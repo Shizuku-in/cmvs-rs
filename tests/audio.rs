@@ -1,0 +1,177 @@
+use cmvs_rs::{
+    audio::{AudioBackend, AudioHost, AudioRequest, AudioSettings, RecordingAudio, SeChannel},
+    machine::{Machine, Step},
+    ps3::Script,
+};
+use std::error::Error;
+
+fn push(code: &mut Vec<u8>, value: u32) {
+    code.extend(0x440u16.to_le_bytes());
+    code.extend(4u16.to_le_bytes());
+    code.extend(value.to_le_bytes());
+}
+/// One 0x20b0 call per (channel, text offset, volume, loop, flag) tuple.
+fn script(calls: &[(u32, u32, u32, u32, u32)], text: &[u8]) -> Script {
+    let mut code = vec![];
+    for &(channel, name, volume, looped, flag) in calls {
+        push(&mut code, flag);
+        push(&mut code, looped);
+        push(&mut code, volume);
+        code.extend(0x201u16.to_le_bytes());
+        code.extend(0x120u16.to_le_bytes());
+        code.extend(name.to_le_bytes());
+        code.extend(0x20fu16.to_le_bytes());
+        code.extend(0x430u16.to_le_bytes());
+        push(&mut code, channel);
+        code.extend(0x20b0u16.to_le_bytes());
+    }
+    let mut payload = 0u32.to_le_bytes().to_vec();
+    payload.extend(&code);
+    payload.extend(text);
+    let mut raw = b"PS2A".to_vec();
+    for n in [
+        48,
+        0,
+        0,
+        1,
+        code.len() as u32,
+        0,
+        text.len() as u32,
+        0,
+        0,
+        payload.len() as u32,
+        0,
+    ] {
+        raw.extend(n.to_le_bytes());
+    }
+    raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+    Script::decode(&raw).unwrap()
+}
+fn pending(vm: &mut Machine<'_>) {
+    while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+}
+struct Started;
+impl AudioBackend for Started {
+    fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+        Ok(true)
+    }
+}
+struct Broken;
+impl AudioBackend for Broken {
+    fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+        Err("synthetic device failure".into())
+    }
+}
+
+#[test]
+fn recording_backend_keeps_requests_and_reports_not_started() {
+    let script = script(
+        &[(0, 0, 0, 0, 0), (5, 11, 128, 1, 1)],
+        b"sys301.ogg\0loop.ogg\0",
+    );
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = AudioHost::default();
+    let mut backend = RecordingAudio::default();
+    for _ in 0..2 {
+        pending(&mut vm);
+        assert!(host.try_handle(&mut vm, &mut backend).unwrap());
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.state().system_integer(0), Some(0));
+    }
+    assert_eq!(
+        backend.requests(),
+        [
+            AudioRequest::PlaySe {
+                channel: 0,
+                name: b"sys301.ogg".to_vec(),
+                volume: 256,
+                looped: false,
+                flag: false
+            },
+            AudioRequest::PlaySe {
+                channel: 5,
+                name: b"loop.ogg".to_vec(),
+                volume: 128,
+                looped: true,
+                flag: true
+            }
+        ]
+    );
+    assert_eq!(
+        host.channel(5),
+        Some(&SeChannel {
+            name: b"loop.ogg".to_vec(),
+            looped: true,
+            volume: 128,
+            flag: true
+        })
+    );
+}
+
+#[test]
+fn settings_scale_volume_and_disabled_se_only_records_the_channel() {
+    let script = script(&[(1, 0, 64, 0, 0), (2, 0, 0, 0, 0)], b"a.ogg\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = AudioHost::new(AudioSettings {
+        se_enabled: true,
+        master: 128,
+        se: 128,
+    });
+    let mut backend = RecordingAudio::default();
+    pending(&mut vm);
+    host.try_handle(&mut vm, &mut Started).unwrap();
+    assert_eq!(vm.state().system_integer(0), Some(1));
+    let mut disabled = AudioHost::new(AudioSettings {
+        se_enabled: false,
+        ..AudioSettings::default()
+    });
+    pending(&mut vm);
+    disabled.try_handle(&mut vm, &mut backend).unwrap();
+    assert!(backend.requests().is_empty());
+    assert_eq!(vm.state().system_integer(0), Some(1));
+    assert_eq!(disabled.channel(2).unwrap().name, b"a.ogg");
+
+    let mut record = RecordingAudio::default();
+    let script = self::script(&[(1, 0, 64, 0, 0)], b"a.ogg\0");
+    let mut vm = Machine::new(&script).unwrap();
+    pending(&mut vm);
+    AudioHost::new(AudioSettings {
+        se_enabled: true,
+        master: 128,
+        se: 128,
+    })
+    .try_handle(&mut vm, &mut record)
+    .unwrap();
+    // (128 * 128 >> 8) = 64, then (64 * 64 >> 8) = 16.
+    assert!(matches!(
+        record.requests()[0],
+        AudioRequest::PlaySe { volume: 16, .. }
+    ));
+}
+
+#[test]
+fn invalid_channel_long_name_and_backend_errors_keep_the_command_pending() {
+    let mut text = b"ok.ogg\0".to_vec();
+    text.extend([b'x'; 32]);
+    text.push(0);
+    for (call, backend_fails) in [
+        ((6, 0, 0, 0, 0), false),
+        ((0, 7, 0, 0, 0), false),
+        ((0, 0, 0, 0, 0), true),
+    ] {
+        let script = script(&[call], &text);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut host = AudioHost::default();
+        pending(&mut vm);
+        let outcome = if backend_fails {
+            host.try_handle(&mut vm, &mut Broken)
+        } else {
+            host.try_handle(&mut vm, &mut RecordingAudio::default())
+        };
+        assert!(outcome.is_err());
+        assert_eq!(vm.pending_system().map(|p| p.1), Some(0xb0));
+        assert_eq!(vm.stack().len_bytes(), 20);
+        assert!((0..6).all(|i| host.channel(i).is_none()));
+        assert_eq!(vm.state().system_integer(0), None);
+    }
+}

@@ -297,3 +297,19 @@ Rust `SaveMenuHost::try_handle_popup` 处理 0x22cd/0x22ce，不需要存档目�
 原版在构造函数中以 `srand(timeGetTime())` 播种，主循环（`0x14000e400`）每帧还调用一次 `rand()`，因此具体数值不可复现。
 Rust `random::CrtRandom` 实现同一生成器，种子必须显式给出：`Startup` 与 `cmvs-desktop` 默认 0（`--rand-seed` 可改），
 `cmvs-trace` 只有加 `--rand-seed` 才处理 0x20d4。研究实现不模拟每帧额外抽取；除数为 0 时报错且不推进生成器。
+
+## 效果音通道 0x20b0
+
+0x20b0 / `0x140070b70`：SP-4 通道 0..5，SP-8 文件名，SP-12 音量（int），SP-16 循环标志，SP-20 第五参数标志，返回 0x4014。
+通道越界时只给 +12056 置位 0x200。+1608（`SE_USE`）非零时，有效音量为 `(+1612 × +1620) >> 8`，
+脚本音量为正时再 `(音量 × 有效音量) >> 8`（均为 32 位无符号运算），调用 `0x140088390` 在设备通道 `通道 + 9` 播放，
+并把是否成功写系统结果槽 0；+1608 为零时既不播放也不写结果。无论是否播放，都把通道记录写入 +1656 + 52 × 通道：
+名称（32 字节）、+1688 循环、+1692 音量、+1696 = 256、+1700 = 0、+1704 标志。菜单切换 SE（`0x140017580`）关闭时停止通道 9..14，
+打开时按这些记录重新播放。+1608/+1612/+1620 由构造函数设为 1/256/256，启动时 `0x14000a3c0` 再从注册表 `param` 键
+（`SO_SeUse`、`SO_MasterVolume`、`SO_SeVolume`）或 INI `[SOUND_INFO]`（`SE_USE`=1、`MASTER_VOLUME`=100、`SE_VOLUME`=100 等默认值）覆盖，
+0..100 到 256 刻度的换算经菜单辅助函数完成，尚未核对。
+
+Rust `audio::AudioHost` 以构造函数值为默认 `AudioSettings`（宿主可显式提供），通过 `AudioBackend::play` 请求播放：
+Ok(true)/Ok(false) 对应原版成功/返回 0，Err 时不提交任何状态。默认 `RecordingAudio` 只记录请求并返回 false（确实没有播放）。
+通道越界（未建模标志）与名称超过 31 字节显式报错。`Startup` 默认使用记录后端，可经 `set_audio_backend` 替换；
+`cmvs-trace` 在 `--record-platform` 下处理。

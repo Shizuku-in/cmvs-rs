@@ -2,6 +2,7 @@
 //! The main-transition snapshot is a barrier unless the caller explicitly continues without an image.
 use crate::{
     MAX_PAYLOAD,
+    audio::{AudioBackend, AudioHost, RecordingAudio},
     bootstrap::Bootstrap,
     gesture::PointerGesture,
     machine::{Machine, Step},
@@ -59,6 +60,8 @@ pub struct Startup<'a> {
     save_title: SaveTitle,
     gesture: PointerGesture,
     random: CrtRandom,
+    audio: AudioHost,
+    audio_backend: Box<dyn AudioBackend>,
     steps: u32,
     main_barrier: bool,
     snapshot_policy: SnapshotPolicy,
@@ -84,6 +87,8 @@ impl<'a> Startup<'a> {
             gesture: PointerGesture::default(),
             // Explicit research seed, like the virtual tick; the original seeds from timeGetTime.
             random: CrtRandom::new(0),
+            audio: AudioHost::default(),
+            audio_backend: Box::new(RecordingAudio::default()),
             steps: 0,
             main_barrier: false,
             snapshot_policy: SnapshotPolicy::default(),
@@ -119,6 +124,13 @@ impl<'a> Startup<'a> {
     }
     pub fn save_image(&self) -> &SaveImage {
         &self.save_image
+    }
+    pub fn audio(&self) -> &AudioHost {
+        &self.audio
+    }
+    /// Defaults to a recording backend that reports nothing started.
+    pub fn set_audio_backend(&mut self, backend: Box<dyn AudioBackend>) {
+        self.audio_backend = backend;
     }
     pub fn set_random_seed(&mut self, seed: u32) {
         self.random = CrtRandom::new(seed);
@@ -188,6 +200,9 @@ impl<'a> Startup<'a> {
             || self.gesture.try_handle(&mut self.machine)?
             || self.save_menu.try_handle_popup(&mut self.machine)?
             || self.random.try_handle(&mut self.machine)?
+            || self
+                .audio
+                .try_handle(&mut self.machine, self.audio_backend.as_mut())?
         {
             return Ok(StartupEvent::Progress);
         }

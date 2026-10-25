@@ -40,7 +40,8 @@
 - [x] +4664 指针手势配置 0x2350–0x2364（平台无关 `gesture`）。
 - [x] 0x0202 浮点表达式与帧变量（含深度 0 基址）。
 - [x] 弹出菜单开关 0x22cd/0x22ce；正常入口切换到 logo.ps3。
-- [x] CRT rand() 与 0x20d4（显式研究种子）；logo.ps3 停于首个音频命令 0x20b0。
+- [x] CRT rand() 与 0x20d4（显式研究种子）。
+- [x] 效果音 0x20b0 的平台无关通道模型与 `AudioBackend`（默认只记录）；logo.ps3 停于 0x2020。
 - [ ] 正常启动的光标/资源后端、快照镜像构建与 0x22b2、自动回调调度、资源校验和验证。
 - [ ] 桌面场景：文字、背景、立绘、音频、选择分支和状态保存。
 - [ ] Windows/macOS/Linux 构建与行为回归。
@@ -84,6 +85,9 @@ NativeBackend 在活动事件循环中应用窗口请求，先解码/验证数�
 
 `gesture` 保存 +4664 拖拽/轻扫识别对象的脚本配置，从 `PlatformHost` 迁出，因为它不涉及平台窗口请求；
 原生输入尚未接入识别逻辑。
+
+`audio` 定义 `AudioBackend`：Ok(true/false) 对应原版播放成功/失败，Err 保持状态供重试；
+`RecordingAudio` 只记录请求并报告未播放。真实播放后端尚未接入，届时只需实现同一接口。
 
 `snapshot` 只遍历 CSV2 第 0 段的记录帧，不解释负载，也不恢复状态。`SaveImage` 区分原版缓冲为空（`Absent`）
 与原版会生成但 Rust 未构建（`Unavailable`）；后者只能由显式 `SnapshotPolicy::ContinueWithoutImage` 产生。

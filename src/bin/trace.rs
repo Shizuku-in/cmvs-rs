@@ -1,5 +1,6 @@
 use cmvs_rs::{
     MAX_PAYLOAD,
+    audio::{AudioHost, AudioRequest, RecordingAudio},
     bootstrap::Bootstrap,
     cpz::Cpz6Index,
     gesture::PointerGesture,
@@ -31,7 +32,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         .ok_or("usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap]")?;
     if path == "--help" {
         println!(
-            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap] [--script-archive <archive>] [--virtual-tick <tick>] [--save-dir <directory>] [--system-save <file>] [--record-platform <game-root>] [--continue-without-snapshot] [--rand-seed <seed>]\n--script loads an isolated initial script. --script-archive supplies common/main scripts and enables explicit control handling with virtual time (default tick 0), without automatic scheduling. --bootstrap applies verified startup configuration. --save-dir enables read-only saveNNN.dat header scanning and menu state, without native UI or save restoration. --system-save explicitly enables CSS1 persistent-state loading for 0x2128; it does not restore a gameplay snapshot. --record-platform enables a recording-only backend with read-only cursor/icon assets from the explicit game root, plus verified state such as the clear color, the save title and pointer-gesture configuration; no native window, drawing, or input polling. Main transfer stops at the engine save snapshot unless --continue-without-snapshot is given; that applies only the verified live-state effect, builds no save image, and leaves saving unavailable. --rand-seed enables 0x20d4 with the CRT rand() generator from an explicit seed; the original seeds from timeGetTime and draws every frame, so values are not reproducible."
+            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap] [--script-archive <archive>] [--virtual-tick <tick>] [--save-dir <directory>] [--system-save <file>] [--record-platform <game-root>] [--continue-without-snapshot] [--rand-seed <seed>]\n--script loads an isolated initial script. --script-archive supplies common/main scripts and enables explicit control handling with virtual time (default tick 0), without automatic scheduling. --bootstrap applies verified startup configuration. --save-dir enables read-only saveNNN.dat header scanning and menu state, without native UI or save restoration. --system-save explicitly enables CSS1 persistent-state loading for 0x2128; it does not restore a gameplay snapshot. --record-platform enables a recording-only backend with read-only cursor/icon assets from the explicit game root, plus verified state such as the clear color, the save title and pointer-gesture configuration, and records SE playback requests without audio output; no native window, drawing, or input polling. Main transfer stops at the engine save snapshot unless --continue-without-snapshot is given; that applies only the verified live-state effect, builds no save image, and leaves saving unavailable. --rand-seed enables 0x20d4 with the CRT rand() generator from an explicit seed; the original seeds from timeGetTime and draws every frame, so values are not reproducible."
         );
         return Ok(());
     }
@@ -122,6 +123,8 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut scene = SceneHost::default();
     let mut save_title = SaveTitle::default();
     let mut gesture = PointerGesture::default();
+    let mut audio = AudioHost::default();
+    let mut audio_backend = RecordingAudio::default();
     if platform_assets.is_some() {
         println!(
             "# RECORDING platform backend: requests and state only; no native window, cursor, icon display, or input polling"
@@ -192,6 +195,23 @@ fn run() -> Result<(), Box<dyn Error>> {
                         "# save title 0x2162 = {}; recorded only",
                         save_title.bytes().escape_ascii()
                     );
+                    continue;
+                }
+                if audio.try_handle(&mut machine, &mut audio_backend)? {
+                    if let Some(AudioRequest::PlaySe {
+                        channel,
+                        name,
+                        volume,
+                        looped,
+                        ..
+                    }) = audio_backend.requests().last()
+                    {
+                        println!(
+                            "# audio 0x20b0 recorded SE[{channel}]={} volume={volume} loop={looped}; not played, system_integer[0]={:?}",
+                            name.escape_ascii(),
+                            machine.state().system_integer(0)
+                        );
+                    }
                     continue;
                 }
                 if save_menu.try_handle_popup(&mut machine)? {
