@@ -23,11 +23,13 @@ cargo run --offline --bin cmvs-cpz -- "E:/Download/AMATSUTSUMI/data/pack/script.
 cargo run --offline --bin cmvs-cpz -- --list "E:/Download/AMATSUTSUMI/data/pack/script.cpz"
 cargo run --offline --bin cmvs-cpz -- --script "E:/Download/AMATSUTSUMI/data/pack/script.cpz" main.ps3
 cargo run --offline --bin cmvs-save -- "E:/Download/AMATSUTSUMI/save/save000.dat"
+cargo run --offline --bin cmvs-save -- --records "E:/Download/AMATSUTSUMI/save/save000.dat"
 cargo run --offline --bin cmvs-system-save -- "E:/Download/AMATSUTSUMI/save/system.dat"
 cargo run --offline --bin cmvs-cursor -- "E:/Download/AMATSUTSUMI/data/icon/01.cur"
 cargo run --offline --bin cmvs-pb3 -- "../../work/logo.pb3"
 cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --bootstrap --save-dir "E:/Download/AMATSUTSUMI/save" --system-save "E:/Download/AMATSUTSUMI/save/system.dat" --script-archive "E:/Download/AMATSUTSUMI/data/pack/script.cpz"
 cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --bootstrap --save-dir "E:/Download/AMATSUTSUMI/save" --system-save "E:/Download/AMATSUTSUMI/save/system.dat" --script-archive "E:/Download/AMATSUTSUMI/data/pack/script.cpz" --record-platform "E:/Download/AMATSUTSUMI"
+cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --bootstrap --save-dir "E:/Download/AMATSUTSUMI/save" --system-save "E:/Download/AMATSUTSUMI/save/system.dat" --script-archive "E:/Download/AMATSUTSUMI/data/pack/script.cpz" --record-platform "E:/Download/AMATSUTSUMI" --continue-without-snapshot
 cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/script.cpz" --script main.ps3
 cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --entry 0x1214 --script-archive "E:/Download/AMATSUTSUMI/data/pack/script.cpz"
 cargo test --offline
@@ -35,7 +37,7 @@ cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-`--payload` 仅允许创建新文件，输出不包含原始头部。默认 130 项测试、启用 desktop 后 135 项测试和严格 Clippy 检查通过。
+`--payload` 仅允许创建新文件，输出不包含原始头部。默认 137 项测试、启用 desktop 后 142 项测试和严格 Clippy 检查通过。
 真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
 `ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
 
@@ -94,7 +96,7 @@ cargo run --offline --features desktop --bin cmvs-desktop -- "E:/Download/AMATSU
 ```
 
 用户已确认 logo 比例正常、无花屏并可关闭。图像按比例居中、以透明度合成到预览背景上；
-这是显式素材预览，未执行 VM 绘图命令，主快照断点仍保留。背景样本使用的 type 3/JBP 暂不支持。
+这是显式素材预览，未执行 VM 绘图命令，主快照断点默认保留。背景样本使用的 type 3/JBP 暂不支持。
 `cmvs-pb3 <文件> --rgba <新输出>` 可导出顶向下 RGBA，拒绝覆盖；详情见 [pb3-format](docs/pb3-format.md)。
 `cmvs-cpz` 默认读取 64 字节头部；`--list` 解密索引，`--script` 读取并解析 PS2A，
 `--extract` 将指定 ASCII 文件名的内容写入用户指定的新文件。支持当前 CPZ6 加密模式 1，尚未验证校验和。
@@ -107,6 +109,13 @@ cargo run --offline --features desktop --bin cmvs-desktop -- "E:/Download/AMATSU
 准备 main.ps3 后停在尚未实现的引擎存档快照步骤。它没有运行此前启动配置，不可宣称完整启动成功。
 参数字节栈与返回标志见 `vm` 模块。
 详细证据见 [VM 语义](docs/vm-semantics.md)。CLI 的线性解码不跟随分支，尚不能运行游戏。
+
+新增 `snapshot`：核对 0x2080/0x22b2 调用的引擎快照 0x140069270。快照缓冲只供存档写入使用，
+对 VM 唯一可见的实时影响是位变量 0 最终被清零。`cmvs-save --records` 遍历 CSV2 第 0 段记录帧，
+三份真实存档各 45 条记录，与独立 Python 遍历器逐条一致。上面带 `--continue-without-snapshot` 的命令
+只应用这一项影响、不构建存档镜像，执行 479 步后进入 main.ps3，共 491 步后在 PC=0x38d68 停于 0x22cb。
+`cmvs-desktop` 支持同名选项，Windows 实测停点相同。此时存档镜像为“不可用”，存档功能不能使用。
+格式与证据见 [snapshot-format](docs/snapshot-format.md)。
 
 目前提供研究工具和原生桌面预览，**尚不能运行游戏剧情**，也没有生成 iOS/Android 应用。
 

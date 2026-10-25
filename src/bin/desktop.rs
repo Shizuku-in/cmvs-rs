@@ -5,7 +5,7 @@ use cmvs_rs::{
     pb3,
     platform::{DirectoryAssets, PlatformAssets, PlatformBackend, PlatformRequest},
     raster::RgbaImage,
-    runner::{Startup, StartupEvent, load_start},
+    runner::{SnapshotPolicy, Startup, StartupEvent, load_start},
 };
 use std::{
     env,
@@ -225,6 +225,10 @@ impl ApplicationHandler for App<'_> {
                 match self.startup.tick(&mut backend) {
                     Ok(StartupEvent::Progress) => {}
                     Ok(StartupEvent::Yield) => break,
+                    Ok(StartupEvent::MainEnteredWithoutSnapshot) => println!(
+                        "# main entered at step {}; snapshot NOT built, saving unavailable",
+                        self.startup.steps()
+                    ),
                     Ok(event) => {
                         self.halted = true;
                         println!(
@@ -265,7 +269,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     )?;
     if root == "--help" {
         println!(
-            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>]\nNative research preview only. Runs bounded startup with virtual tick 0; stops at unknown commands or main snapshot barrier. Without an explicit image, shows a diagnostic checkerboard. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. Raw window input is observed but not injected into CMVS opcodes. All game files read-only."
+            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>] [--continue-without-snapshot]\nNative research preview only. Runs bounded startup with virtual tick 0; stops at unknown commands or main snapshot barrier. --continue-without-snapshot enters main without building a save image; saving stays unavailable. Without an explicit image, shows a diagnostic checkerboard. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. Raw window input is observed but not injected into CMVS opcodes. All game files read-only."
         );
         return Ok(());
     }
@@ -273,7 +277,12 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut exit_after = None;
     let mut preview_name = None;
     let mut image_archive = None;
+    let mut snapshot_policy = SnapshotPolicy::Barrier;
     while let Some(flag) = args.next() {
+        if flag == "--continue-without-snapshot" {
+            snapshot_policy = SnapshotPolicy::ContinueWithoutImage;
+            continue;
+        }
         let value = args.next().ok_or("missing option value")?;
         if flag == "--encoding" {
             encoding = Some(TextEncoding::parse(
@@ -316,7 +325,8 @@ fn run() -> Result<(), Box<dyn Error>> {
         _ => return Err("preview-image and image-archive must be supplied together".into()),
     };
     let script = load_start(&root)?;
-    let startup = Startup::new(&script, &root, 0)?;
+    let mut startup = Startup::new(&script, &root, 0)?;
+    startup.set_snapshot_policy(snapshot_policy);
     let mut app = App {
         surface: None,
         context: None,

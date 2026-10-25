@@ -1,7 +1,8 @@
 use cmvs_rs::{
     platform::{PlatformBackend, PlatformRequest, RecordingBackend},
     ps3::Script,
-    runner::{Startup, StartupEvent, load_start},
+    runner::{SnapshotPolicy, Startup, StartupEvent, load_start},
+    snapshot::SaveImage,
 };
 use std::{error::Error, fs, path::PathBuf};
 
@@ -98,6 +99,39 @@ fn startup_main_snapshot_barrier_is_sticky_and_does_not_execute_new_main() {
             run.machine().stack().len_bytes()
         ),
         before
+    );
+}
+#[test]
+fn explicit_policy_enters_main_without_building_a_save_image() {
+    let root = Root::new("no-snapshot", &string_call(0x2080), b"fixture.ps3\0");
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    run.set_snapshot_policy(SnapshotPolicy::ContinueWithoutImage);
+    let mut backend = RecordingBackend::default();
+    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(*run.save_image(), SaveImage::Absent);
+    assert_eq!(
+        run.tick(&mut backend).unwrap(),
+        StartupEvent::MainEnteredWithoutSnapshot
+    );
+    assert_eq!(
+        *run.save_image(),
+        SaveImage::Unavailable {
+            script: b"fixture.ps3".to_vec(),
+            pc: 0
+        }
+    );
+    assert_eq!(run.machine().state().bit(0), Some(false));
+    assert_eq!(run.machine().stack().len_bytes(), 0);
+    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(
+        (
+            run.steps(),
+            run.machine().pc(),
+            run.machine().stack().len_bytes()
+        ),
+        (4, 8, 4)
     );
 }
 struct Reject;

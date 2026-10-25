@@ -139,7 +139,9 @@ Rust 将这个额外字保留为不解释的字段，而不是把后面的 0 当
 0x2080 的主脚本装载路径 `0x140080530` 重置参数栈、普通/跨脚本调用状态和 repeat，
 保留公共脚本及全局变量；主脚本来源的回调失效，公共脚本回调保留。
 其后 `0x1400810f0` 还会调用 `0x140069270` 创建引擎级存档快照，涉及时间、画面、音频和其他状态。
-研究 API 只完成核心切换并返回 `MainPreparedNeedsSnapshot`；CLI 在此停止，不把快照当作空操作略过。
+研究 API 只完成核心切换并返回 `MainPreparedNeedsSnapshot`；默认在此停止，不把快照当作空操作略过。
+快照缓冲只供存档写入使用；对 VM 唯一可见的实时影响是位变量 0 最终被清零，详见 `snapshot-format.md`。
+`--continue-without-snapshot` 或 `SnapshotPolicy::ContinueWithoutImage` 只应用这一项影响，并把存档镜像记为不可用，然后进入主脚本。
 
 ## 存档菜单数据层
 

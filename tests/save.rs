@@ -167,6 +167,38 @@ fn lzss_length_mismatch_is_rejected_after_valid_checksum() {
 }
 
 #[test]
+fn cli_lists_snapshot_records_and_rejects_unknown_tags() {
+    let root = std::env::temp_dir().join(format!("cmvs-csv2-records-{}", std::process::id()));
+    fs::create_dir(&root).unwrap();
+    let input = root.join("synthetic.dat");
+    let mut snapshot = vec![0x02, 0x01, 4, 0, b'a', b'.', b'p', 0];
+    snapshot.extend([0x00, 0x07, 3, 0, 9, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    fs::write(&input, fixture([&snapshot, b"", b"script"])).unwrap();
+    let exe = env!("CARGO_BIN_EXE_cmvs-save");
+    let output = Command::new(exe)
+        .arg("--records")
+        .arg(&input)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("snapshot records=2"));
+    assert!(stdout.contains("record offset=0 tag=0x102 index=None len=4"));
+    assert!(stdout.contains("record offset=8 tag=0x700 index=Some(3) len=9"));
+    snapshot[0] = 0x16;
+    fs::write(&input, fixture([&snapshot, b"", b"script"])).unwrap();
+    let output = Command::new(exe)
+        .arg("--records")
+        .arg(&input)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("unknown snapshot record tag"));
+    fs::remove_file(input).unwrap();
+    fs::remove_dir(root).unwrap();
+}
+
+#[test]
 fn cli_export_never_overwrites_and_invalid_input_creates_no_output() {
     let root = std::env::temp_dir().join(format!("cmvs-csv2-cli-{}", std::process::id()));
     fs::create_dir(&root).unwrap();

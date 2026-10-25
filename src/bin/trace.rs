@@ -7,6 +7,7 @@ use cmvs_rs::{
     ps3::Script,
     save_menu::{DirectorySaves, SaveMenuHost, SlotStatus},
     script_control::{ArchiveScripts, ControlEvent, ScriptControl},
+    snapshot::SaveImage,
     system_save::{FileSystemSave, SystemSaveHost},
 };
 use std::{env, error::Error, fs::File, io::Read};
@@ -27,7 +28,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         .ok_or("usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap]")?;
     if path == "--help" {
         println!(
-            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap] [--script-archive <archive>] [--virtual-tick <tick>] [--save-dir <directory>] [--system-save <file>] [--record-platform <game-root>]\n--script loads an isolated initial script. --script-archive supplies common/main scripts and enables explicit control handling with virtual time (default tick 0), without automatic scheduling. --bootstrap applies verified startup configuration. --save-dir enables read-only saveNNN.dat header scanning and menu state, without native UI or save restoration. --system-save explicitly enables CSS1 persistent-state loading for 0x2128; it does not restore a gameplay snapshot. --record-platform enables a recording-only backend with read-only cursor/icon assets from the explicit game root; no native window or input polling. Main transfer stops for the unimplemented engine snapshot."
+            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap] [--script-archive <archive>] [--virtual-tick <tick>] [--save-dir <directory>] [--system-save <file>] [--record-platform <game-root>] [--continue-without-snapshot]\n--script loads an isolated initial script. --script-archive supplies common/main scripts and enables explicit control handling with virtual time (default tick 0), without automatic scheduling. --bootstrap applies verified startup configuration. --save-dir enables read-only saveNNN.dat header scanning and menu state, without native UI or save restoration. --system-save explicitly enables CSS1 persistent-state loading for 0x2128; it does not restore a gameplay snapshot. --record-platform enables a recording-only backend with read-only cursor/icon assets from the explicit game root; no native window or input polling. Main transfer stops at the engine save snapshot unless --continue-without-snapshot is given; that applies only the verified live-state effect, builds no save image, and leaves saving unavailable."
         );
         return Ok(());
     }
@@ -40,9 +41,14 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut save_dir = None;
     let mut system_save_path = None;
     let mut platform_root = None;
+    let mut continue_without_snapshot = false;
     while let Some(flag) = args.next() {
         if flag == "--bootstrap" {
             bootstrap = Some(Bootstrap::default());
+            continue;
+        }
+        if flag == "--continue-without-snapshot" {
+            continue_without_snapshot = true;
             continue;
         }
         let value = args.next().ok_or("missing option value")?;
@@ -106,6 +112,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut platform_assets = platform_root.map(DirectoryAssets::new).transpose()?;
     let mut platform_host = PlatformHost::default();
     let mut platform_backend = RecordingBackend::default();
+    let mut save_image = SaveImage::default();
     if platform_assets.is_some() {
         println!(
             "# RECORDING platform backend: requests and state only; no native window, cursor, icon display, or input polling"
@@ -199,6 +206,15 @@ fn run() -> Result<(), Box<dyn Error>> {
                     machine.pc(),
                     control.callbacks().len()
                 );
+                if event == ControlEvent::MainPreparedNeedsSnapshot && continue_without_snapshot {
+                    save_image.capture_unavailable(&mut machine)?;
+                    println!(
+                        "# main snapshot NOT built; bit[0] cleared as in original; save image unavailable from {}:0x{:x}",
+                        machine.current_name().escape_ascii(),
+                        machine.pc()
+                    );
+                    continue;
+                }
                 if event == ControlEvent::MainPreparedNeedsSnapshot {
                     println!(
                         "# STOP main context prepared; original engine snapshot still requires a host implementation"
