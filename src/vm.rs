@@ -84,6 +84,14 @@ impl ParameterStack {
         let word = &self.bytes[start..start + 4];
         Ok(u32::from_le_bytes([word[0], word[1], word[2], word[3]]))
     }
+    /// Absolute byte offset from the stack base, as used by frame-relative operands.
+    pub fn read_u32_at(&self, offset: usize) -> Result<u32, FormatError> {
+        let word = offset
+            .checked_add(4)
+            .and_then(|end| self.bytes.get(offset..end))
+            .ok_or(FormatError("stack read outside live bytes"))?;
+        Ok(u32::from_le_bytes([word[0], word[1], word[2], word[3]]))
+    }
     pub fn discard(&mut self, count: usize) -> Result<(), FormatError> {
         let length = self
             .bytes

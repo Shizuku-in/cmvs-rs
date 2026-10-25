@@ -7,6 +7,45 @@ use crate::{
 };
 use std::{borrow::Cow, collections::BTreeMap};
 
+/// Frame table +82548 has 64 entries indexed by depth +82804; entry 0 is the base.
+const MAX_CALL_DEPTH: usize = 63;
+/// The +82864 accumulator and each string slot are 1024 bytes including the NUL.
+const STRING_CAPACITY: usize = 1023;
+
+fn c_string(bytes: &[u8], offset: u32, pc: usize, tag: u16) -> Result<&[u8], DecodeError> {
+    let tail = bytes
+        .get(offset as usize..)
+        .ok_or_else(|| error(pc, tag, "string reference out of bounds"))?;
+    let end = tail
+        .iter()
+        .position(|b| *b == 0)
+        .ok_or_else(|| error(pc, tag, "unterminated string reference"))?;
+    Ok(&tail[..end])
+}
+fn append(buffer: &mut Vec<u8>, bytes: &[u8], pc: usize, tag: u16) -> Result<(), DecodeError> {
+    if buffer.len() + bytes.len() > STRING_CAPACITY {
+        return Err(error(pc, tag, "string accumulator exceeds 1023 bytes"));
+    }
+    buffer.extend_from_slice(bytes);
+    Ok(())
+}
+/// 0x140085ea0 copies only slots 0..127; other indexes leave the accumulator unchanged.
+fn append_slot(
+    state: &State,
+    buffer: &mut Vec<u8>,
+    index: u32,
+    pc: usize,
+    tag: u16,
+) -> Result<(), DecodeError> {
+    if index > 127 {
+        return Ok(());
+    }
+    let bytes = state
+        .string(index)
+        .ok_or_else(|| error(pc, tag, "read of unknown string slot"))?;
+    append(buffer, bytes, pc, tag)
+}
+
 struct Image<'a> {
     script: Cow<'a, Script>,
     instructions: BTreeMap<usize, Instruction>,
@@ -111,8 +150,8 @@ impl<'a> Machine<'a> {
     }
     pub fn resolve_string(&self, raw: u32) -> Result<Vec<u8>, DecodeError> {
         let (bytes, offset) = match StringRef::decode(raw) {
-            StringRef::Text(offset) => (self.image().script.text(), offset as usize),
-            StringRef::ScriptData(offset) => (self.image().script.unknown(), offset as usize),
+            StringRef::Text(offset) => (self.image().script.text(), offset),
+            StringRef::ScriptData(offset) => (self.image().script.unknown(), offset),
             StringRef::StringBank(index) => {
                 let index = if index > 127 { 0 } else { index };
                 return self
@@ -129,14 +168,128 @@ impl<'a> Machine<'a> {
                 ));
             }
         };
-        let tail = bytes
-            .get(offset..)
-            .ok_or_else(|| error(self.pc, 0x201, "string reference out of bounds"))?;
-        let end = tail
-            .iter()
-            .position(|b| *b == 0)
-            .ok_or_else(|| error(self.pc, 0x201, "unterminated string reference"))?;
-        Ok(tail[..end].to_vec())
+        Ok(c_string(bytes, offset, self.pc, 0x201)?.to_vec())
+    }
+
+    /// Word at the current call frame minus `distance`, as tag 0x122/0x103 operands read it.
+    fn frame_word(&self, distance: u32, pc: usize, tag: u16) -> Result<u32, DecodeError> {
+        let top = *self
+            .frames
+            .last()
+            .ok_or_else(|| error(pc, tag, "frame operand outside a call"))?;
+        let offset = top
+            .checked_sub(distance as usize)
+            .ok_or_else(|| error(pc, tag, "frame operand below stack base"))?;
+        self.stack
+            .read_u32_at(offset)
+            .map_err(|e| error(pc, tag, e.0))
+    }
+
+    /// Operand reader 0x1400652e0 for string tags: appends to the accumulator.
+    fn append_operand(
+        &self,
+        state: &State,
+        buffer: &mut Vec<u8>,
+        (tag, value, pc): (u16, u32, usize),
+    ) -> Result<(), DecodeError> {
+        let script = &self.image().script;
+        let bytes = match tag {
+            // Placeholder left by a previous operator: the original reader returns 0.
+            0 => return Ok(()),
+            0x120 => c_string(script.text(), value, pc, tag)?,
+            0x125 => c_string(script.unknown(), value, pc, tag)?,
+            0x121 => return append_slot(state, buffer, value & 0x3fff_ffff, pc, tag),
+            0x122 => match StringRef::decode(self.frame_word(value, pc, tag)?) {
+                StringRef::Text(offset) => c_string(script.text(), offset, pc, tag)?,
+                StringRef::ScriptData(offset) => c_string(script.unknown(), offset, pc, tag)?,
+                StringRef::StringBank(index) => {
+                    return append_slot(state, buffer, index, pc, tag);
+                }
+                StringRef::Frame(_) => {
+                    return Err(error(pc, tag, "frame-local string not implemented"));
+                }
+            },
+            _ => return Err(error(pc, tag, "string operand type not implemented")),
+        };
+        append(buffer, bytes, pc, tag)
+    }
+
+    /// 0x0201 / 0x140066b00: clears the accumulator, appends operands as operators read them,
+    /// and sets the result only from the tag of the bottom entry. Commits all writes or none.
+    fn string_expression(&mut self, expr: &Expression) -> Result<(), DecodeError> {
+        let labels = self.image().script.labels();
+        let mut state = self.state.clone();
+        let mut buffer = Vec::new();
+        let mut entries: Vec<(u16, u32, usize)> = Vec::new();
+        for term in &expr.terms {
+            match term {
+                Term::Nested {
+                    pc,
+                    tag: 0x121,
+                    expression,
+                } => {
+                    // The nested integer evaluator also updates result, condition and integer 4096.
+                    let index = state.evaluate_integer_with_labels(expression, &labels)?;
+                    entries.push((0x121, index as u32 | 0x8000_0000, *pc));
+                }
+                Term::Scalar { pc, tag, raw } => entries.push((*tag, *raw, *pc)),
+                Term::Operator { pc, opcode } if (0x160..=0x172).contains(opcode) => {
+                    let top = entries
+                        .pop()
+                        .ok_or_else(|| error(*pc, *opcode, "expression stack underflow"))?;
+                    let second = *entries
+                        .last()
+                        .ok_or_else(|| error(*pc, *opcode, "expression stack underflow"))?;
+                    if *opcode == 0x170 {
+                        self.append_operand(&state, &mut buffer, top)?;
+                        match second {
+                            (0x121, value, _) if value & 0x3fff_ffff > 127 => {}
+                            (0x121, value, at) => state
+                                .set_string(value & 0x3fff_ffff, &buffer)
+                                .map_err(|why| error(at, 0x121, why))?,
+                            (tag, _, at) => {
+                                return Err(error(
+                                    at,
+                                    tag,
+                                    "string assignment target not implemented",
+                                ));
+                            }
+                        }
+                    } else {
+                        // Binary operators only read both operands, so strings concatenate.
+                        self.append_operand(&state, &mut buffer, second)?;
+                        self.append_operand(&state, &mut buffer, top)?;
+                    }
+                    *entries.last_mut().expect("checked above") = (0, 0, *pc);
+                }
+                Term::Nested { pc, tag, .. }
+                | Term::Indexed { pc, tag, .. }
+                | Term::Operator { pc, opcode: tag } => {
+                    return Err(error(*pc, *tag, "string expression term not implemented"));
+                }
+            }
+        }
+        let &(tag, value, pc) = entries
+            .first()
+            .ok_or_else(|| error(expr.pc, expr.kind, "empty string expression"))?;
+        let result = match tag {
+            0x120 => {
+                c_string(self.image().script.text(), value, pc, tag)?;
+                Some(value)
+            }
+            0x121 => Some(value),
+            0x122 => Some(self.frame_word(value, pc, tag)?),
+            0x125 => Some(value | 0x4000_0000),
+            0x127 => Some(value | 0xc000_0000),
+            _ => None, // The original leaves +82812 unchanged.
+        };
+        if result.is_some() {
+            state.result = result;
+        }
+        // This evaluator does not modify integer condition flags itself.
+        state.set_string_buffer(buffer);
+        self.state = state;
+        Ok(())
     }
 
     fn expression(&mut self, expr: &Expression) -> Result<(), DecodeError> {
@@ -145,28 +298,7 @@ impl<'a> Machine<'a> {
                 self.state
                     .evaluate_integer_with_labels(expr, &self.image().script.labels())?;
             }
-            (
-                0x201,
-                [
-                    Term::Scalar {
-                        tag: 0x120,
-                        raw,
-                        pc,
-                    },
-                ],
-            ) => {
-                let tail = self
-                    .image()
-                    .script
-                    .text()
-                    .get(*raw as usize..)
-                    .ok_or_else(|| error(*pc, 0x120, "text reference out of bounds"))?;
-                if !tail.contains(&0) {
-                    return Err(error(*pc, 0x120, "unterminated text reference"));
-                }
-                self.state.result = Some(*raw);
-                // This evaluator does not modify integer condition flags.
-            }
+            (0x201, _) => self.string_expression(expr)?,
             (
                 0x202,
                 [
@@ -229,8 +361,8 @@ impl<'a> Machine<'a> {
             InstructionKind::Label { index } => {
                 next = self.image().script.labels()[index as usize] as usize;
                 if op == 0x410 {
-                    if self.frames.len() >= 256 {
-                        return Err(error(pc, op, "call frame research limit"));
+                    if self.frames.len() >= MAX_CALL_DEPTH {
+                        return Err(error(pc, op, "call frame table holds 63 nested calls"));
                     }
                     self.stack
                         .push_u32(insn.end as u32)

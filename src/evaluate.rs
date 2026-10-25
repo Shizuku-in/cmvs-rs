@@ -20,6 +20,7 @@ pub struct State {
     system_integers: [Option<u32>; 7],
     integer_limit: u32,
     bit_limit: u32,
+    string_buffer: Vec<u8>,
     pub result: Option<u32>,
     pub condition: Option<bool>,
 }
@@ -41,6 +42,7 @@ impl State {
             system_integers: [None; 7],
             integer_limit,
             bit_limit,
+            string_buffer: Vec::new(),
             result: None,
             condition: None,
         }
@@ -74,6 +76,16 @@ impl State {
     }
     pub fn string(&self, index: u32) -> Option<&[u8]> {
         self.strings.get(&index).map(Vec::as_slice)
+    }
+    /// The 1024-byte accumulator at +82864, cleared by every 0x0201 evaluation.
+    pub fn string_buffer(&self) -> &[u8] {
+        &self.string_buffer
+    }
+    pub(crate) fn set_string_buffer(&mut self, bytes: Vec<u8>) {
+        self.string_buffer = bytes;
+    }
+    pub fn set_string(&mut self, index: u32, bytes: &[u8]) -> Result<(), &'static str> {
+        self.fill_strings(index, 1, bytes)
     }
     fn range(start: u32, count: u32, limit: u32) -> Result<std::ops::Range<u32>, &'static str> {
         let end = start.checked_add(count).ok_or("variable range overflow")?;
