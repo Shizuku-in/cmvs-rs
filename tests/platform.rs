@@ -210,6 +210,55 @@ fn backend_failure_preserves_vm_and_host_for_retry() {
 }
 
 #[test]
+fn scene_title_composes_window_text_and_keeps_base_title() {
+    let mut assets = Assets::default();
+    let mut host = PlatformHost::default();
+    let mut backend = RecordingBackend::default();
+    let orphan = script(&[(0x2161, 0)], b"scene\0");
+    let mut vm = Machine::new(&orphan).unwrap();
+    pending(&mut vm);
+    assert!(
+        host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+            .is_err()
+    );
+    assert_eq!((vm.stack().len_bytes(), backend.requests().len()), (4, 0));
+
+    let mut text = b"Game\0- main -\0".to_vec();
+    let long = text.len() as u32;
+    text.extend([b'x'; 122]);
+    text.push(0);
+    let script = script(&[(0x2160, 0), (0x2161, 5), (0x2161, long)], &text);
+    let mut vm = Machine::new(&script).unwrap();
+    assert_eq!(host.scene_title(), b"");
+    pending(&mut vm);
+    host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+        .unwrap();
+    pending(&mut vm);
+    assert!(
+        host.try_handle(&mut vm, &mut RejectBackend, &mut assets, &[])
+            .is_err()
+    );
+    assert_eq!(host.scene_title(), b"");
+    host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+        .unwrap();
+    assert_eq!(host.title(), Some(b"Game".as_slice()));
+    assert_eq!(host.scene_title(), b"- main -");
+    assert_eq!(
+        backend.requests().last(),
+        Some(&PlatformRequest::Title(b"Game\x81\x40- main -".to_vec()))
+    );
+    pending(&mut vm);
+    let before = vm.pending_system();
+    assert!(
+        host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+            .is_err()
+    );
+    assert_eq!(vm.pending_system(), before);
+    assert_eq!(host.scene_title(), b"- main -");
+    assert_eq!(backend.requests().len(), 2);
+}
+
+#[test]
 fn cursor_selection_reads_once_default_restores_and_invalid_id_stops() {
     let script = script(&[(0x2099, 1), (0x2099, 1), (0x2099, 0), (0x2099, 2)], b"");
     let mut vm = Machine::new(&script).unwrap();

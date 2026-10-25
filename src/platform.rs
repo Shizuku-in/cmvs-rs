@@ -158,9 +158,15 @@ pub enum PlatformEvent {
     CursorUnchanged,
     Configured,
 }
+/// Separator 0x1400de070 between base title and scene title: Shift-JIS full-width space.
+const TITLE_SEPARATOR: [u8; 2] = [0x81, 0x40];
+
 #[derive(Default)]
 pub struct PlatformHost {
+    /// Base window title +340, set by 0x2160.
     title: Option<Vec<u8>>,
+    /// Scene title +14336; constructor 0x140068580 zeroes it, 0x2161 replaces it.
+    scene_title: Vec<u8>,
     // Original constructor 0x14008d540 sets selection to zero.
     cursor: u32,
     icon: Option<Vec<u8>>,
@@ -170,6 +176,9 @@ pub struct PlatformHost {
 impl PlatformHost {
     pub fn title(&self) -> Option<&[u8]> {
         self.title.as_deref()
+    }
+    pub fn scene_title(&self) -> &[u8] {
+        &self.scene_title
     }
     pub fn cursor(&self) -> u32 {
         self.cursor
@@ -193,7 +202,7 @@ impl PlatformHost {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(None);
         };
-        if !matches!(command, 0x160 | 0x99 | 0x8f | 0x350 | 0x2b0) {
+        if !matches!(command, 0x160 | 0x161 | 0x99 | 0x8f | 0x350 | 0x2b0) {
             return Ok(None);
         }
         let arg = vm
@@ -219,7 +228,24 @@ impl PlatformHost {
             vm.complete_system(SystemResult(0x4004))?;
             return Ok(Some(PlatformEvent::CursorUnchanged));
         }
+        let mut scene = None;
         let request = match command {
+            0x161 => {
+                let name = vm.resolve_string(arg)?;
+                let base = self
+                    .title
+                    .as_deref()
+                    .ok_or_else(|| error(pc, 0x2161, "base window title +340 is unknown"))?;
+                let mut text = base.to_vec();
+                text.extend(TITLE_SEPARATOR);
+                text.extend(&name);
+                // The original composes into a 128-byte stack buffer without a bound check.
+                if text.len() >= 128 {
+                    return Err(error(pc, 0x2161, "composed title exceeds 127 bytes").into());
+                }
+                scene = Some(name);
+                PlatformRequest::Title(text)
+            }
             0x160 => {
                 let title = vm.resolve_string(arg)?;
                 if title.len() >= 256 {
@@ -260,6 +286,9 @@ impl PlatformHost {
         // All parameter sizes and references have been validated before invoking the backend.
         vm.complete_system(SystemResult(0x4004))?;
         match request {
+            PlatformRequest::Title(_) if command == 0x161 => {
+                self.scene_title = scene.expect("set for 0x2161");
+            }
             PlatformRequest::Title(bytes) => self.title = Some(bytes),
             PlatformRequest::Cursor { id, .. } => self.cursor = id,
             PlatformRequest::Icon { name, .. } => self.icon = Some(name),

@@ -140,7 +140,7 @@ fn startup_records_clear_color_without_drawing() {
     code.extend(4u16.to_le_bytes());
     code.extend(0x00ff_8000u32.to_le_bytes());
     code.extend(0x22cbu16.to_le_bytes());
-    code.extend(0x2161u16.to_le_bytes());
+    code.extend(0x27ffu16.to_le_bytes());
     let root = Root::new("clear", &code, b"");
     let script = root.script();
     let mut run = Startup::new(&script, &root.0, 0).unwrap();
@@ -152,7 +152,7 @@ fn startup_records_clear_color_without_drawing() {
     assert!(matches!(
         run.tick(&mut backend).unwrap(),
         StartupEvent::Unhandled {
-            command: 0x2161,
+            command: 0x27ff,
             ..
         }
     ));
@@ -166,7 +166,7 @@ impl PlatformBackend for Reject {
 #[test]
 fn startup_backend_error_can_be_retried_without_losing_pending_request() {
     let mut code = string_call(0x2160);
-    code.extend(0x2161u16.to_le_bytes());
+    code.extend(0x27ffu16.to_le_bytes());
     let root = Root::new("retry", &code, b"title\0");
     let script = root.script();
     let mut run = Startup::new(&script, &root.0, 0).unwrap();
@@ -182,7 +182,7 @@ fn startup_backend_error_can_be_retried_without_losing_pending_request() {
     assert!(matches!(
         run.tick(&mut backend).unwrap(),
         StartupEvent::Unhandled {
-            command: 0x2161,
+            command: 0x27ff,
             ..
         }
     ));
@@ -190,7 +190,7 @@ fn startup_backend_error_can_be_retried_without_losing_pending_request() {
 #[test]
 fn missing_system_file_is_a_verified_no_change_return() {
     let mut code = 0x2128u16.to_le_bytes().to_vec();
-    code.extend(0x2161u16.to_le_bytes());
+    code.extend(0x27ffu16.to_le_bytes());
     let root = Root::new("missing-system", &code, b"");
     let script = root.script();
     let mut run = Startup::new(&script, &root.0, 0).unwrap();
@@ -201,7 +201,7 @@ fn missing_system_file_is_a_verified_no_change_return() {
     assert!(matches!(
         run.tick(&mut backend).unwrap(),
         StartupEvent::Unhandled {
-            command: 0x2161,
+            command: 0x27ff,
             ..
         }
     ));

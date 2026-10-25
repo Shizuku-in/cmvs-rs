@@ -9,7 +9,7 @@ use crate::{
     save_menu::{DirectorySaves, SaveMenuHost},
     scene::SceneHost,
     script_control::{ArchiveScripts, ControlEvent, ScriptControl},
-    snapshot::SaveImage,
+    snapshot::{SaveImage, SaveTitle},
     system_save::{FileSystemSave, SystemSaveHost},
 };
 use std::{error::Error, fs::File, io::Read, path::Path};
@@ -54,6 +54,7 @@ pub struct Startup<'a> {
     assets: DirectoryAssets,
     platform: PlatformHost,
     scene: SceneHost,
+    save_title: SaveTitle,
     steps: u32,
     main_barrier: bool,
     snapshot_policy: SnapshotPolicy,
@@ -75,6 +76,7 @@ impl<'a> Startup<'a> {
             assets: DirectoryAssets::new(root)?,
             platform: PlatformHost::default(),
             scene: SceneHost::default(),
+            save_title: SaveTitle::default(),
             steps: 0,
             main_barrier: false,
             snapshot_policy: SnapshotPolicy::default(),
@@ -95,6 +97,9 @@ impl<'a> Startup<'a> {
     }
     pub fn scene(&self) -> &SceneHost {
         &self.scene
+    }
+    pub fn save_title(&self) -> &SaveTitle {
+        &self.save_title
     }
     pub fn steps(&self) -> u32 {
         self.steps
@@ -163,6 +168,7 @@ impl<'a> Startup<'a> {
             .try_handle(&mut self.machine, &mut self.saves)?
             || self.bootstrap.try_handle(&mut self.machine)?.is_some()
             || self.scene.try_handle(&mut self.machine)?
+            || self.save_title.try_handle(&mut self.machine)?
         {
             return Ok(StartupEvent::Progress);
         }

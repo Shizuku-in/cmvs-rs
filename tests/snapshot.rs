@@ -1,7 +1,7 @@
 use cmvs_rs::{
     machine::Machine,
     ps3::Script,
-    snapshot::{Framing, MAX_SNAPSHOT, SaveImage, framing, parse_records},
+    snapshot::{Framing, MAX_SNAPSHOT, SaveImage, SaveTitle, framing, parse_records},
 };
 
 fn short(tag: u16, body: &[u8]) -> Vec<u8> {
@@ -129,4 +129,66 @@ fn unavailable_capture_clears_bit_zero_and_records_origin() {
             pc: 0
         }
     );
+}
+
+fn title_script(text: &[u8], offsets: &[u32]) -> Script {
+    let mut code = vec![];
+    for offset in offsets {
+        code.extend(0x201u16.to_le_bytes());
+        code.extend(0x120u16.to_le_bytes());
+        code.extend(offset.to_le_bytes());
+        code.extend(0x20fu16.to_le_bytes());
+        code.extend(0x430u16.to_le_bytes());
+        code.extend(0x2162u16.to_le_bytes());
+    }
+    code.extend(0x2161u16.to_le_bytes());
+    let mut payload = 0u32.to_le_bytes().to_vec();
+    payload.extend(&code);
+    payload.extend(text);
+    let mut raw = b"PS2A".to_vec();
+    for n in [
+        48,
+        0,
+        0,
+        1,
+        code.len() as u32,
+        0,
+        text.len() as u32,
+        0,
+        0,
+        payload.len() as u32,
+        0,
+    ] {
+        raw.extend(n.to_le_bytes());
+    }
+    raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+    Script::decode(&raw).unwrap()
+}
+fn to_system(vm: &mut Machine<'_>) {
+    while !matches!(vm.step().unwrap(), cmvs_rs::machine::Step::System { .. }) {}
+}
+
+#[test]
+fn save_title_copies_short_strings_and_rejects_the_unmodeled_flag_path() {
+    let mut text = b"- main -\0".to_vec();
+    text.extend([b'x'; 128]);
+    text.push(0);
+    let script = title_script(&text, &[0, 9]);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut title = SaveTitle::default();
+    assert_eq!(title.bytes(), b"");
+    assert!(!title.try_handle(&mut vm).unwrap());
+    to_system(&mut vm);
+    assert!(title.try_handle(&mut vm).unwrap());
+    assert_eq!(title.bytes(), b"- main -");
+    assert_eq!(vm.stack().len_bytes(), 0);
+    to_system(&mut vm);
+    let before = vm.pending_system();
+    assert!(title.try_handle(&mut vm).is_err());
+    assert_eq!(vm.pending_system(), before);
+    assert_eq!(title.bytes(), b"- main -");
+    vm.complete_system(cmvs_rs::vm::SystemResult(0x4004))
+        .unwrap();
+    to_system(&mut vm);
+    assert!(!title.try_handle(&mut vm).unwrap());
 }

@@ -1,6 +1,8 @@
 //! Engine save snapshot (0x140069270): record framing and its verified live-state effect.
 //! Rust never builds an original snapshot image; skipped captures are tracked as unavailable.
-use crate::{FormatError, machine::Machine};
+use crate::{
+    FormatError, bytecode::DecodeError, evaluate::error, machine::Machine, vm::SystemResult,
+};
 use std::ops::Range;
 
 /// The original fixed buffer at engine +11176; larger streams would overflow it on load.
@@ -134,5 +136,34 @@ impl SaveImage {
             pc: vm.pc(),
         };
         Ok(())
+    }
+}
+
+/// +11840: appended to save labels by the snapshot writer and stored as record 0x100.
+/// Constructor 0x140016e20 starts it empty; 0x2162 replaces it.
+#[derive(Debug, Default)]
+pub struct SaveTitle(Vec<u8>);
+
+impl SaveTitle {
+    pub fn bytes(&self) -> &[u8] {
+        &self.0
+    }
+    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
+        let Some((pc, 0x162)) = vm.pending_system() else {
+            return Ok(false);
+        };
+        let raw = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x2162, e.0))?;
+        let title = vm.resolve_string(raw)?;
+        if title.len() >= 128 {
+            // The original skips the copy and sets +12056 bit 8, which is not modeled.
+            return Err(error(
+                pc,
+                0x2162,
+                "save title of 128+ bytes sets an unmodeled flag",
+            ));
+        }
+        vm.complete_system(SystemResult(0x4004))?;
+        self.0 = title;
+        Ok(true)
     }
 }
