@@ -6,6 +6,7 @@ use cmvs_rs::{
     ps3::Script,
     save_menu::{DirectorySaves, SaveMenuHost, SlotStatus},
     script_control::{ArchiveScripts, ControlEvent, ScriptControl},
+    system_save::{FileSystemSave, SystemSaveHost},
 };
 use std::{env, error::Error, fs::File, io::Read};
 
@@ -25,7 +26,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         .ok_or("usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap]")?;
     if path == "--help" {
         println!(
-            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap] [--script-archive <archive>] [--virtual-tick <tick>] [--save-dir <directory>]\n--script loads an isolated initial script. --script-archive supplies common/main scripts and enables explicit control handling with virtual time (default tick 0), without automatic scheduling. --bootstrap applies verified startup configuration. --save-dir enables read-only saveNNN.dat header scanning and menu state, without native UI or save restoration. Main transfer stops for the unimplemented engine snapshot."
+            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap] [--script-archive <archive>] [--virtual-tick <tick>] [--save-dir <directory>] [--system-save <file>]\n--script loads an isolated initial script. --script-archive supplies common/main scripts and enables explicit control handling with virtual time (default tick 0), without automatic scheduling. --bootstrap applies verified startup configuration. --save-dir enables read-only saveNNN.dat header scanning and menu state, without native UI or save restoration. --system-save explicitly enables CSS1 persistent-state loading for 0x2128; it does not restore a gameplay snapshot. Main transfer stops for the unimplemented engine snapshot."
         );
         return Ok(());
     }
@@ -36,6 +37,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut script_archive = None;
     let mut virtual_tick = 0;
     let mut save_dir = None;
+    let mut system_save_path = None;
     while let Some(flag) = args.next() {
         if flag == "--bootstrap" {
             bootstrap = Some(Bootstrap::default());
@@ -54,6 +56,8 @@ fn run() -> Result<(), Box<dyn Error>> {
             virtual_tick = number(&value)?;
         } else if flag == "--save-dir" {
             save_dir = Some(value);
+        } else if flag == "--system-save" {
+            system_save_path = Some(value);
         } else {
             return Err("unknown option".into());
         }
@@ -93,6 +97,8 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut control = ScriptControl::new(virtual_tick);
     let mut saves = save_dir.map(DirectorySaves::new).transpose()?;
     let mut save_menu = SaveMenuHost::default();
+    let mut system_source = system_save_path.map(FileSystemSave::new);
+    let mut system_host = SystemSaveHost::default();
     if script_source.is_some() {
         println!(
             "# script control uses explicit virtual_tick={virtual_tick}; no automatic callback scheduler"
@@ -115,6 +121,19 @@ fn run() -> Result<(), Box<dyn Error>> {
             machine.stack().len_bytes()
         );
         if let Step::System { command, .. } = event {
+            if let Some(source) = &mut system_source {
+                let game_id = bootstrap
+                    .as_ref()
+                    .and_then(|host| host.settings().get(&0x201d).copied());
+                if let Some(event) = system_host.try_handle(&mut machine, source, game_id)? {
+                    println!(
+                        "# system save {event:?}; known integers={} known bits={}",
+                        machine.state().integers().len(),
+                        machine.state().bits().len()
+                    );
+                    continue;
+                }
+            }
             let control_event = if let Some(source) = &mut script_source {
                 control.try_handle(&mut machine, source)?
             } else {

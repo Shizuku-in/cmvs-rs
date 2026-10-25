@@ -9,6 +9,7 @@ pub mod ps3;
 pub mod save;
 pub mod save_menu;
 pub mod script_control;
+pub mod system_save;
 pub mod vm;
 
 use std::fmt;

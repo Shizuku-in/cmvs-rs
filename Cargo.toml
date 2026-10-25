@@ -29,6 +29,10 @@ path = "src/bin/cpz.rs"
 name = "cmvs-save"
 path = "src/bin/save.rs"
 
+[[bin]]
+name = "cmvs-system-save"
+path = "src/bin/system_save.rs"
+
 [lints.rust]
 unsafe_code = "forbid"
 

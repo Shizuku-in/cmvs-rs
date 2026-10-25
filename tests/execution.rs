@@ -118,7 +118,7 @@ fn unknown_read_and_invalid_index_do_not_guess_or_commit_nested_results() {
         (0x102, 5),
         (0x101, -1),
         (0x101, 8192),
-        (0x102, 65536),
+        (0x102, 262144),
     ] {
         assert!(evaluate(&mut state, &expr(0x200, vec![reference(tag, index)])).is_err());
         assert_eq!(state.result, None);
@@ -493,8 +493,8 @@ fn initialization_validates_whole_range_before_modifying_any_slot() {
     state.set_integer(8, 37).unwrap();
     assert!(state.fill_integers(8, u32::MAX, 0).is_err());
     assert_eq!(state.integer(8), Some(37));
-    assert!(state.fill_bits(65535, 2, false).is_err());
-    assert_eq!(state.bit(65535), None);
+    assert!(state.fill_bits(262143, 2, false).is_err());
+    assert_eq!(state.bit(262143), None);
     assert!(state.fill_floats(2047, 2, 0).is_err());
     assert_eq!(state.float_bits(2047), None);
     assert!(state.fill_strings(127, 2, b"x").is_err());

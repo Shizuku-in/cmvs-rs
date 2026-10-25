@@ -26,7 +26,7 @@ pub struct State {
 
 impl Default for State {
     fn default() -> Self {
-        Self::new(8192, 65536)
+        Self::new(8192, 262144)
     }
 }
 

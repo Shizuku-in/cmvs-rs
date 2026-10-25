@@ -22,6 +22,8 @@ cargo run --offline --bin cmvs-cpz -- "E:/Download/AMATSUTSUMI/data/pack/script.
 cargo run --offline --bin cmvs-cpz -- --list "E:/Download/AMATSUTSUMI/data/pack/script.cpz"
 cargo run --offline --bin cmvs-cpz -- --script "E:/Download/AMATSUTSUMI/data/pack/script.cpz" main.ps3
 cargo run --offline --bin cmvs-save -- "E:/Download/AMATSUTSUMI/save/save000.dat"
+cargo run --offline --bin cmvs-system-save -- "E:/Download/AMATSUTSUMI/save/system.dat"
+cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --bootstrap --save-dir "E:/Download/AMATSUTSUMI/save" --system-save "E:/Download/AMATSUTSUMI/save/system.dat" --script-archive "E:/Download/AMATSUTSUMI/data/pack/script.cpz"
 cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/script.cpz" --script main.ps3
 cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --entry 0x1214 --script-archive "E:/Download/AMATSUTSUMI/data/pack/script.cpz"
 cargo test --offline
@@ -29,7 +31,7 @@ cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-`--payload` 仅允许创建新文件，输出不包含原始头部。95 项 Rust 测试和严格 Clippy 检查通过。
+`--payload` 仅允许创建新文件，输出不包含原始头部。106 项 Rust 测试和严格 Clippy 检查通过。
 真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
 `ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
 
@@ -56,6 +58,11 @@ cargo fmt --check
 三份真实存档的全部 9 个解码段与 Python 逐字节一致，原始存档未修改。
 `cmvs-save --section <0|1|2> <存档> <新输出文件>` 可导出指定段，拒绝覆盖现有文件。
 当前仅支持 CSV2 的已核对写入模式；格式和限制见 [save-format](docs/save-format.md)，尚不恢复 VM 或引擎状态。
+新增 CSS1 `system_save` 与检查工具 `cmvs-system-save`，解码真实 `system.dat` 得到的 44864 字节与 Python 完全一致。
+`--system-save <文件>` 显式处理 0x2128，只恢复经核对的持久变量区和两组文件名列表；
+默认不从 `--save-dir` 推断系统存档，读取或校验失败保留 VM 状态，原存档始终只读。
+启用完整示例中的选项后，正常入口执行 292 次 step，在 PC=0x1174 停于窗口标题命令 0x2160。
+此时已知整数 4097、位变量 262144；窗口与画面后端尚未实现。格式见 [system-save-format](docs/system-save-format.md)。
 `cmvs-cpz` 默认读取 64 字节头部；`--list` 解密索引，`--script` 读取并解析 PS2A，
 `--extract` 将指定 ASCII 文件名的内容写入用户指定的新文件。支持当前 CPZ6 加密模式 1，尚未验证校验和。
 本作全部 13 个包的索引已解析，`script.cpz` 列出 87 个文件。
