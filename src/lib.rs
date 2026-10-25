@@ -1,13 +1,16 @@
-//! Platform-independent CMVS format research. No game assets or OS APIs.
+//! Platform-independent CMVS research core; optional `desktop` adds a native window adapter.
 pub mod bootstrap;
 pub mod bytecode;
 pub mod cpz;
 pub mod cursor;
+#[cfg(feature = "desktop")]
+pub mod desktop;
 pub mod evaluate;
 pub mod lzss;
 pub mod machine;
 pub mod platform;
 pub mod ps3;
+pub mod runner;
 pub mod save;
 pub mod save_menu;
 pub mod script_control;

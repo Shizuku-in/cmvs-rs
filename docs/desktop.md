@@ -1,0 +1,43 @@
+# 原生桌面预览
+
+这是 Windows 实测的研究预览，不是完整剧情播放器。winit 负责窗口与事件，softbuffer 只呈现棋盘格测试背景。
+应用从正常入口处理已验证的启动命令，到未知命令或引擎快照断点暂停；主断点之后仍运行窗口事件循环。
+不生成缺失的引擎对象，不把测试背景保存为剧情快照，不自动执行登记回调。
+
+```powershell
+cargo run --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis
+cargo run --offline --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --exit-after 30
+cargo test --offline
+cargo test --offline --features desktop
+cargo clippy --offline --features desktop --all-targets -- -D warnings
+```
+
+首次需获取可选依赖，此后在已缓存依赖的环境可以 offline 构建。默认 features 为空；`cargo tree --no-default-features` 只有 cmvs-rs。
+game-root 明确指定本次研究过的目录布局：data/pack/start.ps3、script.cpz、save 目录和资源根。
+不存在的 system.dat 按原版无修改返回；已有损坏存档、编码错误、未知命令不会静默跳过。
+
+窗口标题必须显式指定 shift-jis、gbk 或 utf-8。使用 encoding_rs 的严格转换，不猜测编码，不用替换字符隐藏解码错误。
+图标先验证所有 ICO 条目及嵌入图像尺寸相符，限制在目录可表达的 1..256 像素，之后解码最接近 32×32 的条目。
+输入文件上限沿用 4 MiB；并不声称模拟 Windows 所有 DPI/图标自动选择规则。
+光标用现有 CUR 解码器读取热点/平面；AND=1 且 XOR 非零的反色像素不能转换为普通 RGBA，原生后端明确拒绝。
+本作四份 CUR 没有此类反色像素，均可转换并交给 winit 原生光标接口。
+
+研究控制：
+
+- 下边栏蓝色表示启动执行中，黄色表示已在研究断点暂停；棋盘格不是游戏图像。
+- 暂停后 F1 恢复默认光标，F2～F5 预览登记的四个光标。它们直接测试后端，不改变 VM、系统变量或脚本 PC。
+- Esc 或窗口关闭按钮退出。`--exit-after 1..3600` 指定自动退出秒数，仅用于窗口运行检查。
+- 标准输出记录实际应用的标题/图标/光标请求和输入事件统计，不写游戏目录。
+
+宿主输入只观察本窗口的物理按键、鼠标移动/按钮/滚轮和焦点事件。
+保持按下集合以供后续适配，失焦时清空，最多保留 256 条事件并统计丢弃数量。
+这些事件没有伪装成 CMVS 系统结果，也未绑定到游戏输入指令；当前不会推进剧情或触发已登记脚本回调。
+窗口帧缓冲上限 16M 像素。启动采用事件循环内的协作执行预算，单条 VM 指令仍可能超过预算，后续需要性能与调度研究。
+当前虚拟 tick 固定 0，窗口 wall-clock 和自动退出时钟不代表已完成 CMVS 计时语义。
+
+验证：原生运行 479 步到 main.ps3 的 PC=0x38d1e，13 个回调，已知整数 4097、位变量 262144。
+窗口列表实际返回标题「アマツツミ」；日志确认创建窗口、提交 32×32 图标并进入暂停后事件循环。
+图标 4096 字节 RGBA 与 Pillow 逐字节一致；用户确认 F2～F5 四个光标及 Esc 正常。
+人工检查日志记录四个原生光标、键盘、鼠标事件，退出时 VM 步数仍为 479。
+桌面自动化工具对 cmvs-desktop 的截图请求因应用未获批准被拒绝，未使用其他自动化方式绕过；没有自动截图验证。
+macOS/Linux/Android/iOS 尚未构建或真机验证，当前窗口代码不能直接视为这些平台均已支持。

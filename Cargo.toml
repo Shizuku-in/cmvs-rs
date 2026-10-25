@@ -42,3 +42,18 @@ unsafe_code = "forbid"
 
 [lints.clippy]
 all = "warn"
+
+[dependencies]
+encoding_rs = { version = "=0.8.42", optional = true }
+ico = { version = "=0.5.0", optional = true }
+softbuffer = { version = "=0.4.8", optional = true }
+winit = { version = "=0.30.13", optional = true }
+
+[features]
+default = []
+desktop = ["dep:winit", "dep:ico", "dep:encoding_rs", "dep:softbuffer"]
+
+[[bin]]
+name = "cmvs-desktop"
+path = "src/bin/desktop.rs"
+required-features = ["desktop"]

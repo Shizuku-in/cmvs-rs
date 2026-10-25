@@ -2,12 +2,13 @@
 
 以 **Rust** 研究并重实现 CMVS，目标是让 CMVS 获得全平台支持。从《アマツツミ》开始，逐步扩展到其他 CMVS 版本与作品。
 
-Windows、macOS、Linux、Android、iOS 是主要平台目标；当前仅 Windows 研究工具经过实测。
+Windows、macOS、Linux、Android、iOS 是主要平台目标；当前 Windows 研究工具与原生桌面预览经过实测。
 
 ## Rust 核心与命令行
 
 已实现 `cmvs_rs` 库和 `cmvs-inspect` 命令行：PS2A 解析、字节解码、LZSS 解压、标签及分段读取。
-无第三方依赖，禁止 unsafe；文本保留原始字节，CLI 以十六进制显示，避免误判 Shift-JIS/GBK 编码。
+默认核心无第三方依赖，项目代码禁止 unsafe；可选 `desktop` 功能使用窗口与图像依赖。
+核心文本保留原始字节，CLI 以十六进制显示，避免误判 Shift-JIS/GBK 编码。
 
 在项目目录中，使用支持 Rust 2024 edition 的 stable 工具链：
 
@@ -33,7 +34,7 @@ cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-`--payload` 仅允许创建新文件，输出不包含原始头部。116 项 Rust 测试和严格 Clippy 检查通过。
+`--payload` 仅允许创建新文件，输出不包含原始头部。默认 119 项测试、启用 desktop 后 124 项测试和严格 Clippy 检查通过。
 真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
 `ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
 
@@ -72,6 +73,18 @@ cargo fmt --check
 新增 `cursor`、`cmvs-cursor`，读取本作单图像 8 位 CUR，保留 AND/XOR 像素与热点；
 四份真实光标的 4096 字节平面结果均与 Python 逐字节一致。`--planes <新文件>` 可导出原始平面，格式不是 RGBA。
 平台接口、错误策略和当前支持范围见 [platform-host](docs/platform-host.md)。
+新增可选原生桌面预览，运行命令：
+
+```powershell
+cargo run --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis
+```
+
+原生窗口已实测显示日文标题、提交 32×32 图标，从正常入口执行 479 步到主快照断点并保持响应。
+棋盘格是后端测试画面；尚无 CMVS 场景绘制、剧情文字、音频或输入指令绑定。
+暂停后 F1 恢复默认光标、F2～F5 预览登记光标，Esc/关闭按钮退出；预览快捷键不修改 VM 状态。
+用户已确认四个光标和 Esc 正常，事件日志记录了真实键盘、鼠标和焦点事件。
+标题必须显式选择 `--encoding shift-jis|gbk|utf-8`；`--exit-after <秒>` 可用于有界运行检查。
+桌面后端支持范围和验证方式见 [desktop](docs/desktop.md)，其他平台尚未构建验证。
 `cmvs-cpz` 默认读取 64 字节头部；`--list` 解密索引，`--script` 读取并解析 PS2A，
 `--extract` 将指定 ASCII 文件名的内容写入用户指定的新文件。支持当前 CPZ6 加密模式 1，尚未验证校验和。
 本作全部 13 个包的索引已解析，`script.cpz` 列出 87 个文件。
@@ -84,7 +97,7 @@ cargo fmt --check
 参数字节栈与返回标志见 `vm` 模块。
 详细证据见 [VM 语义](docs/vm-semantics.md)。CLI 的线性解码不跟随分支，尚不能运行游戏。
 
-目前提供的是可运行的脚本解码研究工具，**尚不能运行游戏**，也没有生成 iOS/Android 应用。
+目前提供研究工具和原生桌面预览，**尚不能运行游戏剧情**，也没有生成 iOS/Android 应用。
 
 ## 已实现
 

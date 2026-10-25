@@ -35,6 +35,14 @@
 - Microsoft [About Cursors](https://learn.microsoft.com/en-us/windows/win32/menurc/about-cursors)：热点、CUR、多图像选择及窗口类光标行为。
 - 仅参考格式和行为描述，未复制示例源码。CUR 解码器仅实现本作当前单图像 8 位样本，使用外部 Python 和合成样本验证。
 
+## 可选桌面依赖
+
+- [winit 0.30.13](https://docs.rs/winit/0.30.13/winit/)，Apache-2.0：原生事件循环、窗口、图标与光标接口。
+- [softbuffer 0.4.8](https://docs.rs/softbuffer/0.4.8/softbuffer/)，MIT OR Apache-2.0：桌面测试帧缓冲呈现。
+- [ico 0.5.0](https://docs.rs/ico/0.5.0/ico/)，MIT：预检尺寸后的 ICO 图像解码。
+- [encoding_rs 0.8.42](https://docs.rs/encoding_rs/0.8.42/encoding_rs/)，(Apache-2.0 OR MIT) AND BSD-3-Clause：显式编码的严格标题转换。
+- 版本和传递依赖固定在 Cargo.lock；这些依赖只在 `desktop` 功能启用，不引入默认核心依赖。未复制库示例源码，使用公开 API 实现适配。
+
 ## 本作证据与验证约定
 
 IDA 地址、文件哈希和实际指令差异见 `research.md`。当前样本是 PC 版，未分析 Android 包。
