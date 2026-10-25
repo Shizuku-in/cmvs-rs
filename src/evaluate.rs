@@ -122,8 +122,15 @@ impl State {
     }
     /// Commit all nested expression writes only if the complete expression succeeds.
     pub fn evaluate_integer(&mut self, expr: &Expression) -> Result<i32, DecodeError> {
+        self.evaluate_integer_with_labels(expr, &[])
+    }
+    pub fn evaluate_integer_with_labels(
+        &mut self,
+        expr: &Expression,
+        labels: &[u32],
+    ) -> Result<i32, DecodeError> {
         let mut candidate = self.clone();
-        let value = candidate.evaluate(expr, 0)?;
+        let value = candidate.evaluate(expr, 0, labels)?;
         *self = candidate;
         Ok(value)
     }
@@ -147,7 +154,12 @@ impl State {
         }
         .map_err(|why| error(pc, op, why))
     }
-    fn evaluate(&mut self, expr: &Expression, depth: usize) -> Result<i32, DecodeError> {
+    fn evaluate(
+        &mut self,
+        expr: &Expression,
+        depth: usize,
+        labels: &[u32],
+    ) -> Result<i32, DecodeError> {
         if depth >= 64 {
             return Err(error(
                 expr.pc,
@@ -164,12 +176,22 @@ impl State {
                 Term::Scalar {
                     tag: 0x100, raw, ..
                 } => stack.push(Cell::Value(*raw as i32)),
+                Term::Scalar {
+                    pc,
+                    tag: 0x10e,
+                    raw,
+                } => {
+                    let target = labels
+                        .get(*raw as usize)
+                        .ok_or_else(|| error(*pc, 0x10e, "label operand index out of bounds"))?;
+                    stack.push(Cell::Value(*target as i32));
+                }
                 Term::Nested {
                     pc,
                     tag,
                     expression,
                 } if matches!(tag, 0x200 | 0x101 | 0x102) => {
-                    let value = self.evaluate(expression, depth + 1)?;
+                    let value = self.evaluate(expression, depth + 1, labels)?;
                     let cell = match tag {
                         0x200 => Cell::Value(value),
                         0x101 if value >= 0 && (value as u32) < self.integer_limit => {

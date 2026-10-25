@@ -4,6 +4,7 @@ use cmvs_rs::{
     cpz::Cpz6Index,
     machine::{Machine, Step},
     ps3::Script,
+    script_control::{ArchiveScripts, ControlEvent, ScriptControl},
 };
 use std::{env, error::Error, fs::File, io::Read};
 
@@ -23,7 +24,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         .ok_or("usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap]")?;
     if path == "--help" {
         println!(
-            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap]\n--script loads a script directly from CPZ6 mode 1. Bounded research VM; stops at unimplemented host commands. --bootstrap applies verified startup state/configuration. Isolated scripts do not inherit game startup state."
+            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap] [--script-archive <archive>] [--virtual-tick <tick>]\n--script loads an isolated initial script. --script-archive supplies common/main scripts and enables explicit control handling with virtual time (default tick 0), without automatic scheduling. --bootstrap applies verified startup configuration. Main transfer stops for the unimplemented engine snapshot."
         );
         return Ok(());
     }
@@ -31,6 +32,8 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut budget = 10000u32;
     let mut bootstrap = None;
     let mut archive_script = None;
+    let mut script_archive = None;
+    let mut virtual_tick = 0;
     while let Some(flag) = args.next() {
         if flag == "--bootstrap" {
             bootstrap = Some(Bootstrap::default());
@@ -43,6 +46,10 @@ fn run() -> Result<(), Box<dyn Error>> {
             budget = number(&value)?;
         } else if flag == "--script" {
             archive_script = Some(value);
+        } else if flag == "--script-archive" {
+            script_archive = Some(value);
+        } else if flag == "--virtual-tick" {
+            virtual_tick = number(&value)?;
         } else {
             return Err("unknown option".into());
         }
@@ -51,12 +58,19 @@ fn run() -> Result<(), Box<dyn Error>> {
         return Err("step budget must be 1..1000000".into());
     }
     let mut file = File::open(&path)?;
+    let mut initial_name = std::path::Path::new(&path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("entry.ps3")
+        .as_bytes()
+        .to_vec();
     let raw = if let Some(name) = archive_script {
         let name = name
             .to_str()
             .filter(|s| s.is_ascii())
             .ok_or("archive script basename must be ASCII")?;
         let index = Cpz6Index::read(&mut file)?;
+        initial_name = name.as_bytes().to_vec();
         index.read_entry(&mut file, index.find(name.as_bytes())?)?
     } else {
         let mut raw = Vec::new();
@@ -68,6 +82,16 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
     let script = Script::decode(&raw)?;
     let mut machine = Machine::at(&script, entry.unwrap_or(script.header.entry_pc))?;
+    machine.set_current_name(initial_name);
+    let mut script_source = script_archive
+        .map(|path| -> Result<_, Box<dyn Error>> { ArchiveScripts::new(File::open(path)?) })
+        .transpose()?;
+    let mut control = ScriptControl::new(virtual_tick);
+    if script_source.is_some() {
+        println!(
+            "# script control uses explicit virtual_tick={virtual_tick}; no automatic callback scheduler"
+        );
+    }
     println!(
         "# Research trace {:?}; initial variables unknown; entry=0x{:x}",
         path,
@@ -75,14 +99,47 @@ fn run() -> Result<(), Box<dyn Error>> {
     );
     for step in 0..budget {
         let pc = machine.pc();
+        let slot = machine.current_slot();
+        let name = machine.current_name().escape_ascii().to_string();
         let event = machine.step()?;
         println!(
-            "{step}: pc=0x{pc:04x} -> 0x{:04x} result={:?} stack_bytes={} {event:?}",
+            "{step}: slot={slot} script={name} pc=0x{pc:04x} -> 0x{:04x} result={:?} stack_bytes={} {event:?}",
             machine.pc(),
             machine.state().result,
             machine.stack().len_bytes()
         );
         if let Step::System { command, .. } = event {
+            let control_event = if let Some(source) = &mut script_source {
+                control.try_handle(&mut machine, source)?
+            } else {
+                None
+            };
+            if let Some(event) = control_event {
+                println!(
+                    "# script control 0x{:04x}: {event:?}; slot={} script={} pc=0x{:x} callbacks={}",
+                    command + 0x2000,
+                    machine.current_slot(),
+                    machine.current_name().escape_ascii(),
+                    machine.pc(),
+                    control.callbacks().len()
+                );
+                if event == ControlEvent::MainPreparedNeedsSnapshot {
+                    println!(
+                        "# STOP main context prepared; original engine snapshot still requires a host implementation"
+                    );
+                    for (slot, name) in machine.loaded_names() {
+                        println!("# loaded[{slot}]={}", name.escape_ascii());
+                    }
+                    println!(
+                        "# known integers={} known bits={} stack_bytes={}",
+                        machine.state().integers().len(),
+                        machine.state().bits().len(),
+                        machine.stack().len_bytes()
+                    );
+                    return Ok(());
+                }
+                continue;
+            }
             if let Some(host) = &mut bootstrap {
                 if let Some(event) = host.try_handle(&mut machine)? {
                     println!(

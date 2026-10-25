@@ -55,7 +55,7 @@ impl Header {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Script {
     pub header: Header,
     payload: Vec<u8>,

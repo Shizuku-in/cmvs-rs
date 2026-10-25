@@ -72,6 +72,7 @@ pub enum InstructionKind {
     Label { index: u16 },
     StackAdjust { bytes: u16 },
     StackImmediate { bytes: u16, raw: u32 },
+    ScriptReturn { reserved: u16 },
     Simple,
     System { command: u16 },
 }
@@ -252,7 +253,10 @@ pub fn decode_at(code: &[u8], pc: usize) -> Result<Instruction, DecodeError> {
         0x411 | 0x412 => InstructionKind::StackAdjust {
             bytes: reader.word()?,
         },
-        0x413 | 0x414 | 0x416 | 0x430 => InstructionKind::Simple,
+        0x414 => InstructionKind::ScriptReturn {
+            reserved: reader.word()?,
+        },
+        0x413 | 0x416 | 0x430 => InstructionKind::Simple,
         0x440 | 0x442 => InstructionKind::StackImmediate {
             bytes: reader.word()?,
             raw: reader.dword()?,

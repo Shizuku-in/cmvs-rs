@@ -156,3 +156,38 @@ CLI 解包只接受用户指定的新输出文件，不使用包内路径自动�
 目前 62 项 Rust 测试及严格 Clippy 检查通过。
 
 下一步：公共脚本槽与脚本切换、0x2089 和存档菜单后端，以及资源校验和。
+
+## 公共脚本与控制流阶段
+
+通过当前 IDA 数据库核对 0x2081、0x2088/89/8a/8b/8c、0x2080 和跨脚本返回。
+源码记录见 `vm-semantics.md`。新增 `ScriptSource`、CPZ6 来源、`ScriptControl` 和多槽 VM；
+对初始脚本保留借用，对新加载的公共/主脚本持有所有权，全局变量在切换时保留。
+
+修正 0x0414 文件编码宽度后，两个公共脚本完整结构解码通过：
+
+| 文件 | 顶层指令数 | 系统命令种类 | 代码字节数 |
+|---|---:|---:|---:|
+| intproc.ps3 | 67170 | 390 | 569388 |
+| intcode.ps3 | 14515 | 4 | 198674 |
+
+二者的资源解码字节及 PS2A payload 均与独立 Python 参考结果一致。
+资源 SHA-256：intproc `bc006ea8d1101a00d8646fadd0dfb3682439bf046c286dcf0f35b0247e9034c4`，
+intcode `afd81aeec052c49f764f3617fc165e2a3ac2fe71604c345784a1a7f5f6a5031e`。
+
+实际尾段实验（不是完整启动）：
+
+```powershell
+cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --entry 0x1214 --script-archive "E:/Download/AMATSUTSUMI/data/pack/script.cpz"
+```
+
+共进行 172 次 step。先执行 intproc 的初始化入口 0x5efa2，返回 start，再执行 intcode 的入口 0，返回 start。
+共登记 13 个回调；随后 0x2080 准备 main.ps3，内部槽 0=main、1=intproc、2=intcode，
+PC=0x38d1e、SP=0，在原引擎快照尚待宿主实现处停止。
+该隔离运行只得到表达式结果槽的已知值，没有伪造此前正常启动的变量初始化或菜单/存档状态。
+正常入口加 bootstrap 仍停在 0x22b3，未自动跳过。
+
+新增合成测试覆盖嵌套初始化返回、非零入口、repeat 恢复、标签来源、回调参数/禁用/调用、
+主切换保留变量和公共槽、主脚本回调失效、缺失/非法脚本回滚及活跃槽重入限制。
+74 项 Rust 测试与严格 Clippy 检查通过；没有加入游戏数据或真实脚本。
+
+下一步：正常启动的存档菜单和引擎快照；之后继续覆盖公共脚本的数据/帧寻址与执行命令。

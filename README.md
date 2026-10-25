@@ -21,12 +21,13 @@ cargo run --offline --bin cmvs-cpz -- "E:/Download/AMATSUTSUMI/data/pack/script.
 cargo run --offline --bin cmvs-cpz -- --list "E:/Download/AMATSUTSUMI/data/pack/script.cpz"
 cargo run --offline --bin cmvs-cpz -- --script "E:/Download/AMATSUTSUMI/data/pack/script.cpz" main.ps3
 cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/script.cpz" --script main.ps3
+cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --entry 0x1214 --script-archive "E:/Download/AMATSUTSUMI/data/pack/script.cpz"
 cargo test --offline
 cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-`--payload` 仅允许创建新文件，输出不包含原始头部。62 项 Rust 测试和严格 Clippy 检查通过。
+`--payload` 仅允许创建新文件，输出不包含原始头部。74 项 Rust 测试和严格 Clippy 检查通过。
 真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
 `ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
 
@@ -46,6 +47,10 @@ cargo fmt --check
 本作全部 13 个包的索引已解析，`script.cpz` 列出 87 个文件。
 主脚本结构解码为 26257 条指令，可直接加载进 VM，执行 8 条指令后停在 0x2089。
 这次独立主脚本实验没有继承完整启动状态，也不代表完整游戏已经运行。
+新增 `script_control`：公共脚本槽、执行初始化后跨脚本返回、显式回调登记/调用，以及主脚本核心切换。
+`--script-archive` 显式提供公共脚本来源，使用可指定的虚拟 tick（默认 0），不自动运行回调调度器。
+上面的 `--entry 0x1214` 是尾段隔离实验：执行 172 次 step，依次初始化 intproc/intcode，登记 13 个回调，
+准备 main.ps3 后停在尚未实现的引擎存档快照步骤。它没有运行此前启动配置，不可宣称完整启动成功。
 参数字节栈与返回标志见 `vm` 模块。
 详细证据见 [VM 语义](docs/vm-semantics.md)。CLI 的线性解码不跟随分支，尚不能运行游戏。
 
