@@ -37,7 +37,7 @@ cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-`--payload` 仅允许创建新文件，输出不包含原始头部。默认 137 项测试、启用 desktop 后 142 项测试和严格 Clippy 检查通过。
+`--payload` 仅允许创建新文件，输出不包含原始头部。默认 142 项测试、启用 desktop 后 147 项测试和严格 Clippy 检查通过。
 真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
 `ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
 
@@ -113,8 +113,11 @@ cargo run --offline --features desktop --bin cmvs-desktop -- "E:/Download/AMATSU
 新增 `snapshot`：核对 0x2080/0x22b2 调用的引擎快照 0x140069270。快照缓冲只供存档写入使用，
 对 VM 唯一可见的实时影响是位变量 0 最终被清零。`cmvs-save --records` 遍历 CSV2 第 0 段记录帧，
 三份真实存档各 45 条记录，与独立 Python 遍历器逐条一致。上面带 `--continue-without-snapshot` 的命令
-只应用这一项影响、不构建存档镜像，执行 479 步后进入 main.ps3，共 491 步后在 PC=0x38d68 停于 0x22cb。
-`cmvs-desktop` 支持同名选项，Windows 实测停点相同。此时存档镜像为“不可用”，存档功能不能使用。
+只应用这一项影响、不构建存档镜像，执行 479 步后进入 main.ps3。此时存档镜像为“不可用”，存档功能不能使用。
+新增 `scene`：0x22cb 设置清屏色（不透明 0xRRGGBB）、0x2250 设置深度清除标志，只保存状态、不绘制。
+main.ps3 将清屏色设为 0，再经已支持的 0x22b4 调用标签 186；共执行 497 步后，
+在 0x34eea 的字符串变量赋值（栈帧字符串参数写入字符串变量 4）处明确报错“未实现”，没有跳过。
+`cmvs-desktop` 支持同名选项，Windows 实测在同一位置报错退出；窗口仍显示诊断棋盘格。
 格式与证据见 [snapshot-format](docs/snapshot-format.md)。
 
 目前提供研究工具和原生桌面预览，**尚不能运行游戏剧情**，也没有生成 iOS/Android 应用。

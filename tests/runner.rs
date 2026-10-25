@@ -134,6 +134,29 @@ fn explicit_policy_enters_main_without_building_a_save_image() {
         (4, 8, 4)
     );
 }
+#[test]
+fn startup_records_clear_color_without_drawing() {
+    let mut code = 0x440u16.to_le_bytes().to_vec();
+    code.extend(4u16.to_le_bytes());
+    code.extend(0x00ff_8000u32.to_le_bytes());
+    code.extend(0x22cbu16.to_le_bytes());
+    code.extend(0x2161u16.to_le_bytes());
+    let root = Root::new("clear", &code, b"");
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let mut backend = RecordingBackend::default();
+    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(run.scene().clear().rgba(), [0xff, 0x80, 0, 255]);
+    assert!(backend.requests().is_empty());
+    assert!(matches!(
+        run.tick(&mut backend).unwrap(),
+        StartupEvent::Unhandled {
+            command: 0x2161,
+            ..
+        }
+    ));
+}
 struct Reject;
 impl PlatformBackend for Reject {
     fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {

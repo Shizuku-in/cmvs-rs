@@ -6,6 +6,7 @@ use cmvs_rs::{
     platform::{DirectoryAssets, PlatformHost, PlatformRequest, RecordingBackend},
     ps3::Script,
     save_menu::{DirectorySaves, SaveMenuHost, SlotStatus},
+    scene::SceneHost,
     script_control::{ArchiveScripts, ControlEvent, ScriptControl},
     snapshot::SaveImage,
     system_save::{FileSystemSave, SystemSaveHost},
@@ -28,7 +29,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         .ok_or("usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap]")?;
     if path == "--help" {
         println!(
-            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap] [--script-archive <archive>] [--virtual-tick <tick>] [--save-dir <directory>] [--system-save <file>] [--record-platform <game-root>] [--continue-without-snapshot]\n--script loads an isolated initial script. --script-archive supplies common/main scripts and enables explicit control handling with virtual time (default tick 0), without automatic scheduling. --bootstrap applies verified startup configuration. --save-dir enables read-only saveNNN.dat header scanning and menu state, without native UI or save restoration. --system-save explicitly enables CSS1 persistent-state loading for 0x2128; it does not restore a gameplay snapshot. --record-platform enables a recording-only backend with read-only cursor/icon assets from the explicit game root; no native window or input polling. Main transfer stops at the engine save snapshot unless --continue-without-snapshot is given; that applies only the verified live-state effect, builds no save image, and leaves saving unavailable."
+            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap] [--script-archive <archive>] [--virtual-tick <tick>] [--save-dir <directory>] [--system-save <file>] [--record-platform <game-root>] [--continue-without-snapshot]\n--script loads an isolated initial script. --script-archive supplies common/main scripts and enables explicit control handling with virtual time (default tick 0), without automatic scheduling. --bootstrap applies verified startup configuration. --save-dir enables read-only saveNNN.dat header scanning and menu state, without native UI or save restoration. --system-save explicitly enables CSS1 persistent-state loading for 0x2128; it does not restore a gameplay snapshot. --record-platform enables a recording-only backend with read-only cursor/icon assets from the explicit game root, plus verified scene state such as the clear color; no native window, drawing, or input polling. Main transfer stops at the engine save snapshot unless --continue-without-snapshot is given; that applies only the verified live-state effect, builds no save image, and leaves saving unavailable."
         );
         return Ok(());
     }
@@ -113,6 +114,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut platform_host = PlatformHost::default();
     let mut platform_backend = RecordingBackend::default();
     let mut save_image = SaveImage::default();
+    let mut scene = SceneHost::default();
     if platform_assets.is_some() {
         println!(
             "# RECORDING platform backend: requests and state only; no native window, cursor, icon display, or input polling"
@@ -176,6 +178,15 @@ fn run() -> Result<(), Box<dyn Error>> {
                             ),
                         }
                     }
+                    continue;
+                }
+                if scene.try_handle(&mut machine)? {
+                    println!(
+                        "# scene state 0x{:04x}: {:?} rgba={:?}; recorded only, nothing drawn",
+                        command + 0x2000,
+                        scene.clear(),
+                        scene.clear().rgba()
+                    );
                     continue;
                 }
             }

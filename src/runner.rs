@@ -7,6 +7,7 @@ use crate::{
     platform::{DirectoryAssets, PlatformBackend, PlatformHost},
     ps3::Script,
     save_menu::{DirectorySaves, SaveMenuHost},
+    scene::SceneHost,
     script_control::{ArchiveScripts, ControlEvent, ScriptControl},
     snapshot::SaveImage,
     system_save::{FileSystemSave, SystemSaveHost},
@@ -52,6 +53,7 @@ pub struct Startup<'a> {
     system_host: SystemSaveHost,
     assets: DirectoryAssets,
     platform: PlatformHost,
+    scene: SceneHost,
     steps: u32,
     main_barrier: bool,
     snapshot_policy: SnapshotPolicy,
@@ -72,6 +74,7 @@ impl<'a> Startup<'a> {
             system_host: SystemSaveHost::default(),
             assets: DirectoryAssets::new(root)?,
             platform: PlatformHost::default(),
+            scene: SceneHost::default(),
             steps: 0,
             main_barrier: false,
             snapshot_policy: SnapshotPolicy::default(),
@@ -89,6 +92,9 @@ impl<'a> Startup<'a> {
     }
     pub fn platform(&self) -> &PlatformHost {
         &self.platform
+    }
+    pub fn scene(&self) -> &SceneHost {
+        &self.scene
     }
     pub fn steps(&self) -> u32 {
         self.steps
@@ -156,6 +162,7 @@ impl<'a> Startup<'a> {
             .save_menu
             .try_handle(&mut self.machine, &mut self.saves)?
             || self.bootstrap.try_handle(&mut self.machine)?.is_some()
+            || self.scene.try_handle(&mut self.machine)?
         {
             return Ok(StartupEvent::Progress);
         }
