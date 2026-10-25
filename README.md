@@ -1,4 +1,31 @@
-# CMVS 多平台兼容实现：第一阶段
+# cmvs-rs
+
+以 **Rust** 研究并重实现 CMVS，目标是让 CMVS 获得全平台支持。从《アマツツミ》开始，逐步扩展到其他 CMVS 版本与作品。
+
+Windows、macOS、Linux、Android、iOS 是主要平台目标；当前仅 Windows 研究工具经过实测。
+
+## Rust 核心与命令行
+
+已实现 `cmvs_rs` 库和 `cmvs-inspect` 命令行：PS2A 解析、字节解码、LZSS 解压、标签及分段读取。
+无第三方依赖，禁止 unsafe；文本保留原始字节，CLI 以十六进制显示，避免误判 Shift-JIS/GBK 编码。
+
+在项目目录中，使用支持 Rust 2024 edition 的 stable 工具链：
+
+```powershell
+cargo run --offline -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3"
+cargo run --offline -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --payload ../../work/start-rust-new.bin
+cargo test --offline
+cargo clippy --offline --all-targets -- -D warnings
+cargo fmt --check
+```
+
+`--payload` 仅允许创建新文件，输出不包含原始头部。10 项 Rust 测试和严格 Clippy 检查通过。
+真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
+`ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
+
+源代码在 `src/`，Rust 测试在 `tests/*.rs`；Python 工具保留为研究对照。
+架构见 [architecture](docs/architecture.md)，参考来源见 [references](docs/references.md)。
+当前仅建立本地 Git 仓库，未配置远端或推送。
 
 目前提供的是可运行的脚本解码研究工具，**尚不能运行游戏**，也没有生成 iOS/Android 应用。
 
@@ -23,7 +50,7 @@ python -m unittest discover -s tests -v
 
 1. 以当前游戏二进制核对表达式求值、参数栈和系统命令；建立带未知指令即停止的启动脚本执行器。
 2. 实现 CPZ6 目录读取和文件提取，验证 intproc.ps3、intcode.ps3、main.ps3 等实际内容。
-3. 建立平台无关的 VM 和资源核心（计划 C++），先在桌面实现文字、背景、立绘、语音与选择分支。
+3. 用 Rust 建立平台无关的 VM 和资源核心，先在桌面实现文字、背景、立绘、语音与选择分支。
 4. 加入图形、音频、字体、输入、存档的后端，再接 Windows/macOS/Linux/Android/iOS。
 5. 使用同一段剧情对照原程序验证；iOS 编译、签名和设备测试仍需要对应环境。
 

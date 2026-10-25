@@ -1,0 +1,19 @@
+[package]
+name = "cmvs-rs"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Portable CMVS format research tools; not yet a game runtime"
+
+[lib]
+name = "cmvs_rs"
+
+[[bin]]
+name = "cmvs-inspect"
+path = "src/main.rs"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "warn"

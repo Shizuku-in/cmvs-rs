@@ -1,3 +1,9 @@
+Reference: https://github.com/xmoezzz/CMVS-Engine
+Commit: a6bc9501d82264e228943f894af1b969ab98bee5
+Used for PS2A byte transform and LZSS format research/implementation.
+The notice below applies to that third-party work, not automatically to
+every original file in cmvs-rs.
+
 MIT License
 
 Copyright (c) 2017 X'moe
