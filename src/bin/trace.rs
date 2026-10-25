@@ -191,6 +191,13 @@ fn run() -> Result<(), Box<dyn Error>> {
                 for ((op, slot), path) in host.paths() {
                     println!("# path 0x{op:04x}[{slot}]={}", path.escape_ascii());
                 }
+                for (i, name) in host.cursor_names().iter().enumerate() {
+                    println!("# cursor[{}]={}", i + 1, name.escape_ascii());
+                }
+                println!(
+                    "# system_integer[0]={:?}",
+                    machine.state().system_integer(0)
+                );
             }
             println!(
                 "# STOP pending system=0x{:04x}; PC and parameters preserved; not game completion",

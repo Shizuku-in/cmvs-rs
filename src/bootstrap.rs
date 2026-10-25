@@ -13,6 +13,7 @@ pub struct Bootstrap {
     settings: BTreeMap<u16, u32>,
     paths: BTreeMap<(u16, u32), Vec<u8>>,
     handled: usize,
+    cursors: Vec<Vec<u8>>,
 }
 
 impl Bootstrap {
@@ -28,12 +29,35 @@ impl Bootstrap {
     pub fn handled_count(&self) -> usize {
         self.handled
     }
+    /// Registration order maps to original one-based IDs; duplicates are retained.
+    pub fn cursor_names(&self) -> &[Vec<u8>] {
+        &self.cursors
+    }
 
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<Option<Step>, DecodeError> {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(None);
         };
         let op = command + 0x2000;
+        if command == 0x98 {
+            let raw = vm.stack().peek_u32(4).map_err(|e| error(pc, op, e.0))?;
+            let name = vm.resolve_string(raw)?;
+            if name.len() >= 128 || self.cursors.len() >= 1024 {
+                return Err(error(
+                    pc,
+                    op,
+                    "cursor name or registry exceeds research limit",
+                ));
+            }
+            let id = self.cursors.len() as u32 + 1;
+            let event = vm.complete_system(SystemResult(0x4004))?;
+            vm.state_mut()
+                .set_system_integer(0, id)
+                .map_err(|why| error(pc, op, why))?;
+            self.cursors.push(name);
+            self.handled += 1;
+            return Ok(Some(event));
+        }
         let argument = |distance| {
             vm.stack()
                 .peek_u32(distance)

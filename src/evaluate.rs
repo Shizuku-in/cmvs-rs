@@ -17,6 +17,7 @@ pub struct State {
     bits: BTreeMap<u32, bool>,
     floats: BTreeMap<u32, u32>,
     strings: BTreeMap<u32, Vec<u8>>,
+    system_integers: [Option<u32>; 7],
     integer_limit: u32,
     bit_limit: u32,
     pub result: Option<u32>,
@@ -37,6 +38,7 @@ impl State {
             bits: BTreeMap::new(),
             floats: BTreeMap::new(),
             strings: BTreeMap::new(),
+            system_integers: [None; 7],
             integer_limit,
             bit_limit,
             result: None,
@@ -45,6 +47,18 @@ impl State {
     }
     pub fn integer(&self, index: u32) -> Option<i32> {
         self.integers.get(&index).copied()
+    }
+    /// Integer system result slots +82816..+82840, distinct from expression result +82812.
+    pub fn system_integer(&self, index: u32) -> Option<u32> {
+        self.system_integers.get(index as usize).copied().flatten()
+    }
+    pub fn set_system_integer(&mut self, index: u32, value: u32) -> Result<(), &'static str> {
+        let slot = self
+            .system_integers
+            .get_mut(index as usize)
+            .ok_or("integer system result slot must be 0..6")?;
+        *slot = Some(value);
+        Ok(())
     }
     pub fn bit(&self, index: u32) -> Option<bool> {
         self.bits.get(&index).copied()
@@ -185,6 +199,26 @@ impl State {
                         .get(*raw as usize)
                         .ok_or_else(|| error(*pc, 0x10e, "label operand index out of bounds"))?;
                     stack.push(Cell::Value(*target as i32));
+                }
+                Term::Scalar {
+                    pc,
+                    tag: 0x10f,
+                    raw,
+                } => {
+                    let value = match *raw {
+                        0..=6 => self
+                            .system_integer(*raw)
+                            .ok_or_else(|| error(*pc, 0x10f, "unknown integer system result"))?,
+                        7..=10 => {
+                            return Err(error(
+                                *pc,
+                                0x10f,
+                                "floating system result conversion not implemented",
+                            ));
+                        }
+                        _ => 0, // Original operand reader returns zero outside slots 0..10.
+                    };
+                    stack.push(Cell::Value(value as i32));
                 }
                 Term::Nested {
                     pc,

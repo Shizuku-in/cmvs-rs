@@ -520,3 +520,98 @@ fn repeated_path_registration_replaces_its_slot_not_other_categories() {
     assert_eq!(host.paths().len(), 1);
     assert_eq!(host.paths().get(&(0x2010, 0)).unwrap(), b"new");
 }
+
+#[test]
+fn system_integer_reads_are_separate_known_values_and_preserve_failed_state() {
+    let mut state = State::default();
+    evaluate(&mut state, &int(91)).unwrap();
+    let operand = expr(0x200, vec![scalar(0x10f, 0)]);
+    assert!(evaluate(&mut state, &operand).is_err());
+    assert_eq!(state.result, Some(91));
+    state.set_system_integer(0, u32::MAX).unwrap();
+    assert_eq!(state.result, Some(91));
+    assert_eq!(evaluate(&mut state, &operand).unwrap(), -1);
+    for slot in 0..7 {
+        state.set_system_integer(slot, 100 + slot).unwrap();
+        assert_eq!(
+            evaluate(&mut state, &expr(0x200, vec![scalar(0x10f, slot)])).unwrap(),
+            100 + slot as i32
+        );
+    }
+    assert!(state.set_system_integer(7, 1).is_err());
+    assert!(state.set_system_integer(u32::MAX, 1).is_err());
+    assert_eq!(state.system_integer(7), None);
+    for slot in 7..=10 {
+        assert!(evaluate(&mut state, &expr(0x200, vec![scalar(0x10f, slot)])).is_err());
+    }
+    assert_eq!(
+        evaluate(&mut state, &expr(0x200, vec![scalar(0x10f, 11)])).unwrap(),
+        0
+    );
+}
+
+#[test]
+fn cursor_registration_appends_duplicate_names_and_returns_one_based_system_id() {
+    let mut code = Vec::new();
+    for _ in 0..2 {
+        push_expr(&mut code, expr(0x201, vec![scalar(0x120, 0)]));
+        word(&mut code, 0x2098);
+    }
+    word(&mut code, 0x2099); // registration host must stop before actual platform loading
+    let script = Script::decode(&fixture(&code, &[0], b"\x81cursor.cur\0")).unwrap();
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = Bootstrap::default();
+    assert!(matches!(
+        run_bootstrap(&mut vm, &mut host),
+        Step::System { command: 0x99, .. }
+    ));
+    assert_eq!(
+        host.cursor_names(),
+        [b"\x81cursor.cur".to_vec(), b"\x81cursor.cur".to_vec()]
+    );
+    assert_eq!(vm.state().system_integer(0), Some(2));
+    assert_eq!(vm.state().result, Some(0)); // string reference result was not replaced by ID
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(host.handled_count(), 2);
+}
+
+#[test]
+fn cursor_name_boundary_and_bad_reference_preserve_pending_command() {
+    for len in [127, 128] {
+        let mut code = vec![];
+        push_expr(&mut code, expr(0x201, vec![scalar(0x120, 0)]));
+        word(&mut code, 0x2098);
+        word(&mut code, 0x2099);
+        let mut text = vec![b'x'; len];
+        text.push(0);
+        let script = Script::decode(&fixture(&code, &[0], &text)).unwrap();
+        let mut vm = Machine::new(&script).unwrap();
+        let mut host = Bootstrap::default();
+        while vm.pending_system().is_none() {
+            vm.step().unwrap();
+        }
+        let before = vm.pending_system();
+        if len == 127 {
+            assert!(host.try_handle(&mut vm).unwrap().is_some());
+            assert_eq!(vm.state().system_integer(0), Some(1));
+        } else {
+            assert!(host.try_handle(&mut vm).is_err());
+            assert_eq!(vm.pending_system(), before);
+            assert_eq!(vm.stack().len_bytes(), 4);
+            assert!(host.cursor_names().is_empty());
+            assert_eq!(vm.state().system_integer(0), None);
+        }
+    }
+    let mut code = vec![];
+    push_expr(&mut code, int(-1));
+    word(&mut code, 0x2098);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = Bootstrap::default();
+    while vm.pending_system().is_none() {
+        vm.step().unwrap();
+    }
+    assert!(host.try_handle(&mut vm).is_err());
+    assert_eq!(vm.stack().peek_u32(4).unwrap(), u32::MAX);
+    assert!(host.cursor_names().is_empty());
+}

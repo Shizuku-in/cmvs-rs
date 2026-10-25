@@ -21,6 +21,7 @@ cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start
 cargo run --offline --bin cmvs-cpz -- "E:/Download/AMATSUTSUMI/data/pack/script.cpz"
 cargo run --offline --bin cmvs-cpz -- --list "E:/Download/AMATSUTSUMI/data/pack/script.cpz"
 cargo run --offline --bin cmvs-cpz -- --script "E:/Download/AMATSUTSUMI/data/pack/script.cpz" main.ps3
+cargo run --offline --bin cmvs-save -- "E:/Download/AMATSUTSUMI/save/save000.dat"
 cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/script.cpz" --script main.ps3
 cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --entry 0x1214 --script-archive "E:/Download/AMATSUTSUMI/data/pack/script.cpz"
 cargo test --offline
@@ -28,7 +29,7 @@ cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-`--payload` 仅允许创建新文件，输出不包含原始头部。83 项 Rust 测试和严格 Clippy 检查通过。
+`--payload` 仅允许创建新文件，输出不包含原始头部。95 项 Rust 测试和严格 Clippy 检查通过。
 真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
 `ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
 
@@ -48,6 +49,13 @@ cargo fmt --check
 本机真实目录仅有 `system.dat`，扫描得到 10 个空槽；正常启动可处理 0x22b3/0x22b4，
 在 PC=0x0276 停于下一条未实现命令 0x2098。
 随后用户生成的 3 份真实 CSV2 存档均通过 Rust 头部识别，最新槽正确选择为 2；完整恢复尚未实现。
+现已支持 0x2098 的光标名登记与独立的整数系统结果寄存器；不加载光标图像。
+`--bootstrap --save-dir <目录>` 从正常入口继续执行，共 287 次 step 后在 PC=0x1136 停于
+读取系统存档的 0x2128；保留未知格式断点，没有跳过 `system.dat`。
+新增 `save` 模块及 `cmvs-save`：CSV2 容器边界检查、第一段原版累加校验和、字节逆变换和三段 LZSS 解压。
+三份真实存档的全部 9 个解码段与 Python 逐字节一致，原始存档未修改。
+`cmvs-save --section <0|1|2> <存档> <新输出文件>` 可导出指定段，拒绝覆盖现有文件。
+当前仅支持 CSV2 的已核对写入模式；格式和限制见 [save-format](docs/save-format.md)，尚不恢复 VM 或引擎状态。
 `cmvs-cpz` 默认读取 64 字节头部；`--list` 解密索引，`--script` 读取并解析 PS2A，
 `--extract` 将指定 ASCII 文件名的内容写入用户指定的新文件。支持当前 CPZ6 加密模式 1，尚未验证校验和。
 本作全部 13 个包的索引已解析，`script.cpz` 列出 87 个文件。

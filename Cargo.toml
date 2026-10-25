@@ -25,6 +25,10 @@ path = "src/bin/trace.rs"
 name = "cmvs-cpz"
 path = "src/bin/cpz.rs"
 
+[[bin]]
+name = "cmvs-save"
+path = "src/bin/save.rs"
+
 [lints.rust]
 unsafe_code = "forbid"
 
