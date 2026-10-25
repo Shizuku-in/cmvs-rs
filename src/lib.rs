@@ -6,6 +6,7 @@ pub mod evaluate;
 pub mod lzss;
 pub mod machine;
 pub mod ps3;
+pub mod save_menu;
 pub mod script_control;
 pub mod vm;
 

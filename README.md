@@ -17,6 +17,7 @@ cargo run --offline -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --payload .
 cargo run --offline --bin cmvs-disasm -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3"
 cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --steps 10000
 cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --bootstrap
+cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --bootstrap --save-dir "E:/Download/AMATSUTSUMI/save"
 cargo run --offline --bin cmvs-cpz -- "E:/Download/AMATSUTSUMI/data/pack/script.cpz"
 cargo run --offline --bin cmvs-cpz -- --list "E:/Download/AMATSUTSUMI/data/pack/script.cpz"
 cargo run --offline --bin cmvs-cpz -- --script "E:/Download/AMATSUTSUMI/data/pack/script.cpz" main.ps3
@@ -27,7 +28,7 @@ cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-`--payload` 仅允许创建新文件，输出不包含原始头部。74 项 Rust 测试和严格 Clippy 检查通过。
+`--payload` 仅允许创建新文件，输出不包含原始头部。83 项 Rust 测试和严格 Clippy 检查通过。
 真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
 `ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
 
@@ -42,6 +43,11 @@ cargo fmt --check
 该真实赋值段已执行 153 条指令后停在 0x2128；严格模式正常入口停在首个未处理系统命令 0x201e。
 启用 `--bootstrap` 后，从正常入口处理 25 次已验证的启动系统调用，注册 16 条资源路径，停在 0x22b3。
 此模式只应用配置、变量初始化和路径注册，不打开存档、不生成窗口、不忽略未实现命令。
+新增 `save_menu`：通过显式 `--save-dir` 只读扫描 `save000.dat` 等剧情存档头，
+生成槽状态、最新槽和菜单启用状态；不载入剧情、不写文件、不创建原生菜单。
+本机真实目录仅有 `system.dat`，扫描得到 10 个空槽；正常启动可处理 0x22b3/0x22b4，
+在 PC=0x0276 停于下一条未实现命令 0x2098。
+随后用户生成的 3 份真实 CSV2 存档均通过 Rust 头部识别，最新槽正确选择为 2；完整恢复尚未实现。
 `cmvs-cpz` 默认读取 64 字节头部；`--list` 解密索引，`--script` 读取并解析 PS2A，
 `--extract` 将指定 ASCII 文件名的内容写入用户指定的新文件。支持当前 CPZ6 加密模式 1，尚未验证校验和。
 本作全部 13 个包的索引已解析，`script.cpz` 列出 87 个文件。

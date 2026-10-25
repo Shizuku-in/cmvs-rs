@@ -4,6 +4,7 @@ use cmvs_rs::{
     cpz::Cpz6Index,
     machine::{Machine, Step},
     ps3::Script,
+    save_menu::{DirectorySaves, SaveMenuHost, SlotStatus},
     script_control::{ArchiveScripts, ControlEvent, ScriptControl},
 };
 use std::{env, error::Error, fs::File, io::Read};
@@ -24,7 +25,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         .ok_or("usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap]")?;
     if path == "--help" {
         println!(
-            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap] [--script-archive <archive>] [--virtual-tick <tick>]\n--script loads an isolated initial script. --script-archive supplies common/main scripts and enables explicit control handling with virtual time (default tick 0), without automatic scheduling. --bootstrap applies verified startup configuration. Main transfer stops for the unimplemented engine snapshot."
+            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap] [--script-archive <archive>] [--virtual-tick <tick>] [--save-dir <directory>]\n--script loads an isolated initial script. --script-archive supplies common/main scripts and enables explicit control handling with virtual time (default tick 0), without automatic scheduling. --bootstrap applies verified startup configuration. --save-dir enables read-only saveNNN.dat header scanning and menu state, without native UI or save restoration. Main transfer stops for the unimplemented engine snapshot."
         );
         return Ok(());
     }
@@ -34,6 +35,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut archive_script = None;
     let mut script_archive = None;
     let mut virtual_tick = 0;
+    let mut save_dir = None;
     while let Some(flag) = args.next() {
         if flag == "--bootstrap" {
             bootstrap = Some(Bootstrap::default());
@@ -50,6 +52,8 @@ fn run() -> Result<(), Box<dyn Error>> {
             script_archive = Some(value);
         } else if flag == "--virtual-tick" {
             virtual_tick = number(&value)?;
+        } else if flag == "--save-dir" {
+            save_dir = Some(value);
         } else {
             return Err("unknown option".into());
         }
@@ -87,6 +91,8 @@ fn run() -> Result<(), Box<dyn Error>> {
         .map(|path| -> Result<_, Box<dyn Error>> { ArchiveScripts::new(File::open(path)?) })
         .transpose()?;
     let mut control = ScriptControl::new(virtual_tick);
+    let mut saves = save_dir.map(DirectorySaves::new).transpose()?;
+    let mut save_menu = SaveMenuHost::default();
     if script_source.is_some() {
         println!(
             "# script control uses explicit virtual_tick={virtual_tick}; no automatic callback scheduler"
@@ -137,6 +143,34 @@ fn run() -> Result<(), Box<dyn Error>> {
                         machine.stack().len_bytes()
                     );
                     return Ok(());
+                }
+                continue;
+            }
+            if let Some(source) = &mut saves
+                && save_menu.try_handle(&mut machine, source)?
+            {
+                println!(
+                    "# save menu applied 0x{:04x}; second_group_enabled={:?}",
+                    command + 0x2000,
+                    save_menu.second_group_enabled()
+                );
+                if command == 0x2b3 {
+                    let menu = save_menu.menu().expect("completed scan");
+                    println!(
+                        "# save slots={} latest={:?}; header recognition only, no snapshot restoration",
+                        menu.slots.len(),
+                        menu.latest
+                    );
+                    for (slot, status) in menu.slots.iter().enumerate() {
+                        match status {
+                            SlotStatus::Recognized(header) => println!(
+                                "# save[{slot:03}] label={} key=0x{:08x}",
+                                header.label.escape_ascii(),
+                                header.ordering_key
+                            ),
+                            other => println!("# save[{slot:03}]={other:?}"),
+                        }
+                    }
                 }
                 continue;
             }

@@ -1,0 +1,235 @@
+use cmvs_rs::{
+    machine::{Machine, Step},
+    ps3::Script,
+    save_menu::{DirectorySaves, SaveHeader, SaveMenu, SaveMenuHost, SaveSource, SlotStatus},
+};
+use std::{collections::BTreeMap, io};
+
+fn header(version: u8, label: &[u8]) -> Vec<u8> {
+    let mut bytes = vec![0; 16];
+    bytes[..3].copy_from_slice(b"CSV");
+    bytes[3] = version;
+    bytes.extend(label);
+    bytes.push(0);
+    bytes
+}
+
+#[derive(Default)]
+struct MemorySaves {
+    files: BTreeMap<u16, Vec<u8>>,
+    calls: Vec<u16>,
+    fail_at: Option<u16>,
+}
+impl SaveSource for MemorySaves {
+    fn read_header(&mut self, slot: u16) -> io::Result<Option<Vec<u8>>> {
+        self.calls.push(slot);
+        if self.fail_at == Some(slot) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "synthetic failure",
+            ));
+        }
+        Ok(self.files.get(&slot).cloned())
+    }
+}
+
+#[test]
+fn accepts_menu_versions_and_preserves_non_utf8_label() {
+    for version in b'2'..=b'9' {
+        let label = b"2026-10-26 09:08:07 \x81\xff";
+        let parsed = SaveHeader::parse(&header(version, label)).unwrap();
+        assert_eq!(parsed.version, version);
+        assert_eq!(parsed.label, label);
+        assert_eq!(parsed.ordering_key, 0x355a4903);
+    }
+    for bytes in [
+        b"CSS1".to_vec(),
+        header(b'1', b"2026-10-26 09:08:07"),
+        header(b':', b"2026-10-26 09:08:07"),
+    ] {
+        assert!(SaveHeader::parse(&bytes).is_err());
+    }
+}
+
+#[test]
+fn malformed_labels_and_read_boundary_are_rejected() {
+    let valid = header(b'2', b"2026-10-26 09:08:07 title");
+    for end in 0..valid.len() {
+        assert!(SaveHeader::parse(&valid[..end]).is_err());
+    }
+    for label in [b"2026/10/26 09:08:07".as_slice(), b"2026-10-26 0x:08:07"] {
+        assert!(SaveHeader::parse(&header(b'2', label)).is_err());
+    }
+    let mut oversized = header(b'2', b"2026-10-26 09:08:07");
+    oversized.pop();
+    oversized.resize(512, b'x');
+    oversized.push(0); // A terminator outside the original 512-byte read is unavailable.
+    assert!(SaveHeader::parse(&oversized).is_err());
+    oversized[511] = 0;
+    assert!(SaveHeader::parse(&oversized).is_ok());
+}
+
+#[test]
+fn latest_uses_embedded_key_keeps_first_tie_and_wraps_century() {
+    let mut source = MemorySaves::default();
+    for (slot, date) in [
+        (0, b"2026-10-26 09:08:06".as_slice()),
+        (1, b"2026-10-26 09:08:07"), // same key, two-second precision
+        (2, b"2026-10-26 09:08:08"),
+        (3, b"2126-10-26 09:08:09"), // century ignored
+    ] {
+        source.files.insert(slot, header(b'2', date));
+    }
+    source.files.insert(4, b"bad".to_vec());
+    let menu = SaveMenu::scan(&mut source, 6).unwrap();
+    assert_eq!(menu.latest, Some(2));
+    assert!(matches!(menu.slots[4], SlotStatus::Invalid(_)));
+    assert_eq!(menu.slots[5], SlotStatus::Missing);
+}
+
+#[test]
+fn numeric_prefix_is_not_calendar_validation_and_zero_key_is_not_latest() {
+    let mut source = MemorySaves::default();
+    source.files.insert(0, header(b'2', b"2000-00-00 00:00:00"));
+    let menu = SaveMenu::scan(&mut source, 1).unwrap();
+    assert!(matches!(menu.slots[0], SlotStatus::Recognized(_)));
+    assert_eq!(menu.latest, None);
+}
+
+#[test]
+fn slot_count_clamps_and_empty_scan_does_not_read() {
+    for (request, count) in [
+        (i32::MIN, 10),
+        (-1, 10),
+        (0, 0),
+        (1, 1),
+        (256, 256),
+        (i32::MAX, 256),
+    ] {
+        let mut source = MemorySaves::default();
+        let menu = SaveMenu::scan(&mut source, request).unwrap();
+        assert_eq!(menu.slots.len(), count);
+        assert_eq!(source.calls.len(), count);
+        assert_eq!(menu.latest, None);
+    }
+}
+
+fn script(commands: &[(u16, u32)]) -> Script {
+    let mut code = Vec::new();
+    for (command, value) in commands {
+        code.extend(0x0442u16.to_le_bytes()); // immediate push, four-byte stride
+        code.extend(4u16.to_le_bytes());
+        code.extend(value.to_le_bytes());
+        code.extend(command.to_le_bytes());
+    }
+    code.extend(0x201eu16.to_le_bytes()); // valid command outside the save-menu host
+    let mut raw = b"PS2A".to_vec();
+    for v in [
+        48u32,
+        0,
+        0,
+        0,
+        code.len() as u32,
+        0,
+        0,
+        0,
+        0,
+        code.len() as u32,
+        0,
+    ] {
+        raw.extend(v.to_le_bytes());
+    }
+    raw.extend(code.into_iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+    Script::decode(&raw).unwrap()
+}
+
+fn pending(vm: &mut Machine<'_>) {
+    loop {
+        if matches!(vm.step().unwrap(), Step::System { .. }) {
+            break;
+        }
+    }
+}
+
+#[test]
+fn commands_consume_parameters_toggle_and_preserve_unknown_commands() {
+    let script = script(&[(0x22b3, 2), (0x22b4, 0), (0x22b4, 9)]);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut source = MemorySaves::default();
+    let mut host = SaveMenuHost::default();
+    assert!(!host.try_handle(&mut vm, &mut source).unwrap());
+    for enabled in [None, Some(false), Some(true)] {
+        pending(&mut vm);
+        let pc = vm.pc();
+        assert!(host.try_handle(&mut vm, &mut source).unwrap());
+        assert_eq!(vm.pc(), pc + 2);
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(host.second_group_enabled(), enabled);
+    }
+    assert_eq!(host.menu().unwrap().slots.len(), 2);
+    assert_eq!(source.calls, [0, 1]); // toggles perform no I/O
+    pending(&mut vm);
+    let before = vm.pending_system();
+    assert!(!host.try_handle(&mut vm, &mut source).unwrap());
+    assert_eq!(vm.pending_system(), before);
+}
+
+#[test]
+fn io_failure_keeps_previous_menu_and_pending_parameters_for_retry() {
+    let script = script(&[(0x22b3, 1), (0x22b3, 2)]);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut source = MemorySaves::default();
+    let mut host = SaveMenuHost::default();
+    pending(&mut vm);
+    host.try_handle(&mut vm, &mut source).unwrap();
+    let old = host.menu().unwrap().clone();
+    pending(&mut vm);
+    let before = vm.pending_system();
+    source.fail_at = Some(1);
+    assert!(host.try_handle(&mut vm, &mut source).is_err());
+    assert_eq!(host.menu(), Some(&old));
+    assert_eq!(vm.pending_system(), before);
+    assert_eq!(vm.stack().peek_u32(4).unwrap(), 2);
+    source.fail_at = None;
+    assert!(host.try_handle(&mut vm, &mut source).unwrap());
+    assert_eq!(host.menu().unwrap().slots.len(), 2);
+}
+
+#[test]
+fn missing_argument_does_not_read_source() {
+    // Create the header with the helper, then reuse an isolated system-only entry.
+    let script = script(&[(0x22b3, 1)]);
+    let mut vm = Machine::at(&script, 8).unwrap();
+    let mut source = MemorySaves::default();
+    let mut host = SaveMenuHost::default();
+    pending(&mut vm);
+    assert!(host.try_handle(&mut vm, &mut source).is_err());
+    assert!(source.calls.is_empty());
+    assert_eq!(vm.pc(), 8);
+    assert!(host.menu().is_none());
+}
+
+#[test]
+fn directory_reads_only_selected_slot_prefix_and_never_modifies_files() {
+    let root = std::env::temp_dir().join(format!("cmvs-save-menu-test-{}", std::process::id()));
+    std::fs::create_dir(&root).unwrap();
+    let mut data = header(b'2', b"2026-10-26 09:08:07 synthetic");
+    data.resize(1024, 0xa5);
+    let path = root.join("save000.dat");
+    std::fs::write(&path, &data).unwrap();
+    std::fs::write(root.join("system.dat"), b"CSS1 synthetic").unwrap();
+    let mut source = DirectorySaves::new(&root).unwrap();
+    assert_eq!(source.read_header(0).unwrap().unwrap(), data[..512]);
+    assert_eq!(source.read_header(1).unwrap(), None);
+    assert!(source.read_header(256).is_err());
+    assert!(DirectorySaves::new(&path).is_err());
+    assert!(DirectorySaves::new(root.join("absent")).is_err());
+    assert_eq!(std::fs::read(&path).unwrap(), data);
+    assert_eq!(
+        std::fs::read(root.join("system.dat")).unwrap(),
+        b"CSS1 synthetic"
+    );
+    std::fs::remove_file(path).unwrap();
+    std::fs::remove_file(root.join("system.dat")).unwrap();
+    std::fs::remove_dir(root).unwrap();
+}
