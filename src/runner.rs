@@ -3,6 +3,7 @@
 use crate::{
     MAX_PAYLOAD,
     bootstrap::Bootstrap,
+    gesture::PointerGesture,
     machine::{Machine, Step},
     platform::{DirectoryAssets, PlatformBackend, PlatformHost},
     ps3::Script,
@@ -55,6 +56,7 @@ pub struct Startup<'a> {
     platform: PlatformHost,
     scene: SceneHost,
     save_title: SaveTitle,
+    gesture: PointerGesture,
     steps: u32,
     main_barrier: bool,
     snapshot_policy: SnapshotPolicy,
@@ -77,6 +79,7 @@ impl<'a> Startup<'a> {
             platform: PlatformHost::default(),
             scene: SceneHost::default(),
             save_title: SaveTitle::default(),
+            gesture: PointerGesture::default(),
             steps: 0,
             main_barrier: false,
             snapshot_policy: SnapshotPolicy::default(),
@@ -100,6 +103,9 @@ impl<'a> Startup<'a> {
     }
     pub fn save_title(&self) -> &SaveTitle {
         &self.save_title
+    }
+    pub fn gesture(&self) -> &PointerGesture {
+        &self.gesture
     }
     pub fn steps(&self) -> u32 {
         self.steps
@@ -169,6 +175,7 @@ impl<'a> Startup<'a> {
             || self.bootstrap.try_handle(&mut self.machine)?.is_some()
             || self.scene.try_handle(&mut self.machine)?
             || self.save_title.try_handle(&mut self.machine)?
+            || self.gesture.try_handle(&mut self.machine)?
         {
             return Ok(StartupEvent::Progress);
         }

@@ -37,7 +37,7 @@ cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-`--payload` 仅允许创建新文件，输出不包含原始头部。默认 149 项测试、启用 desktop 后 154 项测试和严格 Clippy 检查通过。
+`--payload` 仅允许创建新文件，输出不包含原始头部。默认 153 项测试、启用 desktop 后 158 项测试和严格 Clippy 检查通过。
 真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
 `ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
 
@@ -70,7 +70,7 @@ cargo fmt --check
 启用完整示例中的选项后，正常入口执行 292 次 step，在 PC=0x1174 停于窗口标题命令 0x2160。
 此时已知整数 4097、位变量 262144；窗口与画面后端尚未实现。格式见 [system-save-format](docs/system-save-format.md)。
 新增 `platform` 宿主接口和显式 `--record-platform <游戏根目录>`：记录标题/图标/光标请求，
-应用已核对的 0x2350 子对象重置及 0x22b0 缩略图尺寸配置，不创建原生窗口、不采集或伪造输入。
+应用已核对的 0x22b0 缩略图尺寸配置（0x2350 现由 `gesture` 模块处理），不创建原生窗口、不采集或伪造输入。
 **记录模式**从正常入口执行 479 次 step，完成两个公共脚本初始化和 13 个回调登记，
 准备 main.ps3 后停在引擎快照断点。它验证了启动状态流，不能当作原生平台效果或完整启动成功。
 新增 `cursor`、`cmvs-cursor`，读取本作单图像 8 位 CUR，保留 AND/XOR 像素与热点；
@@ -117,7 +117,8 @@ cargo run --offline --features desktop --bin cmvs-desktop -- "E:/Download/AMATSU
 新增 `scene`：0x22cb 设置清屏色（不透明 0xRRGGBB）、0x2250 设置深度清除标志，只保存状态、不绘制。
 main.ps3 将清屏色设为 0，再经已支持的 0x22b4 调用标签 186。新增 0x0201 字符串表达式（累加器模型）和帧参数读取：
 该函数把 `- メイン -` 写入字符串变量 4 和 14，再以 0x2162 设为存档标题、以 0x2161 设为场景标题，
-窗口标题变为「アマツツミ　- メイン -」。随后返回 main.ps3，共执行 515 步后在 PC=0x38dbc 停于 0x2351。
+窗口标题变为「アマツツミ　- メイン -」。随后返回 main.ps3，执行指针手势配置 0x2351–0x2364（新增 `gesture`，只保存配置、不识别输入），
+再经一段整数赋值，共执行 578 步后在 0x39210 的浮点表达式（浮点变量 120 ← 1.0f）处明确报错“未实现”。
 `cmvs-desktop` 支持同名选项，Windows 实测停点相同；窗口仍显示诊断棋盘格。
 表达式求值改用撤销日志实现事务后，到当时停点（504 步）的 trace 在 debug 构建下由 3682 ms 降至约 300 ms，输出逐行不变。
 格式与证据见 [snapshot-format](docs/snapshot-format.md)。

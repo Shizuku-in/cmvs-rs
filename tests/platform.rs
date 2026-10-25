@@ -360,23 +360,12 @@ fn title_limit_and_icon_directory_errors_do_not_invoke_backend() {
 }
 
 #[test]
-fn raw_reset_fields_and_thumbnail_argument_order_are_retained() {
-    let script = script(&[(0x2350, 7), (0x22b0, 192), (0x2350, 0)], b"");
-    let mut vm = Machine::new(&script).unwrap();
+fn thumbnail_argument_order_is_retained_and_gesture_commands_are_not_platform() {
+    let short = script(&[(0x22b0, 192), (0x2350, 0)], b"");
+    let mut vm = Machine::new(&short).unwrap();
     let mut host = PlatformHost::default();
     let mut backend = RecordingBackend::default();
     let mut assets = Assets::default();
-    pending(&mut vm);
-    host.try_handle(&mut vm, &mut backend, &mut assets, &[])
-        .unwrap();
-    let fields = &host.reset2350().unwrap().fields;
-    assert_eq!(fields[&0], 1);
-    for at in [44, 88, 172] {
-        assert_eq!(fields[&at], u32::MAX)
-    }
-    for at in [48, 52, 72, 76, 80, 84, 92, 108, 120, 180, 184] {
-        assert_eq!(fields[&at], 0)
-    }
     // 0x22b0 lacks the second argument: must fail without replacing configuration.
     pending(&mut vm);
     assert!(
@@ -423,6 +412,15 @@ fn raw_reset_fields_and_thumbnail_argument_order_are_retained() {
     );
     assert_eq!(vm.stack().len_bytes(), 0);
     assert!(backend.requests().is_empty());
+    let gesture = script(&[(0x2350, 1)], b"");
+    let mut vm = Machine::new(&gesture).unwrap();
+    pending(&mut vm);
+    assert!(
+        host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(vm.pending_system(), Some((8, 0x350)));
 }
 
 #[test]

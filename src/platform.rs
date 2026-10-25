@@ -4,7 +4,6 @@ use crate::{
     vm::SystemResult,
 };
 use std::{
-    collections::BTreeMap,
     error::Error,
     fs::File,
     io::Read,
@@ -135,23 +134,6 @@ pub struct ThumbnailConfig {
     pub height: u32,
     pub enabled: bool,
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Reset2350 {
-    /// Known fields of the original +4664 subobject; others remain unmodeled.
-    pub fields: BTreeMap<u16, u32>,
-}
-impl Reset2350 {
-    fn new(enabled: bool) -> Self {
-        let mut fields = BTreeMap::from([(0, u32::from(enabled))]);
-        for field in [44, 88, 172] {
-            fields.insert(field, u32::MAX);
-        }
-        for field in [48, 52, 72, 76, 80, 84, 92, 108, 120, 180, 184] {
-            fields.insert(field, 0);
-        }
-        Self { fields }
-    }
-}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlatformEvent {
     Applied,
@@ -171,7 +153,6 @@ pub struct PlatformHost {
     cursor: u32,
     icon: Option<Vec<u8>>,
     thumbnail: Option<ThumbnailConfig>,
-    reset2350: Option<Reset2350>,
 }
 impl PlatformHost {
     pub fn title(&self) -> Option<&[u8]> {
@@ -189,9 +170,6 @@ impl PlatformHost {
     pub fn thumbnail(&self) -> Option<ThumbnailConfig> {
         self.thumbnail
     }
-    pub fn reset2350(&self) -> Option<&Reset2350> {
-        self.reset2350.as_ref()
-    }
     pub fn try_handle(
         &mut self,
         vm: &mut Machine<'_>,
@@ -202,7 +180,7 @@ impl PlatformHost {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(None);
         };
-        if !matches!(command, 0x160 | 0x161 | 0x99 | 0x8f | 0x350 | 0x2b0) {
+        if !matches!(command, 0x160 | 0x161 | 0x99 | 0x8f | 0x2b0) {
             return Ok(None);
         }
         let arg = vm
@@ -217,11 +195,6 @@ impl PlatformHost {
                 height,
                 enabled: arg != 0 && height != 0,
             });
-            return Ok(Some(PlatformEvent::Configured));
-        }
-        if command == 0x350 {
-            vm.complete_system(SystemResult(0x4004))?;
-            self.reset2350 = Some(Reset2350::new(arg != 0));
             return Ok(Some(PlatformEvent::Configured));
         }
         if command == 0x99 && arg == self.cursor {
