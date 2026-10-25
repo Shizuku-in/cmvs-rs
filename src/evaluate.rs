@@ -1,6 +1,12 @@
-//! Stateful integer evaluation with explicit unknown values and transactional errors.
-use crate::bytecode::{DecodeError, Expression, Term};
+//! Stateful integer and float evaluation with explicit unknown values and transactional errors.
+use crate::{
+    bytecode::{DecodeError, Expression, Term},
+    vm::ParameterStack,
+};
 use std::collections::BTreeMap;
+
+/// Float variables flt_14012df00..0x14012ff00 hold 2048 entries.
+const FLOAT_LIMIT: u32 = 2048;
 
 pub(crate) fn error(pc: usize, opcode: u16, reason: &'static str) -> DecodeError {
     DecodeError {
@@ -18,12 +24,74 @@ enum Undo {
     Buffer(Vec<u8>),
     Result(Option<u32>),
     Condition(Option<bool>),
+    Float(u32, Option<u32>),
+    Stack(usize, u32),
 }
 
 /// Previous values recorded before each write, so a failed evaluation is undone
 /// without cloning the whole State.
 #[derive(Debug, Default)]
 pub(crate) struct Journal(Vec<Undo>);
+
+/// Stack bytes addressed by frame operands; `base` is frame[depth], zero at depth 0.
+pub(crate) struct Frame<'s> {
+    pub(crate) stack: &'s mut ParameterStack,
+    pub(crate) base: usize,
+}
+
+/// Memory outside State that operands may address.
+pub(crate) struct Env<'a, 's> {
+    pub(crate) labels: &'a [u32],
+    pub(crate) frame: Option<Frame<'s>>,
+}
+
+impl Env<'_, '_> {
+    /// Tags 0x103/0x129 address base-raw (arguments); 0x108/0x12c address base+raw (locals).
+    fn offset(&self, tag: u16, raw: u32, pc: usize) -> Result<usize, DecodeError> {
+        let frame = self
+            .frame
+            .as_ref()
+            .ok_or_else(|| error(pc, tag, "frame operand needs the machine stack"))?;
+        let offset = if matches!(tag, 0x103 | 0x129) {
+            frame.base.checked_sub(raw as usize)
+        } else {
+            frame.base.checked_add(raw as usize)
+        };
+        offset.ok_or_else(|| error(pc, tag, "frame operand outside the stack"))
+    }
+    fn load(&self, offset: usize, pc: usize, op: u16) -> Result<u32, DecodeError> {
+        let frame = self.frame.as_ref().expect("offset checked the frame");
+        frame
+            .stack
+            .read_u32_at(offset)
+            .map_err(|e| error(pc, op, e.0))
+    }
+    fn store(
+        &mut self,
+        offset: usize,
+        value: u32,
+        journal: &mut Journal,
+        pc: usize,
+        op: u16,
+    ) -> Result<(), DecodeError> {
+        let frame = self.frame.as_mut().expect("offset checked the frame");
+        let old = frame
+            .stack
+            .write_u32_at(offset, value)
+            .map_err(|e| error(pc, op, e.0))?;
+        journal.0.push(Undo::Stack(offset, old));
+        Ok(())
+    }
+}
+
+/// cvttss2si truncation, including the x86 indefinite value for NaN and out-of-range input.
+pub(crate) fn truncate(value: f32) -> i32 {
+    if value.is_nan() || !(-2_147_483_648.0..2_147_483_648.0).contains(&value) {
+        i32::MIN
+    } else {
+        value as i32
+    }
+}
 
 /// Bounded research state. Missing variables are unknown, not implicitly zero.
 #[derive(Debug, Clone)]
@@ -144,8 +212,21 @@ impl State {
         journal.0.push(Undo::Bit(index, old));
         Ok(())
     }
-    /// Restores every journaled write in reverse order.
-    pub(crate) fn rollback(&mut self, journal: Journal) {
+    fn set_float_journaled(
+        &mut self,
+        index: u32,
+        bits: u32,
+        journal: &mut Journal,
+    ) -> Result<(), &'static str> {
+        if index >= FLOAT_LIMIT {
+            return Err("float variable outside research limit");
+        }
+        let old = self.floats.insert(index, bits);
+        journal.0.push(Undo::Float(index, old));
+        Ok(())
+    }
+    /// Restores every journaled write in reverse order; stack words need the same stack.
+    pub(crate) fn rollback(&mut self, journal: Journal, mut stack: Option<&mut ParameterStack>) {
         fn restore<V>(map: &mut BTreeMap<u32, V>, index: u32, old: Option<V>) {
             match old {
                 Some(value) => map.insert(index, value),
@@ -157,6 +238,13 @@ impl State {
                 Undo::Integer(index, old) => restore(&mut self.integers, index, old),
                 Undo::Bit(index, old) => restore(&mut self.bits, index, old),
                 Undo::String(index, old) => restore(&mut self.strings, index, old),
+                Undo::Float(index, old) => restore(&mut self.floats, index, old),
+                Undo::Stack(offset, old) => {
+                    let stack = stack.as_deref_mut().expect("stack writes need their stack");
+                    stack
+                        .write_u32_at(offset, old)
+                        .expect("restoring a previously written word");
+                }
                 Undo::Buffer(old) => self.string_buffer = old,
                 Undo::Result(old) => self.result = old,
                 Undo::Condition(old) => self.condition = old,
@@ -235,24 +323,29 @@ impl State {
         labels: &[u32],
     ) -> Result<i32, DecodeError> {
         let mut journal = Journal::default();
-        let outcome = self.evaluate(expr, 0, labels, &mut journal);
+        let mut env = Env {
+            labels,
+            frame: None,
+        };
+        let outcome = self.evaluate(expr, 0, &mut env, &mut journal);
         if outcome.is_err() {
-            self.rollback(journal);
+            self.rollback(journal, None);
         }
         outcome
     }
-    /// Nested evaluation inside a larger transaction; the caller owns rollback.
-    pub(crate) fn evaluate_journaled(
+    /// Evaluation inside a larger transaction; the caller owns rollback.
+    pub(crate) fn evaluate_in(
         &mut self,
         expr: &Expression,
-        labels: &[u32],
+        env: &mut Env,
         journal: &mut Journal,
     ) -> Result<i32, DecodeError> {
-        self.evaluate(expr, 0, labels, journal)
+        self.evaluate(expr, 0, env, journal)
     }
-    fn read(&self, cell: Cell, pc: usize, op: u16) -> Result<i32, DecodeError> {
+    fn read(&self, cell: Cell, env: &Env, pc: usize, op: u16) -> Result<i32, DecodeError> {
         match cell {
             Cell::Value(value) => Ok(value),
+            Cell::Frame(offset) => Ok(env.load(offset, pc, op)? as i32),
             Cell::Integer(index) => self
                 .integer(index)
                 .ok_or_else(|| error(pc, op, "read of unknown integer variable")),
@@ -266,11 +359,13 @@ impl State {
         &mut self,
         cell: Cell,
         value: i32,
+        env: &mut Env,
         pc: usize,
         op: u16,
         journal: &mut Journal,
     ) -> Result<(), DecodeError> {
         match cell {
+            Cell::Frame(offset) => return env.store(offset, value as u32, journal, pc, op),
             Cell::Integer(index) => self.set_integer_journaled(index, value, journal),
             Cell::Bit(index) => self.set_bit_journaled(index, value != 0, journal),
             Cell::Value(_) => Err("assignment requires a writable variable"),
@@ -281,7 +376,7 @@ impl State {
         &mut self,
         expr: &Expression,
         depth: usize,
-        labels: &[u32],
+        env: &mut Env,
         journal: &mut Journal,
     ) -> Result<i32, DecodeError> {
         if depth >= 64 {
@@ -305,7 +400,8 @@ impl State {
                     tag: 0x10e,
                     raw,
                 } => {
-                    let target = labels
+                    let target = env
+                        .labels
                         .get(*raw as usize)
                         .ok_or_else(|| error(*pc, 0x10e, "label operand index out of bounds"))?;
                     stack.push(Cell::Value(*target as i32));
@@ -330,12 +426,17 @@ impl State {
                     };
                     stack.push(Cell::Value(value as i32));
                 }
+                Term::Scalar {
+                    pc,
+                    tag: tag @ (0x103 | 0x108),
+                    raw,
+                } => stack.push(Cell::Frame(env.offset(*tag, *raw, *pc)?)),
                 Term::Nested {
                     pc,
                     tag,
                     expression,
                 } if matches!(tag, 0x200 | 0x101 | 0x102) => {
-                    let value = self.evaluate(expression, depth + 1, labels, journal)?;
+                    let value = self.evaluate(expression, depth + 1, env, journal)?;
                     let cell = match tag {
                         0x200 => Cell::Value(value),
                         0x101 if value >= 0 && (value as u32) < self.integer_limit => {
@@ -355,13 +456,13 @@ impl State {
                     let cell = stack
                         .pop()
                         .ok_or_else(|| error(*pc, *op, "expression stack underflow"))?;
-                    let old = self.read(cell, *pc, *op)?;
+                    let old = self.read(cell, env, *pc, *op)?;
                     let value = if *op == 0x173 {
                         old.wrapping_add(1)
                     } else {
                         old.wrapping_sub(1)
                     };
-                    self.write(cell, value, *pc, *op, journal)?;
+                    self.write(cell, value, env, *pc, *op, journal)?;
                     stack.push(Cell::Value(value));
                 }
                 Term::Operator { pc, opcode } => {
@@ -372,13 +473,13 @@ impl State {
                         .pop()
                         .ok_or_else(|| error(*pc, *opcode, "expression stack underflow"))?;
                     let value = if *opcode == 0x170 {
-                        let right = self.read(right_cell, *pc, *opcode)?;
-                        self.write(left_cell, right, *pc, *opcode, journal)?;
+                        let right = self.read(right_cell, env, *pc, *opcode)?;
+                        self.write(left_cell, right, env, *pc, *opcode, journal)?;
                         right
                     } else {
                         // Preserve descriptor laziness: nested writes may change either source.
-                        let left = self.read(left_cell, *pc, *opcode)?;
-                        let right = self.read(right_cell, *pc, *opcode)?;
+                        let left = self.read(left_cell, env, *pc, *opcode)?;
+                        let right = self.read(right_cell, env, *pc, *opcode)?;
                         let binary = match opcode {
                             0x175 => 0x163,
                             0x176 => 0x164,
@@ -394,7 +495,7 @@ impl State {
                         };
                         let value = binary_value(*pc, binary, left, right)?;
                         if (0x175..=0x17e).contains(opcode) {
-                            self.write(left_cell, value, *pc, *opcode, journal)?;
+                            self.write(left_cell, value, env, *pc, *opcode, journal)?;
                         }
                         value
                     };
@@ -414,7 +515,7 @@ impl State {
                 "expression does not produce exactly one value",
             ));
         }
-        let value = self.read(stack[0], expr.pc, expr.kind)?;
+        let value = self.read(stack[0], env, expr.pc, expr.kind)?;
         // The original integer evaluator writes its result to global integer 4096.
         self.set_integer_journaled(4096, value, journal)
             .map_err(|why| error(expr.pc, expr.kind, why))?;
@@ -423,6 +524,231 @@ impl State {
         self.condition = Some(value != 0);
         Ok(value)
     }
+
+    pub fn evaluate_float_with_labels(
+        &mut self,
+        expr: &Expression,
+        labels: &[u32],
+    ) -> Result<f32, DecodeError> {
+        let mut journal = Journal::default();
+        let mut env = Env {
+            labels,
+            frame: None,
+        };
+        let outcome = self.evaluate_float_in(expr, &mut env, &mut journal);
+        if outcome.is_err() {
+            self.rollback(journal, None);
+        }
+        outcome
+    }
+    /// Operand reader 0x1400659b0: integer storage converts to float.
+    fn read_float(
+        &self,
+        cell: FloatCell,
+        env: &Env,
+        pc: usize,
+        op: u16,
+    ) -> Result<f32, DecodeError> {
+        Ok(match cell {
+            FloatCell::Value(value) => value,
+            FloatCell::Integer(index) => self
+                .integer(index)
+                .ok_or_else(|| error(pc, op, "read of unknown integer variable"))?
+                as f32,
+            FloatCell::Bit(index) => f32::from(u8::from(
+                self.bit(index)
+                    .ok_or_else(|| error(pc, op, "read of unknown bit variable"))?,
+            )),
+            FloatCell::Float(index) => f32::from_bits(
+                self.float_bits(index)
+                    .ok_or_else(|| error(pc, op, "read of unknown float variable"))?,
+            ),
+            FloatCell::FrameInt(offset) => env.load(offset, pc, op)? as i32 as f32,
+            FloatCell::FrameFloat(offset) => f32::from_bits(env.load(offset, pc, op)?),
+        })
+    }
+    /// Operand writer 0x140065f00: integer storage receives the truncated value.
+    fn write_float(
+        &mut self,
+        cell: FloatCell,
+        value: f32,
+        env: &mut Env,
+        pc: usize,
+        op: u16,
+        journal: &mut Journal,
+    ) -> Result<(), DecodeError> {
+        match cell {
+            FloatCell::Integer(index) => {
+                self.set_integer_journaled(index, truncate(value), journal)
+            }
+            FloatCell::Bit(index) => self.set_bit_journaled(index, truncate(value) != 0, journal),
+            FloatCell::Float(index) => self.set_float_journaled(index, value.to_bits(), journal),
+            FloatCell::FrameInt(offset) => {
+                return env.store(offset, truncate(value) as u32, journal, pc, op);
+            }
+            FloatCell::FrameFloat(offset) => {
+                return env.store(offset, value.to_bits(), journal, pc, op);
+            }
+            FloatCell::Value(_) => Err("assignment requires a writable variable"),
+        }
+        .map_err(|why| error(pc, op, why))
+    }
+    /// 0x0202 / 0x140066e60: float postfix evaluation; result bits go to +82812 and the
+    /// condition bit to `result != 0.0`. Integer 4096 changes only through nested integers.
+    pub(crate) fn evaluate_float_in(
+        &mut self,
+        expr: &Expression,
+        env: &mut Env,
+        journal: &mut Journal,
+    ) -> Result<f32, DecodeError> {
+        if expr.kind != 0x202 {
+            return Err(error(expr.pc, expr.kind, "not a float expression"));
+        }
+        let mut stack = Vec::new();
+        for term in &expr.terms {
+            match term {
+                Term::Scalar {
+                    tag: 0x100, raw, ..
+                } => stack.push(FloatCell::Value(*raw as i32 as f32)),
+                Term::Scalar {
+                    tag: 0x12a, raw, ..
+                } => stack.push(FloatCell::Value(f32::from_bits(*raw))),
+                Term::Scalar {
+                    pc,
+                    tag: tag @ (0x103 | 0x108 | 0x129 | 0x12c),
+                    raw,
+                } => {
+                    let offset = env.offset(*tag, *raw, *pc)?;
+                    stack.push(if matches!(tag, 0x103 | 0x108) {
+                        FloatCell::FrameInt(offset)
+                    } else {
+                        FloatCell::FrameFloat(offset)
+                    });
+                }
+                Term::Nested {
+                    pc,
+                    tag,
+                    expression,
+                } if matches!(tag, 0x200 | 0x101 | 0x102 | 0x12b) => {
+                    let value = self.evaluate(expression, 1, env, journal)?;
+                    let index = value as u32;
+                    stack.push(match tag {
+                        0x200 => FloatCell::Value(value as f32),
+                        0x101 if value >= 0 && index < self.integer_limit => {
+                            FloatCell::Integer(index)
+                        }
+                        0x102 if value >= 0 && index < self.bit_limit => FloatCell::Bit(index),
+                        0x12b if value >= 0 && index < FLOAT_LIMIT => FloatCell::Float(index),
+                        _ => return Err(error(*pc, *tag, "variable index outside research limit")),
+                    });
+                }
+                Term::Operator {
+                    pc,
+                    opcode: op @ (0x173 | 0x174),
+                } => {
+                    let cell = stack
+                        .pop()
+                        .ok_or_else(|| error(*pc, *op, "expression stack underflow"))?;
+                    let old = self.read_float(cell, env, *pc, *op)?;
+                    let value = if *op == 0x173 { old + 1.0 } else { old - 1.0 };
+                    self.write_float(cell, value, env, *pc, *op, journal)?;
+                    stack.push(FloatCell::Value(value));
+                }
+                Term::Operator { pc, opcode } => {
+                    let right_cell = stack
+                        .pop()
+                        .ok_or_else(|| error(*pc, *opcode, "expression stack underflow"))?;
+                    let left_cell = stack
+                        .pop()
+                        .ok_or_else(|| error(*pc, *opcode, "expression stack underflow"))?;
+                    let value = if *opcode == 0x170 {
+                        let right = self.read_float(right_cell, env, *pc, *opcode)?;
+                        self.write_float(left_cell, right, env, *pc, *opcode, journal)?;
+                        right
+                    } else if (0x175..=0x17e).contains(opcode) {
+                        // The compound path reads the right operand first.
+                        let right = self.read_float(right_cell, env, *pc, *opcode)?;
+                        let left = self.read_float(left_cell, env, *pc, *opcode)?;
+                        let binary = match opcode {
+                            0x175 => 0x163,
+                            0x176 => 0x164,
+                            0x177 => 0x160,
+                            0x178 => 0x161,
+                            0x179 => 0x165,
+                            0x17a => 0x166,
+                            0x17b => 0x162,
+                            0x17c => 0x167,
+                            0x17d => 0x168,
+                            _ => 0x169,
+                        };
+                        let value = float_binary(*pc, binary, left, right)?;
+                        self.write_float(left_cell, value, env, *pc, *opcode, journal)?;
+                        value
+                    } else {
+                        let left = self.read_float(left_cell, env, *pc, *opcode)?;
+                        let right = self.read_float(right_cell, env, *pc, *opcode)?;
+                        float_binary(*pc, *opcode, left, right)?
+                    };
+                    stack.push(FloatCell::Value(value));
+                }
+                Term::Scalar { pc, tag, .. }
+                | Term::Nested { pc, tag, .. }
+                | Term::Indexed { pc, tag, .. } => {
+                    return Err(error(
+                        *pc,
+                        *tag,
+                        "float operand storage/type is not implemented",
+                    ));
+                }
+            }
+        }
+        if stack.len() != 1 {
+            return Err(error(
+                expr.pc,
+                expr.kind,
+                "expression does not produce exactly one value",
+            ));
+        }
+        let value = self.read_float(stack[0], env, expr.pc, expr.kind)?;
+        self.set_result_journaled(Some(value.to_bits()), journal);
+        journal.0.push(Undo::Condition(self.condition));
+        self.condition = Some(value != 0.0);
+        Ok(value)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum FloatCell {
+    Value(f32),
+    Integer(u32),
+    Bit(u32),
+    Float(u32),
+    FrameInt(usize),
+    FrameFloat(usize),
+}
+
+/// Float operators of 0x140066e60; bitwise, remainder and shifts truncate both sides first.
+fn float_binary(pc: usize, opcode: u16, left: f32, right: f32) -> Result<f32, DecodeError> {
+    let flag = |value: bool| f32::from(u8::from(value));
+    if matches!(opcode, 0x16a..=0x16f | 0x171 | 0x172) && (left.is_nan() || right.is_nan()) {
+        return Err(error(pc, opcode, "NaN comparison semantics not verified"));
+    }
+    Ok(match opcode {
+        0x160 => left * right,
+        0x161 => left / right,
+        0x163 => left + right,
+        0x164 => left - right,
+        0x162 | 0x165..=0x169 => binary_value(pc, opcode, truncate(left), truncate(right))? as f32,
+        0x16a => flag(left > right),
+        0x16b => flag(left >= right),
+        0x16c => flag(left < right),
+        0x16d => flag(left <= right),
+        0x16e => flag(left != 0.0 && right != 0.0),
+        0x16f => flag(left != 0.0 || right != 0.0),
+        0x171 => flag(left == right),
+        0x172 => flag(left != right),
+        _ => return Err(error(pc, opcode, "unsupported float operator")),
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -430,6 +756,8 @@ enum Cell {
     Value(i32),
     Integer(u32),
     Bit(u32),
+    /// Absolute stack byte offset of a frame word.
+    Frame(usize),
 }
 
 pub(crate) fn binary_value(

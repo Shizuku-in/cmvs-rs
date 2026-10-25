@@ -1,7 +1,7 @@
 //! Bounded multi-slot stepping. Unimplemented host commands remain pending.
 use crate::{
     bytecode::{self, DecodeError, Expression, Instruction, InstructionKind, Term},
-    evaluate::{Journal, State, error},
+    evaluate::{Env, Frame, Journal, State, error},
     ps3::Script,
     vm::{ParameterStack, StringRef, SystemResult},
 };
@@ -177,11 +177,8 @@ impl<'a> Machine<'a> {
 
     /// Word at the current call frame minus `distance`, as tag 0x122/0x103 operands read it.
     fn frame_word(&self, distance: u32, pc: usize, tag: u16) -> Result<u32, DecodeError> {
-        let top = *self
-            .frames
-            .last()
-            .ok_or_else(|| error(pc, tag, "frame operand outside a call"))?;
-        let offset = top
+        let offset = self
+            .frame_base()
             .checked_sub(distance as usize)
             .ok_or_else(|| error(pc, tag, "frame operand below stack base"))?;
         self.stack
@@ -224,7 +221,7 @@ impl<'a> Machine<'a> {
         let mut journal = Journal::default();
         let outcome = self.string_expression_in(expr, &mut journal);
         if outcome.is_err() {
-            self.state.rollback(journal);
+            self.state.rollback(journal, Some(&mut self.stack));
         }
         outcome
     }
@@ -243,8 +240,15 @@ impl<'a> Machine<'a> {
                     expression,
                 } => {
                     // The nested integer evaluator also updates result, condition and integer 4096.
-                    let labels = &self.images[&self.slot].labels;
-                    let index = self.state.evaluate_journaled(expression, labels, journal)?;
+                    let base = self.frame_base();
+                    let mut env = Env {
+                        labels: &self.images[&self.slot].labels,
+                        frame: Some(Frame {
+                            stack: &mut self.stack,
+                            base,
+                        }),
+                    };
+                    let index = self.state.evaluate_in(expression, &mut env, journal)?;
                     entries.push((0x121, index as u32 | 0x8000_0000, *pc));
                 }
                 Term::Scalar { pc, tag, raw } => entries.push((*tag, *raw, *pc)),
@@ -307,23 +311,41 @@ impl<'a> Machine<'a> {
         Ok(())
     }
 
+    /// frame[depth]: 0x140080530 zeroes entry 0 with SP, and 0x0410 writes only depth >= 1.
+    fn frame_base(&self) -> usize {
+        self.frames.last().copied().unwrap_or(0)
+    }
+    /// Runs a numeric evaluation with the current labels and frame; rolls back on failure.
+    fn numeric<T>(
+        &mut self,
+        run: impl FnOnce(&mut State, &mut Env, &mut Journal) -> Result<T, DecodeError>,
+    ) -> Result<T, DecodeError> {
+        let base = self.frame_base();
+        let mut journal = Journal::default();
+        let outcome = {
+            let mut env = Env {
+                labels: &self.images[&self.slot].labels,
+                frame: Some(Frame {
+                    stack: &mut self.stack,
+                    base,
+                }),
+            };
+            run(&mut self.state, &mut env, &mut journal)
+        };
+        if outcome.is_err() {
+            self.state.rollback(journal, Some(&mut self.stack));
+        }
+        outcome
+    }
+
     fn expression(&mut self, expr: &Expression) -> Result<(), DecodeError> {
-        match (expr.kind, expr.terms.as_slice()) {
-            (0x200, _) => {
-                let labels = &self.images[&self.slot].labels;
-                self.state.evaluate_integer_with_labels(expr, labels)?;
+        match expr.kind {
+            0x200 => {
+                self.numeric(|state, env, journal| state.evaluate_in(expr, env, journal))?;
             }
-            (0x201, _) => self.string_expression(expr)?,
-            (
-                0x202,
-                [
-                    Term::Scalar {
-                        tag: 0x12a, raw, ..
-                    },
-                ],
-            ) => {
-                self.state.result = Some(*raw);
-                self.state.condition = Some(f32::from_bits(*raw) != 0.0);
+            0x201 => self.string_expression(expr)?,
+            0x202 => {
+                self.numeric(|state, env, journal| state.evaluate_float_in(expr, env, journal))?;
             }
             _ => {
                 return Err(error(

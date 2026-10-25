@@ -92,6 +92,12 @@ impl ParameterStack {
             .ok_or(FormatError("stack read outside live bytes"))?;
         Ok(u32::from_le_bytes([word[0], word[1], word[2], word[3]]))
     }
+    /// Overwrites a live word in place and returns the previous value.
+    pub fn write_u32_at(&mut self, offset: usize, value: u32) -> Result<u32, FormatError> {
+        let old = self.read_u32_at(offset)?;
+        self.bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        Ok(old)
+    }
     pub fn discard(&mut self, count: usize) -> Result<(), FormatError> {
         let length = self
             .bytes
