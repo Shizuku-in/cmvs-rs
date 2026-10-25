@@ -1,12 +1,16 @@
 use cmvs_rs::{
+    cpz::Cpz6Index,
     cursor::CursorBitmap,
     desktop::{DesktopInput, InputEvent, NativeBackend, TextEncoding},
+    pb3,
     platform::{DirectoryAssets, PlatformAssets, PlatformBackend, PlatformRequest},
+    raster::RgbaImage,
     runner::{Startup, StartupEvent, load_start},
 };
 use std::{
     env,
     error::Error,
+    fs::File,
     num::NonZeroU32,
     path::PathBuf,
     sync::Arc,
@@ -33,6 +37,7 @@ struct App<'a> {
     error: Option<String>,
     exit_after: Option<Duration>,
     deadline: Option<Instant>,
+    preview_image: Option<RgbaImage>,
 }
 impl App<'_> {
     fn fail(&mut self, el: &ActiveEventLoop, error: impl std::fmt::Display) {
@@ -54,14 +59,17 @@ impl App<'_> {
         for (i, pixel) in buffer.iter_mut().enumerate() {
             let x = i % size.width as usize;
             let y = i / size.width as usize;
-            *pixel = if y + 10 >= size.height as usize {
-                if self.halted { 0x9c7529 } else { 0x3c7fa2 }
-            } else if (x / 32 + y / 32).is_multiple_of(2) {
+            *pixel = if (x / 32 + y / 32).is_multiple_of(2) {
                 0x263447
             } else {
                 0x2c3c50
             };
         }
+        if let Some(image) = &self.preview_image {
+            image.draw_fit(&mut buffer, size.width, size.height)?;
+        }
+        let bar_start = size.height.saturating_sub(10) as usize * size.width as usize;
+        buffer[bar_start..].fill(if self.halted { 0x9c7529 } else { 0x3c7fa2 });
         buffer.present()?;
         Ok(())
     }
@@ -110,7 +118,8 @@ impl ApplicationHandler for App<'_> {
             window.set_visible(true);
             window.request_redraw();
             println!(
-                "# native window created; diagnostic checkerboard only, no CMVS scene rendering"
+                "# native window created; explicit_image_preview={}; no CMVS scene rendering",
+                self.preview_image.is_some()
             );
             Ok(())
         })();
@@ -256,12 +265,14 @@ fn run() -> Result<(), Box<dyn Error>> {
     )?;
     if root == "--help" {
         println!(
-            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>]\nNative research preview only. Runs bounded startup with virtual tick 0; stops at unknown commands or main snapshot barrier. Checkerboard is diagnostic, not game graphics. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. Raw window input is observed but not injected into CMVS opcodes. All game files read-only."
+            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>]\nNative research preview only. Runs bounded startup with virtual tick 0; stops at unknown commands or main snapshot barrier. Without an explicit image, shows a diagnostic checkerboard. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. Raw window input is observed but not injected into CMVS opcodes. All game files read-only."
         );
         return Ok(());
     }
     let mut encoding = None;
     let mut exit_after = None;
+    let mut preview_name = None;
+    let mut image_archive = None;
     while let Some(flag) = args.next() {
         let value = args.next().ok_or("missing option value")?;
         if flag == "--encoding" {
@@ -274,12 +285,36 @@ fn run() -> Result<(), Box<dyn Error>> {
                 return Err("exit-after must be 1..3600 seconds".into());
             }
             exit_after = Some(Duration::from_secs(seconds));
+        } else if flag == "--preview-image" {
+            preview_name = Some(value);
+        } else if flag == "--image-archive" {
+            image_archive = Some(value);
         } else {
             return Err("unknown option".into());
         }
     }
     let encoding = encoding.ok_or("select title encoding explicitly with --encoding")?;
     let root = PathBuf::from(root).canonicalize()?;
+    let preview_image = match (preview_name, image_archive) {
+        (None, None) => None,
+        (Some(name), Some(path)) => {
+            let name = name
+                .to_str()
+                .filter(|v| v.is_ascii())
+                .ok_or("image basename must be ASCII")?;
+            let mut file = File::open(path)?;
+            let index = Cpz6Index::read(&mut file)?;
+            let bytes = index.read_entry(&mut file, index.find(name.as_bytes())?)?;
+            let image = pb3::decode(&bytes)?;
+            println!(
+                "# explicit PB3 preview={name} dimensions={}x{}; no VM draw opcode executed",
+                image.width(),
+                image.height()
+            );
+            Some(image)
+        }
+        _ => return Err("preview-image and image-archive must be supplied together".into()),
+    };
     let script = load_start(&root)?;
     let startup = Startup::new(&script, &root, 0)?;
     let mut app = App {
@@ -294,6 +329,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         error: None,
         exit_after,
         deadline: None,
+        preview_image,
     };
     let event_loop = EventLoop::new()?;
     event_loop.run_app(&mut app)?;

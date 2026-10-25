@@ -4,6 +4,9 @@ Used for PS2A byte transform and LZSS format research/implementation.
 Also used for CPZ6 header layout and XOR field decoding.
 CPZ6 index/resource transforms and the customized CMVS digest were ported
 to bounded Rust implementations from CPZV6.cpp and cmvs_md5.cpp.
+PB3B header transforms, type-1 block layout and split-stream LZSS were
+reimplemented using Pb3Decoder/Pb3Decoder/PB3B.cpp and CPB.cpp as format
+references, with bounded validation and current-binary/Python cross-checks.
 The notice below applies to that third-party work, not automatically to
 every original file in cmvs-rs.
 

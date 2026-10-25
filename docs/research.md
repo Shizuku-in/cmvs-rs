@@ -380,3 +380,30 @@ Windows x86_64-pc-windows-msvc、Rust 1.96.0 下实际启动原生窗口：
 新增 3 项默认启动调度测试及 5 项 desktop 测试：默认总计 119，启用 desktop 总计 124；
 fmt、默认及 desktop 全目标严格 Clippy 均通过。依赖锁、源码、合成测试进入 Git，素材/解码图像/运行日志留在仓库外。
 下一步仍是引擎级快照状态及 PB3/场景资源与渲染，逐步将桌面输入映射到已核对的 VM 指令。
+
+## PB3 type 1 与真实素材显示阶段
+
+核对 PB3B 文件分发 0x140036700、头部变换/codec 分发 0x140036ae0、type 1 0x1400a0230。
+type 5 0x14009fad0 仅作后续线索，未纳入支持范围。本作 bg000a/bg010a 使用 type 3，尚待 JBP 实现。
+当前新增 `pb3`、`raster`、`cmvs-pb3`，支持 type 1/24/32 位并严格检查各通道/块/LZSS 边界。
+固定开源参考、许可及格式见 references.md、pb3-format.md；没有执行原 C++ 解码器。
+
+外部 Python 独立实现头部变换、分离流 LZSS 和分块恢复，四份真实样本与 Rust RGBA 全部逐字节一致：
+
+| 文件 | 尺寸 / 位深 | 源文件 SHA-256 | RGBA SHA-256 |
+|---|---|---|---|
+| logo.pb3 | 1280×720 / 24 | 102145b0b05a2e0a8c3d5c3db43b0baa25ba2935d3406d68e91b9d3457e52546 | efbfa2a5af4b7517c10c3133b5f32e205f9b810ee084b764aed89b073a10d38f |
+| chara_chip01.pb3 | 768×768 / 32 | a155796e967bab6400e482bafe1f6a137a86b06c311b0f5934704cfdb8b70c39 | 0d170e22c8aa86bce4faeaaca1e94b137ee66ffdf6e7058aa2342a11cd8f4725 |
+| chara_chip02.pb3 | 768×768 / 32 | dbc76aa0388e62114364c1ffc1cbfb5c0fc379098d940e5977b4c5cda8b78ecb | c850be7efab1490a27daa17422cd81614347b88410fddfaf0dbfa8b3f45da1ca |
+| title01_chip.pb3 | 1280×1280 / 32 | 024478e5e2d18beeaf713da11a79b2b37f0f1bdfc24c10947b1c598234c18a4e | cf285b049d5ad29092f6818ac23b348071d6c4232a3dc59e0d4a6e03d6159393 |
+
+各通道真实样本的压缩流消费字节、LZSS 输出和常量块数量均与表中声明一致，没有用截断或补零掩盖损坏。
+样本、RGBA、预览 PNG、Python 工具和报告保存在仓库外，原游戏只读。
+原生桌面显式从 chip.cpz 加载 logo.pb3，按比例显示；用户反馈“显示正常，已关闭”。
+日志确认素材 1280×720，仍以 479 步、13 回调在 main.ps3 / 0x38d1e 的快照断点暂停，Esc 退出。
+这验证了真实素材显示链路，不代表已执行 VM 绘图命令或完成游戏开场场景。
+
+新增 11 项合成测试，覆盖 24/32 位、混合常量/字面块、边缘裁块、MSB 标记、最长引用/重叠/环绕、
+截断/长度错误/分配溢出、输出不覆盖、比例适配和 alpha 预览公式。
+默认测试总计 130，desktop 总计 135；fmt 与两套严格 Clippy 通过。
+下一步继续 type 3/JBP 背景解码及场景图层语义，同时保留引擎快照兼容性边界。

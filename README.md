@@ -25,6 +25,7 @@ cargo run --offline --bin cmvs-cpz -- --script "E:/Download/AMATSUTSUMI/data/pac
 cargo run --offline --bin cmvs-save -- "E:/Download/AMATSUTSUMI/save/save000.dat"
 cargo run --offline --bin cmvs-system-save -- "E:/Download/AMATSUTSUMI/save/system.dat"
 cargo run --offline --bin cmvs-cursor -- "E:/Download/AMATSUTSUMI/data/icon/01.cur"
+cargo run --offline --bin cmvs-pb3 -- "../../work/logo.pb3"
 cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --bootstrap --save-dir "E:/Download/AMATSUTSUMI/save" --system-save "E:/Download/AMATSUTSUMI/save/system.dat" --script-archive "E:/Download/AMATSUTSUMI/data/pack/script.cpz"
 cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --bootstrap --save-dir "E:/Download/AMATSUTSUMI/save" --system-save "E:/Download/AMATSUTSUMI/save/system.dat" --script-archive "E:/Download/AMATSUTSUMI/data/pack/script.cpz" --record-platform "E:/Download/AMATSUTSUMI"
 cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/script.cpz" --script main.ps3
@@ -34,7 +35,7 @@ cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-`--payload` 仅允许创建新文件，输出不包含原始头部。默认 119 项测试、启用 desktop 后 124 项测试和严格 Clippy 检查通过。
+`--payload` 仅允许创建新文件，输出不包含原始头部。默认 130 项测试、启用 desktop 后 135 项测试和严格 Clippy 检查通过。
 真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
 `ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
 
@@ -85,6 +86,16 @@ cargo run --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --e
 用户已确认四个光标和 Esc 正常，事件日志记录了真实键盘、鼠标和焦点事件。
 标题必须显式选择 `--encoding shift-jis|gbk|utf-8`；`--exit-after <秒>` 可用于有界运行检查。
 桌面后端支持范围和验证方式见 [desktop](docs/desktop.md)，其他平台尚未构建验证。
+新增 PB3B type 1（24/32 位）有界解码及显式素材预览，四份真实素材 RGBA 均与 Python 逐字节一致。
+下面直接只读加载资源包中的 logo，无需把素材放入项目：
+
+```powershell
+cargo run --offline --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --image-archive "E:/Download/AMATSUTSUMI/data/pack/chip.cpz" --preview-image logo.pb3
+```
+
+用户已确认 logo 比例正常、无花屏并可关闭。图像按比例居中、以透明度合成到预览背景上；
+这是显式素材预览，未执行 VM 绘图命令，主快照断点仍保留。背景样本使用的 type 3/JBP 暂不支持。
+`cmvs-pb3 <文件> --rgba <新输出>` 可导出顶向下 RGBA，拒绝覆盖；详情见 [pb3-format](docs/pb3-format.md)。
 `cmvs-cpz` 默认读取 64 字节头部；`--list` 解密索引，`--script` 读取并解析 PS2A，
 `--extract` 将指定 ASCII 文件名的内容写入用户指定的新文件。支持当前 CPZ6 加密模式 1，尚未验证校验和。
 本作全部 13 个包的索引已解析，`script.cpz` 列出 87 个文件。

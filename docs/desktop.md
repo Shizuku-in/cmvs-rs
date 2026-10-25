@@ -1,12 +1,13 @@
 # 原生桌面预览
 
-这是 Windows 实测的研究预览，不是完整剧情播放器。winit 负责窗口与事件，softbuffer 只呈现棋盘格测试背景。
+这是 Windows 实测的研究预览，不是完整剧情播放器。winit 负责窗口与事件，softbuffer 呈现测试背景或用户明确选择的素材。
 应用从正常入口处理已验证的启动命令，到未知命令或引擎快照断点暂停；主断点之后仍运行窗口事件循环。
 不生成缺失的引擎对象，不把测试背景保存为剧情快照，不自动执行登记回调。
 
 ```powershell
 cargo run --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis
 cargo run --offline --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --exit-after 30
+cargo run --offline --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --image-archive "E:/Download/AMATSUTSUMI/data/pack/chip.cpz" --preview-image logo.pb3
 cargo test --offline
 cargo test --offline --features desktop
 cargo clippy --offline --features desktop --all-targets -- -D warnings
@@ -29,6 +30,12 @@ game-root 明确指定本次研究过的目录布局：data/pack/start.ps3、scr
 - Esc 或窗口关闭按钮退出。`--exit-after 1..3600` 指定自动退出秒数，仅用于窗口运行检查。
 - 标准输出记录实际应用的标题/图标/光标请求和输入事件统计，不写游戏目录。
 
+`--image-archive` 与 `--preview-image` 必须一起提供，basename 目前仅 ASCII。
+通过 CPZ6 读取并解码 PB3 type 1，加载成功后在原生窗口中按比例居中显示，最近邻缩放，直通 alpha 合成。
+这些是预览显示策略，尚未核对为原版场景的缩放/混合规则；图像的加载和展示不修改 VM。
+测试背景仍填充图片之外的区域，状态栏最后绘制。未提供图片时仍为原来的棋盘格预览。
+不支持的 codec、模糊 basename、图像损坏或错误尺寸会在创建窗口前明确失败。
+
 宿主输入只观察本窗口的物理按键、鼠标移动/按钮/滚轮和焦点事件。
 保持按下集合以供后续适配，失焦时清空，最多保留 256 条事件并统计丢弃数量。
 这些事件没有伪装成 CMVS 系统结果，也未绑定到游戏输入指令；当前不会推进剧情或触发已登记脚本回调。
@@ -41,3 +48,6 @@ game-root 明确指定本次研究过的目录布局：data/pack/start.ps3、scr
 人工检查日志记录四个原生光标、键盘、鼠标事件，退出时 VM 步数仍为 479。
 桌面自动化工具对 cmvs-desktop 的截图请求因应用未获批准被拒绝，未使用其他自动化方式绕过；没有自动截图验证。
 macOS/Linux/Android/iOS 尚未构建或真机验证，当前窗口代码不能直接视为这些平台均已支持。
+
+PB3 素材显示验证：只读加载 chip.cpz 内的 logo.pb3（1280×720，type 1/24 位），
+用户确认“显示正常，已关闭”。该原生运行仍以 479 步停于主快照断点，Esc 退出，未运行绘图 opcode。
