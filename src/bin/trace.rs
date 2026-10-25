@@ -3,6 +3,7 @@ use cmvs_rs::{
     bootstrap::Bootstrap,
     cpz::Cpz6Index,
     machine::{Machine, Step},
+    platform::{DirectoryAssets, PlatformHost, PlatformRequest, RecordingBackend},
     ps3::Script,
     save_menu::{DirectorySaves, SaveMenuHost, SlotStatus},
     script_control::{ArchiveScripts, ControlEvent, ScriptControl},
@@ -26,7 +27,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         .ok_or("usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap]")?;
     if path == "--help" {
         println!(
-            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap] [--script-archive <archive>] [--virtual-tick <tick>] [--save-dir <directory>] [--system-save <file>]\n--script loads an isolated initial script. --script-archive supplies common/main scripts and enables explicit control handling with virtual time (default tick 0), without automatic scheduling. --bootstrap applies verified startup configuration. --save-dir enables read-only saveNNN.dat header scanning and menu state, without native UI or save restoration. --system-save explicitly enables CSS1 persistent-state loading for 0x2128; it does not restore a gameplay snapshot. Main transfer stops for the unimplemented engine snapshot."
+            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap] [--script-archive <archive>] [--virtual-tick <tick>] [--save-dir <directory>] [--system-save <file>] [--record-platform <game-root>]\n--script loads an isolated initial script. --script-archive supplies common/main scripts and enables explicit control handling with virtual time (default tick 0), without automatic scheduling. --bootstrap applies verified startup configuration. --save-dir enables read-only saveNNN.dat header scanning and menu state, without native UI or save restoration. --system-save explicitly enables CSS1 persistent-state loading for 0x2128; it does not restore a gameplay snapshot. --record-platform enables a recording-only backend with read-only cursor/icon assets from the explicit game root; no native window or input polling. Main transfer stops for the unimplemented engine snapshot."
         );
         return Ok(());
     }
@@ -38,6 +39,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut virtual_tick = 0;
     let mut save_dir = None;
     let mut system_save_path = None;
+    let mut platform_root = None;
     while let Some(flag) = args.next() {
         if flag == "--bootstrap" {
             bootstrap = Some(Bootstrap::default());
@@ -58,6 +60,8 @@ fn run() -> Result<(), Box<dyn Error>> {
             save_dir = Some(value);
         } else if flag == "--system-save" {
             system_save_path = Some(value);
+        } else if flag == "--record-platform" {
+            platform_root = Some(value);
         } else {
             return Err("unknown option".into());
         }
@@ -99,6 +103,14 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut save_menu = SaveMenuHost::default();
     let mut system_source = system_save_path.map(FileSystemSave::new);
     let mut system_host = SystemSaveHost::default();
+    let mut platform_assets = platform_root.map(DirectoryAssets::new).transpose()?;
+    let mut platform_host = PlatformHost::default();
+    let mut platform_backend = RecordingBackend::default();
+    if platform_assets.is_some() {
+        println!(
+            "# RECORDING platform backend: requests and state only; no native window, cursor, icon display, or input polling"
+        );
+    }
     if script_source.is_some() {
         println!(
             "# script control uses explicit virtual_tick={virtual_tick}; no automatic callback scheduler"
@@ -121,6 +133,45 @@ fn run() -> Result<(), Box<dyn Error>> {
             machine.stack().len_bytes()
         );
         if let Step::System { command, .. } = event {
+            if let Some(assets) = &mut platform_assets {
+                let cursors = bootstrap
+                    .as_ref()
+                    .map(Bootstrap::cursor_names)
+                    .unwrap_or(&[]);
+                let previous = platform_backend.requests().len();
+                if let Some(event) = platform_host.try_handle(
+                    &mut machine,
+                    &mut platform_backend,
+                    assets,
+                    cursors,
+                )? {
+                    println!(
+                        "# platform recording 0x{:04x} {event:?}; requests={} thumbnail={:?}",
+                        command + 0x2000,
+                        platform_backend.requests().len(),
+                        platform_host.thumbnail()
+                    );
+                    if platform_backend.requests().len() > previous {
+                        match platform_backend.requests().last().expect("new request") {
+                            PlatformRequest::Title(bytes) => {
+                                println!("# recorded title={}", bytes.escape_ascii())
+                            }
+                            PlatformRequest::Cursor { id, bitmap } => println!(
+                                "# recorded cursor={id} dimensions={:?}",
+                                bitmap
+                                    .as_ref()
+                                    .map(|b| (b.width(), b.height(), b.hotspot()))
+                            ),
+                            PlatformRequest::Icon { name, bytes } => println!(
+                                "# recorded icon={} bytes={} (directory validated, pixels opaque)",
+                                name.escape_ascii(),
+                                bytes.len()
+                            ),
+                        }
+                    }
+                    continue;
+                }
+            }
             if let Some(source) = &mut system_source {
                 let game_id = bootstrap
                     .as_ref()

@@ -2,9 +2,11 @@
 pub mod bootstrap;
 pub mod bytecode;
 pub mod cpz;
+pub mod cursor;
 pub mod evaluate;
 pub mod lzss;
 pub mod machine;
+pub mod platform;
 pub mod ps3;
 pub mod save;
 pub mod save_menu;

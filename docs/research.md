@@ -324,3 +324,36 @@ Rust 与仓库外独立 Python 的解压字节完全一致，payload SHA-256：
 新增 11 项 CSS1 测试，总计 106 项 Rust 测试通过，fmt 与严格 Clippy 通过。
 涵盖四种旋转、最长/重叠引用、环绕、逐前缀截断、容量与列表边界、错误重试、恢复范围及只读导出。
 下一步：窗口/输入宿主边界与标题等命令，再推进公共脚本初始化、引擎快照和桌面场景。
+
+## 平台接口与正常入口记录实验
+
+新增 `PlatformHost`、`PlatformBackend`、有界 `RecordingBackend` 和只读 `PlatformAssets`；
+仅显式 `--record-platform <根目录>` 启用记录模式。语义、地址、支持范围与错误策略见 `platform-host.md`。
+新增 `cursor::CursorBitmap` 及 `cmvs-cursor`，不再把 Windows 光标文件作为不透明路径跳过。
+ICO 仍只验证目录/范围并保留原始资源，未实现像素解码或显示。
+
+静态核对 0x2160、0x2350、0x2099、0x22b0、0x208f 及辅助函数，
+0x2350 仅更改 +4664 子对象的明确字段，未从它推断或模拟完整输入系统。
+真实标题保留原始字节，缩略图配置 192×108；读取 amatsutsumi.ico 82214 字节，目录有 4 项，SHA-256
+`c8e647fbb36bfaf8dfed3da5e62e9554c15d92e1b3b3e461e0c981c7877aa121`。
+本机 CSS1 整数 2190 为 0，正常路径跳过自定义光标选择，没有声称真实启动执行了 0x2099。
+
+正常入口完整研究命令在此前四个显式选项上追加 `--record-platform E:/Download/AMATSUTSUMI`：
+共 479 次 step，两个公共脚本初始化均从原始入口到达并返回；13 个回调登记，
+最终主切换准备槽 0=main.ps3、1=intproc.ps3、2=intcode.ps3，PC=0x38d1e、SP=0，
+已知整数 4097、位变量 262144。在 `MainPreparedNeedsSnapshot` 停止，未略过快照。
+这消除了此前尾段隔离实验缺失启动变量状态的问题，但平台效果只是记录，仍不能宣称原生启动成功。
+
+四份原始 CUR 均为 2238 字节、32×32、热点 (0,0)，解析为各 4096 字节的顶向下 AND/RGB XOR 记录。
+Rust 与独立 Python 的每份结果逐字节一致，原文件哈希未变：
+
+| 文件 | 原始 SHA-256 | 解码平面 SHA-256 |
+|---|---|---|
+| 01.cur | d00627b45c3b57f8d8bfefe5435aecef1cb537f534269f577e034f9f1c398517 | 62a65790501c3d3af72a3870c3eb156150d4bc798af6d67f436aba7038eecd31 |
+| 02.cur | d0b2aff7ff67b6850c32f56eb5f7a859e16b956646ce3738157130e7948a0f3e | adeb44328ca2577eedd3da7bcd824b532d7867c4d31c86f0530b2ad35746da7e |
+| 03.cur | e159842311e438f431fc3473c3034cdb834811a669fd1aec01b617ba77e3422e | 01abb7f2ee8adcbd0de44d81fd28ae3c5d1f9abf327bd3f3c42e5c8806244a92 |
+| 04.cur | b945439f5687e8321c2825e1f7be302f498aa6e649c1b76aad89351e20d0caed | c61d195d44c120adbe2079f57012cb36f2b7fab782c2510814a827349d8b233a |
+
+真实资源、平面和报告仅在仓库外，system.dat 哈希保持前节值。新增 10 项合成测试，
+总计 116 项测试，fmt、严格 Clippy 通过。下一步为真实窗口/输入/渲染后端，
+以及可表达缺失对象状态的引擎快照方案；不能通过填充零对象绕过兼容性问题。

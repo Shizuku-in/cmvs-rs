@@ -33,6 +33,10 @@ path = "src/bin/save.rs"
 name = "cmvs-system-save"
 path = "src/bin/system_save.rs"
 
+[[bin]]
+name = "cmvs-cursor"
+path = "src/bin/cursor.rs"
+
 [lints.rust]
 unsafe_code = "forbid"
 

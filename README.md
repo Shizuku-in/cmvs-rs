@@ -23,7 +23,9 @@ cargo run --offline --bin cmvs-cpz -- --list "E:/Download/AMATSUTSUMI/data/pack/
 cargo run --offline --bin cmvs-cpz -- --script "E:/Download/AMATSUTSUMI/data/pack/script.cpz" main.ps3
 cargo run --offline --bin cmvs-save -- "E:/Download/AMATSUTSUMI/save/save000.dat"
 cargo run --offline --bin cmvs-system-save -- "E:/Download/AMATSUTSUMI/save/system.dat"
+cargo run --offline --bin cmvs-cursor -- "E:/Download/AMATSUTSUMI/data/icon/01.cur"
 cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --bootstrap --save-dir "E:/Download/AMATSUTSUMI/save" --system-save "E:/Download/AMATSUTSUMI/save/system.dat" --script-archive "E:/Download/AMATSUTSUMI/data/pack/script.cpz"
+cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --bootstrap --save-dir "E:/Download/AMATSUTSUMI/save" --system-save "E:/Download/AMATSUTSUMI/save/system.dat" --script-archive "E:/Download/AMATSUTSUMI/data/pack/script.cpz" --record-platform "E:/Download/AMATSUTSUMI"
 cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/script.cpz" --script main.ps3
 cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --entry 0x1214 --script-archive "E:/Download/AMATSUTSUMI/data/pack/script.cpz"
 cargo test --offline
@@ -31,7 +33,7 @@ cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-`--payload` 仅允许创建新文件，输出不包含原始头部。106 项 Rust 测试和严格 Clippy 检查通过。
+`--payload` 仅允许创建新文件，输出不包含原始头部。116 项 Rust 测试和严格 Clippy 检查通过。
 真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
 `ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
 
@@ -63,6 +65,13 @@ cargo fmt --check
 默认不从 `--save-dir` 推断系统存档，读取或校验失败保留 VM 状态，原存档始终只读。
 启用完整示例中的选项后，正常入口执行 292 次 step，在 PC=0x1174 停于窗口标题命令 0x2160。
 此时已知整数 4097、位变量 262144；窗口与画面后端尚未实现。格式见 [system-save-format](docs/system-save-format.md)。
+新增 `platform` 宿主接口和显式 `--record-platform <游戏根目录>`：记录标题/图标/光标请求，
+应用已核对的 0x2350 子对象重置及 0x22b0 缩略图尺寸配置，不创建原生窗口、不采集或伪造输入。
+**记录模式**从正常入口执行 479 次 step，完成两个公共脚本初始化和 13 个回调登记，
+准备 main.ps3 后停在引擎快照断点。它验证了启动状态流，不能当作原生平台效果或完整启动成功。
+新增 `cursor`、`cmvs-cursor`，读取本作单图像 8 位 CUR，保留 AND/XOR 像素与热点；
+四份真实光标的 4096 字节平面结果均与 Python 逐字节一致。`--planes <新文件>` 可导出原始平面，格式不是 RGBA。
+平台接口、错误策略和当前支持范围见 [platform-host](docs/platform-host.md)。
 `cmvs-cpz` 默认读取 64 字节头部；`--list` 解密索引，`--script` 读取并解析 PS2A，
 `--extract` 将指定 ASCII 文件名的内容写入用户指定的新文件。支持当前 CPZ6 加密模式 1，尚未验证校验和。
 本作全部 13 个包的索引已解析，`script.cpz` 列出 87 个文件。

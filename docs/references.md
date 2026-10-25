@@ -29,7 +29,13 @@
 - 尚未固定提交、完成许可审查或纳入源码依赖。
 - 后续用于分析 Android 版的线索，代码复用前重新核对。
 
-## 本作证据
+## Windows 图标/光标格式说明
+
+- Microsoft [The evolution of the ICO file format, part 2](https://devblogs.microsoft.com/oldnewthing/20101019-00/?p=12503)：DIB、双倍高度、调色板及 AND/XOR 平面语义。
+- Microsoft [About Cursors](https://learn.microsoft.com/en-us/windows/win32/menurc/about-cursors)：热点、CUR、多图像选择及窗口类光标行为。
+- 仅参考格式和行为描述，未复制示例源码。CUR 解码器仅实现本作当前单图像 8 位样本，使用外部 Python 和合成样本验证。
+
+## 本作证据与验证约定
 
 IDA 地址、文件哈希和实际指令差异见 `research.md`。当前样本是 PC 版，未分析 Android 包。
 新增参考需记录 URL、提交、文件、用途、许可和验证方式。

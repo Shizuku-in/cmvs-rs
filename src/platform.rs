@@ -1,0 +1,269 @@
+//! Explicit platform requests. The recording backend is a research model, not a window.
+use crate::{
+    FormatError, MAX_PAYLOAD, cursor::CursorBitmap, evaluate::error, machine::Machine,
+    vm::SystemResult,
+};
+use std::{
+    collections::BTreeMap,
+    error::Error,
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+
+pub const MAX_PLATFORM_ASSET: usize = 4 * 1024 * 1024;
+pub trait PlatformAssets {
+    fn read(&mut self, name: &[u8]) -> Result<Vec<u8>, Box<dyn Error>>;
+}
+pub struct DirectoryAssets {
+    root: PathBuf,
+}
+impl DirectoryAssets {
+    pub fn new(root: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
+        let root = root.as_ref().canonicalize()?;
+        if !root.is_dir() {
+            return Err("platform asset root is not a directory".into());
+        }
+        Ok(Self { root })
+    }
+}
+impl PlatformAssets for DirectoryAssets {
+    fn read(&mut self, name: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+        if name.is_empty()
+            || name.len() >= 2048
+            || !name.is_ascii()
+            || name.contains(&0)
+            || name.contains(&b':')
+        {
+            return Err("platform asset path must be a bounded ASCII relative path".into());
+        }
+        let mut path = self.root.clone();
+        for part in name.split(|b| matches!(b, b'/' | b'\\')) {
+            if part.is_empty() || part == b"." || part == b".." {
+                return Err("invalid platform asset path component".into());
+            }
+            path.push(std::str::from_utf8(part)?);
+        }
+        let path = path.canonicalize()?;
+        if !path.starts_with(&self.root) {
+            return Err("platform asset resolves outside root".into());
+        }
+        let file = File::open(path)?;
+        let mut bytes = Vec::new();
+        file.take(MAX_PLATFORM_ASSET as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > MAX_PLATFORM_ASSET {
+            return Err("platform asset exceeds research limit".into());
+        }
+        Ok(bytes)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlatformRequest {
+    Title(Vec<u8>),
+    Cursor {
+        id: u32,
+        bitmap: Option<Arc<CursorBitmap>>,
+    },
+    /// Validated ICO directory and opaque payloads; no raster/icon size selection yet.
+    Icon {
+        name: Vec<u8>,
+        bytes: Arc<Vec<u8>>,
+    },
+}
+pub trait PlatformBackend {
+    /// Must commit the request on Ok; on Err leave backend state unchanged for retry.
+    /// This is not a queued acknowledgement. Native event-loop implementations must honor this contract.
+    fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>>;
+}
+#[derive(Default)]
+pub struct RecordingBackend {
+    requests: Vec<PlatformRequest>,
+    bytes: usize,
+}
+impl RecordingBackend {
+    pub fn requests(&self) -> &[PlatformRequest] {
+        &self.requests
+    }
+}
+impl PlatformBackend for RecordingBackend {
+    fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+        let size = match request {
+            PlatformRequest::Title(bytes) => bytes.len(),
+            PlatformRequest::Cursor { bitmap, .. } => {
+                bitmap.as_ref().map_or(0, |b| b.width() * b.height() * 4)
+            }
+            PlatformRequest::Icon { bytes, .. } => bytes.len(),
+        };
+        if self.requests.len() >= 4096 || size > MAX_PAYLOAD - self.bytes {
+            return Err("recorded platform requests exceed research limits".into());
+        }
+        self.requests.push(request.clone());
+        self.bytes += size;
+        Ok(())
+    }
+}
+
+fn validate_icon(bytes: &[u8]) -> Result<(), FormatError> {
+    if bytes.len() < 6 || bytes[..4] != [0, 0, 1, 0] {
+        return Err(FormatError("expected ICO directory"));
+    }
+    let count = usize::from(u16::from_le_bytes([bytes[4], bytes[5]]));
+    let end = 6 + 16 * count;
+    if count == 0 || count > 256 || end > bytes.len() {
+        return Err(FormatError("ICO directory count exceeds bounds"));
+    }
+    for entry in bytes[6..end].chunks_exact(16) {
+        let size = u64::from(u32::from_le_bytes(
+            entry[8..12].try_into().expect("16-byte entry"),
+        ));
+        let offset = u64::from(u32::from_le_bytes(
+            entry[12..16].try_into().expect("16-byte entry"),
+        ));
+        if entry[3] != 0 || size == 0 || offset < end as u64 || offset + size > bytes.len() as u64 {
+            return Err(FormatError("ICO image range exceeds file"));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThumbnailConfig {
+    pub width: u32,
+    pub height: u32,
+    pub enabled: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reset2350 {
+    /// Known fields of the original +4664 subobject; others remain unmodeled.
+    pub fields: BTreeMap<u16, u32>,
+}
+impl Reset2350 {
+    fn new(enabled: bool) -> Self {
+        let mut fields = BTreeMap::from([(0, u32::from(enabled))]);
+        for field in [44, 88, 172] {
+            fields.insert(field, u32::MAX);
+        }
+        for field in [48, 52, 72, 76, 80, 84, 92, 108, 120, 180, 184] {
+            fields.insert(field, 0);
+        }
+        Self { fields }
+    }
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlatformEvent {
+    Applied,
+    CursorUnchanged,
+    Configured,
+}
+#[derive(Default)]
+pub struct PlatformHost {
+    title: Option<Vec<u8>>,
+    // Original constructor 0x14008d540 sets selection to zero.
+    cursor: u32,
+    icon: Option<Vec<u8>>,
+    thumbnail: Option<ThumbnailConfig>,
+    reset2350: Option<Reset2350>,
+}
+impl PlatformHost {
+    pub fn title(&self) -> Option<&[u8]> {
+        self.title.as_deref()
+    }
+    pub fn cursor(&self) -> u32 {
+        self.cursor
+    }
+    pub fn icon(&self) -> Option<&[u8]> {
+        self.icon.as_deref()
+    }
+    pub fn thumbnail(&self) -> Option<ThumbnailConfig> {
+        self.thumbnail
+    }
+    pub fn reset2350(&self) -> Option<&Reset2350> {
+        self.reset2350.as_ref()
+    }
+    pub fn try_handle(
+        &mut self,
+        vm: &mut Machine<'_>,
+        backend: &mut impl PlatformBackend,
+        assets: &mut impl PlatformAssets,
+        cursors: &[Vec<u8>],
+    ) -> Result<Option<PlatformEvent>, Box<dyn Error>> {
+        let Some((pc, command)) = vm.pending_system() else {
+            return Ok(None);
+        };
+        if !matches!(command, 0x160 | 0x99 | 0x8f | 0x350 | 0x2b0) {
+            return Ok(None);
+        }
+        let arg = vm
+            .stack()
+            .peek_u32(4)
+            .map_err(|e| error(pc, command + 0x2000, e.0))?;
+        if command == 0x2b0 {
+            let height = vm.stack().peek_u32(8).map_err(|e| error(pc, 0x22b0, e.0))?;
+            vm.complete_system(SystemResult(0x4008))?;
+            self.thumbnail = Some(ThumbnailConfig {
+                width: arg,
+                height,
+                enabled: arg != 0 && height != 0,
+            });
+            return Ok(Some(PlatformEvent::Configured));
+        }
+        if command == 0x350 {
+            vm.complete_system(SystemResult(0x4004))?;
+            self.reset2350 = Some(Reset2350::new(arg != 0));
+            return Ok(Some(PlatformEvent::Configured));
+        }
+        if command == 0x99 && arg == self.cursor {
+            vm.complete_system(SystemResult(0x4004))?;
+            return Ok(Some(PlatformEvent::CursorUnchanged));
+        }
+        let request = match command {
+            0x160 => {
+                let title = vm.resolve_string(arg)?;
+                if title.len() >= 256 {
+                    return Err(error(pc, 0x2160, "title exceeds research byte limit").into());
+                }
+                PlatformRequest::Title(title)
+            }
+            0x99 => {
+                let bitmap = if arg == 0 {
+                    None
+                } else {
+                    let name = cursors
+                        .get((arg - 1) as usize)
+                        .ok_or_else(|| error(pc, 0x2099, "cursor ID not registered"))?;
+                    let bytes = assets.read(name)?;
+                    if bytes.len() > MAX_PLATFORM_ASSET {
+                        return Err("cursor file exceeds research limit".into());
+                    }
+                    Some(Arc::new(CursorBitmap::decode(&bytes)?))
+                };
+                PlatformRequest::Cursor { id: arg, bitmap }
+            }
+            0x8f => {
+                let name = vm.resolve_string(arg)?;
+                let bytes = assets.read(&name)?;
+                if bytes.len() > MAX_PLATFORM_ASSET {
+                    return Err("icon file exceeds research limit".into());
+                }
+                validate_icon(&bytes)?;
+                PlatformRequest::Icon {
+                    name,
+                    bytes: Arc::new(bytes),
+                }
+            }
+            _ => unreachable!(),
+        };
+        backend.apply(&request)?;
+        // All parameter sizes and references have been validated before invoking the backend.
+        vm.complete_system(SystemResult(0x4004))?;
+        match request {
+            PlatformRequest::Title(bytes) => self.title = Some(bytes),
+            PlatformRequest::Cursor { id, .. } => self.cursor = id,
+            PlatformRequest::Icon { name, .. } => self.icon = Some(name),
+        }
+        Ok(Some(PlatformEvent::Applied))
+    }
+}
