@@ -236,10 +236,11 @@ fn run() -> Result<(), Box<dyn Error>> {
                 }
                 if scene.try_handle(&mut machine)? {
                     println!(
-                        "# scene state 0x{:04x}: {:?} rgba={:?}; recorded only, nothing drawn",
+                        "# scene state 0x{:04x}: {:?} rgba={:?} objects={:?}; recorded only, nothing drawn",
                         command + 0x2000,
                         scene.clear(),
-                        scene.clear().rgba()
+                        scene.clear().rgba(),
+                        scene.objects().keys().collect::<Vec<_>>()
                     );
                     continue;
                 }

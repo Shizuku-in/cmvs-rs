@@ -40,7 +40,7 @@ cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-`--payload` 仅允许创建新文件，输出不包含原始头部。默认 165 项测试、启用 desktop 后 170 项测试和严格 Clippy 检查通过。
+`--payload` 仅允许创建新文件，输出不包含原始头部。默认 166 项测试、启用 desktop 后 171 项测试和严格 Clippy 检查通过。
 真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
 `ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
 
@@ -124,7 +124,8 @@ main.ps3 将清屏色设为 0，再经已支持的 0x22b4 调用标签 186。新
 再经一段整数赋值和新增的浮点表达式、帧局部变量循环，以 0x22cd 关闭弹出菜单后经 0x2080 切换到 logo.ps3；
 窗口标题变为「アマツツミ　- ブランドロゴ -」。新增 `random`（MSVC CRT rand()，显式种子 `--rand-seed`）处理 0x20d4，
 随机选择品牌语音；种子 0 选中 `sys301.ogg`。新增 `audio`：0x20b0 的效果音通道模型与 `AudioBackend`，
-默认后端只记录请求、不发声。共执行 880 步后在 PC=0x324e2 停于 0x2020。
+默认后端只记录请求、不发声。0x2020/0x2021 建立场景对象槽（暂只记录存在性），
+共执行 883 步后在 PC=0x324f0 停于以 `logo.pb3` 为参数的 0x20f8。
 `cmvs-desktop` 支持同名选项，Windows 实测停点相同；窗口仍显示诊断棋盘格。
 表达式求值改用撤销日志实现事务后，到当时停点（504 步）的 trace 在 debug 构建下由 3682 ms 降至约 300 ms，输出逐行不变。
 格式与证据见 [snapshot-format](docs/snapshot-format.md)。

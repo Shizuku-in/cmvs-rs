@@ -1,7 +1,7 @@
 use cmvs_rs::{
     machine::{Machine, Step},
     ps3::Script,
-    scene::{ClearState, SceneHost},
+    scene::{ClearState, SceneHost, SceneObject},
 };
 
 fn script(code: &[u8]) -> Script {
@@ -97,4 +97,37 @@ fn other_commands_are_left_pending() {
     assert!(!scene.try_handle(&mut vm).unwrap());
     assert_eq!(vm.pending_system(), Some((8, 0x2cc)));
     assert_eq!(scene.clear(), ClearState::default());
+}
+
+#[test]
+fn object_slots_are_rebuilt_destroyed_and_bounded() {
+    let mut code = vec![];
+    for op in [0x2020, 0x2020, 0x2021, 0x2021] {
+        code.extend(push_then(10, &[op]));
+    }
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    for expected in [true, true, false, false] {
+        vm.step().unwrap();
+        vm.step().unwrap();
+        assert!(scene.try_handle(&mut vm).unwrap());
+        assert_eq!(scene.object(10).is_some(), expected);
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
+    for slot in [256u32, u32::MAX] {
+        let program = script(&push_then(slot, &[0x2020]));
+        let mut vm = Machine::new(&program).unwrap();
+        vm.step().unwrap();
+        vm.step().unwrap();
+        assert!(scene.try_handle(&mut vm).is_err());
+        assert_eq!(vm.pending_system(), Some((8, 0x20)));
+    }
+    assert!(scene.objects().is_empty());
+    let program = script(&push_then(3, &[0x2020]));
+    let mut vm = Machine::new(&program).unwrap();
+    vm.step().unwrap();
+    vm.step().unwrap();
+    scene.try_handle(&mut vm).unwrap();
+    assert_eq!(scene.object(3), Some(&SceneObject::default()));
 }
