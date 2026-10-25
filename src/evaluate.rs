@@ -10,6 +10,21 @@ pub(crate) fn error(pc: usize, opcode: u16, reason: &'static str) -> DecodeError
     }
 }
 
+#[derive(Debug)]
+enum Undo {
+    Integer(u32, Option<i32>),
+    Bit(u32, Option<bool>),
+    String(u32, Option<Vec<u8>>),
+    Buffer(Vec<u8>),
+    Result(Option<u32>),
+    Condition(Option<bool>),
+}
+
+/// Previous values recorded before each write, so a failed evaluation is undone
+/// without cloning the whole State.
+#[derive(Debug, Default)]
+pub(crate) struct Journal(Vec<Undo>);
+
 /// Bounded research state. Missing variables are unknown, not implicitly zero.
 #[derive(Debug, Clone)]
 pub struct State {
@@ -81,8 +96,72 @@ impl State {
     pub fn string_buffer(&self) -> &[u8] {
         &self.string_buffer
     }
-    pub(crate) fn set_string_buffer(&mut self, bytes: Vec<u8>) {
-        self.string_buffer = bytes;
+    pub(crate) fn set_string_buffer_journaled(&mut self, bytes: Vec<u8>, journal: &mut Journal) {
+        let old = std::mem::replace(&mut self.string_buffer, bytes);
+        journal.0.push(Undo::Buffer(old));
+    }
+    pub(crate) fn set_result_journaled(&mut self, value: Option<u32>, journal: &mut Journal) {
+        journal.0.push(Undo::Result(self.result));
+        self.result = value;
+    }
+    pub(crate) fn set_string_journaled(
+        &mut self,
+        index: u32,
+        bytes: &[u8],
+        journal: &mut Journal,
+    ) -> Result<(), &'static str> {
+        Self::range(index, 1, 128)?;
+        if bytes.len() >= 1024 || bytes.contains(&0) {
+            return Err("invalid bounded string slot value");
+        }
+        let old = self.strings.insert(index, bytes.to_vec());
+        journal.0.push(Undo::String(index, old));
+        Ok(())
+    }
+    fn set_integer_journaled(
+        &mut self,
+        index: u32,
+        value: i32,
+        journal: &mut Journal,
+    ) -> Result<(), &'static str> {
+        if index >= self.integer_limit {
+            return Err("integer variable outside research limit");
+        }
+        let old = self.integers.insert(index, value);
+        journal.0.push(Undo::Integer(index, old));
+        Ok(())
+    }
+    fn set_bit_journaled(
+        &mut self,
+        index: u32,
+        value: bool,
+        journal: &mut Journal,
+    ) -> Result<(), &'static str> {
+        if index >= self.bit_limit {
+            return Err("bit variable outside research limit");
+        }
+        let old = self.bits.insert(index, value);
+        journal.0.push(Undo::Bit(index, old));
+        Ok(())
+    }
+    /// Restores every journaled write in reverse order.
+    pub(crate) fn rollback(&mut self, journal: Journal) {
+        fn restore<V>(map: &mut BTreeMap<u32, V>, index: u32, old: Option<V>) {
+            match old {
+                Some(value) => map.insert(index, value),
+                None => map.remove(&index),
+            };
+        }
+        for undo in journal.0.into_iter().rev() {
+            match undo {
+                Undo::Integer(index, old) => restore(&mut self.integers, index, old),
+                Undo::Bit(index, old) => restore(&mut self.bits, index, old),
+                Undo::String(index, old) => restore(&mut self.strings, index, old),
+                Undo::Buffer(old) => self.string_buffer = old,
+                Undo::Result(old) => self.result = old,
+                Undo::Condition(old) => self.condition = old,
+            }
+        }
     }
     pub fn set_string(&mut self, index: u32, bytes: &[u8]) -> Result<(), &'static str> {
         self.fill_strings(index, 1, bytes)
@@ -155,10 +234,21 @@ impl State {
         expr: &Expression,
         labels: &[u32],
     ) -> Result<i32, DecodeError> {
-        let mut candidate = self.clone();
-        let value = candidate.evaluate(expr, 0, labels)?;
-        *self = candidate;
-        Ok(value)
+        let mut journal = Journal::default();
+        let outcome = self.evaluate(expr, 0, labels, &mut journal);
+        if outcome.is_err() {
+            self.rollback(journal);
+        }
+        outcome
+    }
+    /// Nested evaluation inside a larger transaction; the caller owns rollback.
+    pub(crate) fn evaluate_journaled(
+        &mut self,
+        expr: &Expression,
+        labels: &[u32],
+        journal: &mut Journal,
+    ) -> Result<i32, DecodeError> {
+        self.evaluate(expr, 0, labels, journal)
     }
     fn read(&self, cell: Cell, pc: usize, op: u16) -> Result<i32, DecodeError> {
         match cell {
@@ -172,10 +262,17 @@ impl State {
                 .ok_or_else(|| error(pc, op, "read of unknown bit variable")),
         }
     }
-    fn write(&mut self, cell: Cell, value: i32, pc: usize, op: u16) -> Result<(), DecodeError> {
+    fn write(
+        &mut self,
+        cell: Cell,
+        value: i32,
+        pc: usize,
+        op: u16,
+        journal: &mut Journal,
+    ) -> Result<(), DecodeError> {
         match cell {
-            Cell::Integer(index) => self.set_integer(index, value),
-            Cell::Bit(index) => self.set_bit(index, value != 0),
+            Cell::Integer(index) => self.set_integer_journaled(index, value, journal),
+            Cell::Bit(index) => self.set_bit_journaled(index, value != 0, journal),
             Cell::Value(_) => Err("assignment requires a writable variable"),
         }
         .map_err(|why| error(pc, op, why))
@@ -185,6 +282,7 @@ impl State {
         expr: &Expression,
         depth: usize,
         labels: &[u32],
+        journal: &mut Journal,
     ) -> Result<i32, DecodeError> {
         if depth >= 64 {
             return Err(error(
@@ -237,7 +335,7 @@ impl State {
                     tag,
                     expression,
                 } if matches!(tag, 0x200 | 0x101 | 0x102) => {
-                    let value = self.evaluate(expression, depth + 1, labels)?;
+                    let value = self.evaluate(expression, depth + 1, labels, journal)?;
                     let cell = match tag {
                         0x200 => Cell::Value(value),
                         0x101 if value >= 0 && (value as u32) < self.integer_limit => {
@@ -263,7 +361,7 @@ impl State {
                     } else {
                         old.wrapping_sub(1)
                     };
-                    self.write(cell, value, *pc, *op)?;
+                    self.write(cell, value, *pc, *op, journal)?;
                     stack.push(Cell::Value(value));
                 }
                 Term::Operator { pc, opcode } => {
@@ -275,7 +373,7 @@ impl State {
                         .ok_or_else(|| error(*pc, *opcode, "expression stack underflow"))?;
                     let value = if *opcode == 0x170 {
                         let right = self.read(right_cell, *pc, *opcode)?;
-                        self.write(left_cell, right, *pc, *opcode)?;
+                        self.write(left_cell, right, *pc, *opcode, journal)?;
                         right
                     } else {
                         // Preserve descriptor laziness: nested writes may change either source.
@@ -296,7 +394,7 @@ impl State {
                         };
                         let value = binary_value(*pc, binary, left, right)?;
                         if (0x175..=0x17e).contains(opcode) {
-                            self.write(left_cell, value, *pc, *opcode)?;
+                            self.write(left_cell, value, *pc, *opcode, journal)?;
                         }
                         value
                     };
@@ -318,9 +416,10 @@ impl State {
         }
         let value = self.read(stack[0], expr.pc, expr.kind)?;
         // The original integer evaluator writes its result to global integer 4096.
-        self.set_integer(4096, value)
+        self.set_integer_journaled(4096, value, journal)
             .map_err(|why| error(expr.pc, expr.kind, why))?;
-        self.result = Some(value as u32);
+        self.set_result_journaled(Some(value as u32), journal);
+        journal.0.push(Undo::Condition(self.condition));
         self.condition = Some(value != 0);
         Ok(value)
     }

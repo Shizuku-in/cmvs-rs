@@ -74,6 +74,9 @@ NativeBackend 在活动事件循环中应用窗口请求，先解码/验证数�
 桌面 `--image-archive/--preview-image` 使用既有 CPZ6 阅读器读取唯一 basename，输出仅保留内存，不写游戏目录。
 没有将预览图写入引擎快照，也没有将其伪装成脚本请求的当前场景。
 
+`State` 的表达式事务使用撤销日志：写入前记录旧值，失败逆序恢复，不再整体克隆状态；嵌套求值共享外层日志。
+`Machine` 在装载脚本时缓存标签表，并以 `Rc` 共享已解码指令。
+
 `snapshot` 只遍历 CSV2 第 0 段的记录帧，不解释负载，也不恢复状态。`SaveImage` 区分原版缓冲为空（`Absent`）
 与原版会生成但 Rust 未构建（`Unavailable`）；后者只能由显式 `SnapshotPolicy::ContinueWithoutImage` 产生。
 `Startup` 默认仍在主快照断点粘性停止；显式策略下只清除位变量 0、记录来源，然后继续执行主脚本。

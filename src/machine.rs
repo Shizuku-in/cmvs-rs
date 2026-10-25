@@ -1,11 +1,11 @@
 //! Bounded multi-slot stepping. Unimplemented host commands remain pending.
 use crate::{
     bytecode::{self, DecodeError, Expression, Instruction, InstructionKind, Term},
-    evaluate::{State, error},
+    evaluate::{Journal, State, error},
     ps3::Script,
     vm::{ParameterStack, StringRef, SystemResult},
 };
-use std::{borrow::Cow, collections::BTreeMap};
+use std::{borrow::Cow, collections::BTreeMap, rc::Rc};
 
 /// Frame table +82548 has 64 entries indexed by depth +82804; entry 0 is the base.
 const MAX_CALL_DEPTH: usize = 63;
@@ -48,19 +48,23 @@ fn append_slot(
 
 struct Image<'a> {
     script: Cow<'a, Script>,
-    instructions: BTreeMap<usize, Instruction>,
+    /// Shared so each step clones a pointer, not an expression tree.
+    instructions: BTreeMap<usize, Rc<Instruction>>,
+    labels: Vec<u32>,
     name: Vec<u8>,
 }
 
 impl<'a> Image<'a> {
     fn prepare(script: Cow<'a, Script>, name: Vec<u8>, entry: u32) -> Result<Self, DecodeError> {
-        let instructions = bytecode::decode_layout(script.code(), entry, &script.labels())?
+        let labels = script.labels();
+        let instructions = bytecode::decode_layout(script.code(), entry, &labels)?
             .into_iter()
-            .map(|i| (i.pc, i))
+            .map(|i| (i.pc, Rc::new(i)))
             .collect();
         Ok(Self {
             script,
             instructions,
+            labels,
             name,
         })
     }
@@ -217,8 +221,18 @@ impl<'a> Machine<'a> {
     /// 0x0201 / 0x140066b00: clears the accumulator, appends operands as operators read them,
     /// and sets the result only from the tag of the bottom entry. Commits all writes or none.
     fn string_expression(&mut self, expr: &Expression) -> Result<(), DecodeError> {
-        let labels = self.image().script.labels();
-        let mut state = self.state.clone();
+        let mut journal = Journal::default();
+        let outcome = self.string_expression_in(expr, &mut journal);
+        if outcome.is_err() {
+            self.state.rollback(journal);
+        }
+        outcome
+    }
+    fn string_expression_in(
+        &mut self,
+        expr: &Expression,
+        journal: &mut Journal,
+    ) -> Result<(), DecodeError> {
         let mut buffer = Vec::new();
         let mut entries: Vec<(u16, u32, usize)> = Vec::new();
         for term in &expr.terms {
@@ -229,7 +243,8 @@ impl<'a> Machine<'a> {
                     expression,
                 } => {
                     // The nested integer evaluator also updates result, condition and integer 4096.
-                    let index = state.evaluate_integer_with_labels(expression, &labels)?;
+                    let labels = &self.images[&self.slot].labels;
+                    let index = self.state.evaluate_journaled(expression, labels, journal)?;
                     entries.push((0x121, index as u32 | 0x8000_0000, *pc));
                 }
                 Term::Scalar { pc, tag, raw } => entries.push((*tag, *raw, *pc)),
@@ -241,11 +256,12 @@ impl<'a> Machine<'a> {
                         .last()
                         .ok_or_else(|| error(*pc, *opcode, "expression stack underflow"))?;
                     if *opcode == 0x170 {
-                        self.append_operand(&state, &mut buffer, top)?;
+                        self.append_operand(&self.state, &mut buffer, top)?;
                         match second {
                             (0x121, value, _) if value & 0x3fff_ffff > 127 => {}
-                            (0x121, value, at) => state
-                                .set_string(value & 0x3fff_ffff, &buffer)
+                            (0x121, value, at) => self
+                                .state
+                                .set_string_journaled(value & 0x3fff_ffff, &buffer, journal)
                                 .map_err(|why| error(at, 0x121, why))?,
                             (tag, _, at) => {
                                 return Err(error(
@@ -257,8 +273,8 @@ impl<'a> Machine<'a> {
                         }
                     } else {
                         // Binary operators only read both operands, so strings concatenate.
-                        self.append_operand(&state, &mut buffer, second)?;
-                        self.append_operand(&state, &mut buffer, top)?;
+                        self.append_operand(&self.state, &mut buffer, second)?;
+                        self.append_operand(&self.state, &mut buffer, top)?;
                     }
                     *entries.last_mut().expect("checked above") = (0, 0, *pc);
                 }
@@ -284,19 +300,18 @@ impl<'a> Machine<'a> {
             _ => None, // The original leaves +82812 unchanged.
         };
         if result.is_some() {
-            state.result = result;
+            self.state.set_result_journaled(result, journal);
         }
         // This evaluator does not modify integer condition flags itself.
-        state.set_string_buffer(buffer);
-        self.state = state;
+        self.state.set_string_buffer_journaled(buffer, journal);
         Ok(())
     }
 
     fn expression(&mut self, expr: &Expression) -> Result<(), DecodeError> {
         match (expr.kind, expr.terms.as_slice()) {
             (0x200, _) => {
-                self.state
-                    .evaluate_integer_with_labels(expr, &self.image().script.labels())?;
+                let labels = &self.images[&self.slot].labels;
+                self.state.evaluate_integer_with_labels(expr, labels)?;
             }
             (0x201, _) => self.string_expression(expr)?,
             (
@@ -334,10 +349,10 @@ impl<'a> Machine<'a> {
         let pc = insn.pc;
         let op = insn.opcode;
         let mut next = insn.end;
-        match insn.kind {
-            InstructionKind::Expression(expr) => self.expression(&expr)?,
+        match &insn.kind {
+            InstructionKind::Expression(expr) => self.expression(expr)?,
             InstructionKind::Jump { target } | InstructionKind::LongJump { target, .. } => {
-                next = target as usize
+                next = *target as usize
             }
             InstructionKind::ConditionalJump { target } => {
                 let condition = self
@@ -345,7 +360,7 @@ impl<'a> Machine<'a> {
                     .condition
                     .ok_or_else(|| error(pc, op, "condition flag is unknown"))?;
                 if (op == 0x401 && !condition) || (op == 0x402 && condition) {
-                    next = target as usize;
+                    next = *target as usize;
                 }
             }
             InstructionKind::CompareJump { value, target } => {
@@ -353,13 +368,13 @@ impl<'a> Machine<'a> {
                     .state
                     .result
                     .ok_or_else(|| error(pc, op, "result register is unknown"))?
-                    == value
+                    == *value
                 {
-                    next = target as usize;
+                    next = *target as usize;
                 }
             }
             InstructionKind::Label { index } => {
-                next = self.image().script.labels()[index as usize] as usize;
+                next = self.image().labels[*index as usize] as usize;
                 if op == 0x410 {
                     if self.frames.len() >= MAX_CALL_DEPTH {
                         return Err(error(pc, op, "call frame table holds 63 nested calls"));
@@ -372,7 +387,7 @@ impl<'a> Machine<'a> {
             }
             InstructionKind::StackAdjust { bytes } if op == 0x412 => {
                 self.stack
-                    .discard(bytes as usize)
+                    .discard(*bytes as usize)
                     .map_err(|e| error(pc, op, e.0))?;
             }
             InstructionKind::StackAdjust { bytes } if op == 0x411 => {
@@ -384,7 +399,7 @@ impl<'a> Machine<'a> {
                     return Err(error(pc, op, "invalid return address"));
                 }
                 self.stack
-                    .discard(4 + bytes as usize)
+                    .discard(4 + *bytes as usize)
                     .map_err(|e| error(pc, op, e.0))?;
                 self.frames.pop();
             }
@@ -396,7 +411,7 @@ impl<'a> Machine<'a> {
                 self.stack.push_u32(raw).map_err(|e| error(pc, op, e.0))?;
             }
             InstructionKind::StackImmediate { bytes: 4, raw } => {
-                self.stack.push_u32(raw).map_err(|e| error(pc, op, e.0))?;
+                self.stack.push_u32(*raw).map_err(|e| error(pc, op, e.0))?;
             }
             InstructionKind::ScriptReturn { .. } => {
                 let slot = self.stack.peek_u32(4).map_err(|e| error(pc, op, e.0))?;
@@ -418,7 +433,7 @@ impl<'a> Machine<'a> {
                 self.repeat_count = 0;
                 return Ok(Step::Yield);
             }
-            InstructionKind::System { command } => {
+            &InstructionKind::System { command } => {
                 self.pending = Some((pc, command));
                 return Ok(Step::System { pc, command });
             }

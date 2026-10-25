@@ -203,6 +203,37 @@ fn literal_cannot_be_assigned_and_policy_limits_are_atomic() {
 }
 
 #[test]
+fn failed_expression_restores_overwritten_values_and_registers() {
+    let mut state = State::default();
+    state.set_integer(8, 1).unwrap();
+    state.set_bit(3, true).unwrap();
+    state.result = Some(5);
+    state.condition = Some(false);
+    let code = expr(
+        0x200,
+        vec![
+            reference(0x101, 8),
+            scalar(0x100, 7),
+            operator(0x170),
+            reference(0x102, 3),
+            scalar(0x100, 0),
+            operator(0x170),
+            operator(0x163),
+            reference(0x101, 50),
+            operator(0x163),
+        ],
+    );
+    assert!(evaluate(&mut state, &code).is_err());
+    assert_eq!(state.integer(8), Some(1));
+    assert_eq!(state.bit(3), Some(true));
+    assert_eq!(state.integer(4096), None);
+    assert_eq!((state.result, state.condition), (Some(5), Some(false)));
+    state.set_integer(50, 2).unwrap();
+    assert_eq!(evaluate(&mut state, &code).unwrap(), 9);
+    assert_eq!((state.integer(8), state.bit(3)), (Some(7), Some(false)));
+}
+
+#[test]
 fn pending_system_is_stable_and_resume_reclaims_exact_byte_count() {
     let mut code = int(42);
     word(&mut code, 0x430);
