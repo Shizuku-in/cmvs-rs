@@ -3,6 +3,7 @@ name = "cmvs-rs"
 version = "0.1.0"
 edition = "2024"
 publish = false
+default-run = "cmvs-inspect"
 description = "Portable CMVS format research tools; not yet a game runtime"
 
 [lib]
@@ -11,6 +12,10 @@ name = "cmvs_rs"
 [[bin]]
 name = "cmvs-inspect"
 path = "src/main.rs"
+
+[[bin]]
+name = "cmvs-disasm"
+path = "src/bin/disasm.rs"
 
 [lints.rust]
 unsafe_code = "forbid"
