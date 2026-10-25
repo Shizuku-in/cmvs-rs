@@ -233,3 +233,54 @@ fn directory_reads_only_selected_slot_prefix_and_never_modifies_files() {
     std::fs::remove_file(root.join("system.dat")).unwrap();
     std::fs::remove_dir(root).unwrap();
 }
+
+#[test]
+fn popup_flag_defaults_enabled_and_is_reported_without_cleanup() {
+    let script = script(&[(0x22cd, 0), (0x22ce, 9), (0x22cd, 5), (0x22ce, 9)]);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = SaveMenuHost::default();
+    assert!(host.popup_enabled());
+    assert!(!host.try_handle_popup(&mut vm).unwrap());
+    let mut seen = vec![];
+    for _ in 0..4 {
+        pending(&mut vm);
+        assert!(host.try_handle_popup(&mut vm).unwrap());
+        seen.push((
+            host.popup_enabled(),
+            vm.state().system_integer(0),
+            vm.stack().len_bytes(),
+        ));
+    }
+    // 0x22ce returns 0x4000, so its pushed word stays on the stack.
+    assert_eq!(
+        seen,
+        [
+            (false, None, 0),
+            (false, Some(0), 4),
+            (true, Some(0), 4),
+            (true, Some(1), 8)
+        ]
+    );
+    pending(&mut vm);
+    assert!(!host.try_handle_popup(&mut vm).unwrap());
+}
+
+#[test]
+fn popup_flag_without_argument_stays_pending() {
+    let mut raw = b"PS2A".to_vec();
+    for v in [48u32, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0] {
+        raw.extend(v.to_le_bytes());
+    }
+    raw.extend(
+        0x22cdu16
+            .to_le_bytes()
+            .map(|b| b.rotate_left(1).wrapping_add(124)),
+    );
+    let script = Script::decode(&raw).unwrap();
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = SaveMenuHost::default();
+    pending(&mut vm);
+    assert!(host.try_handle_popup(&mut vm).is_err());
+    assert_eq!(vm.pending_system(), Some((0, 0x2cd)));
+    assert!(host.popup_enabled());
+}

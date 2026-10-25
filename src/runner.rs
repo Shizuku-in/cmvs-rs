@@ -107,6 +107,9 @@ impl<'a> Startup<'a> {
     pub fn gesture(&self) -> &PointerGesture {
         &self.gesture
     }
+    pub fn save_menu(&self) -> &SaveMenuHost {
+        &self.save_menu
+    }
     pub fn steps(&self) -> u32 {
         self.steps
     }
@@ -176,6 +179,7 @@ impl<'a> Startup<'a> {
             || self.scene.try_handle(&mut self.machine)?
             || self.save_title.try_handle(&mut self.machine)?
             || self.gesture.try_handle(&mut self.machine)?
+            || self.save_menu.try_handle_popup(&mut self.machine)?
         {
             return Ok(StartupEvent::Progress);
         }

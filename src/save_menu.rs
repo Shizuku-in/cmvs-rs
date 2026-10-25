@@ -1,6 +1,8 @@
 //! Read-only gameplay-save header scanning and platform-neutral menu state.
 //! Header recognition does not validate or restore the saved engine snapshot.
-use crate::{FormatError, evaluate::error, machine::Machine, vm::SystemResult};
+use crate::{
+    FormatError, bytecode::DecodeError, evaluate::error, machine::Machine, vm::SystemResult,
+};
 use std::{
     error::Error,
     fs::File,
@@ -148,11 +150,24 @@ impl SaveMenu {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct SaveMenuHost {
     menu: Option<SaveMenu>,
     /// 0x22b4 enables position 0 unconditionally and sets position 1 to this value.
     second_group_enabled: Option<bool>,
+    /// +12092: the main loop may open the popup menu (0x140018850 -> TrackPopupMenu).
+    popup_enabled: bool,
+}
+
+impl Default for SaveMenuHost {
+    fn default() -> Self {
+        Self {
+            menu: None,
+            second_group_enabled: None,
+            // Constructor 0x140016e20, reset 0x140080700 and load 0x140081960 all set 1.
+            popup_enabled: true,
+        }
+    }
 }
 
 impl SaveMenuHost {
@@ -161,6 +176,31 @@ impl SaveMenuHost {
     }
     pub fn second_group_enabled(&self) -> Option<bool> {
         self.second_group_enabled
+    }
+    pub fn popup_enabled(&self) -> bool {
+        self.popup_enabled
+    }
+    /// 0x22cd stores SP-4 != 0 in +12092; 0x22ce copies +12092 to system result 0.
+    /// Neither needs a save directory or creates native UI.
+    pub fn try_handle_popup(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
+        let Some((pc, command)) = vm.pending_system() else {
+            return Ok(false);
+        };
+        match command {
+            0x2cd => {
+                let value = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x22cd, e.0))?;
+                vm.complete_system(SystemResult(0x4004))?;
+                self.popup_enabled = value != 0;
+            }
+            0x2ce => {
+                vm.complete_system(SystemResult(0x4000))?;
+                vm.state_mut()
+                    .set_system_integer(0, u32::from(self.popup_enabled))
+                    .expect("slot 0 exists");
+            }
+            _ => return Ok(false),
+        }
+        Ok(true)
     }
     /// Returns true only when a verified command completed. No native UI is created.
     pub fn try_handle(

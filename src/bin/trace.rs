@@ -190,6 +190,15 @@ fn run() -> Result<(), Box<dyn Error>> {
                     );
                     continue;
                 }
+                if save_menu.try_handle_popup(&mut machine)? {
+                    println!(
+                        "# popup menu 0x{:04x}: enabled={}; system_integer[0]={:?}; no native menu",
+                        command + 0x2000,
+                        save_menu.popup_enabled(),
+                        machine.state().system_integer(0)
+                    );
+                    continue;
+                }
                 if gesture.try_handle(&mut machine)? {
                     println!(
                         "# pointer gesture config 0x{:04x}; fields +0..+36={:?}; state only, no input",
