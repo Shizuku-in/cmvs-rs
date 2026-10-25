@@ -289,3 +289,11 @@ Rust `snapshot::SaveTitle` 保存该字节串；≥128 字节的分支涉及未�
 构造函数 `0x140016e20`、0x2003 重置和读档都把 +12092 设为 1；它是快照记录 0x202。
 0x22ce 把 +12092 复制到系统结果槽 0 并返回 0x4000（不回收参数）。0x22cf 写 +12096 = 1，未找到直接读取者，仍保留为未处理。
 Rust `SaveMenuHost::try_handle_popup` 处理 0x22cd/0x22ce，不需要存档目录，也不创建原生菜单。
+
+## 随机数 0x20d4
+
+0x20d4 / `0x140074b10`：系统结果槽 0 = `rand() % SP-4`，返回 0x4004；除数为 0 时原版 idiv 异常。
+`rand` 为静态链接的 MSVC CRT（`0x1400c77b4`）：`state = state * 214013 + 2531011`，返回 `(state >> 16) & 0x7fff`。
+原版在构造函数中以 `srand(timeGetTime())` 播种，主循环（`0x14000e400`）每帧还调用一次 `rand()`，因此具体数值不可复现。
+Rust `random::CrtRandom` 实现同一生成器，种子必须显式给出：`Startup` 与 `cmvs-desktop` 默认 0（`--rand-seed` 可改），
+`cmvs-trace` 只有加 `--rand-seed` 才处理 0x20d4。研究实现不模拟每帧额外抽取；除数为 0 时报错且不推进生成器。

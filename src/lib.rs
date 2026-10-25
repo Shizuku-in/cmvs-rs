@@ -12,6 +12,7 @@ pub mod machine;
 pub mod pb3;
 pub mod platform;
 pub mod ps3;
+pub mod random;
 pub mod raster;
 pub mod runner;
 pub mod save;

@@ -7,6 +7,7 @@ use crate::{
     machine::{Machine, Step},
     platform::{DirectoryAssets, PlatformBackend, PlatformHost},
     ps3::Script,
+    random::CrtRandom,
     save_menu::{DirectorySaves, SaveMenuHost},
     scene::SceneHost,
     script_control::{ArchiveScripts, ControlEvent, ScriptControl},
@@ -57,6 +58,7 @@ pub struct Startup<'a> {
     scene: SceneHost,
     save_title: SaveTitle,
     gesture: PointerGesture,
+    random: CrtRandom,
     steps: u32,
     main_barrier: bool,
     snapshot_policy: SnapshotPolicy,
@@ -80,6 +82,8 @@ impl<'a> Startup<'a> {
             scene: SceneHost::default(),
             save_title: SaveTitle::default(),
             gesture: PointerGesture::default(),
+            // Explicit research seed, like the virtual tick; the original seeds from timeGetTime.
+            random: CrtRandom::new(0),
             steps: 0,
             main_barrier: false,
             snapshot_policy: SnapshotPolicy::default(),
@@ -115,6 +119,9 @@ impl<'a> Startup<'a> {
     }
     pub fn save_image(&self) -> &SaveImage {
         &self.save_image
+    }
+    pub fn set_random_seed(&mut self, seed: u32) {
+        self.random = CrtRandom::new(seed);
     }
     pub fn set_snapshot_policy(&mut self, policy: SnapshotPolicy) {
         self.snapshot_policy = policy;
@@ -180,6 +187,7 @@ impl<'a> Startup<'a> {
             || self.save_title.try_handle(&mut self.machine)?
             || self.gesture.try_handle(&mut self.machine)?
             || self.save_menu.try_handle_popup(&mut self.machine)?
+            || self.random.try_handle(&mut self.machine)?
         {
             return Ok(StartupEvent::Progress);
         }

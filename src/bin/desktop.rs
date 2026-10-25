@@ -269,7 +269,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     )?;
     if root == "--help" {
         println!(
-            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>] [--continue-without-snapshot]\nNative research preview only. Runs bounded startup with virtual tick 0; stops at unknown commands or main snapshot barrier. --continue-without-snapshot enters main without building a save image; saving stays unavailable. Without an explicit image, shows a diagnostic checkerboard. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. Raw window input is observed but not injected into CMVS opcodes. All game files read-only."
+            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>] [--continue-without-snapshot] [--rand-seed <seed>]\nNative research preview only. Runs bounded startup with virtual tick 0; stops at unknown commands or main snapshot barrier. --continue-without-snapshot enters main without building a save image; saving stays unavailable. --rand-seed sets the CRT rand() research seed (default 0). Without an explicit image, shows a diagnostic checkerboard. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. Raw window input is observed but not injected into CMVS opcodes. All game files read-only."
         );
         return Ok(());
     }
@@ -278,6 +278,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut preview_name = None;
     let mut image_archive = None;
     let mut snapshot_policy = SnapshotPolicy::Barrier;
+    let mut rand_seed = 0;
     while let Some(flag) = args.next() {
         if flag == "--continue-without-snapshot" {
             snapshot_policy = SnapshotPolicy::ContinueWithoutImage;
@@ -294,6 +295,8 @@ fn run() -> Result<(), Box<dyn Error>> {
                 return Err("exit-after must be 1..3600 seconds".into());
             }
             exit_after = Some(Duration::from_secs(seconds));
+        } else if flag == "--rand-seed" {
+            rand_seed = value.to_str().ok_or("invalid seed")?.parse::<u32>()?;
         } else if flag == "--preview-image" {
             preview_name = Some(value);
         } else if flag == "--image-archive" {
@@ -327,6 +330,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let script = load_start(&root)?;
     let mut startup = Startup::new(&script, &root, 0)?;
     startup.set_snapshot_policy(snapshot_policy);
+    startup.set_random_seed(rand_seed);
     let mut app = App {
         surface: None,
         context: None,

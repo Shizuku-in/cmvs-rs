@@ -646,3 +646,42 @@ fn cursor_name_boundary_and_bad_reference_preserve_pending_command() {
     assert_eq!(vm.stack().peek_u32(4).unwrap(), u32::MAX);
     assert!(host.cursor_names().is_empty());
 }
+
+#[test]
+fn crt_rand_sequence_and_0x20d4_remainder() {
+    use cmvs_rs::random::CrtRandom;
+    let mut random = CrtRandom::new(0);
+    let first: Vec<_> = (0..4).map(|_| random.next_value()).collect();
+    // MSVC CRT reference values for seed 0 (and srand(1) gives 41, 18467, ...).
+    assert_eq!(first, [38, 7719, 21238, 2437]);
+    assert_eq!(CrtRandom::new(1).next_value(), 41);
+
+    for (divisor, expected) in [(6u32, 2u32), ((-6i32) as u32, 2)] {
+        let mut code = vec![];
+        push_expr(&mut code, int(divisor as i32));
+        word(&mut code, 0x20d4);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut random = CrtRandom::new(0);
+        while vm.pending_system().is_none() {
+            vm.step().unwrap();
+        }
+        assert!(random.try_handle(&mut vm).unwrap());
+        assert_eq!(vm.state().system_integer(0), Some(expected));
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(random.next_value(), 7719);
+    }
+
+    let mut code = vec![];
+    push_expr(&mut code, int(0));
+    word(&mut code, 0x20d4);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut random = CrtRandom::new(0);
+    while vm.pending_system().is_none() {
+        vm.step().unwrap();
+    }
+    assert!(random.try_handle(&mut vm).is_err());
+    assert_eq!(vm.pending_system().map(|p| p.1), Some(0xd4));
+    assert_eq!(random, CrtRandom::new(0));
+}
