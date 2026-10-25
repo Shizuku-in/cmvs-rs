@@ -1,5 +1,6 @@
 use cmvs_rs::{
     MAX_PAYLOAD,
+    bootstrap::Bootstrap,
     machine::{Machine, Step},
     ps3::Script,
 };
@@ -18,16 +19,21 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut args = env::args_os().skip(1);
     let path = args
         .next()
-        .ok_or("usage: cmvs-trace <script> [--entry <pc>] [--steps <budget>]")?;
+        .ok_or("usage: cmvs-trace <script> [--entry <pc>] [--steps <budget>] [--bootstrap]")?;
     if path == "--help" {
         println!(
-            "Usage: cmvs-trace <script> [--entry <pc>] [--steps <budget>]\nBounded research VM; stops at unimplemented host commands. Alternate entry has no initialized game state."
+            "Usage: cmvs-trace <script> [--entry <pc>] [--steps <budget>] [--bootstrap]\nBounded research VM; stops at unimplemented host commands. --bootstrap applies verified startup state/configuration without file IO. Alternate entry has no initialized game state."
         );
         return Ok(());
     }
     let mut entry = None;
     let mut budget = 10000u32;
+    let mut bootstrap = None;
     while let Some(flag) = args.next() {
+        if flag == "--bootstrap" {
+            bootstrap = Some(Bootstrap::default());
+            continue;
+        }
         let value = args.next().ok_or("missing option value")?;
         if flag == "--entry" {
             entry = Some(number(&value)?);
@@ -64,6 +70,24 @@ fn run() -> Result<(), Box<dyn Error>> {
             machine.stack().len_bytes()
         );
         if let Step::System { command, .. } = event {
+            if let Some(host) = &mut bootstrap {
+                if let Some(event) = host.try_handle(&mut machine)? {
+                    println!(
+                        "# bootstrap applied 0x{:04x} -> pc=0x{:04x} {event:?}",
+                        command + 0x2000,
+                        machine.pc()
+                    );
+                    continue;
+                }
+                println!(
+                    "# bootstrap handled={} registered_paths={}",
+                    host.handled_count(),
+                    host.paths().len()
+                );
+                for ((op, slot), path) in host.paths() {
+                    println!("# path 0x{op:04x}[{slot}]={}", path.escape_ascii());
+                }
+            }
             println!(
                 "# STOP pending system=0x{:04x}; PC and parameters preserved; not game completion",
                 command + 0x2000

@@ -1,4 +1,5 @@
 use cmvs_rs::{
+    bootstrap::Bootstrap,
     bytecode::{self, Expression, InstructionKind},
     evaluate::State,
     machine::{Machine, Step},
@@ -329,4 +330,193 @@ fn cli_step_budget_stops_a_real_control_flow_loop() {
     std::fs::remove_file(path).unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("budget exhausted"));
+}
+
+fn push_expr(code: &mut Vec<u8>, expression: Vec<u8>) {
+    code.extend(expression);
+    word(code, 0x430);
+}
+
+fn run_bootstrap(vm: &mut Machine<'_>, host: &mut Bootstrap) -> Step {
+    for _ in 0..1000 {
+        match vm.step().unwrap() {
+            Step::Continue => {}
+            Step::Yield => return Step::Yield,
+            request @ Step::System { .. } => {
+                if host.try_handle(vm).unwrap().is_none() {
+                    return request;
+                }
+            }
+        }
+    }
+    panic!("synthetic bootstrap exceeded budget");
+}
+
+#[test]
+fn bootstrap_initializes_integer_bit_float_and_string_regions() {
+    let mut code = vec![];
+    for (command, value, start, count) in [
+        (0x2092, int(7), 2, 3),
+        (0x2091, int(-1), 0, 2),
+        (0x2093, expr(0x202, vec![scalar(0x12a, 0x7fc01234)]), 4, 1),
+        (0x2094, expr(0x201, vec![scalar(0x120, 0)]), 5, 2),
+    ] {
+        push_expr(&mut code, value);
+        push_expr(&mut code, int(count));
+        push_expr(&mut code, int(start));
+        word(&mut code, command);
+    }
+    word(&mut code, 0x2000);
+    let script = Script::decode(&fixture(&code, &[0], b"test\0")).unwrap();
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = Bootstrap::default();
+    assert_eq!(run_bootstrap(&mut vm, &mut host), Step::Yield);
+    assert_eq!(vm.state().integer(2), Some(7));
+    assert_eq!(vm.state().integer(4), Some(7));
+    assert_eq!(vm.state().integer(5), None);
+    assert_eq!(vm.state().bit(1), Some(true));
+    assert_eq!(vm.state().bit(2), None);
+    assert_eq!(vm.state().float_bits(4), Some(0x7fc01234));
+    assert_eq!(vm.state().string(5), Some(&b"test"[..]));
+    assert_eq!(vm.state().string(6), Some(&b"test"[..]));
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(host.handled_count(), 4);
+}
+
+#[test]
+fn bootstrap_config_fields_are_applied_without_clobbering_expression_result() {
+    let mut code = vec![];
+    for (command, value) in [(0x201d, 0x17800016), (0x201e, 10), (0x201f, 22)] {
+        push_expr(&mut code, int(value));
+        word(&mut code, command);
+    }
+    word(&mut code, 0x2090);
+    word(&mut code, 0x234d);
+    word(&mut code, 0x2000);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = Bootstrap::default();
+    assert_eq!(run_bootstrap(&mut vm, &mut host), Step::Yield);
+    assert_eq!(host.settings().get(&0x201d), Some(&0x17800016));
+    assert_eq!(host.settings().get(&0x201e), Some(&10));
+    assert_eq!(host.settings().get(&0x234d), Some(&1));
+    assert_eq!(vm.state().result, Some(22));
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
+fn bootstrap_path_commands_use_their_actual_argument_counts_and_preserve_bytes() {
+    let path = b"data\\\x83\\name\\\0";
+    let mut code = vec![];
+    for (command, slot) in [
+        (0x2011, Some(7)),
+        (0x2013, Some(0)),
+        (0x2015, None),
+        (0x2016, None),
+    ] {
+        push_expr(&mut code, expr(0x201, vec![scalar(0x120, 0)]));
+        if let Some(index) = slot {
+            push_expr(&mut code, int(index));
+        }
+        word(&mut code, command);
+    }
+    word(&mut code, 0x2000);
+    let script = Script::decode(&fixture(&code, &[0], path)).unwrap();
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = Bootstrap::default();
+    assert_eq!(run_bootstrap(&mut vm, &mut host), Step::Yield);
+    assert_eq!(
+        host.paths().get(&(0x2011, 7)).unwrap(),
+        &path[..path.len() - 1]
+    );
+    assert_eq!(host.paths().len(), 4);
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
+fn invalid_bootstrap_range_keeps_pending_stack_and_variable_state() {
+    let mut code = vec![];
+    for value in [7, 3, 8191] {
+        push_expr(&mut code, int(value));
+    }
+    word(&mut code, 0x2092);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = Bootstrap::default();
+    while vm.pending_system().is_none() {
+        vm.step().unwrap();
+    }
+    let pc = vm.pc();
+    assert!(host.try_handle(&mut vm).is_err());
+    assert_eq!(vm.pc(), pc);
+    assert_eq!(vm.stack().len_bytes(), 12);
+    assert_eq!(vm.state().integer(8191), None);
+    assert_eq!(host.handled_count(), 0);
+}
+
+#[test]
+fn bootstrap_stops_on_environment_dependent_command() {
+    let mut code = vec![];
+    push_expr(&mut code, int(10));
+    word(&mut code, 0x22b3);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = Bootstrap::default();
+    assert_eq!(
+        run_bootstrap(&mut vm, &mut host),
+        Step::System {
+            pc: 12,
+            command: 0x2b3
+        }
+    );
+    assert_eq!(vm.stack().peek_u32(4).unwrap(), 10);
+    assert_eq!(host.handled_count(), 0);
+    assert!(host.try_handle(&mut vm).unwrap().is_none());
+    assert_eq!(vm.pc(), 12);
+}
+
+#[test]
+fn string_bank_resolution_uses_verified_out_of_range_fallback() {
+    let script = script(&int(0));
+    let mut vm = Machine::new(&script).unwrap();
+    assert!(vm.resolve_string(0x80000000).is_err());
+    vm.state_mut().fill_strings(0, 1, b"fallback").unwrap();
+    vm.state_mut().fill_strings(5, 1, b"chosen").unwrap();
+    assert_eq!(vm.resolve_string(0x80000005).unwrap(), b"chosen");
+    assert_eq!(vm.resolve_string(0x80000080).unwrap(), b"fallback");
+    assert!(vm.resolve_string(0xc0000000).is_err());
+}
+
+#[test]
+fn initialization_validates_whole_range_before_modifying_any_slot() {
+    let mut state = State::default();
+    state.set_integer(8, 37).unwrap();
+    assert!(state.fill_integers(8, u32::MAX, 0).is_err());
+    assert_eq!(state.integer(8), Some(37));
+    assert!(state.fill_bits(65535, 2, false).is_err());
+    assert_eq!(state.bit(65535), None);
+    assert!(state.fill_floats(2047, 2, 0).is_err());
+    assert_eq!(state.float_bits(2047), None);
+    assert!(state.fill_strings(127, 2, b"x").is_err());
+    assert_eq!(state.string(127), None);
+    assert!(state.fill_strings(0, 1, &vec![b'x'; 1024]).is_err());
+    assert!(state.fill_strings(0, 1, b"x\0y").is_err());
+    assert!(state.fill_integers(8192, 0, 0).is_ok());
+}
+
+#[test]
+fn repeated_path_registration_replaces_its_slot_not_other_categories() {
+    let mut code = vec![];
+    for offset in [0, 4] {
+        push_expr(&mut code, expr(0x201, vec![scalar(0x120, offset)]));
+        push_expr(&mut code, int(0));
+        word(&mut code, 0x2010);
+    }
+    word(&mut code, 0x2000);
+    let script = Script::decode(&fixture(&code, &[0], b"old\0new\0")).unwrap();
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = Bootstrap::default();
+    assert_eq!(run_bootstrap(&mut vm, &mut host), Step::Yield);
+    assert_eq!(host.paths().len(), 1);
+    assert_eq!(host.paths().get(&(0x2010, 0)).unwrap(), b"new");
 }

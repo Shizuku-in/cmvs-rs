@@ -15,6 +15,8 @@ pub(crate) fn error(pc: usize, opcode: u16, reason: &'static str) -> DecodeError
 pub struct State {
     integers: BTreeMap<u32, i32>,
     bits: BTreeMap<u32, bool>,
+    floats: BTreeMap<u32, u32>,
+    strings: BTreeMap<u32, Vec<u8>>,
     integer_limit: u32,
     bit_limit: u32,
     pub result: Option<u32>,
@@ -33,6 +35,8 @@ impl State {
         Self {
             integers: BTreeMap::new(),
             bits: BTreeMap::new(),
+            floats: BTreeMap::new(),
+            strings: BTreeMap::new(),
             integer_limit,
             bit_limit,
             result: None,
@@ -50,6 +54,57 @@ impl State {
     }
     pub fn bits(&self) -> &BTreeMap<u32, bool> {
         &self.bits
+    }
+    pub fn float_bits(&self, index: u32) -> Option<u32> {
+        self.floats.get(&index).copied()
+    }
+    pub fn string(&self, index: u32) -> Option<&[u8]> {
+        self.strings.get(&index).map(Vec::as_slice)
+    }
+    fn range(start: u32, count: u32, limit: u32) -> Result<std::ops::Range<u32>, &'static str> {
+        let end = start.checked_add(count).ok_or("variable range overflow")?;
+        if end > limit {
+            return Err("variable range outside research limit");
+        }
+        Ok(start..end)
+    }
+    pub fn fill_integers(
+        &mut self,
+        start: u32,
+        count: u32,
+        value: i32,
+    ) -> Result<(), &'static str> {
+        for index in Self::range(start, count, self.integer_limit)? {
+            self.integers.insert(index, value);
+        }
+        Ok(())
+    }
+    pub fn fill_bits(&mut self, start: u32, count: u32, value: bool) -> Result<(), &'static str> {
+        for index in Self::range(start, count, self.bit_limit)? {
+            self.bits.insert(index, value);
+        }
+        Ok(())
+    }
+    pub fn fill_floats(&mut self, start: u32, count: u32, bits: u32) -> Result<(), &'static str> {
+        // Research capacity; the model preserves raw f32 bits, including NaN payloads.
+        for index in Self::range(start, count, 2048)? {
+            self.floats.insert(index, bits);
+        }
+        Ok(())
+    }
+    pub fn fill_strings(
+        &mut self,
+        start: u32,
+        count: u32,
+        bytes: &[u8],
+    ) -> Result<(), &'static str> {
+        if bytes.len() >= 1024 || bytes.contains(&0) {
+            return Err("invalid bounded string slot value");
+        }
+        for index in Self::range(start, count, 128)? {
+            self.strings.insert(index, bytes.to_vec());
+        }
+        Ok(())
     }
     pub fn set_integer(&mut self, index: u32, value: i32) -> Result<(), &'static str> {
         if index >= self.integer_limit {

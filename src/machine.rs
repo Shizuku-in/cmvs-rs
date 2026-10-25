@@ -3,7 +3,7 @@ use crate::{
     bytecode::{self, DecodeError, Expression, Instruction, InstructionKind, Term},
     evaluate::{State, error},
     ps3::Script,
-    vm::{ParameterStack, SystemResult},
+    vm::{ParameterStack, StringRef, SystemResult},
 };
 use std::collections::BTreeMap;
 
@@ -60,6 +60,38 @@ impl<'a> Machine<'a> {
     }
     pub fn repeat_count(&self) -> u32 {
         self.repeat_count
+    }
+    pub fn pending_system(&self) -> Option<(usize, u16)> {
+        self.pending
+    }
+    pub fn resolve_string(&self, raw: u32) -> Result<Vec<u8>, DecodeError> {
+        let (bytes, offset) = match StringRef::decode(raw) {
+            StringRef::Text(offset) => (self.script.text(), offset as usize),
+            StringRef::ScriptData(offset) => (self.script.unknown(), offset as usize),
+            StringRef::StringBank(index) => {
+                let index = if index > 127 { 0 } else { index };
+                return self
+                    .state
+                    .string(index)
+                    .map(<[u8]>::to_vec)
+                    .ok_or_else(|| error(self.pc, 0x201, "read of unknown string slot"));
+            }
+            StringRef::Frame(_) => {
+                return Err(error(
+                    self.pc,
+                    0x201,
+                    "frame string resolution not implemented",
+                ));
+            }
+        };
+        let tail = bytes
+            .get(offset..)
+            .ok_or_else(|| error(self.pc, 0x201, "string reference out of bounds"))?;
+        let end = tail
+            .iter()
+            .position(|b| *b == 0)
+            .ok_or_else(|| error(self.pc, 0x201, "unterminated string reference"))?;
+        Ok(tail[..end].to_vec())
     }
 
     fn expression(&mut self, expr: &Expression) -> Result<(), DecodeError> {

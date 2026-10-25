@@ -1,5 +1,7 @@
 //! Platform-independent CMVS format research. No game assets or OS APIs.
+pub mod bootstrap;
 pub mod bytecode;
+pub mod cpz;
 pub mod evaluate;
 pub mod lzss;
 pub mod machine;
