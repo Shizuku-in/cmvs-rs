@@ -1,4 +1,4 @@
-//! Verified VM value/stack conventions. No script execution or host handlers yet.
+//! Verified VM value/stack conventions. The bounded executor lives in `machine`.
 use crate::FormatError;
 
 /// Strings are 32-bit tagged offsets, not native host pointers.
@@ -47,7 +47,7 @@ impl SystemResult {
 }
 
 /// Explicit byte stack: return flags encode byte counts, not counts of values.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ParameterStack {
     bytes: Vec<u8>,
     limit: usize,

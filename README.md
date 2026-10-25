@@ -15,12 +15,13 @@ Windows、macOS、Linux、Android、iOS 是主要平台目标；当前仅 Window
 cargo run --offline -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3"
 cargo run --offline -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --payload ../../work/start-rust-new.bin
 cargo run --offline --bin cmvs-disasm -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3"
+cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --steps 10000
 cargo test --offline
 cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-`--payload` 仅允许创建新文件，输出不包含原始头部。26 项 Rust 测试和严格 Clippy 检查通过。
+`--payload` 仅允许创建新文件，输出不包含原始头部。41 项 Rust 测试和严格 Clippy 检查通过。
 真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
 `ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
 
@@ -30,7 +31,10 @@ cargo fmt --check
 
 新增 `bytecode` 模块和 `cmvs-disasm`：结构化解码嵌套表达式、控制流和系统指令，
 并验证标签与直接跳转目标落在指令边界上。本作启动代码完整解析为 330 条顶层指令、30 种系统命令。
-目前仅纯整数常量表达式可以求值；变量/系统命令不执行。参数字节栈与返回标志见 `vm` 模块。
+`evaluate` 支持整数/位变量、赋值和复合赋值，`machine` 提供部分单步 VM；未实现系统命令停下等待宿主。
+`cmvs-trace` 默认以未知变量状态启动，有执行步数上限；`--entry 0x02a2` 可独立研究赋值段，不能当作完整启动。
+该真实赋值段已执行 153 条指令后停在 0x2128；正常入口仍停在首个未实现系统命令 0x201e。
+参数字节栈与返回标志见 `vm` 模块。
 详细证据见 [VM 语义](docs/vm-semantics.md)。CLI 的线性解码不跟随分支，尚不能运行游戏。
 
 目前提供的是可运行的脚本解码研究工具，**尚不能运行游戏**，也没有生成 iOS/Android 应用。

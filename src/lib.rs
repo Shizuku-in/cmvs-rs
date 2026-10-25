@@ -1,6 +1,8 @@
 //! Platform-independent CMVS format research. No game assets or OS APIs.
 pub mod bytecode;
+pub mod evaluate;
 pub mod lzss;
+pub mod machine;
 pub mod ps3;
 pub mod vm;
 

@@ -17,6 +17,10 @@ path = "src/main.rs"
 name = "cmvs-disasm"
 path = "src/bin/disasm.rs"
 
+[[bin]]
+name = "cmvs-trace"
+path = "src/bin/trace.rs"
+
 [lints.rust]
 unsafe_code = "forbid"
 

@@ -354,31 +354,7 @@ pub fn eval_constant(expression: &Expression) -> Result<i32, DecodeError> {
                 let left = values
                     .pop()
                     .ok_or_else(|| error(*pc, *opcode, "expression stack underflow"))?;
-                let result = match opcode {
-                    0x160 => left.wrapping_mul(right),
-                    0x161 => left
-                        .checked_div(right)
-                        .ok_or_else(|| error(*pc, *opcode, "invalid signed division"))?,
-                    0x162 => left
-                        .checked_rem(right)
-                        .ok_or_else(|| error(*pc, *opcode, "invalid signed remainder"))?,
-                    0x163 => left.wrapping_add(right),
-                    0x164 => left.wrapping_sub(right),
-                    0x165 => left & right,
-                    0x166 => left | right,
-                    0x167 => left ^ right,
-                    0x168 => left.wrapping_shl(right as u32),
-                    0x169 => left.wrapping_shr(right as u32),
-                    0x16a => i32::from(left > right),
-                    0x16b => i32::from(left >= right),
-                    0x16c => i32::from(left < right),
-                    0x16d => i32::from(left <= right),
-                    0x16e => i32::from(left != 0 && right != 0),
-                    0x16f => i32::from(left != 0 || right != 0),
-                    0x171 => i32::from(left == right),
-                    0x172 => i32::from(left != right),
-                    _ => unreachable!(),
-                };
+                let result = crate::evaluate::binary_value(*pc, *opcode, left, right)?;
                 values.push(result);
             }
             Term::Scalar { pc, tag, .. }
