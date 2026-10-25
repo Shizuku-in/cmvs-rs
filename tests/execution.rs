@@ -260,7 +260,7 @@ fn unknown_condition_and_unsupported_instruction_leave_pc_unchanged() {
     assert_eq!(vm.pc(), 0);
     let mut code = vec![];
     word(&mut code, 0x440);
-    word(&mut code, 4);
+    word(&mut code, 8);
     code.extend(7u32.to_le_bytes());
     let script = script(&code);
     let mut vm = Machine::new(&script).unwrap();

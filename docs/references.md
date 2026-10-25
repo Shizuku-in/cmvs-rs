@@ -8,9 +8,11 @@
 - 当前参考 `Ps2TextDumper/Ps2TextDumper/Ps2TextDumper.cpp` 的字节变换与 LZSS、
   `Ps3TextDumper/Ps3TextDumper/Ps3TextDumper.cpp` 的头部布局。
 - Rust 模块基于这些格式资料及当前二进制核对结果实现，增加边界检查和合成测试。
-- 当前另参考 `CPZV6Unpacker/CPZV6/CPZV6.cpp` 的 `CPZHEADER` 和头部 XOR 字段，
-  实现 CPZ6 元数据读取；没有直接运行该解包器或复制游戏素材。
-- CPZ6 索引、数据解码与 PB3 仍待研究；该仓库不是完整运行引擎。
+- 当前另参考 `CPZV6Unpacker/CPZV6/CPZV6.cpp` 的头部、索引和资源变换，
+  以及同目录 `cmvs_md5.cpp` 的自定义初始化值、单块处理和输出顺序，重新实现为有界 Rust 读取器。
+- 使用独立 Python 实现进行真实主脚本逐字节对照；合成加密测试向量不含游戏内容。
+- 原工具的 Windows 解包入口没有被运行；不将任何游戏素材或真实脚本放入仓库。
+- CPZ 校验和、其他加密模式及 PB3 仍待研究；该仓库不是完整运行引擎。
 
 ## ZQF-ReVN/RxCMVS
 

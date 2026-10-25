@@ -204,3 +204,16 @@ fn bounded_random_inputs_do_not_panic() {
         let _ = bytecode::decode_at(&bytes, 0);
     }
 }
+
+#[test]
+fn string_assignment_is_structurally_decoded_without_claiming_numeric_evaluation() {
+    let mut code = vec![];
+    word(&mut code, 0x201);
+    scalar(&mut code, 0x125, 12);
+    scalar(&mut code, 0x120, 0x20f0170);
+    word(&mut code, 0x170);
+    word(&mut code, 0x20f);
+    let expr = expression(&code);
+    assert_eq!(expr.end, code.len());
+    assert!(bytecode::eval_constant(&expr).is_err());
+}

@@ -1,6 +1,7 @@
 use cmvs_rs::{
     MAX_PAYLOAD,
     bootstrap::Bootstrap,
+    cpz::Cpz6Index,
     machine::{Machine, Step},
     ps3::Script,
 };
@@ -19,16 +20,17 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut args = env::args_os().skip(1);
     let path = args
         .next()
-        .ok_or("usage: cmvs-trace <script> [--entry <pc>] [--steps <budget>] [--bootstrap]")?;
+        .ok_or("usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap]")?;
     if path == "--help" {
         println!(
-            "Usage: cmvs-trace <script> [--entry <pc>] [--steps <budget>] [--bootstrap]\nBounded research VM; stops at unimplemented host commands. --bootstrap applies verified startup state/configuration without file IO. Alternate entry has no initialized game state."
+            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap]\n--script loads a script directly from CPZ6 mode 1. Bounded research VM; stops at unimplemented host commands. --bootstrap applies verified startup state/configuration. Isolated scripts do not inherit game startup state."
         );
         return Ok(());
     }
     let mut entry = None;
     let mut budget = 10000u32;
     let mut bootstrap = None;
+    let mut archive_script = None;
     while let Some(flag) = args.next() {
         if flag == "--bootstrap" {
             bootstrap = Some(Bootstrap::default());
@@ -39,6 +41,8 @@ fn run() -> Result<(), Box<dyn Error>> {
             entry = Some(number(&value)?);
         } else if flag == "--steps" {
             budget = number(&value)?;
+        } else if flag == "--script" {
+            archive_script = Some(value);
         } else {
             return Err("unknown option".into());
         }
@@ -46,10 +50,19 @@ fn run() -> Result<(), Box<dyn Error>> {
     if budget == 0 || budget > 1000000 {
         return Err("step budget must be 1..1000000".into());
     }
-    let mut raw = Vec::new();
-    File::open(&path)?
-        .take(MAX_PAYLOAD as u64 + 49)
-        .read_to_end(&mut raw)?;
+    let mut file = File::open(&path)?;
+    let raw = if let Some(name) = archive_script {
+        let name = name
+            .to_str()
+            .filter(|s| s.is_ascii())
+            .ok_or("archive script basename must be ASCII")?;
+        let index = Cpz6Index::read(&mut file)?;
+        index.read_entry(&mut file, index.find(name.as_bytes())?)?
+    } else {
+        let mut raw = Vec::new();
+        file.take(MAX_PAYLOAD as u64 + 49).read_to_end(&mut raw)?;
+        raw
+    };
     if raw.len() > MAX_PAYLOAD + 48 {
         return Err("input exceeds research allocation limit".into());
     }

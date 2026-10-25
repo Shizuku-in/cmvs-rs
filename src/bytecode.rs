@@ -190,7 +190,7 @@ impl Reader<'_> {
                         indices,
                     }
                 }
-                0x160..=0x17e if kind != 0x201 => Term::Operator {
+                0x160..=0x17e if kind != 0x201 || tag <= 0x172 => Term::Operator {
                     pc: at,
                     opcode: tag,
                 },

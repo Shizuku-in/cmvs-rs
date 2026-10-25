@@ -215,6 +215,9 @@ impl<'a> Machine<'a> {
                     .ok_or_else(|| error(pc, op, "result register is unknown"))?;
                 self.stack.push_u32(raw).map_err(|e| error(pc, op, e.0))?;
             }
+            InstructionKind::StackImmediate { bytes: 4, raw } => {
+                self.stack.push_u32(raw).map_err(|e| error(pc, op, e.0))?;
+            }
             InstructionKind::System { command: 0 } => {
                 self.pc = next;
                 self.repeat_count = 0;
