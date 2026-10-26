@@ -21,7 +21,7 @@ use crate::{
     scene::SceneHost,
     script_control::{ArchiveScripts, ControlEvent, ScriptControl},
     sequence::SequenceHost,
-    snapshot::{SaveImage, SaveTitle},
+    snapshot::{SaveImage, SaveInfo, SaveTitle},
     system_save::{FileSystemSave, SystemSaveHost},
     text,
     timers::VmTimers,
@@ -85,6 +85,7 @@ pub struct Startup<'a> {
     frame_delta: u32,
     images: ImageArchives,
     save_title: SaveTitle,
+    save_info: SaveInfo,
     gesture: PointerGesture,
     message_flags: MessageFlags,
     messages: MessageHost,
@@ -126,6 +127,7 @@ impl<'a> Startup<'a> {
             frame_delta: 0,
             images: ImageArchives::new(root)?,
             save_title: SaveTitle::default(),
+            save_info: SaveInfo::default(),
             gesture: PointerGesture::default(),
             message_flags: MessageFlags::default(),
             messages: MessageHost::default(),
@@ -211,6 +213,9 @@ impl<'a> Startup<'a> {
     }
     pub fn save_title(&self) -> &SaveTitle {
         &self.save_title
+    }
+    pub fn save_info(&self) -> SaveInfo {
+        self.save_info
     }
     pub fn gesture(&self) -> &PointerGesture {
         &self.gesture
@@ -331,6 +336,7 @@ impl<'a> Startup<'a> {
                 &mut self.images.with_paths(self.bootstrap.paths()),
             )?
             || self.save_title.try_handle(&mut self.machine)?
+            || self.save_info.try_handle(&mut self.machine)?
             || self.gesture.try_handle(&mut self.machine)?
             || self.save_menu.try_handle_popup(&mut self.machine)?
             || self.message_flags.try_handle(&mut self.machine)?

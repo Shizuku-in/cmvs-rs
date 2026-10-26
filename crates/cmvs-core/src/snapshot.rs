@@ -167,3 +167,27 @@ impl SaveTitle {
         Ok(true)
     }
 }
+
+/// +11828/+11832/+11836: three words the snapshot writer copies into CSV2 header offsets
+/// 528/532/536, save loading (0x140081960) restores, and the save slot query 0x22bd
+/// (0x14007cf10) returns as system results 4..6 for menu scripts. No constructor or reset
+/// write was found, so they stay unknown until set. 0x22ba (+11832/+11836) is verified but
+/// not yet met on the real path.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct SaveInfo([Option<u32>; 3]);
+
+impl SaveInfo {
+    pub fn values(&self) -> [Option<u32>; 3] {
+        self.0
+    }
+    /// 0x22b9, inline in the dispatcher: +11828 = SP-4, pops 4 bytes.
+    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
+        let Some((pc, 0x2b9)) = vm.pending_system() else {
+            return Ok(false);
+        };
+        let value = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x22b9, e.0))?;
+        vm.complete_system(SystemResult(0x4004))?;
+        self.0[0] = Some(value);
+        Ok(true)
+    }
+}

@@ -162,6 +162,9 @@ impl MessageHost {
             Some((pc, command @ 0x190..=0x192)) => self.button(vm, pc, command).map(|()| true),
             Some((pc, 0x150)) => self.move_window(vm, pc).map(|()| true),
             Some((pc, 0x151)) => self.cursor(vm, pc).map(|()| true),
+            Some((pc, command @ (0x14a | 0x15a))) => {
+                self.window_text(vm, pc, command).map(|()| true)
+            }
             Some((pc, command @ (0x1cf..=0x1d1))) => self.animation(vm, pc, command).map(|()| true),
             Some((pc, command @ (0x114..=0x117 | 0x11e))) => {
                 self.text_command(vm, pc, command).map(|()| true)
@@ -470,6 +473,54 @@ impl MessageHost {
     /// become +28; modes 1 and 3 store SP-12/SP-16 as 16-bit +30/+32, modes 0 and 2 clear
     /// them and other modes leave them. Pops 16; a missing window only sets +12056 bit
     /// 0x10000.
+    /// SP-4 window slot for both; a missing window only sets +12056 bit 0x10000.
+    /// - 0x214a / 0x1400763d0 -> 0x14005db70 -> 0x14005ad50: clear the window's text. The
+    ///   original destroys the glyph objects (0x14003a880 on the +6152 list) and frees the
+    ///   +168 glyph records, then resets the pen to the area origin. Rust holds no glyphs
+    ///   yet, so only the pen moves. Pops 4.
+    /// - 0x215a / 0x140076b20 -> 0x14005de30: +2472/+2476 = SP-8/SP-12, the switch state 1
+    ///   position (the current position is not moved). Pops 12.
+    fn window_text(
+        &mut self,
+        vm: &mut Machine<'_>,
+        pc: usize,
+        command: u16,
+    ) -> Result<(), DecodeError> {
+        let op = command + 0x2000;
+        let slot = window_slot(vm, pc, op)?;
+        let point = if command == 0x15a {
+            let word = |distance| {
+                vm.stack()
+                    .peek_u32(distance)
+                    .map(|value| value as i32)
+                    .map_err(|e| error(pc, op, e.0))
+            };
+            Some([word(8)?, word(12)?])
+        } else {
+            None
+        };
+        let Some(text) = self.windows[slot].as_ref().map(|window| window.text) else {
+            return Err(error(
+                pc,
+                op,
+                "message window slot without a window sets an unmodeled flag",
+            ));
+        };
+        if self.texts[text].is_none() {
+            return Err(error(pc, op, "message window without its text object"));
+        }
+        vm.complete_system(SystemResult(if point.is_some() { 0x400c } else { 0x4004 }))?;
+        if let Some(point) = point {
+            self.windows[slot]
+                .as_mut()
+                .expect("checked above")
+                .switch_positions[1] = point;
+        } else {
+            let text = self.texts[text].as_mut().expect("checked above");
+            text.cursor = [text.area[0], text.area[1]];
+        }
+        Ok(())
+    }
     fn cursor(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
         let slot = window_slot(vm, pc, 0x2151)?;
         let word = |distance| {

@@ -984,3 +984,44 @@ fn window_opacity_caps_at_255_and_keeps_negative_values() {
     assert!(messages.try_handle(&mut vm).is_err());
     assert_eq!(vm.pending_system().map(|p| p.1), Some(0x186));
 }
+
+#[test]
+fn switch_state_one_position_and_text_clearing() {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 540, 1280, 180]);
+    call(&mut code, 0x215a, &[u32::MAX, 40, 0]);
+    call(&mut code, 0x2145, &[100, 900, 5, 6, 0]);
+    // No modeled command moves the pen off the area origin yet, so clearing keeps it there.
+    call(&mut code, 0x214a, &[0]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 2);
+    let window = messages.window(0).unwrap();
+    assert_eq!(window.switch_positions, [[0, 540], [40, -1]]);
+    assert_eq!(window.position, [0, 540]);
+    run(&mut vm, &mut messages, 1);
+    let before = messages.text(7).unwrap().clone();
+    assert_eq!(before.cursor, [6, 5]);
+    run(&mut vm, &mut messages, 1);
+    assert_eq!(messages.text(7), Some(&before));
+    assert_eq!(vm.stack().len_bytes(), 0);
+    for (command, words) in [
+        (0x214au16, vec![1]),
+        (0x215a, vec![0, 1]),
+        (0x215a, vec![0]),
+    ] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 10, 10]);
+        call(&mut code, command, &words);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 1);
+        pending(&mut vm);
+        let bytes = vm.stack().len_bytes();
+        assert!(messages.try_handle(&mut vm).is_err());
+        assert_eq!(vm.pending_system().map(|p| p.1), Some(command - 0x2000));
+        assert_eq!(vm.stack().len_bytes(), bytes);
+    }
+}

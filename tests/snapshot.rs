@@ -1,7 +1,7 @@
 use cmvs_rs::{
     machine::Machine,
     ps3::Script,
-    snapshot::{Framing, MAX_SNAPSHOT, SaveImage, SaveTitle, framing, parse_records},
+    snapshot::{Framing, MAX_SNAPSHOT, SaveImage, SaveInfo, SaveTitle, framing, parse_records},
 };
 
 fn short(tag: u16, body: &[u8]) -> Vec<u8> {
@@ -191,4 +191,54 @@ fn save_title_copies_short_strings_and_rejects_the_unmodeled_flag_path() {
         .unwrap();
     to_system(&mut vm);
     assert!(!title.try_handle(&mut vm).unwrap());
+}
+
+#[test]
+fn save_info_starts_unknown_and_0x22b9_sets_the_first_word() {
+    let mut code = vec![];
+    for value in [1u32, 0x8000_0000] {
+        code.extend(0x440u16.to_le_bytes());
+        code.extend(4u16.to_le_bytes());
+        code.extend(value.to_le_bytes());
+        code.extend(0x22b9u16.to_le_bytes());
+    }
+    code.extend(0x22b9u16.to_le_bytes());
+    code.extend(0x22bau16.to_le_bytes());
+    let mut payload = 0u32.to_le_bytes().to_vec();
+    payload.extend(&code);
+    let mut raw = b"PS2A".to_vec();
+    for n in [
+        48,
+        0,
+        0,
+        1,
+        code.len() as u32,
+        0,
+        0,
+        0,
+        0,
+        payload.len() as u32,
+        0,
+    ] {
+        raw.extend(n.to_le_bytes());
+    }
+    raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+    let script = Script::decode(&raw).unwrap();
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_system_integer(0, 9).unwrap();
+    let mut info = SaveInfo::default();
+    assert_eq!(info.values(), [None; 3]);
+    to_system(&mut vm);
+    assert!(info.try_handle(&mut vm).unwrap());
+    assert_eq!(info.values(), [Some(1), None, None]);
+    to_system(&mut vm);
+    assert!(info.try_handle(&mut vm).unwrap());
+    assert_eq!(info.values(), [Some(0x8000_0000), None, None]);
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(9));
+    // An empty stack keeps the command pending; 0x22ba is left to other handlers.
+    to_system(&mut vm);
+    assert!(info.try_handle(&mut vm).is_err());
+    assert_eq!(vm.pending_system().map(|p| p.1), Some(0x2b9));
+    assert_eq!(info.values(), [Some(0x8000_0000), None, None]);
 }

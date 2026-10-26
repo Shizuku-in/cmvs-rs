@@ -287,3 +287,81 @@ fn destroy_all_clears_every_slot_but_keeps_stack_fade_and_clear_state() {
     assert_eq!(scene.clear().color, 0x123456);
     assert_eq!(vm.state().system_integer(0), Some(5));
 }
+
+/// Pushes `words` bottom first, then issues `command`.
+fn invoke(code: &mut Vec<u8>, command: u16, words: &[u32]) {
+    for &word in words {
+        code.extend(0x440u16.to_le_bytes());
+        code.extend(4u16.to_le_bytes());
+        code.extend(word.to_le_bytes());
+    }
+    code.extend(command.to_le_bytes());
+}
+
+#[test]
+fn objects_move_between_slots_and_existence_queries_report_them() {
+    let mut code = vec![];
+    invoke(&mut code, 0x2020, &[29]);
+    invoke(&mut code, 0x2022, &[5, 29]);
+    invoke(&mut code, 0x2020, &[30]);
+    // 0x2028: SP-4 target 30, SP-8 source 29.
+    invoke(&mut code, 0x2028, &[29, 30]);
+    invoke(&mut code, 0x2027, &[u32::MAX, 30]);
+    invoke(&mut code, 0x2027, &[5, 30]);
+    invoke(&mut code, 0x2027, &[6, 30]);
+    invoke(&mut code, 0x2027, &[u32::MAX, 29]);
+    invoke(&mut code, 0x2027, &[768, 30]);
+    // Moving from an empty slot empties the target.
+    invoke(&mut code, 0x2028, &[29, 30]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut scene = SceneHost::default();
+    let step = |vm: &mut Machine<'_>, scene: &mut SceneHost| {
+        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        assert!(scene.try_handle(vm).unwrap());
+    };
+    for _ in 0..4 {
+        step(&mut vm, &mut scene);
+    }
+    assert!(scene.object(29).is_none());
+    assert!(scene.object(30).unwrap().children.contains_key(&5));
+    for expected in [1, 1, 0, 0, 0] {
+        step(&mut vm, &mut scene);
+        assert_eq!(vm.state().system_integer(0), Some(expected));
+    }
+    step(&mut vm, &mut scene);
+    assert!(scene.objects().is_empty());
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
+fn object_moves_and_queries_reject_bad_slots_and_self_moves() {
+    for (setup, command, words) in [
+        (true, 0x2028u16, vec![3, 3]),
+        (false, 0x2028, vec![256, 3]),
+        (false, 0x2028, vec![3, u32::MAX]),
+        (false, 0x2027, vec![0, 256]),
+        (false, 0x2027, vec![0]),
+    ] {
+        let mut code = vec![];
+        if setup {
+            invoke(&mut code, 0x2020, &[3]);
+        }
+        invoke(&mut code, command, &words);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        vm.state_mut().set_system_integer(0, 9).unwrap();
+        let mut scene = SceneHost::default();
+        if setup {
+            while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+            assert!(scene.try_handle(&mut vm).unwrap());
+        }
+        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        let bytes = vm.stack().len_bytes();
+        assert!(scene.try_handle(&mut vm).is_err());
+        assert_eq!(vm.pending_system().map(|p| p.1), Some(command - 0x2000));
+        assert_eq!(vm.stack().len_bytes(), bytes);
+        assert_eq!(vm.state().system_integer(0), Some(9));
+        assert_eq!(scene.object(3).is_some(), setup);
+    }
+}

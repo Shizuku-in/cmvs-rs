@@ -270,6 +270,9 @@ impl SceneHost {
         if matches!(command, 0x22 | 0x40 | 0x50 | 0x44..=0x48 | 0x4b) {
             return self.handle_object(vm, pc, command);
         }
+        if matches!(command, 0x27 | 0x28) {
+            return self.query_or_move(vm, pc, command);
+        }
         if command == 0x2f {
             // 0x14006bc50 runs the 0x2021 destructor on all 256 slots and pops nothing.
             // The +4616 fade overlay owns its object outside this table, so it survives.
@@ -304,6 +307,60 @@ impl SceneHost {
                 self.objects.remove(&slot);
             }
             _ => unreachable!("slot is parsed for object commands"),
+        }
+        Ok(true)
+    }
+
+    /// SP-4 slot (signed < 256; larger values only set +12056 bit 0x10, negative ones would
+    /// index before the table); both pop 8 bytes.
+    /// - 0x2027 / 0x14006be00: system result 0 = whether the slot holds an object (negative
+    ///   SP-8) or whether that object has child SP-8 (0x14003a760: none at 768 and above).
+    /// - 0x2028 / 0x14006bea0: SP-8 is the source slot (same bounds). Destroys the target
+    ///   object, moves the source pointer into the target and clears the source. With the
+    ///   same occupied slot the original stores the pointer it just freed, which Rust rejects.
+    fn query_or_move(
+        &mut self,
+        vm: &mut Machine<'_>,
+        pc: usize,
+        command: u16,
+    ) -> Result<bool, DecodeError> {
+        let op = command + 0x2000;
+        let word = |distance| {
+            vm.stack()
+                .peek_u32(distance)
+                .map(|value| value as i32)
+                .map_err(|e| error(pc, op, e.0))
+        };
+        let slot = |value: i32| {
+            u8::try_from(value).map_err(|_| error(pc, op, "object slot outside 0..255"))
+        };
+        let target = slot(word(4)?)?;
+        let second = word(8)?;
+        if command == 0x27 {
+            let exists = match self.objects.get(&target) {
+                None => false,
+                Some(_) if second < 0 => true,
+                Some(object) => u16::try_from(second)
+                    .is_ok_and(|id| id < 768 && object.children.contains_key(&id)),
+            };
+            vm.complete_system(SystemResult(0x4008))?;
+            vm.state_mut()
+                .set_system_integer(0, u32::from(exists))
+                .expect("slot 0 exists");
+            return Ok(true);
+        }
+        let source = slot(second)?;
+        if source == target && self.objects.contains_key(&target) {
+            return Err(error(
+                pc,
+                op,
+                "moving an object onto its own slot leaves a freed pointer",
+            ));
+        }
+        vm.complete_system(SystemResult(0x4008))?;
+        self.objects.remove(&target);
+        if let Some(object) = self.objects.remove(&source) {
+            self.objects.insert(target, object);
         }
         Ok(true)
     }
