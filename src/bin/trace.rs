@@ -2,6 +2,7 @@ use cmvs_rs::{
     MAX_PAYLOAD,
     audio::{AudioHost, AudioRequest, RecordingAudio},
     bootstrap::Bootstrap,
+    buttons::ButtonHost,
     cpz::Cpz6Index,
     gesture::PointerGesture,
     image::ImageArchives,
@@ -139,6 +140,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut save_title = SaveTitle::default();
     let mut gesture = PointerGesture::default();
     let mut message_flags = MessageFlags::default();
+    let mut buttons = ButtonHost::default();
     let mut audio = AudioHost::default();
     let mut audio_backend = RecordingAudio::default();
     if platform_assets.is_some() {
@@ -290,6 +292,22 @@ fn run() -> Result<(), Box<dyn Error>> {
                         "# popup menu 0x{:04x}: enabled={}; system_integer[0]={:?}; no native menu",
                         command + 0x2000,
                         save_menu.popup_enabled(),
+                        machine.state().system_integer(0)
+                    );
+                    continue;
+                }
+                if buttons.try_handle(&mut machine, &scene)? {
+                    println!(
+                        "# button 0x{:04x}: groups={:?} merged_states={}; system_integer[0]={:?}; data only, no display or input",
+                        command + 0x2000,
+                        (0..6)
+                            .filter_map(|i| buttons.group(i).map(|g| (
+                                i,
+                                g.object,
+                                g.buttons.len()
+                            )))
+                            .collect::<Vec<_>>(),
+                        buttons.merged_states(),
                         machine.state().system_integer(0)
                     );
                     continue;

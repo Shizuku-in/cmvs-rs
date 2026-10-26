@@ -1,6 +1,7 @@
 //! Platform-independent CMVS research core; optional `desktop` adds a native window adapter.
 pub mod audio;
 pub mod bootstrap;
+pub mod buttons;
 pub mod bytecode;
 pub mod cpz;
 pub mod cursor;

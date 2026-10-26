@@ -4,6 +4,7 @@ use crate::{
     MAX_PAYLOAD,
     audio::{AudioBackend, AudioHost, RecordingAudio},
     bootstrap::Bootstrap,
+    buttons::ButtonHost,
     gesture::PointerGesture,
     image::ImageArchives,
     machine::{Machine, Step},
@@ -61,6 +62,7 @@ pub struct Startup<'a> {
     assets: DirectoryAssets,
     platform: PlatformHost,
     scene: SceneHost,
+    buttons: ButtonHost,
     timers: VmTimers,
     resume_run: bool,
     frame_delta: u32,
@@ -92,6 +94,7 @@ impl<'a> Startup<'a> {
             assets: DirectoryAssets::new(root)?,
             platform: PlatformHost::default(),
             scene: SceneHost::default(),
+            buttons: ButtonHost::default(),
             timers: VmTimers::default(),
             resume_run: true,
             frame_delta: 0,
@@ -123,6 +126,9 @@ impl<'a> Startup<'a> {
     }
     pub fn scene(&self) -> &SceneHost {
         &self.scene
+    }
+    pub fn buttons(&self) -> &ButtonHost {
+        &self.buttons
     }
     /// Update the scene and supply the latest delta for the next VM run entry.
     /// The timer delta is consumed once after yield, never per instruction/budget slice.
@@ -245,6 +251,7 @@ impl<'a> Startup<'a> {
             || self.gesture.try_handle(&mut self.machine)?
             || self.save_menu.try_handle_popup(&mut self.machine)?
             || self.message_flags.try_handle(&mut self.machine)?
+            || self.buttons.try_handle(&mut self.machine, &self.scene)?
             || self.random.try_handle(&mut self.machine)?
             || text::try_handle(&mut self.machine)?
             || self
