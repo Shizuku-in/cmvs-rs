@@ -15,6 +15,7 @@ pub mod input;
 pub mod jbpd;
 pub mod lzss;
 pub mod machine;
+pub mod message;
 pub mod message_flags;
 pub mod movie;
 pub mod pb3;

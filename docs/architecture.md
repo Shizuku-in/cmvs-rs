@@ -169,3 +169,5 @@ BGM 与 SE 共用 `AudioHost`/`AudioBackend`：`BgmState` 保存 +4464 对象的
 与 play/start 不同，`AudioHost` 在 SE 关闭时也会发出停止请求，与原版不检查 SE_USE 一致；真实后端须容忍对空通道的停止。
 
 2026-10-27 脚本数据段阶段：Image 持有从 PS2A unknown 段初始化的独立可变数据，0x104/0x106 经求值事务读写，字符串数据引用读取同一视图；不修改原 Script 或代码。真实开始游戏路径最新停点已推进为 intproc.ps3 / 0x42306 / 0x2141（SP=128），之前的 0x0106 停点属于历史记录；详见 vm-semantics.md。
+
+2026-10-27 消息窗口阶段：`message::MessageHost` 保存 +4064 的 8 个窗口槽（窗口 +0 的文字对象号）与 +4128 的 12 项文字对象存在标志，0x2141 按原版顺序销毁；创建 0x2140/0x215d 未实现，槽恒为空。真实开始游戏路径最新停点为 intproc.ps3 / 0x42368 / 0x215d（SP=156），详见 vm-semantics.md。

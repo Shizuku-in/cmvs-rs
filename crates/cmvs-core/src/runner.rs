@@ -11,6 +11,7 @@ use crate::{
     image::ImageArchives,
     input::{self, ActionInput},
     machine::{Machine, Step},
+    message::MessageHost,
     message_flags::MessageFlags,
     movie::{DirectoryMovies, MovieHost},
     platform::{DirectoryAssets, PlatformBackend, PlatformHost},
@@ -86,6 +87,7 @@ pub struct Startup<'a> {
     save_title: SaveTitle,
     gesture: PointerGesture,
     message_flags: MessageFlags,
+    messages: MessageHost,
     random: CrtRandom,
     audio: AudioHost,
     audio_backend: Box<dyn AudioBackend>,
@@ -126,6 +128,7 @@ impl<'a> Startup<'a> {
             save_title: SaveTitle::default(),
             gesture: PointerGesture::default(),
             message_flags: MessageFlags::default(),
+            messages: MessageHost::default(),
             // Explicit research seed, like the virtual tick; the original seeds from timeGetTime.
             random: CrtRandom::new(0),
             audio: AudioHost::default(),
@@ -212,6 +215,9 @@ impl<'a> Startup<'a> {
     }
     pub fn message_flags(&self) -> MessageFlags {
         self.message_flags
+    }
+    pub fn messages(&self) -> &MessageHost {
+        &self.messages
     }
     pub fn save_menu(&self) -> &SaveMenuHost {
         &self.save_menu
@@ -326,6 +332,7 @@ impl<'a> Startup<'a> {
             || self.gesture.try_handle(&mut self.machine)?
             || self.save_menu.try_handle_popup(&mut self.machine)?
             || self.message_flags.try_handle(&mut self.machine)?
+            || self.messages.try_handle(&mut self.machine)?
             || self
                 .buttons
                 .try_handle(&mut self.machine, &mut self.scene)?
