@@ -1,5 +1,7 @@
 //! Engine +4616 full-screen color fade; addresses refer to the documented binary hash.
-use crate::{bytecode::DecodeError, evaluate::error, machine::Machine, vm::SystemResult};
+use crate::{
+    bytecode::DecodeError, evaluate::error, input::ActionInput, machine::Machine, vm::SystemResult,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fade {
@@ -45,33 +47,66 @@ impl Fade {
     }
 }
 
+/// Engine settings 0x2224's skippable branch (0x14007a6c0) reads besides input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SkipGate {
+    /// +1508, EFFECT_USE (constructor 1); when false a skippable wait ends at once.
+    pub effects: bool,
+    /// +1520, the script skip flag of 0x22eb.
+    pub skip: bool,
+}
+impl Default for SkipGate {
+    fn default() -> Self {
+        Self {
+            effects: true,
+            skip: false,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct FadeHost {
     current: Option<Fade>,
 }
 impl FadeHost {
-    /// 0x2224: only the no-input branch is implemented while a fade is active.
-    /// A nonzero skip flag stays unhandled until a verified input adapter is supplied.
+    /// 0x2224 / 0x14007a6c0: SP-4 nonzero makes an active wait skippable. It ends at once
+    /// when effects are off, input action 7 or 8 is held (0x140054e20/0x140054e30) or the
+    /// skip flag is set; otherwise a released action 0 (0x140054d60) is consumed
+    /// (0x140054d90) and ends it. Ending forces the fade like 0x2222 (0x14007a610), sets
+    /// system result 0 to 1 and returns 0xc004; waiting returns 0xa000 with result 0.
     pub fn try_wait(
-        &self,
+        &mut self,
         vm: &mut Machine<'_>,
+        gate: SkipGate,
+        input: &mut ActionInput,
     ) -> Result<Option<crate::machine::Step>, DecodeError> {
         let Some((pc, 0x224)) = vm.pending_system() else {
             return Ok(None);
         };
-        let skip = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x2224, e.0))?;
+        let skippable = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x2224, e.0))? != 0;
         let active = self
             .current
             .as_ref()
             .is_some_and(|f| (f.remaining() as i32) >= 0);
-        if active && skip != 0 {
-            return Ok(None);
+        if !active {
+            let step = vm.complete_system(SystemResult(0x4004))?;
+            vm.state_mut().set_system_integer(0, 0).expect("slot 0");
+            return Ok(Some(step));
         }
-        let step = if active {
-            vm.yield_pending_system()?
-        } else {
-            vm.complete_system(SystemResult(0x4004))?
-        };
+        let immediate = !gate.effects || input.held(7) || input.held(8) || gate.skip;
+        let decided = skippable && !immediate && input.released(0);
+        if skippable && (immediate || decided) {
+            let step = vm.complete_system(SystemResult(0xc004))?;
+            if decided {
+                input.consume(0);
+            }
+            vm.state_mut().set_system_integer(0, 1).expect("slot 0");
+            if self.current.as_mut().is_some_and(Fade::finish) {
+                self.current = None;
+            }
+            return Ok(Some(step));
+        }
+        let step = vm.yield_pending_system()?;
         vm.state_mut().set_system_integer(0, 0).expect("slot 0");
         Ok(Some(step))
     }

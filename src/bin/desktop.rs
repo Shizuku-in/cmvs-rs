@@ -11,7 +11,8 @@ use cmvs_rs::{
 use std::{
     env,
     error::Error,
-    fs::File,
+    fs::{File, OpenOptions},
+    io::Write,
     num::NonZeroU32,
     path::PathBuf,
     sync::Arc,
@@ -307,7 +308,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     )?;
     if root == "--help" {
         println!(
-            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>] [--continue-without-snapshot] [--rand-seed <seed>]\nNative research preview only. Runs bounded startup with virtual callback tick 0 and explicit wall-time scene updates; stops at unknown commands or main snapshot barrier. --continue-without-snapshot enters main without building a save image; saving stays unavailable. --rand-seed sets the CRT rand() research seed (default 0). Without an explicit image, presents the verified static top-level 2D scene on a 1280x720 research viewport; includes timed full-screen color fades; child rendering, transforms, other transitions and alternate blend modes remain unsupported. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. Raw window input is observed but not injected into CMVS opcodes. All game files read-only."
+            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>] [--continue-without-snapshot] [--rand-seed <seed>] [--save-frame <new.png>]\nNative research preview only. Runs bounded startup with virtual callback tick 0 and explicit wall-time scene updates; stops at unknown commands or main snapshot barrier. --continue-without-snapshot enters main without building a save image; saving stays unavailable. --rand-seed sets the CRT rand() research seed (default 0). Without an explicit image, presents the verified static 2D scene (top-level objects and their children) on a 1280x720 research viewport; includes timed full-screen color fades; transforms, other transitions and alternate blend modes remain unsupported. --save-frame writes the frame shown at exit, in script coordinates, to a new PNG file (never overwritten); use it instead of screen captures to check rendering. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. Raw window input is observed but not injected into CMVS opcodes. All game files read-only."
         );
         return Ok(());
     }
@@ -317,6 +318,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut image_archive = None;
     let mut snapshot_policy = SnapshotPolicy::Barrier;
     let mut rand_seed = 0;
+    let mut save_frame = None;
     while let Some(flag) = args.next() {
         if flag == "--continue-without-snapshot" {
             snapshot_policy = SnapshotPolicy::ContinueWithoutImage;
@@ -339,6 +341,8 @@ fn run() -> Result<(), Box<dyn Error>> {
             preview_name = Some(value);
         } else if flag == "--image-archive" {
             image_archive = Some(value);
+        } else if flag == "--save-frame" {
+            save_frame = Some(PathBuf::from(value));
         } else {
             return Err("unknown option".into());
         }
@@ -396,6 +400,24 @@ fn run() -> Result<(), Box<dyn Error>> {
     );
     if let Some(error) = app.error {
         return Err(error.into());
+    }
+    if let Some(path) = save_frame {
+        // Script coordinates before window fitting: exactly what the renderer produced.
+        let frame = match &app.preview_image {
+            Some(image) => image.clone(),
+            None => scene_render::render(app.startup.scene(), 1280, 720)?,
+        };
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        file.write_all(&frame.to_png())?;
+        println!(
+            "# saved frame {}x{} to {}",
+            frame.width(),
+            frame.height(),
+            path.display()
+        );
     }
     Ok(())
 }

@@ -1,4 +1,5 @@
-//! Bounded top-down straight-alpha image and explicit resource-preview compositor.
+//! Bounded top-down straight-alpha image, explicit resource-preview compositor and an
+//! uncompressed PNG writer for research frame exports.
 use crate::{FormatError, MAX_PAYLOAD};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RgbaImage {
@@ -62,4 +63,76 @@ impl RgbaImage {
         }
         Ok(())
     }
+    /// RGBA8 PNG with filter 0 rows and stored (uncompressed) deflate blocks, so no
+    /// compression library is needed. Intended for exporting rendered research frames.
+    pub fn to_png(&self) -> Vec<u8> {
+        let row = self.width as usize * 4;
+        let mut raw = Vec::with_capacity((row + 1) * self.height as usize);
+        for line in self.pixels.chunks_exact(row) {
+            raw.push(0);
+            raw.extend_from_slice(line);
+        }
+        let mut zlib = vec![0x78, 0x01];
+        let blocks = raw.chunks(65535);
+        let count = blocks.len();
+        for (i, block) in blocks.enumerate() {
+            let len = block.len() as u16;
+            zlib.push(u8::from(i + 1 == count));
+            zlib.extend(len.to_le_bytes());
+            zlib.extend((!len).to_le_bytes());
+            zlib.extend_from_slice(block);
+        }
+        zlib.extend(adler32(&raw).to_be_bytes());
+        let mut header = Vec::with_capacity(13);
+        header.extend(self.width.to_be_bytes());
+        header.extend(self.height.to_be_bytes());
+        header.extend([8, 6, 0, 0, 0]);
+        let mut png = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        for (kind, data) in [
+            (b"IHDR", &header[..]),
+            (b"IDAT", &zlib[..]),
+            (b"IEND", &[][..]),
+        ] {
+            png.extend((data.len() as u32).to_be_bytes());
+            let start = png.len();
+            png.extend_from_slice(kind);
+            png.extend_from_slice(data);
+            let crc = crc32(&png[start..]);
+            png.extend(crc.to_be_bytes());
+        }
+        png
+    }
+}
+
+/// CRC-32 (ISO-HDLC, reflected 0xEDB88320) as PNG chunks require.
+pub fn crc32(bytes: &[u8]) -> u32 {
+    let mut table = [0u32; 256];
+    for (n, entry) in table.iter_mut().enumerate() {
+        let mut c = n as u32;
+        for _ in 0..8 {
+            c = if c & 1 != 0 {
+                0xedb8_8320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
+        }
+        *entry = c;
+    }
+    !bytes.iter().fold(!0u32, |c, &b| {
+        table[((c ^ u32::from(b)) & 0xff) as usize] ^ (c >> 8)
+    })
+}
+
+/// Adler-32 checksum that ends a zlib stream.
+pub fn adler32(bytes: &[u8]) -> u32 {
+    let (mut a, mut b) = (1u32, 0u32);
+    for chunk in bytes.chunks(5552) {
+        for &byte in chunk {
+            a += u32::from(byte);
+            b += a;
+        }
+        a %= 65521;
+        b %= 65521;
+    }
+    (b << 16) | a
 }

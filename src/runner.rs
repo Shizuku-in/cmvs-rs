@@ -5,8 +5,10 @@ use crate::{
     audio::{AudioBackend, AudioHost, RecordingAudio},
     bootstrap::Bootstrap,
     buttons::ButtonHost,
+    fade::SkipGate,
     gesture::PointerGesture,
     image::ImageArchives,
+    input::ActionInput,
     machine::{Machine, Step},
     message_flags::MessageFlags,
     platform::{DirectoryAssets, PlatformBackend, PlatformHost},
@@ -63,6 +65,8 @@ pub struct Startup<'a> {
     platform: PlatformHost,
     scene: SceneHost,
     buttons: ButtonHost,
+    input: ActionInput,
+    effects: bool,
     timers: VmTimers,
     resume_run: bool,
     frame_delta: u32,
@@ -95,6 +99,10 @@ impl<'a> Startup<'a> {
             platform: PlatformHost::default(),
             scene: SceneHost::default(),
             buttons: ButtonHost::default(),
+            // No verified key bindings yet: no action is active (see `input`).
+            input: ActionInput::default(),
+            // EFFECT_USE constructor value; the configuration may override it.
+            effects: true,
             timers: VmTimers::default(),
             resume_run: true,
             frame_delta: 0,
@@ -129,6 +137,9 @@ impl<'a> Startup<'a> {
     }
     pub fn buttons(&self) -> &ButtonHost {
         &self.buttons
+    }
+    pub fn input(&self) -> &ActionInput {
+        &self.input
     }
     /// Update the scene and supply the latest delta for the next VM run entry.
     /// The timer delta is consumed once after yield, never per instruction/budget slice.
@@ -196,7 +207,15 @@ impl<'a> Startup<'a> {
             });
         };
         let id = self.bootstrap.settings().get(&0x201d).copied();
-        if let Some(step) = self.scene.fade().try_wait(&mut self.machine)? {
+        let gate = SkipGate {
+            effects: self.effects,
+            skip: self.message_flags.skip(),
+        };
+        if let Some(step) =
+            self.scene
+                .fade_mut()
+                .try_wait(&mut self.machine, gate, &mut self.input)?
+        {
             self.resume_run = step == Step::Yield;
             return Ok(if step == Step::Yield {
                 StartupEvent::Yield

@@ -1,5 +1,6 @@
 use cmvs_rs::{
-    fade::FadeHost,
+    fade::{FadeHost, SkipGate},
+    input::ActionInput,
     machine::{Machine, Step},
     ps3::Script,
     scene::SceneHost,
@@ -93,7 +94,11 @@ fn waits_preserve_pc_stack_and_repeat_count_until_completion() {
     let pc = vm.pc();
     let mut fade = create(1, 100);
     for repeat in 1..=3 {
-        assert_eq!(fade.try_wait(&mut vm).unwrap(), Some(Step::Yield));
+        assert_eq!(
+            fade.try_wait(&mut vm, SkipGate::default(), &mut ActionInput::default())
+                .unwrap(),
+            Some(Step::Yield)
+        );
         assert_eq!(
             (vm.pc(), vm.stack().len_bytes(), vm.repeat_count()),
             (pc, 4, repeat)
@@ -102,7 +107,11 @@ fn waits_preserve_pc_stack_and_repeat_count_until_completion() {
         assert_eq!(vm.state().system_integer(0), Some(0));
     }
     fade.advance(100);
-    assert_eq!(fade.try_wait(&mut vm).unwrap(), Some(Step::Continue));
+    assert_eq!(
+        fade.try_wait(&mut vm, SkipGate::default(), &mut ActionInput::default())
+            .unwrap(),
+        Some(Step::Continue)
+    );
     assert_eq!(
         (vm.pc(), vm.stack().len_bytes(), vm.repeat_count()),
         (pc + 2, 0, 0)
@@ -111,7 +120,7 @@ fn waits_preserve_pc_stack_and_repeat_count_until_completion() {
 }
 
 #[test]
-fn unsupported_input_and_invalid_creation_do_not_commit() {
+fn skippable_wait_without_input_and_invalid_creation_do_not_commit() {
     let mut code = vec![];
     command(&mut code, 0x2224, &[1]);
     command(&mut code, 0x2220, &[2, 0, 100, 0]);
@@ -121,11 +130,15 @@ fn unsupported_input_and_invalid_creation_do_not_commit() {
     let mut fade = create(1, 100);
     let before = fade.current().cloned();
     vm.state_mut().set_system_integer(0, 42).unwrap();
-    assert!(fade.try_wait(&mut vm).unwrap().is_none());
-    assert_eq!(vm.state().system_integer(0), Some(42));
+    // With effects on, no skip flag and no input, a skippable wait just waits.
+    let step = fade.try_wait(&mut vm, SkipGate::default(), &mut ActionInput::default());
+    assert_eq!(step.unwrap(), Some(Step::Yield));
+    assert_eq!(vm.state().system_integer(0), Some(0));
     assert_eq!(vm.stack().len_bytes(), 4);
+    assert_eq!(fade.current(), before.as_ref());
     fade.advance(100);
-    fade.try_wait(&mut vm).unwrap();
+    fade.try_wait(&mut vm, SkipGate::default(), &mut ActionInput::default())
+        .unwrap();
     pending(&mut vm);
     assert!(fade.try_handle(&mut vm).is_err());
     assert_eq!(vm.stack().len_bytes(), 16);
@@ -219,5 +232,95 @@ fn elapsed_and_product_use_u32_wrapping_and_wait_uses_signed_remaining() {
     let program = script(&code);
     let mut vm = Machine::new(&program).unwrap();
     pending(&mut vm);
-    assert_eq!(fade.try_wait(&mut vm).unwrap(), Some(Step::Continue));
+    assert_eq!(
+        fade.try_wait(&mut vm, SkipGate::default(), &mut ActionInput::default())
+            .unwrap(),
+        Some(Step::Continue)
+    );
+}
+
+/// Runs one 0x2224 with the given skip argument against a fresh 100 ms fade.
+fn skip_wait(
+    direction: u32,
+    argument: u32,
+    gate: SkipGate,
+    input: &mut ActionInput,
+) -> (Option<Step>, FadeHost, u32, usize, Option<u32>) {
+    let mut code = vec![];
+    command(&mut code, 0x2224, &[argument]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    pending(&mut vm);
+    let mut fade = create(direction, 100);
+    let step = fade.try_wait(&mut vm, gate, input).unwrap();
+    let pc = vm.pc() as u32;
+    (
+        step,
+        fade,
+        pc,
+        vm.stack().len_bytes(),
+        vm.state().system_integer(0),
+    )
+}
+
+#[test]
+fn skippable_wait_ends_at_once_without_effects_held_skip_actions_or_skip_flag() {
+    let off = SkipGate {
+        effects: false,
+        ..SkipGate::default()
+    };
+    let flag = SkipGate {
+        skip: true,
+        ..SkipGate::default()
+    };
+    let mut held7 = ActionInput::default();
+    held7.set(7, true, false, false).unwrap();
+    let mut held8 = ActionInput::default();
+    held8.set(8, true, false, false).unwrap();
+    for (gate, mut input) in [
+        (off, ActionInput::default()),
+        (flag, ActionInput::default()),
+        (SkipGate::default(), held7),
+        (SkipGate::default(), held8),
+    ] {
+        for direction in [0, 1] {
+            let (step, fade, pc, stack, result) = skip_wait(direction, 1, gate, &mut input);
+            // 0xc004: yield after advancing PC and popping the argument.
+            assert_eq!(
+                (step, pc, stack, result),
+                (Some(Step::Yield), 10, 0, Some(1))
+            );
+            // Forced like 0x2222: direction 0 keeps an opaque overlay, direction 1 removes it.
+            match direction {
+                0 => assert_eq!(
+                    fade.current().map(|f| (f.finished, f.opacity)),
+                    Some((true, 255))
+                ),
+                _ => assert!(fade.current().is_none()),
+            }
+        }
+    }
+}
+
+#[test]
+fn released_decide_action_is_consumed_only_by_a_skippable_wait() {
+    let mut input = ActionInput::default();
+    input.set(0, true, true, true).unwrap();
+    // A zero argument ignores input entirely.
+    let (step, fade, _, stack, result) = skip_wait(1, 0, SkipGate::default(), &mut input);
+    assert_eq!((step, stack, result), (Some(Step::Yield), 4, Some(0)));
+    assert!(fade.current().is_some());
+    assert!(input.released(0));
+    let (step, fade, _, stack, result) = skip_wait(1, 1, SkipGate::default(), &mut input);
+    assert_eq!((step, stack, result), (Some(Step::Yield), 0, Some(1)));
+    assert!(fade.current().is_none());
+    // 0x140054d90 clears the release and press flags but keeps the held flag.
+    assert!(!input.released(0) && !input.pressed(0) && input.held(0));
+    // Other actions do not end the wait.
+    let mut other = ActionInput::default();
+    other.set(1, true, true, true).unwrap();
+    let (step, _, _, stack, _) = skip_wait(1, 1, SkipGate::default(), &mut other);
+    assert_eq!((step, stack), (Some(Step::Yield), 4));
+    assert!(other.released(1));
+    assert!(ActionInput::default().set(24, true, true, true).is_err());
 }

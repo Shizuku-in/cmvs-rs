@@ -93,6 +93,9 @@ impl SceneHost {
     pub fn fade(&self) -> &crate::fade::FadeHost {
         &self.fade
     }
+    pub fn fade_mut(&mut self) -> &mut crate::fade::FadeHost {
+        &mut self.fade
+    }
     pub fn advance_frame(&mut self, delta: u32) {
         self.fade.advance(delta);
     }

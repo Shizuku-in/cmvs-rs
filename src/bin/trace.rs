@@ -4,8 +4,10 @@ use cmvs_rs::{
     bootstrap::Bootstrap,
     buttons::ButtonHost,
     cpz::Cpz6Index,
+    fade::SkipGate,
     gesture::PointerGesture,
     image::ImageArchives,
+    input::ActionInput,
     machine::{Machine, Step},
     message_flags::MessageFlags,
     platform::{DirectoryAssets, PlatformHost, PlatformRequest, RecordingBackend},
@@ -141,6 +143,8 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut gesture = PointerGesture::default();
     let mut message_flags = MessageFlags::default();
     let mut buttons = ButtonHost::default();
+    // Traces supply no input: no CMVS action is ever active.
+    let mut input = ActionInput::default();
     let mut audio = AudioHost::default();
     let mut audio_backend = RecordingAudio::default();
     if platform_assets.is_some() {
@@ -184,7 +188,11 @@ fn run() -> Result<(), Box<dyn Error>> {
         );
         if let Step::System { command, .. } = event {
             if let Some(assets) = &mut platform_assets {
-                if let Some(event) = scene.fade().try_wait(&mut machine)? {
+                let gate = SkipGate {
+                    skip: message_flags.skip(),
+                    ..SkipGate::default()
+                };
+                if let Some(event) = scene.fade_mut().try_wait(&mut machine, gate, &mut input)? {
                     if event == Step::Yield {
                         let Some(delta) = frame_ms else {
                             println!(
