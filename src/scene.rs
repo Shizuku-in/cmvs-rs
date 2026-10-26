@@ -1,7 +1,14 @@
 //! Platform-independent display state set by verified scene commands.
 //! Renderers read it each frame; this module draws nothing and owns no device.
-use crate::{bytecode::DecodeError, evaluate::error, machine::Machine, vm::SystemResult};
-use std::collections::BTreeMap;
+use crate::{
+    bytecode::DecodeError,
+    evaluate::error,
+    image::{self, ImageSource},
+    machine::Machine,
+    raster::RgbaImage,
+    vm::SystemResult,
+};
+use std::{collections::BTreeMap, error::Error};
 
 /// Engine +1976 holds 256 object pointers (snapshot records 0x700).
 pub const OBJECT_SLOTS: usize = 256;
@@ -21,10 +28,23 @@ impl ClearState {
     }
 }
 
+/// Object +6176 after a successful 0x2030 (image object built by 0x14002fd00).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectImage {
+    /// File name as given to 0x2030 (image +1044).
+    pub name: Vec<u8>,
+    pub pixels: RgbaImage,
+    /// Image +1152: the source has 32 bits per pixel.
+    pub alpha: bool,
+}
+
 /// A 0x38c8-byte object freshly built by 0x14003a3c0: a parent pointer, 96 zeroed 64-byte
 /// entries and counters. Its fields join the model as property commands are verified.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct SceneObject {}
+pub struct SceneObject {
+    /// None until 0x2030 loads an image; a quiet decode failure also leaves it empty.
+    pub image: Option<ObjectImage>,
+}
 
 #[derive(Debug, Default)]
 pub struct SceneHost {
@@ -73,6 +93,48 @@ impl SceneHost {
             }
             _ => unreachable!("slot is parsed for object commands"),
         }
+        Ok(true)
+    }
+
+    /// 0x2030 / 0x14006c220: SP-4 object slot, SP-8 file name. Rebuilds the object image
+    /// (0x14003bb10) and sets system result 0 to whether loading succeeded; returns 0x4008.
+    /// +12032 is set only by 0x212a, which stays unhandled, so its 0x140018bc0 call never runs.
+    pub fn try_handle_image(
+        &mut self,
+        vm: &mut Machine<'_>,
+        images: &mut dyn ImageSource,
+    ) -> Result<bool, Box<dyn Error>> {
+        let Some((pc, 0x30)) = vm.pending_system() else {
+            return Ok(false);
+        };
+        let fail = |why| error(pc, 0x2030, why);
+        let raw_slot = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
+        let raw_name = vm.stack().peek_u32(8).map_err(|e| fail(e.0))?;
+        // Slots >= 256 or without an object only set +12056 bit 0x10 (unmodeled);
+        // negative slots would index before the table.
+        let slot = u8::try_from(raw_slot as i32)
+            .ok()
+            .filter(|slot| self.objects.contains_key(slot))
+            .ok_or_else(|| fail("image load needs an existing object in slots 0..255"))?;
+        let name = vm.resolve_string(raw_name)?;
+        if name.len() >= 64 {
+            return Err(fail("image name exceeds the original 64-byte buffers").into());
+        }
+        let bytes = images.read(&name)?.ok_or_else(|| {
+            fail("image not found in any 0x2011 entry; the original shows a modal MessageBox")
+        })?;
+        let decoded =
+            image::decode(&bytes).map_err(|e| format!("0x2030 {}: {e}", name.escape_ascii()))?;
+        vm.complete_system(SystemResult(0x4008))?;
+        vm.state_mut()
+            .set_system_integer(0, u32::from(decoded.is_some()))
+            .expect("slot 0 exists");
+        self.objects.get_mut(&slot).expect("checked above").image =
+            decoded.map(|decoded| ObjectImage {
+                name,
+                pixels: decoded.pixels,
+                alpha: decoded.alpha,
+            });
         Ok(true)
     }
 }

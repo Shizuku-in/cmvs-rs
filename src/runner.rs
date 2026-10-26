@@ -5,6 +5,7 @@ use crate::{
     audio::{AudioBackend, AudioHost, RecordingAudio},
     bootstrap::Bootstrap,
     gesture::PointerGesture,
+    image::ImageArchives,
     machine::{Machine, Step},
     platform::{DirectoryAssets, PlatformBackend, PlatformHost},
     ps3::Script,
@@ -58,6 +59,7 @@ pub struct Startup<'a> {
     assets: DirectoryAssets,
     platform: PlatformHost,
     scene: SceneHost,
+    images: ImageArchives,
     save_title: SaveTitle,
     gesture: PointerGesture,
     random: CrtRandom,
@@ -84,6 +86,7 @@ impl<'a> Startup<'a> {
             assets: DirectoryAssets::new(root)?,
             platform: PlatformHost::default(),
             scene: SceneHost::default(),
+            images: ImageArchives::new(root)?,
             save_title: SaveTitle::default(),
             gesture: PointerGesture::default(),
             // Explicit research seed, like the virtual tick; the original seeds from timeGetTime.
@@ -197,6 +200,10 @@ impl<'a> Startup<'a> {
             .try_handle(&mut self.machine, &mut self.saves)?
             || self.bootstrap.try_handle(&mut self.machine)?.is_some()
             || self.scene.try_handle(&mut self.machine)?
+            || self.scene.try_handle_image(
+                &mut self.machine,
+                &mut self.images.with_paths(self.bootstrap.paths()),
+            )?
             || self.save_title.try_handle(&mut self.machine)?
             || self.gesture.try_handle(&mut self.machine)?
             || self.save_menu.try_handle_popup(&mut self.machine)?

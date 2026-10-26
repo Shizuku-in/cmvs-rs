@@ -1,4 +1,5 @@
-//! Bounded CPZ6 layout, index and resource decoding. Checksums are not verified yet.
+//! Bounded CPZ6 layout, index and resource decoding. Header and index digests are not
+//! verified; resource checksums only through `read_entry_verified`.
 //! Header XOR fields follow xmoezzz/CMVS-Engine, pinned in docs/references.md.
 use crate::FormatError;
 use std::{
@@ -221,11 +222,43 @@ impl Cpz6Index {
         Ok(first)
     }
 
+    /// 0x140002090 with an empty directory: the first entry, in index order across all
+    /// directories, whose stored name equals `lookup_key(name)` byte for byte.
+    pub fn lookup(&self, name: &[u8]) -> Result<Option<usize>, FormatError> {
+        let key = lookup_key(name)?;
+        Ok(self.entries.iter().position(|entry| entry.name == key))
+    }
+
     pub fn read_entry<R: Read + Seek>(
         &self,
         reader: &mut R,
         index: usize,
     ) -> Result<Vec<u8>, ArchiveError> {
+        let (entry, mut bytes) = self.read_raw(reader, index)?;
+        self.decrypt(entry, &mut bytes);
+        Ok(bytes)
+    }
+
+    /// PACK_DATA_CHECK path of 0x140002090: the stored checksum must match the encrypted
+    /// bytes before decryption; the original shows a MessageBox and exits otherwise.
+    pub fn read_entry_verified<R: Read + Seek>(
+        &self,
+        reader: &mut R,
+        index: usize,
+    ) -> Result<Vec<u8>, ArchiveError> {
+        let (entry, mut bytes) = self.read_raw(reader, index)?;
+        if data_checksum(&bytes) != entry.checksum_raw {
+            return Err(FormatError("CPZ6 resource checksum mismatch").into());
+        }
+        self.decrypt(entry, &mut bytes);
+        Ok(bytes)
+    }
+
+    fn read_raw<R: Read + Seek>(
+        &self,
+        reader: &mut R,
+        index: usize,
+    ) -> Result<(&Entry, Vec<u8>), ArchiveError> {
         let entry = self
             .entries
             .get(index)
@@ -243,13 +276,49 @@ impl Cpz6Index {
         reader.seek(SeekFrom::Start(entry.offset))?;
         let mut bytes = vec![0; entry.size as usize];
         reader.read_exact(&mut bytes)?;
+        Ok((entry, bytes))
+    }
+
+    fn decrypt(&self, entry: &Entry, bytes: &mut [u8]) {
         let seed = self.keys.seed
             ^ (self.keys.key ^ entry.directory_key.wrapping_add(entry.file_key))
                 .wrapping_add(self.layout.directory_count)
                 .wrapping_add(0xa3d61785);
-        crypto::resource(&mut bytes, &self.keys, seed);
-        Ok(bytes)
+        crypto::resource(bytes, &self.keys, seed);
     }
+}
+
+/// Query folding of 0x140002090: ASCII A-Z become lowercase, Shift-JIS lead bytes
+/// (0x81..0x9f, 0xe0..0xfc) skip their trail byte. The original copies into 64 bytes.
+pub fn lookup_key(name: &[u8]) -> Result<Vec<u8>, FormatError> {
+    if name.len() >= 64 || name.contains(&0) {
+        return Err(FormatError(
+            "CPZ6 lookup name exceeds the original 64-byte buffer",
+        ));
+    }
+    let mut key = name.to_vec();
+    let mut at = 0;
+    while at < key.len() {
+        if matches!(key[at], 0x81..=0x9f | 0xe0..=0xfc) {
+            at += 2;
+        } else {
+            key[at] = key[at].to_ascii_lowercase();
+            at += 1;
+        }
+    }
+    Ok(key)
+}
+
+/// 0x140062fc0: wrapping sum of little-endian u32 words, then of the tail bytes, from 0x5a902b7c.
+pub fn data_checksum(bytes: &[u8]) -> u32 {
+    let mut words = bytes.chunks_exact(4);
+    let sum = words.by_ref().fold(0x5a902b7c_u32, |sum, word| {
+        sum.wrapping_add(u32::from_le_bytes(word.try_into().expect("four bytes")))
+    });
+    words
+        .remainder()
+        .iter()
+        .fold(sum, |sum, &byte| sum.wrapping_add(u32::from(byte)))
 }
 
 impl Cpz6Layout {

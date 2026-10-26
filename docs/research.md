@@ -552,3 +552,14 @@ logo.ps3 在库函数（约 0x324be 起）中以 0x2020 创建对象，随后依
 已核对 0x2030 → `0x14003bb10` → `0x1400325a0` → `0x140036e60/0x140036820` 的查找链和 0x2011 的条目写入，结论记入 vm-semantics.md。
 实现 0x2030 需要按 0x2011 注册顺序只读查找目录/CPZ6 归档、解码 PB3（目前仅 type 1）并把图像挂到场景对象上。
 完整示例加 `--continue-without-snapshot --rand-seed 0` 后共 890 步停于 0x2030。新增 1 项测试：默认总计 167，desktop 总计 172。
+
+## 对象图像加载阶段
+
+实现 0x2030（细节见 vm-semantics.md）。核对得到：本作 0x201f = 10 选用 CPZ6 归档类，查找名会折叠大小写并取首个命中；
+`cmvs.cfg` 的 `PACK_DATA_CHECK=1` 使原版对每个资源做数据校验。`cmvs-cpz --list` 现在列出存储的校验值；
+独立 Python 脚本对 chip.cpz 156 项、bg.cpz 147 项逐一求和，全部与存储值一致。
+
+完整示例加 `--continue-without-snapshot --rand-seed 0` 后，`logo.pb3` 从 chip.cpz 解码为 1280×720、24 bpp（无 alpha）图像，
+系统结果槽 0 = 1，共 894 步在 PC=0x32536 停于 0x2040（槽 10）。此前 890 步的 trace 前缀逐行不变，
+`cmvs-desktop` 实测停点相同，画面仍为诊断棋盘格（对象显示需要后续属性命令）。
+新增 9 项测试：默认总计 176，desktop 总计 181。

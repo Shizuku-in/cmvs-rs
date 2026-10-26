@@ -36,14 +36,18 @@ fn run() -> Result<(), Box<dyn Error>> {
         if paths[0] == "--list" {
             for (i, entry) in index.entries().iter().enumerate() {
                 println!(
-                    "{i}: {}/{} size={} offset={}",
+                    "{i}: {}/{} size={} offset={} checksum=0x{:08x}",
                     entry.directory.escape_ascii(),
                     entry.name.escape_ascii(),
                     entry.size,
-                    entry.offset
+                    entry.offset,
+                    entry.checksum_raw
                 );
             }
-            println!("# {} files; checksums NOT verified", index.entries().len());
+            println!(
+                "# {} files; stored checksums listed, NOT verified",
+                index.entries().len()
+            );
         } else {
             let name = paths[2]
                 .to_str()

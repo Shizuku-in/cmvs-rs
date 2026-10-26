@@ -40,7 +40,7 @@ cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-`--payload` 仅允许创建新文件，输出不包含原始头部。默认 167 项测试、启用 desktop 后 172 项测试和严格 Clippy 检查通过。
+`--payload` 仅允许创建新文件，输出不包含原始头部。默认 176 项测试、启用 desktop 后 181 项测试和严格 Clippy 检查通过。
 真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
 `ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
 
@@ -102,7 +102,7 @@ cargo run --offline --features desktop --bin cmvs-desktop -- "E:/Download/AMATSU
 这是显式素材预览，未执行 VM 绘图命令，主快照断点默认保留。背景样本使用的 type 3/JBP 暂不支持。
 `cmvs-pb3 <文件> --rgba <新输出>` 可导出顶向下 RGBA，拒绝覆盖；详情见 [pb3-format](docs/pb3-format.md)。
 `cmvs-cpz` 默认读取 64 字节头部；`--list` 解密索引，`--script` 读取并解析 PS2A，
-`--extract` 将指定 ASCII 文件名的内容写入用户指定的新文件。支持当前 CPZ6 加密模式 1，尚未验证校验和。
+`--extract` 将指定 ASCII 文件名的内容写入用户指定的新文件。支持当前 CPZ6 加密模式 1；`--list` 列出存储的资源校验值，CLI 读取不验证，0x2030 的图像读取会验证。
 本作全部 13 个包的索引已解析，`script.cpz` 列出 87 个文件。
 主脚本结构解码为 26257 条指令，可直接加载进 VM，执行 8 条指令后停在 0x2089。
 这次独立主脚本实验没有继承完整启动状态，也不代表完整游戏已经运行。
@@ -125,7 +125,8 @@ main.ps3 将清屏色设为 0，再经已支持的 0x22b4 调用标签 186。新
 窗口标题变为「アマツツミ　- ブランドロゴ -」。新增 `random`（MSVC CRT rand()，显式种子 `--rand-seed`）处理 0x20d4，
 随机选择品牌语音；种子 0 选中 `sys301.ogg`。新增 `audio`：0x20b0 的效果音通道模型与 `AudioBackend`，
 默认后端只记录请求、不发声。0x2020/0x2021 建立场景对象槽（暂只记录存在性），
-0x20f8（strlen）后，共执行 890 步在 PC=0x32522 停于把 `logo.pb3` 加载到对象槽 10 的 0x2030。
+0x20f8（strlen）后，新增 `image`：0x2030 按 0x2011 注册顺序只读查找图像（CPZ6 资源校验和按原版验证），
+把 `logo.pb3` 解码为 1280×720 图像挂到对象槽 10。共执行 894 步在 PC=0x32536 停于 0x2040。
 `cmvs-desktop` 支持同名选项，Windows 实测停点相同；窗口仍显示诊断棋盘格。
 表达式求值改用撤销日志实现事务后，到当时停点（504 步）的 trace 在 debug 构建下由 3682 ms 降至约 300 ms，输出逐行不变。
 格式与证据见 [snapshot-format](docs/snapshot-format.md)。

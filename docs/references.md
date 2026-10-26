@@ -14,7 +14,7 @@
 - 原工具的 Windows 解包入口没有被运行；不将任何游戏素材或真实脚本放入仓库。
 - 当前另参考 `Pb3Decoder/Pb3Decoder/PB3B.cpp` 的头部变换、type 1 分块布局及 `CPB.cpp` 的分离流 LZSS。
   Rust 实现增加完整段边界、分配限制和错误检查，以当前 IDA 及仓库外 Python 核对，未运行原 C++ 解码器。
-- CPZ 校验和、其他加密模式及 PB3 type 3/JBP 等仍待研究；该仓库不是完整运行引擎。
+- CPZ 资源数据校验和已按 IDA 实现并经真实样本核对；头部/索引摘要、其他加密模式及 PB3 type 3/JBP 等仍待研究；该仓库不是完整运行引擎。
 
 ## ZQF-ReVN/RxCMVS
 

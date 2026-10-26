@@ -4,6 +4,7 @@ use cmvs_rs::{
     bootstrap::Bootstrap,
     cpz::Cpz6Index,
     gesture::PointerGesture,
+    image::ImageArchives,
     machine::{Machine, Step},
     platform::{DirectoryAssets, PlatformHost, PlatformRequest, RecordingBackend},
     ps3::Script,
@@ -15,7 +16,7 @@ use cmvs_rs::{
     system_save::{FileSystemSave, SystemSaveHost},
     text,
 };
-use std::{env, error::Error, fs::File, io::Read};
+use std::{collections::BTreeMap, env, error::Error, fs::File, io::Read};
 
 fn number(raw: &std::ffi::OsStr) -> Result<u32, Box<dyn Error>> {
     let text = raw.to_str().ok_or("expected numeric argument")?;
@@ -33,7 +34,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         .ok_or("usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap]")?;
     if path == "--help" {
         println!(
-            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap] [--script-archive <archive>] [--virtual-tick <tick>] [--save-dir <directory>] [--system-save <file>] [--record-platform <game-root>] [--continue-without-snapshot] [--rand-seed <seed>]\n--script loads an isolated initial script. --script-archive supplies common/main scripts and enables explicit control handling with virtual time (default tick 0), without automatic scheduling. --bootstrap applies verified startup configuration. --save-dir enables read-only saveNNN.dat header scanning and menu state, without native UI or save restoration. --system-save explicitly enables CSS1 persistent-state loading for 0x2128; it does not restore a gameplay snapshot. --record-platform enables a recording-only backend with read-only cursor/icon assets from the explicit game root, plus verified state such as the clear color, the save title and pointer-gesture configuration, and records SE playback requests without audio output; no native window, drawing, or input polling. Main transfer stops at the engine save snapshot unless --continue-without-snapshot is given; that applies only the verified live-state effect, builds no save image, and leaves saving unavailable. --rand-seed enables 0x20d4 with the CRT rand() generator from an explicit seed; the original seeds from timeGetTime and draws every frame, so values are not reproducible."
+            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap] [--script-archive <archive>] [--virtual-tick <tick>] [--save-dir <directory>] [--system-save <file>] [--record-platform <game-root>] [--continue-without-snapshot] [--rand-seed <seed>]\n--script loads an isolated initial script. --script-archive supplies common/main scripts and enables explicit control handling with virtual time (default tick 0), without automatic scheduling. --bootstrap applies verified startup configuration. --save-dir enables read-only saveNNN.dat header scanning and menu state, without native UI or save restoration. --system-save explicitly enables CSS1 persistent-state loading for 0x2128; it does not restore a gameplay snapshot. --record-platform enables a recording-only backend with read-only cursor/icon assets from the explicit game root, plus verified state such as the clear color, the save title and pointer-gesture configuration, records SE playback requests without audio output, and decodes 0x2030 object images read-only from the 0x2011 entries; no native window, drawing, or input polling. Main transfer stops at the engine save snapshot unless --continue-without-snapshot is given; that applies only the verified live-state effect, builds no save image, and leaves saving unavailable. --rand-seed enables 0x20d4 with the CRT rand() generator from an explicit seed; the original seeds from timeGetTime and draws every frame, so values are not reproducible."
         );
         return Ok(());
     }
@@ -117,6 +118,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut save_menu = SaveMenuHost::default();
     let mut system_source = system_save_path.map(FileSystemSave::new);
     let mut system_host = SystemSaveHost::default();
+    let mut images = platform_root.as_ref().map(ImageArchives::new).transpose()?;
     let mut platform_assets = platform_root.map(DirectoryAssets::new).transpose()?;
     let mut platform_host = PlatformHost::default();
     let mut platform_backend = RecordingBackend::default();
@@ -250,6 +252,28 @@ fn run() -> Result<(), Box<dyn Error>> {
                         scene.clear(),
                         scene.clear().rgba(),
                         scene.objects().keys().collect::<Vec<_>>()
+                    );
+                    continue;
+                }
+                let no_paths = BTreeMap::new();
+                let paths = bootstrap.as_ref().map_or(&no_paths, Bootstrap::paths);
+                if let Some(images) = &mut images
+                    && scene.try_handle_image(&mut machine, &mut images.with_paths(paths))?
+                {
+                    println!(
+                        "# scene image 0x2030: system_integer[0]={:?} objects={:?}; decoded only, nothing drawn",
+                        machine.state().system_integer(0),
+                        scene
+                            .objects()
+                            .iter()
+                            .filter_map(|(slot, object)| object.image.as_ref().map(|image| (
+                                slot,
+                                image.name.escape_ascii().to_string(),
+                                image.pixels.width(),
+                                image.pixels.height(),
+                                image.alpha
+                            )))
+                            .collect::<Vec<_>>()
                     );
                     continue;
                 }

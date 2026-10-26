@@ -1,5 +1,5 @@
-use cmvs_rs::cpz::Cpz6Index;
 use cmvs_rs::cpz::{CPZ6_HEADER_SIZE, Cpz6Layout};
+use cmvs_rs::cpz::{Cpz6Index, data_checksum, lookup_key};
 use std::io::Cursor;
 
 fn header(dirs: u32, dir_bytes: u32, file_bytes: u32) -> [u8; CPZ6_HEADER_SIZE] {
@@ -197,4 +197,64 @@ fn decrypted_resource_offset_overflow_is_rejected() {
     let bytes = from_hex(include_str!("fixtures/cpz6-invalid-offset.hex"));
     let error = Cpz6Index::read(&mut Cursor::new(bytes)).unwrap_err();
     assert!(error.to_string().contains("offset overflow"));
+}
+
+#[test]
+fn lookup_key_folds_ascii_case_but_not_shift_jis_trail_bytes() {
+    assert_eq!(lookup_key(b"LOGO.PB3").unwrap(), b"logo.pb3");
+    assert_eq!(
+        lookup_key(b"\x82A\x9fZ\xe0Q\xfcRX").unwrap(),
+        b"\x82A\x9fZ\xe0Q\xfcRx"
+    );
+    // 0x80, 0xa0 and 0xfd are not lead bytes, so the following letter is folded.
+    assert_eq!(lookup_key(b"\x80A\xa0B\xfdC").unwrap(), b"\x80a\xa0b\xfdc");
+    // A trailing lead byte simply ends the string.
+    assert_eq!(lookup_key(b"A\x81").unwrap(), b"a\x81");
+    assert_eq!(lookup_key(&[b'a'; 63]).unwrap().len(), 63);
+    assert!(lookup_key(&[b'a'; 64]).is_err());
+    assert!(lookup_key(b"a\0b").is_err());
+}
+
+#[test]
+fn lookup_takes_the_first_folded_basename_in_index_order() {
+    let reader = Cursor::new(from_hex(include_str!("fixtures/cpz6-multiple.hex")));
+    let index = Cpz6Index::read(&mut reader.clone()).unwrap();
+    assert_eq!(index.lookup(b"FIXTURE.BIN").unwrap(), Some(0));
+    assert_eq!(index.entries()[0].directory.as_ref(), b"first");
+    assert_eq!(index.lookup(b"absent").unwrap(), None);
+    assert!(index.lookup(&[b'a'; 64]).is_err());
+}
+
+#[test]
+fn data_checksum_sums_words_then_tail_bytes_from_the_original_seed() {
+    assert_eq!(data_checksum(&[]), 0x5a90_2b7c);
+    assert_eq!(data_checksum(&[1, 0, 0, 0, 2, 3]), 0x5a90_2b7c + 1 + 2 + 3);
+    assert_eq!(data_checksum(&[0, 0, 0, 1, 0xff]), 0x5b90_2c7b);
+    assert_eq!(data_checksum(&[0xff; 4]), 0x5a90_2b7b);
+}
+
+#[test]
+fn verified_reads_compare_the_stored_checksum_with_encrypted_bytes() {
+    // The synthetic vectors store zero checksums, which their resources do not sum to.
+    for i in 0..8 {
+        let mut reader = Cursor::new(vector(i));
+        let index = Cpz6Index::read(&mut reader).unwrap();
+        let error = index.read_entry_verified(&mut reader, 0).unwrap_err();
+        assert!(error.to_string().contains("checksum mismatch"), "{i}");
+        assert!(index.read_entry(&mut reader, 0).is_ok());
+    }
+    // Adjusting the first encrypted word makes the resource sum to the stored zero.
+    let mut bytes = vector(3);
+    let index = Cpz6Index::read(&mut Cursor::new(&bytes)).unwrap();
+    let entry = &index.entries()[0];
+    let range = entry.offset as usize..entry.offset as usize + entry.size as usize;
+    let sum = data_checksum(&bytes[range.clone()]);
+    let first = u32::from_le_bytes(bytes[range.start..range.start + 4].try_into().unwrap());
+    bytes[range.start..range.start + 4].copy_from_slice(&first.wrapping_sub(sum).to_le_bytes());
+    assert_eq!(data_checksum(&bytes[range]), 0);
+    let mut reader = Cursor::new(bytes);
+    assert_eq!(
+        index.read_entry_verified(&mut reader, 0).unwrap(),
+        index.read_entry(&mut reader, 0).unwrap()
+    );
 }

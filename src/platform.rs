@@ -27,28 +27,34 @@ impl DirectoryAssets {
         Ok(Self { root })
     }
 }
+/// A bounded ASCII game-relative path, split on `/` or `\`, that must resolve inside the
+/// canonical `root`. A missing file surfaces as the canonicalize `io::Error`.
+pub fn resolve_under(root: &Path, name: &[u8]) -> Result<PathBuf, Box<dyn Error>> {
+    if name.is_empty()
+        || name.len() >= 2048
+        || !name.is_ascii()
+        || name.contains(&0)
+        || name.contains(&b':')
+    {
+        return Err("game path must be a bounded ASCII relative path".into());
+    }
+    let mut path = root.to_path_buf();
+    for part in name.split(|b| matches!(b, b'/' | b'\\')) {
+        if part.is_empty() || part == b"." || part == b".." {
+            return Err("invalid game path component".into());
+        }
+        path.push(std::str::from_utf8(part)?);
+    }
+    let path = path.canonicalize()?;
+    if !path.starts_with(root) {
+        return Err("game path resolves outside root".into());
+    }
+    Ok(path)
+}
+
 impl PlatformAssets for DirectoryAssets {
     fn read(&mut self, name: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-        if name.is_empty()
-            || name.len() >= 2048
-            || !name.is_ascii()
-            || name.contains(&0)
-            || name.contains(&b':')
-        {
-            return Err("platform asset path must be a bounded ASCII relative path".into());
-        }
-        let mut path = self.root.clone();
-        for part in name.split(|b| matches!(b, b'/' | b'\\')) {
-            if part.is_empty() || part == b"." || part == b".." {
-                return Err("invalid platform asset path component".into());
-            }
-            path.push(std::str::from_utf8(part)?);
-        }
-        let path = path.canonicalize()?;
-        if !path.starts_with(&self.root) {
-            return Err("platform asset resolves outside root".into());
-        }
-        let file = File::open(path)?;
+        let file = File::open(resolve_under(&self.root, name)?)?;
         let mut bytes = Vec::new();
         file.take(MAX_PLATFORM_ASSET as u64 + 1)
             .read_to_end(&mut bytes)?;
