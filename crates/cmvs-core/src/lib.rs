@@ -12,6 +12,7 @@ pub mod fade;
 pub mod gesture;
 pub mod image;
 pub mod input;
+pub mod jbp1;
 pub mod jbpd;
 pub mod lzss;
 pub mod machine;

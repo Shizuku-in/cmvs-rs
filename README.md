@@ -41,7 +41,7 @@ cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-`--payload` 仅允许创建新文件，输出不包含原始头部。当前默认 317 项测试、全 workspace 全功能 331 项测试及严格 Clippy 检查通过。
+`--payload` 仅允许创建新文件，输出不包含原始头部。当前默认 321 项测试、全 workspace 全功能 335 项测试及严格 Clippy 检查通过。
 真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
 `ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
 
@@ -177,6 +177,8 @@ Windows 175 秒检查完成有音频输出的启动、标题、OP 与返回标�
 
 随后实现窗口坐标 0x215a、清空文字 0x214a、存档信息 0x22b9 与场景对象查询/移动 0x2027/0x2028。真实重放经 `cmovie.ps3` 进入第一个剧本 `sn1001.ps3`，在公共脚本 `intcode.ps3` / PC `0x1a5a2` 以 0x2030 载入背景 `white.pb3` 时停止：它与 bg.cpz 的抽查背景都是 PB3 type 3，尚未实现。默认 317 项、全 workspace 全功能 331 项测试与严格 Clippy 通过；尚无文字绘制。
 
+随后实现 PB3 type 3（JBP1：共用 JBPD 熵解码、本作标量整数 IDCT、768 字节截断表、16 对齐裁剪与 alpha）。全部资源包的 188 个 type 3 均可解码，13 个真实样本的 RGBA 与仓库外独立 Python 逐字节一致，导出 PNG 目视正常；JBPD 回归哈希不变。真实重放载入 `white.pb3` 后停于 `sn1001.ps3` / PC `0x2de9c` 的未处理系统命令 `0x2033`（对象图像信息查询），SP=40。默认 321 项、全 workspace 全功能 335 项测试与严格 Clippy 通过；尚无文字绘制。
+
 目前提供研究工具和原生桌面预览，**尚不能运行游戏剧情**，也没有生成 iOS/Android 应用。
 
 ## 已实现
@@ -198,7 +200,7 @@ python -m unittest discover -s tests -v
 
 ## 后续实现顺序
 
-1. 实现 PB3 type 3 解码（剧情背景格式，首个样本 bg.cpz 的 `white.pb3`），以仓库外真实样本和独立 Python 对照验证，再从 intcode.ps3 / 0x1a5a2 的 0x2030 继续推进。
+1. 核对剧本路径上的对象图像信息查询 `0x2033`（sn1001.ps3 / 0x2de9c，处理函数 0x14006c7c0），保留参数并从当前真实断点继续推进。
 2. 沿该路径实现消息窗口、字体/文字、背景与立绘、语音，先显示第一屏剧情。
 3. 补齐选择分支、必要转场、回调调度与完整存档镜像，并对照原程序验证同一段剧情。
 4. 验证 Windows/macOS/Linux 构建和行为，再实现 Android/iOS 后端与真机检查。

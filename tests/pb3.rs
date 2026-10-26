@@ -197,9 +197,17 @@ fn truncation_bad_dimensions_offsets_and_unsupported_codecs_fail() {
     ] {
         assert!(pb3::decode(&mutate(raw.clone(), at, v)).is_err());
     }
+    // Type 3 is decoded as JBP1, which this type-1 payload is not.
     let type3 = mutate(raw.clone(), 28, 3 | (2 << 16));
     assert_eq!(pb3::Header::parse(&type3).unwrap().kind, 3);
-    assert!(pb3::decode(&type3).unwrap_err().0.contains("only type 1"));
+    assert!(pb3::decode(&type3).unwrap_err().0.contains("JBP1"));
+    let type5 = mutate(raw.clone(), 28, 5 | (2 << 16));
+    assert!(
+        pb3::decode(&type5)
+            .unwrap_err()
+            .0
+            .contains("only types 1 and 3")
+    );
     assert!(pb3::decode(&mutate(raw, 34, 8)).is_err());
 }
 

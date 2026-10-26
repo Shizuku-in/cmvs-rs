@@ -45,11 +45,13 @@ pub struct DecodedImage {
     pub alpha: bool,
 }
 
-/// 0x140036700 picks the codec by magic; only PB3B type 1 decodes here, other known codecs
+/// 0x140036700 picks the codec by magic; only PB3B types 1 and 3 decode here (type 2 shares
+/// 0x1400a0700 with type 3 but no sample was verified), other known codecs
 /// are explicit errors. Ok(None) is the original quiet failure for an unknown magic or a
 /// PB3 type outside 1..8: the load returns 0 without a MessageBox.
 pub fn decode(bytes: &[u8]) -> Result<Option<DecodedImage>, FormatError> {
-    let unsupported = FormatError("image codec not implemented; only PB3 type 1 is supported");
+    let unsupported =
+        FormatError("image codec not implemented; only PB3 types 1 and 3 are supported");
     let magic = bytes
         .get(..4)
         .ok_or(FormatError("image file shorter than its 4-byte magic"))?;
@@ -57,11 +59,11 @@ pub fn decode(bytes: &[u8]) -> Result<Option<DecodedImage>, FormatError> {
         b"PB3B" => {
             let header = pb3::Header::parse(bytes)?;
             match header.kind {
-                1 => Ok(Some(DecodedImage {
+                1 | 3 => Ok(Some(DecodedImage {
                     pixels: pb3::decode(bytes)?,
                     alpha: header.bpp == 32,
                 })),
-                2..=8 => Err(unsupported),
+                2 | 4..=8 => Err(unsupported),
                 _ => Ok(None),
             }
         }

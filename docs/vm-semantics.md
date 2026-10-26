@@ -1009,3 +1009,7 @@ Rust：`scene::Animation`/`AnimationFrame` 挂在 `DrawState::animation`，重�
 Rust：`MessageHost` 处理 0x215a/0x214a；`snapshot::SaveInfo` 以 `[Option<u32>; 3]` 保存三项存档信息（未设置为未知），`Startup::save_info` 读取；`SceneHost` 处理 0x2027/0x2028。新增合成测试覆盖上述命令与错误参数。
 
 真实鼠标与键盘重放（逐 tick 记录脚本切换）：第 8662 次 tick 回到 menu.ps3 建立窗口 0，第 10155 次进入 `cmovie.ps3`（含 5 处 0x20c0 影片播放调用，文件名非字面字符串，所播影片未核对），第 23858 次进入剧本 **`sn1001.ps3`**，0x22b9(1) 设置存档信息，0x2028 把对象 29 移到槽 30、0x2027 查询槽 30；第 24025 次调用公共脚本 intcode.ps3。期间窗口 0 的两组等待光标动画按帧推进。第 24041 次 tick 在 **intcode.ps3 / PC=0x1a5a2 的 0x2030 载入 `white.pb3`** 时报错：该文件位于 `bg.cpz`，是 PB3B type 3（1280×720、24 位），当前只支持 type 1。抽查 bg.cpz 的 bg000a/bg010a/bg100a 也都是 type 3（1820×1024、24 位），因此剧情背景需要先实现 PB3 type 3 解码。仍为无窗口重放，本阶段不改解码算法。
+
+## PB3 type 3 之后的剧本路径（2026-10-27）
+
+实现 PB3 type 3（见 pb3-format.md）后，真实鼠标与键盘重放在 intcode.ps3 / PC=0x1a5a2 以 0x2030 成功载入 bg.cpz 的 `white.pb3`（1280×720 纯白），第 24044 次 tick 返回 sn1001.ps3，第 24049 次 tick 停于 **sn1001.ps3 / PC=0x2de9c / 未处理系统命令 0x2033，SP=40**。0x2033 的处理函数 `0x14006c7c0` 读取 SP-4 槽对象的图像信息：系统结果 0 = 是否有图像，结果 1/2 = 图像宽高，结果 3 = alpha 标志，返回 0x4004；尚未实现。仍为无窗口重放。

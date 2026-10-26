@@ -3,7 +3,8 @@
 //! Always decodes all blocks, like the original non-consecutive-frame path.
 use crate::{FormatError, MAX_PAYLOAD, raster::RgbaImage};
 
-const ORDER: [usize; 64] = [
+/// Zigzag scan; JBP1's 0x1400e4730 holds entries 1..64 of the same order.
+pub(crate) const ORDER: [usize; 64] = [
     0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20,
     13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59,
     52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
@@ -99,21 +100,25 @@ fn idct(block: &mut [i16; 64]) {
     }
 }
 
-struct Bits<'a> {
+/// Bits taken low bit first from each byte (the originals load 32-bit words).
+pub(crate) struct Bits<'a> {
     data: &'a [u8],
     at: usize,
 }
-impl Bits<'_> {
-    fn bit(&mut self) -> Result<usize, FormatError> {
+impl<'a> Bits<'a> {
+    pub(crate) fn new(data: &'a [u8]) -> Self {
+        Self { data, at: 0 }
+    }
+    pub(crate) fn bit(&mut self) -> Result<usize, FormatError> {
         let b = *self
             .data
             .get(self.at / 8)
-            .ok_or(FormatError("JBPD bitstream truncated"))?;
+            .ok_or(FormatError("JBP bitstream truncated"))?;
         let v = usize::from((b >> (self.at % 8)) & 1);
         self.at += 1;
         Ok(v)
     }
-    fn signed(&mut self, n: usize) -> Result<i16, FormatError> {
+    pub(crate) fn signed(&mut self, n: usize) -> Result<i16, FormatError> {
         if n == 0 {
             return Ok(0);
         }
@@ -127,11 +132,13 @@ impl Bits<'_> {
         Ok(v as i16)
     }
 }
-struct Tree {
+/// Frequency tree shared by JBPD (0x1400a0960) and JBP1 (0x1400b3b40): repeatedly join the
+/// two lowest weights, lower node index first, the first one on bit 0.
+pub(crate) struct Tree {
     children: Vec<[usize; 2]>,
 }
 impl Tree {
-    fn new(data: &[u8]) -> Result<Self, FormatError> {
+    pub(crate) fn new(data: &[u8]) -> Result<Self, FormatError> {
         let mut weights: Vec<u32> = data
             .chunks_exact(4)
             .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
@@ -145,7 +152,7 @@ impl Tree {
             let sum = weights[a]
                 .checked_add(weights[b])
                 .filter(|&v| v < 2099999999)
-                .ok_or(FormatError("JBPD Huffman frequencies overflow"))?;
+                .ok_or(FormatError("JBP Huffman frequencies overflow"))?;
             active[a] = false;
             active[b] = false;
             weights.push(sum);
@@ -154,7 +161,7 @@ impl Tree {
         }
         Ok(Self { children })
     }
-    fn symbol(&self, bits: &mut Bits<'_>) -> Result<usize, FormatError> {
+    pub(crate) fn symbol(&self, bits: &mut Bits<'_>) -> Result<usize, FormatError> {
         let mut node = 30;
         while node >= 16 {
             node = self.children[node][bits.bit()?];
@@ -162,10 +169,10 @@ impl Tree {
         Ok(node)
     }
 }
-fn word(data: &[u8], at: usize) -> Result<u32, FormatError> {
+pub(crate) fn word(data: &[u8], at: usize) -> Result<u32, FormatError> {
     Ok(u32::from_le_bytes(
         data.get(at..at + 4)
-            .ok_or(FormatError("JBPD header truncated"))?
+            .ok_or(FormatError("JBP header truncated"))?
             .try_into()
             .unwrap(),
     ))
@@ -233,14 +240,8 @@ pub fn decode(data: &[u8]) -> Result<RgbaImage, FormatError> {
     let ac_data = data
         .get(split..end)
         .ok_or(FormatError("JBPD AC stream outside frame"))?;
-    let mut dc = Bits {
-        data: dc_data,
-        at: 0,
-    };
-    let mut ac = Bits {
-        data: ac_data,
-        at: 0,
-    };
+    let mut dc = Bits::new(dc_data);
+    let mut ac = Bits::new(ac_data);
     let blocks = w / 16 * h / 16 * 6;
     let mut values = Vec::with_capacity(blocks);
     let mut previous = 0i16;
