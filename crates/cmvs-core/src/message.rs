@@ -7,20 +7,37 @@
 //! object's pointer. 0x215d creates windows and 0x2141 destroys them. 0x2140 (0x140075a50)
 //! differs from 0x215d only in taking the logical size from the device, which is not
 //! modeled, so it stays unhandled. 0x215b and 0x2142..0x2149 set window and text object
-//! fields; 0x2170, 0x2178 and 0x217f drive the window's own scene object. Glyphs, fonts and
-//! drawing are not modeled.
+//! fields; 0x2170, 0x2178, 0x217a, 0x217f and 0x2180..0x2185 drive the window's own scene object;
+//! 0x2190..0x2192 fill its 32 button records. Glyphs, fonts and drawing are not modeled.
 use crate::{
     bytecode::DecodeError,
     evaluate::error,
     image::ImageSource,
     machine::Machine,
-    scene::{self, SceneObject},
+    scene::{self, DrawSetter, DrawState, SceneObject},
     vm::SystemResult,
 };
 use std::error::Error;
 
 pub const MESSAGE_WINDOWS: usize = 8;
 pub const TEXT_OBJECTS: usize = 12;
+pub const WINDOW_BUTTONS: usize = 32;
+/// State groups that fit before the hit rectangle in a 76-byte record.
+pub const BUTTON_STATES: usize = 5;
+
+/// One 76-byte record at window +40 + 76 * index; the constructor's memset zeroes it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WindowButton {
+    /// Record +0: 0x2192 sets it (0x14005df70); hit testing (0x14005dff0) skips clear records.
+    pub enabled: bool,
+    /// Record +4 + 12 * state: six 16-bit words per state from 0x2190 (0x14005dee0). Their
+    /// reader is not verified; on the real path they match the button child's source
+    /// rectangle and position.
+    pub states: [[u16; 6]; BUTTON_STATES],
+    /// Record +64..+70: hit rectangle x, y, width, height relative to the window position,
+    /// read unsigned by 0x14005dff0 (0x2191 / 0x14005df40).
+    pub hit: [u16; 4],
+}
 
 /// Fields 0x14005d3b0 sets from the creating command, plus later setters.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,8 +51,10 @@ pub struct MessageWindow {
     /// +2488 (0x215b): while set, 0x14005de50 moves the window between the +2472 and
     /// +2480 positions; zeroed by the constructor's memset.
     pub position_switch: bool,
-    /// +2520: the window's own scene object (0x14003a3c0), outside the +1976 table.
+    /// +2520: the window's own scene object (0x14003a3c0), outside the +1976 table. Button
+    /// record `i` shows child `i + 16`.
     pub object: SceneObject,
+    pub buttons: [WindowButton; WINDOW_BUTTONS],
 }
 
 /// Text object fields that scripts set; the layout readers are 0x14005b6b0 and
@@ -95,6 +114,10 @@ impl MessageHost {
                 self.set(vm, pc, command).map(|()| true)
             }
             Some((pc, command @ (0x178 | 0x17f))) => self.object(vm, pc, command).map(|()| true),
+            Some((pc, command @ (0x17a | 0x180 | 0x182..=0x185))) => {
+                self.draw(vm, pc, command).map(|()| true)
+            }
+            Some((pc, command @ 0x190..=0x192)) => self.button(vm, pc, command).map(|()| true),
             _ => Ok(false),
         }
     }
@@ -104,6 +127,135 @@ impl MessageHost {
     /// gets +6244 = 0 (hidden). 0x217f clears +6248 bit 0x100 on the object (negative
     /// child) or an existing child. Both pop 8 bytes. Missing windows or children only set
     /// +12056 bit 0x10000; 0x2178 with a child >= 768 would dereference a null child.
+    /// 0x217a / 0x140077240, 0x2180 / 0x1400774b0 and 0x2182..0x2185 / 0x140077660..0x140077820:
+    /// SP-4 window slot,
+    /// SP-8 child selected by 0x14005d280 (negative = the +2520 object, else an existing
+    /// child below 768), then arguments from SP-12. Missing windows or children only set
+    /// +12056 bit 0x10000; a setter without a draw state would dereference null.
+    /// - 0x217a: +6244 shown = bool(SP-12) (0x14003a6f0); pops 12, needs no draw state.
+    /// - 0x2180: rebuild the draw state (0x14003c7a0, as 0x2040) and zero its coordinate
+    ///   mode word (0x14003b130); pops 8 bytes.
+    /// - 0x2182: source rectangle (0x14003b070, as 0x2044); pops 24.
+    /// - 0x2183: position (0x14003b0b0, as 0x2045); 0x2185: origin (0x14003b0a0, as 0x2046);
+    ///   both pop 16.
+    /// - 0x2184: layer (0x14003b0d0, as 0x2047); pops 12.
+    fn draw(&mut self, vm: &mut Machine<'_>, pc: usize, command: u16) -> Result<(), DecodeError> {
+        let op = command + 0x2000;
+        let slot = window_slot(vm, pc, op)?;
+        let count = match command {
+            0x180 => 0,
+            0x182 => 4,
+            0x17a | 0x184 => 1,
+            _ => 2,
+        };
+        let mut args = [0u32; 4];
+        for (i, arg) in args.iter_mut().take(count).enumerate() {
+            *arg = vm
+                .stack()
+                .peek_u32(12 + 4 * i)
+                .map_err(|e| error(pc, op, e.0))?;
+        }
+        let child = vm.stack().peek_u32(8).map_err(|e| error(pc, op, e.0))? as i32;
+        let target = self.windows[slot]
+            .as_ref()
+            .and_then(|window| window_target(&window.object, child))
+            .ok_or_else(|| error(pc, op, "message window or window child does not exist"))?;
+        if !matches!(command, 0x17a | 0x180) && target.draw.is_none() {
+            return Err(error(pc, op, "window object has no draw state"));
+        }
+        vm.complete_system(SystemResult(0x4008 + 4 * count as u16))?;
+        let window = self.windows[slot].as_mut().expect("checked above");
+        let target = window_target_mut(&mut window.object, child).expect("checked above");
+        let [a, b, c, d] = args;
+        let setter = match command {
+            0x17a => {
+                target.shown = a != 0;
+                return Ok(());
+            }
+            0x180 => {
+                let mut draw = DrawState::default();
+                draw.words[0] = 0;
+                target.draw = Some(draw);
+                return Ok(());
+            }
+            0x182 => DrawSetter::Source([a, b, c, d]),
+            0x183 => DrawSetter::Position([a, b]),
+            0x184 => DrawSetter::Layer(a),
+            _ => DrawSetter::Origin([a, b]),
+        };
+        target.draw.as_mut().expect("checked above").set(setter);
+        Ok(())
+    }
+    /// 0x2190 / 0x1400786c0, 0x2191 / 0x140078750 and 0x2192 / 0x1400787d0: SP-4 window
+    /// slot, SP-8 record index (signed < 32; otherwise, or without a window, only +12056
+    /// bit 0x20000 is set). 0x2190 stores six 16-bit words SP-16..SP-36 in state group
+    /// SP-12, which the original does not bound (Rust accepts 0..5); pops 36. 0x2191 stores
+    /// the hit rectangle SP-12..SP-24; pops 24. 0x2192 enables the record and shows window
+    /// child index + 16 if it exists; pops 8.
+    fn button(&mut self, vm: &mut Machine<'_>, pc: usize, command: u16) -> Result<(), DecodeError> {
+        let op = command + 0x2000;
+        let slot = window_slot(vm, pc, op)?;
+        let word = |distance| {
+            vm.stack()
+                .peek_u32(distance)
+                .map_err(|e| error(pc, op, e.0))
+        };
+        let index = word(8)? as i32;
+        if index < 0 {
+            return Err(error(
+                pc,
+                op,
+                "negative window button indexes before the records",
+            ));
+        }
+        let index = index as usize;
+        if index >= WINDOW_BUTTONS || self.windows[slot].is_none() {
+            return Err(error(
+                pc,
+                op,
+                "window button outside 0..31 or without a window sets an unmodeled flag",
+            ));
+        }
+        let count = match command {
+            0x190 => 7,
+            0x191 => 4,
+            _ => 0,
+        };
+        let mut args = [0u32; 7];
+        for (i, arg) in args.iter_mut().take(count).enumerate() {
+            *arg = word(12 + 4 * i)?;
+        }
+        if command == 0x190 && args[0] as usize >= BUTTON_STATES {
+            return Err(error(
+                pc,
+                op,
+                "window button state outside 0..4 overlaps other record fields",
+            ));
+        }
+        vm.complete_system(SystemResult(0x4008 + 4 * count as u16))?;
+        let window = self.windows[slot].as_mut().expect("checked above");
+        let button = &mut window.buttons[index];
+        // The records keep 16-bit words; higher bits of each argument are dropped.
+        match command {
+            0x190 => {
+                for (field, value) in button.states[args[0] as usize].iter_mut().zip(&args[1..]) {
+                    *field = *value as u16;
+                }
+            }
+            0x191 => {
+                for (field, value) in button.hit.iter_mut().zip(&args) {
+                    *field = *value as u16;
+                }
+            }
+            _ => {
+                button.enabled = true;
+                if let Some(child) = window.object.children.get_mut(&(index as u16 + 16)) {
+                    child.shown = true;
+                }
+            }
+        }
+        Ok(())
+    }
     fn object(&mut self, vm: &mut Machine<'_>, pc: usize, command: u16) -> Result<(), DecodeError> {
         let op = command + 0x2000;
         let slot = window_slot(vm, pc, op)?;
@@ -348,12 +500,29 @@ impl MessageHost {
             size,
             position_switch: false,
             object: SceneObject::default(),
+            buttons: [WindowButton::default(); WINDOW_BUTTONS],
         });
         Ok(())
     }
 }
 
-/// SP-4 compared signed against 8, as both handlers do.
+/// 0x14005d280: a negative child selects the object itself, others an existing child.
+fn window_target(object: &SceneObject, child: i32) -> Option<&SceneObject> {
+    match u16::try_from(child) {
+        Err(_) if child < 0 => Some(object),
+        Ok(id) if id < 768 => object.children.get(&id),
+        _ => None,
+    }
+}
+fn window_target_mut(object: &mut SceneObject, child: i32) -> Option<&mut SceneObject> {
+    match u16::try_from(child) {
+        Err(_) if child < 0 => Some(object),
+        Ok(id) if id < 768 => object.children.get_mut(&id),
+        _ => None,
+    }
+}
+
+/// SP-4 compared signed against 8, as all window handlers do.
 fn window_slot(vm: &Machine<'_>, pc: usize, op: u16) -> Result<usize, DecodeError> {
     let slot = vm.stack().peek_u32(4).map_err(|e| error(pc, op, e.0))? as i32;
     if slot < 0 {

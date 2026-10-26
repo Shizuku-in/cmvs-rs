@@ -83,6 +83,29 @@ impl Default for DrawState {
     }
 }
 
+/// Draw-state setters shared by 0x2044..0x2047 and the message window object commands.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum DrawSetter {
+    /// 0x14003b070: source x/y/width/height.
+    Source([u32; 4]),
+    /// 0x14003b0a0: origin x/y.
+    Origin([u32; 2]),
+    /// 0x14003b0b0: position x/y.
+    Position([u32; 2]),
+    /// 0x14003b0d0: layer.
+    Layer(u32),
+}
+impl DrawState {
+    pub(crate) fn set(&mut self, setter: DrawSetter) {
+        match setter {
+            DrawSetter::Source(rect) => self.words[2..6].copy_from_slice(&rect),
+            DrawSetter::Origin(point) => self.words[6..8].copy_from_slice(&point),
+            DrawSetter::Position(point) => self.words[8..10].copy_from_slice(&point),
+            DrawSetter::Layer(layer) => self.words[10] = layer,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct SceneHost {
     clear: ClearState,
@@ -228,15 +251,20 @@ impl SceneHost {
                 Some(id) => parent.children.get_mut(&id).expect("validated"),
                 None => parent,
             };
+            let setter = match command {
+                0x44 => Some(DrawSetter::Source([args[2], args[3], args[4], args[5]])),
+                0x46 => Some(DrawSetter::Origin([args[2], args[3]])),
+                0x45 => Some(DrawSetter::Position([args[2], args[3]])),
+                0x47 => Some(DrawSetter::Layer(args[2])),
+                _ => None,
+            };
             match command {
                 0x40 | 0x50 => object.draw = Some(DrawState::default()),
-                0x44 => object.draw.as_mut().expect("validated").words[2..6]
-                    .copy_from_slice(&args[2..6]),
-                0x46 => object.draw.as_mut().expect("validated").words[6..8]
-                    .copy_from_slice(&args[2..4]),
-                0x45 => object.draw.as_mut().expect("validated").words[8..10]
-                    .copy_from_slice(&args[2..4]),
-                0x47 => object.draw.as_mut().expect("validated").words[10] = args[2],
+                0x44..=0x47 => object
+                    .draw
+                    .as_mut()
+                    .expect("validated")
+                    .set(setter.expect("setter command")),
                 0x48 => {
                     object.draw.as_mut().expect("validated").words[17] =
                         (args[2] as i32).min(255) as u32

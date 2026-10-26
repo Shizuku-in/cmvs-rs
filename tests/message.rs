@@ -1,8 +1,11 @@
 use cmvs_rs::{
     machine::{Machine, Step},
-    message::{MESSAGE_WINDOWS, MessageHost, MessageWindow, TEXT_OBJECTS, TextObject},
+    message::{
+        MESSAGE_WINDOWS, MessageHost, MessageWindow, TEXT_OBJECTS, TextObject, WINDOW_BUTTONS,
+        WindowButton,
+    },
     ps3::Script,
-    scene::SceneObject,
+    scene::{DrawState, SceneObject},
 };
 
 fn script(code: &[u8]) -> Script {
@@ -135,6 +138,7 @@ fn creation_stores_window_text_and_font_and_pops_all_arguments() {
             size: [1280, 54],
             position_switch: false,
             object: SceneObject::default(),
+            buttons: [WindowButton::default(); WINDOW_BUTTONS],
         })
     );
     assert_eq!(messages.text(10), Some(&created_text([3, -1], [1280, 54])));
@@ -357,4 +361,148 @@ fn window_object_commands_need_a_window_and_valid_children() {
         assert_eq!(vm.stack().len_bytes(), bytes);
         assert_eq!(messages.window(0).unwrap().object, SceneObject::default());
     }
+}
+
+#[test]
+fn window_draw_commands_reuse_scene_draw_fields() {
+    let mut code = vec![];
+    create(&mut code, 7, 10, [0, 0, 1280, 54]);
+    call(&mut code, 0x2180, &[u32::MAX, 7]);
+    call(&mut code, 0x2182, &[54, 1280, 2, 1, u32::MAX, 7]);
+    call(&mut code, 0x2183, &[6, 5, u32::MAX, 7]);
+    call(&mut code, 0x2184, &[3, u32::MAX, 7]);
+    call(&mut code, 0x2185, &[9, 8, u32::MAX, 7]);
+    call(&mut code, 0x2178, &[16, 7]);
+    call(&mut code, 0x2180, &[16, 7]);
+    call(&mut code, 0x2183, &[0, 588, 16, 7]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 2);
+    let object = &messages.window(7).unwrap().object;
+    assert_eq!(object.draw, Some(DrawState::default()));
+    run(&mut vm, &mut messages, 4);
+    let words = messages
+        .window(7)
+        .unwrap()
+        .object
+        .draw
+        .clone()
+        .unwrap()
+        .words;
+    assert_eq!(words[2..11], [1, 2, 1280, 54, 8, 9, 5, 6, 3]);
+    run(&mut vm, &mut messages, 3);
+    let child = &messages.window(7).unwrap().object.children[&16];
+    assert_eq!(child.draw.as_ref().unwrap().words[8..10], [588, 0]);
+    assert!(!child.shown);
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
+fn window_draw_commands_need_a_target_and_its_draw_state() {
+    let mut cases = vec![];
+    for (command, words) in [
+        (0x2183u16, vec![0, 0, u32::MAX, 0]),
+        (0x2180, vec![5, 0]),
+        (0x2180, vec![768, 0]),
+        (0x2180, vec![u32::MAX, 1]),
+        (0x2182, vec![0, 0, u32::MAX, 0]),
+    ] {
+        let mut code = vec![];
+        create(&mut code, 0, 0, [0, 0, 10, 10]);
+        call(&mut code, command, &words);
+        cases.push(code);
+    }
+    for code in cases {
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 1);
+        pending(&mut vm);
+        let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
+        assert!(messages.try_handle(&mut vm).is_err());
+        assert_eq!(vm.pending_system(), command);
+        assert_eq!(vm.stack().len_bytes(), bytes);
+        assert_eq!(messages.window(0).unwrap().object, SceneObject::default());
+    }
+}
+
+#[test]
+fn button_records_store_states_hit_rectangles_and_enable_children() {
+    let mut code = vec![];
+    create(&mut code, 7, 10, [0, 0, 1280, 54]);
+    call(&mut code, 0x2178, &[16, 7]);
+    // State 1 of record 0, with a value whose upper bits the 16-bit field drops.
+    call(&mut code, 0x2190, &[0, 0x1_0005, 52, 94, 0, 96, 1, 0, 7]);
+    call(&mut code, 0x2191, &[52, 94, 0, 0, 0, 7]);
+    call(&mut code, 0x2192, &[0, 7]);
+    call(&mut code, 0x2192, &[3, 7]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 6);
+    let window = messages.window(7).unwrap();
+    let mut states = [[0; 6]; 5];
+    states[1] = [96, 0, 94, 52, 5, 0];
+    assert_eq!(
+        window.buttons[0],
+        WindowButton {
+            enabled: true,
+            states,
+            hit: [0, 0, 94, 52],
+        }
+    );
+    assert!(window.object.children[&16].shown);
+    // Record 3 has no child 19 to show; only the record is enabled.
+    assert!(window.buttons[3].enabled);
+    assert_eq!(window.object.children.len(), 1);
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
+fn button_commands_reject_bad_records_states_and_missing_windows() {
+    let mut cases = vec![];
+    for (command, words) in [
+        (0x2192u16, vec![32, 0]),
+        (0x2192, vec![u32::MAX, 0]),
+        (0x2192, vec![0, 1]),
+        (0x2190, vec![0, 0, 0, 0, 0, 0, 5, 0, 0]),
+        (0x2191, vec![0, 0, 0, 0]),
+    ] {
+        let mut code = vec![];
+        create(&mut code, 0, 0, [0, 0, 10, 10]);
+        call(&mut code, command, &words);
+        cases.push(code);
+    }
+    for code in cases {
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 1);
+        pending(&mut vm);
+        let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
+        assert!(messages.try_handle(&mut vm).is_err());
+        assert_eq!(vm.pending_system(), command);
+        assert_eq!(vm.stack().len_bytes(), bytes);
+        assert!(messages.window(0).unwrap().buttons == [WindowButton::default(); WINDOW_BUTTONS]);
+    }
+}
+
+#[test]
+fn window_visibility_sets_the_shown_flag_without_a_draw_state() {
+    let mut code = vec![];
+    create(&mut code, 7, 10, [0, 0, 1280, 54]);
+    call(&mut code, 0x2178, &[64, 7]);
+    call(&mut code, 0x217a, &[5, 64, 7]);
+    call(&mut code, 0x217a, &[0, u32::MAX, 7]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 3);
+    let object = &messages.window(7).unwrap().object;
+    assert!(object.children[&64].shown);
+    assert!(object.children[&64].draw.is_none());
+    run(&mut vm, &mut messages, 1);
+    assert!(!messages.window(7).unwrap().object.shown);
+    assert_eq!(vm.stack().len_bytes(), 0);
 }
