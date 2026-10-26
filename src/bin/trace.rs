@@ -6,13 +6,13 @@ use cmvs_rs::{
     gesture::PointerGesture,
     image::ImageArchives,
     machine::{Machine, Step},
+    message_flags::MessageFlags,
     platform::{DirectoryAssets, PlatformHost, PlatformRequest, RecordingBackend},
     ps3::Script,
     random::CrtRandom,
     save_menu::{DirectorySaves, SaveMenuHost, SlotStatus},
     scene::SceneHost,
     script_control::{ArchiveScripts, ControlEvent, ScriptControl},
-    skip::SkipFlag,
     snapshot::{SaveImage, SaveTitle},
     system_save::{FileSystemSave, SystemSaveHost},
     text,
@@ -138,7 +138,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut frame_delta = 0;
     let mut save_title = SaveTitle::default();
     let mut gesture = PointerGesture::default();
-    let mut skip = SkipFlag::default();
+    let mut message_flags = MessageFlags::default();
     let mut audio = AudioHost::default();
     let mut audio_backend = RecordingAudio::default();
     if platform_assets.is_some() {
@@ -294,10 +294,12 @@ fn run() -> Result<(), Box<dyn Error>> {
                     );
                     continue;
                 }
-                if skip.try_handle(&mut machine)? {
+                if message_flags.try_handle(&mut machine)? {
                     println!(
-                        "# skip flag 0x22eb: active={}; system_integer[0]={:?}",
-                        skip.active(),
+                        "# message flag 0x{:04x}: skip={} auto_advance={}; system_integer[0]={:?}",
+                        command + 0x2000,
+                        message_flags.skip(),
+                        message_flags.auto_advance(),
                         machine.state().system_integer(0)
                     );
                     continue;
