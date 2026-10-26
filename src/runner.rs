@@ -11,12 +11,14 @@ use crate::{
     input::ActionInput,
     machine::{Machine, Step},
     message_flags::MessageFlags,
+    movie::MovieHost,
     platform::{DirectoryAssets, PlatformBackend, PlatformHost},
     ps3::Script,
     random::CrtRandom,
     save_menu::{DirectorySaves, SaveMenuHost},
     scene::SceneHost,
     script_control::{ArchiveScripts, ControlEvent, ScriptControl},
+    sequence::SequenceHost,
     snapshot::{SaveImage, SaveTitle},
     system_save::{FileSystemSave, SystemSaveHost},
     text,
@@ -65,6 +67,8 @@ pub struct Startup<'a> {
     platform: PlatformHost,
     scene: SceneHost,
     buttons: ButtonHost,
+    movies: MovieHost,
+    sequence: SequenceHost,
     input: ActionInput,
     effects: bool,
     timers: VmTimers,
@@ -99,6 +103,8 @@ impl<'a> Startup<'a> {
             platform: PlatformHost::default(),
             scene: SceneHost::default(),
             buttons: ButtonHost::default(),
+            movies: MovieHost::default(),
+            sequence: SequenceHost::default(),
             // No verified key bindings yet: no action is active (see `input`).
             input: ActionInput::default(),
             // EFFECT_USE constructor value; the configuration may override it.
@@ -276,6 +282,8 @@ impl<'a> Startup<'a> {
             || self
                 .buttons
                 .try_handle_input(&mut self.machine, &mut self.scene, &mut self.input)?
+            || self.movies.try_handle(&mut self.machine)?
+            || self.sequence.try_handle(&mut self.machine)?
             || self.random.try_handle(&mut self.machine)?
             || text::try_handle(&mut self.machine)?
             || self

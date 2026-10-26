@@ -10,12 +10,14 @@ use cmvs_rs::{
     input::ActionInput,
     machine::{Machine, Step},
     message_flags::MessageFlags,
+    movie::MovieHost,
     platform::{DirectoryAssets, PlatformHost, PlatformRequest, RecordingBackend},
     ps3::Script,
     random::CrtRandom,
     save_menu::{DirectorySaves, SaveMenuHost, SlotStatus},
     scene::SceneHost,
     script_control::{ArchiveScripts, ControlEvent, ScriptControl},
+    sequence::SequenceHost,
     snapshot::{SaveImage, SaveTitle},
     system_save::{FileSystemSave, SystemSaveHost},
     text,
@@ -143,6 +145,8 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut gesture = PointerGesture::default();
     let mut message_flags = MessageFlags::default();
     let mut buttons = ButtonHost::default();
+    let mut movies = MovieHost::default();
+    let mut sequence = SequenceHost::default();
     // Traces supply no input: no CMVS action is ever active.
     let mut input = ActionInput::default();
     let mut audio = AudioHost::default();
@@ -312,6 +316,21 @@ fn run() -> Result<(), Box<dyn Error>> {
                         command + 0x2000,
                         save_menu.popup_enabled(),
                         machine.state().system_integer(0)
+                    );
+                    continue;
+                }
+                if sequence.try_handle(&mut machine)? {
+                    println!(
+                        "# sequence 0x2280 reset: header={:?}; entries are not modeled",
+                        sequence.header()
+                    );
+                    continue;
+                }
+                if movies.try_handle(&mut machine)? {
+                    println!(
+                        "# movie 0x{:04x}: slots occupied={:?}; creation is not modeled",
+                        command + 0x2000,
+                        (0..3).map(|i| movies.occupied(i)).collect::<Vec<_>>()
                     );
                     continue;
                 }
