@@ -64,6 +64,34 @@ impl Default for SkipGate {
     }
 }
 
+/// 0x22d1 / 0x14007bcf0: nonzero SP-4 sets EFFECT_USE (+1508) to bool(SP-8) through
+/// 0x140091040, which also checks popup menu item 32773 (no native menu is modeled); zero
+/// SP-4 copies it to system result 0 without reading SP-8. Both pop 8 bytes.
+pub fn try_handle_effects(vm: &mut Machine<'_>, effects: &mut bool) -> Result<bool, DecodeError> {
+    let Some((pc, 0x2d1)) = vm.pending_system() else {
+        return Ok(false);
+    };
+    let arg = |distance| {
+        vm.stack()
+            .peek_u32(distance)
+            .map_err(|e| error(pc, 0x22d1, e.0))
+    };
+    let value = if arg(4)? != 0 {
+        Some(arg(8)? != 0)
+    } else {
+        None
+    };
+    vm.complete_system(SystemResult(0x4008))?;
+    match value {
+        Some(value) => *effects = value,
+        None => vm
+            .state_mut()
+            .set_system_integer(0, u32::from(*effects))
+            .expect("slot 0 exists"),
+    }
+    Ok(true)
+}
+
 #[derive(Debug, Default)]
 pub struct FadeHost {
     current: Option<Fade>,

@@ -53,3 +53,4 @@ core 的 `KeyBindings` 提供 64 KiB 上限的 ASCII INI 子集；缺失项为 0
 其后帧动画与等待光标设置已实现，两条重放路径均停于 `menu.ps3` / PC `0x12c8c` 的 `0x215a`，SP=92。
 其后两条重放路径均进入剧本 `sn1001.ps3`，停于 `intcode.ps3` / PC `0x1a5a2` 载入 PB3 type 3 背景 `white.pb3`。
 其后实现 PB3 type 3，两条重放路径均越过 `white.pb3`，停于 `sn1001.ps3` / PC `0x2de9c` 的 `0x2033`，SP=40。
+其后两条重放路径均走完剧本开头的淡入等待（循环查询 0x22ef 与 0x21a0–0x21a3），停于 `sn1001.ps3` / PC `0xc58c` 的 `0x20ba`，SP=40。

@@ -559,3 +559,47 @@ fn window_image_failures_keep_the_command_pending() {
         assert!(messages.window(7).unwrap().object.image.is_none());
     }
 }
+
+#[test]
+fn image_query_reports_size_and_depth_or_only_absence() {
+    // Slot 4 loads the 2x1 opaque image, slot 5 has no image, slot 6 has no object.
+    let mut code = loads(4, &[0]);
+    push(&mut code, 5);
+    op(&mut code, 0x2020);
+    for slot in [4, 5, 6] {
+        push(&mut code, slot);
+        op(&mut code, 0x2033);
+    }
+    let script = script(&code, b"a.pb3\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut files = Files::default();
+    files.0.insert(b"a.pb3".to_vec(), opaque());
+    let mut scene = SceneHost::default();
+    for _ in 0..2 {
+        run_to_system(&mut vm);
+        if !scene.try_handle(&mut vm).unwrap() {
+            assert!(scene.try_handle_image(&mut vm, &mut files).unwrap());
+        }
+    }
+    run_to_system(&mut vm);
+    assert!(scene.try_handle(&mut vm).unwrap());
+    for slot in 1..4 {
+        vm.state_mut().set_system_integer(slot, 77).unwrap();
+    }
+    run_to_system(&mut vm);
+    assert!(scene.try_handle(&mut vm).unwrap());
+    let results: Vec<_> = (0..4).map(|i| vm.state().system_integer(i)).collect();
+    assert_eq!(results, [Some(1), Some(2), Some(1), Some(0)]);
+    for slot in 1..4 {
+        vm.state_mut().set_system_integer(slot, 77).unwrap();
+    }
+    run_to_system(&mut vm);
+    assert!(scene.try_handle(&mut vm).unwrap());
+    let results: Vec<_> = (0..4).map(|i| vm.state().system_integer(i)).collect();
+    assert_eq!(results, [Some(0), Some(77), Some(77), Some(77)]);
+    run_to_system(&mut vm);
+    let bytes = vm.stack().len_bytes();
+    assert!(scene.try_handle(&mut vm).is_err());
+    assert_eq!(vm.pending_system().map(|p| p.1), Some(0x33));
+    assert_eq!(vm.stack().len_bytes(), bytes);
+}

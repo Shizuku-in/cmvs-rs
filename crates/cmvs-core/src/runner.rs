@@ -362,6 +362,7 @@ impl<'a> Startup<'a> {
                 self.audio_backend.as_mut(),
             )?
             || input::try_handle(&mut self.machine, &mut self.input)?
+            || crate::fade::try_handle_effects(&mut self.machine, &mut self.effects)?
             || input::try_handle_skipping(
                 &mut self.machine,
                 &self.input,

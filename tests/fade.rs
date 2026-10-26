@@ -1,5 +1,5 @@
 use cmvs_rs::{
-    fade::{FadeHost, SkipGate},
+    fade::{self, FadeHost, SkipGate},
     input::ActionInput,
     machine::{Machine, Step},
     ps3::Script,
@@ -323,4 +323,57 @@ fn released_decide_action_is_consumed_only_by_a_skippable_wait() {
     assert_eq!((step, stack), (Some(Step::Yield), 4));
     assert!(other.released(1));
     assert!(ActionInput::default().set(24, true, true, true).is_err());
+}
+
+#[test]
+fn effect_use_is_set_and_read_by_0x22d1() {
+    let mut code = vec![];
+    // Read (SP-4 = 0, SP-8 unread), clear, read, set with a nonzero value, read.
+    for (value, set) in [
+        (None, 0u32),
+        (Some(0u32), 1),
+        (None, 0),
+        (Some(7), 1),
+        (None, 0),
+    ] {
+        if let Some(value) = value {
+            code.extend(0x440u16.to_le_bytes());
+            code.extend(4u16.to_le_bytes());
+            code.extend(value.to_le_bytes());
+        } else {
+            code.extend(0x440u16.to_le_bytes());
+            code.extend(4u16.to_le_bytes());
+            code.extend(99u32.to_le_bytes());
+        }
+        code.extend(0x440u16.to_le_bytes());
+        code.extend(4u16.to_le_bytes());
+        code.extend(set.to_le_bytes());
+        code.extend(0x22d1u16.to_le_bytes());
+    }
+    code.extend(0x22d1u16.to_le_bytes());
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut effects = true;
+    let mut results = vec![];
+    for _ in 0..5 {
+        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        vm.state_mut().set_system_integer(0, 5).unwrap();
+        assert!(fade::try_handle_effects(&mut vm, &mut effects).unwrap());
+        results.push((vm.state().system_integer(0), effects));
+    }
+    assert_eq!(
+        results,
+        [
+            (Some(1), true),
+            (Some(5), false),
+            (Some(0), false),
+            (Some(5), true),
+            (Some(1), true),
+        ]
+    );
+    assert_eq!(vm.stack().len_bytes(), 0);
+    // An empty stack keeps the command pending.
+    while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+    assert!(fade::try_handle_effects(&mut vm, &mut effects).is_err());
+    assert_eq!(vm.pending_system().map(|p| p.1), Some(0x2d1));
 }

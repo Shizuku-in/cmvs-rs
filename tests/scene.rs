@@ -365,3 +365,172 @@ fn object_moves_and_queries_reject_bad_slots_and_self_moves() {
         assert_eq!(scene.object(3).is_some(), setup);
     }
 }
+
+/// Slot `slot` with a draw state, an opacity track starting at `base`, and keys
+/// (next, hold, duration, value) played from key 0.
+fn tracked(code: &mut Vec<u8>, slot: u32, base: u32, keys: &[(u32, u32, u32, u32)]) {
+    invoke(code, 0x2020, &[slot]);
+    invoke(code, 0x2040, &[slot]);
+    invoke(code, 0x21ea, &[base, u32::MAX, slot]);
+    for (index, &(next, hold, duration, value)) in keys.iter().enumerate() {
+        invoke(
+            code,
+            0x21eb,
+            &[value, duration, hold, next, index as u32, u32::MAX, slot],
+        );
+    }
+    invoke(code, 0x21ec, &[0, u32::MAX, slot]);
+}
+fn run_all(vm: &mut Machine<'_>, scene: &mut SceneHost, commands: usize) {
+    for _ in 0..commands {
+        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        assert!(scene.try_handle(vm).unwrap(), "{:?}", vm.pending_system());
+    }
+}
+fn opacity(scene: &SceneHost, slot: u8) -> u32 {
+    scene.object(slot).unwrap().draw.as_ref().unwrap().words[17]
+}
+
+#[test]
+fn opacity_tracks_interpolate_with_clamped_frame_time_and_free_at_the_end() {
+    let mut code = vec![];
+    tracked(&mut code, 3, 0, &[(u32::MAX, 0, 1000, 255)]);
+    invoke(&mut code, 0x21ee, &[u32::MAX, 3]);
+    invoke(&mut code, 0x21ee, &[u32::MAX, 3]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut scene = SceneHost::default();
+    run_all(&mut vm, &mut scene, 5);
+    assert_eq!(opacity(&scene, 3), 255, "starting does not change opacity");
+    run_all(&mut vm, &mut scene, 1);
+    assert_eq!(vm.state().system_integer(0), Some(0));
+    let mut seen = vec![];
+    for delta in [250, 300, 100, 200, 200, 200] {
+        scene.advance_frame(delta);
+        seen.push(opacity(&scene, 3));
+    }
+    assert_eq!(seen, [51, 102, 127, 178, 229, 255]);
+    let draw = scene.object(3).unwrap().draw.as_ref().unwrap();
+    assert!(draw.opacity_track.is_none());
+    run_all(&mut vm, &mut scene, 1);
+    assert_eq!(vm.state().system_integer(0), Some(u32::MAX));
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
+fn opacity_keys_chain_hold_reverse_and_dispose() {
+    let mut code = vec![];
+    // Slot 1: two keys; slot 2: 255 down to 0; slot 4: held key; slot 5 ends with -2.
+    tracked(
+        &mut code,
+        1,
+        0,
+        &[(1, 0, 100, 100), (u32::MAX, 0, 100, 200)],
+    );
+    tracked(&mut code, 2, 255, &[(u32::MAX, 0, 100, 0)]);
+    tracked(&mut code, 4, 10, &[(u32::MAX, 1, 100, 90)]);
+    tracked(&mut code, 5, 0, &[((-2i32) as u32, 0, 100, 0)]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    run_all(&mut vm, &mut scene, 6 + 5 + 5 + 5);
+    scene.advance_frame(150);
+    // Slot 1 reached key 0 (value 100) and moved on without interpolating key 1 yet.
+    assert_eq!(opacity(&scene, 1), 100);
+    assert!(
+        scene.object(5).is_none(),
+        "the -2 end disposes the slot object"
+    );
+    scene.advance_frame(25);
+    assert_eq!(opacity(&scene, 1), 175);
+    // After 175 ms: slot 2 ended at 0; slot 4 held its old opacity until the end.
+    assert_eq!(opacity(&scene, 2), 0);
+    assert_eq!(opacity(&scene, 4), 90);
+    let mut code = vec![];
+    tracked(&mut code, 2, 255, &[(u32::MAX, 0, 100, 0)]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    run_all(&mut vm, &mut scene, 5);
+    scene.advance_frame(50);
+    // (0 - 255) as u32 * 50 is -12750 as i32; divided by 100 that is -127.
+    assert_eq!(opacity(&scene, 2), 128);
+    let mut code = vec![];
+    tracked(&mut code, 4, 10, &[(u32::MAX, 1, 100, 90)]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    run_all(&mut vm, &mut scene, 5);
+    scene.advance_frame(50);
+    assert_eq!(opacity(&scene, 4), 255, "a held key does not interpolate");
+}
+
+#[test]
+fn stopping_and_querying_opacity_tracks() {
+    let mut code = vec![];
+    tracked(&mut code, 3, 0, &[(u32::MAX, 0, 1000, 77)]);
+    invoke(&mut code, 0x21ed, &[u32::MAX, 3]);
+    invoke(&mut code, 0x21ea, &[0x8000_0000, u32::MAX, 3]);
+    invoke(&mut code, 0x21ee, &[u32::MAX, 3]);
+    invoke(&mut code, 0x21ed, &[u32::MAX, 3]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    run_all(&mut vm, &mut scene, 5);
+    scene.advance_frame(100);
+    assert_eq!(opacity(&scene, 3), 7);
+    // Stopping a playing track writes its current key's value.
+    run_all(&mut vm, &mut scene, 1);
+    assert_eq!(opacity(&scene, 3), 77);
+    run_all(&mut vm, &mut scene, 1);
+    let track = scene
+        .object(3)
+        .unwrap()
+        .draw
+        .as_ref()
+        .unwrap()
+        .opacity_track
+        .clone()
+        .unwrap();
+    assert_eq!(track.base, 0, "|i32::MIN| % 256 is 0");
+    run_all(&mut vm, &mut scene, 1);
+    assert_eq!(vm.state().system_integer(0), Some(u32::MAX - 1));
+    // Stopping a stopped track only frees it.
+    run_all(&mut vm, &mut scene, 1);
+    let draw = scene.object(3).unwrap().draw.as_ref().unwrap();
+    assert!(draw.opacity_track.is_none());
+    assert_eq!(draw.words[17], 77);
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
+fn opacity_commands_reject_bad_targets_and_keys() {
+    for (draw, command, words) in [
+        (false, 0x21eau16, vec![0, u32::MAX, 3]),
+        (true, 0x21ea, vec![0, 5, 3]),
+        (true, 0x21ea, vec![0, 768, 3]),
+        (true, 0x21ea, vec![0, u32::MAX, 4]),
+        (true, 0x21eb, vec![0, 0, 0, u32::MAX, 8, u32::MAX, 3]),
+        (true, 0x21eb, vec![0, 0, 0, 8, 0, u32::MAX, 3]),
+        (true, 0x21ec, vec![8, u32::MAX, 3]),
+        (true, 0x21ee, vec![3]),
+    ] {
+        let mut code = vec![];
+        invoke(&mut code, 0x2020, &[3]);
+        if draw {
+            invoke(&mut code, 0x2040, &[3]);
+        }
+        invoke(&mut code, command, &words);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        vm.state_mut().set_system_integer(0, 9).unwrap();
+        let mut scene = SceneHost::default();
+        run_all(&mut vm, &mut scene, 1 + usize::from(draw));
+        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        let bytes = vm.stack().len_bytes();
+        assert!(scene.try_handle(&mut vm).is_err(), "{command:x} {words:?}");
+        assert_eq!(vm.pending_system().map(|p| p.1), Some(command - 0x2000));
+        assert_eq!(vm.stack().len_bytes(), bytes);
+        assert_eq!(vm.state().system_integer(0), Some(9));
+    }
+}
