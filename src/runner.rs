@@ -14,6 +14,7 @@ use crate::{
     script_control::{ArchiveScripts, ControlEvent, ScriptControl},
     snapshot::{SaveImage, SaveTitle},
     system_save::{FileSystemSave, SystemSaveHost},
+    text,
 };
 use std::{error::Error, fs::File, io::Read, path::Path};
 
@@ -200,6 +201,7 @@ impl<'a> Startup<'a> {
             || self.gesture.try_handle(&mut self.machine)?
             || self.save_menu.try_handle_popup(&mut self.machine)?
             || self.random.try_handle(&mut self.machine)?
+            || text::try_handle(&mut self.machine)?
             || self
                 .audio
                 .try_handle(&mut self.machine, self.audio_backend.as_mut())?

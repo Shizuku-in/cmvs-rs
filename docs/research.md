@@ -545,3 +545,10 @@ logo.ps3 在库函数（约 0x324be 起）中以 0x2020 创建对象，随后依
 推测为对象的资源与属性设置。0x2020/0x2021 语义见 vm-semantics.md。完整示例加 `--continue-without-snapshot --rand-seed 0` 后，
 创建对象槽 10，共 883 步在 PC=0x324f0 停于待处理的 0x20f8，参数为文本偏移 2494 的 `logo.pb3`。`cmvs-desktop` 实测停点相同。
 新增 1 项测试：默认总计 166，desktop 总计 171。下一步：0x20f8 及后续对象属性命令。
+
+## 字符串长度与图像加载调查
+
+0x20f8 为 strlen（见 vm-semantics.md），logo.ps3 以它取得 `logo.pb3` 的长度 8，随后在 PC=0x32522 停于 0x2030（槽 10、`logo.pb3`）。
+已核对 0x2030 → `0x14003bb10` → `0x1400325a0` → `0x140036e60/0x140036820` 的查找链和 0x2011 的条目写入，结论记入 vm-semantics.md。
+实现 0x2030 需要按 0x2011 注册顺序只读查找目录/CPZ6 归档、解码 PB3（目前仅 type 1）并把图像挂到场景对象上。
+完整示例加 `--continue-without-snapshot --rand-seed 0` 后共 890 步停于 0x2030。新增 1 项测试：默认总计 167，desktop 总计 172。

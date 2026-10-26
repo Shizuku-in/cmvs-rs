@@ -13,6 +13,7 @@ use cmvs_rs::{
     script_control::{ArchiveScripts, ControlEvent, ScriptControl},
     snapshot::{SaveImage, SaveTitle},
     system_save::{FileSystemSave, SystemSaveHost},
+    text,
 };
 use std::{env, error::Error, fs::File, io::Read};
 
@@ -194,6 +195,14 @@ fn run() -> Result<(), Box<dyn Error>> {
                     println!(
                         "# save title 0x2162 = {}; recorded only",
                         save_title.bytes().escape_ascii()
+                    );
+                    continue;
+                }
+                if text::try_handle(&mut machine)? {
+                    println!(
+                        "# text 0x{:04x}: system_integer[0]={:?}",
+                        command + 0x2000,
+                        machine.state().system_integer(0)
                     );
                     continue;
                 }
