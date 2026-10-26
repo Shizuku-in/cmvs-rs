@@ -1,8 +1,8 @@
 use cmvs_rs::{
     machine::{Machine, Step},
     message::{
-        MESSAGE_WINDOWS, MessageHost, MessageWindow, TEXT_OBJECTS, TextObject, WINDOW_BUTTONS,
-        WindowButton,
+        LineBreakRules, MESSAGE_WINDOWS, MessageHost, MessageWindow, TEXT_OBJECTS, TextObject,
+        WINDOW_BUTTONS, WindowButton,
     },
     ps3::Script,
     scene::{DrawState, SceneObject},
@@ -66,6 +66,11 @@ fn created_text(position: [i32; 2], size: [u32; 2]) -> TextObject {
         reveal: [0, 0],
         char_delay: 100,
         layer: 1,
+        ruby: false,
+        ruby_every_line: false,
+        ruby_size: 12,
+        ruby_spacing: 0,
+        line_break: None,
     }
 }
 fn pending(vm: &mut Machine<'_>) {
@@ -136,6 +141,7 @@ fn creation_stores_window_text_and_font_and_pops_all_arguments() {
             text: 10,
             position: [3, -1],
             size: [1280, 54],
+            switch_positions: [[3, -1]; 2],
             position_switch: false,
             object: SceneObject::default(),
             buttons: [WindowButton::default(); WINDOW_BUTTONS],
@@ -505,4 +511,173 @@ fn window_visibility_sets_the_shown_flag_without_a_draw_state() {
     run(&mut vm, &mut messages, 1);
     assert!(!messages.window(7).unwrap().object.shown);
     assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
+fn moving_a_window_updates_state_zero_object_and_text_positions() {
+    let mut code = vec![];
+    create(&mut code, 7, 10, [5, 6, 1280, 54]);
+    call(&mut code, 0x2180, &[u32::MAX, 7]);
+    call(&mut code, 0x2150, &[0, 1186, 0, 7]);
+    call(&mut code, 0x2150, &[4, u32::MAX, 1, 7]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 3);
+    let window = messages.window(7).unwrap();
+    assert_eq!(window.position, [1186, 0]);
+    assert_eq!(window.switch_positions, [[1186, 0], [5, 6]]);
+    assert_eq!(window.object.draw.as_ref().unwrap().words[8..10], [1186, 0]);
+    assert_eq!(messages.text(10).unwrap().position, [1186, 0]);
+    run(&mut vm, &mut messages, 1);
+    let window = messages.window(7).unwrap();
+    assert_eq!(window.position, [1185, 4]);
+    assert_eq!(window.switch_positions, [[1185, 4], [5, 6]]);
+    assert_eq!(window.object.draw.as_ref().unwrap().words[8..10], [1185, 4]);
+    assert_eq!(messages.text(10).unwrap().position, [1185, 4]);
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
+fn window_moves_need_a_known_mode_a_window_and_a_draw_state() {
+    let mut cases = vec![];
+    for (draw, words) in [
+        (true, vec![0, 0, 2, 0]),
+        (false, vec![0, 0, 0, 0]),
+        (true, vec![0, 0, 0, 1]),
+        (true, vec![0, 0, 0]),
+    ] {
+        let mut code = vec![];
+        create(&mut code, 0, 0, [0, 0, 10, 10]);
+        if draw {
+            call(&mut code, 0x2180, &[u32::MAX, 0]);
+        }
+        call(&mut code, 0x2150, &words);
+        cases.push((code, 1 + usize::from(draw)));
+    }
+    for (code, setup) in cases {
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, setup);
+        pending(&mut vm);
+        let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
+        assert!(messages.try_handle(&mut vm).is_err());
+        assert_eq!(vm.pending_system(), command);
+        assert_eq!(vm.stack().len_bytes(), bytes);
+        let window = messages.window(0).unwrap();
+        assert_eq!(window.position, [0, 0]);
+        assert_eq!(messages.text(0).unwrap().position, [0, 0]);
+    }
+}
+
+#[test]
+fn text_object_commands_set_ruby_fields_and_logical_size() {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 540, 1280, 180]);
+    call(&mut code, 0x2114, &[0, 7]);
+    call(&mut code, 0x2114, &[1, 7]);
+    call(&mut code, 0x2115, &[15, 7]);
+    call(&mut code, 0x2116, &[u32::MAX, 7]);
+    call(&mut code, 0x2117, &[2, 7]);
+    call(&mut code, 0x217c, &[720, 1280, u32::MAX, 0]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 2);
+    assert!(!messages.text(7).unwrap().ruby);
+    run(&mut vm, &mut messages, 4);
+    let text = messages.text(7).unwrap();
+    assert_eq!(
+        (
+            text.ruby,
+            text.ruby_size,
+            text.ruby_spacing,
+            text.ruby_every_line
+        ),
+        (true, 15, -1, true)
+    );
+    run(&mut vm, &mut messages, 1);
+    let object = &messages.window(0).unwrap().object;
+    assert_eq!(object.logical_size, [1280, 720]);
+    assert!(object.draw.is_none());
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+/// A PS2A image whose text segment holds `text`, for 0x211e string references.
+fn script_with_text(code: &[u8], text: &[u8]) -> Script {
+    let mut payload = 0u32.to_le_bytes().to_vec();
+    payload.extend(code);
+    payload.extend(text);
+    let mut raw = b"PS2A".to_vec();
+    for n in [
+        48,
+        0,
+        0,
+        1,
+        code.len() as u32,
+        0,
+        text.len() as u32,
+        0,
+        0,
+        payload.len() as u32,
+        0,
+    ] {
+        raw.extend(n.to_le_bytes());
+    }
+    raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+    Script::decode(&raw).unwrap()
+}
+
+#[test]
+fn line_break_rules_copy_both_strings_and_the_overflow_limit() {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 540, 1280, 180]);
+    // Text offsets: 0 = hanging set, 5 = inseparable set.
+    call(&mut code, 0x211e, &[3, 5, 0, 7]);
+    let script = script_with_text(&code, b"abcd\0xy\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 2);
+    assert_eq!(
+        messages.text(7).unwrap().line_break,
+        Some(LineBreakRules {
+            max_overflow: 3,
+            hanging: b"abcd".to_vec(),
+            inseparable: b"xy".to_vec(),
+        })
+    );
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
+fn text_object_commands_reject_missing_objects_and_long_strings() {
+    let long = [b'a'; 64];
+    let mut text = long.to_vec();
+    text.push(0);
+    let mut cases = vec![];
+    for (command, words) in [
+        (0x2115u16, vec![15, 6]),
+        (0x2115, vec![15, 12]),
+        (0x2115, vec![15, u32::MAX]),
+        (0x211e, vec![3, 0, 0, 7]),
+        (0x2117, vec![7]),
+    ] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 10, 10]);
+        call(&mut code, command, &words);
+        cases.push(code);
+    }
+    for code in cases {
+        let script = script_with_text(&code, &text);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 1);
+        pending(&mut vm);
+        let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
+        assert!(messages.try_handle(&mut vm).is_err());
+        assert_eq!(vm.pending_system(), command);
+        assert_eq!(vm.stack().len_bytes(), bytes);
+        assert_eq!(messages.text(7), Some(&created_text([0, 0], [10, 10])));
+    }
 }

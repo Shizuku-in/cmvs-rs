@@ -51,6 +51,9 @@ pub struct SceneObject {
     pub flags: u32,
     /// +6244 (constructor 1): 0x14003de80 skips the object when zero; 0x2215 sets it.
     pub shown: bool,
+    /// +6256/+6260 (constructor 0): logical screen size; 0x14003b350 scales by the device
+    /// width over +6256, or over the screen width while it is zero. Set by 0x217c.
+    pub logical_size: [u32; 2],
 }
 impl Default for SceneObject {
     fn default() -> Self {
@@ -60,6 +63,7 @@ impl Default for SceneObject {
             draw: None,
             flags: 0x7fff_ffff,
             shown: true,
+            logical_size: [0, 0],
         }
     }
 }

@@ -8,7 +8,8 @@
 //! differs from 0x215d only in taking the logical size from the device, which is not
 //! modeled, so it stays unhandled. 0x215b and 0x2142..0x2149 set window and text object
 //! fields; 0x2170, 0x2178, 0x217a, 0x217f and 0x2180..0x2185 drive the window's own scene object;
-//! 0x2190..0x2192 fill its 32 button records. Glyphs, fonts and drawing are not modeled.
+//! 0x2190..0x2192 fill its 32 button records and 0x2150 moves the window. 0x2114..0x2117 and
+//! 0x211e address text objects directly. Glyphs, fonts and drawing are not modeled.
 use crate::{
     bytecode::DecodeError,
     evaluate::error,
@@ -44,8 +45,11 @@ pub struct WindowButton {
 pub struct MessageWindow {
     /// +0: index into the text object table.
     pub text: usize,
-    /// +12/+16 (also copied to +2472/+2476 and +2480/+2484).
+    /// +12/+16, the current position.
     pub position: [i32; 2],
+    /// The positions 0x14005de50 switches between: [0] = +2480/+2484 (switch state 0, also
+    /// moved by 0x2150) and [1] = +2472/+2476 (state 1). Creation sets both to `position`.
+    pub switch_positions: [[i32; 2]; 2],
     /// +20/+24.
     pub size: [i32; 2],
     /// +2488 (0x215b): while set, 0x14005de50 moves the window between the +2472 and
@@ -57,9 +61,21 @@ pub struct MessageWindow {
     pub buttons: [WindowButton; WINDOW_BUTTONS],
 }
 
+/// 0x211e line-break rules (+328 set, +332, +336, +400), used by 0x14005b120 when the pen
+/// reaches the end of a line and +112 is set.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LineBreakRules {
+    /// +332: how many consecutive characters may run past the line end.
+    pub max_overflow: i32,
+    /// +336: characters that may hang past the line end (0x14005b050 returns 1).
+    pub hanging: Vec<u8>,
+    /// +400: characters kept on the line while they repeat the previous one (returns 2).
+    pub inseparable: Vec<u8>,
+}
+
 /// Text object fields that scripts set; the layout readers are 0x14005b6b0 and
 /// 0x14005bc90. Unlisted constructor/0x14005d3b0 defaults are documented in vm-semantics.md.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextObject {
     /// Configuration words 4/5 (+552/+556): the script-space size that 0x14005aac0 divides
     /// by when scaling positions to the device size in words 2/3.
@@ -86,6 +102,16 @@ pub struct TextObject {
     pub char_delay: i32,
     /// +152: scene layer for the text and glyph objects (0x14003b0d0, as for 0x2047).
     pub layer: i32,
+    /// +176: ruby layout; 0x14005b360 marks lines holding `{base/ruby}` groups.
+    pub ruby: bool,
+    /// +184: reserve the ruby height above every line, not only marked ones.
+    pub ruby_every_line: bool,
+    /// +188 (constructor 12): ruby glyph size, also the height reserved above a line.
+    pub ruby_size: i32,
+    /// +192: extra spacing between ruby glyphs.
+    pub ruby_spacing: i32,
+    /// None until 0x211e; the constructor zeroes +328.
+    pub line_break: Option<LineBreakRules>,
 }
 
 #[derive(Debug, Default)]
@@ -114,10 +140,14 @@ impl MessageHost {
                 self.set(vm, pc, command).map(|()| true)
             }
             Some((pc, command @ (0x178 | 0x17f))) => self.object(vm, pc, command).map(|()| true),
-            Some((pc, command @ (0x17a | 0x180 | 0x182..=0x185))) => {
+            Some((pc, command @ (0x17a | 0x17c | 0x180 | 0x182..=0x185))) => {
                 self.draw(vm, pc, command).map(|()| true)
             }
             Some((pc, command @ 0x190..=0x192)) => self.button(vm, pc, command).map(|()| true),
+            Some((pc, 0x150)) => self.move_window(vm, pc).map(|()| true),
+            Some((pc, command @ (0x114..=0x117 | 0x11e))) => {
+                self.text_command(vm, pc, command).map(|()| true)
+            }
             _ => Ok(false),
         }
     }
@@ -133,6 +163,8 @@ impl MessageHost {
     /// child below 768), then arguments from SP-12. Missing windows or children only set
     /// +12056 bit 0x10000; a setter without a draw state would dereference null.
     /// - 0x217a: +6244 shown = bool(SP-12) (0x14003a6f0); pops 12, needs no draw state.
+    /// - 0x217c / 0x140077340: +6256/+6260 logical size = SP-12/SP-16 (0x14003b410); pops
+    ///   16, needs no draw state.
     /// - 0x2180: rebuild the draw state (0x14003c7a0, as 0x2040) and zero its coordinate
     ///   mode word (0x14003b130); pops 8 bytes.
     /// - 0x2182: source rectangle (0x14003b070, as 0x2044); pops 24.
@@ -160,7 +192,7 @@ impl MessageHost {
             .as_ref()
             .and_then(|window| window_target(&window.object, child))
             .ok_or_else(|| error(pc, op, "message window or window child does not exist"))?;
-        if !matches!(command, 0x17a | 0x180) && target.draw.is_none() {
+        if !matches!(command, 0x17a | 0x17c | 0x180) && target.draw.is_none() {
             return Err(error(pc, op, "window object has no draw state"));
         }
         vm.complete_system(SystemResult(0x4008 + 4 * count as u16))?;
@@ -170,6 +202,10 @@ impl MessageHost {
         let setter = match command {
             0x17a => {
                 target.shown = a != 0;
+                return Ok(());
+            }
+            0x17c => {
+                target.logical_size = [a, b];
                 return Ok(());
             }
             0x180 => {
@@ -254,6 +290,130 @@ impl MessageHost {
                 }
             }
         }
+        Ok(())
+    }
+    /// 0x2150 / 0x140076640 -> 0x14005dc90: SP-4 window slot, SP-8 mode, SP-12/SP-16 x/y.
+    /// Mode 0 takes the point as is and mode 1 adds the current +12/+16; other modes read an
+    /// uninitialized stack slot. The result becomes +12/+16 and +2480/+2484 (not +2472), the
+    /// +2520 object position (0x14003b0b0, which dereferences its draw state) and the text
+    /// object position (0x14005aac0). Pops 16 bytes; a missing window only sets +12056 bit
+    /// 0x10000.
+    /// 0x2114..0x2117 / 0x140072d50..0x140072e70 and 0x211e / 0x140073130 address a text
+    /// object directly: SP-4 index (signed < 12 with an object, otherwise only +12056 bit
+    /// 0x1000 is set).
+    /// - 0x2114: +176 ruby = bool(SP-8); 0x2115: +188 ruby size; 0x2116: +192 ruby spacing;
+    ///   0x2117: +184 = bool(SP-8). Each pops 8 bytes.
+    /// - 0x211e (0x14005afd0): copies the strings SP-8 and SP-12 into the 64-byte +336 and
+    ///   +400 buffers with lstrcpyA, sets +332 = SP-16, clears +464 and the +528/+532 layout
+    ///   counters and sets +328 = 1; pops 16.
+    fn text_command(
+        &mut self,
+        vm: &mut Machine<'_>,
+        pc: usize,
+        command: u16,
+    ) -> Result<(), DecodeError> {
+        let op = command + 0x2000;
+        let word = |distance| {
+            vm.stack()
+                .peek_u32(distance)
+                .map_err(|e| error(pc, op, e.0))
+        };
+        let index = word(4)? as i32;
+        if index < 0 {
+            return Err(error(
+                pc,
+                op,
+                "negative text object index indexes before the table",
+            ));
+        }
+        let index = index as usize;
+        let rules = if command == 0x11e {
+            let hanging = vm.resolve_string(word(8)?)?;
+            let inseparable = vm.resolve_string(word(12)?)?;
+            if hanging.len() >= 64 || inseparable.len() >= 64 {
+                return Err(error(
+                    pc,
+                    op,
+                    "line-break string overflows its 64-byte buffer",
+                ));
+            }
+            Some(LineBreakRules {
+                max_overflow: word(16)? as i32,
+                hanging,
+                inseparable,
+            })
+        } else {
+            None
+        };
+        let value = word(8)?;
+        if self.text(index).is_none() {
+            return Err(error(
+                pc,
+                op,
+                "text object index outside 0..11 or without an object sets an unmodeled flag",
+            ));
+        }
+        vm.complete_system(SystemResult(if rules.is_some() { 0x4010 } else { 0x4008 }))?;
+        let text = self.texts[index].as_mut().expect("checked above");
+        match command {
+            0x114 => text.ruby = value != 0,
+            0x115 => text.ruby_size = value as i32,
+            0x116 => text.ruby_spacing = value as i32,
+            0x117 => text.ruby_every_line = value != 0,
+            _ => text.line_break = rules,
+        }
+        Ok(())
+    }
+    fn move_window(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
+        let slot = window_slot(vm, pc, 0x2150)?;
+        let word = |distance| {
+            vm.stack()
+                .peek_u32(distance)
+                .map_err(|e| error(pc, 0x2150, e.0))
+        };
+        let (mode, x, y) = (word(8)?, word(12)? as i32, word(16)? as i32);
+        let window = self.windows[slot].as_ref().ok_or_else(|| {
+            error(
+                pc,
+                0x2150,
+                "message window slot without a window sets an unmodeled flag",
+            )
+        })?;
+        let point = match mode {
+            0 => [x, y],
+            1 => [
+                window.position[0].wrapping_add(x),
+                window.position[1].wrapping_add(y),
+            ],
+            _ => {
+                return Err(error(
+                    pc,
+                    0x2150,
+                    "window move mode other than 0/1 reads an uninitialized stack slot",
+                ));
+            }
+        };
+        if window.object.draw.is_none() {
+            return Err(error(pc, 0x2150, "window object has no draw state"));
+        }
+        if self.texts[window.text].is_none() {
+            return Err(error(pc, 0x2150, "message window without its text object"));
+        }
+        vm.complete_system(SystemResult(0x4010))?;
+        let window = self.windows[slot].as_mut().expect("checked above");
+        window.position = point;
+        window.switch_positions[0] = point;
+        let [x, y] = point.map(|v| v as u32);
+        window
+            .object
+            .draw
+            .as_mut()
+            .expect("checked above")
+            .set(DrawSetter::Position([x, y]));
+        self.texts[window.text]
+            .as_mut()
+            .expect("checked above")
+            .position = point;
         Ok(())
     }
     fn object(&mut self, vm: &mut Machine<'_>, pc: usize, command: u16) -> Result<(), DecodeError> {
@@ -493,11 +653,17 @@ impl MessageHost {
             reveal: [0, 0],
             char_delay: 100,
             layer: 1,
+            ruby: false,
+            ruby_every_line: false,
+            ruby_size: 12,
+            ruby_spacing: 0,
+            line_break: None,
         });
         self.windows[slot] = Some(MessageWindow {
             text,
             position,
             size,
+            switch_positions: [position; 2],
             position_switch: false,
             object: SceneObject::default(),
             buttons: [WindowButton::default(); WINDOW_BUTTONS],
