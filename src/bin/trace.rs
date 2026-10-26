@@ -34,7 +34,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         .ok_or("usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap]")?;
     if path == "--help" {
         println!(
-            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap] [--script-archive <archive>] [--virtual-tick <tick>] [--save-dir <directory>] [--system-save <file>] [--record-platform <game-root>] [--continue-without-snapshot] [--rand-seed <seed>]\n--script loads an isolated initial script. --script-archive supplies common/main scripts and enables explicit control handling with virtual time (default tick 0), without automatic scheduling. --bootstrap applies verified startup configuration. --save-dir enables read-only saveNNN.dat header scanning and menu state, without native UI or save restoration. --system-save explicitly enables CSS1 persistent-state loading for 0x2128; it does not restore a gameplay snapshot. --record-platform enables a recording-only backend with read-only cursor/icon assets from the explicit game root, plus verified state such as the clear color, the save title and pointer-gesture configuration, records SE playback requests without audio output, and decodes 0x2030 object images read-only from the 0x2011 entries; no native window, drawing, or input polling. Main transfer stops at the engine save snapshot unless --continue-without-snapshot is given; that applies only the verified live-state effect, builds no save image, and leaves saving unavailable. --rand-seed enables 0x20d4 with the CRT rand() generator from an explicit seed; the original seeds from timeGetTime and draws every frame, so values are not reproducible."
+            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap] [--script-archive <archive>] [--virtual-tick <tick>] [--frame-ms <delta>] [--save-dir <directory>] [--system-save <file>] [--record-platform <game-root>] [--continue-without-snapshot] [--rand-seed <seed>]\n--frame-ms supplies a positive engine-frame delta on each supported wait/yield; without it time stays frozen. Callback ticks remain separate. --script loads an isolated initial script. --script-archive supplies common/main scripts and enables explicit control handling with virtual time (default tick 0), without automatic scheduling. --bootstrap applies verified startup configuration. --save-dir enables read-only saveNNN.dat header scanning and menu state, without native UI or save restoration. --system-save explicitly enables CSS1 persistent-state loading for 0x2128; it does not restore a gameplay snapshot. --record-platform enables a recording-only backend with read-only cursor/icon assets from the explicit game root, plus verified state such as the clear color, the save title and pointer-gesture configuration, records SE playback requests without audio output, and decodes 0x2030 object images read-only from the 0x2011 entries; no native window, drawing, or input polling. Main transfer stops at the engine save snapshot unless --continue-without-snapshot is given; that applies only the verified live-state effect, builds no save image, and leaves saving unavailable. --rand-seed enables 0x20d4 with the CRT rand() generator from an explicit seed; the original seeds from timeGetTime and draws every frame, so values are not reproducible."
         );
         return Ok(());
     }
@@ -44,6 +44,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut archive_script = None;
     let mut script_archive = None;
     let mut virtual_tick = 0;
+    let mut frame_ms = None;
     let mut save_dir = None;
     let mut system_save_path = None;
     let mut platform_root = None;
@@ -69,6 +70,12 @@ fn run() -> Result<(), Box<dyn Error>> {
             script_archive = Some(value);
         } else if flag == "--virtual-tick" {
             virtual_tick = number(&value)?;
+        } else if flag == "--frame-ms" {
+            let value = number(&value)?;
+            if value == 0 {
+                return Err("frame-ms must be positive".into());
+            }
+            frame_ms = Some(value);
         } else if flag == "--save-dir" {
             save_dir = Some(value);
         } else if flag == "--system-save" {
@@ -148,6 +155,11 @@ fn run() -> Result<(), Box<dyn Error>> {
         let slot = machine.current_slot();
         let name = machine.current_name().escape_ascii().to_string();
         let event = machine.step()?;
+        if event == Step::Yield
+            && let Some(delta) = frame_ms
+        {
+            scene.advance_frame(delta);
+        }
         println!(
             "{step}: slot={slot} script={name} pc=0x{pc:04x} -> 0x{:04x} result={:?} stack_bytes={} {event:?}",
             machine.pc(),
@@ -156,6 +168,20 @@ fn run() -> Result<(), Box<dyn Error>> {
         );
         if let Step::System { command, .. } = event {
             if let Some(assets) = &mut platform_assets {
+                if let Some(event) = scene.fade().try_wait(&mut machine)? {
+                    if event == Step::Yield {
+                        let Some(delta) = frame_ms else {
+                            println!(
+                                "# WAIT fade at pc=0x{:x}; PC and stack preserved; supply --frame-ms to advance engine frames",
+                                machine.pc()
+                            );
+                            return Ok(());
+                        };
+                        scene.advance_frame(delta);
+                        println!("# frame delta_ms={delta} fade={:?}", scene.fade().current());
+                    }
+                    continue;
+                }
                 let cursors = bootstrap
                     .as_ref()
                     .map(Bootstrap::cursor_names)

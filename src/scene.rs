@@ -84,8 +84,15 @@ impl Default for DrawState {
 pub struct SceneHost {
     clear: ClearState,
     objects: BTreeMap<u8, SceneObject>,
+    fade: crate::fade::FadeHost,
 }
 impl SceneHost {
+    pub fn fade(&self) -> &crate::fade::FadeHost {
+        &self.fade
+    }
+    pub fn advance_frame(&mut self, delta: u32) {
+        self.fade.advance(delta);
+    }
     pub fn clear(&self) -> ClearState {
         self.clear
     }
@@ -96,6 +103,9 @@ impl SceneHost {
         &self.objects
     }
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
+        if self.fade.try_handle(vm)? {
+            return Ok(true);
+        }
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(false);
         };

@@ -39,6 +39,8 @@ struct App<'a> {
     exit_after: Option<Duration>,
     deadline: Option<Instant>,
     preview_image: Option<RgbaImage>,
+    next_frame: Instant,
+    last_frame: Instant,
 }
 impl App<'_> {
     fn fail(&mut self, el: &ActiveEventLoop, error: impl std::fmt::Display) {
@@ -119,10 +121,12 @@ impl ApplicationHandler for App<'_> {
             self.context = Some(context);
             self.window = Some(window.clone());
             self.deadline = self.exit_after.map(|d| Instant::now() + d);
+            self.last_frame = Instant::now();
+            self.next_frame = self.last_frame;
             window.set_visible(true);
             window.request_redraw();
             println!(
-                "# native window created; explicit_image_preview={}; static 2D scene viewport=1280x720",
+                "# native window created; explicit_image_preview={}; 2D scene viewport=1280x720",
                 self.preview_image.is_some()
             );
             Ok(())
@@ -218,6 +222,17 @@ impl ApplicationHandler for App<'_> {
         if !self.halted
             && let Some(window) = &self.window
         {
+            let now = Instant::now();
+            if now < self.next_frame {
+                el.set_control_flow(ControlFlow::WaitUntil(self.next_frame));
+                return;
+            }
+            let delta = now
+                .duration_since(self.last_frame)
+                .as_millis()
+                .min(u128::from(u32::MAX)) as u32;
+            self.last_frame = now;
+            self.next_frame = now + Duration::from_millis(16);
             let window = window.clone();
             let start = Instant::now();
             while start.elapsed() < Duration::from_millis(8) {
@@ -226,7 +241,12 @@ impl ApplicationHandler for App<'_> {
                     event_loop: el,
                     encoding: self.encoding,
                 };
-                match self.startup.tick(&mut backend) {
+                let had_fade = self.startup.scene().fade().current().is_some();
+                let outcome = self.startup.tick(&mut backend);
+                if !had_fade && let Some(fade) = self.startup.scene().fade().current() {
+                    println!("# fade started {fade:?}");
+                }
+                match outcome {
                     Ok(StartupEvent::Progress) => {}
                     Ok(StartupEvent::Yield) => break,
                     Ok(StartupEvent::MainEnteredWithoutSnapshot) => println!(
@@ -260,12 +280,19 @@ impl ApplicationHandler for App<'_> {
                     }
                 }
             }
+            if !self.halted {
+                let had_fade = self.startup.scene().fade().current().is_some();
+                self.startup.advance_frame(delta);
+                if had_fade && self.startup.scene().fade().current().is_none() {
+                    println!(
+                        "# fade completed and removed; elapsed wall time drives frame updates"
+                    );
+                }
+            }
             window.request_redraw();
         }
         if !self.halted {
-            el.set_control_flow(ControlFlow::WaitUntil(
-                Instant::now() + Duration::from_millis(1),
-            ));
+            el.set_control_flow(ControlFlow::WaitUntil(self.next_frame));
         } else if let Some(deadline) = self.deadline {
             el.set_control_flow(ControlFlow::WaitUntil(deadline));
         } else {
@@ -280,7 +307,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     )?;
     if root == "--help" {
         println!(
-            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>] [--continue-without-snapshot] [--rand-seed <seed>]\nNative research preview only. Runs bounded startup with virtual tick 0; stops at unknown commands or main snapshot barrier. --continue-without-snapshot enters main without building a save image; saving stays unavailable. --rand-seed sets the CRT rand() research seed (default 0). Without an explicit image, presents the verified static top-level 2D scene on a 1280x720 research viewport; child rendering, transforms, transitions and alternate blend modes remain unsupported. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. Raw window input is observed but not injected into CMVS opcodes. All game files read-only."
+            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>] [--continue-without-snapshot] [--rand-seed <seed>]\nNative research preview only. Runs bounded startup with virtual callback tick 0 and explicit wall-time scene updates; stops at unknown commands or main snapshot barrier. --continue-without-snapshot enters main without building a save image; saving stays unavailable. --rand-seed sets the CRT rand() research seed (default 0). Without an explicit image, presents the verified static top-level 2D scene on a 1280x720 research viewport; includes timed full-screen color fades; child rendering, transforms, other transitions and alternate blend modes remain unsupported. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. Raw window input is observed but not injected into CMVS opcodes. All game files read-only."
         );
         return Ok(());
     }
@@ -355,6 +382,8 @@ fn run() -> Result<(), Box<dyn Error>> {
         exit_after,
         deadline: None,
         preview_image,
+        next_frame: Instant::now(),
+        last_frame: Instant::now(),
     };
     let event_loop = EventLoop::new()?;
     event_loop.run_app(&mut app)?;

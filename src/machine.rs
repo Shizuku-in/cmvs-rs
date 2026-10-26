@@ -595,4 +595,13 @@ impl<'a> Machine<'a> {
             Step::Continue
         })
     }
+
+    /// Verified 0xa000 return: yield and increment repeat count without advancing PC or SP.
+    pub fn yield_pending_system(&mut self) -> Result<Step, DecodeError> {
+        if self.pending.is_none() {
+            return Err(error(self.pc, 0, "no pending system command"));
+        }
+        self.repeat_count = self.repeat_count.wrapping_add(1);
+        Ok(Step::Yield)
+    }
 }

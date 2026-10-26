@@ -1,6 +1,11 @@
-//! Minimal software presentation of verified static, top-level 2D objects.
+//! Software presentation of verified static 2D objects and full-screen color fades.
 //! Unsupported transforms, children and blend modes fail explicitly.
 use crate::{FormatError, MAX_PAYLOAD, raster::RgbaImage, scene::SceneHost};
+
+enum Layer<'a> {
+    Image(&'a crate::scene::ObjectImage, &'a [u32; 22], [i64; 4]),
+    Fade(&'a crate::fade::Fade),
+}
 
 /// Render in script coordinates. Window aspect fitting is a separate desktop policy.
 pub fn render(scene: &SceneHost, width: u32, height: u32) -> Result<RgbaImage, FormatError> {
@@ -42,7 +47,11 @@ pub fn render(scene: &SceneHost, width: u32, height: u32) -> Result<RgbaImage, F
         {
             return Err(FormatError("scene source rectangle outside image"));
         }
-        objects.push((d[10] as i32 as f32, image, d, [sx, sy, w, h]));
+        objects.push((d[10] as i32 as f32, Layer::Image(image, d, [sx, sy, w, h])));
+    }
+    // The engine enqueues the fade after ordinary object slots (0x140015da0).
+    if let Some(fade) = scene.fade().current() {
+        objects.push((fade.order as f32, Layer::Fade(fade)));
     }
     // 0x14003ddd0 inserts after equal keys, with larger orders first.
     objects.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -50,7 +59,22 @@ pub fn render(scene: &SceneHost, width: u32, height: u32) -> Result<RgbaImage, F
     for p in pixels.chunks_exact_mut(4) {
         p.copy_from_slice(&scene.clear().rgba());
     }
-    for (_, image, d, [sx, sy, w, h]) in objects {
+    for (_, layer) in objects {
+        let (image, d, [sx, sy, w, h]) = match layer {
+            Layer::Image(image, d, rect) => (image, d, rect),
+            Layer::Fade(fade) => {
+                let [b, g, r, _] = fade.color.to_le_bytes();
+                let alpha = fade.opacity.clamp(0, 255) as u32;
+                for p in pixels.chunks_exact_mut(4) {
+                    for (c, source) in [r, g, b].iter().enumerate() {
+                        p[c] =
+                            ((u32::from(*source) * alpha + u32::from(p[c]) * (255 - alpha) + 127)
+                                / 255) as u8;
+                    }
+                }
+                continue;
+            }
+        };
         let left = i64::from(d[8] as i32) - i64::from(d[6] as i16);
         let top = i64::from(d[9] as i32) - i64::from(d[7] as i16);
         for y in top.max(0)..(top + h).min(i64::from(height)) {

@@ -114,6 +114,10 @@ impl<'a> Startup<'a> {
     pub fn scene(&self) -> &SceneHost {
         &self.scene
     }
+    /// Explicit engine-frame update, separate from instruction execution and callback time.
+    pub fn advance_frame(&mut self, delta_ms: u32) {
+        self.scene.advance_frame(delta_ms);
+    }
     pub fn save_title(&self) -> &SaveTitle {
         &self.save_title
     }
@@ -162,6 +166,13 @@ impl<'a> Startup<'a> {
             });
         };
         let id = self.bootstrap.settings().get(&0x201d).copied();
+        if let Some(step) = self.scene.fade().try_wait(&mut self.machine)? {
+            return Ok(if step == Step::Yield {
+                StartupEvent::Yield
+            } else {
+                StartupEvent::Progress
+            });
+        }
         if self
             .system_host
             .try_handle(&mut self.machine, &mut self.system_source, id)?

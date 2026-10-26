@@ -7,6 +7,7 @@ pub mod cursor;
 #[cfg(feature = "desktop")]
 pub mod desktop;
 pub mod evaluate;
+pub mod fade;
 pub mod gesture;
 pub mod image;
 pub mod lzss;

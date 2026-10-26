@@ -40,7 +40,7 @@ cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-`--payload` 仅允许创建新文件，输出不包含原始头部。默认 183 项测试、启用 desktop 后 188 项测试和严格 Clippy 检查通过。
+`--payload` 仅允许创建新文件，输出不包含原始头部。默认 192 项测试、启用 desktop 后 197 项测试和严格 Clippy 检查通过。
 真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
 `ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
 
@@ -141,7 +141,12 @@ cargo run --offline --features desktop --bin cmvs-desktop -- "E:/Download/AMATSU
 
 Windows 实测显示完整 Purple Software logo，截图与 Esc 退出已验证；第 944 次 step 在 logo.ps3 / PC=0x364ea 停于 0x2220。
 当前视口固定为本作研究用 1280×720，窗口按比例适配；这只是静态场景，不是完整开场动画。
-快照仍不可用，音频仍只记录，原游戏只读。下一步核对 0x2220 及后续计时/转场行为。
+快照仍不可用，音频仍只记录，原游戏只读。该静态阶段之后已继续实现纯色淡入/淡出（见下文）。
+
+新增 `fade`：0x2220–0x2223 全屏纯色覆盖层及 0x2224 的无输入等待分支，按显式帧增量更新透明度。
+桌面上述命令现可完成 logo 的 2000ms 黑色淡入，随后停于 logo.ps3 / 0x36512 / 0x20b1；帧率受当前软件绘制耗时影响。
+trace 在完整选项后加 `--frame-ms 16` 可复现 1077 步停点；未提供时冻结时间并在等待处停止，不用指令次数模拟时间。
+活动等待的输入跳过、真实音频、其他转场与完整开场仍未实现；下一步核对 0x20b1。
 
 目前提供研究工具和原生桌面预览，**尚不能运行游戏剧情**，也没有生成 iOS/Android 应用。
 

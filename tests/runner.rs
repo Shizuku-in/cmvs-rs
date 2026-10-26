@@ -206,3 +206,42 @@ fn missing_system_file_is_a_verified_no_change_return() {
         }
     ));
 }
+
+#[test]
+fn startup_fade_wait_needs_explicit_frames_and_resumes_after_removal() {
+    let mut code = vec![];
+    for value in [9u32, 100, 0, 1] {
+        code.extend(0x440u16.to_le_bytes());
+        code.extend(4u16.to_le_bytes());
+        code.extend(value.to_le_bytes());
+    }
+    code.extend(0x2220u16.to_le_bytes());
+    code.extend(0x440u16.to_le_bytes());
+    code.extend(4u16.to_le_bytes());
+    code.extend(0u32.to_le_bytes());
+    code.extend(0x2224u16.to_le_bytes());
+    code.extend(0x27ffu16.to_le_bytes());
+    let root = Root::new("fade-wait", &code, b"");
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let mut backend = RecordingBackend::default();
+    for _ in 0..6 {
+        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    }
+    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
+    let pc = run.machine().pc();
+    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
+    assert_eq!(run.machine().pc(), pc);
+    assert_eq!(run.scene().fade().current().unwrap().elapsed, 0);
+    run.advance_frame(100);
+    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(run.machine().pc(), pc + 2);
+    assert!(run.scene().fade().current().is_none());
+    assert!(matches!(
+        run.tick(&mut backend).unwrap(),
+        StartupEvent::Unhandled {
+            command: 0x27ff,
+            ..
+        }
+    ));
+}

@@ -64,3 +64,10 @@ cargo run --offline --features desktop --bin cmvs-desktop -- "E:/Download/AMATSU
 本机实测不使用 --preview-image 显示完整白底 Purple Software logo，前置窗口截图确认，Escape 正常退出。
 日志停于第 944 次 step、logo.ps3 / 0x364ea / 0x2220，14 个回调；并非完整品牌开场播放成功。
 默认不加 --continue-without-snapshot 时仍停于第 479 步的快照断点，窗口保持响应；存档镜像未实现。
+
+## 全屏纯色淡入/淡出
+
+同一条 --continue-without-snapshot 命令现会执行 logo 的 2000ms 黑色覆盖层淡出，完成后停在 0x36512 / 0x20b1。
+帧调度约 16ms，场景按实际经过的毫秒推进；debug 软件绘制耗时可能使帧率低于 60fps，原版全引擎调度尚未复现。
+桌面输入仍只观察，活动的 0x2224 非零参数等待未接入；真实 logo 此处使用 0，无需输入跳过。
+默认快照断点保持，命令行的 --virtual-tick 也仍不代表整个引擎时钟。

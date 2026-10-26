@@ -389,3 +389,21 @@ fn static_scene_opacity_and_unsupported_blend_are_explicit() {
     scene_command(&mut code, 0x204b, &[1, u32::MAX, 2]);
     assert!(cmvs_rs::scene_render::render(&build_scene(&code), 2, 1).is_err());
 }
+
+#[test]
+fn fade_joins_object_order_and_equal_keys_follow_slot_objects() {
+    for (order, covered) in [(11, false), (10, true), (9, true)] {
+        let mut code = loads(1, &[0]);
+        scene_command(&mut code, 0x2040, &[1]);
+        scene_command(&mut code, 0x2044, &[1, u32::MAX, 0, 0, 2, 1]);
+        scene_command(&mut code, 0x2047, &[1, u32::MAX, 10]);
+        scene_command(&mut code, 0x2220, &[1, 0, 2000, order]);
+        let scene = build_scene(&code);
+        let frame = cmvs_rs::scene_render::render(&scene, 2, 1).unwrap();
+        if covered {
+            assert_eq!(frame.pixels(), &[0, 0, 0, 255, 0, 0, 0, 255]);
+        } else {
+            assert_eq!(frame, opaque_pixels());
+        }
+    }
+}
