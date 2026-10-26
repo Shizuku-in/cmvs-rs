@@ -1,5 +1,7 @@
 //! Optional native window/input adapter. Static scene rendering lives in `scene_render`.
-use crate::{
+mod app;
+pub use app::run_cli;
+use cmvs_core::{
     FormatError,
     cursor::CursorBitmap,
     platform::{MAX_PLATFORM_ASSET, PlatformBackend, PlatformRequest},

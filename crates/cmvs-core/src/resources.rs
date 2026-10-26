@@ -1,8 +1,6 @@
-//! Read-only image lookup and decoding for 0x2030, following the image manager (+4760):
-//! 0x140036820 tries the ten 0x2011 entries in slot order and takes the first hit.
-use crate::{
-    FormatError, MAX_PAYLOAD, cpz::Cpz6Index, pb3, platform::resolve_under, raster::RgbaImage,
-};
+//! Bounded read-only directory/CPZ lookup shared by image and audio backends.
+//! Slot order, case folding, checksums and path confinement follow the existing reader.
+use crate::{MAX_PAYLOAD, cpz::Cpz6Index, platform::resolve_under};
 use std::{
     collections::BTreeMap,
     error::Error,
@@ -11,12 +9,30 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// 0x2011 / 0x1400717c0 accepts slots below 10 (image manager +4232, stride 2056).
-pub const IMAGE_ENTRIES: u32 = 10;
-
-pub trait ImageSource {
-    /// Raw bytes from the first entry holding `name`, or Ok(None) when no entry does
-    /// (the original then shows a MessageBox).
+/// Verified engine registration families. Images have ten slots; SE/BGM have four.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResourceKind {
+    Image,
+    SoundEffect,
+    Music,
+}
+impl ResourceKind {
+    pub const fn command(self) -> u16 {
+        match self {
+            Self::Image => 0x2011,
+            Self::SoundEffect => 0x2012,
+            Self::Music => 0x2013,
+        }
+    }
+    pub const fn slot_count(self) -> u32 {
+        match self {
+            Self::Image => 10,
+            Self::SoundEffect | Self::Music => 4,
+        }
+    }
+}
+pub trait ResourceSource {
+    /// Return the first hit, None for missing resources, or an explicit format/I/O error.
     fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>>;
 }
 
@@ -28,16 +44,16 @@ struct OpenArchive {
 
 /// Archives open lazily per entry slot. A slot registered again with another path is
 /// reopened, as 0x140035b00 destroys the old archive object.
-pub struct ImageArchives {
+pub struct ResourceArchives {
     root: PathBuf,
-    open: BTreeMap<u32, OpenArchive>,
+    open: BTreeMap<(u16, u32), OpenArchive>,
 }
 
-impl ImageArchives {
+impl ResourceArchives {
     pub fn new(root: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
         let root = root.as_ref().canonicalize()?;
         if !root.is_dir() {
-            return Err("image root is not a directory".into());
+            return Err("resource root is not a directory".into());
         }
         Ok(Self {
             root,
@@ -45,31 +61,17 @@ impl ImageArchives {
         })
     }
 
-    /// Binds the 0x2011 registrations recorded by `Bootstrap::paths`.
+    /// Bind the explicit registrations for one engine resource family.
     pub fn with_paths<'a>(
         &'a mut self,
         paths: &'a BTreeMap<(u16, u32), Vec<u8>>,
-    ) -> Registered<'a> {
-        Registered {
+        kind: ResourceKind,
+    ) -> RegisteredResources<'a> {
+        RegisteredResources {
             archives: self,
             paths,
-            command: 0x2011,
-            entries: IMAGE_ENTRIES,
-        }
-    }
-    /// Shared bounded directory/CPZ lookup, also used by the four-slot audio roots.
-    #[cfg(feature = "audio-output")]
-    pub(crate) fn with_entries<'a>(
-        &'a mut self,
-        paths: &'a BTreeMap<(u16, u32), Vec<u8>>,
-        command: u16,
-        entries: u32,
-    ) -> Registered<'a> {
-        Registered {
-            archives: self,
-            paths,
-            command,
-            entries,
+            command: kind.command(),
+            entries: kind.slot_count(),
         }
     }
 
@@ -83,7 +85,7 @@ impl ImageArchives {
             .take(MAX_PAYLOAD as u64 + 1)
             .read_to_end(&mut bytes)?;
         if bytes.len() > MAX_PAYLOAD {
-            return Err("image file exceeds research limit".into());
+            return Err("resource file exceeds research limit".into());
         }
         Ok(Some(bytes))
     }
@@ -92,19 +94,24 @@ impl ImageArchives {
     /// (the original exits). Resources are checksum-verified as with PACK_DATA_CHECK=1.
     fn read_archive(
         &mut self,
+        command: u16,
         slot: u32,
         path: &[u8],
         name: &[u8],
     ) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
-        if self.open.get(&slot).is_none_or(|open| open.path != path) {
-            self.open.remove(&slot);
+        if self
+            .open
+            .get(&(command, slot))
+            .is_none_or(|open| open.path != path)
+        {
+            self.open.remove(&(command, slot));
             let Some(resolved) = resolve_present(&self.root, path)? else {
                 return Ok(None);
             };
             let mut file = File::open(resolved)?;
             let index = Cpz6Index::read(&mut file)?;
             self.open.insert(
-                slot,
+                (command, slot),
                 OpenArchive {
                     path: path.to_vec(),
                     file,
@@ -112,7 +119,7 @@ impl ImageArchives {
                 },
             );
         }
-        let open = self.open.get_mut(&slot).expect("opened above");
+        let open = self.open.get_mut(&(command, slot)).expect("opened above");
         let Some(entry) = open.index.lookup(name)? else {
             return Ok(None);
         };
@@ -133,14 +140,14 @@ fn resolve_present(root: &Path, name: &[u8]) -> Result<Option<PathBuf>, Box<dyn 
     }
 }
 
-pub struct Registered<'a> {
-    archives: &'a mut ImageArchives,
+pub struct RegisteredResources<'a> {
+    archives: &'a mut ResourceArchives,
     paths: &'a BTreeMap<(u16, u32), Vec<u8>>,
     command: u16,
     entries: u32,
 }
 
-impl ImageSource for Registered<'_> {
+impl ResourceSource for RegisteredResources<'_> {
     fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
         for slot in 0..self.entries {
             let Some(path) = self
@@ -154,44 +161,12 @@ impl ImageSource for Registered<'_> {
             let hit = if path.ends_with(b"\\") {
                 self.archives.read_file(&[path.as_slice(), name].concat())?
             } else {
-                self.archives.read_archive(slot, path, name)?
+                self.archives.read_archive(self.command, slot, path, name)?
             };
             if hit.is_some() {
                 return Ok(hit);
             }
         }
         Ok(None)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DecodedImage {
-    pub pixels: RgbaImage,
-    /// Image info +24 (object image +1152): the source has 32 bits per pixel.
-    pub alpha: bool,
-}
-
-/// 0x140036700 picks the codec by magic; only PB3B type 1 decodes here, other known codecs
-/// are explicit errors. Ok(None) is the original quiet failure for an unknown magic or a
-/// PB3 type outside 1..8: the load returns 0 without a MessageBox.
-pub fn decode(bytes: &[u8]) -> Result<Option<DecodedImage>, FormatError> {
-    let unsupported = FormatError("image codec not implemented; only PB3 type 1 is supported");
-    let magic = bytes
-        .get(..4)
-        .ok_or(FormatError("image file shorter than its 4-byte magic"))?;
-    match magic {
-        b"PB3B" => {
-            let header = pb3::Header::parse(bytes)?;
-            match header.kind {
-                1 => Ok(Some(DecodedImage {
-                    pixels: pb3::decode(bytes)?,
-                    alpha: header.bpp == 32,
-                })),
-                2..=8 => Err(unsupported),
-                _ => Ok(None),
-            }
-        }
-        [0x89, b'P', b'N', b'G'] | b"MSK0" | b"PB2A" | [b'B', b'M', ..] => Err(unsupported),
-        _ => Ok(None),
     }
 }

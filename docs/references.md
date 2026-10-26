@@ -116,3 +116,6 @@ Rust 解码依同一哈希二进制的 `0x140037620`、`0x1400ab650`、`0x1400a0
 MOG_InputMemory2（`0x180001b60`）、分段读取（`0x1800013e0`）、MOG_Replay（`0x180002770`）；只作行为事实，不执行或分发 DLL。
 使用本机 pefile 2023.2.7（MIT）和 Capstone（BSD）只读检查导出表与机器码；原版 DLL、IDA 数据库、反汇编输出不纳入 Git。
 独立 Python/NumPy 调用本机 FFmpeg 比较四份真实音轨的完整浮点 PCM，FFmpeg 仅为外部验证工具，不是运行依赖；结果与精度限制见 audio-output.md。
+
+Workspace 阶段仅移动现有实现、整理通用资源接口及 feature 转发，未新增外部源码或参考项目；既有来源提交、许可及 registry 依赖版本不变。
+源码位置改为 crates/cmvs-core、crates/cmvs-audio、crates/cmvs-desktop，根包保留工具与兼容重导出；结构与回归证据见 workspace.md。

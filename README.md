@@ -41,11 +41,11 @@ cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-`--payload` 仅允许创建新文件，输出不包含原始头部。默认 269 项测试、启用 desktop 后 274 项、再启用 audio-output 后 279 项测试和严格 Clippy 检查通过。
+`--payload` 仅允许创建新文件，输出不包含原始头部。默认 272 项测试、启用 desktop 后 277 项、再启用 audio-output 后 282 项测试和严格 Clippy 检查通过。
 真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
 `ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
 
-源代码在 `src/`，Rust 测试在 `tests/*.rs`；Python 工具保留为研究对照。
+项目已拆为 workspace：`crates/cmvs-core` 为无依赖核心，`crates/cmvs-audio` 为音频后端，`crates/cmvs-desktop` 为桌面后端与运行入口。根 `src/` 保留检查工具和 `cmvs_rs` 兼容重导出，现有命令与 feature 名不变。Rust 集成测试仍在 `tests/*.rs`；Python 工具保留为研究对照。结构、依赖边界与全 workspace 检查命令见 [workspace](docs/workspace.md)。
 架构见 [architecture](docs/architecture.md)，参考来源见 [references](docs/references.md)。
 当前仅建立本地 Git 仓库，未配置远端或推送。
 

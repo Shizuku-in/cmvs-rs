@@ -1,10 +1,11 @@
 //! Optional Rust Vorbis streaming and native output. Engine state stays in `audio`.
-use crate::{
+pub mod vorbis;
+use crate::vorbis::Vorbis;
+use cmvs_core::{
     MAX_PAYLOAD,
     audio::{AudioBackend, AudioRequest, MovieAudioClock, SE_CHANNELS},
-    image::{ImageArchives, ImageSource},
     platform::resolve_under,
-    vorbis::Vorbis,
+    resources::{ResourceArchives, ResourceKind, ResourceSource},
 };
 use rodio::{OutputStream, OutputStreamBuilder, Sink, Source};
 use std::{
@@ -224,7 +225,7 @@ impl Channel {
 pub struct NativeAudio {
     root: PathBuf,
     paths: BTreeMap<(u16, u32), Vec<u8>>,
-    archives: ImageArchives,
+    archives: ResourceArchives,
     se: [Option<Channel>; SE_CHANNELS],
     bgm: [Option<Channel>; 2],
     movie: Option<Channel>,
@@ -251,7 +252,7 @@ impl NativeAudio {
         Ok(Self {
             root: root.canonicalize()?,
             paths: BTreeMap::new(),
-            archives: ImageArchives::new(root)?,
+            archives: ResourceArchives::new(root)?,
             se: std::array::from_fn(|_| None),
             bgm: std::array::from_fn(|_| None),
             movie: None,
@@ -260,16 +261,14 @@ impl NativeAudio {
             stream,
         })
     }
-    fn load(&mut self, command: u16, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    fn load(&mut self, kind: ResourceKind, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
         if name.is_empty() {
             return Ok(None);
         }
         if !name.to_ascii_lowercase().ends_with(b".ogg") {
             return Err("native audio supports verified Ogg Vorbis resources only".into());
         }
-        self.archives
-            .with_entries(&self.paths, command, 4)
-            .read(name)
+        self.archives.with_paths(&self.paths, kind).read(name)
     }
     fn prepare(&self, program: VorbisProgram, volume: u32, fade_ms: u32) -> Channel {
         let fault: Fault = Arc::default();
@@ -350,7 +349,7 @@ impl AudioBackend for NativeAudio {
         if usize::from(*channel) >= SE_CHANNELS {
             return Err("SE channel out of range".into());
         }
-        let data = self.load(0x2012, name)?;
+        let data = self.load(ResourceKind::SoundEffect, name)?;
         let Some(data) = data else {
             self.se[*channel as usize] = None;
             return Ok(false);
@@ -408,13 +407,13 @@ impl AudioBackend for NativeAudio {
             return Err("BGM channel out of range".into());
         }
         let first = self
-            .load(0x2013, primary)?
+            .load(ResourceKind::Music, primary)?
             .ok_or("BGM primary resource missing")?;
         let second = if secondary.is_empty() {
             None
         } else {
             Some(
-                self.load(0x2013, secondary)?
+                self.load(ResourceKind::Music, secondary)?
                     .ok_or("BGM loop resource missing")?,
             )
         };

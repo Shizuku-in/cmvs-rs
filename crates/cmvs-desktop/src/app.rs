@@ -1,0 +1,450 @@
+use crate::{DesktopInput, InputEvent, NativeBackend, TextEncoding};
+use cmvs_core::{
+    cpz::Cpz6Index,
+    cursor::CursorBitmap,
+    pb3,
+    platform::{DirectoryAssets, PlatformAssets, PlatformBackend, PlatformRequest},
+    raster::RgbaImage,
+    runner::{SnapshotPolicy, Startup, StartupEvent, load_start},
+};
+use std::{
+    env,
+    error::Error,
+    fs::{File, OpenOptions},
+    io::Write,
+    num::NonZeroU32,
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+use winit::{
+    application::ApplicationHandler,
+    dpi::LogicalSize,
+    event::{ElementState, MouseScrollDelta, WindowEvent},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    keyboard::{KeyCode, PhysicalKey},
+    window::{Window, WindowId},
+};
+
+struct App<'a> {
+    surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
+    context: Option<softbuffer::Context<Arc<Window>>>,
+    window: Option<Arc<Window>>,
+    startup: Startup<'a>,
+    assets: DirectoryAssets,
+    encoding: TextEncoding,
+    input: DesktopInput,
+    halted: bool,
+    error: Option<String>,
+    exit_after: Option<Duration>,
+    deadline: Option<Instant>,
+    preview_image: Option<RgbaImage>,
+    next_frame: Instant,
+    last_frame: Instant,
+}
+impl App<'_> {
+    fn fail(&mut self, el: &ActiveEventLoop, error: impl std::fmt::Display) {
+        self.error = Some(error.to_string());
+        el.exit();
+    }
+    fn redraw(&mut self) -> Result<(), Box<dyn Error>> {
+        let window = self.window.as_ref().ok_or("no window")?;
+        let size = window.inner_size();
+        let (Some(w), Some(h)) = (NonZeroU32::new(size.width), NonZeroU32::new(size.height)) else {
+            return Ok(());
+        };
+        if u64::from(size.width) * u64::from(size.height) > 16 * 1024 * 1024 {
+            return Err("desktop surface exceeds research pixel limit".into());
+        }
+        let surface = self.surface.as_mut().ok_or("no surface")?;
+        surface.resize(w, h)?;
+        let mut buffer = surface.buffer_mut()?;
+        for (i, pixel) in buffer.iter_mut().enumerate() {
+            let x = i % size.width as usize;
+            let y = i / size.width as usize;
+            *pixel = if (x / 32 + y / 32).is_multiple_of(2) {
+                0x263447
+            } else {
+                0x2c3c50
+            };
+        }
+        if let Some(image) = &self.preview_image {
+            image.draw_fit(&mut buffer, size.width, size.height)?;
+        } else {
+            // Amatsutsumi research viewport. Scaling to a resized window is presentation policy.
+            let image = self.startup.render_frame()?;
+            buffer.fill(0);
+            image.draw_fit(&mut buffer, size.width, size.height)?;
+        }
+        buffer.present()?;
+        Ok(())
+    }
+    fn preview_cursor(&mut self, el: &ActiveEventLoop, id: u32) -> Result<(), Box<dyn Error>> {
+        let bitmap = if id == 0 {
+            None
+        } else {
+            let name = self
+                .startup
+                .bootstrap()
+                .cursor_names()
+                .get((id - 1) as usize)
+                .ok_or("preview cursor not registered")?;
+            Some(Arc::new(CursorBitmap::decode(&self.assets.read(name)?)?))
+        };
+        let mut backend = NativeBackend {
+            window: self.window.as_ref().ok_or("no window")?,
+            event_loop: el,
+            encoding: self.encoding,
+        };
+        backend.apply(&PlatformRequest::Cursor { id, bitmap })?;
+        println!("# preview-only cursor shortcut={id}; VM state unchanged");
+        Ok(())
+    }
+}
+impl ApplicationHandler for App<'_> {
+    fn resumed(&mut self, el: &ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+        let result = (|| -> Result<(), Box<dyn Error>> {
+            let window = Arc::new(
+                el.create_window(
+                    Window::default_attributes()
+                        .with_title("cmvs-rs")
+                        .with_inner_size(LogicalSize::new(960.0, 540.0))
+                        .with_visible(false),
+                )?,
+            );
+            let context = softbuffer::Context::new(window.clone())?;
+            let surface = softbuffer::Surface::new(&context, window.clone())?;
+            self.surface = Some(surface);
+            self.context = Some(context);
+            self.window = Some(window.clone());
+            self.deadline = self.exit_after.map(|d| Instant::now() + d);
+            self.last_frame = Instant::now();
+            self.next_frame = self.last_frame;
+            window.set_visible(true);
+            window.request_redraw();
+            println!(
+                "# native window created; explicit_image_preview={}; 2D scene viewport=1280x720",
+                self.preview_image.is_some()
+            );
+            Ok(())
+        })();
+        if let Err(error) = result {
+            self.fail(el, error);
+        }
+    }
+    fn window_event(&mut self, el: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        if self.window.as_ref().is_none_or(|w| w.id() != id) {
+            return;
+        }
+        match event {
+            WindowEvent::CloseRequested => {
+                println!("# close requested");
+                el.exit();
+            }
+            WindowEvent::RedrawRequested => {
+                if let Err(error) = self.redraw() {
+                    self.fail(el, error)
+                }
+            }
+            WindowEvent::Resized(_) => self.window.as_ref().expect("window").request_redraw(),
+            WindowEvent::Focused(focus) => {
+                self.input.push(InputEvent::Focus(focus));
+                println!("# input focus={focus}");
+            }
+            WindowEvent::CursorMoved { position, .. } => self.input.push(InputEvent::Pointer {
+                x: position.x,
+                y: position.y,
+            }),
+            WindowEvent::MouseInput { state, button, .. } => {
+                let button = format!("{button:?}");
+                println!(
+                    "# input button={button} pressed={}",
+                    state == ElementState::Pressed
+                );
+                self.input.push(InputEvent::Button {
+                    button,
+                    pressed: state == ElementState::Pressed,
+                });
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                let (x, y) = match delta {
+                    MouseScrollDelta::LineDelta(x, y) => (f64::from(x), f64::from(y)),
+                    MouseScrollDelta::PixelDelta(p) => (p.x, p.y),
+                };
+                self.input.push(InputEvent::Wheel { x, y });
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                let pressed = event.state == ElementState::Pressed;
+                println!(
+                    "# input key={:?} pressed={pressed} repeat={}",
+                    event.physical_key, event.repeat
+                );
+                self.input.push(InputEvent::Key {
+                    physical: format!("{:?}", event.physical_key),
+                    pressed,
+                    repeat: event.repeat,
+                });
+                if pressed && !event.repeat {
+                    if event.physical_key == PhysicalKey::Code(KeyCode::Escape) {
+                        el.exit();
+                    } else if self.halted {
+                        let id = match event.physical_key {
+                            PhysicalKey::Code(KeyCode::F1) => Some(0),
+                            PhysicalKey::Code(KeyCode::F2) => Some(1),
+                            PhysicalKey::Code(KeyCode::F3) => Some(2),
+                            PhysicalKey::Code(KeyCode::F4) => Some(3),
+                            PhysicalKey::Code(KeyCode::F5) => Some(4),
+                            _ => None,
+                        };
+                        if let Some(id) = id
+                            && let Err(error) = self.preview_cursor(el, id)
+                        {
+                            eprintln!("# cursor preview rejected: {error}");
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    fn about_to_wait(&mut self, el: &ActiveEventLoop) {
+        if el.exiting() {
+            return;
+        }
+        if self.deadline.is_some_and(|d| Instant::now() >= d) {
+            println!("# diagnostic exit deadline reached");
+            el.exit();
+            return;
+        }
+        if !self.halted
+            && let Some(window) = &self.window
+        {
+            let now = Instant::now();
+            if now < self.next_frame {
+                el.set_control_flow(ControlFlow::WaitUntil(self.next_frame));
+                return;
+            }
+            let delta = now
+                .duration_since(self.last_frame)
+                .as_millis()
+                .min(u128::from(u32::MAX)) as u32;
+            self.last_frame = now;
+            self.next_frame = now + Duration::from_millis(16);
+            let window = window.clone();
+            let start = Instant::now();
+            while start.elapsed() < Duration::from_millis(8) {
+                let mut backend = NativeBackend {
+                    window: &window,
+                    event_loop: el,
+                    encoding: self.encoding,
+                };
+                let had_fade = self.startup.scene().fade().current().is_some();
+                let outcome = self.startup.tick(&mut backend);
+                if !had_fade && let Some(fade) = self.startup.scene().fade().current() {
+                    println!("# fade started {fade:?}");
+                }
+                match outcome {
+                    Ok(StartupEvent::Progress) => {}
+                    Ok(StartupEvent::Yield) => break,
+                    Ok(StartupEvent::MainEnteredWithoutSnapshot) => println!(
+                        "# main entered at step {}; snapshot NOT built, saving unavailable",
+                        self.startup.steps()
+                    ),
+                    Ok(event) => {
+                        self.halted = true;
+                        for (slot, object) in self.startup.scene().objects() {
+                            println!(
+                                "# scene object[{slot}] draw={:?} children={}",
+                                object.draw,
+                                object.children.len()
+                            );
+                        }
+                        println!(
+                            "# STARTUP STOP {event:?}; steps={} slot={} script={} pc=0x{:x} callbacks={} known_integers={} known_bits={}",
+                            self.startup.steps(),
+                            self.startup.machine().current_slot(),
+                            self.startup.machine().current_name().escape_ascii(),
+                            self.startup.machine().pc(),
+                            self.startup.control().callbacks().len(),
+                            self.startup.machine().state().integers().len(),
+                            self.startup.machine().state().bits().len()
+                        );
+                        break;
+                    }
+                    Err(error) => {
+                        self.fail(el, error);
+                        return;
+                    }
+                }
+            }
+            if !self.halted {
+                let had_fade = self.startup.scene().fade().current().is_some();
+                if let Err(error) = self.startup.advance_decoded_frame(delta) {
+                    self.fail(el, error);
+                    return;
+                }
+                if had_fade && self.startup.scene().fade().current().is_none() {
+                    println!(
+                        "# fade completed and removed; elapsed wall time drives frame updates"
+                    );
+                }
+            }
+            window.request_redraw();
+        }
+        if !self.halted {
+            el.set_control_flow(ControlFlow::WaitUntil(self.next_frame));
+        } else if let Some(deadline) = self.deadline {
+            el.set_control_flow(ControlFlow::WaitUntil(deadline));
+        } else {
+            el.set_control_flow(ControlFlow::Wait);
+        }
+    }
+}
+fn run() -> Result<(), Box<dyn Error>> {
+    let mut args = env::args_os().skip(1);
+    let root = args.next().ok_or(
+        "usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <seconds>]",
+    )?;
+    if root == "--help" {
+        println!(
+            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>] [--continue-without-snapshot] [--rand-seed <seed>] [--save-frame <new.png>] [--audio <record|native>]\nNative research preview only. Runs bounded startup with virtual callback tick 0 and explicit wall-time scene updates; stops at unknown commands or main snapshot barrier. --continue-without-snapshot enters main without building a save image; saving stays unavailable. --rand-seed sets the CRT rand() research seed (default 0). Without an explicit image, presents the verified 2D scene (top-level objects and their children) and CMV6 JBPD movies on a 1280x720 research viewport; includes timed full-screen color fades; use a release build for movie decoding; transforms, other transitions and alternate blend modes remain unsupported. --save-frame writes the frame shown at exit, in script coordinates, to a new PNG file (never overwritten); use it instead of screen captures to check rendering. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. --audio record (default) records only; --audio native requires the audio-output feature and opens the default device for Vorbis SE/BGM/movie playback, using audio source position for movie frames. Device-buffer latency is not calibrated. Raw window input is observed but not injected into CMVS opcodes. All game files read-only."
+        );
+        return Ok(());
+    }
+    let mut encoding = None;
+    let mut exit_after = None;
+    let mut preview_name = None;
+    let mut image_archive = None;
+    let mut snapshot_policy = SnapshotPolicy::Barrier;
+    let mut rand_seed = 0;
+    let mut save_frame = None;
+    let mut native_audio = false;
+    while let Some(flag) = args.next() {
+        if flag == "--continue-without-snapshot" {
+            snapshot_policy = SnapshotPolicy::ContinueWithoutImage;
+            continue;
+        }
+        let value = args.next().ok_or("missing option value")?;
+        if flag == "--encoding" {
+            encoding = Some(TextEncoding::parse(
+                value.to_str().ok_or("invalid encoding")?,
+            )?);
+        } else if flag == "--exit-after" {
+            let seconds = value.to_str().ok_or("invalid seconds")?.parse::<u64>()?;
+            if !(1..=3600).contains(&seconds) {
+                return Err("exit-after must be 1..3600 seconds".into());
+            }
+            exit_after = Some(Duration::from_secs(seconds));
+        } else if flag == "--rand-seed" {
+            rand_seed = value.to_str().ok_or("invalid seed")?.parse::<u32>()?;
+        } else if flag == "--preview-image" {
+            preview_name = Some(value);
+        } else if flag == "--image-archive" {
+            image_archive = Some(value);
+        } else if flag == "--save-frame" {
+            save_frame = Some(PathBuf::from(value));
+        } else if flag == "--audio" {
+            native_audio = match value.to_str() {
+                Some("native") => true,
+                Some("record") => false,
+                _ => return Err("audio must be native or record".into()),
+            };
+        } else {
+            return Err("unknown option".into());
+        }
+    }
+    let encoding = encoding.ok_or("select title encoding explicitly with --encoding")?;
+    let root = PathBuf::from(root).canonicalize()?;
+    let preview_image = match (preview_name, image_archive) {
+        (None, None) => None,
+        (Some(name), Some(path)) => {
+            let name = name
+                .to_str()
+                .filter(|v| v.is_ascii())
+                .ok_or("image basename must be ASCII")?;
+            let mut file = File::open(path)?;
+            let index = Cpz6Index::read(&mut file)?;
+            let bytes = index.read_entry(&mut file, index.find(name.as_bytes())?)?;
+            let image = pb3::decode(&bytes)?;
+            println!(
+                "# explicit PB3 preview={name} dimensions={}x{}; no VM draw opcode executed",
+                image.width(),
+                image.height()
+            );
+            Some(image)
+        }
+        _ => return Err("preview-image and image-archive must be supplied together".into()),
+    };
+    let script = load_start(&root)?;
+    let mut startup = Startup::new(&script, &root, 0)?;
+    startup.set_decode_movie_frames(true);
+    if native_audio {
+        #[cfg(feature = "audio-output")]
+        {
+            startup.set_audio_backend(Box::new(cmvs_audio::NativeAudio::new(&root)?));
+            println!(
+                "# native Vorbis audio enabled; movie frames follow the audio source position"
+            );
+        }
+        #[cfg(not(feature = "audio-output"))]
+        return Err("native audio requires --features desktop,audio-output".into());
+    }
+    startup.set_snapshot_policy(snapshot_policy);
+    startup.set_random_seed(rand_seed);
+    let mut app = App {
+        surface: None,
+        context: None,
+        window: None,
+        startup,
+        assets: DirectoryAssets::new(&root)?,
+        encoding,
+        input: DesktopInput::default(),
+        halted: false,
+        error: None,
+        exit_after,
+        deadline: None,
+        preview_image,
+        next_frame: Instant::now(),
+        last_frame: Instant::now(),
+    };
+    let event_loop = EventLoop::new()?;
+    event_loop.run_app(&mut app)?;
+    println!(
+        "# desktop exit; input_events={} dropped={} VM steps={} observed={:?}",
+        app.input.events().len(),
+        app.input.dropped(),
+        app.startup.steps(),
+        app.input.counts()
+    );
+    if let Some(error) = app.error {
+        return Err(error.into());
+    }
+    if let Some(path) = save_frame {
+        // Script coordinates before window fitting: exactly what the renderer produced.
+        let frame = match &app.preview_image {
+            Some(image) => image.clone(),
+            None => app.startup.render_frame()?,
+        };
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        file.write_all(&frame.to_png())?;
+        println!(
+            "# saved frame {}x{} to {}",
+            frame.width(),
+            frame.height(),
+            path.display()
+        );
+    }
+    Ok(())
+}
+pub fn run_cli() {
+    if let Err(error) = run() {
+        eprintln!("Error: {error}");
+        std::process::exit(1)
+    }
+}

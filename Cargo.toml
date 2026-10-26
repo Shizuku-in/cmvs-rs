@@ -1,3 +1,27 @@
+[workspace]
+members = ["crates/cmvs-core", "crates/cmvs-audio", "crates/cmvs-desktop"]
+default-members = ["."]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+
+[workspace.dependencies]
+encoding_rs = "=0.8.42"
+ico = "=0.5.0"
+softbuffer = "=0.4.8"
+winit = "=0.30.13"
+rodio = { version = "=0.21.1", default-features = false, features = ["playback"] }
+lewton = "=0.10.2"
+
 [package]
 name = "cmvs-rs"
 version = "0.1.0"
@@ -50,24 +74,18 @@ name = "cmvs-audio"
 path = "src/bin/audio.rs"
 required-features = ["audio-output"]
 
-[lints.rust]
-unsafe_code = "forbid"
-
-[lints.clippy]
-all = "warn"
+[lints]
+workspace = true
 
 [dependencies]
-encoding_rs = { version = "=0.8.42", optional = true }
-ico = { version = "=0.5.0", optional = true }
-softbuffer = { version = "=0.4.8", optional = true }
-winit = { version = "=0.30.13", optional = true }
-rodio = { version = "=0.21.1", default-features = false, features = ["playback"], optional = true }
-lewton = { version = "=0.10.2", optional = true }
+cmvs-core = { path = "crates/cmvs-core" }
+cmvs-audio = { path = "crates/cmvs-audio", optional = true }
+cmvs-desktop = { path = "crates/cmvs-desktop", optional = true }
 
 [features]
 default = []
-desktop = ["dep:winit", "dep:ico", "dep:encoding_rs", "dep:softbuffer"]
-audio-output = ["dep:rodio", "dep:lewton"]
+desktop = ["dep:cmvs-desktop"]
+audio-output = ["dep:cmvs-audio", "cmvs-desktop?/audio-output"]
 
 [[bin]]
 name = "cmvs-desktop"

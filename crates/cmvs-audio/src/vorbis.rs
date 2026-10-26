@@ -1,5 +1,5 @@
 //! Optional bounded streaming Vorbis adapter; codec implementation is lewton.
-use crate::MAX_PAYLOAD;
+use cmvs_core::MAX_PAYLOAD;
 use lewton::{inside_ogg::OggStreamReader, samples::InterleavedSamples};
 use std::{error::Error, io::Cursor, sync::Arc};
 

@@ -876,3 +876,24 @@ OP 音轨源位置从 10002ms 推进到 120087ms 后报告结束，第 140408 �
 新增 6 项测试：绝对音频时钟、回退保护、结束与失败回滚（1 项），可选合成 Vorbis、两段/单段循环、坏输入、淡变端点（5 项）。
 默认 269、desktop 274、desktop+audio-output 279 项测试和三套 all-targets Clippy -D warnings 通过，cargo fmt --check 通过。
 完整限制和启动命令见 [audio-output](audio-output.md)。下一步核对真实动作绑定并接入鼠标/键盘，推进「はじめから」后的剧情路径。
+
+## Workspace 拆分与共享资源接口
+
+在音频阶段提交 `8afc3c8` 后整理工程结构，尚未增加输入绑定、剧情指令或修改解码算法。
+新 `cmvs-core` 保存原格式/VM/场景/宿主接口，Cargo 清单无依赖；`cmvs-audio` 保存 Vorbis 和原生音频；`cmvs-desktop` 保存窗口适配器及运行入口。
+根 `cmvs-rs` 保留 CLI、集成测试和 `cmvs_rs` 兼容重导出；`desktop`/`audio-output` 功能及全部二进制名保持。
+音频可单独启用，弱依赖 feature 转发不会因此拉入桌面包。两类具体后端均不能反向成为 core 的依赖。
+
+将原 image 中的目录/CPZ6 阅读器抽到 core 的 `resources`，以 `ResourceKind` 固定图像十槽、SE/BGM 各四槽；
+缓存按 `(命令族, 槽号)` 隔离，image 保留包装接口，audio 直接使用通用读取器，消除跨 crate 私有接口耦合。
+文件边界、校验和、路径约束与首命中顺序保持；新三项合成测试验证资源族、槽数、查找和重新登记及路径约束。
+未新增外部依赖或参考代码，Cargo.lock 的全部 registry 包版本/校验值与拆分前相同。
+
+固定种子 0、16ms、160000 步，真实正常入口 trace 的 19111724 字节输出与拆分前完全相同：
+SHA-256 `de61dfb967c153cf34c768b9145a7f85e9c78cb406308280d1627e425380067d`。两次均因显式研究预算耗尽而返回 1；覆盖 OP 与返回标题。
+既有核心文件迁移前后经文件哈希确认未变（image/lib 的结构整理除外），CPZ 加密子模块也原样移动。
+真实 bgm41v 完整 PCM 及 OP 第 1000 帧 RGBA 的哈希仍与前阶段 Python 对照结果相同，详见 workspace.md。
+Windows 原生音频模式 24 秒检查通过：读取品牌/标题 SE 与 BGM，显示标题，22303 步后退出码 0；素材、trace 与输出仍不入 Git。
+
+默认 272 项、desktop 277 项、全 workspace 完整功能 282 项测试；原有 fmt/test/clippy 命令和 workspace 全功能格式/严格 Clippy 检查通过。
+这次仅整理结构，仍不能运行剧情；接下来可在 desktop 中接物理输入到 core 的 ActionInput，继续逐项核对原版语义。

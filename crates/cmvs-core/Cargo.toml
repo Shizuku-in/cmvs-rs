@@ -1,0 +1,9 @@
+[package]
+name = "cmvs-core"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Platform-independent CMVS formats, VM, scene and backend contracts"
+
+[lints]
+workspace = true

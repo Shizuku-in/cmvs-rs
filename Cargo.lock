@@ -230,15 +230,37 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
+name = "cmvs-audio"
+version = "0.1.0"
+dependencies = [
+ "cmvs-core",
+ "lewton",
+ "rodio",
+]
+
+[[package]]
+name = "cmvs-core"
+version = "0.1.0"
+
+[[package]]
+name = "cmvs-desktop"
+version = "0.1.0"
+dependencies = [
+ "cmvs-audio",
+ "cmvs-core",
+ "encoding_rs",
+ "ico",
+ "softbuffer",
+ "winit",
+]
+
+[[package]]
 name = "cmvs-rs"
 version = "0.1.0"
 dependencies = [
- "encoding_rs",
- "ico",
- "lewton",
- "rodio",
- "softbuffer",
- "winit",
+ "cmvs-audio",
+ "cmvs-core",
+ "cmvs-desktop",
 ]
 
 [[package]]

@@ -4,7 +4,7 @@
 
 当前正常入口在显式继续快照、记录音频和 16ms 帧推进下完成 logo 淡入、3500ms 停留、淡出、效果音通道停止及全部对象销毁，切换到 menu.ps3 并设置标题菜单标题；完成标题淡入并经过 30 秒无输入的按钮空闲循环、BGM 淡出与停止、OP 前的清理与镜头重置后切换到 op.ps3，第 42990 次 step 以 0x20c0 计时播放 op.cmv（trace 为计时模式，桌面另解码 JBPD 帧），第 141423 次 step 播完，经 1500ms 可跳过等待回到 main.ps3 与标题，无输入时循环往复。原停点记录：op.ps3 / 0x36278 / 0x20c0（播放 op.cmv，需 --steps 400000）。
 
-模块按以下顺序建立；前期保留单个 Cargo 包，形成稳定边界后再拆 crate：
+现已建立 workspace：`cmvs-core` 保存下列前三层及宿主接口，`cmvs-audio` 和 `cmvs-desktop` 保存具体后端；根 `cmvs-rs` 保留 CLI 和兼容重导出。core 无依赖，后端单向依赖 core。目录、功能转发及检查方式见 [workspace](workspace.md)。核心内部模块继续按以下层次组织：
 
 1. **格式与资源**：PS2A、CPZ6、PB3、CMV；显式小端字段、有界切片和原始文本字节。
 2. **VM**：PC、标签、栈、寄存器、表达式和控制流；不依赖窗口或音频设备。
@@ -107,7 +107,7 @@ NativeBackend 在活动事件循环中应用窗口请求，先解码/验证数�
 桌面 `--image-archive/--preview-image` 使用既有 CPZ6 阅读器读取唯一 basename，输出仅保留内存，不写游戏目录。
 没有将预览图写入引擎快照，也没有将其伪装成脚本请求的当前场景。
 
-`image` 是 0x2030 的只读资源层：`ImageSource` 抽象“按名取首个命中”，`ImageArchives` 按 0x2011 注册顺序
+`image` 是 0x2030 的图像资源视图与解码分派层（共享 I/O 已迁至 `resources`）：`ImageSource` 抽象“按名取首个命中”，`ImageArchives` 按 0x2011 注册顺序
 查找目录与 CPZ6 归档（惰性打开、按槽缓存），`decode` 按魔数分派。路径校验与平台素材共用 `platform::resolve_under`。
 
 `State` 的表达式事务使用撤销日志：写入前记录旧值，失败逆序恢复，不再整体克隆状态；嵌套求值共享外层日志。
