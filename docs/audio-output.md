@@ -87,3 +87,5 @@ Windows 原生设备报告 192000 Hz / 双声道，由后端重采样。175 秒�
 默认 269 项、desktop 274 项、desktop+audio-output 279 项测试，三套严格 all-targets Clippy 及 cargo fmt --check 通过。
 
 当前仍没有剧情文字、真实动作输入、完整存档镜像、其他音频编码及其他平台验证。
+
+2026-10-27：0x20ba 的淡入效果音经 `AudioRequest::PlaySe::fade_in_ms` 传入原生后端；仅在立即启动时使用既有线性包络淡入（与 BGM 淡入同为 `0x140088240` 的近似），并在 `update` 中推进效果音通道的包络。未新增实机听感验证。

@@ -78,6 +78,9 @@ pub enum AudioRequest {
         looped: bool,
         /// Prepare the sound and start it immediately when true.
         flag: bool,
+        /// 0x20ba SP-16 (0x20b0 passes 0): when starting immediately and nonzero,
+        /// 0x140088240 fades the sound in over this many milliseconds first.
+        fade_in_ms: u32,
     },
     /// 0x140088030: start a prepared device channel; an already active channel is unchanged.
     StartSe { channel: u8, looped: bool },
@@ -255,23 +258,29 @@ impl AudioHost {
             Some((_, 0xa1)) => return self.try_bgm_stop(vm, backend),
             _ => {}
         }
-        let Some((pc, 0xb0)) = vm.pending_system() else {
+        // 0x20b0 / 0x140070b70 and 0x20ba / 0x140070cd0 differ only in 0x20ba's SP-16 fade-in
+        // time (passed as 0x140088390's sixth argument), which shifts loop and flag by 4.
+        let Some((pc, command @ (0xb0 | 0xba))) = vm.pending_system() else {
             return Ok(false);
         };
+        let op = command + 0x2000;
         let arg = |distance| {
             vm.stack()
                 .peek_u32(distance)
-                .map_err(|e| error(pc, 0x20b0, e.0))
+                .map_err(|e| error(pc, op, e.0))
         };
+        let shift = if command == 0xba { 4 } else { 0 };
         let channel = arg(4)?;
-        let (name, volume, looped, flag) = (arg(8)?, arg(12)? as i32, arg(16)? != 0, arg(20)? != 0);
+        let (name, volume) = (arg(8)?, arg(12)? as i32);
+        let fade_in_ms = if command == 0xba { arg(16)? } else { 0 };
+        let (looped, flag) = (arg(16 + shift)? != 0, arg(20 + shift)? != 0);
         if channel as usize >= SE_CHANNELS {
             // The original only sets +12056 bit 0x200, which is not modeled.
-            return Err(error(pc, 0x20b0, "SE channel outside 0..5 sets an unmodeled flag").into());
+            return Err(error(pc, op, "SE channel outside 0..5 sets an unmodeled flag").into());
         }
         let name = vm.resolve_string(name)?;
         if name.len() > NAME_CAPACITY {
-            return Err(error(pc, 0x20b0, "SE file name exceeds the 32-byte record").into());
+            return Err(error(pc, op, "SE file name exceeds the 32-byte record").into());
         }
         let started = if self.settings.se_enabled {
             // Unsigned 32-bit products, as in the original.
@@ -285,11 +294,12 @@ impl AudioHost {
                 volume: effective,
                 looped,
                 flag,
+                fade_in_ms,
             })?)
         } else {
             None
         };
-        vm.complete_system(SystemResult(0x4014))?;
+        vm.complete_system(SystemResult(0x4014 + shift as u16))?;
         if let Some(started) = started {
             vm.state_mut()
                 .set_system_integer(0, u32::from(started))

@@ -303,14 +303,16 @@ fn recording_backend_keeps_requests_and_reports_not_started() {
                 name: b"sys301.ogg".to_vec(),
                 volume: 256,
                 looped: false,
-                flag: false
+                flag: false,
+                fade_in_ms: 0
             },
             AudioRequest::PlaySe {
                 channel: 5,
                 name: b"loop.ogg".to_vec(),
                 volume: 128,
                 looped: true,
-                flag: true
+                flag: true,
+                fade_in_ms: 0
             }
         ]
     );
@@ -639,4 +641,88 @@ fn bgm_stop_releases_both_channels_and_pops_nothing() {
     disabled.try_handle(&mut vm, &mut Broken).unwrap();
     assert_eq!(disabled.bgm().channel, 1);
     assert!(disabled.bgm().primary.is_empty());
+}
+
+/// One 0x20ba call: like 0x20b0 with the fade-in time between volume and loop.
+fn fade_in_code(
+    channel: u32,
+    name: u32,
+    volume: u32,
+    fade: u32,
+    looped: u32,
+    flag: u32,
+) -> Vec<u8> {
+    let mut code = vec![];
+    push(&mut code, flag);
+    push(&mut code, looped);
+    push(&mut code, fade);
+    push(&mut code, volume);
+    code.extend(0x201u16.to_le_bytes());
+    code.extend(0x120u16.to_le_bytes());
+    code.extend(name.to_le_bytes());
+    code.extend(0x20fu16.to_le_bytes());
+    code.extend(0x430u16.to_le_bytes());
+    push(&mut code, channel);
+    code.extend(0x20bau16.to_le_bytes());
+    code
+}
+
+#[test]
+fn fade_in_se_records_the_fade_and_shifts_loop_and_flag() {
+    let mut code = fade_in_code(3, 0, 128, 1500, 1, 1);
+    code.extend(fade_in_code(4, 0, 0, 700, 0, 0));
+    let script = program(&code, b"wave.ogg\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = AudioHost::default();
+    let mut backend = RecordingAudio::default();
+    for _ in 0..2 {
+        pending(&mut vm);
+        assert!(host.try_handle(&mut vm, &mut backend).unwrap());
+    }
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(
+        backend.requests(),
+        [
+            AudioRequest::PlaySe {
+                channel: 3,
+                name: b"wave.ogg".to_vec(),
+                volume: 128,
+                looped: true,
+                flag: true,
+                fade_in_ms: 1500
+            },
+            AudioRequest::PlaySe {
+                channel: 4,
+                name: b"wave.ogg".to_vec(),
+                volume: 256,
+                looped: false,
+                flag: false,
+                fade_in_ms: 700
+            }
+        ]
+    );
+    // The channel record matches 0x20b0's: the fade-in time is not kept.
+    assert_eq!(
+        host.channel(3),
+        Some(&SeChannel {
+            name: b"wave.ogg".to_vec(),
+            looped: true,
+            volume: 128,
+            flag: true
+        })
+    );
+    // A short stack (no flag word) keeps the command pending.
+    let mut short = fade_in_code(3, 0, 128, 1500, 1, 1);
+    short.drain(..8);
+    let script = program(&short, b"wave.ogg\0");
+    let mut vm = Machine::new(&script).unwrap();
+    pending(&mut vm);
+    let bytes = vm.stack().len_bytes();
+    assert!(
+        AudioHost::default()
+            .try_handle(&mut vm, &mut backend)
+            .is_err()
+    );
+    assert_eq!(vm.pending_system().map(|p| p.1), Some(0xba));
+    assert_eq!(vm.stack().len_bytes(), bytes);
 }

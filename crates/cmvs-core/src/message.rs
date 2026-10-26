@@ -15,6 +15,7 @@ use crate::{
     bytecode::DecodeError,
     evaluate::error,
     image::ImageSource,
+    input::ActionInput,
     machine::Machine,
     scene::{self, ANIMATION_FRAMES, AnimationFrame, DrawSetter, DrawState, SceneObject},
     vm::SystemResult,
@@ -22,6 +23,9 @@ use crate::{
 use std::error::Error;
 
 pub const MESSAGE_WINDOWS: usize = 8;
+/// Screen info +8/+12 (configuration words 0/1 of every window), which is not modeled; the
+/// research viewport stands in for it, as everywhere else in this project.
+pub const RESEARCH_SCREEN: [u32; 2] = [1280, 720];
 pub const TEXT_OBJECTS: usize = 12;
 pub const WINDOW_BUTTONS: usize = 32;
 /// State groups that fit before the hit rectangle in a 76-byte record.
@@ -46,6 +50,11 @@ pub struct WindowButton {
 pub struct MessageWindow {
     /// +0: index into the text object table.
     pub text: usize,
+    /// +4 (constructor 0): shown, toggled by 0x214e.
+    pub visible: bool,
+    /// +8 (constructor 0): hidden for a while although shown (0x214c / 0x14005dbc0), which
+    /// hides the text and +2520 objects; 0x214d reports it and 0x214e clears it.
+    pub hidden: bool,
     /// +12/+16, the current position.
     pub position: [i32; 2],
     /// The positions 0x14005de50 switches between: [0] = +2480/+2484 (switch state 0, also
@@ -109,6 +118,8 @@ pub struct TextObject {
     pub char_delay: i32,
     /// +152: scene layer for the text and glyph objects (0x14003b0d0, as for 0x2047).
     pub layer: i32,
+    /// +148 (constructor 1): shown, also copied to the text scene object (0x14005ac80).
+    pub visible: bool,
     /// +176: ruby layout; 0x14005b360 marks lines holding `{base/ruby}` groups.
     pub ruby: bool,
     /// +184: reserve the ruby height above every line, not only marked ones.
@@ -148,6 +159,56 @@ impl MessageHost {
             window.object.advance_effects(delta);
         }
     }
+    /// 0x215f / 0x140076be0 -> 0x14005dd10: SP-4 window slot (a missing window or a slot of
+    /// 8 or more only sets +12056 bit 0x10000), SP-8/SP-12 offset and SP-16/SP-20 size of a
+    /// rectangle relative to the window position. The input pointer (+868/+872, 0x1400565a0)
+    /// is scaled by configuration word 4 over word 0 (and 5 over 1) with unsigned arithmetic;
+    /// system result 0 = whether it lies in [x, x + w) x [y, y + h). Pops 20.
+    pub fn try_handle_pointer(
+        &mut self,
+        vm: &mut Machine<'_>,
+        input: &ActionInput,
+    ) -> Result<bool, DecodeError> {
+        let Some((pc, 0x15f)) = vm.pending_system() else {
+            return Ok(false);
+        };
+        let slot = window_slot(vm, pc, 0x215f)?;
+        let mut args = [0i32; 4];
+        for (i, arg) in args.iter_mut().enumerate() {
+            *arg = vm
+                .stack()
+                .peek_u32(8 + 4 * i)
+                .map_err(|e| error(pc, 0x215f, e.0))? as i32;
+        }
+        let window = self.windows[slot].as_ref().ok_or_else(|| {
+            error(
+                pc,
+                0x215f,
+                "message window slot without a window sets an unmodeled flag",
+            )
+        })?;
+        let logical = self.texts[window.text]
+            .as_ref()
+            .ok_or_else(|| error(pc, 0x215f, "message window without its text object"))?
+            .logical_size;
+        let [px, py] = input.pointer();
+        let scale = |value: i32, logical: i32, screen: u32| {
+            ((value as u32).wrapping_mul(logical as u32) / screen) as i32
+        };
+        let (px, py) = (
+            scale(px, logical[0], RESEARCH_SCREEN[0]),
+            scale(py, logical[1], RESEARCH_SCREEN[1]),
+        );
+        let [x, y, w, h] = args;
+        let left = x.wrapping_add(window.position[0]);
+        let top = y.wrapping_add(window.position[1]);
+        let hit = left <= px && top <= py && left.wrapping_add(w) > px && top.wrapping_add(h) > py;
+        vm.complete_system(SystemResult(0x4014))?;
+        vm.state_mut()
+            .set_system_integer(0, u32::from(hit))
+            .expect("slot 0 exists");
+        Ok(true)
+    }
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
         match vm.pending_system() {
             Some((pc, 0x141)) => self.destroy(vm, pc).map(|()| true),
@@ -162,6 +223,8 @@ impl MessageHost {
             Some((pc, command @ 0x190..=0x192)) => self.button(vm, pc, command).map(|()| true),
             Some((pc, 0x150)) => self.move_window(vm, pc).map(|()| true),
             Some((pc, 0x151)) => self.cursor(vm, pc).map(|()| true),
+            Some((pc, 0x14e)) => self.show(vm, pc).map(|()| true),
+            Some((pc, command @ (0x14b | 0x14c))) => self.presence(vm, pc, command).map(|()| true),
             Some((pc, command @ (0x14a | 0x15a))) => {
                 self.window_text(vm, pc, command).map(|()| true)
             }
@@ -521,6 +584,80 @@ impl MessageHost {
         }
         Ok(())
     }
+    /// 0x214e / 0x140076540: SP-4 window slot, SP-8 shown (as bool). Only when it differs
+    /// from +4, 0x14005da80 clears +8, sets +4, shows or hides the text object (+148 and its
+    /// scene object, 0x14005ac80) and the +2520 object, and on showing moves the text object
+    /// to the window position (0x14005aac0); +8 is cleared again. Pops 8. The original does
+    /// not check the window pointer, and for slots >= 8 it sets +12056 bit 0x10000 and still
+    /// writes past the table, so both are errors here.
+    fn show(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
+        let slot = window_slot(vm, pc, 0x214e)?;
+        let shown = vm.stack().peek_u32(8).map_err(|e| error(pc, 0x214e, e.0))? != 0;
+        let Some(text) = self.windows[slot].as_ref().map(|window| window.text) else {
+            return Err(error(
+                pc,
+                0x214e,
+                "showing a missing message window dereferences null",
+            ));
+        };
+        if self.texts[text].is_none() {
+            return Err(error(pc, 0x214e, "message window without its text object"));
+        }
+        vm.complete_system(SystemResult(0x4008))?;
+        let window = self.windows[slot].as_mut().expect("checked above");
+        if window.visible != shown {
+            window.visible = shown;
+            window.hidden = false;
+            window.object.shown = shown;
+            let position = window.position;
+            let text = self.texts[text].as_mut().expect("checked above");
+            text.visible = shown;
+            if shown {
+                text.position = position;
+            }
+        }
+        Ok(())
+    }
+    /// SP-4 window slot, compared signed against 8 (larger ones only set +12056 bit 0x10000).
+    /// - 0x214b / 0x140076430: system result 0 = whether the slot holds a window. Pops 4.
+    /// - 0x214c / 0x1400764e0 -> 0x14005dbc0: for a shown window (+4), +8 = bool(SP-8) and
+    ///   the text object and +2520 object are shown exactly when it is clear; a window that
+    ///   is not shown is left alone. A missing window only sets the flag. Pops 8.
+    fn presence(
+        &mut self,
+        vm: &mut Machine<'_>,
+        pc: usize,
+        command: u16,
+    ) -> Result<(), DecodeError> {
+        let op = command + 0x2000;
+        let slot = window_slot(vm, pc, op)?;
+        if command == 0x14b {
+            vm.complete_system(SystemResult(0x4004))?;
+            vm.state_mut()
+                .set_system_integer(0, u32::from(self.windows[slot].is_some()))
+                .expect("slot 0 exists");
+            return Ok(());
+        }
+        let hidden = vm.stack().peek_u32(8).map_err(|e| error(pc, op, e.0))? != 0;
+        let Some(text) = self.windows[slot].as_ref().map(|window| window.text) else {
+            return Err(error(
+                pc,
+                op,
+                "message window slot without a window sets an unmodeled flag",
+            ));
+        };
+        if self.texts[text].is_none() {
+            return Err(error(pc, op, "message window without its text object"));
+        }
+        vm.complete_system(SystemResult(0x4008))?;
+        let window = self.windows[slot].as_mut().expect("checked above");
+        if window.visible {
+            window.hidden = hidden;
+            window.object.shown = !hidden;
+            self.texts[text].as_mut().expect("checked above").visible = !hidden;
+        }
+        Ok(())
+    }
     fn cursor(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
         let slot = window_slot(vm, pc, 0x2151)?;
         let word = |distance| {
@@ -839,6 +976,7 @@ impl MessageHost {
             reveal: [0, 0],
             char_delay: 100,
             layer: 1,
+            visible: true,
             ruby: false,
             ruby_every_line: false,
             ruby_size: 12,
@@ -847,6 +985,8 @@ impl MessageHost {
         });
         self.windows[slot] = Some(MessageWindow {
             text,
+            visible: false,
+            hidden: false,
             position,
             size,
             switch_positions: [position; 2],

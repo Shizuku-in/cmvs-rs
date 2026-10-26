@@ -1,4 +1,5 @@
 use cmvs_rs::{
+    input::ActionInput,
     machine::{Machine, Step},
     message::{
         LineBreakRules, MESSAGE_WINDOWS, MessageHost, MessageWindow, TEXT_OBJECTS, TextObject,
@@ -66,6 +67,7 @@ fn created_text(position: [i32; 2], size: [u32; 2]) -> TextObject {
         reveal: [0, 0],
         char_delay: 100,
         layer: 1,
+        visible: true,
         ruby: false,
         ruby_every_line: false,
         ruby_size: 12,
@@ -139,6 +141,8 @@ fn creation_stores_window_text_and_font_and_pops_all_arguments() {
         messages.window(7),
         Some(&MessageWindow {
             text: 10,
+            visible: false,
+            hidden: false,
             position: [3, -1],
             size: [1280, 54],
             switch_positions: [[3, -1]; 2],
@@ -1022,6 +1026,155 @@ fn switch_state_one_position_and_text_clearing() {
         let bytes = vm.stack().len_bytes();
         assert!(messages.try_handle(&mut vm).is_err());
         assert_eq!(vm.pending_system().map(|p| p.1), Some(command - 0x2000));
+        assert_eq!(vm.stack().len_bytes(), bytes);
+    }
+}
+
+#[test]
+fn showing_and_hiding_a_window_toggles_window_text_and_object() {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 540, 1280, 180]);
+    call(&mut code, 0x2180, &[u32::MAX, 0]);
+    call(&mut code, 0x2150, &[600, 30, 0, 0]);
+    call(&mut code, 0x214e, &[1, 0]);
+    call(&mut code, 0x214e, &[5, 0]);
+    call(&mut code, 0x214e, &[0, 0]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 3);
+    assert!(!messages.window(0).unwrap().visible);
+    run(&mut vm, &mut messages, 1);
+    let window = messages.window(0).unwrap();
+    assert!(window.visible && window.object.shown);
+    let text = messages.text(7).unwrap();
+    // Showing moves the text object to the window position, which it already shares here.
+    assert!(text.visible);
+    assert_eq!(text.position, [30, 600]);
+    // Already shown: nothing changes.
+    run(&mut vm, &mut messages, 1);
+    assert!(messages.window(0).unwrap().visible);
+    run(&mut vm, &mut messages, 1);
+    let window = messages.window(0).unwrap();
+    assert!(!window.visible && !window.object.shown);
+    assert!(!messages.text(7).unwrap().visible);
+    assert_eq!(vm.stack().len_bytes(), 0);
+    for words in [vec![1, 3], vec![1, 8], vec![1, u32::MAX], vec![0]] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 10, 10]);
+        call(&mut code, 0x214e, &words);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 1);
+        pending(&mut vm);
+        let bytes = vm.stack().len_bytes();
+        assert!(messages.try_handle(&mut vm).is_err());
+        assert_eq!(vm.pending_system().map(|p| p.1), Some(0x14e));
+        assert_eq!(vm.stack().len_bytes(), bytes);
+    }
+}
+
+#[test]
+fn window_presence_and_temporary_hiding() {
+    let mut code = vec![];
+    create(&mut code, 2, 7, [0, 540, 1280, 180]);
+    call(&mut code, 0x214b, &[2]);
+    call(&mut code, 0x214b, &[3]);
+    // Hiding a window that is not shown does nothing.
+    call(&mut code, 0x214c, &[1, 2]);
+    call(&mut code, 0x214e, &[1, 2]);
+    call(&mut code, 0x214c, &[9, 2]);
+    call(&mut code, 0x214c, &[0, 2]);
+    call(&mut code, 0x214c, &[1, 2]);
+    // Hiding the window clears the temporary flag.
+    call(&mut code, 0x214e, &[0, 2]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 2);
+    assert_eq!(vm.state().system_integer(0), Some(1));
+    run(&mut vm, &mut messages, 1);
+    assert_eq!(vm.state().system_integer(0), Some(0));
+    run(&mut vm, &mut messages, 1);
+    assert!(!messages.window(2).unwrap().hidden);
+    run(&mut vm, &mut messages, 2);
+    let window = messages.window(2).unwrap();
+    assert!(window.visible && window.hidden && !window.object.shown);
+    assert!(!messages.text(7).unwrap().visible);
+    run(&mut vm, &mut messages, 1);
+    let window = messages.window(2).unwrap();
+    assert!(!window.hidden && window.object.shown);
+    assert!(messages.text(7).unwrap().visible);
+    run(&mut vm, &mut messages, 2);
+    let window = messages.window(2).unwrap();
+    assert!(!window.visible && !window.hidden && !window.object.shown);
+    assert_eq!(vm.stack().len_bytes(), 0);
+    for (command, words) in [
+        (0x214bu16, vec![8]),
+        (0x214b, vec![u32::MAX]),
+        (0x214c, vec![1, 3]),
+        (0x214c, vec![2]),
+    ] {
+        let mut code = vec![];
+        create(&mut code, 2, 7, [0, 0, 10, 10]);
+        call(&mut code, command, &words);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        vm.state_mut().set_system_integer(0, 9).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 1);
+        pending(&mut vm);
+        let bytes = vm.stack().len_bytes();
+        assert!(messages.try_handle(&mut vm).is_err(), "{command:x}");
+        assert_eq!(vm.pending_system().map(|p| p.1), Some(command - 0x2000));
+        assert_eq!(vm.stack().len_bytes(), bytes);
+        assert_eq!(vm.state().system_integer(0), Some(9));
+    }
+}
+
+#[test]
+fn pointer_hit_test_is_relative_to_the_window_and_half_open() {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 540, 1280, 180]);
+    // Rectangle (1100, 20) 100x50 inside the window at (0, 540).
+    for _ in 0..6 {
+        call(&mut code, 0x215f, &[50, 100, 20, 1100, 0]);
+    }
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 1);
+    let mut input = ActionInput::default();
+    let mut hits = vec![];
+    for (x, y) in [
+        (1100, 560),
+        (1199, 609),
+        (1200, 560),
+        (1100, 610),
+        (1099, 600),
+        (-1, -1),
+    ] {
+        input.set_pointer(x, y);
+        pending(&mut vm);
+        assert!(!messages.try_handle(&mut vm).unwrap());
+        assert!(messages.try_handle_pointer(&mut vm, &input).unwrap());
+        hits.push(vm.state().system_integer(0));
+    }
+    assert_eq!(hits, [Some(1), Some(1), Some(0), Some(0), Some(0), Some(0)]);
+    assert_eq!(vm.stack().len_bytes(), 0);
+    for words in [vec![0, 0, 0, 0, 1], vec![0, 0, 0, 0, 8], vec![0, 0, 0, 0]] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 10, 10]);
+        call(&mut code, 0x215f, &words);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 1);
+        pending(&mut vm);
+        let bytes = vm.stack().len_bytes();
+        assert!(messages.try_handle_pointer(&mut vm, &input).is_err());
+        assert_eq!(vm.pending_system().map(|p| p.1), Some(0x15f));
         assert_eq!(vm.stack().len_bytes(), bytes);
     }
 }

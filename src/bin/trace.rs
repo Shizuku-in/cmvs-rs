@@ -274,7 +274,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 }
                 if audio.try_handle(&mut machine, &mut audio_backend)? {
                     if let (
-                        0xb0,
+                        0xb0 | 0xba,
                         Some(AudioRequest::PlaySe {
                             channel,
                             name,

@@ -923,3 +923,5 @@ Windows 原生音频模式 24 秒检查通过：读取品牌/标题 SE 与 BGM�
 PB3 type 3（JBP1）已实现：0x1400a0700、0x1400a0ad0、0x1400b4020、0x1400b3b40、0x1400b3c80（以反汇编核对运算宽度）、0x1400e4730/0x1400e47b0。188 个真实 type 3 全部解码，13 个与独立 Python 逐字节一致；真实重放越过 white.pb3，停于 sn1001.ps3 / PC=0x2de9c / 0x2033、SP=40。详见 pb3-format.md。
 
 对象图像信息 0x2033、EFFECT_USE 0x22d1 与不透明度轨道 0x21ea–0x21ee（每帧 0x1400268d0）已实现，槽对象帧更新已接入。真实重放走完剧本开头的白底淡入，停于 sn1001.ps3 / PC=0xc58c / 0x20ba、SP=40。详见 vm-semantics.md。
+
+淡入效果音 0x20ba、窗口显示 0x214e、存在查询 0x214b、临时隐藏 0x214c 与指针命中 0x215f 已实现。真实重放停于 sn1001.ps3 / PC=0xe2ba / 0x2285（动作序列查询）、SP=156。详见 vm-semantics.md。

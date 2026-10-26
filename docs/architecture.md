@@ -180,3 +180,4 @@ BGM 与 SE 共用 `AudioHost`/`AudioBackend`：`BgmState` 保存 +4464 对象的
 随后进入剧本：`MessageHost` 处理 0x215a/0x214a，`snapshot::SaveInfo` 保存 0x22b9 的存档信息，`SceneHost` 处理 0x2027/0x2028。真实路径经 cmovie.ps3 进入 sn1001.ps3，停于 intcode.ps3 / 0x1a5a2 的 0x2030：背景 white.pb3 为 PB3 type 3，解码器尚未实现。
 随后 PB3 type 3：新增 `jbp1` 模块（与 `jbpd` 共用位流与频率树），`pb3::decode` 处理 type 3 的裁剪与 alpha，`image::decode` 接受 type 1/3。最新停点为 sn1001.ps3 / 0x2de9c / 0x2033（SP=40）。
 随后效果通道阶段：`scene::OpacityTrack` 挂在绘制状态，`SceneObject::advance_effects` 推进不透明度与帧动画两通道，`SceneHost::advance_frame` 更新槽对象并销毁标记对象；0x2033 读取对象图像信息，0x22d1 读写 EFFECT_USE。最新停点为 sn1001.ps3 / 0xc58c / 0x20ba（SP=40）。
+随后消息窗口显示阶段：`MessageWindow` 保存可见与临时隐藏标志，`TextObject` 保存可见标志，`MessageHost::try_handle_pointer` 以 `ActionInput` 指针做命中测试（屏幕尺寸取研究视口）；`AudioRequest::PlaySe` 带淡入毫秒。最新停点为 sn1001.ps3 / 0xe2ba / 0x2285（SP=156）。

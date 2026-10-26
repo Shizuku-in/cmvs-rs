@@ -342,6 +342,7 @@ impl AudioBackend for NativeAudio {
             volume,
             looped,
             flag,
+            fade_in_ms,
         } = request
         else {
             return Err("expected PlaySe".into());
@@ -362,7 +363,8 @@ impl AudioBackend for NativeAudio {
             program.channels(),
             !flag
         );
-        let candidate = self.prepare(program, *volume, 0);
+        // The original only sets the fade-in (0x140088240) when starting immediately.
+        let candidate = self.prepare(program, *volume, if *flag { *fade_in_ms } else { 0 });
         self.se[*channel as usize] = Some(candidate);
         if *flag {
             self.se[*channel as usize].as_ref().unwrap().sink.play();
@@ -492,11 +494,11 @@ impl AudioBackend for NativeAudio {
             return Err(format!("audio device failed: {e}").into());
         }
         for channel in &mut self.se {
-            if let Some(current) = channel {
-                current.check()?;
-                if current.sink.empty() {
-                    *channel = None;
-                }
+            Self::tick_channel(channel)?;
+            if let Some(current) = channel
+                && current.sink.empty()
+            {
+                *channel = None;
             }
         }
         for channel in &mut self.bgm {
