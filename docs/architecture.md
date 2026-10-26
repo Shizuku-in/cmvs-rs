@@ -174,3 +174,4 @@ BGM 与 SE 共用 `AudioHost`/`AudioBackend`：`BgmState` 保存 +4464 对象的
 随后 0x215d 创建窗口：`MessageHost` 保存窗口（文字号、位置、尺寸）、文字对象（逻辑尺寸、位置、区域）与字体存在标志，GDI 字体、字形纹理和场景对象留给后续渲染阶段；0x2140 需设备尺寸，仍未处理。最新停点为 intproc.ps3 / 0x42382 / 0x215b（SP=132）。
 随后窗口属性阶段：`TextObject` 保存排版与样式字段，`MessageWindow` 保存 +2488 切换标志和 +2520 的 `scene::SceneObject`；0x2170 与 0x2030 共用 `scene::load_image`。最新停点为 intproc.ps3 / 0x42502 / 0x2180（SP=132）。
 随后窗口对象与按钮阶段：0x217a、0x2180–0x2185 作用于窗口 +2520 对象或其子对象，与场景命令共用 `scene::DrawSetter`；`MessageWindow::buttons` 保存 32 条按钮记录（0x2190–0x2192）。最新停点为 intproc.ps3 表达式 0x44e7c 的操作数 0x0110（SP=172）。
+随后求值器把数组操作数 0x110 按原版改写为脚本数据字 0x106（base + 4 × 索引）。最新停点为 intproc.ps3 / 0x43086 / 0x2150（SP=140）。

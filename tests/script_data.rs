@@ -16,6 +16,13 @@ fn expr(terms: Vec<Vec<u8>>) -> Vec<u8> {
     b.extend(0x20fu16.to_le_bytes());
     b
 }
+/// Tag 0x110: base dword, then the index expression.
+fn data_array(base: u32, index: Vec<u8>) -> Vec<u8> {
+    let mut b = 0x110u16.to_le_bytes().to_vec();
+    b.extend(base.to_le_bytes());
+    b.extend(index);
+    b
+}
 fn assign(tag: u16, offset: u32, value: u32) -> Vec<u8> {
     expr(vec![
         scalar(tag, offset),
@@ -162,4 +169,74 @@ fn common_script_data_is_isolated_and_persists_across_calls() {
     assert_eq!(vm.script_data(), 77u32.to_le_bytes());
     vm.step().unwrap();
     assert_eq!(vm.script_data(), 11u32.to_le_bytes());
+}
+
+#[test]
+fn data_arrays_address_base_plus_four_times_index_like_tag_0x106() {
+    // 0x110[2 + 4 * 1] = 0x11223344, read back through 0x106 at byte 6, then += 2.
+    let mut code = expr(vec![
+        data_array(2, expr(vec![scalar(0x100, 1)])),
+        scalar(0x100, 0x11223344),
+        0x170u16.to_le_bytes().to_vec(),
+    ]);
+    code.extend(expr(vec![scalar(0x106, 6)]));
+    code.extend(expr(vec![
+        data_array(2, expr(vec![scalar(0x100, 1)])),
+        scalar(0x100, 2),
+        0x175u16.to_le_bytes().to_vec(),
+    ]));
+    // The base and scaled index add in u32 arithmetic: -8 + 4 * 3 = byte 4.
+    code.extend(expr(vec![data_array(
+        (-8i32) as u32,
+        expr(vec![scalar(0x100, 3)]),
+    )]));
+    let script = script(&code, &[0; 12]);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.step().unwrap();
+    assert_eq!(
+        vm.script_data(),
+        [0, 0, 0, 0, 0, 0, 0x44, 0x33, 0x22, 0x11, 0, 0]
+    );
+    vm.step().unwrap();
+    assert_eq!(vm.state().result, Some(0x11223344));
+    vm.step().unwrap();
+    assert_eq!(vm.state().result, Some(0x11223346));
+    vm.step().unwrap();
+    assert_eq!(vm.state().result, Some(0x3346_0000));
+    assert_eq!(vm.state().integer(4096), Some(0x3346_0000));
+}
+
+#[test]
+fn data_array_addresses_outside_the_segment_are_errors() {
+    for (base, index) in [(0, u32::MAX), (4, 1), (0, 0x2000_0000)] {
+        let code = expr(vec![
+            data_array(base, expr(vec![scalar(0x100, index)])),
+            scalar(0x100, 7),
+            0x170u16.to_le_bytes().to_vec(),
+        ]);
+        let script = script(&code, &[0; 11]);
+        let mut vm = Machine::new(&script).unwrap();
+        assert!(vm.step().is_err(), "{base} {index}");
+        assert_eq!(vm.pc(), 0);
+        assert_eq!(vm.script_data(), [0; 11]);
+    }
+}
+
+#[test]
+fn data_array_index_writes_roll_back_when_the_expression_fails() {
+    // The index expression writes byte 0 and yields 1; reading unknown integer 100 fails.
+    let mut unknown = 0x101u16.to_le_bytes().to_vec();
+    unknown.extend(expr(vec![scalar(0x100, 100)]));
+    let code = expr(vec![
+        data_array(0, assign(0x106, 0, 1)),
+        unknown,
+        0x170u16.to_le_bytes().to_vec(),
+    ]);
+    let script = script(&code, &[0xaa; 8]);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_integer(4096, 91).unwrap();
+    assert!(vm.step().is_err());
+    assert_eq!(vm.pc(), 0);
+    assert_eq!(vm.script_data(), [0xaa; 8]);
+    assert_eq!(vm.state().integer(4096), Some(91));
 }

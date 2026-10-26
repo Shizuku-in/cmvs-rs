@@ -476,19 +476,25 @@ impl State {
                 }
                 Term::Indexed {
                     pc,
-                    tag: 0x109,
+                    tag: tag @ (0x109 | 0x110),
                     base,
                     indices,
                     ..
                 } => {
-                    // 0x140066200 evaluates the index when pushing and rewrites the item as
-                    // tag 0x108 with raw = base + 4 * index in u32 arithmetic.
+                    // 0x140066200 evaluates the index when pushing and rewrites the item with
+                    // raw = base + 4 * index in u32 arithmetic: 0x109 becomes the frame word
+                    // 0x108 and 0x110 the script data word 0x106 (0x105 -> 0x104 likewise,
+                    // not yet met on a real path).
                     let [index] = indices.as_slice() else {
-                        return Err(error(*pc, 0x109, "frame array needs one index"));
+                        return Err(error(*pc, *tag, "array operand needs one index"));
                     };
                     let index = self.evaluate(index, depth + 1, env, journal)?;
                     let raw = base.wrapping_add((index as u32).wrapping_mul(4));
-                    stack.push(Cell::Frame(env.offset(0x108, raw, *pc)?));
+                    stack.push(if *tag == 0x109 {
+                        Cell::Frame(env.offset(0x108, raw, *pc)?)
+                    } else {
+                        Cell::Data(env.data_offset(raw, *pc, *tag)?)
+                    });
                 }
                 Term::Nested {
                     pc,
