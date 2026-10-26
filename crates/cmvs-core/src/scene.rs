@@ -54,6 +54,32 @@ pub struct SceneObject {
     /// +6256/+6260 (constructor 0): logical screen size; 0x14003b350 scales by the device
     /// width over +6256, or over the screen width while it is zero. Set by 0x217c.
     pub logical_size: [u32; 2],
+    /// +14500 (constructor 0): set by 0x14003d0c0 when an effect ends with -2; parents then
+    /// destroy such children.
+    pub dispose: bool,
+}
+impl SceneObject {
+    /// 0x14003d0c0 limited to the frame animation channel of 0x14001f5c0: with a draw state,
+    /// advance its animation, freeing it when it ends and marking the object for disposal
+    /// when it ended with -2; then, once children were created (+6248 bit 31), update each
+    /// child and destroy the marked ones. Other effect channels are not modeled.
+    pub(crate) fn advance_effects(&mut self, delta: u32) {
+        if let Some(draw) = self.draw.as_mut()
+            && let Some(animation) = draw.animation.as_deref_mut()
+            && let Some(end) = animation.advance(delta, &mut draw.words)
+        {
+            draw.animation = None;
+            if end == -2 {
+                self.dispose = true;
+            }
+        }
+        if (self.flags as i32) < 0 {
+            for child in self.children.values_mut() {
+                child.advance_effects(delta);
+            }
+            self.children.retain(|_, child| !child.dispose);
+        }
+    }
 }
 impl Default for SceneObject {
     fn default() -> Self {
@@ -64,6 +90,93 @@ impl Default for SceneObject {
             flags: 0x7fff_ffff,
             shown: true,
             logical_size: [0, 0],
+            dispose: false,
+        }
+    }
+}
+
+/// Frame entries in the 0x510-byte animation object (0x140026060 zeroes them all).
+pub const ANIMATION_FRAMES: usize = 64;
+
+/// One 20-byte entry at animation +16 + 20 * index, written by 0x1400261b0.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AnimationFrame {
+    /// Entry +0: the frame 0x1400262b0 moves to next; negative ends the animation and -2
+    /// also marks the object for disposal (0x14003d0c0 sets +14500).
+    pub next: i32,
+    /// Entry +4..+14: source x, y, width, height and origin x, y copied into draw words 2..8
+    /// (origin only when non-negative).
+    pub words: [i16; 6],
+    /// Entry +16: milliseconds before moving on, compared unsigned with the elapsed time.
+    pub duration: u32,
+}
+
+/// The draw state +136 frame animation (0x21cf). Header words: +0 playing, +4 start frame,
+/// +8 current frame, +12 elapsed milliseconds; all zero after construction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Animation {
+    pub playing: bool,
+    pub start: u32,
+    pub current: u32,
+    pub elapsed: u32,
+    pub frames: [AnimationFrame; ANIMATION_FRAMES],
+}
+impl Animation {
+    /// 0x140026200 (0x21d1): play from `frame`, copying it into the draw words.
+    pub(crate) fn start(&mut self, frame: usize, words: &mut [u32; 22]) {
+        self.playing = true;
+        self.start = frame as u32;
+        self.current = frame as u32;
+        self.elapsed = 0;
+        self.frames[frame].apply(words);
+    }
+    /// 0x1400262b0 for a playing animation: add the frame delta (at most 200 ms), then
+    /// while the current frame's duration has elapsed either end with its negative `next`
+    /// or move to `next`, subtracting the duration and copying the frame into the draw
+    /// words. A cycle of zero-length frames never exits in the original; Rust moves at most
+    /// ANIMATION_FRAMES times per update.
+    fn advance(&mut self, delta: u32, words: &mut [u32; 22]) -> Option<i32> {
+        if !self.playing {
+            return None;
+        }
+        self.elapsed = self.elapsed.wrapping_add(delta.min(200));
+        for _ in 0..ANIMATION_FRAMES {
+            let frame = self.frames[self.current as usize];
+            if frame.duration > self.elapsed {
+                return None;
+            }
+            if frame.next < 0 {
+                return Some(frame.next);
+            }
+            self.elapsed -= frame.duration;
+            self.current = frame.next as u32;
+            self.frames[self.current as usize].apply(words);
+        }
+        None
+    }
+}
+impl AnimationFrame {
+    /// Sign-extended source rectangle into draw words 2..6; origin words 6/7 only when the
+    /// stored value is non-negative.
+    fn apply(&self, words: &mut [u32; 22]) {
+        for (word, value) in words[2..6].iter_mut().zip(&self.words[..4]) {
+            *word = i32::from(*value) as u32;
+        }
+        for (word, value) in words[6..8].iter_mut().zip(&self.words[4..]) {
+            if *value >= 0 {
+                *word = i32::from(*value) as u32;
+            }
+        }
+    }
+}
+impl Default for Animation {
+    fn default() -> Self {
+        Self {
+            playing: false,
+            start: 0,
+            current: 0,
+            elapsed: 0,
+            frames: [AnimationFrame::default(); ANIMATION_FRAMES],
         }
     }
 }
@@ -74,6 +187,8 @@ impl Default for SceneObject {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DrawState {
     pub words: [u32; 22],
+    /// +136: frame animation; rebuilding the draw state drops it.
+    pub animation: Option<Box<Animation>>,
 }
 impl Default for DrawState {
     fn default() -> Self {
@@ -83,11 +198,14 @@ impl Default for DrawState {
         words[18] = 1.0f32.to_bits();
         words[19] = 1.0f32.to_bits();
         words[21] = 256;
-        Self { words }
+        Self {
+            words,
+            animation: None,
+        }
     }
 }
 
-/// Draw-state setters shared by 0x2044..0x2047 and the message window object commands.
+/// Draw-state setters shared by 0x2044..0x2048 and the message window object commands.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum DrawSetter {
     /// 0x14003b070: source x/y/width/height.
@@ -98,6 +216,8 @@ pub(crate) enum DrawSetter {
     Position([u32; 2]),
     /// 0x14003b0d0: layer.
     Layer(u32),
+    /// 0x14003b0e0: opacity, capped at 255 as a signed value (negative values are kept).
+    Opacity(u32),
 }
 impl DrawState {
     pub(crate) fn set(&mut self, setter: DrawSetter) {
@@ -106,6 +226,7 @@ impl DrawState {
             DrawSetter::Origin(point) => self.words[6..8].copy_from_slice(&point),
             DrawSetter::Position(point) => self.words[8..10].copy_from_slice(&point),
             DrawSetter::Layer(layer) => self.words[10] = layer,
+            DrawSetter::Opacity(opacity) => self.words[17] = (opacity as i32).min(255) as u32,
         }
     }
 }
@@ -260,19 +381,16 @@ impl SceneHost {
                 0x46 => Some(DrawSetter::Origin([args[2], args[3]])),
                 0x45 => Some(DrawSetter::Position([args[2], args[3]])),
                 0x47 => Some(DrawSetter::Layer(args[2])),
+                0x48 => Some(DrawSetter::Opacity(args[2])),
                 _ => None,
             };
             match command {
                 0x40 | 0x50 => object.draw = Some(DrawState::default()),
-                0x44..=0x47 => object
+                0x44..=0x48 => object
                     .draw
                     .as_mut()
                     .expect("validated")
                     .set(setter.expect("setter command")),
-                0x48 => {
-                    object.draw.as_mut().expect("validated").words[17] =
-                        (args[2] as i32).min(255) as u32
-                }
                 0x4b => {
                     if args[2] <= 3 {
                         object.draw.as_mut().expect("validated").words[1] = args[2];

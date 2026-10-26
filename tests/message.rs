@@ -5,7 +5,7 @@ use cmvs_rs::{
         WINDOW_BUTTONS, WindowButton,
     },
     ps3::Script,
-    scene::{DrawState, SceneObject},
+    scene::{Animation, AnimationFrame, DrawState, SceneObject},
 };
 
 fn script(code: &[u8]) -> Script {
@@ -142,6 +142,8 @@ fn creation_stores_window_text_and_font_and_pops_all_arguments() {
             position: [3, -1],
             size: [1280, 54],
             switch_positions: [[3, -1]; 2],
+            cursor_mode: 0,
+            cursor_offset: [0, 0],
             position_switch: false,
             object: SceneObject::default(),
             buttons: [WindowButton::default(); WINDOW_BUTTONS],
@@ -680,4 +682,305 @@ fn text_object_commands_reject_missing_objects_and_long_strings() {
         assert_eq!(vm.stack().len_bytes(), bytes);
         assert_eq!(messages.text(7), Some(&created_text([0, 0], [10, 10])));
     }
+}
+
+#[test]
+fn frame_animations_are_rebuilt_and_filled_per_entry() {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 540, 1280, 180]);
+    call(&mut code, 0x2178, &[2, 0]);
+    call(&mut code, 0x2180, &[2, 0]);
+    call(&mut code, 0x21cf, &[2, 0]);
+    // Entry 1: next 2, 100 ms, source (48, 320, 48, 48), origin (-1, 0x1_0002 -> 2).
+    call(
+        &mut code,
+        0x21d0,
+        &[0x1_0002, u32::MAX, 48, 48, 320, 48, 100, 2, 1, 2, 0],
+    );
+    call(&mut code, 0x21cf, &[2, 0]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 4);
+    let animation = |messages: &MessageHost| {
+        messages.window(0).unwrap().object.children[&2]
+            .draw
+            .as_ref()
+            .unwrap()
+            .animation
+            .clone()
+    };
+    assert_eq!(animation(&messages), Some(Box::default()));
+    run(&mut vm, &mut messages, 1);
+    let mut expected = Animation::default();
+    expected.frames[1] = AnimationFrame {
+        next: 2,
+        words: [48, 320, 48, 48, -1, 2],
+        duration: 100,
+    };
+    assert_eq!(animation(&messages).as_deref(), Some(&expected));
+    // Rebuilding replaces the filled animation with an empty one.
+    run(&mut vm, &mut messages, 1);
+    assert_eq!(animation(&messages), Some(Box::default()));
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
+fn frame_entries_without_an_animation_are_ignored_and_bad_targets_rejected() {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 540, 1280, 180]);
+    call(&mut code, 0x2180, &[u32::MAX, 0]);
+    call(
+        &mut code,
+        0x21d0,
+        &[0, 0, 48, 48, 0, 0, 100, 1, 0, u32::MAX, 0],
+    );
+    let ignored = script(&code);
+    let mut vm = Machine::new(&ignored).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 3);
+    let object = &messages.window(0).unwrap().object;
+    assert_eq!(object.draw, Some(DrawState::default()));
+    assert_eq!(vm.stack().len_bytes(), 0);
+
+    let mut cases = vec![];
+    for (draw, command, words) in [
+        (false, 0x21cfu16, vec![u32::MAX, 0]),
+        (true, 0x21cf, vec![5, 0]),
+        (true, 0x21cf, vec![u32::MAX, 1]),
+        (true, 0x21d0, vec![0, 0, 0, 0, 0, 0, 0, 0, 64, u32::MAX, 0]),
+        (true, 0x21d0, vec![0, 0, 0, u32::MAX, 0]),
+    ] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 10, 10]);
+        if draw {
+            call(&mut code, 0x2180, &[u32::MAX, 0]);
+            call(&mut code, 0x21cf, &[u32::MAX, 0]);
+        }
+        call(&mut code, command, &words);
+        cases.push((code, if draw { 3 } else { 1 }));
+    }
+    for (code, setup) in cases {
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, setup);
+        let before = messages.window(0).unwrap().object.clone();
+        pending(&mut vm);
+        let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
+        assert!(messages.try_handle(&mut vm).is_err());
+        assert_eq!(vm.pending_system(), command);
+        assert_eq!(vm.stack().len_bytes(), bytes);
+        assert_eq!(messages.window(0).unwrap().object, before);
+    }
+}
+
+/// Window 0 with child 2 animated by `frames` (next, duration, source x), all 48x48 at y 320.
+fn animated(frames: &[(u32, u32, u32)], start: u32) -> Vec<u8> {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 540, 1280, 180]);
+    call(&mut code, 0x2178, &[2, 0]);
+    call(&mut code, 0x2180, &[2, 0]);
+    call(&mut code, 0x21cf, &[2, 0]);
+    for (index, &(next, duration, x)) in frames.iter().enumerate() {
+        call(
+            &mut code,
+            0x21d0,
+            &[
+                u32::MAX,
+                0,
+                48,
+                48,
+                320,
+                x,
+                duration,
+                next,
+                index as u32,
+                2,
+                0,
+            ],
+        );
+    }
+    call(&mut code, 0x21d1, &[start, 2, 0]);
+    code
+}
+fn child_words(messages: &MessageHost) -> Vec<u32> {
+    messages.window(0).unwrap().object.children[&2]
+        .draw
+        .as_ref()
+        .unwrap()
+        .words[2..8]
+        .to_vec()
+}
+
+#[test]
+fn playback_starts_at_a_frame_and_advances_by_clamped_frame_time() {
+    let frames = [(1, 100, 0), (2, 100, 48), (0, 100, 96)];
+    let script = script(&animated(&frames, 1));
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 4 + frames.len() + 1);
+    assert_eq!(vm.stack().len_bytes(), 0);
+    // Starting copies the frame; the origin (-1) keeps the draw state's value.
+    assert_eq!(child_words(&messages), [48, 320, 48, 48, 0, 0]);
+    messages.advance_frame(99);
+    assert_eq!(child_words(&messages)[0], 48);
+    messages.advance_frame(1);
+    assert_eq!(child_words(&messages)[0], 96);
+    // One 1000 ms frame counts as 200 ms: two steps, looping back to frame 0.
+    messages.advance_frame(1000);
+    assert_eq!(child_words(&messages)[0], 48);
+    let animation = messages.window(0).unwrap().object.children[&2]
+        .draw
+        .as_ref()
+        .unwrap()
+        .animation
+        .clone()
+        .unwrap();
+    assert_eq!(
+        (
+            animation.playing,
+            animation.start,
+            animation.current,
+            animation.elapsed
+        ),
+        (true, 1, 1, 0)
+    );
+}
+
+#[test]
+fn ended_animations_are_freed_and_minus_two_disposes_the_child() {
+    for (end, survives) in [(u32::MAX, true), ((-2i32) as u32, false)] {
+        let script = script(&animated(&[(1, 50, 0), (end, 50, 48)], 0));
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 4 + 2 + 1);
+        messages.advance_frame(50);
+        assert_eq!(child_words(&messages)[0], 48);
+        messages.advance_frame(49);
+        assert!(
+            messages.window(0).unwrap().object.children[&2]
+                .draw
+                .as_ref()
+                .unwrap()
+                .animation
+                .is_some()
+        );
+        messages.advance_frame(1);
+        let object = &messages.window(0).unwrap().object;
+        assert_eq!(object.children.contains_key(&2), survives, "{end}");
+        if survives {
+            let child = &object.children[&2];
+            assert!(child.draw.as_ref().unwrap().animation.is_none());
+            assert_eq!(child.draw.as_ref().unwrap().words[2], 48);
+        }
+    }
+}
+
+#[test]
+fn zero_length_loops_stop_after_one_pass_per_frame() {
+    // Unwritten frames are zero: frame 0 loops to itself with no duration.
+    let script = script(&animated(&[], 0));
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 4 + 1);
+    messages.advance_frame(16);
+    assert_eq!(child_words(&messages), [0, 0, 0, 0, 0, 0]);
+}
+
+#[test]
+fn playback_rejects_out_of_table_frames() {
+    for code in [animated(&[], 64), {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 540, 1280, 180]);
+        call(&mut code, 0x2178, &[2, 0]);
+        call(&mut code, 0x2180, &[2, 0]);
+        call(&mut code, 0x21cf, &[2, 0]);
+        call(&mut code, 0x21d0, &[0, 0, 48, 48, 0, 0, 100, 64, 0, 2, 0]);
+        code
+    }] {
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 4);
+        pending(&mut vm);
+        let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
+        assert!(messages.try_handle(&mut vm).is_err());
+        assert_eq!(vm.pending_system(), command);
+        assert_eq!(vm.stack().len_bytes(), bytes);
+    }
+}
+
+#[test]
+fn wait_cursor_mode_keeps_offsets_for_modes_one_and_three_only() {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 540, 1280, 180]);
+    // Mode 0x1_0003 truncates to 3; the offsets truncate to 16 bits.
+    call(&mut code, 0x2151, &[0x1_0004, u32::MAX - 1, 0x1_0003, 0]);
+    call(&mut code, 0x2151, &[9, 9, 7, 0]);
+    call(&mut code, 0x2151, &[9, 9, 2, 0]);
+    call(&mut code, 0x2151, &[5, 6, 1, 0]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut messages = MessageHost::default();
+    let state = |messages: &MessageHost| {
+        let window = messages.window(0).unwrap();
+        (window.cursor_mode, window.cursor_offset)
+    };
+    run(&mut vm, &mut messages, 2);
+    assert_eq!(state(&messages), (3, [-2, 4]));
+    run(&mut vm, &mut messages, 1);
+    assert_eq!(state(&messages), (7, [-2, 4]));
+    run(&mut vm, &mut messages, 1);
+    assert_eq!(state(&messages), (2, [0, 0]));
+    run(&mut vm, &mut messages, 1);
+    assert_eq!(state(&messages), (1, [6, 5]));
+    assert_eq!(vm.stack().len_bytes(), 0);
+    for words in [vec![0, 0, 3, 1], vec![0, 3, 0]] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 10, 10]);
+        call(&mut code, 0x2151, &words);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 1);
+        pending(&mut vm);
+        let bytes = vm.stack().len_bytes();
+        assert!(messages.try_handle(&mut vm).is_err());
+        assert_eq!(vm.pending_system().map(|p| p.1), Some(0x151));
+        assert_eq!(vm.stack().len_bytes(), bytes);
+        assert_eq!(state(&messages), (0, [0, 0]));
+    }
+}
+
+#[test]
+fn window_opacity_caps_at_255_and_keeps_negative_values() {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 540, 1280, 180]);
+    call(&mut code, 0x2178, &[6, 0]);
+    call(&mut code, 0x2180, &[6, 0]);
+    call(&mut code, 0x2186, &[128, 6, 0]);
+    call(&mut code, 0x2186, &[300, 6, 0]);
+    call(&mut code, 0x2186, &[u32::MAX, 6, 0]);
+    call(&mut code, 0x2186, &[1, u32::MAX, 0]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut messages = MessageHost::default();
+    let opacity = |messages: &MessageHost| {
+        messages.window(0).unwrap().object.children[&6]
+            .draw
+            .as_ref()
+            .unwrap()
+            .words[17]
+    };
+    run(&mut vm, &mut messages, 4);
+    assert_eq!(opacity(&messages), 128);
+    run(&mut vm, &mut messages, 1);
+    assert_eq!(opacity(&messages), 255);
+    run(&mut vm, &mut messages, 1);
+    assert_eq!(opacity(&messages), u32::MAX);
+    // The window object itself has no draw state.
+    pending(&mut vm);
+    assert!(messages.try_handle(&mut vm).is_err());
+    assert_eq!(vm.pending_system().map(|p| p.1), Some(0x186));
 }

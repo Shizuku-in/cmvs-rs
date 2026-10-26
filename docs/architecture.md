@@ -176,3 +176,4 @@ BGM 与 SE 共用 `AudioHost`/`AudioBackend`：`BgmState` 保存 +4464 对象的
 随后窗口对象与按钮阶段：0x217a、0x2180–0x2185 作用于窗口 +2520 对象或其子对象，与场景命令共用 `scene::DrawSetter`；`MessageWindow::buttons` 保存 32 条按钮记录（0x2190–0x2192）。最新停点为 intproc.ps3 表达式 0x44e7c 的操作数 0x0110（SP=172）。
 随后求值器把数组操作数 0x110 按原版改写为脚本数据字 0x106（base + 4 × 索引）。最新停点为 intproc.ps3 / 0x43086 / 0x2150（SP=140）。
 随后窗口移动与文字设置阶段：`MessageWindow` 分别保存两组切换坐标，`TextObject` 保存注音设置与 `LineBreakRules`，`SceneObject::logical_size` 保存逻辑屏幕尺寸。最新停点为 menu.ps3 / 0x15382 / 0x21cf（SP=96），此时已建立底部消息窗口 0。
+随后帧动画阶段：`scene::DrawState` 可挂 `Animation`，`SceneObject::advance_effects` 实现帧动画通道与 -2 销毁，`MessageHost::advance_frame` 接入 `Startup` 帧推进；最新停点为 menu.ps3 / 0x12c8c / 0x215a（SP=92）。

@@ -182,6 +182,7 @@ impl<'a> Startup<'a> {
             self.audio_backend.stop_movie_audio()?;
         }
         self.scene.advance_frame(delta_ms);
+        self.messages.advance_frame(delta_ms);
         self.frame_delta = delta_ms;
         Ok(())
     }
@@ -201,6 +202,7 @@ impl<'a> Startup<'a> {
     /// Callback registration time remains a separate research clock.
     pub fn advance_frame(&mut self, delta_ms: u32) {
         self.scene.advance_frame(delta_ms);
+        self.messages.advance_frame(delta_ms);
         self.movies.advance(delta_ms);
         self.frame_delta = delta_ms;
     }

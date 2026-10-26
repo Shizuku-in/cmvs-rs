@@ -8,14 +8,15 @@
 //! differs from 0x215d only in taking the logical size from the device, which is not
 //! modeled, so it stays unhandled. 0x215b and 0x2142..0x2149 set window and text object
 //! fields; 0x2170, 0x2178, 0x217a, 0x217f and 0x2180..0x2185 drive the window's own scene object;
-//! 0x2190..0x2192 fill its 32 button records and 0x2150 moves the window. 0x2114..0x2117 and
-//! 0x211e address text objects directly. Glyphs, fonts and drawing are not modeled.
+//! 0x2190..0x2192 fill its 32 button records and 0x2150 moves the window; 0x21cf/0x21d0 build
+//! frame animations. 0x2114..0x2117 and 0x211e address text objects directly. Glyphs, fonts and
+//! drawing are not modeled.
 use crate::{
     bytecode::DecodeError,
     evaluate::error,
     image::ImageSource,
     machine::Machine,
-    scene::{self, DrawSetter, DrawState, SceneObject},
+    scene::{self, ANIMATION_FRAMES, AnimationFrame, DrawSetter, DrawState, SceneObject},
     vm::SystemResult,
 };
 use std::error::Error;
@@ -52,6 +53,12 @@ pub struct MessageWindow {
     pub switch_positions: [[i32; 2]; 2],
     /// +20/+24.
     pub size: [i32; 2],
+    /// +28 (0x2151, zeroed by the constructor): wait cursor mode. With 3, the window updates
+    /// 0x14005e220/0x14005d4e0 place children 2 and 3 at the text pen plus `cursor_offset`;
+    /// no reader treats the other modes specially.
+    pub cursor_mode: u16,
+    /// +30/+32: wait cursor offset, kept for modes 1 and 3 and cleared for 0 and 2.
+    pub cursor_offset: [i16; 2],
     /// +2488 (0x215b): while set, 0x14005de50 moves the window between the +2472 and
     /// +2480 positions; zeroed by the constructor's memset.
     pub position_switch: bool,
@@ -132,6 +139,15 @@ impl MessageHost {
     pub fn font_present(&self, index: usize) -> bool {
         self.fonts.get(index).copied().unwrap_or(false)
     }
+    /// The window part of the frame update 0x140015900: after the slot objects and text
+    /// objects, each window's +2520 object runs 0x14003d0c0. The window object itself is
+    /// never destroyed here, only its marked children. Text object updates (0x14005ae70)
+    /// are not modeled.
+    pub fn advance_frame(&mut self, delta: u32) {
+        for window in self.windows.iter_mut().flatten() {
+            window.object.advance_effects(delta);
+        }
+    }
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
         match vm.pending_system() {
             Some((pc, 0x141)) => self.destroy(vm, pc).map(|()| true),
@@ -140,11 +156,13 @@ impl MessageHost {
                 self.set(vm, pc, command).map(|()| true)
             }
             Some((pc, command @ (0x178 | 0x17f))) => self.object(vm, pc, command).map(|()| true),
-            Some((pc, command @ (0x17a | 0x17c | 0x180 | 0x182..=0x185))) => {
+            Some((pc, command @ (0x17a | 0x17c | 0x180 | 0x182..=0x186))) => {
                 self.draw(vm, pc, command).map(|()| true)
             }
             Some((pc, command @ 0x190..=0x192)) => self.button(vm, pc, command).map(|()| true),
             Some((pc, 0x150)) => self.move_window(vm, pc).map(|()| true),
+            Some((pc, 0x151)) => self.cursor(vm, pc).map(|()| true),
+            Some((pc, command @ (0x1cf..=0x1d1))) => self.animation(vm, pc, command).map(|()| true),
             Some((pc, command @ (0x114..=0x117 | 0x11e))) => {
                 self.text_command(vm, pc, command).map(|()| true)
             }
@@ -170,14 +188,15 @@ impl MessageHost {
     /// - 0x2182: source rectangle (0x14003b070, as 0x2044); pops 24.
     /// - 0x2183: position (0x14003b0b0, as 0x2045); 0x2185: origin (0x14003b0a0, as 0x2046);
     ///   both pop 16.
-    /// - 0x2184: layer (0x14003b0d0, as 0x2047); pops 12.
+    /// - 0x2184: layer (0x14003b0d0, as 0x2047); 0x2186 / 0x140077970: opacity
+    ///   (0x14003b0e0, as 0x2048); both pop 12.
     fn draw(&mut self, vm: &mut Machine<'_>, pc: usize, command: u16) -> Result<(), DecodeError> {
         let op = command + 0x2000;
         let slot = window_slot(vm, pc, op)?;
         let count = match command {
             0x180 => 0,
             0x182 => 4,
-            0x17a | 0x184 => 1,
+            0x17a | 0x184 | 0x186 => 1,
             _ => 2,
         };
         let mut args = [0u32; 4];
@@ -217,6 +236,7 @@ impl MessageHost {
             0x182 => DrawSetter::Source([a, b, c, d]),
             0x183 => DrawSetter::Position([a, b]),
             0x184 => DrawSetter::Layer(a),
+            0x186 => DrawSetter::Opacity(a),
             _ => DrawSetter::Origin([a, b]),
         };
         target.draw.as_mut().expect("checked above").set(setter);
@@ -361,6 +381,121 @@ impl MessageHost {
             0x116 => text.ruby_spacing = value as i32,
             0x117 => text.ruby_every_line = value != 0,
             _ => text.line_break = rules,
+        }
+        Ok(())
+    }
+    /// 0x21cf / 0x140078210 and 0x21d0 / 0x140078280: SP-4 window slot, SP-8 child selected
+    /// by 0x14005d280, then the draw state's +136 frame animation (0x14003b060 returns the
+    /// draw state, which both dereference). Missing windows or children only set +12056 bit
+    /// 0x10000.
+    /// - 0x21cf (0x14001fc10): replace the animation with an empty, stopped one; pops 8.
+    /// - 0x21d0 (0x14001fd60 -> 0x1400261b0): entry SP-12 gets next = SP-16, duration =
+    ///   SP-20 and the 16-bit words SP-24..SP-44; no animation is a no-op. The original does
+    ///   not bound the entry index (Rust accepts 0..63) and only reads past the table when
+    ///   playback reaches a `next` >= 64, which Rust rejects here. Pops 44.
+    /// - 0x21d1 / 0x140078380 (0x14001fd10 -> 0x140026200): play from frame SP-12 (Rust
+    ///   accepts 0..63; the original does not bound it); no animation is a no-op. Pops 12.
+    ///
+    /// Stopping (0x21d2 / 0x140026110) is not on the real path yet and stays unhandled;
+    /// `advance_frame` runs the per-frame update.
+    fn animation(
+        &mut self,
+        vm: &mut Machine<'_>,
+        pc: usize,
+        command: u16,
+    ) -> Result<(), DecodeError> {
+        let op = command + 0x2000;
+        let slot = window_slot(vm, pc, op)?;
+        let word = |distance| {
+            vm.stack()
+                .peek_u32(distance)
+                .map_err(|e| error(pc, op, e.0))
+        };
+        let child = word(8)? as i32;
+        let mut args = [0u32; 9];
+        let count = match command {
+            0x1d0 => 9,
+            0x1d1 => 1,
+            _ => 0,
+        };
+        for (i, arg) in args.iter_mut().take(count).enumerate() {
+            *arg = word(12 + 4 * i)?;
+        }
+        if count > 0 && args[0] as usize >= ANIMATION_FRAMES {
+            return Err(error(
+                pc,
+                op,
+                "animation frame outside 0..63 overflows the original buffer",
+            ));
+        }
+        if command == 0x1d0 && args[1] as i32 >= ANIMATION_FRAMES as i32 {
+            return Err(error(
+                pc,
+                op,
+                "next animation frame >= 64 would be read past the original buffer",
+            ));
+        }
+        let target = self.windows[slot]
+            .as_ref()
+            .and_then(|window| window_target(&window.object, child))
+            .ok_or_else(|| error(pc, op, "message window or window child does not exist"))?;
+        if target.draw.is_none() {
+            return Err(error(pc, op, "window object has no draw state"));
+        }
+        vm.complete_system(SystemResult(0x4008 + 4 * count as u16))?;
+        let window = self.windows[slot].as_mut().expect("checked above");
+        let draw = window_target_mut(&mut window.object, child)
+            .and_then(|target| target.draw.as_mut())
+            .expect("checked above");
+        if command == 0x1cf {
+            draw.animation = Some(Box::default());
+        } else if command == 0x1d1 {
+            if let Some(animation) = draw.animation.as_deref_mut() {
+                animation.start(args[0] as usize, &mut draw.words);
+            }
+        } else if let Some(animation) = draw.animation.as_deref_mut() {
+            let mut words = [0i16; 6];
+            for (field, value) in words.iter_mut().zip(&args[3..]) {
+                *field = *value as u16 as i16;
+            }
+            animation.frames[args[0] as usize] = AnimationFrame {
+                next: args[1] as i32,
+                words,
+                duration: args[2],
+            };
+        }
+        Ok(())
+    }
+    /// 0x2151 / 0x1400766a0 -> 0x14005db90: SP-4 window slot, then the low 16 bits of SP-8
+    /// become +28; modes 1 and 3 store SP-12/SP-16 as 16-bit +30/+32, modes 0 and 2 clear
+    /// them and other modes leave them. Pops 16; a missing window only sets +12056 bit
+    /// 0x10000.
+    fn cursor(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
+        let slot = window_slot(vm, pc, 0x2151)?;
+        let word = |distance| {
+            vm.stack()
+                .peek_u32(distance)
+                .map_err(|e| error(pc, 0x2151, e.0))
+        };
+        let (mode, x, y) = (
+            word(8)? as u16,
+            word(12)? as u16 as i16,
+            word(16)? as u16 as i16,
+        );
+        if self.windows[slot].is_none() {
+            return Err(error(
+                pc,
+                0x2151,
+                "message window slot without a window sets an unmodeled flag",
+            ));
+        }
+        vm.complete_system(SystemResult(0x4010))?;
+        let window = self.windows[slot].as_mut().expect("checked above");
+        window.cursor_mode = mode;
+        match mode {
+            1 | 3 => window.cursor_offset = [x, y],
+            0 | 2 => window.cursor_offset = [0, 0],
+            _ => {}
         }
         Ok(())
     }
@@ -664,6 +799,8 @@ impl MessageHost {
             position,
             size,
             switch_positions: [position; 2],
+            cursor_mode: 0,
+            cursor_offset: [0, 0],
             position_switch: false,
             object: SceneObject::default(),
             buttons: [WindowButton::default(); WINDOW_BUTTONS],
