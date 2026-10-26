@@ -37,7 +37,7 @@ pub struct SeChannel {
     pub looped: bool,
     /// +1692 raw script volume; positive values scale the effective volume by /256.
     pub volume: i32,
-    /// +1704: 0x20b0's immediate-start flag; 0x20b1 sets this to true.
+    /// +1704: 0x20b0's immediate-start flag; 0x20b1 sets this to true, 0x20b3 clears it.
     pub flag: bool,
 }
 
@@ -54,6 +54,8 @@ pub enum AudioRequest {
     },
     /// 0x140088030: start a prepared device channel; an already active channel is unchanged.
     StartSe { channel: u8, looped: bool },
+    /// 0x140087910: stop and release the device channel's sound, prepared or active.
+    StopSe { channel: u8 },
 }
 
 pub trait AudioBackend {
@@ -65,6 +67,11 @@ pub trait AudioBackend {
     /// Err must leave the device unchanged, so the VM request can be retried.
     fn start(&mut self, _channel: u8, _looped: bool) -> Result<(), Box<dyn Error>> {
         Err("audio backend does not implement starting a prepared SE channel".into())
+    }
+    /// Stop channel + 9 at once (no fade) and release its sound; an empty channel is a no-op.
+    /// The original waits until its mixer thread has freed the slot, so Ok means released.
+    fn stop(&mut self, _channel: u8) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement stopping an SE channel".into())
     }
 }
 
@@ -91,6 +98,9 @@ impl AudioBackend for RecordingAudio {
     }
     fn start(&mut self, channel: u8, looped: bool) -> Result<(), Box<dyn Error>> {
         self.record(AudioRequest::StartSe { channel, looped })
+    }
+    fn stop(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::StopSe { channel })
     }
 }
 
@@ -119,8 +129,10 @@ impl AudioHost {
         vm: &mut Machine<'_>,
         backend: &mut dyn AudioBackend,
     ) -> Result<bool, Box<dyn Error>> {
-        if matches!(vm.pending_system(), Some((_, 0xb1))) {
-            return self.try_start(vm, backend);
+        match vm.pending_system() {
+            Some((_, 0xb1)) => return self.try_start(vm, backend),
+            Some((_, 0xb3)) => return self.try_stop(vm, backend),
+            _ => {}
         }
         let Some((pc, 0xb0)) = vm.pending_system() else {
             return Ok(false);
@@ -192,6 +204,28 @@ impl AudioHost {
         let record = self.channels[channel as usize].get_or_insert_with(SeChannel::default);
         record.looped = looped;
         record.flag = true;
+        Ok(true)
+    }
+
+    /// 0x20b3 / 0x140070f60: SP-4 channel; returns 0x4004, no result write.
+    fn try_stop(
+        &mut self,
+        vm: &mut Machine<'_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<bool, Box<dyn Error>> {
+        let (pc, _) = vm.pending_system().expect("checked pending command");
+        let fail = |why| error(pc, 0x20b3, why);
+        let channel = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
+        if channel as usize >= SE_CHANNELS {
+            return Err(fail("SE channel outside 0..5 sets an unmodeled flag").into());
+        }
+        // Unlike 0x20b0/0x20b1, the original stops the device channel without checking SE_USE.
+        backend.stop(channel as u8)?;
+        vm.complete_system(SystemResult(0x4004))?;
+        // An empty name keeps the SE menu toggle (0x140017580) from replaying the channel.
+        let record = self.channels[channel as usize].get_or_insert_with(SeChannel::default);
+        record.name.clear();
+        record.flag = false;
         Ok(true)
     }
 }

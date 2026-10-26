@@ -272,6 +272,14 @@ fn run() -> Result<(), Box<dyn Error>> {
                             "# audio 0x20b1 recorded start SE[{channel}] loop={looped}; no playback, system_integer[0]={:?}",
                             machine.state().system_integer(0)
                         );
+                    } else if let (0xb3, Some(AudioRequest::StopSe { channel })) =
+                        (command, audio_backend.requests().last())
+                    {
+                        println!(
+                            "# audio 0x20b3 recorded stop SE[{channel}]; record={:?}, system_integer[0]={:?}",
+                            audio.channel(usize::from(*channel)),
+                            machine.state().system_integer(0)
+                        );
                     }
                     continue;
                 }
