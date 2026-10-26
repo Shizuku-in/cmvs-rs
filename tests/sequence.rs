@@ -53,3 +53,34 @@ fn reset_zeroes_the_header_and_pops_nothing() {
     assert!(!sequence.try_handle(&mut vm).unwrap());
     assert_eq!(vm.pending_system().map(|p| p.1), Some(0x281));
 }
+
+#[test]
+fn count_query_preserves_stack_header_and_other_results() {
+    let mut code = vec![];
+    code.extend(0x440u16.to_le_bytes());
+    code.extend(4u16.to_le_bytes());
+    code.extend(0xdeadbeefu32.to_le_bytes());
+    code.extend(0x2285u16.to_le_bytes());
+    code.extend(0x2285u16.to_le_bytes());
+    code.extend(0x2281u16.to_le_bytes());
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_system_integer(0, 99).unwrap();
+    vm.state_mut().set_system_integer(4, 7).unwrap();
+    let mut sequence = SequenceHost::default();
+    assert!(!sequence.try_handle(&mut vm).unwrap());
+    for _ in 0..2 {
+        pending(&mut vm);
+        let pc = vm.pc();
+        assert!(sequence.try_handle(&mut vm).unwrap());
+        assert_eq!(vm.pc(), pc + 2);
+        assert_eq!(vm.state().system_integer(0), Some(0));
+        assert_eq!(vm.state().system_integer(4), Some(7));
+        assert_eq!(vm.stack().len_bytes(), 4);
+        assert_eq!(vm.stack().peek_u32(4).unwrap(), 0xdeadbeef);
+        assert_eq!(sequence.header(), SequenceHeader::default());
+    }
+    pending(&mut vm);
+    assert!(!sequence.try_handle(&mut vm).unwrap());
+    assert_eq!(vm.pending_system().map(|p| p.1), Some(0x281));
+}
