@@ -250,3 +250,40 @@ fn invalid_property_targets_and_truncated_arguments_are_transactional() {
         assert_eq!(vm.stack().len_bytes(), args.len() * 4);
     }
 }
+
+#[test]
+fn destroy_all_clears_every_slot_but_keeps_stack_fade_and_clear_state() {
+    let mut code = vec![];
+    for (op, args) in [
+        (0x22cb, vec![0x123456]),
+        (0x2020, vec![0]),
+        (0x2020, vec![255]),
+        (0x2040, vec![255]),
+        (0x2022, vec![255, 3]),
+        (0x2220, vec![0, 0, 2000, 9]),
+    ] {
+        command(&mut code, op, &args);
+    }
+    // A leftover argument shows that 0x202f pops nothing.
+    code.extend(push_then(0xdead, &[0x202f, 0x202f]));
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    for _ in 0..6 {
+        assert!(next(&mut vm, &mut scene).unwrap());
+    }
+    vm.state_mut().set_system_integer(0, 5).unwrap();
+    let fade = scene.fade().current().cloned();
+    assert!(fade.is_some());
+    assert_eq!(scene.objects().len(), 2);
+    for _ in 0..2 {
+        assert!(next(&mut vm, &mut scene).unwrap());
+        assert!(scene.objects().is_empty());
+        assert_eq!(vm.stack().len_bytes(), 4);
+    }
+    assert_eq!(vm.pc(), code.len());
+    assert_eq!(vm.stack().peek_u32(4).unwrap(), 0xdead);
+    assert_eq!(scene.fade().current().cloned(), fade);
+    assert_eq!(scene.clear().color, 0x123456);
+    assert_eq!(vm.state().system_integer(0), Some(5));
+}

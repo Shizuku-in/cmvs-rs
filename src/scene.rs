@@ -112,6 +112,13 @@ impl SceneHost {
         if matches!(command, 0x22 | 0x40 | 0x50 | 0x44..=0x48 | 0x4b) {
             return self.handle_object(vm, pc, command);
         }
+        if command == 0x2f {
+            // 0x14006bc50 runs the 0x2021 destructor on all 256 slots and pops nothing.
+            // The +4616 fade overlay owns its object outside this table, so it survives.
+            vm.complete_system(SystemResult(0x4000))?;
+            self.objects.clear();
+            return Ok(true);
+        }
         if !matches!(command, 0x2cb | 0x250 | 0x20 | 0x21) {
             return Ok(false);
         }
