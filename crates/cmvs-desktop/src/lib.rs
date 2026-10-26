@@ -1,5 +1,6 @@
 //! Optional native window/input adapter. Static scene rendering lives in `scene_render`.
 mod app;
+pub mod game_input;
 pub use app::run_cli;
 use cmvs_core::{
     FormatError,

@@ -1,11 +1,103 @@
 //! Action-level input of the engine +4656 object; addresses refer to the documented binary hash.
 //! Each frame 0x140055260 derives three flags for each of 24 actions from five bound input
 //! codes (tables at +944 + 10 * action) and per-code frame counters (+1540 now, +2564 before).
-//! Which physical keys are bound is not verified yet, so hosts that cannot map input supply
-//! the default: no action active.
+//! KeyBindings reads the verified key.cfg bank; hosts without native input supply the
+//! default: no action active. Physical event translation stays in the desktop backend.
 use crate::{bytecode::DecodeError, machine::Machine, vm::SystemResult};
 
 pub const ACTIONS: usize = 24;
+
+/// The first 24 KEY_FUNCTION sections of key.cfg (0x140057740).
+/// Registry overrides and the second bank (51..) are deliberately not read.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KeyBindings([[u8; 5]; ACTIONS]);
+
+impl KeyBindings {
+    pub fn codes(&self) -> &[[u8; 5]; ACTIONS] {
+        &self.0
+    }
+    /// Bounded ASCII INI subset. Missing entries and out-of-range input codes are zero,
+    /// as in the original profile reader. Malformed relevant values are errors.
+    pub fn parse(text: &str) -> Result<Self, &'static str> {
+        if text.len() > 65536 || !text.is_ascii() {
+            return Err("key.cfg must be ASCII and at most 64 KiB");
+        }
+        let mut result = Self::default();
+        let mut section = None;
+        for line in text.lines() {
+            let line = line.trim();
+            if line.starts_with([';', '#']) || line.is_empty() {
+                continue;
+            }
+            if let Some(name) = line.strip_prefix('[').and_then(|v| v.strip_suffix(']')) {
+                section = name
+                    .to_ascii_uppercase()
+                    .strip_prefix("KEY_FUNCTION_")
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .filter(|v| (1..=ACTIONS).contains(v))
+                    .map(|v| v - 1);
+            } else if let Some(action) = section
+                && let Some((key, value)) = line.split_once('=')
+                && let Some(slot) = key
+                    .trim()
+                    .to_ascii_uppercase()
+                    .strip_prefix("KEY_DATA_")
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .filter(|v| (1..=5).contains(v))
+            {
+                let value = value
+                    .trim()
+                    .parse::<i64>()
+                    .map_err(|_| "invalid key.cfg input code")?;
+                result.0[action][slot - 1] = if (0..128).contains(&value) {
+                    value as u8
+                } else {
+                    0
+                };
+            }
+        }
+        Ok(result)
+    }
+}
+
+/// Per-code history, independent of consumed action flags. One update per VM frame,
+/// never per instruction or cooperative execution slice (0x140055260/0x140056780).
+#[derive(Debug, Clone)]
+pub struct CodeInput {
+    previous: [bool; 128],
+}
+impl Default for CodeInput {
+    fn default() -> Self {
+        Self {
+            previous: [false; 128],
+        }
+    }
+}
+impl CodeInput {
+    pub fn update(&mut self, bindings: &KeyBindings, now: &[bool; 128], input: &mut ActionInput) {
+        for (action, codes) in bindings.0.iter().enumerate() {
+            let mut held = false;
+            let mut pressed = false;
+            let mut released = false;
+            for &code in codes.iter().filter(|&&c| c != 0) {
+                let code = usize::from(code);
+                held |= now[code];
+                pressed |= now[code] && !self.previous[code];
+                released |= !now[code] && self.previous[code];
+            }
+            input
+                .set(action, held, pressed, released)
+                .expect("bounded action");
+        }
+        self.previous = *now;
+    }
+    /// Focus loss cancels state without turning it into a click on release.
+    pub fn clear(&mut self, input: &mut ActionInput) {
+        self.previous.fill(false);
+        *input = ActionInput::default();
+        input.set_pointer(-1, -1);
+    }
+}
 
 /// Flags at +1232 + 12 * action: +0 released, +4 held, +8 pressed.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

@@ -1,7 +1,9 @@
+use crate::game_input::{GameInput, event_key};
 use crate::{DesktopInput, InputEvent, NativeBackend, TextEncoding};
 use cmvs_core::{
     cpz::Cpz6Index,
     cursor::CursorBitmap,
+    input::KeyBindings,
     pb3,
     platform::{DirectoryAssets, PlatformAssets, PlatformBackend, PlatformRequest},
     raster::RgbaImage,
@@ -34,6 +36,10 @@ struct App<'a> {
     assets: DirectoryAssets,
     encoding: TextEncoding,
     input: DesktopInput,
+    game_input: GameInput,
+    bindings: KeyBindings,
+    native_input: bool,
+    input_due: bool,
     halted: bool,
     error: Option<String>,
     exit_after: Option<Duration>,
@@ -152,13 +158,20 @@ impl ApplicationHandler for App<'_> {
             WindowEvent::Resized(_) => self.window.as_ref().expect("window").request_redraw(),
             WindowEvent::Focused(focus) => {
                 self.input.push(InputEvent::Focus(focus));
+                self.game_input.focus(focus, self.startup.input_mut());
                 println!("# input focus={focus}");
             }
-            WindowEvent::CursorMoved { position, .. } => self.input.push(InputEvent::Pointer {
-                x: position.x,
-                y: position.y,
-            }),
+            WindowEvent::CursorMoved { position, .. } => {
+                self.game_input.pointer(position.x, position.y);
+                self.input.push(InputEvent::Pointer {
+                    x: position.x,
+                    y: position.y,
+                });
+            }
+            WindowEvent::CursorLeft { .. } => self.game_input.leave(),
             WindowEvent::MouseInput { state, button, .. } => {
+                self.game_input
+                    .button(button, state == ElementState::Pressed);
                 let button = format!("{button:?}");
                 println!(
                     "# input button={button} pressed={}",
@@ -175,9 +188,14 @@ impl ApplicationHandler for App<'_> {
                     MouseScrollDelta::PixelDelta(p) => (p.x, p.y),
                 };
                 self.input.push(InputEvent::Wheel { x, y });
+                self.game_input.wheel(y);
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 let pressed = event.state == ElementState::Pressed;
+                if let PhysicalKey::Code(key) = event.physical_key {
+                    self.game_input
+                        .key(event_key(key, &event.logical_key), pressed);
+                }
                 println!(
                     "# input key={:?} pressed={pressed} repeat={}",
                     event.physical_key, event.repeat
@@ -188,7 +206,9 @@ impl ApplicationHandler for App<'_> {
                     repeat: event.repeat,
                 });
                 if pressed && !event.repeat {
-                    if event.physical_key == PhysicalKey::Code(KeyCode::Escape) {
+                    if event.physical_key == PhysicalKey::Code(KeyCode::Escape)
+                        && (self.halted || !self.native_input || self.preview_image.is_some())
+                    {
                         el.exit();
                     } else if self.halted {
                         let id = match event.physical_key {
@@ -234,6 +254,15 @@ impl ApplicationHandler for App<'_> {
             self.last_frame = now;
             self.next_frame = now + Duration::from_millis(16);
             let window = window.clone();
+            if self.input_due && self.native_input && self.preview_image.is_none() {
+                let size = window.inner_size();
+                self.game_input.frame(
+                    &self.bindings,
+                    [size.width, size.height],
+                    self.startup.input_mut(),
+                );
+                self.input_due = false;
+            }
             let start = Instant::now();
             while start.elapsed() < Duration::from_millis(8) {
                 let mut backend = NativeBackend {
@@ -248,7 +277,10 @@ impl ApplicationHandler for App<'_> {
                 }
                 match outcome {
                     Ok(StartupEvent::Progress) => {}
-                    Ok(StartupEvent::Yield) => break,
+                    Ok(StartupEvent::Yield) => {
+                        self.input_due = true;
+                        break;
+                    }
                     Ok(StartupEvent::MainEnteredWithoutSnapshot) => println!(
                         "# main entered at step {}; snapshot NOT built, saving unavailable",
                         self.startup.steps()
@@ -275,9 +307,28 @@ impl ApplicationHandler for App<'_> {
                         break;
                     }
                     Err(error) => {
+                        let vm = self.startup.machine();
+                        let stack_top: Vec<_> =
+                            (1..=5).map(|n| vm.stack().peek_u32(n * 4)).collect();
+                        eprintln!(
+                            "# VM error script={} pc=0x{:x} stack_bytes={} top_words={stack_top:?}",
+                            vm.current_name().escape_ascii(),
+                            vm.pc(),
+                            vm.stack().len_bytes()
+                        );
                         self.fail(el, error);
                         return;
                     }
+                }
+            }
+            if let Some(point) = self.startup.input_mut().take_warp() {
+                let size = window.inner_size();
+                if let Some([x, y]) = self.game_input.warp([size.width, size.height], point)
+                    && let Err(error) =
+                        window.set_cursor_position(winit::dpi::PhysicalPosition::new(x, y))
+                {
+                    self.fail(el, error);
+                    return;
                 }
             }
             if !self.halted {
@@ -322,6 +373,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut rand_seed = 0;
     let mut save_frame = None;
     let mut native_audio = false;
+    let mut native_input = true;
     while let Some(flag) = args.next() {
         if flag == "--continue-without-snapshot" {
             snapshot_policy = SnapshotPolicy::ContinueWithoutImage;
@@ -346,6 +398,12 @@ fn run() -> Result<(), Box<dyn Error>> {
             image_archive = Some(value);
         } else if flag == "--save-frame" {
             save_frame = Some(PathBuf::from(value));
+        } else if flag == "--input" {
+            native_input = match value.to_str() {
+                Some("native") => true,
+                Some("record") => false,
+                _ => return Err("input must be native or record".into()),
+            };
         } else if flag == "--audio" {
             native_audio = match value.to_str() {
                 Some("native") => true,
@@ -358,6 +416,20 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
     let encoding = encoding.ok_or("select title encoding explicitly with --encoding")?;
     let root = PathBuf::from(root).canonicalize()?;
+    let bindings = if native_input {
+        use std::io::Read;
+        let mut text = String::new();
+        File::open(root.join("key.cfg"))?
+            .take(65537)
+            .read_to_string(&mut text)?;
+        let bindings = KeyBindings::parse(&text)?;
+        println!(
+            "# native input enabled; bindings read only from key.cfg; no registry overrides or gamepad"
+        );
+        bindings
+    } else {
+        KeyBindings::default()
+    };
     let preview_image = match (preview_name, image_archive) {
         (None, None) => None,
         (Some(name), Some(path)) => {
@@ -402,6 +474,10 @@ fn run() -> Result<(), Box<dyn Error>> {
         assets: DirectoryAssets::new(&root)?,
         encoding,
         input: DesktopInput::default(),
+        game_input: GameInput::default(),
+        bindings,
+        native_input,
+        input_due: true,
         halted: false,
         error: None,
         exit_after,

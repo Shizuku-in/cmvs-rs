@@ -41,7 +41,7 @@ cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-`--payload` 仅允许创建新文件，输出不包含原始头部。默认 272 项测试、启用 desktop 后 277 项、再启用 audio-output 后 282 项测试和严格 Clippy 检查通过。
+`--payload` 仅允许创建新文件，输出不包含原始头部。当前默认 274 项测试、全 workspace 全功能 288 项测试及严格 Clippy 检查通过。
 真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
 `ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
 
@@ -155,7 +155,9 @@ trace 在完整选项后加 `--frame-ms 16` 会在标题空闲循环中耗尽默
 cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --audio native
 ```
 
-Windows 175 秒检查完成有音频输出的启动、标题、OP 与返回标题；四份真实音轨的完整 PCM 样本数与 Python/FFmpeg 一致，浮点最大绝对误差低于 6.6e-7。音频源时钟尚未校准设备缓冲延迟；默认核心仍无依赖，原游戏只读。支持范围和证据见 [audio-output](docs/audio-output.md)。下一步核对并接入真实动作输入，推进开始游戏后的剧情路径。
+Windows 175 秒检查完成有音频输出的启动、标题、OP 与返回标题；四份真实音轨的完整 PCM 样本数与 Python/FFmpeg 一致，浮点最大绝对误差低于 6.6e-7。音频源时钟尚未校准设备缓冲延迟；默认核心仍无依赖，原游戏只读。支持范围和证据见 [audio-output](docs/audio-output.md)。现已接入真实键鼠动作输入，见下文。
+
+新增真实动作输入：桌面默认只读加载根目录 `key.cfg`，鼠标可操作标题，Enter 可跳过 OP；`--input record` 保留此前无输入研究模式。开始游戏已推进到 `intproc.ps3` 表达式 PC `0x4201e`，停于内部操作数 `0x0106`（`0x42020`），SP=124。默认 274 项、全 workspace 全功能 288 项测试与严格 Clippy 通过。输入证据、限制与验证见 [input](docs/input.md)。活动游戏中的 Esc 交给脚本，关闭按钮仍可退出。
 
 目前提供研究工具和原生桌面预览，**尚不能运行游戏剧情**，也没有生成 iOS/Android 应用。
 
@@ -178,14 +180,13 @@ python -m unittest discover -s tests -v
 
 ## 后续实现顺序
 
-1. 以当前游戏二进制核对表达式求值、参数栈和系统命令；建立带未知指令即停止的启动脚本执行器。
-2. 实现 CPZ6 目录读取和文件提取，验证 intproc.ps3、intcode.ps3、main.ps3 等实际内容。
-3. 用 Rust 建立平台无关的 VM 和资源核心，先在桌面实现文字、背景、立绘、语音与选择分支。
-4. 加入图形、音频、字体、输入、存档的后端，再接 Windows/macOS/Linux/Android/iOS。
-5. 使用同一段剧情对照原程序验证；iOS 编译、签名和设备测试仍需要对应环境。
+1. 核对开始游戏路径的 `0x0106` 操作数语义，从当前真实断点继续推进，未知项明确停止。
+2. 沿该路径实现消息窗口、字体/文字、背景与立绘、语音，先显示第一屏剧情。
+3. 补齐选择分支、必要转场、回调调度与完整存档镜像，并对照原程序验证同一段剧情。
+4. 验证 Windows/macOS/Linux 构建和行为，再实现 Android/iOS 后端与真机检查。
+5. 扩展引擎版本与作品兼容矩阵。iOS 编译、签名和设备测试仍需对应环境。
 
-采用哪种图形/窗口库尚未定案，优先保证 VM 和资源逻辑不绑定平台。
-现在的 Python 工具用于验证格式，不是未来手机端的运行核心。
+平台无关核心优先，窗口、音频与物理输入留在后端；Python 工具仅作研究对照。
 
 ## 参考与许可
 

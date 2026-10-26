@@ -119,3 +119,5 @@ MOG_InputMemory2（`0x180001b60`）、分段读取（`0x1800013e0`）、MOG_Repl
 
 Workspace 阶段仅移动现有实现、整理通用资源接口及 feature 转发，未新增外部源码或参考项目；既有来源提交、许可及 registry 依赖版本不变。
 源码位置改为 crates/cmvs-core、crates/cmvs-audio、crates/cmvs-desktop，根包保留工具与兼容重导出；结构与回归证据见 workspace.md。
+
+2026-10-27 动作绑定、输入码与帧语义仅据同一哈希二进制的 0x140057740、0x140056780、0x140055260、0x140019430 和仓库外只读 key.cfg 核对后重新实现，详见 input.md。未新增参考项目、依赖或外部源码，未改变解码算法。

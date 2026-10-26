@@ -188,6 +188,11 @@ impl<'a> Startup<'a> {
     pub fn input(&self) -> &ActionInput {
         &self.input
     }
+    /// Host input is refreshed once at a frame boundary, and remains consumable across
+    /// cooperative budget slices. Core does not interpret physical window events.
+    pub fn input_mut(&mut self) -> &mut ActionInput {
+        &mut self.input
+    }
     /// Update the scene and supply the latest delta for the next VM run entry.
     /// The timer delta is consumed once after yield, never per instruction/budget slice.
     /// Callback registration time remains a separate research clock.
