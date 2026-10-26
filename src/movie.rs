@@ -9,7 +9,7 @@
 //! Engine +4480 holds three slot players (0x2308/0x230e create them, unhandled); only the
 //! slot destruction 0x230a is modeled, so those slots are always empty here.
 use crate::{
-    audio::{AudioBackend, AudioRequest, AudioSettings},
+    audio::{AudioBackend, AudioRequest, AudioSettings, MovieAudioClock},
     bytecode::DecodeError,
     cmv::CmvIndex,
     evaluate::error,
@@ -126,10 +126,27 @@ impl MovieHost {
         delta_ms: u32,
         source: &mut dyn MovieSource,
     ) -> Result<(), Box<dyn Error>> {
+        self.advance_with_clock(delta_ms, None, source)
+    }
+    /// Real audio time is absolute and never supplemented by wall time. Ended releases
+    /// the player, including when audio duration differs from the container's frame limit.
+    pub fn advance_with_clock(
+        &mut self,
+        delta_ms: u32,
+        clock: Option<MovieAudioClock>,
+        source: &mut dyn MovieSource,
+    ) -> Result<(), Box<dyn Error>> {
         let Some(movie) = &self.player else {
             return Ok(());
         };
-        let elapsed = movie.elapsed.saturating_add(delta_ms);
+        if clock == Some(MovieAudioClock::Ended) {
+            self.player = None;
+            return Ok(());
+        }
+        let elapsed = match clock {
+            Some(MovieAudioClock::Playing { position_ms }) => position_ms.max(movie.elapsed),
+            _ => movie.elapsed.saturating_add(delta_ms),
+        };
         let target = movie.target_at(elapsed);
         let image = if target > movie.frame
             && target < movie.index.header.max_sequence
@@ -139,10 +156,17 @@ impl MovieHost {
         } else {
             None
         };
-        self.advance(delta_ms);
-        if let Some(movie) = &mut self.player
-            && let Some(image) = image
-        {
+        if target >= movie.index.header.max_sequence {
+            self.player = None;
+            return Ok(());
+        }
+        let movie = self.player.as_mut().expect("checked active player");
+        movie.elapsed = elapsed;
+        if target > movie.frame {
+            movie.frame = target;
+            movie.image = None;
+        }
+        if let Some(image) = image {
             movie.image = Some(image);
         }
         Ok(())

@@ -356,3 +356,58 @@ fn initial_frame_failure_preserves_vm_and_sends_no_audio() {
     assert!(movies.player().is_none());
     assert!(audio.requests().is_empty());
 }
+
+#[test]
+fn audio_clock_is_absolute_and_does_not_accumulate_wall_time() {
+    use cmvs_rs::audio::MovieAudioClock;
+    let script = program(&player_code(0), b"a.cmv\0");
+    let mut vm = Machine::new(&script).unwrap();
+    pending(&mut vm);
+    let mut source = Frames {
+        files: Files::default(),
+        reads: vec![],
+        fail: false,
+    };
+    source
+        .files
+        .0
+        .insert(b"a.cmv".to_vec(), cmv(100, 24, 1, true));
+    let mut movies = MovieHost::default();
+    movies.set_decode_frames(true);
+    movies
+        .try_handle_player(
+            &mut vm,
+            &mut source,
+            AudioSettings::default(),
+            &mut RecordingAudio::default(),
+        )
+        .unwrap();
+    for position_ms in [0, 0, 100, 100, 80] {
+        movies
+            .advance_with_clock(
+                1000,
+                Some(MovieAudioClock::Playing { position_ms }),
+                &mut source,
+            )
+            .unwrap();
+    }
+    assert_eq!(movies.player().unwrap().elapsed, 100);
+    assert_eq!(movies.player().unwrap().frame, 2);
+    assert_eq!(source.reads, [0, 2]);
+    let before = movies.player().unwrap().clone();
+    source.fail = true;
+    assert!(
+        movies
+            .advance_with_clock(
+                0,
+                Some(MovieAudioClock::Playing { position_ms: 300 }),
+                &mut source
+            )
+            .is_err()
+    );
+    assert_eq!(movies.player(), Some(&before));
+    movies
+        .advance_with_clock(0, Some(MovieAudioClock::Ended), &mut source)
+        .unwrap();
+    assert!(movies.player().is_none());
+}

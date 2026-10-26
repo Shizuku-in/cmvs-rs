@@ -1,5 +1,7 @@
 //! Platform-independent CMVS research core; optional `desktop` adds a native window adapter.
 pub mod audio;
+#[cfg(feature = "audio-output")]
+pub mod audio_output;
 pub mod bootstrap;
 pub mod buttons;
 pub mod bytecode;
@@ -36,6 +38,8 @@ pub mod system_save;
 pub mod text;
 pub mod timers;
 pub mod vm;
+#[cfg(feature = "audio-output")]
+pub mod vorbis;
 
 use std::fmt;
 

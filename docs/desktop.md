@@ -117,3 +117,14 @@ Windows release `--exit-after 170 --save-frame <新文件.png>` 已从正常入�
 这证明本次无输入路径的画面播放和返回，音轨仍只记录、输入仍未注入、存档镜像仍不可用。
 另以最新 release `--exit-after 70` 导出 OP 播放中的 1280×720 帧，64862 步后正常退出，已目视确认含实际影片画面。
 格式、逐字节对照、支持范围见 [jbpd-format](jbpd-format.md)。
+
+## 可选原生音频（当前阶段）
+
+```powershell
+cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --audio native
+```
+
+默认不加 `--audio native` 仍为记录后端。原生模式已接入 Ogg SE、BGM 前奏/循环与淡变、影片音轨，影片选帧跟随音频源位置。
+Windows 175 秒有界检查从正常入口完成 OP 音轨、返回标题并正常退出；其他平台未验证。
+源消费进度不是 DAC 硬件时间戳，设备延迟未校准，尚未人工听音确认音质；真实输入仍只观察、不注入 VM。
+设备或解码错误明确报错。格式、库版本、二进制证据与 PCM 对照见 [audio-output](audio-output.md)。

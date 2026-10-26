@@ -116,6 +116,21 @@ pub enum AudioRequest {
 }
 
 pub trait AudioBackend {
+    /// Supply the currently registered resource roots before loading a sound.
+    fn configure_paths(
+        &mut self,
+        _paths: &std::collections::BTreeMap<(u16, u32), Vec<u8>>,
+    ) -> Result<(), Box<dyn Error>> {
+        Ok(())
+    }
+    /// Maintain output/fades and surface asynchronous decoder/device failures.
+    fn update(&mut self) -> Result<(), Box<dyn Error>> {
+        Ok(())
+    }
+    /// None selects the explicit virtual clock; real backends report channel 2 state.
+    fn movie_clock(&self) -> Result<Option<MovieAudioClock>, Box<dyn Error>> {
+        Ok(None)
+    }
     /// Prepare a PlaySe request, optionally starting it according to its flag.
     /// Ok(true) means loading succeeded (the original's return), Ok(false) means it failed;
     /// Err leaves VM and channel state unchanged for retry.
@@ -150,6 +165,12 @@ pub trait AudioBackend {
     fn stop_movie_audio(&mut self) -> Result<(), Box<dyn Error>> {
         Err("audio backend does not implement stopping movie audio".into())
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MovieAudioClock {
+    Playing { position_ms: u32 },
+    Ended,
 }
 
 #[derive(Debug, Default)]

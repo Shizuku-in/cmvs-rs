@@ -103,3 +103,16 @@ JBPD 阶段对照 xmoezzz/CMVS-Engine 固定提交 `a6bc9501d82264e228943f894af1
 Rust 解码依同一哈希二进制的 `0x140037620`、`0x1400ab650`、`0x1400a0ad0`、`0x1400a0960`、
 `0x1400b51c0`、`0x1400a2300` 及量化/IDCT 常数重新实现。
 独立 Python/NumPy 对照只用于仓库外原游戏输入的验证，不构成 Rust 核心依赖；真实帧、IDA 数据库、研究伪代码不纳入 Git。
+
+## 可选音频输出依赖与证据
+
+- [rodio 0.21.1](https://docs.rs/rodio/0.21.1/rodio/)：MIT OR Apache-2.0；原生混音、Sink、播放位置。关闭默认功能，只启用 playback，不使用其默认解码器。
+- [lewton 0.10.2](https://docs.rs/lewton/0.10.2/lewton/)：MIT OR Apache-2.0；纯 Rust Vorbis 包解码，流式包装与错误策略由本项目实现。
+- [cpal 0.16.0](https://docs.rs/cpal/0.16.0/cpal/)：Apache-2.0；rodio 的原生设备依赖，Windows 实测。全部版本与校验值固定于 Cargo.lock。
+- [rodio Sink::get_pos](https://docs.rs/rodio/0.21.1/rodio/struct.Sink.html#method.get_pos) 与本地固定版本 sink.rs：进度为源消费位置，约 5ms 更新，不作为 DAC 硬件时间戳。
+
+仅通过公开 API 使用这些库，未将外部源码复制进项目；默认核心不引入它们。
+双文件 BGM 除既有 cmvs64.exe 地址外，还只读核对本作 mog2x64.dll（SHA-256 `c51ba0c33e0153492b6cb2688701b35f0ddae309828fc21a7631ac54abb5b205`）的
+MOG_InputMemory2（`0x180001b60`）、分段读取（`0x1800013e0`）、MOG_Replay（`0x180002770`）；只作行为事实，不执行或分发 DLL。
+使用本机 pefile 2023.2.7（MIT）和 Capstone（BSD）只读检查导出表与机器码；原版 DLL、IDA 数据库、反汇编输出不纳入 Git。
+独立 Python/NumPy 调用本机 FFmpeg 比较四份真实音轨的完整浮点 PCM，FFmpeg 仅为外部验证工具，不是运行依赖；结果与精度限制见 audio-output.md。

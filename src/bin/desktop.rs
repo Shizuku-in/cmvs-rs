@@ -310,7 +310,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     )?;
     if root == "--help" {
         println!(
-            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>] [--continue-without-snapshot] [--rand-seed <seed>] [--save-frame <new.png>]\nNative research preview only. Runs bounded startup with virtual callback tick 0 and explicit wall-time scene updates; stops at unknown commands or main snapshot barrier. --continue-without-snapshot enters main without building a save image; saving stays unavailable. --rand-seed sets the CRT rand() research seed (default 0). Without an explicit image, presents the verified 2D scene (top-level objects and their children) and CMV6 JBPD movies on a 1280x720 research viewport; includes timed full-screen color fades; use a release build for movie decoding; transforms, other transitions and alternate blend modes remain unsupported. --save-frame writes the frame shown at exit, in script coordinates, to a new PNG file (never overwritten); use it instead of screen captures to check rendering. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. Raw window input is observed but not injected into CMVS opcodes. All game files read-only."
+            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>] [--continue-without-snapshot] [--rand-seed <seed>] [--save-frame <new.png>] [--audio <record|native>]\nNative research preview only. Runs bounded startup with virtual callback tick 0 and explicit wall-time scene updates; stops at unknown commands or main snapshot barrier. --continue-without-snapshot enters main without building a save image; saving stays unavailable. --rand-seed sets the CRT rand() research seed (default 0). Without an explicit image, presents the verified 2D scene (top-level objects and their children) and CMV6 JBPD movies on a 1280x720 research viewport; includes timed full-screen color fades; use a release build for movie decoding; transforms, other transitions and alternate blend modes remain unsupported. --save-frame writes the frame shown at exit, in script coordinates, to a new PNG file (never overwritten); use it instead of screen captures to check rendering. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. --audio record (default) records only; --audio native requires the audio-output feature and opens the default device for Vorbis SE/BGM/movie playback, using audio source position for movie frames. Device-buffer latency is not calibrated. Raw window input is observed but not injected into CMVS opcodes. All game files read-only."
         );
         return Ok(());
     }
@@ -321,6 +321,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut snapshot_policy = SnapshotPolicy::Barrier;
     let mut rand_seed = 0;
     let mut save_frame = None;
+    let mut native_audio = false;
     while let Some(flag) = args.next() {
         if flag == "--continue-without-snapshot" {
             snapshot_policy = SnapshotPolicy::ContinueWithoutImage;
@@ -345,6 +346,12 @@ fn run() -> Result<(), Box<dyn Error>> {
             image_archive = Some(value);
         } else if flag == "--save-frame" {
             save_frame = Some(PathBuf::from(value));
+        } else if flag == "--audio" {
+            native_audio = match value.to_str() {
+                Some("native") => true,
+                Some("record") => false,
+                _ => return Err("audio must be native or record".into()),
+            };
         } else {
             return Err("unknown option".into());
         }
@@ -374,6 +381,17 @@ fn run() -> Result<(), Box<dyn Error>> {
     let script = load_start(&root)?;
     let mut startup = Startup::new(&script, &root, 0)?;
     startup.set_decode_movie_frames(true);
+    if native_audio {
+        #[cfg(feature = "audio-output")]
+        {
+            startup.set_audio_backend(Box::new(cmvs_rs::audio_output::NativeAudio::new(&root)?));
+            println!(
+                "# native Vorbis audio enabled; movie frames follow the audio source position"
+            );
+        }
+        #[cfg(not(feature = "audio-output"))]
+        return Err("native audio requires --features desktop,audio-output".into());
+    }
     startup.set_snapshot_policy(snapshot_policy);
     startup.set_random_seed(rand_seed);
     let mut app = App {

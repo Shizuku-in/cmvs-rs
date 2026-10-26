@@ -53,6 +53,23 @@ impl ImageArchives {
         Registered {
             archives: self,
             paths,
+            command: 0x2011,
+            entries: IMAGE_ENTRIES,
+        }
+    }
+    /// Shared bounded directory/CPZ lookup, also used by the four-slot audio roots.
+    #[cfg(feature = "audio-output")]
+    pub(crate) fn with_entries<'a>(
+        &'a mut self,
+        paths: &'a BTreeMap<(u16, u32), Vec<u8>>,
+        command: u16,
+        entries: u32,
+    ) -> Registered<'a> {
+        Registered {
+            archives: self,
+            paths,
+            command,
+            entries,
         }
     }
 
@@ -119,12 +136,18 @@ fn resolve_present(root: &Path, name: &[u8]) -> Result<Option<PathBuf>, Box<dyn 
 pub struct Registered<'a> {
     archives: &'a mut ImageArchives,
     paths: &'a BTreeMap<(u16, u32), Vec<u8>>,
+    command: u16,
+    entries: u32,
 }
 
 impl ImageSource for Registered<'_> {
     fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
-        for slot in 0..IMAGE_ENTRIES {
-            let Some(path) = self.paths.get(&(0x2011, slot)).filter(|p| !p.is_empty()) else {
+        for slot in 0..self.entries {
+            let Some(path) = self
+                .paths
+                .get(&(self.command, slot))
+                .filter(|p| !p.is_empty())
+            else {
                 continue;
             };
             // A trailing backslash marks a directory; anything else is an archive.

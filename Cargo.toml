@@ -45,6 +45,11 @@ path = "src/bin/pb3.rs"
 name = "cmvs-cmv"
 path = "src/bin/cmv.rs"
 
+[[bin]]
+name = "cmvs-audio"
+path = "src/bin/audio.rs"
+required-features = ["audio-output"]
+
 [lints.rust]
 unsafe_code = "forbid"
 
@@ -56,10 +61,13 @@ encoding_rs = { version = "=0.8.42", optional = true }
 ico = { version = "=0.5.0", optional = true }
 softbuffer = { version = "=0.4.8", optional = true }
 winit = { version = "=0.30.13", optional = true }
+rodio = { version = "=0.21.1", default-features = false, features = ["playback"], optional = true }
+lewton = { version = "=0.10.2", optional = true }
 
 [features]
 default = []
 desktop = ["dep:winit", "dep:ico", "dep:encoding_rs", "dep:softbuffer"]
+audio-output = ["dep:rodio", "dep:lewton"]
 
 [[bin]]
 name = "cmvs-desktop"

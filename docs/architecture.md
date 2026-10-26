@@ -61,7 +61,8 @@
 - [x] 画面镜头 0x2058–0x2068、0x209c（`camera`，原始字保存，2D 渲染不使用）。
 - [x] CMV6 容器（`cmv`）与全屏影片计时播放 0x20c0–0x20c2，影片音轨后端契约（默认只记录）；输入查询 0x21a0–0x21a3、跳过查询 0x22ef。
 - [x] JBPD 安全整数解码与桌面全屏呈现，真实 11 帧 Python 对照、6501 帧解码检查；详见 jbpd-format.md。
-- [ ] Ogg 音频、影片槽创建 0x2308/0x230e；动作序列条目、按键绑定、0x2218/0x2219/0x221a/0x221b。
+- [x] 可选 Ogg 原生输出（SE/BGM/影片）、双文件 BGM 循环与源位置驱动影片；Windows 检查通过，见 audio-output.md。
+- [ ] 影片槽创建 0x2308/0x230e；动作序列条目、按键绑定、0x2218/0x2219/0x221a/0x221b。
 - [x] 场景对象槽 0x2020/0x2021、子对象 0x2022、绘制状态 0x2040/0x2050 与基础属性。
 - [x] 字符串长度 0x20f8。
 - [x] 对象图像加载 0x2030/0x2038：按 0x2011 条目只读查找、CPZ6 数据校验、PB3 type 1 解码，图像挂到父/子对象。
@@ -116,7 +117,7 @@ NativeBackend 在活动事件循环中应用窗口请求，先解码/验证数�
 原生输入尚未接入识别逻辑。
 
 `audio` 定义 `AudioBackend`：Ok(true/false) 对应原版播放成功/失败，Err 保持状态供重试；
-`RecordingAudio` 只记录请求并报告未播放。真实播放后端尚未接入，届时只需实现同一接口。
+`RecordingAudio` 只记录请求并报告未播放。可选 audio-output 已实现原生 Ogg 后端，默认仍只记录；源消费时钟与设备延迟限制见 audio-output.md。
 
 `snapshot` 只遍历 CSV2 第 0 段的记录帧，不解释负载，也不恢复状态。`SaveImage` 区分原版缓冲为空（`Absent`）
 与原版会生成但 Rust 未构建（`Unavailable`）；后者只能由显式 `SnapshotPolicy::ContinueWithoutImage` 产生。

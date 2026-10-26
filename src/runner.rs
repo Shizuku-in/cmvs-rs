@@ -164,13 +164,20 @@ impl<'a> Startup<'a> {
         }
     }
     pub fn advance_decoded_frame(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error>> {
-        self.movies.advance_decoded(
+        self.audio_backend.update()?;
+        let clock = self.audio_backend.movie_clock()?;
+        let had_movie = self.movies.player().is_some();
+        self.movies.advance_with_clock(
             delta_ms,
+            clock,
             &mut DirectoryMovies {
                 root: &self.root,
                 directory: self.bootstrap.paths().get(&(0x2015, 0)).map(Vec::as_slice),
             },
         )?;
+        if had_movie && self.movies.player().is_none() && clock.is_some() {
+            self.audio_backend.stop_movie_audio()?;
+        }
         self.scene.advance_frame(delta_ms);
         self.frame_delta = delta_ms;
         Ok(())
@@ -248,6 +255,9 @@ impl<'a> Startup<'a> {
             });
         };
         let id = self.bootstrap.settings().get(&0x201d).copied();
+        if matches!(command, 0xa0 | 0xa4 | 0xb0) {
+            self.audio_backend.configure_paths(self.bootstrap.paths())?;
+        }
         let gate = SkipGate {
             effects: self.effects,
             skip: self.message_flags.skip(),
