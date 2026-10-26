@@ -1,5 +1,5 @@
 //! Sound-effect channel commands with an explicit audio backend.
-//! The recording backend keeps requests only and reports that nothing started playing.
+//! The recording backend keeps requests only; no sound is loaded or played.
 use crate::{evaluate::error, machine::Machine, vm::SystemResult};
 use std::error::Error;
 
@@ -30,14 +30,14 @@ impl Default for AudioSettings {
 }
 
 /// Channel record kept even while SE is disabled, so re-enabling can restart it (0x140017580).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SeChannel {
     pub name: Vec<u8>,
     /// +1688.
     pub looped: bool,
     /// +1692 raw script volume; positive values scale the effective volume by /256.
     pub volume: i32,
-    /// +1704, fifth argument passed to the player; meaning not yet verified.
+    /// +1704: 0x20b0's immediate-start flag; 0x20b1 sets this to true.
     pub flag: bool,
 }
 
@@ -49,14 +49,23 @@ pub enum AudioRequest {
         name: Vec<u8>,
         volume: u32,
         looped: bool,
+        /// Prepare the sound and start it immediately when true.
         flag: bool,
     },
+    /// 0x140088030: start a prepared device channel; an already active channel is unchanged.
+    StartSe { channel: u8, looped: bool },
 }
 
 pub trait AudioBackend {
-    /// Ok(true) when playback started, Ok(false) for the original's zero (not started);
+    /// Prepare a PlaySe request, optionally starting it according to its flag.
+    /// Ok(true) means loading succeeded (the original's return), Ok(false) means it failed;
     /// Err leaves VM and channel state unchanged for retry.
     fn play(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error>>;
+    /// Apply start-if-not-playing on channel + 9, including no-op for a missing sound.
+    /// Err must leave the device unchanged, so the VM request can be retried.
+    fn start(&mut self, _channel: u8, _looped: bool) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement starting a prepared SE channel".into())
+    }
 }
 
 #[derive(Debug, Default)]
@@ -67,14 +76,21 @@ impl RecordingAudio {
     pub fn requests(&self) -> &[AudioRequest] {
         &self.requests
     }
-}
-impl AudioBackend for RecordingAudio {
-    fn play(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+    fn record(&mut self, request: AudioRequest) -> Result<(), Box<dyn Error>> {
         if self.requests.len() >= 4096 {
             return Err("recorded audio requests exceed research limit".into());
         }
-        self.requests.push(request.clone());
+        self.requests.push(request);
+        Ok(())
+    }
+}
+impl AudioBackend for RecordingAudio {
+    fn play(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+        self.record(request.clone())?;
         Ok(false)
+    }
+    fn start(&mut self, channel: u8, looped: bool) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::StartSe { channel, looped })
     }
 }
 
@@ -103,6 +119,9 @@ impl AudioHost {
         vm: &mut Machine<'_>,
         backend: &mut dyn AudioBackend,
     ) -> Result<bool, Box<dyn Error>> {
+        if matches!(vm.pending_system(), Some((_, 0xb1))) {
+            return self.try_start(vm, backend);
+        }
         let Some((pc, 0xb0)) = vm.pending_system() else {
             return Ok(false);
         };
@@ -149,6 +168,30 @@ impl AudioHost {
             volume,
             flag,
         });
+        Ok(true)
+    }
+
+    /// 0x20b1 / 0x140070e40: SP-4 channel, SP-8 loop; returns 0x4008, no result write.
+    fn try_start(
+        &mut self,
+        vm: &mut Machine<'_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<bool, Box<dyn Error>> {
+        let (pc, _) = vm.pending_system().expect("checked pending command");
+        let fail = |why| error(pc, 0x20b1, why);
+        let channel = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
+        let looped = vm.stack().peek_u32(8).map_err(|e| fail(e.0))? != 0;
+        if channel as usize >= SE_CHANNELS {
+            return Err(fail("SE channel outside 0..5 sets an unmodeled flag").into());
+        }
+        if self.settings.se_enabled {
+            backend.start(channel as u8, looped)?;
+        }
+        vm.complete_system(SystemResult(0x4008))?;
+        // The constructor zeroes all six 52-byte records, even without a prior 0x20b0.
+        let record = self.channels[channel as usize].get_or_insert_with(SeChannel::default);
+        record.looped = looped;
+        record.flag = true;
         Ok(true)
     }
 }

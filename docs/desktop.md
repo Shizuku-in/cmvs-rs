@@ -67,7 +67,7 @@ cargo run --offline --features desktop --bin cmvs-desktop -- "E:/Download/AMATSU
 
 ## 全屏纯色淡入/淡出
 
-同一条 --continue-without-snapshot 命令现会执行 logo 的 2000ms 黑色覆盖层淡出，完成后停在 0x36512 / 0x20b1。
+同一条 --continue-without-snapshot 命令现会执行 logo 的 2000ms 黑色覆盖层淡出，完成后执行 0x20b1 的准备声音启动请求，停在 0x36520 / 0x200b（音频仍只记录，无声）。
 帧调度约 16ms，场景按实际经过的毫秒推进；debug 软件绘制耗时可能使帧率低于 60fps，原版全引擎调度尚未复现。
 桌面输入仍只观察，活动的 0x2224 非零参数等待未接入；真实 logo 此处使用 0，无需输入跳过。
 默认快照断点保持，命令行的 --virtual-tick 也仍不代表整个引擎时钟。

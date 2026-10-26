@@ -235,17 +235,27 @@ fn run() -> Result<(), Box<dyn Error>> {
                     continue;
                 }
                 if audio.try_handle(&mut machine, &mut audio_backend)? {
-                    if let Some(AudioRequest::PlaySe {
-                        channel,
-                        name,
-                        volume,
-                        looped,
-                        ..
-                    }) = audio_backend.requests().last()
+                    if let (
+                        0xb0,
+                        Some(AudioRequest::PlaySe {
+                            channel,
+                            name,
+                            volume,
+                            looped,
+                            ..
+                        }),
+                    ) = (command, audio_backend.requests().last())
                     {
                         println!(
-                            "# audio 0x20b0 recorded SE[{channel}]={} volume={volume} loop={looped}; not played, system_integer[0]={:?}",
+                            "# audio 0x20b0 recorded SE[{channel}]={} volume={volume} loop={looped}; not loaded/played, system_integer[0]={:?}",
                             name.escape_ascii(),
+                            machine.state().system_integer(0)
+                        );
+                    } else if let (0xb1, Some(AudioRequest::StartSe { channel, looped })) =
+                        (command, audio_backend.requests().last())
+                    {
+                        println!(
+                            "# audio 0x20b1 recorded start SE[{channel}] loop={looped}; no playback, system_integer[0]={:?}",
                             machine.state().system_integer(0)
                         );
                     }

@@ -25,8 +25,11 @@ fn script(calls: &[(u32, u32, u32, u32, u32)], text: &[u8]) -> Script {
         push(&mut code, channel);
         code.extend(0x20b0u16.to_le_bytes());
     }
+    program(&code, text)
+}
+fn program(code: &[u8], text: &[u8]) -> Script {
     let mut payload = 0u32.to_le_bytes().to_vec();
-    payload.extend(&code);
+    payload.extend_from_slice(code);
     payload.extend(text);
     let mut raw = b"PS2A".to_vec();
     for n in [
@@ -46,6 +49,123 @@ fn script(calls: &[(u32, u32, u32, u32, u32)], text: &[u8]) -> Script {
     }
     raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
     Script::decode(&raw).unwrap()
+}
+
+fn start_code(channel: u32, looped: u32) -> Vec<u8> {
+    let mut code = vec![];
+    push(&mut code, looped);
+    push(&mut code, channel);
+    code.extend(0x20b1u16.to_le_bytes());
+    code
+}
+
+#[test]
+fn prepared_sound_start_preserves_name_volume_and_result_and_records_loop_flag() {
+    let script = script(&[(5, 0, 64, 0, 0)], b"prepared.ogg\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = AudioHost::default();
+    let mut backend = RecordingAudio::default();
+    pending(&mut vm);
+    host.try_handle(&mut vm, &mut backend).unwrap();
+    for looped in [7, 0] {
+        let script = program(&start_code(5, looped), b"");
+        let mut vm = Machine::new(&script).unwrap();
+        vm.state_mut().set_system_integer(0, 123).unwrap();
+        pending(&mut vm);
+        let pc = vm.pc();
+        host.try_handle(&mut vm, &mut backend).unwrap();
+        assert_eq!((vm.pc(), vm.stack().len_bytes()), (pc + 2, 0));
+        assert_eq!(vm.state().system_integer(0), Some(123));
+        assert_eq!(
+            host.channel(5),
+            Some(&SeChannel {
+                name: b"prepared.ogg".to_vec(),
+                volume: 64,
+                looped: looped != 0,
+                flag: true
+            })
+        );
+        assert_eq!(
+            backend.requests().last(),
+            Some(&AudioRequest::StartSe {
+                channel: 5,
+                looped: looped != 0
+            })
+        );
+    }
+}
+
+#[test]
+fn disabled_se_start_updates_zero_initialized_record_without_a_device_request() {
+    let script = program(&start_code(0, 1), b"");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = AudioHost::new(AudioSettings {
+        se_enabled: false,
+        ..AudioSettings::default()
+    });
+    pending(&mut vm);
+    host.try_handle(&mut vm, &mut Broken).unwrap();
+    assert_eq!(
+        host.channel(0),
+        Some(&SeChannel {
+            name: vec![],
+            volume: 0,
+            looped: true,
+            flag: true
+        })
+    );
+    assert_eq!(vm.state().system_integer(0), None);
+    assert!(host.channel(1).is_none());
+}
+
+#[test]
+fn start_backend_failure_is_transactional_and_retry_keeps_original_request() {
+    let script = script(&[(0, 0, 128, 1, 0)], b"a.ogg\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = AudioHost::default();
+    pending(&mut vm);
+    host.try_handle(&mut vm, &mut Started).unwrap();
+    let before = host.channel(0).cloned();
+    let script = program(&start_code(0, 0), b"");
+    let mut vm = Machine::new(&script).unwrap();
+    pending(&mut vm);
+    let pc = vm.pc();
+    assert!(host.try_handle(&mut vm, &mut Broken).is_err());
+    assert_eq!(host.channel(0), before.as_ref());
+    assert_eq!(vm.pending_system(), Some((pc, 0xb1)));
+    assert_eq!(vm.stack().len_bytes(), 8);
+    assert_eq!(vm.state().system_integer(0), None);
+    let mut backend = RecordingAudio::default();
+    host.try_handle(&mut vm, &mut backend).unwrap();
+    assert_eq!(
+        backend.requests(),
+        &[AudioRequest::StartSe {
+            channel: 0,
+            looped: false
+        }]
+    );
+    assert_eq!(host.channel(0).unwrap().name, b"a.ogg");
+    assert!(host.channel(0).unwrap().flag);
+}
+
+#[test]
+fn start_rejects_invalid_channels_and_truncated_stack_without_effects() {
+    let mut truncated = vec![];
+    push(&mut truncated, 0);
+    truncated.extend(0x20b1u16.to_le_bytes());
+    for code in [start_code(6, 0), start_code(u32::MAX, 0), truncated] {
+        let script = program(&code, b"");
+        let mut vm = Machine::new(&script).unwrap();
+        pending(&mut vm);
+        let mut host = AudioHost::default();
+        let mut backend = RecordingAudio::default();
+        let pc = vm.pc();
+        assert!(host.try_handle(&mut vm, &mut backend).is_err());
+        assert_eq!(vm.pending_system(), Some((pc, 0xb1)));
+        assert!((0..6).all(|i| host.channel(i).is_none()));
+        assert!(backend.requests().is_empty());
+        assert_eq!(vm.state().system_integer(0), None);
+    }
 }
 fn pending(vm: &mut Machine<'_>) {
     while !matches!(vm.step().unwrap(), Step::System { .. }) {}
