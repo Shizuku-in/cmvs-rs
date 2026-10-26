@@ -245,3 +245,55 @@ fn startup_fade_wait_needs_explicit_frames_and_resumes_after_removal() {
         }
     ));
 }
+
+#[test]
+fn timers_advance_at_run_entry_and_ignore_budget_slices_and_reused_deltas() {
+    let mut code = vec![];
+    for (op, slot) in [(0x200bu16, 0u32), (0x200c, 0), (0x200c, 1)] {
+        code.extend(0x440u16.to_le_bytes());
+        code.extend(4u16.to_le_bytes());
+        code.extend(slot.to_le_bytes());
+        code.extend(op.to_le_bytes());
+    }
+    code.extend(0x2000u16.to_le_bytes());
+    for slot in [0u32, 1] {
+        code.extend(0x440u16.to_le_bytes());
+        code.extend(4u16.to_le_bytes());
+        code.extend(slot.to_le_bytes());
+        code.extend(0x200cu16.to_le_bytes());
+    }
+    code.extend(0x2000u16.to_le_bytes());
+    code.extend(0x27ffu16.to_le_bytes());
+    let root = Root::new("timer-boundary", &code, b"");
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let mut backend = RecordingBackend::default();
+    run.advance_frame(100);
+    for _ in 0..4 {
+        run.tick(&mut backend).unwrap();
+    }
+    assert_eq!(run.machine().state().system_integer(0), Some(0));
+    run.advance_frame(7); // Host budget slice, not a VM yield.
+    for _ in 0..2 {
+        run.tick(&mut backend).unwrap();
+    }
+    assert_eq!(run.machine().state().system_integer(0), Some(100));
+    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
+    run.advance_frame(16);
+    for expected in [16, 116] {
+        for _ in 0..2 {
+            run.tick(&mut backend).unwrap();
+        }
+        assert_eq!(run.machine().state().system_integer(0), Some(expected));
+    }
+    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
+    // No new frame delta: retrying the host must not reuse the previous 16ms.
+    assert!(matches!(
+        run.tick(&mut backend).unwrap(),
+        StartupEvent::Unhandled {
+            command: 0x27ff,
+            ..
+        }
+    ));
+    assert_eq!(&run.timers().values()[..2], &[16, 116]);
+}

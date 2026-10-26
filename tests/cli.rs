@@ -108,3 +108,65 @@ fn trace_fade_time_is_frozen_unless_a_frame_delta_is_explicit() {
     fs::remove_file(input).unwrap();
     fs::remove_dir(root).unwrap();
 }
+
+#[test]
+fn trace_timer_queries_observe_one_delta_after_yield_and_zero_without_frame_clock() {
+    let root = std::env::temp_dir().join(format!("cmvs-cli-timers-{}", std::process::id()));
+    fs::create_dir(&root).unwrap();
+    let input = root.join("synthetic.ps3");
+    let mut code = vec![];
+    for query in 0..2 {
+        if query == 1 {
+            code.extend(0x2000u16.to_le_bytes());
+        }
+        code.extend(0x440u16.to_le_bytes());
+        code.extend(4u16.to_le_bytes());
+        code.extend(0u32.to_le_bytes());
+        code.extend(0x200cu16.to_le_bytes());
+    }
+    code.extend(0x27ffu16.to_le_bytes());
+    let mut raw = b"PS2A".to_vec();
+    for n in [
+        48u32,
+        0,
+        0,
+        0,
+        code.len() as u32,
+        0,
+        0,
+        0,
+        0,
+        code.len() as u32,
+        0,
+    ] {
+        raw.extend(n.to_le_bytes());
+    }
+    raw.extend(code.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+    fs::write(&input, &raw).unwrap();
+    for (args, expected) in [(vec![], 0), (vec!["--frame-ms", "17"], 17)] {
+        let output = Command::new(env!("CARGO_BIN_EXE_cmvs-trace"))
+            .arg(&input)
+            .arg("--record-platform")
+            .arg(&root)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let queries = stdout
+            .lines()
+            .filter(|s| s.starts_with("# timer 0x200c:"))
+            .collect::<Vec<_>>();
+        assert_eq!(queries.len(), 2);
+        assert!(queries[0].ends_with("system_integer[0]=Some(0)"));
+        assert!(queries[1].ends_with(&format!("system_integer[0]=Some({expected})")));
+        assert!(stdout.contains("# STOP pending system=0x27ff"));
+    }
+    assert_eq!(fs::read(&input).unwrap(), raw);
+    fs::remove_file(input).unwrap();
+    fs::remove_dir(root).unwrap();
+}

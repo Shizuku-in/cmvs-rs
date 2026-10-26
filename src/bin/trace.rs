@@ -15,6 +15,7 @@ use cmvs_rs::{
     snapshot::{SaveImage, SaveTitle},
     system_save::{FileSystemSave, SystemSaveHost},
     text,
+    timers::VmTimers,
 };
 use std::{collections::BTreeMap, env, error::Error, fs::File, io::Read};
 
@@ -131,6 +132,9 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut platform_backend = RecordingBackend::default();
     let mut save_image = SaveImage::default();
     let mut scene = SceneHost::default();
+    let mut timers = VmTimers::default();
+    let mut resume_run = true;
+    let mut frame_delta = 0;
     let mut save_title = SaveTitle::default();
     let mut gesture = PointerGesture::default();
     let mut audio = AudioHost::default();
@@ -151,6 +155,10 @@ fn run() -> Result<(), Box<dyn Error>> {
         machine.pc()
     );
     for step in 0..budget {
+        if resume_run {
+            timers.begin_run(std::mem::take(&mut frame_delta));
+            resume_run = false;
+        }
         let pc = machine.pc();
         let slot = machine.current_slot();
         let name = machine.current_name().escape_ascii().to_string();
@@ -159,6 +167,10 @@ fn run() -> Result<(), Box<dyn Error>> {
             && let Some(delta) = frame_ms
         {
             scene.advance_frame(delta);
+            frame_delta = delta;
+        }
+        if event == Step::Yield {
+            resume_run = true;
         }
         println!(
             "{step}: slot={slot} script={name} pc=0x{pc:04x} -> 0x{:04x} result={:?} stack_bytes={} {event:?}",
@@ -178,6 +190,8 @@ fn run() -> Result<(), Box<dyn Error>> {
                             return Ok(());
                         };
                         scene.advance_frame(delta);
+                        frame_delta = delta;
+                        resume_run = true;
                         println!("# frame delta_ms={delta} fade={:?}", scene.fade().current());
                     }
                     continue;
@@ -288,6 +302,15 @@ fn run() -> Result<(), Box<dyn Error>> {
                         scene.clear(),
                         scene.clear().rgba(),
                         scene.objects().keys().collect::<Vec<_>>()
+                    );
+                    continue;
+                }
+                if timers.try_handle(&mut machine)? {
+                    println!(
+                        "# timer 0x{:04x}: values={:?} system_integer[0]={:?}",
+                        command + 0x2000,
+                        timers.values(),
+                        machine.state().system_integer(0)
                     );
                     continue;
                 }

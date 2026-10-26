@@ -16,6 +16,7 @@ use crate::{
     snapshot::{SaveImage, SaveTitle},
     system_save::{FileSystemSave, SystemSaveHost},
     text,
+    timers::VmTimers,
 };
 use std::{error::Error, fs::File, io::Read, path::Path};
 
@@ -59,6 +60,9 @@ pub struct Startup<'a> {
     assets: DirectoryAssets,
     platform: PlatformHost,
     scene: SceneHost,
+    timers: VmTimers,
+    resume_run: bool,
+    frame_delta: u32,
     images: ImageArchives,
     save_title: SaveTitle,
     gesture: PointerGesture,
@@ -86,6 +90,9 @@ impl<'a> Startup<'a> {
             assets: DirectoryAssets::new(root)?,
             platform: PlatformHost::default(),
             scene: SceneHost::default(),
+            timers: VmTimers::default(),
+            resume_run: true,
+            frame_delta: 0,
             images: ImageArchives::new(root)?,
             save_title: SaveTitle::default(),
             gesture: PointerGesture::default(),
@@ -114,9 +121,15 @@ impl<'a> Startup<'a> {
     pub fn scene(&self) -> &SceneHost {
         &self.scene
     }
-    /// Explicit engine-frame update, separate from instruction execution and callback time.
+    /// Update the scene and supply the latest delta for the next VM run entry.
+    /// The timer delta is consumed once after yield, never per instruction/budget slice.
+    /// Callback registration time remains a separate research clock.
     pub fn advance_frame(&mut self, delta_ms: u32) {
         self.scene.advance_frame(delta_ms);
+        self.frame_delta = delta_ms;
+    }
+    pub fn timers(&self) -> &VmTimers {
+        &self.timers
     }
     pub fn save_title(&self) -> &SaveTitle {
         &self.save_title
@@ -156,9 +169,14 @@ impl<'a> Startup<'a> {
         if self.steps >= 1_000_000 {
             return Err("startup research step budget exhausted".into());
         }
+        if self.resume_run {
+            self.timers.begin_run(std::mem::take(&mut self.frame_delta));
+            self.resume_run = false;
+        }
         let event = self.machine.step()?;
         self.steps += 1;
         let Step::System { pc, command } = event else {
+            self.resume_run = event == Step::Yield;
             return Ok(if event == Step::Yield {
                 StartupEvent::Yield
             } else {
@@ -167,6 +185,7 @@ impl<'a> Startup<'a> {
         };
         let id = self.bootstrap.settings().get(&0x201d).copied();
         if let Some(step) = self.scene.fade().try_wait(&mut self.machine)? {
+            self.resume_run = step == Step::Yield;
             return Ok(if step == Step::Yield {
                 StartupEvent::Yield
             } else {
@@ -209,6 +228,7 @@ impl<'a> Startup<'a> {
         if self
             .save_menu
             .try_handle(&mut self.machine, &mut self.saves)?
+            || self.timers.try_handle(&mut self.machine)?
             || self.bootstrap.try_handle(&mut self.machine)?.is_some()
             || self.scene.try_handle(&mut self.machine)?
             || self.scene.try_handle_image(
