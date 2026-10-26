@@ -531,3 +531,112 @@ fn bgm_errors_keep_the_command_pending() {
         assert_eq!(host.bgm(), &BgmState::default());
     }
 }
+
+fn fade_out_code(fade: u32) -> Vec<u8> {
+    let mut code = vec![];
+    push(&mut code, fade);
+    code.extend(0x20a2u16.to_le_bytes());
+    code
+}
+
+#[test]
+fn bgm_fade_out_clears_names_fades_the_current_channel_and_flips_it() {
+    let mut code = bgm_code(0, Some(11), 0, 1);
+    code.extend(fade_out_code(2000));
+    let script = program(&code, BGM_TEXT);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_system_integer(0, 5).unwrap();
+    let mut host = AudioHost::default();
+    let mut backend = RecordingAudio::default();
+    for _ in 0..2 {
+        pending(&mut vm);
+        assert!(host.try_handle(&mut vm, &mut backend).unwrap());
+    }
+    assert_eq!(
+        backend.requests().last(),
+        Some(&AudioRequest::FadeOutBgm {
+            channel: 1,
+            fade_ms: 2000
+        })
+    );
+    assert_eq!(
+        host.bgm(),
+        &BgmState {
+            channel: 0,
+            ..BgmState::default()
+        }
+    );
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(5));
+}
+
+#[test]
+fn bgm_fade_out_without_bgm_or_backend_support() {
+    // Disabled BGM clears the state without a device request or channel flip.
+    let mut code = bgm_code(11, None, 0, 0);
+    code.extend(fade_out_code(0));
+    let script = program(&code, BGM_TEXT);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = AudioHost::new(AudioSettings {
+        bgm_enabled: false,
+        ..AudioSettings::default()
+    });
+    for _ in 0..2 {
+        pending(&mut vm);
+        host.try_handle(&mut vm, &mut Broken).unwrap();
+    }
+    assert_eq!(
+        host.bgm(),
+        &BgmState {
+            channel: 1,
+            ..BgmState::default()
+        }
+    );
+    // A backend without fade-out support keeps the command and state for retry.
+    let script = program(&fade_out_code(100), b"");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = AudioHost::default();
+    pending(&mut vm);
+    let pc = vm.pc();
+    assert!(host.try_handle(&mut vm, &mut Broken).is_err());
+    assert_eq!(vm.pending_system(), Some((pc, 0xa2)));
+    assert_eq!(vm.stack().len_bytes(), 4);
+    assert_eq!(host.bgm(), &BgmState::default());
+}
+
+#[test]
+fn bgm_stop_releases_both_channels_and_pops_nothing() {
+    let mut code = bgm_code(11, None, 500, 1);
+    push(&mut code, 77);
+    code.extend(0x20a1u16.to_le_bytes());
+    let script = program(&code, BGM_TEXT);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = AudioHost::default();
+    let mut backend = RecordingAudio::default();
+    for _ in 0..2 {
+        pending(&mut vm);
+        host.try_handle(&mut vm, &mut backend).unwrap();
+    }
+    assert_eq!(backend.requests().last(), Some(&AudioRequest::StopBgm));
+    assert_eq!(host.bgm(), &BgmState::default());
+    // 0x4000: the unrelated word below stays on the stack.
+    assert_eq!(vm.stack().len_bytes(), 4);
+    assert_eq!(vm.stack().peek_u32(4).unwrap(), 77);
+    // Disabled BGM keeps the channel and sends nothing.
+    let mut disabled = AudioHost::new(AudioSettings {
+        bgm_enabled: false,
+        ..AudioSettings::default()
+    });
+    let script = program(&bgm_code(11, None, 500, 1), BGM_TEXT);
+    let mut vm = Machine::new(&script).unwrap();
+    pending(&mut vm);
+    disabled.try_handle(&mut vm, &mut Broken).unwrap();
+    let mut stop = vec![];
+    stop.extend(0x20a1u16.to_le_bytes());
+    let script = program(&stop, b"");
+    let mut vm = Machine::new(&script).unwrap();
+    pending(&mut vm);
+    disabled.try_handle(&mut vm, &mut Broken).unwrap();
+    assert_eq!(disabled.bgm().channel, 1);
+    assert!(disabled.bgm().primary.is_empty());
+}

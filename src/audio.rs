@@ -94,6 +94,12 @@ pub enum AudioRequest {
         looped: bool,
         flag_1576: u32,
     },
+    /// 0x14008a1c0 with BGM enabled: `channel` fades out over `fade_ms` (0x1400882d0, a no-op
+    /// when the slot is empty or already fading) and is released when the fade ends.
+    FadeOutBgm { channel: u8, fade_ms: u32 },
+    /// 0x14008a0a0 with BGM enabled: stop and release BGM device channels 0 and 1 at once
+    /// (0x140087910 each), the same as a 0x20a0/0x20a4 request without fade does first.
+    StopBgm,
 }
 
 pub trait AudioBackend {
@@ -114,6 +120,14 @@ pub trait AudioBackend {
     /// Apply a PlayBgm request in full before returning Ok; Err leaves the device unchanged.
     fn play_bgm(&mut self, _request: &AudioRequest) -> Result<(), Box<dyn Error>> {
         Err("audio backend does not implement BGM playback".into())
+    }
+    /// Start the fade-out of a BGM device channel; Err leaves the device unchanged.
+    fn fade_out_bgm(&mut self, _channel: u8, _fade_ms: u32) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement BGM fade-out".into())
+    }
+    /// Stop and release both BGM device channels before returning Ok.
+    fn stop_bgm(&mut self) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement stopping BGM".into())
     }
 }
 
@@ -146,6 +160,12 @@ impl AudioBackend for RecordingAudio {
     }
     fn play_bgm(&mut self, request: &AudioRequest) -> Result<(), Box<dyn Error>> {
         self.record(request.clone())
+    }
+    fn fade_out_bgm(&mut self, channel: u8, fade_ms: u32) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::FadeOutBgm { channel, fade_ms })
+    }
+    fn stop_bgm(&mut self) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::StopBgm)
     }
 }
 
@@ -183,6 +203,8 @@ impl AudioHost {
             Some((_, 0xb1)) => return self.try_start(vm, backend),
             Some((_, 0xb3)) => return self.try_stop(vm, backend),
             Some((_, 0xa0 | 0xa4)) => return self.try_bgm(vm, backend),
+            Some((_, 0xa2)) => return self.try_bgm_fade_out(vm, backend),
+            Some((_, 0xa1)) => return self.try_bgm_stop(vm, backend),
             _ => {}
         }
         let Some((pc, 0xb0)) = vm.pending_system() else {
@@ -335,6 +357,50 @@ impl AudioHost {
             secondary,
             channel,
             playing: enabled,
+        };
+        Ok(true)
+    }
+
+    /// 0x20a2 / 0x140070320 → 0x14008a1c0: SP-4 fade milliseconds; returns 0x4004 with no
+    /// result write. Names and the playing flag are cleared; with BGM enabled the current
+    /// channel fades out and the channel flips to (channel - 1) & 1.
+    fn try_bgm_fade_out(
+        &mut self,
+        vm: &mut Machine<'_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<bool, Box<dyn Error>> {
+        let (pc, _) = vm.pending_system().expect("checked pending command");
+        let fade_ms = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x20a2, e.0))?;
+        let mut channel = self.bgm.channel;
+        if self.settings.bgm_enabled {
+            backend.fade_out_bgm(channel, fade_ms)?;
+            channel = channel.wrapping_sub(1) & 1;
+        }
+        vm.complete_system(SystemResult(0x4004))?;
+        self.bgm = BgmState {
+            channel,
+            ..BgmState::default()
+        };
+        Ok(true)
+    }
+
+    /// 0x20a1: the dispatcher calls 0x14008a0a0 inline and returns 0x4000 (nothing popped).
+    /// Names and the playing flag are cleared; with BGM enabled both channels stop and the
+    /// channel resets to 0.
+    fn try_bgm_stop(
+        &mut self,
+        vm: &mut Machine<'_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<bool, Box<dyn Error>> {
+        let mut channel = self.bgm.channel;
+        if self.settings.bgm_enabled {
+            backend.stop_bgm()?;
+            channel = 0;
+        }
+        vm.complete_system(SystemResult(0x4000))?;
+        self.bgm = BgmState {
+            channel,
+            ..BgmState::default()
         };
         Ok(true)
     }

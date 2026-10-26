@@ -292,7 +292,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                             audio.channel(usize::from(*channel)),
                             machine.state().system_integer(0)
                         );
-                    } else if matches!(command, 0xa0 | 0xa4) {
+                    } else if matches!(command, 0xa0..=0xa2 | 0xa4) {
                         let bgm = audio.bgm();
                         println!(
                             "# audio 0x{:04x} BGM channel={} primary={} secondary={} playing={}; last request={:?}; not loaded/played",
