@@ -13,6 +13,7 @@ use crate::{
     save_menu::{DirectorySaves, SaveMenuHost},
     scene::SceneHost,
     script_control::{ArchiveScripts, ControlEvent, ScriptControl},
+    skip::SkipFlag,
     snapshot::{SaveImage, SaveTitle},
     system_save::{FileSystemSave, SystemSaveHost},
     text,
@@ -66,6 +67,7 @@ pub struct Startup<'a> {
     images: ImageArchives,
     save_title: SaveTitle,
     gesture: PointerGesture,
+    skip: SkipFlag,
     random: CrtRandom,
     audio: AudioHost,
     audio_backend: Box<dyn AudioBackend>,
@@ -96,6 +98,7 @@ impl<'a> Startup<'a> {
             images: ImageArchives::new(root)?,
             save_title: SaveTitle::default(),
             gesture: PointerGesture::default(),
+            skip: SkipFlag::default(),
             // Explicit research seed, like the virtual tick; the original seeds from timeGetTime.
             random: CrtRandom::new(0),
             audio: AudioHost::default(),
@@ -136,6 +139,9 @@ impl<'a> Startup<'a> {
     }
     pub fn gesture(&self) -> &PointerGesture {
         &self.gesture
+    }
+    pub fn skip(&self) -> SkipFlag {
+        self.skip
     }
     pub fn save_menu(&self) -> &SaveMenuHost {
         &self.save_menu
@@ -238,6 +244,7 @@ impl<'a> Startup<'a> {
             || self.save_title.try_handle(&mut self.machine)?
             || self.gesture.try_handle(&mut self.machine)?
             || self.save_menu.try_handle_popup(&mut self.machine)?
+            || self.skip.try_handle(&mut self.machine)?
             || self.random.try_handle(&mut self.machine)?
             || text::try_handle(&mut self.machine)?
             || self

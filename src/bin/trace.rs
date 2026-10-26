@@ -12,6 +12,7 @@ use cmvs_rs::{
     save_menu::{DirectorySaves, SaveMenuHost, SlotStatus},
     scene::SceneHost,
     script_control::{ArchiveScripts, ControlEvent, ScriptControl},
+    skip::SkipFlag,
     snapshot::{SaveImage, SaveTitle},
     system_save::{FileSystemSave, SystemSaveHost},
     text,
@@ -137,6 +138,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut frame_delta = 0;
     let mut save_title = SaveTitle::default();
     let mut gesture = PointerGesture::default();
+    let mut skip = SkipFlag::default();
     let mut audio = AudioHost::default();
     let mut audio_backend = RecordingAudio::default();
     if platform_assets.is_some() {
@@ -288,6 +290,14 @@ fn run() -> Result<(), Box<dyn Error>> {
                         "# popup menu 0x{:04x}: enabled={}; system_integer[0]={:?}; no native menu",
                         command + 0x2000,
                         save_menu.popup_enabled(),
+                        machine.state().system_integer(0)
+                    );
+                    continue;
+                }
+                if skip.try_handle(&mut machine)? {
+                    println!(
+                        "# skip flag 0x22eb: active={}; system_integer[0]={:?}",
+                        skip.active(),
                         machine.state().system_integer(0)
                     );
                     continue;

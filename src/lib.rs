@@ -23,6 +23,7 @@ pub mod save_menu;
 pub mod scene;
 pub mod scene_render;
 pub mod script_control;
+pub mod skip;
 pub mod snapshot;
 pub mod system_save;
 pub mod text;
