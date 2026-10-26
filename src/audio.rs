@@ -1,4 +1,4 @@
-//! Sound-effect channel commands with an explicit audio backend.
+//! Sound-effect channel and BGM commands with an explicit audio backend.
 //! The recording backend keeps requests only; no sound is loaded or played.
 use crate::{evaluate::error, machine::Machine, vm::SystemResult};
 use std::error::Error;
@@ -18,6 +18,14 @@ pub struct AudioSettings {
     pub master: u32,
     /// +1620 SE volume on the 256 scale.
     pub se: u32,
+    /// +1600, copied into the BGM object +148 at startup (0x14000aa6e); when false,
+    /// 0x20a0/0x20a4 only update the object state.
+    pub bgm_enabled: bool,
+    /// +1616 BGM volume on the 256 scale.
+    pub bgm: u32,
+    /// +1576 (menu item 0x807C). 0x140088b00 consults it only when the first BGM stream
+    /// is missing, to allow a second lookup root; the meaning is not verified further.
+    pub bgm_flag_1576: u32,
 }
 impl Default for AudioSettings {
     fn default() -> Self {
@@ -25,8 +33,24 @@ impl Default for AudioSettings {
             se_enabled: true,
             master: 256,
             se: 256,
+            bgm_enabled: true,
+            bgm: 256,
+            bgm_flag_1576: 0,
         }
     }
+}
+
+/// BGM object at engine +4464 (0xa8 bytes, constructor 0x140089fc0).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BgmState {
+    /// +0: first file; for 0x20a4 the decoder opens it together with `secondary`.
+    pub primary: Vec<u8>,
+    /// +64: second file (empty for 0x20a0); how the decoder combines the two is unverified.
+    pub secondary: Vec<u8>,
+    /// +152: device channel 0 or 1 of the newest track.
+    pub channel: u8,
+    /// +156.
+    pub playing: bool,
 }
 
 /// Channel record kept even while SE is disabled, so re-enabling can restart it (0x140017580).
@@ -56,6 +80,20 @@ pub enum AudioRequest {
     StartSe { channel: u8, looped: bool },
     /// 0x140087910: stop and release the device channel's sound, prepared or active.
     StopSe { channel: u8 },
+    /// 0x14008a240 with BGM enabled. With `fade_ms` 0 both BGM device channels 0 and 1
+    /// stop at once first; otherwise `previous` fades out over `fade_ms`. The track then
+    /// loads and starts on `channel` (fading in over `fade_ms`), and both channels get
+    /// `volume`. Load failures are not reported to the VM.
+    PlayBgm {
+        channel: u8,
+        previous: u8,
+        primary: Vec<u8>,
+        secondary: Vec<u8>,
+        volume: u32,
+        fade_ms: u32,
+        looped: bool,
+        flag_1576: u32,
+    },
 }
 
 pub trait AudioBackend {
@@ -72,6 +110,10 @@ pub trait AudioBackend {
     /// The original waits until its mixer thread has freed the slot, so Ok means released.
     fn stop(&mut self, _channel: u8) -> Result<(), Box<dyn Error>> {
         Err("audio backend does not implement stopping an SE channel".into())
+    }
+    /// Apply a PlayBgm request in full before returning Ok; Err leaves the device unchanged.
+    fn play_bgm(&mut self, _request: &AudioRequest) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement BGM playback".into())
     }
 }
 
@@ -102,12 +144,16 @@ impl AudioBackend for RecordingAudio {
     fn stop(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
         self.record(AudioRequest::StopSe { channel })
     }
+    fn play_bgm(&mut self, request: &AudioRequest) -> Result<(), Box<dyn Error>> {
+        self.record(request.clone())
+    }
 }
 
 #[derive(Debug, Default)]
 pub struct AudioHost {
     settings: AudioSettings,
     channels: [Option<SeChannel>; SE_CHANNELS],
+    bgm: BgmState,
 }
 
 impl AudioHost {
@@ -115,7 +161,11 @@ impl AudioHost {
         Self {
             settings,
             channels: Default::default(),
+            bgm: BgmState::default(),
         }
+    }
+    pub fn bgm(&self) -> &BgmState {
+        &self.bgm
     }
     pub fn settings(&self) -> AudioSettings {
         self.settings
@@ -132,6 +182,7 @@ impl AudioHost {
         match vm.pending_system() {
             Some((_, 0xb1)) => return self.try_start(vm, backend),
             Some((_, 0xb3)) => return self.try_stop(vm, backend),
+            Some((_, 0xa0 | 0xa4)) => return self.try_bgm(vm, backend),
             _ => {}
         }
         let Some((pc, 0xb0)) = vm.pending_system() else {
@@ -226,6 +277,65 @@ impl AudioHost {
         let record = self.channels[channel as usize].get_or_insert_with(SeChannel::default);
         record.name.clear();
         record.flag = false;
+        Ok(true)
+    }
+
+    /// 0x20a0 / 0x1400701b0: SP-4 name, SP-8 fade, SP-12 loop; returns 0x400c.
+    /// 0x20a4 / 0x140070250: SP-4 first and SP-8 second name, SP-12 fade, SP-16 loop;
+    /// returns 0x4010. Both call 0x14008a240 and write no system result.
+    fn try_bgm(
+        &mut self,
+        vm: &mut Machine<'_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<bool, Box<dyn Error>> {
+        let (pc, command) = vm.pending_system().expect("checked pending command");
+        let op = command + 0x2000;
+        let pair = command == 0xa4;
+        let arg = |distance| {
+            vm.stack()
+                .peek_u32(distance)
+                .map_err(|e| error(pc, op, e.0))
+        };
+        let primary = vm.resolve_string(arg(4)?)?;
+        let secondary = if pair {
+            vm.resolve_string(arg(8)?)?
+        } else {
+            Vec::new()
+        };
+        let base = if pair { 8 } else { 4 };
+        let (fade_ms, looped) = (arg(base + 4)?, arg(base + 8)? != 0);
+        // 0x140088390/0x140088b00 refuse names of 32 bytes or more after stopping the
+        // channel; that failure path is not modeled.
+        if primary.len() >= 32 || secondary.len() >= 32 {
+            return Err(error(pc, op, "BGM file name exceeds the 32-byte device limit").into());
+        }
+        let enabled = self.settings.bgm_enabled;
+        let previous = self.bgm.channel;
+        // 0x14008a0a0 resets the channel to 0 only while BGM is enabled.
+        let current = if fade_ms == 0 && enabled { 0 } else { previous };
+        let channel = current.wrapping_sub(1) & 1;
+        if enabled {
+            backend.play_bgm(&AudioRequest::PlayBgm {
+                channel,
+                previous,
+                primary: primary.clone(),
+                secondary: secondary.clone(),
+                // Unsigned 32-bit product, as in the original.
+                volume: self.settings.master.wrapping_mul(self.settings.bgm) >> 8,
+                fade_ms,
+                looped,
+                flag_1576: self.settings.bgm_flag_1576,
+            })?;
+        }
+        vm.complete_system(SystemResult(if pair { 0x4010 } else { 0x400c }))?;
+        // When disabled, the second 0x14008a0a0 clears +156 again; the time stamp at +160
+        // is not modeled.
+        self.bgm = BgmState {
+            primary,
+            secondary,
+            channel,
+            playing: enabled,
+        };
         Ok(true)
     }
 }

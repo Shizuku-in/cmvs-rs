@@ -1,5 +1,7 @@
 use cmvs_rs::{
-    audio::{AudioBackend, AudioHost, AudioRequest, AudioSettings, RecordingAudio, SeChannel},
+    audio::{
+        AudioBackend, AudioHost, AudioRequest, AudioSettings, BgmState, RecordingAudio, SeChannel,
+    },
     machine::{Machine, Step},
     ps3::Script,
 };
@@ -331,6 +333,7 @@ fn settings_scale_volume_and_disabled_se_only_records_the_channel() {
         se_enabled: true,
         master: 128,
         se: 128,
+        ..AudioSettings::default()
     });
     let mut backend = RecordingAudio::default();
     pending(&mut vm);
@@ -354,6 +357,7 @@ fn settings_scale_volume_and_disabled_se_only_records_the_channel() {
         se_enabled: true,
         master: 128,
         se: 128,
+        ..AudioSettings::default()
     })
     .try_handle(&mut vm, &mut record)
     .unwrap();
@@ -388,5 +392,142 @@ fn invalid_channel_long_name_and_backend_errors_keep_the_command_pending() {
         assert_eq!(vm.stack().len_bytes(), 20);
         assert!((0..6).all(|i| host.channel(i).is_none()));
         assert_eq!(vm.state().system_integer(0), None);
+    }
+}
+
+/// 0x20a4 with (first, second, fade, loop), or 0x20a0 with (first, fade, loop) when
+/// `second` is None; names are text offsets.
+fn bgm_code(first: u32, second: Option<u32>, fade: u32, looped: u32) -> Vec<u8> {
+    let mut code = vec![];
+    push(&mut code, looped);
+    push(&mut code, fade);
+    let mut names = vec![first];
+    names.extend(second);
+    for &name in names.iter().rev() {
+        code.extend(0x201u16.to_le_bytes());
+        code.extend(0x120u16.to_le_bytes());
+        code.extend(name.to_le_bytes());
+        code.extend(0x20fu16.to_le_bytes());
+        code.extend(0x430u16.to_le_bytes());
+    }
+    code.extend(
+        if second.is_some() {
+            0x20a4u16
+        } else {
+            0x20a0u16
+        }
+        .to_le_bytes(),
+    );
+    code
+}
+const BGM_TEXT: &[u8] = b"bgm41v.ogg\0bgm41.ogg\0";
+
+#[test]
+fn bgm_without_fade_stops_both_channels_and_starts_on_channel_one() {
+    let mut code = bgm_code(0, Some(11), 0, 1);
+    code.extend(bgm_code(11, None, 0, 0));
+    let script = program(&code, BGM_TEXT);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_system_integer(0, 5).unwrap();
+    let mut host = AudioHost::new(AudioSettings {
+        master: 128,
+        bgm: 128,
+        ..AudioSettings::default()
+    });
+    let mut backend = RecordingAudio::default();
+    for expected in [
+        (0, b"bgm41v.ogg".to_vec(), b"bgm41.ogg".to_vec(), true),
+        (1, b"bgm41.ogg".to_vec(), vec![], false),
+    ] {
+        pending(&mut vm);
+        assert!(host.try_handle(&mut vm, &mut backend).unwrap());
+        let (previous, primary, secondary, looped) = expected;
+        assert_eq!(
+            backend.requests().last(),
+            Some(&AudioRequest::PlayBgm {
+                channel: 1,
+                previous,
+                primary: primary.clone(),
+                secondary: secondary.clone(),
+                volume: 64,
+                fade_ms: 0,
+                looped,
+                flag_1576: 0
+            })
+        );
+        assert_eq!(
+            host.bgm(),
+            &BgmState {
+                primary,
+                secondary,
+                channel: 1,
+                playing: true
+            }
+        );
+    }
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(5));
+}
+
+#[test]
+fn bgm_fades_alternate_channels_and_disabled_bgm_only_updates_state() {
+    let mut code = vec![];
+    for _ in 0..3 {
+        code.extend(bgm_code(11, None, 500, 1));
+    }
+    let script = program(&code, BGM_TEXT);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = AudioHost::default();
+    let mut backend = RecordingAudio::default();
+    for (channel, previous) in [(1, 0), (0, 1)] {
+        pending(&mut vm);
+        host.try_handle(&mut vm, &mut backend).unwrap();
+        assert!(matches!(
+            backend.requests().last(),
+            Some(AudioRequest::PlayBgm { channel: c, previous: p, fade_ms: 500, .. })
+                if (*c, *p) == (channel, previous)
+        ));
+    }
+    // Disabled BGM flips the channel and keeps the names, without a device request.
+    let mut disabled = AudioHost::new(AudioSettings {
+        bgm_enabled: false,
+        ..AudioSettings::default()
+    });
+    pending(&mut vm);
+    disabled.try_handle(&mut vm, &mut Broken).unwrap();
+    assert_eq!(
+        disabled.bgm(),
+        &BgmState {
+            primary: b"bgm41.ogg".to_vec(),
+            secondary: vec![],
+            channel: 1,
+            playing: false
+        }
+    );
+}
+
+#[test]
+fn bgm_errors_keep_the_command_pending() {
+    let mut text = BGM_TEXT.to_vec();
+    text.extend([b'x'; 32]);
+    text.push(0);
+    for (code, broken) in [
+        (bgm_code(0, Some(21), 0, 0), false), // 32-byte second name
+        (bgm_code(0, None, 0, 0), true),      // backend failure
+    ] {
+        let script = program(&code, &text);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut host = AudioHost::default();
+        pending(&mut vm);
+        let (pc, bytes) = (vm.pc(), vm.stack().len_bytes());
+        let outcome = if broken {
+            host.try_handle(&mut vm, &mut Broken)
+        } else {
+            host.try_handle(&mut vm, &mut RecordingAudio::default())
+        };
+        assert!(outcome.is_err());
+        assert_eq!(vm.pc(), pc);
+        assert_eq!(vm.stack().len_bytes(), bytes);
+        assert_eq!(host.bgm(), &BgmState::default());
     }
 }
