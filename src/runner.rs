@@ -9,10 +9,10 @@ use crate::{
     fade::SkipGate,
     gesture::PointerGesture,
     image::ImageArchives,
-    input::ActionInput,
+    input::{self, ActionInput},
     machine::{Machine, Step},
     message_flags::MessageFlags,
-    movie::MovieHost,
+    movie::{DirectoryMovies, MovieHost},
     platform::{DirectoryAssets, PlatformBackend, PlatformHost},
     ps3::Script,
     random::CrtRandom,
@@ -25,7 +25,12 @@ use crate::{
     text,
     timers::VmTimers,
 };
-use std::{error::Error, fs::File, io::Read, path::Path};
+use std::{
+    error::Error,
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 pub fn load_start(root: &Path) -> Result<Script, Box<dyn Error>> {
     let mut bytes = Vec::new();
@@ -69,6 +74,7 @@ pub struct Startup<'a> {
     scene: SceneHost,
     buttons: ButtonHost,
     movies: MovieHost,
+    root: PathBuf,
     sequence: SequenceHost,
     camera: CameraHost,
     input: ActionInput,
@@ -106,6 +112,7 @@ impl<'a> Startup<'a> {
             scene: SceneHost::default(),
             buttons: ButtonHost::default(),
             movies: MovieHost::default(),
+            root: root.canonicalize()?,
             sequence: SequenceHost::default(),
             camera: CameraHost::default(),
             // No verified key bindings yet: no action is active (see `input`).
@@ -144,6 +151,30 @@ impl<'a> Startup<'a> {
     pub fn scene(&self) -> &SceneHost {
         &self.scene
     }
+    pub fn movie_frame(&self) -> Option<&crate::raster::RgbaImage> {
+        self.movies.player().and_then(|m| m.image.as_ref())
+    }
+    pub fn set_decode_movie_frames(&mut self, enabled: bool) {
+        self.movies.set_decode_frames(enabled);
+    }
+    pub fn render_frame(&self) -> Result<crate::raster::RgbaImage, crate::FormatError> {
+        match self.movie_frame() {
+            Some(image) => Ok(image.clone()),
+            None => crate::scene_render::render(&self.scene, 1280, 720),
+        }
+    }
+    pub fn advance_decoded_frame(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error>> {
+        self.movies.advance_decoded(
+            delta_ms,
+            &mut DirectoryMovies {
+                root: &self.root,
+                directory: self.bootstrap.paths().get(&(0x2015, 0)).map(Vec::as_slice),
+            },
+        )?;
+        self.scene.advance_frame(delta_ms);
+        self.frame_delta = delta_ms;
+        Ok(())
+    }
     pub fn buttons(&self) -> &ButtonHost {
         &self.buttons
     }
@@ -155,6 +186,7 @@ impl<'a> Startup<'a> {
     /// Callback registration time remains a separate research clock.
     pub fn advance_frame(&mut self, delta_ms: u32) {
         self.scene.advance_frame(delta_ms);
+        self.movies.advance(delta_ms);
         self.frame_delta = delta_ms;
     }
     pub fn timers(&self) -> &VmTimers {
@@ -286,6 +318,21 @@ impl<'a> Startup<'a> {
                 .buttons
                 .try_handle_input(&mut self.machine, &mut self.scene, &mut self.input)?
             || self.movies.try_handle(&mut self.machine)?
+            || self.movies.try_handle_player(
+                &mut self.machine,
+                &mut DirectoryMovies {
+                    root: &self.root,
+                    directory: self.bootstrap.paths().get(&(0x2015, 0)).map(Vec::as_slice),
+                },
+                self.audio.settings(),
+                self.audio_backend.as_mut(),
+            )?
+            || input::try_handle(&mut self.machine, &mut self.input)?
+            || input::try_handle_skipping(
+                &mut self.machine,
+                &self.input,
+                self.message_flags.skip(),
+            )?
             || self.sequence.try_handle(&mut self.machine)?
             || self.camera.try_handle(&mut self.machine)?
             || self.random.try_handle(&mut self.machine)?

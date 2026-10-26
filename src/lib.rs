@@ -4,6 +4,7 @@ pub mod bootstrap;
 pub mod buttons;
 pub mod bytecode;
 pub mod camera;
+pub mod cmv;
 pub mod cpz;
 pub mod cursor;
 #[cfg(feature = "desktop")]
@@ -13,6 +14,7 @@ pub mod fade;
 pub mod gesture;
 pub mod image;
 pub mod input;
+pub mod jbpd;
 pub mod lzss;
 pub mod machine;
 pub mod message_flags;

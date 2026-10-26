@@ -3,6 +3,7 @@
 //! codes (tables at +944 + 10 * action) and per-code frame counters (+1540 now, +2564 before).
 //! Which physical keys are bound is not verified yet, so hosts that cannot map input supply
 //! the default: no action active.
+use crate::{bytecode::DecodeError, machine::Machine, vm::SystemResult};
 
 pub const ACTIONS: usize = 24;
 
@@ -48,6 +49,11 @@ impl ActionInput {
     pub fn released(&self, action: usize) -> bool {
         self.released.get(action).copied().unwrap_or(false)
     }
+    /// 0x140054e20 / 0x140054e30 read +1320 / +1332: action 7 or 8 held. 0x2224 and 0x22ef
+    /// treat it like the script skip flag.
+    pub fn skip_held(&self) -> bool {
+        self.held(7) || self.held(8)
+    }
     pub fn pointer(&self) -> [i32; 2] {
         self.pointer
     }
@@ -71,4 +77,44 @@ impl ActionInput {
             self.pressed[action] = false;
         }
     }
+}
+
+/// 0x21a0 (0x140078b10) / 0x21a2 (0x140078b90): system result 0 = action 0 / 1 released,
+/// system result 4 (+82832) = held. 0x21a1 / 0x21a3 (inline 0x140054d90 / 0x140054dd0)
+/// consume action 0 / 1. All return 0x4000 and pop nothing.
+pub fn try_handle(vm: &mut Machine<'_>, input: &mut ActionInput) -> Result<bool, DecodeError> {
+    let Some((_, command @ 0x1a0..=0x1a3)) = vm.pending_system() else {
+        return Ok(false);
+    };
+    let action = usize::from(command >= 0x1a2);
+    vm.complete_system(SystemResult(0x4000))?;
+    if command & 1 == 0 {
+        let state = vm.state_mut();
+        state
+            .set_system_integer(0, u32::from(input.released(action)))
+            .expect("slot 0 exists");
+        state
+            .set_system_integer(4, u32::from(input.held(action)))
+            .expect("slot 4 exists");
+    } else {
+        input.consume(action);
+    }
+    Ok(true)
+}
+
+/// 0x22ef / 0x14007c8e0: system result 0 = 1 when the +1520 script skip flag (0x22eb) is set
+/// or action 7 or 8 is held, else 0; returns 0x4000 and pops nothing.
+pub fn try_handle_skipping(
+    vm: &mut Machine<'_>,
+    input: &ActionInput,
+    skip: bool,
+) -> Result<bool, DecodeError> {
+    let Some((_, 0x2ef)) = vm.pending_system() else {
+        return Ok(false);
+    };
+    vm.complete_system(SystemResult(0x4000))?;
+    vm.state_mut()
+        .set_system_integer(0, u32::from(skip || input.skip_held()))
+        .expect("slot 0 exists");
+    Ok(true)
 }

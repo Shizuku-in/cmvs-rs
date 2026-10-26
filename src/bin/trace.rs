@@ -8,10 +8,10 @@ use cmvs_rs::{
     fade::SkipGate,
     gesture::PointerGesture,
     image::ImageArchives,
-    input::ActionInput,
+    input::{self, ActionInput},
     machine::{Machine, Step},
     message_flags::MessageFlags,
-    movie::MovieHost,
+    movie::{DirectoryMovies, MovieHost},
     platform::{DirectoryAssets, PlatformHost, PlatformRequest, RecordingBackend},
     ps3::Script,
     random::CrtRandom,
@@ -134,6 +134,10 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut system_source = system_save_path.map(FileSystemSave::new);
     let mut system_host = SystemSaveHost::default();
     let mut images = platform_root.as_ref().map(ImageArchives::new).transpose()?;
+    let movie_root = platform_root
+        .as_ref()
+        .map(|root| std::path::Path::new(root).canonicalize())
+        .transpose()?;
     let mut platform_assets = platform_root.map(DirectoryAssets::new).transpose()?;
     let mut platform_host = PlatformHost::default();
     let mut platform_backend = RecordingBackend::default();
@@ -181,6 +185,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             && let Some(delta) = frame_ms
         {
             scene.advance_frame(delta);
+            movies.advance(delta);
             frame_delta = delta;
         }
         if event == Step::Yield {
@@ -208,6 +213,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                             return Ok(());
                         };
                         scene.advance_frame(delta);
+                        movies.advance(delta);
                         frame_delta = delta;
                         resume_run = true;
                         println!("# frame delta_ms={delta} fade={:?}", scene.fade().current());
@@ -420,6 +426,60 @@ fn run() -> Result<(), Box<dyn Error>> {
                 }
                 let no_paths = BTreeMap::new();
                 let paths = bootstrap.as_ref().map_or(&no_paths, Bootstrap::paths);
+                if let Some(root) = &movie_root
+                    && movies.try_handle_player(
+                        &mut machine,
+                        &mut DirectoryMovies {
+                            root,
+                            directory: paths.get(&(0x2015, 0)).map(Vec::as_slice),
+                        },
+                        audio.settings(),
+                        &mut audio_backend,
+                    )?
+                {
+                    println!(
+                        "# movie 0x{:04x}: player={} system_integer[0]={:?}; frames not decoded, last audio request={:?}",
+                        command + 0x2000,
+                        movies.player().map_or("none".into(), |m| format!(
+                            "{} frame={}/{} rate={}/{}",
+                            m.path.escape_ascii(),
+                            m.frame,
+                            m.index.header.max_sequence,
+                            m.index.header.rate,
+                            m.index.header.rate_time
+                        )),
+                        machine.state().system_integer(0),
+                        audio_backend.requests().last().map(|r| match r {
+                            AudioRequest::PlayMovieAudio {
+                                offset,
+                                size,
+                                volume,
+                                ..
+                            } => format!(
+                                "PlayMovieAudio offset={offset} size={size} volume={volume}"
+                            ),
+                            other => format!("{other:?}"),
+                        })
+                    );
+                    continue;
+                }
+                if input::try_handle(&mut machine, &mut input)? {
+                    println!(
+                        "# input 0x{:04x}: system_integer[0]={:?} [4]={:?}; no input supplied",
+                        command + 0x2000,
+                        machine.state().system_integer(0),
+                        machine.state().system_integer(4)
+                    );
+                    continue;
+                }
+                if input::try_handle_skipping(&mut machine, &input, message_flags.skip())? {
+                    println!(
+                        "# skipping 0x22ef: script skip={} system_integer[0]={:?}; no input supplied",
+                        message_flags.skip(),
+                        machine.state().system_integer(0)
+                    );
+                    continue;
+                }
                 if let Some(images) = &mut images
                     && scene.try_handle_image(&mut machine, &mut images.with_paths(paths))?
                 {

@@ -41,6 +41,10 @@ path = "src/bin/cursor.rs"
 name = "cmvs-pb3"
 path = "src/bin/pb3.rs"
 
+[[bin]]
+name = "cmvs-cmv"
+path = "src/bin/cmv.rs"
+
 [lints.rust]
 unsafe_code = "forbid"
 

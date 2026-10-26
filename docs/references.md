@@ -92,3 +92,14 @@ BGM 淡出/停止仅根据同一哈希二进制的 0x140070320/0x14008a1c0、分
 CMV6 头部与索引的字段含义另对照 ZQF-ReVN/RxCMVS（提交 584f9f58，本地克隆，仓库仍无 LICENSE）的 lib/CMVS/src/#collation/CMV/CMV_Struct.h 与 CMV6_PixelArray.h，
 仅作为格式事实（字段顺序、资源类型 0=ogg/2=JBPX、15 块 1280×720 纹理布局）并以 op.cmv 只读核对，未复制其源码；RxCMVS 自身以钩子调用游戏解码器，不含 JBPD 算法。
 xmoezzz/CMVS-Engine（MIT，提交 a6bc9501）含 Pb3Decoder/JBP1.cpp 的 JBP1 解码器，可作为 JBPD 研究的许可参考，尚未使用。
+
+全屏影片与输入查询仅根据同一哈希二进制的 0x140071500/0x140071680/0x1400716d0、播放器构造 0x1400375e0、打开 0x1400379f0、音轨 0x1400397e0/0x1400397b0、
+帧更新 0x14000e4a4/0x140037bb0、输入 0x140078b10/0x140078b90/0x140054d90/0x140054dd0/0x140054e20/0x140054e30 与 0x22ef 的 0x14007c8e0 证据实现。
+CMV6 字段仍以 RxCMVS（提交 584f9f58，无 LICENSE）作为格式事实对照，并以独立 Python 解析 op/op2/c1.cmv 核对；未复制源码、未新增依赖。
+
+JBPD 阶段对照 xmoezzz/CMVS-Engine 固定提交 `a6bc9501d82264e228943f894af1b969ab98bee5` 的
+`Pb3Decoder/Pb3Decoder/JBP1.cpp`（MIT，既有许可副本）核对分离 DC/AC、频率树和 zigzag 的共有格式。
+未整合或运行其 C++ 源码；JBP1 本身不覆盖 JBPD 的布局、掩码与本作 SSE IDCT。
+Rust 解码依同一哈希二进制的 `0x140037620`、`0x1400ab650`、`0x1400a0ad0`、`0x1400a0960`、
+`0x1400b51c0`、`0x1400a2300` 及量化/IDCT 常数重新实现。
+独立 Python/NumPy 对照只用于仓库外原游戏输入的验证，不构成 Rust 核心依赖；真实帧、IDA 数据库、研究伪代码不纳入 Git。

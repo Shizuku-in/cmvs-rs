@@ -6,7 +6,6 @@ use cmvs_rs::{
     platform::{DirectoryAssets, PlatformAssets, PlatformBackend, PlatformRequest},
     raster::RgbaImage,
     runner::{SnapshotPolicy, Startup, StartupEvent, load_start},
-    scene_render,
 };
 use std::{
     env,
@@ -73,7 +72,7 @@ impl App<'_> {
             image.draw_fit(&mut buffer, size.width, size.height)?;
         } else {
             // Amatsutsumi research viewport. Scaling to a resized window is presentation policy.
-            let image = scene_render::render(self.startup.scene(), 1280, 720)?;
+            let image = self.startup.render_frame()?;
             buffer.fill(0);
             image.draw_fit(&mut buffer, size.width, size.height)?;
         }
@@ -283,7 +282,10 @@ impl ApplicationHandler for App<'_> {
             }
             if !self.halted {
                 let had_fade = self.startup.scene().fade().current().is_some();
-                self.startup.advance_frame(delta);
+                if let Err(error) = self.startup.advance_decoded_frame(delta) {
+                    self.fail(el, error);
+                    return;
+                }
                 if had_fade && self.startup.scene().fade().current().is_none() {
                     println!(
                         "# fade completed and removed; elapsed wall time drives frame updates"
@@ -308,7 +310,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     )?;
     if root == "--help" {
         println!(
-            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>] [--continue-without-snapshot] [--rand-seed <seed>] [--save-frame <new.png>]\nNative research preview only. Runs bounded startup with virtual callback tick 0 and explicit wall-time scene updates; stops at unknown commands or main snapshot barrier. --continue-without-snapshot enters main without building a save image; saving stays unavailable. --rand-seed sets the CRT rand() research seed (default 0). Without an explicit image, presents the verified static 2D scene (top-level objects and their children) on a 1280x720 research viewport; includes timed full-screen color fades; transforms, other transitions and alternate blend modes remain unsupported. --save-frame writes the frame shown at exit, in script coordinates, to a new PNG file (never overwritten); use it instead of screen captures to check rendering. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. Raw window input is observed but not injected into CMVS opcodes. All game files read-only."
+            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>] [--continue-without-snapshot] [--rand-seed <seed>] [--save-frame <new.png>]\nNative research preview only. Runs bounded startup with virtual callback tick 0 and explicit wall-time scene updates; stops at unknown commands or main snapshot barrier. --continue-without-snapshot enters main without building a save image; saving stays unavailable. --rand-seed sets the CRT rand() research seed (default 0). Without an explicit image, presents the verified 2D scene (top-level objects and their children) and CMV6 JBPD movies on a 1280x720 research viewport; includes timed full-screen color fades; use a release build for movie decoding; transforms, other transitions and alternate blend modes remain unsupported. --save-frame writes the frame shown at exit, in script coordinates, to a new PNG file (never overwritten); use it instead of screen captures to check rendering. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. Raw window input is observed but not injected into CMVS opcodes. All game files read-only."
         );
         return Ok(());
     }
@@ -371,6 +373,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     };
     let script = load_start(&root)?;
     let mut startup = Startup::new(&script, &root, 0)?;
+    startup.set_decode_movie_frames(true);
     startup.set_snapshot_policy(snapshot_policy);
     startup.set_random_seed(rand_seed);
     let mut app = App {
@@ -405,7 +408,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         // Script coordinates before window fitting: exactly what the renderer produced.
         let frame = match &app.preview_image {
             Some(image) => image.clone(),
-            None => scene_render::render(app.startup.scene(), 1280, 720)?,
+            None => app.startup.render_frame()?,
         };
         let mut file = OpenOptions::new()
             .write(true)

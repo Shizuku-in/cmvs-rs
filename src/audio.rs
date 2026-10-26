@@ -26,6 +26,8 @@ pub struct AudioSettings {
     /// +1576 (menu item 0x807C). 0x140088b00 consults it only when the first BGM stream
     /// is missing, to allow a second lookup root; the meaning is not verified further.
     pub bgm_flag_1576: u32,
+    /// +1628 movie volume on the 256 scale (0x20c0 uses (+1612 * +1628) >> 8).
+    pub movie: u32,
 }
 impl Default for AudioSettings {
     fn default() -> Self {
@@ -36,6 +38,7 @@ impl Default for AudioSettings {
             bgm_enabled: true,
             bgm: 256,
             bgm_flag_1576: 0,
+            movie: 256,
         }
     }
 }
@@ -100,6 +103,16 @@ pub enum AudioRequest {
     /// 0x14008a0a0 with BGM enabled: stop and release BGM device channels 0 and 1 at once
     /// (0x140087910 each), the same as a 0x20a0/0x20a4 request without fade does first.
     StopBgm,
+    /// 0x140088870 on device channel 2: the movie player starts the Ogg resource stored at
+    /// `offset` (absolute) with `size` bytes in the CMV file at `path`, replacing the channel.
+    PlayMovieAudio {
+        path: Vec<u8>,
+        offset: u64,
+        size: u32,
+        volume: u32,
+    },
+    /// 0x140087910 on device channel 2, from the player destructor 0x140037890.
+    StopMovieAudio,
 }
 
 pub trait AudioBackend {
@@ -128,6 +141,14 @@ pub trait AudioBackend {
     /// Stop and release both BGM device channels before returning Ok.
     fn stop_bgm(&mut self) -> Result<(), Box<dyn Error>> {
         Err("audio backend does not implement stopping BGM".into())
+    }
+    /// Apply a PlayMovieAudio request before returning Ok; Err leaves the device unchanged.
+    fn play_movie_audio(&mut self, _request: &AudioRequest) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement movie audio".into())
+    }
+    /// Stop and release device channel 2 before returning Ok.
+    fn stop_movie_audio(&mut self) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement stopping movie audio".into())
     }
 }
 
@@ -166,6 +187,12 @@ impl AudioBackend for RecordingAudio {
     }
     fn stop_bgm(&mut self) -> Result<(), Box<dyn Error>> {
         self.record(AudioRequest::StopBgm)
+    }
+    fn play_movie_audio(&mut self, request: &AudioRequest) -> Result<(), Box<dyn Error>> {
+        self.record(request.clone())
+    }
+    fn stop_movie_audio(&mut self) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::StopMovieAudio)
     }
 }
 

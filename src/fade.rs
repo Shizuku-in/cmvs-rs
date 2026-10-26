@@ -93,7 +93,7 @@ impl FadeHost {
             vm.state_mut().set_system_integer(0, 0).expect("slot 0");
             return Ok(Some(step));
         }
-        let immediate = !gate.effects || input.held(7) || input.held(8) || gate.skip;
+        let immediate = !gate.effects || input.skip_held() || gate.skip;
         let decided = skippable && !immediate && input.released(0);
         if skippable && (immediate || decided) {
             let step = vm.complete_system(SystemResult(0xc004))?;
