@@ -49,6 +49,8 @@ pub struct SceneObject {
     pub draw: Option<DrawState>,
     /// +6248: inheritance flags; bit 31 records child creation.
     pub flags: u32,
+    /// +6244 (constructor 1): 0x14003de80 skips the object when zero; 0x2215 sets it.
+    pub shown: bool,
 }
 impl Default for SceneObject {
     fn default() -> Self {
@@ -57,6 +59,7 @@ impl Default for SceneObject {
             children: BTreeMap::new(),
             draw: None,
             flags: 0x7fff_ffff,
+            shown: true,
         }
     }
 }
@@ -101,6 +104,10 @@ impl SceneHost {
     }
     pub fn objects(&self) -> &BTreeMap<u8, SceneObject> {
         &self.objects
+    }
+    /// For other verified command families that drive scene objects (0x2215).
+    pub(crate) fn object_mut(&mut self, slot: u8) -> Option<&mut SceneObject> {
+        self.objects.get_mut(&slot)
     }
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
         if self.fade.try_handle(vm)? {

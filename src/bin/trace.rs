@@ -296,9 +296,9 @@ fn run() -> Result<(), Box<dyn Error>> {
                     );
                     continue;
                 }
-                if buttons.try_handle(&mut machine, &scene)? {
+                if buttons.try_handle(&mut machine, &mut scene)? {
                     println!(
-                        "# button 0x{:04x}: groups={:?} merged_states={}; system_integer[0]={:?}; data only, no display or input",
+                        "# button 0x{:04x}: groups={:?} merged_states={}; system_integer[0]={:?}; scene state only, no input",
                         command + 0x2000,
                         (0..6)
                             .filter_map(|i| buttons.group(i).map(|g| (

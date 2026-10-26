@@ -175,7 +175,7 @@ fn invalid_slots_missing_objects_and_short_stacks_keep_the_command_pending() {
         next(&mut vm, &mut scene, &mut buttons);
         while !matches!(vm.step().unwrap(), Step::System { .. }) {}
         let (pc, bytes) = (vm.pc(), vm.stack().len_bytes());
-        assert!(buttons.try_handle(&mut vm, &scene).is_err(), "{op:#x}");
+        assert!(buttons.try_handle(&mut vm, &mut scene).is_err(), "{op:#x}");
         assert_eq!(vm.pending_system(), Some((pc, op - 0x2000)));
         assert_eq!(vm.stack().len_bytes(), bytes);
         assert_eq!(buttons.group(2).unwrap().buttons, vec![]);
@@ -186,7 +186,7 @@ fn invalid_slots_missing_objects_and_short_stacks_keep_the_command_pending() {
 
 #[test]
 fn display_and_input_commands_are_left_pending() {
-    for op in [0x2215, 0x2216, 0x2217, 0x2219] {
+    for op in [0x2216, 0x2217, 0x2219] {
         let mut code = vec![];
         prelude(&mut code);
         call(&mut code, op, &[2]);
@@ -197,5 +197,62 @@ fn display_and_input_commands_are_left_pending() {
         next(&mut vm, &mut scene, &mut buttons);
         assert!(!next(&mut vm, &mut scene, &mut buttons));
         assert_eq!(vm.pending_system().map(|p| p.1), Some(op - 0x2000));
+    }
+}
+
+#[test]
+fn show_applies_state_zero_crop_and_origin_to_the_child_and_marks_it_shown() {
+    let mut code = vec![];
+    prelude(&mut code);
+    call(&mut code, 0x2022, &[10, 3]);
+    call(&mut code, 0x2050, &[10, 3]);
+    call(&mut code, 0x2212, &[2, 1]);
+    set_image(&mut code, 1, 0, 3, 0xfffe);
+    set_image(&mut code, 1, 3, 3, 40);
+    call(&mut code, 0x2215, &[2]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let (mut scene, mut buttons) = (SceneHost::default(), ButtonHost::default());
+    while vm.pc() < code.len() {
+        assert!(next(&mut vm, &mut scene, &mut buttons));
+    }
+    assert_eq!(vm.stack().len_bytes(), 0);
+    let child = &scene.object(10).unwrap().children[&3];
+    assert!(child.shown);
+    // Sign-extended words from movsx, as the 0x2044/0x2046 setters receive them.
+    let crop_origin = [-2, -1, 0, 1, 2, 3].map(|v: i32| v as u32);
+    assert_eq!(&child.draw.as_ref().unwrap().words[2..8], &crop_origin);
+}
+
+#[test]
+fn show_checks_every_target_before_writing() {
+    // Button 1 targets a valid child; button 2 targets either a child without a draw
+    // state or one that does not exist.
+    for (missing_draw, child) in [(true, 4), (false, 9)] {
+        let mut code = vec![];
+        prelude(&mut code);
+        call(&mut code, 0x2022, &[10, 3]);
+        call(&mut code, 0x2050, &[10, 3]);
+        call(&mut code, 0x2022, &[10, 4]);
+        call(&mut code, 0x2212, &[2, 1]);
+        set_image(&mut code, 1, 0, 3, 7);
+        call(&mut code, 0x2212, &[2, 2]);
+        set_image(&mut code, 2, 0, child, 7);
+        call(&mut code, 0x2215, &[2]);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let (mut scene, mut buttons) = (SceneHost::default(), ButtonHost::default());
+        for _ in 0..9 {
+            next(&mut vm, &mut scene, &mut buttons);
+        }
+        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        let before = scene.object(10).unwrap().clone();
+        assert!(
+            buttons.try_handle(&mut vm, &mut scene).is_err(),
+            "{missing_draw}"
+        );
+        assert_eq!(scene.object(10).unwrap(), &before);
+        assert_eq!(vm.pending_system().map(|p| p.1), Some(0x215));
+        assert_eq!(vm.stack().len_bytes(), 4);
     }
 }

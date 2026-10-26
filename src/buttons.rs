@@ -1,7 +1,7 @@
 //! Engine +4504: six button groups bound to scene objects (0x2210..0x221b); addresses refer
 //! to the documented binary hash. Data layer only: groups, buttons, hit rectangles,
-//! navigation links and per-state images. Display (0x2215), input hit-testing
-//! (0x2217/0x221a) and the remaining commands stay unhandled.
+//! navigation links and per-state images, plus the initial display of 0x2215. Input
+//! hit-testing (0x2217/0x221a) and the remaining commands stay unhandled.
 use crate::{
     bytecode::DecodeError, evaluate::error, machine::Machine, scene::SceneHost, vm::SystemResult,
 };
@@ -60,15 +60,15 @@ impl ButtonHost {
     pub fn try_handle(
         &mut self,
         vm: &mut Machine<'_>,
-        scene: &SceneHost,
+        scene: &mut SceneHost,
     ) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x87 | 0x210..=0x214))) = vm.pending_system() else {
+        let Some((pc, command @ (0x87 | 0x210..=0x215))) = vm.pending_system() else {
             return Ok(false);
         };
         let op = command + 0x2000;
         let fail = |why| error(pc, op, why);
         let count = match command {
-            0x87 | 0x211 => 1,
+            0x87 | 0x211 | 0x215 => 1,
             0x210 | 0x212 => 2,
             0x213 => 6,
             _ => 10,
@@ -109,6 +109,9 @@ impl ButtonHost {
         let group = self.groups[slot]
             .as_ref()
             .ok_or_else(|| fail("button group slot is empty"))?;
+        if command == 0x215 {
+            return Self::show(group, vm, scene, pc);
+        }
         let id = args[1];
         if command == 0x212 && group.buttons.len() >= BUTTON_LIMIT {
             return Err(fail("button count exceeds research limit"));
@@ -161,6 +164,53 @@ impl ButtonHost {
         };
         for &record in records {
             button.images[record] = image;
+        }
+        Ok(true)
+    }
+
+    /// 0x2215 / 0x14005f3c0: for every button, apply image 0 (image 3 when disabled) to the
+    /// child of the group's object with the 0x2044/0x2046 setters, then set child +6244.
+    /// The original dereferences a missing child or draw state; every target is checked
+    /// before anything is written. Clearing group +16 (current item) is not modeled yet.
+    fn show(
+        group: &ButtonGroup,
+        vm: &mut Machine<'_>,
+        scene: &mut SceneHost,
+        pc: usize,
+    ) -> Result<bool, DecodeError> {
+        let fail = |why| error(pc, 0x2215, why);
+        let parent = scene
+            .object(group.object)
+            .ok_or_else(|| fail("button group object no longer exists"))?;
+        let images = group
+            .buttons
+            .iter()
+            .map(|button| button.images[if button.enabled { 0 } else { 3 }])
+            .collect::<Vec<_>>();
+        for image in &images {
+            let child = u16::try_from(image.child)
+                .ok()
+                .and_then(|child| parent.children.get(&child))
+                .ok_or_else(|| fail("button image child does not exist"))?;
+            if child.draw.is_none() {
+                return Err(fail("button image child has no draw state"));
+            }
+        }
+        vm.complete_system(SystemResult(0x4004))?;
+        let parent = scene.object_mut(group.object).expect("checked");
+        for image in images {
+            let child = parent
+                .children
+                .get_mut(&(image.child as u16))
+                .expect("checked");
+            let words = &mut child.draw.as_mut().expect("checked").words;
+            for (word, value) in words[2..8]
+                .iter_mut()
+                .zip(image.crop.iter().chain(&image.origin))
+            {
+                *word = i32::from(*value) as u32;
+            }
+            child.shown = true;
         }
         Ok(true)
     }

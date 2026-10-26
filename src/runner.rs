@@ -251,7 +251,9 @@ impl<'a> Startup<'a> {
             || self.gesture.try_handle(&mut self.machine)?
             || self.save_menu.try_handle_popup(&mut self.machine)?
             || self.message_flags.try_handle(&mut self.machine)?
-            || self.buttons.try_handle(&mut self.machine, &self.scene)?
+            || self
+                .buttons
+                .try_handle(&mut self.machine, &mut self.scene)?
             || self.random.try_handle(&mut self.machine)?
             || text::try_handle(&mut self.machine)?
             || self

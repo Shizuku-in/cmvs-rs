@@ -321,7 +321,13 @@ fn child_image_loading_uses_child_argument_and_preserves_parent_image() {
     let parent = scene.object(3).unwrap();
     assert_eq!(parent.image, parent.children[&7].image);
     assert!(parent.image.is_some());
-    assert!(cmvs_rs::scene_render::render(&scene, 2, 1).is_err());
+    // Without 0x2040 the parent is never enqueued, so its children are not visited either.
+    assert_eq!(
+        cmvs_rs::scene_render::render(&scene, 2, 1)
+            .unwrap()
+            .pixels(),
+        &[0, 0, 0, 255, 0, 0, 0, 255]
+    );
 }
 
 #[test]
@@ -406,4 +412,87 @@ fn fade_joins_object_order_and_equal_keys_follow_slot_objects() {
             assert_eq!(frame, opaque_pixels());
         }
     }
+}
+
+/// Parent slot 1 shows image pixel 0 at `parent_x` (order 10); child 5 shows pixel 1 at
+/// `child_x`. Creating the child before 0x2040 leaves its inheritance flags clear.
+fn parent_and_child(early_child: bool, parent_x: u32, child_x: u32, child_order: u32) -> Vec<u8> {
+    let mut code = loads(1, &[0]);
+    if early_child {
+        scene_command(&mut code, 0x2022, &[1, 5]);
+    }
+    scene_command(&mut code, 0x2040, &[1]);
+    if !early_child {
+        scene_command(&mut code, 0x2022, &[1, 5]);
+    }
+    scene_command(&mut code, 0x2044, &[1, u32::MAX, 0, 0, 1, 1]);
+    scene_command(&mut code, 0x2045, &[1, u32::MAX, parent_x, 0]);
+    scene_command(&mut code, 0x2047, &[1, u32::MAX, 10]);
+    scene_command(&mut code, 0x2050, &[1, 5]);
+    scene_command(&mut code, 0x2044, &[1, 5, 1, 0, 1, 1]);
+    scene_command(&mut code, 0x2045, &[1, 5, child_x, 0]);
+    scene_command(&mut code, 0x2047, &[1, 5, child_order]);
+    code
+}
+fn frame(code: &[u8]) -> Vec<u8> {
+    cmvs_rs::scene_render::render(&build_scene(code), 2, 1)
+        .unwrap()
+        .pixels()
+        .to_vec()
+}
+const P0: [u8; 4] = [5, 3, 1, 255];
+const P1: [u8; 4] = [6, 4, 2, 255];
+const CLEAR: [u8; 4] = [0, 0, 0, 255];
+
+#[test]
+fn inheriting_children_borrow_the_parent_image_and_position_and_draw_after_it() {
+    assert_eq!(frame(&parent_and_child(false, 0, 1, 0)), [P0, P1].concat());
+    // The child position is relative to the parent's.
+    assert_eq!(
+        frame(&parent_and_child(false, 1, 1, 0)),
+        [CLEAR, P0].concat()
+    );
+    // Sublist children follow their parent even with a lower order key.
+    assert_eq!(
+        frame(&parent_and_child(false, 0, 0, 0)),
+        [P1, CLEAR].concat()
+    );
+}
+
+#[test]
+fn inheriting_children_multiply_the_parent_opacity() {
+    let mut code = parent_and_child(false, 0, 1, 0);
+    scene_command(&mut code, 0x2048, &[1, u32::MAX, 128]);
+    let pixels = frame(&code);
+    // 255 * 128 / 255 = 128 for both the parent and the child.
+    for (actual, source) in pixels.chunks_exact(4).zip([P0, P1]) {
+        for c in 0..3 {
+            assert_eq!(actual[c], ((u32::from(source[c]) * 128 + 127) / 255) as u8);
+        }
+    }
+    scene_command(&mut code, 0x2048, &[1, 5, u32::MAX]);
+    assert!(cmvs_rs::scene_render::render(&build_scene(&code), 2, 1).is_err());
+}
+
+#[test]
+fn children_without_inheritance_flags_are_independent_queue_entries() {
+    // Absolute position: the child lands at x=0 although the parent is at x=1.
+    assert_eq!(frame(&parent_and_child(true, 1, 0, 0)), [P1, P0].concat());
+    // A higher order sorts the child before (below) the parent; a lower one after it.
+    assert_eq!(
+        frame(&parent_and_child(true, 1, 1, 20)),
+        [CLEAR, P0].concat()
+    );
+    assert_eq!(
+        frame(&parent_and_child(true, 1, 1, 0)),
+        [CLEAR, P1].concat()
+    );
+}
+
+#[test]
+fn shown_children_without_draw_state_fail_explicitly() {
+    let mut code = loads(1, &[0]);
+    scene_command(&mut code, 0x2040, &[1]);
+    scene_command(&mut code, 0x2022, &[1, 5]);
+    assert!(cmvs_rs::scene_render::render(&build_scene(&code), 2, 1).is_err());
 }
