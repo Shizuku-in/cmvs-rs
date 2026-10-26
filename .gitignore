@@ -2,6 +2,7 @@
 /local/
 __pycache__/
 *.py[cod]
+.vscode/
 # User-supplied game data and IDA databases belong outside the repository.
 *.cpz
 *.ps2
