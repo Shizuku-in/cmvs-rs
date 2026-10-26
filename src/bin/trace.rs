@@ -261,7 +261,8 @@ fn run() -> Result<(), Box<dyn Error>> {
                     && scene.try_handle_image(&mut machine, &mut images.with_paths(paths))?
                 {
                     println!(
-                        "# scene image 0x2030: system_integer[0]={:?} objects={:?}; decoded only, nothing drawn",
+                        "# scene image 0x{:04x}: system_integer[0]={:?} objects={:?}; decoded only, nothing drawn",
+                        command + 0x2000,
                         machine.state().system_integer(0),
                         scene
                             .objects()

@@ -20,6 +20,7 @@ pub mod runner;
 pub mod save;
 pub mod save_menu;
 pub mod scene;
+pub mod scene_render;
 pub mod script_control;
 pub mod snapshot;
 pub mod system_save;

@@ -289,3 +289,103 @@ fn archive_entries_fold_case_verify_checksums_and_reopen_on_reregistration() {
     assert!(source.read(&[b'a'; 64]).is_err());
     fs::remove_dir_all(root).unwrap();
 }
+
+fn scene_command(code: &mut Vec<u8>, opcode: u16, args: &[u32]) {
+    for &arg in args.iter().rev() {
+        push(code, arg);
+    }
+    op(code, opcode);
+}
+fn build_scene(code: &[u8]) -> SceneHost {
+    let program = script(code, b"a.pb3\0");
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    let mut files = Files::default();
+    files.0.insert(b"a.pb3".to_vec(), opaque());
+    while vm.pc() < code.len() {
+        run_to_system(&mut vm);
+        assert!(
+            scene.try_handle(&mut vm).unwrap()
+                || scene.try_handle_image(&mut vm, &mut files).unwrap()
+        );
+    }
+    scene
+}
+
+#[test]
+fn child_image_loading_uses_child_argument_and_preserves_parent_image() {
+    let mut code = loads(3, &[0]);
+    scene_command(&mut code, 0x2022, &[3, 7]);
+    scene_command(&mut code, 0x2038, &[3, 7, 0]);
+    let scene = build_scene(&code);
+    let parent = scene.object(3).unwrap();
+    assert_eq!(parent.image, parent.children[&7].image);
+    assert!(parent.image.is_some());
+    assert!(cmvs_rs::scene_render::render(&scene, 2, 1).is_err());
+}
+
+#[test]
+fn static_scene_uses_script_crop_origin_position_and_clear_color() {
+    let mut code = loads(3, &[0]);
+    // Loading alone is invisible.
+    let scene = build_scene(&code);
+    assert_eq!(
+        cmvs_rs::scene_render::render(&scene, 2, 1)
+            .unwrap()
+            .pixels(),
+        &[0, 0, 0, 255, 0, 0, 0, 255]
+    );
+    scene_command(&mut code, 0x22cb, &[0x102030]);
+    scene_command(&mut code, 0x2040, &[3]);
+    scene_command(&mut code, 0x2044, &[3, u32::MAX, 0, 0, 2, 1]);
+    scene_command(&mut code, 0x2046, &[3, u32::MAX, 1, 0]);
+    scene_command(&mut code, 0x2045, &[3, u32::MAX, 0, 0]);
+    let scene = build_scene(&code);
+    let frame = cmvs_rs::scene_render::render(&scene, 2, 1).unwrap();
+    assert_eq!(&frame.pixels()[..4], &opaque_pixels().pixels()[4..]);
+    assert_eq!(&frame.pixels()[4..], &[0x10, 0x20, 0x30, 255]);
+    assert!(cmvs_rs::scene_render::render(&scene, u32::MAX, u32::MAX).is_err());
+}
+
+#[test]
+fn static_scene_sorts_back_to_front_and_equal_orders_keep_slot_order() {
+    for second_order in [10, 0, 20] {
+        let mut code = vec![];
+        for (slot, crop, order) in [(1, 0, 10), (2, 1, second_order)] {
+            code.extend(loads(slot, &[0]));
+            scene_command(&mut code, 0x2040, &[slot]);
+            scene_command(&mut code, 0x2044, &[slot, u32::MAX, crop, 0, 1, 1]);
+            scene_command(&mut code, 0x2047, &[slot, u32::MAX, order]);
+        }
+        let frame = cmvs_rs::scene_render::render(&build_scene(&code), 1, 1).unwrap();
+        let pixels = opaque_pixels();
+        assert_eq!(
+            frame.pixels(),
+            if second_order > 10 {
+                &pixels.pixels()[..4]
+            } else {
+                &pixels.pixels()[4..]
+            }
+        );
+    }
+}
+
+#[test]
+fn static_scene_opacity_and_unsupported_blend_are_explicit() {
+    let mut code = loads(1, &[0]);
+    scene_command(&mut code, 0x2040, &[1]);
+    scene_command(&mut code, 0x2044, &[1, u32::MAX, 0, 0, 2, 1]);
+    scene_command(&mut code, 0x2048, &[1, u32::MAX, 128]);
+    let frame = cmvs_rs::scene_render::render(&build_scene(&code), 2, 1).unwrap();
+    for (actual, source) in frame
+        .pixels()
+        .chunks_exact(4)
+        .zip(opaque_pixels().pixels().chunks_exact(4))
+    {
+        for c in 0..3 {
+            assert_eq!(actual[c], ((u32::from(source[c]) * 128 + 127) / 255) as u8);
+        }
+    }
+    scene_command(&mut code, 0x204b, &[1, u32::MAX, 2]);
+    assert!(cmvs_rs::scene_render::render(&build_scene(&code), 2, 1).is_err());
+}

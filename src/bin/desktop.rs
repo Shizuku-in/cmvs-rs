@@ -6,6 +6,7 @@ use cmvs_rs::{
     platform::{DirectoryAssets, PlatformAssets, PlatformBackend, PlatformRequest},
     raster::RgbaImage,
     runner::{SnapshotPolicy, Startup, StartupEvent, load_start},
+    scene_render,
 };
 use std::{
     env,
@@ -67,9 +68,12 @@ impl App<'_> {
         }
         if let Some(image) = &self.preview_image {
             image.draw_fit(&mut buffer, size.width, size.height)?;
+        } else {
+            // Amatsutsumi research viewport. Scaling to a resized window is presentation policy.
+            let image = scene_render::render(self.startup.scene(), 1280, 720)?;
+            buffer.fill(0);
+            image.draw_fit(&mut buffer, size.width, size.height)?;
         }
-        let bar_start = size.height.saturating_sub(10) as usize * size.width as usize;
-        buffer[bar_start..].fill(if self.halted { 0x9c7529 } else { 0x3c7fa2 });
         buffer.present()?;
         Ok(())
     }
@@ -118,7 +122,7 @@ impl ApplicationHandler for App<'_> {
             window.set_visible(true);
             window.request_redraw();
             println!(
-                "# native window created; explicit_image_preview={}; no CMVS scene rendering",
+                "# native window created; explicit_image_preview={}; static 2D scene viewport=1280x720",
                 self.preview_image.is_some()
             );
             Ok(())
@@ -231,6 +235,13 @@ impl ApplicationHandler for App<'_> {
                     ),
                     Ok(event) => {
                         self.halted = true;
+                        for (slot, object) in self.startup.scene().objects() {
+                            println!(
+                                "# scene object[{slot}] draw={:?} children={}",
+                                object.draw,
+                                object.children.len()
+                            );
+                        }
                         println!(
                             "# STARTUP STOP {event:?}; steps={} slot={} script={} pc=0x{:x} callbacks={} known_integers={} known_bits={}",
                             self.startup.steps(),
@@ -269,7 +280,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     )?;
     if root == "--help" {
         println!(
-            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>] [--continue-without-snapshot] [--rand-seed <seed>]\nNative research preview only. Runs bounded startup with virtual tick 0; stops at unknown commands or main snapshot barrier. --continue-without-snapshot enters main without building a save image; saving stays unavailable. --rand-seed sets the CRT rand() research seed (default 0). Without an explicit image, shows a diagnostic checkerboard. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. Raw window input is observed but not injected into CMVS opcodes. All game files read-only."
+            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>] [--continue-without-snapshot] [--rand-seed <seed>]\nNative research preview only. Runs bounded startup with virtual tick 0; stops at unknown commands or main snapshot barrier. --continue-without-snapshot enters main without building a save image; saving stays unavailable. --rand-seed sets the CRT rand() research seed (default 0). Without an explicit image, presents the verified static top-level 2D scene on a 1280x720 research viewport; child rendering, transforms, transitions and alternate blend modes remain unsupported. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. Raw window input is observed but not injected into CMVS opcodes. All game files read-only."
         );
         return Ok(());
     }

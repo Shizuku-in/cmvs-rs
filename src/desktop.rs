@@ -1,4 +1,4 @@
-//! Optional native desktop adapter. No CMVS rendering, input-opcode emulation or snapshot bypass.
+//! Optional native window/input adapter. Static scene rendering lives in `scene_render`.
 use crate::{
     FormatError,
     cursor::CursorBitmap,
