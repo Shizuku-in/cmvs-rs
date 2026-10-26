@@ -273,6 +273,9 @@ impl<'a> Startup<'a> {
             || self
                 .buttons
                 .try_handle(&mut self.machine, &mut self.scene)?
+            || self
+                .buttons
+                .try_handle_input(&mut self.machine, &mut self.scene, &mut self.input)?
             || self.random.try_handle(&mut self.machine)?
             || text::try_handle(&mut self.machine)?
             || self

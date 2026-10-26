@@ -315,6 +315,17 @@ fn run() -> Result<(), Box<dyn Error>> {
                     );
                     continue;
                 }
+                if buttons.try_handle_input(&mut machine, &mut scene, &mut input)? {
+                    let group = buttons.group(0);
+                    println!(
+                        "# button input 0x{:04x}: group0 current={:?} pressed={:?}; system_integer[0]={:?}; no input supplied",
+                        command + 0x2000,
+                        group.and_then(|g| g.current),
+                        group.map(|g| g.pressed_visual),
+                        machine.state().system_integer(0).map(|v| v as i32)
+                    );
+                    continue;
+                }
                 if buttons.try_handle(&mut machine, &mut scene)? {
                     println!(
                         "# button 0x{:04x}: groups={:?} merged_states={}; system_integer[0]={:?}; scene state only, no input",

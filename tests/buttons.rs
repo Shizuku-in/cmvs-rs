@@ -1,5 +1,6 @@
 use cmvs_rs::{
     buttons::{Button, ButtonHost, ButtonImage},
+    input::ActionInput,
     machine::{Machine, Step},
     ps3::Script,
     scene::SceneHost,
@@ -185,8 +186,8 @@ fn invalid_slots_missing_objects_and_short_stacks_keep_the_command_pending() {
 }
 
 #[test]
-fn display_and_input_commands_are_left_pending() {
-    for op in [0x2216, 0x2217, 0x2219] {
+fn unverified_commands_are_left_pending() {
+    for op in [0x2218, 0x2219] {
         let mut code = vec![];
         prelude(&mut code);
         call(&mut code, op, &[2]);
@@ -255,4 +256,174 @@ fn show_checks_every_target_before_writing() {
         assert_eq!(vm.pending_system().map(|p| p.1), Some(0x215));
         assert_eq!(vm.stack().len_bytes(), 4);
     }
+}
+
+/// Object 10 with children 3 and 4 (draw states), group 2 with button 7 at (0,0,10,10)
+/// drawn by child 3 and button 9 at (20,0,10,10) drawn by child 4. State s of child c uses
+/// crop base 10 * s + c, so every applied image is recognizable.
+fn interactive(code: &mut Vec<u8>) {
+    prelude(code);
+    for child in [3, 4] {
+        call(code, 0x2022, &[10, child]);
+        call(code, 0x2050, &[10, child]);
+    }
+    for (id, child, x) in [(7, 3, 0), (9, 4, 20)] {
+        call(code, 0x2212, &[2, id]);
+        call(code, 0x2213, &[2, id, x, 0, 10, 10]);
+        for state in 0..4 {
+            set_image(code, id, state, child, 10 * state + child);
+        }
+    }
+}
+const SETUP: usize = 2 + 4 + 2 * 6;
+/// Crop x of a child, which identifies the last applied state image.
+fn crop_x(scene: &SceneHost, child: u16) -> i32 {
+    scene.object(10).unwrap().children[&child]
+        .draw
+        .as_ref()
+        .unwrap()
+        .words[2] as i32
+}
+/// Runs the next 0x2216/0x2217 with `input` and returns system result 0 as i32.
+fn frame(
+    vm: &mut Machine<'_>,
+    scene: &mut SceneHost,
+    buttons: &mut ButtonHost,
+    input: &mut ActionInput,
+) -> i32 {
+    while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+    assert!(buttons.try_handle_input(vm, scene, input).unwrap());
+    vm.state().system_integer(0).unwrap() as i32
+}
+fn run_setup(vm: &mut Machine<'_>, scene: &mut SceneHost, buttons: &mut ButtonHost) {
+    for _ in 0..SETUP {
+        assert!(next(vm, scene, buttons));
+    }
+}
+
+#[test]
+fn pointer_hover_press_and_release_select_the_button_under_it() {
+    let mut code = vec![];
+    interactive(&mut code);
+    for _ in 0..5 {
+        call(&mut code, 0x2217, &[2]);
+    }
+    call(&mut code, 0x2216, &[2]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let (mut scene, mut buttons) = (SceneHost::default(), ButtonHost::default());
+    run_setup(&mut vm, &mut scene, &mut buttons);
+    let mut input = ActionInput::default();
+    // No input: the pointer at (0, 0) is inside button 7, which becomes hovered.
+    assert_eq!(frame(&mut vm, &mut scene, &mut buttons, &mut input), -1);
+    assert_eq!(buttons.group(2).unwrap().current, Some(0));
+    assert_eq!(crop_x(&scene, 3), 13);
+    // Outside every button: hover cleared and image 0 restored.
+    input.set_pointer(15, 5);
+    assert_eq!(frame(&mut vm, &mut scene, &mut buttons, &mut input), -1);
+    assert_eq!(buttons.group(2).unwrap().current, None);
+    assert_eq!(crop_x(&scene, 3), 3);
+    // Press over button 9 shows its pressed image.
+    input.set_pointer(25, 5);
+    input.set(0, true, true, false).unwrap();
+    assert_eq!(frame(&mut vm, &mut scene, &mut buttons, &mut input), -1);
+    let group = buttons.group(2).unwrap();
+    assert_eq!(
+        (group.current, group.press_target, group.pressed_visual),
+        (Some(1), Some(1), true)
+    );
+    assert_eq!(crop_x(&scene, 4), 24);
+    // Releasing over the same button selects its id and consumes action 0.
+    input.set(0, false, false, true).unwrap();
+    assert_eq!(frame(&mut vm, &mut scene, &mut buttons, &mut input), 9);
+    assert!(!input.released(0));
+    // Without further input the pressed image returns to the hover image.
+    assert_eq!(frame(&mut vm, &mut scene, &mut buttons, &mut input), -1);
+    assert_eq!(crop_x(&scene, 4), 14);
+    assert!(!buttons.group(2).unwrap().pressed_visual);
+    assert_eq!(frame(&mut vm, &mut scene, &mut buttons, &mut input), 9);
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
+fn release_elsewhere_and_cancel_have_their_own_results() {
+    let mut code = vec![];
+    interactive(&mut code);
+    for _ in 0..3 {
+        call(&mut code, 0x2217, &[2]);
+    }
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let (mut scene, mut buttons) = (SceneHost::default(), ButtonHost::default());
+    run_setup(&mut vm, &mut scene, &mut buttons);
+    let mut input = ActionInput::default();
+    input.set(0, true, true, false).unwrap();
+    assert_eq!(frame(&mut vm, &mut scene, &mut buttons, &mut input), -1);
+    // Moving to button 9 restores button 7 and hovers button 9; the release is elsewhere.
+    input.set_pointer(25, 5);
+    input.set(0, false, false, true).unwrap();
+    assert_eq!(frame(&mut vm, &mut scene, &mut buttons, &mut input), -10);
+    assert_eq!((crop_x(&scene, 3), crop_x(&scene, 4)), (3, 14));
+    input.set(1, false, false, true).unwrap();
+    assert_eq!(frame(&mut vm, &mut scene, &mut buttons, &mut input), -2);
+    assert!(!input.released(1));
+}
+
+#[test]
+fn keyboard_navigation_follows_links_and_warps_the_pointer() {
+    let mut code = vec![];
+    interactive(&mut code);
+    for _ in 0..3 {
+        call(&mut code, 0x2217, &[2]);
+    }
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let (mut scene, mut buttons) = (SceneHost::default(), ButtonHost::default());
+    run_setup(&mut vm, &mut scene, &mut buttons);
+    let mut input = ActionInput::default();
+    input.set_pointer(50, 50);
+    // Action 2 without a current button goes to the last one.
+    input.set(2, false, false, true).unwrap();
+    frame(&mut vm, &mut scene, &mut buttons, &mut input);
+    assert_eq!(buttons.group(2).unwrap().current, Some(1));
+    assert_eq!(input.take_warp(), Some([25, 5]));
+    assert!(!input.released(2));
+    // Button 9 links back to 7 as its previous button.
+    input.set(2, false, false, true).unwrap();
+    frame(&mut vm, &mut scene, &mut buttons, &mut input);
+    assert_eq!(buttons.group(2).unwrap().current, Some(0));
+    assert_eq!(input.pointer(), [5, 5]);
+    // Button 7 links forward to 9 through action 3.
+    input.set(3, false, false, true).unwrap();
+    frame(&mut vm, &mut scene, &mut buttons, &mut input);
+    assert_eq!(buttons.group(2).unwrap().current, Some(1));
+    assert_eq!(input.take_warp(), Some([25, 5]));
+}
+
+#[test]
+fn missing_state_children_keep_the_frame_uncommitted() {
+    let mut code = vec![];
+    prelude(&mut code);
+    call(&mut code, 0x2212, &[2, 7]);
+    call(&mut code, 0x2213, &[2, 7, 0, 0, 10, 10]);
+    call(&mut code, 0x2217, &[2]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let (mut scene, mut buttons) = (SceneHost::default(), ButtonHost::default());
+    for _ in 0..4 {
+        next(&mut vm, &mut scene, &mut buttons);
+    }
+    while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+    let mut input = ActionInput::default();
+    input.set(1, false, false, true).unwrap();
+    // The hover image names child 0, which does not exist.
+    assert!(
+        buttons
+            .try_handle_input(&mut vm, &mut scene, &mut input)
+            .is_err()
+    );
+    assert_eq!(buttons.group(2).unwrap().current, None);
+    assert!(input.released(1));
+    assert_eq!(vm.stack().len_bytes(), 4);
+    assert_eq!(vm.state().system_integer(0), Some(1));
 }

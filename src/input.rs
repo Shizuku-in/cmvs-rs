@@ -15,6 +15,11 @@ pub struct ActionInput {
     held: [bool; ACTIONS],
     /// A bound code went down on this frame (its counter is 1).
     pressed: [bool; ACTIONS],
+    /// +868/+872: pointer position in script coordinates (constructor 0, 0).
+    pointer: [i32; 2],
+    /// Set by button keyboard navigation (0x140056530 plus SetCursorPos); the host moves
+    /// the system cursor and takes it.
+    warp: Option<[i32; 2]>,
 }
 
 impl ActionInput {
@@ -42,6 +47,21 @@ impl ActionInput {
     }
     pub fn released(&self, action: usize) -> bool {
         self.released.get(action).copied().unwrap_or(false)
+    }
+    pub fn pointer(&self) -> [i32; 2] {
+        self.pointer
+    }
+    /// Host update of the pointer in script coordinates.
+    pub fn set_pointer(&mut self, x: i32, y: i32) {
+        self.pointer = [x, y];
+    }
+    /// Pending system cursor move requested by the engine, cleared when taken.
+    pub fn take_warp(&mut self) -> Option<[i32; 2]> {
+        self.warp.take()
+    }
+    pub(crate) fn warp_pointer(&mut self, x: i32, y: i32) {
+        self.pointer = [x, y];
+        self.warp = Some([x, y]);
     }
     /// 0x140054d90 for action 0 (siblings such as 0x140054dd0 for later actions): clears the
     /// release and press flags and keeps the held flag.
