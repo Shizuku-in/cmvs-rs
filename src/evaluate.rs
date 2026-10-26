@@ -1,7 +1,7 @@
 //! Stateful integer and float evaluation with explicit unknown values and transactional errors.
 use crate::{
     bytecode::{DecodeError, Expression, Term},
-    vm::ParameterStack,
+    vm::{ParameterStack, StackWord, frame_offset},
 };
 use std::collections::BTreeMap;
 
@@ -25,7 +25,7 @@ enum Undo {
     Result(Option<u32>),
     Condition(Option<bool>),
     Float(u32, Option<u32>),
-    Stack(usize, u32),
+    Stack(usize, StackWord),
 }
 
 /// Previous values recorded before each write, so a failed evaluation is undone
@@ -52,12 +52,8 @@ impl Env<'_, '_> {
             .frame
             .as_ref()
             .ok_or_else(|| error(pc, tag, "frame operand needs the machine stack"))?;
-        let offset = if matches!(tag, 0x103 | 0x129) {
-            frame.base.checked_sub(raw as usize)
-        } else {
-            frame.base.checked_add(raw as usize)
-        };
-        offset.ok_or_else(|| error(pc, tag, "frame operand outside the stack"))
+        frame_offset(frame.base, raw, matches!(tag, 0x103 | 0x129))
+            .ok_or_else(|| error(pc, tag, "frame operand outside the stack"))
     }
     fn load(&self, offset: usize, pc: usize, op: u16) -> Result<u32, DecodeError> {
         let frame = self.frame.as_ref().expect("offset checked the frame");
@@ -241,9 +237,7 @@ impl State {
                 Undo::Float(index, old) => restore(&mut self.floats, index, old),
                 Undo::Stack(offset, old) => {
                     let stack = stack.as_deref_mut().expect("stack writes need their stack");
-                    stack
-                        .write_u32_at(offset, old)
-                        .expect("restoring a previously written word");
+                    stack.restore_at(offset, old);
                 }
                 Undo::Buffer(old) => self.string_buffer = old,
                 Undo::Result(old) => self.result = old,
@@ -431,6 +425,22 @@ impl State {
                     tag: tag @ (0x103 | 0x108),
                     raw,
                 } => stack.push(Cell::Frame(env.offset(*tag, *raw, *pc)?)),
+                Term::Indexed {
+                    pc,
+                    tag: 0x109,
+                    base,
+                    indices,
+                    ..
+                } => {
+                    // 0x140066200 evaluates the index when pushing and rewrites the item as
+                    // tag 0x108 with raw = base + 4 * index in u32 arithmetic.
+                    let [index] = indices.as_slice() else {
+                        return Err(error(*pc, 0x109, "frame array needs one index"));
+                    };
+                    let index = self.evaluate(index, depth + 1, env, journal)?;
+                    let raw = base.wrapping_add((index as u32).wrapping_mul(4));
+                    stack.push(Cell::Frame(env.offset(0x108, raw, *pc)?));
+                }
                 Term::Nested {
                     pc,
                     tag,

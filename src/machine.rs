@@ -3,7 +3,7 @@ use crate::{
     bytecode::{self, DecodeError, Expression, Instruction, InstructionKind, Term},
     evaluate::{Env, Frame, Journal, State, error},
     ps3::Script,
-    vm::{ParameterStack, StringRef, SystemResult},
+    vm::{ParameterStack, StringRef, SystemResult, frame_offset},
 };
 use std::{borrow::Cow, collections::BTreeMap, rc::Rc};
 
@@ -177,9 +177,7 @@ impl<'a> Machine<'a> {
 
     /// Word at the current call frame minus `distance`, as tag 0x122/0x103 operands read it.
     fn frame_word(&self, distance: u32, pc: usize, tag: u16) -> Result<u32, DecodeError> {
-        let offset = self
-            .frame_base()
-            .checked_sub(distance as usize)
+        let offset = frame_offset(self.frame_base(), distance, true)
             .ok_or_else(|| error(pc, tag, "frame operand below stack base"))?;
         self.stack
             .read_u32_at(offset)
@@ -432,8 +430,10 @@ impl<'a> Machine<'a> {
                     .ok_or_else(|| error(pc, op, "result register is unknown"))?;
                 self.stack.push_u32(raw).map_err(|e| error(pc, op, e.0))?;
             }
-            InstructionKind::StackImmediate { bytes: 4, raw } => {
-                self.stack.push_u32(*raw).map_err(|e| error(pc, op, e.0))?;
+            InstructionKind::StackImmediate { bytes, raw } => {
+                self.stack
+                    .reserve(*raw, usize::from(*bytes))
+                    .map_err(|e| error(pc, op, e.0))?;
             }
             InstructionKind::ScriptReturn { .. } => {
                 let slot = self.stack.peek_u32(4).map_err(|e| error(pc, op, e.0))?;

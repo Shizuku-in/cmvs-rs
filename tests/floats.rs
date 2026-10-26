@@ -29,6 +29,18 @@ fn var(tag: u16, index: i32) -> Vec<u8> {
 fn op(opcode: u16) -> Vec<u8> {
     opcode.to_le_bytes().to_vec()
 }
+/// 0x109 frame array element: base, then an integer index expression.
+fn indexed(base: u32, index: i32) -> Vec<u8> {
+    let mut bytes = 0x109u16.to_le_bytes().to_vec();
+    bytes.extend(base.to_le_bytes());
+    bytes.extend(expr(0x200, vec![scalar(0x100, index as u32)]));
+    bytes
+}
+fn reserve(code: &mut Vec<u8>, bytes: u16, raw: u32) {
+    code.extend(0x440u16.to_le_bytes());
+    code.extend(bytes.to_le_bytes());
+    code.extend(raw.to_le_bytes());
+}
 fn parse(code: &[u8]) -> Expression {
     match bytecode::decode_at(code, 0).unwrap().kind {
         InstructionKind::Expression(e) => e,
@@ -249,4 +261,112 @@ fn frame_arguments_are_read_below_the_call_frame() {
     }
     assert_eq!(vm.state().result, Some(42));
     assert!(vm.step().is_err());
+}
+
+#[test]
+fn frame_arrays_address_wide_reservations_and_unwritten_words_stay_unknown() {
+    let mut code = vec![];
+    reserve(&mut code, 4, 3);
+    reserve(&mut code, 8, 0);
+    reserve(&mut code, 8, 0);
+    code.extend(expr(
+        0x200,
+        vec![indexed(4, 1), scalar(0x100, 236), op(0x170)],
+    ));
+    code.extend(expr(
+        0x200,
+        vec![
+            indexed(4, 1),
+            indexed(4, 0),
+            op(0x163),
+            indexed(0, 0),
+            op(0x163),
+        ],
+    ));
+    // The second word of the other 8-byte reservation was never written.
+    code.extend(expr(0x200, vec![indexed(12, 1)]));
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    for _ in 0..4 {
+        vm.step().unwrap();
+    }
+    assert_eq!(vm.stack().len_bytes(), 20);
+    assert_eq!(vm.stack().read_u32_at(8).unwrap(), 236);
+    vm.step().unwrap();
+    assert_eq!(vm.state().result, Some(239));
+    assert_eq!(vm.state().integer(4096), Some(239));
+    let pc = vm.pc();
+    assert!(vm.step().is_err());
+    assert_eq!(vm.pc(), pc);
+    assert_eq!(vm.state().result, Some(239));
+    assert_eq!(vm.state().integer(4096), Some(239));
+}
+
+#[test]
+fn failed_frame_array_write_restores_the_unknown_word() {
+    let mut code = vec![];
+    reserve(&mut code, 8, 0);
+    code.extend(expr(
+        0x200,
+        vec![
+            indexed(0, 1),
+            scalar(0x100, 5),
+            op(0x170),
+            var(0x101, 7), // unknown integer variable
+            op(0x163),
+        ],
+    ));
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.step().unwrap();
+    assert!(vm.step().is_err());
+    assert!(vm.stack().read_u32_at(4).is_err());
+    assert_eq!(vm.stack().read_u32_at(0).unwrap(), 0);
+}
+
+#[test]
+fn negative_frame_offsets_reach_below_the_call_frame_as_signed_values() {
+    let mut code = vec![];
+    reserve(&mut code, 4, 41);
+    code.extend(0x410u16.to_le_bytes());
+    code.extend(1u16.to_le_bytes());
+    let function = code.len() as u32;
+    // Base + 4 * -2 wraps to 0xfffffff8, which the original adds as (int) -8.
+    code.extend(expr(
+        0x200,
+        vec![indexed(0, -2), scalar(0x100, 1), op(0x163)],
+    ));
+    code.extend(expr(0x200, vec![scalar(0x108, (-8i32) as u32)]));
+    code.extend(expr(0x200, vec![scalar(0x103, (-4i32) as u32)]));
+    let mut payload = 0u32.to_le_bytes().to_vec();
+    payload.extend(function.to_le_bytes());
+    payload.extend(&code);
+    let mut raw = b"PS2A".to_vec();
+    for n in [
+        48,
+        0,
+        0,
+        2,
+        code.len() as u32,
+        0,
+        0,
+        0,
+        0,
+        payload.len() as u32,
+        0,
+    ] {
+        raw.extend(n.to_le_bytes());
+    }
+    raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+    let script = Script::decode(&raw).unwrap();
+    let mut vm = Machine::new(&script).unwrap();
+    for _ in 0..3 {
+        vm.step().unwrap();
+    }
+    assert_eq!(vm.state().result, Some(42));
+    vm.step().unwrap();
+    assert_eq!(vm.state().result, Some(41));
+    // base - (int)-4 = base + 4 lies past the live stack.
+    assert!(vm.step().is_err());
+    assert_eq!(vm.state().result, Some(41));
 }

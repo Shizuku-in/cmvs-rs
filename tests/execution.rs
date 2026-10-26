@@ -289,14 +289,13 @@ fn unknown_condition_and_unsupported_instruction_leave_pc_unchanged() {
     let mut vm = Machine::new(&first_script).unwrap();
     assert!(vm.step().is_err());
     assert_eq!(vm.pc(), 0);
+    // 0x0413 (return by result-register count) is decoded but not executed yet.
     let mut code = vec![];
-    word(&mut code, 0x440);
-    word(&mut code, 8);
-    code.extend(7u32.to_le_bytes());
+    word(&mut code, 0x413);
     let script = script(&code);
     let mut vm = Machine::new(&script).unwrap();
     assert!(vm.step().is_err());
-    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!((vm.pc(), vm.stack().len_bytes()), (0, 0));
 }
 
 #[test]
