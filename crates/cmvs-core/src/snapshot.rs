@@ -126,6 +126,32 @@ pub enum SaveImage {
 }
 
 impl SaveImage {
+    /// 0x22b2 / 0x14007c9a0 captures the next PC with repeat count zero.
+    /// Only an explicit research policy may proceed without the serialized image.
+    pub fn try_handle(
+        &mut self,
+        vm: &mut Machine<'_>,
+        continue_without_image: bool,
+    ) -> Result<bool, DecodeError> {
+        let Some((pc, 0x2b2)) = vm.pending_system() else {
+            return Ok(false);
+        };
+        if !continue_without_image {
+            return Ok(false);
+        }
+        // Validate/apply the only fallible live-state change before completing the
+        // verified no-argument command. Completion advances PC and resets repeat.
+        vm.state_mut()
+            .set_bit(0, false)
+            .map_err(|why| error(pc, 0x22b2, why))?;
+        vm.complete_system(SystemResult(0x4000))?;
+        *self = Self::Unavailable {
+            script: vm.current_name().to_vec(),
+            pc: vm.pc(),
+        };
+        Ok(true)
+    }
+
     /// Applies 0x140069270's only VM-visible effect without building the image:
     /// bit 0 is set for the captured copy, then cleared in live state.
     /// The variable change-tracking flag it may raise is not modeled.

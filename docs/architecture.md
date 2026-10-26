@@ -183,3 +183,5 @@ BGM 与 SE 共用 `AudioHost`/`AudioBackend`：`BgmState` 保存 +4464 对象的
 随后消息窗口显示阶段：`MessageWindow` 保存可见与临时隐藏标志，`TextObject` 保存可见标志，`MessageHost::try_handle_pointer` 以 `ActionInput` 指针做命中测试（屏幕尺寸取研究视口）；`AudioRequest::PlaySe` 带淡入毫秒。最新停点为 sn1001.ps3 / 0xe2ba / 0x2285（SP=156）。
 
 动作序列条目数查询 0x2285 已实现，返回头部 count 并保留参数栈；真实鼠标与键盘重放均停于 sn1001.ps3 / PC=0xe39c / 0x22b2（剧情快照），鼠标重放第 38793 次 tick、SP=156。其他序列命令仍未实现，未新增文字绘制或原生窗口实测。详见 vm-semantics.md。
+
+剧情快照 0x22b2 现接入显式不建镜像模式；+14744 已核对为现有 repeat_count，完成命令时清零并前进 PC，位变量 0 清零，存档仍为 Unavailable。默认保留断点。真实鼠标与键盘重放停于 sn1001.ps3 / 0xf062 / 0x20ec（鼠标第 38854 次 tick，SP=164）；未新增窗口实测或文字绘制，见 snapshot-format.md。

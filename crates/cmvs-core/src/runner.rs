@@ -1,5 +1,5 @@
 //! Bounded real-data startup orchestration for the researched Amatsutsumi layout.
-//! The main-transition snapshot is a barrier unless the caller explicitly continues without an image.
+//! Snapshots remain barriers unless the caller explicitly continues without an image.
 use crate::{
     MAX_PAYLOAD,
     audio::{AudioBackend, AudioHost, RecordingAudio},
@@ -328,6 +328,10 @@ impl<'a> Startup<'a> {
         if self
             .save_menu
             .try_handle(&mut self.machine, &mut self.saves)?
+            || self.save_image.try_handle(
+                &mut self.machine,
+                self.snapshot_policy == SnapshotPolicy::ContinueWithoutImage,
+            )?
             || self.timers.try_handle(&mut self.machine)?
             || self.bootstrap.try_handle(&mut self.machine)?.is_some()
             || self.scene.try_handle(&mut self.machine)?

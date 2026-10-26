@@ -42,7 +42,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         .ok_or("usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap]")?;
     if path == "--help" {
         println!(
-            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap] [--script-archive <archive>] [--virtual-tick <tick>] [--frame-ms <delta>] [--save-dir <directory>] [--system-save <file>] [--record-platform <game-root>] [--continue-without-snapshot] [--rand-seed <seed>]\n--frame-ms supplies a positive engine-frame delta on each supported wait/yield; without it time stays frozen. Callback ticks remain separate. --script loads an isolated initial script. --script-archive supplies common/main scripts and enables explicit control handling with virtual time (default tick 0), without automatic scheduling. --bootstrap applies verified startup configuration. --save-dir enables read-only saveNNN.dat header scanning and menu state, without native UI or save restoration. --system-save explicitly enables CSS1 persistent-state loading for 0x2128; it does not restore a gameplay snapshot. --record-platform enables a recording-only backend with read-only cursor/icon assets from the explicit game root, plus verified state such as the clear color, the save title and pointer-gesture configuration, records SE playback requests without audio output, and decodes 0x2030 object images read-only from the 0x2011 entries; no native window, drawing, or input polling. Main transfer stops at the engine save snapshot unless --continue-without-snapshot is given; that applies only the verified live-state effect, builds no save image, and leaves saving unavailable. --rand-seed enables 0x20d4 with the CRT rand() generator from an explicit seed; the original seeds from timeGetTime and draws every frame, so values are not reproducible."
+            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap] [--script-archive <archive>] [--virtual-tick <tick>] [--frame-ms <delta>] [--save-dir <directory>] [--system-save <file>] [--record-platform <game-root>] [--continue-without-snapshot] [--rand-seed <seed>]\n--frame-ms supplies a positive engine-frame delta on each supported wait/yield; without it time stays frozen. Callback ticks remain separate. --script loads an isolated initial script. --script-archive supplies common/main scripts and enables explicit control handling with virtual time (default tick 0), without automatic scheduling. --bootstrap applies verified startup configuration. --save-dir enables read-only saveNNN.dat header scanning and menu state, without native UI or save restoration. --system-save explicitly enables CSS1 persistent-state loading for 0x2128; it does not restore a gameplay snapshot. --record-platform enables a recording-only backend with read-only cursor/icon assets from the explicit game root, plus verified state such as the clear color, the save title and pointer-gesture configuration, records SE playback requests without audio output, and decodes 0x2030 object images read-only from the 0x2011 entries; no native window, drawing, or input polling. Main transfer and scenario 0x22b2 stop at the engine save snapshot unless --continue-without-snapshot is given; that applies only the verified live-state effect, builds no save image, and leaves saving unavailable. --rand-seed enables 0x20d4 with the CRT rand() generator from an explicit seed; the original seeds from timeGetTime and draws every frame, so values are not reproducible."
         );
         return Ok(());
     }
@@ -198,6 +198,12 @@ fn run() -> Result<(), Box<dyn Error>> {
             machine.stack().len_bytes()
         );
         if let Step::System { command, .. } = event {
+            if save_image.try_handle(&mut machine, continue_without_snapshot)? {
+                println!(
+                    "# scenario snapshot NOT built; bit[0] and repeat count cleared; save image unavailable: {save_image:?}"
+                );
+                continue;
+            }
             if let Some(assets) = &mut platform_assets {
                 let gate = SkipGate {
                     skip: message_flags.skip(),
