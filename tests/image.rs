@@ -2,6 +2,7 @@ use cmvs_rs::{
     cpz::{Cpz6Index, data_checksum},
     image::{DecodedImage, ImageArchives, ImageSource, decode},
     machine::{Machine, Step},
+    message::MessageHost,
     ps3::Script,
     raster::RgbaImage,
     scene::{ObjectImage, SceneHost},
@@ -495,4 +496,66 @@ fn shown_children_without_draw_state_fail_explicitly() {
     scene_command(&mut code, 0x2040, &[1]);
     scene_command(&mut code, 0x2022, &[1, 5]);
     assert!(cmvs_rs::scene_render::render(&build_scene(&code), 2, 1).is_err());
+}
+
+/// 0x215d builds window 7 (text object 10), then 0x2170 loads the text offset `name`.
+fn window_load(name: u32) -> Vec<u8> {
+    let mut code = vec![];
+    for value in [720, 1280, 54, 1280, 0, 0, 10, 7] {
+        push(&mut code, value);
+    }
+    op(&mut code, 0x215d);
+    push(&mut code, name);
+    push(&mut code, 7);
+    op(&mut code, 0x2170);
+    code
+}
+
+#[test]
+fn window_image_load_replaces_the_window_object_image_without_a_result() {
+    let script = script(&window_load(0), b"win.pb3\0");
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_system_integer(0, 9).unwrap();
+    let mut files = Files::default();
+    files.0.insert(b"win.pb3".to_vec(), opaque());
+    let mut messages = MessageHost::default();
+    run_to_system(&mut vm);
+    assert!(messages.try_handle(&mut vm).unwrap());
+    run_to_system(&mut vm);
+    assert!(!messages.try_handle(&mut vm).unwrap());
+    assert!(messages.try_handle_image(&mut vm, &mut files).unwrap());
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(9));
+    assert_eq!(
+        messages.window(7).unwrap().object.image,
+        Some(ObjectImage {
+            name: b"win.pb3".to_vec(),
+            pixels: opaque_pixels(),
+            alpha: false,
+        })
+    );
+}
+
+#[test]
+fn window_image_failures_keep_the_command_pending() {
+    for (contents, missing) in [(Some(b"XYZW".to_vec()), false), (None, true)] {
+        let script = script(&window_load(0), b"win.pb3\0");
+        let mut vm = Machine::new(&script).unwrap();
+        let mut files = Files::default();
+        if let Some(contents) = contents {
+            files.0.insert(b"win.pb3".to_vec(), contents);
+        }
+        let mut messages = MessageHost::default();
+        run_to_system(&mut vm);
+        messages.try_handle(&mut vm).unwrap();
+        run_to_system(&mut vm);
+        let bytes = vm.stack().len_bytes();
+        assert!(
+            messages.try_handle_image(&mut vm, &mut files).is_err(),
+            "{missing}"
+        );
+        assert_eq!(vm.pending_system().map(|p| p.1), Some(0x170));
+        assert_eq!(vm.stack().len_bytes(), bytes);
+        assert!(messages.window(7).unwrap().object.image.is_none());
+    }
 }

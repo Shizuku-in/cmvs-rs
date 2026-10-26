@@ -288,14 +288,7 @@ impl SceneHost {
             None
         };
         let name = vm.resolve_string(raw_name)?;
-        if name.len() >= 64 {
-            return Err(fail("image name exceeds the original 64-byte buffers").into());
-        }
-        let bytes = images.read(&name)?.ok_or_else(|| {
-            fail("image not found in any 0x2011 entry; the original shows a modal MessageBox")
-        })?;
-        let decoded = image::decode(&bytes)
-            .map_err(|e| format!("0x{:04x} {}: {e}", command + 0x2000, name.escape_ascii()))?;
+        let decoded = load_image(images, name, pc, command + 0x2000)?;
         vm.complete_system(SystemResult(if child.is_some() { 0x400c } else { 0x4008 }))?;
         vm.state_mut()
             .set_system_integer(0, u32::from(decoded.is_some()))
@@ -305,11 +298,34 @@ impl SceneHost {
             Some(id) => parent.children.get_mut(&id).expect("checked above"),
             None => parent,
         };
-        object.image = decoded.map(|decoded| ObjectImage {
-            name,
-            pixels: decoded.pixels,
-            alpha: decoded.alpha,
-        });
+        object.image = decoded;
         Ok(true)
     }
+}
+
+/// The 0x14003bb10 lookup shared by object image commands: the first 0x2011 entry holding
+/// `name`, decoded by magic. Ok(None) is the quiet decode failure.
+pub(crate) fn load_image(
+    images: &mut dyn ImageSource,
+    name: Vec<u8>,
+    pc: usize,
+    op: u16,
+) -> Result<Option<ObjectImage>, Box<dyn Error>> {
+    if name.len() >= 64 {
+        return Err(error(pc, op, "image name exceeds the original 64-byte buffers").into());
+    }
+    let bytes = images.read(&name)?.ok_or_else(|| {
+        error(
+            pc,
+            op,
+            "image not found in any 0x2011 entry; the original shows a modal MessageBox",
+        )
+    })?;
+    let decoded =
+        image::decode(&bytes).map_err(|e| format!("0x{op:04x} {}: {e}", name.escape_ascii()))?;
+    Ok(decoded.map(|decoded| ObjectImage {
+        name,
+        pixels: decoded.pixels,
+        alpha: decoded.alpha,
+    }))
 }

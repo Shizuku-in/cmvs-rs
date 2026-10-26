@@ -333,6 +333,10 @@ impl<'a> Startup<'a> {
             || self.save_menu.try_handle_popup(&mut self.machine)?
             || self.message_flags.try_handle(&mut self.machine)?
             || self.messages.try_handle(&mut self.machine)?
+            || self.messages.try_handle_image(
+                &mut self.machine,
+                &mut self.images.with_paths(self.bootstrap.paths()),
+            )?
             || self
                 .buttons
                 .try_handle(&mut self.machine, &mut self.scene)?

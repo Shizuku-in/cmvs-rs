@@ -172,3 +172,4 @@ BGM 与 SE 共用 `AudioHost`/`AudioBackend`：`BgmState` 保存 +4464 对象的
 
 2026-10-27 消息窗口阶段：`message::MessageHost` 保存 +4064 的 8 个窗口槽（窗口 +0 的文字对象号）与 +4128 的 12 项文字对象存在标志，0x2141 按原版顺序销毁；创建 0x2140/0x215d 未实现，槽恒为空。真实开始游戏路径最新停点为 intproc.ps3 / 0x42368 / 0x215d（SP=156），详见 vm-semantics.md。
 随后 0x215d 创建窗口：`MessageHost` 保存窗口（文字号、位置、尺寸）、文字对象（逻辑尺寸、位置、区域）与字体存在标志，GDI 字体、字形纹理和场景对象留给后续渲染阶段；0x2140 需设备尺寸，仍未处理。最新停点为 intproc.ps3 / 0x42382 / 0x215b（SP=132）。
+随后窗口属性阶段：`TextObject` 保存排版与样式字段，`MessageWindow` 保存 +2488 切换标志和 +2520 的 `scene::SceneObject`；0x2170 与 0x2030 共用 `scene::load_image`。最新停点为 intproc.ps3 / 0x42502 / 0x2180（SP=132）。
