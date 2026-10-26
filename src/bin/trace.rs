@@ -3,6 +3,7 @@ use cmvs_rs::{
     audio::{AudioHost, AudioRequest, RecordingAudio},
     bootstrap::Bootstrap,
     buttons::ButtonHost,
+    camera::CameraHost,
     cpz::Cpz6Index,
     fade::SkipGate,
     gesture::PointerGesture,
@@ -147,6 +148,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut buttons = ButtonHost::default();
     let mut movies = MovieHost::default();
     let mut sequence = SequenceHost::default();
+    let mut camera = CameraHost::default();
     // Traces supply no input: no CMVS action is ever active.
     let mut input = ActionInput::default();
     let mut audio = AudioHost::default();
@@ -316,6 +318,21 @@ fn run() -> Result<(), Box<dyn Error>> {
                         command + 0x2000,
                         save_menu.popup_enabled(),
                         machine.state().system_integer(0)
+                    );
+                    continue;
+                }
+                if camera.try_handle(&mut machine)? {
+                    let floats = |c: usize| {
+                        camera
+                            .camera(c)
+                            .map(|cam| (0..19).map(|i| cam.float(i)).collect::<Vec<_>>())
+                    };
+                    println!(
+                        "# camera 0x{:04x}: camera0 words0..18 as f32={:?} camera1={:?} moving={}; stored only, 2D rendering unaffected",
+                        command + 0x2000,
+                        floats(0),
+                        floats(1),
+                        camera.moving()
                     );
                     continue;
                 }

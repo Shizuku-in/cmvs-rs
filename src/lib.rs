@@ -3,6 +3,7 @@ pub mod audio;
 pub mod bootstrap;
 pub mod buttons;
 pub mod bytecode;
+pub mod camera;
 pub mod cpz;
 pub mod cursor;
 #[cfg(feature = "desktop")]

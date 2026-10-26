@@ -5,6 +5,7 @@ use crate::{
     audio::{AudioBackend, AudioHost, RecordingAudio},
     bootstrap::Bootstrap,
     buttons::ButtonHost,
+    camera::CameraHost,
     fade::SkipGate,
     gesture::PointerGesture,
     image::ImageArchives,
@@ -69,6 +70,7 @@ pub struct Startup<'a> {
     buttons: ButtonHost,
     movies: MovieHost,
     sequence: SequenceHost,
+    camera: CameraHost,
     input: ActionInput,
     effects: bool,
     timers: VmTimers,
@@ -105,6 +107,7 @@ impl<'a> Startup<'a> {
             buttons: ButtonHost::default(),
             movies: MovieHost::default(),
             sequence: SequenceHost::default(),
+            camera: CameraHost::default(),
             // No verified key bindings yet: no action is active (see `input`).
             input: ActionInput::default(),
             // EFFECT_USE constructor value; the configuration may override it.
@@ -284,6 +287,7 @@ impl<'a> Startup<'a> {
                 .try_handle_input(&mut self.machine, &mut self.scene, &mut self.input)?
             || self.movies.try_handle(&mut self.machine)?
             || self.sequence.try_handle(&mut self.machine)?
+            || self.camera.try_handle(&mut self.machine)?
             || self.random.try_handle(&mut self.machine)?
             || text::try_handle(&mut self.machine)?
             || self
