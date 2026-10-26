@@ -48,6 +48,7 @@ fn append_slot(
 
 struct Image<'a> {
     script: Cow<'a, Script>,
+    data: Vec<u8>,
     /// Shared so each step clones a pointer, not an expression tree.
     instructions: BTreeMap<usize, Rc<Instruction>>,
     labels: Vec<u32>,
@@ -62,6 +63,7 @@ impl<'a> Image<'a> {
             .map(|i| (i.pc, Rc::new(i)))
             .collect();
         Ok(Self {
+            data: script.unknown().to_vec(),
             script,
             instructions,
             labels,
@@ -146,6 +148,10 @@ impl<'a> Machine<'a> {
     pub fn stack(&self) -> &ParameterStack {
         &self.stack
     }
+    /// Current slot's mutable script data, initialized from the PS2A unknown segment.
+    pub fn script_data(&self) -> &[u8] {
+        &self.image().data
+    }
     pub fn repeat_count(&self) -> u32 {
         self.repeat_count
     }
@@ -155,7 +161,7 @@ impl<'a> Machine<'a> {
     pub fn resolve_string(&self, raw: u32) -> Result<Vec<u8>, DecodeError> {
         let (bytes, offset) = match StringRef::decode(raw) {
             StringRef::Text(offset) => (self.image().script.text(), offset),
-            StringRef::ScriptData(offset) => (self.image().script.unknown(), offset),
+            StringRef::ScriptData(offset) => (self.script_data(), offset),
             StringRef::StringBank(index) => {
                 let index = if index > 127 { 0 } else { index };
                 return self
@@ -196,11 +202,11 @@ impl<'a> Machine<'a> {
             // Placeholder left by a previous operator: the original reader returns 0.
             0 => return Ok(()),
             0x120 => c_string(script.text(), value, pc, tag)?,
-            0x125 => c_string(script.unknown(), value, pc, tag)?,
+            0x125 => c_string(self.script_data(), value, pc, tag)?,
             0x121 => return append_slot(state, buffer, value & 0x3fff_ffff, pc, tag),
             0x122 => match StringRef::decode(self.frame_word(value, pc, tag)?) {
                 StringRef::Text(offset) => c_string(script.text(), offset, pc, tag)?,
-                StringRef::ScriptData(offset) => c_string(script.unknown(), offset, pc, tag)?,
+                StringRef::ScriptData(offset) => c_string(self.script_data(), offset, pc, tag)?,
                 StringRef::StringBank(index) => {
                     return append_slot(state, buffer, index, pc, tag);
                 }
@@ -219,7 +225,11 @@ impl<'a> Machine<'a> {
         let mut journal = Journal::default();
         let outcome = self.string_expression_in(expr, &mut journal);
         if outcome.is_err() {
-            self.state.rollback(journal, Some(&mut self.stack));
+            self.state.rollback(
+                journal,
+                Some(&mut self.stack),
+                Some(&mut self.images.get_mut(&self.slot).expect("active image").data),
+            );
         }
         outcome
     }
@@ -239,8 +249,10 @@ impl<'a> Machine<'a> {
                 } => {
                     // The nested integer evaluator also updates result, condition and integer 4096.
                     let base = self.frame_base();
+                    let image = self.images.get_mut(&self.slot).expect("active image");
                     let mut env = Env {
-                        labels: &self.images[&self.slot].labels,
+                        labels: &image.labels,
+                        data: Some(&mut image.data),
                         frame: Some(Frame {
                             stack: &mut self.stack,
                             base,
@@ -321,8 +333,10 @@ impl<'a> Machine<'a> {
         let base = self.frame_base();
         let mut journal = Journal::default();
         let outcome = {
+            let image = self.images.get_mut(&self.slot).expect("active image");
             let mut env = Env {
-                labels: &self.images[&self.slot].labels,
+                labels: &image.labels,
+                data: Some(&mut image.data),
                 frame: Some(Frame {
                     stack: &mut self.stack,
                     base,
@@ -331,7 +345,11 @@ impl<'a> Machine<'a> {
             run(&mut self.state, &mut env, &mut journal)
         };
         if outcome.is_err() {
-            self.state.rollback(journal, Some(&mut self.stack));
+            self.state.rollback(
+                journal,
+                Some(&mut self.stack),
+                Some(&mut self.images.get_mut(&self.slot).expect("active image").data),
+            );
         }
         outcome
     }

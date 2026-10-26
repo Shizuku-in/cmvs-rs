@@ -41,7 +41,7 @@ cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-`--payload` 仅允许创建新文件，输出不包含原始头部。当前默认 274 项测试、全 workspace 全功能 288 项测试及严格 Clippy 检查通过。
+`--payload` 仅允许创建新文件，输出不包含原始头部。当前默认 279 项测试、全 workspace 全功能 293 项测试及严格 Clippy 检查通过。
 真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
 `ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
 
@@ -157,7 +157,9 @@ cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop
 
 Windows 175 秒检查完成有音频输出的启动、标题、OP 与返回标题；四份真实音轨的完整 PCM 样本数与 Python/FFmpeg 一致，浮点最大绝对误差低于 6.6e-7。音频源时钟尚未校准设备缓冲延迟；默认核心仍无依赖，原游戏只读。支持范围和证据见 [audio-output](docs/audio-output.md)。现已接入真实键鼠动作输入，见下文。
 
-新增真实动作输入：桌面默认只读加载根目录 `key.cfg`，鼠标可操作标题，Enter 可跳过 OP；`--input record` 保留此前无输入研究模式。开始游戏已推进到 `intproc.ps3` 表达式 PC `0x4201e`，停于内部操作数 `0x0106`（`0x42020`），SP=124。默认 274 项、全 workspace 全功能 288 项测试与严格 Clippy 通过。输入证据、限制与验证见 [input](docs/input.md)。活动游戏中的 Esc 交给脚本，关闭按钮仍可退出。
+新增真实动作输入：桌面默认只读加载根目录 `key.cfg`，鼠标可操作标题，Enter 可跳过 OP；`--input record` 保留此前无输入研究模式。开始游戏已推进到 `intproc.ps3` 表达式 PC `0x4201e`，停于内部操作数 `0x0106`（`0x42020`），SP=124。默认 279 项、全 workspace 全功能 293 项测试与严格 Clippy 通过。输入证据、限制与验证见 [input](docs/input.md)。活动游戏中的 Esc 交给脚本，关闭按钮仍可退出。
+
+后续已实现标量 `0x0104/0x0106` 的脚本数据段整数读写、按脚本槽隔离及表达式失败回滚；真实鼠标和键盘重放均推进到 `intproc.ps3` / PC `0x42306` 的未处理系统命令 `0x2141`，SP=128。证据见 [VM 语义](docs/vm-semantics.md)。本轮未新增窗口实测，尚无剧情画面。
 
 目前提供研究工具和原生桌面预览，**尚不能运行游戏剧情**，也没有生成 iOS/Android 应用。
 
@@ -180,7 +182,7 @@ python -m unittest discover -s tests -v
 
 ## 后续实现顺序
 
-1. 核对开始游戏路径的 `0x0106` 操作数语义，从当前真实断点继续推进，未知项明确停止。
+1. 核对开始游戏路径的系统命令 `0x2141`（intproc.ps3 / 0x42306），保留参数并从当前真实断点继续推进。
 2. 沿该路径实现消息窗口、字体/文字、背景与立绘、语音，先显示第一屏剧情。
 3. 补齐选择分支、必要转场、回调调度与完整存档镜像，并对照原程序验证同一段剧情。
 4. 验证 Windows/macOS/Linux 构建和行为，再实现 Android/iOS 后端与真机检查。

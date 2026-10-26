@@ -167,3 +167,5 @@ BGM 与 SE 共用 `AudioHost`/`AudioBackend`：`BgmState` 保存 +4464 对象的
 
 `AudioBackend::stop` 表达原版同步的“停止并释放”：返回 Ok 时该通道声音已释放，空通道为无操作，不做淡出；失败时不提交 VM 或通道记录。
 与 play/start 不同，`AudioHost` 在 SE 关闭时也会发出停止请求，与原版不检查 SE_USE 一致；真实后端须容忍对空通道的停止。
+
+2026-10-27 脚本数据段阶段：Image 持有从 PS2A unknown 段初始化的独立可变数据，0x104/0x106 经求值事务读写，字符串数据引用读取同一视图；不修改原 Script 或代码。真实开始游戏路径最新停点已推进为 intproc.ps3 / 0x42306 / 0x2141（SP=128），之前的 0x0106 停点属于历史记录；详见 vm-semantics.md。

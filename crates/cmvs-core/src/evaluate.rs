@@ -26,6 +26,7 @@ enum Undo {
     Condition(Option<bool>),
     Float(u32, Option<u32>),
     Stack(usize, StackWord),
+    Data(usize, [u8; 4]),
 }
 
 /// Previous values recorded before each write, so a failed evaluation is undone
@@ -43,9 +44,35 @@ pub(crate) struct Frame<'s> {
 pub(crate) struct Env<'a, 's> {
     pub(crate) labels: &'a [u32],
     pub(crate) frame: Option<Frame<'s>>,
+    pub(crate) data: Option<&'s mut [u8]>,
 }
 
 impl Env<'_, '_> {
+    fn data_offset(&self, raw: u32, pc: usize, tag: u16) -> Result<usize, DecodeError> {
+        let data = self
+            .data
+            .as_deref()
+            .ok_or_else(|| error(pc, tag, "script data operand needs a machine image"))?;
+        let offset = usize::try_from(raw as i32)
+            .map_err(|_| error(pc, tag, "negative script data offset"))?;
+        if offset.checked_add(4).is_none_or(|end| end > data.len()) {
+            return Err(error(pc, tag, "script data word outside data segment"));
+        }
+        Ok(offset)
+    }
+    fn load_data(&self, offset: usize) -> i32 {
+        i32::from_le_bytes(
+            self.data.as_deref().expect("checked data")[offset..offset + 4]
+                .try_into()
+                .expect("checked word"),
+        )
+    }
+    fn store_data(&mut self, offset: usize, value: i32, journal: &mut Journal) {
+        let data = self.data.as_deref_mut().expect("checked data");
+        let old = data[offset..offset + 4].try_into().expect("checked word");
+        journal.0.push(Undo::Data(offset, old));
+        data[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
     /// Tags 0x103/0x129 address base-raw (arguments); 0x108/0x12c address base+raw (locals).
     fn offset(&self, tag: u16, raw: u32, pc: usize) -> Result<usize, DecodeError> {
         let frame = self
@@ -222,7 +249,12 @@ impl State {
         Ok(())
     }
     /// Restores every journaled write in reverse order; stack words need the same stack.
-    pub(crate) fn rollback(&mut self, journal: Journal, mut stack: Option<&mut ParameterStack>) {
+    pub(crate) fn rollback(
+        &mut self,
+        journal: Journal,
+        mut stack: Option<&mut ParameterStack>,
+        mut data: Option<&mut [u8]>,
+    ) {
         fn restore<V>(map: &mut BTreeMap<u32, V>, index: u32, old: Option<V>) {
             match old {
                 Some(value) => map.insert(index, value),
@@ -238,6 +270,10 @@ impl State {
                 Undo::Stack(offset, old) => {
                     let stack = stack.as_deref_mut().expect("stack writes need their stack");
                     stack.restore_at(offset, old);
+                }
+                Undo::Data(offset, old) => {
+                    data.as_deref_mut().expect("data writes need their image")[offset..offset + 4]
+                        .copy_from_slice(&old)
                 }
                 Undo::Buffer(old) => self.string_buffer = old,
                 Undo::Result(old) => self.result = old,
@@ -320,10 +356,11 @@ impl State {
         let mut env = Env {
             labels,
             frame: None,
+            data: None,
         };
         let outcome = self.evaluate(expr, 0, &mut env, &mut journal);
         if outcome.is_err() {
-            self.rollback(journal, None);
+            self.rollback(journal, None, None);
         }
         outcome
     }
@@ -340,6 +377,7 @@ impl State {
         match cell {
             Cell::Value(value) => Ok(value),
             Cell::Frame(offset) => Ok(env.load(offset, pc, op)? as i32),
+            Cell::Data(offset) => Ok(env.load_data(offset)),
             Cell::Integer(index) => self
                 .integer(index)
                 .ok_or_else(|| error(pc, op, "read of unknown integer variable")),
@@ -359,6 +397,10 @@ impl State {
         journal: &mut Journal,
     ) -> Result<(), DecodeError> {
         match cell {
+            Cell::Data(offset) => {
+                env.store_data(offset, value, journal);
+                return Ok(());
+            }
             Cell::Frame(offset) => return env.store(offset, value as u32, journal, pc, op),
             Cell::Integer(index) => self.set_integer_journaled(index, value, journal),
             Cell::Bit(index) => self.set_bit_journaled(index, value != 0, journal),
@@ -425,6 +467,13 @@ impl State {
                     tag: tag @ (0x103 | 0x108),
                     raw,
                 } => stack.push(Cell::Frame(env.offset(*tag, *raw, *pc)?)),
+                Term::Scalar {
+                    pc,
+                    tag: tag @ (0x104 | 0x106),
+                    raw,
+                } => {
+                    stack.push(Cell::Data(env.data_offset(*raw, *pc, *tag)?));
+                }
                 Term::Indexed {
                     pc,
                     tag: 0x109,
@@ -544,10 +593,11 @@ impl State {
         let mut env = Env {
             labels,
             frame: None,
+            data: None,
         };
         let outcome = self.evaluate_float_in(expr, &mut env, &mut journal);
         if outcome.is_err() {
-            self.rollback(journal, None);
+            self.rollback(journal, None, None);
         }
         outcome
     }
@@ -768,6 +818,7 @@ enum Cell {
     Bit(u32),
     /// Absolute stack byte offset of a frame word.
     Frame(usize),
+    Data(usize),
 }
 
 pub(crate) fn binary_value(
