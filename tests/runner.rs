@@ -237,7 +237,7 @@ fn startup_fade_wait_needs_explicit_frames_and_resumes_after_removal() {
     assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
     assert_eq!(run.machine().pc(), pc);
     assert_eq!(run.scene().fade().current().unwrap().elapsed, 0);
-    run.advance_frame(100);
+    run.advance_frame(100).unwrap();
     assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
     assert_eq!(run.machine().pc(), pc + 2);
     assert!(run.scene().fade().current().is_none());
@@ -276,7 +276,7 @@ fn message_wait_resumes_without_advancing_time_on_release_completion() {
     }
     let pc = run.machine().pc();
     assert_eq!(run.machine().pending_system(), Some((pc, 0x153)));
-    run.advance_frame(16);
+    run.advance_frame(16).unwrap();
     assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
     assert_eq!(run.machine().pc(), pc);
     assert_eq!(run.timers().values()[0], 16);
@@ -327,7 +327,7 @@ fn message_recording_is_opt_in_and_resumes_each_yield_with_explicit_frame_time()
     assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
     assert_eq!(run.machine().repeat_count(), 2);
     assert_eq!(run.messages().text(7).unwrap().glyphs.len(), 1);
-    run.advance_frame(400);
+    run.advance_frame(400).unwrap();
     assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
     assert_eq!(run.machine().repeat_count(), 0);
     assert_eq!(run.machine().stack().len_bytes(), 0);
@@ -364,18 +364,18 @@ fn timers_advance_at_run_entry_and_ignore_budget_slices_and_reused_deltas() {
     let script = root.script();
     let mut run = Startup::new(&script, &root.0, 0).unwrap();
     let mut backend = RecordingBackend::default();
-    run.advance_frame(100);
+    run.advance_frame(100).unwrap();
     for _ in 0..4 {
         run.tick(&mut backend).unwrap();
     }
     assert_eq!(run.machine().state().system_integer(0), Some(0));
-    run.advance_frame(7); // Host budget slice, not a VM yield.
+    run.advance_frame(7).unwrap(); // Host budget slice, not a VM yield.
     for _ in 0..2 {
         run.tick(&mut backend).unwrap();
     }
     assert_eq!(run.machine().state().system_integer(0), Some(100));
     assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
-    run.advance_frame(16);
+    run.advance_frame(16).unwrap();
     for expected in [16, 116] {
         for _ in 0..2 {
             run.tick(&mut backend).unwrap();

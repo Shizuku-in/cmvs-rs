@@ -1178,3 +1178,210 @@ fn replacement_control_without_draw_allows_query_and_inactive_wait_but_rejects_c
     assert!(scene.object(20).unwrap().draw.is_none());
     assert_eq!(vm.stack().len_bytes(), 4);
 }
+
+fn sequence_scene(vm: &mut Machine<'_>, scene: &mut SceneHost, files: &mut Files) {
+    assert_eq!(run_to_system(vm), 0x20);
+    scene.try_handle(vm).unwrap();
+    assert_eq!(run_to_system(vm), 0x30);
+    scene.try_handle_image(vm, files).unwrap();
+    assert_eq!(run_to_system(vm), 0x40);
+    scene.try_handle(vm).unwrap();
+}
+
+#[test]
+fn sequence_image_load_is_deferred_until_wait_expires_and_replacement_advances_in_same_frame() {
+    use cmvs_rs::sequence::SequenceHost;
+    let mut code = loads(20, &[0]);
+    scene_command(&mut code, 0x2040, &[20]);
+    scene_command(&mut code, 0x2286, &[30]);
+    scene_command(&mut code, 0x2288, &[20, 0x8000_0003, 100]);
+    scene_command(&mut code, 0x2282, &[]);
+    let program = script(&code, b"a.pb3\0b.pb3\0");
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    let mut files = change_files();
+    sequence_scene(&mut vm, &mut scene, &mut files);
+    let previous = scene.object(20).unwrap().clone();
+    let mut sequence = SequenceHost::default();
+    vm.state_mut().set_system_integer(0, 987).unwrap();
+    vm.state_mut().set_string(3, b"b.pb3").unwrap();
+    for _ in 0..3 {
+        let command = run_to_system(&mut vm);
+        sequence.try_handle(&mut vm).unwrap();
+        if command == 0x288 {
+            vm.state_mut().set_string(3, b"a.pb3").unwrap();
+        }
+    }
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(987));
+    // Removing the queued asset cannot affect append/start or the preceding wait.
+    let asset = files.0.remove(b"b.pb3".as_slice()).unwrap();
+    sequence
+        .advance_frame_with_images(29, &mut scene, &mut files)
+        .unwrap();
+    assert_eq!(scene.object(20), Some(&previous));
+    assert!(
+        sequence
+            .advance_frame_with_images(1, &mut scene, &mut files)
+            .is_err()
+    );
+    assert_eq!((sequence.header().index, sequence.header().waited), (1, 30));
+    assert_eq!(scene.object(20), Some(&previous));
+    files.0.insert(b"b.pb3".to_vec(), asset);
+    sequence
+        .advance_frame_with_images(0, &mut scene, &mut files)
+        .unwrap();
+    let object = scene.object(20).unwrap();
+    assert_eq!(object.image.as_ref().unwrap().name, b"b.pb3");
+    assert_eq!(object.change.as_ref().unwrap().duration, 100);
+    assert_eq!(object.change.as_ref().unwrap().elapsed, 0);
+    assert_eq!(sequence.header().active, 0);
+    scene.advance_frame(25);
+    assert_eq!(
+        scene.object(20).unwrap().change.as_ref().unwrap().elapsed,
+        25
+    );
+}
+
+#[test]
+fn sequence_finish_uses_zero_duration_and_failed_finish_retains_pending_command() {
+    use cmvs_rs::sequence::{SequenceHeader, SequenceHost};
+    for active in [false, true] {
+        let mut code = loads(20, &[0]);
+        scene_command(&mut code, 0x2040, &[20]);
+        scene_command(&mut code, 0x2286, &[u32::MAX]);
+        scene_command(&mut code, 0x2288, &[20, 6, 999]);
+        if active {
+            scene_command(&mut code, 0x2282, &[]);
+        }
+        scene_command(&mut code, 0x2284, &[]);
+        let program = script(&code, b"a.pb3\0b.pb3\0");
+        let mut vm = Machine::new(&program).unwrap();
+        let mut scene = SceneHost::default();
+        let mut files = change_files();
+        sequence_scene(&mut vm, &mut scene, &mut files);
+        let previous = scene.object(20).unwrap().clone();
+        let mut sequence = SequenceHost::default();
+        for _ in 0..(2 + usize::from(active)) {
+            run_to_system(&mut vm);
+            sequence.try_handle(&mut vm).unwrap();
+        }
+        let entries = sequence.entries().clone();
+        let asset = files.0.remove(b"b.pb3".as_slice()).unwrap();
+        assert_eq!(run_to_system(&mut vm), 0x284);
+        if active {
+            assert!(
+                sequence
+                    .try_handle_with_images(&mut vm, &mut scene, &mut files)
+                    .is_err()
+            );
+            assert_eq!(sequence.header().index, 1);
+            assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x284)));
+            assert_eq!(scene.object(20), Some(&previous));
+        }
+        files.0.insert(b"b.pb3".to_vec(), asset);
+        sequence
+            .try_handle_with_images(&mut vm, &mut scene, &mut files)
+            .unwrap();
+        assert_eq!(sequence.header(), SequenceHeader::default());
+        assert_eq!(sequence.entries(), &entries);
+        assert_eq!(vm.pending_system(), None);
+        assert_eq!(
+            scene.object(20).unwrap().image.as_ref().unwrap().name,
+            if active { b"b.pb3" } else { b"a.pb3" }
+        );
+        assert!(scene.object(20).unwrap().change.is_none());
+    }
+}
+
+#[test]
+fn sequence_missing_slot_skips_resource_io_but_invalid_slot_is_an_explicit_execution_error() {
+    use cmvs_rs::sequence::SequenceHost;
+    struct NoReads;
+    impl ImageSource for NoReads {
+        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+            panic!("missing slot must not load");
+        }
+    }
+    for slot in [255, 256, u32::MAX] {
+        let mut code = vec![];
+        scene_command(&mut code, 0x2288, &[slot, 0, 10]);
+        scene_command(&mut code, 0x2282, &[]);
+        let program = script(&code, b"missing.pb3\0");
+        let mut vm = Machine::new(&program).unwrap();
+        let mut sequence = SequenceHost::default();
+        for _ in 0..2 {
+            run_to_system(&mut vm);
+            sequence.try_handle(&mut vm).unwrap();
+        }
+        let result =
+            sequence.advance_frame_with_images(16, &mut SceneHost::default(), &mut NoReads);
+        assert_eq!(result.is_ok(), slot == 255);
+        assert_eq!(sequence.header().index, u32::from(slot == 255));
+    }
+}
+
+#[test]
+fn sequence_image_append_checks_arguments_names_and_full_capacity_before_mutating() {
+    use cmvs_rs::sequence::{SequenceEntry, SequenceHost};
+    let mut code = vec![];
+    for i in 0..17 {
+        scene_command(&mut code, 0x2288, &[i, 0, i + 100]);
+    }
+    // Even at capacity the original handler resolves the string reference.
+    scene_command(&mut code, 0x2288, &[0, 0x3fff_ffff, 0]);
+    let program = script(&code, b"a.pb3\0");
+    let mut vm = Machine::new(&program).unwrap();
+    let mut sequence = SequenceHost::default();
+    vm.state_mut().set_system_integer(0, 77).unwrap();
+    for i in 0..17 {
+        run_to_system(&mut vm);
+        sequence.try_handle(&mut vm).unwrap();
+        assert_eq!(sequence.header().count, (i + 1).min(16));
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.state().system_integer(0), Some(77));
+    }
+    assert!(
+        matches!(&sequence.entries()[0], Some(SequenceEntry::ReplaceImage{ slot:0, name, duration:100, .. }) if name == b"a.pb3")
+    );
+    let entries = sequence.entries().clone();
+    run_to_system(&mut vm);
+    assert!(sequence.try_handle(&mut vm).is_err());
+    assert_eq!(sequence.entries(), &entries);
+    assert_eq!(vm.stack().len_bytes(), 12);
+    for length in [63, 64] {
+        let mut code = vec![];
+        scene_command(&mut code, 0x2288, &[0, 0, 0]);
+        let mut text = vec![b'x'; length];
+        text.push(0);
+        let program = script(&code, &text);
+        let mut vm = Machine::new(&program).unwrap();
+        let mut sequence = SequenceHost::default();
+        run_to_system(&mut vm);
+        assert_eq!(sequence.try_handle(&mut vm).is_ok(), length == 63);
+        assert_eq!(sequence.header().count, u32::from(length == 63));
+        assert_eq!(vm.stack().len_bytes(), if length == 63 { 0 } else { 12 });
+    }
+}
+
+#[test]
+fn image_sequence_without_resource_context_reports_error_and_keeps_entry() {
+    use cmvs_rs::sequence::SequenceHost;
+    let mut code = vec![];
+    scene_command(&mut code, 0x2288, &[0, 0, 10]);
+    scene_command(&mut code, 0x2282, &[]);
+    scene_command(&mut code, 0x2284, &[]);
+    let program = script(&code, b"a.pb3\0");
+    let mut vm = Machine::new(&program).unwrap();
+    let mut sequence = SequenceHost::default();
+    for _ in 0..2 {
+        run_to_system(&mut vm);
+        sequence.try_handle(&mut vm).unwrap();
+    }
+    assert!(sequence.advance_frame(16).is_err());
+    assert_eq!(sequence.header().index, 0);
+    run_to_system(&mut vm);
+    assert!(sequence.try_handle(&mut vm).is_err());
+    assert_eq!(sequence.header().index, 0);
+    assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x284)));
+}

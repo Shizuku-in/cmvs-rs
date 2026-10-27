@@ -106,6 +106,13 @@ fn common_image(old: &ObjectImage, new: &ObjectImage) -> Result<ObjectImage, Box
     })
 }
 
+pub(crate) struct PreparedChange {
+    image: ObjectImage,
+    draw: DrawState,
+    common: Option<Box<SceneObject>>,
+    duration: u32,
+}
+
 impl SceneHost {
     /// 0x22c5 / 0x14007d3c0 cancels the slot object's replacement, restoring factor 256.
     /// 0x22c6 / 0x14007d400 writes whether +14504 or +14508 is active to result 0.
@@ -210,7 +217,7 @@ impl SceneHost {
         }
         let name = vm.resolve_string(args[1])?;
         let slot = u8::try_from(args[0]).map_err(|_| fail("replacement slot outside 0..255"))?;
-        let Some(old) = self.objects.get(&slot) else {
+        let Some(_) = self.objects.get(&slot) else {
             vm.complete_system(SystemResult(0x4010))?;
             vm.state_mut()
                 .set_system_integer(0, 0)
@@ -220,6 +227,29 @@ impl SceneHost {
         if args[3] != 0 {
             return Err(fail("secondary replacement image manager is not implemented").into());
         }
+        let prepared = self.prepare_image_change(slot, &name, args[2], images, pc, 0x22c4)?;
+        vm.complete_system(SystemResult(0x4010))?;
+        vm.state_mut()
+            .set_system_integer(0, 1)
+            .expect("result 0 exists");
+        self.commit_image_change(slot, prepared.expect("validated existing slot"));
+        Ok(true)
+    }
+
+    /// Prepare all fallible work before replacing the slot or consuming a VM command.
+    pub(crate) fn prepare_image_change(
+        &self,
+        slot: u8,
+        name: &[u8],
+        duration: u32,
+        images: &mut dyn ImageSource,
+        pc: usize,
+        opcode: u16,
+    ) -> Result<Option<PreparedChange>, Box<dyn Error>> {
+        let fail = |why| error(pc, opcode, why);
+        let Some(old) = self.objects.get(&slot) else {
+            return Ok(None);
+        };
         let old_image = old
             .image
             .as_ref()
@@ -228,7 +258,7 @@ impl SceneHost {
             .draw
             .as_ref()
             .ok_or_else(|| fail("replacement needs an existing draw state"))?;
-        let image = load_image(images, name, pc, 0x22c4)?
+        let image = load_image(images, name.to_vec(), pc, opcode)?
             .ok_or_else(|| fail("missing replacement image leaves an unmodeled partial object"))?;
         let mut draw = DrawState {
             words: old_draw.words,
@@ -238,7 +268,7 @@ impl SceneHost {
         };
         draw.words[21] = 256;
         fit(&mut draw, old_image, &image);
-        let common = if args[2] != 0 {
+        let common = if duration != 0 {
             let image = common_image(old_image, &image)?;
             let mut common_draw = DrawState {
                 words: old_draw.words,
@@ -257,10 +287,21 @@ impl SceneHost {
         } else {
             None
         };
-        vm.complete_system(SystemResult(0x4010))?;
-        vm.state_mut()
-            .set_system_integer(0, 1)
-            .expect("result 0 exists");
+        Ok(Some(PreparedChange {
+            image,
+            draw,
+            common,
+            duration,
+        }))
+    }
+
+    pub(crate) fn commit_image_change(&mut self, slot: u8, prepared: PreparedChange) {
+        let PreparedChange {
+            image,
+            mut draw,
+            common,
+            duration,
+        } = prepared;
         let mut previous = self.objects.remove(&slot).expect("validated slot");
         previous.cancel_change();
         let old_draw = previous.draw.as_mut().expect("validated draw");
@@ -278,12 +319,11 @@ impl SceneHost {
             replacement.change = Some(Box::new(ImageChange {
                 previous: Box::new(previous),
                 common,
-                duration: args[2],
+                duration,
                 elapsed: 0,
             }));
         }
         self.objects.insert(slot, replacement);
-        Ok(true)
     }
 }
 

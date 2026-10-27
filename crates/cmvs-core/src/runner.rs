@@ -211,7 +211,11 @@ impl<'a> Startup<'a> {
         if had_movie && self.movies.player().is_none() && clock.is_some() {
             self.audio_backend.stop_movie_audio()?;
         }
-        self.sequence.advance_frame(delta_ms);
+        self.sequence.advance_frame_with_images(
+            delta_ms,
+            &mut self.scene,
+            &mut self.images.with_paths(self.bootstrap.paths()),
+        )?;
         self.scene.advance_frame(delta_ms);
         self.messages.advance_frame(delta_ms);
         self.camera.advance_frame(delta_ms);
@@ -232,13 +236,18 @@ impl<'a> Startup<'a> {
     /// Update the scene and supply the latest delta for the next VM run entry.
     /// The timer delta is consumed once after yield, never per instruction/budget slice.
     /// Callback registration time remains a separate research clock.
-    pub fn advance_frame(&mut self, delta_ms: u32) {
-        self.sequence.advance_frame(delta_ms);
+    pub fn advance_frame(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error>> {
+        self.sequence.advance_frame_with_images(
+            delta_ms,
+            &mut self.scene,
+            &mut self.images.with_paths(self.bootstrap.paths()),
+        )?;
         self.scene.advance_frame(delta_ms);
         self.messages.advance_frame(delta_ms);
         self.movies.advance(delta_ms);
         self.camera.advance_frame(delta_ms);
         self.frame_delta = delta_ms;
+        Ok(())
     }
     pub fn timers(&self) -> &VmTimers {
         &self.timers
@@ -485,7 +494,11 @@ impl<'a> Startup<'a> {
                 &self.input,
                 self.message_flags.skip(),
             )?
-            || self.sequence.try_handle(&mut self.machine)?
+            || self.sequence.try_handle_with_images(
+                &mut self.machine,
+                &mut self.scene,
+                &mut self.images.with_paths(self.bootstrap.paths()),
+            )?
             || self.camera.try_handle(&mut self.machine)?
             || self.random.try_handle(&mut self.machine)?
             || text::try_handle(&mut self.machine)?

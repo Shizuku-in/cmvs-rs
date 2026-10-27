@@ -186,6 +186,15 @@ fn run() -> Result<(), Box<dyn Error>> {
         if event == Step::Yield
             && let Some(delta) = frame_ms
         {
+            if let (Some(images), Some(config)) = (&mut images, &bootstrap) {
+                sequence.advance_frame_with_images(
+                    delta,
+                    &mut scene,
+                    &mut images.with_paths(config.paths()),
+                )?;
+            } else {
+                sequence.advance_frame(delta)?;
+            }
             scene.advance_frame(delta);
             movies.advance(delta);
             frame_delta = delta;
@@ -227,6 +236,15 @@ fn run() -> Result<(), Box<dyn Error>> {
                             );
                             return Ok(());
                         };
+                        if let (Some(images), Some(config)) = (&mut images, &bootstrap) {
+                            sequence.advance_frame_with_images(
+                                delta,
+                                &mut scene,
+                                &mut images.with_paths(config.paths()),
+                            )?;
+                        } else {
+                            sequence.advance_frame(delta)?;
+                        }
                         scene.advance_frame(delta);
                         movies.advance(delta);
                         frame_delta = delta;
@@ -370,9 +388,20 @@ fn run() -> Result<(), Box<dyn Error>> {
                     );
                     continue;
                 }
-                if sequence.try_handle(&mut machine)? {
+                let handled_sequence =
+                    if let (Some(images), Some(config)) = (&mut images, &bootstrap) {
+                        sequence.try_handle_with_images(
+                            &mut machine,
+                            &mut scene,
+                            &mut images.with_paths(config.paths()),
+                        )?
+                    } else {
+                        sequence.try_handle(&mut machine)?
+                    };
+                if handled_sequence {
                     println!(
-                        "# sequence 0x2280 reset: header={:?}; entries are not modeled",
+                        "# sequence 0x{:04x}: header={:?}",
+                        command + 0x2000,
                         sequence.header()
                     );
                     continue;

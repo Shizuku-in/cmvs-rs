@@ -1,15 +1,27 @@
 //! Engine +4736: a timed action sequence (0x614-byte buffer from 0x140014270: a five-word
 //! header plus 16 entries of 96 bytes) that the frame update 0x140015900 runs through
 //! 0x140014b10; addresses refer to the documented binary hash. Wait entries and their
-//! start/stop/finish lifecycle are modeled; appending other action types stays unhandled.
-use crate::{bytecode::DecodeError, evaluate::error, machine::Machine, vm::SystemResult};
+//! start/stop/finish lifecycle and image replacement entries are modeled; other action types stay unhandled.
+use crate::{
+    evaluate::error, image::ImageSource, machine::Machine, scene::SceneHost, vm::SystemResult,
+};
+use std::error::Error;
 
 pub const SEQUENCE_ENTRIES: usize = 16;
 
 /// Semantics of the supported 96-byte record type. This is not a binary save image.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SequenceEntry {
-    Wait { duration: u32 },
+    Wait {
+        duration: u32,
+    },
+    /// Type 3/subtype 0; the owned name is captured at append, not at execution.
+    ReplaceImage {
+        slot: u32,
+        name: Vec<u8>,
+        duration: u32,
+        pc: usize,
+    },
 }
 
 /// Header words as 0x140014b10 reads them; the constructor zeroes the whole buffer.
@@ -68,37 +80,129 @@ impl SequenceHost {
     /// 0x140015900 calls 0x140014b10 before updating scene objects. Waits use absolute
     /// clock - start - already-waited (u32 wrapping), allowing consecutive waits to
     /// consume leftover time within the same update. No 200 ms frame clamp.
-    pub fn advance_frame(&mut self, delta: u32) {
+    pub fn advance_frame(&mut self, delta: u32) -> Result<(), Box<dyn Error>> {
         self.clock = self.clock.wrapping_add(delta);
-        self.run_waits(false);
+        self.run(false, |_, _, _, pc| {
+            Err(error(pc, 0x2288, "image sequence needs scene and image source").into())
+        })
     }
 
-    fn run_waits(&mut self, finish: bool) {
+    pub fn advance_frame_with_images(
+        &mut self,
+        delta: u32,
+        scene: &mut SceneHost,
+        images: &mut dyn ImageSource,
+    ) -> Result<(), Box<dyn Error>> {
+        self.clock = self.clock.wrapping_add(delta);
+        self.run_images(false, scene, images)
+    }
+
+    fn run_images(
+        &mut self,
+        finish: bool,
+        scene: &mut SceneHost,
+        images: &mut dyn ImageSource,
+    ) -> Result<(), Box<dyn Error>> {
+        self.run(finish, |raw, name, duration, pc| {
+            let slot = u8::try_from(raw)
+                .map_err(|_| error(pc, 0x2288, "replacement slot outside 0..255"))?;
+            if let Some(prepared) =
+                scene.prepare_image_change(slot, name, duration, images, pc, 0x2288)?
+            {
+                scene.commit_image_change(slot, prepared);
+            }
+            Ok(())
+        })
+    }
+
+    fn run(
+        &mut self,
+        finish: bool,
+        mut replace: impl FnMut(u32, &[u8], u32, usize) -> Result<(), Box<dyn Error>>,
+    ) -> Result<(), Box<dyn Error>> {
         if self.header.active == 0 || self.header.index >= self.header.count {
-            return;
+            return Ok(());
         }
         while self.header.index < self.header.count {
-            let Some(SequenceEntry::Wait { duration }) = self.entries[self.header.index as usize]
-            else {
-                unreachable!("only validated wait entries can be appended");
-            };
-            if !finish {
-                let elapsed = self
-                    .clock
-                    .wrapping_sub(self.header.start)
-                    .wrapping_sub(self.header.waited);
-                if elapsed < duration {
-                    return;
+            match self.entries[self.header.index as usize]
+                .as_ref()
+                .expect("validated entry")
+            {
+                SequenceEntry::Wait { duration } => {
+                    if !finish {
+                        let elapsed = self
+                            .clock
+                            .wrapping_sub(self.header.start)
+                            .wrapping_sub(self.header.waited);
+                        if elapsed < *duration {
+                            return Ok(());
+                        }
+                        self.header.waited = self.header.waited.wrapping_add(*duration);
+                    }
                 }
-                self.header.waited = self.header.waited.wrapping_add(duration);
+                SequenceEntry::ReplaceImage {
+                    slot,
+                    name,
+                    duration,
+                    pc,
+                } => {
+                    replace(*slot, name, if finish { 0 } else { *duration }, *pc)?;
+                }
             }
+            // Resource failures retain this entry; earlier successful entries stay committed.
             self.header.index += 1;
         }
         self.header.active = 0;
+        Ok(())
+    }
+
+    /// Resource-aware finish runs remaining image actions with duration zero.
+    pub fn try_handle_with_images(
+        &mut self,
+        vm: &mut Machine<'_>,
+        scene: &mut SceneHost,
+        images: &mut dyn ImageSource,
+    ) -> Result<bool, Box<dyn Error>> {
+        if !matches!(vm.pending_system(), Some((_, 0x284))) {
+            return self.try_handle(vm);
+        }
+        self.run_images(true, scene, images)?;
+        vm.complete_system(SystemResult(0x4000))?;
+        self.header = SequenceHeader::default();
+        Ok(true)
     }
     /// 0x2280: the dispatcher calls 0x140014320 inline, zeroing the five header words, and
     /// returns 0x4000 (nothing popped). Entries keep their bytes but are no longer run.
-    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
+    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, Box<dyn Error>> {
+        if let Some((pc, 0x288)) = vm.pending_system() {
+            let mut args = [0; 3];
+            for (i, arg) in args.iter_mut().enumerate() {
+                *arg = vm
+                    .stack()
+                    .peek_u32((i + 1) * 4)
+                    .map_err(|e| error(pc, 0x2288, e.0))?;
+            }
+            let name = vm.resolve_string(args[1])?;
+            let entry = if self.header.count < SEQUENCE_ENTRIES as u32 {
+                if name.len() >= 64 {
+                    return Err(error(pc, 0x2288, "sequence image name exceeds 63 bytes").into());
+                }
+                Some(SequenceEntry::ReplaceImage {
+                    slot: args[0],
+                    name,
+                    duration: args[2],
+                    pc,
+                })
+            } else {
+                None
+            };
+            vm.complete_system(SystemResult(0x400c))?;
+            if let Some(entry) = entry {
+                self.entries[self.header.count as usize] = Some(entry);
+                self.header.count += 1;
+            }
+            return Ok(true);
+        }
         let Some((pc, command @ 0x280..=0x286)) = vm.pending_system() else {
             return Ok(false);
         };
@@ -111,6 +215,11 @@ impl SequenceHost {
                 self.header.count += 1;
             }
             return Ok(true);
+        }
+        if command == 0x284 {
+            self.run(true, |_, _, _, pc| {
+                Err(error(pc, 0x2288, "image sequence needs scene and image source").into())
+            })?;
         }
         vm.complete_system(SystemResult(0x4000))?;
         if command == 0x280 {
@@ -130,7 +239,6 @@ impl SequenceHost {
             }
         } else if command == 0x284 {
             // 0x14007f860 executes the remaining active entries in fast mode, then resets.
-            self.run_waits(true);
             self.header = SequenceHeader::default();
         } else {
             // 0x14007f8e0 -> 0x1400143c0 reads header word 1, not active/index.
