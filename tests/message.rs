@@ -64,6 +64,7 @@ fn created_text(position: [i32; 2], size: [u32; 2]) -> TextObject {
         spacing: [0, 0],
         color: 0xff_ffff,
         decoration_color: 0xff_ffff,
+        glyph_parameter: 0,
         decoration: 0,
         reveal: [0, 0],
         char_delay: 100,
@@ -1215,6 +1216,82 @@ fn window_scale_snaps_near_one_and_preserves_other_float_bits() {
         assert_eq!(messages.text(7).unwrap().scale_bits, expected);
         assert_eq!(vm.state().system_integer(0), Some(11));
         assert_eq!(vm.stack().len_bytes(), 0);
+    }
+}
+
+#[test]
+fn window_glyph_parameter_preserves_raw_bits_and_only_changes_the_linked_text() {
+    let values = [1, 0x8000_0000, u32::MAX, 0];
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 540, 1280, 180]);
+    create(&mut code, 1, 2, [10, 20, 100, 30]);
+    code.extend(0x440u16.to_le_bytes());
+    code.extend(4u16.to_le_bytes());
+    code.extend(0x1234u32.to_le_bytes());
+    for value in values {
+        call(&mut code, 0x2155, &[value, 0]);
+    }
+    call(&mut code, 0x2155, &[99, 0]);
+    create(&mut code, 0, 7, [0, 540, 1280, 180]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 2);
+    vm.state_mut().set_system_integer(0, 42).unwrap();
+    let window = messages.window(0).unwrap().clone();
+    let other = messages.text(2).unwrap().clone();
+    let initial = messages.text(7).unwrap().clone();
+    assert_eq!(initial.glyph_parameter, 0);
+    for value in values {
+        let mut expected = initial.clone();
+        expected.glyph_parameter = value;
+        run(&mut vm, &mut messages, 1);
+        assert_eq!(messages.text(7), Some(&expected));
+        assert_eq!(messages.text(2), Some(&other));
+        assert_eq!(messages.window(0), Some(&window));
+        assert_eq!(vm.stack().len_bytes(), 4);
+        assert_eq!(vm.stack().peek_u32(4).unwrap(), 0x1234);
+        assert_eq!(vm.state().system_integer(0), Some(42));
+    }
+    run(&mut vm, &mut messages, 2);
+    assert_eq!(messages.text(7), Some(&initial));
+}
+
+#[test]
+fn window_glyph_parameter_errors_preserve_pending_command_stack_and_objects() {
+    for (exists, words) in [
+        (false, vec![5, 0]),
+        (true, vec![5, 8]),
+        (true, vec![5, u32::MAX]),
+        (true, vec![0]),
+        (true, vec![]),
+    ] {
+        let mut code = vec![];
+        if exists {
+            create(&mut code, 0, 7, [0, 0, 100, 20]);
+        }
+        call(&mut code, 0x2155, &words);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, usize::from(exists));
+        vm.state_mut().set_system_integer(0, 42).unwrap();
+        pending(&mut vm);
+        let pc = vm.pc();
+        let window = messages.window(0).cloned();
+        let text = messages.text(7).cloned();
+        for _ in 0..2 {
+            assert!(messages.try_handle(&mut vm).is_err());
+            assert_eq!(vm.pc(), pc);
+            assert_eq!(vm.pending_system(), Some((pc, 0x155)));
+            assert_eq!(vm.stack().len_bytes(), words.len() * 4);
+            for (i, value) in words.iter().rev().enumerate() {
+                assert_eq!(vm.stack().peek_u32(4 * (i + 1)).unwrap(), *value);
+            }
+            assert_eq!(messages.window(0), window.as_ref());
+            assert_eq!(messages.text(7), text.as_ref());
+            assert_eq!(vm.state().system_integer(0), Some(42));
+        }
     }
 }
 

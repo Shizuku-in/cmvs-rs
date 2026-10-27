@@ -112,6 +112,9 @@ pub struct TextObject {
     pub color: u32,
     /// +120: decoration colour.
     pub decoration_color: u32,
+    /// +128: raw glyph parameter set by 0x2155, copied into glyph descriptor word 8
+    /// by 0x14005bc90. Its rendering interpretation is not modeled yet.
+    pub glyph_parameter: u32,
     /// +132: decoration style 0..3 passed to glyph rendering.
     pub decoration: i32,
     /// +136/+140: per-character reveal mode (1 = alpha from 0, 2 = offset) and duration.
@@ -226,6 +229,7 @@ impl MessageHost {
             Some((pc, command @ 0x190..=0x192)) => self.button(vm, pc, command).map(|()| true),
             Some((pc, 0x150)) => self.move_window(vm, pc).map(|()| true),
             Some((pc, 0x151)) => self.cursor(vm, pc).map(|()| true),
+            Some((pc, 0x155)) => self.glyph_parameter(vm, pc).map(|()| true),
             Some((pc, 0x14e)) => self.show(vm, pc).map(|()| true),
             Some((pc, command @ (0x14b | 0x14c))) => self.presence(vm, pc, command).map(|()| true),
             Some((pc, command @ (0x14a | 0x15a))) => {
@@ -585,6 +589,32 @@ impl MessageHost {
             let text = self.texts[text].as_mut().expect("checked above");
             text.cursor = [text.area[0], text.area[1]];
         }
+        Ok(())
+    }
+    /// 0x140076250 -> 0x14005db60 -> 0x14002e860: SP-4 window slot, SP-8
+    /// raw u32 stored at text +128. The wrapper preserves edx despite the decompiler
+    /// omitting that parameter. Missing windows set an unmodeled engine error flag.
+    fn glyph_parameter(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
+        let slot = window_slot(vm, pc, 0x2155)?;
+        let value = vm.stack().peek_u32(8).map_err(|e| error(pc, 0x2155, e.0))?;
+        let text = self.windows[slot]
+            .as_ref()
+            .ok_or_else(|| {
+                error(
+                    pc,
+                    0x2155,
+                    "message window slot without a window sets an unmodeled flag",
+                )
+            })?
+            .text;
+        if self.texts[text].is_none() {
+            return Err(error(pc, 0x2155, "message window without its text object"));
+        }
+        vm.complete_system(SystemResult(0x4008))?;
+        self.texts[text]
+            .as_mut()
+            .expect("checked above")
+            .glyph_parameter = value;
         Ok(())
     }
     /// 0x140076ea0 -> 0x14005ddc0: SP-4 slot, SP-8 f32 scale. Both axes of
@@ -1018,6 +1048,7 @@ impl MessageHost {
             spacing: [0, 0],
             color: 0xff_ffff,
             decoration_color: 0xff_ffff,
+            glyph_parameter: 0,
             decoration: 0,
             reveal: [0, 0],
             char_delay: 100,
