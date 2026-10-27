@@ -590,11 +590,16 @@ fn run() -> Result<(), Box<dyn Error>> {
                 if let Some(images) = &mut images
                     && scene.try_handle_mask(&mut machine, &mut images.with_paths(paths))?
                 {
+                    let channel = if command >= 0x234 {
+                        scene.second_mask()
+                    } else {
+                        scene.mask()
+                    };
                     println!(
                         "# mask transition 0x{:04x}: system_integer[0]={:?} mask={:?}; shader path, nothing drawn",
                         command + 0x2000,
                         machine.state().system_integer(0),
-                        scene.mask().map(|mask| (
+                        channel.map(|mask| (
                             mask.slot,
                             mask.put,
                             mask.mask.name.escape_ascii().to_string(),

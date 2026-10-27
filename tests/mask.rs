@@ -347,3 +347,141 @@ fn render_rejects_masks_on_cropped_images() {
     scene.advance_frame(100);
     assert!(scene_render::render(&scene, 2, 1).is_ok());
 }
+
+/// 0x2234: the +4648 channel with the same arguments as 0x222a.
+fn second(code: &mut Vec<u8>, slot: u32, duration: u32, put: u32) {
+    command(code, 0x2234, &[MASK, slot, duration, duration / 2, put]);
+}
+
+#[test]
+fn second_channel_shades_its_target_and_waits_and_finishes_with_its_own_commands() {
+    let mut code = vec![];
+    object(&mut code, 3);
+    second(&mut code, 3, 100, 1);
+    command(&mut code, 0x2235, &[1]);
+    command(&mut code, 0x2237, &[]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut scene = SceneHost::default();
+    run(&mut vm, &mut scene, 4);
+    vm.state_mut().set_system_integer(0, 9).unwrap();
+    run(&mut vm, &mut scene, 1);
+    assert_eq!(vm.state().system_integer(0), Some(1));
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert!(scene.mask().is_none());
+    let mask = scene.second_mask().unwrap();
+    assert_eq!(
+        (mask.put, mask.slot, mask.ramp, mask.width, mask.elapsed),
+        (true, 3, 50, 50, 0)
+    );
+    assert_eq!(scene.mask_on(3), Some(mask));
+    // The renderer shades the target exactly as for the first channel.
+    for (delta, expected) in [(0, [0, 0]), (25, [128, 0])] {
+        scene.advance_frame(delta);
+        assert_eq!(alphas(&scene), expected, "after {delta} ms");
+    }
+    // 0x2235 is this channel's skippable wait: a released action 0 finishes it.
+    pending(&mut vm);
+    let mut input = ActionInput::default();
+    input.set(0, false, false, true).unwrap();
+    let step = scene
+        .try_wait_mask(&mut vm, SkipGate::default(), &mut input)
+        .unwrap();
+    assert_eq!(step, Some(Step::Yield));
+    assert!(!input.released(0) && scene.second_mask().is_none());
+    assert_eq!(vm.state().system_integer(0), Some(1));
+    assert_eq!(alphas(&scene), [255, 255]);
+    // 0x2237 without a transition is a no-op that pops nothing.
+    vm.state_mut().set_system_integer(0, 9).unwrap();
+    run(&mut vm, &mut scene, 1);
+    assert_eq!(vm.state().system_integer(0), Some(9));
+    assert_eq!((vm.pc(), vm.stack().len_bytes()), (code.len(), 0));
+}
+
+#[test]
+fn both_channels_run_independently_on_different_objects() {
+    let mut code = vec![];
+    object(&mut code, 3);
+    object(&mut code, 4);
+    transition(&mut code, 3, 100, 1);
+    second(&mut code, 4, 200, 0);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut scene = SceneHost::default();
+    run(&mut vm, &mut scene, 10);
+    let (first, second) = (scene.mask().unwrap(), scene.second_mask().unwrap());
+    assert_eq!((first.slot, first.put), (3, true));
+    assert_eq!((second.slot, second.put, second.ramp), (4, false, 100));
+    assert_eq!(scene.mask_on(3), Some(first));
+    assert_eq!(scene.mask_on(4), Some(second));
+    assert_eq!(scene.mask_on(5), None);
+    scene.advance_frame(100);
+    assert!(scene.mask().is_none() && scene.object(3).is_some());
+    assert_eq!(scene.second_mask().unwrap().elapsed, 100);
+    scene.advance_frame(100);
+    assert!(scene.second_mask().is_none() && scene.object(4).is_none());
+}
+
+#[test]
+fn second_channel_rejects_shared_objects_and_replacements_that_leave_a_shader() {
+    // (creation command, slot) pairs: two channels on one object, then 0x2234 replacing a
+    // transition whose old target would keep its shader.
+    for pair in [
+        [(0x222a, 3), (0x2234, 3)],
+        [(0x2234, 3), (0x222a, 3)],
+        [(0x2234, 3), (0x2234, 4)],
+    ] {
+        let mut code = vec![];
+        object(&mut code, 3);
+        object(&mut code, 4);
+        for (op, slot) in pair {
+            command(&mut code, op, &[MASK, slot, 100, 50, 1]);
+        }
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut scene = SceneHost::default();
+        run(&mut vm, &mut scene, 9);
+        let before = (scene.mask().cloned(), scene.second_mask().cloned());
+        pending(&mut vm);
+        let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
+        assert!(scene.try_handle_mask(&mut vm, &mut files()).is_err());
+        assert_eq!(
+            (vm.pending_system(), vm.stack().len_bytes()),
+            (command, bytes)
+        );
+        assert_eq!(
+            (scene.mask().cloned(), scene.second_mask().cloned()),
+            before
+        );
+    }
+    // Replacing on the same object, or after the old target is gone, is accepted.
+    let mut code = vec![];
+    object(&mut code, 3);
+    object(&mut code, 4);
+    second(&mut code, 3, 100, 1);
+    second(&mut code, 3, 300, 0);
+    command(&mut code, 0x2021, &[3]);
+    second(&mut code, 4, 100, 1);
+    let replacing = script(&code);
+    let mut vm = Machine::new(&replacing).unwrap();
+    let mut scene = SceneHost::default();
+    run(&mut vm, &mut scene, 10);
+    assert_eq!(scene.second_mask().unwrap().width, 150);
+    run(&mut vm, &mut scene, 2);
+    assert_eq!(scene.second_mask().unwrap().slot, 4);
+    // 0x2236 (like 0x222c) is unused by this title and stays unhandled.
+    for op in [0x222c, 0x2236] {
+        let mut code = vec![];
+        command(&mut code, op, &[]);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        pending(&mut vm);
+        let mut scene = SceneHost::default();
+        assert!(!scene.try_handle_mask(&mut vm, &mut files()).unwrap());
+        let step = scene
+            .try_wait_mask(&mut vm, SkipGate::default(), &mut ActionInput::default())
+            .unwrap();
+        assert_eq!(step, None);
+        assert_eq!(vm.pending_system().map(|p| p.1), Some(op - 0x2000));
+    }
+}

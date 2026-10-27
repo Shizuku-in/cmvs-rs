@@ -1,9 +1,12 @@
-//! Engine +4632 mask transition (0x4b0-byte object built by 0x140051450); addresses refer to
-//! the documented binary hash. 0x14001d150 selects the pixel-shader path when the device
-//! reports ps_2_0 and the configuration enables it; this model follows that path: the mask
-//! texture is attached to the slot object and MaskEffectPut.o2 / MaskEffectCut.o2 (ps.cpz,
-//! dwords XORed with "PSX2") scale the object's alpha. The CPU path, which rewrites the image
-//! alpha through a threshold table, is not modeled.
+//! Engine +4632 and +4648 mask transitions (0x4b0/0x4b8-byte objects built by 0x140051450 /
+//! 0x140051d10); addresses refer to the documented binary hash. 0x14001d150 selects the
+//! pixel-shader path when the device reports ps_2_0 and the configuration enables it; this
+//! model follows that path: the mask texture is attached to the slot object and
+//! MaskEffectPut.o2 / MaskEffectCut.o2 (ps.cpz, dwords XORed with "PSX2") scale the object's
+//! alpha. The CPU path, which rewrites the image alpha through a threshold table (the +4648
+//! object also saves the original alpha at +1056), is not modeled. On the shader path the
+//! two channels differ only by an 8-byte shift of the fields after +1056 and by 0x2234 not
+//! detaching the previous transition's shader.
 use super::{ObjectImage, SceneHost, load_image};
 use crate::{
     bytecode::DecodeError,
@@ -73,51 +76,83 @@ impl MaskTransition {
     }
 }
 
+/// (channel, command offset) of 0x222a..0x222d (+4632) and 0x2234..0x2237 (+4648):
+/// create, wait, query (unhandled, unused by this title), finish.
+fn channel(command: u16) -> Option<(usize, u16)> {
+    match command {
+        0x22a..=0x22d => Some((0, command - 0x22a)),
+        0x234..=0x237 => Some((1, command - 0x234)),
+        _ => None,
+    }
+}
+
 impl SceneHost {
+    /// The +4632 transition (0x222a..0x222d).
     pub fn mask(&self) -> Option<&MaskTransition> {
-        self.mask.as_ref()
+        self.masks[0].as_ref()
+    }
+    /// The +4648 transition (0x2234..0x2237).
+    pub fn second_mask(&self) -> Option<&MaskTransition> {
+        self.masks[1].as_ref()
+    }
+    /// The transition shading the object in `slot`; creation keeps it to one per object.
+    pub fn mask_on(&self, slot: u8) -> Option<&MaskTransition> {
+        self.masks.iter().flatten().find(|mask| mask.slot == slot)
     }
 
-    /// 0x14007b270 (0x222b skip, 0x222d) and the frame update's end branch: a Put object
-    /// keeps its final state without the shader; a Cut object is destroyed. A missing
-    /// object only frees the transition.
-    fn finish_mask(&mut self) {
-        if let Some(mask) = self.mask.take()
+    /// 0x14007b270 / 0x14007b500 (0x222b/0x2235 skip, 0x222d/0x2237) and the frame update's
+    /// end branch: a Put object keeps its final state without the shader; a Cut object is
+    /// destroyed. A missing object only frees the transition.
+    fn finish_mask(&mut self, channel: usize) {
+        if let Some(mask) = self.masks[channel].take()
             && !mask.put
         {
             self.objects.remove(&mask.slot);
         }
     }
 
-    /// The +4632 part of the frame update 0x140015900, after the fade. The original would
-    /// dereference a target object destroyed meanwhile; here only the timing continues.
+    /// The +4632 and then +4648 parts of the frame update 0x140015900, after the fade and
+    /// the strip wipe. The original would dereference a target object destroyed meanwhile;
+    /// here only the timing continues.
     pub(super) fn advance_mask(&mut self, delta: u32) {
-        if self.mask.as_mut().is_some_and(|mask| mask.advance(delta)) {
-            self.finish_mask();
+        for channel in 0..2 {
+            if self.masks[channel]
+                .as_mut()
+                .is_some_and(|mask| mask.advance(delta))
+            {
+                self.finish_mask(channel);
+            }
         }
     }
 
-    /// 0x222a / 0x14007ae40: SP-4 mask name, SP-8 object slot, SP-12 duration, SP-16 edge,
-    /// SP-20 mode. The previous transition loses its shader and is freed without finishing
-    /// (a Cut object survives). The shader path always succeeds: system result 0 = 1,
-    /// returns 0x4014. 0x222d / 0x14007b270 finishes the transition and returns 0x4000.
-    /// The slot is not bounds-checked and the shader setup dereferences the object, so
-    /// missing objects are errors, as are mask images the 0x2030 lookup cannot decode.
+    /// 0x222a / 0x14007ae40 and 0x2234 / 0x14007b370: SP-4 mask name, SP-8 object slot,
+    /// SP-12 duration, SP-16 edge, SP-20 mode. 0x222a detaches the previous transition's
+    /// shader (0x140051140) and frees it without finishing (a Cut object survives); 0x2234
+    /// only frees it, so an old target other than the new one would stay shaded, which is
+    /// rejected here, as is a second transition on an object the other channel shades. The
+    /// shader path always succeeds: system result 0 = 1, returns 0x4014. 0x222d / 0x14007b270
+    /// and 0x2237 / 0x14007b500 finish the transition and return 0x4000. The slot is not
+    /// bounds-checked and the shader setup dereferences the object, so missing objects are
+    /// errors, as are mask images the 0x2030 lookup cannot decode.
     pub fn try_handle_mask(
         &mut self,
         vm: &mut Machine<'_>,
         images: &mut dyn ImageSource,
     ) -> Result<bool, Box<dyn Error>> {
-        let pc = match vm.pending_system() {
-            Some((pc, 0x22a)) => pc,
-            Some((_, 0x22d)) => {
-                vm.complete_system(SystemResult(0x4000))?;
-                self.finish_mask();
-                return Ok(true);
-            }
+        let Some((pc, command)) = vm.pending_system() else {
+            return Ok(false);
+        };
+        let (channel, offset) = match channel(command) {
+            Some((channel, offset @ (0 | 3))) => (channel, offset),
             _ => return Ok(false),
         };
-        let fail = |why| error(pc, 0x222a, why);
+        if offset == 3 {
+            vm.complete_system(SystemResult(0x4000))?;
+            self.finish_mask(channel);
+            return Ok(true);
+        }
+        let op = command + 0x2000;
+        let fail = |why| error(pc, op, why);
         let mut args = [0u32; 5];
         for (i, value) in args.iter_mut().enumerate() {
             *value = vm.stack().peek_u32(4 * (i + 1)).map_err(|e| fail(e.0))?;
@@ -127,12 +162,25 @@ impl SceneHost {
             .ok()
             .filter(|slot| self.objects.contains_key(slot))
             .ok_or_else(|| fail("mask transition needs an existing object in slots 0..255"))?;
+        if self.masks[1 - channel]
+            .as_ref()
+            .is_some_and(|other| other.slot == slot)
+        {
+            return Err(fail("two mask transitions on one object are not modeled").into());
+        }
+        if channel == 1
+            && self.masks[1]
+                .as_ref()
+                .is_some_and(|old| old.slot != slot && self.objects.contains_key(&old.slot))
+        {
+            return Err(fail("0x2234 would leave the previous object shaded (not modeled)").into());
+        }
         let name = vm.resolve_string(name)?;
-        let mask = load_image(images, name, pc, 0x222a)?.ok_or_else(|| {
+        let mask = load_image(images, name, pc, op)?.ok_or_else(|| {
             fail("undecodable mask leaves an unmodeled transition without shader")
         })?;
         vm.complete_system(SystemResult(0x4014))?;
-        self.mask = Some(MaskTransition {
+        self.masks[channel] = Some(MaskTransition {
             put: put != 0,
             slot,
             ramp: duration.wrapping_sub(width),
@@ -146,22 +194,27 @@ impl SceneHost {
         Ok(true)
     }
 
-    /// 0x222b / 0x140081170: system result 0 = 0; without a transition returns 0x4004.
-    /// With SP-4 nonzero the wait ends at once when effects are off, action 7 or 8 is held
-    /// or the skip flag is set, or on a released action 0, which is consumed: the transition
-    /// finishes as for 0x222d, result 0 = 1, 0xc004. Otherwise 0xa000 until the frame update
-    /// frees the transition (always for SP-4 zero).
+    /// 0x222b / 0x140081170 and 0x2235 / 0x140081230 for their channel: system result 0 = 0;
+    /// without a transition returns 0x4004. With SP-4 nonzero the wait ends at once when
+    /// effects are off, action 7 or 8 is held or the skip flag is set, or on a released
+    /// action 0, which is consumed: the transition finishes as for 0x222d/0x2237, result 0 =
+    /// 1, 0xc004. Otherwise 0xa000 until the frame update frees the transition (always for
+    /// SP-4 zero).
     pub fn try_wait_mask(
         &mut self,
         vm: &mut Machine<'_>,
         gate: SkipGate,
         input: &mut ActionInput,
     ) -> Result<Option<Step>, DecodeError> {
-        let Some((pc, 0x22b)) = vm.pending_system() else {
+        let Some((pc, command)) = vm.pending_system() else {
             return Ok(None);
         };
-        let skippable = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x222b, e.0))? != 0;
-        if self.mask.is_none() {
+        let Some((channel, 1)) = channel(command) else {
+            return Ok(None);
+        };
+        let op = command + 0x2000;
+        let skippable = vm.stack().peek_u32(4).map_err(|e| error(pc, op, e.0))? != 0;
+        if self.masks[channel].is_none() {
             let step = vm.complete_system(SystemResult(0x4004))?;
             vm.state_mut().set_system_integer(0, 0).expect("slot 0");
             return Ok(Some(step));
@@ -174,7 +227,7 @@ impl SceneHost {
                 input.consume(0);
             }
             vm.state_mut().set_system_integer(0, 1).expect("slot 0");
-            self.finish_mask();
+            self.finish_mask(channel);
             return Ok(Some(step));
         }
         let step = vm.yield_pending_system()?;

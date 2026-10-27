@@ -336,8 +336,8 @@ pub struct SceneHost {
     clear: ClearState,
     objects: BTreeMap<u8, SceneObject>,
     fade: crate::fade::FadeHost,
-    /// Engine +4632; see `mask`.
-    mask: Option<MaskTransition>,
+    /// Engine +4632 and +4648; see `mask`.
+    masks: [Option<MaskTransition>; 2],
     /// Engine +4624; see `quake`.
     quake: Option<Quake>,
     /// Engine +4640; see `strip`.
@@ -352,7 +352,7 @@ impl SceneHost {
     }
     /// The slot part of the frame update 0x140015900: each object runs 0x14003d0c0 and is
     /// destroyed when it is marked for disposal (0x14003a780 reads +14500); then the fade,
-    /// the strip wipe and the mask transition. The quake follows in the render pass
+    /// the strip wipe and both mask transitions. The quake follows in the render pass
     /// 0x140015da0.
     pub fn advance_frame(&mut self, delta: u32) {
         for object in self.objects.values_mut() {

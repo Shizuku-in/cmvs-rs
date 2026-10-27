@@ -180,7 +180,7 @@ pub fn render_with_objects(
         let d = &draw.words;
         check(d)?;
         let position = [d[8] as i32, d[9] as i32].map(i64::from);
-        let mask = scene.mask().filter(|mask| Some(mask.slot) == slot);
+        let mask = slot.and_then(|slot| scene.mask_on(slot));
         // 0x1400526b0 offsets slot objects as queue layer 0 and the backend's windows and
         // glyphs as layer 1; 0x14003b420 applies it only with the top-level object's +6248
         // bit 0x100, children included.
