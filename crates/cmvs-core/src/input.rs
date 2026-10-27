@@ -171,14 +171,40 @@ impl ActionInput {
     }
 }
 
-/// 0x21a0 (0x140078b10) / 0x21a2 (0x140078b90): system result 0 = action 0 / 1 released,
-/// system result 4 (+82832) = held. 0x21a1 / 0x21a3 (inline 0x140054d90 / 0x140054dd0)
-/// consume action 0 / 1. All return 0x4000 and pop nothing.
+/// Action of each 0x21a0 + 2 * n command pair, from the getter/consumer offsets
+/// (+1232 + 12 * action). 0x21a5/0x21a7 and 0x21be/0x21bf fall into the dispatcher's shared
+/// default case 0x1400823e7 and stay unhandled.
+const ACTION_COMMANDS: [(u16, usize); 15] = [
+    (0x1a0, 0),
+    (0x1a2, 1),
+    (0x1a4, 7),
+    (0x1a6, 8),
+    (0x1a8, 6),
+    (0x1aa, 9),
+    (0x1ac, 10),
+    (0x1ae, 11),
+    (0x1b0, 12),
+    (0x1b2, 13),
+    (0x1b4, 14),
+    (0x1b6, 2),
+    (0x1b8, 3),
+    (0x1ba, 4),
+    (0x1bc, 5),
+];
+
+/// Even commands of ACTION_COMMANDS (0x140078b10 and identical siblings up to 0x140078fd0):
+/// system result 0 = action released, system result 4 (+82832) = held. The following odd
+/// command (inline 0x140054d90 and siblings) consumes the action; actions 7 and 8 have none.
+/// All return 0x4000 and pop nothing.
 pub fn try_handle(vm: &mut Machine<'_>, input: &mut ActionInput) -> Result<bool, DecodeError> {
-    let Some((_, command @ 0x1a0..=0x1a3)) = vm.pending_system() else {
+    let Some((_, command)) = vm.pending_system() else {
         return Ok(false);
     };
-    let action = usize::from(command >= 0x1a2);
+    let Some(&(_, action)) = ACTION_COMMANDS.iter().find(|&&(query, action)| {
+        command == query || (command == query + 1 && !matches!(action, 7 | 8))
+    }) else {
+        return Ok(false);
+    };
     vm.complete_system(SystemResult(0x4000))?;
     if command & 1 == 0 {
         let state = vm.state_mut();

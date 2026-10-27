@@ -109,9 +109,82 @@ fn skipping_reports_the_script_flag_or_held_skip_actions() {
     }
 }
 
+/// (query command, action) from the getter offsets; actions 15..23 have no command.
+const QUERIES: [(u16, usize); 15] = [
+    (0x21a0, 0),
+    (0x21a2, 1),
+    (0x21a4, 7),
+    (0x21a6, 8),
+    (0x21a8, 6),
+    (0x21aa, 9),
+    (0x21ac, 10),
+    (0x21ae, 11),
+    (0x21b0, 12),
+    (0x21b2, 13),
+    (0x21b4, 14),
+    (0x21b6, 2),
+    (0x21b8, 3),
+    (0x21ba, 4),
+    (0x21bc, 5),
+];
+
+#[test]
+fn every_query_reads_only_its_own_action() {
+    for (op, action) in QUERIES {
+        let only = |released, held| {
+            let mut input = ActionInput::default();
+            input.set(action, held, !held, released).unwrap();
+            input
+        };
+        let mut others = ActionInput::default();
+        for other in (0..24).filter(|&a| a != action) {
+            others.set(other, true, true, true).unwrap();
+        }
+        for (mut input, expected) in [
+            (only(true, false), (Some(1), Some(0))),
+            (only(false, true), (Some(0), Some(1))),
+            (others, (Some(0), Some(0))),
+        ] {
+            let before = input.clone();
+            let script = commands(&[op]);
+            let mut vm = Machine::new(&script).unwrap();
+            pending(&mut vm);
+            assert!(input::try_handle(&mut vm, &mut input).unwrap());
+            assert_eq!(results(&vm), expected, "{op:#x}");
+            assert_eq!(input, before, "{op:#x} must not consume");
+            assert_eq!((vm.pending_system(), vm.pc()), (None, 2));
+            assert_eq!(vm.stack().len_bytes(), 0);
+        }
+    }
+}
+
+#[test]
+fn every_consumer_clears_only_its_own_action() {
+    for (op, action) in QUERIES.into_iter().filter(|&(_, a)| !matches!(a, 7 | 8)) {
+        let mut input = ActionInput::default();
+        for a in 0..24 {
+            input.set(a, true, true, true).unwrap();
+        }
+        let script = commands(&[op + 1]);
+        let mut vm = Machine::new(&script).unwrap();
+        vm.state_mut().set_system_integer(0, 7).unwrap();
+        pending(&mut vm);
+        assert!(input::try_handle(&mut vm, &mut input).unwrap());
+        assert_eq!(vm.state().system_integer(0), Some(7));
+        assert_eq!((vm.pending_system(), vm.pc()), (None, 2));
+        for a in 0..24 {
+            let cleared = a == action;
+            assert!(input.held(a), "{op:#x} keeps hold of {a}");
+            assert_eq!(input.pressed(a), !cleared, "{op:#x} press of {a}");
+            assert_eq!(input.released(a), !cleared, "{op:#x} release of {a}");
+        }
+    }
+}
+
 #[test]
 fn neighbouring_commands_are_left_pending() {
-    for op in [0x219f, 0x21a4] {
+    // 0x21a5/0x21a7/0x21be/0x21bf reach the dispatcher's shared default case.
+    for op in [0x219f, 0x21a5, 0x21a7, 0x21be, 0x21bf, 0x21c0] {
         let script = commands(&[op]);
         let mut vm = Machine::new(&script).unwrap();
         pending(&mut vm);
