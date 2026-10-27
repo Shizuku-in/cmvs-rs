@@ -168,6 +168,16 @@ impl State {
         *slot = Some(value);
         Ok(())
     }
+    /// Marks a system result the original writes with a value this model does not know, so
+    /// that reading it fails explicitly.
+    pub(crate) fn forget_system_integer(&mut self, index: u32) -> Result<(), &'static str> {
+        let slot = self
+            .system_integers
+            .get_mut(index as usize)
+            .ok_or("integer system result slot must be 0..6")?;
+        *slot = None;
+        Ok(())
+    }
     pub fn bit(&self, index: u32) -> Option<bool> {
         self.bits.get(&index).copied()
     }

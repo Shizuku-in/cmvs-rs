@@ -283,7 +283,7 @@ impl<'a> Startup<'a> {
             });
         };
         let id = self.bootstrap.settings().get(&0x201d).copied();
-        if matches!(command, 0xa0 | 0xa4 | 0xb0) {
+        if matches!(command, 0xa0 | 0xa4 | 0xa6 | 0xb0 | 0xba) {
             self.audio_backend.configure_paths(self.bootstrap.paths())?;
         }
         let gate = SkipGate {

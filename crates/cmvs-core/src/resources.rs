@@ -15,6 +15,9 @@ pub enum ResourceKind {
     Image,
     SoundEffect,
     Music,
+    /// Engine +4808, registered by 0x2014 (0x140071b30); the same 0x2820-byte list class as
+    /// the sound-effect (+4792) and music (+4800) roots.
+    Voice,
 }
 impl ResourceKind {
     pub const fn command(self) -> u16 {
@@ -22,12 +25,13 @@ impl ResourceKind {
             Self::Image => 0x2011,
             Self::SoundEffect => 0x2012,
             Self::Music => 0x2013,
+            Self::Voice => 0x2014,
         }
     }
     pub const fn slot_count(self) -> u32 {
         match self {
             Self::Image => 10,
-            Self::SoundEffect | Self::Music => 4,
+            Self::SoundEffect | Self::Music | Self::Voice => 4,
         }
     }
 }

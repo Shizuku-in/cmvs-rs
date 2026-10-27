@@ -30,6 +30,10 @@ pub struct AudioSettings {
     pub bgm_flag_1576: u32,
     /// +1628 movie volume on the 256 scale (0x20c0 uses (+1612 * +1628) >> 8).
     pub movie: u32,
+    /// +1604; when false 0x20a6 only reports failure.
+    pub voice_enabled: bool,
+    /// +1624 voice volume on the 256 scale.
+    pub voice: u32,
 }
 impl Default for AudioSettings {
     fn default() -> Self {
@@ -41,6 +45,8 @@ impl Default for AudioSettings {
             bgm: 256,
             bgm_flag_1576: 0,
             movie: 256,
+            voice_enabled: true,
+            voice: 256,
         }
     }
 }
@@ -93,6 +99,15 @@ pub enum AudioRequest {
     FadeOutSe { channel: u8, fade_ms: u32 },
     /// 0x20a8: stop and release voice channel 0..3 (device channel +5).
     StopVoice { channel: u8 },
+    /// 0x20a6: 0x140088390 on device channel `channel + 5` from the 0x2014 roots, without
+    /// loop, fade-in or fallback root; it releases the channel first and starts the sound
+    /// when `start` is set.
+    PlayVoice {
+        channel: u8,
+        name: Vec<u8>,
+        volume: u32,
+        start: bool,
+    },
     /// 0x14008a240 with BGM enabled. With `fade_ms` 0 both BGM device channels 0 and 1
     /// stop at once first; otherwise `previous` fades out over `fade_ms`. The track then
     /// loads and starts on `channel` (fading in over `fade_ms`), and both channels get
@@ -165,6 +180,11 @@ pub trait AudioBackend {
     fn stop_voice(&mut self, _channel: u8) -> Result<(), Box<dyn Error>> {
         Err("audio backend does not implement stopping a voice channel".into())
     }
+    /// Apply a PlayVoice request: Ok(true) when the sound loaded, Ok(false) when it did not
+    /// (the channel is released either way). Err leaves the device unchanged for retry.
+    fn play_voice(&mut self, _request: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+        Err("audio backend does not implement voice playback".into())
+    }
     /// Apply a PlayBgm request in full before returning Ok; Err leaves the device unchanged.
     fn play_bgm(&mut self, _request: &AudioRequest) -> Result<(), Box<dyn Error>> {
         Err("audio backend does not implement BGM playback".into())
@@ -226,6 +246,10 @@ impl AudioBackend for RecordingAudio {
     fn stop_voice(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
         self.record(AudioRequest::StopVoice { channel })
     }
+    fn play_voice(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+        self.record(request.clone())?;
+        Ok(false)
+    }
     fn play_bgm(&mut self, request: &AudioRequest) -> Result<(), Box<dyn Error>> {
         self.record(request.clone())
     }
@@ -275,6 +299,7 @@ impl AudioHost {
     ) -> Result<bool, Box<dyn Error>> {
         match vm.pending_system() {
             Some((_, 0xa8)) => return self.try_voice_stop(vm, backend),
+            Some((_, 0xa6)) => return self.try_voice_play(vm, backend),
             Some((_, 0xb1)) => return self.try_start(vm, backend),
             Some((_, 0xb3)) => return self.try_stop(vm, backend),
             Some((_, 0xb6)) => return self.try_fade_out(vm, backend),
@@ -357,6 +382,55 @@ impl AudioHost {
         }
         backend.stop_voice(channel as u8)?;
         vm.complete_system(SystemResult(0x4004))?;
+        Ok(true)
+    }
+
+    /// 0x20a6 / 0x1400703b0: SP-4 voice channel (unsigned, above 3 only sets +12056 bit
+    /// 0x400), SP-8 name, SP-12 volume, SP-16 start flag; returns 0x4010. With +1604 off,
+    /// system result 0 = 0. Otherwise result 0 reports the load, and result 4 receives
+    /// MOG_GetPcmLength through the output pointer (uninitialized stack on failure); its
+    /// unit is unverified, so the model marks it unknown. No channel record is kept.
+    fn try_voice_play(
+        &mut self,
+        vm: &mut Machine<'_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<bool, Box<dyn Error>> {
+        let (pc, _) = vm.pending_system().expect("checked pending command");
+        let fail = |why| error(pc, 0x20a6, why);
+        let arg = |distance| vm.stack().peek_u32(distance).map_err(|e| fail(e.0));
+        let (channel, name, volume, start) = (arg(4)?, arg(8)?, arg(12)? as i32, arg(16)? != 0);
+        if channel as usize >= VOICE_CHANNELS {
+            return Err(fail("voice channel outside 0..3 sets an unmodeled flag").into());
+        }
+        let name = vm.resolve_string(name)?;
+        let loaded = if self.settings.voice_enabled {
+            // 0x140088390 releases the channel and then refuses names of 32 bytes or more;
+            // that failure path is not modeled.
+            if name.len() >= 32 {
+                return Err(fail("voice file name exceeds the 32-byte device limit").into());
+            }
+            // Unsigned 32-bit products, as for sound effects.
+            let mut effective = self.settings.master.wrapping_mul(self.settings.voice) >> 8;
+            if volume > 0 {
+                effective = (volume as u32).wrapping_mul(effective) >> 8;
+            }
+            Some(backend.play_voice(&AudioRequest::PlayVoice {
+                channel: channel as u8,
+                name,
+                volume: effective,
+                start,
+            })?)
+        } else {
+            None
+        };
+        vm.complete_system(SystemResult(0x4010))?;
+        let state = vm.state_mut();
+        state
+            .set_system_integer(0, u32::from(loaded == Some(true)))
+            .expect("slot 0 exists");
+        if loaded.is_some() {
+            state.forget_system_integer(4).expect("slot 4 exists");
+        }
         Ok(true)
     }
 

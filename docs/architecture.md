@@ -225,3 +225,5 @@ BGM 与 SE 共用 `AudioHost`/`AudioBackend`：`BgmState` 保存 +4464 对象的
 `message::output` 的记录输出拆分为原版对应的小函数：`ruby_lines`（0x14005b360）、`wraps`（双字节与注音组共用的换行判断）、`push`/`retime`（0x14005a830/0x14005b5a0）。“上一个字形”在每次调用开始时为空，以对应原版的未初始化指针。注音组按 22.10 定点均分或居中，组内单字节与分隔符照原版重复计时。逐句点击重放停于 sn1001.ps3 / PC=0x34f3a / 0x2225、SP=28，详见 vm-semantics.md。
 
 `SceneHost` 新增引擎 +4624 的 `Quake`（`scene/quake.rs`），帧推进位于遮罩转场之后，对应原版的渲染入队阶段。`scene_render` 把场景槽对象视为队列标志 0、`render_with_objects` 的附加对象（窗口与字形）视为标志 1，按模式低 4 位和顶层对象的位 0x100 平移图层及其子对象；纯色覆盖层在非零偏移下显式报错。真实重放停于 sn1001.ps3 / PC=0xe570 / 0x20a6、SP=172，详见 vm-semantics.md。
+
+`AudioBackend::play_voice` 承接 0x20a6 的语音播放，`ResourceKind::Voice` 对应 0x2014 的语音根；`AudioSettings` 补齐 +1604/+1624。原版写入但 Rust 不知道具体值的系统结果，用 `State::forget_system_integer` 标为未知，读取时显式报错。真实重放停于 sn1001.ps3 / PC=0x2b5a4 / 0x2042、SP=28，详见 vm-semantics.md。

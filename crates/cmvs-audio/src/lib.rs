@@ -393,6 +393,40 @@ impl AudioBackend for NativeAudio {
             .ok_or("voice channel out of range")? = None;
         Ok(())
     }
+    fn play_voice(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+        let AudioRequest::PlayVoice {
+            channel,
+            name,
+            volume,
+            start,
+        } = request
+        else {
+            return Err("expected PlayVoice".into());
+        };
+        let slot = usize::from(*channel);
+        if slot >= VOICE_CHANNELS {
+            return Err("voice channel out of range".into());
+        }
+        let data = self.load(ResourceKind::Voice, name)?;
+        // The device releases the channel before loading, also when loading fails.
+        self.voice[slot] = None;
+        let Some(data) = data else {
+            return Ok(false);
+        };
+        let program = VorbisProgram::new(data, None, false)?;
+        println!(
+            "# native voice[{channel}] {}: {} Hz, {} channels, started={start}",
+            name.escape_ascii(),
+            program.sample_rate(),
+            program.channels()
+        );
+        let candidate = self.prepare(program, *volume, 0);
+        if *start {
+            candidate.sink.play();
+        }
+        self.voice[slot] = Some(candidate);
+        Ok(true)
+    }
     fn stop(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
         *self
             .se
@@ -510,7 +544,7 @@ impl AudioBackend for NativeAudio {
         if let Some(e) = self.device_fault.lock().unwrap().as_ref() {
             return Err(format!("audio device failed: {e}").into());
         }
-        for channel in &mut self.se {
+        for channel in self.se.iter_mut().chain(&mut self.voice) {
             Self::tick_channel(channel)?;
             if let Some(current) = channel
                 && current.sink.empty()

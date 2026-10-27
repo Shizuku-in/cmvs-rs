@@ -896,3 +896,116 @@ fn fade_in_se_records_the_fade_and_shifts_loop_and_flag() {
     assert_eq!(vm.pending_system().map(|p| p.1), Some(0xba));
     assert_eq!(vm.stack().len_bytes(), bytes);
 }
+
+/// 0x20a6: SP-16 start, SP-12 volume, SP-8 name (text offset), SP-4 channel.
+fn voice_code(channel: u32, name: u32, volume: u32, start: u32) -> Vec<u8> {
+    let mut code = vec![];
+    push(&mut code, start);
+    push(&mut code, volume);
+    code.extend(0x201u16.to_le_bytes());
+    code.extend(0x120u16.to_le_bytes());
+    code.extend(name.to_le_bytes());
+    code.extend(0x20fu16.to_le_bytes());
+    code.extend(0x430u16.to_le_bytes());
+    push(&mut code, channel);
+    code.extend(0x20a6u16.to_le_bytes());
+    code
+}
+/// Offsets: 0 a short name, 6 a 32-byte name.
+const VOICE_TEXT: &[u8] = b"v.ogg\0abcdefghijklmnopqrstuvwxyz012345\0";
+struct Voiced;
+impl AudioBackend for Voiced {
+    fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+        Ok(true)
+    }
+    fn play_voice(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+        Ok(true)
+    }
+}
+
+#[test]
+fn voice_play_scales_volume_reports_loading_and_forgets_the_pcm_length() {
+    let settings = AudioSettings {
+        voice: 128,
+        ..AudioSettings::default()
+    };
+    for (volume, effective) in [(0, 128), (u32::MAX, 128), (128, 64)] {
+        let script = program(&voice_code(2, 0, volume, 1), VOICE_TEXT);
+        let mut vm = Machine::new(&script).unwrap();
+        vm.state_mut().set_system_integer(4, 77).unwrap();
+        let mut host = AudioHost::new(settings);
+        let mut backend = RecordingAudio::default();
+        pending(&mut vm);
+        let pc = vm.pc();
+        assert!(host.try_handle(&mut vm, &mut backend).unwrap());
+        assert_eq!((vm.pc(), vm.stack().len_bytes()), (pc + 2, 0));
+        assert_eq!(
+            backend.requests(),
+            &[AudioRequest::PlayVoice {
+                channel: 2,
+                name: b"v.ogg".to_vec(),
+                volume: effective,
+                start: true
+            }]
+        );
+        assert_eq!(vm.state().system_integer(0), Some(0));
+        assert_eq!(vm.state().system_integer(4), None);
+        assert!((0..6).all(|i| host.channel(i).is_none()));
+    }
+    let script = program(&voice_code(0, 0, 0, 0), VOICE_TEXT);
+    let mut vm = Machine::new(&script).unwrap();
+    pending(&mut vm);
+    AudioHost::default()
+        .try_handle(&mut vm, &mut Voiced)
+        .unwrap();
+    assert_eq!(vm.state().system_integer(0), Some(1));
+}
+
+#[test]
+fn disabled_voice_reports_failure_without_a_request_or_name_check() {
+    let script = program(&voice_code(3, 6, 0, 1), VOICE_TEXT);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_system_integer(4, 77).unwrap();
+    let mut host = AudioHost::new(AudioSettings {
+        voice_enabled: false,
+        ..AudioSettings::default()
+    });
+    pending(&mut vm);
+    host.try_handle(&mut vm, &mut Broken).unwrap();
+    assert_eq!(vm.state().system_integer(0), Some(0));
+    assert_eq!(vm.state().system_integer(4), Some(77));
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
+fn voice_play_errors_keep_the_command_pending() {
+    let mut short = vec![];
+    push(&mut short, 0);
+    push(&mut short, 0);
+    short.extend(0x20a6u16.to_le_bytes());
+    for (code, backend_supported) in [
+        (voice_code(4, 0, 0, 1), true),
+        (voice_code(u32::MAX, 0, 0, 1), true),
+        (voice_code(0, 6, 0, 1), true),
+        (short, true),
+        (voice_code(1, 0, 0, 1), false),
+    ] {
+        let script = program(&code, VOICE_TEXT);
+        let mut vm = Machine::new(&script).unwrap();
+        vm.state_mut().set_system_integer(0, 9).unwrap();
+        pending(&mut vm);
+        let (pending_command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
+        let mut host = AudioHost::default();
+        let mut recording = RecordingAudio::default();
+        let result = if backend_supported {
+            host.try_handle(&mut vm, &mut recording)
+        } else {
+            host.try_handle(&mut vm, &mut Broken)
+        };
+        assert!(result.is_err());
+        assert_eq!(vm.pending_system(), pending_command);
+        assert_eq!(vm.stack().len_bytes(), bytes);
+        assert_eq!(vm.state().system_integer(0), Some(9));
+        assert!(recording.requests().is_empty());
+    }
+}
