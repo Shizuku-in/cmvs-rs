@@ -140,6 +140,7 @@ impl SceneHost {
             words: old_draw.words,
             opacity_track: None,
             animation: None,
+            world_motion: None,
         };
         draw.words[21] = 256;
         fit(&mut draw, old_image, &image);
@@ -149,6 +150,7 @@ impl SceneHost {
                 words: old_draw.words,
                 opacity_track: None,
                 animation: None,
+                world_motion: None,
             };
             common_draw.words[21] = 256;
             fit(&mut common_draw, old_image, &image);
@@ -170,6 +172,7 @@ impl SceneHost {
         let old_draw = previous.draw.as_mut().expect("validated draw");
         draw.opacity_track = old_draw.opacity_track.take();
         draw.animation = old_draw.animation.take();
+        draw.world_motion = old_draw.world_motion.take();
         let mut replacement = SceneObject {
             image: Some(image),
             draw: Some(draw),

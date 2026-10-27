@@ -718,3 +718,271 @@ fn opacity_commands_reject_bad_targets_and_keys() {
         assert_eq!(vm.state().system_integer(0), Some(9));
     }
 }
+
+fn motion_setup(code: &mut Vec<u8>, slot: u32, base: [f32; 3]) {
+    command(code, 0x2020, &[slot]);
+    command(code, 0x2040, &[slot]);
+    for (i, value) in base.into_iter().enumerate() {
+        command(code, 0x2072 + i as u16, &[slot, u32::MAX, value.to_bits()]);
+    }
+    command(code, 0x21f9, &[slot, u32::MAX]);
+}
+fn motion_xyz(scene: &SceneHost, slot: u8) -> [f32; 3] {
+    scene.object(slot).unwrap().draw.as_ref().unwrap().words[11..14]
+        .try_into()
+        .map(|v: [u32; 3]| v.map(f32::from_bits))
+        .unwrap()
+}
+
+#[test]
+fn world_motion_reset_query_stop_and_parent_child_isolation() {
+    let mut code = vec![];
+    motion_setup(&mut code, 255, [1.0, 2.0, 3.0]);
+    command(&mut code, 0x2022, &[255, 767]);
+    command(&mut code, 0x2050, &[255, 767]);
+    command(&mut code, 0x21fd, &[255, 767]);
+    command(&mut code, 0x21f9, &[255, 767]);
+    command(&mut code, 0x21fd, &[255, 767]);
+    command(
+        &mut code,
+        0x21fa,
+        &[
+            255,
+            767,
+            7,
+            u32::MAX,
+            0,
+            400,
+            0x7fc01234,
+            0x80000000,
+            0x7f800000,
+        ],
+    );
+    command(&mut code, 0x21fb, &[255, 767, 7]);
+    command(&mut code, 0x21fd, &[255, 767]);
+    command(&mut code, 0x21fc, &[255, 767]);
+    command(&mut code, 0x21f9, &[255, u32::MAX]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    run_all(&mut vm, &mut scene, 8);
+    vm.state_mut().set_system_integer(6, 123).unwrap();
+    run_all(&mut vm, &mut scene, 1);
+    assert_eq!(vm.state().system_integer(0), Some(u32::MAX));
+    run_all(&mut vm, &mut scene, 2);
+    assert_eq!(vm.state().system_integer(0), Some(u32::MAX - 1));
+    run_all(&mut vm, &mut scene, 3);
+    assert_eq!(vm.state().system_integer(0), Some(7));
+    let child = &scene.object(255).unwrap().children[&767];
+    assert_eq!(
+        &child.draw.as_ref().unwrap().words[11..14],
+        &[0, 0, 0],
+        "play does not snap"
+    );
+    run_all(&mut vm, &mut scene, 1);
+    let child = &scene.object(255).unwrap().children[&767];
+    assert_eq!(
+        &child.draw.as_ref().unwrap().words[11..14],
+        &[0x7fc01234, 0x80000000, 0x7f800000]
+    );
+    assert!(child.draw.as_ref().unwrap().world_motion.is_none());
+    assert_eq!(motion_xyz(&scene, 255), [1.0, 2.0, 3.0]);
+    run_all(&mut vm, &mut scene, 1);
+    let motion = scene
+        .object(255)
+        .unwrap()
+        .draw
+        .as_ref()
+        .unwrap()
+        .world_motion
+        .as_ref()
+        .unwrap();
+    assert!(motion.playback.is_none());
+    assert_eq!(motion.keys, [cmvs_rs::scene::MotionKey::default(); 8]);
+    assert_eq!(vm.state().system_integer(6), Some(123));
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
+fn world_motion_linear_relative_and_quadratic_ease_out_use_hundredths_and_clamped_time() {
+    for (mode, halfway) in [
+        (0, [10.0, 10.0, 0.0]),
+        (0x8000, [15.0, 20.0, 15.0]),
+        (1, [10.0, 5.0, -15.0]),
+    ] {
+        let mut code = vec![];
+        motion_setup(&mut code, 3, [10.0, 20.0, 30.0]);
+        command(
+            &mut code,
+            0x21fa,
+            &[
+                3,
+                u32::MAX,
+                0,
+                u32::MAX,
+                mode,
+                400,
+                10f32.to_bits(),
+                0,
+                (-30f32).to_bits(),
+            ],
+        );
+        command(&mut code, 0x21fb, &[3, u32::MAX, 0]);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        let mut scene = SceneHost::default();
+        run_all(&mut vm, &mut scene, 8);
+        assert_eq!(motion_xyz(&scene, 3), [10.0, 20.0, 30.0]);
+        scene.advance_frame(900);
+        assert_eq!(motion_xyz(&scene, 3), halfway, "mode={mode:x}");
+        scene.advance_frame(200);
+        // Even relative interpolation snaps to the stored target, not base + target.
+        assert_eq!(motion_xyz(&scene, 3), [10.0, 0.0, -30.0]);
+        assert!(
+            scene
+                .object(3)
+                .unwrap()
+                .draw
+                .as_ref()
+                .unwrap()
+                .world_motion
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn world_motion_crossing_a_key_snaps_until_the_next_frame_and_disposes_on_minus_two() {
+    let mut code = vec![];
+    motion_setup(&mut code, 1, [0.0; 3]);
+    for (index, next_key, target) in [(0, 1, 10f32), (1, (-2i32) as u32, 20f32)] {
+        command(
+            &mut code,
+            0x21fa,
+            &[
+                1,
+                u32::MAX,
+                index,
+                next_key,
+                0,
+                100,
+                target.to_bits(),
+                target.to_bits(),
+                target.to_bits(),
+            ],
+        );
+    }
+    command(&mut code, 0x21fb, &[1, u32::MAX, 0]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    run_all(&mut vm, &mut scene, 9);
+    scene.advance_frame(150);
+    assert_eq!(motion_xyz(&scene, 1), [10.0; 3]);
+    let motion = scene
+        .object(1)
+        .unwrap()
+        .draw
+        .as_ref()
+        .unwrap()
+        .world_motion
+        .as_ref()
+        .unwrap();
+    assert_eq!(motion.playback.as_ref().unwrap().current, 1);
+    assert_eq!(motion.playback.as_ref().unwrap().elapsed, 50);
+    scene.advance_frame(1);
+    assert_eq!(motion_xyz(&scene, 1), [15.1; 3]);
+    scene.advance_frame(49);
+    assert!(scene.object(1).is_none());
+}
+
+#[test]
+fn world_motion_without_a_track_is_a_noop_and_reset_discards_a_playing_track() {
+    let mut code = vec![];
+    command(&mut code, 0x2020, &[1]);
+    command(&mut code, 0x2040, &[1]);
+    command(&mut code, 0x21fa, &[1, u32::MAX, 99, 99, 99, 100, 0, 0, 0]);
+    command(&mut code, 0x21fb, &[1, u32::MAX, 99]);
+    command(&mut code, 0x21fc, &[1, u32::MAX]);
+    command(&mut code, 0x21f9, &[1, u32::MAX]);
+    command(
+        &mut code,
+        0x21fa,
+        &[1, u32::MAX, 0, u32::MAX, 0, 100, 100f32.to_bits(), 0, 0],
+    );
+    command(&mut code, 0x21fb, &[1, u32::MAX, 0]);
+    command(&mut code, 0x21f9, &[1, u32::MAX]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    run_all(&mut vm, &mut scene, 5);
+    assert!(
+        scene
+            .object(1)
+            .unwrap()
+            .draw
+            .as_ref()
+            .unwrap()
+            .world_motion
+            .is_none()
+    );
+    run_all(&mut vm, &mut scene, 3);
+    scene.advance_frame(50);
+    assert_eq!(motion_xyz(&scene, 1), [50.0, 0.0, 0.0]);
+    run_all(&mut vm, &mut scene, 1);
+    scene.advance_frame(100);
+    assert_eq!(motion_xyz(&scene, 1), [50.0, 0.0, 0.0]);
+    assert!(
+        scene
+            .object(1)
+            .unwrap()
+            .draw
+            .as_ref()
+            .unwrap()
+            .world_motion
+            .as_ref()
+            .unwrap()
+            .playback
+            .is_none()
+    );
+}
+
+#[test]
+fn world_motion_invalid_targets_indices_modes_and_missing_args_are_transactional() {
+    for (op, args) in [
+        (0x21f9, vec![256, u32::MAX]),
+        (0x21f9, vec![u32::MAX, u32::MAX]),
+        (0x21f9, vec![2, u32::MAX]),
+        (0x21f9, vec![1, 768]),
+        (0x21f9, vec![1, 0]),
+        (0x21fa, vec![1, u32::MAX, 8, 0, 0, 0, 0, 0, 0]),
+        (0x21fa, vec![1, u32::MAX, 0, 8, 0, 0, 0, 0, 0]),
+        (0x21fa, vec![1, u32::MAX, 0, 0, 0x8001, 0, 0, 0, 0]),
+        (0x21fa, vec![1, u32::MAX, 0, 0, 16, 0, 0, 0, 0]),
+        (0x21fb, vec![1, u32::MAX, u32::MAX]),
+        (0x21fc, vec![1]),
+        (0x21fd, vec![]),
+    ] {
+        let mut code = vec![];
+        motion_setup(&mut code, 1, [1.0, 2.0, 3.0]);
+        command(&mut code, op, &args);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        let mut scene = SceneHost::default();
+        run_all(&mut vm, &mut scene, 6);
+        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        let before = scene.object(1).unwrap().clone();
+        vm.state_mut().set_system_integer(0, 123).unwrap();
+        for _ in 0..2 {
+            assert!(scene.try_handle(&mut vm).is_err(), "{op:x} {args:?}");
+            assert_eq!(scene.object(1), Some(&before));
+            assert_eq!(vm.pending_system(), Some((code.len() - 2, op - 0x2000)));
+            assert_eq!(vm.pc(), code.len() - 2);
+            assert_eq!(vm.stack().len_bytes(), args.len() * 4);
+            for (i, arg) in args.iter().enumerate() {
+                assert_eq!(vm.stack().peek_u32((i + 1) * 4).unwrap(), *arg);
+            }
+            assert_eq!(vm.state().system_integer(0), Some(123));
+        }
+    }
+}

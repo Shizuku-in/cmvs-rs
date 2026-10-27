@@ -119,13 +119,14 @@ fn replacement_setup(code: &mut Vec<u8>, duration: u32, manager: u32) {
     scene_command(code, 0x2044, &[20, u32::MAX, 0, 0, 2, 1]);
     scene_command(code, 0x2045, &[20, u32::MAX, 10, 20]);
     scene_command(code, 0x21ea, &[20, u32::MAX, 200]);
+    scene_command(code, 0x21f9, &[20, u32::MAX]);
     scene_command(code, 0x2022, &[20, 0]);
     scene_command(code, 0x2050, &[20, 0]);
     scene_command(code, 0x22c4, &[20, 6, duration, manager]);
 }
 
 fn prepare_replacement<'a>(vm: &mut Machine<'a>, scene: &mut SceneHost, files: &mut Files) {
-    for _ in 0..8 {
+    for _ in 0..9 {
         let command = run_to_system(vm);
         if command == 0x30 {
             assert!(scene.try_handle_image(vm, files).unwrap());
@@ -162,8 +163,10 @@ fn replacement_retains_old_children_moves_effects_and_finishes_on_frame_time() {
     let change = object.change.as_ref().unwrap();
     assert_eq!((change.duration, change.elapsed), (500, 0));
     previous.draw.as_mut().unwrap().opacity_track = None;
+    previous.draw.as_mut().unwrap().world_motion = None;
     assert_eq!(&*change.previous, &previous);
     assert!(object.draw.as_ref().unwrap().opacity_track.is_some());
+    assert!(object.draw.as_ref().unwrap().world_motion.is_some());
     assert_eq!(object.draw.as_ref().unwrap().words[21], 0);
     assert!(object.children.is_empty());
     assert_eq!(object.flags, 0x7fffffff);
@@ -222,7 +225,9 @@ fn immediate_and_repeated_replacements_drop_retained_objects_without_cloning_eff
         assert!(previous.children.is_empty());
         assert_eq!(previous.draw.as_ref().unwrap().words[21], 256);
         assert!(previous.draw.as_ref().unwrap().opacity_track.is_none());
+        assert!(previous.draw.as_ref().unwrap().world_motion.is_none());
         assert!(object.draw.as_ref().unwrap().opacity_track.is_some());
+        assert!(object.draw.as_ref().unwrap().world_motion.is_some());
         assert_eq!(vm.stack().len_bytes(), 0);
     }
 }
