@@ -2628,3 +2628,74 @@ fn window_image_release_rejects_missing_slots_and_short_stacks_without_mutation(
         assert_eq!(messages.text(0), Some(&text));
     }
 }
+
+#[test]
+fn window_object_presence_ignores_images_visibility_and_draw_state_and_tracks_children() {
+    let mut code = vec![];
+    create(&mut code, 0, 0, [10, 20, 100, 40]);
+    code.extend(0x440u16.to_le_bytes());
+    code.extend(4u16.to_le_bytes());
+    code.extend(0x12345678u32.to_le_bytes());
+    let first = [
+        (u32::MAX, 1),
+        (0x80000000, 1),
+        (64, 0),
+        (768, 0),
+        (65536, 0),
+    ];
+    for (child, _) in first {
+        call(&mut code, 0x217b, &[child, 0]);
+    }
+    call(&mut code, 0x2178, &[64, 0]);
+    call(&mut code, 0x217b, &[64, 0]);
+    call(&mut code, 0x2179, &[64, 0]);
+    call(&mut code, 0x217b, &[64, 0]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 1);
+    vm.state_mut().set_system_integer(1, 99).unwrap();
+    let check = |vm: &mut Machine<'_>, messages: &mut MessageHost, result| {
+        let window = messages.window(0).unwrap().clone();
+        let text = messages.text(0).unwrap().clone();
+        pending(vm);
+        let pc = vm.pc();
+        assert!(messages.try_handle(vm).unwrap());
+        assert_eq!(vm.pc(), pc + 2);
+        assert_eq!(vm.state().system_integer(0), Some(result));
+        assert_eq!(vm.state().system_integer(1), Some(99));
+        assert_eq!(vm.stack().len_bytes(), 4);
+        assert_eq!(vm.stack().peek_u32(4).unwrap(), 0x12345678);
+        assert_eq!(messages.window(0), Some(&window));
+        assert_eq!(messages.text(0), Some(&text));
+    };
+    for (_, result) in first {
+        check(&mut vm, &mut messages, result);
+    }
+    run(&mut vm, &mut messages, 1);
+    assert!(!messages.window(0).unwrap().object.children[&64].shown);
+    check(&mut vm, &mut messages, 1);
+    run(&mut vm, &mut messages, 1);
+    check(&mut vm, &mut messages, 0);
+}
+#[test]
+fn window_object_query_rejects_missing_windows_and_short_arguments_without_mutation() {
+    for args in [vec![], vec![0], vec![0, 1], vec![0, 8], vec![0, u32::MAX]] {
+        let mut code = vec![];
+        create(&mut code, 0, 0, [10, 20, 100, 40]);
+        call(&mut code, 0x217b, &args);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 1);
+        vm.state_mut().set_system_integer(0, 17).unwrap();
+        let before = messages.window(0).unwrap().clone();
+        pending(&mut vm);
+        let pc = vm.pc();
+        assert!(messages.try_handle(&mut vm).is_err());
+        assert_eq!(vm.pending_system(), Some((pc, 0x17b)));
+        assert_eq!(vm.stack().len_bytes(), args.len() * 4);
+        assert_eq!(vm.state().system_integer(0), Some(17));
+        assert_eq!(messages.window(0), Some(&before));
+    }
+}

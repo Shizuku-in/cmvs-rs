@@ -7,7 +7,7 @@
 //! object's pointer. 0x215d creates windows and 0x2141 destroys them. 0x2140 (0x140075a50)
 //! differs from 0x215d only in taking the logical size from the device, which is not
 //! modeled, so it stays unhandled. 0x215b and 0x2142..0x2149 set window and text object
-//! fields; 0x2170/0x2171, 0x2178, 0x2179, 0x217a, 0x217f and 0x2180..0x2185 drive the window's own
+//! fields; 0x2170/0x2171, 0x2178..0x217b, 0x217f and 0x2180..0x2185 drive the window's own
 //! scene object; 0x2190..0x2192 fill its 32 button records and 0x2150 moves the window;
 //! 0x21cf/0x21d0 build frame animations. 0x2114..0x2117 and 0x211e address text objects
 //! directly. Glyphs, fonts and drawing are not modeled.
@@ -246,6 +246,7 @@ impl MessageHost {
                 self.set(vm, pc, command).map(|()| true)
             }
             Some((pc, command @ (0x178 | 0x17f))) => self.object(vm, pc, command).map(|()| true),
+            Some((pc, 0x17b)) => self.object_presence(vm, pc).map(|()| true),
             Some((pc, 0x171)) => self.release_image(vm, pc).map(|()| true),
             Some((pc, 0x179)) => self.destroy_child(vm, pc).map(|()| true),
             Some((pc, command @ (0x17a | 0x17c | 0x180 | 0x182..=0x186))) => {
@@ -955,6 +956,27 @@ impl MessageHost {
         }
         Ok(())
     }
+    /// 0x217b / 0x1400772d0 -> 0x14005d280: tests the window's own object
+    /// (negative child) or a child pointer, regardless of image, visibility or draw state.
+    /// Existing window with missing/out-of-range child returns 0, not an error.
+    fn object_presence(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
+        let slot = window_slot(vm, pc, 0x217b)?;
+        let child = vm.stack().peek_u32(8).map_err(|e| error(pc, 0x217b, e.0))? as i32;
+        let window = self.windows[slot].as_ref().ok_or_else(|| {
+            error(
+                pc,
+                0x217b,
+                "message window slot without a window sets an unmodeled flag",
+            )
+        })?;
+        let exists = window_target(&window.object, child).is_some();
+        vm.complete_system(SystemResult(0x4008))?;
+        vm.state_mut()
+            .set_system_integer(0, u32::from(exists))
+            .expect("slot 0 exists");
+        Ok(())
+    }
+
     /// 0x2171 / 0x140076fd0 -> 0x14003aa30: releases only +6176 on the
     /// window's +2520 object. Children, draw state, text and visibility are retained.
     fn release_image(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
