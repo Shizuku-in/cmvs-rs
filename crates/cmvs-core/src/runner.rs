@@ -418,6 +418,10 @@ impl<'a> Startup<'a> {
                 &mut self.machine,
                 &mut self.images.with_paths(self.bootstrap.paths()),
             )?
+            || self.scene.try_change_image(
+                &mut self.machine,
+                &mut self.images.with_paths(self.bootstrap.paths()),
+            )?
             || self.scene.try_handle_mask(
                 &mut self.machine,
                 &mut self.images.with_paths(self.bootstrap.paths()),

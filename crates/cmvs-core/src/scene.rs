@@ -9,8 +9,10 @@ use crate::{
     vm::SystemResult,
 };
 use std::{collections::BTreeMap, error::Error};
+mod change;
 mod mask;
 mod quake;
+pub use change::ImageChange;
 pub use mask::MaskTransition;
 pub use quake::Quake;
 
@@ -61,6 +63,8 @@ pub struct SceneObject {
     /// +14500 (constructor 0): set by 0x14003d0c0 when an effect ends with -2; parents then
     /// destroy such children.
     pub dispose: bool,
+    /// +14504/+14512/+14520: software image replacement and retained objects.
+    pub change: Option<Box<ImageChange>>,
 }
 impl SceneObject {
     /// 0x14003d0c0 limited to the opacity (+128) and frame animation (+136) channels of
@@ -89,6 +93,7 @@ impl SceneObject {
             }
             self.children.retain(|_, child| !child.dispose);
         }
+        self.advance_change(delta);
     }
 }
 impl Default for SceneObject {
@@ -101,6 +106,7 @@ impl Default for SceneObject {
             shown: true,
             logical_size: [0, 0],
             dispose: false,
+            change: None,
         }
     }
 }

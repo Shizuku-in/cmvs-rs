@@ -168,6 +168,11 @@ pub fn render_with_objects(
         let Some(draw) = object.draw.as_ref().filter(|_| object.shown) else {
             continue;
         };
+        if object.change.is_some() {
+            return Err(FormatError(
+                "image replacement transition rendering is not implemented",
+            ));
+        }
         let d = &draw.words;
         check(d)?;
         let position = [d[8] as i32, d[9] as i32].map(i64::from);
@@ -193,6 +198,11 @@ pub fn render_with_objects(
         // Children are visited only once 0x2022 has set the parent's bit 31.
         if object.flags & 0x8000_0000 != 0 {
             for child in object.children.values().filter(|child| child.shown) {
+                if child.change.is_some() {
+                    return Err(FormatError(
+                        "image replacement transition rendering is not implemented",
+                    ));
+                }
                 let words = &child
                     .draw
                     .as_ref()

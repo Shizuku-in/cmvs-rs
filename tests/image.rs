@@ -113,6 +113,180 @@ impl ImageSource for Files {
     }
 }
 
+fn replacement_setup(code: &mut Vec<u8>, duration: u32, manager: u32) {
+    code.extend(loads(20, &[0]));
+    scene_command(code, 0x2040, &[20]);
+    scene_command(code, 0x2044, &[20, u32::MAX, 0, 0, 2, 1]);
+    scene_command(code, 0x2045, &[20, u32::MAX, 10, 20]);
+    scene_command(code, 0x21ea, &[20, u32::MAX, 200]);
+    scene_command(code, 0x2022, &[20, 0]);
+    scene_command(code, 0x2050, &[20, 0]);
+    scene_command(code, 0x22c4, &[20, 6, duration, manager]);
+}
+
+fn prepare_replacement<'a>(vm: &mut Machine<'a>, scene: &mut SceneHost, files: &mut Files) {
+    for _ in 0..8 {
+        let command = run_to_system(vm);
+        if command == 0x30 {
+            assert!(scene.try_handle_image(vm, files).unwrap());
+        } else {
+            assert!(scene.try_handle(vm).unwrap());
+        }
+    }
+    assert_eq!(run_to_system(vm), 0x2c4);
+}
+
+#[test]
+fn replacement_retains_old_children_moves_effects_and_finishes_on_frame_time() {
+    let mut code = vec![];
+    replacement_setup(&mut code, 500, 0);
+    scene_command(&mut code, 0x2045, &[20, u32::MAX, 30, 40]);
+    let program = script(&code, b"a.pb3\0b.pb3\0");
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    let mut files = Files(BTreeMap::from([
+        (b"a.pb3".to_vec(), opaque()),
+        (
+            b"b.pb3".to_vec(),
+            pb3(1, &[[9, 10], [11, 12], [13, 14], [255, 128]]),
+        ),
+    ]));
+    prepare_replacement(&mut vm, &mut scene, &mut files);
+    let mut previous = scene.object(20).unwrap().clone();
+    vm.state_mut().set_system_integer(1, 789).unwrap();
+    assert!(scene.try_change_image(&mut vm, &mut files).unwrap());
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(1));
+    assert_eq!(vm.state().system_integer(1), Some(789));
+    let object = scene.object(20).unwrap();
+    let change = object.change.as_ref().unwrap();
+    assert_eq!((change.duration, change.elapsed), (500, 0));
+    previous.draw.as_mut().unwrap().opacity_track = None;
+    assert_eq!(&*change.previous, &previous);
+    assert!(object.draw.as_ref().unwrap().opacity_track.is_some());
+    assert_eq!(object.draw.as_ref().unwrap().words[21], 0);
+    assert!(object.children.is_empty());
+    assert_eq!(object.flags, 0x7fffffff);
+    assert_eq!(
+        change.common.image.as_ref().unwrap().pixels.pixels(),
+        &[13, 11, 9, 255, 0, 0, 0, 0]
+    );
+    assert!(
+        cmvs_rs::scene_render::render(&scene, 32, 32)
+            .unwrap_err()
+            .0
+            .contains("replacement")
+    );
+    assert_eq!(run_to_system(&mut vm), 0x45);
+    scene.try_handle(&mut vm).unwrap();
+    scene.advance_frame(250);
+    let object = scene.object(20).unwrap();
+    let change = object.change.as_ref().unwrap();
+    for retained in [&change.previous, &change.common] {
+        assert_eq!(&retained.draw.as_ref().unwrap().words[8..10], &[30, 40]);
+    }
+    assert_eq!(object.draw.as_ref().unwrap().words[21], 128);
+    assert_eq!(change.previous.draw.as_ref().unwrap().words[21], 128);
+    scene.advance_frame(249);
+    assert!(scene.object(20).unwrap().change.is_some());
+    scene.advance_frame(1);
+    let object = scene.object(20).unwrap();
+    assert!(object.change.is_none());
+    assert_eq!(object.draw.as_ref().unwrap().words[21], 256);
+    assert_eq!(object.image.as_ref().unwrap().name, b"b.pb3");
+    assert!(cmvs_rs::scene_render::render(&scene, 32, 32).is_ok());
+}
+
+#[test]
+fn immediate_and_repeated_replacements_drop_retained_objects_without_cloning_effects() {
+    for duration in [0, 500] {
+        let mut code = vec![];
+        replacement_setup(&mut code, duration, 0);
+        scene_command(&mut code, 0x22c4, &[20, 0, 500, 0]);
+        let program = script(&code, b"a.pb3\0b.pb3\0");
+        let mut vm = Machine::new(&program).unwrap();
+        let mut scene = SceneHost::default();
+        let mut files = Files(BTreeMap::from([
+            (b"a.pb3".to_vec(), opaque()),
+            (b"b.pb3".to_vec(), opaque()),
+        ]));
+        prepare_replacement(&mut vm, &mut scene, &mut files);
+        scene.try_change_image(&mut vm, &mut files).unwrap();
+        assert_eq!(scene.object(20).unwrap().change.is_some(), duration != 0);
+        scene.advance_frame(100);
+        assert_eq!(run_to_system(&mut vm), 0x2c4);
+        scene.try_change_image(&mut vm, &mut files).unwrap();
+        let object = scene.object(20).unwrap();
+        let previous = &object.change.as_ref().unwrap().previous;
+        assert!(previous.change.is_none());
+        assert!(previous.children.is_empty());
+        assert_eq!(previous.draw.as_ref().unwrap().words[21], 256);
+        assert!(previous.draw.as_ref().unwrap().opacity_track.is_none());
+        assert!(object.draw.as_ref().unwrap().opacity_track.is_some());
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
+}
+
+#[test]
+fn replacement_failures_preserve_pending_command_scene_stack_and_results() {
+    for manager in [0, 1] {
+        for bytes in [None, Some(b"unknown image codec".to_vec())] {
+            let mut code = vec![];
+            replacement_setup(&mut code, 500, manager);
+            let program = script(&code, b"a.pb3\0b.pb3\0");
+            let mut vm = Machine::new(&program).unwrap();
+            let mut scene = SceneHost::default();
+            let mut files = Files(BTreeMap::from([(b"a.pb3".to_vec(), opaque())]));
+            prepare_replacement(&mut vm, &mut scene, &mut files);
+            if let Some(bytes) = bytes {
+                files.0.insert(b"b.pb3".to_vec(), bytes);
+            }
+            let old = scene.object(20).unwrap().clone();
+            let pending = vm.pending_system();
+            vm.state_mut().set_system_integer(0, 123).unwrap();
+            for _ in 0..2 {
+                assert!(scene.try_change_image(&mut vm, &mut files).is_err());
+                assert_eq!(vm.pending_system(), pending);
+                assert_eq!(vm.stack().len_bytes(), 16);
+                assert_eq!(vm.state().system_integer(0), Some(123));
+                assert_eq!(scene.object(20), Some(&old));
+            }
+        }
+    }
+    for args in [vec![256, 0, 0, 0], vec![u32::MAX, 0, 0, 0], vec![0, 0, 0]] {
+        let mut code = vec![];
+        scene_command(&mut code, 0x22c4, &args);
+        let program = script(&code, b"a.pb3\0");
+        let mut vm = Machine::new(&program).unwrap();
+        run_to_system(&mut vm);
+        assert!(
+            SceneHost::default()
+                .try_change_image(&mut vm, &mut Files::default())
+                .is_err()
+        );
+        assert_eq!(vm.stack().len_bytes(), args.len() * 4);
+        assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x2c4)));
+    }
+}
+
+#[test]
+fn missing_object_returns_false_without_reading_a_replacement() {
+    let mut code = vec![];
+    scene_command(&mut code, 0x22c4, &[255, 0, 500, 1]);
+    let program = script(&code, b"a.pb3\0");
+    let mut vm = Machine::new(&program).unwrap();
+    run_to_system(&mut vm);
+    let mut scene = SceneHost::default();
+    assert!(
+        scene
+            .try_change_image(&mut vm, &mut Files::default())
+            .unwrap()
+    );
+    assert_eq!((vm.pc(), vm.stack().len_bytes()), (code.len(), 0));
+    assert_eq!(vm.state().system_integer(0), Some(0));
+    assert!(scene.objects().is_empty());
+}
+
 #[test]
 fn decode_dispatches_on_magic_and_pb3_type_like_0x140036700() {
     let decoded = decode(&opaque()).unwrap().unwrap();
