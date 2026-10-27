@@ -209,3 +209,5 @@ BGM 与 SE 共用 `AudioHost`/`AudioBackend`：`BgmState` 保存 +4464 对象的
 0x20a8 已实现为语音停止并释放：脚本 0..3 映射设备 5..8，不读取音频开关、不影响 SE/BGM 状态；记录与原生后端均接入独立 stop_voice 契约。鼠标/Enter 重放推进到 sn1001.ps3 / PC=0xf950 / 0x21a4、SP=156（鼠标第 40625 次 tick、键盘第 40665 次 tick）。语音加载/播放仍未实现，本轮未新增原生窗口或真实语音播放检查。详见 vm-semantics.md。
 
 输入族 0x21a0–0x21bd 改为 `input::ACTION_COMMANDS` 表驱动：偶数查询动作 0–14 的松开/按住，奇数消费松开/按下；动作 7/8 没有消费命令，默认分支的 0x21a5/0x21a7/0x21be/0x21bf 保持未处理。鼠标/Enter 重放停于 sn1001.ps3 / PC=0x12714 / 0x2179、SP=172（鼠标第 40674 次 tick、键盘第 40714 次 tick）。未新增原生窗口实测，详见 vm-semantics.md。
+
+`MessageHost` 处理 0x2179：从窗口 +2520 对象的子对象表移除 0..767 的现存子对象，缺失/越界为无操作；负子号需要“窗口对象为空”的状态，`MessageWindow::object` 不表示它，因此显式报错。场景槽的同构命令 0x2023 未实现。鼠标/Enter 重放停于 sn1001.ps3 / PC=0xfad0 / 0x2340、SP=160（鼠标第 42402 次 tick、键盘第 42442 次 tick），详见 vm-semantics.md。

@@ -7,10 +7,10 @@
 //! object's pointer. 0x215d creates windows and 0x2141 destroys them. 0x2140 (0x140075a50)
 //! differs from 0x215d only in taking the logical size from the device, which is not
 //! modeled, so it stays unhandled. 0x215b and 0x2142..0x2149 set window and text object
-//! fields; 0x2170, 0x2178, 0x217a, 0x217f and 0x2180..0x2185 drive the window's own scene object;
-//! 0x2190..0x2192 fill its 32 button records and 0x2150 moves the window; 0x21cf/0x21d0 build
-//! frame animations. 0x2114..0x2117 and 0x211e address text objects directly. Glyphs, fonts and
-//! drawing are not modeled.
+//! fields; 0x2170, 0x2178, 0x2179, 0x217a, 0x217f and 0x2180..0x2185 drive the window's own
+//! scene object; 0x2190..0x2192 fill its 32 button records and 0x2150 moves the window;
+//! 0x21cf/0x21d0 build frame animations. 0x2114..0x2117 and 0x211e address text objects
+//! directly. Glyphs, fonts and drawing are not modeled.
 use crate::{
     bytecode::DecodeError,
     evaluate::error,
@@ -246,6 +246,7 @@ impl MessageHost {
                 self.set(vm, pc, command).map(|()| true)
             }
             Some((pc, command @ (0x178 | 0x17f))) => self.object(vm, pc, command).map(|()| true),
+            Some((pc, 0x179)) => self.destroy_child(vm, pc).map(|()| true),
             Some((pc, command @ (0x17a | 0x17c | 0x180 | 0x182..=0x186))) => {
                 self.draw(vm, pc, command).map(|()| true)
             }
@@ -918,6 +919,38 @@ impl MessageHost {
             (_, Some(id)) => {
                 object.children.get_mut(&id).expect("checked above").flags &= !0x100;
             }
+        }
+        Ok(())
+    }
+    /// 0x2179 / 0x1400771e0 (0x14005d350): SP-4 window slot, SP-8 child (signed); pops 8
+    /// bytes. A child below 768 is destroyed by 0x14003a7d0 (0x14003c590 also releases its own
+    /// children, images and draw state); a missing or larger child is a no-op without a flag.
+    /// A negative child frees the +2520 object and leaves its pointer null, which
+    /// `MessageWindow` cannot represent, so it stays an error. Missing windows only set
+    /// +12056 bit 0x10000.
+    fn destroy_child(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
+        let slot = window_slot(vm, pc, 0x2179)?;
+        let child = vm.stack().peek_u32(8).map_err(|e| error(pc, 0x2179, e.0))? as i32;
+        if self.windows[slot].is_none() {
+            return Err(error(
+                pc,
+                0x2179,
+                "message window slot without a window sets an unmodeled flag",
+            ));
+        }
+        if child < 0 {
+            return Err(error(
+                pc,
+                0x2179,
+                "freeing the window's own object leaves an unmodeled null object",
+            ));
+        }
+        vm.complete_system(SystemResult(0x4008))?;
+        let object = &mut self.windows[slot].as_mut().expect("checked above").object;
+        if let Ok(id) = u16::try_from(child)
+            && id < 768
+        {
+            object.children.remove(&id);
         }
         Ok(())
     }

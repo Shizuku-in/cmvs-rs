@@ -382,6 +382,79 @@ fn window_object_commands_need_a_window_and_valid_children() {
 }
 
 #[test]
+fn window_child_destruction_removes_existing_children_and_ignores_others() {
+    let mut code = vec![];
+    create(&mut code, 7, 10, [0, 0, 1280, 54]);
+    call(&mut code, 0x2178, &[5, 7]);
+    call(&mut code, 0x2178, &[6, 7]);
+    call(&mut code, 0x2180, &[5, 7]);
+    for child in [5, 5, 768, 0x7fff_ffff] {
+        call(&mut code, 0x2179, &[child, 7]);
+    }
+    call(&mut code, 0x2178, &[5, 7]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_system_integer(0, 9).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 4);
+    let before = messages.window(7).unwrap().object.clone();
+    assert!(before.children[&5].draw.is_some());
+    run(&mut vm, &mut messages, 1);
+    let object = &messages.window(7).unwrap().object;
+    assert_eq!(object.children.keys().copied().collect::<Vec<_>>(), [6]);
+    assert_eq!(object.children[&6], before.children[&6]);
+    assert_eq!(
+        (object.flags, object.draw.clone()),
+        (before.flags, before.draw)
+    );
+    let after = object.clone();
+    // Missing children and children beyond the 768-entry table are quiet no-ops.
+    run(&mut vm, &mut messages, 3);
+    assert_eq!(messages.window(7).unwrap().object, after);
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(9));
+    // A rebuilt child starts fresh rather than reusing the destroyed state.
+    run(&mut vm, &mut messages, 1);
+    assert_eq!(messages.window(7).unwrap().object.children[&5].draw, None);
+}
+
+#[test]
+fn window_child_destruction_rejects_the_window_object_missing_windows_and_short_stacks() {
+    let mut cases = vec![];
+    for words in [
+        [u32::MAX, 0],
+        [0x8000_0000, 0],
+        [5, 1],
+        [5, 8],
+        [5, u32::MAX],
+    ] {
+        let mut code = vec![];
+        create(&mut code, 0, 0, [0, 0, 10, 10]);
+        call(&mut code, 0x2178, &[5, 0]);
+        call(&mut code, 0x2179, &words);
+        cases.push(code);
+    }
+    let mut short = vec![];
+    create(&mut short, 0, 0, [0, 0, 10, 10]);
+    call(&mut short, 0x2178, &[5, 0]);
+    call(&mut short, 0x2179, &[0]);
+    cases.push(short);
+    for code in cases {
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 2);
+        let before = messages.window(0).unwrap().object.clone();
+        pending(&mut vm);
+        let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
+        assert!(messages.try_handle(&mut vm).is_err());
+        assert_eq!(vm.pending_system(), command);
+        assert_eq!(vm.stack().len_bytes(), bytes);
+        assert_eq!(messages.window(0).unwrap().object, before);
+    }
+}
+
+#[test]
 fn window_draw_commands_reuse_scene_draw_fields() {
     let mut code = vec![];
     create(&mut code, 7, 10, [0, 0, 1280, 54]);
