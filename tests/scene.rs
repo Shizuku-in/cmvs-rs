@@ -191,6 +191,84 @@ fn draw_initialization_properties_and_reinitialization_preserve_other_objects() 
 }
 
 #[test]
+fn coordinate_mode_two_preserves_parent_child_properties_and_system_results() {
+    let mut code = vec![];
+    for (op, args) in [
+        (0x2020, vec![255]),
+        (0x2040, vec![255]),
+        (0x2045, vec![255, u32::MAX, 100, 200]),
+        (0x21ea, vec![255, u32::MAX, 23]),
+        (0x2022, vec![255, 767]),
+        (0x2050, vec![255, 767]),
+        (0x2048, vec![255, 767, 42]),
+        (0x2042, vec![255, 0x8000_0000]), // Any signed negative child selects the parent.
+        (0x2042, vec![255, 767]),
+        (0x2042, vec![255, 767]), // Idempotent.
+    ] {
+        command(&mut code, op, &args);
+    }
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    for _ in 0..7 {
+        assert!(next(&mut vm, &mut scene).unwrap());
+    }
+    let mut expected = scene.object(255).unwrap().clone();
+    vm.state_mut().set_system_integer(0, 0xdead_beef).unwrap();
+    assert!(next(&mut vm, &mut scene).unwrap());
+    expected.draw.as_mut().unwrap().words[0] = 2;
+    assert_eq!(scene.object(255), Some(&expected));
+    expected
+        .children
+        .get_mut(&767)
+        .unwrap()
+        .draw
+        .as_mut()
+        .unwrap()
+        .words[0] = 2;
+    for _ in 0..2 {
+        assert!(next(&mut vm, &mut scene).unwrap());
+        assert_eq!(scene.object(255), Some(&expected));
+    }
+    assert_eq!(vm.pc(), code.len());
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(0xdead_beef));
+    // The mode is retained, but its presentation is not yet modeled.
+    assert!(cmvs_rs::scene_render::render(&scene, 1, 1).is_err());
+}
+
+#[test]
+fn coordinate_mode_two_errors_preserve_pending_command_stack_and_objects() {
+    for args in [
+        vec![256, u32::MAX],
+        vec![u32::MAX, u32::MAX],
+        vec![2, u32::MAX], // Missing parent.
+        vec![1, 768],
+        vec![1, 0],        // Missing child.
+        vec![1, 767],      // Child without a draw state.
+        vec![1, u32::MAX], // Parent without a draw state.
+        vec![1],           // Missing argument.
+    ] {
+        let mut code = vec![];
+        command(&mut code, 0x2020, &[1]);
+        command(&mut code, 0x2022, &[1, 767]);
+        command(&mut code, 0x2042, &args);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        let mut scene = SceneHost::default();
+        for _ in 0..2 {
+            assert!(next(&mut vm, &mut scene).unwrap());
+        }
+        let before = scene.objects().clone();
+        assert!(next(&mut vm, &mut scene).is_err());
+        assert_eq!(scene.objects(), &before);
+        assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x42)));
+        assert_eq!(vm.pc(), code.len() - 2);
+        assert_eq!(vm.stack().len_bytes(), args.len() * 4);
+    }
+}
+
+#[test]
 fn children_rebuild_and_inherit_constructor_flags_at_creation_time() {
     let mut code = vec![];
     for (op, args) in [

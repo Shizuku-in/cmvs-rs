@@ -359,7 +359,7 @@ impl SceneHost {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(false);
         };
-        if matches!(command, 0x22 | 0x40 | 0x50 | 0x44..=0x48 | 0x4b) {
+        if matches!(command, 0x22 | 0x40 | 0x42 | 0x50 | 0x44..=0x48 | 0x4b) {
             return self.handle_object(vm, pc, command);
         }
         if matches!(command, 0x27 | 0x28) {
@@ -624,7 +624,7 @@ impl SceneHost {
         let fail = |why| error(pc, command + 0x2000, why);
         let count = match command {
             0x40 => 1,
-            0x22 | 0x50 => 2,
+            0x22 | 0x42 | 0x50 => 2,
             0x44 => 6,
             0x45 | 0x46 => 4,
             0x47 | 0x48 | 0x4b => 3,
@@ -639,17 +639,18 @@ impl SceneHost {
             .objects
             .get(&slot)
             .ok_or_else(|| fail("object slot does not exist"))?;
-        let child =
-            if command == 0x40 || (matches!(command, 0x44..=0x48 | 0x4b) && (args[1] as i32) < 0) {
-                None
-            } else {
-                Some(
-                    u16::try_from(args[1])
-                        .ok()
-                        .filter(|v| *v < 768)
-                        .ok_or_else(|| fail("child slot outside 0..767"))?,
-                )
-            };
+        let child = if command == 0x40
+            || (matches!(command, 0x42 | 0x44..=0x48 | 0x4b) && (args[1] as i32) < 0)
+        {
+            None
+        } else {
+            Some(
+                u16::try_from(args[1])
+                    .ok()
+                    .filter(|v| *v < 768)
+                    .ok_or_else(|| fail("child slot outside 0..767"))?,
+            )
+        };
         if command != 0x22 {
             let object = match child {
                 Some(id) => parent
@@ -658,7 +659,7 @@ impl SceneHost {
                     .ok_or_else(|| fail("child object does not exist"))?,
                 None => parent,
             };
-            if matches!(command, 0x44..=0x48 | 0x4b) && object.draw.is_none() {
+            if matches!(command, 0x42 | 0x44..=0x48 | 0x4b) && object.draw.is_none() {
                 return Err(fail("object has no draw state"));
             }
         }
@@ -693,6 +694,9 @@ impl SceneHost {
             };
             match command {
                 0x40 | 0x50 => object.draw = Some(DrawState::default()),
+                // 0x2042 / 0x14006d130 -> 0x14003b190 -> 0x14001f550:
+                // set the existing draw state's coordinate mode without rebuilding it.
+                0x42 => object.draw.as_mut().expect("validated").words[0] = 2,
                 0x44..=0x48 => object
                     .draw
                     .as_mut()
