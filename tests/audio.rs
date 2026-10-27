@@ -176,6 +176,87 @@ fn stop_code(channel: u32) -> Vec<u8> {
     code
 }
 
+fn voice_stop_code(channel: u32) -> Vec<u8> {
+    let mut code = vec![];
+    push(&mut code, channel);
+    code.extend(0x20a8u16.to_le_bytes());
+    code
+}
+
+#[test]
+fn voice_stop_routes_all_four_channels_without_touching_se_bgm_or_results() {
+    let mut host = AudioHost::new(AudioSettings {
+        se_enabled: false,
+        bgm_enabled: false,
+        ..AudioSettings::default()
+    });
+    let mut backend = RecordingAudio::default();
+    for channel in 0..4 {
+        let mut code = vec![];
+        push(&mut code, 0x1234);
+        code.extend(voice_stop_code(channel));
+        let script = program(&code, b"");
+        let mut vm = Machine::new(&script).unwrap();
+        for slot in 0..7 {
+            vm.state_mut().set_system_integer(slot, 99).unwrap();
+        }
+        pending(&mut vm);
+        let pc = vm.pc();
+        assert!(host.try_handle(&mut vm, &mut backend).unwrap());
+        assert_eq!(
+            backend.requests().last(),
+            Some(&AudioRequest::StopVoice {
+                channel: channel as u8
+            })
+        );
+        assert_eq!(vm.pc(), pc + 2);
+        assert_eq!(vm.pending_system(), None);
+        assert_eq!(vm.stack().len_bytes(), 4);
+        assert_eq!(vm.stack().peek_u32(4).unwrap(), 0x1234);
+        for slot in 0..7 {
+            assert_eq!(vm.state().system_integer(slot), Some(99));
+        }
+        for slot in 0..6 {
+            assert!(host.channel(slot).is_none());
+        }
+        assert_eq!(host.bgm(), &BgmState::default());
+    }
+}
+
+#[test]
+fn voice_stop_failure_can_retry_and_invalid_channels_never_reach_backend() {
+    let script = program(&voice_stop_code(2), b"");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = AudioHost::default();
+    pending(&mut vm);
+    let command = vm.pending_system();
+    assert!(host.try_handle(&mut vm, &mut Broken).is_err());
+    assert_eq!(vm.pending_system(), command);
+    assert_eq!(vm.stack().len_bytes(), 4);
+    let mut backend = RecordingAudio::default();
+    assert!(host.try_handle(&mut vm, &mut backend).unwrap());
+    assert_eq!(
+        backend.requests(),
+        &[AudioRequest::StopVoice { channel: 2 }]
+    );
+    for code in [
+        voice_stop_code(4),
+        voice_stop_code(u32::MAX),
+        0x20a8u16.to_le_bytes().to_vec(),
+    ] {
+        let script = program(&code, b"");
+        let mut vm = Machine::new(&script).unwrap();
+        pending(&mut vm);
+        let command = vm.pending_system();
+        let len = vm.stack().len_bytes();
+        let requests = backend.requests().len();
+        assert!(host.try_handle(&mut vm, &mut backend).is_err());
+        assert_eq!(vm.pending_system(), command);
+        assert_eq!(vm.stack().len_bytes(), len);
+        assert_eq!(backend.requests().len(), requests);
+    }
+}
+
 #[test]
 fn stop_clears_name_and_flag_but_keeps_loop_volume_and_result() {
     let script = script(&[(3, 0, 64, 1, 1)], b"loop.ogg\0");

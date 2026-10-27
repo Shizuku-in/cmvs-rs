@@ -5,6 +5,8 @@ use std::error::Error;
 
 /// Six SE channels at +1656, 52 bytes each (snapshot record 0x310); device channels 9..14.
 pub const SE_CHANNELS: usize = 6;
+/// Four voice channels map to device channels 5..8 (0x140070650).
+pub const VOICE_CHANNELS: usize = 4;
 /// The file name occupies +1656..+1688 of each channel record.
 const NAME_CAPACITY: usize = 31;
 
@@ -86,6 +88,8 @@ pub enum AudioRequest {
     StartSe { channel: u8, looped: bool },
     /// 0x140087910: stop and release the device channel's sound, prepared or active.
     StopSe { channel: u8 },
+    /// 0x20a8: stop and release voice channel 0..3 (device channel +5).
+    StopVoice { channel: u8 },
     /// 0x14008a240 with BGM enabled. With `fade_ms` 0 both BGM device channels 0 and 1
     /// stop at once first; otherwise `previous` fades out over `fade_ms`. The track then
     /// loads and starts on `channel` (fading in over `fade_ms`), and both channels get
@@ -148,6 +152,11 @@ pub trait AudioBackend {
     fn stop(&mut self, _channel: u8) -> Result<(), Box<dyn Error>> {
         Err("audio backend does not implement stopping an SE channel".into())
     }
+    /// Stop and release a voice channel (0..3, device +5), including an empty slot.
+    /// Err leaves the device unchanged so the VM can retry the pending command.
+    fn stop_voice(&mut self, _channel: u8) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement stopping a voice channel".into())
+    }
     /// Apply a PlayBgm request in full before returning Ok; Err leaves the device unchanged.
     fn play_bgm(&mut self, _request: &AudioRequest) -> Result<(), Box<dyn Error>> {
         Err("audio backend does not implement BGM playback".into())
@@ -203,6 +212,9 @@ impl AudioBackend for RecordingAudio {
     fn stop(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
         self.record(AudioRequest::StopSe { channel })
     }
+    fn stop_voice(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::StopVoice { channel })
+    }
     fn play_bgm(&mut self, request: &AudioRequest) -> Result<(), Box<dyn Error>> {
         self.record(request.clone())
     }
@@ -251,6 +263,7 @@ impl AudioHost {
         backend: &mut dyn AudioBackend,
     ) -> Result<bool, Box<dyn Error>> {
         match vm.pending_system() {
+            Some((_, 0xa8)) => return self.try_voice_stop(vm, backend),
             Some((_, 0xb1)) => return self.try_start(vm, backend),
             Some((_, 0xb3)) => return self.try_stop(vm, backend),
             Some((_, 0xa0 | 0xa4)) => return self.try_bgm(vm, backend),
@@ -311,6 +324,27 @@ impl AudioHost {
             volume,
             flag,
         });
+        Ok(true)
+    }
+
+    /// 0x20a8 / 0x140070650: SP-4 voice channel, device +5; no enable flag gate.
+    fn try_voice_stop(
+        &mut self,
+        vm: &mut Machine<'_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<bool, Box<dyn Error>> {
+        let (pc, _) = vm.pending_system().expect("checked pending command");
+        let channel = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x20a8, e.0))?;
+        if channel as usize >= VOICE_CHANNELS {
+            return Err(error(
+                pc,
+                0x20a8,
+                "voice channel outside 0..3 sets an unmodeled flag",
+            )
+            .into());
+        }
+        backend.stop_voice(channel as u8)?;
+        vm.complete_system(SystemResult(0x4004))?;
         Ok(true)
     }
 

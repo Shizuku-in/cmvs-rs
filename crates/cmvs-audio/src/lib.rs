@@ -3,7 +3,7 @@ pub mod vorbis;
 use crate::vorbis::Vorbis;
 use cmvs_core::{
     MAX_PAYLOAD,
-    audio::{AudioBackend, AudioRequest, MovieAudioClock, SE_CHANNELS},
+    audio::{AudioBackend, AudioRequest, MovieAudioClock, SE_CHANNELS, VOICE_CHANNELS},
     platform::resolve_under,
     resources::{ResourceArchives, ResourceKind, ResourceSource},
 };
@@ -227,6 +227,7 @@ pub struct NativeAudio {
     paths: BTreeMap<(u16, u32), Vec<u8>>,
     archives: ResourceArchives,
     se: [Option<Channel>; SE_CHANNELS],
+    voice: [Option<Channel>; VOICE_CHANNELS],
     bgm: [Option<Channel>; 2],
     movie: Option<Channel>,
     device_fault: Fault,
@@ -254,6 +255,7 @@ impl NativeAudio {
             paths: BTreeMap::new(),
             archives: ResourceArchives::new(root)?,
             se: std::array::from_fn(|_| None),
+            voice: std::array::from_fn(|_| None),
             bgm: std::array::from_fn(|_| None),
             movie: None,
             device_fault: fault,
@@ -382,6 +384,13 @@ impl AudioBackend for NativeAudio {
             channel.looped.store(looped, Ordering::Relaxed);
             channel.sink.play();
         }
+        Ok(())
+    }
+    fn stop_voice(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
+        *self
+            .voice
+            .get_mut(usize::from(channel))
+            .ok_or("voice channel out of range")? = None;
         Ok(())
     }
     fn stop(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
