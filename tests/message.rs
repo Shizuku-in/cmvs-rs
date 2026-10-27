@@ -1309,12 +1309,141 @@ fn recorded_output_wraps_with_rules_through_hanging_and_inseparable_limits() {
     assert_eq!(text.layout_scratch, [0, 0]);
 }
 
+/// Records `text` in window 0 / text 7 (area width `width`, 10-pixel glyphs, 40 ms
+/// interval) after `setup`; returns whether the output succeeded.
+fn ruby_layout(width: u32, setup: &[(u16, Vec<u32>)], text: &[u8]) -> (MessageHost, bool) {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, width, 100]);
+    call(&mut code, 0x2143, &[10, 0]);
+    for (command, words) in setup {
+        call(&mut code, *command, words);
+    }
+    call(&mut code, 0x2152, &[0, 0, 0]);
+    let mut data = text.to_vec();
+    data.push(0);
+    let script = script_with_text(&code, &data);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 2 + setup.len());
+    messages.set_record_output(true);
+    pending(&mut vm);
+    let ok = messages
+        .try_record_output(
+            &mut vm,
+            &mut ActionInput::default(),
+            wait_flags(false, false),
+        )
+        .is_ok();
+    (messages, ok)
+}
+/// (code, position, size, delay) of every recorded glyph.
+fn layout(messages: &MessageHost) -> Vec<(u16, [i32; 2], u32, u32)> {
+    let glyphs = &messages.text(7).unwrap().glyphs;
+    glyphs
+        .iter()
+        .map(|g| (g.code, g.position, g.size, g.delay_ms))
+        .collect()
+}
+
+#[test]
+fn recorded_output_spreads_narrow_ruby_and_re_times_the_last_glyph_per_iteration() {
+    // あ{いう/えa}お with ruby size 4 and ruby spacing 3.
+    let text = b"\x82\xa0{\x82\xa2\x82\xa4/\x82\xa6a}\x82\xa8";
+    let setup = [
+        (0x2114, vec![1, 7]),
+        (0x2115, vec![4, 7]),
+        (0x2116, vec![3, 7]),
+    ];
+    let (messages, ok) = ruby_layout(200, &setup, text);
+    assert!(ok);
+    // Line 0 holds a group, so the pen drops by the ruby size first. The annotation starts
+    // at base start + gap / 2 = 10 + 8 (22.10: 10240 + 8192). The `/` re-times う to 120
+    // and adds an interval; え starts at the group delay 40, then `a` and `}` re-time it.
+    assert_eq!(
+        layout(&messages),
+        [
+            (0x82a0, [0, 4], 10, 0),
+            (0x82a2, [10, 4], 10, 40),
+            (0x82a4, [20, 4], 10, 120),
+            (0x82a6, [18, 0], 4, 120),
+            (0x82a8, [30, 4], 10, 160),
+        ]
+    );
+    let text_object = messages.text(7).unwrap();
+    assert_eq!(text_object.cursor, [40, 4]);
+    assert_eq!(text_object.ruby_lines[..2], [1, 0]);
+    // Without ruby the annotation is skipped and nothing reserves its height.
+    let (messages, ok) = ruby_layout(200, &[(0x2117, vec![1, 7])], text);
+    assert!(ok);
+    assert_eq!(
+        layout(&messages),
+        [
+            (0x82a0, [0, 0], 10, 0),
+            (0x82a2, [10, 0], 10, 40),
+            (0x82a4, [20, 0], 10, 120),
+            (0x82a8, [30, 0], 10, 160),
+        ]
+    );
+    assert!(
+        messages
+            .text(7)
+            .unwrap()
+            .ruby_lines
+            .iter()
+            .all(|&flag| flag == 0)
+    );
+}
+
+#[test]
+fn recorded_output_centres_wide_ruby_and_wraps_groups_as_a_whole() {
+    // ああ{あ/いうえ} with the default ruby size 12 on every line: centred at 20 + 10/2
+    // − 36/2 = 7, stepping by the ruby size without spacing.
+    let (messages, ok) = ruby_layout(
+        200,
+        &[(0x2114, vec![1, 7]), (0x2117, vec![1, 7])],
+        b"\x82\xa0\x82\xa0{\x82\xa0/\x82\xa2\x82\xa4\x82\xa6}",
+    );
+    assert!(ok);
+    let positions: Vec<_> = layout(&messages).iter().map(|g| (g.1, g.2)).collect();
+    assert_eq!(
+        positions,
+        [
+            ([0, 12], 10),
+            ([10, 12], 10),
+            ([20, 12], 10),
+            ([7, 0], 12),
+            ([19, 0], 12),
+            ([31, 0], 12),
+        ]
+    );
+    // Line end 20: the group wraps as one unit onto line 1, which 0x14005b360 marked, so the
+    // new line reserves the ruby height; the base then runs past the line end.
+    let (messages, ok) = ruby_layout(
+        30,
+        &[(0x2114, vec![1, 7]), (0x2115, vec![4, 7])],
+        b"\x82\xa0\x82\xa0{\x82\xa2\x82\xa4/\x82\xa6}",
+    );
+    assert!(ok);
+    let positions: Vec<_> = layout(&messages).iter().map(|g| g.1).collect();
+    assert_eq!(positions, [[0, 0], [10, 0], [0, 14], [10, 14], [8, 10]]);
+    let text_object = messages.text(7).unwrap();
+    assert_eq!(text_object.ruby_lines[..3], [0, 1, 0]);
+    assert_eq!(text_object.cursor, [20, 14]);
+    // An annotation without double-byte characters divides by zero in the original.
+    let (messages, ok) = ruby_layout(200, &[(0x2114, vec![1, 7])], b"{\x82\xa0/a}");
+    assert!(!ok);
+    assert!(messages.text(7).unwrap().glyphs.is_empty());
+}
+
 #[test]
 fn recorded_output_rejects_unsupported_layout_without_partial_glyphs_or_stack_changes() {
-    // Wrapping two characters per line reaches line 32, past the ruby-line flags.
+    // Wrapping two characters per line reaches line 32, past the ruby-line flags; a group
+    // closing its base before any glyph re-times an uninitialized pointer.
     for bytes in [
         &b"A\\n"[..],
-        &b"A{base/ruby}"[..],
+        &b"{/ruby}"[..],
+        &b"A{base"[..],
+        &b"A{\x82\xa0/\x82"[..],
         &b"A\x81"[..],
         &[b'a'; 80][..],
     ] {

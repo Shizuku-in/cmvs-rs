@@ -31,7 +31,8 @@ struct Layout<'a> {
     previous: u16,
 }
 
-fn lead(byte: u8) -> bool {
+/// 0x140008080: Shift-JIS lead bytes, without checking the trail byte.
+pub(super) fn lead(byte: u8) -> bool {
     (0x81..=0x9f).contains(&byte) || (0xe0..=0xfc).contains(&byte)
 }
 

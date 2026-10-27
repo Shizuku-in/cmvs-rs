@@ -221,3 +221,5 @@ BGM 与 SE 共用 `AudioHost`/`AudioBackend`：`BgmState` 保存 +4464 对象的
 `SceneHost` 新增引擎 +4632 的 `MaskTransition`（`scene/mask.rs`）：0x222a/0x222d 与 0x2030 共用 `load_image`，0x222b 与 0x2224 共用 `SkipGate`，帧推进放在纯色淡入淡出之后。`scene_render` 只给目标槽顶层对象的图像层附加遮罩，用着色器系数缩放 alpha；遮罩与图像尺寸不同或对象被裁切时显式报错。原版的 CPU 改写 alpha 路径不建模。真实重放停于 sn1001.ps3 / PC=0xd26e / 0x20b6、SP=16，详见 vm-semantics.md。
 
 `AudioBackend::fade_out_se` 表达 0x20b6 对 SE 设备通道的淡出并释放，与 `fade_out_bgm` 共用原版设备函数 0x1400882d0 的语义；`AudioHost` 不按 SE_USE 门控，只清空通道名称。逐句点击重放随后停于 sn1001.ps3 / PC=0xf19c / 0x2152 的注音组屏障，详见 vm-semantics.md。
+
+`message::output` 的记录输出拆分为原版对应的小函数：`ruby_lines`（0x14005b360）、`wraps`（双字节与注音组共用的换行判断）、`push`/`retime`（0x14005a830/0x14005b5a0）。“上一个字形”在每次调用开始时为空，以对应原版的未初始化指针。注音组按 22.10 定点均分或居中，组内单字节与分隔符照原版重复计时。逐句点击重放停于 sn1001.ps3 / PC=0x34f3a / 0x2225、SP=28，详见 vm-semantics.md。

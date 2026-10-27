@@ -974,3 +974,5 @@ PB3 type 3（JBP1）已实现：0x1400a0700、0x1400a0ad0、0x1400b4020、0x1400
 ps.cpz 的 `maskeffectput.o2` / `maskeffectcut.o2` 按 dword 与 "PSX2" 异或，还原为 ps_2_0；Put 系数为 min(count − m, 1)，Cut 为 min(count − (1 − m), 1)，m 为遮罩绿色分量。真实重放完成 `mask002a.pb3` 的 Put 转场后停于 sn1001.ps3 / PC=0xd26e / 0x20b6（`0x1400710f0`）、SP=16。详见 vm-semantics.md。
 
 0x20b6（`0x1400710f0`）对 SE 设备通道 ch+9 调用 `0x1400882d0` 淡出并释放，只清空 +1656 记录名称，不检查 SE_USE。之后逐句点击重放停于 sn1001.ps3 / PC=0xf19c / 0x2152 的注音组。详见 vm-semantics.md。
+
+注音组：`0x14005b360` 按不含禁则的简化排版标记注音行；`0x14005bc90` 对每个注音组做一次换行判断，基字按正文排版，注音按 22.10 无符号定点均分或居中，n = 0 时除零；`0x14005b5a0` 在组内每次迭代都重新计时上一字形。逐句点击重放停于 sn1001.ps3 / PC=0x34f3a / 0x2225（`0x14007abc0`）、SP=28。详见 vm-semantics.md。
