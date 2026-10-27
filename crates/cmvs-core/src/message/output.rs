@@ -173,9 +173,9 @@ impl MessageHost {
             append(&mut candidate, &bytes, skip).map_err(|why| error(pc, 0x2152, why))?;
         }
         let active = candidate.glyphs.iter().any(|g| g.active);
-        let triggered = skip || input.skip_held() || input.pressed(0);
+        let triggered = skip || input.skip_held() || input.released(0);
         let done = !window.hidden && (!active || triggered);
-        let consume = done && active && !skip && !input.skip_held() && input.pressed(0);
+        let consume = done && active && !skip && !input.skip_held() && input.released(0);
         let step = if done {
             vm.complete_system(SystemResult(0xc00c))?
         } else {

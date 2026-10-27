@@ -302,6 +302,17 @@ impl<'a> Startup<'a> {
                 StartupEvent::Progress
             });
         }
+        if let Some(step) =
+            self.messages
+                .try_wait(&mut self.machine, &mut self.input, self.message_flags)?
+        {
+            self.resume_run = step == Step::Yield;
+            return Ok(if step == Step::Yield {
+                StartupEvent::Yield
+            } else {
+                StartupEvent::Progress
+            });
+        }
         if let Some(step) = self.messages.try_record_output(
             &mut self.machine,
             &mut self.input,

@@ -1,0 +1,120 @@
+//! Manual 0x2153 / 0x140076880 -> 0x14005e220 under the current constructor settings.
+//! READ_SKIP=0, no pointer gesture result or +12244 bypass. Auto advance stays explicit.
+use super::{MessageHost, RESEARCH_SCREEN, window_slot};
+use crate::{
+    bytecode::DecodeError,
+    evaluate::error,
+    input::ActionInput,
+    machine::{Machine, Step},
+    message_flags::MessageFlags,
+    vm::SystemResult,
+};
+
+impl MessageHost {
+    /// Waits for a release outside message buttons or a skip flag/action. No glyphs
+    /// are generated. Pending returns 0xa000; completion 0x400c does not yield.
+    pub fn try_wait(
+        &mut self,
+        vm: &mut Machine<'_>,
+        input: &mut ActionInput,
+        flags: MessageFlags,
+    ) -> Result<Option<Step>, DecodeError> {
+        let Some((pc, 0x153)) = vm.pending_system() else {
+            return Ok(None);
+        };
+        let slot = window_slot(vm, pc, 0x2153)?;
+        let _read = vm.stack().peek_u32(8).map_err(|e| error(pc, 0x2153, e.0))?;
+        let _voice = vm
+            .stack()
+            .peek_u32(12)
+            .map_err(|e| error(pc, 0x2153, e.0))?;
+        let mut window = self
+            .window(slot)
+            .ok_or_else(|| error(pc, 0x2153, "missing message window sets an unmodeled flag"))?
+            .clone();
+        let text = self
+            .text(window.text)
+            .ok_or_else(|| error(pc, 0x2153, "message window without its text object"))?;
+        if window.hidden {
+            return vm.yield_pending_system().map(Some);
+        }
+        let mut done = flags.skip() || input.skip_held();
+        let mut consume = false;
+        if !done {
+            if input.pressed(0) {
+                window.pressed_button = -1;
+            }
+            let [px, py] = input.pointer();
+            let [px, py] = [px, py].map(|value| value as u32);
+            let px = (px.wrapping_mul(text.logical_size[0] as u32) / RESEARCH_SCREEN[0]) as i32;
+            let py = (py.wrapping_mul(text.logical_size[1] as u32) / RESEARCH_SCREEN[1]) as i32;
+            let mut hovered = false;
+            for (index, button) in window.buttons.iter().enumerate().filter(|(_, b)| b.enabled) {
+                let [x, y, w, h] = button.hit.map(i32::from);
+                let left = window.position[0].wrapping_add(x);
+                let top = window.position[1].wrapping_add(y);
+                // 0x14005e220 uses inclusive right/bottom bounds (unlike 0x215f).
+                if left <= px
+                    && top <= py
+                    && px <= left.wrapping_add(w)
+                    && py <= top.wrapping_add(h)
+                {
+                    hovered = true;
+                    if input.pressed(0) {
+                        window.pressed_button = index as i32;
+                    }
+                    consume |= input.released(0);
+                }
+            }
+            if input.released(0) && window.pressed_button >= 0 {
+                consume = true;
+                window.pressed_button = -1;
+            }
+            if !input.held(0) {
+                window.pressed_button = -1;
+            }
+            if !hovered && input.released(0) && !consume {
+                done = true;
+                consume = true;
+            }
+            if !done && flags.auto_advance() {
+                return Err(error(
+                    pc,
+                    0x2153,
+                    "automatic message advance requires an unimplemented timer/audio policy",
+                ));
+            }
+        }
+        if !done && window.cursor_mode == 3 {
+            let position = [
+                text.cursor[0].wrapping_add(i32::from(window.cursor_offset[0])),
+                text.cursor[1].wrapping_add(i32::from(window.cursor_offset[1])),
+            ];
+            for id in [2, 3] {
+                if let Some(child) = window.object.children.get_mut(&id) {
+                    let draw = child
+                        .draw
+                        .as_mut()
+                        .ok_or_else(|| error(pc, 0x2153, "wait cursor child has no draw state"))?;
+                    draw.words[8] = position[0] as u32;
+                    draw.words[9] = position[1] as u32;
+                }
+            }
+        }
+        for id in [2, 3] {
+            if let Some(child) = window.object.children.get_mut(&id) {
+                child.shown = !done;
+            }
+        }
+        let step = if done {
+            vm.complete_system(SystemResult(0x400c))?
+        } else {
+            vm.yield_pending_system()?
+        };
+        self.windows[slot] = Some(window);
+        if consume {
+            input.consume(0);
+        }
+        Ok(Some(step))
+    }
+}

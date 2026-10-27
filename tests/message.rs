@@ -156,6 +156,7 @@ fn creation_stores_window_text_and_font_and_pops_all_arguments() {
             position_switch: false,
             object: SceneObject::default(),
             buttons: [WindowButton::default(); WINDOW_BUTTONS],
+            pressed_button: -1,
         })
     );
     assert_eq!(messages.text(10), Some(&created_text([3, -1], [1280, 54])));
@@ -638,6 +639,249 @@ fn script_with_text(code: &[u8], text: &[u8]) -> Script {
     }
     raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
     Script::decode(&raw).unwrap()
+}
+
+#[test]
+fn recorded_output_only_release_edge_skips_reveal_not_press_edge() {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 100, 100]);
+    call(&mut code, 0x2152, &[0, 0, 0]);
+    let script = script_with_text(&code, b"A\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 1);
+    messages.set_record_output(true);
+    pending(&mut vm);
+    let mut input = ActionInput::default();
+    input.set(0, true, true, false).unwrap();
+    messages
+        .try_record_output(&mut vm, &mut input, false)
+        .unwrap();
+    assert!(vm.pending_system().is_some());
+    assert!(messages.text(7).unwrap().glyphs[0].active);
+    assert!(input.pressed(0));
+    input.set(0, false, false, true).unwrap();
+    messages
+        .try_record_output(&mut vm, &mut input, false)
+        .unwrap();
+    assert!(vm.pending_system().is_none());
+    assert!(!messages.text(7).unwrap().glyphs[0].active);
+    assert!(!input.released(0));
+}
+
+fn wait_flags(skip: bool, auto: bool) -> cmvs_rs::message_flags::MessageFlags {
+    let mut code = vec![];
+    call(&mut code, 0x22eb, &[u32::from(skip), 1]);
+    call(&mut code, 0x22e5, &[u32::from(auto), 1]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut flags = cmvs_rs::message_flags::MessageFlags::default();
+    for _ in 0..2 {
+        pending(&mut vm);
+        assert!(flags.try_handle(&mut vm).unwrap());
+    }
+    flags
+}
+
+#[test]
+fn message_wait_preserves_parameters_shows_pen_cursor_and_advances_on_release() {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [100, 200, 100, 50]);
+    for child in [2, 3] {
+        call(&mut code, 0x2178, &[child, 0]);
+        call(&mut code, 0x2180, &[child, 0]);
+    }
+    call(&mut code, 0x2151, &[7, 5, 3, 0]);
+    call(&mut code, 0x214f, &[20, 10, 0]);
+    call(&mut code, 0x2153, &[u32::MAX, 123, 0]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 7);
+    pending(&mut vm);
+    let pc = vm.pc();
+    let mut input = ActionInput::default();
+    input.set_pointer(-1, -1);
+    vm.state_mut().set_system_integer(0, 99).unwrap();
+    for count in 1..=2 {
+        assert_eq!(
+            messages
+                .try_wait(&mut vm, &mut input, wait_flags(false, false))
+                .unwrap(),
+            Some(Step::Yield)
+        );
+        assert_eq!(vm.pending_system(), Some((pc, 0x153)));
+        assert_eq!(vm.stack().len_bytes(), 12);
+        assert_eq!(vm.repeat_count(), count);
+        for child in messages.window(0).unwrap().object.children.values() {
+            assert!(child.shown);
+            assert_eq!(&child.draw.as_ref().unwrap().words[8..10], &[15, 27]);
+        }
+    }
+    input.set(0, true, true, false).unwrap();
+    messages
+        .try_wait(&mut vm, &mut input, wait_flags(false, false))
+        .unwrap();
+    assert!(vm.pending_system().is_some());
+    assert!(input.pressed(0));
+    input.set(0, false, false, true).unwrap();
+    input.set(1, true, true, true).unwrap();
+    assert_eq!(
+        messages
+            .try_wait(&mut vm, &mut input, wait_flags(false, false))
+            .unwrap(),
+        Some(Step::Continue)
+    );
+    assert_eq!(vm.pc(), pc + 2);
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.repeat_count(), 0);
+    assert!(!input.released(0));
+    assert!(input.pressed(1));
+    assert_eq!(vm.state().system_integer(0), Some(99));
+    assert!(
+        messages
+            .window(0)
+            .unwrap()
+            .object
+            .children
+            .values()
+            .all(|c| !c.shown)
+    );
+}
+
+#[test]
+fn message_wait_button_edges_are_inclusive_and_drag_release_does_not_advance() {
+    for outside in [false, true] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [100, 200, 100, 100]);
+        call(&mut code, 0x2191, &[40, 30, 20, 10, 0, 0]);
+        call(&mut code, 0x2192, &[0, 0]);
+        call(&mut code, 0x2153, &[u32::MAX, 0, 0]);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 3);
+        pending(&mut vm);
+        let mut input = ActionInput::default();
+        input.set_pointer(140, 260);
+        input.set(0, true, true, false).unwrap();
+        messages
+            .try_wait(&mut vm, &mut input, wait_flags(false, false))
+            .unwrap();
+        assert_eq!(messages.window(0).unwrap().pressed_button, 0);
+        if outside {
+            input.set_pointer(141, 261);
+        }
+        input.set(0, false, false, true).unwrap();
+        messages
+            .try_wait(&mut vm, &mut input, wait_flags(false, false))
+            .unwrap();
+        assert!(vm.pending_system().is_some());
+        assert!(!input.released(0));
+        assert_eq!(messages.window(0).unwrap().pressed_button, -1);
+        input.set_pointer(141, 261);
+        input.set(0, false, false, true).unwrap();
+        messages
+            .try_wait(&mut vm, &mut input, wait_flags(false, false))
+            .unwrap();
+        assert!(vm.pending_system().is_none());
+    }
+}
+
+#[test]
+fn message_wait_skip_flags_and_actions_complete_without_consuming_other_edges() {
+    for (skip, action) in [(true, 1), (false, 7), (false, 8)] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 100, 100]);
+        call(&mut code, 0x2153, &[u32::MAX, 0, 0]);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 1);
+        pending(&mut vm);
+        let mut input = ActionInput::default();
+        input.set(action, true, true, true).unwrap();
+        assert_eq!(
+            messages
+                .try_wait(&mut vm, &mut input, wait_flags(skip, false))
+                .unwrap(),
+            Some(Step::Continue)
+        );
+        assert!(vm.pending_system().is_none());
+        assert!(input.pressed(action));
+        assert!(input.released(action));
+    }
+}
+
+#[test]
+fn message_wait_hidden_window_ignores_skip_and_preserves_all_input_and_children() {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 100, 100]);
+    call(&mut code, 0x214e, &[1, 0]);
+    call(&mut code, 0x214c, &[1, 0]);
+    call(&mut code, 0x2153, &[u32::MAX, 0, 0]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 3);
+    pending(&mut vm);
+    let before = messages.window(0).cloned();
+    let mut input = ActionInput::default();
+    input.set(0, false, false, true).unwrap();
+    let old = input.clone();
+    assert_eq!(
+        messages
+            .try_wait(&mut vm, &mut input, wait_flags(true, true))
+            .unwrap(),
+        Some(Step::Yield)
+    );
+    assert_eq!(messages.window(0), before.as_ref());
+    assert_eq!(input, old);
+    assert_eq!(vm.stack().len_bytes(), 12);
+}
+
+#[test]
+fn message_wait_rejects_unsupported_auto_missing_cursor_draw_and_bad_arguments_atomically() {
+    for (auto, child, words) in [
+        (true, false, vec![u32::MAX, 0, 0]),
+        (false, true, vec![u32::MAX, 0, 0]),
+        (false, false, vec![u32::MAX, 0, 8]),
+        (false, false, vec![u32::MAX, 0, u32::MAX]),
+        (false, false, vec![u32::MAX, 0, 1]),
+        (false, false, vec![0, 0]),
+        (false, false, vec![0]),
+        (false, false, vec![]),
+    ] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 100, 100]);
+        let mut setup = 1;
+        if child {
+            call(&mut code, 0x2178, &[2, 0]);
+            call(&mut code, 0x2151, &[0, 0, 3, 0]);
+            setup += 2;
+        }
+        call(&mut code, 0x2153, &words);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, setup);
+        pending(&mut vm);
+        let before = messages.window(0).cloned();
+        let command = vm.pending_system();
+        let mut input = ActionInput::default();
+        input.set(0, true, true, false).unwrap();
+        let old = input.clone();
+        assert!(
+            messages
+                .try_wait(&mut vm, &mut input, wait_flags(false, auto))
+                .is_err()
+        );
+        assert_eq!(messages.window(0), before.as_ref());
+        assert_eq!(vm.pending_system(), command);
+        assert_eq!(vm.stack().len_bytes(), words.len() * 4);
+        assert_eq!(vm.repeat_count(), 0);
+        assert_eq!(input, old);
+    }
 }
 
 #[test]

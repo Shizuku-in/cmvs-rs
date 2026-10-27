@@ -150,3 +150,5 @@ cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Downl
 ```
 
 首句文字及消息窗口已在无窗口真实重放导出帧中核对；16 秒 Windows 窗口检查验证启动、标题与导出，退出码 0，本轮未在窗口中操作开始游戏。字体、基线和边缘使用 OpenType/ab_glyph 策略，与 GDI 有像素差异，支持边界及证据见 [font-output](font-output.md)。
+
+2026-10-27 手动消息等待已接入：原生用户实测确认第一话动画/声音、首句画面及等待小点，点击后小点消失；当前继续停在未实现的 0x22d0，文字尚不推进到下一句。自动送页分支仍明确报错。运行命令及受限设置见 font-output.md 与 vm-semantics.md。

@@ -247,6 +247,51 @@ fn startup_fade_wait_needs_explicit_frames_and_resumes_after_removal() {
 }
 
 #[test]
+fn message_wait_resumes_without_advancing_time_on_release_completion() {
+    let mut code = vec![];
+    for (op, words) in [
+        (0x215du16, vec![720u32, 1280, 100, 100, 0, 0, 7, 0]),
+        (0x2153, vec![u32::MAX, 0, 0]),
+    ] {
+        for word in words {
+            code.extend(0x440u16.to_le_bytes());
+            code.extend(4u16.to_le_bytes());
+            code.extend(word.to_le_bytes());
+        }
+        code.extend(op.to_le_bytes());
+    }
+    code.extend(0x27ffu16.to_le_bytes());
+    let root = Root::new("message-wait", &code, b"");
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let mut backend = RecordingBackend::default();
+    loop {
+        if run.tick(&mut backend).unwrap() == StartupEvent::Yield {
+            break;
+        }
+    }
+    let pc = run.machine().pc();
+    assert_eq!(run.machine().pending_system(), Some((pc, 0x153)));
+    run.advance_frame(16);
+    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
+    assert_eq!(run.machine().pc(), pc);
+    assert_eq!(run.timers().values()[0], 16);
+    run.input_mut().set(0, false, false, true).unwrap();
+    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert!(!run.input().released(0));
+    assert_eq!(run.machine().stack().len_bytes(), 0);
+    assert_eq!(run.timers().values()[0], 16);
+    assert!(matches!(
+        run.tick(&mut backend).unwrap(),
+        StartupEvent::Unhandled {
+            command: 0x27ff,
+            ..
+        }
+    ));
+    assert_eq!(run.timers().values()[0], 16);
+}
+
+#[test]
 fn message_recording_is_opt_in_and_resumes_each_yield_with_explicit_frame_time() {
     let mut code = vec![];
     for (op, words) in [

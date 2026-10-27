@@ -23,6 +23,7 @@ use crate::{
 use std::error::Error;
 mod measure;
 mod output;
+mod wait;
 pub use output::RecordedGlyph;
 
 pub const MESSAGE_WINDOWS: usize = 8;
@@ -78,6 +79,8 @@ pub struct MessageWindow {
     /// record `i` shows child `i + 16`.
     pub object: SceneObject,
     pub buttons: [WindowButton; WINDOW_BUTTONS],
+    /// +2536: button pressed on action 0's down edge; constructor -1.
+    pub pressed_button: i32,
 }
 
 /// 0x211e line-break rules (+328 set, +332, +336, +400), used by 0x14005b120 when the pen
@@ -1130,6 +1133,7 @@ impl MessageHost {
             position_switch: false,
             object: SceneObject::default(),
             buttons: [WindowButton::default(); WINDOW_BUTTONS],
+            pressed_button: -1,
         });
         Ok(())
     }
