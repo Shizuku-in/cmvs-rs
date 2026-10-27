@@ -130,3 +130,13 @@ cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop
 Windows 175 秒有界检查从正常入口完成 OP 音轨、返回标题并正常退出；其他平台未验证。
 源消费进度不是 DAC 硬件时间戳，设备延迟未校准，尚未人工听音确认音质；真实输入仍只观察、不注入 VM。
 设备或解码错误明确报错。格式、库版本、二进制证据与 PCM 对照见 [audio-output](audio-output.md)。
+
+## 显式消息记录模式（2026-10-27）
+
+`--record-text` 只记录当前支持的单行 0x2152 字形描述与逐字 alpha 计时，不生成字体像素、不绘制剧情文字。默认仍保留该命令的输出断点。该选项可加到现有显式继续命令：
+
+```powershell
+cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --record-text
+```
+
+本轮仅用仓库外无窗口鼠标/键盘重放验证，记录模式到 sn1001.ps3 / 0xf6f2 / 0x2136，未新增原生窗口实测。支持分支、设置约束与默认停点见 vm-semantics.md；字体后端、消息窗口/文字合成仍待实现。

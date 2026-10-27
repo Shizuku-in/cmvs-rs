@@ -361,7 +361,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     )?;
     if root == "--help" {
         println!(
-            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>] [--continue-without-snapshot] [--rand-seed <seed>] [--save-frame <new.png>] [--audio <record|native>]\nNative research preview only. Runs bounded startup with virtual callback tick 0 and explicit wall-time scene updates; stops at unknown commands or main snapshot barrier. --continue-without-snapshot enters main without building a save image; saving stays unavailable. --rand-seed sets the CRT rand() research seed (default 0). Without an explicit image, presents the verified 2D scene (top-level objects and their children) and CMV6 JBPD movies on a 1280x720 research viewport; includes timed full-screen color fades; use a release build for movie decoding; transforms, other transitions and alternate blend modes remain unsupported. --save-frame writes the frame shown at exit, in script coordinates, to a new PNG file (never overwritten); use it instead of screen captures to check rendering. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. --audio record (default) records only; --audio native requires the audio-output feature and opens the default device for Vorbis SE/BGM/movie playback, using audio source position for movie frames. Device-buffer latency is not calibrated. Raw window input is observed but not injected into CMVS opcodes. All game files read-only."
+            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>] [--continue-without-snapshot] [--rand-seed <seed>] [--save-frame <new.png>] [--audio <record|native>] [--record-text]\nNative research preview only. Runs bounded startup with virtual callback tick 0 and explicit wall-time scene updates; stops at unknown commands or main snapshot barrier. --continue-without-snapshot enters main without building a save image; saving stays unavailable. --rand-seed sets the CRT rand() research seed (default 0). Without an explicit image, presents the verified 2D scene (top-level objects and their children) and CMV6 JBPD movies on a 1280x720 research viewport; includes timed full-screen color fades; use a release build for movie decoding; transforms, other transitions and alternate blend modes remain unsupported. --save-frame writes the frame shown at exit, in script coordinates, to a new PNG file (never overwritten); use it instead of screen captures to check rendering. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. --audio record (default) records only; --audio native requires the audio-output feature and opens the default device for Vorbis SE/BGM/movie playback, using audio source position for movie frames. Device-buffer latency is not calibrated. Raw window input is observed but not injected into CMVS opcodes. --record-text explicitly records only the supported single-line message glyph descriptors and reveal timing; no font pixels or text drawing. Default message output stays a barrier. All game files read-only."
         );
         return Ok(());
     }
@@ -374,9 +374,14 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut save_frame = None;
     let mut native_audio = false;
     let mut native_input = true;
+    let mut record_text = false;
     while let Some(flag) = args.next() {
         if flag == "--continue-without-snapshot" {
             snapshot_policy = SnapshotPolicy::ContinueWithoutImage;
+            continue;
+        }
+        if flag == "--record-text" {
+            record_text = true;
             continue;
         }
         let value = args.next().ok_or("missing option value")?;
@@ -465,6 +470,12 @@ fn run() -> Result<(), Box<dyn Error>> {
         return Err("native audio requires --features desktop,audio-output".into());
     }
     startup.set_snapshot_policy(snapshot_policy);
+    startup.set_record_text(record_text);
+    if record_text {
+        println!(
+            "# text RECORDING ONLY: supported single-line glyph descriptors and reveal timing; no font pixels or text drawing"
+        );
+    }
     startup.set_random_seed(rand_seed);
     let mut app = App {
         surface: None,

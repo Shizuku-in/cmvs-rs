@@ -226,6 +226,10 @@ impl<'a> Startup<'a> {
     pub fn messages(&self) -> &MessageHost {
         &self.messages
     }
+    /// Explicit single-line message recording; no font pixels are generated.
+    pub fn set_record_text(&mut self, enabled: bool) {
+        self.messages.set_record_output(enabled);
+    }
     pub fn save_menu(&self) -> &SaveMenuHost {
         &self.save_menu
     }
@@ -291,6 +295,14 @@ impl<'a> Startup<'a> {
             } else {
                 StartupEvent::Progress
             });
+        }
+        if let Some(step) = self.messages.try_record_output(
+            &mut self.machine,
+            &mut self.input,
+            self.message_flags.skip(),
+        )? {
+            self.resume_run = step == Step::Yield;
+            return Ok(StartupEvent::Yield);
         }
         if self
             .system_host

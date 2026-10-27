@@ -247,6 +247,53 @@ fn startup_fade_wait_needs_explicit_frames_and_resumes_after_removal() {
 }
 
 #[test]
+fn message_recording_is_opt_in_and_resumes_each_yield_with_explicit_frame_time() {
+    let mut code = vec![];
+    for (op, words) in [
+        (0x215du16, vec![720u32, 1280, 100, 100, 0, 0, 7, 0]),
+        (0x2152, vec![0, u32::MAX, 0]),
+    ] {
+        for word in words {
+            code.extend(0x440u16.to_le_bytes());
+            code.extend(4u16.to_le_bytes());
+            code.extend(word.to_le_bytes());
+        }
+        code.extend(op.to_le_bytes());
+    }
+    code.extend(0x27ffu16.to_le_bytes());
+    let root = Root::new("message-record", &code, b"A\0");
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let mut backend = RecordingBackend::default();
+    loop {
+        if let StartupEvent::Unhandled { command, .. } = run.tick(&mut backend).unwrap() {
+            assert_eq!(command, 0x2152);
+            break;
+        }
+    }
+    assert!(run.messages().text(7).unwrap().glyphs.is_empty());
+    run.set_record_text(true);
+    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
+    assert_eq!(run.machine().repeat_count(), 1);
+    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
+    assert_eq!(run.machine().repeat_count(), 2);
+    assert_eq!(run.messages().text(7).unwrap().glyphs.len(), 1);
+    run.advance_frame(400);
+    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
+    assert_eq!(run.machine().repeat_count(), 0);
+    assert_eq!(run.machine().stack().len_bytes(), 0);
+    assert_eq!(run.timers().values()[0], 400);
+    assert!(matches!(
+        run.tick(&mut backend).unwrap(),
+        StartupEvent::Unhandled {
+            command: 0x27ff,
+            ..
+        }
+    ));
+    assert_eq!(run.timers().values()[0], 400);
+}
+
+#[test]
 fn timers_advance_at_run_entry_and_ignore_budget_slices_and_reused_deltas() {
     let mut code = vec![];
     for (op, slot) in [(0x200bu16, 0u32), (0x200c, 0), (0x200c, 1)] {

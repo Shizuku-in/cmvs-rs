@@ -22,6 +22,8 @@ use crate::{
 };
 use std::error::Error;
 mod measure;
+mod output;
+pub use output::RecordedGlyph;
 
 pub const MESSAGE_WINDOWS: usize = 8;
 /// Screen info +8/+12 (configuration words 0/1 of every window), which is not modeled; the
@@ -109,6 +111,8 @@ pub struct TextObject {
     pub ruby_lines: [u32; 32],
     /// +528/+532: overflow count and previous 16-bit character, reset by measurement.
     pub layout_scratch: [u32; 2],
+    /// Explicit research records, without glyph pixels or a font device.
+    pub glyphs: Vec<RecordedGlyph>,
     /// +32: glyph size; one character advances size + spacing[0], one line size + spacing[1].
     pub glyph_size: i32,
     /// +36/+40: character and line spacing.
@@ -117,7 +121,7 @@ pub struct TextObject {
     pub color: u32,
     /// +120: decoration colour.
     pub decoration_color: u32,
-    /// +128: raw glyph parameter set by 0x2155, copied into glyph descriptor word 8
+    /// +128: raw glyph parameter set by 0x2155, copied into glyph descriptor word 9
     /// by 0x14005bc90. Its rendering interpretation is not modeled yet.
     pub glyph_parameter: u32,
     /// +132: decoration style 0..3 passed to glyph rendering.
@@ -144,6 +148,7 @@ pub struct TextObject {
 
 #[derive(Debug, Default)]
 pub struct MessageHost {
+    record_output: bool,
     windows: [Option<MessageWindow>; MESSAGE_WINDOWS],
     texts: [Option<TextObject>; TEXT_OBJECTS],
     /// +4224: created on first use of a text index and never freed by these commands.
@@ -151,6 +156,11 @@ pub struct MessageHost {
 }
 
 impl MessageHost {
+    /// Explicit research mode only: records the supported single-line 0x2152 branch,
+    /// without font rasterization. Default false preserves the output barrier.
+    pub fn set_record_output(&mut self, enabled: bool) {
+        self.record_output = enabled;
+    }
     pub fn window(&self, slot: usize) -> Option<&MessageWindow> {
         self.windows.get(slot)?.as_ref()
     }
@@ -165,6 +175,11 @@ impl MessageHost {
     /// never destroyed here, only its marked children. Text object updates (0x14005ae70)
     /// are not modeled.
     pub fn advance_frame(&mut self, delta: u32) {
+        for text in self.texts.iter_mut().flatten() {
+            for glyph in &mut text.glyphs {
+                glyph.advance(delta);
+            }
+        }
         for window in self.windows.iter_mut().flatten() {
             window.object.advance_effects(delta);
         }
@@ -594,6 +609,7 @@ impl MessageHost {
         } else {
             let text = self.texts[text].as_mut().expect("checked above");
             text.cursor = [text.area[0], text.area[1]];
+            text.glyphs.clear();
         }
         Ok(())
     }
@@ -1085,6 +1101,7 @@ impl MessageHost {
             cursor: [0, 0],
             ruby_lines: [0; 32],
             layout_scratch: [0; 2],
+            glyphs: Vec::new(),
             glyph_size: 27,
             spacing: [0, 0],
             color: 0xff_ffff,

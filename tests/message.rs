@@ -62,6 +62,7 @@ fn created_text(position: [i32; 2], size: [u32; 2]) -> TextObject {
         cursor: [0, 0],
         ruby_lines: [0; 32],
         layout_scratch: [0; 2],
+        glyphs: Vec::new(),
         glyph_size: 27,
         spacing: [0, 0],
         color: 0xff_ffff,
@@ -637,6 +638,239 @@ fn script_with_text(code: &[u8], text: &[u8]) -> Script {
     }
     raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
     Script::decode(&raw).unwrap()
+}
+
+#[test]
+fn recorded_output_requires_explicit_policy_and_yields_without_duplicating_glyphs() {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 100, 100]);
+    call(&mut code, 0x2152, &[0, 123, 0]);
+    let script = script_with_text(&code, b"\x82\xa0A\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    let mut input = ActionInput::default();
+    run(&mut vm, &mut messages, 1);
+    pending(&mut vm);
+    let pc = vm.pc();
+    let before = messages.text(7).cloned();
+    assert_eq!(
+        messages
+            .try_record_output(&mut vm, &mut input, false)
+            .unwrap(),
+        None
+    );
+    assert_eq!(messages.text(7), before.as_ref());
+    assert_eq!(vm.repeat_count(), 0);
+    messages.set_record_output(true);
+    for i in 1..=3 {
+        assert_eq!(
+            messages
+                .try_record_output(&mut vm, &mut input, false)
+                .unwrap(),
+            Some(Step::Yield)
+        );
+        assert_eq!(vm.pending_system(), Some((pc, 0x152)));
+        assert_eq!(vm.repeat_count(), i);
+        assert_eq!(vm.stack().len_bytes(), 12);
+        assert_eq!(messages.text(7).unwrap().glyphs.len(), 2);
+        assert_eq!(messages.text(7).unwrap().cursor, [40, 0]);
+    }
+    let glyphs = &messages.text(7).unwrap().glyphs;
+    assert_eq!((glyphs[0].code, glyphs[0].position), (0x82a0, [0, 0]));
+    assert_eq!(
+        (glyphs[1].code, glyphs[1].position, glyphs[1].delay_ms),
+        (65, [27, 0], 40)
+    );
+    messages.advance_frame(40);
+    let glyphs = &messages.text(7).unwrap().glyphs;
+    assert_eq!((glyphs[0].shown, glyphs[0].opacity), (true, 29));
+    assert!(!glyphs[1].shown);
+    messages.advance_frame(350);
+    assert!(
+        messages
+            .text(7)
+            .unwrap()
+            .glyphs
+            .iter()
+            .all(|g| !g.active && g.shown && g.opacity == 255)
+    );
+    assert_eq!(
+        messages
+            .try_record_output(&mut vm, &mut input, false)
+            .unwrap(),
+        Some(Step::Yield)
+    );
+    assert_eq!(vm.pc(), pc + 2);
+    assert_eq!(vm.pending_system(), None);
+    assert_eq!(vm.repeat_count(), 0);
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
+fn recorded_output_captures_styles_and_ruby_reserved_height_then_clears() {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 100, 100]);
+    call(&mut code, 0x2114, &[1, 7]);
+    call(&mut code, 0x2117, &[1, 7]);
+    call(&mut code, 0x2149, &[2, 0]);
+    call(&mut code, 0x2146, &[0xabcdef, 0x123456, 0]);
+    call(&mut code, 0x2155, &[0x272727, 0]);
+    call(&mut code, 0x2152, &[0, u32::MAX, 0]);
+    call(&mut code, 0x214a, &[0]);
+    let script = script_with_text(&code, b"A\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 6);
+    messages.set_record_output(true);
+    pending(&mut vm);
+    vm.state_mut().set_system_integer(0, 42).unwrap();
+    messages
+        .try_record_output(&mut vm, &mut ActionInput::default(), true)
+        .unwrap();
+    let glyph = &messages.text(7).unwrap().glyphs[0];
+    assert_eq!(glyph.position, [0, 12]);
+    assert_eq!(glyph.colors, [0x123456, 0xabcdef]);
+    assert_eq!(glyph.gradient, 2);
+    assert_eq!(glyph.outline, [1, 0x272727]);
+    assert!(!glyph.active);
+    assert_eq!(vm.state().system_integer(0), Some(42));
+    run(&mut vm, &mut messages, 1);
+    assert!(messages.text(7).unwrap().glyphs.is_empty());
+    assert_eq!(messages.text(7).unwrap().cursor, [0, 0]);
+}
+
+#[test]
+fn recorded_output_click_finishes_and_consumes_only_action_zero_edges() {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 100, 100]);
+    call(&mut code, 0x2152, &[0, 0, 0]);
+    let script = script_with_text(&code, b"AB\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 1);
+    messages.set_record_output(true);
+    pending(&mut vm);
+    let mut input = ActionInput::default();
+    input.set(0, true, true, true).unwrap();
+    input.set(1, true, true, true).unwrap();
+    messages
+        .try_record_output(&mut vm, &mut input, false)
+        .unwrap();
+    assert!(
+        messages
+            .text(7)
+            .unwrap()
+            .glyphs
+            .iter()
+            .all(|g| !g.active && g.opacity == 255)
+    );
+    assert!(input.held(0));
+    assert!(!input.pressed(0) && !input.released(0));
+    assert!(input.pressed(1) && input.released(1));
+    assert_eq!(vm.pending_system(), None);
+}
+
+#[test]
+fn recorded_output_hidden_window_keeps_waiting_even_when_skip_finishes_layout() {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 100, 100]);
+    call(&mut code, 0x214e, &[1, 0]);
+    call(&mut code, 0x214c, &[1, 0]);
+    call(&mut code, 0x2152, &[0, 0, 0]);
+    let script = script_with_text(&code, b"A\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 3);
+    messages.set_record_output(true);
+    pending(&mut vm);
+    let pc = vm.pc();
+    let mut input = ActionInput::default();
+    messages
+        .try_record_output(&mut vm, &mut input, true)
+        .unwrap();
+    assert_eq!(vm.pending_system(), Some((pc, 0x152)));
+    assert_eq!(messages.text(7).unwrap().glyphs.len(), 1);
+    let mut code = vec![];
+    call(&mut code, 0x214c, &[0, 0]);
+    let other_script = script_with_text(&code, b"");
+    let mut other_vm = Machine::new(&other_script).unwrap();
+    run(&mut other_vm, &mut messages, 1);
+    messages
+        .try_record_output(&mut vm, &mut input, true)
+        .unwrap();
+    assert_eq!(vm.pending_system(), None);
+    assert_eq!(messages.text(7).unwrap().glyphs.len(), 1);
+}
+
+#[test]
+fn recorded_output_rejects_unsupported_layout_without_partial_glyphs_or_stack_changes() {
+    for bytes in [
+        &b"A\\n"[..],
+        &b"A{base/ruby}"[..],
+        &b"A\x81"[..],
+        &b"abcdefgh"[..],
+    ] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 50, 100]);
+        call(&mut code, 0x2152, &[0, 0, 0]);
+        let mut data = bytes.to_vec();
+        data.push(0);
+        let script = script_with_text(&code, &data);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 1);
+        messages.set_record_output(true);
+        pending(&mut vm);
+        let pc = vm.pc();
+        let before = messages.text(7).cloned();
+        let mut input = ActionInput::default();
+        input.set(0, true, true, false).unwrap();
+        for _ in 0..2 {
+            assert!(
+                messages
+                    .try_record_output(&mut vm, &mut input, false)
+                    .is_err()
+            );
+            assert_eq!(vm.pending_system(), Some((pc, 0x152)));
+            assert_eq!(vm.stack().len_bytes(), 12);
+            assert_eq!(vm.repeat_count(), 0);
+            assert_eq!(messages.text(7), before.as_ref());
+            assert!(input.pressed(0));
+        }
+    }
+}
+
+#[test]
+fn recorded_output_rejects_missing_windows_bad_references_and_short_arguments() {
+    for words in [
+        vec![0, 0, 8],
+        vec![0, 0, u32::MAX],
+        vec![0, 0, 1],
+        vec![100, 0, 0],
+        vec![0, 0],
+        vec![0],
+        vec![],
+    ] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 100, 100]);
+        call(&mut code, 0x2152, &words);
+        let script = script_with_text(&code, b"A\0");
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 1);
+        messages.set_record_output(true);
+        pending(&mut vm);
+        let before = messages.text(7).cloned();
+        let command = vm.pending_system();
+        assert!(
+            messages
+                .try_record_output(&mut vm, &mut ActionInput::default(), false)
+                .is_err()
+        );
+        assert_eq!(messages.text(7), before.as_ref());
+        assert_eq!(vm.pending_system(), command);
+        assert_eq!(vm.stack().len_bytes(), 4 * words.len());
+    }
 }
 
 #[test]
