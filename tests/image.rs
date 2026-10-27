@@ -1,6 +1,8 @@
 use cmvs_rs::{
     cpz::{Cpz6Index, data_checksum},
+    fade::SkipGate,
     image::{DecodedImage, ImageArchives, ImageSource, decode},
+    input::ActionInput,
     machine::{Machine, Step},
     message::MessageHost,
     ps3::Script,
@@ -928,4 +930,251 @@ fn unsupported_cache_source_keeps_command_pending_without_consuming_parameters()
     assert_eq!(vm.stack().peek_u32(4).unwrap(), 42);
     assert_eq!(vm.stack().len_bytes(), 4);
     assert!(scene.objects().is_empty());
+}
+
+fn change_files() -> Files {
+    Files(BTreeMap::from([
+        (b"a.pb3".to_vec(), opaque()),
+        (b"b.pb3".to_vec(), opaque()),
+    ]))
+}
+
+#[test]
+fn replacement_query_and_cancel_keep_new_image_motion_and_other_results() {
+    let mut code = vec![];
+    replacement_setup(&mut code, 500, 0);
+    for opcode in [0x22c6, 0x22c5, 0x22c6, 0x22c5] {
+        scene_command(&mut code, opcode, &[20]);
+    }
+    let program = script(&code, b"a.pb3\0b.pb3\0");
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    let mut files = change_files();
+    prepare_replacement(&mut vm, &mut scene, &mut files);
+    scene.try_change_image(&mut vm, &mut files).unwrap();
+    scene.advance_frame(100);
+    let mut expected = scene.object(20).unwrap().clone();
+    vm.state_mut().set_system_integer(1, 555).unwrap();
+    assert_eq!(run_to_system(&mut vm), 0x2c6);
+    assert!(scene.try_handle(&mut vm).unwrap());
+    assert_eq!(vm.state().system_integer(0), Some(1));
+    assert_eq!(
+        scene.object(20),
+        Some(&expected),
+        "query does not advance time"
+    );
+    assert_eq!(run_to_system(&mut vm), 0x2c5);
+    scene.try_handle(&mut vm).unwrap();
+    expected.change = None;
+    expected.draw.as_mut().unwrap().words[21] = 256;
+    assert_eq!(scene.object(20), Some(&expected));
+    assert_eq!(
+        vm.state().system_integer(0),
+        Some(1),
+        "cancel preserves result 0"
+    );
+    assert_eq!(run_to_system(&mut vm), 0x2c6);
+    scene.try_handle(&mut vm).unwrap();
+    assert_eq!(vm.state().system_integer(0), Some(0));
+    assert_eq!(run_to_system(&mut vm), 0x2c5);
+    scene.try_handle(&mut vm).unwrap();
+    assert_eq!(scene.object(20), Some(&expected));
+    assert_eq!(vm.state().system_integer(1), Some(555));
+    assert_eq!((vm.pc(), vm.stack().len_bytes()), (code.len(), 0));
+}
+
+#[test]
+fn replacement_wait_retries_without_advancing_time_then_completes_without_yield() {
+    let mut code = vec![];
+    replacement_setup(&mut code, 500, 0);
+    scene_command(&mut code, 0x22c7, &[20, 0]);
+    let program = script(&code, b"a.pb3\0b.pb3\0");
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    let mut files = change_files();
+    prepare_replacement(&mut vm, &mut scene, &mut files);
+    scene.try_change_image(&mut vm, &mut files).unwrap();
+    assert_eq!(run_to_system(&mut vm), 0x2c7);
+    let pc = vm.pc();
+    let expected = scene.object(20).unwrap().clone();
+    let mut input = ActionInput::default();
+    input.set(0, true, true, true).unwrap();
+    input.set(7, true, true, false).unwrap();
+    let before_input = input.clone();
+    let gate = SkipGate {
+        effects: false,
+        skip: true,
+    };
+    for repeat in 1..=3 {
+        assert_eq!(
+            scene.try_wait_change(&mut vm, gate, &mut input).unwrap(),
+            Some(Step::Yield)
+        );
+        assert_eq!(
+            (vm.pc(), vm.stack().len_bytes(), vm.repeat_count()),
+            (pc, 8, repeat)
+        );
+        assert_eq!(scene.object(20), Some(&expected));
+        assert_eq!(input, before_input, "non-skippable wait consumes no input");
+        assert_eq!(vm.state().system_integer(0), Some(0));
+    }
+    scene.advance_frame(499);
+    assert_eq!(
+        scene.try_wait_change(&mut vm, gate, &mut input).unwrap(),
+        Some(Step::Yield)
+    );
+    scene.advance_frame(1);
+    assert_eq!(
+        scene.try_wait_change(&mut vm, gate, &mut input).unwrap(),
+        Some(Step::Continue)
+    );
+    assert_eq!(
+        (vm.pc(), vm.stack().len_bytes(), vm.repeat_count()),
+        (pc + 2, 0, 0)
+    );
+    assert_eq!(vm.state().system_integer(0), Some(0));
+    assert_eq!(input, before_input);
+    assert_eq!(
+        scene.try_wait_change(&mut vm, gate, &mut input).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn replacement_wait_skip_flags_preserve_input_while_released_action_zero_is_consumed() {
+    for trigger in 0..5 {
+        let mut code = vec![];
+        replacement_setup(&mut code, 500, 0);
+        scene_command(&mut code, 0x22c7, &[20, 1]);
+        let program = script(&code, b"a.pb3\0b.pb3\0");
+        let mut vm = Machine::new(&program).unwrap();
+        let mut scene = SceneHost::default();
+        let mut files = change_files();
+        prepare_replacement(&mut vm, &mut scene, &mut files);
+        scene.try_change_image(&mut vm, &mut files).unwrap();
+        run_to_system(&mut vm);
+        let mut input = ActionInput::default();
+        input.set(0, true, true, true).unwrap();
+        input.set(1, false, true, true).unwrap();
+        if trigger == 2 || trigger == 3 {
+            input.set(7 + (trigger - 2), true, true, true).unwrap();
+        }
+        let gate = SkipGate {
+            effects: trigger != 0,
+            skip: trigger == 1,
+        };
+        let mut expected_input = input.clone();
+        if trigger == 4 {
+            expected_input.consume(0);
+        }
+        assert_eq!(
+            scene.try_wait_change(&mut vm, gate, &mut input).unwrap(),
+            Some(Step::Yield)
+        );
+        assert_eq!((vm.pc(), vm.stack().len_bytes()), (code.len(), 0));
+        assert!(
+            vm.pending_system().is_none(),
+            "skip yields after completing the command"
+        );
+        assert_eq!(vm.state().system_integer(0), Some(1));
+        assert_eq!(input, expected_input);
+        let object = scene.object(20).unwrap();
+        assert!(object.change.is_none());
+        assert_eq!(object.image.as_ref().unwrap().name, b"b.pb3");
+        assert!(object.draw.as_ref().unwrap().world_motion.is_some());
+        assert_eq!(object.draw.as_ref().unwrap().words[21], 256);
+    }
+}
+
+#[test]
+fn replacement_control_errors_preserve_scene_parameters_results_and_input() {
+    for (opcode, args) in [
+        (0x22c5, vec![256]),
+        (0x22c6, vec![u32::MAX]),
+        (0x22c7, vec![256, 1]),
+        (0x22c5, vec![19]),
+        (0x22c6, vec![19]),
+        (0x22c7, vec![19, 1]),
+        (0x22c5, vec![]),
+        (0x22c6, vec![]),
+        (0x22c7, vec![20]),
+    ] {
+        let mut code = vec![];
+        replacement_setup(&mut code, 500, 0);
+        scene_command(&mut code, opcode, &args);
+        let program = script(&code, b"a.pb3\0b.pb3\0");
+        let mut vm = Machine::new(&program).unwrap();
+        let mut scene = SceneHost::default();
+        let mut files = change_files();
+        prepare_replacement(&mut vm, &mut scene, &mut files);
+        scene.try_change_image(&mut vm, &mut files).unwrap();
+        run_to_system(&mut vm);
+        vm.state_mut().set_system_integer(0, 99).unwrap();
+        let expected = scene.object(20).unwrap().clone();
+        let mut input = ActionInput::default();
+        input.set(0, true, true, true).unwrap();
+        let expected_input = input.clone();
+        for _ in 0..2 {
+            if opcode == 0x22c7 {
+                assert!(
+                    scene
+                        .try_wait_change(&mut vm, SkipGate::default(), &mut input)
+                        .is_err()
+                );
+            } else {
+                assert!(scene.try_handle(&mut vm).is_err());
+            }
+            assert_eq!(scene.object(20), Some(&expected));
+            assert_eq!(input, expected_input);
+            assert_eq!(vm.state().system_integer(0), Some(99));
+            assert_eq!(vm.pending_system(), Some((code.len() - 2, opcode - 0x2000)));
+            assert_eq!(vm.stack().len_bytes(), args.len() * 4);
+            for (i, arg) in args.iter().enumerate() {
+                assert_eq!(vm.stack().peek_u32((i + 1) * 4).unwrap(), *arg);
+            }
+        }
+    }
+}
+
+#[test]
+fn replacement_control_without_draw_allows_query_and_inactive_wait_but_rejects_cancel() {
+    let mut code = vec![];
+    for (opcode, args) in [
+        (0x2020, vec![20]),
+        (0x22c6, vec![20]),
+        (0x22c7, vec![20, 1]),
+        (0x22c5, vec![20]),
+    ] {
+        scene_command(&mut code, opcode, &args);
+    }
+    let program = script(&code, b"");
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    run_to_system(&mut vm);
+    scene.try_handle(&mut vm).unwrap();
+    run_to_system(&mut vm);
+    scene.try_handle(&mut vm).unwrap();
+    assert_eq!(vm.state().system_integer(0), Some(0));
+    run_to_system(&mut vm);
+    let mut input = ActionInput::default();
+    input.set(0, false, false, true).unwrap();
+    assert_eq!(
+        scene
+            .try_wait_change(
+                &mut vm,
+                SkipGate {
+                    effects: false,
+                    skip: true
+                },
+                &mut input
+            )
+            .unwrap(),
+        Some(Step::Continue)
+    );
+    assert!(input.released(0));
+    assert_eq!(vm.state().system_integer(0), Some(0));
+    run_to_system(&mut vm);
+    assert!(scene.try_handle(&mut vm).is_err());
+    assert!(scene.object(20).unwrap().draw.is_none());
+    assert_eq!(vm.stack().len_bytes(), 4);
 }

@@ -2,9 +2,17 @@
 //! Timed replacement keeps the previous object and an opaque common-area image. The
 //! shader optimization and secondary image manager are not modeled; rendering refuses
 //! active replacements. Addresses are bound to the binary hash in vm-semantics.md.
+//! 0x22c5..0x22c7 cancel, query and wait on this lifecycle without advancing frame time.
 use super::{DrawState, ObjectImage, SceneHost, SceneObject, load_image};
 use crate::{
-    evaluate::error, image::ImageSource, machine::Machine, raster::RgbaImage, vm::SystemResult,
+    bytecode::DecodeError,
+    evaluate::error,
+    fade::SkipGate,
+    image::ImageSource,
+    input::ActionInput,
+    machine::{Machine, Step},
+    raster::RgbaImage,
+    vm::SystemResult,
 };
 use std::error::Error;
 
@@ -99,6 +107,92 @@ fn common_image(old: &ObjectImage, new: &ObjectImage) -> Result<ObjectImage, Box
 }
 
 impl SceneHost {
+    /// 0x22c5 / 0x14007d3c0 cancels the slot object's replacement, restoring factor 256.
+    /// 0x22c6 / 0x14007d400 writes whether +14504 or +14508 is active to result 0.
+    /// Both take only SP-4, return 0x4004 and do not advance time or yield.
+    pub(super) fn control_change(
+        &mut self,
+        vm: &mut Machine<'_>,
+        pc: usize,
+        command: u16,
+    ) -> Result<bool, DecodeError> {
+        let slot = self.change_slot(vm, pc, command)?;
+        if command == 0x2c5 && self.objects[&slot].draw.is_none() {
+            return Err(error(
+                pc,
+                0x22c5,
+                "canceling replacement needs a draw state",
+            ));
+        }
+        let active = self.objects[&slot].change.is_some();
+        vm.complete_system(SystemResult(0x4004))?;
+        if command == 0x2c5 {
+            self.objects
+                .get_mut(&slot)
+                .expect("validated")
+                .cancel_change();
+        } else {
+            vm.state_mut()
+                .set_system_integer(0, u32::from(active))
+                .expect("result 0 exists");
+        }
+        Ok(true)
+    }
+
+    fn change_slot(&self, vm: &Machine<'_>, pc: usize, command: u16) -> Result<u8, DecodeError> {
+        let fail = |why| error(pc, command + 0x2000, why);
+        let raw = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
+        // The original sign-extends and indexes the slot table without bounds/null checks.
+        u8::try_from(raw)
+            .ok()
+            .filter(|s| self.objects.contains_key(s))
+            .ok_or_else(|| fail("replacement control needs an existing object in slots 0..255"))
+    }
+
+    /// 0x22c7 / 0x14007d440: SP-4 slot, SP-8 skippable. While active return 0xa000,
+    /// preserving the command/arguments. No active replacement: result 0=0, 0x4008.
+    /// Skipping cancels, result 0=1, 0xc008; only a release-triggered skip consumes input.
+    pub fn try_wait_change(
+        &mut self,
+        vm: &mut Machine<'_>,
+        gate: SkipGate,
+        input: &mut ActionInput,
+    ) -> Result<Option<Step>, DecodeError> {
+        let Some((pc, 0x2c7)) = vm.pending_system() else {
+            return Ok(None);
+        };
+        let slot = self.change_slot(vm, pc, 0x2c7)?;
+        let skippable = vm.stack().peek_u32(8).map_err(|e| error(pc, 0x22c7, e.0))? != 0;
+        if self.objects[&slot].change.is_none() {
+            let step = vm.complete_system(SystemResult(0x4008))?;
+            vm.state_mut()
+                .set_system_integer(0, 0)
+                .expect("result 0 exists");
+            return Ok(Some(step));
+        }
+        let immediate = !gate.effects || input.skip_held() || gate.skip;
+        let released = skippable && !immediate && input.released(0);
+        if skippable && (immediate || released) {
+            let step = vm.complete_system(SystemResult(0xc008))?;
+            if released {
+                input.consume(0);
+            }
+            vm.state_mut()
+                .set_system_integer(0, 1)
+                .expect("result 0 exists");
+            self.objects
+                .get_mut(&slot)
+                .expect("validated")
+                .cancel_change();
+            return Ok(Some(step));
+        }
+        let step = vm.yield_pending_system()?;
+        vm.state_mut()
+            .set_system_integer(0, 0)
+            .expect("result 0 exists");
+        Ok(Some(step))
+    }
+
     /// SP-4 unsigned slot (unbounded in the original), SP-8 name, SP-12 duration,
     /// SP-16 manager selector (0 = primary). Writes result 0, returns 0x4010, no yield.
     pub fn try_change_image(

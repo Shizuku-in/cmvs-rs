@@ -381,6 +381,9 @@ impl SceneHost {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(false);
         };
+        if matches!(command, 0x2c5 | 0x2c6) {
+            return self.control_change(vm, pc, command);
+        }
         if matches!(
             command,
             0x22 | 0x40 | 0x42 | 0x50 | 0x44..=0x48 | 0x4b | 0x70..=0x74

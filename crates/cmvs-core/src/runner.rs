@@ -328,6 +328,12 @@ impl<'a> Startup<'a> {
             Some(step) => Some(step),
             None => self.scene.try_wait_quake(&mut self.machine)?,
         };
+        let waited = match waited {
+            Some(step) => Some(step),
+            None => self
+                .scene
+                .try_wait_change(&mut self.machine, gate, &mut self.input)?,
+        };
         if let Some(step) = waited {
             self.resume_run = step == Step::Yield;
             return Ok(if step == Step::Yield {
