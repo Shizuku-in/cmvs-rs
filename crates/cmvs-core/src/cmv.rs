@@ -133,7 +133,13 @@ impl CmvIndex {
         let decoded_size = u64::from(self.header.width)
             .checked_mul(u64::from(self.header.height))
             .and_then(|n| n.checked_mul(3));
-        if self.header.bit_count != 24 || Some(u64::from(entry.decoded_size)) != decoded_size {
+        // Scene CMV6 indexes also record the 54-byte BMP header in this metadata
+        // size (mv_ic01.cmv). JBPD output itself is still just the RGB surface.
+        if self.header.bit_count != 24
+            || !decoded_size.is_some_and(|size| {
+                u64::from(entry.decoded_size) == size || u64::from(entry.decoded_size) == size + 54
+            })
+        {
             return Err("CMV decoded frame size or bit depth unsupported".into());
         }
         if entry.stored_size as usize > crate::MAX_PAYLOAD {

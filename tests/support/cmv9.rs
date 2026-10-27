@@ -67,6 +67,55 @@ pub fn movie(reuse: bool) -> Vec<u8> {
     movie_frames(1, 15, 1, reuse)
 }
 
+/// Synthetic opaque CMV6 with 16x16 independent frames and an empty final audio entry.
+/// Audio flag 2 does not imply a nonempty soundtrack (as in the real scene sample).
+#[allow(dead_code)]
+pub fn cmv6(frames: u32, bitmap_header: bool) -> Vec<u8> {
+    let resource = 44 + (frames as usize + 1) * 20;
+    let mut b = vec![0; resource];
+    b[..4].copy_from_slice(b"CMV6");
+    for (at, v) in [
+        (4, resource as u32),
+        (16, frames),
+        (20, 15),
+        (24, 1),
+        (28, 16),
+        (32, 16),
+        (36, 24),
+        (40, 2),
+    ] {
+        put(&mut b, at, v);
+    }
+    for i in 0..frames {
+        let mut payload = jbpd(false, false, (i * 64) as i16);
+        put(&mut payload, 16, 16 | (16 << 16));
+        payload[325] = 1;
+        if i % 2 != 0 {
+            put(&mut payload, 8, 0x58c01002);
+            payload.splice(328..328, [255; 4]);
+        }
+        let offset = (b.len() - resource) as u32;
+        for (n, v) in [
+            i,
+            payload.len() as u32,
+            16 * 16 * 3 + if bitmap_header { 54 } else { 0 },
+            2,
+            offset,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            put(&mut b, 44 + i as usize * 20 + n * 4, v);
+        }
+        b.extend(payload);
+    }
+    put(&mut b, 44 + frames as usize * 20, frames);
+    let length = b.len() as u32;
+    put(&mut b, 60 + frames as usize * 20, length - resource as u32);
+    put(&mut b, 8, length);
+    b
+}
+
 pub fn movie_frames(frames: u32, rate: u32, time: u32, reuse: bool) -> Vec<u8> {
     let mut base = vec![0; 9];
     base[4..8].copy_from_slice(&[2, 0, 1, 0]);

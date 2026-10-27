@@ -100,7 +100,7 @@ impl MovieHost {
             looping: arg(20)? != 0,
             start,
             end: if end == u32::MAX {
-                movie.index.max_sequence - 1
+                movie.index.max_sequence() - 1
             } else {
                 end
             },
@@ -135,8 +135,8 @@ impl MovieHost {
             let target = playback.advance(
                 self.scene_clock,
                 movie.frame,
-                movie.index.rate,
-                movie.index.rate_time,
+                movie.index.rate(),
+                movie.index.rate_time(),
             )?;
             if target != movie.frame {
                 if scene
@@ -147,7 +147,7 @@ impl MovieHost {
                 }
                 let pixels = movie
                     .index
-                    .decode_with_base(&movie.data, target, &movie.base)?;
+                    .decode(&movie.data, target, movie.base.as_ref())?;
                 scene
                     .object_mut(movie.object_slot)
                     .expect("validated")

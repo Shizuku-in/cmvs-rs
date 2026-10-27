@@ -6,7 +6,7 @@
 //! channel 2 and advances one frame index per decoded frame. Desktop enables JBPD decoding;
 //! timing-only research remains explicit. The clock still stands in for soundtrack position.
 //!
-//! Engine +4480 holds three scene players. 0x2308 creates a stopped CMV9 player and
+//! Engine +4480 holds three scene players. 0x2308 creates a stopped CMV6/CMV9 player and
 //! initializes its bound scene object; 0x230a destroys the player, retaining that image.
 //! 0x2309 starts default-mode segment playback. Other slot controls, playback modes,
 //! audio-bearing slots and the other creation variant remain unhandled.
@@ -117,10 +117,52 @@ pub struct SceneMovie {
     pub object_slot: u8,
     pub name: Vec<u8>,
     pub frame: u32,
-    pub index: crate::cmv9::Cmv9Index,
+    pub index: SceneMovieIndex,
     data: Vec<u8>,
-    base: crate::raster::RgbaImage,
+    base: Option<crate::raster::RgbaImage>,
     pub playback: MoviePlayback,
+}
+
+/// Container-specific scene frame decoding; timing and object ownership are shared.
+#[derive(Debug)]
+pub enum SceneMovieIndex {
+    Cmv6(CmvIndex),
+    Cmv9(crate::cmv9::Cmv9Index),
+}
+impl SceneMovieIndex {
+    pub fn max_sequence(&self) -> u32 {
+        match self {
+            Self::Cmv6(index) => index.header.max_sequence,
+            Self::Cmv9(index) => index.max_sequence,
+        }
+    }
+    pub fn rate(&self) -> u32 {
+        match self {
+            Self::Cmv6(index) => index.header.rate,
+            Self::Cmv9(index) => index.rate,
+        }
+    }
+    pub fn rate_time(&self) -> u32 {
+        match self {
+            Self::Cmv6(index) => index.header.rate_time,
+            Self::Cmv9(index) => index.rate_time,
+        }
+    }
+    fn decode(
+        &self,
+        data: &[u8],
+        frame: u32,
+        base: Option<&crate::raster::RgbaImage>,
+    ) -> Result<crate::raster::RgbaImage, Box<dyn Error>> {
+        match self {
+            Self::Cmv6(index) => index.decode_frame(&mut io::Cursor::new(data), frame),
+            Self::Cmv9(index) => Ok(index.decode_with_base(
+                data,
+                frame,
+                base.ok_or("CMV9 scene base image unavailable")?,
+            )?),
+        }
+    }
 }
 impl SceneMovie {
     pub fn encoded(&self) -> &[u8] {
@@ -238,10 +280,29 @@ impl MovieHost {
         let data = source
             .read(&name)?
             .ok_or_else(|| fail("missing scene movie leaves an unmodeled failed player"))?;
-        let index = crate::cmv9::Cmv9Index::parse(&data)?;
-        let base = index.decode_base(&data)?;
-        let pixels = index.decode_with_base(&data, frame, &base)?;
-        let playback = MoviePlayback::new(frame, index.max_sequence - 1);
+        if data.len() > crate::MAX_PAYLOAD {
+            return Err(fail("scene movie exceeds research limit").into());
+        }
+        let (index, base) = if data.get(..4) == Some(b"CMV6") {
+            let index = CmvIndex::read(&mut io::Cursor::new(&data))?;
+            // 0x140039c90 loads a nonempty final audio entry when +40 != 0;
+            // 0x1400390b0 hands it to device channel slot+2. Do not drop audio.
+            if index.header.audio_flag != 0
+                && index
+                    .entries
+                    .last()
+                    .is_some_and(|entry| entry.stored_size != 0)
+            {
+                return Err(fail("CMV6 scene movie soundtrack is not implemented").into());
+            }
+            (SceneMovieIndex::Cmv6(index), None)
+        } else {
+            let index = crate::cmv9::Cmv9Index::parse(&data)?;
+            let base = index.decode_base(&data)?;
+            (SceneMovieIndex::Cmv9(index), Some(base))
+        };
+        let pixels = index.decode(&data, frame, base.as_ref())?;
+        let playback = MoviePlayback::new(frame, index.max_sequence() - 1);
         let mut draw = crate::scene::DrawState::default();
         draw.words[4] = pixels.width();
         draw.words[5] = pixels.height();

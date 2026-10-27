@@ -726,3 +726,110 @@ fn scene_frame_decode_failure_keeps_the_previous_pixels_frame_and_playback_for_r
     assert!(movies.advance_scene(0, &mut scene).is_err());
     assert_eq!(movies.scene_player(0).unwrap().playback, playback);
 }
+
+#[test]
+fn cmv6_scene_creation_and_segment_playback_share_the_existing_ownership_rules() {
+    for bitmap_header in [false, true] {
+        let mut code = create_code(2, 28, 1);
+        scene_start(&mut code, &[2, 0, 0, u32::MAX, 1]);
+        code.extend(destroy(&[2]));
+        let script = program(&code, b"synthetic.cmv\0");
+        let mut vm = Machine::new(&script).unwrap();
+        let mut movies = MovieHost::default();
+        let mut scene = cmvs_rs::scene::SceneHost::default();
+        let mut files = SceneFiles(Some(slot_fixture::cmv6(4, bitmap_header)));
+        pending(&mut vm);
+        vm.state_mut().set_system_integer(0, 123).unwrap();
+        movies
+            .try_create_scene(&mut vm, &mut scene, &mut files)
+            .unwrap();
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.state().system_integer(0), Some(123));
+        let p = movies.scene_player(2).unwrap();
+        assert!(matches!(p.index, cmvs_rs::movie::SceneMovieIndex::Cmv6(_)));
+        assert!(!p.playback.active);
+        assert_eq!(p.frame, 1);
+        assert!(
+            scene
+                .object(28)
+                .unwrap()
+                .image
+                .as_ref()
+                .unwrap()
+                .pixels
+                .pixels()
+                .chunks_exact(4)
+                .all(|p| p == [136, 136, 136, 255])
+        );
+        pending(&mut vm);
+        movies.try_start_scene(&mut vm).unwrap();
+        for target in [2, 3, 0, 1] {
+            movies.advance_scene(67, &mut scene).unwrap();
+            assert_eq!(movies.scene_player(2).unwrap().frame, target);
+            let c = 128 + target as u8 * 8;
+            assert!(
+                scene
+                    .object(28)
+                    .unwrap()
+                    .image
+                    .as_ref()
+                    .unwrap()
+                    .pixels
+                    .pixels()
+                    .chunks_exact(4)
+                    .all(|p| p == [c, c, c, 255])
+            );
+        }
+        let old = scene.objects().clone();
+        pending(&mut vm);
+        movies.try_handle(&mut vm).unwrap();
+        assert!(!movies.occupied(2));
+        assert_eq!(scene.objects(), &old);
+    }
+}
+
+#[test]
+fn cmv6_scene_bad_frames_metadata_and_real_soundtracks_preserve_the_old_player() {
+    let good = slot_fixture::cmv6(4, true);
+    let mut bad_size = good.clone();
+    bad_size[52..56].copy_from_slice(&769u32.to_le_bytes());
+    let mut bad_dimensions = good.clone();
+    bad_dimensions[28..32].copy_from_slice(&32u32.to_le_bytes());
+    let mut audio = good.clone();
+    audio.extend(b"Ogg");
+    let len = audio.len() as u32;
+    audio[8..12].copy_from_slice(&len.to_le_bytes());
+    audio[128..132].copy_from_slice(&3u32.to_le_bytes());
+    for (data, frame) in [(bad_size, 0), (bad_dimensions, 0), (audio, 0), (good, 4)] {
+        let mut code = create_code(0, 28, 0);
+        code.extend(create_code(0, 29, frame));
+        let script = program(&code, b"synthetic.cmv\0");
+        let mut vm = Machine::new(&script).unwrap();
+        let mut movies = MovieHost::default();
+        let mut scene = cmvs_rs::scene::SceneHost::default();
+        pending(&mut vm);
+        movies
+            .try_create_scene(
+                &mut vm,
+                &mut scene,
+                &mut SceneFiles(Some(slot_fixture::movie(false))),
+            )
+            .unwrap();
+        let old = scene.objects().clone();
+        let encoded = movies.scene_player(0).unwrap().encoded().to_vec();
+        pending(&mut vm);
+        vm.state_mut().set_system_integer(0, 456).unwrap();
+        let pc = vm.pc();
+        let sp = vm.stack().len_bytes();
+        assert!(
+            movies
+                .try_create_scene(&mut vm, &mut scene, &mut SceneFiles(Some(data)))
+                .is_err()
+        );
+        assert_eq!(vm.pending_system(), Some((pc, 0x308)));
+        assert_eq!(vm.stack().len_bytes(), sp);
+        assert_eq!(vm.state().system_integer(0), Some(456));
+        assert_eq!(scene.objects(), &old);
+        assert_eq!(movies.scene_player(0).unwrap().encoded(), encoded);
+    }
+}
