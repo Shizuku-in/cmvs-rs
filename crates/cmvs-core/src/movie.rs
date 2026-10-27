@@ -8,8 +8,9 @@
 //!
 //! Engine +4480 holds three scene players. 0x2308 creates a stopped CMV6/CMV9 player and
 //! initializes its bound scene object; 0x230a destroys the player, retaining that image.
-//! 0x2309 starts default-mode segment playback. Other slot controls, playback modes,
-//! audio-bearing slots and the other creation variant remain unhandled.
+//! 0x2309 starts default-mode segment playback and 0x231a queries whether a player is
+//! active. Other slot controls, playback modes, audio-bearing slots and the other creation
+//! variant remain unhandled.
 use crate::{
     audio::{AudioBackend, AudioRequest, AudioSettings, MovieAudioClock},
     bytecode::DecodeError,
@@ -330,22 +331,33 @@ impl MovieHost {
     }
 
     /// 0x230a / 0x14007f390: SP-4 slot compared unsigned against 2; destroys and clears the
-    /// slot's player if present and returns 0x4004. Out-of-range slots only set +12056 bit
-    /// 0x1000000 in the original, which is not modeled.
+    /// slot's player if present and returns 0x4004. 0x231a / 0x14007f610 checks the same
+    /// slot and sets system result 0 to whether 0x140038590 reads a nonzero +68 active flag,
+    /// or 0 for an empty slot; returns 0x4004. A completed segment clears active while
+    /// setting paused, so it reports 0. Out-of-range slots only set +12056 bit 0x1000000 in
+    /// the original, which is not modeled.
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, 0x30a)) = vm.pending_system() else {
+        let Some((pc, command @ (0x30a | 0x31a))) = vm.pending_system() else {
             return Ok(false);
         };
-        let slot = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x230a, e.0))? as usize;
+        let op = command + 0x2000;
+        let slot = vm.stack().peek_u32(4).map_err(|e| error(pc, op, e.0))? as usize;
         if slot >= MOVIE_SLOTS {
             return Err(error(
                 pc,
-                0x230a,
+                op,
                 "movie slot outside 0..2 sets an unmodeled flag",
             ));
         }
         vm.complete_system(SystemResult(0x4004))?;
-        self.slots[slot] = None;
+        if command == 0x30a {
+            self.slots[slot] = None;
+        } else {
+            let active = self.slots[slot].as_ref().is_some_and(|m| m.playback.active);
+            vm.state_mut()
+                .set_system_integer(0, u32::from(active))
+                .expect("slot 0 exists");
+        }
         Ok(true)
     }
 

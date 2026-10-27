@@ -33,15 +33,21 @@ fn program(code: &[u8], text: &[u8]) -> Script {
     raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
     Script::decode(&raw).unwrap()
 }
-fn destroy(slots: &[u32]) -> Vec<u8> {
+fn slot_command(op: u16, slots: &[u32]) -> Vec<u8> {
     let mut code = vec![];
     for &slot in slots {
         code.extend(0x440u16.to_le_bytes());
         code.extend(4u16.to_le_bytes());
         code.extend(slot.to_le_bytes());
-        code.extend(0x230au16.to_le_bytes());
+        code.extend(op.to_le_bytes());
     }
     code
+}
+fn destroy(slots: &[u32]) -> Vec<u8> {
+    slot_command(0x230a, slots)
+}
+fn query(slots: &[u32]) -> Vec<u8> {
+    slot_command(0x231a, slots)
 }
 fn pending(vm: &mut Machine<'_>) {
     while !matches!(vm.step().unwrap(), Step::System { .. }) {}
@@ -64,18 +70,22 @@ fn destroying_constructor_empty_slots_completes_without_a_result() {
 
 #[test]
 fn out_of_range_slots_and_short_stacks_keep_the_command_pending() {
-    for code in [
-        destroy(&[3]),
-        destroy(&[u32::MAX]),
-        0x230au16.to_le_bytes().to_vec(),
-    ] {
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        pending(&mut vm);
-        let (pc, bytes) = (vm.pc(), vm.stack().len_bytes());
-        assert!(MovieHost::default().try_handle(&mut vm).is_err());
-        assert_eq!(vm.pending_system(), Some((pc, 0x30a)));
-        assert_eq!(vm.stack().len_bytes(), bytes);
+    for op in [0x230au16, 0x231a] {
+        for code in [
+            slot_command(op, &[3]),
+            slot_command(op, &[u32::MAX]),
+            op.to_le_bytes().to_vec(),
+        ] {
+            let script = script(&code);
+            let mut vm = Machine::new(&script).unwrap();
+            vm.state_mut().set_system_integer(0, 9).unwrap();
+            pending(&mut vm);
+            let (pc, bytes) = (vm.pc(), vm.stack().len_bytes());
+            assert!(MovieHost::default().try_handle(&mut vm).is_err());
+            assert_eq!(vm.pending_system(), Some((pc, op - 0x2000)));
+            assert_eq!(vm.stack().len_bytes(), bytes);
+            assert_eq!(vm.state().system_integer(0), Some(9));
+        }
     }
 }
 
@@ -646,6 +656,51 @@ fn scene_start_does_not_seek_and_preserves_a_paused_completion_state() {
     let p = &movies.scene_player(0).unwrap().playback;
     assert!(p.active && p.paused);
     assert_eq!(movies.scene_player(0).unwrap().frame, 0);
+}
+fn query_result(vm: &mut Machine<'_>, movies: &mut MovieHost) -> Option<u32> {
+    pending(vm);
+    vm.state_mut().set_system_integer(0, 9).unwrap();
+    let pc = vm.pc();
+    assert!(movies.try_handle(vm).unwrap());
+    assert_eq!((vm.pc(), vm.stack().len_bytes()), (pc + 2, 0));
+    vm.state().system_integer(0)
+}
+#[test]
+fn scene_activity_query_follows_start_and_completion_and_reports_empty_slots_as_zero() {
+    let mut code = query(&[0, 2]);
+    scene_start(&mut code, &[0, 0, 0, u32::MAX, 0]);
+    code.extend(query(&[0, 0]));
+    code.extend(destroy(&[0]));
+    code.extend(query(&[0]));
+    let (script, mut files) = scene_play_fixture(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut movies = MovieHost::default();
+    let mut scene = cmvs_rs::scene::SceneHost::default();
+    pending(&mut vm);
+    movies
+        .try_create_scene(&mut vm, &mut scene, &mut files)
+        .unwrap();
+    // A created player is stopped; an empty slot also reads 0.
+    assert_eq!(query_result(&mut vm, &mut movies), Some(0));
+    assert_eq!(query_result(&mut vm, &mut movies), Some(0));
+    pending(&mut vm);
+    movies.try_start_scene(&mut vm).unwrap();
+    let playback = movies.scene_player(0).unwrap().playback.clone();
+    let objects = scene.objects().clone();
+    assert_eq!(query_result(&mut vm, &mut movies), Some(1));
+    assert_eq!(movies.scene_player(0).unwrap().playback, playback);
+    assert_eq!(scene.objects(), &objects);
+    movies.advance_scene(267, &mut scene).unwrap();
+    let player = movies.scene_player(0).unwrap();
+    assert!(!player.playback.active && player.playback.paused);
+    assert_eq!(player.frame, 3);
+    // Completion keeps the player and its last image but reports it inactive.
+    assert_eq!(query_result(&mut vm, &mut movies), Some(0));
+    assert!(movies.occupied(0));
+    pending(&mut vm);
+    movies.try_handle(&mut vm).unwrap();
+    assert_eq!(query_result(&mut vm, &mut movies), Some(0));
+    assert!(!movies.occupied(0));
 }
 #[test]
 fn scene_playback_rejects_destroyed_bindings_without_committing_its_frame_or_time() {
