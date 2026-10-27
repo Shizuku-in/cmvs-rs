@@ -1,9 +1,10 @@
 //! Screen cameras at engine +1968 -> +16 and +24 (0xa0 bytes each, constructor 0x14004fab0);
 //! addresses refer to the documented binary hash. 0x2058..0x205f/0x2066/0x2067/0x209c set
 //! fields of the camera selected by SP-4 (0x140027090), 0x2060..0x2065 the same fields of camera 0
-//! (0x140027070). Fields stay raw words named by offset: the original only reads them for
-//! coordinate modes 2/3 (0x140020340 -> 0x14004ef40), which the renderer rejects, so they
-//! do not affect the supported 2D output. Eased moves (+84) are not modeled.
+//! (0x140027070). Fields stay raw words named by offset. The original renderer uses them
+//! for coordinate modes 2/3 (0x140020340 -> 0x14004ef40), which our renderer rejects, so
+//! they do not affect the supported 2D output. 0x2056 queries projected integer coordinates
+//! without rendering. Eased moves (+84) are not modeled.
 use crate::{
     bytecode::DecodeError,
     evaluate::{error, truncate},
@@ -53,6 +54,38 @@ impl Camera {
     fn set(&mut self, index: usize, value: f32) {
         self.words[index] = value.to_bits();
     }
+
+    /// 0x14004ee00: mode 3 projects a point, other camera modes leave it unchanged.
+    /// Preserve the scalar SSE operation order; +52 is a horizontal projection offset,
+    /// not the angle at +56. Query mode 1 selects the alternate position during a move.
+    fn project(&self, mode: u32, point: [f32; 3], offset: f32, reference: f32) -> [f32; 3] {
+        if self.words[0] != 3 {
+            return point;
+        }
+        let base = if mode == 1 && self.words[MOVING] != 0 {
+            23
+        } else {
+            1
+        };
+        let [x, y, z] = point;
+        let depth = z - self.float(base + 2);
+        let ratio = reference / depth;
+        let shift = if self.float(13) != 0.0 {
+            ((self.float(7) * 0.5) * (self.float(13) / 45.0)) * (depth / self.float(6))
+        } else {
+            0.0
+        };
+        let relative = depth / self.float(6);
+        let vertical = ((self.float(base + 1) - y) * ratio) + offset;
+        let horizontal = (x - (shift + self.float(base))) * ratio;
+        let scale_y = (self.float(10) / (relative * self.float(8))) / self.float(18);
+        let scale_x = (self.float(9) / (relative * self.float(7))) / self.float(17);
+        [
+            (scale_x * horizontal) + self.float(15),
+            ((scale_y * vertical) + self.float(16)) + ((reference - depth) * self.float(11)),
+            0.0,
+        ]
+    }
 }
 
 /// `(float)(int)(v * 100) / 100` as 0x14004ed10 computes it with cvttss2si.
@@ -74,6 +107,9 @@ impl CameraHost {
         self.cameras[0].words[MOVING] != 0
     }
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
+        if let Some((pc, 0x56)) = vm.pending_system() {
+            return self.project_query(vm, pc);
+        }
         let Some((pc, command @ (0x58..=0x68 | 0x9c))) = vm.pending_system() else {
             return Ok(false);
         };
@@ -158,5 +194,71 @@ impl CameraHost {
             _ => unreachable!("matched above"),
         }
         Ok(true)
+    }
+
+    /// 0x2056 / 0x14006fa20: SP-4 camera, SP-8 query mode, SP-12..20 XYZ,
+    /// SP-24 vertical offset, SP-28 reference depth. Returns 0x401c and writes only
+    /// integer system results 1..3 with cvttss2si (including its indefinite i32 value).
+    fn project_query(&self, vm: &mut Machine<'_>, pc: usize) -> Result<bool, DecodeError> {
+        let fail = |why| error(pc, 0x2056, why);
+        let mut args = [0; 7];
+        for (i, arg) in args.iter_mut().enumerate() {
+            *arg = vm.stack().peek_u32(4 * (i + 1)).map_err(|e| fail(e.0))?;
+        }
+        let camera = self
+            .cameras
+            .get(args[0] as usize)
+            .ok_or_else(|| fail("camera index outside 0..1"))?;
+        let point = camera.project(
+            args[1],
+            [args[2], args[3], args[4]].map(f32::from_bits),
+            f32::from_bits(args[5]),
+            f32::from_bits(args[6]),
+        );
+        let result = point.map(truncate);
+        vm.complete_system(SystemResult(0x401c))?;
+        for (index, value) in (1..=3).zip(result) {
+            vm.state_mut()
+                .set_system_integer(index, value as u32)
+                .expect("system results 1..3 exist");
+        }
+        Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn projection_uses_alternate_position_only_for_query_mode_one_during_move() {
+        let mut camera = Camera::default();
+        camera.words[0] = 3;
+        for (i, value) in [
+            (6, 10.0),
+            (7, 8.0),
+            (8, 6.0),
+            (9, 800.0),
+            (10, 600.0),
+            (11, 1.5),
+            (13, 45.0),
+            (15, 400.0),
+            (16, 300.0),
+            (17, 2.0),
+            (18, 0.5),
+            (23, 2.0),
+            (24, 3.0),
+            (25, 4.0),
+        ] {
+            camera.set(i, value);
+        }
+        let point = [10.0, -1.0, 24.0];
+        let original = camera.project(0, point, 2.0, 40.0);
+        assert_eq!(camera.project(1, point, 2.0, 40.0), original);
+        camera.words[MOVING] = 1;
+        assert_eq!(camera.project(0, point, 2.0, 40.0), original);
+        assert_eq!(camera.project(2, point, 2.0, 40.0), original);
+        // Horizontal shift is 8, so x matches camera X + shift; Y is unchanged.
+        assert_eq!(camera.project(1, point, 2.0, 40.0), [400.0, 1330.0, 0.0]);
     }
 }
