@@ -21,6 +21,7 @@ use crate::{
     vm::SystemResult,
 };
 use std::error::Error;
+mod measure;
 
 pub const MESSAGE_WINDOWS: usize = 8;
 /// Screen info +8/+12 (configuration words 0/1 of every window), which is not modeled; the
@@ -104,6 +105,10 @@ pub struct TextObject {
     pub area: [i32; 4],
     /// +156/+160: pen position, reset to the area origin by 0x14005ab00.
     pub cursor: [i32; 2],
+    /// +196..+323: ruby-line flags. Zero until text output marks a line.
+    pub ruby_lines: [u32; 32],
+    /// +528/+532: overflow count and previous 16-bit character, reset by measurement.
+    pub layout_scratch: [u32; 2],
     /// +32: glyph size; one character advances size + spacing[0], one line size + spacing[1].
     pub glyph_size: i32,
     /// +36/+40: character and line spacing.
@@ -230,6 +235,7 @@ impl MessageHost {
             Some((pc, 0x150)) => self.move_window(vm, pc).map(|()| true),
             Some((pc, 0x151)) => self.cursor(vm, pc).map(|()| true),
             Some((pc, 0x155)) => self.glyph_parameter(vm, pc).map(|()| true),
+            Some((pc, 0x11f)) => self.measure(vm, pc).map(|()| true),
             Some((pc, 0x14e)) => self.show(vm, pc).map(|()| true),
             Some((pc, command @ (0x14b | 0x14c))) => self.presence(vm, pc, command).map(|()| true),
             Some((pc, command @ (0x14a | 0x15a))) => {
@@ -588,6 +594,36 @@ impl MessageHost {
         } else {
             let text = self.texts[text].as_mut().expect("checked above");
             text.cursor = [text.area[0], text.area[1]];
+        }
+        Ok(())
+    }
+    /// 0x1400731d0 -> 0x14005ca80: SP-4 text index, SP-8 string reference.
+    /// System results 0/1/2/4 = success/max count/lines/last count; pops 8.
+    fn measure(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
+        let word = |distance| {
+            vm.stack()
+                .peek_u32(distance)
+                .map_err(|e| error(pc, 0x211f, e.0))
+        };
+        let index = word(4)? as usize;
+        let bytes = vm.resolve_string(word(8)?)?;
+        let text = self.text(index).ok_or_else(|| {
+            error(
+                pc,
+                0x211f,
+                "text object index outside 0..11 or without an object sets an unmodeled flag",
+            )
+        })?;
+        let (counts, scratch) = measure::measure(text, &bytes).map_err(|e| error(pc, 0x211f, e))?;
+        vm.complete_system(SystemResult(0x4008))?;
+        self.texts[index]
+            .as_mut()
+            .expect("checked above")
+            .layout_scratch = scratch;
+        for (slot, value) in [(0, 1), (1, counts[0]), (2, counts[1]), (4, counts[2])] {
+            vm.state_mut()
+                .set_system_integer(slot, value)
+                .expect("known result slot");
         }
         Ok(())
     }
@@ -1047,6 +1083,8 @@ impl MessageHost {
             position,
             area: [0, 0, size[0], size[1]],
             cursor: [0, 0],
+            ruby_lines: [0; 32],
+            layout_scratch: [0; 2],
             glyph_size: 27,
             spacing: [0, 0],
             color: 0xff_ffff,

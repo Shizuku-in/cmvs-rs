@@ -60,6 +60,8 @@ fn created_text(position: [i32; 2], size: [u32; 2]) -> TextObject {
         position,
         area: [0, 0, size[0] as i32, size[1] as i32],
         cursor: [0, 0],
+        ruby_lines: [0; 32],
+        layout_scratch: [0; 2],
         glyph_size: 27,
         spacing: [0, 0],
         color: 0xff_ffff,
@@ -635,6 +637,252 @@ fn script_with_text(code: &[u8], text: &[u8]) -> Script {
     }
     raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
     Script::decode(&raw).unwrap()
+}
+
+#[test]
+fn text_measurement_counts_bytes_and_controls_without_moving_the_pen() {
+    for (bytes, expected) in [
+        (&b""[..], [0, 1, 0]),
+        (&b"abcd"[..], [4, 1, 4]),
+        (&b"\x82\xa0\x82\xa2AB"[..], [6, 1, 6]),
+        (&b"abcd\\nx"[..], [4, 2, 1]),
+        (&b"a\\cb\\tc\\wxd"[..], [4, 1, 4]),
+        (&b"{\x82\xa0\x82\xa2/\x82\xa4}"[..], [4, 1, 4]),
+        (&b"{ascii/ruby}"[..], [0, 1, 0]),
+    ] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [20, 540, 1280, 180]);
+        call(&mut code, 0x214f, &[3, 5, 0]);
+        call(&mut code, 0x211f, &[0, 7]);
+        let mut data = bytes.to_vec();
+        data.push(0);
+        let script = script_with_text(&code, &data);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 2);
+        let before = messages.text(7).cloned();
+        for i in 0..7 {
+            vm.state_mut().set_system_integer(i, 99).unwrap();
+        }
+        run(&mut vm, &mut messages, 1);
+        assert_eq!(messages.text(7), before.as_ref());
+        for (slot, value) in [
+            (0, 1),
+            (1, expected[0]),
+            (2, expected[1]),
+            (4, expected[2]),
+            (3, 99),
+            (5, 99),
+            (6, 99),
+        ] {
+            assert_eq!(
+                vm.state().system_integer(slot),
+                Some(value),
+                "{bytes:?} slot {slot}"
+            );
+        }
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
+}
+
+#[test]
+fn text_measurement_wrap_counts_follow_the_original_default_and_configured_branches() {
+    for (bytes, rules, expected) in [
+        (&b"abcde"[..], false, [5, 2, 5]),
+        (&b"abcde"[..], true, [4, 2, 1]),
+        (&b"\x82\xa0\x82\xa2\x82\xa4"[..], false, [6, 2, 6]),
+        (&b"\x82\xa0\x82\xa2\x82\xa4"[..], true, [4, 2, 2]),
+        (&b"{\x82\xa0\x82\xa2/x}\x82\xa4"[..], false, [6, 2, 6]),
+    ] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 30, 100]);
+        call(&mut code, 0x2143, &[10, 0]);
+        if rules {
+            call(&mut code, 0x211e, &[0, 0, 0, 7]);
+        }
+        call(&mut code, 0x211f, &[1, 7]);
+        let mut data = vec![0];
+        data.extend(bytes);
+        data.push(0);
+        let script = script_with_text(&code, &data);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 3 + usize::from(rules));
+        assert_eq!(
+            [1, 2, 4].map(|slot| vm.state().system_integer(slot).unwrap()),
+            expected,
+            "{bytes:?} rules={rules}"
+        );
+        assert_eq!(messages.text(7).unwrap().cursor, [0, 0]);
+    }
+}
+
+#[test]
+fn text_measurement_applies_hanging_and_repeated_character_limits() {
+    for (hanging, inseparable, bytes, expected, scratch) in [
+        (
+            &b"\x81\x41"[..],
+            &b""[..],
+            &b"\x82\xa0\x81\x41"[..],
+            [4, 1, 4],
+            [1, 0x82a0],
+        ),
+        (
+            &b""[..],
+            &b"\x81\x41"[..],
+            &b"\x81\x41\x81\x41\x81\x41"[..],
+            [4, 2, 2],
+            [0, 0],
+        ),
+        (
+            &b""[..],
+            &b"\x81\x41"[..],
+            &b"\x82\xa0\x81\x41"[..],
+            [2, 2, 2],
+            [0, 0],
+        ),
+    ] {
+        let mut data = hanging.to_vec();
+        data.push(0);
+        let second = data.len() as u32;
+        data.extend(inseparable);
+        data.push(0);
+        let input = data.len() as u32;
+        data.extend(bytes);
+        data.push(0);
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 20, 100]);
+        call(&mut code, 0x2143, &[10, 0]);
+        call(&mut code, 0x211e, &[1, second, 0, 7]);
+        call(&mut code, 0x211f, &[input, 7]);
+        call(&mut code, 0x211f, &[input, 7]);
+        let script = script_with_text(&code, &data);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 3);
+        for _ in 0..2 {
+            run(&mut vm, &mut messages, 1);
+            assert_eq!(
+                [1, 2, 4].map(|slot| vm.state().system_integer(slot).unwrap()),
+                expected
+            );
+            assert_eq!(messages.text(7).unwrap().layout_scratch, scratch);
+        }
+    }
+}
+
+#[test]
+fn text_measurement_rejects_malformed_strings_transactionally() {
+    for bytes in [
+        &b"\\"[..],
+        &b"\\q"[..],
+        &b"\\w"[..],
+        &b"\x81"[..],
+        &b"{base"[..],
+        &b"{base/ruby"[..],
+        &b"{\x81"[..],
+    ] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 100, 100]);
+        call(&mut code, 0x211f, &[0, 7]);
+        let mut data = bytes.to_vec();
+        data.push(0);
+        let script = script_with_text(&code, &data);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 1);
+        pending(&mut vm);
+        for i in 0..7 {
+            vm.state_mut().set_system_integer(i, 99).unwrap();
+        }
+        let pc = vm.pc();
+        let before = messages.text(7).cloned();
+        for _ in 0..2 {
+            assert!(messages.try_handle(&mut vm).is_err(), "{bytes:?}");
+            assert_eq!(messages.text(7), before.as_ref());
+            assert_eq!(vm.pending_system(), Some((pc, 0x11f)));
+            assert_eq!(vm.stack().len_bytes(), 8);
+            for i in 0..7 {
+                assert_eq!(vm.state().system_integer(i), Some(99));
+            }
+        }
+    }
+}
+
+#[test]
+fn text_measurement_rejects_missing_text_bad_references_and_short_stacks() {
+    for words in [
+        vec![0, 12],
+        vec![0, u32::MAX],
+        vec![0, 2],
+        vec![100, 7],
+        vec![7],
+        vec![],
+    ] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 100, 100]);
+        call(&mut code, 0x211f, &words);
+        let script = script_with_text(&code, b"text\0");
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 1);
+        pending(&mut vm);
+        let pc = vm.pc();
+        let before = messages.text(7).cloned();
+        assert!(messages.try_handle(&mut vm).is_err());
+        assert_eq!(messages.text(7), before.as_ref());
+        assert_eq!(vm.pending_system(), Some((pc, 0x11f)));
+        assert_eq!(vm.stack().len_bytes(), 4 * words.len());
+    }
+}
+
+#[test]
+fn text_measurement_resolves_string_bank_and_preserves_stack_below_arguments() {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 100, 100]);
+    code.extend(0x440u16.to_le_bytes());
+    code.extend(4u16.to_le_bytes());
+    code.extend(0x12345678u32.to_le_bytes());
+    call(&mut code, 0x211f, &[0x8000_0003, 7]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 1);
+    vm.state_mut().set_string(3, b"abc").unwrap();
+    run(&mut vm, &mut messages, 1);
+    assert_eq!(
+        [1, 2, 4].map(|slot| vm.state().system_integer(slot).unwrap()),
+        [3, 1, 3]
+    );
+    assert_eq!(vm.stack().len_bytes(), 4);
+    assert_eq!(vm.stack().peek_u32(4).unwrap(), 0x12345678);
+}
+
+#[test]
+fn text_measurement_bounds_automatic_ruby_line_access_but_not_explicit_newlines() {
+    for (bytes, success) in [(vec![b'a'; 33], false), (b"\\n".repeat(40), true)] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 10, 100]);
+        call(&mut code, 0x2143, &[10, 0]);
+        call(&mut code, 0x211f, &[0, 7]);
+        let mut data = bytes;
+        data.push(0);
+        let script = script_with_text(&code, &data);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 2);
+        pending(&mut vm);
+        let before = messages.text(7).cloned();
+        let command = vm.pending_system();
+        assert_eq!(messages.try_handle(&mut vm).is_ok(), success);
+        assert_eq!(messages.text(7), before.as_ref());
+        if success {
+            assert_eq!(vm.state().system_integer(2), Some(41));
+        } else {
+            assert_eq!(vm.pending_system(), command);
+            assert_eq!(vm.stack().len_bytes(), 8);
+        }
+    }
 }
 
 #[test]
