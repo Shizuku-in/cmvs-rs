@@ -12,8 +12,8 @@ use crate::{
 };
 
 impl MessageHost {
-    /// Waits for a release outside message buttons or a skip flag/action. No glyphs
-    /// are generated. Pending returns 0xa000; completion 0x400c does not yield.
+    /// Waits for a release of action 0 or 20 outside message buttons, or a skip flag/action.
+    /// No glyphs are generated. Pending returns 0xa000; completion 0x400c does not yield.
     pub fn try_wait(
         &mut self,
         vm: &mut Machine<'_>,
@@ -41,6 +41,7 @@ impl MessageHost {
         }
         let mut done = flags.skip() || input.skip_held() || flags.bypass();
         let mut consume = false;
+        let mut advance = false;
         if !done {
             if input.pressed(0) {
                 window.pressed_button = -1;
@@ -74,9 +75,12 @@ impl MessageHost {
             if !input.held(0) {
                 window.pressed_button = -1;
             }
-            if !hovered && input.released(0) && !consume {
+            // 0x14005e48f: an action 0 release left after the button checks, or an action 20
+            // release, advances and consumes both actions (0x140054d90, 0x140055160).
+            if !hovered && ((input.released(0) && !consume) || input.released(20)) {
                 done = true;
                 consume = true;
+                advance = true;
             }
             if !done && flags.auto_advance() {
                 return Err(error(
@@ -115,6 +119,9 @@ impl MessageHost {
         self.windows[slot] = Some(window);
         if consume {
             input.consume(0);
+        }
+        if advance {
+            input.consume(20);
         }
         Ok(Some(step))
     }

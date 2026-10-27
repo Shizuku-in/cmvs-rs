@@ -893,6 +893,58 @@ fn message_wait_skip_flags_and_actions_complete_without_consuming_other_edges() 
 }
 
 #[test]
+fn message_wait_action_twenty_release_advances_outside_buttons_and_consumes_both_actions() {
+    // (hovered, dragged from the button): a drag release consumes action 0 first, but a
+    // simultaneous action 20 release still advances.
+    for (hovered, dragged) in [(false, false), (true, false), (false, true)] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [100, 200, 100, 100]);
+        call(&mut code, 0x2191, &[40, 30, 20, 10, 0, 0]);
+        call(&mut code, 0x2192, &[0, 0]);
+        call(&mut code, 0x2153, &[u32::MAX, 0, 0]);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 3);
+        pending(&mut vm);
+        let mut input = ActionInput::default();
+        if dragged {
+            input.set_pointer(140, 260);
+            input.set(0, true, true, false).unwrap();
+            messages
+                .try_wait(&mut vm, &mut input, wait_flags(false, false))
+                .unwrap();
+            assert_eq!(messages.window(0).unwrap().pressed_button, 0);
+            input.set(0, false, false, true).unwrap();
+        } else {
+            // A press edge alone never advances; it is cleared with action 20.
+            input.set(0, true, true, false).unwrap();
+        }
+        input.set_pointer(
+            if hovered { 140 } else { 141 },
+            if hovered { 260 } else { 261 },
+        );
+        input.set(20, false, false, true).unwrap();
+        input.set(1, true, true, true).unwrap();
+        let step = messages
+            .try_wait(&mut vm, &mut input, wait_flags(false, false))
+            .unwrap();
+        assert!(input.pressed(1) && input.released(1));
+        if hovered {
+            assert_eq!(step, Some(Step::Yield));
+            assert!(vm.pending_system().is_some());
+            assert!(input.released(20) && input.pressed(0));
+        } else {
+            assert_eq!(step, Some(Step::Continue));
+            assert!(vm.pending_system().is_none());
+            assert!(!input.released(20));
+            assert!(!input.pressed(0) && !input.released(0));
+            assert_eq!(input.held(0), !dragged);
+        }
+    }
+}
+
+#[test]
 fn message_wait_bypass_completes_like_skip_before_auto_advance_without_consuming_input() {
     let mut code = vec![];
     create(&mut code, 0, 7, [0, 0, 100, 100]);
@@ -1126,6 +1178,31 @@ fn recorded_output_click_finishes_and_consumes_only_action_zero_edges() {
     assert!(!input.pressed(0) && !input.released(0));
     assert!(input.pressed(1) && input.released(1));
     assert_eq!(vm.pending_system(), None);
+}
+
+#[test]
+fn recorded_output_action_twenty_release_finishes_and_consumes_both_actions() {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 100, 100]);
+    call(&mut code, 0x2152, &[0, 0, 0]);
+    let script = script_with_text(&code, b"AB\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 1);
+    messages.set_record_output(true);
+    pending(&mut vm);
+    let mut input = ActionInput::default();
+    input.set(0, true, true, false).unwrap();
+    input.set(20, true, true, true).unwrap();
+    input.set(1, true, true, true).unwrap();
+    messages
+        .try_record_output(&mut vm, &mut input, wait_flags(false, false))
+        .unwrap();
+    assert_eq!(vm.pending_system(), None);
+    assert!(messages.text(7).unwrap().glyphs.iter().all(|g| !g.active));
+    assert!(input.held(0) && !input.pressed(0));
+    assert!(input.held(20) && !input.pressed(20) && !input.released(20));
+    assert!(input.pressed(1) && input.released(1));
 }
 
 #[test]

@@ -109,8 +109,9 @@ fn skipping_reports_the_script_flag_or_held_skip_actions() {
     }
 }
 
-/// (query command, action) from the getter offsets; actions 15..23 have no command.
-const QUERIES: [(u16, usize); 15] = [
+/// (query command, action) from the getter offsets; actions 15..19 have no command and
+/// action 21 (0x2348) is deliberately left pending.
+const QUERIES: [(u16, usize); 18] = [
     (0x21a0, 0),
     (0x21a2, 1),
     (0x21a4, 7),
@@ -126,6 +127,9 @@ const QUERIES: [(u16, usize); 15] = [
     (0x21b8, 3),
     (0x21ba, 4),
     (0x21bc, 5),
+    (0x2344, 22),
+    (0x2346, 23),
+    (0x234a, 20),
 ];
 
 #[test]
@@ -183,8 +187,11 @@ fn every_consumer_clears_only_its_own_action() {
 
 #[test]
 fn neighbouring_commands_are_left_pending() {
-    // 0x21a5/0x21a7/0x21be/0x21bf reach the dispatcher's shared default case.
-    for op in [0x219f, 0x21a5, 0x21a7, 0x21be, 0x21bf, 0x21c0] {
+    // 0x21a5/0x21a7/0x21be/0x21bf, 0x2341..0x2343 and 0x234c reach the dispatcher's shared
+    // case; the action 21 pair 0x2348/0x2349 needs the unmodeled frame-update consumer.
+    for op in [
+        0x219f, 0x21a5, 0x21a7, 0x21be, 0x21bf, 0x21c0, 0x2341, 0x2343, 0x2348, 0x2349, 0x234c,
+    ] {
         let script = commands(&[op]);
         let mut vm = Machine::new(&script).unwrap();
         pending(&mut vm);

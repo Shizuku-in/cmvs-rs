@@ -408,6 +408,7 @@ impl MessageHost {
     /// yielding. Waiting returns 0xa000, completion 0xc00c (both yield). Research mode
     /// explicitly selects the constructor settings block. Only the +1520 skip flag shortens
     /// reveal timing; it, held actions 7/8 and the +12244 bypass finish without consuming.
+    /// A release of action 0 or 20 finishes and consumes both (0x140054d90, 0x140055160).
     pub fn try_record_output(
         &mut self,
         vm: &mut Machine<'_>,
@@ -441,8 +442,9 @@ impl MessageHost {
         }
         let active = candidate.glyphs.iter().any(|g| g.active);
         let skip = flags.skip() || input.skip_held() || flags.bypass();
-        let done = !window.hidden && (!active || skip || input.released(0));
-        let consume = done && active && !skip && input.released(0);
+        let release = input.released(0) || input.released(20);
+        let done = !window.hidden && (!active || skip || release);
+        let consume = done && active && !skip && release;
         let step = if done {
             vm.complete_system(SystemResult(0xc00c))?
         } else {
@@ -456,6 +458,7 @@ impl MessageHost {
         self.texts[index] = Some(candidate);
         if consume {
             input.consume(0);
+            input.consume(20);
         }
         Ok(Some(step))
     }

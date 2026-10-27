@@ -171,10 +171,12 @@ impl ActionInput {
     }
 }
 
-/// Action of each 0x21a0 + 2 * n command pair, from the getter/consumer offsets
-/// (+1232 + 12 * action). 0x21a5/0x21a7 and 0x21be/0x21bf fall into the dispatcher's shared
-/// default case 0x1400823e7 and stay unhandled.
-const ACTION_COMMANDS: [(u16, usize); 15] = [
+/// Action of each 0x21a0 + 2 * n and 0x2344..0x234b command pair, from the getter/consumer
+/// offsets (+1232 + 12 * action). 0x21a5/0x21a7, 0x21be/0x21bf, 0x2341..0x2343 and 0x234c fall
+/// into the dispatcher's shared case 0x1400823e7 and stay unhandled. So do 0x2348/0x2349
+/// (action 21): the frame update 0x140019430 also consumes that action while +11152 is set,
+/// which is not modeled.
+const ACTION_COMMANDS: [(u16, usize); 18] = [
     (0x1a0, 0),
     (0x1a2, 1),
     (0x1a4, 7),
@@ -190,12 +192,16 @@ const ACTION_COMMANDS: [(u16, usize); 15] = [
     (0x1b8, 3),
     (0x1ba, 4),
     (0x1bc, 5),
+    (0x344, 22),
+    (0x346, 23),
+    (0x34a, 20),
 ];
 
-/// Even commands of ACTION_COMMANDS (0x140078b10 and identical siblings up to 0x140078fd0):
-/// system result 0 = action released, system result 4 (+82832) = held. The following odd
-/// command (inline 0x140054d90 and siblings) consumes the action; actions 7 and 8 have none.
-/// All return 0x4000 and pop nothing.
+/// Even commands of ACTION_COMMANDS (0x140078b10 and identical siblings up to 0x140078fd0;
+/// 0x1400791b0, 0x140079200 and 0x1400792a0 for 0x2344/0x2346/0x234a): system result 0 =
+/// action released, system result 4 (+82832) = held. The following odd command (inline
+/// 0x140054d90 and siblings, 0x1400551c0/0x1400551f0/0x140055160 for the 0x234x pairs)
+/// consumes the action; actions 7 and 8 have none. All return 0x4000 and pop nothing.
 pub fn try_handle(vm: &mut Machine<'_>, input: &mut ActionInput) -> Result<bool, DecodeError> {
     let Some((_, command)) = vm.pending_system() else {
         return Ok(false);
