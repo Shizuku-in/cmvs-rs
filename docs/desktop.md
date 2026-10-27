@@ -156,3 +156,19 @@ cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Downl
 2026-10-27 遮罩转场：软件呈现器现按原版着色器系数绘制 0x222a 的 Put/Cut 转场，桌面显示同一结果。无窗口探针导出的帧已显示事件 CG 按方块遮罩溶解；本轮未在原生窗口中实测转场。
 
 2026-10-27 画面震动：软件呈现器按 0x2225 的偏移平移场景槽对象或窗口/文字图层，桌面显示同一结果；无窗口探针导出帧中 CG 左移 35 px、消息窗口不动。本轮未在原生窗口中实测震动。
+
+## 启动自动读档黑屏与显式标题预览（2026-10-27）
+
+本机 system.dat 的整数 2198=1，使 main.ps3 尝试恢复 save870.dat；默认在 0x395de / 0x22b5 保留断点，尚无场景画面。桌面新增无参数开关 `--skip-auto-resume`：配置 `Startup::set_skip_auto_resume(true)`，只在首次系统存档成功读取后清零内存整数 2198，保持其他持久变量与所有文件不变。只支持已核对的 Amatsutsumi 游戏 ID 0x17800016，其他/未知 ID 显式报错；不替换签名查询结果，不忽略未知指令，完整恢复仍未实现。
+
+推荐当前画面检查命令（静音）：
+
+```powershell
+cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --skip-auto-resume --audio record --font "C:/Windows/Fonts/msgothic.ttc"
+```
+
+默认未启用该选项时，Windows 原生窗口仍在第 808 步暂停，现把暂停原因和启动选项提示显示在窗口标题中；其他未实现命令显示命令号与脚本/PC，快照屏障显示显式继续选项。提示不是 VM 命令或脚本标题修改。
+
+同一 release 生产构建以记录音频模式运行 14 秒，完成 logo 淡入/停留/淡出、标题淡入，9983 步后正常退出，导出 local/skip-auto-resume-title.png（1280×720），目视确认标题完整、没有黑屏。存档目录所有文件运行前后哈希一致。鼠标/Enter 无窗口重放可从标题开始游戏，分别到 sn1001.ps3 / 0x2b656 / 0x2070（481318/481358 步，SP=32）；模式 2 的原生绘制与该后续命令仍未实现，本轮未在原生窗口点击进入剧情。
+
+真实音频模式在当前 192000 Hz/双声道默认设备上两次异常退出，状态 0xc0000008，日志结束在 sys301.ogg 准备与品牌淡入之后，未生成预定标题帧。原因未定位，本轮不宣称音频设备播放成功，使用 `--audio record` 可独立验证画面。未更改音频后端或用户设备设置。

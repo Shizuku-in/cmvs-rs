@@ -231,3 +231,5 @@ BGM 与 SE 共用 `AudioHost`/`AudioBackend`：`BgmState` 保存 +4464 对象的
 `SceneHost::handle_object` 接入 0x2042，复用父/子目标与绘制状态检查，只写模式字 2，保留属性与效果。`scene_render` 对该模式仍显式报错。当前存档使正常入口停于 main.ps3 / 0x395a0 / 0x22bb；只在忽略目录的独立研究构建中复现整数 2198=0 的开始新游戏条件后，剧情 VM 可到 sn1001.ps3 / 0x2b656 / 0x2070。生产核心没有启动变量覆盖，详见 vm-semantics.md。
 
 `SaveMenuHost` 接入只读签名查询 0x22bb，复用 `SaveSource` 的有界前缀；`DirectorySaves` 支持 0..999，菜单扫描仍最多 256 槽。查询与完整 CSV2 解码、快照恢复分开：仅签名识别成功不能证明存档可恢复。当前生产构建原样启动查询 save870.dat 成功，在 main.ps3 / 0x395de / 0x22b5 停于完整读档请求；没有研究变量覆盖或静默忽略恢复，详见 vm-semantics.md。
+
+启动自动恢复的预览策略留在本作专用 `runner::Startup`，不修改 `SystemSaveHost` 的格式/装载语义：`set_skip_auto_resume` 仅能在 tick 前配置，默认 false；首次 0x2128 成功装载后清零内存整数 2198，只接受已核对的本作 ID。缺失系统存档不生成变量，损坏/读取失败不消费策略，之后正常恢复重试；第一次读取成功或缺失后策略即不再作用于后续载入。desktop 以 `--skip-auto-resume` 显式启用，暂停提示仅写原生窗口标题。验证见 desktop.md，默认仍保留完整读档断点。

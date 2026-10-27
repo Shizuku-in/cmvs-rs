@@ -51,7 +51,11 @@ impl Root {
 }
 impl Drop for Root {
     fn drop(&mut self) {
-        for name in ["data/pack/start.ps3", "data/pack/script.cpz"] {
+        for name in [
+            "data/pack/start.ps3",
+            "data/pack/script.cpz",
+            "save/system.dat",
+        ] {
             let _ = fs::remove_file(self.0.join(name));
         }
         for name in ["data/pack", "data", "save"] {
@@ -388,4 +392,179 @@ fn timers_advance_at_run_entry_and_ignore_budget_slices_and_reused_deltas() {
         }
     ));
     assert_eq!(&run.timers().values()[..2], &[16, 116]);
+}
+
+// Synthetic CSS1, literal-only LZSS; no game bytes or external assets.
+fn auto_resume_save(game_id: u32) -> Vec<u8> {
+    let mut payload = vec![0u8; 44864];
+    payload[32512 + 4 * (2198 - 2048)..32516 + 4 * (2198 - 2048)]
+        .copy_from_slice(&1i32.to_le_bytes());
+    payload[32512 + 4 * (2199 - 2048)..32516 + 4 * (2199 - 2048)]
+        .copy_from_slice(&77i32.to_le_bytes());
+    payload[10] = 4; // Persistent bit 2130 remains set.
+    let mut packed = Vec::new();
+    for chunk in payload.chunks(8) {
+        packed.push(((1u16 << chunk.len()) - 1) as u8);
+        packed.extend_from_slice(chunk);
+    }
+    let mut raw = vec![0u8; 360];
+    raw[..4].copy_from_slice(b"CSS1");
+    for (offset, value) in [
+        (4, 104),
+        (68, game_id),
+        (92, 44864),
+        (96, packed.len() as u32),
+        (100, 360 + packed.len() as u32),
+    ] {
+        raw[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    raw[76] = 1;
+    let key = b"YUKO_KAWAI_PURPLE_SYSTEM_SAVE_CHECK";
+    for (i, byte) in packed.iter().enumerate() {
+        raw.push((byte.wrapping_add(64) ^ key[i % key.len()]).rotate_left(2));
+    }
+    let checksum = raw[360..]
+        .iter()
+        .fold(0u16, |sum, &b| sum.wrapping_add(u16::from(b)));
+    raw.extend(checksum.to_le_bytes());
+    raw
+}
+fn auto_resume_code(game_id: u32, reads: usize) -> Vec<u8> {
+    let mut code = 0x442u16.to_le_bytes().to_vec();
+    code.extend(4u16.to_le_bytes());
+    code.extend(game_id.to_le_bytes());
+    code.extend(0x201du16.to_le_bytes());
+    for _ in 0..reads {
+        code.extend(0x2128u16.to_le_bytes());
+    }
+    code.extend(0x27ffu16.to_le_bytes());
+    code
+}
+
+#[test]
+fn auto_resume_policy_is_explicit_preserves_other_settings_and_never_writes_saves() {
+    for skip in [false, true] {
+        let code = auto_resume_code(0x1780_0016, 1);
+        let root = Root::new(&format!("auto-resume-{skip}"), &code, b"");
+        let raw = auto_resume_save(0x1780_0016);
+        let path = root.0.join("save/system.dat");
+        fs::write(&path, &raw).unwrap();
+        let script = root.script();
+        let mut run = Startup::new(&script, &root.0, 0).unwrap();
+        if skip {
+            run.set_skip_auto_resume(true).unwrap();
+        }
+        let mut backend = RecordingBackend::default();
+        for _ in 0..3 {
+            assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+        }
+        assert_eq!(
+            run.machine().state().integer(2198),
+            Some(if skip { 0 } else { 1 })
+        );
+        assert_eq!(run.machine().state().integer(2199), Some(77));
+        assert_eq!(run.machine().state().bit(2130), Some(true));
+        assert_eq!(run.auto_resume_skipped(), skip);
+        assert!(matches!(
+            run.tick(&mut backend).unwrap(),
+            StartupEvent::Unhandled {
+                command: 0x27ff,
+                ..
+            }
+        ));
+        assert_eq!(fs::read(path).unwrap(), raw);
+        assert!(run.set_skip_auto_resume(false).is_err());
+    }
+}
+
+#[test]
+fn auto_resume_policy_only_overrides_the_first_system_save_read() {
+    let code = auto_resume_code(0x1780_0016, 2);
+    let root = Root::new("auto-resume-once", &code, b"");
+    fs::write(
+        root.0.join("save/system.dat"),
+        auto_resume_save(0x1780_0016),
+    )
+    .unwrap();
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    run.set_skip_auto_resume(true).unwrap();
+    let mut backend = RecordingBackend::default();
+    for _ in 0..3 {
+        run.tick(&mut backend).unwrap();
+    }
+    assert_eq!(run.machine().state().integer(2198), Some(0));
+    run.tick(&mut backend).unwrap();
+    assert_eq!(run.machine().state().integer(2198), Some(1));
+}
+
+#[test]
+fn auto_resume_policy_rejects_other_profiles_without_applying_system_state() {
+    let code = auto_resume_code(0x1234_5678, 1);
+    let root = Root::new("auto-resume-wrong-profile", &code, b"");
+    let raw = auto_resume_save(0x1234_5678);
+    fs::write(root.0.join("save/system.dat"), &raw).unwrap();
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    run.set_skip_auto_resume(true).unwrap();
+    let mut backend = RecordingBackend::default();
+    for _ in 0..2 {
+        run.tick(&mut backend).unwrap();
+    }
+    assert!(
+        run.tick(&mut backend)
+            .unwrap_err()
+            .to_string()
+            .contains("only verified")
+    );
+    assert_eq!(run.machine().pending_system(), Some((10, 0x128)));
+    assert_eq!(run.machine().state().integer(2198), None);
+    assert!(!run.auto_resume_skipped());
+    assert_eq!(fs::read(root.0.join("save/system.dat")).unwrap(), raw);
+}
+
+#[test]
+fn auto_resume_policy_keeps_missing_and_invalid_system_saves_distinct_and_retryable() {
+    let code = auto_resume_code(0x1780_0016, 2);
+    let root = Root::new("auto-resume-missing", &code, b"");
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    run.set_skip_auto_resume(true).unwrap();
+    let mut backend = RecordingBackend::default();
+    for _ in 0..3 {
+        run.tick(&mut backend).unwrap();
+    }
+    assert_eq!(run.machine().state().integer(2198), None);
+    assert!(!run.auto_resume_skipped());
+    // Missing first read consumes the startup policy; a later load is not overridden.
+    fs::write(
+        root.0.join("save/system.dat"),
+        auto_resume_save(0x1780_0016),
+    )
+    .unwrap();
+    run.tick(&mut backend).unwrap();
+    assert_eq!(run.machine().state().integer(2198), Some(1));
+
+    let root = Root::new("auto-resume-invalid", &code, b"");
+    let mut raw = auto_resume_save(0x1780_0016);
+    raw[360] ^= 1;
+    fs::write(root.0.join("save/system.dat"), &raw).unwrap();
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    run.set_skip_auto_resume(true).unwrap();
+    for _ in 0..2 {
+        run.tick(&mut backend).unwrap();
+    }
+    assert!(run.tick(&mut backend).is_err());
+    assert_eq!(run.machine().pending_system(), Some((10, 0x128)));
+    assert_eq!(run.machine().state().integer(2198), None);
+    assert!(!run.auto_resume_skipped());
+    fs::write(
+        root.0.join("save/system.dat"),
+        auto_resume_save(0x1780_0016),
+    )
+    .unwrap();
+    run.tick(&mut backend).unwrap();
+    assert_eq!(run.machine().state().integer(2198), Some(0));
+    assert!(run.auto_resume_skipped());
 }

@@ -297,6 +297,11 @@ impl ApplicationHandler for App<'_> {
                     ),
                     Ok(event) => {
                         self.halted = true;
+                        window.set_title(&halt_title(
+                            event,
+                            self.startup.machine().current_name(),
+                            self.startup.machine().pc(),
+                        ));
                         for (slot, object) in self.startup.scene().objects() {
                             println!(
                                 "# scene object[{slot}] draw={:?} children={}",
@@ -364,6 +369,20 @@ impl ApplicationHandler for App<'_> {
         }
     }
 }
+fn halt_title(event: StartupEvent, script: &[u8], pc: usize) -> String {
+    match event {
+        StartupEvent::Unhandled {
+            command: 0x22b5, ..
+        } if script == b"main.ps3" && pc == 0x395de => {
+            "cmvs-rs paused: save restore unsupported; restart with --skip-auto-resume".into()
+        }
+        StartupEvent::Unhandled { command, .. } => format!(
+            "cmvs-rs paused: unsupported 0x{command:04x} at {} / 0x{pc:x}",
+            script.escape_ascii()
+        ),
+        _ => "cmvs-rs paused: snapshot required; use --continue-without-snapshot".into(),
+    }
+}
 fn run() -> Result<(), Box<dyn Error>> {
     let mut args = env::args_os().skip(1);
     let root = args.next().ok_or(
@@ -371,7 +390,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     )?;
     if root == "--help" {
         println!(
-            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>] [--continue-without-snapshot] [--rand-seed <seed>] [--save-frame <new.png>] [--audio <record|native>] [--record-text | --font <file> [--font-face <index>]]\nNative research preview only. Runs bounded startup with virtual callback tick 0 and explicit wall-time scene updates; stops at unknown commands or main snapshot barrier. --continue-without-snapshot enters main without building a save image; saving stays unavailable. --rand-seed sets the CRT rand() research seed (default 0). Without an explicit image, presents the verified 2D scene (top-level objects and their children) and CMV6 JBPD movies on a 1280x720 research viewport; includes timed full-screen color fades; use a release build for movie decoding; transforms, other transitions and alternate blend modes remain unsupported. --save-frame writes the frame shown at exit, in script coordinates, to a new PNG file (never overwritten); use it instead of screen captures to check rendering. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. --audio record (default) records only; --audio native requires the audio-output feature and opens the default device for Vorbis SE/BGM/movie playback, using audio source position for movie frames. Device-buffer latency is not calibrated. Raw window input is observed but not injected into CMVS opcodes. --record-text explicitly records only the supported single-line message glyph descriptors and reveal timing; no font pixels or text drawing. --font loads an explicit OpenType file/collection face and previews the supported single-line Shift-JIS messages, with flat colors and outlines. Its glyph masks differ from GDI. --font-face defaults to 0. Default message output stays a barrier. All game files read-only."
+            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>] [--continue-without-snapshot] [--skip-auto-resume] [--rand-seed <seed>] [--save-frame <new.png>] [--audio <record|native>] [--input <native|record>] [--record-text | --font <file> [--font-face <index>]]\nNative research preview only. Runs bounded startup with virtual callback tick 0 and explicit wall-time scene updates; stops at unknown commands or main snapshot barrier. --continue-without-snapshot enters main without building a save image; saving stays unavailable. --skip-auto-resume explicitly disables startup auto-load in memory for the verified Amatsutsumi profile, preserving all save files and other system-save settings; full save restore stays unsupported. --rand-seed sets the CRT rand() research seed (default 0). Without an explicit image, presents the verified 2D scene (top-level objects and their children) and CMV6 JBPD movies on a 1280x720 research viewport; includes timed full-screen color fades; use a release build for movie decoding; transforms, other transitions and alternate blend modes remain unsupported. --save-frame writes the frame shown at exit, in script coordinates, to a new PNG file (never overwritten); use it instead of screen captures to check rendering. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. --audio record (default) records only; --audio native requires the audio-output feature and opens the default device for Vorbis SE/BGM/movie playback, using audio source position for movie frames. Device-buffer latency is not calibrated. --input native (default) maps key.cfg bindings and pointer events to CMVS actions; --input record observes input without injecting actions. --record-text explicitly records only the supported message glyph descriptors and reveal timing; no font pixels or text drawing. --font loads an explicit OpenType file/collection face and previews the supported Shift-JIS messages with wrapping and ruby, with flat colors and outlines. Its glyph masks differ from GDI. --font-face defaults to 0. Default message output stays a barrier. All game files read-only."
         );
         return Ok(());
     }
@@ -380,6 +399,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut preview_name = None;
     let mut image_archive = None;
     let mut snapshot_policy = SnapshotPolicy::Barrier;
+    let mut skip_auto_resume = false;
     let mut rand_seed = 0;
     let mut save_frame = None;
     let mut native_audio = false;
@@ -388,6 +408,10 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut font_path = None;
     let mut font_face = None;
     while let Some(flag) = args.next() {
+        if flag == "--skip-auto-resume" {
+            skip_auto_resume = true;
+            continue;
+        }
         if flag == "--continue-without-snapshot" {
             snapshot_policy = SnapshotPolicy::ContinueWithoutImage;
             continue;
@@ -485,6 +509,12 @@ fn run() -> Result<(), Box<dyn Error>> {
     };
     let script = load_start(&root)?;
     let mut startup = Startup::new(&script, &root, 0)?;
+    startup.set_skip_auto_resume(skip_auto_resume)?;
+    if skip_auto_resume {
+        println!(
+            "# skip-auto-resume: explicitly clear Amatsutsumi's in-memory startup auto-load flag after system-save loading; save files unchanged; full save restore remains unsupported"
+        );
+    }
     startup.set_decode_movie_frames(true);
     if native_audio {
         #[cfg(feature = "audio-output")]
