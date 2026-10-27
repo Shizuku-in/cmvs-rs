@@ -46,6 +46,113 @@ fn pending(vm: &mut Machine<'_>) {
 }
 
 #[test]
+fn mode_1548_preserves_signed_abs_remainder_including_minimum_integer() {
+    let cases = [
+        (0, 0),
+        (1, 1),
+        (2, 2),
+        (3, 0),
+        (7, 1),
+        (u32::MAX, 1),
+        ((-2i32) as u32, 2),
+        ((-3i32) as u32, 0),
+        (i32::MAX as u32, 1),
+        (i32::MIN as u32, (-2i32) as u32),
+    ];
+    let mut code = vec![];
+    call(&mut code, 0x22eb, &[1, 1]);
+    call(&mut code, 0x22e5, &[1, 1]);
+    for (raw, _) in cases {
+        call(&mut code, 0x22d0, &[u32::MAX, raw]);
+        call(&mut code, 0x22d0, &[0, 999]);
+    }
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut flags = MessageFlags::default();
+    for _ in 0..2 {
+        pending(&mut vm);
+        flags.try_handle(&mut vm).unwrap();
+    }
+    for (_, expected) in cases {
+        vm.state_mut().set_system_integer(0, 99).unwrap();
+        pending(&mut vm);
+        let pc = vm.pc();
+        assert!(flags.try_handle(&mut vm).unwrap());
+        assert_eq!(flags.mode_1548(), expected);
+        assert_eq!(vm.pc(), pc + 2);
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.state().system_integer(0), Some(99));
+        assert!(flags.skip() && flags.auto_advance());
+        pending(&mut vm);
+        assert!(flags.try_handle(&mut vm).unwrap());
+        assert_eq!(vm.state().system_integer(0), Some(expected));
+        assert!(flags.skip() && flags.auto_advance());
+    }
+}
+
+#[test]
+fn mode_query_defaults_to_zero_and_unused_value_may_remain_unknown() {
+    let mut code = vec![];
+    reserve(&mut code, 8, 77);
+    reserve(&mut code, 4, 0);
+    code.extend(0x22d0u16.to_le_bytes());
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut flags = MessageFlags::default();
+    assert_eq!(flags.mode_1548(), 0);
+    assert!(!flags.try_handle(&mut vm).unwrap());
+    for slot in 0..7 {
+        vm.state_mut().set_system_integer(slot, 42).unwrap();
+    }
+    pending(&mut vm);
+    assert!(flags.try_handle(&mut vm).unwrap());
+    assert_eq!(vm.state().system_integer(0), Some(0));
+    for slot in 1..7 {
+        assert_eq!(vm.state().system_integer(slot), Some(42));
+    }
+    assert_eq!(vm.stack().len_bytes(), 4);
+    assert_eq!(vm.stack().peek_u32(4).unwrap(), 77);
+    assert_eq!(flags, MessageFlags::default());
+}
+
+#[test]
+fn mode_errors_preserve_existing_setting_results_and_pending_arguments() {
+    let mut bad = vec![];
+    for args in [vec![1], vec![0], vec![]] {
+        let mut code = vec![];
+        call(&mut code, 0x22d0, &args);
+        bad.push(code);
+    }
+    let mut unknown = vec![];
+    reserve(&mut unknown, 8, 0);
+    reserve(&mut unknown, 4, 1);
+    unknown.extend(0x22d0u16.to_le_bytes());
+    bad.push(unknown);
+    for tail in bad {
+        let mut code = vec![];
+        call(&mut code, 0x22d0, &[1, 2]);
+        code.extend(tail);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut flags = MessageFlags::default();
+        pending(&mut vm);
+        flags.try_handle(&mut vm).unwrap();
+        pending(&mut vm);
+        let before = flags;
+        let command = vm.pending_system();
+        let len = vm.stack().len_bytes();
+        vm.state_mut().set_system_integer(0, 99).unwrap();
+        for _ in 0..2 {
+            assert!(flags.try_handle(&mut vm).is_err());
+            assert_eq!(flags, before);
+            assert_eq!(vm.pending_system(), command);
+            assert_eq!(vm.stack().len_bytes(), len);
+            assert_eq!(vm.state().system_integer(0), Some(99));
+        }
+    }
+}
+
+#[test]
 fn constructor_values_are_inactive_and_query_ignores_the_second_argument() {
     for op in COMMANDS {
         let mut code = vec![];
