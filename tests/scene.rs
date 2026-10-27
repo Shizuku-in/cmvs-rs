@@ -262,7 +262,7 @@ fn projection_parameters_preserve_raw_float_bits_and_each_other() {
         command(&mut code, op, &args);
     }
     for value in values {
-        for op in [0x2070, 0x2071] {
+        for op in [0x2070, 0x2071, 0x2072] {
             command(&mut code, op, &[255, 0x8000_0000, value]);
             command(&mut code, op, &[255, 767, value]);
         }
@@ -277,7 +277,7 @@ fn projection_parameters_preserve_raw_float_bits_and_each_other() {
     vm.state_mut().set_system_integer(4, 456).unwrap();
     let mut expected = scene.object(255).unwrap().clone();
     for value in values {
-        for index in [15, 16] {
+        for index in [15, 16, 11] {
             assert!(next(&mut vm, &mut scene).unwrap());
             expected.draw.as_mut().unwrap().words[index] = value;
             assert_eq!(scene.object(255), Some(&expected));
@@ -302,35 +302,37 @@ fn projection_parameters_preserve_raw_float_bits_and_each_other() {
 }
 
 #[test]
-fn projection_offset_errors_preserve_targets_stack_and_pending_command() {
-    for args in [
-        vec![256, u32::MAX, 0],
-        vec![u32::MAX, u32::MAX, 0],
-        vec![2, u32::MAX, 0],
-        vec![1, 768, 0],
-        vec![1, 0, 0],        // Missing child.
-        vec![1, 767, 0],      // Existing child without a draw state.
-        vec![1, u32::MAX, 0], // Parent without a draw state.
-        vec![1, u32::MAX],    // Missing float word.
-    ] {
-        let mut code = vec![];
-        command(&mut code, 0x2020, &[1]);
-        command(&mut code, 0x2022, &[1, 767]);
-        command(&mut code, 0x2071, &args);
-        let program = script(&code);
-        let mut vm = Machine::new(&program).unwrap();
-        let mut scene = SceneHost::default();
-        for _ in 0..2 {
-            next(&mut vm, &mut scene).unwrap();
+fn projection_setter_errors_preserve_targets_stack_and_pending_command() {
+    for op in [0x2071, 0x2072] {
+        for args in [
+            vec![256, u32::MAX, 0],
+            vec![u32::MAX, u32::MAX, 0],
+            vec![2, u32::MAX, 0],
+            vec![1, 768, 0],
+            vec![1, 0, 0],        // Missing child.
+            vec![1, 767, 0],      // Existing child without a draw state.
+            vec![1, u32::MAX, 0], // Parent without a draw state.
+            vec![1, u32::MAX],    // Missing float word.
+        ] {
+            let mut code = vec![];
+            command(&mut code, 0x2020, &[1]);
+            command(&mut code, 0x2022, &[1, 767]);
+            command(&mut code, op, &args);
+            let program = script(&code);
+            let mut vm = Machine::new(&program).unwrap();
+            let mut scene = SceneHost::default();
+            for _ in 0..2 {
+                next(&mut vm, &mut scene).unwrap();
+            }
+            vm.state_mut().set_system_integer(0, 123).unwrap();
+            let before = scene.objects().clone();
+            assert!(next(&mut vm, &mut scene).is_err());
+            assert_eq!(scene.objects(), &before);
+            assert_eq!(vm.pending_system(), Some((code.len() - 2, op - 0x2000)));
+            assert_eq!(vm.pc(), code.len() - 2);
+            assert_eq!(vm.stack().len_bytes(), args.len() * 4);
+            assert_eq!(vm.state().system_integer(0), Some(123));
         }
-        vm.state_mut().set_system_integer(0, 123).unwrap();
-        let before = scene.objects().clone();
-        assert!(next(&mut vm, &mut scene).is_err());
-        assert_eq!(scene.objects(), &before);
-        assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x71)));
-        assert_eq!(vm.pc(), code.len() - 2);
-        assert_eq!(vm.stack().len_bytes(), args.len() * 4);
-        assert_eq!(vm.state().system_integer(0), Some(123));
     }
 }
 
