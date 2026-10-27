@@ -10,6 +10,7 @@ pub mod cursor;
 pub mod evaluate;
 pub mod fade;
 pub mod gesture;
+pub mod history;
 pub mod image;
 pub mod input;
 pub mod jbp1;

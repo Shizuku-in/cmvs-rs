@@ -7,6 +7,7 @@ use cmvs_rs::{
     cpz::Cpz6Index,
     fade::SkipGate,
     gesture::PointerGesture,
+    history::HistoryHost,
     image::ImageArchives,
     input::{self, ActionInput},
     machine::{Machine, Step},
@@ -148,6 +149,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut frame_delta = 0;
     let mut save_title = SaveTitle::default();
     let mut gesture = PointerGesture::default();
+    let mut history = HistoryHost::default();
     let mut message_flags = MessageFlags::default();
     let mut buttons = ButtonHost::default();
     let mut movies = MovieHost::default();
@@ -330,6 +332,13 @@ fn run() -> Result<(), Box<dyn Error>> {
                         command + 0x2000,
                         save_menu.popup_enabled(),
                         machine.state().system_integer(0)
+                    );
+                    continue;
+                }
+                if history.try_handle(&mut machine)? {
+                    println!(
+                        "# history entries={} (newest first; no history UI)",
+                        history.entries().len()
                     );
                     continue;
                 }

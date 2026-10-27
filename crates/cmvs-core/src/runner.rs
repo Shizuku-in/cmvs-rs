@@ -8,6 +8,7 @@ use crate::{
     camera::CameraHost,
     fade::SkipGate,
     gesture::PointerGesture,
+    history::HistoryHost,
     image::ImageArchives,
     input::{self, ActionInput},
     machine::{Machine, Step},
@@ -89,6 +90,7 @@ pub struct Startup<'a> {
     gesture: PointerGesture,
     message_flags: MessageFlags,
     messages: MessageHost,
+    history: HistoryHost,
     random: CrtRandom,
     audio: AudioHost,
     audio_backend: Box<dyn AudioBackend>,
@@ -131,6 +133,7 @@ impl<'a> Startup<'a> {
             gesture: PointerGesture::default(),
             message_flags: MessageFlags::default(),
             messages: MessageHost::default(),
+            history: HistoryHost::default(),
             // Explicit research seed, like the virtual tick; the original seeds from timeGetTime.
             random: CrtRandom::new(0),
             audio: AudioHost::default(),
@@ -225,6 +228,9 @@ impl<'a> Startup<'a> {
     }
     pub fn messages(&self) -> &MessageHost {
         &self.messages
+    }
+    pub fn history(&self) -> &HistoryHost {
+        &self.history
     }
     /// Explicit single-line message recording; no font pixels are generated.
     pub fn set_record_text(&mut self, enabled: bool) {
@@ -357,6 +363,7 @@ impl<'a> Startup<'a> {
             || self.save_menu.try_handle_popup(&mut self.machine)?
             || self.message_flags.try_handle(&mut self.machine)?
             || self.messages.try_handle(&mut self.machine)?
+            || self.history.try_handle(&mut self.machine)?
             || self
                 .messages
                 .try_handle_pointer(&mut self.machine, &self.input)?

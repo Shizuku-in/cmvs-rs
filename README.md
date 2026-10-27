@@ -41,7 +41,7 @@ cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-`--payload` 仅允许创建新文件，输出不包含原始头部。当前默认 356 项测试、全 workspace 全功能 373 项测试及严格 Clippy 检查通过。
+`--payload` 仅允许创建新文件，输出不包含原始头部。当前默认 361 项测试、全 workspace 全功能 378 项测试及严格 Clippy 检查通过。
 真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
 `ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
 
@@ -220,9 +220,11 @@ python -m unittest discover -s tests -v
 
 字体预览命令与限制见 [font-output](docs/font-output.md)。
 
+新增平台无关 history 模块处理 0x2136：保存四段原始字符串与六个 u32，最新记录在前，默认 128 项、满容量淘汰最旧项。显式文字记录/字体路径的鼠标和键盘重放均推进到 sn1001.ps3 / PC=0xf6f4 / 0x2281、SP=156（鼠标第 40580 次 tick、键盘第 40620 次 tick）。历史 UI、存档序列化和动作序列条目仍未实现；本轮未新增窗口实测或字形呈现能力。详见 vm-semantics.md。
+
 ## 后续实现顺序
 
-1. 核对 `0x2136`（sn1001.ps3 / 0xf6f2，处理函数 0x1400758e0），继续消息路径。显式 `--font` 已可合成首句文字与消息窗口；默认无字体仍保留 `0x2152` 断点，`--record-text` 仍只记录。
+1. 核对动作序列条目命令 `0x2281`（sn1001.ps3 / 0xf6f4，处理函数 0x14007f830），继续消息路径；0x2136 历史记录已支持。显式 `--font` 可合成首句文字与消息窗口，默认无字体仍保留 `0x2152` 断点，`--record-text` 仍只记录。
 2. 沿该路径补齐换行、注音、其他文字样式、立绘与语音，并核对原生窗口中的剧情显示。
 3. 补齐选择分支、必要转场、回调调度与完整存档镜像，并对照原程序验证同一段剧情。
 4. 验证 Windows/macOS/Linux 构建和行为，再实现 Android/iOS 后端与真机检查。
