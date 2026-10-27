@@ -237,3 +237,5 @@ BGM 与 SE 共用 `AudioHost`/`AudioBackend`：`BgmState` 保存 +4464 对象的
 原生音频设备诊断留在可选 audio-output 集成测试中：native_device_smoke 默认忽略，手动运行时才打开设备，使用既有合成 Vorbis 验证通道与释放过程；默认 core/CI 测试继续不依赖音频硬件。同构建对照确认本机受限沙箱的无效句柄退出影响，普通桌面有声启动通过。本轮没有修改后端边界、解码或混音实现，证据范围见 audio-output.md。
 
 `SceneHost::handle_object` 接入 0x2070，复用父/子目标和绘制状态验证，只保存投影参数原始字（DrawState::words[15]）。场景数据与呈现能力分开：模式 2 仍需连接相机投影与光栅化，renderer 继续显式报错。真实剧情 VM 的下一断点为 sn1001.ps3 / 0x2b67c / 0x2071，证据见 vm-semantics.md。
+
+0x2070/0x2071 共用场景对象属性的父/子与绘制状态检查，各自保存原始浮点字到 DrawState::words[15]/[16]。仅保存数据，不将模式 2 降级为普通 2D 绘制；相机投影接入仍是后续工作。真实剧情 VM 最新停点为 sn1001.ps3 / 0x2b6a2 / 0x2072，证据见 vm-semantics.md。
