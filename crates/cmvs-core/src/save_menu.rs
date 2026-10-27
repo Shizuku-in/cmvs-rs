@@ -1,4 +1,4 @@
-//! Read-only gameplay-save header scanning and platform-neutral menu state.
+//! Read-only gameplay-save header scanning, signature queries and menu state.
 //! Header recognition does not validate or restore the saved engine snapshot.
 use crate::{
     FormatError, bytecode::DecodeError, evaluate::error, machine::Machine, vm::SystemResult,
@@ -61,7 +61,7 @@ impl SaveHeader {
     }
 }
 
-/// A source returns at most the first 512 bytes; None means that slot is absent.
+/// Slots 0..999; a source returns at most the first 512 bytes, None for absent files.
 /// I/O failures are distinct from missing or malformed saves and stop the command.
 pub trait SaveSource {
     fn read_header(&mut self, slot: u16) -> io::Result<Option<Vec<u8>>>;
@@ -87,10 +87,10 @@ impl DirectorySaves {
 
 impl SaveSource for DirectorySaves {
     fn read_header(&mut self, slot: u16) -> io::Result<Option<Vec<u8>>> {
-        if slot >= 256 {
+        if slot > 999 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "save slot outside 0..255",
+                "save slot outside 0..999",
             ));
         }
         let file = match File::open(self.root.join(format!("save{slot:03}.dat"))) {
@@ -211,14 +211,30 @@ impl SaveMenuHost {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(false);
         };
-        if !matches!(command, 0x2b3 | 0x2b4) {
+        if !matches!(command, 0x2b3 | 0x2b4 | 0x2bb) {
             return Ok(false);
         }
         let argument = vm
             .stack()
             .peek_u32(4)
             .map_err(|e| error(pc, command + 0x2000, e.0))?;
-        if command == 0x2b3 {
+        if command == 0x2bb {
+            // 0x14007cb60 reads up to 64 bytes and tests only CSV[2-9]. Unlike the
+            // menu scan, this accepts a signature without a valid date/label/body.
+            // Out-of-range u32 values (including negative words) perform no I/O.
+            // Short reads use only available bytes, never the original stale buffer.
+            let recognized = if argument <= 999 {
+                source.read_header(argument as u16)?.is_some_and(|bytes| {
+                    bytes.len() >= 4 && &bytes[..3] == b"CSV" && (b'2'..=b'9').contains(&bytes[3])
+                })
+            } else {
+                false
+            };
+            vm.complete_system(SystemResult(0x4004))?;
+            vm.state_mut()
+                .set_system_integer(0, u32::from(recognized))
+                .expect("slot 0 exists");
+        } else if command == 0x2b3 {
             let menu = SaveMenu::scan(source, argument as i32)?;
             vm.complete_system(SystemResult(0x4004))?;
             self.menu = Some(menu);

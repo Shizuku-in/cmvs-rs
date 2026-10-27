@@ -210,6 +210,100 @@ fn missing_argument_does_not_read_source() {
 }
 
 #[test]
+fn signature_query_accepts_versions_without_menu_labels_and_preserves_menu_state() {
+    let mut source = MemorySaves::default();
+    let mut inputs = vec![];
+    for version in b'2'..=b'9' {
+        inputs.push((vec![b'C', b'S', b'V', version], true));
+    }
+    for invalid in [
+        b"".as_slice(),
+        b"C",
+        b"CS",
+        b"CSV",
+        b"CSV1",
+        b"CSV:",
+        b"CSS2",
+        b"csv2",
+    ] {
+        inputs.push((invalid.to_vec(), false));
+    }
+    inputs.push((b"CSV2no valid label or payload".to_vec(), true));
+    // A short read after a valid one cannot reuse the earlier signature bytes.
+    inputs.push((b"CS".to_vec(), false));
+    let mut commands = vec![(0x22b3, 1), (0x22b4, 1)];
+    for (i, (bytes, _)) in inputs.iter().enumerate() {
+        let slot = 870 + i as u16;
+        source.files.insert(slot, bytes.clone());
+        commands.push((0x22bb, u32::from(slot)));
+    }
+    commands.extend([(0x22bb, 999), (0x22bb, 1000), (0x22bb, u32::MAX)]);
+    let program = script(&commands);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut host = SaveMenuHost::default();
+    for _ in 0..2 {
+        pending(&mut vm);
+        host.try_handle(&mut vm, &mut source).unwrap();
+    }
+    let menu = host.menu().unwrap().clone();
+    source.calls.clear();
+    vm.state_mut().set_system_integer(4, 0xfeed).unwrap();
+    for expected in inputs
+        .iter()
+        .map(|(_, ok)| *ok)
+        .chain([false, false, false])
+    {
+        pending(&mut vm);
+        let pc = vm.pc();
+        assert!(host.try_handle(&mut vm, &mut source).unwrap());
+        assert_eq!(vm.state().system_integer(0), Some(u32::from(expected)));
+        assert_eq!(vm.state().system_integer(4), Some(0xfeed));
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.pc(), pc + 2);
+        assert_eq!(vm.pending_system(), None);
+        assert_eq!(host.menu(), Some(&menu));
+        assert_eq!(host.second_group_enabled(), Some(true));
+        assert!(host.popup_enabled());
+    }
+    let expected_calls: Vec<_> = (870..870 + inputs.len() as u16).chain([999]).collect();
+    assert_eq!(source.calls, expected_calls);
+}
+
+#[test]
+fn signature_query_io_failure_and_missing_parameter_are_transactional() {
+    let program = script(&[(0x22bb, 870)]);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut source = MemorySaves {
+        fail_at: Some(870),
+        ..MemorySaves::default()
+    };
+    let mut host = SaveMenuHost::default();
+    vm.state_mut().set_system_integer(0, 9).unwrap();
+    pending(&mut vm);
+    let before = vm.pending_system();
+    assert!(host.try_handle(&mut vm, &mut source).is_err());
+    assert_eq!(vm.pending_system(), before);
+    assert_eq!(vm.pc(), 8);
+    assert_eq!(vm.stack().len_bytes(), 4);
+    assert_eq!(vm.stack().peek_u32(4).unwrap(), 870);
+    assert_eq!(vm.state().system_integer(0), Some(9));
+    assert!(host.menu().is_none());
+    source.fail_at = None;
+    source.files.insert(870, b"CSV2".to_vec());
+    assert!(host.try_handle(&mut vm, &mut source).unwrap());
+    assert_eq!(vm.state().system_integer(0), Some(1));
+    assert_eq!(vm.stack().len_bytes(), 0);
+
+    let mut vm = Machine::at(&program, 8).unwrap();
+    pending(&mut vm);
+    source.calls.clear();
+    assert!(host.try_handle(&mut vm, &mut source).is_err());
+    assert_eq!(vm.pending_system(), Some((8, 0x2bb)));
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert!(source.calls.is_empty());
+}
+
+#[test]
 fn directory_reads_only_selected_slot_prefix_and_never_modifies_files() {
     let root = std::env::temp_dir().join(format!("cmvs-save-menu-test-{}", std::process::id()));
     std::fs::create_dir(&root).unwrap();
@@ -221,7 +315,15 @@ fn directory_reads_only_selected_slot_prefix_and_never_modifies_files() {
     let mut source = DirectorySaves::new(&root).unwrap();
     assert_eq!(source.read_header(0).unwrap().unwrap(), data[..512]);
     assert_eq!(source.read_header(1).unwrap(), None);
-    assert!(source.read_header(256).is_err());
+    for slot in [256, 870, 999] {
+        let extra = root.join(format!("save{slot:03}.dat"));
+        std::fs::write(&extra, &data).unwrap();
+        assert_eq!(source.read_header(slot).unwrap().unwrap(), data[..512]);
+        assert_eq!(std::fs::read(&extra).unwrap(), data);
+        std::fs::remove_file(extra).unwrap();
+    }
+    assert!(source.read_header(1000).is_err());
+    assert!(source.read_header(u16::MAX).is_err());
     assert!(DirectorySaves::new(&path).is_err());
     assert!(DirectorySaves::new(root.join("absent")).is_err());
     assert_eq!(std::fs::read(&path).unwrap(), data);

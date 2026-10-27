@@ -229,3 +229,5 @@ BGM 与 SE 共用 `AudioHost`/`AudioBackend`：`BgmState` 保存 +4464 对象的
 `AudioBackend::play_voice` 承接 0x20a6 的语音播放，`ResourceKind::Voice` 对应 0x2014 的语音根；`AudioSettings` 补齐 +1604/+1624。原版写入但 Rust 不知道具体值的系统结果，用 `State::forget_system_integer` 标为未知，读取时显式报错。真实重放停于 sn1001.ps3 / PC=0x2b5a4 / 0x2042、SP=28，详见 vm-semantics.md。
 
 `SceneHost::handle_object` 接入 0x2042，复用父/子目标与绘制状态检查，只写模式字 2，保留属性与效果。`scene_render` 对该模式仍显式报错。当前存档使正常入口停于 main.ps3 / 0x395a0 / 0x22bb；只在忽略目录的独立研究构建中复现整数 2198=0 的开始新游戏条件后，剧情 VM 可到 sn1001.ps3 / 0x2b656 / 0x2070。生产核心没有启动变量覆盖，详见 vm-semantics.md。
+
+`SaveMenuHost` 接入只读签名查询 0x22bb，复用 `SaveSource` 的有界前缀；`DirectorySaves` 支持 0..999，菜单扫描仍最多 256 槽。查询与完整 CSV2 解码、快照恢复分开：仅签名识别成功不能证明存档可恢复。当前生产构建原样启动查询 save870.dat 成功，在 main.ps3 / 0x395de / 0x22b5 停于完整读档请求；没有研究变量覆盖或静默忽略恢复，详见 vm-semantics.md。

@@ -626,7 +626,12 @@ fn run() -> Result<(), Box<dyn Error>> {
                     command + 0x2000,
                     save_menu.second_group_enabled()
                 );
-                if command == 0x2b3 {
+                if command == 0x2bb {
+                    println!(
+                        "# save signature result={:?}; signature recognition only, no snapshot restoration",
+                        machine.state().system_integer(0)
+                    );
+                } else if command == 0x2b3 {
                     let menu = save_menu.menu().expect("completed scan");
                     println!(
                         "# save slots={} latest={:?}; header recognition only, no snapshot restoration",
