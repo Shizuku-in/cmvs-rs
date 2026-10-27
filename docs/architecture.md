@@ -215,3 +215,5 @@ BGM 与 SE 共用 `AudioHost`/`AudioBackend`：`BgmState` 保存 +4464 对象的
 `MessageFlags` 增加引擎 +12244 的 `bypass`（0x2340 写入，构造为 false）；它不属于 +1496 设置块，但与 skip 一样由消息等待读取，因此 `try_record_output` 与 `try_wait` 都接收整份 `MessageFlags`。旁路只改变完成条件，不改字形揭示间隔，也不消费输入。每次等待都注入点击的显式文字重放连续显示三句，停于 sn1001.ps3 / PC=0xf19c / 0x2152 的换行屏障，详见 vm-semantics.md。
 
 消息记录输出 `message::output::append` 按 0x14005bc90/0x14005b120 实现自动换行，禁则分类与 0x211f 计数共用 `measure::line_break_kind`，两者都依赖 +112 = 1（0x2108 未实现）。转义与注音组仍是显式屏障。逐句点击的显式文字重放连续显示 12 句，停于 sn1001.ps3 / PC=0x2f44e / 0x20fc、SP=68，详见 vm-semantics.md。
+
+`text` 模块新增 0x20fc：平台无关地实现原版 0x140006ed0 的 `%%` 与 `%z` 子集，目标只限字符串库槽并按 1024 字节检查，不复现原版的无界写入或重叠行为。真实重放停于 sn1001.ps3 / PC=0x2f4da / 0x222a、SP=76，详见 vm-semantics.md。

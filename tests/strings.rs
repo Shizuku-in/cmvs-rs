@@ -213,3 +213,90 @@ fn strlen_0x20f8_reports_resolved_byte_length() {
     assert_eq!(vm.pending_system().map(|p| p.1), Some(0xf8));
     assert_eq!(vm.state().system_integer(0), Some(0));
 }
+
+fn push(code: &mut Vec<u8>, raw: u32) {
+    word(code, 0x440);
+    word(code, 4);
+    code.extend(raw.to_le_bytes());
+}
+/// 0x20fc arguments: SP-12 value, SP-8 format reference, SP-4 destination reference.
+fn format_call(code: &mut Vec<u8>, value: u32, pattern: u32, target: u32) {
+    for raw in [value, pattern, target] {
+        push(code, raw);
+    }
+    word(code, 0x20fc);
+}
+
+#[test]
+fn format_0x20fc_writes_zero_padded_low_digits_into_a_string_slot() {
+    let text = b"mask%z3a.pb3\0%z+12/100%%\0";
+    let mut code = vec![];
+    for value in [5, 0, 1234, u32::MAX] {
+        format_call(&mut code, value, 0, 0x8000_0031);
+    }
+    // Width 12 exposes the original's wrapping powers of ten; slot 200 resolves to slot 0.
+    format_call(&mut code, 1_234_567_890, 13, 0x8000_00c8);
+    let script = script(&code, &[0], text);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_system_integer(0, 7).unwrap();
+    for expected in [
+        &b"mask005a.pb3"[..],
+        b"mask000a.pb3",
+        b"mask234a.pb3",
+        b"mask295a.pb3",
+    ] {
+        run_to_system(&mut vm);
+        assert!(cmvs_rs::text::try_handle(&mut vm).unwrap());
+        assert_eq!(vm.state().string(49), Some(expected));
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.pending_system(), None);
+    }
+    run_to_system(&mut vm);
+    assert!(cmvs_rs::text::try_handle(&mut vm).unwrap());
+    assert_eq!(vm.state().string(0), Some(&b"101234567890/100%"[..]));
+    assert_eq!(vm.state().system_integer(0), Some(7));
+}
+
+#[test]
+fn format_0x20fc_rejects_unmodeled_conversions_targets_overlap_and_overflow() {
+    // Offsets: %d 0, %za 3, % 7, %z1%z1 9, %z33 16, x%z1 21, 1020 bytes + %z4 26.
+    let mut text = b"%d\0%za\0%\0%z1%z1\0%z33\0x%z1\0".to_vec();
+    text.extend([b'a'; 1020]);
+    text.extend(b"%z4\0");
+    let mut cases = vec![];
+    for (pattern, target) in [
+        (0, 0x8000_0031),
+        (3, 0x8000_0031),
+        (7, 0x8000_0031),
+        (9, 0x8000_0031),
+        (16, 0x8000_0031),
+        (21, 0),
+        (21, 0xc000_0004),
+        (0x8000_0003, 0x8000_0003),
+        (0x8000_0000, 0x8000_0080),
+        (26, 0x8000_0031),
+    ] {
+        let mut code = vec![];
+        format_call(&mut code, 1, pattern, target);
+        cases.push(code);
+    }
+    let mut short = vec![];
+    push(&mut short, 0);
+    push(&mut short, 0x8000_0031);
+    word(&mut short, 0x20fc);
+    cases.push(short);
+    for code in cases {
+        let script = script(&code, &[0], &text);
+        let mut vm = Machine::new(&script).unwrap();
+        vm.state_mut().set_string(3, b"x%z1").unwrap();
+        vm.state_mut().set_string(0, b"y%z1").unwrap();
+        run_to_system(&mut vm);
+        let (pending, bytes) = (vm.pending_system(), vm.stack().len_bytes());
+        assert!(cmvs_rs::text::try_handle(&mut vm).is_err());
+        assert_eq!(vm.pending_system(), pending);
+        assert_eq!(vm.stack().len_bytes(), bytes);
+        assert_eq!(vm.state().string(49), None);
+        assert_eq!(vm.state().string(3), Some(&b"x%z1"[..]));
+        assert_eq!(vm.state().string(0), Some(&b"y%z1"[..]));
+    }
+}
