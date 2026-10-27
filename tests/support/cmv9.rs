@@ -64,35 +64,52 @@ fn jbpd(base: bool, reuse: bool, luma: i16) -> Vec<u8> {
     b
 }
 pub fn movie(reuse: bool) -> Vec<u8> {
+    movie_frames(1, 15, 1, reuse)
+}
+
+pub fn movie_frames(frames: u32, rate: u32, time: u32, reuse: bool) -> Vec<u8> {
     let mut base = vec![0; 9];
     base[4..8].copy_from_slice(&[2, 0, 1, 0]);
     base[8] = 128;
     base.extend(jbpd(true, false, 64));
     let size = base.len() as u32;
     put(&mut base, 0, size);
-    let frame = jbpd(false, reuse, 128);
-    let resource = 84 + base.len();
-    let length = resource + frame.len();
-    let mut b = vec![0; 84];
+    let payloads: Vec<_> = (0..frames)
+        .map(|i| jbpd(false, reuse, 128 + (i % 8) as i16 * 64))
+        .collect();
+    let head = 44 + (frames as usize + 1) * 20;
+    let resource = head + base.len();
+    let length = resource + payloads.iter().map(Vec::len).sum::<usize>();
+    let mut b = vec![0; head];
     b[..4].copy_from_slice(b"CMV9");
     for (at, v) in [
         (4, resource as u32),
         (8, length as u32),
-        (16, 1),
-        (20, 15),
-        (24, 1),
+        (16, frames),
+        (20, rate),
+        (24, time),
         (28, 17),
         (32, 16),
         (36, 24),
-        (48, frame.len() as u32),
-        (52, 17 * 16 * 3 + 54),
-        (56, 2),
-        (64, 1),
-        (80, frame.len() as u32),
     ] {
         put(&mut b, at, v);
     }
+    let mut offset = 0;
+    for (i, payload) in payloads.iter().enumerate() {
+        let at = 44 + i * 20;
+        for (n, v) in [i as u32, payload.len() as u32, 17 * 16 * 3 + 54, 2, offset]
+            .into_iter()
+            .enumerate()
+        {
+            put(&mut b, at + n * 4, v);
+        }
+        offset += payload.len() as u32;
+    }
+    put(&mut b, 44 + frames as usize * 20, frames);
+    put(&mut b, 60 + frames as usize * 20, offset);
     b.extend(base);
-    b.extend(frame);
+    for p in payloads {
+        b.extend(p);
+    }
     b
 }

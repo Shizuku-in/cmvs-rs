@@ -8,7 +8,8 @@
 //!
 //! Engine +4480 holds three scene players. 0x2308 creates a stopped CMV9 player and
 //! initializes its bound scene object; 0x230a destroys the player, retaining that image.
-//! Playback, audio-bearing slots and the other creation variant remain unhandled.
+//! 0x2309 starts default-mode segment playback. Other slot controls, playback modes,
+//! audio-bearing slots and the other creation variant remain unhandled.
 use crate::{
     audio::{AudioBackend, AudioRequest, AudioSettings, MovieAudioClock},
     bytecode::DecodeError,
@@ -21,6 +22,8 @@ use crate::{
 use std::{error::Error, fs::File, io, path::Path};
 
 pub const MOVIE_SLOTS: usize = 3;
+mod playback;
+pub use playback::{MOVIE_SEGMENTS, MoviePlayback, MovieSegment};
 
 /// The game-relative path the soundtrack request names and the parsed container.
 pub type OpenedMovie = (Vec<u8>, CmvIndex);
@@ -108,7 +111,7 @@ impl Movie {
     }
 }
 
-/// 0x1400383c0 / 0x1400390b0: a stopped player bound to a separately owned scene object.
+/// 0x1400383c0 / 0x1400390b0: a scene player, initially stopped, bound to a separate object.
 #[derive(Debug)]
 pub struct SceneMovie {
     pub object_slot: u8,
@@ -116,6 +119,8 @@ pub struct SceneMovie {
     pub frame: u32,
     pub index: crate::cmv9::Cmv9Index,
     data: Vec<u8>,
+    base: crate::raster::RgbaImage,
+    pub playback: MoviePlayback,
 }
 impl SceneMovie {
     pub fn encoded(&self) -> &[u8] {
@@ -129,6 +134,7 @@ pub struct MovieHost {
     slots: [Option<SceneMovie>; MOVIE_SLOTS],
     player: Option<Movie>,
     decode_frames: bool,
+    scene_clock: u32,
 }
 
 impl MovieHost {
@@ -233,7 +239,9 @@ impl MovieHost {
             .read(&name)?
             .ok_or_else(|| fail("missing scene movie leaves an unmodeled failed player"))?;
         let index = crate::cmv9::Cmv9Index::parse(&data)?;
-        let pixels = index.decode_frame(&data, frame)?;
+        let base = index.decode_base(&data)?;
+        let pixels = index.decode_with_base(&data, frame, &base)?;
+        let playback = MoviePlayback::new(frame, index.max_sequence - 1);
         let mut draw = crate::scene::DrawState::default();
         draw.words[4] = pixels.width();
         draw.words[5] = pixels.height();
@@ -254,6 +262,8 @@ impl MovieHost {
             frame,
             index,
             data,
+            base,
+            playback,
         });
         Ok(true)
     }

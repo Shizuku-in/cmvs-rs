@@ -527,3 +527,202 @@ fn replacing_an_existing_scene_player_is_atomic_on_resource_failure() {
     assert!(scene.object(28).is_some());
     assert!(scene.object(29).is_some());
 }
+
+fn scene_start(code: &mut Vec<u8>, args: &[u32]) {
+    for &arg in args.iter().rev() {
+        code.extend(0x440u16.to_le_bytes());
+        code.extend(4u16.to_le_bytes());
+        code.extend(arg.to_le_bytes());
+    }
+    code.extend(0x2309u16.to_le_bytes());
+}
+fn scene_play_fixture(extra: &[u8]) -> (Script, SceneFiles) {
+    let mut code = create_code(0, 28, 0);
+    code.extend(extra);
+    (
+        program(&code, b"synthetic.cmv\0"),
+        SceneFiles(Some(slot_fixture::movie_frames(4, 15, 1, true))),
+    )
+}
+#[test]
+fn scene_playback_uses_fractional_frame_time_and_keeps_the_final_image() {
+    let mut code = vec![];
+    scene_start(&mut code, &[0, 0, 0, u32::MAX, 0]);
+    let (script, mut files) = scene_play_fixture(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut movies = MovieHost::default();
+    let mut scene = cmvs_rs::scene::SceneHost::default();
+    pending(&mut vm);
+    movies
+        .try_create_scene(&mut vm, &mut scene, &mut files)
+        .unwrap();
+    pending(&mut vm);
+    vm.state_mut().set_system_integer(0, 789).unwrap();
+    movies.try_start_scene(&mut vm).unwrap();
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(789));
+    assert_eq!(movies.scene_player(0).unwrap().playback.segments[0].end, 3);
+    movies.advance_scene(66, &mut scene).unwrap();
+    assert_eq!(movies.scene_player(0).unwrap().frame, 0);
+    movies.advance_scene(1, &mut scene).unwrap();
+    assert_eq!(movies.scene_player(0).unwrap().frame, 1);
+    assert_eq!(
+        &scene
+            .object(28)
+            .unwrap()
+            .image
+            .as_ref()
+            .unwrap()
+            .pixels
+            .pixels()[64..68],
+        &[152, 152, 152, 255]
+    );
+    movies.advance_scene(133, &mut scene).unwrap();
+    assert_eq!(movies.scene_player(0).unwrap().frame, 3);
+    assert!(movies.scene_player(0).unwrap().playback.active);
+    movies.advance_scene(67, &mut scene).unwrap();
+    let player = movies.scene_player(0).unwrap();
+    assert!(!player.playback.active);
+    assert!(player.playback.paused);
+    assert_eq!(player.frame, 3);
+    let old = scene.objects().clone();
+    movies.advance_scene(1000, &mut scene).unwrap();
+    assert_eq!(scene.objects(), &old);
+}
+#[test]
+fn scene_playback_loops_and_defers_a_new_segment_until_the_boundary() {
+    let mut code = vec![];
+    scene_start(&mut code, &[0, 0, 0, 1, 1]);
+    scene_start(&mut code, &[0, 1, 2, 3, 0]);
+    let (script, mut files) = scene_play_fixture(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut movies = MovieHost::default();
+    let mut scene = cmvs_rs::scene::SceneHost::default();
+    pending(&mut vm);
+    movies
+        .try_create_scene(&mut vm, &mut scene, &mut files)
+        .unwrap();
+    pending(&mut vm);
+    movies.try_start_scene(&mut vm).unwrap();
+    movies.advance_scene(200, &mut scene).unwrap();
+    assert_eq!(movies.scene_player(0).unwrap().frame, 1);
+    pending(&mut vm);
+    movies.try_start_scene(&mut vm).unwrap();
+    assert_eq!(movies.scene_player(0).unwrap().playback.pending, Some(1));
+    movies.advance_scene(67, &mut scene).unwrap();
+    let player = movies.scene_player(0).unwrap();
+    assert_eq!(
+        (
+            player.frame,
+            player.playback.current,
+            player.playback.pending
+        ),
+        (2, 1, None)
+    );
+    movies.advance_scene(133, &mut scene).unwrap();
+    assert!(!movies.scene_player(0).unwrap().playback.active);
+}
+#[test]
+fn scene_start_does_not_seek_and_preserves_a_paused_completion_state() {
+    let mut code = vec![];
+    scene_start(&mut code, &[0, 0, 2, 0, 0]);
+    scene_start(&mut code, &[0, 0, 0, 3, 0]);
+    let (script, mut files) = scene_play_fixture(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut movies = MovieHost::default();
+    let mut scene = cmvs_rs::scene::SceneHost::default();
+    pending(&mut vm);
+    movies
+        .try_create_scene(&mut vm, &mut scene, &mut files)
+        .unwrap();
+    pending(&mut vm);
+    movies.try_start_scene(&mut vm).unwrap();
+    assert_eq!(movies.scene_player(0).unwrap().frame, 0);
+    movies.advance_scene(67, &mut scene).unwrap();
+    assert!(movies.scene_player(0).unwrap().playback.paused);
+    pending(&mut vm);
+    movies.try_start_scene(&mut vm).unwrap();
+    movies.advance_scene(1000, &mut scene).unwrap();
+    let p = &movies.scene_player(0).unwrap().playback;
+    assert!(p.active && p.paused);
+    assert_eq!(movies.scene_player(0).unwrap().frame, 0);
+}
+#[test]
+fn scene_playback_rejects_destroyed_bindings_without_committing_its_frame_or_time() {
+    let mut code = vec![];
+    scene_start(&mut code, &[0, 0, 0, 3, 1]);
+    code.extend(destroy(&[]));
+    code.extend(0x440u16.to_le_bytes());
+    code.extend(4u16.to_le_bytes());
+    code.extend(28u32.to_le_bytes());
+    code.extend(0x2021u16.to_le_bytes());
+    let (script, mut files) = scene_play_fixture(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut movies = MovieHost::default();
+    let mut scene = cmvs_rs::scene::SceneHost::default();
+    pending(&mut vm);
+    movies
+        .try_create_scene(&mut vm, &mut scene, &mut files)
+        .unwrap();
+    pending(&mut vm);
+    movies.try_start_scene(&mut vm).unwrap();
+    pending(&mut vm);
+    scene.try_handle(&mut vm).unwrap();
+    let old = movies.scene_player(0).unwrap().playback.clone();
+    assert!(movies.advance_scene(67, &mut scene).is_err());
+    assert_eq!(movies.scene_player(0).unwrap().playback, old);
+    assert_eq!(movies.scene_player(0).unwrap().frame, 0);
+}
+#[test]
+fn scene_start_checks_segments_and_arguments_but_an_empty_slot_is_a_noop() {
+    for args in [vec![0, 16, 0, 3, 0], vec![3, 0, 0, 3, 0], vec![0, 0, 0, 3]] {
+        let mut code = vec![];
+        scene_start(&mut code, &args);
+        let (script, mut files) = scene_play_fixture(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut movies = MovieHost::default();
+        let mut scene = cmvs_rs::scene::SceneHost::default();
+        pending(&mut vm);
+        movies
+            .try_create_scene(&mut vm, &mut scene, &mut files)
+            .unwrap();
+        pending(&mut vm);
+        let old = movies.scene_player(0).unwrap().playback.clone();
+        assert!(movies.try_start_scene(&mut vm).is_err());
+        assert_eq!(movies.scene_player(0).unwrap().playback, old);
+        assert_eq!(vm.stack().len_bytes(), args.len() * 4);
+    }
+    let mut code = vec![];
+    scene_start(&mut code, &[2, u32::MAX, 0, u32::MAX, 0]);
+    let script = program(&code, b"");
+    let mut vm = Machine::new(&script).unwrap();
+    pending(&mut vm);
+    assert!(MovieHost::default().try_start_scene(&mut vm).unwrap());
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
+fn scene_frame_decode_failure_keeps_the_previous_pixels_frame_and_playback_for_retry() {
+    let mut code = vec![];
+    scene_start(&mut code, &[0, 0, 0, 4, 0]);
+    let (script, mut files) = scene_play_fixture(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut movies = MovieHost::default();
+    let mut scene = cmvs_rs::scene::SceneHost::default();
+    pending(&mut vm);
+    movies
+        .try_create_scene(&mut vm, &mut scene, &mut files)
+        .unwrap();
+    pending(&mut vm);
+    movies.try_start_scene(&mut vm).unwrap();
+    movies.advance_scene(200, &mut scene).unwrap();
+    let old = scene.objects().clone();
+    let playback = movies.scene_player(0).unwrap().playback.clone();
+    assert_eq!(movies.scene_player(0).unwrap().frame, 3);
+    assert!(movies.advance_scene(67, &mut scene).is_err());
+    assert_eq!(movies.scene_player(0).unwrap().playback, playback);
+    assert_eq!(scene.objects(), &old);
+    assert_eq!(movies.scene_player(0).unwrap().frame, 3);
+    assert!(movies.advance_scene(0, &mut scene).is_err());
+    assert_eq!(movies.scene_player(0).unwrap().playback, playback);
+}

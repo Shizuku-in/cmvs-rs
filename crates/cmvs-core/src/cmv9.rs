@@ -81,11 +81,16 @@ impl Cmv9Index {
 
     /// Non-consecutive-frame path: rebuild the static base and decode all dynamic MCUs.
     pub fn decode_frame(&self, data: &[u8], frame: u32) -> Result<RgbaImage, FormatError> {
-        let entry = self
+        let _entry = self
             .entries
             .get(frame as usize)
             .filter(|e| frame < self.max_sequence && e.sequence == frame && e.kind == 2)
             .ok_or(FormatError("CMV9 frame is not a video entry"))?;
+        let base = self.decode_base(data)?;
+        self.decode_with_base(data, frame, &base)
+    }
+
+    pub(crate) fn decode_base(&self, data: &[u8]) -> Result<RgbaImage, FormatError> {
         let base = data
             .get(self.base_offset..self.base_offset + self.base_size)
             .ok_or(FormatError("CMV9 static block truncated"))?;
@@ -109,10 +114,28 @@ impl Cmv9Index {
         if (image.width(), image.height()) != (self.width, self.height) {
             return Err(FormatError("CMV9 static image dimensions differ"));
         }
+        Ok(image)
+    }
+
+    pub(crate) fn decode_with_base(
+        &self,
+        data: &[u8],
+        frame: u32,
+        image: &RgbaImage,
+    ) -> Result<RgbaImage, FormatError> {
+        let entry = self
+            .entries
+            .get(frame as usize)
+            .filter(|e| frame < self.max_sequence && e.sequence == frame && e.kind == 2)
+            .ok_or(FormatError("CMV9 frame is not a video entry"))?;
+        let count = (self.width as usize).div_ceil(16) * (self.height as usize).div_ceil(16);
+        let mask = data
+            .get(self.base_offset + 8..self.base_offset + 8 + count.div_ceil(8))
+            .ok_or(FormatError("CMV9 static bitmap truncated"))?;
         let start = self.resource_offset + entry.offset as usize;
         let frame_data = data
             .get(start..start + entry.stored_size as usize)
             .ok_or(FormatError("CMV9 frame truncated"))?;
-        jbpd::decode_masked(frame_data, mask, false, Some(&image))
+        jbpd::decode_masked(frame_data, mask, false, Some(image))
     }
 }
