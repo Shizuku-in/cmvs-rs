@@ -2,9 +2,10 @@
 //! addresses refer to the documented binary hash. 0x2058..0x205f/0x2066/0x2067/0x209c set
 //! fields of the camera selected by SP-4 (0x140027090), 0x2060..0x2065 the same fields of camera 0
 //! (0x140027070). Fields stay raw words named by offset. The original renderer uses them
-//! for coordinate modes 2/3 (0x140020340 -> 0x14004ef40), which our renderer rejects, so
-//! they do not affect the supported 2D output. 0x2056 queries projected integer coordinates
-//! without rendering. Camera 0 motion supports linear and quadratic ease-out branches.
+//! for coordinate modes 2/3 (0x140020340 -> 0x14004ef40); the software renderer supports
+//! cameras of type 3 without rotation (`project_object`). 0x2056 queries projected
+//! integer coordinates without rendering. Camera 0 motion supports linear and quadratic
+//! ease-out branches.
 use crate::{
     bytecode::DecodeError,
     evaluate::{error, truncate},
@@ -148,6 +149,61 @@ impl Camera {
             ((scale_y * vertical) + self.float(16)) + ((reference - depth) * self.float(11)),
             0.0,
         ]
+    }
+}
+
+/// 0x14004ef40's result for a drawn object (camera type 3; see `Camera::project_object`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ObjectProjection {
+    /// Screen position of the object's origin (output +0/+4).
+    pub position: [f32; 2],
+    /// z − camera z (+8), also the queue key 0x14004ef30 computes.
+    pub depth: f32,
+    /// (reference / depth)², times the input scale 1.0 of a top-level object (+12/+16).
+    pub scale: f32,
+    /// 255, or (int)((depth − 9) × 256) below depth 10; scales the opacity by /255 (+20).
+    pub fade: i32,
+}
+
+impl Camera {
+    /// +148: camera 1's queue 6 is drawn only while set (0x14004eca0).
+    pub fn enabled(&self) -> bool {
+        self.words[37] != 0
+    }
+    /// +152 (0x209c): nonzero draws the camera's queue into an effect target first
+    /// (0x14004ecc0 in 0x140015fc0).
+    pub fn effect(&self) -> u32 {
+        self.words[38]
+    }
+    /// 0x14004ef40 for camera type 3 (+0): the x/y terms equal the 0x2056 projection of
+    /// the current position, the offset being draw +64 and the reference depth draw +60.
+    /// Objects at depth ≤ 9 (also NaN) are not drawn. Types 1 and 2 are not verified.
+    pub fn project_object(
+        &self,
+        world: [f32; 3],
+        offset: f32,
+        reference: f32,
+    ) -> Result<Option<ObjectProjection>, &'static str> {
+        if self.words[0] != 3 {
+            return Err("camera projection types other than 3 are not verified");
+        }
+        let depth = world[2] - self.float(3);
+        if depth.is_nan() || depth <= 9.0 {
+            return Ok(None);
+        }
+        let [x, y, _] = self.project(0, world, offset, reference);
+        let ratio = reference / depth;
+        let fade = if depth >= 10.0 {
+            255
+        } else {
+            truncate((depth - 9.0) * 256.0)
+        };
+        Ok(Some(ObjectProjection {
+            position: [x, y],
+            depth,
+            scale: ratio * ratio,
+            fade,
+        }))
     }
 }
 

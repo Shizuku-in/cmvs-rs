@@ -353,10 +353,20 @@ fn unverified_layouts_and_short_stacks_keep_the_command_pending() {
 }
 
 #[test]
-fn the_software_renderer_rejects_an_active_wipe() {
+fn the_software_renderer_draws_growing_strips_and_the_final_cover() {
     let mut scene = scene_with(0, 20, 1250);
-    assert!(scene_render::render(&scene, 1280, 720).is_err());
+    let frame = scene_render::render(&scene, 1280, 720).unwrap();
+    assert!(frame.pixels().chunks_exact(4).all(|p| p == [0, 0, 0, 255]));
+    scene.advance_frame(16);
+    let frame = scene_render::render(&scene, 1280, 720).unwrap();
+    assert_eq!(&frame.pixels()[..4], &[0x12, 0x34, 0x56, 255]);
+    assert_eq!(&frame.pixels()[4..8], &[0, 0, 0, 255]);
     scene.advance_frame(1250);
-    assert!(scene_render::render(&scene, 1280, 720).is_err());
-    assert!(scene_render::render(&SceneHost::default(), 1280, 720).is_ok());
+    let frame = scene_render::render(&scene, 1280, 720).unwrap();
+    assert!(
+        frame
+            .pixels()
+            .chunks_exact(4)
+            .all(|p| p == [0x12, 0x34, 0x56, 255])
+    );
 }

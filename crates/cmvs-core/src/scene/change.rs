@@ -1,7 +1,7 @@
 //! 0x22c4 / 0x14007d340 -> 0x140015620 -> 0x14003c900, software fallback.
 //! Timed replacement keeps the previous object and an opaque common-area image. The
-//! shader optimization and secondary image manager are not modeled; rendering refuses
-//! active replacements. Addresses are bound to the binary hash in vm-semantics.md.
+//! shader optimization and secondary image manager are not modeled. The renderer queues
+//! common, previous and current images with their individual fade factors. Addresses are bound to the binary hash in vm-semantics.md.
 //! 0x22c5..0x22c7 cancel, query and wait on this lifecycle without advancing frame time.
 use super::{DrawState, ObjectImage, SceneHost, SceneObject, load_image};
 use crate::{

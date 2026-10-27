@@ -198,7 +198,9 @@ impl<'a> Startup<'a> {
     pub fn render_frame(&self) -> Result<crate::raster::RgbaImage, crate::FormatError> {
         match self.movie_frame() {
             Some(image) => Ok(image.clone()),
-            None => crate::scene_render::render(&self.scene, 1280, 720),
+            None => {
+                crate::scene_render::render_scene(&self.scene, Some(&self.camera), &[], 1280, 720)
+            }
         }
     }
     pub fn advance_decoded_frame(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error>> {

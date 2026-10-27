@@ -58,7 +58,11 @@ impl App<'_> {
             return Ok(image.clone());
         }
         if let Some(font) = &mut self.font {
-            return Ok(font.render(self.startup.scene(), self.startup.messages())?);
+            return Ok(font.render(
+                self.startup.scene(),
+                self.startup.camera(),
+                self.startup.messages(),
+            )?);
         }
         Ok(self.startup.render_frame()?)
     }

@@ -176,12 +176,7 @@ fn replacement_retains_old_children_moves_effects_and_finishes_on_frame_time() {
         change.common.image.as_ref().unwrap().pixels.pixels(),
         &[13, 11, 9, 255, 0, 0, 0, 0]
     );
-    assert!(
-        cmvs_rs::scene_render::render(&scene, 32, 32)
-            .unwrap_err()
-            .0
-            .contains("replacement")
-    );
+    assert!(cmvs_rs::scene_render::render(&scene, 32, 32).is_ok());
     assert_eq!(run_to_system(&mut vm), 0x45);
     scene.try_handle(&mut vm).unwrap();
     scene.advance_frame(250);

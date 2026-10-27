@@ -1,8 +1,9 @@
 //! Software presentation of verified static 2D objects, their children, full-screen color
-//! fades and mask transitions. Unsupported transforms, solid-color objects (including the
-//! strip wipe) and blend modes fail explicitly.
+//! fades, mask transitions and camera projections and strip wipes. Unsupported transforms,
+//! blend modes and unverified solid-color paths fail explicitly.
 use crate::{
     FormatError, MAX_PAYLOAD,
+    camera::CameraHost,
     raster::RgbaImage,
     scene::{MaskTransition, ObjectImage, SceneHost, SceneObject},
 };
@@ -18,6 +19,21 @@ enum Layer<'a> {
         /// The mask transition shading this slot object (not its children).
         mask: Option<&'a MaskTransition>,
         blend: Blend,
+    },
+    /// A coordinate mode 2/3 object projected by camera 0/1 (queue 2/6).
+    Projected {
+        image: &'a ObjectImage,
+        /// Source x/y/width/height.
+        rect: [i64; 4],
+        /// Left/top/right/bottom in device coordinates, whose pixel centers are integers.
+        quad: [f32; 4],
+        alpha: u32,
+        blend: Blend,
+    },
+    Solid {
+        rect: [i64; 4],
+        color: [u8; 3],
+        alpha: u32,
     },
     Fade(&'a crate::fade::Fade),
 }
@@ -68,14 +84,24 @@ struct Entry<'a> {
 }
 
 /// Only blend modes 1/2, crop, origin, position, order and opacity may differ from the
-/// constructor values.
-fn check(words: &[u32; 22]) -> Result<(), FormatError> {
+/// constructor values; a projected object (coordinate mode 2/3) also keeps its world XYZ
+/// (words 11..14) and projection inputs (15/16). Own scale and rotation must stay at constructor values; fade factors
+/// in 0..256 are used by image replacement.
+fn check(words: &[u32; 22], projected: bool) -> Result<(), FormatError> {
     let mut allowed = crate::scene::DrawState::default().words;
     if matches!(words[1], 1 | 2) {
         allowed[1] = words[1];
     }
     allowed[2..11].copy_from_slice(&words[2..11]);
+    if projected {
+        allowed[0] = words[0];
+        allowed[11..14].copy_from_slice(&words[11..14]);
+        allowed[15..17].copy_from_slice(&words[15..17]);
+    }
     allowed[17] = words[17];
+    if words[21] <= 256 {
+        allowed[21] = words[21];
+    }
     if *words != allowed {
         return Err(FormatError("unsupported scene transform or blend mode"));
     }
@@ -154,12 +180,106 @@ fn child_layer<'a>(
         // Fade factors are the constructor's 256, so (256 * 256 * (c * p / 255)) >> 16.
         (
             [base[0] + own[0], base[1] + own[1]],
-            i64::from(opacity * parent_opacity / 255),
+            i64::from(
+                (words[21]
+                    .wrapping_mul(parent_words[21])
+                    .wrapping_mul((opacity * parent_opacity / 255) as u32) as i32)
+                    >> 16,
+            ),
         )
     } else {
-        (own, i64::from(words[17] as i32))
+        (
+            own,
+            i64::from((words[17].wrapping_mul(words[21]) as i32) >> 8),
+        )
     };
     image_layer(image, words, position, alpha, None)
+}
+
+/// Queues 2/6 of 0x14003de80/0x140015fc0 for a top-level mode 2/3 object, keyed by its
+/// depth (0x14004ef30). 0x140020340 projects it with camera 0/1 (0x14004ef40), lays out the
+/// source rectangle around the origin (0x140024020) and places it at the projected position
+/// and scale (0x1400238a0, device factor 1 on the 1280x720 viewport) minus the device's
+/// half-pixel offset. Children, masks, camera rotation and effect targets are not verified.
+fn projected_layer<'a>(
+    scene: &SceneHost,
+    cameras: Option<&CameraHost>,
+    slot: Option<u8>,
+    object: &'a SceneObject,
+    words: &[u32; 22],
+) -> Result<Option<(f32, Layer<'a>)>, FormatError> {
+    let cameras = cameras.ok_or(FormatError("camera projection needs the camera state"))?;
+    check(words, true)?;
+    if object.flags & 0x8000_0000 != 0 && object.children.values().any(|child| child.shown) {
+        return Err(FormatError(
+            "children of projected objects are not verified",
+        ));
+    }
+    if slot.is_some_and(|slot| scene.mask_on(slot).is_some()) {
+        return Err(FormatError(
+            "mask transition on a projected object is not verified",
+        ));
+    }
+    let camera = cameras
+        .camera((words[0] - 2) as usize)
+        .expect("camera exists");
+    if words[0] == 3 && !camera.enabled() {
+        return Ok(None);
+    }
+    if camera.effect() != 0 {
+        return Err(FormatError(
+            "camera effect targets (0x209c) are not modeled",
+        ));
+    }
+    // +48, +52 (also a horizontal shift) and +56 (screen roll) feed rotations.
+    if camera.words[12..15].iter().any(|&word| word != 0) {
+        return Err(FormatError("camera rotation is not modeled"));
+    }
+    let Some(image) = &object.image else {
+        return Ok(None);
+    };
+    let float = |index: usize| f32::from_bits(words[index]);
+    let Some(projection) = camera
+        .project_object([float(11), float(12), float(13)], float(16), float(15))
+        .map_err(FormatError)?
+    else {
+        return Ok(None);
+    };
+    // Opacity times the constructor fade factor 256, >> 8; then the depth fade, /255.
+    let opacity = (words[17].wrapping_mul(words[21]) as i32) >> 8;
+    let alpha = projection.fade.wrapping_mul(opacity) / 255;
+    let [sx, sy, w, h] = [2, 3, 4, 5].map(|i| i64::from(words[i] as i16));
+    // 0x140020340 skips v249/v250 <= 0.0; a NaN scale reaches the extent check below.
+    if alpha <= 0 || projection.scale <= 0.0 || w <= 0 || h <= 0 {
+        return Ok(None);
+    }
+    let size = [image.pixels.width(), image.pixels.height()].map(i64::from);
+    if sx < 0 || sy < 0 || sx + w > size[0] || sy + h > size[1] {
+        return Err(FormatError("scene source rectangle outside image"));
+    }
+    let [px, py] = projection.position;
+    let scale = projection.scale;
+    let origin = [words[6] as i16, words[7] as i16].map(|v| 0.0 - f32::from(v));
+    let quad = [
+        (origin[0] * scale + px) - 0.5,
+        (origin[1] * scale + py) - 0.5,
+        ((w as f32 + origin[0]) * scale + px) - 0.5,
+        ((h as f32 + origin[1]) * scale + py) - 0.5,
+    ];
+    if quad.iter().any(|v| !v.is_finite()) {
+        return Err(FormatError("projected object has a non-finite extent"));
+    }
+    let blend = blend(words, image, i64::from(alpha), false)?;
+    Ok(Some((
+        projection.depth,
+        Layer::Projected {
+            image,
+            rect: [sx, sy, w, h],
+            quad,
+            alpha: alpha.min(255) as u32,
+            blend,
+        },
+    )))
 }
 
 /// Moves an image layer by a quake offset.
@@ -180,19 +300,49 @@ fn shifted(layer: Layer<'_>, by: [i64; 2]) -> Layer<'_> {
             mask,
             blend,
         },
+        Layer::Projected {
+            image,
+            rect,
+            quad,
+            alpha,
+            blend,
+        } => {
+            let [x, y] = by.map(|v| v as f32);
+            Layer::Projected {
+                image,
+                rect,
+                quad: [quad[0] + x, quad[1] + y, quad[2] + x, quad[3] + y],
+                alpha,
+                blend,
+            }
+        }
         fade => fade,
     }
 }
 
 /// Render in script coordinates. Window aspect fitting is a separate desktop policy.
+/// Without camera state, projected objects fail explicitly.
 pub fn render(scene: &SceneHost, width: u32, height: u32) -> Result<RgbaImage, FormatError> {
-    render_with_objects(scene, &[], width, height)
+    render_scene(scene, None, &[], width, height)
+}
+
+/// `render` with additional objects; see `render_scene`.
+pub fn render_with_objects(
+    scene: &SceneHost,
+    additional: &[&SceneObject],
+    width: u32,
+    height: u32,
+) -> Result<RgbaImage, FormatError> {
+    render_scene(scene, None, additional, width, height)
 }
 
 /// Additional objects (e.g. a backend's glyph images and message windows) join the
 /// same stable layer queue before the fade. Their order breaks ties after slot objects.
-pub fn render_with_objects(
+/// 0x140015fc0 draws camera 0/1's queues 2/6 before queue 3, which holds the 2D
+/// objects, windows, glyphs and the fade, so projected objects lie beneath all of them.
+pub fn render_scene(
     scene: &SceneHost,
+    cameras: Option<&CameraHost>,
     additional: &[&SceneObject],
     width: u32,
     height: u32,
@@ -203,39 +353,60 @@ pub fn render_with_objects(
     if width == 0 || height == 0 || size > MAX_PAYLOAD as u64 {
         return Err(FormatError("invalid scene surface dimensions"));
     }
-    // Its strips and cover are solid-color objects queued by layer (0x14003de80).
-    if scene.strip_wipe().is_some() {
-        return Err(FormatError("strip wipe rendering is not implemented"));
-    }
     // Validate the entire scene before rasterizing. Slot order is the stable tie-breaker.
     let mut entries = Vec::new();
+    let mut projected = [Vec::new(), Vec::new()];
     let slots = scene
         .objects()
         .iter()
         .map(|(&slot, object)| (Some(slot), object));
+    // Default forward queue traversal: common, previous, then current. Equal keys keep
+    // this insertion order (0x14003de80 / 0x14003ddd0). Retained objects have no slot mask.
+    let mut objects = Vec::new();
     for (slot, object) in slots.chain(additional.iter().map(|&object| (None, object))) {
+        if object.shown
+            && let Some(change) = &object.change
+        {
+            objects.push((None, change.common.as_ref(), slot.is_none()));
+            objects.push((None, change.previous.as_ref(), slot.is_none()));
+        }
+        objects.push((slot, object, slot.is_none()));
+    }
+    for (slot, object, additional_object) in objects {
         // 0x14003de80 returns early for +6244 == 0; no draw state means +6240 == 0.
         let Some(draw) = object.draw.as_ref().filter(|_| object.shown) else {
             continue;
         };
-        if object.change.is_some() {
-            return Err(FormatError(
-                "image replacement transition rendering is not implemented",
-            ));
-        }
         let d = &draw.words;
-        check(d)?;
-        let position = [d[8] as i32, d[9] as i32].map(i64::from);
-        let mask = slot.and_then(|slot| scene.mask_on(slot));
         // 0x1400526b0 offsets slot objects as queue layer 0 and the backend's windows and
         // glyphs as layer 1; 0x14003b420 applies it only with the top-level object's +6248
         // bit 0x100, children included.
         let by = match scene.quake() {
-            Some(quake) if object.flags & 0x100 != 0 => quake.offset(slot.is_none()).map(i64::from),
+            Some(quake) if object.flags & 0x100 != 0 => {
+                quake.offset(additional_object).map(i64::from)
+            }
             _ => [0, 0],
         };
+        match d[0] {
+            2 | 3 => {
+                if let Some((depth, layer)) = projected_layer(scene, cameras, slot, object, d)? {
+                    projected[(d[0] - 2) as usize].push((depth, shifted(layer, by)));
+                }
+                continue;
+            }
+            _ => {}
+        }
+        check(d, false)?;
+        let position = [d[8] as i32, d[9] as i32].map(i64::from);
+        let mask = slot.and_then(|slot| scene.mask_on(slot));
         let layer = match &object.image {
-            Some(image) => image_layer(image, d, position, i64::from(d[17] as i32), mask)?,
+            Some(image) => image_layer(
+                image,
+                d,
+                position,
+                i64::from((d[17].wrapping_mul(d[21]) as i32) >> 8),
+                mask,
+            )?,
             None => None,
         }
         .map(|layer| shifted(layer, by));
@@ -261,7 +432,7 @@ pub fn render_with_objects(
                 if words[0] != d[0] || order(words) < 0.0 {
                     continue;
                 }
-                check(words)?;
+                check(words, false)?;
                 let Some(layer) = child_layer(object, d, child, words)? else {
                     continue;
                 };
@@ -279,6 +450,39 @@ pub fn render_with_objects(
         }
         entries.push(entry);
         entries.extend(independent);
+    }
+    // Attached strips follow ordinary slots, then the fade (0x140015da0).
+    if let Some(wipe) = scene.strip_wipe() {
+        for object in std::iter::once(&wipe.object).chain(wipe.strips.iter().map(|s| &s.object)) {
+            if !object.shown {
+                continue;
+            }
+            let Some(draw) = &object.draw else {
+                continue;
+            };
+            let d = &draw.words;
+            let mut plain = *d;
+            plain[14] = 0;
+            check(&plain, false)?;
+            if d[0] != 0 || d[1] != 1 {
+                return Err(FormatError("unsupported strip transform or blend mode"));
+            }
+            let [w, h] = [d[4] as i16, d[5] as i16].map(i64::from);
+            if w <= 0 || h <= 0 {
+                continue;
+            }
+            let [left, top] = [8, 9].map(|i| i64::from(d[i] as i32));
+            let [b, g, r, a] = d[14].to_le_bytes();
+            entries.push(Entry {
+                order: order(d),
+                layer: Some(Layer::Solid {
+                    rect: [left, top, w, h],
+                    color: [r, g, b],
+                    alpha: u32::from(a),
+                }),
+                children: Vec::new(),
+            });
+        }
     }
     // The engine enqueues the fade after ordinary object slots (0x140015da0).
     if let Some(fade) = scene.fade().current() {
@@ -300,9 +504,15 @@ pub fn render_with_objects(
     // 0x14003ddd0 inserts after equal keys, with larger orders first; the traversal
     // 0x14003dc40 drains an entry's sublist right after the entry itself.
     entries.sort_by(|a, b| b.order.total_cmp(&a.order));
+    for queue in &mut projected {
+        queue.sort_by(|a, b| b.0.total_cmp(&a.0));
+    }
     let mut pixels = vec![0; size as usize];
     for p in pixels.chunks_exact_mut(4) {
         p.copy_from_slice(&scene.clear().rgba());
+    }
+    for (_, layer) in projected.into_iter().flatten() {
+        draw(&mut pixels, width, height, layer);
     }
     for mut entry in entries {
         entry.children.sort_by(|a, b| b.0.total_cmp(&a.0));
@@ -317,6 +527,74 @@ pub fn render_with_objects(
     RgbaImage::new(width, height, pixels)
 }
 
+/// One target pixel under the device blend state, with straight 8-bit source values.
+fn put(target: &mut [u8], source: [u8; 3], alpha: u32, blend: Blend) {
+    for c in 0..3 {
+        let (s, t) = (u32::from(source[c]), u32::from(target[c]));
+        target[c] = match blend {
+            Blend::Replace => source[c],
+            Blend::Alpha => ((s * alpha + t * (255 - alpha) + 127) / 255) as u8,
+            Blend::Additive => (t + (s * alpha + 127) / 255).min(255) as u8,
+        };
+    }
+}
+
+/// Bilinear sampling (cmvs.cfg TEXTURE_MIN/MAG_FILTER = 1 selects D3DTEXF_LINEAR in
+/// 0x1400220e0) with clamped addressing over the whole image, modulated by the vertex alpha.
+/// Pixels whose centers lie in [left, right) × [top, bottom) are covered. Texture tiling
+/// seams, power-of-two padding and the device's sub-texel precision are not modeled, so
+/// scaled output approximates the original; at unit scale on whole pixels it copies texels.
+fn draw_projected(
+    pixels: &mut [u8],
+    [width, height]: [u32; 2],
+    image: &ObjectImage,
+    [sx, sy, w, h]: [i64; 4],
+    [left, top, right, bottom]: [f32; 4],
+    opacity: u32,
+    blend: Blend,
+) {
+    let size = [image.pixels.width(), image.pixels.height()].map(i64::from);
+    let texels = image.pixels.pixels();
+    let step = [w as f32 / (right - left), h as f32 / (bottom - top)];
+    let span = |from: f32, to: f32, limit: u32| {
+        let limit = limit as f32;
+        (
+            from.ceil().clamp(0.0, limit) as i64,
+            to.ceil().clamp(0.0, limit) as i64,
+        )
+    };
+    let (x0, x1) = span(left, right, width);
+    let (y0, y1) = span(top, bottom, height);
+    for y in y0..y1 {
+        let ty = sy as f32 + (y as f32 - top) * step[1] - 0.5;
+        let wy = ty - ty.floor();
+        let rows = [ty.floor() as i64, ty.floor() as i64 + 1].map(|r| r.clamp(0, size[1] - 1));
+        for x in x0..x1 {
+            let tx = sx as f32 + (x as f32 - left) * step[0] - 0.5;
+            let wx = tx - tx.floor();
+            let cols = [tx.floor() as i64, tx.floor() as i64 + 1].map(|c| c.clamp(0, size[0] - 1));
+            let texel = |row: i64, col: i64, c: usize| {
+                f32::from(texels[((row * size[0] + col) * 4) as usize + c])
+            };
+            let sample = |c: usize| {
+                let upper =
+                    texel(rows[0], cols[0], c) * (1.0 - wx) + texel(rows[0], cols[1], c) * wx;
+                let lower =
+                    texel(rows[1], cols[0], c) * (1.0 - wx) + texel(rows[1], cols[1], c) * wx;
+                (upper * (1.0 - wy) + lower * wy).round().clamp(0.0, 255.0) as u8
+            };
+            let alpha = (u32::from(sample(3)) * opacity + 127) / 255;
+            let dst = ((y * i64::from(width) + x) * 4) as usize;
+            put(
+                &mut pixels[dst..dst + 3],
+                [sample(0), sample(1), sample(2)],
+                alpha,
+                blend,
+            );
+        }
+    }
+}
+
 fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
     let (image, [sx, sy, w, h], [left, top], opacity, mask, blend) = match layer {
         Layer::Image {
@@ -327,6 +605,29 @@ fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
             mask,
             blend,
         } => (image, rect, corner, alpha, mask, blend),
+        Layer::Projected {
+            image,
+            rect,
+            quad,
+            alpha,
+            blend,
+        } => {
+            draw_projected(pixels, [width, height], image, rect, quad, alpha, blend);
+            return;
+        }
+        Layer::Solid {
+            rect: [left, top, w, h],
+            color,
+            alpha,
+        } => {
+            for y in top.max(0)..(top + h).min(i64::from(height)) {
+                for x in left.max(0)..(left + w).min(i64::from(width)) {
+                    let dst = ((y * i64::from(width) + x) * 4) as usize;
+                    put(&mut pixels[dst..dst + 3], color, alpha, Blend::Alpha);
+                }
+            }
+            return;
+        }
         Layer::Fade(fade) => {
             let [b, g, r, _] = fade.color.to_le_bytes();
             let alpha = fade.opacity.clamp(0, 255) as u32;
@@ -356,14 +657,7 @@ fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
                 // Same size and coordinates as the image, so the same texel.
                 alpha = (alpha as f32 * coverage[usize::from(texture[src + 1])]).round() as u32;
             }
-            for c in 0..3 {
-                let (source, target) = (u32::from(p[c]), u32::from(pixels[dst + c]));
-                pixels[dst + c] = match blend {
-                    Blend::Replace => p[c],
-                    Blend::Alpha => ((source * alpha + target * (255 - alpha) + 127) / 255) as u8,
-                    Blend::Additive => (target + (source * alpha + 127) / 255).min(255) as u8,
-                };
-            }
+            put(&mut pixels[dst..dst + 3], [p[0], p[1], p[2]], alpha, blend);
         }
     }
 }

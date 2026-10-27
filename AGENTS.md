@@ -5,6 +5,7 @@
 - 平台无关核心优先，系统接口留在后端，不新增 C++ 运行核心。
 - 原游戏只读，素材、解包剧本、IDA 数据库不进入 Git。
 - 提交前运行 cargo fmt --check、cargo test --offline、cargo clippy --offline --all-targets -- -D warnings。
+- Commit message 格式：`<type>(<optional scope>): <description>`；scope 可省略，省略时使用 `<type>: <description>`。
 - 改动解码算法后使用外部真实样本与 Python 对照；测试仅含合成数据。
 - 记录参考项目提交和许可，不直接复制未明确授权的源码。
 - 指令语义保留证据，未知指令显式报错，地址与二进制哈希绑定。

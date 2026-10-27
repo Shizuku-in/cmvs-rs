@@ -4,7 +4,7 @@
 //! the +40 table. The frame update 0x140015900 runs 0x140052e20 after the fade (+4616) and
 //! before the mask (+4632), freeing the wipe when it reports the end. 0x14003de80 queues
 //! attached objects by their own layer even though the owner has no draw state; that
-//! solid-color drawing is not modeled, so the software renderer rejects an active wipe.
+//! software renderer draws these verified solid rectangles in the same layer queue.
 use super::{DrawState, SceneHost, SceneObject};
 use crate::{
     bytecode::DecodeError,

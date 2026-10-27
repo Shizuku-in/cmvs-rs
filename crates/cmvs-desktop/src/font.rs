@@ -3,6 +3,7 @@
 use ab_glyph::{Font, FontVec, ScaleFont, point};
 use cmvs_core::{
     FormatError,
+    camera::CameraHost,
     message::{MESSAGE_WINDOWS, MessageHost, RecordedGlyph, TEXT_OBJECTS},
     raster::RgbaImage,
     scene::{DrawState, ObjectImage, SceneHost, SceneObject},
@@ -43,12 +44,32 @@ fn rgb(color: u32) -> [u8; 3] {
     [r, g, b]
 }
 
-/// Straight-alpha foreground over a dilation outline; only equal-endpoint gradients
-/// are supported. Glyph shapes/baselines follow ab_glyph, not Windows GDI hinting.
+/// 0x140059d20: signed 10-bit fixed-point color steps over the glyph's size.
+/// Mode 1 is vertical, 2 horizontal, 3 diagonal (halve each axis step separately).
+/// The final row/column stops one step before the second endpoint.
+fn gradient_color(colors: [u32; 2], mode: u32, size: usize, x: usize, y: usize) -> [u8; 3] {
+    let first = rgb(colors[0]);
+    let last = rgb(colors[1]);
+    std::array::from_fn(|c| {
+        let base = i32::from(first[c]) << 10;
+        let step = ((i32::from(last[c]) << 10) - base) / size as i32;
+        let offset = match mode {
+            1 => step * y as i32,
+            2 => step * x as i32,
+            3 => (step / 2) * (x + y) as i32,
+            _ => 0,
+        };
+        ((base + offset) >> 10) as u8
+    })
+}
+
+/// Straight-alpha foreground over a dilation outline. Glyph shapes/baselines and
+/// outline compositing follow this preview backend, not Windows GDI hinting.
 fn paint(
     mask: &[u8],
     side: usize,
-    color: u32,
+    colors: [u32; 2],
+    gradient: u32,
     outline: [u32; 2],
 ) -> Result<RgbaImage, FormatError> {
     let radius = match outline[0] {
@@ -70,10 +91,15 @@ fn paint(
             }
         }
     }
-    let fg = rgb(color);
+    let size = side - 4;
     let bg = rgb(outline[1]);
     let mut pixels = Vec::with_capacity(mask.len() * 4);
-    for (a, b) in mask.iter().zip(dilation) {
+    for (index, (a, b)) in mask.iter().zip(dilation).enumerate() {
+        // The mask has two padding pixels on every side. Clamp any overhanging
+        // ab_glyph bearings to the nominal GDI color grid.
+        let x = (index % side).saturating_sub(2).min(size - 1);
+        let y = (index / side).saturating_sub(2).min(size - 1);
+        let fg = gradient_color(colors, gradient, size, x, y);
         let a = u32::from(*a);
         let b = u32::from(b);
         let behind = (b * (255 - a) + 127) / 255;
@@ -113,10 +139,8 @@ impl FontRenderer {
         if !(1..=128).contains(&glyph.size) {
             return Err(FormatError("glyph size outside 1..128 preview range"));
         }
-        if glyph.gradient > 3 || (glyph.gradient != 0 && glyph.colors[0] != glyph.colors[1]) {
-            return Err(FormatError(
-                "non-flat glyph gradients are not implemented by the font preview",
-            ));
+        if glyph.gradient > 3 {
+            return Err(FormatError("unsupported glyph gradient mode"));
         }
         if glyph.outline[0] > 2 {
             return Err(FormatError("unsupported glyph outline mode"));
@@ -170,7 +194,7 @@ impl FontRenderer {
                 "selected font lacks a supported outline for a character",
             ));
         }
-        let image = paint(&mask, side, glyph.colors[0], glyph.outline)?;
+        let image = paint(&mask, side, glyph.colors, glyph.gradient, glyph.outline)?;
         if self.cache.len() >= 128 {
             self.cache.clear();
         }
@@ -179,10 +203,11 @@ impl FontRenderer {
     }
 
     /// Adds glyph images and visible message-window objects to the core's layer queue.
-    /// Current layout is the 1280x720 research viewport, unit text scale, flat gradients.
+    /// Current layout is the 1280x720 research viewport, unit text scale, and flat/vertical/horizontal/diagonal colors.
     pub fn render(
         &mut self,
         scene: &SceneHost,
+        cameras: &CameraHost,
         messages: &MessageHost,
     ) -> Result<RgbaImage, FormatError> {
         let mut objects = Vec::new();
@@ -229,7 +254,7 @@ impl FontRenderer {
                 .filter(|w| w.visible && !w.hidden)
                 .map(|w| &w.object),
         );
-        scene_render::render_with_objects(scene, &additional, 1280, 720)
+        scene_render::render_scene(scene, Some(cameras), &additional, 1280, 720)
     }
 }
 
@@ -248,15 +273,47 @@ mod tests {
     fn synthetic_mask_has_transparent_padding_and_a_one_pixel_outline() {
         let mut mask = vec![0; 25];
         mask[12] = 255;
-        let image = paint(&mask, 5, 0xffffff, [1, 0x123456]).unwrap();
+        let image = paint(&mask, 5, [0xffffff; 2], 0, [1, 0x123456]).unwrap();
         assert_eq!(&image.pixels()[48..52], &[255, 255, 255, 255]);
         assert_eq!(&image.pixels()[24..28], &[0x12, 0x34, 0x56, 255]);
         assert_eq!(&image.pixels()[..4], &[0, 0, 0, 0]);
-        assert!(paint(&mask, 5, 0, [3, 0]).is_err());
+        assert!(paint(&mask, 5, [0; 2], 0, [3, 0]).is_err());
     }
     #[test]
     fn invalid_font_data_or_collection_face_is_an_error() {
         assert!(FontRenderer::from_bytes(vec![], 0).is_err());
         assert!(FontRenderer::from_bytes(b"ttcf".to_vec(), 1).is_err());
+    }
+}
+
+#[cfg(test)]
+mod gradient_tests {
+    use super::*;
+
+    #[test]
+    fn gradients_follow_fixed_point_axis_steps_and_do_not_reach_the_endpoint() {
+        let colors = [0xffffff, 0];
+        assert_eq!(gradient_color(colors, 0, 4, 3, 3), [255; 3]);
+        assert_eq!(gradient_color(colors, 1, 4, 3, 0), [255; 3]);
+        assert_eq!(gradient_color(colors, 1, 4, 0, 3), [63; 3]);
+        assert_eq!(gradient_color(colors, 2, 4, 0, 3), [255; 3]);
+        assert_eq!(gradient_color(colors, 2, 4, 3, 0), [63; 3]);
+        assert_eq!(gradient_color(colors, 3, 4, 1, 0), [223; 3]);
+        assert_eq!(gradient_color(colors, 3, 4, 0, 1), [223; 3]);
+        // Signed division truncates toward zero before the diagonal step is halved.
+        assert_eq!(gradient_color([0, 0x010101], 3, 3, 2, 2), [0; 3]);
+    }
+
+    #[test]
+    fn gradient_foreground_keeps_constant_outline_color_and_transparent_padding() {
+        let mut mask = vec![0; 64];
+        mask[2 * 8 + 2] = 255;
+        mask[5 * 8 + 2] = 255;
+        let image = paint(&mask, 8, [0xff0000, 0x0000ff], 1, [1, 0x123456]).unwrap();
+        let pixel = |x: usize, y: usize| &image.pixels()[(y * 8 + x) * 4..(y * 8 + x + 1) * 4];
+        assert_eq!(pixel(2, 2), [255, 0, 0, 255]);
+        assert_eq!(pixel(2, 5), [63, 0, 191, 255]);
+        assert_eq!(pixel(1, 2), [0x12, 0x34, 0x56, 255]);
+        assert_eq!(pixel(0, 0), [0, 0, 0, 0]);
     }
 }
