@@ -130,3 +130,5 @@ cargo test --offline --features audio-output --test audio_output native_device_s
 ```
 
 状态码 0xc0000008 是进程级原生异常，不能把它当作 Rust Result 或解码断言失败；排查时先记录执行环境，再以同一构建在普通桌面权限下对照。该检查缺失设备或后端错误会明确失败；不加到默认测试或自动替换真实设备结果。
+
+播放位置查询：`AudioBackend::se_position` / `voice_position` 服务 0x20b7/0x20aa。原生后端把已启动且仍有数据的 sink 视为播放中，返回 rodio 源消费位置（毫秒），暂停（仅准备）、空槽或播完为 None；与影片时钟相同，不含设备缓冲延迟。本次只经编译与 Clippy，未打开设备实测。记录后端始终返回 None。

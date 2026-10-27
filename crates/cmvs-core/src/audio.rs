@@ -205,6 +205,16 @@ pub trait AudioBackend {
     fn stop_movie_audio(&mut self) -> Result<(), Box<dyn Error>> {
         Err("audio backend does not implement stopping movie audio".into())
     }
+    /// 0x140087870 on device channel `channel + 9`: Some(milliseconds since the sound
+    /// started) while it plays, None when the slot is empty, only prepared, being released
+    /// or finished (0x1400892f0 resets +172 to 0 once a stream that does not loop ends).
+    fn se_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+        Err("audio backend does not implement SE position queries".into())
+    }
+    /// The same query on voice channel 0..3 (device channel +5).
+    fn voice_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+        Err("audio backend does not implement voice position queries".into())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -265,6 +275,13 @@ impl AudioBackend for RecordingAudio {
     fn stop_movie_audio(&mut self) -> Result<(), Box<dyn Error>> {
         self.record(AudioRequest::StopMovieAudio)
     }
+    /// Nothing is ever loaded (play reports failure), so every slot is empty.
+    fn se_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+        Ok(None)
+    }
+    fn voice_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+        Ok(None)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -306,6 +323,7 @@ impl AudioHost {
             Some((_, 0xa0 | 0xa4)) => return self.try_bgm(vm, backend),
             Some((_, 0xa2)) => return self.try_bgm_fade_out(vm, backend),
             Some((_, 0xa1)) => return self.try_bgm_stop(vm, backend),
+            Some((_, 0xaa | 0xb7)) => return self.try_position(vm, backend),
             _ => {}
         }
         // 0x20b0 / 0x140070b70 and 0x20ba / 0x140070cd0 differ only in 0x20ba's SP-16 fade-in
@@ -501,6 +519,36 @@ impl AudioHost {
             .get_or_insert_with(SeChannel::default)
             .name
             .clear();
+        Ok(true)
+    }
+
+    /// 0x20b7 / 0x140071170 (SE channel 0..5) and 0x20aa / 0x140070790 (voice channel
+    /// 0..3): system result 0 = the 0x140087870 playback position, or −1; pops 4 and
+    /// returns 0x4004. Neither checks SE_USE or the voice setting; larger channels only set
+    /// +12056 bits 0x200 / 0x400 (unmodeled, rejected here).
+    fn try_position(
+        &mut self,
+        vm: &mut Machine<'_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<bool, Box<dyn Error>> {
+        let (pc, command) = vm.pending_system().expect("checked pending command");
+        let fail = |why| error(pc, command + 0x2000, why);
+        let channel = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
+        let position = if command == 0xb7 {
+            if channel as usize >= SE_CHANNELS {
+                return Err(fail("SE channel outside 0..5 sets an unmodeled flag").into());
+            }
+            backend.se_position(channel as u8)?
+        } else {
+            if channel as usize >= VOICE_CHANNELS {
+                return Err(fail("voice channel outside 0..3 sets an unmodeled flag").into());
+            }
+            backend.voice_position(channel as u8)?
+        };
+        vm.complete_system(SystemResult(0x4004))?;
+        vm.state_mut()
+            .set_system_integer(0, position.unwrap_or(u32::MAX))
+            .expect("slot 0 exists");
         Ok(true)
     }
 

@@ -1009,3 +1009,109 @@ fn voice_play_errors_keep_the_command_pending() {
         assert!(recording.requests().is_empty());
     }
 }
+
+/// One 0x20b7 (SE) or 0x20aa (voice) position query of `channel`.
+fn position_code(op: u16, channel: u32) -> Vec<u8> {
+    let mut code = vec![];
+    push(&mut code, channel);
+    code.extend(op.to_le_bytes());
+    code
+}
+/// Fixed positions per SE and voice channel; records each (voice, channel) query.
+struct Positions {
+    se: [Option<u32>; 6],
+    voice: [Option<u32>; 4],
+    queries: std::cell::RefCell<Vec<(bool, u8)>>,
+}
+impl AudioBackend for Positions {
+    fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+        Err("unexpected play".into())
+    }
+    fn se_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+        self.queries.borrow_mut().push((false, channel));
+        Ok(self.se[usize::from(channel)])
+    }
+    fn voice_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+        self.queries.borrow_mut().push((true, channel));
+        Ok(self.voice[usize::from(channel)])
+    }
+}
+
+#[test]
+fn position_queries_report_milliseconds_or_minus_one_per_channel_family() {
+    let queries = [(0x20b7, 2), (0x20b7, 5), (0x20aa, 0), (0x20aa, 3)];
+    let mut code = vec![];
+    for (op, channel) in queries {
+        code.extend(position_code(op, channel));
+    }
+    let script = program(&code, b"");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = AudioHost::default();
+    let mut backend = Positions {
+        se: [None, None, Some(1234), None, None, None],
+        voice: [Some(0), None, None, Some(u32::MAX - 1)],
+        queries: Default::default(),
+    };
+    for expected in [1234, u32::MAX, 0, u32::MAX - 1] {
+        pending(&mut vm);
+        vm.state_mut().set_system_integer(4, 77).unwrap();
+        assert!(host.try_handle(&mut vm, &mut backend).unwrap());
+        assert_eq!(vm.state().system_integer(0), Some(expected));
+        assert_eq!(vm.state().system_integer(4), Some(77));
+        assert_eq!((vm.pending_system(), vm.stack().len_bytes()), (None, 0));
+    }
+    assert_eq!(vm.pc(), code.len());
+    assert_eq!(
+        *backend.queries.borrow(),
+        [(false, 2), (false, 5), (true, 0), (true, 3)]
+    );
+    assert_eq!(host.channel(2), None);
+    // The recording backend never loads a sound, so every slot reports -1.
+    let mut vm = Machine::new(&script).unwrap();
+    let mut recording = RecordingAudio::default();
+    for _ in queries {
+        pending(&mut vm);
+        vm.state_mut().set_system_integer(0, 7).unwrap();
+        assert!(host.try_handle(&mut vm, &mut recording).unwrap());
+        assert_eq!(vm.state().system_integer(0), Some(u32::MAX));
+    }
+    assert!(recording.requests().is_empty());
+}
+
+#[test]
+fn position_queries_reject_large_channels_and_keep_backend_errors_pending() {
+    let silent = || Positions {
+        se: [None; 6],
+        voice: [None; 4],
+        queries: Default::default(),
+    };
+    for (op, channel) in [(0x20b7, 6), (0x20b7, u32::MAX), (0x20aa, 4)] {
+        let script = program(&position_code(op, channel), b"");
+        let mut vm = Machine::new(&script).unwrap();
+        pending(&mut vm);
+        vm.state_mut().set_system_integer(0, 7).unwrap();
+        let mut backend = silent();
+        assert!(
+            AudioHost::default()
+                .try_handle(&mut vm, &mut backend)
+                .is_err()
+        );
+        assert!(backend.queries.borrow().is_empty());
+        assert_eq!(vm.pending_system().map(|p| p.1), Some(op - 0x2000));
+        assert_eq!(vm.stack().len_bytes(), 4);
+        assert_eq!(vm.state().system_integer(0), Some(7));
+    }
+    // A backend without the query, or a missing channel argument, keeps the command.
+    for (code, bytes) in [
+        (position_code(0x20b7, 0), 4),
+        (0x20aau16.to_le_bytes().to_vec(), 0),
+    ] {
+        let script = program(&code, b"");
+        let mut vm = Machine::new(&script).unwrap();
+        pending(&mut vm);
+        let error = AudioHost::default().try_handle(&mut vm, &mut Started);
+        assert!(error.is_err());
+        assert!(vm.pending_system().is_some());
+        assert_eq!(vm.stack().len_bytes(), bytes);
+    }
+}

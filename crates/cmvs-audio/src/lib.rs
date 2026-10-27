@@ -309,6 +309,21 @@ impl NativeAudio {
             .set_volume(gain * channel.envelope.as_ref().map_or(1.0, Envelope::value));
         channel.gain = gain;
     }
+    /// Playing means started (not paused) with source data left; `update` releases
+    /// finished channels. The position is the source consumption clock, not a DAC
+    /// timestamp, and includes no device-buffer latency.
+    fn position(channel: Option<&Channel>) -> Result<Option<u32>, Box<dyn Error>> {
+        let Some(channel) = channel else {
+            return Ok(None);
+        };
+        channel.check()?;
+        if channel.sink.is_paused() || channel.sink.empty() {
+            return Ok(None);
+        }
+        Ok(Some(
+            channel.sink.get_pos().as_millis().min(u128::from(u32::MAX)) as u32,
+        ))
+    }
     fn tick_channel(channel: &mut Option<Channel>) -> Result<(), Box<dyn Error>> {
         let Some(current) = channel else {
             return Ok(());
@@ -569,6 +584,20 @@ impl AudioBackend for NativeAudio {
             }
         }
         Ok(())
+    }
+    fn se_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+        let channel = self
+            .se
+            .get(usize::from(channel))
+            .ok_or("SE channel out of range")?;
+        Self::position(channel.as_ref())
+    }
+    fn voice_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+        let channel = self
+            .voice
+            .get(usize::from(channel))
+            .ok_or("voice channel out of range")?;
+        Self::position(channel.as_ref())
     }
     fn movie_clock(&self) -> Result<Option<MovieAudioClock>, Box<dyn Error>> {
         let Some(movie) = &self.movie else {
