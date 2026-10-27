@@ -302,10 +302,14 @@ impl<'a> Startup<'a> {
                 StartupEvent::Progress
             });
         }
-        if let Some(step) = self
+        let waited = match self
             .scene
             .try_wait_mask(&mut self.machine, gate, &mut self.input)?
         {
+            Some(step) => Some(step),
+            None => self.scene.try_wait_quake(&mut self.machine)?,
+        };
+        if let Some(step) = waited {
             self.resume_run = step == Step::Yield;
             return Ok(if step == Step::Yield {
                 StartupEvent::Yield
@@ -375,6 +379,7 @@ impl<'a> Startup<'a> {
             || self.timers.try_handle(&mut self.machine)?
             || self.bootstrap.try_handle(&mut self.machine)?.is_some()
             || self.scene.try_handle(&mut self.machine)?
+            || self.scene.try_handle_quake(&mut self.machine)?
             || self.scene.try_handle_image(
                 &mut self.machine,
                 &mut self.images.with_paths(self.bootstrap.paths()),

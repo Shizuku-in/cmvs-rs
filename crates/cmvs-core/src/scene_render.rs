@@ -118,6 +118,26 @@ fn child_layer<'a>(
     image_layer(image, words, position, alpha, None)
 }
 
+/// Moves an image layer by a quake offset.
+fn shifted(layer: Layer<'_>, by: [i64; 2]) -> Layer<'_> {
+    match layer {
+        Layer::Image {
+            image,
+            rect,
+            corner,
+            alpha,
+            mask,
+        } => Layer::Image {
+            image,
+            rect,
+            corner: [corner[0] + by[0], corner[1] + by[1]],
+            alpha,
+            mask,
+        },
+        fade => fade,
+    }
+}
+
 /// Render in script coordinates. Window aspect fitting is a separate desktop policy.
 pub fn render(scene: &SceneHost, width: u32, height: u32) -> Result<RgbaImage, FormatError> {
     render_with_objects(scene, &[], width, height)
@@ -152,10 +172,18 @@ pub fn render_with_objects(
         check(d)?;
         let position = [d[8] as i32, d[9] as i32].map(i64::from);
         let mask = scene.mask().filter(|mask| Some(mask.slot) == slot);
+        // 0x1400526b0 offsets slot objects as queue layer 0 and the backend's windows and
+        // glyphs as layer 1; 0x14003b420 applies it only with the top-level object's +6248
+        // bit 0x100, children included.
+        let by = match scene.quake() {
+            Some(quake) if object.flags & 0x100 != 0 => quake.offset(slot.is_none()).map(i64::from),
+            _ => [0, 0],
+        };
         let layer = match &object.image {
             Some(image) => image_layer(image, d, position, i64::from(d[17] as i32), mask)?,
             None => None,
-        };
+        }
+        .map(|layer| shifted(layer, by));
         let mut entry = Entry {
             order: order(d),
             layer,
@@ -177,6 +205,7 @@ pub fn render_with_objects(
                 let Some(layer) = child_layer(object, d, child, words)? else {
                     continue;
                 };
+                let layer = shifted(layer, by);
                 if child.flags & 2 != 0 {
                     entry.children.push((order(words), layer));
                 } else {
@@ -193,6 +222,15 @@ pub fn render_with_objects(
     }
     // The engine enqueues the fade after ordinary object slots (0x140015da0).
     if let Some(fade) = scene.fade().current() {
+        // The overlay is a layer 0 queue item; its translated extent is not verified.
+        if scene
+            .quake()
+            .is_some_and(|quake| quake.offset(false) != [0, 0])
+        {
+            return Err(FormatError(
+                "fade overlay under a quake offset is not verified",
+            ));
+        }
         entries.push(Entry {
             order: fade.order as f32,
             layer: Some(Layer::Fade(fade)),

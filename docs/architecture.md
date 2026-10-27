@@ -223,3 +223,5 @@ BGM 与 SE 共用 `AudioHost`/`AudioBackend`：`BgmState` 保存 +4464 对象的
 `AudioBackend::fade_out_se` 表达 0x20b6 对 SE 设备通道的淡出并释放，与 `fade_out_bgm` 共用原版设备函数 0x1400882d0 的语义；`AudioHost` 不按 SE_USE 门控，只清空通道名称。逐句点击重放随后停于 sn1001.ps3 / PC=0xf19c / 0x2152 的注音组屏障，详见 vm-semantics.md。
 
 `message::output` 的记录输出拆分为原版对应的小函数：`ruby_lines`（0x14005b360）、`wraps`（双字节与注音组共用的换行判断）、`push`/`retime`（0x14005a830/0x14005b5a0）。“上一个字形”在每次调用开始时为空，以对应原版的未初始化指针。注音组按 22.10 定点均分或居中，组内单字节与分隔符照原版重复计时。逐句点击重放停于 sn1001.ps3 / PC=0x34f3a / 0x2225、SP=28，详见 vm-semantics.md。
+
+`SceneHost` 新增引擎 +4624 的 `Quake`（`scene/quake.rs`），帧推进位于遮罩转场之后，对应原版的渲染入队阶段。`scene_render` 把场景槽对象视为队列标志 0、`render_with_objects` 的附加对象（窗口与字形）视为标志 1，按模式低 4 位和顶层对象的位 0x100 平移图层及其子对象；纯色覆盖层在非零偏移下显式报错。真实重放停于 sn1001.ps3 / PC=0xe570 / 0x20a6、SP=172，详见 vm-semantics.md。

@@ -10,7 +10,9 @@ use crate::{
 };
 use std::{collections::BTreeMap, error::Error};
 mod mask;
+mod quake;
 pub use mask::MaskTransition;
+pub use quake::Quake;
 
 /// Engine +1976 holds 256 object pointers (snapshot records 0x700).
 pub const OBJECT_SLOTS: usize = 256;
@@ -315,6 +317,8 @@ pub struct SceneHost {
     fade: crate::fade::FadeHost,
     /// Engine +4632; see `mask`.
     mask: Option<MaskTransition>,
+    /// Engine +4624; see `quake`.
+    quake: Option<Quake>,
 }
 impl SceneHost {
     pub fn fade(&self) -> &crate::fade::FadeHost {
@@ -325,7 +329,7 @@ impl SceneHost {
     }
     /// The slot part of the frame update 0x140015900: each object runs 0x14003d0c0 and is
     /// destroyed when it is marked for disposal (0x14003a780 reads +14500); then the fade
-    /// and the mask transition.
+    /// and the mask transition. The quake follows in the render pass 0x140015da0.
     pub fn advance_frame(&mut self, delta: u32) {
         for object in self.objects.values_mut() {
             object.advance_effects(delta);
@@ -333,6 +337,7 @@ impl SceneHost {
         self.objects.retain(|_, object| !object.dispose);
         self.fade.advance(delta);
         self.advance_mask(delta);
+        self.advance_quake(delta);
     }
     pub fn clear(&self) -> ClearState {
         self.clear

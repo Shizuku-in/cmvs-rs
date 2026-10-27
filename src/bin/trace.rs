@@ -213,7 +213,10 @@ fn run() -> Result<(), Box<dyn Error>> {
                 };
                 let waited = match scene.fade_mut().try_wait(&mut machine, gate, &mut input)? {
                     Some(event) => Some(event),
-                    None => scene.try_wait_mask(&mut machine, gate, &mut input)?,
+                    None => match scene.try_wait_mask(&mut machine, gate, &mut input)? {
+                        Some(event) => Some(event),
+                        None => scene.try_wait_quake(&mut machine)?,
+                    },
                 };
                 if let Some(event) = waited {
                     if event == Step::Yield {
@@ -438,6 +441,15 @@ fn run() -> Result<(), Box<dyn Error>> {
                         scene.clear(),
                         scene.clear().rgba(),
                         scene.objects().keys().collect::<Vec<_>>()
+                    );
+                    continue;
+                }
+                if scene.try_handle_quake(&mut machine)? {
+                    println!(
+                        "# quake 0x{:04x}: {:?} system_integer[0]={:?}",
+                        command + 0x2000,
+                        scene.quake(),
+                        machine.state().system_integer(0)
                     );
                     continue;
                 }
