@@ -1210,13 +1210,113 @@ fn recorded_output_hidden_window_keeps_waiting_even_when_skip_finishes_layout() 
     assert_eq!(messages.text(7).unwrap().glyphs.len(), 1);
 }
 
+/// Records `data[offset..]` in window 0 / text 7 with a 40-wide area and 10-pixel glyphs
+/// (line end 30); `setup` runs between the size command and the output.
+fn wrapped(setup: &[(u16, Vec<u32>)], data: &[u8], offset: u32) -> MessageHost {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 40, 100]);
+    call(&mut code, 0x2143, &[10, 0]);
+    for (command, words) in setup {
+        call(&mut code, *command, words);
+    }
+    call(&mut code, 0x2152, &[offset, 0, 0]);
+    let script = script_with_text(&code, data);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 2 + setup.len());
+    messages.set_record_output(true);
+    pending(&mut vm);
+    messages
+        .try_record_output(
+            &mut vm,
+            &mut ActionInput::default(),
+            wait_flags(false, false),
+        )
+        .unwrap();
+    assert_eq!(vm.pending_system().map(|p| p.1), Some(0x152));
+    messages
+}
+fn positions(messages: &MessageHost) -> Vec<[i32; 2]> {
+    let glyphs = &messages.text(7).unwrap().glyphs;
+    glyphs.iter().map(|glyph| glyph.position).collect()
+}
+
+#[test]
+fn recorded_output_wraps_without_rules_keeping_closing_punctuation_on_the_line() {
+    // あああ。 fit with 。 past the line end; the next あ and the half-width e wrap.
+    let data = b"\x82\xa0\x82\xa0\x82\xa0\x81\x42\x82\xa0abcde\0";
+    let plain = wrapped(&[], data, 0);
+    let rows = [0, 0, 0, 0, 10, 10, 10, 10, 10, 20];
+    let xs = [0, 10, 20, 30, 0, 10, 15, 20, 25, 0];
+    let expected: Vec<_> = xs.iter().zip(rows).map(|(&x, y)| [x, y]).collect();
+    assert_eq!(positions(&plain), expected);
+    let text = plain.text(7).unwrap();
+    assert_eq!(text.cursor, [5, 20]);
+    assert_eq!(text.layout_scratch, [0, 0]);
+    // Reveal delays keep accumulating across lines.
+    let delays: Vec<_> = text.glyphs.iter().map(|glyph| glyph.delay_ms).collect();
+    assert_eq!(delays, (0..10).map(|n| 40 * n).collect::<Vec<_>>());
+    // Every-line ruby reserves its height above the first and each wrapped line.
+    let ruby = wrapped(&[(0x2114, vec![1, 7]), (0x2117, vec![1, 7])], data, 0);
+    let shifted: Vec<_> = expected
+        .iter()
+        .map(|&[x, y]| [x, 12 + y / 10 * 22])
+        .collect();
+    assert_eq!(positions(&ruby), shifted);
+    assert!(
+        ruby.text(7)
+            .unwrap()
+            .ruby_lines
+            .iter()
+            .all(|&flag| flag == 0)
+    );
+}
+
+#[test]
+fn recorded_output_wraps_with_rules_through_hanging_and_inseparable_limits() {
+    // Hanging set 。 at offset 0, inseparable set ー at offset 3, message at offset 6.
+    let mut data = b"\x81\x42\0\x81\x5b\0".to_vec();
+    for code in [
+        0x82a0u16, 0x82a0, 0x82a0, 0x8142, 0x8142, 0x82a0, 0x815b, 0x815b, 0x82a0, 0x82a0, 0x82a0,
+        0x815b,
+    ] {
+        data.extend(code.to_be_bytes());
+    }
+    data.push(0);
+    let messages = wrapped(&[(0x211e, vec![1, 3, 0, 7])], &data, 6);
+    assert_eq!(
+        positions(&messages),
+        [
+            // One hanging 。 overflows; the second exceeds the limit of 1 and wraps.
+            [0, 0],
+            [10, 0],
+            [20, 0],
+            [30, 0],
+            [0, 10],
+            [10, 10],
+            // A repeated ー overflows once, then あ wraps.
+            [20, 10],
+            [30, 10],
+            [0, 20],
+            [10, 20],
+            [20, 20],
+            // ー after a different character wraps without counting.
+            [0, 30],
+        ]
+    );
+    let text = messages.text(7).unwrap();
+    assert_eq!(text.cursor, [10, 30]);
+    assert_eq!(text.layout_scratch, [0, 0]);
+}
+
 #[test]
 fn recorded_output_rejects_unsupported_layout_without_partial_glyphs_or_stack_changes() {
+    // Wrapping two characters per line reaches line 32, past the ruby-line flags.
     for bytes in [
         &b"A\\n"[..],
         &b"A{base/ruby}"[..],
         &b"A\x81"[..],
-        &b"abcdefgh"[..],
+        &[b'a'; 80][..],
     ] {
         let mut code = vec![];
         create(&mut code, 0, 7, [0, 0, 50, 100]);

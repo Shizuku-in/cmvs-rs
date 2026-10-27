@@ -1,5 +1,24 @@
 //! Bounded byte-oriented counterpart of 0x14005ca80 (see vm-semantics.md).
-use super::TextObject;
+use super::{LineBreakRules, TextObject};
+
+/// 0x14005b050: 1 for a character of the hanging set (+336), 2 for the inseparable set
+/// (+400), else 0. Shared by measurement and output.
+pub(super) fn line_break_kind(rules: &LineBreakRules, code: u16) -> Result<u8, &'static str> {
+    for (kind, bytes) in [(1, &rules.hanging), (2, &rules.inseparable)] {
+        // 0x14005b050 walks two bytes at a time; an odd final byte has the NUL
+        // terminator as its second byte. Its next iteration would read beyond it.
+        if bytes
+            .chunks_exact(2)
+            .any(|b| u16::from_be_bytes([b[0], b[1]]) == code)
+        {
+            return Ok(kind);
+        }
+        if bytes.len() % 2 != 0 {
+            return Err("odd-length line-break set has an unbounded original scan");
+        }
+    }
+    Ok(0)
+}
 
 struct Layout<'a> {
     text: &'a TextObject,
@@ -51,23 +70,10 @@ impl Layout<'_> {
     }
 
     fn classify(&self, code: u16) -> Result<u8, &'static str> {
-        let Some(rules) = &self.text.line_break else {
-            return Ok(0);
-        };
-        for (kind, bytes) in [(1, &rules.hanging), (2, &rules.inseparable)] {
-            // 0x14005b050 walks two bytes at a time; an odd final byte has the NUL
-            // terminator as its second byte. Its next iteration would read beyond it.
-            if bytes
-                .chunks_exact(2)
-                .any(|b| u16::from_be_bytes([b[0], b[1]]) == code)
-            {
-                return Ok(kind);
-            }
-            if bytes.len() % 2 != 0 {
-                return Err("odd-length line-break set has an unbounded original scan");
-            }
+        match &self.text.line_break {
+            Some(rules) => line_break_kind(rules, code),
+            None => Ok(0),
         }
-        Ok(0)
     }
 
     fn wide_wrap(&mut self, code: u16) -> Result<(), &'static str> {

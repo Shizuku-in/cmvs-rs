@@ -1,6 +1,6 @@
-//! Explicit recording of the first, non-wrapping 0x2152 output branch.
+//! Explicit recording of 0x2152 output for plain characters, including automatic wrapping.
 //! These records are not glyph textures and must not imply successful font rendering.
-use super::{MessageHost, TextObject, window_slot};
+use super::{MessageHost, TextObject, measure::line_break_kind, window_slot};
 use crate::{
     bytecode::DecodeError,
     evaluate::error,
@@ -54,16 +54,45 @@ impl RecordedGlyph {
     }
 }
 
+/// Line feed of 0x14005bc90 and 0x14005b120: the new line reserves the ruby height when it is
+/// marked or every line reserves it, then the pen returns to the area's left edge. The
+/// original reads past the 32 ruby-line flags from line 32 on.
+fn new_line(
+    text: &TextObject,
+    line: &mut u32,
+    x: &mut u32,
+    y: &mut u32,
+) -> Result<(), &'static str> {
+    *line += 1;
+    let marked = *text
+        .ruby_lines
+        .get(*line as usize)
+        .ok_or("message output exceeds the 32 ruby-line flags")?;
+    if marked != 0 || text.ruby_every_line {
+        *y = y.wrapping_add(text.ruby_size as u32);
+    }
+    *x = text.area[0] as u32;
+    *y = y
+        .wrapping_add(text.glyph_size as u32)
+        .wrapping_add(text.spacing[1] as u32);
+    Ok(())
+}
+
 /// Settings block constructor: +1544=4, +1536=1 (alpha reveal), +1540=2 (350ms),
 /// +1528=1. READ_SKIP and script skip initially zero. Other modes remain barriers.
+/// Wrapping follows 0x14005bc90 with +112 = 1 (constructor and 0x14005d3b0; only the
+/// unimplemented 0x2108 clears it). Without line-break rules a double-byte 、。」』 never
+/// starts a line; with rules, double-byte characters go through 0x14005b120.
 fn append(text: &mut TextObject, bytes: &[u8], skip: bool) -> Result<(), &'static str> {
     let mut x = text.cursor[0] as u32;
     let mut y = text.cursor[1] as u32;
+    let mut line = 0u32;
     let size = text.glyph_size as u32;
     let limit = (text.area[0] as u32)
         .wrapping_add(text.area[2] as u32)
         .wrapping_sub(text.spacing[0] as u32)
         .wrapping_sub(size);
+    // 0x14005b360 would mark lines holding ruby groups; those are rejected below.
     text.ruby_lines.fill(0);
     if text.ruby && text.ruby_every_line {
         y = y.wrapping_add(text.ruby_size as u32);
@@ -81,24 +110,53 @@ fn append(text: &mut TextObject, bytes: &[u8], skip: bool) -> Result<(), &'stati
         if matches!(byte, b'\\' | b'{') {
             return Err("recorded message output does not yet support escapes or ruby groups");
         }
-        if x >= limit {
-            return Err("recorded message output does not yet support line wrapping");
-        }
         if text.glyphs.len() >= 4096 {
             return Err("recorded message glyph limit exceeded");
         }
         let wide = (0x81..=0x9f).contains(&byte) || (0xe0..=0xfc).contains(&byte);
-        let code = if wide {
+        let (code, wrap) = if wide {
             let second = *bytes
                 .get(i + 1)
                 .filter(|&&b| b != 0)
                 .ok_or("truncated double-byte message character")?;
             i += 2;
-            u16::from_be_bytes([byte, second])
+            let code = u16::from_be_bytes([byte, second]);
+            let wrap = match &text.line_break {
+                None => x >= limit && !matches!(code, 0x8141 | 0x8142 | 0x8176 | 0x8178),
+                Some(_) if x < limit => {
+                    text.layout_scratch[1] = u32::from(code);
+                    false
+                }
+                // Past the line end, +528 counts hanging characters and repeats of an
+                // inseparable one; past the unsigned limit they wrap as well.
+                Some(rules) => {
+                    let overflow = match line_break_kind(rules, code)? {
+                        1 => true,
+                        2 => text.layout_scratch[1] == u32::from(code),
+                        _ => false,
+                    };
+                    if overflow {
+                        text.layout_scratch[0] = text.layout_scratch[0].wrapping_add(1);
+                    }
+                    !overflow || (rules.max_overflow as u32) < text.layout_scratch[0]
+                }
+            };
+            (code, wrap)
         } else {
             i += 1;
-            byte as i8 as i16 as u16
+            // Sign-extended to the 16-bit character word.
+            let code = byte as i8 as i16 as u16;
+            if text.line_break.is_some() && x < limit {
+                text.layout_scratch[1] = u32::from(code);
+            }
+            (code, x >= limit)
         };
+        if wrap {
+            new_line(text, &mut line, &mut x, &mut y)?;
+            if text.line_break.is_some() {
+                text.layout_scratch = [0; 2];
+            }
+        }
         let gx = if code == 0x814a {
             x.wrapping_sub(size / 5)
         } else {
@@ -121,9 +179,6 @@ fn append(text: &mut TextObject, bytes: &[u8], skip: bool) -> Result<(), &'stati
             shown: interval == 0,
             opacity: if interval == 0 { 255 } else { 0 },
         });
-        if text.line_break.is_some() {
-            text.layout_scratch[1] = u32::from(code);
-        }
         let advance = if code == 0x814a {
             (size >> 1).wrapping_sub(size / 5)
         } else if wide {
