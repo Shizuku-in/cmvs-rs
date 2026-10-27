@@ -5,7 +5,7 @@ use crate::{
     FormatError, MAX_PAYLOAD,
     camera::CameraHost,
     raster::RgbaImage,
-    scene::{MaskTransition, ObjectImage, SceneHost, SceneObject},
+    scene::{DrawState, MaskTransition, ObjectImage, SceneHost, SceneObject},
 };
 
 enum Layer<'a> {
@@ -90,7 +90,7 @@ struct Entry<'a> {
 /// in 0..256 are used by image replacement. A 2D object's color word also selects
 /// the solid rectangle color and whether its children inherit the parent's image.
 fn check(words: &[u32; 22], projected: bool) -> Result<(), FormatError> {
-    let mut allowed = crate::scene::DrawState::default().words;
+    let mut allowed = DrawState::default().words;
     if matches!(words[1], 1 | 2) {
         allowed[1] = words[1];
     }
@@ -231,7 +231,8 @@ fn child_layer<'a>(
 }
 
 /// Queues 2/6 of 0x14003de80/0x140015fc0 for a top-level mode 2/3 object, keyed by its
-/// depth (0x14004ef30). 0x140020340 projects it with camera 0/1 (0x14004ef40), lays out the
+/// biased depth (`Camera::queue_key`); objects with keys not above 0 are not enqueued.
+/// 0x140020340 projects it with camera 0/1 (0x14004ef40), lays out the
 /// source rectangle around the origin (0x140024020) and places it at the projected position
 /// and scale (0x1400238a0, device factor 1 on the 1280x720 viewport) minus the device's
 /// half-pixel offset. Children, masks, camera rotation and effect targets are not verified.
@@ -240,9 +241,18 @@ fn projected_layer<'a>(
     cameras: Option<&CameraHost>,
     slot: Option<u8>,
     object: &'a SceneObject,
-    words: &[u32; 22],
+    draw: &DrawState,
 ) -> Result<Option<(f32, Layer<'a>)>, FormatError> {
     let cameras = cameras.ok_or(FormatError("camera projection needs the camera state"))?;
+    let words = &draw.words;
+    let float = |index: usize| f32::from_bits(words[index]);
+    let camera = cameras
+        .camera((words[0] - 2) as usize)
+        .expect("camera exists");
+    let key = camera.queue_key(float(13), f32::from_bits(draw.depth_bias));
+    if key.is_nan() || key <= 0.0 {
+        return Ok(None);
+    }
     check(words, true)?;
     if object.flags & 0x8000_0000 != 0 && object.children.values().any(|child| child.shown) {
         return Err(FormatError(
@@ -254,9 +264,6 @@ fn projected_layer<'a>(
             "mask transition on a projected object is not verified",
         ));
     }
-    let camera = cameras
-        .camera((words[0] - 2) as usize)
-        .expect("camera exists");
     if words[0] == 3 && !camera.enabled() {
         return Ok(None);
     }
@@ -272,7 +279,6 @@ fn projected_layer<'a>(
     let Some(image) = &object.image else {
         return Ok(None);
     };
-    let float = |index: usize| f32::from_bits(words[index]);
     let Some(projection) = camera
         .project_object([float(11), float(12), float(13)], float(16), float(15))
         .map_err(FormatError)?
@@ -305,7 +311,7 @@ fn projected_layer<'a>(
     }
     let blend = blend(words, image, i64::from(alpha), false)?;
     Ok(Some((
-        projection.depth,
+        key,
         Layer::Projected {
             image,
             rect: [sx, sy, w, h],
@@ -434,8 +440,8 @@ pub fn render_scene(
         };
         match d[0] {
             2 | 3 => {
-                if let Some((depth, layer)) = projected_layer(scene, cameras, slot, object, d)? {
-                    projected[(d[0] - 2) as usize].push((depth, shifted(layer, by)));
+                if let Some((key, layer)) = projected_layer(scene, cameras, slot, object, draw)? {
+                    projected[(d[0] - 2) as usize].push((key, shifted(layer, by)));
                 }
                 continue;
             }

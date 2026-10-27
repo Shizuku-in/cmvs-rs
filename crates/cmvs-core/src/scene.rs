@@ -55,7 +55,7 @@ pub struct SceneObject {
     pub image: Option<ObjectImage>,
     /// 768 child pointers at +8, addressed by 0x2022/0x2038/0x2050.
     pub children: BTreeMap<u16, SceneObject>,
-    /// First 88 bytes of +6192, initialized by 0x14001ee40.
+    /// +6192, initialized by 0x14001ee40: the first 88 bytes and the modeled later fields.
     pub draw: Option<DrawState>,
     /// +6248: inheritance flags; bit 31 records child creation.
     pub flags: u32,
@@ -281,6 +281,9 @@ impl OpacityTrack {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DrawState {
     pub words: [u32; 22],
+    /// +108 (0x2075; constructor 0): raw float bits added to world Z for the projected
+    /// queue key only (0x14001f360). 0x22c4 copies it with +88..+104 (0x14001f520).
+    pub depth_bias: u32,
     /// +128: opacity track; rebuilding the draw state drops it.
     pub opacity_track: Option<Box<OpacityTrack>>,
     /// +136: frame animation; rebuilding the draw state drops it.
@@ -298,6 +301,7 @@ impl Default for DrawState {
         words[21] = 256;
         Self {
             words,
+            depth_bias: 0,
             opacity_track: None,
             animation: None,
             world_motion: None,
@@ -396,7 +400,7 @@ impl SceneHost {
         }
         if matches!(
             command,
-            0x22 | 0x40 | 0x42 | 0x43 | 0x50 | 0x44..=0x49 | 0x4b | 0x4c | 0x70..=0x74
+            0x22 | 0x40 | 0x42 | 0x43 | 0x50 | 0x44..=0x49 | 0x4b | 0x4c | 0x70..=0x75
         ) {
             return self.handle_object(vm, pc, command);
         }
@@ -666,7 +670,7 @@ impl SceneHost {
             0x43 => 5,
             0x44 => 6,
             0x45 | 0x46 | 0x49 => 4,
-            0x47 | 0x48 | 0x4b | 0x4c | 0x70..=0x74 => 3,
+            0x47 | 0x48 | 0x4b | 0x4c | 0x70..=0x75 => 3,
             _ => unreachable!(),
         };
         let mut args = Vec::with_capacity(count);
@@ -679,7 +683,7 @@ impl SceneHost {
             .get(&slot)
             .ok_or_else(|| fail("object slot does not exist"))?;
         let child = if command == 0x40
-            || (matches!(command, 0x42..=0x49 | 0x4b | 0x4c | 0x70..=0x74) && (args[1] as i32) < 0)
+            || (matches!(command, 0x42..=0x49 | 0x4b | 0x4c | 0x70..=0x75) && (args[1] as i32) < 0)
         {
             None
         } else {
@@ -698,7 +702,7 @@ impl SceneHost {
                     .ok_or_else(|| fail("child object does not exist"))?,
                 None => parent,
             };
-            if matches!(command, 0x42..=0x49 | 0x4b | 0x4c | 0x70..=0x74) && object.draw.is_none() {
+            if matches!(command, 0x42..=0x49 | 0x4b | 0x4c | 0x70..=0x75) && object.draw.is_none() {
                 return Err(fail("object has no draw state"));
             }
         }
@@ -766,6 +770,9 @@ impl SceneHost {
                     let index = 11 + usize::from(command - 0x72);
                     object.draw.as_mut().expect("validated").words[index] = args[2];
                 }
+                // 0x2075 / 0x14006f5b0 -> 0x14003b200 -> 0x14001f590:
+                // movss preserves SP-12's bits in draw +108 (projected depth bias).
+                0x75 => object.draw.as_mut().expect("validated").depth_bias = args[2],
                 // 0x2049 / 0x14006d730 -> 0x14003b100 -> 0x14001f490:
                 // SP-12/SP-16 pass through xmm1/xmm2 and movss to +72/+76.
                 0x49 => object.draw.as_mut().expect("validated").words[18..20]

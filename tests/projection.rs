@@ -263,6 +263,33 @@ fn deeper_objects_draw_first_and_two_dimensional_objects_cover_projections() {
 }
 
 #[test]
+fn depth_bias_orders_and_gates_the_queue_without_moving_the_projection() {
+    let mut code = vec![];
+    camera(&mut code);
+    // Equal keys keep slot order: orange (black, orange) over white at pixels 20/21.
+    projected(&mut code, 1, 6, [0.0, 0.0, 10.0], 10.0);
+    projected(&mut code, 2, 0, [0.0, 0.0, 10.0], 10.0);
+    assert_eq!(&render(&code)[20..23], &[[0; 3], ORANGE, [0; 3]]);
+    // A bias only moves slot 2 behind slot 1; positions and sizes stay at depth 10.
+    command(&mut code, 0x2075, &[2, u32::MAX, f(0.125)]);
+    assert_eq!(&render(&code)[20..23], &[[255; 3], [255; 3], [0; 3]]);
+    // An unverified child would fail, but key (−10 + 10) − 0 is not above 0, so slot 1
+    // is not enqueued and nothing of it is checked or drawn.
+    command(&mut code, 0x2022, &[1, 0]);
+    assert!(rejected(&code));
+    command(&mut code, 0x2075, &[1, u32::MAX, f(-10.0)]);
+    assert_eq!(&render(&code)[20..22], &[[0; 3], ORANGE]);
+    // Image replacement copies the bias into the new and the common draw state.
+    command(&mut code, 0x22c4, &[2, 6, 100, 0]);
+    let (scene, _) = build(&code);
+    let object = &scene.objects()[&2];
+    let change = object.change.as_ref().unwrap();
+    for draw in [&object.draw, &change.common.draw, &change.previous.draw] {
+        assert_eq!(draw.as_ref().unwrap().depth_bias, f(0.125));
+    }
+}
+
+#[test]
 fn objects_fade_in_between_depth_nine_and_ten_and_vanish_nearer() {
     let mut code = vec![];
     camera(&mut code);

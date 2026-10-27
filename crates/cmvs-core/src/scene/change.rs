@@ -260,8 +260,11 @@ impl SceneHost {
             .ok_or_else(|| fail("replacement needs an existing draw state"))?;
         let image = load_image(images, name.to_vec(), pc, opcode)?
             .ok_or_else(|| fail("missing replacement image leaves an unmodeled partial object"))?;
+        // 0x14003c900 copies the first 88 bytes, then 0x14001f520 copies +88..+108 into
+        // both the new and the common draw state.
         let mut draw = DrawState {
             words: old_draw.words,
+            depth_bias: old_draw.depth_bias,
             opacity_track: None,
             animation: None,
             world_motion: None,
@@ -272,6 +275,7 @@ impl SceneHost {
             let image = common_image(old_image, &image)?;
             let mut common_draw = DrawState {
                 words: old_draw.words,
+                depth_bias: old_draw.depth_bias,
                 opacity_track: None,
                 animation: None,
                 world_motion: None,

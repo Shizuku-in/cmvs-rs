@@ -1,7 +1,7 @@
 use cmvs_rs::{
     machine::{Machine, Step},
     ps3::Script,
-    scene::{ClearState, SceneHost, SceneObject},
+    scene::{ClearState, DrawState, SceneHost, SceneObject},
 };
 
 fn script(code: &[u8]) -> Script {
@@ -311,7 +311,7 @@ fn projection_parameters_preserve_raw_float_bits_and_each_other() {
         command(&mut code, op, &args);
     }
     for value in values {
-        for op in [0x2070, 0x2071, 0x2072, 0x2073, 0x2074] {
+        for op in [0x2070, 0x2071, 0x2072, 0x2073, 0x2074, 0x2075] {
             command(&mut code, op, &[255, 0x8000_0000, value]);
             command(&mut code, op, &[255, 767, value]);
         }
@@ -325,20 +325,19 @@ fn projection_parameters_preserve_raw_float_bits_and_each_other() {
     vm.state_mut().set_system_integer(0, 123).unwrap();
     vm.state_mut().set_system_integer(4, 456).unwrap();
     let mut expected = scene.object(255).unwrap().clone();
+    // Index 27 stands for +108, the depth bias kept outside the first 88 bytes.
+    let set = |draw: &mut DrawState, index: usize, value: u32| match index {
+        27 => draw.depth_bias = value,
+        _ => draw.words[index] = value,
+    };
     for value in values {
-        for index in [15, 16, 11, 12, 13] {
+        for index in [15, 16, 11, 12, 13, 27] {
             assert!(next(&mut vm, &mut scene).unwrap());
-            expected.draw.as_mut().unwrap().words[index] = value;
+            set(expected.draw.as_mut().unwrap(), index, value);
             assert_eq!(scene.object(255), Some(&expected));
             assert!(next(&mut vm, &mut scene).unwrap());
-            expected
-                .children
-                .get_mut(&767)
-                .unwrap()
-                .draw
-                .as_mut()
-                .unwrap()
-                .words[index] = value;
+            let child = expected.children.get_mut(&767).unwrap();
+            set(child.draw.as_mut().unwrap(), index, value);
             assert_eq!(scene.object(255), Some(&expected));
             assert_eq!(vm.stack().len_bytes(), 0);
             assert_eq!(vm.state().system_integer(0), Some(123));
@@ -352,7 +351,7 @@ fn projection_parameters_preserve_raw_float_bits_and_each_other() {
 
 #[test]
 fn projection_setter_errors_preserve_targets_stack_and_pending_command() {
-    for op in [0x204c, 0x2071, 0x2072, 0x2073, 0x2074] {
+    for op in [0x204c, 0x2071, 0x2072, 0x2073, 0x2074, 0x2075] {
         for args in [
             vec![256, u32::MAX, 0],
             vec![u32::MAX, u32::MAX, 0],

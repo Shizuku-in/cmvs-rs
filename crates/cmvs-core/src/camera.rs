@@ -157,7 +157,7 @@ impl Camera {
 pub struct ObjectProjection {
     /// Screen position of the object's origin (output +0/+4).
     pub position: [f32; 2],
-    /// z − camera z (+8), also the queue key 0x14004ef30 computes.
+    /// z − camera z (+8); the queue key adds the draw state's depth bias (`queue_key`).
     pub depth: f32,
     /// (reference / depth)², times the input scale 1.0 of a top-level object (+12/+16).
     pub scale: f32,
@@ -174,6 +174,12 @@ impl Camera {
     /// (0x14004ecc0 in 0x140015fc0).
     pub fn effect(&self) -> u32 {
         self.words[38]
+    }
+    /// 0x14003de80 keys a projected object by 0x14004ef30 applied to 0x14001f360:
+    /// (draw +108 + z) − camera z (+12), for any camera type. Only keys above 0 (not NaN)
+    /// are enqueued; children of such objects are skipped with their parent.
+    pub fn queue_key(&self, z: f32, bias: f32) -> f32 {
+        (bias + z) - self.float(3)
     }
     /// 0x14004ef40 for camera type 3 (+0): the x/y terms equal the 0x2056 projection of
     /// the current position, the offset being draw +64 and the reference depth draw +60.

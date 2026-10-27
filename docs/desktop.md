@@ -219,3 +219,5 @@ cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Downl
 CMV6 场景影片 `mv_ic01.cmv` 已在 0x2308 创建为对象 28 的初始帧（影片槽 2），实际音轨为空。鼠标/Enter 各 1458 次点击后分别在 10320569/10320609 步到 `sn1002.ps3 / 0x4e64 / 0x231a`；该停点 FontRenderer 呈现成功。影片尚未在真实路径开始播放，未新增原生窗口实测；完整功能桌面 release 构建通过。场景槽与全屏 OP 生命周期保持独立。
 
 0x231a 接入后，`mv_ic01.cmv` 在无窗口重放中播完 135 帧并释放；自 sn1001 首次 0x2309 起的 81823 个让出帧均通过 FontRenderer 呈现。鼠标/Enter 各 1478 次点击后分别在 10462930/10462970 步到 `sn1002.ps3 / 0x2ca48 / 0x2126`（步数绑定当前系统存档，见 cmv9-format.md）。未新增原生窗口实测；完整功能桌面 release 构建通过。
+
+2026-10-28 用户反馈：原生窗口中按住 Ctrl 快进时，有时停于 `cmvs-rs paused: unsupported 0x2075 at sn1001.ps3 / 0x21e82`。点击重放未经过该指令；无窗口探针每帧按住 Ctrl 后在第 1052259 步复现。0x2075 接入后，Ctrl 重放 0 次点击在第 10104707 步到 `sn1002.ps3 / 0x2ca48 / 0x2126`，首次 0x2075 后的 1372 个让出帧均通过 FontRenderer 呈现。本轮未新增原生窗口实测；完整功能桌面 release 构建通过。
