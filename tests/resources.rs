@@ -138,3 +138,40 @@ fn shared_reader_confines_audio_paths_and_rejects_file_roots() {
         None
     );
 }
+
+#[test]
+fn scene_movie_registration_is_independent_and_searches_only_four_slots() {
+    let root = Root::new();
+    root.put("a/same.bin", b"image");
+    root.put("b/same.bin", b"movie");
+    root.put("c/later.bin", b"outside movie slots");
+    let paths = BTreeMap::from([
+        ((0x2011, 0), b"a\\".to_vec()),
+        ((0x201a, 3), b"b\\".to_vec()),
+        ((0x201a, 4), b"c\\".to_vec()),
+    ]);
+    let mut archives = ResourceArchives::new(&root.0).unwrap();
+    assert_eq!(
+        archives
+            .with_paths(&paths, ResourceKind::SceneMovie)
+            .read(b"same.bin")
+            .unwrap()
+            .unwrap(),
+        b"movie"
+    );
+    assert!(
+        archives
+            .with_paths(&paths, ResourceKind::SceneMovie)
+            .read(b"later.bin")
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        archives
+            .with_paths(&paths, ResourceKind::Image)
+            .read(b"same.bin")
+            .unwrap()
+            .unwrap(),
+        b"image"
+    );
+}

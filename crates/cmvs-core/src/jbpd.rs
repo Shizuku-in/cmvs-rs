@@ -181,6 +181,25 @@ pub(crate) fn word(data: &[u8], at: usize) -> Result<u32, FormatError> {
 /// Decode a self-contained CMV6 JBPD frame to top-down opaque RGBA.
 /// Other JBP versions, subsampling modes, and missing quantization tables are rejected.
 pub fn decode(data: &[u8]) -> Result<RgbaImage, FormatError> {
+    decode_inner(data, None)
+}
+
+/// CMV9: the outer bitmap marks static blocks. Base data contains the set bits;
+/// ordinary frames contain the clear bits. Frames decode independently over the base.
+/// The base stream's table offset lacks the regular frame's four-byte tile mask.
+pub(crate) fn decode_masked(
+    data: &[u8],
+    mask: &[u8],
+    static_blocks: bool,
+    base: Option<&RgbaImage>,
+) -> Result<RgbaImage, FormatError> {
+    decode_inner(data, Some((mask, static_blocks, base)))
+}
+
+fn decode_inner(
+    data: &[u8],
+    masked: Option<(&[u8], bool, Option<&RgbaImage>)>,
+) -> Result<RgbaImage, FormatError> {
     if data.len() > MAX_PAYLOAD || data.get(..4) != Some(b"JBPD") {
         return Err(FormatError("expected bounded JBPD frame"));
     }
@@ -196,14 +215,21 @@ pub fn decode(data: &[u8]) -> Result<RgbaImage, FormatError> {
         || h == 0
         || w * h > MAX_PAYLOAD / 4
         || word(data, 20)? != 24
-        || !w.is_multiple_of(16)
-        || !h.is_multiple_of(16)
+        || (masked.is_none() && (!w.is_multiple_of(16) || !h.is_multiple_of(16)))
     {
         return Err(FormatError("unsupported JBPD dimensions or bit depth"));
     }
     let table = usize::try_from(word(data, 4)?)
         .ok()
-        .and_then(|n| n.checked_add(4))
+        .and_then(|n| {
+            n.checked_add(
+                if masked.is_some_and(|(_, static_blocks, _)| static_blocks) {
+                    0
+                } else {
+                    4
+                },
+            )
+        })
         .filter(|&n| n >= 44 && n <= data.len().saturating_sub(272))
         .ok_or(FormatError("JBPD table offset outside frame"))?;
     let head = data
@@ -226,7 +252,14 @@ pub fn decode(data: &[u8]) -> Result<RgbaImage, FormatError> {
         .ok_or(FormatError("JBPD tiles truncated"))?;
     let mut start = layout + (4 + count * 2).next_multiple_of(4);
     if flags & 0x1000 != 0 {
-        start += (w / 16 * h / 16).div_ceil(8).next_multiple_of(4);
+        if masked.is_some() {
+            let length = data
+                .get(start..start + 2)
+                .ok_or(FormatError("CMV9 reuse mask truncated"))?;
+            start += 2 + usize::from(u16::from_le_bytes(length.try_into().unwrap()));
+        } else {
+            start += (w / 16 * h / 16).div_ceil(8).next_multiple_of(4);
+        }
     }
     let split = start
         .checked_add(word(data, 28)? as usize)
@@ -242,7 +275,20 @@ pub fn decode(data: &[u8]) -> Result<RgbaImage, FormatError> {
         .ok_or(FormatError("JBPD AC stream outside frame"))?;
     let mut dc = Bits::new(dc_data);
     let mut ac = Bits::new(ac_data);
-    let blocks = w / 16 * h / 16 * 6;
+    let mcus = w.div_ceil(16) * h.div_ceil(16);
+    if let Some((mask, _, base)) = masked
+        && (mask.len() != mcus.div_ceil(8)
+            || base.is_some_and(|b| b.width() as usize != w || b.height() as usize != h))
+    {
+        return Err(FormatError("CMV9 base mask or dimensions differ"));
+    }
+    let present = |index: usize| {
+        masked.is_none_or(|(mask, set, _)| ((mask[index / 8] & (128 >> (index % 8))) != 0) == set)
+    };
+    let blocks = (0..mcus).filter(|&i| present(i)).count() * 6;
+    if masked.is_some() && word(data, 36)? as usize != blocks {
+        return Err(FormatError("CMV9 DC count differs from block mask"));
+    }
     let mut values = Vec::with_capacity(blocks);
     let mut previous = 0i16;
     for _ in 0..blocks {
@@ -250,18 +296,26 @@ pub fn decode(data: &[u8]) -> Result<RgbaImage, FormatError> {
         previous = previous.wrapping_add(dc.signed(n)?);
         values.push(previous);
     }
-    let mut pixels = vec![0u8; w * h * 4];
+    let mut pixels = masked
+        .and_then(|(_, _, base)| base)
+        .map_or_else(|| vec![0u8; w * h * 4], |base| base.pixels().to_vec());
     let mut dc_index = 0;
+    let mut mcu_index = 0;
     for tile in 0..count {
         let ty = tile / cols * 256;
         let tx = tile % cols * 256;
         let nr = usize::from(tiles[tile * 2]);
         let nc = usize::from(tiles[tile * 2 + 1]);
-        if nr != (h - ty).min(256) / 16 || nc != (w - tx).min(256) / 16 {
+        if nr != (h - ty).min(256).div_ceil(16) || nc != (w - tx).min(256).div_ceil(16) {
             return Err(FormatError("JBPD tile extent differs from grid"));
         }
         for by in 0..nr {
             for bx in 0..nc {
+                let draw = present(mcu_index);
+                mcu_index += 1;
+                if !draw {
+                    continue;
+                }
                 let mut samples = [[0i16; 64]; 6];
                 for (n, block) in samples.iter_mut().enumerate() {
                     let q = &quant[if n < 4 { 0..64 } else { 64..128 }];
@@ -297,6 +351,9 @@ pub fn decode(data: &[u8]) -> Result<RgbaImage, FormatError> {
                 }
                 for y in 0..16 {
                     for x in 0..16 {
+                        if ty + by * 16 + y >= h || tx + bx * 16 + x >= w {
+                            continue;
+                        }
                         let l = i32::from(samples[y / 8 * 2 + x / 8][y % 8 * 8 + x % 8]);
                         let cb = i32::from(samples[4][y / 2 * 8 + x / 2]);
                         let cr = i32::from(samples[5][y / 2 * 8 + x / 2]);

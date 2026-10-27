@@ -18,6 +18,7 @@ use crate::{
     platform::{DirectoryAssets, PlatformBackend, PlatformHost},
     ps3::Script,
     random::CrtRandom,
+    resources::{ResourceArchives, ResourceKind},
     save_menu::{DirectorySaves, SaveMenuHost},
     scene::SceneHost,
     script_control::{ArchiveScripts, ControlEvent, ScriptControl},
@@ -76,6 +77,7 @@ pub struct Startup<'a> {
     scene: SceneHost,
     buttons: ButtonHost,
     movies: MovieHost,
+    scene_movies: ResourceArchives,
     root: PathBuf,
     sequence: SequenceHost,
     camera: CameraHost,
@@ -123,6 +125,7 @@ impl<'a> Startup<'a> {
             scene: SceneHost::default(),
             buttons: ButtonHost::default(),
             movies: MovieHost::default(),
+            scene_movies: ResourceArchives::new(root)?,
             root: root.canonicalize()?,
             sequence: SequenceHost::default(),
             camera: CameraHost::default(),
@@ -517,6 +520,13 @@ impl<'a> Startup<'a> {
             || self
                 .buttons
                 .try_handle_input(&mut self.machine, &mut self.scene, &mut self.input)?
+            || self.movies.try_create_scene(
+                &mut self.machine,
+                &mut self.scene,
+                &mut self
+                    .scene_movies
+                    .with_paths(self.bootstrap.paths(), ResourceKind::SceneMovie),
+            )?
             || self.movies.try_handle(&mut self.machine)?
             || self.movies.try_handle_player(
                 &mut self.machine,

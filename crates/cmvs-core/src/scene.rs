@@ -377,6 +377,10 @@ impl SceneHost {
     pub(crate) fn object_mut(&mut self, slot: u8) -> Option<&mut SceneObject> {
         self.objects.get_mut(&slot)
     }
+    /// 0x2308 creates a fresh object bound to the scene movie's first decoded frame.
+    pub(crate) fn replace_movie_object(&mut self, slot: u8, object: SceneObject) {
+        self.objects.insert(slot, object);
+    }
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
         if matches!(vm.pending_system(), Some((_, 0x1f9..=0x1fd))) {
             return self.try_world_motion(vm);

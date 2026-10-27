@@ -80,7 +80,7 @@ fn out_of_range_slots_and_short_stacks_keep_the_command_pending() {
 }
 
 #[test]
-fn creation_commands_are_left_pending() {
+fn scene_creation_requires_the_resource_aware_entrypoint() {
     let mut code = vec![];
     code.extend(0x2308u16.to_le_bytes());
     let script = script(&code);
@@ -410,4 +410,120 @@ fn audio_clock_is_absolute_and_does_not_accumulate_wall_time() {
         .advance_with_clock(0, Some(MovieAudioClock::Ended), &mut source)
         .unwrap();
     assert!(movies.player().is_none());
+}
+
+#[path = "support/cmv9.rs"]
+mod slot_fixture;
+struct SceneFiles(Option<Vec<u8>>);
+impl cmvs_rs::resources::ResourceSource for SceneFiles {
+    fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+        Ok(self.0.clone())
+    }
+}
+fn create_code(slot: u32, object: u32, frame: u32) -> Vec<u8> {
+    let mut code = vec![];
+    for arg in [frame, 0xdeadbeef, 0, object, slot] {
+        code.extend(0x440u16.to_le_bytes());
+        code.extend(4u16.to_le_bytes());
+        code.extend(arg.to_le_bytes());
+    }
+    code.extend(0x2308u16.to_le_bytes());
+    code
+}
+#[test]
+fn scene_movie_creation_replaces_the_object_without_changing_results_or_starting_playback() {
+    let mut code = create_code(0, 28, 0);
+    code.extend(destroy(&[0]));
+    let program = program(&code, b"synthetic.cmv\0");
+    let mut vm = Machine::new(&program).unwrap();
+    let mut movies = MovieHost::default();
+    let mut scene = cmvs_rs::scene::SceneHost::default();
+    let mut files = SceneFiles(Some(slot_fixture::movie(false)));
+    vm.state_mut().set_system_integer(0, 123).unwrap();
+    pending(&mut vm);
+    let pc = vm.pc();
+    assert!(
+        movies
+            .try_create_scene(&mut vm, &mut scene, &mut files)
+            .unwrap()
+    );
+    assert_eq!((vm.pc(), vm.stack().len_bytes()), (pc + 2, 0));
+    assert_eq!(vm.state().system_integer(0), Some(123));
+    assert_eq!(movies.scene_player(0).unwrap().object_slot, 28);
+    assert_eq!(movies.scene_player(0).unwrap().frame, 0);
+    let old = scene.objects().clone();
+    movies.advance(1000);
+    assert_eq!(scene.objects(), &old);
+    pending(&mut vm);
+    movies.try_handle(&mut vm).unwrap();
+    assert!(!movies.occupied(0));
+    assert_eq!(scene.objects(), &old);
+    assert!(movies.player().is_none());
+}
+#[test]
+fn failed_scene_movie_creation_preserves_command_stack_results_and_scene() {
+    for (slot, object, frame, data) in [
+        (3, 28, 0, Some(slot_fixture::movie(false))),
+        (0, 256, 0, Some(slot_fixture::movie(false))),
+        (0, 28, 1, Some(slot_fixture::movie(false))),
+        (0, 28, 0, None),
+        (0, 28, 0, Some(vec![0; 44])),
+    ] {
+        let code = create_code(slot, object, frame);
+        let program = program(&code, b"synthetic.cmv\0");
+        let mut vm = Machine::new(&program).unwrap();
+        let mut movies = MovieHost::default();
+        let mut scene = cmvs_rs::scene::SceneHost::default();
+        pending(&mut vm);
+        vm.state_mut().set_system_integer(0, 456).unwrap();
+        let pc = vm.pc();
+        let stack = vm.stack().len_bytes();
+        assert!(
+            movies
+                .try_create_scene(&mut vm, &mut scene, &mut SceneFiles(data))
+                .is_err()
+        );
+        assert_eq!(vm.pending_system(), Some((pc, 0x308)));
+        assert_eq!(vm.stack().len_bytes(), stack);
+        assert_eq!(vm.state().system_integer(0), Some(456));
+        assert!(scene.objects().is_empty());
+        assert!(!movies.occupied(0));
+    }
+}
+
+#[test]
+fn replacing_an_existing_scene_player_is_atomic_on_resource_failure() {
+    let mut code = create_code(0, 28, 0);
+    code.extend(create_code(0, 29, 0));
+    let script = program(&code, b"synthetic.cmv\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut movies = MovieHost::default();
+    let mut scene = cmvs_rs::scene::SceneHost::default();
+    let mut files = SceneFiles(Some(slot_fixture::movie(false)));
+    pending(&mut vm);
+    movies
+        .try_create_scene(&mut vm, &mut scene, &mut files)
+        .unwrap();
+    let old = scene.objects().clone();
+    let encoded = movies.scene_player(0).unwrap().encoded().to_vec();
+    pending(&mut vm);
+    let pc = vm.pc();
+    files.0 = None;
+    assert!(
+        movies
+            .try_create_scene(&mut vm, &mut scene, &mut files)
+            .is_err()
+    );
+    assert_eq!(vm.pending_system(), Some((pc, 0x308)));
+    assert_eq!(vm.stack().len_bytes(), 20);
+    assert_eq!(scene.objects(), &old);
+    assert_eq!(movies.scene_player(0).unwrap().encoded(), encoded);
+    files.0 = Some(slot_fixture::movie(true));
+    movies
+        .try_create_scene(&mut vm, &mut scene, &mut files)
+        .unwrap();
+    assert_eq!(movies.scene_player(0).unwrap().object_slot, 29);
+    // Changing the binding leaves the old object in the scene, as the player owns no object.
+    assert!(scene.object(28).is_some());
+    assert!(scene.object(29).is_some());
 }

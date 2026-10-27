@@ -6,8 +6,9 @@
 //! channel 2 and advances one frame index per decoded frame. Desktop enables JBPD decoding;
 //! timing-only research remains explicit. The clock still stands in for soundtrack position.
 //!
-//! Engine +4480 holds three slot players (0x2308/0x230e create them, unhandled); only the
-//! slot destruction 0x230a is modeled, so those slots are always empty here.
+//! Engine +4480 holds three scene players. 0x2308 creates a stopped CMV9 player and
+//! initializes its bound scene object; 0x230a destroys the player, retaining that image.
+//! Playback, audio-bearing slots and the other creation variant remain unhandled.
 use crate::{
     audio::{AudioBackend, AudioRequest, AudioSettings, MovieAudioClock},
     bytecode::DecodeError,
@@ -107,16 +108,32 @@ impl Movie {
     }
 }
 
+/// 0x1400383c0 / 0x1400390b0: a stopped player bound to a separately owned scene object.
+#[derive(Debug)]
+pub struct SceneMovie {
+    pub object_slot: u8,
+    pub name: Vec<u8>,
+    pub frame: u32,
+    pub index: crate::cmv9::Cmv9Index,
+    data: Vec<u8>,
+}
+impl SceneMovie {
+    pub fn encoded(&self) -> &[u8] {
+        &self.data
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct MovieHost {
     /// The constructor (0x140014fc2..0x140014fd0) stores null in all three pointers.
-    occupied: [bool; MOVIE_SLOTS],
+    slots: [Option<SceneMovie>; MOVIE_SLOTS],
     player: Option<Movie>,
     decode_frames: bool,
 }
 
 impl MovieHost {
-    /// Explicit timing-only research mode remains the default; desktop enables decoding.
+    /// Full-screen timing-only mode is the default; desktop enables decoding.
+    /// Scene-slot creation always decodes its initial image before committing.
     pub fn set_decode_frames(&mut self, enabled: bool) {
         self.decode_frames = enabled;
     }
@@ -172,11 +189,75 @@ impl MovieHost {
         Ok(())
     }
     pub fn occupied(&self, slot: usize) -> bool {
-        self.occupied.get(slot).copied().unwrap_or(false)
+        self.slots.get(slot).is_some_and(Option::is_some)
     }
     pub fn player(&self) -> Option<&Movie> {
         self.player.as_ref()
     }
+    pub fn scene_player(&self, slot: usize) -> Option<&SceneMovie> {
+        self.slots.get(slot).and_then(Option::as_ref)
+    }
+
+    /// 0x2308 / 0x14007ef20: SP-4 player, SP-8 object, SP-12 name, SP-20 initial frame.
+    /// SP-16 is not read; return 0x4014 without writing a system result. Decode before
+    /// committing so an I/O/format error retains the pending command and old objects.
+    pub fn try_create_scene(
+        &mut self,
+        vm: &mut Machine<'_>,
+        scene: &mut crate::scene::SceneHost,
+        source: &mut dyn crate::resources::ResourceSource,
+    ) -> Result<bool, Box<dyn Error>> {
+        let Some((pc, 0x308)) = vm.pending_system() else {
+            return Ok(false);
+        };
+        let fail = |why| error(pc, 0x2308, why);
+        let arg = |at| vm.stack().peek_u32(at).map_err(|e| fail(e.0));
+        let (slot, object, name, frame) = (arg(4)?, arg(8)?, arg(12)?, arg(20)?);
+        let name = vm.resolve_string(name)?;
+        if slot as usize >= MOVIE_SLOTS {
+            return Err(fail("movie slot outside 0..2 sets an unmodeled flag").into());
+        }
+        let object_slot =
+            u8::try_from(object).map_err(|_| fail("scene movie object outside 0..255"))?;
+        if name.len() >= 64 || name.contains(&0) {
+            return Err(fail("scene movie name exceeds the 63-byte research limit").into());
+        }
+        if self.slots.iter().enumerate().any(|(i, p)| {
+            i != slot as usize && p.as_ref().is_some_and(|p| p.object_slot == object_slot)
+        }) {
+            return Err(
+                fail("replacing an object bound to another movie player is not modeled").into(),
+            );
+        }
+        let data = source
+            .read(&name)?
+            .ok_or_else(|| fail("missing scene movie leaves an unmodeled failed player"))?;
+        let index = crate::cmv9::Cmv9Index::parse(&data)?;
+        let pixels = index.decode_frame(&data, frame)?;
+        let mut draw = crate::scene::DrawState::default();
+        draw.words[4] = pixels.width();
+        draw.words[5] = pixels.height();
+        let object = crate::scene::SceneObject {
+            image: Some(crate::scene::ObjectImage {
+                name: name.clone(),
+                pixels,
+                alpha: false,
+            }),
+            draw: Some(draw),
+            ..crate::scene::SceneObject::default()
+        };
+        vm.complete_system(SystemResult(0x4014))?;
+        scene.replace_movie_object(object_slot, object);
+        self.slots[slot as usize] = Some(SceneMovie {
+            object_slot,
+            name,
+            frame,
+            index,
+            data,
+        });
+        Ok(true)
+    }
+
     /// 0x230a / 0x14007f390: SP-4 slot compared unsigned against 2; destroys and clears the
     /// slot's player if present and returns 0x4004. Out-of-range slots only set +12056 bit
     /// 0x1000000 in the original, which is not modeled.
@@ -193,7 +274,7 @@ impl MovieHost {
             ));
         }
         vm.complete_system(SystemResult(0x4004))?;
-        self.occupied[slot] = false;
+        self.slots[slot] = None;
         Ok(true)
     }
 

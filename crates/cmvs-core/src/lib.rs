@@ -5,6 +5,7 @@ pub mod buttons;
 pub mod bytecode;
 pub mod camera;
 pub mod cmv;
+pub mod cmv9;
 pub mod cpz;
 pub mod cursor;
 pub mod evaluate;

@@ -195,3 +195,6 @@ cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Downl
 
 
 完整字体验证：第 32 次点击后的异色渐变已按 `0x140059d20` 实现（见 font-output.md）。Enter 路径使用真实桌面 FontRenderer 与 msgothic.ttc，19,183 个让出帧均渲染成功；241 次点击后到同一 VM 屏障，1,692,971 步、SP=40。导出并目视检查投影立绘及文字、换图半程、条带半程和模式 3 小头像。最终默认 490 项、全功能 518 项测试通过，另 1 项硬件检查忽略，格式与两组严格 Clippy 通过；release desktop,audio-output 构建成功。上述剧情帧来自无窗口重放，不冒充原生窗口完整交互或原生音频验证。
+
+
+2026-10-28 用户反馈：已实测前一提交的原生窗口，未发现问题。作为用户实测记录补充此前的无窗口验证；本轮新增 CMV9 创建与初始帧绑定尚未新增原生交互实测。当前鼠标/Enter 无窗口重放已越过 0x2308，停在 `sn1001.ps3 / 0x2bc3c / 0x2049`，影片槽尚未开始播放，详见 cmv9-format.md。完整功能桌面 release 构建通过。
