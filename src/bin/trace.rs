@@ -211,11 +211,15 @@ fn run() -> Result<(), Box<dyn Error>> {
                     skip: message_flags.skip(),
                     ..SkipGate::default()
                 };
-                if let Some(event) = scene.fade_mut().try_wait(&mut machine, gate, &mut input)? {
+                let waited = match scene.fade_mut().try_wait(&mut machine, gate, &mut input)? {
+                    Some(event) => Some(event),
+                    None => scene.try_wait_mask(&mut machine, gate, &mut input)?,
+                };
+                if let Some(event) = waited {
                     if event == Step::Yield {
                         let Some(delta) = frame_ms else {
                             println!(
-                                "# WAIT fade at pc=0x{:x}; PC and stack preserved; supply --frame-ms to advance engine frames",
+                                "# WAIT fade/mask transition at pc=0x{:x}; PC and stack preserved; supply --frame-ms to advance engine frames",
                                 machine.pc()
                             );
                             return Ok(());
@@ -224,7 +228,13 @@ fn run() -> Result<(), Box<dyn Error>> {
                         movies.advance(delta);
                         frame_delta = delta;
                         resume_run = true;
-                        println!("# frame delta_ms={delta} fade={:?}", scene.fade().current());
+                        println!(
+                            "# frame delta_ms={delta} fade={:?} mask={:?}",
+                            scene.fade().current(),
+                            scene
+                                .mask()
+                                .map(|mask| (mask.slot, mask.elapsed, mask.duration()))
+                        );
                     }
                     continue;
                 }
@@ -514,6 +524,22 @@ fn run() -> Result<(), Box<dyn Error>> {
                                 image.alpha
                             )))
                             .collect::<Vec<_>>()
+                    );
+                    continue;
+                }
+                if let Some(images) = &mut images
+                    && scene.try_handle_mask(&mut machine, &mut images.with_paths(paths))?
+                {
+                    println!(
+                        "# mask transition 0x{:04x}: system_integer[0]={:?} mask={:?}; shader path, nothing drawn",
+                        command + 0x2000,
+                        machine.state().system_integer(0),
+                        scene.mask().map(|mask| (
+                            mask.slot,
+                            mask.put,
+                            mask.mask.name.escape_ascii().to_string(),
+                            mask.duration()
+                        ))
                     );
                     continue;
                 }

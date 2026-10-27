@@ -1,9 +1,10 @@
-//! Software presentation of verified static 2D objects, their children and full-screen color
-//! fades. Unsupported transforms, solid-color objects and blend modes fail explicitly.
+//! Software presentation of verified static 2D objects, their children, full-screen color
+//! fades and mask transitions. Unsupported transforms, solid-color objects and blend modes
+//! fail explicitly.
 use crate::{
     FormatError, MAX_PAYLOAD,
     raster::RgbaImage,
-    scene::{ObjectImage, SceneHost, SceneObject},
+    scene::{MaskTransition, ObjectImage, SceneHost, SceneObject},
 };
 
 enum Layer<'a> {
@@ -14,6 +15,8 @@ enum Layer<'a> {
         /// Top-left destination corner: position minus origin.
         corner: [i64; 2],
         alpha: u32,
+        /// The +4632 transition shading this slot object (not its children).
+        mask: Option<&'a MaskTransition>,
     },
     Fade(&'a crate::fade::Fade),
 }
@@ -47,17 +50,25 @@ fn image_layer<'a>(
     words: &[u32; 22],
     position: [i64; 2],
     alpha: i64,
+    mask: Option<&'a MaskTransition>,
 ) -> Result<Option<Layer<'a>>, FormatError> {
     let [sx, sy, w, h] = [2, 3, 4, 5].map(|i| i64::from(words[i] as i16));
     if w <= 0 || h <= 0 || alpha <= 0 {
         return Ok(None);
     }
-    if sx < 0
-        || sy < 0
-        || sx + w > i64::from(image.pixels.width())
-        || sy + h > i64::from(image.pixels.height())
-    {
+    let size = [image.pixels.width(), image.pixels.height()].map(i64::from);
+    if sx < 0 || sy < 0 || sx + w > size[0] || sy + h > size[1] {
         return Err(FormatError("scene source rectangle outside image"));
+    }
+    // The mask is the object's second texture; only the case where it covers the whole,
+    // equally sized image texel for texel is modeled.
+    if let Some(mask) = mask {
+        let mask_size = [mask.mask.pixels.width(), mask.mask.pixels.height()].map(i64::from);
+        if [sx, sy, w, h] != [0, 0, size[0], size[1]] || mask_size != size {
+            return Err(FormatError(
+                "mask transition on a cropped or differently sized image is not verified",
+            ));
+        }
     }
     Ok(Some(Layer::Image {
         image,
@@ -67,6 +78,7 @@ fn image_layer<'a>(
             position[1] - i64::from(words[7] as i16),
         ],
         alpha: alpha.min(255) as u32,
+        mask,
     }))
 }
 
@@ -103,7 +115,7 @@ fn child_layer<'a>(
     } else {
         (own, i64::from(words[17] as i32))
     };
-    image_layer(image, words, position, alpha)
+    image_layer(image, words, position, alpha, None)
 }
 
 /// Render in script coordinates. Window aspect fitting is a separate desktop policy.
@@ -127,7 +139,11 @@ pub fn render_with_objects(
     }
     // Validate the entire scene before rasterizing. Slot order is the stable tie-breaker.
     let mut entries = Vec::new();
-    for object in scene.objects().values().chain(additional.iter().copied()) {
+    let slots = scene
+        .objects()
+        .iter()
+        .map(|(&slot, object)| (Some(slot), object));
+    for (slot, object) in slots.chain(additional.iter().map(|&object| (None, object))) {
         // 0x14003de80 returns early for +6244 == 0; no draw state means +6240 == 0.
         let Some(draw) = object.draw.as_ref().filter(|_| object.shown) else {
             continue;
@@ -135,8 +151,9 @@ pub fn render_with_objects(
         let d = &draw.words;
         check(d)?;
         let position = [d[8] as i32, d[9] as i32].map(i64::from);
+        let mask = scene.mask().filter(|mask| Some(mask.slot) == slot);
         let layer = match &object.image {
-            Some(image) => image_layer(image, d, position, i64::from(d[17] as i32))?,
+            Some(image) => image_layer(image, d, position, i64::from(d[17] as i32), mask)?,
             None => None,
         };
         let mut entry = Entry {
@@ -203,13 +220,14 @@ pub fn render_with_objects(
 }
 
 fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
-    let (image, [sx, sy, w, h], [left, top], opacity) = match layer {
+    let (image, [sx, sy, w, h], [left, top], opacity, mask) = match layer {
         Layer::Image {
             image,
             rect,
             corner,
             alpha,
-        } => (image, rect, corner, alpha),
+            mask,
+        } => (image, rect, corner, alpha, mask),
         Layer::Fade(fade) => {
             let [b, g, r, _] = fade.color.to_le_bytes();
             let alpha = fade.opacity.clamp(0, 255) as u32;
@@ -222,13 +240,23 @@ fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
             return;
         }
     };
+    // Shader factor per mask green byte; the float result is rounded into the 8-bit alpha,
+    // so pixels approximate rather than match the device's blending.
+    let shade = mask.map(|mask| {
+        let coverage: [f32; 256] = std::array::from_fn(|green| mask.coverage(green as u8));
+        (mask.mask.pixels.pixels(), coverage)
+    });
     for y in top.max(0)..(top + h).min(i64::from(height)) {
         for x in left.max(0)..(left + w).min(i64::from(width)) {
             let src =
                 (((sy + y - top) * i64::from(image.pixels.width()) + sx + x - left) * 4) as usize;
             let dst = ((y * i64::from(width) + x) * 4) as usize;
             let p = &image.pixels.pixels()[src..src + 4];
-            let alpha = (u32::from(p[3]) * opacity + 127) / 255;
+            let mut alpha = (u32::from(p[3]) * opacity + 127) / 255;
+            if let Some((texture, coverage)) = &shade {
+                // Same size and coordinates as the image, so the same texel.
+                alpha = (alpha as f32 * coverage[usize::from(texture[src + 1])]).round() as u32;
+            }
             for c in 0..3 {
                 pixels[dst + c] =
                     ((u32::from(p[c]) * alpha + u32::from(pixels[dst + c]) * (255 - alpha) + 127)

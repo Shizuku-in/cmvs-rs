@@ -9,6 +9,8 @@ use crate::{
     vm::SystemResult,
 };
 use std::{collections::BTreeMap, error::Error};
+mod mask;
+pub use mask::MaskTransition;
 
 /// Engine +1976 holds 256 object pointers (snapshot records 0x700).
 pub const OBJECT_SLOTS: usize = 256;
@@ -311,6 +313,8 @@ pub struct SceneHost {
     clear: ClearState,
     objects: BTreeMap<u8, SceneObject>,
     fade: crate::fade::FadeHost,
+    /// Engine +4632; see `mask`.
+    mask: Option<MaskTransition>,
 }
 impl SceneHost {
     pub fn fade(&self) -> &crate::fade::FadeHost {
@@ -320,13 +324,15 @@ impl SceneHost {
         &mut self.fade
     }
     /// The slot part of the frame update 0x140015900: each object runs 0x14003d0c0 and is
-    /// destroyed when it is marked for disposal (0x14003a780 reads +14500); then the fade.
+    /// destroyed when it is marked for disposal (0x14003a780 reads +14500); then the fade
+    /// and the mask transition.
     pub fn advance_frame(&mut self, delta: u32) {
         for object in self.objects.values_mut() {
             object.advance_effects(delta);
         }
         self.objects.retain(|_, object| !object.dispose);
         self.fade.advance(delta);
+        self.advance_mask(delta);
     }
     pub fn clear(&self) -> ClearState {
         self.clear

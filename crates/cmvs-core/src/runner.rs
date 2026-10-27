@@ -302,6 +302,17 @@ impl<'a> Startup<'a> {
                 StartupEvent::Progress
             });
         }
+        if let Some(step) = self
+            .scene
+            .try_wait_mask(&mut self.machine, gate, &mut self.input)?
+        {
+            self.resume_run = step == Step::Yield;
+            return Ok(if step == Step::Yield {
+                StartupEvent::Yield
+            } else {
+                StartupEvent::Progress
+            });
+        }
         if let Some(step) =
             self.messages
                 .try_wait(&mut self.machine, &mut self.input, self.message_flags)?
@@ -365,6 +376,10 @@ impl<'a> Startup<'a> {
             || self.bootstrap.try_handle(&mut self.machine)?.is_some()
             || self.scene.try_handle(&mut self.machine)?
             || self.scene.try_handle_image(
+                &mut self.machine,
+                &mut self.images.with_paths(self.bootstrap.paths()),
+            )?
+            || self.scene.try_handle_mask(
                 &mut self.machine,
                 &mut self.images.with_paths(self.bootstrap.paths()),
             )?
