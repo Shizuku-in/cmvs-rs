@@ -345,6 +345,95 @@ fn stop_backend_failure_and_invalid_channels_keep_the_command_pending() {
     }
 }
 
+fn se_fade_code(channel: u32, fade: u32) -> Vec<u8> {
+    let mut code = vec![];
+    push(&mut code, fade);
+    push(&mut code, channel);
+    code.extend(0x20b6u16.to_le_bytes());
+    code
+}
+
+#[test]
+fn se_fade_out_reaches_the_device_and_clears_only_the_name() {
+    for se_enabled in [true, false] {
+        let script = script(&[(1, 0, 64, 1, 1)], b"loop.ogg\0");
+        let mut vm = Machine::new(&script).unwrap();
+        let mut host = AudioHost::new(AudioSettings {
+            se_enabled,
+            ..AudioSettings::default()
+        });
+        let mut backend = RecordingAudio::default();
+        pending(&mut vm);
+        host.try_handle(&mut vm, &mut backend).unwrap();
+        let script = program(&se_fade_code(1, 500), b"");
+        let mut vm = Machine::new(&script).unwrap();
+        vm.state_mut().set_system_integer(0, 77).unwrap();
+        pending(&mut vm);
+        let pc = vm.pc();
+        assert!(host.try_handle(&mut vm, &mut backend).unwrap());
+        assert_eq!((vm.pc(), vm.stack().len_bytes()), (pc + 2, 0));
+        assert_eq!(vm.state().system_integer(0), Some(77));
+        // Unlike 0x20b3, the start flag survives.
+        assert_eq!(
+            host.channel(1),
+            Some(&SeChannel {
+                name: vec![],
+                looped: true,
+                volume: 64,
+                flag: true
+            })
+        );
+        // SE_USE is not consulted.
+        assert_eq!(
+            backend.requests().last(),
+            Some(&AudioRequest::FadeOutSe {
+                channel: 1,
+                fade_ms: 500
+            })
+        );
+    }
+}
+
+#[test]
+fn se_fade_out_failures_and_invalid_arguments_keep_the_command_pending() {
+    let script = program(&se_fade_code(2, 0), b"");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = AudioHost::default();
+    pending(&mut vm);
+    let pc = vm.pc();
+    // Broken has no SE fade-out, so the default trait method reports it as unimplemented.
+    assert!(host.try_handle(&mut vm, &mut Broken).is_err());
+    assert_eq!(vm.pending_system(), Some((pc, 0xb6)));
+    assert_eq!(vm.stack().len_bytes(), 8);
+    assert!(host.channel(2).is_none());
+    let mut backend = RecordingAudio::default();
+    host.try_handle(&mut vm, &mut backend).unwrap();
+    assert_eq!(
+        backend.requests(),
+        &[AudioRequest::FadeOutSe {
+            channel: 2,
+            fade_ms: 0
+        }]
+    );
+    assert_eq!(host.channel(2), Some(&SeChannel::default()));
+    let mut short = vec![];
+    push(&mut short, 1);
+    short.extend(0x20b6u16.to_le_bytes());
+    for code in [se_fade_code(6, 10), se_fade_code(u32::MAX, 10), short] {
+        let script = program(&code, b"");
+        let mut vm = Machine::new(&script).unwrap();
+        pending(&mut vm);
+        let (pc, bytes) = (vm.pc(), vm.stack().len_bytes());
+        let mut host = AudioHost::default();
+        let mut backend = RecordingAudio::default();
+        assert!(host.try_handle(&mut vm, &mut backend).is_err());
+        assert_eq!(vm.pending_system(), Some((pc, 0xb6)));
+        assert_eq!(vm.stack().len_bytes(), bytes);
+        assert!((0..6).all(|i| host.channel(i).is_none()));
+        assert!(backend.requests().is_empty());
+    }
+}
+
 fn pending(vm: &mut Machine<'_>) {
     while !matches!(vm.step().unwrap(), Step::System { .. }) {}
 }

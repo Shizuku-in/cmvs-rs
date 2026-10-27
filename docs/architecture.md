@@ -219,3 +219,5 @@ BGM 与 SE 共用 `AudioHost`/`AudioBackend`：`BgmState` 保存 +4464 对象的
 `text` 模块新增 0x20fc：平台无关地实现原版 0x140006ed0 的 `%%` 与 `%z` 子集，目标只限字符串库槽并按 1024 字节检查，不复现原版的无界写入或重叠行为。真实重放停于 sn1001.ps3 / PC=0x2f4da / 0x222a、SP=76，详见 vm-semantics.md。
 
 `SceneHost` 新增引擎 +4632 的 `MaskTransition`（`scene/mask.rs`）：0x222a/0x222d 与 0x2030 共用 `load_image`，0x222b 与 0x2224 共用 `SkipGate`，帧推进放在纯色淡入淡出之后。`scene_render` 只给目标槽顶层对象的图像层附加遮罩，用着色器系数缩放 alpha；遮罩与图像尺寸不同或对象被裁切时显式报错。原版的 CPU 改写 alpha 路径不建模。真实重放停于 sn1001.ps3 / PC=0xd26e / 0x20b6、SP=16，详见 vm-semantics.md。
+
+`AudioBackend::fade_out_se` 表达 0x20b6 对 SE 设备通道的淡出并释放，与 `fade_out_bgm` 共用原版设备函数 0x1400882d0 的语义；`AudioHost` 不按 SE_USE 门控，只清空通道名称。逐句点击重放随后停于 sn1001.ps3 / PC=0xf19c / 0x2152 的注音组屏障，详见 vm-semantics.md。

@@ -88,6 +88,9 @@ pub enum AudioRequest {
     StartSe { channel: u8, looped: bool },
     /// 0x140087910: stop and release the device channel's sound, prepared or active.
     StopSe { channel: u8 },
+    /// 0x20b6: 0x1400882d0 on device channel `channel + 9` fades the sound out over
+    /// `fade_ms` and releases it at the end; a no-op for an empty or already fading slot.
+    FadeOutSe { channel: u8, fade_ms: u32 },
     /// 0x20a8: stop and release voice channel 0..3 (device channel +5).
     StopVoice { channel: u8 },
     /// 0x14008a240 with BGM enabled. With `fade_ms` 0 both BGM device channels 0 and 1
@@ -152,6 +155,11 @@ pub trait AudioBackend {
     fn stop(&mut self, _channel: u8) -> Result<(), Box<dyn Error>> {
         Err("audio backend does not implement stopping an SE channel".into())
     }
+    /// Start the fade-out of channel + 9 (released when it ends); an empty or already
+    /// fading channel is unchanged. Err leaves the device unchanged for retry.
+    fn fade_out_se(&mut self, _channel: u8, _fade_ms: u32) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement SE fade-out".into())
+    }
     /// Stop and release a voice channel (0..3, device +5), including an empty slot.
     /// Err leaves the device unchanged so the VM can retry the pending command.
     fn stop_voice(&mut self, _channel: u8) -> Result<(), Box<dyn Error>> {
@@ -212,6 +220,9 @@ impl AudioBackend for RecordingAudio {
     fn stop(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
         self.record(AudioRequest::StopSe { channel })
     }
+    fn fade_out_se(&mut self, channel: u8, fade_ms: u32) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::FadeOutSe { channel, fade_ms })
+    }
     fn stop_voice(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
         self.record(AudioRequest::StopVoice { channel })
     }
@@ -266,6 +277,7 @@ impl AudioHost {
             Some((_, 0xa8)) => return self.try_voice_stop(vm, backend),
             Some((_, 0xb1)) => return self.try_start(vm, backend),
             Some((_, 0xb3)) => return self.try_stop(vm, backend),
+            Some((_, 0xb6)) => return self.try_fade_out(vm, backend),
             Some((_, 0xa0 | 0xa4)) => return self.try_bgm(vm, backend),
             Some((_, 0xa2)) => return self.try_bgm_fade_out(vm, backend),
             Some((_, 0xa1)) => return self.try_bgm_stop(vm, backend),
@@ -391,6 +403,30 @@ impl AudioHost {
         let record = self.channels[channel as usize].get_or_insert_with(SeChannel::default);
         record.name.clear();
         record.flag = false;
+        Ok(true)
+    }
+
+    /// 0x20b6 / 0x1400710f0: SP-4 channel (unsigned, above 5 only sets +12056 bit 0x200),
+    /// SP-8 fade milliseconds; returns 0x4008, no result write. Like 0x20b3 it skips the
+    /// SE_USE check; it clears only the record's name, keeping loop, volume and flag.
+    fn try_fade_out(
+        &mut self,
+        vm: &mut Machine<'_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<bool, Box<dyn Error>> {
+        let (pc, _) = vm.pending_system().expect("checked pending command");
+        let fail = |why| error(pc, 0x20b6, why);
+        let channel = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
+        let fade_ms = vm.stack().peek_u32(8).map_err(|e| fail(e.0))?;
+        if channel as usize >= SE_CHANNELS {
+            return Err(fail("SE channel outside 0..5 sets an unmodeled flag").into());
+        }
+        backend.fade_out_se(channel as u8, fade_ms)?;
+        vm.complete_system(SystemResult(0x4008))?;
+        self.channels[channel as usize]
+            .get_or_insert_with(SeChannel::default)
+            .name
+            .clear();
         Ok(true)
     }
 

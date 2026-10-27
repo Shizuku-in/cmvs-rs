@@ -400,6 +400,14 @@ impl AudioBackend for NativeAudio {
             .ok_or("SE channel out of range")? = None;
         Ok(())
     }
+    fn fade_out_se(&mut self, channel: u8, ms: u32) -> Result<(), Box<dyn Error>> {
+        let channel = self
+            .se
+            .get_mut(usize::from(channel))
+            .ok_or("SE channel out of range")?;
+        Self::fade(channel, ms);
+        Ok(())
+    }
     fn play_bgm(&mut self, request: &AudioRequest) -> Result<(), Box<dyn Error>> {
         let AudioRequest::PlayBgm {
             channel,
