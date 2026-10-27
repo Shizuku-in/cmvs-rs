@@ -2,22 +2,30 @@
 use crate::{
     FormatError, pb3,
     raster::RgbaImage,
-    resources::{RegisteredResources, ResourceArchives, ResourceKind, ResourceSource},
+    resources::{RegisteredResources, ResourceArchives, ResourceKind},
 };
 use std::{collections::BTreeMap, error::Error, path::Path};
+mod cache;
+use cache::Cache;
 /// 0x2011 / 0x1400717c0: image manager has ten registration slots.
 pub const IMAGE_ENTRIES: u32 = ResourceKind::Image.slot_count();
 pub trait ImageSource {
     fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>>;
+    /// 0x203f: arm the next image-file read's raw-byte cache lookup/insertion.
+    fn cache_next_read(&mut self) -> Result<(), Box<dyn Error>> {
+        Err("image source does not implement the next-read cache".into())
+    }
 }
 /// Compatibility image view over the common read-only resource store.
 pub struct ImageArchives {
     archives: ResourceArchives,
+    cache: Cache,
 }
 impl ImageArchives {
     pub fn new(root: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
             archives: ResourceArchives::new(root)?,
+            cache: Cache::default(),
         })
     }
     pub fn with_paths<'a>(
@@ -26,15 +34,21 @@ impl ImageArchives {
     ) -> Registered<'a> {
         Registered {
             inner: self.archives.with_paths(paths, ResourceKind::Image),
+            cache: &mut self.cache,
         }
     }
 }
 pub struct Registered<'a> {
     inner: RegisteredResources<'a>,
+    cache: &'a mut Cache,
 }
 impl ImageSource for Registered<'_> {
     fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
-        self.inner.read(name)
+        self.cache.read(name, &mut self.inner)
+    }
+    fn cache_next_read(&mut self) -> Result<(), Box<dyn Error>> {
+        self.cache.arm();
+        Ok(())
     }
 }
 

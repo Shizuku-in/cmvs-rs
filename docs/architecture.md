@@ -245,3 +245,5 @@ BGM 与 SE 共用 `AudioHost`/`AudioBackend`：`BgmState` 保存 +4464 对象的
 0x2072/0x2073 复用相邻世界坐标字段写入，原始浮点位保存在 DrawState::words[11]/[12]，与普通二维位置保持分开。四字段交错测试扩展到原始位和事务边界；最新真实剧情 VM 停点为 sn1001.ps3 / 0x2b6ee / 0x2074。保存字段不代表模式 2 投影/光栅化已实现，证据见 vm-semantics.md。
 
 0x2072..0x2074 的浮点 XYZ setter 已齐全，原始位保存到 DrawState::words[11..14]；与 +60/+64 投影参数的相互保留通过五字段交错测试验证。真实剧情 VM 最新停点为 sn1001.ps3 / 0x21b9c / 0x203f。相机投影和模式 2 光栅化仍未接入，不将世界坐标当作普通二维位置，证据见 vm-semantics.md。
+
+图像专用 `image/cache.rs` 保存 0x203f 的下一次读取提示与有界原始字节 LRU；ImageArchives 持有状态，Registered 视图只借用，ImageSource 未实现缓存能力时显式返回错误。它与 CPZ 索引缓存、已解码 ObjectImage 和音频资源族分开；32 MiB/1024 项为本轮留存策略，原版启动容量配置未接入。真实剧情现停于 sn1001.ps3 / 0x200d4 的 0x2030：PB3 type 6 需要带参考图像源的上下文解码，不能继续只靠无上下文的 decode(bytes)；递归加载的缓存提交顺序仍待核对。模式 2 绘制仍未实现，见 vm-semantics.md。

@@ -603,3 +603,150 @@ fn image_query_reports_size_and_depth_or_only_absence() {
     assert_eq!(vm.pending_system().map(|p| p.1), Some(0x33));
     assert_eq!(vm.stack().len_bytes(), bytes);
 }
+
+struct CacheRoot(PathBuf);
+impl CacheRoot {
+    fn new(name: &str) -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "cmvs-raw-image-cache-{name}-{}",
+            std::process::id()
+        ));
+        fs::create_dir(&path).unwrap();
+        let root = Self(path);
+        fs::create_dir(root.0.join("raw")).unwrap();
+        root
+    }
+}
+impl Drop for CacheRoot {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(self.0.join("raw/a.pb3"));
+        let _ = fs::remove_dir(self.0.join("raw"));
+        let _ = fs::remove_dir(&self.0);
+    }
+}
+
+#[test]
+fn next_read_cache_hint_keeps_stack_results_and_active_images_and_only_affects_one_read() {
+    let root = CacheRoot::new("hint");
+    let first = opaque();
+    let second = pb3(1, &[[8, 9], [10, 11], [12, 13]]);
+    let path = root.0.join("raw/a.pb3");
+    fs::write(&path, &first).unwrap();
+    let paths = registered(&[(0, b"raw\\")]);
+    let mut archives = ImageArchives::new(&root.0).unwrap();
+    let mut code = loads(3, &[0]);
+    push(&mut code, 0xdead_beef);
+    for _ in 0..4 {
+        op(&mut code, 0x203f);
+    }
+    let program = script(&code, b"a.pb3\0");
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    assert_eq!(run_to_system(&mut vm), 0x20);
+    scene.try_handle(&mut vm).unwrap();
+    assert_eq!(run_to_system(&mut vm), 0x30);
+    scene
+        .try_handle_image(&mut vm, &mut archives.with_paths(&paths))
+        .unwrap();
+    let before = scene.objects().clone();
+    vm.state_mut().set_system_integer(0, 99).unwrap();
+    vm.state_mut().set_system_integer(4, 123).unwrap();
+    // Arming twice does not accumulate two reads or clear an active decoded image.
+    for _ in 0..2 {
+        assert_eq!(run_to_system(&mut vm), 0x3f);
+        let pc = vm.pc();
+        assert!(
+            scene
+                .try_handle_image(&mut vm, &mut archives.with_paths(&paths))
+                .unwrap()
+        );
+        assert_eq!(vm.pc(), pc + 2);
+        assert_eq!(vm.pending_system(), None);
+        assert_eq!(scene.objects(), &before);
+        assert_eq!(vm.stack().peek_u32(4).unwrap(), 0xdead_beef);
+    }
+    assert_eq!(
+        archives.with_paths(&paths).read(b"a.pb3").unwrap(),
+        Some(first.clone())
+    );
+    fs::write(&path, &second).unwrap();
+    // Unarmed reads bypass the cache and do not update its stored bytes.
+    assert_eq!(
+        archives.with_paths(&paths).read(b"a.pb3").unwrap(),
+        Some(second)
+    );
+    assert_eq!(run_to_system(&mut vm), 0x3f);
+    scene
+        .try_handle_image(&mut vm, &mut archives.with_paths(&paths))
+        .unwrap();
+    assert_eq!(
+        archives.with_paths(&paths).read(b"A.PB3").unwrap(),
+        Some(first.clone())
+    );
+    fs::remove_file(&path).unwrap();
+    assert_eq!(archives.with_paths(&paths).read(b"a.pb3").unwrap(), None);
+    assert_eq!(run_to_system(&mut vm), 0x3f);
+    scene
+        .try_handle_image(&mut vm, &mut archives.with_paths(&paths))
+        .unwrap();
+    assert_eq!(
+        archives.with_paths(&paths).read(b"a.pb3").unwrap(),
+        Some(first)
+    );
+    assert_eq!(scene.objects(), &before);
+    assert_eq!(vm.stack().len_bytes(), 4);
+    assert_eq!(vm.state().system_integer(0), Some(99));
+    assert_eq!(vm.state().system_integer(4), Some(123));
+}
+
+#[test]
+fn next_read_cache_hint_is_consumed_by_missing_files_and_errors() {
+    let root = CacheRoot::new("failure");
+    let paths = registered(&[(0, b"raw\\")]);
+    let mut archives = ImageArchives::new(&root.0).unwrap();
+    for (name, error) in [
+        (b"missing.pb3".as_slice(), false),
+        (b"..\\outside.pb3", true),
+    ] {
+        archives.with_paths(&paths).cache_next_read().unwrap();
+        let result = archives.with_paths(&paths).read(name);
+        if error {
+            assert!(result.is_err());
+        } else {
+            assert_eq!(result.unwrap(), None);
+        }
+        let path = root.0.join("raw/a.pb3");
+        fs::write(&path, b"uncached").unwrap();
+        assert_eq!(
+            archives.with_paths(&paths).read(b"a.pb3").unwrap(),
+            Some(b"uncached".to_vec())
+        );
+        fs::remove_file(&path).unwrap();
+        archives.with_paths(&paths).cache_next_read().unwrap();
+        assert_eq!(archives.with_paths(&paths).read(b"a.pb3").unwrap(), None);
+    }
+}
+
+#[test]
+fn unsupported_cache_source_keeps_command_pending_without_consuming_parameters() {
+    struct Unsupported;
+    impl ImageSource for Unsupported {
+        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+            panic!("0x203f does not read a file");
+        }
+    }
+    let mut code = vec![];
+    push(&mut code, 42);
+    op(&mut code, 0x203f);
+    let program = script(&code, b"");
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    assert_eq!(run_to_system(&mut vm), 0x3f);
+    assert!(!scene.try_handle(&mut vm).unwrap());
+    assert!(scene.try_handle_image(&mut vm, &mut Unsupported).is_err());
+    assert_eq!(vm.pending_system(), Some((8, 0x3f)));
+    assert_eq!(vm.pc(), 8);
+    assert_eq!(vm.stack().peek_u32(4).unwrap(), 42);
+    assert_eq!(vm.stack().len_bytes(), 4);
+    assert!(scene.objects().is_empty());
+}

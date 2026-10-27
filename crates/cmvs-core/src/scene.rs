@@ -742,6 +742,12 @@ impl SceneHost {
         vm: &mut Machine<'_>,
         images: &mut dyn ImageSource,
     ) -> Result<bool, Box<dyn Error>> {
+        if matches!(vm.pending_system(), Some((_, 0x3f))) {
+            // Dispatcher 0x1400827a7 -> 0x140035a90: arm, do not flush or load.
+            images.cache_next_read()?;
+            vm.complete_system(SystemResult(0x4000))?;
+            return Ok(true);
+        }
         let Some((pc, command @ (0x30 | 0x38))) = vm.pending_system() else {
             return Ok(false);
         };
