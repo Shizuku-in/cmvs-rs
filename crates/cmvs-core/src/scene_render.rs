@@ -34,6 +34,7 @@ enum Layer<'a> {
         rect: [i64; 4],
         color: [u8; 3],
         alpha: u32,
+        blend: Blend,
     },
     Fade(&'a crate::fade::Fade),
 }
@@ -86,7 +87,8 @@ struct Entry<'a> {
 /// Only blend modes 1/2, crop, origin, position, order and opacity may differ from the
 /// constructor values; a projected object (coordinate mode 2/3) also keeps its world XYZ
 /// (words 11..14) and projection inputs (15/16). Own scale and rotation must stay at constructor values; fade factors
-/// in 0..256 are used by image replacement.
+/// in 0..256 are used by image replacement. A 2D object's color word also selects
+/// the solid rectangle color and whether its children inherit the parent's image.
 fn check(words: &[u32; 22], projected: bool) -> Result<(), FormatError> {
     let mut allowed = crate::scene::DrawState::default().words;
     if matches!(words[1], 1 | 2) {
@@ -97,6 +99,9 @@ fn check(words: &[u32; 22], projected: bool) -> Result<(), FormatError> {
         allowed[0] = words[0];
         allowed[11..14].copy_from_slice(&words[11..14]);
         allowed[15..17].copy_from_slice(&words[15..17]);
+    }
+    if !projected {
+        allowed[14] = words[14];
     }
     allowed[17] = words[17];
     if words[21] <= 256 {
@@ -152,8 +157,35 @@ fn image_layer<'a>(
     }))
 }
 
+/// Untextured 2D branch of 0x140020340 / 0x1400233e0. The color's alpha byte
+/// selects child image inheritance, but vertex alpha comes from opacity and fade.
+fn solid_layer<'a>(words: &[u32; 22], position: [i64; 2], alpha: i64) -> Option<Layer<'a>> {
+    let [w, h] = [4, 5].map(|i| i64::from(words[i] as i16));
+    if w <= 0 || h <= 0 || alpha <= 0 {
+        return None;
+    }
+    let [b, g, r, _] = words[14].to_le_bytes();
+    Some(Layer::Solid {
+        rect: [
+            position[0] - i64::from(words[6] as i16),
+            position[1] - i64::from(words[7] as i16),
+            w,
+            h,
+        ],
+        color: [r, g, b],
+        alpha: alpha.min(255) as u32,
+        blend: if alpha >= 255 {
+            Blend::Replace
+        } else if words[1] == 2 {
+            Blend::Additive
+        } else {
+            Blend::Alpha
+        },
+    })
+}
+
 /// 0x14003b420/0x140020340 for a child of a top-level object. Without its own image the
-/// child uses the parent's (its +56 color has a zero alpha byte, as `check` enforces).
+/// child uses the parent's only when its +56 color has a zero alpha byte.
 /// Flag bit 0 inherits the parent's position and opacity at unit scale.
 fn child_layer<'a>(
     parent: &'a SceneObject,
@@ -161,13 +193,12 @@ fn child_layer<'a>(
     child: &'a SceneObject,
     words: &[u32; 22],
 ) -> Result<Option<Layer<'a>>, FormatError> {
-    let image = child
-        .image
-        .as_ref()
-        .or(parent.image.as_ref())
-        .ok_or(FormatError(
-            "child without an image source uses an unverified solid-color path",
-        ))?;
+    let image = child.image.as_ref().or_else(|| {
+        parent
+            .image
+            .as_ref()
+            .filter(|_| words[14] & 0xff00_0000 == 0)
+    });
     let own = [words[8] as i32, words[9] as i32].map(i64::from);
     let (position, alpha) = if child.flags & 1 != 0 {
         let (opacity, parent_opacity) = (words[17] as i32, parent_words[17] as i32);
@@ -193,7 +224,10 @@ fn child_layer<'a>(
             i64::from((words[17].wrapping_mul(words[21]) as i32) >> 8),
         )
     };
-    image_layer(image, words, position, alpha, None)
+    match image {
+        Some(image) => image_layer(image, words, position, alpha, None),
+        None => Ok(solid_layer(words, position, alpha)),
+    }
 }
 
 /// Queues 2/6 of 0x14003de80/0x140015fc0 for a top-level mode 2/3 object, keyed by its
@@ -316,6 +350,17 @@ fn shifted(layer: Layer<'_>, by: [i64; 2]) -> Layer<'_> {
                 blend,
             }
         }
+        Layer::Solid {
+            rect: [x, y, w, h],
+            color,
+            alpha,
+            blend,
+        } => Layer::Solid {
+            rect: [x + by[0], y + by[1], w, h],
+            color,
+            alpha,
+            blend,
+        },
         fade => fade,
     }
 }
@@ -407,7 +452,11 @@ pub fn render_scene(
                 i64::from((d[17].wrapping_mul(d[21]) as i32) >> 8),
                 mask,
             )?,
-            None => None,
+            None => solid_layer(
+                d,
+                position,
+                i64::from((d[17].wrapping_mul(d[21]) as i32) >> 8),
+            ),
         }
         .map(|layer| shifted(layer, by));
         let mut entry = Entry {
@@ -479,6 +528,7 @@ pub fn render_scene(
                     rect: [left, top, w, h],
                     color: [r, g, b],
                     alpha: u32::from(a),
+                    blend: Blend::Alpha,
                 }),
                 children: Vec::new(),
             });
@@ -619,11 +669,12 @@ fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
             rect: [left, top, w, h],
             color,
             alpha,
+            blend,
         } => {
             for y in top.max(0)..(top + h).min(i64::from(height)) {
                 for x in left.max(0)..(left + w).min(i64::from(width)) {
                     let dst = ((y * i64::from(width) + x) * 4) as usize;
-                    put(&mut pixels[dst..dst + 3], color, alpha, Blend::Alpha);
+                    put(&mut pixels[dst..dst + 3], color, alpha, blend);
                 }
             }
             return;

@@ -1111,3 +1111,90 @@ fn scale_setter_invalid_targets_or_short_stack_preserve_the_pending_command() {
         assert_eq!(vm.stack().len_bytes(), args.len() * 4);
     }
 }
+
+#[test]
+fn solid_setter_preserves_other_properties_tracks_and_child_isolation() {
+    let mut code = vec![];
+    for (op, args) in [
+        (0x2020, vec![7]),
+        (0x2040, vec![7]),
+        (0x2044, vec![7, u32::MAX, 3, 4, 5, 6]),
+        (0x2046, vec![7, u32::MAX, 9, 10]),
+        (0x2045, vec![7, u32::MAX, 11, 22]),
+        (0x21ea, vec![7, u32::MAX, 2]),
+        (0x2022, vec![7, 767]),
+        (0x2050, vec![7, 767]),
+    ] {
+        command(&mut code, op, &args);
+    }
+    let pairs = [
+        [0x3fc00000, 0xbf800000],
+        [0x80000000, 0x7fc01234],
+        [0x7f800000, 0xff800000],
+    ];
+    for pair in pairs {
+        command(
+            &mut code,
+            0x2043,
+            &[7, 0x80000000, pair[0], pair[1], 0x12345678],
+        );
+        command(&mut code, 0x2043, &[7, 767, pair[1], pair[0], 0xabcdef]);
+    }
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    for _ in 0..8 {
+        next(&mut vm, &mut scene).unwrap();
+    }
+    vm.state_mut().set_system_integer(0, 123).unwrap();
+    let mut expected = scene.object(7).unwrap().clone();
+    for pair in pairs {
+        next(&mut vm, &mut scene).unwrap();
+        let words = &mut expected.draw.as_mut().unwrap().words;
+        words[2..4].fill(0);
+        words[4..6].copy_from_slice(&pair);
+        words[14] = 0xff345678;
+        assert_eq!(scene.object(7), Some(&expected));
+        next(&mut vm, &mut scene).unwrap();
+        let words = &mut expected
+            .children
+            .get_mut(&767)
+            .unwrap()
+            .draw
+            .as_mut()
+            .unwrap()
+            .words;
+        words[2..4].fill(0);
+        words[4..6].copy_from_slice(&[pair[1], pair[0]]);
+        words[14] = 0xffabcdef;
+        assert_eq!(scene.object(7), Some(&expected));
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.state().system_integer(0), Some(123));
+    }
+}
+
+#[test]
+fn solid_setter_invalid_targets_or_short_stack_preserve_the_pending_command() {
+    for args in [
+        vec![1, u32::MAX, 0, 0, 0],
+        vec![2, u32::MAX, 0, 0, 0],
+        vec![256, u32::MAX, 0, 0, 0],
+        vec![u32::MAX, u32::MAX, 0, 0, 0],
+        vec![1, 768, 0, 0, 0],
+        vec![1, 0, 0, 0, 0],
+        vec![1, u32::MAX, 0, 0],
+    ] {
+        let mut code = vec![];
+        command(&mut code, 0x2020, &[1]);
+        command(&mut code, 0x2043, &args);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        let mut scene = SceneHost::default();
+        next(&mut vm, &mut scene).unwrap();
+        let old = scene.objects().clone();
+        assert!(next(&mut vm, &mut scene).is_err());
+        assert_eq!(scene.objects(), &old);
+        assert_eq!(vm.pending_system().map(|p| p.1), Some(0x43));
+        assert_eq!(vm.stack().len_bytes(), args.len() * 4);
+    }
+}

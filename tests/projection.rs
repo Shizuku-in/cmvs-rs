@@ -345,3 +345,55 @@ fn non_finite_projected_extents_are_reported_and_near_nan_depth_is_clipped() {
     command(&mut code, 0x2074, &[1, u32::MAX, f(f32::NAN)]);
     assert!(render(&code).iter().all(|p| *p == [0; 3]));
 }
+
+#[test]
+fn solid_rectangles_clip_use_origin_and_blend_opacity_instead_of_color_alpha() {
+    for (blend, opacity, expected) in [
+        (1, 128, [110, 70, 50]),
+        (2, 128, [120, 90, 75]),
+        (2, 255, [200, 100, 50]),
+    ] {
+        let mut code = vec![];
+        for slot in [0, 1] {
+            command(&mut code, 0x2020, &[slot]);
+            command(&mut code, 0x2040, &[slot]);
+        }
+        command(&mut code, 0x2043, &[0, u32::MAX, 8, 4, 0x142832]);
+        command(&mut code, 0x2043, &[1, u32::MAX, 3, 2, 0xc86432]);
+        command(&mut code, 0x2046, &[1, u32::MAX, 2, 1]);
+        command(&mut code, 0x2045, &[1, u32::MAX, 1, 2]);
+        command(&mut code, 0x2048, &[1, u32::MAX, opacity]);
+        command(&mut code, 0x204b, &[1, u32::MAX, blend]);
+        let frame = render(&code);
+        assert_eq!(frame[8], expected);
+        assert_eq!(frame[9], expected);
+        assert_eq!(frame[10], [20, 40, 50]);
+        assert_eq!(frame[0], [20, 40, 50]);
+    }
+}
+
+#[test]
+fn solid_color_blocks_child_image_inheritance_but_keeps_an_objects_own_image() {
+    let mut code = vec![];
+    command(&mut code, 0x2020, &[0]);
+    command(&mut code, 0x2030, &[0, 6]); // white image
+    command(&mut code, 0x2040, &[0]);
+    command(&mut code, 0x2043, &[0, u32::MAX, 2, 1, 0xff0000]);
+    command(&mut code, 0x2022, &[0, 0]);
+    command(&mut code, 0x2050, &[0, 0]);
+    command(&mut code, 0x2043, &[0, 0, 2, 1, 0x00ff00]);
+    command(&mut code, 0x2045, &[0, 0, 2, 0]);
+    let frame = render(&code);
+    assert_eq!(&frame[..4], &[[255; 3], [255; 3], [0, 255, 0], [0, 255, 0]]);
+    // An image-free top-level rectangle uses RGB and effective opacity even when
+    // the color alpha is zero (a released image retains its source dimensions).
+    let (mut scene, _) = build(&code);
+    // Additional objects exercise the exact same renderer path without a loader.
+    let mut object = scene.object(0).unwrap().clone();
+    object.children.clear();
+    object.image = None;
+    object.draw.as_mut().unwrap().words[14] = 0x000000ff;
+    scene = SceneHost::default();
+    let frame = scene_render::render_with_objects(&scene, &[&object], 8, 4).unwrap();
+    assert_eq!(&frame.pixels()[..4], &[0, 0, 255, 255]);
+}
