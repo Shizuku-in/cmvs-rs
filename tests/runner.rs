@@ -161,6 +161,56 @@ fn startup_records_clear_color_without_drawing() {
         }
     ));
 }
+/// 0x0400 to `target`, as raw code bytes.
+fn jump(target: u32) -> Vec<u8> {
+    let mut code = 0x400u16.to_le_bytes().to_vec();
+    code.extend(target.to_le_bytes());
+    code
+}
+
+#[test]
+fn yield_watchdog_stops_a_loop_that_never_yields_without_stepping() {
+    let root = Root::new("watchdog", &jump(0), b"");
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let mut backend = RecordingBackend::default();
+    run.set_yield_watchdog(3);
+    for _ in 0..3 {
+        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    }
+    for _ in 0..2 {
+        let error = run.tick(&mut backend).unwrap_err().to_string();
+        assert!(error.contains("watchdog"), "{error}");
+        assert_eq!((run.steps(), run.machine().pc()), (3, 0));
+    }
+    run.set_yield_watchdog(5);
+    for _ in 0..2 {
+        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    }
+    assert!(run.tick(&mut backend).is_err());
+    assert_eq!(run.steps(), 5);
+}
+
+#[test]
+fn yields_reset_the_watchdog_and_total_steps_are_unbounded() {
+    // 0x2000 yields, then 0x0400 jumps back to it.
+    let mut code = 0x2000u16.to_le_bytes().to_vec();
+    code.extend(jump(0));
+    let root = Root::new("yielding", &code, b"");
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let mut backend = RecordingBackend::default();
+    run.set_yield_watchdog(2);
+    for _ in 0..1000 {
+        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
+        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    }
+    assert_eq!(run.steps(), 2000);
+    // One step after the last yield already reaches a watchdog of 1.
+    run.set_yield_watchdog(1);
+    assert!(run.tick(&mut backend).is_err());
+    assert_eq!(run.steps(), 2000);
+}
 struct Reject;
 impl PlatformBackend for Reject {
     fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {

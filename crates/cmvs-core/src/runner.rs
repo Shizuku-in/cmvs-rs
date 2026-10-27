@@ -94,7 +94,10 @@ pub struct Startup<'a> {
     random: CrtRandom,
     audio: AudioHost,
     audio_backend: Box<dyn AudioBackend>,
-    steps: u32,
+    steps: u64,
+    /// Steps since the last yield, and the watchdog limit for them.
+    since_yield: u64,
+    yield_watchdog: u64,
     main_barrier: bool,
     snapshot_policy: SnapshotPolicy,
     save_image: SaveImage,
@@ -142,6 +145,8 @@ impl<'a> Startup<'a> {
             audio: AudioHost::default(),
             audio_backend: Box::new(RecordingAudio::default()),
             steps: 0,
+            since_yield: 0,
+            yield_watchdog: 1_000_000,
             main_barrier: false,
             snapshot_policy: SnapshotPolicy::default(),
             save_image: SaveImage::default(),
@@ -277,7 +282,7 @@ impl<'a> Startup<'a> {
     pub fn save_menu(&self) -> &SaveMenuHost {
         &self.save_menu
     }
-    pub fn steps(&self) -> u32 {
+    pub fn steps(&self) -> u64 {
         self.steps
     }
     pub fn save_image(&self) -> &SaveImage {
@@ -293,6 +298,13 @@ impl<'a> Startup<'a> {
     pub fn set_random_seed(&mut self, seed: u32) {
         self.random = CrtRandom::new(seed);
     }
+    /// Host watchdog, not an engine limit: a tick fails without stepping once this many VM
+    /// steps ran since the last yield (default 1,000,000; the longest stretch measured on
+    /// the replayed path from startup into the first scenario is 9970). Total steps are
+    /// unbounded; hosts bound long runs themselves.
+    pub fn set_yield_watchdog(&mut self, steps: u64) {
+        self.yield_watchdog = steps;
+    }
     pub fn set_snapshot_policy(&mut self, policy: SnapshotPolicy) {
         self.snapshot_policy = policy;
     }
@@ -300,11 +312,30 @@ impl<'a> Startup<'a> {
         &mut self,
         backend: &mut impl PlatformBackend,
     ) -> Result<StartupEvent, Box<dyn Error>> {
+        if self.since_yield >= self.yield_watchdog {
+            return Err(format!(
+                "research watchdog: {} VM steps without a yield",
+                self.since_yield
+            )
+            .into());
+        }
+        let before = self.steps;
+        let event = self.step_once(backend)?;
+        if self.steps != before {
+            if event == StartupEvent::Yield {
+                self.since_yield = 0;
+            } else {
+                self.since_yield += 1;
+            }
+        }
+        Ok(event)
+    }
+    fn step_once(
+        &mut self,
+        backend: &mut impl PlatformBackend,
+    ) -> Result<StartupEvent, Box<dyn Error>> {
         if self.main_barrier {
             return Ok(StartupEvent::MainPreparedNeedsSnapshot);
-        }
-        if self.steps >= 1_000_000 {
-            return Err("startup research step budget exhausted".into());
         }
         if self.resume_run {
             self.timers.begin_run(std::mem::take(&mut self.frame_delta));

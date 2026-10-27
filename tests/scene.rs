@@ -238,6 +238,55 @@ fn coordinate_mode_two_preserves_parent_child_properties_and_system_results() {
 }
 
 #[test]
+fn camera_coordinate_mode_is_three_for_nonzero_values_and_two_for_zero() {
+    let mut code = vec![];
+    for (op, args) in [
+        (0x2020, vec![255]),
+        (0x2040, vec![255]),
+        (0x2045, vec![255, u32::MAX, 100, 200]),
+        (0x2022, vec![255, 767]),
+        (0x2050, vec![255, 767]),
+        (0x2048, vec![255, 767, 42]),
+    ] {
+        command(&mut code, op, &args);
+    }
+    // (child, value, mode): any signed negative child selects the parent.
+    let cases = [
+        (0x8000_0000, 1, 3),
+        (767, 0x8000_0000, 3),
+        (767, 0, 2),
+        (u32::MAX, 0, 2),
+        (u32::MAX, u32::MAX, 3),
+    ];
+    for (child, value, _) in cases {
+        command(&mut code, 0x204c, &[255, child, value]);
+    }
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    for _ in 0..6 {
+        assert!(next(&mut vm, &mut scene).unwrap());
+    }
+    vm.state_mut().set_system_integer(0, 0xdead_beef).unwrap();
+    let mut expected = scene.object(255).unwrap().clone();
+    for (child, _, mode) in cases {
+        assert!(next(&mut vm, &mut scene).unwrap());
+        let target = if child == 767 {
+            expected.children.get_mut(&767).unwrap()
+        } else {
+            &mut expected
+        };
+        target.draw.as_mut().unwrap().words[0] = mode;
+        assert_eq!(scene.object(255), Some(&expected));
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
+    assert_eq!(vm.pc(), code.len());
+    assert_eq!(vm.state().system_integer(0), Some(0xdead_beef));
+    // Camera projection is not presented yet.
+    assert!(cmvs_rs::scene_render::render(&scene, 1, 1).is_err());
+}
+
+#[test]
 fn projection_parameters_preserve_raw_float_bits_and_each_other() {
     let values = [
         70.0f32.to_bits(),
@@ -303,7 +352,7 @@ fn projection_parameters_preserve_raw_float_bits_and_each_other() {
 
 #[test]
 fn projection_setter_errors_preserve_targets_stack_and_pending_command() {
-    for op in [0x2071, 0x2072, 0x2073, 0x2074] {
+    for op in [0x204c, 0x2071, 0x2072, 0x2073, 0x2074] {
         for args in [
             vec![256, u32::MAX, 0],
             vec![u32::MAX, u32::MAX, 0],

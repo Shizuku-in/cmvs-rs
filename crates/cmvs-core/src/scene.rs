@@ -392,7 +392,7 @@ impl SceneHost {
         }
         if matches!(
             command,
-            0x22 | 0x40 | 0x42 | 0x50 | 0x44..=0x48 | 0x4b | 0x70..=0x74
+            0x22 | 0x40 | 0x42 | 0x50 | 0x44..=0x48 | 0x4b | 0x4c | 0x70..=0x74
         ) {
             return self.handle_object(vm, pc, command);
         }
@@ -661,7 +661,7 @@ impl SceneHost {
             0x22 | 0x42 | 0x50 => 2,
             0x44 => 6,
             0x45 | 0x46 => 4,
-            0x47 | 0x48 | 0x4b | 0x70..=0x74 => 3,
+            0x47 | 0x48 | 0x4b | 0x4c | 0x70..=0x74 => 3,
             _ => unreachable!(),
         };
         let mut args = Vec::with_capacity(count);
@@ -674,7 +674,8 @@ impl SceneHost {
             .get(&slot)
             .ok_or_else(|| fail("object slot does not exist"))?;
         let child = if command == 0x40
-            || (matches!(command, 0x42 | 0x44..=0x48 | 0x4b | 0x70..=0x74) && (args[1] as i32) < 0)
+            || (matches!(command, 0x42 | 0x44..=0x48 | 0x4b | 0x4c | 0x70..=0x74)
+                && (args[1] as i32) < 0)
         {
             None
         } else {
@@ -693,7 +694,9 @@ impl SceneHost {
                     .ok_or_else(|| fail("child object does not exist"))?,
                 None => parent,
             };
-            if matches!(command, 0x42 | 0x44..=0x48 | 0x4b | 0x70..=0x74) && object.draw.is_none() {
+            if matches!(command, 0x42 | 0x44..=0x48 | 0x4b | 0x4c | 0x70..=0x74)
+                && object.draw.is_none()
+            {
                 return Err(fail("object has no draw state"));
             }
         }
@@ -731,6 +734,13 @@ impl SceneHost {
                 // 0x2042 / 0x14006d130 -> 0x14003b190 -> 0x14001f550:
                 // set the existing draw state's coordinate mode without rebuilding it.
                 0x42 => object.draw.as_mut().expect("validated").words[0] = 2,
+                // 0x204c / 0x14006d1a0 -> 0x14003b1a0 -> 0x14001f560: mode 3 for a
+                // nonzero SP-12, else 2. 0x14003de80 projects mode 2 through camera 0
+                // (0x140027070) and mode 3 through camera 1 (0x140027080).
+                0x4c => {
+                    object.draw.as_mut().expect("validated").words[0] =
+                        if args[2] != 0 { 3 } else { 2 };
+                }
                 // 0x2070 / 0x14006f1a0 -> 0x14003b1b0 -> 0x14001f5a0:
                 // 0x2071 / 0x14006f240 -> 0x14003b1c0 -> 0x14001f5b0:
                 // movss preserves SP-12's bits in draw +60/+64, camera projection inputs.
