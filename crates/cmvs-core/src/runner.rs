@@ -178,6 +178,9 @@ impl<'a> Startup<'a> {
     pub fn scene(&self) -> &SceneHost {
         &self.scene
     }
+    pub fn camera(&self) -> &CameraHost {
+        &self.camera
+    }
     pub fn movie_frame(&self) -> Option<&crate::raster::RgbaImage> {
         self.movies.player().and_then(|m| m.image.as_ref())
     }
@@ -207,6 +210,7 @@ impl<'a> Startup<'a> {
         }
         self.scene.advance_frame(delta_ms);
         self.messages.advance_frame(delta_ms);
+        self.camera.advance_frame(delta_ms);
         self.frame_delta = delta_ms;
         Ok(())
     }
@@ -228,6 +232,7 @@ impl<'a> Startup<'a> {
         self.scene.advance_frame(delta_ms);
         self.messages.advance_frame(delta_ms);
         self.movies.advance(delta_ms);
+        self.camera.advance_frame(delta_ms);
         self.frame_delta = delta_ms;
     }
     pub fn timers(&self) -> &VmTimers {
@@ -333,6 +338,12 @@ impl<'a> Startup<'a> {
             None => self
                 .scene
                 .try_wait_change(&mut self.machine, gate, &mut self.input)?,
+        };
+        let waited = match waited {
+            Some(step) => Some(step),
+            None => self
+                .camera
+                .try_wait_move(&mut self.machine, gate, &mut self.input)?,
         };
         if let Some(step) = waited {
             self.resume_run = step == Step::Yield;

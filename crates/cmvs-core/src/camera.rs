@@ -4,11 +4,13 @@
 //! (0x140027070). Fields stay raw words named by offset. The original renderer uses them
 //! for coordinate modes 2/3 (0x140020340 -> 0x14004ef40), which our renderer rejects, so
 //! they do not affect the supported 2D output. 0x2056 queries projected integer coordinates
-//! without rendering. Eased moves (+84) are not modeled.
+//! without rendering. Camera 0 motion supports linear and quadratic ease-out branches.
 use crate::{
     bytecode::DecodeError,
     evaluate::{error, truncate},
-    machine::Machine,
+    fade::SkipGate,
+    input::ActionInput,
+    machine::{Machine, Step},
     vm::SystemResult,
 };
 
@@ -29,8 +31,8 @@ impl Default for Camera {
         let mut words = [0; CAMERA_WORDS];
         for (index, value) in [
             (2, 3.0f32),
-            (6, 9.0),
-            (7, 9.0),
+            (6, 10.0),
+            (7, 10.0),
             (8, 6.0),
             (9, 1024.0),
             (10, 612.0),
@@ -53,6 +55,67 @@ impl Camera {
     }
     fn set(&mut self, index: usize, value: f32) {
         self.words[index] = value.to_bits();
+    }
+
+    /// 0x14004f550: cancel, optionally copying the stored targets without quantization.
+    fn stop_move(&mut self, finish: bool) {
+        if self.words[MOVING] == 0 {
+            return;
+        }
+        self.words[MOVING] = 0;
+        if finish {
+            self.words.copy_within(23..26, 1);
+            for (bit, target, field) in [
+                (0x80000000, 26, 12),
+                (0x40000000, 27, 13),
+                (0x20000000, 28, 14),
+            ] {
+                if self.words[22] & bit != 0 {
+                    self.words[field] = self.words[target];
+                }
+            }
+        }
+    }
+
+    /// 0x14004fb60: unbounded frame delta (unlike object tracks), unsigned elapsed/time,
+    /// f32 linear arithmetic or f32 differences with f64 quadratic ease-out.
+    fn advance_move(&mut self, delta: u32) {
+        if self.words[MOVING] == 0 {
+            return;
+        }
+        self.words[36] = self.words[36].wrapping_add(delta);
+        let elapsed = self.words[36];
+        let duration = self.words[29];
+        if elapsed >= duration {
+            self.stop_move(true);
+            return;
+        }
+        let time = elapsed as f32;
+        let total = duration as f32;
+        for (axis, shift) in [(0, 16), (1, 8), (2, 0)] {
+            let target = self.float(23 + axis);
+            let base = self.float(30 + axis);
+            if target == base {
+                continue;
+            }
+            let value = match (self.words[22] >> shift) & 0xff {
+                0 => hundredths(((target - base) * time) / total) + base,
+                1 => {
+                    let remaining = 1.0 - f64::from(time) / f64::from(total);
+                    let value = ((remaining * remaining) * f64::from(target - base)) * 100.0;
+                    let integer = if value.is_nan()
+                        || !(-2_147_483_648.0..2_147_483_648.0).contains(&value)
+                    {
+                        i32::MIN
+                    } else {
+                        value as i32
+                    };
+                    target - (integer as f32 / 100.0)
+                }
+                _ => unreachable!("only validated camera move modes may start"),
+            };
+            self.set(1 + axis, value);
+        }
     }
 
     /// 0x14004ee00: mode 3 projects a point, other camera modes leave it unchanged.
@@ -102,11 +165,111 @@ impl CameraHost {
     pub fn camera(&self, index: usize) -> Option<&Camera> {
         self.cameras.get(index)
     }
-    /// Camera 0 +84: an eased move is running. No modeled command starts one.
+    /// Camera 0 +84: a move is running (0x206a).
     pub fn moving(&self) -> bool {
         self.cameras[0].words[MOVING] != 0
     }
+    /// Camera updates are the last part of 0x140015900, camera 0 then camera 1.
+    pub fn advance_frame(&mut self, delta: u32) {
+        for camera in &mut self.cameras {
+            camera.advance_move(delta);
+        }
+    }
+
+    /// 0x206b/0x206c/0x206d -> 0x14004f5b0/0x14004f680/0x14004f820.
+    /// Camera 0 only; first argument mode, last duration, intervening floats XZ/XYZ/Y.
+    fn start_move(
+        &mut self,
+        vm: &mut Machine<'_>,
+        pc: usize,
+        command: u16,
+    ) -> Result<bool, DecodeError> {
+        let fail = |why| error(pc, command + 0x2000, why);
+        let count = match command {
+            0x6b => 4,
+            0x6c => 5,
+            _ => 3,
+        };
+        let mut args = [0; 5];
+        for (i, arg) in args.iter_mut().take(count).enumerate() {
+            *arg = vm.stack().peek_u32((i + 1) * 4).map_err(|e| fail(e.0))?;
+        }
+        if args[0] > 1 {
+            return Err(fail("camera motion interpolation mode is not implemented"));
+        }
+        let mut target: [u32; 3] = self.cameras[0].words[1..4].try_into().expect("XYZ");
+        let axes: &[usize] = match command {
+            0x6b => &[0, 2],
+            0x6c => &[0, 1, 2],
+            _ => &[1],
+        };
+        for (i, &axis) in axes.iter().enumerate() {
+            target[axis] = hundredths(f32::from_bits(args[i + 1])).to_bits();
+        }
+        vm.complete_system(SystemResult(0x4000 | (count * 4) as u16))?;
+        let camera = &mut self.cameras[0];
+        camera.words[22] = if args[0] == 0 { 0 } else { 0x00010101 };
+        camera.words[23..26].copy_from_slice(&target);
+        camera.words.copy_within(12..15, 26);
+        camera.words[29] = args[count - 1];
+        camera.words.copy_within(1..4, 30);
+        camera.words.copy_within(12..15, 33);
+        camera.words[36] = 0;
+        camera.words[MOVING] = 1;
+        Ok(true)
+    }
+
+    /// 0x2069 / 0x14006fd90: wait on camera 0, using 0x4004/0xa000/0xc004.
+    pub fn try_wait_move(
+        &mut self,
+        vm: &mut Machine<'_>,
+        gate: SkipGate,
+        input: &mut ActionInput,
+    ) -> Result<Option<Step>, DecodeError> {
+        let Some((pc, 0x69)) = vm.pending_system() else {
+            return Ok(None);
+        };
+        let skippable = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x2069, e.0))? != 0;
+        if !self.moving() {
+            let step = vm.complete_system(SystemResult(0x4004))?;
+            vm.state_mut()
+                .set_system_integer(0, 0)
+                .expect("result 0 exists");
+            return Ok(Some(step));
+        }
+        let immediate = !gate.effects || input.skip_held() || gate.skip;
+        let released = skippable && !immediate && input.released(0);
+        if skippable && (immediate || released) {
+            let step = vm.complete_system(SystemResult(0xc004))?;
+            if released {
+                input.consume(0);
+            }
+            vm.state_mut()
+                .set_system_integer(0, 1)
+                .expect("result 0 exists");
+            self.cameras[0].stop_move(true);
+            return Ok(Some(step));
+        }
+        let step = vm.yield_pending_system()?;
+        vm.state_mut()
+            .set_system_integer(0, 0)
+            .expect("result 0 exists");
+        Ok(Some(step))
+    }
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
+        if let Some((pc, command @ 0x6b..=0x6d)) = vm.pending_system() {
+            return self.start_move(vm, pc, command);
+        }
+        if matches!(vm.pending_system(), Some((_, 0x6a))) {
+            // 0x206a / 0x14006fe80 -> camera 0 (0x140027070) -> 0x14004f5a0.
+            // No stack parameters: return only the boolean of camera +84.
+            let result = u32::from(self.moving());
+            vm.complete_system(SystemResult(0x4000))?;
+            vm.state_mut()
+                .set_system_integer(0, result)
+                .expect("result 0 exists");
+            return Ok(true);
+        }
         if let Some((pc, 0x56)) = vm.pending_system() {
             return self.project_query(vm, pc);
         }
@@ -128,11 +291,9 @@ impl CameraHost {
             args.push(vm.stack().peek_u32(i * 4).map_err(|e| fail(e.0))?);
         }
         if command == 0x68 {
-            // 0x2068 / 0x14006fd50 -> 0x14004f550 ends camera 0's move; nothing runs here.
-            if self.moving() {
-                return Err(fail("ending a camera move needs the move parameters"));
-            }
+            // 0x2068 / 0x14006fd50 -> 0x14004f550: zero cancels, nonzero finishes.
             vm.complete_system(SystemResult(0x4004))?;
+            self.cameras[0].stop_move(args[0] != 0);
             return Ok(true);
         }
         let camera = if indexed {
