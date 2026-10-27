@@ -574,8 +574,65 @@ fn static_scene_opacity_and_unsupported_blend_are_explicit() {
             assert_eq!(actual[c], ((u32::from(source[c]) * 128 + 127) / 255) as u8);
         }
     }
+    // Modes 0 and 3 are unused by the title and stay unverified.
+    for mode in [0, 3] {
+        let mut code = code.clone();
+        scene_command(&mut code, 0x204b, &[1, u32::MAX, mode]);
+        assert!(cmvs_rs::scene_render::render(&build_scene(&code), 2, 1).is_err());
+    }
+}
+
+/// The 2x1 opaque image in slot 1 with blend mode 2 and `opacity`, over `clear`.
+fn additive(clear: u32, opacity: u32) -> Vec<u8> {
+    let mut code = vec![];
+    scene_command(&mut code, 0x22cb, &[clear]);
+    code.extend(loads(1, &[0]));
+    scene_command(&mut code, 0x2040, &[1]);
+    scene_command(&mut code, 0x2044, &[1, u32::MAX, 0, 0, 2, 1]);
     scene_command(&mut code, 0x204b, &[1, u32::MAX, 2]);
-    assert!(cmvs_rs::scene_render::render(&build_scene(&code), 2, 1).is_err());
+    scene_command(&mut code, 0x2048, &[1, u32::MAX, opacity]);
+    code
+}
+
+#[test]
+fn additive_blend_adds_scaled_texels_and_opaque_images_at_full_opacity_replace() {
+    let source = opaque_pixels();
+    let frame =
+        cmvs_rs::scene_render::render(&build_scene(&additive(0x40_4040, 128)), 2, 1).unwrap();
+    for (actual, source) in frame
+        .pixels()
+        .chunks_exact(4)
+        .zip(source.pixels().chunks_exact(4))
+    {
+        for c in 0..3 {
+            let added = (u32::from(source[c]) * 128 + 127) / 255;
+            assert_eq!(u32::from(actual[c]), 0x40 + added);
+        }
+    }
+    // Without an alpha channel at full opacity 0x140020340 selects device mode 0.
+    let frame =
+        cmvs_rs::scene_render::render(&build_scene(&additive(0x40_4040, 255)), 2, 1).unwrap();
+    assert_eq!(frame.pixels(), source.pixels());
+    // The 8-bit target saturates.
+    let frame =
+        cmvs_rs::scene_render::render(&build_scene(&additive(0xfe_fefe, 254)), 2, 1).unwrap();
+    assert!(frame.pixels().iter().all(|&v| v == 255));
+    // An image with an alpha channel stays additive at full opacity.
+    let mut draw = cmvs_rs::scene::DrawState::default();
+    draw.words[1] = 2;
+    draw.words[4..6].copy_from_slice(&[1, 1]);
+    let glow = cmvs_rs::scene::SceneObject {
+        image: Some(ObjectImage {
+            name: vec![],
+            pixels: RgbaImage::new(1, 1, vec![10, 20, 30, 255]).unwrap(),
+            alpha: true,
+        }),
+        draw: Some(draw),
+        ..cmvs_rs::scene::SceneObject::default()
+    };
+    let scene = build_scene(&additive(0x40_4040, 0));
+    let frame = cmvs_rs::scene_render::render_with_objects(&scene, &[&glow], 1, 1).unwrap();
+    assert_eq!(&frame.pixels()[..3], &[0x4a, 0x54, 0x5e]);
 }
 
 #[test]

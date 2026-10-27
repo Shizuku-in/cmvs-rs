@@ -485,3 +485,18 @@ fn second_channel_rejects_shared_objects_and_replacements_that_leave_a_shader() 
         assert_eq!(vm.pending_system().map(|p| p.1), Some(op - 0x2000));
     }
 }
+
+#[test]
+fn render_rejects_masks_on_additive_objects() {
+    let mut code = vec![];
+    object(&mut code, 3);
+    command(&mut code, 0x204b, &[3, u32::MAX, 2]);
+    transition(&mut code, 3, 100, 1);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut scene = SceneHost::default();
+    run(&mut vm, &mut scene, 5);
+    assert!(scene_render::render(&scene, 2, 1).is_ok());
+    run(&mut vm, &mut scene, 1);
+    assert!(scene_render::render(&scene, 2, 1).is_err());
+}

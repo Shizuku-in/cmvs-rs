@@ -15,10 +15,49 @@ enum Layer<'a> {
         /// Top-left destination corner: position minus origin.
         corner: [i64; 2],
         alpha: u32,
-        /// The +4632 transition shading this slot object (not its children).
+        /// The mask transition shading this slot object (not its children).
         mask: Option<&'a MaskTransition>,
+        blend: Blend,
     },
     Fade(&'a crate::fade::Fade),
+}
+
+/// Device blend state chosen by 0x140020340 through 0x14001bc20.
+#[derive(Clone, Copy)]
+enum Blend {
+    /// Device mode 0: blending disabled, the texel color replaces the target.
+    Replace,
+    /// Device mode 1: SRCALPHA / INVSRCALPHA.
+    Alpha,
+    /// Device mode 2: SRCALPHA / ONE, saturated by the 8-bit target.
+    Additive,
+}
+
+/// Draw word 1 (0x204b): 1 alpha, 2 additive. 0x140020340 falls back to device mode 0 when
+/// the image has no alpha channel (image +1152) and the effective opacity is at least 255.
+/// Modes 0 and 3 (INVDESTCOLOR / ONE) are unused by this title and rejected by `check`.
+/// A masked object keeps the verified alpha path; other modes with a mask are not verified.
+fn blend(
+    words: &[u32; 22],
+    image: &ObjectImage,
+    alpha: i64,
+    masked: bool,
+) -> Result<Blend, FormatError> {
+    if masked {
+        if words[1] != 1 {
+            return Err(FormatError(
+                "mask transition on an additive object is not verified",
+            ));
+        }
+        return Ok(Blend::Alpha);
+    }
+    Ok(if !image.alpha && alpha >= 255 {
+        Blend::Replace
+    } else if words[1] == 2 {
+        Blend::Additive
+    } else {
+        Blend::Alpha
+    })
 }
 
 /// A main queue entry and the children 0x14003de80 attaches to its sublist (flag bit 1).
@@ -28,9 +67,13 @@ struct Entry<'a> {
     children: Vec<(f32, Layer<'a>)>,
 }
 
-/// Only crop, origin, position, order and opacity may differ from the constructor values.
+/// Only blend modes 1/2, crop, origin, position, order and opacity may differ from the
+/// constructor values.
 fn check(words: &[u32; 22]) -> Result<(), FormatError> {
     let mut allowed = crate::scene::DrawState::default().words;
+    if matches!(words[1], 1 | 2) {
+        allowed[1] = words[1];
+    }
     allowed[2..11].copy_from_slice(&words[2..11]);
     allowed[17] = words[17];
     if *words != allowed {
@@ -79,6 +122,7 @@ fn image_layer<'a>(
         ],
         alpha: alpha.min(255) as u32,
         mask,
+        blend: blend(words, image, alpha, mask.is_some())?,
     }))
 }
 
@@ -127,12 +171,14 @@ fn shifted(layer: Layer<'_>, by: [i64; 2]) -> Layer<'_> {
             corner,
             alpha,
             mask,
+            blend,
         } => Layer::Image {
             image,
             rect,
             corner: [corner[0] + by[0], corner[1] + by[1]],
             alpha,
             mask,
+            blend,
         },
         fade => fade,
     }
@@ -272,14 +318,15 @@ pub fn render_with_objects(
 }
 
 fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
-    let (image, [sx, sy, w, h], [left, top], opacity, mask) = match layer {
+    let (image, [sx, sy, w, h], [left, top], opacity, mask, blend) = match layer {
         Layer::Image {
             image,
             rect,
             corner,
             alpha,
             mask,
-        } => (image, rect, corner, alpha, mask),
+            blend,
+        } => (image, rect, corner, alpha, mask, blend),
         Layer::Fade(fade) => {
             let [b, g, r, _] = fade.color.to_le_bytes();
             let alpha = fade.opacity.clamp(0, 255) as u32;
@@ -310,9 +357,12 @@ fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
                 alpha = (alpha as f32 * coverage[usize::from(texture[src + 1])]).round() as u32;
             }
             for c in 0..3 {
-                pixels[dst + c] =
-                    ((u32::from(p[c]) * alpha + u32::from(pixels[dst + c]) * (255 - alpha) + 127)
-                        / 255) as u8;
+                let (source, target) = (u32::from(p[c]), u32::from(pixels[dst + c]));
+                pixels[dst + c] = match blend {
+                    Blend::Replace => p[c],
+                    Blend::Alpha => ((source * alpha + target * (255 - alpha) + 127) / 255) as u8,
+                    Blend::Additive => (target + (source * alpha + 127) / 255).min(255) as u8,
+                };
             }
         }
     }
