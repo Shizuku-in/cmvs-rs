@@ -219,7 +219,7 @@ impl MessageHost {
             Some((pc, 0xec)) => self.scale(vm, pc).map(|()| true),
             Some((pc, 0x141)) => self.destroy(vm, pc).map(|()| true),
             Some((pc, 0x15d)) => self.create(vm, pc).map(|()| true),
-            Some((pc, command @ (0x142..=0x149 | 0x15b))) => {
+            Some((pc, command @ (0x142..=0x149 | 0x14f | 0x15b))) => {
                 self.set(vm, pc, command).map(|()| true)
             }
             Some((pc, command @ (0x178 | 0x17f))) => self.object(vm, pc, command).map(|()| true),
@@ -914,6 +914,8 @@ impl MessageHost {
     /// - 0x2145: area = SP-8..SP-20 and cursor = SP-8/SP-12 (0x14005ab00).
     /// - 0x2146: +116/+120 for each of SP-8/SP-12 whose top byte is zero (0x14005ac00).
     /// - 0x2147: +144 (0x14002e850); 0x2148: +136/+140 (0x14005ac40); 0x2149: +132.
+    /// - 0x214f / 0x1400765e0 -> 0x14005db80 -> 0x14005ac20: cursor +156/+160 =
+    ///   SP-8/SP-12, unconditionally; area and window position stay unchanged. Pops 12.
     fn set(&mut self, vm: &mut Machine<'_>, pc: usize, command: u16) -> Result<(), DecodeError> {
         let op = command + 0x2000;
         let slot = window_slot(vm, pc, op)?;
@@ -926,7 +928,7 @@ impl MessageHost {
         };
         let count = match command {
             0x145 => 4,
-            0x144 | 0x146 | 0x148 => 2,
+            0x144 | 0x146 | 0x148 | 0x14f => 2,
             _ => 1,
         };
         let mut args = [0i32; 4];
@@ -973,6 +975,7 @@ impl MessageHost {
             0x147 => text.char_delay = a,
             0x148 => text.reveal = [a, b],
             0x149 => text.decoration = a,
+            0x14f => text.cursor = [a, b],
             _ => {}
         }
         Ok(())

@@ -997,7 +997,7 @@ fn switch_state_one_position_and_text_clearing() {
     create(&mut code, 0, 7, [0, 540, 1280, 180]);
     call(&mut code, 0x215a, &[u32::MAX, 40, 0]);
     call(&mut code, 0x2145, &[100, 900, 5, 6, 0]);
-    // No modeled command moves the pen off the area origin yet, so clearing keeps it there.
+    call(&mut code, 0x214f, &[u32::MAX, 12, 0]);
     call(&mut code, 0x214a, &[0]);
     let program = script(&code);
     let mut vm = Machine::new(&program).unwrap();
@@ -1009,6 +1009,8 @@ fn switch_state_one_position_and_text_clearing() {
     run(&mut vm, &mut messages, 1);
     let before = messages.text(7).unwrap().clone();
     assert_eq!(before.cursor, [6, 5]);
+    run(&mut vm, &mut messages, 1);
+    assert_eq!(messages.text(7).unwrap().cursor, [12, -1]);
     run(&mut vm, &mut messages, 1);
     assert_eq!(messages.text(7), Some(&before));
     assert_eq!(vm.stack().len_bytes(), 0);
@@ -1029,6 +1031,78 @@ fn switch_state_one_position_and_text_clearing() {
         assert!(messages.try_handle(&mut vm).is_err());
         assert_eq!(vm.pending_system().map(|p| p.1), Some(command - 0x2000));
         assert_eq!(vm.stack().len_bytes(), bytes);
+    }
+}
+
+#[test]
+fn window_cursor_is_absolute_signed_unclamped_and_isolated_from_layout() {
+    let points = [[12, 34], [u32::MAX, 0x8000_0000], [9000, 8000], [0, 0]];
+    let mut code = vec![];
+    create(&mut code, 0, 7, [30, 540, 1280, 180]);
+    create(&mut code, 1, 2, [50, 60, 100, 20]);
+    for [x, y] in points {
+        call(&mut code, 0x214f, &[y, x, 0]);
+    }
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 2);
+    let window = messages.window(0).cloned();
+    let other = messages.text(2).cloned();
+    let initial = messages.text(7).unwrap().clone();
+    vm.state_mut().set_system_integer(0, 91).unwrap();
+    for [x, y] in points {
+        let mut expected = initial.clone();
+        expected.cursor = [x as i32, y as i32];
+        pending(&mut vm);
+        let pc = vm.pc();
+        assert!(messages.try_handle(&mut vm).unwrap());
+        assert_eq!(vm.pc(), pc + 2);
+        assert_eq!(vm.pending_system(), None);
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.state().system_integer(0), Some(91));
+        assert_eq!(messages.text(7), Some(&expected));
+        assert_eq!(messages.window(0), window.as_ref());
+        assert_eq!(messages.text(2), other.as_ref());
+    }
+}
+
+#[test]
+fn window_cursor_errors_keep_the_pending_command_and_all_arguments() {
+    for (exists, words) in [
+        (false, vec![5, 4, 0]),
+        (true, vec![5, 4, 8]),
+        (true, vec![5, 4, u32::MAX]),
+        (true, vec![5, 0]),
+        (true, vec![0]),
+        (true, vec![]),
+    ] {
+        let mut code = vec![];
+        if exists {
+            create(&mut code, 0, 7, [0, 0, 100, 20]);
+        }
+        call(&mut code, 0x214f, &words);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, usize::from(exists));
+        vm.state_mut().set_system_integer(0, 91).unwrap();
+        pending(&mut vm);
+        let pc = vm.pc();
+        let window = messages.window(0).cloned();
+        let text = messages.text(7).cloned();
+        for _ in 0..2 {
+            assert!(messages.try_handle(&mut vm).is_err());
+            assert_eq!(vm.pc(), pc);
+            assert_eq!(vm.pending_system(), Some((pc, 0x14f)));
+            assert_eq!(vm.stack().len_bytes(), words.len() * 4);
+            for (i, value) in words.iter().rev().enumerate() {
+                assert_eq!(vm.stack().peek_u32(4 * (i + 1)).unwrap(), *value);
+            }
+            assert_eq!(messages.window(0), window.as_ref());
+            assert_eq!(messages.text(7), text.as_ref());
+            assert_eq!(vm.state().system_integer(0), Some(91));
+        }
     }
 }
 
