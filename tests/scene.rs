@@ -262,7 +262,7 @@ fn projection_parameters_preserve_raw_float_bits_and_each_other() {
         command(&mut code, op, &args);
     }
     for value in values {
-        for op in [0x2070, 0x2071, 0x2072, 0x2073] {
+        for op in [0x2070, 0x2071, 0x2072, 0x2073, 0x2074] {
             command(&mut code, op, &[255, 0x8000_0000, value]);
             command(&mut code, op, &[255, 767, value]);
         }
@@ -277,7 +277,7 @@ fn projection_parameters_preserve_raw_float_bits_and_each_other() {
     vm.state_mut().set_system_integer(4, 456).unwrap();
     let mut expected = scene.object(255).unwrap().clone();
     for value in values {
-        for index in [15, 16, 11, 12] {
+        for index in [15, 16, 11, 12, 13] {
             assert!(next(&mut vm, &mut scene).unwrap());
             expected.draw.as_mut().unwrap().words[index] = value;
             assert_eq!(scene.object(255), Some(&expected));
@@ -303,7 +303,7 @@ fn projection_parameters_preserve_raw_float_bits_and_each_other() {
 
 #[test]
 fn projection_setter_errors_preserve_targets_stack_and_pending_command() {
-    for op in [0x2071, 0x2072, 0x2073] {
+    for op in [0x2071, 0x2072, 0x2073, 0x2074] {
         for args in [
             vec![256, u32::MAX, 0],
             vec![u32::MAX, u32::MAX, 0],

@@ -259,7 +259,7 @@ impl OpacityTrack {
 
 /// Draw fields retained as original words (offset / 4). Unimplemented setters stay pending.
 /// 0=coordinate mode, 1=blend, 2..6=source x/y/width/height, 6..8=origin,
-/// 8..10=position, 10=order, 11/12=world x/y float bits (0x2072/0x2073),
+/// 8..10=position, 10=order, 11..14=world x/y/z float bits (0x2072..0x2074),
 /// 15/16=camera projection parameter bits (0x2070/0x2071),
 /// 17=opacity, 18/19=scale bits, 20=rotation, 21=fade factor.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -363,7 +363,7 @@ impl SceneHost {
         };
         if matches!(
             command,
-            0x22 | 0x40 | 0x42 | 0x50 | 0x44..=0x48 | 0x4b | 0x70..=0x73
+            0x22 | 0x40 | 0x42 | 0x50 | 0x44..=0x48 | 0x4b | 0x70..=0x74
         ) {
             return self.handle_object(vm, pc, command);
         }
@@ -632,7 +632,7 @@ impl SceneHost {
             0x22 | 0x42 | 0x50 => 2,
             0x44 => 6,
             0x45 | 0x46 => 4,
-            0x47 | 0x48 | 0x4b | 0x70..=0x73 => 3,
+            0x47 | 0x48 | 0x4b | 0x70..=0x74 => 3,
             _ => unreachable!(),
         };
         let mut args = Vec::with_capacity(count);
@@ -645,7 +645,7 @@ impl SceneHost {
             .get(&slot)
             .ok_or_else(|| fail("object slot does not exist"))?;
         let child = if command == 0x40
-            || (matches!(command, 0x42 | 0x44..=0x48 | 0x4b | 0x70..=0x73) && (args[1] as i32) < 0)
+            || (matches!(command, 0x42 | 0x44..=0x48 | 0x4b | 0x70..=0x74) && (args[1] as i32) < 0)
         {
             None
         } else {
@@ -664,7 +664,7 @@ impl SceneHost {
                     .ok_or_else(|| fail("child object does not exist"))?,
                 None => parent,
             };
-            if matches!(command, 0x42 | 0x44..=0x48 | 0x4b | 0x70..=0x73) && object.draw.is_none() {
+            if matches!(command, 0x42 | 0x44..=0x48 | 0x4b | 0x70..=0x74) && object.draw.is_none() {
                 return Err(fail("object has no draw state"));
             }
         }
@@ -711,8 +711,9 @@ impl SceneHost {
                 }
                 // 0x2072 / 0x14006f2e0 -> 0x14003b1d0 -> 0x14004ede0:
                 // 0x2073 / 0x14006f380 -> 0x14003b1e0 -> 0x14001f570:
-                // movss preserves SP-12's bits in draw +44/+48 (world x/y).
-                0x72..=0x73 => {
+                // 0x2074 / 0x14006f420 -> 0x14003b1f0 -> 0x14001f580:
+                // movss preserves SP-12's bits in draw +44/+48/+52 (world x/y/z).
+                0x72..=0x74 => {
                     let index = 11 + usize::from(command - 0x72);
                     object.draw.as_mut().expect("validated").words[index] = args[2];
                 }
