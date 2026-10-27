@@ -2606,3 +2606,25 @@ fn window_scale_rejects_bad_targets_and_truncated_arguments_without_mutation() {
         assert_eq!(messages.text(7), text.as_ref());
     }
 }
+
+#[test]
+fn window_image_release_rejects_missing_slots_and_short_stacks_without_mutation() {
+    for args in [vec![], vec![8], vec![u32::MAX], vec![1]] {
+        let mut code = vec![];
+        create(&mut code, 0, 0, [10, 20, 100, 40]);
+        call(&mut code, 0x2171, &args);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 1);
+        let before = messages.window(0).unwrap().clone();
+        let text = messages.text(0).unwrap().clone();
+        pending(&mut vm);
+        let pc = vm.pc();
+        assert!(messages.try_handle(&mut vm).is_err());
+        assert_eq!(vm.pending_system(), Some((pc, 0x171)));
+        assert_eq!(vm.stack().len_bytes(), args.len() * 4);
+        assert_eq!(messages.window(0), Some(&before));
+        assert_eq!(messages.text(0), Some(&text));
+    }
+}

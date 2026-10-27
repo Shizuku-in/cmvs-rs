@@ -7,7 +7,7 @@
 //! object's pointer. 0x215d creates windows and 0x2141 destroys them. 0x2140 (0x140075a50)
 //! differs from 0x215d only in taking the logical size from the device, which is not
 //! modeled, so it stays unhandled. 0x215b and 0x2142..0x2149 set window and text object
-//! fields; 0x2170, 0x2178, 0x2179, 0x217a, 0x217f and 0x2180..0x2185 drive the window's own
+//! fields; 0x2170/0x2171, 0x2178, 0x2179, 0x217a, 0x217f and 0x2180..0x2185 drive the window's own
 //! scene object; 0x2190..0x2192 fill its 32 button records and 0x2150 moves the window;
 //! 0x21cf/0x21d0 build frame animations. 0x2114..0x2117 and 0x211e address text objects
 //! directly. Glyphs, fonts and drawing are not modeled.
@@ -246,6 +246,7 @@ impl MessageHost {
                 self.set(vm, pc, command).map(|()| true)
             }
             Some((pc, command @ (0x178 | 0x17f))) => self.object(vm, pc, command).map(|()| true),
+            Some((pc, 0x171)) => self.release_image(vm, pc).map(|()| true),
             Some((pc, 0x179)) => self.destroy_child(vm, pc).map(|()| true),
             Some((pc, command @ (0x17a | 0x17c | 0x180 | 0x182..=0x186))) => {
                 self.draw(vm, pc, command).map(|()| true)
@@ -954,6 +955,22 @@ impl MessageHost {
         }
         Ok(())
     }
+    /// 0x2171 / 0x140076fd0 -> 0x14003aa30: releases only +6176 on the
+    /// window's +2520 object. Children, draw state, text and visibility are retained.
+    fn release_image(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
+        let slot = window_slot(vm, pc, 0x2171)?;
+        if self.windows[slot].is_none() {
+            return Err(error(
+                pc,
+                0x2171,
+                "message window slot without a window sets an unmodeled flag",
+            ));
+        }
+        vm.complete_system(SystemResult(0x4004))?;
+        self.windows[slot].as_mut().expect("validated").object.image = None;
+        Ok(())
+    }
+
     /// 0x2170 / 0x140076f00: SP-4 window slot, SP-8 file name. Releases the +2520 object's
     /// image (0x14003aa30) and reloads it with 0x14003bb10 as 0x2030 does, without a system
     /// result or the +12032 hook; returns 0x4008. A quiet decode failure only sets +12056

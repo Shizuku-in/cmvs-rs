@@ -1437,3 +1437,44 @@ fn image_sequence_without_resource_context_reports_error_and_keeps_entry() {
     assert_eq!(sequence.header().index, 0);
     assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x284)));
 }
+
+#[test]
+fn releasing_window_image_keeps_children_draw_text_visibility_and_stack_below_the_slot() {
+    let mut code = window_load(0);
+    scene_command(&mut code, 0x2180, &[7, u32::MAX]);
+    scene_command(&mut code, 0x214e, &[7, 1]);
+    scene_command(&mut code, 0x2178, &[7, 3]);
+    scene_command(&mut code, 0x2180, &[7, 3]);
+    scene_command(&mut code, 0x2183, &[7, 3, 12, 34]);
+    // A stack value below the one-word argument must survive both releases.
+    push(&mut code, 0x12345678);
+    scene_command(&mut code, 0x2171, &[7]);
+    scene_command(&mut code, 0x2171, &[7]);
+    let program = script(&code, b"win.pb3\0");
+    let mut vm = Machine::new(&program).unwrap();
+    let mut messages = MessageHost::default();
+    let mut files = Files(BTreeMap::from([(b"win.pb3".to_vec(), opaque())]));
+    run_to_system(&mut vm);
+    messages.try_handle(&mut vm).unwrap();
+    run_to_system(&mut vm);
+    messages.try_handle_image(&mut vm, &mut files).unwrap();
+    for _ in 0..5 {
+        run_to_system(&mut vm);
+        messages.try_handle(&mut vm).unwrap();
+    }
+    let mut expected = messages.window(7).unwrap().clone();
+    assert!(expected.object.image.take().is_some());
+    let text = messages.text(10).unwrap().clone();
+    vm.state_mut().set_system_integer(0, 901).unwrap();
+    for _ in 0..2 {
+        run_to_system(&mut vm);
+        let pc = vm.pc();
+        messages.try_handle(&mut vm).unwrap();
+        assert_eq!(vm.pc(), pc + 2);
+        assert_eq!(messages.window(7), Some(&expected));
+        assert_eq!(messages.text(10), Some(&text));
+        assert_eq!(vm.stack().len_bytes(), 4);
+        assert_eq!(vm.stack().peek_u32(4).unwrap(), 0x12345678);
+        assert_eq!(vm.state().system_integer(0), Some(901));
+    }
+}
