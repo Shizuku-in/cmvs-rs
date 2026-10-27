@@ -93,6 +93,8 @@ pub struct LineBreakRules {
 /// 0x14005bc90. Unlisted constructor/0x14005d3b0 defaults are documented in vm-semantics.md.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextObject {
+    /// Uniform scale of the text's scene object, kept as f32 bits (0x20ec).
+    pub scale_bits: u32,
     /// Configuration words 4/5 (+552/+556): the script-space size that 0x14005aac0 divides
     /// by when scaling positions to the device size in words 2/3.
     pub logical_size: [i32; 2],
@@ -211,6 +213,7 @@ impl MessageHost {
     }
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
         match vm.pending_system() {
+            Some((pc, 0xec)) => self.scale(vm, pc).map(|()| true),
             Some((pc, 0x141)) => self.destroy(vm, pc).map(|()| true),
             Some((pc, 0x15d)) => self.create(vm, pc).map(|()| true),
             Some((pc, command @ (0x142..=0x149 | 0x15b))) => {
@@ -582,6 +585,48 @@ impl MessageHost {
             let text = self.texts[text].as_mut().expect("checked above");
             text.cursor = [text.area[0], text.area[1]];
         }
+        Ok(())
+    }
+    /// 0x140076ea0 -> 0x14005ddc0: SP-4 slot, SP-8 f32 scale. Both axes of
+    /// the window and text draw state receive it; [0.95, 1.05] snaps to 1.0.
+    fn scale(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
+        let slot = window_slot(vm, pc, 0x20ec)?;
+        let raw = vm.stack().peek_u32(8).map_err(|e| error(pc, 0x20ec, e.0))?;
+        let window = self.windows[slot].as_ref().ok_or_else(|| {
+            error(
+                pc,
+                0x20ec,
+                "message window slot without a window sets an unmodeled flag",
+            )
+        })?;
+        if window.object.draw.is_none() {
+            return Err(error(
+                pc,
+                0x20ec,
+                "window scale without draw state dereferences null",
+            ));
+        }
+        let text = window.text;
+        if self.texts[text].is_none() {
+            return Err(error(pc, 0x20ec, "message window without its text object"));
+        }
+        let scale = f32::from_bits(raw);
+        let bits = if (0.95..=1.05).contains(&scale) {
+            1.0f32.to_bits()
+        } else {
+            raw
+        };
+        vm.complete_system(SystemResult(0x4008))?;
+        self.windows[slot]
+            .as_mut()
+            .expect("checked above")
+            .object
+            .draw
+            .as_mut()
+            .expect("checked above")
+            .words[18..20]
+            .fill(bits);
+        self.texts[text].as_mut().expect("checked above").scale_bits = bits;
         Ok(())
     }
     /// 0x214e / 0x140076540: SP-4 window slot, SP-8 shown (as bool). Only when it differs
@@ -964,6 +1009,7 @@ impl MessageHost {
         self.fonts[text] = true;
         // 0x14005d3b0's setter calls override the constructor values (e.g. +144 30 -> 100).
         self.texts[text] = Some(TextObject {
+            scale_bits: 1.0f32.to_bits(),
             logical_size,
             position,
             area: [0, 0, size[0], size[1]],

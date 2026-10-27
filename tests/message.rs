@@ -55,6 +55,7 @@ fn create(code: &mut Vec<u8>, slot: u32, text: u32, rect: [u32; 4]) {
 /// The text object 0x215d leaves after 0x14005d3b0, for a 1280x720 logical size.
 fn created_text(position: [i32; 2], size: [u32; 2]) -> TextObject {
     TextObject {
+        scale_bits: 1.0f32.to_bits(),
         logical_size: [1280, 720],
         position,
         area: [0, 0, size[0] as i32, size[1] as i32],
@@ -1176,5 +1177,81 @@ fn pointer_hit_test_is_relative_to_the_window_and_half_open() {
         assert!(messages.try_handle_pointer(&mut vm, &input).is_err());
         assert_eq!(vm.pending_system().map(|p| p.1), Some(0x15f));
         assert_eq!(vm.stack().len_bytes(), bytes);
+    }
+}
+
+#[test]
+fn window_scale_snaps_near_one_and_preserves_other_float_bits() {
+    let values = [
+        0.95f32.to_bits(),
+        1.05f32.to_bits(),
+        1.0f32.to_bits(),
+        0.95f32.to_bits() - 1,
+        1.05f32.to_bits() + 1,
+        2.0f32.to_bits(),
+        (-0.0f32).to_bits(),
+        (-2.0f32).to_bits(),
+        f32::INFINITY.to_bits(),
+        0x7fc01234,
+    ];
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 540, 1280, 180]);
+    call(&mut code, 0x2180, &[u32::MAX, 0]);
+    for raw in values {
+        call(&mut code, 0x20ec, &[raw, 0]);
+    }
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    vm.state_mut().set_system_integer(0, 11).unwrap();
+    run(&mut vm, &mut messages, 2);
+    let initial = messages.window(0).unwrap().clone();
+    for (i, raw) in values.into_iter().enumerate() {
+        run(&mut vm, &mut messages, 1);
+        let expected = if i < 3 { 1.0f32.to_bits() } else { raw };
+        let mut window = initial.clone();
+        window.object.draw.as_mut().unwrap().words[18..20].fill(expected);
+        assert_eq!(messages.window(0), Some(&window));
+        assert_eq!(messages.text(7).unwrap().scale_bits, expected);
+        assert_eq!(vm.state().system_integer(0), Some(11));
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
+}
+
+#[test]
+fn window_scale_rejects_bad_targets_and_truncated_arguments_without_mutation() {
+    for (create_window, draw, words) in [
+        (false, false, vec![1.0f32.to_bits(), 0]),
+        (true, false, vec![1.0f32.to_bits(), 0]),
+        (true, true, vec![1.0f32.to_bits(), 8]),
+        (true, true, vec![1.0f32.to_bits(), u32::MAX]),
+        (true, true, vec![0]),
+    ] {
+        let mut code = vec![];
+        if create_window {
+            create(&mut code, 0, 7, [0, 0, 100, 100]);
+        }
+        if draw {
+            call(&mut code, 0x2180, &[u32::MAX, 0]);
+        }
+        call(&mut code, 0x20ec, &words);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(
+            &mut vm,
+            &mut messages,
+            usize::from(create_window) + usize::from(draw),
+        );
+        pending(&mut vm);
+        let pc = vm.pc();
+        let stack = vm.stack().len_bytes();
+        let window = messages.window(0).cloned();
+        let text = messages.text(7).cloned();
+        assert!(messages.try_handle(&mut vm).is_err());
+        assert_eq!(vm.pending_system(), Some((pc, 0xec)));
+        assert_eq!(vm.stack().len_bytes(), stack);
+        assert_eq!(messages.window(0), window.as_ref());
+        assert_eq!(messages.text(7), text.as_ref());
     }
 }
