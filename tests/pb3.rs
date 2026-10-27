@@ -201,12 +201,12 @@ fn truncation_bad_dimensions_offsets_and_unsupported_codecs_fail() {
     let type3 = mutate(raw.clone(), 28, 3 | (2 << 16));
     assert_eq!(pb3::Header::parse(&type3).unwrap().kind, 3);
     assert!(pb3::decode(&type3).unwrap_err().0.contains("JBP1"));
-    let type5 = mutate(raw.clone(), 28, 5 | (2 << 16));
+    let type4 = mutate(raw.clone(), 28, 4 | (2 << 16));
     assert!(
-        pb3::decode(&type5)
+        pb3::decode(&type4)
             .unwrap_err()
             .0
-            .contains("only types 1 and 3")
+            .contains("not implemented")
     );
     assert!(pb3::decode(&mutate(raw, 34, 8)).is_err());
 }

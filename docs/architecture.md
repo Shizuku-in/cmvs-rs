@@ -247,3 +247,5 @@ BGM 与 SE 共用 `AudioHost`/`AudioBackend`：`BgmState` 保存 +4464 对象的
 0x2072..0x2074 的浮点 XYZ setter 已齐全，原始位保存到 DrawState::words[11..14]；与 +60/+64 投影参数的相互保留通过五字段交错测试验证。真实剧情 VM 最新停点为 sn1001.ps3 / 0x21b9c / 0x203f。相机投影和模式 2 光栅化仍未接入，不将世界坐标当作普通二维位置，证据见 vm-semantics.md。
 
 图像专用 `image/cache.rs` 保存 0x203f 的下一次读取提示与有界原始字节 LRU；ImageArchives 持有状态，Registered 视图只借用，ImageSource 未实现缓存能力时显式返回错误。它与 CPZ 索引缓存、已解码 ObjectImage 和音频资源族分开；32 MiB/1024 项为本轮留存策略，原版启动容量配置未接入。真实剧情现停于 sn1001.ps3 / 0x200d4 的 0x2030：PB3 type 6 需要带参考图像源的上下文解码，不能继续只靠无上下文的 decode(bytes)；递归加载的缓存提交顺序仍待核对。模式 2 绘制仍未实现，见 vm-semantics.md。
+
+图像层新增 type 5 通道差分和 type 6 引用替换解码。pb3::decode 保持无 I/O；type 6 由 decode_with_base 或 image::load 供给参考图像。后者经同一 ImageSource/注册源递归解析，供场景/消息窗口/遮罩共用。ImageRead 延迟 token 保持底图先于外层原始字节提交；直接 raw read 仍在返回前提交。参考链限制循环、16 个活动文件、累计原始/RGBA 声明长度 64 MiB；失败保留 VM 和旧图像。独立 CLI/单文件预览仍要求参考上下文，不猜路径。模式 2 渲染未实现。证据及对照见 pb3-format.md。

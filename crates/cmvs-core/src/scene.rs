@@ -801,15 +801,7 @@ pub(crate) fn load_image(
     if name.len() >= 64 {
         return Err(error(pc, op, "image name exceeds the original 64-byte buffers").into());
     }
-    let bytes = images.read(&name)?.ok_or_else(|| {
-        error(
-            pc,
-            op,
-            "image not found in any 0x2011 entry; the original shows a modal MessageBox",
-        )
-    })?;
-    let decoded =
-        image::decode(&bytes).map_err(|e| format!("0x{op:04x} {}: {e}", name.escape_ascii()))?;
+    let decoded = image::load(images, &name).map_err(|e| format!("PC=0x{pc:x} 0x{op:04x}: {e}"))?;
     Ok(decoded.map(|decoded| ObjectImage {
         name,
         pixels: decoded.pixels,

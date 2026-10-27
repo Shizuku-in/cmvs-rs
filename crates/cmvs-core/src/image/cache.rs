@@ -1,5 +1,6 @@
 //! Raw image bytes: next-read hint (0x140035a90/0x140036820) and LRU
 //! (0x140037370/0x140037470). This is separate from CPZ index and decoded-image storage.
+use super::ImageRead;
 use crate::{cpz::lookup_key, resources::ResourceSource};
 use std::{collections::VecDeque, error::Error};
 
@@ -32,20 +33,58 @@ impl Cache {
         name: &[u8],
         source: &mut impl ResourceSource,
     ) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+        let Some(read) = self.begin(name, source)? else {
+            return Ok(None);
+        };
+        if read.cache_key.is_none() {
+            return Ok(Some(read.bytes));
+        }
+        let bytes = read.bytes.clone();
+        self.finish(read);
+        Ok(Some(bytes))
+    }
+    pub(super) fn begin(
+        &mut self,
+        name: &[u8],
+        source: &mut impl ResourceSource,
+    ) -> Result<Option<ImageRead>, Box<dyn Error>> {
         // The original resets +24792 before lookup, including missing/failed reads.
         if !std::mem::take(&mut self.armed) {
-            return source.read(name);
+            return Ok(source.read(name)?.map(|bytes| ImageRead {
+                bytes,
+                cache_key: None,
+            }));
         }
         let key = lookup_key(name)?;
         if let Some(index) = self.entries.iter().position(|(name, _)| *name == key) {
             let entry = self.entries.remove(index).expect("found above");
             let result = entry.1.clone();
             self.entries.push_front(entry);
-            return Ok(Some(result));
+            return Ok(Some(ImageRead {
+                bytes: result,
+                cache_key: None,
+            }));
         }
         let Some(bytes) = source.read(name)? else {
             return Ok(None);
         };
+        Ok(Some(ImageRead {
+            bytes,
+            cache_key: Some(key),
+        }))
+    }
+    pub(super) fn finish(&mut self, read: ImageRead) {
+        let ImageRead {
+            bytes,
+            cache_key: Some(key),
+        } = read
+        else {
+            return;
+        };
+        // Recursive reads may have inserted the same key in the meantime.
+        if let Some(index) = self.entries.iter().position(|(name, _)| *name == key) {
+            self.bytes -= self.entries.remove(index).expect("found above").1.len();
+        }
         // An oversized insertion evicts all entries, including itself, in the original.
         // Keep ownership of the returned bytes and never reproduce a freed buffer access.
         if bytes.len() > self.limit {
@@ -53,12 +92,11 @@ impl Cache {
             self.bytes = 0;
         } else {
             self.bytes += bytes.len();
-            self.entries.push_front((key, bytes.clone()));
+            self.entries.push_front((key, bytes));
             while self.bytes > self.limit || self.entries.len() > self.max_entries {
                 self.bytes -= self.entries.pop_back().expect("over limit").1.len();
             }
         }
-        Ok(Some(bytes))
     }
 }
 
@@ -127,5 +165,29 @@ mod tests {
         assert_eq!(read(&mut cache, &mut source, b"a"), None);
         assert_eq!(read(&mut cache, &mut source, b"\x81A"), Some(vec![]));
         assert_eq!(read(&mut cache, &mut source, b"\x81a"), Some(vec![]));
+    }
+    #[test]
+    fn decode_reads_insert_in_recursive_completion_order() {
+        let mut cache = Cache {
+            max_entries: 2,
+            ..Cache::default()
+        };
+        let mut source = Files::default();
+        for name in [b"outer", b"inner"] {
+            source.0.insert(name.to_vec(), vec![1]);
+        }
+        cache.arm();
+        let outer = cache.begin(b"outer", &mut source).unwrap().unwrap();
+        cache.arm();
+        let inner = cache.begin(b"inner", &mut source).unwrap().unwrap();
+        assert!(cache.entries.is_empty());
+        cache.finish(inner);
+        cache.finish(outer);
+        assert_eq!(cache.entries.front().unwrap().0, b"outer");
+        source.0.insert(b"third".to_vec(), vec![3]);
+        read(&mut cache, &mut source, b"third");
+        source.0.clear();
+        assert_eq!(read(&mut cache, &mut source, b"inner"), None);
+        assert_eq!(read(&mut cache, &mut source, b"outer"), Some(vec![1]));
     }
 }

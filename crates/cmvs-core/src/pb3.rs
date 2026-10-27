@@ -1,4 +1,4 @@
-//! PB3B header, the type-1 tiled channel decoder and the type-3 JBP1 layer. Other codecs are
+//! PB3B header, types 1/3/5 and contextual type-6 replacement blocks. Other codecs are
 //! explicitly unsupported. Format reference: pinned MIT CMVS-Engine PB3B.cpp/CPB.cpp/JBP1.cpp;
 //! checked against current IDA.
 use crate::{FormatError, MAX_PAYLOAD, jbp1, raster::RgbaImage};
@@ -26,14 +26,7 @@ pub struct Header {
 }
 impl Header {
     pub fn parse(raw: &[u8]) -> Result<Self, FormatError> {
-        if raw.len() < 99 || raw.len() > MAX_PAYLOAD || &raw[..4] != b"PB3B" {
-            return Err(FormatError("expected bounded PB3B header and key data"));
-        }
-        let mut header = raw[..52].to_vec();
-        for i in 0..44 {
-            header[8 + i] =
-                (header[8 + i] ^ raw[raw.len() - 3 + i % 2]).wrapping_sub(raw[raw.len() - 47 + i]);
-        }
+        let header = plain_header(raw)?;
         let h = Self {
             kind: u16_at(&header, 28)?,
             width: u16_at(&header, 30)?,
@@ -50,6 +43,18 @@ impl Header {
         }
         Ok(h)
     }
+}
+
+fn plain_header(raw: &[u8]) -> Result<Vec<u8>, FormatError> {
+    if raw.len() < 99 || raw.len() > MAX_PAYLOAD || &raw[..4] != b"PB3B" {
+        return Err(FormatError("expected bounded PB3B header and key data"));
+    }
+    let mut header = raw[..52].to_vec();
+    for i in 0..44 {
+        header[8 + i] =
+            (header[8 + i] ^ raw[raw.len() - 3 + i % 2]).wrapping_sub(raw[raw.len() - 47 + i]);
+    }
+    Ok(header)
 }
 
 fn chunks(raw: &[u8], base: u32, count: usize) -> Result<Vec<Range<usize>>, FormatError> {
@@ -74,6 +79,23 @@ fn chunks(raw: &[u8], base: u32, count: usize) -> Result<Vec<Range<usize>>, Form
 }
 
 fn split_lzss(flags: &[u8], data: &[u8], expected: usize) -> Result<Vec<u8>, FormatError> {
+    let (output, tokens, bytes) = lzss_prefix(flags, data, expected)?;
+    if bytes != data.len() || tokens.div_ceil(8) != flags.len() {
+        return Err(FormatError("unused PB3 LZSS stream bytes"));
+    }
+    Ok(output)
+}
+
+// Types 5/6 store starting offsets rather than exact stream lengths. The trailing
+// header-key sample may also be compressed data; stop at the declared output length.
+fn lzss_prefix(
+    flags: &[u8],
+    data: &[u8],
+    expected: usize,
+) -> Result<(Vec<u8>, usize, usize), FormatError> {
+    if expected > MAX_PAYLOAD {
+        return Err(FormatError("PB3 LZSS output exceeds research bounds"));
+    }
     let mut ring = [0u8; 2048];
     let mut write = 2014;
     let mut at = 0;
@@ -109,10 +131,131 @@ fn split_lzss(flags: &[u8], data: &[u8], expected: usize) -> Result<Vec<u8>, For
             }
         }
     }
-    if at != data.len() || token.div_ceil(8) != flags.len() {
-        return Err(FormatError("unused PB3 LZSS stream bytes"));
+    Ok((output, token, at))
+}
+
+/// 0x14009fad0: four independently compressed delta planes, cumulative across rows.
+fn decode_delta(raw: &[u8], h: &Header) -> Result<RgbaImage, FormatError> {
+    if h.bpp != 32 {
+        return Err(FormatError("PB3 type 5 requires 32 bits per pixel"));
     }
-    Ok(output)
+    let count = usize::from(h.width) * usize::from(h.height);
+    let mut pixels = vec![0; count * 4];
+    for (plane, component) in [2, 1, 0, 3].into_iter().enumerate() {
+        let flag_at = offset(84, u32_at(raw, 52 + plane * 8)?)?;
+        let data_at = offset(84, u32_at(raw, 56 + plane * 8)?)?;
+        let flags = raw
+            .get(flag_at..data_at)
+            .ok_or(FormatError("invalid PB3 type-5 flag offsets"))?;
+        let data = raw
+            .get(data_at..)
+            .ok_or(FormatError("invalid PB3 type-5 data offset"))?;
+        let (deltas, _, _) = lzss_prefix(flags, data, count)?;
+        let mut value = 0u8;
+        for (i, delta) in deltas.into_iter().enumerate() {
+            value = value.wrapping_add(delta);
+            pixels[i * 4 + component] = value;
+        }
+    }
+    RgbaImage::new(u32::from(h.width), u32::from(h.height), pixels)
+}
+
+fn offset(base: usize, relative: u32) -> Result<usize, FormatError> {
+    base.checked_add(relative as usize)
+        .ok_or(FormatError("PB3 offset overflow"))
+}
+
+/// 0x140036ae0 case 6: encrypted, NUL-terminated 32-byte stem plus `.pb3`.
+/// Unlike the reference extractor, the original recursively decodes any supported base.
+pub fn reference_name(raw: &[u8]) -> Result<Option<Vec<u8>>, FormatError> {
+    let h = Header::parse(raw)?;
+    if h.kind != 6 {
+        return Ok(None);
+    }
+    if h.bpp != 32 {
+        return Err(FormatError("PB3 type 6 requires 32 bits per pixel"));
+    }
+    let key = [
+        0xa6, 0x75, 0xf3, 0x9c, 0xc5, 0x69, 0x78, 0xa3, 0x3e, 0xa5, 0x4f, 0x79, 0x59, 0xfe, 0x3a,
+        0xc7,
+    ];
+    let stem: Vec<_> = raw[52..84]
+        .iter()
+        .enumerate()
+        .map(|(i, b)| b ^ key[i % 16])
+        .collect();
+    let end = stem
+        .iter()
+        .position(|b| *b == 0)
+        .ok_or(FormatError("unterminated PB3 reference name"))?;
+    if end == 0 {
+        return Err(FormatError("empty PB3 reference name"));
+    }
+    let mut name = stem[..end].to_vec();
+    name.extend(b".pb3");
+    crate::cpz::lookup_key(&name)?;
+    Ok(Some(name))
+}
+
+/// 0x14009f820: copy BGRA replacements into 8x8 tiles with a zero mask bit.
+/// A one bit preserves the base, including its alpha; there is no alpha blending.
+pub fn decode_with_base(raw: &[u8], base: RgbaImage) -> Result<RgbaImage, FormatError> {
+    let h = Header::parse(raw)?;
+    if h.kind != 6 || h.bpp != 32 {
+        return Err(FormatError("expected a 32-bit PB3 type-6 image"));
+    }
+    if base.width() != u32::from(h.width) || base.height() != u32::from(h.height) {
+        return Err(FormatError(
+            "PB3 reference dimensions differ from the overlay",
+        ));
+    }
+    let header = plain_header(raw)?;
+    let flag_at = offset(32, u32_at(&header, 12)?)?;
+    if flag_at < 84 {
+        return Err(FormatError("PB3 type-6 flags overlap the reference name"));
+    }
+    let data_at = offset(flag_at, h.flags_offset)?;
+    let flags = raw
+        .get(flag_at..data_at)
+        .ok_or(FormatError("invalid PB3 type-6 flag offsets"))?;
+    let data = raw
+        .get(data_at..)
+        .ok_or(FormatError("invalid PB3 type-6 data offset"))?;
+    let width = usize::from(h.width);
+    let height = usize::from(h.height);
+    let tiles = width.div_ceil(8) * height.div_ceil(8);
+    if h.block as usize > 8 + tiles.div_ceil(8) + width * height * 4 {
+        return Err(FormatError("PB3 type-6 patch exceeds the image byte bound"));
+    }
+    let (patch, _, _) = lzss_prefix(flags, data, h.block as usize)?;
+    let masks = u32_at(&patch, 0)? as usize;
+    if masks != tiles.div_ceil(8) || masks > patch.len().saturating_sub(8) {
+        return Err(FormatError("invalid PB3 type-6 tile mask length"));
+    }
+    let mut at = 8 + masks;
+    let mut pixels = base.pixels().to_vec();
+    let mut tile = 0;
+    for y in (0..height).step_by(8) {
+        for x in (0..width).step_by(8) {
+            if patch[8 + tile / 8] & (128 >> (tile % 8)) == 0 {
+                for yy in y..height.min(y + 8) {
+                    for xx in x..width.min(x + 8) {
+                        let bgra = patch
+                            .get(at..at + 4)
+                            .ok_or(FormatError("truncated PB3 type-6 replacement pixels"))?;
+                        let to = (yy * width + xx) * 4;
+                        pixels[to..to + 4].copy_from_slice(&[bgra[2], bgra[1], bgra[0], bgra[3]]);
+                        at += 4;
+                    }
+                }
+            }
+            tile += 1;
+        }
+    }
+    if at != patch.len() {
+        return Err(FormatError("unused PB3 type-6 replacement pixels"));
+    }
+    RgbaImage::new(u32::from(h.width), u32::from(h.height), pixels)
 }
 
 /// 0x1400a0700 for type 3: JBP1 data at offset 52 decodes to padded samples, rows are
@@ -176,9 +319,15 @@ pub fn decode(raw: &[u8]) -> Result<RgbaImage, FormatError> {
     if h.kind == 3 {
         return decode_jbp1(raw, &h);
     }
+    if h.kind == 5 {
+        return decode_delta(raw, &h);
+    }
+    if h.kind == 6 {
+        return Err(FormatError("PB3 type 6 requires a reference image source"));
+    }
     if h.kind != 1 {
         return Err(FormatError(
-            "PB3 codec not implemented; only types 1 and 3 are supported",
+            "PB3 codec not implemented; standalone types 1, 3 and 5 are supported",
         ));
     }
     if !matches!(h.bpp, 24 | 32) || h.block == 0 {
