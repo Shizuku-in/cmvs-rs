@@ -401,10 +401,11 @@ fn run() -> Result<(), Box<dyn Error>> {
                 }
                 if message_flags.try_handle(&mut machine)? {
                     println!(
-                        "# message flag 0x{:04x}: skip={} auto_advance={}; system_integer[0]={:?}",
+                        "# message flag 0x{:04x}: skip={} auto_advance={} bypass={}; system_integer[0]={:?}",
                         command + 0x2000,
                         message_flags.skip(),
                         message_flags.auto_advance(),
+                        message_flags.bypass(),
                         machine.state().system_integer(0)
                     );
                     continue;

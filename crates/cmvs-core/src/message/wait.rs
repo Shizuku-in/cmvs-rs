@@ -1,5 +1,6 @@
 //! Manual 0x2153 / 0x140076880 -> 0x14005e220 under the current constructor settings.
-//! READ_SKIP=0, no pointer gesture result or +12244 bypass. Auto advance stays explicit.
+//! READ_SKIP=0 and no pointer gesture result; the +12244 bypass (0x2340) completes like the
+//! skip flag. Auto advance stays explicit.
 use super::{MessageHost, RESEARCH_SCREEN, window_slot};
 use crate::{
     bytecode::DecodeError,
@@ -38,7 +39,7 @@ impl MessageHost {
         if window.hidden {
             return vm.yield_pending_system().map(Some);
         }
-        let mut done = flags.skip() || input.skip_held();
+        let mut done = flags.skip() || input.skip_held() || flags.bypass();
         let mut consume = false;
         if !done {
             if input.pressed(0) {

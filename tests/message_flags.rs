@@ -247,6 +247,48 @@ fn unreadable_or_missing_arguments_keep_the_command_pending() {
 }
 
 #[test]
+fn bypass_is_set_from_sp4_without_a_query_or_system_result() {
+    let mut code = vec![];
+    for value in [1, 0, 0x8000_0000, 0, u32::MAX] {
+        call(&mut code, 0x2340, &[value]);
+    }
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_system_integer(0, 7).unwrap();
+    let mut flags = MessageFlags::default();
+    assert!(!flags.bypass());
+    for expected in [true, false, true, false, true] {
+        pending(&mut vm);
+        let pc = vm.pc();
+        assert!(flags.try_handle(&mut vm).unwrap());
+        assert_eq!(flags.bypass(), expected);
+        assert_eq!((vm.pending_system(), vm.pc()), (None, pc + 2));
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
+    assert_eq!(vm.state().system_integer(0), Some(7));
+    assert!(!flags.skip() && !flags.auto_advance());
+    assert_eq!(flags.mode_1548(), 0);
+}
+
+#[test]
+fn bypass_needs_a_known_argument() {
+    let mut unknown = vec![];
+    reserve(&mut unknown, 8, 1);
+    unknown.extend(0x2340u16.to_le_bytes());
+    for code in [unknown, 0x2340u16.to_le_bytes().to_vec()] {
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut flags = MessageFlags::default();
+        pending(&mut vm);
+        let (pc, bytes) = (vm.pc(), vm.stack().len_bytes());
+        assert!(flags.try_handle(&mut vm).is_err());
+        assert_eq!(vm.pending_system(), Some((pc, 0x340)));
+        assert_eq!(vm.stack().len_bytes(), bytes);
+        assert_eq!(flags, MessageFlags::default());
+    }
+}
+
+#[test]
 fn other_commands_are_left_pending() {
     let mut code = vec![];
     reserve(&mut code, 4, 0);

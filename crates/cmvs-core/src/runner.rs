@@ -316,7 +316,7 @@ impl<'a> Startup<'a> {
         if let Some(step) = self.messages.try_record_output(
             &mut self.machine,
             &mut self.input,
-            self.message_flags.skip(),
+            self.message_flags,
         )? {
             self.resume_run = step == Step::Yield;
             return Ok(StartupEvent::Yield);

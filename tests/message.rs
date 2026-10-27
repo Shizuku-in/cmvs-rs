@@ -728,14 +728,14 @@ fn recorded_output_only_release_edge_skips_reveal_not_press_edge() {
     let mut input = ActionInput::default();
     input.set(0, true, true, false).unwrap();
     messages
-        .try_record_output(&mut vm, &mut input, false)
+        .try_record_output(&mut vm, &mut input, wait_flags(false, false))
         .unwrap();
     assert!(vm.pending_system().is_some());
     assert!(messages.text(7).unwrap().glyphs[0].active);
     assert!(input.pressed(0));
     input.set(0, false, false, true).unwrap();
     messages
-        .try_record_output(&mut vm, &mut input, false)
+        .try_record_output(&mut vm, &mut input, wait_flags(false, false))
         .unwrap();
     assert!(vm.pending_system().is_none());
     assert!(!messages.text(7).unwrap().glyphs[0].active);
@@ -743,16 +743,22 @@ fn recorded_output_only_release_edge_skips_reveal_not_press_edge() {
 }
 
 fn wait_flags(skip: bool, auto: bool) -> cmvs_rs::message_flags::MessageFlags {
+    message_flags(skip, auto, false)
+}
+/// Flags set through the script commands: 0x22eb skip, 0x22e5 auto advance, 0x2340 bypass.
+fn message_flags(skip: bool, auto: bool, bypass: bool) -> cmvs_rs::message_flags::MessageFlags {
     let mut code = vec![];
     call(&mut code, 0x22eb, &[u32::from(skip), 1]);
     call(&mut code, 0x22e5, &[u32::from(auto), 1]);
+    call(&mut code, 0x2340, &[u32::from(bypass)]);
     let program = script(&code);
     let mut vm = Machine::new(&program).unwrap();
     let mut flags = cmvs_rs::message_flags::MessageFlags::default();
-    for _ in 0..2 {
+    for _ in 0..3 {
         pending(&mut vm);
         assert!(flags.try_handle(&mut vm).unwrap());
     }
+    assert_eq!(flags.bypass(), bypass);
     flags
 }
 
@@ -887,6 +893,37 @@ fn message_wait_skip_flags_and_actions_complete_without_consuming_other_edges() 
 }
 
 #[test]
+fn message_wait_bypass_completes_like_skip_before_auto_advance_without_consuming_input() {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 100, 100]);
+    for child in [2, 3] {
+        call(&mut code, 0x2178, &[child, 0]);
+    }
+    call(&mut code, 0x2153, &[u32::MAX, 0, 0]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 3);
+    pending(&mut vm);
+    let pc = vm.pc();
+    let mut input = ActionInput::default();
+    input.set(0, true, true, true).unwrap();
+    let old = input.clone();
+    // Auto advance alone is an explicit barrier; the bypass completes before reaching it.
+    assert_eq!(
+        messages
+            .try_wait(&mut vm, &mut input, message_flags(false, true, true))
+            .unwrap(),
+        Some(Step::Continue)
+    );
+    assert_eq!((vm.pending_system(), vm.pc()), (None, pc + 2));
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(input, old);
+    let window = messages.window(0).unwrap();
+    assert!(window.object.children.values().all(|child| !child.shown));
+}
+
+#[test]
 fn message_wait_hidden_window_ignores_skip_and_preserves_all_input_and_children() {
     let mut code = vec![];
     create(&mut code, 0, 7, [0, 0, 100, 100]);
@@ -904,7 +941,7 @@ fn message_wait_hidden_window_ignores_skip_and_preserves_all_input_and_children(
     let old = input.clone();
     assert_eq!(
         messages
-            .try_wait(&mut vm, &mut input, wait_flags(true, true))
+            .try_wait(&mut vm, &mut input, message_flags(true, true, true))
             .unwrap(),
         Some(Step::Yield)
     );
@@ -972,7 +1009,7 @@ fn recorded_output_requires_explicit_policy_and_yields_without_duplicating_glyph
     let before = messages.text(7).cloned();
     assert_eq!(
         messages
-            .try_record_output(&mut vm, &mut input, false)
+            .try_record_output(&mut vm, &mut input, wait_flags(false, false))
             .unwrap(),
         None
     );
@@ -982,7 +1019,7 @@ fn recorded_output_requires_explicit_policy_and_yields_without_duplicating_glyph
     for i in 1..=3 {
         assert_eq!(
             messages
-                .try_record_output(&mut vm, &mut input, false)
+                .try_record_output(&mut vm, &mut input, wait_flags(false, false))
                 .unwrap(),
             Some(Step::Yield)
         );
@@ -1013,7 +1050,7 @@ fn recorded_output_requires_explicit_policy_and_yields_without_duplicating_glyph
     );
     assert_eq!(
         messages
-            .try_record_output(&mut vm, &mut input, false)
+            .try_record_output(&mut vm, &mut input, wait_flags(false, false))
             .unwrap(),
         Some(Step::Yield)
     );
@@ -1042,7 +1079,11 @@ fn recorded_output_captures_styles_and_ruby_reserved_height_then_clears() {
     pending(&mut vm);
     vm.state_mut().set_system_integer(0, 42).unwrap();
     messages
-        .try_record_output(&mut vm, &mut ActionInput::default(), true)
+        .try_record_output(
+            &mut vm,
+            &mut ActionInput::default(),
+            wait_flags(true, false),
+        )
         .unwrap();
     let glyph = &messages.text(7).unwrap().glyphs[0];
     assert_eq!(glyph.position, [0, 12]);
@@ -1071,7 +1112,7 @@ fn recorded_output_click_finishes_and_consumes_only_action_zero_edges() {
     input.set(0, true, true, true).unwrap();
     input.set(1, true, true, true).unwrap();
     messages
-        .try_record_output(&mut vm, &mut input, false)
+        .try_record_output(&mut vm, &mut input, wait_flags(false, false))
         .unwrap();
     assert!(
         messages
@@ -1085,6 +1126,56 @@ fn recorded_output_click_finishes_and_consumes_only_action_zero_edges() {
     assert!(!input.pressed(0) && !input.released(0));
     assert!(input.pressed(1) && input.released(1));
     assert_eq!(vm.pending_system(), None);
+}
+
+#[test]
+fn recorded_output_bypass_keeps_reveal_timing_and_finishes_without_consuming() {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 100, 100]);
+    call(&mut code, 0x214e, &[1, 0]);
+    call(&mut code, 0x214c, &[1, 0]);
+    call(&mut code, 0x2152, &[0, 0, 0]);
+    let script = script_with_text(&code, b"AB\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 3);
+    messages.set_record_output(true);
+    pending(&mut vm);
+    let pc = vm.pc();
+    let flags = message_flags(false, false, true);
+    let mut input = ActionInput::default();
+    input.set(0, false, false, true).unwrap();
+    let old = input.clone();
+    // Hidden: glyphs are laid out with the normal interval, unlike the +1520 skip flag.
+    messages
+        .try_record_output(&mut vm, &mut input, flags)
+        .unwrap();
+    assert_eq!(vm.pending_system(), Some((pc, 0x152)));
+    let glyphs = &messages.text(7).unwrap().glyphs;
+    assert_eq!(
+        glyphs.iter().map(|g| g.delay_ms).collect::<Vec<_>>(),
+        [0, 40]
+    );
+    assert!(glyphs.iter().all(|g| g.active));
+    let mut code = vec![];
+    call(&mut code, 0x214c, &[0, 0]);
+    let other_script = script_with_text(&code, b"");
+    let mut other_vm = Machine::new(&other_script).unwrap();
+    run(&mut other_vm, &mut messages, 1);
+    messages
+        .try_record_output(&mut vm, &mut input, flags)
+        .unwrap();
+    assert_eq!(vm.pending_system(), None);
+    assert_eq!(vm.pc(), pc + 2);
+    assert!(
+        messages
+            .text(7)
+            .unwrap()
+            .glyphs
+            .iter()
+            .all(|g| !g.active && g.opacity == 255)
+    );
+    assert_eq!(input, old);
 }
 
 #[test]
@@ -1103,7 +1194,7 @@ fn recorded_output_hidden_window_keeps_waiting_even_when_skip_finishes_layout() 
     let pc = vm.pc();
     let mut input = ActionInput::default();
     messages
-        .try_record_output(&mut vm, &mut input, true)
+        .try_record_output(&mut vm, &mut input, wait_flags(true, false))
         .unwrap();
     assert_eq!(vm.pending_system(), Some((pc, 0x152)));
     assert_eq!(messages.text(7).unwrap().glyphs.len(), 1);
@@ -1113,7 +1204,7 @@ fn recorded_output_hidden_window_keeps_waiting_even_when_skip_finishes_layout() 
     let mut other_vm = Machine::new(&other_script).unwrap();
     run(&mut other_vm, &mut messages, 1);
     messages
-        .try_record_output(&mut vm, &mut input, true)
+        .try_record_output(&mut vm, &mut input, wait_flags(true, false))
         .unwrap();
     assert_eq!(vm.pending_system(), None);
     assert_eq!(messages.text(7).unwrap().glyphs.len(), 1);
@@ -1145,7 +1236,7 @@ fn recorded_output_rejects_unsupported_layout_without_partial_glyphs_or_stack_ch
         for _ in 0..2 {
             assert!(
                 messages
-                    .try_record_output(&mut vm, &mut input, false)
+                    .try_record_output(&mut vm, &mut input, wait_flags(false, false))
                     .is_err()
             );
             assert_eq!(vm.pending_system(), Some((pc, 0x152)));
@@ -1181,7 +1272,11 @@ fn recorded_output_rejects_missing_windows_bad_references_and_short_arguments() 
         let command = vm.pending_system();
         assert!(
             messages
-                .try_record_output(&mut vm, &mut ActionInput::default(), false)
+                .try_record_output(
+                    &mut vm,
+                    &mut ActionInput::default(),
+                    wait_flags(false, false)
+                )
                 .is_err()
         );
         assert_eq!(messages.text(7), before.as_ref());

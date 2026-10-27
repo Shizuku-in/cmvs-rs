@@ -3,6 +3,7 @@
 //! The two boolean flags are cleared by the constructor/reset/save loading; no
 //! configuration helper writes either boolean. The +1548 mode starts at zero and
 //! 0x140092d40 writes it while selecting popup menu items 0x809d..0x809f.
+//! The bypass flag is engine +12244, outside that block, but read by the same message waits.
 use crate::{bytecode::DecodeError, evaluate::error, machine::Machine, vm::SystemResult};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -10,8 +11,15 @@ pub struct MessageFlags {
     skip: bool,
     auto_advance: bool,
     mode_1548: u32,
+    bypass: bool,
 }
 impl MessageFlags {
+    /// Engine +12244: zeroed by the CMainFrameWnd constructor (qword store at 0x140016ff5)
+    /// and written only by 0x2340. 0x2152/0x2153/0x215c treat it as read and finish like
+    /// the skip flag without consuming input (0x14005d900 a7, 0x14005e220 a8).
+    pub fn bypass(&self) -> bool {
+        self.bypass
+    }
     /// +1548: raw setting read/written by 0x22d0. Normally 0..2, but the original
     /// wrapping abs of i32::MIN produces -2 after signed remainder. UI meaning unverified.
     pub fn mode_1548(&self) -> u32 {
@@ -27,7 +35,15 @@ impl MessageFlags {
     }
     /// 0x22eb / 0x14007c890 and 0x22e5 / 0x14007c5d0: nonzero SP-4 sets the flag to
     /// bool(SP-8); zero SP-4 copies it to system result 0 without reading SP-8. Both pop 8 bytes.
+    /// 0x2340 (inline 0x1400847fa) sets the bypass to bool(SP-4) and pops 4 bytes; it has no
+    /// query form and leaves the system results alone.
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
+        if let Some((pc, 0x340)) = vm.pending_system() {
+            let value = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x2340, e.0))?;
+            vm.complete_system(SystemResult(0x4004))?;
+            self.bypass = value != 0;
+            return Ok(true);
+        }
         if let Some((pc, 0x2d0)) = vm.pending_system() {
             let mode = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x22d0, e.0))?;
             let value = if mode != 0 {

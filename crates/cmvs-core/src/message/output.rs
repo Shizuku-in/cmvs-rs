@@ -6,6 +6,7 @@ use crate::{
     evaluate::error,
     input::ActionInput,
     machine::{Machine, Step},
+    message_flags::MessageFlags,
     vm::SystemResult,
 };
 
@@ -140,12 +141,13 @@ fn append(text: &mut TextObject, bytes: &[u8], skip: bool) -> Result<(), &'stati
 impl MessageHost {
     /// 0x140076700 / 0x14005d900: repeat=0 creates glyphs once; hidden windows keep
     /// yielding. Waiting returns 0xa000, completion 0xc00c (both yield). Research mode
-    /// explicitly selects constructor settings and a zero +12244 bypass flag.
+    /// explicitly selects the constructor settings block. Only the +1520 skip flag shortens
+    /// reveal timing; it, held actions 7/8 and the +12244 bypass finish without consuming.
     pub fn try_record_output(
         &mut self,
         vm: &mut Machine<'_>,
         input: &mut ActionInput,
-        skip: bool,
+        flags: MessageFlags,
     ) -> Result<Option<Step>, DecodeError> {
         let Some((pc, 0x152)) = vm.pending_system() else {
             return Ok(None);
@@ -170,12 +172,12 @@ impl MessageHost {
             .ok_or_else(|| error(pc, 0x2152, "message window without text"))?
             .clone();
         if vm.repeat_count() == 0 {
-            append(&mut candidate, &bytes, skip).map_err(|why| error(pc, 0x2152, why))?;
+            append(&mut candidate, &bytes, flags.skip()).map_err(|why| error(pc, 0x2152, why))?;
         }
         let active = candidate.glyphs.iter().any(|g| g.active);
-        let triggered = skip || input.skip_held() || input.released(0);
-        let done = !window.hidden && (!active || triggered);
-        let consume = done && active && !skip && !input.skip_held() && input.released(0);
+        let skip = flags.skip() || input.skip_held() || flags.bypass();
+        let done = !window.hidden && (!active || skip || input.released(0));
+        let consume = done && active && !skip && input.released(0);
         let step = if done {
             vm.complete_system(SystemResult(0xc00c))?
         } else {
