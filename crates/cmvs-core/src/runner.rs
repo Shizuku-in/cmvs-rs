@@ -181,6 +181,9 @@ impl<'a> Startup<'a> {
     pub fn camera(&self) -> &CameraHost {
         &self.camera
     }
+    pub fn sequence(&self) -> &SequenceHost {
+        &self.sequence
+    }
     pub fn movie_frame(&self) -> Option<&crate::raster::RgbaImage> {
         self.movies.player().and_then(|m| m.image.as_ref())
     }
@@ -208,6 +211,7 @@ impl<'a> Startup<'a> {
         if had_movie && self.movies.player().is_none() && clock.is_some() {
             self.audio_backend.stop_movie_audio()?;
         }
+        self.sequence.advance_frame(delta_ms);
         self.scene.advance_frame(delta_ms);
         self.messages.advance_frame(delta_ms);
         self.camera.advance_frame(delta_ms);
@@ -229,6 +233,7 @@ impl<'a> Startup<'a> {
     /// The timer delta is consumed once after yield, never per instruction/budget slice.
     /// Callback registration time remains a separate research clock.
     pub fn advance_frame(&mut self, delta_ms: u32) {
+        self.sequence.advance_frame(delta_ms);
         self.scene.advance_frame(delta_ms);
         self.messages.advance_frame(delta_ms);
         self.movies.advance(delta_ms);
