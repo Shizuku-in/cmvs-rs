@@ -12,10 +12,12 @@ use std::{collections::BTreeMap, error::Error};
 mod change;
 mod mask;
 mod quake;
+mod strip;
 mod world_motion;
 pub use change::ImageChange;
 pub use mask::MaskTransition;
 pub use quake::Quake;
+pub use strip::{Strip, StripWipe};
 pub use world_motion::{MotionKey, MotionPlayback, WORLD_MOTION_KEYS, WorldMotion};
 
 /// Engine +1976 holds 256 object pointers (snapshot records 0x700).
@@ -338,6 +340,8 @@ pub struct SceneHost {
     mask: Option<MaskTransition>,
     /// Engine +4624; see `quake`.
     quake: Option<Quake>,
+    /// Engine +4640; see `strip`.
+    strip: Option<StripWipe>,
 }
 impl SceneHost {
     pub fn fade(&self) -> &crate::fade::FadeHost {
@@ -347,14 +351,16 @@ impl SceneHost {
         &mut self.fade
     }
     /// The slot part of the frame update 0x140015900: each object runs 0x14003d0c0 and is
-    /// destroyed when it is marked for disposal (0x14003a780 reads +14500); then the fade
-    /// and the mask transition. The quake follows in the render pass 0x140015da0.
+    /// destroyed when it is marked for disposal (0x14003a780 reads +14500); then the fade,
+    /// the strip wipe and the mask transition. The quake follows in the render pass
+    /// 0x140015da0.
     pub fn advance_frame(&mut self, delta: u32) {
         for object in self.objects.values_mut() {
             object.advance_effects(delta);
         }
         self.objects.retain(|_, object| !object.dispose);
         self.fade.advance(delta);
+        self.advance_strip(delta);
         self.advance_mask(delta);
         self.advance_quake(delta);
     }

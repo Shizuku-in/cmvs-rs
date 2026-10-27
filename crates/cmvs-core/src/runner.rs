@@ -356,6 +356,12 @@ impl<'a> Startup<'a> {
         let waited = match waited {
             Some(step) => Some(step),
             None => self
+                .scene
+                .try_wait_strip(&mut self.machine, gate, &mut self.input)?,
+        };
+        let waited = match waited {
+            Some(step) => Some(step),
+            None => self
                 .camera
                 .try_wait_move(&mut self.machine, gate, &mut self.input)?,
         };
@@ -445,6 +451,7 @@ impl<'a> Startup<'a> {
             || self.bootstrap.try_handle(&mut self.machine)?.is_some()
             || self.scene.try_handle(&mut self.machine)?
             || self.scene.try_handle_quake(&mut self.machine)?
+            || self.scene.try_handle_strip(&mut self.machine)?
             || self.scene.try_handle_image(
                 &mut self.machine,
                 &mut self.images.with_paths(self.bootstrap.paths()),

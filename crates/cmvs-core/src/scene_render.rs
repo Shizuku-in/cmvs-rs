@@ -1,6 +1,6 @@
 //! Software presentation of verified static 2D objects, their children, full-screen color
-//! fades and mask transitions. Unsupported transforms, solid-color objects and blend modes
-//! fail explicitly.
+//! fades and mask transitions. Unsupported transforms, solid-color objects (including the
+//! strip wipe) and blend modes fail explicitly.
 use crate::{
     FormatError, MAX_PAYLOAD,
     raster::RgbaImage,
@@ -156,6 +156,10 @@ pub fn render_with_objects(
         .ok_or(FormatError("scene surface size overflow"))?;
     if width == 0 || height == 0 || size > MAX_PAYLOAD as u64 {
         return Err(FormatError("invalid scene surface dimensions"));
+    }
+    // Its strips and cover are solid-color objects queued by layer (0x14003de80).
+    if scene.strip_wipe().is_some() {
+        return Err(FormatError("strip wipe rendering is not implemented"));
     }
     // Validate the entire scene before rasterizing. Slot order is the stable tie-breaker.
     let mut entries = Vec::new();

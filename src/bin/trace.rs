@@ -224,7 +224,10 @@ fn run() -> Result<(), Box<dyn Error>> {
                     Some(event) => Some(event),
                     None => match scene.try_wait_mask(&mut machine, gate, &mut input)? {
                         Some(event) => Some(event),
-                        None => scene.try_wait_quake(&mut machine)?,
+                        None => match scene.try_wait_quake(&mut machine)? {
+                            Some(event) => Some(event),
+                            None => scene.try_wait_strip(&mut machine, gate, &mut input)?,
+                        },
                     },
                 };
                 if let Some(event) = waited {
@@ -478,6 +481,22 @@ fn run() -> Result<(), Box<dyn Error>> {
                         "# quake 0x{:04x}: {:?} system_integer[0]={:?}",
                         command + 0x2000,
                         scene.quake(),
+                        machine.state().system_integer(0)
+                    );
+                    continue;
+                }
+                if scene.try_handle_strip(&mut machine)? {
+                    println!(
+                        "# strip wipe 0x{:04x}: {:?} system_integer[0]={:?}; not drawn",
+                        command + 0x2000,
+                        scene.strip_wipe().map(|wipe| (
+                            wipe.mode,
+                            wipe.size,
+                            wipe.duration,
+                            wipe.layer,
+                            wipe.strips.len(),
+                            wipe.finished
+                        )),
                         machine.state().system_integer(0)
                     );
                     continue;
