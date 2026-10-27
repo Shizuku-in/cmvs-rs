@@ -396,7 +396,7 @@ impl SceneHost {
         }
         if matches!(
             command,
-            0x22 | 0x40 | 0x42 | 0x50 | 0x44..=0x48 | 0x4b | 0x4c | 0x70..=0x74
+            0x22 | 0x40 | 0x42 | 0x50 | 0x44..=0x49 | 0x4b | 0x4c | 0x70..=0x74
         ) {
             return self.handle_object(vm, pc, command);
         }
@@ -664,7 +664,7 @@ impl SceneHost {
             0x40 => 1,
             0x22 | 0x42 | 0x50 => 2,
             0x44 => 6,
-            0x45 | 0x46 => 4,
+            0x45 | 0x46 | 0x49 => 4,
             0x47 | 0x48 | 0x4b | 0x4c | 0x70..=0x74 => 3,
             _ => unreachable!(),
         };
@@ -678,7 +678,7 @@ impl SceneHost {
             .get(&slot)
             .ok_or_else(|| fail("object slot does not exist"))?;
         let child = if command == 0x40
-            || (matches!(command, 0x42 | 0x44..=0x48 | 0x4b | 0x4c | 0x70..=0x74)
+            || (matches!(command, 0x42 | 0x44..=0x49 | 0x4b | 0x4c | 0x70..=0x74)
                 && (args[1] as i32) < 0)
         {
             None
@@ -698,7 +698,7 @@ impl SceneHost {
                     .ok_or_else(|| fail("child object does not exist"))?,
                 None => parent,
             };
-            if matches!(command, 0x42 | 0x44..=0x48 | 0x4b | 0x4c | 0x70..=0x74)
+            if matches!(command, 0x42 | 0x44..=0x49 | 0x4b | 0x4c | 0x70..=0x74)
                 && object.draw.is_none()
             {
                 return Err(fail("object has no draw state"));
@@ -760,6 +760,10 @@ impl SceneHost {
                     let index = 11 + usize::from(command - 0x72);
                     object.draw.as_mut().expect("validated").words[index] = args[2];
                 }
+                // 0x2049 / 0x14006d730 -> 0x14003b100 -> 0x14001f490:
+                // SP-12/SP-16 pass through xmm1/xmm2 and movss to +72/+76.
+                0x49 => object.draw.as_mut().expect("validated").words[18..20]
+                    .copy_from_slice(&args[2..4]),
                 0x44..=0x48 => object
                     .draw
                     .as_mut()
