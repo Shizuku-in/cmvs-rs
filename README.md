@@ -41,7 +41,7 @@ cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-`--payload` 仅允许创建新文件，输出不包含原始头部。当前默认 415 项测试、全 workspace 全功能 432 项测试及严格 Clippy 检查通过。
+`--payload` 仅允许创建新文件，输出不包含原始头部。当前默认 415 项测试、全 workspace 全功能 432 项测试及严格 Clippy 检查通过；另有 1 项默认忽略的原生音频设备检查，已在普通桌面权限下手动通过。
 真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
 `ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
 
@@ -252,7 +252,7 @@ python -m unittest discover -s tests -v
 
 ## 后续实现顺序
 
-1. 显式 `--skip-auto-resume` 可保留存档并进入标题；继续核对 `sn1001.ps3 / 0x2b656 / 0x2070`（`0x14006f1a0`）与 `0x2042` 设置的模式 2 呈现。默认仍停于 `main.ps3 / 0x395de / 0x22b5` 完整读档请求，恢复功能未实现。本机真实音频模式本轮两次异常退出，需单独排查，先用记录音频模式验证画面。转义输出、0x215c 输出变体、语音长度结果 4 的单位与原生窗口中的语音/震动/注音实测仍待完成。显式 `--font` 可合成文字与消息窗口，默认无字体仍保留 `0x2152` 断点，`--record-text` 仍只记录。
+1. 显式 `--skip-auto-resume` 可保留存档并进入标题；继续核对 `sn1001.ps3 / 0x2b656 / 0x2070`（`0x14006f1a0`）与 `0x2042` 设置的模式 2 呈现。默认仍停于 `main.ps3 / 0x395de / 0x22b5` 完整读档请求，恢复功能未实现。音频已通过相同构建的普通桌面权限对照，受限沙箱中的 0xc0000008 不作为普通桌面播放回归结论。转义输出、0x215c 输出变体、语音长度结果 4 的单位与原生窗口中的语音/震动/注音实测仍待完成。显式 `--font` 可合成文字与消息窗口，默认无字体仍保留 `0x2152` 断点，`--record-text` 仍只记录。
 2. 沿该路径补齐换行、注音、其他文字样式、立绘与语音，并核对原生窗口中的剧情显示。
 3. 补齐选择分支、必要转场、回调调度与完整存档镜像，并对照原程序验证同一段剧情。
 4. 验证 Windows/macOS/Linux 构建和行为，再实现 Android/iOS 后端与真机检查。
@@ -274,7 +274,15 @@ cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Downl
 
 `--skip-auto-resume` 是宿主预览策略：仅在首次系统存档读取成功后把内存整数 2198 设为 0，其他持久设置与磁盘文件不变。只允许已核对的本作游戏 ID，默认不启用，也不伪造 0x22bb 的查询结果或忽略 0x22b5。全量读写存档仍未实现。停于自动恢复或其他未实现命令时，窗口标题会显示暂停原因。
 
-本轮 14 秒 Windows 原生窗口检查已完成品牌 logo、标题淡入与标题帧导出，截图见本地忽略目录；存档目录所有文件前后 SHA-256 一致。鼠标/Enter 无窗口重放可开始第一话并分别在第 481318/481358 步到达 `sn1001.ps3 / 0x2b656 / 0x2070`，模式 2 的绘制仍不支持。上述命令是静音模式：本轮 `--audio native` 在当前 192000 Hz 默认设备上两次于品牌声音启动阶段异常退出（Windows 状态 0xc0000008），尚未定位原因；此前音频验证记录仍仅代表当时环境，不能当作本轮通过。完整剧情尚不可运行。
+14 秒 Windows 静音窗口检查已完成品牌 logo、标题淡入与标题帧导出，截图见本地忽略目录；存档目录所有文件前后 SHA-256 一致。鼠标/Enter 无窗口重放可开始第一话并分别在第 481318/481358 步到达 `sn1001.ps3 / 0x2b656 / 0x2070`，模式 2 的绘制仍不支持。完整剧情尚不可运行。
+
+已对照确认：相同 release 构建在受限工具沙箱中使用 `--audio native` 会以 Windows 0xc0000008 退出，在普通桌面权限下则完成 18 秒品牌音效、标题 BGM、标题淡入及帧导出，退出码 0。独立合成音频设备检查也只在普通桌面权限下通过；未修改运行时解码、混音或设备设置。具体底层句柄失败点仍未定位，普通 PowerShell 中可使用有声命令：
+
+```powershell
+cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --skip-auto-resume --audio native --font "C:/Windows/Fonts/msgothic.ttc"
+```
+
+音频设备检查与验证边界见 [audio-output](docs/audio-output.md)。
 
 ## 参考与许可
 

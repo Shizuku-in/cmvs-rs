@@ -5,7 +5,7 @@
 项目自身禁止 unsafe，没有新增 C++ 运行核心，没有调用原游戏 DLL。
 
 ```powershell
-cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --audio native
+cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --skip-auto-resume --audio native
 ```
 
 `--audio record` 或不提供该参数继续记录请求，不打开音频设备。
@@ -103,3 +103,30 @@ Windows 原生设备报告 192000 Hz / 双声道，由后端重采样。175 秒�
 0x20a6 接入 `play_voice`：逻辑通道 0..3 对应设备 5..8，从 0x2014 注册的语音根（本作为 voice3/voice/voice2.cpz）读取 Ogg，不循环、不淡入，按请求立即开始或只准备。原生后端先释放该槽再装载，读取失败返回未装载，Err 时不改设备；`update` 推进语音槽，播放完毕后释放。音量为 (主音量 × 语音音量) >> 8，再按脚本音量缩放。真实路径的 cosn1001001.ogg 能经 `ResourceKind::Voice` 找到并通过校验；本轮没有打开音频设备做真实语音播放检查。
 
 2026-10-27 自动恢复绕过后的回归：当前默认设备报告 192000 Hz/双声道，两次 release 原生窗口运行在准备 sys301.ogg、完成品牌淡入后异常退出，Windows 状态 0xc0000008。原因尚未定位，不能把本文早期音频通过记录视为本次环境的通过；本轮未改动音频后端/设备设置。记录音频模式正常显示标题并退出，画面检查先使用 --audio record，详情见 desktop.md。
+
+## 0xc0000008 的执行环境对照（2026-10-27）
+
+上一节的“原因尚未定位”已通过相同构建的执行环境对照缩小范围。早期文档实际上已有同类沙箱失败记录，上一轮未把该线索用于重测，导致建议暂时静音。本轮先确认受限工具沙箱稳定复现，再以普通桌面权限运行同一 target/release/cmvs-desktop.exe，参数均为 --continue-without-snapshot --skip-auto-resume --audio native --font C:/Windows/Fonts/msgothic.ttc，只将有界运行延长到 18 秒并请求退出帧。
+
+| 检查 | 受限工具沙箱 | 普通桌面权限 |
+| --- | --- | --- |
+| 相同 release 桌面构建，192000 Hz / 双声道默认设备 | 品牌音效准备/启动阶段退出，0xc0000008 | 品牌 SE、标题 SE、两段循环 BGM 与标题淡入正常，18 秒、15023 步后退出码 0 |
+| 独立合成设备检查 native_device_smoke | SE 启动阶段退出，0xc0000008 | SE 准备/启动/停止、语音、双文件循环 BGM/淡出、影片音轨时钟结束与设备释放通过，约 1.35 秒 |
+
+桌面日志与帧为 local/audio-crash-unsandboxed.log / audio-crash-unsandboxed-title.png（目视确认完整标题）；沙箱日志为 local/audio-crash-sandbox.log。独立检查日志为 local/audio-crash-smoke-desktop.log 与 audio-crash-smoke-sandbox-final.log。真实存档目录与此前记录的全部文件 SHA-256 相同。
+
+这把当前失败定位到受限执行环境的影响，不能仅凭状态码归因于 192 kHz、Vorbis、某条 VM 指令或特定驱动函数；具体底层无效句柄操作尚未定位。本轮没有修改运行时音频实现、依赖版本、设备设置或游戏文件，也未捕获并忽略原生异常。正常退出和设备消费通过不等于人工听音或音质、延迟校准通过。
+
+在普通 PowerShell 中运行有声命令即可；如果必须在同类受限沙箱内只检查画面，显式选择 --audio record，记录模式仍不发声。应用不会自动提权或静默切换为记录模式。
+
+### 独立设备检查
+
+新增 tests/audio_output.rs 的 native_device_smoke，默认 #[ignore]，普通 offline/CI 回归不打开设备。它仅使用仓库既有合成 440/880 Hz Vorbis，音量 16/256，临时目录中生成固定资源名，用同一原生后端验证所有通道生命周期与影片源到达 EOF；不用真实游戏、窗口、字体或脚本，不要求长片播放。正常返回时先释放设备再删除本次临时文件。
+
+手动运行（会打开默认设备并播放短促低音量合成音）：
+
+```powershell
+cargo test --offline --features audio-output --test audio_output native_device_smoke -- --ignored --nocapture
+```
+
+状态码 0xc0000008 是进程级原生异常，不能把它当作 Rust Result 或解码断言失败；排查时先记录执行环境，再以同一构建在普通桌面权限下对照。该检查缺失设备或后端错误会明确失败；不加到默认测试或自动替换真实设备结果。

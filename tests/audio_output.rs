@@ -101,3 +101,103 @@ fn fade_envelopes_reach_exact_endpoints_without_overshoot() {
     assert_eq!(fade.value_at(u32::MAX), 0.0);
     assert_eq!(Envelope::new(0.0, 1.0, 0).value_at(0), 1.0);
 }
+
+/// Explicit hardware diagnostic: synthetic quiet tones only, no game files or window.
+/// Keep ignored so normal offline/CI tests never open a device or require audio hardware.
+#[test]
+#[ignore = "opens the default native audio device; run explicitly outside restricted sandboxes"]
+fn native_device_smoke() -> Result<(), Box<dyn std::error::Error>> {
+    use cmvs_rs::{
+        audio::{AudioBackend, AudioRequest, MovieAudioClock},
+        audio_output::NativeAudio,
+    };
+    use std::{
+        collections::BTreeMap,
+        fs,
+        path::PathBuf,
+        thread,
+        time::{Duration, Instant},
+    };
+    struct Scratch(PathBuf);
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            for name in ["first.ogg", "second.ogg"] {
+                let _ = fs::remove_file(self.0.join("sound").join(name));
+            }
+            let _ = fs::remove_dir(self.0.join("sound"));
+            let _ = fs::remove_dir(&self.0);
+        }
+    }
+    fn pump(audio: &mut NativeAudio) -> Result<(), Box<dyn std::error::Error>> {
+        for _ in 0..30 {
+            thread::sleep(Duration::from_millis(10));
+            audio.update()?;
+        }
+        Ok(())
+    }
+    let path = std::env::temp_dir().join(format!("cmvs-native-audio-smoke-{}", std::process::id()));
+    fs::create_dir(&path)?;
+    let scratch = Scratch(path);
+    fs::create_dir(scratch.0.join("sound"))?;
+    fs::write(scratch.0.join("sound/first.ogg"), FIRST)?;
+    fs::write(scratch.0.join("sound/second.ogg"), SECOND)?;
+    // Declared after scratch so channels and the device drop before deleting the files.
+    let mut audio = NativeAudio::new(&scratch.0)?;
+    audio.configure_paths(&BTreeMap::from([
+        ((0x2012, 0), b"sound\\".to_vec()),
+        ((0x2013, 0), b"sound\\".to_vec()),
+        ((0x2014, 0), b"sound\\".to_vec()),
+    ]))?;
+    println!("# smoke: prepare/start SE");
+    assert!(audio.play(&AudioRequest::PlaySe {
+        channel: 0,
+        name: b"first.ogg".to_vec(),
+        volume: 16,
+        looped: false,
+        flag: false,
+        fade_in_ms: 0,
+    })?);
+    audio.start(0, false)?;
+    pump(&mut audio)?;
+    audio.stop(0)?;
+    println!("# smoke: voice");
+    assert!(audio.play_voice(&AudioRequest::PlayVoice {
+        channel: 0,
+        name: b"first.ogg".to_vec(),
+        volume: 16,
+        start: true,
+    })?);
+    pump(&mut audio)?;
+    audio.stop_voice(0)?;
+    println!("# smoke: two-file looping BGM and fade");
+    audio.play_bgm(&AudioRequest::PlayBgm {
+        channel: 0,
+        previous: 1,
+        primary: b"first.ogg".to_vec(),
+        secondary: b"second.ogg".to_vec(),
+        volume: 16,
+        fade_ms: 0,
+        looped: true,
+        flag_1576: 0,
+    })?;
+    pump(&mut audio)?;
+    audio.fade_out_bgm(0, 20)?;
+    pump(&mut audio)?;
+    audio.stop_bgm()?;
+    println!("# smoke: movie audio clock and EOF");
+    audio.play_movie_audio(&AudioRequest::PlayMovieAudio {
+        path: b"sound/first.ogg".to_vec(),
+        offset: 0,
+        size: FIRST.len() as u32,
+        volume: 16,
+    })?;
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while audio.movie_clock()? != Some(MovieAudioClock::Ended) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+        audio.update()?;
+    }
+    assert_eq!(audio.movie_clock()?, Some(MovieAudioClock::Ended));
+    audio.stop_movie_audio()?;
+    println!("# smoke: all native channels completed; releasing device");
+    Ok(())
+}
