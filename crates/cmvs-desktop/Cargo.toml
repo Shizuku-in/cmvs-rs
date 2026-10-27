@@ -15,6 +15,7 @@ encoding_rs.workspace = true
 ico.workspace = true
 softbuffer.workspace = true
 winit.workspace = true
+ab_glyph.workspace = true
 
 [features]
 default = []

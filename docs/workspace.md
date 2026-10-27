@@ -73,3 +73,5 @@ OP 第 1000 帧 RGBA 仍为 `ece6dcbe6d8365ef6356a69b83e8a76c9b437a191c248d15c9d
 
 拆分后的 Windows 原生桌面以音频模式运行 24 秒，成功准备/启动 SE、读取 BGM 前奏与循环段、显示完整标题，22303 步后退出码 0。
 与上一阶段结束时的标题帧进行文件对照；原始输入仍只观察、不驱动 VM。
+
+字体预览阶段：cmvs-desktop 直接依赖固定 ab_glyph 0.2.32（仅 std，默认功能关闭），字体文件/字符编码/光栅化/字形缓存都留在桌面 crate。core 只新增可接收外部 SceneObject 的排序呈现入口，仍无依赖；没有依赖图反向引用。Cargo.lock 只新增 desktop → ab_glyph 的直接依赖边，复用已锁定的版本。默认 356 项、全 workspace 全功能 373 项测试通过，详见 font-output.md。

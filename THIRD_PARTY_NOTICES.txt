@@ -54,3 +54,14 @@ These crates are used through their public APIs. Exact direct and transitive
 versions and checksums are recorded in Cargo.lock. Their published packages
 contain their respective license/notice files; desktop binary distributions
 must retain the applicable notices for the dependencies they include.
+
+OpenType preview dependency (used through its public Rust API):
+  ab_glyph 0.2.32, Apache-2.0
+  https://github.com/alexheretic/ab-glyph
+  Registry source revision: ffde4c677fa1095ac355174c1aa2919d7d53eff3
+  ab_glyph_rasterizer 0.1.10: Apache-2.0
+  owned_ttf_parser 0.25.1: Apache-2.0
+  ttf-parser 0.25.1: MIT OR Apache-2.0
+Versions and registry checksums are pinned in Cargo.lock. No library source
+was copied into this repository. The font file is supplied explicitly by
+the user at runtime and is not included or redistributed by cmvs-rs.

@@ -108,6 +108,17 @@ fn child_layer<'a>(
 
 /// Render in script coordinates. Window aspect fitting is a separate desktop policy.
 pub fn render(scene: &SceneHost, width: u32, height: u32) -> Result<RgbaImage, FormatError> {
+    render_with_objects(scene, &[], width, height)
+}
+
+/// Additional objects (e.g. a backend's glyph images and message windows) join the
+/// same stable layer queue before the fade. Their order breaks ties after slot objects.
+pub fn render_with_objects(
+    scene: &SceneHost,
+    additional: &[&SceneObject],
+    width: u32,
+    height: u32,
+) -> Result<RgbaImage, FormatError> {
     let size = (u64::from(width) * u64::from(height))
         .checked_mul(4)
         .ok_or(FormatError("scene surface size overflow"))?;
@@ -116,7 +127,7 @@ pub fn render(scene: &SceneHost, width: u32, height: u32) -> Result<RgbaImage, F
     }
     // Validate the entire scene before rasterizing. Slot order is the stable tie-breaker.
     let mut entries = Vec::new();
-    for object in scene.objects().values() {
+    for object in scene.objects().values().chain(additional.iter().copied()) {
         // 0x14003de80 returns early for +6244 == 0; no draw state means +6240 == 0.
         let Some(draw) = object.draw.as_ref().filter(|_| object.shown) else {
             continue;

@@ -246,6 +246,7 @@ version = "0.1.0"
 name = "cmvs-desktop"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
  "cmvs-audio",
  "cmvs-core",
  "encoding_rs",

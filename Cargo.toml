@@ -21,6 +21,7 @@ softbuffer = "=0.4.8"
 winit = "=0.30.13"
 rodio = { version = "=0.21.1", default-features = false, features = ["playback"] }
 lewton = "=0.10.2"
+ab_glyph = { version = "=0.2.32", default-features = false, features = ["std"] }
 
 [package]
 name = "cmvs-rs"

@@ -149,3 +149,11 @@ PB3 type 3 / JBP1 对照 xmoezzz/CMVS-Engine 固定提交 `a6bc9501d82264e228943
 0x211f 依据同一哈希二进制的系统分发表 0x140084cf8（case 287 → 0x14008316d）、0x1400731d0（反汇编确认结果槽 0/1/2/4）、排版计数 0x14005ca80、字符分类 0x140008080、禁则函数 0x14005b050/0x14005b120（反汇编确认无符号比较）与既有构造证据重新实现。仅只读定位下一命令 0x2152 的 0x140076700；无新外部项目、依赖或源码复制，未修改解码算法。
 
 0x2152 显式字形记录分支仅据同一哈希二进制的 0x140076700、0x14005d900、0x14005bc90（反汇编重新确认描述字索引）、0x14005a830、0x14005b5a0、0x14005ae70、0x14005adb0、0x14005ac90、构造 0x140014e60/0x14003a3c0、0x140054d60/0x140054d90/0x140054e20/0x140054e30 证据重新实现。只读分析 0x140085d60、0x140055140/0x140055160 及下一命令 0x2136 的分发表项；这些未实现路径保持支持范围限制。无新参考项目、源码复制或依赖，未修改解码算法。
+
+## 可选 OpenType 字体预览
+
+- ab_glyph 0.2.32，Apache-2.0；项目 https://github.com/alexheretic/ab-glyph ，registry 包 .cargo_vcs_info.json 固定提交 `ffde4c677fa1095ac355174c1aa2919d7d53eff3`。通过本地固定版本公开 API FontVec::try_from_vec_and_index、Font::glyph_id、ScaleFont::ascent、Font::outline_glyph、OutlinedGlyph::draw 使用，未复制示例或外部实现。
+- 锁定依赖 ab_glyph_rasterizer 0.1.10（Apache-2.0）、owned_ttf_parser 0.25.1（Apache-2.0）、ttf-parser 0.25.1（MIT OR Apache-2.0）；版本/校验值沿用 Cargo.lock，仅新增 desktop 的直接依赖边。核心不依赖字体库。
+- 字形描述、位置与描边形式沿用同一哈希 cmvs64.exe 的既有 0x14005bc90、0x14005a830、0x140059d20 证据；OpenType 光栅化、基线和 straight-alpha 合成是显式预览后端策略，不宣称与 GDI 像素一致。对象与覆盖层排序沿用既有 scene_render 证据。
+- 本机 msgothic.ttc 仅由外部探针及显式 CLI 路径只读读取，字体文件、字形图和真实画面均未纳入 Git。字体不作为项目依赖或再分发资产；验证与哈希见 font-output.md。
+字体合成阶段另只读重新核对 0x140015da0 的入队顺序，并通过 IDA 再次读取输入文件 SHA-256，确认仍为 research.md 绑定的 dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5；文字对象/窗口/覆盖层的相对顺序证据见 font-output.md。

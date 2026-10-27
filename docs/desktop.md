@@ -140,3 +140,13 @@ cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Downl
 ```
 
 本轮仅用仓库外无窗口鼠标/键盘重放验证，记录模式到 sn1001.ps3 / 0xf6f2 / 0x2136，未新增原生窗口实测。支持分支、设置约束与默认停点见 vm-semantics.md；字体后端、消息窗口/文字合成仍待实现。
+
+## 字体与首句文字预览（2026-10-27）
+
+显式 `--font <文件> [--font-face <TTC 索引>]` 可替代 --record-text，用相同的受限消息布局实际光栅化字形，并呈现消息窗口；face 默认为 0，只支持 shift-jis。与 --record-text 同用、缺失字形、非等色渐变、非单位缩放均显式失败。--save-frame 导出与窗口相同的字体合成路径。
+
+```powershell
+cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --font "C:/Windows/Fonts/msgothic.ttc"
+```
+
+首句文字及消息窗口已在无窗口真实重放导出帧中核对；16 秒 Windows 窗口检查验证启动、标题与导出，退出码 0，本轮未在窗口中操作开始游戏。字体、基线和边缘使用 OpenType/ab_glyph 策略，与 GDI 有像素差异，支持边界及证据见 [font-output](font-output.md)。

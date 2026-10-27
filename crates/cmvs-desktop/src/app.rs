@@ -47,13 +47,27 @@ struct App<'a> {
     preview_image: Option<RgbaImage>,
     next_frame: Instant,
     last_frame: Instant,
+    font: Option<crate::font::FontRenderer>,
 }
 impl App<'_> {
+    fn frame(&mut self) -> Result<RgbaImage, Box<dyn Error>> {
+        if let Some(image) = &self.preview_image {
+            return Ok(image.clone());
+        }
+        if let Some(image) = self.startup.movie_frame() {
+            return Ok(image.clone());
+        }
+        if let Some(font) = &mut self.font {
+            return Ok(font.render(self.startup.scene(), self.startup.messages())?);
+        }
+        Ok(self.startup.render_frame()?)
+    }
     fn fail(&mut self, el: &ActiveEventLoop, error: impl std::fmt::Display) {
         self.error = Some(error.to_string());
         el.exit();
     }
     fn redraw(&mut self) -> Result<(), Box<dyn Error>> {
+        let image = self.frame()?;
         let window = self.window.as_ref().ok_or("no window")?;
         let size = window.inner_size();
         let (Some(w), Some(h)) = (NonZeroU32::new(size.width), NonZeroU32::new(size.height)) else {
@@ -74,14 +88,10 @@ impl App<'_> {
                 0x2c3c50
             };
         }
-        if let Some(image) = &self.preview_image {
-            image.draw_fit(&mut buffer, size.width, size.height)?;
-        } else {
-            // Amatsutsumi research viewport. Scaling to a resized window is presentation policy.
-            let image = self.startup.render_frame()?;
+        if self.preview_image.is_none() {
             buffer.fill(0);
-            image.draw_fit(&mut buffer, size.width, size.height)?;
         }
+        image.draw_fit(&mut buffer, size.width, size.height)?;
         buffer.present()?;
         Ok(())
     }
@@ -361,7 +371,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     )?;
     if root == "--help" {
         println!(
-            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>] [--continue-without-snapshot] [--rand-seed <seed>] [--save-frame <new.png>] [--audio <record|native>] [--record-text]\nNative research preview only. Runs bounded startup with virtual callback tick 0 and explicit wall-time scene updates; stops at unknown commands or main snapshot barrier. --continue-without-snapshot enters main without building a save image; saving stays unavailable. --rand-seed sets the CRT rand() research seed (default 0). Without an explicit image, presents the verified 2D scene (top-level objects and their children) and CMV6 JBPD movies on a 1280x720 research viewport; includes timed full-screen color fades; use a release build for movie decoding; transforms, other transitions and alternate blend modes remain unsupported. --save-frame writes the frame shown at exit, in script coordinates, to a new PNG file (never overwritten); use it instead of screen captures to check rendering. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. --audio record (default) records only; --audio native requires the audio-output feature and opens the default device for Vorbis SE/BGM/movie playback, using audio source position for movie frames. Device-buffer latency is not calibrated. Raw window input is observed but not injected into CMVS opcodes. --record-text explicitly records only the supported single-line message glyph descriptors and reveal timing; no font pixels or text drawing. Default message output stays a barrier. All game files read-only."
+            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>] [--continue-without-snapshot] [--rand-seed <seed>] [--save-frame <new.png>] [--audio <record|native>] [--record-text | --font <file> [--font-face <index>]]\nNative research preview only. Runs bounded startup with virtual callback tick 0 and explicit wall-time scene updates; stops at unknown commands or main snapshot barrier. --continue-without-snapshot enters main without building a save image; saving stays unavailable. --rand-seed sets the CRT rand() research seed (default 0). Without an explicit image, presents the verified 2D scene (top-level objects and their children) and CMV6 JBPD movies on a 1280x720 research viewport; includes timed full-screen color fades; use a release build for movie decoding; transforms, other transitions and alternate blend modes remain unsupported. --save-frame writes the frame shown at exit, in script coordinates, to a new PNG file (never overwritten); use it instead of screen captures to check rendering. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. --audio record (default) records only; --audio native requires the audio-output feature and opens the default device for Vorbis SE/BGM/movie playback, using audio source position for movie frames. Device-buffer latency is not calibrated. Raw window input is observed but not injected into CMVS opcodes. --record-text explicitly records only the supported single-line message glyph descriptors and reveal timing; no font pixels or text drawing. --font loads an explicit OpenType file/collection face and previews the supported single-line Shift-JIS messages, with flat colors and outlines. Its glyph masks differ from GDI. --font-face defaults to 0. Default message output stays a barrier. All game files read-only."
         );
         return Ok(());
     }
@@ -375,6 +385,8 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut native_audio = false;
     let mut native_input = true;
     let mut record_text = false;
+    let mut font_path = None;
+    let mut font_face = None;
     while let Some(flag) = args.next() {
         if flag == "--continue-without-snapshot" {
             snapshot_policy = SnapshotPolicy::ContinueWithoutImage;
@@ -403,6 +415,10 @@ fn run() -> Result<(), Box<dyn Error>> {
             image_archive = Some(value);
         } else if flag == "--save-frame" {
             save_frame = Some(PathBuf::from(value));
+        } else if flag == "--font" {
+            font_path = Some(PathBuf::from(value));
+        } else if flag == "--font-face" {
+            font_face = Some(value.to_str().ok_or("invalid font face")?.parse::<u32>()?);
         } else if flag == "--input" {
             native_input = match value.to_str() {
                 Some("native") => true,
@@ -420,6 +436,18 @@ fn run() -> Result<(), Box<dyn Error>> {
         }
     }
     let encoding = encoding.ok_or("select title encoding explicitly with --encoding")?;
+    if font_face.is_some() && font_path.is_none() {
+        return Err("--font-face requires --font".into());
+    }
+    if font_path.is_some() && (record_text || encoding != TextEncoding::ShiftJis) {
+        return Err(
+            "--font requires shift-jis encoding and cannot be combined with --record-text".into(),
+        );
+    }
+    let font = font_path
+        .as_ref()
+        .map(|path| crate::font::FontRenderer::read(path, font_face.unwrap_or(0)))
+        .transpose()?;
     let root = PathBuf::from(root).canonicalize()?;
     let bindings = if native_input {
         use std::io::Read;
@@ -470,7 +498,12 @@ fn run() -> Result<(), Box<dyn Error>> {
         return Err("native audio requires --features desktop,audio-output".into());
     }
     startup.set_snapshot_policy(snapshot_policy);
-    startup.set_record_text(record_text);
+    startup.set_record_text(record_text || font.is_some());
+    if font.is_some() {
+        println!(
+            "# OpenType font preview enabled; explicit font file, Shift-JIS, supported single-line layout; glyph masks differ from GDI"
+        );
+    }
     if record_text {
         println!(
             "# text RECORDING ONLY: supported single-line glyph descriptors and reveal timing; no font pixels or text drawing"
@@ -496,6 +529,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         preview_image,
         next_frame: Instant::now(),
         last_frame: Instant::now(),
+        font,
     };
     let event_loop = EventLoop::new()?;
     event_loop.run_app(&mut app)?;
@@ -511,10 +545,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
     if let Some(path) = save_frame {
         // Script coordinates before window fitting: exactly what the renderer produced.
-        let frame = match &app.preview_image {
-            Some(image) => image.clone(),
-            None => app.startup.render_frame()?,
-        };
+        let frame = app.frame()?;
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)

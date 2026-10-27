@@ -56,6 +56,90 @@ fn create(direction: u32, duration: u32) -> FadeHost {
 }
 
 #[test]
+fn additional_objects_use_stable_layers_and_validate_their_source_rectangles() {
+    use cmvs_rs::{
+        raster::RgbaImage,
+        scene::{DrawState, ObjectImage, SceneObject},
+    };
+    let object = |rgba| {
+        let mut draw = DrawState::default();
+        draw.words[4] = 1;
+        draw.words[5] = 1;
+        draw.words[10] = 1;
+        SceneObject {
+            image: Some(ObjectImage {
+                name: vec![],
+                pixels: RgbaImage::new(1, 1, rgba).unwrap(),
+                alpha: true,
+            }),
+            draw: Some(draw),
+            ..SceneObject::default()
+        }
+    };
+    let blue = object(vec![0, 0, 255, 255]);
+    let mut red = object(vec![255, 0, 0, 255]);
+    let scene = SceneHost::default();
+    assert_eq!(
+        scene_render::render_with_objects(&scene, &[&blue, &red], 1, 1)
+            .unwrap()
+            .pixels(),
+        &[255, 0, 0, 255]
+    );
+    red.shown = false;
+    assert_eq!(
+        scene_render::render_with_objects(&scene, &[&blue, &red], 1, 1)
+            .unwrap()
+            .pixels(),
+        &[0, 0, 255, 255]
+    );
+    red.shown = true;
+    red.draw.as_mut().unwrap().words[2] = 1;
+    assert!(scene_render::render_with_objects(&scene, &[&blue, &red], 1, 1).is_err());
+}
+
+#[test]
+fn additional_glyph_objects_are_sorted_with_the_fade_instead_of_overlaid_after_it() {
+    use cmvs_rs::{
+        raster::RgbaImage,
+        scene::{DrawState, ObjectImage, SceneObject},
+    };
+    let mut code = vec![];
+    command(&mut code, 0x2220, &[0, 0, 1000, 0]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    pending(&mut vm);
+    let mut scene = SceneHost::default();
+    scene.fade_mut().try_handle(&mut vm).unwrap();
+    scene.fade_mut().advance(500);
+    let mut draw = DrawState::default();
+    draw.words[4] = 1;
+    draw.words[5] = 1;
+    draw.words[10] = 1;
+    let mut glyph = SceneObject {
+        image: Some(ObjectImage {
+            name: vec![],
+            pixels: RgbaImage::new(1, 1, vec![255; 4]).unwrap(),
+            alpha: true,
+        }),
+        draw: Some(draw),
+        ..SceneObject::default()
+    };
+    assert_eq!(
+        scene_render::render_with_objects(&scene, &[&glyph], 1, 1)
+            .unwrap()
+            .pixels(),
+        &[128, 128, 128, 255]
+    );
+    glyph.draw.as_mut().unwrap().words[10] = u32::MAX;
+    assert_eq!(
+        scene_render::render_with_objects(&scene, &[&glyph], 1, 1)
+            .unwrap()
+            .pixels(),
+        &[255; 4]
+    );
+}
+
+#[test]
 fn both_directions_advance_only_on_frames_and_have_distinct_lifetimes() {
     for direction in [0, 1] {
         let mut fade = create(direction, 2000);
