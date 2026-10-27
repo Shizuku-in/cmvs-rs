@@ -238,6 +238,66 @@ fn coordinate_mode_two_preserves_parent_child_properties_and_system_results() {
 }
 
 #[test]
+fn projection_parameter_preserves_raw_float_bits_and_unrelated_draw_state() {
+    let values = [
+        70.0f32.to_bits(),
+        (-12.5f32).to_bits(),
+        0,
+        0x8000_0000,
+        0x7f80_0000,
+        0xff80_0000,
+        0x7fc0_1234,
+        0x7f80_0001,
+    ];
+    let mut code = vec![];
+    for (op, args) in [
+        (0x2020, vec![255]),
+        (0x2040, vec![255]),
+        (0x2042, vec![255, u32::MAX]),
+        (0x2045, vec![255, u32::MAX, 100, 200]),
+        (0x21ea, vec![255, u32::MAX, 23]),
+        (0x2022, vec![255, 767]),
+        (0x2050, vec![255, 767]),
+    ] {
+        command(&mut code, op, &args);
+    }
+    for value in values {
+        command(&mut code, 0x2070, &[255, 0x8000_0000, value]);
+        command(&mut code, 0x2070, &[255, 767, value]);
+    }
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    for _ in 0..7 {
+        assert!(next(&mut vm, &mut scene).unwrap());
+    }
+    vm.state_mut().set_system_integer(0, 123).unwrap();
+    vm.state_mut().set_system_integer(4, 456).unwrap();
+    let mut expected = scene.object(255).unwrap().clone();
+    for value in values {
+        assert!(next(&mut vm, &mut scene).unwrap());
+        expected.draw.as_mut().unwrap().words[15] = value;
+        assert_eq!(scene.object(255), Some(&expected));
+        assert!(next(&mut vm, &mut scene).unwrap());
+        expected
+            .children
+            .get_mut(&767)
+            .unwrap()
+            .draw
+            .as_mut()
+            .unwrap()
+            .words[15] = value;
+        assert_eq!(scene.object(255), Some(&expected));
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.state().system_integer(0), Some(123));
+        assert_eq!(vm.state().system_integer(4), Some(456));
+    }
+    assert_eq!(vm.pc(), code.len());
+    // Preserving the projection input is not an implementation of camera presentation.
+    assert!(cmvs_rs::scene_render::render(&scene, 1, 1).is_err());
+}
+
+#[test]
 fn coordinate_mode_two_errors_preserve_pending_command_stack_and_objects() {
     for args in [
         vec![256, u32::MAX],
@@ -311,8 +371,15 @@ fn invalid_property_targets_and_truncated_arguments_are_transactional() {
         (0x2040, vec![256]),
         (0x2022, vec![1, 768]),
         (0x2050, vec![1, 0]),
-        (0x2045, vec![1, u32::MAX, 5, 6]), // no draw state
-        (0x2044, vec![1, u32::MAX, 5]),    // truncated stack
+        (0x2045, vec![1, u32::MAX, 5, 6]),        // no draw state
+        (0x2044, vec![1, u32::MAX, 5]),           // truncated stack
+        (0x2070, vec![1, u32::MAX, 0x428c_0000]), // Parent without draw state.
+        (0x2070, vec![2, u32::MAX, 0]),           // Missing parent.
+        (0x2070, vec![256, u32::MAX, 0]),
+        (0x2070, vec![u32::MAX, u32::MAX, 0]),
+        (0x2070, vec![1, 768, 0]),
+        (0x2070, vec![1, 0, 0]),     // Missing child.
+        (0x2070, vec![1, u32::MAX]), // Missing float parameter.
     ] {
         let mut code = vec![];
         command(&mut code, 0x2020, &[1]);

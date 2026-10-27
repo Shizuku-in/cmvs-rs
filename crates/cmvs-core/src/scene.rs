@@ -259,7 +259,8 @@ impl OpacityTrack {
 
 /// Draw fields retained as original words (offset / 4). Unimplemented setters stay pending.
 /// 0=coordinate mode, 1=blend, 2..6=source x/y/width/height, 6..8=origin,
-/// 8..10=position, 10=order, 17=opacity, 18/19=scale bits, 20=rotation, 21=fade factor.
+/// 8..10=position, 10=order, 15=camera projection parameter bits (0x2070),
+/// 17=opacity, 18/19=scale bits, 20=rotation, 21=fade factor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DrawState {
     pub words: [u32; 22],
@@ -359,7 +360,10 @@ impl SceneHost {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(false);
         };
-        if matches!(command, 0x22 | 0x40 | 0x42 | 0x50 | 0x44..=0x48 | 0x4b) {
+        if matches!(
+            command,
+            0x22 | 0x40 | 0x42 | 0x50 | 0x44..=0x48 | 0x4b | 0x70
+        ) {
             return self.handle_object(vm, pc, command);
         }
         if matches!(command, 0x27 | 0x28) {
@@ -627,7 +631,7 @@ impl SceneHost {
             0x22 | 0x42 | 0x50 => 2,
             0x44 => 6,
             0x45 | 0x46 => 4,
-            0x47 | 0x48 | 0x4b => 3,
+            0x47 | 0x48 | 0x4b | 0x70 => 3,
             _ => unreachable!(),
         };
         let mut args = Vec::with_capacity(count);
@@ -640,7 +644,7 @@ impl SceneHost {
             .get(&slot)
             .ok_or_else(|| fail("object slot does not exist"))?;
         let child = if command == 0x40
-            || (matches!(command, 0x42 | 0x44..=0x48 | 0x4b) && (args[1] as i32) < 0)
+            || (matches!(command, 0x42 | 0x44..=0x48 | 0x4b | 0x70) && (args[1] as i32) < 0)
         {
             None
         } else {
@@ -659,7 +663,7 @@ impl SceneHost {
                     .ok_or_else(|| fail("child object does not exist"))?,
                 None => parent,
             };
-            if matches!(command, 0x42 | 0x44..=0x48 | 0x4b) && object.draw.is_none() {
+            if matches!(command, 0x42 | 0x44..=0x48 | 0x4b | 0x70) && object.draw.is_none() {
                 return Err(fail("object has no draw state"));
             }
         }
@@ -697,6 +701,9 @@ impl SceneHost {
                 // 0x2042 / 0x14006d130 -> 0x14003b190 -> 0x14001f550:
                 // set the existing draw state's coordinate mode without rebuilding it.
                 0x42 => object.draw.as_mut().expect("validated").words[0] = 2,
+                // 0x2070 / 0x14006f1a0 -> 0x14003b1b0 -> 0x14001f5a0:
+                // movss preserves SP-12's bits in draw +60, a camera projection input.
+                0x70 => object.draw.as_mut().expect("validated").words[15] = args[2],
                 0x44..=0x48 => object
                     .draw
                     .as_mut()

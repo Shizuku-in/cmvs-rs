@@ -235,3 +235,5 @@ BGM 与 SE 共用 `AudioHost`/`AudioBackend`：`BgmState` 保存 +4464 对象的
 启动自动恢复的预览策略留在本作专用 `runner::Startup`，不修改 `SystemSaveHost` 的格式/装载语义：`set_skip_auto_resume` 仅能在 tick 前配置，默认 false；首次 0x2128 成功装载后清零内存整数 2198，只接受已核对的本作 ID。缺失系统存档不生成变量，损坏/读取失败不消费策略，之后正常恢复重试；第一次读取成功或缺失后策略即不再作用于后续载入。desktop 以 `--skip-auto-resume` 显式启用，暂停提示仅写原生窗口标题。验证见 desktop.md，默认仍保留完整读档断点。
 
 原生音频设备诊断留在可选 audio-output 集成测试中：native_device_smoke 默认忽略，手动运行时才打开设备，使用既有合成 Vorbis 验证通道与释放过程；默认 core/CI 测试继续不依赖音频硬件。同构建对照确认本机受限沙箱的无效句柄退出影响，普通桌面有声启动通过。本轮没有修改后端边界、解码或混音实现，证据范围见 audio-output.md。
+
+`SceneHost::handle_object` 接入 0x2070，复用父/子目标和绘制状态验证，只保存投影参数原始字（DrawState::words[15]）。场景数据与呈现能力分开：模式 2 仍需连接相机投影与光栅化，renderer 继续显式报错。真实剧情 VM 的下一断点为 sn1001.ps3 / 0x2b67c / 0x2071，证据见 vm-semantics.md。
