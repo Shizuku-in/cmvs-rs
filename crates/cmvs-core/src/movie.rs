@@ -128,24 +128,26 @@ pub struct SceneMovie {
 #[derive(Debug)]
 pub enum SceneMovieIndex {
     Cmv6(CmvIndex),
+    /// 32-bit JBPE frames with alpha (0x1400390b0 type 4).
+    Cmv8(CmvIndex),
     Cmv9(crate::cmv9::Cmv9Index),
 }
 impl SceneMovieIndex {
     pub fn max_sequence(&self) -> u32 {
         match self {
-            Self::Cmv6(index) => index.header.max_sequence,
+            Self::Cmv6(index) | Self::Cmv8(index) => index.header.max_sequence,
             Self::Cmv9(index) => index.max_sequence,
         }
     }
     pub fn rate(&self) -> u32 {
         match self {
-            Self::Cmv6(index) => index.header.rate,
+            Self::Cmv6(index) | Self::Cmv8(index) => index.header.rate,
             Self::Cmv9(index) => index.rate,
         }
     }
     pub fn rate_time(&self) -> u32 {
         match self {
-            Self::Cmv6(index) => index.header.rate_time,
+            Self::Cmv6(index) | Self::Cmv8(index) => index.header.rate_time,
             Self::Cmv9(index) => index.rate_time,
         }
     }
@@ -156,7 +158,9 @@ impl SceneMovieIndex {
         base: Option<&crate::raster::RgbaImage>,
     ) -> Result<crate::raster::RgbaImage, Box<dyn Error>> {
         match self {
-            Self::Cmv6(index) => index.decode_frame(&mut io::Cursor::new(data), frame),
+            Self::Cmv6(index) | Self::Cmv8(index) => {
+                index.decode_frame(&mut io::Cursor::new(data), frame)
+            }
             Self::Cmv9(index) => Ok(index.decode_with_base(
                 data,
                 frame,
@@ -284,8 +288,8 @@ impl MovieHost {
         if data.len() > crate::MAX_PAYLOAD {
             return Err(fail("scene movie exceeds research limit").into());
         }
-        let (index, base) = if data.get(..4) == Some(b"CMV6") {
-            let index = CmvIndex::read(&mut io::Cursor::new(&data))?;
+        let (index, base) = if matches!(data.get(..4), Some(b"CMV6" | b"CMV8")) {
+            let index = CmvIndex::read_scene(&mut io::Cursor::new(&data))?;
             // 0x140039c90 loads a nonempty final audio entry when +40 != 0;
             // 0x1400390b0 hands it to device channel slot+2. Do not drop audio.
             if index.header.audio_flag != 0
@@ -294,9 +298,13 @@ impl MovieHost {
                     .last()
                     .is_some_and(|entry| entry.stored_size != 0)
             {
-                return Err(fail("CMV6 scene movie soundtrack is not implemented").into());
+                return Err(fail("CMV6/CMV8 scene movie soundtrack is not implemented").into());
             }
-            (SceneMovieIndex::Cmv6(index), None)
+            if index.alpha {
+                (SceneMovieIndex::Cmv8(index), None)
+            } else {
+                (SceneMovieIndex::Cmv6(index), None)
+            }
         } else {
             let index = crate::cmv9::Cmv9Index::parse(&data)?;
             let base = index.decode_base(&data)?;
@@ -312,7 +320,8 @@ impl MovieHost {
                 filter: None,
                 name: name.clone(),
                 pixels,
-                alpha: false,
+                // 0x14003c020's fifth argument: types 3/4 (CMV7/CMV8) create an alpha image.
+                alpha: matches!(index, SceneMovieIndex::Cmv8(_)),
             }),
             draw: Some(draw),
             ..crate::scene::SceneObject::default()

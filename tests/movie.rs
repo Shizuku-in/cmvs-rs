@@ -888,3 +888,40 @@ fn cmv6_scene_bad_frames_metadata_and_real_soundtracks_preserve_the_old_player()
         assert_eq!(movies.scene_player(0).unwrap().encoded(), encoded);
     }
 }
+
+#[test]
+fn cmv8_scene_creation_binds_an_alpha_image_and_playback_keeps_it() {
+    let mut code = create_code(1, 30, 0);
+    scene_start(&mut code, &[1, 0, 0, u32::MAX, 1]);
+    let script = program(&code, b"synthetic.cmv\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut movies = MovieHost::default();
+    let mut scene = cmvs_rs::scene::SceneHost::default();
+    let mut files = SceneFiles(Some(slot_fixture::cmv8(3)));
+    pending(&mut vm);
+    movies
+        .try_create_scene(&mut vm, &mut scene, &mut files)
+        .unwrap();
+    assert!(matches!(
+        movies.scene_player(1).unwrap().index,
+        cmvs_rs::movie::SceneMovieIndex::Cmv8(_)
+    ));
+    let alpha_of = |scene: &cmvs_rs::scene::SceneHost| {
+        let image = scene.object(30).unwrap().image.as_ref().unwrap();
+        assert!(image.alpha);
+        let pixels = image.pixels.pixels();
+        assert!(
+            pixels
+                .chunks_exact(4)
+                .all(|p| p[..3] == [128, 128, 128] && p[3] == pixels[3])
+        );
+        pixels[3]
+    };
+    assert_eq!(alpha_of(&scene), 50);
+    pending(&mut vm);
+    movies.try_start_scene(&mut vm).unwrap();
+    for expected in [100, 150, 50] {
+        movies.advance_scene(67, &mut scene).unwrap();
+        assert_eq!(alpha_of(&scene), expected);
+    }
+}

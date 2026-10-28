@@ -162,3 +162,71 @@ pub fn movie_frames(frames: u32, rate: u32, time: u32, reuse: bool) -> Vec<u8> {
     }
     b
 }
+
+/// Synthetic CMV8 with 16x16 gray JBPE frames whose alpha is `50 * (i + 1)`, and an empty
+/// final audio entry.
+#[allow(dead_code)]
+pub fn cmv8(frames: u32) -> Vec<u8> {
+    let resource = 44 + (frames as usize + 1) * 20;
+    let mut b = vec![0; resource];
+    b[..4].copy_from_slice(b"CMV8");
+    for (at, v) in [
+        (4, resource as u32),
+        (16, frames),
+        (20, 15),
+        (24, 1),
+        (28, 16),
+        (32, 16),
+        (36, 32),
+        (40, 2),
+    ] {
+        put(&mut b, at, v);
+    }
+    for i in 0..frames {
+        let mut dc = vec![];
+        let mut old = 0;
+        for v in [0, 0, 0, 0, 0, 0]
+            .into_iter()
+            .chain([(i as i16 + 1) * 400; 4])
+        {
+            value(&mut dc, v - old);
+            old = v;
+        }
+        let dc = pack(&dc);
+        let ac = pack(&[1; 40]);
+        let mut p = vec![0; 48];
+        p[..4].copy_from_slice(b"JBPE");
+        for (at, v) in [
+            (4, 44),
+            (8, 0x58c00002),
+            (16, 16 | (16 << 16)),
+            (20, 32),
+            (28, dc.len() as u32),
+            (32, ac.len() as u32),
+        ] {
+            put(&mut p, at, v);
+        }
+        for _ in 0..32 {
+            p.extend(1u32.to_le_bytes());
+        }
+        p.extend([0; 16]);
+        p.extend([1; 192]);
+        p.extend(10u32.to_le_bytes());
+        p.extend([1, 1, 1, 0, 1, 1, 0, 0]);
+        p.extend(dc);
+        p.extend(ac);
+        let offset = (b.len() - resource) as u32;
+        for (n, v) in [i, p.len() as u32, 16 * 16 * 4 + 54, 2, offset]
+            .into_iter()
+            .enumerate()
+        {
+            put(&mut b, 44 + i as usize * 20 + n * 4, v);
+        }
+        b.extend(p);
+    }
+    put(&mut b, 44 + frames as usize * 20, frames);
+    let length = b.len() as u32;
+    put(&mut b, 60 + frames as usize * 20, length - resource as u32);
+    put(&mut b, 8, length);
+    b
+}

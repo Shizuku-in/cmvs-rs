@@ -1,4 +1,4 @@
-//! CMV6 movie containers: header/index parsing and bounded JBPD frame reads.
+//! CMV6/CMV8 movie containers: header/index parsing and bounded JBPD/JBPE frame reads.
 //! The Ogg soundtrack is located but not decoded. Field meanings follow the movie
 //! player in the documented binary (0x1400379f0, 0x140037bb0, 0x140037900) and were checked
 //! read-only against this title's data/video files.
@@ -44,11 +44,24 @@ pub struct CmvEntry {
 pub struct CmvIndex {
     pub header: CmvHeader,
     pub entries: Vec<CmvEntry>,
+    /// CMV8 (0x1400390b0 type 4) frames are 32-bit JBPE images with alpha; CMV6 frames are
+    /// opaque 24-bit JBPD images.
+    pub alpha: bool,
 }
 
 impl CmvIndex {
-    /// Reads and bounds-checks the header and `max_sequence + 1` index entries.
+    /// Reads and bounds-checks a CMV6 header and its `max_sequence + 1` index entries.
     pub fn read(reader: &mut (impl Read + Seek)) -> Result<Self, FormatError> {
+        Self::read_signature(reader, false)
+    }
+    /// Scene movies also accept CMV8, whose container fields match CMV6.
+    pub fn read_scene(reader: &mut (impl Read + Seek)) -> Result<Self, FormatError> {
+        Self::read_signature(reader, true)
+    }
+    fn read_signature(
+        reader: &mut (impl Read + Seek),
+        allow_alpha: bool,
+    ) -> Result<Self, FormatError> {
         let length = reader
             .seek(SeekFrom::End(0))
             .map_err(|_| FormatError("CMV length unavailable"))?;
@@ -59,9 +72,11 @@ impl CmvIndex {
         reader
             .read_exact(&mut head)
             .map_err(|_| FormatError("CMV header truncated"))?;
-        if &head[..4] != b"CMV6" {
-            return Err(FormatError("only the verified CMV6 signature is supported"));
-        }
+        let alpha = match &head[..4] {
+            b"CMV6" => false,
+            b"CMV8" if allow_alpha => true,
+            _ => return Err(FormatError("only the verified CMV6 signature is supported")),
+        };
         let word = |i: usize| u32::from_le_bytes(head[4 + 4 * i..8 + 4 * i].try_into().unwrap());
         let header = CmvHeader {
             resource_offset: word(0),
@@ -108,7 +123,11 @@ impl CmvIndex {
             }
             entries.push(entry);
         }
-        Ok(Self { header, entries })
+        Ok(Self {
+            header,
+            entries,
+            alpha,
+        })
     }
     /// The Ogg soundtrack the player hands to device channel 2.
     pub fn audio(&self) -> Option<&CmvEntry> {
@@ -130,12 +149,13 @@ impl CmvIndex {
                 e.kind == KIND_JBPX && e.sequence == frame && frame < self.header.max_sequence
             })
             .ok_or("CMV frame index is not a video entry")?;
+        let channels = if self.alpha { 4 } else { 3 };
         let decoded_size = u64::from(self.header.width)
             .checked_mul(u64::from(self.header.height))
-            .and_then(|n| n.checked_mul(3));
-        // Scene CMV6 indexes also record the 54-byte BMP header in this metadata
-        // size (mv_ic01.cmv). JBPD output itself is still just the RGB surface.
-        if self.header.bit_count != 24
+            .and_then(|n| n.checked_mul(channels));
+        // Scene CMV6/CMV8 indexes also record the 54-byte BMP header in this metadata
+        // size (mv_ic01.cmv, st-snow.cmv). JBPD output itself is still just the surface.
+        if u64::from(self.header.bit_count) != channels * 8
             || !decoded_size.is_some_and(|size| {
                 u64::from(entry.decoded_size) == size || u64::from(entry.decoded_size) == size + 54
             })
@@ -148,7 +168,11 @@ impl CmvIndex {
         reader.seek(SeekFrom::Start(entry.file_offset(&self.header)))?;
         let mut data = vec![0; entry.stored_size as usize];
         reader.read_exact(&mut data)?;
-        let image = crate::jbpd::decode(&data)?;
+        let image = if self.alpha {
+            crate::jbpd::decode_alpha(&data)?
+        } else {
+            crate::jbpd::decode(&data)?
+        };
         if image.width() != self.header.width || image.height() != self.header.height {
             return Err("JBPD dimensions differ from CMV header".into());
         }

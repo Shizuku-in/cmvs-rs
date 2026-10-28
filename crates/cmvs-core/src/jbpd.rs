@@ -1,5 +1,6 @@
-//! Bounded CMV6 JBPD decoder. Evidence: documented cmvs64.exe hash,
-//! 0x1400ab650 (tiles/entropy), 0x1400b51c0 (integer IDCT), 0x1400a2300 (color).
+//! Bounded CMV6 JBPD and CMV8 JBPE decoder. Evidence: documented cmvs64.exe hash,
+//! 0x1400ab650 / 0x1400af100 (tiles/entropy), 0x1400b51c0 (integer IDCT), 0x1400a2300
+//! (color), 0x1400a3850 (alpha).
 //! Always decodes all blocks, like the original non-consecutive-frame path.
 use crate::{FormatError, MAX_PAYLOAD, raster::RgbaImage};
 
@@ -181,7 +182,28 @@ pub(crate) fn word(data: &[u8], at: usize) -> Result<u32, FormatError> {
 /// Decode a self-contained CMV6 JBPD frame to top-down opaque RGBA.
 /// Other JBP versions, subsampling modes, and missing quantization tables are rejected.
 pub fn decode(data: &[u8]) -> Result<RgbaImage, FormatError> {
-    decode_inner(data, None)
+    decode_inner(data, None, false)
+}
+
+/// Decode a self-contained CMV8 `JBPE` frame (0x1400af100) to top-down RGBA with alpha.
+/// After the six colour blocks each MCU carries four alpha blocks laid out like luma and
+/// dequantized with a third table. The DC count is stored after the three tables; the
+/// optional reuse mask covers the MCU grid rounded up to 16 pixels. The original does not
+/// check the signature; only the observed `JBPE` is accepted here.
+pub fn decode_alpha(data: &[u8]) -> Result<RgbaImage, FormatError> {
+    decode_inner(data, None, true)
+}
+
+/// 0x1400a3850 writes byte 0 of `0x1400e3b30[4 * v + 512]` for each alpha IDCT sample:
+/// clamp(v, 0, 255) for v in -128..=383. Other entries hold unrelated values and samples
+/// below -128 read before the table, so they are rejected.
+fn alpha_sample(v: i16) -> Result<u8, FormatError> {
+    match v {
+        -128..=383 => Ok(v.clamp(0, 255) as u8),
+        _ => Err(FormatError(
+            "JBPE alpha sample outside the verified clamp table",
+        )),
+    }
 }
 
 /// CMV9: the outer bitmap marks static blocks. Base data contains the set bits;
@@ -193,14 +215,16 @@ pub(crate) fn decode_masked(
     static_blocks: bool,
     base: Option<&RgbaImage>,
 ) -> Result<RgbaImage, FormatError> {
-    decode_inner(data, Some((mask, static_blocks, base)))
+    decode_inner(data, Some((mask, static_blocks, base)), false)
 }
 
 fn decode_inner(
     data: &[u8],
     masked: Option<(&[u8], bool, Option<&RgbaImage>)>,
+    alpha: bool,
 ) -> Result<RgbaImage, FormatError> {
-    if data.len() > MAX_PAYLOAD || data.get(..4) != Some(b"JBPD") {
+    let signature: &[u8] = if alpha { b"JBPE" } else { b"JBPD" };
+    if data.len() > MAX_PAYLOAD || data.get(..4) != Some(signature) {
         return Err(FormatError("expected bounded JBPD frame"));
     }
     let flags = word(data, 8)?;
@@ -214,11 +238,13 @@ fn decode_inner(
     if w == 0
         || h == 0
         || w * h > MAX_PAYLOAD / 4
-        || word(data, 20)? != 24
-        || (masked.is_none() && (!w.is_multiple_of(16) || !h.is_multiple_of(16)))
+        || word(data, 20)? != if alpha { 32 } else { 24 }
+        || (masked.is_none() && !alpha && (!w.is_multiple_of(16) || !h.is_multiple_of(16)))
     {
         return Err(FormatError("unsupported JBPD dimensions or bit depth"));
     }
+    // JBPE has a third (alpha) quantization table.
+    let head_size = if alpha { 336 } else { 272 };
     let table = usize::try_from(word(data, 4)?)
         .ok()
         .and_then(|n| {
@@ -230,16 +256,24 @@ fn decode_inner(
                 },
             )
         })
-        .filter(|&n| n >= 44 && n <= data.len().saturating_sub(272))
+        .filter(|&n| n >= 44 && n <= data.len().saturating_sub(head_size))
         .ok_or(FormatError("JBPD table offset outside frame"))?;
     let head = data
-        .get(table..table + 272)
+        .get(table..table + head_size)
         .ok_or(FormatError("JBPD tables truncated"))?;
     let dc_tree = Tree::new(&head[..64])?;
     let ac_tree = Tree::new(&head[64..128])?;
     let runs = &head[128..144];
-    let quant = &head[144..272];
-    let layout = table + 272;
+    let quant = &head[144..head_size];
+    let mcus = w.div_ceil(16) * h.div_ceil(16);
+    let per_mcu = if alpha { 10 } else { 6 };
+    let mut layout = table + head_size;
+    if alpha {
+        if word(data, layout)? as usize != mcus * per_mcu {
+            return Err(FormatError("JBPE DC count differs from the MCU grid"));
+        }
+        layout += 4;
+    }
     let layout_word = word(data, layout)?;
     let rows = (layout_word & 255) as usize;
     let cols = ((layout_word >> 8) & 255) as usize;
@@ -257,6 +291,9 @@ fn decode_inner(
                 .get(start..start + 2)
                 .ok_or(FormatError("CMV9 reuse mask truncated"))?;
             start += 2 + usize::from(u16::from_le_bytes(length.try_into().unwrap()));
+        } else if alpha {
+            // 0x1400a0ad0 rounds both dimensions up to 16 in this mode.
+            start += mcus.div_ceil(8).next_multiple_of(4);
         } else {
             start += (w / 16 * h / 16).div_ceil(8).next_multiple_of(4);
         }
@@ -275,7 +312,6 @@ fn decode_inner(
         .ok_or(FormatError("JBPD AC stream outside frame"))?;
     let mut dc = Bits::new(dc_data);
     let mut ac = Bits::new(ac_data);
-    let mcus = w.div_ceil(16) * h.div_ceil(16);
     if let Some((mask, _, base)) = masked
         && (mask.len() != mcus.div_ceil(8)
             || base.is_some_and(|b| b.width() as usize != w || b.height() as usize != h))
@@ -285,7 +321,7 @@ fn decode_inner(
     let present = |index: usize| {
         masked.is_none_or(|(mask, set, _)| ((mask[index / 8] & (128 >> (index % 8))) != 0) == set)
     };
-    let blocks = (0..mcus).filter(|&i| present(i)).count() * 6;
+    let blocks = (0..mcus).filter(|&i| present(i)).count() * per_mcu;
     if masked.is_some() && word(data, 36)? as usize != blocks {
         return Err(FormatError("CMV9 DC count differs from block mask"));
     }
@@ -316,9 +352,14 @@ fn decode_inner(
                 if !draw {
                     continue;
                 }
-                let mut samples = [[0i16; 64]; 6];
-                for (n, block) in samples.iter_mut().enumerate() {
-                    let q = &quant[if n < 4 { 0..64 } else { 64..128 }];
+                // Luma 0..3, Cb 4, Cr 5, then JBPE alpha 6..9 with the third table.
+                let mut samples = [[0i16; 64]; 10];
+                for (n, block) in samples[..per_mcu].iter_mut().enumerate() {
+                    let q = &quant[match n {
+                        0..4 => 0..64,
+                        4 | 5 => 64..128,
+                        _ => 128..192,
+                    }];
                     block[0] = values[dc_index].wrapping_mul(i16::from(q[0]));
                     dc_index += 1;
                     let mut pos = 1;
@@ -366,7 +407,11 @@ fn decode_inner(
                         for c in 0..3 {
                             pixels[at + c] = rgb[c].clamp(0, 255) as u8;
                         }
-                        pixels[at + 3] = 255;
+                        pixels[at + 3] = if alpha {
+                            alpha_sample(samples[6 + y / 8 * 2 + x / 8][y % 8 * 8 + x % 8])?
+                        } else {
+                            255
+                        };
                     }
                 }
             }
