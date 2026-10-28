@@ -565,6 +565,99 @@ fn system_save_export_is_opt_in_external_and_becomes_the_read_source() {
     assert_eq!(fs::read(root.0.join("save/system.dat")).unwrap(), original);
     fs::remove_file(output).unwrap();
 }
+
+#[test]
+fn user_directory_saves_twice_restarts_and_never_falls_back_from_corrupt_primary() {
+    use cmvs_rs::{evaluate::State, system_save::Css1Save};
+    let mut code = vec![];
+    let mut call = |op: u16, args: &[u32]| {
+        for value in args.iter().rev() {
+            code.extend(0x440u16.to_le_bytes());
+            code.extend(4u16.to_le_bytes());
+            code.extend(value.to_le_bytes());
+        }
+        code.extend(op.to_le_bytes());
+    };
+    call(0x201d, &[0x12345678]);
+    call(0x2128, &[]);
+    call(0x2092, &[2048, 1, 42]);
+    call(0x2129, &[]);
+    call(0x2092, &[2048, 1, 99]);
+    call(0x2129, &[]);
+    call(0x2092, &[2048, 1, 17]);
+    call(0x2128, &[]);
+    call(0x27ff, &[]);
+    let root = Root::new("user-directory", &code, b"");
+    let original = auto_resume_save(0x12345678);
+    fs::write(root.0.join("save/system.dat"), &original).unwrap();
+    let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join(format!("cmvs-runner-profile-{}", std::process::id()));
+    assert!(!directory.exists());
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    assert!(
+        run.set_user_data_directory(&root.0.join("save/profile"))
+            .is_err()
+    );
+    run.set_user_data_directory(&directory).unwrap();
+    assert!(
+        run.set_system_save_output(&directory.join("other.dat"))
+            .is_err()
+    );
+    let mut backend = RecordingBackend::default();
+    loop {
+        if let StartupEvent::Unhandled { command, .. } = run.tick(&mut backend).unwrap() {
+            assert_eq!(command, 0x27ff);
+            break;
+        }
+    }
+    assert_eq!(run.machine().state().integer(2048), Some(99));
+    let stored = Css1Save::decode(&fs::read(directory.join("system.dat")).unwrap()).unwrap();
+    let backup_raw = fs::read(directory.join("system.bak")).unwrap();
+    let backup = Css1Save::decode(&backup_raw).unwrap();
+    assert_eq!(
+        stored
+            .applied(&State::default(), Some(0x12345678))
+            .unwrap()
+            .integer(2048),
+        Some(99)
+    );
+    assert_eq!(
+        backup
+            .applied(&State::default(), Some(0x12345678))
+            .unwrap()
+            .integer(2048),
+        Some(42)
+    );
+    drop(run);
+    let mut restarted = Startup::new(&script, &root.0, 0).unwrap();
+    restarted.set_user_data_directory(&directory).unwrap();
+    while restarted.machine().state().integer(2048).is_none() {
+        restarted.tick(&mut backend).unwrap();
+    }
+    assert_eq!(restarted.machine().state().integer(2048), Some(99));
+    drop(restarted);
+    fs::write(directory.join("system.dat"), b"corrupt profile").unwrap();
+    let mut corrupt = Startup::new(&script, &root.0, 0).unwrap();
+    corrupt.set_user_data_directory(&directory).unwrap();
+    let mut failed = false;
+    for _ in 0..20 {
+        if corrupt.tick(&mut backend).is_err() {
+            failed = true;
+            break;
+        }
+    }
+    assert!(failed);
+    assert_eq!(corrupt.machine().state().integer(2048), None);
+    assert_eq!(fs::read(root.0.join("save/system.dat")).unwrap(), original);
+    assert_eq!(fs::read(directory.join("system.bak")).unwrap(), backup_raw);
+    drop(corrupt);
+    for name in ["system.dat", "system.bak", ".cmvs-system.lock"] {
+        fs::remove_file(directory.join(name)).unwrap();
+    }
+    fs::remove_dir(directory).unwrap();
+}
 fn auto_resume_code(game_id: u32, reads: usize) -> Vec<u8> {
     let mut code = 0x442u16.to_le_bytes().to_vec();
     code.extend(4u16.to_le_bytes());

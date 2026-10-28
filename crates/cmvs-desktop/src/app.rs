@@ -394,7 +394,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     )?;
     if root == "--help" {
         println!(
-            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>] [--continue-without-snapshot] [--skip-auto-resume] [--system-save-output <new.dat>] [--rand-seed <seed>] [--save-frame <new.png>] [--audio <record|native>] [--input <native|record>] [--record-text | --font <file> [--font-face <index>]]\nNative research preview only. Runs bounded startup with virtual callback tick 0 and explicit wall-time scene updates; stops at unknown commands or main snapshot barrier. --continue-without-snapshot enters main without building a save image; gameplay snapshot saving stays unavailable. --system-save-output explicitly enables one mode-1 CSS1 export to a new file outside the game root after loading a header template; existing files are never replaced, and later system-save reads use that export. Without this option 0x2129 stays a barrier. --skip-auto-resume explicitly disables startup auto-load in memory for the verified Amatsutsumi profile, preserving all save files and other system-save settings; full save restore stays unsupported. --rand-seed sets the CRT rand() research seed (default 0). Without an explicit image, presents the verified 2D scene (top-level objects and their children) and CMV6 JBPD movies on a 1280x720 research viewport; includes timed full-screen color fades; use a release build for movie decoding; transforms, other transitions and alternate blend modes remain unsupported. --save-frame writes the frame shown at exit, in script coordinates, to a new PNG file (never overwritten); use it instead of screen captures to check rendering. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. --audio record (default) records only; --audio native requires the audio-output feature and opens the default device for Vorbis SE/BGM/movie playback, using audio source position for movie frames. Device-buffer latency is not calibrated. --input native (default) maps key.cfg bindings and pointer events to CMVS actions; --input record observes input without injecting actions. --record-text explicitly records only the supported message glyph descriptors and reveal timing; no font pixels or text drawing. --font loads an explicit OpenType file/collection face and previews the supported Shift-JIS messages with wrapping and ruby, with flat colors and outlines. Its glyph masks differ from GDI. --font-face defaults to 0. Default message output stays a barrier. All game files read-only."
+            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>] [--continue-without-snapshot] [--skip-auto-resume] [--system-save-output <new.dat> | --user-data-dir <directory>] [--rand-seed <seed>] [--save-frame <new.png>] [--audio <record|native>] [--input <native|record>] [--record-text | --font <file> [--font-face <index>]]\nNative research preview only. Runs bounded startup with virtual callback tick 0 and explicit wall-time scene updates; stops at unknown commands or main snapshot barrier. --continue-without-snapshot enters main without building a save image; gameplay snapshot saving stays unavailable. --system-save-output explicitly enables one mode-1 CSS1 export to a new file outside the game root after loading a header template; existing files are never replaced, and later system-save reads use that export. --user-data-dir instead enables a locked independent user directory, reads its system.dat on restart (falling back to the read-only game template only if absent), scans gameplay slots there, and permits repeated CSS1 saves with a system.bak backup. These two output modes are mutually exclusive. Without either option 0x2129 stays a barrier. --skip-auto-resume explicitly disables startup auto-load in memory for the verified Amatsutsumi profile, preserving all save files and other system-save settings; full save restore stays unsupported. --rand-seed sets the CRT rand() research seed (default 0). Without an explicit image, presents the verified 2D scene (top-level objects and their children) and CMV6 JBPD movies on a 1280x720 research viewport; includes timed full-screen color fades; use a release build for movie decoding; transforms, other transitions and alternate blend modes remain unsupported. --save-frame writes the frame shown at exit, in script coordinates, to a new PNG file (never overwritten); use it instead of screen captures to check rendering. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. --audio record (default) records only; --audio native requires the audio-output feature and opens the default device for Vorbis SE/BGM/movie playback, using audio source position for movie frames. Device-buffer latency is not calibrated. --input native (default) maps key.cfg bindings and pointer events to CMVS actions; --input record observes input without injecting actions. --record-text explicitly records only the supported message glyph descriptors and reveal timing; no font pixels or text drawing. --font loads an explicit OpenType file/collection face and previews the supported Shift-JIS messages with wrapping and ruby, with flat colors and outlines. Its glyph masks differ from GDI. --font-face defaults to 0. Default message output stays a barrier. All game files read-only."
         );
         return Ok(());
     }
@@ -405,6 +405,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut snapshot_policy = SnapshotPolicy::Barrier;
     let mut skip_auto_resume = false;
     let mut system_save_output = None;
+    let mut user_data_dir = None;
     let mut rand_seed = 0;
     let mut save_frame = None;
     let mut native_audio = false;
@@ -440,6 +441,8 @@ fn run() -> Result<(), Box<dyn Error>> {
             rand_seed = value.to_str().ok_or("invalid seed")?.parse::<u32>()?;
         } else if flag == "--system-save-output" {
             system_save_output = Some(PathBuf::from(value));
+        } else if flag == "--user-data-dir" {
+            user_data_dir = Some(PathBuf::from(value));
         } else if flag == "--preview-image" {
             preview_name = Some(value);
         } else if flag == "--image-archive" {
@@ -515,7 +518,13 @@ fn run() -> Result<(), Box<dyn Error>> {
         _ => return Err("preview-image and image-archive must be supplied together".into()),
     };
     let script = load_start(&root)?;
+    if system_save_output.is_some() && user_data_dir.is_some() {
+        return Err("--user-data-dir and --system-save-output are mutually exclusive".into());
+    }
     let mut startup = Startup::new(&script, &root, 0)?;
+    if let Some(path) = &user_data_dir {
+        startup.set_user_data_directory(path)?;
+    }
     if let Some(path) = &system_save_output {
         startup.set_system_save_output(path)?;
     }

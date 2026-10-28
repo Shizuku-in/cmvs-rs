@@ -2,6 +2,7 @@
 name = "cmvs-desktop"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 publish.workspace = true
 description = "CMVS desktop window, native input adapter and application entry point"
 

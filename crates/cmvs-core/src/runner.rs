@@ -25,7 +25,10 @@ use crate::{
     script_control::{ArchiveScripts, ControlEvent, ScriptControl},
     sequence::SequenceHost,
     snapshot::{SaveImage, SaveInfo, SaveTitle},
-    system_save::{FileSystemSave, NewSystemSave, SystemSaveEvent, SystemSaveHost},
+    system_save::{
+        FileSystemSave, NewSystemSave, ProfileSystemSave, SystemSaveEvent, SystemSaveHost,
+        SystemSaveSink,
+    },
     text,
     timers::VmTimers,
 };
@@ -35,6 +38,27 @@ use std::{
     io::Read,
     path::{Path, PathBuf},
 };
+
+enum SystemOutput {
+    New(NewSystemSave),
+    Profile(ProfileSystemSave),
+}
+impl SystemOutput {
+    fn path(&self) -> PathBuf {
+        match self {
+            Self::New(output) => output.path().to_owned(),
+            Self::Profile(profile) => profile.path(),
+        }
+    }
+}
+impl SystemSaveSink for SystemOutput {
+    fn write(&mut self, raw: &[u8]) -> std::io::Result<()> {
+        match self {
+            Self::New(output) => output.write(raw),
+            Self::Profile(profile) => profile.write(raw),
+        }
+    }
+}
 
 pub fn load_start(root: &Path) -> Result<Script, Box<dyn Error>> {
     let mut bytes = Vec::new();
@@ -73,7 +97,7 @@ pub struct Startup<'a> {
     save_menu: SaveMenuHost,
     system_source: FileSystemSave,
     system_host: SystemSaveHost,
-    system_output: Option<NewSystemSave>,
+    system_output: Option<SystemOutput>,
     assets: DirectoryAssets,
     platform: PlatformHost,
     scene: SceneHost,
@@ -354,10 +378,29 @@ impl<'a> Startup<'a> {
     /// Opt into one CSS1 export to a new file outside the original game directory.
     /// Subsequent 0x2128 reads use the exported file after the write succeeds.
     pub fn set_system_save_output(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
-        if self.steps != 0 {
-            return Err("system-save output must be selected before VM execution".into());
+        if self.steps != 0 || self.system_output.is_some() {
+            return Err("select one system-save output mode before VM execution".into());
         }
-        self.system_output = Some(NewSystemSave::new(path, &self.root)?);
+        self.system_output = Some(SystemOutput::New(NewSystemSave::new(path, &self.root)?));
+        Ok(())
+    }
+    /// Use a locked, independent user directory for CSS1 reads, repeated writes and
+    /// gameplay-slot scanning. Only an absent initial CSS1 falls back to the game template.
+    pub fn set_user_data_directory(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
+        if self.steps != 0 || self.system_output.is_some() {
+            return Err("select one system-save output mode before VM execution".into());
+        }
+        let profile = ProfileSystemSave::open(path, &self.root)?;
+        let saves = DirectorySaves::new(profile.directory())?;
+        let primary = profile.path();
+        let source = if primary.try_exists()? {
+            primary
+        } else {
+            self.root.join("save/system.dat")
+        };
+        self.system_source = FileSystemSave::new(source);
+        self.saves = saves;
+        self.system_output = Some(SystemOutput::Profile(profile));
         Ok(())
     }
     /// Host watchdog, not an engine limit: a tick fails without stepping once this many VM

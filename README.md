@@ -13,7 +13,7 @@ Windows、macOS、Linux、Android、iOS 是主要平台目标；当前 Windows �
 默认核心无第三方依赖，项目代码禁止 unsafe；可选 `desktop` 功能使用窗口与图像依赖。
 核心文本保留原始字节，CLI 以十六进制显示，避免误判 Shift-JIS/GBK 编码。
 
-在项目目录中，使用支持 Rust 2024 edition 的 stable 工具链：
+在项目目录中，使用 Rust 1.89 或更高版本的 stable 工具链（本机验证版本 1.96）：
 
 ```powershell
 cargo run --offline -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3"
@@ -41,7 +41,7 @@ cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-`--payload` 仅允许创建新文件，输出不包含原始头部。当前默认 581 项测试、全 workspace 全功能 626 项测试及严格 Clippy 检查通过；另有 1 项默认忽略的原生音频设备检查，已在普通桌面权限下手动通过。
+`--payload` 仅允许创建新文件，输出不包含原始头部。当前默认 587 项测试、全 workspace 全功能 632 项测试及严格 Clippy 检查通过；另有 1 项默认忽略的原生音频设备检查，已在普通桌面权限下手动通过。
 真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
 `ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
 
@@ -404,3 +404,11 @@ CMV8 场景影片已实现（2026-10-28）：JBPE 帧按原版解码第三量化
 设备通道 15 停止 `0x2241(0)` 与历史清空 `0x212f` 已实现（2026-10-28）：前者使用独立音频后端接口，后者释放全部历史记录并保留容量。鼠标/Ctrl 正常入口记录重放都清空了 128 条历史，在 95850312/93249730 步到 sn1508.ps3 / PC=0x33b22 / `0x2129`（写系统存档），SP=8；较旧 0x2241 屏障各增加 183 步，无新增让出帧，消息推进数仍为 13857/0。两条终点字体呈现通过；通道 15 的播放命令仍未实现，原生只支持空槽停止，本轮未新增原生窗口/音频设备实测。默认 576 项、全功能 621 项测试、格式、两组严格 Clippy 与完整功能 release 构建通过，1 项硬件检查忽略。CSS1 写入保留未处理，原游戏存档未修改，尚未返回标题。
 
 CSS1 系统存档新文件导出 `0x2129` 已实现（2026-10-28）。默认写入屏障保留；从项目目录给桌面运行命令增加 `--system-save-output "local/completed-system.dat"`，可在已有 CSS1 模板和完整已知状态下导出到游戏目录之外的新文件，拒绝覆盖。原系统存档 2541 字节同参数复编码逐字节一致；路线结尾鼠标/Ctrl 的 2707 字节输出相同，独立 Python 解码均与 VM 持久状态一致。两条路径已切回标题脚本，Ctrl 进一步到达完整标题画面和五按钮等待点。该记录重放验证了选定路线的剧情→片尾→后日谈→标题闭环，不代表完整游戏或原生完整流程已验证。默认 581 项、全功能 626 项测试、格式、两组严格 Clippy 和完整功能 release 构建通过，1 项设备检查忽略。无模板首次写入、多次保存/备份、0x212a/b/c、完整剧情快照与恢复仍未实现；详见 [系统存档](docs/system-save-format.md)。
+
+独立用户目录已接入（2026-10-29）：用 `--user-data-dir "local/user-data"` 替代单次 `--system-save-output`，从用户 system.dat 加载，并支持重复保存及 system.bak 备份；目录不存在时可创建，必须位于原游戏根之外。用户主文件不存在才回退读取原游戏 CSS1 模板，损坏时明确报错，不自动重置或恢复备份；剧情槽扫描也使用该目录。会话锁阻止同一目录并发运行，关闭/崩溃后自动释放。真实 Ctrl 路线保存后回标题，退出再启动时通关标志与持久区保持，未开启 skip-auto-resume 也正常进入标题；原系统存档未改。默认 587 项、全功能 632 项测试及格式、严格 Clippy、release 构建通过，1 项音频设备检查默认忽略；尚不支持剧情中途的完整存读档或无 CSS1 模板首次保存。
+
+例如从项目目录运行（Rust 1.89+）：
+
+```powershell
+cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --skip-auto-resume --user-data-dir "local/user-data" --font "C:/Windows/Fonts/msgothic.ttc"
+```
