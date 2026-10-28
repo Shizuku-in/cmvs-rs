@@ -87,7 +87,7 @@ struct Entry<'a> {
 
 /// Only blend modes 1/2, crop, origin, position, order and opacity may differ from the
 /// constructor values; a projected object (coordinate mode 2/3) also keeps its world XYZ
-/// (words 11..14) and projection inputs (15/16). Own scale and rotation must stay at constructor values; fade factors
+/// (words 11..14), projection inputs (15/16), and finite nonnegative XY scale. Rotation stays at constructor values; fade factors
 /// in 0..256 are used by image replacement. A 2D object's color word also selects
 /// the solid rectangle color and whether its children inherit the parent's image.
 fn check(words: &[u32; 22], projected: bool) -> Result<(), FormatError> {
@@ -100,6 +100,12 @@ fn check(words: &[u32; 22], projected: bool) -> Result<(), FormatError> {
         allowed[0] = words[0];
         allowed[11..14].copy_from_slice(&words[11..14]);
         allowed[15..17].copy_from_slice(&words[15..17]);
+        for i in 18..20 {
+            let scale = f32::from_bits(words[i]);
+            if scale.is_finite() && scale >= 0.0 {
+                allowed[i] = words[i];
+            }
+        }
     }
     if !projected {
         allowed[14] = words[14];
@@ -341,21 +347,29 @@ fn projected_layer<'a>(
         return Err(FormatError("scene source rectangle outside image"));
     }
     let [px, py] = projection.position;
-    let scale = projection.scale;
-    let origin = [0, 1].map(|i| {
-        let own = 0.0 - f32::from(words[6 + i] as i16);
+    // 0x140024020 scales the child's local corners about its own origin first.
+    // 0x140020708 and 0x1400238a0 then subtract the parent origin/child position
+    // offset and apply the projection scale (which includes the parent's XY scale).
+    let scale =
+        [0, 1].map(|i| projection.scale * inherited.map_or(1.0, |p| f32::from_bits(p[18 + i])));
+    if scale.iter().any(|v| *v <= 0.0) {
+        return Ok(None);
+    }
+    let offset = [0, 1].map(|i| {
         if let Some(p) = inherited {
             // 0x140020708/0x14002070c: signed 16-bit parent origin minus child position.
-            own - f32::from((p[6 + i] as i16).wrapping_sub(words[8 + i] as i16))
+            f32::from((p[6 + i] as i16).wrapping_sub(words[8 + i] as i16))
         } else {
-            own
+            0.0
         }
     });
+    let origin = [0, 1].map(|i| 0.0 - f32::from(words[6 + i] as i16));
+    let local = [0, 1].map(|i| f32::from_bits(words[18 + i]));
     let quad = [
-        (origin[0] * scale + px) - 0.5,
-        (origin[1] * scale + py) - 0.5,
-        ((w as f32 + origin[0]) * scale + px) - 0.5,
-        ((h as f32 + origin[1]) * scale + py) - 0.5,
+        ((origin[0] * local[0] - offset[0]) * scale[0] + px) - 0.5,
+        ((origin[1] * local[1] - offset[1]) * scale[1] + py) - 0.5,
+        (((w as f32 + origin[0]) * local[0] - offset[0]) * scale[0] + px) - 0.5,
+        (((h as f32 + origin[1]) * local[1] - offset[1]) * scale[1] + py) - 0.5,
     ];
     if quad.iter().any(|v| !v.is_finite()) {
         return Err(FormatError("projected object has a non-finite extent"));

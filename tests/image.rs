@@ -1737,3 +1737,85 @@ fn replacement_moves_position_motion_without_cloning_it_into_retained_objects() 
         16
     );
 }
+
+#[test]
+fn replacement_moves_scale_motion_without_cloning_it_into_retained_objects() {
+    let mut code = loads(20, &[0]);
+    for (op, args) in [
+        (0x2040, vec![20]),
+        (0x21e0, vec![20, u32::MAX, 0, 0]),
+        (
+            0x21e1,
+            vec![
+                20,
+                u32::MAX,
+                7,
+                u32::MAX,
+                0,
+                400,
+                1.0f32.to_bits(),
+                1.0f32.to_bits(),
+            ],
+        ),
+        (0x21e2, vec![20, u32::MAX, 7]),
+        (0x22c4, vec![20, 6, 100, 0]),
+    ] {
+        scene_command(&mut code, op, &args);
+    }
+    let program = script(&code, b"a.pb3\0b.pb3\0");
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    let mut files = Files(BTreeMap::from([
+        (b"a.pb3".to_vec(), opaque()),
+        (b"b.pb3".to_vec(), opaque()),
+    ]));
+    for _ in 0..6 {
+        let op = run_to_system(&mut vm);
+        if op == 0x30 {
+            scene.try_handle_image(&mut vm, &mut files).unwrap();
+        } else {
+            scene.try_handle(&mut vm).unwrap();
+        }
+    }
+    let before = scene
+        .object(20)
+        .unwrap()
+        .draw
+        .as_ref()
+        .unwrap()
+        .scale_motion
+        .clone();
+    assert!(before.is_some());
+    assert_eq!(run_to_system(&mut vm), 0x2c4);
+    scene.try_change_image(&mut vm, &mut files).unwrap();
+    let object = scene.object(20).unwrap();
+    assert_eq!(object.draw.as_ref().unwrap().scale_motion, before);
+    let change = object.change.as_ref().unwrap();
+    assert!(
+        change
+            .previous
+            .draw
+            .as_ref()
+            .unwrap()
+            .scale_motion
+            .is_none()
+    );
+    assert!(change.common.draw.as_ref().unwrap().scale_motion.is_none());
+    scene.advance_frame(16);
+    assert_eq!(
+        scene
+            .object(20)
+            .unwrap()
+            .draw
+            .as_ref()
+            .unwrap()
+            .scale_motion
+            .as_ref()
+            .unwrap()
+            .playback
+            .as_ref()
+            .unwrap()
+            .elapsed,
+        16
+    );
+}

@@ -41,12 +41,12 @@ cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-`--payload` 仅允许创建新文件，输出不包含原始头部。当前默认 545 项测试、全 workspace 全功能 578 项测试及严格 Clippy 检查通过；另有 1 项默认忽略的原生音频设备检查，已在普通桌面权限下手动通过。
+`--payload` 仅允许创建新文件，输出不包含原始头部。当前默认 551 项测试、全 workspace 全功能 585 项测试及严格 Clippy 检查通过；另有 1 项默认忽略的原生音频设备检查，已在普通桌面权限下手动通过。
 真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
 `ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
 
 项目已拆为 workspace：`crates/cmvs-core` 为无依赖核心，`crates/cmvs-audio` 为音频后端，`crates/cmvs-desktop` 为桌面后端与运行入口。根 `src/` 保留检查工具和 `cmvs_rs` 兼容重导出，现有命令与 feature 名不变。Rust 集成测试仍在 `tests/*.rs`；Python 工具保留为研究对照。结构、依赖边界与全 workspace 检查命令见 [workspace](docs/workspace.md)。
-场景轨道分别位于 `scene/animation.rs`、`scene/opacity.rs`、`scene/position_motion.rs`、`scene/world_motion.rs`，类型仍从 `scene` 导出；场景与序列测试共用 `tests/support/bytecode.rs` 的合成构造器。
+场景轨道分别位于 `scene/scale_motion.rs`、`scene/animation.rs`、`scene/opacity.rs`、`scene/position_motion.rs`、`scene/world_motion.rs`，类型仍从 `scene` 导出；场景与序列测试共用 `tests/support/bytecode.rs` 的合成构造器。
 架构见 [architecture](docs/architecture.md)，参考来源见 [references](docs/references.md)。
 当前仅建立本地 Git 仓库，未配置远端或推送。
 

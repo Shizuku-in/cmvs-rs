@@ -433,6 +433,55 @@ fn projected_child(code: &mut Vec<u8>) {
     command(code, 0x2044, &[1, 0, 0, 0, 2, 1]);
     command(code, 0x2045, &[1, 0, u32::MAX, 0]);
 }
+
+#[test]
+fn projected_scale_uses_own_origin_then_parent_offset_and_independent_xy_axes() {
+    let mut code = vec![];
+    camera(&mut code);
+    projected(&mut code, 1, 6, [0.0, 0.0, 10.0], 10.0);
+    command(&mut code, 0x2046, &[1, u32::MAX, 1, 0]);
+    command(&mut code, 0x2049, &[1, u32::MAX, f(2.0), f(2.0)]);
+    let frame = render(&code);
+    for y in 0..4 {
+        for x in 0..8 {
+            assert_eq!(
+                frame[y * 8 + x],
+                if y >= 2 && (2..6).contains(&x) {
+                    [255; 3]
+                } else {
+                    [0; 3]
+                }
+            );
+        }
+    }
+    // Suppress the parent quad; preserve its origin and scale for the child.
+    command(&mut code, 0x2044, &[1, u32::MAX, 0, 0, 0, 0]);
+    command(&mut code, 0x2049, &[1, u32::MAX, f(2.0), f(1.0)]);
+    projected_child(&mut code);
+    command(&mut code, 0x2045, &[1, 0, 0, 0]);
+    command(&mut code, 0x2046, &[1, 0, 1, 0]);
+    command(&mut code, 0x2049, &[1, 0, f(0.5), f(1.0)]);
+    let frame = render(&code);
+    for y in 0..4 {
+        for x in 0..8 {
+            assert_eq!(
+                frame[y * 8 + x],
+                if y == 2 && (1..3).contains(&x) {
+                    [255; 3]
+                } else {
+                    [0; 3]
+                }
+            );
+        }
+    }
+    command(&mut code, 0x2049, &[1, 0, 0, f(1.0)]);
+    assert!(render(&code).iter().all(|p| *p == [0; 3]));
+    for scale in [f(-1.0), f(f32::NAN), f(f32::INFINITY)] {
+        let mut invalid = code.clone();
+        command(&mut invalid, 0x2049, &[1, 0, scale, f(1.0)]);
+        assert!(rejected(&invalid));
+    }
+}
 #[test]
 fn projected_child_inherits_world_position_origin_and_opacity_without_using_own_world() {
     let mut code = vec![];
