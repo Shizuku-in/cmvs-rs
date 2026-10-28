@@ -1,4 +1,4 @@
-//! Engine +4320 history list: 0x2136 / 0x1400758e0 -> 0x14005ee00.
+//! Engine +4320 history list: append 0x2136 and clear 0x212f.
 //! Addresses are bound to the binary hash in research.md. No UI or serialization.
 use crate::{bytecode::DecodeError, evaluate::error, machine::Machine, vm::SystemResult};
 use std::collections::VecDeque;
@@ -28,6 +28,13 @@ impl HistoryHost {
     }
 
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
+        // 0x140083240 -> 0x14005e800 frees the nodes and their dynamic strings,
+        // then clears the head pointer. The configured capacity is unchanged.
+        if matches!(vm.pending_system(), Some((_, 0x12f))) {
+            vm.complete_system(SystemResult(0x4000))?;
+            self.entries.clear();
+            return Ok(true);
+        }
         let Some((pc, 0x136)) = vm.pending_system() else {
             return Ok(false);
         };

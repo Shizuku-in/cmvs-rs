@@ -402,6 +402,93 @@ fn stop_all_failure_keeps_successful_prefix_and_retries_pending_command() {
     assert!(host.channel(3).unwrap().flag);
 }
 
+fn channel15_stop_code(slot: u32) -> Vec<u8> {
+    let mut code = vec![];
+    push(&mut code, slot);
+    code.extend(0x2241u16.to_le_bytes());
+    code
+}
+
+#[test]
+fn channel15_stop_is_independent_of_se_records_settings_and_results() {
+    let setup = script(&[(2, 0, 64, 1, 1)], b"loop.ogg\0");
+    let mut vm = Machine::new(&setup).unwrap();
+    let mut host = AudioHost::new(AudioSettings {
+        se_enabled: false,
+        bgm_enabled: false,
+        ..AudioSettings::default()
+    });
+    pending(&mut vm);
+    host.try_handle(&mut vm, &mut Started).unwrap();
+    let before: Vec<_> = (0..6).map(|i| host.channel(i).cloned()).collect();
+    let bgm = host.bgm().clone();
+    let settings = host.settings();
+    let mut code = vec![];
+    push(&mut code, 0x12345678);
+    code.extend(channel15_stop_code(0));
+    code.extend(channel15_stop_code(0));
+    let script = program(&code, b"");
+    let mut vm = Machine::new(&script).unwrap();
+    for i in 0..7 {
+        vm.state_mut().set_system_integer(i, 100 + i).unwrap();
+    }
+    let mut backend = RecordingAudio::default();
+    for _ in 0..2 {
+        pending(&mut vm);
+        let pc = vm.pc();
+        assert!(host.try_handle(&mut vm, &mut backend).unwrap());
+        assert_eq!(vm.pc(), pc + 2);
+        assert_eq!(vm.stack().len_bytes(), 4);
+        assert_eq!(vm.stack().peek_u32(4).unwrap(), 0x12345678);
+        for i in 0..7 {
+            assert_eq!(vm.state().system_integer(i), Some(100 + i));
+        }
+        assert_eq!(
+            (0..6).map(|i| host.channel(i).cloned()).collect::<Vec<_>>(),
+            before
+        );
+        assert_eq!(host.bgm(), &bgm);
+        assert_eq!(host.settings(), settings);
+    }
+    assert_eq!(
+        backend.requests(),
+        &[AudioRequest::StopChannel15, AudioRequest::StopChannel15]
+    );
+}
+
+#[test]
+fn channel15_stop_rejects_bad_arguments_and_retries_backend_failure() {
+    let mut host = AudioHost::default();
+    let mut backend = RecordingAudio::default();
+    for code in [
+        channel15_stop_code(1),
+        channel15_stop_code(u32::MAX),
+        0x2241u16.to_le_bytes().to_vec(),
+    ] {
+        let script = program(&code, b"");
+        let mut vm = Machine::new(&script).unwrap();
+        pending(&mut vm);
+        let pending_command = vm.pending_system();
+        let sp = vm.stack().len_bytes();
+        assert!(host.try_handle(&mut vm, &mut backend).is_err());
+        assert_eq!(vm.pending_system(), pending_command);
+        assert_eq!(vm.stack().len_bytes(), sp);
+        assert_eq!(vm.state().system_integer(0), None);
+        assert!(backend.requests().is_empty());
+    }
+    let script = program(&channel15_stop_code(0), b"");
+    let mut vm = Machine::new(&script).unwrap();
+    pending(&mut vm);
+    let pending_command = vm.pending_system();
+    assert!(host.try_handle(&mut vm, &mut Broken).is_err());
+    assert_eq!(vm.pending_system(), pending_command);
+    assert_eq!(vm.stack().len_bytes(), 4);
+    assert!(host.try_handle(&mut vm, &mut backend).unwrap());
+    assert_eq!(vm.pending_system(), None);
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(backend.requests(), &[AudioRequest::StopChannel15]);
+}
+
 #[test]
 fn stop_backend_failure_and_invalid_channels_keep_the_command_pending() {
     let script = script(&[(1, 0, 0, 0, 1)], b"a.ogg\0");

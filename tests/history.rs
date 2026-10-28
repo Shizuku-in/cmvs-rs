@@ -118,6 +118,45 @@ fn history_keeps_newest_first_evicts_oldest_and_owns_string_copies() {
 }
 
 #[test]
+fn clear_releases_all_entries_preserves_stack_results_and_allows_refilling() {
+    let mut code = vec![];
+    code.extend(0x440u16.to_le_bytes());
+    code.extend(4u16.to_le_bytes());
+    code.extend(77u32.to_le_bytes());
+    call(&mut code, 0x212f, &[]); // Empty-list branch.
+    for i in 0..HISTORY_CAPACITY {
+        call(&mut code, 0x2136, &[0, 0, 2, 0, i as u32, 0, 0, 0, 0, 0]);
+    }
+    call(&mut code, 0x212f, &[]);
+    call(&mut code, 0x212f, &[]); // Repeated clear.
+    call(&mut code, 0x2136, &[0, 0, 2, 0, 999, 0, 0, 0, 0, 0]);
+    let script = script(&code, b"a\0body\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut history = HistoryHost::default();
+    for slot in 0..7 {
+        vm.state_mut().set_system_integer(slot, 99).unwrap();
+    }
+    for expected in std::iter::once(0)
+        .chain(1..=HISTORY_CAPACITY)
+        .chain([0, 0, 1])
+    {
+        pending(&mut vm);
+        let pc = vm.pc();
+        assert!(history.try_handle(&mut vm).unwrap());
+        assert_eq!(history.entries().len(), expected);
+        assert_eq!(vm.pc(), pc + 2);
+        assert_eq!(vm.stack().len_bytes(), 4);
+        assert_eq!(vm.stack().peek_u32(4).unwrap(), 77);
+        for slot in 0..7 {
+            assert_eq!(vm.state().system_integer(slot), Some(99));
+        }
+    }
+    let entry = history.entries().front().unwrap();
+    assert_eq!(entry.words[0], 999);
+    assert_eq!(entry.strings[2], b"body");
+}
+
+#[test]
 fn fixed_strings_accept_31_bytes_but_only_dynamic_text_accepts_larger_data() {
     let mut code = vec![];
     call(

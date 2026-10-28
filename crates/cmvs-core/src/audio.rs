@@ -94,6 +94,8 @@ pub enum AudioRequest {
     StartSe { channel: u8, looped: bool },
     /// 0x140087910: stop and release the device channel's sound, prepared or active.
     StopSe { channel: u8 },
+    /// 0x2241: stop and release device channel 15, separate from SE, voice and BGM.
+    StopChannel15,
     /// 0x20b6: 0x1400882d0 on device channel `channel + 9` fades the sound out over
     /// `fade_ms` and releases it at the end; a no-op for an empty or already fading slot.
     FadeOutSe { channel: u8, fade_ms: u32 },
@@ -169,6 +171,11 @@ pub trait AudioBackend {
     /// The original waits until its mixer thread has freed the slot, so Ok means released.
     fn stop(&mut self, _channel: u8) -> Result<(), Box<dyn Error>> {
         Err("audio backend does not implement stopping an SE channel".into())
+    }
+    /// 0x1400713a0 calls 0x140087910 on device channel 15. Ok means released;
+    /// an empty slot is a no-op, and Err leaves the device unchanged for retry.
+    fn stop_channel15(&mut self) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement stopping device channel 15".into())
     }
     /// Start the fade-out of channel + 9 (released when it ends); an empty or already
     /// fading channel is unchanged. Err leaves the device unchanged for retry.
@@ -250,6 +257,9 @@ impl AudioBackend for RecordingAudio {
     fn stop(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
         self.record(AudioRequest::StopSe { channel })
     }
+    fn stop_channel15(&mut self) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::StopChannel15)
+    }
     fn fade_out_se(&mut self, channel: u8, fade_ms: u32) -> Result<(), Box<dyn Error>> {
         self.record(AudioRequest::FadeOutSe { channel, fade_ms })
     }
@@ -320,6 +330,7 @@ impl AudioHost {
             Some((_, 0xb1)) => return self.try_start(vm, backend),
             Some((_, 0xb3)) => return self.try_stop(vm, backend),
             Some((_, 0xb5)) => return self.try_stop_all(vm, backend),
+            Some((_, 0x241)) => return self.try_channel15_stop(vm, backend),
             Some((_, 0xb6)) => return self.try_fade_out(vm, backend),
             Some((_, 0xa0 | 0xa4)) => return self.try_bgm(vm, backend),
             Some((_, 0xa2)) => return self.try_bgm_fade_out(vm, backend),
@@ -496,6 +507,27 @@ impl AudioHost {
         let record = self.channels[channel as usize].get_or_insert_with(SeChannel::default);
         record.name.clear();
         record.flag = false;
+        Ok(true)
+    }
+
+    /// 0x2241 / 0x1400713a0: SP-4 must be zero; stop device channel 15.
+    /// No SE_USE check or channel-record writes; returns 0x4004, no result write.
+    fn try_channel15_stop(
+        &mut self,
+        vm: &mut Machine<'_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<bool, Box<dyn Error>> {
+        let (pc, _) = vm.pending_system().expect("checked pending command");
+        let fail = |why| error(pc, 0x2241, why);
+        let slot = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
+        if slot != 0 {
+            return Err(fail(
+                "device channel 15 slot must be 0; other values set an unmodeled flag",
+            )
+            .into());
+        }
+        backend.stop_channel15()?;
+        vm.complete_system(SystemResult(0x4004))?;
         Ok(true)
     }
 

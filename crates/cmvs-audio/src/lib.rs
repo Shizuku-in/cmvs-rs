@@ -230,6 +230,9 @@ pub struct NativeAudio {
     voice: [Option<Channel>; VOICE_CHANNELS],
     bgm: [Option<Channel>; 2],
     movie: Option<Channel>,
+    // 0x2241 addresses this device slot independently of the six SE channels.
+    // Its playback command is not implemented yet, so it starts and remains empty.
+    channel15: Option<Channel>,
     device_fault: Fault,
     last_movie_report_ms: u32,
     // Channels must drop before the device stream.
@@ -258,6 +261,7 @@ impl NativeAudio {
             voice: std::array::from_fn(|_| None),
             bgm: std::array::from_fn(|_| None),
             movie: None,
+            channel15: None,
             device_fault: fault,
             last_movie_report_ms: 0,
             stream,
@@ -447,6 +451,10 @@ impl AudioBackend for NativeAudio {
             .se
             .get_mut(usize::from(channel))
             .ok_or("SE channel out of range")? = None;
+        Ok(())
+    }
+    fn stop_channel15(&mut self) -> Result<(), Box<dyn Error>> {
+        self.channel15 = None;
         Ok(())
     }
     fn fade_out_se(&mut self, channel: u8, ms: u32) -> Result<(), Box<dyn Error>> {
