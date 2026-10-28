@@ -1,5 +1,7 @@
 # PB3B type 1、type 3 JBP1 与 type 5/6 参考图像
 
+> 本文描述已核对的实现分支，真实样本与历史验证来自[《アマツツミ》](../games/amatsutsumi/README.md)。其他游戏或引擎版本需单独验证；下文历史停点不代表最新完成度。
+
 当前实现 type 1（24/32 位）、type 3（JBP1）、type 5（32 位通道差分）与带资源上下文的 type 6（参考底图上的块替换）。type 2/4/7/8 与其他 codec 仍明确报未支持；各类型边界和验证范围见下文。
 参考固定 MIT 提交 a6bc9501d82264e228943f894af1b969ab98bee5 的 PB3B.cpp、CPB.cpp，
 结合 research.md 指定哈希版本的 0x140036ae0、0x1400a0230 进行核对。

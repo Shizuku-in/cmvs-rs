@@ -1,5 +1,7 @@
 # CMV6 JBPD 帧解码
 
+> 本文描述已核对的实现分支，真实样本与历史验证来自[《アマツツミ》](../games/amatsutsumi/README.md)。其他游戏或引擎版本需单独验证；下文历史停点不代表最新完成度。
+
 证据绑定 `cmvs64.exe` SHA-256 `dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5`。
 Rust 核心使用安全、有界的整数运算，不依赖原版 DLL、Windows API 或新增 C++ 核心。
 
