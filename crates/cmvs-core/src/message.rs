@@ -259,27 +259,34 @@ impl MessageHost {
         if let Some((pc, 0x380)) = vm.pending_system() {
             return self.create_auxiliary_text(vm, pc).map(|()| true);
         }
-        if let Some((pc, 0x383)) = vm.pending_system() {
-            // 0x1400736f0: SP-4 group, SP-8 signed X, SP-12 signed Y.
-            let mut args = [0; 3];
-            for (i, arg) in args.iter_mut().enumerate() {
+        if let Some((pc, command @ (0x383 | 0x385))) = vm.pending_system() {
+            // 0x1400736f0 / 0x140073820: group followed by signed position
+            // (two words) or layout (four words); neither changes results.
+            let opcode = 0x2000 + command;
+            let count = if command == 0x383 { 3 } else { 5 };
+            let mut args = [0; 5];
+            for (i, arg) in args.iter_mut().take(count).enumerate() {
                 *arg = vm
                     .stack()
                     .peek_u32(4 * (i + 1))
-                    .map_err(|e| error(pc, 0x2383, e.0))?;
+                    .map_err(|e| error(pc, opcode, e.0))?;
             }
             let slot = args[0] as usize;
             if slot >= AUXILIARY_TEXTS {
-                return Err(error(pc, 0x2383, "auxiliary text group slot outside 0..7"));
+                return Err(error(pc, opcode, "auxiliary text group slot outside 0..7"));
             }
             if self.auxiliary_texts[slot].is_none() {
-                return Err(error(pc, 0x2383, "auxiliary text group is not created"));
+                return Err(error(pc, opcode, "auxiliary text group is not created"));
             }
-            vm.complete_system(SystemResult(0x400c))?;
-            self.auxiliary_texts[slot]
+            vm.complete_system(SystemResult(0x4000 | (count as u16 * 4)))?;
+            let group = self.auxiliary_texts[slot]
                 .as_mut()
-                .expect("validated group")
-                .set_position(args[1], args[2]);
+                .expect("validated group");
+            if command == 0x383 {
+                group.set_position(args[1], args[2]);
+            } else {
+                group.set_layout([args[1], args[2], args[3], args[4]]);
+            }
             return Ok(true);
         }
         if let Some((pc, 0x382)) = vm.pending_system() {

@@ -303,11 +303,19 @@ fn positioning_updates_only_auxiliary_coordinates_and_preserves_results() {
 }
 
 #[test]
-fn invalid_position_target_keeps_pending_command_and_owned_state() {
-    for slot in [0, 8, u32::MAX] {
+fn invalid_auxiliary_setter_target_keeps_pending_command_and_owned_state() {
+    for (opcode, slot) in [0x2383, 0x2385]
+        .into_iter()
+        .flat_map(|op| [0, 8, u32::MAX].map(|slot| (op, slot)))
+    {
         let mut code = vec![];
         call(&mut code, 0x2380, &[7, 0, 25, 32]);
-        call(&mut code, 0x2383, &[slot, 180, 72]);
+        let args = [slot, 180, 72, 1060, 720];
+        call(
+            &mut code,
+            opcode,
+            &args[..if opcode == 0x2383 { 3 } else { 5 }],
+        );
         let script = script(&code, b"\0");
         let mut vm = Machine::new(&script).unwrap();
         let mut messages = MessageHost::default();
@@ -321,6 +329,9 @@ fn invalid_position_target_keeps_pending_command_and_owned_state() {
             let after = messages.auxiliary_text(7).unwrap();
             assert_eq!(after.word(8), group.word(8));
             assert_eq!(after.word(12), group.word(12));
+            for at in [16, 20, 24, 28, 176, 180] {
+                assert_eq!(after.word(at), group.word(at));
+            }
             assert_eq!(after.object, group.object);
             assert_eq!(after.atlas, group.atlas);
             assert_eq!(vm.state().system_integer(0), Some(1));
@@ -329,11 +340,14 @@ fn invalid_position_target_keeps_pending_command_and_owned_state() {
 }
 
 #[test]
-fn incomplete_position_arguments_leave_group_and_stack_unchanged() {
-    for count in 0..3 {
+fn incomplete_auxiliary_setter_arguments_leave_group_and_stack_unchanged() {
+    for (opcode, count) in [0x2383, 0x2385]
+        .into_iter()
+        .flat_map(|op| (0..if op == 0x2383 { 3 } else { 5 }).map(move |count| (op, count)))
+    {
         let mut code = vec![];
         call(&mut code, 0x2380, &[0, 0, 25, 32]);
-        call(&mut code, 0x2383, &[0, 180, 72][..count]);
+        call(&mut code, opcode, &[0, 180, 72, 1060, 720][..count]);
         let script = script(&code, b"\0");
         let mut vm = Machine::new(&script).unwrap();
         let mut messages = MessageHost::default();
@@ -346,7 +360,73 @@ fn incomplete_position_arguments_leave_group_and_stack_unchanged() {
         let after = messages.auxiliary_text(0).unwrap();
         assert_eq!(after.word(8), group.word(8));
         assert_eq!(after.word(12), group.word(12));
+        for at in [16, 20, 24, 28, 176, 180] {
+            assert_eq!(after.word(at), group.word(at));
+        }
         assert_eq!(after.object, group.object);
         assert_eq!(after.atlas, group.atlas);
+    }
+}
+
+#[test]
+fn layout_stores_signed_float_fields_without_moving_or_resizing_the_atlas() {
+    let mut code = vec![];
+    call(&mut code, 0x2380, &[0, 0, 25, 32]);
+    call(&mut code, 0x2383, &[0, 180, 72]);
+    call(&mut code, 0x2385, &[0, 180, 0, 1060, 720]);
+    call(
+        &mut code,
+        0x2385,
+        &[
+            0,
+            (-180i32) as u32,
+            16_777_217,
+            i32::MIN as u32,
+            i32::MAX as u32,
+        ],
+    );
+    let script = script(&code, b"\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages);
+    run(&mut vm, &mut messages);
+    let before = messages.auxiliary_text(0).unwrap().clone();
+    for i in 0..7 {
+        vm.state_mut().set_system_integer(i, 90 + i).unwrap();
+    }
+    // Reference words retain signed values and f32 rounding without clamping.
+    for bits in [
+        [0x43340000, 0, 0x44848000, 0x44340000],
+        [0xc3340000, 0x4b800000, 0xcf000000, 0x4f000000],
+    ] {
+        pending(&mut vm);
+        let pc = vm.pc();
+        assert_eq!(vm.stack().len_bytes(), 20);
+        assert!(messages.try_handle(&mut vm).unwrap());
+        assert_eq!(vm.pc(), pc + 2);
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert!(vm.pending_system().is_none());
+        let group = messages.auxiliary_text(0).unwrap();
+        for (at, value) in [
+            (16, bits[0]),
+            (20, bits[1]),
+            (24, bits[2]),
+            (28, bits[3]),
+            (176, bits[0]),
+            (180, bits[1]),
+        ] {
+            assert_eq!(group.word(at), Some(value));
+        }
+        for at in [8, 12, 40, 44, 344, 348, 352, 356, 360, 364] {
+            assert_eq!(group.word(at), before.word(at));
+        }
+        assert_eq!(group.object, before.object);
+        assert_eq!(group.atlas, before.atlas);
+        assert_eq!(messages.auxiliary_font_present(0), Some(true));
+        assert!(messages.auxiliary_text(1).is_none());
+        assert!(messages.text(0).is_none());
+        for i in 0..7 {
+            assert_eq!(vm.state().system_integer(i), Some(90 + i));
+        }
     }
 }

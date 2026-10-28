@@ -70,7 +70,7 @@ pub struct AuxiliaryText {
 }
 
 impl AuxiliaryText {
-    /// Known constructor words only; native pointers and unknown fields are omitted.
+    /// Known state words only; native pointers and unknown fields are omitted.
     pub fn word(&self, offset: u16) -> Option<u32> {
         self.words.get(&offset).copied()
     }
@@ -91,6 +91,17 @@ impl AuxiliaryText {
         // Constructor 0x14002fbf2 sets the optional +1472 object to null.
         // Its creation commands remain barriers, so there is no second object
         // to reposition through 0x14003b0b0 here.
+    }
+
+    /// 0x14002e6e0 stores four signed layout parameters as f32 and repeats
+    /// the first pair at +176/+180. It does not change the atlas draw state.
+    pub(super) fn set_layout(&mut self, args: [u32; 4]) {
+        for (offset, value) in [16, 20, 24, 28, 176, 180]
+            .into_iter()
+            .zip(args.into_iter().chain(args[..2].iter().copied()))
+        {
+            self.words.insert(offset, ((value as i32) as f32).to_bits());
+        }
     }
 
     pub(super) fn new(glyph_size: u32, capacity: u32) -> Result<Self, FormatError> {
