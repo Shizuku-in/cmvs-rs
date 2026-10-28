@@ -62,7 +62,8 @@ pub struct SceneObject {
     /// +6244 (constructor 1): 0x14003de80 skips the object when zero; 0x2215 sets it.
     pub shown: bool,
     /// +6256/+6260 (constructor 0): logical screen size; 0x14003b350 scales by the device
-    /// width over +6256, or over the screen width while it is zero. Set by 0x217c.
+    /// width over +6256, or over the screen width while it is zero. Set by 0x217c (windows)
+    /// and 0x202a (slot objects).
     pub logical_size: [u32; 2],
     /// +14500 (constructor 0): set by 0x14003d0c0 when an effect ends with -2; parents then
     /// destroy such children.
@@ -410,6 +411,9 @@ impl SceneHost {
         if command == 0x33 {
             return self.image_info(vm, pc);
         }
+        if command == 0x2a {
+            return self.set_logical_size(vm, pc);
+        }
         if matches!(command, 0x1ea..=0x1ee) {
             return self.opacity(vm, pc, command);
         }
@@ -541,6 +545,35 @@ impl SceneHost {
                     .expect("slots 1..3 exist");
             }
         }
+        Ok(true)
+    }
+
+    /// 0x202a / 0x14006c160 -> 0x14003b410: SP-4 slot (signed; 256 and above only set +12056
+    /// bit 0x10), SP-8 child (negative selects the object, 0x14003a760 otherwise), SP-12/SP-16
+    /// logical width/height written to +6256/+6260. A missing object or child (none at 768
+    /// and above) would be dereferenced. Pops 16.
+    fn set_logical_size(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<bool, DecodeError> {
+        let fail = |why| error(pc, 0x202a, why);
+        let mut args = [0; 4];
+        for (i, arg) in args.iter_mut().enumerate() {
+            *arg = vm.stack().peek_u32(4 * (i + 1)).map_err(|e| fail(e.0))?;
+        }
+        let [slot, child, width, height] = args;
+        let object = u8::try_from(slot as i32)
+            .ok()
+            .and_then(|slot| self.objects.get_mut(&slot))
+            .ok_or_else(|| fail("logical size needs an existing object in slots 0..255"))?;
+        let target = if (child as i32) < 0 {
+            object
+        } else {
+            u16::try_from(child)
+                .ok()
+                .filter(|id| *id < 768)
+                .and_then(|id| object.children.get_mut(&id))
+                .ok_or_else(|| fail("logical size needs an existing child in slots 0..767"))?
+        };
+        vm.complete_system(SystemResult(0x4010))?;
+        target.logical_size = [width, height];
         Ok(true)
     }
 

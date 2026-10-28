@@ -4,6 +4,7 @@
 use crate::{
     FormatError, MAX_PAYLOAD,
     camera::CameraHost,
+    message::RESEARCH_SCREEN,
     raster::RgbaImage,
     scene::{DrawState, MaskTransition, ObjectImage, SceneHost, SceneObject},
 };
@@ -230,6 +231,17 @@ fn child_layer<'a>(
     }
 }
 
+/// 0x14003b350 scales drawing by the device width (+24) over the logical width (+6256), or
+/// over the screen width (+8) while that is zero. Both device widths are the research
+/// viewport, so only another logical width would change the factor; that is not modeled.
+fn unit_screen_scale(object: &SceneObject) -> Result<(), FormatError> {
+    match object.logical_size[0] {
+        0 => Ok(()),
+        width if width == RESEARCH_SCREEN[0] => Ok(()),
+        _ => Err(FormatError("logical screen scaling is not modeled")),
+    }
+}
+
 /// Queues 2/6 of 0x14003de80/0x140015fc0 for a top-level mode 2/3 object, keyed by its
 /// biased depth (`Camera::queue_key`); objects with keys not above 0 are not enqueued.
 /// 0x140020340 projects it with camera 0/1 (0x14004ef40), lays out the
@@ -428,6 +440,7 @@ pub fn render_scene(
         let Some(draw) = object.draw.as_ref().filter(|_| object.shown) else {
             continue;
         };
+        unit_screen_scale(object)?;
         let d = &draw.words;
         // 0x1400526b0 offsets slot objects as queue layer 0 and the backend's windows and
         // glyphs as layer 1; 0x14003b420 applies it only with the top-level object's +6248
@@ -487,6 +500,7 @@ pub fn render_scene(
                 if words[0] != d[0] || order(words) < 0.0 {
                     continue;
                 }
+                unit_screen_scale(child)?;
                 check(words, false)?;
                 let Some(layer) = child_layer(object, d, child, words)? else {
                     continue;

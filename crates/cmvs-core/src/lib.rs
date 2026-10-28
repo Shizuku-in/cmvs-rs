@@ -4,6 +4,7 @@ pub mod bootstrap;
 pub mod buttons;
 pub mod bytecode;
 pub mod camera;
+pub mod capture;
 pub mod cmv;
 pub mod cmv9;
 pub mod cpz;

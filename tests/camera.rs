@@ -336,6 +336,36 @@ fn camera_move_query_has_no_parameters_and_preserves_stack_cameras_and_other_res
     }
 }
 
+#[test]
+fn device_size_query_writes_results_one_and_two_without_popping() {
+    let stack_words = [0x12345678, u32::MAX];
+    let mut code = vec![];
+    for &word in &stack_words {
+        code.extend(0x440u16.to_le_bytes());
+        code.extend(4u16.to_le_bytes());
+        code.extend(word.to_le_bytes());
+    }
+    code.extend(0x2126u16.to_le_bytes());
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut host = CameraHost::default();
+    for i in 0..7 {
+        vm.state_mut().set_system_integer(i, 100 + i).unwrap();
+    }
+    pending(&mut vm);
+    assert!(host.try_handle(&mut vm).unwrap());
+    let results: Vec<_> = (0..7).map(|i| vm.state().system_integer(i)).collect();
+    assert_eq!(
+        results,
+        [100, 1280, 720, 103, 104, 105, 106].map(Some).to_vec()
+    );
+    assert_eq!((vm.pc(), vm.stack().len_bytes()), (code.len(), 8));
+    assert_eq!(vm.stack().peek_u32(4).unwrap(), u32::MAX);
+    for i in 0..2 {
+        assert_eq!(host.camera(i), Some(&Default::default()));
+    }
+}
+
 fn move_xyz(host: &CameraHost) -> [f32; 3] {
     [1, 2, 3].map(|i| host.camera(0).unwrap().float(i))
 }

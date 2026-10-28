@@ -5,13 +5,14 @@
 //! for coordinate modes 2/3 (0x140020340 -> 0x14004ef40); the software renderer supports
 //! cameras of type 3 without rotation (`project_object`). 0x2056 queries projected
 //! integer coordinates without rendering. Camera 0 motion supports linear and quadratic
-//! ease-out branches.
+//! ease-out branches. 0x2126 queries the screen device size at +1968 -> +8.
 use crate::{
     bytecode::DecodeError,
     evaluate::{error, truncate},
     fade::SkipGate,
     input::ActionInput,
     machine::{Machine, Step},
+    message::RESEARCH_SCREEN,
     vm::SystemResult,
 };
 
@@ -330,6 +331,18 @@ impl CameraHost {
             vm.state_mut()
                 .set_system_integer(0, result)
                 .expect("result 0 exists");
+            return Ok(true);
+        }
+        if matches!(vm.pending_system(), Some((_, 0x126))) {
+            // 0x2126 / 0x1400756f0: no stack parameters; results 1/2 = device +24/+28
+            // (0x140027020/0x140027030). Only startup code (0x140010370/0x140011320) sets
+            // them from cmvs.cfg, which selects 1280x720 here: the research viewport.
+            vm.complete_system(SystemResult(0x4000))?;
+            for (slot, value) in [(1, RESEARCH_SCREEN[0]), (2, RESEARCH_SCREEN[1])] {
+                vm.state_mut()
+                    .set_system_integer(slot, value)
+                    .expect("results 1/2 exist");
+            }
             return Ok(true);
         }
         if let Some((pc, 0x56)) = vm.pending_system() {

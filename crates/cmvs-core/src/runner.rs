@@ -6,6 +6,7 @@ use crate::{
     bootstrap::Bootstrap,
     buttons::ButtonHost,
     camera::CameraHost,
+    capture::ScreenCapture,
     fade::SkipGate,
     gesture::PointerGesture,
     history::HistoryHost,
@@ -81,6 +82,7 @@ pub struct Startup<'a> {
     root: PathBuf,
     sequence: SequenceHost,
     camera: CameraHost,
+    capture: ScreenCapture,
     input: ActionInput,
     effects: bool,
     timers: VmTimers,
@@ -129,6 +131,7 @@ impl<'a> Startup<'a> {
             root: root.canonicalize()?,
             sequence: SequenceHost::default(),
             camera: CameraHost::default(),
+            capture: ScreenCapture::default(),
             // No verified key bindings yet: no action is active (see `input`).
             input: ActionInput::default(),
             // EFFECT_USE constructor value; the configuration may override it.
@@ -234,7 +237,45 @@ impl<'a> Startup<'a> {
         self.messages.advance_frame(delta_ms);
         self.camera.advance_frame(delta_ms);
         self.frame_delta = delta_ms;
+        self.take_capture()
+    }
+    /// The main loop 0x14000e400 draws after the updates (0x140015900, then 0x140009c90);
+    /// the draw 0x140015fc0 ends with 0x1400157b0, which serves a pending 0x2304 request.
+    /// The core draws the scene and visible message windows on the device-sized research
+    /// viewport. Glyphs belong to the backend and full-screen movies to their player, so
+    /// a capture over either fails explicitly.
+    fn take_capture(&mut self) -> Result<(), Box<dyn Error>> {
+        if !self.capture.requested() {
+            return Ok(());
+        }
+        if self.movies.player().is_some() {
+            return Err("screen capture during a full-screen movie is not verified".into());
+        }
+        let texts = (0..crate::message::TEXT_OBJECTS).filter_map(|i| self.messages.text(i));
+        if texts
+            .filter(|text| text.visible)
+            .any(|text| text.glyphs.iter().any(|g| g.shown && g.opacity != 0))
+        {
+            return Err("screen capture over visible glyphs needs the font backend".into());
+        }
+        let windows: Vec<_> = (0..crate::message::MESSAGE_WINDOWS)
+            .filter_map(|i| self.messages.window(i))
+            .filter(|window| window.visible && !window.hidden)
+            .map(|window| &window.object)
+            .collect();
+        let [width, height] = crate::message::RESEARCH_SCREEN;
+        let frame = crate::scene_render::render_scene(
+            &self.scene,
+            Some(&self.camera),
+            &windows,
+            width,
+            height,
+        )?;
+        self.capture.take(frame)?;
         Ok(())
+    }
+    pub fn capture(&self) -> &ScreenCapture {
+        &self.capture
     }
     pub fn buttons(&self) -> &ButtonHost {
         &self.buttons
@@ -262,7 +303,7 @@ impl<'a> Startup<'a> {
         self.movies.advance(delta_ms);
         self.camera.advance_frame(delta_ms);
         self.frame_delta = delta_ms;
-        Ok(())
+        self.take_capture()
     }
     pub fn timers(&self) -> &VmTimers {
         &self.timers
@@ -556,6 +597,9 @@ impl<'a> Startup<'a> {
                 &mut self.images.with_paths(self.bootstrap.paths()),
             )?
             || self.camera.try_handle(&mut self.machine)?
+            || self
+                .capture
+                .try_handle(&mut self.machine, &mut self.scene)?
             || self.random.try_handle(&mut self.machine)?
             || text::try_handle(&mut self.machine)?
             || self
