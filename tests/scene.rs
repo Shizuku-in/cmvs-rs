@@ -857,6 +857,9 @@ fn world_motion_linear_relative_and_quadratic_ease_out_use_hundredths_and_clampe
         (0, [10.0, 10.0, 0.0]),
         (0x8000, [15.0, 20.0, 15.0]),
         (1, [10.0, 5.0, -15.0]),
+        (0x103e0038, [10.0, 19.38, 30.0]),
+        (0x203e8038, [10.0, 20.0, 30.0]),
+        (0x003e0038, [10.0, 20.0, 30.0]),
     ] {
         let mut code = vec![];
         motion_setup(&mut code, 3, [10.0, 20.0, 30.0]);

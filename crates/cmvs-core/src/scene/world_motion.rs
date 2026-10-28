@@ -1,5 +1,5 @@
 //! Draw state +152, 0x21f9..0x21fd; addresses refer to the documented binary hash.
-//! Linear low-byte mode 0 and absolute quadratic ease-out mode 1 are modeled.
+//! Linear mode 0, absolute quadratic ease-out mode 1 and periodic Y mode 0x38.
 use super::SceneHost;
 use crate::{
     bytecode::DecodeError,
@@ -49,6 +49,20 @@ impl WorldMotion {
             // cvtsi2ss uses zero-extended rdi/r8, not the decompiler's signed int casts.
             let elapsed = playback.elapsed as f32;
             let duration = key.duration as f32;
+            if key.mode as u8 == 0x38 {
+                // 0x140025bac -> 0x140025b56: unsigned wrapping product and remainder,
+                // f32 degrees/amplitude; 0x140025310 uses f64 sin then f32 hundredths.
+                let phase = playback.elapsed.wrapping_mul(key.mode >> 28) % key.duration;
+                let degrees = (phase as f32 * 180.0) / duration;
+                let radians = (degrees / 180.0) * std::f32::consts::PI;
+                let amplitude = ((key.mode >> 16) & 0xfff) as f32 / 100.0;
+                let value = (f64::from(radians).sin() * f64::from(amplitude)) as f32;
+                let offset = truncate(value * 100.0) as f32 / 100.0;
+                words[11] = playback.base[0];
+                words[12] = (f32::from_bits(playback.base[1]) - offset).to_bits();
+                words[13] = playback.base[2];
+                return None;
+            }
             for (i, word) in words[11..14].iter_mut().enumerate() {
                 let base = f32::from_bits(playback.base[i]);
                 let target = f32::from_bits(key.xyz[i]);
@@ -140,7 +154,9 @@ impl SceneHost {
                 if (args[3] as i32) >= WORLD_MOTION_KEYS as i32 {
                     return Err(fail("world motion next key outside 0..7"));
                 }
-                if args[4] as u8 != 0 && !(args[4] as u8 == 1 && args[4] & 0x8000 == 0) {
+                if !(matches!(args[4] as u8, 0 | 0x38)
+                    || args[4] as u8 == 1 && args[4] & 0x8000 == 0)
+                {
                     return Err(fail("world motion interpolation mode is not implemented"));
                 }
             }
@@ -209,6 +225,33 @@ mod tests {
             }),
             ..WorldMotion::default()
         }
+    }
+
+    #[test]
+    fn periodic_y_wraps_product_and_preserves_other_axes_as_raw_bits() {
+        let mut motion = playing();
+        let base = [0x7fc01234, 10f32.to_bits(), 0x80000000];
+        motion.playback.as_mut().unwrap().base = base;
+        motion.playback.as_mut().unwrap().elapsed = 0x20000064;
+        motion.keys[0] = MotionKey {
+            next: -1,
+            xyz: [0; 3],
+            mode: 0x80fa0038,
+            duration: 3_200_000_000,
+        };
+        let mut words = [0; 22];
+        motion.advance(0, &mut words);
+        // Product wraps to 800, so the offset truncates to zero hundredths.
+        assert_eq!(&words[11..14], &base);
+        motion.playback.as_mut().unwrap().elapsed = 25;
+        motion.keys[0].duration = 400;
+        motion.advance(0, &mut words);
+        assert_eq!(words[11], base[0]);
+        assert_eq!(words[12], (7.5f32).to_bits());
+        assert_eq!(words[13], base[2]);
+        motion.playback.as_mut().unwrap().elapsed = 399;
+        assert_eq!(motion.advance(1, &mut words), Some(-1));
+        assert_eq!(&words[11..14], &[0; 3]);
     }
 
     #[test]
