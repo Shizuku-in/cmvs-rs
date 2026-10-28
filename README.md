@@ -412,3 +412,5 @@ CSS1 系统存档新文件导出 `0x2129` 已实现（2026-10-28）。默认写�
 ```powershell
 cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --skip-auto-resume --user-data-dir "local/user-data" --font "C:/Windows/Fonts/msgothic.ttc"
 ```
+
+第二项选择后的響子分支验证通过（2026-10-29，无核心代码变更）：sn1012 选第二项，再在 sn2010 选第一项，即选择链 `[2,1]`。鼠标/Ctrl 均走完 sn2001..sn2010、sn2501..sn2508 及片尾，保存后恢复五按钮标题；鼠标累计 18262 次消息推进，新增路径的 7868 个消息等待帧和 Ctrl 的 180 个定期抽样帧呈现成功。两份 CSS1 完全相同，新进程加载后響子通关位 2151=true。原游戏及既有首条路线目录保持不变；默认 587 项、全功能 632 项测试和格式、严格 Clippy 通过。当前已验证选择链 `[1]` 与 `[2,1]` 的记录重放闭环，尚不代表其他选择链、原生窗口/真实音频完整流程或完整剧情存档恢复已验证。
