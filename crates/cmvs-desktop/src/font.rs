@@ -203,7 +203,7 @@ impl FontRenderer {
     }
 
     /// Adds glyph images and visible message-window objects to the core's layer queue.
-    /// Current layout is the 1280x720 research viewport, unit text scale, and flat/vertical/horizontal/diagonal colors.
+    /// Current layout uses the 1280x720 research viewport and finite nonnegative text scale.
     pub fn render(
         &mut self,
         scene: &SceneHost,
@@ -211,42 +211,61 @@ impl FontRenderer {
         messages: &MessageHost,
     ) -> Result<RgbaImage, FormatError> {
         let mut objects = Vec::new();
+        let mut visible_glyphs = 0;
         for text in (0..TEXT_OBJECTS)
             .filter_map(|i| messages.text(i))
             .filter(|t| t.visible && !t.glyphs.is_empty())
         {
-            if text.scale_bits != 1.0f32.to_bits() || text.logical_size != [1280, 720] {
+            if text.logical_size != [1280, 720] {
                 return Err(FormatError(
-                    "font preview requires unit scale and 1280x720 text coordinates",
+                    "font preview requires 1280x720 text coordinates",
                 ));
             }
+            let scale = f32::from_bits(text.scale_bits);
+            if !scale.is_finite() || scale < 0.0 {
+                return Err(FormatError(
+                    "font preview requires finite nonnegative scale",
+                ));
+            }
+            let mut parent_draw = DrawState::default();
+            parent_draw.words[8..10].copy_from_slice(&text.position.map(|v| v as u32));
+            parent_draw.words[10] = text.layer as u32;
+            parent_draw.words[18..20].fill(text.scale_bits);
+            // The original text scene object owns attached glyph children. Scaling
+            // acts on their relative positions and padded cells, not the text anchor.
+            let mut parent = SceneObject {
+                draw: Some(parent_draw),
+                flags: 0xffff_ffff,
+                ..SceneObject::default()
+            };
             for glyph in text.glyphs.iter().filter(|g| g.shown && g.opacity != 0) {
-                if objects.len() >= 512 {
+                if visible_glyphs >= 512 {
                     return Err(FormatError("font preview exceeds 512 visible glyphs"));
                 }
+                visible_glyphs += 1;
                 let pixels = self.glyph(glyph)?;
                 let mut draw = DrawState::default();
                 draw.words[4] = pixels.width();
                 draw.words[5] = pixels.height();
-                draw.words[8] = (text.position[0] as u32)
-                    .wrapping_add(glyph.position[0] as u32)
-                    .wrapping_sub(2);
-                draw.words[9] = (text.position[1] as u32)
-                    .wrapping_add(glyph.position[1] as u32)
-                    .wrapping_sub(2);
+                draw.words[8] = (glyph.position[0] as u32).wrapping_sub(2);
+                draw.words[9] = (glyph.position[1] as u32).wrapping_sub(2);
                 draw.words[10] = text.layer as u32;
                 draw.words[17] = glyph.opacity;
-                objects.push(SceneObject {
-                    image: Some(ObjectImage {
-                        filter: None,
-                        name: Vec::new(),
-                        pixels,
-                        alpha: true,
-                    }),
-                    draw: Some(draw),
-                    ..SceneObject::default()
-                });
+                parent.children.insert(
+                    parent.children.len() as u16,
+                    SceneObject {
+                        image: Some(ObjectImage {
+                            filter: None,
+                            name: Vec::new(),
+                            pixels,
+                            alpha: true,
+                        }),
+                        draw: Some(draw),
+                        ..SceneObject::default()
+                    },
+                );
             }
+            objects.push(parent);
         }
         let mut additional: Vec<_> = objects.iter().collect();
         additional.extend(

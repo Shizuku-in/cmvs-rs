@@ -21,7 +21,7 @@ enum Layer<'a> {
         mask: Option<&'a MaskTransition>,
         blend: Blend,
     },
-    /// A coordinate mode 2/3 object projected by camera 0/1 (queue 2/6).
+    /// A projected or scaled 2D image, sampled over a device-space quad.
     Projected {
         image: &'a ObjectImage,
         /// Source x/y/width/height.
@@ -87,7 +87,8 @@ struct Entry<'a> {
 
 /// Only blend modes 1/2, crop, origin, position, order and opacity may differ from the
 /// constructor values; a projected object (coordinate mode 2/3) also keeps its world XYZ
-/// (words 11..14), projection inputs (15/16), and finite nonnegative XY scale. Rotation stays at constructor values; fade factors
+/// (words 11..14) and projection inputs (15/16). Both paths accept finite nonnegative
+/// XY scale. Rotation stays at constructor values; fade factors
 /// in 0..256 are used by image replacement. A 2D object's color word also selects
 /// the solid rectangle color and whether its children inherit the parent's image.
 fn check(words: &[u32; 22], projected: bool) -> Result<(), FormatError> {
@@ -100,11 +101,11 @@ fn check(words: &[u32; 22], projected: bool) -> Result<(), FormatError> {
         allowed[0] = words[0];
         allowed[11..14].copy_from_slice(&words[11..14]);
         allowed[15..17].copy_from_slice(&words[15..17]);
-        for i in 18..20 {
-            let scale = f32::from_bits(words[i]);
-            if scale.is_finite() && scale >= 0.0 {
-                allowed[i] = words[i];
-            }
+    }
+    for i in 18..20 {
+        let scale = f32::from_bits(words[i]);
+        if scale.is_finite() && scale >= 0.0 {
+            allowed[i] = words[i];
         }
     }
     if !projected {
@@ -132,6 +133,7 @@ fn image_layer<'a>(
     position: [i64; 2],
     alpha: i64,
     mask: Option<&'a MaskTransition>,
+    inherited: Option<([f32; 2], [f32; 2])>,
 ) -> Result<Option<Layer<'a>>, FormatError> {
     let [sx, sy, w, h] = [2, 3, 4, 5].map(|i| i64::from(words[i] as i16));
     if w <= 0 || h <= 0 || alpha <= 0 {
@@ -151,6 +153,33 @@ fn image_layer<'a>(
             ));
         }
     }
+    let scale = [words[18], words[19]].map(f32::from_bits);
+    if inherited.is_some() || scale != [1.0; 2] {
+        if mask.is_some() {
+            return Err(FormatError("scaled 2D mask rendering is not verified"));
+        }
+        let (position, scale) = inherited.unwrap_or((position.map(|v| v as f32), scale));
+        if scale.contains(&0.0) {
+            return Ok(None);
+        }
+        let origin = [words[6] as i16, words[7] as i16].map(f32::from);
+        let quad = [
+            position[0] - origin[0] * scale[0] - 0.5,
+            position[1] - origin[1] * scale[1] - 0.5,
+            position[0] + (w as f32 - origin[0]) * scale[0] - 0.5,
+            position[1] + (h as f32 - origin[1]) * scale[1] - 0.5,
+        ];
+        if !quad.iter().all(|v| v.is_finite()) {
+            return Err(FormatError("scaled 2D image extent is not finite"));
+        }
+        return Ok(Some(Layer::Projected {
+            image,
+            rect: [sx, sy, w, h],
+            quad,
+            alpha: alpha.min(255) as u32,
+            blend: blend(words, image, alpha, false)?,
+        }));
+    }
     Ok(Some(Layer::Image {
         image,
         rect: [sx, sy, w, h],
@@ -166,13 +195,22 @@ fn image_layer<'a>(
 
 /// Untextured 2D branch of 0x140020340 / 0x1400233e0. The color's alpha byte
 /// selects child image inheritance, but vertex alpha comes from opacity and fade.
-fn solid_layer<'a>(words: &[u32; 22], position: [i64; 2], alpha: i64) -> Option<Layer<'a>> {
+fn solid_layer<'a>(
+    words: &[u32; 22],
+    position: [i64; 2],
+    alpha: i64,
+) -> Result<Option<Layer<'a>>, FormatError> {
     let [w, h] = [4, 5].map(|i| i64::from(words[i] as i16));
     if w <= 0 || h <= 0 || alpha <= 0 {
-        return None;
+        return Ok(None);
+    }
+    if words[18..20] != [1.0f32.to_bits(); 2] {
+        return Err(FormatError(
+            "scaled solid rectangle rendering is not verified",
+        ));
     }
     let [b, g, r, _] = words[14].to_le_bytes();
-    Some(Layer::Solid {
+    Ok(Some(Layer::Solid {
         rect: [
             position[0] - i64::from(words[6] as i16),
             position[1] - i64::from(words[7] as i16),
@@ -188,12 +226,12 @@ fn solid_layer<'a>(words: &[u32; 22], position: [i64; 2], alpha: i64) -> Option<
         } else {
             Blend::Alpha
         },
-    })
+    }))
 }
 
 /// 0x14003b420/0x140020340 for a child of a top-level object. Without its own image the
 /// child uses the parent's only when its +56 color has a zero alpha byte.
-/// Flag bit 0 inherits the parent's position and opacity at unit scale.
+/// Flag bit 0 inherits the parent's position, scale and opacity.
 fn child_layer<'a>(
     parent: &'a SceneObject,
     parent_words: &[u32; 22],
@@ -231,9 +269,23 @@ fn child_layer<'a>(
             i64::from((words[17].wrapping_mul(words[21]) as i32) >> 8),
         )
     };
+    // 0x140020d75..0x140020dcc: parent X scale applies to both child position
+    // components; local corners use the product of the corresponding XY scales.
+    let inherited = if child.flags & 1 != 0 && parent_words[18..20] != [1.0f32.to_bits(); 2] {
+        let parent_scale = [parent_words[18], parent_words[19]].map(f32::from_bits);
+        Some((
+            [0, 1].map(|i| own[i] as f32 * parent_scale[0] + parent_words[8 + i] as i32 as f32),
+            [0, 1].map(|i| f32::from_bits(words[18 + i]) * parent_scale[i]),
+        ))
+    } else {
+        None
+    };
     match image {
-        Some(image) => image_layer(image, words, position, alpha, None),
-        None => Ok(solid_layer(words, position, alpha)),
+        Some(image) => image_layer(image, words, position, alpha, None, inherited),
+        None if inherited.is_some() && words[4] as i16 > 0 && words[5] as i16 > 0 => {
+            Err(FormatError("scaled solid child rendering is not verified"))
+        }
+        None => solid_layer(words, position, alpha),
     }
 }
 
@@ -574,12 +626,13 @@ pub fn render_scene(
                 position,
                 i64::from((d[17].wrapping_mul(d[21]) as i32) >> 8),
                 mask,
+                None,
             )?,
             None => solid_layer(
                 d,
                 position,
                 i64::from((d[17].wrapping_mul(d[21]) as i32) >> 8),
-            ),
+            )?,
         }
         .map(|layer| shifted(layer, by));
         let mut entry = Entry {
@@ -637,7 +690,7 @@ pub fn render_scene(
             let mut plain = *d;
             plain[14] = 0;
             check(&plain, false)?;
-            if d[0] != 0 || d[1] != 1 {
+            if d[0] != 0 || d[1] != 1 || d[18..20] != [1.0f32.to_bits(); 2] {
                 return Err(FormatError("unsupported strip transform or blend mode"));
             }
             let [w, h] = [d[4] as i16, d[5] as i16].map(i64::from);
@@ -831,5 +884,80 @@ fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
             }
             put(&mut pixels[dst..dst + 3], [p[0], p[1], p[2]], alpha, blend);
         }
+    }
+}
+
+#[cfg(test)]
+mod scale_tests {
+    use super::*;
+
+    fn image() -> ObjectImage {
+        ObjectImage {
+            name: Vec::new(),
+            filter: None,
+            alpha: true,
+            pixels: RgbaImage::new(2, 2, [255, 0, 0, 255].repeat(4)).unwrap(),
+        }
+    }
+
+    #[test]
+    fn scaled_root_uses_origin_and_half_pixel_quad_and_zero_scale_draws_nothing() {
+        let image = image();
+        let mut words = DrawState::default().words;
+        words[4..8].copy_from_slice(&[2, 2, 1, 1]);
+        words[18..20].copy_from_slice(&[1.5f32.to_bits(), 2.0f32.to_bits()]);
+        let layer = image_layer(&image, &words, [4, 5], 255, None, None)
+            .unwrap()
+            .unwrap();
+        let Layer::Projected { quad, .. } = &layer else {
+            panic!("scaled image quad")
+        };
+        assert_eq!(*quad, [2.0, 2.5, 5.0, 6.5]);
+        let mut pixels = vec![0; 8 * 8 * 4];
+        draw(&mut pixels, 8, 8, layer);
+        assert_eq!(&pixels[(3 * 8 + 2) * 4..(3 * 8 + 2) * 4 + 3], &[255, 0, 0]);
+        assert_eq!(&pixels[(3 * 8 + 5) * 4..(3 * 8 + 5) * 4 + 3], &[0, 0, 0]);
+        words[18] = 0;
+        assert!(
+            image_layer(&image, &words, [4, 5], 255, None, None)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn inherited_scale_keeps_fractional_child_positions_and_axis_products() {
+        let mut p = DrawState::default().words;
+        p[8..10].copy_from_slice(&[10, 20]);
+        p[18..20].copy_from_slice(&[1.5f32.to_bits(), 2.0f32.to_bits()]);
+        let mut c = DrawState::default().words;
+        c[4..10].copy_from_slice(&[2, 2, 0, 0, 1, 3]);
+        c[18] = 2.0f32.to_bits();
+        let child = SceneObject {
+            image: Some(image()),
+            ..SceneObject::default()
+        };
+        let parent = SceneObject::default();
+        let Layer::Projected { quad, .. } = child_layer(&parent, &p, &child, &c).unwrap().unwrap()
+        else {
+            panic!("inherited quad")
+        };
+        // Both positions use parent's X scale; each extent uses its own axis product.
+        assert_eq!(quad, [11.0, 24.0, 17.0, 28.0]);
+    }
+
+    #[test]
+    fn scale_validation_preserves_unverified_solid_and_rotation_barriers() {
+        let mut words = DrawState::default().words;
+        for scale in [-1.0, f32::NAN, f32::INFINITY] {
+            words[18] = scale.to_bits();
+            assert!(check(&words, false).is_err());
+        }
+        words[18] = 1.5f32.to_bits();
+        words[4..6].fill(2);
+        assert!(check(&words, false).is_ok());
+        assert!(solid_layer(&words, [0, 0], 255).is_err());
+        words[20] = 1;
+        assert!(check(&words, false).is_err());
     }
 }
