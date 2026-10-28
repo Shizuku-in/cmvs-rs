@@ -1176,3 +1176,79 @@ fn solid_setter_invalid_targets_or_short_stack_preserve_the_pending_command() {
         assert_eq!(vm.stack().len_bytes(), args.len() * 4);
     }
 }
+
+#[test]
+fn child_deletion_preserves_parent_siblings_results_and_out_of_range_indices() {
+    let mut code = vec![];
+    for (op, args) in [
+        (0x2020, vec![20]),
+        (0x2040, vec![20]),
+        (0x2022, vec![20, 0]),
+        (0x2050, vec![20, 0]),
+        (0x21f9, vec![20, 0]),
+        (0x2022, vec![20, 767]),
+    ] {
+        command(&mut code, op, &args);
+    }
+    for child in [768, u32::MAX, 0x80000000, 0, 0, 767] {
+        command(&mut code, 0x2023, &[20, child]);
+    }
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    run_all(&mut vm, &mut scene, 6);
+    let mut expected = scene.object(20).unwrap().clone();
+    for i in 0..7 {
+        vm.state_mut().set_system_integer(i, 100 + i).unwrap();
+    }
+    for child in [768, u32::MAX, 0x80000000, 0, 0, 767] {
+        next(&mut vm, &mut scene).unwrap();
+        if child < 768 {
+            expected.children.remove(&(child as u16));
+        }
+        assert_eq!(scene.object(20), Some(&expected));
+        for i in 0..7 {
+            assert_eq!(vm.state().system_integer(i), Some(100 + i));
+        }
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
+    assert!(expected.children.is_empty());
+    assert_ne!(
+        expected.flags & 0x80000000,
+        0,
+        "deleting the last child does not clear the parent flag"
+    );
+}
+
+#[test]
+fn child_deletion_invalid_parent_and_missing_arguments_preserve_pending_state() {
+    for args in [
+        vec![256, 0],
+        vec![u32::MAX, 0],
+        vec![21, 0],
+        vec![20],
+        vec![],
+    ] {
+        let mut code = vec![];
+        command(&mut code, 0x2020, &[20]);
+        command(&mut code, 0x2022, &[20, 0]);
+        command(&mut code, 0x2023, &args);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        let mut scene = SceneHost::default();
+        run_all(&mut vm, &mut scene, 2);
+        pending(&mut vm);
+        let before = scene.object(20).unwrap().clone();
+        vm.state_mut().set_system_integer(0, 123).unwrap();
+        for _ in 0..2 {
+            assert!(scene.try_handle(&mut vm).is_err());
+            assert_eq!(scene.object(20), Some(&before));
+            assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x23)));
+            assert_eq!(vm.stack().len_bytes(), args.len() * 4);
+            for (i, word) in args.iter().enumerate() {
+                assert_eq!(vm.stack().peek_u32((i + 1) * 4).unwrap(), *word);
+            }
+            assert_eq!(vm.state().system_integer(0), Some(123));
+        }
+    }
+}

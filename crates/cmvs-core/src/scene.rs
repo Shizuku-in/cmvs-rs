@@ -257,6 +257,9 @@ impl SceneHost {
         ) {
             return self.handle_object(vm, pc, command);
         }
+        if command == 0x23 {
+            return self.destroy_child(vm, pc);
+        }
         if matches!(command, 0x27 | 0x28) {
             return self.query_or_move(vm, pc, command);
         }
@@ -303,6 +306,28 @@ impl SceneHost {
                 self.objects.remove(&slot);
             }
             _ => unreachable!("slot is parsed for object commands"),
+        }
+        Ok(true)
+    }
+
+    /// 0x2023 / 0x14006bd10 -> 0x14003a7d0: remove SP-8 from parent SP-4.
+    /// The child index is unsigned: values >=768, including negative i32 bits, are no-ops.
+    /// Drop owns the subtree, images and effect state; parent flags/state remain untouched.
+    fn destroy_child(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<bool, DecodeError> {
+        let fail = |why| error(pc, 0x2023, why);
+        let raw = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
+        let child = vm.stack().peek_u32(8).map_err(|e| fail(e.0))?;
+        let slot = u8::try_from(raw).map_err(|_| fail("object slot outside 0..255"))?;
+        if !self.objects.contains_key(&slot) {
+            return Err(fail("child deletion needs an existing parent object"));
+        }
+        vm.complete_system(SystemResult(0x4008))?;
+        if child < 768 {
+            self.objects
+                .get_mut(&slot)
+                .expect("validated parent")
+                .children
+                .remove(&(child as u16));
         }
         Ok(true)
     }
