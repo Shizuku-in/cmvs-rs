@@ -235,11 +235,7 @@ fn decode_inner(
     let dimensions = word(data, 16)?;
     let w = (dimensions & 65535) as usize;
     let h = (dimensions >> 16) as usize;
-    if w == 0
-        || h == 0
-        || w * h > MAX_PAYLOAD / 4
-        || word(data, 20)? != if alpha { 32 } else { 24 }
-        || (masked.is_none() && !alpha && (!w.is_multiple_of(16) || !h.is_multiple_of(16)))
+    if w == 0 || h == 0 || w * h > MAX_PAYLOAD / 4 || word(data, 20)? != if alpha { 32 } else { 24 }
     {
         return Err(FormatError("unsupported JBPD dimensions or bit depth"));
     }
@@ -291,11 +287,10 @@ fn decode_inner(
                 .get(start..start + 2)
                 .ok_or(FormatError("CMV9 reuse mask truncated"))?;
             start += 2 + usize::from(u16::from_le_bytes(length.try_into().unwrap()));
-        } else if alpha {
-            // 0x1400a0ad0 rounds both dimensions up to 16 in this mode.
-            start += mcus.div_ceil(8).next_multiple_of(4);
         } else {
-            start += (w / 16 * h / 16).div_ceil(8).next_multiple_of(4);
+            // 0x1400a0ad0 rounds both dimensions up to 16 for 4:2:0; 0x1400ab650 (JBPD) and
+            // 0x1400af100 (JBPE) size the mask from that MCU grid (hot_n_mov.cmv: 640x360).
+            start += mcus.div_ceil(8).next_multiple_of(4);
         }
     }
     let split = start

@@ -91,6 +91,22 @@ fn reuse_mask_still_allows_independent_frame_decoding() {
     );
 }
 #[test]
+fn partial_mcus_are_cropped_and_the_reuse_mask_covers_the_rounded_grid() {
+    let full = jbpd::decode(&flat([0, 64, 128, 192, 32, -32], false)).unwrap();
+    for mask in [false, true] {
+        let mut data = flat([0, 64, 128, 192, 32, -32], mask);
+        data[16..20].copy_from_slice(&(12u32 | (10 << 16)).to_le_bytes());
+        let image = jbpd::decode(&data).unwrap();
+        assert_eq!((image.width(), image.height()), (12, 10));
+        for y in 0..10 {
+            assert_eq!(
+                &image.pixels()[y * 48..y * 48 + 48],
+                &full.pixels()[y * 64..y * 64 + 48]
+            );
+        }
+    }
+}
+#[test]
 fn ac_coefficients_and_zero_runs_change_the_correct_block() {
     let mut ac = vec![];
     coefficient(&mut ac, 64);
