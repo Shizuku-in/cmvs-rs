@@ -22,12 +22,16 @@ use crate::{
     vm::SystemResult,
 };
 use std::error::Error;
+mod auxiliary;
 mod measure;
 mod output;
 mod wait;
+pub use auxiliary::{AuxiliaryGlyphAtlas, AuxiliaryText};
 pub use output::RecordedGlyph;
 
 pub const MESSAGE_WINDOWS: usize = 8;
+/// Independent +4328/+4392 tables; these slots are not message window indices.
+pub const AUXILIARY_TEXTS: usize = 8;
 /// Screen info +8/+12 (configuration words 0/1 of every window), which is not modeled; the
 /// research viewport stands in for it, as everywhere else in this project.
 pub const RESEARCH_SCREEN: [u32; 2] = [1280, 720];
@@ -161,9 +165,18 @@ pub struct MessageHost {
     texts: [Option<TextObject>; TEXT_OBJECTS],
     /// +4224: created on first use of a text index and never freed by these commands.
     fonts: [bool; TEXT_OBJECTS],
+    /// Independent engine +4328 text lists and +4392 persistent font objects.
+    auxiliary_texts: [Option<AuxiliaryText>; AUXILIARY_TEXTS],
+    auxiliary_fonts: [bool; AUXILIARY_TEXTS],
 }
 
 impl MessageHost {
+    pub fn auxiliary_text(&self, slot: usize) -> Option<&AuxiliaryText> {
+        self.auxiliary_texts.get(slot)?.as_ref()
+    }
+    pub fn auxiliary_font_present(&self, slot: usize) -> Option<bool> {
+        self.auxiliary_fonts.get(slot).copied()
+    }
     /// Explicit research mode only: records the supported single-line 0x2152 branch,
     /// without font rasterization. Default false preserves the output barrier.
     pub fn set_record_output(&mut self, enabled: bool) {
@@ -243,16 +256,18 @@ impl MessageHost {
         Ok(true)
     }
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
+        if let Some((pc, 0x380)) = vm.pending_system() {
+            return self.create_auxiliary_text(vm, pc).map(|()| true);
+        }
         if let Some((pc, 0x382)) = vm.pending_system() {
-            // Engine +4328 is a separate eight-slot table initialized to null by
-            // 0x140014e60. Its creation commands 0x2380/0x2381 remain unhandled:
-            // this implements only 0x1400735e0's empty-slot destruction branch.
-            // Add owned state and full destruction before supporting creation.
+            // 0x1400735e0 releases +4328 and its owned atlas/list, preserving the
+            // separate +4392 font object and ordinary windows/text objects.
             let slot = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x2382, e.0))?;
-            if slot >= 8 {
+            if slot >= AUXILIARY_TEXTS as u32 {
                 return Err(error(pc, 0x2382, "auxiliary text group slot outside 0..7"));
             }
             vm.complete_system(SystemResult(0x4004))?;
+            self.auxiliary_texts[slot as usize] = None;
             return Ok(true);
         }
         match vm.pending_system() {
@@ -290,6 +305,42 @@ impl MessageHost {
             }
             _ => Ok(false),
         }
+    }
+    /// 0x140073280: slot, font name, glyph size, capacity; returns 0x4010 and
+    /// system result 0 = object != null. Only the existing explicit default-font
+    /// policy is supported; native font discovery and named faces remain errors.
+    fn create_auxiliary_text(
+        &mut self,
+        vm: &mut Machine<'_>,
+        pc: usize,
+    ) -> Result<(), DecodeError> {
+        let mut args = [0; 4];
+        for (i, word) in args.iter_mut().enumerate() {
+            *word = vm
+                .stack()
+                .peek_u32(4 * (i + 1))
+                .map_err(|e| error(pc, 0x2380, e.0))?;
+        }
+        if args[0] >= AUXILIARY_TEXTS as u32 {
+            return Err(error(pc, 0x2380, "auxiliary text group slot outside 0..7"));
+        }
+        if !vm.resolve_string(args[1])?.is_empty() {
+            return Err(error(
+                pc,
+                0x2380,
+                "auxiliary font face selection is not modeled",
+            ));
+        }
+        let candidate = AuxiliaryText::new(args[2], args[3]).map_err(|e| error(pc, 0x2380, e.0))?;
+        vm.complete_system(SystemResult(0x4010))?;
+        vm.state_mut()
+            .set_system_integer(0, 1)
+            .expect("slot 0 exists");
+        let slot = args[0] as usize;
+        self.auxiliary_fonts[slot] = true;
+        // The native overwrite leaks its old object; Rust drops owned state.
+        self.auxiliary_texts[slot] = Some(candidate);
+        Ok(())
     }
     /// 0x2178 / 0x140077180 (0x14005d2a0) and 0x217f / 0x1400773d0: SP-4 window slot, SP-8
     /// child (signed). 0x2178 with a negative child destroys and rebuilds the +2520 object;

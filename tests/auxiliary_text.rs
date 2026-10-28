@@ -1,0 +1,226 @@
+use cmvs_rs::{
+    machine::{Machine, Step},
+    message::MessageHost,
+    ps3::Script,
+};
+
+fn call(code: &mut Vec<u8>, op: u16, args: &[u32]) {
+    for &arg in args.iter().rev() {
+        code.extend(0x440u16.to_le_bytes());
+        code.extend(4u16.to_le_bytes());
+        code.extend(arg.to_le_bytes());
+    }
+    code.extend(op.to_le_bytes());
+}
+fn script(code: &[u8], text: &[u8]) -> Script {
+    let mut payload = 0u32.to_le_bytes().to_vec();
+    payload.extend(code);
+    payload.extend(text);
+    let mut raw = b"PS2A".to_vec();
+    for value in [
+        48,
+        0,
+        0,
+        1,
+        code.len() as u32,
+        0,
+        text.len() as u32,
+        0,
+        0,
+        payload.len() as u32,
+        0,
+    ] {
+        raw.extend(value.to_le_bytes());
+    }
+    raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+    Script::decode(&raw).unwrap()
+}
+fn pending(vm: &mut Machine<'_>) {
+    while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+}
+fn run(vm: &mut Machine<'_>, messages: &mut MessageHost) {
+    pending(vm);
+    assert!(messages.try_handle(vm).unwrap());
+}
+
+#[test]
+fn construction_owns_a_separate_atlas_and_preserves_constructor_defaults() {
+    let mut code = vec![];
+    call(&mut code, 0x2380, &[7, 0, 25, 32]);
+    let script = script(&code, b"\0");
+    let mut vm = Machine::new(&script).unwrap();
+    for i in 0..7 {
+        vm.state_mut().set_system_integer(i, 10 + i).unwrap();
+    }
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages);
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(1));
+    for i in 1..7 {
+        assert_eq!(vm.state().system_integer(i), Some(10 + i));
+    }
+    assert_eq!(messages.auxiliary_font_present(7), Some(true));
+    assert!(messages.text(7).is_none());
+    assert!(!messages.font_present(7));
+    let group = messages.auxiliary_text(7).unwrap();
+    for (at, value) in [
+        (48, 25),
+        (124, 0),
+        (128, 1),
+        (132, 0xffffff),
+        (136, 0xffffff),
+        (140, 2),
+        (144, 0),
+        (148, 0),
+        (168, 1),
+        (172, 1),
+        (196, 148),
+        (204, 12),
+        (340, 32),
+        (344, 1280),
+        (348, 720),
+        (352, 1280),
+        (356, 720),
+        (360, 1280),
+        (364, 720),
+        (368, 0),
+        (404, 16),
+        (408, 16),
+        (412, 256),
+        (1440, 512),
+    ] {
+        assert_eq!(group.word(at), Some(value), "offset {at}");
+    }
+    assert_eq!(group.word(40), Some(1280.0f32.to_bits()));
+    assert_eq!(group.word(44), Some(720.0f32.to_bits()));
+    assert_eq!(group.word(0), None); // native pointer is not a serialized address
+    assert_eq!(group.atlas.texture_size, [512, 512]);
+    assert_eq!(group.atlas.cell_side, 31);
+    assert_eq!(group.atlas.initial_clear_tile.width(), 31);
+    assert!(
+        group
+            .atlas
+            .initial_clear_tile
+            .pixels()
+            .iter()
+            .all(|b| *b == 0)
+    );
+    let draw = group.object.draw.as_ref().unwrap();
+    assert_eq!(draw.words[0], 5);
+    assert_eq!(&draw.words[2..6], &[0, 0, 4, 4]);
+    assert_eq!(group.object.logical_size, [1280, 720]);
+    assert!(group.object.children.is_empty());
+    assert!(group.object.image.is_none()); // unknown atlas pixels are not fabricated
+}
+
+#[test]
+fn capacity_boundaries_default_and_multiple_pages_follow_native_geometry() {
+    for (capacity, side, height, normalized) in [
+        (0, 1024, 1024, 512),
+        (64, 512, 512, 64),
+        (65, 1024, 1024, 65),
+        (2000, 1024, 2048, 2000),
+    ] {
+        let mut code = vec![];
+        call(&mut code, 0x2380, &[0, 0, 25, capacity]);
+        let script = script(&code, b"\0");
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages);
+        let atlas = &messages.auxiliary_text(0).unwrap().atlas;
+        assert_eq!(atlas.capacity, normalized);
+        assert_eq!(atlas.texture_size, [side, height]);
+        assert_eq!(atlas.grid_side, side / 31);
+        assert_eq!(atlas.cells_per_page, (side / 31) * (side / 31));
+    }
+}
+
+#[test]
+fn replacement_and_nonempty_destruction_preserve_font_and_ordinary_window() {
+    let mut code = vec![];
+    call(&mut code, 0x215d, &[0, 0, 20, 30, 100, 50, 1280, 720]);
+    call(&mut code, 0x2380, &[0, 0, 25, 32]);
+    call(&mut code, 0x2380, &[0, 0, 18, 65]);
+    call(&mut code, 0x2382, &[0]);
+    call(&mut code, 0x2382, &[0]);
+    let script = script(&code, b"\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages);
+    let window = messages.window(0).unwrap().clone();
+    let text = messages.text(0).unwrap().clone();
+    run(&mut vm, &mut messages);
+    run(&mut vm, &mut messages);
+    assert_eq!(messages.auxiliary_text(0).unwrap().atlas.cell_side, 24);
+    assert_eq!(messages.auxiliary_text(0).unwrap().word(48), Some(18));
+    for i in 0..7 {
+        vm.state_mut().set_system_integer(i, 70 + i).unwrap();
+    }
+    for _ in 0..2 {
+        run(&mut vm, &mut messages);
+        assert!(messages.auxiliary_text(0).is_none());
+        assert_eq!(messages.auxiliary_font_present(0), Some(true));
+        assert_eq!(messages.window(0), Some(&window));
+        assert_eq!(messages.text(0), Some(&text));
+        assert!(messages.font_present(0));
+        assert_eq!(vm.stack().len_bytes(), 0);
+        for i in 0..7 {
+            assert_eq!(vm.state().system_integer(i), Some(70 + i));
+        }
+    }
+}
+
+#[test]
+fn invalid_creation_preserves_existing_owned_state_font_stack_pc_and_results() {
+    for args in [
+        [8, 0, 25, 32],
+        [u32::MAX, 0, 25, 32],
+        [2, u32::MAX, 25, 32],
+        [2, 1, 25, 32],
+        [2, 0, u32::MAX, 32],
+        [2, 0, 1024, 32],
+        [2, 0, 25, u32::MAX],
+    ] {
+        let mut code = vec![];
+        call(&mut code, 0x2380, &[2, 0, 25, 32]);
+        call(&mut code, 0x2380, &args);
+        let script = script(&code, b"\0Named\0");
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages);
+        let atlas = messages.auxiliary_text(2).unwrap().atlas.clone();
+        pending(&mut vm);
+        let before = (vm.pc(), vm.stack().len_bytes(), vm.pending_system());
+        vm.state_mut().set_system_integer(0, 123).unwrap();
+        for _ in 0..2 {
+            assert!(messages.try_handle(&mut vm).is_err(), "{args:?}");
+            assert_eq!(
+                (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
+                before
+            );
+            assert_eq!(vm.state().system_integer(0), Some(123));
+            assert_eq!(messages.auxiliary_text(2).unwrap().atlas, atlas);
+            assert_eq!(messages.auxiliary_font_present(2), Some(true));
+        }
+    }
+}
+
+#[test]
+fn incomplete_creation_never_installs_a_font_or_object() {
+    for count in 0..4 {
+        let mut code = vec![];
+        call(&mut code, 0x2380, &[0, 0, 25, 32][..count]);
+        let script = script(&code, b"\0");
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        pending(&mut vm);
+        let before = (vm.pc(), vm.stack().len_bytes(), vm.pending_system());
+        assert!(messages.try_handle(&mut vm).is_err());
+        assert_eq!(
+            (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
+            before
+        );
+        assert!(messages.auxiliary_text(0).is_none());
+        assert_eq!(messages.auxiliary_font_present(0), Some(false));
+    }
+}

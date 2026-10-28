@@ -139,20 +139,18 @@ fn auxiliary_text_destruction_rejects_missing_or_invalid_slot_atomically() {
 }
 
 #[test]
-fn auxiliary_text_creation_stays_a_barrier_for_empty_only_destruction() {
-    for op in [0x2380, 0x2381] {
-        let mut code = vec![];
-        call(&mut code, op, &[0, 0, 0, 0]);
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        pending(&mut vm);
-        let before = (vm.pc(), vm.stack().len_bytes(), vm.pending_system());
-        assert!(!MessageHost::default().try_handle(&mut vm).unwrap());
-        assert_eq!(
-            (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
-            before
-        );
-    }
+fn auxiliary_text_explicit_viewport_creation_stays_unhandled() {
+    let mut code = vec![];
+    call(&mut code, 0x2381, &[0, 0, 0, 0]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    pending(&mut vm);
+    let before = (vm.pc(), vm.stack().len_bytes(), vm.pending_system());
+    assert!(!MessageHost::default().try_handle(&mut vm).unwrap());
+    assert_eq!(
+        (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
+        before
+    );
 }
 fn run(vm: &mut Machine<'_>, messages: &mut MessageHost, commands: usize) {
     for _ in 0..commands {
