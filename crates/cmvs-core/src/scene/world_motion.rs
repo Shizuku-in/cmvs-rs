@@ -1,5 +1,5 @@
 //! Draw state +152, 0x21f9..0x21fd; addresses refer to the documented binary hash.
-//! Linear mode 0, absolute quadratic ease-out mode 1 and periodic Y modes 0x38/0x39.
+//! Linear mode 0, absolute quadratic ease-out mode 1 and periodic Y modes 0x38/0x39 and X mode 0x48.
 use super::SceneHost;
 use crate::{
     bytecode::DecodeError,
@@ -39,7 +39,7 @@ pub struct WorldMotion {
 
 impl WorldMotion {
     fn supports_mode(mode: u32) -> bool {
-        matches!(mode as u8, 0 | 0x38 | 0x39) || mode as u8 == 1 && mode & 0x8000 == 0
+        matches!(mode as u8, 0 | 0x38 | 0x39 | 0x48) || mode as u8 == 1 && mode & 0x8000 == 0
     }
 
     /// 0x140025530: capture the current coordinates and start at an already validated key.
@@ -63,15 +63,23 @@ impl WorldMotion {
             // cvtsi2ss uses zero-extended rdi/r8, not the decompiler's signed int casts.
             let elapsed = playback.elapsed as f32;
             let duration = key.duration as f32;
-            if matches!(key.mode as u8, 0x38 | 0x39) {
+            if matches!(key.mode as u8, 0x38 | 0x39 | 0x48) {
                 // 0x140025bac -> 0x140025b56: unsigned wrapping product and remainder,
                 // f32 degrees/amplitude; 0x140025310 uses f64 sin then f32 hundredths.
                 let phase = playback.elapsed.wrapping_mul(key.mode >> 28) % key.duration;
-                let degrees = (phase as f32 * 180.0) / duration;
+                // 0x140025c92 -> 0x140025c09 uses full turns for X, half turns for Y.
+                let turn = if key.mode as u8 == 0x48 { 360.0 } else { 180.0 };
+                let degrees = (phase as f32 * turn) / duration;
                 let radians = (degrees / 180.0) * std::f32::consts::PI;
                 let amplitude = ((key.mode >> 16) & 0xfff) as f32 / 100.0;
                 let value = (f64::from(radians).sin() * f64::from(amplitude)) as f32;
                 let offset = truncate(value * 100.0) as f32 / 100.0;
+                if key.mode as u8 == 0x48 {
+                    // 0x140025c3a..0x140025c52: f32 offset + X; preserve Y/Z bits.
+                    words[11] = (offset + f32::from_bits(playback.base[0])).to_bits();
+                    words[12..14].copy_from_slice(&playback.base[1..]);
+                    return None;
+                }
                 words[11] = playback.base[0];
                 let base_y = f32::from_bits(playback.base[1]);
                 words[12] = if key.mode as u8 == 0x38 {
@@ -272,6 +280,36 @@ mod tests {
             }),
             ..WorldMotion::default()
         }
+    }
+
+    #[test]
+    fn periodic_x_uses_full_turns_and_preserves_other_axes_until_terminal_snap() {
+        let mut motion = playing();
+        let base = [10f32.to_bits(), 0x7fc01234, 0x80000000];
+        motion.start(base, 0);
+        motion.keys[0] = MotionKey {
+            next: -1,
+            xyz: [1f32.to_bits(), 2f32.to_bits(), 3f32.to_bits()],
+            mode: 0x107d8048,
+            duration: 400,
+        };
+        let mut words = [0; 22];
+        for (elapsed, x) in [(0, 10f32), (100, 11.25), (200, 10.0), (300, 8.75)] {
+            motion.playback.as_mut().unwrap().elapsed = elapsed;
+            assert_eq!(motion.advance(0, &mut words), None);
+            assert_eq!(words[11], x.to_bits());
+            assert_eq!(&words[12..14], &base[1..]);
+        }
+        motion.playback.as_mut().unwrap().elapsed = 399;
+        assert_eq!(motion.advance(1, &mut words), Some(-1));
+        assert_eq!(&words[11..14], &motion.keys[0].xyz);
+        motion.start(base, 0);
+        motion.keys[0].mode = 0xf07d0048;
+        motion.keys[0].duration = u32::MAX;
+        motion.playback.as_mut().unwrap().elapsed = 0xeeee_eeef;
+        motion.advance(0, &mut words);
+        // Wrapping product is 1, so its tiny phase truncates to zero hundredths.
+        assert_eq!(&words[11..14], &base);
     }
 
     #[test]
