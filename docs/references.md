@@ -1,5 +1,7 @@
 # 研究资料与来源
 
+2026-10-29 脚本审计仅组合本项目已有 CPZ6/PS2A/字节码解码接口及 Rust/Python 标准库；没有新依赖、外部源码、参考项目或许可变化，没有修改资源算法或新增原版语义推断。真实游戏输入、探针、Python 汇总器及 PC 数据保留在忽略目录或原游戏目录；Git 仅加入结构校验测试接口、合成测试与元数据报告，详见 [审计方法](script-audit.md)。
+
 ## xmoezzz/CMVS-Engine
 
 - 地址：https://github.com/xmoezzz/CMVS-Engine

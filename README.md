@@ -3,6 +3,8 @@
 
 # cmvs-rs
 
+2026-10-29 脚本审计：包内 87 个脚本加包外启动脚本共 88 个来源全部通过结构检查；五条结局路线与 OP 回标题已重新采集执行地址。鉴赏模式仍在 `omake.ps3` 的数组操作数 `0x0105` 明确报错，不能宣称全脚本/全分支通过。逐脚本清单见 [覆盖报告](docs/script-coverage.md)，方法和补测缺口见 [脚本审计](docs/script-audit.md)。
+
 以 **Rust** 研究并重实现 CMVS，目标是让 CMVS 获得全平台支持。从《アマツツミ》开始，逐步扩展到其他 CMVS 版本与作品。
 
 Windows、macOS、Linux、Android、iOS 是主要平台目标；当前 Windows 研究工具与原生桌面预览经过实测。
