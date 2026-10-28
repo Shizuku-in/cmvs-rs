@@ -486,15 +486,14 @@ impl State {
                 }
                 Term::Indexed {
                     pc,
-                    tag: tag @ (0x109 | 0x110),
+                    tag: tag @ (0x105 | 0x109 | 0x110),
                     base,
                     indices,
                     ..
                 } => {
                     // 0x140066200 evaluates the index when pushing and rewrites the item with
                     // raw = base + 4 * index in u32 arithmetic: 0x109 becomes the frame word
-                    // 0x108 and 0x110 the script data word 0x106 (0x105 -> 0x104 likewise,
-                    // not yet met on a real path).
+                    // 0x108, 0x105 the script data word 0x104 and 0x110 the data word 0x106.
                     let [index] = indices.as_slice() else {
                         return Err(error(*pc, *tag, "array operand needs one index"));
                     };
