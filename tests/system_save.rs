@@ -4,10 +4,165 @@ use cmvs_rs::{
     machine::{Machine, Step},
     ps3::Script,
     system_save::{
-        Css1Layout, Css1Save, FileSystemSave, SystemSaveEvent, SystemSaveHost, SystemSaveSource,
+        Css1Layout, Css1Parameters, Css1Save, FileSystemSave, NewSystemSave, SystemSaveEvent,
+        SystemSaveHost, SystemSaveSink, SystemSaveSource,
     },
 };
 use std::{fs, io, process::Command};
+
+#[test]
+fn encoder_preserves_persistent_words_lists_and_all_rotation_modes() {
+    for mixed in [false, true] {
+        let mut payload = body();
+        let mut seed = 19u32;
+        for (i, byte) in payload[..44800].iter_mut().enumerate() {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            *byte = if mixed && i % 1100 < 750 {
+                (seed >> 24) as u8
+            } else {
+                0
+            };
+        }
+        let template = Css1Save::decode(&fixture(&payload, [0, 0])).unwrap();
+        let state = template
+            .applied(&State::default(), Some(0x12345678))
+            .unwrap();
+        let lists = [vec![b"a".to_vec(), vec![]], vec![vec![0x81, 0xff]]];
+        for rotation in 2..=5 {
+            let parameters = Css1Parameters {
+                byte_add: 7,
+                key_add: 161,
+                rotation_word: ((rotation - 2) << 3) as u16,
+            };
+            let raw = template
+                .encode_state(&state, 0x12345678, parameters, [&lists[0], &lists[1]])
+                .unwrap();
+            let decoded = Css1Save::decode(&raw).unwrap();
+            let mut expected = payload.clone();
+            expected.extend(b"a\0\0\x81\xff\0");
+            assert_eq!(decoded.payload(), expected);
+            assert_eq!(decoded.lists(), &lists);
+            assert_eq!(decoded.layout().list_counts, [2, 1]);
+            assert!(decoded.layout().packed_size < payload.len());
+        }
+    }
+}
+
+#[test]
+fn encoder_never_fills_unknown_persistent_state_or_accepts_embedded_list_nuls() {
+    let template = Css1Save::decode(&fixture(&body(), [0, 0])).unwrap();
+    let p = Css1Parameters {
+        byte_add: 0,
+        key_add: 128,
+        rotation_word: 0,
+    };
+    let mut state = State::default();
+    assert!(template.encode_state(&state, 1, p, [&[], &[]]).is_err());
+    state.fill_bits(2048, 260096, false).unwrap();
+    assert!(template.encode_state(&state, 1, p, [&[], &[]]).is_err());
+    state.fill_integers(2048, 2048, 0).unwrap();
+    assert!(template.encode_state(&state, 1, p, [&[], &[]]).is_err());
+    state.fill_floats(1024, 1024, 0).unwrap();
+    assert!(template.encode_state(&state, 1, p, [&[], &[]]).is_err());
+    state.fill_strings(64, 64, b"").unwrap();
+    assert!(template.encode_state(&state, 1, p, [&[], &[]]).is_ok());
+    assert!(
+        template
+            .encode_state(&state, 1, p, [&[b"a\0b".to_vec()], &[]])
+            .is_err()
+    );
+}
+
+#[test]
+fn writer_failure_keeps_rng_vm_and_template_then_commits_exactly_four_draws() {
+    use cmvs_rs::random::CrtRandom;
+    #[derive(Default)]
+    struct Sink {
+        fail: bool,
+        raw: Vec<u8>,
+    }
+    impl SystemSaveSink for Sink {
+        fn write(&mut self, raw: &[u8]) -> io::Result<()> {
+            if self.fail {
+                return Err(io::Error::other("synthetic sink failure"));
+            }
+            self.raw = raw.to_vec();
+            Ok(())
+        }
+    }
+    let template = Css1Save::decode(&fixture(&body(), [0, 0])).unwrap();
+    let code = 0x2129u16.to_le_bytes();
+    let mut raw = b"PS2A".to_vec();
+    for v in [48u32, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0] {
+        raw.extend(v.to_le_bytes());
+    }
+    raw.extend(code.map(|b| b.rotate_left(1).wrapping_add(124)));
+    let script = Script::decode(&raw).unwrap();
+    let mut vm = Machine::new(&script).unwrap();
+    *vm.state_mut() = template.applied(vm.state(), Some(0x12345678)).unwrap();
+    vm.state_mut().set_system_integer(0, 77).unwrap();
+    vm.step().unwrap();
+    let pending = vm.pending_system();
+    let mut host = SystemSaveHost::default();
+    let mut sink = Sink::default();
+    let mut random = CrtRandom::new(19);
+    let before = random.clone();
+    assert!(
+        host.try_write(&mut vm, &mut sink, &mut random, Some(0x12345678))
+            .is_err()
+    );
+    host.loaded = Some(template);
+    assert!(
+        host.try_write(&mut vm, &mut sink, &mut random, Some(1))
+            .is_err()
+    );
+    sink.fail = true;
+    assert!(
+        host.try_write(&mut vm, &mut sink, &mut random, Some(0x12345678))
+            .is_err()
+    );
+    assert_eq!(random, before);
+    assert_eq!(vm.pending_system(), pending);
+    assert!(sink.raw.is_empty());
+    sink.fail = false;
+    host.try_write(&mut vm, &mut sink, &mut random, Some(0x12345678))
+        .unwrap();
+    let mut expected = before;
+    for _ in 0..4 {
+        expected.next_value();
+    }
+    assert_eq!(random, expected);
+    // Independent seed-19 CRT vector: 100, 15331, 209, 888.
+    assert_eq!(&sink.raw[78..84], &[100, 0, 227, 0, 75, 108]);
+    assert_eq!(vm.pending_system(), None);
+    assert_eq!(vm.pc(), 2);
+    assert_eq!(vm.state().system_integer(0), Some(77));
+    assert_eq!(Css1Save::decode(&sink.raw).unwrap().payload(), body());
+}
+
+#[test]
+fn new_output_rejects_game_paths_existing_files_and_creation_races() {
+    let root = std::env::temp_dir().join(format!("cmvs-css1-output-{}", std::process::id()));
+    fs::create_dir(&root).unwrap();
+    let game = root.join("game");
+    fs::create_dir(&game).unwrap();
+    assert!(NewSystemSave::new(&game.join("system.dat"), &game).is_err());
+    let path = root.join("system.dat");
+    let mut output = NewSystemSave::new(&path, &game).unwrap();
+    output.write(b"first").unwrap();
+    assert!(output.write(b"second").is_err());
+    assert!(NewSystemSave::new(&path, &game).is_err());
+    assert_eq!(fs::read(&path).unwrap(), b"first");
+    let race = root.join("race.dat");
+    let mut output = NewSystemSave::new(&race, &game).unwrap();
+    fs::write(&race, b"other writer").unwrap();
+    assert!(output.write(b"replacement").is_err());
+    assert_eq!(fs::read(&race).unwrap(), b"other writer");
+    fs::remove_file(path).unwrap();
+    fs::remove_file(race).unwrap();
+    fs::remove_dir(game).unwrap();
+    fs::remove_dir(root).unwrap();
+}
 
 fn put(b: &mut [u8], at: usize, v: u32) {
     b[at..at + 4].copy_from_slice(&v.to_le_bytes());

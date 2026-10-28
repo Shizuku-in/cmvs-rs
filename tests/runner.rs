@@ -506,6 +506,65 @@ fn auto_resume_save(game_id: u32) -> Vec<u8> {
     raw.extend(checksum.to_le_bytes());
     raw
 }
+
+#[test]
+fn system_save_export_is_opt_in_external_and_becomes_the_read_source() {
+    use cmvs_rs::system_save::Css1Save;
+    let mut code = vec![];
+    let mut call = |op: u16, args: &[u32]| {
+        for value in args.iter().rev() {
+            code.extend(0x440u16.to_le_bytes());
+            code.extend(4u16.to_le_bytes());
+            code.extend(value.to_le_bytes());
+        }
+        code.extend(op.to_le_bytes());
+    };
+    call(0x201d, &[0x12345678]);
+    call(0x2128, &[]);
+    call(0x2092, &[2048, 1, 42]);
+    call(0x2129, &[]);
+    call(0x2092, &[2048, 1, 99]);
+    call(0x2128, &[]);
+    call(0x27ff, &[]);
+    let root = Root::new("system-export", &code, b"");
+    let original = auto_resume_save(0x12345678);
+    fs::write(root.0.join("save/system.dat"), &original).unwrap();
+    let output = root.0.with_extension("css1");
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    assert!(
+        run.set_system_save_output(&root.0.join("save/new.dat"))
+            .is_err()
+    );
+    let mut backend = RecordingBackend::default();
+    loop {
+        if let StartupEvent::Unhandled { command, .. } = run.tick(&mut backend).unwrap() {
+            assert_eq!(command, 0x2129);
+            break;
+        }
+    }
+    assert!(!output.exists());
+    assert!(run.set_system_save_output(&output).is_err()); // Too late to configure.
+    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    run.set_system_save_output(&output).unwrap();
+    loop {
+        if let StartupEvent::Unhandled { command, .. } = run.tick(&mut backend).unwrap() {
+            assert_eq!(command, 0x27ff);
+            break;
+        }
+    }
+    assert_eq!(run.machine().state().integer(2048), Some(42));
+    let saved = Css1Save::decode(&fs::read(&output).unwrap()).unwrap();
+    assert_eq!(
+        saved
+            .applied(run.machine().state(), Some(0x12345678))
+            .unwrap()
+            .integer(2048),
+        Some(42)
+    );
+    assert_eq!(fs::read(root.0.join("save/system.dat")).unwrap(), original);
+    fs::remove_file(output).unwrap();
+}
 fn auto_resume_code(game_id: u32, reads: usize) -> Vec<u8> {
     let mut code = 0x442u16.to_le_bytes().to_vec();
     code.extend(4u16.to_le_bytes());

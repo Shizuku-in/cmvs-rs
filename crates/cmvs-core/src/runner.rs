@@ -25,7 +25,7 @@ use crate::{
     script_control::{ArchiveScripts, ControlEvent, ScriptControl},
     sequence::SequenceHost,
     snapshot::{SaveImage, SaveInfo, SaveTitle},
-    system_save::{FileSystemSave, SystemSaveEvent, SystemSaveHost},
+    system_save::{FileSystemSave, NewSystemSave, SystemSaveEvent, SystemSaveHost},
     text,
     timers::VmTimers,
 };
@@ -73,6 +73,7 @@ pub struct Startup<'a> {
     save_menu: SaveMenuHost,
     system_source: FileSystemSave,
     system_host: SystemSaveHost,
+    system_output: Option<NewSystemSave>,
     assets: DirectoryAssets,
     platform: PlatformHost,
     scene: SceneHost,
@@ -122,6 +123,7 @@ impl<'a> Startup<'a> {
             save_menu: SaveMenuHost::default(),
             system_source: FileSystemSave::new(root.join("save/system.dat")),
             system_host: SystemSaveHost::default(),
+            system_output: None,
             assets: DirectoryAssets::new(root)?,
             platform: PlatformHost::default(),
             scene: SceneHost::default(),
@@ -349,6 +351,15 @@ impl<'a> Startup<'a> {
     pub fn set_random_seed(&mut self, seed: u32) {
         self.random = CrtRandom::new(seed);
     }
+    /// Opt into one CSS1 export to a new file outside the original game directory.
+    /// Subsequent 0x2128 reads use the exported file after the write succeeds.
+    pub fn set_system_save_output(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
+        if self.steps != 0 {
+            return Err("system-save output must be selected before VM execution".into());
+        }
+        self.system_output = Some(NewSystemSave::new(path, &self.root)?);
+        Ok(())
+    }
     /// Host watchdog, not an engine limit: a tick fails without stepping once this many VM
     /// steps ran since the last yield (default 1,000,000; the longest stretch measured on
     /// the replayed path from startup into the first scenario is 9970). Total steps are
@@ -406,6 +417,15 @@ impl<'a> Startup<'a> {
             });
         };
         let id = self.bootstrap.settings().get(&0x201d).copied();
+        if command == 0x129
+            && let Some(output) = &mut self.system_output
+            && self
+                .system_host
+                .try_write(&mut self.machine, output, &mut self.random, id)?
+        {
+            self.system_source = FileSystemSave::new(output.path());
+            return Ok(StartupEvent::Progress);
+        }
         if matches!(command, 0xa0 | 0xa4 | 0xa6 | 0xb0 | 0xba) {
             self.audio_backend.configure_paths(self.bootstrap.paths())?;
         }

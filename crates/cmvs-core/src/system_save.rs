@@ -1,4 +1,6 @@
-//! CSS1 persistent variable data. No system-save writing or gameplay snapshot restore.
+//! CSS1 persistent variable data; optional exclusive-file export, no gameplay snapshot restore.
+mod pack;
+mod write;
 use crate::{FormatError, MAX_PAYLOAD, evaluate::State, machine::Machine, vm::SystemResult};
 use std::{
     error::Error,
@@ -6,6 +8,7 @@ use std::{
     io::{self, Read},
     path::{Path, PathBuf},
 };
+pub use write::{Css1Parameters, NewSystemSave, SystemSaveSink};
 
 pub const PAYLOAD_OFFSET: usize = 360;
 const KEY: &[u8] = b"YUKO_KAWAI_PURPLE_SYSTEM_SAVE_CHECK";
@@ -113,6 +116,8 @@ pub struct Css1Save {
     strings: Vec<Vec<u8>>,
     /// Original object lists +12016, +12024; opaque byte names, not filesystem writes.
     lists: [Vec<Vec<u8>>; 2],
+    /// Opaque header annotation; retained from a supplied source, never interpreted as text.
+    marker: [u8; 60],
 }
 
 impl Css1Save {
@@ -180,6 +185,7 @@ impl Css1Save {
             payload,
             strings,
             lists,
+            marker: raw[8..68].try_into().expect("validated CSS1 metadata"),
         })
     }
 
