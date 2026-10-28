@@ -1478,3 +1478,81 @@ fn releasing_window_image_keeps_children_draw_text_visibility_and_stack_below_th
         assert_eq!(vm.state().system_integer(0), Some(901));
     }
 }
+
+#[test]
+fn replacement_moves_position_motion_without_cloning_it_into_retained_objects() {
+    let mut code = loads(20, &[0]);
+    for (op, args) in [
+        (0x2040, vec![20]),
+        (0x21f4, vec![20, u32::MAX]),
+        (0x21f5, vec![20, u32::MAX, 15, u32::MAX, 0, 400, 100, 200]),
+        (0x21f6, vec![20, u32::MAX, 15]),
+        (0x22c4, vec![20, 6, 100, 0]),
+    ] {
+        scene_command(&mut code, op, &args);
+    }
+    let program = script(&code, b"a.pb3\0b.pb3\0");
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    let mut files = Files(BTreeMap::from([
+        (b"a.pb3".to_vec(), opaque()),
+        (b"b.pb3".to_vec(), opaque()),
+    ]));
+    for _ in 0..6 {
+        let op = run_to_system(&mut vm);
+        if op == 0x30 {
+            scene.try_handle_image(&mut vm, &mut files).unwrap();
+        } else {
+            scene.try_handle(&mut vm).unwrap();
+        }
+    }
+    let before = scene
+        .object(20)
+        .unwrap()
+        .draw
+        .as_ref()
+        .unwrap()
+        .position_motion
+        .clone();
+    assert!(before.is_some());
+    assert_eq!(run_to_system(&mut vm), 0x2c4);
+    scene.try_change_image(&mut vm, &mut files).unwrap();
+    let object = scene.object(20).unwrap();
+    assert_eq!(object.draw.as_ref().unwrap().position_motion, before);
+    let change = object.change.as_ref().unwrap();
+    assert!(
+        change
+            .previous
+            .draw
+            .as_ref()
+            .unwrap()
+            .position_motion
+            .is_none()
+    );
+    assert!(
+        change
+            .common
+            .draw
+            .as_ref()
+            .unwrap()
+            .position_motion
+            .is_none()
+    );
+    scene.advance_frame(16);
+    assert_eq!(
+        scene
+            .object(20)
+            .unwrap()
+            .draw
+            .as_ref()
+            .unwrap()
+            .position_motion
+            .as_ref()
+            .unwrap()
+            .playback
+            .as_ref()
+            .unwrap()
+            .elapsed,
+        16
+    );
+}

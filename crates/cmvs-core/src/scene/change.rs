@@ -267,6 +267,7 @@ impl SceneHost {
             depth_bias: old_draw.depth_bias,
             opacity_track: None,
             animation: None,
+            position_motion: None,
             world_motion: None,
         };
         draw.words[21] = 256;
@@ -278,6 +279,7 @@ impl SceneHost {
                 depth_bias: old_draw.depth_bias,
                 opacity_track: None,
                 animation: None,
+                position_motion: None,
                 world_motion: None,
             };
             common_draw.words[21] = 256;
@@ -311,6 +313,7 @@ impl SceneHost {
         let old_draw = previous.draw.as_mut().expect("validated draw");
         draw.opacity_track = old_draw.opacity_track.take();
         draw.animation = old_draw.animation.take();
+        draw.position_motion = old_draw.position_motion.take();
         draw.world_motion = old_draw.world_motion.take();
         let mut replacement = SceneObject {
             image: Some(image),

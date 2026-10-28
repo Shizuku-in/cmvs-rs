@@ -13,6 +13,7 @@ mod animation;
 mod change;
 mod mask;
 mod opacity;
+mod position_motion;
 mod quake;
 mod strip;
 mod world_motion;
@@ -20,6 +21,7 @@ pub use animation::{ANIMATION_FRAMES, Animation, AnimationFrame};
 pub use change::ImageChange;
 pub use mask::MaskTransition;
 pub use opacity::{OPACITY_KEYS, OpacityKey, OpacityTrack};
+pub use position_motion::{POSITION_KEYS, PositionKey, PositionMotion, PositionPlayback};
 pub use quake::Quake;
 pub use strip::{Strip, StripWipe};
 pub use world_motion::{MotionKey, MotionPlayback, WORLD_MOTION_KEYS, WorldMotion};
@@ -76,7 +78,7 @@ pub struct SceneObject {
     pub change: Option<Box<ImageChange>>,
 }
 impl SceneObject {
-    /// 0x14003d0c0 limited to opacity (+128), frame animation (+136), and XYZ (+152) of
+    /// 0x14003d0c0 limited to opacity (+128), frame animation (+136), XY (+144), and XYZ (+152) of
     /// 0x14001f5c0, in that order: with a draw state, advance each, freeing a channel when it
     /// ends and marking the object for disposal when it ended with -2; then, once children
     /// were created (+6248 bit 31), update each child and destroy the marked ones. The other
@@ -93,6 +95,12 @@ impl SceneObject {
                 && let Some(end) = animation.advance(delta, &mut draw.words)
             {
                 draw.animation = None;
+                self.dispose |= end == -2;
+            }
+            if let Some(motion) = draw.position_motion.as_deref_mut()
+                && let Some(end) = motion.advance(delta, &mut draw.words)
+            {
+                draw.position_motion = None;
                 self.dispose |= end == -2;
             }
             if let Some(motion) = draw.world_motion.as_deref_mut()
@@ -141,6 +149,8 @@ pub struct DrawState {
     pub opacity_track: Option<Box<OpacityTrack>>,
     /// +136: frame animation; rebuilding the draw state drops it.
     pub animation: Option<Box<Animation>>,
+    /// +144: signed 16-bit key positions, writing the 32-bit XY position words.
+    pub position_motion: Option<Box<PositionMotion>>,
     /// +152: floating-point world XYZ motion, managed by 0x21f9..0x21fd.
     pub world_motion: Option<Box<WorldMotion>>,
 }
@@ -157,6 +167,7 @@ impl Default for DrawState {
             depth_bias: 0,
             opacity_track: None,
             animation: None,
+            position_motion: None,
             world_motion: None,
         }
     }
@@ -239,6 +250,9 @@ impl SceneHost {
         self.objects.insert(slot, object);
     }
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
+        if matches!(vm.pending_system(), Some((_, 0x1f4..=0x1f8))) {
+            return self.try_position_motion(vm);
+        }
         if matches!(vm.pending_system(), Some((_, 0x1f9..=0x1fd))) {
             return self.try_world_motion(vm);
         }

@@ -41,12 +41,12 @@ cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-`--payload` 仅允许创建新文件，输出不包含原始头部。当前默认 532 项测试、全 workspace 全功能 564 项测试及严格 Clippy 检查通过；另有 1 项默认忽略的原生音频设备检查，已在普通桌面权限下手动通过。
+`--payload` 仅允许创建新文件，输出不包含原始头部。当前默认 537 项测试、全 workspace 全功能 570 项测试及严格 Clippy 检查通过；另有 1 项默认忽略的原生音频设备检查，已在普通桌面权限下手动通过。
 真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
 `ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
 
 项目已拆为 workspace：`crates/cmvs-core` 为无依赖核心，`crates/cmvs-audio` 为音频后端，`crates/cmvs-desktop` 为桌面后端与运行入口。根 `src/` 保留检查工具和 `cmvs_rs` 兼容重导出，现有命令与 feature 名不变。Rust 集成测试仍在 `tests/*.rs`；Python 工具保留为研究对照。结构、依赖边界与全 workspace 检查命令见 [workspace](docs/workspace.md)。
-场景轨道分别位于 `scene/animation.rs`、`scene/opacity.rs`、`scene/world_motion.rs`，类型仍从 `scene` 导出；场景与序列测试共用 `tests/support/bytecode.rs` 的合成构造器。
+场景轨道分别位于 `scene/animation.rs`、`scene/opacity.rs`、`scene/position_motion.rs`、`scene/world_motion.rs`，类型仍从 `scene` 导出；场景与序列测试共用 `tests/support/bytecode.rs` 的合成构造器。
 架构见 [architecture](docs/architecture.md)，参考来源见 [references](docs/references.md)。
 当前仅建立本地 Git 仓库，未配置远端或推送。
 
@@ -381,3 +381,6 @@ PB3 type 5/6 已实现：同一资源上下文递归加载底图，以 8×8 掩�
 
 
 子队列标志 `0x202d` 已实现：对自身或指定子对象置 flags 的 0x2 位，回收 8 字节、不改系统结果。呈现器支持当前立绘附加图所需的同模式、继承且附着的投影子对象：继承父对象的世界坐标/投影参数/透明度，以父原点和子位置定位，在父项之后按子深度排序。非继承、独立入队、嵌套子对象和子换图仍显式报错。三条重放均再执行 40 步到 `sn1002.ps3 / PC=0x19354 / 0x21f4`、SP=64：鼠标/Enter 各 1818 次、12831101 步，Ctrl 0 次、12393340 步。旧投影子对象报错已消除，终点字体呈现通过；Ctrl 的汗滴附加图已导出目视检查，鼠标路径因父图换图系数为 0 仍显示保留旧图。默认 532 项、全功能 564 项测试、格式、两组严格 Clippy 与完整功能桌面 release 构建通过，硬件测试 1 项默认忽略；未新增原生窗口实测。
+
+
+二维位置轨道 `0x21f4..0x21f8` 已实现：创建、16 条关键帧、播放、停止/查询，按有符号 16 位基点和目标推进 32 位 XY；支持线性/相对线性及已核对的正弦模式，超过 i32::MAX 的时长和未知模式显式报错。效果位于 DrawState +144，在帧动画后、XYZ 前推进，换图时移动轨道所有权。鼠标/Enter 各 2459 次推进、17027294 步，Ctrl 0 次、16503692 步，均到 `sn1003.ps3 / PC=0x18f6e / 0x21ef`、SP=64。点击路径各 31 项真实线性轨道样本与独立 Python 一致，抽查各 1212 个字体呈现帧；Ctrl 1 项采样一致，抽查 18 帧，三条终点呈现通过。正弦分支仅有静态证据和合成测试，未宣称真实路径覆盖。默认 537 项、全功能 570 项测试、格式、两组严格 Clippy 和完整功能桌面 release 构建通过，硬件测试 1 项默认忽略；未新增原生窗口实测。
