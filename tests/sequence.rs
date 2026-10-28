@@ -1,34 +1,9 @@
+mod support;
 use cmvs_rs::{
-    machine::{Machine, Step},
-    ps3::Script,
+    machine::Machine,
     sequence::{SequenceHeader, SequenceHost},
 };
-
-fn script(code: &[u8]) -> Script {
-    let mut payload = 0u32.to_le_bytes().to_vec();
-    payload.extend(code);
-    let mut raw = b"PS2A".to_vec();
-    for n in [
-        48,
-        0,
-        0,
-        1,
-        code.len() as u32,
-        0,
-        0,
-        0,
-        0,
-        payload.len() as u32,
-        0,
-    ] {
-        raw.extend(n.to_le_bytes());
-    }
-    raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
-    Script::decode(&raw).unwrap()
-}
-fn pending(vm: &mut Machine<'_>) {
-    while !matches!(vm.step().unwrap(), Step::System { .. }) {}
-}
+use support::bytecode::{command, pending, script};
 
 #[test]
 fn reset_zeroes_the_header_and_pops_nothing() {
@@ -138,14 +113,6 @@ fn current_index_query_returns_minus_one_when_inactive_and_does_not_consume_para
     }
 }
 
-fn call(code: &mut Vec<u8>, opcode: u16, args: &[u32]) {
-    for &arg in args.iter().rev() {
-        code.extend(0x440u16.to_le_bytes());
-        code.extend(4u16.to_le_bytes());
-        code.extend(arg.to_le_bytes());
-    }
-    code.extend(opcode.to_le_bytes());
-}
 fn run(vm: &mut Machine<'_>, sequence: &mut SequenceHost) {
     pending(vm);
     assert!(sequence.try_handle(vm).unwrap());
@@ -156,11 +123,11 @@ fn wait_append_caps_at_sixteen_preserves_results_and_reset_keeps_inactive_entrie
     use cmvs_rs::sequence::SequenceEntry;
     let mut code = vec![];
     for duration in 0..17 {
-        call(&mut code, 0x2286, &[duration]);
+        command(&mut code, 0x2286, &[duration]);
     }
-    call(&mut code, 0x2285, &[]);
-    call(&mut code, 0x2280, &[]);
-    call(&mut code, 0x2286, &[999]);
+    command(&mut code, 0x2285, &[]);
+    command(&mut code, 0x2280, &[]);
+    command(&mut code, 0x2286, &[999]);
     let program = script(&code);
     let mut vm = Machine::new(&program).unwrap();
     let mut host = SequenceHost::default();
@@ -208,7 +175,7 @@ fn wait_sequence_start_stop_restart_and_queries_follow_header_lifecycle() {
         (0x2282, vec![]),
         (0x2281, vec![]),
     ] {
-        call(&mut code, op, &args);
+        command(&mut code, op, &args);
     }
     let program = script(&code);
     let mut vm = Machine::new(&program).unwrap();
@@ -284,9 +251,9 @@ fn waits_use_wrapping_absolute_time_and_carry_leftover_time_without_frame_clamp(
     for start in [0, u32::MAX - 15] {
         let mut code = vec![];
         for duration in [0, 20, 40, 0] {
-            call(&mut code, 0x2286, &[duration]);
+            command(&mut code, 0x2286, &[duration]);
         }
-        call(&mut code, 0x2282, &[]);
+        command(&mut code, 0x2282, &[]);
         let program = script(&code);
         let mut vm = Machine::new(&program).unwrap();
         let mut host = SequenceHost::with_tick(start);
@@ -321,8 +288,8 @@ fn waits_use_wrapping_absolute_time_and_carry_leftover_time_without_frame_clamp(
         assert_eq!(host.header(), finished);
     }
     let mut code = vec![];
-    call(&mut code, 0x2286, &[300]);
-    call(&mut code, 0x2282, &[]);
+    command(&mut code, 0x2286, &[300]);
+    command(&mut code, 0x2282, &[]);
     let program = script(&code);
     let mut vm = Machine::new(&program).unwrap();
     let mut host = SequenceHost::default();
@@ -340,11 +307,11 @@ fn waits_use_wrapping_absolute_time_and_carry_leftover_time_without_frame_clamp(
 fn finishing_waits_clears_header_keeps_entries_clock_stack_and_results() {
     for active in [false, true] {
         let mut code = vec![];
-        call(&mut code, 0x2286, &[u32::MAX]);
+        command(&mut code, 0x2286, &[u32::MAX]);
         if active {
-            call(&mut code, 0x2282, &[]);
+            command(&mut code, 0x2282, &[]);
         }
-        call(&mut code, 0x2284, &[]);
+        command(&mut code, 0x2284, &[]);
         let program = script(&code);
         let mut vm = Machine::new(&program).unwrap();
         let mut host = SequenceHost::default();
@@ -367,9 +334,9 @@ fn finishing_waits_clears_header_keeps_entries_clock_stack_and_results() {
 #[test]
 fn failed_wait_append_preserves_active_sequence_and_unknown_actions_remain_pending() {
     let mut code = vec![];
-    call(&mut code, 0x2286, &[100]);
-    call(&mut code, 0x2282, &[]);
-    call(&mut code, 0x2286, &[]);
+    command(&mut code, 0x2286, &[100]);
+    command(&mut code, 0x2282, &[]);
+    command(&mut code, 0x2286, &[]);
     let program = script(&code);
     let mut vm = Machine::new(&program).unwrap();
     let mut host = SequenceHost::default();
@@ -408,17 +375,17 @@ impl cmvs_rs::image::ImageSource for NoImages {
 }
 fn motion_scene() -> cmvs_rs::scene::SceneHost {
     let mut code = vec![];
-    call(&mut code, 0x2020, &[20]);
-    call(&mut code, 0x2040, &[20]);
+    command(&mut code, 0x2020, &[20]);
+    command(&mut code, 0x2040, &[20]);
     for (i, value) in [10f32, 20.0, 30.0].into_iter().enumerate() {
-        call(
+        command(
             &mut code,
             0x2072 + i as u16,
             &[20, u32::MAX, value.to_bits()],
         );
     }
-    call(&mut code, 0x21f9, &[20, u32::MAX]);
-    call(
+    command(&mut code, 0x21f9, &[20, u32::MAX]);
+    command(
         &mut code,
         0x21fa,
         &[20, u32::MAX, 7, u32::MAX, 0, 999, 0, 0, 0],
@@ -435,8 +402,8 @@ fn motion_scene() -> cmvs_rs::scene::SceneHost {
 #[test]
 fn motion_sequence_defers_rebuild_captures_execution_base_and_does_not_wait_for_motion() {
     let mut code = vec![];
-    call(&mut code, 0x2286, &[30]);
-    call(
+    command(&mut code, 0x2286, &[30]);
+    command(
         &mut code,
         0x228a,
         &[
@@ -448,8 +415,8 @@ fn motion_sequence_defers_rebuild_captures_execution_base_and_does_not_wait_for_
             400,
         ],
     );
-    call(&mut code, 0x2286, &[50]);
-    call(&mut code, 0x2282, &[]);
+    command(&mut code, 0x2286, &[50]);
+    command(&mut code, 0x2282, &[]);
     let program = script(&code);
     let mut vm = Machine::new(&program).unwrap();
     let mut host = SequenceHost::default();
@@ -464,7 +431,7 @@ fn motion_sequence_defers_rebuild_captures_execution_base_and_does_not_wait_for_
     assert_eq!(scene.object(20), Some(&before));
     // Change a coordinate after append/start: the animation must capture it at execution.
     let mut setter = vec![];
-    call(&mut setter, 0x2072, &[20, u32::MAX, 11f32.to_bits()]);
+    command(&mut setter, 0x2072, &[20, u32::MAX, 11f32.to_bits()]);
     let setter = script(&setter);
     let mut setter_vm = Machine::new(&setter).unwrap();
     pending(&mut setter_vm);
@@ -511,9 +478,9 @@ fn motion_sequence_defers_rebuild_captures_execution_base_and_does_not_wait_for_
 fn motion_sequence_fast_finish_skips_without_changing_existing_track_or_validating_mode() {
     for with_scene in [false, true] {
         let mut code = vec![];
-        call(&mut code, 0x228a, &[20, 0, 0, 0, 0xffff, 500]);
-        call(&mut code, 0x2282, &[]);
-        call(&mut code, 0x2284, &[]);
+        command(&mut code, 0x228a, &[20, 0, 0, 0, 0xffff, 500]);
+        command(&mut code, 0x2282, &[]);
+        command(&mut code, 0x2284, &[]);
         let program = script(&code);
         let mut vm = Machine::new(&program).unwrap();
         let mut host = SequenceHost::default();
@@ -544,8 +511,8 @@ fn motion_sequence_execution_errors_preserve_entry_and_target_but_missing_slots_
         (20, 0, true, false),
     ] {
         let mut code = vec![];
-        call(&mut code, 0x228a, &[slot, 0, 0, 0, mode, 100]);
-        call(&mut code, 0x2282, &[]);
+        command(&mut code, 0x228a, &[slot, 0, 0, 0, mode, 100]);
+        command(&mut code, 0x2282, &[]);
         let program = script(&code);
         let mut vm = Machine::new(&program).unwrap();
         let mut host = SequenceHost::default();
@@ -553,7 +520,7 @@ fn motion_sequence_execution_errors_preserve_entry_and_target_but_missing_slots_
         if no_draw {
             let program = script(&{
                 let mut c = vec![];
-                call(&mut c, 0x2020, &[20]);
+                command(&mut c, 0x2020, &[20]);
                 c
             });
             let mut vm = Machine::new(&program).unwrap();
@@ -578,13 +545,13 @@ fn motion_sequence_execution_errors_preserve_entry_and_target_but_missing_slots_
 fn motion_append_preserves_raw_bits_caps_at_sixteen_and_missing_args_are_transactional() {
     let mut code = vec![];
     for slot in 0..17 {
-        call(
+        command(
             &mut code,
             0x228a,
             &[slot, 0x7fc01234, 0x80000000, 0x7f800000, 0xffff, u32::MAX],
         );
     }
-    call(&mut code, 0x228a, &[20, 0, 0, 0, 0]);
+    command(&mut code, 0x228a, &[20, 0, 0, 0, 0]);
     let program = script(&code);
     let mut vm = Machine::new(&program).unwrap();
     let mut host = SequenceHost::default();

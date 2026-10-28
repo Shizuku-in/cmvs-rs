@@ -38,8 +38,18 @@ pub struct WorldMotion {
 }
 
 impl WorldMotion {
-    pub(crate) fn supports_mode(mode: u32) -> bool {
+    fn supports_mode(mode: u32) -> bool {
         matches!(mode as u8, 0 | 0x38 | 0x39) || mode as u8 == 1 && mode & 0x8000 == 0
+    }
+
+    /// 0x140025530: capture the current coordinates and start at an already validated key.
+    fn start(&mut self, base: [u32; 3], key: u32) {
+        self.playback = Some(MotionPlayback {
+            base,
+            start: key,
+            current: key,
+            elapsed: 0,
+        });
     }
 
     /// 0x140025570 after opacity/frame animation: clamp delta to 200 ms, wrap elapsed,
@@ -119,6 +129,40 @@ impl WorldMotion {
 }
 
 impl SceneHost {
+    /// 0x228a normal execution: replace +152, write key 0, and capture the execution-time
+    /// XYZ. The sequence owns timing/fast-finish decisions; this method owns scene state.
+    pub(crate) fn replace_world_motion(
+        &mut self,
+        raw_slot: u32,
+        xyz: [u32; 3],
+        mode: u32,
+        duration: u32,
+        pc: usize,
+    ) -> Result<(), DecodeError> {
+        let fail = |why| error(pc, 0x228a, why);
+        let slot = u8::try_from(raw_slot).map_err(|_| fail("motion slot outside 0..255"))?;
+        let Some(object) = self.object_mut(slot) else {
+            return Ok(());
+        };
+        let draw = object
+            .draw
+            .as_mut()
+            .ok_or_else(|| fail("motion target has no draw state"))?;
+        if !WorldMotion::supports_mode(mode) {
+            return Err(fail("world motion interpolation mode is not implemented"));
+        }
+        let mut motion = WorldMotion::default();
+        motion.keys[0] = MotionKey {
+            next: -1,
+            xyz,
+            mode,
+            duration,
+        };
+        motion.start(draw.words[11..14].try_into().expect("XYZ"), 0);
+        draw.world_motion = Some(Box::new(motion));
+        Ok(())
+    }
+
     pub(super) fn try_world_motion(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
         let Some((pc, command @ 0x1f9..=0x1fd)) = vm.pending_system() else {
             return Ok(false);
@@ -190,12 +234,7 @@ impl SceneHost {
             }
             0x1fb => {
                 if let Some(motion) = draw.world_motion.as_mut() {
-                    motion.playback = Some(MotionPlayback {
-                        base: draw.words[11..14].try_into().expect("XYZ"),
-                        start: args[2],
-                        current: args[2],
-                        elapsed: 0,
-                    });
+                    motion.start(draw.words[11..14].try_into().expect("XYZ"), args[2]);
                 }
             }
             0x1fc => {

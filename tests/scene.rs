@@ -1,31 +1,10 @@
+mod support;
 use cmvs_rs::{
     machine::{Machine, Step},
-    ps3::Script,
     scene::{ClearState, DrawState, SceneHost, SceneObject},
 };
+use support::bytecode::{command, pending, script};
 
-fn script(code: &[u8]) -> Script {
-    let mut payload = 0u32.to_le_bytes().to_vec();
-    payload.extend(code);
-    let mut raw = b"PS2A".to_vec();
-    for n in [
-        48,
-        0,
-        0,
-        1,
-        code.len() as u32,
-        0,
-        0,
-        0,
-        0,
-        payload.len() as u32,
-        0,
-    ] {
-        raw.extend(n.to_le_bytes());
-    }
-    raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
-    Script::decode(&raw).unwrap()
-}
 fn push_then(value: u32, ops: &[u16]) -> Vec<u8> {
     let mut code = 0x440u16.to_le_bytes().to_vec();
     code.extend(4u16.to_le_bytes());
@@ -132,12 +111,6 @@ fn object_slots_are_rebuilt_destroyed_and_bounded() {
     assert_eq!(scene.object(3), Some(&SceneObject::default()));
 }
 
-fn command(code: &mut Vec<u8>, op: u16, args: &[u32]) {
-    for &arg in args.iter().rev() {
-        code.extend(push_then(arg, &[]));
-    }
-    code.extend(op.to_le_bytes());
-}
 fn next(
     vm: &mut Machine<'_>,
     scene: &mut SceneHost,
@@ -521,6 +494,7 @@ fn destroy_all_clears_every_slot_but_keeps_stack_fade_and_clear_state() {
 }
 
 /// Pushes `words` bottom first, then issues `command`.
+/// Emits words in actual push order, unlike support::bytecode::command.
 fn invoke(code: &mut Vec<u8>, command: u16, words: &[u32]) {
     for &word in words {
         code.extend(0x440u16.to_le_bytes());
@@ -549,7 +523,7 @@ fn objects_move_between_slots_and_existence_queries_report_them() {
     let mut vm = Machine::new(&script).unwrap();
     let mut scene = SceneHost::default();
     let step = |vm: &mut Machine<'_>, scene: &mut SceneHost| {
-        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        pending(vm);
         assert!(scene.try_handle(vm).unwrap());
     };
     for _ in 0..4 {
@@ -585,10 +559,10 @@ fn object_moves_and_queries_reject_bad_slots_and_self_moves() {
         vm.state_mut().set_system_integer(0, 9).unwrap();
         let mut scene = SceneHost::default();
         if setup {
-            while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+            pending(&mut vm);
             assert!(scene.try_handle(&mut vm).unwrap());
         }
-        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        pending(&mut vm);
         let bytes = vm.stack().len_bytes();
         assert!(scene.try_handle(&mut vm).is_err());
         assert_eq!(vm.pending_system().map(|p| p.1), Some(command - 0x2000));
@@ -615,7 +589,7 @@ fn tracked(code: &mut Vec<u8>, slot: u32, base: u32, keys: &[(u32, u32, u32, u32
 }
 fn run_all(vm: &mut Machine<'_>, scene: &mut SceneHost, commands: usize) {
     for _ in 0..commands {
-        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        pending(vm);
         assert!(scene.try_handle(vm).unwrap(), "{:?}", vm.pending_system());
     }
 }
@@ -758,7 +732,7 @@ fn opacity_commands_reject_bad_targets_and_keys() {
         vm.state_mut().set_system_integer(0, 9).unwrap();
         let mut scene = SceneHost::default();
         run_all(&mut vm, &mut scene, 1 + usize::from(draw));
-        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        pending(&mut vm);
         let bytes = vm.stack().len_bytes();
         assert!(scene.try_handle(&mut vm).is_err(), "{command:x} {words:?}");
         assert_eq!(vm.pending_system().map(|p| p.1), Some(command - 0x2000));
@@ -1022,7 +996,7 @@ fn world_motion_invalid_targets_indices_modes_and_missing_args_are_transactional
         let mut vm = Machine::new(&program).unwrap();
         let mut scene = SceneHost::default();
         run_all(&mut vm, &mut scene, 6);
-        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        pending(&mut vm);
         let before = scene.object(1).unwrap().clone();
         vm.state_mut().set_system_integer(0, 123).unwrap();
         for _ in 0..2 {

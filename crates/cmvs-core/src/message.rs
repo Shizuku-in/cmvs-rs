@@ -10,7 +10,8 @@
 //! fields; 0x2170/0x2171, 0x2178..0x217b, 0x217f and 0x2180..0x2185 drive the window's own
 //! scene object; 0x2190..0x2192 fill its 32 button records and 0x2150 moves the window;
 //! 0x21cf/0x21d0 build frame animations. 0x2114..0x2117 and 0x211e address text objects
-//! directly. Glyphs, fonts and drawing are not modeled.
+//! directly. Glyph records and font/layout metadata live in core; font rasterization
+//! belongs to the desktop backend.
 use crate::{
     bytecode::DecodeError,
     evaluate::error,

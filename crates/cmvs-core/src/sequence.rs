@@ -3,11 +3,7 @@
 //! 0x140014b10; addresses refer to the documented binary hash. Wait entries and their
 //! start/stop/finish lifecycle, image replacement and XYZ motion entries are modeled; other actions stay unhandled.
 use crate::{
-    evaluate::error,
-    image::ImageSource,
-    machine::Machine,
-    scene::{MotionKey, MotionPlayback, SceneHost, WorldMotion},
-    vm::SystemResult,
+    evaluate::error, image::ImageSource, machine::Machine, scene::SceneHost, vm::SystemResult,
 };
 use std::error::Error;
 
@@ -144,38 +140,7 @@ impl SequenceHost {
                     if finish {
                         return Ok(());
                     }
-                    let slot = u8::try_from(*raw)
-                        .map_err(|_| error(*pc, 0x228a, "motion slot outside 0..255"))?;
-                    // Missing objects are skipped; no draw state is an explicit safety barrier.
-                    let Some(object) = scene.object_mut(slot) else {
-                        return Ok(());
-                    };
-                    let draw = object
-                        .draw
-                        .as_mut()
-                        .ok_or_else(|| error(*pc, 0x228a, "motion target has no draw state"))?;
-                    if !WorldMotion::supports_mode(*mode) {
-                        return Err(error(
-                            *pc,
-                            0x228a,
-                            "world motion interpolation mode is not implemented",
-                        )
-                        .into());
-                    }
-                    let mut motion = WorldMotion::default();
-                    motion.keys[0] = MotionKey {
-                        next: -1,
-                        xyz: *xyz,
-                        mode: *mode,
-                        duration: *duration,
-                    };
-                    motion.playback = Some(MotionPlayback {
-                        base: draw.words[11..14].try_into().expect("XYZ"),
-                        start: 0,
-                        current: 0,
-                        elapsed: 0,
-                    });
-                    draw.world_motion = Some(Box::new(motion));
+                    scene.replace_world_motion(*raw, *xyz, *mode, *duration, *pc)?;
                 }
                 SequenceEntry::Wait { .. } => unreachable!("wait handled by sequence"),
             }

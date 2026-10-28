@@ -75,3 +75,16 @@ OP 第 1000 帧 RGBA 仍为 `ece6dcbe6d8365ef6356a69b83e8a76c9b437a191c248d15c9d
 与上一阶段结束时的标题帧进行文件对照；原始输入仍只观察、不驱动 VM。
 
 字体预览阶段：cmvs-desktop 直接依赖固定 ab_glyph 0.2.32（仅 std，默认功能关闭），字体文件/字符编码/光栅化/字形缓存都留在桌面 crate。core 只新增可接收外部 SceneObject 的排序呈现入口，仍无依赖；没有依赖图反向引用。Cargo.lock 只新增 desktop → ab_glyph 的直接依赖边，复用已锁定的版本。默认 356 项、全 workspace 全功能 373 项测试通过，详见 font-output.md。
+
+
+## 场景内部整理（2026-10-28）
+
+保持四个 workspace 包与依赖方向，未新增 feature 或第三方依赖。`scene.rs` 的帧动画类型/计算迁入 `scene/animation.rs`，不透明度轨道与命令迁入 `scene/opacity.rs`，原 `scene::Animation`、`AnimationFrame`、`ANIMATION_FRAMES`、`OpacityKey`、`OpacityTrack`、`OPACITY_KEYS` 路径均由重导出保留。算法、字段及效果推进顺序不变。
+
+`SequenceHost` 只决定动作执行时机与快进跳过，正常执行通过 crate 内部 `SceneHost::replace_world_motion` 重建并启动轨道。方法留在 `scene/world_motion.rs`，与直接播放命令共用私有 `WorldMotion::start`，不把原始 DrawState 字段和轨道构造留给序列层。
+
+`tests/scene.rs` 与 `tests/sequence.rs` 共用 `tests/support/bytecode.rs` 的合成 PS2A、参数顺序命令构造器和等待辅助函数。`command` 的 args[0] 对应 SP-4，按逆序压栈；场景测试原有 `invoke` 仍接收实际压栈顺序，明确标注差异。未迁移其他测试或加入游戏数据。
+
+重构前后鼠标、Enter、Ctrl 重放日志逐字节一致：两条点击路径分别 8479 字节、SHA-256 `cf836f8439223d2c63fb6000eeae451140c9d70f2042f21887819f1c6659e8f9`，Ctrl 1072 字节、SHA-256 `b02191202dbffd82a76ac1564b3243b0ff599efd22eadf071f25d1fe82a25ae8`；15 张导出 PNG 逐字节一致。此处使用与上一阶段相同的抽样呈现探针，未扩展为全部让出帧验证。当前停点仍为 `sn1002.ps3 / 0x267b4 / 0x21fa` 的模式 0x48。
+
+默认 526 项、全 workspace 全功能 557 项测试、格式、默认/全功能严格 Clippy 与完整功能桌面 release 构建通过，硬件检查 1 项默认忽略。未修改资源解码算法、指令语义或游戏数据，未新增原生窗口实测。
