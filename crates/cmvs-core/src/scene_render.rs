@@ -31,6 +31,16 @@ enum Layer<'a> {
         alpha: u32,
         blend: Blend,
     },
+    /// A rotated 2D image: device-space corners in strip order top-left, top-right,
+    /// bottom-left, bottom-right of the source rectangle.
+    Rotated {
+        image: &'a ObjectImage,
+        /// Source x/y/width/height.
+        rect: [i64; 4],
+        corners: [[f32; 2]; 4],
+        alpha: u32,
+        blend: Blend,
+    },
     Solid {
         rect: [i64; 4],
         color: [u8; 3],
@@ -88,7 +98,7 @@ struct Entry<'a> {
 /// Only blend modes 1/2, crop, origin, position, order and opacity may differ from the
 /// constructor values; a projected object (coordinate mode 2/3) also keeps its world XYZ
 /// (words 11..14) and projection inputs (15/16). Both paths accept finite nonnegative
-/// XY scale. Rotation stays at constructor values; fade factors
+/// XY scale and a rotation (word 20); fade factors
 /// in 0..256 are used by image replacement. A 2D object's color word also selects
 /// the solid rectangle color and whether its children inherit the parent's image.
 fn check(words: &[u32; 22], projected: bool) -> Result<(), FormatError> {
@@ -112,6 +122,7 @@ fn check(words: &[u32; 22], projected: bool) -> Result<(), FormatError> {
         allowed[14] = words[14];
     }
     allowed[17] = words[17];
+    allowed[20] = words[20];
     if words[21] <= 256 {
         allowed[21] = words[21];
     }
@@ -154,6 +165,29 @@ fn image_layer<'a>(
         }
     }
     let scale = [words[18], words[19]].map(f32::from_bits);
+    // 0x140022500 divides the signed hundredths by 100.0f; only a zero angle skips rotation.
+    let degrees = words[20] as i32 as f32 / 100.0;
+    if degrees != 0.0 {
+        if mask.is_some() {
+            return Err(FormatError("rotated 2D mask rendering is not verified"));
+        }
+        let (position, scale) = inherited.unwrap_or((position.map(|v| v as f32), scale));
+        if scale.contains(&0.0) {
+            return Ok(None);
+        }
+        let origin = [words[6] as i16, words[7] as i16].map(i64::from);
+        let corners = rotated_corners(position, scale, origin, [w, h], degrees);
+        if !corners.as_flattened().iter().all(|v| v.is_finite()) {
+            return Err(FormatError("rotated 2D image extent is not finite"));
+        }
+        return Ok(Some(Layer::Rotated {
+            image,
+            rect: [sx, sy, w, h],
+            corners,
+            alpha: alpha.min(255) as u32,
+            blend: blend(words, image, alpha, false)?,
+        }));
+    }
     if inherited.is_some() || scale != [1.0; 2] {
         if mask.is_some() {
             return Err(FormatError("scaled 2D mask rendering is not verified"));
@@ -193,6 +227,49 @@ fn image_layer<'a>(
     }))
 }
 
+/// `cvttss2si`: out-of-range and NaN inputs give the integer indefinite value.
+fn truncate(v: f32) -> i32 {
+    if v.is_nan() || !(-2_147_483_648.0..2_147_483_648.0).contains(&v) {
+        i32::MIN
+    } else {
+        v as i32
+    }
+}
+
+/// The single-texture rotated branch of 0x140022500 (`0x14002263b..0x140022a52`): the
+/// rotated local corners move by the position and the device's half-pixel offset (device
+/// factor 1). Rotation is about the object's own position.
+fn rotated_corners(
+    position: [f32; 2],
+    scale: [f32; 2],
+    origin: [i64; 2],
+    size: [i64; 2],
+    degrees: f32,
+) -> [[f32; 2]; 4] {
+    rotated_local(scale, origin, size, degrees)
+        .map(|[x, y]| [x + position[0] - 0.5, y + position[1] - 0.5])
+}
+
+/// Local corners top-left, top-right, bottom-left, bottom-right: the scaled offsets from
+/// the origin, in single precision. With θ = (360 − degrees) · 0.017453292 they become
+/// x' = s·y + c·x and y' = c·y − x·s, each truncated toward zero to hundredths. Shared by
+/// 0x140022500 (2D) and 0x140024020 (`0x1400240b2..0x140024223`, projected local layout).
+/// The binary's static CRT cosf/sinf are approximated by rounding f64 results.
+fn rotated_local(
+    scale: [f32; 2],
+    origin: [i64; 2],
+    [w, h]: [i64; 2],
+    degrees: f32,
+) -> [[f32; 2]; 4] {
+    let [left, right] = [-origin[0], w - origin[0]].map(|v| v as f32 * scale[0]);
+    let [top, bottom] = [-origin[1], h - origin[1]].map(|v| v as f32 * scale[1]);
+    let theta = (360.0 - degrees) * 0.017_453_292;
+    let (sin, cos) = (f64::from(theta).sin() as f32, f64::from(theta).cos() as f32);
+    let hundredths = |v: f32| truncate(v * 100.0) as f32 / 100.0;
+    [[left, top], [right, top], [left, bottom], [right, bottom]]
+        .map(|[x, y]| [hundredths(sin * y + cos * x), hundredths(cos * y - x * sin)])
+}
+
 /// Untextured 2D branch of 0x140020340 / 0x1400233e0. The color's alpha byte
 /// selects child image inheritance, but vertex alpha comes from opacity and fade.
 fn solid_layer<'a>(
@@ -207,6 +284,11 @@ fn solid_layer<'a>(
     if words[18..20] != [1.0f32.to_bits(); 2] {
         return Err(FormatError(
             "scaled solid rectangle rendering is not verified",
+        ));
+    }
+    if words[20] != 0 {
+        return Err(FormatError(
+            "rotated solid rectangle rendering is not verified",
         ));
     }
     let [b, g, r, _] = words[14].to_le_bytes();
@@ -305,8 +387,9 @@ fn unit_screen_scale(object: &SceneObject) -> Result<(), FormatError> {
 /// 0x140020340 projects it with camera 0/1 (0x14004ef40), lays out the
 /// source rectangle around the origin (0x140024020) and places it at the projected position
 /// and scale (0x1400238a0, device factor 1 on the 1280x720 viewport) minus the device's
-/// half-pixel offset. Inherited attached children reuse the parent projection and origin;
-/// masks, camera rotation and effect targets are not verified.
+/// half-pixel offset. The object's own angle rotates its local corners before projection
+/// scaling. Inherited attached children reuse the parent projection and origin; masks,
+/// camera rotation, rotated parents of children and effect targets are not verified.
 fn projected_layer<'a>(
     scene: &SceneHost,
     cameras: Option<&CameraHost>,
@@ -417,6 +500,34 @@ fn projected_layer<'a>(
     });
     let origin = [0, 1].map(|i| 0.0 - f32::from(words[6 + i] as i16));
     let local = [0, 1].map(|i| f32::from_bits(words[18 + i]));
+    // 0x140024020 rotates the scaled local corners by the object's own angle; 0x1400238a0
+    // then subtracts the offset, applies the projection scale, rotates by its +52 argument
+    // (the parent's angle for an inherited child, 0 otherwise) and adds the position.
+    if inherited.is_some_and(|p| p[20] != 0) {
+        return Err(FormatError(
+            "children of a rotated projected parent are not verified",
+        ));
+    }
+    let degrees = words[20] as i32 as f32 / 100.0;
+    if degrees != 0.0 {
+        let origin = [words[6] as i16, words[7] as i16].map(i64::from);
+        let corners = rotated_local(local, origin, [w, h], degrees)
+            .map(|c| [0, 1].map(|i| ((c[i] - offset[i]) * scale[i] + [px, py][i]) - 0.5));
+        if !corners.as_flattened().iter().all(|v| v.is_finite()) {
+            return Err(FormatError("projected object has a non-finite extent"));
+        }
+        let blend = blend(words, image, i64::from(alpha), false)?;
+        return Ok(Some((
+            key,
+            Layer::Rotated {
+                image,
+                rect: [sx, sy, w, h],
+                corners,
+                alpha: alpha.min(255) as u32,
+                blend,
+            },
+        )));
+    }
     let quad = [
         ((origin[0] * local[0] - offset[0]) * scale[0] + px) - 0.5,
         ((origin[1] * local[1] - offset[1]) * scale[1] + py) - 0.5,
@@ -469,6 +580,22 @@ fn shifted(layer: Layer<'_>, by: [i64; 2]) -> Layer<'_> {
                 image,
                 rect,
                 quad: [quad[0] + x, quad[1] + y, quad[2] + x, quad[3] + y],
+                alpha,
+                blend,
+            }
+        }
+        Layer::Rotated {
+            image,
+            rect,
+            corners,
+            alpha,
+            blend,
+        } => {
+            let [x, y] = by.map(|v| v as f32);
+            Layer::Rotated {
+                image,
+                rect,
+                corners: corners.map(|[cx, cy]| [cx + x, cy + y]),
                 alpha,
                 blend,
             }
@@ -690,7 +817,7 @@ pub fn render_scene(
             let mut plain = *d;
             plain[14] = 0;
             check(&plain, false)?;
-            if d[0] != 0 || d[1] != 1 || d[18..20] != [1.0f32.to_bits(); 2] {
+            if d[0] != 0 || d[1] != 1 || d[18..20] != [1.0f32.to_bits(); 2] || d[20] != 0 {
                 return Err(FormatError("unsupported strip transform or blend mode"));
             }
             let [w, h] = [d[4] as i16, d[5] as i16].map(i64::from);
@@ -777,8 +904,6 @@ fn draw_projected(
     opacity: u32,
     blend: Blend,
 ) {
-    let size = [image.pixels.width(), image.pixels.height()].map(i64::from);
-    let texels = image.pixels.pixels();
     let step = [w as f32 / (right - left), h as f32 / (bottom - top)];
     let span = |from: f32, to: f32, limit: u32| {
         let limit = limit as f32;
@@ -791,30 +916,108 @@ fn draw_projected(
     let (y0, y1) = span(top, bottom, height);
     for y in y0..y1 {
         let ty = sy as f32 + (y as f32 - top) * step[1] - 0.5;
-        let wy = ty - ty.floor();
-        let rows = [ty.floor() as i64, ty.floor() as i64 + 1].map(|r| r.clamp(0, size[1] - 1));
         for x in x0..x1 {
             let tx = sx as f32 + (x as f32 - left) * step[0] - 0.5;
-            let wx = tx - tx.floor();
-            let cols = [tx.floor() as i64, tx.floor() as i64 + 1].map(|c| c.clamp(0, size[0] - 1));
-            let texel = |row: i64, col: i64, c: usize| {
-                f32::from(texels[((row * size[0] + col) * 4) as usize + c])
-            };
-            let sample = |c: usize| {
-                let upper =
-                    texel(rows[0], cols[0], c) * (1.0 - wx) + texel(rows[0], cols[1], c) * wx;
-                let lower =
-                    texel(rows[1], cols[0], c) * (1.0 - wx) + texel(rows[1], cols[1], c) * wx;
-                (upper * (1.0 - wy) + lower * wy).round().clamp(0.0, 255.0) as u8
-            };
-            let alpha = (u32::from(sample(3)) * opacity + 127) / 255;
+            let texel = bilinear(image, tx, ty);
+            let alpha = (u32::from(texel[3]) * opacity + 127) / 255;
             let dst = ((y * i64::from(width) + x) * 4) as usize;
             put(
                 &mut pixels[dst..dst + 3],
-                [sample(0), sample(1), sample(2)],
+                [texel[0], texel[1], texel[2]],
                 alpha,
                 blend,
             );
+        }
+    }
+}
+
+/// Clamped bilinear sample at texel-space coordinates whose texel centers are integers.
+fn bilinear(image: &ObjectImage, tx: f32, ty: f32) -> [u8; 4] {
+    let size = [image.pixels.width(), image.pixels.height()].map(i64::from);
+    let texels = image.pixels.pixels();
+    let [wx, wy] = [tx - tx.floor(), ty - ty.floor()];
+    let rows = [ty.floor() as i64, ty.floor() as i64 + 1].map(|r| r.clamp(0, size[1] - 1));
+    let cols = [tx.floor() as i64, tx.floor() as i64 + 1].map(|c| c.clamp(0, size[0] - 1));
+    let texel =
+        |row: i64, col: i64, c: usize| f32::from(texels[((row * size[0] + col) * 4) as usize + c]);
+    std::array::from_fn(|c| {
+        let upper = texel(rows[0], cols[0], c) * (1.0 - wx) + texel(rows[0], cols[1], c) * wx;
+        let lower = texel(rows[1], cols[0], c) * (1.0 - wx) + texel(rows[1], cols[1], c) * wx;
+        (upper * (1.0 - wy) + lower * wy).round().clamp(0.0, 255.0) as u8
+    })
+}
+
+/// A rotated quad as the strip triangles (0, 1, 2) and (1, 3, 2) with affine texture
+/// coordinates and bilinear sampling. Pixel centers on an edge follow a top-left rule, so
+/// the shared diagonal is covered once and an axis-aligned quad covers the same pixels as
+/// `draw_projected`. Device rasterization precision is not modeled.
+fn draw_rotated(
+    pixels: &mut [u8],
+    [width, height]: [u32; 2],
+    image: &ObjectImage,
+    [sx, sy, w, h]: [i64; 4],
+    corners: [[f32; 2]; 4],
+    opacity: u32,
+    blend: Blend,
+) {
+    let [u0, v0, u1, v1] = [sx, sy, sx + w, sy + h].map(|v| v as f64);
+    let texture = [[u0, v0], [u1, v0], [u0, v1], [u1, v1]];
+    let point = corners.map(|[x, y]| [f64::from(x), f64::from(y)]);
+    for triangle in [[0, 1, 2], [1, 3, 2]] {
+        let mut p = triangle.map(|i| point[i]);
+        let mut t = triangle.map(|i| texture[i]);
+        let edge = |a: [f64; 2], b: [f64; 2], q: [f64; 2]| {
+            (b[0] - a[0]) * (q[1] - a[1]) - (b[1] - a[1]) * (q[0] - a[0])
+        };
+        let mut area = edge(p[0], p[1], p[2]);
+        if area == 0.0 {
+            continue;
+        }
+        if area < 0.0 {
+            p.swap(1, 2);
+            t.swap(1, 2);
+            area = -area;
+        }
+        // With y down and a positive area, top edges point right and left edges point up.
+        let top_left = |a: [f64; 2], b: [f64; 2]| b[1] < a[1] || (b[1] == a[1] && b[0] > a[0]);
+        let edges = [(1, 2), (2, 0), (0, 1)];
+        let bound = |axis: usize, limit: u32| {
+            let values = p.map(|v| v[axis]);
+            let low = values.iter().copied().fold(f64::INFINITY, f64::min);
+            let high = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            (
+                low.floor().clamp(0.0, f64::from(limit)) as i64,
+                (high.ceil() + 1.0).clamp(0.0, f64::from(limit)) as i64,
+            )
+        };
+        let (x0, x1) = bound(0, width);
+        let (y0, y1) = bound(1, height);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let q = [x as f64, y as f64];
+                let weights = edges.map(|(a, b)| edge(p[a], p[b], q));
+                let inside = edges
+                    .iter()
+                    .zip(weights)
+                    .all(|(&(a, b), e)| e > 0.0 || (e == 0.0 && top_left(p[a], p[b])));
+                if !inside {
+                    continue;
+                }
+                // weights[i] is opposite vertex i.
+                let [tx, ty] = [0, 1].map(|axis| {
+                    let sum: f64 = (0..3).map(|i| weights[i] * t[i][axis]).sum();
+                    (sum / area) as f32 - 0.5
+                });
+                let texel = bilinear(image, tx, ty);
+                let alpha = (u32::from(texel[3]) * opacity + 127) / 255;
+                let dst = ((y * i64::from(width) + x) * 4) as usize;
+                put(
+                    &mut pixels[dst..dst + 3],
+                    [texel[0], texel[1], texel[2]],
+                    alpha,
+                    blend,
+                );
+            }
         }
     }
 }
@@ -837,6 +1040,16 @@ fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
             blend,
         } => {
             draw_projected(pixels, [width, height], image, rect, quad, alpha, blend);
+            return;
+        }
+        Layer::Rotated {
+            image,
+            rect,
+            corners,
+            alpha,
+            blend,
+        } => {
+            draw_rotated(pixels, [width, height], image, rect, corners, alpha, blend);
             return;
         }
         Layer::Solid {
@@ -958,6 +1171,65 @@ mod scale_tests {
         assert!(check(&words, false).is_ok());
         assert!(solid_layer(&words, [0, 0], 255).is_err());
         words[20] = 1;
-        assert!(check(&words, false).is_err());
+        assert!(check(&words, false).is_ok());
+        assert!(check(&words, true).is_ok());
+        words[18] = 1.0f32.to_bits();
+        assert!(solid_layer(&words, [0, 0], 255).is_err());
+    }
+
+    #[test]
+    fn rotation_truncates_corners_to_hundredths_and_samples_the_rotated_quad() {
+        // Red then green, rotated 90 degrees about the position (4, 5) with origin (0, 0).
+        let image = ObjectImage {
+            pixels: RgbaImage::new(2, 1, vec![255, 0, 0, 255, 0, 255, 0, 255]).unwrap(),
+            ..image()
+        };
+        let mut words = DrawState::default().words;
+        words[4..6].copy_from_slice(&[2, 1]);
+        words[20] = 9000;
+        let layer = image_layer(&image, &words, [4, 5], 255, None, None)
+            .unwrap()
+            .unwrap();
+        let Layer::Rotated { corners, .. } = &layer else {
+            panic!("rotated quad")
+        };
+        // cos(270°) ≈ -4.4e-8 truncates away; +x maps to +y on the y-down screen.
+        assert_eq!(*corners, [[3.5, 4.5], [3.5, 6.5], [2.5, 4.5], [2.5, 6.5]]);
+        let mut pixels = vec![0; 8 * 8 * 4];
+        draw(&mut pixels, 8, 8, layer);
+        let at = |x: usize, y: usize| &pixels[(y * 8 + x) * 4..(y * 8 + x) * 4 + 3];
+        assert_eq!(at(3, 5), &[255, 0, 0]);
+        assert_eq!(at(3, 6), &[0, 255, 0]);
+        let covered = pixels
+            .chunks_exact(4)
+            .filter(|p| p[..3] != [0, 0, 0])
+            .count();
+        assert_eq!(covered, 2);
+    }
+
+    #[test]
+    fn rotated_mask_and_out_of_range_truncation_stay_explicit() {
+        assert_eq!(truncate(f32::NAN), i32::MIN);
+        assert_eq!(truncate(3.0e9), i32::MIN);
+        assert_eq!(truncate(-1.99), -1);
+        let image = image();
+        let mut words = DrawState::default().words;
+        words[4..6].copy_from_slice(&[2, 2]);
+        words[20] = 6000;
+        let mask = MaskTransition {
+            put: true,
+            slot: 0,
+            ramp: 0,
+            width: 0,
+            elapsed: 0,
+            mask: image.clone(),
+        };
+        assert!(image_layer(&image, &words, [0, 0], 255, Some(&mask), None).is_err());
+        words[18] = 0;
+        assert!(
+            image_layer(&image, &words, [0, 0], 255, None, None)
+                .unwrap()
+                .is_none()
+        );
     }
 }
