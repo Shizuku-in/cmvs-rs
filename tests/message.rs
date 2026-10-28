@@ -84,6 +84,76 @@ fn created_text(position: [i32; 2], size: [u32; 2]) -> TextObject {
 fn pending(vm: &mut Machine<'_>) {
     while !matches!(vm.step().unwrap(), Step::System { .. }) {}
 }
+
+#[test]
+fn empty_auxiliary_text_destruction_preserves_windows_text_and_results() {
+    let mut code = vec![];
+    create(&mut code, 0, 0, [20, 30, 100, 50]);
+    for _ in 0..2 {
+        for slot in 0..8 {
+            call(&mut code, 0x2382, &[slot]);
+        }
+    }
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    pending(&mut vm);
+    assert!(messages.try_handle(&mut vm).unwrap());
+    let window = messages.window(0).unwrap().clone();
+    let text = messages.text(0).unwrap().clone();
+    for i in 0..7 {
+        vm.state_mut().set_system_integer(i, 200 + i).unwrap();
+    }
+    for _ in 0..16 {
+        pending(&mut vm);
+        assert!(messages.try_handle(&mut vm).unwrap());
+        assert_eq!(messages.window(0), Some(&window));
+        assert_eq!(messages.text(0), Some(&text));
+        assert_eq!(vm.stack().len_bytes(), 0);
+        for i in 0..7 {
+            assert_eq!(vm.state().system_integer(i), Some(200 + i));
+        }
+    }
+}
+
+#[test]
+fn auxiliary_text_destruction_rejects_missing_or_invalid_slot_atomically() {
+    for args in [vec![], vec![8], vec![u32::MAX]] {
+        let mut code = vec![];
+        call(&mut code, 0x2382, &args);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        pending(&mut vm);
+        vm.state_mut().set_system_integer(0, 123).unwrap();
+        let before = (vm.pc(), vm.stack().len_bytes(), vm.pending_system());
+        let mut messages = MessageHost::default();
+        for _ in 0..2 {
+            assert!(messages.try_handle(&mut vm).is_err());
+            assert_eq!(
+                (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
+                before
+            );
+            assert_eq!(vm.state().system_integer(0), Some(123));
+        }
+    }
+}
+
+#[test]
+fn auxiliary_text_creation_stays_a_barrier_for_empty_only_destruction() {
+    for op in [0x2380, 0x2381] {
+        let mut code = vec![];
+        call(&mut code, op, &[0, 0, 0, 0]);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        pending(&mut vm);
+        let before = (vm.pc(), vm.stack().len_bytes(), vm.pending_system());
+        assert!(!MessageHost::default().try_handle(&mut vm).unwrap());
+        assert_eq!(
+            (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
+            before
+        );
+    }
+}
 fn run(vm: &mut Machine<'_>, messages: &mut MessageHost, commands: usize) {
     for _ in 0..commands {
         pending(vm);

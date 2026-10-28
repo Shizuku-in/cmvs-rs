@@ -2,6 +2,8 @@
 //! to the documented binary hash. Covers groups, buttons, hit rectangles, navigation links,
 //! per-state images, the initial display of 0x2215 and the hover/press/selection logic of
 //! 0x2216/0x2217 over `ActionInput`. 0x2218/0x2219/0x221a/0x221b stay unhandled.
+//! 0x2371 only handles the initially empty auxiliary list slots at engine +4552;
+//! their creation commands remain barriers and must gain owned state before support.
 use crate::{
     bytecode::DecodeError, evaluate::error, input::ActionInput, machine::Machine, scene::SceneHost,
     vm::SystemResult,
@@ -124,6 +126,19 @@ impl ButtonHost {
         vm: &mut Machine<'_>,
         scene: &mut SceneHost,
     ) -> Result<bool, DecodeError> {
+        if let Some((pc, 0x371)) = vm.pending_system() {
+            // Engine +4552 has eight auxiliary list groups, separate from +4504.
+            // 0x140014f8a..0x140014fbb initializes them all to null. Their creation
+            // commands (0x2370/0x237b) remain unhandled, so only the verified empty
+            // branch of 0x140079e10 can be reached. When adding creation, store the
+            // owned groups and implement their destruction here before enabling it.
+            let slot = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x2371, e.0))?;
+            if slot >= 8 {
+                return Err(error(pc, 0x2371, "auxiliary list group slot outside 0..7"));
+            }
+            vm.complete_system(SystemResult(0x4004))?;
+            return Ok(true);
+        }
         let Some((pc, command @ (0x87 | 0x210..=0x215))) = vm.pending_system() else {
             return Ok(false);
         };

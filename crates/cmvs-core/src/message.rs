@@ -243,6 +243,18 @@ impl MessageHost {
         Ok(true)
     }
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
+        if let Some((pc, 0x382)) = vm.pending_system() {
+            // Engine +4328 is a separate eight-slot table initialized to null by
+            // 0x140014e60. Its creation commands 0x2380/0x2381 remain unhandled:
+            // this implements only 0x1400735e0's empty-slot destruction branch.
+            // Add owned state and full destruction before supporting creation.
+            let slot = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x2382, e.0))?;
+            if slot >= 8 {
+                return Err(error(pc, 0x2382, "auxiliary text group slot outside 0..7"));
+            }
+            vm.complete_system(SystemResult(0x4004))?;
+            return Ok(true);
+        }
         match vm.pending_system() {
             Some((pc, 0xec)) => self.scale(vm, pc).map(|()| true),
             Some((pc, 0x141)) => self.destroy(vm, pc).map(|()| true),

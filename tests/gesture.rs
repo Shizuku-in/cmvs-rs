@@ -58,6 +58,77 @@ fn defaults_follow_the_constructor() {
     assert_eq!((gesture.field(32), gesture.field(36)), (Some(64), Some(90)));
     assert!(tracking_is_reset(&gesture));
     assert_eq!(gesture.field(40), None);
+    for at in (188..=304).step_by(4) {
+        assert_eq!(gesture.field(at), Some(0));
+    }
+}
+
+#[test]
+fn region_setter_keeps_raw_rectangles_without_resetting_other_fields_or_results() {
+    let script = script(&[
+        (0x235a, &[27]),
+        (0x2366, &[0, 9, u32::MAX, 2, 0x8000_0000, 4]),
+        (0x2366, &[5, 0, 10, 20, 30, 40]),
+    ]);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut gesture = PointerGesture::default();
+    assert!(run(&mut gesture, &mut vm));
+    vm.state_mut().set_system_integer(0, 123).unwrap();
+    assert!(run(&mut gesture, &mut vm));
+    assert_eq!(
+        (188..=204)
+            .step_by(4)
+            .map(|at| gesture.field(at).unwrap())
+            .collect::<Vec<_>>(),
+        [1, u32::MAX, 2, 0x8000_0000, 4]
+    );
+    assert!(run(&mut gesture, &mut vm));
+    assert_eq!(
+        (288..=304)
+            .step_by(4)
+            .map(|at| gesture.field(at).unwrap())
+            .collect::<Vec<_>>(),
+        [0, 10, 20, 30, 40]
+    );
+    assert_eq!(gesture.field(36), Some(27));
+    assert_eq!(gesture.field(208), Some(0));
+    assert_eq!(vm.state().system_integer(0), Some(123));
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
+fn region_setter_ignores_unsigned_out_of_range_slots_and_still_consumes_all_words() {
+    let script = script(&[
+        (0x2366, &[6, 1, 2, 3, 4, 5]),
+        (0x2366, &[u32::MAX, 1, 2, 3, 4, 5]),
+    ]);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut gesture = PointerGesture::default();
+    let before = gesture.clone();
+    for _ in 0..2 {
+        assert!(run(&mut gesture, &mut vm));
+        assert_eq!(gesture, before);
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
+}
+
+#[test]
+fn region_setter_requires_all_six_arguments_before_committing() {
+    for count in 0..6 {
+        let args = vec![0; count];
+        let script = script(&[(0x2366, &args)]);
+        let mut vm = Machine::new(&script).unwrap();
+        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        let before_vm = (vm.pc(), vm.stack().len_bytes(), vm.pending_system());
+        let mut gesture = PointerGesture::default();
+        let before = gesture.clone();
+        assert!(gesture.try_handle(&mut vm).is_err());
+        assert_eq!(gesture, before);
+        assert_eq!(
+            (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
+            before_vm
+        );
+    }
 }
 
 #[test]

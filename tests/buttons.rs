@@ -427,3 +427,78 @@ fn missing_state_children_keep_the_frame_uncommitted() {
     assert_eq!(vm.stack().len_bytes(), 4);
     assert_eq!(vm.state().system_integer(0), Some(1));
 }
+
+#[test]
+fn empty_auxiliary_list_destruction_preserves_regular_groups_and_results() {
+    let mut code = vec![];
+    prelude(&mut code);
+    call(&mut code, 0x2212, &[2, 7]);
+    for _ in 0..2 {
+        for slot in 0..8 {
+            call(&mut code, 0x2371, &[slot]);
+        }
+    }
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let (mut scene, mut buttons) = (SceneHost::default(), ButtonHost::default());
+    for _ in 0..3 {
+        assert!(next(&mut vm, &mut scene, &mut buttons));
+    }
+    let group = buttons.group(2).unwrap().clone();
+    for i in 0..7 {
+        vm.state_mut().set_system_integer(i, 100 + i).unwrap();
+    }
+    for _ in 0..16 {
+        assert!(next(&mut vm, &mut scene, &mut buttons));
+        assert_eq!(buttons.group(2), Some(&group));
+        assert!(scene.object(10).is_some());
+        assert_eq!(vm.stack().len_bytes(), 0);
+        for i in 0..7 {
+            assert_eq!(vm.state().system_integer(i), Some(100 + i));
+        }
+    }
+}
+
+#[test]
+fn auxiliary_list_destruction_rejects_missing_or_invalid_slot_atomically() {
+    for args in [vec![], vec![8], vec![u32::MAX]] {
+        let mut code = vec![];
+        call(&mut code, 0x2371, &args);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        vm.state_mut().set_system_integer(0, 123).unwrap();
+        let (pc, sp, pending) = (vm.pc(), vm.stack().len_bytes(), vm.pending_system());
+        let mut buttons = ButtonHost::default();
+        let mut scene = SceneHost::default();
+        for _ in 0..2 {
+            assert!(buttons.try_handle(&mut vm, &mut scene).is_err());
+            assert_eq!(
+                (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
+                (pc, sp, pending)
+            );
+            assert_eq!(vm.state().system_integer(0), Some(123));
+        }
+    }
+}
+
+#[test]
+fn auxiliary_list_creation_stays_a_barrier_for_empty_only_destruction() {
+    for op in [0x2370, 0x237b] {
+        let mut code = vec![];
+        call(&mut code, op, &[0, 10, 1280, 720]);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        let (pc, sp, pending) = (vm.pc(), vm.stack().len_bytes(), vm.pending_system());
+        assert!(
+            !ButtonHost::default()
+                .try_handle(&mut vm, &mut SceneHost::default())
+                .unwrap()
+        );
+        assert_eq!(
+            (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
+            (pc, sp, pending)
+        );
+    }
+}

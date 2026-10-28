@@ -1,5 +1,6 @@
 //! Engine +4664 pointer drag/flick recognizer (constructor 0x1400533d0). Scripts configure
-//! it (0x2350..0x2364) and query the per-frame hold result (0x2362). The frame update
+//! it (0x2350..0x2364, plus six region records through 0x2366) and query the per-frame
+//! hold result (0x2362). The frame update
 //! 0x140054a60 runs mode 0 (0x140053930) over the mouse flags of `ActionInput`; modes 1/2
 //! (0x1400541a0 / 0x140054570) are not modeled. Fields stay named by offset.
 use crate::{
@@ -25,6 +26,7 @@ impl Default for PointerGesture {
         for offset in [0, 4, 8, 12, 16, 20, 24, 28, 56, 60, 64, 68, 100, 104]
             .into_iter()
             .chain(RESET_ZERO)
+            .chain((188..=304).step_by(4))
         {
             fields.insert(offset, 0);
         }
@@ -277,6 +279,29 @@ impl PointerGesture {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(false);
         };
+        if command == 0x366 {
+            // 0x14007fef0 -> 0x1400536d0: six region records at +188, stride 20.
+            // The slot comparison is unsigned; out-of-range slots are ignored. This
+            // setter keeps raw rectangle words, does not reset tracking or query input.
+            let mut args = [0; 6];
+            for (i, arg) in args.iter_mut().enumerate() {
+                *arg = vm
+                    .stack()
+                    .peek_u32(4 * (i + 1))
+                    .map_err(|e| error(pc, 0x2366, e.0))?;
+            }
+            vm.complete_system(SystemResult(0x4018))?;
+            if args[0] < 6 {
+                let base = 188 + args[0] as u16 * 20;
+                for (i, value) in [u32::from(args[1] != 0), args[2], args[3], args[4], args[5]]
+                    .into_iter()
+                    .enumerate()
+                {
+                    self.fields.insert(base + i as u16 * 4, value);
+                }
+            }
+            return Ok(true);
+        }
         let flag_field = match command {
             0x350 => Some(0),
             0x352 => Some(8),
