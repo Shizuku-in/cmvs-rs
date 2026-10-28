@@ -444,6 +444,33 @@ fn timers_advance_at_run_entry_and_ignore_budget_slices_and_reused_deltas() {
     assert_eq!(&run.timers().values()[..2], &[16, 116]);
 }
 
+#[test]
+fn stopwatch_uses_frame_time_once_per_vm_run() {
+    let mut code = vec![];
+    for op in [0x200eu16, 0x200f, 0x2000, 0x200f, 0x200f, 0x2000, 0x200f] {
+        code.extend(op.to_le_bytes());
+    }
+    let root = Root::new("stopwatch-boundary", &code, b"");
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let mut backend = RecordingBackend::default();
+    run.advance_frame(100).unwrap();
+    run.tick(&mut backend).unwrap(); // Mark at 100ms.
+    run.advance_frame(7).unwrap(); // A budget slice does not advance the VM clock.
+    run.tick(&mut backend).unwrap();
+    assert_eq!(run.machine().state().system_integer(0), Some(0));
+    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
+    run.advance_frame(16).unwrap();
+    for _ in 0..2 {
+        run.tick(&mut backend).unwrap();
+        assert_eq!(run.machine().state().system_integer(0), Some(16));
+    }
+    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
+    run.tick(&mut backend).unwrap(); // No new delta: the previous 16ms is not reused.
+    assert_eq!(run.machine().state().system_integer(0), Some(16));
+    assert_eq!(run.timers().clock(), 116);
+}
+
 // Synthetic CSS1, literal-only LZSS; no game bytes or external assets.
 fn auto_resume_save(game_id: u32) -> Vec<u8> {
     let mut payload = vec![0u8; 44864];

@@ -109,3 +109,43 @@ fn unrelated_commands_remain_pending() {
     assert!(!timers.try_handle(&mut vm).unwrap());
     assert_eq!(vm.pending_system(), Some((0, 13)));
 }
+
+#[test]
+fn stopwatch_preserves_stack_and_other_results_and_wraps_without_resetting_slots() {
+    let mut code = vec![];
+    // Keep a sentinel on the stack: neither stopwatch command consumes it.
+    command(&mut code, 0x200f, 0x12345678);
+    for op in [0x200eu16, 0x200f, 0x200f, 0x200e, 0x200f] {
+        code.extend(op.to_le_bytes());
+    }
+    let program = program(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut timers = VmTimers::default();
+    timers.begin_run(u32::MAX - 2);
+    vm.state_mut().set_system_integer(4, 99).unwrap();
+    // Before the first mark, the constructor's zero mark is used.
+    pending(&mut vm);
+    timers.try_handle(&mut vm).unwrap();
+    assert_eq!(vm.state().system_integer(0), Some(u32::MAX - 2));
+    pending(&mut vm);
+    timers.try_handle(&mut vm).unwrap();
+    assert_eq!(vm.state().system_integer(0), Some(u32::MAX - 2));
+    timers.begin_run(10);
+    for _ in 0..2 {
+        pending(&mut vm);
+        let pc = vm.pc();
+        timers.try_handle(&mut vm).unwrap();
+        assert_eq!(vm.pc(), pc + 2);
+        assert_eq!(vm.state().system_integer(0), Some(10));
+        assert_eq!(vm.state().system_integer(4), Some(99));
+        assert_eq!(vm.stack().len_bytes(), 4);
+        assert_eq!(vm.stack().peek_u32(4).unwrap(), 0x12345678);
+    }
+    pending(&mut vm);
+    timers.try_handle(&mut vm).unwrap();
+    pending(&mut vm);
+    timers.try_handle(&mut vm).unwrap();
+    assert_eq!(vm.state().system_integer(0), Some(0));
+    assert_eq!(timers.clock(), 7);
+    assert_eq!(timers.values(), &[7; 10]);
+}
