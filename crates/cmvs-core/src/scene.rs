@@ -309,7 +309,7 @@ impl SceneHost {
         }
         if matches!(
             command,
-            0x22 | 0x2d | 0x40 | 0x42 | 0x43 | 0x50 | 0x44..=0x49 | 0x4b | 0x4c | 0x70..=0x75
+            0x22 | 0x2d | 0x40 | 0x42..=0x4c | 0x50 | 0x70..=0x75
         ) {
             return self.handle_object(vm, pc, command);
         }
@@ -523,7 +523,7 @@ impl SceneHost {
             0x43 => 5,
             0x44 => 6,
             0x45 | 0x46 | 0x49 => 4,
-            0x47 | 0x48 | 0x4b | 0x4c | 0x70..=0x75 => 3,
+            0x47 | 0x48 | 0x4a..=0x4c | 0x70..=0x75 => 3,
             _ => unreachable!(),
         };
         let mut args = Vec::with_capacity(count);
@@ -536,8 +536,7 @@ impl SceneHost {
             .get(&slot)
             .ok_or_else(|| fail("object slot does not exist"))?;
         let child = if command == 0x40
-            || (matches!(command, 0x2d | 0x42..=0x49 | 0x4b | 0x4c | 0x70..=0x75)
-                && (args[1] as i32) < 0)
+            || (matches!(command, 0x2d | 0x42..=0x4c | 0x70..=0x75) && (args[1] as i32) < 0)
         {
             None
         } else {
@@ -556,7 +555,7 @@ impl SceneHost {
                     .ok_or_else(|| fail("child object does not exist"))?,
                 None => parent,
             };
-            if matches!(command, 0x42..=0x49 | 0x4b | 0x4c | 0x70..=0x75) && object.draw.is_none() {
+            if matches!(command, 0x42..=0x4c | 0x70..=0x75) && object.draw.is_none() {
                 return Err(fail("object has no draw state"));
             }
         }
@@ -633,6 +632,13 @@ impl SceneHost {
                 // SP-12/SP-16 pass through xmm1/xmm2 and movss to +72/+76.
                 0x49 => object.draw.as_mut().expect("validated").words[18..20]
                     .copy_from_slice(&args[2..4]),
+                // 0x204a / 0x14006d7f0 -> 0x14003b110 -> 0x14001f4a0:
+                // cdq/xor/sub absolute value wraps for i32::MIN; remainder is signed.
+                // +80 stores hundredths of a degree, independently of effect tracks.
+                0x4a => {
+                    object.draw.as_mut().expect("validated").words[20] =
+                        ((args[2] as i32).wrapping_abs() % 360 * 100) as u32;
+                }
                 0x44..=0x48 => object
                     .draw
                     .as_mut()

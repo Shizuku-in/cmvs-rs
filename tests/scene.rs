@@ -1065,6 +1065,85 @@ fn scale_setter_preserves_raw_float_bits_other_properties_and_child_isolation() 
 }
 
 #[test]
+fn rotation_setter_normalizes_signed_degrees_and_preserves_other_state() {
+    let mut code = vec![];
+    for (op, args) in [
+        (0x2020, vec![7]),
+        (0x2040, vec![7]),
+        (0x2045, vec![7, u32::MAX, 11, 22]),
+        (0x21ea, vec![7, u32::MAX, 2]),
+        (0x2022, vec![7, 767]),
+        (0x2050, vec![7, 767]),
+    ] {
+        command(&mut code, op, &args);
+    }
+    let cases = [
+        (60, 6000),
+        (-60, 6000),
+        (360, 0),
+        (-721, 100),
+        (i32::MAX, 12700),
+        (i32::MIN, -12800),
+        (0, 0),
+    ];
+    for (value, _) in cases {
+        command(&mut code, 0x204a, &[7, 0x8000_0000, value as u32]);
+        command(&mut code, 0x204a, &[7, 767, value as u32]);
+    }
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    for _ in 0..6 {
+        next(&mut vm, &mut scene).unwrap();
+    }
+    vm.state_mut().set_system_integer(0, 123).unwrap();
+    let mut expected = scene.object(7).unwrap().clone();
+    for (_, result) in cases {
+        next(&mut vm, &mut scene).unwrap();
+        expected.draw.as_mut().unwrap().words[20] = result as u32;
+        assert_eq!(scene.object(7), Some(&expected));
+        next(&mut vm, &mut scene).unwrap();
+        expected
+            .children
+            .get_mut(&767)
+            .unwrap()
+            .draw
+            .as_mut()
+            .unwrap()
+            .words[20] = result as u32;
+        assert_eq!(scene.object(7), Some(&expected));
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.state().system_integer(0), Some(123));
+    }
+}
+
+#[test]
+fn rotation_setter_invalid_targets_or_short_stack_do_not_commit() {
+    for args in [
+        vec![1, u32::MAX, 60],
+        vec![2, u32::MAX, 60],
+        vec![256, u32::MAX, 60],
+        vec![u32::MAX, u32::MAX, 60],
+        vec![1, 768, 60],
+        vec![1, 0, 60],
+        vec![1, u32::MAX],
+    ] {
+        let mut code = vec![];
+        command(&mut code, 0x2020, &[1]);
+        command(&mut code, 0x204a, &args);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        let mut scene = SceneHost::default();
+        next(&mut vm, &mut scene).unwrap();
+        let before = scene.objects().clone();
+        assert!(next(&mut vm, &mut scene).is_err());
+        assert_eq!(scene.objects(), &before);
+        assert_eq!(vm.pending_system().map(|p| p.1), Some(0x4a));
+        assert_eq!(vm.stack().len_bytes(), args.len() * 4);
+    }
+}
+
+#[test]
 fn scale_setter_invalid_targets_or_short_stack_preserve_the_pending_command() {
     for args in [
         vec![1, u32::MAX, 0, 0],
