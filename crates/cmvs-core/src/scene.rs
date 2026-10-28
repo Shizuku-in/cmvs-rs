@@ -250,6 +250,9 @@ impl SceneHost {
         self.objects.insert(slot, object);
     }
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
+        if matches!(vm.pending_system(), Some((_, 0x1ef..=0x1f3))) {
+            return self.try_frame_animation(vm);
+        }
         if matches!(vm.pending_system(), Some((_, 0x1f4..=0x1f8))) {
             return self.try_position_motion(vm);
         }
