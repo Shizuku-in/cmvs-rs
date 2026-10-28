@@ -1252,3 +1252,59 @@ fn child_deletion_invalid_parent_and_missing_arguments_preserve_pending_state() 
         }
     }
 }
+
+#[test]
+fn subqueue_flag_selects_self_or_child_without_needing_draw_state() {
+    let mut code = vec![];
+    command(&mut code, 0x2020, &[20]);
+    command(&mut code, 0x2022, &[20, 0]);
+    for args in [[20, 0], [20, 0], [20, u32::MAX]] {
+        command(&mut code, 0x202d, &args);
+    }
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    run_all(&mut vm, &mut scene, 2);
+    let mut expected = scene.object(20).unwrap().clone();
+    assert_eq!(expected.children[&0].flags, 0);
+    vm.state_mut().set_system_integer(0, 123).unwrap();
+    for child in [0, 0, u32::MAX] {
+        next(&mut vm, &mut scene).unwrap();
+        if child == u32::MAX {
+            expected.flags |= 2;
+        } else {
+            expected.children.get_mut(&0).unwrap().flags |= 2;
+        }
+        assert_eq!(scene.object(20), Some(&expected));
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.state().system_integer(0), Some(123));
+    }
+}
+#[test]
+fn subqueue_flag_invalid_targets_and_missing_parameters_are_transactional() {
+    for args in [
+        vec![20, 1],
+        vec![20, 768],
+        vec![21, 0],
+        vec![256, 0],
+        vec![u32::MAX, 0],
+        vec![20],
+        vec![],
+    ] {
+        let mut code = vec![];
+        command(&mut code, 0x2020, &[20]);
+        command(&mut code, 0x202d, &args);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        let mut scene = SceneHost::default();
+        run_all(&mut vm, &mut scene, 1);
+        pending(&mut vm);
+        let before = scene.object(20).unwrap().clone();
+        for _ in 0..2 {
+            assert!(scene.try_handle(&mut vm).is_err());
+            assert_eq!(scene.object(20), Some(&before));
+            assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x2d)));
+            assert_eq!(vm.stack().len_bytes(), args.len() * 4);
+        }
+    }
+}

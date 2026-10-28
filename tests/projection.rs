@@ -424,3 +424,95 @@ fn solid_color_blocks_child_image_inheritance_but_keeps_an_objects_own_image() {
     let frame = scene_render::render_with_objects(&scene, &[&object], 8, 4).unwrap();
     assert_eq!(&frame.pixels()[..4], &[0, 0, 255, 255]);
 }
+
+fn projected_child(code: &mut Vec<u8>) {
+    command(code, 0x2022, &[1, 0]);
+    command(code, 0x2038, &[1, 0, 6]);
+    command(code, 0x2050, &[1, 0]);
+    command(code, 0x2042, &[1, 0]);
+    command(code, 0x2044, &[1, 0, 0, 0, 2, 1]);
+    command(code, 0x2045, &[1, 0, u32::MAX, 0]);
+}
+#[test]
+fn projected_child_inherits_world_position_origin_and_opacity_without_using_own_world() {
+    let mut code = vec![];
+    camera(&mut code);
+    projected(&mut code, 1, 0, [0.0, 0.0, 10.0], 10.0);
+    projected_child(&mut code);
+    let frame = render(&code);
+    assert_eq!(&frame[19..22], &[[255; 3], [255; 3], ORANGE]);
+    command(&mut code, 0x2072, &[1, 0, f(1000.0)]);
+    command(&mut code, 0x2074, &[1, 0, f(1000.0)]);
+    assert_eq!(
+        render(&code),
+        frame,
+        "inherited child uses parent world coordinates"
+    );
+    command(&mut code, 0x2048, &[1, u32::MAX, 128]);
+    command(&mut code, 0x2048, &[1, 0, 128]);
+    let alpha = render(&code);
+    assert_eq!(alpha[19], [64; 3]);
+    assert_eq!(alpha[20], [64; 3]);
+    assert_eq!(alpha[21], [100, 50, 20]);
+    command(&mut code, 0x2046, &[1, 0, 1, 0]);
+    let shifted = render(&code);
+    assert_eq!(shifted[18], [64; 3]);
+    assert_eq!(shifted[19], [64; 3]);
+    assert_eq!(shifted[20], [0; 3]);
+}
+#[test]
+fn projected_child_stays_in_parent_group_and_unsupported_flags_still_fail() {
+    let mut code = vec![];
+    camera(&mut code);
+    projected(&mut code, 1, 6, [0.0, 0.0, 10.0], 10.0);
+    projected_child(&mut code);
+    projected(&mut code, 2, 0, [0.0, 0.0, 10.0], 10.0);
+    let frame = render(&code);
+    assert_eq!(frame[20], [0; 3]);
+    assert_eq!(frame[21], ORANGE);
+    let (scene, cameras) = build(&code);
+    let mut object = scene.object(1).unwrap().clone();
+    // Attached children sort by parent key + their own biased Z, independently of
+    // the inherited projection coordinates. The larger-key orange child draws first.
+    let mut farther = object.children[&0].clone();
+    farther.image = Some(cmvs_rs::scene::ObjectImage {
+        name: b"orange".to_vec(),
+        pixels: cmvs_rs::raster::RgbaImage::new(
+            2,
+            1,
+            [
+                ORANGE[0], ORANGE[1], ORANGE[2], 255, ORANGE[0], ORANGE[1], ORANGE[2], 255,
+            ]
+            .to_vec(),
+        )
+        .unwrap(),
+        alpha: false,
+    });
+    farther.draw.as_mut().unwrap().words[13] = f(1.0);
+    object.children.insert(1, farther);
+    let ordered =
+        scene_render::render_scene(&SceneHost::default(), Some(&cameras), &[&object], 8, 4)
+            .unwrap();
+    assert_eq!(&ordered.pixels()[76..84], &[255; 8]);
+    object.children.remove(&1);
+    for flags in [0, 1, 2] {
+        object.children.get_mut(&0).unwrap().flags = flags;
+        assert!(
+            scene_render::render_scene(&SceneHost::default(), Some(&cameras), &[&object], 8, 4)
+                .is_err()
+        );
+    }
+    object.children.get_mut(&0).unwrap().flags = 3;
+    object
+        .children
+        .get_mut(&0)
+        .unwrap()
+        .draw
+        .as_mut()
+        .unwrap()
+        .words[0] = 0;
+    assert!(
+        scene_render::render_scene(&SceneHost::default(), Some(&cameras), &[&object], 8, 4).is_ok(),
+        "mismatched coordinate modes do not enqueue"
+    );
+}

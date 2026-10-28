@@ -247,30 +247,33 @@ fn unit_screen_scale(object: &SceneObject) -> Result<(), FormatError> {
 /// 0x140020340 projects it with camera 0/1 (0x14004ef40), lays out the
 /// source rectangle around the origin (0x140024020) and places it at the projected position
 /// and scale (0x1400238a0, device factor 1 on the 1280x720 viewport) minus the device's
-/// half-pixel offset. Children, masks, camera rotation and effect targets are not verified.
+/// half-pixel offset. Inherited attached children reuse the parent projection and origin;
+/// masks, camera rotation and effect targets are not verified.
 fn projected_layer<'a>(
     scene: &SceneHost,
     cameras: Option<&CameraHost>,
     slot: Option<u8>,
     object: &'a SceneObject,
     draw: &DrawState,
+    parent: Option<&'a SceneObject>,
 ) -> Result<Option<(f32, Layer<'a>)>, FormatError> {
     let cameras = cameras.ok_or(FormatError("camera projection needs the camera state"))?;
     let words = &draw.words;
-    let float = |index: usize| f32::from_bits(words[index]);
     let camera = cameras
         .camera((words[0] - 2) as usize)
         .expect("camera exists");
-    let key = camera.queue_key(float(13), f32::from_bits(draw.depth_bias));
+    let inherited_draw = parent
+        .filter(|_| object.flags & 1 != 0)
+        .and_then(|p| p.draw.as_ref());
+    let key_draw = inherited_draw.unwrap_or(draw);
+    let key = camera.queue_key(
+        f32::from_bits(key_draw.words[13]),
+        f32::from_bits(key_draw.depth_bias),
+    );
     if key.is_nan() || key <= 0.0 {
         return Ok(None);
     }
     check(words, true)?;
-    if object.flags & 0x8000_0000 != 0 && object.children.values().any(|child| child.shown) {
-        return Err(FormatError(
-            "children of projected objects are not verified",
-        ));
-    }
     if slot.is_some_and(|slot| scene.mask_on(slot).is_some()) {
         return Err(FormatError(
             "mask transition on a projected object is not verified",
@@ -288,17 +291,45 @@ fn projected_layer<'a>(
     if camera.words[12..15].iter().any(|&word| word != 0) {
         return Err(FormatError("camera rotation is not modeled"));
     }
-    let Some(image) = &object.image else {
+    let inherited = parent
+        .filter(|_| object.flags & 1 != 0)
+        .and_then(|p| p.draw.as_ref())
+        .map(|d| &d.words);
+    let image = object.image.as_ref().or_else(|| {
+        parent
+            .and_then(|p| p.image.as_ref())
+            .filter(|_| words[14] & 0xff00_0000 == 0)
+    });
+    let Some(image) = image else {
         return Ok(None);
     };
+    let projection_words = inherited.unwrap_or(words);
+    let world = [11, 12, 13].map(|i| f32::from_bits(projection_words[i]));
     let Some(projection) = camera
-        .project_object([float(11), float(12), float(13)], float(16), float(15))
+        .project_object(
+            world,
+            f32::from_bits(projection_words[16]),
+            f32::from_bits(projection_words[15]),
+        )
         .map_err(FormatError)?
     else {
         return Ok(None);
     };
     // Opacity times the constructor fade factor 256, >> 8; then the depth fade, /255.
-    let opacity = (words[17].wrapping_mul(words[21]) as i32) >> 8;
+    let opacity = if let Some(p) = inherited {
+        let (own, parent) = (words[17] as i32, p[17] as i32);
+        if own < 0 || parent < 0 {
+            return Err(FormatError(
+                "negative opacity with parent inheritance is not verified",
+            ));
+        }
+        (words[21]
+            .wrapping_mul(p[21])
+            .wrapping_mul((own.wrapping_mul(parent) / 255) as u32) as i32)
+            >> 16
+    } else {
+        (words[17].wrapping_mul(words[21]) as i32) >> 8
+    };
     let alpha = projection.fade.wrapping_mul(opacity) / 255;
     let [sx, sy, w, h] = [2, 3, 4, 5].map(|i| i64::from(words[i] as i16));
     // 0x140020340 skips v249/v250 <= 0.0; a NaN scale reaches the extent check below.
@@ -311,7 +342,15 @@ fn projected_layer<'a>(
     }
     let [px, py] = projection.position;
     let scale = projection.scale;
-    let origin = [words[6] as i16, words[7] as i16].map(|v| 0.0 - f32::from(v));
+    let origin = [0, 1].map(|i| {
+        let own = 0.0 - f32::from(words[6 + i] as i16);
+        if let Some(p) = inherited {
+            // 0x140020708/0x14002070c: signed 16-bit parent origin minus child position.
+            own - f32::from((p[6 + i] as i16).wrapping_sub(words[8 + i] as i16))
+        } else {
+            own
+        }
+    });
     let quad = [
         (origin[0] * scale + px) - 0.5,
         (origin[1] * scale + py) - 0.5,
@@ -453,9 +492,60 @@ pub fn render_scene(
         };
         match d[0] {
             2 | 3 => {
-                if let Some((key, layer)) = projected_layer(scene, cameras, slot, object, draw)? {
-                    projected[(d[0] - 2) as usize].push((key, shifted(layer, by)));
+                let cameras =
+                    cameras.ok_or(FormatError("camera projection needs the camera state"))?;
+                let camera = cameras.camera((d[0] - 2) as usize).expect("camera exists");
+                let key = camera.queue_key(f32::from_bits(d[13]), f32::from_bits(draw.depth_bias));
+                if key.is_nan() || key <= 0.0 || d[0] == 3 && !camera.enabled() {
+                    continue;
                 }
+                let layer = projected_layer(scene, Some(cameras), slot, object, draw, None)?
+                    .map(|(_, l)| shifted(l, by));
+                let mut entry = Entry {
+                    order: key,
+                    layer,
+                    children: Vec::new(),
+                };
+                if object.flags & 0x8000_0000 != 0 {
+                    for child in object.children.values().filter(|c| c.shown) {
+                        let child_draw = child
+                            .draw
+                            .as_ref()
+                            .ok_or(FormatError("shown child object has no draw state"))?;
+                        if child_draw.words[0] != d[0] {
+                            continue;
+                        }
+                        if child.change.is_some() || child.children.values().any(|c| c.shown) {
+                            return Err(FormatError(
+                                "nested projected children or child image replacement is not verified",
+                            ));
+                        }
+                        unit_screen_scale(child)?;
+                        // Bound this implementation to the observed inherited, attached image path.
+                        if child.flags & 3 != 3 {
+                            return Err(FormatError(
+                                "independent projected children are not verified",
+                            ));
+                        }
+                        let child_depth = f32::from_bits(child_draw.depth_bias)
+                            + f32::from_bits(child_draw.words[13]);
+                        let child_key = key + child_depth;
+                        if !child_key.is_finite() {
+                            return Err(FormatError("projected child has a non-finite queue key"));
+                        }
+                        if let Some((_, layer)) = projected_layer(
+                            scene,
+                            Some(cameras),
+                            None,
+                            child,
+                            child_draw,
+                            Some(object),
+                        )? {
+                            entry.children.push((child_key, shifted(layer, by)));
+                        }
+                    }
+                }
+                projected[(d[0] - 2) as usize].push(entry);
                 continue;
             }
             _ => {}
@@ -575,16 +665,13 @@ pub fn render_scene(
     // 0x14003dc40 drains an entry's sublist right after the entry itself.
     entries.sort_by(|a, b| b.order.total_cmp(&a.order));
     for queue in &mut projected {
-        queue.sort_by(|a, b| b.0.total_cmp(&a.0));
+        queue.sort_by(|a, b| b.order.total_cmp(&a.order));
     }
     let mut pixels = vec![0; size as usize];
     for p in pixels.chunks_exact_mut(4) {
         p.copy_from_slice(&scene.clear().rgba());
     }
-    for (_, layer) in projected.into_iter().flatten() {
-        draw(&mut pixels, width, height, layer);
-    }
-    for mut entry in entries {
+    for mut entry in projected.into_iter().flatten().chain(entries) {
         entry.children.sort_by(|a, b| b.0.total_cmp(&a.0));
         let layers = entry
             .layer

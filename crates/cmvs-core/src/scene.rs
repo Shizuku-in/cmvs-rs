@@ -253,7 +253,7 @@ impl SceneHost {
         }
         if matches!(
             command,
-            0x22 | 0x40 | 0x42 | 0x43 | 0x50 | 0x44..=0x49 | 0x4b | 0x4c | 0x70..=0x75
+            0x22 | 0x2d | 0x40 | 0x42 | 0x43 | 0x50 | 0x44..=0x49 | 0x4b | 0x4c | 0x70..=0x75
         ) {
             return self.handle_object(vm, pc, command);
         }
@@ -463,7 +463,7 @@ impl SceneHost {
         let fail = |why| error(pc, command + 0x2000, why);
         let count = match command {
             0x40 => 1,
-            0x22 | 0x42 | 0x50 => 2,
+            0x22 | 0x2d | 0x42 | 0x50 => 2,
             0x43 => 5,
             0x44 => 6,
             0x45 | 0x46 | 0x49 => 4,
@@ -480,7 +480,8 @@ impl SceneHost {
             .get(&slot)
             .ok_or_else(|| fail("object slot does not exist"))?;
         let child = if command == 0x40
-            || (matches!(command, 0x42..=0x49 | 0x4b | 0x4c | 0x70..=0x75) && (args[1] as i32) < 0)
+            || (matches!(command, 0x2d | 0x42..=0x49 | 0x4b | 0x4c | 0x70..=0x75)
+                && (args[1] as i32) < 0)
         {
             None
         } else {
@@ -533,6 +534,8 @@ impl SceneHost {
                 _ => None,
             };
             match command {
+                // 0x202d / 0x14006bfe0 -> 0x14003a720: attach to the parent subqueue.
+                0x2d => object.flags |= 2,
                 0x40 | 0x50 => object.draw = Some(DrawState::default()),
                 // 0x2042 / 0x14006d130 -> 0x14003b190 -> 0x14001f550:
                 // set the existing draw state's coordinate mode without rebuilding it.
