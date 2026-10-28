@@ -67,6 +67,7 @@ fn created_text(position: [i32; 2], size: [u32; 2]) -> TextObject {
         spacing: [0, 0],
         color: 0xff_ffff,
         decoration_color: 0xff_ffff,
+        outline_mode: 2,
         glyph_parameter: 0,
         decoration: 0,
         reveal: [0, 0],
@@ -2853,5 +2854,163 @@ fn window_object_query_rejects_missing_windows_and_short_arguments_without_mutat
         assert_eq!(vm.stack().len_bytes(), args.len() * 4);
         assert_eq!(vm.state().system_integer(0), Some(17));
         assert_eq!(messages.window(0), Some(&before));
+    }
+}
+
+#[test]
+fn direct_text_setters_reuse_window_setter_rules_and_pop_their_words() {
+    let mut code = vec![];
+    call(&mut code, 0x2100, &[0, 0, 1]);
+    call(&mut code, 0x2102, &[720, 1280, 1]);
+    call(&mut code, 0x2103, &[50, 400, 20, 10, 1]);
+    call(&mut code, 0x2105, &[2, u32::MAX, 32, 1]);
+    call(&mut code, 0x2105, &[u32::MAX, 3, 0, 1]);
+    call(&mut code, 0x2107, &[0x0100_0000, 0x123456, 1]);
+    call(&mut code, 0x210c, &[7, 8, 1]);
+    call(&mut code, 0x210d, &[350, 1, 1]);
+    call(&mut code, 0x210e, &[0, 1]);
+    call(&mut code, 0x210f, &[3, 1]);
+    call(&mut code, 0x2110, &[8, 1]);
+    call(&mut code, 0x2113, &[1, 1]);
+    call(&mut code, 0x211a, &[0x272727, 1]);
+    call(&mut code, 0x2104, &[1]);
+    let script = script_with_text(&code, b"\0");
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_system_integer(0, 9).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 1);
+    assert_eq!(messages.text(1).unwrap().outline_mode, 2);
+    vm.state_mut().set_system_integer(0, 9).unwrap();
+    run(&mut vm, &mut messages, 12);
+    let text = messages.text(1).unwrap();
+    assert_eq!(text.position, [1280, 720]);
+    assert_eq!(text.area, [10, 20, 400, 50]);
+    // Size only when positive; each spacing only when nonnegative.
+    assert_eq!((text.glyph_size, text.spacing), (32, [3, 2]));
+    assert_eq!((text.color, text.decoration_color), (0x123456, 0xff_ffff));
+    assert_eq!(text.cursor, [8, 7]);
+    assert_eq!(text.reveal, [1, 350]);
+    assert_eq!((text.char_delay, text.decoration, text.layer), (0, 3, 8));
+    assert_eq!((text.outline_mode, text.glyph_parameter), (1, 0x272727));
+    run(&mut vm, &mut messages, 1);
+    assert_eq!(messages.text(1).unwrap().cursor, [10, 20]);
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(9));
+}
+
+#[test]
+fn direct_text_destruction_and_rejected_targets_keep_state_atomic() {
+    let mut code = vec![];
+    call(&mut code, 0x2100, &[0, 0, 4]);
+    call(&mut code, 0x2101, &[4]);
+    call(&mut code, 0x2101, &[4]);
+    let destroying = script_with_text(&code, b"\0");
+    let mut vm = Machine::new(&destroying).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 3);
+    assert!(messages.text(4).is_none());
+    assert!(messages.font_present(4));
+    assert_eq!(vm.stack().len_bytes(), 0);
+    // Missing, out-of-range and negative targets, and freeing a window's text object.
+    for (command, words, window) in [
+        (0x2102u16, vec![0, 0, 4], false),
+        (0x2113, vec![1, 12], false),
+        (0x2104, vec![u32::MAX], false),
+        (0x2101, vec![12], false),
+        (0x2101, vec![3], true),
+    ] {
+        let mut code = vec![];
+        if window {
+            create(&mut code, 0, 3, [0, 0, 10, 10]);
+        }
+        call(&mut code, command, &words);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, usize::from(window));
+        let before = messages.text(3).cloned();
+        pending(&mut vm);
+        let bytes = vm.stack().len_bytes();
+        assert!(messages.try_handle(&mut vm).is_err(), "{command:x}");
+        assert_eq!(vm.pending_system().map(|p| p.1), Some(command - 0x2000));
+        assert_eq!(vm.stack().len_bytes(), bytes);
+        assert_eq!(messages.text(3).cloned(), before);
+    }
+}
+
+/// Text object 1 with a 20-pixel glyph, no spacing, area (10, 5, 70, 100), outline mode 0.
+fn direct_output(code: &mut Vec<u8>) {
+    call(code, 0x2100, &[0, 0, 1]);
+    call(code, 0x2103, &[100, 70, 5, 10, 1]);
+    call(code, 0x2105, &[0, 0, 20, 1]);
+    call(code, 0x2113, &[0, 1]);
+}
+
+#[test]
+fn direct_text_output_places_glyphs_at_once_and_follows_its_own_layout() {
+    // 4 x あ wraps before the fourth; \n; 0x814a; a ruby group draws only its base. The
+    // leading NUL is 0x2100's empty face name; the output string starts at offset 1.
+    let text = b"\0\x82\xa0\x82\xa0\x82\xa0\x82\xa0\\n\x81\x4a{\x82\xa0/\x82\xa2}\0";
+    let mut code = vec![];
+    direct_output(&mut code);
+    call(&mut code, 0x210b, &[1, 1]);
+    let script = script_with_text(&code, text);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 4);
+    pending(&mut vm);
+    // Without the research output policy the command stays a barrier.
+    assert!(!messages.try_handle(&mut vm).unwrap());
+    messages.set_record_output(true);
+    assert!(messages.try_handle(&mut vm).unwrap());
+    assert_eq!(vm.stack().len_bytes(), 0);
+    let text = messages.text(1).unwrap();
+    let placed: Vec<_> = text
+        .glyphs
+        .iter()
+        .map(|g| (g.code, g.position, g.outline[0]))
+        .collect();
+    assert_eq!(
+        placed,
+        [
+            (0x82a0, [10, 5], 0),
+            (0x82a0, [30, 5], 0),
+            (0x82a0, [50, 5], 0),
+            (0x82a0, [10, 25], 0),
+            (0x814a, [6, 45], 0),
+            (0x82a0, [16, 45], 0),
+        ]
+    );
+    assert!(
+        text.glyphs
+            .iter()
+            .all(|g| g.shown && !g.active && g.delay_ms == 0 && g.opacity == 255)
+    );
+    assert_eq!(text.cursor, [36, 45]);
+}
+
+#[test]
+fn direct_text_output_rejects_gdi_widths_and_stalling_escapes_atomically() {
+    for bad in [
+        &b"\0\x82\xa0A\0"[..],
+        b"\0\\x\0",
+        b"\0\\w\0",
+        b"\0{\x82\xa0\0",
+    ] {
+        let mut code = vec![];
+        direct_output(&mut code);
+        call(&mut code, 0x210b, &[1, 1]);
+        let script = script_with_text(&code, bad);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        messages.set_record_output(true);
+        run(&mut vm, &mut messages, 4);
+        let before = messages.text(1).cloned();
+        pending(&mut vm);
+        let bytes = vm.stack().len_bytes();
+        assert!(messages.try_handle(&mut vm).is_err(), "{bad:?}");
+        assert_eq!(vm.pending_system().map(|p| p.1), Some(0x10b));
+        assert_eq!(vm.stack().len_bytes(), bytes);
+        assert_eq!(messages.text(1).cloned(), before);
     }
 }

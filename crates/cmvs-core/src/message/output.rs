@@ -24,7 +24,8 @@ pub struct RecordedGlyph {
     pub colors: [u32; 2],
     /// Descriptor word 2, mapped from text +132 (0..3; other values map to zero).
     pub gradient: u32,
-    /// Descriptor words 8/9: settings +1528 and text +128, respectively.
+    /// Descriptor words 8/9: outline mode (settings +1528 for window output, text +124
+    /// for direct output) and text +128.
     pub outline: [u32; 2],
     pub delay_ms: u32,
     pub elapsed_ms: u32,
@@ -222,12 +223,14 @@ fn wraps(text: &mut TextObject, code: u16, x: u32, limit: u32) -> Result<bool, &
     })
 }
 
-/// 0x14005a830: a glyph shown at once; 0x14005b5a0 may then delay its reveal.
+/// 0x14005a830: a glyph shown at once; 0x14005b5a0 may then delay its reveal. Window
+/// output passes settings +1528 (1) as the outline mode, direct output text +124.
 fn push(
     text: &mut TextObject,
     code: u16,
     [x, y]: [u32; 2],
     size: u32,
+    outline_mode: u32,
 ) -> Result<usize, &'static str> {
     if text.glyphs.len() >= 4096 {
         return Err("recorded message glyph limit exceeded");
@@ -241,7 +244,7 @@ fn push(
             1..=3 => text.decoration as u32,
             _ => 0,
         },
-        outline: [1, text.glyph_parameter],
+        outline: [outline_mode, text.glyph_parameter],
         delay_ms: 0,
         elapsed_ms: 0,
         duration_ms: 350,
@@ -336,7 +339,7 @@ fn append(text: &mut TextObject, bytes: &[u8], skip: bool) -> Result<(), &'stati
             let (start, ruby_y, group_delay) = (x, y.wrapping_sub(text.ruby_size as u32), delay);
             for item in &group.base {
                 if let Some(code) = *item {
-                    last = Some(push(text, code, [x, y], size)?);
+                    last = Some(push(text, code, [x, y], size, 1)?);
                     x = x.wrapping_add(size).wrapping_add(text.spacing[0] as u32);
                 }
                 delay = retime(text, last, delay, interval)?;
@@ -366,7 +369,7 @@ fn append(text: &mut TextObject, bytes: &[u8], skip: bool) -> Result<(), &'stati
             let mut ruby_delay = group_delay;
             for item in &group.ruby {
                 if let Some(code) = *item {
-                    last = Some(push(text, code, [ruby_x >> 10, ruby_y], ruby_size)?);
+                    last = Some(push(text, code, [ruby_x >> 10, ruby_y], ruby_size, 1)?);
                     ruby_x = ruby_x.wrapping_add(step);
                 }
                 ruby_delay = retime(text, last, ruby_delay, interval)?;
@@ -402,7 +405,7 @@ fn append(text: &mut TextObject, bytes: &[u8], skip: bool) -> Result<(), &'stati
         } else {
             x
         };
-        last = Some(push(text, code, [gx, y], size)?);
+        last = Some(push(text, code, [gx, y], size, 1)?);
         delay = retime(text, last, delay, interval)?;
         let advance = if code == 0x814a {
             (size >> 1).wrapping_sub(size / 5)
@@ -417,12 +420,120 @@ fn append(text: &mut TextObject, bytes: &[u8], skip: bool) -> Result<(), &'stati
     Ok(())
 }
 
+/// 0x14005b6b0 with a3 = 0 (0x210b): glyphs shown at once from the pen, without reveal
+/// timing, using text +124 as the outline mode. It clears the ruby-line flags and +528/+532
+/// first and never marks lines, so only `ruby_every_line` reserves ruby height on wraps.
+/// Escapes are read only before a character: `\c` and `\t` are skipped, `\w` skips three
+/// bytes and `\n` returns the pen to the area's left edge one line down without counting a
+/// line or reserving ruby height; any other escape would loop forever in the original.
+/// Double-byte characters wrap as in 0x14005bc90; 0x814a sits size/5 left and advances
+/// size/2 − size/5. A `{base/ruby}` group draws only its double-byte base characters, each
+/// wrapping on its own; the annotation is skipped. Single bytes advance by the measured GDI
+/// glyph width (at least half the size), which the core does not have, so they are rejected,
+/// as are groups under 0x211e rules (its inline rule copy is not modeled).
+fn place(text: &mut TextObject, bytes: &[u8]) -> Result<(), &'static str> {
+    text.ruby_lines = [0; 32];
+    text.layout_scratch = [0; 2];
+    let size = text.glyph_size as u32;
+    let limit = line_end(text);
+    let mode = text.outline_mode;
+    let (mut x, mut y) = (text.cursor[0] as u32, text.cursor[1] as u32);
+    let mut line = 0u32;
+    let mut i = 0;
+    while let Some(&byte) = bytes.get(i).filter(|&&b| b != 0) {
+        if byte == b'\\' {
+            match bytes.get(i + 1) {
+                Some(b'c' | b't') => i += 2,
+                Some(b'n') => {
+                    x = text.area[0] as u32;
+                    y = y.wrapping_add(size).wrapping_add(text.spacing[1] as u32);
+                    i += 2;
+                }
+                Some(b'w') if bytes.get(i + 2).is_some_and(|&b| b != 0) => i += 3,
+                _ => return Err("direct text output escape would not advance in the original"),
+            }
+            continue;
+        }
+        if byte == b'{' {
+            if text.line_break.is_some() {
+                return Err("direct ruby groups under line-break rules are not modeled");
+            }
+            let group = parse_group(bytes, i + 1)?;
+            for &code in group.base.iter().flatten() {
+                if wraps(text, code, x, limit)? {
+                    new_line(text, &mut line, &mut x, &mut y)?;
+                }
+                push(text, code, [x, y], size, mode)?;
+                x = x.wrapping_add(size).wrapping_add(text.spacing[0] as u32);
+            }
+            i = group.end;
+            continue;
+        }
+        if !lead(byte) {
+            return Err("direct single-byte text advances by the unmodeled GDI glyph width");
+        }
+        let second = *bytes
+            .get(i + 1)
+            .filter(|&&b| b != 0)
+            .ok_or("truncated double-byte message character")?;
+        i += 2;
+        let code = u16::from_be_bytes([byte, second]);
+        if wraps(text, code, x, limit)? {
+            new_line(text, &mut line, &mut x, &mut y)?;
+            if text.line_break.is_some() {
+                text.layout_scratch = [0; 2];
+            }
+        }
+        let (gx, advance) = if code == 0x814a {
+            (x.wrapping_sub(size / 5), (size >> 1).wrapping_sub(size / 5))
+        } else {
+            (x, size)
+        };
+        push(text, code, [gx, y], size, mode)?;
+        x = x.wrapping_add(advance).wrapping_add(text.spacing[0] as u32);
+    }
+    text.cursor = [x as i32, y as i32];
+    Ok(())
+}
+
 impl MessageHost {
     /// 0x140076700 / 0x14005d900: repeat=0 creates glyphs once; hidden windows keep
     /// yielding. Waiting returns 0xa000, completion 0xc00c (both yield). Research mode
     /// explicitly selects the constructor settings block. Only the +1520 skip flag shortens
     /// reveal timing; it, held actions 7/8 and the +12244 bypass finish without consuming.
     /// A release of action 0 or 20 finishes and consumes both (0x140054d90, 0x140055160).
+    /// 0x210b / 0x140072aa0: SP-4 text index (signed >= 12 or a missing object only sets
+    /// +12056 bit 0x1000), SP-8 string; lays it out with 0x14005b6b0 (`place`) and returns
+    /// 0x4008 without a system result. Research mode only, like 0x2152's recording.
+    pub(super) fn place_text(
+        &mut self,
+        vm: &mut Machine<'_>,
+        pc: usize,
+    ) -> Result<(), DecodeError> {
+        let word = |distance| {
+            vm.stack()
+                .peek_u32(distance)
+                .map_err(|e| error(pc, 0x210b, e.0))
+        };
+        let index = word(4)? as i32;
+        let raw = word(8)?;
+        let bytes = vm.resolve_string(raw)?;
+        let mut candidate = usize::try_from(index)
+            .ok()
+            .and_then(|index| self.text(index))
+            .ok_or_else(|| {
+                error(
+                    pc,
+                    0x210b,
+                    "text object index outside 0..11 or without an object is not modeled",
+                )
+            })?
+            .clone();
+        place(&mut candidate, &bytes).map_err(|why| error(pc, 0x210b, why))?;
+        vm.complete_system(SystemResult(0x4008))?;
+        self.texts[index as usize] = Some(candidate);
+        Ok(())
+    }
     pub fn try_record_output(
         &mut self,
         vm: &mut Machine<'_>,

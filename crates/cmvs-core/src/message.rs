@@ -10,7 +10,7 @@
 //! fields; 0x2170/0x2171, 0x2178..0x217b, 0x217f and 0x2180..0x2185 drive the window's own
 //! scene object; 0x2190..0x2192 fill its 32 button records and 0x2150 moves the window;
 //! 0x21cf/0x21d0 build frame animations. 0x2100 creates a text object without a window;
-//! 0x2114..0x2117 and 0x211e address text objects directly. Glyph records and font/layout metadata live in core; font rasterization
+//! 0x2101..0x2113, 0x2114..0x2117 and 0x211e address text objects directly. Glyph records and font/layout metadata live in core; font rasterization
 //! belongs to the desktop backend.
 use crate::{
     bytecode::DecodeError,
@@ -125,6 +125,10 @@ pub struct TextObject {
     pub color: u32,
     /// +120: decoration colour.
     pub decoration_color: u32,
+    /// +124 (constructor 2, set by 0x2113): outline mode 0..2 that 0x14005bc90 copies into
+    /// glyph descriptor word 8 for direct output (0x210a). Window output passes its own
+    /// setting instead (0x14005d870), so window texts do not read it.
+    pub outline_mode: u32,
     /// +128: raw glyph parameter set by 0x2155, copied into glyph descriptor word 9
     /// by 0x14005bc90. Its rendering interpretation is not modeled yet.
     pub glyph_parameter: u32,
@@ -268,6 +272,10 @@ impl MessageHost {
                 self.text_command(vm, pc, command).map(|()| true)
             }
             Some((pc, 0x100)) => self.create_text(vm, pc).map(|()| true),
+            Some((pc, 0x10b)) if self.record_output => self.place_text(vm, pc).map(|()| true),
+            Some((pc, command @ (0x101..=0x105 | 0x107 | 0x10c..=0x110 | 0x113 | 0x11a))) => {
+                self.text_setter(vm, pc, command).map(|()| true)
+            }
             _ => Ok(false),
         }
     }
@@ -556,6 +564,7 @@ impl MessageHost {
             spacing: [0, 0],
             color: 0xff_ffff,
             decoration_color: 0xff_ffff,
+            outline_mode: 2,
             glyph_parameter: 0,
             decoration: 0,
             reveal: [0, 0],
@@ -568,6 +577,121 @@ impl MessageHost {
             ruby_spacing: 0,
             line_break: None,
         });
+        Ok(())
+    }
+    /// 0x2101..0x2113 / 0x140072680..0x140073010 and 0x211a address a text object: SP-4 index
+    /// (signed >= 12, or a missing object for the setters, only sets +12056 bit 0x1000).
+    /// They reach the same callees as the window setters and return 0x4000 + 4 x words:
+    /// - 0x2101: free the object (0x14005c710) and clear the entry; an empty entry is a
+    ///   no-op and the font object stays. A window's +2528 cache would dangle.
+    /// - 0x2102 (0x14005aac0): +8/+12 position; the scene object gets it scaled by screen
+    ///   info over the logical size. 0x2103 (0x14005ab00): area SP-8..SP-20, pen = its
+    ///   origin. 0x2104 (0x14005ad50): clear the glyphs and return the pen to the area
+    ///   origin. 0x2105 (0x14005ab20): +32 if SP-8 > 0, +36/+40 for SP-12/SP-16 >= 0.
+    /// - 0x2107 (0x14005ac00): colours whose top byte is zero. 0x210c (0x14005ac20): pen.
+    ///   0x210d (0x14005ac40): reveal mode/duration. 0x210e (0x14002e850): +144 delay.
+    ///   0x210f (0x14005ac30): +132 decoration. 0x2110 (0x14005ac70): +152 layer, also on
+    ///   the scene object. 0x2113 (0x14005ac50): +124 outline mode, raw. 0x211a /
+    ///   0x140073070 (0x14002e860, as 0x2155): +128 glyph parameter, raw.
+    fn text_setter(
+        &mut self,
+        vm: &mut Machine<'_>,
+        pc: usize,
+        command: u16,
+    ) -> Result<(), DecodeError> {
+        let op = command + 0x2000;
+        let count = match command {
+            0x101 | 0x104 => 1,
+            0x10e | 0x10f | 0x110 | 0x113 | 0x11a => 2,
+            0x102 | 0x107 | 0x10c | 0x10d => 3,
+            0x105 => 4,
+            _ => 5,
+        };
+        let mut words = [0i32; 5];
+        for (i, word) in words.iter_mut().take(count).enumerate() {
+            *word = vm
+                .stack()
+                .peek_u32(4 + 4 * i)
+                .map_err(|e| error(pc, op, e.0))? as i32;
+        }
+        let [index, a, b, c, d] = words;
+        if index < 0 {
+            return Err(error(
+                pc,
+                op,
+                "negative text object index indexes before the table",
+            ));
+        }
+        let index = index as usize;
+        if index >= TEXT_OBJECTS {
+            return Err(error(
+                pc,
+                op,
+                "text object index outside 0..11 sets an unmodeled flag",
+            ));
+        }
+        if command == 0x101 {
+            if self.texts[index].is_some()
+                && (0..MESSAGE_WINDOWS)
+                    .any(|slot| self.window(slot).is_some_and(|w| w.text == index))
+            {
+                return Err(error(
+                    pc,
+                    op,
+                    "freeing a text object a window uses leaves a dangling pointer",
+                ));
+            }
+            vm.complete_system(SystemResult(0x4004))?;
+            self.texts[index] = None;
+            return Ok(());
+        }
+        if self.texts[index].is_none() {
+            return Err(error(
+                pc,
+                op,
+                "text object index without an object sets an unmodeled flag",
+            ));
+        }
+        vm.complete_system(SystemResult(0x4000 + 4 * count as u16))?;
+        let text = self.texts[index].as_mut().expect("checked above");
+        match command {
+            0x102 => text.position = [a, b],
+            0x103 => {
+                text.area = [a, b, c, d];
+                text.cursor = [a, b];
+            }
+            0x104 => {
+                text.cursor = [text.area[0], text.area[1]];
+                text.glyphs.clear();
+            }
+            0x105 => {
+                if a > 0 {
+                    text.glyph_size = a;
+                }
+                for (spacing, value) in text.spacing.iter_mut().zip([b, c]) {
+                    if value >= 0 {
+                        *spacing = value;
+                    }
+                }
+            }
+            0x107 => {
+                for (color, value) in [&mut text.color, &mut text.decoration_color]
+                    .into_iter()
+                    .zip([a, b])
+                {
+                    if value as u32 & 0xff00_0000 == 0 {
+                        *color = value as u32;
+                    }
+                }
+            }
+            0x10c => text.cursor = [a, b],
+            0x10d => text.reveal = [a, b],
+            0x10e => text.char_delay = a,
+            0x10f => text.decoration = a,
+            0x110 => text.layer = a,
+            0x113 => text.outline_mode = a as u32,
+            _ => text.glyph_parameter = a as u32,
+        }
         Ok(())
     }
     /// 0x21cf / 0x140078210 and 0x21d0 / 0x140078280: SP-4 window slot, SP-8 child selected
@@ -1267,6 +1391,7 @@ impl MessageHost {
             spacing: [0, 0],
             color: 0xff_ffff,
             decoration_color: 0xff_ffff,
+            outline_mode: 2,
             glyph_parameter: 0,
             decoration: 0,
             reveal: [0, 0],
