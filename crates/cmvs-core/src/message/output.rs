@@ -1,5 +1,5 @@
-//! Explicit recording of 0x2152 output for plain characters and ruby groups, including
-//! automatic wrapping. These records are not glyph textures and must not imply successful
+//! Explicit recording of 0x2152 output for plain characters, ruby groups and newlines,
+//! including automatic wrapping. These records are not glyph textures and must not imply successful
 //! font rendering.
 use super::{
     MessageHost, TextObject,
@@ -83,7 +83,7 @@ fn new_line(
     Ok(())
 }
 
-const ESCAPES: &str = "recorded message output does not yet support text escapes";
+const ESCAPES: &str = "recorded message output does not yet support this text escape";
 
 /// Line end shared by the layout functions: area x + width − spacing x − glyph size.
 fn line_end(text: &TextObject) -> u32 {
@@ -154,7 +154,14 @@ fn ruby_lines(text: &TextObject, bytes: &[u8]) -> Result<[u32; 32], &'static str
     while i < bytes.len() && bytes[i] != 0 {
         let byte = bytes[i];
         if byte == b'\\' {
-            return Err(ESCAPES);
+            if bytes.get(i + 1) != Some(&b'n') {
+                return Err(ESCAPES);
+            }
+            // 0x14005b547..0x14005b552: explicit newline, without a glyph advance.
+            x = text.area[0] as u32;
+            line += 1;
+            i += 2;
+            continue;
         }
         let (advance, wrap) = if byte == b'{' {
             if x >= limit {
@@ -308,7 +315,14 @@ fn append(text: &mut TextObject, bytes: &[u8], skip: bool) -> Result<(), &'stati
     while i < bytes.len() && bytes[i] != 0 {
         let byte = bytes[i];
         if byte == b'\\' {
-            return Err(ESCAPES);
+            if bytes.get(i + 1) != Some(&b'n') {
+                return Err(ESCAPES);
+            }
+            // 0x14005c46a..0x14005c4b8: no glyph or reveal interval for the newline.
+            new_line(text, &mut line, &mut x, &mut y)?;
+            text.layout_scratch = [0; 2];
+            i += 2;
+            continue;
         }
         if byte == b'{' {
             let group = parse_group(bytes, i + 1)?;

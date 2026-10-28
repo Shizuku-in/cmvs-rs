@@ -1319,6 +1319,100 @@ fn positions(messages: &MessageHost) -> Vec<[i32; 2]> {
 }
 
 #[test]
+fn recorded_newlines_move_the_pen_without_glyphs_or_reveal_intervals() {
+    let messages = wrapped(&[], b"\\nA\\n\\n\x83\x5cB\\n\0", 0);
+    // 0x835c is one double-byte character whose trailing byte is a backslash.
+    assert_eq!(positions(&messages), [[0, 10], [0, 30], [10, 30]]);
+    let text = messages.text(7).unwrap();
+    assert_eq!(text.cursor, [0, 40]);
+    assert_eq!(
+        text.glyphs
+            .iter()
+            .map(|g| (g.code, g.delay_ms))
+            .collect::<Vec<_>>(),
+        [(65, 0), (0x835c, 40), (66, 80)]
+    );
+    let (blank, ok) = ruby_layout(40, &[], b"\\n\\n\0");
+    assert!(ok);
+    assert!(blank.text(7).unwrap().glyphs.is_empty());
+    assert_eq!(blank.text(7).unwrap().cursor, [0, 20]);
+}
+
+#[test]
+fn recorded_newlines_reserve_ruby_on_the_destination_line_and_clear_break_scratch() {
+    let (messages, ok) = ruby_layout(
+        200,
+        &[(0x2114, vec![1, 7]), (0x2115, vec![4, 7])],
+        b"A\\n{\x82\xa0/\x82\xa2}\\nB",
+    );
+    assert!(ok);
+    let glyphs = layout(&messages);
+    assert_eq!(
+        glyphs.iter().map(|g| (g.0, g.1)).collect::<Vec<_>>(),
+        [
+            (65, [0, 0]),
+            (0x82a0, [0, 14]),
+            (0x82a2, [3, 10]),
+            (66, [0, 24])
+        ]
+    );
+    assert_eq!(&messages.text(7).unwrap().ruby_lines[..3], &[0, 1, 0]);
+    let messages = wrapped(&[(0x2117, vec![1, 7])], b"A\\nB\0", 0);
+    assert_eq!(
+        positions(&messages),
+        [[0, 0], [0, 22]],
+        "explicit newline reserves every-line ruby even with ruby disabled"
+    );
+    // Build up hanging overflow before the newline; a trailing newline clears both words.
+    let messages = wrapped(
+        &[(0x211e, vec![1, 3, 0, 7])],
+        b"\x81\x42\0\x81\x5b\0\x82\xa0\x82\xa0\x82\xa0\x81\x42\\n\0",
+        6,
+    );
+    assert_eq!(messages.text(7).unwrap().layout_scratch, [0, 0]);
+    assert_eq!(messages.text(7).unwrap().cursor, [0, 10]);
+}
+
+#[test]
+fn recorded_newline_overflow_and_unsupported_escapes_are_transactional() {
+    for bytes in [
+        b"\\n".repeat(32),
+        b"A\\nB\\c".to_vec(),
+        b"A\\nB\\t".to_vec(),
+        b"A\\nB\\ws".to_vec(),
+        b"A\\nB\\".to_vec(),
+    ] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 100, 100]);
+        call(&mut code, 0x2114, &[1, 7]);
+        call(&mut code, 0x2152, &[0, 0, 0]);
+        let program = script_with_text(&code, &bytes);
+        let mut vm = Machine::new(&program).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 2);
+        messages.set_record_output(true);
+        pending(&mut vm);
+        let old = messages.text(7).unwrap().clone();
+        let pending_command = vm.pending_system();
+        let mut input = ActionInput::default();
+        input.set(0, true, true, false).unwrap();
+        let before_input = input.clone();
+        for _ in 0..2 {
+            assert!(
+                messages
+                    .try_record_output(&mut vm, &mut input, wait_flags(false, false))
+                    .is_err()
+            );
+            assert_eq!(messages.text(7), Some(&old));
+            assert_eq!(vm.pending_system(), pending_command);
+            assert_eq!(vm.stack().len_bytes(), 12);
+            assert_eq!(vm.repeat_count(), 0);
+            assert_eq!(input, before_input);
+        }
+    }
+}
+
+#[test]
 fn recorded_output_wraps_without_rules_keeping_closing_punctuation_on_the_line() {
     // あああ。 fit with 。 past the line end; the next あ and the half-width e wrap.
     let data = b"\x82\xa0\x82\xa0\x82\xa0\x81\x42\x82\xa0abcde\0";
@@ -1517,7 +1611,7 @@ fn recorded_output_rejects_unsupported_layout_without_partial_glyphs_or_stack_ch
     // Wrapping two characters per line reaches line 32, past the ruby-line flags; a group
     // closing its base before any glyph re-times an uninitialized pointer.
     for bytes in [
-        &b"A\\n"[..],
+        &b"A\\q"[..],
         &b"{/ruby}"[..],
         &b"A{base"[..],
         &b"A{\x82\xa0/\x82"[..],

@@ -41,7 +41,7 @@ cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-`--payload` 仅允许创建新文件，输出不包含原始头部。当前默认 551 项测试、全 workspace 全功能 585 项测试及严格 Clippy 检查通过；另有 1 项默认忽略的原生音频设备检查，已在普通桌面权限下手动通过。
+`--payload` 仅允许创建新文件，输出不包含原始头部。当前默认 554 项测试、全 workspace 全功能 588 项测试及严格 Clippy 检查通过；另有 1 项默认忽略的原生音频设备检查，已在普通桌面权限下手动通过。
 真实启动脚本的 Rust 解码结果与 Python 参考工具逐字节一致：5141 字节，SHA-256 为
 `ad58f1bb6ffe8e9e93bc291e18df39c0807cdd453d3d39b267dcb9ff9aa84474`。
 
