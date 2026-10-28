@@ -43,6 +43,13 @@ fn run(vm: &mut Machine<'_>, messages: &mut MessageHost) {
     assert!(messages.try_handle(vm).unwrap());
 }
 
+fn stack_words(vm: &Machine<'_>) -> Vec<u32> {
+    (0..vm.stack().len_bytes())
+        .step_by(4)
+        .map(|at| vm.stack().read_u32_at(at).unwrap())
+        .collect()
+}
+
 #[test]
 fn construction_owns_a_separate_atlas_and_preserves_constructor_defaults() {
     let mut code = vec![];
@@ -222,5 +229,124 @@ fn incomplete_creation_never_installs_a_font_or_object() {
         );
         assert!(messages.auxiliary_text(0).is_none());
         assert_eq!(messages.auxiliary_font_present(0), Some(false));
+    }
+}
+
+#[test]
+fn positioning_updates_only_auxiliary_coordinates_and_preserves_results() {
+    let mut code = vec![];
+    call(&mut code, 0x2380, &[7, 0, 25, 32]);
+    let positions = [
+        [0, 0],
+        [(-180i32) as u32, 72],
+        [16_777_217, (-16_777_217i32) as u32],
+        [i32::MAX as u32, i32::MIN as u32],
+    ];
+    for [x, y] in positions {
+        call(&mut code, 0x2383, &[7, x, y]);
+    }
+    call(&mut code, 0x2384, &[7]);
+    let script = script(&code, b"\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages);
+    let atlas = messages.auxiliary_text(7).unwrap().atlas.clone();
+    let before_draw = messages
+        .auxiliary_text(7)
+        .unwrap()
+        .object
+        .draw
+        .clone()
+        .unwrap();
+    for i in 0..7 {
+        vm.state_mut().set_system_integer(i, 80 + i).unwrap();
+    }
+    // IEEE-754 reference words include signed and beyond-exact-integer cases.
+    let expected = [
+        [0, 0],
+        [0xc3340000, 0x42900000],
+        [0x4b800000, 0xcb800000],
+        [0x4f000000, 0xcf000000],
+    ];
+    for bits in expected {
+        pending(&mut vm);
+        let pc = vm.pc();
+        assert_eq!(vm.stack().len_bytes(), 12);
+        assert!(messages.try_handle(&mut vm).unwrap());
+        assert_eq!(vm.pc(), pc + 2);
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert!(vm.pending_system().is_none());
+        let group = messages.auxiliary_text(7).unwrap();
+        assert_eq!(group.word(8), Some(bits[0]));
+        assert_eq!(group.word(12), Some(bits[1]));
+        let mut draw = before_draw.clone();
+        draw.words[11] = bits[0];
+        draw.words[12] = bits[1];
+        assert_eq!(group.object.draw.as_ref(), Some(&draw));
+        assert_eq!(group.atlas, atlas);
+        assert_eq!(group.word(40), Some(1280.0f32.to_bits()));
+        assert_eq!(group.word(44), Some(720.0f32.to_bits()));
+        assert_eq!(messages.auxiliary_font_present(7), Some(true));
+        assert!(messages.auxiliary_text(0).is_none());
+        assert!(messages.text(7).is_none());
+        for i in 0..7 {
+            assert_eq!(vm.state().system_integer(i), Some(80 + i));
+        }
+    }
+    pending(&mut vm);
+    let before = (vm.pc(), vm.stack().len_bytes(), vm.pending_system());
+    assert!(!messages.try_handle(&mut vm).unwrap());
+    assert_eq!(
+        (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
+        before
+    );
+}
+
+#[test]
+fn invalid_position_target_keeps_pending_command_and_owned_state() {
+    for slot in [0, 8, u32::MAX] {
+        let mut code = vec![];
+        call(&mut code, 0x2380, &[7, 0, 25, 32]);
+        call(&mut code, 0x2383, &[slot, 180, 72]);
+        let script = script(&code, b"\0");
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages);
+        let group = messages.auxiliary_text(7).unwrap().clone();
+        pending(&mut vm);
+        let before = (vm.pc(), stack_words(&vm), vm.pending_system());
+        for _ in 0..2 {
+            assert!(messages.try_handle(&mut vm).is_err());
+            assert_eq!((vm.pc(), stack_words(&vm), vm.pending_system()), before);
+            let after = messages.auxiliary_text(7).unwrap();
+            assert_eq!(after.word(8), group.word(8));
+            assert_eq!(after.word(12), group.word(12));
+            assert_eq!(after.object, group.object);
+            assert_eq!(after.atlas, group.atlas);
+            assert_eq!(vm.state().system_integer(0), Some(1));
+        }
+    }
+}
+
+#[test]
+fn incomplete_position_arguments_leave_group_and_stack_unchanged() {
+    for count in 0..3 {
+        let mut code = vec![];
+        call(&mut code, 0x2380, &[0, 0, 25, 32]);
+        call(&mut code, 0x2383, &[0, 180, 72][..count]);
+        let script = script(&code, b"\0");
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages);
+        let group = messages.auxiliary_text(0).unwrap().clone();
+        pending(&mut vm);
+        let before = (vm.pc(), stack_words(&vm), vm.pending_system());
+        assert!(messages.try_handle(&mut vm).is_err());
+        assert_eq!((vm.pc(), stack_words(&vm), vm.pending_system()), before);
+        let after = messages.auxiliary_text(0).unwrap();
+        assert_eq!(after.word(8), group.word(8));
+        assert_eq!(after.word(12), group.word(12));
+        assert_eq!(after.object, group.object);
+        assert_eq!(after.atlas, group.atlas);
     }
 }

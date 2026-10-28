@@ -75,6 +75,24 @@ impl AuxiliaryText {
         self.words.get(&offset).copied()
     }
 
+    /// 0x14002e5d0 -> 0x14003b0c0 / 0x14001f410. Both axes use
+    /// width +352 / +360, with separate single-precision multiply and divide.
+    pub(super) fn set_position(&mut self, x: u32, y: u32) {
+        let width = self.words[&352] as f32;
+        let logical_width = self.words[&360] as f32;
+        let x = (x as i32) as f32;
+        let y = (y as i32) as f32;
+        self.words.insert(8, x.to_bits());
+        self.words.insert(12, y.to_bits());
+        let draw = self.object.draw.as_mut().expect("owned atlas draw state");
+        draw.words[11] = (width * x / logical_width).to_bits();
+        draw.words[12] = (width * y / logical_width).to_bits();
+        draw.words[13] = 0;
+        // Constructor 0x14002fbf2 sets the optional +1472 object to null.
+        // Its creation commands remain barriers, so there is no second object
+        // to reposition through 0x14003b0b0 here.
+    }
+
     pub(super) fn new(glyph_size: u32, capacity: u32) -> Result<Self, FormatError> {
         let atlas = AuxiliaryGlyphAtlas::new(glyph_size, capacity)?;
         let mut words: BTreeMap<_, _> = (8..184)
