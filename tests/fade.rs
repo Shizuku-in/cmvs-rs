@@ -68,6 +68,7 @@ fn additional_objects_use_stable_layers_and_validate_their_source_rectangles() {
         draw.words[10] = 1;
         SceneObject {
             image: Some(ObjectImage {
+                filter: None,
                 name: vec![],
                 pixels: RgbaImage::new(1, 1, rgba).unwrap(),
                 alpha: true,
@@ -117,6 +118,7 @@ fn additional_glyph_objects_are_sorted_with_the_fade_instead_of_overlaid_after_i
     draw.words[10] = 1;
     let mut glyph = SceneObject {
         image: Some(ObjectImage {
+            filter: None,
             name: vec![],
             pixels: RgbaImage::new(1, 1, vec![255; 4]).unwrap(),
             alpha: true,

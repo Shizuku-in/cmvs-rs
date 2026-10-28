@@ -309,6 +309,7 @@ impl MovieHost {
         draw.words[5] = pixels.height();
         let object = crate::scene::SceneObject {
             image: Some(crate::scene::ObjectImage {
+                filter: None,
                 name: name.clone(),
                 pixels,
                 alpha: false,

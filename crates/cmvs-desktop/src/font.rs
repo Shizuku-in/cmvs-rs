@@ -238,6 +238,7 @@ impl FontRenderer {
                 draw.words[17] = glyph.opacity;
                 objects.push(SceneObject {
                     image: Some(ObjectImage {
+                        filter: None,
                         name: Vec::new(),
                         pixels,
                         alpha: true,

@@ -476,6 +476,7 @@ fn projected_child_stays_in_parent_group_and_unsupported_flags_still_fail() {
     // the inherited projection coordinates. The larger-key orange child draws first.
     let mut farther = object.children[&0].clone();
     farther.image = Some(cmvs_rs::scene::ObjectImage {
+        filter: None,
         name: b"orange".to_vec(),
         pixels: cmvs_rs::raster::RgbaImage::new(
             2,

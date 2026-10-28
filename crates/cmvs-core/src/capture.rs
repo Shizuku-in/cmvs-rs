@@ -98,6 +98,7 @@ impl ScreenCapture {
         }
         vm.complete_system(SystemResult(0x4008))?;
         object.image = Some(ObjectImage {
+            filter: None,
             name: Vec::new(),
             pixels: self.image.take().expect("checked above"),
             alpha: false,

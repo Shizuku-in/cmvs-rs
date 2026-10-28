@@ -336,6 +336,7 @@ fn image_load_sets_result_and_rebuilds_the_object_image() {
     assert!(!scene.try_handle_image(&mut vm, &mut files).unwrap());
     scene.try_handle(&mut vm).unwrap();
     let expected = ObjectImage {
+        filter: None,
         name: b"a.pb3".to_vec(),
         pixels: opaque_pixels(),
         alpha: false,
@@ -354,6 +355,184 @@ fn image_load_sets_result_and_rebuilds_the_object_image() {
     assert_eq!(vm.pending_system().map(|p| p.1), Some(0x30));
     assert_eq!(vm.stack().len_bytes(), 8);
     assert_eq!(scene.object(3).unwrap().image.as_ref(), Some(&expected));
+}
+
+#[test]
+fn filtered_image_load_scales_rgb_with_saturation_and_preserves_alpha_and_object() {
+    let mut code = loads(20, &[0]);
+    scene_command(&mut code, 0x2040, &[20]);
+    scene_command(&mut code, 0x2045, &[20, u32::MAX, 30, 40]);
+    scene_command(&mut code, 0x2022, &[20, 0]);
+    scene_command(&mut code, 0x21ef, &[20, u32::MAX]);
+    scene_command(&mut code, 0x203b, &[20, 0, 2, 0x55ff8000, u32::MAX]);
+    scene_command(&mut code, 0x2030, &[20, 0]);
+    let program = script(&code, b"a.pb3\0");
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    let mut files = Files::default();
+    files.0.insert(
+        b"a.pb3".to_vec(),
+        pb3(1, &[[200, 255], [128, 1], [240, 64], [0, 17]]),
+    );
+    for _ in 0..6 {
+        run_to_system(&mut vm);
+        if !scene.try_handle(&mut vm).unwrap() {
+            scene.try_handle_image(&mut vm, &mut files).unwrap();
+        }
+    }
+    let mut expected = scene.object(20).unwrap().clone();
+    run_to_system(&mut vm);
+    assert!(scene.try_handle_image(&mut vm, &mut files).unwrap());
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(1));
+    let image = scene.object(20).unwrap().image.as_ref().unwrap();
+    assert_eq!(image.name, b"a.pb3");
+    assert!(image.alpha);
+    assert_eq!(image.pixels.pixels(), &[255, 128, 0, 0, 127, 1, 0, 17]);
+    expected.image = Some(image.clone());
+    assert_eq!(scene.object(20), Some(&expected));
+    // A normal reload reads original bytes, rather than filtering the old pixels again.
+    run_to_system(&mut vm);
+    scene.try_handle_image(&mut vm, &mut files).unwrap();
+    assert_eq!(
+        scene
+            .object(20)
+            .unwrap()
+            .image
+            .as_ref()
+            .unwrap()
+            .pixels
+            .pixels(),
+        &[240, 128, 200, 0, 64, 1, 255, 17]
+    );
+}
+
+#[test]
+fn filtered_image_load_uses_128_as_identity_and_quiet_failure_clears_image() {
+    let mut code = loads(20, &[0]);
+    for args in [
+        [20, 0, 2, 0x808080, 0],
+        [20, 0, 2, 0, 0],
+        [20, 6, 2, 0x808080, 0],
+    ] {
+        scene_command(&mut code, 0x203b, &args);
+    }
+    let program = script(&code, b"a.pb3\0bad\0");
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    let mut files = Files::default();
+    files.0.insert(b"a.pb3".to_vec(), opaque());
+    files.0.insert(b"bad".to_vec(), b"XYZW".to_vec());
+    run_to_system(&mut vm);
+    scene.try_handle(&mut vm).unwrap();
+    for expected in [
+        Some(opaque_pixels()),
+        Some(opaque_pixels()),
+        Some(RgbaImage::new(2, 1, vec![0, 0, 0, 255, 0, 0, 0, 255]).unwrap()),
+        None,
+    ] {
+        run_to_system(&mut vm);
+        scene.try_handle_image(&mut vm, &mut files).unwrap();
+        assert_eq!(
+            vm.state().system_integer(0),
+            Some(u32::from(expected.is_some()))
+        );
+        assert_eq!(
+            scene
+                .object(20)
+                .unwrap()
+                .image
+                .as_ref()
+                .map(|im| &im.pixels),
+            expected.as_ref()
+        );
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
+}
+
+#[test]
+fn filtered_image_load_rejects_unknown_modes_missing_args_and_resource_failures_transactionally() {
+    for args in [
+        vec![20, 0, 1, 0x808080, 0],
+        vec![20, 0, 2, 0x808080],
+        vec![20, 6, 2, 0x808080, 0],
+        vec![20, 14, 2, 0x808080, 0],
+        vec![256, 0, 2, 0x808080, 0],
+        vec![21, 0, 2, 0x808080, 0],
+    ] {
+        let mut code = loads(20, &[0]);
+        scene_command(&mut code, 0x203b, &args);
+        let program = script(&code, b"a.pb3\0png.pb3\0missing\0");
+        let mut vm = Machine::new(&program).unwrap();
+        let mut scene = SceneHost::default();
+        let mut files = Files::default();
+        files.0.insert(b"a.pb3".to_vec(), opaque());
+        files.0.insert(b"png.pb3".to_vec(), b"\x89PNG".to_vec());
+        run_to_system(&mut vm);
+        scene.try_handle(&mut vm).unwrap();
+        run_to_system(&mut vm);
+        scene.try_handle_image(&mut vm, &mut files).unwrap();
+        let old = scene.object(20).unwrap().clone();
+        run_to_system(&mut vm);
+        let pending = vm.pending_system();
+        for _ in 0..2 {
+            assert!(scene.try_handle_image(&mut vm, &mut files).is_err());
+            assert_eq!(scene.object(20), Some(&old));
+            assert_eq!(vm.pending_system(), pending);
+            assert_eq!(vm.stack().len_bytes(), args.len() * 4);
+            assert_eq!(vm.state().system_integer(0), Some(1));
+        }
+    }
+}
+
+#[test]
+fn replacement_inherits_filter_and_filters_new_source_once_before_common_area() {
+    for duration in [0, 100] {
+        let mut code = loads(20, &[0]);
+        scene_command(&mut code, 0x2040, &[20]);
+        scene_command(&mut code, 0x203b, &[20, 0, 2, 0x404080, 55]);
+        scene_command(&mut code, 0x22c4, &[20, 6, duration, 0]);
+        scene_command(&mut code, 0x22c4, &[20, 0, 0, 0]);
+        let program = script(&code, b"a.pb3\0b.pb3\0");
+        let mut vm = Machine::new(&program).unwrap();
+        let mut scene = SceneHost::default();
+        let mut files = Files::default();
+        files.0.insert(b"a.pb3".to_vec(), opaque());
+        files.0.insert(
+            b"b.pb3".to_vec(),
+            pb3(1, &[[100, 200], [128, 255], [255, 128], [10, 255]]),
+        );
+        for _ in 0..4 {
+            run_to_system(&mut vm);
+            if !scene.try_handle(&mut vm).unwrap() {
+                scene.try_handle_image(&mut vm, &mut files).unwrap();
+            }
+        }
+        run_to_system(&mut vm);
+        scene.try_change_image(&mut vm, &mut files).unwrap();
+        let object = scene.object(20).unwrap();
+        let image = object.image.as_ref().unwrap();
+        assert_eq!(image.filter, Some([2, 0x404080, 55]));
+        assert_eq!(
+            image.pixels.pixels(),
+            &[127, 64, 100, 10, 64, 127, 200, 255]
+        );
+        if duration > 0 {
+            let change = object.change.as_ref().unwrap();
+            assert_eq!(change.previous.image.as_ref().unwrap().filter, image.filter);
+            let common = change.common.image.as_ref().unwrap();
+            assert_eq!(common.filter, None);
+            assert_eq!(common.pixels.pixels(), &[0, 0, 0, 0, 64, 127, 200, 255]);
+        } else {
+            assert!(object.change.is_none());
+        }
+        run_to_system(&mut vm);
+        scene.try_change_image(&mut vm, &mut files).unwrap();
+        let image = scene.object(20).unwrap().image.as_ref().unwrap();
+        assert_eq!(image.filter, Some([2, 0x404080, 55]));
+        assert_eq!(image.pixels.pixels(), &[2, 1, 1, 255, 3, 2, 2, 255]);
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
 }
 
 #[test]
@@ -618,6 +797,7 @@ fn additive_blend_adds_scaled_texels_and_opaque_images_at_full_opacity_replace()
     draw.words[4..6].copy_from_slice(&[1, 1]);
     let glow = cmvs_rs::scene::SceneObject {
         image: Some(ObjectImage {
+            filter: None,
             name: vec![],
             pixels: RgbaImage::new(1, 1, vec![10, 20, 30, 255]).unwrap(),
             alpha: true,
@@ -762,6 +942,7 @@ fn window_image_load_replaces_the_window_object_image_without_a_result() {
     assert_eq!(
         messages.window(7).unwrap().object.image,
         Some(ObjectImage {
+            filter: None,
             name: b"win.pb3".to_vec(),
             pixels: opaque_pixels(),
             alpha: false,

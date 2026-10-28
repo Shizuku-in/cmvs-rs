@@ -47,11 +47,36 @@ impl ClearState {
 /// Object +6176 after a successful 0x2030 (image object built by 0x14002fd00).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectImage {
+    /// Image +1200 enables the mode/color/extra words at +1204..+1212.
+    /// Replacement loads reuse these parameters (0x1400156ef..0x140015768).
+    pub filter: Option<[u32; 3]>,
     /// File name as given to 0x2030 (image +1044).
     pub name: Vec<u8>,
     pub pixels: RgbaImage,
     /// Image +1152: the source has 32 bits per pixel.
     pub alpha: bool,
+}
+
+impl ObjectImage {
+    fn apply_filter(&mut self, parameters: [u32; 3]) -> Result<(), crate::FormatError> {
+        let [mode, color, _extra] = parameters;
+        if mode != 2 {
+            return Err(crate::FormatError(
+                "image filter mode not implemented; only mode 2 is verified",
+            ));
+        }
+        // 0x14003364c..0x1400336d9: original BGRA, ours RGBA. Alpha is untouched.
+        let [b, g, r, _] = color.to_le_bytes();
+        let mut pixels = self.pixels.pixels().to_vec();
+        for pixel in pixels.chunks_exact_mut(4) {
+            for (channel, factor) in pixel[..3].iter_mut().zip([r, g, b]) {
+                *channel = ((u32::from(*channel) * u32::from(factor)) >> 7).min(255) as u8;
+            }
+        }
+        self.pixels = RgbaImage::new(self.pixels.width(), self.pixels.height(), pixels)?;
+        self.filter = Some(parameters);
+        Ok(())
+    }
 }
 
 /// A 0x38c8-byte object freshly built by 0x14003a3c0, including 768 child pointers.
@@ -613,6 +638,8 @@ impl SceneHost {
     /// 0x2030 / 0x14006c220: SP-4 object slot, SP-8 file name. Rebuilds the object image
     /// (0x14003bb10) and sets system result 0 to whether loading succeeded; returns 0x4008.
     /// 0x2038 uses SP-8 child slot and SP-12 name, and returns 0x400c.
+    /// 0x203b / 0x14006c3b0 -> 0x14003bbc0 -> 0x140035260 adds mode/color/extra,
+    /// filters decoded pixels before upload, and returns 0x4014. Only mode 2 is verified.
     /// +12032 is set only by 0x212a, which stays unhandled, so its 0x140018bc0 call never runs.
     pub fn try_handle_image(
         &mut self,
@@ -625,7 +652,7 @@ impl SceneHost {
             vm.complete_system(SystemResult(0x4000))?;
             return Ok(true);
         }
-        let Some((pc, command @ (0x30 | 0x38))) = vm.pending_system() else {
+        let Some((pc, command @ (0x30 | 0x38 | 0x3b))) = vm.pending_system() else {
             return Ok(false);
         };
         let fail = |why| error(pc, command + 0x2000, why);
@@ -651,9 +678,32 @@ impl SceneHost {
         } else {
             None
         };
+        let filter = if command == 0x3b {
+            let mode = vm.stack().peek_u32(12).map_err(|e| fail(e.0))?;
+            let color = vm.stack().peek_u32(16).map_err(|e| fail(e.0))?;
+            // Stored at image +1212; not read by the mode 2 branch.
+            let extra = vm.stack().peek_u32(20).map_err(|e| fail(e.0))?;
+            if mode != 2 {
+                return Err(
+                    fail("image filter mode not implemented; only mode 2 is verified").into(),
+                );
+            }
+            Some([mode, color, extra])
+        } else {
+            None
+        };
         let name = vm.resolve_string(raw_name)?;
-        let decoded = load_image(images, name, pc, command + 0x2000)?;
-        vm.complete_system(SystemResult(if child.is_some() { 0x400c } else { 0x4008 }))?;
+        let mut decoded = load_image(images, name, pc, command + 0x2000)?;
+        if let Some(filter) = filter
+            && let Some(image) = decoded.as_mut()
+        {
+            image.apply_filter(filter)?;
+        }
+        vm.complete_system(SystemResult(match command {
+            0x38 => 0x400c,
+            0x3b => 0x4014,
+            _ => 0x4008,
+        }))?;
         vm.state_mut()
             .set_system_integer(0, u32::from(decoded.is_some()))
             .expect("slot 0 exists");
@@ -680,6 +730,7 @@ pub(crate) fn load_image(
     }
     let decoded = image::load(images, &name).map_err(|e| format!("PC=0x{pc:x} 0x{op:04x}: {e}"))?;
     Ok(decoded.map(|decoded| ObjectImage {
+        filter: None,
         name,
         pixels: decoded.pixels,
         alpha: decoded.alpha,

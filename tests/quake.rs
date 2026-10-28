@@ -178,6 +178,7 @@ fn frame(scene: &SceneHost, extra_flags: u32) -> Vec<u8> {
     draw.words[8] = 2;
     let extra = SceneObject {
         image: Some(ObjectImage {
+            filter: None,
             name: vec![],
             pixels: RgbaImage::new(1, 1, vec![255; 4]).unwrap(),
             alpha: false,

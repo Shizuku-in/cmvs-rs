@@ -100,6 +100,7 @@ fn common_image(old: &ObjectImage, new: &ObjectImage) -> Result<ObjectImage, Box
         }
     }
     Ok(ObjectImage {
+        filter: None,
         name: Vec::new(),
         pixels: RgbaImage::new(width, height, pixels)?,
         alpha: true,
@@ -258,8 +259,11 @@ impl SceneHost {
             .draw
             .as_ref()
             .ok_or_else(|| fail("replacement needs an existing draw state"))?;
-        let image = load_image(images, name.to_vec(), pc, opcode)?
+        let mut image = load_image(images, name.to_vec(), pc, opcode)?
             .ok_or_else(|| fail("missing replacement image leaves an unmodeled partial object"))?;
+        if let Some(filter) = old_image.filter {
+            image.apply_filter(filter)?;
+        }
         // 0x14003c900 copies the first 88 bytes, then 0x14001f520 copies +88..+108 into
         // both the new and the common draw state.
         let mut draw = DrawState {
@@ -340,6 +344,7 @@ mod tests {
 
     fn image(width: u32, height: u32, pixels: Vec<u8>) -> ObjectImage {
         ObjectImage {
+            filter: None,
             name: b"synthetic".to_vec(),
             pixels: RgbaImage::new(width, height, pixels).unwrap(),
             alpha: true,
