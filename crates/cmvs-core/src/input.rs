@@ -6,6 +6,9 @@
 use crate::{bytecode::DecodeError, machine::Machine, vm::SystemResult};
 
 pub const ACTIONS: usize = 24;
+/// Input codes behind the mouse flags at +1184 + 12 * i (0x140055260): left button, right
+/// button, wheel up and wheel down.
+pub const MOUSE_CODES: [usize; 4] = [1, 3, 4, 5];
 
 /// The first 24 KEY_FUNCTION sections of key.cfg (0x140057740).
 /// Registry overrides and the second bank (51..) are deliberately not read.
@@ -89,6 +92,13 @@ impl CodeInput {
                 .set(action, held, pressed, released)
                 .expect("bounded action");
         }
+        for (flags, code) in input.mouse.iter_mut().zip(MOUSE_CODES) {
+            *flags = [
+                !now[code] && self.previous[code],
+                now[code],
+                now[code] && !self.previous[code],
+            ];
+        }
         self.previous = *now;
     }
     /// Focus loss cancels state without turning it into a click on release.
@@ -108,6 +118,9 @@ pub struct ActionInput {
     held: [bool; ACTIONS],
     /// A bound code went down on this frame (its counter is 1).
     pressed: [bool; ACTIONS],
+    /// +1184 + 12 * i: released, held and pressed for each of `MOUSE_CODES`, read by the
+    /// pointer gesture recognizer.
+    mouse: [[bool; 3]; 4],
     /// +868/+872: pointer position in script coordinates (constructor 0, 0).
     pointer: [i32; 2],
     /// Set by button keyboard navigation (0x140056530 plus SetCursorPos); the host moves
@@ -160,6 +173,26 @@ impl ActionInput {
     pub(crate) fn warp_pointer(&mut self, x: i32, y: i32) {
         self.pointer = [x, y];
         self.warp = Some([x, y]);
+    }
+    /// Released, held and pressed flags of `MOUSE_CODES[index]`.
+    pub fn mouse(&self, index: usize) -> [bool; 3] {
+        self.mouse.get(index).copied().unwrap_or_default()
+    }
+    /// 0x140054bf0: clears every pressed flag (mouse and actions) and every action release,
+    /// keeping held flags and the mouse releases.
+    pub(crate) fn clear_edges(&mut self) {
+        for flags in &mut self.mouse {
+            flags[2] = false;
+        }
+        self.released = [false; ACTIONS];
+        self.pressed = [false; ACTIONS];
+    }
+    /// 0x140059560: also clears the four mouse releases before 0x140054bf0.
+    pub(crate) fn clear_all_edges(&mut self) {
+        for flags in &mut self.mouse {
+            flags[0] = false;
+        }
+        self.clear_edges();
     }
     /// 0x140054d90 for action 0 (siblings such as 0x140054dd0 for later actions): clears the
     /// release and press flags and keeps the held flag.

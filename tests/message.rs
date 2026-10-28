@@ -1438,12 +1438,12 @@ fn recorded_newlines_reserve_ruby_on_the_destination_line_and_clear_break_scratc
 
 #[test]
 fn recorded_newline_overflow_and_unsupported_escapes_are_transactional() {
+    // Ruby-line overflow, escapes that never advance and `\w` without a selector.
     for bytes in [
-        b"\\n".repeat(32),
-        b"A\\nB\\c".to_vec(),
-        b"A\\nB\\t".to_vec(),
-        b"A\\nB\\ws".to_vec(),
-        b"A\\nB\\".to_vec(),
+        [b"\\n".repeat(32), vec![0]].concat(),
+        b"A\\nB\\x\0".to_vec(),
+        b"A\\nB\\w\0".to_vec(),
+        b"A\\nB\\\0".to_vec(),
     ] {
         let mut code = vec![];
         create(&mut code, 0, 7, [0, 0, 100, 100]);
@@ -3013,4 +3013,64 @@ fn direct_text_output_rejects_gdi_widths_and_stalling_escapes_atomically() {
         assert_eq!(vm.stack().len_bytes(), bytes);
         assert_eq!(messages.text(1).cloned(), before);
     }
+}
+
+/// Records 0x2152 output of `bytes` into window 0 / text 7 (27-pixel glyphs, 100 delay so
+/// a 40 ms reveal interval) and returns the text object.
+fn record(bytes: &[u8]) -> TextObject {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 100, 100]);
+    call(&mut code, 0x2152, &[0, 0, 0]);
+    let program = script_with_text(&code, bytes);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 1);
+    messages.set_record_output(true);
+    pending(&mut vm);
+    let mut input = ActionInput::default();
+    messages
+        .try_record_output(&mut vm, &mut input, wait_flags(false, false))
+        .unwrap();
+    messages.text(7).unwrap().clone()
+}
+
+#[test]
+fn wait_escapes_switch_instant_reveal_and_tab_restarts_the_delay() {
+    let text = record(b"AB\\wcCD\\wsE\0");
+    let timing: Vec<_> = text
+        .glyphs
+        .iter()
+        .map(|g| (g.code, g.delay_ms, g.active, g.shown))
+        .collect();
+    assert_eq!(
+        timing,
+        [
+            (u16::from(b'A'), 0, true, false),
+            (u16::from(b'B'), 40, true, false),
+            // `\wc` shows glyphs at once and restarts the delay; `\ws` resumes revealing.
+            (u16::from(b'C'), 0, false, true),
+            (u16::from(b'D'), 0, false, true),
+            (u16::from(b'E'), 0, true, false),
+        ]
+    );
+    let text = record(b"AB\\tC\0");
+    let delays: Vec<_> = text.glyphs.iter().map(|g| g.delay_ms).collect();
+    assert_eq!(delays, [0, 40, 0]);
+    // Unknown `\w` selectors are skipped without changing the mode.
+    let text = record(b"A\\wxB\0");
+    let delays: Vec<_> = text.glyphs.iter().map(|g| g.delay_ms).collect();
+    assert_eq!(delays, [0, 40]);
+}
+
+#[test]
+fn clear_escape_drops_glyphs_and_returns_the_pen_to_the_area_origin() {
+    let text = record(b"AB\\nC\\cD\0");
+    let placed: Vec<_> = text
+        .glyphs
+        .iter()
+        .map(|g| (g.code, g.position, g.delay_ms))
+        .collect();
+    // The delay keeps running across the clear.
+    assert_eq!(placed, [(u16::from(b'D'), [0, 0], 120)]);
+    assert_eq!(text.cursor, [13, 0]);
 }

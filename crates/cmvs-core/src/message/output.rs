@@ -84,7 +84,19 @@ fn new_line(
     Ok(())
 }
 
-const ESCAPES: &str = "recorded message output does not yet support this text escape";
+const ESCAPES: &str = "text escape that does not advance in the original";
+
+/// `\w` and its selector skip three bytes in 0x14005b360/0x14005bc90; a missing selector
+/// would step past the terminator. Returns the length and Some(instant) for `\wc` (true)
+/// and `\ws` (false); other selectors change nothing.
+fn escape_w(bytes: &[u8], i: usize) -> Result<(usize, Option<bool>), &'static str> {
+    match bytes.get(i + 2) {
+        Some(b'c') => Ok((3, Some(true))),
+        Some(b's') => Ok((3, Some(false))),
+        Some(&b) if b != 0 => Ok((3, None)),
+        _ => Err("text escape \\w without a selector runs past the terminator"),
+    }
+}
 
 /// Line end shared by the layout functions: area x + width − spacing x − glyph size.
 fn line_end(text: &TextObject) -> u32 {
@@ -155,13 +167,18 @@ fn ruby_lines(text: &TextObject, bytes: &[u8]) -> Result<[u32; 32], &'static str
     while i < bytes.len() && bytes[i] != 0 {
         let byte = bytes[i];
         if byte == b'\\' {
-            if bytes.get(i + 1) != Some(&b'n') {
-                return Err(ESCAPES);
+            match bytes.get(i + 1) {
+                // 0x14005b547..0x14005b552: explicit newline, without a glyph advance.
+                Some(b'n') => {
+                    x = text.area[0] as u32;
+                    line += 1;
+                    i += 2;
+                }
+                // `\c` and `\t` are skipped here without moving the pen.
+                Some(b'c' | b't') => i += 2,
+                Some(b'w') => i += escape_w(bytes, i)?.0,
+                _ => return Err(ESCAPES),
             }
-            // 0x14005b547..0x14005b552: explicit newline, without a glyph advance.
-            x = text.area[0] as u32;
-            line += 1;
-            i += 2;
             continue;
         }
         let (advance, wrap) = if byte == b'{' {
@@ -255,14 +272,19 @@ fn push(
     Ok(text.glyphs.len() - 1)
 }
 
-/// 0x14005b5a0 with the constructor settings (alpha reveal, 350 ms) and no `\wc`: a nonzero
-/// interval hides the glyph until `delay` has passed and returns delay + interval.
+/// 0x14005b5a0 with the constructor settings (alpha reveal, 350 ms). After `\wc` (a5 != 0)
+/// it returns 0 at once, leaving the glyph shown and restarting the delay. Otherwise a
+/// nonzero interval hides the glyph until `delay` has passed and returns delay + interval.
 fn retime(
     text: &mut TextObject,
     glyph: Option<usize>,
     delay: u32,
     interval: u32,
+    instant: bool,
 ) -> Result<u32, &'static str> {
+    if instant {
+        return Ok(0);
+    }
     if interval == 0 {
         return Ok(delay);
     }
@@ -312,19 +334,48 @@ fn append(text: &mut TextObject, bytes: &[u8], skip: bool) -> Result<(), &'stati
         4u32.wrapping_mul(text.char_delay as u32) / 10
     };
     let mut delay = 0u32;
+    // `\wc` / `\ws` (v83): reveal glyphs at once until switched back; starts off per call.
+    let mut instant = false;
     // 0x14005bc90's last-glyph pointer is uninitialized at the start of every call.
     let mut last = None;
     let mut i = 0;
     while i < bytes.len() && bytes[i] != 0 {
         let byte = bytes[i];
         if byte == b'\\' {
-            if bytes.get(i + 1) != Some(&b'n') {
-                return Err(ESCAPES);
+            match bytes.get(i + 1) {
+                // 0x14005c46a..0x14005c4b8: no glyph or reveal interval for the newline.
+                Some(b'n') => {
+                    new_line(text, &mut line, &mut x, &mut y)?;
+                    text.layout_scratch = [0; 2];
+                    i += 2;
+                }
+                // `\c` (as 0x14005ad50): drop the glyphs and return the pen to the area
+                // origin; the line count and ruby marks stay. The original's last-glyph
+                // pointer then refers to a freed glyph, so it is forgotten here.
+                Some(b'c') => {
+                    text.glyphs.clear();
+                    last = None;
+                    x = text.area[0] as u32;
+                    y = text.area[1] as u32;
+                    i += 2;
+                }
+                // `\t` restarts the reveal delay (v104).
+                Some(b't') => {
+                    delay = 0;
+                    i += 2;
+                }
+                Some(b'w') => {
+                    let (length, selector) = escape_w(bytes, i)?;
+                    if let Some(value) = selector {
+                        instant = value;
+                        if value {
+                            delay = 0;
+                        }
+                    }
+                    i += length;
+                }
+                _ => return Err(ESCAPES),
             }
-            // 0x14005c46a..0x14005c4b8: no glyph or reveal interval for the newline.
-            new_line(text, &mut line, &mut x, &mut y)?;
-            text.layout_scratch = [0; 2];
-            i += 2;
             continue;
         }
         if byte == b'{' {
@@ -342,7 +393,7 @@ fn append(text: &mut TextObject, bytes: &[u8], skip: bool) -> Result<(), &'stati
                     last = Some(push(text, code, [x, y], size, 1)?);
                     x = x.wrapping_add(size).wrapping_add(text.spacing[0] as u32);
                 }
-                delay = retime(text, last, delay, interval)?;
+                delay = retime(text, last, delay, interval, instant)?;
             }
             if !text.ruby {
                 continue;
@@ -372,7 +423,7 @@ fn append(text: &mut TextObject, bytes: &[u8], skip: bool) -> Result<(), &'stati
                     last = Some(push(text, code, [ruby_x >> 10, ruby_y], ruby_size, 1)?);
                     ruby_x = ruby_x.wrapping_add(step);
                 }
-                ruby_delay = retime(text, last, ruby_delay, interval)?;
+                ruby_delay = retime(text, last, ruby_delay, interval, instant)?;
             }
             continue;
         }
@@ -406,7 +457,7 @@ fn append(text: &mut TextObject, bytes: &[u8], skip: bool) -> Result<(), &'stati
             x
         };
         last = Some(push(text, code, [gx, y], size, 1)?);
-        delay = retime(text, last, delay, interval)?;
+        delay = retime(text, last, delay, interval, instant)?;
         let advance = if code == 0x814a {
             (size >> 1).wrapping_sub(size / 5)
         } else if wide {

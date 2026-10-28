@@ -131,3 +131,18 @@ fn missing_arguments_keep_the_command_pending() {
     assert_eq!(vm.stack().len_bytes(), 4);
     assert_eq!(gesture, PointerGesture::default());
 }
+
+#[test]
+fn hold_query_reports_zero_without_a_recognized_hold_and_pops_its_argument() {
+    let script = script(&[(0x2362, &[1]), (0x2362, &[0])]);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut gesture = PointerGesture::default();
+    for _ in 0..2 {
+        vm.state_mut().set_system_integer(0, 9).unwrap();
+        assert!(run(&mut gesture, &mut vm));
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.state().system_integer(0), Some(0));
+    }
+    // The query does not reset tracking.
+    assert_eq!(gesture, PointerGesture::default());
+}

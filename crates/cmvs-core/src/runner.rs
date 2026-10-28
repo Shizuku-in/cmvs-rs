@@ -92,6 +92,9 @@ pub struct Startup<'a> {
     save_title: SaveTitle,
     save_info: SaveInfo,
     gesture: PointerGesture,
+    /// Research millisecond clock for the gesture recognizer (0x140008bc0), advanced by the
+    /// frame delta when a VM frame begins.
+    gesture_clock: u32,
     message_flags: MessageFlags,
     messages: MessageHost,
     history: HistoryHost,
@@ -143,6 +146,7 @@ impl<'a> Startup<'a> {
             save_title: SaveTitle::default(),
             save_info: SaveInfo::default(),
             gesture: PointerGesture::default(),
+            gesture_clock: 0,
             message_flags: MessageFlags::default(),
             messages: MessageHost::default(),
             history: HistoryHost::default(),
@@ -389,7 +393,11 @@ impl<'a> Startup<'a> {
             return Ok(StartupEvent::MainPreparedNeedsSnapshot);
         }
         if self.resume_run {
-            self.timers.begin_run(std::mem::take(&mut self.frame_delta));
+            // 0x140019430: the gesture update follows the input refresh and precedes the VM.
+            let delta = std::mem::take(&mut self.frame_delta);
+            self.timers.begin_run(delta);
+            self.gesture_clock = self.gesture_clock.wrapping_add(delta);
+            self.gesture.frame(&mut self.input, self.gesture_clock)?;
             self.resume_run = false;
         }
         let event = self.machine.step()?;
