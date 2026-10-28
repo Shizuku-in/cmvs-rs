@@ -321,3 +321,5 @@ CMV8/JBPE 解码仅据同一 SHA-256 二进制的 `0x1400390b0`、`0x140038ba0`�
 CSS1 编码仅据同一 SHA-256 二进制的写入 0x1400179e0、压缩 0x14008db90、插入/移除 0x14008d870/0x14008da30、文件写入 0x1400086e0 与构造 0x140016f52/0x140016f68 核对实现。头部注释只在运行时沿用用户模板，未复制游戏固定字符串进 Git。保留既有参考仓库固定提交与许可，没有新增外部源码、依赖或 C++；原同参数样本复编码逐字节一致，独立 Python、真实输入和输出均仅保留在 local，详见 research.md。
 
 独立用户目录为本项目文件系统后端策略，不新增原版 opcode 推断或资源算法。只使用 Rust 标准库 File::try_lock（https://doc.rust-lang.org/std/fs/struct.File.html#method.try_lock）和 fs::rename（https://doc.rust-lang.org/std/fs/fn.rename.html）等公开接口；已读取本机 Rust 1.96 随附文档，锁接口标注自 1.89 稳定。没有复制标准库或外部项目源码，没有新依赖/许可。主文件、前代备份、跨进程锁、强制结束后释放及真实重启验证见 research.md；不宣称原版备份流程相同或断电安全。
+
+JBPD 非 16 倍尺寸的复用掩码长度仅据同一 SHA-256 二进制的 `0x1400a0ad0` 与 `0x1400ab650` 核对（4:2:0 取整到 16 的 MCU 网格），Python/NumPy 对照沿用本地既有 jbpd-check 工具；无新增外部项目、源码、依赖或许可。

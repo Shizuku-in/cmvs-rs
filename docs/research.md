@@ -1360,3 +1360,19 @@ Ctrl CSS1 共 2914 字节（压缩 2552、解压 44864），参数 word78/80/82=
 原 cmvs64.exe SHA-256 仍为 dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5；原 system.dat 仍为 ace328a04d320626ee61ef69e1668d90e1c7a2a862e5fbd8c0a2dfa92f089410，既有 first-route-profile 与 branch-two-ctrl-profile 主文件仍分别为 08a28272... / 760845b9...。真实脚本、素材、存档、探针和图像仅在忽略目录 local，Git 仅提交验证记录。
 
 cargo fmt --check、cargo test --offline（587 项）、cargo clippy --offline --all-targets -- -D warnings，以及全 workspace 全功能测试（632 项）与严格 Clippy 均通过，1 项原生音频设备检查默认忽略。本轮是 Windows 记录音频后端和无窗口重放，未新增原生完整流程、真实音频时序、Enter、完整剧情存档恢复或其他平台验证。当前所选闭环为 [1]（こころ）、[2,1]（響子）、[2,2,1]（愛），ほたる及 [2,2,2] 后续仍待验证。
+
+## 水無月 ほたる END1 / END2 与 JBPD 非 16 倍尺寸（2026-10-29）
+
+本轮基线 ad0bc8b，运行核心仅改 JBPD 掩码长度（见下）；正常启动、种子 0、16ms、ContinueWithoutImage、记录文字/音频，前三次选择取第二项，第四次按选项文字匹配（local/hotaru_replay.rs，只读游戏数据）。
+
+阻塞点：END1 片尾 staff2.ps3 / 0x36b42 的 0x2308 打开 hot_n_mov.cmv（640×360，321 帧 JBPD，291 帧带 0x1000 复用掩码），旧实现拒绝高度非 16 倍的非 alpha 帧。同一 SHA-256 二进制 `0x1400a0ad0` 对 4:2:0（flags 位 28..29 = 1）把宽高各向上取整到 16，`0x1400ab650`（CMV6 JBPD）以取整后 MCU 数 mw·mh 读 6·mw·mh 个 DC，并在 0x1000 时跳过 (((mw·mh+7)>>3)+3)&~3 字节掩码，与 JBPE `0x1400af100` 一致。Rust 改为统一按取整 MCU 网格计算掩码长度并删除 16 倍限制；16 倍尺寸结果不变，输出仍裁剪到 w×h。合成 12×10 帧（有/无掩码）测试覆盖；独立 NumPy 对照 local/hot_mov_reference.py（沿用 jbpd-check 中由可执行文件导出的 IDCT/树/之字表）对 hot_n_mov.cmv（SHA-256 b5af9ba5c3357cc4c76bcfc1f98a3770743b6e485721f4579f918666063c34ba）82 个抽样帧（75 帧带掩码）与 Rust 逐字节一致。
+
+sn4015n.ps3 / 0x394ea..0x39524 在片尾后循环查询 0x21a0（动作 0）并让出，需点击确认才进入保存；这是脚本等待而非运行时错误。探针新增“非 staff* 脚本中 300 个让出无输入则点击一次”的规则；staff2/staff3 片尾不点击，自行计时结束（Ctrl 进入 sn4015n 的步数在带/不带片尾点击两次运行中同为 213085377）。为缩短运行，本轮只从第四次选择后呈现帧；前三段路径的逐帧呈现沿用此前 [2,2,1] 等轮次结论，本轮未重新逐帧检查。
+
+END1：sn4009n 在未通关时只放置一个选项“殺してやる”（id 1）。Ctrl 四次选择在 68425385 / 104990234 / 147084930 / 182354024 步，经 sn4001n..sn4009n、sn4010n..sn4014n、staff2.ps3、sn4015n，213856320 步在 sn4015n.ps3 / 0x33b22 写 CSS1，213857828 步到五按钮标题；第四次选择后 225 个定期抽样帧呈现通过。鼠标（带片尾点击版本）在 186683381 步第四次选择，4699 个消息等待帧通过，219044643 步到标题。两份 CSS1 均 2941 字节，SHA-256 93728fc75cb5bec1d66db9e5f15c4ea93fabb0914f99d1cad60cd04f13edba34，2150..2155 中仅 2153=true。
+
+END2：以 END1 存档副本为用户目录（不设 skip-auto-resume），sn4009n 放置两个启用选项，选第二项“…………”（id 2；Ctrl 182378227 / 鼠标 186707584 步）。路径为 sn4010n、sn4011n/h、sn4012n/h、sn4013h..sn4015h、staff3.ps3、sn4016h；sn4016h.ps3 / 0x33b22 写 CSS1 后回五按钮标题（Ctrl 211985408 步、107 个抽样帧；鼠标 217280160 步、4508 个消息等待帧），无未处理命令、VM 或呈现错误。两份 CSS1 均 2973 字节，SHA-256 765896a38317315265d12646f4e03a5920a4823c58dc028460b0e51d49ec4120，2153/2154=true，system.bak 为前代 END1 文件。
+
+四份存档经独立标准库 Python CSS1 解码与写出时收集的 VM 持久区逐字节一致（END1 负载 c011a123…，END2 负载 cd4e3f7a…）。END2 Ctrl 目录经全新进程、不设 skip-auto-resume 重载，第 287 步逐项核对全部持久区，2145=true、int2198=0，第 4480 步到五按钮标题且主文件未变。原 cmvs64.exe 与 save/system.dat 哈希仍为 dc74d200… / ace328a0…，既有 first-route-profile 与 branch-three-ctrl-profile 主文件未变；素材、剧本、存档、日志与图像仅在忽略目录 local。
+
+cargo fmt --check、cargo test --offline（588 项）、默认严格 Clippy、全 workspace 全功能测试（633 项）及严格 Clippy 通过。当前所选闭环为 [1]（こころ）、[2,1]（響子）、[2,2,1]（愛）、[2,2,2,1]（ほたる END1）及 END1 后的 [2,2,2,2]（ほたる END2）；原生窗口/真实音频完整流程、Enter 路径、完整剧情存档恢复及其他平台仍未验证。
