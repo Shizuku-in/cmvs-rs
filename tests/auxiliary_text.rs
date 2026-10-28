@@ -304,18 +304,14 @@ fn positioning_updates_only_auxiliary_coordinates_and_preserves_results() {
 
 #[test]
 fn invalid_auxiliary_setter_target_keeps_pending_command_and_owned_state() {
-    for (opcode, slot) in [0x2383, 0x2385]
+    for (opcode, slot, count) in [(0x2383, 3), (0x2385, 5), (0x2387, 4)]
         .into_iter()
-        .flat_map(|op| [0, 8, u32::MAX].map(|slot| (op, slot)))
+        .flat_map(|(op, count)| [0, 8, u32::MAX].map(|slot| (op, slot, count)))
     {
         let mut code = vec![];
         call(&mut code, 0x2380, &[7, 0, 25, 32]);
         let args = [slot, 180, 72, 1060, 720];
-        call(
-            &mut code,
-            opcode,
-            &args[..if opcode == 0x2383 { 3 } else { 5 }],
-        );
+        call(&mut code, opcode, &args[..count]);
         let script = script(&code, b"\0");
         let mut vm = Machine::new(&script).unwrap();
         let mut messages = MessageHost::default();
@@ -329,7 +325,7 @@ fn invalid_auxiliary_setter_target_keeps_pending_command_and_owned_state() {
             let after = messages.auxiliary_text(7).unwrap();
             assert_eq!(after.word(8), group.word(8));
             assert_eq!(after.word(12), group.word(12));
-            for at in [16, 20, 24, 28, 176, 180] {
+            for at in [16, 20, 24, 28, 48, 52, 56, 176, 180] {
                 assert_eq!(after.word(at), group.word(at));
             }
             assert_eq!(after.object, group.object);
@@ -341,9 +337,9 @@ fn invalid_auxiliary_setter_target_keeps_pending_command_and_owned_state() {
 
 #[test]
 fn incomplete_auxiliary_setter_arguments_leave_group_and_stack_unchanged() {
-    for (opcode, count) in [0x2383, 0x2385]
+    for (opcode, count) in [(0x2383, 3), (0x2385, 5), (0x2387, 4)]
         .into_iter()
-        .flat_map(|op| (0..if op == 0x2383 { 3 } else { 5 }).map(move |count| (op, count)))
+        .flat_map(|(op, count)| (0..count).map(move |count| (op, count)))
     {
         let mut code = vec![];
         call(&mut code, 0x2380, &[0, 0, 25, 32]);
@@ -360,12 +356,72 @@ fn incomplete_auxiliary_setter_arguments_leave_group_and_stack_unchanged() {
         let after = messages.auxiliary_text(0).unwrap();
         assert_eq!(after.word(8), group.word(8));
         assert_eq!(after.word(12), group.word(12));
-        for at in [16, 20, 24, 28, 176, 180] {
+        for at in [16, 20, 24, 28, 48, 52, 56, 176, 180] {
             assert_eq!(after.word(at), group.word(at));
         }
         assert_eq!(after.object, group.object);
         assert_eq!(after.atlas, group.atlas);
     }
+}
+
+#[test]
+fn text_parameters_keep_sentinel_fields_and_never_reallocate_the_atlas() {
+    let cases = [
+        ([0, 30, 4, 5], [30, 0x40800000, 0x40a00000]),
+        (
+            [0, 0, u32::MAX, (-2i32) as u32],
+            [30, 0x40800000, 0x40a00000],
+        ),
+        ([0, u32::MAX, 0, u32::MAX], [30, 0, 0x40a00000]),
+        ([0, i32::MIN as u32, u32::MAX, 0], [30, 0, 0]),
+        (
+            [0, i32::MAX as u32, i32::MAX as u32, 16_777_217],
+            [i32::MAX as u32, 0x4f000000, 0x4b800000],
+        ),
+    ];
+    let mut code = vec![];
+    call(&mut code, 0x2380, &[0, 0, 25, 32]);
+    for (args, _) in cases {
+        call(&mut code, 0x2387, &args);
+    }
+    call(&mut code, 0x2389, &[0]);
+    let script = script(&code, b"\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages);
+    let before = messages.auxiliary_text(0).unwrap().clone();
+    for i in 0..7 {
+        vm.state_mut().set_system_integer(i, 100 + i).unwrap();
+    }
+    for (_, words) in cases {
+        pending(&mut vm);
+        let pc = vm.pc();
+        assert_eq!(vm.stack().len_bytes(), 16);
+        assert!(messages.try_handle(&mut vm).unwrap());
+        assert_eq!(vm.pc(), pc + 2);
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert!(vm.pending_system().is_none());
+        let group = messages.auxiliary_text(0).unwrap();
+        for (offset, value) in [48, 52, 56].into_iter().zip(words) {
+            assert_eq!(group.word(offset), Some(value));
+        }
+        for at in [8, 12, 16, 20, 24, 28, 124, 132, 136, 140, 176, 180, 340] {
+            assert_eq!(group.word(at), before.word(at));
+        }
+        assert_eq!(group.object, before.object);
+        assert_eq!(group.atlas, before.atlas);
+        assert_eq!(group.atlas.cell_side, 31);
+        assert_eq!(messages.auxiliary_font_present(0), Some(true));
+        assert!(messages.auxiliary_text(1).is_none());
+        assert!(messages.text(0).is_none());
+        for i in 0..7 {
+            assert_eq!(vm.state().system_integer(i), Some(100 + i));
+        }
+    }
+    pending(&mut vm);
+    let before = (vm.pc(), stack_words(&vm), vm.pending_system());
+    assert!(!messages.try_handle(&mut vm).unwrap());
+    assert_eq!((vm.pc(), stack_words(&vm), vm.pending_system()), before);
 }
 
 #[test]

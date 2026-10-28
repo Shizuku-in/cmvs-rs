@@ -104,6 +104,20 @@ impl AuxiliaryText {
         }
     }
 
+    /// 0x14002e730: +48 is an integer size, +52/+56 are f32 parameters.
+    /// Signed nonpositive size and negative float parameters mean "keep".
+    /// This setter never reallocates the atlas created by 0x2380.
+    pub(super) fn set_text_parameters(&mut self, size: u32, first: u32, second: u32) {
+        if (size as i32) > 0 {
+            self.words.insert(48, size);
+        }
+        for (offset, value) in [(52, first), (56, second)] {
+            if (value as i32) >= 0 {
+                self.words.insert(offset, ((value as i32) as f32).to_bits());
+            }
+        }
+    }
+
     pub(super) fn new(glyph_size: u32, capacity: u32) -> Result<Self, FormatError> {
         let atlas = AuxiliaryGlyphAtlas::new(glyph_size, capacity)?;
         let mut words: BTreeMap<_, _> = (8..184)

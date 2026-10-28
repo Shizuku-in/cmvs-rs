@@ -259,11 +259,15 @@ impl MessageHost {
         if let Some((pc, 0x380)) = vm.pending_system() {
             return self.create_auxiliary_text(vm, pc).map(|()| true);
         }
-        if let Some((pc, command @ (0x383 | 0x385))) = vm.pending_system() {
-            // 0x1400736f0 / 0x140073820: group followed by signed position
-            // (two words) or layout (four words); neither changes results.
+        if let Some((pc, command @ (0x383 | 0x385 | 0x387))) = vm.pending_system() {
+            // 0x1400736f0 / 0x140073820 / 0x1400738f0: independent
+            // auxiliary text setters; none changes system results.
             let opcode = 0x2000 + command;
-            let count = if command == 0x383 { 3 } else { 5 };
+            let count = match command {
+                0x383 => 3,
+                0x385 => 5,
+                _ => 4,
+            };
             let mut args = [0; 5];
             for (i, arg) in args.iter_mut().take(count).enumerate() {
                 *arg = vm
@@ -282,10 +286,10 @@ impl MessageHost {
             let group = self.auxiliary_texts[slot]
                 .as_mut()
                 .expect("validated group");
-            if command == 0x383 {
-                group.set_position(args[1], args[2]);
-            } else {
-                group.set_layout([args[1], args[2], args[3], args[4]]);
+            match command {
+                0x383 => group.set_position(args[1], args[2]),
+                0x385 => group.set_layout([args[1], args[2], args[3], args[4]]),
+                _ => group.set_text_parameters(args[1], args[2], args[3]),
             }
             return Ok(true);
         }
