@@ -1,5 +1,5 @@
 //! Draw state +152, 0x21f9..0x21fd; addresses refer to the documented binary hash.
-//! Linear mode 0, absolute quadratic ease-out mode 1 and periodic Y mode 0x38.
+//! Linear mode 0, absolute quadratic ease-out mode 1 and periodic Y modes 0x38/0x39.
 use super::SceneHost;
 use crate::{
     bytecode::DecodeError,
@@ -38,6 +38,10 @@ pub struct WorldMotion {
 }
 
 impl WorldMotion {
+    pub(crate) fn supports_mode(mode: u32) -> bool {
+        matches!(mode as u8, 0 | 0x38 | 0x39) || mode as u8 == 1 && mode & 0x8000 == 0
+    }
+
     /// 0x140025570 after opacity/frame animation: clamp delta to 200 ms, wrap elapsed,
     /// interpolate only before the first boundary, then snap while crossing entries.
     /// A new segment with remaining time is not interpolated until the following frame.
@@ -49,7 +53,7 @@ impl WorldMotion {
             // cvtsi2ss uses zero-extended rdi/r8, not the decompiler's signed int casts.
             let elapsed = playback.elapsed as f32;
             let duration = key.duration as f32;
-            if key.mode as u8 == 0x38 {
+            if matches!(key.mode as u8, 0x38 | 0x39) {
                 // 0x140025bac -> 0x140025b56: unsigned wrapping product and remainder,
                 // f32 degrees/amplitude; 0x140025310 uses f64 sin then f32 hundredths.
                 let phase = playback.elapsed.wrapping_mul(key.mode >> 28) % key.duration;
@@ -59,7 +63,13 @@ impl WorldMotion {
                 let value = (f64::from(radians).sin() * f64::from(amplitude)) as f32;
                 let offset = truncate(value * 100.0) as f32 / 100.0;
                 words[11] = playback.base[0];
-                words[12] = (f32::from_bits(playback.base[1]) - offset).to_bits();
+                let base_y = f32::from_bits(playback.base[1]);
+                words[12] = if key.mode as u8 == 0x38 {
+                    (base_y - offset).to_bits()
+                } else {
+                    // 0x140025bcd -> 0x140025ad6 -> 0x140025b0b.
+                    (offset + base_y).to_bits()
+                };
                 words[13] = playback.base[2];
                 return None;
             }
@@ -154,9 +164,7 @@ impl SceneHost {
                 if (args[3] as i32) >= WORLD_MOTION_KEYS as i32 {
                     return Err(fail("world motion next key outside 0..7"));
                 }
-                if !(matches!(args[4] as u8, 0 | 0x38)
-                    || args[4] as u8 == 1 && args[4] & 0x8000 == 0)
-                {
+                if !WorldMotion::supports_mode(args[4]) {
                     return Err(fail("world motion interpolation mode is not implemented"));
                 }
             }

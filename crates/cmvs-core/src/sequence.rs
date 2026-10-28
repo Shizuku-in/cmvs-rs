@@ -1,9 +1,13 @@
 //! Engine +4736: a timed action sequence (0x614-byte buffer from 0x140014270: a five-word
 //! header plus 16 entries of 96 bytes) that the frame update 0x140015900 runs through
 //! 0x140014b10; addresses refer to the documented binary hash. Wait entries and their
-//! start/stop/finish lifecycle and image replacement entries are modeled; other action types stay unhandled.
+//! start/stop/finish lifecycle, image replacement and XYZ motion entries are modeled; other actions stay unhandled.
 use crate::{
-    evaluate::error, image::ImageSource, machine::Machine, scene::SceneHost, vm::SystemResult,
+    evaluate::error,
+    image::ImageSource,
+    machine::Machine,
+    scene::{MotionKey, MotionPlayback, SceneHost, WorldMotion},
+    vm::SystemResult,
 };
 use std::error::Error;
 
@@ -12,6 +16,14 @@ pub const SEQUENCE_ENTRIES: usize = 16;
 /// Semantics of the supported 96-byte record type. This is not a binary save image.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SequenceEntry {
+    /// Type 3/subtype 2; fast finish skips this entry without touching the object.
+    WorldMotion {
+        slot: u32,
+        xyz: [u32; 3],
+        mode: u32,
+        duration: u32,
+        pc: usize,
+    },
     Wait {
         duration: u32,
     },
@@ -82,9 +94,7 @@ impl SequenceHost {
     /// consume leftover time within the same update. No 200 ms frame clamp.
     pub fn advance_frame(&mut self, delta: u32) -> Result<(), Box<dyn Error>> {
         self.clock = self.clock.wrapping_add(delta);
-        self.run(false, |_, _, _, pc| {
-            Err(error(pc, 0x2288, "image sequence needs scene and image source").into())
-        })
+        self.run(false, missing_scene)
     }
 
     pub fn advance_frame_with_images(
@@ -103,13 +113,71 @@ impl SequenceHost {
         scene: &mut SceneHost,
         images: &mut dyn ImageSource,
     ) -> Result<(), Box<dyn Error>> {
-        self.run(finish, |raw, name, duration, pc| {
-            let slot = u8::try_from(raw)
-                .map_err(|_| error(pc, 0x2288, "replacement slot outside 0..255"))?;
-            if let Some(prepared) =
-                scene.prepare_image_change(slot, name, duration, images, pc, 0x2288)?
-            {
-                scene.commit_image_change(slot, prepared);
+        self.run(finish, |entry, finish| {
+            match entry {
+                SequenceEntry::ReplaceImage {
+                    slot: raw,
+                    name,
+                    duration,
+                    pc,
+                } => {
+                    let slot = u8::try_from(*raw)
+                        .map_err(|_| error(*pc, 0x2288, "replacement slot outside 0..255"))?;
+                    if let Some(prepared) = scene.prepare_image_change(
+                        slot,
+                        name,
+                        if finish { 0 } else { *duration },
+                        images,
+                        *pc,
+                        0x2288,
+                    )? {
+                        scene.commit_image_change(slot, prepared);
+                    }
+                }
+                SequenceEntry::WorldMotion {
+                    slot: raw,
+                    xyz,
+                    mode,
+                    duration,
+                    pc,
+                } => {
+                    if finish {
+                        return Ok(());
+                    }
+                    let slot = u8::try_from(*raw)
+                        .map_err(|_| error(*pc, 0x228a, "motion slot outside 0..255"))?;
+                    // Missing objects are skipped; no draw state is an explicit safety barrier.
+                    let Some(object) = scene.object_mut(slot) else {
+                        return Ok(());
+                    };
+                    let draw = object
+                        .draw
+                        .as_mut()
+                        .ok_or_else(|| error(*pc, 0x228a, "motion target has no draw state"))?;
+                    if !WorldMotion::supports_mode(*mode) {
+                        return Err(error(
+                            *pc,
+                            0x228a,
+                            "world motion interpolation mode is not implemented",
+                        )
+                        .into());
+                    }
+                    let mut motion = WorldMotion::default();
+                    motion.keys[0] = MotionKey {
+                        next: -1,
+                        xyz: *xyz,
+                        mode: *mode,
+                        duration: *duration,
+                    };
+                    motion.playback = Some(MotionPlayback {
+                        base: draw.words[11..14].try_into().expect("XYZ"),
+                        start: 0,
+                        current: 0,
+                        elapsed: 0,
+                    });
+                    draw.world_motion = Some(Box::new(motion));
+                }
+                SequenceEntry::Wait { .. } => unreachable!("wait handled by sequence"),
             }
             Ok(())
         })
@@ -118,7 +186,7 @@ impl SequenceHost {
     fn run(
         &mut self,
         finish: bool,
-        mut replace: impl FnMut(u32, &[u8], u32, usize) -> Result<(), Box<dyn Error>>,
+        mut apply: impl FnMut(&SequenceEntry, bool) -> Result<(), Box<dyn Error>>,
     ) -> Result<(), Box<dyn Error>> {
         if self.header.active == 0 || self.header.index >= self.header.count {
             return Ok(());
@@ -140,14 +208,7 @@ impl SequenceHost {
                         self.header.waited = self.header.waited.wrapping_add(*duration);
                     }
                 }
-                SequenceEntry::ReplaceImage {
-                    slot,
-                    name,
-                    duration,
-                    pc,
-                } => {
-                    replace(*slot, name, if finish { 0 } else { *duration }, *pc)?;
-                }
+                entry => apply(entry, finish)?,
             }
             // Resource failures retain this entry; earlier successful entries stay committed.
             self.header.index += 1;
@@ -156,7 +217,7 @@ impl SequenceHost {
         Ok(())
     }
 
-    /// Resource-aware finish runs remaining image actions with duration zero.
+    /// Resource-aware finish runs image actions with duration zero and skips subtype 2 motion.
     pub fn try_handle_with_images(
         &mut self,
         vm: &mut Machine<'_>,
@@ -174,6 +235,27 @@ impl SequenceHost {
     /// 0x2280: the dispatcher calls 0x140014320 inline, zeroing the five header words, and
     /// returns 0x4000 (nothing popped). Entries keep their bytes but are no longer run.
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, Box<dyn Error>> {
+        if let Some((pc, 0x28a)) = vm.pending_system() {
+            let mut args = [0; 6];
+            for (i, arg) in args.iter_mut().enumerate() {
+                *arg = vm
+                    .stack()
+                    .peek_u32((i + 1) * 4)
+                    .map_err(|e| error(pc, 0x228a, e.0))?;
+            }
+            vm.complete_system(SystemResult(0x4018))?;
+            if self.header.count < SEQUENCE_ENTRIES as u32 {
+                self.entries[self.header.count as usize] = Some(SequenceEntry::WorldMotion {
+                    slot: args[0],
+                    xyz: [args[1], args[2], args[3]],
+                    mode: args[4],
+                    duration: args[5],
+                    pc,
+                });
+                self.header.count += 1;
+            }
+            return Ok(true);
+        }
         if let Some((pc, 0x288)) = vm.pending_system() {
             let mut args = [0; 3];
             for (i, arg) in args.iter_mut().enumerate() {
@@ -217,9 +299,7 @@ impl SequenceHost {
             return Ok(true);
         }
         if command == 0x284 {
-            self.run(true, |_, _, _, pc| {
-                Err(error(pc, 0x2288, "image sequence needs scene and image source").into())
-            })?;
+            self.run(true, missing_scene)?;
         }
         vm.complete_system(SystemResult(0x4000))?;
         if command == 0x280 {
@@ -253,5 +333,18 @@ impl SequenceHost {
                 .expect("slot 0 exists");
         }
         Ok(true)
+    }
+}
+
+fn missing_scene(entry: &SequenceEntry, finish: bool) -> Result<(), Box<dyn Error>> {
+    match entry {
+        SequenceEntry::WorldMotion { .. } if finish => Ok(()),
+        SequenceEntry::WorldMotion { pc, .. } => {
+            Err(error(*pc, 0x228a, "motion sequence needs scene").into())
+        }
+        SequenceEntry::ReplaceImage { pc, .. } => {
+            Err(error(*pc, 0x2288, "image sequence needs scene and image source").into())
+        }
+        SequenceEntry::Wait { .. } => unreachable!("wait handled by sequence"),
     }
 }

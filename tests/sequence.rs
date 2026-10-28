@@ -389,7 +389,7 @@ fn failed_wait_append_preserves_active_sequence_and_unknown_actions_remain_pendi
         assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x286)));
         assert_eq!(vm.stack().len_bytes(), 0);
     }
-    for opcode in [0x2287u16, 0x2289, 0x228a] {
+    for opcode in [0x2287u16, 0x2289] {
         let program = script(&opcode.to_le_bytes());
         let mut vm = Machine::new(&program).unwrap();
         pending(&mut vm);
@@ -397,5 +397,217 @@ fn failed_wait_append_preserves_active_sequence_and_unknown_actions_remain_pendi
         assert_eq!(vm.pending_system(), Some((0, opcode - 0x2000)));
         assert_eq!(host.header(), header);
         assert_eq!(host.entries(), &entries);
+    }
+}
+
+struct NoImages;
+impl cmvs_rs::image::ImageSource for NoImages {
+    fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+        panic!("world motion must not read image resources")
+    }
+}
+fn motion_scene() -> cmvs_rs::scene::SceneHost {
+    let mut code = vec![];
+    call(&mut code, 0x2020, &[20]);
+    call(&mut code, 0x2040, &[20]);
+    for (i, value) in [10f32, 20.0, 30.0].into_iter().enumerate() {
+        call(
+            &mut code,
+            0x2072 + i as u16,
+            &[20, u32::MAX, value.to_bits()],
+        );
+    }
+    call(&mut code, 0x21f9, &[20, u32::MAX]);
+    call(
+        &mut code,
+        0x21fa,
+        &[20, u32::MAX, 7, u32::MAX, 0, 999, 0, 0, 0],
+    );
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = cmvs_rs::scene::SceneHost::default();
+    for _ in 0..7 {
+        pending(&mut vm);
+        assert!(scene.try_handle(&mut vm).unwrap());
+    }
+    scene
+}
+#[test]
+fn motion_sequence_defers_rebuild_captures_execution_base_and_does_not_wait_for_motion() {
+    let mut code = vec![];
+    call(&mut code, 0x2286, &[30]);
+    call(
+        &mut code,
+        0x228a,
+        &[
+            20,
+            1f32.to_bits(),
+            2f32.to_bits(),
+            3f32.to_bits(),
+            0x203e0039,
+            400,
+        ],
+    );
+    call(&mut code, 0x2286, &[50]);
+    call(&mut code, 0x2282, &[]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut host = SequenceHost::default();
+    let mut scene = motion_scene();
+    let before = scene.object(20).unwrap().clone();
+    vm.state_mut().set_system_integer(0, 123).unwrap();
+    for _ in 0..4 {
+        run(&mut vm, &mut host);
+    }
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(123));
+    assert_eq!(scene.object(20), Some(&before));
+    // Change a coordinate after append/start: the animation must capture it at execution.
+    let mut setter = vec![];
+    call(&mut setter, 0x2072, &[20, u32::MAX, 11f32.to_bits()]);
+    let setter = script(&setter);
+    let mut setter_vm = Machine::new(&setter).unwrap();
+    pending(&mut setter_vm);
+    scene.try_handle(&mut setter_vm).unwrap();
+    let execution_words = scene.object(20).unwrap().draw.as_ref().unwrap().words;
+    host.advance_frame_with_images(29, &mut scene, &mut NoImages)
+        .unwrap();
+    assert_eq!(host.header().index, 0);
+    host.advance_frame_with_images(1, &mut scene, &mut NoImages)
+        .unwrap();
+    assert_eq!(host.header().index, 2);
+    let draw = scene.object(20).unwrap().draw.as_ref().unwrap();
+    assert_eq!(draw.words, execution_words);
+    let motion = draw.world_motion.as_ref().unwrap();
+    assert_eq!(
+        motion.keys[7],
+        Default::default(),
+        "rebuild discards old keys"
+    );
+    assert_eq!(
+        motion.playback.as_ref().unwrap().base,
+        [11f32, 20.0, 30.0].map(f32::to_bits)
+    );
+    assert_eq!(motion.playback.as_ref().unwrap().elapsed, 0);
+    scene.advance_frame(100);
+    assert_eq!(
+        scene.object(20).unwrap().draw.as_ref().unwrap().words[12],
+        20.62f32.to_bits()
+    );
+    host.advance_frame_with_images(50, &mut scene, &mut NoImages)
+        .unwrap();
+    assert_eq!(
+        host.header().active,
+        0,
+        "sequence waits are independent of animation lifetime"
+    );
+    scene.advance_frame(200);
+    scene.advance_frame(100);
+    let draw = scene.object(20).unwrap().draw.as_ref().unwrap();
+    assert_eq!(&draw.words[11..14], &[1f32, 2.0, 3.0].map(f32::to_bits));
+    assert!(draw.world_motion.is_none());
+}
+#[test]
+fn motion_sequence_fast_finish_skips_without_changing_existing_track_or_validating_mode() {
+    for with_scene in [false, true] {
+        let mut code = vec![];
+        call(&mut code, 0x228a, &[20, 0, 0, 0, 0xffff, 500]);
+        call(&mut code, 0x2282, &[]);
+        call(&mut code, 0x2284, &[]);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        let mut host = SequenceHost::default();
+        let mut scene = motion_scene();
+        let before = scene.object(20).unwrap().clone();
+        run(&mut vm, &mut host);
+        run(&mut vm, &mut host);
+        pending(&mut vm);
+        if with_scene {
+            assert!(
+                host.try_handle_with_images(&mut vm, &mut scene, &mut NoImages)
+                    .unwrap()
+            );
+        } else {
+            assert!(host.try_handle(&mut vm).unwrap());
+        }
+        assert_eq!(scene.object(20), Some(&before));
+        assert_eq!(host.header(), SequenceHeader::default());
+        assert!(host.entries()[0].is_some());
+    }
+}
+#[test]
+fn motion_sequence_execution_errors_preserve_entry_and_target_but_missing_slots_are_skipped() {
+    for (slot, mode, no_draw, succeeds) in [
+        (20, 16, false, false),
+        (256, 0, false, false),
+        (21, 16, false, true),
+        (20, 0, true, false),
+    ] {
+        let mut code = vec![];
+        call(&mut code, 0x228a, &[slot, 0, 0, 0, mode, 100]);
+        call(&mut code, 0x2282, &[]);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        let mut host = SequenceHost::default();
+        let mut scene = motion_scene();
+        if no_draw {
+            let program = script(&{
+                let mut c = vec![];
+                call(&mut c, 0x2020, &[20]);
+                c
+            });
+            let mut vm = Machine::new(&program).unwrap();
+            pending(&mut vm);
+            scene.try_handle(&mut vm).unwrap();
+        }
+        let before = scene.object(20).unwrap().clone();
+        run(&mut vm, &mut host);
+        run(&mut vm, &mut host);
+        for _ in 0..2 {
+            assert_eq!(
+                host.advance_frame_with_images(16, &mut scene, &mut NoImages)
+                    .is_ok(),
+                succeeds
+            );
+            assert_eq!(host.header().index, u32::from(succeeds));
+            assert_eq!(scene.object(20), Some(&before));
+        }
+    }
+}
+#[test]
+fn motion_append_preserves_raw_bits_caps_at_sixteen_and_missing_args_are_transactional() {
+    let mut code = vec![];
+    for slot in 0..17 {
+        call(
+            &mut code,
+            0x228a,
+            &[slot, 0x7fc01234, 0x80000000, 0x7f800000, 0xffff, u32::MAX],
+        );
+    }
+    call(&mut code, 0x228a, &[20, 0, 0, 0, 0]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut host = SequenceHost::default();
+    for count in 1..=17 {
+        run(&mut vm, &mut host);
+        assert_eq!(host.header().count, count.min(16));
+    }
+    assert!(matches!(
+        host.entries()[0],
+        Some(cmvs_rs::sequence::SequenceEntry::WorldMotion {
+            xyz: [0x7fc01234, 0x80000000, 0x7f800000],
+            mode: 0xffff,
+            duration: u32::MAX,
+            ..
+        })
+    ));
+    let header = host.header();
+    let entries = host.entries().clone();
+    pending(&mut vm);
+    for _ in 0..2 {
+        assert!(host.try_handle(&mut vm).is_err());
+        assert_eq!(host.header(), header);
+        assert_eq!(host.entries(), &entries);
+        assert_eq!(vm.stack().len_bytes(), 20);
     }
 }
