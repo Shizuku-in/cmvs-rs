@@ -689,6 +689,68 @@ fn text_object_commands_set_ruby_fields_and_logical_size() {
     assert_eq!(vm.stack().len_bytes(), 0);
 }
 
+#[test]
+fn standalone_text_creation_uses_constructor_values_and_overwrites_in_place() {
+    let mut code = vec![];
+    call(&mut code, 0x2100, &[0, 0, 3]);
+    call(&mut code, 0x2114, &[1, 3]);
+    call(&mut code, 0x2100, &[196, 0, 3]);
+    let script = script_with_text(&code, b"\0");
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_system_integer(0, 9).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 1);
+    let expected = TextObject {
+        area: [0; 4],
+        position: [0, 0],
+        glyph_size: 0,
+        char_delay: 30,
+        ..created_text([0, 0], [0, 0])
+    };
+    assert_eq!(messages.text(3), Some(&expected));
+    assert!(messages.font_present(3));
+    assert_eq!(vm.state().system_integer(0), Some(1));
+    assert_eq!(vm.stack().len_bytes(), 0);
+    run(&mut vm, &mut messages, 1);
+    assert!(messages.text(3).unwrap().ruby);
+    run(&mut vm, &mut messages, 1);
+    assert_eq!(messages.text(3), Some(&expected));
+    assert!((0..MESSAGE_WINDOWS).all(|slot| messages.window(slot).is_none()));
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
+fn standalone_text_creation_rejects_unmodeled_arguments_atomically() {
+    // Index 12, negative index, a named face, an unverified capacity, a window's text.
+    for (words, window) in [
+        ([0, 0, 12], false),
+        ([0, 0, u32::MAX], false),
+        ([0, 1, 3], false),
+        ([5, 0, 3], false),
+        ([0, 0, 3], true),
+    ] {
+        let mut code = vec![];
+        if window {
+            create(&mut code, 0, 3, [0, 0, 10, 10]);
+        }
+        call(&mut code, 0x2100, &words);
+        let script = script_with_text(&code, b"\0MS Gothic\0");
+        let mut vm = Machine::new(&script).unwrap();
+        vm.state_mut().set_system_integer(0, 9).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, usize::from(window));
+        let before = messages.text(3).cloned();
+        pending(&mut vm);
+        let bytes = vm.stack().len_bytes();
+        assert!(messages.try_handle(&mut vm).is_err(), "{words:?}");
+        assert_eq!(vm.pending_system().map(|p| p.1), Some(0x100));
+        assert_eq!(vm.stack().len_bytes(), bytes);
+        assert_eq!(vm.state().system_integer(0), Some(9));
+        assert_eq!(messages.text(3).cloned(), before);
+        assert_eq!(messages.font_present(3), window);
+    }
+}
+
 /// A PS2A image whose text segment holds `text`, for 0x211e string references.
 fn script_with_text(code: &[u8], text: &[u8]) -> Script {
     let mut payload = 0u32.to_le_bytes().to_vec();

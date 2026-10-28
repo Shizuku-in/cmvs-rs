@@ -9,8 +9,8 @@
 //! modeled, so it stays unhandled. 0x215b and 0x2142..0x2149 set window and text object
 //! fields; 0x2170/0x2171, 0x2178..0x217b, 0x217f and 0x2180..0x2185 drive the window's own
 //! scene object; 0x2190..0x2192 fill its 32 button records and 0x2150 moves the window;
-//! 0x21cf/0x21d0 build frame animations. 0x2114..0x2117 and 0x211e address text objects
-//! directly. Glyph records and font/layout metadata live in core; font rasterization
+//! 0x21cf/0x21d0 build frame animations. 0x2100 creates a text object without a window;
+//! 0x2114..0x2117 and 0x211e address text objects directly. Glyph records and font/layout metadata live in core; font rasterization
 //! belongs to the desktop backend.
 use crate::{
     bytecode::DecodeError,
@@ -267,6 +267,7 @@ impl MessageHost {
             Some((pc, command @ (0x114..=0x117 | 0x11e))) => {
                 self.text_command(vm, pc, command).map(|()| true)
             }
+            Some((pc, 0x100)) => self.create_text(vm, pc).map(|()| true),
             _ => Ok(false),
         }
     }
@@ -483,6 +484,90 @@ impl MessageHost {
             0x117 => text.ruby_every_line = value != 0,
             _ => text.line_break = rules,
         }
+        Ok(())
+    }
+    /// 0x2100 / 0x140072320: SP-4 text index (signed >= 12 only sets +12056 bit 0x1000),
+    /// SP-8 font face string, SP-12 glyph capacity. It creates the font object if absent,
+    /// then overwrites the +4128 entry with a new text object without freeing the old one
+    /// (0x215d frees it), and writes system integer 0 = created. Returns 0x400c.
+    ///
+    /// Constructor 0x14005c550 without 0x14005d3b0: the memset leaves position, area, pen,
+    /// glyph size and spacing 0; colours 0xffffff, +144 delay 30, +148 shown, +152 layer 1,
+    /// ruby size 12. The logical size (+552/+556) repeats screen info +8/+12, which the
+    /// research viewport stands in for. The face is copied into +44 and selected on the
+    /// font object (0x140059b90); only the default empty face is modeled. The capacity
+    /// (+324) sizes the glyph texture in 0x14005a6a0: 0 and 196 (0x215d's value) both give
+    /// a 1024x2048 texture; other capacities are rejected because textures are not modeled.
+    /// Replacing a text object a window caches (+2528) would leave that window stale.
+    fn create_text(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
+        let word = |distance| {
+            vm.stack()
+                .peek_u32(distance)
+                .map_err(|e| error(pc, 0x2100, e.0))
+        };
+        let index = word(4)? as i32;
+        if index < 0 {
+            return Err(error(
+                pc,
+                0x2100,
+                "negative text object index indexes before the table",
+            ));
+        }
+        let index = index as usize;
+        if index >= TEXT_OBJECTS {
+            return Err(error(
+                pc,
+                0x2100,
+                "text object index outside 0..11 sets an unmodeled flag",
+            ));
+        }
+        if !vm.resolve_string(word(8)?)?.is_empty() {
+            return Err(error(pc, 0x2100, "font face selection is not modeled"));
+        }
+        if !matches!(word(12)?, 0 | 196) {
+            return Err(error(
+                pc,
+                0x2100,
+                "glyph texture capacity other than 0 or 196 is not modeled",
+            ));
+        }
+        if (0..MESSAGE_WINDOWS).any(|slot| self.window(slot).is_some_and(|w| w.text == index)) {
+            return Err(error(
+                pc,
+                0x2100,
+                "replacing a text object a window uses leaves a dangling pointer",
+            ));
+        }
+        vm.complete_system(SystemResult(0x400c))?;
+        vm.state_mut()
+            .set_system_integer(0, 1)
+            .expect("slot 0 exists");
+        self.fonts[index] = true;
+        self.texts[index] = Some(TextObject {
+            scale_bits: 1.0f32.to_bits(),
+            logical_size: RESEARCH_SCREEN.map(|v| v as i32),
+            position: [0, 0],
+            area: [0; 4],
+            cursor: [0, 0],
+            ruby_lines: [0; 32],
+            layout_scratch: [0; 2],
+            glyphs: Vec::new(),
+            glyph_size: 0,
+            spacing: [0, 0],
+            color: 0xff_ffff,
+            decoration_color: 0xff_ffff,
+            glyph_parameter: 0,
+            decoration: 0,
+            reveal: [0, 0],
+            char_delay: 30,
+            layer: 1,
+            visible: true,
+            ruby: false,
+            ruby_every_line: false,
+            ruby_size: 12,
+            ruby_spacing: 0,
+            line_break: None,
+        });
         Ok(())
     }
     /// 0x21cf / 0x140078210 and 0x21d0 / 0x140078280: SP-4 window slot, SP-8 child selected
