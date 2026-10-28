@@ -306,6 +306,103 @@ fn stop_reaches_the_device_even_with_se_disabled_and_untouched_records() {
 }
 
 #[test]
+fn stop_all_clears_only_names_in_order_even_with_se_disabled() {
+    for enabled in [false, true] {
+        let mut host = AudioHost::new(AudioSettings {
+            se_enabled: enabled,
+            ..AudioSettings::default()
+        });
+        let setup = script(&[(0, 0, 64, 1, 1), (4, 0, 128, 0, 1)], b"loop.ogg\0");
+        let mut vm = Machine::new(&setup).unwrap();
+        for _ in 0..2 {
+            pending(&mut vm);
+            host.try_handle(&mut vm, &mut Started).unwrap();
+        }
+        let before: Vec<_> = (0..6)
+            .map(|i| host.channel(i).cloned().unwrap_or_default())
+            .collect();
+        let mut code = vec![];
+        push(&mut code, 0x12345678);
+        code.extend(0x20b5u16.to_le_bytes());
+        code.extend(0x20b5u16.to_le_bytes());
+        let script = program(&code, b"");
+        let mut vm = Machine::new(&script).unwrap();
+        for slot in 0..7 {
+            vm.state_mut().set_system_integer(slot, 100 + slot).unwrap();
+        }
+        let mut backend = RecordingAudio::default();
+        for _ in 0..2 {
+            pending(&mut vm);
+            let pc = vm.pc();
+            host.try_handle(&mut vm, &mut backend).unwrap();
+            assert_eq!(vm.pc(), pc + 2);
+            assert_eq!(vm.stack().len_bytes(), 4);
+            assert_eq!(vm.stack().peek_u32(4).unwrap(), 0x12345678);
+            for slot in 0..7 {
+                assert_eq!(vm.state().system_integer(slot), Some(100 + slot));
+            }
+            for (i, old) in before.iter().enumerate() {
+                let mut expected = old.clone();
+                expected.name.clear();
+                assert_eq!(host.channel(i), Some(&expected));
+            }
+        }
+        let expected: Vec<_> = (0..6)
+            .cycle()
+            .take(12)
+            .map(|channel| AudioRequest::StopSe { channel })
+            .collect();
+        assert_eq!(backend.requests(), expected);
+    }
+}
+
+#[test]
+fn stop_all_failure_keeps_successful_prefix_and_retries_pending_command() {
+    struct FailsAtThree(Vec<u8>);
+    impl AudioBackend for FailsAtThree {
+        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+            unreachable!()
+        }
+        fn stop(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
+            if channel == 3 {
+                return Err("synthetic stop failure".into());
+            }
+            self.0.push(channel);
+            Ok(())
+        }
+    }
+    let setup = script(&[(1, 0, 64, 1, 1), (3, 0, 128, 0, 1)], b"loop.ogg\0");
+    let mut host = AudioHost::default();
+    let mut vm = Machine::new(&setup).unwrap();
+    for _ in 0..2 {
+        pending(&mut vm);
+        host.try_handle(&mut vm, &mut Started).unwrap();
+    }
+    let failed_before = host.channel(3).cloned();
+    let script = program(&0x20b5u16.to_le_bytes(), b"");
+    let mut vm = Machine::new(&script).unwrap();
+    pending(&mut vm);
+    let pending_command = vm.pending_system();
+    let mut backend = FailsAtThree(vec![]);
+    assert!(host.try_handle(&mut vm, &mut backend).is_err());
+    assert_eq!(backend.0, [0, 1, 2]);
+    assert_eq!(vm.pending_system(), pending_command);
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), None);
+    assert!(host.channel(1).unwrap().name.is_empty());
+    assert!(host.channel(1).unwrap().flag);
+    assert_eq!(host.channel(3), failed_before.as_ref());
+    assert!(host.channel(4).is_none());
+    assert!(host.channel(5).is_none());
+    let mut backend = RecordingAudio::default();
+    host.try_handle(&mut vm, &mut backend).unwrap();
+    assert_eq!(vm.pending_system(), None);
+    assert_eq!(backend.requests().len(), 6);
+    assert!((0..6).all(|i| host.channel(i).unwrap().name.is_empty()));
+    assert!(host.channel(3).unwrap().flag);
+}
+
+#[test]
 fn stop_backend_failure_and_invalid_channels_keep_the_command_pending() {
     let script = script(&[(1, 0, 0, 0, 1)], b"a.ogg\0");
     let mut vm = Machine::new(&script).unwrap();

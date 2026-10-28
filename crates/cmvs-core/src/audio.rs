@@ -319,6 +319,7 @@ impl AudioHost {
             Some((_, 0xa6)) => return self.try_voice_play(vm, backend),
             Some((_, 0xb1)) => return self.try_start(vm, backend),
             Some((_, 0xb3)) => return self.try_stop(vm, backend),
+            Some((_, 0xb5)) => return self.try_stop_all(vm, backend),
             Some((_, 0xb6)) => return self.try_fade_out(vm, backend),
             Some((_, 0xa0 | 0xa4)) => return self.try_bgm(vm, backend),
             Some((_, 0xa2)) => return self.try_bgm_fade_out(vm, backend),
@@ -495,6 +496,23 @@ impl AudioHost {
         let record = self.channels[channel as usize].get_or_insert_with(SeChannel::default);
         record.name.clear();
         record.flag = false;
+        Ok(true)
+    }
+
+    /// 0x20b5 / 0x140071090: stop all six SE channels, clearing only their names.
+    /// No SE_USE check, arguments, or result write; returns 0x4000. Each successful
+    /// stop commits its name clear; a backend failure preserves that prefix and the
+    /// pending VM command. Retrying safely stops the already empty channels again.
+    fn try_stop_all(
+        &mut self,
+        vm: &mut Machine<'_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<bool, Box<dyn Error>> {
+        for (channel, record) in self.channels.iter_mut().enumerate() {
+            backend.stop(channel as u8)?;
+            record.get_or_insert_with(SeChannel::default).name.clear();
+        }
+        vm.complete_system(SystemResult(0x4000))?;
         Ok(true)
     }
 
