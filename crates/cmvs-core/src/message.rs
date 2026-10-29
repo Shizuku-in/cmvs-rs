@@ -23,6 +23,7 @@ use crate::{
 };
 use std::error::Error;
 mod auxiliary;
+mod auxiliary_motion;
 mod measure;
 mod output;
 mod wait;
@@ -168,6 +169,7 @@ pub struct MessageHost {
     /// Independent engine +4328 text lists and +4392 persistent font objects.
     auxiliary_texts: [Option<AuxiliaryText>; AUXILIARY_TEXTS],
     auxiliary_fonts: [bool; AUXILIARY_TEXTS],
+    auxiliary_clock: u32,
 }
 
 impl MessageHost {
@@ -256,6 +258,9 @@ impl MessageHost {
         Ok(true)
     }
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
+        if self.try_auxiliary_motion(vm)? {
+            return Ok(true);
+        }
         if let Some((pc, 0x380)) = vm.pending_system() {
             return self.create_auxiliary_text(vm, pc).map(|()| true);
         }

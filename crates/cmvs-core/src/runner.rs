@@ -261,6 +261,8 @@ impl<'a> Startup<'a> {
         )?;
         self.scene.advance_frame(delta_ms);
         self.messages.advance_frame(delta_ms);
+        self.messages
+            .advance_auxiliary_motion(delta_ms, &mut self.scene)?;
         self.camera.advance_frame(delta_ms);
         self.frame_delta = delta_ms;
         self.take_capture()
@@ -326,6 +328,8 @@ impl<'a> Startup<'a> {
         )?;
         self.scene.advance_frame(delta_ms);
         self.messages.advance_frame(delta_ms);
+        self.messages
+            .advance_auxiliary_motion(delta_ms, &mut self.scene)?;
         self.movies.advance(delta_ms);
         self.camera.advance_frame(delta_ms);
         self.frame_delta = delta_ms;
@@ -614,6 +618,11 @@ impl<'a> Startup<'a> {
             )?
             || self.save_title.try_handle(&mut self.machine)?
             || self.save_info.try_handle(&mut self.machine)?
+            || self.gesture.try_handle_drag_press(
+                &mut self.machine,
+                &self.input,
+                self.timers.clock(),
+            )?
             || self.gesture.try_handle(&mut self.machine)?
             || self.save_menu.try_handle_popup(&mut self.machine)?
             || self.message_flags.try_handle(&mut self.machine)?

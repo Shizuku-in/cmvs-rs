@@ -19,6 +19,16 @@ pub struct AuxiliaryGlyphAtlas {
     pub initial_clear_tile: RgbaImage,
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct PositionMotion {
+    pub mode: u32,
+    pub base: [u32; 2],
+    pub target: [u32; 2],
+    pub duration: u32,
+    pub start: u32,
+    pub extra: u32,
+}
+
 impl super::MessageHost {
     /// 0x239d binds +1472. The bound branch of 0x2383 also moves that scene object.
     pub fn try_handle_scene(
@@ -143,9 +153,36 @@ pub struct AuxiliaryText {
     pub secondary_image: Option<ObjectImage>,
     /// +1472: a non-owned scene object moved along with this text group.
     pub associated_scene: Option<u8>,
+    motion: Option<PositionMotion>,
 }
 
 impl AuxiliaryText {
+    pub(super) fn motion(&self) -> Option<&PositionMotion> {
+        self.motion.as_ref()
+    }
+    pub(super) fn start_motion(&mut self, motion: PositionMotion) {
+        for (at, value) in [
+            (368, 1),
+            (372, motion.mode),
+            (376, motion.base[0]),
+            (380, motion.base[1]),
+            (384, motion.target[0]),
+            (388, motion.target[1]),
+            (392, motion.extra),
+            (396, motion.duration),
+            (400, motion.start),
+        ] {
+            self.words.insert(at, value);
+        }
+        self.motion = Some(motion);
+    }
+    pub(super) fn commit_motion_position(&mut self, position: [u32; 2], active: bool) {
+        self.set_position(position[0], position[1]);
+        self.words.insert(368, u32::from(active));
+        if !active {
+            self.motion = None;
+        }
+    }
     /// Known state words only; native pointers and unknown fields are omitted.
     pub fn word(&self, offset: u16) -> Option<u32> {
         self.words.get(&offset).copied()
@@ -316,6 +353,7 @@ impl AuxiliaryText {
             atlas,
             secondary_image: None,
             associated_scene: None,
+            motion: None,
             object: SceneObject {
                 draw: Some(draw),
                 logical_size: RESEARCH_SCREEN,

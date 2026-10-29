@@ -243,3 +243,42 @@ fn flick_query_and_consume_keep_unrelated_results_and_pop_nothing() {
         assert_eq!(vm.state().system_integer(slot), Some(value));
     }
 }
+
+#[test]
+fn drag_press_query_can_force_tracking_without_consuming_the_press() {
+    use cmvs_rs::input::{ActionInput, CodeInput, KeyBindings};
+    let script = script(&[
+        (0x2350, &[1]),
+        (0x2352, &[1]),
+        (0x2356, &[1]),
+        (0x2357, &[1]),
+        (0x2358, &[1]),
+        (0x2364, &[1]),
+        (0x2366, &[0, 1, 0, 0, 100, 100]),
+        (0x2369, &[0]),
+        (0x2369, &[1]),
+    ]);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut gesture = PointerGesture::default();
+    for _ in 0..7 {
+        assert!(run(&mut gesture, &mut vm));
+    }
+    let bindings = KeyBindings::parse("[KEY_FUNCTION_1]\nKEY_DATA_1=1\n").unwrap();
+    let mut codes = CodeInput::default();
+    let mut input = ActionInput::default();
+    let mut down = [false; 128];
+    down[1] = true;
+    codes.update(&bindings, &down, &mut input);
+    input.set_pointer(20, 30);
+    let before = input.clone();
+    for active in [0, 1] {
+        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        assert!(gesture.try_handle_drag_press(&mut vm, &input, 123).unwrap());
+        assert_eq!(vm.state().system_integer(0), Some(1));
+        assert_eq!(gesture.field(120), Some(active));
+        assert_eq!(input, before);
+    }
+    assert_eq!(gesture.field(156), Some(123));
+    assert_eq!(gesture.field(100), Some(20));
+    assert_eq!(gesture.field(104), Some(30));
+}

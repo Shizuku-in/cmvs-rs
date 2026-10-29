@@ -948,3 +948,133 @@ fn auxiliary_position_queries_preserve_result_zero_and_clamp_inverted_bounds_seq
     );
     assert_eq!(vm.stack().len_bytes(), 0);
 }
+
+#[test]
+fn auxiliary_motion_linear_sine_wrap_clock_and_bound_scene_advance_only_per_frame() {
+    for (opcode, args, half) in [
+        (
+            0x239c,
+            vec![7, 100, (-100i32) as u32, 100],
+            [50, (-50i32) as u32],
+        ),
+        (
+            0x239f,
+            vec![7, 1, 100, (-100i32) as u32, 77, 100],
+            [70, (-70i32) as u32],
+        ),
+    ] {
+        let mut code = vec![];
+        for (op, args) in [
+            (0x2020, vec![11]),
+            (0x2040, vec![11]),
+            (0x2380, vec![7, 0, 25, 32]),
+            (0x239d, vec![7, 11]),
+            (
+                0x239a,
+                vec![7, (-1000i32) as u32, 1000, (-1000i32) as u32, 1000],
+            ),
+        ] {
+            call(&mut code, op, &args);
+        }
+        call(&mut code, opcode, &args);
+        call(&mut code, 0x239b, &[7]);
+        let script = script(&code, b"\0");
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        let mut scene = cmvs_rs::scene::SceneHost::default();
+        messages
+            .advance_auxiliary_motion(u32::MAX, &mut scene)
+            .unwrap();
+        for _ in 0..6 {
+            pending(&mut vm);
+            assert!(
+                scene.try_handle(&mut vm).unwrap()
+                    || messages.try_handle_scene(&mut vm, &mut scene).unwrap()
+                    || messages.try_handle(&mut vm).unwrap()
+            );
+        }
+        assert_eq!(
+            messages.auxiliary_text(7).unwrap().word(400),
+            Some(u32::MAX)
+        );
+        assert_eq!(messages.auxiliary_text(7).unwrap().word(368), Some(1));
+        assert_eq!(messages.auxiliary_text(7).unwrap().word(8), Some(0));
+        messages.advance_auxiliary_motion(50, &mut scene).unwrap();
+        assert_eq!(
+            &scene.object(11).unwrap().draw.as_ref().unwrap().words[8..10],
+            &half
+        );
+        run(&mut vm, &mut messages);
+        assert_eq!(vm.state().system_integer(0), Some(1));
+        messages.advance_auxiliary_motion(50, &mut scene).unwrap();
+        assert_eq!(
+            &scene.object(11).unwrap().draw.as_ref().unwrap().words[8..10],
+            &[100, (-100i32) as u32]
+        );
+        assert_eq!(messages.auxiliary_text(7).unwrap().word(368), Some(0));
+        messages.advance_auxiliary_motion(1000, &mut scene).unwrap();
+        assert_eq!(
+            &scene.object(11).unwrap().draw.as_ref().unwrap().words[8..10],
+            &[100, (-100i32) as u32]
+        );
+    }
+}
+
+#[test]
+fn auxiliary_motion_clamps_stops_and_rejects_unknown_mode_without_changing_command() {
+    let mut code = vec![];
+    call(&mut code, 0x2380, &[0, 0, 25, 32]);
+    call(&mut code, 0x239a, &[0, 0, 10, 0, 0]);
+    call(&mut code, 0x239c, &[0, 100, 0, 100]);
+    call(&mut code, 0x239c, &[0, 1, 0, 100]);
+    call(&mut code, 0x239f, &[0, 2, 0, 0, 0, 100]);
+    let script = script(&code, b"\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    let mut scene = cmvs_rs::scene::SceneHost::default();
+    for _ in 0..3 {
+        run(&mut vm, &mut messages);
+    }
+    messages.advance_auxiliary_motion(50, &mut scene).unwrap();
+    assert_eq!(
+        messages.auxiliary_text(0).unwrap().word(8),
+        Some(10f32.to_bits())
+    );
+    assert_eq!(messages.auxiliary_text(0).unwrap().word(368), Some(0));
+    let before = messages.auxiliary_text(0).unwrap().clone();
+    run(&mut vm, &mut messages);
+    assert_eq!(
+        messages.auxiliary_text(0).unwrap().word(400),
+        before.word(400)
+    );
+    pending(&mut vm);
+    let pc = vm.pc();
+    let sp = vm.stack().len_bytes();
+    assert!(messages.try_handle(&mut vm).is_err());
+    assert_eq!(vm.pc(), pc);
+    assert_eq!(vm.stack().len_bytes(), sp);
+    assert_eq!(messages.auxiliary_text(0).unwrap().word(368), Some(0));
+}
+
+#[test]
+fn inverted_motion_bounds_stop_even_when_sequential_clamping_restores_same_position() {
+    let mut code = vec![];
+    call(&mut code, 0x2380, &[0, 0, 25, 32]);
+    call(&mut code, 0x2383, &[0, 50, 0]);
+    call(&mut code, 0x239a, &[0, 100, 50, 0, 0]);
+    call(&mut code, 0x239c, &[0, 0, 0, 100]);
+    let script = script(&code, b"\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    for _ in 0..4 {
+        run(&mut vm, &mut messages);
+    }
+    messages
+        .advance_auxiliary_motion(10, &mut cmvs_rs::scene::SceneHost::default())
+        .unwrap();
+    assert_eq!(
+        messages.auxiliary_text(0).unwrap().word(8),
+        Some(50f32.to_bits())
+    );
+    assert_eq!(messages.auxiliary_text(0).unwrap().word(368), Some(0));
+}

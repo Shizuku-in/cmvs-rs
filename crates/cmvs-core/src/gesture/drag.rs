@@ -3,6 +3,69 @@ use super::{HELD, LEFT, PRESSED, PointerGesture, RELEASED};
 use crate::input::ActionInput;
 
 impl PointerGesture {
+    /// 0x2369 / 0x1400537a0: a new left press in a configured region can
+    /// immediately establish a drag while interrupting auxiliary inertia.
+    pub fn try_handle_drag_press(
+        &mut self,
+        vm: &mut crate::machine::Machine<'_>,
+        input: &ActionInput,
+        now: u32,
+    ) -> Result<bool, crate::bytecode::DecodeError> {
+        let Some((pc, 0x369)) = vm.pending_system() else {
+            return Ok(false);
+        };
+        let force = vm
+            .stack()
+            .peek_u32(4)
+            .map_err(|e| crate::evaluate::error(pc, 0x2369, e.0))?
+            != 0;
+        let [x, y] = input.pointer();
+        let hit = self.get(4) == 1
+            && input.mouse(LEFT)[PRESSED]
+            && (0..6).any(|slot| {
+                let base = 188 + slot * 20;
+                let [left, top, w, h] = [4, 8, 12, 16].map(|d| self.get(base + d));
+                self.get(base) != 0
+                    && x >= left
+                    && y >= top
+                    && x < left.wrapping_add(w)
+                    && y < top.wrapping_add(h)
+            });
+        vm.complete_system(crate::vm::SystemResult(0x4004))?;
+        if hit
+            && force
+            && self.get(120) == 0
+            && [0, 8, 12, 16, 20].into_iter().all(|at| self.get(at) != 0)
+        {
+            for (at, value) in [
+                (56, x),
+                (60, y),
+                (100, x),
+                (104, y),
+                (132, x),
+                (136, y),
+                (140, x),
+                (144, y),
+                (148, x),
+                (152, y),
+                (156, now as i32),
+                (160, now as i32),
+                (44, -1),
+                (172, -1),
+                (124, 0),
+                (128, 0),
+                (48, 1),
+                (120, 1),
+            ] {
+                self.set(at, value);
+            }
+        }
+        vm.state_mut()
+            .set_system_integer(0, u32::from(hit))
+            .expect("result exists");
+        Ok(true)
+    }
+
     pub(super) fn frame_drag(&mut self, input: &mut ActionInput, now: u32) {
         self.set(80, 0);
         self.set(88, -1);
