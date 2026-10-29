@@ -86,6 +86,8 @@ impl ObjectImage {
 pub struct SceneObject {
     /// None until 0x2030 loads an image; a quiet decode failure also leaves it empty.
     pub image: Option<ObjectImage>,
+    /// +6184: second texture loaded by 0x2035, separate from the main image.
+    pub secondary_image: Option<ObjectImage>,
     /// 768 child pointers at +8, addressed by 0x2022/0x2038/0x2050.
     pub children: BTreeMap<u16, SceneObject>,
     /// +6192, initialized by 0x14001ee40: the first 88 bytes and the modeled later fields.
@@ -156,6 +158,7 @@ impl Default for SceneObject {
     fn default() -> Self {
         Self {
             image: None,
+            secondary_image: None,
             children: BTreeMap::new(),
             draw: None,
             flags: 0x7fff_ffff,
@@ -175,6 +178,8 @@ impl Default for SceneObject {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DrawState {
     pub words: [u32; 22],
+    /// +88: second-texture mapping mode, set by 0x2321.
+    pub texture_mode: u32,
     /// +108 (0x2075; constructor 0): raw float bits added to world Z for the projected
     /// queue key only (0x14001f360). 0x22c4 copies it with +88..+104 (0x14001f520).
     pub depth_bias: u32,
@@ -199,6 +204,7 @@ impl Default for DrawState {
         words[21] = 256;
         Self {
             words,
+            texture_mode: 0,
             depth_bias: 0,
             scale_motion: None,
             opacity_track: None,
@@ -309,7 +315,7 @@ impl SceneHost {
         }
         if matches!(
             command,
-            0x22 | 0x2d | 0x40 | 0x42..=0x4c | 0x50 | 0x70..=0x75
+            0x22 | 0x2d | 0x40 | 0x42..=0x4c | 0x50 | 0x70..=0x75 | 0x321
         ) {
             return self.handle_object(vm, pc, command);
         }
@@ -523,7 +529,7 @@ impl SceneHost {
             0x43 => 5,
             0x44 => 6,
             0x45 | 0x46 | 0x49 => 4,
-            0x47 | 0x48 | 0x4a..=0x4c | 0x70..=0x75 => 3,
+            0x47 | 0x48 | 0x4a..=0x4c | 0x70..=0x75 | 0x321 => 3,
             _ => unreachable!(),
         };
         let mut args = Vec::with_capacity(count);
@@ -536,7 +542,7 @@ impl SceneHost {
             .get(&slot)
             .ok_or_else(|| fail("object slot does not exist"))?;
         let child = if command == 0x40
-            || (matches!(command, 0x2d | 0x42..=0x4c | 0x70..=0x75) && (args[1] as i32) < 0)
+            || (matches!(command, 0x2d | 0x42..=0x4c | 0x70..=0x75 | 0x321) && (args[1] as i32) < 0)
         {
             None
         } else {
@@ -555,7 +561,7 @@ impl SceneHost {
                     .ok_or_else(|| fail("child object does not exist"))?,
                 None => parent,
             };
-            if matches!(command, 0x42..=0x4c | 0x70..=0x75) && object.draw.is_none() {
+            if matches!(command, 0x42..=0x4c | 0x70..=0x75 | 0x321) && object.draw.is_none() {
                 return Err(fail("object has no draw state"));
             }
         }
@@ -595,6 +601,7 @@ impl SceneHost {
                 // 0x2042 / 0x14006d130 -> 0x14003b190 -> 0x14001f550:
                 // set the existing draw state's coordinate mode without rebuilding it.
                 0x42 => object.draw.as_mut().expect("validated").words[0] = 2,
+                0x321 => object.draw.as_mut().expect("validated").texture_mode = args[2],
                 // 0x14006d220 -> 0x14003b150 -> 0x14001f3b0. Retain the image,
                 // origin and animation tracks; only reset the source and fill fields.
                 0x43 => {
@@ -672,7 +679,7 @@ impl SceneHost {
             vm.complete_system(SystemResult(0x4000))?;
             return Ok(true);
         }
-        let Some((pc, command @ (0x30 | 0x38 | 0x3b))) = vm.pending_system() else {
+        let Some((pc, command @ (0x30 | 0x35 | 0x38 | 0x3b))) = vm.pending_system() else {
             return Ok(false);
         };
         let fail = |why| error(pc, command + 0x2000, why);
@@ -713,6 +720,23 @@ impl SceneHost {
             None
         };
         let name = vm.resolve_string(raw_name)?;
+        if command == 0x35 {
+            let first = vm.stack().peek_u32(12).map_err(|e| fail(e.0))?;
+            let second = vm.stack().peek_u32(16).map_err(|e| fail(e.0))?;
+            if first != 0 || second != 0 {
+                return Err(fail("second texture nonzero load flags are not verified").into());
+            }
+            let decoded = load_image(images, name, pc, 0x2035)?;
+            vm.complete_system(SystemResult(0x4010))?;
+            vm.state_mut()
+                .set_system_integer(0, u32::from(decoded.is_some()))
+                .expect("slot 0 exists");
+            self.objects
+                .get_mut(&slot)
+                .expect("validated")
+                .secondary_image = decoded;
+            return Ok(true);
+        }
         let mut decoded = load_image(images, name, pc, command + 0x2000)?;
         if let Some(filter) = filter
             && let Some(image) = decoded.as_mut()

@@ -1387,3 +1387,50 @@ fn subqueue_flag_invalid_targets_and_missing_parameters_are_transactional() {
         }
     }
 }
+
+#[test]
+fn second_texture_mode_preserves_draw_state_and_targets_parent_or_child() {
+    let mut code = vec![];
+    for (op, args) in [
+        (0x2020, vec![7]),
+        (0x2040, vec![7]),
+        (0x2022, vec![7, 2]),
+        (0x2050, vec![7, 2]),
+        (0x2321, vec![7, u32::MAX, 4]),
+        (0x2321, vec![7, 2, u32::MAX]),
+    ] {
+        command(&mut code, op, &args);
+    }
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut scene = SceneHost::default();
+    for _ in 0..4 {
+        pending(&mut vm);
+        scene.try_handle(&mut vm).unwrap();
+    }
+    let before = scene.object(7).unwrap().clone();
+    for i in 0..7 {
+        vm.state_mut().set_system_integer(i, 44 + i).unwrap();
+    }
+    for (child, value) in [(None, 4), (Some(2), u32::MAX)] {
+        pending(&mut vm);
+        let pc = vm.pc();
+        assert!(scene.try_handle(&mut vm).unwrap());
+        let parent = scene.object(7).unwrap();
+        let object = child.map_or(parent, |id| parent.children.get(&id).unwrap());
+        assert_eq!(object.draw.as_ref().unwrap().texture_mode, value);
+        assert_eq!(
+            object.draw.as_ref().unwrap().words,
+            before.draw.as_ref().unwrap().words
+        );
+        assert_eq!(vm.pc(), pc + 2);
+        assert_eq!(vm.stack().len_bytes(), 0);
+        for i in 0..7 {
+            assert_eq!(vm.state().system_integer(i), Some(44 + i));
+        }
+    }
+    assert_eq!(
+        scene.object(7).unwrap().draw.as_ref().unwrap().texture_mode,
+        4
+    );
+}

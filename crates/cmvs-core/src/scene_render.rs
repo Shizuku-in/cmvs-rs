@@ -19,6 +19,7 @@ enum Layer<'a> {
         alpha: u32,
         /// The mask transition shading this slot object (not its children).
         mask: Option<&'a MaskTransition>,
+        screen_mask: Option<&'a ObjectImage>,
         blend: Blend,
     },
     /// A projected or scaled 2D image, sampled over a device-space quad.
@@ -223,6 +224,7 @@ fn image_layer<'a>(
         ],
         alpha: alpha.min(255) as u32,
         mask,
+        screen_mask: None,
         blend: blend(words, image, alpha, mask.is_some())?,
     }))
 }
@@ -398,6 +400,11 @@ fn projected_layer<'a>(
     draw: &DrawState,
     parent: Option<&'a SceneObject>,
 ) -> Result<Option<(f32, Layer<'a>)>, FormatError> {
+    if object.secondary_image.is_some() {
+        return Err(FormatError(
+            "projected second texture rendering is not verified",
+        ));
+    }
     let cameras = cameras.ok_or(FormatError("camera projection needs the camera state"))?;
     let words = &draw.words;
     let camera = cameras
@@ -559,6 +566,7 @@ fn shifted(layer: Layer<'_>, by: [i64; 2]) -> Layer<'_> {
             corner,
             alpha,
             mask,
+            screen_mask,
             blend,
         } => Layer::Image {
             image,
@@ -566,6 +574,7 @@ fn shifted(layer: Layer<'_>, by: [i64; 2]) -> Layer<'_> {
             corner: [corner[0] + by[0], corner[1] + by[1]],
             alpha,
             mask,
+            screen_mask,
             blend,
         },
         Layer::Projected {
@@ -673,6 +682,11 @@ pub fn render_scene(
             continue;
         };
         unit_screen_scale(object)?;
+        if object.secondary_image.is_some() && matches!(draw.words[0], 2 | 3) {
+            return Err(FormatError(
+                "projected second texture rendering is not verified",
+            ));
+        }
         let d = &draw.words;
         // 0x1400526b0 offsets slot objects as queue layer 0 and the backend's windows and
         // glyphs as layer 1; 0x14003b420 applies it only with the top-level object's +6248
@@ -761,6 +775,8 @@ pub fn render_scene(
                 i64::from((d[17].wrapping_mul(d[21]) as i32) >> 8),
             )?,
         }
+        .map(|layer| screen_mask(layer, object))
+        .transpose()?
         .map(|layer| shifted(layer, by));
         let mut entry = Entry {
             order: order(d),
@@ -789,7 +805,7 @@ pub fn render_scene(
                 let Some(layer) = child_layer(object, d, child, words)? else {
                     continue;
                 };
-                let layer = shifted(layer, by);
+                let layer = shifted(screen_mask(layer, child)?, by);
                 if child.flags & 2 != 0 {
                     entry.children.push((order(words), layer));
                 } else {
@@ -1022,16 +1038,47 @@ fn draw_rotated(
     }
 }
 
+/// 0x140020340 mode 4 maps the second texture over the device viewport.
+/// 0x140030a70 copies its green channel into texture alpha; RGB stays primary.
+fn screen_mask<'a>(
+    mut layer: Layer<'a>,
+    object: &'a SceneObject,
+) -> Result<Layer<'a>, FormatError> {
+    if let Some(texture) = &object.secondary_image {
+        if object.draw.as_ref().is_none_or(|d| d.texture_mode != 4) {
+            return Err(FormatError("second texture mapping mode is not verified"));
+        }
+        match &mut layer {
+            Layer::Image {
+                screen_mask,
+                mask,
+                blend,
+                ..
+            } if mask.is_none() => {
+                *screen_mask = Some(texture);
+                *blend = Blend::Alpha;
+            }
+            _ => {
+                return Err(FormatError(
+                    "second texture on transformed or masked object is not verified",
+                ));
+            }
+        }
+    }
+    Ok(layer)
+}
+
 fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
-    let (image, [sx, sy, w, h], [left, top], opacity, mask, blend) = match layer {
+    let (image, [sx, sy, w, h], [left, top], opacity, mask, screen_mask, blend) = match layer {
         Layer::Image {
             image,
             rect,
             corner,
             alpha,
             mask,
+            screen_mask,
             blend,
-        } => (image, rect, corner, alpha, mask, blend),
+        } => (image, rect, corner, alpha, mask, screen_mask, blend),
         Layer::Projected {
             image,
             rect,
@@ -1094,6 +1141,11 @@ fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
             if let Some((texture, coverage)) = &shade {
                 // Same size and coordinates as the image, so the same texel.
                 alpha = (alpha as f32 * coverage[usize::from(texture[src + 1])]).round() as u32;
+            }
+            if let Some(texture) = screen_mask {
+                let tx = x as f32 * texture.pixels.width() as f32 / width as f32 - 0.5;
+                let ty = y as f32 * texture.pixels.height() as f32 / height as f32 - 0.5;
+                alpha = (alpha * u32::from(bilinear(texture, tx, ty)[1]) + 127) / 255;
             }
             put(&mut pixels[dst..dst + 3], [p[0], p[1], p[2]], alpha, blend);
         }

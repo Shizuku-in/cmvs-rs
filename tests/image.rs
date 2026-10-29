@@ -1895,3 +1895,88 @@ fn auxiliary_second_texture_errors_preserve_pending_command_and_previous_texture
         }
     }
 }
+
+#[test]
+fn second_texture_load_and_screen_mapping_use_green_as_alpha() {
+    let mut code = loads(11, &[0]);
+    scene_command(&mut code, 0x2040, &[11]);
+    scene_command(&mut code, 0x2044, &[11, u32::MAX, 0, 0, 2, 1]);
+    scene_command(&mut code, 0x2035, &[11, 6, 0, 0]);
+    scene_command(&mut code, 0x2321, &[11, u32::MAX, 4]);
+    let script = script(&code, b"a.pb3\0m.pb3\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut scene = SceneHost::default();
+    let mut files = Files::default();
+    files.0.insert(
+        b"a.pb3".to_vec(),
+        pb3(1, &[[255, 255], [255, 255], [255, 255]]),
+    );
+    files.0.insert(
+        b"m.pb3".to_vec(),
+        pb3(1, &[[255, 255], [0, 255], [255, 255]]),
+    );
+    for _ in 0..6 {
+        let cmd = run_to_system(&mut vm);
+        if matches!(cmd, 0x30 | 0x35) {
+            assert!(scene.try_handle_image(&mut vm, &mut files).unwrap());
+        } else {
+            assert!(scene.try_handle(&mut vm).unwrap());
+        }
+    }
+    assert_eq!(
+        scene
+            .object(11)
+            .unwrap()
+            .draw
+            .as_ref()
+            .unwrap()
+            .texture_mode,
+        4
+    );
+    assert_eq!(
+        scene
+            .object(11)
+            .unwrap()
+            .secondary_image
+            .as_ref()
+            .unwrap()
+            .name,
+        b"m.pb3"
+    );
+    let frame = cmvs_rs::scene_render::render(&scene, 2, 1).unwrap();
+    assert_eq!(frame.pixels(), &[0, 0, 0, 255, 128, 128, 128, 255]);
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(1));
+}
+
+#[test]
+fn second_texture_bad_flags_and_invalid_slots_preserve_main_image_and_pending_command() {
+    for (slot, first, second) in [
+        (11, 1, 0),
+        (11, 0, 1),
+        (12, 0, 0),
+        (256, 0, 0),
+        (u32::MAX, 0, 0),
+    ] {
+        let mut code = loads(11, &[0]);
+        scene_command(&mut code, 0x2035, &[slot, 0, first, second]);
+        let script = script(&code, b"a.pb3\0");
+        let mut vm = Machine::new(&script).unwrap();
+        let mut scene = SceneHost::default();
+        let mut files = Files::default();
+        files.0.insert(b"a.pb3".to_vec(), opaque());
+        run_to_system(&mut vm);
+        scene.try_handle(&mut vm).unwrap();
+        run_to_system(&mut vm);
+        scene.try_handle_image(&mut vm, &mut files).unwrap();
+        let before = scene.object(11).unwrap().clone();
+        run_to_system(&mut vm);
+        let pc = vm.pc();
+        let sp = vm.stack().len_bytes();
+        assert!(scene.try_handle_image(&mut vm, &mut files).is_err());
+        assert_eq!(scene.object(11), Some(&before));
+        assert_eq!(vm.pc(), pc);
+        assert_eq!(vm.stack().len_bytes(), sp);
+        assert_eq!(vm.pending_system(), Some((pc, 0x35)));
+    }
+}

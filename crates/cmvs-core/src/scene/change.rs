@@ -251,6 +251,11 @@ impl SceneHost {
         let Some(old) = self.objects.get(&slot) else {
             return Ok(None);
         };
+        if old.secondary_image.is_some() {
+            return Err(
+                fail("replacement of an object with a second texture is not verified").into(),
+            );
+        }
         let old_image = old
             .image
             .as_ref()
@@ -269,6 +274,7 @@ impl SceneHost {
         let mut draw = DrawState {
             words: old_draw.words,
             depth_bias: old_draw.depth_bias,
+            texture_mode: old_draw.texture_mode,
             scale_motion: None,
             opacity_track: None,
             animation: None,
@@ -282,6 +288,7 @@ impl SceneHost {
             let mut common_draw = DrawState {
                 words: old_draw.words,
                 depth_bias: old_draw.depth_bias,
+                texture_mode: old_draw.texture_mode,
                 scale_motion: None,
                 opacity_track: None,
                 animation: None,
