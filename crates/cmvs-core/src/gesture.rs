@@ -7,6 +7,7 @@ use crate::{
     bytecode::DecodeError, evaluate::error, input::ActionInput, machine::Machine, vm::SystemResult,
 };
 use std::collections::BTreeMap;
+mod drag;
 
 /// Tracking fields reset by every setter that shares the tail of 0x1400548e0.
 const RESET_MINUS_ONE: [u16; 3] = [44, 88, 172];
@@ -22,9 +23,18 @@ impl Default for PointerGesture {
     /// (distance threshold), +36 = 90, +96 = 700 (hold time), +112 = 1500 (rest time);
     /// the memset leaves the anchors +56..+68 and +100/+104 zero.
     fn default() -> Self {
-        let mut fields = BTreeMap::from([(32, 64), (36, 90), (96, 700), (112, 1500)]);
+        let mut fields = BTreeMap::from([
+            (32, 64),
+            (36, 90),
+            (40, 4),
+            (96, 700),
+            (112, 1500),
+            (116, 1),
+        ]);
         for offset in [0, 4, 8, 12, 16, 20, 24, 28, 56, 60, 64, 68, 100, 104]
             .into_iter()
+            .chain([176])
+            .chain((124..=168).step_by(4))
             .chain(RESET_ZERO)
             .chain((188..=304).step_by(4))
         {
@@ -178,7 +188,11 @@ impl PointerGesture {
         self.set(44, -1);
         match self.get(4) {
             0 => {}
-            1 | 2 => return Err("pointer gesture modes 1 and 2 are not modeled"),
+            1 => {
+                self.frame_drag(input, now);
+                return Ok(());
+            }
+            2 => return Err("pointer gesture mode 2 is not modeled"),
             _ => return Ok(()),
         }
         let previous = self.get(88);
@@ -279,6 +293,24 @@ impl PointerGesture {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(false);
         };
+        if command == 0x365 {
+            vm.complete_system(SystemResult(0x4000))?;
+            let active = self.get(120) != 0;
+            vm.state_mut()
+                .set_system_integer(0, u32::from(active))
+                .expect("result exists");
+            if active {
+                for (slot, offset) in [(1, 124), (2, 128), (4, 100), (5, 104)] {
+                    vm.state_mut()
+                        .set_system_integer(slot, self.get(offset) as u32)
+                        .expect("result exists");
+                }
+            }
+            vm.state_mut()
+                .set_system_integer(6, self.get(176) as u32)
+                .expect("result exists");
+            return Ok(true);
+        }
         if command == 0x366 {
             // 0x14007fef0 -> 0x1400536d0: six region records at +188, stride 20.
             // The slot comparison is unsigned; out-of-range slots are ignored. This
@@ -512,10 +544,107 @@ mod tests {
         // The two-button chord suppresses hold reports.
         assert_eq!(chord.get(88), -1);
         let mut other = enabled();
-        other.set(4, 1);
+        other.set(4, 2);
         assert!(other.frame(&mut ActionInput::default(), 0).is_err());
         other.set(4, 3);
         assert!(other.frame(&mut ActionInput::default(), 0).is_ok());
         assert_eq!(other.get(44), -1);
+    }
+
+    fn drag() -> PointerGesture {
+        let mut gesture = enabled();
+        gesture.set(4, 1);
+        for (at, value) in [(188, 1), (192, 0), (196, 0), (200, 300), (204, 300)] {
+            gesture.set(at, value);
+        }
+        gesture
+    }
+
+    #[test]
+    fn region_drag_preserves_short_clicks_and_only_starts_on_the_selected_axis() {
+        let mut gesture = drag();
+        gesture.set(116, 1);
+        let mut f = Frames::new();
+        f.step(&mut gesture, &[1], [20, 30], 16);
+        f.step(&mut gesture, &[1], [120, 33], 16);
+        assert_eq!(gesture.get(120), 0);
+        f.step(&mut gesture, &[], [120, 33], 16);
+        assert!(f.input.released(0));
+        assert_eq!((gesture.get(48), gesture.get(120)), (0, 0));
+        f.step(&mut gesture, &[1], [20, 30], 16);
+        f.step(&mut gesture, &[1], [20, 34], 16);
+        assert_eq!(
+            (gesture.get(120), gesture.get(124), gesture.get(128)),
+            (1, 0, 0)
+        );
+        f.step(&mut gesture, &[1], [22, 54], 16);
+        assert_eq!((gesture.get(124), gesture.get(128)), (2, 20));
+        f.step(&mut gesture, &[], [22, 60], 16);
+        assert_eq!(
+            (gesture.get(48), gesture.get(120), gesture.get(172)),
+            (0, 0, 1)
+        );
+        assert_eq!((gesture.get(168), gesture.get(164)), (26, 32));
+        assert!(!f.input.released(0) && !f.input.mouse(LEFT)[RELEASED]);
+    }
+
+    #[test]
+    fn drag_regions_choose_last_match_and_idle_release_invalidates_small_flick() {
+        let mut gesture = drag();
+        gesture.set(116, 0);
+        for (at, value) in [(288, 1), (292, 0), (296, 0), (300, 200), (304, 200)] {
+            gesture.set(at, value);
+        }
+        let mut f = Frames::new();
+        f.step(&mut gesture, &[1], [400, 400], 16);
+        assert_eq!(gesture.get(48), 0);
+        f.step(&mut gesture, &[], [400, 400], 16);
+        f.step(&mut gesture, &[1], [20, 30], 16);
+        assert_eq!(gesture.get(176), 5);
+        f.step(&mut gesture, &[1], [24, 30], 16);
+        f.step(&mut gesture, &[1], [25, 30], 100);
+        f.step(&mut gesture, &[], [25, 30], 16);
+        assert_eq!(gesture.get(172), -1);
+        assert_eq!(gesture.get(168), 0);
+        assert!(!f.input.released(0));
+    }
+
+    #[test]
+    fn drag_query_only_updates_coordinates_when_active_and_always_returns_region() {
+        let code = [0x65, 0x23, 0x65, 0x23];
+        let mut payload = 0u32.to_le_bytes().to_vec();
+        payload.extend(code);
+        let mut raw = b"PS2A".to_vec();
+        for n in [48u32, 0, 0, 1, 4, 0, 0, 0, 0, payload.len() as u32, 0] {
+            raw.extend(n.to_le_bytes());
+        }
+        raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+        let script = crate::ps3::Script::decode(&raw).unwrap();
+        let mut vm = Machine::new(&script).unwrap();
+        let mut gesture = drag();
+        assert_eq!(gesture.get(116), 1);
+        for (at, value) in [(124, -3), (128, 25), (100, 20), (104, 30), (176, 5)] {
+            gesture.set(at, value);
+        }
+        for i in 0..7 {
+            vm.state_mut().set_system_integer(i, 100 + i).unwrap();
+        }
+        for active in [false, true] {
+            gesture.set(120, i32::from(active));
+            assert!(matches!(
+                vm.step().unwrap(),
+                crate::machine::Step::System { .. }
+            ));
+            assert!(gesture.try_handle(&mut vm).unwrap());
+            let expected = if active {
+                [1, (-3i32) as u32, 25, 103, 20, 30, 5]
+            } else {
+                [0, 101, 102, 103, 104, 105, 5]
+            };
+            for (i, value) in expected.into_iter().enumerate() {
+                assert_eq!(vm.state().system_integer(i as u32), Some(value));
+            }
+            assert_eq!(vm.stack().len_bytes(), 0);
+        }
     }
 }

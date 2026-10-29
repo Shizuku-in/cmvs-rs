@@ -250,6 +250,27 @@ impl AuxiliaryText {
         }
     }
 
+    /// 0x14002e6d0: CVTTSS2SI of stored f32 positions, including integer indefinite.
+    pub(super) fn position(&self) -> [u32; 2] {
+        [8, 12].map(|at| {
+            let value = f32::from_bits(self.words[&at]);
+            if !(-2147483648.0..2147483648.0).contains(&value) {
+                i32::MIN as u32
+            } else {
+                (value as i32) as u32
+            }
+        })
+    }
+
+    /// 0x14002eaa0 performs sequential signed lower/upper clamps, even inverted bounds.
+    pub(super) fn clamp_position(&self, x: u32, y: u32) -> [u32; 2] {
+        [(x, 152, 156), (y, 160, 164)].map(|(v, lo, hi)| {
+            (v as i32)
+                .max(self.words[&lo] as i32)
+                .min(self.words[&hi] as i32) as u32
+        })
+    }
+
     pub(super) fn new(glyph_size: u32, capacity: u32) -> Result<Self, FormatError> {
         let atlas = AuxiliaryGlyphAtlas::new(glyph_size, capacity)?;
         let mut words: BTreeMap<_, _> = (8..184)

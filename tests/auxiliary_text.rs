@@ -914,3 +914,37 @@ fn auxiliary_position_bounds_keep_complete_signed_words_and_other_configuration(
     assert_eq!(group.atlas, before.atlas);
     assert_eq!(vm.stack().len_bytes(), 0);
 }
+
+#[test]
+fn auxiliary_position_queries_preserve_result_zero_and_clamp_inverted_bounds_sequentially() {
+    let mut code = vec![];
+    call(&mut code, 0x2380, &[0, 0, 25, 32]);
+    call(&mut code, 0x2383, &[0, i32::MAX as u32, (-17i32) as u32]);
+    call(&mut code, 0x2398, &[0]);
+    call(&mut code, 0x239a, &[0, 100, 50, (-100i32) as u32, 100]);
+    call(&mut code, 0x239e, &[0, 0, (-200i32) as u32]);
+    let script = script(&code, b"\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    for _ in 0..2 {
+        run(&mut vm, &mut messages);
+    }
+    for i in 0..7 {
+        vm.state_mut().set_system_integer(i, 120 + i).unwrap();
+    }
+    run(&mut vm, &mut messages);
+    assert_eq!(vm.state().system_integer(1), Some(i32::MIN as u32));
+    assert_eq!(vm.state().system_integer(2), Some((-17i32) as u32));
+    run(&mut vm, &mut messages);
+    run(&mut vm, &mut messages);
+    assert_eq!(vm.state().system_integer(1), Some(50));
+    assert_eq!(vm.state().system_integer(2), Some((-100i32) as u32));
+    for i in [0, 3, 4, 5, 6] {
+        assert_eq!(vm.state().system_integer(i), Some(120 + i));
+    }
+    assert_eq!(
+        messages.auxiliary_text(0).unwrap().word(8),
+        Some((i32::MAX as f32).to_bits())
+    );
+    assert_eq!(vm.stack().len_bytes(), 0);
+}

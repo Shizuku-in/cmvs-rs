@@ -57,7 +57,8 @@ fn defaults_follow_the_constructor() {
     }
     assert_eq!((gesture.field(32), gesture.field(36)), (Some(64), Some(90)));
     assert!(tracking_is_reset(&gesture));
-    assert_eq!(gesture.field(40), None);
+    assert_eq!(gesture.field(40), Some(4));
+    assert_eq!(gesture.field(116), Some(1));
     for at in (188..=304).step_by(4) {
         assert_eq!(gesture.field(at), Some(0));
     }
