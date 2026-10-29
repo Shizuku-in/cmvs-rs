@@ -25,6 +25,109 @@ impl ButtonHost {
         self.lists.get(slot)?.as_ref()
     }
 
+    /// 0x2377 / 0x14007a0e0 -> 0x140005140. Hit rectangles are relative to
+    /// the bound object's current position; the group hit area stays in screen space.
+    pub fn try_handle_list_input(
+        &mut self,
+        vm: &mut Machine<'_>,
+        scene: &mut SceneHost,
+        input: &mut crate::input::ActionInput,
+        gesture: &crate::gesture::PointerGesture,
+    ) -> Result<bool, DecodeError> {
+        let Some((pc, 0x377)) = vm.pending_system() else {
+            return Ok(false);
+        };
+        let fail = |why| error(pc, 0x2377, why);
+        let slot = vm.stack().peek_u32(4).map_err(|e| fail(e.0))? as usize;
+        let group = self
+            .lists
+            .get(slot)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| fail("auxiliary list group does not exist or outside 0..7"))?;
+        let draw = scene
+            .object(group.object)
+            .and_then(|o| o.draw.as_ref())
+            .ok_or_else(|| fail("auxiliary list object has no draw state"))?;
+        let position = match draw.words[0] {
+            0 => [draw.words[8], draw.words[9]].map(|v| v as i32),
+            5 => [draw.words[11], draw.words[12]].map(|v| {
+                let f = f32::from_bits(v);
+                if !(-2147483648.0..2147483648.0).contains(&f) {
+                    i32::MIN
+                } else {
+                    f as i32
+                }
+            }),
+            _ => {
+                return Err(fail(
+                    "auxiliary list hit testing needs 2D or font coordinates",
+                ));
+            }
+        };
+        let mut view = super::ButtonGroup {
+            object: group.object,
+            buttons: group.buttons.clone(),
+            current: group.current,
+            pressed_visual: group.pressed_visual,
+            press_target: group.press_target,
+        };
+        for button in &mut view.buttons {
+            for (coordinate, offset) in button.rect[..2].iter_mut().zip(position) {
+                *coordinate = coordinate.wrapping_add(offset);
+            }
+        }
+        let dragging = gesture.field(4) == Some(1) && gesture.field(120).is_some_and(|v| v != 0);
+        let mut local = input.clone();
+        if group.disable_navigation || dragging {
+            local.consume(2);
+            local.consume(3);
+        }
+        let planned = super::Frame::plan(&view, &local);
+        let [px, py] = planned.warp.unwrap_or_else(|| input.pointer());
+        let [x, y, w, h] = group.hit_area;
+        let inside =
+            px >= x && py >= y && px < x.wrapping_add(w) && py < y.wrapping_add(h) && !dragging;
+        if !inside {
+            for button in &mut view.buttons {
+                button.enabled = false;
+            }
+        }
+        let mut frame = super::Frame::plan(&view, &local);
+        let mut hit = [-1, -1];
+        if inside && let Some(index) = frame.current {
+            let button = &view.buttons[index];
+            let [x, y, w, h] = button.rect;
+            if button.enabled
+                && px >= x
+                && py >= y
+                && px < x.wrapping_add(w)
+                && py < y.wrapping_add(h)
+            {
+                hit = [px.wrapping_sub(x), py.wrapping_sub(y)];
+            }
+        }
+        if group.keep_input {
+            frame.consumed.retain(|action| !matches!(action, 0 | 1));
+        }
+        apply_images(scene, group.object, &frame.images, false).map_err(fail)?;
+        vm.complete_system(SystemResult(0x4004))?;
+        vm.state_mut()
+            .set_system_integer(0, frame.result)
+            .expect("result exists");
+        let group = self.lists[slot].as_mut().expect("validated");
+        group.current = frame.current;
+        group.press_target = frame.press_target;
+        group.pressed_visual = frame.pressed_visual;
+        group.hit_point = Some(hit);
+        for action in frame.consumed {
+            input.consume(action);
+        }
+        if let Some([x, y]) = frame.warp {
+            input.warp_pointer(x, y);
+        }
+        Ok(true)
+    }
+
     pub(super) fn try_handle_list(
         &mut self,
         vm: &mut Machine<'_>,

@@ -1,8 +1,8 @@
 //! Engine +4664 pointer drag/flick recognizer (constructor 0x1400533d0). Scripts configure
 //! it (0x2350..0x2364, plus six region records through 0x2366) and query the per-frame
 //! hold result (0x2362). The frame update
-//! 0x140054a60 runs mode 0 (0x140053930) over the mouse flags of `ActionInput`; modes 1/2
-//! (0x1400541a0 / 0x140054570) are not modeled. Fields stay named by offset.
+//! 0x140054a60 runs mode 0 (0x140053930) or region drag mode 1 (0x1400541a0).
+//! Mode 2 (0x140054570) remains a barrier. Fields stay named by offset.
 use crate::{
     bytecode::DecodeError, evaluate::error, input::ActionInput, machine::Machine, vm::SystemResult,
 };
@@ -293,6 +293,19 @@ impl PointerGesture {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(false);
         };
+        if matches!(command, 0x367 | 0x368) {
+            vm.complete_system(SystemResult(0x4000))?;
+            if command == 0x367 {
+                self.set(172, -1);
+            } else {
+                for (slot, offset) in [(0, 172), (4, 168), (5, 164), (6, 176)] {
+                    vm.state_mut()
+                        .set_system_integer(slot, self.get(offset) as u32)
+                        .expect("result exists");
+                }
+            }
+            return Ok(true);
+        }
         if command == 0x365 {
             vm.complete_system(SystemResult(0x4000))?;
             let active = self.get(120) != 0;

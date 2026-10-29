@@ -592,3 +592,144 @@ fn auxiliary_list_invalid_and_short_commands_preserve_old_group() {
         assert_eq!(vm.stack().len_bytes(), sp);
     }
 }
+
+#[test]
+fn list_input_offsets_hits_by_parent_and_keeps_input_when_configured() {
+    for keep in [0, 1] {
+        let mut code = vec![];
+        prelude(&mut code);
+        call(&mut code, 0x2040, &[10]);
+        call(&mut code, 0x2045, &[10, u32::MAX, 100, 50]);
+        call(&mut code, 0x2022, &[10, 3]);
+        call(&mut code, 0x2050, &[10, 3]);
+        call(&mut code, 0x2370, &[7, 10]);
+        call(&mut code, 0x2372, &[7, 9]);
+        call(&mut code, 0x2373, &[7, 9, 10, 20, 30, 40]);
+        for state in 0..4 {
+            call(
+                &mut code,
+                0x2374,
+                &[7, 9, state, 3, state * 10, 0, 4, 5, 0, 0],
+            );
+        }
+        call(&mut code, 0x2375, &[7]);
+        call(&mut code, 0x237c, &[7, keep]);
+        let setup = code.len();
+        for _ in 0..3 {
+            call(&mut code, 0x2377, &[7]);
+        }
+        call(&mut code, 0x237f, &[7]);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let (mut scene, mut buttons) = (SceneHost::default(), ButtonHost::default());
+        while vm.pc() < setup {
+            assert!(next(&mut vm, &mut scene, &mut buttons));
+        }
+        let mut input = ActionInput::default();
+        input.set_pointer(120, 80);
+        for (held, pressed, released, expected) in [
+            (false, false, false, u32::MAX),
+            (true, true, false, u32::MAX),
+            (false, false, true, 9),
+        ] {
+            input.set(0, held, pressed, released).unwrap();
+            while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+            assert!(
+                buttons
+                    .try_handle_list_input(
+                        &mut vm,
+                        &mut scene,
+                        &mut input,
+                        &cmvs_rs::gesture::PointerGesture::default()
+                    )
+                    .unwrap()
+            );
+            assert_eq!(vm.state().system_integer(0), Some(expected));
+            assert_eq!(buttons.list_group(7).unwrap().hit_point, Some([10, 10]));
+        }
+        assert_eq!(input.released(0), keep != 0);
+        assert!(next(&mut vm, &mut scene, &mut buttons));
+        assert_eq!(vm.state().system_integer(1), Some(10));
+        assert_eq!(vm.state().system_integer(2), Some(10));
+    }
+}
+
+#[test]
+fn list_input_hit_area_is_half_open_and_navigation_can_be_disabled() {
+    let mut code = vec![];
+    prelude(&mut code);
+    call(&mut code, 0x2040, &[10]);
+    call(&mut code, 0x2370, &[7, 10]);
+    call(&mut code, 0x2372, &[7, 9]);
+    call(&mut code, 0x2373, &[7, 9, 10, 20, 30, 40]);
+    call(&mut code, 0x237d, &[7, 10, 20, 10, 10]);
+    call(&mut code, 0x237e, &[7, 1]);
+    let setup = code.len();
+    for _ in 0..2 {
+        call(&mut code, 0x2377, &[7]);
+    }
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let (mut scene, mut buttons) = (SceneHost::default(), ButtonHost::default());
+    while vm.pc() < setup {
+        assert!(next(&mut vm, &mut scene, &mut buttons));
+    }
+    let mut input = ActionInput::default();
+    input.set(2, false, false, true).unwrap();
+    for point in [[20, 25], [15, 30]] {
+        input.set_pointer(point[0], point[1]);
+        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        buttons
+            .try_handle_list_input(
+                &mut vm,
+                &mut scene,
+                &mut input,
+                &cmvs_rs::gesture::PointerGesture::default(),
+            )
+            .unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(u32::MAX));
+        assert_eq!(buttons.list_group(7).unwrap().hit_point, Some([-1, -1]));
+        assert!(input.released(2));
+        assert!(input.take_warp().is_none());
+    }
+}
+
+#[test]
+fn list_input_missing_visual_keeps_group_input_and_pending_command_unchanged() {
+    let mut code = vec![];
+    prelude(&mut code);
+    call(&mut code, 0x2040, &[10]);
+    call(&mut code, 0x2370, &[7, 10]);
+    call(&mut code, 0x2372, &[7, 9]);
+    call(&mut code, 0x2373, &[7, 9, 10, 20, 30, 40]);
+    call(&mut code, 0x2377, &[7]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let (mut scene, mut buttons) = (SceneHost::default(), ButtonHost::default());
+    for _ in 0..6 {
+        assert!(next(&mut vm, &mut scene, &mut buttons));
+    }
+    let mut input = ActionInput::default();
+    input.set_pointer(20, 30);
+    input.set(0, true, true, false).unwrap();
+    let old_input = input.clone();
+    let group = buttons.list_group(7).unwrap().clone();
+    let object = scene.object(10).unwrap().clone();
+    while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+    let pc = vm.pc();
+    let sp = vm.stack().len_bytes();
+    assert!(
+        buttons
+            .try_handle_list_input(
+                &mut vm,
+                &mut scene,
+                &mut input,
+                &cmvs_rs::gesture::PointerGesture::default()
+            )
+            .is_err()
+    );
+    assert_eq!(buttons.list_group(7), Some(&group));
+    assert_eq!(scene.object(10), Some(&object));
+    assert_eq!(input, old_input);
+    assert_eq!((vm.pc(), vm.stack().len_bytes()), (pc, sp));
+}

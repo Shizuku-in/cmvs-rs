@@ -632,6 +632,12 @@ impl<'a> Startup<'a> {
             || self
                 .buttons
                 .try_handle(&mut self.machine, &mut self.scene)?
+            || self.buttons.try_handle_list_input(
+                &mut self.machine,
+                &mut self.scene,
+                &mut self.input,
+                &self.gesture,
+            )?
             || self
                 .buttons
                 .try_handle_input(&mut self.machine, &mut self.scene, &mut self.input)?

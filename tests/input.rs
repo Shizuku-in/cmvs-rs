@@ -111,7 +111,9 @@ fn skipping_reports_the_script_flag_or_held_skip_actions() {
 
 /// (query command, action) from the getter offsets; actions 15..19 have no command and
 /// action 21 (0x2348) is deliberately left pending.
-const QUERIES: [(u16, usize); 18] = [
+const QUERIES: [(u16, usize); 20] = [
+    (0x219c, 15),
+    (0x219e, 16),
     (0x21a0, 0),
     (0x21a2, 1),
     (0x21a4, 7),
@@ -190,12 +192,37 @@ fn neighbouring_commands_are_left_pending() {
     // 0x21a5/0x21a7/0x21be/0x21bf, 0x2341..0x2343 and 0x234c reach the dispatcher's shared
     // case; the action 21 pair 0x2348/0x2349 needs the unmodeled frame-update consumer.
     for op in [
-        0x219f, 0x21a5, 0x21a7, 0x21be, 0x21bf, 0x21c0, 0x2341, 0x2343, 0x2348, 0x2349, 0x234c,
+        0x21a5, 0x21a7, 0x21be, 0x21bf, 0x21c0, 0x2341, 0x2343, 0x2348, 0x2349, 0x234c,
     ] {
         let script = commands(&[op]);
         let mut vm = Machine::new(&script).unwrap();
         pending(&mut vm);
         assert!(!input::try_handle(&mut vm, &mut ActionInput::default()).unwrap());
         assert_eq!(vm.pending_system().map(|p| p.1), Some(op - 0x2000));
+    }
+}
+
+#[test]
+fn pointer_rectangle_query_includes_right_and_bottom_edges_and_preserves_input() {
+    let mut code = vec![];
+    for _ in 0..4 {
+        for value in [40u32, 30, 20, 10] {
+            code.extend(0x440u16.to_le_bytes());
+            code.extend(4u16.to_le_bytes());
+            code.extend(value.to_le_bytes());
+        }
+        code.extend(0x20cau16.to_le_bytes());
+    }
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut input = ActionInput::default();
+    input.set(0, false, false, true).unwrap();
+    for (point, expected) in [([10, 20], 1), ([40, 60], 1), ([41, 60], 0), ([40, 61], 0)] {
+        input.set_pointer(point[0], point[1]);
+        pending(&mut vm);
+        assert!(input::try_handle(&mut vm, &mut input).unwrap());
+        assert_eq!(vm.state().system_integer(0), Some(expected));
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert!(input.released(0));
     }
 }

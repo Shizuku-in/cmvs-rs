@@ -218,3 +218,28 @@ fn hold_query_reports_zero_without_a_recognized_hold_and_pops_its_argument() {
     // The query does not reset tracking.
     assert_eq!(gesture, PointerGesture::default());
 }
+
+#[test]
+fn flick_query_and_consume_keep_unrelated_results_and_pop_nothing() {
+    let script = script(&[(0x2368, &[]), (0x2367, &[]), (0x2368, &[])]);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut gesture = PointerGesture::default();
+    for i in 0..7 {
+        vm.state_mut().set_system_integer(i, 50 + i).unwrap();
+    }
+    for expected in [true, true, true] {
+        assert_eq!(run(&mut gesture, &mut vm), expected);
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
+    for (slot, value) in [
+        (0, u32::MAX),
+        (1, 51),
+        (2, 52),
+        (3, 53),
+        (4, 0),
+        (5, 0),
+        (6, 0),
+    ] {
+        assert_eq!(vm.state().system_integer(slot), Some(value));
+    }
+}

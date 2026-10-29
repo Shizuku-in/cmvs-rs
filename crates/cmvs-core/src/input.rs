@@ -209,7 +209,9 @@ impl ActionInput {
 /// into the dispatcher's shared case 0x1400823e7 and stay unhandled. So do 0x2348/0x2349
 /// (action 21): the frame update 0x140019430 also consumes that action while +11152 is set,
 /// which is not modeled.
-const ACTION_COMMANDS: [(u16, usize); 18] = [
+const ACTION_COMMANDS: [(u16, usize); 20] = [
+    (0x19c, 15),
+    (0x19e, 16),
     (0x1a0, 0),
     (0x1a2, 1),
     (0x1a4, 7),
@@ -236,9 +238,28 @@ const ACTION_COMMANDS: [(u16, usize); 18] = [
 /// 0x140054d90 and siblings, 0x1400551c0/0x1400551f0/0x140055160 for the 0x234x pairs)
 /// consumes the action; actions 7 and 8 have none. All return 0x4000 and pop nothing.
 pub fn try_handle(vm: &mut Machine<'_>, input: &mut ActionInput) -> Result<bool, DecodeError> {
-    let Some((_, command)) = vm.pending_system() else {
+    let Some((pc, command)) = vm.pending_system() else {
         return Ok(false);
     };
+    if command == 0xca {
+        // 0x140074f30: inclusive signed rectangle, no normalization or consumption.
+        let mut rect = [0; 4];
+        for (i, value) in rect.iter_mut().enumerate() {
+            *value = vm
+                .stack()
+                .peek_u32((i + 1) * 4)
+                .map_err(|e| crate::evaluate::error(pc, 0x20ca, e.0))? as i32;
+        }
+        let [left, top, width, height] = rect;
+        let [x, y] = input.pointer();
+        let hit =
+            x >= left && x <= left.wrapping_add(width) && y >= top && y <= top.wrapping_add(height);
+        vm.complete_system(SystemResult(0x4010))?;
+        vm.state_mut()
+            .set_system_integer(0, u32::from(hit))
+            .expect("result exists");
+        return Ok(true);
+    }
     let Some(&(_, action)) = ACTION_COMMANDS.iter().find(|&&(query, action)| {
         command == query || (command == query + 1 && !matches!(action, 7 | 8))
     }) else {

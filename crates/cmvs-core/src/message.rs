@@ -262,7 +262,7 @@ impl MessageHost {
         if let Some((
             pc,
             command @ (0x383 | 0x385 | 0x386 | 0x387 | 0x389 | 0x38e | 0x38f | 0x392 | 0x393
-            | 0x396 | 0x398 | 0x39a | 0x39e),
+            | 0x396 | 0x398 | 0x39a | 0x39b | 0x39e),
         )) = vm.pending_system()
         {
             // 0x1400736f0 / 0x140073820 / 0x1400738f0 / 0x1400739c0: independent
@@ -271,7 +271,7 @@ impl MessageHost {
             let count = match command {
                 0x383 | 0x389 | 0x39e => 3,
                 0x385 | 0x396 | 0x39a => 5,
-                0x386 | 0x398 => 1,
+                0x386 | 0x398 | 0x39b => 1,
                 0x38e | 0x38f | 0x392 | 0x393 => 2,
                 _ => 4,
             };
@@ -309,6 +309,14 @@ impl MessageHost {
             match command {
                 0x383 => group.set_position(args[1], args[2]),
                 0x386 => group.clear_content(),
+                0x39b => {
+                    vm.state_mut()
+                        .set_system_integer(
+                            0,
+                            u32::from(group.word(368).expect("modeled activity") != 0),
+                        )
+                        .expect("result exists");
+                }
                 0x398 | 0x39e => {
                     let values = if command == 0x398 {
                         group.position()
