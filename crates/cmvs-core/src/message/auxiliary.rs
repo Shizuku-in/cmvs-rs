@@ -118,6 +118,16 @@ impl AuxiliaryText {
         }
     }
 
+    /// 0x14002e7e0: each color updates only when its high byte is zero.
+    /// Nonzero high bytes mean "keep", rather than an alpha component.
+    pub(super) fn set_colors(&mut self, first: u32, second: u32) {
+        for (offset, color) in [(132, first), (136, second)] {
+            if color & 0xff00_0000 == 0 {
+                self.words.insert(offset, color);
+            }
+        }
+    }
+
     pub(super) fn new(glyph_size: u32, capacity: u32) -> Result<Self, FormatError> {
         let atlas = AuxiliaryGlyphAtlas::new(glyph_size, capacity)?;
         let mut words: BTreeMap<_, _> = (8..184)

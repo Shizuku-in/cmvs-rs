@@ -1547,3 +1547,12 @@ END2：以 END1 存档副本为用户目录（不设 skip-auto-resume），sn400
 四份存档经独立标准库 Python CSS1 解码与写出时收集的 VM 持久区逐字节一致（END1 负载 c011a123…，END2 负载 cd4e3f7a…）。END2 Ctrl 目录经全新进程、不设 skip-auto-resume 重载，第 287 步逐项核对全部持久区，2145=true、int2198=0，第 4480 步到五按钮标题且主文件未变。原 cmvs64.exe 与 save/system.dat 哈希仍为 dc74d200… / ace328a0…，既有 first-route-profile 与 branch-three-ctrl-profile 主文件未变；素材、剧本、存档、日志与图像仅在忽略目录 local。
 
 cargo fmt --check、cargo test --offline（588 项）、默认严格 Clippy、全 workspace 全功能测试（633 项）及严格 Clippy 通过。当前所选闭环为 [1]（こころ）、[2,1]（響子）、[2,2,1]（愛）、[2,2,2,1]（ほたる END1）及 END1 后的 [2,2,2,2]（ほたる END2）；原生窗口/真实音频完整流程、Enter 路径、完整剧情存档恢复及其他平台仍未验证。
+
+
+## 鉴赏辅助文本颜色（2026-10-29）
+
+基线6b01675，核对0x2389的分发、包装0x1400739c0与内部0x14002e7e0反汇编后，实现+132/+136的独立高字节门控写入，保留其他状态与错误事务。地址/参数/返回标志及哈希绑定见[VM语义](vm-semantics.md#辅助文本颜色-0x23892026-10-29)。无新增依赖、外部源码、原生接口或资源解码变更。
+
+以END2 CSS1副本、种子0、16ms、ContinueWithoutImage、skip-auto-resume和记录音频/文字正常启动点击鉴赏，真实调用[0,0xffffff,0xffffff]执行通过，SP68→56、七个结果保持；4867步/567次让出停于omake.ps3 / 0x4711a / 0x238e。独立Python核对真实颜色、栈变化、停点与输入哈希；FontRenderer输出与上一黑帧逐字节相同，尚未显示鉴赏菜单。原游戏与输入存档保持只读，探针和真实输出仅在local。验证范围不含原生窗口、音轨、其他游戏或平台；历史覆盖报告不回写。
+
+本轮 cargo fmt --check、cargo test --offline（613项通过、1项外部样本测试默认忽略）、cargo clippy --offline --all-targets -- -D warnings、全workspace全功能测试（658项通过、外部样本及原生音频设备2项默认忽略）、全功能严格Clippy及release构建通过。编译缓存硬链接失败时工具链退回复制，不影响检查退出码。本轮完成此条命令的实现与验证后停下，下一步为0x238e。
