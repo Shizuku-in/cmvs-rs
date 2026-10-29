@@ -27,7 +27,7 @@
 
 ## 游戏测试与证据
 
-[游戏测试目录](games/README.md)汇总各款游戏与版本，当前只有[《アマツツミ》](games/amatsutsumi/README.md)。其目录保存二进制身份、VM 语义证据、研究记录、审计报告和开发历史。
+[游戏测试目录](games/README.md)汇总各款游戏与版本：[《アマツツミ》](games/amatsutsumi/README.md)是主线，[《クロノクロック》](games/chronoclock/README.md)仅完成接入摸底。其目录保存二进制身份、VM 语义证据、研究记录、审计报告和开发历史。
 
 ## 归档规则
 
