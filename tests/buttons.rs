@@ -484,7 +484,7 @@ fn auxiliary_list_destruction_rejects_missing_or_invalid_slot_atomically() {
 
 #[test]
 fn auxiliary_list_creation_stays_a_barrier_for_empty_only_destruction() {
-    for op in [0x2370, 0x237b] {
+    for op in [0x237b] {
         let mut code = vec![];
         call(&mut code, op, &[0, 10, 1280, 720]);
         let script = script(&code);
@@ -500,5 +500,95 @@ fn auxiliary_list_creation_stays_a_barrier_for_empty_only_destruction() {
             (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
             (pc, sp, pending)
         );
+    }
+}
+
+#[test]
+fn auxiliary_list_records_keep_full_rects_links_and_truncated_state_words() {
+    let mut code = vec![];
+    prelude(&mut code);
+    call(&mut code, 0x2370, &[7, 10]);
+    for id in [7, 9] {
+        call(&mut code, 0x2372, &[7, id]);
+    }
+    call(&mut code, 0x2373, &[7, 9, 0x80000000, 200, 300, u32::MAX]);
+    call(
+        &mut code,
+        0x2374,
+        &[
+            7, 9, 2, 5, 0xfffe, 0xffff, 0x10000, 0x10001, 0x10002, 0x10003,
+        ],
+    );
+    call(&mut code, 0x2379, &[7, 9, 1, 2, 3, 4]);
+    call(&mut code, 0x237c, &[7, u32::MAX]);
+    call(&mut code, 0x237d, &[7, 1, 2, 500, 600]);
+    call(&mut code, 0x237e, &[7, 1]);
+    call(&mut code, 0x2378, &[7]);
+    call(&mut code, 0x2376, &[7]);
+    call(&mut code, 0x2371, &[7]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let (mut scene, mut buttons) = (SceneHost::default(), ButtonHost::default());
+    for _ in 0..3 {
+        assert!(next(&mut vm, &mut scene, &mut buttons));
+    }
+    let group = buttons.list_group(7).unwrap();
+    assert_eq!(group.screen, [1280, 720, 1280, 720, 1280, 720]);
+    assert_eq!(group.hit_point, None);
+    assert!(group.active);
+    for _ in 0..10 {
+        assert!(next(&mut vm, &mut scene, &mut buttons));
+    }
+    let group = buttons.list_group(7).unwrap();
+    assert_eq!(group.buttons[0].links, [-1, 9, -1, -1]);
+    let b = &group.buttons[1];
+    assert_eq!(b.id, 9);
+    assert_eq!(b.rect, [i32::MIN, 200, 300, -1]);
+    assert_eq!(b.links, [1, 2, 3, 4]);
+    assert_eq!(
+        b.images[2],
+        ButtonImage {
+            child: 5,
+            crop: [-2, -1, 0, 1],
+            origin: [2, 3]
+        }
+    );
+    assert!(group.keep_input && group.disable_navigation);
+    assert!(!group.active);
+    assert_eq!(group.hit_area, [1, 2, 500, 600]);
+    assert_eq!(vm.state().system_integer(0), Some(u32::MAX));
+    assert!(next(&mut vm, &mut scene, &mut buttons));
+    assert!(buttons.list_group(7).is_none());
+    assert!(buttons.group(2).is_some());
+    assert!(scene.object(10).is_some());
+}
+
+#[test]
+fn auxiliary_list_invalid_and_short_commands_preserve_old_group() {
+    for (op, args) in [
+        (0x2370, vec![7, 256]),
+        (0x2370, vec![7, 11]),
+        (0x2372, vec![8, 1]),
+        (0x2374, vec![7, 1, 0]),
+        (0x237f, vec![7]),
+    ] {
+        let mut code = vec![];
+        prelude(&mut code);
+        call(&mut code, 0x2370, &[7, 10]);
+        call(&mut code, op, &args);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let (mut scene, mut buttons) = (SceneHost::default(), ButtonHost::default());
+        for _ in 0..3 {
+            assert!(next(&mut vm, &mut scene, &mut buttons));
+        }
+        let before = buttons.list_group(7).unwrap().clone();
+        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        let pending = vm.pending_system();
+        let sp = vm.stack().len_bytes();
+        assert!(buttons.try_handle(&mut vm, &mut scene).is_err());
+        assert_eq!(buttons.list_group(7), Some(&before));
+        assert_eq!(vm.pending_system(), pending);
+        assert_eq!(vm.stack().len_bytes(), sp);
     }
 }
