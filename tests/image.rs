@@ -1819,3 +1819,79 @@ fn replacement_moves_scale_motion_without_cloning_it_into_retained_objects() {
         16
     );
 }
+
+#[test]
+fn auxiliary_second_texture_replaces_only_mask_and_survives_content_clear() {
+    let mut code = vec![];
+    scene_command(&mut code, 0x2380, &[7, 0, 25, 32]);
+    for _ in 0..2 {
+        scene_command(&mut code, 0x2397, &[7, 1]);
+    }
+    scene_command(&mut code, 0x2386, &[7]);
+    let script = script(&code, b"\0mask.pb3\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    let mut files = Files::default();
+    run_to_system(&mut vm);
+    messages.try_handle(&mut vm).unwrap();
+    let before = messages.auxiliary_text(7).unwrap().clone();
+    for i in 0..7 {
+        vm.state_mut().set_system_integer(i, 70 + i).unwrap();
+    }
+    for bytes in [opaque(), pb3(1, &[[0, 0], [0, 0], [0, 0], [128, 255]])] {
+        files.0.insert(b"mask.pb3".to_vec(), bytes.clone());
+        run_to_system(&mut vm);
+        assert!(messages.try_handle_image(&mut vm, &mut files).unwrap());
+        let group = messages.auxiliary_text(7).unwrap();
+        assert_eq!(group.object, before.object);
+        assert_eq!(group.atlas, before.atlas);
+        let image = group.secondary_image.as_ref().unwrap();
+        assert_eq!(image.name, b"mask.pb3");
+        assert_eq!(image.pixels, decode(&bytes).unwrap().unwrap().pixels);
+        assert_eq!(vm.stack().len_bytes(), 0);
+        for i in 0..7 {
+            assert_eq!(vm.state().system_integer(i), Some(70 + i));
+        }
+    }
+    let mask = messages.auxiliary_text(7).unwrap().secondary_image.clone();
+    run_to_system(&mut vm);
+    messages.try_handle(&mut vm).unwrap();
+    assert_eq!(messages.auxiliary_text(7).unwrap().secondary_image, mask);
+}
+
+#[test]
+fn auxiliary_second_texture_errors_preserve_pending_command_and_previous_texture() {
+    for slot in [0, 7, 8, u32::MAX] {
+        for data in [None, Some(b"bad".to_vec())] {
+            let mut code = vec![];
+            scene_command(&mut code, 0x2380, &[7, 0, 25, 32]);
+            scene_command(&mut code, 0x2397, &[7, 1]);
+            scene_command(&mut code, 0x2397, &[slot, 1]);
+            let script = script(&code, b"\0mask.pb3\0");
+            let mut vm = Machine::new(&script).unwrap();
+            let mut messages = MessageHost::default();
+            let mut files = Files::default();
+            files.0.insert(b"mask.pb3".to_vec(), opaque());
+            run_to_system(&mut vm);
+            messages.try_handle(&mut vm).unwrap();
+            run_to_system(&mut vm);
+            messages.try_handle_image(&mut vm, &mut files).unwrap();
+            let before = messages.auxiliary_text(7).unwrap().clone();
+            if let Some(data) = data {
+                files.0.insert(b"mask.pb3".to_vec(), data);
+            } else {
+                files.0.clear();
+            }
+            run_to_system(&mut vm);
+            let pending = vm.pending_system();
+            let sp = vm.stack().len_bytes();
+            assert!(messages.try_handle_image(&mut vm, &mut files).is_err());
+            assert_eq!(vm.pending_system(), pending);
+            assert_eq!(vm.stack().len_bytes(), sp);
+            let group = messages.auxiliary_text(7).unwrap();
+            assert_eq!(group.secondary_image, before.secondary_image);
+            assert_eq!(group.object, before.object);
+            assert_eq!(group.atlas, before.atlas);
+        }
+    }
+}

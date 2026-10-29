@@ -307,10 +307,13 @@ fn invalid_auxiliary_setter_target_keeps_pending_command_and_owned_state() {
     for (opcode, slot, count) in [
         (0x2383, 3),
         (0x2385, 5),
+        (0x2396, 5),
+        (0x2386, 1),
         (0x2387, 4),
         (0x2389, 3),
         (0x238e, 2),
         (0x2392, 2),
+        (0x2393, 2),
         (0x238f, 2),
     ]
     .into_iter()
@@ -348,10 +351,13 @@ fn incomplete_auxiliary_setter_arguments_leave_group_and_stack_unchanged() {
     for (opcode, count) in [
         (0x2383, 3),
         (0x2385, 5),
+        (0x2396, 5),
+        (0x2386, 1),
         (0x2387, 4),
         (0x2389, 3),
         (0x238e, 2),
         (0x2392, 2),
+        (0x2393, 2),
         (0x238f, 2),
     ]
     .into_iter()
@@ -659,6 +665,133 @@ fn layer_updates_owned_draw_and_preserves_other_state() {
         let mut expected_object = before.object.clone();
         expected_object.draw.as_mut().unwrap().words[10] = value;
         assert_eq!(group.object, expected_object);
+        assert_eq!(group.atlas, before.atlas);
+        assert_eq!(messages.auxiliary_font_present(7), Some(true));
+        assert!(messages.text(7).is_none());
+        assert!(messages.auxiliary_text(0).is_none());
+        for i in 0..7 {
+            assert_eq!(vm.state().system_integer(i), Some(120 + i));
+        }
+    }
+}
+
+#[test]
+fn clear_empty_content_preserves_atlas_and_configured_object() {
+    let mut code = vec![];
+    call(&mut code, 0x2380, &[7, 0, 25, 32]);
+    call(&mut code, 0x2385, &[7, 180, 72, 1060, 720]);
+    call(&mut code, 0x2383, &[7, 31, 52]);
+    call(&mut code, 0x238f, &[7, 10]);
+    call(&mut code, 0x2386, &[7]);
+    call(&mut code, 0x2386, &[7]);
+    let script = script(&code, b"\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    for _ in 0..4 {
+        run(&mut vm, &mut messages);
+    }
+    let before = messages.auxiliary_text(7).unwrap().clone();
+    for i in 0..7 {
+        vm.state_mut().set_system_integer(i, 120 + i).unwrap();
+    }
+    for _ in 0..2 {
+        run(&mut vm, &mut messages);
+        let group = messages.auxiliary_text(7).unwrap();
+        assert!(vm.pending_system().is_none());
+        assert_eq!(vm.stack().len_bytes(), 0);
+        for at in (0..1476).step_by(4) {
+            assert_eq!(group.word(at), before.word(at));
+        }
+        assert_eq!(group.object, before.object);
+        assert_eq!(group.atlas, before.atlas);
+        assert_eq!(group.word(176), Some(180f32.to_bits()));
+        assert_eq!(group.word(180), Some(72f32.to_bits()));
+        for i in 0..7 {
+            assert_eq!(vm.state().system_integer(i), Some(120 + i));
+        }
+    }
+}
+#[test]
+fn field_144_preserves_all_parameter_bits_without_affecting_other_state() {
+    let values = [1, 0, 0x01000000, i32::MAX as u32, i32::MIN as u32, u32::MAX];
+    let mut code = vec![];
+    call(&mut code, 0x2380, &[7, 0, 25, 32]);
+    for value in values {
+        call(&mut code, 0x2393, &[7, value]);
+    }
+    let script = script(&code, b"\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages);
+    let before = messages.auxiliary_text(7).unwrap().clone();
+    for i in 0..7 {
+        vm.state_mut().set_system_integer(i, 120 + i).unwrap();
+    }
+    for value in values {
+        pending(&mut vm);
+        let pc = vm.pc();
+        assert_eq!(vm.stack().len_bytes(), 8);
+        assert!(messages.try_handle(&mut vm).unwrap());
+        assert_eq!(vm.pc(), pc + 2);
+        assert!(vm.pending_system().is_none());
+        assert_eq!(vm.stack().len_bytes(), 0);
+        let group = messages.auxiliary_text(7).unwrap();
+        assert_eq!(group.word(144), Some(value));
+        for at in (0..1476).step_by(4).filter(|at| *at != 144) {
+            assert_eq!(group.word(at), before.word(at), "offset {at}");
+        }
+        assert_eq!(group.object, before.object);
+        assert_eq!(group.atlas, before.atlas);
+        assert_eq!(messages.auxiliary_font_present(7), Some(true));
+        assert!(messages.text(7).is_none());
+        assert!(messages.auxiliary_text(0).is_none());
+        for i in 0..7 {
+            assert_eq!(vm.state().system_integer(i), Some(120 + i));
+        }
+    }
+}
+#[test]
+fn bounds_convert_signed_parameters_without_affecting_other_state() {
+    let values = [1, 0, 0x01000000, i32::MAX as u32, i32::MIN as u32, u32::MAX];
+    let mut code = vec![];
+    call(&mut code, 0x2380, &[7, 0, 25, 32]);
+    for value in values {
+        call(
+            &mut code,
+            0x2396,
+            &[7, value, value.wrapping_add(1), 1280, 720],
+        );
+    }
+    let script = script(&code, b"\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages);
+    let before = messages.auxiliary_text(7).unwrap().clone();
+    for i in 0..7 {
+        vm.state_mut().set_system_integer(i, 120 + i).unwrap();
+    }
+    for value in values {
+        pending(&mut vm);
+        let pc = vm.pc();
+        assert_eq!(vm.stack().len_bytes(), 20);
+        assert!(messages.try_handle(&mut vm).unwrap());
+        assert_eq!(vm.pc(), pc + 2);
+        assert!(vm.pending_system().is_none());
+        assert_eq!(vm.stack().len_bytes(), 0);
+        let group = messages.auxiliary_text(7).unwrap();
+        for (at, v) in [32, 36, 40, 44]
+            .into_iter()
+            .zip([value, value.wrapping_add(1), 1280, 720])
+        {
+            assert_eq!(group.word(at), Some(((v as i32) as f32).to_bits()));
+        }
+        for at in (0..1476)
+            .step_by(4)
+            .filter(|at| !matches!(*at, 32 | 36 | 40 | 44))
+        {
+            assert_eq!(group.word(at), before.word(at), "offset {at}");
+        }
+        assert_eq!(group.object, before.object);
         assert_eq!(group.atlas, before.atlas);
         assert_eq!(messages.auxiliary_font_present(7), Some(true));
         assert!(messages.text(7).is_none());

@@ -259,16 +259,20 @@ impl MessageHost {
         if let Some((pc, 0x380)) = vm.pending_system() {
             return self.create_auxiliary_text(vm, pc).map(|()| true);
         }
-        if let Some((pc, command @ (0x383 | 0x385 | 0x387 | 0x389 | 0x38e | 0x38f | 0x392))) =
-            vm.pending_system()
+        if let Some((
+            pc,
+            command @ (0x383 | 0x385 | 0x386 | 0x387 | 0x389 | 0x38e | 0x38f | 0x392 | 0x393
+            | 0x396),
+        )) = vm.pending_system()
         {
             // 0x1400736f0 / 0x140073820 / 0x1400738f0 / 0x1400739c0: independent
             // and 0x140073bc0: auxiliary text setters; none changes system results.
             let opcode = 0x2000 + command;
             let count = match command {
                 0x383 | 0x389 => 3,
-                0x385 => 5,
-                0x38e | 0x38f | 0x392 => 2,
+                0x385 | 0x396 => 5,
+                0x386 => 1,
+                0x38e | 0x38f | 0x392 | 0x393 => 2,
                 _ => 4,
             };
             let mut args = [0; 5];
@@ -291,10 +295,13 @@ impl MessageHost {
                 .expect("validated group");
             match command {
                 0x383 => group.set_position(args[1], args[2]),
+                0x386 => group.clear_content(),
+                0x396 => group.set_bounds([args[1], args[2], args[3], args[4]]),
                 0x385 => group.set_layout([args[1], args[2], args[3], args[4]]),
                 0x389 => group.set_colors(args[1], args[2]),
                 0x38e => group.set_field_148(args[1]),
                 0x392 => group.set_field_140(args[1]),
+                0x393 => group.set_field_144(args[1]),
                 0x38f => group.set_layer(args[1]),
                 _ => group.set_text_parameters(args[1], args[2], args[3]),
             }
@@ -1316,6 +1323,27 @@ impl MessageHost {
         vm: &mut Machine<'_>,
         images: &mut dyn ImageSource,
     ) -> Result<bool, Box<dyn Error>> {
+        if let Some((pc, 0x397)) = vm.pending_system() {
+            let slot = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x2397, e.0))? as usize;
+            let raw = vm.stack().peek_u32(8).map_err(|e| error(pc, 0x2397, e.0))?;
+            if slot >= AUXILIARY_TEXTS || self.auxiliary_texts[slot].is_none() {
+                return Err(error(
+                    pc,
+                    0x2397,
+                    "auxiliary text group is not created or outside 0..7",
+                )
+                .into());
+            }
+            let name = vm.resolve_string(raw)?;
+            let image = scene::load_image(images, name, pc, 0x2397)?
+                .ok_or_else(|| error(pc, 0x2397, "auxiliary second texture is missing"))?;
+            vm.complete_system(SystemResult(0x4008))?;
+            self.auxiliary_texts[slot]
+                .as_mut()
+                .expect("validated group")
+                .secondary_image = Some(image);
+            return Ok(true);
+        }
         let Some((pc, 0x170)) = vm.pending_system() else {
             return Ok(false);
         };

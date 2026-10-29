@@ -3,7 +3,7 @@ use super::RESEARCH_SCREEN;
 use crate::{
     FormatError, MAX_PAYLOAD,
     raster::RgbaImage,
-    scene::{DrawSetter, DrawState, SceneObject},
+    scene::{DrawSetter, DrawState, ObjectImage, SceneObject},
 };
 use std::collections::BTreeMap;
 
@@ -67,6 +67,9 @@ pub struct AuxiliaryText {
     /// Owned atlas scene object; backing texture metadata belongs to `atlas`.
     /// It is not a scene slot and must never be drawn using guessed texture pixels.
     pub object: SceneObject,
+    /// 0x2397 attaches this at object +6184 and selects draw mode +88 = 4.
+    /// It is a second texture, not a replacement for the glyph atlas.
+    pub secondary_image: Option<ObjectImage>,
 }
 
 impl AuxiliaryText {
@@ -139,6 +142,11 @@ impl AuxiliaryText {
         self.words.insert(140, value);
     }
 
+    /// 0x14002e850 stores the complete parameter word at +144.
+    pub(super) fn set_field_144(&mut self, value: u32) {
+        self.words.insert(144, value);
+    }
+
     /// 0x14002e870 -> 0x14003b0d0 -> 0x14001f430.
     pub(super) fn set_layer(&mut self, value: u32) {
         self.words.insert(172, value);
@@ -147,6 +155,21 @@ impl AuxiliaryText {
             .as_mut()
             .expect("owned atlas draw state")
             .set(DrawSetter::Layer(value));
+    }
+
+    /// 0x14002e8e0 destroys attached glyph objects and text rows, then resets
+    /// the layout cursor. Content creation is still a barrier, so rows are empty.
+    pub(super) fn clear_content(&mut self) {
+        self.object.children.clear();
+        self.words.insert(176, self.words[&16]);
+        self.words.insert(180, self.words[&20]);
+    }
+
+    /// 0x14002e880 stores four signed integer parameters as single precision.
+    pub(super) fn set_bounds(&mut self, args: [u32; 4]) {
+        for (offset, value) in [32, 36, 40, 44].into_iter().zip(args) {
+            self.words.insert(offset, ((value as i32) as f32).to_bits());
+        }
     }
 
     pub(super) fn new(glyph_size: u32, capacity: u32) -> Result<Self, FormatError> {
@@ -192,6 +215,7 @@ impl AuxiliaryText {
         Ok(Self {
             words,
             atlas,
+            secondary_image: None,
             object: SceneObject {
                 draw: Some(draw),
                 logical_size: RESEARCH_SCREEN,
