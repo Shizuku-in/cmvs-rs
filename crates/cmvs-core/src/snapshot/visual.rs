@@ -1,0 +1,403 @@
+//! Bounded, version-specific visual records. This is an offline component preview,
+//! never a replacement for the engine snapshot loader. Evidence: snapshot-format.md.
+use super::{SnapshotRecord, parse_records, unique_body};
+use crate::{
+    FormatError,
+    image::{self, ImageSource},
+    message::{MessageHost, MessageWindow, TextObject},
+    save::Csv2Save,
+    scene::{ClearState, DrawState, ObjectImage, SceneHost, SceneObject},
+};
+use std::{collections::BTreeMap, error::Error};
+mod draw;
+mod text;
+mod window;
+
+const MAX_NODES: usize = 2048;
+const MAX_DEPTH: usize = 32;
+const MAX_PIXELS: usize = 64 * 1024 * 1024;
+
+struct Reader<'a> {
+    bytes: &'a [u8],
+    at: usize,
+}
+impl<'a> Reader<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, at: 0 }
+    }
+    fn take(&mut self, count: usize) -> Result<&'a [u8], FormatError> {
+        let end = self
+            .at
+            .checked_add(count)
+            .filter(|&n| n <= self.bytes.len())
+            .ok_or(FormatError("truncated snapshot visual record"))?;
+        let bytes = &self.bytes[self.at..end];
+        self.at = end;
+        Ok(bytes)
+    }
+    fn u16(&mut self) -> Result<u16, FormatError> {
+        Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
+    }
+    fn u32(&mut self) -> Result<u32, FormatError> {
+        Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+    }
+    fn words<const N: usize>(&mut self) -> Result<[u32; N], FormatError> {
+        let mut out = [0; N];
+        for n in &mut out {
+            *n = self.u32()?;
+        }
+        Ok(out)
+    }
+    fn string(&mut self, limit: usize) -> Result<&'a [u8], FormatError> {
+        let len = self.bytes[self.at..]
+            .iter()
+            .take(limit)
+            .position(|&b| b == 0)
+            .ok_or(FormatError(
+                "snapshot visual string exceeds bound or lacks NUL",
+            ))?;
+        let out = self.take(len)?;
+        self.take(1)?;
+        Ok(out)
+    }
+    fn peek(&self) -> Option<u16> {
+        self.bytes
+            .get(self.at..self.at + 2)
+            .map(|b| u16::from_le_bytes(b.try_into().unwrap()))
+    }
+    fn chunk(&mut self) -> Result<&'a [u8], FormatError> {
+        let len = self.u32()?;
+        self.take(len as usize)
+    }
+    fn finish(&self) -> Result<(), FormatError> {
+        if self.at == self.bytes.len() {
+            Ok(())
+        } else {
+            Err(FormatError("trailing snapshot visual bytes"))
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedImage {
+    pub name: Vec<u8>,
+    pub size: [u32; 2],
+    pub filter: Option<[u32; 3]>,
+}
+impl SavedImage {
+    fn decode(bytes: &[u8]) -> Result<Self, FormatError> {
+        let mut r = Reader::new(bytes);
+        let h = r.words::<10>()?;
+        if h[0] != 3 {
+            return Err(FormatError("unsupported snapshot image version"));
+        }
+        if h[1..5].iter().chain(&h[9..]).any(|&v| v != 0) {
+            return Err(FormatError(
+                "unsupported snapshot image kind, flags or subobject",
+            ));
+        }
+        let filter = (h[5] != 0).then_some([h[6], h[7], h[8]]);
+        if filter.is_some_and(|p| p[0] != 2) {
+            return Err(FormatError("unsupported snapshot image filter"));
+        }
+        let name = r.string(64)?.to_vec();
+        if name.is_empty() || !r.string(32)?.is_empty() {
+            return Err(FormatError(
+                "snapshot blank or compound image is not implemented",
+            ));
+        }
+        let tail = r.words::<3>()?;
+        r.finish()?;
+        if tail[0] != 0 {
+            return Err(FormatError(
+                "snapshot alternate image resource manager is not implemented",
+            ));
+        }
+        if tail[1] == 0
+            || tail[2] == 0
+            || u64::from(tail[1]) * u64::from(tail[2]) > (MAX_PIXELS / 4) as u64
+        {
+            return Err(FormatError(
+                "snapshot image dimensions exceed preview budget",
+            ));
+        }
+        Ok(Self {
+            name,
+            size: [tail[1], tail[2]],
+            filter,
+        })
+    }
+    fn load(
+        &self,
+        source: &mut dyn ImageSource,
+        budget: &mut usize,
+    ) -> Result<ObjectImage, Box<dyn Error>> {
+        // Check the saved dimensions before allocating decoded pixels. The actual
+        // resource must match them below; image::load also has its own codec bound.
+        let required = u64::from(self.size[0]) * u64::from(self.size[1]) * 4;
+        if required > *budget as u64 {
+            return Err(FormatError("snapshot preview exceeds decoded image budget").into());
+        }
+        let decoded = image::load(source, &self.name)?.ok_or(FormatError(
+            "snapshot image is missing or has an unknown codec",
+        ))?;
+        if self.size != [decoded.pixels.width(), decoded.pixels.height()] {
+            return Err(FormatError("snapshot image dimensions disagree with resource").into());
+        }
+        *budget = budget
+            .checked_sub(decoded.pixels.pixels().len())
+            .ok_or(FormatError("snapshot preview exceeds decoded image budget"))?;
+        let mut image = ObjectImage {
+            name: self.name.clone(),
+            pixels: decoded.pixels,
+            alpha: decoded.alpha,
+            filter: None,
+        };
+        if let Some(filter) = self.filter {
+            image.apply_filter(filter)?;
+        }
+        Ok(image)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedScene {
+    pub shown: bool,
+    pub flags: u32,
+    pub logical_size: [u32; 2],
+    pub image: Option<SavedImage>,
+    pub secondary_image: Option<SavedImage>,
+    pub draw: Option<DrawState>,
+    /// +6264..+6304; only the inactive effect branch (word 0 == 0) is supported.
+    pub effect_words: [u32; 11],
+    pub children: BTreeMap<u16, SavedScene>,
+}
+impl SavedScene {
+    fn decode(bytes: &[u8], depth: usize, nodes: &mut usize) -> Result<Self, FormatError> {
+        if depth > MAX_DEPTH || *nodes == MAX_NODES {
+            return Err(FormatError(
+                "snapshot scene nesting or node budget exceeded",
+            ));
+        }
+        *nodes += 1;
+        let mut r = Reader::new(bytes);
+        if r.u16()? != 0xffff || r.u16()? != 3 {
+            return Err(FormatError("unsupported snapshot scene version"));
+        }
+        let h = r.words::<8>()?;
+        if h[0] > 1 || h[3..6] != [0; 3] {
+            return Err(FormatError("unsupported snapshot scene kind or metadata"));
+        }
+        let mut image = None;
+        let mut secondary_image = None;
+        let mut draw = None;
+        // The native format has a fixed optional-chunk order, followed by an
+        // untagged 44-byte effect block; do not scan arbitrary words for tags.
+        for tag in [0x740, 0x741, 0x745, 0x749, 0x780] {
+            if r.peek() == Some(tag) {
+                r.u16()?;
+                let bytes = r.chunk()?;
+                match tag {
+                    0x740 => image = Some(SavedImage::decode(bytes)?),
+                    0x741 => secondary_image = Some(SavedImage::decode(bytes)?),
+                    0x780 => draw = Some(draw::decode(bytes)?),
+                    _ => {
+                        return Err(FormatError(
+                            "snapshot scene special image or effect is not implemented",
+                        ));
+                    }
+                }
+            }
+        }
+        if (h[0] == 1) != draw.is_some() {
+            return Err(FormatError("snapshot scene kind disagrees with draw state"));
+        }
+        let effect_words = r.words::<11>()?;
+        if effect_words[0] != 0 {
+            return Err(FormatError(
+                "snapshot scene image change is not implemented",
+            ));
+        }
+        let mut children = BTreeMap::new();
+        while r.peek() == Some(0x700) {
+            r.u16()?;
+            let slot = r.u16()?;
+            let body = r.chunk()?;
+            if slot >= 768 || children.contains_key(&slot) {
+                return Err(FormatError("snapshot child slot is invalid or duplicated"));
+            }
+            children.insert(slot, Self::decode(body, depth + 1, nodes)?);
+        }
+        if !children.is_empty() && h[2] & 0x8000_0000 == 0 {
+            return Err(FormatError("snapshot children lack inheritance flag"));
+        }
+        if r.u16()? != 0xf0f0 {
+            return Err(FormatError("invalid snapshot scene terminator"));
+        }
+        r.finish()?;
+        Ok(Self {
+            shown: h[1] != 0,
+            flags: h[2],
+            logical_size: [h[6], h[7]],
+            image,
+            secondary_image,
+            draw,
+            effect_words,
+            children,
+        })
+    }
+    fn load(
+        &self,
+        source: &mut dyn ImageSource,
+        budget: &mut usize,
+    ) -> Result<SceneObject, Box<dyn Error>> {
+        let mut object = SceneObject {
+            shown: self.shown,
+            flags: self.flags,
+            logical_size: self.logical_size,
+            draw: self.draw.clone(),
+            ..SceneObject::default()
+        };
+        object.image = self
+            .image
+            .as_ref()
+            .map(|i| i.load(source, budget))
+            .transpose()?;
+        object.secondary_image = self
+            .secondary_image
+            .as_ref()
+            .map(|i| i.load(source, budget))
+            .transpose()?;
+        for (&slot, child) in &self.children {
+            object.children.insert(slot, child.load(source, budget)?);
+        }
+        Ok(object)
+    }
+}
+
+/// Parsed records retain window words whose behavior is not yet modeled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedWindow {
+    state: MessageWindow,
+    pub logical_size: [u32; 2],
+    pub button_words: [u32; 32],
+    pub switch_state: u32,
+    pub scene: SavedScene,
+}
+
+/// Typed visual subset, not a full-engine restore image. Public fields are read-only
+/// through accessors so callers cannot bypass parse limits before resource loading.
+#[derive(Debug)]
+pub struct VisualSnapshot {
+    clear: ClearState,
+    texts: [Option<TextObject>; 12],
+    windows: [Option<SavedWindow>; 8],
+    objects: BTreeMap<u8, SavedScene>,
+    pub uninterpreted: Vec<SnapshotRecord>,
+}
+/// Fresh standalone hosts for rendering and advancing supported object animations.
+/// Timers, cameras, VM, audio, auxiliary text and global effects are not installed.
+/// Window button_words/switch_state remain in VisualSnapshot, not these hosts;
+/// this API does not claim to resume window interaction or execute a loaded game.
+#[derive(Debug)]
+pub struct VisualPreview {
+    pub scene: SceneHost,
+    pub messages: MessageHost,
+}
+impl VisualSnapshot {
+    pub fn clear(&self) -> ClearState {
+        self.clear
+    }
+    pub fn texts(&self) -> &[Option<TextObject>; 12] {
+        &self.texts
+    }
+    pub fn windows(&self) -> &[Option<SavedWindow>; 8] {
+        &self.windows
+    }
+    pub fn objects(&self) -> &BTreeMap<u8, SavedScene> {
+        &self.objects
+    }
+    pub fn decode(save: &Csv2Save) -> Result<Self, FormatError> {
+        Self::decode_records(&save.snapshot)
+    }
+    pub fn decode_records(bytes: &[u8]) -> Result<Self, FormatError> {
+        let records = parse_records(bytes)?;
+        let scalar = |tag| {
+            let mut r = Reader::new(unique_body(bytes, &records, tag)?);
+            let n = r.u32()?;
+            r.finish()?;
+            Ok::<_, FormatError>(n)
+        };
+        let clear = ClearState {
+            color: scalar(0x200)?,
+            depth: scalar(0x203)? != 0,
+        };
+        let mut out = Self {
+            clear,
+            texts: std::array::from_fn(|_| None),
+            windows: std::array::from_fn(|_| None),
+            objects: BTreeMap::new(),
+            uninterpreted: Vec::new(),
+        };
+        let mut nodes = 0;
+        for record in records {
+            let body = &bytes[record.body.clone()];
+            let index = usize::from(record.index.unwrap_or(0));
+            match record.tag {
+                0x200 | 0x203 => {}
+                0x380 => {
+                    if index >= 12 || out.texts[index].is_some() {
+                        return Err(FormatError("invalid or duplicate snapshot text slot"));
+                    }
+                    out.texts[index] = Some(text::decode(body)?);
+                }
+                0x400 => {
+                    if index >= 8 || out.windows[index].is_some() {
+                        return Err(FormatError("invalid or duplicate snapshot window slot"));
+                    }
+                    out.windows[index] = Some(window::decode(body, &mut nodes)?);
+                }
+                0x700 => {
+                    if index >= 256 || out.objects.contains_key(&(index as u8)) {
+                        return Err(FormatError("invalid or duplicate snapshot scene slot"));
+                    }
+                    out.objects
+                        .insert(index as u8, SavedScene::decode(body, 0, &mut nodes)?);
+                }
+                _ => out.uninterpreted.push(record),
+            }
+        }
+        for window in out.windows.iter().flatten() {
+            let text = out.texts[window.state.text]
+                .as_ref()
+                .ok_or(FormatError("snapshot window references absent text"))?;
+            if text.logical_size.map(|v| v as u32) != window.logical_size {
+                return Err(FormatError(
+                    "snapshot window and text logical sizes disagree",
+                ));
+            }
+        }
+        Ok(out)
+    }
+    /// Reads named resources through the caller's existing read-only image source.
+    /// Returns hosts only after every resource succeeds; no existing engine is changed.
+    pub fn preview(&self, source: &mut dyn ImageSource) -> Result<VisualPreview, Box<dyn Error>> {
+        let mut budget = MAX_PIXELS;
+        let mut objects = BTreeMap::new();
+        for (&slot, saved) in &self.objects {
+            objects.insert(slot, saved.load(source, &mut budget)?);
+        }
+        let mut windows = std::array::from_fn(|_| None);
+        for (slot, saved) in self.windows.iter().enumerate() {
+            if let Some(saved) = saved {
+                let mut window = saved.state.clone();
+                window.object = saved.scene.load(source, &mut budget)?;
+                windows[slot] = Some(window);
+            }
+        }
+        Ok(VisualPreview {
+            scene: SceneHost::snapshot_preview(self.clear, objects),
+            messages: MessageHost::snapshot_preview(self.texts.clone(), windows),
+        })
+    }
+}

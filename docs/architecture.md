@@ -115,6 +115,8 @@
 
 `system_save` 独立处理 CSS1：恢复经核对的持久变量和文件名列表；候选状态完成验证后才提交。`system_save/pack.rs` 负责 1024 字节字典与 48 字节匹配压缩，`write.rs` 负责完整已知持久区序列化、变换/校验和可选导出。导出需要已加载来源的头部注释模板；未知变量报错，不能补零。缺失稀疏变量不隐式初始化。`0x22b5` 完整剧情恢复保持未实现。格式与限制见 [save](formats/save-format.md)、[system-save](formats/system-save-format.md)、[snapshot](formats/snapshot-format.md)。
 
+`snapshot::VisualSnapshot` 在独立模型内解析清屏状态及有证据的文字/窗口/场景记录；`preview` 经既有 `ImageSource`、PB3 解码和过滤器重建独立 `SceneHost` / `MessageHost`，供渲染及帧动画推进。资源缺失、尺寸不符、预算超限或未知分支返回错误，所有资源成功后才返回新宿主。它不修改运行中的Machine；窗口未建模状态字留在检查模型，字体使用后端显式选择，摄像机、音频、回调、计时及全局效果没有安装，因此不能用于继续剧情或交互式读档。核心不引入字体或设备依赖。
+
 `platform::PlatformHost` 解码已验证的标题、图标、光标等请求，通过 `PlatformBackend::apply` 应用；后端成功后才完成 VM 命令并提交宿主状态。`RecordingBackend` 保留请求，不能证明原生 API 已执行。`PlatformAssets`/`DirectoryAssets` 提供显式游戏根目录下的只读素材，CUR 核心保留 AND/XOR 平面与热点，原生光标转换由桌面完成。见 [platform-host](backends/platform-host.md)。
 
 ## 运行编排与时间

@@ -60,7 +60,7 @@ pub struct ObjectImage {
 }
 
 impl ObjectImage {
-    fn apply_filter(&mut self, parameters: [u32; 3]) -> Result<(), crate::FormatError> {
+    pub(crate) fn apply_filter(&mut self, parameters: [u32; 3]) -> Result<(), crate::FormatError> {
         let [mode, color, _extra] = parameters;
         if mode != 2 {
             return Err(crate::FormatError(
@@ -254,6 +254,13 @@ pub struct SceneHost {
     strip: Option<StripWipe>,
 }
 impl SceneHost {
+    pub(crate) fn snapshot_preview(clear: ClearState, objects: BTreeMap<u8, SceneObject>) -> Self {
+        Self {
+            clear,
+            objects,
+            ..Self::default()
+        }
+    }
     pub fn fade(&self) -> &crate::fade::FadeHost {
         &self.fade
     }

@@ -14,12 +14,13 @@ fn run() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = env::args_os().skip(1).collect();
     if args.len() == 1 && args[0] == "--help" {
         println!(
-            "Usage: cmvs-save <save.dat>\n       cmvs-save --section <0|1|2> <save.dat> <new-output-file>\n       cmvs-save --records <save.dat>\n       cmvs-save --vm-state <save.dat>\nRead-only CSV2 decoding. Section 0=snapshot, 1=auxiliary, 2=script memory image. Only section 0 has the original additive checksum; this does not authenticate the full file. --records lists framing; --vm-state validates typed VM fields and lists uninterpreted records. Neither installs engine state."
+            "Usage: cmvs-save <save.dat>\n       cmvs-save --section <0|1|2> <save.dat> <new-output-file>\n       cmvs-save --records <save.dat>\n       cmvs-save --vm-state <save.dat>\n       cmvs-save --visual-state <save.dat>\nRead-only CSV2 decoding. Section 0=snapshot, 1=auxiliary, 2=script memory image. Only section 0 has the original additive checksum; this does not authenticate the full file. --records lists framing; --vm-state validates typed VM fields; --visual-state validates the supported text/window/scene subset without reading resources. These commands never install engine state."
         );
         return Ok(());
     }
     let records = args.len() == 2 && args[0] == "--records";
     let vm_state = args.len() == 2 && args[0] == "--vm-state";
+    let visual_state = args.len() == 2 && args[0] == "--visual-state";
     let section = if args.len() == 4 && args[0] == "--section" {
         let index = args[1]
             .to_str()
@@ -29,14 +30,14 @@ fn run() -> Result<(), Box<dyn Error>> {
             return Err("section must be 0, 1 or 2".into());
         }
         Some(index)
-    } else if records || vm_state || (args.len() == 1 && args[0] != "--section") {
+    } else if records || vm_state || visual_state || (args.len() == 1 && args[0] != "--section") {
         None
     } else {
         return Err("wrong argument count; use --help".into());
     };
     let input = if section.is_some() {
         &args[2]
-    } else if records || vm_state {
+    } else if records || vm_state || visual_state {
         &args[1]
     } else {
         &args[0]
@@ -81,6 +82,41 @@ fn run() -> Result<(), Box<dyn Error>> {
                 record.body.len()
             );
         }
+    }
+    if visual_state {
+        let visual = snapshot::VisualSnapshot::decode(&save)?;
+        println!(
+            "visual clear={:?} texts={} windows={} objects={}",
+            visual.clear(),
+            visual.texts().iter().flatten().count(),
+            visual.windows().iter().flatten().count(),
+            visual.objects().len()
+        );
+        for (&slot, scene) in visual.objects() {
+            println!(
+                "scene[{slot}] shown={} children={} image={}",
+                scene.shown,
+                scene.children.len(),
+                scene
+                    .image
+                    .as_ref()
+                    .map_or_else(|| "<none>".into(), |i| i.name.escape_ascii().to_string())
+            );
+        }
+        for (slot, window) in visual.windows().iter().enumerate() {
+            if let Some(window) = window {
+                println!(
+                    "window[{slot}] children={} button_words={:?} switch_state={}",
+                    window.scene.children.len(),
+                    window.button_words,
+                    window.switch_state
+                );
+            }
+        }
+        println!(
+            "# visual subset only; {} other records uninterpreted; resources not loaded; no engine restoration",
+            visual.uninterpreted.len()
+        );
     }
     if vm_state {
         let vm = snapshot::VmSnapshot::decode(&save)?;

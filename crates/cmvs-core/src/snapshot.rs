@@ -6,8 +6,10 @@ use crate::{
 use std::ops::Range;
 
 mod variables;
+mod visual;
 mod vm_state;
 pub use variables::LocalVariables;
+pub use visual::{SavedImage, SavedScene, SavedWindow, VisualPreview, VisualSnapshot};
 pub use vm_state::VmSnapshot;
 
 fn unique_body<'a>(
@@ -18,9 +20,9 @@ fn unique_body<'a>(
     let mut found = records.iter().filter(|r| r.tag == tag);
     let record = found
         .next()
-        .ok_or(FormatError("missing required snapshot VM record"))?;
+        .ok_or(FormatError("missing required snapshot record"))?;
     if found.next().is_some() {
-        return Err(FormatError("duplicate snapshot VM record"));
+        return Err(FormatError("duplicate snapshot record"));
     }
     Ok(&bytes[record.body.clone()])
 }

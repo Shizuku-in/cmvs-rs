@@ -173,6 +173,18 @@ pub struct MessageHost {
 }
 
 impl MessageHost {
+    pub(crate) fn snapshot_preview(
+        texts: [Option<TextObject>; TEXT_OBJECTS],
+        windows: [Option<MessageWindow>; MESSAGE_WINDOWS],
+    ) -> Self {
+        let fonts = std::array::from_fn(|i| texts[i].is_some());
+        Self {
+            texts,
+            windows,
+            fonts,
+            ..Self::default()
+        }
+    }
     pub fn auxiliary_text(&self, slot: usize) -> Option<&AuxiliaryText> {
         self.auxiliary_texts.get(slot)?.as_ref()
     }

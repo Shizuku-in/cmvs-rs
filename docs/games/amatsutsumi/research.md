@@ -1827,3 +1827,26 @@ python local/character_verify.py character-endpoint-new
 复现/对照工具均在忽略的local目录：`snapshot_vm_probe.rs` SHA-256 `e18e5be29efe996729fd40f49806a9e2a71316698db20e144cccd13c776ed639`，实际 `snapshot-vm-probe.exe` 为 `a79ac383188d23ea7159cccc48f374b23be0f791c98638ff828d2317b3ce40cc`；`snapshot_reference.py` / `verify_snapshot_vm.py` 分别为 `476a1f0f9e9444064e40fa481419d97807509f2078e27f52e7432c2386f65817` / `151a39128d5df96c5da9603b28494eddf33bf3fee7b06a0fbcf526ff28a9ae5f`。Rust结果日志 `snapshot-vm-real1.log` 为 `e4402513e382892d01ffeaa2ccbd120d84af5831c2f9000afd8dab21076cb4b0`，独立报告 `snapshot-vm-real1-reference.json` 为 `baf432092671dd5cf4548cba8e90f570d15d7a05d07b1a74469fb6157d0ec43c`。解包负载、真实存档和IDA数据库不进入Git。
 
 六项新合成测试通过，覆盖缺失/重复/非法长度、字符串边界、浮点位保持、原子失败、未初始化值、持久区隔离、脚本内存与磁盘分支隔离、非空0x900覆盖、非法主PC和未验证公共PC。默认646项/全功能694项测试、格式、默认/全功能严格Clippy及全功能release构建通过；默认忽略1项外部脚本适配器，全功能另忽略1项设备检查，本轮未重新执行设备。未新增依赖、unsafe或外部源码复用，历史覆盖计数不变。
+
+## CSV2视觉子集解析与独立画面预览（2026-10-29）
+
+本轮延续前节同一可执行文件身份和4份CSV2输入：save000 SHA-256 `a45cdaa63789c7797a085db4d176becf4c3b3d82d94265392e2e7c7e54de61af`、save001 `adf66fc6d80730022ff16cc5e81f8791b54aa104526da5075dcec8c09a21d855`、save002 `c66164c30107b60a8afc5d36dcd96d01dde00dd3efa9d97c443998c8eef358b1`、save870 `4fbfa97d1386b59af1218c9d46b35de060e4abeed18ac6abacb6234f9178384a`。读取原文件及图像包，不向游戏目录写入。序列化/读取地址和未知分支见[VM语义末节](vm-semantics.md#csv2视觉子集与预览2026-10-29)。
+
+新增 `VisualSnapshot` 和CLI `--visual-state`，支持清屏0x200/203、文字380、窗口400、普通场景700及嵌套图像/绘制/帧动画。每份样本都是2个空字形文字（7/10）、2个窗口（0/7）、2个顶层场景（29/69），含窗口树共34个场景节点。原读取器的淡变系数重置256、文字笔复位、窗口按下缓存-1均按证据实现。窗口按钮+72原始值0/3及+2492位置切换缓存留在检查模型，不将其交互行为当作已实现。
+
+独立Python从CSV2解码结果读取原始偏移，输出统一的规范字段流；Rust输出文字全部已建模字段、窗口几何/按钮字段及保留状态字、递归场景/图像引用、绘制状态及动画帧。同样按原读取器重置瞬时字段后逐字节比较，4份全部一致：
+
+| 输入 | 规范字段字节数 | 规范字段SHA-256 | 初始PNG SHA-256 |
+|---|---:|---|---|
+| save000 | 14401 | `aa67a17ae1dee300b0e38fc1ff6168fe934f2b9c29b0cd7d8448843d8cdc3889` | `0bea6414588835b2dac85e66bcb45c08e18a8ad5986a1d5eb9cbce80325ea06d` |
+| save001 | 14397 | `9f4aa633df2098f6a0d3c8b4bc269931072f53bdcabaa767203c5786d693b784` | `a2bcc7fdfa25f4507e815d81717cbca0635530291f57d40c8726e3f7089adcff` |
+| save002 | 14401 | `fbcbf1976193069fd05a440d047076cb0a1372f526e3e92786ed91fb10ca6deb` | `c6f821aeeeb5d2feee549c59264ec0f0eb7b5ccb14a5ecfefee33260576595ac` |
+| save870 | 14401 | `588adc161dffb615abc50193f374ebd31c4784c8a0dd1eae4841b632a192cb1e` | `db88b61f4d205d55509cac2a1ecd8ad4103bdc108194b723e0247e82126fe0b6` |
+
+资源通过 `ImageArchives` 及本作已有2011登记（chip/bg/event/stand/up/balloon）只读加载，没有硬编码到核心。使用既有 `FontRenderer`、显式Windows msgothic.ttc face0、默认CameraHost、1280×720视口渲染；4份初始画面均已逐张查看：save000为树林CG，save001为白屏状态，save002/870为对应鞋部差分CG，均含顶部按钮栏。随后对场景和消息宿主推进200ms，4份再次渲染通过且各自PNG哈希与初始相同；这不是动画已全部覆盖，样本活动窗口光标隐藏，终止动画另由合成测试核对。缺失图像源均显式失败，无新宿主返回；没有继续VM、原生窗口、音频或与原版设备截图逐像素比较。
+
+视觉检查模型解释8条，VM检查模型21条，两者不重叠；每份45条还剩16条：标题100/101、计时/原始字段/回调109/10a/10b、设备201/202、540/6e0、相机880..883、音频304/310/318。即使这些未来均解析，仍须组合验证Machine及所有宿主，处理窗口状态字、已显示字形、特殊图像/效果和持久字体缓存；不能将独立预览当作完整读档。下一步优先核对540/6e0和相机/设备视图记录，补齐视觉全局状态，再接计时/回调与音频。
+
+探针 `local/snapshot_visual_probe.rs` SHA-256 `00078012c0dfecb4194f5c273f4035fe3feef4c3f707741cfb65194b782882cf`；最终release库重编探针exe `3239fb0f5c279692ad45706b223c4fbe3962d17036a9763b5b1af1f977594ea3`（real2再次对照，字段流和PNG哈希与real1一致）；独立对照 `verify_snapshot_visual.py` `3bbfb65ead2d33cb99a2d9dc5c375a6e72f049e4299f05a4ec178baace16587e`，容器参考脚本仍为前节 `476a1f0f9e9444064e40fa481419d97807509f2078e27f52e7432c2386f65817`。真实输出、PNG、工具和IDA数据库仅保存在忽略的local目录，不纳入Git。没有改动PB3解码算法或新增依赖/外部源码。
+
+8项新增合成测试覆盖恢复时的重置、窗口字段与前向引用、资源解码/过滤及尺寸失败、重复/越界索引、逐字节截断、未知分支、递归深度/节点预算、非法动画帧和未解释全局记录保留。默认654项/全功能702项通过；默认忽略1项外部脚本适配器，全功能另忽略1项音频设备检查，本轮未重跑硬件测试。默认/全功能严格Clippy、格式及全功能release构建通过；增量缓存硬链接警告只影响构建缓存，不是代码诊断。
