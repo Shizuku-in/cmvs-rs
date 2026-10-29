@@ -1556,3 +1556,12 @@ cargo fmt --check、cargo test --offline（588 项）、默认严格 Clippy、�
 以END2 CSS1副本、种子0、16ms、ContinueWithoutImage、skip-auto-resume和记录音频/文字正常启动点击鉴赏，真实调用[0,0xffffff,0xffffff]执行通过，SP68→56、七个结果保持；4867步/567次让出停于omake.ps3 / 0x4711a / 0x238e。独立Python核对真实颜色、栈变化、停点与输入哈希；FontRenderer输出与上一黑帧逐字节相同，尚未显示鉴赏菜单。原游戏与输入存档保持只读，探针和真实输出仅在local。验证范围不含原生窗口、音轨、其他游戏或平台；历史覆盖报告不回写。
 
 本轮 cargo fmt --check、cargo test --offline（613项通过、1项外部样本测试默认忽略）、cargo clippy --offline --all-targets -- -D warnings、全workspace全功能测试（658项通过、外部样本及原生音频设备2项默认忽略）、全功能严格Clippy及release构建通过。编译缓存硬链接失败时工具链退回复制，不影响检查退出码。本轮完成此条命令的实现与验证后停下，下一步为0x238e。
+
+
+## 鉴赏辅助文本字段 +148（2026-10-29）
+
+基线a6efab8，核对分发case910、包装0x140073bc0及两条指令的内部0x14002e840，实现0x238e原样写+148；其后续排版用途尚未核对，不作命名推断。参数、返回标志、错误策略和二进制身份见[VM语义](vm-semantics.md#辅助文本字段-148-设置-0x238e2026-10-29)。未新增依赖、外部源码、原生API或资源解码改动。
+
+正常启动、END2 CSS1副本、新用户目录local/audit-omake238e-profile、种子0、16ms、ContinueWithoutImage、skip-auto-resume、记录文字/音频；点击鉴赏后的真实调用[0,0]通过，SP64→56、七个结果与图集/拥有对象保持，4872步/567次让出停在omake.ps3 / 0x47134 / 0x2392。独立Python核对真实参数存储、栈变化、终点、相同PNG及输入哈希。PNG仍与上一黑帧逐字节一致，菜单未显示；高位和非零参数只由反汇编与合成测试覆盖。原游戏与END2来源只读，所有真实输出和探针仅在local，历史覆盖计数不回写。
+
+本轮 cargo fmt --check、cargo test --offline（614项通过、1项外部样本默认忽略）、cargo clippy --offline --all-targets -- -D warnings、全workspace全功能测试（659项通过，外部样本和原生音频设备2项默认忽略）、全功能严格Clippy及release构建通过。12项辅助文本测试通过。本轮完成0x238e实现与验证后停下，下一步为0x2392。

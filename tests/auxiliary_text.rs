@@ -304,9 +304,15 @@ fn positioning_updates_only_auxiliary_coordinates_and_preserves_results() {
 
 #[test]
 fn invalid_auxiliary_setter_target_keeps_pending_command_and_owned_state() {
-    for (opcode, slot, count) in [(0x2383, 3), (0x2385, 5), (0x2387, 4), (0x2389, 3)]
-        .into_iter()
-        .flat_map(|(op, count)| [0, 8, u32::MAX].map(|slot| (op, slot, count)))
+    for (opcode, slot, count) in [
+        (0x2383, 3),
+        (0x2385, 5),
+        (0x2387, 4),
+        (0x2389, 3),
+        (0x238e, 2),
+    ]
+    .into_iter()
+    .flat_map(|(op, count)| [0, 8, u32::MAX].map(|slot| (op, slot, count)))
     {
         let mut code = vec![];
         call(&mut code, 0x2380, &[7, 0, 25, 32]);
@@ -325,7 +331,7 @@ fn invalid_auxiliary_setter_target_keeps_pending_command_and_owned_state() {
             let after = messages.auxiliary_text(7).unwrap();
             assert_eq!(after.word(8), group.word(8));
             assert_eq!(after.word(12), group.word(12));
-            for at in [16, 20, 24, 28, 48, 52, 56, 132, 136, 176, 180] {
+            for at in [16, 20, 24, 28, 48, 52, 56, 132, 136, 148, 176, 180] {
                 assert_eq!(after.word(at), group.word(at));
             }
             assert_eq!(after.object, group.object);
@@ -337,9 +343,15 @@ fn invalid_auxiliary_setter_target_keeps_pending_command_and_owned_state() {
 
 #[test]
 fn incomplete_auxiliary_setter_arguments_leave_group_and_stack_unchanged() {
-    for (opcode, count) in [(0x2383, 3), (0x2385, 5), (0x2387, 4), (0x2389, 3)]
-        .into_iter()
-        .flat_map(|(op, count)| (0..count).map(move |count| (op, count)))
+    for (opcode, count) in [
+        (0x2383, 3),
+        (0x2385, 5),
+        (0x2387, 4),
+        (0x2389, 3),
+        (0x238e, 2),
+    ]
+    .into_iter()
+    .flat_map(|(op, count)| (0..count).map(move |count| (op, count)))
     {
         let mut code = vec![];
         call(&mut code, 0x2380, &[0, 0, 25, 32]);
@@ -356,7 +368,7 @@ fn incomplete_auxiliary_setter_arguments_leave_group_and_stack_unchanged() {
         let after = messages.auxiliary_text(0).unwrap();
         assert_eq!(after.word(8), group.word(8));
         assert_eq!(after.word(12), group.word(12));
-        for at in [16, 20, 24, 28, 48, 52, 56, 132, 136, 176, 180] {
+        for at in [16, 20, 24, 28, 48, 52, 56, 132, 136, 148, 176, 180] {
             assert_eq!(after.word(at), group.word(at));
         }
         assert_eq!(after.object, group.object);
@@ -529,6 +541,46 @@ fn layout_stores_signed_float_fields_without_moving_or_resizing_the_atlas() {
         assert!(messages.text(0).is_none());
         for i in 0..7 {
             assert_eq!(vm.state().system_integer(i), Some(90 + i));
+        }
+    }
+}
+
+#[test]
+fn field_148_preserves_all_parameter_bits_without_affecting_other_state() {
+    let values = [1, 0, 0x01000000, i32::MAX as u32, i32::MIN as u32, u32::MAX];
+    let mut code = vec![];
+    call(&mut code, 0x2380, &[7, 0, 25, 32]);
+    for value in values {
+        call(&mut code, 0x238e, &[7, value]);
+    }
+    let script = script(&code, b"\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages);
+    let before = messages.auxiliary_text(7).unwrap().clone();
+    for i in 0..7 {
+        vm.state_mut().set_system_integer(i, 120 + i).unwrap();
+    }
+    for value in values {
+        pending(&mut vm);
+        let pc = vm.pc();
+        assert_eq!(vm.stack().len_bytes(), 8);
+        assert!(messages.try_handle(&mut vm).unwrap());
+        assert_eq!(vm.pc(), pc + 2);
+        assert!(vm.pending_system().is_none());
+        assert_eq!(vm.stack().len_bytes(), 0);
+        let group = messages.auxiliary_text(7).unwrap();
+        assert_eq!(group.word(148), Some(value));
+        for at in (0..1476).step_by(4).filter(|at| *at != 148) {
+            assert_eq!(group.word(at), before.word(at), "offset {at}");
+        }
+        assert_eq!(group.object, before.object);
+        assert_eq!(group.atlas, before.atlas);
+        assert_eq!(messages.auxiliary_font_present(7), Some(true));
+        assert!(messages.text(7).is_none());
+        assert!(messages.auxiliary_text(0).is_none());
+        for i in 0..7 {
+            assert_eq!(vm.state().system_integer(i), Some(120 + i));
         }
     }
 }

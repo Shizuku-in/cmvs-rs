@@ -128,6 +128,12 @@ impl AuxiliaryText {
         }
     }
 
+    /// 0x14002e840 writes the complete parameter word without validation.
+    /// Its later layout/output use has not yet been verified.
+    pub(super) fn set_field_148(&mut self, value: u32) {
+        self.words.insert(148, value);
+    }
+
     pub(super) fn new(glyph_size: u32, capacity: u32) -> Result<Self, FormatError> {
         let atlas = AuxiliaryGlyphAtlas::new(glyph_size, capacity)?;
         let mut words: BTreeMap<_, _> = (8..184)
