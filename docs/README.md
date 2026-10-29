@@ -12,6 +12,7 @@
 | [Workspace](workspace.md) | crate 划分、feature 与检查命令 |
 | [研究约定](research.md) | 证据绑定、真实样本验证与新游戏接入 |
 | [参考与许可](references.md) | 固定参考提交、依赖许可与使用边界 |
+| [引擎档案层设计](design/engine-profiles.md) | 多构建识别、命令状态闸门、全系列普查与分阶段计划 |
 
 ## 格式与后端
 
