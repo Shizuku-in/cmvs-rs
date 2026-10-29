@@ -134,6 +134,21 @@ impl AuxiliaryText {
         self.words.insert(148, value);
     }
 
+    /// 0x14001d2a0 stores the complete parameter word at +140.
+    pub(super) fn set_field_140(&mut self, value: u32) {
+        self.words.insert(140, value);
+    }
+
+    /// 0x14002e870 -> 0x14003b0d0 -> 0x14001f430.
+    pub(super) fn set_layer(&mut self, value: u32) {
+        self.words.insert(172, value);
+        self.object
+            .draw
+            .as_mut()
+            .expect("owned atlas draw state")
+            .set(DrawSetter::Layer(value));
+    }
+
     pub(super) fn new(glyph_size: u32, capacity: u32) -> Result<Self, FormatError> {
         let atlas = AuxiliaryGlyphAtlas::new(glyph_size, capacity)?;
         let mut words: BTreeMap<_, _> = (8..184)

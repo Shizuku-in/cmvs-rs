@@ -259,14 +259,16 @@ impl MessageHost {
         if let Some((pc, 0x380)) = vm.pending_system() {
             return self.create_auxiliary_text(vm, pc).map(|()| true);
         }
-        if let Some((pc, command @ (0x383 | 0x385 | 0x387 | 0x389 | 0x38e))) = vm.pending_system() {
+        if let Some((pc, command @ (0x383 | 0x385 | 0x387 | 0x389 | 0x38e | 0x38f | 0x392))) =
+            vm.pending_system()
+        {
             // 0x1400736f0 / 0x140073820 / 0x1400738f0 / 0x1400739c0: independent
             // and 0x140073bc0: auxiliary text setters; none changes system results.
             let opcode = 0x2000 + command;
             let count = match command {
                 0x383 | 0x389 => 3,
                 0x385 => 5,
-                0x38e => 2,
+                0x38e | 0x38f | 0x392 => 2,
                 _ => 4,
             };
             let mut args = [0; 5];
@@ -292,6 +294,8 @@ impl MessageHost {
                 0x385 => group.set_layout([args[1], args[2], args[3], args[4]]),
                 0x389 => group.set_colors(args[1], args[2]),
                 0x38e => group.set_field_148(args[1]),
+                0x392 => group.set_field_140(args[1]),
+                0x38f => group.set_layer(args[1]),
                 _ => group.set_text_parameters(args[1], args[2], args[3]),
             }
             return Ok(true);

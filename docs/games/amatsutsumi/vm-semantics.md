@@ -2527,3 +2527,13 @@ Rust在 message/auxiliary.rs 保存构造字段、逻辑图集几何、实际已
 真实END2 CSS1副本（SHA-256 `765896a38317315265d12646f4e03a5920a4823c58dc028460b0e51d49ec4120`）在新的 `local/audit-omake238e-profile` 正常启动进入鉴赏，种子0、16ms、ContinueWithoutImage、skip-auto-resume、记录文字/音频。`omake.ps3 / 0x4711a` 的实际参数[0,0]成功，SP64→56，+148从0保持0，七个结果、拥有对象与图集保持。`local/aux_field148_reference.py` 独立标准库Python验证原始参数存储、栈变化、停点、图像字节和输入哈希；非零与边界值只由静态证据和合成测试覆盖。
 
 4872步/567次让出停于 `omake.ps3 / PC=0x47134 / 未处理0x2392`，SP64，较旧屏障增加5步、无新增让出。终点FontRenderer成功，PNG与上一黑帧逐字节一致（SHA-256 `ae57b84a4c69aa9c6cda290d617503943434eb78a37fb18353074ef2e63c4c83`），鉴赏菜单及辅助文字仍未显示，未新增原生窗口/音轨实测。原游戏system.dat SHA-256仍为 `ace328a04d320626ee61ef69e1668d90e1c7a2a862e5fbd8c0a2dfa92f089410`，END2输入也未变。探针、真实样本、日志、PC列表和PNG只留忽略的local，历史覆盖报告保持原采集记录。下一0x2392尚未读取内部，不推断语义。
+
+## 辅助文本字段 +140 与图层 0x2392 / 0x238f（2026-10-29）
+
+基线 232aa0d；IDA 输入 cmvs64.exe SHA-256 重新核对为 dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5，x86-64、image base 0x140000000。分发器 0x1400823a0 case914（0x140084bf7..0x140084bff）→0x140073dc0→0x14001d2a0，后者仅将完整 edx 写入辅助对象 +140；不归一、不限制范围，不推断该字段后续用途。case911→0x140073c20→0x14002e870 写 +172，并沿 0x14003b0d0→0x14001f430 将相同参数写入拥有对象 DrawState+40（图层）。均取 SP-4 组号、SP-8 参数，返回0x4008，七个结果保持。原版无效组置引擎+12056的0x1000位；Rust对负/越界/缺失组和缺参显式报错，保留挂起命令、PC/SP及原状态。层值完整保存，不限制为当前可见层范围。
+
+两项新增合成测试覆盖0、1、高字节、i32极值与全位值，以及其他字段、图集、拥有对象和结果保持（图层命令仅修改所需draw字）；既有缺参及无效目标测试扩展至两条命令。无新增依赖、原生接口或解码改动。
+
+真实入口：新独立 local/audit-omake2392-profile 与 audit-omake238f-profile，只读复制既有END2 CSS1（SHA-256 765896a38317315265d12646f4e03a5920a4823c58dc028460b0e51d49ec4120），种子0、16ms、ContinueWithoutImage、skip-auto-resume、记录文字/音频，点击标题鉴赏。0x47134的0x2392参数[0,1]使+140从2变1；4877步/567次让出停0x4714e/0x238f。接入0x238f后实际参数[0,10]，+172和draw层从1变10，4880步/567次让出停0x4715c/0x2386；两条SP均64→56、结果与图集保持。标准库Python local/aux_field140_reference.py、aux_layer_reference.py分别验证真实参数、栈回收、终点、输入哈希和黑帧相同。FontRenderer通过，PNG仍为ae57b84a4c69aa9c6cda290d617503943434eb78a37fb18353074ef2e63c4c83；不代表菜单显示。未新增原生窗口/音轨验证。原system.dat仍为ace328a04d320626ee61ef69e1668d90e1c7a2a862e5fbd8c0a2dfa92f089410。真实探针、PC表、日志、PNG仅留local，历史覆盖计数不重算。
+
+本组 cargo fmt --check、默认616项/全workspace全功能661项测试、默认/全功能严格Clippy及release全功能构建通过；音频硬件检查1项默认忽略。
