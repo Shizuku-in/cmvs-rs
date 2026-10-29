@@ -238,6 +238,24 @@ fn profile_text_round_trips_and_marks_present_commands_by_profile_kind() {
 }
 
 #[test]
+fn profile_data_parses_the_same_with_crlf_line_endings() {
+    let root = build("synthetic-root", None, &[0, 1, 2, 0], 1).to_text();
+    let derived = build(
+        "synthetic-derived",
+        Some("synthetic-root"),
+        &[0, 1, 2, 0],
+        3,
+    )
+    .to_text();
+    let records = games(&[7; 32], &[8; 32], &[3; 32]);
+    let crlf = |text: &str| text.replace('\n', "\r\n");
+    assert_eq!(
+        Registry::parse(&[&crlf(&root), &crlf(&derived)], &crlf(&records)).unwrap(),
+        Registry::parse(&[&root, &derived], &records).unwrap()
+    );
+}
+
+#[test]
 fn profile_tables_reject_contradictions_and_mixed_builds() {
     let root = build("synthetic-root", None, &[0, 1, 2], 1).to_text();
     let reject = |text: String, needle: &str| {
