@@ -1,7 +1,1 @@
-* text=auto
-*.rs text eol=lf
-*.toml text eol=lf
-*.md text eol=lf
-*.py text eol=lf
-# Embedded engine profile data: parsed at runtime via include_str!, keep LF everywhere.
-crates/cmvs-core/profiles/** text eol=lf
+* text=auto eol=lf
