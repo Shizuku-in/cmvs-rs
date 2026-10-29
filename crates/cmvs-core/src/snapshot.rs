@@ -5,9 +5,11 @@ use crate::{
 };
 use std::ops::Range;
 
+mod engine;
 mod variables;
 mod visual;
 mod vm_state;
+pub use engine::EngineSnapshot;
 pub use variables::LocalVariables;
 pub use visual::{SavedImage, SavedScene, SavedWindow, VisualPreview, VisualSnapshot};
 pub use vm_state::VmSnapshot;

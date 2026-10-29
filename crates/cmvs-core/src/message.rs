@@ -157,6 +157,9 @@ pub struct TextObject {
     pub ruby_spacing: i32,
     /// None until 0x211e; the constructor zeroes +328.
     pub line_break: Option<LineBreakRules>,
+    /// +324: glyph texture capacity from creation (0x2100 SP-12, 196 for 0x215d); saved by
+    /// the snapshot (0x14005c790) and passed back to the constructor on load.
+    pub glyph_capacity: u32,
 }
 
 #[derive(Debug, Default)]
@@ -694,7 +697,8 @@ impl MessageHost {
         if !vm.resolve_string(word(8)?)?.is_empty() {
             return Err(error(pc, 0x2100, "font face selection is not modeled"));
         }
-        if !matches!(word(12)?, 0 | 196) {
+        let glyph_capacity = word(12)?;
+        if !matches!(glyph_capacity, 0 | 196) {
             return Err(error(
                 pc,
                 0x2100,
@@ -738,6 +742,7 @@ impl MessageHost {
             ruby_size: 12,
             ruby_spacing: 0,
             line_break: None,
+            glyph_capacity,
         });
         Ok(())
     }
@@ -1586,6 +1591,7 @@ impl MessageHost {
             ruby_size: 12,
             ruby_spacing: 0,
             line_break: None,
+            glyph_capacity: 196,
         });
         self.windows[slot] = Some(MessageWindow {
             text,

@@ -79,6 +79,7 @@ fn created_text(position: [i32; 2], size: [u32; 2]) -> TextObject {
         ruby_size: 12,
         ruby_spacing: 0,
         line_break: None,
+        glyph_capacity: 196,
     }
 }
 fn pending(vm: &mut Machine<'_>) {
@@ -774,6 +775,7 @@ fn standalone_text_creation_uses_constructor_values_and_overwrites_in_place() {
         position: [0, 0],
         glyph_size: 0,
         char_delay: 30,
+        glyph_capacity: 0,
         ..created_text([0, 0], [0, 0])
     };
     assert_eq!(messages.text(3), Some(&expected));
@@ -783,7 +785,11 @@ fn standalone_text_creation_uses_constructor_values_and_overwrites_in_place() {
     run(&mut vm, &mut messages, 1);
     assert!(messages.text(3).unwrap().ruby);
     run(&mut vm, &mut messages, 1);
-    assert_eq!(messages.text(3), Some(&expected));
+    let recreated = TextObject {
+        glyph_capacity: 196,
+        ..expected.clone()
+    };
+    assert_eq!(messages.text(3), Some(&recreated));
     assert!((0..MESSAGE_WINDOWS).all(|slot| messages.window(slot).is_none()));
     assert_eq!(vm.stack().len_bytes(), 0);
 }

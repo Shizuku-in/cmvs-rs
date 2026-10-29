@@ -10,8 +10,8 @@ use crate::{
 };
 use std::{collections::BTreeMap, error::Error};
 mod draw;
-mod text;
-mod window;
+pub(super) mod text;
+pub(super) mod window;
 
 const MAX_NODES: usize = 2048;
 const MAX_DEPTH: usize = 32;
@@ -83,8 +83,38 @@ pub struct SavedImage {
     pub name: Vec<u8>,
     pub size: [u32; 2],
     pub filter: Option<[u32; 3]>,
+    /// +1204..+1212 while +1200 is clear: earlier parameters the loader ignores.
+    pub disabled_filter: [u32; 3],
 }
+
+/// Appends `u16 tag, u32 length, body`, the chunk framing inside visual records.
+pub(crate) fn chunk(out: &mut Vec<u8>, tag: u16, body: &[u8]) {
+    out.extend(tag.to_le_bytes());
+    out.extend((body.len() as u32).to_le_bytes());
+    out.extend(body);
+}
+fn words(out: &mut Vec<u8>, words: &[u32]) {
+    for word in words {
+        out.extend(word.to_le_bytes());
+    }
+}
+
 impl SavedImage {
+    /// Image writer 0x140030030 for the supported single-file branch.
+    pub(crate) fn encode(&self) -> Vec<u8> {
+        let (enabled, params) = match self.filter {
+            Some(params) => (1, params),
+            None => (0, self.disabled_filter),
+        };
+        let mut out = Vec::new();
+        words(&mut out, &[3, 0, 0, 0, 0, enabled]);
+        words(&mut out, &params);
+        words(&mut out, &[0]);
+        out.extend(&self.name);
+        out.extend([0, 0]);
+        words(&mut out, &[0, self.size[0], self.size[1]]);
+        out
+    }
     fn decode(bytes: &[u8]) -> Result<Self, FormatError> {
         let mut r = Reader::new(bytes);
         let h = r.words::<10>()?;
@@ -95,6 +125,9 @@ impl SavedImage {
             return Err(FormatError(
                 "unsupported snapshot image kind, flags or subobject",
             ));
+        }
+        if h[5] > 1 {
+            return Err(FormatError("unsupported snapshot image filter flag"));
         }
         let filter = (h[5] != 0).then_some([h[6], h[7], h[8]]);
         if filter.is_some_and(|p| p[0] != 2) {
@@ -125,6 +158,11 @@ impl SavedImage {
             name,
             size: [tail[1], tail[2]],
             filter,
+            disabled_filter: if filter.is_some() {
+                [0; 3]
+            } else {
+                [h[6], h[7], h[8]]
+            },
         })
     }
     fn load(
@@ -173,7 +211,11 @@ pub struct SavedScene {
     pub children: BTreeMap<u16, SavedScene>,
 }
 impl SavedScene {
-    fn decode(bytes: &[u8], depth: usize, nodes: &mut usize) -> Result<Self, FormatError> {
+    pub(super) fn decode(
+        bytes: &[u8],
+        depth: usize,
+        nodes: &mut usize,
+    ) -> Result<Self, FormatError> {
         if depth > MAX_DEPTH || *nodes == MAX_NODES {
             return Err(FormatError(
                 "snapshot scene nesting or node budget exceeded",
@@ -246,6 +288,43 @@ impl SavedScene {
             children,
         })
     }
+    /// Scene writer 0x14003a4a0 for the supported subset (see `decode`).
+    pub(crate) fn encode(&self) -> Result<Vec<u8>, FormatError> {
+        let mut out = 0xffffu16.to_le_bytes().to_vec();
+        out.extend(3u16.to_le_bytes());
+        words(
+            &mut out,
+            &[
+                u32::from(self.draw.is_some()),
+                u32::from(self.shown),
+                self.flags,
+                0,
+                0,
+                0,
+                self.logical_size[0],
+                self.logical_size[1],
+            ],
+        );
+        if let Some(image) = &self.image {
+            chunk(&mut out, 0x740, &image.encode());
+        }
+        if let Some(image) = &self.secondary_image {
+            chunk(&mut out, 0x741, &image.encode());
+        }
+        if let Some(draw) = &self.draw {
+            chunk(&mut out, 0x780, &draw::encode(draw)?);
+        }
+        words(&mut out, &self.effect_words);
+        for (&slot, child) in &self.children {
+            out.extend(0x700u16.to_le_bytes());
+            out.extend(slot.to_le_bytes());
+            let body = child.encode()?;
+            out.extend((body.len() as u32).to_le_bytes());
+            out.extend(body);
+        }
+        out.extend(0xf0f0u16.to_le_bytes());
+        Ok(out)
+    }
     fn load(
         &self,
         source: &mut dyn ImageSource,
@@ -258,6 +337,9 @@ impl SavedScene {
             draw: self.draw.clone(),
             ..SceneObject::default()
         };
+        if let Some(draw) = &mut object.draw {
+            draw::reset_transients(draw);
+        }
         object.image = self
             .image
             .as_ref()
@@ -278,7 +360,7 @@ impl SavedScene {
 /// Parsed records retain window words whose behavior is not yet modeled.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SavedWindow {
-    state: MessageWindow,
+    pub(crate) state: MessageWindow,
     pub logical_size: [u32; 2],
     pub button_words: [u32; 32],
     pub switch_state: u32,
@@ -387,6 +469,11 @@ impl VisualSnapshot {
         for (&slot, saved) in &self.objects {
             objects.insert(slot, saved.load(source, &mut budget)?);
         }
+        let mut texts = self.texts.clone();
+        // The text loader 0x14005c8f0 regenerates glyphs from the area origin.
+        for text in texts.iter_mut().flatten() {
+            text.cursor = [text.area[0], text.area[1]];
+        }
         let mut windows = std::array::from_fn(|_| None);
         for (slot, saved) in self.windows.iter().enumerate() {
             if let Some(saved) = saved {
@@ -397,7 +484,7 @@ impl VisualSnapshot {
         }
         Ok(VisualPreview {
             scene: SceneHost::snapshot_preview(self.clear, objects),
-            messages: MessageHost::snapshot_preview(self.texts.clone(), windows),
+            messages: MessageHost::snapshot_preview(texts, windows),
         })
     }
 }
