@@ -298,6 +298,9 @@ impl AudioBackend for RecordingAudio {
 pub struct AudioHost {
     settings: AudioSettings,
     channels: [Option<SeChannel>; SE_CHANNELS],
+    /// Channel record +40 (+1696): 0x20b0/0x20ba store 256 with each play, the constructor
+    /// zeroes it, and stopping keeps it. Only the snapshot reads it here.
+    played: [u32; SE_CHANNELS],
     bgm: BgmState,
 }
 
@@ -306,6 +309,7 @@ impl AudioHost {
         Self {
             settings,
             channels: Default::default(),
+            played: [0; SE_CHANNELS],
             bgm: BgmState::default(),
         }
     }
@@ -391,6 +395,7 @@ impl AudioHost {
             volume,
             flag,
         });
+        self.played[channel as usize] = 256;
         Ok(true)
     }
 
@@ -703,5 +708,140 @@ impl AudioHost {
             ..BgmState::default()
         };
         Ok(true)
+    }
+}
+
+/// Record 0x310 length: six 52-byte channel records at +1656.
+pub const SAVED_CHANNELS: usize = SE_CHANNELS * 52;
+
+impl AudioHost {
+    /// Record 0x304: the BGM names at +4464 and +4464+64.
+    pub(crate) fn saved_bgm(&self) -> [Vec<u8>; 2] {
+        [self.bgm.primary.clone(), self.bgm.secondary.clone()]
+    }
+
+    /// Record 0x310: name (+0, 32 bytes), loop (+32), volume (+36), +40, +44, flag (+48) per
+    /// channel. 0x20b0/0x20ba store 256 and 0 at +40/+44; only unimplemented commands change
+    /// them. A stopped channel keeps its old name behind a cleared first byte in the
+    /// original; Rust writes the cleared name as zeros.
+    pub(crate) fn saved_channels(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(SAVED_CHANNELS);
+        for (channel, played) in self.channels.iter().zip(self.played) {
+            let mut raw = [0u8; 52];
+            if let Some(c) = channel {
+                raw[..c.name.len()].copy_from_slice(&c.name);
+                for (at, value) in [
+                    (32, u32::from(c.looped)),
+                    (36, c.volume as u32),
+                    (48, u32::from(c.flag)),
+                ] {
+                    raw[at..at + 4].copy_from_slice(&value.to_le_bytes());
+                }
+            }
+            raw[40..44].copy_from_slice(&played.to_le_bytes());
+            out.extend(raw);
+        }
+        out
+    }
+
+    /// Loader 0x140081960 then reader 0x140069fd0: stop BGM (0x14008a0a0) and every device
+    /// sound (0x1400879e0 / 0x140089060), clear the channel records, then restart a saved
+    /// BGM without fade and with looping (0x14008a240), and replay each named SE channel
+    /// (0x140088390 on channel + 9, starting at once only when looped and flagged). SE_USE
+    /// is not consulted by the loader.
+    pub(crate) fn restore(
+        &mut self,
+        bgm: &[Vec<u8>; 2],
+        record: &[u8],
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        if record.len() != SAVED_CHANNELS {
+            return Err("SE channel record has unexpected length".into());
+        }
+        let mut channels: [Option<SeChannel>; SE_CHANNELS] = Default::default();
+        let mut played = [0; SE_CHANNELS];
+        for (i, slot) in channels.iter_mut().enumerate() {
+            let raw = &record[52 * i..52 * (i + 1)];
+            let word = |at: usize| u32::from_le_bytes(raw[at..at + 4].try_into().unwrap());
+            let end = raw[..32]
+                .iter()
+                .position(|&b| b == 0)
+                .ok_or("SE name lacks its terminator")?;
+            let name = raw[..end].to_vec();
+            if !name.is_empty() && (word(40) != 256 || word(44) != 0) {
+                return Err("saved SE pitch or pan settings are not modeled".into());
+            }
+            played[i] = word(40);
+            if raw.iter().any(|&b| b != 0) {
+                *slot = Some(SeChannel {
+                    name,
+                    looped: word(32) != 0,
+                    volume: word(36) as i32,
+                    flag: word(48) != 0,
+                });
+            }
+        }
+        if bgm.iter().any(|name| name.len() >= 32) {
+            return Err("saved BGM name exceeds the device limit".into());
+        }
+        let enabled = self.settings.bgm_enabled;
+        if enabled {
+            backend.stop_bgm()?;
+        }
+        for channel in 0..SE_CHANNELS as u8 {
+            backend.stop(channel)?;
+        }
+        for channel in 0..VOICE_CHANNELS as u8 {
+            backend.stop_voice(channel)?;
+        }
+        backend.stop_channel15()?;
+        let mut current = if enabled { 0 } else { self.bgm.channel };
+        self.bgm = BgmState {
+            channel: current,
+            ..BgmState::default()
+        };
+        if !bgm[0].is_empty() {
+            let channel = current.wrapping_sub(1) & 1;
+            if enabled {
+                backend.play_bgm(&AudioRequest::PlayBgm {
+                    channel,
+                    previous: current,
+                    primary: bgm[0].clone(),
+                    secondary: bgm[1].clone(),
+                    volume: self.settings.master.wrapping_mul(self.settings.bgm) >> 8,
+                    fade_ms: 0,
+                    looped: true,
+                    flag_1576: self.settings.bgm_flag_1576,
+                })?;
+            }
+            current = channel;
+            self.bgm = BgmState {
+                primary: bgm[0].clone(),
+                secondary: bgm[1].clone(),
+                channel: current,
+                playing: enabled,
+            };
+        }
+        for (i, channel) in channels.iter().enumerate() {
+            let Some(c) = channel.as_ref().filter(|c| !c.name.is_empty()) else {
+                continue;
+            };
+            let mut volume = self.settings.master.wrapping_mul(self.settings.se) >> 8;
+            if c.volume > 0 {
+                volume = (c.volume as u32).wrapping_mul(volume) >> 8;
+            }
+            let start = c.looped && c.flag;
+            backend.play(&AudioRequest::PlaySe {
+                channel: i as u8,
+                name: c.name.clone(),
+                volume,
+                looped: c.looped,
+                flag: start,
+                fade_in_ms: 0,
+            })?;
+        }
+        self.channels = channels;
+        self.played = played;
+        Ok(())
     }
 }

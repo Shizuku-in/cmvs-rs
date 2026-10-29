@@ -59,7 +59,7 @@ impl SequenceHeader {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct SequenceHost {
     header: SequenceHeader,
     entries: [Option<SequenceEntry>; SEQUENCE_ENTRIES],
@@ -311,5 +311,117 @@ fn missing_scene(entry: &SequenceEntry, finish: bool) -> Result<(), Box<dyn Erro
             Err(error(*pc, 0x2288, "image sequence needs scene and image source").into())
         }
         SequenceEntry::Wait { .. } => unreachable!("wait handled by sequence"),
+    }
+}
+
+/// Record 0x6e0 body length: u16 version 1 and the 0x614-byte buffer (0x1400142b0).
+pub const SAVED_SEQUENCE: usize = 2 + 20 + SEQUENCE_ENTRIES * 96;
+
+impl SequenceHost {
+    /// Record 0x6e0: the five header words, then each 96-byte entry as 0x1400143e0 /
+    /// 0x140014540 / 0x140014720 write it (type, subtype, slot, 64-byte name, duration,
+    /// three motion words, mode). Rust does not keep the bytes an earlier, longer name
+    /// leaves behind its terminator; they are written as zero.
+    pub(crate) fn saved(&self) -> Result<Vec<u8>, &'static str> {
+        let mut out = 1u16.to_le_bytes().to_vec();
+        let h = self.header;
+        for word in [h.active, h.count, h.index, h.start, h.waited] {
+            out.extend(word.to_le_bytes());
+        }
+        for entry in &self.entries {
+            let mut raw = [0u8; 96];
+            let mut put =
+                |at: usize, value: u32| raw[at..at + 4].copy_from_slice(&value.to_le_bytes());
+            match entry {
+                None => {}
+                Some(SequenceEntry::Wait { duration }) => {
+                    put(0, 1);
+                    put(76, *duration);
+                }
+                Some(SequenceEntry::ReplaceImage {
+                    slot,
+                    name,
+                    duration,
+                    ..
+                }) => {
+                    if name.len() >= 64 {
+                        return Err("sequence image name exceeds its field");
+                    }
+                    put(0, 3);
+                    put(8, *slot);
+                    put(76, *duration);
+                    raw[12..12 + name.len()].copy_from_slice(name);
+                }
+                Some(SequenceEntry::WorldMotion {
+                    slot,
+                    xyz,
+                    mode,
+                    duration,
+                    ..
+                }) => {
+                    put(0, 3);
+                    put(4, 2);
+                    put(8, *slot);
+                    put(76, *duration);
+                    put(80, xyz[0]);
+                    put(84, xyz[1]);
+                    put(88, xyz[2]);
+                    put(92, *mode);
+                }
+            }
+            out.extend(raw);
+        }
+        Ok(out)
+    }
+
+    /// Reader 0x1400142e0: copies the buffer, and for an active non-empty sequence moves
+    /// the start time so the wait already consumed stays consumed (start = now - waited).
+    pub(crate) fn restore(&mut self, record: &[u8]) -> Result<(), &'static str> {
+        if record.len() != SAVED_SEQUENCE || record[..2] != [1, 0] {
+            return Err("unsupported sequence record");
+        }
+        let word = |at: usize| u32::from_le_bytes(record[at..at + 4].try_into().unwrap());
+        let mut header = SequenceHeader {
+            active: word(2),
+            count: word(6),
+            index: word(10),
+            start: word(14),
+            waited: word(18),
+        };
+        if header.count > SEQUENCE_ENTRIES as u32 {
+            return Err("saved sequence count exceeds its entries");
+        }
+        let mut entries: [Option<SequenceEntry>; SEQUENCE_ENTRIES] = Default::default();
+        for (i, entry) in entries.iter_mut().enumerate() {
+            let raw = &record[22 + 96 * i..22 + 96 * (i + 1)];
+            let at =
+                |offset: usize| u32::from_le_bytes(raw[offset..offset + 4].try_into().unwrap());
+            let name = &raw[12..76];
+            let name = &name[..name.iter().position(|&b| b == 0).unwrap_or(64)];
+            *entry = match (at(0), at(4)) {
+                (0, _) if raw.iter().all(|&b| b == 0) => None,
+                (1, 0) => Some(SequenceEntry::Wait { duration: at(76) }),
+                (3, 0) => Some(SequenceEntry::ReplaceImage {
+                    slot: at(8),
+                    name: name.to_vec(),
+                    duration: at(76),
+                    pc: 0,
+                }),
+                (3, 2) => Some(SequenceEntry::WorldMotion {
+                    slot: at(8),
+                    xyz: [at(80), at(84), at(88)],
+                    mode: at(92),
+                    duration: at(76),
+                    pc: 0,
+                }),
+                _ => return Err("saved sequence entry type is not modeled"),
+            };
+        }
+        if header.active != 0 && header.count != 0 {
+            header.start = self.clock.wrapping_sub(header.waited);
+        }
+        self.header = header;
+        self.entries = entries;
+        Ok(())
     }
 }

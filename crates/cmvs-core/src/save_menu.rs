@@ -85,6 +85,27 @@ impl DirectorySaves {
     }
 }
 
+impl DirectorySaves {
+    /// A whole slot file for loading (0x1400087c0), bounded by the research payload limit.
+    pub(crate) fn read_slot(&self, slot: u16) -> io::Result<Option<Vec<u8>>> {
+        let file = match File::open(self.root.join(format!("save{slot:03}.dat"))) {
+            Ok(file) => file,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let mut bytes = Vec::new();
+        file.take(crate::MAX_PAYLOAD as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() > crate::MAX_PAYLOAD {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "save exceeds research limit",
+            ));
+        }
+        Ok(Some(bytes))
+    }
+}
+
 impl SaveSource for DirectorySaves {
     fn read_header(&mut self, slot: u16) -> io::Result<Option<Vec<u8>>> {
         if slot > 999 {
@@ -179,6 +200,19 @@ impl SaveMenuHost {
     }
     pub fn popup_enabled(&self) -> bool {
         self.popup_enabled
+    }
+    /// Records 0x10a (+16584, constructor 0) and 0x202 (+12092).
+    pub(crate) fn saved_flags(&self) -> (u32, u32) {
+        (
+            u32::from(self.second_group_enabled.unwrap_or(false)),
+            u32::from(self.popup_enabled),
+        )
+    }
+    /// Loader 0x140081960: +12092 comes from record 0x202, while +16584 is overwritten
+    /// afterwards by 0x140092ea0(.., 1), which enables the second menu group.
+    pub(crate) fn restore_flags(&mut self, popup: u32) {
+        self.popup_enabled = popup != 0;
+        self.second_group_enabled = Some(true);
     }
     /// 0x22cd stores SP-4 != 0 in +12092; 0x22ce copies +12092 to system result 0.
     /// Neither needs a save directory or creates native UI.

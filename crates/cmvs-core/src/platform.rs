@@ -167,6 +167,26 @@ impl PlatformHost {
     pub fn scene_title(&self) -> &[u8] {
         &self.scene_title
     }
+    /// Record 0x101, then 0x140069fd0's SetWindowTextA of +340, the separator and +14336, as
+    /// 0x2161 composes it. The backend applies the title before the scene title commits.
+    pub(crate) fn restore_scene_title(
+        &mut self,
+        title: Vec<u8>,
+        backend: &mut impl PlatformBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let mut text = self
+            .title
+            .clone()
+            .ok_or("base window title +340 is unknown at load")?;
+        text.extend(TITLE_SEPARATOR);
+        text.extend(&title);
+        if text.len() >= 128 {
+            return Err("restored window title exceeds 127 bytes".into());
+        }
+        backend.apply(&PlatformRequest::Title(text))?;
+        self.scene_title = title;
+        Ok(())
+    }
     pub fn cursor(&self) -> u32 {
         self.cursor
     }

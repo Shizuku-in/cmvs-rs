@@ -41,6 +41,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod save;
+pub use save::{SaveTime, thumbnail_bmp};
+
 enum SystemOutput {
     New(NewSystemSave),
     Profile(ProfileSystemSave),
@@ -83,11 +86,17 @@ pub enum StartupEvent {
     MainPreparedNeedsSnapshot,
     /// Main entry reached; the original snapshot was not built and saving stays unavailable.
     MainEnteredWithoutSnapshot,
+    /// 0x2080 or 0x22b2 built the engine snapshot that slot writes use.
+    SnapshotCaptured,
 }
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SnapshotPolicy {
+    /// Build the engine snapshot (0x140069270) at 0x2080 and 0x22b2.
     #[default]
+    Capture,
+    /// Stop at the first snapshot point (research).
     Barrier,
+    /// Apply only the live-state effect and continue without an image (research).
     ContinueWithoutImage,
 }
 pub struct Startup<'a> {
@@ -138,6 +147,9 @@ pub struct Startup<'a> {
     /// Recorded (game ID, integer) of the verified preview policy, once enabled.
     skip_auto_resume: Option<(u32, u32)>,
     auto_resume_checked: bool,
+    /// Engine +11192: the 0x22b8 thumbnail BMP.
+    thumbnail: Option<Vec<u8>>,
+    save_clock: Box<dyn FnMut() -> SaveTime>,
     auto_resume_skipped: bool,
 }
 impl<'a> Startup<'a> {
@@ -197,6 +209,9 @@ impl<'a> Startup<'a> {
             save_image: SaveImage::default(),
             skip_auto_resume: None,
             auto_resume_checked: false,
+            thumbnail: None,
+            // A fixed research time keeps runs repeatable; hosts supply a wall clock.
+            save_clock: Box::new(|| [2000, 1, 1, 0, 0, 0]),
             auto_resume_skipped: false,
         })
     }
@@ -623,13 +638,47 @@ impl<'a> Startup<'a> {
             .try_handle(&mut self.machine, &mut self.source)?
         {
             if event == ControlEvent::MainPreparedNeedsSnapshot {
-                if self.snapshot_policy == SnapshotPolicy::Barrier {
-                    self.main_barrier = true;
-                    return Ok(StartupEvent::MainPreparedNeedsSnapshot);
+                match self.snapshot_policy {
+                    SnapshotPolicy::Barrier => {
+                        self.main_barrier = true;
+                        return Ok(StartupEvent::MainPreparedNeedsSnapshot);
+                    }
+                    SnapshotPolicy::ContinueWithoutImage => {
+                        self.save_image.capture_unavailable(&mut self.machine)?;
+                        return Ok(StartupEvent::MainEnteredWithoutSnapshot);
+                    }
+                    SnapshotPolicy::Capture => {
+                        // 0x140069270 sets bit 0 only for the copy; the live bit ends clear.
+                        self.machine.state_mut().set_bit(0, false)?;
+                        self.capture_snapshot()?;
+                        return Ok(StartupEvent::SnapshotCaptured);
+                    }
                 }
-                self.save_image.capture_unavailable(&mut self.machine)?;
-                return Ok(StartupEvent::MainEnteredWithoutSnapshot);
             }
+            return Ok(StartupEvent::Progress);
+        }
+        if self.snapshot_policy == SnapshotPolicy::Capture
+            && let Some((pc, 0x2b2)) = self.machine.pending_system()
+        {
+            // 0x14007c9a0 serializes with PC + 2 and repeat 0, which completing the
+            // no-argument command produces; the live bit 0 ends clear.
+            self.machine
+                .state_mut()
+                .set_bit(0, false)
+                .map_err(|why| crate::evaluate::error(pc, 0x22b2, why))?;
+            self.machine
+                .complete_system(crate::vm::SystemResult(0x4000))?;
+            self.capture_snapshot()?;
+            return Ok(StartupEvent::SnapshotCaptured);
+        }
+        if self.try_load_slot(backend)? {
+            return Ok(StartupEvent::Progress);
+        }
+        if self.try_save_slot()?
+            || self.try_thumbnail()?
+            || self.try_latest_slot()?
+            || self.try_slot_info()?
+        {
             return Ok(StartupEvent::Progress);
         }
         if self

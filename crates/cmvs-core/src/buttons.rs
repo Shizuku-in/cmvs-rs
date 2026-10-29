@@ -391,3 +391,15 @@ impl Frame {
         }
     }
 }
+
+impl ButtonHost {
+    /// Records 0x8c0 (+4504 groups) and 0x8c8 (+4552 lists) are not implemented.
+    pub(crate) fn has_saved_objects(&self) -> bool {
+        self.groups.iter().any(Option::is_some) || self.lists.iter().any(Option::is_some)
+    }
+    /// Loader 0x140081960 frees both tables; 0x2087's merged-state flag stays.
+    pub(crate) fn clear_for_load(&mut self) {
+        self.groups = Default::default();
+        self.lists = Default::default();
+    }
+}

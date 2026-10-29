@@ -14,6 +14,11 @@ pub struct MessageFlags {
     bypass: bool,
 }
 impl MessageFlags {
+    /// Loader 0x140081960 clears +1520 (skip) and +1552 (auto advance).
+    pub(crate) fn clear_for_load(&mut self) {
+        self.skip = false;
+        self.auto_advance = false;
+    }
     /// Engine +12244: zeroed by the CMainFrameWnd constructor (qword store at 0x140016ff5)
     /// and written only by 0x2340. 0x2152/0x2153/0x215c treat it as read and finish like
     /// the skip flag without consuming input (0x14005d900 a7, 0x14005e220 a8).

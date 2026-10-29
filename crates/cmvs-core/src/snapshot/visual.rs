@@ -115,6 +115,14 @@ impl SavedImage {
         words(&mut out, &[0, self.size[0], self.size[1]]);
         out
     }
+    pub(crate) fn from_image(image: &ObjectImage) -> Self {
+        Self {
+            name: image.name.clone(),
+            size: [image.pixels.width(), image.pixels.height()],
+            filter: image.filter,
+            disabled_filter: [0; 3],
+        }
+    }
     fn decode(bytes: &[u8]) -> Result<Self, FormatError> {
         let mut r = Reader::new(bytes);
         let h = r.words::<10>()?;
@@ -325,7 +333,31 @@ impl SavedScene {
         out.extend(0xf0f0u16.to_le_bytes());
         Ok(out)
     }
-    fn load(
+    /// Capture side: the record of a live object, rejecting what the writer here cannot
+    /// express. Disposal marks are not saved, as in the original.
+    pub(crate) fn from_object(object: &SceneObject) -> Result<Self, FormatError> {
+        if object.change.is_some() {
+            return Err(FormatError(
+                "saving an object during an image change is not implemented",
+            ));
+        }
+        let children = object
+            .children
+            .iter()
+            .map(|(&slot, child)| Ok((slot, Self::from_object(child)?)))
+            .collect::<Result<_, FormatError>>()?;
+        Ok(Self {
+            shown: object.shown,
+            flags: object.flags,
+            logical_size: object.logical_size,
+            image: object.image.as_ref().map(SavedImage::from_image),
+            secondary_image: object.secondary_image.as_ref().map(SavedImage::from_image),
+            draw: object.draw.clone(),
+            effect_words: [0; 11],
+            children,
+        })
+    }
+    pub(crate) fn load(
         &self,
         source: &mut dyn ImageSource,
         budget: &mut usize,
@@ -366,6 +398,40 @@ pub struct SavedWindow {
     pub switch_state: u32,
     pub scene: SavedScene,
 }
+
+impl SavedWindow {
+    pub(crate) fn from_window(
+        window: &MessageWindow,
+        logical_size: [u32; 2],
+    ) -> Result<Self, FormatError> {
+        Ok(Self {
+            state: MessageWindow {
+                object: SceneObject::default(),
+                ..window.clone()
+            },
+            logical_size,
+            button_words: window.buttons.map(|b| b.state_word),
+            switch_state: window.switch_state,
+            scene: SavedScene::from_object(&window.object)?,
+        })
+    }
+    /// The loader's window (0x14005d0c0): saved fields, a fresh pressed-button cache and the
+    /// scene object rebuilt from its record.
+    pub(crate) fn load(
+        &self,
+        source: &mut dyn ImageSource,
+        budget: &mut usize,
+    ) -> Result<MessageWindow, Box<dyn Error>> {
+        Ok(MessageWindow {
+            object: self.scene.load(source, budget)?,
+            pressed_button: -1,
+            ..self.state.clone()
+        })
+    }
+}
+
+/// Decoded-pixel budget for rebuilding saved objects, shared with the preview.
+pub(crate) const RESTORE_PIXELS: usize = MAX_PIXELS;
 
 /// Typed visual subset, not a full-engine restore image. Public fields are read-only
 /// through accessors so callers cannot bypass parse limits before resource loading.

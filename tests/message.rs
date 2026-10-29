@@ -227,6 +227,7 @@ fn creation_stores_window_text_and_font_and_pops_all_arguments() {
             object: SceneObject::default(),
             buttons: [WindowButton::default(); WINDOW_BUTTONS],
             pressed_button: -1,
+            switch_state: 0,
         })
     );
     assert_eq!(messages.text(10), Some(&created_text([3, -1], [1280, 54])));
@@ -611,6 +612,7 @@ fn button_records_store_states_hit_rectangles_and_enable_children() {
             enabled: true,
             states,
             hit: [0, 0, 94, 52],
+            state_word: 0,
         }
     );
     assert!(window.object.children[&16].shown);

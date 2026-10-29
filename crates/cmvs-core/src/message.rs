@@ -53,6 +53,10 @@ pub struct WindowButton {
     /// Record +64..+70: hit rectangle x, y, width, height relative to the window position,
     /// read unsigned by 0x14005dff0 (0x2191 / 0x14005df40).
     pub hit: [u16; 4],
+    /// Record +72 (constructor 0): the visual state 0x2196 (0x140078990) last applied, a u16
+    /// it compares before changing the button child's source rectangle. 0x2196 is not
+    /// implemented, so Rust only carries saved values through save and load.
+    pub state_word: u32,
 }
 
 /// Fields 0x14005d3b0 sets from the creating command, plus later setters.
@@ -87,6 +91,9 @@ pub struct MessageWindow {
     pub buttons: [WindowButton; WINDOW_BUTTONS],
     /// +2536: button pressed on action 0's down edge; constructor -1.
     pub pressed_button: i32,
+    /// +2492 (constructor 0): the position 0x14005de50 last switched to. Rust does not model
+    /// that movement; the value is carried through save and load unchanged.
+    pub switch_state: u32,
 }
 
 /// 0x211e line-break rules (+328 set, +332, +336, +400), used by 0x14005b120 when the pen
@@ -1606,6 +1613,7 @@ impl MessageHost {
             object: SceneObject::default(),
             buttons: [WindowButton::default(); WINDOW_BUTTONS],
             pressed_button: -1,
+            switch_state: 0,
         });
         Ok(())
     }
@@ -1645,4 +1653,33 @@ fn window_slot(vm: &Machine<'_>, pc: usize, op: u16) -> Result<usize, DecodeErro
         ));
     }
     Ok(slot as usize)
+}
+
+impl MessageHost {
+    /// Records 0x380 and 0x400 come from these tables; the window's logical size is that of
+    /// its text (0x14005d050 copies the text's +552/+556).
+    pub(crate) fn saved_texts(&self) -> &[Option<TextObject>; TEXT_OBJECTS] {
+        &self.texts
+    }
+    pub(crate) fn saved_windows(&self) -> &[Option<MessageWindow>; MESSAGE_WINDOWS] {
+        &self.windows
+    }
+    /// Loader: 0x140081960 destroys the windows, texts and +4328 auxiliary texts; the
+    /// readers then rebuild texts (creating a missing +4224 font object) with the pen at
+    /// the area origin, and windows. +4392 fonts and the output mode stay.
+    pub(crate) fn restore(
+        &mut self,
+        mut texts: [Option<TextObject>; TEXT_OBJECTS],
+        windows: [Option<MessageWindow>; MESSAGE_WINDOWS],
+    ) {
+        for (index, text) in texts.iter_mut().enumerate() {
+            if let Some(text) = text {
+                text.cursor = [text.area[0], text.area[1]];
+                self.fonts[index] = true;
+            }
+        }
+        self.texts = texts;
+        self.windows = windows;
+        self.auxiliary_texts = Default::default();
+    }
 }

@@ -468,3 +468,16 @@ impl MovieHost {
         }
     }
 }
+
+impl MovieHost {
+    /// Record 0x8e8 (+4480 scene players) is not implemented; the +4472 player is never saved.
+    pub(crate) fn has_scene_players(&self) -> bool {
+        self.slots.iter().any(Option::is_some)
+    }
+    /// Loader 0x140081960 destroys the full-screen player (+4472) and the scene players.
+    pub(crate) fn clear_for_load(&mut self) -> bool {
+        let had_player = self.player.take().is_some();
+        self.slots = Default::default();
+        had_player
+    }
+}

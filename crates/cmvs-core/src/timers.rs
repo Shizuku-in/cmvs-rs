@@ -14,6 +14,10 @@ impl VmTimers {
     pub fn values(&self) -> &[u32; TIMER_SLOTS] {
         &self.values
     }
+    /// Record 0x109 restore: the reader copies +14748..+14788 verbatim.
+    pub(crate) fn restore_values(&mut self, values: [u32; TIMER_SLOTS]) {
+        self.values = values;
+    }
     /// Explicit wrapping millisecond clock corresponding to 0x140008bc0.
     pub fn clock(&self) -> u32 {
         self.clock

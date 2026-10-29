@@ -28,6 +28,7 @@ pub(crate) fn decode(bytes: &[u8], nodes: &mut usize) -> Result<SavedWindow, For
         button.states =
             std::array::from_fn(|state| std::array::from_fn(|n| half(at + 4 + 12 * state + 2 * n)));
         button.hit = std::array::from_fn(|n| half(at + 64 + 2 * n));
+        button.state_word = word(at + 72);
         button_words[i] = word(at + 72);
     }
     let scene = SavedScene::decode(r.chunk()?, 0, nodes)?;
@@ -49,6 +50,7 @@ pub(crate) fn decode(bytes: &[u8], nodes: &mut usize) -> Result<SavedWindow, For
             object: SceneObject::default(),
             buttons,
             pressed_button: -1,
+            switch_state: word(2492),
         },
         logical_size,
         button_words,

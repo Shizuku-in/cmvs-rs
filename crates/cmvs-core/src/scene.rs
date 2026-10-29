@@ -294,6 +294,10 @@ impl SceneHost {
     pub(crate) fn object_mut(&mut self, slot: u8) -> Option<&mut SceneObject> {
         self.objects.get_mut(&slot)
     }
+    /// A fresh slot object, as 0x22bd creates for a negative child index.
+    pub(crate) fn replace_object(&mut self, slot: u8, object: SceneObject) {
+        self.objects.insert(slot, object);
+    }
     /// 0x2308 creates a fresh object bound to the scene movie's first decoded frame.
     pub(crate) fn replace_movie_object(&mut self, slot: u8, object: SceneObject) {
         self.objects.insert(slot, object);
@@ -786,4 +790,31 @@ pub(crate) fn load_image(
         pixels: decoded.pixels,
         alpha: decoded.alpha,
     }))
+}
+
+impl SceneHost {
+    /// Effects the snapshot would write as 0x600..0x630 (+4624 quake, +4616 fade, +4632
+    /// mask, +4640 strip); their record formats are not implemented here.
+    pub(crate) fn unsaved_effect(&self) -> Option<&'static str> {
+        if self.quake.is_some() {
+            Some("a screen quake")
+        } else if self.fade.current().is_some() {
+            Some("a full-screen fade")
+        } else if self.masks[0].is_some() {
+            Some("a mask transition")
+        } else if self.strip.is_some() {
+            Some("a strip wipe")
+        } else {
+            None
+        }
+    }
+    /// Loader 0x140081960 destroys the slot objects and the +4616/+4624/+4632/+4640/+4648
+    /// effects; the reader then rebuilds the saved objects and clear state.
+    pub(crate) fn restore(&mut self, clear: ClearState, objects: BTreeMap<u8, SceneObject>) {
+        *self = Self {
+            clear,
+            objects,
+            ..Self::default()
+        };
+    }
 }

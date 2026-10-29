@@ -191,6 +191,20 @@ impl super::SystemSaveHost {
         if !matches!(vm.pending_system(), Some((_, 0x129))) {
             return Ok(false);
         }
+        self.write_now(vm.state(), sink, random, game_id)?;
+        vm.complete_system(SystemResult(0x4000))?;
+        Ok(true)
+    }
+
+    /// The CSS1 writer 0x1400179e0 itself, which the slot writer 0x140080b20 also calls.
+    /// Random draws are committed only after the sink accepted the file.
+    pub fn write_now(
+        &mut self,
+        state: &crate::evaluate::State,
+        sink: &mut dyn SystemSaveSink,
+        random: &mut CrtRandom,
+        game_id: Option<u32>,
+    ) -> Result<(), Box<dyn Error>> {
         let game_id = game_id.ok_or("CSS1 write requires a known game identifier")?;
         let template = self
             .loaded
@@ -201,10 +215,9 @@ impl super::SystemSaveHost {
         }
         let mut candidate = random.clone();
         let parameters = Css1Parameters::draw(&mut candidate);
-        let raw = template.encode_state(vm.state(), game_id, parameters, [&[], &[]])?;
+        let raw = template.encode_state(state, game_id, parameters, [&[], &[]])?;
         sink.write(&raw)?;
-        vm.complete_system(SystemResult(0x4000))?;
         *random = candidate;
-        Ok(true)
+        Ok(())
     }
 }

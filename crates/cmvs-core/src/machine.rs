@@ -72,6 +72,25 @@ impl<'a> Image<'a> {
     }
 }
 
+/// The VM fields of an engine snapshot; see `Machine::capture_vm`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VmImage {
+    pub script_names: [Vec<u8>; 4],
+    pub script_sizes: [u32; 4],
+    pub active_slot: u32,
+    pub pc: u32,
+    pub repeat_count: u32,
+    pub stack_pointer: u32,
+    pub frame_depth: u32,
+    pub frames: [u32; 64],
+    pub stack: Vec<u8>,
+    pub system_results: [u32; 11],
+    /// CSV2 section 2: the main script memory image with its current data segment.
+    pub main_image: Vec<u8>,
+    /// Record 0x900: the same data segment.
+    pub main_data: Vec<u8>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
     Continue,
@@ -134,6 +153,139 @@ impl<'a> Machine<'a> {
             .map(|(slot, i)| (*slot, i.name.as_slice()))
             .collect()
     }
+    /// VM domain of the engine snapshot 0x140069270: records 0x102..0x108, 0x112..0x115,
+    /// 0x240..0x248, 0x900 and CSV2 section 2. Unknown stack bytes and unverified system
+    /// results are written as zero; stale frame entries above the depth are not kept.
+    pub fn capture_vm(&self) -> Result<VmImage, &'static str> {
+        if !self.cross_calls.is_empty() {
+            return Err("saving inside a cross-script call is not supported");
+        }
+        self.capture_vm_unchecked()
+    }
+    /// `capture_vm` without the cross-script check, for inspection only.
+    pub(crate) fn capture_vm_unchecked(&self) -> Result<VmImage, &'static str> {
+        if self.frames.len() > MAX_CALL_DEPTH {
+            return Err("call depth exceeds the frame table");
+        }
+        let main = self.images.get(&0).ok_or("no main script image")?;
+        let mut names: [Vec<u8>; 4] = std::array::from_fn(|_| Vec::new());
+        let mut sizes = [0u32; 4];
+        for (slot, image) in &self.images {
+            names[usize::from(*slot)] = image.name.clone();
+            let data = if *slot == 0 { &main.data } else { &image.data };
+            sizes[usize::from(*slot)] = image
+                .script
+                .memory_image(data)
+                .map_err(|e| e.0)?
+                .len()
+                .try_into()
+                .map_err(|_| "script image exceeds 4 GiB")?;
+        }
+        let mut frames = [0u32; 64];
+        for (entry, &base) in frames[1..].iter_mut().zip(&self.frames) {
+            *entry = base as u32;
+        }
+        let mut system_results = [0u32; 11];
+        for (i, word) in system_results.iter_mut().take(7).enumerate() {
+            *word = self.state.system_integer(i as u32).unwrap_or(0);
+        }
+        Ok(VmImage {
+            script_names: names,
+            script_sizes: sizes,
+            active_slot: u32::from(self.slot),
+            pc: self.pc as u32,
+            repeat_count: self.repeat_count,
+            stack_pointer: self.stack.len_bytes() as u32,
+            frame_depth: self.frames.len() as u32,
+            frames,
+            stack: self.stack.saved_image(),
+            system_results,
+            main_image: main.script.memory_image(&main.data).map_err(|e| e.0)?,
+            main_data: main.data.clone(),
+        })
+    }
+
+    /// Loader 0x140081960 / 0x140080650 / 0x140069fd0 for the VM domain: the saved main
+    /// image replaces slot 0 with its data segment; common scripts stay loaded and must carry
+    /// the saved names. Registers outside the snapshot (expression result, condition, string
+    /// accumulator) keep their current values, as in the original.
+    pub fn restore_vm(&mut self, image: &VmImage) -> Result<(), &'static str> {
+        let mut script = Script::from_memory_image(&image.main_image).map_err(|e| e.0)?;
+        script
+            .apply_snapshot_data(&image.main_data)
+            .map_err(|e| e.0)?;
+        for slot in 1..4u8 {
+            let loaded = self.images.get(&slot).map(|i| i.name.as_slice());
+            let saved = &image.script_names[usize::from(slot)];
+            if loaded.unwrap_or_default() != saved.as_slice() {
+                return Err("saved common script differs from the loaded one");
+            }
+        }
+        if image.active_slot > 3
+            || (image.active_slot != 0 && !self.images.contains_key(&(image.active_slot as u8)))
+        {
+            return Err("saved active script slot is not loaded");
+        }
+        let depth = image.frame_depth as usize;
+        let sp = image.stack_pointer as usize;
+        if depth > MAX_CALL_DEPTH || image.frames[0] != 0 {
+            return Err("saved call frames exceed the frame table");
+        }
+        let frames: Vec<usize> = image.frames[1..=depth]
+            .iter()
+            .map(|&b| b as usize)
+            .collect();
+        if frames.iter().any(|&base| base > sp) {
+            return Err("saved call frame lies above the stack pointer");
+        }
+        let stack = ParameterStack::from_saved(&image.stack, sp, 65536).map_err(|e| e.0)?;
+        let entry = script.header.entry_pc;
+        let main = Image::prepare(Cow::Owned(script), image.script_names[0].clone(), entry)
+            .map_err(|_| "saved main script layout is invalid")?;
+        let mut candidate_state = self.state.clone();
+        for (i, &word) in image.system_results.iter().take(7).enumerate() {
+            candidate_state.set_system_integer(i as u32, word)?;
+        }
+        let slot = image.active_slot as u8;
+        if slot == 0 && !main.instructions.contains_key(&(image.pc as usize)) {
+            return Err("saved PC is not an instruction boundary");
+        }
+        if slot != 0 && !self.is_boundary(slot, image.pc as usize) {
+            return Err("saved PC is not an instruction boundary");
+        }
+        self.images.insert(0, main);
+        self.slot = slot;
+        self.pc = image.pc as usize;
+        self.repeat_count = image.repeat_count;
+        self.stack = stack;
+        self.frames = frames;
+        self.cross_calls.clear();
+        self.pending = None;
+        self.state = candidate_state;
+        Ok(())
+    }
+
+    /// 0x140068770: when callback `index` is registered, push the current repeat count, PC
+    /// and slot as a cross-script return frame and continue at the callback with repeat 0.
+    pub(crate) fn enter_callback(&mut self, slot: u8, target: usize) -> Result<(), &'static str> {
+        if !self.is_boundary(slot, target) {
+            return Err("callback target is not an instruction boundary");
+        }
+        let mut stack = self.stack.clone();
+        for value in [self.repeat_count, self.pc as u32, u32::from(self.slot)] {
+            stack.push_u32(value).map_err(|e| e.0)?;
+        }
+        self.stack = stack;
+        self.cross_calls.push(self.slot);
+        self.slot = slot;
+        self.pc = target;
+        self.repeat_count = 0;
+        Ok(())
+    }
+    pub(crate) fn set_repeat_count(&mut self, count: u32) {
+        self.repeat_count = count;
+    }
+
     pub fn is_boundary(&self, slot: u8, pc: usize) -> bool {
         self.images
             .get(&slot)

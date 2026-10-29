@@ -118,6 +118,7 @@ fn startup_main_snapshot_barrier_is_sticky_and_does_not_execute_new_main() {
     let root = Root::new("barrier", &string_call(0x2080), b"fixture.ps3\0");
     let script = root.script();
     let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    run.set_snapshot_policy(SnapshotPolicy::Barrier);
     let mut backend = RecordingBackend::default();
     assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
     assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);

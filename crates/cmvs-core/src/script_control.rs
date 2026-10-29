@@ -53,6 +53,7 @@ pub enum ControlEvent {
     MainPreparedNeedsSnapshot,
 }
 
+#[derive(Clone)]
 pub struct ScriptControl {
     callbacks: BTreeMap<u8, Callback>,
     settings: BTreeMap<u16, u32>,
@@ -176,5 +177,97 @@ impl ScriptControl {
         };
         vm.complete_system(SystemResult(flags))?;
         Ok(Some(ControlEvent::Applied))
+    }
+}
+
+/// Record 0x10b: +14788 (the 0x2089 setting) and 64 callback entries of 28 bytes:
+/// +0 dispatch word (zeroed on registration), +4 script slot, +8 target (-1 = none),
+/// +12/+16/+20 the SP-12/SP-16/SP-20 parameters, +24 registration clock (0x140071ed0).
+pub const CALLBACK_RECORD: usize = 4 + 64 * 28;
+
+impl ScriptControl {
+    /// Writer 0x140069270 copies +14788..+16584 verbatim. Rust never runs the automatic
+    /// dispatcher, so every dispatch word is the zero that registration leaves.
+    pub fn saved_callbacks(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(CALLBACK_RECORD);
+        let setting = self.settings.get(&0x2089).copied().unwrap_or(0);
+        out.extend(setting.to_le_bytes());
+        for slot in 0..64u8 {
+            let entry = match self.callbacks.get(&slot) {
+                Some(c) => [
+                    0,
+                    u32::from(c.script_slot),
+                    c.target,
+                    c.parameters[2],
+                    c.parameters[1],
+                    c.parameters[0],
+                    c.registered_tick,
+                ],
+                // Constructor 0x140068580: slot 0, target -1, other words zero.
+                None => [0, 0, u32::MAX, 0, 0, 0, 0],
+            };
+            for word in entry {
+                out.extend(word.to_le_bytes());
+            }
+        }
+        out
+    }
+
+    /// Loader 0x140081960 after 0x140069fd0: callbacks registered by common scripts survive
+    /// the load, saved ones of common scripts are disabled, and main-script callbacks come
+    /// from the save. The 0x2089 setting is restored from +14788.
+    pub fn restore_callbacks(&mut self, record: &[u8]) -> Result<(), &'static str> {
+        if record.len() != CALLBACK_RECORD {
+            return Err("callback record has unexpected length");
+        }
+        let word = |at: usize| u32::from_le_bytes(record[at..at + 4].try_into().unwrap());
+        let mut callbacks = BTreeMap::new();
+        for slot in 0..64u8 {
+            let at = 4 + 28 * usize::from(slot);
+            let [dispatch, script, target, p12, p16, p20, tick] =
+                std::array::from_fn(|i| word(at + 4 * i));
+            if dispatch != 0 {
+                return Err("saved callback is mid-dispatch, which is not modeled");
+            }
+            if script > 3 {
+                return Err("saved callback script slot is out of range");
+            }
+            let mut saved = Callback {
+                script_slot: script as u8,
+                target,
+                parameters: [p20, p16, p12],
+                registered_tick: tick,
+                enabled: target != u32::MAX,
+            };
+            if script != 0 {
+                saved.target = u32::MAX;
+                saved.enabled = false;
+            }
+            let current = self.callbacks.get(&slot).filter(|c| c.script_slot != 0);
+            let entry = match current {
+                Some(current) => Some(current.clone()),
+                None if saved == Callback::unused() => None,
+                None => Some(saved),
+            };
+            if let Some(entry) = entry {
+                callbacks.insert(slot, entry);
+            }
+        }
+        self.callbacks = callbacks;
+        self.settings.insert(0x2089, u32::from(word(0) != 0));
+        Ok(())
+    }
+}
+
+impl Callback {
+    /// The constructor's entry, indistinguishable from never registered.
+    fn unused() -> Self {
+        Self {
+            script_slot: 0,
+            target: u32::MAX,
+            parameters: [0; 3],
+            registered_tick: 0,
+            enabled: false,
+        }
     }
 }

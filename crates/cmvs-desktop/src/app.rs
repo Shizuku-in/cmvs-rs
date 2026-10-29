@@ -302,6 +302,7 @@ impl ApplicationHandler for App<'_> {
                         self.input_due = true;
                         break;
                     }
+                    Ok(StartupEvent::SnapshotCaptured) => {}
                     Ok(StartupEvent::MainEnteredWithoutSnapshot) => println!(
                         "# main entered at step {}; snapshot NOT built, saving unavailable",
                         self.startup.steps()
@@ -380,6 +381,32 @@ impl ApplicationHandler for App<'_> {
         }
     }
 }
+/// Save labels use UTC: the standard library has no local time zone without platform calls.
+fn utc_save_time() -> cmvs_core::runner::SaveTime {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let (days, rest) = ((seconds / 86_400) as i64, seconds % 86_400);
+    // Civil date from days since 1970-01-01 (proleptic Gregorian calendar).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    [
+        year as u16,
+        month as u16,
+        day as u16,
+        (rest / 3600) as u16,
+        (rest / 60 % 60) as u16,
+        (rest % 60) as u16,
+    ]
+}
+
 fn halt_title(event: StartupEvent, script: &[u8], pc: usize) -> String {
     match event {
         StartupEvent::Unhandled {
@@ -409,7 +436,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut exit_after = None;
     let mut preview_name = None;
     let mut image_archive = None;
-    let mut snapshot_policy = SnapshotPolicy::Barrier;
+    let mut snapshot_policy = SnapshotPolicy::Capture;
     let mut skip_auto_resume = false;
     let mut profile = None;
     let mut allow_unreviewed = false;
@@ -571,6 +598,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         return Err("native audio requires --features desktop,audio-output".into());
     }
     startup.set_snapshot_policy(snapshot_policy);
+    startup.set_save_clock(Box::new(utc_save_time));
     startup.set_record_text(record_text || font.is_some());
     if font.is_some() {
         println!(

@@ -148,6 +148,23 @@ impl ParameterStack {
         self.bytes.truncate(length);
         Ok(())
     }
+    /// The 64 KiB snapshot image (+16740): bytes below SP as known, never-written bytes as
+    /// zero. Rust does not keep the stale contents above SP that the original buffer holds.
+    pub(crate) fn saved_image(&self) -> Vec<u8> {
+        let mut out: Vec<u8> = self.bytes.iter().map(|b| b.unwrap_or(0)).collect();
+        out.resize(self.limit.max(out.len()), 0);
+        out
+    }
+    /// Rebuilds the live stack from a saved image; every byte below SP becomes known.
+    pub(crate) fn from_saved(image: &[u8], sp: usize, limit: usize) -> Result<Self, FormatError> {
+        if sp > image.len() || sp > limit {
+            return Err(FormatError("saved stack pointer exceeds the stack"));
+        }
+        Ok(Self {
+            bytes: image[..sp].iter().map(|&b| Some(b)).collect(),
+            limit,
+        })
+    }
     pub fn apply_cleanup(&mut self, result: SystemResult) -> Result<(), FormatError> {
         self.discard(result.cleanup_bytes())
     }

@@ -219,7 +219,7 @@ fn hundredths(value: f32) -> f32 {
     truncate(value * 100.0) as f32 / 100.0
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct CameraHost {
     cameras: [Camera; CAMERAS],
 }
@@ -460,6 +460,109 @@ impl CameraHost {
         }
         Ok(true)
     }
+}
+
+impl CameraHost {
+    /// Records 0x880/0x881, writer 0x14004e7f0: version 3, words 37..39, then by the mode in
+    /// word 39 the base words 0..14 (mode 0 and 1) and the motion words 21..36 (mode 1),
+    /// then words 15..18. A running move saves its targets as the base words.
+    pub(crate) fn saved(&self, index: usize) -> Vec<u8> {
+        let w = &self.cameras[index].words;
+        let mut out = 3u16.to_le_bytes().to_vec();
+        let mut put = |words: &[u32]| {
+            for word in words {
+                out.extend(word.to_le_bytes());
+            }
+        };
+        put(&w[37..40]);
+        let mut base: [u32; 15] = w[..15].try_into().unwrap();
+        match w[39] {
+            0 => {
+                if w[MOVING] != 0 {
+                    base[1..4].copy_from_slice(&w[23..26]);
+                    for (bit, target, source) in [(31, 12, 26), (30, 13, 27), (29, 14, 28)] {
+                        if w[22] >> bit & 1 != 0 {
+                            base[target] = w[source];
+                        }
+                    }
+                }
+                put(&base);
+            }
+            1 => {
+                let mut motion: [u32; 16] = w[21..37].try_into().unwrap();
+                if motion[0] != 0 {
+                    motion[15] = 0;
+                    motion[0] = 1;
+                    base[1..4].copy_from_slice(&w[30..33]);
+                    for (bit, target, source) in [(31, 12, 33), (30, 13, 34), (29, 14, 35)] {
+                        if w[22] >> bit & 1 != 0 {
+                            base[target] = w[source];
+                        }
+                    }
+                } else {
+                    motion = [0; 16];
+                }
+                put(&base);
+                put(&motion);
+            }
+            _ => {}
+        }
+        put(&w[15..19]);
+        out
+    }
+
+    /// Reader 0x14004ea90 for version 3; words 19/20 and 40.. keep their current values.
+    pub(crate) fn restore(&mut self, index: usize, record: &[u8]) -> Result<(), &'static str> {
+        let words: Vec<u32> = record
+            .get(2..)
+            .filter(|_| record.len() % 4 == 2 && record[..2] == [3, 0])
+            .ok_or("unsupported camera record version")?
+            .chunks_exact(4)
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+            .collect();
+        let (body, expected) = match words.get(2) {
+            Some(0) => (15, 22),
+            Some(1) => (31, 38),
+            Some(_) => (0, 7),
+            None => return Err("truncated camera record"),
+        };
+        if words.len() != expected {
+            return Err("camera record length disagrees with its mode");
+        }
+        let camera = &mut self.cameras[index].words;
+        camera[37..40].copy_from_slice(&words[..3]);
+        if body != 0 {
+            camera[..15].copy_from_slice(&words[3..18]);
+            if body == 31 {
+                camera[21..37].copy_from_slice(&words[18..34]);
+            } else {
+                camera[21..37].fill(0);
+            }
+        }
+        camera[15..19].copy_from_slice(&words[3 + body..7 + body]);
+        Ok(())
+    }
+}
+
+/// Records 0x882/0x883: device +32/+40 objects (writer 0x1400501d0) that Rust does not
+/// model. No implemented command reaches them, so they hold the reset 0x140050180 values;
+/// word 23 is 1 for the first object and 0 for the second, as in the original saves.
+pub(crate) fn saved_device_object(index: usize) -> Vec<u8> {
+    let mut out = 2u16.to_le_bytes().to_vec();
+    let words = [
+        u32::from(index == 0),
+        0,
+        1.0f32.to_bits(),
+        0,
+        0,
+        0,
+        0,
+        45.0f32.to_bits(),
+    ];
+    for word in words {
+        out.extend(word.to_le_bytes());
+    }
+    out
 }
 
 #[cfg(test)]

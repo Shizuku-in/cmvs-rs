@@ -11,6 +11,7 @@ mod visual;
 mod vm_state;
 pub use engine::EngineSnapshot;
 pub use variables::LocalVariables;
+pub(crate) use visual::RESTORE_PIXELS;
 pub use visual::{SavedImage, SavedScene, SavedWindow, VisualPreview, VisualSnapshot};
 pub use vm_state::VmSnapshot;
 
@@ -139,6 +140,15 @@ pub fn parse_records(bytes: &[u8]) -> Result<Vec<SnapshotRecord>, FormatError> {
     Ok(records)
 }
 
+/// The engine snapshot buffer +11176 with the CSV2 header it prepared at +11204 and the
+/// main script memory image (+16592) the slot writer packs as section 2.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapturedSave {
+    pub header: [u8; crate::save::HEADER_SIZE],
+    pub snapshot: Vec<u8>,
+    pub script_image: Vec<u8>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum SaveImage {
     /// Original buffer is still null; its save writer returns without writing.
@@ -147,6 +157,8 @@ pub enum SaveImage {
     /// The original captured an image here; this research host did not build it.
     /// Save writers must fail explicitly rather than write a fabricated snapshot.
     Unavailable { script: Vec<u8>, pc: usize },
+    /// A complete snapshot, built at 0x2080/0x22b2 or loaded from a slot.
+    Captured(Box<CapturedSave>),
 }
 
 impl SaveImage {
@@ -198,6 +210,10 @@ impl SaveTitle {
     pub fn bytes(&self) -> &[u8] {
         &self.0
     }
+    /// Record 0x100.
+    pub(crate) fn restore(&mut self, title: Vec<u8>) {
+        self.0 = title;
+    }
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
         let Some((pc, 0x162)) = vm.pending_system() else {
             return Ok(false);
@@ -230,14 +246,27 @@ impl SaveInfo {
     pub fn values(&self) -> [Option<u32>; 3] {
         self.0
     }
-    /// 0x22b9, inline in the dispatcher: +11828 = SP-4, pops 4 bytes.
+    /// 0x22b9, inline in the dispatcher: +11828 = SP-4, pops 4 bytes. 0x22ba (inline):
+    /// +11832 = SP-4 and +11836 = SP-8, pops 8.
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, 0x2b9)) = vm.pending_system() else {
+        let Some((pc, command @ (0x2b9 | 0x2ba))) = vm.pending_system() else {
             return Ok(false);
         };
-        let value = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x22b9, e.0))?;
-        vm.complete_system(SystemResult(0x4004))?;
-        self.0[0] = Some(value);
+        let op = command + 0x2000;
+        let first = vm.stack().peek_u32(4).map_err(|e| error(pc, op, e.0))?;
+        if command == 0x2b9 {
+            vm.complete_system(SystemResult(0x4004))?;
+            self.0[0] = Some(first);
+        } else {
+            let second = vm.stack().peek_u32(8).map_err(|e| error(pc, op, e.0))?;
+            vm.complete_system(SystemResult(0x4008))?;
+            self.0[1] = Some(first);
+            self.0[2] = Some(second);
+        }
         Ok(true)
+    }
+    /// Loader 0x140081960: header 528/532/536, then +11832 cleared.
+    pub(crate) fn restore(&mut self, words: [u32; 3]) {
+        self.0 = words.map(Some);
     }
 }

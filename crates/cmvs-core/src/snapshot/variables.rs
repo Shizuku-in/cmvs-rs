@@ -113,6 +113,29 @@ impl LocalVariables {
         })
     }
 
+    /// The engine capture: the banks are zero-initialized statics (0x140109ef0, 0x14012df00,
+    /// 0x14012ff00, 0x14010df00 lie in the unloaded part of .data), and every script write
+    /// the original performs on a path Rust runs is also a Rust write, so a local Rust never
+    /// wrote holds zero (an empty string) in the original.
+    pub fn capture(state: &State) -> Self {
+        let mut bits = vec![0; BIT_BYTES];
+        for i in 0..BIT_BYTES * 8 {
+            bits[i / 8] |= u8::from(state.bit(i as u32).unwrap_or(false)) << (i % 8);
+        }
+        Self {
+            integers: (0..INTEGERS)
+                .map(|i| state.integer(i as u32).unwrap_or(0))
+                .collect(),
+            floats: (0..FLOATS)
+                .map(|i| state.float_bits(i as u32).unwrap_or(0))
+                .collect(),
+            bits,
+            strings: (0..STRINGS)
+                .map(|i| state.string(i as u32).unwrap_or_default().to_vec())
+                .collect(),
+        }
+    }
+
     pub fn integers(&self) -> &[i32] {
         &self.integers
     }
@@ -125,6 +148,13 @@ impl LocalVariables {
     }
     pub fn strings(&self) -> &[Vec<u8>] {
         &self.strings
+    }
+
+    /// The snapshot writer sets bit 0 for the captured copy (0x140085ce0(0, 1)).
+    pub fn set_bit0(&mut self) {
+        if let Some(first) = self.bits.first_mut() {
+            *first |= 1;
+        }
     }
 
     /// Encode just these four records, not a complete snapshot or CSV2 file.

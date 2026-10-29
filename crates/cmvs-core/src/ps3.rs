@@ -100,6 +100,36 @@ impl Script {
         Ok(script)
     }
 
+    /// Inverse of `from_memory_image` (CSV2 section 2, engine +16592): the header fields as
+    /// loaded, then the decoded payload with `data` as the mutable segment.
+    pub fn memory_image(&self, data: &[u8]) -> Result<Vec<u8>, FormatError> {
+        if data.len() != self.header.unknown_size as usize {
+            return Err(FormatError("script data length differs from its segment"));
+        }
+        let h = &self.header;
+        let mut out = b"PS2A".to_vec();
+        for word in [
+            HEADER_SIZE as u32,
+            h.version_raw,
+            h.key,
+            h.label_count,
+            h.code_size,
+            h.unknown_size,
+            h.text_size,
+            h.entry_pc,
+            h.compressed_size,
+            h.decoded_size,
+            h.reserved,
+        ] {
+            out.extend(word.to_le_bytes());
+        }
+        let start = self.code_start() + h.code_size as usize;
+        out.extend(&self.payload[..start]);
+        out.extend(data);
+        out.extend(&self.payload[start + data.len()..]);
+        Ok(out)
+    }
+
     pub(crate) fn apply_snapshot_data(&mut self, data: &[u8]) -> Result<(), FormatError> {
         if data.len() != self.header.unknown_size as usize {
             return Err(FormatError("snapshot main data length differs from script"));

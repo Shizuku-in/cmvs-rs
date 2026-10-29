@@ -64,7 +64,7 @@ fn format(vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
 }
 
 /// String-bank slot of a reference; 0x14006b850 maps indexes above 127 to slot 0.
-fn bank_slot(raw: u32) -> Option<u32> {
+pub(crate) fn bank_slot(raw: u32) -> Option<u32> {
     match StringRef::decode(raw) {
         StringRef::StringBank(index) => Some(if index > 127 { 0 } else { index }),
         _ => None,
