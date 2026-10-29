@@ -14,7 +14,9 @@ cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Downl
 |---|---|
 | `--encoding shift-jis` | 显式选择文本编码；另可选 `gbk`、`utf-8`，不能据此推断对应游戏已兼容 |
 | `--continue-without-snapshot` | 应用已核对的实时快照影响并继续，镜像标记不可用；默认会停在快照屏障 |
-| `--skip-auto-resume` | 本作首次系统存档读取成功后清零内存整数 2198，绕过自动恢复；只接受已核对游戏 ID，磁盘存档保持不变 |
+| `--skip-auto-resume` | 首次系统存档读取成功后清零游戏记录中登记的内存整数（本作为 2198），绕过自动恢复；只对记录了该策略的游戏可用（目前仅本作），磁盘存档保持不变 |
+| `--profile <id>` | 研究用：显式选择引擎档案。默认按启动脚本、脚本包与 exe 的哈希自动识别，未登记的游戏会拒绝启动 |
+| `--allow-unreviewed` | 研究用：用基准语义放行当前档案中未复核的命令，每个命令首次放行时打印 `# UNREVIEWED`；不存在和空操作的命令仍会停止 |
 | `--font <字体>` | 用桌面 OpenType 后端显示文字；字体路径由用户提供，与原版 GDI 有像素差异 |
 | `--audio record` | 仅记录音频请求，不发声 |
 

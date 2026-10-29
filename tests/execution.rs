@@ -354,12 +354,21 @@ fn cli_step_budget_stops_a_real_control_flow_loop() {
     std::fs::write(&path, fixture(&scalar(0x400, 0), &[0], &[])).unwrap();
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_cmvs-trace"))
         .arg(&path)
-        .args(["--steps", "3"])
+        .args(["--steps", "3", "--profile", "cmvs-20160201"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("budget exhausted"));
+    // Without --profile an unrecorded script is rejected before it runs.
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_cmvs-trace"))
+        .arg(&path)
         .output()
         .unwrap();
     std::fs::remove_file(path).unwrap();
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("budget exhausted"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("matches no recorded game"), "{stderr}");
+    assert!(output.stdout.is_empty());
 }
 
 fn push_expr(code: &mut Vec<u8>, expression: Vec<u8>) {

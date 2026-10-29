@@ -14,6 +14,7 @@ use cmvs_rs::{
     message_flags::MessageFlags,
     movie::{DirectoryMovies, MovieHost},
     platform::{DirectoryAssets, PlatformHost, PlatformRequest, RecordingBackend},
+    profile::{CommandGate, Evidence, FileEvidence, Registry},
     ps3::Script,
     random::CrtRandom,
     save_menu::{DirectorySaves, SaveMenuHost, SlotStatus},
@@ -43,7 +44,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         .ok_or("usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap]")?;
     if path == "--help" {
         println!(
-            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap] [--script-archive <archive>] [--virtual-tick <tick>] [--frame-ms <delta>] [--save-dir <directory>] [--system-save <file>] [--record-platform <game-root>] [--continue-without-snapshot] [--rand-seed <seed>]\n--frame-ms supplies a positive engine-frame delta on each supported wait/yield; without it time stays frozen. Callback ticks remain separate. --script loads an isolated initial script. --script-archive supplies common/main scripts and enables explicit control handling with virtual time (default tick 0), without automatic scheduling. --bootstrap applies verified startup configuration. --save-dir enables read-only saveNNN.dat header scanning and menu state, without native UI or save restoration. --system-save explicitly enables CSS1 persistent-state loading for 0x2128; it does not restore a gameplay snapshot. --record-platform enables a recording-only backend with read-only cursor/icon assets from the explicit game root, plus verified state such as the clear color, the save title and pointer-gesture configuration, records SE playback requests without audio output, and decodes 0x2030 object images read-only from the 0x2011 entries; no native window, drawing, or input polling. Main transfer and scenario 0x22b2 stop at the engine save snapshot unless --continue-without-snapshot is given; that applies only the verified live-state effect, builds no save image, and leaves saving unavailable. --rand-seed enables 0x20d4 with the CRT rand() generator from an explicit seed; the original seeds from timeGetTime and draws every frame, so values are not reproducible."
+            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap] [--script-archive <archive>] [--virtual-tick <tick>] [--frame-ms <delta>] [--save-dir <directory>] [--system-save <file>] [--record-platform <game-root>] [--continue-without-snapshot] [--rand-seed <seed>] [--profile <id>] [--allow-unreviewed]\nThe engine profile is identified from the input script or archive, --script-archive and, with --record-platform, the executables in that game root; synthetic or unrecorded scripts need an explicit --profile. Every system command passes the profile gate first: absent and no-op commands stop, unreviewed commands stop unless --allow-unreviewed (research only, first use logged).\n--frame-ms supplies a positive engine-frame delta on each supported wait/yield; without it time stays frozen. Callback ticks remain separate. --script loads an isolated initial script. --script-archive supplies common/main scripts and enables explicit control handling with virtual time (default tick 0), without automatic scheduling. --bootstrap applies verified startup configuration. --save-dir enables read-only saveNNN.dat header scanning and menu state, without native UI or save restoration. --system-save explicitly enables CSS1 persistent-state loading for 0x2128; it does not restore a gameplay snapshot. --record-platform enables a recording-only backend with read-only cursor/icon assets from the explicit game root, plus verified state such as the clear color, the save title and pointer-gesture configuration, records SE playback requests without audio output, and decodes 0x2030 object images read-only from the 0x2011 entries; no native window, drawing, or input polling. Main transfer and scenario 0x22b2 stop at the engine save snapshot unless --continue-without-snapshot is given; that applies only the verified live-state effect, builds no save image, and leaves saving unavailable. --rand-seed enables 0x20d4 with the CRT rand() generator from an explicit seed; the original seeds from timeGetTime and draws every frame, so values are not reproducible."
         );
         return Ok(());
     }
@@ -59,7 +60,13 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut platform_root = None;
     let mut continue_without_snapshot = false;
     let mut random = None;
+    let mut profile = None;
+    let mut allow_unreviewed = false;
     while let Some(flag) = args.next() {
+        if flag == "--allow-unreviewed" {
+            allow_unreviewed = true;
+            continue;
+        }
         if flag == "--bootstrap" {
             bootstrap = Some(Bootstrap::default());
             continue;
@@ -69,7 +76,13 @@ fn run() -> Result<(), Box<dyn Error>> {
             continue;
         }
         let value = args.next().ok_or("missing option value")?;
-        if flag == "--entry" {
+        if flag == "--profile" {
+            profile = Some(
+                value
+                    .into_string()
+                    .map_err(|_| "profile id must be ASCII")?,
+            );
+        } else if flag == "--entry" {
             entry = Some(number(&value)?);
         } else if flag == "--steps" {
             budget = number(&value)?;
@@ -99,6 +112,32 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
     if budget == 0 || budget > 1000000 {
         return Err("step budget must be 1..1000000".into());
+    }
+    let label = |p: &std::ffi::OsStr| p.to_string_lossy().into_owned();
+    let mut evidence = Evidence::default();
+    if archive_script.is_some() {
+        evidence.script_archive = Some(FileEvidence::read(path.as_ref(), label(&path))?);
+    } else {
+        evidence.start_script = Some(FileEvidence::read(path.as_ref(), label(&path))?);
+    }
+    if let Some(archive) = &script_archive {
+        let read = FileEvidence::read(archive.as_ref(), label(archive))?;
+        if evidence
+            .script_archive
+            .as_ref()
+            .is_some_and(|f| f.sha256 != read.sha256)
+        {
+            return Err("--script-archive differs from the input archive".into());
+        }
+        evidence.script_archive = Some(read);
+    }
+    if let Some(root) = &platform_root {
+        evidence.executables = Evidence::executables_in(root.as_ref())?;
+    }
+    let mut gate = CommandGate::new(Registry::builtin().select(profile.as_deref(), &evidence)?);
+    gate.set_allow_unreviewed(allow_unreviewed);
+    for line in gate.selection().log_lines() {
+        println!("{line}");
     }
     let mut file = File::open(&path)?;
     let mut initial_name = std::path::Path::new(&path)
@@ -208,7 +247,17 @@ fn run() -> Result<(), Box<dyn Error>> {
             machine.state().result,
             machine.stack().len_bytes()
         );
-        if let Step::System { command, .. } = event {
+        if let Step::System {
+            pc: system_pc,
+            command,
+        } = event
+        {
+            if let Some(first) = gate.check(&machine, system_pc, command)? {
+                println!(
+                    "# UNREVIEWED system command 0x{:04x} allowed with base semantics (--allow-unreviewed, first use)",
+                    0x2000 + first
+                );
+            }
             if save_image.try_handle(&mut machine, continue_without_snapshot)? {
                 println!(
                     "# scenario snapshot NOT built; bit[0] and repeat count cleared; save image unavailable: {save_image:?}"

@@ -92,3 +92,7 @@ OP 第 1000 帧 RGBA 仍为 `ece6dcbe6d8365ef6356a69b83e8a76c9b437a191c248d15c9d
 ## 用户目录后端与工具链（2026-10-29）
 
 workspace 各包声明 Rust 1.89+（本机使用 1.96.0），用于标准库 File::try_lock 的跨进程会话锁，无新增依赖或 unsafe。system_save/profile.rs 为标准库文件系统适配器，处理独立用户目录的主文件、备份、临时文件提交及锁；原有编码/解码和游戏目录只读边界不变。default/全功能 Windows 检查数量为 587/632，另有 1 项音频设备测试默认忽略；其中 1 项主文件分享模式导致替换失败的回归检查仅在 Windows 编译。平台无关存储测试也在 Windows 上执行，其他平台尚未构建验证。
+
+## 引擎档案（2026-10-30）
+
+`cmvs-core` 新增 `digest`（SHA-256）、`exe`（只读 PE 与 switch 定位）和 `profile` 模块，仍无第三方依赖。档案表与游戏记录是生成的元数据，放在 `crates/cmvs-core/profiles/`，以 `include_str!` 内嵌，不含原版代码或素材。根包新增 `cmvs-profile` 二进制（`identify`/`table`/`show`）。默认 664 项、全 workspace 全功能 712 项测试通过，另有 1/2 项默认忽略。

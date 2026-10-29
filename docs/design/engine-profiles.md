@@ -1,6 +1,6 @@
 # 引擎档案层设计草案
 
-> 状态：**已确认，P1 实施中**。2026-10-30 起草，基线 `15c9fa4`；第 11 节的决定当天确认。实现完成后把当前行为并入[架构](../architecture.md)，本文只保留决策记录。
+> 状态：**已确认；P1 已实现**（2026-10-30，结果见第 12 节）。起草基线 `15c9fa4`，第 11 节的决定当天确认。当前行为见[架构](../architecture.md#引擎档案与命令闸门)，本文保留决策记录。
 
 ## 1. 要解决的问题
 
@@ -15,7 +15,7 @@
 
 对本机 19 款 Purple Software 作品（2007–2023）做了只读元数据普查，不用 IDA：PE 头、系统命令 switch、封包签名和启动脚本。各游戏的二进制哈希待正式建档时登记。
 
-| 游戏目录 | exe | 链接器 | switch 项数 | 存在命令 | 比基准少 | 比基准多 | 封包 | 启动脚本 |
+| 游戏目录 | exe | 链接器 | switch 项数 | 处理函数 | 比基准少 | 比基准多 | 封包 | 启动脚本 |
 |---|---|---|---|---|---|---|---|---|
 | 2007-02 PURIRING | `cmvs.exe` x86 | 8.0 | 800 | 480 | 241 | 0 | CPZ3 | `start.ps2` |
 | 2007-11 ASUKIMI | `cmvs.exe` x86 | 8.0 | 864 | 519 | 202 | 0 | CPZ3 | `start.ps2` |
@@ -37,12 +37,14 @@
 | 2023-05 HAPYMAHER_RE | x86 + x64 | 14.0 | 992 | 749 | 0 | 28 | CPZ5 | `start.ps3` |
 | 2023-05 HAPYMAHERFD_RE | x86 + x64 | 14.0 | 992 | 749 | 0 | 28 | CPZ5 | `start.ps3` |
 
-"存在命令"指 switch 中不落到 default 的项；"比基准少/多"是与《アマツツミ》x64 按 case 号比较的结果。
+"处理函数"指不指向空操作存根的 case；"比基准少/多"是与《アマツツミ》x64 按 case 号比较处理函数集合的结果。
+
+**P1 实现时的更正**：普查最初把"出现最多的跳转目标"当成 default，实际上那是一个共用的空操作存根（`mov eax, 0x4000` 后直接返回，不回收参数、没有副作用）。真正的 default 是 `ja` 的目标（返回 0），32 个 exe 中没有任何范围内的 case 指向它，只有越界命令会走到。所以表中"处理函数"的数字不变，但"比基准少"的命令在旧构建里是**空操作**，不是"不存在"。存根在各时代有 5 种字节形态（x64 一种，x86 四种），P1 按字节精确识别。
 
 **结论**
 
 1. **分派结构 16 年不变。** x64 都是 `movzx eax, dx` 后接 switch；x86 都是 `cmp` 后接 `jmp [reg*4+table]`。只有表的大小在增长：800 → 864 → 928 → 976 → 992。
-2. **命令集合单调增长。** 早于基准的引擎，命令集合全部是基准的子集；晚于基准的，全部是超集。没有出现过删除或重编号，这是"命令号跨版本稳定"的强证据，但**不是**语义不变的证据。
+2. **处理函数集合单调增长。** 早于基准的引擎，处理函数集合全部是基准的子集；晚于基准的，全部是超集。没有出现过删除或重编号，这是"命令号跨版本稳定"的强证据，但**不是**语义不变的证据。旧构建中缺少的处理函数都是空操作（见上文更正），套用基准语义同样是错的。
 3. **同一构建的 x86 与 x64 一致。** 13 对 exe（两款 RE 共用同一对）的命令集合完全相同；PE 时间戳不完全相同，但每对只相差 66–147 秒，应是同一份源码先后连续编译的结果。
 4. **6 款游戏只有 x86 exe（2007–2010），而每款游戏都有 x86 exe。**草案原先的"只做 x64 档案"不成立。
 5. **编译器分四个时代**：VS2005（8.0）、VS2008（9.0）、VS2010（10.0）、VS2015+（14.0）。同一份源码换编译器后机器码会大幅变化，这直接限制了指纹继承（见第 7 节）。2019 年后 x86 exe 从约 1.7 MB 缩到约 1.06 MB，与换编译器同时发生，没有加壳。
@@ -126,12 +128,15 @@
 
 | 状态 | 含义 | 运行时行为 |
 |---|---|---|
-| `Absent` | switch 落到 default，或命令号超出该构建的项数 | 总是报错 `CommandNotInEngine`，研究参数也不能放行 |
+| `Absent` | switch 的 default（返回 0），以及超出该构建项数的命令 | 总是报错，研究参数也不能放行 |
+| `NoOp` | 指向共用空操作存根：返回 0x4000，无副作用 | 总是报错（这一行为尚未实现）；`--allow-unreviewed` 不放行，因为套用基准语义是错的 |
 | `Base` | 仅根档案使用：语义来源就是这个构建 | 进入现有分派链；Rust 未实现时仍报现有的 `Unhandled` |
 | `Inherited { fingerprint }` | 同架构的处理函数指纹与基准相同，继承基准语义 | 同 `Base`；日志计数里单独统计 |
 | `Reviewed { note }` | 指纹不同，但已人工复核，确认与基准语义一致 | 同 `Base` |
 | `Variant(VariantId)` | 已复核，语义与基准不同 | 交给知道这个变体的宿主；宿主不认识就报错 |
-| `Unreviewed` | 存在，但尚未比对、比对后不同，或基准中没有 | 默认报错 `CommandUnreviewed`；`--allow-unreviewed` 放行并逐次记录 |
+| `Unreviewed` | 有处理函数，但尚未比对、比对后不同，或基准中没有 | 默认报错；`--allow-unreviewed` 放行，每个命令首次放行时记录一次 |
+
+P1 只实现了 `Absent`、`NoOp`、`Base`、`Unreviewed`；`Inherited`、`Reviewed`、`Variant` 等到 P2/P3 需要时再加。
 
 "命令状态"表示档案对这个命令知道多少；"Rust 是否实现"仍由分派链决定。两者正交，不合并。
 
@@ -175,19 +180,19 @@ trace 和桌面在启动时打印选择结果和证据。trace 用 `#` 开头的
 
 档案表是生成的元数据（命令号、各架构的处理函数 RVA、状态、指纹哈希），不含原版代码字节。推荐方案：
 
-- 放在 `crates/cmvs-core/profiles/<id>.tsv`，用 `include_str!` 内嵌，启动时严格解析。
-- 测试检查：每张表都能解析；行数等于声明的 switch 项数；`base` 无环；`Inherited` 的指纹与基准同架构的指纹相同；`GameRecord` 引用的档案都存在。
+- 放在 `crates/cmvs-core/profiles/<id>.profile`（游戏记录在 `games.txt`），用 `include_str!` 内嵌，启动时严格解析。表由 `cmvs-profile table` 生成，状态只在复核后手改。
+- 解析时检查：行数等于声明的 switch 项数且从 `0x2000` 连续；同一行的各架构必须同为处理函数、同为空操作或同为 default；各 exe 的时间戳相差不超过 5 分钟；状态与 case 类型和档案类型相符；派生档案的基准必须是同家族的根档案；游戏记录引用的档案存在，且记录的 exe 都是该档案的二进制。
+
+实际格式（P1）：每行一个命令，先状态，再按 `binary` 行的顺序给出各架构的 case 入口 RVA，default 写 `-`。P2 再增加指纹列。
 
 ```text
-# profile cmvs-20150405
-# binary x64 cmvs64.exe sha256=d1c4ade9…911d pe_timestamp=0x55219bdb linker=10.0 image_base=0x140000000 dispatch=0x81344 cases=976
-# binary x86 cmvs32.exe sha256=30edecfd…49b4 pe_timestamp=0x55219b5a linker=10.0 image_base=0x400000 dispatch=… cases=976
-# same_build timestamp_delta=129s command_set=equal
-# base cmvs-20160201
-# command  x64_rva   x86_rva   status      x64_fingerprint
-0x2026     0x68aa0   …         inherited   3f1c…
-0x211e     -         -         absent      -
-0x22ca     0x782d0   …         unreviewed  9a07…
+profile cmvs-20150405
+family cmvs
+base cmvs-20160201
+binary x64 file=cmvs64.exe sha256=d1c4…911d timestamp=0x55219bdb linker=10.0 image-base=0x140000000 table=0x81344 default=0x7eaba cases=976
+binary x86 file=cmvs32.exe sha256=30ed…49b4 timestamp=0x55219b5a linker=10.0 image-base=0x400000 table=0x72aac default=0x70c62 cases=976
+0x2026 unreviewed 0x7ed2f 0x70dc4
+0x211e noop 0x7eaa7 0x70c53
 ```
 
 ### 6.3 分派闸门
@@ -235,7 +240,7 @@ profile::check_command(selection, pc, command, allow_unreviewed)?;
 
 | 基准 | 派生 | 结果 |
 |---|---|---|
-| 存在 | 不存在 | `Absent` |
+| 有处理函数 | 空操作或 default | `NoOp` / `Absent` |
 | 存在 | 存在，指纹相同且未截断 | `Inherited` |
 | 存在 | 存在，指纹不同或截断 | `Unreviewed`，待人工复核后改为 `Reviewed` 或 `Variant` |
 | 不存在 | 存在 | `Unreviewed`（基准没有这条语义可继承） |
@@ -268,7 +273,7 @@ profile::check_command(selection, pc, command, allow_unreviewed)?;
 
 | 阶段 | 内容 | 验收 |
 |---|---|---|
-| P1 | `digest`、`profile`、闸门、选择流程、CLI 参数、`identify`；两张档案表：根档案 `cmvs-20160201`（721 个 `Base`、其余 `Absent`），`cmvs-20150405`（只有 `Absent` 与 `Unreviewed`），两者都登记 x86/x64；路径和常量移入记录 | 《アマツツミ》既有 trace 与重放日志除新增的 `#` 头部行外逐字节一致；CHRONOCLOCK 不加参数时停在第一个未复核命令，加 `--allow-unreviewed` 时复现 2026-10-30 的 `0x2026` 停点；`identify` 对 19 款游戏的输出与第 2 节表格一致 |
+| P1 | **已完成。**`digest`、`exe`、`profile`、闸门、选择流程、CLI 参数、`cmvs-profile`；两张档案表：根档案 `cmvs-20160201`（721 个 `Base`、255 个 `NoOp`），`cmvs-20150405`（712 个 `Unreviewed`、264 个 `NoOp`），两者都登记 x86/x64；路径和常量移入记录 | 《アマツツミ》既有 trace 与重放日志除新增的 `#` 头部行外逐字节一致；CHRONOCLOCK 不加参数时停在第一个未复核命令，加 `--allow-unreviewed` 时复现 2026-10-30 的 `0x2026` 停点；`identify` 对 19 款游戏的输出与第 2 节表格一致 |
 | P2 | IDA 导出与比较工具（x64、x86），生成 CHRONOCLOCK 的 `Inherited` 状态 | CHRONOCLOCK 不加参数时 trace 的停点前移或不变，停点原因写入档案 |
 | P3 | 按需引入 `Variant`；实现 `0x2026`。它的处理函数在两个构建中相同，可以同时在两边核对 | 照常走语义证据流程 |
 | P4 | 做第一个非 CPZ6 游戏时实现封包代际分派 | 照常走格式验证流程 |
@@ -279,7 +284,22 @@ P1 和 P2 只改闸门和元数据，不改任何命令语义。这样主线（�
 ## 11. 决定（2026-10-30 确认）
 
 1. **档案粒度**：按构建。同一构建的 x86/x64 合为一个档案，多款游戏可共用。
-2. **未复核命令**：默认硬停，`--allow-unreviewed` 只用于研究，并逐次记录。
-3. **表的格式**：内嵌 TSV。
+2. **未复核命令**：默认硬停，`--allow-unreviewed` 只用于研究；实现为每个命令首次放行时记录一次（等待恢复时会重复检查同一条待处理命令，逐次记录会刷屏）。
+3. **表的格式**：内嵌的行式文本（P1 用 `key=value` 头部加每命令一行，比 TSV 更易审阅）。
 4. **指纹导出**：接受依赖 IDA；比较步骤只用 Python 标准库。
 5. **长期路线**：采用"时代锚点"，每个编译器时代选一个构建深度复核。
+
+## 12. P1 实施结果（2026-10-30）
+
+基线 `7de88ce`。新增 `cmvs-core::digest`（SHA-256）、`cmvs-core::exe`（只读 PE 解析与 switch 定位）、`cmvs-core::profile`（档案、游戏记录、选择与闸门）和 `cmvs-profile` CLI；runner、`cmvs-trace`、`cmvs-desktop` 都在分派链之前经过闸门。未改动任何命令语义。
+
+| 验收项 | 结果 |
+|---|---|
+| 《アマツツミ》trace 回归 | 与 `7de88ce` 构建的 trace 同参数对比（显式帧 16ms；种子 0 跑满 100 万步、120 MB 日志，以及不带种子停在 `0x20d4`），去掉新增的 6 行 `#` 档案头部后逐字节一致，退出码不变 |
+| CHRONOCLOCK 默认 | 第一个系统命令 `start.ps3 / 0xc / 0x201e` 报"未复核"，退出码 1 |
+| CHRONOCLOCK `--allow-unreviewed` | 途中首次放行 92 种未复核命令；去掉档案相关行后与 10-30 的 trace3 逐字节一致，仍停在 `cdemo.ps3 / 0x341a2 / 0x2026` |
+| `cmvs-profile identify` | 32 个 exe 全部定位到唯一 switch，处理函数与空操作数量与第 2 节一致；两个已登记游戏的内嵌表与 exe 逐项一致；未登记游戏与 CVNS 样本被明确拒绝 |
+| 桌面 | 《アマツツミ》原生窗口运行到 5 秒截止时间后正常退出；CHRONOCLOCK 在同一个闸门处报错退出 |
+| 检查 | `cargo fmt --check`；默认 664 项、全 workspace 全功能 712 项测试通过（分别 1、2 项默认忽略）；默认与全功能严格 Clippy 通过 |
+
+合成测试中原来把 `0x27ff` 当作"未知命令"哨兵；它超出基准构建的 976 项 switch，现在由闸门报 `Absent`。runner 测试改用 2048 项全为 `Base` 的合成档案，CLI 测试改为断言闸门错误。`--skip-auto-resume` 只对记录了该策略的游戏可用，目前只有《アマツツミ》（变量 2198）；脚本在 `0x201d` 声明的游戏 ID 与记录不符时由闸门报错。

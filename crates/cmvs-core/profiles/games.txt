@@ -1,0 +1,21 @@
+# Game records: data hashes identify a game; executables confirm the build of its profile.
+# Hashes are evidence from docs/games/<game>/; game files themselves never enter the repository.
+
+game amatsutsumi
+profile cmvs-20160201
+start data/pack/start.ps3 sha256=c338313949a803e834acf0d746c93f09c4d41f558af8fb6c13ab1ee55aff2bd0
+archive data/pack/script.cpz sha256=92b367e8c3d2791f1dd2ca8426581974fbb640d2766f2e82ab12383d2f5359e4
+game-id 0x17800016
+executable cmvs64.exe sha256=dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5
+executable cmvs32.exe sha256=8b09e6b23e0eeaecccf6a584cb94720d239c00f177ed02036ab8845120d99197
+policy skip-auto-resume integer=2198
+end
+
+game chronoclock
+profile cmvs-20150405
+start data/pack/start.ps3 sha256=d4263a32830bb385fabfa7e06c2fde2d70e072722e3ed6c317292e7086fb6dce
+archive data/pack/script.cpz sha256=aa4bd891cc50fe658cacc050c6b216e8ba0389d17d01163e335f3177d6f14ba3
+game-id 0x17700011
+executable cmvs64.exe sha256=d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d
+executable cmvs32.exe sha256=30edecfde8d69b60102c79c82db7eda3895126510e51c0ec76658a303f5a49b4
+end

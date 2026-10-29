@@ -80,27 +80,35 @@ fn trace_fade_time_is_frozen_unless_a_frame_delta_is_explicit() {
     }
     raw.extend(code.iter().map(|v| v.rotate_left(1).wrapping_add(124)));
     fs::write(&input, &raw).unwrap();
-    for (extra, needle) in [
-        (vec![], "# WAIT fade"),
-        (vec!["--frame-ms", "10"], "# STOP pending system=0x27ff"),
-    ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_cmvs-trace"))
-            .arg(&input)
-            .arg("--record-platform")
-            .arg(&root)
-            .args(extra)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(String::from_utf8_lossy(&output.stdout).contains(needle));
-    }
     let output = Command::new(env!("CARGO_BIN_EXE_cmvs-trace"))
         .arg(&input)
-        .args(["--frame-ms", "0"])
+        .args(["--profile", "cmvs-20160201", "--record-platform"])
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("# WAIT fade"));
+    // Once the fade finishes, 0x27ff lies beyond the base build's switch: the gate stops it.
+    let output = Command::new(env!("CARGO_BIN_EXE_cmvs-trace"))
+        .arg(&input)
+        .args(["--profile", "cmvs-20160201", "--record-platform"])
+        .arg(&root)
+        .args(["--frame-ms", "10"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).contains("# frame delta_ms=10"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("system command 0x27ff at synthetic.ps3 / 0x")
+    );
+    let output = Command::new(env!("CARGO_BIN_EXE_cmvs-trace"))
+        .arg(&input)
+        .args(["--profile", "cmvs-20160201", "--frame-ms", "0"])
         .output()
         .unwrap();
     assert!(!output.status.success());
@@ -146,16 +154,11 @@ fn trace_timer_queries_observe_one_delta_after_yield_and_zero_without_frame_cloc
     for (args, expected) in [(vec![], 0), (vec!["--frame-ms", "17"], 17)] {
         let output = Command::new(env!("CARGO_BIN_EXE_cmvs-trace"))
             .arg(&input)
-            .arg("--record-platform")
+            .args(["--profile", "cmvs-20160201", "--record-platform"])
             .arg(&root)
             .args(args)
             .output()
             .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
         let stdout = String::from_utf8(output.stdout).unwrap();
         let queries = stdout
             .lines()
@@ -164,7 +167,12 @@ fn trace_timer_queries_observe_one_delta_after_yield_and_zero_without_frame_cloc
         assert_eq!(queries.len(), 2);
         assert!(queries[0].ends_with("system_integer[0]=Some(0)"));
         assert!(queries[1].ends_with(&format!("system_integer[0]=Some({expected})")));
-        assert!(stdout.contains("# STOP pending system=0x27ff"));
+        // 0x27ff lies beyond the base build's switch, so the profile gate ends the trace.
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("0x27ff at synthetic.ps3 / 0x16 does not exist")
+        );
     }
     assert_eq!(fs::read(&input).unwrap(), raw);
     fs::remove_file(input).unwrap();

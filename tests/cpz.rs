@@ -158,7 +158,7 @@ fn trace_cli_loads_and_steps_synthetic_ps3_directly_from_archive() {
     std::fs::write(&path, bytes).unwrap();
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_cmvs-trace"))
         .arg(&path)
-        .args(["--script", "fixture.ps3"])
+        .args(["--script", "fixture.ps3", "--profile", "cmvs-20160201"])
         .output()
         .unwrap();
     std::fs::remove_file(path).unwrap();

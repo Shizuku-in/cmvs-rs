@@ -1,10 +1,31 @@
 use cmvs_rs::{
+    digest::{sha256, to_hex},
     platform::{PlatformBackend, PlatformRequest, RecordingBackend},
+    profile::{Game, Registry},
     ps3::Script,
     runner::{SnapshotPolicy, Startup, StartupEvent, load_start},
     snapshot::SaveImage,
 };
-use std::{error::Error, fs, path::PathBuf};
+use std::{error::Error, fs, path::PathBuf, sync::OnceLock};
+
+/// A synthetic build whose 2048 cases all count as base semantics, so these tests exercise
+/// the runner rather than any real profile table.
+fn synthetic_profile() -> String {
+    let mut text = format!(
+        "profile synthetic-base\nfamily cmvs\nbase -\nbinary x64 file=cmvs64.exe sha256={} \
+         timestamp=0x00000000 linker=10.0 image-base=0x140000000 table=0x1000 default=0x2000 \
+         cases=2048\n",
+        "0".repeat(64)
+    );
+    for command in 0..2048 {
+        text.push_str(&format!("0x{:04x} base 0x3000\n", 0x2000 + command));
+    }
+    text
+}
+fn base_registry() -> &'static Registry {
+    static REGISTRY: OnceLock<Registry> = OnceLock::new();
+    REGISTRY.get_or_init(|| Registry::parse(&[&synthetic_profile()], "").unwrap())
+}
 
 struct Root(PathBuf);
 impl Root {
@@ -45,8 +66,26 @@ impl Root {
         fs::write(root.join("data/pack/script.cpz"), bytes).unwrap();
         Self(root)
     }
+    /// Synthetic roots match no game record, so they name the synthetic profile explicitly.
+    fn game(&self) -> Game<'static> {
+        base_registry()
+            .identify_game(&self.0, Some("synthetic-base"))
+            .unwrap()
+    }
+    /// A registry whose record matches this root's files and verifies skip-auto-resume.
+    fn recorded_registry(&self, game_id: u32) -> Registry {
+        let hash = |name: &str| to_hex(&sha256(&fs::read(self.0.join(name)).unwrap()));
+        let games = format!(
+            "game synthetic\nprofile synthetic-base\nstart data/pack/start.ps3 sha256={}\n\
+             archive data/pack/script.cpz sha256={}\ngame-id 0x{game_id:08x}\n\
+             policy skip-auto-resume integer=2198\nend\n",
+            hash("data/pack/start.ps3"),
+            hash("data/pack/script.cpz")
+        );
+        Registry::parse(&[&synthetic_profile()], &games).unwrap()
+    }
     fn script(&self) -> Script {
-        load_start(&self.0).unwrap()
+        load_start(&self.0, &self.game().files).unwrap()
     }
 }
 impl Drop for Root {
@@ -78,7 +117,7 @@ fn string_call(op: u16) -> Vec<u8> {
 fn startup_main_snapshot_barrier_is_sticky_and_does_not_execute_new_main() {
     let root = Root::new("barrier", &string_call(0x2080), b"fixture.ps3\0");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
     let mut backend = RecordingBackend::default();
     assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
     assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
@@ -109,7 +148,7 @@ fn startup_main_snapshot_barrier_is_sticky_and_does_not_execute_new_main() {
 fn explicit_policy_enters_main_without_building_a_save_image() {
     let root = Root::new("no-snapshot", &string_call(0x2080), b"fixture.ps3\0");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
     run.set_snapshot_policy(SnapshotPolicy::ContinueWithoutImage);
     let mut backend = RecordingBackend::default();
     assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
@@ -147,7 +186,7 @@ fn startup_records_clear_color_without_drawing() {
     code.extend(0x27ffu16.to_le_bytes());
     let root = Root::new("clear", &code, b"");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
     let mut backend = RecordingBackend::default();
     assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
     assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
@@ -172,7 +211,7 @@ fn jump(target: u32) -> Vec<u8> {
 fn yield_watchdog_stops_a_loop_that_never_yields_without_stepping() {
     let root = Root::new("watchdog", &jump(0), b"");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
     let mut backend = RecordingBackend::default();
     run.set_yield_watchdog(3);
     for _ in 0..3 {
@@ -198,7 +237,7 @@ fn yields_reset_the_watchdog_and_total_steps_are_unbounded() {
     code.extend(jump(0));
     let root = Root::new("yielding", &code, b"");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
     let mut backend = RecordingBackend::default();
     run.set_yield_watchdog(2);
     for _ in 0..1000 {
@@ -223,7 +262,7 @@ fn startup_backend_error_can_be_retried_without_losing_pending_request() {
     code.extend(0x27ffu16.to_le_bytes());
     let root = Root::new("retry", &code, b"title\0");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
     run.tick(&mut Reject).unwrap();
     run.tick(&mut Reject).unwrap();
     assert!(run.tick(&mut Reject).is_err());
@@ -247,7 +286,7 @@ fn missing_system_file_is_a_verified_no_change_return() {
     code.extend(0x27ffu16.to_le_bytes());
     let root = Root::new("missing-system", &code, b"");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
     let mut backend = RecordingBackend::default();
     assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
     assert_eq!(run.machine().state().integer(2048), None);
@@ -277,7 +316,7 @@ fn startup_fade_wait_needs_explicit_frames_and_resumes_after_removal() {
     code.extend(0x27ffu16.to_le_bytes());
     let root = Root::new("fade-wait", &code, b"");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
     let mut backend = RecordingBackend::default();
     for _ in 0..6 {
         assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
@@ -317,7 +356,7 @@ fn message_wait_resumes_without_advancing_time_on_release_completion() {
     code.extend(0x27ffu16.to_le_bytes());
     let root = Root::new("message-wait", &code, b"");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
     let mut backend = RecordingBackend::default();
     loop {
         if run.tick(&mut backend).unwrap() == StartupEvent::Yield {
@@ -362,7 +401,7 @@ fn message_recording_is_opt_in_and_resumes_each_yield_with_explicit_frame_time()
     code.extend(0x27ffu16.to_le_bytes());
     let root = Root::new("message-record", &code, b"A\0");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
     let mut backend = RecordingBackend::default();
     loop {
         if let StartupEvent::Unhandled { command, .. } = run.tick(&mut backend).unwrap() {
@@ -412,7 +451,7 @@ fn timers_advance_at_run_entry_and_ignore_budget_slices_and_reused_deltas() {
     code.extend(0x27ffu16.to_le_bytes());
     let root = Root::new("timer-boundary", &code, b"");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
     let mut backend = RecordingBackend::default();
     run.advance_frame(100).unwrap();
     for _ in 0..4 {
@@ -452,7 +491,7 @@ fn stopwatch_uses_frame_time_once_per_vm_run() {
     }
     let root = Root::new("stopwatch-boundary", &code, b"");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
     let mut backend = RecordingBackend::default();
     run.advance_frame(100).unwrap();
     run.tick(&mut backend).unwrap(); // Mark at 100ms.
@@ -531,7 +570,7 @@ fn system_save_export_is_opt_in_external_and_becomes_the_read_source() {
     fs::write(root.0.join("save/system.dat"), &original).unwrap();
     let output = root.0.with_extension("css1");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
     assert!(
         run.set_system_save_output(&root.0.join("save/new.dat"))
             .is_err()
@@ -545,7 +584,7 @@ fn system_save_export_is_opt_in_external_and_becomes_the_read_source() {
     }
     assert!(!output.exists());
     assert!(run.set_system_save_output(&output).is_err()); // Too late to configure.
-    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
     run.set_system_save_output(&output).unwrap();
     loop {
         if let StartupEvent::Unhandled { command, .. } = run.tick(&mut backend).unwrap() {
@@ -595,7 +634,7 @@ fn user_directory_saves_twice_restarts_and_never_falls_back_from_corrupt_primary
         .join(format!("cmvs-runner-profile-{}", std::process::id()));
     assert!(!directory.exists());
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
     assert!(
         run.set_user_data_directory(&root.0.join("save/profile"))
             .is_err()
@@ -631,7 +670,7 @@ fn user_directory_saves_twice_restarts_and_never_falls_back_from_corrupt_primary
         Some(42)
     );
     drop(run);
-    let mut restarted = Startup::new(&script, &root.0, 0).unwrap();
+    let mut restarted = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
     restarted.set_user_data_directory(&directory).unwrap();
     while restarted.machine().state().integer(2048).is_none() {
         restarted.tick(&mut backend).unwrap();
@@ -639,7 +678,7 @@ fn user_directory_saves_twice_restarts_and_never_falls_back_from_corrupt_primary
     assert_eq!(restarted.machine().state().integer(2048), Some(99));
     drop(restarted);
     fs::write(directory.join("system.dat"), b"corrupt profile").unwrap();
-    let mut corrupt = Startup::new(&script, &root.0, 0).unwrap();
+    let mut corrupt = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
     corrupt.set_user_data_directory(&directory).unwrap();
     let mut failed = false;
     for _ in 0..20 {
@@ -679,7 +718,9 @@ fn auto_resume_policy_is_explicit_preserves_other_settings_and_never_writes_save
         let path = root.0.join("save/system.dat");
         fs::write(&path, &raw).unwrap();
         let script = root.script();
-        let mut run = Startup::new(&script, &root.0, 0).unwrap();
+        let registry = root.recorded_registry(0x1780_0016);
+        let game = registry.identify_game(&root.0, None).unwrap();
+        let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
         if skip {
             run.set_skip_auto_resume(true).unwrap();
         }
@@ -716,7 +757,9 @@ fn auto_resume_policy_only_overrides_the_first_system_save_read() {
     )
     .unwrap();
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let registry = root.recorded_registry(0x1780_0016);
+    let game = registry.identify_game(&root.0, None).unwrap();
+    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
     run.set_skip_auto_resume(true).unwrap();
     let mut backend = RecordingBackend::default();
     for _ in 0..3 {
@@ -728,25 +771,29 @@ fn auto_resume_policy_only_overrides_the_first_system_save_read() {
 }
 
 #[test]
-fn auto_resume_policy_rejects_other_profiles_without_applying_system_state() {
+fn auto_resume_policy_rejects_other_games_without_applying_system_state() {
     let code = auto_resume_code(0x1234_5678, 1);
     let root = Root::new("auto-resume-wrong-profile", &code, b"");
     let raw = auto_resume_save(0x1234_5678);
     fs::write(root.0.join("save/system.dat"), &raw).unwrap();
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    // Without a game record the policy cannot be enabled at all.
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    assert!(run.set_skip_auto_resume(true).is_err());
+    // A record verified for another game ID stops at 0x201d, before any system state.
+    let registry = root.recorded_registry(0x1780_0016);
+    let game = registry.identify_game(&root.0, None).unwrap();
+    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
     run.set_skip_auto_resume(true).unwrap();
     let mut backend = RecordingBackend::default();
-    for _ in 0..2 {
-        run.tick(&mut backend).unwrap();
-    }
-    assert!(
-        run.tick(&mut backend)
-            .unwrap_err()
-            .to_string()
-            .contains("only verified")
-    );
-    assert_eq!(run.machine().pending_system(), Some((10, 0x128)));
+    let error = loop {
+        match run.tick(&mut backend) {
+            Ok(_) => {}
+            Err(error) => break error.to_string(),
+        }
+    };
+    assert!(error.contains("declares game ID 0x12345678"), "{error}");
+    assert_eq!(run.machine().pending_system().map(|(_, c)| c), Some(0x1d));
     assert_eq!(run.machine().state().integer(2198), None);
     assert!(!run.auto_resume_skipped());
     assert_eq!(fs::read(root.0.join("save/system.dat")).unwrap(), raw);
@@ -757,7 +804,9 @@ fn auto_resume_policy_keeps_missing_and_invalid_system_saves_distinct_and_retrya
     let code = auto_resume_code(0x1780_0016, 2);
     let root = Root::new("auto-resume-missing", &code, b"");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let registry = root.recorded_registry(0x1780_0016);
+    let game = registry.identify_game(&root.0, None).unwrap();
+    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
     run.set_skip_auto_resume(true).unwrap();
     let mut backend = RecordingBackend::default();
     for _ in 0..3 {
@@ -779,7 +828,9 @@ fn auto_resume_policy_keeps_missing_and_invalid_system_saves_distinct_and_retrya
     raw[360] ^= 1;
     fs::write(root.0.join("save/system.dat"), &raw).unwrap();
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, 0).unwrap();
+    let registry = root.recorded_registry(0x1780_0016);
+    let game = registry.identify_game(&root.0, None).unwrap();
+    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
     run.set_skip_auto_resume(true).unwrap();
     for _ in 0..2 {
         run.tick(&mut backend).unwrap();

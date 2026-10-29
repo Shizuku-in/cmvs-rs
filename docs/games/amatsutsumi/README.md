@@ -11,6 +11,7 @@
 | 二进制 SHA-256 | `dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5` |
 | 当前编码配置 | 显式 `shift-jis` |
 | 样本格式 | PS2A、CPZ6 模式 1、PB3、CMV6/8/9、CSV2、CSS1 的已核对分支 |
+| 引擎档案 | 根档案 `cmvs-20160201`：x64 与同构建的 `cmvs32.exe`（SHA-256 `8b09e6b23e0eeaecccf6a584cb94720d239c00f177ed02036ab8845120d99197`）；721 个处理函数为 `base`，255 个为空操作。游戏 ID `0x17800016`，`--skip-auto-resume` 策略变量 2198 登记于游戏记录 |
 
 本地路径仅为复现示例，不是身份依据。各脚本、资源、系统存档和音频 DLL 的哈希及验证条件见[研究记录](research.md)、[VM 语义](vm-semantics.md)和[覆盖报告](script-coverage.md)。本文所有原版地址只对上表二进制有效。
 

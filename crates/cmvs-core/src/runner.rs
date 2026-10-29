@@ -1,5 +1,6 @@
 //! Bounded real-data startup orchestration for the researched Amatsutsumi layout.
 //! Snapshots remain barriers unless the caller explicitly continues without an image.
+//! Every system command first passes the selected engine profile's gate.
 use crate::{
     MAX_PAYLOAD,
     audio::{AudioBackend, AudioHost, RecordingAudio},
@@ -17,6 +18,7 @@ use crate::{
     message_flags::MessageFlags,
     movie::{DirectoryMovies, MovieHost},
     platform::{DirectoryAssets, PlatformBackend, PlatformHost},
+    profile::{CommandGate, Game, GameFiles},
     ps3::Script,
     random::CrtRandom,
     resources::{ResourceArchives, ResourceKind},
@@ -60,9 +62,9 @@ impl SystemSaveSink for SystemOutput {
     }
 }
 
-pub fn load_start(root: &Path) -> Result<Script, Box<dyn Error>> {
+pub fn load_start(root: &Path, files: &GameFiles) -> Result<Script, Box<dyn Error>> {
     let mut bytes = Vec::new();
-    File::open(root.join("data/pack/start.ps3"))?
+    File::open(root.join(&files.start_script))?
         .take(MAX_PAYLOAD as u64 + 49)
         .read_to_end(&mut bytes)?;
     if bytes.len() > MAX_PAYLOAD + 48 {
@@ -90,6 +92,9 @@ pub enum SnapshotPolicy {
 }
 pub struct Startup<'a> {
     machine: Machine<'a>,
+    gate: CommandGate<'a>,
+    /// Unreviewed commands first let through since the last `take_unreviewed_notices`.
+    notices: Vec<u16>,
     bootstrap: Bootstrap,
     control: ScriptControl,
     source: ArchiveScripts<File>,
@@ -130,19 +135,27 @@ pub struct Startup<'a> {
     main_barrier: bool,
     snapshot_policy: SnapshotPolicy,
     save_image: SaveImage,
-    skip_auto_resume: bool,
+    /// Recorded (game ID, integer) of the verified preview policy, once enabled.
+    skip_auto_resume: Option<(u32, u32)>,
     auto_resume_checked: bool,
     auto_resume_skipped: bool,
 }
 impl<'a> Startup<'a> {
-    pub fn new(script: &'a Script, root: &Path, virtual_tick: u32) -> Result<Self, Box<dyn Error>> {
+    pub fn new(
+        script: &'a Script,
+        root: &Path,
+        game: &Game<'a>,
+        virtual_tick: u32,
+    ) -> Result<Self, Box<dyn Error>> {
         let mut machine = Machine::new(script)?;
-        machine.set_current_name(b"start.ps3".to_vec());
+        machine.set_current_name(game.files.start_name());
         Ok(Self {
             machine,
+            gate: CommandGate::new(game.selection.clone()),
+            notices: Vec::new(),
             bootstrap: Bootstrap::default(),
             control: ScriptControl::new(virtual_tick),
-            source: ArchiveScripts::new(File::open(root.join("data/pack/script.cpz"))?)?,
+            source: ArchiveScripts::new(File::open(root.join(&game.files.script_archive))?)?,
             saves: DirectorySaves::new(root.join("save"))?,
             save_menu: SaveMenuHost::default(),
             system_source: FileSystemSave::new(root.join("save/system.dat")),
@@ -182,7 +195,7 @@ impl<'a> Startup<'a> {
             main_barrier: false,
             snapshot_policy: SnapshotPolicy::default(),
             save_image: SaveImage::default(),
-            skip_auto_resume: false,
+            skip_auto_resume: None,
             auto_resume_checked: false,
             auto_resume_skipped: false,
         })
@@ -190,15 +203,36 @@ impl<'a> Startup<'a> {
     pub fn machine(&self) -> &Machine<'a> {
         &self.machine
     }
-    /// Explicit Amatsutsumi preview policy, not a VM command: after the first system-save
-    /// read, clear in-memory integer 2198 so main.ps3 does not attempt startup auto-load.
-    /// Other persistent values and every file stay unchanged. Configure before ticking.
+    /// Explicit preview policy, not a VM command: after the first system-save read, clear
+    /// the recorded integer (2198 for Amatsutsumi) so main.ps3 does not attempt startup
+    /// auto-load. Other persistent values and every file stay unchanged. Configure before
+    /// ticking; only games whose record verifies the policy accept it.
     pub fn set_skip_auto_resume(&mut self, enabled: bool) -> Result<(), &'static str> {
         if self.steps != 0 {
             return Err("skip-auto-resume must be configured before startup");
         }
-        self.skip_auto_resume = enabled;
+        self.skip_auto_resume = match (enabled, self.gate.selection().record) {
+            (false, _) => None,
+            (true, Some(record)) => Some((
+                record.game_id,
+                record
+                    .skip_auto_resume
+                    .ok_or("skip-auto-resume is not verified for this game")?,
+            )),
+            (true, None) => return Err("skip-auto-resume needs a recorded game"),
+        };
         Ok(())
+    }
+    /// Research only: let unreviewed commands run with the base profile's semantics.
+    pub fn set_allow_unreviewed(&mut self, allow: bool) {
+        self.gate.set_allow_unreviewed(allow);
+    }
+    pub fn gate(&self) -> &CommandGate<'a> {
+        &self.gate
+    }
+    /// Unreviewed commands let through for the first time since the previous call.
+    pub fn take_unreviewed_notices(&mut self) -> Vec<u16> {
+        std::mem::take(&mut self.notices)
     }
     pub fn auto_resume_skipped(&self) -> bool {
         self.auto_resume_skipped
@@ -463,6 +497,9 @@ impl<'a> Startup<'a> {
                 StartupEvent::Progress
             });
         };
+        if let Some(first) = self.gate.check(&self.machine, pc, command)? {
+            self.notices.push(first);
+        }
         let id = self.bootstrap.settings().get(&0x201d).copied();
         if command == 0x129
             && let Some(output) = &mut self.system_output
@@ -545,21 +582,24 @@ impl<'a> Startup<'a> {
             return Ok(StartupEvent::Yield);
         }
         if command == 0x128
-            && self.skip_auto_resume
+            && let Some((game_id, _)) = self.skip_auto_resume
             && !self.auto_resume_checked
-            && id != Some(0x1780_0016)
+            && id != Some(game_id)
         {
-            return Err(
-                "skip-auto-resume is only verified for Amatsutsumi game ID 0x17800016".into(),
-            );
+            return Err(format!(
+                "skip-auto-resume is only verified for recorded game ID 0x{game_id:08x}"
+            )
+            .into());
         }
         if let Some(event) =
             self.system_host
                 .try_handle(&mut self.machine, &mut self.system_source, id)?
         {
             if !self.auto_resume_checked {
-                if self.skip_auto_resume && event == SystemSaveEvent::Applied {
-                    self.machine.state_mut().set_integer(2198, 0)?;
+                if let Some((_, integer)) = self.skip_auto_resume
+                    && event == SystemSaveEvent::Applied
+                {
+                    self.machine.state_mut().set_integer(integer, 0)?;
                     self.auto_resume_skipped = true;
                 }
                 self.auto_resume_checked = true;

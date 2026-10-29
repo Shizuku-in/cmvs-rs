@@ -1,0 +1,342 @@
+//! Engine profiles: which analysed CMVS build supplies the semantics for a run.
+//! A profile covers one build (its x86/x64 executables); game records map data files to it.
+//! Selection never defaults; the command gate rejects absent and unreviewed commands.
+mod gate;
+mod select;
+mod text;
+
+pub use gate::{CommandGate, GateError, GateErrorKind};
+pub use select::{
+    EXECUTABLE_NAMES, Evidence, FileEvidence, Game, GameFiles, ProfileSelection, SelectionBasis,
+    SelectionError,
+};
+
+use crate::exe::{Arch, Case, Dispatch, PeImage};
+use std::{fmt, sync::OnceLock};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Family {
+    Cmvs,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandStatus {
+    /// The switch's default (returns 0); every command beyond the switch is absent too.
+    Absent,
+    /// The shared stub returning 0x4000 with no effect; base semantics never apply.
+    NoOp,
+    /// Root profile only: this build is the semantic reference.
+    Base,
+    /// Present, but not yet compared with or reviewed against the base.
+    Unreviewed,
+}
+
+impl CommandStatus {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Absent => "absent",
+            Self::NoOp => "noop",
+            Self::Base => "base",
+            Self::Unreviewed => "unreviewed",
+        }
+    }
+}
+
+/// One analysed executable of a build; every address is relative to this file only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Binary {
+    pub arch: Arch,
+    pub file: String,
+    pub sha256: [u8; 32],
+    pub timestamp: u32,
+    pub linker: (u8, u8),
+    pub image_base: u64,
+    pub table_rva: u32,
+    pub default_rva: u32,
+    pub cases: Vec<Case>,
+}
+
+impl Binary {
+    /// Whether a freshly located switch is exactly the one recorded for this binary.
+    pub fn matches(&self, image: &PeImage, dispatch: &Dispatch) -> bool {
+        self.arch == image.arch
+            && self.timestamp == image.timestamp
+            && self.linker == image.linker
+            && self.image_base == image.image_base
+            && self.table_rva == dispatch.table_rva
+            && self.default_rva == dispatch.default_rva
+            && self.cases == dispatch.cases
+    }
+}
+
+/// x86/x64 executables of one build are linked minutes apart (66-147 s in the 2010-2023 survey).
+pub const SAME_BUILD_SECONDS: u32 = 300;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EngineProfile {
+    pub id: String,
+    pub family: Family,
+    pub base: Option<String>,
+    pub binaries: Vec<Binary>,
+    statuses: Vec<CommandStatus>,
+}
+
+impl EngineProfile {
+    /// Status of system command `0x2000 + command`; cases beyond the switch are absent.
+    pub fn status(&self, command: u16) -> CommandStatus {
+        self.statuses
+            .get(command as usize)
+            .copied()
+            .unwrap_or(CommandStatus::Absent)
+    }
+    pub fn statuses(&self) -> &[CommandStatus] {
+        &self.statuses
+    }
+    pub fn count(&self, status: CommandStatus) -> usize {
+        self.statuses.iter().filter(|&&s| s == status).count()
+    }
+    pub fn binary(&self, sha256: &[u8; 32]) -> Option<&Binary> {
+        self.binaries.iter().find(|b| &b.sha256 == sha256)
+    }
+    /// Builds a profile from located switches: present cases become `Base` for a root
+    /// profile and `Unreviewed` for a derived one.
+    pub fn from_dispatch(
+        id: &str,
+        family: Family,
+        base: Option<&str>,
+        binaries: Vec<(String, [u8; 32], &PeImage, &Dispatch)>,
+    ) -> Result<Self, ProfileError> {
+        let present = if base.is_some() {
+            CommandStatus::Unreviewed
+        } else {
+            CommandStatus::Base
+        };
+        let statuses = binaries
+            .first()
+            .ok_or(ProfileError::new("profile needs at least one binary"))?
+            .3
+            .cases
+            .iter()
+            .map(|case| match case {
+                Case::Handler(_) => present,
+                Case::NoOp(_) => CommandStatus::NoOp,
+                Case::Default => CommandStatus::Absent,
+            })
+            .collect();
+        let profile = Self {
+            id: id.to_owned(),
+            family,
+            base: base.map(str::to_owned),
+            binaries: binaries
+                .into_iter()
+                .map(|(file, sha256, image, dispatch)| Binary {
+                    arch: image.arch,
+                    file,
+                    sha256,
+                    timestamp: image.timestamp,
+                    linker: image.linker,
+                    image_base: image.image_base,
+                    table_rva: dispatch.table_rva,
+                    default_rva: dispatch.default_rva,
+                    cases: dispatch.cases.clone(),
+                })
+                .collect(),
+            statuses,
+        };
+        profile.validate()?;
+        Ok(profile)
+    }
+    fn validate(&self) -> Result<(), ProfileError> {
+        if !text::is_identifier(&self.id) {
+            return Err(ProfileError::new("profile id must be lowercase ASCII"));
+        }
+        let first = self
+            .binaries
+            .first()
+            .ok_or(ProfileError::new("profile needs at least one binary"))?;
+        for (i, binary) in self.binaries.iter().enumerate() {
+            if self.binaries[..i].iter().any(|b| b.arch == binary.arch) {
+                return Err(ProfileError::new("profile lists one architecture twice"));
+            }
+            if binary.cases.len() != self.statuses.len() {
+                return Err(ProfileError::new("binaries disagree on the switch size"));
+            }
+            if binary.timestamp.abs_diff(first.timestamp) > SAME_BUILD_SECONDS {
+                return Err(ProfileError::new(
+                    "executables were not linked minutes apart; not one build",
+                ));
+            }
+        }
+        let kind = |case: &Case| std::mem::discriminant(case);
+        for (command, status) in self.statuses.iter().enumerate() {
+            let case = self.binaries[0].cases[command];
+            if self
+                .binaries
+                .iter()
+                .any(|b| kind(&b.cases[command]) != kind(&case))
+            {
+                return Err(ProfileError::new(
+                    "executables disagree on a command; not one build",
+                ));
+            }
+            let allowed = match (status, case) {
+                (CommandStatus::Absent, Case::Default) => true,
+                (CommandStatus::NoOp, Case::NoOp(_)) => true,
+                (CommandStatus::Base, Case::Handler(_)) => self.base.is_none(),
+                (CommandStatus::Unreviewed, Case::Handler(_)) => self.base.is_some(),
+                _ => false,
+            };
+            if !allowed {
+                return Err(ProfileError::new(
+                    "command status contradicts the switch or profile kind",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Maps the data of one game to the profile of the build it ships with.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GameRecord {
+    pub game: String,
+    pub profile: String,
+    pub start_script: RecordFile,
+    pub script_archive: RecordFile,
+    /// Value the start script hands to 0x201d.
+    pub game_id: u32,
+    pub executables: Vec<RecordFile>,
+    /// Integer cleared by the explicit `--skip-auto-resume` preview policy, when verified.
+    pub skip_auto_resume: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecordFile {
+    pub path: String,
+    pub sha256: [u8; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileError {
+    pub line: Option<usize>,
+    pub message: String,
+}
+
+impl ProfileError {
+    fn new(message: impl Into<String>) -> Self {
+        Self {
+            line: None,
+            message: message.into(),
+        }
+    }
+}
+
+impl fmt::Display for ProfileError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.line {
+            Some(line) => write!(f, "profile data line {line}: {}", self.message),
+            None => write!(f, "profile data: {}", self.message),
+        }
+    }
+}
+
+impl std::error::Error for ProfileError {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Registry {
+    profiles: Vec<EngineProfile>,
+    games: Vec<GameRecord>,
+}
+
+const BUILTIN_PROFILES: [&str; 2] = [
+    include_str!("../profiles/cmvs-20160201.profile"),
+    include_str!("../profiles/cmvs-20150405.profile"),
+];
+const BUILTIN_GAMES: &str = include_str!("../profiles/games.txt");
+
+impl Registry {
+    pub fn parse(profiles: &[&str], games: &str) -> Result<Self, ProfileError> {
+        let registry = Self {
+            profiles: profiles
+                .iter()
+                .map(|t| text::parse_profile(t))
+                .collect::<Result<_, _>>()?,
+            games: text::parse_games(games)?,
+        };
+        registry.validate()?;
+        Ok(registry)
+    }
+    /// The embedded profiles; their validity is covered by the test suite.
+    pub fn builtin() -> &'static Self {
+        static REGISTRY: OnceLock<Registry> = OnceLock::new();
+        REGISTRY.get_or_init(|| {
+            Self::parse(&BUILTIN_PROFILES, BUILTIN_GAMES).expect("embedded profile data is valid")
+        })
+    }
+    pub fn profiles(&self) -> &[EngineProfile] {
+        &self.profiles
+    }
+    pub fn games(&self) -> &[GameRecord] {
+        &self.games
+    }
+    pub fn profile(&self, id: &str) -> Option<&EngineProfile> {
+        self.profiles.iter().find(|p| p.id == id)
+    }
+    /// The profile and binary an executable hash was analysed as.
+    pub fn binary(&self, sha256: &[u8; 32]) -> Option<(&EngineProfile, &Binary)> {
+        self.profiles
+            .iter()
+            .find_map(|p| p.binary(sha256).map(|b| (p, b)))
+    }
+    fn validate(&self) -> Result<(), ProfileError> {
+        for (i, profile) in self.profiles.iter().enumerate() {
+            if self.profiles[..i].iter().any(|p| p.id == profile.id) {
+                return Err(ProfileError::new(format!(
+                    "duplicate profile {}",
+                    profile.id
+                )));
+            }
+            if let Some(base) = &profile.base {
+                let base = self.profile(base).ok_or(ProfileError::new(format!(
+                    "profile {} names a missing base",
+                    profile.id
+                )))?;
+                // Inheritance is one level deep until a reviewed chain exists.
+                if base.base.is_some() || base.family != profile.family {
+                    return Err(ProfileError::new(format!(
+                        "profile {} must derive from a root profile of its family",
+                        profile.id
+                    )));
+                }
+            }
+        }
+        for (i, game) in self.games.iter().enumerate() {
+            let earlier = &self.games[..i];
+            if earlier.iter().any(|g| {
+                g.game == game.game
+                    || g.start_script.sha256 == game.start_script.sha256
+                    || g.script_archive.sha256 == game.script_archive.sha256
+            }) {
+                return Err(ProfileError::new(format!(
+                    "game {} duplicates an earlier record",
+                    game.game
+                )));
+            }
+            let profile = self
+                .profile(&game.profile)
+                .ok_or(ProfileError::new(format!(
+                    "game {} names a missing profile",
+                    game.game
+                )))?;
+            for exe in &game.executables {
+                if profile.binary(&exe.sha256).is_none() {
+                    return Err(ProfileError::new(format!(
+                        "game {} executable {} is not a binary of profile {}",
+                        game.game, exe.path, profile.id
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+}
