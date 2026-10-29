@@ -267,6 +267,17 @@ impl NativeAudio {
             stream,
         })
     }
+    /// Observe BGM device channel 0 or 1 without changing playback or advancing time.
+    /// Returns source consumption milliseconds, excluding device-buffer latency;
+    /// an empty, paused or exhausted channel returns None. Call `update` separately
+    /// to advance fades and report device failures. This is not a VM command result.
+    pub fn bgm_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+        let channel = self
+            .bgm
+            .get(usize::from(channel))
+            .ok_or("BGM channel out of range")?;
+        Self::position(channel.as_ref())
+    }
     fn load(&mut self, kind: ResourceKind, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
         if name.is_empty() {
             return Ok(None);

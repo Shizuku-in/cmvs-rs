@@ -170,6 +170,9 @@ fn native_device_smoke() -> Result<(), Box<dyn std::error::Error>> {
     pump(&mut audio)?;
     audio.stop_voice(0)?;
     println!("# smoke: two-file looping BGM and fade");
+    assert_eq!(audio.bgm_position(0)?, None);
+    assert_eq!(audio.bgm_position(1)?, None);
+    assert!(audio.bgm_position(2).is_err());
     audio.play_bgm(&AudioRequest::PlayBgm {
         channel: 0,
         previous: 1,
@@ -181,9 +184,28 @@ fn native_device_smoke() -> Result<(), Box<dyn std::error::Error>> {
         flag_1576: 0,
     })?;
     pump(&mut audio)?;
-    audio.fade_out_bgm(0, 20)?;
+    assert!(audio.bgm_position(0)?.is_some_and(|ms| ms > 0));
+    assert_eq!(audio.bgm_position(1)?, None);
+    println!("# smoke: switch BGM channels, then fade and stop");
+    audio.play_bgm(&AudioRequest::PlayBgm {
+        channel: 1,
+        previous: 0,
+        primary: b"second.ogg".to_vec(),
+        secondary: vec![],
+        volume: 16,
+        fade_ms: 0,
+        looped: true,
+        flag_1576: 0,
+    })?;
     pump(&mut audio)?;
+    assert_eq!(audio.bgm_position(0)?, None);
+    assert!(audio.bgm_position(1)?.is_some_and(|ms| ms > 0));
+    audio.fade_out_bgm(1, 20)?;
+    pump(&mut audio)?;
+    assert_eq!(audio.bgm_position(1)?, None);
     audio.stop_bgm()?;
+    assert_eq!(audio.bgm_position(0)?, None);
+    assert_eq!(audio.bgm_position(1)?, None);
     println!("# smoke: movie audio clock and EOF");
     audio.play_movie_audio(&AudioRequest::PlayMovieAudio {
         path: b"sound/first.ogg".to_vec(),
