@@ -69,6 +69,46 @@ pub struct TextEntry<'a> {
 }
 
 impl Script {
+    /// Already-decoded PS2A memory image from CSV2 section 2. The original key and
+    /// packed-size fields remain in the header; do not decrypt or decompress again.
+    pub fn from_memory_image(raw: &[u8]) -> Result<Self, FormatError> {
+        let header = Header::parse(raw)?;
+        let total = header.segment_size();
+        if total > MAX_PAYLOAD as u64 || total != u64::from(header.decoded_size) {
+            return Err(FormatError("script memory segment sizes disagree"));
+        }
+        if raw.len() as u64 != HEADER_SIZE as u64 + total {
+            return Err(FormatError(
+                "script memory image length differs from header",
+            ));
+        }
+        if header.code_size < 2 || header.entry_pc >= header.code_size {
+            return Err(FormatError("script entry outside code segment"));
+        }
+        let script = Self {
+            header,
+            payload: raw[HEADER_SIZE..].to_vec(),
+            trailing_file_bytes: 0,
+        };
+        if script
+            .labels()
+            .iter()
+            .any(|&pc| pc >= script.header.code_size)
+        {
+            return Err(FormatError("label outside code segment"));
+        }
+        Ok(script)
+    }
+
+    pub(crate) fn apply_snapshot_data(&mut self, data: &[u8]) -> Result<(), FormatError> {
+        if data.len() != self.header.unknown_size as usize {
+            return Err(FormatError("snapshot main data length differs from script"));
+        }
+        let start = self.code_start() + self.header.code_size as usize;
+        self.payload[start..start + data.len()].copy_from_slice(data);
+        Ok(())
+    }
+
     pub fn decode(raw: &[u8]) -> Result<Self, FormatError> {
         let header = Header::parse(raw)?;
         let total = header.segment_size();

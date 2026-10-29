@@ -39,11 +39,13 @@ cargo run --offline --bin cmvs-cmv -- "<游戏目录>/data/video/op.cmv"
 ```powershell
 cargo run --offline --bin cmvs-save -- "<游戏目录>/save/save000.dat"
 cargo run --offline --bin cmvs-save -- --records "<游戏目录>/save/save000.dat"
+cargo run --offline --bin cmvs-save -- --vm-state "<游戏目录>/save/save000.dat"
 cargo run --offline --bin cmvs-save -- --section 0 "<游戏目录>/save/save000.dat" "<新输出文件>"
 cargo run --offline --bin cmvs-system-save -- "<游戏目录>/save/system.dat"
 ```
 
 CSV2 检查与解压不会恢复 VM，段导出拒绝覆盖。CSS1 的模板编码、可选输出与独立用户目录策略见[系统存档](../formats/system-save-format.md)，剧情恢复边界见[快照](../formats/snapshot-format.md)。
+`--vm-state` 检查保存的脚本名称、PC/栈、局部变量和主脚本内存布局，并逐项列出未安装的对象/宿主记录；活动公共脚本的PC没有提供对应图像时明确标为未验证。输出不是完整读档成功，工具不改写游戏或存档。
 
 ## 外部样本审计
 

@@ -111,7 +111,7 @@
 
 `save_menu::SaveSource` 提供只读槽前缀；`DirectorySaves` 支持槽号 0..999，菜单扫描仍最多 256 槽。`0x22bb` 只识别 `CSV2`..`CSV9` 签名，不要求有效正文，也不代表该格式已可完整解码或恢复。
 
-`save` 负责已核对模式的 CSV2 容器、校验、逆变换和三段解压，返回尚未恢复的快照、辅助图像与脚本内存字节。`snapshot` 能遍历第 0 段记录帧，但尚未构建完整存档镜像或恢复引擎状态。`SaveImage` 区分原版缓冲为空的 `Absent` 与本应生成但 Rust 未构建的 `Unavailable`；后续写入必须拒绝后者。
+`save` 负责已核对模式的 CSV2 容器、校验、逆变换和三段解压，返回尚未恢复的快照、辅助图像与脚本内存字节。`snapshot::VmSnapshot` 可检查第0段VM元数据、栈/局部变量及第2段已解码主脚本布局，并显式保留未解释/安装的宿主记录；`LocalVariables` 提供四条局部变量记录的编解码、捕获和原子State安装，保留高位持久区。完整Machine、对象、计时/回调与设备恢复仍未实现。`SaveImage` 区分原版缓冲为空的 `Absent` 与本应生成但 Rust 未构建的 `Unavailable`；后续写入必须拒绝后者，不能把分域变量往返当作完整快照。
 
 `system_save` 独立处理 CSS1：恢复经核对的持久变量和文件名列表；候选状态完成验证后才提交。`system_save/pack.rs` 负责 1024 字节字典与 48 字节匹配压缩，`write.rs` 负责完整已知持久区序列化、变换/校验和可选导出。导出需要已加载来源的头部注释模板；未知变量报错，不能补零。缺失稀疏变量不隐式初始化。`0x22b5` 完整剧情恢复保持未实现。格式与限制见 [save](formats/save-format.md)、[system-save](formats/system-save-format.md)、[snapshot](formats/snapshot-format.md)。
 

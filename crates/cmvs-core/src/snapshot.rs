@@ -5,6 +5,26 @@ use crate::{
 };
 use std::ops::Range;
 
+mod variables;
+mod vm_state;
+pub use variables::LocalVariables;
+pub use vm_state::VmSnapshot;
+
+fn unique_body<'a>(
+    bytes: &'a [u8],
+    records: &[SnapshotRecord],
+    tag: u16,
+) -> Result<&'a [u8], FormatError> {
+    let mut found = records.iter().filter(|r| r.tag == tag);
+    let record = found
+        .next()
+        .ok_or(FormatError("missing required snapshot VM record"))?;
+    if found.next().is_some() {
+        return Err(FormatError("duplicate snapshot VM record"));
+    }
+    Ok(&bytes[record.body.clone()])
+}
+
 /// The original fixed buffer at engine +11176; larger streams would overflow it on load.
 pub const MAX_SNAPSHOT: usize = 0x30_0000;
 

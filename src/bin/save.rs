@@ -14,11 +14,12 @@ fn run() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = env::args_os().skip(1).collect();
     if args.len() == 1 && args[0] == "--help" {
         println!(
-            "Usage: cmvs-save <save.dat>\n       cmvs-save --section <0|1|2> <save.dat> <new-output-file>\n       cmvs-save --records <save.dat>\nRead-only CSV2 decoding. Section 0=snapshot, 1=auxiliary, 2=script memory image. Only section 0 has the original additive checksum; this does not authenticate the full file. --records lists snapshot record framing without interpreting payloads. No VM restoration."
+            "Usage: cmvs-save <save.dat>\n       cmvs-save --section <0|1|2> <save.dat> <new-output-file>\n       cmvs-save --records <save.dat>\n       cmvs-save --vm-state <save.dat>\nRead-only CSV2 decoding. Section 0=snapshot, 1=auxiliary, 2=script memory image. Only section 0 has the original additive checksum; this does not authenticate the full file. --records lists framing; --vm-state validates typed VM fields and lists uninterpreted records. Neither installs engine state."
         );
         return Ok(());
     }
     let records = args.len() == 2 && args[0] == "--records";
+    let vm_state = args.len() == 2 && args[0] == "--vm-state";
     let section = if args.len() == 4 && args[0] == "--section" {
         let index = args[1]
             .to_str()
@@ -28,14 +29,14 @@ fn run() -> Result<(), Box<dyn Error>> {
             return Err("section must be 0, 1 or 2".into());
         }
         Some(index)
-    } else if records || (args.len() == 1 && args[0] != "--section") {
+    } else if records || vm_state || (args.len() == 1 && args[0] != "--section") {
         None
     } else {
         return Err("wrong argument count; use --help".into());
     };
     let input = if section.is_some() {
         &args[2]
-    } else if records {
+    } else if records || vm_state {
         &args[1]
     } else {
         &args[0]
@@ -79,6 +80,42 @@ fn run() -> Result<(), Box<dyn Error>> {
                 record.index,
                 record.body.len()
             );
+        }
+    }
+    if vm_state {
+        let vm = snapshot::VmSnapshot::decode(&save)?;
+        println!(
+            "vm slot={} script={} pc=0x{:x} pc_verified={} repeat={} sp={} depth={}",
+            vm.active_slot,
+            vm.script_names[usize::from(vm.active_slot)].escape_ascii(),
+            vm.pc,
+            vm.active_pc_verified,
+            vm.repeat_count,
+            vm.stack_pointer,
+            vm.frame_depth
+        );
+        println!(
+            "locals integers={} floats={} bits={} strings={} saved_system_results={}",
+            vm.variables.integers().len(),
+            vm.variables.float_bits().len(),
+            vm.variables.packed_bits().len() * 8,
+            vm.variables.strings().len(),
+            vm.system_results.len()
+        );
+        println!(
+            "# uninterpreted records={} (not restored)",
+            vm.uninterpreted.len()
+        );
+        for record in &vm.uninterpreted {
+            println!(
+                "uninterpreted tag=0x{:03x} index={:?} len={}",
+                record.tag,
+                record.index,
+                record.body.len()
+            );
+        }
+        if !vm.active_pc_verified {
+            println!("# active common script is not supplied; its PC has not been validated");
         }
     }
     if let Some(index) = section {
