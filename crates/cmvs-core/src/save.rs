@@ -107,4 +107,53 @@ impl Csv2Save {
             script_image,
         })
     }
+
+    /// Writer 0x140080b20: `header` is the 600-byte block the snapshot prepared (+11204),
+    /// already carrying the label and other fields. This fills the packed/decoded lengths
+    /// (560..592), checksum offset (540) and encoding mode 1 (546), compresses the three
+    /// sections with `lzss::encode`, applies `(byte + 0x80) ^ key` to section 0 only and
+    /// appends the u16 sum of those transformed bytes. An empty auxiliary section is omitted
+    /// as the original does when no thumbnail exists.
+    pub fn encode(
+        header: &[u8; HEADER_SIZE],
+        snapshot: &[u8],
+        auxiliary: &[u8],
+        script_image: &[u8],
+    ) -> Result<Vec<u8>, FormatError> {
+        if snapshot.is_empty() || script_image.is_empty() {
+            return Err(FormatError(
+                "CSV2 snapshot and script image must not be empty",
+            ));
+        }
+        if &header[..4] != b"CSV2" || dword(header, 4) != HEADER_SIZE as u32 {
+            return Err(FormatError("expected CSV2 with 600-byte header"));
+        }
+        let sections = [snapshot, auxiliary, script_image];
+        let total: usize = sections.iter().map(|s| s.len()).sum();
+        if total > MAX_PAYLOAD {
+            return Err(FormatError(
+                "CSV2 sections exceed research allocation limit",
+            ));
+        }
+        let packed = sections.map(lzss::encode);
+        let end = HEADER_SIZE + packed.iter().map(Vec::len).sum::<usize>();
+        let end32 = u32::try_from(end).map_err(|_| FormatError("CSV2 file too large"))?;
+        let mut out = header.to_vec();
+        out[540..544].copy_from_slice(&end32.to_le_bytes());
+        out[546..548].copy_from_slice(&1u16.to_le_bytes());
+        for (i, (section, data)) in sections.iter().zip(&packed).enumerate() {
+            out[560 + 4 * i..564 + 4 * i].copy_from_slice(&(data.len() as u32).to_le_bytes());
+            out[580 + 4 * i..584 + 4 * i].copy_from_slice(&(section.len() as u32).to_le_bytes());
+        }
+        let mut checksum = 0u16;
+        out.extend(packed[0].iter().enumerate().map(|(i, b)| {
+            let stored = b.wrapping_add(0x80) ^ KEY[i % KEY.len()];
+            checksum = checksum.wrapping_add(u16::from(stored));
+            stored
+        }));
+        out.extend(&packed[1]);
+        out.extend(&packed[2]);
+        out.extend(checksum.to_le_bytes());
+        Ok(out)
+    }
 }

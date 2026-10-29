@@ -229,3 +229,50 @@ fn cli_export_never_overwrites_and_invalid_input_creates_no_output() {
     fs::remove_file(input).unwrap();
     fs::remove_dir(root).unwrap();
 }
+
+#[test]
+fn encoder_round_trips_sections_and_compresses_repeats() {
+    let snapshot: Vec<u8> = (0..5000u32).map(|i| (i % 97) as u8).collect();
+    let script: Vec<u8> = b"PS2A".iter().copied().cycle().take(3000).collect();
+    for auxiliary in [&b""[..], &[7u8; 1234][..]] {
+        let source = fixture([&snapshot, auxiliary, &script]);
+        let header: [u8; HEADER_SIZE] = source[..HEADER_SIZE].try_into().unwrap();
+        let encoded = Csv2Save::encode(&header, &snapshot, auxiliary, &script).unwrap();
+        // Repeated input compresses well below the literal-only fixture.
+        assert!(encoded.len() < source.len() / 4);
+        let decoded = Csv2Save::decode(&encoded).unwrap();
+        assert_eq!(decoded.snapshot, snapshot);
+        assert_eq!(decoded.auxiliary, auxiliary);
+        assert_eq!(decoded.script_image, script);
+        assert_eq!(&encoded[16..45], b"2026-10-26 09:08:07 synthetic");
+    }
+    let header = [0u8; HEADER_SIZE];
+    assert!(Csv2Save::encode(&header, &snapshot, b"", &script).is_err());
+    let source = fixture([&snapshot, b"", &script]);
+    let header: [u8; HEADER_SIZE] = source[..HEADER_SIZE].try_into().unwrap();
+    assert!(Csv2Save::encode(&header, b"", b"", &script).is_err());
+}
+
+/// Re-encodes external original saves from their own header and decoded sections; the result
+/// must equal the original file byte for byte. Inputs are read-only.
+#[test]
+#[ignore = "requires explicit CMVS_SAVE_TEST_INPUTS pointing to external read-only CSV2 saves"]
+fn external_csv2_reencodes_byte_identically() {
+    let inputs = std::env::var_os("CMVS_SAVE_TEST_INPUTS").expect("CMVS_SAVE_TEST_INPUTS");
+    let mut checked = 0;
+    for path in std::env::split_paths(&inputs) {
+        let original = fs::read(&path).unwrap();
+        let save = Csv2Save::decode(&original).unwrap();
+        let header: [u8; HEADER_SIZE] = original[..HEADER_SIZE].try_into().unwrap();
+        let encoded =
+            Csv2Save::encode(&header, &save.snapshot, &save.auxiliary, &save.script_image).unwrap();
+        assert!(
+            encoded == original,
+            "{} differs after re-encoding",
+            path.display()
+        );
+        println!("{}: {} bytes identical", path.display(), original.len());
+        checked += 1;
+    }
+    assert!(checked > 0);
+}
