@@ -617,6 +617,9 @@ impl<'a> Startup<'a> {
             || self.gesture.try_handle(&mut self.machine)?
             || self.save_menu.try_handle_popup(&mut self.machine)?
             || self.message_flags.try_handle(&mut self.machine)?
+            || self
+                .messages
+                .try_handle_scene(&mut self.machine, &mut self.scene)?
             || self.messages.try_handle(&mut self.machine)?
             || self.history.try_handle(&mut self.machine)?
             || self

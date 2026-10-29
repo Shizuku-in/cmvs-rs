@@ -775,7 +775,7 @@ pub fn render_scene(
                 i64::from((d[17].wrapping_mul(d[21]) as i32) >> 8),
             )?,
         }
-        .map(|layer| screen_mask(layer, object))
+        .map(|layer| screen_mask(layer, object, None))
         .transpose()?
         .map(|layer| shifted(layer, by));
         let mut entry = Entry {
@@ -805,7 +805,7 @@ pub fn render_scene(
                 let Some(layer) = child_layer(object, d, child, words)? else {
                     continue;
                 };
-                let layer = shifted(screen_mask(layer, child)?, by);
+                let layer = shifted(screen_mask(layer, child, Some(object))?, by);
                 if child.flags & 2 != 0 {
                     entry.children.push((order(words), layer));
                 } else {
@@ -1043,9 +1043,25 @@ fn draw_rotated(
 fn screen_mask<'a>(
     mut layer: Layer<'a>,
     object: &'a SceneObject,
+    parent: Option<&'a SceneObject>,
 ) -> Result<Layer<'a>, FormatError> {
-    if let Some(texture) = &object.secondary_image {
-        if object.draw.as_ref().is_none_or(|d| d.texture_mode != 4) {
+    let inherited = parent.filter(|_| object.flags & 1 != 0);
+    let draw = inherited
+        .and_then(|p| p.draw.as_ref())
+        .or(object.draw.as_ref());
+    let texture = object.secondary_image.as_ref().or_else(|| {
+        inherited
+            .filter(|_| {
+                object
+                    .draw
+                    .as_ref()
+                    .is_some_and(|d| d.words[14] & 0xff000000 == 0)
+                    && draw.is_some_and(|d| d.texture_mode == 4)
+            })
+            .and_then(|p| p.secondary_image.as_ref())
+    });
+    if let Some(texture) = texture {
+        if draw.is_none_or(|d| d.texture_mode != 4) {
             return Err(FormatError("second texture mapping mode is not verified"));
         }
         match &mut layer {

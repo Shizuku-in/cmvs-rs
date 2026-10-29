@@ -801,3 +801,116 @@ fn bounds_convert_signed_parameters_without_affecting_other_state() {
         }
     }
 }
+
+#[test]
+fn bound_auxiliary_position_moves_scene_with_float_roundtrip_and_detaches() {
+    let mut code = vec![];
+    for (op, args) in [
+        (0x2020, vec![11]),
+        (0x2040, vec![11]),
+        (0x2380, vec![0, 0, 25, 32]),
+        (0x239d, vec![0, 11]),
+        (0x2383, vec![0, 16777217, i32::MAX as u32]),
+        (0x239d, vec![0, u32::MAX]),
+        (0x2383, vec![0, 180, 72]),
+    ] {
+        call(&mut code, op, &args);
+    }
+    let script = script(&code, b"\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    let mut scene = cmvs_rs::scene::SceneHost::default();
+    for _ in 0..4 {
+        pending(&mut vm);
+        assert!(
+            scene.try_handle(&mut vm).unwrap()
+                || messages.try_handle_scene(&mut vm, &mut scene).unwrap()
+                || messages.try_handle(&mut vm).unwrap()
+        );
+    }
+    assert_eq!(
+        messages.auxiliary_text(0).unwrap().associated_scene,
+        Some(11)
+    );
+    for i in 0..7 {
+        vm.state_mut().set_system_integer(i, 99 + i).unwrap();
+    }
+    pending(&mut vm);
+    assert!(messages.try_handle(&mut vm).is_err());
+    assert!(messages.try_handle_scene(&mut vm, &mut scene).unwrap());
+    assert_eq!(
+        &scene.object(11).unwrap().draw.as_ref().unwrap().words[8..10],
+        &[16777216, i32::MIN as u32]
+    );
+    for _ in 0..2 {
+        pending(&mut vm);
+        assert!(
+            messages.try_handle_scene(&mut vm, &mut scene).unwrap()
+                || messages.try_handle(&mut vm).unwrap()
+        );
+    }
+    assert_eq!(messages.auxiliary_text(0).unwrap().associated_scene, None);
+    assert_eq!(
+        messages.auxiliary_text(0).unwrap().word(8),
+        Some(180f32.to_bits())
+    );
+    assert_eq!(
+        &scene.object(11).unwrap().draw.as_ref().unwrap().words[8..10],
+        &[16777216, i32::MIN as u32]
+    );
+    for i in 0..7 {
+        assert_eq!(vm.state().system_integer(i), Some(99 + i));
+    }
+}
+
+#[test]
+fn auxiliary_association_errors_keep_target_and_pending_command() {
+    for args in [vec![0, 256], vec![0, 11], vec![0], vec![8, 0]] {
+        let mut code = vec![];
+        call(&mut code, 0x2380, &[0, 0, 25, 32]);
+        call(&mut code, 0x239d, &args);
+        let script = script(&code, b"\0");
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        let mut scene = cmvs_rs::scene::SceneHost::default();
+        run(&mut vm, &mut messages);
+        let before = messages.auxiliary_text(0).unwrap().clone();
+        pending(&mut vm);
+        let p = vm.pending_system();
+        let sp = vm.stack().len_bytes();
+        assert!(messages.try_handle_scene(&mut vm, &mut scene).is_err());
+        assert_eq!(vm.pending_system(), p);
+        assert_eq!(vm.stack().len_bytes(), sp);
+        assert_eq!(messages.auxiliary_text(0).unwrap().object, before.object);
+        assert_eq!(messages.auxiliary_text(0).unwrap().associated_scene, None);
+    }
+}
+
+#[test]
+fn auxiliary_position_bounds_keep_complete_signed_words_and_other_configuration() {
+    let mut code = vec![];
+    call(&mut code, 0x2380, &[7, 0, 25, 32]);
+    call(&mut code, 0x239a, &[7, 180, 180, i32::MIN as u32, 72]);
+    let script = script(&code, b"\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages);
+    let before = messages.auxiliary_text(7).unwrap().clone();
+    run(&mut vm, &mut messages);
+    let group = messages.auxiliary_text(7).unwrap();
+    for (offset, value) in [152, 156, 160, 164]
+        .into_iter()
+        .zip([180, 180, i32::MIN as u32, 72])
+    {
+        assert_eq!(group.word(offset), Some(value));
+    }
+    for at in (0..1476)
+        .step_by(4)
+        .filter(|at| !matches!(*at, 152 | 156 | 160 | 164))
+    {
+        assert_eq!(group.word(at), before.word(at));
+    }
+    assert_eq!(group.object, before.object);
+    assert_eq!(group.atlas, before.atlas);
+    assert_eq!(vm.stack().len_bytes(), 0);
+}

@@ -19,6 +19,77 @@ pub struct AuxiliaryGlyphAtlas {
     pub initial_clear_tile: RgbaImage,
 }
 
+impl super::MessageHost {
+    /// 0x239d binds +1472. The bound branch of 0x2383 also moves that scene object.
+    pub fn try_handle_scene(
+        &mut self,
+        vm: &mut crate::machine::Machine<'_>,
+        scene: &mut crate::scene::SceneHost,
+    ) -> Result<bool, crate::bytecode::DecodeError> {
+        use crate::{evaluate::error, vm::SystemResult};
+        let Some((pc, command @ (0x39d | 0x383))) = vm.pending_system() else {
+            return Ok(false);
+        };
+        let fail = |why| error(pc, command + 0x2000, why);
+        let slot = vm.stack().peek_u32(4).map_err(|e| fail(e.0))? as usize;
+        let group = self
+            .auxiliary_texts
+            .get(slot)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| fail("auxiliary text group does not exist or outside 0..7"))?;
+        if command == 0x39d {
+            let raw = vm.stack().peek_u32(8).map_err(|e| fail(e.0))?;
+            let target = if (raw as i32) < 0 {
+                None
+            } else {
+                Some(
+                    u8::try_from(raw)
+                        .ok()
+                        .filter(|s| scene.object(*s).is_some())
+                        .ok_or_else(|| {
+                            fail("associated scene object does not exist or outside 0..255")
+                        })?,
+                )
+            };
+            vm.complete_system(SystemResult(0x4008))?;
+            self.auxiliary_texts[slot]
+                .as_mut()
+                .expect("validated")
+                .associated_scene = target;
+        } else {
+            let Some(target) = group.associated_scene else {
+                return Ok(false);
+            };
+            let x = vm.stack().peek_u32(8).map_err(|e| fail(e.0))?;
+            let y = vm.stack().peek_u32(12).map_err(|e| fail(e.0))?;
+            if scene.object(target).and_then(|o| o.draw.as_ref()).is_none() {
+                return Err(fail("associated scene object has no draw state"));
+            }
+            vm.complete_system(SystemResult(0x400c))?;
+            self.auxiliary_texts[slot]
+                .as_mut()
+                .expect("validated")
+                .set_position(x, y);
+            let position = [x, y].map(|v| {
+                let f = (v as i32) as f32;
+                if f >= 2147483648.0 {
+                    i32::MIN as u32
+                } else {
+                    (f as i32) as u32
+                }
+            });
+            scene
+                .object_mut(target)
+                .expect("validated")
+                .draw
+                .as_mut()
+                .expect("validated")
+                .set(DrawSetter::Position(position));
+        }
+        Ok(true)
+    }
+}
+
 impl AuxiliaryGlyphAtlas {
     fn new(glyph_size: u32, capacity: u32) -> Result<Self, FormatError> {
         let fail = FormatError("auxiliary glyph atlas exceeds supported allocation geometry");
@@ -70,6 +141,8 @@ pub struct AuxiliaryText {
     /// 0x2397 attaches this at object +6184 and selects draw mode +88 = 4.
     /// It is a second texture, not a replacement for the glyph atlas.
     pub secondary_image: Option<ObjectImage>,
+    /// +1472: a non-owned scene object moved along with this text group.
+    pub associated_scene: Option<u8>,
 }
 
 impl AuxiliaryText {
@@ -91,9 +164,7 @@ impl AuxiliaryText {
         draw.words[11] = (width * x / logical_width).to_bits();
         draw.words[12] = (width * y / logical_width).to_bits();
         draw.words[13] = 0;
-        // Constructor 0x14002fbf2 sets the optional +1472 object to null.
-        // Its creation commands remain barriers, so there is no second object
-        // to reposition through 0x14003b0b0 here.
+        // try_handle_scene handles the optional +1472 object separately.
     }
 
     /// 0x14002e6e0 stores four signed layout parameters as f32 and repeats
@@ -172,6 +243,13 @@ impl AuxiliaryText {
         }
     }
 
+    /// 0x14002e8c0 stores four complete signed bounds without normalization.
+    pub(super) fn set_position_bounds(&mut self, args: [u32; 4]) {
+        for (offset, value) in [152, 156, 160, 164].into_iter().zip(args) {
+            self.words.insert(offset, value);
+        }
+    }
+
     pub(super) fn new(glyph_size: u32, capacity: u32) -> Result<Self, FormatError> {
         let atlas = AuxiliaryGlyphAtlas::new(glyph_size, capacity)?;
         let mut words: BTreeMap<_, _> = (8..184)
@@ -216,6 +294,7 @@ impl AuxiliaryText {
             words,
             atlas,
             secondary_image: None,
+            associated_scene: None,
             object: SceneObject {
                 draw: Some(draw),
                 logical_size: RESEARCH_SCREEN,

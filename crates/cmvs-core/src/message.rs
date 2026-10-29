@@ -262,7 +262,7 @@ impl MessageHost {
         if let Some((
             pc,
             command @ (0x383 | 0x385 | 0x386 | 0x387 | 0x389 | 0x38e | 0x38f | 0x392 | 0x393
-            | 0x396),
+            | 0x396 | 0x39a),
         )) = vm.pending_system()
         {
             // 0x1400736f0 / 0x140073820 / 0x1400738f0 / 0x1400739c0: independent
@@ -270,7 +270,7 @@ impl MessageHost {
             let opcode = 0x2000 + command;
             let count = match command {
                 0x383 | 0x389 => 3,
-                0x385 | 0x396 => 5,
+                0x385 | 0x396 | 0x39a => 5,
                 0x386 => 1,
                 0x38e | 0x38f | 0x392 | 0x393 => 2,
                 _ => 4,
@@ -289,6 +289,19 @@ impl MessageHost {
             if self.auxiliary_texts[slot].is_none() {
                 return Err(error(pc, opcode, "auxiliary text group is not created"));
             }
+            if command == 0x383
+                && self.auxiliary_texts[slot]
+                    .as_ref()
+                    .expect("validated")
+                    .associated_scene
+                    .is_some()
+            {
+                return Err(error(
+                    pc,
+                    opcode,
+                    "bound auxiliary position requires scene context",
+                ));
+            }
             vm.complete_system(SystemResult(0x4000 | (count as u16 * 4)))?;
             let group = self.auxiliary_texts[slot]
                 .as_mut()
@@ -297,6 +310,7 @@ impl MessageHost {
                 0x383 => group.set_position(args[1], args[2]),
                 0x386 => group.clear_content(),
                 0x396 => group.set_bounds([args[1], args[2], args[3], args[4]]),
+                0x39a => group.set_position_bounds([args[1], args[2], args[3], args[4]]),
                 0x385 => group.set_layout([args[1], args[2], args[3], args[4]]),
                 0x389 => group.set_colors(args[1], args[2]),
                 0x38e => group.set_field_148(args[1]),

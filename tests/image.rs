@@ -1980,3 +1980,36 @@ fn second_texture_bad_flags_and_invalid_slots_preserve_main_image_and_pending_co
         assert_eq!(vm.pending_system(), Some((pc, 0x35)));
     }
 }
+
+#[test]
+fn child_inherits_parent_second_texture_and_screen_mode() {
+    let mut code = loads(11, &[0]);
+    scene_command(&mut code, 0x2040, &[11]);
+    scene_command(&mut code, 0x2035, &[11, 6, 0, 0]);
+    scene_command(&mut code, 0x2321, &[11, u32::MAX, 4]);
+    scene_command(&mut code, 0x2022, &[11, 0]);
+    scene_command(&mut code, 0x2050, &[11, 0]);
+    scene_command(&mut code, 0x2044, &[11, 0, 0, 0, 2, 1]);
+    let script = script(&code, b"a.pb3\0m.pb3\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut scene = SceneHost::default();
+    let mut files = Files::default();
+    files.0.insert(
+        b"a.pb3".to_vec(),
+        pb3(1, &[[255, 255], [255, 255], [255, 255]]),
+    );
+    files.0.insert(
+        b"m.pb3".to_vec(),
+        pb3(1, &[[255, 255], [0, 255], [255, 255]]),
+    );
+    for _ in 0..8 {
+        let cmd = run_to_system(&mut vm);
+        if matches!(cmd, 0x30 | 0x35) {
+            scene.try_handle_image(&mut vm, &mut files).unwrap();
+        } else {
+            scene.try_handle(&mut vm).unwrap();
+        }
+    }
+    let frame = cmvs_rs::scene_render::render(&scene, 2, 1).unwrap();
+    assert_eq!(frame.pixels(), &[0, 0, 0, 255, 128, 128, 128, 255]);
+}
