@@ -216,7 +216,7 @@ impl Startup<'_> {
             windows,
             objects,
             raw_objects,
-            effects: Default::default(),
+            effects: [self.scene.saved_quake(), None, None, None],
             record_6e0: self.sequence.saved()?,
             cameras: [
                 self.camera.saved(0),
@@ -411,9 +411,13 @@ impl Startup<'_> {
         if snapshot.word_11144 != 1 {
             return Err("saved +11144 value is not modeled".into());
         }
-        if snapshot.effects.iter().any(Option::is_some) {
-            return Err("saved transition or quake effects are not implemented".into());
+        if snapshot.effects[1..].iter().any(Option::is_some) {
+            return Err("saved fade, mask or strip effects are not implemented".into());
         }
+        let quake = snapshot.effects[0]
+            .as_deref()
+            .map(crate::scene::Quake::restore)
+            .transpose()?;
         if snapshot.raw_objects.keys().any(|&(tag, _)| tag != 0x540) {
             return Err("saved button, list, movie or overlay objects are not implemented".into());
         }
@@ -490,6 +494,7 @@ impl Startup<'_> {
                 depth: snapshot.depth_clear != 0,
             },
             objects,
+            quake,
         );
         self.messages.restore(texts, windows);
         let word = |at: usize| u32::from_le_bytes(header[at..at + 4].try_into().unwrap());

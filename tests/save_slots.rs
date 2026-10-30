@@ -185,6 +185,38 @@ fn external_auto_resume_restores_the_original_snapshot() {
     for slot in [0, 1, 2] {
         run.load_slot(slot, &mut backend).unwrap();
         check_loaded(&run, original_snapshot(&root, slot));
+        // The restored game runs on with skip held (action 7, Ctrl): through the load
+        // callback and text until the script reaches its next snapshot point.
+        run.input_mut().set(7, true, false, false).unwrap();
+        let (mut captured, start) = (0, run.steps());
+        for _ in 0..3_000_000 {
+            match run.tick(&mut backend).unwrap() {
+                StartupEvent::Yield => run.advance_frame(16).unwrap(),
+                StartupEvent::SnapshotCaptured => {
+                    captured += 1;
+                    if captured == 2 {
+                        break;
+                    }
+                }
+                StartupEvent::Progress => {}
+                other => panic!(
+                    "slot {slot}: {other:?} at {} / 0x{:x}",
+                    run.machine().current_name().escape_ascii(),
+                    run.machine().pc()
+                ),
+            }
+        }
+        run.input_mut().set(7, false, false, true).unwrap();
+        println!(
+            "slot {slot}: {} steps to {} / 0x{:x}, snapshots captured: {captured}",
+            run.steps() - start,
+            run.machine().current_name().escape_ascii(),
+            run.machine().pc()
+        );
+        assert_eq!(
+            captured, 2,
+            "slot {slot}: the game stopped before two snapshots"
+        );
         // Write the held snapshot to a new slot through 0x22b6's path and load it back.
         let held = match run.held_snapshot() {
             cmvs_rs::snapshot::SaveImage::Captured(c) => {

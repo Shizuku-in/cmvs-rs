@@ -33,6 +33,54 @@ pub struct Quake {
     pub offset: [i32; 2],
 }
 
+/// Record 0x600 length (writer 0x1400522e0).
+pub const SAVED_QUAKE: usize = 56;
+
+impl Quake {
+    /// Record 0x600: the constructor words +0..+12, then the whole 0x28-byte object.
+    /// +16 is zeroed by the constructor 0x1400522b0 and written by no implemented command.
+    pub(crate) fn saved(&self) -> Vec<u8> {
+        let object = [
+            self.mode,
+            self.amplitude as u32,
+            self.period,
+            self.count,
+            0,
+            u32::from(self.paused),
+            self.elapsed,
+            self.steps,
+            self.offset[0] as u32,
+            self.offset[1] as u32,
+        ];
+        let mut out = Vec::with_capacity(SAVED_QUAKE);
+        for word in object[..4].iter().chain(&object) {
+            out.extend(word.to_le_bytes());
+        }
+        out
+    }
+    /// Reader: 0x1400522b0 with the first four words, then 0x140052330 copies the object.
+    pub(crate) fn restore(record: &[u8]) -> Result<Self, &'static str> {
+        if record.len() != SAVED_QUAKE {
+            return Err("quake record has unexpected length");
+        }
+        let word =
+            |i: usize| u32::from_le_bytes(record[16 + 4 * i..20 + 4 * i].try_into().unwrap());
+        if word(4) != 0 || word(5) > 1 {
+            return Err("saved quake state is not modeled");
+        }
+        Ok(Self {
+            mode: word(0),
+            amplitude: word(1) as i32,
+            period: word(2),
+            count: word(3),
+            paused: word(5) != 0,
+            elapsed: word(6),
+            steps: word(7),
+            offset: [word(8) as i32, word(9) as i32],
+        })
+    }
+}
+
 impl Quake {
     /// 0x1400526b0: the offset for queue items enqueued as message windows/text (`ui`) or
     /// as slot objects; zero while paused or for the layer the low nibble excludes.
