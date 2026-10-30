@@ -41,6 +41,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod preferences;
 mod save;
 pub use save::{SaveTime, thumbnail_bmp};
 
@@ -136,6 +137,7 @@ pub struct Startup<'a> {
     gesture: PointerGesture,
     message_flags: MessageFlags,
     settings: crate::settings::SettingsHost,
+    configuration: crate::settings::Configuration,
     messages: MessageHost,
     history: HistoryHost,
     random: CrtRandom,
@@ -166,31 +168,23 @@ impl<'a> Startup<'a> {
         let mut machine = Machine::new(script)?;
         machine.set_current_name(game.files.start_name());
         // 0x14000a3c0 reads the startup settings; cmvs.cfg is optional and read only.
+        let configuration = crate::settings::Configuration::read(&root.join("cmvs.cfg"))?
+            .unwrap_or(crate::settings::Configuration::new(Vec::new())?);
+        let text = configuration.bytes();
         let mut save_menu = SaveMenuHost::default();
-        let audio;
-        let settings;
-        let message_flags;
-        match std::fs::read(root.join("cmvs.cfg")) {
-            Ok(text) => {
-                audio = AudioHost::from_ini(&text);
-                settings = crate::settings::SettingsHost::from_ini(&text);
-                message_flags = MessageFlags::from_ini(&text);
-                save_menu.set_confirmations(
-                    crate::save_menu::profile_int(&text, "SYSTEM_INFO", "DLG_LOAD", 0) != 0,
-                    crate::save_menu::profile_int(&text, "SYSTEM_INFO", "DLG_SAVE", 0) != 0,
-                );
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                audio = AudioHost::from_ini(&[]);
-                settings = crate::settings::SettingsHost::from_ini(&[]);
-                message_flags = MessageFlags::from_ini(&[]);
-            }
-            Err(e) => return Err(e.into()),
-        }
+        save_menu.set_confirmations(
+            crate::save_menu::profile_int(text, "SYSTEM_INFO", "DLG_LOAD", 0) != 0,
+            crate::save_menu::profile_int(text, "SYSTEM_INFO", "DLG_SAVE", 0) != 0,
+        );
+        let audio = AudioHost::from_ini(text);
+        let settings = crate::settings::SettingsHost::from_ini(text);
+        let message_flags = MessageFlags::from_ini(text);
+        let effects = crate::save_menu::profile_int(text, "SYSTEM_INFO", "EFFECT_USE", 1) != 0;
         Ok(Self {
             machine,
             gate: CommandGate::new(game.selection.clone()),
             notices: Vec::new(),
+            configuration,
             focused: true,
             bootstrap: Bootstrap::default(),
             control: ScriptControl::new(virtual_tick),
@@ -212,8 +206,7 @@ impl<'a> Startup<'a> {
             capture: ScreenCapture::default(),
             // No verified key bindings yet: no action is active (see `input`).
             input: ActionInput::default(),
-            // EFFECT_USE constructor value; the configuration may override it.
-            effects: true,
+            effects,
             timers: VmTimers::default(),
             resume_run: true,
             frame_delta: 0,
@@ -508,12 +501,16 @@ impl<'a> Startup<'a> {
         }
         let profile = ProfileSystemSave::open(path, &self.root)?;
         let saves = DirectorySaves::new(profile.directory())?;
+        let configuration = profile.read_configuration()?;
         let primary = profile.path();
         let source = if primary.try_exists()? {
             primary
         } else {
             self.root.join("save/system.dat")
         };
+        if let Some(configuration) = configuration {
+            self.install_configuration(configuration)?;
+        }
         self.system_source = FileSystemSave::new(source);
         self.saves = saves;
         self.system_output = Some(SystemOutput::Profile(profile));

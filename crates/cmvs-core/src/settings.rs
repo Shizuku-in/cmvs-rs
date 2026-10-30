@@ -1,5 +1,7 @@
 //! Runtime configuration commands, researched against cmvs-20160201 x64.
 use crate::{bytecode::DecodeError, evaluate::error, machine::Machine, vm::SystemResult};
+mod profile;
+pub use profile::{Configuration, DisplayPreferences, MAX_CONFIGURATION};
 
 /// Shift-JIS `ＭＳ ゴシック`, the initialized global at 0x1400fc150.
 pub const DEFAULT_FONT_FACE: &[u8] = b"\x82l\x82r \x83S\x83V\x83b\x83N";

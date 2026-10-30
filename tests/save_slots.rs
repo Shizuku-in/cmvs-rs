@@ -844,6 +844,61 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         ui.voices.len(),
         ui.voice_fades.len()
     );
+    let settings = ui.run.settings().clone();
+    let audio = ui.run.audio().settings();
+    let ducking = ui.run.audio().voice_ducking();
+    let voice_mode = ui.run.message_flags().mode_1548();
+    let persistent = [2195, 2196, 2197].map(|index| ui.run.machine().state().integer(index));
+    ui.run
+        .save_preferences(cmvs_rs::settings::DisplayPreferences {
+            fullscreen: false,
+            aspect_mode: 3,
+        })
+        .unwrap();
+    drop(ui);
+    drop(run);
+    let mut resumed = Startup::new(&script, &root, &game, 0).unwrap();
+    resumed.set_user_data_directory(&user).unwrap();
+    assert_eq!(resumed.settings(), &settings);
+    assert_eq!(resumed.audio().settings(), audio);
+    assert_eq!(resumed.audio().voice_ducking(), ducking);
+    assert_eq!(resumed.message_flags().mode_1548(), voice_mode);
+    assert_eq!(
+        resumed.display_preferences(),
+        cmvs_rs::settings::DisplayPreferences {
+            fullscreen: false,
+            aspect_mode: 3
+        }
+    );
+    let mut backend = RecordingBackend::default();
+    let mut loaded = false;
+    for _ in 0..100_000 {
+        let vm = resumed.machine();
+        let reading = vm
+            .loaded_script(vm.current_slot())
+            .and_then(|s| s.code().get(vm.pc()..vm.pc() + 2))
+            == Some(0x2128u16.to_le_bytes().as_slice());
+        let event = resumed.tick(&mut backend).unwrap();
+        if reading {
+            loaded = true;
+            break;
+        }
+        if event == StartupEvent::Yield {
+            resumed.advance_frame(16).unwrap();
+        }
+        assert!(matches!(
+            event,
+            StartupEvent::Progress | StartupEvent::Yield
+        ));
+    }
+    assert!(loaded);
+    assert_eq!(
+        [2195, 2196, 2197].map(|index| resumed.machine().state().integer(index)),
+        persistent
+    );
+    println!(
+        "settings: saved user INI + CSS1 and reloaded runtime settings and script variables on restart"
+    );
 }
 
 impl Ui<'_, '_> {

@@ -6,6 +6,79 @@ use std::{
 };
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
+
+#[test]
+fn configuration_uses_the_profile_lock_atomic_replacement_and_own_backup() {
+    use cmvs_rs::settings::Configuration;
+    let root = Root::new();
+    fs::write(root.game().join("cmvs.cfg"), b"original read only").unwrap();
+    let mut profile = ProfileSystemSave::open(&root.profile(), &root.game()).unwrap();
+    assert!(profile.read_configuration().unwrap().is_none());
+    let first = Configuration::new(b"[S]\nX=1\n".to_vec()).unwrap();
+    let second = Configuration::new(b"[S]\nX=2\n".to_vec()).unwrap();
+    profile.write_configuration(&first).unwrap();
+    profile.write_configuration(&second).unwrap();
+    assert_eq!(profile.read_configuration().unwrap(), Some(second));
+    assert_eq!(
+        fs::read(root.profile().join("cmvs.cfg.bak")).unwrap(),
+        first.bytes()
+    );
+    assert_eq!(
+        fs::read(root.game().join("cmvs.cfg")).unwrap(),
+        b"original read only"
+    );
+    drop(profile);
+    assert!(
+        ProfileSystemSave::open(&root.profile(), &root.game())
+            .unwrap()
+            .read_configuration()
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn configuration_rejects_invalid_targets_and_ambiguous_missing_primary() {
+    use cmvs_rs::settings::Configuration;
+    let root = Root::new();
+    let mut profile = ProfileSystemSave::open(&root.profile(), &root.game()).unwrap();
+    fs::create_dir(root.profile().join("cmvs.cfg.bak")).unwrap();
+    assert!(
+        profile
+            .write_configuration(&Configuration::new(vec![]).unwrap())
+            .is_err()
+    );
+    fs::remove_dir(root.profile().join("cmvs.cfg.bak")).unwrap();
+    fs::write(root.profile().join("cmvs.cfg.bak"), b"x").unwrap();
+    assert!(profile.read_configuration().is_err());
+    assert!(!root.profile().join("cmvs.cfg").exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn failed_configuration_replacement_preserves_primary_and_backup_for_retry() {
+    use cmvs_rs::settings::Configuration;
+    use std::os::windows::fs::OpenOptionsExt;
+    let root = Root::new();
+    let mut profile = ProfileSystemSave::open(&root.profile(), &root.game()).unwrap();
+    let first = Configuration::new(b"[S]\nX=1\n".to_vec()).unwrap();
+    let second = Configuration::new(b"[S]\nX=2\n".to_vec()).unwrap();
+    profile.write_configuration(&first).unwrap();
+    let blocker = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(3)
+        .open(root.profile().join("cmvs.cfg"))
+        .unwrap();
+    assert!(profile.write_configuration(&second).is_err());
+    assert_eq!(profile.read_configuration().unwrap(), Some(first.clone()));
+    assert_eq!(
+        fs::read(root.profile().join("cmvs.cfg.bak")).unwrap(),
+        first.bytes()
+    );
+    drop(blocker);
+    profile.write_configuration(&second).unwrap();
+    assert_eq!(profile.read_configuration().unwrap(), Some(second));
+}
 struct Root(PathBuf);
 impl Root {
     fn new() -> Self {

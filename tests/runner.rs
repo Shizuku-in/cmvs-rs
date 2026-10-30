@@ -118,6 +118,85 @@ fn string_call(op: u16) -> Vec<u8> {
 }
 
 #[test]
+fn user_configuration_round_trips_live_settings_and_preserves_the_game_file() {
+    use cmvs_rs::settings::DisplayPreferences;
+    let mut code = vec![];
+    for (op, value) in [
+        (0x22e1, 7),
+        (0x22e0, 1),
+        (0x22d5, 0),
+        (0x22d9, 123),
+        (0x22d0, 2),
+        (0x22d3, 1),
+        (0x22e7, 8),
+        (0x22e9, 4),
+    ] {
+        commands::command(&mut code, op, &[1, value]);
+    }
+    code.extend(0x2000u16.to_le_bytes());
+    let root = Root::new("preferences", &code, b"");
+    let original = b"[MESSAGE_INFO]\nTEXT_WAIT=2\nTEXT_BOLD=0\n[FUTURE]\nUNKNOWN=\x82\xa0\n";
+    fs::write(root.0.join("cmvs.cfg"), original).unwrap();
+    let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join(format!("preferences-{}", std::process::id()));
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    assert!(!run.save_preferences(DisplayPreferences::default()).unwrap());
+    run.set_user_data_directory(&directory).unwrap();
+    let mut backend = RecordingBackend::default();
+    let mut yielded = false;
+    for _ in 0..100 {
+        if run.tick(&mut backend).unwrap() == StartupEvent::Yield {
+            yielded = true;
+            break;
+        }
+    }
+    assert!(yielded);
+    let settings = run.settings().clone();
+    let audio = run.audio().settings();
+    let duck = run.audio().voice_ducking();
+    let flags = run.message_flags();
+    let confirmations = run.save_menu().confirmations();
+    run.save_preferences(DisplayPreferences {
+        fullscreen: true,
+        aspect_mode: 2,
+    })
+    .unwrap();
+    let first = fs::read(directory.join("cmvs.cfg")).unwrap();
+    run.save_preferences(DisplayPreferences {
+        fullscreen: false,
+        aspect_mode: 3,
+    })
+    .unwrap();
+    assert_eq!(fs::read(directory.join("cmvs.cfg.bak")).unwrap(), first);
+    drop(run);
+    let mut resumed = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    resumed.set_user_data_directory(&directory).unwrap();
+    assert_eq!(resumed.settings(), &settings);
+    assert_eq!(resumed.audio().settings(), audio);
+    assert_eq!(resumed.audio().voice_ducking(), duck);
+    assert_eq!(resumed.message_flags().mode_1548(), flags.mode_1548());
+    assert_eq!(resumed.save_menu().confirmations(), confirmations);
+    assert_eq!(
+        resumed.display_preferences(),
+        DisplayPreferences {
+            fullscreen: false,
+            aspect_mode: 3
+        }
+    );
+    assert_eq!(fs::read(root.0.join("cmvs.cfg")).unwrap(), original);
+    assert!(
+        fs::read(directory.join("cmvs.cfg"))
+            .unwrap()
+            .windows(b"UNKNOWN=\x82\xa0\n".len())
+            .any(|w| w == b"UNKNOWN=\x82\xa0\n")
+    );
+    drop(resumed);
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn inactive_policy_freezes_vm_and_scene_but_keeps_audio_updates_without_time_catchup() {
     use cmvs_rs::audio::{AudioBackend, AudioRequest};
     use std::sync::{

@@ -203,3 +203,10 @@ VM 运行、帧时间和协作预算分别管理。计时器只在首次运行�
 
 
 `0x202d` 只设置目标对象 flags 的 0x2（父项子队列）位，不要求 DrawState。`scene_render` 的投影队列复用 `Entry` 保存父层和子层，父项按深度排序，附着子项在其后按 parent_key + child_biased_z 稳定降序。当前只接入同模式、flags &3 ==3 的继承附着分支；世界坐标/投影参数/有效透明度继承父状态，子图在父原点周围按自身位置布局。其他组合保持错误屏障，不将其视为二维对象绘制。
+
+
+## 用户设置存储（2026-10-31）
+
+settings::Configuration保存有界原始INI字节，替换已实现的键并保留未知字段；runner/preferences.rs负责从运行中的SettingsHost、AudioHost、MessageFlags、确认/效果状态及显式DisplayPreferences汇集配置。用户目录初始化时安装用户配置，音频后端配置成功后才提交候选宿主；原游戏配置仅作首次只读来源。
+
+ProfileSystemSave复用会话锁及同目录临时文件替换，分别管理cmvs.cfg/cmvs.cfg.bak与CSS1。桌面正常退出显式保存，错误退出不保存；核心Drop没有隐藏I/O。INI和CSS1是两个独立提交，失败保留各自备份和可重试状态，不能描述成整体事务。原生窗口状态通过DisplayPreferences传入；核心不持有winit窗口。未实现的设置继续保留原始键及其现有错误屏障，不因写配置而伪造支持。

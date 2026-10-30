@@ -121,6 +121,35 @@ impl ProfileSystemSave {
     pub fn backup_path(&self) -> PathBuf {
         self.directory.join("system.bak")
     }
+    pub fn read_configuration(&self) -> io::Result<Option<crate::settings::Configuration>> {
+        let path = self.directory.join("cmvs.cfg");
+        let primary = regular_file(&path)?;
+        let backup = regular_file(&self.directory.join("cmvs.cfg.bak"))?;
+        if !primary && backup {
+            return Err(io::Error::other(
+                "profile cmvs.cfg is missing but its backup exists; restore explicitly",
+            ));
+        }
+        if primary {
+            crate::settings::Configuration::read(&path)
+        } else {
+            Ok(None)
+        }
+    }
+    pub fn write_configuration(
+        &mut self,
+        configuration: &crate::settings::Configuration,
+    ) -> io::Result<()> {
+        let path = self.directory.join("cmvs.cfg");
+        let backup = self.directory.join("cmvs.cfg.bak");
+        regular_file(&backup)?;
+        let previous = self.read_configuration()?;
+        let staged = self.stage(configuration.bytes())?;
+        if let Some(previous) = previous {
+            self.stage(previous.bytes())?.commit(&backup)?;
+        }
+        staged.commit(&path)
+    }
     fn stage(&self, raw: &[u8]) -> io::Result<StagedFile> {
         for _ in 0..100 {
             let id = TEMP_ID.fetch_add(1, Ordering::Relaxed);
