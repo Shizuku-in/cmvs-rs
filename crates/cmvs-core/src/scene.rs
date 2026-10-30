@@ -343,6 +343,9 @@ impl SceneHost {
         if command == 0x33 {
             return self.image_info(vm, pc);
         }
+        if command == 0x34 {
+            return self.pixel(vm, pc);
+        }
         if command == 0x2a {
             return self.set_logical_size(vm, pc);
         }
@@ -499,6 +502,59 @@ impl SceneHost {
                     .expect("slots 1..3 exist");
             }
         }
+        Ok(true)
+    }
+
+    /// 0x2034 / 0x14006ca80: SP-4 slot (as 0x2033), SP-8 child (negative selects the object,
+    /// 0x14003a760 otherwise), SP-12/SP-16 signed x/y. Result 0 is image vtable +0x28
+    /// (0x140030190): the BGRA dword of the CPU copy at +1160, or 0 outside +1144/+1148 or
+    /// without an image. Only file-loaded, unfiltered images are verified to keep that copy
+    /// equal to the decoded pixels. Pops 16.
+    fn pixel(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<bool, DecodeError> {
+        let fail = |why| error(pc, 0x2034, why);
+        let mut args = [0; 4];
+        for (i, arg) in args.iter_mut().enumerate() {
+            *arg = vm.stack().peek_u32(4 * (i + 1)).map_err(|e| fail(e.0))?;
+        }
+        let [slot, child, x, y] = args;
+        let object = u8::try_from(slot as i32)
+            .ok()
+            .and_then(|slot| self.objects.get(&slot))
+            .ok_or_else(|| fail("pixel query needs an existing object in slots 0..255"))?;
+        let target = if (child as i32) < 0 {
+            object
+        } else {
+            u16::try_from(child)
+                .ok()
+                .filter(|id| *id < 768)
+                .and_then(|id| object.children.get(&id))
+                .ok_or_else(|| fail("pixel query needs an existing child in slots 0..767"))?
+        };
+        let value = match &target.image {
+            None => 0,
+            Some(image) if image.surface || image.filter.is_some() || image.name.is_empty() => {
+                return Err(fail(
+                    "pixel reads are verified only for unfiltered file-loaded images",
+                ));
+            }
+            Some(image) => {
+                let pixels = &image.pixels;
+                let (x, y) = (x as i32, y as i32);
+                if x < 0 || y < 0 || x as u32 >= pixels.width() || y as u32 >= pixels.height() {
+                    0
+                } else {
+                    let at = (y as usize * pixels.width() as usize + x as usize) * 4;
+                    let [r, g, b, a] = pixels.pixels()[at..at + 4] else {
+                        unreachable!("validated RGBA bounds")
+                    };
+                    u32::from_le_bytes([b, g, r, a])
+                }
+            }
+        };
+        vm.complete_system(SystemResult(0x4010))?;
+        vm.state_mut()
+            .set_system_integer(0, value)
+            .expect("slot 0 exists");
         Ok(true)
     }
 

@@ -2019,3 +2019,92 @@ fn child_inherits_parent_second_texture_and_screen_mode() {
     let frame = cmvs_rs::scene_render::render(&scene, 2, 1).unwrap();
     assert_eq!(frame.pixels(), &[0, 0, 0, 255, 128, 128, 128, 255]);
 }
+
+#[test]
+fn pixel_query_returns_bgra_words_zero_outside_or_without_image_and_reads_children() {
+    let mut code = loads(4, &[0]);
+    scene_command(&mut code, 0x2022, &[4, 7]);
+    scene_command(&mut code, 0x2038, &[4, 7, 0]);
+    scene_command(&mut code, 0x2020, &[5]);
+    let setup = code.len();
+    let queries = [
+        ([4, u32::MAX, 0, 0], 0xff05_0301),
+        ([4, u32::MAX, 1, 0], 0xff06_0402),
+        ([4, u32::MAX, 2, 0], 0),
+        ([4, u32::MAX, u32::MAX, 0], 0),
+        ([4, u32::MAX, 0, 1], 0),
+        ([4, 7, 1, 0], 0xff06_0402),
+        ([5, u32::MAX, 0, 0], 0),
+    ];
+    for (args, _) in queries {
+        scene_command(&mut code, 0x2034, &args);
+    }
+    for args in [[6, u32::MAX, 0, 0], [4, 8, 0, 0], [4, 768, 0, 0]] {
+        scene_command(&mut code, 0x2034, &args);
+    }
+    let program = script(&code, b"a.pb3\0");
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    let mut files = Files::default();
+    files.0.insert(b"a.pb3".to_vec(), opaque());
+    while vm.pc() < setup {
+        run_to_system(&mut vm);
+        assert!(
+            scene.try_handle(&mut vm).unwrap()
+                || scene.try_handle_image(&mut vm, &mut files).unwrap()
+        );
+    }
+    for (_, expected) in queries {
+        vm.state_mut().set_system_integer(0, 77).unwrap();
+        run_to_system(&mut vm);
+        assert!(scene.try_handle(&mut vm).unwrap());
+        assert_eq!(vm.state().system_integer(0), Some(expected));
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
+    run_to_system(&mut vm);
+    let before = scene.object(4).cloned();
+    assert!(scene.try_handle(&mut vm).is_err());
+    assert_eq!(vm.pending_system().map(|p| p.1), Some(0x34));
+    assert_eq!(vm.stack().len_bytes(), 16);
+    assert_eq!(vm.state().system_integer(0), Some(0));
+    assert_eq!(scene.object(4).cloned(), before);
+}
+
+#[test]
+fn pixel_query_keeps_alpha_and_rejects_filtered_images() {
+    let mut code = loads(4, &[0]);
+    scene_command(&mut code, 0x2034, &[4, u32::MAX, 1, 0]);
+    scene_command(&mut code, 0x203b, &[4, 0, 2, 0x80_8080, 0]);
+    scene_command(&mut code, 0x2034, &[4, u32::MAX, 0, 0]);
+    let program = script(&code, b"a.pb3\0");
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    let mut files = Files::default();
+    files.0.insert(
+        b"a.pb3".to_vec(),
+        pb3(1, &[[200, 255], [128, 1], [240, 64], [0, 17]]),
+    );
+    for _ in 0..3 {
+        run_to_system(&mut vm);
+        if !scene.try_handle(&mut vm).unwrap() {
+            assert!(scene.try_handle_image(&mut vm, &mut files).unwrap());
+        }
+    }
+    assert_eq!(vm.state().system_integer(0), Some(0x1140_01ff));
+    run_to_system(&mut vm);
+    assert!(scene.try_handle_image(&mut vm, &mut files).unwrap());
+    assert!(
+        scene
+            .object(4)
+            .unwrap()
+            .image
+            .as_ref()
+            .unwrap()
+            .filter
+            .is_some()
+    );
+    run_to_system(&mut vm);
+    assert!(scene.try_handle(&mut vm).is_err());
+    assert_eq!(vm.pending_system().map(|p| p.1), Some(0x34));
+    assert_eq!(vm.stack().len_bytes(), 16);
+}

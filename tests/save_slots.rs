@@ -433,6 +433,8 @@ struct Ui<'a, 'b> {
     commands: Vec<u16>,
     /// Voice files 0x20a6 played (SP-8) since the last check.
     voices: Vec<Vec<u8>>,
+    /// SP-12 of each 0x20a6, the per-call volume before the global voice gain.
+    voice_volumes: Vec<i32>,
     voice_fades: Vec<(u32, u32)>,
     /// Set when a load completes; frames do nothing until the test has checked the hosts.
     frozen: bool,
@@ -490,6 +492,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         codes: CodeInput::default(),
         commands: Vec::new(),
         voices: Vec::new(),
+        voice_volumes: Vec::new(),
         voice_fades: Vec::new(),
         frozen: false,
     };
@@ -716,6 +719,42 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     assert_eq!(ui.run.buttons().group(1).unwrap().buttons.len(), 107);
     font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
         .unwrap();
+    // Character page: five words per character from 2400 (volume, -, gradient, colors).
+    let int = |ui: &Ui, index| ui.run.machine().state().integer(index);
+    ui.click(ui.button(1, 42), 30);
+    assert_eq!(int(&ui, 2402), Some(2));
+    ui.click(ui.button(1, 53), 30);
+    assert_eq!(int(&ui, 2400), Some(96));
+    // Colour picker: 0x2034 reads the palette image to mark the current colour.
+    ui.click(ui.button(1, 45), 30);
+    assert!(ui.run.buttons().group(3).is_some());
+    font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+        .unwrap();
+    ui.click([640, 300], 30);
+    ui.click(ui.button(3, 2), 30);
+    assert!(ui.run.buttons().group(3).is_none());
+    assert_eq!(int(&ui, 2403), Some(0x1effff));
+    let lower = int(&ui, 2404);
+    ui.click(ui.button(1, 47), 30);
+    ui.click([760, 330], 30);
+    ui.click(ui.button(3, 3), 30);
+    assert_eq!(int(&ui, 2404), lower);
+    ui.click(ui.button(1, 62), 30);
+    assert_eq!(int(&ui, 2407), Some(2));
+    ui.click(ui.button(1, 69), 30);
+    ui.click(ui.button(2, 1), 30);
+    assert_eq!(int(&ui, 2407), Some(1));
+    let characters: Vec<_> = (2400..2450).map(|index| int(&ui, index)).collect();
+    ui.click(ui.button(1, 16), 30);
+    ui.click(ui.button(2, 2), 30);
+    assert_eq!(
+        (2400..2450)
+            .map(|index| int(&ui, index))
+            .collect::<Vec<_>>(),
+        characters
+    );
+    font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+        .unwrap();
     ui.click(ui.button(1, 1), 120);
     assert_eq!(ui.run.buttons().group(1).unwrap().buttons.len(), 50);
     for (x, expected) in [(472, 0), (576, 1)] {
@@ -811,11 +850,13 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     let before_auto = ui.run.history().entries().len();
     ui.voice_fades.clear();
     ui.voices.clear();
+    ui.voice_volumes.clear();
     ui.click(ui.toolbar(5), 0);
     assert!(ui.run.message_flags().auto_advance());
     let mut auto_frames = 0;
     let mut first_voice_history = None;
-    for _ in 0..if native_audio { 8000 } else { 2000 } {
+    let mut character_glyphs = None;
+    for _ in 0..8000 {
         font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
             .unwrap();
         auto_frames += 1;
@@ -823,21 +864,33 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         if !ui.voices.is_empty() && first_voice_history.is_none() {
             first_voice_history = Some(ui.run.history().entries().len());
         }
+        if character_glyphs.is_none() && !ui.voices.is_empty() {
+            character_glyphs = (0..cmvs_rs::message::TEXT_OBJECTS)
+                .filter_map(|slot| ui.run.messages().text(slot))
+                .flat_map(|text| &text.glyphs)
+                .find(|glyph| glyph.colors[0] == 0x1effff)
+                .map(|glyph| (glyph.colors, glyph.gradient));
+        }
         if ui.run.history().entries().len() >= before_auto + 3
-            && (!native_audio
-                || first_voice_history
-                    .is_some_and(|count| ui.run.history().entries().len() >= count + 2))
+            && first_voice_history
+                .is_some_and(|count| ui.run.history().entries().len() >= count + 2)
         {
             break;
         }
     }
     assert!(ui.run.history().entries().len() >= before_auto + 3);
-    if native_audio {
-        assert!(
-            first_voice_history.is_some_and(|count| ui.run.history().entries().len() >= count + 2),
-            "native auto must advance beyond actual voice playback"
-        );
-    }
+    assert!(
+        first_voice_history.is_some_and(|count| ui.run.history().entries().len() >= count + 2),
+        "auto must advance beyond actual voice playback"
+    );
+    // The first voice belongs to こころ, whose settings were changed above.
+    assert!(ui.voices[0].starts_with(b"co"));
+    assert_eq!(ui.voice_volumes[0], 96);
+    assert_eq!(
+        character_glyphs,
+        Some(([0x1effff, lower.unwrap() as u32], 2)),
+        "character text colour and gradient reach the dialogue glyphs"
+    );
     assert!(
         !ui.voice_fades.is_empty(),
         "fade-out stop mode must execute voice fades"
@@ -873,7 +926,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
             .all(|child| child.draw.as_ref().unwrap().words[17] == 32)
     );
     println!(
-        "settings: native_audio={native_audio}; title + toolbar; background/opacity/fullscreen/aspect/filter, cursor hide, voice stop modes, read-skip policy, bold/text/audio/auto settings, three pages, 442 settings frames; auto advanced at least three entries in {auto_frames} rendered frames with {} voices and {} voice fades; disabled then idle 240 rendered frames",
+        "settings: native_audio={native_audio}; title + toolbar; background/opacity/fullscreen/aspect/filter, cursor hide, voice stop modes, read-skip policy, bold/text/audio/auto settings, character volume/gradient/colour picker/reset, three pages, 444 settings frames; auto advanced at least three entries in {auto_frames} rendered frames with {} voices and {} voice fades; disabled then idle 240 rendered frames",
         ui.voices.len(),
         ui.voice_fades.len()
     );
@@ -882,6 +935,9 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     let ducking = ui.run.audio().voice_ducking();
     let voice_mode = ui.run.message_flags().mode_1548();
     let persistent = [2195, 2196, 2197].map(|index| ui.run.machine().state().integer(index));
+    let characters: Vec<_> = (2400..2450)
+        .map(|index| ui.run.machine().state().integer(index))
+        .collect();
     ui.run
         .save_preferences(cmvs_rs::settings::DisplayPreferences {
             fullscreen: false,
@@ -931,6 +987,12 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         [2195, 2196, 2197].map(|index| resumed.machine().state().integer(index)),
         persistent
     );
+    assert_eq!(
+        (2400..2450)
+            .map(|index| resumed.machine().state().integer(index))
+            .collect::<Vec<_>>(),
+        characters
+    );
     println!(
         "settings: saved user INI + CSS1 and reloaded runtime settings and script variables on restart"
     );
@@ -953,6 +1015,7 @@ impl Ui<'_, '_> {
                 .then(|| self.run.machine().stack().peek_u32(8).ok())
                 .flatten()
                 .and_then(|raw| self.run.machine().resolve_string(raw).ok());
+            let voice_volume = self.run.machine().stack().peek_u32(12).ok();
             let voice_fade = (opcode == Some(0x20a9))
                 .then(|| {
                     self.run
@@ -982,6 +1045,8 @@ impl Ui<'_, '_> {
                 && self.run.machine().pending_system().is_none()
             {
                 self.voices.push(name);
+                self.voice_volumes
+                    .push(voice_volume.expect("0x20a6 has four arguments") as i32);
             }
             if let Some(fade) = voice_fade
                 && self.run.machine().pending_system().is_none()
@@ -1073,6 +1138,7 @@ fn external_in_game_menus_save_and_load() {
         codes: CodeInput::default(),
         commands: Vec::new(),
         voices: Vec::new(),
+        voice_volumes: Vec::new(),
         voice_fades: Vec::new(),
         frozen: false,
     };
@@ -1206,6 +1272,7 @@ fn external_backlog_scrolls_replays_voices_and_jumps_back() {
         codes: CodeInput::default(),
         commands: Vec::new(),
         voices: Vec::new(),
+        voice_volumes: Vec::new(),
         voice_fades: Vec::new(),
         frozen: false,
     };
