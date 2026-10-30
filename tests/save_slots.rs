@@ -414,3 +414,179 @@ fn external_route_saves_every_snapshot_and_plays_on_after_loads() {
     }
     panic!("budget exhausted at {}", place(&run));
 }
+
+/// Drives the game's own save UI: the toolbar (message window 7, run by the automatic
+/// callbacks), its confirmation dialog (button group 2, id 1 = yes), the save and load
+/// screens (button group 1, slot ids from 70). Clicks go through key.cfg bindings.
+struct Ui<'a, 'b> {
+    run: &'b mut Startup<'a>,
+    backend: RecordingBackend,
+    bindings: KeyBindings,
+    codes: CodeInput,
+    /// Save commands completed (0x22b6 / 0x22b5) since the last check.
+    commands: Vec<u16>,
+    /// Set when a load completes; frames do nothing until the test has checked the hosts.
+    frozen: bool,
+}
+
+impl Ui<'_, '_> {
+    fn frame(&mut self, pointer: [i32; 2], click: bool) {
+        if self.frozen {
+            return;
+        }
+        loop {
+            let pc = self.run.machine().pc();
+            let opcode = self
+                .run
+                .machine()
+                .loaded_script(self.run.machine().current_slot())
+                .and_then(|s| s.code().get(pc..pc + 2))
+                .map(|b| u16::from_le_bytes([b[0], b[1]]));
+            let event = self.run.tick(&mut self.backend).unwrap_or_else(|e| {
+                panic!(
+                    "{e} at {} / 0x{pc:x}",
+                    self.run.machine().current_name().escape_ascii()
+                )
+            });
+            if let Some(op @ (0x22b5 | 0x22b6)) = opcode
+                && self.run.machine().pending_system().is_none()
+            {
+                self.commands.push(op);
+                if op == 0x22b5 {
+                    self.frozen = true;
+                    return;
+                }
+            }
+            match event {
+                StartupEvent::Yield => break,
+                StartupEvent::Progress | StartupEvent::SnapshotCaptured => {}
+                other => panic!("{other:?}"),
+            }
+        }
+        self.run.advance_frame(16).unwrap();
+        let mut now = [false; 128];
+        now[1] = click;
+        self.codes
+            .update(&self.bindings, &now, self.run.input_mut());
+        self.run.input_mut().set_pointer(pointer[0], pointer[1]);
+    }
+    /// Moves there, presses for three frames, releases and lets `wait` frames pass.
+    fn click(&mut self, at: [i32; 2], wait: u32) {
+        for i in 0..(8 + wait) {
+            self.frame(at, (3..6).contains(&i));
+        }
+    }
+    fn toolbar(&self, button: usize) -> [i32; 2] {
+        let window = self.run.messages().window(7).expect("toolbar window");
+        let [x, y, w, h] = window.buttons[button].hit.map(i32::from);
+        [
+            window.position[0] + x + w / 2,
+            window.position[1] + y + h / 2,
+        ]
+    }
+    fn button(&self, group: usize, id: u32) -> [i32; 2] {
+        let b = self
+            .run
+            .buttons()
+            .group(group)
+            .and_then(|g| g.buttons.iter().find(|b| b.id == id))
+            .unwrap_or_else(|| panic!("button {id} of group {group}"));
+        [b.rect[0] + b.rect[2] / 2, b.rect[1] + b.rect[3] / 2]
+    }
+    fn waiting_for_text(&self) -> bool {
+        matches!(self.run.machine().pending_system(), Some((_, 0x153)))
+            && self.run.machine().current_name() == b"sn1001.ps3"
+    }
+}
+
+/// The in-game toolbar and menus save and load through the automatic callbacks: quick
+/// save (slot 860) and quick load, then the save screen (slot 004 = save003) and the load
+/// screen (slot 001 = save000). Each load must leave the hosts equal to the slot's snapshot.
+#[test]
+#[ignore = "requires CMVS_GAME_ROOT with original system.dat and save000..002 in save/"]
+fn external_in_game_menus_save_and_load() {
+    let root = PathBuf::from(std::env::var_os("CMVS_GAME_ROOT").expect("CMVS_GAME_ROOT"));
+    let user = user_directory("menus");
+    for name in ["system.dat", "save000.dat", "save001.dat", "save002.dat"] {
+        fs::copy(root.join("save").join(name), user.join(name)).unwrap();
+    }
+    let game = Registry::builtin().identify_game(&root, None).unwrap();
+    let script = load_start(&root, &game.files).unwrap();
+    let mut run = Startup::new(&script, &root, &game, 0).unwrap();
+    run.set_user_data_directory(&user).unwrap();
+    run.set_record_text(true);
+    let mut ui = Ui {
+        run: &mut run,
+        backend: RecordingBackend::default(),
+        bindings: KeyBindings::parse(&fs::read_to_string(root.join("key.cfg")).unwrap()).unwrap(),
+        codes: CodeInput::default(),
+        commands: Vec::new(),
+        frozen: false,
+    };
+    // Title menu idle, then the first slot, as in the auto-resume test.
+    while !(ui.run.machine().current_name() == b"menu.ps3" && ui.run.steps() > 200_000) {
+        ui.frame([-1, -1], false);
+    }
+    ui.run.load_slot(0, &mut ui.backend).unwrap();
+    let wait_for_text = |ui: &mut Ui<'_, '_>| {
+        for _ in 0..2000 {
+            if ui.waiting_for_text() && ui.run.machine().repeat_count() >= 2 {
+                return;
+            }
+            ui.frame([640, 360], false);
+        }
+        panic!("no message wait");
+    };
+    wait_for_text(&mut ui);
+
+    // Quick save: toolbar button 3, then yes.
+    ui.click(ui.toolbar(3), 30);
+    ui.click(ui.button(2, 1), 60);
+    assert_eq!(ui.commands, [0x22b6]);
+    let quick = fs::read(user.join("save860.dat")).unwrap();
+    let quick = EngineSnapshot::decode(&Csv2Save::decode(&quick).unwrap().snapshot).unwrap();
+    wait_for_text(&mut ui);
+
+    // Quick load: toolbar button 4, then yes; the hosts equal the quick save.
+    ui.commands.clear();
+    ui.click(ui.toolbar(4), 30);
+    ui.click(ui.button(2, 1), 0);
+    for _ in 0..120 {
+        if ui.commands.contains(&0x22b5) {
+            break;
+        }
+        ui.frame([640, 360], false);
+    }
+    assert_eq!(ui.commands, [0x22b5]);
+    check_loaded(ui.run, quick);
+    ui.frozen = false;
+    wait_for_text(&mut ui);
+
+    // Save screen: toolbar button 1, slot 004 (id 73), yes.
+    ui.commands.clear();
+    ui.click(ui.toolbar(1), 60);
+    ui.click(ui.button(1, 73), 60);
+    ui.click(ui.button(2, 1), 60);
+    assert_eq!(ui.commands, [0x22b6]);
+    let saved = fs::read(user.join("save003.dat")).unwrap();
+    EngineSnapshot::decode(&Csv2Save::decode(&saved).unwrap().snapshot).unwrap();
+    // Back (id 5) to the story.
+    ui.click(ui.button(1, 5), 0);
+    wait_for_text(&mut ui);
+
+    // Load screen: toolbar button 2, slot 001 (id 70), yes; the hosts equal save000.
+    ui.commands.clear();
+    ui.click(ui.toolbar(2), 60);
+    ui.click(ui.button(1, 70), 60);
+    ui.click(ui.button(2, 1), 0);
+    for _ in 0..200 {
+        if ui.commands.contains(&0x22b5) {
+            break;
+        }
+        ui.frame([640, 360], false);
+    }
+    assert_eq!(ui.commands, [0x22b5]);
+    check_loaded(ui.run, original_snapshot(&root, 0));
+    drop(ui);
+    fs::remove_dir_all(user).unwrap();
+}
