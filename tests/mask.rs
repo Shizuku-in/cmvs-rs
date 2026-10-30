@@ -128,6 +128,33 @@ fn alphas(scene: &SceneHost) -> Vec<u8> {
 }
 
 #[test]
+fn texture_subtract_is_bypassed_by_transition_shader_until_it_detaches() {
+    let mut code = vec![];
+    object(&mut code, 3);
+    command(&mut code, 0x2322, &[3, u32::MAX, 1]);
+    transition(&mut code, 3, 100, 1);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut scene = SceneHost::default();
+    run(&mut vm, &mut scene, 6);
+    scene.advance_frame(75);
+    assert_eq!(alphas(&scene), [255, 128]);
+    scene.advance_frame(25);
+    assert!(scene.mask().is_none());
+    assert_eq!(
+        scene
+            .object(3)
+            .unwrap()
+            .draw
+            .as_ref()
+            .unwrap()
+            .texture_subtract,
+        1
+    );
+    assert_eq!(alphas(&scene), [0, 0]);
+}
+
+#[test]
 fn put_transition_reveals_by_mask_green_and_keeps_the_object() {
     let mut code = vec![];
     object(&mut code, 3);

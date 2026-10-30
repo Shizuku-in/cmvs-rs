@@ -32,12 +32,13 @@ pub(super) fn decode(bytes: &[u8]) -> Result<DrawState, FormatError> {
     }
     let words = r.words::<22>()?;
     let extra = r.words::<6>()?;
-    if extra[1..5] != [0; 4] {
+    if extra[1..4] != [0; 3] {
         return Err(FormatError("unsupported snapshot draw extra fields"));
     }
     let mut out = DrawState {
         words,
         texture_mode: extra[0],
+        texture_subtract: extra[4],
         depth_bias: extra[5],
         ..DrawState::default()
     };
@@ -89,7 +90,14 @@ pub(crate) fn encode(draw: &DrawState) -> Result<Vec<u8>, FormatError> {
     for word in draw.words {
         out.extend(word.to_le_bytes());
     }
-    for word in [draw.texture_mode, 0, 0, 0, 0, draw.depth_bias] {
+    for word in [
+        draw.texture_mode,
+        0,
+        0,
+        0,
+        draw.texture_subtract,
+        draw.depth_bias,
+    ] {
         out.extend(word.to_le_bytes());
     }
     if let Some(scale) = &draw.scale_motion {
@@ -454,6 +462,23 @@ fn animation(bytes: &[u8]) -> Result<Animation, FormatError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn texture_subtract_round_trips_raw_word_and_survives_transient_reset() {
+        for value in [0, 1, 0x8000_0000, u32::MAX] {
+            let draw = DrawState {
+                texture_subtract: value,
+                ..DrawState::default()
+            };
+            let bytes = encode(&draw).unwrap();
+            assert_eq!(&bytes[108..112], &value.to_le_bytes());
+            let mut loaded = decode(&bytes).unwrap();
+            assert_eq!(loaded, draw);
+            reset_transients(&mut loaded);
+            assert_eq!(loaded.texture_subtract, value);
+            assert_eq!(encode(&loaded).unwrap(), bytes);
+        }
+    }
 
     #[test]
     fn rotation_record_round_trip_resumes_from_saved_progress_and_rejects_bad_keys() {

@@ -1471,6 +1471,80 @@ fn subqueue_flag_invalid_targets_and_missing_parameters_are_transactional() {
 }
 
 #[test]
+fn texture_subtract_normalizes_boolean_targets_and_keeps_other_state() {
+    let mut code = vec![];
+    for (op, args) in [
+        (0x2020, vec![7]),
+        (0x2040, vec![7]),
+        (0x2022, vec![7, 2]),
+        (0x2050, vec![7, 2]),
+        (0x2322, vec![7, 0x8000_0000, 2]),
+        (0x2322, vec![7, 2, u32::MAX]),
+        (0x2322, vec![7, u32::MAX, 0]),
+    ] {
+        command(&mut code, op, &args);
+    }
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut scene = SceneHost::default();
+    for _ in 0..4 {
+        assert!(next(&mut vm, &mut scene).unwrap());
+    }
+    let mut expected = scene.object(7).unwrap().clone();
+    vm.state_mut().set_system_integer(0, 123).unwrap();
+    for (child, value) in [(false, 1), (true, 1), (false, 0)] {
+        pending(&mut vm);
+        let pc = vm.pc();
+        assert!(scene.try_handle(&mut vm).unwrap());
+        let target = if child {
+            expected.children.get_mut(&2).unwrap()
+        } else {
+            &mut expected
+        };
+        target.draw.as_mut().unwrap().texture_subtract = value;
+        assert_eq!(scene.object(7), Some(&expected));
+        assert_eq!(vm.pc(), pc + 2);
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.state().system_integer(0), Some(123));
+    }
+}
+
+#[test]
+fn texture_subtract_rejects_invalid_targets_without_consuming_the_command() {
+    for (draw, args) in [
+        (true, [256, u32::MAX, 1]),
+        (true, [u32::MAX, u32::MAX, 1]),
+        (true, [8, u32::MAX, 1]),
+        (true, [7, 768, 1]),
+        (true, [7, 2, 1]),
+        (false, [7, u32::MAX, 1]),
+    ] {
+        let mut code = vec![];
+        command(&mut code, 0x2020, &[7]);
+        if draw {
+            command(&mut code, 0x2040, &[7]);
+        }
+        command(&mut code, 0x2322, &args);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut scene = SceneHost::default();
+        assert!(next(&mut vm, &mut scene).unwrap());
+        if draw {
+            assert!(next(&mut vm, &mut scene).unwrap());
+        }
+        let before = scene.objects().clone();
+        pending(&mut vm);
+        let pc = vm.pc();
+        vm.state_mut().set_system_integer(0, 123).unwrap();
+        assert!(scene.try_handle(&mut vm).is_err());
+        assert_eq!(scene.objects(), &before);
+        assert_eq!(vm.pending_system(), Some((pc, 0x322)));
+        assert_eq!(vm.stack().len_bytes(), 12);
+        assert_eq!(vm.state().system_integer(0), Some(123));
+    }
+}
+
+#[test]
 fn second_texture_mode_preserves_draw_state_and_targets_parent_or_child() {
     let mut code = vec![];
     for (op, args) in [

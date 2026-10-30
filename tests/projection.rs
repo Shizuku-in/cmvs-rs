@@ -345,6 +345,31 @@ fn second_camera_has_its_own_queue_and_enable_flag() {
 }
 
 #[test]
+fn texture_subtract_affects_projected_scaled_and_rotated_images_but_not_solids() {
+    for (scale, rotation) in [(1.0, 0), (2.0, 0), (1.0, 90)] {
+        let mut code = vec![];
+        camera(&mut code);
+        command(&mut code, 0x22cb, &[0x806040]);
+        projected(&mut code, 1, 6, [0.0, 0.0, 10.0], 10.0);
+        command(&mut code, 0x2049, &[1, u32::MAX, f(scale), f(scale)]);
+        command(&mut code, 0x204a, &[1, u32::MAX, rotation]);
+        let normal = render(&code);
+        assert!(normal.contains(&[255; 3]));
+        command(&mut code, 0x2322, &[1, u32::MAX, 1]);
+        let subtracted = render(&code);
+        for (before, after) in normal.iter().zip(subtracted) {
+            assert_eq!(after, if *before == [255; 3] { [0; 3] } else { *before });
+        }
+    }
+    let mut code = vec![];
+    command(&mut code, 0x2020, &[1]);
+    command(&mut code, 0x2040, &[1]);
+    command(&mut code, 0x2043, &[1, u32::MAX, 8, 4, 0x123456]);
+    command(&mut code, 0x2322, &[1, u32::MAX, 1]);
+    assert!(render(&code).iter().all(|p| *p == [0x12, 0x34, 0x56]));
+}
+
+#[test]
 fn replacement_renders_retained_images_and_finishes_without_a_dark_hole() {
     let mut code = vec![];
     camera(&mut code);

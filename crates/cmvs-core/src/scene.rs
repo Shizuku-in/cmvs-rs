@@ -192,6 +192,8 @@ pub struct DrawState {
     pub words: [u32; 22],
     /// +88: second-texture mapping mode, set by 0x2321.
     pub texture_mode: u32,
+    /// +104: 0x2322 selects texture stage 0 COLOROP=SUBTRACT instead of MODULATE.
+    pub texture_subtract: u32,
     /// +108 (0x2075; constructor 0): raw float bits added to world Z for the projected
     /// queue key only (0x14001f360). 0x22c4 copies it with +88..+104 (0x14001f520).
     pub depth_bias: u32,
@@ -219,6 +221,7 @@ impl Default for DrawState {
         Self {
             words,
             texture_mode: 0,
+            texture_subtract: 0,
             depth_bias: 0,
             scale_motion: None,
             rotation_track: None,
@@ -366,7 +369,7 @@ impl SceneHost {
         }
         if matches!(
             command,
-            0x22 | 0x2d | 0x2e | 0x40 | 0x42..=0x4c | 0x50 | 0x70..=0x75 | 0x321
+            0x22 | 0x2d | 0x2e | 0x40 | 0x42..=0x4c | 0x50 | 0x70..=0x75 | 0x321 | 0x322
         ) {
             return self.handle_object(vm, pc, command);
         }
@@ -636,7 +639,7 @@ impl SceneHost {
             0x43 => 5,
             0x44 => 6,
             0x45 | 0x46 | 0x49 => 4,
-            0x47 | 0x48 | 0x4a..=0x4c | 0x70..=0x75 | 0x321 => 3,
+            0x47 | 0x48 | 0x4a..=0x4c | 0x70..=0x75 | 0x321 | 0x322 => 3,
             _ => unreachable!(),
         };
         let mut args = Vec::with_capacity(count);
@@ -649,7 +652,7 @@ impl SceneHost {
             .get(&slot)
             .ok_or_else(|| fail("object slot does not exist"))?;
         let child = if command == 0x40
-            || (matches!(command, 0x2d | 0x2e | 0x42..=0x4c | 0x70..=0x75 | 0x321)
+            || (matches!(command, 0x2d | 0x2e | 0x42..=0x4c | 0x70..=0x75 | 0x321 | 0x322)
                 && (args[1] as i32) < 0)
         {
             None
@@ -669,7 +672,8 @@ impl SceneHost {
                     .ok_or_else(|| fail("child object does not exist"))?,
                 None => parent,
             };
-            if matches!(command, 0x42..=0x4c | 0x70..=0x75 | 0x321) && object.draw.is_none() {
+            if matches!(command, 0x42..=0x4c | 0x70..=0x75 | 0x321 | 0x322) && object.draw.is_none()
+            {
                 return Err(fail("object has no draw state"));
             }
         }
@@ -712,6 +716,10 @@ impl SceneHost {
                 // set the existing draw state's coordinate mode without rebuilding it.
                 0x42 => object.draw.as_mut().expect("validated").words[0] = 2,
                 0x321 => object.draw.as_mut().expect("validated").texture_mode = args[2],
+                0x322 => {
+                    object.draw.as_mut().expect("validated").texture_subtract =
+                        u32::from(args[2] != 0)
+                }
                 // 0x14006d220 -> 0x14003b150 -> 0x14001f3b0. Retain the image,
                 // origin and animation tracks; only reset the source and fill fields.
                 0x43 => {

@@ -711,6 +711,110 @@ fn static_scene_uses_script_crop_origin_position_and_clear_color() {
 }
 
 #[test]
+fn texture_subtract_keeps_texel_alpha_opacity_and_device_blending() {
+    use cmvs_rs::{
+        scene::{DrawState, SceneObject},
+        scene_render,
+    };
+    let scene = build_scene(&{
+        let mut code = vec![];
+        scene_command(&mut code, 0x22cb, &[0x806040]);
+        code
+    });
+    for (alpha_image, blend, opacity, expected) in [
+        (true, 1, 255, [64, 48, 32]),
+        (true, 1, 128, [96, 72, 48]),
+        (true, 2, 255, [128, 96, 64]),
+        (false, 2, 255, [0, 0, 0]),
+    ] {
+        let mut draw = DrawState {
+            texture_subtract: 1,
+            ..DrawState::default()
+        };
+        draw.words[1] = blend;
+        draw.words[4..6].copy_from_slice(&[2, 1]);
+        draw.words[17] = opacity;
+        let object = SceneObject {
+            image: Some(ObjectImage {
+                name: vec![],
+                filter: None,
+                alpha: alpha_image,
+                surface: false,
+                pixels: RgbaImage::new(2, 1, vec![200, 120, 80, 128, 255, 255, 255, 0]).unwrap(),
+            }),
+            draw: Some(draw),
+            ..SceneObject::default()
+        };
+        let frame = scene_render::render_with_objects(&scene, &[&object], 2, 1).unwrap();
+        assert_eq!(&frame.pixels()[..3], &expected);
+        assert_eq!(
+            &frame.pixels()[4..7],
+            if alpha_image {
+                &[128, 96, 64]
+            } else {
+                &[0, 0, 0]
+            }
+        );
+    }
+}
+
+#[test]
+fn texture_subtract_is_local_to_each_draw_including_inherited_children() {
+    for (parent, child, expected) in [
+        (1, 0, vec![5, 3, 1, 255, 0, 0, 0, 255]),
+        (0, 1, vec![0, 0, 0, 255, 6, 4, 2, 255]),
+    ] {
+        let mut code = loads(1, &[0]);
+        for (op, args) in [
+            (0x2040, vec![1]),
+            (0x2044, vec![1, u32::MAX, 0, 0, 2, 1]),
+            (0x2022, vec![1, 2]),
+            (0x2050, vec![1, 2]),
+            (0x2044, vec![1, 2, 0, 0, 1, 1]),
+            (0x2322, vec![1, u32::MAX, parent]),
+            (0x2322, vec![1, 2, child]),
+        ] {
+            scene_command(&mut code, op, &args);
+        }
+        let frame = cmvs_rs::scene_render::render(&build_scene(&code), 2, 1).unwrap();
+        assert_eq!(frame.pixels(), expected);
+    }
+}
+
+#[test]
+fn texture_subtract_survives_immediate_and_crossfade_replacements() {
+    for duration in [0, 100] {
+        let mut code = loads(20, &[0]);
+        scene_command(&mut code, 0x2040, &[20]);
+        scene_command(&mut code, 0x2322, &[20, u32::MAX, 7]);
+        scene_command(&mut code, 0x22c4, &[20, 6, duration, 0]);
+        let program = script(&code, b"a.pb3\0b.pb3\0");
+        let mut vm = Machine::new(&program).unwrap();
+        let mut scene = SceneHost::default();
+        let mut files = Files(BTreeMap::from([
+            (b"a.pb3".to_vec(), opaque()),
+            (b"b.pb3".to_vec(), opaque()),
+        ]));
+        for _ in 0..4 {
+            run_to_system(&mut vm);
+            assert!(
+                scene.try_handle(&mut vm).unwrap()
+                    || scene.try_handle_image(&mut vm, &mut files).unwrap()
+            );
+        }
+        assert_eq!(run_to_system(&mut vm), 0x2c4);
+        assert!(scene.try_change_image(&mut vm, &mut files).unwrap());
+        let object = scene.object(20).unwrap();
+        assert_eq!(object.draw.as_ref().unwrap().texture_subtract, 1);
+        if let Some(change) = &object.change {
+            for retained in [&change.previous, &change.common] {
+                assert_eq!(retained.draw.as_ref().unwrap().texture_subtract, 1);
+            }
+        }
+    }
+}
+
+#[test]
 fn static_scene_sorts_back_to_front_and_equal_orders_keep_slot_order() {
     for second_order in [10, 0, 20] {
         let mut code = vec![];
@@ -1909,6 +2013,8 @@ fn second_texture_load_and_screen_mapping_use_green_as_alpha() {
     scene_command(&mut code, 0x2044, &[11, u32::MAX, 0, 0, 2, 1]);
     scene_command(&mut code, 0x2035, &[11, 6, 0, 0]);
     scene_command(&mut code, 0x2321, &[11, u32::MAX, 4]);
+    scene_command(&mut code, 0x22cb, &[0x806040]);
+    scene_command(&mut code, 0x2322, &[11, u32::MAX, 1]);
     let script = script(&code, b"a.pb3\0m.pb3\0");
     let mut vm = Machine::new(&script).unwrap();
     let mut scene = SceneHost::default();
@@ -1953,6 +2059,12 @@ fn second_texture_load_and_screen_mapping_use_green_as_alpha() {
     assert_eq!(frame.pixels(), &[0, 0, 0, 255, 128, 128, 128, 255]);
     assert_eq!(vm.stack().len_bytes(), 0);
     assert_eq!(vm.state().system_integer(0), Some(1));
+    for _ in 0..2 {
+        run_to_system(&mut vm);
+        assert!(scene.try_handle(&mut vm).unwrap());
+    }
+    let frame = cmvs_rs::scene_render::render(&scene, 2, 1).unwrap();
+    assert_eq!(frame.pixels(), &[128, 96, 64, 255, 64, 48, 32, 255]);
 }
 
 #[test]

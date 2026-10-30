@@ -60,6 +60,44 @@ enum Blend {
     Alpha,
     /// Device mode 2: SRCALPHA / ONE, saturated by the 8-bit target.
     Additive,
+    BlackReplace,
+    BlackAlpha,
+    BlackAdditive,
+}
+
+impl Blend {
+    fn subtract_white(self) -> Self {
+        match self {
+            Self::Replace | Self::BlackReplace => Self::BlackReplace,
+            Self::Alpha | Self::BlackAlpha => Self::BlackAlpha,
+            Self::Additive | Self::BlackAdditive => Self::BlackAdditive,
+        }
+    }
+    fn alpha(self) -> Self {
+        match self {
+            Self::BlackReplace | Self::BlackAlpha | Self::BlackAdditive => Self::BlackAlpha,
+            _ => Self::Alpha,
+        }
+    }
+}
+
+/// The verified textured paths supply white diffuse RGB (0x1400238a0). Stage 0
+/// COLORARG1=TEXTURE, COLORARG2=DIFFUSE, so SUBTRACT saturates RGB to black while
+/// leaving the independent alpha operation intact. Solid primitives use no texture.
+fn texture_operation(mut layer: Layer<'_>, enabled: bool) -> Layer<'_> {
+    if enabled {
+        match &mut layer {
+            // A transition's pixel shader (0x140028af0) replaces fixed-function
+            // texture stages, so COLOROP has no effect while that shader is bound.
+            Layer::Image {
+                blend, mask: None, ..
+            }
+            | Layer::Projected { blend, .. }
+            | Layer::Rotated { blend, .. } => *blend = blend.subtract_white(),
+            _ => {}
+        }
+    }
+    layer
 }
 
 /// Draw word 1 (0x204b): 1 alpha, 2 additive. 0x140020340 falls back to device mode 0 when
@@ -524,6 +562,11 @@ fn projected_layer<'a>(
             return Err(FormatError("projected object has a non-finite extent"));
         }
         let blend = blend(words, image, i64::from(alpha), false)?;
+        let blend = if draw.texture_subtract != 0 {
+            blend.subtract_white()
+        } else {
+            blend
+        };
         return Ok(Some((
             key,
             Layer::Rotated {
@@ -545,6 +588,11 @@ fn projected_layer<'a>(
         return Err(FormatError("projected object has a non-finite extent"));
     }
     let blend = blend(words, image, i64::from(alpha), false)?;
+    let blend = if draw.texture_subtract != 0 {
+        blend.subtract_white()
+    } else {
+        blend
+    };
     Ok(Some((
         key,
         Layer::Projected {
@@ -775,6 +823,7 @@ pub fn render_scene(
                 i64::from((d[17].wrapping_mul(d[21]) as i32) >> 8),
             )?,
         }
+        .map(|layer| texture_operation(layer, draw.texture_subtract != 0))
         .map(|layer| screen_mask(layer, object, None))
         .transpose()?
         .map(|layer| shifted(layer, by));
@@ -805,6 +854,10 @@ pub fn render_scene(
                 let Some(layer) = child_layer(object, d, child, words)? else {
                     continue;
                 };
+                let layer = texture_operation(
+                    layer,
+                    child.draw.as_ref().expect("validated").texture_subtract != 0,
+                );
                 let layer = shifted(screen_mask(layer, child, Some(object))?, by);
                 if child.flags & 2 != 0 {
                     entry.children.push((order(words), layer));
@@ -896,12 +949,20 @@ pub fn render_scene(
 
 /// One target pixel under the device blend state, with straight 8-bit source values.
 fn put(target: &mut [u8], source: [u8; 3], alpha: u32, blend: Blend) {
+    let source = if matches!(
+        blend,
+        Blend::BlackReplace | Blend::BlackAlpha | Blend::BlackAdditive
+    ) {
+        [0; 3]
+    } else {
+        source
+    };
     for c in 0..3 {
         let (s, t) = (u32::from(source[c]), u32::from(target[c]));
         target[c] = match blend {
-            Blend::Replace => source[c],
-            Blend::Alpha => ((s * alpha + t * (255 - alpha) + 127) / 255) as u8,
-            Blend::Additive => (t + (s * alpha + 127) / 255).min(255) as u8,
+            Blend::Replace | Blend::BlackReplace => source[c],
+            Blend::Alpha | Blend::BlackAlpha => ((s * alpha + t * (255 - alpha) + 127) / 255) as u8,
+            Blend::Additive | Blend::BlackAdditive => (t + (s * alpha + 127) / 255).min(255) as u8,
         };
     }
 }
@@ -1072,7 +1133,7 @@ fn screen_mask<'a>(
                 ..
             } if mask.is_none() => {
                 *screen_mask = Some(texture);
-                *blend = Blend::Alpha;
+                *blend = blend.alpha();
             }
             _ => {
                 return Err(FormatError(
