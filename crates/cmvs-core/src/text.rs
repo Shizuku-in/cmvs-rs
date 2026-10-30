@@ -8,10 +8,57 @@ use crate::{
 
 pub fn try_handle(vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
     match vm.pending_system() {
+        Some((pc, 0xf1)) => compare(vm, pc).map(|()| true),
         Some((pc, 0xf8)) => strlen(vm, pc).map(|()| true),
         Some((pc, 0xfc)) => format(vm, pc).map(|()| true),
         _ => Ok(false),
     }
+}
+
+/// 0x20f1 / 0x140074400: system result 0 = 1 when the SP-4 and SP-8 strings are equal under
+/// 0x140008140, else 0; returns 0x4008.
+fn compare(vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
+    let arg = |distance| {
+        vm.stack()
+            .peek_u32(distance)
+            .map_err(|e| error(pc, 0x20f1, e.0))
+    };
+    let (first, second) = (arg(4)?, arg(8)?);
+    let first = vm.resolve_string(first)?;
+    let second = vm.resolve_string(second)?;
+    let equal = equal_ignoring_ascii_case(&first, &second).map_err(|why| error(pc, 0x20f1, why))?;
+    vm.complete_system(SystemResult(0x4008))?;
+    vm.state_mut()
+        .set_system_integer(0, u32::from(equal))
+        .expect("slot 0 exists");
+    Ok(())
+}
+
+/// 0x140008140 walks the first string: a Shift-JIS lead byte compares itself and the next
+/// byte exactly, any other byte compares with a-z folded to A-Z; the second string must
+/// end where the first does. A trailing lead byte whose pair matches steps past the first
+/// string's terminator, which is not modeled.
+fn equal_ignoring_ascii_case(first: &[u8], second: &[u8]) -> Result<bool, &'static str> {
+    let at = |text: &[u8], i: usize| text.get(i).copied().unwrap_or(0);
+    let mut i = 0;
+    while at(first, i) != 0 {
+        let b = at(first, i);
+        if (0x81..=0x9f).contains(&b) || (0xe0..=0xfc).contains(&b) {
+            if b != at(second, i) || at(first, i + 1) != at(second, i + 1) {
+                return Ok(false);
+            }
+            if at(first, i + 1) == 0 {
+                return Err("string comparison steps past a trailing lead byte");
+            }
+            i += 2;
+        } else {
+            if !b.eq_ignore_ascii_case(&at(second, i)) {
+                return Ok(false);
+            }
+            i += 1;
+        }
+    }
+    Ok(at(second, i) == 0)
 }
 
 /// 0x20f8 / 0x1400747c0: system result 0 = lstrlenA of the SP-4 string reference.

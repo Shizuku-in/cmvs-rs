@@ -5,7 +5,7 @@ use crate::{
     raster::RgbaImage,
     scene::{DrawSetter, DrawState, ObjectImage, SceneObject},
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Logical glyph texture allocation. Only the initial tile is known to be clear;
 /// unused native texture pixels are not guessed or exposed as a decoded image.
@@ -139,11 +139,40 @@ impl AuxiliaryGlyphAtlas {
     }
 }
 
-/// Constructor state for the auxiliary text list. Content/list commands remain
-/// barriers, so it has no text rows or glyphs and produces no visible pixels.
+/// A +184 record of 0x14002f3e0: the 40-byte glyph descriptor at +12, and the atlas cell
+/// (+16) and layer that 0x14002eb10 gives it while it has an attached object.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuxiliaryGlyph {
+    /// Descriptor word 0 high half: Shift-JIS pair, lead byte high.
+    pub code: u16,
+    /// Descriptor words 3/4: truncated pen position relative to the group position.
+    pub position: [i32; 2],
+    /// Descriptor word 5: +48 when laid out.
+    pub size: u32,
+    /// Descriptor words 6/7: +132 and +136.
+    pub colors: [u32; 2],
+    /// Descriptor word 2: +148 values 1..3, other values map to zero.
+    pub gradient: u32,
+    /// Descriptor words 8/9: +140 (0x238b passes -1, selecting it) and +144.
+    pub outline: [u32; 2],
+    /// Atlas cell 1..1023 while attached, 0 otherwise.
+    pub cell: u16,
+    /// +172 when the attached object was created; later 0x238f calls do not change it.
+    pub layer: u32,
+}
+
+/// The auxiliary text list: constructor state, layout fields, glyph records and the
+/// glyphs currently attached to the atlas object. Glyph pixels belong to the backend.
 #[derive(Debug, Clone)]
 pub struct AuxiliaryText {
-    words: BTreeMap<u16, u32>,
+    pub(super) words: BTreeMap<u16, u32>,
+    /// +184: glyph records in layout order.
+    pub glyphs: Vec<AuxiliaryGlyph>,
+    /// The atlas object's +6152 list: indexes of attached glyph records, oldest first.
+    pub(super) attached: Vec<usize>,
+    /// +416: atlas cells in use. Only atlas creation (0x14002e2f0) clears the table;
+    /// 0x2386 drops the records without releasing their cells.
+    pub(super) cells: BTreeSet<u16>,
     pub atlas: AuxiliaryGlyphAtlas,
     /// Owned atlas scene object; backing texture metadata belongs to `atlas`.
     /// It is not a scene slot and must never be drawn using guessed texture pixels.
@@ -239,18 +268,18 @@ impl AuxiliaryText {
         }
     }
 
-    /// 0x14002e840 writes the complete parameter word without validation.
-    /// Its later layout/output use has not yet been verified.
+    /// 0x14002e840 writes the complete parameter word without validation; 0x238b maps
+    /// 1..3 to the glyph gradient and other values to none.
     pub(super) fn set_field_148(&mut self, value: u32) {
         self.words.insert(148, value);
     }
 
-    /// 0x14001d2a0 stores the complete parameter word at +140.
+    /// 0x14001d2a0 stores the complete parameter word at +140, the glyph outline mode.
     pub(super) fn set_field_140(&mut self, value: u32) {
         self.words.insert(140, value);
     }
 
-    /// 0x14002e850 stores the complete parameter word at +144.
+    /// 0x14002e850 stores the complete parameter word at +144, the glyph outline color.
     pub(super) fn set_field_144(&mut self, value: u32) {
         self.words.insert(144, value);
     }
@@ -265,12 +294,31 @@ impl AuxiliaryText {
             .set(DrawSetter::Layer(value));
     }
 
-    /// 0x14002e8e0 destroys attached glyph objects and text rows, then resets
-    /// the layout cursor. Content creation is still a barrier, so rows are empty.
+    /// 0x14002e8e0 destroys the attached glyph objects (0x14003a880) and the glyph records
+    /// (0x14002e540), then resets the layout cursor. The atlas cell table is kept.
     pub(super) fn clear_content(&mut self) {
         self.object.children.clear();
+        self.glyphs.clear();
+        self.attached.clear();
         self.words.insert(176, self.words[&16]);
         self.words.insert(180, self.words[&20]);
+    }
+
+    /// 0x14002e800: the layout cursor +176/+180 from two signed integers.
+    pub(super) fn set_cursor(&mut self, x: u32, y: u32) {
+        self.words.insert(176, ((x as i32) as f32).to_bits());
+        self.words.insert(180, ((y as i32) as f32).to_bits());
+    }
+
+    /// 0x14002eb00 clears only the motion flag +368; the frame update then skips the motion.
+    pub(super) fn stop_motion(&mut self) {
+        self.words.insert(368, 0);
+        self.motion = None;
+    }
+
+    /// Glyph records with an attached object, in the atlas object's list order.
+    pub fn attached_glyphs(&self) -> impl Iterator<Item = &AuxiliaryGlyph> {
+        self.attached.iter().map(|&i| &self.glyphs[i])
     }
 
     /// 0x14002e880 stores four signed integer parameters as single precision.
@@ -350,6 +398,9 @@ impl AuxiliaryText {
         draw.set(DrawSetter::Layer(1));
         Ok(Self {
             words,
+            glyphs: Vec::new(),
+            attached: Vec::new(),
+            cells: BTreeSet::new(),
             atlas,
             secondary_image: None,
             associated_scene: None,

@@ -1838,6 +1838,9 @@ fn auxiliary_second_texture_replaces_only_mask_and_survives_content_clear() {
     run_to_system(&mut vm);
     messages.try_handle(&mut vm).unwrap();
     let before = messages.auxiliary_text(7).unwrap().clone();
+    // 0x14003b170 selects second-texture mode 4 on the atlas draw state.
+    let mut object = before.object.clone();
+    object.draw.as_mut().unwrap().texture_mode = 4;
     for i in 0..7 {
         vm.state_mut().set_system_integer(i, 70 + i).unwrap();
     }
@@ -1846,7 +1849,7 @@ fn auxiliary_second_texture_replaces_only_mask_and_survives_content_clear() {
         run_to_system(&mut vm);
         assert!(messages.try_handle_image(&mut vm, &mut files).unwrap());
         let group = messages.auxiliary_text(7).unwrap();
-        assert_eq!(group.object, before.object);
+        assert_eq!(group.object, object);
         assert_eq!(group.atlas, before.atlas);
         let image = group.secondary_image.as_ref().unwrap();
         assert_eq!(image.name, b"mask.pb3");

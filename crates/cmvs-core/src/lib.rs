@@ -10,6 +10,7 @@ pub mod cmv9;
 pub mod cpz;
 pub mod cursor;
 pub mod digest;
+pub mod effect_objects;
 pub mod evaluate;
 pub mod exe;
 pub mod fade;

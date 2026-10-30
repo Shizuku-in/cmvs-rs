@@ -23,11 +23,12 @@ use crate::{
 };
 use std::error::Error;
 mod auxiliary;
+mod auxiliary_layout;
 mod auxiliary_motion;
 mod measure;
 mod output;
 mod wait;
-pub use auxiliary::{AuxiliaryGlyphAtlas, AuxiliaryText};
+pub use auxiliary::{AuxiliaryGlyph, AuxiliaryGlyphAtlas, AuxiliaryText};
 pub use output::RecordedGlyph;
 
 pub const MESSAGE_WINDOWS: usize = 8;
@@ -364,6 +365,11 @@ impl MessageHost {
         if let Some((pc, 0x380)) = vm.pending_system() {
             return self.create_auxiliary_text(vm, pc).map(|()| true);
         }
+        if let Some((pc, command @ (0x38b | 0x38c | 0x390 | 0x3a0))) = vm.pending_system()
+            && (command != 0x38b || self.record_output)
+        {
+            return self.auxiliary_content(vm, pc, command).map(|()| true);
+        }
         if let Some((
             pc,
             command @ (0x383 | 0x385 | 0x386 | 0x387 | 0x389 | 0x38e | 0x38f | 0x392 | 0x393
@@ -495,6 +501,80 @@ impl MessageHost {
             }
             _ => Ok(false),
         }
+    }
+    /// 0x238b text (0x140073a80, returns 0x4008), 0x238c pen (0x140073b00, 0x400c), 0x2390
+    /// measurement (0x140073c80, 0x4008; system results 0, 1 and 4) and 0x23a0 motion stop
+    /// (0x140074210, 0x4004). SP-4 is the group slot, SP-8 the string or pen x, SP-12 pen y.
+    /// A missing group only sets +12056 bit 0x1000, which is not modeled. Text output is
+    /// recorded only in the explicit text-recording mode, as for 0x2152.
+    fn auxiliary_content(
+        &mut self,
+        vm: &mut Machine<'_>,
+        pc: usize,
+        command: u16,
+    ) -> Result<(), DecodeError> {
+        let opcode = 0x2000 + command;
+        let count = match command {
+            0x38c => 3,
+            0x3a0 => 1,
+            _ => 2,
+        };
+        let mut args = [0; 3];
+        for (i, arg) in args.iter_mut().take(count).enumerate() {
+            *arg = vm
+                .stack()
+                .peek_u32(4 * (i + 1))
+                .map_err(|e| error(pc, opcode, e.0))?;
+        }
+        let slot = args[0] as usize;
+        let group = self
+            .auxiliary_texts
+            .get(slot)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| {
+                error(
+                    pc,
+                    opcode,
+                    "auxiliary text group does not exist or outside 0..7",
+                )
+            })?;
+        match command {
+            0x38b => {
+                let text = vm.resolve_string(args[1])?;
+                let layout = group.layout(&text).map_err(|why| error(pc, opcode, why))?;
+                vm.complete_system(SystemResult(0x4008))?;
+                self.auxiliary_texts[slot]
+                    .as_mut()
+                    .expect("validated")
+                    .append(layout);
+            }
+            0x390 => {
+                let text = vm.resolve_string(args[1])?;
+                let [lines, widest, last] =
+                    group.measure(&text).map_err(|why| error(pc, opcode, why))?;
+                vm.complete_system(SystemResult(0x4008))?;
+                for (index, value) in [(0, lines), (1, widest), (4, last)] {
+                    vm.state_mut()
+                        .set_system_integer(index, value)
+                        .expect("result exists");
+                }
+            }
+            0x38c => {
+                vm.complete_system(SystemResult(0x400c))?;
+                self.auxiliary_texts[slot]
+                    .as_mut()
+                    .expect("validated")
+                    .set_cursor(args[1], args[2]);
+            }
+            _ => {
+                vm.complete_system(SystemResult(0x4004))?;
+                self.auxiliary_texts[slot]
+                    .as_mut()
+                    .expect("validated")
+                    .stop_motion();
+            }
+        }
+        Ok(())
     }
     /// 0x140073280: slot, font name, glyph size, capacity; returns 0x4010 and
     /// system result 0 = object != null. Only the existing explicit default-font
@@ -1586,10 +1666,17 @@ impl MessageHost {
             let image = scene::load_image(images, name, pc, 0x2397)?
                 .ok_or_else(|| error(pc, 0x2397, "auxiliary second texture is missing"))?;
             vm.complete_system(SystemResult(0x4008))?;
-            self.auxiliary_texts[slot]
+            // 0x14002e4e0: 0x14003b170 sets the atlas draw state's +88 to 4 before the load.
+            let group = self.auxiliary_texts[slot]
                 .as_mut()
-                .expect("validated group")
-                .secondary_image = Some(image);
+                .expect("validated group");
+            group
+                .object
+                .draw
+                .as_mut()
+                .expect("owned atlas draw state")
+                .texture_mode = 4;
+            group.secondary_image = Some(image);
             return Ok(true);
         }
         let Some((pc, 0x170)) = vm.pending_system() else {

@@ -345,6 +345,12 @@ impl<'a> Startup<'a> {
         {
             return Err("screen capture over visible glyphs needs the font backend".into());
         }
+        if (0..crate::message::AUXILIARY_TEXTS)
+            .filter_map(|i| self.messages.auxiliary_text(i))
+            .any(|group| group.attached_glyphs().next().is_some())
+        {
+            return Err("screen capture over auxiliary glyphs needs the font backend".into());
+        }
         let windows: Vec<_> = (0..crate::message::MESSAGE_WINDOWS)
             .filter_map(|i| self.messages.window(i))
             .filter(|window| window.visible && !window.hidden)
@@ -804,6 +810,7 @@ impl<'a> Startup<'a> {
             || self.random.try_handle(&mut self.machine)?
             || crate::math::try_handle(&mut self.machine)?
             || text::try_handle(&mut self.machine)?
+            || crate::effect_objects::try_handle(&mut self.machine)?
             || self
                 .audio
                 .try_handle(&mut self.machine, self.audio_backend.as_mut())?

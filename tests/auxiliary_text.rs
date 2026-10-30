@@ -1078,3 +1078,298 @@ fn inverted_motion_bounds_stop_even_when_sequential_clamping_restores_same_posit
     );
     assert_eq!(messages.auxiliary_text(0).unwrap().word(368), Some(0));
 }
+
+/// Text segment offsets: 0 is the empty font name, 1 the text under test.
+fn content_script(calls: &[(u16, &[u32])], text: &[u8]) -> Script {
+    let mut code = vec![];
+    for (op, args) in calls {
+        call(&mut code, *op, args);
+    }
+    let mut segment = b"\0".to_vec();
+    segment.extend(text);
+    segment.push(0);
+    script(&code, &segment)
+}
+fn run_calls(vm: &mut Machine<'_>, messages: &mut MessageHost, count: usize) {
+    for _ in 0..count {
+        run(vm, messages);
+    }
+}
+/// Group 7 with 24-pixel glyphs: area at (100, 50), 110 wide, glyph spacing 2, line spacing 6,
+/// so the wrap test fires once the pen reaches 210 - 26 = 184.
+const AREA: [(u16, &[u32]); 3] = [
+    (0x2380, &[7, 0, 24, 64]),
+    (0x2385, &[7, 100, 50, 110, 200]),
+    (0x2387, &[7, 0, 2, 6]),
+];
+/// あいうえ。か
+const KANA: &[u8] = b"\x82\xa0\x82\xa2\x82\xa4\x82\xa6\x81\x42\x82\xa9";
+
+#[test]
+fn text_layout_wraps_keeps_closing_marks_and_shifts_voiced_marks() {
+    // あいうえ。か \n ゛あ \c\w5 {漢/かん}
+    let mut text = KANA.to_vec();
+    text.extend(b"\\n\x81\x4a\x82\xa0\\c\\w5{\x8a\xbf/\x82\xa9\x82\xf1}");
+    let mut calls = AREA.to_vec();
+    calls.extend([
+        (0x2389, &[7, 0x123456, 0x654321][..]),
+        (0x238e, &[7, 2]),
+        (0x2393, &[7, 0x111111]),
+        (0x238b, &[7, 1]),
+    ]);
+    let script = content_script(&calls, &text);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run_calls(&mut vm, &mut messages, 6);
+    for i in 0..7 {
+        vm.state_mut().set_system_integer(i, 10 + i).unwrap();
+    }
+    // Text output follows the explicit recording policy of 0x2152.
+    pending(&mut vm);
+    assert!(!messages.try_handle(&mut vm).unwrap());
+    messages.set_record_output(true);
+    assert!(messages.try_handle(&mut vm).unwrap());
+    assert_eq!(vm.stack().len_bytes(), 0);
+    for i in 0..7 {
+        assert_eq!(vm.state().system_integer(i), Some(10 + i));
+    }
+    let group = messages.auxiliary_text(7).unwrap();
+    let placed: Vec<(u16, [i32; 2])> = group.glyphs.iter().map(|g| (g.code, g.position)).collect();
+    assert_eq!(
+        placed,
+        [
+            (0x82a0, [100, 50]),
+            (0x82a2, [126, 50]),
+            (0x82a4, [152, 50]),
+            (0x82a6, [178, 50]),
+            (0x8142, [204, 50]), // 。 stays on the full line
+            (0x82a9, [100, 80]),
+            (0x814a, [96, 110]), // ゛ a fifth of the size to the left
+            (0x82a0, [109, 110]),
+            (0x8abf, [135, 110]), // ruby base only
+        ]
+    );
+    for glyph in &group.glyphs {
+        assert_eq!(glyph.size, 24);
+        assert_eq!(glyph.colors, [0x123456, 0x654321]);
+        assert_eq!(glyph.gradient, 2);
+        assert_eq!(glyph.outline, [2, 0x111111]);
+        assert_eq!(glyph.cell, 0);
+    }
+    assert_eq!(group.attached_glyphs().count(), 0);
+    let x = ((100.0f32 + ((12.0f32 - 24.0 / 5.0) + 2.0)) + 26.0) + 26.0;
+    assert_eq!(group.word(176), Some(x.to_bits()));
+    assert_eq!(group.word(180), Some(110.0f32.to_bits()));
+}
+
+#[test]
+fn text_layout_errors_keep_the_group_pen_and_pending_command() {
+    let thirty_three = b"\x82\xa0".repeat(33);
+    for (layout, text) in [
+        (&[7, 100, 50, 110, 200][..], &b"\x82\xa0A"[..]), // uninitialized half-width advance
+        (&[7, 100, 50, 110, 200], b"\\x"),                // loops forever in the original
+        (&[7, 100, 50, 110, 200], b"\\"),
+        (&[7, 100, 50, 110, 200], b"\\w"),
+        (&[7, 100, 50, 110, 200], b"{\x8a\xbf/\x82\xa9"),
+        (&[7, 0, 0, 0, 0], &thirty_three), // every glyph wraps: 32 cleared line flags
+    ] {
+        let script = content_script(
+            &[
+                (0x2380, &[7, 0, 24, 64]),
+                (0x2385, layout),
+                (0x238b, &[7, 1]),
+            ],
+            text,
+        );
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        messages.set_record_output(true);
+        run_calls(&mut vm, &mut messages, 2);
+        let pen = messages.auxiliary_text(7).unwrap().word(176);
+        pending(&mut vm);
+        let sp = vm.stack().len_bytes();
+        assert!(messages.try_handle(&mut vm).is_err());
+        assert_eq!(vm.pending_system().map(|p| p.1), Some(0x38b));
+        assert_eq!(vm.stack().len_bytes(), sp);
+        let group = messages.auxiliary_text(7).unwrap();
+        assert!(group.glyphs.is_empty());
+        assert_eq!(group.word(176), pen);
+    }
+}
+
+#[test]
+fn measurement_counts_lines_and_byte_columns_from_the_pen() {
+    for (text, expected) in [
+        // あいうえ。 fit (。 stays), か wraps, \n starts line 3 with two half-width bytes.
+        ([KANA, b"\\nAB"].concat(), [3, 10, 2]),
+        // An unknown escape ends the measurement.
+        (b"\x82\xa0\\q\x82\xa2".to_vec(), [1, 2, 2]),
+        // Ruby base characters count, ruby text does not.
+        (b"{\x8a\xbf\x8a\xbf/xyz}".to_vec(), [1, 4, 4]),
+    ] {
+        let mut calls = AREA.to_vec();
+        calls.push((0x2390, &[7, 1]));
+        let script = content_script(&calls, &text);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run_calls(&mut vm, &mut messages, 3);
+        for i in 0..7 {
+            vm.state_mut().set_system_integer(i, 70 + i).unwrap();
+        }
+        run(&mut vm, &mut messages);
+        assert_eq!(vm.stack().len_bytes(), 0);
+        for (i, value) in [(0, expected[0]), (1, expected[1]), (4, expected[2])] {
+            assert_eq!(vm.state().system_integer(i), Some(value));
+        }
+        for i in [2, 3, 5, 6] {
+            assert_eq!(vm.state().system_integer(i), Some(70 + i));
+        }
+        let group = messages.auxiliary_text(7).unwrap();
+        assert!(group.glyphs.is_empty());
+        assert_eq!(group.word(176), Some(100.0f32.to_bits()));
+    }
+}
+
+#[test]
+fn pen_and_motion_stop_change_only_their_fields() {
+    let script = content_script(
+        &[
+            (0x2380, &[7, 0, 24, 64]),
+            (0x238c, &[7, (-5i32) as u32, 40]),
+            (
+                0x239a,
+                &[7, (-1000i32) as u32, 1000, (-1000i32) as u32, 1000],
+            ),
+            (0x239c, &[7, 100, 0, 100]),
+            (0x23a0, &[7]),
+        ],
+        b"",
+    );
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    let mut scene = cmvs_rs::scene::SceneHost::default();
+    run_calls(&mut vm, &mut messages, 2);
+    let group = messages.auxiliary_text(7).unwrap();
+    assert_eq!(group.word(176), Some((-5.0f32).to_bits()));
+    assert_eq!(group.word(180), Some(40.0f32.to_bits()));
+    run_calls(&mut vm, &mut messages, 2);
+    assert_eq!(messages.auxiliary_text(7).unwrap().word(368), Some(1));
+    run(&mut vm, &mut messages);
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(messages.auxiliary_text(7).unwrap().word(368), Some(0));
+    messages.advance_auxiliary_motion(50, &mut scene).unwrap();
+    assert_eq!(messages.auxiliary_text(7).unwrap().word(8), Some(0));
+}
+
+fn attached(messages: &MessageHost) -> Vec<(u16, u16, u32)> {
+    messages
+        .auxiliary_text(7)
+        .unwrap()
+        .attached_glyphs()
+        .map(|g| (g.code, g.cell, g.layer))
+        .collect()
+}
+
+#[test]
+fn glyphs_attach_inside_the_bounds_and_cells_leak_after_a_clear() {
+    let up: &[u32] = &[7, 0, (-40i32) as u32];
+    let up2: &[u32] = &[7, 0, (-80i32) as u32];
+    let mut calls = AREA.to_vec();
+    calls.extend([
+        (0x2396, &[7, 0, 0, 300, 60][..]),
+        (0x238f, &[7, 9]),
+        (0x238b, &[7, 1]),
+        (0x238f, &[7, 3]),
+        (0x2383, up),
+        (0x2383, up2),
+        (0x2386, &[7]),
+        (0x2383, &[7, 0, 0]),
+        (0x238b, &[7, 1]),
+        (0x2383, up),
+    ]);
+    let script = content_script(&calls, KANA);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    messages.set_record_output(true);
+    let mut scene = cmvs_rs::scene::SceneHost::default();
+    let mut frame = |messages: &mut MessageHost| {
+        messages.advance_auxiliary_motion(16, &mut scene).unwrap();
+        attached(messages)
+    };
+    run_calls(&mut vm, &mut messages, 6);
+    // Line 0 (y 50) is inside; line 1 (y 80, padded top 78) lies below the bottom 60.
+    let line0: Vec<(u16, u16, u32)> = [0x82a0, 0x82a2, 0x82a4, 0x82a6, 0x8142]
+        .into_iter()
+        .zip(1..)
+        .map(|(code, cell)| (code, cell, 9))
+        .collect();
+    assert_eq!(frame(&mut messages), line0);
+    // Attached glyphs keep the layer they were attached with.
+    run_calls(&mut vm, &mut messages, 2);
+    let mut both = line0.clone();
+    both.push((0x82a9, 6, 3));
+    assert_eq!(frame(&mut messages), both);
+    // At y -80 line 0 ends above the top (padded bottom -4) and releases its cells.
+    run(&mut vm, &mut messages);
+    assert_eq!(frame(&mut messages), [(0x82a9, 6, 3)]);
+    // 0x2386 drops the records but not cell 6.
+    run_calls(&mut vm, &mut messages, 3);
+    let group = messages.auxiliary_text(7).unwrap();
+    assert_eq!(group.glyphs.len(), 6);
+    assert_eq!(group.word(176), Some(126.0f32.to_bits()));
+    let line0: Vec<_> = line0
+        .iter()
+        .map(|&(code, cell, _)| (code, cell, 3))
+        .collect();
+    assert_eq!(frame(&mut messages), line0);
+    run(&mut vm, &mut messages);
+    let mut both = line0;
+    both.push((0x82a9, 7, 3));
+    assert_eq!(frame(&mut messages), both);
+}
+
+#[test]
+fn exhausted_cells_leave_glyphs_detached_and_cells_must_fit_the_atlas() {
+    let page = (0x2385, &[7, 0, 0, 1280, 720][..]);
+    // 4-pixel glyphs: 1024-pixel pages hold 10404 cells, so the 1023-cell table runs out.
+    let script = content_script(
+        &[(0x2380, &[7, 0, 4, 0]), page, (0x238b, &[7, 1])],
+        &b"\x82\xa0".repeat(1100),
+    );
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    messages.set_record_output(true);
+    let mut scene = cmvs_rs::scene::SceneHost::default();
+    run_calls(&mut vm, &mut messages, 3);
+    for _ in 0..2 {
+        messages.advance_auxiliary_motion(16, &mut scene).unwrap();
+        let group = messages.auxiliary_text(7).unwrap();
+        assert_eq!(group.glyphs.len(), 1100);
+        assert_eq!(group.attached_glyphs().count(), 1023);
+        assert!(group.glyphs[1023..].iter().all(|g| g.cell == 0));
+    }
+    // 24-pixel glyphs in a 64-glyph atlas: one 512-pixel page of 289 cells; and a glyph
+    // size changed after creation no longer matches the atlas cells.
+    for (calls, glyphs) in [
+        (
+            vec![(0x2380, &[7, 0, 24, 64][..]), page, (0x238b, &[7, 1])],
+            290,
+        ),
+        (
+            vec![
+                (0x2380, &[7, 0, 24, 64][..]),
+                page,
+                (0x2387, &[7, 30, u32::MAX, u32::MAX]),
+                (0x238b, &[7, 1]),
+            ],
+            1,
+        ),
+    ] {
+        let script = content_script(&calls, &b"\x82\xa0".repeat(glyphs));
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        messages.set_record_output(true);
+        run_calls(&mut vm, &mut messages, calls.len());
+        assert!(messages.advance_auxiliary_motion(16, &mut scene).is_err());
+    }
+}

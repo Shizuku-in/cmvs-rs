@@ -61,8 +61,9 @@ impl MessageHost {
         Ok(true)
     }
 
-    /// Auxiliary objects update after ordinary scene/window objects. The wrapping
-    /// millisecond clock advances once per frame, independently of VM query retries.
+    /// Auxiliary objects update after ordinary scene/window objects: the motion, then the
+    /// glyphs at the new position. The wrapping millisecond clock advances once per frame,
+    /// independently of VM query retries.
     pub fn advance_auxiliary_motion(
         &mut self,
         delta: u32,
@@ -134,6 +135,9 @@ impl MessageHost {
                     .expect("validated");
                 draw.words[8..10].copy_from_slice(&group.position());
             }
+        }
+        for group in self.auxiliary_texts.iter_mut().flatten() {
+            group.attach_glyphs()?;
         }
         Ok(())
     }

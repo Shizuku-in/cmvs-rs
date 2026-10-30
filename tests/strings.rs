@@ -214,6 +214,43 @@ fn strlen_0x20f8_reports_resolved_byte_length() {
     assert_eq!(vm.state().system_integer(0), Some(0));
 }
 
+#[test]
+fn compare_0x20f1_folds_ascii_letters_and_matches_shift_jis_pairs_exactly() {
+    // Offsets: abc 0, ABC 4, abd 8, ab 12, あ 15, lead+a 18, lead+A 21, empty 24, lead 25.
+    let text = b"abc\0ABC\0abd\0ab\0\x82\xa0\0\x82a\0\x82A\0\0\x82\0";
+    let cases = [
+        (0, 4, 1),
+        (4, 0, 1),
+        (0, 8, 0),
+        (12, 0, 0),
+        (0, 12, 0),
+        (15, 15, 1),
+        (18, 21, 0), // the byte after a lead byte is not folded
+        (24, 24, 1),
+    ];
+    let mut code = vec![];
+    for (first, second, _) in cases.iter().copied().chain([(25, 25, 0)]) {
+        push(&mut code, second);
+        push(&mut code, first);
+        word(&mut code, 0x20f1);
+    }
+    let script = script(&code, &[0], text);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_system_integer(1, 9).unwrap();
+    for (_, _, expected) in cases {
+        run_to_system(&mut vm);
+        assert!(cmvs_rs::text::try_handle(&mut vm).unwrap());
+        assert_eq!(vm.state().system_integer(0), Some(expected));
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
+    assert_eq!(vm.state().system_integer(1), Some(9));
+    // A matching trailing lead byte walks past the first string's terminator.
+    run_to_system(&mut vm);
+    assert!(cmvs_rs::text::try_handle(&mut vm).is_err());
+    assert_eq!(vm.pending_system().map(|p| p.1), Some(0xf1));
+    assert_eq!(vm.stack().len_bytes(), 8);
+}
+
 fn push(code: &mut Vec<u8>, raw: u32) {
     word(code, 0x440);
     word(code, 4);

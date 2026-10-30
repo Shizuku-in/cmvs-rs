@@ -5,6 +5,7 @@ use cmvs_rs::{
     buttons::ButtonHost,
     camera::CameraHost,
     cpz::Cpz6Index,
+    effect_objects,
     fade::SkipGate,
     gesture::PointerGesture,
     history::HistoryHost,
@@ -361,6 +362,10 @@ fn run() -> Result<(), Box<dyn Error>> {
                         command + 0x2000,
                         machine.state().system_integer(0)
                     );
+                    continue;
+                }
+                if effect_objects::try_handle(&mut machine)? {
+                    println!("# effect object release 0x22a0: no +4024 object is modeled");
                     continue;
                 }
                 if audio.try_handle(&mut machine, &mut audio_backend)? {
