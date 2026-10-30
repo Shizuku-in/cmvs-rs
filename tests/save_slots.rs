@@ -432,6 +432,7 @@ struct Ui<'a, 'b> {
     commands: Vec<u16>,
     /// Voice files 0x20a6 played (SP-8) since the last check.
     voices: Vec<Vec<u8>>,
+    voice_fades: Vec<(u32, u32)>,
     /// Set when a load completes; frames do nothing until the test has checked the hosts.
     frozen: bool,
 }
@@ -462,6 +463,7 @@ fn external_system_settings_entries_render_and_return() {
         codes: CodeInput::default(),
         commands: Vec::new(),
         voices: Vec::new(),
+        voice_fades: Vec::new(),
         frozen: false,
     };
     for _ in 0..30_000 {
@@ -489,6 +491,12 @@ fn external_system_settings_entries_render_and_return() {
     assert_eq!(group.buttons.len(), 292);
     assert!(ui.run.messages().window(6).is_some());
     let initial_audio = ui.run.audio().settings();
+    for (mode, x) in [1008, 1112, 1216].into_iter().enumerate() {
+        ui.click([x, 173], 30);
+        assert_eq!(ui.run.message_flags().mode_1548(), mode as u32);
+        font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+            .unwrap();
+    }
     for (x, expected) in [(174, false), (278, true)] {
         ui.click([x, 239], 30);
         assert_eq!(ui.run.settings().read_skip(), expected);
@@ -636,6 +644,7 @@ fn external_system_settings_entries_render_and_return() {
     ui.wait_for_text();
     assert!(ui.run.buttons().group(1).is_none());
     let before_auto = ui.run.history().entries().len();
+    ui.voice_fades.clear();
     ui.click(ui.toolbar(5), 0);
     assert!(ui.run.message_flags().auto_advance());
     let mut auto_frames = 0;
@@ -649,6 +658,11 @@ fn external_system_settings_entries_render_and_return() {
         }
     }
     assert!(ui.run.history().entries().len() >= before_auto + 3);
+    assert!(
+        !ui.voice_fades.is_empty(),
+        "fade-out stop mode must execute voice fades"
+    );
+    assert!(ui.voice_fades.iter().all(|&(channel, _)| channel < 4));
     ui.click(ui.toolbar(5), 0);
     assert!(!ui.run.message_flags().auto_advance());
     ui.wait_for_text();
@@ -661,7 +675,8 @@ fn external_system_settings_entries_render_and_return() {
     assert_eq!(ui.run.history().entries().len(), stopped);
     assert!(ui.waiting_for_text());
     println!(
-        "settings: title + toolbar; read-skip policy, text outline/speed, audio and auto sliders, resets, three pages, 415 settings frames; auto advanced three entries in {auto_frames} rendered frames; disabled then idle 240 rendered frames"
+        "settings: title + toolbar; voice stop modes, read-skip policy, text/audio/auto settings, three pages, 418 settings frames; auto advanced three entries in {auto_frames} rendered frames with {} voice fades; disabled then idle 240 rendered frames",
+        ui.voice_fades.len()
     );
 }
 
@@ -682,6 +697,16 @@ impl Ui<'_, '_> {
                 .then(|| self.run.machine().stack().peek_u32(8).ok())
                 .flatten()
                 .and_then(|raw| self.run.machine().resolve_string(raw).ok());
+            let voice_fade = (opcode == Some(0x20a9))
+                .then(|| {
+                    self.run
+                        .machine()
+                        .stack()
+                        .peek_u32(4)
+                        .ok()
+                        .zip(self.run.machine().stack().peek_u32(8).ok())
+                })
+                .flatten();
             let event = self.run.tick(&mut self.backend).unwrap_or_else(|e| {
                 panic!(
                     "{e} at {} / 0x{pc:x}",
@@ -701,6 +726,11 @@ impl Ui<'_, '_> {
                 && self.run.machine().pending_system().is_none()
             {
                 self.voices.push(name);
+            }
+            if let Some(fade) = voice_fade
+                && self.run.machine().pending_system().is_none()
+            {
+                self.voice_fades.push(fade);
             }
             match event {
                 StartupEvent::Yield => break,
@@ -781,6 +811,7 @@ fn external_in_game_menus_save_and_load() {
         codes: CodeInput::default(),
         commands: Vec::new(),
         voices: Vec::new(),
+        voice_fades: Vec::new(),
         frozen: false,
     };
     // Title menu idle, then the first slot, as in the auto-resume test.
@@ -912,6 +943,7 @@ fn external_backlog_scrolls_replays_voices_and_jumps_back() {
         codes: CodeInput::default(),
         commands: Vec::new(),
         voices: Vec::new(),
+        voice_fades: Vec::new(),
         frozen: false,
     };
     while !(ui.run.machine().current_name() == b"menu.ps3" && ui.run.steps() > 200_000) {

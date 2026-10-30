@@ -14,6 +14,13 @@ pub struct MessageFlags {
     bypass: bool,
 }
 impl MessageFlags {
+    pub fn from_ini(bytes: &[u8]) -> Self {
+        Self {
+            mode_1548: crate::save_menu::profile_int(bytes, "MESSAGE_INFO", "VOICE_CUT_MODE", 0)
+                as u32,
+            ..Self::default()
+        }
+    }
     /// 0x140076700/76880: READ_SKIP clears script skip upon reaching an unread ID.
     /// Return a candidate so a failed message command does not change global flags.
     pub fn prepare_read(
@@ -49,7 +56,8 @@ impl MessageFlags {
         self.bypass
     }
     /// +1548: raw setting read/written by 0x22d0. Normally 0..2, but the original
-    /// wrapping abs of i32::MIN produces -2 after signed remainder. UI meaning unverified.
+    /// wrapping abs of i32::MIN produces -2 after signed remainder. VOICE_CUT_MODE;
+    /// the game scripts query it to choose text-send, next-voice or fade-out behavior.
     pub fn mode_1548(&self) -> u32 {
         self.mode_1548
     }

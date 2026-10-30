@@ -133,6 +133,11 @@ pub enum AudioRequest {
     StopVoice {
         channel: u8,
     },
+    /// 0x20a9: fade device channel +5 out, releasing it at the end.
+    FadeOutVoice {
+        channel: u8,
+        fade_ms: u32,
+    },
     /// 0x20a6: 0x140088390 on device channel `channel + 5` from the 0x2014 roots, without
     /// loop, fade-in or fallback root; it releases the channel first and starts the sound
     /// when `start` is set.
@@ -241,6 +246,10 @@ pub trait AudioBackend {
     fn stop_voice(&mut self, _channel: u8) -> Result<(), Box<dyn Error>> {
         Err("audio backend does not implement stopping a voice channel".into())
     }
+    /// An empty or already fading voice is unchanged. Err preserves the device.
+    fn fade_out_voice(&mut self, _channel: u8, _fade_ms: u32) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement voice fade-out".into())
+    }
     /// Apply a PlayVoice request: Ok(true) when the sound loaded, Ok(false) when it did not
     /// (the channel is released either way). Err leaves the device unchanged for retry.
     fn play_voice(&mut self, _request: &AudioRequest) -> Result<bool, Box<dyn Error>> {
@@ -301,6 +310,9 @@ impl RecordingAudio {
     }
 }
 impl AudioBackend for RecordingAudio {
+    fn fade_out_voice(&mut self, channel: u8, fade_ms: u32) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::FadeOutVoice { channel, fade_ms })
+    }
     fn configure_voice_ducking(
         &mut self,
         settings: VoiceDuckingSettings,
@@ -471,6 +483,7 @@ impl AudioHost {
             }
             Some((_, 0x2d6..=0x2dd)) => return self.try_settings_query(vm, backend),
             Some((_, 0xa8)) => return self.try_voice_stop(vm, backend),
+            Some((_, 0xa9)) => return self.try_voice_fade_out(vm, backend),
             Some((_, 0xa6)) => return self.try_voice_play(vm, backend),
             Some((_, 0xb1)) => return self.try_start(vm, backend),
             Some((_, 0xb3)) => return self.try_stop(vm, backend),
@@ -698,6 +711,28 @@ impl AudioHost {
             _ => unreachable!(),
         }
         Ok(())
+    }
+
+    /// 0x20a9 / 0x140070740: SP-4 voice channel, SP-8 duration; no enable flag gate.
+    fn try_voice_fade_out(
+        &mut self,
+        vm: &mut Machine<'_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<bool, Box<dyn Error>> {
+        let (pc, _) = vm.pending_system().expect("checked pending command");
+        let channel = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x20a9, e.0))?;
+        let fade_ms = vm.stack().peek_u32(8).map_err(|e| error(pc, 0x20a9, e.0))?;
+        if channel as usize >= VOICE_CHANNELS {
+            return Err(error(
+                pc,
+                0x20a9,
+                "voice channel outside 0..3 sets an unmodeled flag",
+            )
+            .into());
+        }
+        backend.fade_out_voice(channel as u8, fade_ms)?;
+        vm.complete_system(SystemResult(0x4008))?;
+        Ok(true)
     }
 
     /// 0x20a8 / 0x140070650: SP-4 voice channel, device +5; no enable flag gate.

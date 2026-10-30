@@ -275,6 +275,37 @@ fn native_device_smoke() -> Result<(), Box<dyn std::error::Error>> {
     }
     assert_eq!(audio.voice_position(0)?, None);
     assert_eq!(audio.bgm_gain(0)?, Some(16.0 / 256.0));
+    println!("# smoke: fading voice ducking flag and fade completion");
+    for include_fading in [false, true] {
+        audio.configure_voice_ducking(VoiceDuckingSettings {
+            percent: 50,
+            fade_ms: 40,
+            wait_ms: 30,
+            include_fading,
+        })?;
+        audio.update()?;
+        assert!(audio.play_voice(&AudioRequest::PlayVoice {
+            channel: 0,
+            name: b"voice.ogg".to_vec(),
+            volume: 16,
+            start: true
+        })?);
+        pump(&mut audio)?;
+        assert_eq!(audio.bgm_gain(0)?, Some(16.0 / 256.0 * 0.5));
+        audio.fade_out_voice(0, 200)?;
+        for _ in 0..15 {
+            thread::sleep(Duration::from_millis(10));
+            audio.update()?;
+        }
+        assert!(audio.voice_position(0)?.is_some());
+        assert_eq!(
+            audio.bgm_gain(0)?,
+            Some(16.0 / 256.0 * if include_fading { 0.5 } else { 1.0 })
+        );
+        pump(&mut audio)?;
+        assert_eq!(audio.voice_position(0)?, None);
+        assert_eq!(audio.bgm_gain(0)?, Some(16.0 / 256.0));
+    }
     println!("# smoke: switch BGM channels, then fade and stop");
     audio.play_bgm(&AudioRequest::PlayBgm {
         channel: 1,

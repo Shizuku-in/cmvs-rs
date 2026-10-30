@@ -46,6 +46,19 @@ fn pending(vm: &mut Machine<'_>) {
 }
 
 #[test]
+fn startup_voice_cut_mode_keeps_raw_ini_values_without_enabling_skip_or_auto() {
+    for (ini, expected) in [
+        (&b""[..], 0),
+        (&b"[MESSAGE_INFO]\nVOICE_CUT_MODE=2\n"[..], 2),
+        (&b"[MESSAGE_INFO]\nVOICE_CUT_MODE=-1\n"[..], u32::MAX),
+    ] {
+        let flags = MessageFlags::from_ini(ini);
+        assert_eq!(flags.mode_1548(), expected);
+        assert!(!flags.skip() && !flags.auto_advance() && !flags.bypass());
+    }
+}
+
+#[test]
 fn mode_1548_preserves_signed_abs_remainder_including_minimum_integer() {
     let cases = [
         (0, 0),

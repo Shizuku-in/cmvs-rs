@@ -7,6 +7,63 @@ use cmvs_rs::{
 };
 use std::error::Error;
 
+#[test]
+fn voice_fade_out_keeps_duration_results_and_works_with_voice_disabled() {
+    for channel in 0..4 {
+        for duration in [0, 300, u32::MAX] {
+            let mut code = vec![];
+            push(&mut code, duration);
+            push(&mut code, channel);
+            code.extend(0x20a9u16.to_le_bytes());
+            let script = program(&code, b"");
+            let mut vm = Machine::new(&script).unwrap();
+            let mut host = AudioHost::new(AudioSettings {
+                voice_enabled: false,
+                ..Default::default()
+            });
+            let mut backend = RecordingAudio::default();
+            vm.state_mut().set_system_integer(0, 77).unwrap();
+            pending(&mut vm);
+            assert!(host.try_handle(&mut vm, &mut backend).unwrap());
+            assert_eq!(
+                backend.requests(),
+                &[AudioRequest::FadeOutVoice {
+                    channel: channel as u8,
+                    fade_ms: duration
+                }]
+            );
+            assert_eq!(vm.state().system_integer(0), Some(77));
+            assert_eq!(vm.stack().len_bytes(), 0);
+        }
+    }
+}
+
+#[test]
+fn invalid_voice_fade_or_backend_failure_keeps_command_pending() {
+    for args in [
+        vec![],
+        vec![0],
+        vec![20, 4],
+        vec![20, u32::MAX],
+        vec![20, 0],
+    ] {
+        let mut code = vec![];
+        for value in &args {
+            push(&mut code, *value);
+        }
+        code.extend(0x20a9u16.to_le_bytes());
+        let script = program(&code, b"");
+        let mut vm = Machine::new(&script).unwrap();
+        let mut host = AudioHost::default();
+        pending(&mut vm);
+        let pc = vm.pc();
+        assert!(host.try_handle(&mut vm, &mut Started).is_err());
+        assert_eq!(vm.pc(), pc);
+        assert_eq!(vm.stack().len_bytes(), args.len() * 4);
+        assert!(vm.pending_system().is_some());
+    }
+}
+
 fn push(code: &mut Vec<u8>, value: u32) {
     code.extend(0x440u16.to_le_bytes());
     code.extend(4u16.to_le_bytes());

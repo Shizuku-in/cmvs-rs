@@ -166,10 +166,12 @@ impl<'a> Startup<'a> {
         let mut save_menu = SaveMenuHost::default();
         let audio;
         let settings;
+        let message_flags;
         match std::fs::read(root.join("cmvs.cfg")) {
             Ok(text) => {
                 audio = AudioHost::from_ini(&text);
                 settings = crate::settings::SettingsHost::from_ini(&text);
+                message_flags = MessageFlags::from_ini(&text);
                 save_menu.set_confirmations(
                     crate::save_menu::profile_int(&text, "SYSTEM_INFO", "DLG_LOAD", 0) != 0,
                     crate::save_menu::profile_int(&text, "SYSTEM_INFO", "DLG_SAVE", 0) != 0,
@@ -178,6 +180,7 @@ impl<'a> Startup<'a> {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 audio = AudioHost::from_ini(&[]);
                 settings = crate::settings::SettingsHost::from_ini(&[]);
+                message_flags = MessageFlags::from_ini(&[]);
             }
             Err(e) => return Err(e.into()),
         }
@@ -214,7 +217,7 @@ impl<'a> Startup<'a> {
             save_title: SaveTitle::default(),
             save_info: SaveInfo::default(),
             gesture: PointerGesture::default(),
-            message_flags: MessageFlags::default(),
+            message_flags,
             settings,
             messages: MessageHost::default(),
             history: HistoryHost::default(),
