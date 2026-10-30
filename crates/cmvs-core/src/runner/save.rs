@@ -141,11 +141,8 @@ impl Startup<'_> {
         self.thumbnail.as_deref()
     }
 
-    /// The engine snapshot writer 0x140069270 over the Rust hosts. Fails, leaving the old
-    /// image, when live state has no record format here.
-    fn engine_snapshot(&self) -> Result<(EngineSnapshot, Vec<u8>), Box<dyn Error>> {
-        self.engine_snapshot_with(self.machine.capture_vm()?)
-    }
+    /// The engine snapshot writer 0x140069270 over the Rust hosts, with `vm` as the writer
+    /// sees it. Fails when live state has no record format here.
     fn engine_snapshot_with(
         &self,
         vm: crate::machine::VmImage,
@@ -254,14 +251,20 @@ impl Startup<'_> {
         Ok(header)
     }
 
-    /// 0x2080 / 0x22b2 capture after the caller applied the live-state effects.
-    pub(super) fn capture_snapshot(&mut self) -> Result<(), Box<dyn Error>> {
-        let (snapshot, script_image) = self.engine_snapshot()?;
+    /// 0x2080 / 0x22b2: the image is built before any live change, so a state without a
+    /// record format leaves the VM, bit 0 and the held image as they were.
+    pub(super) fn capture_snapshot(
+        &mut self,
+        vm: crate::machine::VmImage,
+    ) -> Result<(), Box<dyn Error>> {
+        let (snapshot, script_image) = self.engine_snapshot_with(vm)?;
         let bytes = snapshot.encode()?;
         if bytes.len() > crate::snapshot::MAX_SNAPSHOT {
             return Err("snapshot exceeds the original 3 MiB buffer".into());
         }
         let header = self.snapshot_header()?;
+        // 0x140069270 sets bit 0 only for the copy; the live bit ends clear.
+        self.machine.state_mut().set_bit(0, false)?;
         self.save_image = SaveImage::Captured(Box::new(CapturedSave {
             header,
             snapshot: bytes,
@@ -467,6 +470,7 @@ impl Startup<'_> {
         camera_host.restore(1, &snapshot.cameras[1])?;
         let mut control = self.control.clone();
         control.restore_callbacks(&snapshot.callbacks)?;
+        self.platform.restored_title(&snapshot.scene_title)?;
         // The local banks are validated against a copy before the VM changes.
         snapshot
             .variables

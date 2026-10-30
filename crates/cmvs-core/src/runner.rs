@@ -648,9 +648,16 @@ impl<'a> Startup<'a> {
                         return Ok(StartupEvent::MainEnteredWithoutSnapshot);
                     }
                     SnapshotPolicy::Capture => {
-                        // 0x140069270 sets bit 0 only for the copy; the live bit ends clear.
-                        self.machine.state_mut().set_bit(0, false)?;
-                        self.capture_snapshot()?;
+                        // Main is already loaded; a failed capture keeps the barrier sticky
+                        // instead of running main without an image.
+                        let captured = match self.machine.capture_vm() {
+                            Ok(vm) => self.capture_snapshot(vm),
+                            Err(why) => Err(why.into()),
+                        };
+                        if let Err(why) = captured {
+                            self.main_barrier = true;
+                            return Err(why);
+                        }
                         return Ok(StartupEvent::SnapshotCaptured);
                     }
                 }
@@ -661,14 +668,16 @@ impl<'a> Startup<'a> {
             && let Some((pc, 0x2b2)) = self.machine.pending_system()
         {
             // 0x14007c9a0 serializes with PC + 2 and repeat 0, which completing the
-            // no-argument command produces; the live bit 0 ends clear.
-            self.machine
-                .state_mut()
-                .set_bit(0, false)
+            // no-argument command then produces; a failed capture keeps it pending.
+            let mut vm = self
+                .machine
+                .capture_vm()
                 .map_err(|why| crate::evaluate::error(pc, 0x22b2, why))?;
+            vm.pc = pc as u32 + 2;
+            vm.repeat_count = 0;
+            self.capture_snapshot(vm)?;
             self.machine
                 .complete_system(crate::vm::SystemResult(0x4000))?;
-            self.capture_snapshot()?;
             return Ok(StartupEvent::SnapshotCaptured);
         }
         if self.try_load_slot(backend)? {

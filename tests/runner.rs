@@ -849,3 +849,147 @@ fn auto_resume_policy_keeps_missing_and_invalid_system_saves_distinct_and_retrya
     assert_eq!(run.machine().state().integer(2198), Some(0));
     assert!(run.auto_resume_skipped());
 }
+
+/// Pushes `args` so that `args[0]` lies at SP-4, then issues `op`.
+fn system_call(code: &mut Vec<u8>, op: u16, args: &[u32]) {
+    for value in args.iter().rev() {
+        code.extend(0x440u16.to_le_bytes());
+        code.extend(4u16.to_le_bytes());
+        code.extend(value.to_le_bytes());
+    }
+    code.extend(op.to_le_bytes());
+}
+
+#[test]
+fn scenario_snapshot_failure_keeps_the_command_vm_and_image_unchanged() {
+    let mut code = vec![];
+    // A 100 ms full-screen fade, then the scenario snapshot while it runs.
+    system_call(&mut code, 0x2220, &[1, 0, 100, 9]);
+    let snapshot_pc = code.len();
+    code.extend(0x22b2u16.to_le_bytes());
+    code.extend(0x27ffu16.to_le_bytes());
+    let root = Root::new("snapshot-failure", &code, b"");
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut backend = RecordingBackend::default();
+    let error = loop {
+        match run.tick(&mut backend) {
+            Ok(StartupEvent::Progress) => {}
+            Ok(event) => panic!("unexpected {event:?}"),
+            Err(error) => break error,
+        }
+    };
+    assert!(error.to_string().contains("fade"), "{error}");
+    for _ in 0..2 {
+        assert_eq!(run.machine().pending_system(), Some((snapshot_pc, 0x2b2)));
+        assert_eq!(run.machine().pc(), snapshot_pc);
+        assert_eq!(run.machine().state().bit(0), None);
+        assert_eq!(*run.save_image(), SaveImage::Absent);
+        assert!(run.tick(&mut backend).is_err());
+    }
+    // Once the fade ends the same command builds the image and advances.
+    run.advance_frame(100).unwrap();
+    assert_eq!(
+        run.tick(&mut backend).unwrap(),
+        StartupEvent::SnapshotCaptured
+    );
+    assert_eq!(run.machine().pc(), snapshot_pc + 2);
+    assert_eq!(run.machine().state().bit(0), Some(false));
+    assert!(matches!(run.save_image(), SaveImage::Captured(_)));
+}
+
+#[test]
+fn scenario_snapshot_writes_a_slot_that_loads_back_with_backups() {
+    use cmvs_rs::{save::Csv2Save, snapshot::EngineSnapshot};
+    // A load sets the window title from the base title 0x2160 gives.
+    let mut code = string_call(0x2160);
+    system_call(&mut code, 0x201d, &[0x12345678]);
+    system_call(&mut code, 0x2128, &[]);
+    system_call(&mut code, 0x2092, &[5, 1, 42]);
+    let snapshot_pc = code.len();
+    code.extend(0x22b2u16.to_le_bytes());
+    system_call(&mut code, 0x2092, &[5, 1, 7]);
+    system_call(&mut code, 0x22b6, &[3]);
+    let end = code.len();
+    code.extend(0x27ffu16.to_le_bytes());
+    let root = Root::new("snapshot-slots", &code, b"Synthetic ");
+    fs::write(root.0.join("save/system.dat"), auto_resume_save(0x12345678)).unwrap();
+    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("cmvs-runner-slots-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&directory);
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    run.set_user_data_directory(&directory).unwrap();
+    let mut backend = RecordingBackend::default();
+    let run_to_end = |run: &mut Startup<'_>, backend: &mut RecordingBackend| {
+        let mut captured = 0;
+        loop {
+            match run.tick(backend).unwrap() {
+                StartupEvent::Progress => {}
+                StartupEvent::SnapshotCaptured => captured += 1,
+                StartupEvent::Unhandled { pc, command } => {
+                    assert_eq!((pc, command), (end, 0x27ff));
+                    return captured;
+                }
+                event => panic!("unexpected {event:?}"),
+            }
+        }
+    };
+    assert_eq!(run_to_end(&mut run, &mut backend), 1);
+    assert_eq!(run.machine().state().integer(5), Some(7));
+    assert_eq!(run.machine().state().bit(0), Some(false));
+    let slot = directory.join("save003.dat");
+    let first = fs::read(&slot).unwrap();
+    let save = Csv2Save::decode(&first).unwrap();
+    assert_eq!(&first[16..36], b"2000-01-01 00:00:00 ");
+    let snapshot = EngineSnapshot::decode(&save.snapshot).unwrap();
+    assert_eq!(
+        (snapshot.active_slot, snapshot.pc, snapshot.repeat_count),
+        (0, snapshot_pc as u32 + 2, 0)
+    );
+    assert_eq!(snapshot.variables.integers()[5], 42);
+    assert_eq!(snapshot.variables.packed_bits()[0] & 1, 1);
+    assert!(directory.join("system.dat").exists());
+    assert!(!directory.join("save998.dat").exists());
+    assert!(!directory.join("save999.dat").exists());
+
+    // Loading slot 3 first keeps the held image as slot 998, then resumes after 0x22b2
+    // with the captured locals, bit 0 included.
+    run.load_slot(3, &mut backend).unwrap();
+    assert_eq!(
+        backend.requests().last(),
+        Some(&PlatformRequest::Title(b"Synthetic\x81\x40".to_vec()))
+    );
+    assert!(directory.join("save998.dat").exists());
+    assert_eq!(run.machine().pc(), snapshot_pc + 2);
+    assert_eq!(run.machine().state().integer(5), Some(42));
+    assert_eq!(run.machine().state().bit(0), Some(true));
+    // Saving over slot 3 again moves the previous version to slot 999.
+    assert_eq!(run_to_end(&mut run, &mut backend), 0);
+    assert_eq!(fs::read(directory.join("save999.dat")).unwrap(), first);
+    assert_eq!(fs::read(&slot).unwrap(), first);
+    assert!(run.load_slot(4, &mut backend).is_err());
+    assert!(run.save_slot(1000).is_err());
+    drop(run);
+    fs::remove_dir_all(&directory).unwrap();
+}
+
+#[test]
+fn gameplay_saves_need_an_independent_user_directory() {
+    let mut code = vec![];
+    code.extend(0x22b2u16.to_le_bytes());
+    code.extend(0x27ffu16.to_le_bytes());
+    let root = Root::new("snapshot-no-directory", &code, b"");
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut backend = RecordingBackend::default();
+    // Nothing to write before the first snapshot, as in the original.
+    assert!(!run.save_slot(0).unwrap());
+    assert_eq!(
+        run.tick(&mut backend).unwrap(),
+        StartupEvent::SnapshotCaptured
+    );
+    let error = run.save_slot(0).unwrap_err();
+    assert!(error.to_string().contains("--user-data-dir"), "{error}");
+    assert!(!root.0.join("save/save000.dat").exists());
+}
