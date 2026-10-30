@@ -102,6 +102,7 @@ impl ScreenCapture {
             name: Vec::new(),
             pixels: self.image.take().expect("checked above"),
             alpha: false,
+            surface: false,
         });
         *self = Self::default();
         vm.state_mut()

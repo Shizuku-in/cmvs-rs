@@ -104,6 +104,7 @@ fn common_image(old: &ObjectImage, new: &ObjectImage) -> Result<ObjectImage, Box
         name: Vec::new(),
         pixels: RgbaImage::new(width, height, pixels)?,
         alpha: true,
+        surface: false,
     })
 }
 
@@ -358,6 +359,7 @@ mod tests {
             name: b"synthetic".to_vec(),
             pixels: RgbaImage::new(width, height, pixels).unwrap(),
             alpha: true,
+            surface: false,
         }
     }
 

@@ -359,6 +359,53 @@ impl ImageSource for Tiny {
     }
 }
 
+/// Kind 3 (0x140034f60): no file names, size 2x3, alpha flag at +36.
+fn surface(alpha: u32) -> Vec<u8> {
+    let mut b = Vec::new();
+    for n in [3u32, 0, 0, 3, 0, 0, 0, 0, 0, alpha] {
+        b.extend(n.to_le_bytes());
+    }
+    b.extend([0, 0]);
+    for n in [0u32, 2, 3] {
+        b.extend(n.to_le_bytes());
+    }
+    b
+}
+
+#[test]
+fn surface_images_rebuild_blank_without_reading_resources() {
+    for alpha in [0, 1] {
+        let mut b = base();
+        record(&mut b, 0x700, 0, &scene(None, Some(&surface(alpha)), &[]));
+        let visual = VisualSnapshot::decode_records(&b).unwrap();
+        let saved = visual.objects()[&0].image.as_ref().unwrap();
+        assert_eq!(
+            (saved.surface, saved.name.as_slice()),
+            (Some(alpha == 1), &b""[..])
+        );
+        let p = visual.preview(&mut Empty).unwrap();
+        let i = p.scene.object(0).unwrap().image.as_ref().unwrap();
+        assert!(i.surface);
+        assert_eq!(i.alpha, alpha == 1);
+        assert_eq!([i.pixels.width(), i.pixels.height()], [2, 3]);
+        assert!(i.pixels.pixels().iter().all(|&v| v == 0));
+    }
+    // A surface has no file name, filter or second flag value; a file needs a name.
+    let mut named = surface(0);
+    named.splice(40..40, *b"x.pb3");
+    let mut filtered = surface(0);
+    put(&mut filtered, 20, 1);
+    let mut flag = surface(2);
+    put(&mut flag, 36, 2);
+    let mut unnamed_file = surface(0);
+    put(&mut unnamed_file, 12, 0);
+    for body in [named, filtered, flag, unnamed_file] {
+        let mut b = base();
+        record(&mut b, 0x700, 0, &scene(None, Some(&body), &[]));
+        assert!(VisualSnapshot::decode_records(&b).is_err());
+    }
+}
+
 #[test]
 fn resources_use_existing_decoder_filter_and_dimension_checks() {
     let mut image = image();

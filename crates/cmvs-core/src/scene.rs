@@ -57,6 +57,10 @@ pub struct ObjectImage {
     pub pixels: RgbaImage,
     /// Image +1152: the source has 32 bits per pixel.
     pub alpha: bool,
+    /// Kind 3 (+1224, 0x140034f60): a blank surface the engine draws into, such as a scene
+    /// movie frame, rather than a loaded file. Saves record only its size and alpha flag;
+    /// Rust keeps the movie name in `name` to check the player's binding.
+    pub surface: bool,
 }
 
 impl ObjectImage {
@@ -789,6 +793,7 @@ pub(crate) fn load_image(
         name,
         pixels: decoded.pixels,
         alpha: decoded.alpha,
+        surface: false,
     }))
 }
 

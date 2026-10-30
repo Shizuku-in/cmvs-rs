@@ -1178,6 +1178,7 @@ mod scale_tests {
             filter: None,
             alpha: true,
             pixels: RgbaImage::new(2, 2, [255, 0, 0, 255].repeat(4)).unwrap(),
+            surface: false,
         }
     }
 

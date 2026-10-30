@@ -259,6 +259,7 @@ impl FontRenderer {
                             name: Vec::new(),
                             pixels,
                             alpha: true,
+                            surface: false,
                         }),
                         draw: Some(draw),
                         ..SceneObject::default()

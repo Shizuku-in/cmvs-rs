@@ -150,9 +150,6 @@ impl Startup<'_> {
         if self.buttons.has_saved_objects() {
             return Err("saving while button or list groups exist is not implemented".into());
         }
-        if self.movies.has_scene_players() {
-            return Err("saving while a scene movie exists is not implemented".into());
-        }
         if let Some(effect) = self.scene.unsaved_effect() {
             return Err(format!("saving during {effect} is not implemented").into());
         }
@@ -186,6 +183,9 @@ impl Startup<'_> {
             .collect::<Result<BTreeMap<_, _>, crate::FormatError>>()?;
         let mut raw_objects = BTreeMap::new();
         raw_objects.insert((0x540, 0), self.history.saved());
+        for (slot, record) in self.movies.saved_scene_players() {
+            raw_objects.insert((0x8e8, slot), record);
+        }
         let (second_group, popup) = self.save_menu.saved_flags();
         let clear = self.scene.clear();
         let snapshot = EngineSnapshot {
@@ -421,8 +421,12 @@ impl Startup<'_> {
             .as_deref()
             .map(crate::scene::Quake::restore)
             .transpose()?;
-        if snapshot.raw_objects.keys().any(|&(tag, _)| tag != 0x540) {
-            return Err("saved button, list, movie or overlay objects are not implemented".into());
+        if snapshot
+            .raw_objects
+            .keys()
+            .any(|&(tag, _)| !matches!(tag, 0x540 | 0x8e8))
+        {
+            return Err("saved button, list or overlay objects are not implemented".into());
         }
         if snapshot.sound_device != [1, 0, 0, 0, 0, 0] {
             return Err("saved sound device buffers are not implemented".into());
@@ -460,6 +464,21 @@ impl Startup<'_> {
                 windows[slot] = Some(saved.load(&mut images, &mut budget)?);
             }
         }
+        // Records 0x8e8 follow 0x700 and bind to the objects just rebuilt.
+        let movie_records: Vec<_> = snapshot
+            .raw_objects
+            .iter()
+            .filter(|((tag, _), _)| *tag == 0x8e8)
+            .map(|(&(_, slot), body)| (slot, body.as_slice()))
+            .collect();
+        let players = self.movies.load_scene_players(
+            &movie_records,
+            &mut objects,
+            &mut self.scene_movies.with_paths(
+                self.bootstrap.paths(),
+                crate::resources::ResourceKind::SceneMovie,
+            ),
+        )?;
         let texts: [Option<_>; TEXT_OBJECTS] = snapshot.texts.clone();
         let mut history = self.history.clone();
         history.restore(&snapshot.raw_objects[&(0x540, 0)])?;
@@ -489,7 +508,7 @@ impl Startup<'_> {
         self.save_menu.restore_flags(snapshot.word_12092);
         self.message_flags.clear_for_load();
         self.buttons.clear_for_load();
-        if self.movies.clear_for_load() {
+        if self.movies.restore(players) {
             self.audio_backend.stop_movie_audio()?;
         }
         self.scene.restore(
@@ -646,6 +665,7 @@ impl Startup<'_> {
                     name: Vec::new(),
                     pixels: RgbaImage::new(config.width, config.height, pixels)?,
                     alpha: true,
+                    surface: false,
                 })
             } else {
                 let save = Csv2Save::decode(&bytes)?;
@@ -654,6 +674,7 @@ impl Startup<'_> {
                     name: Vec::new(),
                     pixels: decode_bmp(&save.auxiliary)?,
                     alpha: false,
+                    surface: false,
                 })
             }
         } else {

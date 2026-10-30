@@ -85,6 +85,9 @@ pub struct SavedImage {
     pub filter: Option<[u32; 3]>,
     /// +1204..+1212 while +1200 is clear: earlier parameters the loader ignores.
     pub disabled_filter: [u32; 3],
+    /// Kind 3 surface (`ObjectImage::surface`): `Some(alpha flag +1232)`, no file name.
+    /// The reader 0x140035590 rebuilds it blank with 0x140034f60 from the saved size.
+    pub surface: Option<bool>,
 }
 
 /// Appends `u16 tag, u32 length, body`, the chunk framing inside visual records.
@@ -100,28 +103,47 @@ fn words(out: &mut Vec<u8>, words: &[u32]) {
 }
 
 impl SavedImage {
-    /// Image writer 0x140030030 for the supported single-file branch.
+    /// Image writer 0x140030030 for the supported single-file and surface branches.
     pub(crate) fn encode(&self) -> Vec<u8> {
         let (enabled, params) = match self.filter {
             Some(params) => (1, params),
             None => (0, self.disabled_filter),
         };
+        let (kind, alpha) = match self.surface {
+            Some(alpha) => (3, u32::from(alpha)),
+            None => (0, 0),
+        };
         let mut out = Vec::new();
-        words(&mut out, &[3, 0, 0, 0, 0, enabled]);
+        words(&mut out, &[3, 0, 0, kind, 0, enabled]);
         words(&mut out, &params);
-        words(&mut out, &[0]);
+        words(&mut out, &[alpha]);
         out.extend(&self.name);
         out.extend([0, 0]);
         words(&mut out, &[0, self.size[0], self.size[1]]);
         out
     }
-    pub(crate) fn from_image(image: &ObjectImage) -> Self {
-        Self {
-            name: image.name.clone(),
+    pub(crate) fn from_image(image: &ObjectImage) -> Result<Self, FormatError> {
+        if image.surface && image.filter.is_some() {
+            return Err(FormatError(
+                "saving a filtered surface image is not implemented",
+            ));
+        }
+        if !image.surface && image.name.is_empty() {
+            return Err(FormatError(
+                "saving an image decoded from memory is not implemented",
+            ));
+        }
+        Ok(Self {
+            name: if image.surface {
+                Vec::new()
+            } else {
+                image.name.clone()
+            },
             size: [image.pixels.width(), image.pixels.height()],
             filter: image.filter,
             disabled_filter: [0; 3],
-        }
+            surface: image.surface.then_some(image.alpha),
+        })
     }
     fn decode(bytes: &[u8]) -> Result<Self, FormatError> {
         let mut r = Reader::new(bytes);
@@ -129,7 +151,12 @@ impl SavedImage {
         if h[0] != 3 {
             return Err(FormatError("unsupported snapshot image version"));
         }
-        if h[1..5].iter().chain(&h[9..]).any(|&v| v != 0) {
+        // Kind 3 is a blank surface with its alpha flag; the loader ignores its filter.
+        let surface = h[3] == 3;
+        if h[1..3].iter().chain(&h[4..5]).any(|&v| v != 0)
+            || !(h[3] == 0 || surface && h[5..9] == [0; 4] && h[9] <= 1)
+            || !surface && h[9] != 0
+        {
             return Err(FormatError(
                 "unsupported snapshot image kind, flags or subobject",
             ));
@@ -142,7 +169,7 @@ impl SavedImage {
             return Err(FormatError("unsupported snapshot image filter"));
         }
         let name = r.string(64)?.to_vec();
-        if name.is_empty() || !r.string(32)?.is_empty() {
+        if name.is_empty() != surface || !r.string(32)?.is_empty() {
             return Err(FormatError(
                 "snapshot blank or compound image is not implemented",
             ));
@@ -171,6 +198,7 @@ impl SavedImage {
             } else {
                 [h[6], h[7], h[8]]
             },
+            surface: surface.then_some(h[9] != 0),
         })
     }
     fn load(
@@ -183,6 +211,21 @@ impl SavedImage {
         let required = u64::from(self.size[0]) * u64::from(self.size[1]) * 4;
         if required > *budget as u64 {
             return Err(FormatError("snapshot preview exceeds decoded image budget").into());
+        }
+        if let Some(alpha) = self.surface {
+            // A new blank surface; a scene movie record then decodes its frame into it.
+            *budget -= required as usize;
+            return Ok(ObjectImage {
+                filter: None,
+                name: Vec::new(),
+                pixels: crate::raster::RgbaImage::new(
+                    self.size[0],
+                    self.size[1],
+                    vec![0; required as usize],
+                )?,
+                alpha,
+                surface: true,
+            });
         }
         let decoded = image::load(source, &self.name)?.ok_or(FormatError(
             "snapshot image is missing or has an unknown codec",
@@ -198,6 +241,7 @@ impl SavedImage {
             pixels: decoded.pixels,
             alpha: decoded.alpha,
             filter: None,
+            surface: false,
         };
         if let Some(filter) = self.filter {
             image.apply_filter(filter)?;
@@ -350,8 +394,16 @@ impl SavedScene {
             shown: object.shown,
             flags: object.flags,
             logical_size: object.logical_size,
-            image: object.image.as_ref().map(SavedImage::from_image),
-            secondary_image: object.secondary_image.as_ref().map(SavedImage::from_image),
+            image: object
+                .image
+                .as_ref()
+                .map(SavedImage::from_image)
+                .transpose()?,
+            secondary_image: object
+                .secondary_image
+                .as_ref()
+                .map(SavedImage::from_image)
+                .transpose()?,
             draw: object.draw.clone(),
             effect_words: [0; 11],
             children,

@@ -169,11 +169,64 @@ impl SceneMovieIndex {
         }
     }
 }
+impl SceneMovieIndex {
+    /// The bound object's image: a surface, with alpha for type 4 (CMV8) as 0x14003c020's
+    /// fifth argument gives it. `name` tags the binding in Rust only.
+    fn frame_image(
+        &self,
+        name: &[u8],
+        pixels: crate::raster::RgbaImage,
+    ) -> crate::scene::ObjectImage {
+        crate::scene::ObjectImage {
+            filter: None,
+            name: name.to_vec(),
+            pixels,
+            alpha: matches!(self, Self::Cmv8(_)),
+            surface: true,
+        }
+    }
+}
 impl SceneMovie {
     pub fn encoded(&self) -> &[u8] {
         &self.data
     }
 }
+
+/// 0x1400390b0's container setup, shared by 0x2308 and the loader.
+fn open_scene(
+    data: &[u8],
+) -> Result<(SceneMovieIndex, Option<crate::raster::RgbaImage>), Box<dyn Error>> {
+    if matches!(data.get(..4), Some(b"CMV6" | b"CMV8")) {
+        let index = CmvIndex::read_scene(&mut io::Cursor::new(data))?;
+        // 0x140039c90 loads a nonempty final audio entry when +40 != 0;
+        // 0x1400390b0 hands it to device channel slot+2. Do not drop audio.
+        if index.header.audio_flag != 0
+            && index
+                .entries
+                .last()
+                .is_some_and(|entry| entry.stored_size != 0)
+        {
+            return Err("CMV6/CMV8 scene movie soundtrack is not implemented".into());
+        }
+        Ok(if index.alpha {
+            (SceneMovieIndex::Cmv8(index), None)
+        } else {
+            (SceneMovieIndex::Cmv6(index), None)
+        })
+    } else {
+        let index = crate::cmv9::Cmv9Index::parse(data)?;
+        let base = index.decode_base(data)?;
+        Ok((SceneMovieIndex::Cmv9(index), Some(base)))
+    }
+}
+
+/// Record 0x8e8 body (0x140038420): u16 version 4, +268 player slot, +272 object slot,
+/// the 64-byte name at +300, the 208-byte playback block +60..+268 (current and pending
+/// segment, active, paused, sixteen looping/start/end segments), +280 frame, then +48,
+/// +52 (load mode) and +56.
+const SCENE_RECORD: usize = 298;
+/// 0x2308 passes load mode 2; the reader reads 3 as 2.
+const SCENE_MODE: u32 = 2;
 
 #[derive(Debug, Default)]
 pub struct MovieHost {
@@ -288,41 +341,14 @@ impl MovieHost {
         if data.len() > crate::MAX_PAYLOAD {
             return Err(fail("scene movie exceeds research limit").into());
         }
-        let (index, base) = if matches!(data.get(..4), Some(b"CMV6" | b"CMV8")) {
-            let index = CmvIndex::read_scene(&mut io::Cursor::new(&data))?;
-            // 0x140039c90 loads a nonempty final audio entry when +40 != 0;
-            // 0x1400390b0 hands it to device channel slot+2. Do not drop audio.
-            if index.header.audio_flag != 0
-                && index
-                    .entries
-                    .last()
-                    .is_some_and(|entry| entry.stored_size != 0)
-            {
-                return Err(fail("CMV6/CMV8 scene movie soundtrack is not implemented").into());
-            }
-            if index.alpha {
-                (SceneMovieIndex::Cmv8(index), None)
-            } else {
-                (SceneMovieIndex::Cmv6(index), None)
-            }
-        } else {
-            let index = crate::cmv9::Cmv9Index::parse(&data)?;
-            let base = index.decode_base(&data)?;
-            (SceneMovieIndex::Cmv9(index), Some(base))
-        };
+        let (index, base) = open_scene(&data)?;
         let pixels = index.decode(&data, frame, base.as_ref())?;
         let playback = MoviePlayback::new(frame, index.max_sequence() - 1);
         let mut draw = crate::scene::DrawState::default();
         draw.words[4] = pixels.width();
         draw.words[5] = pixels.height();
         let object = crate::scene::SceneObject {
-            image: Some(crate::scene::ObjectImage {
-                filter: None,
-                name: name.clone(),
-                pixels,
-                // 0x14003c020's fifth argument: types 3/4 (CMV7/CMV8) create an alpha image.
-                alpha: matches!(index, SceneMovieIndex::Cmv8(_)),
-            }),
+            image: Some(index.frame_image(&name, pixels)),
             draw: Some(draw),
             ..crate::scene::SceneObject::default()
         };
@@ -469,15 +495,245 @@ impl MovieHost {
     }
 }
 
-impl MovieHost {
-    /// Record 0x8e8 (+4480 scene players) is not implemented; the +4472 player is never saved.
-    pub(crate) fn has_scene_players(&self) -> bool {
-        self.slots.iter().any(Option::is_some)
+/// The parts of record 0x8e8 Rust models. +48 and +56 keep their constructor zero: only
+/// unimplemented commands (0x14007f4c0, 0x14007f520) set them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SceneRecord {
+    slot: u16,
+    object_slot: u8,
+    name: Vec<u8>,
+    frame: u32,
+    playback: MoviePlayback,
+}
+impl SceneRecord {
+    fn encode(&self) -> Vec<u8> {
+        let p = &self.playback;
+        let mut body = 4u16.to_le_bytes().to_vec();
+        body.extend(u32::from(self.slot).to_le_bytes());
+        body.extend(u32::from(self.object_slot).to_le_bytes());
+        let mut name = [0u8; 64];
+        name[..self.name.len()].copy_from_slice(&self.name);
+        body.extend(name);
+        let head = [
+            p.current as u32,
+            p.pending.map_or(u32::MAX, |n| n as u32),
+            u32::from(p.active),
+            u32::from(p.paused),
+        ];
+        let segments = p
+            .segments
+            .iter()
+            .flat_map(|s| [u32::from(s.looping), s.start, s.end]);
+        for word in head
+            .into_iter()
+            .chain(segments)
+            .chain([self.frame, 0, SCENE_MODE, 0])
+        {
+            body.extend(word.to_le_bytes());
+        }
+        body
     }
-    /// Loader 0x140081960 destroys the full-screen player (+4472) and the scene players.
-    pub(crate) fn clear_for_load(&mut self) -> bool {
+    /// The playback clock restarts at `now` with no elapsed time, as the reader sets it.
+    fn decode(slot: u16, body: &[u8], now: u32) -> Result<Self, &'static str> {
+        if body.len() != SCENE_RECORD || body[..2] != [4, 0] {
+            return Err("unsupported scene movie record");
+        }
+        let word = |at: usize| u32::from_le_bytes(body[at..at + 4].try_into().unwrap());
+        if slot as usize >= MOVIE_SLOTS || word(2) != u32::from(slot) {
+            return Err("scene movie record names another player slot");
+        }
+        if [word(286), word(290), word(294)] != [0, SCENE_MODE, 0] {
+            return Err("scene movie load mode or control fields are not implemented");
+        }
+        let object_slot = u8::try_from(word(6)).map_err(|_| "scene movie object outside 0..255")?;
+        let name = &body[10..74];
+        let end = name
+            .iter()
+            .position(|&b| b == 0)
+            .ok_or("scene movie name lacks its NUL")?;
+        let flag = |at: usize| match word(at) {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err("scene movie flag is not 0 or 1"),
+        };
+        let (current, pending) = (word(74) as usize, word(78));
+        if current >= MOVIE_SEGMENTS || pending != u32::MAX && pending as usize >= MOVIE_SEGMENTS {
+            return Err("scene movie segment outside 0..15");
+        }
+        let mut segments = [MovieSegment::default(); MOVIE_SEGMENTS];
+        for (i, segment) in segments.iter_mut().enumerate() {
+            let at = 90 + 12 * i;
+            *segment = MovieSegment {
+                looping: word(at) != 0,
+                start: word(at + 4),
+                end: word(at + 8),
+            };
+        }
+        Ok(Self {
+            slot,
+            object_slot,
+            name: name[..end].to_vec(),
+            frame: word(282),
+            playback: MoviePlayback {
+                segments,
+                current,
+                pending: (pending != u32::MAX).then_some(pending as usize),
+                active: flag(82)?,
+                paused: flag(86)?,
+                elapsed: 0,
+                last_tick: now,
+            },
+        })
+    }
+}
+
+impl MovieHost {
+    /// Records 0x8e8 for the +4480 scene players; the +4472 player is never saved.
+    pub(crate) fn saved_scene_players(&self) -> Vec<(u16, Vec<u8>)> {
+        let mut out = Vec::new();
+        for (slot, movie) in self.slots.iter().enumerate() {
+            let Some(movie) = movie else { continue };
+            let record = SceneRecord {
+                slot: slot as u16,
+                object_slot: movie.object_slot,
+                name: movie.name.clone(),
+                frame: movie.frame,
+                playback: movie.playback.clone(),
+            };
+            out.push((record.slot, record.encode()));
+        }
+        out
+    }
+    /// Reader 0x140039630 over objects already rebuilt from records 0x700: reopen each
+    /// movie, recreate the bound object's surface (0x14003c020) with the saved frame, then
+    /// restore the playback block. Elapsed time restarts at the current tick (+284/+288).
+    pub(crate) fn load_scene_players(
+        &self,
+        records: &[(u16, &[u8])],
+        objects: &mut std::collections::BTreeMap<u8, crate::scene::SceneObject>,
+        source: &mut dyn crate::resources::ResourceSource,
+    ) -> Result<[Option<SceneMovie>; MOVIE_SLOTS], Box<dyn Error>> {
+        let mut players: [Option<SceneMovie>; MOVIE_SLOTS] = Default::default();
+        for &(slot, body) in records {
+            let record = SceneRecord::decode(slot, body, self.scene_clock)?;
+            if players
+                .iter()
+                .flatten()
+                .any(|p| p.object_slot == record.object_slot)
+            {
+                return Err("two scene movies are bound to one object".into());
+            }
+            let data = source
+                .read(&record.name)?
+                .ok_or("saved scene movie is missing")?;
+            if data.len() > crate::MAX_PAYLOAD {
+                return Err("scene movie exceeds research limit".into());
+            }
+            let (index, base) = open_scene(&data)?;
+            if record.frame >= index.max_sequence() {
+                return Err("saved scene movie frame exceeds the movie".into());
+            }
+            let pixels = index.decode(&data, record.frame, base.as_ref())?;
+            let object = objects
+                .get_mut(&record.object_slot)
+                .filter(|o| o.image.as_ref().is_some_and(|i| i.surface))
+                .ok_or("scene movie object was not saved with a surface image")?;
+            if object.draw.is_none() {
+                let mut draw = crate::scene::DrawState::default();
+                draw.words[4] = pixels.width();
+                draw.words[5] = pixels.height();
+                object.draw = Some(draw);
+            }
+            object.image = Some(index.frame_image(&record.name, pixels));
+            players[slot as usize] = Some(SceneMovie {
+                object_slot: record.object_slot,
+                name: record.name,
+                frame: record.frame,
+                index,
+                data,
+                base,
+                playback: record.playback,
+            });
+        }
+        Ok(players)
+    }
+    /// Loader 0x140081960 destroys the full-screen player (+4472) and the scene players,
+    /// then installs the players its records rebuilt.
+    pub(crate) fn restore(&mut self, players: [Option<SceneMovie>; MOVIE_SLOTS]) -> bool {
         let had_player = self.player.take().is_some();
-        self.slots = Default::default();
+        self.slots = players;
         had_player
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record() -> SceneRecord {
+        let mut playback = MoviePlayback::new(3, 40);
+        playback.segments[5] = MovieSegment {
+            looping: true,
+            start: u32::MAX,
+            end: 12,
+        };
+        playback.current = 5;
+        playback.pending = Some(15);
+        playback.active = true;
+        SceneRecord {
+            slot: 2,
+            object_slot: 255,
+            name: b"synthetic.cmv".to_vec(),
+            frame: 9,
+            playback,
+        }
+    }
+
+    #[test]
+    fn scene_records_round_trip_and_restart_the_clock() {
+        let record = record();
+        let body = record.encode();
+        assert_eq!(body.len(), SCENE_RECORD);
+        assert_eq!(&body[10..24], b"synthetic.cmv\0");
+        // +52 load mode 2 between the zero +48 and +56.
+        assert_eq!(body[286..298], [0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0]);
+        let mut expected = record.clone();
+        expected.playback.last_tick = 77;
+        assert_eq!(SceneRecord::decode(2, &body, 77).unwrap(), expected);
+        let mut idle = record;
+        idle.playback.pending = None;
+        let body = idle.encode();
+        assert_eq!(body[78..82], [0xff; 4]);
+        assert_eq!(
+            SceneRecord::decode(2, &body, 0).unwrap().playback.pending,
+            None
+        );
+    }
+
+    #[test]
+    fn scene_records_reject_unmodeled_fields() {
+        let body = record().encode();
+        assert!(SceneRecord::decode(1, &body, 0).is_err());
+        for (at, value) in [
+            (0, 3),   // version
+            (6, 256), // object slot
+            (74, 16), // current segment
+            (78, 16), // pending segment
+            (82, 2),  // active flag
+            (286, 1), // +48
+            (290, 3), // load mode
+            (294, 1), // +56
+        ] {
+            let mut bad = body.clone();
+            bad[at..at + 4].copy_from_slice(&(value as u32).to_le_bytes());
+            if at == 0 {
+                bad[2..4].copy_from_slice(&body[2..4]);
+            }
+            assert!(SceneRecord::decode(2, &bad, 0).is_err(), "offset {at}");
+        }
+        let mut unterminated = body.clone();
+        unterminated[10..74].fill(b'a');
+        assert!(SceneRecord::decode(2, &unterminated, 0).is_err());
+        assert!(SceneRecord::decode(2, &body[..297], 0).is_err());
     }
 }

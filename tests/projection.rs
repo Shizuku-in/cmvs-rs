@@ -537,6 +537,7 @@ fn projected_child_stays_in_parent_group_and_unsupported_flags_still_fail() {
         )
         .unwrap(),
         alpha: false,
+        surface: false,
     });
     farther.draw.as_mut().unwrap().words[13] = f(1.0);
     object.children.insert(1, farther);

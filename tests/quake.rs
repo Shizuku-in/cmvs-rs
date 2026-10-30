@@ -182,6 +182,7 @@ fn frame(scene: &SceneHost, extra_flags: u32) -> Vec<u8> {
             name: vec![],
             pixels: RgbaImage::new(1, 1, vec![255; 4]).unwrap(),
             alpha: false,
+            surface: false,
         }),
         draw: Some(draw),
         flags: extra_flags,

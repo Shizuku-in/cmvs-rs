@@ -340,6 +340,7 @@ fn image_load_sets_result_and_rebuilds_the_object_image() {
         name: b"a.pb3".to_vec(),
         pixels: opaque_pixels(),
         alpha: false,
+        surface: false,
     };
     // A quiet failure destroys the previous image and reports 0.
     for (result, image) in [(1, Some(&expected)), (0, None), (1, Some(&expected))] {
@@ -801,6 +802,7 @@ fn additive_blend_adds_scaled_texels_and_opaque_images_at_full_opacity_replace()
             name: vec![],
             pixels: RgbaImage::new(1, 1, vec![10, 20, 30, 255]).unwrap(),
             alpha: true,
+            surface: false,
         }),
         draw: Some(draw),
         ..cmvs_rs::scene::SceneObject::default()
@@ -946,6 +948,7 @@ fn window_image_load_replaces_the_window_object_image_without_a_result() {
             name: b"win.pb3".to_vec(),
             pixels: opaque_pixels(),
             alpha: false,
+            surface: false,
         })
     );
 }
