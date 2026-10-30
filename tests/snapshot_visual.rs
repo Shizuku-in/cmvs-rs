@@ -390,20 +390,33 @@ fn surface_images_rebuild_blank_without_reading_resources() {
         assert_eq!([i.pixels.width(), i.pixels.height()], [2, 3]);
         assert!(i.pixels.pixels().iter().all(|&v| v == 0));
     }
-    // A surface has no file name, filter or second flag value; a file needs a name.
+    // A surface has no file name, filter or second flag value.
     let mut named = surface(0);
     named.splice(40..40, *b"x.pb3");
     let mut filtered = surface(0);
     put(&mut filtered, 20, 1);
     let mut flag = surface(2);
     put(&mut flag, 36, 2);
-    let mut unnamed_file = surface(0);
-    put(&mut unnamed_file, 12, 0);
-    for body in [named, filtered, flag, unnamed_file] {
+    for body in [named, filtered, flag] {
         let mut b = base();
         record(&mut b, 0x700, 0, &scene(None, Some(&body), &[]));
         assert!(VisualSnapshot::decode_records(&b).is_err());
     }
+}
+
+#[test]
+fn anonymous_image_rebuilds_opaque_black_instead_of_restoring_memory_pixels() {
+    let mut anonymous = surface(0);
+    put(&mut anonymous, 12, 0);
+    let mut b = base();
+    record(&mut b, 0x700, 0, &scene(None, Some(&anonymous), &[]));
+    let visual = VisualSnapshot::decode_records(&b).unwrap();
+    let preview = visual.preview(&mut Empty).unwrap();
+    let image = preview.scene.object(0).unwrap().image.as_ref().unwrap();
+    assert!(!image.surface);
+    assert!(image.alpha);
+    assert_eq!([image.pixels.width(), image.pixels.height()], [2, 3]);
+    assert_eq!(image.pixels.pixels(), [0, 0, 0, 255].repeat(6));
 }
 
 #[test]

@@ -1425,6 +1425,37 @@ fn external_in_game_menus_save_and_load() {
     // Save screen: toolbar button 1, slot 004 (id 73), yes.
     ui.commands.clear();
     ui.click(ui.toolbar(1), 60);
+    // The save screen contains anonymous images decoded from real CSV2 thumbnails.
+    // They have no pixel payload in a native scene-image record.
+    let menu_snapshot = ui.run.inspect_snapshot().unwrap();
+    fn anonymous(scene: &SavedScene) -> usize {
+        [&scene.image, &scene.secondary_image]
+            .into_iter()
+            .flatten()
+            .filter(|i| i.surface.is_none() && i.name.is_empty())
+            .count()
+            + scene.children.values().map(anonymous).sum::<usize>()
+    }
+    let anonymous_count: usize = menu_snapshot.objects.values().map(anonymous).sum();
+    assert!(anonymous_count > 0);
+    let menu_bytes = menu_snapshot.encode().unwrap();
+    assert_eq!(
+        EngineSnapshot::decode(&menu_bytes)
+            .unwrap()
+            .encode()
+            .unwrap(),
+        menu_bytes
+    );
+    let image = ui.run.machine().capture_vm().unwrap().main_image;
+    let menu_file =
+        Csv2Save::encode(source[..600].try_into().unwrap(), &menu_bytes, &[], &image).unwrap();
+    fs::write(user.join("save006.dat"), &menu_file).unwrap();
+    if let Some(directory) = std::env::var_os("CMVS_MEMORY_IMAGE_OUTPUT") {
+        let directory = PathBuf::from(directory);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("menu.dat"), menu_file).unwrap();
+        fs::write(directory.join("count.txt"), anonymous_count.to_string()).unwrap();
+    }
     ui.click(ui.button(1, 73), 60);
     ui.click(ui.button(2, 1), 60);
     assert_eq!(ui.commands, [0x22b6]);
@@ -1447,6 +1478,37 @@ fn external_in_game_menus_save_and_load() {
     }
     assert_eq!(ui.commands, [0x22b5]);
     check_loaded(ui.run, original_snapshot(&root, 0));
+    ui.run.load_slot(6, &mut ui.backend).unwrap();
+    fn black_images(object: &cmvs_rs::scene::SceneObject) -> usize {
+        let mut count = 0;
+        for image in [&object.image, &object.secondary_image]
+            .into_iter()
+            .flatten()
+        {
+            if !image.surface && image.name.is_empty() {
+                assert!(image.alpha);
+                assert!(
+                    image
+                        .pixels
+                        .pixels()
+                        .chunks_exact(4)
+                        .all(|p| p == [0, 0, 0, 255])
+                );
+                count += 1;
+            }
+        }
+        count + object.children.values().map(black_images).sum::<usize>()
+    }
+    assert_eq!(
+        ui.run
+            .scene()
+            .objects()
+            .values()
+            .map(black_images)
+            .sum::<usize>(),
+        anonymous_count
+    );
+    println!("save menu snapshot: {anonymous_count} anonymous thumbnail images rebuilt black");
     drop(ui);
     fs::remove_dir_all(user).unwrap();
 }

@@ -1238,6 +1238,11 @@ fn scenario_snapshot_writes_a_slot_that_loads_back_with_backups() {
     system_call(&mut code, 0x201d, &[0x12345678]);
     system_call(&mut code, 0x2128, &[]);
     system_call(&mut code, 0x2092, &[5, 1, 42]);
+    commands::command(&mut code, 0x2020, &[20]);
+    commands::command(&mut code, 0x22cb, &[0x112233]);
+    commands::command(&mut code, 0x2304, &[]);
+    commands::command(&mut code, 0x2000, &[]);
+    commands::command(&mut code, 0x203c, &[20, u32::MAX]);
     commands::command(&mut code, 0x215d, &[0, 7, 0, 0, 100, 100, 1280, 720]);
     commands::command(&mut code, 0x2152, &[0, u32::MAX, 0]);
     let snapshot_pc = code.len();
@@ -1286,6 +1291,11 @@ fn scenario_snapshot_writes_a_slot_that_loads_back_with_backups() {
     assert_eq!(snapshot.variables.integers()[5], 42);
     assert_eq!(snapshot.variables.packed_bits()[0] & 1, 1);
     assert_eq!(snapshot.texts[7].as_ref().unwrap().glyphs.len(), 9);
+    let live = run.scene().object(20).unwrap().image.as_ref().unwrap();
+    assert_eq!(&live.pixels.pixels()[..4], &[0x11, 0x22, 0x33, 255]);
+    assert!(!live.alpha && !live.surface && live.name.is_empty());
+    let saved_image = snapshot.objects[&20].image.as_ref().unwrap();
+    assert!(saved_image.name.is_empty() && saved_image.surface.is_none());
     assert!(directory.join("system.dat").exists());
     assert!(!directory.join("save998.dat").exists());
     assert!(!directory.join("save999.dat").exists());
@@ -1301,6 +1311,15 @@ fn scenario_snapshot_writes_a_slot_that_loads_back_with_backups() {
     assert_eq!(run.machine().pc(), snapshot_pc + 2);
     assert_eq!(run.machine().state().integer(5), Some(42));
     assert_eq!(run.machine().state().bit(0), Some(true));
+    let restored = run.scene().object(20).unwrap().image.as_ref().unwrap();
+    assert!(restored.alpha && !restored.surface && restored.name.is_empty());
+    assert!(
+        restored
+            .pixels
+            .pixels()
+            .chunks_exact(4)
+            .all(|p| p == [0, 0, 0, 255])
+    );
     let glyphs = &run.messages().text(7).unwrap().glyphs;
     assert_eq!(glyphs.len(), 9);
     assert!(

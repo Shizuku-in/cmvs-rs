@@ -30,6 +30,35 @@ mod tests {
     }
 
     #[test]
+    fn anonymous_capture_keeps_live_pixels_but_load_rebuilds_black() {
+        for alpha in [false, true] {
+            let original = ObjectImage {
+                name: Vec::new(),
+                pixels: crate::raster::RgbaImage::new(2, 1, vec![10, 20, 30, 40, 50, 60, 70, 80])
+                    .unwrap(),
+                alpha,
+                filter: Some([2, 0x804020, 99]),
+                surface: false,
+            };
+            let before = original.clone();
+            let saved = SavedImage::from_image(&original).unwrap();
+            let bytes = saved.encode();
+            assert_eq!(bytes.len(), 54);
+            assert_eq!(original, before);
+            assert_eq!(SavedImage::decode(&bytes).unwrap(), saved);
+            let mut budget = 8;
+            let loaded = saved.load(&mut NoImages, &mut budget).unwrap();
+            assert_eq!(budget, 0);
+            assert!(loaded.name.is_empty() && !loaded.surface && loaded.alpha);
+            assert_eq!(loaded.filter, None);
+            assert_eq!(loaded.pixels.pixels(), [0, 0, 0, 255, 0, 0, 0, 255]);
+            let mut small = 7;
+            assert!(saved.load(&mut NoImages, &mut small).is_err());
+            assert_eq!(small, 7);
+        }
+    }
+
+    #[test]
     fn capture_during_replacement_keeps_live_transition_and_loads_full_fade() {
         for elapsed in [0, 120, 999] {
             let mut draw = DrawState::default();
@@ -38,8 +67,8 @@ mod tests {
                 draw: Some(draw),
                 ..SceneObject::default()
             };
-            // Retained objects include unsaveable anonymous images. Neither
-            // they nor the transition clock belong to the native record.
+            // Retained anonymous images and the transition clock do not belong
+            // to the native record.
             let retained = SceneObject {
                 image: Some(ObjectImage {
                     name: Vec::new(),
@@ -138,6 +167,8 @@ impl<'a> Reader<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SavedImage {
+    /// Empty for kind-0 anonymous images: reload creates opaque black pixels,
+    /// rather than saving a capture or thumbnail's original memory contents.
     pub name: Vec<u8>,
     pub size: [u32; 2],
     pub filter: Option<[u32; 3]>,
@@ -161,7 +192,7 @@ fn words(out: &mut Vec<u8>, words: &[u32]) {
 }
 
 impl SavedImage {
-    /// Image writer 0x140030030 for the supported single-file and surface branches.
+    /// Image writer 0x140030030 for file, anonymous kind-0 and surface branches.
     pub(crate) fn encode(&self) -> Vec<u8> {
         let (enabled, params) = match self.filter {
             Some(params) => (1, params),
@@ -184,11 +215,6 @@ impl SavedImage {
         if image.surface && image.filter.is_some() {
             return Err(FormatError(
                 "saving a filtered surface image is not implemented",
-            ));
-        }
-        if !image.surface && image.name.is_empty() {
-            return Err(FormatError(
-                "saving an image decoded from memory is not implemented",
             ));
         }
         Ok(Self {
@@ -227,9 +253,9 @@ impl SavedImage {
             return Err(FormatError("unsupported snapshot image filter"));
         }
         let name = r.string(64)?.to_vec();
-        if name.is_empty() != surface || !r.string(32)?.is_empty() {
+        if surface && !name.is_empty() || !r.string(32)?.is_empty() {
             return Err(FormatError(
-                "snapshot blank or compound image is not implemented",
+                "snapshot named surface or compound image is not implemented",
             ));
         }
         let tail = r.words::<3>()?;
@@ -270,19 +296,23 @@ impl SavedImage {
         if required > *budget as u64 {
             return Err(FormatError("snapshot preview exceeds decoded image budget").into());
         }
-        if let Some(alpha) = self.surface {
-            // A new blank surface; a scene movie record then decodes its frame into it.
+        if self.surface.is_some() || self.name.is_empty() {
+            // Kind 3 creates a blank surface; the movie record supplies its frame.
+            // Kind 0 with an empty name calls 0x140032b10(..., 1), rebuilding
+            // opaque black CPU pixels. Native snapshots never save these pixels.
             *budget -= required as usize;
+            let mut pixels = vec![0; required as usize];
+            if self.surface.is_none() {
+                for pixel in pixels.chunks_exact_mut(4) {
+                    pixel[3] = 255;
+                }
+            }
             return Ok(ObjectImage {
                 filter: None,
                 name: Vec::new(),
-                pixels: crate::raster::RgbaImage::new(
-                    self.size[0],
-                    self.size[1],
-                    vec![0; required as usize],
-                )?,
-                alpha,
-                surface: true,
+                pixels: crate::raster::RgbaImage::new(self.size[0], self.size[1], pixels)?,
+                alpha: self.surface.unwrap_or(true),
+                surface: self.surface.is_some(),
             });
         }
         let decoded = image::load(source, &self.name)?.ok_or(FormatError(
