@@ -150,9 +150,6 @@ impl Startup<'_> {
         if self.buttons.has_saved_objects() {
             return Err("saving while button or list groups exist is not implemented".into());
         }
-        if let Some(effect) = self.scene.unsaved_effect() {
-            return Err(format!("saving during {effect} is not implemented").into());
-        }
         if self
             .control
             .callbacks()
@@ -216,8 +213,8 @@ impl Startup<'_> {
             effects: [
                 self.scene.saved_quake(),
                 self.scene.saved_fade(),
-                None,
-                None,
+                self.scene.saved_mask(),
+                self.scene.saved_strip(),
             ],
             record_6e0: self.sequence.saved()?,
             cameras: [
@@ -419,9 +416,6 @@ impl Startup<'_> {
         if snapshot.word_11144 != 1 {
             return Err("saved +11144 value is not modeled".into());
         }
-        if snapshot.effects[2..].iter().any(Option::is_some) {
-            return Err("saved mask or strip effects are not implemented".into());
-        }
         let quake = snapshot.effects[0]
             .as_deref()
             .map(crate::scene::Quake::restore)
@@ -430,6 +424,10 @@ impl Startup<'_> {
             .as_deref()
             .map(crate::fade::Fade::restore)
             .transpose()?;
+        let strip = match snapshot.effects[3].as_deref() {
+            Some(record) => crate::scene::StripWipe::restore(record)?,
+            None => None,
+        };
         if snapshot
             .raw_objects
             .keys()
@@ -466,6 +464,11 @@ impl Startup<'_> {
         for (&slot, saved) in &snapshot.objects {
             objects.insert(slot, saved.load(&mut images, &mut budget)?);
         }
+        // Record 0x620 follows the objects it shades.
+        let mask = snapshot.effects[2]
+            .as_deref()
+            .map(|record| crate::scene::MaskTransition::restore(record, &objects, &mut images))
+            .transpose()?;
         let mut windows: [Option<crate::message::MessageWindow>; MESSAGE_WINDOWS] =
             Default::default();
         for (slot, saved) in snapshot.windows.iter().enumerate() {
@@ -528,6 +531,8 @@ impl Startup<'_> {
             objects,
             quake,
             fade,
+            mask,
+            strip,
         );
         self.messages.restore(texts, windows);
         let word = |at: usize| u32::from_le_bytes(header[at..at + 4].try_into().unwrap());

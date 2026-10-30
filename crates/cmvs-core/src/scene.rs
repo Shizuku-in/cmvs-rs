@@ -798,16 +798,9 @@ pub(crate) fn load_image(
 }
 
 impl SceneHost {
-    /// Effects the snapshot would write as 0x610..0x630 (+4616 fade, +4632 mask, +4640
-    /// strip); their record formats are not implemented here.
-    pub(crate) fn unsaved_effect(&self) -> Option<&'static str> {
-        if self.masks[0].is_some() {
-            Some("a mask transition")
-        } else if self.strip.is_some() {
-            Some("a strip wipe")
-        } else {
-            None
-        }
+    /// Record 0x620 while the +4632 mask transition exists; the +4648 one is never saved.
+    pub(crate) fn saved_mask(&self) -> Option<Vec<u8>> {
+        self.masks[0].as_ref().map(MaskTransition::saved)
     }
     /// Record 0x600 when a quake runs.
     pub(crate) fn saved_quake(&self) -> Option<Vec<u8>> {
@@ -817,21 +810,29 @@ impl SceneHost {
     pub(crate) fn saved_fade(&self) -> Option<Vec<u8>> {
         self.fade.current().map(crate::fade::Fade::saved)
     }
+    /// Record 0x630 while the +4640 strip wipe exists.
+    pub(crate) fn saved_strip(&self) -> Option<Vec<u8>> {
+        self.strip.as_ref().map(StripWipe::saved)
+    }
     /// Loader 0x140081960 destroys the slot objects and the +4616/+4624/+4632/+4640/+4648
-    /// effects; the reader then rebuilds the saved objects, clear state, quake and fade.
+    /// effects; the reader then rebuilds the saved objects, clear state, quake, fade, mask
+    /// transition and strip wipe.
     pub(crate) fn restore(
         &mut self,
         clear: ClearState,
         objects: BTreeMap<u8, SceneObject>,
         quake: Option<Quake>,
         fade: Option<crate::fade::Fade>,
+        mask: Option<MaskTransition>,
+        strip: Option<StripWipe>,
     ) {
         *self = Self {
             clear,
             objects,
             quake,
             fade: crate::fade::FadeHost::restored(fade),
-            ..Self::default()
+            masks: [mask, None],
+            strip,
         };
     }
 }

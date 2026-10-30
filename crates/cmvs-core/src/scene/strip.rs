@@ -180,6 +180,69 @@ impl StripWipe {
         false
     }
 
+    /// Record 0x630 (0x140052c40): mode, color, size, duration and layer for the reader's
+    /// constructor, then the object words +0..+36: finished, mode, color, size, layer,
+    /// screen width/height, duration, elapsed.
+    pub(crate) fn saved(&self) -> Vec<u8> {
+        [
+            self.mode,
+            self.color,
+            self.size,
+            self.duration,
+            self.layer,
+            u32::from(self.finished),
+            self.mode,
+            self.color,
+            self.size,
+            self.layer,
+            self.screen[0],
+            self.screen[1],
+            self.duration,
+            self.elapsed,
+        ]
+        .iter()
+        .flat_map(|w| w.to_le_bytes())
+        .collect()
+    }
+    /// Reader: 0x140052700 rebuilds the wipe without strips and 0x140052c90 ignores the
+    /// saved progress. A revealing wipe (modes 10/12) is freed; a covering one becomes the
+    /// finished full-screen cover of 0x140052d70 with elapsed = duration.
+    pub(crate) fn restore(record: &[u8]) -> Result<Option<Self>, &'static str> {
+        if record.len() != 56 {
+            return Err("strip wipe record length differs from the original");
+        }
+        let w: Vec<u32> = record
+            .chunks_exact(4)
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+            .collect();
+        if [w[0], w[1], w[2], w[3], w[4]] != [w[6], w[7], w[8], w[12], w[9]] {
+            return Err("strip wipe record header disagrees with its object words");
+        }
+        let (mode, color, size, duration, layer) = (w[0], w[1], w[2], w[3], w[4]);
+        if !matches!(mode, 0 | 2 | 10 | 12) {
+            return Err("saved strip wipe mode is not verified");
+        }
+        if mode >= 10 {
+            return Ok(None);
+        }
+        let screen = RESEARCH_SCREEN;
+        Ok(Some(Self {
+            mode,
+            color,
+            size,
+            layer,
+            screen,
+            duration,
+            elapsed: duration,
+            finished: true,
+            object: SceneObject {
+                draw: Some(solid(color, screen, [0, 0], layer)),
+                ..SceneObject::default()
+            },
+            strips: Vec::new(),
+        }))
+    }
+
     /// 0x140052e00: −1 once finished, else the time left (0 when overdue).
     pub fn remaining(&self) -> u32 {
         if self.finished {
@@ -293,5 +356,40 @@ impl SceneHost {
         let step = vm.yield_pending_system()?;
         vm.state_mut().set_system_integer(0, 0).expect("slot 0");
         Ok(Some(step))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_records_restore_covers_finished_and_drop_reveals() {
+        for mode in [0, 2, 10, 12] {
+            let mut wipe = StripWipe::new([mode, 0x12_3456, 100, 500, 9]).unwrap();
+            wipe.advance(200);
+            let saved = wipe.saved();
+            assert_eq!(saved.len(), 56);
+            let restored = StripWipe::restore(&saved).unwrap();
+            if mode >= 10 {
+                assert!(restored.is_none());
+                continue;
+            }
+            let mut expected = StripWipe::new([mode, 0x12_3456, 100, 500, 9]).unwrap();
+            expected.finish();
+            expected.elapsed = 500;
+            assert_eq!(restored.unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn strip_records_reject_inconsistent_or_unverified_wipes() {
+        let saved = StripWipe::new([0, 1, 100, 500, 9]).unwrap().saved();
+        for (at, value) in [(0, 2), (0, 4), (8, 7), (16, 3)] {
+            let mut bad = saved.clone();
+            bad[at..at + 4].copy_from_slice(&(value as u32).to_le_bytes());
+            assert!(StripWipe::restore(&bad).is_err(), "offset {at}");
+        }
+        assert!(StripWipe::restore(&saved[..52]).is_err());
     }
 }

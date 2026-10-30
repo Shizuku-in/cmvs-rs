@@ -36,9 +36,93 @@ pub struct MaskTransition {
     pub mask: ObjectImage,
 }
 
+/// Object bytes record 0x620 copies after the name (+0..+1064).
+const SAVED_OBJECT: usize = 0x428;
+
 impl MaskTransition {
     pub fn duration(&self) -> u32 {
         self.ramp.wrapping_add(self.width)
+    }
+    /// Record 0x620 (0x140051170): slot, duration, edge width and mode for the reader's
+    /// constructor, the mask name, then the object bytes +0..+1064. On the shader path
+    /// +16..+32 (CPU mask buffer and size) and the +32 threshold table stay zero; +1060 is
+    /// written as zero.
+    pub(crate) fn saved(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        for word in [
+            u32::from(self.slot),
+            self.duration(),
+            self.width,
+            u32::from(self.put),
+        ] {
+            out.extend(word.to_le_bytes());
+        }
+        out.extend(&self.mask.name);
+        out.push(0);
+        let mut object = [0u8; SAVED_OBJECT];
+        for (at, word) in [
+            (0, u32::from(self.put)),
+            (4, u32::from(self.slot)),
+            (8, self.ramp),
+            (12, self.width),
+            (1056, self.elapsed),
+        ] {
+            object[at..at + 4].copy_from_slice(&word.to_le_bytes());
+        }
+        out.extend(object);
+        out
+    }
+    /// Reader: 0x140051450 builds a new transition from the head words and the name on the
+    /// rebuilt slot object, so the transition restarts with elapsed 0; the object bytes go
+    /// to an empty function (0x14006ad10) and are not read.
+    pub(crate) fn restore(
+        record: &[u8],
+        objects: &std::collections::BTreeMap<u8, crate::scene::SceneObject>,
+        images: &mut dyn ImageSource,
+    ) -> Result<Self, Box<dyn Error>> {
+        let word = |at: usize| -> Result<u32, &'static str> {
+            Ok(u32::from_le_bytes(
+                record
+                    .get(at..at + 4)
+                    .ok_or("truncated mask record")?
+                    .try_into()
+                    .unwrap(),
+            ))
+        };
+        let (slot, duration, width, put) = (word(0)?, word(4)?, word(8)?, word(12)?);
+        let tail = record.get(16..).ok_or("truncated mask record")?;
+        let end = tail
+            .iter()
+            .position(|&b| b == 0)
+            .ok_or("mask record name lacks its NUL")?;
+        if tail.len() != end + 1 + SAVED_OBJECT {
+            return Err("mask record length differs from the original".into());
+        }
+        let slot = u8::try_from(slot)
+            .ok()
+            .filter(|slot| objects.contains_key(slot))
+            .ok_or("saved mask transition targets a missing object")?;
+        let name = tail[..end].to_vec();
+        if name.len() >= 64 {
+            return Err("saved mask name exceeds the original 64-byte buffers".into());
+        }
+        let decoded =
+            crate::image::load(images, &name)?.ok_or("saved mask image has an unknown codec")?;
+        let mask = ObjectImage {
+            filter: None,
+            name,
+            pixels: decoded.pixels,
+            alpha: decoded.alpha,
+            surface: false,
+        };
+        Ok(Self {
+            put: put != 0,
+            slot,
+            ramp: duration.wrapping_sub(width),
+            width,
+            elapsed: 0,
+            mask,
+        })
     }
     /// Shader constant `count` (0x1400517a0 at creation, 0x14005189e per frame): f32
     /// elapsed / duration × 2.0 for Put and 2.0 minus that for Cut; the end value once the
@@ -233,5 +317,73 @@ impl SceneHost {
         let step = vm.yield_pending_system()?;
         vm.state_mut().set_system_integer(0, 0).expect("slot 0");
         Ok(Some(step))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{raster::RgbaImage, scene::SceneObject};
+    use std::collections::BTreeMap;
+
+    struct Missing;
+    impl ImageSource for Missing {
+        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+            Ok(None)
+        }
+    }
+
+    fn transition() -> MaskTransition {
+        MaskTransition {
+            put: true,
+            slot: 7,
+            ramp: 300,
+            width: 100,
+            elapsed: 250,
+            mask: ObjectImage {
+                filter: None,
+                name: b"mask.pb3".to_vec(),
+                pixels: RgbaImage::new(1, 1, vec![0, 128, 0, 255]).unwrap(),
+                alpha: false,
+                surface: false,
+            },
+        }
+    }
+
+    #[test]
+    fn mask_records_hold_head_words_name_and_the_shader_path_object() {
+        let saved = transition().saved();
+        assert_eq!(saved.len(), 16 + 9 + SAVED_OBJECT);
+        let word = |at: usize| u32::from_le_bytes(saved[at..at + 4].try_into().unwrap());
+        assert_eq!([word(0), word(4), word(8), word(12)], [7, 400, 100, 1]);
+        assert_eq!(&saved[16..25], b"mask.pb3\0");
+        let object = 25;
+        assert_eq!(
+            [
+                word(object),
+                word(object + 4),
+                word(object + 8),
+                word(object + 12)
+            ],
+            [1, 7, 300, 100]
+        );
+        assert_eq!(word(object + 1056), 250);
+        assert!(saved[object + 16..object + 1056].iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn mask_records_need_their_object_image_and_exact_length() {
+        let saved = transition().saved();
+        let objects = BTreeMap::from([(7u8, SceneObject::default())]);
+        // The image lookup runs only for a well-formed record on an existing object.
+        let missing = MaskTransition::restore(&saved, &objects, &mut Missing).unwrap_err();
+        assert!(missing.to_string().contains("mask.pb3"), "{missing}");
+        assert!(MaskTransition::restore(&saved, &BTreeMap::new(), &mut Missing).is_err());
+        assert!(
+            MaskTransition::restore(&saved[..saved.len() - 1], &objects, &mut Missing).is_err()
+        );
+        let mut unterminated = saved.clone();
+        unterminated.truncate(24);
+        assert!(MaskTransition::restore(&unterminated, &objects, &mut Missing).is_err());
     }
 }
