@@ -26,6 +26,14 @@ impl std::fmt::Debug for PreviewMetrics {
     }
 }
 impl cmvs_core::message::GlyphMetrics for PreviewMetrics {
+    fn styled_ink_width(&self, code: u16, size: u32, bold: bool) -> Result<u32, &'static str> {
+        let width = self.ink_width(code, size)?;
+        Ok(if bold && width != 0 {
+            (width + 1).min(size)
+        } else {
+            width
+        })
+    }
     fn ink_width(&self, code: u16, size: u32) -> Result<u32, &'static str> {
         if !(1..=128).contains(&size) {
             return Err("glyph size outside 1..128 preview range");
@@ -82,6 +90,16 @@ fn character(code: u16) -> Result<char, FormatError> {
 fn rgb(color: u32) -> [u8; 3] {
     let [b, g, r, _] = color.to_le_bytes();
     [r, g, b]
+}
+
+/// Preview weight synthesis: extend ink by one pixel to the right before painting
+/// gradients and outlines. This is not GDI's weight-600 rasterizer.
+fn embolden(mask: &mut [u8], side: usize) {
+    for row in mask.chunks_exact_mut(side) {
+        for x in (1..side).rev() {
+            row[x] = row[x].max(row[x - 1]);
+        }
+    }
 }
 
 /// 0x140059d20: signed 10-bit fixed-point color steps over the glyph's size.
@@ -198,7 +216,7 @@ impl FontRenderer {
             glyph.gradient,
             glyph.outline[0],
             glyph.outline[1],
-            0,
+            u32::from(glyph.bold),
         ];
         if let Some(image) = self.cache.get(&key) {
             return Ok(image.clone());
@@ -238,6 +256,9 @@ impl FontRenderer {
             return Err(FormatError(
                 "selected font lacks a supported outline for a character",
             ));
+        }
+        if glyph.bold {
+            embolden(&mut mask, side);
         }
         let image = paint(&mask, side, glyph.colors, glyph.gradient, glyph.outline)?;
         if self.cache.len() >= 128 {
@@ -341,6 +362,7 @@ impl FontRenderer {
             };
             for glyph in group.attached_glyphs() {
                 let pixels = self.glyph(&RecordedGlyph {
+                    bold: false,
                     code: glyph.code,
                     position: glyph.position,
                     size: glyph.size,
@@ -394,6 +416,66 @@ impl FontRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires CMVS_FONT_PATH; synthetic glyphs and external font"]
+    fn bold_glyph_uses_a_distinct_cache_entry_and_increases_ink() {
+        let path = std::env::var_os("CMVS_FONT_PATH").expect("CMVS_FONT_PATH");
+        let mut font = FontRenderer::read(Path::new(&path), 0).unwrap();
+        let mut glyph = RecordedGlyph {
+            bold: false,
+            code: 0x82a0,
+            position: [0, 0],
+            size: 27,
+            colors: [0xffffff; 2],
+            gradient: 0,
+            outline: [0, 0],
+            delay_ms: 0,
+            elapsed_ms: 0,
+            duration_ms: 0,
+            active: false,
+            shown: true,
+            opacity: 255,
+            reveal_mode: 0,
+            reveal_width: 31,
+        };
+        let normal = font.glyph(&glyph).unwrap();
+        glyph.bold = true;
+        let bold = font.glyph(&glyph).unwrap();
+        let ink = |image: &RgbaImage| {
+            image
+                .pixels()
+                .chunks_exact(4)
+                .map(|p| u64::from(p[3]))
+                .sum::<u64>()
+        };
+        assert!(ink(&bold) > ink(&normal));
+        for (before, after) in normal
+            .pixels()
+            .chunks_exact(4)
+            .zip(bold.pixels().chunks_exact(4))
+        {
+            assert!(after[3] >= before[3]);
+        }
+        glyph.bold = false;
+        assert_eq!(font.glyph(&glyph).unwrap(), normal);
+        assert_eq!(font.cache.len(), 2);
+        let metrics = font.metrics();
+        let width = metrics.ink_width(65, 27).unwrap();
+        assert_eq!(
+            metrics.styled_ink_width(65, 27, true).unwrap(),
+            (width + 1).min(27)
+        );
+        assert_eq!(metrics.styled_ink_width(32, 27, true).unwrap(), 0);
+    }
+    #[test]
+    fn bold_mask_extends_ink_once_without_crossing_rows() {
+        let mut mask = vec![0, 20, 200, 0, 0, 0, 0, 0, 255];
+        embolden(&mut mask, 3);
+        assert_eq!(mask, [0, 20, 200, 0, 0, 0, 0, 0, 255]);
+        let mut mask = vec![0, 180, 0, 0, 0, 0, 0, 0, 0];
+        embolden(&mut mask, 3);
+        assert_eq!(mask, [0, 180, 180, 0, 0, 0, 0, 0, 0]);
+    }
     #[test]
     fn glyph_codes_decode_strictly_including_sign_extended_halfwidth() {
         assert_eq!(character(0x82a0).unwrap(), 'あ');

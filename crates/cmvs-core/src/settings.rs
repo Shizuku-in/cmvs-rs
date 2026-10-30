@@ -14,6 +14,7 @@ pub struct SettingsHost {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextOutputSettings {
+    pub bold: bool,
     pub speed: u32,
     pub outline: u32,
     pub reveal_mode: u32,
@@ -22,6 +23,7 @@ pub struct TextOutputSettings {
 impl Default for TextOutputSettings {
     fn default() -> Self {
         Self {
+            bold: false,
             speed: 4,
             outline: 1,
             reveal_mode: 1,
@@ -114,6 +116,7 @@ impl SettingsHost {
         Self {
             read_skip: int("READ_SKIP", 1) != 0,
             text: TextOutputSettings {
+                bold: int("TEXT_BOLD", 0) != 0,
                 speed: int("TEXT_WAIT", 2),
                 outline: int("TEXT_GANG", 0),
                 reveal_mode: int("EFFECT_TYPE", 1),
@@ -138,19 +141,25 @@ impl SettingsHost {
     /// changing subsequent font construction would misrepresent the command.
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
         if let Some((pc, command)) = vm.pending_system() {
-            if command == 0x2e4 {
-                let mode = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x22e4, e.0))?;
+            if matches!(command, 0x2e0 | 0x2e4) {
+                let op = command + 0x2000;
+                let mode = vm.stack().peek_u32(4).map_err(|e| error(pc, op, e.0))?;
                 let value = if mode != 0 {
-                    Some(vm.stack().peek_u32(8).map_err(|e| error(pc, 0x22e4, e.0))? != 0)
+                    Some(vm.stack().peek_u32(8).map_err(|e| error(pc, op, e.0))? != 0)
                 } else {
                     None
                 };
                 vm.complete_system(SystemResult(0x4008))?;
+                let field = if command == 0x2e0 {
+                    &mut self.text.bold
+                } else {
+                    &mut self.read_skip
+                };
                 if let Some(value) = value {
-                    self.read_skip = value;
+                    *field = value;
                 } else {
                     vm.state_mut()
-                        .set_system_integer(0, u32::from(self.read_skip))
+                        .set_system_integer(0, u32::from(*field))
                         .expect("slot 0 exists");
                 }
                 return Ok(true);
@@ -238,7 +247,6 @@ impl SettingsHost {
             // effects before they may be accepted; these reads expose current defaults.
             let value = match command {
                 0x2d5 => Some(1),
-                0x2e0 => Some(0),
                 0x2e9 => Some(1),
                 _ => None,
             };

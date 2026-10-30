@@ -35,7 +35,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<TextObject, FormatError> {
     let cw = |offset: usize| word(c, offset - 328);
     let mut face_field = [0; 64];
     face_field[..font_face.len()].copy_from_slice(&font_face);
-    if a[36..100] != face_field || aw(108) != 0 || aw(112) != 1 || bw(180) != 148 {
+    if a[36..100] != face_field || aw(108) > 1 || aw(112) != 1 || bw(180) != 148 {
         return Err(FormatError("unsupported snapshot text font or layout mode"));
     }
     if cw(328) > 1 {
@@ -73,6 +73,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<TextObject, FormatError> {
     r.finish()?;
     Ok(TextObject {
         font_face,
+        bold: aw(108) != 0,
         scale_bits: 1.0f32.to_bits(),
         logical_size,
         position: [aw(8) as i32, aw(12) as i32],
@@ -128,6 +129,7 @@ pub(crate) fn encode(text: &TextObject) -> Result<Vec<u8>, FormatError> {
         (32, text.glyph_size as u32),
         (36, text.spacing[0] as u32),
         (40, text.spacing[1] as u32),
+        (108, u32::from(text.bold)),
         (112, 1),
         (116, text.color),
         (120, text.decoration_color),
@@ -202,6 +204,10 @@ mod tests {
         let text = decode(&bytes).unwrap();
         assert_eq!(text.font_face, face);
         assert_eq!(encode(&text).unwrap(), bytes);
+        let mut bold = text.clone();
+        bold.bold = true;
+        let encoded = encode(&bold).unwrap();
+        assert_eq!(decode(&encoded).unwrap(), bold);
         // The raw +44 block must agree with the preceding font-name string.
         let at = 6 + face.len() + 1 + 8 + 36;
         bytes[at] = 0;

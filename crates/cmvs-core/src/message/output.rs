@@ -18,6 +18,7 @@ use crate::{
 /// Logical glyph descriptor and reveal state; no device objects or font pixels.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordedGlyph {
+    pub bold: bool,
     pub code: u16,
     pub position: [i32; 2],
     pub size: u32,
@@ -263,6 +264,7 @@ fn push(
         return Err("recorded message glyph limit exceeded");
     }
     text.glyphs.push(RecordedGlyph {
+        bold: text.bold,
         code,
         position: [x as i32, y as i32],
         size,
@@ -562,7 +564,9 @@ fn place(
             let metrics =
                 metrics.ok_or("direct single-byte text requires a font metrics backend")?;
             let code = (byte as i8 as i16) as u16;
-            let width = metrics.ink_width(code, size)?.max(size >> 1);
+            let width = metrics
+                .styled_ink_width(code, size, text.bold)?
+                .max(size >> 1);
             if x >= limit {
                 new_line(text, &mut line, &mut x, &mut y)?;
                 text.layout_scratch = [0; 2];

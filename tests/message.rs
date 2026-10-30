@@ -56,6 +56,7 @@ fn create(code: &mut Vec<u8>, slot: u32, text: u32, rect: [u32; 4]) {
 fn created_text(position: [i32; 2], size: [u32; 2]) -> TextObject {
     TextObject {
         font_face: Vec::new(),
+        bold: false,
         scale_bits: 1.0f32.to_bits(),
         logical_size: [1280, 720],
         position,
@@ -1799,6 +1800,7 @@ fn configured_text_reveal_modes_durations_and_outline_only_affect_new_glyphs() {
             run(&mut vm, &mut messages, 1);
             messages.set_record_output(true);
             messages.set_text_settings(TextOutputSettings {
+                bold: false,
                 speed: 3,
                 outline: 2,
                 reveal_mode: mode,
@@ -1815,6 +1817,7 @@ fn configured_text_reveal_modes_durations_and_outline_only_affect_new_glyphs() {
             assert_eq!(first[0].duration_ms, duration);
             // Changing the current settings must not re-time existing glyphs.
             messages.set_text_settings(TextOutputSettings {
+                bold: false,
                 speed: 10,
                 outline: 0,
                 reveal_mode: 0,
@@ -1851,6 +1854,54 @@ fn configured_text_reveal_modes_durations_and_outline_only_affect_new_glyphs() {
             assert!(!messages.text(7).unwrap().glyphs[3].shown);
         }
     }
+}
+
+#[test]
+fn bold_updates_default_text_fonts_but_preserves_uploaded_glyphs_and_named_fonts() {
+    use cmvs_rs::settings::TextOutputSettings;
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 300, 100]);
+    call(&mut code, 0x2159, &[0, 0, 0, 0]);
+    call(&mut code, 0x2159, &[0, 0, 0, 0]);
+    call(&mut code, 0x2106, &[0x8000_0000, 7]);
+    call(&mut code, 0x2159, &[0, 0, 0, 0]);
+    let script = script_with_text(&code, b"\x82\xa0\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    messages.set_record_output(true);
+    run(&mut vm, &mut messages, 1);
+    for bold in [false, true] {
+        messages.set_text_settings(TextOutputSettings {
+            bold,
+            speed: 0,
+            ..Default::default()
+        });
+        pending(&mut vm);
+        messages
+            .try_record_poll(&mut vm, wait_flags(false, false))
+            .unwrap();
+    }
+    let glyphs = &messages.text(7).unwrap().glyphs;
+    assert_eq!(
+        glyphs.iter().map(|g| g.bold).collect::<Vec<_>>(),
+        [false, true]
+    );
+    // Set a named face via the bank; it retains its weight through global changes.
+    vm.state_mut()
+        .set_string(0, cmvs_rs::settings::DEFAULT_FONT_FACE)
+        .unwrap();
+    run(&mut vm, &mut messages, 1);
+    messages.set_text_settings(TextOutputSettings {
+        bold: false,
+        speed: 0,
+        ..Default::default()
+    });
+    assert!(messages.text(7).unwrap().bold);
+    pending(&mut vm);
+    messages
+        .try_record_poll(&mut vm, wait_flags(false, false))
+        .unwrap();
+    assert!(messages.text(7).unwrap().glyphs[2].bold);
 }
 
 #[test]

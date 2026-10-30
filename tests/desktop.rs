@@ -27,6 +27,7 @@ fn horizontal_glyph_reveal_crops_the_full_font_image_without_rescaling() {
     assert!(messages.try_handle(&mut vm).unwrap());
     messages.set_record_output(true);
     messages.set_text_settings(TextOutputSettings {
+        bold: false,
         speed: 1,
         outline: 0,
         reveal_mode: 2,

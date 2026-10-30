@@ -7,6 +7,35 @@ mod bytecode;
 use bytecode::{command, pending, script};
 
 #[test]
+fn bold_setting_normalizes_ini_and_vm_values_and_preserves_write_result() {
+    assert!(!SettingsHost::default().text_output().bold);
+    assert!(!SettingsHost::from_ini(&[]).text_output().bold);
+    assert!(
+        SettingsHost::from_ini(b"[MESSAGE_INFO]\nTEXT_BOLD=-1\n")
+            .text_output()
+            .bold
+    );
+    let mut code = vec![];
+    for raw in [u32::MAX, 0, 2] {
+        command(&mut code, 0x22e0, &[1, raw]);
+        command(&mut code, 0x22e0, &[0, 0]);
+    }
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut settings = SettingsHost::default();
+    for expected in [1, 0, 1] {
+        vm.state_mut().set_system_integer(0, 77).unwrap();
+        pending(&mut vm);
+        settings.try_handle(&mut vm).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(77));
+        pending(&mut vm);
+        settings.try_handle(&mut vm).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(expected));
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
+}
+
+#[test]
 fn read_skip_setting_loads_ini_and_normalizes_writes_without_changing_results() {
     assert!(!SettingsHost::default().read_skip());
     assert!(SettingsHost::from_ini(&[]).read_skip());
@@ -66,6 +95,7 @@ fn text_settings_round_trip_clamps_preserve_results_and_keep_outline_signed_rema
     assert_eq!(
         host.text_output(),
         cmvs_rs::settings::TextOutputSettings {
+            bold: false,
             speed: 7,
             outline: 2,
             reveal_mode: 0,
@@ -577,7 +607,7 @@ fn automatic_advance_fields_round_trip_raw_words_and_normalize_only_the_boolean(
 
 #[test]
 fn configuration_queries_expose_current_constructor_policy_and_setters_stay_barriers() {
-    for (op, value) in [(0x22d5, 1), (0x22e0, 0), (0x22e9, 1)] {
+    for (op, value) in [(0x22d5, 1), (0x22e9, 1)] {
         let mut code = vec![];
         command(&mut code, op, &[0, 0]);
         command(&mut code, op, &[1, 2]);

@@ -116,6 +116,8 @@ pub struct TextObject {
     /// Requested face (+44), empty selects the configured default. Currently only
     /// the original default face is supported by the explicit font backend.
     pub font_face: Vec<u8>,
+    /// +108: weight of the persistent font object, captured by each new glyph.
+    pub bold: bool,
     /// Uniform scale of the text's scene object, kept as f32 bits (0x20ec).
     pub scale_bits: u32,
     /// Configuration words 4/5 (+552/+556): the script-space size that 0x14005aac0 divides
@@ -177,6 +179,12 @@ pub struct TextObject {
 /// The core applies the original minimum half-size advance and spacing separately.
 pub trait GlyphMetrics: std::fmt::Debug {
     fn ink_width(&self, code: u16, size: u32) -> Result<u32, &'static str>;
+    fn styled_ink_width(&self, code: u16, size: u32, bold: bool) -> Result<u32, &'static str> {
+        if bold {
+            return Err("bold glyph metrics are not implemented by this backend");
+        }
+        self.ink_width(code, size)
+    }
 }
 
 #[derive(Debug, Default)]
@@ -190,6 +198,7 @@ pub struct MessageHost {
     texts: [Option<TextObject>; TEXT_OBJECTS],
     /// +4224: created on first use of a text index and never freed by these commands.
     fonts: [bool; TEXT_OBJECTS],
+    font_bold: [bool; TEXT_OBJECTS],
     /// Independent engine +4328 text lists and +4392 persistent font objects.
     auxiliary_texts: [Option<AuxiliaryText>; AUXILIARY_TEXTS],
     auxiliary_fonts: [bool; AUXILIARY_TEXTS],
@@ -198,6 +207,16 @@ pub struct MessageHost {
 
 impl MessageHost {
     pub fn set_text_settings(&mut self, settings: crate::settings::TextOutputSettings) {
+        // 0x140068960 changes only existing texts that request the default face.
+        // Already uploaded glyph images retain the weight used at their creation.
+        if self.output_settings.bold != settings.bold {
+            for (index, text) in self.texts.iter_mut().enumerate() {
+                if let Some(text) = text.as_mut().filter(|t| t.font_face.is_empty()) {
+                    text.bold = settings.bold;
+                    self.font_bold[index] = settings.bold;
+                }
+            }
+        }
         self.output_settings = settings;
     }
     /// Font device service; headless recording keeps the missing-metrics barrier.
@@ -209,10 +228,12 @@ impl MessageHost {
         windows: [Option<MessageWindow>; MESSAGE_WINDOWS],
     ) -> Self {
         let fonts = std::array::from_fn(|i| texts[i].is_some());
+        let font_bold = std::array::from_fn(|i| texts[i].as_ref().is_some_and(|t| t.bold));
         Self {
             texts,
             windows,
             fonts,
+            font_bold,
             ..Self::default()
         }
     }
@@ -911,6 +932,7 @@ impl MessageHost {
         self.fonts[index] = true;
         self.texts[index] = Some(TextObject {
             font_face: Vec::new(),
+            bold: self.font_bold[index],
             scale_bits: 1.0f32.to_bits(),
             logical_size: RESEARCH_SCREEN.map(|v| v as i32),
             position: [0, 0],
@@ -1880,9 +1902,11 @@ impl MessageHost {
         }
         vm.complete_system(SystemResult(if command == 0x140 { 0x4018 } else { 0x4020 }))?;
         self.fonts[text] = true;
+        self.font_bold[text] = self.output_settings.bold;
         // 0x14005d3b0's setter calls override the constructor values (e.g. +144 30 -> 100).
         self.texts[text] = Some(TextObject {
             font_face: Vec::new(),
+            bold: self.font_bold[text],
             scale_bits: 1.0f32.to_bits(),
             logical_size,
             position,
@@ -1985,6 +2009,7 @@ impl MessageHost {
             if let Some(text) = text {
                 text.cursor = [text.area[0], text.area[1]];
                 self.fonts[index] = true;
+                self.font_bold[index] = text.bold;
             }
         }
         self.texts = texts;
