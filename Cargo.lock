@@ -249,11 +249,19 @@ dependencies = [
  "ab_glyph",
  "cmvs-audio",
  "cmvs-core",
- "cmvs-windows",
+ "cmvs-native",
  "encoding_rs",
  "ico",
  "softbuffer",
  "winit",
+]
+
+[[package]]
+name = "cmvs-native"
+version = "0.1.0"
+dependencies = [
+ "raw-window-handle",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -263,13 +271,6 @@ dependencies = [
  "cmvs-audio",
  "cmvs-core",
  "cmvs-desktop",
-]
-
-[[package]]
-name = "cmvs-windows"
-version = "0.1.0"
-dependencies = [
- "windows-sys 0.61.2",
 ]
 
 [[package]]

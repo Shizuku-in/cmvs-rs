@@ -79,4 +79,4 @@ CUR 解码范围：一个目录条目、40 字节 BITMAPINFOHEADER、正高度�
 
 ## 字体对话框（2026-10-31）
 
-`PlatformBackend::choose_font(current)` 对应0x213d的模态对话框：参数与结果均为游戏编码的字体名，Ok(None)表示取消。默认实现报错。记录后端按 `answer_font_dialog` 预置的答案依次作答并记录每次初值，没有答案时报错。桌面后端在Windows上把名称转为UTF-16后调用 `cmvs_windows::font_dialog::choose_font`（`ChooseFontW`，Shift-JIS脚本、无竖排、仅TrueType，属主为当前winit窗口），再转回游戏编码，并要求字体库能解析该面；其他平台预留并报错。模态对话框在事件循环回调内运行，期间不推进VM。
+`PlatformBackend::choose_font(current)` 对应0x213d的模态对话框：参数与结果均为游戏编码的字体名，Ok(None)表示取消。默认实现报错。记录后端按 `answer_font_dialog` 预置的答案依次作答并记录每次初值，没有答案时报错。桌面后端把名称解码后以winit窗口的原始句柄调用 `cmvs_native::choose_font`，再转回游戏编码，并要求字体库能解析该面。Windows实现为 `ChooseFontW`（Shift-JIS脚本、无竖排、仅TrueType）；其他平台由 `cmvs-native` 返回 Unsupported，桌面代码不含平台条件。模态对话框在事件循环回调内运行，期间不推进VM。

@@ -1,18 +1,21 @@
 [package]
-name = "cmvs-windows"
+name = "cmvs-native"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
-description = "Windows-only native dialogs for the CMVS desktop host; the workspace's only FFI crate"
+description = "Operating-system integration for CMVS hosts behind one cross-platform API; the workspace's only FFI crate"
 
 # The workspace forbids unsafe code. This crate alone denies it and allows it only in the
-# documented system calls of each module.
+# documented system calls of each platform module.
 [lints.rust]
 unsafe_code = "deny"
 
 [lints.clippy]
 all = "warn"
+
+[dependencies]
+raw-window-handle = "=0.6.2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", features = [

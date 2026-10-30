@@ -167,14 +167,11 @@ impl PlatformBackend for NativeBackend<'_> {
     fn fullscreen(&self) -> Result<bool, Box<dyn Error>> {
         Ok(self.window.fullscreen().is_some())
     }
-    #[cfg(windows)]
     fn choose_font(&mut self, current: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
-        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-        let RawWindowHandle::Win32(handle) = self.window.window_handle()?.as_raw() else {
-            return Err("the native font dialog needs a Win32 window".into());
-        };
+        use winit::raw_window_handle::HasWindowHandle;
+        let owner = self.window.window_handle()?.as_raw();
         let current = self.encoding.decode(current)?;
-        let Some(face) = cmvs_windows::font_dialog::choose_font(handle.hwnd, &current)? else {
+        let Some(face) = cmvs_native::choose_font(owner, &current)? else {
             println!("# native font dialog cancelled");
             return Ok(None);
         };
@@ -186,10 +183,6 @@ impl PlatformBackend for NativeBackend<'_> {
         }
         println!("# native font dialog chose {face}");
         Ok(Some(bytes))
-    }
-    #[cfg(not(windows))]
-    fn choose_font(&mut self, _current: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
-        Err("the native font dialog is reserved for later platforms".into())
     }
     fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>> {
         match request {

@@ -1,7 +1,7 @@
 //! Face-name font resolution standing in for GDI's CreateFontA lookup. The explicit
 //! `--font` file serves the built-in default face; other faces are found by family name
-//! in the platform font directories. Only Windows directories are listed so far; other
-//! platforms reserve their discovery and resolve the default face only.
+//! in the directories `cmvs_native::font_directories` lists for this platform (none yet
+//! outside Windows, where only the default face resolves).
 use ab_glyph::FontVec;
 use cmvs_core::{FormatError, settings::DEFAULT_FONT_FACE};
 use std::{
@@ -29,7 +29,7 @@ impl FontLibrary {
             default,
             loaded: BTreeMap::new(),
             index: None,
-            directories: system_font_directories(),
+            directories: cmvs_native::font_directories(),
         }
     }
     /// Research override of the searched directories.
@@ -82,19 +82,6 @@ impl FontLibrary {
         };
         Ok(index.get(&key).cloned())
     }
-}
-
-fn system_font_directories() -> Vec<PathBuf> {
-    let mut directories = Vec::new();
-    if cfg!(windows) {
-        if let Some(windows) = std::env::var_os("WINDIR") {
-            directories.push(PathBuf::from(windows).join("Fonts"));
-        }
-        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-            directories.push(PathBuf::from(local).join("Microsoft/Windows/Fonts"));
-        }
-    }
-    directories
 }
 
 /// First file wins for a name, scanning directories in order and files sorted by path.

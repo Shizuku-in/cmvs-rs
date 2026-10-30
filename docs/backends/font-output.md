@@ -88,4 +88,4 @@ TEXT_BOLD 与 0x22e0 更新使用默认字体的现有文字对象，新建消�
 
 ## 按面解析字体（2026-10-31）
 
-字形与文字对象携带字体对象的面（游戏编码）。`FontLibrary` 以 `--font` 文件服务内置缺省面ＭＳ ゴシック，其他面在系统字体目录中按家族名解析：首次需要时扫描目录内 ttf/ttc/otf/otc 文件的表目录与name表（ID 1/16，Unicode及Windows UTF-16记录，名称不区分大小写），同名取路径排序靠前者，载入整个文件后缓存。字形缓存与度量按面区分，`GlyphMetrics` 以面为参数。目前只列出Windows字体目录；其他平台只能解析缺省面。名称匹配不检查字符集，与原版以SHIFTJIS_CHARSET枚举不完全相同。
+字形与文字对象携带字体对象的面（游戏编码）。`FontLibrary` 以 `--font` 文件服务内置缺省面ＭＳ ゴシック，其他面在系统字体目录中按家族名解析：首次需要时扫描目录内 ttf/ttc/otf/otc 文件的表目录与name表（ID 1/16，Unicode及Windows UTF-16记录，名称不区分大小写），同名取路径排序靠前者，载入整个文件后缓存。字形缓存与度量按面区分，`GlyphMetrics` 以面为参数。目录来自 `cmvs_native::font_directories`，目前只有Windows（系统与当前用户字体目录）；其他平台只能解析缺省面。名称匹配不检查字符集，与原版以SHIFTJIS_CHARSET枚举不完全相同。

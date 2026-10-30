@@ -2212,3 +2212,8 @@ Windows桌面以 --font msgothic.ttc、记录音频、独立用户目录 target/
 真实 `external_system_settings_entries_render_and_return` 点击「フォント選択」，记录后端依次回答ＭＳ 明朝、取消、ＭＳ ゴシック：确定后全局面变为ＭＳ 明朝，设置页演示文字重新输出的字形携带该面，桌面字体库从 `C:\Windows\Fonts` 解析出字体并呈现；取消不变；随后恢复缺省。三次对话框的初值依次为缺省、明朝、明朝。记录音频release 11.35秒；原生音频变体同时重跑通过（两项145.56秒）。这里的对话框由记录后端脚本作答，`ChooseFontW` 原生窗口尚未由人工实测。
 
 合成检查覆盖：字体对象面在槽重建、全局改写（0x22de）、0x2106命名/空名、0x213d刷新（只改默认面文字）与新槽创建下的变化，旧字形保留原面；0x213d确定/取消/无答案失败、非法名称（空、32字节、含NUL）不提交；FONT读取（引号、截断0x7f字节、Shift-JIS名）与保存重启回读；name表扫描对单面字体、字体集合、非UTF-16记录与非家族名ID的处理。默认786项、全workspace全功能848项测试通过（分别8/13项忽略），格式与两套严格Clippy通过；同时修正上一提交在默认特性下未使用的测试辅助函数。
+
+
+## 原生平台包整理（2026-10-31）
+
+基线 `ec6a79c`。用户已在Windows原生窗口中实测「フォント選択」的系统字体对话框。为后续 macOS/iOS/Linux/Android/wasm，按讨论把 `cmvs-windows` 改为单一的 `cmvs-native` 包：`lib.rs` 定义 `choose_font(owner: RawWindowHandle, current)` 与 `font_directories()` 统一接口和 `NativeError`，`windows` 模块实现，`unsupported` 模块对预留平台返回 Unsupported；系统字体目录从桌面字体库移入该包，桌面代码去掉平台条件。unsafe 仍只在该包的两处系统调用。本机只装有Windows目标，其他平台未构建；`unsupported` 模块在Windows上同样编译并有单元测试。行为不变：默认与全功能测试、两套严格Clippy、格式检查及真实设置回归（含字体对话框步骤）通过。

@@ -16,7 +16,7 @@ const FACE_UNITS: usize = 32;
 /// Shift-JIS and vertical faces are hidden, matching the original list; only TrueType
 /// faces are offered because the preview renderer reads outline fonts. Ok(None) means
 /// the user cancelled.
-pub fn choose_font(owner: NonZeroIsize, current: &str) -> Result<Option<String>, String> {
+pub(super) fn choose_font(owner: NonZeroIsize, current: &str) -> Result<Option<String>, String> {
     let mut font = LOGFONTW {
         lfCharSet: SHIFTJIS_CHARSET,
         ..Default::default()
