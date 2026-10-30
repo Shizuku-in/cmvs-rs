@@ -358,6 +358,30 @@ impl NativeAudio {
     }
 }
 impl AudioBackend for NativeAudio {
+    fn set_volumes(&mut self, channels: &[Option<u32>; 15]) -> Result<(), Box<dyn Error>> {
+        // No fallible operation after the first mutation. Keep fade envelopes and
+        // playback positions intact, including paused/prepared channels.
+        for (index, volume) in channels.iter().enumerate() {
+            let Some(volume) = volume else {
+                continue;
+            };
+            // 0x140087ba0 ignores a base gain above 256, preserving the old one.
+            if *volume > 256 {
+                continue;
+            }
+            let channel = match index {
+                0..=1 => &mut self.bgm[index],
+                2 => &mut self.movie,
+                3..=4 => continue, // other movie/device slots have no player yet
+                5..=8 => &mut self.voice[index - 5],
+                _ => &mut self.se[index - 9],
+            };
+            if let Some(channel) = channel {
+                Self::set_gain(channel, *volume as f32 / 256.0);
+            }
+        }
+        Ok(())
+    }
     fn configure_paths(
         &mut self,
         paths: &BTreeMap<(u16, u32), Vec<u8>>,

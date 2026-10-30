@@ -186,6 +186,18 @@ fn native_device_smoke() -> Result<(), Box<dyn std::error::Error>> {
     pump(&mut audio)?;
     assert!(audio.bgm_position(0)?.is_some_and(|ms| ms > 0));
     assert_eq!(audio.bgm_position(1)?, None);
+    let before_gain_change = audio.bgm_position(0)?.unwrap();
+    let mut gains = [None; 15];
+    gains[0] = Some(8);
+    audio.set_volumes(&gains)?;
+    pump(&mut audio)?;
+    assert!(
+        audio
+            .bgm_position(0)?
+            .is_some_and(|ms| ms > before_gain_change)
+    );
+    gains[0] = Some(16);
+    audio.set_volumes(&gains)?;
     println!("# smoke: switch BGM channels, then fade and stop");
     audio.play_bgm(&AudioRequest::PlayBgm {
         channel: 1,

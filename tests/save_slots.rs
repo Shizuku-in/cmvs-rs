@@ -487,6 +487,21 @@ fn external_system_settings_entries_render_and_return() {
     assert_eq!(group.object, 64);
     assert_eq!(group.buttons.len(), 292);
     assert!(ui.run.messages().window(6).is_some());
+    // The original slider logic quantizes the pointer and calls 0x22d9..0x22dd.
+    for (index, y) in [252, 286, 320, 354, 388].into_iter().enumerate() {
+        let before = ui.run.audio().settings();
+        ui.click([900, y], 30);
+        let after = ui.run.audio().settings();
+        let fields = |s: cmvs_rs::audio::AudioSettings| [s.master, s.bgm, s.se, s.voice, s.movie];
+        assert_ne!(fields(before)[index], fields(after)[index]);
+        for other in 0..5 {
+            if other != index {
+                assert_eq!(fields(before)[other], fields(after)[other]);
+            }
+        }
+        font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+            .unwrap();
+    }
     for _ in 0..120 {
         font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
             .unwrap();
@@ -506,7 +521,9 @@ fn external_system_settings_entries_render_and_return() {
     ui.press([640, 360], 3, 120);
     ui.wait_for_text();
     assert!(ui.run.buttons().group(1).is_none());
-    println!("settings: title + toolbar; three pages, 242 rendered frames, right-click return");
+    println!(
+        "settings: title + toolbar; five volume sliders, three pages, 247 rendered frames, right-click return"
+    );
 }
 
 impl Ui<'_, '_> {

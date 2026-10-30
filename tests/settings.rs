@@ -7,6 +7,129 @@ mod bytecode;
 use bytecode::{command, pending, script};
 
 #[test]
+fn live_volume_setters_clamp_and_update_only_their_device_family() {
+    use cmvs_rs::audio::{AudioHost, AudioRequest, AudioSettings, RecordingAudio};
+    for (op, raw, value) in [
+        (0x22d9, u32::MAX, 0),
+        (0x22da, 300, 256),
+        (0x22db, 128, 128),
+        (0x22dc, 64, 64),
+        (0x22dd, 32, 32),
+    ] {
+        let mut code = vec![];
+        command(&mut code, op, &[1, raw]);
+        command(&mut code, op, &[0, 0]);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut host = AudioHost::new(AudioSettings::default());
+        let mut backend = RecordingAudio::default();
+        vm.state_mut().set_system_integer(0, 77).unwrap();
+        pending(&mut vm);
+        host.try_handle(&mut vm, &mut backend).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(77));
+        assert_eq!(vm.stack().len_bytes(), 0);
+        let AudioRequest::SetVolumes { channels } = backend.requests().last().unwrap() else {
+            panic!("volume request")
+        };
+        for (index, channel) in channels.iter().enumerate() {
+            let affected = match op {
+                0x22d9 => true,
+                0x22da => index < 2,
+                0x22db => index >= 9,
+                0x22dc => (5..9).contains(&index),
+                _ => (2..5).contains(&index),
+            };
+            assert_eq!(*channel, affected.then_some(value));
+        }
+        pending(&mut vm);
+        host.try_handle(&mut vm, &mut backend).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(value));
+    }
+}
+
+#[test]
+fn disabled_bgm_keeps_device_gains_while_accepting_volume_configuration() {
+    use cmvs_rs::audio::{AudioHost, AudioRequest, AudioSettings, RecordingAudio};
+    for op in [0x22d9, 0x22da] {
+        let mut code = vec![];
+        command(&mut code, op, &[1, 42]);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut host = AudioHost::new(AudioSettings {
+            bgm_enabled: false,
+            ..AudioSettings::default()
+        });
+        let mut backend = RecordingAudio::default();
+        pending(&mut vm);
+        host.try_handle(&mut vm, &mut backend).unwrap();
+        let AudioRequest::SetVolumes { channels } = backend.requests().last().unwrap() else {
+            panic!("volume request")
+        };
+        assert_eq!(&channels[..2], &[None, None]);
+        if op == 0x22da {
+            assert_eq!(channels, &[None; 15]);
+            assert_eq!(host.settings().bgm, 42);
+        } else {
+            assert_eq!(&channels[2..], &[Some(42); 13]);
+            assert_eq!(host.settings().master, 42);
+        }
+    }
+}
+
+#[test]
+fn failed_live_gain_update_preserves_configuration_stack_and_pending_command() {
+    use cmvs_rs::audio::{AudioBackend, AudioHost, AudioRequest};
+    struct Reject;
+    impl AudioBackend for Reject {
+        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn std::error::Error>> {
+            unreachable!()
+        }
+        fn set_volumes(&mut self, _: &[Option<u32>; 15]) -> Result<(), Box<dyn std::error::Error>> {
+            Err("synthetic failure".into())
+        }
+    }
+    let mut code = vec![];
+    command(&mut code, 0x22da, &[1, 42]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = AudioHost::default();
+    let before = host.settings();
+    pending(&mut vm);
+    let pc = vm.pc();
+    assert!(host.try_handle(&mut vm, &mut Reject).is_err());
+    assert_eq!(host.settings(), before);
+    assert_eq!(vm.pc(), pc);
+    assert_eq!(vm.stack().len_bytes(), 8);
+    assert!(vm.pending_system().is_some());
+}
+
+#[test]
+fn master_adjustment_and_se_adjustment_preserve_the_original_gain_asymmetry() {
+    use cmvs_rs::audio::{AudioHost, AudioRequest, RecordingAudio};
+    let mut code = vec![];
+    command(&mut code, 0x20b0, &[0, 0x8000_0000, 64, 0, 0]);
+    command(&mut code, 0x22db, &[1, 128]);
+    command(&mut code, 0x22d9, &[1, 128]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_string(0, b"synthetic.ogg").unwrap();
+    let mut host = AudioHost::default();
+    let mut backend = RecordingAudio::default();
+    pending(&mut vm);
+    host.try_handle(&mut vm, &mut backend).unwrap();
+    for expected in [32, 64] {
+        pending(&mut vm);
+        host.try_handle(&mut vm, &mut backend).unwrap();
+        let AudioRequest::SetVolumes { channels } = backend.requests().last().unwrap() else {
+            panic!("volume request")
+        };
+        assert_eq!(channels[9], Some(expected));
+        assert_eq!(channels[10], Some(if expected == 32 { 128 } else { 64 }));
+    }
+    assert_eq!(host.channel(0).unwrap().volume, 64);
+}
+
+#[test]
 fn font_name_query_writes_the_bank_and_preserves_other_results() {
     let mut code = vec![];
     for slot in [0, 7, 127, 128] {

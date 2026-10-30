@@ -78,6 +78,8 @@ pub struct SeChannel {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AudioRequest {
+    /// Atomic gain update of device channels 0..14; None preserves that channel.
+    SetVolumes { channels: [Option<u32>; 15] },
     /// 0x140088390 on device channel `channel + 9`.
     PlaySe {
         channel: u8,
@@ -143,6 +145,10 @@ pub enum AudioRequest {
 }
 
 pub trait AudioBackend {
+    /// Apply the whole gain update or leave all channels unchanged on error.
+    fn set_volumes(&mut self, _channels: &[Option<u32>; 15]) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement live volume changes".into())
+    }
     /// Supply the currently registered resource roots before loading a sound.
     fn configure_paths(
         &mut self,
@@ -247,6 +253,11 @@ impl RecordingAudio {
     }
 }
 impl AudioBackend for RecordingAudio {
+    fn set_volumes(&mut self, channels: &[Option<u32>; 15]) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::SetVolumes {
+            channels: *channels,
+        })
+    }
     fn play(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error>> {
         self.record(request.clone())?;
         Ok(false)
@@ -371,7 +382,7 @@ impl AudioHost {
                     .expect("slot 0 exists");
                 return Ok(true);
             }
-            Some((_, 0x2d6..=0x2dd)) => return self.try_settings_query(vm),
+            Some((_, 0x2d6..=0x2dd)) => return self.try_settings_query(vm, backend),
             Some((_, 0xa8)) => return self.try_voice_stop(vm, backend),
             Some((_, 0xa6)) => return self.try_voice_play(vm, backend),
             Some((_, 0xb1)) => return self.try_start(vm, backend),
@@ -441,9 +452,13 @@ impl AudioHost {
         self.played[channel as usize] = 256;
         Ok(true)
     }
-    /// Configuration reads use the same settings as playback. Changing active device
-    /// channels needs a backend transaction and remains an explicit barrier.
-    fn try_settings_query(&self, vm: &mut Machine<'_>) -> Result<bool, Box<dyn Error>> {
+    /// Configuration reads and live volume writes use the same playback settings.
+    /// Commit writes only after the backend accepts the channel gain transaction.
+    fn try_settings_query(
+        &mut self,
+        vm: &mut Machine<'_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<bool, Box<dyn Error>> {
         let (pc, command) = vm.pending_system().expect("pending configuration command");
         let arg = |distance| {
             vm.stack()
@@ -451,6 +466,45 @@ impl AudioHost {
                 .map_err(|e| error(pc, command + 0x2000, e.0))
         };
         if arg(4)? != 0 {
+            if command >= 0x2d9 {
+                let value = (arg(8)? as i32).clamp(0, 256) as u32;
+                let mut settings = self.settings;
+                match command {
+                    0x2d9 => settings.master = value,
+                    0x2da => settings.bgm = value,
+                    0x2db => settings.se = value,
+                    0x2dc => settings.voice = value,
+                    _ => settings.movie = value,
+                }
+                let mut channels = [None; 15];
+                let product = |volume| settings.master.wrapping_mul(volume) >> 8;
+                if matches!(command, 0x2d9 | 0x2da) && settings.bgm_enabled {
+                    channels[0..2].fill(Some(product(settings.bgm)));
+                }
+                if matches!(command, 0x2d9 | 0x2dd) {
+                    channels[2..5].fill(Some(product(settings.movie)));
+                }
+                if matches!(command, 0x2d9 | 0x2dc) {
+                    channels[5..9].fill(Some(product(settings.voice)));
+                }
+                if matches!(command, 0x2d9 | 0x2db) {
+                    for (index, channel) in channels[9..15].iter_mut().enumerate() {
+                        let mut volume = product(settings.se);
+                        // Master adjustment deliberately omits per-SE gain in the original.
+                        if command == 0x2db
+                            && let Some(se) = &self.channels[index]
+                            && se.volume > 0
+                        {
+                            volume = (se.volume as u32).wrapping_mul(volume) >> 8;
+                        }
+                        *channel = Some(volume);
+                    }
+                }
+                backend.set_volumes(&channels)?;
+                vm.complete_system(SystemResult(0x4008))?;
+                self.settings = settings;
+                return Ok(true);
+            }
             return Err(error(
                 pc,
                 command + 0x2000,
