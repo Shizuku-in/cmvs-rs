@@ -706,6 +706,22 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         .unwrap();
     ui.click(ui.button(1, 1), 120);
     assert_eq!(ui.run.buttons().group(1).unwrap().buttons.len(), 50);
+    for (x, expected) in [(472, 0), (576, 1)] {
+        ui.click([x, 239], 30);
+        assert_eq!(ui.run.machine().state().integer(2197), Some(expected));
+        font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+            .unwrap();
+    }
+    for (point, variable, expected, other) in
+        [([300, 400], 2196, 1, 2195), ([500, 440], 2195, 6, 2196)]
+    {
+        let before = ui.run.machine().state().integer(other);
+        ui.click(point, 30);
+        assert_eq!(ui.run.machine().state().integer(variable), Some(expected));
+        assert_eq!(ui.run.machine().state().integer(other), before);
+        font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+            .unwrap();
+    }
     for (x, active) in [(472, false), (576, true)] {
         ui.click([x, 306], 30);
         assert_eq!(ui.run.settings().active_draw(), active);
@@ -757,6 +773,8 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     ui.press([640, 360], 3, 120);
     ui.wait_for_text();
     assert!(ui.run.buttons().group(1).is_none());
+    assert_eq!(ui.run.machine().state().integer(6), Some(1));
+    assert_eq!(ui.run.machine().state().integer(2195), Some(6));
     let before_auto = ui.run.history().entries().len();
     ui.voice_fades.clear();
     ui.voices.clear();
@@ -803,8 +821,26 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     }
     assert_eq!(ui.run.history().entries().len(), stopped);
     assert!(ui.waiting_for_text());
+    let panels: Vec<_> = ui
+        .run
+        .messages()
+        .window(0)
+        .unwrap()
+        .object
+        .children
+        .range(64..=96)
+        .filter(|(_, child)| child.shown)
+        .map(|(_, child)| child)
+        .collect();
+    assert!(!panels.is_empty());
+    assert!(ui.run.messages().window(0).unwrap().object.image.is_some());
+    assert!(
+        panels
+            .iter()
+            .all(|child| child.draw.as_ref().unwrap().words[17] == 32)
+    );
     println!(
-        "settings: native_audio={native_audio}; title + toolbar; background/fullscreen/aspect, cursor hide, voice stop modes, read-skip policy, bold/text/audio/auto settings, three pages, 434 settings frames; auto advanced at least three entries in {auto_frames} rendered frames with {} voices and {} voice fades; disabled then idle 240 rendered frames",
+        "settings: native_audio={native_audio}; title + toolbar; background/opacity/fullscreen/aspect, cursor hide, voice stop modes, read-skip policy, bold/text/audio/auto settings, three pages, 438 settings frames; auto advanced at least three entries in {auto_frames} rendered frames with {} voices and {} voice fades; disabled then idle 240 rendered frames",
         ui.voices.len(),
         ui.voice_fades.len()
     );

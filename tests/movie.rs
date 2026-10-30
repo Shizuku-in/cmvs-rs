@@ -657,6 +657,142 @@ fn scene_start_does_not_seek_and_preserves_a_paused_completion_state() {
     assert!(p.active && p.paused);
     assert_eq!(movies.scene_player(0).unwrap().frame, 0);
 }
+
+#[test]
+fn scene_pause_keeps_frame_and_resume_discards_fractional_time_without_catching_up() {
+    let mut code = vec![];
+    scene_start(&mut code, &[0, 0, 0, 3, 0]);
+    for op in [0x230c, 0x230b, 0x230b, 0x230b] {
+        code.extend(slot_command(op, &[0]));
+    }
+    let (script, mut files) = scene_play_fixture(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut movies = MovieHost::default();
+    let mut scene = cmvs_rs::scene::SceneHost::default();
+    pending(&mut vm);
+    movies
+        .try_create_scene(&mut vm, &mut scene, &mut files)
+        .unwrap();
+    pending(&mut vm);
+    movies.try_start_scene(&mut vm).unwrap();
+    movies.advance_scene(33, &mut scene).unwrap();
+    vm.state_mut().set_system_integer(0, 77).unwrap();
+    pending(&mut vm);
+    movies.try_handle(&mut vm).unwrap();
+    let before = movies.scene_player(0).unwrap().playback.clone();
+    assert!(before.active && before.paused);
+    movies.advance_scene(10_000, &mut scene).unwrap();
+    assert_eq!(movies.scene_player(0).unwrap().frame, 0);
+    assert_eq!(movies.scene_player(0).unwrap().playback, before);
+    pending(&mut vm);
+    movies.try_handle(&mut vm).unwrap();
+    let p = &movies.scene_player(0).unwrap().playback;
+    assert!(p.active && !p.paused);
+    assert_eq!((p.elapsed, p.last_tick), (0, 10_033));
+    movies.advance_scene(33, &mut scene).unwrap();
+    pending(&mut vm);
+    movies.try_handle(&mut vm).unwrap();
+    assert_eq!(movies.scene_player(0).unwrap().playback.elapsed, 0);
+    movies.advance_scene(66, &mut scene).unwrap();
+    assert_eq!(movies.scene_player(0).unwrap().frame, 0);
+    movies.advance_scene(1, &mut scene).unwrap();
+    assert_eq!(movies.scene_player(0).unwrap().frame, 1);
+    movies.advance_scene(1000, &mut scene).unwrap();
+    let before = movies.scene_player(0).unwrap().playback.clone();
+    assert!(!before.active && before.paused);
+    pending(&mut vm);
+    movies.try_handle(&mut vm).unwrap();
+    let after = &movies.scene_player(0).unwrap().playback;
+    assert!(!after.active && !after.paused);
+    assert_eq!(
+        (after.elapsed, after.last_tick),
+        (before.elapsed, before.last_tick)
+    );
+    assert_eq!(vm.state().system_integer(0), Some(77));
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
+fn scene_pause_resume_empty_slots_are_noops_and_invalid_slots_remain_pending() {
+    for op in [0x230b, 0x230c] {
+        for slot in [0, 2, 3, u32::MAX] {
+            let code = slot_command(op, &[slot]);
+            let script = script(&code);
+            let mut vm = Machine::new(&script).unwrap();
+            pending(&mut vm);
+            vm.state_mut().set_system_integer(0, 77).unwrap();
+            let pc = vm.pc();
+            let mut movies = MovieHost::default();
+            if slot < 3 {
+                assert!(movies.try_handle(&mut vm).unwrap());
+                assert_eq!(vm.stack().len_bytes(), 0);
+            } else {
+                assert!(movies.try_handle(&mut vm).is_err());
+                assert_eq!(vm.pc(), pc);
+                assert_eq!(vm.stack().len_bytes(), 4);
+            }
+            assert_eq!(vm.state().system_integer(0), Some(77));
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires CMVS_GAME_ROOT; external background movie, read only"]
+fn external_background_movie_pause_and_resume_keeps_the_bound_image() {
+    use cmvs_rs::resources::{ResourceArchives, ResourceKind};
+    let root = std::env::var_os("CMVS_GAME_ROOT").expect("CMVS_GAME_ROOT");
+    let mut resources = ResourceArchives::new(root).unwrap();
+    let paths = BTreeMap::from([((0x201a, 0), b"data/pack/video.cpz".to_vec())]);
+    let mut code = create_code(0, 28, 0);
+    scene_start(&mut code, &[0, 0, 0, u32::MAX, 1]);
+    code.extend(slot_command(0x230c, &[0]));
+    code.extend(slot_command(0x230b, &[0]));
+    let script = program(&code, b"bg340a.cmv\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut movies = MovieHost::default();
+    let mut scene = cmvs_rs::scene::SceneHost::default();
+    pending(&mut vm);
+    movies
+        .try_create_scene(
+            &mut vm,
+            &mut scene,
+            &mut resources.with_paths(&paths, ResourceKind::SceneMovie),
+        )
+        .unwrap();
+    pending(&mut vm);
+    movies.try_start_scene(&mut vm).unwrap();
+    movies.advance_scene(100, &mut scene).unwrap();
+    let frame = movies.scene_player(0).unwrap().frame;
+    assert!(frame > 0);
+    pending(&mut vm);
+    movies.try_handle(&mut vm).unwrap();
+    let pixels = scene
+        .object(28)
+        .unwrap()
+        .image
+        .as_ref()
+        .unwrap()
+        .pixels
+        .clone();
+    for _ in 0..120 {
+        movies.advance_scene(16, &mut scene).unwrap();
+    }
+    assert_eq!(movies.scene_player(0).unwrap().frame, frame);
+    assert_eq!(
+        scene.object(28).unwrap().image.as_ref().unwrap().pixels,
+        pixels
+    );
+    assert!(movies.scene_player(0).unwrap().playback.active);
+    pending(&mut vm);
+    movies.try_handle(&mut vm).unwrap();
+    assert_eq!(movies.scene_player(0).unwrap().playback.elapsed, 0);
+    movies.advance_scene(100, &mut scene).unwrap();
+    assert_ne!(movies.scene_player(0).unwrap().frame, frame);
+    println!(
+        "external bg340a.cmv: frame {frame} held for 1920ms; resumed at frame {}",
+        movies.scene_player(0).unwrap().frame
+    );
+}
 fn query_result(vm: &mut Machine<'_>, movies: &mut MovieHost) -> Option<u32> {
     pending(vm);
     vm.state_mut().set_system_integer(0, 9).unwrap();

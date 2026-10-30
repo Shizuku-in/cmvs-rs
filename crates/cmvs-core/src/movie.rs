@@ -9,7 +9,8 @@
 //! Engine +4480 holds three scene players. 0x2308 creates a stopped CMV6/CMV9 player and
 //! initializes its bound scene object; 0x230a destroys the player, retaining that image.
 //! 0x2309 starts default-mode segment playback and 0x231a queries whether a player is
-//! active. Other slot controls, playback modes, audio-bearing slots and the other creation
+//! active; 0x230b/0x230c resume/pause while retaining the frame. Other slot controls,
+//! playback modes, audio-bearing slots and the other creation
 //! variant remain unhandled.
 use crate::{
     audio::{AudioBackend, AudioRequest, AudioSettings, MovieAudioClock},
@@ -372,8 +373,11 @@ impl MovieHost {
     /// or 0 for an empty slot; returns 0x4004. A completed segment clears active while
     /// setting paused, so it reports 0. Out-of-range slots only set +12056 bit 0x1000000 in
     /// the original, which is not modeled.
+    /// 0x230b / 0x14007f420 resumes (0x140038500), resetting the clock and fractional
+    /// time only when active. 0x230c / 0x14007f470 pauses (0x1400384f0). Both preserve
+    /// active/frame/segments and system results; empty slots are no-ops.
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x30a | 0x31a))) = vm.pending_system() else {
+        let Some((pc, command @ (0x30a..=0x30c | 0x31a))) = vm.pending_system() else {
             return Ok(false);
         };
         let op = command + 0x2000;
@@ -388,6 +392,18 @@ impl MovieHost {
         vm.complete_system(SystemResult(0x4004))?;
         if command == 0x30a {
             self.slots[slot] = None;
+        } else if matches!(command, 0x30b | 0x30c) {
+            if let Some(movie) = &mut self.slots[slot] {
+                if command == 0x30b {
+                    if movie.playback.active {
+                        movie.playback.last_tick = self.scene_clock;
+                        movie.playback.elapsed = 0;
+                    }
+                    movie.playback.paused = false;
+                } else {
+                    movie.playback.paused = true;
+                }
+            }
         } else {
             let active = self.slots[slot].as_ref().is_some_and(|m| m.playback.active);
             vm.state_mut()
