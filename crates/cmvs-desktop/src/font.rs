@@ -1,5 +1,6 @@
 //! Explicit OpenType font preview. Script layout stays in core; this backend replaces
 //! the original GDI mask rasterizer, so its pixels are not claimed to match GDI.
+use crate::font_library::FontLibrary;
 use ab_glyph::{Font, FontVec, ScaleFont, point};
 use cmvs_core::{
     FormatError,
@@ -9,45 +10,68 @@ use cmvs_core::{
     scene::{DrawState, ObjectImage, SceneHost, SceneObject},
     scene_render,
 };
-use std::{collections::BTreeMap, error::Error, fs::File, io::Read, path::Path, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    error::Error,
+    fs::File,
+    io::Read,
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 const MAX_FONT: usize = 32 * 1024 * 1024;
 
-/// No automatic font discovery or redistribution. TTC face selection is explicit.
+/// The explicit font file (TTC face selected explicitly) serves the built-in default
+/// face; faces named by glyphs are resolved through `FontLibrary`.
 pub struct FontRenderer {
-    font: Arc<FontVec>,
-    cache: BTreeMap<[u32; 8], RgbaImage>,
+    library: Arc<Mutex<FontLibrary>>,
+    cache: BTreeMap<(Arc<[u8]>, [u32; 8]), RgbaImage>,
 }
 
-struct PreviewMetrics(Arc<FontVec>);
+struct PreviewMetrics(Arc<Mutex<FontLibrary>>);
+impl PreviewMetrics {
+    fn font(&self, face: &[u8]) -> Result<Arc<FontVec>, &'static str> {
+        self.0
+            .lock()
+            .map_err(|_| "font library lock poisoned")?
+            .face(face)
+            .map_err(|e| e.0)
+    }
+}
 impl std::fmt::Debug for PreviewMetrics {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("OpenType preview metrics")
     }
 }
 impl cmvs_core::message::GlyphMetrics for PreviewMetrics {
-    fn styled_ink_width(&self, code: u16, size: u32, bold: bool) -> Result<u32, &'static str> {
-        let width = self.ink_width(code, size)?;
+    fn styled_ink_width(
+        &self,
+        face: &[u8],
+        code: u16,
+        size: u32,
+        bold: bool,
+    ) -> Result<u32, &'static str> {
+        let width = self.ink_width(face, code, size)?;
         Ok(if bold && width != 0 {
             (width + 1).min(size)
         } else {
             width
         })
     }
-    fn ink_width(&self, code: u16, size: u32) -> Result<u32, &'static str> {
+    fn ink_width(&self, face: &[u8], code: u16, size: u32) -> Result<u32, &'static str> {
         if !(1..=128).contains(&size) {
             return Err("glyph size outside 1..128 preview range");
         }
+        let font = self.font(face)?;
         let ch = character(code).map_err(|e| e.0)?;
-        let id = self.0.glyph_id(ch);
+        let id = font.glyph_id(ch);
         if id.0 == 0 {
             return Err("selected font has no glyph for a requested character");
         }
         let scale = size as f32;
-        let baseline = self.0.as_scaled(scale).ascent();
-        let Some(outline) = self
-            .0
-            .outline_glyph(id.with_scale_and_position(scale, point(0.0, baseline)))
+        let baseline = font.as_scaled(scale).ascent();
+        let Some(outline) =
+            font.outline_glyph(id.with_scale_and_position(scale, point(0.0, baseline)))
         else {
             return if ch.is_whitespace() {
                 Ok(0)
@@ -189,14 +213,33 @@ impl FontRenderer {
         let font = FontVec::try_from_vec_and_index(bytes, face)
             .map_err(|_| FormatError("invalid OpenType font or collection face index"))?;
         Ok(Self {
-            font: Arc::new(font),
+            library: Arc::new(Mutex::new(FontLibrary::new(Arc::new(font)))),
             cache: BTreeMap::new(),
         })
     }
-    /// Matches this renderer's selected font; OpenType ink bounds replace GDI's
+    /// Uses `library` (sharing its explicit default font) for every face.
+    pub fn with_library(library: FontLibrary) -> Self {
+        Self {
+            library: Arc::new(Mutex::new(library)),
+            cache: BTreeMap::new(),
+        }
+    }
+    /// Matches this renderer's fonts; OpenType ink bounds replace GDI's
     /// device metrics. Whitespace deterministically has zero ink extent.
     pub fn metrics(&self) -> Box<dyn cmvs_core::message::GlyphMetrics> {
-        Box::new(PreviewMetrics(Arc::clone(&self.font)))
+        Box::new(PreviewMetrics(Arc::clone(&self.library)))
+    }
+    /// Whether a face in the game encoding resolves to a font (startup check).
+    pub fn has_face(&self, face: &[u8]) -> bool {
+        self.library
+            .lock()
+            .is_ok_and(|mut library| library.contains(face))
+    }
+    fn font(&self, face: &[u8]) -> Result<Arc<FontVec>, FormatError> {
+        self.library
+            .lock()
+            .map_err(|_| FormatError("font library lock poisoned"))?
+            .face(face)
     }
     fn glyph(&mut self, glyph: &RecordedGlyph) -> Result<RgbaImage, FormatError> {
         if !(1..=128).contains(&glyph.size) {
@@ -218,23 +261,24 @@ impl FontRenderer {
             glyph.outline[1],
             u32::from(glyph.bold),
         ];
+        let key = (glyph.face.clone(), key);
         if let Some(image) = self.cache.get(&key) {
             return Ok(image.clone());
         }
+        let font = self.font(&glyph.face)?;
         let ch = character(glyph.code)?;
-        let id = self.font.glyph_id(ch);
+        let id = font.glyph_id(ch);
         if id.0 == 0 {
             return Err(FormatError(
                 "selected font has no glyph for a requested character",
             ));
         }
         let scale = glyph.size as f32;
-        let baseline = self.font.as_scaled(scale).ascent();
+        let baseline = font.as_scaled(scale).ascent();
         let side = glyph.size as usize + 4;
         let mut mask = vec![0u8; side * side];
-        if let Some(outline) = self
-            .font
-            .outline_glyph(id.with_scale_and_position(scale, point(0.0, baseline)))
+        if let Some(outline) =
+            font.outline_glyph(id.with_scale_and_position(scale, point(0.0, baseline)))
         {
             let bounds = outline.px_bounds();
             let cap = scale * 4.0 + 16.0;
@@ -282,11 +326,6 @@ impl FontRenderer {
             .filter_map(|i| messages.text(i))
             .filter(|t| t.visible && !t.glyphs.is_empty())
         {
-            if !text.font_face.is_empty()
-                && text.font_face != cmvs_core::settings::DEFAULT_FONT_FACE
-            {
-                return Err(FormatError("named font face is not implemented"));
-            }
             if text.logical_size != [1280, 720] {
                 return Err(FormatError(
                     "font preview requires 1280x720 text coordinates",
@@ -362,6 +401,7 @@ impl FontRenderer {
             };
             for glyph in group.attached_glyphs() {
                 let pixels = self.glyph(&RecordedGlyph {
+                    face: glyph.face.clone(),
                     bold: false,
                     code: glyph.code,
                     position: glyph.position,
@@ -422,6 +462,7 @@ mod tests {
         let path = std::env::var_os("CMVS_FONT_PATH").expect("CMVS_FONT_PATH");
         let mut font = FontRenderer::read(Path::new(&path), 0).unwrap();
         let mut glyph = RecordedGlyph {
+            face: Arc::from(cmvs_core::settings::DEFAULT_FONT_FACE),
             bold: false,
             code: 0x82a0,
             position: [0, 0],
@@ -460,12 +501,13 @@ mod tests {
         assert_eq!(font.glyph(&glyph).unwrap(), normal);
         assert_eq!(font.cache.len(), 2);
         let metrics = font.metrics();
-        let width = metrics.ink_width(65, 27).unwrap();
+        let face = cmvs_core::settings::DEFAULT_FONT_FACE;
+        let width = metrics.ink_width(face, 65, 27).unwrap();
         assert_eq!(
-            metrics.styled_ink_width(65, 27, true).unwrap(),
+            metrics.styled_ink_width(face, 65, 27, true).unwrap(),
             (width + 1).min(27)
         );
-        assert_eq!(metrics.styled_ink_width(32, 27, true).unwrap(), 0);
+        assert_eq!(metrics.styled_ink_width(face, 32, 27, true).unwrap(), 0);
     }
     #[test]
     fn bold_mask_extends_ink_once_without_crossing_rows() {

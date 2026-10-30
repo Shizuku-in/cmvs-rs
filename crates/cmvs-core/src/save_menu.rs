@@ -324,6 +324,39 @@ impl SaveMenuHost {
     }
 }
 
+/// GetPrivateProfileStringA over an INI text with a `size`-byte buffer: the trimmed value
+/// of `key` in `[section]`, one pair of enclosing double quotes removed, truncated to
+/// `size - 1` bytes; `default` when absent.
+pub fn profile_string(
+    text: &[u8],
+    section: &str,
+    key: &str,
+    default: &[u8],
+    size: usize,
+) -> Vec<u8> {
+    let mut in_section = false;
+    let mut value = default;
+    for line in text.split(|&b| b == b'\n') {
+        let line = line.strip_suffix(b"\r").unwrap_or(line).trim_ascii();
+        if let Some(name) = line.strip_prefix(b"[").and_then(|l| l.strip_suffix(b"]")) {
+            in_section = name.trim_ascii().eq_ignore_ascii_case(section.as_bytes());
+            continue;
+        }
+        let Some(eq) = line.iter().position(|&b| b == b'=') else {
+            continue;
+        };
+        if in_section && line[..eq].trim_ascii().eq_ignore_ascii_case(key.as_bytes()) {
+            let found = line[eq + 1..].trim_ascii();
+            value = found
+                .strip_prefix(b"\"")
+                .and_then(|v| v.strip_suffix(b"\""))
+                .unwrap_or(found);
+            break;
+        }
+    }
+    value[..value.len().min(size.saturating_sub(1))].to_vec()
+}
+
 /// GetPrivateProfileIntA over an INI text: the integer value of `key` in `[section]` (ASCII,
 /// case-insensitive names), with optional sign and leading digits; `default` when absent.
 pub fn profile_int(text: &[u8], section: &str, key: &str, default: i32) -> i32 {

@@ -83,6 +83,24 @@ impl Configuration {
         &self.0
     }
     pub fn set_integer(&mut self, section: &str, key: &str, value: u32) -> Result<(), FormatError> {
+        Self::check_name(section, key)?;
+        // Signed formatting preserves raw u32 words through the original profile-int reader.
+        self.set(section, key, (value as i32).to_string().as_bytes())
+    }
+    /// Raw bytes in the game's encoding, as WritePrivateProfileStringA stores them.
+    pub fn set_string(
+        &mut self,
+        section: &str,
+        key: &str,
+        value: &[u8],
+    ) -> Result<(), FormatError> {
+        Self::check_name(section, key)?;
+        if value.iter().any(|b| matches!(b, 0 | b'\r' | b'\n')) {
+            return Err(FormatError("invalid settings string value"));
+        }
+        self.set(section, key, value)
+    }
+    fn check_name(section: &str, key: &str) -> Result<(), FormatError> {
         if section.is_empty()
             || key.is_empty()
             || !section.is_ascii()
@@ -94,8 +112,7 @@ impl Configuration {
         {
             return Err(FormatError("invalid settings section or key"));
         }
-        // Signed formatting preserves raw u32 words through the original profile-int reader.
-        self.set(section, key, (value as i32).to_string().as_bytes())
+        Ok(())
     }
     fn set(&mut self, section: &str, key: &str, value: &[u8]) -> Result<(), FormatError> {
         let mut active = false;

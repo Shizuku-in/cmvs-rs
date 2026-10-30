@@ -21,7 +21,7 @@ use crate::{
     scene::{self, ANIMATION_FRAMES, AnimationFrame, DrawSetter, DrawState, SceneObject},
     vm::SystemResult,
 };
-use std::error::Error;
+use std::{error::Error, sync::Arc};
 mod auxiliary;
 mod auxiliary_layout;
 mod auxiliary_motion;
@@ -113,9 +113,12 @@ pub struct LineBreakRules {
 /// 0x14005bc90. Unlisted constructor/0x14005d3b0 defaults are documented in vm-semantics.md.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextObject {
-    /// Requested face (+44), empty selects the configured default. Currently only
-    /// the original default face is supported by the explicit font backend.
+    /// Requested face (+44), empty selects the configured default.
     pub font_face: Vec<u8>,
+    /// Face of the slot's persistent font object (+576 -> +4224): the global face when
+    /// the object was created from an empty name, changed only by 0x2106 and 0x213d.
+    /// Each new glyph captures it, so earlier glyphs keep the face they were drawn with.
+    pub face: Arc<[u8]>,
     /// +108: weight of the persistent font object, captured by each new glyph.
     pub bold: bool,
     /// Uniform scale of the text's scene object, kept as f32 bits (0x20ec).
@@ -177,13 +180,20 @@ pub struct TextObject {
 
 /// Ink extent supplied by the selected font backend for direct single-byte output.
 /// The core applies the original minimum half-size advance and spacing separately.
+/// `face` is the font object's face in the game encoding.
 pub trait GlyphMetrics: std::fmt::Debug {
-    fn ink_width(&self, code: u16, size: u32) -> Result<u32, &'static str>;
-    fn styled_ink_width(&self, code: u16, size: u32, bold: bool) -> Result<u32, &'static str> {
+    fn ink_width(&self, face: &[u8], code: u16, size: u32) -> Result<u32, &'static str>;
+    fn styled_ink_width(
+        &self,
+        face: &[u8],
+        code: u16,
+        size: u32,
+        bold: bool,
+    ) -> Result<u32, &'static str> {
         if bold {
             return Err("bold glyph metrics are not implemented by this backend");
         }
-        self.ink_width(code, size)
+        self.ink_width(face, code, size)
     }
 }
 
@@ -199,9 +209,13 @@ pub struct MessageHost {
     /// +4224: created on first use of a text index and never freed by these commands.
     fonts: [bool; TEXT_OBJECTS],
     font_bold: [bool; TEXT_OBJECTS],
+    font_faces: [Option<Arc<[u8]>>; TEXT_OBJECTS],
+    /// Global face 0x1400fc150; None is the built-in default.
+    default_face: Option<Arc<[u8]>>,
     /// Independent engine +4328 text lists and +4392 persistent font objects.
     auxiliary_texts: [Option<AuxiliaryText>; AUXILIARY_TEXTS],
     auxiliary_fonts: [bool; AUXILIARY_TEXTS],
+    auxiliary_font_faces: [Option<Arc<[u8]>>; AUXILIARY_TEXTS],
     auxiliary_clock: u32,
 }
 
@@ -219,6 +233,36 @@ impl MessageHost {
         }
         self.output_settings = settings;
     }
+    /// The global face that font objects created from an empty name select.
+    pub fn default_face(&self) -> Arc<[u8]> {
+        self.default_face
+            .clone()
+            .unwrap_or_else(|| Arc::from(crate::settings::DEFAULT_FONT_FACE))
+    }
+    /// Changes only font objects created later; existing ones keep their face.
+    pub fn set_default_face(&mut self, face: &[u8]) {
+        if *self.default_face() != *face {
+            self.default_face = Some(Arc::from(face));
+        }
+    }
+    /// 0x140081520 after OK: text objects requesting the default face (0x14005ade0)
+    /// reselect the global face for their font object (0x14005ab40). Auxiliary text
+    /// fonts are not part of that loop.
+    pub fn refresh_default_fonts(&mut self) {
+        let face = self.default_face();
+        for (index, text) in self.texts.iter_mut().enumerate() {
+            if let Some(text) = text.as_mut().filter(|t| t.font_face.is_empty()) {
+                text.face = face.clone();
+                self.font_faces[index] = Some(face.clone());
+            }
+        }
+    }
+    /// Marks the slot's font object present, creating it with the global face if needed.
+    fn font_slot(&mut self, index: usize) -> Arc<[u8]> {
+        self.fonts[index] = true;
+        let face = self.default_face();
+        self.font_faces[index].get_or_insert(face).clone()
+    }
     /// Font device service; headless recording keeps the missing-metrics barrier.
     pub fn set_glyph_metrics(&mut self, metrics: Box<dyn GlyphMetrics>) {
         self.glyph_metrics = Some(metrics);
@@ -229,11 +273,13 @@ impl MessageHost {
     ) -> Self {
         let fonts = std::array::from_fn(|i| texts[i].is_some());
         let font_bold = std::array::from_fn(|i| texts[i].as_ref().is_some_and(|t| t.bold));
+        let font_faces = std::array::from_fn(|i| texts[i].as_ref().map(|t| t.face.clone()));
         Self {
             texts,
             windows,
             fonts,
             font_bold,
+            font_faces,
             ..Self::default()
         }
     }
@@ -650,6 +696,9 @@ impl MessageHost {
             .expect("slot 0 exists");
         let slot = args[0] as usize;
         self.auxiliary_fonts[slot] = true;
+        let face = self.default_face();
+        let mut candidate = candidate;
+        candidate.face = self.auxiliary_font_faces[slot].get_or_insert(face).clone();
         // The native overwrite leaks its old object; Rust drops owned state.
         self.auxiliary_texts[slot] = Some(candidate);
         Ok(())
@@ -929,9 +978,10 @@ impl MessageHost {
         vm.state_mut()
             .set_system_integer(0, 1)
             .expect("slot 0 exists");
-        self.fonts[index] = true;
+        let face = self.font_slot(index);
         self.texts[index] = Some(TextObject {
             font_face: Vec::new(),
+            face,
             bold: self.font_bold[index],
             scale_bits: 1.0f32.to_bits(),
             logical_size: RESEARCH_SCREEN.map(|v| v as i32),
@@ -1036,13 +1086,21 @@ impl MessageHost {
         }
         let face = if command == 0x106 {
             let face = vm.resolve_string(a as u32)?;
-            if !face.is_empty() && face != crate::settings::DEFAULT_FONT_FACE {
-                return Err(error(pc, op, "named font face is not implemented"));
+            if face.len() >= 32 || face.contains(&0) {
+                return Err(error(pc, op, "font face exceeds a LOGFONT name"));
             }
             Some(face)
         } else {
             None
         };
+        // 0x14005ab40 reselects the slot's font object: an empty name takes the global face.
+        let selected = face.as_ref().map(|face| {
+            if face.is_empty() {
+                self.default_face()
+            } else {
+                Arc::from(face.as_slice())
+            }
+        });
         vm.complete_system(SystemResult(0x4000 + 4 * count as u16))?;
         let text = self.texts[index].as_mut().expect("checked above");
         match command {
@@ -1065,7 +1123,11 @@ impl MessageHost {
                     }
                 }
             }
-            0x106 => text.font_face = face.expect("resolved above"),
+            0x106 => {
+                text.font_face = face.expect("resolved above");
+                text.face = selected.expect("resolved above");
+                self.font_faces[index] = Some(text.face.clone());
+            }
             0x107 => {
                 for (color, value) in [&mut text.color, &mut text.decoration_color]
                     .into_iter()
@@ -1901,11 +1963,12 @@ impl MessageHost {
             ));
         }
         vm.complete_system(SystemResult(if command == 0x140 { 0x4018 } else { 0x4020 }))?;
-        self.fonts[text] = true;
+        let face = self.font_slot(text);
         self.font_bold[text] = self.output_settings.bold;
         // 0x14005d3b0's setter calls override the constructor values (e.g. +144 30 -> 100).
         self.texts[text] = Some(TextObject {
             font_face: Vec::new(),
+            face,
             bold: self.font_bold[text],
             scale_bits: 1.0f32.to_bits(),
             logical_size,
@@ -2008,7 +2071,14 @@ impl MessageHost {
         for (index, text) in texts.iter_mut().enumerate() {
             if let Some(text) = text {
                 text.cursor = [text.area[0], text.area[1]];
+                // A surviving font object keeps its face; a missing one is created now.
                 self.fonts[index] = true;
+                let face = if text.font_face.is_empty() {
+                    self.default_face()
+                } else {
+                    Arc::from(text.font_face.as_slice())
+                };
+                text.face = self.font_faces[index].get_or_insert(face).clone();
                 self.font_bold[index] = text.bold;
             }
         }

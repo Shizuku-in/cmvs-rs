@@ -16,7 +16,9 @@ impl Startup<'_> {
         let audio = AudioHost::from_ini(bytes);
         self.audio_backend
             .configure_voice_ducking(audio.voice_ducking())?;
-        self.settings = SettingsHost::from_ini(bytes);
+        let settings = SettingsHost::from_ini(bytes);
+        settings.check_font_face()?;
+        self.settings = settings;
         self.message_flags = MessageFlags::from_ini(bytes);
         self.save_menu.set_confirmations(
             profile_int(bytes, "SYSTEM_INFO", "DLG_LOAD", 0) != 0,
@@ -76,6 +78,7 @@ impl Startup<'_> {
         ] {
             configuration.set_integer("MESSAGE_INFO", key, value)?;
         }
+        configuration.set_string("MESSAGE_INFO", "FONT", self.settings.font_face())?;
         let audio = self.audio.settings();
         let duck = self.audio.voice_ducking();
         for (key, value) in [

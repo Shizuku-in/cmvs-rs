@@ -570,13 +570,29 @@ fn font_name_query_writes_the_bank_and_preserves_other_results() {
 }
 
 #[test]
-fn unsupported_font_change_and_destination_leave_the_command_pending() {
-    for args in [[1, 0x8000_0000], [0, 0x4000_0000]] {
+fn font_writes_set_the_global_face_and_invalid_names_or_destinations_stay_pending() {
+    let mut code = vec![];
+    command(&mut code, 0x22de, &[1, 0x8000_0000]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    vm.state_mut().set_string(0, b"another font").unwrap();
+    vm.state_mut().set_system_integer(0, 99).unwrap();
+    pending(&mut vm);
+    let mut settings = SettingsHost::default();
+    assert!(settings.try_handle(&mut vm).unwrap());
+    assert_eq!(settings.font_face(), b"another font");
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(99));
+    for (args, name) in [
+        ([1, 0x8000_0000], &b""[..]),
+        ([1, 0x8000_0000], &[b'x'; 32][..]),
+        ([0, 0x4000_0000], &b"x"[..]),
+    ] {
         let mut code = vec![];
         command(&mut code, 0x22de, &args);
         let script = script(&code);
         let mut vm = Machine::new(&script).unwrap();
-        vm.state_mut().set_string(0, b"another font").unwrap();
+        vm.state_mut().set_string(0, name).unwrap();
         vm.state_mut().set_system_integer(0, 99).unwrap();
         pending(&mut vm);
         let pc = vm.pc();
@@ -588,6 +604,28 @@ fn unsupported_font_change_and_destination_leave_the_command_pending() {
         assert_eq!(vm.state().system_integer(0), Some(99));
         assert_eq!(settings.font_face(), DEFAULT_FONT_FACE);
     }
+}
+
+#[test]
+fn configured_font_uses_the_profile_string_rules_and_rejects_bad_faces() {
+    let face = |text: &[u8]| SettingsHost::from_ini(text).font_face().to_vec();
+    assert_eq!(face(b""), DEFAULT_FONT_FACE);
+    assert_eq!(face(b"[MESSAGE_INFO]\r\nFONT= \"Font A\" \r\n"), b"Font A");
+    let meiryo = b"\x83\x81\x83C\x83\x8a\x83I";
+    assert_eq!(
+        face(&[b"[MESSAGE_INFO]\nFONT=".as_slice(), meiryo, b"\n"].concat()),
+        meiryo
+    );
+    assert!(
+        SettingsHost::from_ini(b"[MESSAGE_INFO]\nFONT=\n")
+            .check_font_face()
+            .is_err()
+    );
+    let long = [b"[MESSAGE_INFO]\nFONT=".as_slice(), &[b'x'; 40]].concat();
+    assert!(SettingsHost::from_ini(&long).check_font_face().is_err());
+    let mut text = [b"[MESSAGE_INFO]\nFONT=".as_slice(), &[b'y'; 200]].concat();
+    text.push(b'\n');
+    assert_eq!(SettingsHost::from_ini(&text).font_face().len(), 0x7f);
 }
 
 #[test]

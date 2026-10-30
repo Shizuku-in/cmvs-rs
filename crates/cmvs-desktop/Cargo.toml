@@ -18,6 +18,9 @@ softbuffer.workspace = true
 winit.workspace = true
 ab_glyph.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+cmvs-windows = { path = "../cmvs-windows" }
+
 [features]
 default = []
 audio-output = ["dep:cmvs-audio"]

@@ -1,6 +1,7 @@
 //! Optional native window/input adapter. Static scene rendering lives in `scene_render`.
 mod app;
 pub mod font;
+pub mod font_library;
 pub mod game_input;
 pub use app::run_cli;
 use cmvs_core::{
@@ -33,16 +34,27 @@ impl TextEncoding {
             _ => Err(FormatError("encoding must be shift-jis, gbk or utf-8")),
         }
     }
-    pub fn decode(self, bytes: &[u8]) -> Result<String, FormatError> {
-        let encoding = match self {
+    fn encoding(self) -> &'static encoding_rs::Encoding {
+        match self {
             Self::ShiftJis => encoding_rs::SHIFT_JIS,
             Self::Gbk => encoding_rs::GBK,
             Self::Utf8 => encoding_rs::UTF_8,
-        };
-        encoding
+        }
+    }
+    pub fn decode(self, bytes: &[u8]) -> Result<String, FormatError> {
+        self.encoding()
             .decode_without_bom_handling_and_without_replacement(bytes)
             .map(|s| s.into_owned())
             .ok_or(FormatError("invalid title bytes for selected encoding"))
+    }
+    pub fn encode(self, text: &str) -> Result<Vec<u8>, FormatError> {
+        let (bytes, _, unmappable) = self.encoding().encode(text);
+        if unmappable {
+            return Err(FormatError(
+                "text is not representable in the selected encoding",
+            ));
+        }
+        Ok(bytes.into_owned())
     }
 }
 
@@ -125,6 +137,8 @@ pub struct NativeBackend<'a> {
     pub encoding: TextEncoding,
     pub aspect_mode: &'a std::cell::Cell<u32>,
     pub render_mode: &'a std::cell::Cell<u32>,
+    /// Fonts that glyphs will be drawn with; a chosen face must resolve there.
+    pub fonts: Option<&'a crate::font::FontRenderer>,
 }
 impl PlatformBackend for NativeBackend<'_> {
     fn window_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
@@ -152,6 +166,30 @@ impl PlatformBackend for NativeBackend<'_> {
     }
     fn fullscreen(&self) -> Result<bool, Box<dyn Error>> {
         Ok(self.window.fullscreen().is_some())
+    }
+    #[cfg(windows)]
+    fn choose_font(&mut self, current: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+        use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        let RawWindowHandle::Win32(handle) = self.window.window_handle()?.as_raw() else {
+            return Err("the native font dialog needs a Win32 window".into());
+        };
+        let current = self.encoding.decode(current)?;
+        let Some(face) = cmvs_windows::font_dialog::choose_font(handle.hwnd, &current)? else {
+            println!("# native font dialog cancelled");
+            return Ok(None);
+        };
+        let bytes = self.encoding.encode(&face)?;
+        if let Some(fonts) = self.fonts
+            && !fonts.has_face(&bytes)
+        {
+            return Err(format!("chosen font face {face} has no loadable font file").into());
+        }
+        println!("# native font dialog chose {face}");
+        Ok(Some(bytes))
+    }
+    #[cfg(not(windows))]
+    fn choose_font(&mut self, _current: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+        Err("the native font dialog is reserved for later platforms".into())
     }
     fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>> {
         match request {

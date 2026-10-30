@@ -16,12 +16,13 @@
 |---|---|---|
 | `crates/cmvs-core` | 格式、资源读取、VM、命令语义、场景状态、软件呈现、动作输入与后端契约 | 无第三方依赖；包含基于 `std` 的只读文件适配器，不调用原生窗口或设备 API |
 | `crates/cmvs-audio` | Vorbis 解码、原生音频输出、源消费时钟 | 依赖 core、lewton、rodio |
-| `crates/cmvs-desktop` | 窗口、物理输入、字体光栅化、帧显示与桌面运行入口 | 依赖 core、winit、softbuffer、ico、encoding_rs、ab_glyph；可选依赖 audio |
+| `crates/cmvs-desktop` | 窗口、物理输入、字体光栅化与按名解析、帧显示与桌面运行入口 | 依赖 core、winit、softbuffer、ico、encoding_rs、ab_glyph；可选依赖 audio；Windows 上依赖 cmvs-windows |
+| `crates/cmvs-windows` | Windows 系统对话框（当前为字体对话框），工作区唯一的 FFI 包 | 仅 Windows 依赖 windows-sys；其他平台为空 |
 | 根包 `cmvs-rs` | 检查 CLI、`cmvs_rs` 兼容重导出、集成测试 | 默认仅依赖 core；通过 `desktop`、`audio-output` 选择后端 |
 
 依赖方向为 `desktop → core`、`desktop → audio → core`。格式、VM 和软件呈现目前保持为 core 内部模块，不新增 C++ 运行核心。后续平台应复用核心语义，通过后端接入系统服务。
 
-默认 workspace 成员仅为根包；全 workspace 构建会额外选择桌面和音频成员。所有项目包继承 `unsafe_code = forbid` 和严格 Clippy 约定。feature 转发、固定依赖及拆包回归证据见 [workspace](workspace.md)，参考项目提交与许可见 [references](games/amatsutsumi/references.md)。
+默认 workspace 成员仅为根包；全 workspace 构建会额外选择桌面和音频成员。除 `cmvs-windows` 外，所有项目包继承 `unsafe_code = forbid` 和严格 Clippy 约定；`cmvs-windows` 设为 deny，只在注明 SAFETY 的系统调用处局部允许。feature 转发、固定依赖及拆包回归证据见 [workspace](workspace.md)，参考项目提交与许可见 [references](games/amatsutsumi/references.md)。
 
 ## 核心职责
 

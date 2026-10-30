@@ -554,6 +554,49 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     // 音声再生速度「少し速い」stores 1 in 2175; story scripts then play voices with 0x20af at 1.5.
     ui.click(ui.button(1, 43), 30);
     assert_eq!(ui.run.machine().state().integer(2175), Some(1));
+    // フォント選択: 0x213d opens the host font dialog. The recording backend answers
+    // ＭＳ 明朝, which the desktop library resolves from the system font directory; the
+    // demonstration text then re-emits with glyphs in that face.
+    let mincho = b"\x82l\x82r \x96\xbe\x92\xa9";
+    ui.backend.answer_font_dialog(Some(mincho.to_vec()));
+    ui.click(ui.button(1, 10), 30);
+    assert_eq!(ui.run.settings().font_face(), mincho);
+    let mut mincho_glyphs = false;
+    for _ in 0..600 {
+        font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+            .unwrap();
+        if (0..cmvs_rs::message::TEXT_OBJECTS)
+            .filter_map(|slot| ui.run.messages().text(slot))
+            .flat_map(|text| &text.glyphs)
+            .any(|glyph| *glyph.face == *mincho)
+        {
+            mincho_glyphs = true;
+            break;
+        }
+        ui.frame([640, 360], None);
+    }
+    assert!(
+        mincho_glyphs,
+        "the chosen face must reach newly emitted glyphs"
+    );
+    ui.backend.answer_font_dialog(None);
+    ui.click(ui.button(1, 10), 30);
+    assert_eq!(ui.run.settings().font_face(), mincho);
+    ui.backend
+        .answer_font_dialog(Some(cmvs_rs::settings::DEFAULT_FONT_FACE.to_vec()));
+    ui.click(ui.button(1, 10), 30);
+    assert_eq!(
+        ui.run.settings().font_face(),
+        cmvs_rs::settings::DEFAULT_FONT_FACE
+    );
+    assert_eq!(
+        ui.backend.font_dialogs(),
+        [
+            cmvs_rs::settings::DEFAULT_FONT_FACE,
+            mincho.as_slice(),
+            mincho.as_slice()
+        ]
+    );
     for (x, bold) in [(472, false), (576, true), (472, false)] {
         ui.click([x, 107], 30);
         assert_eq!(ui.run.settings().text_output().bold, bold);
@@ -938,7 +981,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
             .all(|child| child.draw.as_ref().unwrap().words[17] == 32)
     );
     println!(
-        "settings: native_audio={native_audio}; title + toolbar; background/opacity/fullscreen/aspect/filter, cursor hide, voice stop modes, read-skip policy, bold/text/audio/auto settings, character volume/gradient/colour picker/reset, 1.5x voice speed, three pages, 444 settings frames; auto advanced at least three entries in {auto_frames} rendered frames with {} voices and {} voice fades; disabled then idle 240 rendered frames",
+        "settings: native_audio={native_audio}; title + toolbar; background/opacity/fullscreen/aspect/filter, cursor hide, voice stop modes, read-skip policy, bold/text/audio/auto settings, character volume/gradient/colour picker/reset, 1.5x voice speed, font dialog, three pages, 444 settings frames; auto advanced at least three entries in {auto_frames} rendered frames with {} voices and {} voice fades; disabled then idle 240 rendered frames",
         ui.voices.len(),
         ui.voice_fades.len()
     );
@@ -1107,6 +1150,7 @@ impl Ui<'_, '_> {
         self.press(at, 1, wait);
     }
     /// Presses at `from`, moves there while holding over 20 frames, releases at `to`.
+    #[cfg(feature = "desktop")]
     fn drag(&mut self, from: [i32; 2], to: [i32; 2]) {
         for i in 0..4 {
             self.frame(from, (i >= 2).then_some(1));

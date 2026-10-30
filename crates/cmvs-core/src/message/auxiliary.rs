@@ -143,6 +143,8 @@ impl AuxiliaryGlyphAtlas {
 /// (+16) and layer that 0x14002eb10 gives it while it has an attached object.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AuxiliaryGlyph {
+    /// The group's +4392 font face (game encoding) when the glyph was laid out.
+    pub face: std::sync::Arc<[u8]>,
     /// Descriptor word 0 high half: Shift-JIS pair, lead byte high.
     pub code: u16,
     /// Descriptor words 3/4: truncated pen position relative to the group position.
@@ -165,6 +167,8 @@ pub struct AuxiliaryGlyph {
 /// glyphs currently attached to the atlas object. Glyph pixels belong to the backend.
 #[derive(Debug, Clone)]
 pub struct AuxiliaryText {
+    /// Face of the slot's persistent +4392 font object, fixed when it was created.
+    pub face: std::sync::Arc<[u8]>,
     pub(super) words: BTreeMap<u16, u32>,
     /// +184: glyph records in layout order.
     pub glyphs: Vec<AuxiliaryGlyph>,
@@ -397,6 +401,7 @@ impl AuxiliaryText {
         draw.set(DrawSetter::Source([0, 0, 4, 4]));
         draw.set(DrawSetter::Layer(1));
         Ok(Self {
+            face: std::sync::Arc::from(crate::settings::DEFAULT_FONT_FACE),
             words,
             glyphs: Vec::new(),
             attached: Vec::new(),

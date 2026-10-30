@@ -1522,3 +1522,76 @@ fn button_groups_are_saved_and_come_back_empty_on_object_zero() {
     drop(run);
     fs::remove_dir_all(&directory).unwrap();
 }
+
+#[test]
+fn font_dialog_sets_the_global_face_refreshes_default_texts_and_persists() {
+    use cmvs_rs::settings::{DEFAULT_FONT_FACE, DisplayPreferences};
+    let mut code = vec![];
+    commands::command(&mut code, 0x2100, &[1, 0, 0]);
+    for _ in 0..3 {
+        commands::command(&mut code, 0x213d, &[]);
+    }
+    let root = Root::new("font-dialog", &code, b"\0");
+    let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join(format!("font-dialog-{}", std::process::id()));
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    run.set_user_data_directory(&directory).unwrap();
+    let mut backend = RecordingBackend::default();
+    backend.answer_font_dialog(Some(b"Face A".to_vec()));
+    backend.answer_font_dialog(None);
+    while backend.font_dialogs().len() < 2 {
+        assert_ne!(run.tick(&mut backend).unwrap(), StartupEvent::Inactive);
+    }
+    assert_eq!(backend.font_dialogs(), [DEFAULT_FONT_FACE, b"Face A"]);
+    assert_eq!(run.settings().font_face(), b"Face A");
+    assert_eq!(run.messages().default_face().as_ref(), b"Face A");
+    assert_eq!(run.messages().text(1).unwrap().face.as_ref(), b"Face A");
+    // Without an answer the third dialog fails and its command stays pending.
+    let mut failed = false;
+    for _ in 0..20 {
+        if run.tick(&mut backend).is_err() {
+            failed = true;
+            break;
+        }
+    }
+    assert!(failed);
+    assert!(run.machine().pending_system().is_some());
+    assert_eq!(run.settings().font_face(), b"Face A");
+    assert!(run.save_preferences(DisplayPreferences::default()).unwrap());
+    let saved = fs::read(directory.join("cmvs.cfg")).unwrap();
+    assert!(saved.windows(13).any(|w| w == b"FONT=Face A\r\n"));
+    drop(run);
+    let mut resumed = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    resumed.set_user_data_directory(&directory).unwrap();
+    assert_eq!(resumed.settings().font_face(), b"Face A");
+    drop(resumed);
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn chosen_faces_are_validated_before_the_command_completes() {
+    let mut code = vec![];
+    commands::command(&mut code, 0x213d, &[]);
+    let root = Root::new("font-dialog-invalid", &code, b"");
+    let script = root.script();
+    for face in [Vec::new(), vec![b'x'; 32], b"a\0b".to_vec()] {
+        let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+        let mut backend = RecordingBackend::default();
+        backend.answer_font_dialog(Some(face));
+        let mut failed = false;
+        for _ in 0..20 {
+            if run.tick(&mut backend).is_err() {
+                failed = true;
+                break;
+            }
+        }
+        assert!(failed);
+        assert!(run.machine().pending_system().is_some());
+        assert_eq!(
+            run.settings().font_face(),
+            cmvs_rs::settings::DEFAULT_FONT_FACE
+        );
+    }
+}

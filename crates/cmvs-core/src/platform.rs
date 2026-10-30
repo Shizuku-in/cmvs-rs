@@ -125,6 +125,11 @@ pub trait PlatformBackend {
     fn linear_stretch_supported(&self) -> Result<bool, Box<dyn Error>> {
         Err("platform backend does not implement linear stretch queries".into())
     }
+    /// 0x213d's modal font dialog, seeded with the global face in the game encoding.
+    /// Ok(None) is a cancelled dialog; Ok(Some) the chosen face in the game encoding.
+    fn choose_font(&mut self, _current: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+        Err("platform backend does not implement the font dialog".into())
+    }
     /// 0=unscaled when it fits, 1=contain, 2=cover, 3=stretch (0x14001a360).
     fn aspect_mode(&self) -> Result<u32, Box<dyn Error>> {
         Err("platform backend does not implement aspect mode queries".into())
@@ -156,10 +161,20 @@ pub struct RecordingBackend {
     aspect_mode: Option<u32>,
     render_mode: u32,
     window_size: Option<[u32; 2]>,
+    font_answers: std::collections::VecDeque<Option<Vec<u8>>>,
+    font_dialogs: Vec<Vec<u8>>,
 }
 impl RecordingBackend {
     pub fn requests(&self) -> &[PlatformRequest] {
         &self.requests
+    }
+    /// Scripted result for the next font dialog; without one the dialog is an error.
+    pub fn answer_font_dialog(&mut self, answer: Option<Vec<u8>>) {
+        self.font_answers.push_back(answer);
+    }
+    /// The global face each font dialog was opened with.
+    pub fn font_dialogs(&self) -> &[Vec<u8>] {
+        &self.font_dialogs
     }
 }
 impl PlatformBackend for RecordingBackend {
@@ -180,6 +195,17 @@ impl PlatformBackend for RecordingBackend {
     }
     fn render_mode(&self) -> Result<u32, Box<dyn Error>> {
         Ok(self.render_mode)
+    }
+    fn choose_font(&mut self, current: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+        if self.font_dialogs.len() >= 4096 {
+            return Err("recorded font dialogs exceed research limits".into());
+        }
+        let answer = self
+            .font_answers
+            .pop_front()
+            .ok_or("recording backend has no scripted font dialog answer")?;
+        self.font_dialogs.push(current.to_vec());
+        Ok(answer)
     }
     fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error>> {
         Ok(0)

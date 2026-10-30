@@ -56,6 +56,7 @@ fn create(code: &mut Vec<u8>, slot: u32, text: u32, rect: [u32; 4]) {
 fn created_text(position: [i32; 2], size: [u32; 2]) -> TextObject {
     TextObject {
         font_face: Vec::new(),
+        face: cmvs_rs::settings::DEFAULT_FONT_FACE.into(),
         bold: false,
         scale_bits: 1.0f32.to_bits(),
         logical_size: [1280, 720],
@@ -3677,7 +3678,8 @@ fn direct_half_width_text_uses_backend_ink_extent_with_minimum_half_size_and_wra
     #[derive(Debug)]
     struct Metrics;
     impl cmvs_rs::message::GlyphMetrics for Metrics {
-        fn ink_width(&self, code: u16, _: u32) -> Result<u32, &'static str> {
+        fn ink_width(&self, face: &[u8], code: u16, _: u32) -> Result<u32, &'static str> {
+            assert_eq!(face, cmvs_rs::settings::DEFAULT_FONT_FACE);
             match code {
                 0x20 => Ok(0),
                 0x57 => Ok(17),
@@ -4009,4 +4011,50 @@ fn window_draw_query_and_hidden_flag_report_window_state() {
     // A missing child sets an engine flag in the original.
     pending(&mut vm);
     assert!(messages.try_handle(&mut vm).is_err());
+}
+
+#[test]
+fn font_objects_keep_their_face_glyphs_capture_it_and_the_dialog_refreshes_default_texts() {
+    use cmvs_rs::settings::DEFAULT_FONT_FACE;
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 300, 100]);
+    create(&mut code, 1, 8, [0, 100, 300, 100]);
+    call(&mut code, 0x2159, &[0, 0, 0, 0]);
+    call(&mut code, 0x2106, &[0x8000_0000, 8]);
+    call(&mut code, 0x2159, &[0, 0, 0, 0]);
+    create(&mut code, 2, 9, [0, 200, 300, 100]);
+    let script = script_with_text(&code, b"\x82\xa0\0");
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_string(0, b"Named").unwrap();
+    let mut messages = MessageHost::default();
+    messages.set_record_output(true);
+    run(&mut vm, &mut messages, 2);
+    pending(&mut vm);
+    messages
+        .try_record_poll(&mut vm, wait_flags(false, false))
+        .unwrap();
+    // A global change (0x22de write) affects only font objects created later.
+    messages.set_default_face(b"New");
+    let face = |messages: &MessageHost, slot| messages.text(slot).unwrap().face.to_vec();
+    assert_eq!(face(&messages, 7), DEFAULT_FONT_FACE);
+    assert_eq!(face(&messages, 8), DEFAULT_FONT_FACE);
+    run(&mut vm, &mut messages, 1);
+    assert_eq!(face(&messages, 8), b"Named");
+    assert_eq!(messages.text(8).unwrap().font_face, b"Named");
+    // 0x213d's OK refreshes only texts requesting the default face.
+    messages.refresh_default_fonts();
+    assert_eq!(face(&messages, 7), b"New");
+    assert_eq!(face(&messages, 8), b"Named");
+    pending(&mut vm);
+    messages
+        .try_record_poll(&mut vm, wait_flags(false, false))
+        .unwrap();
+    let glyphs = &messages.text(7).unwrap().glyphs;
+    assert_eq!(
+        glyphs.iter().map(|g| g.face.to_vec()).collect::<Vec<_>>(),
+        [DEFAULT_FONT_FACE.to_vec(), b"New".to_vec()]
+    );
+    // A new slot's font object takes the global face at creation.
+    run(&mut vm, &mut messages, 1);
+    assert_eq!(face(&messages, 9), b"New");
 }

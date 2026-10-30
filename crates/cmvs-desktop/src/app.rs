@@ -138,6 +138,7 @@ impl App<'_> {
             encoding: self.encoding,
             aspect_mode: &self.aspect_mode,
             render_mode: &self.render_mode,
+            fonts: self.font.as_ref(),
         };
         backend.apply(&PlatformRequest::Cursor { id, bitmap })?;
         println!("# preview-only cursor shortcut={id}; VM state unchanged");
@@ -176,6 +177,7 @@ impl ApplicationHandler for App<'_> {
                 encoding: self.encoding,
                 aspect_mode: &self.aspect_mode,
                 render_mode: &self.render_mode,
+                fonts: self.font.as_ref(),
             };
             let mode =
                 cmvs_core::platform::supported_render_mode(&backend, backend.render_mode()?)?;
@@ -368,6 +370,7 @@ impl ApplicationHandler for App<'_> {
                     encoding: self.encoding,
                     aspect_mode: &self.aspect_mode,
                     render_mode: &self.render_mode,
+                    fonts: self.font.as_ref(),
                 };
                 let had_fade = self.startup.scene().fade().current().is_some();
                 let outcome = self.startup.tick(&mut backend);
@@ -688,6 +691,11 @@ fn run() -> Result<(), Box<dyn Error>> {
     startup.set_record_text(record_text || font.is_some());
     if let Some(font) = &font {
         startup.set_glyph_metrics(font.metrics());
+        // 0x14000b666: a configured face that cannot be found becomes the default.
+        if !font.has_face(startup.settings().font_face()) {
+            println!("# configured font face not found; using the built-in default face");
+            startup.set_font_face(cmvs_core::settings::DEFAULT_FONT_FACE)?;
+        }
     }
     if font.is_some() {
         println!(

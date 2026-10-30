@@ -178,6 +178,7 @@ impl<'a> Startup<'a> {
         );
         let audio = AudioHost::from_ini(text);
         let settings = crate::settings::SettingsHost::from_ini(text);
+        settings.check_font_face()?;
         let message_flags = MessageFlags::from_ini(text);
         let effects = crate::save_menu::profile_int(text, "SYSTEM_INFO", "EFFECT_USE", 1) != 0;
         Ok(Self {
@@ -447,6 +448,13 @@ impl<'a> Startup<'a> {
     pub fn settings(&self) -> &crate::settings::SettingsHost {
         &self.settings
     }
+    /// Startup check 0x14000b666: the host replaces a configured face it cannot find
+    /// with the built-in default before any font object exists.
+    pub fn set_font_face(&mut self, face: &[u8]) -> Result<(), Box<dyn Error>> {
+        self.settings.set_font_face(face)?;
+        self.messages.set_default_face(face);
+        Ok(())
+    }
     pub fn messages(&self) -> &MessageHost {
         &self.messages
     }
@@ -551,11 +559,33 @@ impl<'a> Startup<'a> {
         }
         Ok(event)
     }
+    /// 0x213d / 0x140081520: the modal font dialog starts from the global face (+3160).
+    /// On OK the choice becomes global (0x140007f20) and the twelve text objects that
+    /// request the default face reselect it (0x14005ab40). Returns 0x4000 either way.
+    fn choose_font(&mut self, backend: &mut impl PlatformBackend) -> Result<(), Box<dyn Error>> {
+        let (pc, _) = self.machine.pending_system().expect("checked by caller");
+        let chosen = backend.choose_font(self.settings.font_face())?;
+        let mut settings = self.settings.clone();
+        if let Some(face) = &chosen {
+            settings
+                .set_font_face(face)
+                .map_err(|why| crate::evaluate::error(pc, 0x213d, why))?;
+        }
+        self.machine
+            .complete_system(crate::vm::SystemResult(0x4000))?;
+        if chosen.is_some() {
+            self.settings = settings;
+            self.messages.set_default_face(self.settings.font_face());
+            self.messages.refresh_default_fonts();
+        }
+        Ok(())
+    }
     fn step_once(
         &mut self,
         backend: &mut impl PlatformBackend,
     ) -> Result<StartupEvent, Box<dyn Error>> {
         self.messages.set_text_settings(self.settings.text_output());
+        self.messages.set_default_face(self.settings.font_face());
         if self.main_barrier {
             return Ok(StartupEvent::MainPreparedNeedsSnapshot);
         }
@@ -714,6 +744,10 @@ impl<'a> Startup<'a> {
                 }
                 self.auto_resume_checked = true;
             }
+            return Ok(StartupEvent::Progress);
+        }
+        if matches!(self.machine.pending_system(), Some((_, 0x13d))) {
+            self.choose_font(backend)?;
             return Ok(StartupEvent::Progress);
         }
         if let Some(event) = self.platform.try_handle(

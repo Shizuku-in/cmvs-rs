@@ -49,6 +49,7 @@ impl AuxiliaryText {
             _ => 0,
         };
         let template = AuxiliaryGlyph {
+            face: self.face.clone(),
             code: 0,
             position: [0, 0],
             size,

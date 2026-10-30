@@ -1,0 +1,22 @@
+[package]
+name = "cmvs-windows"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Windows-only native dialogs for the CMVS desktop host; the workspace's only FFI crate"
+
+# The workspace forbids unsafe code. This crate alone denies it and allows it only in the
+# documented system calls of each module.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_Controls_Dialogs",
+] }

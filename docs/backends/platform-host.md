@@ -75,3 +75,8 @@ CUR 解码范围：一个目录条目、40 字节 BITMAPINFOHEADER、正高度�
 记录后端构造为0并保存请求；桌面后端将模式保存在窗口宿主，呈现时模式1使用 `RgbaImage::draw_scaled` 的双线性路径：按纹素中心映射、边缘夹取、8位权重，在预乘alpha上插值后与背景合成；模式0保持最近邻。窗口和全屏都经过同一缩放（原版 `0x14001db60` 对后处理对象传入同一设备字段，未按全屏区分）。这是软件滤镜，不宣称与D3D线性采样逐像素一致；两种后端都不报告像素着色器，模式2/3不可达。
 
 启动时读取用户或游戏 `GRAPHIC_CONFIG/ASPECT_RATIO_FILTER`，原版保存字对0/1互换（0为线性），负数或≥4为点采样；桌面创建窗口后用同一能力回退得到实际模式，正常退出按同一互换写回用户配置。证据见[VM语义](../games/amatsutsumi/vm-semantics.md#系统页绘制模式2026-10-31)。
+
+
+## 字体对话框（2026-10-31）
+
+`PlatformBackend::choose_font(current)` 对应0x213d的模态对话框：参数与结果均为游戏编码的字体名，Ok(None)表示取消。默认实现报错。记录后端按 `answer_font_dialog` 预置的答案依次作答并记录每次初值，没有答案时报错。桌面后端在Windows上把名称转为UTF-16后调用 `cmvs_windows::font_dialog::choose_font`（`ChooseFontW`，Shift-JIS脚本、无竖排、仅TrueType，属主为当前winit窗口），再转回游戏编码，并要求字体库能解析该面；其他平台预留并报错。模态对话框在事件循环回调内运行，期间不推进VM。

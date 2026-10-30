@@ -71,8 +71,16 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<TextObject, FormatError> {
         ));
     }
     r.finish()?;
+    // The record names only +44; MessageHost::restore resolves the font object's face.
+    let face = if font_face.is_empty() {
+        crate::settings::DEFAULT_FONT_FACE
+    } else {
+        &font_face
+    }
+    .into();
     Ok(TextObject {
         font_face,
+        face,
         bold: aw(108) != 0,
         scale_bits: 1.0f32.to_bits(),
         logical_size,

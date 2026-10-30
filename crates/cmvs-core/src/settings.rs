@@ -153,16 +153,35 @@ impl SettingsHost {
                 voice_wait: int("AUTO_MODE_4", 0),
                 sync_voice: int("AUTO_VOICE_SYNC", 1) != 0,
             },
-            ..Self::default()
+            // 0x14000b5dc: a 0x80-byte read defaulting to the built-in face. The existence
+            // check (0x140007f80) that may restore the default needs the font backend.
+            font_face: crate::save_menu::profile_string(
+                bytes,
+                "MESSAGE_INFO",
+                "FONT",
+                DEFAULT_FONT_FACE,
+                0x80,
+            ),
         }
     }
     pub fn font_face(&self) -> &[u8] {
         &self.font_face
     }
+    /// Global face 0x1400fc150. Faces are LOGFONT names, so 31 bytes at most; longer or
+    /// empty names would overflow or select GDI's own default and are not modeled.
+    /// A configured FONT longer than a LOGFONT name would overflow the original's
+    /// existence check (0x140007f80 copies it into lfFaceName).
+    pub fn check_font_face(&self) -> Result<(), &'static str> {
+        validate_face(&self.font_face)
+    }
+    pub fn set_font_face(&mut self, face: &[u8]) -> Result<(), &'static str> {
+        validate_face(face)?;
+        self.font_face = face.to_vec();
+        Ok(())
+    }
     /// 0x22de / 0x14007c2d0: SP-4 selects write/read, SP-8 is a string reference.
-    /// Read writes the global font name to the destination and result 0 = 1.
-    /// Native font selection is still a barrier; accepting another face without
-    /// changing subsequent font construction would misrepresent the command.
+    /// Read writes the global font name to the destination and result 0 = 1. A write only
+    /// changes the global face used by font objects created afterwards.
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
         if let Some((pc, command)) = vm.pending_system() {
             if command == 0x2e9 {
@@ -298,14 +317,10 @@ impl SettingsHost {
         };
         let (write, reference) = (arg(4)? != 0, arg(8)?);
         if write {
-            if vm.resolve_string(reference)? != self.font_face {
-                return Err(error(
-                    pc,
-                    0x22de,
-                    "changing the default font face is not implemented",
-                ));
-            }
+            let face = vm.resolve_string(reference)?;
+            validate_face(&face).map_err(|why| error(pc, 0x22de, why))?;
             vm.complete_system(SystemResult(0x4008))?;
+            self.font_face = face;
         } else {
             let slot = crate::text::bank_slot(reference).ok_or_else(|| {
                 error(
@@ -324,4 +339,11 @@ impl SettingsHost {
         }
         Ok(true)
     }
+}
+
+fn validate_face(face: &[u8]) -> Result<(), &'static str> {
+    if face.is_empty() || face.len() >= 32 || face.contains(&0) {
+        return Err("font face must be a 1..31 byte LOGFONT name");
+    }
+    Ok(())
 }
