@@ -198,7 +198,16 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut camera = CameraHost::default();
     // Traces supply no input: no CMVS action is ever active.
     let mut input = ActionInput::default();
-    let mut audio = AudioHost::default();
+    let mut audio = if let Some(root) = &movie_root {
+        let config = match std::fs::read(root.join("cmvs.cfg")) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => return Err(e.into()),
+        };
+        AudioHost::from_ini(&config)
+    } else {
+        AudioHost::default()
+    };
     let mut audio_backend = RecordingAudio::default();
     if platform_assets.is_some() {
         println!(

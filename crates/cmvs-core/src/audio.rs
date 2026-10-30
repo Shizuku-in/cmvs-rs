@@ -294,9 +294,12 @@ impl AudioBackend for RecordingAudio {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct AudioHost {
     settings: AudioSettings,
+    /// Device +2424/+2428/+2432/+2436. Parameters queried by 0x2239/3b/3d;
+    /// the mixer envelope that consumes them is not implemented yet.
+    voice_ducking: [u32; 4],
     channels: [Option<SeChannel>; SE_CHANNELS],
     /// Channel record +40 (+1696): 0x20b0/0x20ba store 256 with each play, the constructor
     /// zeroes it, and stopping keeps it. Only the snapshot reads it here.
@@ -304,10 +307,17 @@ pub struct AudioHost {
     bgm: BgmState,
 }
 
+impl Default for AudioHost {
+    fn default() -> Self {
+        Self::new(AudioSettings::default())
+    }
+}
+
 impl AudioHost {
     pub fn new(settings: AudioSettings) -> Self {
         Self {
             settings,
+            voice_ducking: [128, 500, 1000, 0],
             channels: Default::default(),
             played: [0; SE_CHANNELS],
             bgm: BgmState::default(),
@@ -318,6 +328,29 @@ impl AudioHost {
     }
     pub fn settings(&self) -> AudioSettings {
         self.settings
+    }
+    /// Read-only startup configuration (0x14000a3c0); registry overrides and
+    /// configuration persistence are separate backend work. Call before playback.
+    pub fn from_ini(text: &[u8]) -> Self {
+        let mut host = Self::default();
+        let int = |key, default| crate::save_menu::profile_int(text, "SOUND_INFO", key, default);
+        host.settings.bgm_enabled = int("MUSIC_USE", 1) != 0;
+        host.settings.se_enabled = int("SE_USE", 1) != 0;
+        host.settings.voice_enabled = int("VOICE_USE", 1) != 0;
+        // 0x140017750 delegates to menu helpers that store the incoming raw word.
+        // Unlike the VM setters, startup does not clamp the volume parameters.
+        host.settings.master = int("MASTER_VOLUME", 100) as u32;
+        host.settings.bgm = int("MUSIC_VOLUME", 100) as u32;
+        host.settings.se = int("SE_VOLUME", 100) as u32;
+        host.settings.voice = int("VOICE_VOLUME", 100) as u32;
+        host.settings.movie = int("VIDEO_VOLUME", 100) as u32;
+        host.voice_ducking = [
+            (int("VOICE_FADE_VOLOME", 100) as u32).min(100),
+            (int("VOICE_FADE_TIMER", 500) as u32).min(2000),
+            (int("VOICE_FADE_WAIT", 1000) as u32).min(3000),
+            u32::from(int("VOICE_FADE_USE", 1) != 0),
+        ];
+        host
     }
     pub fn channel(&self, index: usize) -> Option<&SeChannel> {
         self.channels.get(index).and_then(Option::as_ref)
@@ -331,12 +364,7 @@ impl AudioHost {
         match vm.pending_system() {
             Some((_, command @ (0x239 | 0x23b | 0x23d))) => {
                 // Device constructor 0x140087440, queried by 0x140087d00.
-                // No effect-setting command is accepted yet, so these stay at reset.
-                let value = match command {
-                    0x239 => 128,
-                    0x23b => 500,
-                    _ => 1000,
-                };
+                let value = self.voice_ducking[usize::from((command - 0x239) / 2)];
                 vm.complete_system(SystemResult(0x4000))?;
                 vm.state_mut()
                     .set_system_integer(0, value)

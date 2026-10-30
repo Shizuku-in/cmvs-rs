@@ -96,6 +96,7 @@ fn automatic_advance_fields_round_trip_raw_words_and_normalize_only_the_boolean(
 #[test]
 fn configuration_queries_expose_current_constructor_policy_and_setters_stay_barriers() {
     for (op, value) in [
+        (0x22d5, 1),
         (0x22df, 1),
         (0x22e0, 0),
         (0x22e1, 4),
@@ -154,6 +155,44 @@ fn audio_queries_use_playback_settings_without_backend_requests() {
         assert_eq!(vm.stack().len_bytes(), 0);
     }
     assert_eq!(host.settings(), settings);
+}
+
+#[test]
+fn audio_ini_initializes_query_values_and_preserves_startup_volume_words() {
+    use cmvs_rs::audio::{AudioHost, RecordingAudio};
+    let ini = b"[SOUND_INFO]\nMASTER_VOLUME=224\nMUSIC_VOLUME=128\nSE_VOLUME=192\nVOICE_VOLUME=256\nVIDEO_VOLUME=224\nMUSIC_USE=0\nSE_USE=-1\nVOICE_USE=0\nVOICE_FADE_VOLOME=75\nVOICE_FADE_TIMER=600\nVOICE_FADE_WAIT=1200\n";
+    let mut host = AudioHost::from_ini(ini);
+    let settings = host.settings();
+    assert_eq!(
+        [
+            settings.master,
+            settings.bgm,
+            settings.se,
+            settings.voice,
+            settings.movie
+        ],
+        [224, 128, 192, 256, 224]
+    );
+    assert!(!settings.bgm_enabled && settings.se_enabled && !settings.voice_enabled);
+    let mut code = vec![];
+    for op in [0x2239, 0x223b, 0x223d] {
+        command(&mut code, op, &[]);
+    }
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut backend = RecordingAudio::default();
+    for value in [75, 600, 1200] {
+        pending(&mut vm);
+        host.try_handle(&mut vm, &mut backend).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(value));
+    }
+    assert_eq!(AudioHost::from_ini(&[]).settings().master, 100);
+    assert_eq!(
+        AudioHost::from_ini(b"[SOUND_INFO]\nMASTER_VOLUME=-1\n")
+            .settings()
+            .master,
+        u32::MAX
+    );
 }
 
 #[test]

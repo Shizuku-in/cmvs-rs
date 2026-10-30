@@ -435,15 +435,15 @@ struct Ui<'a, 'b> {
     frozen: bool,
 }
 
-/// First settings milestone: the toolbar opens the original scripted settings and
-/// right click returns to gameplay. Rendering, edits and persistence are separate checks.
+/// Title and toolbar settings entries, three pages and right-click return.
+/// Edits, persistence and native device behavior remain separate checks.
 #[cfg(feature = "desktop")]
 #[test]
 #[ignore = "requires CMVS_GAME_ROOT with system.dat/save000 and CMVS_FONT_PATH"]
-fn external_system_settings_toolbar_opens_and_returns_to_text() {
+fn external_system_settings_entries_render_and_return() {
     let root = PathBuf::from(std::env::var_os("CMVS_GAME_ROOT").expect("CMVS_GAME_ROOT"));
     let font_path = PathBuf::from(std::env::var_os("CMVS_FONT_PATH").expect("CMVS_FONT_PATH"));
-    let font = cmvs_rs::desktop::font::FontRenderer::read(&font_path, 0).unwrap();
+    let mut font = cmvs_rs::desktop::font::FontRenderer::read(&font_path, 0).unwrap();
     let user = user_directory("settings");
     for name in ["system.dat", "save000.dat"] {
         fs::copy(root.join("save").join(name), user.join(name)).unwrap();
@@ -470,6 +470,16 @@ fn external_system_settings_toolbar_opens_and_returns_to_text() {
         ui.frame([-1, -1], None);
     }
     assert_eq!(ui.run.machine().current_name(), b"menu.ps3");
+    // The title is still fading in when its button group is first created.
+    for _ in 0..600 {
+        ui.frame([-1, -1], None);
+    }
+    ui.click(ui.button(0, 2), 120);
+    assert_eq!(ui.run.buttons().group(1).unwrap().buttons.len(), 291);
+    font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+        .unwrap();
+    ui.press([640, 360], 3, 120);
+    assert_eq!(ui.run.machine().current_name(), b"menu.ps3");
     ui.run.load_slot(0, &mut ui.backend).unwrap();
     ui.wait_for_text();
     ui.click(ui.toolbar(0), 120);
@@ -477,10 +487,26 @@ fn external_system_settings_toolbar_opens_and_returns_to_text() {
     assert_eq!(group.object, 64);
     assert_eq!(group.buttons.len(), 292);
     assert!(ui.run.messages().window(6).is_some());
+    for _ in 0..120 {
+        font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+            .unwrap();
+        ui.frame([640, 360], None);
+    }
+    ui.click(ui.button(1, 3), 120);
+    assert_eq!(ui.run.buttons().group(1).unwrap().buttons.len(), 107);
+    font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+        .unwrap();
+    ui.click(ui.button(1, 1), 120);
+    assert_eq!(ui.run.buttons().group(1).unwrap().buttons.len(), 50);
+    for _ in 0..120 {
+        font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+            .unwrap();
+        ui.frame([640, 360], None);
+    }
     ui.press([640, 360], 3, 120);
     ui.wait_for_text();
     assert!(ui.run.buttons().group(1).is_none());
-    println!("settings: 292 buttons; toolbar open, idle, right-click close and gameplay resume");
+    println!("settings: title + toolbar; three pages, 242 rendered frames, right-click return");
 }
 
 impl Ui<'_, '_> {

@@ -79,6 +79,29 @@ pub enum PlatformRequest {
     },
 }
 pub trait PlatformBackend {
+    /// 0x2163 queries the device's current display mode, not the startup preference.
+    fn fullscreen(&self) -> Result<bool, Box<dyn Error>> {
+        Err("platform backend does not implement display mode queries".into())
+    }
+    /// Native pixel shader capability; software backends report zero. This does
+    /// not grant support for individual VM effects in the core renderer.
+    fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error>> {
+        Err("platform backend does not implement pixel shader capability queries".into())
+    }
+    fn render_mode(&self) -> Result<u32, Box<dyn Error>> {
+        Err("platform backend does not implement render mode queries".into())
+    }
+    fn resizable(&self) -> Result<bool, Box<dyn Error>> {
+        Err("platform backend does not implement window resizing queries".into())
+    }
+    /// StretchRect-equivalent point or linear enlargement in the selected backend.
+    fn stretch_filter_supported(&self) -> Result<bool, Box<dyn Error>> {
+        Err("platform backend does not implement stretch filter queries".into())
+    }
+    /// 0=unscaled when it fits, 1=contain, 2=cover, 3=stretch (0x14001a360).
+    fn aspect_mode(&self) -> Result<u32, Box<dyn Error>> {
+        Err("platform backend does not implement aspect mode queries".into())
+    }
     /// Must commit the request on Ok; on Err leave backend state unchanged for retry.
     /// This is not a queued acknowledgement. Native event-loop implementations must honor this contract.
     fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>>;
@@ -94,6 +117,24 @@ impl RecordingBackend {
     }
 }
 impl PlatformBackend for RecordingBackend {
+    fn aspect_mode(&self) -> Result<u32, Box<dyn Error>> {
+        Ok(1)
+    }
+    fn stretch_filter_supported(&self) -> Result<bool, Box<dyn Error>> {
+        Ok(true)
+    }
+    fn resizable(&self) -> Result<bool, Box<dyn Error>> {
+        Ok(true)
+    }
+    fn render_mode(&self) -> Result<u32, Box<dyn Error>> {
+        Ok(0)
+    }
+    fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error>> {
+        Ok(0)
+    }
+    fn fullscreen(&self) -> Result<bool, Box<dyn Error>> {
+        Ok(false)
+    }
     fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>> {
         let size = match request {
             PlatformRequest::Title(bytes) => bytes.len(),
@@ -212,6 +253,58 @@ impl PlatformHost {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(None);
         };
+        if command == 0x2fc {
+            let value = backend.aspect_mode()?;
+            vm.complete_system(SystemResult(0x4000))?;
+            vm.state_mut()
+                .set_system_integer(0, value)
+                .expect("slot 0 exists");
+            return Ok(Some(PlatformEvent::Configured));
+        }
+        if command == 0x2c8 {
+            let value = backend.stretch_filter_supported()?;
+            vm.complete_system(SystemResult(0x4000))?;
+            vm.state_mut()
+                .set_system_integer(0, u32::from(value))
+                .expect("slot 0 exists");
+            return Ok(Some(PlatformEvent::Configured));
+        }
+        if command == 0x16f {
+            // Screen viewport +152; 0x140018260 selects WS_THICKFRAME with it.
+            let value = backend.resizable()?;
+            vm.complete_system(SystemResult(0x4000))?;
+            vm.state_mut()
+                .set_system_integer(0, u32::from(value))
+                .expect("slot 0 exists");
+            return Ok(Some(PlatformEvent::Configured));
+        }
+        if command == 0x16c {
+            let mode = backend.render_mode()?;
+            vm.complete_system(SystemResult(0x4000))?;
+            vm.state_mut()
+                .set_system_integer(0, mode)
+                .expect("slot 0 exists");
+            return Ok(Some(PlatformEvent::Configured));
+        }
+        if command == 0x16b {
+            // 0x140075570: D3DCAPS9.PixelShaderVersion major byte.
+            let major = backend.pixel_shader_major()?;
+            let value = 3 | if major >= 2 { 4 } else { 0 } | if major >= 3 { 8 } else { 0 };
+            vm.complete_system(SystemResult(0x4000))?;
+            vm.state_mut()
+                .set_system_integer(0, value)
+                .expect("slot 0 exists");
+            return Ok(Some(PlatformEvent::Configured));
+        }
+        if command == 0x163 {
+            // 0x1400753d0 -> 0x140027040 -> device +56 (zero is fullscreen).
+            let fullscreen = backend.fullscreen()?;
+            vm.complete_system(SystemResult(0x4000))?;
+            vm.state_mut()
+                .set_system_integer(0, u32::from(fullscreen))
+                .expect("slot 0 exists");
+            return Ok(Some(PlatformEvent::Configured));
+        }
         if !matches!(command, 0x160 | 0x161 | 0x99 | 0x8f | 0x2b0) {
             return Ok(None);
         }

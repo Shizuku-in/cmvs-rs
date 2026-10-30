@@ -164,12 +164,16 @@ impl<'a> Startup<'a> {
         machine.set_current_name(game.files.start_name());
         // 0x14000a3c0 reads the startup settings; cmvs.cfg is optional and read only.
         let mut save_menu = SaveMenuHost::default();
+        let audio;
         match std::fs::read(root.join("cmvs.cfg")) {
-            Ok(text) => save_menu.set_confirmations(
-                crate::save_menu::profile_int(&text, "SYSTEM_INFO", "DLG_LOAD", 0) != 0,
-                crate::save_menu::profile_int(&text, "SYSTEM_INFO", "DLG_SAVE", 0) != 0,
-            ),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Ok(text) => {
+                audio = AudioHost::from_ini(&text);
+                save_menu.set_confirmations(
+                    crate::save_menu::profile_int(&text, "SYSTEM_INFO", "DLG_LOAD", 0) != 0,
+                    crate::save_menu::profile_int(&text, "SYSTEM_INFO", "DLG_SAVE", 0) != 0,
+                );
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => audio = AudioHost::from_ini(&[]),
             Err(e) => return Err(e.into()),
         }
         Ok(Self {
@@ -211,7 +215,7 @@ impl<'a> Startup<'a> {
             history: HistoryHost::default(),
             // Explicit research seed, like the virtual tick; the original seeds from timeGetTime.
             random: CrtRandom::new(0),
-            audio: AudioHost::default(),
+            audio,
             audio_backend: Box::new(RecordingAudio::default()),
             steps: 0,
             since_yield: 0,

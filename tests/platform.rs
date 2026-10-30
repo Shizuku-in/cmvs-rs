@@ -8,6 +8,78 @@ use cmvs_rs::{
     ps3::Script,
 };
 use std::{collections::BTreeMap, error::Error, fs, process::Command};
+#[path = "support/bytecode.rs"]
+mod bytecode;
+
+#[test]
+fn fullscreen_query_uses_backend_state_and_needs_no_arguments_or_assets() {
+    struct Display(bool);
+    impl PlatformBackend for Display {
+        fn fullscreen(&self) -> Result<bool, Box<dyn Error>> {
+            Ok(self.0)
+        }
+        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+            panic!("query must not apply requests")
+        }
+    }
+    for fullscreen in [false, true] {
+        let mut code = Vec::new();
+        bytecode::command(&mut code, 0x2163, &[]);
+        let script = bytecode::script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        bytecode::pending(&mut vm);
+        let mut host = PlatformHost::default();
+        let mut assets = Assets::default();
+        host.try_handle(&mut vm, &mut Display(fullscreen), &mut assets, &[])
+            .unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(u32::from(fullscreen)));
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(assets.calls, 0);
+    }
+}
+
+#[test]
+fn graphics_and_resizing_queries_report_explicit_backend_capabilities() {
+    struct Device(u8, bool);
+    impl PlatformBackend for Device {
+        fn stretch_filter_supported(&self) -> Result<bool, Box<dyn Error>> {
+            Ok(true)
+        }
+        fn aspect_mode(&self) -> Result<u32, Box<dyn Error>> {
+            Ok(2)
+        }
+        fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error>> {
+            Ok(self.0)
+        }
+        fn render_mode(&self) -> Result<u32, Box<dyn Error>> {
+            Ok(2)
+        }
+        fn resizable(&self) -> Result<bool, Box<dyn Error>> {
+            Ok(self.1)
+        }
+        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+            panic!("query must not apply requests")
+        }
+    }
+    for (major, flags) in [(0, 3), (1, 3), (2, 7), (3, 15), (255, 15)] {
+        let mut code = Vec::new();
+        for op in [0x216b, 0x216c, 0x216f, 0x22c8, 0x22fc] {
+            bytecode::command(&mut code, op, &[]);
+        }
+        let script = bytecode::script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut host = PlatformHost::default();
+        let mut assets = Assets::default();
+        for expected in [flags, 2, 1, 1, 2] {
+            bytecode::pending(&mut vm);
+            host.try_handle(&mut vm, &mut Device(major, true), &mut assets, &[])
+                .unwrap();
+            assert_eq!(vm.state().system_integer(0), Some(expected));
+            assert_eq!(vm.stack().len_bytes(), 0);
+        }
+        assert_eq!(assets.calls, 0);
+    }
+}
 
 fn put(b: &mut [u8], at: usize, v: u32) {
     b[at..at + 4].copy_from_slice(&v.to_le_bytes());

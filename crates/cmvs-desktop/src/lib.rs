@@ -125,6 +125,24 @@ pub struct NativeBackend<'a> {
     pub encoding: TextEncoding,
 }
 impl PlatformBackend for NativeBackend<'_> {
+    fn aspect_mode(&self) -> Result<u32, Box<dyn Error>> {
+        Ok(1)
+    }
+    fn stretch_filter_supported(&self) -> Result<bool, Box<dyn Error>> {
+        Ok(true)
+    }
+    fn resizable(&self) -> Result<bool, Box<dyn Error>> {
+        Ok(self.window.is_resizable())
+    }
+    fn render_mode(&self) -> Result<u32, Box<dyn Error>> {
+        Ok(0)
+    }
+    fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error>> {
+        Ok(0)
+    }
+    fn fullscreen(&self) -> Result<bool, Box<dyn Error>> {
+        Ok(self.window.fullscreen().is_some())
+    }
     fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>> {
         match request {
             PlatformRequest::Title(bytes) => {

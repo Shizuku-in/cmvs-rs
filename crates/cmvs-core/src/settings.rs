@@ -62,6 +62,7 @@ impl SettingsHost {
             // Constructor 0x140014e60. Setters require their consumers and backend
             // effects before they may be accepted; these reads expose current defaults.
             let value = match command {
+                0x2d5 => Some(1),
                 0x2df => Some(1),
                 0x2e0 => Some(0),
                 0x2e1 => Some(4),
