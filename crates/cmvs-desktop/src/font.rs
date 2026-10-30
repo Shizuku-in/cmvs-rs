@@ -401,6 +401,7 @@ impl FontRenderer {
             };
             for glyph in group.attached_glyphs() {
                 let pixels = self.glyph(&RecordedGlyph {
+                    snapshot_indices: None,
                     face: glyph.face.clone(),
                     bold: false,
                     code: glyph.code,
@@ -462,6 +463,7 @@ mod tests {
         let path = std::env::var_os("CMVS_FONT_PATH").expect("CMVS_FONT_PATH");
         let mut font = FontRenderer::read(Path::new(&path), 0).unwrap();
         let mut glyph = RecordedGlyph {
+            snapshot_indices: None,
             face: Arc::from(cmvs_core::settings::DEFAULT_FONT_FACE),
             bold: false,
             code: 0x82a0,

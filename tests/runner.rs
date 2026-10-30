@@ -1190,10 +1190,11 @@ fn read_skip_cancels_script_skip_at_unread_output_and_keeps_flags_on_unknown_bit
 
 #[test]
 fn scenario_snapshot_failure_keeps_the_command_vm_and_image_unchanged() {
-    // Text 7 showing a glyph: displayed glyphs have no save record here.
+    // An oversized glyph stays outside the supported reconstruction range.
     let mut code = vec![];
     for (op, words) in [
         (0x215du16, vec![720u32, 1280, 100, 100, 0, 0, 7, 0]),
+        (0x2143, vec![129, 0]),
         (0x2152, vec![0, u32::MAX, 0]),
     ] {
         for word in words {
@@ -1219,7 +1220,7 @@ fn scenario_snapshot_failure_keeps_the_command_vm_and_image_unchanged() {
             Err(error) => break error,
         }
     };
-    assert!(error.to_string().contains("glyphs"), "{error}");
+    assert!(error.to_string().contains("size"), "{error}");
     for _ in 0..2 {
         assert_eq!(run.machine().pending_system(), Some((snapshot_pc, 0x2b2)));
         assert_eq!(run.machine().pc(), snapshot_pc);
@@ -1237,6 +1238,8 @@ fn scenario_snapshot_writes_a_slot_that_loads_back_with_backups() {
     system_call(&mut code, 0x201d, &[0x12345678]);
     system_call(&mut code, 0x2128, &[]);
     system_call(&mut code, 0x2092, &[5, 1, 42]);
+    commands::command(&mut code, 0x215d, &[0, 7, 0, 0, 100, 100, 1280, 720]);
+    commands::command(&mut code, 0x2152, &[0, u32::MAX, 0]);
     let snapshot_pc = code.len();
     code.extend(0x22b2u16.to_le_bytes());
     system_call(&mut code, 0x2092, &[5, 1, 7]);
@@ -1251,12 +1254,14 @@ fn scenario_snapshot_writes_a_slot_that_loads_back_with_backups() {
     let script = root.script();
     let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
     run.set_user_data_directory(&directory).unwrap();
+    run.set_record_text(true);
     let mut backend = RecordingBackend::default();
     let run_to_end = |run: &mut Startup<'_>, backend: &mut RecordingBackend| {
         let mut captured = 0;
         loop {
             match run.tick(backend).unwrap() {
                 StartupEvent::Progress => {}
+                StartupEvent::Yield => run.advance_frame(400).unwrap(),
                 StartupEvent::SnapshotCaptured => captured += 1,
                 StartupEvent::Unhandled { pc, command } => {
                     assert_eq!((pc, command), (end, 0x27ff));
@@ -1280,6 +1285,7 @@ fn scenario_snapshot_writes_a_slot_that_loads_back_with_backups() {
     );
     assert_eq!(snapshot.variables.integers()[5], 42);
     assert_eq!(snapshot.variables.packed_bits()[0] & 1, 1);
+    assert_eq!(snapshot.texts[7].as_ref().unwrap().glyphs.len(), 9);
     assert!(directory.join("system.dat").exists());
     assert!(!directory.join("save998.dat").exists());
     assert!(!directory.join("save999.dat").exists());
@@ -1295,12 +1301,54 @@ fn scenario_snapshot_writes_a_slot_that_loads_back_with_backups() {
     assert_eq!(run.machine().pc(), snapshot_pc + 2);
     assert_eq!(run.machine().state().integer(5), Some(42));
     assert_eq!(run.machine().state().bit(0), Some(true));
+    let glyphs = &run.messages().text(7).unwrap().glyphs;
+    assert_eq!(glyphs.len(), 9);
+    assert!(
+        glyphs
+            .iter()
+            .all(|g| g.shown && !g.active && g.opacity == 255)
+    );
     // Saving over slot 3 again moves the previous version to slot 999.
     assert_eq!(run_to_end(&mut run, &mut backend), 0);
     assert_eq!(fs::read(directory.join("save999.dat")).unwrap(), first);
     assert_eq!(fs::read(&slot).unwrap(), first);
     assert!(run.load_slot(4, &mut backend).is_err());
     assert!(run.save_slot(1000).is_err());
+    // 0x6a0 is an allocation descriptor, not saved overlay pixels. The native
+    // loader ignores its dimensions; the software backend allocates no D3D target.
+    let mut with_targets = snapshot.clone();
+    let mut target = 0u16.to_le_bytes().to_vec();
+    target.extend(2048u32.to_le_bytes());
+    target.extend(1024u32.to_le_bytes());
+    for index in 0..2 {
+        with_targets
+            .raw_objects
+            .insert((0x6a0, index), target.clone());
+    }
+    let header: &[u8; 600] = first[..600].try_into().unwrap();
+    let changed = Csv2Save::encode(
+        header,
+        &with_targets.encode().unwrap(),
+        &save.auxiliary,
+        &save.script_image,
+    )
+    .unwrap();
+    fs::write(directory.join("save004.dat"), changed).unwrap();
+    run.load_slot(4, &mut backend).unwrap();
+    assert_eq!(run.messages().text(7).unwrap().glyphs.len(), 9);
+    // Unknown target versions fail before installing any VM/visual state.
+    with_targets.raw_objects.get_mut(&(0x6a0, 1)).unwrap()[0] = 1;
+    let changed = Csv2Save::encode(
+        header,
+        &with_targets.encode().unwrap(),
+        &save.auxiliary,
+        &save.script_image,
+    )
+    .unwrap();
+    fs::write(directory.join("save004.dat"), changed).unwrap();
+    let before = run.inspect_snapshot().unwrap().encode().unwrap();
+    assert!(run.load_slot(4, &mut backend).is_err());
+    assert_eq!(run.inspect_snapshot().unwrap().encode().unwrap(), before);
     drop(run);
     fs::remove_dir_all(&directory).unwrap();
 }

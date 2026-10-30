@@ -80,6 +80,11 @@ fn check_loaded(run: &Startup<'_>, mut expected: EngineSnapshot) {
     for scene in expected.objects.values_mut() {
         reset_fades(scene);
     }
+    // 0x14005c8f0 redraws descriptors at their saved positions, while resetting
+    // the text pen independently to the area origin.
+    for text in expected.texts.iter_mut().flatten() {
+        text.cursor = [text.area[0], text.area[1]];
+    }
     // A stopped SE channel keeps its old name behind a cleared first byte in the original.
     for channel in expected.sound_channels.chunks_exact_mut(52) {
         if channel[0] == 0 {
@@ -1311,6 +1316,87 @@ fn external_in_game_menus_save_and_load() {
         ui.frame([-1, -1], None);
     }
     ui.run.load_slot(0, &mut ui.backend).unwrap();
+    ui.wait_for_text();
+
+    // Capture visible real-script glyphs between VM commands, then restore the
+    // exact snapshot through the normal slot loader. Inputs remain read-only.
+    let visible = ui.run.inspect_snapshot().unwrap();
+    #[cfg(feature = "desktop")]
+    let mut visual = std::env::var_os("CMVS_FONT_PATH").map(|path| {
+        let mut font =
+            cmvs_rs::desktop::font::FontRenderer::read(std::path::Path::new(&path), 0).unwrap();
+        let frame = font
+            .render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+            .unwrap();
+        (font, frame)
+    });
+    let bytes = visible.encode().unwrap();
+    assert_eq!(
+        EngineSnapshot::decode(&bytes).unwrap().encode().unwrap(),
+        bytes
+    );
+    let source = fs::read(user.join("save000.dat")).unwrap();
+    let vm = ui.run.machine().capture_vm().unwrap();
+    let csv = Csv2Save::encode(
+        source[..600].try_into().unwrap(),
+        &bytes,
+        &[],
+        &vm.main_image,
+    )
+    .unwrap();
+    fs::write(user.join("save005.dat"), &csv).unwrap();
+    let mut count = 0;
+    let mut manifest = String::new();
+    for (slot, text) in visible.texts.iter().enumerate() {
+        for glyph in text.iter().flat_map(|t| &t.glyphs) {
+            count += 1;
+            manifest.push_str(&format!(
+                "{slot} {} {} {} {} {} {} {} {} {}\n",
+                glyph.code,
+                glyph.position[0],
+                glyph.position[1],
+                glyph.size,
+                glyph.gradient,
+                glyph.colors[0],
+                glyph.colors[1],
+                glyph.outline[0],
+                glyph.outline[1]
+            ));
+        }
+    }
+    assert!(count > 0);
+    if let Some(directory) = std::env::var_os("CMVS_GLYPH_OUTPUT") {
+        let directory = PathBuf::from(directory);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("visible.dat"), csv).unwrap();
+        fs::write(directory.join("glyphs.txt"), manifest).unwrap();
+    }
+    ui.run.load_slot(5, &mut ui.backend).unwrap();
+    #[cfg(feature = "desktop")]
+    if let Some((font, before)) = &mut visual {
+        let after = font
+            .render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+            .unwrap();
+        assert_eq!(
+            after, *before,
+            "visible glyph snapshot changed rendered pixels"
+        );
+        println!("visible snapshot: rendered pixels identical");
+    }
+    for (slot, expected) in visible.texts.iter().enumerate() {
+        if let Some(expected) = expected {
+            let actual = ui.run.messages().text(slot).unwrap();
+            assert_eq!(actual.glyphs.len(), expected.glyphs.len());
+            for (a, e) in actual.glyphs.iter().zip(&expected.glyphs) {
+                assert_eq!(
+                    (a.code, a.position, a.size, a.colors, a.gradient, a.outline),
+                    (e.code, e.position, e.size, e.colors, e.gradient, e.outline)
+                );
+                assert!(a.shown && !a.active && a.opacity == 255);
+            }
+        }
+    }
+    println!("visible snapshot: {count} glyphs restored");
     ui.wait_for_text();
 
     // Quick save: toolbar button 3, then yes.

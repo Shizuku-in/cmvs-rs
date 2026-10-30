@@ -4,7 +4,7 @@
 use super::Reader;
 use crate::{
     FormatError,
-    message::{LineBreakRules, TextObject},
+    message::{LineBreakRules, RecordedGlyph, TextObject},
 };
 
 /// Decodes the saved fields as written; the loader's pen reset is applied by callers.
@@ -18,8 +18,8 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<TextObject, FormatError> {
         return Err(FormatError("unsupported snapshot text atlas capacity"));
     }
     let font_face = r.string(64)?.to_vec();
-    if !font_face.is_empty() && font_face != crate::settings::DEFAULT_FONT_FACE {
-        return Err(FormatError("snapshot named font face is not implemented"));
+    if font_face.len() > 31 {
+        return Err(FormatError("snapshot font face exceeds native capacity"));
     }
     let logical_size = r.words::<2>()?.map(|v| v as i32);
     if logical_size.iter().any(|&v| v <= 0) {
@@ -65,10 +65,40 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<TextObject, FormatError> {
             inseparable: field(72..200, 128)?,
         })
     };
-    if r.u16()? != 0 {
-        return Err(FormatError(
-            "snapshot displayed glyph reconstruction is not implemented",
-        ));
+    let count = usize::from(r.u16()?);
+    if count > 4096 {
+        return Err(FormatError("snapshot glyph count exceeds research limit"));
+    }
+    let mut glyphs = Vec::with_capacity(count);
+    for _ in 0..count {
+        let w = r.words::<11>()?;
+        if w[1] & 0xffff != 40 || !(1..=128).contains(&w[6]) {
+            return Err(FormatError("unsupported snapshot glyph descriptor or size"));
+        }
+        glyphs.push(RecordedGlyph {
+            snapshot_indices: Some([w[0], w[2]]),
+            face: if font_face.is_empty() {
+                crate::settings::DEFAULT_FONT_FACE
+            } else {
+                &font_face
+            }
+            .into(),
+            bold: aw(108) != 0,
+            code: (w[1] >> 16) as u16,
+            position: [w[4] as i32, w[5] as i32],
+            size: w[6],
+            colors: [w[7], w[8]],
+            gradient: w[3],
+            outline: [w[9], w[10]],
+            delay_ms: 0,
+            elapsed_ms: 0,
+            duration_ms: 350,
+            active: false,
+            shown: true,
+            opacity: 255,
+            reveal_mode: 0,
+            reveal_width: w[6] + 4,
+        });
     }
     r.finish()?;
     // The record names only +44; MessageHost::restore resolves the font object's face.
@@ -89,7 +119,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<TextObject, FormatError> {
         cursor: [aw(156) as i32, aw(160) as i32],
         ruby_lines: std::array::from_fn(|i| bw(196 + i * 4)),
         layout_scratch: [cw(528), cw(532)],
-        glyphs: Vec::new(),
+        glyphs,
         glyph_size: aw(32) as i32,
         spacing: [aw(36) as i32, aw(40) as i32],
         color: aw(116),
@@ -110,15 +140,13 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<TextObject, FormatError> {
     })
 }
 
-/// Writer 0x14005c790 for the supported subset: default face, no displayed glyphs.
+/// Writer 0x14005c790: logical glyph descriptors, without pixels or reveal clocks.
 pub(crate) fn encode(text: &TextObject) -> Result<Vec<u8>, FormatError> {
-    if !text.font_face.is_empty() && text.font_face != crate::settings::DEFAULT_FONT_FACE {
-        return Err(FormatError("snapshot named font face is not implemented"));
+    if text.font_face.len() > 31 || text.font_face.contains(&0) {
+        return Err(FormatError("snapshot font face exceeds native capacity"));
     }
-    if !text.glyphs.is_empty() {
-        return Err(FormatError(
-            "saving displayed text glyphs is not implemented",
-        ));
+    if text.glyphs.len() > 4096 {
+        return Err(FormatError("snapshot glyph count exceeds research limit"));
     }
     let mut a = [0u8; 156];
     a[36..36 + text.font_face.len()].copy_from_slice(&text.font_face);
@@ -184,13 +212,91 @@ pub(crate) fn encode(text: &TextObject) -> Result<Vec<u8>, FormatError> {
     out.extend(a);
     out.extend(b);
     out.extend(c);
-    out.extend(0u16.to_le_bytes());
+    out.extend((text.glyphs.len() as u16).to_le_bytes());
+    for (i, glyph) in text.glyphs.iter().enumerate() {
+        if !(1..=128).contains(&glyph.size) {
+            return Err(FormatError("unsupported snapshot glyph descriptor or size"));
+        }
+        let [child, atlas] = glyph.snapshot_indices.unwrap_or([i as u32, i as u32 + 1]);
+        for word in [
+            child,
+            40 | (u32::from(glyph.code) << 16),
+            atlas,
+            glyph.gradient,
+            glyph.position[0] as u32,
+            glyph.position[1] as u32,
+            glyph.size,
+            glyph.colors[0],
+            glyph.colors[1],
+            glyph.outline[0],
+            glyph.outline[1],
+        ] {
+            out.extend(word.to_le_bytes());
+        }
+    }
     Ok(out)
 }
 
 #[cfg(test)]
 mod tests {
     use super::{decode, encode};
+    #[test]
+    fn glyph_records_preserve_descriptors_and_restore_fully_shown() {
+        let mut bytes = 3u16.to_le_bytes().to_vec();
+        bytes.extend(196u32.to_le_bytes());
+        bytes.push(0);
+        bytes.extend(1280u32.to_le_bytes());
+        bytes.extend(720u32.to_le_bytes());
+        let mut blocks = [0u8; 512];
+        blocks[104..108].copy_from_slice(&1u32.to_le_bytes());
+        blocks[160..164].copy_from_slice(&148u32.to_le_bytes());
+        bytes.extend(blocks);
+        bytes.extend(1u16.to_le_bytes());
+        let record = [
+            17u32,
+            40 | (0x82a0 << 16),
+            42,
+            3,
+            (-9i32) as u32,
+            25,
+            27,
+            0x112233,
+            0x445566,
+            2,
+            0xdeadbeef,
+        ];
+        for word in record {
+            bytes.extend(word.to_le_bytes());
+        }
+        let text = decode(&bytes).unwrap();
+        let glyph = &text.glyphs[0];
+        assert_eq!(glyph.snapshot_indices, Some([17, 42]));
+        assert_eq!(glyph.code, 0x82a0);
+        assert_eq!(glyph.position, [-9, 25]);
+        assert_eq!(glyph.colors, [0x112233, 0x445566]);
+        assert_eq!(glyph.outline, [2, 0xdeadbeef]);
+        assert!(glyph.shown && !glyph.active && glyph.opacity == 255);
+        assert_eq!(encode(&text).unwrap(), bytes);
+        let mut partial = text.clone();
+        partial.glyphs[0].active = true;
+        partial.glyphs[0].shown = false;
+        partial.glyphs[0].opacity = 0;
+        partial.glyphs[0].delay_ms = 100;
+        assert_eq!(encode(&partial).unwrap(), bytes);
+        assert!(partial.glyphs[0].active);
+        for end in bytes.len() - 44..bytes.len() {
+            assert!(decode(&bytes[..end]).is_err());
+        }
+        let last = bytes.len() - 44;
+        bytes[last + 4] = 41;
+        assert!(decode(&bytes).is_err());
+        let mut named = text;
+        named.font_face = b"Face A".to_vec();
+        assert_eq!(
+            decode(&encode(&named).unwrap()).unwrap().font_face,
+            b"Face A"
+        );
+    }
     #[test]
     fn explicit_default_face_round_trips_both_serialized_copies() {
         let face = crate::settings::DEFAULT_FONT_FACE;

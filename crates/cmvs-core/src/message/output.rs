@@ -18,6 +18,9 @@ use crate::{
 /// Logical glyph descriptor and reveal state; no device objects or font pixels.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RecordedGlyph {
+    /// Saved child/atlas indices, retained only for lossless record re-encoding.
+    /// Rendering uses logical glyph fields, never these native resource indices.
+    pub snapshot_indices: Option<[u32; 2]>,
     /// The text object's font face when the glyph was rasterized (game encoding).
     pub face: std::sync::Arc<[u8]>,
     pub bold: bool,
@@ -266,6 +269,7 @@ fn push(
         return Err("recorded message glyph limit exceeded");
     }
     text.glyphs.push(RecordedGlyph {
+        snapshot_indices: None,
         face: text.face.clone(),
         bold: text.bold,
         code,

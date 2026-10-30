@@ -2080,6 +2080,12 @@ impl MessageHost {
                 };
                 text.face = self.font_faces[index].get_or_insert(face).clone();
                 self.font_bold[index] = text.bold;
+                // 0x14005c8f0 redraws every descriptor with the restored text font;
+                // reveal state and the old rasterized face are not serialized.
+                for glyph in &mut text.glyphs {
+                    glyph.face = text.face.clone();
+                    glyph.bold = text.bold;
+                }
             }
         }
         self.texts = texts;

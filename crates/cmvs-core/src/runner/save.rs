@@ -433,12 +433,21 @@ impl Startup<'_> {
             Some(record) => crate::scene::StripWipe::restore(record)?,
             None => None,
         };
+        // 0x6a0 holds D3D render-target allocation metadata, not overlay pixels.
+        // 0x14001dc70 -> 0x140026dd0 ignores the saved dimensions and rebuilds
+        // square targets from the current viewport. The software backend needs
+        // no D3D allocation; validate the record rather than inventing scene pixels.
+        for (&(tag, _), body) in &snapshot.raw_objects {
+            if tag == 0x6a0 && (body.len() != 10 || body[..2] != [0, 0]) {
+                return Err("unsupported saved render-target record".into());
+            }
+        }
         if snapshot
             .raw_objects
             .keys()
-            .any(|&(tag, _)| !matches!(tag, 0x540 | 0x8c0 | 0x8c8 | 0x8e8))
+            .any(|&(tag, _)| !matches!(tag, 0x6a0 | 0x540 | 0x8c0 | 0x8c8 | 0x8e8))
         {
-            return Err("saved overlay or camera-sequence objects are not implemented".into());
+            return Err("saved camera-sequence objects are not implemented".into());
         }
         if snapshot.sound_device != [1, 0, 0, 0, 0, 0] {
             return Err("saved sound device buffers are not implemented".into());
