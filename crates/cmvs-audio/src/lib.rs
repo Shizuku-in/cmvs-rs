@@ -5,7 +5,7 @@ use cmvs_core::{
     MAX_PAYLOAD,
     audio::{
         AudioBackend, AudioRequest, MovieAudioClock, SE_CHANNELS, SePlayback, VOICE_CHANNELS,
-        VoiceActivity, VoiceDucking, VoiceDuckingSettings,
+        VoiceActivity, VoiceCompressor, VoiceDucking, VoiceDuckingSettings,
     },
     platform::resolve_under,
     resources::{ResourceArchives, ResourceKind, ResourceSource},
@@ -141,10 +141,57 @@ impl VorbisProgram {
 }
 
 type Fault = Arc<Mutex<Option<String>>>;
+/// 0x1400892f0's per-chunk path for a sound with an attached compressor.
+struct Compression {
+    compressor: VoiceCompressor,
+    chunk_bytes: u32,
+    chunk: Vec<i16>,
+    at: usize,
+    /// The compressor ended during this chunk; the mixer frees it afterwards and the
+    /// exhausted decoder stops the channel at the next chunk.
+    last: bool,
+}
 struct StreamSource {
     program: VorbisProgram,
+    compression: Option<Compression>,
     fault: Fault,
     failed: bool,
+}
+impl StreamSource {
+    /// Original MOG output is saturated signed 16-bit PCM before device gain.
+    fn pcm(&mut self) -> Result<Option<i16>, Box<dyn Error>> {
+        Ok(self
+            .program
+            .next_sample()?
+            .map(|x| (x * 32768.0).clamp(-32768.0, 32767.0).trunc() as i16))
+    }
+    fn compressed(&mut self) -> Result<Option<i16>, Box<dyn Error>> {
+        let compression = self.compression.as_mut().expect("checked by caller");
+        if compression.at == compression.chunk.len() {
+            if compression.last || compression.compressor.ended() {
+                return Ok(None);
+            }
+            let need = compression.chunk_bytes;
+            let request = compression.compressor.request(need) / 2;
+            let mut decoded = Vec::with_capacity(request as usize);
+            while decoded.len() < request as usize {
+                match self.pcm()? {
+                    Some(sample) => decoded.push(sample),
+                    None => break,
+                }
+            }
+            let compression = self.compression.as_mut().expect("checked by caller");
+            compression.chunk = compression.compressor.process(need, &decoded)?;
+            compression.at = 0;
+            compression.last = compression.compressor.ended();
+            if compression.chunk.is_empty() {
+                return Ok(None);
+            }
+        }
+        let compression = self.compression.as_mut().expect("checked by caller");
+        compression.at += 1;
+        Ok(Some(compression.chunk[compression.at - 1]))
+    }
 }
 impl Iterator for StreamSource {
     type Item = f32;
@@ -152,9 +199,13 @@ impl Iterator for StreamSource {
         if self.failed {
             return None;
         }
-        match self.program.next_sample() {
-            // Original MOG output is saturated signed 16-bit PCM before device gain.
-            Ok(sample) => sample.map(|x| (x * 32768.0).clamp(-32768.0, 32767.0).trunc() / 32768.0),
+        let sample = if self.compression.is_some() {
+            self.compressed()
+        } else {
+            self.pcm()
+        };
+        match sample {
+            Ok(sample) => sample.map(|x| f32::from(x) / 32768.0),
             Err(e) => {
                 *self.fault.lock().unwrap() = Some(e.to_string());
                 self.failed = true;
@@ -306,6 +357,15 @@ impl NativeAudio {
         self.archives.with_paths(&self.paths, kind).read(name)
     }
     fn prepare(&self, program: VorbisProgram, volume: u32, fade_ms: u32) -> Channel {
+        self.prepare_with(program, None, volume, fade_ms)
+    }
+    fn prepare_with(
+        &self,
+        program: VorbisProgram,
+        compression: Option<Compression>,
+        volume: u32,
+        fade_ms: u32,
+    ) -> Channel {
         let fault: Fault = Arc::default();
         let looped = program.looped.clone();
         let sink = Sink::connect_new(self.stream.mixer());
@@ -315,6 +375,7 @@ impl NativeAudio {
         sink.set_volume(if envelope.is_some() { 0.0 } else { gain });
         sink.append(StreamSource {
             program,
+            compression,
             fault: fault.clone(),
             failed: false,
         });
@@ -514,6 +575,8 @@ impl AudioBackend for NativeAudio {
             name,
             volume,
             start,
+            rate_bits,
+            mixer,
         } = request
         else {
             return Err("expected PlayVoice".into());
@@ -529,13 +592,28 @@ impl AudioBackend for NativeAudio {
             return Ok(false);
         };
         let program = VorbisProgram::new(data, None, false)?;
+        let rate = f32::from_bits(*rate_bits);
+        let compression =
+            match VoiceCompressor::new(rate, program.sample_rate(), program.channels())? {
+                Some(compressor) => Some(Compression {
+                    compressor,
+                    chunk_bytes: mixer
+                        .mono_request(program.sample_rate())
+                        .ok_or("SOUND_BUFFER outside 0..3 leaves the mixer chunk unset")?,
+                    chunk: Vec::new(),
+                    at: 0,
+                    last: false,
+                }),
+                None => None,
+            };
         println!(
-            "# native voice[{channel}] {}: {} Hz, {} channels, started={start}",
+            "# native voice[{channel}] {}: {} Hz, {} channels, rate={rate}, compressed={}, started={start}",
             name.escape_ascii(),
             program.sample_rate(),
-            program.channels()
+            program.channels(),
+            compression.is_some()
         );
-        let candidate = self.prepare(program, *volume, 0);
+        let candidate = self.prepare_with(program, compression, *volume, 0);
         if *start {
             candidate.sink.play();
         }

@@ -1186,7 +1186,9 @@ fn voice_play_scales_volume_reports_loading_and_forgets_the_pcm_length() {
                 channel: 2,
                 name: b"v.ogg".to_vec(),
                 volume: effective,
-                start: true
+                start: true,
+                rate_bits: 1.0f32.to_bits(),
+                mixer: cmvs_rs::audio::VoiceMixer::default(),
             }]
         );
         assert_eq!(vm.state().system_integer(0), Some(0));
@@ -1355,4 +1357,181 @@ fn position_queries_reject_large_channels_and_keep_backend_errors_pending() {
         assert!(vm.pending_system().is_some());
         assert_eq!(vm.stack().len_bytes(), bytes);
     }
+}
+
+fn voice_rate_code(rate: f32) -> Vec<u8> {
+    let mut code = vec![];
+    push(&mut code, rate.to_bits());
+    let mut play = voice_code(1, 0, 0, 1);
+    let at = play.len() - 2;
+    play[at..].copy_from_slice(&0x20afu16.to_le_bytes());
+    code.extend(play);
+    code
+}
+
+#[test]
+fn rated_voice_play_clamps_the_rate_keeps_nan_and_pops_twenty_bytes() {
+    use cmvs_rs::audio::VoiceMixer;
+    for (rate, expected) in [
+        (2.0f32, 2.0f32),
+        (1.0, 1.0),
+        (3.0, 3.0),
+        (0.5, 1.0),
+        (3.5, 1.0),
+        (f32::NEG_INFINITY, 1.0),
+        (f32::NAN, f32::NAN),
+    ] {
+        let script = program(&voice_rate_code(rate), VOICE_TEXT);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut host =
+            AudioHost::from_ini(b"[SOUND_INFO]\r\nSOUND_QUALITY=1\r\nSOUND_BUFFER=2\r\n");
+        let mut backend = RecordingAudio::default();
+        pending(&mut vm);
+        let pc = vm.pc();
+        assert!(host.try_handle(&mut vm, &mut backend).unwrap());
+        assert_eq!((vm.pc(), vm.stack().len_bytes()), (pc + 2, 0));
+        let [
+            AudioRequest::PlayVoice {
+                channel,
+                rate_bits,
+                mixer,
+                ..
+            },
+        ] = backend.requests()
+        else {
+            panic!("one voice request")
+        };
+        assert_eq!(*channel, 1);
+        assert_eq!(f32::from_bits(*rate_bits).to_bits(), expected.to_bits());
+        assert_eq!(
+            *mixer,
+            VoiceMixer {
+                device_rate: 44100,
+                chunk_bytes: Some(0x3000)
+            }
+        );
+    }
+}
+
+#[test]
+fn voice_mixer_follows_quality_and_buffer_keys() {
+    use cmvs_rs::audio::VoiceMixer;
+    assert_eq!(VoiceMixer::default(), VoiceMixer::from_ini(0, 0));
+    for (quality, buffer, rate, chunk) in [
+        (0, 0, 22050, Some(0xc00)),
+        (1, 1, 44100, Some(0x2000)),
+        (5, 3, 44100, Some(0x4000)),
+        (0, 2, 22050, Some(0x1800)),
+        (1, 4, 44100, None),
+        (1, -1, 44100, None),
+    ] {
+        let mixer = VoiceMixer::from_ini(quality, buffer);
+        assert_eq!((mixer.device_rate, mixer.chunk_bytes), (rate, chunk));
+    }
+    let fast = VoiceMixer::from_ini(1, 1);
+    assert_eq!(fast.mono_request(44100), Some(0x1000));
+    assert_eq!(fast.mono_request(22050), Some(0x800));
+    assert_eq!(fast.mono_request(48000), Some(0x1000));
+    let slow = VoiceMixer::from_ini(0, 1);
+    assert_eq!(slow.mono_request(44100), Some(0x1000));
+    assert_eq!(slow.mono_request(22050), Some(0x800));
+    assert_eq!(VoiceMixer::from_ini(1, 9).mono_request(44100), None);
+}
+
+#[test]
+fn voice_compressor_attaches_only_to_mono_rates_from_1_1_to_3() {
+    use cmvs_rs::audio::VoiceCompressor;
+    for (rate, channels, attached) in [
+        (1.1f32, 1, true),
+        (3.0, 1, true),
+        (2.0, 2, false),
+        (1.0999999, 1, false),
+        (3.0000002, 1, false),
+        (f32::NAN, 1, false),
+    ] {
+        assert_eq!(
+            VoiceCompressor::new(rate, 44100, channels)
+                .unwrap()
+                .is_some(),
+            attached,
+            "rate={rate} channels={channels}"
+        );
+    }
+    assert!(VoiceCompressor::new(2.0, 100, 1).is_err());
+}
+
+/// Feeds whole chunks as the mixer does until the compressor reports its end.
+fn compress(rate: f32, need: u32, input: &[i16]) -> (Vec<i16>, Vec<u32>) {
+    let mut compressor = cmvs_rs::audio::VoiceCompressor::new(rate, 44100, 1)
+        .unwrap()
+        .unwrap();
+    let (mut at, mut output, mut requests) = (0, vec![], vec![]);
+    while !compressor.ended() {
+        let request = compressor.request(need);
+        requests.push(request);
+        let end = (at + request as usize / 2).min(input.len());
+        output.extend(compressor.process(need, &input[at..end]).unwrap());
+        at = end;
+        assert!(requests.len() < 10_000);
+    }
+    (output, requests)
+}
+
+#[test]
+fn compressing_a_lag_periodic_wave_reproduces_the_wave_and_halves_its_length() {
+    // At 44100 Hz the 220-sample template spans two periods of 110, so every window has
+    // the same energy: lags 110/220/330/440 tie exactly and the first wins. The splice
+    // then cross-fades identical samples and the output continues the same wave.
+    let input: Vec<i16> = (0..30_000)
+        .map(|n| (10000.0 * (std::f64::consts::TAU * f64::from(n % 110) / 110.0).sin()) as i16)
+        .collect();
+    let (output, requests) = compress(2.0, 0x1000, &input);
+    // 2.0 is below the 2.1 threshold: the first request is five times the chunk.
+    assert_eq!(requests[0], 5 * 0x1000);
+    assert_eq!(output.len() % 0x800, 0);
+    let expected = |s: i16| (f32::from(s) * (1.0 / 32768.0) * 32767.0) as i32 as i16;
+    let produced = 15_000 - 2048;
+    for (n, &sample) in output[..produced].iter().enumerate() {
+        assert_eq!(sample, expected(input[n]), "n={n}");
+    }
+    assert!(output.len() <= 15_000 + 0x800);
+}
+
+#[test]
+fn constant_input_splices_at_the_minimum_lag_and_quantizes_with_32767() {
+    // Equal correlations keep the first lag: 110 at 44100 Hz, copying 220 per step at 1.5.
+    let input = vec![16384i16; 20_000];
+    let (output, requests) = compress(1.5, 0x1000, &input);
+    assert_eq!(requests[0], 5 * 0x1000);
+    assert!(output[..12_000].iter().all(|&s| s == 16383));
+    // The short final read pads with zeros, which fade the tail out before it ends.
+    assert_eq!(*output.last().unwrap(), 0);
+    let (_, requests) = compress(2.5, 0x1000, &input);
+    assert_eq!(requests[0], 8 * 0x1000);
+}
+
+#[test]
+fn buffered_output_skips_the_decoder_until_it_runs_short() {
+    let input = vec![1000i16; 50_000];
+    let mut compressor = cmvs_rs::audio::VoiceCompressor::new(1.5, 44100, 1)
+        .unwrap()
+        .unwrap();
+    // A large first chunk leaves processed output for smaller later chunks.
+    let request = compressor.request(0x4000);
+    let first = compressor
+        .process(0x4000, &input[..request as usize / 2])
+        .unwrap();
+    assert_eq!(first.len(), 0x2000);
+    let mut zero_requests = 0;
+    for _ in 0..8 {
+        let request = compressor.request(0x100);
+        if request == 0 {
+            zero_requests += 1;
+            assert_eq!(compressor.process(0x100, &[]).unwrap().len(), 0x80);
+        } else {
+            break;
+        }
+    }
+    assert!(zero_requests > 0);
+    assert!(!compressor.ended());
 }

@@ -153,3 +153,8 @@ cargo test --offline --features audio-output --test audio_output native_device_s
 `NativeAudio::bgm_position(channel)` 是原生后端的只读诊断接口，接受设备 BGM 通道0/1，越界返回错误。沿用上述 sink 源消费时钟，空槽、暂停或源耗尽返回 None；不推进帧、淡变或 VM 时间，也不写系统结果寄存器。调用方仍须调用 `AudioBackend::update` 推进真实时间的淡变并检查设备错误。它不是新增 CMVS 指令或核心后端契约。
 
 默认忽略的 `native_device_smoke` 已扩展为检查初始空槽、越界、双文件循环音源消费、切换通道后的旧槽释放、新槽消费、淡出及停止状态；仍只使用仓库合成音频。在普通桌面权限、192000 Hz/双声道设备上显式运行通过。鉴赏音乐条目50/51的真实资源切曲、重复选择停止、恢复、跨页继续及返回标题，也已通过设备消费与软件呈现检查；运行条件、哈希及边界见[游戏研究记录](../games/amatsutsumi/research.md)。这些结果不等于原生窗口物理交互、人工听音或所有曲目的循环边界通过。
+
+
+## 语音时间压缩（2026-10-31）
+
+0x20af给出的速率经核心 `VoiceCompressor::new` 判定：单声道且1.1..=3.0时挂载。原生后端的语音源不再逐样本直读解码器，而是按 `VoiceMixer::mono_request`（由 `SOUND_QUALITY`/`SOUND_BUFFER` 推得的原版混音块）每块先调用 `request` 取得解码字节数，读取对应16位样本后交给 `process`，再逐样本输出该块；压缩器报告结束后，当前块播完即结束通道。块内调度在rodio的拉取线程中完成，块大小只决定压缩器的输入输出分段，不代表本机设备缓冲或延迟。`SOUND_BUFFER` 超出0..3而需要压缩时明确报错。证据与外部对照见[游戏记录](../games/amatsutsumi/research.md#音声再生速度与语音时间压缩2026-10-31)。

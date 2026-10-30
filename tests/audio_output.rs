@@ -199,6 +199,8 @@ fn native_device_smoke() -> Result<(), Box<dyn std::error::Error>> {
         name: b"first.ogg".to_vec(),
         volume: 16,
         start: true,
+        rate_bits: 1.0f32.to_bits(),
+        mixer: Default::default(),
     })?);
     pump(&mut audio)?;
     audio.stop_voice(0)?;
@@ -244,6 +246,8 @@ fn native_device_smoke() -> Result<(), Box<dyn std::error::Error>> {
         name: b"voice.ogg".to_vec(),
         volume: 16,
         start: true,
+        rate_bits: 1.0f32.to_bits(),
+        mixer: Default::default(),
     })?);
     pump(&mut audio)?;
     assert!(audio.voice_position(0)?.is_some());
@@ -267,6 +271,8 @@ fn native_device_smoke() -> Result<(), Box<dyn std::error::Error>> {
         name: b"voice.ogg".to_vec(),
         volume: 16,
         start: true,
+        rate_bits: 1.0f32.to_bits(),
+        mixer: Default::default(),
     })?);
     pump(&mut audio)?;
     assert_eq!(audio.bgm_gain(0)?, Some(16.0 / 256.0 * 0.5));
@@ -274,6 +280,22 @@ fn native_device_smoke() -> Result<(), Box<dyn std::error::Error>> {
         pump(&mut audio)?;
     }
     assert_eq!(audio.voice_position(0)?, None);
+    assert_eq!(audio.bgm_gain(0)?, Some(16.0 / 256.0));
+    println!("# smoke: a 2x rated mono voice runs through the compressor and ends early");
+    assert!(audio.play_voice(&AudioRequest::PlayVoice {
+        channel: 1,
+        name: b"voice.ogg".to_vec(),
+        volume: 16,
+        start: true,
+        rate_bits: 2.0f32.to_bits(),
+        mixer: cmvs_rs::audio::VoiceMixer::from_ini(1, 1),
+    })?);
+    pump(&mut audio)?;
+    assert!(audio.voice_position(1)?.is_some());
+    // The 1 s fixture lasts about 0.5 s plus at most one 2048-sample chunk.
+    pump(&mut audio)?;
+    assert_eq!(audio.voice_position(1)?, None);
+    pump(&mut audio)?;
     assert_eq!(audio.bgm_gain(0)?, Some(16.0 / 256.0));
     println!("# smoke: fading voice ducking flag and fade completion");
     for include_fading in [false, true] {
@@ -288,7 +310,9 @@ fn native_device_smoke() -> Result<(), Box<dyn std::error::Error>> {
             channel: 0,
             name: b"voice.ogg".to_vec(),
             volume: 16,
-            start: true
+            start: true,
+            rate_bits: 1.0f32.to_bits(),
+            mixer: Default::default(),
         })?);
         pump(&mut audio)?;
         assert_eq!(audio.bgm_gain(0)?, Some(16.0 / 256.0 * 0.5));

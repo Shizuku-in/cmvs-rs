@@ -435,6 +435,8 @@ struct Ui<'a, 'b> {
     voices: Vec<Vec<u8>>,
     /// SP-12 of each 0x20a6, the per-call volume before the global voice gain.
     voice_volumes: Vec<i32>,
+    /// SP-20 of 0x20af, or 1.0 for 0x20a6.
+    voice_rates: Vec<f32>,
     voice_fades: Vec<(u32, u32)>,
     /// Set when a load completes; frames do nothing until the test has checked the hosts.
     frozen: bool,
@@ -493,6 +495,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         commands: Vec::new(),
         voices: Vec::new(),
         voice_volumes: Vec::new(),
+        voice_rates: Vec::new(),
         voice_fades: Vec::new(),
         frozen: false,
     };
@@ -548,6 +551,9 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
             .unwrap();
     }
+    // 音声再生速度「少し速い」stores 1 in 2175; story scripts then play voices with 0x20af at 1.5.
+    ui.click(ui.button(1, 43), 30);
+    assert_eq!(ui.run.machine().state().integer(2175), Some(1));
     for (x, bold) in [(472, false), (576, true), (472, false)] {
         ui.click([x, 107], 30);
         assert_eq!(ui.run.settings().text_output().bold, bold);
@@ -886,6 +892,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     // The first voice belongs to こころ, whose settings were changed above.
     assert!(ui.voices[0].starts_with(b"co"));
     assert_eq!(ui.voice_volumes[0], 96);
+    assert_eq!(ui.voice_rates[0], 1.5);
     assert_eq!(
         character_glyphs,
         Some(([0x1effff, lower.unwrap() as u32], 2)),
@@ -926,7 +933,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
             .all(|child| child.draw.as_ref().unwrap().words[17] == 32)
     );
     println!(
-        "settings: native_audio={native_audio}; title + toolbar; background/opacity/fullscreen/aspect/filter, cursor hide, voice stop modes, read-skip policy, bold/text/audio/auto settings, character volume/gradient/colour picker/reset, three pages, 444 settings frames; auto advanced at least three entries in {auto_frames} rendered frames with {} voices and {} voice fades; disabled then idle 240 rendered frames",
+        "settings: native_audio={native_audio}; title + toolbar; background/opacity/fullscreen/aspect/filter, cursor hide, voice stop modes, read-skip policy, bold/text/audio/auto settings, character volume/gradient/colour picker/reset, 1.5x voice speed, three pages, 444 settings frames; auto advanced at least three entries in {auto_frames} rendered frames with {} voices and {} voice fades; disabled then idle 240 rendered frames",
         ui.voices.len(),
         ui.voice_fades.len()
     );
@@ -1011,11 +1018,21 @@ impl Ui<'_, '_> {
                 .loaded_script(self.run.machine().current_slot())
                 .and_then(|s| s.code().get(pc..pc + 2))
                 .map(|b| u16::from_le_bytes([b[0], b[1]]));
-            let voice = (opcode == Some(0x20a6))
+            let voice = matches!(opcode, Some(0x20a6 | 0x20af))
                 .then(|| self.run.machine().stack().peek_u32(8).ok())
                 .flatten()
                 .and_then(|raw| self.run.machine().resolve_string(raw).ok());
             let voice_volume = self.run.machine().stack().peek_u32(12).ok();
+            let voice_rate = if opcode == Some(0x20af) {
+                self.run
+                    .machine()
+                    .stack()
+                    .peek_u32(20)
+                    .ok()
+                    .map(f32::from_bits)
+            } else {
+                Some(1.0)
+            };
             let voice_fade = (opcode == Some(0x20a9))
                 .then(|| {
                     self.run
@@ -1047,6 +1064,8 @@ impl Ui<'_, '_> {
                 self.voices.push(name);
                 self.voice_volumes
                     .push(voice_volume.expect("0x20a6 has four arguments") as i32);
+                self.voice_rates
+                    .push(voice_rate.expect("0x20af has five arguments"));
             }
             if let Some(fade) = voice_fade
                 && self.run.machine().pending_system().is_none()
@@ -1139,6 +1158,7 @@ fn external_in_game_menus_save_and_load() {
         commands: Vec::new(),
         voices: Vec::new(),
         voice_volumes: Vec::new(),
+        voice_rates: Vec::new(),
         voice_fades: Vec::new(),
         frozen: false,
     };
@@ -1273,6 +1293,7 @@ fn external_backlog_scrolls_replays_voices_and_jumps_back() {
         commands: Vec::new(),
         voices: Vec::new(),
         voice_volumes: Vec::new(),
+        voice_rates: Vec::new(),
         voice_fades: Vec::new(),
         frozen: false,
     };

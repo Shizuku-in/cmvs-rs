@@ -1,7 +1,9 @@
 //! Sound-effect channel and BGM commands with an explicit audio backend.
 //! The recording backend keeps requests only; no sound is loaded or played.
+pub mod compress;
 pub mod ducking;
 use crate::{evaluate::error, machine::Machine, vm::SystemResult};
+pub use compress::{VoiceCompressor, VoiceMixer};
 pub use ducking::{VoiceActivity, VoiceDucking, VoiceDuckingSettings};
 use std::error::Error;
 
@@ -138,14 +140,18 @@ pub enum AudioRequest {
         channel: u8,
         fade_ms: u32,
     },
-    /// 0x20a6: 0x140088390 on device channel `channel + 5` from the 0x2014 roots, without
-    /// loop, fade-in or fallback root; it releases the channel first and starts the sound
-    /// when `start` is set.
+    /// 0x20a6/0x20af: 0x140088390 on device channel `channel + 5` from the 0x2014 roots,
+    /// without loop, fade-in or fallback root; it releases the channel first and starts
+    /// the sound when `start` is set.
     PlayVoice {
         channel: u8,
         name: Vec<u8>,
         volume: u32,
         start: bool,
+        /// f32 bits of the playback rate (1.0 for 0x20a6). Mono sounds at 1.1..=3.0 run
+        /// through `VoiceCompressor` in chunks of `mixer`.
+        rate_bits: u32,
+        mixer: VoiceMixer,
     },
     /// 0x14008a240 with BGM enabled. With `fade_ms` 0 both BGM device channels 0 and 1
     /// stop at once first; otherwise `previous` fades out over `fade_ms`. The track then
@@ -385,6 +391,7 @@ pub struct AudioHost {
     /// Device +2424/+2428/+2432/+2436, including the most recent queued update.
     voice_ducking: VoiceDuckingSettings,
     channels: [Option<SeChannel>; SE_CHANNELS],
+    mixer: VoiceMixer,
     /// Channel record +40 (+1696): 0x20b0/0x20ba store 256 with each play, the constructor
     /// zeroes it, and stopping keeps it. Only the snapshot reads it here.
     played: [u32; SE_CHANNELS],
@@ -403,6 +410,7 @@ impl AudioHost {
             settings,
             voice_ducking: VoiceDuckingSettings::default(),
             channels: Default::default(),
+            mixer: VoiceMixer::default(),
             played: [0; SE_CHANNELS],
             bgm: BgmState::default(),
         }
@@ -437,6 +445,7 @@ impl AudioHost {
             wait_ms: (int("VOICE_FADE_WAIT", 1000) as u32).min(3000),
             include_fading: int("VOICE_FADE_USE", 1) != 0,
         };
+        host.mixer = VoiceMixer::from_ini(int("SOUND_QUALITY", 0), int("SOUND_BUFFER", 0));
         host
     }
     pub fn channel(&self, index: usize) -> Option<&SeChannel> {
@@ -484,7 +493,7 @@ impl AudioHost {
             Some((_, 0x2d6..=0x2dd)) => return self.try_settings_query(vm, backend),
             Some((_, 0xa8)) => return self.try_voice_stop(vm, backend),
             Some((_, 0xa9)) => return self.try_voice_fade_out(vm, backend),
-            Some((_, 0xa6)) => return self.try_voice_play(vm, backend),
+            Some((_, 0xa6 | 0xaf)) => return self.try_voice_play(vm, backend),
             Some((_, 0xb1)) => return self.try_start(vm, backend),
             Some((_, 0xb3)) => return self.try_stop(vm, backend),
             Some((_, 0xb5)) => return self.try_stop_all(vm, backend),
@@ -761,15 +770,27 @@ impl AudioHost {
     /// system result 0 = 0. Otherwise result 0 reports the load, and result 4 receives
     /// MOG_GetPcmLength through the output pointer (uninitialized stack on failure); its
     /// unit is unverified, so the model marks it unknown. No channel record is kept.
+    /// 0x20af / 0x1400704c0 adds an SP-20 f32 rate, replaced by 1.0 when below 1.0 or
+    /// above 3.0 (NaN is kept), and returns 0x4014.
     fn try_voice_play(
         &mut self,
         vm: &mut Machine<'_>,
         backend: &mut dyn AudioBackend,
     ) -> Result<bool, Box<dyn Error>> {
         let (pc, _) = vm.pending_system().expect("checked pending command");
-        let fail = |why| error(pc, 0x20a6, why);
+        let op = 0x2000 + vm.pending_system().expect("checked pending command").1;
+        let fail = |why| error(pc, op, why);
         let arg = |distance| vm.stack().peek_u32(distance).map_err(|e| fail(e.0));
         let (channel, name, volume, start) = (arg(4)?, arg(8)?, arg(12)? as i32, arg(16)? != 0);
+        let rate = if op == 0x20af {
+            let rate = f32::from_bits(arg(20)?);
+            // 0x14007051e..0x140070534 keeps NaN, which a range check would replace.
+            #[allow(clippy::manual_range_contains)]
+            let out_of_range = 1.0 > rate || rate > 3.0;
+            if out_of_range { 1.0 } else { rate }
+        } else {
+            1.0
+        };
         if channel as usize >= VOICE_CHANNELS {
             return Err(fail("voice channel outside 0..3 sets an unmodeled flag").into());
         }
@@ -790,11 +811,13 @@ impl AudioHost {
                 name,
                 volume: effective,
                 start,
+                rate_bits: rate.to_bits(),
+                mixer: self.mixer,
             })?)
         } else {
             None
         };
-        vm.complete_system(SystemResult(0x4010))?;
+        vm.complete_system(SystemResult(if op == 0x20af { 0x4014 } else { 0x4010 }))?;
         let state = vm.state_mut();
         state
             .set_system_integer(0, u32::from(loaded == Some(true)))
