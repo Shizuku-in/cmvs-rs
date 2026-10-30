@@ -2217,3 +2217,15 @@ Windows桌面以 --font msgothic.ttc、记录音频、独立用户目录 target/
 ## 原生平台包整理（2026-10-31）
 
 基线 `ec6a79c`。用户已在Windows原生窗口中实测「フォント選択」的系统字体对话框。为后续 macOS/iOS/Linux/Android/wasm，按讨论把 `cmvs-windows` 改为单一的 `cmvs-native` 包：`lib.rs` 定义 `choose_font(owner: RawWindowHandle, current)` 与 `font_directories()` 统一接口和 `NativeError`，`windows` 模块实现，`unsupported` 模块对预留平台返回 Unsupported；系统字体目录从桌面字体库移入该包，桌面代码去掉平台条件。unsafe 仍只在该包的两处系统调用。本机只装有Windows目标，其他平台未构建；`unsupported` 模块在Windows上同样编译并有单元测试。行为不变：默认与全功能测试、两套严格Clippy、格式检查及真实设置回归（含字体对话框步骤）通过。
+
+## 混合快进与点击下的换图快照（2026-10-31）
+
+用户原生窗口中反复 Ctrl 快进与左键点击，报告 `sn1001.ps3 / 0xe39c`、SP=156，因 `saving an object during an image change is not implemented` 退出，进程退出码1。该状态是固定按住Ctrl的路线重放未覆盖的快照分支。重新核对同一二进制的场景写入/读取与换图函数，确认原版不保存换图临时对象和时钟；证据见[VM语义](vm-semantics.md#混合快进与点击下的换图快照2026-10-31)。
+
+修复仅移除活动换图的额外捕获限制，保留当前新图及绘制状态，读档沿用原版 fade=256。合成单元测试覆盖0/120/999ms、附着子对象、不可保存的匿名保留图不进入记录、捕获前后宿主相同、编解码一致与读档清除转场并恢复fade。
+
+新增默认忽略的 `external_mixed_skip_click_captures_active_image_change`：真实资源只读，新建target/tmp用户目录，不使用用户已有存档；种子0、16ms、按key.cfg映射输入，标题后以固定xorshift种子0x12345678组合Ctrl和左键。在第213个剧情输入帧、第99次快照到达同一 `sn1001.ps3 / 0xe39c`，确有活动换图；捕获后写槽保持场景不变，读回后全部宿主按既有加载规则比对一致。release回归通过（1.30秒）。这属于合成输入与记录后端回归，不等于已重新完成原生窗口人工实测或验证所有随机组合。
+
+未修改资源解码算法、增加依赖或引入真实素材fixture。
+
+检查：默认786项、全workspace全功能851项测试通过（分别9/14项外部或设备检查默认忽略）；其中新增混合输入外部检查已单独显式运行。新增合成核心单元测试另已定向通过，并包含在全workspace检查中。cargo fmt --check、默认与全workspace全功能严格Clippy、desktop+audio-output的release桌面构建通过。

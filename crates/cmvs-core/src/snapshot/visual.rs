@@ -17,6 +17,64 @@ const MAX_NODES: usize = 2048;
 const MAX_DEPTH: usize = 32;
 const MAX_PIXELS: usize = 64 * 1024 * 1024;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::ImageChange;
+
+    struct NoImages;
+    impl ImageSource for NoImages {
+        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+            panic!("retained replacement resources must not be loaded");
+        }
+    }
+
+    #[test]
+    fn capture_during_replacement_keeps_live_transition_and_loads_full_fade() {
+        for elapsed in [0, 120, 999] {
+            let mut draw = DrawState::default();
+            draw.words[21] = elapsed * 256 / 1000;
+            let mut current = SceneObject {
+                draw: Some(draw),
+                ..SceneObject::default()
+            };
+            // Retained objects include unsaveable anonymous images. Neither
+            // they nor the transition clock belong to the native record.
+            let retained = SceneObject {
+                image: Some(ObjectImage {
+                    name: Vec::new(),
+                    pixels: crate::raster::RgbaImage::new(1, 1, vec![0; 4]).unwrap(),
+                    alpha: true,
+                    filter: None,
+                    surface: false,
+                }),
+                ..SceneObject::default()
+            };
+            current.change = Some(Box::new(ImageChange {
+                previous: Box::new(retained.clone()),
+                common: Box::new(retained),
+                duration: 1000,
+                elapsed,
+            }));
+            // The same rule must work recursively for attached children.
+            let mut parent = SceneObject::default();
+            parent.flags |= 0x8000_0000;
+            parent.children.insert(2, current.clone());
+            let before = parent.clone();
+            let saved = SavedScene::from_object(&parent).unwrap();
+            assert_eq!(parent, before);
+            assert_eq!(saved.children[&2].draw, current.draw);
+            let decoded = SavedScene::decode(&saved.encode().unwrap(), 0, &mut 0).unwrap();
+            assert_eq!(decoded, saved);
+            let mut budget = MAX_PIXELS;
+            let loaded = decoded.load(&mut NoImages, &mut budget).unwrap();
+            let child = &loaded.children[&2];
+            assert!(child.change.is_none());
+            assert_eq!(child.draw.as_ref().unwrap().words[21], 256);
+        }
+    }
+}
+
 struct Reader<'a> {
     bytes: &'a [u8],
     at: usize,
@@ -380,11 +438,9 @@ impl SavedScene {
     /// Capture side: the record of a live object, rejecting what the writer here cannot
     /// express. Disposal marks are not saved, as in the original.
     pub(crate) fn from_object(object: &SceneObject) -> Result<Self, FormatError> {
-        if object.change.is_some() {
-            return Err(FormatError(
-                "saving an object during an image change is not implemented",
-            ));
-        }
+        // 0x14003a4a0 writes the current image/draw, not +14504..+14532
+        // (replacement flag, retained objects and clock). Loading resets the
+        // draw fade to 256; capturing must not cancel the live replacement.
         let children = object
             .children
             .iter()

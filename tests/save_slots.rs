@@ -246,6 +246,85 @@ fn held(run: &Startup<'_>) -> EngineSnapshot {
     }
 }
 
+#[test]
+#[ignore = "requires CMVS_GAME_ROOT; read-only game with fresh temporary user directory"]
+fn external_mixed_skip_click_captures_active_image_change() {
+    let root = PathBuf::from(std::env::var_os("CMVS_GAME_ROOT").expect("CMVS_GAME_ROOT"));
+    let user = user_directory("mixed-skip-click");
+    let game = Registry::builtin().identify_game(&root, None).unwrap();
+    let script = load_start(&root, &game.files).unwrap();
+    let mut run = Startup::new(&script, &root, &game, 0).unwrap();
+    run.set_user_data_directory(&user).unwrap();
+    run.set_skip_auto_resume(true).unwrap();
+    run.set_record_text(true);
+    let bindings = KeyBindings::parse(&fs::read_to_string(root.join("key.cfg")).unwrap()).unwrap();
+    let mut codes = CodeInput::default();
+    let mut backend = RecordingBackend::default();
+    let (mut started, mut frame, mut captures) = (false, 0u32, 0u32);
+    let mut random = 0x1234_5678u32;
+    let mut mixed = [false; 128];
+    for _ in 0..8_000_000 {
+        if !started && run.machine().current_name() == b"menu.ps3" && run.machine().pc() == 0x38f00
+        {
+            let b = run.buttons().group(0).unwrap().buttons[0].clone();
+            run.input_mut()
+                .set_pointer(b.rect[0] + b.rect[2] / 2, b.rect[1] + b.rect[3] / 2);
+            started = true;
+        }
+        let at = format!(
+            "{} / 0x{:x}",
+            run.machine().current_name().escape_ascii(),
+            run.machine().pc()
+        );
+        let event = run
+            .tick(&mut backend)
+            .unwrap_or_else(|e| panic!("{e} at {at}, frame={frame}"));
+        if event == StartupEvent::SnapshotCaptured && started {
+            captures += 1;
+            if run.scene().objects().values().any(|o| o.change.is_some()) {
+                let expected = held(&run);
+                let live = run.scene().objects().clone();
+                assert!(run.save_slot(0).unwrap());
+                assert_eq!(run.scene().objects(), &live);
+                run.load_slot(0, &mut backend).unwrap();
+                check_loaded(&run, expected);
+                assert!(run.scene().objects().values().all(|o| o.change.is_none()));
+                println!(
+                    "active change captured and loaded at {at}; frame={frame}, captures={captures}"
+                );
+                fs::remove_dir_all(user).unwrap();
+                return;
+            }
+        }
+        if event != StartupEvent::Yield {
+            assert!(
+                matches!(
+                    event,
+                    StartupEvent::Progress | StartupEvent::SnapshotCaptured
+                ),
+                "{event:?} at {at}"
+            );
+            continue;
+        }
+        run.advance_frame(16).unwrap();
+        if started {
+            frame += 1;
+            if frame < 4 {
+                mixed[1] = frame == 1;
+            } else {
+                run.input_mut().set_pointer(640, 650);
+                random ^= random << 13;
+                random ^= random >> 17;
+                random ^= random << 5;
+                mixed[1] = random & 3 == 0;
+                mixed[24] = random & 4 != 0;
+            }
+            codes.update(&bindings, &mixed, run.input_mut());
+        }
+    }
+    panic!("no active change snapshot reached; frame={frame}, captures={captures}");
+}
+
 /// Replays one route from a fresh user directory with the default capture policy: skip
 /// held after the title, the `CMVS_ROUTE` choice chain (1-based enabled buttons, e.g.
 /// `2,2,2,1`), and a confirm after 300 idle frames outside the staff roll. Every snapshot
