@@ -3,7 +3,7 @@ pub mod vorbis;
 use crate::vorbis::Vorbis;
 use cmvs_core::{
     MAX_PAYLOAD,
-    audio::{AudioBackend, AudioRequest, MovieAudioClock, SE_CHANNELS, VOICE_CHANNELS},
+    audio::{AudioBackend, AudioRequest, MovieAudioClock, SE_CHANNELS, SePlayback, VOICE_CHANNELS},
     platform::resolve_under,
     resources::{ResourceArchives, ResourceKind, ResourceSource},
 };
@@ -358,6 +358,31 @@ impl NativeAudio {
     }
 }
 impl AudioBackend for NativeAudio {
+    fn configure_se(
+        &mut self,
+        channels: &[Option<SePlayback>; SE_CHANNELS],
+    ) -> Result<(), Box<dyn Error>> {
+        let mut prepared = std::array::from_fn(|_| None);
+        // Load and validate every resource while old sounds keep playing. Candidates
+        // remain paused, so a later decode error leaves the audible state unchanged.
+        for (index, request) in channels.iter().enumerate() {
+            if let Some(request) = request
+                && let Some(data) = self.load(ResourceKind::SoundEffect, &request.name)?
+            {
+                let program = VorbisProgram::new(data, None, request.looped)?;
+                prepared[index] = Some(self.prepare(program, request.volume, 0));
+            }
+        }
+        self.se = prepared;
+        for (channel, request) in self.se.iter().zip(channels) {
+            if let (Some(channel), Some(request)) = (channel, request)
+                && request.start
+            {
+                channel.sink.play();
+            }
+        }
+        Ok(())
+    }
     fn set_volumes(&mut self, channels: &[Option<u32>; 15]) -> Result<(), Box<dyn Error>> {
         // No fallible operation after the first mutation. Keep fade envelopes and
         // playback positions intact, including paused/prepared channels.

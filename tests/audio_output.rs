@@ -108,7 +108,7 @@ fn fade_envelopes_reach_exact_endpoints_without_overshoot() {
 #[ignore = "opens the default native audio device; run explicitly outside restricted sandboxes"]
 fn native_device_smoke() -> Result<(), Box<dyn std::error::Error>> {
     use cmvs_rs::{
-        audio::{AudioBackend, AudioRequest, MovieAudioClock},
+        audio::{AudioBackend, AudioRequest, MovieAudioClock, SePlayback},
         audio_output::NativeAudio,
     };
     use std::{
@@ -121,7 +121,7 @@ fn native_device_smoke() -> Result<(), Box<dyn std::error::Error>> {
     struct Scratch(PathBuf);
     impl Drop for Scratch {
         fn drop(&mut self) {
-            for name in ["first.ogg", "second.ogg"] {
+            for name in ["first.ogg", "second.ogg", "bad.ogg"] {
                 let _ = fs::remove_file(self.0.join("sound").join(name));
             }
             let _ = fs::remove_dir(self.0.join("sound"));
@@ -141,6 +141,7 @@ fn native_device_smoke() -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir(scratch.0.join("sound"))?;
     fs::write(scratch.0.join("sound/first.ogg"), FIRST)?;
     fs::write(scratch.0.join("sound/second.ogg"), SECOND)?;
+    fs::write(scratch.0.join("sound/bad.ogg"), b"synthetic malformed Ogg")?;
     // Declared after scratch so channels and the device drop before deleting the files.
     let mut audio = NativeAudio::new(&scratch.0)?;
     audio.configure_paths(&BTreeMap::from([
@@ -160,6 +161,36 @@ fn native_device_smoke() -> Result<(), Box<dyn std::error::Error>> {
     audio.start(0, false)?;
     pump(&mut audio)?;
     audio.stop(0)?;
+    println!("# smoke: SE group disable, loop restart and atomic load failure");
+    let mut group = std::array::from_fn(|_| None);
+    group[0] = Some(SePlayback {
+        name: b"first.ogg".to_vec(),
+        volume: 16,
+        looped: true,
+        start: true,
+    });
+    group[1] = Some(SePlayback {
+        name: b"second.ogg".to_vec(),
+        volume: 16,
+        looped: false,
+        start: false,
+    });
+    audio.configure_se(&group)?;
+    pump(&mut audio)?;
+    let before = audio.se_position(0)?.unwrap();
+    assert_eq!(audio.se_position(1)?, None);
+    group[1].as_mut().unwrap().name = b"bad.ogg".to_vec();
+    assert!(audio.configure_se(&group).is_err());
+    pump(&mut audio)?;
+    assert!(
+        audio
+            .se_position(0)?
+            .is_some_and(|position| position > before)
+    );
+    assert_eq!(audio.se_position(1)?, None);
+    audio.configure_se(&Default::default())?;
+    assert_eq!(audio.se_position(0)?, None);
+    assert_eq!(audio.se_position(1)?, None);
     println!("# smoke: voice");
     assert!(audio.play_voice(&AudioRequest::PlayVoice {
         channel: 0,

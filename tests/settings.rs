@@ -7,6 +7,240 @@ mod bytecode;
 use bytecode::{command, pending, script};
 
 #[test]
+fn audio_use_switches_normalize_and_skip_repeated_writes() {
+    use cmvs_rs::audio::{AudioHost, RecordingAudio};
+    for op in 0x22d6..=0x22d8 {
+        let mut code = vec![];
+        for value in [1, 0, 0, u32::MAX, u32::MAX] {
+            command(&mut code, op, &[1, value]);
+            command(&mut code, op, &[0, 0]);
+        }
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut host = AudioHost::default();
+        let mut backend = RecordingAudio::default();
+        for value in [1, 0, 0, 1, 1] {
+            vm.state_mut().set_system_integer(0, 77).unwrap();
+            pending(&mut vm);
+            host.try_handle(&mut vm, &mut backend).unwrap();
+            assert_eq!(vm.state().system_integer(0), Some(77));
+            pending(&mut vm);
+            host.try_handle(&mut vm, &mut backend).unwrap();
+            assert_eq!(vm.state().system_integer(0), Some(value));
+            assert_eq!(vm.stack().len_bytes(), 0);
+        }
+        // Only SE needs to release/rebuild empty device slots. BGM without a
+        // remembered name and voice gating need no device operation.
+        assert_eq!(backend.requests().len(), if op == 0x22d7 { 2 } else { 0 });
+    }
+}
+
+#[test]
+fn bgm_switch_preserves_names_and_restarts_the_pair_without_fade() {
+    use cmvs_rs::audio::{AudioHost, AudioRequest, RecordingAudio};
+    let mut code = vec![];
+    command(&mut code, 0x20a4, &[0x8000_0000, 0x8000_0001, 100, 0]);
+    command(&mut code, 0x22d6, &[1, 0]);
+    command(&mut code, 0x22d6, &[1, 1]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_string(0, b"intro.ogg").unwrap();
+    vm.state_mut().set_string(1, b"loop.ogg").unwrap();
+    let mut host = AudioHost::default();
+    let mut backend = RecordingAudio::default();
+    pending(&mut vm);
+    host.try_handle(&mut vm, &mut backend).unwrap();
+    pending(&mut vm);
+    host.try_handle(&mut vm, &mut backend).unwrap();
+    assert_eq!(backend.requests().last(), Some(&AudioRequest::StopBgm));
+    assert_eq!(host.bgm().primary, b"intro.ogg");
+    assert_eq!(host.bgm().secondary, b"loop.ogg");
+    assert_eq!(host.bgm().channel, 0);
+    assert!(!host.bgm().playing);
+    pending(&mut vm);
+    host.try_handle(&mut vm, &mut backend).unwrap();
+    assert_eq!(
+        backend.requests().last(),
+        Some(&AudioRequest::PlayBgm {
+            channel: 1,
+            previous: 0,
+            primary: b"intro.ogg".to_vec(),
+            secondary: b"loop.ogg".to_vec(),
+            volume: 256,
+            fade_ms: 0,
+            looped: true,
+            flag_1576: 0,
+        })
+    );
+    assert!(host.bgm().playing && host.settings().bgm_enabled);
+    assert_eq!(host.bgm().channel, 1);
+}
+
+#[test]
+fn se_switch_rebuilds_named_slots_and_only_restarts_flagged_loops() {
+    use cmvs_rs::audio::{AudioHost, AudioRequest, AudioSettings, RecordingAudio};
+    let mut code = vec![];
+    for (index, looped, flag) in [(0, 1, 1), (1, 0, 1), (2, 1, 0), (3, 0, 0)] {
+        command(&mut code, 0x20b0, &[index, 0x8000_0000, 64, looped, flag]);
+    }
+    command(&mut code, 0x22d7, &[1, 0]);
+    command(&mut code, 0x22d7, &[1, 1]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_string(0, b"synthetic.ogg").unwrap();
+    let mut host = AudioHost::new(AudioSettings {
+        master: 128,
+        se: 128,
+        ..AudioSettings::default()
+    });
+    let mut backend = RecordingAudio::default();
+    for _ in 0..4 {
+        pending(&mut vm);
+        host.try_handle(&mut vm, &mut backend).unwrap();
+    }
+    let before: Vec<_> = (0..6).map(|i| host.channel(i).cloned()).collect();
+    pending(&mut vm);
+    host.try_handle(&mut vm, &mut backend).unwrap();
+    assert_eq!(
+        backend.requests().last(),
+        Some(&AudioRequest::ConfigureSe {
+            channels: Default::default()
+        })
+    );
+    assert_eq!(
+        (0..6).map(|i| host.channel(i).cloned()).collect::<Vec<_>>(),
+        before
+    );
+    pending(&mut vm);
+    host.try_handle(&mut vm, &mut backend).unwrap();
+    let AudioRequest::ConfigureSe { channels } = backend.requests().last().unwrap() else {
+        panic!("SE configuration")
+    };
+    for (index, channel) in channels[..4].iter().enumerate() {
+        let channel = channel.as_ref().unwrap();
+        assert_eq!(channel.volume, 16);
+        assert_eq!(channel.start, index == 0);
+        assert_eq!(channel.looped, index % 2 == 0);
+        assert_eq!(host.channel(index).unwrap().flag, index == 0);
+    }
+    assert!(channels[4..].iter().all(Option::is_none));
+}
+
+#[test]
+fn disabled_bgm_tracks_the_latest_request_for_reenable() {
+    use cmvs_rs::audio::{AudioHost, AudioRequest, AudioSettings, RecordingAudio};
+    let mut code = vec![];
+    command(&mut code, 0x20a0, &[0x8000_0000, 700, 0]);
+    command(&mut code, 0x22d6, &[1, 1]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_string(0, b"latest.ogg").unwrap();
+    let mut host = AudioHost::new(AudioSettings {
+        bgm_enabled: false,
+        ..AudioSettings::default()
+    });
+    let mut backend = RecordingAudio::default();
+    pending(&mut vm);
+    host.try_handle(&mut vm, &mut backend).unwrap();
+    assert!(backend.requests().is_empty());
+    pending(&mut vm);
+    host.try_handle(&mut vm, &mut backend).unwrap();
+    let AudioRequest::PlayBgm {
+        primary,
+        fade_ms,
+        looped,
+        ..
+    } = &backend.requests()[0]
+    else {
+        panic!("BGM restart")
+    };
+    assert_eq!(primary, b"latest.ogg");
+    assert_eq!(*fade_ms, 0);
+    assert!(*looped);
+    assert!(host.bgm().playing);
+}
+
+#[test]
+fn voice_switch_does_not_stop_current_audio_and_gates_future_playback() {
+    use cmvs_rs::audio::{AudioHost, RecordingAudio};
+    let mut code = vec![];
+    command(&mut code, 0x20a6, &[0, 0x8000_0000, 256, 1]);
+    command(&mut code, 0x22d8, &[1, 0]);
+    command(&mut code, 0x20a6, &[0, 0x8000_0000, 256, 1]);
+    command(&mut code, 0x22d8, &[1, 1]);
+    command(&mut code, 0x20a6, &[0, 0x8000_0000, 256, 1]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_string(0, b"synthetic.ogg").unwrap();
+    let mut host = AudioHost::default();
+    let mut backend = RecordingAudio::default();
+    for expected in [1, 1, 1, 1, 2] {
+        pending(&mut vm);
+        host.try_handle(&mut vm, &mut backend).unwrap();
+        assert_eq!(backend.requests().len(), expected);
+    }
+}
+
+#[test]
+fn failed_audio_use_changes_keep_configuration_records_and_vm_for_retry() {
+    use cmvs_rs::audio::{
+        AudioBackend, AudioHost, AudioRequest, RecordingAudio, SE_CHANNELS, SePlayback,
+    };
+    struct Reject;
+    impl AudioBackend for Reject {
+        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn std::error::Error>> {
+            unreachable!()
+        }
+        fn stop_bgm(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+            Err("synthetic stop failure".into())
+        }
+        fn play_bgm(&mut self, _: &AudioRequest) -> Result<(), Box<dyn std::error::Error>> {
+            Err("synthetic load failure".into())
+        }
+        fn configure_se(
+            &mut self,
+            _: &[Option<SePlayback>; SE_CHANNELS],
+        ) -> Result<(), Box<dyn std::error::Error>> {
+            Err("synthetic group failure".into())
+        }
+    }
+    for op in [0x22d6, 0x22d7] {
+        for enabled in [false, true] {
+            let mut code = vec![];
+            command(&mut code, 0x20a0, &[0x8000_0000, 0, 1]);
+            command(&mut code, 0x20b0, &[0, 0x8000_0000, 64, 0, 1]);
+            if enabled {
+                command(&mut code, op, &[1, 0]);
+            }
+            command(&mut code, op, &[1, u32::from(enabled)]);
+            let script = script(&code);
+            let mut vm = Machine::new(&script).unwrap();
+            vm.state_mut().set_string(0, b"synthetic.ogg").unwrap();
+            let mut host = AudioHost::default();
+            let mut record = RecordingAudio::default();
+            for _ in 0..(2 + usize::from(enabled)) {
+                pending(&mut vm);
+                host.try_handle(&mut vm, &mut record).unwrap();
+            }
+            let settings = host.settings();
+            let bgm = host.bgm().clone();
+            let se = host.channel(0).cloned();
+            pending(&mut vm);
+            let pc = vm.pc();
+            assert!(host.try_handle(&mut vm, &mut Reject).is_err());
+            assert_eq!(host.settings(), settings);
+            assert_eq!(*host.bgm(), bgm);
+            assert_eq!(host.channel(0).cloned(), se);
+            assert_eq!(vm.pc(), pc);
+            assert_eq!(vm.stack().len_bytes(), 8);
+            assert!(vm.pending_system().is_some());
+            host.try_handle(&mut vm, &mut record).unwrap();
+            assert_eq!(vm.stack().len_bytes(), 0);
+        }
+    }
+}
+
+#[test]
 fn live_volume_setters_clamp_and_update_only_their_device_family() {
     use cmvs_rs::audio::{AudioHost, AudioRequest, AudioSettings, RecordingAudio};
     for (op, raw, value) in [

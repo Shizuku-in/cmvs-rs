@@ -436,7 +436,7 @@ struct Ui<'a, 'b> {
 }
 
 /// Title and toolbar settings entries, three pages and right-click return.
-/// Edits, persistence and native device behavior remain separate checks.
+/// Volume and USE edits use recording audio; persistence and native behavior are separate.
 #[cfg(feature = "desktop")]
 #[test]
 #[ignore = "requires CMVS_GAME_ROOT with system.dat/save000 and CMVS_FONT_PATH"]
@@ -487,6 +487,7 @@ fn external_system_settings_entries_render_and_return() {
     assert_eq!(group.object, 64);
     assert_eq!(group.buttons.len(), 292);
     assert!(ui.run.messages().window(6).is_some());
+    let initial_audio = ui.run.audio().settings();
     // The original slider logic quantizes the pointer and calls 0x22d9..0x22dd.
     for (index, y) in [252, 286, 320, 354, 388].into_iter().enumerate() {
         let before = ui.run.audio().settings();
@@ -502,6 +503,47 @@ fn external_system_settings_entries_render_and_return() {
         font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
             .unwrap();
     }
+    // Speaker icons toggle MUSIC_USE / SE_USE / VOICE_USE, without changing volume.
+    for (index, y) in [286, 320, 354].into_iter().enumerate() {
+        let before = ui.run.audio().settings();
+        let flags =
+            |s: cmvs_rs::audio::AudioSettings| [s.bgm_enabled, s.se_enabled, s.voice_enabled];
+        ui.click([1194, y], 30);
+        let mut expected = before;
+        match index {
+            0 => expected.bgm_enabled = !before.bgm_enabled,
+            1 => expected.se_enabled = !before.se_enabled,
+            _ => expected.voice_enabled = !before.voice_enabled,
+        }
+        assert_eq!(ui.run.audio().settings(), expected);
+        assert_ne!(
+            flags(ui.run.audio().settings())[index],
+            flags(before)[index]
+        );
+        font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+            .unwrap();
+        ui.click([1194, y], 30);
+        assert_eq!(ui.run.audio().settings(), before);
+        font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+            .unwrap();
+    }
+    for y in [286, 320, 354] {
+        ui.click([1194, y], 30);
+    }
+    let before_reset = ui.run.audio().settings();
+    assert!(!before_reset.bgm_enabled && !before_reset.se_enabled && !before_reset.voice_enabled);
+    ui.click([1215, 428], 30);
+    assert_eq!(ui.run.audio().settings(), before_reset);
+    font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+        .unwrap();
+    ui.click(ui.button(2, 2), 30);
+    assert_eq!(ui.run.audio().settings(), before_reset);
+    ui.click([1215, 428], 30);
+    ui.click(ui.button(2, 1), 30);
+    assert_eq!(ui.run.audio().settings(), initial_audio);
+    assert!(ui.run.buttons().group(2).is_none());
+    font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+        .unwrap();
     for _ in 0..120 {
         font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
             .unwrap();
@@ -522,7 +564,7 @@ fn external_system_settings_entries_render_and_return() {
     ui.wait_for_text();
     assert!(ui.run.buttons().group(1).is_none());
     println!(
-        "settings: title + toolbar; five volume sliders, three pages, 247 rendered frames, right-click return"
+        "settings: title + toolbar; five volume sliders, three audio switches, audio reset/cancel, three pages, 255 rendered frames, right-click return"
     );
 }
 

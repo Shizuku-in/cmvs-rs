@@ -556,7 +556,7 @@ impl<'a> Startup<'a> {
             self.system_source = FileSystemSave::new(output.path());
             return Ok(StartupEvent::Progress);
         }
-        if matches!(command, 0xa0 | 0xa4 | 0xa6 | 0xb0 | 0xba) {
+        if matches!(command, 0xa0 | 0xa4 | 0xa6 | 0xb0 | 0xba | 0x2d6 | 0x2d7) {
             self.audio_backend.configure_paths(self.bootstrap.paths())?;
         }
         let gate = SkipGate {

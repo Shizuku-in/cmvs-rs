@@ -76,8 +76,21 @@ pub struct SeChannel {
     pub flag: bool,
 }
 
+/// Prepared device sound for a whole-group SE configuration change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SePlayback {
+    pub name: Vec<u8>,
+    pub volume: u32,
+    pub looped: bool,
+    pub start: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AudioRequest {
+    /// Atomically replace SE device channels 9..14; None releases that slot.
+    ConfigureSe {
+        channels: [Option<SePlayback>; SE_CHANNELS],
+    },
     /// Atomic gain update of device channels 0..14; None preserves that channel.
     SetVolumes { channels: [Option<u32>; 15] },
     /// 0x140088390 on device channel `channel + 9`.
@@ -145,6 +158,14 @@ pub enum AudioRequest {
 }
 
 pub trait AudioBackend {
+    /// Prepare all replacement sounds before changing any SE channel. Err preserves
+    /// every old channel; missing sounds replace their slot with None, as in playback.
+    fn configure_se(
+        &mut self,
+        _channels: &[Option<SePlayback>; SE_CHANNELS],
+    ) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement SE configuration changes".into())
+    }
     /// Apply the whole gain update or leave all channels unchanged on error.
     fn set_volumes(&mut self, _channels: &[Option<u32>; 15]) -> Result<(), Box<dyn Error>> {
         Err("audio backend does not implement live volume changes".into())
@@ -253,6 +274,14 @@ impl RecordingAudio {
     }
 }
 impl AudioBackend for RecordingAudio {
+    fn configure_se(
+        &mut self,
+        channels: &[Option<SePlayback>; SE_CHANNELS],
+    ) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::ConfigureSe {
+            channels: channels.clone(),
+        })
+    }
     fn set_volumes(&mut self, channels: &[Option<u32>; 15]) -> Result<(), Box<dyn Error>> {
         self.record(AudioRequest::SetVolumes {
             channels: *channels,
@@ -505,12 +534,17 @@ impl AudioHost {
                 self.settings = settings;
                 return Ok(true);
             }
-            return Err(error(
-                pc,
-                command + 0x2000,
-                "changing audio settings is not implemented",
-            )
-            .into());
+            let enabled = arg(8)? != 0;
+            let current = match command {
+                0x2d6 => self.settings.bgm_enabled,
+                0x2d7 => self.settings.se_enabled,
+                _ => self.settings.voice_enabled,
+            };
+            if current != enabled {
+                self.set_enabled(command, enabled, pc, backend)?;
+            }
+            vm.complete_system(SystemResult(0x4008))?;
+            return Ok(true);
         }
         if command >= 0x2d9 {
             arg(8)?;
@@ -531,6 +565,81 @@ impl AudioHost {
             .set_system_integer(0, value)
             .expect("slot 0 exists");
         Ok(true)
+    }
+
+    /// 0x140017430/17580/17720: USE switches are not equivalent to muting gains.
+    fn set_enabled(
+        &mut self,
+        command: u16,
+        enabled: bool,
+        pc: usize,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        match command {
+            0x2d6 => {
+                if !enabled && self.bgm.playing {
+                    backend.stop_bgm()?;
+                    self.bgm.channel = 0;
+                    self.bgm.playing = false;
+                } else if enabled && !self.bgm.primary.is_empty() {
+                    backend.play_bgm(&AudioRequest::PlayBgm {
+                        channel: 1,
+                        previous: self.bgm.channel,
+                        primary: self.bgm.primary.clone(),
+                        secondary: self.bgm.secondary.clone(),
+                        volume: self.settings.master.wrapping_mul(self.settings.bgm) >> 8,
+                        fade_ms: 0,
+                        looped: true,
+                        flag_1576: self.settings.bgm_flag_1576,
+                    })?;
+                    self.bgm.channel = 1;
+                    self.bgm.playing = true;
+                }
+                self.settings.bgm_enabled = enabled;
+            }
+            0x2d7 => {
+                let mut channels = std::array::from_fn(|_| None);
+                if enabled {
+                    for (index, target) in channels.iter_mut().enumerate() {
+                        if let Some(se) = &self.channels[index]
+                            && !se.name.is_empty()
+                        {
+                            if self.played[index] < 256 {
+                                return Err(error(
+                                    pc,
+                                    command + 0x2000,
+                                    "SE pitch restoration is not implemented",
+                                )
+                                .into());
+                            }
+                            let mut volume =
+                                self.settings.master.wrapping_mul(self.settings.se) >> 8;
+                            if se.volume > 0 {
+                                volume = (se.volume as u32).wrapping_mul(volume) >> 8;
+                            }
+                            *target = Some(SePlayback {
+                                name: se.name.clone(),
+                                volume,
+                                looped: se.looped,
+                                start: se.looped && se.flag,
+                            });
+                        }
+                    }
+                }
+                backend.configure_se(&channels)?;
+                if enabled {
+                    for se in self.channels.iter_mut().flatten() {
+                        if !se.name.is_empty() && !se.looped {
+                            se.flag = false;
+                        }
+                    }
+                }
+                self.settings.se_enabled = enabled;
+            }
+            0x2d8 => self.settings.voice_enabled = enabled,
+            _ => unreachable!(),
+        }
+        Ok(())
     }
 
     /// 0x20a8 / 0x140070650: SP-4 voice channel, device +5; no enable flag gate.
