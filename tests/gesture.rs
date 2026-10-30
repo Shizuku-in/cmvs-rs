@@ -282,3 +282,22 @@ fn drag_press_query_can_force_tracking_without_consuming_the_press() {
     assert_eq!(gesture.field(100), Some(20));
     assert_eq!(gesture.field(104), Some(30));
 }
+
+#[test]
+fn flick_hold_and_state_queries_read_the_tracking_fields() {
+    let script = script(&[(0x2353, &[]), (0x2359, &[]), (0x2360, &[])]);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut gesture = PointerGesture::default();
+    assert!(run(&mut gesture, &mut vm));
+    assert_eq!(vm.state().system_integer(0), Some(u32::MAX));
+    // +72 and +76 both clear: +80 is cleared and reported, and result 4 is 0.
+    assert!(run(&mut gesture, &mut vm));
+    assert_eq!(
+        (vm.state().system_integer(0), vm.state().system_integer(4)),
+        (Some(0), Some(0))
+    );
+    assert_eq!(gesture.field(80), Some(0));
+    assert!(run(&mut gesture, &mut vm));
+    assert_eq!(vm.state().system_integer(0), Some(u32::MAX));
+    assert_eq!(vm.stack().len_bytes(), 0);
+}

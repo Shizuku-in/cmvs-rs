@@ -311,3 +311,25 @@ fn unmodeled_waveforms_bad_arguments_and_fades_under_offsets_are_errors() {
     scene.advance_frame(10);
     assert!(scene_render::render(&scene, 4, 1).is_err());
 }
+
+#[test]
+fn pause_query_reports_a_paused_quake_only() {
+    let mut code = quake_code(0, 4, 10, u32::MAX);
+    command(&mut code, 0x220c, &[]);
+    command(&mut code, 0x2227, &[1]);
+    command(&mut code, 0x220c, &[]);
+    command(&mut code, 0x2227, &[0]);
+    command(&mut code, 0x220c, &[]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut scene = SceneHost::default();
+    let mut results = vec![];
+    for _ in 0..6 {
+        run(&mut vm, &mut scene, 1);
+        results.push(vm.state().system_integer(0));
+    }
+    assert_eq!(results[1], Some(0));
+    assert_eq!(results[3], Some(1));
+    assert_eq!(results[5], Some(0));
+    assert_eq!(vm.stack().len_bytes(), 0);
+}

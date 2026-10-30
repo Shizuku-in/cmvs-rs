@@ -226,3 +226,43 @@ fn pointer_rectangle_query_includes_right_and_bottom_edges_and_preserves_input()
         assert!(input.released(0));
     }
 }
+
+#[test]
+fn pointer_function_key_and_press_queries_read_the_per_frame_state() {
+    let script = commands(&[
+        0x20c8, 0x20c9, 0x20c9, 0x235c, 0x235d, 0x234e, 0x234d, 0x234e, 0x234f, 0x234e, 0x219a,
+    ]);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut input = ActionInput::default();
+    let step = |vm: &mut Machine<'_>, input: &mut ActionInput| {
+        pending(vm);
+        assert!(input::try_handle(vm, input).unwrap());
+        vm.state().system_integer(0)
+    };
+    input.set_pointer(-3, 700);
+    input.latch_pointer();
+    step(&mut vm, &mut input);
+    assert_eq!(
+        (vm.state().system_integer(1), vm.state().system_integer(2)),
+        (Some(-3i32 as u32), Some(700))
+    );
+    // Moved since the previous per-frame update, then still for the same frame.
+    assert_eq!(step(&mut vm, &mut input), Some(1));
+    input.latch_pointer();
+    assert_eq!(step(&mut vm, &mut input), Some(0));
+    input.set(1, true, true, false).unwrap();
+    assert_eq!(step(&mut vm, &mut input), Some(0));
+    assert_eq!(step(&mut vm, &mut input), Some(1));
+    // Function keys are ignored until 0x234d enables them; F3 and F5 down: F3 wins.
+    input.press_function_keys(0b10100);
+    assert_eq!(step(&mut vm, &mut input), Some(0));
+    step(&mut vm, &mut input);
+    input.press_function_keys(0b10100);
+    assert_eq!(step(&mut vm, &mut input), Some(3));
+    step(&mut vm, &mut input);
+    assert_eq!(step(&mut vm, &mut input), Some(0));
+    // 0x219a clears every edge but keeps holds.
+    step(&mut vm, &mut input);
+    assert!(!input.pressed(1) && input.held(1));
+    assert_eq!(vm.stack().len_bytes(), 0);
+}

@@ -149,3 +149,26 @@ fn stopwatch_preserves_stack_and_other_results_and_wraps_without_resetting_slots
     assert_eq!(timers.clock(), 7);
     assert_eq!(timers.values(), &[7; 10]);
 }
+
+#[test]
+fn frame_clock_and_delta_queries_follow_the_last_run_entry() {
+    let mut code = vec![];
+    for op in [0x2008u16, 0x2009, 0x2008, 0x2009] {
+        code.extend(op.to_le_bytes());
+    }
+    let script = program(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut timers = VmTimers::default();
+    let query = |vm: &mut Machine<'_>, timers: &mut VmTimers| {
+        pending(vm);
+        assert!(timers.try_handle(vm).unwrap());
+        vm.state().system_integer(0)
+    };
+    timers.begin_run(16);
+    assert_eq!(query(&mut vm, &mut timers), Some(16));
+    assert_eq!(query(&mut vm, &mut timers), Some(16));
+    timers.begin_run(u32::MAX);
+    assert_eq!(query(&mut vm, &mut timers), Some(15));
+    assert_eq!(query(&mut vm, &mut timers), Some(u32::MAX));
+    assert_eq!(vm.stack().len_bytes(), 0);
+}

@@ -21,6 +21,7 @@ pub mod jbp1;
 pub mod jbpd;
 pub mod lzss;
 pub mod machine;
+pub mod math;
 pub mod message;
 pub mod message_flags;
 pub mod movie;

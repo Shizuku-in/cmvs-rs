@@ -178,6 +178,8 @@ pub struct SaveMenuHost {
     second_group_enabled: Option<bool>,
     /// +12092: the main loop may open the popup menu (0x140018850 -> TrackPopupMenu).
     popup_enabled: bool,
+    /// +1496 / +1500: DLG_LOAD / DLG_SAVE, whether the scripts ask before loading / saving.
+    confirm: [bool; 2],
 }
 
 impl Default for SaveMenuHost {
@@ -187,6 +189,7 @@ impl Default for SaveMenuHost {
             second_group_enabled: None,
             // Constructor 0x140016e20, reset 0x140080700 and load 0x140081960 all set 1.
             popup_enabled: true,
+            confirm: [false; 2],
         }
     }
 }
@@ -201,6 +204,16 @@ impl SaveMenuHost {
     pub fn popup_enabled(&self) -> bool {
         self.popup_enabled
     }
+    /// +1496 / +1500 as the startup loader 0x14000a3c0 sets them: the registry values
+    /// SI_DlgLoad / SI_DlgSave when present, else `[SYSTEM_INFO]` DLG_LOAD / DLG_SAVE of
+    /// cmvs.cfg (GetPrivateProfileIntA, default 0). The host supplies them; the registry is
+    /// not read here.
+    pub fn set_confirmations(&mut self, load: bool, save: bool) {
+        self.confirm = [load, save];
+    }
+    pub fn confirmations(&self) -> [bool; 2] {
+        self.confirm
+    }
     /// Records 0x10a (+16584, constructor 0) and 0x202 (+12092).
     pub(crate) fn saved_flags(&self) -> (u32, u32) {
         (
@@ -214,22 +227,53 @@ impl SaveMenuHost {
         self.popup_enabled = popup != 0;
         self.second_group_enabled = Some(true);
     }
-    /// 0x22cd stores SP-4 != 0 in +12092; 0x22ce copies +12092 to system result 0.
-    /// Neither needs a save directory or creates native UI.
+    /// 0x22d3 / 0x14007be00 and 0x22d4 / 0x14007be70: nonzero SP-4 sets +1496 / +1500 to
+    /// bool(SP-8) through 0x140090da0 (menu items 32764 / 32765 are checked accordingly);
+    /// zero SP-4 copies the flag to system result 0. Both return 0x4008. The original keeps
+    /// changed values for its registry; Rust keeps them for the session only.
+    /// 0x22cd stores SP-4 != 0 in +12092; 0x22ce copies +12092 to system result 0. 0x22ee
+    /// (inline) sets system result 0 to +1644 != 0, the copy of the second menu group flag
+    /// 0x140092ea0 keeps (constructor 0). None needs a save directory or creates native UI.
     pub fn try_handle_popup(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(false);
         };
         match command {
+            0x2d3 | 0x2d4 => {
+                let index = usize::from(command == 0x2d4);
+                let arg = |distance| {
+                    vm.stack()
+                        .peek_u32(distance)
+                        .map_err(|e| error(pc, command + 0x2000, e.0))
+                };
+                let value = if arg(4)? != 0 {
+                    Some(arg(8)? != 0)
+                } else {
+                    None
+                };
+                vm.complete_system(SystemResult(0x4008))?;
+                match value {
+                    Some(value) => self.confirm[index] = value,
+                    None => vm
+                        .state_mut()
+                        .set_system_integer(0, u32::from(self.confirm[index]))
+                        .expect("slot 0 exists"),
+                }
+            }
             0x2cd => {
                 let value = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x22cd, e.0))?;
                 vm.complete_system(SystemResult(0x4004))?;
                 self.popup_enabled = value != 0;
             }
-            0x2ce => {
+            0x2ce | 0x2ee => {
+                let value = if command == 0x2ce {
+                    self.popup_enabled
+                } else {
+                    self.second_group_enabled.unwrap_or(false)
+                };
                 vm.complete_system(SystemResult(0x4000))?;
                 vm.state_mut()
-                    .set_system_integer(0, u32::from(self.popup_enabled))
+                    .set_system_integer(0, u32::from(value))
                     .expect("slot 0 exists");
             }
             _ => return Ok(false),
@@ -278,4 +322,39 @@ impl SaveMenuHost {
         }
         Ok(true)
     }
+}
+
+/// GetPrivateProfileIntA over an INI text: the integer value of `key` in `[section]` (ASCII,
+/// case-insensitive names), with optional sign and leading digits; `default` when absent.
+pub fn profile_int(text: &[u8], section: &str, key: &str, default: i32) -> i32 {
+    let mut in_section = false;
+    for line in text.split(|&b| b == b'\n') {
+        let line = line.strip_suffix(b"\r").unwrap_or(line).trim_ascii();
+        if let Some(name) = line.strip_prefix(b"[").and_then(|l| l.strip_suffix(b"]")) {
+            in_section = name.trim_ascii().eq_ignore_ascii_case(section.as_bytes());
+            continue;
+        }
+        let Some(eq) = line.iter().position(|&b| b == b'=') else {
+            continue;
+        };
+        if !in_section || !line[..eq].trim_ascii().eq_ignore_ascii_case(key.as_bytes()) {
+            continue;
+        }
+        let value = line[eq + 1..].trim_ascii();
+        let (negative, digits) = match value.first() {
+            Some(b'-') => (true, &value[1..]),
+            Some(b'+') => (false, &value[1..]),
+            _ => (false, value),
+        };
+        let mut result = 0i32;
+        for &b in digits.iter().take_while(|b| b.is_ascii_digit()) {
+            result = result.wrapping_mul(10).wrapping_add(i32::from(b - b'0'));
+        }
+        return if negative {
+            result.wrapping_neg()
+        } else {
+            result
+        };
+    }
+    default
 }

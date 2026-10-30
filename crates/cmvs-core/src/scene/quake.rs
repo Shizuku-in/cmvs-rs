@@ -188,9 +188,19 @@ impl SceneHost {
     /// 0x2229 return 0x4000. Waveforms the scripts never use stay unmodeled errors: 0x100 and
     /// step direction 0x20, whose rand() shares the CRT state with 0x20d4.
     pub fn try_handle_quake(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x225..=0x227 | 0x229))) = vm.pending_system() else {
+        let Some((pc, command @ (0x20c | 0x225..=0x227 | 0x229))) = vm.pending_system() else {
             return Ok(false);
         };
+        if command == 0x20c {
+            // 0x14007ad00: system result 0 = a quake exists and is paused (+20,
+            // 0x140052370); 0x4000.
+            let paused = self.quake.as_ref().is_some_and(|q| q.paused);
+            vm.complete_system(SystemResult(0x4000))?;
+            vm.state_mut()
+                .set_system_integer(0, u32::from(paused))
+                .expect("slot 0 exists");
+            return Ok(true);
+        }
         let op = command + 0x2000;
         let arg = |distance| {
             vm.stack()

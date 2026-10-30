@@ -733,3 +733,51 @@ fn list_input_missing_visual_keeps_group_input_and_pending_command_unchanged() {
     assert_eq!(input, old_input);
     assert_eq!((vm.pc(), vm.stack().len_bytes()), (pc, sp));
 }
+
+#[test]
+fn making_a_button_current_swaps_images_and_can_warp_the_pointer() {
+    let mut code = vec![];
+    interactive(&mut code);
+    call(&mut code, 0x221a, &[2, 7, 0]);
+    call(&mut code, 0x221a, &[2, 9, 1]);
+    call(&mut code, 0x221a, &[2, 9, 1]);
+    call(&mut code, 0x221a, &[2, 8, 1]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let (mut scene, mut buttons) = (SceneHost::default(), ButtonHost::default());
+    run_setup(&mut vm, &mut scene, &mut buttons);
+    let mut input = ActionInput::default();
+    input.set_pointer(100, 100);
+    // Button 7 becomes current with its hover image; the pointer stays without the flag.
+    assert_eq!(frame(&mut vm, &mut scene, &mut buttons, &mut input), 1);
+    assert_eq!(crop_x(&scene, 3), 13);
+    assert_eq!(input.take_warp(), None);
+    // Button 9: 7 gets image 0 back, 9 its hover image, and the pointer moves to its centre.
+    assert_eq!(frame(&mut vm, &mut scene, &mut buttons, &mut input), 1);
+    assert_eq!((crop_x(&scene, 3), crop_x(&scene, 4)), (3, 14));
+    assert_eq!(input.take_warp(), Some([25, 5]));
+    assert_eq!(buttons.group(2).unwrap().current, Some(1));
+    // Already inside: no warp; an unknown id gives 0 and changes nothing.
+    assert_eq!(frame(&mut vm, &mut scene, &mut buttons, &mut input), 1);
+    assert_eq!(input.take_warp(), None);
+    assert_eq!(frame(&mut vm, &mut scene, &mut buttons, &mut input), 0);
+    assert_eq!(buttons.group(2).unwrap().current, Some(1));
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
+fn scaled_group_creation_accepts_the_device_scale_only() {
+    for (scale, accepted) in [([1280, 720], true), ([640, 360], false)] {
+        let mut code = vec![];
+        call(&mut code, 0x2020, &[10]);
+        call(&mut code, 0x221b, &[2, 10, scale[0], scale[1]]);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let (mut scene, mut buttons) = (SceneHost::default(), ButtonHost::default());
+        assert!(next(&mut vm, &mut scene, &mut buttons));
+        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        assert_eq!(buttons.try_handle(&mut vm, &mut scene).is_ok(), accepted);
+        assert_eq!(buttons.group(2).is_some(), accepted);
+        assert_eq!(vm.stack().len_bytes(), if accepted { 0 } else { 16 });
+    }
+}

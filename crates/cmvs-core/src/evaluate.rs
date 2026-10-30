@@ -124,6 +124,8 @@ pub struct State {
     floats: BTreeMap<u32, u32>,
     strings: BTreeMap<u32, Vec<u8>>,
     system_integers: [Option<u32>; 7],
+    /// Float system result slots 7..10 (+82844..+82856) as raw f32 bits.
+    system_float_bits: [Option<u32>; 4],
     integer_limit: u32,
     bit_limit: u32,
     string_buffer: Vec<u8>,
@@ -146,6 +148,7 @@ impl State {
             floats: BTreeMap::new(),
             strings: BTreeMap::new(),
             system_integers: [None; 7],
+            system_float_bits: [None; 4],
             integer_limit,
             bit_limit,
             string_buffer: Vec::new(),
@@ -166,6 +169,21 @@ impl State {
             .get_mut(index as usize)
             .ok_or("integer system result slot must be 0..6")?;
         *slot = Some(value);
+        Ok(())
+    }
+    /// Float system result slot 7..10 as raw f32 bits.
+    pub fn system_float_bits(&self, index: u32) -> Option<u32> {
+        self.system_float_bits
+            .get((index as usize).wrapping_sub(7))
+            .copied()
+            .flatten()
+    }
+    pub fn set_system_float_bits(&mut self, index: u32, bits: u32) -> Result<(), &'static str> {
+        let slot = self
+            .system_float_bits
+            .get_mut((index as usize).wrapping_sub(7))
+            .ok_or("float system result slot must be 7..10")?;
+        *slot = Some(bits);
         Ok(())
     }
     /// Marks a system result the original writes with a value this model does not know, so

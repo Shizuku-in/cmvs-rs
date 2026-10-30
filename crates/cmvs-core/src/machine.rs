@@ -186,8 +186,13 @@ impl<'a> Machine<'a> {
             *entry = base as u32;
         }
         let mut system_results = [0u32; 11];
-        for (i, word) in system_results.iter_mut().take(7).enumerate() {
-            *word = self.state.system_integer(i as u32).unwrap_or(0);
+        for (i, word) in system_results.iter_mut().enumerate() {
+            *word = if i < 7 {
+                self.state.system_integer(i as u32)
+            } else {
+                self.state.system_float_bits(i as u32)
+            }
+            .unwrap_or(0);
         }
         Ok(VmImage {
             script_names: names,
@@ -243,8 +248,12 @@ impl<'a> Machine<'a> {
         let main = Image::prepare(Cow::Owned(script), image.script_names[0].clone(), entry)
             .map_err(|_| "saved main script layout is invalid")?;
         let mut candidate_state = self.state.clone();
-        for (i, &word) in image.system_results.iter().take(7).enumerate() {
-            candidate_state.set_system_integer(i as u32, word)?;
+        for (i, &word) in image.system_results.iter().enumerate() {
+            if i < 7 {
+                candidate_state.set_system_integer(i as u32, word)?;
+            } else {
+                candidate_state.set_system_float_bits(i as u32, word)?;
+            }
         }
         let slot = image.active_slot as u8;
         if slot == 0 && !main.instructions.contains_key(&(image.pc as usize)) {

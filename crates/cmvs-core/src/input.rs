@@ -126,6 +126,15 @@ pub struct ActionInput {
     /// Set by button keyboard navigation (0x140056530 plus SetCursorPos); the host moves
     /// the system cursor and takes it.
     warp: Option<[i32; 2]>,
+    /// +876/+880: the pointer at the previous per-frame update (0x140056530).
+    last_pointer: [i32; 2],
+    /// +936: the pointer moved at the last per-frame update or navigation warp.
+    pointer_moved: bool,
+    /// +0x5fc: function key reporting, enabled by 0x234d (no command disables it).
+    function_keys: bool,
+    /// +0x600: while enabled, the function key 1..12 whose VK_F1..VK_F12 hold counter is 1
+    /// this frame (the lowest one when several are), else 0; 0x234f clears it.
+    function_key: u32,
 }
 
 impl ActionInput {
@@ -166,6 +175,15 @@ impl ActionInput {
     pub fn set_pointer(&mut self, x: i32, y: i32) {
         self.pointer = [x, y];
     }
+    /// Host update per frame (0x140056780): the function keys F1..F12 that went down on this
+    /// frame, by bit (bit 0 = F1). Ignored until a script enables reporting with 0x234d.
+    pub fn press_function_keys(&mut self, pressed: u16) {
+        if self.function_keys {
+            self.function_key = (0..12)
+                .find(|bit| pressed & (1 << bit) != 0)
+                .map_or(0, |bit| bit + 1);
+        }
+    }
     /// Pending system cursor move requested by the engine, cleared when taken.
     pub fn take_warp(&mut self) -> Option<[i32; 2]> {
         self.warp.take()
@@ -173,6 +191,13 @@ impl ActionInput {
     pub(crate) fn warp_pointer(&mut self, x: i32, y: i32) {
         self.pointer = [x, y];
         self.warp = Some([x, y]);
+        self.latch_pointer();
+    }
+    /// 0x140056530 once per frame before the VM run (and on navigation warps): +936 = the
+    /// pointer differs from the previous update, which it then replaces.
+    pub fn latch_pointer(&mut self) {
+        self.pointer_moved = self.pointer != self.last_pointer;
+        self.last_pointer = self.pointer;
     }
     /// Released, held and pressed flags of `MOUSE_CODES[index]`.
     pub fn mouse(&self, index: usize) -> [bool; 3] {
@@ -241,6 +266,56 @@ pub fn try_handle(vm: &mut Machine<'_>, input: &mut ActionInput) -> Result<bool,
     let Some((pc, command)) = vm.pending_system() else {
         return Ok(false);
     };
+    if matches!(command, 0xc8 | 0xc9) {
+        // 0x140074ed0: system results 1/2 = pointer x/y (0x1400565a0); 0x140074f00: system
+        // result 0 = +936 (0x1400565c0). Both return 0x4000.
+        vm.complete_system(SystemResult(0x4000))?;
+        let state = vm.state_mut();
+        if command == 0xc8 {
+            let [x, y] = input.pointer();
+            state
+                .set_system_integer(1, x as u32)
+                .expect("result exists");
+            state
+                .set_system_integer(2, y as u32)
+                .expect("result exists");
+        } else {
+            state
+                .set_system_integer(0, u32::from(input.pointer_moved))
+                .expect("result exists");
+        }
+        return Ok(true);
+    }
+    if matches!(command, 0x35c | 0x35d) {
+        // 0x140078b60 / 0x140078be0: system result 0 = action 0 / 1 went down on this frame
+        // (0x140054d80 / 0x140054dc0); 0x4000.
+        let pressed = input.pressed(usize::from(command == 0x35d));
+        vm.complete_system(SystemResult(0x4000))?;
+        vm.state_mut()
+            .set_system_integer(0, u32::from(pressed))
+            .expect("slot 0 exists");
+        return Ok(true);
+    }
+    if command == 0x19a {
+        // Inline 0x14008370b: 0x140059560 on the +4656 input object, 0x4000.
+        vm.complete_system(SystemResult(0x4000))?;
+        input.clear_all_edges();
+        return Ok(true);
+    }
+    if matches!(command, 0x34d..=0x34f) {
+        // 0x140055230 sets +0x5fc, 0x140055240 reads +0x600 into system result 0 and
+        // 0x140055250 clears it; all return 0x4000 and pop nothing.
+        vm.complete_system(SystemResult(0x4000))?;
+        match command {
+            0x34d => input.function_keys = true,
+            0x34e => vm
+                .state_mut()
+                .set_system_integer(0, input.function_key)
+                .expect("slot 0 exists"),
+            _ => input.function_key = 0,
+        }
+        return Ok(true);
+    }
     if command == 0xca {
         // 0x140074f30: inclusive signed rectangle, no normalization or consumption.
         let mut rect = [0; 4];

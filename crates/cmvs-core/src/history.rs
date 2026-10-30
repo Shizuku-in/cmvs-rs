@@ -1,5 +1,5 @@
-//! Engine +4320 history list: append 0x2136 and clear 0x212f.
-//! Addresses are bound to the binary hash in research.md. No UI or serialization.
+//! Engine +4320 history list: append 0x2136, clear 0x212f and the queries 0x2130..0x2135.
+//! Addresses are bound to the binary hash in research.md.
 use crate::{bytecode::DecodeError, evaluate::error, machine::Machine, vm::SystemResult};
 use std::collections::VecDeque;
 
@@ -34,6 +34,9 @@ impl HistoryHost {
             vm.complete_system(SystemResult(0x4000))?;
             self.entries.clear();
             return Ok(true);
+        }
+        if let Some((pc, command @ 0x130..=0x135)) = vm.pending_system() {
+            return self.query(vm, pc, command).map(|()| true);
         }
         let Some((pc, 0x136)) = vm.pending_system() else {
             return Ok(false);
@@ -75,6 +78,56 @@ impl HistoryHost {
         }
         self.entries.push_front(HistoryEntry { strings, words });
         Ok(true)
+    }
+
+    /// 0x2130 / 0x140075730 -> 0x14005e9c0: system result 0 = entry count; 0x4000. The
+    /// others take SP-4 entry (newest = 0; the walk stops at once for negative values):
+    /// 0x2131 / 0x2132 / 0x2133 / 0x2134 (0x14005ea70 / 0x14005eac0 / 0x14005ea20 /
+    /// 0x14005eb00) copy string +40 / *+104 / +8 / +72 to the SP-8 string destination, empty
+    /// for a missing entry; 0x2135 (0x14005e9e0) sets system result 0 to word SP-8 % 6
+    /// (unsigned), or -1 for a missing entry. All return 0x4008. Destinations other than
+    /// the string bank are not modeled.
+    fn query(&mut self, vm: &mut Machine<'_>, pc: usize, command: u16) -> Result<(), DecodeError> {
+        let op = command + 0x2000;
+        if command == 0x130 {
+            vm.complete_system(SystemResult(0x4000))?;
+            vm.state_mut()
+                .set_system_integer(0, self.entries.len() as u32)
+                .expect("slot 0 exists");
+            return Ok(());
+        }
+        let word = |distance| {
+            vm.stack()
+                .peek_u32(distance)
+                .map_err(|e| error(pc, op, e.0))
+        };
+        let entry = self.entries.get((word(4)? as i32).max(0) as usize);
+        let argument = word(8)?;
+        if command == 0x135 {
+            let value = entry.map_or(u32::MAX, |e| e.words[(argument % 6) as usize]);
+            vm.complete_system(SystemResult(0x4008))?;
+            vm.state_mut()
+                .set_system_integer(0, value)
+                .expect("slot 0 exists");
+            return Ok(());
+        }
+        let slot = crate::text::bank_slot(argument)
+            .ok_or_else(|| error(pc, op, "history string destination outside the string bank"))?;
+        let field = match command {
+            0x131 => 1,
+            0x132 => 2,
+            0x133 => 0,
+            _ => 3,
+        };
+        let text = entry.map_or(&[][..], |e| e.strings[field].as_slice());
+        if text.len() >= 1024 {
+            return Err(error(pc, op, "history string overflows its destination"));
+        }
+        vm.complete_system(SystemResult(0x4008))?;
+        vm.state_mut()
+            .set_string(slot, text)
+            .map_err(|why| error(pc, op, why))?;
+        Ok(())
     }
 }
 

@@ -54,8 +54,7 @@ pub struct WindowButton {
     /// read unsigned by 0x14005dff0 (0x2191 / 0x14005df40).
     pub hit: [u16; 4],
     /// Record +72 (constructor 0): the visual state 0x2196 (0x140078990) last applied, a u16
-    /// it compares before changing the button child's source rectangle. 0x2196 is not
-    /// implemented, so Rust only carries saved values through save and load.
+    /// it compares before changing the button child's source rectangle; 0x2197 reports it.
     pub state_word: u32,
 }
 
@@ -279,6 +278,85 @@ impl MessageHost {
             .expect("slot 0 exists");
         Ok(true)
     }
+    /// 0x2194 / 0x140078890 -> 0x14005dff0: SP-4 window slot (8 or more, or a missing window,
+    /// only sets +12056 bit 0x20000). Results 4 = the last enabled button record under the
+    /// pointer (-1 for none), 5 = action 0 released over the button it was pressed on, 6 =
+    /// action 0 held over a button. A press (0x140054d80) over a button records it at +2536
+    /// and a press elsewhere clears it; a release over a button is consumed (0x140054d90),
+    /// as is a later release while a button is recorded; letting go clears the record. Hit
+    /// rectangles are inclusive, from the window position plus unsigned 16-bit offsets, with
+    /// the pointer scaled by configuration word 4 over word 0 (and 5 over 1) in signed
+    /// arithmetic (imul/idiv). Returns 0x4004.
+    pub fn try_handle_buttons(
+        &mut self,
+        vm: &mut Machine<'_>,
+        input: &mut ActionInput,
+    ) -> Result<bool, DecodeError> {
+        let Some((pc, 0x194)) = vm.pending_system() else {
+            return Ok(false);
+        };
+        let slot = window_slot(vm, pc, 0x2194)?;
+        let window = self.windows[slot]
+            .as_ref()
+            .ok_or_else(|| error(pc, 0x2194, "missing message window sets an unmodeled flag"))?;
+        let logical = self.texts[window.text]
+            .as_ref()
+            .ok_or_else(|| error(pc, 0x2194, "message window without its text object"))?
+            .logical_size;
+        let [px, py] = input.pointer();
+        let scale = |value: i32, logical: i32, screen: u32| {
+            value.wrapping_mul(logical).wrapping_div(screen as i32)
+        };
+        let (px, py) = (
+            scale(px, logical[0], RESEARCH_SCREEN[0]),
+            scale(py, logical[1], RESEARCH_SCREEN[1]),
+        );
+        vm.complete_system(SystemResult(0x4004))?;
+        let window = self.windows[slot].as_mut().expect("checked above");
+        let (mut hovered, mut clicked, mut held) = (u32::MAX, 0u32, 0u32);
+        if input.pressed(0) {
+            window.pressed_button = -1;
+        }
+        for (index, button) in window.buttons.iter().enumerate() {
+            if !button.enabled {
+                continue;
+            }
+            let [x, y, w, h] = button.hit.map(i32::from);
+            let left = window.position[0].wrapping_add(x);
+            let top = window.position[1].wrapping_add(y);
+            if !(left <= px && top <= py && left.wrapping_add(w) >= px && top.wrapping_add(h) >= py)
+            {
+                continue;
+            }
+            if input.pressed(0) {
+                window.pressed_button = index as i32;
+            }
+            hovered = index as u32;
+            if input.released(0) {
+                input.consume(0);
+                if window.pressed_button == index as i32 {
+                    clicked = 1;
+                }
+            }
+            if input.held(0) {
+                held = 1;
+            }
+        }
+        if input.released(0) && window.pressed_button >= 0 {
+            input.consume(0);
+            window.pressed_button = -1;
+        }
+        if !input.held(0) {
+            window.pressed_button = -1;
+        }
+        let state = vm.state_mut();
+        for (index, value) in [(4, hovered), (5, clicked), (6, held)] {
+            state
+                .set_system_integer(index, value)
+                .expect("result exists");
+        }
+        Ok(true)
+    }
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
         if self.try_auxiliary_motion(vm)? {
             return Ok(true);
@@ -393,13 +471,16 @@ impl MessageHost {
             Some((pc, command @ (0x17a | 0x17c | 0x180 | 0x182..=0x186))) => {
                 self.draw(vm, pc, command).map(|()| true)
             }
-            Some((pc, command @ 0x190..=0x192)) => self.button(vm, pc, command).map(|()| true),
+            Some((pc, command @ (0x190..=0x192 | 0x195..=0x197))) => {
+                self.button(vm, pc, command).map(|()| true)
+            }
             Some((pc, 0x150)) => self.move_window(vm, pc).map(|()| true),
+            Some((pc, 0x18d)) => self.draw_query(vm, pc).map(|()| true),
             Some((pc, 0x151)) => self.cursor(vm, pc).map(|()| true),
             Some((pc, 0x155)) => self.glyph_parameter(vm, pc).map(|()| true),
             Some((pc, 0x11f)) => self.measure(vm, pc).map(|()| true),
             Some((pc, 0x14e)) => self.show(vm, pc).map(|()| true),
-            Some((pc, command @ (0x14b | 0x14c))) => self.presence(vm, pc, command).map(|()| true),
+            Some((pc, command @ (0x14b..=0x14d))) => self.presence(vm, pc, command).map(|()| true),
             Some((pc, command @ (0x14a | 0x15a))) => {
                 self.window_text(vm, pc, command).map(|()| true)
             }
@@ -553,6 +634,9 @@ impl MessageHost {
                 op,
                 "window button outside 0..31 or without a window sets an unmodeled flag",
             ));
+        }
+        if matches!(command, 0x195..=0x197) {
+            return self.button_state(vm, pc, command, slot, index);
         }
         let count = match command {
             0x190 => 7,
@@ -1155,6 +1239,19 @@ impl MessageHost {
                 .expect("slot 0 exists");
             return Ok(());
         }
+        // 0x214d / 0x140076470: system result 0 = window +8 (hidden), 0x4004; a missing
+        // window sets +12056 bit 0x10000 instead.
+        if command == 0x14d {
+            let hidden = self.windows[slot]
+                .as_ref()
+                .ok_or_else(|| error(pc, op, "missing message window sets an unmodeled flag"))?
+                .hidden;
+            vm.complete_system(SystemResult(0x4004))?;
+            vm.state_mut()
+                .set_system_integer(0, u32::from(hidden))
+                .expect("slot 0 exists");
+            return Ok(());
+        }
         let hidden = vm.stack().peek_u32(8).map_err(|e| error(pc, op, e.0))? != 0;
         let Some(text) = self.windows[slot].as_ref().map(|window| window.text) else {
             return Err(error(
@@ -1173,6 +1270,94 @@ impl MessageHost {
             window.object.shown = !hidden;
             self.texts[text].as_mut().expect("checked above").visible = !hidden;
         }
+        Ok(())
+    }
+    /// 0x218d / 0x1400778b0: SP-4 window slot, SP-8 child (negative = the window's own +2520
+    /// object, else child lookup 0x14003a760). From that object's draw state: results 0 =
+    /// word 17 (opacity), 1..3 = words 8..10 (position and layer), float results 8/9 =
+    /// words 18/19 (scale). Returns 0x4008. A missing window or child only sets a +12056
+    /// flag in the original and a missing draw state is dereferenced; both are errors here.
+    fn draw_query(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
+        let slot = window_slot(vm, pc, 0x218d)?;
+        let child = vm.stack().peek_u32(8).map_err(|e| error(pc, 0x218d, e.0))? as i32;
+        let window = self.windows[slot]
+            .as_ref()
+            .ok_or_else(|| error(pc, 0x218d, "missing message window sets an unmodeled flag"))?;
+        let object = if child < 0 {
+            Some(&window.object)
+        } else {
+            u16::try_from(child)
+                .ok()
+                .and_then(|id| window.object.children.get(&id))
+        };
+        let words = object
+            .ok_or_else(|| error(pc, 0x218d, "missing window child sets an unmodeled flag"))?
+            .draw
+            .as_ref()
+            .ok_or_else(|| error(pc, 0x218d, "window object without a draw state"))?
+            .words;
+        vm.complete_system(SystemResult(0x4008))?;
+        let state = vm.state_mut();
+        for (index, word) in [(0, 17), (1, 8), (2, 9), (3, 10)] {
+            state
+                .set_system_integer(index, words[word])
+                .expect("result exists");
+        }
+        for (index, word) in [(8, 18), (9, 19)] {
+            state
+                .set_system_float_bits(index, words[word])
+                .expect("result exists");
+        }
+        Ok(())
+    }
+    /// 0x2195 / 0x140078910: system result 0 = record enabled; 0x4008. 0x2196 /
+    /// 0x140078990: SP-12 state; when it differs from the +72 word, the button child (16 +
+    /// index, 0x14005d280) gets that state's first four signed words as its source
+    /// rectangle (0x14003b070 -> draw words 2..5) and the word is stored; 0x400c. 0x2197 /
+    /// 0x140078a90: system result 0 = the +72 word; 0x4008.
+    fn button_state(
+        &mut self,
+        vm: &mut Machine<'_>,
+        pc: usize,
+        command: u16,
+        slot: usize,
+        index: usize,
+    ) -> Result<(), DecodeError> {
+        let op = command + 0x2000;
+        let window = self.windows[slot].as_mut().expect("checked by the caller");
+        let button = &window.buttons[index];
+        let result = match command {
+            0x195 => u32::from(button.enabled),
+            0x197 => button.state_word & 0xffff,
+            _ => {
+                let state = vm.stack().peek_u32(12).map_err(|e| error(pc, op, e.0))? as u16;
+                if u32::from(state) != button.state_word & 0xffff {
+                    let rect = *button.states.get(usize::from(state)).ok_or_else(|| {
+                        error(
+                            pc,
+                            op,
+                            "window button state outside 0..4 reads other fields",
+                        )
+                    })?;
+                    if let Some(child) = window.object.children.get_mut(&(index as u16 + 16)) {
+                        let draw = child.draw.as_mut().ok_or_else(|| {
+                            error(pc, op, "window button child without a draw state")
+                        })?;
+                        for (word, value) in draw.words[2..6].iter_mut().zip(rect) {
+                            *word = i32::from(value as i16) as u32;
+                        }
+                    }
+                    let button = &mut window.buttons[index];
+                    button.state_word = (button.state_word & 0xffff_0000) | u32::from(state);
+                }
+                vm.complete_system(SystemResult(0x400c))?;
+                return Ok(());
+            }
+        };
+        vm.complete_system(SystemResult(0x4008))?;
+        vm.state_mut()
+            .set_system_integer(0, result)
+            .expect("slot 0 exists");
         Ok(())
     }
     fn cursor(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {

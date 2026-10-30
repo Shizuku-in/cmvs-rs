@@ -238,3 +238,52 @@ fn unsupported_commands_and_no_pending_command_are_not_consumed() {
     assert_eq!(vm.pending_system(), command);
     assert!(history.entries().is_empty());
 }
+
+#[test]
+fn queries_report_count_strings_and_words_newest_first() {
+    let bank = |slot: u32| 0x8000_0000 | slot;
+    let mut code = vec![];
+    // Older entry: "a", "b", "\x82\xa0", "c"; newer entry: "c", "\x82\xa0", "b", "a".
+    call(&mut code, 0x2136, &[0, 2, 4, 7, 1, 2, 3, 4, 5, 6]);
+    call(&mut code, 0x2136, &[7, 4, 2, 0, 10, 20, 30, 40, 50, 60]);
+    call(&mut code, 0x2130, &[]);
+    call(&mut code, 0x2131, &[0, bank(3)]);
+    call(&mut code, 0x2132, &[1, bank(4)]);
+    call(&mut code, 0x2133, &[u32::MAX, bank(5)]);
+    call(&mut code, 0x2134, &[5, bank(6)]);
+    call(&mut code, 0x2135, &[1, 8]);
+    call(&mut code, 0x2135, &[2, 0]);
+    call(&mut code, 0x2131, &[0, 0]);
+    let script = script(&code, b"a\0b\0\x82\xa0\0c\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut history = HistoryHost::default();
+    let mut step = |vm: &mut Machine<'_>| {
+        pending(vm);
+        assert!(history.try_handle(vm).unwrap());
+    };
+    step(&mut vm);
+    step(&mut vm);
+    step(&mut vm);
+    assert_eq!(vm.state().system_integer(0), Some(2));
+    for _ in 0..4 {
+        step(&mut vm);
+    }
+    // +40 of the newest, *+104 of the older, +8 of the newest (negative index), and a
+    // missing entry's +72 as an empty string.
+    let strings: Vec<_> = (3..7)
+        .map(|slot| vm.state().string(slot).unwrap().to_vec())
+        .collect();
+    assert_eq!(
+        strings,
+        [vec![0x82, 0xa0], vec![0x82, 0xa0], b"c".to_vec(), vec![]]
+    );
+    step(&mut vm);
+    assert_eq!(vm.state().system_integer(0), Some(3));
+    step(&mut vm);
+    assert_eq!(vm.state().system_integer(0), Some(u32::MAX));
+    assert_eq!(vm.stack().len_bytes(), 0);
+    // A destination outside the string bank is not modeled.
+    pending(&mut vm);
+    assert!(history.try_handle(&mut vm).is_err());
+    assert!(vm.pending_system().is_some());
+}

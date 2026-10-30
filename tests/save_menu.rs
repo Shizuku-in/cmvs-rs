@@ -386,3 +386,64 @@ fn popup_flag_without_argument_stays_pending() {
     assert_eq!(vm.pending_system(), Some((0, 0x2cd)));
     assert!(host.popup_enabled());
 }
+
+#[test]
+fn confirmation_settings_are_set_and_queried_and_read_from_an_ini() {
+    use cmvs_rs::save_menu::profile_int;
+    let text =
+        b"[WINDOW_STATUS]\r\nDLG_SAVE=0\r\n[ system_info ]\r\n dlg_load = -12x\r\nDLG_SAVE=1\r\n";
+    assert_eq!(profile_int(text, "SYSTEM_INFO", "DLG_LOAD", 0), -12);
+    assert_eq!(profile_int(text, "SYSTEM_INFO", "DLG_SAVE", 0), 1);
+    assert_eq!(profile_int(text, "SYSTEM_INFO", "EFFECT_USE", 7), 7);
+
+    // Pushes SP-8 then SP-4 for each command; 0x22ee takes none.
+    let mut code = Vec::new();
+    for (command, args) in [
+        (0x22d4u16, &[0u32, 0][..]),
+        (0x22d3, &[1, 0][..]),
+        (0x22d3, &[0, 0][..]),
+        (0x22ee, &[][..]),
+    ] {
+        for value in args.iter().rev() {
+            code.extend(0x0440u16.to_le_bytes());
+            code.extend(4u16.to_le_bytes());
+            code.extend(value.to_le_bytes());
+        }
+        code.extend(command.to_le_bytes());
+    }
+    let mut raw = b"PS2A".to_vec();
+    for v in [
+        48u32,
+        0,
+        0,
+        0,
+        code.len() as u32,
+        0,
+        0,
+        0,
+        0,
+        code.len() as u32,
+        0,
+    ] {
+        raw.extend(v.to_le_bytes());
+    }
+    raw.extend(code.into_iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+    let script = Script::decode(&raw).unwrap();
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = SaveMenuHost::default();
+    host.set_confirmations(true, true);
+    let step = |vm: &mut Machine<'_>, host: &mut SaveMenuHost| {
+        pending(vm);
+        assert!(host.try_handle_popup(vm).unwrap());
+        vm.state().system_integer(0)
+    };
+    // 0x22d4 with a zero SP-4 queries DLG_SAVE.
+    assert_eq!(step(&mut vm, &mut host), Some(1));
+    // 0x22d3 with SP-4 = 1 sets DLG_LOAD to bool(SP-8) without touching the results.
+    assert_eq!(step(&mut vm, &mut host), Some(1));
+    assert_eq!(host.confirmations(), [false, true]);
+    assert_eq!(step(&mut vm, &mut host), Some(0));
+    // 0x22ee reports the second menu group flag, unknown (0) until 0x22b4.
+    assert_eq!(step(&mut vm, &mut host), Some(0));
+    assert_eq!(vm.stack().len_bytes(), 0);
+}

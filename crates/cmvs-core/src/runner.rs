@@ -161,6 +161,16 @@ impl<'a> Startup<'a> {
     ) -> Result<Self, Box<dyn Error>> {
         let mut machine = Machine::new(script)?;
         machine.set_current_name(game.files.start_name());
+        // 0x14000a3c0 reads the startup settings; cmvs.cfg is optional and read only.
+        let mut save_menu = SaveMenuHost::default();
+        match std::fs::read(root.join("cmvs.cfg")) {
+            Ok(text) => save_menu.set_confirmations(
+                crate::save_menu::profile_int(&text, "SYSTEM_INFO", "DLG_LOAD", 0) != 0,
+                crate::save_menu::profile_int(&text, "SYSTEM_INFO", "DLG_SAVE", 0) != 0,
+            ),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
         Ok(Self {
             machine,
             gate: CommandGate::new(game.selection.clone()),
@@ -169,7 +179,7 @@ impl<'a> Startup<'a> {
             control: ScriptControl::new(virtual_tick),
             source: ArchiveScripts::new(File::open(root.join(&game.files.script_archive))?)?,
             saves: DirectorySaves::new(root.join("save"))?,
-            save_menu: SaveMenuHost::default(),
+            save_menu,
             system_source: FileSystemSave::new(root.join("save/system.dat")),
             system_host: SystemSaveHost::default(),
             system_output: None,
@@ -499,6 +509,7 @@ impl<'a> Startup<'a> {
             // 0x140019430: the gesture update follows the input refresh and precedes the VM.
             let delta = std::mem::take(&mut self.frame_delta);
             self.timers.begin_run(delta);
+            self.input.latch_pointer();
             self.gesture.frame(&mut self.input, self.timers.clock())?;
             self.resume_run = false;
         }
@@ -732,6 +743,9 @@ impl<'a> Startup<'a> {
             || self
                 .messages
                 .try_handle_pointer(&mut self.machine, &self.input)?
+            || self
+                .messages
+                .try_handle_buttons(&mut self.machine, &mut self.input)?
             || self.messages.try_handle_image(
                 &mut self.machine,
                 &mut self.images.with_paths(self.bootstrap.paths()),
@@ -783,6 +797,7 @@ impl<'a> Startup<'a> {
                 .capture
                 .try_handle(&mut self.machine, &mut self.scene)?
             || self.random.try_handle(&mut self.machine)?
+            || crate::math::try_handle(&mut self.machine)?
             || text::try_handle(&mut self.machine)?
             || self
                 .audio

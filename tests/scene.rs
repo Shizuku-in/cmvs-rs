@@ -1434,3 +1434,27 @@ fn second_texture_mode_preserves_draw_state_and_targets_parent_or_child() {
         4
     );
 }
+
+#[test]
+fn flag_clear_command_drops_bit_0x100_of_the_object_or_child() {
+    let mut code = vec![];
+    command(&mut code, 0x2020, &[10]);
+    command(&mut code, 0x2040, &[10]);
+    // A child created under a drawn parent starts with flags 0x7fffffff.
+    command(&mut code, 0x2022, &[10, 3]);
+    command(&mut code, 0x202e, &[10, 3]);
+    command(&mut code, 0x202e, &[10, u32::MAX]);
+    command(&mut code, 0x202e, &[10, 4]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut scene = SceneHost::default();
+    for _ in 0..5 {
+        assert!(next(&mut vm, &mut scene).unwrap());
+    }
+    let object = scene.object(10).unwrap();
+    assert_eq!(object.children[&3].flags, 0x7fff_feff);
+    assert_eq!(object.flags, !0x100);
+    // A missing child would be dereferenced by the original.
+    assert!(next(&mut vm, &mut scene).is_err());
+    assert_eq!(vm.stack().len_bytes(), 8);
+}

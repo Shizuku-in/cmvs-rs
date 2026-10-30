@@ -8,6 +8,8 @@ pub const TIMER_SLOTS: usize = 10;
 pub struct VmTimers {
     values: [u32; TIMER_SLOTS],
     clock: u32,
+    /// The delta of the current frame (0x140007ed0: frame time minus the previous one).
+    delta: u32,
     marked_at: u32,
 }
 impl VmTimers {
@@ -26,14 +28,30 @@ impl VmTimers {
     /// A cooperative execution slice is not a new VM run.
     pub fn begin_run(&mut self, delta_ms: u32) {
         self.clock = self.clock.wrapping_add(delta_ms);
+        self.delta = delta_ms;
         for value in &mut self.values {
             *value = value.wrapping_add(delta_ms);
         }
     }
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x0b | 0x0c | 0x0e | 0x0f))) = vm.pending_system() else {
+        let Some((pc, command @ (0x08 | 0x09 | 0x0b | 0x0c | 0x0e | 0x0f))) = vm.pending_system()
+        else {
             return Ok(false);
         };
+        // Inline 0x140082437 / 0x14008244d: system result 0 = the frame time (0x140007eb0)
+        // or the frame delta (0x140007ed0), here the explicit research clock; 0x4000.
+        if matches!(command, 0x08 | 0x09) {
+            vm.complete_system(SystemResult(0x4000))?;
+            let value = if command == 0x08 {
+                self.clock
+            } else {
+                self.delta
+            };
+            vm.state_mut()
+                .set_system_integer(0, value)
+                .expect("slot 0 exists");
+            return Ok(true);
+        }
         // 0x1400824f0/0x140082506: no arguments, independent of the ten timer slots.
         if matches!(command, 0x0e | 0x0f) {
             vm.complete_system(SystemResult(0x4000))?;

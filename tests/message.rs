@@ -3150,3 +3150,137 @@ fn clear_escape_drops_glyphs_and_returns_the_pen_to_the_area_origin() {
     assert_eq!(placed, [(u16::from(b'D'), [0, 0], 120)]);
     assert_eq!(text.cursor, [13, 0]);
 }
+
+#[test]
+fn window_button_hit_test_reports_hover_click_and_hold_and_consumes_releases() {
+    let mut code = vec![];
+    create(&mut code, 0, 0, [100, 200, 100, 100]);
+    // Button 0 covers x 110..=140, y 220..=260.
+    call(&mut code, 0x2191, &[40, 30, 20, 10, 0, 0]);
+    call(&mut code, 0x2192, &[0, 0]);
+    for _ in 0..5 {
+        call(&mut code, 0x2194, &[0]);
+    }
+    call(&mut code, 0x2194, &[8]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 3);
+    let mut input = ActionInput::default();
+    let mut query = |pointer: [i32; 2], flags: [bool; 3], input: &mut ActionInput| {
+        input.set_pointer(pointer[0], pointer[1]);
+        input.set(0, flags[0], flags[1], flags[2]).unwrap();
+        pending(&mut vm);
+        assert!(messages.try_handle_buttons(&mut vm, input).unwrap());
+        let results: Vec<u32> = (4..7)
+            .map(|i| vm.state().system_integer(i).unwrap())
+            .collect();
+        (results, messages.window(0).unwrap().pressed_button)
+    };
+    // A press on the inclusive far corner records the button and reports holding it.
+    assert_eq!(
+        query([140, 260], [true, true, false], &mut input),
+        (vec![0, 0, 1], 0)
+    );
+    // Releasing over it is a click; the release is consumed and the record cleared.
+    assert_eq!(
+        query([140, 260], [false, false, true], &mut input),
+        (vec![0, 1, 0], -1)
+    );
+    assert!(!input.released(0));
+    assert_eq!(
+        query([141, 261], [false, false, false], &mut input),
+        (vec![u32::MAX, 0, 0], -1)
+    );
+    // Pressed inside, released elsewhere: no click, but the release is still consumed.
+    assert_eq!(
+        query([110, 220], [true, true, false], &mut input),
+        (vec![0, 0, 1], 0)
+    );
+    assert_eq!(
+        query([200, 300], [false, false, true], &mut input),
+        (vec![u32::MAX, 0, 0], -1)
+    );
+    assert!(!input.released(0));
+    // Slot 8 only sets an engine flag in the original; the command stays pending here.
+    pending(&mut vm);
+    assert!(messages.try_handle_buttons(&mut vm, &mut input).is_err());
+    assert!(vm.pending_system().is_some());
+}
+
+#[test]
+fn window_button_state_commands_switch_the_child_source_once() {
+    let mut code = vec![];
+    create(&mut code, 7, 10, [0, 0, 1280, 54]);
+    call(&mut code, 0x2178, &[16, 7]);
+    call(&mut code, 0x2180, &[16, 7]);
+    call(&mut code, 0x2190, &[0, 0x1_0005, 52, 94, 0, 96, 1, 0, 7]);
+    call(&mut code, 0x2192, &[0, 7]);
+    call(&mut code, 0x2195, &[0, 7]);
+    call(&mut code, 0x2195, &[1, 7]);
+    call(&mut code, 0x2196, &[1, 0, 7]);
+    call(&mut code, 0x2197, &[0, 7]);
+    call(&mut code, 0x2196, &[5, 0, 7]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 5);
+    let result = |vm: &mut Machine<'_>, messages: &mut MessageHost| {
+        pending(vm);
+        assert!(messages.try_handle(vm).unwrap());
+        vm.state().system_integer(0)
+    };
+    assert_eq!(result(&mut vm, &mut messages), Some(1));
+    assert_eq!(result(&mut vm, &mut messages), Some(0));
+    result(&mut vm, &mut messages);
+    let window = messages.window(7).unwrap();
+    let words = window.object.children[&16].draw.as_ref().unwrap().words;
+    assert_eq!(words[2..6], [96, 0, 94, 52]);
+    assert_eq!(window.buttons[0].state_word, 1);
+    assert_eq!(result(&mut vm, &mut messages), Some(1));
+    // State 5 lies past the five state records.
+    pending(&mut vm);
+    let bytes = vm.stack().len_bytes();
+    assert!(messages.try_handle(&mut vm).is_err());
+    assert_eq!(vm.stack().len_bytes(), bytes);
+}
+
+#[test]
+fn window_draw_query_and_hidden_flag_report_window_state() {
+    let mut code = vec![];
+    create(&mut code, 0, 0, [0, 0, 100, 100]);
+    call(&mut code, 0x2180, &[u32::MAX, 0]);
+    call(&mut code, 0x2186, &[77, u32::MAX, 0]);
+    call(&mut code, 0x2183, &[20, 10, u32::MAX, 0]);
+    call(&mut code, 0x214e, &[1, 0]);
+    call(&mut code, 0x214c, &[1, 0]);
+    call(&mut code, 0x218d, &[u32::MAX, 0]);
+    call(&mut code, 0x214d, &[0]);
+    call(&mut code, 0x218d, &[3, 0]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 7);
+    let state = vm.state();
+    let words = messages
+        .window(0)
+        .unwrap()
+        .object
+        .draw
+        .as_ref()
+        .unwrap()
+        .words;
+    assert_eq!(
+        (0..4)
+            .map(|i| state.system_integer(i).unwrap())
+            .collect::<Vec<_>>(),
+        [77, 10, 20, words[10]]
+    );
+    assert_eq!(state.system_float_bits(8), Some(words[18]));
+    assert_eq!(state.system_float_bits(9), Some(words[19]));
+    run(&mut vm, &mut messages, 1);
+    assert_eq!(vm.state().system_integer(0), Some(1));
+    // A missing child sets an engine flag in the original.
+    pending(&mut vm);
+    assert!(messages.try_handle(&mut vm).is_err());
+}

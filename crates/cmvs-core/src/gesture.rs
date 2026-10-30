@@ -306,6 +306,38 @@ impl PointerGesture {
             }
             return Ok(true);
         }
+        if command == 0x360 {
+            // 0x14007fd10 -> 0x14001cf30: system result 0 = +88 (the 0x2362 state).
+            vm.complete_system(SystemResult(0x4000))?;
+            vm.state_mut()
+                .set_system_integer(0, self.get(88) as u32)
+                .expect("result exists");
+            return Ok(true);
+        }
+        if command == 0x353 {
+            // 0x14007fce0 -> 0x1400534c0: system result 0 = the flick direction +44.
+            vm.complete_system(SystemResult(0x4000))?;
+            vm.state_mut()
+                .set_system_integer(0, self.get(44) as u32)
+                .expect("result exists");
+            return Ok(true);
+        }
+        if command == 0x359 {
+            // 0x14007fde0 -> 0x1400534d0: +80 is cleared when +72 and +76 are both set or
+            // both clear; result 0 = +80, result 4 = bool(+76). With both clear the original
+            // leaves its out word uninitialized; +80 is then 0 and Rust writes 0 there too.
+            let (first, second) = (self.get(72), self.get(76));
+            if (first != 0) == (second != 0) {
+                self.set(80, 0);
+            }
+            vm.complete_system(SystemResult(0x4000))?;
+            for (slot, value) in [(0, self.get(80)), (4, i32::from(second != 0))] {
+                vm.state_mut()
+                    .set_system_integer(slot, value as u32)
+                    .expect("result exists");
+            }
+            return Ok(true);
+        }
         if command == 0x365 {
             vm.complete_system(SystemResult(0x4000))?;
             let active = self.get(120) != 0;
