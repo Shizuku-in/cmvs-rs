@@ -107,6 +107,27 @@ impl GameInput {
         codes[4] = self.wheel > 0.0;
         codes[5] = self.wheel < 0.0;
         self.wheel = 0.0;
+        // VK_F1..VK_F12 whose hold counter becomes 1 this frame (0x140056780), for 0x234e.
+        let function_keys = [
+            KeyCode::F1,
+            KeyCode::F2,
+            KeyCode::F3,
+            KeyCode::F4,
+            KeyCode::F5,
+            KeyCode::F6,
+            KeyCode::F7,
+            KeyCode::F8,
+            KeyCode::F9,
+            KeyCode::F10,
+            KeyCode::F11,
+            KeyCode::F12,
+        ];
+        let pressed = function_keys
+            .iter()
+            .enumerate()
+            .filter(|(_, key)| self.key_pulses.contains(key))
+            .fold(0u16, |mask, (bit, _)| mask | 1 << bit);
+        input.press_function_keys(pressed);
         self.key_pulses.clear();
         self.button_pulses.clear();
         self.history.update(bindings, &codes, input);
