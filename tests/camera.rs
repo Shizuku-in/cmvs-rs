@@ -73,6 +73,56 @@ fn f(value: f32) -> u32 {
 }
 
 #[test]
+fn independent_view_setters_preserve_float_bits_other_axes_and_screen_cameras() {
+    let values = [
+        0x8000_0000,
+        0x7fc0_1234,
+        0x7f80_0001,
+        (-1.5f32).to_bits(),
+        0x7f80_0000,
+        0xff80_0000,
+        60.0f32.to_bits(),
+    ];
+    let mut code = vec![];
+    call(&mut code, 0x2260, &values[..3]);
+    for (op, bits) in (0x2261..=0x2264).zip(&values[3..]) {
+        call(&mut code, op, &[*bits]);
+    }
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = CameraHost::default();
+    let other = host.view(1).unwrap().clone();
+    let screen = host.camera(0).unwrap().clone();
+    vm.state_mut().set_system_integer(0, 123).unwrap();
+    for _ in 0..5 {
+        pending(&mut vm);
+        assert!(host.try_handle(&mut vm).unwrap());
+    }
+    assert_eq!(host.view(0).unwrap().words, values);
+    assert_eq!(host.view(1), Some(&other));
+    assert_eq!(host.camera(0), Some(&screen));
+    assert_eq!(vm.pc(), code.len());
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(123));
+}
+
+#[test]
+fn incomplete_view_pose_does_not_commit_a_partial_xyz() {
+    let mut code = vec![];
+    call(&mut code, 0x2260, &[1, 2]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = CameraHost::default();
+    let before = host.view(0).unwrap().clone();
+    pending(&mut vm);
+    for _ in 0..2 {
+        assert!(host.try_handle(&mut vm).is_err());
+        assert_eq!(host.view(0), Some(&before));
+        assert_eq!(vm.stack().len_bytes(), 8);
+    }
+}
+
+#[test]
 fn constructor_values_match_0x14004fab0() {
     let host = CameraHost::default();
     let camera = host.camera(1).unwrap();

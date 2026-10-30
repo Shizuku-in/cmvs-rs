@@ -3,7 +3,6 @@
 //! 0x140069fd0), thumbnails 0x22b8 (0x14006b4a0) and the slot queries 0x22b7 / 0x22bd.
 use super::{Startup, SystemOutput};
 use crate::{
-    camera,
     evaluate::error,
     message::{MESSAGE_WINDOWS, TEXT_OBJECTS},
     platform::PlatformBackend,
@@ -213,8 +212,8 @@ impl Startup<'_> {
             cameras: [
                 self.camera.saved(0),
                 self.camera.saved(1),
-                camera::saved_device_object(0),
-                camera::saved_device_object(1),
+                self.camera.saved_view(0),
+                self.camera.saved_view(1),
             ],
             script_data: vm.main_data.clone(),
             bgm: self.audio.saved_bgm(),
@@ -458,11 +457,6 @@ impl Startup<'_> {
         if snapshot.sound_device != [1, 0, 0, 0, 0, 0] {
             return Err("saved sound device buffers are not implemented".into());
         }
-        for (i, record) in snapshot.cameras[2..].iter().enumerate() {
-            if *record != camera::saved_device_object(i) {
-                return Err("saved device light/camera object state is not modeled".into());
-            }
-        }
         let vm = crate::machine::VmImage {
             script_names: snapshot.script_names.clone(),
             script_sizes: snapshot.script_sizes,
@@ -529,6 +523,8 @@ impl Startup<'_> {
         let mut camera_host = self.camera.clone();
         camera_host.restore(0, &snapshot.cameras[0])?;
         camera_host.restore(1, &snapshot.cameras[1])?;
+        camera_host.restore_view(0, &snapshot.cameras[2])?;
+        camera_host.restore_view(1, &snapshot.cameras[3])?;
         let mut control = self.control.clone();
         control.restore_callbacks(&snapshot.callbacks)?;
         self.platform.restored_title(&snapshot.scene_title)?;

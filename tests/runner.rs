@@ -1462,8 +1462,14 @@ fn scenario_snapshot_writes_a_slot_that_loads_back_with_backups() {
     commands::command(&mut code, 0x203c, &[20, u32::MAX]);
     commands::command(&mut code, 0x215d, &[0, 7, 0, 0, 100, 100, 1280, 720]);
     commands::command(&mut code, 0x2152, &[0, u32::MAX, 0]);
+    let view_words = [1.25f32, -2.0, 3.0, 17.5, -30.0, 45.0, 60.0].map(f32::to_bits);
+    commands::command(&mut code, 0x2260, &view_words[..3]);
+    for (op, word) in (0x2261..=0x2264).zip(&view_words[3..]) {
+        commands::command(&mut code, op, &[*word]);
+    }
     let snapshot_pc = code.len();
     code.extend(0x22b2u16.to_le_bytes());
+    commands::command(&mut code, 0x2260, &[0; 3]);
     system_call(&mut code, 0x2092, &[5, 1, 7]);
     system_call(&mut code, 0x22b6, &[3]);
     let end = code.len();
@@ -1508,6 +1514,11 @@ fn scenario_snapshot_writes_a_slot_that_loads_back_with_backups() {
     assert_eq!(snapshot.variables.integers()[5], 42);
     assert_eq!(snapshot.variables.packed_bits()[0] & 1, 1);
     assert_eq!(snapshot.texts[7].as_ref().unwrap().glyphs.len(), 9);
+    let recorded_view: Vec<_> = snapshot.cameras[2][6..]
+        .chunks_exact(4)
+        .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+        .collect();
+    assert_eq!(recorded_view, view_words);
     let live = run.scene().object(20).unwrap().image.as_ref().unwrap();
     assert_eq!(&live.pixels.pixels()[..4], &[0x11, 0x22, 0x33, 255]);
     assert!(!live.alpha && !live.surface && live.name.is_empty());
@@ -1528,6 +1539,7 @@ fn scenario_snapshot_writes_a_slot_that_loads_back_with_backups() {
     assert_eq!(run.machine().pc(), snapshot_pc + 2);
     assert_eq!(run.machine().state().integer(5), Some(42));
     assert_eq!(run.machine().state().bit(0), Some(true));
+    assert_eq!(run.camera().view(0).unwrap().words, view_words);
     let restored = run.scene().object(20).unwrap().image.as_ref().unwrap();
     assert!(restored.alpha && !restored.surface && restored.name.is_empty());
     assert!(

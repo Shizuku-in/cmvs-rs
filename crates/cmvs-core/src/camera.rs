@@ -15,6 +15,8 @@ use crate::{
     message::RESEARCH_SCREEN,
     vm::SystemResult,
 };
+mod view;
+pub use view::DeviceView;
 
 pub const CAMERAS: usize = 2;
 pub const CAMERA_WORDS: usize = 40;
@@ -219,14 +221,27 @@ fn hundredths(value: f32) -> f32 {
     truncate(value * 100.0) as f32 / 100.0
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct CameraHost {
     cameras: [Camera; CAMERAS],
+    views: [DeviceView; CAMERAS],
+}
+
+impl Default for CameraHost {
+    fn default() -> Self {
+        Self {
+            cameras: Default::default(),
+            views: std::array::from_fn(DeviceView::new),
+        }
+    }
 }
 
 impl CameraHost {
     /// 0x14004e760 resets the camera parameters and motion, leaving padding alone.
     pub(crate) fn reset(&mut self) {
+        for view in &mut self.views {
+            view.reset();
+        }
         for camera in &mut self.cameras {
             let retained = [19, 20, 37, 38, 39].map(|i| camera.words[i]);
             *camera = Camera::default();
@@ -330,6 +345,9 @@ impl CameraHost {
         Ok(Some(step))
     }
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
+        if let Some((pc, command @ 0x260..=0x264)) = vm.pending_system() {
+            return self.set_view(vm, pc, command);
+        }
         if let Some((pc, command @ 0x6b..=0x6d)) = vm.pending_system() {
             return self.start_move(vm, pc, command);
         }
@@ -552,27 +570,6 @@ impl CameraHost {
         camera[15..19].copy_from_slice(&words[3 + body..7 + body]);
         Ok(())
     }
-}
-
-/// Records 0x882/0x883: device +32/+40 objects (writer 0x1400501d0) that Rust does not
-/// model. No implemented command reaches them, so they hold the reset 0x140050180 values;
-/// word 23 is 1 for the first object and 0 for the second, as in the original saves.
-pub(crate) fn saved_device_object(index: usize) -> Vec<u8> {
-    let mut out = 2u16.to_le_bytes().to_vec();
-    let words = [
-        u32::from(index == 0),
-        0,
-        1.0f32.to_bits(),
-        0,
-        0,
-        0,
-        0,
-        45.0f32.to_bits(),
-    ];
-    for word in words {
-        out.extend(word.to_le_bytes());
-    }
-    out
 }
 
 #[cfg(test)]
