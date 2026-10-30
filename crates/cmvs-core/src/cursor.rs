@@ -2,6 +2,40 @@
 //! Preserve AND/XOR semantics; not every legacy cursor can be represented by RGBA.
 use crate::FormatError;
 
+/// 0x140019430 / 0x140056530: inactivity uses logical pointer changes and a u32
+/// millisecond clock. Mode zero suspends automatic changes, retaining visibility.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CursorVisibility {
+    position: [i32; 2],
+    moved_at: u32,
+    visible: bool,
+}
+impl Default for CursorVisibility {
+    fn default() -> Self {
+        Self {
+            position: [0, 0],
+            moved_at: 0,
+            visible: true,
+        }
+    }
+}
+impl CursorVisibility {
+    pub fn update(&mut self, now: u32, mode: u32, active: bool, position: [i32; 2]) -> bool {
+        if active {
+            if position != self.position {
+                self.position = position;
+                self.moved_at = now;
+            }
+            if mode != 0 {
+                // Preserve the original raw unsigned deadline comparison, including
+                // its behavior around clock wrap; do not substitute elapsed time.
+                self.visible = now < self.moved_at.wrapping_add(mode.wrapping_mul(5000));
+            }
+        }
+        self.visible
+    }
+}
+
 fn word(b: &[u8], at: usize) -> u16 {
     u16::from_le_bytes([b[at], b[at + 1]])
 }

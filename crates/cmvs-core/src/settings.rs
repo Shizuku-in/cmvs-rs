@@ -10,6 +10,7 @@ pub struct SettingsHost {
     auto: AutoAdvanceSettings,
     text: TextOutputSettings,
     read_skip: bool,
+    cursor_auto_clear: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,10 +97,14 @@ impl Default for SettingsHost {
             auto: AutoAdvanceSettings::default(),
             text: TextOutputSettings::default(),
             read_skip: false,
+            cursor_auto_clear: 1,
         }
     }
 }
 impl SettingsHost {
+    pub fn cursor_auto_clear(&self) -> u32 {
+        self.cursor_auto_clear
+    }
     pub fn read_skip(&self) -> bool {
         self.read_skip
     }
@@ -114,6 +119,16 @@ impl SettingsHost {
             crate::save_menu::profile_int(bytes, "MESSAGE_INFO", key, default) as u32
         };
         Self {
+            cursor_auto_clear: match crate::save_menu::profile_int(
+                bytes,
+                "MOUSE_INFO",
+                "AUTO_CLEAR",
+                1,
+            ) as u32
+            {
+                value @ 0..=4 => value,
+                _ => 0,
+            },
             read_skip: int("READ_SKIP", 1) != 0,
             text: TextOutputSettings {
                 bold: int("TEXT_BOLD", 0) != 0,
@@ -141,6 +156,24 @@ impl SettingsHost {
     /// changing subsequent font construction would misrepresent the command.
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
         if let Some((pc, command)) = vm.pending_system() {
+            if command == 0x2e9 {
+                let mode = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x22e9, e.0))?;
+                let value = if mode != 0 {
+                    let raw = vm.stack().peek_u32(8).map_err(|e| error(pc, 0x22e9, e.0))?;
+                    Some(if raw > 4 { 0 } else { raw })
+                } else {
+                    None
+                };
+                vm.complete_system(SystemResult(0x4008))?;
+                if let Some(value) = value {
+                    self.cursor_auto_clear = value;
+                } else {
+                    vm.state_mut()
+                        .set_system_integer(0, self.cursor_auto_clear)
+                        .expect("slot 0 exists");
+                }
+                return Ok(true);
+            }
             if matches!(command, 0x2e0 | 0x2e4) {
                 let op = command + 0x2000;
                 let mode = vm.stack().peek_u32(4).map_err(|e| error(pc, op, e.0))?;
@@ -247,7 +280,6 @@ impl SettingsHost {
             // effects before they may be accepted; these reads expose current defaults.
             let value = match command {
                 0x2d5 => Some(1),
-                0x2e9 => Some(1),
                 _ => None,
             };
             if let Some(value) = value {

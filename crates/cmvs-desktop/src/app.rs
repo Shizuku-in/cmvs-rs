@@ -48,6 +48,9 @@ struct App<'a> {
     preview_image: Option<RgbaImage>,
     next_frame: Instant,
     last_frame: Instant,
+    cursor_clock: Instant,
+    cursor_visibility: cmvs_core::cursor::CursorVisibility,
+    cursor_shown: bool,
     font: Option<crate::font::FontRenderer>,
 }
 impl App<'_> {
@@ -143,6 +146,7 @@ impl ApplicationHandler for App<'_> {
             self.window = Some(window.clone());
             self.deadline = self.exit_after.map(|d| Instant::now() + d);
             self.last_frame = Instant::now();
+            self.cursor_clock = self.last_frame;
             self.next_frame = self.last_frame;
             window.set_visible(true);
             window.request_redraw();
@@ -174,6 +178,13 @@ impl ApplicationHandler for App<'_> {
             WindowEvent::Focused(focus) => {
                 self.input.push(InputEvent::Focus(focus));
                 self.game_input.focus(focus, self.startup.input_mut());
+                if !focus {
+                    self.window
+                        .as_ref()
+                        .expect("window")
+                        .set_cursor_visible(true);
+                    self.cursor_shown = true;
+                }
                 println!("# input focus={focus}");
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -183,7 +194,14 @@ impl ApplicationHandler for App<'_> {
                     y: position.y,
                 });
             }
-            WindowEvent::CursorLeft { .. } => self.game_input.leave(),
+            WindowEvent::CursorLeft { .. } => {
+                self.game_input.leave();
+                self.window
+                    .as_ref()
+                    .expect("window")
+                    .set_cursor_visible(true);
+                self.cursor_shown = true;
+            }
             WindowEvent::MouseInput { state, button, .. } => {
                 self.game_input
                     .button(button, state == ElementState::Pressed);
@@ -276,6 +294,21 @@ impl ApplicationHandler for App<'_> {
                     [size.width, size.height],
                     self.startup.input_mut(),
                 );
+                let position = self.game_input.cursor_position([size.width, size.height]);
+                let visible = self.cursor_visibility.update(
+                    self.cursor_clock.elapsed().as_millis() as u32,
+                    self.startup.settings().cursor_auto_clear(),
+                    position.is_some(),
+                    position.unwrap_or_default(),
+                );
+                // Window-scoped adaptation: always show the host cursor outside the
+                // game viewport; keep the engine's stored visibility while inactive.
+                let visible = position.is_none() || visible;
+                if visible != self.cursor_shown {
+                    window.set_cursor_visible(visible);
+                    self.cursor_shown = visible;
+                    println!("# native cursor visible={visible}");
+                }
                 self.input_due = false;
             }
             let start = Instant::now();
@@ -628,6 +661,9 @@ fn run() -> Result<(), Box<dyn Error>> {
         preview_image,
         next_frame: Instant::now(),
         last_frame: Instant::now(),
+        cursor_clock: Instant::now(),
+        cursor_visibility: Default::default(),
+        cursor_shown: true,
         font,
     };
     let event_loop = EventLoop::new()?;

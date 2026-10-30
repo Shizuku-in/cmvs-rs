@@ -7,6 +7,33 @@ mod bytecode;
 use bytecode::{command, pending, script};
 
 #[test]
+fn cursor_auto_clear_reads_ini_and_normalizes_unsigned_modes_without_changing_results() {
+    assert_eq!(SettingsHost::from_ini(&[]).cursor_auto_clear(), 1);
+    assert_eq!(
+        SettingsHost::from_ini(b"[MOUSE_INFO]\nAUTO_CLEAR=-1\n").cursor_auto_clear(),
+        0
+    );
+    let mut code = vec![];
+    for raw in [0, 4, 5, u32::MAX, 2] {
+        command(&mut code, 0x22e9, &[1, raw]);
+        command(&mut code, 0x22e9, &[0, 0]);
+    }
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut settings = SettingsHost::default();
+    for expected in [0, 4, 0, 0, 2] {
+        vm.state_mut().set_system_integer(0, 77).unwrap();
+        pending(&mut vm);
+        settings.try_handle(&mut vm).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(77));
+        pending(&mut vm);
+        settings.try_handle(&mut vm).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(expected));
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
+}
+
+#[test]
 fn bold_setting_normalizes_ini_and_vm_values_and_preserves_write_result() {
     assert!(!SettingsHost::default().text_output().bold);
     assert!(!SettingsHost::from_ini(&[]).text_output().bold);
@@ -607,22 +634,21 @@ fn automatic_advance_fields_round_trip_raw_words_and_normalize_only_the_boolean(
 
 #[test]
 fn configuration_queries_expose_current_constructor_policy_and_setters_stay_barriers() {
-    for (op, value) in [(0x22d5, 1), (0x22e9, 1)] {
-        let mut code = vec![];
-        command(&mut code, op, &[0, 0]);
-        command(&mut code, op, &[1, 2]);
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        let mut settings = SettingsHost::default();
-        pending(&mut vm);
-        assert!(settings.try_handle(&mut vm).unwrap());
-        assert_eq!(vm.state().system_integer(0), Some(value));
-        pending(&mut vm);
-        let pc = vm.pc();
-        assert!(settings.try_handle(&mut vm).is_err());
-        assert_eq!(vm.pc(), pc);
-        assert_eq!(vm.stack().len_bytes(), 8);
-    }
+    let (op, value) = (0x22d5, 1);
+    let mut code = vec![];
+    command(&mut code, op, &[0, 0]);
+    command(&mut code, op, &[1, 2]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut settings = SettingsHost::default();
+    pending(&mut vm);
+    assert!(settings.try_handle(&mut vm).unwrap());
+    assert_eq!(vm.state().system_integer(0), Some(value));
+    pending(&mut vm);
+    let pc = vm.pc();
+    assert!(settings.try_handle(&mut vm).is_err());
+    assert_eq!(vm.pc(), pc);
+    assert_eq!(vm.stack().len_bytes(), 8);
 }
 
 #[test]

@@ -36,6 +36,9 @@ pub struct GameInput {
     focused: bool,
 }
 impl GameInput {
+    pub fn cursor_position(&self, size: [u32; 2]) -> Option<[i32; 2]> {
+        self.pointer.and_then(|p| Viewport::new(size)?.to_script(p))
+    }
     pub fn key(&mut self, key: KeyCode, pressed: bool) {
         if !self.focused {
             return;
@@ -131,10 +134,7 @@ impl GameInput {
         self.key_pulses.clear();
         self.button_pulses.clear();
         self.history.update(bindings, &codes, input);
-        let [x, y] = self
-            .pointer
-            .and_then(|p| Viewport::new(size)?.to_script(p))
-            .unwrap_or([-1, -1]);
+        let [x, y] = self.cursor_position(size).unwrap_or([-1, -1]);
         input.set_pointer(x, y);
     }
     pub fn warp(&mut self, size: [u32; 2], script: [i32; 2]) -> Option<[f64; 2]> {

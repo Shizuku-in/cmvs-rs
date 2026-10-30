@@ -527,6 +527,12 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     assert_eq!(group.buttons.len(), 292);
     assert!(ui.run.messages().window(6).is_some());
     let initial_audio = ui.run.audio().settings();
+    for (mode, x) in [160, 264, 368, 472, 576].into_iter().enumerate() {
+        ui.click([x, 626], 30);
+        assert_eq!(ui.run.settings().cursor_auto_clear(), mode as u32);
+        font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+            .unwrap();
+    }
     for (x, bold) in [(472, false), (576, true), (472, false)] {
         ui.click([x, 107], 30);
         assert_eq!(ui.run.settings().text_output().bold, bold);
@@ -755,7 +761,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     assert_eq!(ui.run.history().entries().len(), stopped);
     assert!(ui.waiting_for_text());
     println!(
-        "settings: native_audio={native_audio}; title + toolbar; voice stop modes, read-skip policy, bold/text/audio/auto settings, three pages, 421 settings frames; auto advanced at least three entries in {auto_frames} rendered frames with {} voices and {} voice fades; disabled then idle 240 rendered frames",
+        "settings: native_audio={native_audio}; title + toolbar; cursor hide, voice stop modes, read-skip policy, bold/text/audio/auto settings, three pages, 426 settings frames; auto advanced at least three entries in {auto_frames} rendered frames with {} voices and {} voice fades; disabled then idle 240 rendered frames",
         ui.voices.len(),
         ui.voice_fades.len()
     );
