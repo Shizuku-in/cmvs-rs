@@ -38,7 +38,7 @@ pub struct WorldMotion {
 }
 
 impl WorldMotion {
-    fn supports_mode(mode: u32) -> bool {
+    pub(crate) fn supports_mode(mode: u32) -> bool {
         matches!(mode as u8, 0 | 0x38 | 0x39 | 0x48) || mode as u8 == 1 && mode & 0x8000 == 0
     }
 

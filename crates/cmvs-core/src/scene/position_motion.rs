@@ -25,7 +25,7 @@ pub struct PositionMotion {
     pub keys: [PositionKey; POSITION_KEYS],
 }
 impl PositionMotion {
-    fn supported(mode: u32) -> bool {
+    pub(crate) fn supported(mode: u32) -> bool {
         matches!(mode as u8, 0 | 0x20 | 0x21) || mode as u8 == 1 && mode & 0x8000 == 0
     }
     fn start(&mut self, words: &[u32; 22], key: u32) {
