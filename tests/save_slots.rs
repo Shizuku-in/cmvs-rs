@@ -435,6 +435,54 @@ struct Ui<'a, 'b> {
     frozen: bool,
 }
 
+/// First settings milestone: the toolbar opens the original scripted settings and
+/// right click returns to gameplay. Rendering, edits and persistence are separate checks.
+#[cfg(feature = "desktop")]
+#[test]
+#[ignore = "requires CMVS_GAME_ROOT with system.dat/save000 and CMVS_FONT_PATH"]
+fn external_system_settings_toolbar_opens_and_returns_to_text() {
+    let root = PathBuf::from(std::env::var_os("CMVS_GAME_ROOT").expect("CMVS_GAME_ROOT"));
+    let font_path = PathBuf::from(std::env::var_os("CMVS_FONT_PATH").expect("CMVS_FONT_PATH"));
+    let font = cmvs_rs::desktop::font::FontRenderer::read(&font_path, 0).unwrap();
+    let user = user_directory("settings");
+    for name in ["system.dat", "save000.dat"] {
+        fs::copy(root.join("save").join(name), user.join(name)).unwrap();
+    }
+    let game = Registry::builtin().identify_game(&root, None).unwrap();
+    let script = load_start(&root, &game.files).unwrap();
+    let mut run = Startup::new(&script, &root, &game, 0).unwrap();
+    run.set_user_data_directory(&user).unwrap();
+    run.set_record_text(true);
+    run.set_glyph_metrics(font.metrics());
+    let mut ui = Ui {
+        run: &mut run,
+        backend: RecordingBackend::default(),
+        bindings: KeyBindings::parse(&fs::read_to_string(root.join("key.cfg")).unwrap()).unwrap(),
+        codes: CodeInput::default(),
+        commands: Vec::new(),
+        voices: Vec::new(),
+        frozen: false,
+    };
+    for _ in 0..30_000 {
+        if ui.run.machine().current_name() == b"menu.ps3" && ui.run.steps() > 200_000 {
+            break;
+        }
+        ui.frame([-1, -1], None);
+    }
+    assert_eq!(ui.run.machine().current_name(), b"menu.ps3");
+    ui.run.load_slot(0, &mut ui.backend).unwrap();
+    ui.wait_for_text();
+    ui.click(ui.toolbar(0), 120);
+    let group = ui.run.buttons().group(1).unwrap();
+    assert_eq!(group.object, 64);
+    assert_eq!(group.buttons.len(), 292);
+    assert!(ui.run.messages().window(6).is_some());
+    ui.press([640, 360], 3, 120);
+    ui.wait_for_text();
+    assert!(ui.run.buttons().group(1).is_none());
+    println!("settings: 292 buttons; toolbar open, idle, right-click close and gameplay resume");
+}
+
 impl Ui<'_, '_> {
     fn frame(&mut self, pointer: [i32; 2], code: Option<usize>) {
         if self.frozen {

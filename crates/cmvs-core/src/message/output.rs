@@ -480,9 +480,14 @@ fn append(text: &mut TextObject, bytes: &[u8], skip: bool) -> Result<(), &'stati
 /// Double-byte characters wrap as in 0x14005bc90; 0x814a sits size/5 left and advances
 /// size/2 − size/5. A `{base/ruby}` group draws only its double-byte base characters, each
 /// wrapping on its own; the annotation is skipped. Single bytes advance by the measured GDI
-/// glyph width (at least half the size), which the core does not have, so they are rejected,
-/// as are groups under 0x211e rules (its inline rule copy is not modeled).
-fn place(text: &mut TextObject, bytes: &[u8]) -> Result<(), &'static str> {
+/// glyph width (at least half the size), supplied by an explicit font metrics backend.
+/// Without one they are rejected, as are groups under 0x211e rules (its inline rule
+/// copy is not modeled).
+fn place(
+    text: &mut TextObject,
+    bytes: &[u8],
+    metrics: Option<&dyn super::GlyphMetrics>,
+) -> Result<(), &'static str> {
     text.ruby_lines = [0; 32];
     text.layout_scratch = [0; 2];
     let size = text.glyph_size as u32;
@@ -521,7 +526,20 @@ fn place(text: &mut TextObject, bytes: &[u8]) -> Result<(), &'static str> {
             continue;
         }
         if !lead(byte) {
-            return Err("direct single-byte text advances by the unmodeled GDI glyph width");
+            let metrics =
+                metrics.ok_or("direct single-byte text requires a font metrics backend")?;
+            let code = (byte as i8 as i16) as u16;
+            let width = metrics.ink_width(code, size)?.max(size >> 1);
+            if x >= limit {
+                new_line(text, &mut line, &mut x, &mut y)?;
+                text.layout_scratch = [0; 2];
+            } else if text.line_break.is_some() {
+                text.layout_scratch[1] = u32::from(code);
+            }
+            push(text, code, [x, y], size, mode)?;
+            x = x.wrapping_add(width).wrapping_add(text.spacing[0] as u32);
+            i += 1;
+            continue;
         }
         let second = *bytes
             .get(i + 1)
@@ -548,6 +566,46 @@ fn place(text: &mut TextObject, bytes: &[u8]) -> Result<(), &'static str> {
 }
 
 impl MessageHost {
+    /// 0x2159 / 0x140076cf0 -> 0x14005d870: explicit initialization/poll,
+    /// unlike the yielding 0x2152. SP-8 is unused; SP-16 == 0 appends once.
+    pub fn try_record_poll(
+        &mut self,
+        vm: &mut Machine<'_>,
+        flags: MessageFlags,
+    ) -> Result<bool, DecodeError> {
+        let Some((pc, 0x159)) = vm.pending_system() else {
+            return Ok(false);
+        };
+        if !self.record_output {
+            return Ok(false);
+        }
+        let slot = window_slot(vm, pc, 0x2159)?;
+        let arg = |distance| {
+            vm.stack()
+                .peek_u32(distance)
+                .map_err(|e| error(pc, 0x2159, e.0))
+        };
+        let bytes = vm.resolve_string(arg(12)?)?;
+        let initialize = arg(16)? == 0;
+        let window = self
+            .window(slot)
+            .ok_or_else(|| error(pc, 0x2159, "missing window sets an unmodeled flag"))?;
+        let index = window.text;
+        let mut candidate = self
+            .text(index)
+            .ok_or_else(|| error(pc, 0x2159, "window without text object"))?
+            .clone();
+        if initialize {
+            append(&mut candidate, &bytes, flags.skip()).map_err(|why| error(pc, 0x2159, why))?;
+        }
+        let done = !window.hidden && !candidate.glyphs.iter().any(|g| g.active);
+        vm.complete_system(SystemResult(0x4010))?;
+        vm.state_mut()
+            .set_system_integer(0, u32::from(done))
+            .expect("slot 0 exists");
+        self.texts[index] = Some(candidate);
+        Ok(true)
+    }
     /// 0x140076700 / 0x14005d900: repeat=0 creates glyphs once; hidden windows keep
     /// yielding. Waiting returns 0xa000, completion 0xc00c (both yield). Research mode
     /// explicitly selects the constructor settings block. Only the +1520 skip flag shortens
@@ -580,7 +638,8 @@ impl MessageHost {
                 )
             })?
             .clone();
-        place(&mut candidate, &bytes).map_err(|why| error(pc, 0x210b, why))?;
+        place(&mut candidate, &bytes, self.glyph_metrics.as_deref())
+            .map_err(|why| error(pc, 0x210b, why))?;
         vm.complete_system(SystemResult(0x4008))?;
         self.texts[index as usize] = Some(candidate);
         Ok(())

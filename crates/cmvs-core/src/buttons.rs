@@ -14,7 +14,7 @@ pub use list::ListGroup;
 pub const BUTTON_GROUPS: usize = 6;
 pub const BUTTON_STATES: usize = 4;
 /// Research limit; the original allocates list nodes without a bound.
-const BUTTON_LIMIT: usize = 256;
+const BUTTON_LIMIT: usize = 1024;
 
 /// Node +48 + 16 * state: what 0x2215/0x2217 apply to a child of the group's object.
 /// State 0 is normal, 1 hovered, 2 pressed and 3 disabled.

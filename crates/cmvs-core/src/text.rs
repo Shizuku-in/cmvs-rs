@@ -9,10 +9,85 @@ use crate::{
 pub fn try_handle(vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
     match vm.pending_system() {
         Some((pc, 0xf1)) => compare(vm, pc).map(|()| true),
+        Some((pc, 0xf3)) => substring(vm, pc).map(|()| true),
         Some((pc, 0xf8)) => strlen(vm, pc).map(|()| true),
         Some((pc, 0xfc)) => format(vm, pc).map(|()| true),
         _ => Ok(false),
     }
+}
+
+/// 0x20f3 / 0x1400744d0: byte offset/count, copying complete Shift-JIS pairs.
+/// Result 0 counts characters copied, not bytes. An empty range leaves the
+/// destination untouched, including when the source already ends at the offset.
+fn substring(vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
+    let arg = |distance| {
+        vm.stack()
+            .peek_u32(distance)
+            .map_err(|e| error(pc, 0x20f3, e.0))
+    };
+    let (target, source, start, count) = (arg(4)?, arg(8)?, arg(12)? as i32, arg(16)? as i32);
+    let slot = bank_slot(target).ok_or_else(|| {
+        error(
+            pc,
+            0x20f3,
+            "substring destination outside the string bank is not modeled",
+        )
+    })?;
+    let bytes = vm.resolve_string(source)?;
+    let end = start.wrapping_add(count);
+    let mut position = start;
+    let mut output = Vec::new();
+    let mut copied = 0;
+    while position < end {
+        let index = usize::try_from(position)
+            .map_err(|_| error(pc, 0x20f3, "negative substring offset"))?;
+        if index > bytes.len() {
+            return Err(error(
+                pc,
+                0x20f3,
+                "substring offset beyond source terminator",
+            ));
+        }
+        let Some(&byte) = bytes.get(index) else {
+            break;
+        };
+        let width = if (0x81..=0x9f).contains(&byte) || (0xe0..=0xfc).contains(&byte) {
+            2
+        } else {
+            1
+        };
+        let next = index + width;
+        if next > bytes.len() {
+            return Err(error(
+                pc,
+                0x20f3,
+                "substring ends with an incomplete Shift-JIS pair",
+            ));
+        }
+        output.extend_from_slice(&bytes[index..next]);
+        if output.len() >= 1024 {
+            return Err(error(pc, 0x20f3, "substring exceeds destination slot"));
+        }
+        position = position.wrapping_add(width as i32);
+        copied += 1;
+    }
+    if copied != 0 && bank_slot(source) == Some(slot) {
+        return Err(error(
+            pc,
+            0x20f3,
+            "overlapping substring source and destination is not modeled",
+        ));
+    }
+    vm.complete_system(SystemResult(0x4010))?;
+    if copied != 0 {
+        vm.state_mut()
+            .set_string(slot, &output)
+            .expect("validated destination");
+    }
+    vm.state_mut()
+        .set_system_integer(0, copied)
+        .expect("slot 0 exists");
+    Ok(())
 }
 
 /// 0x20f1 / 0x140074400: system result 0 = 1 when the SP-4 and SP-8 strings are equal under

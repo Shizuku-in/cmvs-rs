@@ -329,6 +329,21 @@ impl AudioHost {
         backend: &mut dyn AudioBackend,
     ) -> Result<bool, Box<dyn Error>> {
         match vm.pending_system() {
+            Some((_, command @ (0x239 | 0x23b | 0x23d))) => {
+                // Device constructor 0x140087440, queried by 0x140087d00.
+                // No effect-setting command is accepted yet, so these stay at reset.
+                let value = match command {
+                    0x239 => 128,
+                    0x23b => 500,
+                    _ => 1000,
+                };
+                vm.complete_system(SystemResult(0x4000))?;
+                vm.state_mut()
+                    .set_system_integer(0, value)
+                    .expect("slot 0 exists");
+                return Ok(true);
+            }
+            Some((_, 0x2d6..=0x2dd)) => return self.try_settings_query(vm),
             Some((_, 0xa8)) => return self.try_voice_stop(vm, backend),
             Some((_, 0xa6)) => return self.try_voice_play(vm, backend),
             Some((_, 0xb1)) => return self.try_start(vm, backend),
@@ -396,6 +411,43 @@ impl AudioHost {
             flag,
         });
         self.played[channel as usize] = 256;
+        Ok(true)
+    }
+    /// Configuration reads use the same settings as playback. Changing active device
+    /// channels needs a backend transaction and remains an explicit barrier.
+    fn try_settings_query(&self, vm: &mut Machine<'_>) -> Result<bool, Box<dyn Error>> {
+        let (pc, command) = vm.pending_system().expect("pending configuration command");
+        let arg = |distance| {
+            vm.stack()
+                .peek_u32(distance)
+                .map_err(|e| error(pc, command + 0x2000, e.0))
+        };
+        if arg(4)? != 0 {
+            return Err(error(
+                pc,
+                command + 0x2000,
+                "changing audio settings is not implemented",
+            )
+            .into());
+        }
+        if command >= 0x2d9 {
+            arg(8)?;
+        }
+        let value = match command {
+            0x2d6 => u32::from(self.settings.bgm_enabled),
+            0x2d7 => u32::from(self.settings.se_enabled),
+            0x2d8 => u32::from(self.settings.voice_enabled),
+            0x2d9 => self.settings.master,
+            0x2da => self.settings.bgm,
+            0x2db => self.settings.se,
+            0x2dc => self.settings.voice,
+            0x2dd => self.settings.movie,
+            _ => unreachable!(),
+        };
+        vm.complete_system(SystemResult(0x4008))?;
+        vm.state_mut()
+            .set_system_integer(0, value)
+            .expect("slot 0 exists");
         Ok(true)
     }
 

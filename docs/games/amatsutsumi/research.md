@@ -1949,3 +1949,17 @@ cargo test --offline --release --test save_slots external_backlog -- --ignored -
 ```
 
 输出 `backlog: 33 entries, 680 glyphs, voice "cosn1001001.ogg", jump to entry 27 -> 29 entries`。同时重跑 `external_in_game_menus_save_and_load` 与 `external_auto_resume_restores_the_original_snapshot`，均通过。原生窗口中的回看操作尚未实测。
+
+## 系统设置入口第一轮（2026-10-30）
+
+基线 `89e87e9`，二进制身份及逐条语义见[系统设置入口与配置查询](vm-semantics.md#系统设置入口与配置查询2026-10-30)。实现默认字体名查询、双字节完整复制的子串、文字默认字体设置、设备尺寸消息窗口、非阻塞文字初始化/查询、运行时配置读接口和自动送页参数状态；活动设备/排版尚无消费者的配置写入仍显式报错，没有把未知设置当空操作。
+
+仓库外真实探针 `local/settings_probe.rs`：从正常启动运行到标题后读原版 save000，在 sn1001 文字等待点击工具栏「システム」，经字体查询与名称显示、设置项读取、292按钮初始化和窗口6说明文字进入设置循环 `intproc.ps3 / 0x7aff6`；空闲120帧后右键退出，再回到 `sn1001.ps3 / 0xf808 / 0x2153`。字体度量来自 `C:/Windows/Fonts/msgothic.ttc` face0，与桌面相同。原游戏和存档只读，用户目录为 target/tmp 独立副本。
+
+画面检查仍失败：场景64/子66，源矩形 (864,766,450,24)，图像1280×1536，右边超出34像素，软件呈现器报 `scene source rectangle outside image`。没有跳过该对象，未宣称设置画面或原生窗口通过。`0x1400220e0` 设置采样器 U/V 为CLAMP，`0x140022500` 另有按设备纹理块生成顶点/UV的分支；实际图像的分块/补齐和越界部分如何处理仍需继续核对，不能只放宽边界检查。
+
+标题入口的临时点击尚未进入设置；后续要在稳定标题状态重新定位按钮。设置值的修改、恢复默认、页切换、持久化/重启与原生输出尚未验收。自动送页仍在0x2153处保留计时/语音策略屏障。
+
+新增外部测试 `external_system_settings_toolbar_opens_and_returns_to_text`（desktop feature）：仅验证上述工具栏进入、292按钮、窗口6、右键返回，不将无窗口VM重放当作画面通过。运行需 `CMVS_GAME_ROOT` 和 `CMVS_FONT_PATH`；真实资源、日志与临时探针不入Git。
+
+本轮检查：`cargo fmt --check`、`cargo fmt --all --check` 通过；默认708项测试通过（7项外部测试忽略），workspace全功能767项通过（9项忽略）；默认/全功能严格Clippy通过。显式运行工具栏设置外部测试通过（0.49s），另重跑既有 `external_in_game_menus_save_and_load` 通过（0.91s）。合成测试覆盖字体银行查询/错误原子性、自动参数原始字读写、音频查询使用播放配置、完整双字节子串与空复制、半角墨迹宽度/换行、设备尺寸窗口回收、非阻塞文字查询和具名字体快照双副本一致性。

@@ -55,6 +55,7 @@ fn create(code: &mut Vec<u8>, slot: u32, text: u32, rect: [u32; 4]) {
 /// The text object 0x215d leaves after 0x14005d3b0, for a 1280x720 logical size.
 fn created_text(position: [i32; 2], size: [u32; 2]) -> TextObject {
     TextObject {
+        font_face: Vec::new(),
         scale_bits: 1.0f32.to_bits(),
         logical_size: [1280, 720],
         position,
@@ -284,8 +285,9 @@ fn replacing_a_text_object_used_by_another_window_is_rejected() {
 }
 
 #[test]
-fn device_sized_creation_and_other_window_commands_are_left_pending() {
-    for command in [0x2140u16, 0x2170] {
+fn image_loading_stays_pending_without_an_image_source() {
+    {
+        let command = 0x2170u16;
         let script = script(&command.to_le_bytes());
         let mut vm = Machine::new(&script).unwrap();
         pending(&mut vm);
@@ -3020,6 +3022,82 @@ fn direct_output(code: &mut Vec<u8>) {
     call(code, 0x2103, &[100, 70, 5, 10, 1]);
     call(code, 0x2105, &[0, 0, 20, 1]);
     call(code, 0x2113, &[0, 1]);
+}
+
+#[test]
+fn direct_half_width_text_uses_backend_ink_extent_with_minimum_half_size_and_wraps() {
+    #[derive(Debug)]
+    struct Metrics;
+    impl cmvs_rs::message::GlyphMetrics for Metrics {
+        fn ink_width(&self, code: u16, _: u32) -> Result<u32, &'static str> {
+            match code {
+                0x20 => Ok(0),
+                0x57 => Ok(17),
+                _ => Err("missing synthetic glyph"),
+            }
+        }
+    }
+    let mut code = vec![];
+    direct_output(&mut code);
+    call(&mut code, 0x210b, &[1, 1]);
+    let script = script_with_text(&code, b"\0W W W\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    messages.set_record_output(true);
+    messages.set_glyph_metrics(Box::new(Metrics));
+    run(&mut vm, &mut messages, 5);
+    let text = messages.text(1).unwrap();
+    assert_eq!(
+        text.glyphs.iter().map(|g| g.position).collect::<Vec<_>>(),
+        [[10, 5], [27, 5], [37, 5], [54, 5], [10, 25]]
+    );
+    assert_eq!(text.cursor, [27, 25]);
+}
+
+#[test]
+fn device_window_creation_matches_explicit_viewport_and_cleans_six_words() {
+    let mut code = vec![];
+    call(&mut code, 0x2140, &[60, 70, 20, 10, 3, 6]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 1);
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(messages.window(6).unwrap().text, 3);
+    assert_eq!(messages.text(3), Some(&created_text([10, 20], [70, 60])));
+}
+
+#[test]
+fn polled_window_output_appends_only_on_initialization_and_never_yields() {
+    let mut code = vec![];
+    create(&mut code, 6, 6, [0, 0, 300, 100]);
+    for initialize in [0, 1, 1] {
+        call(&mut code, 0x2159, &[initialize, 0, 8191, 6]);
+    }
+    let script = script_with_text(&code, b"AB\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    messages.set_record_output(true);
+    run(&mut vm, &mut messages, 1);
+    for expected in [0, 0, 1] {
+        pending(&mut vm);
+        assert!(
+            messages
+                .try_record_poll(&mut vm, cmvs_rs::message_flags::MessageFlags::default())
+                .unwrap()
+        );
+        assert!(vm.pending_system().is_none());
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(messages.text(6).unwrap().glyphs.len(), 2);
+        assert_eq!(vm.state().system_integer(0), Some(expected));
+        if expected == 0 {
+            messages.advance_frame(if messages.text(6).unwrap().glyphs[0].elapsed_ms == 0 {
+                20
+            } else {
+                400
+            });
+        }
+    }
 }
 
 #[test]

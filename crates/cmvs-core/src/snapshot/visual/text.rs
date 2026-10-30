@@ -17,7 +17,8 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<TextObject, FormatError> {
     if !matches!(glyph_capacity, 0 | 196) {
         return Err(FormatError("unsupported snapshot text atlas capacity"));
     }
-    if !r.string(64)?.is_empty() {
+    let font_face = r.string(64)?.to_vec();
+    if !font_face.is_empty() && font_face != crate::settings::DEFAULT_FONT_FACE {
         return Err(FormatError("snapshot named font face is not implemented"));
     }
     let logical_size = r.words::<2>()?.map(|v| v as i32);
@@ -32,7 +33,9 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<TextObject, FormatError> {
     let aw = |offset: usize| word(a, offset - 8);
     let bw = |offset: usize| word(b, offset - 176);
     let cw = |offset: usize| word(c, offset - 328);
-    if a[36..100].iter().any(|&v| v != 0) || aw(108) != 0 || aw(112) != 1 || bw(180) != 148 {
+    let mut face_field = [0; 64];
+    face_field[..font_face.len()].copy_from_slice(&font_face);
+    if a[36..100] != face_field || aw(108) != 0 || aw(112) != 1 || bw(180) != 148 {
         return Err(FormatError("unsupported snapshot text font or layout mode"));
     }
     if cw(328) > 1 {
@@ -69,6 +72,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<TextObject, FormatError> {
     }
     r.finish()?;
     Ok(TextObject {
+        font_face,
         scale_bits: 1.0f32.to_bits(),
         logical_size,
         position: [aw(8) as i32, aw(12) as i32],
@@ -99,12 +103,16 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<TextObject, FormatError> {
 
 /// Writer 0x14005c790 for the supported subset: default face, no displayed glyphs.
 pub(crate) fn encode(text: &TextObject) -> Result<Vec<u8>, FormatError> {
+    if !text.font_face.is_empty() && text.font_face != crate::settings::DEFAULT_FONT_FACE {
+        return Err(FormatError("snapshot named font face is not implemented"));
+    }
     if !text.glyphs.is_empty() {
         return Err(FormatError(
             "saving displayed text glyphs is not implemented",
         ));
     }
     let mut a = [0u8; 156];
+    a[36..36 + text.font_face.len()].copy_from_slice(&text.font_face);
     let mut b = [0u8; 148];
     let mut c = [0u8; 208];
     fn put(block: &mut [u8], base: usize, offset: usize, value: u32) {
@@ -158,6 +166,7 @@ pub(crate) fn encode(text: &TextObject) -> Result<Vec<u8>, FormatError> {
     put(&mut c, 328, 532, text.layout_scratch[1]);
     let mut out = 3u16.to_le_bytes().to_vec();
     out.extend(text.glyph_capacity.to_le_bytes());
+    out.extend(&text.font_face);
     out.push(0);
     for size in text.logical_size {
         out.extend((size as u32).to_le_bytes());
@@ -167,4 +176,35 @@ pub(crate) fn encode(text: &TextObject) -> Result<Vec<u8>, FormatError> {
     out.extend(c);
     out.extend(0u16.to_le_bytes());
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode, encode};
+    #[test]
+    fn explicit_default_face_round_trips_both_serialized_copies() {
+        let face = crate::settings::DEFAULT_FONT_FACE;
+        let mut bytes = 3u16.to_le_bytes().to_vec();
+        bytes.extend(196u32.to_le_bytes());
+        bytes.extend(face);
+        bytes.push(0);
+        bytes.extend(1280u32.to_le_bytes());
+        bytes.extend(720u32.to_le_bytes());
+        let mut a = [0; 156];
+        a[36..36 + face.len()].copy_from_slice(face);
+        a[104..108].copy_from_slice(&1u32.to_le_bytes());
+        let mut b = [0; 148];
+        b[4..8].copy_from_slice(&148u32.to_le_bytes());
+        bytes.extend(a);
+        bytes.extend(b);
+        bytes.extend([0; 208]);
+        bytes.extend(0u16.to_le_bytes());
+        let text = decode(&bytes).unwrap();
+        assert_eq!(text.font_face, face);
+        assert_eq!(encode(&text).unwrap(), bytes);
+        // The raw +44 block must agree with the preceding font-name string.
+        let at = 6 + face.len() + 1 + 8 + 36;
+        bytes[at] = 0;
+        assert!(decode(&bytes).is_err());
+    }
 }

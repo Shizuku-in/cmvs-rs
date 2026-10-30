@@ -40,6 +40,7 @@ pub mod scene;
 pub mod scene_render;
 pub mod script_control;
 pub mod sequence;
+pub mod settings;
 pub mod snapshot;
 pub mod system_save;
 pub mod text;

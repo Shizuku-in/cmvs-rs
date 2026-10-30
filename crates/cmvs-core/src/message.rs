@@ -4,9 +4,9 @@
 //! 0x14005cf70), +4128 twelve text objects (0x250 bytes, constructor 0x14005c550) and +4224
 //! twelve font objects (0x70 bytes, 0x140059990); the engine constructor 0x140014e60 zeroes
 //! all three tables. A window's first word (+0) names its text object, and +2528 caches that
-//! object's pointer. 0x215d creates windows and 0x2141 destroys them. 0x2140 (0x140075a50)
-//! differs from 0x215d only in taking the logical size from the device, which is not
-//! modeled, so it stays unhandled. 0x215b and 0x2142..0x2149 set window and text object
+//! object's pointer. 0x215d/0x2140 create windows and 0x2141 destroys them. 0x2140
+//! (0x140075a50) takes the logical size from the configured research device.
+//! 0x215b and 0x2142..0x2149 set window and text object
 //! fields; 0x2170/0x2171, 0x2178..0x217b, 0x217f and 0x2180..0x2185 drive the window's own
 //! scene object; 0x2190..0x2192 fill its 32 button records and 0x2150 moves the window;
 //! 0x21cf/0x21d0 build frame animations. 0x2100 creates a text object without a window;
@@ -112,6 +112,9 @@ pub struct LineBreakRules {
 /// 0x14005bc90. Unlisted constructor/0x14005d3b0 defaults are documented in vm-semantics.md.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextObject {
+    /// Requested face (+44), empty selects the configured default. Currently only
+    /// the original default face is supported by the explicit font backend.
+    pub font_face: Vec<u8>,
     /// Uniform scale of the text's scene object, kept as f32 bits (0x20ec).
     pub scale_bits: u32,
     /// Configuration words 4/5 (+552/+556): the script-space size that 0x14005aac0 divides
@@ -169,8 +172,15 @@ pub struct TextObject {
     pub glyph_capacity: u32,
 }
 
+/// Ink extent supplied by the selected font backend for direct single-byte output.
+/// The core applies the original minimum half-size advance and spacing separately.
+pub trait GlyphMetrics: std::fmt::Debug {
+    fn ink_width(&self, code: u16, size: u32) -> Result<u32, &'static str>;
+}
+
 #[derive(Debug, Default)]
 pub struct MessageHost {
+    glyph_metrics: Option<Box<dyn GlyphMetrics>>,
     record_output: bool,
     windows: [Option<MessageWindow>; MESSAGE_WINDOWS],
     texts: [Option<TextObject>; TEXT_OBJECTS],
@@ -183,6 +193,10 @@ pub struct MessageHost {
 }
 
 impl MessageHost {
+    /// Font device service; headless recording keeps the missing-metrics barrier.
+    pub fn set_glyph_metrics(&mut self, metrics: Box<dyn GlyphMetrics>) {
+        self.glyph_metrics = Some(metrics);
+    }
     pub(crate) fn snapshot_preview(
         texts: [Option<TextObject>; TEXT_OBJECTS],
         windows: [Option<MessageWindow>; MESSAGE_WINDOWS],
@@ -466,7 +480,7 @@ impl MessageHost {
         match vm.pending_system() {
             Some((pc, 0xec)) => self.scale(vm, pc).map(|()| true),
             Some((pc, 0x141)) => self.destroy(vm, pc).map(|()| true),
-            Some((pc, 0x15d)) => self.create(vm, pc).map(|()| true),
+            Some((pc, command @ (0x140 | 0x15d))) => self.create(vm, pc, command).map(|()| true),
             Some((pc, command @ (0x142..=0x149 | 0x14f | 0x15b))) => {
                 self.set(vm, pc, command).map(|()| true)
             }
@@ -496,7 +510,7 @@ impl MessageHost {
             }
             Some((pc, 0x100)) => self.create_text(vm, pc).map(|()| true),
             Some((pc, 0x10b)) if self.record_output => self.place_text(vm, pc).map(|()| true),
-            Some((pc, command @ (0x101..=0x105 | 0x107 | 0x10c..=0x110 | 0x113 | 0x11a))) => {
+            Some((pc, command @ (0x101..=0x107 | 0x10c..=0x110 | 0x113 | 0x11a))) => {
                 self.text_setter(vm, pc, command).map(|()| true)
             }
             _ => Ok(false),
@@ -889,6 +903,7 @@ impl MessageHost {
             .expect("slot 0 exists");
         self.fonts[index] = true;
         self.texts[index] = Some(TextObject {
+            font_face: Vec::new(),
             scale_bits: 1.0f32.to_bits(),
             logical_size: RESEARCH_SCREEN.map(|v| v as i32),
             position: [0, 0],
@@ -940,7 +955,7 @@ impl MessageHost {
         let op = command + 0x2000;
         let count = match command {
             0x101 | 0x104 => 1,
-            0x10e | 0x10f | 0x110 | 0x113 | 0x11a => 2,
+            0x106 | 0x10e | 0x10f | 0x110 | 0x113 | 0x11a => 2,
             0x102 | 0x107 | 0x10c | 0x10d => 3,
             0x105 => 4,
             _ => 5,
@@ -990,6 +1005,15 @@ impl MessageHost {
                 "text object index without an object sets an unmodeled flag",
             ));
         }
+        let face = if command == 0x106 {
+            let face = vm.resolve_string(a as u32)?;
+            if !face.is_empty() && face != crate::settings::DEFAULT_FONT_FACE {
+                return Err(error(pc, op, "named font face is not implemented"));
+            }
+            Some(face)
+        } else {
+            None
+        };
         vm.complete_system(SystemResult(0x4000 + 4 * count as u16))?;
         let text = self.texts[index].as_mut().expect("checked above");
         match command {
@@ -1012,6 +1036,7 @@ impl MessageHost {
                     }
                 }
             }
+            0x106 => text.font_face = face.expect("resolved above"),
             0x107 => {
                 for (color, value) in [&mut text.color, &mut text.decoration_color]
                     .into_iter()
@@ -1804,19 +1829,20 @@ impl MessageHost {
     /// new index, creates the font object there if absent, then builds the text object and
     /// the window. Returns 0x4020. Out-of-range indices only set +12056 bits 0x10000 and
     /// 0x1000 (unmodeled).
-    fn create(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
-        let slot = window_slot(vm, pc, 0x215d)?;
+    fn create(&mut self, vm: &mut Machine<'_>, pc: usize, command: u16) -> Result<(), DecodeError> {
+        let op = command + 0x2000;
+        let slot = window_slot(vm, pc, op)?;
         let word = |distance| {
             vm.stack()
                 .peek_u32(distance)
                 .map(|value| value as i32)
-                .map_err(|e| error(pc, 0x215d, e.0))
+                .map_err(|e| error(pc, op, e.0))
         };
         let text = word(8)?;
         if text < 0 {
             return Err(error(
                 pc,
-                0x215d,
+                op,
                 "negative text object index indexes before the table",
             ));
         }
@@ -1824,28 +1850,32 @@ impl MessageHost {
         if text >= TEXT_OBJECTS {
             return Err(error(
                 pc,
-                0x215d,
+                op,
                 "text object index outside 0..11 sets an unmodeled flag",
             ));
         }
-        let [x, y, width, height, logical_width, logical_height] =
-            [12, 16, 20, 24, 28, 32].map(word);
+        let [x, y, width, height] = [12, 16, 20, 24].map(word);
         let (position, size) = ([x?, y?], [width?, height?]);
-        let logical_size = [logical_width?, logical_height?];
+        let logical_size = if command == 0x140 {
+            RESEARCH_SCREEN.map(|v| v as i32)
+        } else {
+            [word(28)?, word(32)?]
+        };
         // The original frees the text object without clearing other windows' +2528 cache.
         if (0..MESSAGE_WINDOWS)
             .any(|other| other != slot && self.window(other).is_some_and(|w| w.text == text))
         {
             return Err(error(
                 pc,
-                0x215d,
+                op,
                 "replacing a text object another window uses leaves a dangling pointer",
             ));
         }
-        vm.complete_system(SystemResult(0x4020))?;
+        vm.complete_system(SystemResult(if command == 0x140 { 0x4018 } else { 0x4020 }))?;
         self.fonts[text] = true;
         // 0x14005d3b0's setter calls override the constructor values (e.g. +144 30 -> 100).
         self.texts[text] = Some(TextObject {
+            font_face: Vec::new(),
             scale_bits: 1.0f32.to_bits(),
             logical_size,
             position,

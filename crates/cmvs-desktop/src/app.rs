@@ -595,6 +595,9 @@ fn run() -> Result<(), Box<dyn Error>> {
     startup.set_snapshot_policy(snapshot_policy);
     startup.set_save_clock(Box::new(utc_save_time));
     startup.set_record_text(record_text || font.is_some());
+    if let Some(font) = &font {
+        startup.set_glyph_metrics(font.metrics());
+    }
     if font.is_some() {
         println!(
             "# OpenType font preview enabled; explicit font file, Shift-JIS, supported single-line layout; glyph masks differ from GDI"

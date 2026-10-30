@@ -191,6 +191,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut gesture = PointerGesture::default();
     let mut history = HistoryHost::default();
     let mut message_flags = MessageFlags::default();
+    let mut settings = cmvs_rs::settings::SettingsHost::default();
     let mut buttons = ButtonHost::default();
     let mut movies = MovieHost::default();
     let mut sequence = SequenceHost::default();
@@ -494,6 +495,14 @@ fn run() -> Result<(), Box<dyn Error>> {
                             )))
                             .collect::<Vec<_>>(),
                         buttons.merged_states(),
+                        machine.state().system_integer(0)
+                    );
+                    continue;
+                }
+                if settings.try_handle(&mut machine)? {
+                    println!(
+                        "# configuration 0x{:04x}; system_integer[0]={:?}",
+                        command + 0x2000,
                         machine.state().system_integer(0)
                     );
                     continue;

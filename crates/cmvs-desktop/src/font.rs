@@ -9,14 +9,54 @@ use cmvs_core::{
     scene::{DrawState, ObjectImage, SceneHost, SceneObject},
     scene_render,
 };
-use std::{collections::BTreeMap, error::Error, fs::File, io::Read, path::Path};
+use std::{collections::BTreeMap, error::Error, fs::File, io::Read, path::Path, sync::Arc};
 
 const MAX_FONT: usize = 32 * 1024 * 1024;
 
 /// No automatic font discovery or redistribution. TTC face selection is explicit.
 pub struct FontRenderer {
-    font: FontVec,
+    font: Arc<FontVec>,
     cache: BTreeMap<[u32; 8], RgbaImage>,
+}
+
+struct PreviewMetrics(Arc<FontVec>);
+impl std::fmt::Debug for PreviewMetrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OpenType preview metrics")
+    }
+}
+impl cmvs_core::message::GlyphMetrics for PreviewMetrics {
+    fn ink_width(&self, code: u16, size: u32) -> Result<u32, &'static str> {
+        if !(1..=128).contains(&size) {
+            return Err("glyph size outside 1..128 preview range");
+        }
+        let ch = character(code).map_err(|e| e.0)?;
+        let id = self.0.glyph_id(ch);
+        if id.0 == 0 {
+            return Err("selected font has no glyph for a requested character");
+        }
+        let scale = size as f32;
+        let baseline = self.0.as_scaled(scale).ascent();
+        let Some(outline) = self
+            .0
+            .outline_glyph(id.with_scale_and_position(scale, point(0.0, baseline)))
+        else {
+            return if ch.is_whitespace() {
+                Ok(0)
+            } else {
+                Err("selected font lacks a supported outline")
+            };
+        };
+        let bounds = outline.px_bounds();
+        if !bounds.min.x.is_finite() || !bounds.max.x.is_finite() {
+            return Err("nonfinite font metrics");
+        }
+        let left = bounds.min.x.max(0.0);
+        let width = (bounds.max.x - bounds.min.x)
+            .max(0.0)
+            .min((scale - left).max(0.0));
+        Ok((left + width) as u32)
+    }
 }
 
 fn character(code: u16) -> Result<char, FormatError> {
@@ -131,9 +171,14 @@ impl FontRenderer {
         let font = FontVec::try_from_vec_and_index(bytes, face)
             .map_err(|_| FormatError("invalid OpenType font or collection face index"))?;
         Ok(Self {
-            font,
+            font: Arc::new(font),
             cache: BTreeMap::new(),
         })
+    }
+    /// Matches this renderer's selected font; OpenType ink bounds replace GDI's
+    /// device metrics. Whitespace deterministically has zero ink extent.
+    pub fn metrics(&self) -> Box<dyn cmvs_core::message::GlyphMetrics> {
+        Box::new(PreviewMetrics(Arc::clone(&self.font)))
     }
     fn glyph(&mut self, glyph: &RecordedGlyph) -> Result<RgbaImage, FormatError> {
         if !(1..=128).contains(&glyph.size) {
@@ -216,6 +261,11 @@ impl FontRenderer {
             .filter_map(|i| messages.text(i))
             .filter(|t| t.visible && !t.glyphs.is_empty())
         {
+            if !text.font_face.is_empty()
+                && text.font_face != cmvs_core::settings::DEFAULT_FONT_FACE
+            {
+                return Err(FormatError("named font face is not implemented"));
+            }
             if text.logical_size != [1280, 720] {
                 return Err(FormatError(
                     "font preview requires 1280x720 text coordinates",

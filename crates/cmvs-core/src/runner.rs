@@ -132,6 +132,7 @@ pub struct Startup<'a> {
     save_info: SaveInfo,
     gesture: PointerGesture,
     message_flags: MessageFlags,
+    settings: crate::settings::SettingsHost,
     messages: MessageHost,
     history: HistoryHost,
     random: CrtRandom,
@@ -205,6 +206,7 @@ impl<'a> Startup<'a> {
             save_info: SaveInfo::default(),
             gesture: PointerGesture::default(),
             message_flags: MessageFlags::default(),
+            settings: crate::settings::SettingsHost::default(),
             messages: MessageHost::default(),
             history: HistoryHost::default(),
             // Explicit research seed, like the virtual tick; the original seeds from timeGetTime.
@@ -424,6 +426,9 @@ impl<'a> Startup<'a> {
     /// Explicit single-line message recording; no font pixels are generated.
     pub fn set_record_text(&mut self, enabled: bool) {
         self.messages.set_record_output(enabled);
+    }
+    pub fn set_glyph_metrics(&mut self, metrics: Box<dyn crate::message::GlyphMetrics>) {
+        self.messages.set_glyph_metrics(metrics);
     }
     pub fn save_menu(&self) -> &SaveMenuHost {
         &self.save_menu
@@ -746,6 +751,10 @@ impl<'a> Startup<'a> {
             || self.gesture.try_handle(&mut self.machine)?
             || self.save_menu.try_handle_popup(&mut self.machine)?
             || self.message_flags.try_handle(&mut self.machine)?
+            || self.settings.try_handle(&mut self.machine)?
+            || self
+                .messages
+                .try_record_poll(&mut self.machine, self.message_flags)?
             || self
                 .messages
                 .try_handle_scene(&mut self.machine, &mut self.scene)?
