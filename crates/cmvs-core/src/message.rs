@@ -30,6 +30,7 @@ mod output;
 mod wait;
 pub use auxiliary::{AuxiliaryGlyph, AuxiliaryGlyphAtlas, AuxiliaryText};
 pub use output::RecordedGlyph;
+pub use wait::AutoAdvanceContext;
 
 pub const MESSAGE_WINDOWS: usize = 8;
 /// Independent +4328/+4392 tables; these slots are not message window indices.
@@ -180,6 +181,8 @@ pub trait GlyphMetrics: std::fmt::Debug {
 
 #[derive(Debug, Default)]
 pub struct MessageHost {
+    /// Global dword_1401015c4, shared by all message windows and retained while paused.
+    auto_elapsed: u32,
     glyph_metrics: Option<Box<dyn GlyphMetrics>>,
     record_output: bool,
     windows: [Option<MessageWindow>; MESSAGE_WINDOWS],

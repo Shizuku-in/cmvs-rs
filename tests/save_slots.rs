@@ -489,6 +489,22 @@ fn external_system_settings_entries_render_and_return() {
     assert_eq!(group.buttons.len(), 292);
     assert!(ui.run.messages().window(6).is_some());
     let initial_audio = ui.run.audio().settings();
+    for (index, y) in [380, 420, 460].into_iter().enumerate() {
+        let values =
+            |s: cmvs_rs::settings::AutoAdvanceSettings| [s.base, s.per_glyph, s.voice_wait];
+        let before = ui.run.settings().auto_advance();
+        ui.click([220, y], 30);
+        let after = ui.run.settings().auto_advance();
+        assert_ne!(values(before)[index], values(after)[index]);
+        for other in 0..3 {
+            if other != index {
+                assert_eq!(values(before)[other], values(after)[other]);
+            }
+        }
+        assert_eq!(before.sync_voice, after.sync_voice);
+        font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+            .unwrap();
+    }
     // The original slider logic quantizes the pointer and calls 0x22d9..0x22dd.
     for (index, y) in [252, 286, 320, 354, 388].into_iter().enumerate() {
         let before = ui.run.audio().settings();
@@ -592,8 +608,33 @@ fn external_system_settings_entries_render_and_return() {
     ui.press([640, 360], 3, 120);
     ui.wait_for_text();
     assert!(ui.run.buttons().group(1).is_none());
+    let before_auto = ui.run.history().entries().len();
+    ui.click(ui.toolbar(5), 0);
+    assert!(ui.run.message_flags().auto_advance());
+    let mut auto_frames = 0;
+    for _ in 0..2000 {
+        font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+            .unwrap();
+        auto_frames += 1;
+        ui.frame([640, 360], None);
+        if ui.run.history().entries().len() >= before_auto + 3 {
+            break;
+        }
+    }
+    assert!(ui.run.history().entries().len() >= before_auto + 3);
+    ui.click(ui.toolbar(5), 0);
+    assert!(!ui.run.message_flags().auto_advance());
+    ui.wait_for_text();
+    let stopped = ui.run.history().entries().len();
+    for _ in 0..240 {
+        font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+            .unwrap();
+        ui.frame([640, 360], None);
+    }
+    assert_eq!(ui.run.history().entries().len(), stopped);
+    assert!(ui.waiting_for_text());
     println!(
-        "settings: title + toolbar; volume + voice ducking sliders/reset/cancel, three audio switches, three pages, 260 rendered frames, right-click return"
+        "settings: title + toolbar; audio and auto sliders, resets, three pages, 263 settings frames; auto advanced three entries in {auto_frames} rendered frames; disabled then idle 240 rendered frames"
     );
 }
 

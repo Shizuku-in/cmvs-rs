@@ -7,6 +7,57 @@ mod bytecode;
 use bytecode::{command, pending, script};
 
 #[test]
+fn auto_startup_parameters_retain_raw_words_and_apply_text_delay_formula() {
+    use cmvs_rs::settings::AutoAdvanceSettings;
+    let host = SettingsHost::from_ini(b"[MESSAGE_INFO]\nAUTO_MODE_1=-1\nAUTO_MODE_2=10\nAUTO_MODE_3=4\nAUTO_MODE_4=7\nAUTO_VOICE_SYNC=0\n");
+    assert_eq!(
+        host.auto_advance(),
+        AutoAdvanceSettings {
+            base: u32::MAX,
+            per_glyph: 10,
+            acceleration: 4,
+            voice_wait: 7,
+            sync_voice: false
+        }
+    );
+    let simple = AutoAdvanceSettings {
+        base: 1,
+        per_glyph: 10,
+        ..Default::default()
+    };
+    assert_eq!(simple.text_delay_ms(4).unwrap(), 300);
+    assert_eq!(
+        AutoAdvanceSettings {
+            acceleration: 4,
+            ..simple
+        }
+        .text_delay_ms(4)
+        .unwrap(),
+        294
+    );
+    assert_eq!(
+        AutoAdvanceSettings {
+            base: 1000,
+            acceleration: 4,
+            ..simple
+        }
+        .text_delay_ms(4)
+        .unwrap(),
+        100200
+    );
+    assert!(simple.text_delay_ms(4097).is_err());
+    assert_eq!(
+        AutoAdvanceSettings {
+            base: u32::MAX,
+            ..Default::default()
+        }
+        .text_delay_ms(0)
+        .unwrap(),
+        u32::MAX - 99
+    );
+}
+
+#[test]
 fn audio_use_switches_normalize_and_skip_repeated_writes() {
     use cmvs_rs::audio::{AudioHost, RecordingAudio};
     for op in 0x22d6..=0x22d8 {

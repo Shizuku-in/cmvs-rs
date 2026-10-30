@@ -1144,9 +1144,8 @@ fn message_wait_hidden_window_ignores_skip_and_preserves_all_input_and_children(
 }
 
 #[test]
-fn message_wait_rejects_unsupported_auto_missing_cursor_draw_and_bad_arguments_atomically() {
+fn message_wait_rejects_missing_cursor_draw_and_bad_arguments_atomically() {
     for (auto, child, words) in [
-        (true, false, vec![u32::MAX, 0, 0]),
         (false, true, vec![u32::MAX, 0, 0]),
         (false, false, vec![u32::MAX, 0, 8]),
         (false, false, vec![u32::MAX, 0, u32::MAX]),
@@ -1184,6 +1183,343 @@ fn message_wait_rejects_unsupported_auto_missing_cursor_draw_and_bad_arguments_a
         assert_eq!(vm.stack().len_bytes(), words.len() * 4);
         assert_eq!(vm.repeat_count(), 0);
         assert_eq!(input, old);
+    }
+}
+
+struct AutoVoice {
+    playing: bool,
+    fail: bool,
+}
+
+#[test]
+fn pointer_gesture_result_blocks_auto_manual_and_skip_without_advancing_timer() {
+    use cmvs_rs::{message::AutoAdvanceContext, settings::AutoAdvanceSettings};
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 100, 100]);
+    call(&mut code, 0x2153, &[3, 0, 0]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 1);
+    pending(&mut vm);
+    let mut input = ActionInput::default();
+    input.set_pointer(-1, -1);
+    input.set(0, false, false, true).unwrap();
+    let audio = AutoVoice {
+        playing: true,
+        fail: true,
+    };
+    let context = AutoAdvanceContext {
+        settings: AutoAdvanceSettings {
+            base: 1,
+            sync_voice: false,
+            ..Default::default()
+        },
+        delta_ms: 10000,
+        gesture_result: true,
+        audio: &audio,
+    };
+    assert_eq!(
+        messages
+            .try_wait_with_auto(&mut vm, &mut input, wait_flags(true, true), context)
+            .unwrap(),
+        Some(Step::Yield)
+    );
+    assert!(input.released(0));
+    input.consume(0);
+    for expected in [Step::Yield, Step::Continue] {
+        assert_eq!(
+            messages
+                .try_wait_with_auto(
+                    &mut vm,
+                    &mut input,
+                    wait_flags(false, true),
+                    AutoAdvanceContext {
+                        delta_ms: 50,
+                        gesture_result: false,
+                        ..context
+                    }
+                )
+                .unwrap(),
+            Some(expected)
+        );
+    }
+}
+impl cmvs_rs::audio::AudioBackend for AutoVoice {
+    fn play(
+        &mut self,
+        _: &cmvs_rs::audio::AudioRequest,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        unreachable!()
+    }
+    fn voice_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn std::error::Error>> {
+        assert_eq!(channel, 3);
+        if self.fail {
+            Err("synthetic voice query failure".into())
+        } else {
+            Ok(self.playing.then_some(0))
+        }
+    }
+}
+
+#[test]
+fn automatic_wait_uses_frame_delta_and_resets_after_manual_or_timed_completion() {
+    use cmvs_rs::{message::AutoAdvanceContext, settings::AutoAdvanceSettings};
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 100, 100]);
+    for _ in 0..3 {
+        call(&mut code, 0x2153, &[u32::MAX, 0, 0]);
+    }
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 1);
+    pending(&mut vm);
+    let audio = AutoVoice {
+        playing: false,
+        fail: true,
+    };
+    let settings = AutoAdvanceSettings {
+        base: 1,
+        ..Default::default()
+    };
+    let mut input = ActionInput::default();
+    input.set_pointer(-1, -1);
+    for expected in [Step::Yield, Step::Yield, Step::Continue] {
+        assert_eq!(
+            messages
+                .try_wait_with_auto(
+                    &mut vm,
+                    &mut input,
+                    wait_flags(false, true),
+                    AutoAdvanceContext {
+                        settings,
+                        delta_ms: 40,
+                        gesture_result: false,
+                        audio: &audio
+                    }
+                )
+                .unwrap(),
+            Some(expected)
+        );
+    }
+    assert_eq!(vm.stack().len_bytes(), 0);
+    pending(&mut vm);
+    assert_eq!(
+        messages
+            .try_wait_with_auto(
+                &mut vm,
+                &mut input,
+                wait_flags(false, true),
+                AutoAdvanceContext {
+                    settings,
+                    delta_ms: 80,
+                    gesture_result: false,
+                    audio: &audio
+                }
+            )
+            .unwrap(),
+        Some(Step::Yield)
+    );
+    input.set(0, false, false, true).unwrap();
+    assert_eq!(
+        messages
+            .try_wait(&mut vm, &mut input, wait_flags(false, true))
+            .unwrap(),
+        Some(Step::Continue)
+    );
+    assert!(!input.released(0));
+    pending(&mut vm);
+    for expected in [Step::Yield, Step::Continue] {
+        assert_eq!(
+            messages
+                .try_wait_with_auto(
+                    &mut vm,
+                    &mut input,
+                    wait_flags(false, true),
+                    AutoAdvanceContext {
+                        settings,
+                        delta_ms: 50,
+                        gesture_result: false,
+                        audio: &audio
+                    }
+                )
+                .unwrap(),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn automatic_wait_restarts_timer_while_voice_plays_and_waits_after_it_ends() {
+    use cmvs_rs::{message::AutoAdvanceContext, settings::AutoAdvanceSettings};
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 100, 100]);
+    call(&mut code, 0x2153, &[7, 0, 0]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 1);
+    pending(&mut vm);
+    let settings = AutoAdvanceSettings {
+        base: 0,
+        voice_wait: 2,
+        ..Default::default()
+    };
+    let mut input = ActionInput::default();
+    input.set_pointer(-1, -1);
+    for (playing, delta, expected) in [
+        (false, 200, Step::Yield),
+        (true, 1000, Step::Yield),
+        (false, 200, Step::Yield),
+        (false, 200, Step::Yield),
+        (false, 50, Step::Continue),
+    ] {
+        let audio = AutoVoice {
+            playing,
+            fail: false,
+        };
+        assert_eq!(
+            messages
+                .try_wait_with_auto(
+                    &mut vm,
+                    &mut input,
+                    wait_flags(false, true),
+                    AutoAdvanceContext {
+                        settings,
+                        delta_ms: delta,
+                        gesture_result: false,
+                        audio: &audio
+                    }
+                )
+                .unwrap(),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
+fn automatic_wait_voice_query_failure_preserves_timer_command_input_and_window() {
+    use cmvs_rs::{message::AutoAdvanceContext, settings::AutoAdvanceSettings};
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 100, 100]);
+    call(&mut code, 0x2153, &[3, 0, 0]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 1);
+    pending(&mut vm);
+    let mut input = ActionInput::default();
+    input.set_pointer(-1, -1);
+    let old_input = input.clone();
+    let old_window = messages.window(0).cloned();
+    let pc = vm.pc();
+    let settings = AutoAdvanceSettings::default();
+    assert!(
+        messages
+            .try_wait_with_auto(
+                &mut vm,
+                &mut input,
+                wait_flags(false, true),
+                AutoAdvanceContext {
+                    settings,
+                    delta_ms: 200,
+                    gesture_result: false,
+                    audio: &AutoVoice {
+                        playing: false,
+                        fail: true
+                    }
+                }
+            )
+            .is_err()
+    );
+    assert_eq!(input, old_input);
+    assert_eq!(messages.window(0), old_window.as_ref());
+    assert_eq!(vm.pc(), pc);
+    assert_eq!(vm.repeat_count(), 0);
+    assert_eq!(vm.stack().len_bytes(), 12);
+    assert_eq!(
+        messages
+            .try_wait_with_auto(
+                &mut vm,
+                &mut input,
+                wait_flags(false, true),
+                AutoAdvanceContext {
+                    settings,
+                    delta_ms: 50,
+                    gesture_result: false,
+                    audio: &AutoVoice {
+                        playing: false,
+                        fail: false
+                    }
+                }
+            )
+            .unwrap(),
+        Some(Step::Yield)
+    );
+}
+
+#[test]
+fn automatic_wait_hidden_window_pauses_timer_and_sync_off_ignores_voice_device() {
+    use cmvs_rs::{message::AutoAdvanceContext, settings::AutoAdvanceSettings};
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 100, 100]);
+    call(&mut code, 0x214e, &[1, 0]);
+    call(&mut code, 0x214c, &[1, 0]);
+    call(&mut code, 0x2153, &[3, 0, 0]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 3);
+    pending(&mut vm);
+    let mut input = ActionInput::default();
+    let settings = AutoAdvanceSettings {
+        base: 1,
+        sync_voice: false,
+        ..Default::default()
+    };
+    let audio = AutoVoice {
+        playing: true,
+        fail: true,
+    };
+    assert_eq!(
+        messages
+            .try_wait_with_auto(
+                &mut vm,
+                &mut input,
+                wait_flags(false, true),
+                AutoAdvanceContext {
+                    settings,
+                    delta_ms: 10000,
+                    gesture_result: false,
+                    audio: &audio
+                }
+            )
+            .unwrap(),
+        Some(Step::Yield)
+    );
+    let mut show = vec![];
+    call(&mut show, 0x214c, &[0, 0]);
+    let show = self::script(&show);
+    let mut other = Machine::new(&show).unwrap();
+    run(&mut other, &mut messages, 1);
+    for expected in [Step::Yield, Step::Continue] {
+        assert_eq!(
+            messages
+                .try_wait_with_auto(
+                    &mut vm,
+                    &mut input,
+                    wait_flags(false, true),
+                    AutoAdvanceContext {
+                        settings,
+                        delta_ms: 50,
+                        gesture_result: false,
+                        audio: &audio
+                    }
+                )
+                .unwrap(),
+            Some(expected)
+        );
     }
 }
 

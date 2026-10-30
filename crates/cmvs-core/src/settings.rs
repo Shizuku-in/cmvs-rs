@@ -7,18 +7,93 @@ pub const DEFAULT_FONT_FACE: &[u8] = b"\x82l\x82r \x83S\x83V\x83b\x83N";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettingsHost {
     font_face: Vec<u8>,
-    /// +1556, +1560, +1568, +1572. Consumers of automatic advance remain a barrier.
-    auto_fields: [u32; 4],
+    auto: AutoAdvanceSettings,
+}
+
+/// +1556..+1572. Timer fields retain raw words, including negative INI/script values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AutoAdvanceSettings {
+    pub base: u32,
+    pub per_glyph: u32,
+    pub acceleration: u32,
+    pub voice_wait: u32,
+    pub sync_voice: bool,
+}
+impl Default for AutoAdvanceSettings {
+    fn default() -> Self {
+        Self {
+            base: 10,
+            per_glyph: 0,
+            acceleration: 0,
+            voice_wait: 0,
+            sync_voice: true,
+        }
+    }
+}
+impl AutoAdvanceSettings {
+    /// 0x14005e220: text record count includes ruby glyphs, not source byte count.
+    pub fn text_delay_ms(self, glyphs: usize) -> Result<u32, &'static str> {
+        if glyphs > 4096 {
+            return Err("auto advance glyph count exceeds research limit");
+        }
+        let linear = 5u32.wrapping_mul(
+            (glyphs as u32)
+                .wrapping_mul(self.per_glyph)
+                .wrapping_add(20u32.wrapping_mul(self.base)),
+        );
+        if self.acceleration == 0 || self.per_glyph == 0 {
+            return Ok(linear);
+        }
+        let target = self.per_glyph.wrapping_mul(5) as i32 as f32;
+        let increment = self.acceleration as i32 as f32 * 0.25;
+        let mut sum = 0.0f32;
+        let mut step = 0.0f32;
+        for _ in 0..glyphs {
+            sum += step;
+            if target > step {
+                step += increment;
+            }
+        }
+        // x64 CVTTSS2SI returns INT_MIN for an out-of-range float.
+        let reduction = if !(-2147483648.0..2147483648.0).contains(&sum) {
+            i32::MIN
+        } else {
+            sum as i32
+        };
+        let mut result = linear.wrapping_sub(reduction as u32);
+        if result > 65535 {
+            result = linear;
+        }
+        Ok(result.max(self.base.wrapping_mul(100)))
+    }
 }
 impl Default for SettingsHost {
     fn default() -> Self {
         Self {
             font_face: DEFAULT_FONT_FACE.to_vec(),
-            auto_fields: [10, 0, 0, 1],
+            auto: AutoAdvanceSettings::default(),
         }
     }
 }
 impl SettingsHost {
+    pub fn auto_advance(&self) -> AutoAdvanceSettings {
+        self.auto
+    }
+    pub fn from_ini(bytes: &[u8]) -> Self {
+        let int = |key, default| {
+            crate::save_menu::profile_int(bytes, "MESSAGE_INFO", key, default) as u32
+        };
+        Self {
+            auto: AutoAdvanceSettings {
+                base: int("AUTO_MODE_1", 10),
+                per_glyph: int("AUTO_MODE_2", 0),
+                acceleration: int("AUTO_MODE_3", 0),
+                voice_wait: int("AUTO_MODE_4", 0),
+                sync_voice: int("AUTO_VOICE_SYNC", 1) != 0,
+            },
+            ..Self::default()
+        }
+    }
     pub fn font_face(&self) -> &[u8] {
         &self.font_face
     }
@@ -50,11 +125,26 @@ impl SettingsHost {
                     None
                 };
                 vm.complete_system(SystemResult(0x4008))?;
+                let field = match index {
+                    0 => &mut self.auto.base,
+                    1 => &mut self.auto.per_glyph,
+                    2 => &mut self.auto.voice_wait,
+                    _ => {
+                        if let Some(value) = value {
+                            self.auto.sync_voice = value != 0;
+                        } else {
+                            vm.state_mut()
+                                .set_system_integer(0, u32::from(self.auto.sync_voice))
+                                .expect("slot 0 exists");
+                        }
+                        return Ok(true);
+                    }
+                };
                 if let Some(value) = value {
-                    self.auto_fields[index] = value;
+                    *field = value;
                 } else {
                     vm.state_mut()
-                        .set_system_integer(0, self.auto_fields[index])
+                        .set_system_integer(0, *field)
                         .expect("slot 0 exists");
                 }
                 return Ok(true);

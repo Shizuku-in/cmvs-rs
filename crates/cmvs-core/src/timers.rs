@@ -24,6 +24,9 @@ impl VmTimers {
     pub fn clock(&self) -> u32 {
         self.clock
     }
+    pub fn delta_ms(&self) -> u32 {
+        self.delta
+    }
     /// 0x140067930 advances these once on entry, before callback dispatch/instructions.
     /// A cooperative execution slice is not a new VM run.
     pub fn begin_run(&mut self, delta_ms: u32) {

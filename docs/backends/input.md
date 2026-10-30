@@ -2,7 +2,9 @@
 
 > 本文描述已核对的实现分支，真实样本与历史验证来自[《アマツツミ》](../games/amatsutsumi/README.md)。其他游戏或引擎版本需单独验证；下文历史停点不代表最新完成度。
 
-2026-10-27：桌面默认接入键鼠动作输入；trace 保持无输入。当前能操作标题并选择开始游戏，尚不能显示剧情。
+截至2026-10-31，工具栏自动送页已接入当前运行参数、VM帧delta、手势结果和音频后端的语音状态；核心保留手动点击、快进、隐藏窗口与按钮消费的优先级。真实记录重放验证了设置滑块、开启后连续推进及关闭后停止；原生有声自动流程和物理输入仍需验证，详见[游戏记录](../games/amatsutsumi/research.md#设置页自动送页与剧情运行2026-10-31)。
+
+2026-10-27历史状态：桌面默认接入键鼠动作输入；trace 保持无输入。当时能操作标题并选择开始游戏，尚不能显示剧情。
 
 ```powershell
 cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --audio native

@@ -165,15 +165,20 @@ impl<'a> Startup<'a> {
         // 0x14000a3c0 reads the startup settings; cmvs.cfg is optional and read only.
         let mut save_menu = SaveMenuHost::default();
         let audio;
+        let settings;
         match std::fs::read(root.join("cmvs.cfg")) {
             Ok(text) => {
                 audio = AudioHost::from_ini(&text);
+                settings = crate::settings::SettingsHost::from_ini(&text);
                 save_menu.set_confirmations(
                     crate::save_menu::profile_int(&text, "SYSTEM_INFO", "DLG_LOAD", 0) != 0,
                     crate::save_menu::profile_int(&text, "SYSTEM_INFO", "DLG_SAVE", 0) != 0,
                 );
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => audio = AudioHost::from_ini(&[]),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                audio = AudioHost::from_ini(&[]);
+                settings = crate::settings::SettingsHost::from_ini(&[]);
+            }
             Err(e) => return Err(e.into()),
         }
         Ok(Self {
@@ -210,7 +215,7 @@ impl<'a> Startup<'a> {
             save_info: SaveInfo::default(),
             gesture: PointerGesture::default(),
             message_flags: MessageFlags::default(),
-            settings: crate::settings::SettingsHost::default(),
+            settings,
             messages: MessageHost::default(),
             history: HistoryHost::default(),
             // Explicit research seed, like the virtual tick; the original seeds from timeGetTime.
@@ -421,6 +426,9 @@ impl<'a> Startup<'a> {
     pub fn message_flags(&self) -> MessageFlags {
         self.message_flags
     }
+    pub fn settings(&self) -> &crate::settings::SettingsHost {
+        &self.settings
+    }
     pub fn messages(&self) -> &MessageHost {
         &self.messages
     }
@@ -613,10 +621,20 @@ impl<'a> Startup<'a> {
                 StartupEvent::Progress
             });
         }
-        if let Some(step) =
-            self.messages
-                .try_wait(&mut self.machine, &mut self.input, self.message_flags)?
-        {
+        if let Some(step) = self.messages.try_wait_with_auto(
+            &mut self.machine,
+            &mut self.input,
+            self.message_flags,
+            crate::message::AutoAdvanceContext {
+                settings: self.settings.auto_advance(),
+                delta_ms: self.timers.delta_ms(),
+                gesture_result: self
+                    .gesture
+                    .field(88)
+                    .is_some_and(|value| value as i32 >= 0),
+                audio: self.audio_backend.as_ref(),
+            },
+        )? {
             self.resume_run = step == Step::Yield;
             return Ok(if step == Step::Yield {
                 StartupEvent::Yield
