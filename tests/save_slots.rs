@@ -647,6 +647,11 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
             .unwrap();
     }
+    // Sliders are rows of step buttons: 0x2217 returns -10 when press and release land
+    // on different steps, and this page ignores -10, so a drag changes nothing.
+    let before = ui.run.audio().settings();
+    ui.drag([830, 252], [1150, 252]);
+    assert_eq!(ui.run.audio().settings(), before);
     // Speaker icons toggle MUSIC_USE / SE_USE / VOICE_USE, without changing volume.
     for (index, y) in [286, 320, 354].into_iter().enumerate() {
         let before = ui.run.audio().settings();
@@ -1100,6 +1105,22 @@ impl Ui<'_, '_> {
     }
     fn click(&mut self, at: [i32; 2], wait: u32) {
         self.press(at, 1, wait);
+    }
+    /// Presses at `from`, moves there while holding over 20 frames, releases at `to`.
+    fn drag(&mut self, from: [i32; 2], to: [i32; 2]) {
+        for i in 0..4 {
+            self.frame(from, (i >= 2).then_some(1));
+        }
+        for step in 0..=20 {
+            let at = [
+                from[0] + (to[0] - from[0]) * step / 20,
+                from[1] + (to[1] - from[1]) * step / 20,
+            ];
+            self.frame(at, Some(1));
+        }
+        for _ in 0..30 {
+            self.frame(to, None);
+        }
     }
     fn toolbar(&self, button: usize) -> [i32; 2] {
         let window = self.run.messages().window(7).expect("toolbar window");
