@@ -4,7 +4,7 @@ use ab_glyph::{Font, FontVec, ScaleFont, point};
 use cmvs_core::{
     FormatError,
     camera::CameraHost,
-    message::{MESSAGE_WINDOWS, MessageHost, RecordedGlyph, TEXT_OBJECTS},
+    message::{AUXILIARY_TEXTS, MESSAGE_WINDOWS, MessageHost, RecordedGlyph, TEXT_OBJECTS},
     raster::RgbaImage,
     scene::{DrawState, ObjectImage, SceneHost, SceneObject},
     scene_render,
@@ -262,6 +262,66 @@ impl FontRenderer {
                             surface: false,
                         }),
                         draw: Some(draw),
+                        ..SceneObject::default()
+                    },
+                );
+            }
+            objects.push(parent);
+        }
+        // 0x140015da0 queues the +4328 auxiliary atlas objects after the text objects and
+        // before the windows. Attached glyphs (0x14002eb10) inherit the atlas position,
+        // opacity and mode-4 second texture, keep the layer they were attached with, and
+        // queue independently.
+        for group in (0..AUXILIARY_TEXTS)
+            .filter_map(|i| messages.auxiliary_text(i))
+            .filter(|g| g.attached_glyphs().next().is_some())
+        {
+            let mut parent_draw = DrawState::default();
+            parent_draw.words[8..10].copy_from_slice(&group.glyph_origin()?.map(|v| v as u32));
+            parent_draw.texture_mode = group
+                .object
+                .draw
+                .as_ref()
+                .map_or(0, |draw| draw.texture_mode);
+            let mut parent = SceneObject {
+                draw: Some(parent_draw),
+                secondary_image: group.secondary_image.clone(),
+                flags: 0x8000_0000,
+                ..SceneObject::default()
+            };
+            for glyph in group.attached_glyphs() {
+                let pixels = self.glyph(&RecordedGlyph {
+                    code: glyph.code,
+                    position: glyph.position,
+                    size: glyph.size,
+                    colors: glyph.colors,
+                    gradient: glyph.gradient,
+                    outline: glyph.outline,
+                    delay_ms: 0,
+                    elapsed_ms: 0,
+                    duration_ms: 0,
+                    active: false,
+                    shown: true,
+                    opacity: 255,
+                })?;
+                let mut draw = DrawState::default();
+                draw.words[4] = pixels.width();
+                draw.words[5] = pixels.height();
+                draw.words[8] = (glyph.position[0] as u32).wrapping_sub(2);
+                draw.words[9] = (glyph.position[1] as u32).wrapping_sub(2);
+                draw.words[10] = glyph.layer;
+                parent.children.insert(
+                    parent.children.len() as u16,
+                    SceneObject {
+                        image: Some(ObjectImage {
+                            filter: None,
+                            name: Vec::new(),
+                            pixels,
+                            alpha: true,
+                            surface: false,
+                        }),
+                        draw: Some(draw),
+                        flags: 1,
                         ..SceneObject::default()
                     },
                 );
