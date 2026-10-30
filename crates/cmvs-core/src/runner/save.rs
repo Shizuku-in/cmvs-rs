@@ -269,7 +269,7 @@ impl Startup<'_> {
     }
 
     /// The directory gameplay slots are written to: only an independent user directory.
-    fn slot_directory(&self) -> Result<std::path::PathBuf, Box<dyn Error>> {
+    pub(super) fn slot_directory(&self) -> Result<std::path::PathBuf, Box<dyn Error>> {
         match &self.system_output {
             Some(SystemOutput::Profile(profile)) => Ok(profile.directory().to_path_buf()),
             _ => Err(
@@ -284,6 +284,9 @@ impl Startup<'_> {
     /// it, and the command flags applied afterwards are not modeled, so an enabled callback
     /// is an error except for the pre-load backup, whose context the load replaces.
     fn write_slot(&mut self, slot: u16, before_load: bool) -> Result<bool, Box<dyn Error>> {
+        if self.slot_edit.is_some() {
+            return Err("finish the pending slot edit before writing a gameplay save".into());
+        }
         let captured = match &self.save_image {
             SaveImage::Absent => return Ok(false),
             SaveImage::Unavailable { .. } => {
@@ -396,6 +399,9 @@ impl Startup<'_> {
         slot: u16,
         backend: &mut impl PlatformBackend,
     ) -> Result<(), Box<dyn Error>> {
+        if self.slot_edit.is_some() {
+            return Err("finish the pending slot edit before loading a gameplay save".into());
+        }
         let bytes = self
             .saves
             .read_slot(slot)?

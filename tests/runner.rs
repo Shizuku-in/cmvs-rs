@@ -118,6 +118,185 @@ fn string_call(op: u16) -> Vec<u8> {
 }
 
 #[test]
+fn slot_exchange_and_move_preserve_raw_files_and_use_only_the_user_directory() {
+    use std::collections::BTreeMap;
+    for op in [0x228cu16, 0x228e] {
+        for (first, second) in [(0, 1), (999, 998), (3, 3)] {
+            for presence in 0..4 {
+                let mut code = vec![];
+                commands::command(&mut code, op, &[first, second]);
+                let name = format!("slot-edit-{op}-{first}-{second}-{presence}");
+                let root = Root::new(&name, &code, b"");
+                let user = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(&name);
+                let script = root.script();
+                let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+                run.set_user_data_directory(&user).unwrap();
+                let (a, b) = (
+                    format!("save{first:03}.dat"),
+                    format!("save{second:03}.dat"),
+                );
+                let mut expected = BTreeMap::from([
+                    ("savetemp.dat".to_string(), b"old temp".to_vec()),
+                    ("savedel.dat".to_string(), b"old deleted".to_vec()),
+                ]);
+                if presence & 1 != 0 {
+                    expected.insert(a.clone(), b"first raw payload".to_vec());
+                }
+                if presence & 2 != 0 {
+                    expected.insert(b.clone(), b"second raw payload".to_vec());
+                }
+                for (name, bytes) in &expected {
+                    fs::write(user.join(name), bytes).unwrap();
+                }
+                // Same names exist in the synthetic game directory and must remain untouched.
+                fs::write(root.0.join("save").join(&a), b"game file").unwrap();
+                if op == 0x228c {
+                    expected.remove("savetemp.dat");
+                    if first != second {
+                        let old_a = expected.remove(&a);
+                        let old_b = expected.remove(&b);
+                        if let Some(bytes) = old_a {
+                            expected.insert(b.clone(), bytes);
+                        }
+                        if let Some(bytes) = old_b {
+                            expected.insert(a.clone(), bytes);
+                        }
+                    }
+                } else {
+                    expected.remove("savedel.dat");
+                    if expected.contains_key(&b) {
+                        if let Some(old) = expected.remove(&a) {
+                            expected.insert("savedel.dat".to_string(), old);
+                        }
+                        if let Some(bytes) = expected.remove(&b) {
+                            expected.insert(a.clone(), bytes);
+                        }
+                    }
+                }
+                let mut backend = RecordingBackend::default();
+                for _ in 0..3 {
+                    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+                }
+                assert_eq!(run.machine().pc(), code.len());
+                assert_eq!(run.machine().stack().len_bytes(), 0);
+                for name in [&a, &b, "savetemp.dat", "savedel.dat"] {
+                    assert_eq!(
+                        fs::read(user.join(name)).ok().as_ref(),
+                        expected.get(name),
+                        "{op:x} {first}/{second} presence={presence} {name}"
+                    );
+                }
+                assert_eq!(
+                    fs::read(root.0.join("save").join(&a)).unwrap(),
+                    b"game file"
+                );
+                drop(run);
+                fs::remove_file(root.0.join("save").join(&a)).unwrap();
+                fs::remove_dir_all(user).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn slot_edits_ignore_out_of_range_words_and_require_a_user_directory_for_valid_slots() {
+    for op in [0x228c, 0x228e] {
+        for args in [[1000, 0], [0, u32::MAX], [0, 1]] {
+            let mut code = vec![];
+            commands::command(&mut code, op, &args);
+            let root = Root::new(&format!("edit-invalid-{op}-{}", args[0]), &code, b"");
+            let script = root.script();
+            let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+            let mut backend = RecordingBackend::default();
+            for _ in 0..2 {
+                run.tick(&mut backend).unwrap();
+            }
+            if args == [0, 1] {
+                assert!(run.tick(&mut backend).is_err());
+                assert!(run.machine().pending_system().is_some());
+                assert_eq!(run.machine().stack().len_bytes(), 8);
+            } else {
+                assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+                assert_eq!(run.machine().stack().len_bytes(), 0);
+            }
+        }
+    }
+}
+
+#[test]
+fn slot_exchange_refreshes_existing_menu_labels_and_latest_selection() {
+    let mut code = vec![];
+    commands::command(&mut code, 0x22b3, &[2]);
+    commands::command(&mut code, 0x228c, &[0, 1]);
+    let root = Root::new("slot-edit-menu", &code, b"");
+    let user = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("slot-edit-menu");
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    run.set_user_data_directory(&user).unwrap();
+    let labels: [&[u8]; 2] = [b"2020-01-01 00:00:00 first", b"2021-01-01 00:00:00 second"];
+    for (slot, label) in labels.iter().enumerate() {
+        let mut raw = vec![0; 512];
+        raw[..4].copy_from_slice(b"CSV2");
+        raw[16..16 + label.len()].copy_from_slice(label);
+        fs::write(user.join(format!("save{slot:03}.dat")), raw).unwrap();
+    }
+    let mut backend = RecordingBackend::default();
+    for _ in 0..2 {
+        run.tick(&mut backend).unwrap();
+    }
+    assert_eq!(run.save_menu().menu().unwrap().latest, Some(1));
+    for _ in 0..3 {
+        run.tick(&mut backend).unwrap();
+    }
+    let menu = run.save_menu().menu().unwrap();
+    assert_eq!(menu.latest, Some(0));
+    let cmvs_rs::save_menu::SlotStatus::Recognized(header) = &menu.slots[0] else {
+        panic!("header");
+    };
+    assert_eq!(header.label, labels[1]);
+    drop(run);
+    fs::remove_dir_all(user).unwrap();
+}
+
+#[test]
+#[cfg(windows)]
+fn failed_slot_swap_resumes_after_the_successful_rename_without_swapping_twice() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let mut code = vec![];
+    commands::command(&mut code, 0x228c, &[0, 1]);
+    let root = Root::new("slot-edit-retry", &code, b"");
+    let user = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("slot-edit-retry");
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    run.set_user_data_directory(&user).unwrap();
+    fs::write(user.join("save000.dat"), b"first").unwrap();
+    fs::write(user.join("save001.dat"), b"second").unwrap();
+    let locked = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(1)
+        .open(user.join("save001.dat"))
+        .unwrap();
+    let mut backend = RecordingBackend::default();
+    for _ in 0..2 {
+        run.tick(&mut backend).unwrap();
+    }
+    for _ in 0..2 {
+        assert!(run.tick(&mut backend).is_err());
+        assert!(!user.join("save000.dat").exists());
+        assert_eq!(fs::read(user.join("savetemp.dat")).unwrap(), b"first");
+    }
+    assert!(run.save_slot(0).is_err());
+    assert!(run.load_slot(0, &mut backend).is_err());
+    drop(locked);
+    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(fs::read(user.join("save000.dat")).unwrap(), b"second");
+    assert_eq!(fs::read(user.join("save001.dat")).unwrap(), b"first");
+    assert!(!user.join("savetemp.dat").exists());
+    drop(run);
+    fs::remove_dir_all(user).unwrap();
+}
+
+#[test]
 fn user_configuration_round_trips_live_settings_and_preserves_the_game_file() {
     use cmvs_rs::settings::DisplayPreferences;
     let mut code = vec![];

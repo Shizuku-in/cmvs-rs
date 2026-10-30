@@ -195,6 +195,14 @@ impl Default for SaveMenuHost {
 }
 
 impl SaveMenuHost {
+    /// Slot exchange/move refreshes the first-ten native menu labels. Preserve the
+    /// previously requested scan extent in the portable menu model.
+    pub(crate) fn refresh_slots(&mut self, source: &mut impl SaveSource) -> io::Result<()> {
+        if let Some(menu) = &self.menu {
+            self.menu = Some(SaveMenu::scan(source, menu.slots.len() as i32)?);
+        }
+        Ok(())
+    }
     /// RESET writes only +12092; the menu and confirmation settings survive.
     pub(crate) fn reset_popup(&mut self) {
         self.popup_enabled = true;

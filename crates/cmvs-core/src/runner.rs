@@ -44,6 +44,7 @@ use std::{
 mod lifecycle;
 mod preferences;
 mod save;
+mod slot_edit;
 pub use save::{SaveTime, thumbnail_bmp};
 
 enum SystemOutput {
@@ -106,6 +107,7 @@ pub enum SnapshotPolicy {
     ContinueWithoutImage,
 }
 pub struct Startup<'a> {
+    slot_edit: Option<slot_edit::SlotEdit>,
     quit: bool,
     focused: bool,
     machine: Machine<'a>,
@@ -186,6 +188,7 @@ impl<'a> Startup<'a> {
         let message_flags = MessageFlags::from_ini(text);
         let effects = crate::save_menu::profile_int(text, "SYSTEM_INFO", "EFFECT_USE", 1) != 0;
         Ok(Self {
+            slot_edit: None,
             quit: false,
             machine,
             gate: CommandGate::new(game.selection.clone()),
@@ -831,7 +834,8 @@ impl<'a> Startup<'a> {
         if self.try_load_slot(backend)? {
             return Ok(StartupEvent::Progress);
         }
-        if self.try_save_slot()?
+        if self.try_edit_slots()?
+            || self.try_save_slot()?
             || self.try_thumbnail()?
             || self.try_latest_slot()?
             || self.try_slot_info()?
