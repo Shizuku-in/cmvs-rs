@@ -706,6 +706,25 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         .unwrap();
     ui.click(ui.button(1, 1), 120);
     assert_eq!(ui.run.buttons().group(1).unwrap().buttons.len(), 50);
+    for (x, active) in [(472, false), (576, true)] {
+        ui.click([x, 306], 30);
+        assert_eq!(ui.run.settings().active_draw(), active);
+        let steps = ui.run.steps();
+        ui.run.set_focused(false);
+        if active {
+            ui.frame([-1, -1], None);
+            assert!(ui.run.steps() > steps);
+        } else {
+            assert_eq!(
+                ui.run.tick(&mut ui.backend).unwrap(),
+                StartupEvent::Inactive
+            );
+            assert_eq!(ui.run.steps(), steps);
+        }
+        ui.run.set_focused(true);
+        font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+            .unwrap();
+    }
     for (x, fullscreen) in [(576, true), (472, false)] {
         ui.click([x, 107], 30);
         assert_eq!(
@@ -785,7 +804,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     assert_eq!(ui.run.history().entries().len(), stopped);
     assert!(ui.waiting_for_text());
     println!(
-        "settings: native_audio={native_audio}; title + toolbar; fullscreen/aspect, cursor hide, voice stop modes, read-skip policy, bold/text/audio/auto settings, three pages, 432 settings frames; auto advanced at least three entries in {auto_frames} rendered frames with {} voices and {} voice fades; disabled then idle 240 rendered frames",
+        "settings: native_audio={native_audio}; title + toolbar; background/fullscreen/aspect, cursor hide, voice stop modes, read-skip policy, bold/text/audio/auto settings, three pages, 434 settings frames; auto advanced at least three entries in {auto_frames} rendered frames with {} voices and {} voice fades; disabled then idle 240 rendered frames",
         ui.voices.len(),
         ui.voice_fades.len()
     );

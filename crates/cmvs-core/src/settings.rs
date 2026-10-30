@@ -10,6 +10,7 @@ pub struct SettingsHost {
     auto: AutoAdvanceSettings,
     text: TextOutputSettings,
     read_skip: bool,
+    active_draw: bool,
     cursor_auto_clear: u32,
 }
 
@@ -97,11 +98,15 @@ impl Default for SettingsHost {
             auto: AutoAdvanceSettings::default(),
             text: TextOutputSettings::default(),
             read_skip: false,
+            active_draw: true,
             cursor_auto_clear: 1,
         }
     }
 }
 impl SettingsHost {
+    pub fn active_draw(&self) -> bool {
+        self.active_draw
+    }
     pub fn cursor_auto_clear(&self) -> u32 {
         self.cursor_auto_clear
     }
@@ -129,6 +134,7 @@ impl SettingsHost {
                 value @ 0..=4 => value,
                 _ => 0,
             },
+            active_draw: crate::save_menu::profile_int(bytes, "SYSTEM_INFO", "ACTIVE_DRAW", 0) != 0,
             read_skip: int("READ_SKIP", 1) != 0,
             text: TextOutputSettings {
                 bold: int("TEXT_BOLD", 0) != 0,
@@ -174,7 +180,7 @@ impl SettingsHost {
                 }
                 return Ok(true);
             }
-            if matches!(command, 0x2e0 | 0x2e4) {
+            if matches!(command, 0x2d5 | 0x2e0 | 0x2e4) {
                 let op = command + 0x2000;
                 let mode = vm.stack().peek_u32(4).map_err(|e| error(pc, op, e.0))?;
                 let value = if mode != 0 {
@@ -183,7 +189,9 @@ impl SettingsHost {
                     None
                 };
                 vm.complete_system(SystemResult(0x4008))?;
-                let field = if command == 0x2e0 {
+                let field = if command == 0x2d5 {
+                    &mut self.active_draw
+                } else if command == 0x2e0 {
                     &mut self.text.bold
                 } else {
                     &mut self.read_skip
@@ -274,30 +282,6 @@ impl SettingsHost {
                         .set_system_integer(0, *field)
                         .expect("slot 0 exists");
                 }
-                return Ok(true);
-            }
-            // Constructor 0x140014e60. Setters require their consumers and backend
-            // effects before they may be accepted; these reads expose current defaults.
-            let value = match command {
-                0x2d5 => Some(1),
-                _ => None,
-            };
-            if let Some(value) = value {
-                let mode = vm
-                    .stack()
-                    .peek_u32(4)
-                    .map_err(|e| error(pc, command + 0x2000, e.0))?;
-                if mode != 0 {
-                    return Err(error(
-                        pc,
-                        command + 0x2000,
-                        "runtime configuration setter is not implemented",
-                    ));
-                }
-                vm.complete_system(SystemResult(0x4008))?;
-                vm.state_mut()
-                    .set_system_integer(0, value)
-                    .expect("slot 0 exists");
                 return Ok(true);
             }
         }

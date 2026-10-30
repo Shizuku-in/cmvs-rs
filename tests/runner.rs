@@ -1,3 +1,6 @@
+#[path = "support/bytecode.rs"]
+#[allow(dead_code)]
+mod commands;
 use cmvs_rs::{
     digest::{sha256, to_hex},
     platform::{PlatformBackend, PlatformRequest, RecordingBackend},
@@ -115,10 +118,97 @@ fn string_call(op: u16) -> Vec<u8> {
 }
 
 #[test]
+fn inactive_policy_freezes_vm_and_scene_but_keeps_audio_updates_without_time_catchup() {
+    use cmvs_rs::audio::{AudioBackend, AudioRequest};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    struct Audio(Arc<AtomicUsize>);
+    impl AudioBackend for Audio {
+        fn configure_voice_ducking(
+            &mut self,
+            _: cmvs_rs::audio::VoiceDuckingSettings,
+        ) -> Result<(), Box<dyn Error>> {
+            Ok(())
+        }
+        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+            unreachable!()
+        }
+        fn update(&mut self) -> Result<(), Box<dyn Error>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+    for active_draw in [false, true] {
+        let mut code = vec![];
+        commands::command(&mut code, 0x2220, &[0, 0, 1000, 9]);
+        for _ in 0..10 {
+            code.extend(0x2000u16.to_le_bytes());
+        }
+        let root = Root::new(
+            if active_draw {
+                "background-run"
+            } else {
+                "background-pause"
+            },
+            &code,
+            b"",
+        );
+        fs::write(
+            root.0.join("cmvs.cfg"),
+            format!("[SYSTEM_INFO]\nACTIVE_DRAW={}\n", u8::from(active_draw)),
+        )
+        .unwrap();
+        let script = root.script();
+        let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+        let updates = Arc::new(AtomicUsize::new(0));
+        run.set_audio_backend(Box::new(Audio(updates.clone())))
+            .unwrap();
+        let mut backend = RecordingBackend::default();
+        for _ in 0..30 {
+            if run.tick(&mut backend).unwrap() == StartupEvent::Yield {
+                break;
+            }
+        }
+        run.advance_decoded_frame(16).unwrap();
+        let steps = run.steps();
+        let clock = run.timers().clock();
+        let fade = run.scene().fade().current().unwrap().elapsed;
+        run.set_focused(false);
+        assert_eq!(run.frame_running(), active_draw);
+        for _ in 0..5 {
+            assert_eq!(
+                run.tick(&mut backend).unwrap(),
+                if active_draw {
+                    StartupEvent::Yield
+                } else {
+                    StartupEvent::Inactive
+                }
+            );
+            run.advance_decoded_frame(10).unwrap();
+        }
+        if active_draw {
+            assert_eq!(run.steps(), steps + 5);
+        } else {
+            assert_eq!(run.steps(), steps);
+            assert_eq!(run.timers().clock(), clock);
+            assert_eq!(run.scene().fade().current().unwrap().elapsed, fade);
+            // The recording-only frame entry must respect the same pause policy.
+            run.advance_frame(60_000).unwrap();
+            assert_eq!(run.scene().fade().current().unwrap().elapsed, fade);
+        }
+        let clock = run.timers().clock();
+        run.set_focused(true);
+        run.advance_decoded_frame(16).unwrap();
+        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
+        assert_eq!(run.timers().clock(), clock + 16);
+        assert_eq!(updates.load(Ordering::SeqCst), 7);
+    }
+}
+
+#[test]
 fn fullscreen_request_yields_once_and_query_resumes_on_the_next_run() {
-    #[path = "support/bytecode.rs"]
-    #[allow(dead_code)]
-    mod commands;
     let mut code = vec![];
     commands::command(&mut code, 0x2164, &[1]);
     commands::command(&mut code, 0x2163, &[]);

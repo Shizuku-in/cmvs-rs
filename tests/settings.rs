@@ -633,22 +633,28 @@ fn automatic_advance_fields_round_trip_raw_words_and_normalize_only_the_boolean(
 }
 
 #[test]
-fn configuration_queries_expose_current_constructor_policy_and_setters_stay_barriers() {
-    let (op, value) = (0x22d5, 1);
+fn active_draw_normalizes_ini_and_vm_values_and_preserves_write_results() {
+    assert!(SettingsHost::default().active_draw());
+    assert!(!SettingsHost::from_ini(&[]).active_draw());
+    assert!(SettingsHost::from_ini(b"[SYSTEM_INFO]\nACTIVE_DRAW=-1\n").active_draw());
     let mut code = vec![];
-    command(&mut code, op, &[0, 0]);
-    command(&mut code, op, &[1, 2]);
+    for raw in [0, 2, u32::MAX] {
+        command(&mut code, 0x22d5, &[1, raw]);
+        command(&mut code, 0x22d5, &[0, 0]);
+    }
     let script = script(&code);
     let mut vm = Machine::new(&script).unwrap();
     let mut settings = SettingsHost::default();
-    pending(&mut vm);
-    assert!(settings.try_handle(&mut vm).unwrap());
-    assert_eq!(vm.state().system_integer(0), Some(value));
-    pending(&mut vm);
-    let pc = vm.pc();
-    assert!(settings.try_handle(&mut vm).is_err());
-    assert_eq!(vm.pc(), pc);
-    assert_eq!(vm.stack().len_bytes(), 8);
+    for expected in [0, 1, 1] {
+        vm.state_mut().set_system_integer(0, 77).unwrap();
+        pending(&mut vm);
+        settings.try_handle(&mut vm).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(77));
+        pending(&mut vm);
+        settings.try_handle(&mut vm).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(expected));
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
 }
 
 #[test]

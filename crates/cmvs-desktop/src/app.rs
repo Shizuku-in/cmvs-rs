@@ -155,6 +155,9 @@ impl ApplicationHandler for App<'_> {
             self.surface = Some(surface);
             self.context = Some(context);
             self.window = Some(window.clone());
+            if self.native_input && self.preview_image.is_none() {
+                self.startup.set_focused(false);
+            }
             self.deadline = self.exit_after.map(|d| Instant::now() + d);
             self.last_frame = Instant::now();
             self.cursor_clock = self.last_frame;
@@ -189,6 +192,10 @@ impl ApplicationHandler for App<'_> {
             WindowEvent::Focused(focus) => {
                 self.input.push(InputEvent::Focus(focus));
                 self.game_input.focus(focus, self.startup.input_mut());
+                if self.native_input && self.preview_image.is_none() {
+                    self.startup.set_focused(focus);
+                    self.input_due = true;
+                }
                 if !focus {
                     self.window
                         .as_ref()
@@ -348,6 +355,7 @@ impl ApplicationHandler for App<'_> {
                     println!("# fade started {fade:?}");
                 }
                 match outcome {
+                    Ok(StartupEvent::Inactive) => break,
                     Ok(StartupEvent::Progress) => {}
                     Ok(StartupEvent::Yield) => {
                         self.input_due = true;

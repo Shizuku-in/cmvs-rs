@@ -77,6 +77,8 @@ pub fn load_start(root: &Path, files: &GameFiles) -> Result<Script, Box<dyn Erro
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartupEvent {
+    /// Host is unfocused and ACTIVE_DRAW is off; no VM instruction was executed.
+    Inactive,
     Progress,
     Yield,
     Unhandled {
@@ -100,6 +102,7 @@ pub enum SnapshotPolicy {
     ContinueWithoutImage,
 }
 pub struct Startup<'a> {
+    focused: bool,
     machine: Machine<'a>,
     gate: CommandGate<'a>,
     /// Unreviewed commands first let through since the last `take_unreviewed_notices`.
@@ -188,6 +191,7 @@ impl<'a> Startup<'a> {
             machine,
             gate: CommandGate::new(game.selection.clone()),
             notices: Vec::new(),
+            focused: true,
             bootstrap: Bootstrap::default(),
             control: ScriptControl::new(virtual_tick),
             source: ArchiveScripts::new(File::open(root.join(&game.files.script_archive))?)?,
@@ -327,6 +331,10 @@ impl<'a> Startup<'a> {
             self.audio_backend.stop_movie_audio()?;
         }
         self.movies.advance_scene(delta_ms, &mut self.scene)?;
+        if !self.frame_running() {
+            self.frame_delta = 0;
+            return Ok(());
+        }
         self.sequence.advance_frame_with_images(
             delta_ms,
             &mut self.scene,
@@ -400,6 +408,11 @@ impl<'a> Startup<'a> {
     /// Callback registration time remains a separate research clock.
     pub fn advance_frame(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error>> {
         self.movies.advance_scene(delta_ms, &mut self.scene)?;
+        self.movies.advance(delta_ms);
+        if !self.frame_running() {
+            self.frame_delta = 0;
+            return Ok(());
+        }
         self.sequence.advance_frame_with_images(
             delta_ms,
             &mut self.scene,
@@ -409,7 +422,6 @@ impl<'a> Startup<'a> {
         self.messages.advance_frame(delta_ms);
         self.messages
             .advance_auxiliary_motion(delta_ms, &mut self.scene)?;
-        self.movies.advance(delta_ms);
         self.camera.advance_frame(delta_ms);
         self.frame_delta = delta_ms;
         self.take_capture()
@@ -428,6 +440,16 @@ impl<'a> Startup<'a> {
     }
     pub fn message_flags(&self) -> MessageFlags {
         self.message_flags
+    }
+    pub fn set_focused(&mut self, focused: bool) {
+        let was_running = self.frame_running();
+        self.focused = focused;
+        if was_running != self.frame_running() {
+            self.frame_delta = 0;
+        }
+    }
+    pub fn frame_running(&self) -> bool {
+        self.focused || self.settings.active_draw()
     }
     pub fn settings(&self) -> &crate::settings::SettingsHost {
         &self.settings
@@ -511,6 +533,9 @@ impl<'a> Startup<'a> {
         &mut self,
         backend: &mut impl PlatformBackend,
     ) -> Result<StartupEvent, Box<dyn Error>> {
+        if !self.frame_running() {
+            return Ok(StartupEvent::Inactive);
+        }
         if self.since_yield >= self.yield_watchdog {
             return Err(format!(
                 "research watchdog: {} VM steps without a yield",
