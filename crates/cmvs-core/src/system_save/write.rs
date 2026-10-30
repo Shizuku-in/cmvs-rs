@@ -53,6 +53,30 @@ impl Css1Save {
         parameters: Css1Parameters,
         lists: [&[Vec<u8>]; 2],
     ) -> Result<Vec<u8>, FormatError> {
+        Self::encode_with_marker(&self.marker, state, game_id, parameters, lists)
+    }
+
+    /// First save without a source file. The annotation is not consumed by the
+    /// native loader (0x140018da0); identify our output instead of inventing a
+    /// loaded template. Persistent variables must still all be known.
+    pub fn encode_initial_state(
+        state: &State,
+        game_id: u32,
+        parameters: Css1Parameters,
+        lists: [&[Vec<u8>]; 2],
+    ) -> Result<Vec<u8>, FormatError> {
+        let mut marker = [0; 60];
+        marker[..7].copy_from_slice(b"cmvs-rs");
+        Self::encode_with_marker(&marker, state, game_id, parameters, lists)
+    }
+
+    fn encode_with_marker(
+        marker: &[u8; 60],
+        state: &State,
+        game_id: u32,
+        parameters: Css1Parameters,
+        lists: [&[Vec<u8>]; 2],
+    ) -> Result<Vec<u8>, FormatError> {
         if lists.iter().any(|list| list.len() > 4096) {
             return Err(FormatError("CSS1 output list exceeds research bound"));
         }
@@ -96,7 +120,7 @@ impl Css1Save {
         let packed = pack::compress(&payload);
         let mut raw = vec![0u8; PAYLOAD_OFFSET];
         raw[..4].copy_from_slice(b"CSS1");
-        raw[8..68].copy_from_slice(&self.marker);
+        raw[8..68].copy_from_slice(marker);
         for (at, value) in [
             (4, 104),
             (68, game_id),
@@ -180,7 +204,7 @@ impl SystemSaveSink for NewSystemSave {
 
 impl super::SystemSaveHost {
     /// 0x2129: runtime flags 0x212a/b/c remain unsupported, so both name lists and
-    /// extra metadata stay disabled. A loaded template and fully known state are required.
+    /// extra metadata stay disabled. Fully known persistent state is required.
     pub fn try_write(
         &mut self,
         vm: &mut Machine<'_>,
@@ -206,16 +230,17 @@ impl super::SystemSaveHost {
         game_id: Option<u32>,
     ) -> Result<(), Box<dyn Error>> {
         let game_id = game_id.ok_or("CSS1 write requires a known game identifier")?;
-        let template = self
-            .loaded
-            .as_ref()
-            .ok_or("CSS1 write requires a successfully loaded header template")?;
-        if template.layout.game_id != 0 && template.layout.game_id != game_id {
+        if self.loaded.as_ref().is_some_and(|template| {
+            template.layout.game_id != 0 && template.layout.game_id != game_id
+        }) {
             return Err("CSS1 write game identifier mismatch".into());
         }
         let mut candidate = random.clone();
         let parameters = Css1Parameters::draw(&mut candidate);
-        let raw = template.encode_state(state, game_id, parameters, [&[], &[]])?;
+        let raw = match &self.loaded {
+            Some(template) => template.encode_state(state, game_id, parameters, [&[], &[]])?,
+            None => Css1Save::encode_initial_state(state, game_id, parameters, [&[], &[]])?,
+        };
         sink.write(&raw)?;
         *random = candidate;
         Ok(())

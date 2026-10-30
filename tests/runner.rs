@@ -1595,3 +1595,65 @@ fn chosen_faces_are_validated_before_the_command_completes() {
         );
     }
 }
+
+#[test]
+fn first_system_save_without_template_writes_reloads_and_survives_restart() {
+    use cmvs_rs::{settings::DisplayPreferences, system_save::Css1Save};
+    for explicit_write in [false, true] {
+        let mut code = vec![];
+        commands::command(&mut code, 0x201d, &[0x12345678]);
+        commands::command(&mut code, 0x2091, &[2048, 260096, 0]);
+        commands::command(&mut code, 0x2092, &[2048, 2048, 0]);
+        commands::command(&mut code, 0x2093, &[1024, 1024, 0]);
+        commands::command(&mut code, 0x2094, &[64, 64, 0]);
+        commands::command(&mut code, 0x2128, &[]);
+        let after_load = code.len();
+        commands::command(&mut code, 0x2092, &[2400, 1, 96]);
+        if explicit_write {
+            commands::command(&mut code, 0x2129, &[]);
+        }
+        commands::command(&mut code, 0x27ff, &[]);
+        let root = Root::new(&format!("first-css1-{explicit_write}"), &code, b"\0");
+        let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
+            "first-css1-{explicit_write}-{}",
+            std::process::id()
+        ));
+        let script = root.script();
+        let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+        run.set_user_data_directory(&directory).unwrap();
+        // An early close can write INI, but must not manufacture a CSS1.
+        run.save_preferences(DisplayPreferences::default()).unwrap();
+        assert!(!directory.join("system.dat").exists());
+        let mut backend = RecordingBackend::default();
+        loop {
+            if let StartupEvent::Unhandled { command, .. } = run.tick(&mut backend).unwrap() {
+                assert_eq!(command, 0x27ff);
+                break;
+            }
+        }
+        assert_eq!(directory.join("system.dat").exists(), explicit_write);
+        run.save_preferences(DisplayPreferences::default()).unwrap();
+        let raw = fs::read(directory.join("system.dat")).unwrap();
+        assert_eq!(&raw[8..15], b"cmvs-rs");
+        let saved = Css1Save::decode(&raw).unwrap();
+        assert_eq!(saved.layout().game_id, 0x12345678);
+        assert_eq!(
+            saved
+                .applied(run.machine().state(), Some(0x12345678))
+                .unwrap()
+                .integer(2400),
+            Some(96)
+        );
+        drop(run);
+        let mut resumed = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+        resumed.set_user_data_directory(&directory).unwrap();
+        while resumed.machine().pc() != after_load {
+            resumed.tick(&mut backend).unwrap();
+        }
+        // Check before the script writes 96 again: this value came from CSS1.
+        assert_eq!(resumed.machine().state().integer(2400), Some(96));
+        assert!(!root.0.join("save/system.dat").exists());
+        drop(resumed);
+        fs::remove_dir_all(directory).unwrap();
+    }
+}

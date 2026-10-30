@@ -112,7 +112,10 @@ impl Startup<'_> {
             unreachable!()
         };
         let id = self.bootstrap.settings().get(&0x201d).copied();
-        if self.system_host.loaded.is_some() {
+        // Only persist CSS1 after the startup load command has completed,
+        // including its missing-file branch. Earlier exits may precede variable
+        // initialization and must not manufacture persistent defaults.
+        if self.system_host.loaded.is_some() || self.auto_resume_checked {
             self.system_host
                 .write_now(self.machine.state(), profile, &mut self.random, id)?;
             self.system_source = crate::system_save::FileSystemSave::new(profile.path());

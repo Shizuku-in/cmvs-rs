@@ -104,7 +104,10 @@ fn writer_failure_keeps_rng_vm_and_template_then_commits_exactly_four_draws() {
     vm.step().unwrap();
     let pending = vm.pending_system();
     let mut host = SystemSaveHost::default();
-    let mut sink = Sink::default();
+    let mut sink = Sink {
+        fail: true,
+        ..Sink::default()
+    };
     let mut random = CrtRandom::new(19);
     let before = random.clone();
     assert!(
@@ -137,6 +140,24 @@ fn writer_failure_keeps_rng_vm_and_template_then_commits_exactly_four_draws() {
     assert_eq!(vm.pending_system(), None);
     assert_eq!(vm.pc(), 2);
     assert_eq!(vm.state().system_integer(0), Some(77));
+    assert_eq!(Css1Save::decode(&sink.raw).unwrap().payload(), body());
+    // A first save has no loaded template. Failed output still consumes no RNG;
+    // a successful retry writes the complete persistent state with our annotation.
+    let mut fresh = SystemSaveHost::default();
+    let before = random.clone();
+    sink.fail = true;
+    assert!(
+        fresh
+            .write_now(vm.state(), &mut sink, &mut random, Some(0x12345678))
+            .is_err()
+    );
+    assert_eq!(random, before);
+    sink.fail = false;
+    fresh
+        .write_now(vm.state(), &mut sink, &mut random, Some(0x12345678))
+        .unwrap();
+    assert!(fresh.loaded.is_none());
+    assert_eq!(&sink.raw[8..15], b"cmvs-rs");
     assert_eq!(Css1Save::decode(&sink.raw).unwrap().payload(), body());
 }
 
