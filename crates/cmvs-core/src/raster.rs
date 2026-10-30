@@ -71,13 +71,75 @@ impl RgbaImage {
         height: u32,
         mode: u32,
     ) -> Result<(), FormatError> {
+        self.draw_scaled(target, width, height, mode, false)
+    }
+    /// `linear` selects the render mode 1 counterpart of StretchRect D3DTEXF_LINEAR
+    /// (0x140029320): texel centers, clamped edges and 8-bit weights over
+    /// premultiplied texels. It is a software filter, not a GPU-exact match.
+    pub fn draw_scaled(
+        &self,
+        target: &mut [u32],
+        width: u32,
+        height: u32,
+        mode: u32,
+        linear: bool,
+    ) -> Result<(), FormatError> {
         let view =
             crate::viewport::Viewport::new([self.width, self.height], [width, height], mode)?;
         if target.len() as u64 != u64::from(width) * u64::from(height) {
             return Err(FormatError("invalid preview surface dimensions"));
         }
-        for y in view.top.max(0)..(view.top + i64::from(view.height)).min(i64::from(height)) {
-            for x in view.left.max(0)..(view.left + i64::from(view.width)).min(i64::from(width)) {
+        let xs = view.left.max(0)..(view.left + i64::from(view.width)).min(i64::from(width));
+        let ys = view.top.max(0)..(view.top + i64::from(view.height)).min(i64::from(height));
+        if linear {
+            // Per-axis source pair and weight for each target column/row in view.
+            let taps = |range: std::ops::Range<i64>, origin: i64, span: u32, source: u32| {
+                range
+                    .map(|d| {
+                        let center = (2 * (d - origin) + 1) * i64::from(source) * 256
+                            / (2 * i64::from(span))
+                            - 128;
+                        let at = center.clamp(0, (i64::from(source) - 1) * 256);
+                        let low = (at >> 8) as usize;
+                        (low, (low + 1).min(source as usize - 1), (at & 255) as u64)
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let columns = taps(xs.clone(), view.left, view.width, self.width);
+            let rows = taps(ys.clone(), view.top, view.height, self.height);
+            let stride = self.width as usize;
+            for (y, &(y0, y1, fy)) in ys.zip(&rows) {
+                for (x, &(x0, x1, fx)) in xs.clone().zip(&columns) {
+                    let weights = [
+                        (y0 * stride + x0, (256 - fx) * (256 - fy)),
+                        (y0 * stride + x1, fx * (256 - fy)),
+                        (y1 * stride + x0, (256 - fx) * fy),
+                        (y1 * stride + x1, fx * fy),
+                    ];
+                    let mut sums = [0u64; 4];
+                    for (at, weight) in weights {
+                        let p = &self.pixels[at * 4..at * 4 + 4];
+                        let alpha = u64::from(p[3]);
+                        for (channel, sum) in sums[..3].iter_mut().enumerate() {
+                            *sum += weight * u64::from(p[channel]) * alpha;
+                        }
+                        sums[3] += weight * alpha;
+                    }
+                    let dst = &mut target[y as usize * width as usize + x as usize];
+                    // Exact rational composite: (premul + dst * (1 - alpha)) / 255.
+                    let scale = 255 * 65536;
+                    let channel = |i: usize, shift: u32| {
+                        let under = u64::from((*dst >> shift) & 255);
+                        (((sums[i] + under * (scale - sums[3]) + scale / 2) / scale) as u32)
+                            << shift
+                    };
+                    *dst = channel(0, 16) | channel(1, 8) | channel(2, 0);
+                }
+            }
+            return Ok(());
+        }
+        for y in ys {
+            for x in xs.clone() {
                 let sx = (x - view.left) as u64 * u64::from(self.width) / u64::from(view.width);
                 let sy = (y - view.top) as u64 * u64::from(self.height) / u64::from(view.height);
                 let at = ((sy * u64::from(self.width) + sx) * 4) as usize;

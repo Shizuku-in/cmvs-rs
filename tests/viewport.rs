@@ -61,3 +61,33 @@ fn normal_falls_back_to_contain_and_fixed_point_rounding_matches_engine() {
     assert!(Viewport::new([2, 2], [5, 5], 4).is_err());
     assert!(Viewport::new([2, 2], [u32::MAX, u32::MAX], 1).is_err());
 }
+
+#[test]
+fn linear_presentation_uses_texel_centers_clamped_edges_and_premultiplied_alpha() {
+    let image = RgbaImage::new(2, 1, vec![0, 0, 0, 255, 255, 255, 255, 255]).unwrap();
+    let mut target = vec![0x123456; 4];
+    image.draw_scaled(&mut target, 4, 1, 3, true).unwrap();
+    assert_eq!(target, [0, 0x404040, 0xbfbfbf, 0xffffff]);
+    let mut nearest = vec![0x123456; 4];
+    image.draw_scaled(&mut nearest, 4, 1, 3, false).unwrap();
+    assert_eq!(nearest, [0, 0, 0xffffff, 0xffffff]);
+
+    // An unscaled view samples exact texels, matching the point path.
+    let mut pixels = vec![];
+    for n in 0..12u8 {
+        pixels.extend([n * 20, 255 - n, n, if n % 3 == 0 { 128 } else { 255 }]);
+    }
+    let image = RgbaImage::new(4, 3, pixels).unwrap();
+    let mut linear = vec![0x203040; 8 * 5];
+    let mut point = linear.clone();
+    image.draw_scaled(&mut linear, 8, 5, 0, true).unwrap();
+    image.draw_scaled(&mut point, 8, 5, 0, false).unwrap();
+    assert_eq!(linear, point);
+
+    // Transparent texels contribute no color; half coverage keeps half the backdrop.
+    let image = RgbaImage::new(2, 1, vec![255, 0, 0, 255, 0, 255, 0, 0]).unwrap();
+    let mut target = vec![0x0000ff; 3];
+    image.draw_scaled(&mut target, 3, 1, 3, true).unwrap();
+    assert_eq!(target[1], 0x800080);
+    assert!(image.draw_scaled(&mut [0; 2], 3, 1, 3, true).is_err());
+}

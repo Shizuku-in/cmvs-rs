@@ -161,12 +161,14 @@ fn user_configuration_round_trips_live_settings_and_preserves_the_game_file() {
     run.save_preferences(DisplayPreferences {
         fullscreen: true,
         aspect_mode: 2,
+        render_mode: 0,
     })
     .unwrap();
     let first = fs::read(directory.join("cmvs.cfg")).unwrap();
     run.save_preferences(DisplayPreferences {
         fullscreen: false,
         aspect_mode: 3,
+        render_mode: 0,
     })
     .unwrap();
     assert_eq!(fs::read(directory.join("cmvs.cfg.bak")).unwrap(), first);
@@ -182,7 +184,8 @@ fn user_configuration_round_trips_live_settings_and_preserves_the_game_file() {
         resumed.display_preferences(),
         DisplayPreferences {
             fullscreen: false,
-            aspect_mode: 3
+            aspect_mode: 3,
+            render_mode: 0
         }
     );
     assert_eq!(fs::read(root.0.join("cmvs.cfg")).unwrap(), original);
@@ -191,6 +194,13 @@ fn user_configuration_round_trips_live_settings_and_preserves_the_game_file() {
             .unwrap()
             .windows(b"UNKNOWN=\x82\xa0\n".len())
             .any(|w| w == b"UNKNOWN=\x82\xa0\n")
+    );
+    // Point mode 0 is stored as the original's swapped word 1.
+    assert!(
+        fs::read(directory.join("cmvs.cfg"))
+            .unwrap()
+            .windows(b"ASPECT_RATIO_FILTER=1\r\n".len())
+            .any(|w| w == b"ASPECT_RATIO_FILTER=1\r\n")
     );
     drop(resumed);
     fs::remove_dir_all(directory).unwrap();

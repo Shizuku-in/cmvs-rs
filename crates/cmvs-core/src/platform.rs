@@ -69,6 +69,8 @@ impl PlatformAssets for DirectoryAssets {
 pub enum PlatformRequest {
     Fullscreen(bool),
     AspectMode(u32),
+    /// Device +112 presentation filter: 0 point, 1 linear. Shader modes 2/3 are not modeled.
+    RenderMode(u32),
     WindowSize([u32; 2]),
     Title(Vec<u8>),
     Cursor {
@@ -119,6 +121,10 @@ pub trait PlatformBackend {
     fn stretch_filter_supported(&self) -> Result<bool, Box<dyn Error>> {
         Err("platform backend does not implement stretch filter queries".into())
     }
+    /// D3DCAPS9.StretchRectFilterCaps MAGFLINEAR alone; render mode 1 requires it.
+    fn linear_stretch_supported(&self) -> Result<bool, Box<dyn Error>> {
+        Err("platform backend does not implement linear stretch queries".into())
+    }
     /// 0=unscaled when it fits, 1=contain, 2=cover, 3=stretch (0x14001a360).
     fn aspect_mode(&self) -> Result<u32, Box<dyn Error>> {
         Err("platform backend does not implement aspect mode queries".into())
@@ -127,12 +133,28 @@ pub trait PlatformBackend {
     /// This is not a queued acknowledgement. Native event-loop implementations must honor this contract.
     fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>>;
 }
+/// 0x14001cfd0: a request the device cannot honor leaves render mode 0 (point).
+/// Modes 2/3 also need device +124, whose source is not modeled, so a capable
+/// backend reports an error instead of guessing.
+pub fn supported_render_mode(
+    backend: &(impl PlatformBackend + ?Sized),
+    requested: u32,
+) -> Result<u32, Box<dyn Error>> {
+    Ok(match requested {
+        1 if backend.linear_stretch_supported()? => 1,
+        2 | 3 if u32::from(backend.pixel_shader_major()?) >= requested => {
+            return Err("shader presentation filters need unmodeled device flag +124".into());
+        }
+        _ => 0,
+    })
+}
 #[derive(Default)]
 pub struct RecordingBackend {
     requests: Vec<PlatformRequest>,
     bytes: usize,
     fullscreen: bool,
     aspect_mode: Option<u32>,
+    render_mode: u32,
     window_size: Option<[u32; 2]>,
 }
 impl RecordingBackend {
@@ -150,11 +172,14 @@ impl PlatformBackend for RecordingBackend {
     fn stretch_filter_supported(&self) -> Result<bool, Box<dyn Error>> {
         Ok(true)
     }
+    fn linear_stretch_supported(&self) -> Result<bool, Box<dyn Error>> {
+        Ok(true)
+    }
     fn resizable(&self) -> Result<bool, Box<dyn Error>> {
         Ok(true)
     }
     fn render_mode(&self) -> Result<u32, Box<dyn Error>> {
-        Ok(0)
+        Ok(self.render_mode)
     }
     fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error>> {
         Ok(0)
@@ -169,9 +194,13 @@ impl PlatformBackend for RecordingBackend {
         if matches!(request, PlatformRequest::AspectMode(mode) if *mode > 3) {
             return Err("invalid aspect mode".into());
         }
+        if matches!(request, PlatformRequest::RenderMode(mode) if *mode > 1) {
+            return Err("unsupported render mode".into());
+        }
         let size = match request {
             PlatformRequest::Fullscreen(_)
             | PlatformRequest::AspectMode(_)
+            | PlatformRequest::RenderMode(_)
             | PlatformRequest::WindowSize(_) => 0,
             PlatformRequest::Title(bytes) => bytes.len(),
             PlatformRequest::Cursor { bitmap, .. } => {
@@ -188,6 +217,9 @@ impl PlatformBackend for RecordingBackend {
         }
         if let PlatformRequest::AspectMode(value) = request {
             self.aspect_mode = Some(*value);
+        }
+        if let PlatformRequest::RenderMode(value) = request {
+            self.render_mode = *value;
         }
         if let PlatformRequest::WindowSize(value) = request {
             self.window_size = Some(*value);
@@ -313,6 +345,17 @@ impl PlatformHost {
             } else {
                 PlatformEvent::Configured
             }));
+        }
+        if command == 0x16d {
+            // 0x140075630: negative or >= 4 selects 0; no yield or system result.
+            let raw = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x216d, e.0))? as i32;
+            let requested = if (0..4).contains(&raw) { raw as u32 } else { 0 };
+            let mode = supported_render_mode(backend, requested)?;
+            if mode != backend.render_mode()? {
+                backend.apply(&PlatformRequest::RenderMode(mode))?;
+            }
+            vm.complete_system(SystemResult(0x4004))?;
+            return Ok(Some(PlatformEvent::Configured));
         }
         if command == 0x2fd {
             let raw = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x22fd, e.0))?;
@@ -461,6 +504,7 @@ impl PlatformHost {
             PlatformRequest::Icon { name, .. } => self.icon = Some(name),
             PlatformRequest::Fullscreen(_)
             | PlatformRequest::AspectMode(_)
+            | PlatformRequest::RenderMode(_)
             | PlatformRequest::WindowSize(_) => {
                 unreachable!("handled before string requests")
             }

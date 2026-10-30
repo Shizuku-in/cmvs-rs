@@ -493,6 +493,18 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         voice_fades: Vec::new(),
         frozen: false,
     };
+    // The desktop host applies the startup filter; the sample cmvs.cfg word 0 means linear.
+    let startup_filter = cmvs_rs::platform::supported_render_mode(
+        &ui.backend,
+        ui.run.display_preferences().render_mode,
+    )
+    .unwrap();
+    assert_eq!(startup_filter, 1);
+    cmvs_rs::platform::PlatformBackend::apply(
+        &mut ui.backend,
+        &cmvs_rs::platform::PlatformRequest::RenderMode(startup_filter),
+    )
+    .unwrap();
     for _ in 0..30_000 {
         if ui.run.machine().current_name() == b"menu.ps3"
             && if native_audio {
@@ -765,6 +777,20 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
             .unwrap();
     }
+    // Draw-mode group 22: only modes 0/1 exist without pixel shaders (0x216b = 3).
+    for (x, mode) in [(264, 0), (368, 1), (264, 0)] {
+        ui.click([x, 560], 30);
+        assert_eq!(
+            cmvs_rs::platform::PlatformBackend::render_mode(&ui.backend).unwrap(),
+            mode
+        );
+        let image = font
+            .render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+            .unwrap();
+        image
+            .draw_scaled(&mut vec![0; 1000 * 1000], 1000, 1000, 1, mode == 1)
+            .unwrap();
+    }
     for _ in 0..120 {
         font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
             .unwrap();
@@ -847,7 +873,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
             .all(|child| child.draw.as_ref().unwrap().words[17] == 32)
     );
     println!(
-        "settings: native_audio={native_audio}; title + toolbar; background/opacity/fullscreen/aspect, cursor hide, voice stop modes, read-skip policy, bold/text/audio/auto settings, three pages, 439 settings frames; auto advanced at least three entries in {auto_frames} rendered frames with {} voices and {} voice fades; disabled then idle 240 rendered frames",
+        "settings: native_audio={native_audio}; title + toolbar; background/opacity/fullscreen/aspect/filter, cursor hide, voice stop modes, read-skip policy, bold/text/audio/auto settings, three pages, 442 settings frames; auto advanced at least three entries in {auto_frames} rendered frames with {} voices and {} voice fades; disabled then idle 240 rendered frames",
         ui.voices.len(),
         ui.voice_fades.len()
     );
@@ -860,6 +886,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         .save_preferences(cmvs_rs::settings::DisplayPreferences {
             fullscreen: false,
             aspect_mode: 3,
+            render_mode: cmvs_rs::platform::PlatformBackend::render_mode(&ui.backend).unwrap(),
         })
         .unwrap();
     drop(ui);
@@ -874,7 +901,8 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         resumed.display_preferences(),
         cmvs_rs::settings::DisplayPreferences {
             fullscreen: false,
-            aspect_mode: 3
+            aspect_mode: 3,
+            render_mode: 0
         }
     );
     let mut backend = RecordingBackend::default();

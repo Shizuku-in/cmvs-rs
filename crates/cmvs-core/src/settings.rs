@@ -1,6 +1,7 @@
 //! Runtime configuration commands, researched against cmvs-20160201 x64.
 use crate::{bytecode::DecodeError, evaluate::error, machine::Machine, vm::SystemResult};
 mod profile;
+pub(crate) use profile::render_mode_to_ini;
 pub use profile::{Configuration, DisplayPreferences, MAX_CONFIGURATION};
 
 /// Shift-JIS `ＭＳ ゴシック`, the initialized global at 0x1400fc150.

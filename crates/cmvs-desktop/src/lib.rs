@@ -124,6 +124,7 @@ pub struct NativeBackend<'a> {
     pub event_loop: &'a ActiveEventLoop,
     pub encoding: TextEncoding,
     pub aspect_mode: &'a std::cell::Cell<u32>,
+    pub render_mode: &'a std::cell::Cell<u32>,
 }
 impl PlatformBackend for NativeBackend<'_> {
     fn window_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
@@ -136,11 +137,15 @@ impl PlatformBackend for NativeBackend<'_> {
     fn stretch_filter_supported(&self) -> Result<bool, Box<dyn Error>> {
         Ok(true)
     }
+    /// Software bilinear presentation in `RgbaImage::draw_scaled`.
+    fn linear_stretch_supported(&self) -> Result<bool, Box<dyn Error>> {
+        Ok(true)
+    }
     fn resizable(&self) -> Result<bool, Box<dyn Error>> {
         Ok(self.window.is_resizable())
     }
     fn render_mode(&self) -> Result<u32, Box<dyn Error>> {
-        Ok(0)
+        Ok(self.render_mode.get())
     }
     fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error>> {
         Ok(0)
@@ -166,6 +171,14 @@ impl PlatformBackend for NativeBackend<'_> {
                 self.aspect_mode.set(*mode);
                 self.window.request_redraw();
                 println!("# native aspect mode={mode}");
+            }
+            PlatformRequest::RenderMode(mode) => {
+                if *mode > 1 {
+                    return Err("unsupported render mode".into());
+                }
+                self.render_mode.set(*mode);
+                self.window.request_redraw();
+                println!("# native render mode={mode}");
             }
             PlatformRequest::Fullscreen(value) => {
                 self.window.set_fullscreen(

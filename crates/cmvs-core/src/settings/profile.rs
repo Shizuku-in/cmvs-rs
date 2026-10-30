@@ -12,12 +12,15 @@ pub const MAX_CONFIGURATION: usize = 1024 * 1024;
 pub struct DisplayPreferences {
     pub fullscreen: bool,
     pub aspect_mode: u32,
+    /// Requested device +112 mode before the backend capability fallback.
+    pub render_mode: u32,
 }
 impl Default for DisplayPreferences {
     fn default() -> Self {
         Self {
             fullscreen: false,
             aspect_mode: 1,
+            render_mode: 1,
         }
     }
 }
@@ -31,7 +34,28 @@ impl DisplayPreferences {
                 n @ 0..=3 => n,
                 _ => 1,
             },
+            render_mode: render_mode_from_ini(crate::save_menu::profile_int(
+                bytes,
+                "GRAPHIC_CONFIG",
+                "ASPECT_RATIO_FILTER",
+                0,
+            )),
         }
+    }
+}
+/// 0x140013b9d: the stored word swaps 0 and 1; negative or >= 4 becomes 0.
+fn render_mode_from_ini(raw: i32) -> u32 {
+    match raw {
+        0 | 1 => (1 - raw) as u32,
+        2 | 3 => raw as u32,
+        _ => 0,
+    }
+}
+/// 0x14000cd63 writes the same swap for modes 0 and 1.
+pub(crate) fn render_mode_to_ini(mode: u32) -> u32 {
+    match mode {
+        0 | 1 => 1 - mode,
+        _ => mode,
     }
 }
 

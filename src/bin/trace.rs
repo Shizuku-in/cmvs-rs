@@ -347,6 +347,9 @@ fn run() -> Result<(), Box<dyn Error>> {
                             PlatformRequest::AspectMode(value) => {
                                 println!("# recorded aspect mode={value}")
                             }
+                            PlatformRequest::RenderMode(value) => {
+                                println!("# recorded render mode={value}")
+                            }
                             PlatformRequest::WindowSize(value) => {
                                 println!("# recorded window size={value:?}")
                             }

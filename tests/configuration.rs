@@ -67,11 +67,24 @@ fn desktop_preferences_normalize_only_the_supported_aspect_range() {
         DisplayPreferences::from_ini(b"[CMVS_RS_DESKTOP]\nFULLSCREEN=1\nASPECT_MODE=2\n"),
         DisplayPreferences {
             fullscreen: true,
-            aspect_mode: 2
+            aspect_mode: 2,
+            render_mode: 1
         }
     );
     assert_eq!(
         DisplayPreferences::from_ini(b"[CMVS_RS_DESKTOP]\nASPECT_MODE=-1\n").aspect_mode,
         1
     );
+}
+
+#[test]
+fn graphic_filter_preference_swaps_point_and_linear_like_the_original_word() {
+    let mode = |raw: &str| {
+        let text = format!("[GRAPHIC_CONFIG]\r\nASPECT_RATIO_FILTER={raw}\r\n");
+        DisplayPreferences::from_ini(text.as_bytes()).render_mode
+    };
+    for (raw, expected) in [("0", 1), ("1", 0), ("2", 2), ("3", 3), ("4", 0), ("-1", 0)] {
+        assert_eq!(mode(raw), expected, "raw={raw}");
+    }
+    assert_eq!(DisplayPreferences::default().render_mode, 1);
 }

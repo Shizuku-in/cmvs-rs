@@ -102,6 +102,123 @@ fn aspect_mode_normalizes_invalid_words_preserves_results_and_skips_equal_reques
 }
 
 #[test]
+fn render_mode_clamps_words_falls_back_without_linear_support_and_skips_equal_requests() {
+    let mut code = vec![];
+    for raw in [1, 1, 0, 3, 2, u32::MAX, 4, 1] {
+        bytecode::command(&mut code, 0x216d, &[raw]);
+        bytecode::command(&mut code, 0x216c, &[]);
+    }
+    let script = bytecode::script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = PlatformHost::default();
+    let mut backend = RecordingBackend::default();
+    let mut assets = Assets::default();
+    // Shader modes 2/3 need PS2/PS3; the recording backend reports major 0.
+    for value in [1, 1, 0, 0, 0, 0, 0, 1] {
+        vm.state_mut().set_system_integer(0, 77).unwrap();
+        bytecode::pending(&mut vm);
+        assert_eq!(
+            host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+                .unwrap(),
+            Some(cmvs_rs::platform::PlatformEvent::Configured)
+        );
+        assert_eq!(vm.state().system_integer(0), Some(77));
+        assert_eq!(vm.stack().len_bytes(), 0);
+        bytecode::pending(&mut vm);
+        host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+            .unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(value));
+    }
+    assert_eq!(
+        backend.requests(),
+        &[1, 0, 1].map(PlatformRequest::RenderMode)
+    );
+    assert_eq!(assets.calls, 0);
+
+    struct PointOnly(u32);
+    impl PlatformBackend for PointOnly {
+        fn linear_stretch_supported(&self) -> Result<bool, Box<dyn Error>> {
+            Ok(false)
+        }
+        fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error>> {
+            Ok(0)
+        }
+        fn render_mode(&self) -> Result<u32, Box<dyn Error>> {
+            Ok(self.0)
+        }
+        fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+            assert_eq!(request, &PlatformRequest::RenderMode(0));
+            self.0 = 0;
+            Ok(())
+        }
+    }
+    let mut code = vec![];
+    bytecode::command(&mut code, 0x216d, &[1]);
+    let script = bytecode::script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    bytecode::pending(&mut vm);
+    let mut device = PointOnly(1);
+    host.try_handle(&mut vm, &mut device, &mut assets, &[])
+        .unwrap();
+    assert_eq!(device.0, 0);
+}
+
+#[test]
+fn shader_render_modes_on_capable_devices_and_backend_failures_stay_barriers() {
+    struct Device(u8, bool);
+    impl PlatformBackend for Device {
+        fn linear_stretch_supported(&self) -> Result<bool, Box<dyn Error>> {
+            Ok(true)
+        }
+        fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error>> {
+            Ok(self.0)
+        }
+        fn render_mode(&self) -> Result<u32, Box<dyn Error>> {
+            Ok(0)
+        }
+        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+            if self.1 {
+                Ok(())
+            } else {
+                Err("device reset failed".into())
+            }
+        }
+    }
+    for (raw, device) in [
+        (2, Device(2, true)),
+        (3, Device(3, true)),
+        (1, Device(0, false)),
+    ] {
+        let mut code = vec![];
+        bytecode::command(&mut code, 0x216d, &[raw]);
+        let script = bytecode::script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        bytecode::pending(&mut vm);
+        let before = vm.pending_system();
+        vm.state_mut().set_system_integer(0, 77).unwrap();
+        let mut device = device;
+        assert!(
+            PlatformHost::default()
+                .try_handle(&mut vm, &mut device, &mut Assets::default(), &[])
+                .is_err()
+        );
+        assert_eq!(vm.pending_system(), before);
+        assert_eq!(vm.stack().len_bytes(), 4);
+        assert_eq!(vm.state().system_integer(0), Some(77));
+    }
+    // PS2 alone does not satisfy the PS3 mode, which therefore falls back to point.
+    let mut code = vec![];
+    bytecode::command(&mut code, 0x216d, &[3]);
+    let script = bytecode::script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    bytecode::pending(&mut vm);
+    PlatformHost::default()
+        .try_handle(&mut vm, &mut Device(2, false), &mut Assets::default(), &[])
+        .unwrap();
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
 fn fullscreen_changes_yield_preserve_results_and_query_the_new_backend_mode() {
     use cmvs_rs::platform::PlatformEvent;
     let mut code = vec![];

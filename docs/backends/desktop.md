@@ -62,7 +62,7 @@ PB3 素材显示验证：只读加载 chip.cpz 内的 logo.pb3（1280×720，typ
 cargo run --offline --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot
 ```
 
-不指定显式素材时，`scene_render` 按 VM 场景状态呈现，采用 1280×720 本作研究视口，再最近邻按比例适配窗口。
+不指定显式素材时，`scene_render` 按 VM 场景状态呈现，采用 1280×720 本作研究视口，再按比例适配窗口；缩放默认最近邻，绘制模式1为软件双线性（见[平台宿主](platform-host.md#绘制模式与缩放滤镜2026-10-31)）。
 支持顶层模式 0、普通混合、单位缩放/零旋转，按脚本裁切、原点、位置、层次及不透明度显示；子对象呈现与其他变换/混合明确报错。
 层次降序、同层按槽序；整数 alpha 舍入及窗口缩放未与 D3D9 做逐像素对照。
 本机实测不使用 --preview-image 显示完整白底 Purple Software logo，前置窗口截图确认，Escape 正常退出。

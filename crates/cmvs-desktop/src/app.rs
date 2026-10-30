@@ -53,6 +53,7 @@ struct App<'a> {
     cursor_shown: bool,
     font: Option<crate::font::FontRenderer>,
     aspect_mode: std::cell::Cell<u32>,
+    render_mode: std::cell::Cell<u32>,
 }
 impl App<'_> {
     fn frame(&mut self) -> Result<RgbaImage, Box<dyn Error>> {
@@ -108,7 +109,13 @@ impl App<'_> {
             } else {
                 1
             };
-            image.draw_aspect(&mut buffer, size.width, size.height, mode)?;
+            image.draw_scaled(
+                &mut buffer,
+                size.width,
+                size.height,
+                mode,
+                self.render_mode.get() == 1,
+            )?;
         }
         buffer.present()?;
         Ok(())
@@ -130,6 +137,7 @@ impl App<'_> {
             event_loop: el,
             encoding: self.encoding,
             aspect_mode: &self.aspect_mode,
+            render_mode: &self.render_mode,
         };
         backend.apply(&PlatformRequest::Cursor { id, bitmap })?;
         println!("# preview-only cursor shortcut={id}; VM state unchanged");
@@ -161,6 +169,17 @@ impl ApplicationHandler for App<'_> {
             self.surface = Some(surface);
             self.context = Some(context);
             self.window = Some(window.clone());
+            // Startup load (0x140013bf1) applies the same capability fallback as 0x216d.
+            let backend = NativeBackend {
+                window: &window,
+                event_loop: el,
+                encoding: self.encoding,
+                aspect_mode: &self.aspect_mode,
+                render_mode: &self.render_mode,
+            };
+            let mode =
+                cmvs_core::platform::supported_render_mode(&backend, backend.render_mode()?)?;
+            self.render_mode.set(mode);
             if self.native_input && self.preview_image.is_none() {
                 self.startup.set_focused(false);
             }
@@ -348,6 +367,7 @@ impl ApplicationHandler for App<'_> {
                     event_loop: el,
                     encoding: self.encoding,
                     aspect_mode: &self.aspect_mode,
+                    render_mode: &self.render_mode,
                 };
                 let had_fade = self.startup.scene().fade().current().is_some();
                 let outcome = self.startup.tick(&mut backend);
@@ -705,6 +725,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         cursor_shown: true,
         font,
         aspect_mode: std::cell::Cell::new(display_preferences.aspect_mode),
+        render_mode: std::cell::Cell::new(display_preferences.render_mode),
     };
     let event_loop = EventLoop::new()?;
     event_loop.run_app(&mut app)?;
@@ -726,6 +747,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 .as_ref()
                 .is_some_and(|w| w.fullscreen().is_some()),
             aspect_mode: app.aspect_mode.get(),
+            render_mode: app.render_mode.get(),
         })?
     {
         println!("# user settings saved");

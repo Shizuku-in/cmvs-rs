@@ -40,8 +40,8 @@ impl Startup<'_> {
         if !matches!(self.system_output, Some(SystemOutput::Profile(_))) {
             return Ok(false);
         }
-        if display.aspect_mode > 3 {
-            return Err("invalid saved display aspect mode".into());
+        if display.aspect_mode > 3 || display.render_mode > 3 {
+            return Err("invalid saved display aspect or render mode".into());
         }
         let mut configuration = self.configuration.clone();
         let text = self.settings.text_output();
@@ -100,6 +100,11 @@ impl Startup<'_> {
             u32::from(display.fullscreen),
         )?;
         configuration.set_integer("CMVS_RS_DESKTOP", "ASPECT_MODE", display.aspect_mode)?;
+        configuration.set_integer(
+            "GRAPHIC_CONFIG",
+            "ASPECT_RATIO_FILTER",
+            crate::settings::render_mode_to_ini(display.render_mode),
+        )?;
         let Some(SystemOutput::Profile(profile)) = &mut self.system_output else {
             unreachable!()
         };
