@@ -1192,6 +1192,154 @@ struct AutoVoice {
 }
 
 #[test]
+fn read_policy_clears_script_skip_for_unread_and_bypass_overrides_only_eligibility() {
+    let mut state = cmvs_rs::evaluate::State::default();
+    state.set_bit(123, false).unwrap();
+    state.set_bit(124, true).unwrap();
+    for (read_skip, id, bypass, expected_skip, expected_read) in [
+        (true, 123, false, false, false),
+        (true, 124, false, true, true),
+        (false, 123, false, true, true),
+        (true, -1, false, true, true),
+        (true, 123, true, false, true),
+    ] {
+        let flags = message_flags(true, true, bypass);
+        let (candidate, read) = flags.prepare_read(&state, id, read_skip).unwrap();
+        assert_eq!(candidate.skip(), expected_skip);
+        assert_eq!(read, expected_read);
+        assert_eq!(candidate.auto_advance(), flags.auto_advance());
+        assert_eq!(candidate.bypass(), flags.bypass());
+        assert!(flags.skip());
+    }
+    let flags = message_flags(true, false, false);
+    assert!(flags.prepare_read(&state, 125, true).is_err());
+    assert!(flags.prepare_read(&state, i32::MAX, true).is_err());
+    assert!(flags.skip());
+    assert_eq!(state.bits().len(), 2);
+}
+
+#[test]
+fn unread_wait_blocks_normal_skip_but_force_skip_and_bypass_still_advance() {
+    use cmvs_rs::{message::AutoAdvanceContext, settings::AutoAdvanceSettings};
+    for (read, action, skip, bypass, expected) in [
+        (false, Some(8), false, false, Step::Yield),
+        (true, Some(8), false, false, Step::Continue),
+        (false, Some(7), false, false, Step::Continue),
+        (false, None, true, false, Step::Yield),
+        (true, None, true, false, Step::Continue),
+        (false, None, false, true, Step::Continue),
+    ] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 100, 100]);
+        call(&mut code, 0x2153, &[u32::MAX, 123, 0]);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 1);
+        pending(&mut vm);
+        let mut input = ActionInput::default();
+        input.set_pointer(-1, -1);
+        if let Some(action) = action {
+            input.set(action, true, false, false).unwrap();
+        }
+        let old = input.clone();
+        assert_eq!(
+            messages
+                .try_wait_with_auto(
+                    &mut vm,
+                    &mut input,
+                    message_flags(skip, false, bypass),
+                    AutoAdvanceContext {
+                        settings: AutoAdvanceSettings::default(),
+                        delta_ms: 16,
+                        gesture_result: false,
+                        read_eligible: read,
+                        audio: &AutoVoice {
+                            playing: false,
+                            fail: true
+                        },
+                    }
+                )
+                .unwrap(),
+            Some(expected)
+        );
+        assert_eq!(input, old);
+    }
+}
+
+#[test]
+fn unread_output_can_be_revealed_by_held_skip_while_the_following_wait_still_stops() {
+    use cmvs_rs::{message::AutoAdvanceContext, settings::AutoAdvanceSettings};
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 300, 100]);
+    call(&mut code, 0x2152, &[0, 123, 0]);
+    call(&mut code, 0x2153, &[u32::MAX, 123, 0]);
+    let script = script_with_text(&code, b"\x82\xa0\x82\xa2\0");
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_bit(123, false).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 1);
+    messages.set_record_output(true);
+    pending(&mut vm);
+    let (flags, read) = message_flags(true, false, false)
+        .prepare_read(vm.state(), 123, true)
+        .unwrap();
+    assert!(!flags.skip() && !read);
+    let mut input = ActionInput::default();
+    messages
+        .try_record_output(&mut vm, &mut input, flags)
+        .unwrap();
+    assert!(messages.text(7).unwrap().glyphs.iter().all(|g| g.active));
+    input.set(8, true, false, false).unwrap();
+    messages
+        .try_record_output(&mut vm, &mut input, flags)
+        .unwrap();
+    assert!(messages.text(7).unwrap().glyphs.iter().all(|g| !g.active));
+    pending(&mut vm);
+    assert_eq!(
+        messages
+            .try_wait_with_auto(
+                &mut vm,
+                &mut input,
+                flags,
+                AutoAdvanceContext {
+                    settings: AutoAdvanceSettings::default(),
+                    delta_ms: 16,
+                    gesture_result: false,
+                    read_eligible: read,
+                    audio: &AutoVoice {
+                        playing: false,
+                        fail: true
+                    },
+                }
+            )
+            .unwrap(),
+        Some(Step::Yield)
+    );
+    input.set(0, false, false, true).unwrap();
+    assert_eq!(
+        messages
+            .try_wait_with_auto(
+                &mut vm,
+                &mut input,
+                flags,
+                AutoAdvanceContext {
+                    settings: AutoAdvanceSettings::default(),
+                    delta_ms: 16,
+                    gesture_result: false,
+                    read_eligible: read,
+                    audio: &AutoVoice {
+                        playing: false,
+                        fail: true
+                    },
+                }
+            )
+            .unwrap(),
+        Some(Step::Continue)
+    );
+}
+
+#[test]
 fn pointer_gesture_result_blocks_auto_manual_and_skip_without_advancing_timer() {
     use cmvs_rs::{message::AutoAdvanceContext, settings::AutoAdvanceSettings};
     let mut code = vec![];
@@ -1217,6 +1365,7 @@ fn pointer_gesture_result_blocks_auto_manual_and_skip_without_advancing_timer() 
         },
         delta_ms: 10000,
         gesture_result: true,
+        read_eligible: true,
         audio: &audio,
     };
     assert_eq!(
@@ -1237,6 +1386,7 @@ fn pointer_gesture_result_blocks_auto_manual_and_skip_without_advancing_timer() 
                     AutoAdvanceContext {
                         delta_ms: 50,
                         gesture_result: false,
+                        read_eligible: true,
                         ..context
                     }
                 )
@@ -1296,6 +1446,7 @@ fn automatic_wait_uses_frame_delta_and_resets_after_manual_or_timed_completion()
                         settings,
                         delta_ms: 40,
                         gesture_result: false,
+                        read_eligible: true,
                         audio: &audio
                     }
                 )
@@ -1315,6 +1466,7 @@ fn automatic_wait_uses_frame_delta_and_resets_after_manual_or_timed_completion()
                     settings,
                     delta_ms: 80,
                     gesture_result: false,
+                    read_eligible: true,
                     audio: &audio
                 }
             )
@@ -1341,6 +1493,7 @@ fn automatic_wait_uses_frame_delta_and_resets_after_manual_or_timed_completion()
                         settings,
                         delta_ms: 50,
                         gesture_result: false,
+                        read_eligible: true,
                         audio: &audio
                     }
                 )
@@ -1389,6 +1542,7 @@ fn automatic_wait_restarts_timer_while_voice_plays_and_waits_after_it_ends() {
                         settings,
                         delta_ms: delta,
                         gesture_result: false,
+                        read_eligible: true,
                         audio: &audio
                     }
                 )
@@ -1425,6 +1579,7 @@ fn automatic_wait_voice_query_failure_preserves_timer_command_input_and_window()
                     settings,
                     delta_ms: 200,
                     gesture_result: false,
+                    read_eligible: true,
                     audio: &AutoVoice {
                         playing: false,
                         fail: true
@@ -1448,6 +1603,7 @@ fn automatic_wait_voice_query_failure_preserves_timer_command_input_and_window()
                     settings,
                     delta_ms: 50,
                     gesture_result: false,
+                    read_eligible: true,
                     audio: &AutoVoice {
                         playing: false,
                         fail: false
@@ -1492,6 +1648,7 @@ fn automatic_wait_hidden_window_pauses_timer_and_sync_off_ignores_voice_device()
                     settings,
                     delta_ms: 10000,
                     gesture_result: false,
+                    read_eligible: true,
                     audio: &audio
                 }
             )
@@ -1514,6 +1671,7 @@ fn automatic_wait_hidden_window_pauses_timer_and_sync_off_ignores_voice_device()
                         settings,
                         delta_ms: 50,
                         gesture_result: false,
+                        read_eligible: true,
                         audio: &audio
                     }
                 )

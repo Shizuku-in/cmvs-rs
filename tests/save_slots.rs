@@ -489,6 +489,12 @@ fn external_system_settings_entries_render_and_return() {
     assert_eq!(group.buttons.len(), 292);
     assert!(ui.run.messages().window(6).is_some());
     let initial_audio = ui.run.audio().settings();
+    for (x, expected) in [(174, false), (278, true)] {
+        ui.click([x, 239], 30);
+        assert_eq!(ui.run.settings().read_skip(), expected);
+        font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+            .unwrap();
+    }
     for (outline, x) in [368, 472, 576].into_iter().enumerate() {
         ui.click([x, 173], 30);
         assert_eq!(ui.run.settings().text_output().outline, outline as u32);
@@ -655,7 +661,7 @@ fn external_system_settings_entries_render_and_return() {
     assert_eq!(ui.run.history().entries().len(), stopped);
     assert!(ui.waiting_for_text());
     println!(
-        "settings: title + toolbar; text outline/speed, audio and auto sliders, resets, three pages, 413 settings frames; auto advanced three entries in {auto_frames} rendered frames; disabled then idle 240 rendered frames"
+        "settings: title + toolbar; read-skip policy, text outline/speed, audio and auto sliders, resets, three pages, 415 settings frames; auto advanced three entries in {auto_frames} rendered frames; disabled then idle 240 rendered frames"
     );
 }
 

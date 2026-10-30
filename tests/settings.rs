@@ -7,6 +7,32 @@ mod bytecode;
 use bytecode::{command, pending, script};
 
 #[test]
+fn read_skip_setting_loads_ini_and_normalizes_writes_without_changing_results() {
+    assert!(!SettingsHost::default().read_skip());
+    assert!(SettingsHost::from_ini(&[]).read_skip());
+    assert!(!SettingsHost::from_ini(b"[MESSAGE_INFO]\nREAD_SKIP=0\n").read_skip());
+    assert!(SettingsHost::from_ini(b"[MESSAGE_INFO]\nREAD_SKIP=-1\n").read_skip());
+    let mut code = vec![];
+    for value in [u32::MAX, 0, 1] {
+        command(&mut code, 0x22e4, &[1, value]);
+        command(&mut code, 0x22e4, &[0, 0]);
+    }
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut settings = SettingsHost::default();
+    for expected in [1, 0, 1] {
+        vm.state_mut().set_system_integer(0, 77).unwrap();
+        pending(&mut vm);
+        settings.try_handle(&mut vm).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(77));
+        pending(&mut vm);
+        settings.try_handle(&mut vm).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(expected));
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
+}
+
+#[test]
 fn text_settings_round_trip_clamps_preserve_results_and_keep_outline_signed_remainder() {
     for (op, raw, expected) in [
         (0x22df, u32::MAX, 1),
@@ -551,7 +577,7 @@ fn automatic_advance_fields_round_trip_raw_words_and_normalize_only_the_boolean(
 
 #[test]
 fn configuration_queries_expose_current_constructor_policy_and_setters_stay_barriers() {
-    for (op, value) in [(0x22d5, 1), (0x22e0, 0), (0x22e4, 0), (0x22e9, 1)] {
+    for (op, value) in [(0x22d5, 1), (0x22e0, 0), (0x22e9, 1)] {
         let mut code = vec![];
         command(&mut code, op, &[0, 0]);
         command(&mut code, op, &[1, 2]);

@@ -406,6 +406,8 @@ fn startup_fade_wait_needs_explicit_frames_and_resumes_after_removal() {
 #[test]
 fn message_wait_resumes_without_advancing_time_on_release_completion() {
     let mut code = vec![];
+    // Startup READ_SKIP now follows the INI default, so establish unread ID 0.
+    system_call(&mut code, 0x2091, &[0, 1, 0]);
     for (op, words) in [
         (0x215du16, vec![720u32, 1280, 100, 100, 0, 0, 7, 0]),
         (0x2153, vec![u32::MAX, 0, 0]),
@@ -921,6 +923,58 @@ fn system_call(code: &mut Vec<u8>, op: u16, args: &[u32]) {
         code.extend(value.to_le_bytes());
     }
     code.extend(op.to_le_bytes());
+}
+
+#[test]
+fn read_skip_cancels_script_skip_at_unread_output_and_keeps_flags_on_unknown_bits() {
+    for (name, read) in [
+        ("read-skip-unread", Some(false)),
+        ("read-skip-read", Some(true)),
+        ("read-skip-unknown", None),
+    ] {
+        let mut code = vec![];
+        if let Some(read) = read {
+            system_call(&mut code, 0x2091, &[123, 1, u32::from(read)]);
+        }
+        system_call(&mut code, 0x215d, &[0, 0, 0, 0, 100, 100, 1280, 720]);
+        system_call(&mut code, 0x22eb, &[1, 1]);
+        system_call(&mut code, 0x2152, &[0, 123, 0]);
+        code.extend(0x27ffu16.to_le_bytes());
+        let root = Root::new(name, &code, b"A\0");
+        let script = root.script();
+        let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+        run.set_record_text(true);
+        let mut backend = RecordingBackend::default();
+        let mut reached = false;
+        for _ in 0..100 {
+            match run.tick(&mut backend) {
+                Ok(StartupEvent::Progress) => {}
+                Ok(StartupEvent::Yield) => {
+                    assert_eq!(run.message_flags().skip(), read.unwrap());
+                    assert_eq!(
+                        run.messages().text(0).unwrap().glyphs[0].active,
+                        read == Some(false)
+                    );
+                    reached = true;
+                    break;
+                }
+                Err(e) => {
+                    assert_eq!(read, None);
+                    assert!(e.to_string().contains("read-skip bit"));
+                    assert!(run.message_flags().skip());
+                    assert!(run.messages().text(0).unwrap().glyphs.is_empty());
+                    let pc = run.machine().pc();
+                    assert!(run.tick(&mut backend).is_err());
+                    assert_eq!(run.machine().pc(), pc);
+                    assert!(run.message_flags().skip());
+                    reached = true;
+                    break;
+                }
+                event => panic!("{event:?}"),
+            }
+        }
+        assert!(reached);
+    }
 }
 
 #[test]

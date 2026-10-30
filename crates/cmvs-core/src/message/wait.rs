@@ -1,4 +1,4 @@
-//! Manual/automatic 0x2153 / 0x140076880 -> 0x14005e220, with READ_SKIP=0.
+//! Manual/automatic 0x2153 / 0x140076880 -> 0x14005e220 with an explicit read policy.
 //! A pointer gesture result gates completion; the +12244 bypass (0x2340) completes like the
 //! skip flag. Automatic advance uses explicit frame time and voice playback status.
 use super::{MessageHost, RESEARCH_SCREEN, window_slot};
@@ -18,6 +18,7 @@ pub struct AutoAdvanceContext<'a> {
     pub settings: AutoAdvanceSettings,
     pub delta_ms: u32,
     pub gesture_result: bool,
+    pub read_eligible: bool,
     pub audio: &'a dyn AudioBackend,
 }
 
@@ -40,6 +41,7 @@ impl MessageHost {
                 settings: AutoAdvanceSettings::default(),
                 delta_ms: 0,
                 gesture_result: false,
+                read_eligible: true,
                 audio: &RecordingAudio::default(),
             },
         )
@@ -70,8 +72,10 @@ impl MessageHost {
         if window.hidden {
             return vm.yield_pending_system().map(Some);
         }
-        let mut done =
-            !context.gesture_result && (flags.skip() || input.skip_held() || flags.bypass());
+        let mut done = !context.gesture_result
+            && (input.held(7)
+                || ((flags.skip() || input.held(8)) && context.read_eligible)
+                || flags.bypass());
         let mut consume = false;
         let mut advance = false;
         let mut elapsed = self.auto_elapsed;

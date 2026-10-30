@@ -14,6 +14,29 @@ pub struct MessageFlags {
     bypass: bool,
 }
 impl MessageFlags {
+    /// 0x140076700/76880: READ_SKIP clears script skip upon reaching an unread ID.
+    /// Return a candidate so a failed message command does not change global flags.
+    pub fn prepare_read(
+        self,
+        state: &crate::evaluate::State,
+        id: i32,
+        read_skip: bool,
+    ) -> Result<(Self, bool), &'static str> {
+        let mut candidate = self;
+        let mut read = true;
+        if read_skip && id >= 0 {
+            read = state
+                .bit(id as u32)
+                .ok_or("message read-skip bit is unknown or outside the modeled bank")?;
+            if !read {
+                candidate.skip = false;
+            }
+        }
+        if self.bypass {
+            read = true;
+        }
+        Ok((candidate, read))
+    }
     /// Loader 0x140081960 clears +1520 (skip) and +1552 (auto advance).
     pub(crate) fn clear_for_load(&mut self) {
         self.skip = false;

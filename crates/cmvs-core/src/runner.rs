@@ -622,10 +622,23 @@ impl<'a> Startup<'a> {
                 StartupEvent::Progress
             });
         }
+        let (message_flags, read_eligible) = if matches!(command, 0x152 | 0x153) {
+            let read_id = self
+                .machine
+                .stack()
+                .peek_u32(8)
+                .map_err(|e| crate::evaluate::error(pc, command + 0x2000, e.0))?
+                as i32;
+            self.message_flags
+                .prepare_read(self.machine.state(), read_id, self.settings.read_skip())
+                .map_err(|why| crate::evaluate::error(pc, command + 0x2000, why))?
+        } else {
+            (self.message_flags, true)
+        };
         if let Some(step) = self.messages.try_wait_with_auto(
             &mut self.machine,
             &mut self.input,
-            self.message_flags,
+            message_flags,
             crate::message::AutoAdvanceContext {
                 settings: self.settings.auto_advance(),
                 delta_ms: self.timers.delta_ms(),
@@ -633,9 +646,11 @@ impl<'a> Startup<'a> {
                     .gesture
                     .field(88)
                     .is_some_and(|value| value as i32 >= 0),
+                read_eligible,
                 audio: self.audio_backend.as_ref(),
             },
         )? {
+            self.message_flags = message_flags;
             self.resume_run = step == Step::Yield;
             return Ok(if step == Step::Yield {
                 StartupEvent::Yield
@@ -643,11 +658,11 @@ impl<'a> Startup<'a> {
                 StartupEvent::Progress
             });
         }
-        if let Some(step) = self.messages.try_record_output(
-            &mut self.machine,
-            &mut self.input,
-            self.message_flags,
-        )? {
+        if let Some(step) =
+            self.messages
+                .try_record_output(&mut self.machine, &mut self.input, message_flags)?
+        {
+            self.message_flags = message_flags;
             self.resume_run = step == Step::Yield;
             return Ok(StartupEvent::Yield);
         }
