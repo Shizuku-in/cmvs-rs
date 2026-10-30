@@ -128,9 +128,7 @@ impl Startup<'_> {
     /// Research inspection: the snapshot the writer would build from the current hosts,
     /// without the live bit-0 change or replacing the held image.
     pub fn inspect_snapshot(&self) -> Result<EngineSnapshot, Box<dyn Error>> {
-        Ok(self
-            .engine_snapshot_with(self.machine.capture_vm_unchecked()?)?
-            .0)
+        Ok(self.engine_snapshot_with(self.machine.capture_vm()?)?.0)
     }
     /// The held snapshot image (built, loaded, or none).
     pub fn held_snapshot(&self) -> &SaveImage {
@@ -147,17 +145,6 @@ impl Startup<'_> {
         &self,
         vm: crate::machine::VmImage,
     ) -> Result<(EngineSnapshot, Vec<u8>), Box<dyn Error>> {
-        if self.buttons.has_saved_objects() {
-            return Err("saving while button or list groups exist is not implemented".into());
-        }
-        if self
-            .control
-            .callbacks()
-            .get(&SAVE_CALLBACK)
-            .is_some_and(|c| c.enabled)
-        {
-            return Err("the save callback 30 is not implemented".into());
-        }
         let mut variables = LocalVariables::capture(self.machine.state());
         // The captured copy holds bit 0 = 1; the live bit was cleared by the caller.
         variables.set_bit0();
@@ -180,6 +167,12 @@ impl Startup<'_> {
             .collect::<Result<BTreeMap<_, _>, crate::FormatError>>()?;
         let mut raw_objects = BTreeMap::new();
         raw_objects.insert((0x540, 0), self.history.saved());
+        for (slot, record) in self.buttons.saved_groups() {
+            raw_objects.insert((0x8c0, slot), record);
+        }
+        for (slot, record) in self.buttons.saved_lists() {
+            raw_objects.insert((0x8c8, slot), record);
+        }
         for (slot, record) in self.movies.saved_scene_players() {
             raw_objects.insert((0x8e8, slot), record);
         }
@@ -286,8 +279,11 @@ impl Startup<'_> {
     }
 
     /// 0x140080b20 without its native overwrite dialog. Returns false when no snapshot was
-    /// ever taken, which the original also treats as nothing to write.
-    fn write_slot(&mut self, slot: u16) -> Result<bool, Box<dyn Error>> {
+    /// ever taken, which the original also treats as nothing to write. After a write the
+    /// original enters callback 30 (0x140068770) when registered; this title never registers
+    /// it, and the command flags applied afterwards are not modeled, so an enabled callback
+    /// is an error except for the pre-load backup, whose context the load replaces.
+    fn write_slot(&mut self, slot: u16, before_load: bool) -> Result<bool, Box<dyn Error>> {
         let captured = match &self.save_image {
             SaveImage::Absent => return Ok(false),
             SaveImage::Unavailable { .. } => {
@@ -295,6 +291,15 @@ impl Startup<'_> {
             }
             SaveImage::Captured(captured) => captured.clone(),
         };
+        if !before_load
+            && self
+                .control
+                .callbacks()
+                .get(&SAVE_CALLBACK)
+                .is_some_and(|c| c.enabled)
+        {
+            return Err("entering the save callback 30 after a write is not modeled".into());
+        }
         let directory = self.slot_directory()?;
         let path = directory.join(format!("save{slot:03}.dat"));
         let mut header = captured.header;
@@ -337,7 +342,7 @@ impl Startup<'_> {
         if slot > 999 {
             return Err("save slot outside 0..999".into());
         }
-        self.write_slot(slot)
+        self.write_slot(slot, false)
     }
 
     /// 0x22b6 / 0x1400812f0: SP-4 slot; slots above 999 are ignored. Returns 0x4004.
@@ -351,7 +356,7 @@ impl Startup<'_> {
             .peek_u32(4)
             .map_err(|e| error(pc, 0x22b6, e.0))?;
         if slot <= 999 {
-            self.write_slot(slot as u16)?;
+            self.write_slot(slot as u16, false)?;
         }
         self.machine.complete_system(SystemResult(0x4004))?;
         Ok(true)
@@ -398,7 +403,7 @@ impl Startup<'_> {
         let save = Csv2Save::decode(&bytes)?;
         let snapshot = EngineSnapshot::decode(&save.snapshot)?;
         if slot < 950 && matches!(self.save_image, SaveImage::Captured(_)) {
-            self.write_slot(LOAD_BACKUP_SLOT)?;
+            self.write_slot(LOAD_BACKUP_SLOT, true)?;
         }
         self.restore_snapshot(&save, &bytes[..HEADER_SIZE], &snapshot, backend)
     }
@@ -431,9 +436,9 @@ impl Startup<'_> {
         if snapshot
             .raw_objects
             .keys()
-            .any(|&(tag, _)| !matches!(tag, 0x540 | 0x8e8))
+            .any(|&(tag, _)| !matches!(tag, 0x540 | 0x8c0 | 0x8c8 | 0x8e8))
         {
-            return Err("saved button, list or overlay objects are not implemented".into());
+            return Err("saved overlay or camera-sequence objects are not implemented".into());
         }
         if snapshot.sound_device != [1, 0, 0, 0, 0, 0] {
             return Err("saved sound device buffers are not implemented".into());
@@ -491,6 +496,16 @@ impl Startup<'_> {
                 crate::resources::ResourceKind::SceneMovie,
             ),
         )?;
+        let records = |tag: u16| -> Vec<(u16, &[u8])> {
+            snapshot
+                .raw_objects
+                .iter()
+                .filter(|((t, _), _)| *t == tag)
+                .map(|(&(_, slot), body)| (slot, body.as_slice()))
+                .collect()
+        };
+        let mut buttons = self.buttons.clone();
+        buttons.restore(&records(0x8c0), &records(0x8c8))?;
         let texts: [Option<_>; TEXT_OBJECTS] = snapshot.texts.clone();
         let mut history = self.history.clone();
         history.restore(&snapshot.raw_objects[&(0x540, 0)])?;
@@ -519,7 +534,7 @@ impl Startup<'_> {
         self.save_title.restore(snapshot.save_title.clone());
         self.save_menu.restore_flags(snapshot.word_12092);
         self.message_flags.clear_for_load();
-        self.buttons.clear_for_load();
+        self.buttons = buttons;
         if self.movies.restore(players) {
             self.audio_backend.stop_movie_audio()?;
         }

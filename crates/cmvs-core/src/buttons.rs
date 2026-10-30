@@ -61,7 +61,7 @@ const DECIDED_ELSEWHERE: u32 = -10i32 as u32;
 const CANCELLED: u32 = -2i32 as u32;
 const NOTHING: u32 = u32::MAX;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ButtonHost {
     groups: [Option<ButtonGroup>; BUTTON_GROUPS],
     lists: [Option<ListGroup>; 8],
@@ -443,14 +443,142 @@ impl Frame {
     }
 }
 
-impl ButtonHost {
-    /// Records 0x8c0 (+4504 groups) and 0x8c8 (+4552 lists) are not implemented.
-    pub(crate) fn has_saved_objects(&self) -> bool {
-        self.groups.iter().any(Option::is_some) || self.lists.iter().any(Option::is_some)
+/// A node's images as 0x14005f180 / 0x140004cf0 store them: child, crop, origin.
+fn image_words(images: &[ButtonImage; BUTTON_STATES], out: &mut Vec<u8>) {
+    for image in images {
+        out.extend(image.child.to_le_bytes());
+        for value in image.crop.iter().chain(&image.origin) {
+            out.extend(value.to_le_bytes());
+        }
     }
-    /// Loader 0x140081960 frees both tables; 0x2087's merged-state flag stays.
-    pub(crate) fn clear_for_load(&mut self) {
-        self.groups = Default::default();
-        self.lists = Default::default();
+}
+
+/// The header both records share: the u16 object field the writers leave 0 (the dword
+/// 0x20000), version 2, then the pointer scale words +24/+28 of the group.
+fn record_header(out: &mut Vec<u8>, scale: [u32; 2]) {
+    out.extend(0x20000u32.to_le_bytes());
+    out.extend(scale[0].to_le_bytes());
+    out.extend(scale[1].to_le_bytes());
+}
+
+/// Reader side of both records: the object field and the saved scale.
+fn record_binding(body: &[u8]) -> Result<(u8, [u32; 2]), &'static str> {
+    let word = |at: usize| -> Result<u32, &'static str> {
+        Ok(u32::from_le_bytes(
+            body.get(at..at + 4)
+                .ok_or("truncated button record")?
+                .try_into()
+                .unwrap(),
+        ))
+    };
+    if u16::from_le_bytes([body[0], body[1]]) > 255 || body.get(2..4) != Some(&[2, 0]) {
+        return Err("unsupported button record object or version");
+    }
+    Ok((body[0], [word(4)?, word(8)?]))
+}
+
+impl ButtonHost {
+    /// Records 0x8c0 (0x14005efd0): header, +8 (the constructor's 1; only the unimplemented
+    /// 0x2218/0x2219 touch it), the count, then each node +8..+112 (enabled, id, rect,
+    /// links, four images; 104 bytes).
+    pub(crate) fn saved_groups(&self) -> Vec<(u16, Vec<u8>)> {
+        let screen = crate::message::RESEARCH_SCREEN;
+        let mut out = Vec::new();
+        for (slot, group) in self.groups.iter().enumerate() {
+            let Some(group) = group else { continue };
+            let mut body = Vec::new();
+            record_header(&mut body, screen);
+            body.extend(1u32.to_le_bytes());
+            body.extend((group.buttons.len() as u32).to_le_bytes());
+            for button in &group.buttons {
+                body.extend(u32::from(button.enabled).to_le_bytes());
+                body.extend(button.id.to_le_bytes());
+                for value in button.rect.iter().chain(&button.links) {
+                    body.extend(value.to_le_bytes());
+                }
+                image_words(&button.images, &mut body);
+            }
+            out.push((slot as u16, body));
+        }
+        out
+    }
+    /// Records 0x8c8 (0x140004b20): header, +8 active, +92 navigation off, +72 keep input,
+    /// +76..+88 hit area, the count, then each 0x78-byte node +8..+116 (enabled, a word
+    /// the constructor leaves unset and Rust writes as 0, id, rect, links, four images).
+    pub(crate) fn saved_lists(&self) -> Vec<(u16, Vec<u8>)> {
+        let mut out = Vec::new();
+        for (slot, list) in self.lists.iter().enumerate() {
+            let Some(list) = list else { continue };
+            let mut body = Vec::new();
+            record_header(&mut body, [list.screen[0], list.screen[1]]);
+            for flag in [list.active, list.disable_navigation, list.keep_input] {
+                body.extend(u32::from(flag).to_le_bytes());
+            }
+            for value in list.hit_area {
+                body.extend(value.to_le_bytes());
+            }
+            body.extend((list.buttons.len() as u32).to_le_bytes());
+            for button in &list.buttons {
+                body.extend(u32::from(button.enabled).to_le_bytes());
+                body.extend(0u32.to_le_bytes());
+                body.extend(button.id.to_le_bytes());
+                for value in button.rect.iter().chain(&button.links) {
+                    body.extend(value.to_le_bytes());
+                }
+                image_words(&button.images, &mut body);
+            }
+            out.push((slot as u16, body));
+        }
+        out
+    }
+    /// Loader 0x140081960 frees both tables (0x2087's merged-state flag stays); the reader
+    /// then builds each saved group or list with its constructor (0x14005ef80 /
+    /// 0x140004ab0) bound to the record's object field, with the saved pointer scale, and
+    /// passes the record buffer to the writer instead of reading the buttons back. A loaded
+    /// group or list is therefore empty, bound to object 0 for records these writers made.
+    pub(crate) fn restore(
+        &mut self,
+        groups: &[(u16, &[u8])],
+        lists: &[(u16, &[u8])],
+    ) -> Result<(), &'static str> {
+        let mut restored_groups: [Option<ButtonGroup>; BUTTON_GROUPS] = Default::default();
+        for &(slot, body) in groups {
+            let (object, scale) = record_binding(body)?;
+            if scale != crate::message::RESEARCH_SCREEN {
+                return Err("a restored button group with a pointer scale is not modeled");
+            }
+            *restored_groups
+                .get_mut(usize::from(slot))
+                .ok_or("button group record outside 0..5")? = Some(ButtonGroup {
+                object,
+                buttons: Vec::new(),
+                current: None,
+                pressed_visual: false,
+                press_target: None,
+            });
+        }
+        let mut restored_lists: [Option<ListGroup>; 8] = Default::default();
+        for &(slot, body) in lists {
+            let (object, scale) = record_binding(body)?;
+            let [w, h] = crate::message::RESEARCH_SCREEN;
+            *restored_lists
+                .get_mut(usize::from(slot))
+                .ok_or("list group record outside 0..7")? = Some(ListGroup {
+                object,
+                buttons: Vec::new(),
+                screen: [w, h, w, h, scale[0], scale[1]],
+                active: true,
+                current: None,
+                pressed_visual: false,
+                press_target: None,
+                keep_input: false,
+                disable_navigation: false,
+                hit_area: [0, 0, w as i32, h as i32],
+                hit_point: None,
+            });
+        }
+        self.groups = restored_groups;
+        self.lists = restored_lists;
+        Ok(())
     }
 }

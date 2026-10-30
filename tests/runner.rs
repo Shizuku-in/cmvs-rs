@@ -862,24 +862,36 @@ fn system_call(code: &mut Vec<u8>, op: u16, args: &[u32]) {
 
 #[test]
 fn scenario_snapshot_failure_keeps_the_command_vm_and_image_unchanged() {
+    // Text 7 showing a glyph: displayed glyphs have no save record here.
     let mut code = vec![];
-    // An enabled save callback 30 (target: the first instruction) has no implementation.
-    system_call(&mut code, 0x2088, &[30, 0, 0, 0, 0]);
+    for (op, words) in [
+        (0x215du16, vec![720u32, 1280, 100, 100, 0, 0, 7, 0]),
+        (0x2152, vec![0, u32::MAX, 0]),
+    ] {
+        for word in words {
+            code.extend(0x440u16.to_le_bytes());
+            code.extend(4u16.to_le_bytes());
+            code.extend(word.to_le_bytes());
+        }
+        code.extend(op.to_le_bytes());
+    }
     let snapshot_pc = code.len();
     code.extend(0x22b2u16.to_le_bytes());
     code.extend(0x27ffu16.to_le_bytes());
-    let root = Root::new("snapshot-failure", &code, b"");
+    let root = Root::new("snapshot-failure", &code, b"A ");
     let script = root.script();
     let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    run.set_record_text(true);
     let mut backend = RecordingBackend::default();
     let error = loop {
         match run.tick(&mut backend) {
             Ok(StartupEvent::Progress) => {}
+            Ok(StartupEvent::Yield) => run.advance_frame(400).unwrap(),
             Ok(event) => panic!("unexpected {event:?}"),
             Err(error) => break error,
         }
     };
-    assert!(error.to_string().contains("callback 30"), "{error}");
+    assert!(error.to_string().contains("glyphs"), "{error}");
     for _ in 0..2 {
         assert_eq!(run.machine().pending_system(), Some((snapshot_pc, 0x2b2)));
         assert_eq!(run.machine().pc(), snapshot_pc);
@@ -1039,4 +1051,146 @@ fn automatic_dispatch_runs_due_callbacks_at_the_next_run_entry_and_returns() {
         assert_eq!(run.machine().stack().len_bytes(), 0);
         assert_eq!(run.machine().current_slot(), 0);
     }
+}
+
+#[test]
+fn snapshots_inside_a_dispatched_callback_load_back_and_return_through_the_frame() {
+    // Callback 6 disables itself, takes the scenario snapshot and returns.
+    let build = |callback: u32| {
+        let mut code = string_call(0x2160);
+        system_call(&mut code, 0x201d, &[0x12345678]);
+        system_call(&mut code, 0x2128, &[]);
+        system_call(&mut code, 0x2089, &[1]);
+        system_call(&mut code, 0x2088, &[6, callback, 0, 0, 0]);
+        code.extend(0x2000u16.to_le_bytes());
+        let end = code.len();
+        code.extend(0x27ffu16.to_le_bytes());
+        let start = code.len();
+        system_call(&mut code, 0x208b, &[6]);
+        code.extend(0x22b2u16.to_le_bytes());
+        code.extend(0x0414u16.to_le_bytes());
+        code.extend(0u16.to_le_bytes());
+        (code, start, end)
+    };
+    let (_, start, _) = build(0);
+    let (code, start_again, end) = build(start as u32);
+    assert_eq!(start, start_again);
+    let root = Root::new("callback-snapshot", &code, b"Synthetic ");
+    fs::write(root.0.join("save/system.dat"), auto_resume_save(0x12345678)).unwrap();
+    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("cmvs-runner-callback-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&directory);
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    run.set_user_data_directory(&directory).unwrap();
+    let mut backend = RecordingBackend::default();
+    let run_to_end = |run: &mut Startup<'_>, backend: &mut RecordingBackend| {
+        let mut captured = 0;
+        loop {
+            match run.tick(backend).unwrap() {
+                StartupEvent::Progress | StartupEvent::Yield => {}
+                StartupEvent::SnapshotCaptured => {
+                    captured += 1;
+                    // Captured inside the callback, above its return frame.
+                    assert_eq!(run.machine().stack().len_bytes(), 12);
+                }
+                StartupEvent::Unhandled { pc, command } => {
+                    assert_eq!((pc, command), (end, 0x27ff));
+                    return captured;
+                }
+                event => panic!("unexpected {event:?}"),
+            }
+        }
+    };
+    assert_eq!(run_to_end(&mut run, &mut backend), 1);
+    assert!(run.save_slot(0).unwrap());
+    run.load_slot(0, &mut backend).unwrap();
+    // The restored stack keeps the dispatch frames; the callback returns through them.
+    assert_eq!(run_to_end(&mut run, &mut backend), 0);
+    assert_eq!(run.machine().stack().len_bytes(), 0);
+    drop(run);
+    fs::remove_dir_all(&directory).unwrap();
+}
+
+#[test]
+fn an_enabled_save_callback_stops_the_slot_write_but_not_the_snapshot() {
+    let mut code = vec![];
+    system_call(&mut code, 0x201d, &[0x12345678]);
+    system_call(&mut code, 0x2128, &[]);
+    system_call(&mut code, 0x2088, &[30, 0, 0, 0, 0]);
+    code.extend(0x22b2u16.to_le_bytes());
+    let write = code.len() + 10 - 2;
+    system_call(&mut code, 0x22b6, &[0]);
+    code.extend(0x27ffu16.to_le_bytes());
+    let root = Root::new("save-callback", &code, b"");
+    fs::write(root.0.join("save/system.dat"), auto_resume_save(0x12345678)).unwrap();
+    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("cmvs-runner-save-callback-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&directory);
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    run.set_user_data_directory(&directory).unwrap();
+    let mut backend = RecordingBackend::default();
+    let error = loop {
+        match run.tick(&mut backend) {
+            Ok(StartupEvent::Progress | StartupEvent::SnapshotCaptured) => {}
+            Ok(event) => panic!("unexpected {event:?}"),
+            Err(error) => break error,
+        }
+    };
+    assert!(error.to_string().contains("callback 30"), "{error}");
+    assert_eq!(run.machine().pending_system(), Some((write, 0x2b6)));
+    assert!(!directory.join("save000.dat").exists());
+    drop(run);
+    let _ = fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn button_groups_are_saved_and_come_back_empty_on_object_zero() {
+    use cmvs_rs::snapshot::EngineSnapshot;
+    let mut code = string_call(0x2160);
+    system_call(&mut code, 0x201d, &[0x12345678]);
+    system_call(&mut code, 0x2128, &[]);
+    system_call(&mut code, 0x2020, &[10]);
+    system_call(&mut code, 0x2210, &[2, 10]);
+    system_call(&mut code, 0x2212, &[2, 7]);
+    system_call(&mut code, 0x2213, &[2, 7, 1, 2, 3, 4]);
+    code.extend(0x22b2u16.to_le_bytes());
+    code.extend(0x27ffu16.to_le_bytes());
+    let root = Root::new("button-records", &code, b"Synthetic\0");
+    fs::write(root.0.join("save/system.dat"), auto_resume_save(0x12345678)).unwrap();
+    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("cmvs-runner-buttons-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&directory);
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    run.set_user_data_directory(&directory).unwrap();
+    let mut backend = RecordingBackend::default();
+    loop {
+        match run.tick(&mut backend).unwrap() {
+            StartupEvent::Progress | StartupEvent::SnapshotCaptured => {}
+            StartupEvent::Unhandled {
+                command: 0x27ff, ..
+            } => break,
+            event => panic!("unexpected {event:?}"),
+        }
+    }
+    let SaveImage::Captured(held) = run.save_image() else {
+        panic!("no snapshot");
+    };
+    let snapshot = EngineSnapshot::decode(&held.snapshot).unwrap();
+    let record = &snapshot.raw_objects[&(0x8c0, 2)];
+    // Header (object 0, version 2, scale), +8, count, then one 104-byte node.
+    assert_eq!(record.len(), 20 + 104);
+    assert_eq!(record[..4], [0, 0, 2, 0]);
+    assert_eq!(record[16..20], 1u32.to_le_bytes());
+    assert_eq!(record[24..28], 7u32.to_le_bytes());
+    assert!(run.save_slot(0).unwrap());
+    run.load_slot(0, &mut backend).unwrap();
+    // The original reader rebuilds the group empty, bound to the record's object 0.
+    let group = run.buttons().group(2).unwrap();
+    assert!(group.buttons.is_empty());
+    assert_eq!(group.object, 0);
+    drop(run);
+    fs::remove_dir_all(&directory).unwrap();
 }

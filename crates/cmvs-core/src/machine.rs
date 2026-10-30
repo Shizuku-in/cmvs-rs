@@ -154,16 +154,10 @@ impl<'a> Machine<'a> {
             .collect()
     }
     /// VM domain of the engine snapshot 0x140069270: records 0x102..0x108, 0x112..0x115,
-    /// 0x240..0x248, 0x900 and CSV2 section 2. Unknown stack bytes and unverified system
-    /// results are written as zero; stale frame entries above the depth are not kept.
+    /// 0x240..0x248, 0x900 and CSV2 section 2. Unknown stack bytes are written as zero;
+    /// stale frame entries above the depth are not kept. Cross-script return frames are
+    /// ordinary stack words and are saved with the stack.
     pub fn capture_vm(&self) -> Result<VmImage, &'static str> {
-        if !self.cross_calls.is_empty() {
-            return Err("saving inside a cross-script call is not supported");
-        }
-        self.capture_vm_unchecked()
-    }
-    /// `capture_vm` without the cross-script check, for inspection only.
-    pub(crate) fn capture_vm_unchecked(&self) -> Result<VmImage, &'static str> {
         if self.frames.len() > MAX_CALL_DEPTH {
             return Err("call depth exceeds the frame table");
         }
@@ -650,9 +644,14 @@ impl<'a> Machine<'a> {
                 let slot = self.stack.peek_u32(4).map_err(|e| error(pc, op, e.0))?;
                 next = self.stack.peek_u32(8).map_err(|e| error(pc, op, e.0))? as usize;
                 let repeat = self.stack.peek_u32(12).map_err(|e| error(pc, op, e.0))?;
+                // Frames pushed since the last restore are checked against their record;
+                // a frame restored with a saved stack has none and is taken as stored.
                 if slot > 3
                     || !self.is_boundary(slot as u8, next)
-                    || self.cross_calls.last().copied() != Some(slot as u8)
+                    || self
+                        .cross_calls
+                        .last()
+                        .is_some_and(|&caller| caller != slot as u8)
                 {
                     return Err(error(pc, op, "invalid cross-script return context"));
                 }
