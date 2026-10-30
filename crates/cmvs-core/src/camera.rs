@@ -295,16 +295,46 @@ impl CameraHost {
             target[axis] = hundredths(f32::from_bits(args[i + 1])).to_bits();
         }
         vm.complete_system(SystemResult(0x4000 | (count * 4) as u16))?;
+        self.commit_move(target, args[0], args[count - 1]);
+        Ok(true)
+    }
+
+    fn commit_move(&mut self, target: [u32; 3], mode: u32, duration: u32) {
         let camera = &mut self.cameras[0];
-        camera.words[22] = if args[0] == 0 { 0 } else { 0x00010101 };
+        camera.words[22] = if mode == 0 { 0 } else { 0x00010101 };
         camera.words[23..26].copy_from_slice(&target);
         camera.words.copy_within(12..15, 26);
-        camera.words[29] = args[count - 1];
+        camera.words[29] = duration;
         camera.words.copy_within(1..4, 30);
         camera.words.copy_within(12..15, 33);
         camera.words[36] = 0;
         camera.words[MOVING] = 1;
-        Ok(true)
+    }
+
+    /// 0x2287 / type 4 of 0x140014b10: immediate XYZ on finish/zero duration,
+    /// otherwise the same three-axis move as 0x206c. Immediate writes retain old motion.
+    pub(crate) fn sequence_move(
+        &mut self,
+        xyz: [u32; 3],
+        mode: u32,
+        duration: u32,
+        finish: bool,
+        pc: usize,
+    ) -> Result<(), DecodeError> {
+        let target = xyz.map(|bits| hundredths(f32::from_bits(bits)).to_bits());
+        if finish || duration == 0 {
+            self.cameras[0].words[1..4].copy_from_slice(&target);
+        } else {
+            if mode > 1 {
+                return Err(error(
+                    pc,
+                    0x2287,
+                    "camera motion interpolation mode is not implemented",
+                ));
+            }
+            self.commit_move(target, mode, duration);
+        }
+        Ok(())
     }
 
     /// 0x2069 / 0x14006fd90: wait on camera 0, using 0x4004/0xa000/0xc004.

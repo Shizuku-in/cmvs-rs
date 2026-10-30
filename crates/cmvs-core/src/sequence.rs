@@ -3,7 +3,8 @@
 //! 0x140014b10; addresses refer to the documented binary hash. Wait entries and their
 //! start/stop/finish lifecycle, image replacement and XYZ motion entries are modeled; other actions stay unhandled.
 use crate::{
-    evaluate::error, image::ImageSource, machine::Machine, scene::SceneHost, vm::SystemResult,
+    camera::CameraHost, evaluate::error, image::ImageSource, machine::Machine, scene::SceneHost,
+    vm::SystemResult,
 };
 use std::error::Error;
 
@@ -12,6 +13,13 @@ pub const SEQUENCE_ENTRIES: usize = 16;
 /// Semantics of the supported 96-byte record type. This is not a binary save image.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SequenceEntry {
+    /// Type 4, 0x2287: camera 0 XYZ; finish/zero duration writes immediately.
+    CameraMotion {
+        xyz: [u32; 3],
+        mode: u32,
+        duration: u32,
+        pc: usize,
+    },
     /// Type 3/subtype 1 or 2; both start XYZ tracks, differing on fast finish.
     WorldMotion {
         /// Subtype 1 (0x2289) snaps to XYZ on fast finish; subtype 2 skips it.
@@ -109,14 +117,46 @@ impl SequenceHost {
         self.run_images(false, scene, images)
     }
 
+    pub fn advance_frame_with_hosts(
+        &mut self,
+        delta: u32,
+        scene: &mut SceneHost,
+        images: &mut dyn ImageSource,
+        camera: &mut CameraHost,
+    ) -> Result<(), Box<dyn Error>> {
+        self.clock = self.clock.wrapping_add(delta);
+        self.run_with_camera(false, scene, images, Some(camera))
+    }
+
     fn run_images(
         &mut self,
         finish: bool,
         scene: &mut SceneHost,
         images: &mut dyn ImageSource,
     ) -> Result<(), Box<dyn Error>> {
+        self.run_with_camera(finish, scene, images, None)
+    }
+
+    fn run_with_camera(
+        &mut self,
+        finish: bool,
+        scene: &mut SceneHost,
+        images: &mut dyn ImageSource,
+        mut camera: Option<&mut CameraHost>,
+    ) -> Result<(), Box<dyn Error>> {
         self.run(finish, |entry, finish| {
             match entry {
+                SequenceEntry::CameraMotion {
+                    xyz,
+                    mode,
+                    duration,
+                    pc,
+                } => {
+                    let camera = camera
+                        .as_deref_mut()
+                        .ok_or_else(|| error(*pc, 0x2287, "camera sequence needs a camera host"))?;
+                    camera.sequence_move(*xyz, *mode, *duration, finish, *pc)?;
+                }
                 SequenceEntry::ReplaceImage {
                     slot: raw,
                     name,
@@ -209,9 +249,45 @@ impl SequenceHost {
         self.header = SequenceHeader::default();
         Ok(true)
     }
+
+    pub fn try_handle_with_hosts(
+        &mut self,
+        vm: &mut Machine<'_>,
+        scene: &mut SceneHost,
+        images: &mut dyn ImageSource,
+        camera: &mut CameraHost,
+    ) -> Result<bool, Box<dyn Error>> {
+        if !matches!(vm.pending_system(), Some((_, 0x284))) {
+            return self.try_handle(vm);
+        }
+        self.run_with_camera(true, scene, images, Some(camera))?;
+        vm.complete_system(SystemResult(0x4000))?;
+        self.header = SequenceHeader::default();
+        Ok(true)
+    }
     /// 0x2280: the dispatcher calls 0x140014320 inline, zeroing the five header words, and
     /// returns 0x4000 (nothing popped). Entries keep their bytes but are no longer run.
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, Box<dyn Error>> {
+        if let Some((pc, 0x287)) = vm.pending_system() {
+            let mut args = [0; 5];
+            for (i, arg) in args.iter_mut().enumerate() {
+                *arg = vm
+                    .stack()
+                    .peek_u32((i + 1) * 4)
+                    .map_err(|e| error(pc, 0x2287, e.0))?;
+            }
+            vm.complete_system(SystemResult(0x4014))?;
+            if self.header.count < SEQUENCE_ENTRIES as u32 {
+                self.entries[self.header.count as usize] = Some(SequenceEntry::CameraMotion {
+                    mode: args[0],
+                    xyz: [args[1], args[2], args[3]],
+                    duration: args[4],
+                    pc,
+                });
+                self.header.count += 1;
+            }
+            return Ok(true);
+        }
         if let Some((pc, command @ (0x289 | 0x28a))) = vm.pending_system() {
             let mut args = [0; 6];
             for (i, arg) in args.iter_mut().enumerate() {
@@ -316,6 +392,9 @@ impl SequenceHost {
 
 fn missing_scene(entry: &SequenceEntry, finish: bool) -> Result<(), Box<dyn Error>> {
     match entry {
+        SequenceEntry::CameraMotion { pc, .. } => {
+            Err(error(*pc, 0x2287, "camera sequence needs a camera host").into())
+        }
         SequenceEntry::WorldMotion {
             snap_on_finish: false,
             ..
@@ -354,6 +433,19 @@ impl SequenceHost {
             let mut put =
                 |at: usize, value: u32| raw[at..at + 4].copy_from_slice(&value.to_le_bytes());
             match entry {
+                Some(SequenceEntry::CameraMotion {
+                    xyz,
+                    mode,
+                    duration,
+                    ..
+                }) => {
+                    put(0, 4);
+                    put(4, *mode);
+                    put(76, *duration);
+                    put(80, xyz[0]);
+                    put(84, xyz[1]);
+                    put(88, xyz[2]);
+                }
                 None => {}
                 Some(SequenceEntry::Wait { duration }) => {
                     put(0, 1);
@@ -437,6 +529,12 @@ impl SequenceHost {
                     duration: at(76),
                     pc: 0,
                 }),
+                (4, mode) => Some(SequenceEntry::CameraMotion {
+                    mode,
+                    xyz: [at(80), at(84), at(88)],
+                    duration: at(76),
+                    pc: 0,
+                }),
                 _ => return Err("saved sequence entry type is not modeled"),
             };
         }
@@ -452,6 +550,23 @@ impl SequenceHost {
 #[cfg(test)]
 mod motion_snapshot_tests {
     use super::*;
+    #[test]
+    fn camera_sequence_entry_round_trips_raw_parameters() {
+        let mut host = SequenceHost::default();
+        host.header.count = 1;
+        host.entries[0] = Some(SequenceEntry::CameraMotion {
+            xyz: [0x8000_0000, 0x7fc0_1234, 0x7f80_0000],
+            mode: u32::MAX,
+            duration: u32::MAX,
+            pc: 0,
+        });
+        let bytes = host.saved().unwrap();
+        assert_eq!(u32::from_le_bytes(bytes[22..26].try_into().unwrap()), 4);
+        let mut restored = SequenceHost::default();
+        restored.restore(&bytes).unwrap();
+        assert_eq!(restored.entries, host.entries);
+        assert_eq!(restored.saved().unwrap(), bytes);
+    }
     #[test]
     fn both_motion_subtypes_survive_sequence_snapshot_round_trip() {
         for snap_on_finish in [false, true] {

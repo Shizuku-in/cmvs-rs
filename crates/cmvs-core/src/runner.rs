@@ -340,10 +340,11 @@ impl<'a> Startup<'a> {
             self.frame_delta = 0;
             return Ok(());
         }
-        self.sequence.advance_frame_with_images(
+        self.sequence.advance_frame_with_hosts(
             delta_ms,
             &mut self.scene,
             &mut self.images.with_paths(self.bootstrap.paths()),
+            &mut self.camera,
         )?;
         self.scene.advance_frame(delta_ms);
         self.messages.advance_frame(delta_ms);
@@ -421,10 +422,11 @@ impl<'a> Startup<'a> {
             self.frame_delta = 0;
             return Ok(());
         }
-        self.sequence.advance_frame_with_images(
+        self.sequence.advance_frame_with_hosts(
             delta_ms,
             &mut self.scene,
             &mut self.images.with_paths(self.bootstrap.paths()),
+            &mut self.camera,
         )?;
         self.scene.advance_frame(delta_ms);
         self.messages.advance_frame(delta_ms);
@@ -932,10 +934,11 @@ impl<'a> Startup<'a> {
                 &self.input,
                 self.message_flags.skip(),
             )?
-            || self.sequence.try_handle_with_images(
+            || self.sequence.try_handle_with_hosts(
                 &mut self.machine,
                 &mut self.scene,
                 &mut self.images.with_paths(self.bootstrap.paths()),
+                &mut self.camera,
             )?
             || self.camera.try_handle(&mut self.machine)?
             || self

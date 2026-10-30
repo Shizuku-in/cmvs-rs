@@ -356,7 +356,7 @@ fn failed_wait_append_preserves_active_sequence_and_unknown_actions_remain_pendi
         assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x286)));
         assert_eq!(vm.stack().len_bytes(), 0);
     }
-    for opcode in [0x2287u16, 0x228b] {
+    for opcode in [0x228bu16, 0x228d] {
         let program = script(&opcode.to_le_bytes());
         let mut vm = Machine::new(&program).unwrap();
         pending(&mut vm);
@@ -364,6 +364,87 @@ fn failed_wait_append_preserves_active_sequence_and_unknown_actions_remain_pendi
         assert_eq!(vm.pending_system(), Some((0, opcode - 0x2000)));
         assert_eq!(host.header(), header);
         assert_eq!(host.entries(), &entries);
+    }
+}
+
+#[test]
+fn camera_sequence_starts_motion_at_execution_and_requires_the_camera_host() {
+    let mut code = vec![];
+    let xyz = [10f32, 20.0, 30.0].map(f32::to_bits);
+    command(&mut code, 0x2287, &[0, xyz[0], xyz[1], xyz[2], 100]);
+    command(&mut code, 0x2282, &[]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut host = SequenceHost::default();
+    let mut scene = motion_scene();
+    let mut camera = cmvs_rs::camera::CameraHost::default();
+    for _ in 0..2 {
+        run(&mut vm, &mut host);
+    }
+    assert!(
+        host.advance_frame_with_images(0, &mut scene, &mut NoImages)
+            .is_err()
+    );
+    assert_eq!(host.header().index, 0);
+    host.advance_frame_with_hosts(0, &mut scene, &mut NoImages, &mut camera)
+        .unwrap();
+    assert_eq!(host.header().index, 1);
+    assert!(camera.moving());
+    camera.advance_frame(100);
+    assert_eq!(&camera.camera(0).unwrap().words[1..4], &xyz);
+    assert!(!camera.moving());
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
+fn camera_sequence_immediate_paths_quantize_xyz_without_cancelling_old_motion() {
+    for finish in [false, true] {
+        let mut old = vec![];
+        command(
+            &mut old,
+            0x206c,
+            &[0, 90f32.to_bits(), 80f32.to_bits(), 70f32.to_bits(), 500],
+        );
+        let old = script(&old);
+        let mut old_vm = Machine::new(&old).unwrap();
+        let mut camera = cmvs_rs::camera::CameraHost::default();
+        pending(&mut old_vm);
+        camera.try_handle(&mut old_vm).unwrap();
+        let old_words = camera.camera(0).unwrap().words;
+        let mut code = vec![];
+        command(
+            &mut code,
+            0x2287,
+            &[
+                0xffff,
+                1.239f32.to_bits(),
+                2.349f32.to_bits(),
+                3.459f32.to_bits(),
+                if finish { 500 } else { 0 },
+            ],
+        );
+        command(&mut code, 0x2282, &[]);
+        if finish {
+            command(&mut code, 0x2284, &[]);
+        }
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        let mut host = SequenceHost::default();
+        let mut scene = motion_scene();
+        for _ in 0..2 {
+            run(&mut vm, &mut host);
+        }
+        if finish {
+            pending(&mut vm);
+            host.try_handle_with_hosts(&mut vm, &mut scene, &mut NoImages, &mut camera)
+                .unwrap();
+        } else {
+            host.advance_frame_with_hosts(0, &mut scene, &mut NoImages, &mut camera)
+                .unwrap();
+        }
+        let words = camera.camera(0).unwrap().words;
+        assert_eq!(&words[1..4], &[1.23f32, 2.34, 3.45].map(f32::to_bits));
+        assert_eq!(&words[21..37], &old_words[21..37]);
     }
 }
 

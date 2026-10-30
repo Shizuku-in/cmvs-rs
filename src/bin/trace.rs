@@ -237,15 +237,17 @@ fn run() -> Result<(), Box<dyn Error>> {
             && let Some(delta) = frame_ms
         {
             if let (Some(images), Some(config)) = (&mut images, &bootstrap) {
-                sequence.advance_frame_with_images(
+                sequence.advance_frame_with_hosts(
                     delta,
                     &mut scene,
                     &mut images.with_paths(config.paths()),
+                    &mut camera,
                 )?;
             } else {
                 sequence.advance_frame(delta)?;
             }
             scene.advance_frame(delta);
+            camera.advance_frame(delta);
             movies.advance(delta);
             frame_delta = delta;
         }
@@ -300,15 +302,17 @@ fn run() -> Result<(), Box<dyn Error>> {
                             return Ok(());
                         };
                         if let (Some(images), Some(config)) = (&mut images, &bootstrap) {
-                            sequence.advance_frame_with_images(
+                            sequence.advance_frame_with_hosts(
                                 delta,
                                 &mut scene,
                                 &mut images.with_paths(config.paths()),
+                                &mut camera,
                             )?;
                         } else {
                             sequence.advance_frame(delta)?;
                         }
                         scene.advance_frame(delta);
+                        camera.advance_frame(delta);
                         movies.advance(delta);
                         frame_delta = delta;
                         resume_run = true;
@@ -372,15 +376,17 @@ fn run() -> Result<(), Box<dyn Error>> {
                     if event == cmvs_rs::platform::PlatformEvent::Yield {
                         if let Some(delta) = frame_ms {
                             if let (Some(images), Some(config)) = (&mut images, &bootstrap) {
-                                sequence.advance_frame_with_images(
+                                sequence.advance_frame_with_hosts(
                                     delta,
                                     &mut scene,
                                     &mut images.with_paths(config.paths()),
+                                    &mut camera,
                                 )?;
                             } else {
                                 sequence.advance_frame(delta)?;
                             }
                             scene.advance_frame(delta);
+                            camera.advance_frame(delta);
                             movies.advance(delta);
                             frame_delta = delta;
                         }
@@ -486,10 +492,11 @@ fn run() -> Result<(), Box<dyn Error>> {
                 }
                 let handled_sequence =
                     if let (Some(images), Some(config)) = (&mut images, &bootstrap) {
-                        sequence.try_handle_with_images(
+                        sequence.try_handle_with_hosts(
                             &mut machine,
                             &mut scene,
                             &mut images.with_paths(config.paths()),
+                            &mut camera,
                         )?
                     } else {
                         sequence.try_handle(&mut machine)?
