@@ -863,8 +863,8 @@ fn system_call(code: &mut Vec<u8>, op: u16, args: &[u32]) {
 #[test]
 fn scenario_snapshot_failure_keeps_the_command_vm_and_image_unchanged() {
     let mut code = vec![];
-    // A 100 ms full-screen fade, then the scenario snapshot while it runs.
-    system_call(&mut code, 0x2220, &[1, 0, 100, 9]);
+    // An enabled save callback 30 (target: the first instruction) has no implementation.
+    system_call(&mut code, 0x2088, &[30, 0, 0, 0, 0]);
     let snapshot_pc = code.len();
     code.extend(0x22b2u16.to_le_bytes());
     code.extend(0x27ffu16.to_le_bytes());
@@ -879,7 +879,7 @@ fn scenario_snapshot_failure_keeps_the_command_vm_and_image_unchanged() {
             Err(error) => break error,
         }
     };
-    assert!(error.to_string().contains("fade"), "{error}");
+    assert!(error.to_string().contains("callback 30"), "{error}");
     for _ in 0..2 {
         assert_eq!(run.machine().pending_system(), Some((snapshot_pc, 0x2b2)));
         assert_eq!(run.machine().pc(), snapshot_pc);
@@ -887,15 +887,6 @@ fn scenario_snapshot_failure_keeps_the_command_vm_and_image_unchanged() {
         assert_eq!(*run.save_image(), SaveImage::Absent);
         assert!(run.tick(&mut backend).is_err());
     }
-    // Once the fade ends the same command builds the image and advances.
-    run.advance_frame(100).unwrap();
-    assert_eq!(
-        run.tick(&mut backend).unwrap(),
-        StartupEvent::SnapshotCaptured
-    );
-    assert_eq!(run.machine().pc(), snapshot_pc + 2);
-    assert_eq!(run.machine().state().bit(0), Some(false));
-    assert!(matches!(run.save_image(), SaveImage::Captured(_)));
 }
 
 #[test]

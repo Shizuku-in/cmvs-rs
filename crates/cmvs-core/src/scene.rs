@@ -801,9 +801,7 @@ impl SceneHost {
     /// Effects the snapshot would write as 0x610..0x630 (+4616 fade, +4632 mask, +4640
     /// strip); their record formats are not implemented here.
     pub(crate) fn unsaved_effect(&self) -> Option<&'static str> {
-        if self.fade.current().is_some() {
-            Some("a full-screen fade")
-        } else if self.masks[0].is_some() {
+        if self.masks[0].is_some() {
             Some("a mask transition")
         } else if self.strip.is_some() {
             Some("a strip wipe")
@@ -815,18 +813,24 @@ impl SceneHost {
     pub(crate) fn saved_quake(&self) -> Option<Vec<u8>> {
         self.quake.as_ref().map(Quake::saved)
     }
+    /// Record 0x610 while the +4616 fade exists.
+    pub(crate) fn saved_fade(&self) -> Option<Vec<u8>> {
+        self.fade.current().map(crate::fade::Fade::saved)
+    }
     /// Loader 0x140081960 destroys the slot objects and the +4616/+4624/+4632/+4640/+4648
-    /// effects; the reader then rebuilds the saved objects, clear state and quake.
+    /// effects; the reader then rebuilds the saved objects, clear state, quake and fade.
     pub(crate) fn restore(
         &mut self,
         clear: ClearState,
         objects: BTreeMap<u8, SceneObject>,
         quake: Option<Quake>,
+        fade: Option<crate::fade::Fade>,
     ) {
         *self = Self {
             clear,
             objects,
             quake,
+            fade: crate::fade::FadeHost::restored(fade),
             ..Self::default()
         };
     }

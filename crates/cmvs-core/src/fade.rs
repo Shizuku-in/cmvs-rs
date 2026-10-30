@@ -29,13 +29,7 @@ impl Fade {
         if self.elapsed >= self.duration {
             return self.finish();
         }
-        let value = 255u32.wrapping_mul(self.elapsed) / self.duration;
-        let value = if self.direction == 0 {
-            value
-        } else {
-            255u32.wrapping_sub(value)
-        };
-        self.opacity = (value as i32).min(255);
+        self.set_opacity();
         false
     }
     pub fn remaining(&self) -> u32 {
@@ -44,6 +38,69 @@ impl Fade {
         } else {
             self.duration.saturating_sub(self.elapsed)
         }
+    }
+    /// Record 0x610 (0x140050ec0): direction, color, duration and order for the reader's
+    /// constructor, then the object words +0..+24: finished, direction, color, order,
+    /// duration, elapsed. The overlay object at +24 is not saved.
+    pub(crate) fn saved(&self) -> Vec<u8> {
+        let order = self.order as u32;
+        [
+            self.direction,
+            self.color,
+            self.duration,
+            order,
+            u32::from(self.finished),
+            self.direction,
+            self.color,
+            order,
+            self.duration,
+            self.elapsed,
+        ]
+        .iter()
+        .flat_map(|w| w.to_le_bytes())
+        .collect()
+    }
+    /// Reader: 0x140050da0 and 0x140050f00 rebuild the overlay, copy the object words back
+    /// and set the opacity from them (full or clear when finished). An unfinished
+    /// zero-length fade would divide by zero there and is rejected.
+    pub(crate) fn restore(record: &[u8]) -> Result<Self, &'static str> {
+        if record.len() != 40 {
+            return Err("fade record length differs from the original");
+        }
+        let w: Vec<u32> = record
+            .chunks_exact(4)
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+            .collect();
+        if [w[0], w[1], w[2], w[3]] != [w[5], w[6], w[8], w[7]] {
+            return Err("fade record header disagrees with its object words");
+        }
+        if w[4] > 1 || w[5] > 1 || w[4] == 0 && w[8] == 0 {
+            return Err("saved fade state is not supported");
+        }
+        let mut fade = Self {
+            direction: w[5],
+            color: w[6],
+            duration: w[8],
+            order: w[7] as i32,
+            elapsed: w[9],
+            finished: w[4] != 0,
+            opacity: 0,
+        };
+        if fade.finished {
+            fade.opacity = if fade.direction == 0 { 255 } else { 0 };
+        } else {
+            fade.set_opacity();
+        }
+        Ok(fade)
+    }
+    fn set_opacity(&mut self) {
+        let value = 255u32.wrapping_mul(self.elapsed) / self.duration;
+        let value = if self.direction == 0 {
+            value
+        } else {
+            255u32.wrapping_sub(value)
+        };
+        self.opacity = (value as i32).min(255);
     }
 }
 
@@ -141,6 +198,9 @@ impl FadeHost {
     pub fn current(&self) -> Option<&Fade> {
         self.current.as_ref()
     }
+    pub(crate) fn restored(current: Option<Fade>) -> Self {
+        Self { current }
+    }
     /// Explicit engine-frame delta; VM instruction execution never advances time.
     pub fn advance(&mut self, delta: u32) {
         if self
@@ -196,5 +256,54 @@ impl FadeHost {
             _ => unreachable!(),
         }
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fade(direction: u32, elapsed: u32, finished: bool) -> Fade {
+        Fade {
+            direction,
+            color: 0x0012_3456,
+            duration: 400,
+            order: -3,
+            elapsed,
+            finished,
+            opacity: 0,
+        }
+    }
+
+    #[test]
+    fn fade_records_round_trip_and_derive_the_overlay_opacity() {
+        for (direction, elapsed, finished, opacity) in [
+            (0, 100, false, 63),
+            (1, 100, false, 192),
+            (0, 400, true, 255),
+            (1, 400, true, 0),
+        ] {
+            let saved = fade(direction, elapsed, finished).saved();
+            assert_eq!(saved.len(), 40);
+            let restored = Fade::restore(&saved).unwrap();
+            let mut expected = fade(direction, elapsed, finished);
+            expected.opacity = opacity;
+            assert_eq!(restored, expected);
+        }
+    }
+
+    #[test]
+    fn fade_records_reject_inconsistent_or_crashing_states() {
+        let saved = fade(0, 100, false).saved();
+        for (at, value) in [(0, 1), (16, 2), (20, 2)] {
+            let mut bad = saved.clone();
+            bad[at..at + 4].copy_from_slice(&(value as u32).to_le_bytes());
+            assert!(Fade::restore(&bad).is_err(), "offset {at}");
+        }
+        // An unfinished zero-length fade divides by zero in the reader.
+        let mut zero = fade(0, 0, false);
+        zero.duration = 0;
+        assert!(Fade::restore(&zero.saved()).is_err());
+        assert!(Fade::restore(&saved[..36]).is_err());
     }
 }
