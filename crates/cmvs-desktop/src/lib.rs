@@ -136,6 +136,7 @@ pub struct NativeBackend<'a> {
     pub event_loop: &'a ActiveEventLoop,
     pub encoding: TextEncoding,
     pub aspect_mode: &'a std::cell::Cell<u32>,
+    pub aspect_scaling: &'a std::cell::Cell<bool>,
     pub render_mode: &'a std::cell::Cell<u32>,
     /// Physical client size to restore when leaving fullscreen.
     pub windowed_size: &'a std::cell::Cell<[u32; 2]>,
@@ -156,6 +157,9 @@ impl PlatformBackend for NativeBackend<'_> {
     }
     fn aspect_mode(&self) -> Result<u32, Box<dyn Error>> {
         Ok(self.aspect_mode.get())
+    }
+    fn aspect_scaling(&self) -> Result<bool, Box<dyn Error>> {
+        Ok(self.aspect_scaling.get())
     }
     fn stretch_filter_supported(&self) -> Result<bool, Box<dyn Error>> {
         Ok(true)
@@ -214,6 +218,13 @@ impl PlatformBackend for NativeBackend<'_> {
                 self.aspect_mode.set(*mode);
                 self.window.request_redraw();
                 println!("# native aspect mode={mode}");
+            }
+            PlatformRequest::AspectScaling(enabled) => {
+                self.aspect_scaling.set(*enabled);
+                // Software presentation has no exclusive device to recreate. The
+                // next redraw rebuilds its viewport and overwrites the full surface.
+                self.window.request_redraw();
+                println!("# native aspect scaling={enabled}");
             }
             PlatformRequest::RenderMode(mode) => {
                 if *mode > 1 {

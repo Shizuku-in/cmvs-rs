@@ -1,6 +1,35 @@
 use cmvs_rs::{raster::RgbaImage, viewport::Viewport};
 
 #[test]
+fn scaling_disable_centers_native_pixels_and_input_without_losing_selected_mode() {
+    use cmvs_rs::viewport::presentation_mode;
+    let source = [4, 2];
+    let target = [12, 8];
+    let scaled = Viewport::new(source, target, presentation_mode(true, true, 3)).unwrap();
+    assert_eq!(
+        (scaled.left, scaled.top, scaled.width, scaled.height),
+        (0, 0, 12, 8)
+    );
+    let native = Viewport::new(source, target, presentation_mode(true, false, 3)).unwrap();
+    assert_eq!(
+        (native.left, native.top, native.width, native.height),
+        (4, 3, 4, 2)
+    );
+    assert_eq!(native.to_source([3.0, 3.0]), None);
+    assert_eq!(native.to_source([4.0, 3.0]), Some([0, 0]));
+    assert_eq!(native.to_source(native.to_target([3, 1])), Some([3, 1]));
+    let image = RgbaImage::new(4, 2, [40, 20, 10, 255].repeat(8)).unwrap();
+    let mut pixels = vec![0; 12 * 8];
+    image
+        .draw_scaled(&mut pixels, 12, 8, presentation_mode(true, false, 3), false)
+        .unwrap();
+    assert_eq!(pixels.iter().filter(|p| **p == 0x28140a).count(), 8);
+    assert_eq!(pixels[3 * 12 + 4], 0x28140a);
+    assert_eq!(presentation_mode(false, false, 3), 1);
+    assert_eq!(presentation_mode(false, true, 0), 1);
+}
+
+#[test]
 fn all_four_modes_share_rendered_pixel_and_pointer_mapping() {
     let mut pixels = vec![];
     for n in 1..=8 {

@@ -68,6 +68,7 @@ fn desktop_preferences_normalize_only_the_supported_aspect_range() {
         DisplayPreferences {
             fullscreen: true,
             aspect_mode: 2,
+            aspect_scaling: true,
             render_mode: 1
         }
     );
@@ -75,6 +76,16 @@ fn desktop_preferences_normalize_only_the_supported_aspect_range() {
         DisplayPreferences::from_ini(b"[CMVS_RS_DESKTOP]\nASPECT_MODE=-1\n").aspect_mode,
         1
     );
+}
+
+#[test]
+fn desktop_scaling_preference_is_independent_and_nonzero_enables_it() {
+    for (word, enabled) in [("0", false), ("1", true), ("2", true), ("-1", true)] {
+        let ini = format!("[CMVS_RS_DESKTOP]\nASPECT_SCALING={word}\nASPECT_MODE=3\n");
+        let prefs = DisplayPreferences::from_ini(ini.as_bytes());
+        assert_eq!(prefs.aspect_scaling, enabled);
+        assert_eq!(prefs.aspect_mode, 3);
+    }
 }
 
 #[test]

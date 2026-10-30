@@ -12,6 +12,187 @@ use std::{collections::BTreeMap, error::Error, fs, process::Command};
 mod bytecode;
 
 #[test]
+fn aspect_scaling_normalizes_values_and_yields_only_for_fullscreen_updates() {
+    use cmvs_rs::platform::PlatformEvent;
+    for fullscreen in [false, true] {
+        let mut code = vec![];
+        for raw in [0, 0, 2, u32::MAX, 0] {
+            bytecode::command(&mut code, 0x22c9, &[raw]);
+            bytecode::command(&mut code, 0x22ca, &[]);
+        }
+        let script = bytecode::script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut backend = RecordingBackend::default();
+        backend.apply(&PlatformRequest::AspectMode(3)).unwrap();
+        backend
+            .apply(&PlatformRequest::Fullscreen(fullscreen))
+            .unwrap();
+        let mut host = PlatformHost::default();
+        let mut assets = Assets::default();
+        for (value, changed) in [
+            (false, true),
+            (false, false),
+            (true, true),
+            (true, false),
+            (false, true),
+        ] {
+            bytecode::pending(&mut vm);
+            let pc = vm.pc();
+            vm.state_mut().set_system_integer(0, 77).unwrap();
+            assert_eq!(
+                host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+                    .unwrap(),
+                Some(if changed && fullscreen {
+                    PlatformEvent::Yield
+                } else {
+                    PlatformEvent::Configured
+                })
+            );
+            assert_eq!(vm.pc(), pc + 2);
+            assert_eq!(vm.stack().len_bytes(), 0);
+            assert_eq!(vm.state().system_integer(0), Some(77));
+            bytecode::pending(&mut vm);
+            host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+                .unwrap();
+            assert_eq!(vm.state().system_integer(0), Some(u32::from(value)));
+            assert_eq!(backend.aspect_mode().unwrap(), 3);
+            assert_eq!(backend.fullscreen().unwrap(), fullscreen);
+            assert_eq!(backend.windowed_size().unwrap(), [960, 540]);
+        }
+        assert_eq!(
+            &backend.requests()[2..],
+            &[false, true, false].map(PlatformRequest::AspectScaling)
+        );
+        assert_eq!(assets.calls, 0);
+    }
+}
+
+#[test]
+fn unsupported_scaling_enable_still_refreshes_fullscreen_and_retries_failures() {
+    use cmvs_rs::platform::PlatformEvent;
+    struct Device {
+        enabled: bool,
+        supported: bool,
+        fullscreen: bool,
+        fail: bool,
+        requests: Vec<PlatformRequest>,
+    }
+    impl PlatformBackend for Device {
+        fn aspect_scaling(&self) -> Result<bool, Box<dyn Error>> {
+            Ok(self.enabled)
+        }
+        fn stretch_filter_supported(&self) -> Result<bool, Box<dyn Error>> {
+            Ok(self.supported)
+        }
+        fn fullscreen(&self) -> Result<bool, Box<dyn Error>> {
+            Ok(self.fullscreen)
+        }
+        fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+            if self.fail {
+                return Err("synthetic failure".into());
+            }
+            let PlatformRequest::AspectScaling(value) = request else {
+                panic!("unexpected request")
+            };
+            self.enabled = *value;
+            self.requests.push(request.clone());
+            Ok(())
+        }
+    }
+    for fullscreen in [false, true] {
+        for supported in [false, true] {
+            let mut code = vec![];
+            for _ in 0..2 {
+                bytecode::command(&mut code, 0x22c9, &[1]);
+            }
+            let script = bytecode::script(&code);
+            let mut vm = Machine::new(&script).unwrap();
+            let mut backend = Device {
+                enabled: false,
+                supported,
+                fullscreen,
+                fail: true,
+                requests: vec![],
+            };
+            let mut host = PlatformHost::default();
+            bytecode::pending(&mut vm);
+            let pending = vm.pending_system();
+            vm.state_mut().set_system_integer(0, 99).unwrap();
+            assert!(
+                host.try_handle(&mut vm, &mut backend, &mut Assets::default(), &[])
+                    .is_err()
+            );
+            assert_eq!(vm.pending_system(), pending);
+            assert_eq!(vm.stack().len_bytes(), 4);
+            assert_eq!(vm.state().system_integer(0), Some(99));
+            assert!(!backend.enabled);
+            assert!(backend.requests.is_empty());
+            backend.fail = false;
+            for attempt in 0..2 {
+                let refresh = attempt == 0 || !supported;
+                assert_eq!(
+                    host.try_handle(&mut vm, &mut backend, &mut Assets::default(), &[])
+                        .unwrap(),
+                    Some(if refresh && fullscreen {
+                        PlatformEvent::Yield
+                    } else {
+                        PlatformEvent::Configured
+                    })
+                );
+                assert_eq!(backend.enabled, supported);
+                assert_eq!(vm.stack().len_bytes(), 0);
+                if attempt == 0 {
+                    bytecode::pending(&mut vm);
+                }
+            }
+            assert_eq!(
+                backend.requests,
+                vec![PlatformRequest::AspectScaling(supported); if supported { 1 } else { 2 }]
+            );
+        }
+    }
+}
+
+#[test]
+fn equal_scaling_request_needs_no_capabilities_but_unknown_queries_fail() {
+    struct Equal;
+    impl PlatformBackend for Equal {
+        fn aspect_scaling(&self) -> Result<bool, Box<dyn Error>> {
+            Ok(false)
+        }
+        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+            panic!("equal request")
+        }
+    }
+    struct Unknown;
+    impl PlatformBackend for Unknown {
+        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+            panic!("unknown query")
+        }
+    }
+    let mut code = vec![];
+    bytecode::command(&mut code, 0x22c9, &[0]);
+    bytecode::command(&mut code, 0x22ca, &[]);
+    let script = bytecode::script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = PlatformHost::default();
+    bytecode::pending(&mut vm);
+    assert!(
+        host.try_handle(&mut vm, &mut Equal, &mut Assets::default(), &[])
+            .is_ok()
+    );
+    bytecode::pending(&mut vm);
+    vm.state_mut().set_system_integer(0, 77).unwrap();
+    let before = vm.pending_system();
+    assert!(
+        host.try_handle(&mut vm, &mut Unknown, &mut Assets::default(), &[])
+            .is_err()
+    );
+    assert_eq!(vm.pending_system(), before);
+    assert_eq!(vm.state().system_integer(0), Some(77));
+}
+
+#[test]
 fn window_size_reset_yields_only_when_it_changes_and_preserves_results() {
     use cmvs_rs::platform::PlatformEvent;
     let mut code = vec![];

@@ -351,6 +351,9 @@ fn run() -> Result<(), Box<dyn Error>> {
                             PlatformRequest::AspectMode(value) => {
                                 println!("# recorded aspect mode={value}")
                             }
+                            PlatformRequest::AspectScaling(value) => {
+                                println!("# recorded aspect scaling={value}")
+                            }
                             PlatformRequest::RenderMode(value) => {
                                 println!("# recorded render mode={value}")
                             }

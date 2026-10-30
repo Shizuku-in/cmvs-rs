@@ -12,6 +12,7 @@ pub const MAX_CONFIGURATION: usize = 1024 * 1024;
 pub struct DisplayPreferences {
     pub fullscreen: bool,
     pub aspect_mode: u32,
+    pub aspect_scaling: bool,
     /// Requested device +112 mode before the backend capability fallback.
     pub render_mode: u32,
 }
@@ -20,6 +21,7 @@ impl Default for DisplayPreferences {
         Self {
             fullscreen: false,
             aspect_mode: 1,
+            aspect_scaling: true,
             render_mode: 1,
         }
     }
@@ -30,6 +32,7 @@ impl DisplayPreferences {
             |key, default| crate::save_menu::profile_int(bytes, "CMVS_RS_DESKTOP", key, default);
         Self {
             fullscreen: get("FULLSCREEN", 0) != 0,
+            aspect_scaling: get("ASPECT_SCALING", 1) != 0,
             aspect_mode: match get("ASPECT_MODE", 1) as u32 {
                 n @ 0..=3 => n,
                 _ => 1,

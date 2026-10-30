@@ -69,6 +69,9 @@ impl PlatformAssets for DirectoryAssets {
 pub enum PlatformRequest {
     Fullscreen(bool),
     AspectMode(u32),
+    /// Active display's scaling enable (+172). In fullscreen, refresh presentation
+    /// resources before acknowledging; keep the saved windowed client size intact.
+    AspectScaling(bool),
     /// Device +112 presentation filter: 0 point, 1 linear. Shader modes 2/3 are not modeled.
     RenderMode(u32),
     /// Windowed client size. In fullscreen, record it for the next windowed mode.
@@ -137,6 +140,9 @@ pub trait PlatformBackend {
     fn aspect_mode(&self) -> Result<u32, Box<dyn Error>> {
         Err("platform backend does not implement aspect mode queries".into())
     }
+    fn aspect_scaling(&self) -> Result<bool, Box<dyn Error>> {
+        Err("platform backend does not implement aspect scaling queries".into())
+    }
     /// Must commit the request on Ok; on Err leave backend state unchanged for retry.
     /// This is not a queued acknowledgement. Native event-loop implementations must honor this contract.
     fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>>;
@@ -162,6 +168,7 @@ pub struct RecordingBackend {
     bytes: usize,
     fullscreen: bool,
     aspect_mode: Option<u32>,
+    aspect_scaling: Option<bool>,
     render_mode: u32,
     window_size: Option<[u32; 2]>,
     font_answers: std::collections::VecDeque<Option<Vec<u8>>>,
@@ -189,6 +196,9 @@ impl PlatformBackend for RecordingBackend {
     }
     fn aspect_mode(&self) -> Result<u32, Box<dyn Error>> {
         Ok(self.aspect_mode.unwrap_or(1))
+    }
+    fn aspect_scaling(&self) -> Result<bool, Box<dyn Error>> {
+        Ok(self.aspect_scaling.unwrap_or(true))
     }
     fn stretch_filter_supported(&self) -> Result<bool, Box<dyn Error>> {
         Ok(true)
@@ -232,6 +242,7 @@ impl PlatformBackend for RecordingBackend {
         let size = match request {
             PlatformRequest::Fullscreen(_)
             | PlatformRequest::AspectMode(_)
+            | PlatformRequest::AspectScaling(_)
             | PlatformRequest::RenderMode(_)
             | PlatformRequest::WindowSize(_) => 0,
             PlatformRequest::Title(bytes) => bytes.len(),
@@ -249,6 +260,9 @@ impl PlatformBackend for RecordingBackend {
         }
         if let PlatformRequest::AspectMode(value) = request {
             self.aspect_mode = Some(*value);
+        }
+        if let PlatformRequest::AspectScaling(value) = request {
+            self.aspect_scaling = Some(*value);
         }
         if let PlatformRequest::RenderMode(value) = request {
             self.render_mode = *value;
@@ -397,6 +411,36 @@ impl PlatformHost {
             vm.complete_system(SystemResult(0x4004))?;
             return Ok(Some(PlatformEvent::Configured));
         }
+        if command == 0x2c9 {
+            let raw = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x22c9, e.0))?;
+            let requested = raw != 0;
+            // Compare before capability fallback. An unsupported enable still
+            // refreshes fullscreen presentation, even though the stored value stays 0.
+            let changed = requested != backend.aspect_scaling()?;
+            let fullscreen = if changed {
+                let supported = backend.stretch_filter_supported()?;
+                let enabled = requested && supported;
+                let fullscreen = backend.fullscreen()?;
+                backend.apply(&PlatformRequest::AspectScaling(enabled))?;
+                fullscreen
+            } else {
+                false
+            };
+            vm.complete_system(SystemResult(if fullscreen { 0xc004 } else { 0x4004 }))?;
+            return Ok(Some(if fullscreen {
+                PlatformEvent::Yield
+            } else {
+                PlatformEvent::Configured
+            }));
+        }
+        if command == 0x2ca {
+            let value = backend.aspect_scaling()?;
+            vm.complete_system(SystemResult(0x4000))?;
+            vm.state_mut()
+                .set_system_integer(0, u32::from(value))
+                .expect("slot 0 exists");
+            return Ok(Some(PlatformEvent::Configured));
+        }
         if command == 0x2fc {
             let value = backend.aspect_mode()?;
             vm.complete_system(SystemResult(0x4000))?;
@@ -536,6 +580,7 @@ impl PlatformHost {
             PlatformRequest::Icon { name, .. } => self.icon = Some(name),
             PlatformRequest::Fullscreen(_)
             | PlatformRequest::AspectMode(_)
+            | PlatformRequest::AspectScaling(_)
             | PlatformRequest::RenderMode(_)
             | PlatformRequest::WindowSize(_) => {
                 unreachable!("handled before string requests")

@@ -104,6 +104,11 @@ impl Startup<'_> {
         )?;
         configuration.set_integer("CMVS_RS_DESKTOP", "ASPECT_MODE", display.aspect_mode)?;
         configuration.set_integer(
+            "CMVS_RS_DESKTOP",
+            "ASPECT_SCALING",
+            u32::from(display.aspect_scaling),
+        )?;
+        configuration.set_integer(
             "GRAPHIC_CONFIG",
             "ASPECT_RATIO_FILTER",
             crate::settings::render_mode_to_ini(display.render_mode),

@@ -53,6 +53,7 @@ struct App<'a> {
     cursor_shown: bool,
     font: Option<crate::font::FontRenderer>,
     aspect_mode: std::cell::Cell<u32>,
+    aspect_scaling: std::cell::Cell<bool>,
     render_mode: std::cell::Cell<u32>,
     windowed_size: std::cell::Cell<[u32; 2]>,
 }
@@ -105,11 +106,11 @@ impl App<'_> {
         if self.preview_image.is_some() {
             image.draw_fit(&mut buffer, size.width, size.height)?;
         } else {
-            let mode = if window.fullscreen().is_some() {
-                self.aspect_mode.get()
-            } else {
-                1
-            };
+            let mode = cmvs_core::viewport::presentation_mode(
+                window.fullscreen().is_some(),
+                self.aspect_scaling.get(),
+                self.aspect_mode.get(),
+            );
             image.draw_scaled(
                 &mut buffer,
                 size.width,
@@ -138,6 +139,7 @@ impl App<'_> {
             event_loop: el,
             encoding: self.encoding,
             aspect_mode: &self.aspect_mode,
+            aspect_scaling: &self.aspect_scaling,
             render_mode: &self.render_mode,
             windowed_size: &self.windowed_size,
             fonts: self.font.as_ref(),
@@ -185,6 +187,7 @@ impl ApplicationHandler for App<'_> {
                 event_loop: el,
                 encoding: self.encoding,
                 aspect_mode: &self.aspect_mode,
+                aspect_scaling: &self.aspect_scaling,
                 render_mode: &self.render_mode,
                 windowed_size: &self.windowed_size,
                 fonts: self.font.as_ref(),
@@ -343,11 +346,11 @@ impl ApplicationHandler for App<'_> {
             self.next_frame = now + Duration::from_millis(16);
             let window = window.clone();
             self.game_input
-                .set_aspect_mode(if window.fullscreen().is_some() {
-                    self.aspect_mode.get()
-                } else {
-                    1
-                });
+                .set_aspect_mode(cmvs_core::viewport::presentation_mode(
+                    window.fullscreen().is_some(),
+                    self.aspect_scaling.get(),
+                    self.aspect_mode.get(),
+                ));
             if self.input_due && self.native_input && self.preview_image.is_none() {
                 let size = window.inner_size();
                 self.game_input.frame(
@@ -379,6 +382,7 @@ impl ApplicationHandler for App<'_> {
                     event_loop: el,
                     encoding: self.encoding,
                     aspect_mode: &self.aspect_mode,
+                    aspect_scaling: &self.aspect_scaling,
                     render_mode: &self.render_mode,
                     windowed_size: &self.windowed_size,
                     fonts: self.font.as_ref(),
@@ -453,11 +457,11 @@ impl ApplicationHandler for App<'_> {
                 }
             }
             self.game_input
-                .set_aspect_mode(if window.fullscreen().is_some() {
-                    self.aspect_mode.get()
-                } else {
-                    1
-                });
+                .set_aspect_mode(cmvs_core::viewport::presentation_mode(
+                    window.fullscreen().is_some(),
+                    self.aspect_scaling.get(),
+                    self.aspect_mode.get(),
+                ));
             if let Some(point) = self.startup.input_mut().take_warp() {
                 let size = window.inner_size();
                 if let Some([x, y]) = self.game_input.warp([size.width, size.height], point)
@@ -749,6 +753,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         cursor_shown: true,
         font,
         aspect_mode: std::cell::Cell::new(display_preferences.aspect_mode),
+        aspect_scaling: std::cell::Cell::new(display_preferences.aspect_scaling),
         render_mode: std::cell::Cell::new(display_preferences.render_mode),
         windowed_size: std::cell::Cell::new([960, 540]),
     };
@@ -772,6 +777,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 .as_ref()
                 .is_some_and(|w| w.fullscreen().is_some()),
             aspect_mode: app.aspect_mode.get(),
+            aspect_scaling: app.aspect_scaling.get(),
             render_mode: app.render_mode.get(),
         })?
     {

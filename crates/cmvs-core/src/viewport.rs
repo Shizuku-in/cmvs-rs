@@ -1,6 +1,19 @@
 //! Shared display rectangle for software presentation and pointer conversion.
 use crate::{FormatError, MAX_PAYLOAD};
 
+/// Software desktop policy for the independent fullscreen scaling enable switch.
+/// A disabled switch keeps script pixels unscaled when they fit the desktop;
+/// smaller borderless desktops retain mode zero's existing contain fallback.
+pub fn presentation_mode(fullscreen: bool, scaling: bool, aspect_mode: u32) -> u32 {
+    if !fullscreen {
+        1
+    } else if scaling {
+        aspect_mode
+    } else {
+        0
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Viewport {
     pub left: i64,

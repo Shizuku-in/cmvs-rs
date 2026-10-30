@@ -1092,6 +1092,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         .save_preferences(cmvs_rs::settings::DisplayPreferences {
             fullscreen: false,
             aspect_mode: 3,
+            aspect_scaling: true,
             render_mode: cmvs_rs::platform::PlatformBackend::render_mode(&ui.backend).unwrap(),
         })
         .unwrap();
@@ -1108,6 +1109,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         cmvs_rs::settings::DisplayPreferences {
             fullscreen: false,
             aspect_mode: 3,
+            aspect_scaling: true,
             render_mode: 0
         }
     );

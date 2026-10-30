@@ -340,6 +340,7 @@ fn user_configuration_round_trips_live_settings_and_preserves_the_game_file() {
     run.save_preferences(DisplayPreferences {
         fullscreen: true,
         aspect_mode: 2,
+        aspect_scaling: true,
         render_mode: 0,
     })
     .unwrap();
@@ -347,6 +348,7 @@ fn user_configuration_round_trips_live_settings_and_preserves_the_game_file() {
     run.save_preferences(DisplayPreferences {
         fullscreen: false,
         aspect_mode: 3,
+        aspect_scaling: false,
         render_mode: 0,
     })
     .unwrap();
@@ -364,6 +366,7 @@ fn user_configuration_round_trips_live_settings_and_preserves_the_game_file() {
         DisplayPreferences {
             fullscreen: false,
             aspect_mode: 3,
+            aspect_scaling: false,
             render_mode: 0
         }
     );
