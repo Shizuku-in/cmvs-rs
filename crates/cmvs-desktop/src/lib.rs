@@ -145,6 +145,14 @@ impl PlatformBackend for NativeBackend<'_> {
     }
     fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>> {
         match request {
+            PlatformRequest::Fullscreen(value) => {
+                self.window.set_fullscreen(
+                    value.then(|| {
+                        winit::window::Fullscreen::Borderless(self.window.current_monitor())
+                    }),
+                );
+                println!("# native fullscreen={value}");
+            }
             PlatformRequest::Title(bytes) => {
                 let title = self.encoding.decode(bytes)?;
                 self.window.set_title(&title);

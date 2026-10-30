@@ -115,6 +115,38 @@ fn string_call(op: u16) -> Vec<u8> {
 }
 
 #[test]
+fn fullscreen_request_yields_once_and_query_resumes_on_the_next_run() {
+    #[path = "support/bytecode.rs"]
+    #[allow(dead_code)]
+    mod commands;
+    let mut code = vec![];
+    commands::command(&mut code, 0x2164, &[1]);
+    commands::command(&mut code, 0x2163, &[]);
+    let root = Root::new("fullscreen-yield", &code, b"");
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut backend = RecordingBackend::default();
+    let mut yielded = false;
+    for _ in 0..20 {
+        if run.tick(&mut backend).unwrap() == StartupEvent::Yield {
+            yielded = true;
+            break;
+        }
+    }
+    assert!(yielded);
+    assert_eq!(backend.requests(), &[PlatformRequest::Fullscreen(true)]);
+    assert_eq!(run.machine().stack().len_bytes(), 0);
+    run.advance_frame(16).unwrap();
+    for _ in 0..3 {
+        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+        if run.machine().state().system_integer(0) == Some(1) {
+            return;
+        }
+    }
+    panic!("fullscreen query did not run after the yield");
+}
+
+#[test]
 fn audio_backend_receives_startup_ducking_and_failed_replacement_keeps_old_device() {
     use cmvs_rs::audio::{AudioBackend, AudioRequest, VoiceDuckingSettings};
     use std::sync::{Arc, Mutex};

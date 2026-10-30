@@ -341,6 +341,9 @@ fn run() -> Result<(), Box<dyn Error>> {
                     );
                     if platform_backend.requests().len() > previous {
                         match platform_backend.requests().last().expect("new request") {
+                            PlatformRequest::Fullscreen(value) => {
+                                println!("# recorded fullscreen={value}")
+                            }
                             PlatformRequest::Title(bytes) => {
                                 println!("# recorded title={}", bytes.escape_ascii())
                             }
@@ -356,6 +359,23 @@ fn run() -> Result<(), Box<dyn Error>> {
                                 bytes.len()
                             ),
                         }
+                    }
+                    if event == cmvs_rs::platform::PlatformEvent::Yield {
+                        if let Some(delta) = frame_ms {
+                            if let (Some(images), Some(config)) = (&mut images, &bootstrap) {
+                                sequence.advance_frame_with_images(
+                                    delta,
+                                    &mut scene,
+                                    &mut images.with_paths(config.paths()),
+                                )?;
+                            } else {
+                                sequence.advance_frame(delta)?;
+                            }
+                            scene.advance_frame(delta);
+                            movies.advance(delta);
+                            frame_delta = delta;
+                        }
+                        resume_run = true;
                     }
                     continue;
                 }

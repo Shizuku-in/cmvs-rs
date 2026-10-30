@@ -67,6 +67,7 @@ impl PlatformAssets for DirectoryAssets {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlatformRequest {
+    Fullscreen(bool),
     Title(Vec<u8>),
     Cursor {
         id: u32,
@@ -110,6 +111,7 @@ pub trait PlatformBackend {
 pub struct RecordingBackend {
     requests: Vec<PlatformRequest>,
     bytes: usize,
+    fullscreen: bool,
 }
 impl RecordingBackend {
     pub fn requests(&self) -> &[PlatformRequest] {
@@ -133,10 +135,11 @@ impl PlatformBackend for RecordingBackend {
         Ok(0)
     }
     fn fullscreen(&self) -> Result<bool, Box<dyn Error>> {
-        Ok(false)
+        Ok(self.fullscreen)
     }
     fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>> {
         let size = match request {
+            PlatformRequest::Fullscreen(_) => 0,
             PlatformRequest::Title(bytes) => bytes.len(),
             PlatformRequest::Cursor { bitmap, .. } => {
                 bitmap.as_ref().map_or(0, |b| b.width() * b.height() * 4)
@@ -147,6 +150,9 @@ impl PlatformBackend for RecordingBackend {
             return Err("recorded platform requests exceed research limits".into());
         }
         self.requests.push(request.clone());
+        if let PlatformRequest::Fullscreen(value) = request {
+            self.fullscreen = *value;
+        }
         self.bytes += size;
         Ok(())
     }
@@ -183,6 +189,7 @@ pub struct ThumbnailConfig {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlatformEvent {
+    Yield,
     Applied,
     CursorUnchanged,
     Configured,
@@ -253,6 +260,12 @@ impl PlatformHost {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(None);
         };
+        if command == 0x164 {
+            let raw = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x2164, e.0))?;
+            backend.apply(&PlatformRequest::Fullscreen(raw != 0))?;
+            vm.complete_system(SystemResult(0xc004))?;
+            return Ok(Some(PlatformEvent::Yield));
+        }
         if command == 0x2fc {
             let value = backend.aspect_mode()?;
             vm.complete_system(SystemResult(0x4000))?;
@@ -390,6 +403,7 @@ impl PlatformHost {
             PlatformRequest::Title(bytes) => self.title = Some(bytes),
             PlatformRequest::Cursor { id, .. } => self.cursor = id,
             PlatformRequest::Icon { name, .. } => self.icon = Some(name),
+            PlatformRequest::Fullscreen(_) => unreachable!("handled before string requests"),
         }
         Ok(Some(PlatformEvent::Applied))
     }

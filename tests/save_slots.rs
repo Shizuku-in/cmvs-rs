@@ -706,6 +706,15 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         .unwrap();
     ui.click(ui.button(1, 1), 120);
     assert_eq!(ui.run.buttons().group(1).unwrap().buttons.len(), 50);
+    for (x, fullscreen) in [(576, true), (472, false)] {
+        ui.click([x, 107], 30);
+        assert_eq!(
+            cmvs_rs::platform::PlatformBackend::fullscreen(&ui.backend).unwrap(),
+            fullscreen
+        );
+        font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+            .unwrap();
+    }
     for _ in 0..120 {
         font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
             .unwrap();
@@ -761,7 +770,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     assert_eq!(ui.run.history().entries().len(), stopped);
     assert!(ui.waiting_for_text());
     println!(
-        "settings: native_audio={native_audio}; title + toolbar; cursor hide, voice stop modes, read-skip policy, bold/text/audio/auto settings, three pages, 426 settings frames; auto advanced at least three entries in {auto_frames} rendered frames with {} voices and {} voice fades; disabled then idle 240 rendered frames",
+        "settings: native_audio={native_audio}; title + toolbar; fullscreen, cursor hide, voice stop modes, read-skip policy, bold/text/audio/auto settings, three pages, 428 settings frames; auto advanced at least three entries in {auto_frames} rendered frames with {} voices and {} voice fades; disabled then idle 240 rendered frames",
         ui.voices.len(),
         ui.voice_fades.len()
     );

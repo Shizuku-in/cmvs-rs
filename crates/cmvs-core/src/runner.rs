@@ -694,17 +694,19 @@ impl<'a> Startup<'a> {
             }
             return Ok(StartupEvent::Progress);
         }
-        if self
-            .platform
-            .try_handle(
-                &mut self.machine,
-                backend,
-                &mut self.assets,
-                self.bootstrap.cursor_names(),
-            )?
-            .is_some()
-        {
-            return Ok(StartupEvent::Progress);
+        if let Some(event) = self.platform.try_handle(
+            &mut self.machine,
+            backend,
+            &mut self.assets,
+            self.bootstrap.cursor_names(),
+        )? {
+            let yields = event == crate::platform::PlatformEvent::Yield;
+            self.resume_run = yields;
+            return Ok(if yields {
+                StartupEvent::Yield
+            } else {
+                StartupEvent::Progress
+            });
         }
         if let Some(event) = self
             .control
