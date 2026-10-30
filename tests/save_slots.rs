@@ -424,6 +424,7 @@ fn external_route_saves_every_snapshot_and_plays_on_after_loads() {
 /// screens (button group 1, slot ids from 70) and the backlog. Input goes through key.cfg
 /// bindings: code 1 left button, 3 right button, 4/5 wheel up/down.
 struct Ui<'a, 'b> {
+    native_audio: bool,
     run: &'b mut Startup<'a>,
     backend: RecordingBackend,
     bindings: KeyBindings,
@@ -438,25 +439,51 @@ struct Ui<'a, 'b> {
 }
 
 /// Title and toolbar settings entries, three pages and right-click return.
-/// Volume and USE edits use recording audio; persistence and native behavior are separate.
+/// Recording-audio variant; the native variant shares the same assertions below.
 #[cfg(feature = "desktop")]
 #[test]
 #[ignore = "requires CMVS_GAME_ROOT with system.dat/save000 and CMVS_FONT_PATH"]
 fn external_system_settings_entries_render_and_return() {
+    system_settings_entries_render_and_return(false);
+}
+
+#[cfg(all(feature = "desktop", feature = "audio-output"))]
+#[test]
+#[ignore = "requires CMVS_GAME_ROOT, CMVS_FONT_PATH and the native audio device"]
+fn external_native_system_settings_entries_render_and_return() {
+    system_settings_entries_render_and_return(true);
+}
+
+#[cfg(feature = "desktop")]
+fn system_settings_entries_render_and_return(native_audio: bool) {
     let root = PathBuf::from(std::env::var_os("CMVS_GAME_ROOT").expect("CMVS_GAME_ROOT"));
     let font_path = PathBuf::from(std::env::var_os("CMVS_FONT_PATH").expect("CMVS_FONT_PATH"));
     let mut font = cmvs_rs::desktop::font::FontRenderer::read(&font_path, 0).unwrap();
-    let user = user_directory("settings");
+    let user = user_directory(if native_audio {
+        "settings-native"
+    } else {
+        "settings"
+    });
     for name in ["system.dat", "save000.dat"] {
         fs::copy(root.join("save").join(name), user.join(name)).unwrap();
     }
     let game = Registry::builtin().identify_game(&root, None).unwrap();
     let script = load_start(&root, &game.files).unwrap();
     let mut run = Startup::new(&script, &root, &game, 0).unwrap();
+    #[cfg(feature = "audio-output")]
+    if native_audio {
+        run.set_audio_backend(Box::new(
+            cmvs_rs::audio_output::NativeAudio::new(&root).unwrap(),
+        ))
+        .unwrap();
+    }
+    #[cfg(not(feature = "audio-output"))]
+    assert!(!native_audio);
     run.set_user_data_directory(&user).unwrap();
     run.set_record_text(true);
     run.set_glyph_metrics(font.metrics());
     let mut ui = Ui {
+        native_audio,
         run: &mut run,
         backend: RecordingBackend::default(),
         bindings: KeyBindings::parse(&fs::read_to_string(root.join("key.cfg")).unwrap()).unwrap(),
@@ -467,7 +494,16 @@ fn external_system_settings_entries_render_and_return() {
         frozen: false,
     };
     for _ in 0..30_000 {
-        if ui.run.machine().current_name() == b"menu.ps3" && ui.run.steps() > 200_000 {
+        if ui.run.machine().current_name() == b"menu.ps3"
+            && if native_audio {
+                ui.run
+                    .buttons()
+                    .group(0)
+                    .is_some_and(|group| group.buttons.len() >= 4)
+            } else {
+                ui.run.steps() > 200_000
+            }
+        {
             break;
         }
         ui.frame([-1, -1], None);
@@ -645,19 +681,34 @@ fn external_system_settings_entries_render_and_return() {
     assert!(ui.run.buttons().group(1).is_none());
     let before_auto = ui.run.history().entries().len();
     ui.voice_fades.clear();
+    ui.voices.clear();
     ui.click(ui.toolbar(5), 0);
     assert!(ui.run.message_flags().auto_advance());
     let mut auto_frames = 0;
-    for _ in 0..2000 {
+    let mut first_voice_history = None;
+    for _ in 0..if native_audio { 8000 } else { 2000 } {
         font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
             .unwrap();
         auto_frames += 1;
         ui.frame([640, 360], None);
-        if ui.run.history().entries().len() >= before_auto + 3 {
+        if !ui.voices.is_empty() && first_voice_history.is_none() {
+            first_voice_history = Some(ui.run.history().entries().len());
+        }
+        if ui.run.history().entries().len() >= before_auto + 3
+            && (!native_audio
+                || first_voice_history
+                    .is_some_and(|count| ui.run.history().entries().len() >= count + 2))
+        {
             break;
         }
     }
     assert!(ui.run.history().entries().len() >= before_auto + 3);
+    if native_audio {
+        assert!(
+            first_voice_history.is_some_and(|count| ui.run.history().entries().len() >= count + 2),
+            "native auto must advance beyond actual voice playback"
+        );
+    }
     assert!(
         !ui.voice_fades.is_empty(),
         "fade-out stop mode must execute voice fades"
@@ -675,7 +726,8 @@ fn external_system_settings_entries_render_and_return() {
     assert_eq!(ui.run.history().entries().len(), stopped);
     assert!(ui.waiting_for_text());
     println!(
-        "settings: title + toolbar; voice stop modes, read-skip policy, text/audio/auto settings, three pages, 418 settings frames; auto advanced three entries in {auto_frames} rendered frames with {} voice fades; disabled then idle 240 rendered frames",
+        "settings: native_audio={native_audio}; title + toolbar; voice stop modes, read-skip policy, text/audio/auto settings, three pages, 418 settings frames; auto advanced at least three entries in {auto_frames} rendered frames with {} voices and {} voice fades; disabled then idle 240 rendered frames",
+        ui.voices.len(),
         ui.voice_fades.len()
     );
 }
@@ -738,7 +790,12 @@ impl Ui<'_, '_> {
                 other => panic!("{other:?}"),
             }
         }
-        self.run.advance_frame(16).unwrap();
+        if self.native_audio {
+            std::thread::sleep(std::time::Duration::from_millis(16));
+            self.run.advance_decoded_frame(16).unwrap();
+        } else {
+            self.run.advance_frame(16).unwrap();
+        }
         let mut now = [false; 128];
         if let Some(code) = code {
             now[code] = true;
@@ -805,6 +862,7 @@ fn external_in_game_menus_save_and_load() {
     run.set_user_data_directory(&user).unwrap();
     run.set_record_text(true);
     let mut ui = Ui {
+        native_audio: false,
         run: &mut run,
         backend: RecordingBackend::default(),
         bindings: KeyBindings::parse(&fs::read_to_string(root.join("key.cfg")).unwrap()).unwrap(),
@@ -937,6 +995,7 @@ fn external_backlog_scrolls_replays_voices_and_jumps_back() {
     run.set_user_data_directory(&user).unwrap();
     run.set_record_text(true);
     let mut ui = Ui {
+        native_audio: false,
         run: &mut run,
         backend: RecordingBackend::default(),
         bindings: KeyBindings::parse(&fs::read_to_string(root.join("key.cfg")).unwrap()).unwrap(),
