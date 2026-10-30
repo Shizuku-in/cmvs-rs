@@ -33,6 +33,8 @@ pub struct RecordedGlyph {
     pub active: bool,
     pub shown: bool,
     pub opacity: u32,
+    pub reveal_mode: u32,
+    pub reveal_width: u32,
 }
 impl RecordedGlyph {
     pub(super) fn advance(&mut self, delta: u32) {
@@ -41,15 +43,22 @@ impl RecordedGlyph {
         }
         let available = delta.saturating_sub(self.delay_ms);
         self.delay_ms = self.delay_ms.saturating_sub(delta);
-        if available == 0 {
+        if available == 0 && (self.delay_ms != 0 || self.reveal_mode != 0) {
             return;
         }
         self.shown = true;
         self.elapsed_ms = self.elapsed_ms.wrapping_add(available);
-        if self.elapsed_ms >= self.duration_ms {
+        if self.reveal_mode == 0 || self.elapsed_ms >= self.duration_ms {
             self.finish();
         } else {
-            self.opacity = 255u32.wrapping_mul(self.elapsed_ms) / self.duration_ms;
+            match self.reveal_mode {
+                1 => self.opacity = 255u32.wrapping_mul(self.elapsed_ms) / self.duration_ms,
+                2 => {
+                    self.reveal_width =
+                        self.elapsed_ms.wrapping_mul(self.size + 4) / self.duration_ms
+                }
+                _ => self.finish(),
+            }
         }
     }
     fn finish(&mut self) {
@@ -57,6 +66,7 @@ impl RecordedGlyph {
         self.delay_ms = 0;
         self.shown = true;
         self.opacity = 255;
+        self.reveal_width = self.size + 4;
     }
 }
 
@@ -268,11 +278,13 @@ fn push(
         active: false,
         shown: true,
         opacity: 255,
+        reveal_mode: 0,
+        reveal_width: size + 4,
     });
     Ok(text.glyphs.len() - 1)
 }
 
-/// 0x14005b5a0 with the constructor settings (alpha reveal, 350 ms). After `\wc` (a5 != 0)
+/// 0x14005b5a0 using the current output settings. After `\wc` (a5 != 0)
 /// it returns 0 at once, leaving the glyph shown and restarting the delay. Otherwise a
 /// nonzero interval hides the glyph until `delay` has passed and returns delay + interval.
 fn retime(
@@ -281,6 +293,7 @@ fn retime(
     delay: u32,
     interval: u32,
     instant: bool,
+    settings: crate::settings::TextOutputSettings,
 ) -> Result<u32, &'static str> {
     if instant {
         return Ok(0);
@@ -295,12 +308,21 @@ fn retime(
     glyph.elapsed_ms = 0;
     glyph.active = true;
     glyph.shown = false;
-    glyph.opacity = 0;
+    glyph.reveal_mode = settings.reveal_mode;
+    glyph.duration_ms = *[50, 200, 350, 500, 650]
+        .get(settings.reveal_duration as usize)
+        .ok_or("unknown configured text reveal duration")?;
+    glyph.opacity = if settings.reveal_mode == 1 { 0 } else { 255 };
+    glyph.reveal_width = if settings.reveal_mode == 2 {
+        0
+    } else {
+        glyph.size + 4
+    };
     Ok(delay.wrapping_add(interval))
 }
 
-/// Settings block constructor: +1544=4, +1536=1 (alpha reveal), +1540=2 (350ms),
-/// +1528=1. READ_SKIP and script skip initially zero. Other modes remain barriers.
+/// Uses current settings +1544 (speed), +1536/+1540 (effect) and +1528 (outline).
+/// Their constructor defaults are 4/1/2/1; startup INI and VM setters can change them.
 /// Wrapping follows 0x14005bc90 with +112 = 1 (constructor and 0x14005d3b0; only the
 /// unimplemented 0x2108 clears it). Without line-break rules a double-byte 、。」』 never
 /// starts a line; with rules, double-byte characters go through 0x14005b120.
@@ -313,7 +335,12 @@ fn retime(
 /// Every group loop iteration re-times the last glyph through 0x14005b5a0, so `/`, `}` and
 /// single bytes delay the previous glyph again and add an interval; annotations start at
 /// the group's delay and leave the following text's delay unchanged.
-fn append(text: &mut TextObject, bytes: &[u8], skip: bool) -> Result<(), &'static str> {
+fn append(
+    text: &mut TextObject,
+    bytes: &[u8],
+    skip: bool,
+    settings: crate::settings::TextOutputSettings,
+) -> Result<(), &'static str> {
     let mut x = text.cursor[0] as u32;
     let mut y = text.cursor[1] as u32;
     let mut line = 0u32;
@@ -331,7 +358,7 @@ fn append(text: &mut TextObject, bytes: &[u8], skip: bool) -> Result<(), &'stati
     let interval = if skip {
         0
     } else {
-        4u32.wrapping_mul(text.char_delay as u32) / 10
+        settings.speed.wrapping_mul(text.char_delay as u32) / 10
     };
     let mut delay = 0u32;
     // `\wc` / `\ws` (v83): reveal glyphs at once until switched back; starts off per call.
@@ -390,10 +417,10 @@ fn append(text: &mut TextObject, bytes: &[u8], skip: bool) -> Result<(), &'stati
             let (start, ruby_y, group_delay) = (x, y.wrapping_sub(text.ruby_size as u32), delay);
             for item in &group.base {
                 if let Some(code) = *item {
-                    last = Some(push(text, code, [x, y], size, 1)?);
+                    last = Some(push(text, code, [x, y], size, settings.outline)?);
                     x = x.wrapping_add(size).wrapping_add(text.spacing[0] as u32);
                 }
-                delay = retime(text, last, delay, interval, instant)?;
+                delay = retime(text, last, delay, interval, instant, settings)?;
             }
             if !text.ruby {
                 continue;
@@ -420,10 +447,16 @@ fn append(text: &mut TextObject, bytes: &[u8], skip: bool) -> Result<(), &'stati
             let mut ruby_delay = group_delay;
             for item in &group.ruby {
                 if let Some(code) = *item {
-                    last = Some(push(text, code, [ruby_x >> 10, ruby_y], ruby_size, 1)?);
+                    last = Some(push(
+                        text,
+                        code,
+                        [ruby_x >> 10, ruby_y],
+                        ruby_size,
+                        settings.outline,
+                    )?);
                     ruby_x = ruby_x.wrapping_add(step);
                 }
-                ruby_delay = retime(text, last, ruby_delay, interval, instant)?;
+                ruby_delay = retime(text, last, ruby_delay, interval, instant, settings)?;
             }
             continue;
         }
@@ -456,8 +489,8 @@ fn append(text: &mut TextObject, bytes: &[u8], skip: bool) -> Result<(), &'stati
         } else {
             x
         };
-        last = Some(push(text, code, [gx, y], size, 1)?);
-        delay = retime(text, last, delay, interval, instant)?;
+        last = Some(push(text, code, [gx, y], size, settings.outline)?);
+        delay = retime(text, last, delay, interval, instant, settings)?;
         let advance = if code == 0x814a {
             (size >> 1).wrapping_sub(size / 5)
         } else if wide {
@@ -596,7 +629,8 @@ impl MessageHost {
             .ok_or_else(|| error(pc, 0x2159, "window without text object"))?
             .clone();
         if initialize {
-            append(&mut candidate, &bytes, flags.skip()).map_err(|why| error(pc, 0x2159, why))?;
+            append(&mut candidate, &bytes, flags.skip(), self.output_settings)
+                .map_err(|why| error(pc, 0x2159, why))?;
         }
         let done = !window.hidden && !candidate.glyphs.iter().any(|g| g.active);
         vm.complete_system(SystemResult(0x4010))?;
@@ -608,7 +642,7 @@ impl MessageHost {
     }
     /// 0x140076700 / 0x14005d900: repeat=0 creates glyphs once; hidden windows keep
     /// yielding. Waiting returns 0xa000, completion 0xc00c (both yield). Research mode
-    /// explicitly selects the constructor settings block. Only the +1520 skip flag shortens
+    /// uses the current runtime settings block. Only the +1520 skip flag shortens
     /// reveal timing; it, held actions 7/8 and the +12244 bypass finish without consuming.
     /// A release of action 0 or 20 finishes and consumes both (0x140054d90, 0x140055160).
     /// 0x210b / 0x140072aa0: SP-4 text index (signed >= 12 or a missing object only sets
@@ -673,7 +707,8 @@ impl MessageHost {
             .ok_or_else(|| error(pc, 0x2152, "message window without text"))?
             .clone();
         if vm.repeat_count() == 0 {
-            append(&mut candidate, &bytes, flags.skip()).map_err(|why| error(pc, 0x2152, why))?;
+            append(&mut candidate, &bytes, flags.skip(), self.output_settings)
+                .map_err(|why| error(pc, 0x2152, why))?;
         }
         let active = candidate.glyphs.iter().any(|g| g.active);
         let skip = flags.skip() || input.skip_held() || flags.bypass();

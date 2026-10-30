@@ -489,6 +489,27 @@ fn external_system_settings_entries_render_and_return() {
     assert_eq!(group.buttons.len(), 292);
     assert!(ui.run.messages().window(6).is_some());
     let initial_audio = ui.run.audio().settings();
+    for (outline, x) in [368, 472, 576].into_iter().enumerate() {
+        ui.click([x, 173], 30);
+        assert_eq!(ui.run.settings().text_output().outline, outline as u32);
+        for _ in 0..30 {
+            font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+                .unwrap();
+            ui.frame([640, 360], None);
+        }
+    }
+    let mut last_speed = ui.run.settings().text_output().speed;
+    for x in [300, 560] {
+        ui.click([x, 306], 30);
+        let speed = ui.run.settings().text_output().speed;
+        assert_ne!(speed, last_speed);
+        last_speed = speed;
+        for _ in 0..30 {
+            font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+                .unwrap();
+            ui.frame([640, 360], None);
+        }
+    }
     for (index, y) in [380, 420, 460].into_iter().enumerate() {
         let values =
             |s: cmvs_rs::settings::AutoAdvanceSettings| [s.base, s.per_glyph, s.voice_wait];
@@ -634,7 +655,7 @@ fn external_system_settings_entries_render_and_return() {
     assert_eq!(ui.run.history().entries().len(), stopped);
     assert!(ui.waiting_for_text());
     println!(
-        "settings: title + toolbar; audio and auto sliders, resets, three pages, 263 settings frames; auto advanced three entries in {auto_frames} rendered frames; disabled then idle 240 rendered frames"
+        "settings: title + toolbar; text outline/speed, audio and auto sliders, resets, three pages, 413 settings frames; auto advanced three entries in {auto_frames} rendered frames; disabled then idle 240 rendered frames"
     );
 }
 

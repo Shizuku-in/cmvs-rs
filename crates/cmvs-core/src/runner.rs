@@ -530,6 +530,7 @@ impl<'a> Startup<'a> {
         &mut self,
         backend: &mut impl PlatformBackend,
     ) -> Result<StartupEvent, Box<dyn Error>> {
+        self.messages.set_text_settings(self.settings.text_output());
         if self.main_barrier {
             return Ok(StartupEvent::MainPreparedNeedsSnapshot);
         }

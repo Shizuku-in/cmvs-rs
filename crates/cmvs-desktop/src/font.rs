@@ -295,7 +295,7 @@ impl FontRenderer {
                 visible_glyphs += 1;
                 let pixels = self.glyph(glyph)?;
                 let mut draw = DrawState::default();
-                draw.words[4] = pixels.width();
+                draw.words[4] = glyph.reveal_width.min(pixels.width());
                 draw.words[5] = pixels.height();
                 draw.words[8] = (glyph.position[0] as u32).wrapping_sub(2);
                 draw.words[9] = (glyph.position[1] as u32).wrapping_sub(2);
@@ -353,6 +353,8 @@ impl FontRenderer {
                     active: false,
                     shown: true,
                     opacity: 255,
+                    reveal_mode: 0,
+                    reveal_width: glyph.size + 4,
                 })?;
                 let mut draw = DrawState::default();
                 draw.words[4] = pixels.width();

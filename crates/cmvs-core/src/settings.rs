@@ -8,6 +8,25 @@ pub const DEFAULT_FONT_FACE: &[u8] = b"\x82l\x82r \x83S\x83V\x83b\x83N";
 pub struct SettingsHost {
     font_face: Vec<u8>,
     auto: AutoAdvanceSettings,
+    text: TextOutputSettings,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextOutputSettings {
+    pub speed: u32,
+    pub outline: u32,
+    pub reveal_mode: u32,
+    pub reveal_duration: u32,
+}
+impl Default for TextOutputSettings {
+    fn default() -> Self {
+        Self {
+            speed: 4,
+            outline: 1,
+            reveal_mode: 1,
+            reveal_duration: 2,
+        }
+    }
 }
 
 /// +1556..+1572. Timer fields retain raw words, including negative INI/script values.
@@ -72,10 +91,14 @@ impl Default for SettingsHost {
         Self {
             font_face: DEFAULT_FONT_FACE.to_vec(),
             auto: AutoAdvanceSettings::default(),
+            text: TextOutputSettings::default(),
         }
     }
 }
 impl SettingsHost {
+    pub fn text_output(&self) -> TextOutputSettings {
+        self.text
+    }
     pub fn auto_advance(&self) -> AutoAdvanceSettings {
         self.auto
     }
@@ -84,6 +107,12 @@ impl SettingsHost {
             crate::save_menu::profile_int(bytes, "MESSAGE_INFO", key, default) as u32
         };
         Self {
+            text: TextOutputSettings {
+                speed: int("TEXT_WAIT", 2),
+                outline: int("TEXT_GANG", 0),
+                reveal_mode: int("EFFECT_TYPE", 1),
+                reveal_duration: int("EFFECT_TIMER", 2),
+            },
             auto: AutoAdvanceSettings {
                 base: int("AUTO_MODE_1", 10),
                 per_glyph: int("AUTO_MODE_2", 0),
@@ -103,6 +132,39 @@ impl SettingsHost {
     /// changing subsequent font construction would misrepresent the command.
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
         if let Some((pc, command)) = vm.pending_system() {
+            if matches!(command, 0x2df | 0x2e1..=0x2e3) {
+                let mode = vm
+                    .stack()
+                    .peek_u32(4)
+                    .map_err(|e| error(pc, command + 0x2000, e.0))?;
+                let raw = if mode != 0 || command != 0x2df {
+                    vm.stack()
+                        .peek_u32(8)
+                        .map_err(|e| error(pc, command + 0x2000, e.0))?
+                } else {
+                    0
+                };
+                let field = match command {
+                    0x2df => &mut self.text.outline,
+                    0x2e1 => &mut self.text.speed,
+                    0x2e2 => &mut self.text.reveal_mode,
+                    _ => &mut self.text.reveal_duration,
+                };
+                vm.complete_system(SystemResult(0x4008))?;
+                if mode != 0 {
+                    *field = match command {
+                        0x2df => ((raw as i32).wrapping_abs() % 3) as u32,
+                        0x2e1 => (raw as i32).clamp(0, 10) as u32,
+                        0x2e2 => (raw as i32).clamp(0, 2) as u32,
+                        _ => (raw as i32).clamp(0, 4) as u32,
+                    };
+                } else {
+                    vm.state_mut()
+                        .set_system_integer(0, *field)
+                        .expect("slot 0 exists");
+                }
+                return Ok(true);
+            }
             let auto_index = match command {
                 0x2e7 => Some(0),
                 0x2e8 => Some(1),
@@ -153,11 +215,7 @@ impl SettingsHost {
             // effects before they may be accepted; these reads expose current defaults.
             let value = match command {
                 0x2d5 => Some(1),
-                0x2df => Some(1),
                 0x2e0 => Some(0),
-                0x2e1 => Some(4),
-                0x2e2 => Some(1),
-                0x2e3 => Some(2),
                 0x2e4 => Some(0),
                 0x2e9 => Some(1),
                 _ => None,
@@ -173,12 +231,6 @@ impl SettingsHost {
                         command + 0x2000,
                         "runtime configuration setter is not implemented",
                     ));
-                }
-                // Bounded integer wrappers load SP-8 even on query.
-                if matches!(command, 0x2e1..=0x2e3) {
-                    vm.stack()
-                        .peek_u32(8)
-                        .map_err(|e| error(pc, command + 0x2000, e.0))?;
                 }
                 vm.complete_system(SystemResult(0x4008))?;
                 vm.state_mut()

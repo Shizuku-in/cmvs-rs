@@ -181,6 +181,7 @@ pub trait GlyphMetrics: std::fmt::Debug {
 
 #[derive(Debug, Default)]
 pub struct MessageHost {
+    output_settings: crate::settings::TextOutputSettings,
     /// Global dword_1401015c4, shared by all message windows and retained while paused.
     auto_elapsed: u32,
     glyph_metrics: Option<Box<dyn GlyphMetrics>>,
@@ -196,6 +197,9 @@ pub struct MessageHost {
 }
 
 impl MessageHost {
+    pub fn set_text_settings(&mut self, settings: crate::settings::TextOutputSettings) {
+        self.output_settings = settings;
+    }
     /// Font device service; headless recording keeps the missing-metrics barrier.
     pub fn set_glyph_metrics(&mut self, metrics: Box<dyn GlyphMetrics>) {
         self.glyph_metrics = Some(metrics);

@@ -7,6 +7,54 @@ mod bytecode;
 use bytecode::{command, pending, script};
 
 #[test]
+fn text_settings_round_trip_clamps_preserve_results_and_keep_outline_signed_remainder() {
+    for (op, raw, expected) in [
+        (0x22df, u32::MAX, 1),
+        (0x22df, 0x8000_0000, 0xffff_fffe),
+        (0x22df, 5, 2),
+        (0x22e1, u32::MAX, 0),
+        (0x22e1, 11, 10),
+        (0x22e2, 3, 2),
+        (0x22e2, u32::MAX, 0),
+        (0x22e3, 5, 4),
+        (0x22e3, u32::MAX, 0),
+    ] {
+        let mut code = vec![];
+        command(&mut code, op, &[1, raw]);
+        command(&mut code, op, &[0, 0]);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut host = SettingsHost::default();
+        vm.state_mut().set_system_integer(0, 77).unwrap();
+        pending(&mut vm);
+        host.try_handle(&mut vm).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(77));
+        assert_eq!(vm.stack().len_bytes(), 0);
+        pending(&mut vm);
+        host.try_handle(&mut vm).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(expected));
+    }
+    let host = SettingsHost::from_ini(
+        b"[MESSAGE_INFO]\nTEXT_WAIT=7\nTEXT_GANG=2\nEFFECT_TYPE=0\nEFFECT_TIMER=4\n",
+    );
+    assert_eq!(
+        host.text_output(),
+        cmvs_rs::settings::TextOutputSettings {
+            speed: 7,
+            outline: 2,
+            reveal_mode: 0,
+            reveal_duration: 4
+        }
+    );
+    assert_eq!(
+        SettingsHost::from_ini(b"[MESSAGE_INFO]\nTEXT_WAIT=-1\n")
+            .text_output()
+            .speed,
+        u32::MAX
+    );
+}
+
+#[test]
 fn auto_startup_parameters_retain_raw_words_and_apply_text_delay_formula() {
     use cmvs_rs::settings::AutoAdvanceSettings;
     let host = SettingsHost::from_ini(b"[MESSAGE_INFO]\nAUTO_MODE_1=-1\nAUTO_MODE_2=10\nAUTO_MODE_3=4\nAUTO_MODE_4=7\nAUTO_VOICE_SYNC=0\n");
@@ -503,16 +551,7 @@ fn automatic_advance_fields_round_trip_raw_words_and_normalize_only_the_boolean(
 
 #[test]
 fn configuration_queries_expose_current_constructor_policy_and_setters_stay_barriers() {
-    for (op, value) in [
-        (0x22d5, 1),
-        (0x22df, 1),
-        (0x22e0, 0),
-        (0x22e1, 4),
-        (0x22e2, 1),
-        (0x22e3, 2),
-        (0x22e4, 0),
-        (0x22e9, 1),
-    ] {
+    for (op, value) in [(0x22d5, 1), (0x22e0, 0), (0x22e4, 0), (0x22e9, 1)] {
         let mut code = vec![];
         command(&mut code, op, &[0, 0]);
         command(&mut code, op, &[1, 2]);

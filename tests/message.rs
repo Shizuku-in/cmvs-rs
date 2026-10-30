@@ -1627,6 +1627,109 @@ fn recorded_output_captures_styles_and_ruby_reserved_height_then_clears() {
 }
 
 #[test]
+fn configured_text_reveal_modes_durations_and_outline_only_affect_new_glyphs() {
+    use cmvs_rs::settings::TextOutputSettings;
+    for mode in 0..=2 {
+        for (index, duration) in [50, 200, 350, 500, 650].into_iter().enumerate() {
+            let mut code = vec![];
+            create(&mut code, 0, 7, [0, 0, 300, 100]);
+            call(&mut code, 0x2152, &[0, u32::MAX, 0]);
+            call(&mut code, 0x2159, &[0, 0, 0, 0]);
+            let script = script_with_text(&code, b"\x82\xa0\x82\xa2\0");
+            let mut vm = Machine::new(&script).unwrap();
+            let mut messages = MessageHost::default();
+            run(&mut vm, &mut messages, 1);
+            messages.set_record_output(true);
+            messages.set_text_settings(TextOutputSettings {
+                speed: 3,
+                outline: 2,
+                reveal_mode: mode,
+                reveal_duration: index as u32,
+            });
+            pending(&mut vm);
+            let mut input = ActionInput::default();
+            messages
+                .try_record_output(&mut vm, &mut input, wait_flags(false, false))
+                .unwrap();
+            let first = &messages.text(7).unwrap().glyphs;
+            assert_eq!(first[1].delay_ms, 30);
+            assert_eq!(first[0].outline[0], 2);
+            assert_eq!(first[0].duration_ms, duration);
+            // Changing the current settings must not re-time existing glyphs.
+            messages.set_text_settings(TextOutputSettings {
+                speed: 10,
+                outline: 0,
+                reveal_mode: 0,
+                reveal_duration: 0,
+            });
+            messages.advance_frame(25);
+            let first = &messages.text(7).unwrap().glyphs;
+            assert!(first[0].shown && !first[1].shown);
+            assert_eq!(first[0].reveal_mode, mode);
+            match mode {
+                0 => assert!(!first[0].active && first[0].opacity == 255),
+                1 => assert_eq!(first[0].opacity, 255 * 25 / duration),
+                _ => {
+                    assert_eq!(first[0].reveal_width, 31 * 25 / duration);
+                    assert_eq!(first[0].opacity, 255);
+                }
+            }
+            messages.advance_frame(1000);
+            messages
+                .try_record_output(&mut vm, &mut input, wait_flags(false, false))
+                .unwrap();
+            pending(&mut vm);
+            messages
+                .try_record_poll(&mut vm, wait_flags(false, false))
+                .unwrap();
+            let all = &messages.text(7).unwrap().glyphs;
+            assert_eq!(all.len(), 4);
+            assert_eq!(all[0].outline[0], 2);
+            assert_eq!(all[2].outline[0], 0);
+            assert_eq!(all[3].delay_ms, 100);
+            assert_eq!(all[2].duration_ms, 50);
+            messages.advance_frame(0);
+            assert!(messages.text(7).unwrap().glyphs[2].shown);
+            assert!(!messages.text(7).unwrap().glyphs[3].shown);
+        }
+    }
+}
+
+#[test]
+fn zero_text_speed_keeps_glyphs_instant_even_with_a_reveal_effect() {
+    use cmvs_rs::settings::TextOutputSettings;
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 300, 100]);
+    call(&mut code, 0x2152, &[0, u32::MAX, 0]);
+    let script = script_with_text(&code, b"\x82\xa0\x82\xa2\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 1);
+    messages.set_record_output(true);
+    messages.set_text_settings(TextOutputSettings {
+        speed: 0,
+        reveal_mode: 2,
+        ..Default::default()
+    });
+    pending(&mut vm);
+    messages
+        .try_record_output(
+            &mut vm,
+            &mut ActionInput::default(),
+            wait_flags(false, false),
+        )
+        .unwrap();
+    assert!(
+        messages
+            .text(7)
+            .unwrap()
+            .glyphs
+            .iter()
+            .all(|g| g.shown && !g.active && g.reveal_width == 31)
+    );
+}
+
+#[test]
 fn recorded_output_click_finishes_and_consumes_only_action_zero_edges() {
     let mut code = vec![];
     create(&mut code, 0, 7, [0, 0, 100, 100]);

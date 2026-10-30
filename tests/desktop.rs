@@ -4,6 +4,62 @@ use cmvs_rs::{
     desktop::{DesktopInput, InputEvent, TextEncoding, cursor_rgba, decode_icon},
 };
 
+#[path = "support/bytecode.rs"]
+mod bytecode;
+
+#[test]
+#[ignore = "requires CMVS_FONT_PATH; synthetic message and external font, no game data"]
+fn horizontal_glyph_reveal_crops_the_full_font_image_without_rescaling() {
+    use cmvs_rs::{
+        camera::CameraHost, desktop::font::FontRenderer, machine::Machine, message::MessageHost,
+        message_flags::MessageFlags, scene::SceneHost, settings::TextOutputSettings,
+    };
+    let font_path = std::env::var_os("CMVS_FONT_PATH").expect("CMVS_FONT_PATH");
+    let mut font = FontRenderer::read(std::path::Path::new(&font_path), 0).unwrap();
+    let mut code = vec![];
+    bytecode::command(&mut code, 0x215d, &[0, 0, 100, 100, 100, 100, 1280, 720]);
+    bytecode::command(&mut code, 0x2159, &[0, 0, 0x8000_0000, 0]);
+    let script = bytecode::script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_string(0, b"\x82\xa0").unwrap();
+    let mut messages = MessageHost::default();
+    bytecode::pending(&mut vm);
+    assert!(messages.try_handle(&mut vm).unwrap());
+    messages.set_record_output(true);
+    messages.set_text_settings(TextOutputSettings {
+        speed: 1,
+        outline: 0,
+        reveal_mode: 2,
+        reveal_duration: 1,
+    });
+    bytecode::pending(&mut vm);
+    messages
+        .try_record_poll(&mut vm, MessageFlags::default())
+        .unwrap();
+    let scene = SceneHost::default();
+    let camera = CameraHost::default();
+    let blank = font.render(&scene, &camera, &messages).unwrap();
+    messages.advance_frame(100);
+    let partial = font.render(&scene, &camera, &messages).unwrap();
+    let crop_end = 98 + messages.text(0).unwrap().glyphs[0].reveal_width as usize;
+    messages.advance_frame(100);
+    let full = font.render(&scene, &camera, &messages).unwrap();
+    assert_ne!(partial.pixels(), full.pixels());
+    assert_ne!(partial.pixels(), blank.pixels());
+    let mut revealed_later = false;
+    for (i, pixel) in partial.pixels().chunks_exact(4).enumerate() {
+        let expected = if i % 1280 < crop_end {
+            &full.pixels()[i * 4..i * 4 + 4]
+        } else {
+            &blank.pixels()[i * 4..i * 4 + 4]
+        };
+        assert_eq!(pixel, expected);
+        revealed_later |= i % 1280 >= crop_end
+            && full.pixels()[i * 4..i * 4 + 4] != blank.pixels()[i * 4..i * 4 + 4];
+    }
+    assert!(revealed_later);
+}
+
 fn put(b: &mut [u8], at: usize, v: u32) {
     b[at..at + 4].copy_from_slice(&v.to_le_bytes());
 }
