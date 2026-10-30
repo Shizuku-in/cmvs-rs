@@ -58,9 +58,9 @@ cargo run --offline --bin cmvs-save -- --section 0 "<游戏目录>/save/save000.
 cargo run --offline --bin cmvs-system-save -- "<游戏目录>/save/system.dat"
 ```
 
-CSV2 检查与解压不会恢复 VM，段导出拒绝覆盖。CSS1 的模板编码、可选输出与独立用户目录策略见[系统存档](../formats/system-save-format.md)，剧情恢复边界见[快照](../formats/snapshot-format.md)。
-`--vm-state` 检查保存的脚本名称、PC/栈、局部变量和主脚本内存布局，并逐项列出未安装的对象/宿主记录；活动公共脚本的PC没有提供对应图像时明确标为未验证。输出不是完整读档成功，工具不改写游戏或存档。
-`--visual-state` 检查已支持版本的文字、消息窗口、场景树、图像引用与绘制/帧动画负载，列出顶层资源名和窗口未解释状态字；不读取图像资源、不恢复引擎。已有显示字形、其他运动轨道、特殊图像或效果分支显式报错。核心 `VisualSnapshot::preview` 可另行通过调用者的图像源生成独立场景/消息宿主供离线渲染，完整限制见[快照格式](../formats/snapshot-format.md)。
+CSV2 检查与解压不会恢复 VM，段导出拒绝覆盖；运行时存读档由 `Startup`/桌面在 `--user-data-dir` 下完成，`cmvs-trace` 不构建快照镜像。CSS1 的模板编码、可选输出与独立用户目录策略见[系统存档](../formats/system-save-format.md)，剧情恢复边界见[快照](../formats/snapshot-format.md)。
+`--vm-state` 检查保存的脚本名称、PC/栈、局部变量和主脚本内存布局，并逐项列出未安装的对象/宿主记录；活动公共脚本的PC没有提供对应图像时明确标为未验证。这是离线检查模型，工具不改写游戏或存档。
+`--visual-state` 检查已支持版本的文字、消息窗口、场景树、图像引用与绘制/帧动画负载，列出顶层资源名和窗口未解释状态字；不读取图像资源、不恢复引擎。已有显示字形、旋转轨道、复合/特殊图像或效果分支显式报错。核心 `VisualSnapshot::preview` 可另行通过调用者的图像源生成独立场景/消息宿主供离线渲染，完整限制见[快照格式](../formats/snapshot-format.md)。
 
 ## 外部样本审计
 
