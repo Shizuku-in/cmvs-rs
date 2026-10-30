@@ -12,8 +12,10 @@ pub const SEQUENCE_ENTRIES: usize = 16;
 /// Semantics of the supported 96-byte record type. This is not a binary save image.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SequenceEntry {
-    /// Type 3/subtype 2; fast finish skips this entry without touching the object.
+    /// Type 3/subtype 1 or 2; both start XYZ tracks, differing on fast finish.
     WorldMotion {
+        /// Subtype 1 (0x2289) snaps to XYZ on fast finish; subtype 2 skips it.
+        snap_on_finish: bool,
         slot: u32,
         xyz: [u32; 3],
         mode: u32,
@@ -135,16 +137,21 @@ impl SequenceHost {
                     }
                 }
                 SequenceEntry::WorldMotion {
+                    snap_on_finish,
                     slot: raw,
                     xyz,
                     mode,
                     duration,
                     pc,
                 } => {
-                    if finish {
+                    let at = (*pc, if *snap_on_finish { 0x2289 } else { 0x228a });
+                    if finish && *snap_on_finish {
+                        scene.snap_world_position(*raw, *xyz, at)?;
+                    } else if finish {
                         return Ok(());
+                    } else {
+                        scene.replace_world_motion(*raw, *xyz, *mode, *duration, at)?;
                     }
-                    scene.replace_world_motion(*raw, *xyz, *mode, *duration, *pc)?;
                 }
                 SequenceEntry::Wait { .. } => unreachable!("wait handled by sequence"),
             }
@@ -186,7 +193,8 @@ impl SequenceHost {
         Ok(())
     }
 
-    /// Resource-aware finish runs image actions with duration zero and skips subtype 2 motion.
+    /// Resource-aware finish runs image actions with duration zero, snaps subtype 1
+    /// motion and skips subtype 2 motion.
     pub fn try_handle_with_images(
         &mut self,
         vm: &mut Machine<'_>,
@@ -204,17 +212,18 @@ impl SequenceHost {
     /// 0x2280: the dispatcher calls 0x140014320 inline, zeroing the five header words, and
     /// returns 0x4000 (nothing popped). Entries keep their bytes but are no longer run.
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, Box<dyn Error>> {
-        if let Some((pc, 0x28a)) = vm.pending_system() {
+        if let Some((pc, command @ (0x289 | 0x28a))) = vm.pending_system() {
             let mut args = [0; 6];
             for (i, arg) in args.iter_mut().enumerate() {
                 *arg = vm
                     .stack()
                     .peek_u32((i + 1) * 4)
-                    .map_err(|e| error(pc, 0x228a, e.0))?;
+                    .map_err(|e| error(pc, command + 0x2000, e.0))?;
             }
             vm.complete_system(SystemResult(0x4018))?;
             if self.header.count < SEQUENCE_ENTRIES as u32 {
                 self.entries[self.header.count as usize] = Some(SequenceEntry::WorldMotion {
+                    snap_on_finish: command == 0x289,
                     slot: args[0],
                     xyz: [args[1], args[2], args[3]],
                     mode: args[4],
@@ -307,10 +316,18 @@ impl SequenceHost {
 
 fn missing_scene(entry: &SequenceEntry, finish: bool) -> Result<(), Box<dyn Error>> {
     match entry {
-        SequenceEntry::WorldMotion { .. } if finish => Ok(()),
-        SequenceEntry::WorldMotion { pc, .. } => {
-            Err(error(*pc, 0x228a, "motion sequence needs scene").into())
-        }
+        SequenceEntry::WorldMotion {
+            snap_on_finish: false,
+            ..
+        } if finish => Ok(()),
+        SequenceEntry::WorldMotion {
+            pc, snap_on_finish, ..
+        } => Err(error(
+            *pc,
+            if *snap_on_finish { 0x2289 } else { 0x228a },
+            "motion sequence needs scene",
+        )
+        .into()),
         SequenceEntry::ReplaceImage { pc, .. } => {
             Err(error(*pc, 0x2288, "image sequence needs scene and image source").into())
         }
@@ -357,6 +374,7 @@ impl SequenceHost {
                     raw[12..12 + name.len()].copy_from_slice(name);
                 }
                 Some(SequenceEntry::WorldMotion {
+                    snap_on_finish,
                     slot,
                     xyz,
                     mode,
@@ -364,7 +382,7 @@ impl SequenceHost {
                     ..
                 }) => {
                     put(0, 3);
-                    put(4, 2);
+                    put(4, if *snap_on_finish { 1 } else { 2 });
                     put(8, *slot);
                     put(76, *duration);
                     put(80, xyz[0]);
@@ -411,7 +429,8 @@ impl SequenceHost {
                     duration: at(76),
                     pc: 0,
                 }),
-                (3, 2) => Some(SequenceEntry::WorldMotion {
+                (3, subtype @ (1 | 2)) => Some(SequenceEntry::WorldMotion {
+                    snap_on_finish: subtype == 1,
                     slot: at(8),
                     xyz: [at(80), at(84), at(88)],
                     mode: at(92),
@@ -427,5 +446,34 @@ impl SequenceHost {
         self.header = header;
         self.entries = entries;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod motion_snapshot_tests {
+    use super::*;
+    #[test]
+    fn both_motion_subtypes_survive_sequence_snapshot_round_trip() {
+        for snap_on_finish in [false, true] {
+            let mut host = SequenceHost::default();
+            host.header.count = 1;
+            host.entries[0] = Some(SequenceEntry::WorldMotion {
+                snap_on_finish,
+                slot: 255,
+                xyz: [0x8000_0000, 0x7fc0_1234, 0x7f80_0000],
+                mode: u32::MAX,
+                duration: u32::MAX,
+                pc: 0,
+            });
+            let bytes = host.saved().unwrap();
+            assert_eq!(
+                u32::from_le_bytes(bytes[26..30].try_into().unwrap()),
+                if snap_on_finish { 1 } else { 2 }
+            );
+            let mut restored = SequenceHost::default();
+            restored.restore(&bytes).unwrap();
+            assert_eq!(restored.entries, host.entries);
+            assert_eq!(restored.saved().unwrap(), bytes);
+        }
     }
 }

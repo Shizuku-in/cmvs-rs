@@ -145,9 +145,9 @@ impl SceneHost {
         xyz: [u32; 3],
         mode: u32,
         duration: u32,
-        pc: usize,
+        at: (usize, u16),
     ) -> Result<(), DecodeError> {
-        let fail = |why| error(pc, 0x228a, why);
+        let fail = |why| error(at.0, at.1, why);
         let slot = u8::try_from(raw_slot).map_err(|_| fail("motion slot outside 0..255"))?;
         let Some(object) = self.object_mut(slot) else {
             return Ok(());
@@ -168,6 +168,26 @@ impl SceneHost {
         };
         motion.start(draw.words[11..14].try_into().expect("XYZ"), 0);
         draw.world_motion = Some(Box::new(motion));
+        Ok(())
+    }
+
+    /// 0x2289 fast finish: stop/free any XYZ track, then write the raw target words.
+    pub(crate) fn snap_world_position(
+        &mut self,
+        raw_slot: u32,
+        xyz: [u32; 3],
+        at: (usize, u16),
+    ) -> Result<(), DecodeError> {
+        let fail = |why| error(at.0, at.1, why);
+        let slot = u8::try_from(raw_slot).map_err(|_| fail("motion slot outside 0..255"))?;
+        if let Some(object) = self.object_mut(slot) {
+            let draw = object
+                .draw
+                .as_mut()
+                .ok_or_else(|| fail("motion target has no draw state"))?;
+            draw.world_motion = None;
+            draw.words[11..14].copy_from_slice(&xyz);
+        }
         Ok(())
     }
 

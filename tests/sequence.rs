@@ -356,7 +356,7 @@ fn failed_wait_append_preserves_active_sequence_and_unknown_actions_remain_pendi
         assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x286)));
         assert_eq!(vm.stack().len_bytes(), 0);
     }
-    for opcode in [0x2287u16, 0x2289] {
+    for opcode in [0x2287u16, 0x228b] {
         let program = script(&opcode.to_le_bytes());
         let mut vm = Machine::new(&program).unwrap();
         pending(&mut vm);
@@ -500,6 +500,69 @@ fn motion_sequence_fast_finish_skips_without_changing_existing_track_or_validati
         assert_eq!(scene.object(20), Some(&before));
         assert_eq!(host.header(), SequenceHeader::default());
         assert!(host.entries()[0].is_some());
+    }
+}
+
+#[test]
+fn subtype_one_motion_runs_normally_but_fast_finish_snaps_and_removes_the_old_track() {
+    for finish in [false, true] {
+        let xyz = if finish {
+            [0x8000_0000, 0x7fc0_1234, 0x7f80_0000]
+        } else {
+            [1f32, 2.0, 3.0].map(f32::to_bits)
+        };
+        let mut code = vec![];
+        command(
+            &mut code,
+            0x2289,
+            &[
+                20,
+                xyz[0],
+                xyz[1],
+                xyz[2],
+                if finish { 0xffff } else { 0 },
+                100,
+            ],
+        );
+        command(&mut code, 0x2282, &[]);
+        if finish {
+            command(&mut code, 0x2284, &[]);
+        }
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        let mut host = SequenceHost::default();
+        let mut scene = motion_scene();
+        vm.state_mut().set_system_integer(0, 123).unwrap();
+        run(&mut vm, &mut host);
+        run(&mut vm, &mut host);
+        if finish {
+            pending(&mut vm);
+            let before = host.header();
+            assert!(host.try_handle(&mut vm).is_err());
+            assert_eq!(host.header(), before);
+            host.try_handle_with_images(&mut vm, &mut scene, &mut NoImages)
+                .unwrap();
+        } else {
+            host.advance_frame_with_images(0, &mut scene, &mut NoImages)
+                .unwrap();
+            let motion = scene
+                .object(20)
+                .unwrap()
+                .draw
+                .as_ref()
+                .unwrap()
+                .world_motion
+                .as_ref()
+                .unwrap();
+            assert_eq!(motion.keys[0].xyz, xyz);
+            assert_eq!(motion.keys[7], Default::default());
+            scene.advance_frame(100);
+        }
+        let draw = scene.object(20).unwrap().draw.as_ref().unwrap();
+        assert_eq!(&draw.words[11..14], &xyz);
+        assert!(draw.world_motion.is_none());
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.state().system_integer(0), Some(123));
     }
 }
 #[test]
