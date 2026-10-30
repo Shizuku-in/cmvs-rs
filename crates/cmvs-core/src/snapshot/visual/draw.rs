@@ -13,8 +13,9 @@ use crate::{
     FormatError,
     scene::{
         Animation, AnimationFrame, DrawState, MotionKey, MotionPlayback, OPACITY_KEYS, OpacityKey,
-        OpacityTrack, POSITION_KEYS, PositionKey, PositionMotion, PositionPlayback, SCALE_KEYS,
-        ScaleKey, ScaleMotion, ScalePlayback, WORLD_MOTION_KEYS, WorldMotion,
+        OpacityTrack, POSITION_KEYS, PositionKey, PositionMotion, PositionPlayback, ROTATION_KEYS,
+        RotationKey, RotationTrack, SCALE_KEYS, ScaleKey, ScaleMotion, ScalePlayback,
+        WORLD_MOTION_KEYS, WorldMotion,
     },
 };
 
@@ -45,9 +46,8 @@ pub(super) fn decode(bytes: &[u8]) -> Result<DrawState, FormatError> {
         out.scale_motion = Some(Box::new(scale(r.chunk()?)?));
     }
     if r.peek() == Some(0x791) {
-        return Err(FormatError(
-            "snapshot draw rotation track is not implemented",
-        ));
+        r.u16()?;
+        out.rotation_track = Some(Box::new(rotation(r.chunk()?)?));
     }
     if r.peek() == Some(0x792) {
         r.u16()?;
@@ -106,6 +106,19 @@ pub(crate) fn encode(draw: &DrawState) -> Result<Vec<u8>, FormatError> {
             words.extend([k.next as u32, k.xy[0], k.xy[1], k.mode, k.duration]);
         }
         put_track(&mut out, 0x790, &words);
+    }
+    if let Some(rotation) = &draw.rotation_track {
+        let mut words = vec![
+            u32::from(rotation.playing),
+            rotation.base as u32,
+            rotation.start,
+            rotation.current,
+            rotation.elapsed,
+        ];
+        for k in &rotation.keys {
+            words.extend([k.next as u32, k.value as u32, k.mode, k.duration]);
+        }
+        put_track(&mut out, 0x791, &words);
     }
     if let Some(opacity) = &draw.opacity_track {
         let mut words = vec![
@@ -261,6 +274,45 @@ fn scale(bytes: &[u8]) -> Result<ScaleMotion, FormatError> {
     })
 }
 
+fn rotation(bytes: &[u8]) -> Result<RotationTrack, FormatError> {
+    let mut r = track(bytes, OPACITY_SIZE)?;
+    let [play, base, start, current, elapsed] = r.words::<5>()?;
+    let angle = |v: u32| (-35900..=35900).contains(&(v as i32)) && (v as i32) % 100 == 0;
+    if !angle(base) {
+        return Err(FormatError("unsupported snapshot rotation base"));
+    }
+    let mut keys = [RotationKey::default(); ROTATION_KEYS];
+    for key in &mut keys {
+        let [next, value, mode, duration] = r.words::<4>()?;
+        if !keys_in_range(next as i32, ROTATION_KEYS)
+            || !angle(value)
+            || !RotationTrack::supports(mode)
+            || (mode as u8 == 0x80 && duration == 0)
+        {
+            return Err(FormatError("unsupported snapshot rotation key"));
+        }
+        *key = RotationKey {
+            next: next as i32,
+            value: value as i32,
+            mode,
+            duration,
+        };
+    }
+    r.finish()?;
+    let playing = playing(play)?;
+    if playing {
+        active(start, current, ROTATION_KEYS)?;
+    }
+    Ok(RotationTrack {
+        playing,
+        base: base as i32,
+        start,
+        current,
+        elapsed,
+        keys,
+    })
+}
+
 fn opacity(bytes: &[u8]) -> Result<OpacityTrack, FormatError> {
     let mut r = track(bytes, OPACITY_SIZE)?;
     let [play, base, start, current, elapsed] = r.words::<5>()?;
@@ -402,6 +454,51 @@ fn animation(bytes: &[u8]) -> Result<Animation, FormatError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rotation_record_round_trip_resumes_from_saved_progress_and_rejects_bad_keys() {
+        let mut keys = [RotationKey::default(); ROTATION_KEYS];
+        keys[0] = RotationKey {
+            next: -1,
+            value: 9000,
+            mode: 0,
+            duration: 400,
+        };
+        let mut draw = DrawState::default();
+        draw.words[20] = 2250;
+        draw.rotation_track = Some(Box::new(RotationTrack {
+            playing: true,
+            base: 0,
+            start: 0,
+            current: 0,
+            elapsed: 100,
+            keys,
+        }));
+        let bytes = encode(&draw).unwrap();
+        assert_eq!(
+            bodies(&bytes)
+                .iter()
+                .map(|&(tag, _, len)| (tag, len))
+                .collect::<Vec<_>>(),
+            [(0x791, 150)]
+        );
+        assert_eq!(decode(&bytes).unwrap(), draw);
+        let mut loaded = crate::scene::SceneObject {
+            draw: Some(decode(&bytes).unwrap()),
+            ..Default::default()
+        };
+        loaded.advance_effects(100);
+        assert_eq!(loaded.draw.as_ref().unwrap().words[20], 4500);
+        loaded.advance_effects(200);
+        assert_eq!(loaded.draw.as_ref().unwrap().words[20], 9000);
+        assert!(loaded.draw.as_ref().unwrap().rotation_track.is_none());
+        for (offset, value) in [(2, 2u32), (10, 8), (14, 8), (6, 1), (26, 36000), (30, 2)] {
+            let mut bad = bytes.clone();
+            let at = bodies(&bytes)[0].1 + offset;
+            bad[at..at + 4].copy_from_slice(&value.to_le_bytes());
+            assert!(decode(&bad).is_err(), "offset {offset}");
+        }
+    }
 
     /// Scale playing, opacity not yet started, XY playing, XYZ not yet started.
     fn tracked() -> DrawState {

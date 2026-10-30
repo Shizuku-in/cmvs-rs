@@ -277,6 +277,7 @@ impl SceneHost {
             depth_bias: old_draw.depth_bias,
             texture_mode: old_draw.texture_mode,
             scale_motion: None,
+            rotation_track: None,
             opacity_track: None,
             animation: None,
             position_motion: None,
@@ -291,6 +292,7 @@ impl SceneHost {
                 depth_bias: old_draw.depth_bias,
                 texture_mode: old_draw.texture_mode,
                 scale_motion: None,
+                rotation_track: None,
                 opacity_track: None,
                 animation: None,
                 position_motion: None,
@@ -326,6 +328,7 @@ impl SceneHost {
         previous.cancel_change();
         let old_draw = previous.draw.as_mut().expect("validated draw");
         draw.scale_motion = old_draw.scale_motion.take();
+        draw.rotation_track = old_draw.rotation_track.take();
         draw.opacity_track = old_draw.opacity_track.take();
         draw.animation = old_draw.animation.take();
         draw.position_motion = old_draw.position_motion.take();

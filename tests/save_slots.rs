@@ -1662,3 +1662,121 @@ fn external_backlog_scrolls_replays_voices_and_jumps_back() {
     drop(ui);
     fs::remove_dir_all(user).unwrap();
 }
+
+#[test]
+#[ignore = "requires CMVS_GAME_ROOT; original save000 resources with an injected rotation track"]
+fn external_rotation_snapshot_resumes_on_original_resources() {
+    use cmvs_rs::scene::{RotationKey, RotationTrack};
+    let root = PathBuf::from(std::env::var_os("CMVS_GAME_ROOT").expect("CMVS_GAME_ROOT"));
+    let user = user_directory("rotation-snapshot");
+    fs::copy(root.join("save/system.dat"), user.join("system.dat")).unwrap();
+    let source = fs::read(root.join("save/save000.dat")).unwrap();
+    let save = Csv2Save::decode(&source).unwrap();
+    let mut snapshot = EngineSnapshot::decode(&save.snapshot).unwrap();
+    let (&slot, object) = snapshot
+        .objects
+        .iter_mut()
+        .find(|(_, o)| o.image.is_some() && o.draw.is_some() && o.children.is_empty())
+        .expect("a named real image");
+    let draw = object.draw.as_mut().unwrap();
+    draw.words[20] = 2250;
+    let mut keys = [RotationKey::default(); 8];
+    keys[0] = RotationKey {
+        next: -1,
+        value: 9000,
+        mode: 0,
+        duration: 400,
+    };
+    draw.rotation_track = Some(Box::new(RotationTrack {
+        playing: true,
+        base: 0,
+        start: 0,
+        current: 0,
+        elapsed: 100,
+        keys,
+    }));
+    let raw = Csv2Save::encode(
+        source[..600].try_into().unwrap(),
+        &snapshot.encode().unwrap(),
+        &save.auxiliary,
+        &save.script_image,
+    )
+    .unwrap();
+    fs::write(user.join("save005.dat"), &raw).unwrap();
+    let game = Registry::builtin().identify_game(&root, None).unwrap();
+    let script = load_start(&root, &game.files).unwrap();
+    let mut run = Startup::new(&script, &root, &game, 0).unwrap();
+    run.set_user_data_directory(&user).unwrap();
+    run.set_skip_auto_resume(true).unwrap();
+    let mut backend = RecordingBackend::default();
+    for _ in 0..2_000_000 {
+        match run.tick(&mut backend).unwrap() {
+            StartupEvent::Yield => {
+                run.advance_frame(16).unwrap();
+                if run.machine().current_name() == b"menu.ps3" && run.steps() > 200_000 {
+                    break;
+                }
+            }
+            StartupEvent::Progress | StartupEvent::SnapshotCaptured => {}
+            other => panic!("{other:?}"),
+        }
+    }
+    run.load_slot(5, &mut backend).unwrap();
+    let angle = |run: &Startup<'_>| {
+        run.scene()
+            .object(slot)
+            .unwrap()
+            .draw
+            .as_ref()
+            .unwrap()
+            .words[20]
+    };
+    assert_eq!(angle(&run), 2250);
+    assert_eq!(
+        run.scene()
+            .object(slot)
+            .unwrap()
+            .draw
+            .as_ref()
+            .unwrap()
+            .rotation_track,
+        snapshot.objects[&slot]
+            .draw
+            .as_ref()
+            .unwrap()
+            .rotation_track
+    );
+    let mut angles = vec![2250];
+    for expected in [4500, 6750, 9000] {
+        run.advance_frame(100).unwrap();
+        assert_eq!(angle(&run), expected);
+        angles.push(expected);
+    }
+    assert!(
+        run.scene()
+            .object(slot)
+            .unwrap()
+            .draw
+            .as_ref()
+            .unwrap()
+            .rotation_track
+            .is_none()
+    );
+    if let Some(directory) = std::env::var_os("CMVS_ROTATION_OUTPUT") {
+        let directory = PathBuf::from(directory);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("rotation.dat"), raw).unwrap();
+        fs::write(
+            directory.join("angles.txt"),
+            angles
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+    }
+    println!("rotation on real image slot {slot}: {angles:?}");
+    drop(run);
+    fs::remove_dir_all(user).unwrap();
+}

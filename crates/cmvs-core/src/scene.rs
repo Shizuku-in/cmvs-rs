@@ -15,6 +15,7 @@ mod mask;
 mod opacity;
 mod position_motion;
 mod quake;
+mod rotation;
 mod scale_motion;
 mod strip;
 mod world_motion;
@@ -24,6 +25,7 @@ pub use mask::MaskTransition;
 pub use opacity::{OPACITY_KEYS, OpacityKey, OpacityTrack};
 pub use position_motion::{POSITION_KEYS, PositionKey, PositionMotion, PositionPlayback};
 pub use quake::Quake;
+pub use rotation::{ROTATION_KEYS, RotationKey, RotationTrack};
 pub use scale_motion::{SCALE_KEYS, ScaleKey, ScaleMotion, ScalePlayback};
 pub use strip::{Strip, StripWipe};
 pub use world_motion::{MotionKey, MotionPlayback, WORLD_MOTION_KEYS, WorldMotion};
@@ -111,17 +113,23 @@ pub struct SceneObject {
     pub change: Option<Box<ImageChange>>,
 }
 impl SceneObject {
-    /// 0x14003d0c0 limited to scale (+112), opacity (+128), frame animation (+136), XY (+144), and XYZ (+152) of
+    /// 0x14003d0c0 limited to scale (+112), rotation (+120), opacity (+128), frame animation (+136), XY (+144), and XYZ (+152) of
     /// 0x14001f5c0, in that order: with a draw state, advance each, freeing a channel when it
     /// ends and marking the object for disposal when it ended with -2; then, once children
     /// were created (+6248 bit 31), update each child and destroy the marked ones. The other
-    /// effect channels are not modeled.
+    /// effect types outside these channels are not modeled.
     pub(crate) fn advance_effects(&mut self, delta: u32) {
         if let Some(draw) = self.draw.as_mut() {
             if let Some(track) = draw.scale_motion.as_deref_mut()
                 && let Some(end) = track.advance(delta, &mut draw.words)
             {
                 draw.scale_motion = None;
+                self.dispose |= end == -2;
+            }
+            if let Some(track) = draw.rotation_track.as_deref_mut()
+                && let Some(end) = track.advance(delta, &mut draw.words)
+            {
+                draw.rotation_track = None;
                 self.dispose |= end == -2;
             }
             if let Some(track) = draw.opacity_track.as_deref_mut()
@@ -189,6 +197,8 @@ pub struct DrawState {
     pub depth_bias: u32,
     /// +112: floating-point XY scale track, before opacity in the update order.
     pub scale_motion: Option<Box<ScaleMotion>>,
+    /// +120: signed hundredth-degree rotation track, before opacity.
+    pub rotation_track: Option<Box<RotationTrack>>,
     /// +128: opacity track; rebuilding the draw state drops it.
     pub opacity_track: Option<Box<OpacityTrack>>,
     /// +136: frame animation; rebuilding the draw state drops it.
@@ -211,6 +221,7 @@ impl Default for DrawState {
             texture_mode: 0,
             depth_bias: 0,
             scale_motion: None,
+            rotation_track: None,
             opacity_track: None,
             animation: None,
             position_motion: None,
@@ -307,6 +318,9 @@ impl SceneHost {
         self.objects.insert(slot, object);
     }
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
+        if let Some((pc, command @ 0x1e5..=0x1e9)) = vm.pending_system() {
+            return self.rotation(vm, pc, command);
+        }
         if matches!(vm.pending_system(), Some((_, 0x1e0..=0x1e4))) {
             return self.try_scale_motion(vm);
         }
