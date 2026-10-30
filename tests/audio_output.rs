@@ -6,6 +6,7 @@ use cmvs_rs::{
 use std::sync::Arc;
 const FIRST: &[u8] = include_bytes!("fixtures/audio/mono440.ogg");
 const SECOND: &[u8] = include_bytes!("fixtures/audio/mono880.ogg");
+const VOICE: &[u8] = include_bytes!("fixtures/audio/mono660voice.ogg");
 fn samples(bytes: &[u8]) -> Vec<f32> {
     let mut program = VorbisProgram::new(bytes.to_vec(), None, false).unwrap();
     let mut samples = vec![];
@@ -108,7 +109,7 @@ fn fade_envelopes_reach_exact_endpoints_without_overshoot() {
 #[ignore = "opens the default native audio device; run explicitly outside restricted sandboxes"]
 fn native_device_smoke() -> Result<(), Box<dyn std::error::Error>> {
     use cmvs_rs::{
-        audio::{AudioBackend, AudioRequest, MovieAudioClock, SePlayback},
+        audio::{AudioBackend, AudioRequest, MovieAudioClock, SePlayback, VoiceDuckingSettings},
         audio_output::NativeAudio,
     };
     use std::{
@@ -121,7 +122,7 @@ fn native_device_smoke() -> Result<(), Box<dyn std::error::Error>> {
     struct Scratch(PathBuf);
     impl Drop for Scratch {
         fn drop(&mut self) {
-            for name in ["first.ogg", "second.ogg", "bad.ogg"] {
+            for name in ["first.ogg", "second.ogg", "bad.ogg", "voice.ogg"] {
                 let _ = fs::remove_file(self.0.join("sound").join(name));
             }
             let _ = fs::remove_dir(self.0.join("sound"));
@@ -142,6 +143,7 @@ fn native_device_smoke() -> Result<(), Box<dyn std::error::Error>> {
     fs::write(scratch.0.join("sound/first.ogg"), FIRST)?;
     fs::write(scratch.0.join("sound/second.ogg"), SECOND)?;
     fs::write(scratch.0.join("sound/bad.ogg"), b"synthetic malformed Ogg")?;
+    fs::write(scratch.0.join("sound/voice.ogg"), VOICE)?;
     // Declared after scratch so channels and the device drop before deleting the files.
     let mut audio = NativeAudio::new(&scratch.0)?;
     audio.configure_paths(&BTreeMap::from([
@@ -229,6 +231,50 @@ fn native_device_smoke() -> Result<(), Box<dyn std::error::Error>> {
     );
     gains[0] = Some(16);
     audio.set_volumes(&gains)?;
+    println!("# smoke: voice lowers BGM gain and restores after voice stops");
+    audio.configure_voice_ducking(VoiceDuckingSettings {
+        percent: 50,
+        fade_ms: 40,
+        wait_ms: 30,
+        include_fading: true,
+    })?;
+    audio.update()?;
+    assert!(audio.play_voice(&AudioRequest::PlayVoice {
+        channel: 0,
+        name: b"voice.ogg".to_vec(),
+        volume: 16,
+        start: true,
+    })?);
+    pump(&mut audio)?;
+    assert!(audio.voice_position(0)?.is_some());
+    assert_eq!(audio.bgm_gain(0)?, Some(16.0 / 256.0 * 0.5));
+    gains[0] = Some(8);
+    audio.set_volumes(&gains)?;
+    assert_eq!(audio.bgm_gain(0)?, Some(8.0 / 256.0 * 0.5));
+    audio.stop_voice(0)?;
+    pump(&mut audio)?;
+    assert_eq!(audio.bgm_gain(0)?, Some(8.0 / 256.0));
+    assert!(
+        audio
+            .bgm_position(0)?
+            .is_some_and(|ms| ms > before_gain_change)
+    );
+    gains[0] = Some(16);
+    audio.set_volumes(&gains)?;
+    println!("# smoke: natural voice EOF restores BGM without a stop request");
+    assert!(audio.play_voice(&AudioRequest::PlayVoice {
+        channel: 0,
+        name: b"voice.ogg".to_vec(),
+        volume: 16,
+        start: true,
+    })?);
+    pump(&mut audio)?;
+    assert_eq!(audio.bgm_gain(0)?, Some(16.0 / 256.0 * 0.5));
+    for _ in 0..4 {
+        pump(&mut audio)?;
+    }
+    assert_eq!(audio.voice_position(0)?, None);
+    assert_eq!(audio.bgm_gain(0)?, Some(16.0 / 256.0));
     println!("# smoke: switch BGM channels, then fade and stop");
     audio.play_bgm(&AudioRequest::PlayBgm {
         channel: 1,

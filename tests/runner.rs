@@ -94,6 +94,7 @@ impl Drop for Root {
             "data/pack/start.ps3",
             "data/pack/script.cpz",
             "save/system.dat",
+            "cmvs.cfg",
         ] {
             let _ = fs::remove_file(self.0.join(name));
         }
@@ -111,6 +112,68 @@ fn string_call(op: u16) -> Vec<u8> {
     b.extend(0x430u16.to_le_bytes());
     b.extend(op.to_le_bytes());
     b
+}
+
+#[test]
+fn audio_backend_receives_startup_ducking_and_failed_replacement_keeps_old_device() {
+    use cmvs_rs::audio::{AudioBackend, AudioRequest, VoiceDuckingSettings};
+    use std::sync::{Arc, Mutex};
+    struct Probe {
+        settings: Arc<Mutex<Vec<VoiceDuckingSettings>>>,
+        updates: Arc<Mutex<usize>>,
+        reject: bool,
+    }
+    impl AudioBackend for Probe {
+        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+            unreachable!()
+        }
+        fn configure_voice_ducking(
+            &mut self,
+            settings: VoiceDuckingSettings,
+        ) -> Result<(), Box<dyn Error>> {
+            if self.reject {
+                return Err("synthetic configuration failure".into());
+            }
+            self.settings.lock().unwrap().push(settings);
+            Ok(())
+        }
+        fn update(&mut self) -> Result<(), Box<dyn Error>> {
+            *self.updates.lock().unwrap() += 1;
+            Ok(())
+        }
+    }
+    let root = Root::new("ducking-backend", &0x20a1u16.to_le_bytes(), b"");
+    fs::write(root.0.join("cmvs.cfg"), b"[SOUND_INFO]\nVOICE_FADE_VOLOME=42\nVOICE_FADE_TIMER=123\nVOICE_FADE_WAIT=321\nVOICE_FADE_USE=1\n").unwrap();
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let settings = Arc::new(Mutex::new(vec![]));
+    let updates = Arc::new(Mutex::new(0));
+    run.set_audio_backend(Box::new(Probe {
+        settings: settings.clone(),
+        updates: updates.clone(),
+        reject: false,
+    }))
+    .unwrap();
+    assert_eq!(
+        *settings.lock().unwrap(),
+        vec![VoiceDuckingSettings {
+            percent: 42,
+            fade_ms: 123,
+            wait_ms: 321,
+            include_fading: true
+        }]
+    );
+    assert!(
+        run.set_audio_backend(Box::new(Probe {
+            settings: settings.clone(),
+            updates: updates.clone(),
+            reject: true
+        }))
+        .is_err()
+    );
+    run.advance_decoded_frame(16).unwrap();
+    assert_eq!(*updates.lock().unwrap(), 1);
+    assert_eq!(settings.lock().unwrap().len(), 1);
 }
 
 #[test]

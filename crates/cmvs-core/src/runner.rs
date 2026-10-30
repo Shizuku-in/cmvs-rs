@@ -447,8 +447,13 @@ impl<'a> Startup<'a> {
         &self.audio
     }
     /// Defaults to a recording backend that reports nothing started.
-    pub fn set_audio_backend(&mut self, backend: Box<dyn AudioBackend>) {
+    pub fn set_audio_backend(
+        &mut self,
+        mut backend: Box<dyn AudioBackend>,
+    ) -> Result<(), Box<dyn Error>> {
+        backend.configure_voice_ducking(self.audio.voice_ducking())?;
         self.audio_backend = backend;
+        Ok(())
     }
     pub fn set_random_seed(&mut self, seed: u32) {
         self.random = CrtRandom::new(seed);

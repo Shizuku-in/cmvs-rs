@@ -3,7 +3,10 @@ pub mod vorbis;
 use crate::vorbis::Vorbis;
 use cmvs_core::{
     MAX_PAYLOAD,
-    audio::{AudioBackend, AudioRequest, MovieAudioClock, SE_CHANNELS, SePlayback, VOICE_CHANNELS},
+    audio::{
+        AudioBackend, AudioRequest, MovieAudioClock, SE_CHANNELS, SePlayback, VOICE_CHANNELS,
+        VoiceActivity, VoiceDucking, VoiceDuckingSettings,
+    },
     platform::resolve_under,
     resources::{ResourceArchives, ResourceKind, ResourceSource},
 };
@@ -211,6 +214,7 @@ struct Channel {
     release_at_end: bool,
     looped: Arc<AtomicBool>,
     gain: f32,
+    duck_gain: f32,
 }
 impl Channel {
     fn check(&self) -> Result<(), Box<dyn Error>> {
@@ -235,6 +239,8 @@ pub struct NativeAudio {
     channel15: Option<Channel>,
     device_fault: Fault,
     last_movie_report_ms: u32,
+    voice_ducking: VoiceDucking,
+    ducking_clock: Instant,
     // Channels must drop before the device stream.
     stream: OutputStream,
 }
@@ -264,6 +270,8 @@ impl NativeAudio {
             channel15: None,
             device_fault: fault,
             last_movie_report_ms: 0,
+            voice_ducking: VoiceDucking::default(),
+            ducking_clock: Instant::now(),
             stream,
         })
     }
@@ -277,6 +285,16 @@ impl NativeAudio {
             .get(usize::from(channel))
             .ok_or("BGM channel out of range")?;
         Self::position(channel.as_ref())
+    }
+    /// Current sink gain control, including fades and voice ducking. This does not
+    /// measure device output amplitude or queued hardware buffers.
+    pub fn bgm_gain(&self, channel: u8) -> Result<Option<f32>, Box<dyn Error>> {
+        Ok(self
+            .bgm
+            .get(usize::from(channel))
+            .ok_or("BGM channel out of range")?
+            .as_ref()
+            .map(|c| c.sink.volume()))
     }
     fn load(&mut self, kind: ResourceKind, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
         if name.is_empty() {
@@ -307,6 +325,7 @@ impl NativeAudio {
             release_at_end: false,
             looped,
             gain,
+            duck_gain: 1.0,
         }
     }
     fn fade(channel: &mut Option<Channel>, ms: u32) {
@@ -319,9 +338,9 @@ impl NativeAudio {
         }
     }
     fn set_gain(channel: &mut Channel, gain: f32) {
-        channel
-            .sink
-            .set_volume(gain * channel.envelope.as_ref().map_or(1.0, Envelope::value));
+        channel.sink.set_volume(
+            gain * channel.duck_gain * channel.envelope.as_ref().map_or(1.0, Envelope::value),
+        );
         channel.gain = gain;
     }
     /// Playing means started (not paused) with source data left; `update` releases
@@ -345,7 +364,9 @@ impl NativeAudio {
         };
         current.check()?;
         if let Some(fade) = current.envelope {
-            current.sink.set_volume(current.gain * fade.value());
+            current
+                .sink
+                .set_volume(current.gain * current.duck_gain * fade.value());
             if fade.finished() {
                 if current.release_at_end {
                     *channel = None;
@@ -358,6 +379,13 @@ impl NativeAudio {
     }
 }
 impl AudioBackend for NativeAudio {
+    fn configure_voice_ducking(
+        &mut self,
+        settings: VoiceDuckingSettings,
+    ) -> Result<(), Box<dyn Error>> {
+        self.voice_ducking.configure(settings);
+        Ok(())
+    }
     fn configure_se(
         &mut self,
         channels: &[Option<SePlayback>; SE_CHANNELS],
@@ -561,7 +589,9 @@ impl AudioBackend for NativeAudio {
             program.sample_rate(),
             program.channels()
         );
-        let candidate = self.prepare(program, *volume, *fade_ms);
+        let mut candidate = self.prepare(program, *volume, *fade_ms);
+        candidate.duck_gain = self.voice_ducking.gain() as f32 / 256.0;
+        Self::set_gain(&mut candidate, (*volume).min(256) as f32 / 256.0);
         for current in self.bgm.iter_mut().flatten() {
             Self::set_gain(current, (*volume).min(256) as f32 / 256.0);
         }
@@ -626,6 +656,21 @@ impl AudioBackend for NativeAudio {
     fn update(&mut self) -> Result<(), Box<dyn Error>> {
         if let Some(e) = self.device_fault.lock().unwrap().as_ref() {
             return Err(format!("audio device failed: {e}").into());
+        }
+        let voices = self.voice.each_ref().map(|c| VoiceActivity {
+            playing: c
+                .as_ref()
+                .is_some_and(|c| !c.sink.is_paused() && !c.sink.empty()),
+            fading_out: c.as_ref().is_some_and(|c| c.release_at_end),
+        });
+        let duck = self
+            .voice_ducking
+            .update(self.ducking_clock.elapsed().as_millis() as u32, &voices)
+            as f32
+            / 256.0;
+        for channel in self.bgm.iter_mut().flatten() {
+            channel.duck_gain = duck;
+            Self::set_gain(channel, channel.gain);
         }
         for channel in self.se.iter_mut().chain(&mut self.voice) {
             Self::tick_channel(channel)?;

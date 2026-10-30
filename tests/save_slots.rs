@@ -292,7 +292,8 @@ fn external_route_saves_every_snapshot_and_plays_on_after_loads() {
     for iteration in 0..1_000_000_000u64 {
         // The recording backends keep at most 4096 requests; every load sets the title.
         if iteration % 100_000 == 0 {
-            run.set_audio_backend(Box::new(cmvs_rs::audio::RecordingAudio::default()));
+            run.set_audio_backend(Box::new(cmvs_rs::audio::RecordingAudio::default()))
+                .unwrap();
             backend = RecordingBackend::default();
         }
         let at_title = run.machine().current_name() == b"menu.ps3" && run.machine().pc() == 0x38f00;
@@ -544,6 +545,34 @@ fn external_system_settings_entries_render_and_return() {
     assert!(ui.run.buttons().group(2).is_none());
     font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
         .unwrap();
+    let initial_ducking = ui.run.audio().voice_ducking();
+    for (index, y) in [508, 548, 588].into_iter().enumerate() {
+        let before = ui.run.audio().voice_ducking();
+        ui.click([900, y], 30);
+        let after = ui.run.audio().voice_ducking();
+        let values = |s: cmvs_rs::audio::VoiceDuckingSettings| [s.percent, s.fade_ms, s.wait_ms];
+        assert_ne!(values(before)[index], values(after)[index]);
+        for other in 0..3 {
+            if other != index {
+                assert_eq!(values(before)[other], values(after)[other]);
+            }
+        }
+        assert_eq!(after.include_fading, before.include_fading);
+        font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+            .unwrap();
+    }
+    let before_ducking_reset = ui.run.audio().voice_ducking();
+    ui.click([1215, 626], 30);
+    font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+        .unwrap();
+    ui.click(ui.button(2, 2), 30);
+    assert_eq!(ui.run.audio().voice_ducking(), before_ducking_reset);
+    ui.click([1215, 626], 30);
+    ui.click(ui.button(2, 1), 30);
+    assert_eq!(ui.run.audio().voice_ducking(), initial_ducking);
+    assert!(ui.run.buttons().group(2).is_none());
+    font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+        .unwrap();
     for _ in 0..120 {
         font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
             .unwrap();
@@ -564,7 +593,7 @@ fn external_system_settings_entries_render_and_return() {
     ui.wait_for_text();
     assert!(ui.run.buttons().group(1).is_none());
     println!(
-        "settings: title + toolbar; five volume sliders, three audio switches, audio reset/cancel, three pages, 255 rendered frames, right-click return"
+        "settings: title + toolbar; volume + voice ducking sliders/reset/cancel, three audio switches, three pages, 260 rendered frames, right-click return"
     );
 }
 

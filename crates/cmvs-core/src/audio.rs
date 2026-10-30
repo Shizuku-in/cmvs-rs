@@ -1,6 +1,8 @@
 //! Sound-effect channel and BGM commands with an explicit audio backend.
 //! The recording backend keeps requests only; no sound is loaded or played.
+pub mod ducking;
 use crate::{evaluate::error, machine::Machine, vm::SystemResult};
+pub use ducking::{VoiceActivity, VoiceDucking, VoiceDuckingSettings};
 use std::error::Error;
 
 /// Six SE channels at +1656, 52 bytes each (snapshot record 0x310); device channels 9..14.
@@ -87,12 +89,17 @@ pub struct SePlayback {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AudioRequest {
+    ConfigureVoiceDucking {
+        settings: VoiceDuckingSettings,
+    },
     /// Atomically replace SE device channels 9..14; None releases that slot.
     ConfigureSe {
         channels: [Option<SePlayback>; SE_CHANNELS],
     },
     /// Atomic gain update of device channels 0..14; None preserves that channel.
-    SetVolumes { channels: [Option<u32>; 15] },
+    SetVolumes {
+        channels: [Option<u32>; 15],
+    },
     /// 0x140088390 on device channel `channel + 9`.
     PlaySe {
         channel: u8,
@@ -106,16 +113,26 @@ pub enum AudioRequest {
         fade_in_ms: u32,
     },
     /// 0x140088030: start a prepared device channel; an already active channel is unchanged.
-    StartSe { channel: u8, looped: bool },
+    StartSe {
+        channel: u8,
+        looped: bool,
+    },
     /// 0x140087910: stop and release the device channel's sound, prepared or active.
-    StopSe { channel: u8 },
+    StopSe {
+        channel: u8,
+    },
     /// 0x2241: stop and release device channel 15, separate from SE, voice and BGM.
     StopChannel15,
     /// 0x20b6: 0x1400882d0 on device channel `channel + 9` fades the sound out over
     /// `fade_ms` and releases it at the end; a no-op for an empty or already fading slot.
-    FadeOutSe { channel: u8, fade_ms: u32 },
+    FadeOutSe {
+        channel: u8,
+        fade_ms: u32,
+    },
     /// 0x20a8: stop and release voice channel 0..3 (device channel +5).
-    StopVoice { channel: u8 },
+    StopVoice {
+        channel: u8,
+    },
     /// 0x20a6: 0x140088390 on device channel `channel + 5` from the 0x2014 roots, without
     /// loop, fade-in or fallback root; it releases the channel first and starts the sound
     /// when `start` is set.
@@ -141,7 +158,10 @@ pub enum AudioRequest {
     },
     /// 0x14008a1c0 with BGM enabled: `channel` fades out over `fade_ms` (0x1400882d0, a no-op
     /// when the slot is empty or already fading) and is released when the fade ends.
-    FadeOutBgm { channel: u8, fade_ms: u32 },
+    FadeOutBgm {
+        channel: u8,
+        fade_ms: u32,
+    },
     /// 0x14008a0a0 with BGM enabled: stop and release BGM device channels 0 and 1 at once
     /// (0x140087910 each), the same as a 0x20a0/0x20a4 request without fade does first.
     StopBgm,
@@ -158,6 +178,13 @@ pub enum AudioRequest {
 }
 
 pub trait AudioBackend {
+    /// Queue a full parameter change atomically; active cycles keep their old values.
+    fn configure_voice_ducking(
+        &mut self,
+        _settings: VoiceDuckingSettings,
+    ) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement voice ducking".into())
+    }
     /// Prepare all replacement sounds before changing any SE channel. Err preserves
     /// every old channel; missing sounds replace their slot with None, as in playback.
     fn configure_se(
@@ -274,6 +301,12 @@ impl RecordingAudio {
     }
 }
 impl AudioBackend for RecordingAudio {
+    fn configure_voice_ducking(
+        &mut self,
+        settings: VoiceDuckingSettings,
+    ) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::ConfigureVoiceDucking { settings })
+    }
     fn configure_se(
         &mut self,
         channels: &[Option<SePlayback>; SE_CHANNELS],
@@ -337,9 +370,8 @@ impl AudioBackend for RecordingAudio {
 #[derive(Debug)]
 pub struct AudioHost {
     settings: AudioSettings,
-    /// Device +2424/+2428/+2432/+2436. Parameters queried by 0x2239/3b/3d;
-    /// the mixer envelope that consumes them is not implemented yet.
-    voice_ducking: [u32; 4],
+    /// Device +2424/+2428/+2432/+2436, including the most recent queued update.
+    voice_ducking: VoiceDuckingSettings,
     channels: [Option<SeChannel>; SE_CHANNELS],
     /// Channel record +40 (+1696): 0x20b0/0x20ba store 256 with each play, the constructor
     /// zeroes it, and stopping keeps it. Only the snapshot reads it here.
@@ -357,7 +389,7 @@ impl AudioHost {
     pub fn new(settings: AudioSettings) -> Self {
         Self {
             settings,
-            voice_ducking: [128, 500, 1000, 0],
+            voice_ducking: VoiceDuckingSettings::default(),
             channels: Default::default(),
             played: [0; SE_CHANNELS],
             bgm: BgmState::default(),
@@ -368,6 +400,9 @@ impl AudioHost {
     }
     pub fn settings(&self) -> AudioSettings {
         self.settings
+    }
+    pub fn voice_ducking(&self) -> VoiceDuckingSettings {
+        self.voice_ducking
     }
     /// Read-only startup configuration (0x14000a3c0); registry overrides and
     /// configuration persistence are separate backend work. Call before playback.
@@ -384,12 +419,12 @@ impl AudioHost {
         host.settings.se = int("SE_VOLUME", 100) as u32;
         host.settings.voice = int("VOICE_VOLUME", 100) as u32;
         host.settings.movie = int("VIDEO_VOLUME", 100) as u32;
-        host.voice_ducking = [
-            (int("VOICE_FADE_VOLOME", 100) as u32).min(100),
-            (int("VOICE_FADE_TIMER", 500) as u32).min(2000),
-            (int("VOICE_FADE_WAIT", 1000) as u32).min(3000),
-            u32::from(int("VOICE_FADE_USE", 1) != 0),
-        ];
+        host.voice_ducking = VoiceDuckingSettings {
+            percent: (int("VOICE_FADE_VOLOME", 100) as u32).min(100),
+            fade_ms: (int("VOICE_FADE_TIMER", 500) as u32).min(2000),
+            wait_ms: (int("VOICE_FADE_WAIT", 1000) as u32).min(3000),
+            include_fading: int("VOICE_FADE_USE", 1) != 0,
+        };
         host
     }
     pub fn channel(&self, index: usize) -> Option<&SeChannel> {
@@ -402,13 +437,36 @@ impl AudioHost {
         backend: &mut dyn AudioBackend,
     ) -> Result<bool, Box<dyn Error>> {
         match vm.pending_system() {
-            Some((_, command @ (0x239 | 0x23b | 0x23d))) => {
+            Some((_, command @ (0x239 | 0x23b | 0x23d | 0x23f))) => {
                 // Device constructor 0x140087440, queried by 0x140087d00.
-                let value = self.voice_ducking[usize::from((command - 0x239) / 2)];
+                let value = match command {
+                    0x239 => self.voice_ducking.percent,
+                    0x23b => self.voice_ducking.fade_ms,
+                    0x23d => self.voice_ducking.wait_ms,
+                    _ => u32::from(self.voice_ducking.include_fading),
+                };
                 vm.complete_system(SystemResult(0x4000))?;
                 vm.state_mut()
                     .set_system_integer(0, value)
                     .expect("slot 0 exists");
+                return Ok(true);
+            }
+            Some((pc, command @ (0x238 | 0x23a | 0x23c | 0x23e))) => {
+                let raw = vm
+                    .stack()
+                    .peek_u32(4)
+                    .map_err(|e| error(pc, command + 0x2000, e.0))?;
+                let mut settings = self.voice_ducking;
+                match command {
+                    0x238 => settings.percent = (raw as i32).clamp(0, 100) as u32,
+                    0x23a => settings.fade_ms = (raw as i32).min(2000) as u32,
+                    0x23c => settings.wait_ms = (raw as i32).min(3000) as u32,
+                    _ => settings.include_fading = raw != 0,
+                }
+                settings.percent = settings.percent.min(100);
+                backend.configure_voice_ducking(settings)?;
+                vm.complete_system(SystemResult(0x4004))?;
+                self.voice_ducking = settings;
                 return Ok(true);
             }
             Some((_, 0x2d6..=0x2dd)) => return self.try_settings_query(vm, backend),

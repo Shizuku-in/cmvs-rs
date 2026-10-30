@@ -584,7 +584,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     if native_audio {
         #[cfg(feature = "audio-output")]
         {
-            startup.set_audio_backend(Box::new(cmvs_audio::NativeAudio::new(&root)?));
+            startup.set_audio_backend(Box::new(cmvs_audio::NativeAudio::new(&root)?))?;
             println!(
                 "# native Vorbis audio enabled; movie frames follow the audio source position"
             );
