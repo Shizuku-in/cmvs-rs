@@ -137,10 +137,19 @@ pub struct NativeBackend<'a> {
     pub encoding: TextEncoding,
     pub aspect_mode: &'a std::cell::Cell<u32>,
     pub render_mode: &'a std::cell::Cell<u32>,
+    /// Physical client size to restore when leaving fullscreen.
+    pub windowed_size: &'a std::cell::Cell<[u32; 2]>,
     /// Fonts that glyphs will be drawn with; a chosen face must resolve there.
     pub fonts: Option<&'a crate::font::FontRenderer>,
 }
 impl PlatformBackend for NativeBackend<'_> {
+    fn windowed_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
+        if self.fullscreen()? {
+            Ok(self.windowed_size.get())
+        } else {
+            self.window_size()
+        }
+    }
     fn window_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
         let size = self.window.inner_size();
         Ok([size.width, size.height])
@@ -190,9 +199,12 @@ impl PlatformBackend for NativeBackend<'_> {
                 if *size != [1280, 720] {
                     return Err("unsupported window size request".into());
                 }
-                let _ = self
-                    .window
-                    .request_inner_size(winit::dpi::PhysicalSize::new(size[0], size[1]));
+                self.windowed_size.set(*size);
+                if !self.fullscreen()? {
+                    let _ = self
+                        .window
+                        .request_inner_size(winit::dpi::PhysicalSize::new(size[0], size[1]));
+                }
                 println!("# native requested window size={}x{}", size[0], size[1]);
             }
             PlatformRequest::AspectMode(mode) => {
@@ -212,11 +224,21 @@ impl PlatformBackend for NativeBackend<'_> {
                 println!("# native render mode={mode}");
             }
             PlatformRequest::Fullscreen(value) => {
+                let was_fullscreen = self.fullscreen()?;
+                if *value && !was_fullscreen {
+                    self.windowed_size.set(self.window_size()?);
+                }
                 self.window.set_fullscreen(
                     value.then(|| {
                         winit::window::Fullscreen::Borderless(self.window.current_monitor())
                     }),
                 );
+                if !value && was_fullscreen {
+                    let [width, height] = self.windowed_size.get();
+                    let _ = self
+                        .window
+                        .request_inner_size(winit::dpi::PhysicalSize::new(width, height));
+                }
                 println!("# native fullscreen={value}");
             }
             PlatformRequest::Title(bytes) => {

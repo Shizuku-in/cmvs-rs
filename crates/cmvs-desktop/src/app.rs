@@ -54,6 +54,7 @@ struct App<'a> {
     font: Option<crate::font::FontRenderer>,
     aspect_mode: std::cell::Cell<u32>,
     render_mode: std::cell::Cell<u32>,
+    windowed_size: std::cell::Cell<[u32; 2]>,
 }
 impl App<'_> {
     fn frame(&mut self) -> Result<RgbaImage, Box<dyn Error>> {
@@ -138,6 +139,7 @@ impl App<'_> {
             encoding: self.encoding,
             aspect_mode: &self.aspect_mode,
             render_mode: &self.render_mode,
+            windowed_size: &self.windowed_size,
             fonts: self.font.as_ref(),
         };
         backend.apply(&PlatformRequest::Cursor { id, bitmap })?;
@@ -165,6 +167,13 @@ impl ApplicationHandler for App<'_> {
                         .with_visible(false),
                 )?,
             );
+            // Attributes use logical units; deferred window restoration uses physical pixels.
+            let size = if window.fullscreen().is_some() {
+                LogicalSize::new(960.0, 540.0).to_physical::<u32>(window.scale_factor())
+            } else {
+                window.inner_size()
+            };
+            self.windowed_size.set([size.width, size.height]);
             let context = softbuffer::Context::new(window.clone())?;
             let surface = softbuffer::Surface::new(&context, window.clone())?;
             self.surface = Some(surface);
@@ -177,6 +186,7 @@ impl ApplicationHandler for App<'_> {
                 encoding: self.encoding,
                 aspect_mode: &self.aspect_mode,
                 render_mode: &self.render_mode,
+                windowed_size: &self.windowed_size,
                 fonts: self.font.as_ref(),
             };
             let mode =
@@ -370,6 +380,7 @@ impl ApplicationHandler for App<'_> {
                     encoding: self.encoding,
                     aspect_mode: &self.aspect_mode,
                     render_mode: &self.render_mode,
+                    windowed_size: &self.windowed_size,
                     fonts: self.font.as_ref(),
                 };
                 let had_fade = self.startup.scene().fade().current().is_some();
@@ -734,6 +745,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         font,
         aspect_mode: std::cell::Cell::new(display_preferences.aspect_mode),
         render_mode: std::cell::Cell::new(display_preferences.render_mode),
+        windowed_size: std::cell::Cell::new([960, 540]),
     };
     let event_loop = EventLoop::new()?;
     event_loop.run_app(&mut app)?;

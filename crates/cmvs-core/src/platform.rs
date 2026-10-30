@@ -71,6 +71,7 @@ pub enum PlatformRequest {
     AspectMode(u32),
     /// Device +112 presentation filter: 0 point, 1 linear. Shader modes 2/3 are not modeled.
     RenderMode(u32),
+    /// Windowed client size. In fullscreen, record it for the next windowed mode.
     WindowSize([u32; 2]),
     Title(Vec<u8>),
     Cursor {
@@ -87,20 +88,22 @@ pub trait PlatformBackend {
     fn window_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
         Err("platform backend does not implement window size queries".into())
     }
+    fn windowed_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
+        if self.fullscreen()? {
+            return Err("platform backend does not track the future windowed size".into());
+        }
+        self.window_size()
+    }
     fn reset_window_size(&mut self) -> Result<bool, Box<dyn Error>> {
         if !self.resizable()? {
             return Ok(false);
         }
-        if self.window_size()? == [1280, 720] {
+        if self.windowed_size()? == [1280, 720] {
             return Ok(false);
         }
-        if self.fullscreen()? {
-            return Err(
-                "resetting the future window size during fullscreen is not implemented".into(),
-            );
-        }
+        let fullscreen = self.fullscreen()?;
         self.apply(&PlatformRequest::WindowSize([1280, 720]))?;
-        Ok(true)
+        Ok(!fullscreen)
     }
     /// 0x2163 queries the device's current display mode, not the startup preference.
     fn fullscreen(&self) -> Result<bool, Box<dyn Error>> {
@@ -178,6 +181,9 @@ impl RecordingBackend {
     }
 }
 impl PlatformBackend for RecordingBackend {
+    fn windowed_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
+        self.window_size()
+    }
     fn window_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
         Ok(self.window_size.unwrap_or([960, 540]))
     }

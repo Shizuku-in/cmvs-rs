@@ -40,7 +40,7 @@ fn window_size_reset_yields_only_when_it_changes_and_preserves_results() {
 }
 
 #[test]
-fn fixed_window_reset_is_a_noop_and_fullscreen_future_size_stays_an_explicit_barrier() {
+fn fixed_window_reset_is_a_noop_and_fullscreen_reset_records_the_future_size() {
     struct Fixed;
     impl PlatformBackend for Fixed {
         fn resizable(&self) -> Result<bool, Box<dyn Error>> {
@@ -58,17 +58,90 @@ fn fixed_window_reset_is_a_noop_and_fullscreen_future_size_stays_an_explicit_bar
     let mut host = PlatformHost::default();
     let mut backend = RecordingBackend::default();
     backend.apply(&PlatformRequest::Fullscreen(true)).unwrap();
+    vm.state_mut().set_system_integer(0, 77).unwrap();
+    assert_eq!(
+        host.try_handle(&mut vm, &mut backend, &mut Assets::default(), &[])
+            .unwrap(),
+        Some(cmvs_rs::platform::PlatformEvent::Configured)
+    );
+    assert_eq!(backend.windowed_size().unwrap(), [1280, 720]);
+    assert!(backend.fullscreen().unwrap());
+    assert_eq!(vm.state().system_integer(0), Some(77));
+    let mut vm = Machine::new(&script).unwrap();
+    bytecode::pending(&mut vm);
+    assert_eq!(
+        host.try_handle(&mut vm, &mut Fixed, &mut Assets::default(), &[])
+            .unwrap(),
+        Some(cmvs_rs::platform::PlatformEvent::Configured)
+    );
+}
+
+#[test]
+fn fullscreen_reset_changes_only_recorded_size_and_retries_backend_failure() {
+    struct Fullscreen {
+        recorded: [u32; 2],
+        fail: bool,
+        requests: usize,
+    }
+    impl PlatformBackend for Fullscreen {
+        fn resizable(&self) -> Result<bool, Box<dyn Error>> {
+            Ok(true)
+        }
+        fn fullscreen(&self) -> Result<bool, Box<dyn Error>> {
+            Ok(true)
+        }
+        fn window_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
+            Ok([1920, 1080])
+        }
+        fn windowed_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
+            Ok(self.recorded)
+        }
+        fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+            if self.fail {
+                return Err("synthetic failure".into());
+            }
+            let PlatformRequest::WindowSize(size) = request else {
+                panic!("unexpected request")
+            };
+            self.recorded = *size;
+            self.requests += 1;
+            Ok(())
+        }
+    }
+    let mut code = vec![];
+    for _ in 0..2 {
+        bytecode::command(&mut code, 0x216e, &[]);
+    }
+    let script = bytecode::script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = PlatformHost::default();
+    let mut backend = Fullscreen {
+        recorded: [960, 540],
+        fail: true,
+        requests: 0,
+    };
+    bytecode::pending(&mut vm);
     let before = vm.pending_system();
     assert!(
         host.try_handle(&mut vm, &mut backend, &mut Assets::default(), &[])
             .is_err()
     );
     assert_eq!(vm.pending_system(), before);
-    assert_eq!(
-        host.try_handle(&mut vm, &mut Fixed, &mut Assets::default(), &[])
-            .unwrap(),
-        Some(cmvs_rs::platform::PlatformEvent::Configured)
-    );
+    assert_eq!(backend.recorded, [960, 540]);
+    backend.fail = false;
+    for _ in 0..2 {
+        assert_eq!(
+            host.try_handle(&mut vm, &mut backend, &mut Assets::default(), &[])
+                .unwrap(),
+            Some(cmvs_rs::platform::PlatformEvent::Configured)
+        );
+        assert_eq!(backend.window_size().unwrap(), [1920, 1080]);
+        if vm.pc() < code.len() {
+            bytecode::pending(&mut vm);
+        }
+    }
+    assert_eq!(backend.recorded, [1280, 720]);
+    assert_eq!(backend.requests, 1);
 }
 
 #[test]

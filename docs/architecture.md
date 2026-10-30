@@ -211,3 +211,5 @@ VM 运行、帧时间和协作预算分别管理。计时器只在首次运行�
 settings::Configuration保存有界原始INI字节，替换已实现的键并保留未知字段；runner/preferences.rs负责从运行中的SettingsHost、AudioHost、MessageFlags、确认/效果状态及显式DisplayPreferences汇集配置。用户目录初始化时安装用户配置，音频后端配置成功后才提交候选宿主；原游戏配置仅作首次只读来源。
 
 ProfileSystemSave复用会话锁及同目录临时文件替换，分别管理cmvs.cfg/cmvs.cfg.bak与CSS1。桌面正常退出显式保存，错误退出不保存；核心Drop没有隐藏I/O。INI和CSS1是两个独立提交，失败保留各自备份和可重试状态，不能描述成整体事务。原生窗口状态通过DisplayPreferences传入；核心不持有winit窗口。未实现的设置继续保留原始键及其现有错误屏障，不因写配置而伪造支持。
+
+全屏/窗口尺寸分离：PlatformBackend::window_size查询当前物理客户区，windowed_size查询窗口状态（全屏时为未来恢复值）；WindowSize请求全屏时只改恢复记录。桌面App拥有尺寸Cell，NativeBackend的临时借用跨事件回调共享它，离开全屏时请求该尺寸；核心不持有winit窗口或屏幕尺寸策略。0x216e只在窗口立即调整时让出，未来尺寸更新不让出。

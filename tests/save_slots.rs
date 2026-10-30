@@ -937,6 +937,17 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
             fullscreen
         );
         if fullscreen {
+            // 0x216e in fullscreen updates the future windowed size without
+            // leaving fullscreen; repeating the reset sends no second request.
+            ui.click([576, 626], 30);
+            assert!(cmvs_rs::platform::PlatformBackend::fullscreen(&ui.backend).unwrap());
+            assert_eq!(
+                cmvs_rs::platform::PlatformBackend::windowed_size(&ui.backend).unwrap(),
+                [1280, 720]
+            );
+            let requests = ui.backend.requests().len();
+            ui.click([576, 626], 30);
+            assert_eq!(ui.backend.requests().len(), requests);
             for (mode, x) in [904, 1008, 1112, 1216].into_iter().enumerate() {
                 ui.click([x, 137], 30);
                 assert_eq!(
