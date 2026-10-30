@@ -53,6 +53,9 @@ impl MessageHost {
         flags: MessageFlags,
         context: AutoAdvanceContext<'_>,
     ) -> Result<Option<Step>, DecodeError> {
+        if matches!(vm.pending_system(), Some((_, 0x158))) {
+            return self.try_wait_timed(vm, context);
+        }
         let Some((pc, 0x153)) = vm.pending_system() else {
             return Ok(None);
         };
@@ -189,6 +192,85 @@ impl MessageHost {
         if advance {
             input.consume(20);
         }
+        Ok(Some(step))
+    }
+
+    /// 0x2158 / 0x140076a40 -> 0x14005d4e0: an unconditional timed wait,
+    /// independent of manual input, script auto/skip flags and 0x2153's timer.
+    fn try_wait_timed(
+        &mut self,
+        vm: &mut Machine<'_>,
+        context: AutoAdvanceContext<'_>,
+    ) -> Result<Option<Step>, DecodeError> {
+        let (pc, _) = vm.pending_system().expect("checked by caller");
+        let slot = window_slot(vm, pc, 0x2158)?;
+        let voice = vm
+            .stack()
+            .peek_u32(12)
+            .map_err(|e| error(pc, 0x2158, e.0))? as i32;
+        let mut window = self
+            .window(slot)
+            .ok_or_else(|| error(pc, 0x2158, "missing window sets an unmodeled flag"))?
+            .clone();
+        let text = self
+            .text(window.text)
+            .ok_or_else(|| error(pc, 0x2158, "window without text object"))?;
+        if window.hidden {
+            return vm.yield_pending_system().map(Some);
+        }
+        let mut elapsed = self.timed_elapsed.wrapping_add(context.delta_ms);
+        let done = if voice >= 0 && context.settings.sync_voice {
+            if context
+                .audio
+                .voice_position((voice % 4) as u8)
+                .map_err(|_| error(pc, 0x2158, "voice status query failed during timed wait"))?
+                .is_some()
+            {
+                elapsed = 0;
+                false
+            } else {
+                elapsed
+                    >= context
+                        .settings
+                        .voice_wait
+                        .wrapping_mul(100)
+                        .wrapping_add(250)
+            }
+        } else {
+            elapsed
+                >= context
+                    .settings
+                    .text_delay_ms(text.glyphs.len())
+                    .map_err(|why| error(pc, 0x2158, why))?
+        };
+        if !done && window.cursor_mode == 3 {
+            let position = [
+                text.cursor[0].wrapping_add(i32::from(window.cursor_offset[0])),
+                text.cursor[1].wrapping_add(i32::from(window.cursor_offset[1])),
+            ];
+            for id in [2, 3] {
+                if let Some(child) = window.object.children.get_mut(&id) {
+                    let draw = child
+                        .draw
+                        .as_mut()
+                        .ok_or_else(|| error(pc, 0x2158, "wait cursor child has no draw state"))?;
+                    draw.words[8] = position[0] as u32;
+                    draw.words[9] = position[1] as u32;
+                }
+            }
+        }
+        for id in [2, 3] {
+            if let Some(child) = window.object.children.get_mut(&id) {
+                child.shown = !done;
+            }
+        }
+        let step = if done {
+            vm.complete_system(SystemResult(0x400c))?
+        } else {
+            vm.yield_pending_system()?
+        };
+        self.windows[slot] = Some(window);
+        self.timed_elapsed = if done { 0 } else { elapsed };
         Ok(Some(step))
     }
 }

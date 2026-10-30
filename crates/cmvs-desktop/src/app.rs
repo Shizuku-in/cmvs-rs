@@ -395,6 +395,11 @@ impl ApplicationHandler for App<'_> {
                     println!("# fade started {fade:?}");
                 }
                 match outcome {
+                    Ok(StartupEvent::Quit) => {
+                        println!("# script requested quit");
+                        el.exit();
+                        return;
+                    }
                     Ok(StartupEvent::Inactive) => break,
                     Ok(StartupEvent::Progress) => {}
                     Ok(StartupEvent::Yield) => {

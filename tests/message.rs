@@ -90,6 +90,133 @@ fn pending(vm: &mut Machine<'_>) {
 }
 
 #[test]
+fn window_immediate_output_uses_global_outline_and_keeps_text_style() {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 300, 100]);
+    call(&mut code, 0x2154, &[0, 0]);
+    let program = script_with_text(&code, b"\x82\xa0\0");
+    let mut vm = Machine::new(&program).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 1);
+    pending(&mut vm);
+    assert!(!messages.try_handle(&mut vm).unwrap());
+    messages.set_record_output(true);
+    let before = messages.text(7).unwrap().outline_mode;
+    messages.set_text_settings(cmvs_rs::settings::TextOutputSettings {
+        outline: 1,
+        ..Default::default()
+    });
+    vm.state_mut().set_system_integer(0, 123).unwrap();
+    assert!(messages.try_handle(&mut vm).unwrap());
+    let text = messages.text(7).unwrap();
+    assert_eq!(text.outline_mode, before);
+    assert_eq!(text.glyphs.len(), 1);
+    assert_eq!(text.glyphs[0].outline[0], 1);
+    assert!(text.glyphs[0].shown && !text.glyphs[0].active);
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(123));
+}
+
+#[test]
+fn yielding_append_outputs_once_and_does_not_consume_release_or_bypass_reveal() {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 300, 100]);
+    call(&mut code, 0x2157, &[0, 123, 0]);
+    let program = script_with_text(&code, b"\x82\xa0\x82\xa2\0");
+    let mut vm = Machine::new(&program).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 1);
+    messages.set_record_output(true);
+    pending(&mut vm);
+    vm.state_mut().set_system_integer(0, 456).unwrap();
+    let mut input = ActionInput::default();
+    input.set(0, false, false, true).unwrap();
+    input.set(7, true, false, false).unwrap();
+    for _ in 0..3 {
+        assert_eq!(
+            messages
+                .try_record_output(&mut vm, &mut input, message_flags(false, false, true))
+                .unwrap(),
+            Some(Step::Yield)
+        );
+        assert!(vm.pending_system().is_some());
+        assert_eq!(messages.text(7).unwrap().glyphs.len(), 2);
+        assert!(input.released(0));
+    }
+    messages.advance_frame(1000);
+    assert_eq!(
+        messages
+            .try_record_output(&mut vm, &mut input, message_flags(false, false, true))
+            .unwrap(),
+        Some(Step::Yield)
+    );
+    assert!(vm.pending_system().is_none());
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(456));
+}
+
+#[test]
+fn timed_window_wait_ignores_manual_skip_and_auto_flags_and_finishes_without_yield() {
+    use cmvs_rs::{message::AutoAdvanceContext, settings::AutoAdvanceSettings};
+    for (voice, auto) in [(-1i32, false), (-1, true), (5, false), (5, true)] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 300, 100]);
+        call(&mut code, 0x2158, &[voice as u32, 123, 0]);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 1);
+        pending(&mut vm);
+        vm.state_mut().set_system_integer(0, 456).unwrap();
+        let mut input = ActionInput::default();
+        input.set(0, false, false, true).unwrap();
+        input.set(7, true, false, false).unwrap();
+        let settings = AutoAdvanceSettings {
+            base: 1,
+            per_glyph: 0,
+            acceleration: 0,
+            voice_wait: 0,
+            sync_voice: true,
+        };
+        let backend = cmvs_rs::audio::RecordingAudio::default();
+        let expected = if voice < 0 {
+            vec![Step::Yield, Step::Continue]
+        } else {
+            vec![
+                Step::Yield,
+                Step::Yield,
+                Step::Yield,
+                Step::Yield,
+                Step::Continue,
+            ]
+        };
+        for step in expected {
+            assert_eq!(
+                messages
+                    .try_wait_with_auto(
+                        &mut vm,
+                        &mut input,
+                        message_flags(true, auto, true),
+                        AutoAdvanceContext {
+                            settings,
+                            delta_ms: 50,
+                            gesture_result: true,
+                            read_eligible: false,
+                            audio: &backend
+                        }
+                    )
+                    .unwrap(),
+                Some(step)
+            );
+            assert!(input.released(0));
+        }
+        assert!(vm.pending_system().is_none());
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.state().system_integer(0), Some(456));
+    }
+}
+
+#[test]
 fn empty_auxiliary_text_destruction_preserves_windows_text_and_results() {
     let mut code = vec![];
     create(&mut code, 0, 0, [20, 30, 100, 50]);

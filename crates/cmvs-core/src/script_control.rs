@@ -108,6 +108,16 @@ impl ScriptControl {
         self.virtual_tick = tick;
     }
 
+    /// 0x140080530: a main replacement disables only callbacks owned by slot 0.
+    pub(crate) fn main_replaced(&mut self) {
+        for callback in self.callbacks.values_mut() {
+            if callback.script_slot == 0 {
+                callback.enabled = false;
+                callback.target = u32::MAX;
+            }
+        }
+    }
+
     pub fn try_handle<S: ScriptSource>(
         &mut self,
         vm: &mut Machine<'_>,
@@ -139,12 +149,7 @@ impl ScriptControl {
                 let name = vm.resolve_string(argument(4)?)?;
                 let script = source.load(&name)?;
                 vm.switch_main_core(name, script)?;
-                for callback in self.callbacks.values_mut() {
-                    if callback.script_slot == 0 {
-                        callback.enabled = false;
-                        callback.target = u32::MAX;
-                    }
-                }
+                self.main_replaced();
                 return Ok(Some(ControlEvent::MainPreparedNeedsSnapshot));
             }
             0x89 | 0x8c => {
@@ -298,5 +303,37 @@ impl Callback {
             registered_tick: 0,
             enabled: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn main_replacement_disables_only_main_callbacks_and_preserves_control_settings() {
+        let mut host = ScriptControl::new(123);
+        host.settings.insert(0x2089, 1);
+        for slot in 0..4 {
+            host.callbacks.insert(
+                slot,
+                Callback {
+                    script_slot: slot,
+                    target: 42,
+                    parameters: [1, 2, 3],
+                    registered_tick: 123,
+                    enabled: true,
+                },
+            );
+        }
+        let before = host.callbacks.clone();
+        host.main_replaced();
+        assert!(!host.callbacks[&0].enabled);
+        assert_eq!(host.callbacks[&0].target, u32::MAX);
+        assert_eq!(host.callbacks[&0].parameters, [1, 2, 3]);
+        for slot in 1..4 {
+            assert_eq!(host.callbacks[&slot], before[&slot]);
+        }
+        assert_eq!(host.settings[&0x2089], 1);
     }
 }

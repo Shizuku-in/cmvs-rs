@@ -3,6 +3,12 @@
 > 适用范围：《アマツツミ》PC 样本。地址仅对[研究记录中的二进制哈希](research.md#二进制身份)有效，不能直接套用其他游戏。
 > 本文保留阶段性证据；最新验证范围见[游戏档案](README.md)。
 
+## QUIT / RESET 生命周期（2026-10-31）
+
+复核 IDA 输入 SHA-256 `dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5`，逐调用检查 `0x14006b8d0`、`0x140080700`、`0x140080530`、`0x140008cb0` 及相机/音频清理函数；参数、返回标志和状态边界见 [VM 语义](vm-semantics.md#quit-与-reset2026-10-31)。无新第三方来源或解码算法修改。
+
+外部检查命令：`$env:CMVS_GAME_ROOT='E:/Download/AMATSUTSUMI'; cargo test --offline -p cmvs-core external_reset_reenters -- --ignored --nocapture`。原游戏只读，输出在全新临时用户目录。固定随机种子 0、16ms、记录文字/音频，从正常入口重放到标题；利用 VM 调度直接执行真实 intproc 的 `0x41328 / 0x2003`，核对清空快照/场景/调用栈及保留设置/公共回调，再重放到标题，执行 `0x41800 / 0x2001` 并确认终态，551395 步通过。该检查跳过确认 UI，不代表标题/工具栏物理点击、原生窗口销毁或音轨实测。
+
 
 <details>
 <summary>章节导航（历史证据按原顺序保留）</summary>

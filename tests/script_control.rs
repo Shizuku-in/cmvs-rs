@@ -346,6 +346,52 @@ fn repeat_counter_survives_common_initialization_return() {
 }
 
 #[test]
+fn reset_main_from_common_script_discards_frames_without_popping_arguments() {
+    let mut root_code = vec![];
+    common_call(&mut root_code, 0, 0);
+    word(&mut root_code, 0x27ff);
+    let root = script(&root_code, &[0], b"common.ps3\0", 0);
+    let mut vm = Machine::new(&root).unwrap();
+    vm.state_mut().set_integer(7, 42).unwrap();
+    let mut source = MemorySource::default();
+    source.add(b"common.ps3", &[3, 0x20], &[0], &[], 0);
+    let mut control = ScriptControl::new(0);
+    pending(&mut vm);
+    control.try_handle(&mut vm, &mut source).unwrap();
+    assert!(matches!(pending(&mut vm), Step::System { command: 3, .. }));
+    assert_eq!(vm.current_slot(), 1);
+    assert!(vm.stack().len_bytes() > 0);
+    let main = script(&[0, 0x20, 1, 0x20], &[0], &[], 2);
+    vm.switch_main_core(b"main.ps3".to_vec(), main).unwrap();
+    assert_eq!(vm.current_slot(), 0);
+    assert_eq!(vm.pc(), 2);
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.repeat_count(), 0);
+    assert!(vm.pending_system().is_none());
+    assert_eq!(vm.state().integer(7), Some(42));
+    assert!(vm.loaded_script(1).is_some());
+    assert!(matches!(
+        vm.step().unwrap(),
+        Step::System { command: 1, .. }
+    ));
+}
+
+#[test]
+fn reset_main_with_empty_stack_and_invalid_replacement_is_retryable() {
+    let root = script(&[3, 0x20], &[0], &[], 0);
+    let mut vm = Machine::new(&root).unwrap();
+    pending(&mut vm);
+    let mut invalid = script(&[0, 0x20], &[0], &[], 0);
+    invalid.header.entry_pc = 1;
+    assert!(vm.switch_main_core(b"main.ps3".to_vec(), invalid).is_err());
+    assert_eq!(vm.pending_system(), Some((0, 3)));
+    vm.switch_main_core(b"main.ps3".to_vec(), script(&[1, 0x20], &[0], &[], 0))
+        .unwrap();
+    assert_eq!(vm.pc(), 0);
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
 fn callback_disable_blocks_explicit_dispatch_without_consuming_request() {
     let mut root = vec![];
     common_call(&mut root, 0, 0);

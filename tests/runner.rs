@@ -207,6 +207,44 @@ fn user_configuration_round_trips_live_settings_and_preserves_the_game_file() {
 }
 
 #[test]
+fn quit_is_terminal_and_does_not_execute_the_following_command() {
+    let root = Root::new("quit", &[1, 0x20, 0xff, 0x27], b"");
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut backend = RecordingBackend::default();
+    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Quit);
+    assert_eq!(run.machine().pc(), 2);
+    assert!(run.machine().pending_system().is_none());
+    let steps = run.steps();
+    run.set_focused(false);
+    for _ in 0..3 {
+        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Quit);
+    }
+    assert_eq!(run.steps(), steps);
+}
+
+#[test]
+fn reset_missing_main_keeps_the_command_pending_and_old_state_intact() {
+    let mut code = vec![];
+    commands::command(&mut code, 0x22cb, &[0x123456]);
+    commands::command(&mut code, 0x22eb, &[1, 1]);
+    commands::command(&mut code, 0x2003, &[]);
+    let root = Root::new("reset-missing", &code, b"");
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut backend = RecordingBackend::default();
+    while run.machine().pc() != code.len() - 2 {
+        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    }
+    for _ in 0..2 {
+        assert!(run.tick(&mut backend).is_err());
+        assert_eq!(run.machine().pending_system(), Some((code.len() - 2, 3)));
+        assert_eq!(run.scene().clear().color, 0x123456);
+        assert!(run.message_flags().skip());
+    }
+}
+
+#[test]
 fn inactive_policy_freezes_vm_and_scene_but_keeps_audio_updates_without_time_catchup() {
     use cmvs_rs::audio::{AudioBackend, AudioRequest};
     use std::sync::{

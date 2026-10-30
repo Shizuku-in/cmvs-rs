@@ -225,6 +225,16 @@ pub struct CameraHost {
 }
 
 impl CameraHost {
+    /// 0x14004e760 resets the camera parameters and motion, leaving padding alone.
+    pub(crate) fn reset(&mut self) {
+        for camera in &mut self.cameras {
+            let retained = [19, 20, 37, 38, 39].map(|i| camera.words[i]);
+            *camera = Camera::default();
+            for (i, value) in [19, 20, 37, 38, 39].into_iter().zip(retained) {
+                camera.words[i] = value;
+            }
+        }
+    }
     pub fn camera(&self, index: usize) -> Option<&Camera> {
         self.cameras.get(index)
     }

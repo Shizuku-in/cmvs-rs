@@ -68,6 +68,10 @@ pub struct SequenceHost {
 }
 
 impl SequenceHost {
+    /// 0x140014320 clears only the five header words, retaining entry storage and clock.
+    pub(crate) fn reset_header(&mut self) {
+        self.header = SequenceHeader::default();
+    }
     pub fn with_tick(clock: u32) -> Self {
         Self {
             clock,

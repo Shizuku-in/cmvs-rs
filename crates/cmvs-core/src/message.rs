@@ -202,6 +202,8 @@ pub struct MessageHost {
     output_settings: crate::settings::TextOutputSettings,
     /// Global dword_1401015c4, shared by all message windows and retained while paused.
     auto_elapsed: u32,
+    /// Global dword_1401015c0, independently accumulated by 0x2158.
+    timed_elapsed: u32,
     glyph_metrics: Option<Box<dyn GlyphMetrics>>,
     record_output: bool,
     windows: [Option<MessageWindow>; MESSAGE_WINDOWS],
@@ -220,6 +222,12 @@ pub struct MessageHost {
 }
 
 impl MessageHost {
+    /// 0x140080700 frees windows, text and auxiliary text lists, retaining font devices.
+    pub(crate) fn reset_objects(&mut self) {
+        self.windows = Default::default();
+        self.texts = Default::default();
+        self.auxiliary_texts = Default::default();
+    }
     pub fn set_text_settings(&mut self, settings: crate::settings::TextOutputSettings) {
         // 0x140068960 changes only existing texts that request the default face.
         // Already uploaded glyph images retain the weight used at their creation.
@@ -584,6 +592,9 @@ impl MessageHost {
             }
             Some((pc, 0x100)) => self.create_text(vm, pc).map(|()| true),
             Some((pc, 0x10b)) if self.record_output => self.place_text(vm, pc).map(|()| true),
+            Some((pc, 0x154)) if self.record_output => {
+                self.place_window_text(vm, pc).map(|()| true)
+            }
             Some((pc, command @ (0x101..=0x107 | 0x10c..=0x110 | 0x113 | 0x11a))) => {
                 self.text_setter(vm, pc, command).map(|()| true)
             }

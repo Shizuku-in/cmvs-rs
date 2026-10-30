@@ -529,12 +529,13 @@ fn place(
     text: &mut TextObject,
     bytes: &[u8],
     metrics: Option<&dyn super::GlyphMetrics>,
+    outline: Option<u32>,
 ) -> Result<(), &'static str> {
     text.ruby_lines = [0; 32];
     text.layout_scratch = [0; 2];
     let size = text.glyph_size as u32;
     let limit = line_end(text);
-    let mode = text.outline_mode;
+    let mode = outline.unwrap_or(text.outline_mode);
     let (mut x, mut y) = (text.cursor[0] as u32, text.cursor[1] as u32);
     let mut line = 0u32;
     let mut i = 0;
@@ -651,11 +652,6 @@ impl MessageHost {
         self.texts[index] = Some(candidate);
         Ok(true)
     }
-    /// 0x140076700 / 0x14005d900: repeat=0 creates glyphs once; hidden windows keep
-    /// yielding. Waiting returns 0xa000, completion 0xc00c (both yield). Research mode
-    /// uses the current runtime settings block. Only the +1520 skip flag shortens
-    /// reveal timing; it, held actions 7/8 and the +12244 bypass finish without consuming.
-    /// A release of action 0 or 20 finishes and consumes both (0x140054d90, 0x140055160).
     /// 0x210b / 0x140072aa0: SP-4 text index (signed >= 12 or a missing object only sets
     /// +12056 bit 0x1000), SP-8 string; lays it out with 0x14005b6b0 (`place`) and returns
     /// 0x4008 without a system result. Research mode only, like 0x2152's recording.
@@ -683,47 +679,79 @@ impl MessageHost {
                 )
             })?
             .clone();
-        place(&mut candidate, &bytes, self.glyph_metrics.as_deref())
+        place(&mut candidate, &bytes, self.glyph_metrics.as_deref(), None)
             .map_err(|why| error(pc, 0x210b, why))?;
         vm.complete_system(SystemResult(0x4008))?;
         self.texts[index as usize] = Some(candidate);
         Ok(())
     }
+    /// 0x2154 / 0x140076800 -> 0x14005da10: immediate window output uses the
+    /// global outline setting instead of the text object's own +124 field.
+    pub(super) fn place_window_text(
+        &mut self,
+        vm: &mut Machine<'_>,
+        pc: usize,
+    ) -> Result<(), DecodeError> {
+        let slot = window_slot(vm, pc, 0x2154)?;
+        let raw = vm.stack().peek_u32(8).map_err(|e| error(pc, 0x2154, e.0))?;
+        let bytes = vm.resolve_string(raw)?;
+        let index = self
+            .window(slot)
+            .ok_or_else(|| error(pc, 0x2154, "missing window sets an unmodeled flag"))?
+            .text;
+        let mut candidate = self
+            .text(index)
+            .ok_or_else(|| error(pc, 0x2154, "window without text object"))?
+            .clone();
+        place(
+            &mut candidate,
+            &bytes,
+            self.glyph_metrics.as_deref(),
+            Some(self.output_settings.outline),
+        )
+        .map_err(|why| error(pc, 0x2154, why))?;
+        vm.complete_system(SystemResult(0x4008))?;
+        self.texts[index] = Some(candidate);
+        Ok(())
+    }
+    /// 0x2152 / 0x14005d900 and 0x2157 / 0x14005d870: repeat=0 appends once;
+    /// waiting returns 0xa000 and completion 0xc00c. Only 0x2152 accepts input/bypass
+    /// to finish revealing early; both use the script skip flag to set new glyph timing.
     pub fn try_record_output(
         &mut self,
         vm: &mut Machine<'_>,
         input: &mut ActionInput,
         flags: MessageFlags,
     ) -> Result<Option<Step>, DecodeError> {
-        let Some((pc, 0x152)) = vm.pending_system() else {
+        let Some((pc, command @ (0x152 | 0x157))) = vm.pending_system() else {
             return Ok(None);
         };
         if !self.record_output {
             return Ok(None);
         }
-        let slot = window_slot(vm, pc, 0x2152)?;
+        let op = command + 0x2000;
+        let slot = window_slot(vm, pc, op)?;
         // The read ID is resolved even with READ_SKIP=0, to validate all 12 argument bytes.
-        let _read_id = vm.stack().peek_u32(8).map_err(|e| error(pc, 0x2152, e.0))? as i32;
-        let raw = vm
-            .stack()
-            .peek_u32(12)
-            .map_err(|e| error(pc, 0x2152, e.0))?;
+        if command == 0x152 {
+            let _read_id = vm.stack().peek_u32(8).map_err(|e| error(pc, op, e.0))?;
+        }
+        let raw = vm.stack().peek_u32(12).map_err(|e| error(pc, op, e.0))?;
         let bytes = vm.resolve_string(raw)?;
         let window = self
             .window(slot)
-            .ok_or_else(|| error(pc, 0x2152, "missing message window sets an unmodeled flag"))?;
+            .ok_or_else(|| error(pc, op, "missing message window sets an unmodeled flag"))?;
         let index = window.text;
         let mut candidate = self
             .text(index)
-            .ok_or_else(|| error(pc, 0x2152, "message window without text"))?
+            .ok_or_else(|| error(pc, op, "message window without text"))?
             .clone();
         if vm.repeat_count() == 0 {
             append(&mut candidate, &bytes, flags.skip(), self.output_settings)
-                .map_err(|why| error(pc, 0x2152, why))?;
+                .map_err(|why| error(pc, op, why))?;
         }
         let active = candidate.glyphs.iter().any(|g| g.active);
-        let skip = flags.skip() || input.skip_held() || flags.bypass();
-        let release = input.released(0) || input.released(20);
+        let skip = command == 0x152 && (flags.skip() || input.skip_held() || flags.bypass());
+        let release = command == 0x152 && (input.released(0) || input.released(20));
         let done = !window.hidden && (!active || skip || release);
         let consume = done && active && !skip && release;
         let step = if done {

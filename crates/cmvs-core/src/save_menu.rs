@@ -195,6 +195,10 @@ impl Default for SaveMenuHost {
 }
 
 impl SaveMenuHost {
+    /// RESET writes only +12092; the menu and confirmation settings survive.
+    pub(crate) fn reset_popup(&mut self) {
+        self.popup_enabled = true;
+    }
     pub fn menu(&self) -> Option<&SaveMenu> {
         self.menu.as_ref()
     }

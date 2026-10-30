@@ -41,6 +41,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod lifecycle;
 mod preferences;
 mod save;
 pub use save::{SaveTime, thumbnail_bmp};
@@ -78,6 +79,8 @@ pub fn load_start(root: &Path, files: &GameFiles) -> Result<Script, Box<dyn Erro
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartupEvent {
+    /// 0x2001: playback stopped; the host must close its window and end execution.
+    Quit,
     /// Host is unfocused and ACTIVE_DRAW is off; no VM instruction was executed.
     Inactive,
     Progress,
@@ -103,6 +106,7 @@ pub enum SnapshotPolicy {
     ContinueWithoutImage,
 }
 pub struct Startup<'a> {
+    quit: bool,
     focused: bool,
     machine: Machine<'a>,
     gate: CommandGate<'a>,
@@ -182,6 +186,7 @@ impl<'a> Startup<'a> {
         let message_flags = MessageFlags::from_ini(text);
         let effects = crate::save_menu::profile_int(text, "SYSTEM_INFO", "EFFECT_USE", 1) != 0;
         Ok(Self {
+            quit: false,
             machine,
             gate: CommandGate::new(game.selection.clone()),
             notices: Vec::new(),
@@ -310,6 +315,9 @@ impl<'a> Startup<'a> {
         }
     }
     pub fn advance_decoded_frame(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error>> {
+        if self.quit {
+            return Ok(());
+        }
         self.audio_backend.update()?;
         let clock = self.audio_backend.movie_clock()?;
         let had_movie = self.movies.player().is_some();
@@ -401,6 +409,9 @@ impl<'a> Startup<'a> {
     /// The timer delta is consumed once after yield, never per instruction/budget slice.
     /// Callback registration time remains a separate research clock.
     pub fn advance_frame(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error>> {
+        if self.quit {
+            return Ok(());
+        }
         self.movies.advance_scene(delta_ms, &mut self.scene)?;
         self.movies.advance(delta_ms);
         if !self.frame_running() {
@@ -443,7 +454,7 @@ impl<'a> Startup<'a> {
         }
     }
     pub fn frame_running(&self) -> bool {
-        self.focused || self.settings.active_draw()
+        !self.quit && (self.focused || self.settings.active_draw())
     }
     pub fn settings(&self) -> &crate::settings::SettingsHost {
         &self.settings
@@ -538,6 +549,9 @@ impl<'a> Startup<'a> {
         &mut self,
         backend: &mut impl PlatformBackend,
     ) -> Result<StartupEvent, Box<dyn Error>> {
+        if self.quit {
+            return Ok(StartupEvent::Quit);
+        }
         if !self.frame_running() {
             return Ok(StartupEvent::Inactive);
         }
@@ -614,6 +628,9 @@ impl<'a> Startup<'a> {
         };
         if let Some(first) = self.gate.check(&self.machine, pc, command)? {
             self.notices.push(first);
+        }
+        if let Some(event) = self.try_lifecycle()? {
+            return Ok(event);
         }
         let id = self.bootstrap.settings().get(&0x201d).copied();
         if command == 0x129

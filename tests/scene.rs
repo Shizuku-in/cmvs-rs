@@ -24,6 +24,88 @@ fn defaults_match_device_constructor() {
 }
 
 #[test]
+fn world_query_returns_raw_float_registers_for_parent_and_child() {
+    for child in [u32::MAX, 0x8000_0000, 767] {
+        let xyz = [0x8000_0000, 0x7fc0_1234, 0x7f80_0001];
+        let mut code = vec![];
+        command(&mut code, 0x2020, &[255]);
+        command(&mut code, 0x2040, &[255]);
+        command(&mut code, 0x2022, &[255, 767]);
+        command(&mut code, 0x2050, &[255, 767]);
+        for (op, value) in (0x2072..=0x2074).zip(xyz) {
+            command(&mut code, op, &[255, child, value]);
+        }
+        command(&mut code, 0x2078, &[255, child]);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        let mut scene = SceneHost::default();
+        vm.state_mut().set_system_integer(0, 123).unwrap();
+        for _ in 0..8 {
+            assert!(next(&mut vm, &mut scene).unwrap());
+        }
+        assert_eq!(vm.state().system_integer(0), Some(123));
+        for (index, bits) in (8..=10).zip(xyz) {
+            assert_eq!(vm.state().system_float_bits(index), Some(bits));
+        }
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.pc(), code.len());
+    }
+}
+
+#[test]
+fn world_query_missing_child_is_retryable_and_does_not_write_results() {
+    let mut code = vec![];
+    command(&mut code, 0x2020, &[1]);
+    command(&mut code, 0x2040, &[1]);
+    command(&mut code, 0x2078, &[1, 768]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    next(&mut vm, &mut scene).unwrap();
+    next(&mut vm, &mut scene).unwrap();
+    for i in 8..=10 {
+        vm.state_mut().set_system_float_bits(i, i).unwrap();
+    }
+    for _ in 0..2 {
+        assert!(next(&mut vm, &mut scene).is_err());
+        assert_eq!(vm.stack().len_bytes(), 8);
+        for i in 8..=10 {
+            assert_eq!(vm.state().system_float_bits(i), Some(i));
+        }
+    }
+}
+
+#[test]
+fn special_effect_reset_destroys_children_but_retains_the_parent_draw_and_flags() {
+    let mut code = vec![];
+    for (op, args) in [
+        (0x2020, vec![7]),
+        (0x2040, vec![7]),
+        (0x2045, vec![7, u32::MAX, 23, 45]),
+        (0x2022, vec![7, 767]),
+        (0x2050, vec![7, 767]),
+        (0x2329, vec![7]),
+        (0x2329, vec![7]),
+    ] {
+        command(&mut code, op, &args);
+    }
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::default();
+    for _ in 0..5 {
+        assert!(next(&mut vm, &mut scene).unwrap());
+    }
+    let before = scene.object(7).unwrap().clone();
+    for _ in 0..2 {
+        assert!(next(&mut vm, &mut scene).unwrap());
+        let actual = scene.object(7).unwrap();
+        assert!(actual.children.is_empty());
+        assert_eq!(actual.draw, before.draw);
+        assert_eq!(actual.flags, before.flags);
+    }
+}
+
+#[test]
 fn clear_color_keeps_raw_word_and_renders_low_24_bits_opaque() {
     let script = script(&push_then(0x80_12_34_56, &[0x22cb, 0x2250]));
     let mut vm = Machine::new(&script).unwrap();

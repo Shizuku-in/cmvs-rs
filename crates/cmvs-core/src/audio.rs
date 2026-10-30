@@ -405,6 +405,37 @@ impl Default for AudioHost {
 }
 
 impl AudioHost {
+    /// QUIT/RESET: 0x14008a0a0 followed by 0x1400879e0. RESET also zeroes
+    /// engine +1656..+1968, the six SE records. Mixer preferences survive.
+    pub(crate) fn stop_for_lifecycle(
+        &mut self,
+        backend: &mut dyn AudioBackend,
+        reset: bool,
+    ) -> Result<(), Box<dyn Error>> {
+        if self.settings.bgm_enabled {
+            backend.stop_bgm()?;
+        }
+        for channel in 0..SE_CHANNELS as u8 {
+            backend.stop(channel)?;
+        }
+        for channel in 0..VOICE_CHANNELS as u8 {
+            backend.stop_voice(channel)?;
+        }
+        backend.stop_channel15()?;
+        self.bgm = BgmState {
+            channel: if self.settings.bgm_enabled {
+                0
+            } else {
+                self.bgm.channel
+            },
+            ..BgmState::default()
+        };
+        if reset {
+            self.channels = Default::default();
+            self.played = [0; SE_CHANNELS];
+        }
+        Ok(())
+    }
     pub fn new(settings: AudioSettings) -> Self {
         Self {
             settings,
@@ -1202,5 +1233,52 @@ impl AudioHost {
         self.channels = channels;
         self.played = played;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn lifecycle_stops_all_supported_channels_and_reset_clears_se_records() {
+        for reset in [false, true] {
+            let mut host = AudioHost::default();
+            host.bgm.primary = b"bgm".to_vec();
+            host.bgm.playing = true;
+            host.channels[0] = Some(SeChannel {
+                name: b"se".to_vec(),
+                ..SeChannel::default()
+            });
+            host.played[0] = 256;
+            let settings = host.settings;
+            let mut backend = RecordingAudio::default();
+            host.stop_for_lifecycle(&mut backend, reset).unwrap();
+            let mut expected = vec![AudioRequest::StopBgm];
+            expected.extend((0..6).map(|channel| AudioRequest::StopSe { channel }));
+            expected.extend((0..4).map(|channel| AudioRequest::StopVoice { channel }));
+            expected.push(AudioRequest::StopChannel15);
+            assert_eq!(backend.requests(), expected);
+            assert_eq!(host.bgm, BgmState::default());
+            assert_eq!(host.settings, settings);
+            assert_eq!(host.channels[0].is_none(), reset);
+            assert_eq!(host.played[0], if reset { 0 } else { 256 });
+        }
+    }
+
+    #[test]
+    fn failed_lifecycle_stop_keeps_records_for_retry() {
+        let mut host = AudioHost::default();
+        host.bgm.primary = b"bgm".to_vec();
+        host.bgm.playing = true;
+        let mut full = RecordingAudio {
+            requests: vec![AudioRequest::StopBgm; 4090],
+        };
+        assert!(host.stop_for_lifecycle(&mut full, true).is_err());
+        assert_eq!(host.bgm.primary, b"bgm");
+        assert!(host.bgm.playing);
+        host.stop_for_lifecycle(&mut RecordingAudio::default(), true)
+            .unwrap();
+        assert_eq!(host.bgm, BgmState::default());
     }
 }

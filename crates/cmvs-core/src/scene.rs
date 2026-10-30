@@ -339,6 +339,28 @@ impl SceneHost {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(false);
         };
+        if command == 0x78 {
+            return self.world_position(vm, pc);
+        }
+        if command == 0x329 {
+            let slot = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x2329, e.0))?;
+            let object = u8::try_from(slot)
+                .ok()
+                .and_then(|slot| self.objects.get_mut(&slot))
+                .ok_or_else(|| {
+                    error(
+                        pc,
+                        0x2329,
+                        "effect reset needs an existing object in slots 0..255",
+                    )
+                })?;
+            vm.complete_system(SystemResult(0x4004))?;
+            // 0x14003b6a0 -> 0x14003a880: resets the special-effect header and
+            // destroys every child, retaining the parent image/draw state and flags.
+            // Special-effect creation (0x2328) is still an explicit barrier.
+            object.children.clear();
+            return Ok(true);
+        }
         if matches!(command, 0x2c5 | 0x2c6) {
             return self.control_change(vm, pc, command);
         }
@@ -746,6 +768,39 @@ impl SceneHost {
                 }
                 _ => unreachable!(),
             }
+        }
+        Ok(true)
+    }
+
+    /// 0x2078 / 0x14006f4c0 -> 0x14003b210: raw XYZ to float results 8..10.
+    fn world_position(&self, vm: &mut Machine<'_>, pc: usize) -> Result<bool, DecodeError> {
+        let fail = |why| error(pc, 0x2078, why);
+        let slot = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
+        let child = vm.stack().peek_u32(8).map_err(|e| fail(e.0))? as i32;
+        let parent = u8::try_from(slot)
+            .ok()
+            .and_then(|slot| self.objects.get(&slot))
+            .ok_or_else(|| fail("world query needs an existing object in slots 0..255"))?;
+        let object = if child < 0 {
+            parent
+        } else {
+            u16::try_from(child)
+                .ok()
+                .filter(|&id| id < 768)
+                .and_then(|id| parent.children.get(&id))
+                .ok_or_else(|| fail("world query needs an existing child in slots 0..767"))?
+        };
+        let words = &object
+            .draw
+            .as_ref()
+            .ok_or_else(|| fail("world query needs a draw state"))?
+            .words;
+        let xyz = [words[11], words[12], words[13]];
+        vm.complete_system(SystemResult(0x4008))?;
+        for (index, bits) in (8..=10).zip(xyz) {
+            vm.state_mut()
+                .set_system_float_bits(index, bits)
+                .expect("float result exists");
         }
         Ok(true)
     }

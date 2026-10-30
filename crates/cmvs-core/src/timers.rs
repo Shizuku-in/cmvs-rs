@@ -13,6 +13,10 @@ pub struct VmTimers {
     marked_at: u32,
 }
 impl VmTimers {
+    /// RESET's 0x140008cb0 restarts frame measurement, preserving VM timer slots.
+    pub(crate) fn reset_frame_delta(&mut self) {
+        self.delta = 0;
+    }
     pub fn values(&self) -> &[u32; TIMER_SLOTS] {
         &self.values
     }

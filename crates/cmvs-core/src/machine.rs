@@ -55,6 +55,8 @@ struct Image<'a> {
     name: Vec<u8>,
 }
 
+pub(crate) struct PreparedMain<'a>(Image<'a>);
+
 impl<'a> Image<'a> {
     fn prepare(script: Cow<'a, Script>, name: Vec<u8>, entry: u32) -> Result<Self, DecodeError> {
         let labels = script.labels();
@@ -738,17 +740,36 @@ impl<'a> Machine<'a> {
         Ok(())
     }
 
-    /// Core 0x2080 transition only. The host must separately implement save snapshots.
+    /// Core 0x2080 / 0x2003 transition. The host owns snapshot/reset effects.
     pub fn switch_main_core(&mut self, name: Vec<u8>, script: Script) -> Result<(), DecodeError> {
-        if !matches!(self.pending, Some((_, 0x80))) {
+        if !matches!(self.pending, Some((_, 0x80 | 0x03))) {
             return Err(error(self.pc, 0x2080, "no pending main-script switch"));
         }
-        self.stack
-            .peek_u32(4)
-            .map_err(|e| error(self.pc, 0x2080, e.0))?;
-        let entry = script.header.entry_pc as usize;
-        let image = Image::prepare(Cow::Owned(script), name, entry as u32)?;
-        self.images.insert(0, image);
+        if matches!(self.pending, Some((_, 0x80))) {
+            self.stack
+                .peek_u32(4)
+                .map_err(|e| error(self.pc, 0x2080, e.0))?;
+        }
+        let prepared = Self::prepare_main(name, script)?;
+        self.replace_main(prepared);
+        Ok(())
+    }
+
+    pub(crate) fn prepare_main(
+        name: Vec<u8>,
+        script: Script,
+    ) -> Result<PreparedMain<'a>, DecodeError> {
+        let entry = script.header.entry_pc;
+        Ok(PreparedMain(Image::prepare(
+            Cow::Owned(script),
+            name,
+            entry,
+        )?))
+    }
+
+    pub(crate) fn replace_main(&mut self, prepared: PreparedMain<'a>) {
+        let entry = prepared.0.script.header.entry_pc as usize;
+        self.images.insert(0, prepared.0);
         self.slot = 0;
         self.pc = entry;
         self.repeat_count = 0;
@@ -756,7 +777,6 @@ impl<'a> Machine<'a> {
         self.frames.clear();
         self.cross_calls.clear();
         self.pending = None;
-        Ok(())
     }
 
     pub fn call_script(&mut self, slot: u8, target: usize) -> Result<(), DecodeError> {
