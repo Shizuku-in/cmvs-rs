@@ -12,6 +12,66 @@ use std::{collections::BTreeMap, error::Error, fs, process::Command};
 mod bytecode;
 
 #[test]
+fn window_size_reset_yields_only_when_it_changes_and_preserves_results() {
+    use cmvs_rs::platform::PlatformEvent;
+    let mut code = vec![];
+    bytecode::command(&mut code, 0x216e, &[]);
+    bytecode::command(&mut code, 0x216e, &[]);
+    let script = bytecode::script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = PlatformHost::default();
+    let mut backend = RecordingBackend::default();
+    for expected in [PlatformEvent::Yield, PlatformEvent::Configured] {
+        bytecode::pending(&mut vm);
+        vm.state_mut().set_system_integer(0, 77).unwrap();
+        assert_eq!(
+            host.try_handle(&mut vm, &mut backend, &mut Assets::default(), &[])
+                .unwrap(),
+            Some(expected)
+        );
+        assert_eq!(vm.state().system_integer(0), Some(77));
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(backend.window_size().unwrap(), [1280, 720]);
+    }
+    assert_eq!(
+        backend.requests(),
+        &[PlatformRequest::WindowSize([1280, 720])]
+    );
+}
+
+#[test]
+fn fixed_window_reset_is_a_noop_and_fullscreen_future_size_stays_an_explicit_barrier() {
+    struct Fixed;
+    impl PlatformBackend for Fixed {
+        fn resizable(&self) -> Result<bool, Box<dyn Error>> {
+            Ok(false)
+        }
+        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+            panic!("fixed window must not resize")
+        }
+    }
+    let mut code = vec![];
+    bytecode::command(&mut code, 0x216e, &[]);
+    let script = bytecode::script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    bytecode::pending(&mut vm);
+    let mut host = PlatformHost::default();
+    let mut backend = RecordingBackend::default();
+    backend.apply(&PlatformRequest::Fullscreen(true)).unwrap();
+    let before = vm.pending_system();
+    assert!(
+        host.try_handle(&mut vm, &mut backend, &mut Assets::default(), &[])
+            .is_err()
+    );
+    assert_eq!(vm.pending_system(), before);
+    assert_eq!(
+        host.try_handle(&mut vm, &mut Fixed, &mut Assets::default(), &[])
+            .unwrap(),
+        Some(cmvs_rs::platform::PlatformEvent::Configured)
+    );
+}
+
+#[test]
 fn aspect_mode_normalizes_invalid_words_preserves_results_and_skips_equal_requests() {
     let mut code = vec![];
     for raw in [1, 0, 2, 3, 3, u32::MAX, 4] {

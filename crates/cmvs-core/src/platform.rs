@@ -69,6 +69,7 @@ impl PlatformAssets for DirectoryAssets {
 pub enum PlatformRequest {
     Fullscreen(bool),
     AspectMode(u32),
+    WindowSize([u32; 2]),
     Title(Vec<u8>),
     Cursor {
         id: u32,
@@ -81,6 +82,24 @@ pub enum PlatformRequest {
     },
 }
 pub trait PlatformBackend {
+    fn window_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
+        Err("platform backend does not implement window size queries".into())
+    }
+    fn reset_window_size(&mut self) -> Result<bool, Box<dyn Error>> {
+        if !self.resizable()? {
+            return Ok(false);
+        }
+        if self.window_size()? == [1280, 720] {
+            return Ok(false);
+        }
+        if self.fullscreen()? {
+            return Err(
+                "resetting the future window size during fullscreen is not implemented".into(),
+            );
+        }
+        self.apply(&PlatformRequest::WindowSize([1280, 720]))?;
+        Ok(true)
+    }
     /// 0x2163 queries the device's current display mode, not the startup preference.
     fn fullscreen(&self) -> Result<bool, Box<dyn Error>> {
         Err("platform backend does not implement display mode queries".into())
@@ -114,6 +133,7 @@ pub struct RecordingBackend {
     bytes: usize,
     fullscreen: bool,
     aspect_mode: Option<u32>,
+    window_size: Option<[u32; 2]>,
 }
 impl RecordingBackend {
     pub fn requests(&self) -> &[PlatformRequest] {
@@ -121,6 +141,9 @@ impl RecordingBackend {
     }
 }
 impl PlatformBackend for RecordingBackend {
+    fn window_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
+        Ok(self.window_size.unwrap_or([960, 540]))
+    }
     fn aspect_mode(&self) -> Result<u32, Box<dyn Error>> {
         Ok(self.aspect_mode.unwrap_or(1))
     }
@@ -140,11 +163,16 @@ impl PlatformBackend for RecordingBackend {
         Ok(self.fullscreen)
     }
     fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+        if matches!(request, PlatformRequest::WindowSize(size) if *size != [1280, 720]) {
+            return Err("unsupported window size request".into());
+        }
         if matches!(request, PlatformRequest::AspectMode(mode) if *mode > 3) {
             return Err("invalid aspect mode".into());
         }
         let size = match request {
-            PlatformRequest::Fullscreen(_) | PlatformRequest::AspectMode(_) => 0,
+            PlatformRequest::Fullscreen(_)
+            | PlatformRequest::AspectMode(_)
+            | PlatformRequest::WindowSize(_) => 0,
             PlatformRequest::Title(bytes) => bytes.len(),
             PlatformRequest::Cursor { bitmap, .. } => {
                 bitmap.as_ref().map_or(0, |b| b.width() * b.height() * 4)
@@ -160,6 +188,9 @@ impl PlatformBackend for RecordingBackend {
         }
         if let PlatformRequest::AspectMode(value) = request {
             self.aspect_mode = Some(*value);
+        }
+        if let PlatformRequest::WindowSize(value) = request {
+            self.window_size = Some(*value);
         }
         self.bytes += size;
         Ok(())
@@ -273,6 +304,15 @@ impl PlatformHost {
             backend.apply(&PlatformRequest::Fullscreen(raw != 0))?;
             vm.complete_system(SystemResult(0xc004))?;
             return Ok(Some(PlatformEvent::Yield));
+        }
+        if command == 0x16e {
+            let changed = backend.reset_window_size()?;
+            vm.complete_system(SystemResult(if changed { 0xc000 } else { 0x4000 }))?;
+            return Ok(Some(if changed {
+                PlatformEvent::Yield
+            } else {
+                PlatformEvent::Configured
+            }));
         }
         if command == 0x2fd {
             let raw = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x22fd, e.0))?;
@@ -419,7 +459,9 @@ impl PlatformHost {
             PlatformRequest::Title(bytes) => self.title = Some(bytes),
             PlatformRequest::Cursor { id, .. } => self.cursor = id,
             PlatformRequest::Icon { name, .. } => self.icon = Some(name),
-            PlatformRequest::Fullscreen(_) | PlatformRequest::AspectMode(_) => {
+            PlatformRequest::Fullscreen(_)
+            | PlatformRequest::AspectMode(_)
+            | PlatformRequest::WindowSize(_) => {
                 unreachable!("handled before string requests")
             }
         }

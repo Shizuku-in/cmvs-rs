@@ -126,6 +126,10 @@ pub struct NativeBackend<'a> {
     pub aspect_mode: &'a std::cell::Cell<u32>,
 }
 impl PlatformBackend for NativeBackend<'_> {
+    fn window_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
+        let size = self.window.inner_size();
+        Ok([size.width, size.height])
+    }
     fn aspect_mode(&self) -> Result<u32, Box<dyn Error>> {
         Ok(self.aspect_mode.get())
     }
@@ -146,6 +150,15 @@ impl PlatformBackend for NativeBackend<'_> {
     }
     fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>> {
         match request {
+            PlatformRequest::WindowSize(size) => {
+                if *size != [1280, 720] {
+                    return Err("unsupported window size request".into());
+                }
+                let _ = self
+                    .window
+                    .request_inner_size(winit::dpi::PhysicalSize::new(size[0], size[1]));
+                println!("# native requested window size={}x{}", size[0], size[1]);
+            }
             PlatformRequest::AspectMode(mode) => {
                 if *mode > 3 {
                     return Err("invalid aspect mode".into());
