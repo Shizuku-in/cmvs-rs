@@ -291,6 +291,38 @@ impl<'a> Machine<'a> {
         self.repeat_count = 0;
         Ok(())
     }
+    /// 0x140064f50: push the current repeat count, PC and slot, then a (0, target, slot)
+    /// return frame for each due callback, and continue with the last pushed one. The
+    /// chain returns through each callback in turn to the saved context; a pending command
+    /// is executed again there, as the original re-runs a waiting command every frame.
+    pub(crate) fn dispatch_callbacks(&mut self, due: &[(u8, usize)]) -> Result<(), &'static str> {
+        let Some(&(slot, target)) = due.last() else {
+            return Ok(());
+        };
+        if due
+            .iter()
+            .any(|&(slot, target)| !self.is_boundary(slot, target))
+        {
+            return Err("callback target is not an instruction boundary");
+        }
+        let mut stack = self.stack.clone();
+        let frames = std::iter::once((self.repeat_count, self.pc as u32, self.slot))
+            .chain(due[..due.len() - 1].iter().map(|&(s, t)| (0, t as u32, s)));
+        let mut cross_calls = self.cross_calls.clone();
+        for (repeat, pc, frame_slot) in frames {
+            for value in [repeat, pc, u32::from(frame_slot)] {
+                stack.push_u32(value).map_err(|e| e.0)?;
+            }
+            cross_calls.push(frame_slot);
+        }
+        self.stack = stack;
+        self.cross_calls = cross_calls;
+        self.slot = slot;
+        self.pc = target;
+        self.repeat_count = 0;
+        self.pending = None;
+        Ok(())
+    }
     pub(crate) fn set_repeat_count(&mut self, count: u32) {
         self.repeat_count = count;
     }

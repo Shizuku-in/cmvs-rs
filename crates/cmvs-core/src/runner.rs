@@ -511,6 +511,11 @@ impl<'a> Startup<'a> {
             self.timers.begin_run(delta);
             self.input.latch_pointer();
             self.gesture.frame(&mut self.input, self.timers.clock())?;
+            // 0x140067930 runs the automatic callback dispatch 0x140064f50 after the timers.
+            let shown =
+                std::array::from_fn(|slot| self.messages.window(slot).is_some_and(|w| w.visible));
+            let due = self.control.due_callbacks(shown);
+            self.machine.dispatch_callbacks(&due)?;
             self.resume_run = false;
         }
         let event = self.machine.step()?;

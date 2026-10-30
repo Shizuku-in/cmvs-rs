@@ -431,3 +431,57 @@ fn script_version_and_callback_flags_use_verified_argument_order() {
     assert_eq!(host.settings()[&0x208c], 0);
     assert_eq!(vm.stack().len_bytes(), 0);
 }
+
+/// Registers callbacks `slots` with distinct targets (each registration's own start), sets
+/// 0x2089 to `setting` and 0x208c to `blocked`, then yields.
+fn dispatch_registrations(slots: &[u32], setting: u32, blocked: u32) -> (Vec<u8>, Vec<u32>) {
+    let build = |targets: &[u32]| {
+        let mut code = vec![];
+        let mut starts = vec![];
+        for (&slot, &target) in slots.iter().zip(targets) {
+            starts.push(code.len() as u32);
+            for _ in 0..3 {
+                push(&mut code, int(0));
+            }
+            push(&mut code, int(target));
+            push(&mut code, int(slot));
+            word(&mut code, 0x2088);
+        }
+        for (op, value) in [(0x2089, setting), (0x208c, blocked)] {
+            push(&mut code, int(value));
+            word(&mut code, op);
+        }
+        word(&mut code, 0x2000);
+        (code, starts)
+    };
+    let (_, starts) = build(&vec![0; slots.len()]);
+    (build(&starts).0, starts)
+}
+
+#[test]
+fn due_callbacks_follow_the_setting_window_visibility_and_the_block_flag() {
+    let slots = [3, 6, 9, 10, 11, 17, 26, 28, 29];
+    let mut windows = [false; 8];
+    windows[0] = true;
+    windows[7] = true;
+    for (setting, blocked, expected) in [
+        // Entries 3..6 and 28 always, 10..17 for shown windows; 9, 26 (no word), 29 never.
+        (1, 0, vec![3, 6, 10, 17, 28]),
+        // Without the setting only entry 28.
+        (0, 0, vec![28]),
+        (1, 1, vec![]),
+    ] {
+        let (code, starts) = dispatch_registrations(&slots, setting, blocked);
+        let script = script(&code, &[], &[], 0);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut host = ScriptControl::new(0);
+        assert_eq!(run(&mut vm, &mut host, &mut MemorySource::default()), None);
+        let target = |slot: u32| starts[slots.iter().position(|&s| s == slot).unwrap()] as usize;
+        let due: Vec<_> = expected.iter().map(|&slot| (0u8, target(slot))).collect();
+        assert_eq!(
+            host.due_callbacks(windows),
+            due,
+            "setting {setting} blocked {blocked}"
+        );
+    }
+}

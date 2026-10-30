@@ -984,3 +984,59 @@ fn gameplay_saves_need_an_independent_user_directory() {
     assert!(error.to_string().contains("--user-data-dir"), "{error}");
     assert!(!root.0.join("save/save000.dat").exists());
 }
+
+/// 0x2089 on, callback 6 registered at a body that sets integer 42 and returns; a yield
+/// ends the first run. `block` adds 0x208c(1) before the yield.
+fn dispatch_code(block: bool) -> (Vec<u8>, usize) {
+    let mut code = vec![];
+    system_call(&mut code, 0x2089, &[1]);
+    let target = 10 + 42 + if block { 10 } else { 0 } + 2 + 26 + 2;
+    system_call(&mut code, 0x2088, &[6, target as u32, 0, 0, 0]);
+    if block {
+        system_call(&mut code, 0x208c, &[1]);
+    }
+    code.extend(0x2000u16.to_le_bytes());
+    system_call(&mut code, 0x2092, &[100, 1, 5]);
+    let end = code.len();
+    code.extend(0x27ffu16.to_le_bytes());
+    assert_eq!(code.len(), target);
+    system_call(&mut code, 0x2092, &[42, 1, 7]);
+    code.extend(0x0414u16.to_le_bytes());
+    code.extend(0u16.to_le_bytes());
+    (code, end)
+}
+
+#[test]
+fn automatic_dispatch_runs_due_callbacks_at_the_next_run_entry_and_returns() {
+    for block in [false, true] {
+        let (code, end) = dispatch_code(block);
+        let root = Root::new(&format!("dispatch-{block}"), &code, b"");
+        let script = root.script();
+        let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+        let mut backend = RecordingBackend::default();
+        let mut yields = 0;
+        loop {
+            match run.tick(&mut backend).unwrap() {
+                StartupEvent::Progress => {}
+                StartupEvent::Yield => {
+                    yields += 1;
+                    // The callback has not run inside the run that registered it.
+                    assert_eq!(run.machine().state().integer(42), None);
+                }
+                StartupEvent::Unhandled { pc, command } => {
+                    assert_eq!((pc, command), (end, 0x27ff));
+                    break;
+                }
+                event => panic!("unexpected {event:?}"),
+            }
+        }
+        assert_eq!(yields, 1);
+        // 0x208c(1) suppresses the dispatch; otherwise the callback ran first and
+        // returned through its frame to the instruction after the yield.
+        let expected = (!block).then_some(7);
+        assert_eq!(run.machine().state().integer(42), expected);
+        assert_eq!(run.machine().state().integer(100), Some(5));
+        assert_eq!(run.machine().stack().len_bytes(), 0);
+        assert_eq!(run.machine().current_slot(), 0);
+    }
+}
