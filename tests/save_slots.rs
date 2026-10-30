@@ -1,5 +1,7 @@
-//! Gameplay save slots through `Startup`: external original saves only, read-only inputs.
+//! Gameplay save slots through `Startup` on the original game: external saves and route
+//! replays only, read-only inputs. Synthetic save tests live in tests/runner.rs.
 use cmvs_rs::{
+    input::{CodeInput, KeyBindings},
     platform::RecordingBackend,
     profile::Registry,
     runner::{SnapshotPolicy, Startup, StartupEvent, load_start},
@@ -117,7 +119,9 @@ fn check_loaded(run: &Startup<'_>, mut expected: EngineSnapshot) {
         sound_channels,
         sound_device
     );
-    println!("differences: {differences:?}");
+    if !differences.is_empty() {
+        println!("differences: {differences:?}");
+    }
     for (i, (a, e)) in actual
         .sound_channels
         .chunks_exact(52)
@@ -229,4 +233,184 @@ fn external_auto_resume_restores_the_original_snapshot() {
         check_loaded(&run, held);
     }
     fs::remove_dir_all(user).unwrap();
+}
+
+/// The held snapshot as the writer built it.
+fn held(run: &Startup<'_>) -> EngineSnapshot {
+    match run.held_snapshot() {
+        cmvs_rs::snapshot::SaveImage::Captured(c) => EngineSnapshot::decode(&c.snapshot).unwrap(),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Replays one route from a fresh user directory with the default capture policy: skip
+/// held after the title, the `CMVS_ROUTE` choice chain (1-based enabled buttons, e.g.
+/// `2,2,2,1`), and a confirm after 300 idle frames outside the staff roll. Every snapshot
+/// goes to slot 0 through the 0x22b6 path and must read back unchanged; every
+/// `CMVS_ROUTE_LOAD_EVERY`th one (default 10, since each load replays callback 29 and the
+/// scene setup) is also loaded as 0x22b5 would and the hosts must match it, and the route
+/// then plays on from the loaded state until the title is ready again after the ending.
+/// `CMVS_ROUTE_SYSTEM` optionally seeds the user system.dat (END2 needs END1's) and
+/// `CMVS_ROUTE_SYSTEM_OUT` keeps the final one.
+#[test]
+#[ignore = "requires CMVS_GAME_ROOT and CMVS_ROUTE; a full route takes tens of minutes in release"]
+fn external_route_saves_every_snapshot_and_plays_on_after_loads() {
+    let root = PathBuf::from(std::env::var_os("CMVS_GAME_ROOT").expect("CMVS_GAME_ROOT"));
+    let chain: Vec<usize> = std::env::var("CMVS_ROUTE")
+        .expect("CMVS_ROUTE")
+        .split(',')
+        .map(|v| v.parse().unwrap())
+        .collect();
+    let load_every: u32 = std::env::var("CMVS_ROUTE_LOAD_EVERY").map_or(10, |v| v.parse().unwrap());
+    let user = user_directory("route");
+    if let Some(system) = std::env::var_os("CMVS_ROUTE_SYSTEM") {
+        fs::copy(system, user.join("system.dat")).unwrap();
+    }
+    let game = Registry::builtin().identify_game(&root, None).unwrap();
+    let script = load_start(&root, &game.files).unwrap();
+    let mut run = Startup::new(&script, &root, &game, 0).unwrap();
+    run.set_user_data_directory(&user).unwrap();
+    run.set_record_text(true);
+    let bindings = KeyBindings::parse(&fs::read_to_string(root.join("key.cfg")).unwrap()).unwrap();
+    let mut codes = CodeInput::default();
+    let mut backend = RecordingBackend::default();
+    let (mut phase, mut point) = (0, [-1, -1]);
+    let (mut choices, mut choice_idle, mut choice_step) = (0, None::<u32>, 0);
+    let (mut yields, mut last_input, mut system_saved) = (0u64, 0u64, false);
+    let (mut captures, mut loads) = (0u32, 0u32);
+    let place = |run: &Startup<'_>| {
+        format!(
+            "{} / 0x{:x} after {} steps",
+            run.machine().current_name().escape_ascii(),
+            run.machine().pc(),
+            run.steps()
+        )
+    };
+    for iteration in 0..1_000_000_000u64 {
+        // The recording backends keep at most 4096 requests; every load sets the title.
+        if iteration % 100_000 == 0 {
+            run.set_audio_backend(Box::new(cmvs_rs::audio::RecordingAudio::default()));
+            backend = RecordingBackend::default();
+        }
+        let at_title = run.machine().current_name() == b"menu.ps3" && run.machine().pc() == 0x38f00;
+        if at_title && system_saved {
+            println!(
+                "route {chain:?}: title ready, choices={choices} captures={captures} loads={loads}, {}",
+                place(&run)
+            );
+            assert_eq!(choices, chain.len());
+            if let Some(out) = std::env::var_os("CMVS_ROUTE_SYSTEM_OUT") {
+                fs::copy(user.join("system.dat"), out).unwrap();
+            }
+            fs::remove_dir_all(user).unwrap();
+            return;
+        }
+        if phase == 0 && at_title {
+            let group = run.buttons().group(0).unwrap();
+            let b = &group.buttons[0];
+            point = [b.rect[0] + b.rect[2] / 2, b.rect[1] + b.rect[3] / 2];
+            run.input_mut().set_pointer(point[0], point[1]);
+            phase = 1;
+        }
+        let pc = run.machine().pc();
+        let opcode = run
+            .machine()
+            .loaded_script(run.machine().current_slot())
+            .and_then(|s| s.code().get(pc..pc + 2))
+            .map(|b| u16::from_le_bytes([b[0], b[1]]));
+        let event = run
+            .tick(&mut backend)
+            .unwrap_or_else(|e| panic!("{e} at {}", place(&run)));
+        match event {
+            StartupEvent::Progress | StartupEvent::Yield => {}
+            StartupEvent::SnapshotCaptured => {
+                captures += 1;
+                let image = held(&run);
+                assert!(run.save_slot(0).unwrap());
+                let file = Csv2Save::decode(&fs::read(user.join("save000.dat")).unwrap()).unwrap();
+                assert_eq!(EngineSnapshot::decode(&file.snapshot).unwrap(), image);
+                if captures.is_multiple_of(load_every) {
+                    loads += 1;
+                    let main = image.script_names[0].escape_ascii().to_string();
+                    run.load_slot(0, &mut backend)
+                        .unwrap_or_else(|e| panic!("load: {e} in {main} at {}", place(&run)));
+                    check_loaded(&run, image);
+                    if loads.is_multiple_of(50) {
+                        println!(
+                            "load {loads} (capture {captures}) in {main} at {}",
+                            place(&run)
+                        );
+                    }
+                }
+                continue;
+            }
+            other => panic!("{other:?} at {}", place(&run)),
+        }
+        if opcode == Some(0x2129) && run.machine().pending_system().is_none() {
+            system_saved = true;
+        }
+        if opcode == Some(0x210b) && run.machine().pending_system().is_none() {
+            choice_idle = Some(0);
+        }
+        if event != StartupEvent::Yield {
+            continue;
+        }
+        yields += 1;
+        run.advance_frame(16).unwrap();
+        let waiting = matches!(run.machine().pending_system(), Some((_, 0x153)))
+            && run.machine().repeat_count() == 2;
+        let mut now = [false; 128];
+        if phase > 0 && phase < 4 {
+            phase += 1;
+            now[1] = phase == 2;
+        }
+        now[24] = phase >= 4;
+        if waiting {
+            now[1] = true;
+            choice_idle = None;
+            last_input = yields;
+        }
+        if phase >= 4
+            && !run.machine().current_name().starts_with(b"staff")
+            && choice_idle.is_none()
+            && choice_step == 0
+            && yields - last_input > 300
+        {
+            now[1] = true;
+            last_input = yields;
+        }
+        if let Some(idle) = choice_idle.as_mut() {
+            *idle += 1;
+            if *idle == 30 {
+                let group = (0..7)
+                    .rev()
+                    .filter_map(|g| run.buttons().group(g))
+                    .find(|group| !group.buttons.is_empty());
+                if let Some(group) = group {
+                    let pick = *chain.get(choices).expect("unexpected extra choice");
+                    let b = group
+                        .buttons
+                        .iter()
+                        .filter(|b| b.enabled)
+                        .nth(pick - 1)
+                        .expect("choice unavailable");
+                    point = [b.rect[0] + b.rect[2] / 2, b.rect[1] + b.rect[3] / 2];
+                    choices += 1;
+                    choice_step = 1;
+                    println!("choice {choices} id={} at {}", b.id, place(&run));
+                }
+            }
+        }
+        if choice_step > 0 {
+            choice_step += 1;
+            now[1] = choice_step == 3;
+            if choice_step > 3 {
+                choice_step = 0;
+                choice_idle = None;
+            }
+        }
+        codes.update(&bindings, &now, run.input_mut());
+        run.input_mut().set_pointer(point[0], point[1]);
+    }
+    panic!("budget exhausted at {}", place(&run));
 }
