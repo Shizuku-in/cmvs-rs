@@ -5,6 +5,29 @@ use cmvs_rs::{
 };
 
 #[test]
+fn cover_and_stretch_mapping_and_navigation_use_the_selected_mode() {
+    let cover = Viewport::with_mode([1000, 1000], 2).unwrap();
+    assert!(cover.to_script([0.0, 500.0]).unwrap()[0] > 0);
+    let stretch = Viewport::with_mode([1000, 1000], 3).unwrap();
+    assert_eq!(stretch.to_script([0.0, 0.0]), Some([0, 0]));
+    for mode in 0..=3 {
+        let mut game = GameInput::default();
+        let mut input = ActionInput::default();
+        game.focus(true, &mut input);
+        game.set_aspect_mode(mode);
+        let point = game.warp([1000, 1000], [640, 360]).unwrap();
+        assert_eq!(
+            Viewport::with_mode([1000, 1000], mode)
+                .unwrap()
+                .to_script(point),
+            Some([640, 360])
+        );
+        game.frame(&KeyBindings::default(), [1000, 1000], &mut input);
+        assert_eq!(input.pointer(), [640, 360]);
+    }
+}
+
+#[test]
 fn aspect_fit_maps_pixels_and_rejects_bars_and_zero_surface() {
     let v = Viewport::new([1000, 1000]).unwrap();
     assert_eq!(v.to_script([0.0, 219.0]), Some([0, 0]));

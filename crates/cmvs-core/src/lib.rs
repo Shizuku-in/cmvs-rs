@@ -45,6 +45,7 @@ pub mod snapshot;
 pub mod system_save;
 pub mod text;
 pub mod timers;
+pub mod viewport;
 pub mod vm;
 
 use std::fmt;

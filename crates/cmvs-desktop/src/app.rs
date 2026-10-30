@@ -52,6 +52,7 @@ struct App<'a> {
     cursor_visibility: cmvs_core::cursor::CursorVisibility,
     cursor_shown: bool,
     font: Option<crate::font::FontRenderer>,
+    aspect_mode: std::cell::Cell<u32>,
 }
 impl App<'_> {
     fn frame(&mut self) -> Result<RgbaImage, Box<dyn Error>> {
@@ -99,7 +100,16 @@ impl App<'_> {
         if self.preview_image.is_none() {
             buffer.fill(0);
         }
-        image.draw_fit(&mut buffer, size.width, size.height)?;
+        if self.preview_image.is_some() {
+            image.draw_fit(&mut buffer, size.width, size.height)?;
+        } else {
+            let mode = if window.fullscreen().is_some() {
+                self.aspect_mode.get()
+            } else {
+                1
+            };
+            image.draw_aspect(&mut buffer, size.width, size.height, mode)?;
+        }
         buffer.present()?;
         Ok(())
     }
@@ -119,6 +129,7 @@ impl App<'_> {
             window: self.window.as_ref().ok_or("no window")?,
             event_loop: el,
             encoding: self.encoding,
+            aspect_mode: &self.aspect_mode,
         };
         backend.apply(&PlatformRequest::Cursor { id, bitmap })?;
         println!("# preview-only cursor shortcut={id}; VM state unchanged");
@@ -287,6 +298,12 @@ impl ApplicationHandler for App<'_> {
             self.last_frame = now;
             self.next_frame = now + Duration::from_millis(16);
             let window = window.clone();
+            self.game_input
+                .set_aspect_mode(if window.fullscreen().is_some() {
+                    self.aspect_mode.get()
+                } else {
+                    1
+                });
             if self.input_due && self.native_input && self.preview_image.is_none() {
                 let size = window.inner_size();
                 self.game_input.frame(
@@ -317,6 +334,7 @@ impl ApplicationHandler for App<'_> {
                     window: &window,
                     event_loop: el,
                     encoding: self.encoding,
+                    aspect_mode: &self.aspect_mode,
                 };
                 let had_fade = self.startup.scene().fade().current().is_some();
                 let outcome = self.startup.tick(&mut backend);
@@ -381,6 +399,12 @@ impl ApplicationHandler for App<'_> {
                     }
                 }
             }
+            self.game_input
+                .set_aspect_mode(if window.fullscreen().is_some() {
+                    self.aspect_mode.get()
+                } else {
+                    1
+                });
             if let Some(point) = self.startup.input_mut().take_warp() {
                 let size = window.inner_size();
                 if let Some([x, y]) = self.game_input.warp([size.width, size.height], point)
@@ -665,6 +689,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         cursor_visibility: Default::default(),
         cursor_shown: true,
         font,
+        aspect_mode: std::cell::Cell::new(1),
     };
     let event_loop = EventLoop::new()?;
     event_loop.run_app(&mut app)?;

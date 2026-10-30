@@ -712,6 +712,21 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
             cmvs_rs::platform::PlatformBackend::fullscreen(&ui.backend).unwrap(),
             fullscreen
         );
+        if fullscreen {
+            for (mode, x) in [904, 1008, 1112, 1216].into_iter().enumerate() {
+                ui.click([x, 137], 30);
+                assert_eq!(
+                    cmvs_rs::platform::PlatformBackend::aspect_mode(&ui.backend).unwrap(),
+                    mode as u32
+                );
+                let image = font
+                    .render(ui.run.scene(), ui.run.camera(), ui.run.messages())
+                    .unwrap();
+                image
+                    .draw_aspect(&mut vec![0; 1000 * 1000], 1000, 1000, mode as u32)
+                    .unwrap();
+            }
+        }
         font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
             .unwrap();
     }
@@ -770,7 +785,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     assert_eq!(ui.run.history().entries().len(), stopped);
     assert!(ui.waiting_for_text());
     println!(
-        "settings: native_audio={native_audio}; title + toolbar; fullscreen, cursor hide, voice stop modes, read-skip policy, bold/text/audio/auto settings, three pages, 428 settings frames; auto advanced at least three entries in {auto_frames} rendered frames with {} voices and {} voice fades; disabled then idle 240 rendered frames",
+        "settings: native_audio={native_audio}; title + toolbar; fullscreen/aspect, cursor hide, voice stop modes, read-skip policy, bold/text/audio/auto settings, three pages, 432 settings frames; auto advanced at least three entries in {auto_frames} rendered frames with {} voices and {} voice fades; disabled then idle 240 rendered frames",
         ui.voices.len(),
         ui.voice_fades.len()
     );

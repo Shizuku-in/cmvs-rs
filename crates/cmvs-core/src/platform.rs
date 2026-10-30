@@ -68,6 +68,7 @@ impl PlatformAssets for DirectoryAssets {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlatformRequest {
     Fullscreen(bool),
+    AspectMode(u32),
     Title(Vec<u8>),
     Cursor {
         id: u32,
@@ -112,6 +113,7 @@ pub struct RecordingBackend {
     requests: Vec<PlatformRequest>,
     bytes: usize,
     fullscreen: bool,
+    aspect_mode: Option<u32>,
 }
 impl RecordingBackend {
     pub fn requests(&self) -> &[PlatformRequest] {
@@ -120,7 +122,7 @@ impl RecordingBackend {
 }
 impl PlatformBackend for RecordingBackend {
     fn aspect_mode(&self) -> Result<u32, Box<dyn Error>> {
-        Ok(1)
+        Ok(self.aspect_mode.unwrap_or(1))
     }
     fn stretch_filter_supported(&self) -> Result<bool, Box<dyn Error>> {
         Ok(true)
@@ -138,8 +140,11 @@ impl PlatformBackend for RecordingBackend {
         Ok(self.fullscreen)
     }
     fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+        if matches!(request, PlatformRequest::AspectMode(mode) if *mode > 3) {
+            return Err("invalid aspect mode".into());
+        }
         let size = match request {
-            PlatformRequest::Fullscreen(_) => 0,
+            PlatformRequest::Fullscreen(_) | PlatformRequest::AspectMode(_) => 0,
             PlatformRequest::Title(bytes) => bytes.len(),
             PlatformRequest::Cursor { bitmap, .. } => {
                 bitmap.as_ref().map_or(0, |b| b.width() * b.height() * 4)
@@ -152,6 +157,9 @@ impl PlatformBackend for RecordingBackend {
         self.requests.push(request.clone());
         if let PlatformRequest::Fullscreen(value) = request {
             self.fullscreen = *value;
+        }
+        if let PlatformRequest::AspectMode(value) = request {
+            self.aspect_mode = Some(*value);
         }
         self.bytes += size;
         Ok(())
@@ -265,6 +273,14 @@ impl PlatformHost {
             backend.apply(&PlatformRequest::Fullscreen(raw != 0))?;
             vm.complete_system(SystemResult(0xc004))?;
             return Ok(Some(PlatformEvent::Yield));
+        }
+        if command == 0x2fd {
+            let raw = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x22fd, e.0))?;
+            if raw != backend.aspect_mode()? {
+                backend.apply(&PlatformRequest::AspectMode(if raw > 3 { 1 } else { raw }))?;
+            }
+            vm.complete_system(SystemResult(0x4004))?;
+            return Ok(Some(PlatformEvent::Configured));
         }
         if command == 0x2fc {
             let value = backend.aspect_mode()?;
@@ -403,7 +419,9 @@ impl PlatformHost {
             PlatformRequest::Title(bytes) => self.title = Some(bytes),
             PlatformRequest::Cursor { id, .. } => self.cursor = id,
             PlatformRequest::Icon { name, .. } => self.icon = Some(name),
-            PlatformRequest::Fullscreen(_) => unreachable!("handled before string requests"),
+            PlatformRequest::Fullscreen(_) | PlatformRequest::AspectMode(_) => {
+                unreachable!("handled before string requests")
+            }
         }
         Ok(Some(PlatformEvent::Applied))
     }

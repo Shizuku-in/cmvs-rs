@@ -123,10 +123,11 @@ pub struct NativeBackend<'a> {
     pub window: &'a Window,
     pub event_loop: &'a ActiveEventLoop,
     pub encoding: TextEncoding,
+    pub aspect_mode: &'a std::cell::Cell<u32>,
 }
 impl PlatformBackend for NativeBackend<'_> {
     fn aspect_mode(&self) -> Result<u32, Box<dyn Error>> {
-        Ok(1)
+        Ok(self.aspect_mode.get())
     }
     fn stretch_filter_supported(&self) -> Result<bool, Box<dyn Error>> {
         Ok(true)
@@ -145,6 +146,14 @@ impl PlatformBackend for NativeBackend<'_> {
     }
     fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>> {
         match request {
+            PlatformRequest::AspectMode(mode) => {
+                if *mode > 3 {
+                    return Err("invalid aspect mode".into());
+                }
+                self.aspect_mode.set(*mode);
+                self.window.request_redraw();
+                println!("# native aspect mode={mode}");
+            }
             PlatformRequest::Fullscreen(value) => {
                 self.window.set_fullscreen(
                     value.then(|| {

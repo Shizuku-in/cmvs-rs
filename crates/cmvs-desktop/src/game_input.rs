@@ -34,10 +34,15 @@ pub struct GameInput {
     pointer: Option<[f64; 2]>,
     wheel: f64,
     focused: bool,
+    aspect_mode: Option<u32>,
 }
 impl GameInput {
+    pub fn set_aspect_mode(&mut self, mode: u32) {
+        self.aspect_mode = Some(mode);
+    }
     pub fn cursor_position(&self, size: [u32; 2]) -> Option<[i32; 2]> {
-        self.pointer.and_then(|p| Viewport::new(size)?.to_script(p))
+        self.pointer
+            .and_then(|p| Viewport::with_mode(size, self.aspect_mode.unwrap_or(1))?.to_script(p))
     }
     pub fn key(&mut self, key: KeyCode, pressed: bool) {
         if !self.focused {
@@ -138,60 +143,29 @@ impl GameInput {
         input.set_pointer(x, y);
     }
     pub fn warp(&mut self, size: [u32; 2], script: [i32; 2]) -> Option<[f64; 2]> {
-        let point = Viewport::new(size)?.to_window(script);
+        let point = Viewport::with_mode(size, self.aspect_mode.unwrap_or(1))?.to_window(script);
         self.pointer = Some(point);
         Some(point)
     }
 }
 
-/// Exactly the integer aspect fit used by RgbaImage::draw_fit for the 1280x720 scene.
+/// Shared fixed-point display geometry for the 1280x720 logical scene.
 #[derive(Debug, Clone, Copy)]
-pub struct Viewport {
-    left: u32,
-    top: u32,
-    width: u32,
-    height: u32,
-}
+pub struct Viewport(cmvs_core::viewport::Viewport);
 impl Viewport {
-    pub fn new([width, height]: [u32; 2]) -> Option<Self> {
-        if width == 0 || height == 0 {
-            return None;
-        }
-        let mut w = u64::from(width);
-        let mut h = (720 * w / 1280).max(1);
-        if h > u64::from(height) {
-            h = u64::from(height);
-            w = (1280 * h / 720).max(1);
-        }
-        Some(Self {
-            left: (width - w as u32) / 2,
-            top: (height - h as u32) / 2,
-            width: w as u32,
-            height: h as u32,
-        })
+    pub fn new(size: [u32; 2]) -> Option<Self> {
+        Self::with_mode(size, 1)
     }
-    pub fn to_script(self, [x, y]: [f64; 2]) -> Option<[i32; 2]> {
-        let x = x - f64::from(self.left);
-        let y = y - f64::from(self.top);
-        if !x.is_finite()
-            || !y.is_finite()
-            || x < 0.0
-            || y < 0.0
-            || x >= f64::from(self.width)
-            || y >= f64::from(self.height)
-        {
-            return None;
-        }
-        Some([
-            (x * 1280.0 / f64::from(self.width)).floor() as i32,
-            (y * 720.0 / f64::from(self.height)).floor() as i32,
-        ])
+    pub fn with_mode(size: [u32; 2], mode: u32) -> Option<Self> {
+        cmvs_core::viewport::Viewport::new([1280, 720], size, mode)
+            .ok()
+            .map(Self)
     }
-    pub fn to_window(self, [x, y]: [i32; 2]) -> [f64; 2] {
-        [
-            f64::from(self.left) + (f64::from(x) + 0.5) * f64::from(self.width) / 1280.0,
-            f64::from(self.top) + (f64::from(y) + 0.5) * f64::from(self.height) / 720.0,
-        ]
+    pub fn to_script(self, point: [f64; 2]) -> Option<[i32; 2]> {
+        self.0.to_source(point)
+    }
+    pub fn to_window(self, point: [i32; 2]) -> [f64; 2] {
+        self.0.to_target(point)
     }
 }
 

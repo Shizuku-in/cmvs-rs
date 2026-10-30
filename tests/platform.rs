@@ -12,6 +12,36 @@ use std::{collections::BTreeMap, error::Error, fs, process::Command};
 mod bytecode;
 
 #[test]
+fn aspect_mode_normalizes_invalid_words_preserves_results_and_skips_equal_requests() {
+    let mut code = vec![];
+    for raw in [1, 0, 2, 3, 3, u32::MAX, 4] {
+        bytecode::command(&mut code, 0x22fd, &[raw]);
+        bytecode::command(&mut code, 0x22fc, &[]);
+    }
+    let script = bytecode::script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut host = PlatformHost::default();
+    let mut backend = RecordingBackend::default();
+    let mut assets = Assets::default();
+    for value in [1, 0, 2, 3, 3, 1, 1] {
+        vm.state_mut().set_system_integer(0, 77).unwrap();
+        bytecode::pending(&mut vm);
+        host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+            .unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(77));
+        assert_eq!(vm.stack().len_bytes(), 0);
+        bytecode::pending(&mut vm);
+        host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+            .unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(value));
+    }
+    assert_eq!(
+        backend.requests(),
+        &[0, 2, 3, 1, 1].map(PlatformRequest::AspectMode)
+    );
+}
+
+#[test]
 fn fullscreen_changes_yield_preserve_results_and_query_the_new_backend_mode() {
     use cmvs_rs::platform::PlatformEvent;
     let mut code = vec![];
@@ -47,28 +77,33 @@ fn fullscreen_changes_yield_preserve_results_and_query_the_new_backend_mode() {
 }
 
 #[test]
-fn failed_fullscreen_change_retains_pending_command_stack_and_results() {
+fn failed_display_changes_retain_pending_command_stack_and_results() {
     struct Reject;
     impl PlatformBackend for Reject {
+        fn aspect_mode(&self) -> Result<u32, Box<dyn Error>> {
+            Ok(1)
+        }
         fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
             Err("synthetic display failure".into())
         }
     }
-    let mut code = vec![];
-    bytecode::command(&mut code, 0x2164, &[1]);
-    let script = bytecode::script(&code);
-    let mut vm = Machine::new(&script).unwrap();
-    bytecode::pending(&mut vm);
-    let before = vm.pending_system();
-    vm.state_mut().set_system_integer(0, 77).unwrap();
-    assert!(
-        PlatformHost::default()
-            .try_handle(&mut vm, &mut Reject, &mut Assets::default(), &[])
-            .is_err()
-    );
-    assert_eq!(vm.pending_system(), before);
-    assert_eq!(vm.stack().len_bytes(), 4);
-    assert_eq!(vm.state().system_integer(0), Some(77));
+    for op in [0x2164, 0x22fd] {
+        let mut code = vec![];
+        bytecode::command(&mut code, op, &[2]);
+        let script = bytecode::script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        bytecode::pending(&mut vm);
+        let before = vm.pending_system();
+        vm.state_mut().set_system_integer(0, 77).unwrap();
+        assert!(
+            PlatformHost::default()
+                .try_handle(&mut vm, &mut Reject, &mut Assets::default(), &[])
+                .is_err()
+        );
+        assert_eq!(vm.pending_system(), before);
+        assert_eq!(vm.stack().len_bytes(), 4);
+        assert_eq!(vm.state().system_integer(0), Some(77));
+    }
 }
 
 #[test]

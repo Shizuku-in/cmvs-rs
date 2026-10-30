@@ -344,6 +344,9 @@ fn run() -> Result<(), Box<dyn Error>> {
                             PlatformRequest::Fullscreen(value) => {
                                 println!("# recorded fullscreen={value}")
                             }
+                            PlatformRequest::AspectMode(value) => {
+                                println!("# recorded aspect mode={value}")
+                            }
                             PlatformRequest::Title(bytes) => {
                                 println!("# recorded title={}", bytes.escape_ascii())
                             }

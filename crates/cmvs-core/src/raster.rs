@@ -63,6 +63,37 @@ impl RgbaImage {
         }
         Ok(())
     }
+    /// Software fullscreen presentation using the same mapping as pointer input.
+    pub fn draw_aspect(
+        &self,
+        target: &mut [u32],
+        width: u32,
+        height: u32,
+        mode: u32,
+    ) -> Result<(), FormatError> {
+        let view =
+            crate::viewport::Viewport::new([self.width, self.height], [width, height], mode)?;
+        if target.len() as u64 != u64::from(width) * u64::from(height) {
+            return Err(FormatError("invalid preview surface dimensions"));
+        }
+        for y in view.top.max(0)..(view.top + i64::from(view.height)).min(i64::from(height)) {
+            for x in view.left.max(0)..(view.left + i64::from(view.width)).min(i64::from(width)) {
+                let sx = (x - view.left) as u64 * u64::from(self.width) / u64::from(view.width);
+                let sy = (y - view.top) as u64 * u64::from(self.height) / u64::from(view.height);
+                let at = ((sy * u64::from(self.width) + sx) * 4) as usize;
+                let p = &self.pixels[at..at + 4];
+                let dst = &mut target[y as usize * width as usize + x as usize];
+                let alpha = u32::from(p[3]);
+                let channel = |i: usize, shift: u32| {
+                    ((u32::from(p[i]) * alpha + ((*dst >> shift) & 255) * (255 - alpha) + 127)
+                        / 255)
+                        << shift
+                };
+                *dst = channel(0, 16) | channel(1, 8) | channel(2, 0);
+            }
+        }
+        Ok(())
+    }
     /// RGBA8 PNG with filter 0 rows and stored (uncompressed) deflate blocks, so no
     /// compression library is needed. Intended for exporting rendered research frames.
     pub fn to_png(&self) -> Vec<u8> {
