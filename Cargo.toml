@@ -4,6 +4,7 @@ default-members = ["."]
 resolver = "3"
 
 [workspace.package]
+license = "MIT OR Apache-2.0"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.89"
@@ -27,6 +28,7 @@ lewton = "=0.10.2"
 ab_glyph = { version = "=0.2.32", default-features = false, features = ["std"] }
 
 [package]
+license.workspace = true
 name = "cmvs-rs"
 rust-version.workspace = true
 version = "0.1.0"

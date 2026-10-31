@@ -47,3 +47,9 @@ cargo clippy --offline --all-targets -- -D warnings
 ```
 
 测试仅含合成数据；修改解码算法后另用仓库外真实样本与独立 Python 对照。涉及后端或 feature 时，追加 [Workspace](docs/workspace.md) 中的全功能检查。
+
+## 许可证
+
+[MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE) 
+
+本项目许可证不授予原游戏程序、素材或脚本的使用与分发权。
