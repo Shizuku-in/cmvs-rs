@@ -1,6 +1,6 @@
 {
   "schema": "cmvs-contract-mappings-v1",
-  "revision": "chronoclock-m2-pilot-2026-11-01",
+  "revision": "chronoclock-m2c-pilot-2026-11-01",
   "entries": [
     {
       "id": "vm.main-image-manager",
@@ -1203,6 +1203,222 @@
         "date": "2026-11-01",
         "status": "pilot",
         "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "clock.current-tick",
+      "logical_target": {
+        "region": "object",
+        "object": "clock",
+        "field": "current_tick",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "image",
+          "offset": "0x101430",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "image",
+          "offset": "0xfb3d0",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "reset base 0x8cb0#7 / derived 0x7ca0#7; readers 0x2008 base 0x7eb0#2 / derived 0x6ea0#2, 0x2009 base 0x7ed0#2 / derived 0x6ec0#2",
+        "docs/games/chronoclock/contract-m2.md#global-pilot"
+      ],
+      "scope": "One process-global 32-bit cell per build; RVA relocation only, not an object field or an initial-state assertion.",
+      "review": {
+        "source": "manual writer/reader pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "Queries/setter only; no equivalence claim for frame updates, external clocks, button consumers or Rust runtime behaviour."
+      }
+    },
+    {
+      "id": "clock.previous-tick",
+      "logical_target": {
+        "region": "object",
+        "object": "clock",
+        "field": "previous_tick",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "image",
+          "offset": "0x10142c",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "image",
+          "offset": "0xfb3cc",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "reset base 0x8cb0#8 / derived 0x7ca0#8 stores the same tick as current_tick; delta subtraction base 0x7ed0#3 / derived 0x6ec0#3",
+        "docs/games/chronoclock/contract-m2.md#global-pilot"
+      ],
+      "scope": "One process-global 32-bit cell per build; RVA relocation only, not an object field or an initial-state assertion.",
+      "review": {
+        "source": "manual writer/reader pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "Queries/setter only; no equivalence claim for frame updates, external clocks, button consumers or Rust runtime behaviour."
+      }
+    },
+    {
+      "id": "clock.accumulated-tick",
+      "logical_target": {
+        "region": "object",
+        "object": "clock",
+        "field": "accumulated_tick",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "image",
+          "offset": "0x101434",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "image",
+          "offset": "0xfb3d4",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "reset base 0x8cb0#11 / derived 0x7ca0#11 clears it; 0x2008 base 0x7eb0#0 / derived 0x6ea0#0 reads it when mode is nonzero",
+        "docs/games/chronoclock/contract-m2.md#global-pilot"
+      ],
+      "scope": "One process-global 32-bit cell per build; RVA relocation only, not an object field or an initial-state assertion.",
+      "review": {
+        "source": "manual writer/reader pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "Queries/setter only; no equivalence claim for frame updates, external clocks, button consumers or Rust runtime behaviour."
+      }
+    },
+    {
+      "id": "clock.frame-delta",
+      "logical_target": {
+        "region": "object",
+        "object": "clock",
+        "field": "frame_delta",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "image",
+          "offset": "0x1013f8",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "image",
+          "offset": "0xfb398",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "reset base 0x8cb0#10 / derived 0x7ca0#10 clears it; 0x2009 base 0x7ed0#5 / derived 0x6ec0#5 reads it when mode is nonzero",
+        "docs/games/chronoclock/contract-m2.md#global-pilot"
+      ],
+      "scope": "One process-global 32-bit cell per build; RVA relocation only, not an object field or an initial-state assertion.",
+      "review": {
+        "source": "manual writer/reader pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "Queries/setter only; no equivalence claim for frame updates, external clocks, button consumers or Rust runtime behaviour."
+      }
+    },
+    {
+      "id": "clock.mode",
+      "logical_target": {
+        "region": "object",
+        "object": "clock",
+        "field": "mode",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "image",
+          "offset": "0x101438",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "image",
+          "offset": "0xfb3d8",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "mode setter base 0x8cf0#2 / derived 0x7ce0#2 stores ecx and resets the same four clock words; both query helpers branch on this word",
+        "docs/games/chronoclock/contract-m2.md#global-pilot"
+      ],
+      "scope": "One process-global 32-bit cell per build; RVA relocation only, not an object field or an initial-state assertion.",
+      "review": {
+        "source": "manual writer/reader pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "Queries/setter only; no equivalence claim for frame updates, external clocks, button consumers or Rust runtime behaviour."
+      }
+    },
+    {
+      "id": "buttons.shifted-layout",
+      "logical_target": {
+        "region": "object",
+        "object": "button_layout",
+        "field": "shifted_layout",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "image",
+          "offset": "0x101448",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "image",
+          "offset": "0xfb3e8",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "writer 0x2087 base 0x7a300 -> 0x8060 / derived 0x76c10 -> 0x7050 stores arg != 0; getter base 0x8070 / derived 0x7060; independent base role: docs/games/amatsutsumi/research.md (button group data, 0x2087/0x2214)",
+        "docs/games/chronoclock/contract-m2.md#global-pilot"
+      ],
+      "scope": "One process-global 32-bit cell per build; RVA relocation only, not an object field or an initial-state assertion.",
+      "review": {
+        "source": "manual writer/reader pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "Queries/setter only; no equivalence claim for frame updates, external clocks, button consumers or Rust runtime behaviour."
       }
     }
   ]

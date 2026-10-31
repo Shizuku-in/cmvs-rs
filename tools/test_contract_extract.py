@@ -1,6 +1,7 @@
 """Synthetic machine-code tests for the M1 lifter; python -I tools/test_contract_extract.py."""
 import copy
 import importlib.util
+import json
 import struct
 from pathlib import Path
 import unittest
@@ -341,6 +342,65 @@ def global_store(target):
 
 
 class RegionTests(unittest.TestCase):
+    def test_relocated_clock_queries(self):
+        fields = ("current", "previous", "accumulated", "delta", "mode")
+        offsets = {sha: {f: hex(start + i * 4) for i, f in enumerate(fields)}
+                   for sha, start in ((BASE, 0x5000), (DERIVED, 0x6000))}
+        maps = (FLAGS,) + tuple((f, "image:clock", f, 32,
+                                {sha: offsets[sha][f] for sha in offsets}, None) for f in fields)
+
+        def query(sha, delta=False, invert=False):
+            if delta:
+                code = ["833d0000000000", "7500", "8b0500000000", "2b0500000000", "eb00",
+                        "8b0500000000"]
+                refs = {0: [global_ref(offsets[sha]["mode"])], 1: [{"kind": "local", "target": 5}],
+                        2: [global_ref(offsets[sha]["current"])], 3: [global_ref(offsets[sha]["previous"])],
+                        4: [{"kind": "local", "target": 6}], 5: [global_ref(offsets[sha]["delta"])]}
+            else:
+                # CMOV reads its memory source even when the condition is false.
+                code = ["8b0500000000", "833d0000000000", "0f450500000000" if invert else "0f440500000000"]
+                refs = {i: [global_ref(offsets[sha][f])] for i, f in enumerate(("accumulated", "mode", "current"))}
+            off = 0x180 if sha == BASE else 0x250
+            return function(code + ["8983" + struct.pack("<I", off).hex()] + ret(0x4000) + EPILOGUE, refs)
+
+        for delta in (False, True):
+            self.assertEqual(compare(query(BASE, delta), query(DERIVED, delta), maps)["status"], "equivalent")
+        self.assertEqual(compare(query(BASE), query(DERIVED, invert=True), maps)["status"], "different")
+        for delta in (False, True):
+            contract = lift(BASE, query(BASE, delta), maps)["contract"]
+            targets = cc.validate(contract)
+            for mode in (0, 1, 2, 0x80000000, 0xffffffff):
+                initial = {k: 0 for k in targets}
+                values = dict(current=1, previous=0xffffffff, accumulated=123, delta=17, mode=mode)
+                for f, value in values.items():
+                    initial[cc.encode(dict(region="object", object="clock", field=f))] = value
+                result = cc.execute(contract, {}, initial)
+                expected = (17 if mode else 2) if delta else (123 if mode else 1)
+                output = cc.encode(dict(region="vm", object="vm", field="flags"))
+                self.assertEqual(result["state"][output], expected)
+                self.assertEqual((result["exit"], result["released"]), (["return", 0x4000], 0))
+                if not delta:
+                    reads = [e[1] for e in result["events"] if e[0] == "read_state"]
+                    self.assertEqual(len(reads), 3)
+                    self.assertEqual({json.loads(k)["field"] for k in reads},
+                                     {"accumulated", "mode", "current"})
+
+    def test_relocated_boolean_global_setter(self):
+        def setter(target, invert=False):
+            code = READ_SP4 + ["33c0", "85c9", "0f94c0" if invert else "0f95c0", "890500000000"]
+            return function(code + ret(0x4004) + EPILOGUE, {6: [global_ref(target)]})
+        a, b = setter("0x5000"), setter("0x6000")
+        self.assertEqual(compare(a, b, (GLOBAL,))["status"], "equivalent")
+        self.assertEqual(compare(a, setter("0x6000", invert=True), (GLOBAL,))["status"], "different")
+        self.assertEqual(compare(a, setter("0x6004"), (GLOBAL,))["issues"][0]["issue"], "unproven-mapping")
+        contract = lift(BASE, a, (GLOBAL,))["contract"]
+        key = cc.encode(dict(region="object", object="globals", field="g"))
+        for value in (0, 1, 2, 0x7fffffff, 0x80000000, 0xffffffff):
+            stack = {-4 + i: (value >> (8 * i)) & 0xff for i in range(4)}
+            result = cc.execute(contract, stack, {key: 42})
+            self.assertEqual(result["state"][key], int(value != 0))
+            self.assertEqual((result["exit"], result["released"]), (["return", 0x4004], 4))
+
     def test_global_mapping_and_readonly_constant(self):
         maps = (FLAGS, ERRORS, GLOBAL)
         self.assertEqual(compare(global_store("0x5000"), global_store("0x6000"), maps)["status"], "equivalent")
