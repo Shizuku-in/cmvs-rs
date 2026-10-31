@@ -37,7 +37,7 @@ inherit x64 base-sha256=dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91
 0x201c unreviewed 0x7ec86 0x70d74
 0x201d inherited 0x7ec93 0x70d7e inherit=x64:8f83789855b0cbf83d1c47c5d620b0d5793d451868910fc1553f2c2f02e62ed3
 0x201e inherited 0x7ecb6 0x70d88 inherit=x64:ed716edc3ef0a8459667054f3afcba9cf1daa88b1f17735703153b8436c2690b
-0x201f unreviewed 0x7ecd9 0x70d92
+0x201f reviewed 0x7ecd9 0x70d92 review=games/chronoclock/vm-semantics.md
 0x2020 unreviewed 0x7ecfb 0x70d9c
 0x2021 unreviewed 0x7ed08 0x70da6
 0x2022 unreviewed 0x7ed15 0x70db0

@@ -113,6 +113,21 @@ class ComparisonTests(unittest.TestCase):
         self.assertEqual(lines[4], f"0x2000 inherited 0x500 inherit=x64:{rows[0]['fingerprint']}")
         self.assertEqual(len(lines), 5)
 
+    def test_candidate_profile_keeps_review_records_verbatim(self):
+        for g in (self.base, self.derived):
+            g.update(image_base="0x140000000", table_rva="0x300")
+        binary = "binary x64 sha256={} image-base=0x140000000 table=0x300"
+        reviewed = "0x2000 reviewed 0x500 review=games/x/vm-semantics.md"
+        with tempfile.TemporaryDirectory() as root:
+            base_path, derived_path = Path(root, "base.profile"), Path(root, "derived.profile")
+            base_path.write_text(f"profile base\nbase -\n{binary.format('1'*64)}\n0x2000 base 0x100\n")
+            derived_path.write_text(f"profile derived\nbase base\n{binary.format('2'*64)}\n{reviewed}\n")
+            rows = pc.compare(self.base, self.derived)
+            self.assertEqual(rows[0]["status"], "inherited")
+            lines = pc.apply_profile(self.base, self.derived, rows, base_path, derived_path).splitlines()
+        # No inherited row is written, so no stale `inherit` header either.
+        self.assertEqual(lines[3:], [reviewed])
+
 
 if __name__ == "__main__":
     unittest.main()

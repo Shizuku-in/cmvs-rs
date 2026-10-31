@@ -29,6 +29,8 @@ pub enum CommandStatus {
     Base,
     /// A complete same-architecture fingerprint matches the root; proof is mandatory.
     Inherited,
+    /// A recorded manual review found the root semantics apply; the record is mandatory.
+    Reviewed,
     /// Present, but not yet compared with or reviewed against the base.
     Unreviewed,
 }
@@ -40,6 +42,7 @@ impl CommandStatus {
             Self::NoOp => "noop",
             Self::Base => "base",
             Self::Inherited => "inherited",
+            Self::Reviewed => "reviewed",
             Self::Unreviewed => "unreviewed",
         }
     }
@@ -93,6 +96,8 @@ pub struct EngineProfile {
     pub binaries: Vec<Binary>,
     statuses: Vec<CommandStatus>,
     inheritance: BTreeMap<u16, InheritanceProof>,
+    /// Review records, as paths relative to `docs/` of a section headed by the command.
+    reviews: BTreeMap<u16, String>,
 }
 
 impl EngineProfile {
@@ -108,6 +113,9 @@ impl EngineProfile {
     }
     pub fn inheritance(&self, command: u16) -> Option<&InheritanceProof> {
         self.inheritance.get(&command)
+    }
+    pub fn review(&self, command: u16) -> Option<&str> {
+        self.reviews.get(&command).map(String::as_str)
     }
     pub fn count(&self, status: CommandStatus) -> usize {
         self.statuses.iter().filter(|&&s| s == status).count()
@@ -160,6 +168,7 @@ impl EngineProfile {
                 .collect(),
             statuses,
             inheritance: BTreeMap::new(),
+            reviews: BTreeMap::new(),
         };
         profile.validate()?;
         Ok(profile)
@@ -202,7 +211,9 @@ impl EngineProfile {
                 (CommandStatus::NoOp, Case::NoOp(_)) => true,
                 (CommandStatus::Base, Case::Handler(_)) => self.base.is_none(),
                 (CommandStatus::Unreviewed, Case::Handler(_)) => self.base.is_some(),
-                (CommandStatus::Inherited, Case::Handler(_)) => self.base.is_some(),
+                (CommandStatus::Inherited | CommandStatus::Reviewed, Case::Handler(_)) => {
+                    self.base.is_some()
+                }
                 _ => false,
             };
             if !allowed {
@@ -215,6 +226,12 @@ impl EngineProfile {
             {
                 return Err(ProfileError::new(
                     "inherited status requires exactly one proof",
+                ));
+            }
+            if (*status == CommandStatus::Reviewed) != self.reviews.contains_key(&(command as u16))
+            {
+                return Err(ProfileError::new(
+                    "reviewed status requires exactly one review record",
                 ));
             }
             if let Some(proof) = self.inheritance(command as u16)
@@ -343,6 +360,14 @@ impl Registry {
                         "profile {} must derive from a root profile of its family",
                         profile.id
                     )));
+                }
+                // A review compares against root semantics, which only a Base command has.
+                if profile
+                    .reviews
+                    .keys()
+                    .any(|&command| base.status(command) != CommandStatus::Base)
+                {
+                    return Err(ProfileError::new("reviewed command has no root semantics"));
                 }
                 for (&command, proof) in &profile.inheritance {
                     if base.status(command) != CommandStatus::Base

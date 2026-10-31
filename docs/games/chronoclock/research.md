@@ -66,3 +66,13 @@ IDA 9.4分别导出两个构建的x64/x86，二进制身份来自各自档案，
 从Git导出`8eb8708`到忽略目录独立构建，与P2版本同参数运行《アマツツミ》trace：virtual_tick=0、种子0、16ms、百万步、RecordingBackend、ContinueWithoutImage，输入CSS1为`local/amatsutsumi/user-data/system.dat`（SHA-256 `dc20174a630f6525d70d6c4452896c716249ef2c469adf472bf6053ac0e5ef1a`），剧情槽扫描同目录；输入不写回。两份日志完整121639651字节逐字节一致，SHA-256均为`9d8e45d8e8aa5dc14202fb460f953acad04cd5f02d1d93ad83397d17bb48ca21`；两边都在第1000000步预算耗尽，退出码1。日志在`p2-amatsu-before-saved.log`、`p2-amatsu-after-saved.log`。游戏原目录没有CSS1时两版也一致早停未知变量，该早停不计入百万步验收。
 
 检查通过：`cargo fmt --check`、默认离线测试834项（12项忽略）、core离线测试56项（1项忽略）、默认/core严格Clippy、Python标准库合成指纹测试10项（含候选档案头部行）。未新增命令语义、依赖或原生设备验证；`Reviewed`/`Variant`及剩余差异人工复核仍属于P3。
+
+## 2026-10-31：M1，`0x201f` 人工复核
+
+按[分派层设计](../../design/dispatch.md) M1 引入 `Reviewed`。默认停点 `0x201f` 的指纹原因是可写全局（`unresolved-data`、`unresolved-or-mutable-data`）。CHRONOCLOCK x64 在当前 IDA 会话只读查询；基准 x64 用 IDA 9.4 `idat` 对 `local/chronoclock/p2-amatsu-x64.i64` 的临时副本批处理读取，两边输入哈希与档案一致。结论与地址表见 [VM 语义](vm-semantics.md)：处理函数相同；全局只被归档类工厂读取，取值 1、2 在基准中有专用类而本作走默认，取值 10 两边都构造 0x1C8 字节的归档类；Rust 只记录该值不解释，故登记为 `Reviewed`。
+
+默认运行参数同上节。停点前移到 `start.ps3 / 0x50 / 0x2091`，退出码 1，统计 base=0、inherited=3、reviewed=1、unreviewed=0。日志 `local/chronoclock/m1-default.log` SHA-256 `130018b6d499460b16f7bbe16bdc619e69e6d11697d7c0906c35d129f102d5a5`；去掉统计与错误行后，P2 日志是它的逐字节前缀。
+
+《アマツツミ》同上节参数重跑，日志 `local/chronoclock/m1-amatsu.log`（LF）SHA-256 `4803fe2eff8f8e1d48730847e4b94f69f6e6af356b05c2580808a72f48b28d90`，与 P2 的 `p2-amatsu-after-saved.log` 去掉 CR 后的哈希相同。P2 记录的 `9d8e45d8…` 是经 PowerShell 重定向写出的 CRLF 版本，内容一致。
+
+`0x2091` 的工具原因为未建模/可写数据引用，留待下一条复核。

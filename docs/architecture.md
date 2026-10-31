@@ -69,7 +69,7 @@
 
 - **档案**（`EngineProfile`）对应一个构建：同一构建的x86/x64 exe合为一个档案，分别登记身份与switch。命令状态为`Base`、`Inherited`、`Unreviewed`、`NoOp`或`Absent`，越界一律Absent。`Inherited`必须附同架构根/派生exe哈希及完整依赖指纹，由Registry校验证据身份；它不代表完整运行验证或Rust已经实现。初始表由`cmvs-profile table`生成，继承表经IDA导出与标准库比较，见[设计第13节](design/engine-profiles.md#13-p2-实施与使用2026-10-31)。
 - **游戏记录**（`GameRecord`，`games.txt`）把启动脚本与脚本包的 SHA-256 映射到档案，并登记游戏 ID（`0x201d` 参数）、配套 exe 和本作专属策略。选择时按数据哈希找记录，根目录存在的 exe 必须是记录中的构建；`--profile` 可显式选择（研究用，记录只在数据也匹配时生效）。没有匹配就报错，从不默认。
-- **闸门**（`CommandGate`）在runner、trace和桌面的分派链之前统一检查：Base/Inherited进入现有分派；Absent/NoOp总是报错；Unreviewed默认报错，仅研究参数放行并记录首次使用。`0x201d`声明必须与游戏记录一致。GateCounts分别统计已放行来源的分派尝试（含等待重试），不是完成数/覆盖率；trace在派生档案停点打印统计，runner暴露同一API。闸门不改变已放行命令的执行顺序与语义。
+- **闸门**（`CommandGate`）在runner、trace和桌面的分派链之前统一检查：Base/Inherited/Reviewed进入现有分派（Reviewed须引用`docs/`中以该命令号为标题的复核小节）；Absent/NoOp总是报错；Unreviewed默认报错，仅研究参数放行并记录首次使用。`0x201d`声明必须与游戏记录一致。GateCounts分别统计已放行来源的分派尝试（含等待重试），不是完成数/覆盖率；trace在派生档案停点打印统计，runner暴露同一API。闸门不改变已放行命令的执行顺序与语义。
 - `exe` 只读解析 PE 头并按 2007–2023 年观察到的固定字节形态定位唯一的系统命令 switch；其他形态显式报错。`digest` 是无依赖的 SHA-256。
 
 代码注释中不带档案前缀的原版地址一律指根档案 `cmvs-20160201`（《アマツツミ》）的 x64 exe；其他构建的地址只出现在档案表和游戏文档中。

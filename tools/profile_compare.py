@@ -156,22 +156,29 @@ def apply_profile(base, derived, rows, base_path, derived_path):
     if next(w[1] for w in left if w[0] == "base") != "-" or next(
             w[1] for w in right if w[0] == "base") != base["profile"]:
         raise ValueError("inheritance must name its root profile")
-    output = []
+    output, inherits = [], False
     for words in right:
         if words[0] == "inherit":
             continue
-        if words[0].startswith("0x"):
+        if words[0].startswith("0x") and words[1] == "reviewed":
+            # Manual review records outrank a fresh comparison and are kept verbatim.
+            if rows[int(words[0], 0)-0x2000]["status"] in ("noop", "absent"):
+                raise ValueError("reviewed command is not a handler in the export")
+        elif words[0].startswith("0x"):
             result = rows[int(words[0], 0)-0x2000]
             if words[1] not in ("unreviewed", "inherited", "noop", "absent"):
-                raise ValueError("will not overwrite reviewed or variant status")
+                raise ValueError("will not overwrite variant or unknown status")
             words = words[:2+len(binaries)]
             words[1] = result["status"]
             if result["status"] == "inherited":
                 words.append(f"inherit={base['arch']}:{result['fingerprint']}")
+                inherits = True
         output.append(" ".join(words))
+        if words is binaries[-1]:
+            header = len(output)
+    if inherits:
         # The derived exe is the profile's own binary of this arch; only the root exe is named.
-        if words is binaries[-1] and any(r["status"] == "inherited" for r in rows):
-            output.append(f"inherit {base['arch']} base-sha256={base['binary_sha256']}")
+        output.insert(header, f"inherit {base['arch']} base-sha256={base['binary_sha256']}")
     return "\n".join(output)+"\n"
 
 

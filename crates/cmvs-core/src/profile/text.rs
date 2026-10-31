@@ -116,6 +116,17 @@ const BINARY_KEYS: [&str; 8] = [
     "cases",
 ];
 
+/// A review record: a relative `.md` path under `docs/`, plain ASCII, without `..`.
+fn is_review_path(path: &str) -> bool {
+    path.ends_with(".md")
+        && path
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+        && path
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_./".contains(&b))
+}
+
 pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
     let mut lines = Lines::new(text);
     let (line, words) = lines.expect("profile", 1)?;
@@ -184,9 +195,11 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
     }
     let mut statuses = Vec::new();
     let mut inheritance = std::collections::BTreeMap::new();
+    let mut reviews = std::collections::BTreeMap::new();
     while let Some((line, words)) = lines.next() {
         let inherited = words.get(1) == Some(&"inherited");
-        if words.len() != 2 + binaries.len() + usize::from(inherited) {
+        let reviewed = words.get(1) == Some(&"reviewed");
+        if words.len() != 2 + binaries.len() + usize::from(inherited || reviewed) {
             return Err(at(
                 line,
                 "command row needs status and one address per binary",
@@ -200,6 +213,7 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
             "noop" => CommandStatus::NoOp,
             "base" => CommandStatus::Base,
             "inherited" => CommandStatus::Inherited,
+            "reviewed" => CommandStatus::Reviewed,
             "unreviewed" => CommandStatus::Unreviewed,
             _ => return Err(at(line, "unknown command status")),
         };
@@ -225,6 +239,15 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
                     fingerprint: sha(line, fingerprint)?,
                 },
             );
+        }
+        if reviewed {
+            let path = words
+                .last()
+                .expect("row length checked")
+                .strip_prefix("review=")
+                .filter(|path| is_review_path(path))
+                .ok_or_else(|| at(line, "expected review=<docs-relative .md path>"))?;
+            reviews.insert(statuses.len() as u16, path.to_owned());
         }
         statuses.push(status);
         for (binary, word) in binaries.iter_mut().zip(&words[2..]) {
@@ -261,6 +284,7 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
         binaries,
         statuses,
         inheritance,
+        reviews,
     };
     profile.validate()?;
     Ok(profile)
@@ -318,6 +342,9 @@ impl EngineProfile {
                     }
                     Case::Default => out.push_str(" -"),
                 }
+            }
+            if let Some(path) = self.review(i as u16) {
+                let _ = write!(out, " review={path}");
             }
             if let Some(proof) = self.inheritance(i as u16) {
                 let _ = write!(

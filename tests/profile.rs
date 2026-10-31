@@ -338,6 +338,86 @@ fn inherited_commands_require_identity_bound_proofs_and_pass_the_default_gate() 
 }
 
 #[test]
+fn reviewed_commands_require_a_review_record_and_pass_the_default_gate() {
+    let root = build("synthetic-root", None, &[0, 1, 2, 0], 1).to_text();
+    let derived = build(
+        "synthetic-derived",
+        Some("synthetic-root"),
+        &[0, 1, 2, 0],
+        3,
+    )
+    .to_text();
+    let record = "review=games/synthetic/vm-semantics.md";
+    let reviewed = derived.replace("0x2000 unreviewed 0x", "0x2000 reviewed 0x");
+    let line = reviewed
+        .lines()
+        .find(|l| l.starts_with("0x2000 "))
+        .unwrap()
+        .to_owned();
+    let reviewed = reviewed.replace(&line, &format!("{line} {record}"));
+    let registry = Registry::parse(&[&root, &reviewed], "").unwrap();
+    let profile = registry.profile("synthetic-derived").unwrap();
+    assert_eq!(profile.status(0), CommandStatus::Reviewed);
+    assert_eq!(profile.review(0), Some("games/synthetic/vm-semantics.md"));
+    assert_eq!(
+        Registry::parse(&[&root, &profile.to_text()], "").unwrap(),
+        registry
+    );
+    let selection = registry
+        .select(Some("synthetic-derived"), &Evidence::default())
+        .unwrap();
+    let mut gate = CommandGate::new(selection);
+    let mut code = vec![];
+    command(&mut code, 0x201d, &[0]);
+    let program = script(&code);
+    let (vm, pc) = pending_machine(&program);
+    assert_eq!(gate.check(&vm, pc, 0), Ok(None));
+    assert_eq!(gate.counts().reviewed, 1);
+    assert_eq!(gate.counts().inherited + gate.counts().unreviewed, 0);
+    for invalid in [
+        reviewed.replace(&format!(" {record}"), ""),
+        reviewed.replace(record, "review=../vm-semantics.md"),
+        reviewed.replace(record, "review=/games/x.md"),
+        reviewed.replace(record, "review=games/synthetic/vm-semantics.txt"),
+        reviewed.replace(record, "review=games//vm-semantics.md"),
+        reviewed.replace("0x2000 reviewed", "0x2000 unreviewed"),
+        // A review record on any other status, or a review of a command the root lacks.
+        reviewed.replace("0x2000 reviewed", "0x2000 inherited"),
+    ] {
+        assert!(Registry::parse(&[&root, &invalid], "").is_err());
+    }
+    let root_noop = root.replace("0x2000 base", "0x2000 noop");
+    assert!(Registry::parse(&[&root_noop, &reviewed], "").is_err());
+}
+
+/// Review records point at a `docs/` section headed by the command, so the evidence a
+/// profile cites cannot silently disappear.
+#[test]
+fn embedded_review_records_point_at_existing_command_sections() {
+    let docs = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("docs");
+    for profile in Registry::builtin().profiles() {
+        for command in 0..profile.statuses().len() as u16 {
+            let Some(path) = profile.review(command) else {
+                continue;
+            };
+            let text = std::fs::read_to_string(docs.join(path))
+                .unwrap_or_else(|e| panic!("{}: {path}: {e}", profile.id));
+            let opcode = format!("0x{:04x}", 0x2000 + command);
+            let names = |l: &str| {
+                l.match_indices(&opcode).any(|(i, _)| {
+                    !l[i + opcode.len()..].starts_with(|c: char| c.is_ascii_hexdigit())
+                })
+            };
+            assert!(
+                text.lines().any(|l| l.starts_with('#') && names(l)),
+                "{}: {path} has no heading for {opcode}",
+                profile.id
+            );
+        }
+    }
+}
+
+#[test]
 fn profile_tables_reject_contradictions_and_mixed_builds() {
     let root = build("synthetic-root", None, &[0, 1, 2], 1).to_text();
     let reject = |text: String, needle: &str| {
@@ -559,6 +639,7 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
         assert_eq!(
             profile.count(CommandStatus::Base)
                 + profile.count(CommandStatus::Inherited)
+                + profile.count(CommandStatus::Reviewed)
                 + profile.count(CommandStatus::Unreviewed),
             handlers
         );

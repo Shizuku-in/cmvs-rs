@@ -1,6 +1,6 @@
 # 系统命令分派层设计草案
 
-> 状态：**草案**（2026-10-31，基线 `da26a22`）。M1 随草案一起开始实施；M2 起的接口在实施前再确认。档案、证据状态与闸门的来历见[引擎档案层设计](engine-profiles.md)，本文不重复。
+> 状态：**草案；M1 已实现**（2026-10-31，基线 `da26a22`，结果见第 9 节）。M2 起的接口在实施前再确认。档案、证据状态与闸门的来历见[引擎档案层设计](engine-profiles.md)，本文不重复。
 
 ## 1. 要解决的问题
 
@@ -132,3 +132,14 @@ pub static VARIANTS: &[(VariantId, u16, Entry)] = &[];
 | M5 | 封包代际、时代锚点 | 另行设计 |
 
 M3 应在 M4 之前完成，第一个变体就不需要修改宿主签名。
+
+## 9. M1 实施结果（2026-10-31）
+
+基线 `0fc79d9`。新增 `CommandStatus::Reviewed` 与 4.2 的 `review=` 记录：解析要求路径为 `docs/` 下的相对 `.md`、不含 `..`；只能出现在派生档案的处理函数行，根档案对应命令必须是 `Base`。仓库测试检查每条记录指向的文档存在，且有以该命令号为标题的小节。闸门把 `Reviewed` 当作根语义放行，`GateCounts` 增加 `reviewed`；`cmvs-profile identify/show` 与 trace 统计行同步列出。比较工具重新生成候选档案时原样保留 `reviewed` 行，不再整体拒绝。
+
+| 验收项 | 结果 |
+|---|---|
+| 复核记录 | CHRONOCLOCK `0x201f` 登记为 `Reviewed`，证据见[VM 语义](../games/chronoclock/vm-semantics.md)；处理函数两边相同，读取方只在取值 1、2 上不同，Rust 不解释该值 |
+| CHRONOCLOCK 默认 trace | 停点由 `start.ps3 / 0x1a / 0x201f` 前移到 `start.ps3 / 0x50 / 0x2091`；统计 inherited=3、reviewed=1；与 P2 日志的共同前缀逐字节一致 |
+| 《アマツツミ》回归 | 与 P2 同参数百万步 trace，去掉 P2 日志的 CR 后逐字节一致（1220073 行），均以预算耗尽退出码 1 |
+| 检查 | `cargo fmt --check`；默认离线测试 836 项通过（12 项忽略）；严格 Clippy；Python 合成测试 11 项 |

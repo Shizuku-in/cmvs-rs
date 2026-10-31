@@ -75,6 +75,7 @@ pub struct CommandGate<'a> {
 pub struct GateCounts {
     pub base: u64,
     pub inherited: u64,
+    pub reviewed: u64,
     pub unreviewed: u64,
 }
 
@@ -103,8 +104,8 @@ impl<'a> CommandGate<'a> {
     }
     pub fn summary_line(&self) -> String {
         format!(
-            "# profile gate accepted attempts: base={} inherited={} unreviewed={} (includes wait retries; not completion/coverage)",
-            self.counts.base, self.counts.inherited, self.counts.unreviewed
+            "# profile gate accepted attempts: base={} inherited={} reviewed={} unreviewed={} (includes wait retries; not completion/coverage)",
+            self.counts.base, self.counts.inherited, self.counts.reviewed, self.counts.unreviewed
         )
     }
     /// Checks the pending command; returns it on the first time an unreviewed command passes.
@@ -142,6 +143,10 @@ impl<'a> CommandGate<'a> {
             }
             CommandStatus::Inherited => {
                 self.counts.inherited += 1;
+                Ok(None)
+            }
+            CommandStatus::Reviewed => {
+                self.counts.reviewed += 1;
                 Ok(None)
             }
             CommandStatus::Absent => Err(error(GateErrorKind::Absent)),
