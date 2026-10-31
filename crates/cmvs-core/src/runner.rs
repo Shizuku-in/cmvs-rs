@@ -45,7 +45,7 @@ mod lifecycle;
 mod preferences;
 mod save;
 mod slot_edit;
-pub use save::{SaveTime, thumbnail_bmp};
+pub use save::{SaveTime, snapshot_layout_supported, thumbnail_bmp};
 
 enum SystemOutput {
     New(NewSystemSave),
@@ -286,6 +286,9 @@ impl<'a> Startup<'a> {
     /// Research only: let unreviewed commands run with the base profile's semantics.
     pub fn set_allow_unreviewed(&mut self, allow: bool) {
         self.gate.set_allow_unreviewed(allow);
+    }
+    pub fn set_allow_presumed(&mut self, allow: bool) {
+        self.gate.set_allow_presumed(allow);
     }
     pub fn gate(&self) -> &CommandGate<'a> {
         &self.gate

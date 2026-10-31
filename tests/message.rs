@@ -985,6 +985,71 @@ fn script_with_text(code: &[u8], text: &[u8]) -> Script {
 }
 
 #[test]
+fn encoded_length_skips_controls_and_counts_only_double_byte_ruby_base() {
+    for (bytes, expected) in [
+        (&b"\0"[..], 0),
+        (&b"ABC\xa6\x82\xa0\0"[..], 6),
+        (&b"A\\n\\c\\t\\wc\\ws\\wxB\0"[..], 2),
+        (&b"{ab\x82\xa0\x82\xa2/ruby\x82\xa4}Z\0"[..], 5),
+        (&b"{ascii/ruby}\0"[..], 0),
+        (&b"\x82\\\0"[..], 2),
+    ] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 300, 100]);
+        call(&mut code, 0x2119, &[0, 7]);
+        let program = script_with_text(&code, bytes);
+        let mut vm = Machine::new(&program).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 1);
+        let before = messages.text(7).unwrap().clone();
+        for i in 1..7 {
+            vm.state_mut().set_system_integer(i, 100 + i).unwrap();
+        }
+        run(&mut vm, &mut messages, 1);
+        assert_eq!(vm.state().system_integer(0), Some(expected));
+        for i in 1..7 {
+            assert_eq!(vm.state().system_integer(i), Some(100 + i));
+        }
+        assert_eq!(messages.text(7), Some(&before));
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.pc(), code.len());
+    }
+}
+
+#[test]
+fn encoded_length_rejects_malformed_input_or_missing_text_without_committing() {
+    for (bytes, slot) in [
+        (&b"\\q\0"[..], 7),
+        (&b"\\\0"[..], 7),
+        (&b"\\w\0"[..], 7),
+        (&b"\x82\0"[..], 7),
+        (&b"{base\0"[..], 7),
+        (&b"{base/ruby\0"[..], 7),
+        (&b"A\0"[..], 12),
+        (&b"A\0"[..], u32::MAX),
+        (&b"A\0"[..], 6),
+    ] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 300, 100]);
+        call(&mut code, 0x2119, &[0, slot]);
+        let program = script_with_text(&code, bytes);
+        let mut vm = Machine::new(&program).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 1);
+        let before = messages.text(7).unwrap().clone();
+        vm.state_mut().set_system_integer(0, 123).unwrap();
+        pending(&mut vm);
+        for _ in 0..2 {
+            assert!(messages.try_handle(&mut vm).is_err());
+            assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x119)));
+            assert_eq!(vm.stack().len_bytes(), 8);
+            assert_eq!(vm.state().system_integer(0), Some(123));
+            assert_eq!(messages.text(7), Some(&before));
+        }
+    }
+}
+
+#[test]
 fn recorded_output_only_release_edge_skips_reveal_not_press_edge() {
     let mut code = vec![];
     create(&mut code, 0, 7, [0, 0, 100, 100]);
@@ -2599,6 +2664,133 @@ fn recorded_output_rejects_missing_windows_bad_references_and_short_arguments() 
         assert_eq!(messages.text(7), before.as_ref());
         assert_eq!(vm.pending_system(), command);
         assert_eq!(vm.stack().len_bytes(), 4 * words.len());
+    }
+}
+
+#[test]
+fn basic_text_layout_counts_reset_on_wrap_and_preserve_text_and_unrelated_results() {
+    for (bytes, expected) in [
+        (&b""[..], [1, 0, 0]),
+        (&b"abcde"[..], [2, 4, 1]),
+        (&b"\x82\xa0\x82\xa2\x82\xa4"[..], [2, 4, 2]),
+        (&b"\x82\xa0\x82\xa2\x81\x41"[..], [1, 6, 6]),
+        (&b"\x82\xa0\x82\xa2{\x82\xa4\x82\xa6/x}"[..], [2, 4, 4]),
+        (&b"{ascii/ruby}"[..], [1, 0, 0]),
+        (&b"ab\\nc"[..], [2, 2, 1]),
+        (&b"a\\cb\\tc\\wxd"[..], [1, 4, 4]),
+    ] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 30, 100]);
+        call(&mut code, 0x2143, &[10, 0]);
+        call(&mut code, 0x2112, &[0, 7]);
+        let mut data = bytes.to_vec();
+        data.push(0);
+        let script = script_with_text(&code, &data);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 2);
+        let before = messages.text(7).cloned();
+        for i in 0..7 {
+            vm.state_mut().set_system_integer(i, 99).unwrap();
+        }
+        run(&mut vm, &mut messages, 1);
+        assert_eq!(messages.text(7), before.as_ref());
+        assert_eq!(
+            [0, 1, 4].map(|i| vm.state().system_integer(i).unwrap()),
+            expected,
+            "{bytes:?}"
+        );
+        for i in [2, 3, 5, 6] {
+            assert_eq!(vm.state().system_integer(i), Some(99));
+        }
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
+}
+
+#[test]
+fn basic_layout_errors_are_retryable_and_bound_the_callers_sixteen_ruby_flags() {
+    let mut overflow = b"\\n".repeat(16);
+    overflow.extend(b"{a/b}");
+    for bytes in [
+        b"\\q".to_vec(),
+        b"\\w".to_vec(),
+        vec![0x81],
+        b"{a/b".to_vec(),
+        overflow,
+    ] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 100, 100]);
+        call(&mut code, 0x2112, &[0, 7]);
+        let mut data = bytes.clone();
+        data.push(0);
+        let script = script_with_text(&code, &data);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 1);
+        pending(&mut vm);
+        let before = messages.text(7).cloned();
+        let pc = vm.pc();
+        for i in 0..7 {
+            vm.state_mut().set_system_integer(i, 99).unwrap();
+        }
+        for _ in 0..2 {
+            assert!(messages.try_handle(&mut vm).is_err(), "{bytes:?}");
+            assert_eq!(messages.text(7), before.as_ref());
+            assert_eq!(vm.pending_system(), Some((pc, 0x112)));
+            assert_eq!(vm.stack().len_bytes(), 8);
+            for i in 0..7 {
+                assert_eq!(vm.state().system_integer(i), Some(99));
+            }
+        }
+    }
+    for words in [
+        vec![0, 12],
+        vec![0, u32::MAX],
+        vec![0, 2],
+        vec![100, 7],
+        vec![7],
+        vec![],
+    ] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 100, 100]);
+        call(&mut code, 0x2112, &words);
+        let script = script_with_text(&code, b"x\0");
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 1);
+        pending(&mut vm);
+        let before = messages.text(7).cloned();
+        let pc = vm.pc();
+        assert!(messages.try_handle(&mut vm).is_err());
+        assert_eq!(messages.text(7), before.as_ref());
+        assert_eq!(vm.pending_system(), Some((pc, 0x112)));
+        assert_eq!(vm.stack().len_bytes(), 4 * words.len());
+    }
+}
+
+#[test]
+fn basic_layout_string_bank_keeps_lower_stack_and_only_ruby_writes_need_flags() {
+    for (bytes, lines) in [
+        (b"\\n".repeat(32), 33),
+        ([b"\\n".repeat(15), b"{a/b}".to_vec()].concat(), 16),
+    ] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 100, 100]);
+        code.extend(0x440u16.to_le_bytes());
+        code.extend(4u16.to_le_bytes());
+        code.extend(123u32.to_le_bytes());
+        call(&mut code, 0x2112, &[0x80000003, 7]);
+        let script = script_with_text(&code, b"\0");
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        vm.state_mut().set_string(3, &bytes).unwrap();
+        run(&mut vm, &mut messages, 2);
+        assert_eq!(
+            [0, 1, 4].map(|i| vm.state().system_integer(i).unwrap()),
+            [lines, 0, 0]
+        );
+        assert_eq!(vm.stack().len_bytes(), 4);
+        assert_eq!(vm.stack().peek_u32(4).unwrap(), 123);
     }
 }
 

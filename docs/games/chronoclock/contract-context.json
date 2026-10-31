@@ -1,0 +1,48 @@
+{
+  "schema": "cmvs-contract-context-v1",
+  "revision": "chronoclock-m2-2026-11-01",
+  "sides": [
+    {
+      "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+      "arch": "x64",
+      "image_base": "0x140000000",
+      "table_rva": "0x84cf8",
+      "vm_stack": {
+        "sp_offset": "0x14270",
+        "base_offset": "0x14268"
+      },
+      "evidence": [
+        "dispatcher 0x1400823a6: push rbx; sub rsp,0x20; movzx eax,dx; mov rbx,rcx; switch table rva 0x84cf8 (checked from exe bytes by contract_extract.py)",
+        "parameter reads movsxd SP from VM +0x14270 and add VM +0x14268 base, e.g. 0x201f case 0x140082619; docs/games/chronoclock/vm-semantics.md 0x201f/0x2091",
+        "return code: bit14 advance PC and release low byte, bit15 yield, bit13 repeat counter; crates/cmvs-core/src/vm.rs SystemResult",
+        "stack cookie: FLIRT __security_check_cookie at 0xc65f0 (8 instructions: cmp rcx,[cookie]; rol/test high 16 bits; ret, else report failure), cookie global 0xfe538 loaded and xor-ed with rsp in /GS prologues; success path changes only rcx and flags; relies on the CRT clearing the cookie top 16 bits"
+      ],
+      "stack_cookie": {
+        "cookie_rva": "0xfe538",
+        "check_rva": "0xc65f0",
+        "check_body_sha256": "22e8bd3722627411fb51d6002e95a0864d58cbafd31ff68a7ddf8ad64e5ea044"
+      }
+    },
+    {
+      "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+      "arch": "x64",
+      "image_base": "0x140000000",
+      "table_rva": "0x81344",
+      "vm_stack": {
+        "sp_offset": "0x14270",
+        "base_offset": "0x14268"
+      },
+      "evidence": [
+        "dispatcher 0x14007ea66: same prologue and switch shape, table rva 0x81344 (checked from exe bytes)",
+        "0x201f case reads SP-4 through VM +0x14270/+0x14268; docs/games/chronoclock/vm-semantics.md 0x201f",
+        "return code rule shared with base; dispatcher caller not lifted (trust boundary in command-contracts-m1.md)",
+        "stack cookie: FLIRT __security_check_cookie at 0xc1790 (8 instructions: cmp rcx,[cookie]; rol/test high 16 bits; ret, else report failure), cookie global 0xf84e8 loaded and xor-ed with rsp in /GS prologues; success path changes only rcx and flags; relies on the CRT clearing the cookie top 16 bits"
+      ],
+      "stack_cookie": {
+        "cookie_rva": "0xf84e8",
+        "check_rva": "0xc1790",
+        "check_body_sha256": "22e8bd3722627411fb51d6002e95a0864d58cbafd31ff68a7ddf8ad64e5ea044"
+      }
+    }
+  ]
+}

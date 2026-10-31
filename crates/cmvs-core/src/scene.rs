@@ -376,6 +376,9 @@ impl SceneHost {
         if command == 0x23 {
             return self.destroy_child(vm, pc);
         }
+        if command == 0x26 {
+            return self.set_shown(vm, pc);
+        }
         if matches!(command, 0x27 | 0x28) {
             return self.query_or_move(vm, pc, command);
         }
@@ -426,6 +429,32 @@ impl SceneHost {
             }
             _ => unreachable!("slot is parsed for object commands"),
         }
+        Ok(true)
+    }
+
+    /// 0x2026: SP-4 object, SP-8 child (negative selects self), SP-12 boolean.
+    /// Evidence and build-specific addresses: docs/games/chronoclock/vm-semantics.md.
+    /// Missing/invalid targets stay explicit errors: VM +12056 bit 0x10 is unmodeled.
+    fn set_shown(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<bool, DecodeError> {
+        let fail = |why| error(pc, 0x2026, why);
+        let slot = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
+        let child = vm.stack().peek_u32(8).map_err(|e| fail(e.0))? as i32;
+        let shown = vm.stack().peek_u32(12).map_err(|e| fail(e.0))? != 0;
+        let parent = u8::try_from(slot)
+            .ok()
+            .and_then(|slot| self.objects.get_mut(&slot))
+            .ok_or_else(|| fail("visibility needs an existing object in slots 0..255"))?;
+        let target = if child < 0 {
+            parent
+        } else {
+            u16::try_from(child)
+                .ok()
+                .filter(|id| *id < 768)
+                .and_then(|id| parent.children.get_mut(&id))
+                .ok_or_else(|| fail("visibility needs an existing child in slots 0..767"))?
+        };
+        vm.complete_system(SystemResult(0x400c))?;
+        target.shown = shown;
         Ok(true)
     }
 
