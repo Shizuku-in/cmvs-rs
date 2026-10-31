@@ -114,8 +114,15 @@ def validate(contract):
     targets = {}
     unsupported = []
 
-    def target(t, width):
-        keys(t, "region object field")
+    def target(t, width, args, refs):
+        # Optional "index": a 64-bit expression selecting one element of an indexed
+        # logical object or array field (M2). Overlap is checked on the static part.
+        if isinstance(t, dict) and "index" in t:
+            keys(t, "region object field index")
+            require(expression(t["index"], args, refs) == 64, "index must be a 64-bit expression")
+            t = {k: t[k] for k in ("region", "object", "field")}
+        else:
+            keys(t, "region object field")
         require(t["region"] in ("vm", "script", "object", "save", "config"), "unknown region")
         name(t["object"])
         name(t["field"])
@@ -133,7 +140,7 @@ def validate(contract):
         require(kind in ("branch", "leaf"), "unknown tree kind")
         keys(node, "kind events condition then else" if kind == "branch" else "kind events exit")
         counters["nodes"] += 1
-        require(counters["nodes"] <= 128, "tree node limit")
+        require(counters["nodes"] <= 256, "tree node limit")
         require(isinstance(node["events"], list), "invalid events")
         args, refs, used = dict(args), dict(refs), set(used)
         for event in node["events"]:
@@ -154,7 +161,7 @@ def validate(contract):
                 require(event["parameter"] not in args, "duplicate parameter read")
                 args[event["parameter"]] = params[event["parameter"]]
             elif op in ("read_state", "write_state"):
-                target(event["target"], event["width"])
+                target(event["target"], event["width"], args, refs)
                 if op == "read_state":
                     refs[event["id"]] = event["width"]
                 else:
@@ -167,10 +174,15 @@ def validate(contract):
             tree(node["else"], args, refs, used, depth + 1)
         else:
             counters["leaves"] += 1
-            require(counters["leaves"] <= 64, "leaf limit")
+            require(counters["leaves"] <= 128, "leaf limit")
             keys(node["exit"], "kind code")
-            require(node["exit"]["kind"] in ("return", "yield", "stop"), "unknown exit kind")
-            if node["exit"]["kind"] != "return":
+            require(node["exit"]["kind"] in ("return", "yield", "stop", "undefined"), "unknown exit kind")
+            if node["exit"]["kind"] == "undefined":
+                # Out-of-bounds or null access the original does not check: the path is
+                # outside the modelled domain; it compares only by its condition.
+                require(node["exit"]["code"] == ["bv", 32, "00000000"] and not node["events"],
+                        "undefined leaf carries no effects")
+            elif node["exit"]["kind"] != "return":
                 unsupported.append("unsupported-effect")
             require(expression(node["exit"]["code"], args, refs) == 32, "return code must be 32 bits")
 
@@ -202,6 +214,8 @@ def canonical(contract):
         for event in node["events"]:
             if "value" in event:
                 event["value"] = expr(event["value"], refs)
+            if "index" in event.get("target", {}):
+                event["target"]["index"] = expr(event["target"]["index"], refs)
             if "parameter" in event:
                 event["parameter"] = params[event["parameter"]]
             old = event["id"]
@@ -244,6 +258,14 @@ def evaluate(expr, args, refs):
     return value & ((1 << width) - 1), width
 
 
+def cell(target, args, refs):
+    """State key of a (possibly indexed) target, and its static part for initial values."""
+    static = encode({k: target[k] for k in ("region", "object", "field")})
+    if "index" not in target:
+        return static, static
+    return "%s#%d" % (static, evaluate(target["index"], args, refs)[0]), static
+
+
 def execute(contract, stack, initial):
     """Concrete shared byte-stack/state input; a witness is never an equivalence proof."""
     params = {p["id"]: p for p in contract["parameters"]}
@@ -260,11 +282,12 @@ def execute(contract, stack, initial):
                 args[p["id"]] = value, p["width"]
                 trace.append((op, offset, p["width"], value))
             elif op == "read_state":
-                key = encode(event["target"])
-                refs[event["id"]] = state[key], event["width"]
-                trace.append((op, key, event["width"], state[key]))
+                key, static = cell(event["target"], args, refs)
+                value = state[key] if key in state else initial[static]
+                refs[event["id"]] = value, event["width"]
+                trace.append((op, key, event["width"], value))
             elif op == "write_state":
-                key = encode(event["target"])
+                key, _ = cell(event["target"], args, refs)
                 value, _ = evaluate(event["value"], args, refs)
                 state[key] = value
                 trace.append((op, key, event["width"], value))
@@ -272,13 +295,13 @@ def execute(contract, stack, initial):
                 released += event["bytes"]
                 trace.append((op, event["bytes"]))
         if node["kind"] == "leaf":
-            return {"events": trace, "exit": evaluate(node["exit"]["code"], args, refs)[0],
+            return {"events": trace, "exit": [node["exit"]["kind"], evaluate(node["exit"]["code"], args, refs)[0]],
                     "released": released, "state": state}
         condition, _ = evaluate(node["condition"], args, refs)
         node = node["then"] if condition else node["else"]
 
 
-def compare(left, right, witness_budget=256):
+def compare(left, right, witness_budget=2048):
     require(integer(witness_budget) and 0 <= witness_budget <= 4096, "invalid witness budget")
     unsupported = []
     targets = {}
@@ -309,6 +332,28 @@ def compare(left, right, witness_budget=256):
         candidates.append(({offset: 1}, {k: 0 for k in targets}))
     for key in sorted(targets):
         candidates.append(({}, {k: int(k == key) for k in targets}))
+    # Boundary values: each parameter and state cell at constants of either contract +-1.
+    constants = set()
+
+    def collect(value):
+        if isinstance(value, list):
+            if value and value[0] == "bv":
+                constants.add(int(value[2], 16))
+            for item in value:
+                collect(item)
+        elif isinstance(value, dict):
+            for item in value.values():
+                collect(item)
+    collect([left["tree"], right["tree"]])
+    boundary = sorted({c + d for c in constants for d in (-1, 0, 1) if c + d >= 0})[:64]
+    params = sorted({(p["stack_offset"], p["width"]) for c in (left, right) for p in c["parameters"]})
+    for value in boundary:
+        for offset, width in params:
+            masked = value & ((1 << width) - 1)
+            candidates.append(({offset + i: (masked >> (8 * i)) & 0xff for i in range(width // 8)},
+                               {k: 0 for k in targets}))
+        for key, width in sorted(targets.items()):
+            candidates.append(({}, {k: (value & ((1 << w) - 1)) if k == key else 0 for k, w in targets.items()}))
     for stack, initial in candidates[:witness_budget]:
         x, y = execute(left, stack, initial), execute(right, stack, initial)
         if x != y:

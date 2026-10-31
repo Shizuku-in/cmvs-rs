@@ -36,10 +36,15 @@ class Reader:
 
 
 def decode(raw):
-    """Return (mnemonic, operands, extra) with operands as tuples:
+    return decode_ex(raw)[:3]
+
+
+def decode_ex(raw):
+    """Return (mnemonic, operands, extra, rip_disp_pos) with operands as tuples:
     ("reg", name, width), ("imm", value, width), ("mem", base, index, scale, disp, width),
     ("rel", displacement). `extra` holds a condition code for jcc/setcc/cmovcc."""
     r = Reader(raw)
+    rip = []
     opsize16 = rex = 0
     while True:
         b = r.take("B")
@@ -47,7 +52,7 @@ def decode(raw):
             opsize16 = 1
         elif b == 0xf3 and raw[r.pos:] == bytes((0xc3,)):
             r.pos += 1
-            return "ret", [], None
+            return "ret", [], None, None
         elif b in (0xf0, 0xf2, 0xf3, 0x2e, 0x3e, 0x26, 0x36, 0x64, 0x65, 0x67):
             raise Unsupported("unsupported prefix %02x" % b)
         else:
@@ -77,6 +82,7 @@ def decode(raw):
                 base = REG64[bas | (rexb << 3)]
                 disp = 0
         elif rm == 5 and mod == 0:
+            rip.append(r.pos)
             base, disp = "rip", r.take("<i")
         else:
             base, disp = REG64[rm | (rexb << 3)], 0
@@ -190,4 +196,4 @@ def decode(raw):
         raise Unsupported("opcode %02x" % b)
     if r.pos != len(raw):
         raise Unsupported("encoding length mismatch")
-    return out[0], out[1], out[2] if len(out) > 2 else None
+    return out[0], out[1], out[2] if len(out) > 2 else None, rip[0] if rip else None

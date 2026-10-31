@@ -1,16 +1,31 @@
 {
   "schema": "cmvs-contract-mappings-v1",
-  "revision": "chronoclock-m1-pilot-2026-10-31",
+  "revision": "chronoclock-m2-pilot-2026-11-01",
   "entries": [
     {
       "id": "vm.main-image-manager",
-      "logical_target": {"region": "vm", "object": "vm", "field": "main_image_manager", "width": 64,
-                         "points_to": "main_image_manager"},
+      "logical_target": {
+        "region": "vm",
+        "object": "vm",
+        "field": "main_image_manager",
+        "width": 64,
+        "points_to": "main_image_manager"
+      },
       "sides": [
-        {"binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5", "arch": "x64",
-         "base_object": "vm", "offset": "0x1298", "width": 64},
-        {"binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d", "arch": "x64",
-         "base_object": "vm", "offset": "0x1298", "width": 64}
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "vm",
+          "offset": "0x1298",
+          "width": 64
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "vm",
+          "offset": "0x1298",
+          "width": 64
+        }
       ],
       "evidence": [
         "writers: base 0x14001530b (store constructed manager) / 0x140016bd3 (teardown); derived 0x14001430b / 0x140015bd3",
@@ -18,18 +33,36 @@
         "docs/games/chronoclock/vm-semantics.md#图像缓存提示与换图组2026-10-31-复核"
       ],
       "scope": "VM object rooted at dispatcher rbx; pointer field only, never written by lifted commands",
-      "review": {"source": "manual pilot review", "date": "2026-10-31", "status": "pilot",
-                 "limitations": "points_to assumes initialisation succeeded; on allocation failure both builds store the failed result and the commands dereference it without a check. Same unchecked shape on both sides, not a modelled null path."}
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-10-31",
+        "status": "pilot",
+        "limitations": "points_to assumes initialisation succeeded; on allocation failure both builds store the failed result and the commands dereference it without a check. Same unchecked shape on both sides, not a modelled null path."
+      }
     },
     {
       "id": "image-manager.next-read-hint",
-      "logical_target": {"region": "object", "object": "main_image_manager", "field": "next_read_cache_hint",
-                         "width": 32},
+      "logical_target": {
+        "region": "object",
+        "object": "main_image_manager",
+        "field": "next_read_cache_hint",
+        "width": 32
+      },
       "sides": [
-        {"binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5", "arch": "x64",
-         "base_object": "main_image_manager", "offset": "0x60d8", "width": 32},
-        {"binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d", "arch": "x64",
-         "base_object": "main_image_manager", "offset": "0x58b8", "width": 32}
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "main_image_manager",
+          "offset": "0x60d8",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "main_image_manager",
+          "offset": "0x58b8",
+          "width": 32
+        }
       ],
       "evidence": [
         "writers of 1: hint function base 0x140035a90 / derived 0x1400341f0; preload path base 0x140036ae0+106,+145 / derived 0x140034f90+106,+145",
@@ -37,8 +70,1140 @@
         "docs/games/chronoclock/vm-semantics.md#图像缓存提示与换图组2026-10-31-复核 (raw read function 166 instructions each, differences only field/path displacements)"
       ],
       "scope": "main image manager object reached through vm.main-image-manager only; not the independent manager at VM +0x12a0",
-      "review": {"source": "manual pilot review", "date": "2026-10-31", "status": "pilot",
-                 "limitations": "consumer closure covers the raw read function in both builds; no runtime test of the cache effect"}
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-10-31",
+        "status": "pilot",
+        "limitations": "consumer closure covers the raw read function in both builds; no runtime test of the cache effect"
+      }
+    },
+    {
+      "id": "vm.error-flags",
+      "logical_target": {
+        "region": "vm",
+        "object": "vm",
+        "field": "error_flags",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "vm",
+          "offset": "0x2f18",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "vm",
+          "offset": "0x2f18",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md 0x2026 (+12056 |= 0x10), 0x2119 (|= 0x1000), 0x2141 (|= 0x10000): the same VM error word in both builds",
+        "docs/games/amatsutsumi/vm-semantics.md: base writers of +12056 bits 0x10/0x200/0x1000/0x10000",
+        "command access sites (export function#instruction): base 0x706a0#12, 0x707f0#16, 0x70850#13, 0x714b0#13, 0x72770#19, 0x72840#17; derived 0x6d100#12, 0x6d250#16, 0x6d2b0#13, 0x6df10#13, 0x6f1d0#19, 0x6f2a0#17",
+        "pairing candidate from contract_extract.py --propose (54 aligned commands, no conflicting pair)"
+      ],
+      "scope": "VM error flag word; bitwise or-updates only",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "vm.system-int0",
+      "logical_target": {
+        "region": "vm",
+        "object": "vm",
+        "field": "system_int0",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "vm",
+          "offset": "0x14380",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "vm",
+          "offset": "0x14380",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/amatsutsumi/vm-semantics.md snapshot 0x248: system result words at VM +82816..+82856 (base)",
+        "docs/games/chronoclock/vm-semantics.md 0x2032/0x22c4: handlers write system integer 0 in both builds",
+        "command access sites (export function#instruction): base 0x6fe80#7, 0x707f0#11, 0x716d0#12, 0x716d0#7, 0x73fc0#16, 0x74f00#9; derived 0x6c8e0#7, 0x6d250#11, 0x6e130#12, 0x6e130#7, 0x708d0#16, 0x71810#9",
+        "pairing candidate from contract_extract.py --propose (49 aligned commands, no conflicting pair)"
+      ],
+      "scope": "VM system result word 0",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "vm.system-int1",
+      "logical_target": {
+        "region": "vm",
+        "object": "vm",
+        "field": "system_int1",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "vm",
+          "offset": "0x14384",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "vm",
+          "offset": "0x14384",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/amatsutsumi/vm-semantics.md snapshot 0x248: system result words at VM +82816..+82856 (base)",
+        "docs/games/chronoclock/vm-semantics.md 0x2032/0x22c4: handlers write system integer 0 in both builds",
+        "command access sites (export function#instruction): base 0x4de0#1, 0x53670#8, 0x565a0#1, 0x74110#21, 0x756f0#6, 0x834e7#1; derived 0x3dd0#1, 0x50ed0#8, 0x53e00#1, 0x70a20#21, 0x72000#6, 0x7fb66#1",
+        "pairing candidate from contract_extract.py --propose (7 aligned commands, no conflicting pair)"
+      ],
+      "scope": "VM system result word 1",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "vm.system-int2",
+      "logical_target": {
+        "region": "vm",
+        "object": "vm",
+        "field": "system_int2",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "vm",
+          "offset": "0x14388",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "vm",
+          "offset": "0x14388",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/amatsutsumi/vm-semantics.md snapshot 0x248: system result words at VM +82816..+82856 (base)",
+        "docs/games/chronoclock/vm-semantics.md 0x2032/0x22c4: handlers write system integer 0 in both builds",
+        "command access sites (export function#instruction): base 0x4de0#3, 0x53670#11, 0x565a0#3, 0x74110#20, 0x756f0#8, 0x834e7#3; derived 0x3dd0#3, 0x50ed0#11, 0x53e00#3, 0x70a20#20, 0x72000#8, 0x7fb66#3",
+        "pairing candidate from contract_extract.py --propose (7 aligned commands, no conflicting pair)"
+      ],
+      "scope": "VM system result word 2",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "vm.text-objects",
+      "logical_target": {
+        "region": "vm",
+        "object": "vm",
+        "field": "text_objects",
+        "width": 64,
+        "points_to": "text_object",
+        "count": 12
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "vm",
+          "offset": "0x1020",
+          "width": 64,
+          "stride": 8
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "vm",
+          "offset": "0x1020",
+          "width": 64,
+          "stride": 8
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md 0x2119/0x2102: text object table at VM +4128, valid slots 0..11 (signed check), both builds",
+        "docs/games/chronoclock/vm-semantics.md window/text group: 0x2140/0x215d construct text objects into this table in both builds",
+        "command access sites (export function#instruction): base 0x72770#6, 0x72840#6, 0x72910#6, 0x72970#6, 0x72b10#6, 0x72b70#6; derived 0x6f1d0#6, 0x6f2a0#6, 0x6f370#6, 0x6f3d0#6, 0x6f570#6, 0x6f5d0#6",
+        "pairing candidate from contract_extract.py --propose (15 aligned commands, no conflicting pair)"
+      ],
+      "scope": "pointer table; element null means empty slot",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "vm.windows",
+      "logical_target": {
+        "region": "vm",
+        "object": "vm",
+        "field": "windows",
+        "width": 64,
+        "points_to": "window",
+        "count": 8
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "vm",
+          "offset": "0xfe0",
+          "width": 64,
+          "stride": 8
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "vm",
+          "offset": "0xfe0",
+          "width": 64,
+          "stride": 8
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md 0x2141: windows at VM +4064, slot >= 8 sets error 0x10000, both builds",
+        "docs/games/chronoclock/vm-semantics.md window/text group 0x2140/0x215d: window slot upper bound 8",
+        "command access sites (export function#instruction): base 0x76060#6, 0x76120#6, 0x76180#6, 0x761f0#6, 0x76250#6, 0x762b0#6; derived 0x72970#6, 0x72a30#6, 0x72a90#6, 0x72b00#6, 0x72b60#6, 0x72bc0#6",
+        "pairing candidate from contract_extract.py --propose (14 aligned commands, no conflicting pair)"
+      ],
+      "scope": "pointer table; element null means empty slot",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "text-object.word-0x9c",
+      "logical_target": {
+        "region": "object",
+        "object": "text_object",
+        "field": "word_0x9c",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x9c",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x9c",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md window/text group: constructors 0x140059740 (derived) / 0x14005c550 (base) initialise +8..+163 and +176..+323 identically; the base's extra 208-byte block starts at +328, so the prefix keeps its offsets; +8/+12 is the text position, +108 the bold cache",
+        "command access sites (export function#instruction): base 0x5ab00#4, 0x5ac20#0; derived 0x58360#4, 0x58480#0",
+        "pairing candidate from contract_extract.py --propose (2 aligned commands, no conflicting pair)"
+      ],
+      "scope": "text object prefix below +328 only; reached through vm.text-objects",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "text-object.word-0xa0",
+      "logical_target": {
+        "region": "object",
+        "object": "text_object",
+        "field": "word_0xa0",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0xa0",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0xa0",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md window/text group: constructors 0x140059740 (derived) / 0x14005c550 (base) initialise +8..+163 and +176..+323 identically; the base's extra 208-byte block starts at +328, so the prefix keeps its offsets; +8/+12 is the text position, +108 the bold cache",
+        "command access sites (export function#instruction): base 0x5ab00#5, 0x5ac20#1; derived 0x58360#5, 0x58480#1",
+        "pairing candidate from contract_extract.py --propose (2 aligned commands, no conflicting pair)"
+      ],
+      "scope": "text object prefix below +328 only; reached through vm.text-objects",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "text-object.word-0x10",
+      "logical_target": {
+        "region": "object",
+        "object": "text_object",
+        "field": "word_0x10",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x10",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x10",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md window/text group: constructors 0x140059740 (derived) / 0x14005c550 (base) initialise +8..+163 and +176..+323 identically; the base's extra 208-byte block starts at +328, so the prefix keeps its offsets; +8/+12 is the text position, +108 the bold cache",
+        "command access sites (export function#instruction): base 0x5ab00#1; derived 0x58360#1",
+        "pairing candidate from contract_extract.py --propose (1 aligned commands, no conflicting pair)"
+      ],
+      "scope": "text object prefix below +328 only; reached through vm.text-objects",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "text-object.word-0x14",
+      "logical_target": {
+        "region": "object",
+        "object": "text_object",
+        "field": "word_0x14",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x14",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x14",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md window/text group: constructors 0x140059740 (derived) / 0x14005c550 (base) initialise +8..+163 and +176..+323 identically; the base's extra 208-byte block starts at +328, so the prefix keeps its offsets; +8/+12 is the text position, +108 the bold cache",
+        "command access sites (export function#instruction): base 0x5ab00#2; derived 0x58360#2",
+        "pairing candidate from contract_extract.py --propose (1 aligned commands, no conflicting pair)"
+      ],
+      "scope": "text object prefix below +328 only; reached through vm.text-objects",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "text-object.word-0x18",
+      "logical_target": {
+        "region": "object",
+        "object": "text_object",
+        "field": "word_0x18",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x18",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x18",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md window/text group: constructors 0x140059740 (derived) / 0x14005c550 (base) initialise +8..+163 and +176..+323 identically; the base's extra 208-byte block starts at +328, so the prefix keeps its offsets; +8/+12 is the text position, +108 the bold cache",
+        "command access sites (export function#instruction): base 0x5ab00#3; derived 0x58360#3",
+        "pairing candidate from contract_extract.py --propose (1 aligned commands, no conflicting pair)"
+      ],
+      "scope": "text object prefix below +328 only; reached through vm.text-objects",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "text-object.word-0x1c",
+      "logical_target": {
+        "region": "object",
+        "object": "text_object",
+        "field": "word_0x1c",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x1c",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x1c",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md window/text group: constructors 0x140059740 (derived) / 0x14005c550 (base) initialise +8..+163 and +176..+323 identically; the base's extra 208-byte block starts at +328, so the prefix keeps its offsets; +8/+12 is the text position, +108 the bold cache",
+        "command access sites (export function#instruction): base 0x5ab00#6; derived 0x58360#6",
+        "pairing candidate from contract_extract.py --propose (1 aligned commands, no conflicting pair)"
+      ],
+      "scope": "text object prefix below +328 only; reached through vm.text-objects",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "text-object.word-0x20",
+      "logical_target": {
+        "region": "object",
+        "object": "text_object",
+        "field": "word_0x20",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x20",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x20",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md window/text group: constructors 0x140059740 (derived) / 0x14005c550 (base) initialise +8..+163 and +176..+323 identically; the base's extra 208-byte block starts at +328, so the prefix keeps its offsets; +8/+12 is the text position, +108 the bold cache",
+        "command access sites (export function#instruction): base 0x5ab20#2; derived 0x58380#2",
+        "pairing candidate from contract_extract.py --propose (1 aligned commands, no conflicting pair)"
+      ],
+      "scope": "text object prefix below +328 only; reached through vm.text-objects",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "text-object.word-0x24",
+      "logical_target": {
+        "region": "object",
+        "object": "text_object",
+        "field": "word_0x24",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x24",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x24",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md window/text group: constructors 0x140059740 (derived) / 0x14005c550 (base) initialise +8..+163 and +176..+323 identically; the base's extra 208-byte block starts at +328, so the prefix keeps its offsets; +8/+12 is the text position, +108 the bold cache",
+        "command access sites (export function#instruction): base 0x5ab20#5; derived 0x58380#5",
+        "pairing candidate from contract_extract.py --propose (1 aligned commands, no conflicting pair)"
+      ],
+      "scope": "text object prefix below +328 only; reached through vm.text-objects",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "text-object.word-0x28",
+      "logical_target": {
+        "region": "object",
+        "object": "text_object",
+        "field": "word_0x28",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x28",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x28",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md window/text group: constructors 0x140059740 (derived) / 0x14005c550 (base) initialise +8..+163 and +176..+323 identically; the base's extra 208-byte block starts at +328, so the prefix keeps its offsets; +8/+12 is the text position, +108 the bold cache",
+        "command access sites (export function#instruction): base 0x5ab20#8; derived 0x58380#8",
+        "pairing candidate from contract_extract.py --propose (1 aligned commands, no conflicting pair)"
+      ],
+      "scope": "text object prefix below +328 only; reached through vm.text-objects",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "text-object.word-0x70",
+      "logical_target": {
+        "region": "object",
+        "object": "text_object",
+        "field": "word_0x70",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x70",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x70",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md window/text group: constructors 0x140059740 (derived) / 0x14005c550 (base) initialise +8..+163 and +176..+323 identically; the base's extra 208-byte block starts at +328, so the prefix keeps its offsets; +8/+12 is the text position, +108 the bold cache",
+        "command access sites (export function#instruction): base 0x5ac60#0; derived 0x584c0#0",
+        "pairing candidate from contract_extract.py --propose (1 aligned commands, no conflicting pair)"
+      ],
+      "scope": "text object prefix below +328 only; reached through vm.text-objects",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "text-object.word-0x74",
+      "logical_target": {
+        "region": "object",
+        "object": "text_object",
+        "field": "word_0x74",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x74",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x74",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md window/text group: constructors 0x140059740 (derived) / 0x14005c550 (base) initialise +8..+163 and +176..+323 identically; the base's extra 208-byte block starts at +328, so the prefix keeps its offsets; +8/+12 is the text position, +108 the bold cache",
+        "command access sites (export function#instruction): base 0x5ac00#2; derived 0x58460#2",
+        "pairing candidate from contract_extract.py --propose (1 aligned commands, no conflicting pair)"
+      ],
+      "scope": "text object prefix below +328 only; reached through vm.text-objects",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "text-object.word-0x78",
+      "logical_target": {
+        "region": "object",
+        "object": "text_object",
+        "field": "word_0x78",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x78",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x78",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md window/text group: constructors 0x140059740 (derived) / 0x14005c550 (base) initialise +8..+163 and +176..+323 identically; the base's extra 208-byte block starts at +328, so the prefix keeps its offsets; +8/+12 is the text position, +108 the bold cache",
+        "command access sites (export function#instruction): base 0x5ac00#5; derived 0x58460#5",
+        "pairing candidate from contract_extract.py --propose (1 aligned commands, no conflicting pair)"
+      ],
+      "scope": "text object prefix below +328 only; reached through vm.text-objects",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "text-object.word-0x7c",
+      "logical_target": {
+        "region": "object",
+        "object": "text_object",
+        "field": "word_0x7c",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x7c",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x7c",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md window/text group: constructors 0x140059740 (derived) / 0x14005c550 (base) initialise +8..+163 and +176..+323 identically; the base's extra 208-byte block starts at +328, so the prefix keeps its offsets; +8/+12 is the text position, +108 the bold cache",
+        "command access sites (export function#instruction): base 0x5ac50#0; derived 0x584b0#0",
+        "pairing candidate from contract_extract.py --propose (1 aligned commands, no conflicting pair)"
+      ],
+      "scope": "text object prefix below +328 only; reached through vm.text-objects",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "text-object.word-0x80",
+      "logical_target": {
+        "region": "object",
+        "object": "text_object",
+        "field": "word_0x80",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x80",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x80",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md window/text group: constructors 0x140059740 (derived) / 0x14005c550 (base) initialise +8..+163 and +176..+323 identically; the base's extra 208-byte block starts at +328, so the prefix keeps its offsets; +8/+12 is the text position, +108 the bold cache",
+        "command access sites (export function#instruction): base 0x2e860#0; derived 0x2d2d0#0",
+        "pairing candidate from contract_extract.py --propose (1 aligned commands, no conflicting pair)"
+      ],
+      "scope": "text object prefix below +328 only; reached through vm.text-objects",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "text-object.word-0x84",
+      "logical_target": {
+        "region": "object",
+        "object": "text_object",
+        "field": "word_0x84",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x84",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x84",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md window/text group: constructors 0x140059740 (derived) / 0x14005c550 (base) initialise +8..+163 and +176..+323 identically; the base's extra 208-byte block starts at +328, so the prefix keeps its offsets; +8/+12 is the text position, +108 the bold cache",
+        "command access sites (export function#instruction): base 0x5ac30#0; derived 0x58490#0",
+        "pairing candidate from contract_extract.py --propose (1 aligned commands, no conflicting pair)"
+      ],
+      "scope": "text object prefix below +328 only; reached through vm.text-objects",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "text-object.word-0x88",
+      "logical_target": {
+        "region": "object",
+        "object": "text_object",
+        "field": "word_0x88",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x88",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x88",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md window/text group: constructors 0x140059740 (derived) / 0x14005c550 (base) initialise +8..+163 and +176..+323 identically; the base's extra 208-byte block starts at +328, so the prefix keeps its offsets; +8/+12 is the text position, +108 the bold cache",
+        "command access sites (export function#instruction): base 0x5ac40#0; derived 0x584a0#0",
+        "pairing candidate from contract_extract.py --propose (1 aligned commands, no conflicting pair)"
+      ],
+      "scope": "text object prefix below +328 only; reached through vm.text-objects",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "text-object.word-0x8c",
+      "logical_target": {
+        "region": "object",
+        "object": "text_object",
+        "field": "word_0x8c",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x8c",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x8c",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md window/text group: constructors 0x140059740 (derived) / 0x14005c550 (base) initialise +8..+163 and +176..+323 identically; the base's extra 208-byte block starts at +328, so the prefix keeps its offsets; +8/+12 is the text position, +108 the bold cache",
+        "command access sites (export function#instruction): base 0x5ac40#1; derived 0x584a0#1",
+        "pairing candidate from contract_extract.py --propose (1 aligned commands, no conflicting pair)"
+      ],
+      "scope": "text object prefix below +328 only; reached through vm.text-objects",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "text-object.word-0x90",
+      "logical_target": {
+        "region": "object",
+        "object": "text_object",
+        "field": "word_0x90",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x90",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x90",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md window/text group: constructors 0x140059740 (derived) / 0x14005c550 (base) initialise +8..+163 and +176..+323 identically; the base's extra 208-byte block starts at +328, so the prefix keeps its offsets; +8/+12 is the text position, +108 the bold cache",
+        "command access sites (export function#instruction): base 0x2e850#0; derived 0x1c2b0#0",
+        "pairing candidate from contract_extract.py --propose (1 aligned commands, no conflicting pair)"
+      ],
+      "scope": "text object prefix below +328 only; reached through vm.text-objects",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "text-object.word-0x98",
+      "logical_target": {
+        "region": "object",
+        "object": "text_object",
+        "field": "word_0x98",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x98",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0x98",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md window/text group: constructors 0x140059740 (derived) / 0x14005c550 (base) initialise +8..+163 and +176..+323 identically; the base's extra 208-byte block starts at +328, so the prefix keeps its offsets; +8/+12 is the text position, +108 the bold cache",
+        "command access sites (export function#instruction): base 0x5ac70#0; derived 0x584d0#0",
+        "pairing candidate from contract_extract.py --propose (1 aligned commands, no conflicting pair)"
+      ],
+      "scope": "text object prefix below +328 only; reached through vm.text-objects",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "text-object.word-0xb0",
+      "logical_target": {
+        "region": "object",
+        "object": "text_object",
+        "field": "word_0xb0",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0xb0",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0xb0",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md window/text group: constructors 0x140059740 (derived) / 0x14005c550 (base) initialise +8..+163 and +176..+323 identically; the base's extra 208-byte block starts at +328, so the prefix keeps its offsets; +8/+12 is the text position, +108 the bold cache",
+        "command access sites (export function#instruction): base 0x5ae40#0; derived 0x586a0#0",
+        "pairing candidate from contract_extract.py --propose (1 aligned commands, no conflicting pair)"
+      ],
+      "scope": "text object prefix below +328 only; reached through vm.text-objects",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "text-object.word-0xb8",
+      "logical_target": {
+        "region": "object",
+        "object": "text_object",
+        "field": "word_0xb8",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0xb8",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0xb8",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md window/text group: constructors 0x140059740 (derived) / 0x14005c550 (base) initialise +8..+163 and +176..+323 identically; the base's extra 208-byte block starts at +328, so the prefix keeps its offsets; +8/+12 is the text position, +108 the bold cache",
+        "command access sites (export function#instruction): base 0x3dbc0#0; derived 0x586d0#0",
+        "pairing candidate from contract_extract.py --propose (1 aligned commands, no conflicting pair)"
+      ],
+      "scope": "text object prefix below +328 only; reached through vm.text-objects",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "text-object.word-0xbc",
+      "logical_target": {
+        "region": "object",
+        "object": "text_object",
+        "field": "word_0xbc",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0xbc",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0xbc",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md window/text group: constructors 0x140059740 (derived) / 0x14005c550 (base) initialise +8..+163 and +176..+323 identically; the base's extra 208-byte block starts at +328, so the prefix keeps its offsets; +8/+12 is the text position, +108 the bold cache",
+        "command access sites (export function#instruction): base 0x5ae50#0; derived 0x586b0#0",
+        "pairing candidate from contract_extract.py --propose (1 aligned commands, no conflicting pair)"
+      ],
+      "scope": "text object prefix below +328 only; reached through vm.text-objects",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "text-object.word-0xc0",
+      "logical_target": {
+        "region": "object",
+        "object": "text_object",
+        "field": "word_0xc0",
+        "width": 32
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0xc0",
+          "width": 32
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "text_object",
+          "offset": "0xc0",
+          "width": 32
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md window/text group: constructors 0x140059740 (derived) / 0x14005c550 (base) initialise +8..+163 and +176..+323 identically; the base's extra 208-byte block starts at +328, so the prefix keeps its offsets; +8/+12 is the text position, +108 the bold cache",
+        "command access sites (export function#instruction): base 0x5ae60#0; derived 0x586c0#0",
+        "pairing candidate from contract_extract.py --propose (1 aligned commands, no conflicting pair)"
+      ],
+      "scope": "text object prefix below +328 only; reached through vm.text-objects",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
+    },
+    {
+      "id": "vm.scene-objects",
+      "logical_target": {
+        "region": "vm",
+        "object": "vm",
+        "field": "scene_objects",
+        "width": 64,
+        "points_to": "scene_object",
+        "count": 256
+      },
+      "sides": [
+        {
+          "binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+          "arch": "x64",
+          "base_object": "vm",
+          "offset": "0x7b8",
+          "width": 64,
+          "stride": 8
+        },
+        {
+          "binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d",
+          "arch": "x64",
+          "base_object": "vm",
+          "offset": "0x7b8",
+          "width": 64,
+          "stride": 8
+        }
+      ],
+      "evidence": [
+        "docs/games/chronoclock/vm-semantics.md 0x2026: object slot compared signed < 256, then the object pointer at VM +1976; base handler 0x14006bd70 has the same table, bound and error bit",
+        "command access sites (export function#instruction): base 0x74080#14, 0x7d400#6; derived 0x70990#14, 0x79bd0#6",
+        "pairing candidate from contract_extract.py --propose (2 aligned commands, no conflicting pair)"
+      ],
+      "scope": "pointer table; element null means empty slot",
+      "review": {
+        "source": "manual pilot review",
+        "date": "2026-11-01",
+        "status": "pilot",
+        "limitations": "same offset in both builds; meaning beyond the cited sections is not claimed"
+      }
     }
   ]
 }

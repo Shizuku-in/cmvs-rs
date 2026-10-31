@@ -48,15 +48,20 @@ def context():
 
 
 def mapping(entries):
-    """entries: (id, object, field, width, {sha: offset}, points_to)."""
+    """entries: (id, object, field, width, {sha: offset}, points_to[, array count])."""
     doc = {"schema": ce.MAPPINGS, "revision": "t", "entries": []}
-    for ident, obj, field, width, offsets, points in entries:
+    for ident, obj, field, width, offsets, points, *count in entries:
+        base_object = "image" if obj.startswith("image:") else obj     # globals: offset is an RVA
+        obj = obj.split(":")[-1]
         target = {"region": "vm" if obj == "vm" else "object", "object": obj, "field": field, "width": width}
         if points:
             target["points_to"] = points
+        if count:
+            target["count"] = count[0]
         doc["entries"].append({"id": ident, "logical_target": target, "evidence": ["synthetic"], "scope": "t",
-                               "review": {}, "sides": [{"binary_sha256": sha, "arch": "x64", "base_object": obj,
-                                                         "offset": off, "width": width}
+                               "review": {}, "sides": [dict({"binary_sha256": sha, "arch": "x64", "base_object": base_object,
+                                                              "offset": off, "width": width},
+                                                             **({"stride": width // 8} if count else {}))
                                                         for sha, off in offsets.items()]})
     return ce.check_mappings(doc)
 
@@ -145,7 +150,44 @@ class LiftTests(unittest.TestCase):
         call = function(["488b8b98120000", "e800000000"] + ret(0x4000) + EPILOGUE,
                         {1: [{"kind": "function", "target": "0x200"}]})
         inline = lift(BASE, call, maps, {"0x200": helper})
-        self.assertEqual(inline["contract"]["tree"]["events"][1]["target"]["field"], "hint")
+        tree = inline["contract"]["tree"]
+        # The loaded manager pointer is unchecked: null is an explicit undefined path.
+        self.assertEqual(tree["condition"], ["eq", ["ref", "e0"], ["bv", 64, "0" * 16]])
+        self.assertEqual(tree["then"]["exit"]["kind"], "undefined")
+        self.assertEqual(tree["else"]["events"][0]["target"]["field"], "hint")
+
+    def test_checked_table_element(self):
+        """cmp eax,12; jge err; mov r9,[rbx+rax*8+0x1020]; test r9,r9; je err; mov [r9+8],1."""
+        def case(table, field):
+            code = ["48638b70420100", "488b8368420100", "48634401fc", "83f80c", "7d00",
+                    "4c8b8cc3" + struct.pack("<I", table).hex(), "4d85c9", "7400",
+                    "41c741" + "%02x" % field + "01000000"] + ret(0x4004) + EPILOGUE
+            err = len(code)
+            code += ["818b182f000000100000"] + ret(0x4004) + EPILOGUE
+            return function(code, {4: [{"kind": "local", "target": err}], 7: [{"kind": "local", "target": err}]})
+        def maps(derived_count=12):
+            return (ERRORS, ("slots", "vm", "slots", 64, {BASE: "0x1020"}, "text", 12),
+                    ("slots-derived", "vm", "slots", 64, {DERIVED: "0x1040"}, "text", derived_count),
+                    ("x", "text", "x", 32, {BASE: "0x8", DERIVED: "0xc"}, None))
+        side = lift(BASE, case(0x1020, 8), maps())
+        self.assertEqual(side["status"], "extracted", side)
+        result = compare(case(0x1020, 8), case(0x1040, 0xc), maps())
+        self.assertEqual(result["status"], "equivalent", result)
+        # A negative slot passes the signed check and is out of bounds: undefined, not dropped.
+        leaves = []
+        def walk(n):
+            if n["kind"] == "leaf":
+                leaves.append(n["exit"]["kind"])
+            else:
+                walk(n["then"]), walk(n["else"])
+        walk(side["contract"]["tree"])
+        # One undefined leaf (negative slot); the code's own null check is a path fact.
+        self.assertEqual(leaves.count("undefined"), 1)
+        # Larger derived capacity: the signed slot check hides it, so no witness exists, but
+        # the bounds differ in normal form and must not be accepted.
+        self.assertEqual(compare(case(0x1020, 8), case(0x1040, 0xc), maps(16))["status"], "unknown")
+        # A capacity below the checked range is observable.
+        self.assertEqual(compare(case(0x1020, 8), case(0x1040, 0xc), maps(4))["status"], "different")
 
     def test_blockers(self):
         cases = {
@@ -252,13 +294,106 @@ class BinaryTests(unittest.TestCase):
         side = ce.Lifter(g, ctx, maps, {}).lift(0x2000)
         self.assertEqual(side["status"], "extracted", side)
         ce.verify_binary(image, g, 0x2000, side["executed"])
-        bad = [(fn, off, raw_hex, (target + 1 if target else target)) for fn, off, raw_hex, target in side["executed"]]
+        bad = [(fn, off, raw_hex, (target + 1 if target else target), data)
+               for fn, off, raw_hex, target, data in side["executed"]]
         with self.assertRaises(cc.InvalidEvidence):
             ce.verify_binary(image, g, 0x2000, bad)
         g2 = copy.deepcopy(g)
         g2["binary_sha256"] = "f" * 64
         with self.assertRaises(cc.InvalidEvidence):
             ce.verify_binary(image, g2, 0x2000, side["executed"])
+
+    def test_rip_relative_global_binding(self):
+        case = bytes.fromhex("8b05") + struct.pack("<i", 0x2800 - (0x1800 + 6))
+        case += bytes.fromhex("b8004000004883c4205bc3")
+        image = ce.Image(self.build(case))
+        g = graph(image.sha256, function(["8b0500000000", "b800400000"] + EPILOGUE, {0: [
+            {"kind": "unknown-data", "target": "0x2800", "why": "writable"}]}))
+        g["functions"]["0x100"]["instructions"][0]["issues"] = ["unresolved-or-mutable-data"]
+        g["commands"][0]["entry"] = "0x1800"
+        g["functions"]["0x1800"] = g["functions"].pop("0x100")
+        ctx = ce.check_context({"schema": ce.CONTEXT, "revision": "t", "sides": [{
+            "binary_sha256": image.sha256, "arch": "x64", "image_base": "0x140000000", "table_rva": "0x2000",
+            "vm_stack": {"sp_offset": "0x14270", "base_offset": "0x14268"}, "evidence": []}]})
+        maps = {(image.sha256, "image", 0x2800, 32): {"id": "g", "logical_target": {
+            "region": "object", "object": "globals", "field": "g", "width": 32}}}
+        side = ce.Lifter(g, ctx, maps, {}).lift(0x2000)
+        self.assertEqual(side["status"], "extracted", side)
+        ce.verify_binary(image, g, 0x2000, side["executed"])
+        bad = [(fn, off, raw_hex, target, ("rva", 0x2804) if data else data)
+               for fn, off, raw_hex, target, data in side["executed"]]
+        with self.assertRaises(cc.InvalidEvidence):
+            ce.verify_binary(image, g, 0x2000, bad)
+
+
+GLOBAL = ("g", "image:globals", "g", 32, {BASE: "0x5000", DERIVED: "0x6000"}, None)
+
+
+def global_ref(target):
+    return {"kind": "unknown-data", "target": target, "why": "writable"}
+
+
+def global_store(target):
+    """mov [rip+X], ecx after reading SP-4; returns 0x4004."""
+    case = function(READ_SP4 + ["890d00000000"] + ret(0x4004) + EPILOGUE, {3: [global_ref(target)]})
+    case["instructions"][3]["issues"] = ["unresolved-or-mutable-data"]
+    return case
+
+
+class RegionTests(unittest.TestCase):
+    def test_global_mapping_and_readonly_constant(self):
+        maps = (FLAGS, ERRORS, GLOBAL)
+        self.assertEqual(compare(global_store("0x5000"), global_store("0x6000"), maps)["status"], "equivalent")
+        self.assertEqual(compare(global_store("0x5000"), global_store("0x6004"), maps)["issues"][0]["issue"],
+                         "unproven-mapping")
+        # Return code loaded from read-only data: a constant, not state.
+        rodata = function(["8b0500000000"] + EPILOGUE, {0: [{"kind": "data", "offset": 4,
+                                                             "bytes": "00000000" + "04400000"}]})
+        side = lift(BASE, rodata)
+        self.assertEqual(side["contract"]["tree"]["exit"]["code"], ["bv", 32, "00004004"])
+        # Code pointers, immediates and other unresolved data stay blocked.
+        other = global_store("0x5000")
+        other["instructions"][3]["refs"][0]["why"] = "code-address"
+        self.assertEqual(lift(BASE, other, maps)["issues"][0]["issue"], "unknown-memory")
+
+    def test_stack_cookie_builtin(self):
+        check = {"entry_index": 0, "issues": [], "library": "__security_check_cookie",
+                 "instructions": [{"bytes": "c3", "refs": [], "next": None, "offset": 0}]}
+
+        def case(second_xor=True):
+            code = ["4883ec28", "488b0500000000", "4833c4", "4889442420", "488b4c2420"]
+            code += (["4833cc"] if second_xor else ["90"]) + ["e800000000", "4883c428"]
+            code += ret(0x4000) + EPILOGUE
+            f = function(code, {1: [global_ref("0x7000")], 6: [{"kind": "function", "target": "0x300"}]})
+            f["instructions"][1]["issues"] = ["unresolved-or-mutable-data"]
+            return f
+        g = graph(BASE, case(), {"0x300": check})
+        side = {"binary_sha256": BASE, "arch": "x64", "image_base": "0x140000000", "table_rva": "0x2000",
+                "vm_stack": {"sp_offset": "0x14270", "base_offset": "0x14268"}, "evidence": [],
+                "stack_cookie": {"cookie_rva": "0x7000", "check_rva": "0x300",
+                                 "check_body_sha256": ce.body_digest(g, "0x300")}}
+        ctx = ce.check_context({"schema": ce.CONTEXT, "revision": "t", "sides": [side]})
+        result = ce.Lifter(g, ctx, {}, {}).lift(0x2000)
+        self.assertEqual(result["status"], "extracted", result)
+        self.assertEqual(result["contract"]["tree"]["events"], [{"op": "release_stack", "bytes": 0, "id": "e0"}])
+        bad = graph(BASE, case(second_xor=False), {"0x300": check})
+        self.assertEqual(ce.Lifter(bad, ctx, {}, {}).lift(0x2000)["issues"][0]["issue"], "unsupported-effect")
+        stale = copy.deepcopy(side)
+        stale["stack_cookie"]["check_body_sha256"] = "0" * 64
+        with self.assertRaises(cc.InvalidEvidence):
+            ce.Lifter(g, ce.check_context({"schema": ce.CONTEXT, "revision": "t", "sides": [stale]}), {}, {})
+
+    def test_proposals_pair_fields_but_are_not_mappings(self):
+        lifters = [ce.Lifter(graph(sha, global_store(t)), context(), mapping((FLAGS, ERRORS)), {})
+                   for sha, t in ((BASE, "0x5000"), (DERIVED, "0x6000"))]
+        before = [dict(lifter.mappings) for lifter in lifters]
+        result = ce.propose(lifters, [0x2000])
+        self.assertEqual(result["aligned"], ["0x2000"])
+        [candidate] = result["candidates"]
+        self.assertEqual((candidate["base"]["offset"], candidate["derived"]["offset"]), ("0x5000", "0x6000"))
+        self.assertFalse(candidate["conflict"])
+        self.assertEqual([lifter.mappings for lifter in lifters], before)
+        self.assertEqual(lifters[0].lift(0x2000)["issues"][0]["issue"], "unproven-mapping")
 
 
 if __name__ == "__main__":

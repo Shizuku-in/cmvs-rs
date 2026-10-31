@@ -16,6 +16,7 @@
 | [脚本可见契约比较规划](design/command-contracts.md) | 草案：契约等价放行、旧推定迁移、可玩与已验证边界、工具实施和验收 |
 | [契约 M0 模型与验收向量](design/command-contracts-m0.md) | 首版 IR、完整性规则、字段映射与摘要证据格式、M1 支持边界 |
 | [契约 M1 提取与证据](design/command-contracts-m1.md) | x64 case 符号执行、字段映射、原 exe 绑定、离线双边报告；未接入闸门 |
+| [契约 M2 进展](design/command-contracts-m2.md) | 进行中：全局与下标区域、指针空检查、未定义路径、栈保护、映射候选 |
 | [分派层设计草案](design/dispatch.md) | 证据层、opcode 分派表、处理函数接口与迁移阶段 |
 
 ## 格式与后端

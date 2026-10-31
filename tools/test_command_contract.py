@@ -123,7 +123,7 @@ class ContractTests(unittest.TestCase):
         self.base["tree"]["exit"]["code"] = ["ref", "r"]
         cc.validate(self.base)
         result = cc.execute(self.base, {-4: 5}, {cc.encode(target): 99})
-        self.assertEqual(result["exit"], 5)
+        self.assertEqual(result["exit"], ["return", 5])
 
     def test_ordered_effects_are_not_sorted_away(self):
         self.base["tree"]["events"].insert(2, {"id": "write2", "op": "write_state",

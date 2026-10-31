@@ -39,18 +39,31 @@ VOLATILE = ("rax", "rcx", "rdx", "r8", "r9", "r10", "r11")
 # rsp+0x20 and the dispatcher's return address at rsp+0x28.
 DISPATCH_PROLOGUE = bytes.fromhex("40534883ec200fb7c2488bd9")
 FRAME_RET = 0x28
+# Exporter reasons under which a RIP-relative operand is an ordinary global variable.
+GLOBAL_WHY = ("writable", "address-taken")
 BUDGET = {"instructions": 4096, "leaves": 64, "call_depth": 8}
 SOURCES = ("contract_extract.py", "contract_x64.py", "command_contract.py", "profile_compare.py")
 
 
 class Blocked(Exception):
-    def __init__(self, issue, where, detail=""):
+    def __init__(self, issue, where, detail="", missing=None):
         super().__init__(issue)
         self.issue = {"issue": issue, "function": where[0], "instruction_index": where[1],
                       "detail": detail}
+        if missing is not None:
+            self.issue["missing"] = missing
 
 
 InvalidEvidence = cc.InvalidEvidence
+
+
+class Guard(Exception):
+    """An access is defined only when `expr` evaluates to `safe`; the caller forks an
+    explicit `undefined` leaf for the other value (unchecked null/out-of-bounds)."""
+
+    def __init__(self, expr, safe):
+        super().__init__("guard")
+        self.expr, self.safe = expr, safe
 
 
 def evidence_require(condition, message):
@@ -78,7 +91,12 @@ def check_context(doc):
     evidence_require(doc["schema"] == CONTEXT, "context schema")
     sides = {}
     for side in doc["sides"]:
-        cc.keys(side, "binary_sha256 arch image_base table_rva vm_stack evidence")
+        cc.require(isinstance(side, dict) and {"binary_sha256", "arch", "image_base", "table_rva", "vm_stack",
+                                               "evidence"} <= set(side) <= {
+            "binary_sha256", "arch", "image_base", "table_rva", "vm_stack", "evidence", "stack_cookie"},
+            "context side fields")
+        if "stack_cookie" in side:
+            cc.keys(side["stack_cookie"], "cookie_rva check_rva check_body_sha256")
         evidence_require(cc.SHA.fullmatch(side["binary_sha256"]) and side["arch"] == "x64", "context side identity")
         cc.keys(side["vm_stack"], "sp_offset base_offset")
         sides[side["binary_sha256"]] = side
@@ -94,15 +112,24 @@ def check_mappings(doc):
         evidence_require(entry["id"] not in ids, "duplicate mapping id")
         ids.add(entry["id"])
         target = entry["logical_target"]
-        evidence_require(isinstance(target, dict) and set(target) <= {"region", "object", "field", "width", "points_to"}
+        evidence_require(isinstance(target, dict)
+                         and set(target) <= {"region", "object", "field", "width", "points_to", "count"}
                          and {"region", "object", "field", "width"} <= set(target), "mapping logical target")
+        array = "count" in target
+        evidence_require(not array or (type(target["count"]) is int and 0 < target["count"] <= 1 << 20),
+                         "array count")
         evidence_require(target["region"] in ("vm", "object") and target["width"] in cc.WIDTHS, "mapping region/width")
         evidence_require(isinstance(entry["evidence"], list) and entry["evidence"], "mapping needs evidence")
         for side in entry["sides"]:
-            cc.keys(side, "binary_sha256 arch base_object offset width")
+            cc.keys(side, "binary_sha256 arch base_object offset width" + (" stride" if array else ""))
+            # "image" is the global address space (offset = RVA); others are object roots.
             evidence_require(side["arch"] == "x64" and side["width"] == target["width"]
-                             and side["base_object"] == target["object"], "mapping side")
+                             and side["base_object"] in (target["object"], "image"), "mapping side")
             key = (side["binary_sha256"], side["base_object"], int(side["offset"], 16), side["width"])
+            if array:
+                evidence_require(type(side["stride"]) is int and side["stride"] >= side["width"] // 8,
+                                 "array stride")
+                key += (side["stride"],)
             evidence_require(key not in table, "ambiguous mapping")
             table[key] = entry
     return table
@@ -129,7 +156,9 @@ def check_summaries(doc):
 
 # ---------------------------------------------------------------- symbolic values
 # ("bv", width, expr, zx)  value of `width` bits; zx: upper bits of a 64-bit register are 0
-# ("ptr", root, offset)    root: "frame", "pstack", "stackbase" or "obj:<logical object>"
+# ("ptr", root, off, raw, index)  root: "frame", "pstack", "stackbase" or "obj:<logical object>";
+#                          raw: nullable pointer value at offset 0; index: object instance
+# ("elem", root, off, stride, index, raw, instance)  dynamic element address (load/store only)
 # ("sp", 0)                sign-extended VM parameter SP (byte index)
 # ("spraw", 0)             32-bit raw SP value, only valid as movsxd source
 # ("opaque", name)         entry register/return address identity; any use blocks
@@ -155,6 +184,11 @@ def fold(op, width, *args):
     return [op] + list(args)
 
 
+def pointer(root, off, raw=None, index=None):
+    """raw: IR value of the pointer at offset 0 (nullable); index: object instance."""
+    return ("ptr", root, off, raw, index)
+
+
 def resize(expr, source, target, signed=False):
     if source == target:
         return expr
@@ -173,8 +207,8 @@ class State:
     def __init__(self, entry):
         self.regs = {r: ("opaque", "entry:" + r) for r in CALLEE_SAVED}
         self.regs.update({r: ("opaque", "dispatch-scratch") for r in VOLATILE})
-        self.regs["rbx"] = ("ptr", "obj:vm", 0)
-        self.regs["rsp"] = ("ptr", "frame", 0)
+        self.regs["rbx"] = pointer("obj:vm", 0)
+        self.regs["rsp"] = pointer("frame", 0)
         self.frame = {0x20: (64, ("opaque", "entry:rbx")),
                       FRAME_RET: (64, ("opaque", "dispatcher-return"))}
         self.flags = None
@@ -183,11 +217,13 @@ class State:
         self.seen = set()
         self.args = set()
         self.events = []
+        self.facts = set()
 
     def fork(self):
         other = copy.copy(self)
         other.regs, other.frame = dict(self.regs), dict(self.frame)
         other.calls, other.seen, other.args = list(self.calls), set(self.seen), set(self.args)
+        other.facts = set(self.facts)
         other.events = []
         return other
 
@@ -204,10 +240,16 @@ class Lifter:
                          and int(side["table_rva"], 16) == int(graph["table_rva"], 16),
                          "context/export identity")
         self.sp_off = int(side["vm_stack"]["sp_offset"], 16)
+        # MSVC /GS: the cookie global and __security_check_cookie, bound by body hash.
+        self.cookie = side.get("stack_cookie")
+        if self.cookie is not None:
+            evidence_require(self.cookie["check_rva"] in graph["functions"] and body_digest(
+                graph, self.cookie["check_rva"]) == self.cookie["check_body_sha256"], "stale stack cookie check")
         self.base_off = int(side["vm_stack"]["base_offset"], 16)
         self.mappings, self.summaries = mappings, summaries
         self.budget = dict(BUDGET, **(budget or {}))
         self.where = (None, None)
+        self.data_refs = []
 
     def block(self, issue, detail=""):
         raise Blocked(issue, self.where, detail)
@@ -253,31 +295,91 @@ class Lifter:
 
     def address(self, state, op):
         _, base, index, scale, disp, _ = op
+        if base == "rip" and index is None and len(self.data_refs) == 1:
+            ref = self.data_refs[0]
+            if ref["kind"] == "data":
+                return ("rodata", ref["bytes"], ref["offset"])
+            return pointer("obj:image", int(ref["target"], 16))
         if base == "rip" or base is None:
-            self.block("unknown-memory", "global or absolute address (M2 region model)")
-        parts = [self.read_reg(state, base, 64)]
-        if index is not None:
-            if scale != 1:
-                self.block("unknown-memory", "scaled dynamic index")
-            parts.append(self.read_reg(state, index, 64))
-        if len(parts) == 1 and parts[0][0] == "ptr":
-            return ("ptr", parts[0][1], parts[0][2] + disp)
-        if sorted(p[0] for p in parts) == ["ptr", "sp"]:
-            p = next(x for x in parts if x[0] == "ptr")
-            if p[1:] == ("stackbase", 0):
-                return ("ptr", "pstack", disp)
+            self.block("unknown-memory", "unresolved global or absolute address")
+        b = self.read_reg(state, base, 64)
+        i = self.read_reg(state, index, 64) if index is not None else None
+        if i is None and b[0] == "ptr":
+            return pointer(b[1], b[2] + disp, b[3], b[4])
+        if i is not None and {b[0], i[0]} == {"ptr", "sp"} and scale == 1:
+            p = b if b[0] == "ptr" else i
+            if p[1:3] == ("stackbase", 0):
+                return pointer("pstack", disp)
+        if i is not None and b[0] == "ptr" and i[0] == "bv" and b[1].startswith("obj:"):
+            if constant_of(i[2]) is not None:
+                return pointer(b[1], b[2] + disp + constant_of(i[2]) * scale, b[3], b[4])
+            # Dynamic element of an indexed field: (root, field offset, stride, index).
+            return ("elem", b[1], b[2] + disp, scale, i[2], b[3], b[4])
         self.block("unknown-memory", "unresolved address")
 
-    def mapping(self, obj, offset, width):
-        entry = self.mappings.get((self.sha, obj, offset, width))
+    def require(self, state, expr, safe):
+        """Path fact or explicit Guard fork; constant violations block."""
+        try:
+            static = cc.evaluate(expr, {}, {})[0]
+        except (KeyError, TypeError):
+            static = None
+        if static is not None:
+            if static != safe:
+                self.block("undefined-behavior", "access always undefined")
+            return
+        key = cc.encode(expr)
+        if (key, safe) in state.facts:
+            return
+        if (key, not safe) in state.facts:
+            self.block("undefined-behavior", "access undefined on this path")
+        raise Guard(expr, safe)
+
+    def deref(self, state, p):
+        """Dereference check for a pointer loaded from memory (raw value known)."""
+        if p[0] in ("ptr", "elem") and p[-2] is not None:
+            self.require(state, ["eq", p[-2], const(64, 0)], False)
+
+    def mapping(self, obj, offset, width, index=None, stride=None):
+        key = (self.sha, obj, offset, width) + ((stride,) if stride is not None else ())
+        entry = self.mappings.get(key)
         if entry is None:
-            self.block("unproven-mapping", "%s+0x%x/%d" % (obj, offset, width))
+            raise Blocked("unproven-mapping", self.where, "%s+0x%x/%d%s" % (
+                obj, offset, width, "" if stride is None else "[*%d]" % stride),
+                {"object": obj, "offset": offset, "width": width, "stride": stride})
         self.used_mappings.add(entry["id"])
+        self.sites.add((entry["id"], self.where[0], self.where[1]))
         t = entry["logical_target"]
-        return {"region": t["region"], "object": t["object"], "field": t["field"]}, t.get("points_to")
+        target = {"region": t["region"], "object": t["object"], "field": t["field"]}
+        if index is not None:
+            target["index"] = index
+        return target, t.get("points_to"), t.get("count")
+
+    def object_target(self, state, p, width):
+        """Resolve a ptr/elem object access to (target, points_to, instance) with guards."""
+        self.deref(state, p)
+        obj = p[1][4:]
+        if p[0] == "elem":
+            _, _, off, stride, idx, _, inst = p
+            if inst is not None:
+                self.block("unknown-memory", "nested indexed object")
+            target, points, count = self.mapping(obj, off, width, idx, stride)
+            self.require(state, ["ult", idx, const(64, count)], True)
+            return target, points, idx
+        target, points, count = self.mapping(obj, p[2], width, p[4])
+        if count is not None:
+            self.block("unproven-mapping", "array field accessed without index")
+        return target, points, p[4]
 
     def load(self, state, ptr, width):
-        _, root, off = ptr
+        if ptr[0] == "rodata":
+            data, off = bytes.fromhex(ptr[1]), ptr[2]
+            if off + width // 8 > len(data):
+                self.block("unknown-memory", "read past read-only data item")
+            return bv(width, const(width, int.from_bytes(data[off:off + width // 8], "little")))
+        if ptr[0] == "elem":
+            target, points, inst = self.object_target(state, ptr, width)
+            return self.read_object(state, target, points, inst, width)
+        root, off = ptr[1], ptr[2]
         if root == "frame":
             slot = state.frame.get(off)
             if slot is None or slot[0] != width:
@@ -295,22 +397,33 @@ class Lifter:
                 state.args.add(key)
                 self.event(state, op="read_parameter", parameter=pid)
             return bv(width, ["arg", pid])
+        if root == "obj:image" and self.cookie is not None and off == int(self.cookie["cookie_rva"], 16):
+            if width != 64:
+                self.block("unknown-memory", "partial stack cookie read")
+            return ("opaque", "cookie")
         if root.startswith("obj:"):
             obj = root[4:]
             if obj == "vm" and off == self.sp_off and width == 32:
                 return ("spraw", 0)
             if obj == "vm" and off == self.base_off and width == 64:
-                return ("ptr", "stackbase", 0)
-            target, points = self.mapping(obj, off, width)
-            rid = self.event(state, op="read_state", target=target, width=width)
-            if points is not None:
-                return ("ptr", "obj:" + points, 0)
-            return bv(width, ["ref", rid])
+                return pointer("stackbase", 0)
+            target, points, inst = self.object_target(state, ptr, width)
+            return self.read_object(state, target, points, inst, width)
         self.block("unknown-memory", "raw parameter stack base access")
 
+    def read_object(self, state, target, points, inst, width):
+        rid = self.event(state, op="read_state", target=target, width=width)
+        if points is not None:
+            if width != 64:
+                self.block("unproven-mapping", "pointer field width")
+            return pointer("obj:" + points, 0, ["ref", rid], inst)
+        return bv(width, ["ref", rid])
+
     def store(self, state, ptr, width, value):
-        _, root, off = ptr
-        if root == "frame":
+        if ptr[0] == "rodata":
+            self.block("unsupported-effect", "write to read-only data")
+        root, off = ptr[1], ptr[2]
+        if ptr[0] == "ptr" and root == "frame":
             end = off + width // 8
             # Return address and anything past the dispatcher's 32-byte home space are
             # outside this command; a clobbered saved rbx fails the exit check instead.
@@ -321,11 +434,12 @@ class Lifter:
             state.frame[off] = (width, value)
             return
         if root.startswith("obj:"):
-            obj = root[4:]
-            if obj == "vm" and off in (self.sp_off, self.base_off):
+            if ptr[0] == "ptr" and root == "obj:vm" and off in (self.sp_off, self.base_off):
                 self.block("unsupported-effect", "parameter stack pointer write")
-            target, points = self.mapping(obj, off, width)
-            if points is not None or value[0] != "bv" or value[1] != width:
+            target, points, _ = self.object_target(state, ptr, width)
+            if value[0] == "ptr" and points is not None and value[2] == 0 and value[3] is not None:
+                value = bv(64, value[3])          # copy of a loaded pointer value
+            if value[0] != "bv" or value[1] != width:
                 self.block("unsupported-effect", "pointer or mismatched write")
             self.event(state, op="write_state", target=target, width=width, value=value[2])
             return
@@ -383,6 +497,10 @@ class Lifter:
             apply(state, static != invert)
             return None
         yes, no = state.fork(), state.fork()
+        # Each side knows the condition's value: later guards on the same expression
+        # (e.g. the code's own null check) do not fork again.
+        yes.facts.add((cc.encode(expr), True))
+        no.facts.add((cc.encode(expr), False))
         apply(yes, not invert)
         apply(no, invert)
         return {"kind": "branch", "events": state.events, "condition": expr,
@@ -451,6 +569,27 @@ class Lifter:
 
     def run(self, state):
         while True:
+            snapshot, mark = state.fork(), len(state.events)
+            try:
+                result = self.instruction(state)
+            except Guard as guard:
+                # Unchecked null/out-of-bounds access: fork an explicit undefined leaf and
+                # retry the instruction on the defined side with the new path fact.
+                snapshot.facts.add((cc.encode(guard.expr), guard.safe))
+                self.leaves += 1
+                if self.leaves > self.budget["leaves"]:
+                    self.block("budget-exceeded", "leaf paths")
+                undefined = {"kind": "leaf", "events": [], "exit": {"kind": "undefined", "code": const(32, 0)}}
+                defined = self.run(snapshot)
+                return {"kind": "branch", "events": state.events[:mark], "condition": guard.expr,
+                        "then": defined if guard.safe else undefined,
+                        "else": undefined if guard.safe else defined}
+            if result is not None:
+                return result
+
+    def instruction(self, state):
+        """Execute one instruction; returns a finished subtree or None to continue."""
+        if True:
             fn, idx = state.loc
             self.where = (fn, idx)
             node = self.graph["functions"].get(fn)
@@ -470,7 +609,8 @@ class Lifter:
             if self.count > self.budget["instructions"]:
                 self.block("budget-exceeded", "instructions")
             insn = node["instructions"][idx]
-            if insn.get("issues"):
+            if set(insn.get("issues", [])) - {"unresolved-or-mutable-data"} or (
+                    insn.get("issues") and not any(r["kind"] == "unknown-data" for r in insn["refs"])):
                 kinds = set(insn["issues"])
                 self.block("unknown-memory" if kinds == {"unresolved-or-mutable-data"}
                            else "unresolved-call" if kinds == {"indirect-control-flow"} else "cfg-gap",
@@ -482,15 +622,27 @@ class Lifter:
                     branch_target = int(ref["target"], 16)
                 elif ref["kind"] == "local" and 0 <= ref["target"] < len(node["instructions"]):
                     branch_target = int(fn, 16) + node["instructions"][ref["target"]]["offset"]
-            self.executed.add((fn, insn["offset"], insn["bytes"], branch_target))
+            # RIP-relative operands are zeroed too: keep what the original must reference.
+            data = None
+            for ref in insn["refs"]:
+                if ref["kind"] == "unknown-data":
+                    data = ("rva", int(ref["target"], 16))
+                elif ref["kind"] == "data":
+                    data = ("bytes", ref["bytes"], ref["offset"])
+            self.executed.add((fn, insn["offset"], insn["bytes"], branch_target, data))
             try:
                 name, ops, code = x64.decode(bytes.fromhex(insn["bytes"]))
             except x64.Unsupported as error:
                 self.block("unsupported-instruction", str(error))
             refs = insn["refs"]
-            if any(r["kind"] not in ("local", "function") for r in refs):
-                self.block("unknown-memory" if name not in ("call", "jmp") else "unresolved-call",
-                           ",".join(sorted({r["kind"] for r in refs})))
+            for r in refs:
+                if r["kind"] == "import" or (r["kind"] not in ("local", "function") and name in ("call", "jmp")):
+                    self.block("unresolved-call", r.get("name") or r["kind"])
+                if r["kind"] == "unknown-data" and r.get("why") not in GLOBAL_WHY:
+                    self.block("unknown-memory", "global data: " + str(r.get("why")))
+                if r["kind"] not in ("local", "function", "data", "unknown-data"):
+                    self.block("unknown-memory", r["kind"])
+            self.data_refs = [r for r in refs if r["kind"] in ("data", "unknown-data")]
             local = [r["target"] for r in refs if r["kind"] == "local"]
             func = [r["target"] for r in refs if r["kind"] == "function"]
             nxt = insn["next"]
@@ -502,9 +654,9 @@ class Lifter:
                 if state.frame.get(off) != (64, marker):
                     self.block("cfg-gap", "return address mismatch")
                 del state.frame[off]
-                state.regs["rsp"] = ("ptr", "frame", off + 8)
+                state.regs["rsp"] = pointer("frame", off + 8)
                 state.loc = (caller, ret_index)
-                continue
+                return None
             if name == "jcc":
                 if len(local) != 1:
                     self.block("cfg-gap", "conditional target")
@@ -512,18 +664,26 @@ class Lifter:
                 result = self.branch(state, code, lambda s, holds: setattr(s, "loc", (fn, t if holds else nxt)))
                 if result is not None:
                     return result
-                continue
+                return None
             if name in ("jmp", "call"):
                 if name == "jmp" and len(local) == 1 and not func:
                     state.loc = (fn, local[0])
-                    continue
+                    return None
                 if len(func) != 1 or local:
                     self.block("unresolved-call", "indirect or unresolved target")
                 target = func[0]
+                if self.cookie is not None and target == self.cookie["check_rva"] and name == "call":
+                    if state.regs["rcx"] != ("opaque", "cookie"):
+                        self.block("unsupported-effect", "stack cookie check with unproven value")
+                    # Success path: compares, rotates rcx and returns; only rcx and flags change.
+                    state.regs["rcx"] = ("opaque", "clobbered")
+                    state.flags = None
+                    state.loc = (fn, nxt)
+                    return None
                 summary = self.summaries.get((self.sha, target))
                 if name == "call" and summary is not None:
                     self.apply_summary(state, summary, target, insn)
-                    continue
+                    return None
                 active = {c[0] for c in state.calls} | {fn}
                 if target in active:
                     self.block("recursion", target)
@@ -534,12 +694,12 @@ class Lifter:
                     marker = ("opaque", "ret:%d" % next(self.ids))
                     off = self.frame_ptr(state) - 8
                     state.frame[off] = (64, marker)
-                    state.regs["rsp"] = ("ptr", "frame", off)
+                    state.regs["rsp"] = pointer("frame", off)
                     state.calls.append((fn, nxt, marker))
                 elif summary is not None:
                     self.block("unresolved-call", "summary reached through tail jump")
                 state.loc = (target, callee.get("entry_index"))
-                continue
+                return None
             result = self.step(state, name, ops, code, fn, nxt)
             if result is not None:
                 return result
@@ -558,10 +718,24 @@ class Lifter:
                 state.flags = ("res", zero[2], None, w)
                 return None
             a, b = self.read(state, ops[0], w), self.read(state, ops[1], w)
+            if name == "xor" and w == 64 and {a[0], b[0]} == {"opaque", "ptr"}:
+                # cookie ^ rsp is stored in the frame and later xor-ed back before the check.
+                token, frame = (a, b) if a[0] == "opaque" else (b, a)
+                if frame[1] == "frame" and token[1] == "cookie":
+                    self.write(state, ops[0], w, ("opaque", "cookie^frame%d" % frame[2]))
+                elif frame[1] == "frame" and token[1] == "cookie^frame%d" % frame[2]:
+                    self.write(state, ops[0], w, ("opaque", "cookie"))
+                else:
+                    self.block("unsupported-expression", "xor of pointer")
+                state.flags = None
+                return None
+            if name in ("cmp", "test"):
+                # Comparing a loaded pointer (null checks) uses its raw value.
+                a, b = (bv(64, v[3]) if v[0] == "ptr" and v[2] == 0 and v[3] is not None else v for v in (a, b))
             if a[0] == "ptr" and b[0] == "bv" and name in ("add", "sub") and constant_of(b[2]) is not None:
                 delta = constant_of(b[2])
                 delta = delta - (1 << 64) if delta >> 63 else delta
-                self.write(state, ops[0], w, ("ptr", a[1], a[2] + (delta if name == "add" else -delta)))
+                self.write(state, ops[0], w, pointer(a[1], a[2] + (delta if name == "add" else -delta), a[3], a[4]))
                 state.flags = None
                 return None
             if a[0] != "bv" or b[0] != "bv":
@@ -616,18 +790,21 @@ class Lifter:
         if name == "lea":
             if ops[0][2] != 64:
                 self.block("unsupported-expression", "narrow lea")
-            self.write_reg(state, ops[0][1], 64, self.address(state, ops[1]))
+            target = self.address(state, ops[1])
+            if target[0] != "ptr":
+                self.block("unsupported-expression", "address of read-only data or dynamic element")
+            self.write_reg(state, ops[0][1], 64, target)
             return None
         if name == "push":
             v = self.read_reg(state, ops[0][1], 64)
             off = self.frame_ptr(state) - 8
-            self.store(state, ("ptr", "frame", off), 64, v)
-            state.regs["rsp"] = ("ptr", "frame", off)
+            self.store(state, pointer("frame", off), 64, v)
+            state.regs["rsp"] = pointer("frame", off)
             return None
         if name == "pop":
             off = self.frame_ptr(state)
-            v = self.load(state, ("ptr", "frame", off), 64)
-            state.regs["rsp"] = ("ptr", "frame", off + 8)
+            v = self.load(state, pointer("frame", off), 64)
+            state.regs["rsp"] = pointer("frame", off + 8)
             self.write_reg(state, ops[0][1], 64, v)
             return None
         if name == "setcc":
@@ -648,7 +825,7 @@ class Lifter:
     def lift(self, opcode):
         self.ids = itertools.count()
         self.params, self.used_mappings, self.used_summaries = {}, set(), set()
-        self.executed, self.count, self.leaves = set(), 0, 0
+        self.executed, self.count, self.leaves, self.sites = set(), 0, 0, set()
         command = self.graph["commands"][opcode - 0x2000]
         base = {"opcode": "0x%x" % opcode, "binary_sha256": self.sha}
         if command["kind"] != "handler":
@@ -669,9 +846,12 @@ class Lifter:
             cc.validate(contract)
         except cc.Unsupported as error:
             return {**base, "status": "unknown", "issues": [{"issue": str(error), "detail": "IR subset"}]}
+        except cc.Invalid as error:
+            # e.g. one logical field accessed at two widths: needs an alias model.
+            return {**base, "status": "unknown", "issues": [{"issue": "unknown-memory", "detail": str(error)}]}
         return {**base, "status": "extracted", "contract": contract, "instructions": self.count,
                 "mappings": sorted(self.used_mappings), "summaries": sorted(self.used_summaries),
-                "executed": sorted(self.executed)}
+                "executed": sorted(self.executed), "sites": sorted(self.sites)}
 
 
 # ---------------------------------------------------------------- binary binding
@@ -731,9 +911,24 @@ def verify_binary(image, graph, opcode, executed):
     if command["kind"] == "handler":
         entry = struct.unpack_from("<I", image.read(table + 4 * (opcode - 0x2000), 4))[0]
         evidence_require(entry == int(command["entry"], 16), "case table entry differs")
-    for fn, offset, raw, target in executed:
+    for fn, offset, raw, target, data in executed:
         rva = int(fn, 16) + offset
         real = image.read(rva, len(raw) // 2)
+        if data is not None:
+            try:
+                _, ops, _, pos = x64.decode_ex(real)
+            except x64.Unsupported:
+                raise InvalidEvidence("undecodable data reference at %s+0x%x" % (fn, offset)) from None
+            disp = [o[4] for o in ops if o[0] == "mem" and o[1] == "rip"]
+            evidence_require(pos is not None and len(disp) == 1, "data reference shape at %s+0x%x" % (fn, offset))
+            address = rva + len(real) + disp[0]
+            if data[0] == "rva":
+                evidence_require(address == data[1], "global target differs at %s+0x%x" % (fn, offset))
+            else:
+                item = bytes.fromhex(data[1])
+                evidence_require(image.read(address - data[2], len(item)) == item,
+                                 "read-only data differs at %s+0x%x" % (fn, offset))
+            real = real[:pos] + bytes(4) + real[pos + 4:]
         if target is not None:
             try:
                 _, ops, _ = x64.decode(real)
@@ -746,6 +941,101 @@ def verify_binary(image, graph, opcode, executed):
             real = real[:-size] + bytes(size)
         evidence_require(real.hex() == raw, "instruction bytes differ at %s+0x%x" % (fn, offset))
     return {"dispatcher_rva": hex(start), "instructions": len(executed)}
+
+
+# ---------------------------------------------------------------- mapping proposals
+
+PROPOSED_COUNT = 1 << 20
+
+
+def masked_targets(contract):
+    """Canonical copy with every state target name replaced, plus the targets in order."""
+    found = []
+
+    def walk(node):
+        for event in node["events"]:
+            if "target" in event:
+                found.append(event["target"])
+                event["target"] = dict(event["target"], object="_", field="_")
+        if node["kind"] == "branch":
+            walk(node["then"])
+            walk(node["else"])
+    result = cc.canonical(contract)
+    walk(result["tree"])
+    return result, found
+
+
+def propose(lifters, opcodes, rounds=64):
+    """Review aid, never evidence: extract with provisional side-specific names for every
+    missing field, and pair base/derived fields where both contracts align structurally."""
+    saved = [lifter.mappings for lifter in lifters]
+    provisional, proposals, sites, blocked = {}, {}, {}, {}
+    aligned, misaligned = [], []
+    try:
+        for lifter in lifters:
+            lifter.mappings = dict(lifter.mappings)
+        for opcode in opcodes:
+            for _ in range(rounds):
+                rows = [lifter.lift(opcode) for lifter in lifters]
+                added = False
+                for tag, lifter, row in zip(("B", "D"), lifters, rows):
+                    if row["status"] == "extracted":
+                        continue
+                    missing = row["issues"][0].get("missing")
+                    if missing is None:
+                        continue
+                    stride = missing["stride"]
+                    pid = "%s:%s+0x%x/%d%s" % (tag, missing["object"], missing["offset"], missing["width"],
+                                               "" if stride is None else "[*%d]" % stride)
+                    target = {"region": "object", "object": missing["object"], "field": pid,
+                              "width": missing["width"]}
+                    if missing["width"] == 64:
+                        target["points_to"] = pid
+                    if stride is not None:
+                        target["count"] = PROPOSED_COUNT
+                    key = (lifter.sha, missing["object"], missing["offset"], missing["width"])
+                    lifter.mappings[key + ((stride,) if stride is not None else ())] = {
+                        "id": pid, "logical_target": target}
+                    provisional[pid] = dict(missing, side="base" if tag == "B" else "derived")
+                    added = True
+                if not added:
+                    break
+            if any(row["status"] != "extracted" for row in rows):
+                issue = next(row for row in rows if row["status"] != "extracted")["issues"][0]
+                blocked[issue["issue"]] = blocked.get(issue["issue"], 0) + 1
+                continue
+            for row in rows:
+                for ident, fn, index in row["sites"]:
+                    if ident in provisional:
+                        sites.setdefault(ident, set()).add("%s#%d" % (fn, index))
+            (a, ta), (b, tb) = (masked_targets(row["contract"]) for row in rows)
+            if cc.encode(a) != cc.encode(b):
+                misaligned.append("0x%x" % opcode)
+                continue
+            aligned.append("0x%x" % opcode)
+            for x, y in zip(ta, tb):
+                pair = ((x["object"], x["field"]), (y["object"], y["field"]))
+                if pair[0] != pair[1]:
+                    proposals.setdefault(pair, set()).add("0x%x" % opcode)
+    finally:
+        for lifter, mappings in zip(lifters, saved):
+            lifter.mappings = mappings
+    by_base, by_derived = {}, {}
+    for base, derived in proposals:
+        by_base.setdefault(base, set()).add(derived)
+        by_derived.setdefault(derived, set()).add(base)
+
+    def describe(name):
+        info = provisional.get(name[1])
+        if info is None:
+            return {"logical": "%s.%s" % name}
+        return {**info, "offset": hex(info["offset"]), "object_path": name[0],
+                "sites": sorted(sites.get(name[1], ()))}
+    candidates = [{"base": describe(base), "derived": describe(derived), "opcodes": sorted(ops),
+                   "conflict": len(by_base[base]) > 1 or len(by_derived[derived]) > 1}
+                  for (base, derived), ops in sorted(proposals.items(), key=lambda kv: (-len(kv[1]), kv[0]))]
+    return {"scope": "review candidates only; provisional names are not mapping evidence",
+            "aligned": aligned, "misaligned": misaligned, "blocked": blocked, "candidates": candidates}
 
 
 # ---------------------------------------------------------------- envelopes and CLI
@@ -785,7 +1075,7 @@ def compare_pair(base, derived, rules, opcode, images=(None, None)):
             side = lifter.lift(opcode)
             if side["status"] == "extracted" and image is not None:
                 side["binary"] = verify_binary(image, graph, opcode, side["executed"])
-            row[name] = {k: v for k, v in side.items() if k not in ("contract", "executed")}
+            row[name] = {k: v for k, v in side.items() if k not in ("contract", "executed", "sites")}
             sides.append((graph, export_sha, side))
         if any(s[2]["status"] != "extracted" for s in sides):
             row["status"] = "unknown"
@@ -811,6 +1101,8 @@ def main():
     parser.add_argument("--summaries", required=True)
     parser.add_argument("--base-exe")
     parser.add_argument("--derived-exe")
+    parser.add_argument("--propose", action="store_true",
+                        help="list base/derived field pairing candidates for manual review")
     parser.add_argument("opcodes", nargs="*", type=lambda v: int(v, 0),
                         help="default: every derived handler")
     args = parser.parse_args()
@@ -832,6 +1124,10 @@ def main():
             raise ValueError("expected distinct base and derived builds")
         images = tuple(Image(Path(p).read_bytes()) if p else None for p in (args.base_exe, args.derived_exe))
         opcodes = args.opcodes or [c["opcode"] for c in loaded[1][1]["commands"] if c["kind"] == "handler"]
+        if args.propose:
+            print(json.dumps({"status": "proposals", "rules": rules,
+                              **propose([loaded[0][0], loaded[1][0]], opcodes)}, ensure_ascii=False, indent=1))
+            return 0
         rows = [compare_pair(loaded[0], loaded[1], rules, op, images) for op in opcodes]
         totals = {}
         blockers = {}
