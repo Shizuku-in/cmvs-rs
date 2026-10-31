@@ -1592,6 +1592,118 @@ fn second_texture_mode_preserves_draw_state_and_targets_parent_or_child() {
 }
 
 #[test]
+#[ignore = "requires read-only CMVS_GAME_ROOT Amatsutsumi scripts; scene/pixels are synthetic"]
+fn external_original_library_toggle_triggers_texture_subtract() {
+    use cmvs_rs::{
+        capture::ScreenCapture,
+        platform::RecordingBackend,
+        profile::Registry,
+        raster::RgbaImage,
+        scene_render,
+        script_control::{ArchiveScripts, ScriptSource},
+    };
+    let root =
+        std::path::PathBuf::from(std::env::var_os("CMVS_GAME_ROOT").expect("CMVS_GAME_ROOT"));
+    let game = Registry::builtin().identify_game(&root, None).unwrap();
+    assert_eq!(game.selection.profile.id, "cmvs-20160201");
+    let mut source =
+        ArchiveScripts::new(std::fs::File::open(root.join("data/pack/script.cpz")).unwrap())
+            .unwrap();
+    let original = source.load(b"intproc.ps3").unwrap();
+    let labels = original.labels();
+    assert_eq!(labels[158], 0x2bea0);
+    assert_eq!(labels[159], 0x2c138);
+    let slots = [15, 17, 20, 28, 29, 40];
+    let mut code = vec![];
+    for (x, slot) in slots.into_iter().enumerate() {
+        command(&mut code, 0x2020, &[slot]);
+        command(&mut code, 0x203e, &[slot, u32::MAX]);
+        command(&mut code, 0x2040, &[slot]);
+        command(&mut code, 0x2044, &[slot, u32::MAX, 0, 0, 1, 1]);
+        command(&mut code, 0x2045, &[slot, u32::MAX, x as u32, 0]);
+    }
+    let setup = script(&code);
+    let mut setup_vm = Machine::new(&setup).unwrap();
+    let mut scene = SceneHost::default();
+    let capture = ScreenCapture::default();
+    let mut backend = RecordingBackend::default();
+    backend.present_frame(RgbaImage::new(1, 1, vec![220, 80, 50, 255]).unwrap());
+    while setup_vm.pc() < code.len() {
+        pending(&mut setup_vm);
+        assert!(
+            scene.try_handle(&mut setup_vm).unwrap()
+                || capture
+                    .try_immediate(&mut setup_vm, &mut scene, &mut backend)
+                    .unwrap()
+        );
+    }
+    let before = scene_render::render(&scene, 6, 1).unwrap();
+    let mut vm = Machine::at(&original, labels[158]).unwrap();
+    vm.set_current_name(b"intproc.ps3".to_vec());
+    vm.state_mut().set_integer(55, 0).unwrap();
+    vm.state_mut().set_integer(110, 0).unwrap();
+    // Seed a local caller frame, not a patched script/opcode. The original function
+    // reads its parameter at frame-8 and returns with 0x0411(pop 4).
+    let mut invoke = |value: u32, deferred: bool, scene: &mut SceneHost| {
+        vm.state_mut()
+            .set_integer(110, i32::from(deferred))
+            .unwrap();
+        let mut image = vm.capture_vm().unwrap();
+        image.pc = labels[158];
+        image.stack_pointer = 8;
+        image.frame_depth = 1;
+        image.frames[1] = 8;
+        image.stack[..4].copy_from_slice(&value.to_le_bytes());
+        image.stack[4..8].copy_from_slice(&labels[159].to_le_bytes());
+        vm.restore_vm(&image).unwrap();
+        let mut hits = Vec::new();
+        for _ in 0..10_000 {
+            if vm.pc() == labels[159] as usize {
+                assert_eq!(vm.stack().len_bytes(), 0);
+                assert_eq!(vm.state().integer(55), Some(value as i32));
+                println!("original label158({value}), deferred={deferred}: 0x2322 sites={hits:x?}");
+                return hits;
+            }
+            if let cmvs_rs::machine::Step::System { pc, command } = vm.step().unwrap() {
+                if command == 0x322 {
+                    hits.push(pc);
+                }
+                assert!(scene.try_handle(&mut vm).unwrap());
+            }
+        }
+        panic!("original toggle function did not return");
+    };
+    assert_eq!(
+        invoke(1, false, &mut scene),
+        [0x2bf3a, 0x2bf98, 0x2c030, 0x2c0da]
+    );
+    let enabled = scene_render::render(&scene, 6, 1).unwrap();
+    for (x, slot) in slots.into_iter().enumerate() {
+        let affected = [17, 20, 28, 29].contains(&slot);
+        assert_eq!(
+            scene
+                .object(slot as u8)
+                .unwrap()
+                .draw
+                .as_ref()
+                .unwrap()
+                .texture_subtract,
+            u32::from(affected)
+        );
+        assert_eq!(
+            &enabled.pixels()[x * 4..x * 4 + 3],
+            if affected { &[0, 0, 0] } else { &[220, 80, 50] }
+        );
+    }
+    assert!(invoke(1, false, &mut scene).is_empty());
+    assert_eq!(invoke(0, false, &mut scene).len(), 4);
+    assert!(invoke(1, true, &mut scene).is_empty());
+    assert_eq!(scene_render::render(&scene, 6, 1).unwrap(), before);
+    assert_eq!(invoke(0, false, &mut scene).len(), 4);
+    assert_eq!(scene_render::render(&scene, 6, 1).unwrap(), before);
+}
+
+#[test]
 fn flag_clear_command_drops_bit_0x100_of_the_object_or_child() {
     let mut code = vec![];
     command(&mut code, 0x2020, &[10]);
