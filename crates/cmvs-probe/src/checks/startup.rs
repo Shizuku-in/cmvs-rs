@@ -1,18 +1,16 @@
 //! Reaching the start page from a fresh start, and checking that the same input twice
 //! gives the same run.
 use crate::{
-    device::Action,
     json::Json,
-    observe::{Observation, PageSignature, Settle, state_digest},
+    observe::{Observation, PageSignature, state_digest},
     report::{CheckResult, Level, Outcome},
+    scenario::{StartLog, drive_to_start},
     session::{Options, Session, Stop},
     target::{Target, cap},
 };
 use cmvs_core::{digest::to_hex, ps3::Script, runner::load_start};
 use std::path::Path;
 
-/// Frames an interactive page must stay unchanged to count as settled.
-pub const STABLE_FRAMES: u32 = 60;
 pub const RUN_CAPABILITIES: [&str; 3] = [cap::PROFILE, cap::CPZ6, cap::KEY_CONFIG];
 
 /// Result of driving one fresh session to its first stable interactive page.
@@ -33,41 +31,6 @@ pub struct StartRun {
 pub fn load_script(target: &Target) -> Result<Script, String> {
     let files = target.files.as_ref().ok_or("game files not found")?;
     load_start(&target.root, files).map_err(|e| e.to_string())
-}
-
-/// What happened on the way to the start page.
-#[derive(Debug, Default)]
-pub struct StartLog {
-    pub scripts: Vec<String>,
-    pub advances: u64,
-    pub last: Option<Observation>,
-}
-
-/// Advances every message wait until the first settled page. Nothing here knows which
-/// script shows the title; the first settled page is the start page by definition.
-pub fn drive_to_start(
-    session: &mut Session<'_>,
-    log: &mut StartLog,
-) -> Result<PageSignature, Stop> {
-    let mut settle = Settle::new(STABLE_FRAMES);
-    loop {
-        let observation = session.frame()?;
-        let name = observation.script.escape_ascii().to_string();
-        if !log.scripts.contains(&name) {
-            log.scripts.push(name);
-        }
-        if observation.waiting_for_advance() && !session.busy() {
-            session
-                .act(Action::Advance)
-                .map_err(crate::session::Stop::Error)?;
-            log.advances += 1;
-        }
-        let settled = settle.feed(&observation).cloned();
-        log.last = Some(observation);
-        if let Some(page) = settled {
-            return Ok(page);
-        }
-    }
 }
 
 /// Drives a new session in a fresh user directory to the start page and records the run.

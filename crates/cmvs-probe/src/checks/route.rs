@@ -5,15 +5,13 @@
 //! state is copied between runs. Nothing names a script: a scenario entry is a start-page
 //! button after which a message wait appears, and a choice is a settled button group that
 //! was never visible during a message wait.
-use super::{
-    startup::{STABLE_FRAMES, StartLog, drive_to_start},
-    static_checks::ScriptInventory,
-};
+use super::static_checks::ScriptInventory;
 use crate::{
     device::Action,
     json::Json,
-    observe::{GroupShape, Observation, PageSignature, Settle, variables_digest},
+    observe::{PageSignature, Settle, variables_digest},
     report::{Blocked, CheckResult, Level, Outcome},
+    scenario::{Event, STABLE_FRAMES, Scenario, StartLog, drive_to_start},
     session::{Coverage, Options, Session, Stop},
     target::Target,
 };
@@ -23,7 +21,7 @@ use cmvs_core::{
 };
 use std::{
     cell::Cell,
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::Write,
     path::Path,
@@ -31,10 +29,6 @@ use std::{
 
 /// Virtual frames a start-page button gets to show its effect.
 const ENTRY_FRAMES: u64 = 3600;
-/// Frames a choice candidate must stay unchanged before it is taken.
-const CHOICE_FRAMES: u32 = 30;
-/// Quiet frames after which a confirm-to-continue loop gets one advance.
-const NUDGE_FRAMES: u64 = 300;
 /// The engine's system save inside a user directory.
 const SYSTEM_SAVE: &str = "system.dat";
 
@@ -359,16 +353,6 @@ impl Seen {
     }
 }
 
-/// Interactive groups never seen during a message wait.
-fn candidates(o: &Observation, ambient: &HashSet<(usize, [u8; 32])>) -> Vec<GroupShape> {
-    o.page
-        .groups
-        .iter()
-        .filter(|g| g.enabled > 0 && !ambient.contains(&(g.slot, g.layout)))
-        .cloned()
-        .collect()
-}
-
 /// Per-tree state shared by its routes.
 struct TreeState<'s> {
     known: BTreeMap<String, usize>,
@@ -384,193 +368,102 @@ fn explore(
     index: usize,
     route: &mut Route,
 ) -> End {
-    let start = match drive_to_start(session, &mut StartLog::default()) {
-        Ok(page) => page,
-        Err(stop) => return End::Stopped(stop),
-    };
-    let press = Action::Press {
-        group: entry.0,
-        button: entry.1,
-    };
-    if let Err(e) = session.act(press) {
-        return End::Stopped(Stop::Error(e));
-    }
-    let mut ambient: HashSet<(usize, [u8; 32])> = HashSet::new();
-    // Choice shapes already answered; cleared once no candidate is visible.
-    let mut answered: HashSet<(usize, [u8; 32])> = HashSet::new();
-    let (mut pending, mut pending_frames) = (Vec::<GroupShape>::new(), 0u32);
-    let mut settle = Settle::new(STABLE_FRAMES);
-    let mut quiet_since = session.yields();
-    let mut in_scenario = false;
-    loop {
-        let o = match session.frame() {
-            Ok(o) => o,
-            Err(stop) => return End::Stopped(stop),
-        };
-        if o.waiting_for_advance() {
-            if !in_scenario && hold_skip(session) {
-                session.note("skip-held", Json::Null);
-            }
-            in_scenario = true;
-            for g in &o.page.groups {
-                ambient.insert((g.slot, g.layout));
-            }
-            if !session.busy() {
-                let _ = session.act(Action::Advance);
-                route.advances += 1;
-            }
-            quiet_since = o.yields;
-            pending.clear();
-            continue;
-        }
-        if session.busy() {
-            continue;
-        }
-        // The route ends when a page settles in the start page's script. Its shape may
-        // differ: finishing a route can unlock start-page buttons.
-        if in_scenario
-            && let Some(page) = settle.feed(&o)
-            && page.script == start.script
-        {
-            route.end_page = Some(page.clone());
-            session.note(
-                "route-end",
-                Json::obj([("changed", Json::from(*page != start))]),
-            );
-            return End::Start;
-        }
-        // Inside the start page's script the route is ending: wait for the page to settle
-        // instead of answering its buttons as a choice (identity comparison, no literal).
-        if !in_scenario || o.transition || o.script == start.script {
-            continue;
-        }
-        let found: Vec<GroupShape> = candidates(&o, &ambient)
-            .into_iter()
-            .filter(|g| !answered.contains(&(g.slot, g.layout)))
-            .collect();
-        if candidates(&o, &ambient).is_empty() {
-            answered.clear();
-        }
-        if !found.is_empty() && found == pending {
-            pending_frames += 1;
-        } else {
-            pending_frames = 0;
-            pending = found;
-        }
-        if pending_frames >= CHOICE_FRAMES {
-            if pending.len() > 1 {
-                let slots: Vec<_> = pending.iter().map(|g| g.slot).collect();
-                return End::Stopped(Stop::Error(format!(
-                    "ambiguous-choice: candidate groups {slots:?}"
-                )));
-            }
-            let shape = pending[0].clone();
-            let Some(group) = session.startup().buttons().group(shape.slot) else {
-                return End::Stopped(Stop::Error("choice group vanished".into()));
-            };
-            let enabled: Vec<usize> = group
-                .buttons
-                .iter()
-                .enumerate()
-                .filter(|(_, b)| b.enabled)
-                .map(|(i, _)| i)
-                .collect();
-            let buttons = group.buttons.len();
-            let script = o.script.escape_ascii().to_string();
-            let key = variables_digest(session.startup());
-            let depth = route.choices.len();
-            tree.seen.choice(&script, o.pc, &enabled, &mut tree.found);
-            // Replay the prefix while it matches where choices appear. A choice at another
-            // location, or a recorded button that is no longer enabled, ends the replay and
-            // the route continues as new exploration.
-            let replay = if route.diverged.is_none() {
-                prefix.get(depth).and_then(|want| {
-                    let matches = want.script == script && want.pc == o.pc;
-                    (matches && enabled.contains(&want.button)).then_some(want.button)
-                })
-            } else {
-                None
-            };
-            if replay.is_none() && route.diverged.is_none() && depth < prefix.len() {
-                route.diverged = Some(depth);
-                session.note("replay-diverged", Json::obj([("depth", Json::from(depth))]));
-            }
-            let picked = match replay {
-                Some(button) => button,
-                None => {
-                    if let Some(&first) = tree.known.get(&key) {
-                        return End::Merged(first);
-                    }
-                    tree.known.insert(key.clone(), index);
-                    for &alternative in enabled.iter().skip(1) {
-                        let mut branch = route.picks.clone();
-                        branch.push(Pick {
-                            script: script.clone(),
-                            pc: o.pc,
-                            button: alternative,
-                        });
-                        route.branches.push(branch);
-                    }
-                    enabled[0]
-                }
-            };
-            session.note(
-                "choice",
-                Json::obj([
-                    ("depth", Json::from(depth)),
-                    ("group", shape.slot.into()),
-                    ("buttons", buttons.into()),
-                    ("picked", picked.into()),
-                ]),
-            );
-            route.picks.push(Pick {
-                script: script.clone(),
-                pc: o.pc,
-                button: picked,
-            });
-            route.choices.push(ChoicePoint {
-                script,
-                pc: o.pc,
-                key,
-                slot: shape.slot,
-                buttons,
-                enabled,
-                picked,
-            });
-            answered.insert((shape.slot, shape.layout));
-            pending.clear();
-            pending_frames = 0;
-            if let Err(e) = session.act(Action::Press {
-                group: shape.slot,
-                button: picked,
-            }) {
-                return End::Stopped(Stop::Error(e));
-            }
-            quiet_since = o.yields;
-            continue;
-        }
-        let movie = session.startup().movies().player().is_some();
-        if pending.is_empty() && !movie && o.yields - quiet_since >= NUDGE_FRAMES {
-            let _ = session.act(Action::Advance);
-            route.nudges += 1;
-            session.note("nudge", Json::Null);
-            quiet_since = o.yields;
-        }
+    match explore_scenario(session, entry, prefix, tree, index, route) {
+        Ok(end) => end,
+        Err(stop) => End::Stopped(stop),
     }
 }
 
-/// Starts holding skip once, at the first message wait, when the options ask for it.
-fn hold_skip(session: &mut Session<'_>) -> bool {
-    if !session.route_skip() {
-        return false;
-    }
-    match crate::device::skip_code(session.bindings()) {
-        Some(code) => {
-            session.hold(vec![code]);
-            true
+fn explore_scenario(
+    session: &mut Session<'_>,
+    entry: (usize, usize),
+    prefix: &[Pick],
+    tree: &mut TreeState<'_>,
+    index: usize,
+    route: &mut Route,
+) -> Result<End, Stop> {
+    let skip = session.route_skip();
+    let mut scenario = Scenario::begin(session, entry, skip)?;
+    let end = loop {
+        let choice = match scenario.next(session)? {
+            Event::Wait(_) => {
+                scenario.advance(session)?;
+                continue;
+            }
+            Event::End(page) => {
+                route.end_page = Some(page);
+                break End::Start;
+            }
+            Event::Choice(choice) => choice,
+        };
+        let o = &choice.observation;
+        let script = o.script.escape_ascii().to_string();
+        let key = variables_digest(session.startup());
+        let depth = route.choices.len();
+        tree.seen
+            .choice(&script, o.pc, &choice.enabled, &mut tree.found);
+        // Replay the prefix while it matches where choices appear. A choice at another
+        // location, or a recorded button that is no longer enabled, ends the replay and the
+        // route continues as new exploration.
+        let replay = if route.diverged.is_none() {
+            prefix.get(depth).and_then(|want| {
+                let matches = want.script == script && want.pc == o.pc;
+                (matches && choice.enabled.contains(&want.button)).then_some(want.button)
+            })
+        } else {
+            None
+        };
+        if replay.is_none() && route.diverged.is_none() && depth < prefix.len() {
+            route.diverged = Some(depth);
+            session.note("replay-diverged", Json::obj([("depth", Json::from(depth))]));
         }
-        None => false,
-    }
+        let picked = match replay {
+            Some(button) => button,
+            None => {
+                if let Some(&first) = tree.known.get(&key) {
+                    break End::Merged(first);
+                }
+                tree.known.insert(key.clone(), index);
+                for &alternative in choice.enabled.iter().skip(1) {
+                    let mut branch = route.picks.clone();
+                    branch.push(Pick {
+                        script: script.clone(),
+                        pc: o.pc,
+                        button: alternative,
+                    });
+                    route.branches.push(branch);
+                }
+                choice.enabled[0]
+            }
+        };
+        session.note(
+            "choice",
+            Json::obj([
+                ("depth", Json::from(depth)),
+                ("group", choice.shape.slot.into()),
+                ("buttons", choice.buttons.into()),
+                ("picked", picked.into()),
+            ]),
+        );
+        route.picks.push(Pick {
+            script: script.clone(),
+            pc: o.pc,
+            button: picked,
+        });
+        route.choices.push(ChoicePoint {
+            script,
+            pc: o.pc,
+            key,
+            slot: choice.shape.slot,
+            buttons: choice.buttons,
+            enabled: choice.enabled.clone(),
+            picked,
+        });
+        scenario.answer(session, &choice, picked)?;
+    };
+    route.advances = scenario.advances;
+    route.nudges = scenario.nudges;
+    Ok(end)
 }
 
 /// One explored choice tree.

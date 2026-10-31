@@ -5,7 +5,6 @@ pub mod startup;
 pub mod static_checks;
 
 use crate::{
-    device::Device,
     json::Json,
     report::{CheckResult, Outcome},
     session::{Coverage, Options},
@@ -94,13 +93,6 @@ pub fn run(
         .filter(|id| wants(id))
         .collect();
     if exploring.is_empty() {
-        return Run { results, events };
-    }
-    if options.device == Device::Keyboard {
-        let why = "keyboard button navigation is not implemented".to_owned();
-        for id in exploring {
-            results.push(skipped(id, why.clone()));
-        }
         return Run { results, events };
     }
     let runner = route::Runner::new(target, &script, options, font, out);

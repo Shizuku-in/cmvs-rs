@@ -129,6 +129,8 @@ pub struct Session<'a> {
     /// Codes held on every frame in addition to queued input.
     held: Vec<usize>,
     user: PathBuf,
+    /// A keyboard press in progress: group, button and navigation taps so far.
+    navigation: Option<(usize, usize, usize)>,
 }
 
 /// Executed instruction addresses by script name: the PC before each VM step.
@@ -208,6 +210,7 @@ impl<'a> Session<'a> {
             coverage: None,
             held: Vec::new(),
             user: user.to_path_buf(),
+            navigation: None,
         })
     }
     pub fn startup(&self) -> &Startup<'a> {
@@ -241,12 +244,65 @@ impl<'a> Session<'a> {
     pub fn yields(&self) -> u64 {
         self.yields
     }
-    /// True while queued input frames remain.
+    /// True while queued input frames remain or a keyboard press is still navigating.
     pub fn busy(&self) -> bool {
-        !self.queue.is_empty()
+        !self.queue.is_empty() || self.navigation.is_some()
+    }
+    pub fn device(&self) -> Device {
+        self.device
+    }
+    /// Writes a gameplay save to `slot` as the script command would; false when the engine
+    /// has not built a snapshot yet.
+    pub fn save_slot(&mut self, slot: u16) -> Result<bool, String> {
+        self.run.save_slot(slot).map_err(|e| e.to_string())
+    }
+    /// Loads a gameplay save, replacing the VM and every saved host.
+    pub fn load_slot(&mut self, slot: u16) -> Result<(), String> {
+        self.run
+            .load_slot(slot, &mut self.backend)
+            .map_err(|e| e.to_string())
+    }
+    /// Player-facing settings: text, auto advance, read skip and audio mixer values.
+    pub fn settings_fingerprint(&self) -> String {
+        format!(
+            "{:?} {:?} {:?}",
+            self.run.settings(),
+            self.run.audio().settings(),
+            self.run.audio().voice_ducking()
+        )
+    }
+    /// Live resource counts that a long run should not grow without bound.
+    pub fn resource_counts(&self) -> [usize; 5] {
+        let run = &self.run;
+        let objects = run.scene().objects().len();
+        let channels = (0..32)
+            .filter(|&i| run.audio().channel(i).is_some())
+            .count();
+        let groups = (0..cmvs_core::buttons::BUTTON_GROUPS)
+            .filter(|&g| run.buttons().group(g).is_some())
+            .count();
+        let sequences = run.sequence().entries().iter().flatten().count();
+        let history = run.history().entries().len();
+        [objects, channels, groups, sequences, history]
     }
     /// Queues an action; it takes effect over the next frames.
     pub fn act(&mut self, action: Action) -> Result<(), String> {
+        if let (Device::Keyboard, Action::Press { group, button }) = (self.device, action) {
+            let present = self
+                .run
+                .buttons()
+                .group(group)
+                .is_some_and(|g| button < g.buttons.len());
+            if !present {
+                return Err(format!("button {group}:{button} is not present"));
+            }
+            self.event(
+                "action",
+                Json::obj([("action", Json::from(format!("{action:?}")))]),
+            );
+            self.navigation = Some((group, button, 0));
+            return Ok(());
+        }
         let buttons = self.run.buttons();
         let frames = self.device.frames(action, &self.bindings, |g, b| {
             let button = buttons.group(g)?.buttons.get(b)?;
@@ -325,6 +381,11 @@ impl<'a> Session<'a> {
         self.run
             .advance_frame(self.frame_ms)
             .map_err(|e| Stop::Error(e.to_string()))?;
+        // Keyboard navigation moves the system cursor to the new button; the host takes it.
+        if let Some(warp) = self.run.input_mut().take_warp() {
+            self.pointer = warp;
+        }
+        self.navigate()?;
         let frame = self.queue.pop_front().unwrap_or_default();
         if let Some(pointer) = frame.pointer {
             self.pointer = pointer;
@@ -347,6 +408,37 @@ impl<'a> Session<'a> {
             .push(digest[..8].try_into().expect("eight bytes"));
         self.note_changes(&observation);
         Ok(observation)
+    }
+    /// One step of a keyboard press: tap "next" until the target is current, then decide.
+    fn navigate(&mut self) -> Result<(), Stop> {
+        let Some((group, button, taps)) = self.navigation else {
+            return Ok(());
+        };
+        if !self.queue.is_empty() {
+            return Ok(());
+        }
+        let Some(buttons) = self.run.buttons().group(group) else {
+            self.navigation = None;
+            return Err(self.stop(Stop::Error(format!(
+                "keyboard navigation lost button group {group}"
+            ))));
+        };
+        let (current, count) = (buttons.current, buttons.buttons.len());
+        let action = if current == Some(button) {
+            self.navigation = None;
+            crate::device::engine_action::DECIDE
+        } else if taps > count + 1 {
+            self.navigation = None;
+            return Err(self.stop(Stop::Error(format!(
+                "keyboard navigation could not reach button {group}:{button}"
+            ))));
+        } else {
+            self.navigation = Some((group, button, taps + 1));
+            crate::device::engine_action::NEXT
+        };
+        let frames = crate::device::key_tap(&self.bindings, action).map_err(Stop::Error)?;
+        self.queue.extend(frames);
+        Ok(())
     }
     fn note_changes(&mut self, observation: &Observation) {
         if observation.script != self.last_script {

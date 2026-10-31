@@ -6,5 +6,6 @@ pub mod device;
 pub mod json;
 pub mod observe;
 pub mod report;
+pub mod scenario;
 pub mod session;
 pub mod target;

@@ -9,6 +9,9 @@ pub mod engine_action {
     /// Decide: releasing it advances message waits and presses the current button.
     pub const DECIDE: usize = 0;
     pub const CANCEL: usize = 1;
+    /// Button navigation: previous and next link of the current button.
+    pub const PREVIOUS: usize = 2;
+    pub const NEXT: usize = 3;
     /// Normal skip, held.
     pub const SKIP: usize = 8;
 }
@@ -42,12 +45,15 @@ pub enum Action {
     Cancel,
     /// Hold skip for the given number of frames.
     SkipHold(u32),
-    /// Click button `button` of group slot `group`; mouse only until keyboard navigation
-    /// through button links is implemented.
+    /// Click button `button` of group slot `group`. The keyboard device walks the button
+    /// links with the navigation keys and then decides; the session drives that walk.
     Press {
         group: usize,
         button: usize,
     },
+    /// Mouse wheel up or down for one frame.
+    WheelUp,
+    WheelDown,
 }
 
 /// Input held during one VM frame. `pointer` keeps its previous value when `None`.
@@ -59,6 +65,19 @@ pub struct Frame {
 
 /// Pointer position outside every button, so a mouse advance is never taken by a button.
 pub const OFF_SCREEN: [i32; 2] = [-1, -1];
+
+/// One tap of a keyboard-bound engine action: pressed for a frame, then released.
+pub fn key_tap(bindings: &KeyBindings, action: usize) -> Result<Vec<Frame>, String> {
+    let code = bound_key(bindings, action)
+        .ok_or_else(|| format!("key.cfg binds no key to engine action {action}"))?;
+    Ok(vec![
+        Frame {
+            codes: vec![code],
+            pointer: None,
+        },
+        Frame::default(),
+    ])
+}
 
 /// A non-mouse code bound to normal skip, held by route exploration whatever the device.
 pub fn skip_code(bindings: &KeyBindings) -> Option<usize> {
@@ -135,7 +154,12 @@ impl Device {
                 Ok(out)
             }
             (Self::Keyboard, Action::Press { .. }) => {
-                Err("keyboard button navigation is not implemented".into())
+                Err("keyboard presses are driven by the session".into())
+            }
+            (Self::Mouse, Action::WheelUp) => Ok(tap(MOUSE_CODES[2], None)),
+            (Self::Mouse, Action::WheelDown) => Ok(tap(MOUSE_CODES[3], None)),
+            (Self::Keyboard, Action::WheelUp | Action::WheelDown) => {
+                Err("the keyboard device has no wheel".into())
             }
         }
     }
