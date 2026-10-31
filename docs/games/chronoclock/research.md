@@ -97,3 +97,23 @@ IDA 9.4分别导出两个构建的x64/x86，二进制身份来自各自档案，
 ## 2026-10-31：复核辅助 `--explain`
 
 见[档案设计第 14 节](../../design/engine-profiles.md#复核辅助---explain)。带诊断字段的 x64 导出为 `local/chronoclock/v2d-*-x64.json`（基准 x64 读 `p2-amatsu-x64.i64` 临时副本，CHRONOCLOCK x64 读 `v2-chrono-x64.i64` 临时副本）；与已提交报告逐行相同。`0x2091` 的解释：处理函数 `0x7f1fa` → `0x6eb60` → `0x82330`（基准 `0x82b61` → `0x72100` → `0x85ce0`），在 `+0x32` 读取可写全局（CHRONOCLOCK `qword_140131ea0`），`+0x15` 的映像基址 `lea` 位移不同。人工复核从这两处开始。
+
+## 2026-10-31：P3，`0x2091` 位变量初始化复核
+
+基线 `763a74e`。沿默认闸门停点人工核对两个 x64 构建的完整处理函数、位写入函数、错误标志指针 setter 和唯一构造调用者；两边 IDA 输入哈希均与档案一致。CHRONOCLOCK 使用当前会话只读查询，基准由 IDA 9.4 批处理读取 `p2-amatsu-x64.i64` 的新副本 `review-2091-base.i64`。原游戏保持只读，分析库和输出仅留在忽略的 `local/chronoclock/`。
+
+两边对合法范围逐位写入的语义相同，差异为数据区和代码地址；可写全局实际指向 VM `+12056` 错误标志，位区另有逐字节同步的冗余校验副本。现有 Rust 根语义保留变量值，不模拟副本失配标志；非法范围继续明确报错。证据与边界见 [VM 语义](vm-semantics.md#位变量范围初始化-0x20912026-10-31-复核)。仅将 `0x2091` 从 `Unreviewed` 改为 `Reviewed`，不改指纹算法、指纹报告或运行时代码。当前统计为 Inherited=434、Reviewed=2、Unreviewed=276、NoOp=264。
+
+### 默认启动验收
+
+使用 debug `cmvs-trace`，建档命令原参数：`--bootstrap`、原游戏 `save/` 和 CSS1 只读、`--script-archive`、`--record-platform`、`--continue-without-snapshot`、帧16ms、种子0、百万步预算；**不加 `--allow-unreviewed`**。第16步的 `start.ps3 / 0x50 / 0x2091` 以 start=0、count=65536、value=0 完成，回收12字节并前进至 `0x52`。第23步在 `start.ps3 / 0x76 / 0x2092` 明确报未复核，PC和12字节参数保持挂起；其参数为 start=0、count=2048、value=0。闸门统计 base=0、inherited=3、reviewed=2、unreviewed=0。
+
+对 CR 规范化并去掉旧日志末尾统计及错误行后，`v2-default.log` 是新日志的逐字节前缀。没有新增原生窗口、字体、音轨或完整剧情验证；研究放行的 `0x2112` 停点仍为历史结果。下一步复核 `0x2092`，不能据位写入相同直接放行整数初始化。
+
+| 忽略目录内证据 | SHA-256 |
+|---|---|
+| `review-2091-chrono.json`（反汇编与伪代码） | `b9337987c169147fdc56ef1f8abd3026601968e6b48a0babf7eee28472843372` |
+| `review-2091-base.json`（反汇编、伪代码和指针引用） | `fa22a5fe2837226d1f1c093a644f2f22b5d16164f31dea98f566d26e9f86a0da` |
+| `review-2091-default.log` | `8179bc6b3882e3a0c38e7b8d394d77125fdedcbe685f2ffb386f2a0efab185be` |
+
+检查通过：`cargo fmt --check`、`cargo test --offline`（836项通过、12项忽略，含复核文档引用及现有合成初始化测试）、`cargo clippy --offline --all-targets -- -D warnings`、`git diff --check`。未修改解码算法、后端或 feature，无新依赖及外部源码；不重复计入《アマツツミ》百万步回归，本轮只改派生档案数据与文档。

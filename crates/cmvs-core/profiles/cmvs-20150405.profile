@@ -151,7 +151,7 @@ inherit x64 base-sha256=dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91
 0x208e noop 0x7eaa7 0x70c53
 0x208f unreviewed 0x7f1d8 0x7114d
 0x2090 inherited 0x7f1e5 0x71157 inherit=x64:7978786b747d44956cc5c509b0259d56c767acee587927a9c8fc93eb43179d68
-0x2091 unreviewed 0x7f1fa 0x7116b
+0x2091 reviewed 0x7f1fa 0x7116b review=games/chronoclock/vm-semantics.md
 0x2092 unreviewed 0x7f207 0x71175
 0x2093 unreviewed 0x7f214 0x7117f
 0x2094 unreviewed 0x7f221 0x71189
