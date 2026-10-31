@@ -119,26 +119,7 @@ fn decode_bmp(bytes: &[u8]) -> Result<RgbaImage, &'static str> {
     RgbaImage::new(width, height, rgba).map_err(|e| e.0)
 }
 
-/// Command inheritance does not establish the wire format of gameplay snapshots.
-/// The 20150405 writer uses text record v2, eight common-image slots and no effect 9;
-/// the root writer uses text v3, sixteen slots and effect 9. Keep derived layouts
-/// blocked until their encoders and restorers have independent evidence.
-pub fn snapshot_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
-    profile.base.is_none()
-}
-
 impl Startup<'_> {
-    fn require_snapshot_layout(&self) -> Result<(), Box<dyn Error>> {
-        let profile = self.gate.selection().profile;
-        if !snapshot_layout_supported(profile) {
-            return Err(format!(
-                "gameplay snapshot layout is not implemented for engine profile {}",
-                profile.id
-            )
-            .into());
-        }
-        Ok(())
-    }
     /// Wall-clock source for labels; the default is a fixed research time so runs repeat.
     pub fn set_save_clock(&mut self, clock: Box<dyn FnMut() -> SaveTime>) {
         self.save_clock = clock;
@@ -163,7 +144,6 @@ impl Startup<'_> {
         &self,
         vm: crate::machine::VmImage,
     ) -> Result<(EngineSnapshot, Vec<u8>), Box<dyn Error>> {
-        self.require_snapshot_layout()?;
         let mut variables = LocalVariables::capture(self.machine.state());
         // The captured copy holds bit 0 = 1; the live bit was cleared by the caller.
         variables.set_bit0();
@@ -418,7 +398,6 @@ impl Startup<'_> {
         slot: u16,
         backend: &mut impl PlatformBackend,
     ) -> Result<(), Box<dyn Error>> {
-        self.require_snapshot_layout()?;
         if self.slot_edit.is_some() {
             return Err("finish the pending slot edit before loading a gameplay save".into());
         }

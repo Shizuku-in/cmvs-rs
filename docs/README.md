@@ -13,12 +13,6 @@
 | [研究约定](research.md) | 证据绑定、真实样本验证与新游戏接入 |
 | [参考与许可](references.md) | 固定参考提交、依赖许可与使用边界 |
 | [引擎档案层设计](design/engine-profiles.md) | 多构建识别、命令状态闸门、全系列普查与分阶段计划 |
-| [脚本可见契约比较规划](design/command-contracts.md) | 草案：契约等价放行、旧推定迁移、可玩与已验证边界、工具实施和验收 |
-| [契约 M0 模型与验收向量](design/command-contracts-m0.md) | 首版 IR、完整性规则、字段映射与摘要证据格式、M1 支持边界 |
-| [契约 M1 提取与证据](design/command-contracts-m1.md) | x64 case 符号执行、字段映射、原 exe 绑定、离线双边报告；未接入闸门 |
-| [契约 M2 进展](design/command-contracts-m2.md) | 进行中：全局与下标区域、指针空检查、未定义路径、栈保护、映射候选 |
-| [分派层设计草案](design/dispatch.md) | 证据层、opcode 分派表、处理函数接口与迁移阶段 |
-| [通用游戏探针](design/probe.md) | 已实现：与游戏无关的整机检查（静态、路线、输入、页面、存读档、设置、确定性、长时间运行）、判定等级、清单格式与实施记录 |
 
 ## 格式与后端
 
@@ -34,7 +28,7 @@
 
 ## 游戏测试与证据
 
-[游戏测试目录](games/README.md)汇总各款游戏与版本：[《アマツツミ》](games/amatsutsumi/README.md)是主线，[《クロノクロック》](games/chronoclock/README.md)已开始逐条语义研究。其目录保存二进制身份、VM 语义证据、研究记录、审计报告和开发历史。
+[游戏测试目录](games/README.md)汇总各款游戏与版本：[《アマツツミ》](games/amatsutsumi/README.md)是主线，[《クロノクロック》](games/chronoclock/README.md)仅完成接入摸底。其目录保存二进制身份、VM 语义证据、研究记录、审计报告和开发历史。
 
 《アマツツミ》审计后续命令实现状态见[21 条指令推进表](games/amatsutsumi/semantics-progress.md)。
 

@@ -24,96 +24,6 @@ fn defaults_match_device_constructor() {
 }
 
 #[test]
-fn visibility_selects_parent_or_child_and_preserves_other_state() {
-    let mut code = vec![];
-    command(&mut code, 0x2020, &[255]);
-    command(&mut code, 0x2022, &[255, 767]);
-    let changes = [(u32::MAX, 0), (767, 0), (0x8000_0000, 2), (767, u32::MAX)];
-    for (child, shown) in changes {
-        command(&mut code, 0x2026, &[255, child, shown]);
-    }
-    let program = script(&code);
-    let mut vm = Machine::new(&program).unwrap();
-    let mut scene = SceneHost::default();
-    run_all(&mut vm, &mut scene, 2);
-    let mut expected = scene.object(255).unwrap().clone();
-    vm.state_mut().set_system_integer(0, 123).unwrap();
-    for (child, shown) in changes {
-        assert!(next(&mut vm, &mut scene).unwrap());
-        if (child as i32) < 0 {
-            expected.shown = shown != 0;
-        } else {
-            expected.children.get_mut(&767).unwrap().shown = shown != 0;
-        }
-        assert_eq!(scene.object(255), Some(&expected));
-        assert_eq!(vm.stack().len_bytes(), 0);
-        assert_eq!(vm.state().system_integer(0), Some(123));
-    }
-    assert_eq!(vm.pc(), code.len());
-}
-
-#[test]
-fn visibility_invalid_targets_and_truncated_parameters_preserve_pending_state() {
-    for args in [
-        vec![20, 1, 0],
-        vec![20, 768, 0],
-        vec![21, u32::MAX, 0],
-        vec![256, u32::MAX, 0],
-        vec![u32::MAX, u32::MAX, 0],
-        vec![20, u32::MAX],
-        vec![20],
-        vec![],
-    ] {
-        let mut code = vec![];
-        command(&mut code, 0x2020, &[20]);
-        command(&mut code, 0x2026, &args);
-        let program = script(&code);
-        let mut vm = Machine::new(&program).unwrap();
-        let mut scene = SceneHost::default();
-        next(&mut vm, &mut scene).unwrap();
-        pending(&mut vm);
-        let before = scene.object(20).unwrap().clone();
-        for _ in 0..2 {
-            assert!(scene.try_handle(&mut vm).is_err());
-            assert_eq!(scene.object(20), Some(&before));
-            assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x26)));
-            assert_eq!(vm.stack().len_bytes(), args.len() * 4);
-        }
-    }
-}
-
-#[test]
-fn visibility_hides_children_with_parent_and_restores_the_same_pixels() {
-    use cmvs_rs::scene_render;
-    let mut code = vec![];
-    command(&mut code, 0x2020, &[0]);
-    command(&mut code, 0x2040, &[0]);
-    command(&mut code, 0x2043, &[0, u32::MAX, 1, 1, 0xff0000]);
-    command(&mut code, 0x2022, &[0, 0]);
-    command(&mut code, 0x2050, &[0, 0]);
-    command(&mut code, 0x2043, &[0, 0, 1, 1, 0x00ff00]);
-    for (child, shown) in [(0, 0), (0, 1), (u32::MAX, 0), (u32::MAX, 1)] {
-        command(&mut code, 0x2026, &[0, child, shown]);
-    }
-    let program = script(&code);
-    let mut vm = Machine::new(&program).unwrap();
-    let mut scene = SceneHost::default();
-    run_all(&mut vm, &mut scene, 6);
-    let original = scene_render::render(&scene, 1, 1).unwrap();
-    assert_eq!(original.pixels(), &[0, 255, 0, 255]);
-    for pixel in [
-        [255, 0, 0, 255],
-        [0, 255, 0, 255],
-        [0, 0, 0, 255],
-        [0, 255, 0, 255],
-    ] {
-        next(&mut vm, &mut scene).unwrap();
-        assert_eq!(scene_render::render(&scene, 1, 1).unwrap().pixels(), &pixel);
-    }
-    assert_eq!(scene_render::render(&scene, 1, 1).unwrap(), original);
-}
-
-#[test]
 fn world_query_returns_raw_float_registers_for_parent_and_child() {
     for child in [u32::MAX, 0x8000_0000, 767] {
         let xyz = [0x8000_0000, 0x7fc0_1234, 0x7f80_0001];
@@ -1006,8 +916,6 @@ fn world_motion_linear_relative_and_quadratic_ease_out_use_hundredths_and_clampe
         (0x103e0038, [10.0, 19.38, 30.0]),
         (0x103e0039, [10.0, 20.62, 30.0]),
         (0x103e0048, [10.0, 20.0, 30.0]),
-        (0x003e0041, [10.0, 20.0, 30.0]),
-        (0x003e8041, [10.0, 20.0, 30.0]),
         (0x203e8038, [10.0, 20.0, 30.0]),
         (0x003e0038, [10.0, 20.0, 30.0]),
     ] {

@@ -19,15 +19,11 @@ cargo run --offline --bin cmvs-trace -- "<游戏目录>/data/pack/start.ps3" --s
 cargo run --offline --bin cmvs-trace -- "<游戏目录>/data/pack/start.ps3" --bootstrap --save-dir "<游戏目录>/save" --system-save "<游戏目录>/save/system.dat" --script-archive "<游戏目录>/data/pack/script.cpz" --record-platform "<游戏目录>" --continue-without-snapshot --frame-ms 16 --steps 1000000
 ```
 
-trace先识别引擎档案：输入脚本（或`--script`归档）、`--script-archive`及`--record-platform`根目录exe参与哈希比对，以`# engine profile`和`# profile evidence`打印。未登记的游戏或合成脚本需显式`--profile <id>`。命令先经闸门：Base、Inherited、Reviewed与带有效登记证明的ContractEquivalent进入现有分派，Absent/NoOp总是报错。**2026-11-01 M3 变更：旧Presumed不再默认放行**，仅`--allow-presumed`研究放行；Unreviewed仍需独立的`--allow-unreviewed`并记录首次使用。派生档案在退出时打印各来源已放行分派尝试数、契约/研究命令列表及策略（含等待重试和未实现处理器的尝试，不等于完成或覆盖率），闸门错误以非零退出码结束。完整迁移与证明失效规则见[M3](../design/command-contracts-m3.md)。
+trace 先识别引擎档案：输入脚本（或 `--script` 时的输入归档）、`--script-archive` 以及 `--record-platform` 根目录中的 exe 都参与哈希比对，结果以 `# engine profile`、`# profile evidence` 注释行打印在日志开头。未登记的游戏和合成脚本必须加 `--profile <id>`（如根档案 `cmvs-20160201`）。每个系统命令先经过档案闸门：不存在（`Absent`）和空操作（`NoOp`）的命令总是报错；`Unreviewed` 命令默认报错，`--allow-unreviewed` 用基准语义放行，并以 `# UNREVIEWED` 行记录每个命令的首次放行。闸门报错时 trace 以非零退出码结束。
 
 `--bootstrap` 应用已核对的初始化；`--save-dir` 只读扫描剧情槽，不会自动推断 `--system-save`。记录平台请求不创建窗口，帧时间必须显式提供；省略 `--frame-ms` 时冻结时间并在等待处停止。增加步数不能绕过未知命令、快照或完整恢复屏障。VM 地址及语义见[本作证据](../games/amatsutsumi/vm-semantics.md)。
 
 ## 引擎档案
-
-已有IDA导出可用 `python -I tools/profile_compare.py BASE.json DERIVED.json --group-differences` 聚合共享差异函数，或在选项后列出命令号（如 `0x2140 0x215d`）限定范围。输出包含两边exe哈希、架构与深度；仅作人工复核排序，不生成档案或更改状态。
-
-分组只沿整个自身函数体对齐的调用边展开，遇到不同函数体就停止，不断言其后代相同。它仅显示能配对的处理函数；无命令号时依据自动比较的Unreviewed列表，因此可能包含已人工Reviewed的命令。保守数据、间接调用和深度限制仍须结合普通报告及 `--explain` 检查。
 
 ```bash
 cargo run --offline --release --bin cmvs-profile -- identify "<游戏目录>"
@@ -65,28 +61,6 @@ cargo run --offline --bin cmvs-system-save -- "<游戏目录>/save/system.dat"
 CSV2 检查与解压不会恢复 VM，段导出拒绝覆盖；运行时存读档由 `Startup`/桌面在 `--user-data-dir` 下完成，`cmvs-trace` 不构建快照镜像。CSS1 的模板编码、可选输出与独立用户目录策略见[系统存档](../formats/system-save-format.md)，剧情恢复边界见[快照](../formats/snapshot-format.md)。
 `--vm-state` 检查保存的脚本名称、PC/栈、局部变量和主脚本内存布局，并逐项列出未安装的对象/宿主记录；活动公共脚本的PC没有提供对应图像时明确标为未验证。这是离线检查模型，工具不改写游戏或存档。
 `--visual-state` 检查已支持版本的文字、消息窗口、场景树、图像引用与绘制/帧动画负载，列出顶层资源名和窗口未解释状态字；不读取图像资源、不恢复引擎。已有显示字形、旋转轨道、复合/特殊图像或效果分支显式报错。核心 `VisualSnapshot::preview` 可另行通过调用者的图像源生成独立场景/消息宿主供离线渲染，完整限制见[快照格式](../formats/snapshot-format.md)。
-
-## 通用探针
-
-```bash
-cargo run --offline --release -p cmvs-probe -- --help
-cargo run --offline --release -p cmvs-probe -- "<游戏目录>" --out "<新输出目录>" --font "<字体文件>"
-cargo run --offline --release -p cmvs-probe -- "<游戏目录>" --out "<新输出目录>" --font "<字体文件>" --checks all --max-steps 800000000
-cargo run --offline --release -p cmvs-probe -- "<游戏目录>" --out "<新输出目录>" --font "<字体文件>" --checks R2,R3 --fork save --max-steps 800000000
-cargo run --offline --release -p cmvs-probe -- "<游戏目录>" --out "<新输出目录>" --font "<字体文件>" --manifest "<清单文件>" --checks P1,R2
-python -I tools/probe_matrix.py "<输出目录1>" "<输出目录2>" --markdown
-```
-
-对任意已识别构建运行与游戏无关的检查，写出 `summary.json`（身份、能力、参数、清单使用情况，以及各检查的结果和判定等级）与 `events.jsonl`。`--help` 逐行列出全部检查 ID 及其含义，并标出默认运行的那几项。默认只运行静态检查（S1–S5）和启动检查（R1、D1），几秒即可完成；其余检查要玩剧情或整条路线，只在 `--checks` 中列出时运行，`--checks all` 运行全部。
-
-- 游戏目录只读。每次运行都在输出目录下新建用户目录，输出目录本身必须不存在。
-- 命令闸门照常生效；`--allow-presumed`/`--allow-unreviewed` 仅供研究，并记入报告。
-- `--device keyboard` 使用 `key.cfg` 中的按键，按钮通过导航键沿按钮链接选中。
-- `--fork save` 让路线分支从选项处写下的检查点读档开始，而不是每次从头重放；构建缺少快照布局能力时自动退回重放。
-- `--manifest` 读取可选的每游戏纠正清单，格式见[探针设计第 16 节](../design/probe.md#16-完整实现2026-11-01)。
-- `tools/probe_matrix.py` 把多个输出目录汇总为"游戏 × 检查"矩阵，只读。
-
-任何检查失败或被闸门阻止时退出码为 1。检查清单与判定规则见[探针设计](../design/probe.md)。
 
 ## 外部样本审计
 

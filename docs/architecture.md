@@ -67,9 +67,9 @@
 
 `profile` 决定一次运行用哪个已分析构建的语义，设计与普查见[引擎档案层设计](design/engine-profiles.md)。
 
-- **档案**（`EngineProfile`）对应一个构建：同一构建的x86/x64 exe合为一个档案，分别登记身份与switch。命令状态为`Base`、`Inherited`、`Unreviewed`、`NoOp`或`Absent`，越界一律Absent。`Inherited`必须附同架构根/派生exe哈希及完整依赖指纹，由Registry校验证据身份；它不代表完整运行验证或Rust已经实现。初始表由`cmvs-profile table`生成，继承表经IDA导出与标准库比较，见[设计第13节](design/engine-profiles.md#13-p2-实施与使用2026-10-31)。
+- **档案**（`EngineProfile`）对应一个构建：同一构建的 x86/x64 exe 合为一个档案，各自登记 SHA-256、时间戳、链接器版本和 switch 位置。每个命令一行，状态为 `Base`（根档案，语义来源）、`Unreviewed`（派生档案中尚未复核）、`NoOp`（原版只返回 0x4000）或 `Absent`（switch 的 default）；越界命令一律 `Absent`。表由 `cmvs-profile table` 从 exe 生成，内嵌于 `crates/cmvs-core/profiles/`。
 - **游戏记录**（`GameRecord`，`games.txt`）把启动脚本与脚本包的 SHA-256 映射到档案，并登记游戏 ID（`0x201d` 参数）、配套 exe 和本作专属策略。选择时按数据哈希找记录，根目录存在的 exe 必须是记录中的构建；`--profile` 可显式选择（研究用，记录只在数据也匹配时生效）。没有匹配就报错，从不默认。
-- **闸门**（`CommandGate`）在runner、trace和桌面的分派链之前统一检查：Base/Inherited/Reviewed/ContractEquivalent进入现有分派（Reviewed须有复核记录；ContractEquivalent须有独立登记证明并通过二进制/case/规则哈希校验）；Absent/NoOp总是报错；旧Presumed与Unreviewed均默认停止，分别由`--allow-presumed`和`--allow-unreviewed`研究放行。`0x201d`声明必须与游戏记录一致。GateCounts分别统计各来源分派尝试（含等待重试与未实现处理器），不是完成数/覆盖率；trace和桌面退出时打印同一来源列表与策略，runner暴露同一API。闸门不改变已放行命令的执行顺序与语义。证明登记、依赖变更失效和撤销见[M3](design/command-contracts-m3.md)。
+- **闸门**（`CommandGate`）在 runner、`cmvs-trace` 和桌面中都位于分派链之前，同一个函数检查每个待处理系统命令：`Absent`、`NoOp` 总是报错；`Unreviewed` 默认报错，`--allow-unreviewed` 放行并在每个命令首次放行时记录；匹配到记录时，`0x201d` 声明的游戏 ID 必须与记录一致。闸门不改变已放行命令的执行顺序与语义。
 - `exe` 只读解析 PE 头并按 2007–2023 年观察到的固定字节形态定位唯一的系统命令 switch；其他形态显式报错。`digest` 是无依赖的 SHA-256。
 
 代码注释中不带档案前缀的原版地址一律指根档案 `cmvs-20160201`（《アマツツミ》）的 x64 exe；其他构建的地址只出现在档案表和游戏文档中。
@@ -108,11 +108,7 @@
 
 `camera` 保存已核对的镜头参数，并通过 `0x2056` 查询转换后的整数 XYZ（系统结果 1..3）；查询不修改相机。`0x2068..0x206d` 接入相机 0 的 XYZ/XZ/Y 移动启动、取消/结束、查询和等待，支持线性/二次缓出；帧末按原始 delta 推进相机，不使用对象轨道的 200ms 上限，其他曲线仍显式报错。软件呈现器消费相机状态，模式 2/3 分别进入相机 0/1 的队列 2/6，再绘制二维队列 3；相机 1 禁用时不显示其队列。`raster` 提供 RGBA、比例适配、alpha 合成与 PNG 导出；1280×720 是本作研究视口，窗口缩放与留边由后端处理。
 
-世界坐标轨道模式 `0x41` 使用完整高16位振幅，在一个时长内沿Y轴完成360度正弦偏移；目标吸附、键链和结束处理复用既有轨道。其与周期数编码不同的边界及两个构建的核对见[CHRONOCLOCK语义](games/chronoclock/vm-semantics.md)。
-
 ### 消息、输入与音频
-
-`MessageHost` 的 `0x2119` 只读计算显示字节数，跳过控制码和注音，保留文字对象、布局、光标与字形；注音base仅计双字节对。它复用有界注音解析，截断或会使原版循环停滞的输入明确报错。该命令不依赖字体设备，也不等于文字布局测量。
 
 `settings::SettingsHost` 保存默认字体名与自动送页参数状态，提供设置入口所需的构造配置查询。音量/开关查询直接使用 `AudioHost` 的播放配置；尚无排版或设备消费者的设置写入保持错误屏障。`message::GlyphMetrics` 允许后端提供直接半角文字的墨迹宽度，核心负责最小半字宽和换行；桌面用显式所选 OpenType 字体，未提供度量时无窗口记录仍报错。`0x2159` 为明确初始化/轮询的非阻塞文字输出，与 `0x2152` 的让出/重试分开；`0x2140` 复用消息窗口创建，逻辑尺寸取当前1280×720研究设备。游戏范围和预览策略差异见[系统设置证据](games/amatsutsumi/vm-semantics.md#系统设置入口与配置查询2026-10-30)。
 
@@ -212,8 +208,6 @@ VM 运行、帧时间和协作预算分别管理。计时器只在首次运行�
 
 
 `SceneHost` 的 `0x2023` 将指定子编号从父对象的 children 表删除，Rust 所有权释放其子树、图像和效果；不清空父对象的 bit31 子对象标志，不改父对象绘制状态或其他子槽。子编号按原版 unsigned <768 判断；父槽越界或缺失仍采用显式错误策略。
-
-`0x2026` 修改父对象或指定子对象的 `shown`，共用已有绘制队列和快照字段，不要求图像或 DrawState。隐藏父对象时队列也不遍历其子对象。CHRONOCLOCK 与基准构建的独立核对、非法目标错误边界及研究运行结果见[对象可见性证据](games/chronoclock/vm-semantics.md)。
 
 
 `0x202d` 只设置目标对象 flags 的 0x2（父项子队列）位，不要求 DrawState。`scene_render` 的投影队列复用 `Entry` 保存父层和子层，父项按深度排序，附着子项在其后按 parent_key + child_biased_z 稳定降序。当前只接入同模式、flags &3 ==3 的继承附着分支；世界坐标/投影参数/有效透明度继承父状态，子图在父原点周围按自身位置布局。其他组合保持错误屏障，不将其视为二维对象绘制。
