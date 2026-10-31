@@ -268,6 +268,9 @@ fn run() -> Result<(), Box<dyn Error>> {
             let checked = gate.check(&machine, system_pc, command);
             if checked.is_err() && gate.selection().profile.base.is_some() {
                 println!("{}", gate.summary_line());
+                if let Some(line) = gate.presumed_line() {
+                    println!("{line}");
+                }
             }
             if let Some(first) = checked? {
                 println!(
@@ -846,6 +849,9 @@ fn run() -> Result<(), Box<dyn Error>> {
             }
             if gate.selection().profile.base.is_some() {
                 println!("{}", gate.summary_line());
+                if let Some(line) = gate.presumed_line() {
+                    println!("{line}");
+                }
             }
             println!(
                 "# STOP pending system=0x{:04x}; PC and parameters preserved; not game completion",

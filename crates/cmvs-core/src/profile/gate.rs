@@ -66,6 +66,7 @@ pub struct CommandGate<'a> {
     selection: ProfileSelection<'a>,
     allow_unreviewed: bool,
     allowed: BTreeSet<u16>,
+    presumed: BTreeSet<u16>,
     counts: GateCounts,
 }
 
@@ -76,6 +77,7 @@ pub struct GateCounts {
     pub base: u64,
     pub inherited: u64,
     pub reviewed: u64,
+    pub presumed: u64,
     pub unreviewed: u64,
 }
 
@@ -85,6 +87,7 @@ impl<'a> CommandGate<'a> {
             selection,
             allow_unreviewed: false,
             allowed: BTreeSet::new(),
+            presumed: BTreeSet::new(),
             counts: GateCounts::default(),
         }
     }
@@ -99,14 +102,33 @@ impl<'a> CommandGate<'a> {
     pub fn allowed(&self) -> &BTreeSet<u16> {
         &self.allowed
     }
+    /// Presumed commands run so far: suspects first when a run goes wrong.
+    pub fn presumed(&self) -> &BTreeSet<u16> {
+        &self.presumed
+    }
     pub fn counts(&self) -> GateCounts {
         self.counts
     }
     pub fn summary_line(&self) -> String {
         format!(
-            "# profile gate accepted attempts: base={} inherited={} reviewed={} unreviewed={} (includes wait retries; not completion/coverage)",
-            self.counts.base, self.counts.inherited, self.counts.reviewed, self.counts.unreviewed
+            "# profile gate accepted attempts: base={} inherited={} reviewed={} presumed={} unreviewed={} (includes wait retries; not completion/coverage)",
+            self.counts.base,
+            self.counts.inherited,
+            self.counts.reviewed,
+            self.counts.presumed,
+            self.counts.unreviewed
         )
+    }
+    /// The presumed commands that ran, for a stop report; `None` when there were none.
+    pub fn presumed_line(&self) -> Option<String> {
+        (!self.presumed.is_empty()).then(|| {
+            let list: Vec<_> = self
+                .presumed
+                .iter()
+                .map(|c| format!("0x{:04x}", 0x2000 + c))
+                .collect();
+            format!("# presumed commands run: {}", list.join(" "))
+        })
     }
     /// Checks the pending command; returns it on the first time an unreviewed command passes.
     /// Pending commands are re-checked when a wait resumes, which is harmless.
@@ -147,6 +169,11 @@ impl<'a> CommandGate<'a> {
             }
             CommandStatus::Reviewed => {
                 self.counts.reviewed += 1;
+                Ok(None)
+            }
+            CommandStatus::Presumed => {
+                self.counts.presumed += 1;
+                self.presumed.insert(command);
                 Ok(None)
             }
             CommandStatus::Absent => Err(error(GateErrorKind::Absent)),

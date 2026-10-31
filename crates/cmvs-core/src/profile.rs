@@ -31,6 +31,10 @@ pub enum CommandStatus {
     Inherited,
     /// A recorded manual review found the root semantics apply; the record is mandatory.
     Reviewed,
+    /// Comparison found no difference, but conservative limits (blocked data, indirect
+    /// calls, recursion, depth) hide part of the code; the comparable-shape proof is
+    /// mandatory. Runs with root semantics by default and is counted separately.
+    Presumed,
     /// Present, but not yet compared with or reviewed against the base.
     Unreviewed,
 }
@@ -43,19 +47,21 @@ impl CommandStatus {
             Self::Base => "base",
             Self::Inherited => "inherited",
             Self::Reviewed => "reviewed",
+            Self::Presumed => "presumed",
             Self::Unreviewed => "unreviewed",
         }
     }
 }
 
-/// Identity-bound evidence for one inherited command. The digest covers the complete
-/// normalized handler and its dependencies; no original code bytes are embedded.
+/// Identity-bound machine comparison evidence: for `Inherited` the digest covers the
+/// complete normalized handler and its dependencies, for `Presumed` everything comparable
+/// with blocked parts as placeholders. No original code bytes are embedded.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InheritanceProof {
+pub struct MachineProof {
     pub arch: Arch,
     pub base_sha256: [u8; 32],
     pub derived_sha256: [u8; 32],
-    pub fingerprint: [u8; 32],
+    pub digest: [u8; 32],
 }
 
 /// One analysed executable of a build; every address is relative to this file only.
@@ -95,7 +101,7 @@ pub struct EngineProfile {
     pub base: Option<String>,
     pub binaries: Vec<Binary>,
     statuses: Vec<CommandStatus>,
-    inheritance: BTreeMap<u16, InheritanceProof>,
+    proofs: BTreeMap<u16, MachineProof>,
     /// Review records, as paths relative to `docs/` of a section headed by the command.
     reviews: BTreeMap<u16, String>,
 }
@@ -111,8 +117,9 @@ impl EngineProfile {
     pub fn statuses(&self) -> &[CommandStatus] {
         &self.statuses
     }
-    pub fn inheritance(&self, command: u16) -> Option<&InheritanceProof> {
-        self.inheritance.get(&command)
+    /// The machine comparison proof of an `Inherited` or `Presumed` command.
+    pub fn proof(&self, command: u16) -> Option<&MachineProof> {
+        self.proofs.get(&command)
     }
     pub fn review(&self, command: u16) -> Option<&str> {
         self.reviews.get(&command).map(String::as_str)
@@ -167,7 +174,7 @@ impl EngineProfile {
                 })
                 .collect(),
             statuses,
-            inheritance: BTreeMap::new(),
+            proofs: BTreeMap::new(),
             reviews: BTreeMap::new(),
         };
         profile.validate()?;
@@ -211,9 +218,10 @@ impl EngineProfile {
                 (CommandStatus::NoOp, Case::NoOp(_)) => true,
                 (CommandStatus::Base, Case::Handler(_)) => self.base.is_none(),
                 (CommandStatus::Unreviewed, Case::Handler(_)) => self.base.is_some(),
-                (CommandStatus::Inherited | CommandStatus::Reviewed, Case::Handler(_)) => {
-                    self.base.is_some()
-                }
+                (
+                    CommandStatus::Inherited | CommandStatus::Reviewed | CommandStatus::Presumed,
+                    Case::Handler(_),
+                ) => self.base.is_some(),
                 _ => false,
             };
             if !allowed {
@@ -221,11 +229,11 @@ impl EngineProfile {
                     "command status contradicts the switch or profile kind",
                 ));
             }
-            if (*status == CommandStatus::Inherited)
-                != self.inheritance.contains_key(&(command as u16))
+            if matches!(status, CommandStatus::Inherited | CommandStatus::Presumed)
+                != self.proofs.contains_key(&(command as u16))
             {
                 return Err(ProfileError::new(
-                    "inherited status requires exactly one proof",
+                    "inherited and presumed status require exactly one proof",
                 ));
             }
             if (*status == CommandStatus::Reviewed) != self.reviews.contains_key(&(command as u16))
@@ -234,14 +242,14 @@ impl EngineProfile {
                     "reviewed status requires exactly one review record",
                 ));
             }
-            if let Some(proof) = self.inheritance(command as u16)
+            if let Some(proof) = self.proof(command as u16)
                 && !self
                     .binaries
                     .iter()
                     .any(|b| b.arch == proof.arch && b.sha256 == proof.derived_sha256)
             {
                 return Err(ProfileError::new(
-                    "inheritance proof does not match derived binary",
+                    "comparison proof does not match derived binary",
                 ));
             }
         }
@@ -369,7 +377,7 @@ impl Registry {
                 {
                     return Err(ProfileError::new("reviewed command has no root semantics"));
                 }
-                for (&command, proof) in &profile.inheritance {
+                for (&command, proof) in &profile.proofs {
                     if base.status(command) != CommandStatus::Base
                         || !base
                             .binaries
@@ -377,7 +385,7 @@ impl Registry {
                             .any(|b| b.arch == proof.arch && b.sha256 == proof.base_sha256)
                     {
                         return Err(ProfileError::new(
-                            "inheritance proof does not match root binary/command",
+                            "comparison proof does not match root binary/command",
                         ));
                     }
                 }

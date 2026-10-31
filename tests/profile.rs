@@ -256,7 +256,7 @@ fn profile_data_parses_the_same_with_crlf_line_endings() {
 }
 
 #[test]
-fn inherited_commands_require_identity_bound_proofs_and_pass_the_default_gate() {
+fn machine_proofs_bind_both_exes_and_pass_the_default_gate() {
     let root = build("synthetic-root", None, &[0, 1, 2, 0], 1).to_text();
     let derived = build(
         "synthetic-derived",
@@ -265,76 +265,93 @@ fn inherited_commands_require_identity_bound_proofs_and_pass_the_default_gate() 
         3,
     )
     .to_text();
-    let header = format!("inherit x64 base-sha256={}", to_hex(&[1; 32]));
-    let proof = format!("inherit=x64:{}", to_hex(&[9; 32]));
-    let inherited = derived
-        .lines()
-        .map(|line| {
-            if line.starts_with("0x2000 ") {
-                format!("{} {proof}", line.replace("unreviewed", "inherited"))
-            } else if line.starts_with("binary x86 ") {
-                format!("{line}\n{header}")
-            } else {
-                line.to_owned()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    let registry = Registry::parse(&[&root, &inherited], "").unwrap();
-    let profile = registry.profile("synthetic-derived").unwrap();
-    assert_eq!(profile.status(0), CommandStatus::Inherited);
-    let parsed = profile.inheritance(0).unwrap();
-    assert_eq!(parsed.fingerprint, [9; 32]);
-    // The derived exe is implied by the profile's own binary of the proof architecture.
-    assert_eq!(
-        (parsed.base_sha256, parsed.derived_sha256),
-        ([1; 32], [3; 32])
-    );
-    let canonical = profile.to_text();
-    assert!(canonical.contains(&header));
-    assert_eq!(Registry::parse(&[&root, &canonical], "").unwrap(), registry);
-    let selection = registry
-        .select(Some("synthetic-derived"), &Evidence::default())
-        .unwrap();
-    let mut gate = CommandGate::new(selection);
-    let mut code = vec![];
-    command(&mut code, 0x201d, &[0]);
-    let program = script(&code);
-    let (vm, pc) = pending_machine(&program);
-    assert_eq!(gate.check(&vm, pc, 0), Ok(None));
-    assert!(gate.allowed().is_empty());
-    assert_eq!(gate.counts().inherited, 1);
-    assert_eq!(gate.counts().base, 0);
-    assert_eq!(gate.counts().unreviewed, 0);
-    assert!(gate.check(&vm, pc, 3).is_err());
-    assert_eq!(gate.counts().unreviewed, 0);
-    gate.set_allow_unreviewed(true);
-    assert_eq!(gate.check(&vm, pc, 3), Ok(Some(3)));
-    assert_eq!(gate.counts().unreviewed, 1);
-    for invalid in [
-        inherited.replace(&proof, ""),
-        inherited.replace("inherit=x64", "inherit=arm64"),
-        // The proof must name the root exe of the same architecture.
-        inherited.replace(
-            &header,
-            &header.replace(&to_hex(&[1; 32]), &to_hex(&[2; 32])),
-        ),
-        inherited.replace(&header, &header.replace("x64", "x86")),
-        inherited.replace(&header, ""),
-        inherited.replace(&header, &format!("{header}\n{header}")),
-        inherited.replace("inherit x64", "inherit arm64"),
-        inherited.replace(&proof, &format!("{proof}:{}", to_hex(&[3; 32]))),
-        // A header without inherited rows is stale evidence.
-        inherited
-            .replace(&format!(" {proof}"), "")
-            .replace("0x2000 inherited", "0x2000 unreviewed"),
-        inherited.replace("0x2000 inherited", "0x2000 unreviewed"),
-        inherited.replace("inherited", "base"),
+    let header = format!("compare x64 base-sha256={}", to_hex(&[1; 32]));
+    for (name, key, status, other) in [
+        ("inherited", "inherit", CommandStatus::Inherited, "presume"),
+        ("presumed", "presume", CommandStatus::Presumed, "inherit"),
     ] {
-        assert!(Registry::parse(&[&root, &invalid], "").is_err());
+        let proof = format!("{key}=x64:{}", to_hex(&[9; 32]));
+        let row = format!("0x2000 {name}");
+        let text = derived
+            .lines()
+            .map(|line| {
+                if line.starts_with("0x2000 ") {
+                    format!("{} {proof}", line.replace("0x2000 unreviewed", &row))
+                } else if line.starts_with("binary x86 ") {
+                    format!("{line}\n{header}")
+                } else {
+                    line.to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let registry = Registry::parse(&[&root, &text], "").unwrap();
+        let profile = registry.profile("synthetic-derived").unwrap();
+        assert_eq!(profile.status(0), status);
+        let parsed = profile.proof(0).unwrap();
+        assert_eq!(parsed.digest, [9; 32]);
+        // The derived exe is implied by the profile's own binary of the proof architecture.
+        assert_eq!(
+            (parsed.base_sha256, parsed.derived_sha256),
+            ([1; 32], [3; 32])
+        );
+        let canonical = profile.to_text();
+        assert!(canonical.contains(&header) && canonical.contains(&proof));
+        assert_eq!(Registry::parse(&[&root, &canonical], "").unwrap(), registry);
+        let selection = registry
+            .select(Some("synthetic-derived"), &Evidence::default())
+            .unwrap();
+        let mut gate = CommandGate::new(selection);
+        let mut code = vec![];
+        command(&mut code, 0x201d, &[0]);
+        let program = script(&code);
+        let (vm, pc) = pending_machine(&program);
+        assert_eq!(gate.check(&vm, pc, 0), Ok(None));
+        assert!(gate.allowed().is_empty());
+        let counts = gate.counts();
+        assert_eq!(
+            (counts.inherited, counts.presumed),
+            match status {
+                CommandStatus::Inherited => (1, 0),
+                _ => (0, 1),
+            }
+        );
+        assert_eq!((counts.base, counts.unreviewed), (0, 0));
+        assert_eq!(gate.presumed().len(), counts.presumed as usize);
+        assert_eq!(
+            gate.presumed_line().is_some(),
+            status == CommandStatus::Presumed
+        );
+        assert!(gate.check(&vm, pc, 3).is_err());
+        gate.set_allow_unreviewed(true);
+        assert_eq!(gate.check(&vm, pc, 3), Ok(Some(3)));
+        assert_eq!(gate.counts().unreviewed, 1);
+        for invalid in [
+            text.replace(&proof, ""),
+            text.replace(&format!("{key}=x64"), &format!("{key}=arm64")),
+            // Each status takes its own proof key.
+            text.replace(&format!("{key}=x64"), &format!("{other}=x64")),
+            // The proof must name the root exe of the same architecture.
+            text.replace(
+                &header,
+                &header.replace(&to_hex(&[1; 32]), &to_hex(&[2; 32])),
+            ),
+            text.replace(&header, &header.replace("x64", "x86")),
+            text.replace(&header, ""),
+            text.replace(&header, &format!("{header}\n{header}")),
+            text.replace("compare x64", "compare arm64"),
+            text.replace(&proof, &format!("{proof}:{}", to_hex(&[3; 32]))),
+            // A header without proof rows is stale evidence.
+            text.replace(&format!(" {proof}"), "")
+                .replace(&row, "0x2000 unreviewed"),
+            text.replace(&row, "0x2000 unreviewed"),
+            text.replace(&row, "0x2000 base"),
+        ] {
+            assert!(Registry::parse(&[&root, &invalid], "").is_err());
+        }
+        let root_no_handler = root.replace("0x2000 base", "0x2000 noop");
+        assert!(Registry::parse(&[&root_no_handler, &text], "").is_err());
     }
-    let root_no_handler = root.replace("0x2000 base", "0x2000 noop");
-    assert!(Registry::parse(&[&root_no_handler, &inherited], "").is_err());
 }
 
 #[test]
@@ -640,6 +657,7 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
             profile.count(CommandStatus::Base)
                 + profile.count(CommandStatus::Inherited)
                 + profile.count(CommandStatus::Reviewed)
+                + profile.count(CommandStatus::Presumed)
                 + profile.count(CommandStatus::Unreviewed),
             handlers
         );

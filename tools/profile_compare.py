@@ -5,6 +5,7 @@ python -I tools/profile_compare.py BASE.json DERIVED.json --report REPORT.tsv
 python -I tools/profile_compare.py BASE.json DERIVED.json --explain 0x2091
 No input is modified. Incomplete, cyclic, indirect or mutable dependencies never inherit.
 FLIRT-recognized runtime functions are leaves identified by name and their own body.
+A command is presumed when only PRESUMABLE limits block it and both shapes are equal.
 """
 import argparse
 import hashlib
@@ -12,10 +13,16 @@ import json
 import re
 from pathlib import Path
 
-SCHEMA = "cmvs-command-graph-v2"
-POLICY = "raw-operands-closed-cfg-readonly-data-libraries-v2"
+SCHEMA = "cmvs-command-graph-v3"
+POLICY = "raw-operands-closed-cfg-readonly-data-libraries-switches-v3"
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 PLACEHOLDER_NAME = re.compile(r"(?:sub|nullsub|j|unknown_libname)_[0-9A-Fa-f]+\Z")
+# Limits that hide content without showing a difference: blocked data, indirect calls,
+# recursion and the depth bound. Decoding or CFG gaps never qualify.
+PRESUMABLE = frozenset({"unresolved-data", "unresolved-or-mutable-data", "indirect-control-flow",
+                        "recursive-cycle", "depth-limit"})
+REF_KINDS = ("function", "local", "data", "import", "unknown-data", "opaque",
+             "image-base", "switch-table", "switch")
 
 
 def digest(value):
@@ -42,6 +49,9 @@ def validate(graph):
         if library is not None and not (isinstance(library, str) and library
                                         and not PLACEHOLDER_NAME.match(library)):
             raise ValueError("library leaves need a stable, non-placeholder name")
+        def local(target):
+            return isinstance(target, int) and (0 <= target < len(node["instructions"]) or (
+                target == -1 and "missing-local-target" in node["issues"]))
         for instruction in node["instructions"]:
             if (instruction["next"] is not None and not 0 <= instruction["next"] < len(node["instructions"])
                     and not (instruction["next"] == -1 and "missing-fallthrough" in node["issues"])):
@@ -52,9 +62,13 @@ def validate(graph):
                 kind = ref["kind"]
                 if kind == "function" and ref["target"] not in graph["functions"]:
                     raise ValueError("missing dependency function")
-                if (kind == "local" and not 0 <= ref["target"] < len(node["instructions"])
-                        and not (ref["target"] == -1 and "missing-local-target" in node["issues"])):
+                if kind == "local" and not local(ref["target"]):
                     raise ValueError("invalid local branch target")
+                if kind == "switch" and not (
+                        (ref["default"] is None or local(ref["default"])) and all(
+                            len(case) == 2 and local(case[1]) and all(isinstance(v, int) for v in case[0])
+                            for case in ref["cases"])):
+                    raise ValueError("invalid switch cases")
                 if kind == "data" and (not re.fullmatch(r"(?:[0-9a-f]{2})+", ref["bytes"])
                                        or not 0 <= ref["offset"] < len(ref["bytes"])//2):
                     raise ValueError("invalid data dependency")
@@ -64,7 +78,7 @@ def validate(graph):
                     raise ValueError("opaque references belong only to library functions")
                 if library is not None and kind not in ("local", "import", "opaque"):
                     raise ValueError("library functions keep only local, import or opaque references")
-                if kind not in ("function", "local", "data", "import", "unknown-data", "opaque"):
+                if kind not in REF_KINDS:
                     raise ValueError("unknown reference kind")
 
 
@@ -111,6 +125,45 @@ def fingerprint(graph, entry, max_depth=8):
     return walk(entry, max_depth, set())
 
 
+def shape(graph, entry, max_depth=8, budget=200000):
+    """Hash everything comparable: blocked data becomes a placeholder, a back edge names
+    its ancestor by distance, the depth bound is a token, and node issues are included.
+    Raises OverflowError when the walk exceeds `budget` function visits."""
+    memo = {}
+    left = [budget]
+
+    def walk(key, remaining, path):
+        if key in path:
+            return {"cycle": len(path)-path.index(key)}, True
+        if remaining < 0:
+            return {"truncated": True}, False
+        if (key, remaining) in memo:
+            return memo[(key, remaining)], False
+        left[0] -= 1
+        if left[0] < 0:
+            raise OverflowError("shape walk budget exhausted")
+        node = graph["functions"][key]
+        cyclic, normalized = False, []
+        for instruction in node["instructions"]:
+            refs = []
+            for ref in instruction["refs"]:
+                if ref["kind"] == "function" and "library" not in node:
+                    child, back = walk(ref["target"], remaining-1, path+(key,))
+                    cyclic |= back
+                    refs.append({"kind": "function", "shape": child})
+                elif ref["kind"] == "unknown-data":
+                    refs.append({"kind": "blocked"})
+                else:
+                    refs.append(ref)
+            normalized.append({"bytes": instruction["bytes"], "refs": refs, "next": instruction["next"]})
+        result = digest([node.get("library"), node.get("entry_index"), sorted(node["issues"]), normalized])
+        # A result containing back edges depends on the path; recompute it elsewhere.
+        if not cyclic:
+            memo[(key, remaining)] = result
+        return result, cyclic
+    return walk(entry, max_depth, ())[0]
+
+
 def compare(base, derived, max_depth=8):
     validate(base)
     validate(derived)
@@ -131,6 +184,15 @@ def compare(base, derived, max_depth=8):
                 right, ri = fingerprint(derived, command["entry"], max_depth)
                 if li or ri:
                     reason = ",".join(sorted(set(li+ri)))
+                    if set(li+ri) <= PRESUMABLE:
+                        try:
+                            same = shape(base, reference["entry"], max_depth)
+                            if same == shape(derived, command["entry"], max_depth):
+                                status, proof = "presumed", same
+                            else:
+                                reason += ",shape-different"
+                        except OverflowError:
+                            reason += ",shape-limit"
                 elif left != right:
                     reason = "different"
                 else:
@@ -174,9 +236,10 @@ def apply_profile(base, derived, rows, base_path, derived_path):
     if next(w[1] for w in left if w[0] == "base") != "-" or next(
             w[1] for w in right if w[0] == "base") != base["profile"]:
         raise ValueError("inheritance must name its root profile")
-    output, inherits = [], False
+    proof_keys = {"inherited": "inherit", "presumed": "presume"}
+    output, proofs = [], False
     for words in right:
-        if words[0] == "inherit":
+        if words[0] == "compare":
             continue
         if words[0].startswith("0x") and words[1] == "reviewed":
             # Manual review records outrank a fresh comparison and are kept verbatim.
@@ -184,19 +247,19 @@ def apply_profile(base, derived, rows, base_path, derived_path):
                 raise ValueError("reviewed command is not a handler in the export")
         elif words[0].startswith("0x"):
             result = rows[int(words[0], 0)-0x2000]
-            if words[1] not in ("unreviewed", "inherited", "noop", "absent"):
+            if words[1] not in ("unreviewed", "inherited", "presumed", "noop", "absent"):
                 raise ValueError("will not overwrite variant or unknown status")
             words = words[:2+len(binaries)]
             words[1] = result["status"]
-            if result["status"] == "inherited":
-                words.append(f"inherit={base['arch']}:{result['fingerprint']}")
-                inherits = True
+            if result["status"] in proof_keys:
+                words.append(f"{proof_keys[result['status']]}={base['arch']}:{result['fingerprint']}")
+                proofs = True
         output.append(" ".join(words))
         if words is binaries[-1]:
             header = len(output)
-    if inherits:
+    if proofs:
         # The derived exe is the profile's own binary of this arch; only the root exe is named.
-        output.insert(header, f"inherit {base['arch']} base-sha256={base['binary_sha256']}")
+        output.insert(header, f"compare {base['arch']} base-sha256={base['binary_sha256']}")
     return "\n".join(output)+"\n"
 
 
@@ -339,7 +402,7 @@ def main():
     if candidate is not None:
         args.output_profile.write_text(candidate, encoding="utf-8", newline="\n")
     print(json.dumps({status: sum(r["status"] == status for r in rows)
-                      for status in ("inherited", "unreviewed", "noop", "absent")}, sort_keys=True))
+                      for status in ("inherited", "presumed", "unreviewed", "noop", "absent")}, sort_keys=True))
 
 
 if __name__ == "__main__":

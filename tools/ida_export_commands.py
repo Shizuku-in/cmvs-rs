@@ -10,9 +10,12 @@ import re
 import struct
 from pathlib import Path
 
-SCHEMA = "cmvs-command-graph-v2"
-POLICY = "raw-operands-closed-cfg-readonly-data-libraries-v2"
+SCHEMA = "cmvs-command-graph-v3"
+POLICY = "raw-operands-closed-cfg-readonly-data-libraries-switches-v3"
 PLACEHOLDER_NAME = re.compile(r"(?:sub|nullsub|j|unknown_libname)_[0-9A-Fa-f]+\Z")
+# Instructions whose only register write is the explicit destination operand.
+SCAN_SAFE = re.compile(r"(?:mov|movzx|movsx|movsxd|lea|add|sub|and|or|xor|cmp|test|shl|shr|sar"
+                       r"|inc|dec|neg|not|push|nop|cmov[a-z]+|set[a-z]+|j(?!mp)[a-z]+)\Z")
 
 
 def export_commands(profile_path, output_path):
@@ -25,6 +28,7 @@ def export_commands(profile_path, output_path):
     import ida_ua
     import ida_idp
     import ida_fixup
+    import ida_xref
     import idautils
     import idc
 
@@ -118,6 +122,43 @@ def export_commands(profile_path, output_path):
         seg = ida_segment.getseg(ea)
         return seg is not None and bool(seg.perm & ida_segment.SEGPERM_EXEC)
 
+    def image_relative(insn, op, ea, owner):
+        """Whether an address register of `op` provably holds the image base: it was set by
+        `lea reg, __ImageBase` earlier in the same basic block and not written since."""
+        rex = insn.insnpref
+        if op.specflag1:  # SIB byte: base and optional index
+            sib = op.specflag2
+            regs = {(sib & 7) | (8 if rex & 1 else 0)}
+            index = ((sib >> 3) & 7) | (8 if rex & 2 else 0)
+            if index != 4:
+                regs.add(index)
+        else:
+            regs = {op.reg}
+        cur = ea
+        for _ in range(64):
+            if next(iter(idautils.CodeRefsTo(cur, 0)), None) is not None:
+                return False  # a jump target: other predecessors exist
+            prev = idc.prev_head(cur, owner.start_ea)
+            other = ida_funcs.get_func(prev) if prev != idc.BADADDR else None
+            if other is None or other.start_ea != owner.start_ea:
+                return False
+            before = ida_ua.insn_t()
+            mnemonic = idc.print_insn_mnem(prev).lower()
+            if not ida_ua.decode_insn(before, prev) or not SCAN_SAFE.match(mnemonic):
+                return False
+            dest = before.ops[0]
+            if (mnemonic == "lea" and dest.type == ida_ua.o_reg and dest.reg in regs
+                    and before.ops[1].type == ida_ua.o_mem and before.ops[1].addr == image_base):
+                return True
+            if dest.type == ida_ua.o_reg and before.get_canon_feature() & ida_idp.CF_CHG1:
+                if dest.reg >= 16:
+                    return False  # byte registers alias the 64-bit ones
+                regs.discard(dest.reg)
+                if not regs:
+                    return False
+            cur = prev
+        return False
+
     while queue:
         start = queue.pop()
         key = hex(start-image_base)
@@ -140,6 +181,14 @@ def export_commands(profile_path, output_path):
                    and not PLACEHOLDER_NAME.match(name))
         if library:
             node["library"] = name
+        # Switch jump/index tables are explained by the switch they belong to.
+        tables = set()
+        for item in ([] if library else idautils.FuncItems(owner.start_ea)):
+            info = ida_nalt.get_switch_info(item)
+            if info:
+                tables.add(info.jumps)
+                if info.flags & ida_nalt.SWI_INDIRECT:
+                    tables.add(info.values)
         todo, decoded = [start], {}
         while todo:
             ea = todo.pop()
@@ -165,6 +214,9 @@ def export_commands(profile_path, output_path):
             jump = bool(features & ida_idp.CF_JUMP)
             raw = bytearray(ida_bytes.get_bytes(ea, insn.size))
             refs = []
+            drefs = set(idautils.DataRefsFrom(ea))
+            explained = set()
+            noreturn = False
             ops = [op for op in insn.ops if op.type]
             for op in ops:
                 if op.type in (ida_ua.o_near, ida_ua.o_far):
@@ -172,6 +224,8 @@ def export_commands(profile_path, output_path):
                         flag("far-control-flow")
                     target = op.addr
                     other = ida_funcs.get_func(target)
+                    noreturn |= bool(call and other is not None and other.start_ea == target
+                                     and other.flags & ida_funcs.FUNC_NORET)
                     local = not call and other is not None and other.start_ea == owner.start_ea
                     if local:
                         todo.append(target)
@@ -184,11 +238,23 @@ def export_commands(profile_path, output_path):
                     refs.append((op, ref))
                 elif op.type in (ida_ua.o_mem, ida_ua.o_displ, ida_ua.o_imm):
                     target = op.value if op.type == ida_ua.o_imm else op.addr
+                    explained.add(target)
+                    # x64 tables are indexed off a register holding the image base; use only
+                    # displacements IDA resolved or whose register provably holds that base.
+                    if (arch == "x64" and op.type == ida_ua.o_displ and 0 < target < 1 << 31
+                            and not ida_segment.getseg(target) and ida_segment.getseg(target+image_base)
+                            and (target+image_base in drefs or image_relative(insn, op, ea, owner))):
+                        target += image_base
+                        explained.add(target)
                     seg = ida_segment.getseg(target)
                     if target in imports:
                         refs.append((op, {"kind": "import", "name": imports[target]}))
-                    elif seg and library:
+                    elif library and (seg or target == image_base):
                         refs.append((op, {"kind": "opaque"}))
+                    elif op.type == ida_ua.o_mem and mnemonic == "lea" and target == image_base:
+                        refs.append((op, {"kind": "image-base"}))
+                    elif target in tables:
+                        refs.append((op, {"kind": "switch-table"}))
                     elif seg:
                         # Unknown/writable data and function pointers prevent inheritance.
                         head = ida_bytes.get_item_head(target)
@@ -213,11 +279,29 @@ def export_commands(profile_path, output_path):
                                 flag("relocated-data")
                             refs.append((op, {"kind": "data", "offset": target-head,
                                               "bytes": data.hex()}))
+            info = None if library or not jump else ida_nalt.get_switch_info(ea)
+            if info:
+                # The case mapping is semantic: values -> local target, plus the default.
+                cases = ida_xref.calc_switch_cases(ea, info)
+                if cases is None:
+                    flag("unresolved-switch")
+                else:
+                    targets = [cases.targets[i] for i in range(len(cases.targets))]
+                    default = info.defjump if info.defjump != idc.BADADDR else None
+                    for target in targets + ([default] if default is not None else []):
+                        other = ida_funcs.get_func(target)
+                        if other is None or other.start_ea != owner.start_ea:
+                            flag("switch-outside-function")
+                        todo.append(target)
+                    refs.append((None, {"kind": "switch", "default": default, "cases": [
+                        [sorted(int(v) for v in cases.cases[i]), targets[i]] for i in range(len(targets))]}))
             if (call or jump) and not library:
-                if not any(op.type in (ida_ua.o_near, ida_ua.o_far) or
-                           ref["kind"] == "import" for op, ref in refs):
+                if not any(op is not None and op.type in (ida_ua.o_near, ida_ua.o_far) or
+                           ref["kind"] in ("import", "switch") for op, ref in refs):
                     flag("indirect-control-flow")
             for op, ref in refs:
+                if op is None:
+                    continue
                 off = op.offb
                 later = [o.offb for o in ops if o.offb > off]
                 end = min(later) if later else insn.size
@@ -227,13 +311,17 @@ def export_commands(profile_path, output_path):
                     raw[off:end] = bytes(end-off)
             # If IDA knows another data reference that no operand explained, do not guess.
             # Targets outside every segment are IDA type IDs (e.g. stack struct members).
-            known = {op.value if op.type == ida_ua.o_imm else op.addr for op, _ in refs}
-            if not library and any(target not in known and ida_segment.getseg(target)
-                                   for target in idautils.DataRefsFrom(ea)):
+            if info:
+                explained |= {info.jumps, info.values}
+            if not library and any(target not in explained and ida_segment.getseg(target)
+                                   for target in drefs):
                 flag("unmodeled-data-reference")
             decoded[ea] = {"bytes": raw.hex(), "refs": [ref for _, ref in refs], "next": None,
                            "offset": ea-start, "issues": notes}
-            if not features & ida_idp.CF_STOP:
+            # A call IDA marks no-return, followed by int3 padding, has no fallthrough.
+            if noreturn and ida_bytes.get_byte(ea+insn.size) == 0xCC:
+                pass
+            elif not features & ida_idp.CF_STOP:
                 nxt = ea+insn.size
                 other = ida_funcs.get_func(nxt)
                 if other is not None and other.start_ea == owner.start_ea:
@@ -250,12 +338,18 @@ def export_commands(profile_path, output_path):
                     node["issues"].append("missing-fallthrough")
                     instruction["issues"].append("missing-fallthrough")
                 instruction["next"] = order.get(instruction["next"], -1)
+            def local(target, instruction=instruction):
+                if target not in order:
+                    node["issues"].append("missing-local-target")
+                    instruction["issues"].append("missing-local-target")
+                return order.get(target, -1)
             for ref in instruction["refs"]:
                 if ref["kind"] == "local":
-                    if ref["target"] not in order:
-                        node["issues"].append("missing-local-target")
-                        instruction["issues"].append("missing-local-target")
-                    ref["target"] = order.get(ref["target"], -1)
+                    ref["target"] = local(ref["target"])
+                elif ref["kind"] == "switch":
+                    ref["cases"] = [[values, local(target)] for values, target in ref["cases"]]
+                    if ref["default"] is not None:
+                        ref["default"] = local(ref["default"])
             if not instruction["issues"]:
                 del instruction["issues"]
             node["instructions"].append(instruction)

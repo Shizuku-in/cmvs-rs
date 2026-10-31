@@ -51,16 +51,58 @@ class ComparisonTests(unittest.TestCase):
             self.assertEqual(self.status(), "unreviewed")
 
     def test_equal_but_incomplete_subtrees_never_inherit(self):
-        for issue in ("unresolved-or-mutable-data", "indirect-control-flow", "relocated-data", "instruction-limit"):
-            self.base["functions"]["0x200"]["issues"] = [issue]
-            self.derived["functions"]["0x900"]["issues"] = [issue]
-            self.assertEqual(self.status(), "unreviewed")
+        # Blocking limits allow at most a presumption; decoding/CFG gaps not even that.
+        for issue, status in (("unresolved-or-mutable-data", "presumed"), ("indirect-control-flow", "presumed"),
+                              ("relocated-data", "unreviewed"), ("instruction-limit", "unreviewed"),
+                              ("undecoded-instruction", "unreviewed"), ("missing-fallthrough", "unreviewed")):
+            with self.subTest(issue=issue):
+                self.base["functions"]["0x200"]["issues"] = [issue]
+                self.derived["functions"]["0x900"]["issues"] = [issue]
+                self.assertEqual(self.status(), status)
 
     def test_depth_limit_and_recursive_cycles_never_inherit(self):
-        self.assertEqual(pc.compare(self.base, self.derived, 0)[0]["status"], "unreviewed")
+        self.assertEqual(pc.compare(self.base, self.derived, 0)[0]["status"], "presumed")
         for g, callee, entry in [(self.base, "0x200", "0x100"), (self.derived, "0x900", "0x500")]:
             g["functions"][callee]["instructions"][0]["refs"] = [{"kind": "function", "target": entry}]
+        self.assertEqual(self.status(), "presumed")
+
+    def block(self, graph, callee, target, raw="8b0500000000"):
+        graph["functions"][callee]["issues"] = ["unresolved-or-mutable-data"]
+        graph["functions"][callee]["instructions"][0].update(
+            bytes=raw, refs=[{"kind": "unknown-data", "target": target, "why": "writable"}])
+
+    def test_presumed_needs_equal_shapes_around_blocked_data(self):
+        self.block(self.base, "0x200", "0x1000")
+        self.block(self.derived, "0x900", "0x2000")
+        row = pc.compare(self.base, self.derived)[0]
+        self.assertEqual((row["status"], row["reason"]), ("presumed", "unresolved-data,unresolved-or-mutable-data"))
+        self.assertTrue(pc.HEX.fullmatch(row["fingerprint"]))
+        # Any visible difference outside the blocked operand forbids the presumption.
+        self.derived["functions"]["0x900"]["instructions"][1]["bytes"] = "c20400"
+        row = pc.compare(self.base, self.derived)[0]
+        self.assertEqual(row["status"], "unreviewed")
+        self.assertTrue(row["reason"].endswith(",shape-different"))
+        # Only one side blocked: the issue sets differ, so the shapes differ.
+        self.setUp()
+        self.block(self.derived, "0x900", "0x2000")
         self.assertEqual(self.status(), "unreviewed")
+
+    def test_presumed_cycles_must_point_at_the_same_ancestor(self):
+        self.derived["functions"]["0x900"]["instructions"][0]["refs"] = [{"kind": "function", "target": "0x500"}]
+        self.base["functions"]["0x200"]["instructions"][0]["refs"] = [{"kind": "function", "target": "0x200"}]
+        self.assertEqual(self.status(), "unreviewed")
+
+    def test_switch_cases_are_semantic(self):
+        for g, callee in [(self.base, "0x200"), (self.derived, "0x900")]:
+            g["functions"][callee]["instructions"][0]["refs"] = [
+                {"kind": "switch-table"}, {"kind": "image-base"},
+                {"kind": "switch", "default": 1, "cases": [[[0, 2], 1], [[1], 0]]}]
+        self.assertEqual(self.status(), "inherited")
+        self.derived["functions"]["0x900"]["instructions"][0]["refs"][2]["cases"] = [[[0], 1], [[1, 2], 0]]
+        self.assertEqual(self.status(), "unreviewed")
+        self.derived["functions"]["0x900"]["instructions"][0]["refs"][2]["cases"] = [[[0], 7]]
+        with self.assertRaises(ValueError):
+            self.status()
 
     def test_entry_and_control_flow_changes_cannot_match(self):
         self.derived["functions"]["0x900"]["entry_index"] = 1
@@ -138,7 +180,7 @@ class ComparisonTests(unittest.TestCase):
             ins["refs"] = [{"kind": "unknown-data", "target": target, "why": "writable"}]
             g["functions"][callee]["issues"] = ["unresolved-or-mutable-data"]
         text = "\n".join(pc.explain(self.base, self.derived, 0x2000))
-        self.assertIn("0x2000 unreviewed", text)
+        self.assertIn("0x2000 presumed: unresolved-data", text)
         self.assertIn("0x200 / 0x900: incomplete", text)
         self.assertIn("base +0x0 b801000000: unresolved-or-mutable-data", text)
         self.assertIn("data 0x1010 / 0x2020: writable", text)
@@ -189,10 +231,10 @@ class ComparisonTests(unittest.TestCase):
             base_path, derived_path = Path(root, "base.profile"), Path(root, "derived.profile")
             base_path.write_text(f"profile base\nbase -\n{binary.format('1'*64)}\n0x2000 base 0x100\n")
             derived_path.write_text(f"profile derived\nbase base\n{binary.format('2'*64)}\n"
-                                    f"inherit x64 base-sha256={'4'*64}\n0x2000 unreviewed 0x500\n")
+                                    f"compare x64 base-sha256={'4'*64}\n0x2000 unreviewed 0x500\n")
             rows = pc.compare(self.base, self.derived)
             lines = pc.apply_profile(self.base, self.derived, rows, base_path, derived_path).splitlines()
-        self.assertEqual(lines[3], "inherit x64 base-sha256=" + "1"*64)
+        self.assertEqual(lines[3], "compare x64 base-sha256=" + "1"*64)
         self.assertEqual(lines[4], f"0x2000 inherited 0x500 inherit=x64:{rows[0]['fingerprint']}")
         self.assertEqual(len(lines), 5)
 

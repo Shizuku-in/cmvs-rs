@@ -117,3 +117,24 @@ IDA 9.4分别导出两个构建的x64/x86，二进制身份来自各自档案，
 | `review-2091-default.log` | `8179bc6b3882e3a0c38e7b8d394d77125fdedcbe685f2ffb386f2a0efab185be` |
 
 检查通过：`cargo fmt --check`、`cargo test --offline`（836项通过、12项忽略，含复核文档引用及现有合成初始化测试）、`cargo clippy --offline --all-targets -- -D warnings`、`git diff --check`。未修改解码算法、后端或 feature，无新依赖及外部源码；不重复计入《アマツツミ》百万步回归，本轮只改派生档案数据与文档。
+
+## 2026-10-31：指纹策略 v3 与 `Presumed`
+
+见[档案设计第 15 节](../../design/engine-profiles.md#15-指纹策略-v3-与-presumed2026-10-31)。先在当前 IDA 会话只读统计：间接控制流中 switch 跳转 24 处、间接调用 247 处；switch 信息可由 IDA 完整给出。随后逐步核对导出：`lea reg, [映像基址]` 未建模、IDA 未解析的映像相对表访问（如 `0x2091` 的 `movzx ecx, byte [r8+rdx+131EB0h]`）、不返回调用后的 `int3` 填充被当作缺失后继。映像相对位移只在 IDA 已解析或同一基本块内可证明寄存器装有映像基址时置零；该证明在全部 CHRONOCLOCK x64 函数中认定 140 处，抽查均为跳转表与索引表，没有结构体偏移。
+
+导出用 IDA 9.4 `idat` 顺序批处理（并行启动时两次出现数据库输入名读取异常，改为顺序执行后正常），数据库均为 `local/chronoclock/` 中分析库的临时副本：
+
+| 导出 | SHA-256 |
+|---|---|
+| 基准 x64 | `7d1f49d573c1ef912cf05e40c12c3a6dd136c6465c596f56784f140f50a7fdae` |
+| CHRONOCLOCK x64 | `5a3cefbac5ff268e28bcce9cc17baf246051b42c53548a639734d8a876e9742a` |
+| 基准 x86 | `88bd9b1d2c0eee29fb339582621cf1edc1e42ddf719b2a015ccddf424bd25f59` |
+| CHRONOCLOCK x86 | `cc888234a0efb9c0289c6badb131e9cc56c4ca5f9f6ac22e57fb00a9836b6665` |
+
+[比较报告](profiles/)：x64 `d9a0afbc53cc9688741c99e46505d9a16b18e00ed2595650dc80c29b6ab34e8d`，x86 `1aee44ae1d1b51bfe537d59f419987fec7c8d41ac6135bab0482dbb4de63f8e6`。档案由工具从当前档案生成，保留 `0x201f`、`0x2091` 两条人工复核行。
+
+默认 trace（参数同上）停在第 43 步 `start.ps3 / 0xde / 0x2013`，统计 inherited=4、reviewed=2、presumed=3（`0x2092`–`0x2094`），日志 `local/chronoclock/v3-default.log` SHA-256 `29cc6581ee28eb35c5b1a21c6cce091a5f5cb4b2d654daa5f966b54c3816cc11`。`0x2092` 的解释显示可比较部分全部相同，阻断的只有整数区、其校验副本和错误标志指针三处可写数据，与 `0x2091` 复核所见的结构一致。
+
+`--explain` 逐条查看研究路径上剩余的未复核命令：`0x2010`、`0x2012`–`0x2014`、`0x2019` 的首处差异在归档类工厂 `0x1400273d0`，`0x2011` 在 `0x140034260`，`0x201a` 在 `0x1400362f0`，都是 `0x201f` 复核中记录的取值 1、2 差异；`0x2030`、`0x2141` 为对象字段偏移不同，`0x2080` 有多处常量不同，`0x2128` 的首处差异是一处未证明的映像相对地址。
+
+《アマツツミ》百万步 trace 与 M1 日志逐字节一致。检查：`cargo fmt --check`、默认离线测试、严格 Clippy、Python 合成测试 21 项。
