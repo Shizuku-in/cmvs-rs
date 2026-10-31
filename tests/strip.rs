@@ -356,7 +356,14 @@ fn unverified_layouts_and_short_stacks_keep_the_command_pending() {
 fn the_software_renderer_draws_growing_strips_and_the_final_cover() {
     let mut scene = scene_with(0, 20, 1250);
     let frame = scene_render::render(&scene, 1280, 720).unwrap();
-    assert!(frame.pixels().chunks_exact(4).all(|p| p == [0, 0, 0, 255]));
+    assert!(
+        frame
+            .pixels()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| *p == [0, 0, 0, 255])
+    );
     scene.advance_frame(16);
     let frame = scene_render::render(&scene, 1280, 720).unwrap();
     assert_eq!(&frame.pixels()[..4], &[0x12, 0x34, 0x56, 255]);
@@ -366,7 +373,9 @@ fn the_software_renderer_draws_growing_strips_and_the_final_cover() {
     assert!(
         frame
             .pixels()
-            .chunks_exact(4)
-            .all(|p| p == [0x12, 0x34, 0x56, 255])
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| *p == [0x12, 0x34, 0x56, 255])
     );
 }

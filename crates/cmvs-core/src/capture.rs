@@ -148,7 +148,7 @@ impl ScreenCapture {
 /// which 0x14001ca00 copies with alpha forced to 0xff.
 fn opaque(frame: RgbaImage) -> Result<RgbaImage, crate::FormatError> {
     let mut pixels = frame.pixels().to_vec();
-    for pixel in pixels.chunks_exact_mut(4) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
         pixel[3] = 0xff;
     }
     RgbaImage::new(frame.width(), frame.height(), pixels)

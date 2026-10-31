@@ -8,7 +8,9 @@ pub(super) fn line_break_kind(rules: &LineBreakRules, code: u16) -> Result<u8, &
         // 0x14005b050 walks two bytes at a time; an odd final byte has the NUL
         // terminator as its second byte. Its next iteration would read beyond it.
         if bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .any(|b| u16::from_be_bytes([b[0], b[1]]) == code)
         {
             return Ok(kind);

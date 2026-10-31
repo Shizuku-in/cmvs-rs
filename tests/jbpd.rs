@@ -79,8 +79,10 @@ fn neutral_luma_quadrants_and_subsampled_chroma() {
     assert!(
         image
             .pixels()
-            .chunks_exact(4)
-            .all(|p| p == [105, 135, 156, 255])
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| *p == [105, 135, 156, 255])
     );
 }
 #[test]
@@ -278,7 +280,14 @@ fn jbpe_alpha_blocks_follow_color_and_use_the_third_table() {
         assert_eq!(&image.pixels()[at..at + 4], &[128, 128, 128, a]);
     }
     let doubled = jbpd::decode_alpha(&jbpe(&alpha_mcu([400; 4]), 16, false, 2, 10)).unwrap();
-    assert!(doubled.pixels().chunks_exact(4).all(|p| p[3] == 100));
+    assert!(
+        doubled
+            .pixels()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| p[3] == 100)
+    );
     assert_eq!(
         jbpd::decode_alpha(&jbpe(&alpha_mcu([800; 4]), 16, true, 1, 10)).unwrap(),
         jbpd::decode_alpha(&jbpe(&alpha_mcu([800; 4]), 16, false, 1, 10)).unwrap()
@@ -347,8 +356,10 @@ fn cmv8_scene_index_reads_alpha_frames_but_the_op_reader_does_not() {
     assert!(
         image
             .pixels()
-            .chunks_exact(4)
-            .all(|p| p == [128, 128, 128, 100])
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| *p == [128, 128, 128, 100])
     );
     let mut opaque_depth = data.clone();
     opaque_depth[36..40].copy_from_slice(&24u32.to_le_bytes());

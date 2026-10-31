@@ -620,7 +620,9 @@ fn archive_entries_fold_case_verify_checksums_and_reopen_on_reregistration() {
     let bytes: Vec<u8> = include_str!("fixtures/cpz6-multiple.hex")
         .trim()
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
         .collect();
     fs::write(root.join("zero.cpz"), &bytes).unwrap();
@@ -846,8 +848,10 @@ fn static_scene_opacity_and_unsupported_blend_are_explicit() {
     let frame = cmvs_rs::scene_render::render(&build_scene(&code), 2, 1).unwrap();
     for (actual, source) in frame
         .pixels()
-        .chunks_exact(4)
-        .zip(opaque_pixels().pixels().chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(opaque_pixels().pixels().as_chunks::<4>().0.iter())
     {
         for c in 0..3 {
             assert_eq!(actual[c], ((u32::from(source[c]) * 128 + 127) / 255) as u8);
@@ -880,8 +884,10 @@ fn additive_blend_adds_scaled_texels_and_opaque_images_at_full_opacity_replace()
         cmvs_rs::scene_render::render(&build_scene(&additive(0x40_4040, 128)), 2, 1).unwrap();
     for (actual, source) in frame
         .pixels()
-        .chunks_exact(4)
-        .zip(source.pixels().chunks_exact(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(source.pixels().as_chunks::<4>().0.iter())
     {
         for c in 0..3 {
             let added = (u32::from(source[c]) * 128 + 127) / 255;
@@ -985,7 +991,7 @@ fn inheriting_children_multiply_the_parent_opacity() {
     scene_command(&mut code, 0x2048, &[1, u32::MAX, 128]);
     let pixels = frame(&code);
     // 255 * 128 / 255 = 128 for both the parent and the child.
-    for (actual, source) in pixels.chunks_exact(4).zip([P0, P1]) {
+    for (actual, source) in pixels.as_chunks::<4>().0.iter().zip([P0, P1]) {
         for c in 0..3 {
             assert_eq!(actual[c], ((u32::from(source[c]) * 128 + 127) / 255) as u8);
         }

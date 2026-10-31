@@ -575,8 +575,10 @@ impl CameraHost {
             .get(2..)
             .filter(|_| record.len() % 4 == 2 && record[..2] == [3, 0])
             .ok_or("unsupported camera record version")?
-            .chunks_exact(4)
-            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| u32::from_le_bytes(*b))
             .collect();
         let (body, expected) = match words.get(2) {
             Some(0) => (15, 22),

@@ -147,7 +147,9 @@ fn render(code: &[u8]) -> Vec<[u8; 3]> {
     let frame = scene_render::render_scene(&scene, Some(&cameras), &[], 8, 4).unwrap();
     frame
         .pixels()
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|p| [p[0], p[1], p[2]])
         .collect()
 }
@@ -232,7 +234,7 @@ fn magnified_objects_are_sampled_bilinearly_with_clamped_edges() {
     let pixels = render(&code);
     // u = (x + 0.5) / 4 − 0.5: 0 for x < 2, 1 for x >= 6, linear in between.
     let weights = [0.0, 0.0, 0.125, 0.375, 0.625, 0.875, 1.0, 1.0];
-    for row in pixels.chunks_exact(8) {
+    for row in pixels.as_chunks::<8>().0 {
         for (x, pixel) in row.iter().enumerate() {
             let expected = ORANGE.map(|c| (f32::from(c) * weights[x]).round() as u8);
             assert_eq!(*pixel, expected, "column {x}");

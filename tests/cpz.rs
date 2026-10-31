@@ -63,7 +63,9 @@ fn vector(index: usize) -> Vec<u8> {
     fixtures[index]
         .trim()
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
         .collect()
 }
@@ -152,7 +154,9 @@ fn trace_cli_loads_and_steps_synthetic_ps3_directly_from_archive() {
     let hex = include_str!("fixtures/cpz6-script.hex").trim();
     let bytes: Vec<u8> = hex
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap())
         .collect();
     std::fs::write(&path, bytes).unwrap();
@@ -175,7 +179,9 @@ fn trace_cli_loads_and_steps_synthetic_ps3_directly_from_archive() {
 fn from_hex(hex: &str) -> Vec<u8> {
     hex.trim()
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
         .collect()
 }

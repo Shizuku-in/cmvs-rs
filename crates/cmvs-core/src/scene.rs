@@ -76,7 +76,7 @@ impl ObjectImage {
         // 0x14003364c..0x1400336d9: original BGRA, ours RGBA. Alpha is untouched.
         let [b, g, r, _] = color.to_le_bytes();
         let mut pixels = self.pixels.pixels().to_vec();
-        for pixel in pixels.chunks_exact_mut(4) {
+        for pixel in pixels.as_chunks_mut::<4>().0 {
             for (channel, factor) in pixel[..3].iter_mut().zip([r, g, b]) {
                 *channel = ((u32::from(*channel) * u32::from(factor)) >> 7).min(255) as u8;
             }

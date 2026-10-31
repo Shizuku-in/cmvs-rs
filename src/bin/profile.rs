@@ -227,7 +227,9 @@ fn run() -> Result<(), Box<dyn Error>> {
         if rest.len() % 2 != 0 {
             return Err("missing option value".into());
         }
-        rest.chunks_exact(2)
+        rest.as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| {
                 if allowed.contains(&pair[0].as_str()) {
                     Ok((pair[0].clone(), pair[1].clone()))

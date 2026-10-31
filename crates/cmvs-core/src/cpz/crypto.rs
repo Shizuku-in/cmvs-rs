@@ -123,7 +123,7 @@ pub(super) fn outer_index(bytes: &mut [u8], key: u32) {
     let table: [u32; 24] = std::array::from_fn(|i| word(&TABLE_BYTES[4 * i..]).wrapping_sub(key));
     let shift = ((key ^ (key >> 8) ^ (key >> 16) ^ (key >> 24) ^ 0xfffffffb) & 15) + 7;
     let mut flag = 5;
-    for chunk in bytes.chunks_exact_mut(4) {
+    for chunk in bytes.as_chunks_mut::<4>().0 {
         let value = (word(chunk) ^ table[flag])
             .wrapping_add(0x784c5062)
             .rotate_right(shift)
@@ -150,7 +150,7 @@ pub(super) fn directory_index(bytes: &mut [u8], keys: &Keys) {
     let key = keys.directory_key();
     let mut seed = 0x76548aefu32;
     let mut flag = 0;
-    for chunk in bytes.chunks_exact_mut(4) {
+    for chunk in bytes.as_chunks_mut::<4>().0 {
         let value = (word(chunk) ^ key[flag])
             .wrapping_sub(0x4a91c262)
             .rotate_left(3)
@@ -171,7 +171,7 @@ pub(super) fn file_index(bytes: &mut [u8], directory: u32, keys: &Keys) {
     let key = keys.file_key(directory);
     let mut seed = 0x2a65cb4fu32;
     let mut flag = 0;
-    for chunk in bytes.chunks_exact_mut(4) {
+    for chunk in bytes.as_chunks_mut::<4>().0 {
         let value = (word(chunk) ^ key[flag])
             .wrapping_sub(seed)
             .rotate_left(2)
@@ -194,7 +194,7 @@ pub(super) fn resource(bytes: &mut [u8], keys: &Keys, seed: u32) {
     let decrypt: [u32; 24] = std::array::from_fn(|i| word(&key_bytes[i * 4..]) ^ seed);
     let mut key = 0x2748c39eu32;
     let mut flag = 10;
-    for chunk in bytes.chunks_exact_mut(4) {
+    for chunk in bytes.as_chunks_mut::<4>().0 {
         let value = ((decrypt[flag] >> 1) ^ decrypt[((key >> 6) & 15) as usize] ^ word(chunk))
             .wrapping_sub(seed)
             ^ keys.digest[(key & 3) as usize];

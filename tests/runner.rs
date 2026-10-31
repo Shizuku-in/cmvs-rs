@@ -63,7 +63,9 @@ impl Root {
         let bytes: Vec<_> = include_str!("fixtures/cpz6-script.hex")
             .trim()
             .as_bytes()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap())
             .collect();
         fs::write(root.join("data/pack/script.cpz"), bytes).unwrap();
@@ -1558,8 +1560,10 @@ fn scenario_snapshot_writes_a_slot_that_loads_back_with_backups() {
     assert_eq!(snapshot.variables.packed_bits()[0] & 1, 1);
     assert_eq!(snapshot.texts[7].as_ref().unwrap().glyphs.len(), 9);
     let recorded_view: Vec<_> = snapshot.cameras[2][6..]
-        .chunks_exact(4)
-        .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|word| u32::from_le_bytes(*word))
         .collect();
     assert_eq!(recorded_view, view_words);
     let live = run.scene().object(20).unwrap().image.as_ref().unwrap();
@@ -1589,8 +1593,10 @@ fn scenario_snapshot_writes_a_slot_that_loads_back_with_backups() {
         restored
             .pixels
             .pixels()
-            .chunks_exact(4)
-            .all(|p| p == [0, 0, 0, 255])
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| *p == [0, 0, 0, 255])
     );
     let glyphs = &run.messages().text(7).unwrap().glyphs;
     assert_eq!(glyphs.len(), 9);

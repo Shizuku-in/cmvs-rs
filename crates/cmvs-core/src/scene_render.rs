@@ -704,7 +704,7 @@ impl<'a> RenderFrame<'a> {
             return Err(FormatError("invalid scene surface dimensions"));
         }
         let mut pixels = vec![0; size as usize];
-        for pixel in pixels.chunks_exact_mut(4) {
+        for pixel in pixels.as_chunks_mut::<4>().0 {
             pixel.copy_from_slice(&self.clear);
         }
         for command in self.commands {
@@ -1248,7 +1248,7 @@ fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
         Layer::Fade(fade) => {
             let [b, g, r, _] = fade.color.to_le_bytes();
             let alpha = fade.opacity.clamp(0, 255) as u32;
-            for p in pixels.chunks_exact_mut(4) {
+            for p in pixels.as_chunks_mut::<4>().0 {
                 for (c, source) in [r, g, b].iter().enumerate() {
                     p[c] = ((u32::from(*source) * alpha + u32::from(p[c]) * (255 - alpha) + 127)
                         / 255) as u8;
@@ -1386,7 +1386,9 @@ mod scale_tests {
         assert_eq!(at(3, 5), &[255, 0, 0]);
         assert_eq!(at(3, 6), &[0, 255, 0]);
         let covered = pixels
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .filter(|p| p[..3] != [0, 0, 0])
             .count();
         assert_eq!(covered, 2);

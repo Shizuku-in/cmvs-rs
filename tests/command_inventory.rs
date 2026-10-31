@@ -54,7 +54,9 @@ fn write_root(root: &Path, code: &[u8]) {
     let bytes: Vec<_> = include_str!("fixtures/cpz6-script.hex")
         .trim()
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap())
         .collect();
     fs::write(root.join("data/pack/script.cpz"), bytes).unwrap();

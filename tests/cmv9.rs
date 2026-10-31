@@ -9,11 +9,13 @@ fn static_and_dynamic_blocks_compose_and_crop_the_padded_edge() {
         let index = Cmv9Index::parse(&bytes).unwrap();
         let image = index.decode_frame(&bytes, 0).unwrap();
         assert_eq!((image.width(), image.height()), (17, 16));
-        for row in image.pixels().chunks_exact(17 * 4) {
+        for row in image.pixels().as_chunks::<{ 17 * 4 }>().0 {
             assert!(
                 row[..16 * 4]
-                    .chunks_exact(4)
-                    .all(|p| p == [136, 136, 136, 255])
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .all(|p| *p == [136, 136, 136, 255])
             );
             assert_eq!(&row[16 * 4..], &[144, 144, 144, 255]);
         }

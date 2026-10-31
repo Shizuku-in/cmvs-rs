@@ -311,12 +311,11 @@ pub fn lookup_key(name: &[u8]) -> Result<Vec<u8>, FormatError> {
 
 /// 0x140062fc0: wrapping sum of little-endian u32 words, then of the tail bytes, from 0x5a902b7c.
 pub fn data_checksum(bytes: &[u8]) -> u32 {
-    let mut words = bytes.chunks_exact(4);
-    let sum = words.by_ref().fold(0x5a902b7c_u32, |sum, word| {
-        sum.wrapping_add(u32::from_le_bytes(word.try_into().expect("four bytes")))
+    let (words, remainder) = bytes.as_chunks::<4>();
+    let sum = words.iter().fold(0x5a902b7c_u32, |sum, word| {
+        sum.wrapping_add(u32::from_le_bytes(*word))
     });
-    words
-        .remainder()
+    remainder
         .iter()
         .fold(sum, |sum, &byte| sum.wrapping_add(u32::from(byte)))
 }

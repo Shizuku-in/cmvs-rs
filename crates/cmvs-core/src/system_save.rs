@@ -208,21 +208,24 @@ impl Css1Save {
                     .map_err(FormatError)?;
             }
         }
-        for (i, bytes) in self.payload[32512..40704].chunks_exact(4).enumerate() {
+        for (i, bytes) in self.payload[32512..40704]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .enumerate()
+        {
             candidate
-                .set_integer(
-                    2048 + i as u32,
-                    i32::from_le_bytes(bytes.try_into().expect("four bytes")),
-                )
+                .set_integer(2048 + i as u32, i32::from_le_bytes(*bytes))
                 .map_err(FormatError)?;
         }
-        for (i, bytes) in self.payload[40704..44800].chunks_exact(4).enumerate() {
+        for (i, bytes) in self.payload[40704..44800]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .enumerate()
+        {
             candidate
-                .fill_floats(
-                    1024 + i as u32,
-                    1,
-                    u32::from_le_bytes(bytes.try_into().expect("four bytes")),
-                )
+                .fill_floats(1024 + i as u32, 1, u32::from_le_bytes(*bytes))
                 .map_err(FormatError)?;
         }
         for (i, bytes) in self.strings.iter().enumerate() {

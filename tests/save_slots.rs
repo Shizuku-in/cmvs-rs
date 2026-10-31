@@ -51,8 +51,10 @@ fn check_loaded(run: &Startup<'_>, mut expected: EngineSnapshot) {
     assert_eq!(actual.stack_pointer, expected.stack_pointer + 12);
     let sp = expected.stack_pointer as usize;
     let frame: Vec<u32> = actual.stack[sp..sp + 12]
-        .chunks_exact(4)
-        .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|b| u32::from_le_bytes(*b))
         .collect();
     assert_eq!(
         frame,
@@ -88,7 +90,7 @@ fn check_loaded(run: &Startup<'_>, mut expected: EngineSnapshot) {
         text.cursor = [text.area[0], text.area[1]];
     }
     // A stopped SE channel keeps its old name behind a cleared first byte in the original.
-    for channel in expected.sound_channels.chunks_exact_mut(52) {
+    for channel in expected.sound_channels.as_chunks_mut::<52>().0 {
         if channel[0] == 0 {
             channel[..32].fill(0);
         }
@@ -134,8 +136,10 @@ fn check_loaded(run: &Startup<'_>, mut expected: EngineSnapshot) {
     }
     for (i, (a, e)) in actual
         .sound_channels
-        .chunks_exact(52)
-        .zip(expected.sound_channels.chunks_exact(52))
+        .as_chunks::<52>()
+        .0
+        .iter()
+        .zip(expected.sound_channels.as_chunks::<52>().0.iter())
         .enumerate()
     {
         if a != e {
@@ -1545,8 +1549,10 @@ fn external_in_game_menus_save_and_load() {
                     image
                         .pixels
                         .pixels()
-                        .chunks_exact(4)
-                        .all(|p| p == [0, 0, 0, 255])
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .all(|p| *p == [0, 0, 0, 255])
                 );
                 count += 1;
             }

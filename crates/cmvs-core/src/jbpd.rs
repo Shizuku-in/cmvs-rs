@@ -141,8 +141,10 @@ pub(crate) struct Tree {
 impl Tree {
     pub(crate) fn new(data: &[u8]) -> Result<Self, FormatError> {
         let mut weights: Vec<u32> = data
-            .chunks_exact(4)
-            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| u32::from_le_bytes(*b))
             .collect();
         let mut children = vec![[0, 0]; 16];
         let mut active = vec![true; 16];

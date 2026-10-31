@@ -145,7 +145,9 @@ mod tests {
         let archive: Vec<_> = include_str!("../../../../tests/fixtures/cpz6-script.hex")
             .trim()
             .as_bytes()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap())
             .collect();
         std::fs::write(root.join("data/pack/script.cpz"), archive).unwrap();

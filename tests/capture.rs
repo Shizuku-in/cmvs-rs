@@ -82,7 +82,7 @@ fn immediate_read_uses_the_device_frame_and_preserves_held_capture_and_object_st
         let before = scene.objects().clone();
         let mut expected = scene.object(3).unwrap().clone();
         let mut pixels = readback.pixels().to_vec();
-        for p in pixels.chunks_exact_mut(4) {
+        for p in pixels.as_chunks_mut::<4>().0 {
             p[3] = 255;
         }
         expected.image = Some(ObjectImage {

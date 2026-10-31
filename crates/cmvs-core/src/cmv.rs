@@ -109,7 +109,7 @@ impl CmvIndex {
             .read_exact(&mut table)
             .map_err(|_| FormatError("CMV index truncated"))?;
         let mut entries = Vec::with_capacity(count as usize);
-        for raw in table.chunks_exact(ENTRY_SIZE as usize) {
+        for raw in table.as_chunks::<{ ENTRY_SIZE as usize }>().0 {
             let field = |i: usize| u32::from_le_bytes(raw[4 * i..4 * i + 4].try_into().unwrap());
             let entry = CmvEntry {
                 sequence: field(0),

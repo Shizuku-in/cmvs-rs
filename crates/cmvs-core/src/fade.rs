@@ -68,8 +68,10 @@ impl Fade {
             return Err("fade record length differs from the original");
         }
         let w: Vec<u32> = record
-            .chunks_exact(4)
-            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| u32::from_le_bytes(*b))
             .collect();
         if [w[0], w[1], w[2], w[3]] != [w[5], w[6], w[8], w[7]] {
             return Err("fade record header disagrees with its object words");

@@ -949,8 +949,10 @@ fn cmv6_scene_creation_and_segment_playback_share_the_existing_ownership_rules()
                 .unwrap()
                 .pixels
                 .pixels()
-                .chunks_exact(4)
-                .all(|p| p == [136, 136, 136, 255])
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [136, 136, 136, 255])
         );
         pending(&mut vm);
         movies.try_start_scene(&mut vm).unwrap();
@@ -967,8 +969,10 @@ fn cmv6_scene_creation_and_segment_playback_share_the_existing_ownership_rules()
                     .unwrap()
                     .pixels
                     .pixels()
-                    .chunks_exact(4)
-                    .all(|p| p == [c, c, c, 255])
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .all(|p| *p == [c, c, c, 255])
             );
         }
         let old = scene.objects().clone();
@@ -1048,7 +1052,9 @@ fn cmv8_scene_creation_binds_an_alpha_image_and_playback_keeps_it() {
         let pixels = image.pixels.pixels();
         assert!(
             pixels
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .all(|p| p[..3] == [128, 128, 128] && p[3] == pixels[3])
         );
         pixels[3]

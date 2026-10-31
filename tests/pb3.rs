@@ -131,7 +131,7 @@ fn partial_edge_tiles_and_alpha_channel_are_not_flipped_or_rounded() {
     let image = pb3::decode(&raw).unwrap();
     let expected_b = [1, 1, 3, 1, 1, 4, 5, 6, 2];
     let expected_a = [64, 64, 192, 64, 64, 255, 1, 0, 128];
-    for (i, p) in image.pixels().chunks_exact(4).enumerate() {
+    for (i, &p) in image.pixels().as_chunks::<4>().0.iter().enumerate() {
         assert_eq!(
             p,
             [
@@ -179,7 +179,14 @@ fn lzss_msb_flags_maximum_reference_overlap_and_ring_wrap() {
         ],
     );
     let image = pb3::decode(&raw).unwrap();
-    assert!(image.pixels().chunks_exact(4).all(|p| p == [9, 8, 7, 255]));
+    assert!(
+        image
+            .pixels()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| *p == [9, 8, 7, 255])
+    );
 }
 
 #[test]

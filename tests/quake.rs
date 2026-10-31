@@ -189,7 +189,13 @@ fn frame(scene: &SceneHost, extra_flags: u32) -> Vec<u8> {
         ..SceneObject::default()
     };
     let frame = scene_render::render_with_objects(scene, &[&extra], 4, 1).unwrap();
-    frame.pixels().chunks_exact(4).map(|p| p[0]).collect()
+    frame
+        .pixels()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|p| p[0])
+        .collect()
 }
 fn shaken_scene(mode: u32) -> SceneHost {
     let mut code = vec![];

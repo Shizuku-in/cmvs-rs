@@ -124,7 +124,13 @@ fn run(vm: &mut Machine<'_>, scene: &mut SceneHost, commands: usize) {
 /// Red channel of each pixel: white over the black clear color, so the drawn alpha.
 fn alphas(scene: &SceneHost) -> Vec<u8> {
     let frame = scene_render::render(scene, 2, 1).unwrap();
-    frame.pixels().chunks_exact(4).map(|p| p[0]).collect()
+    frame
+        .pixels()
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|p| p[0])
+        .collect()
 }
 
 #[test]

@@ -301,7 +301,7 @@ fn validate_icon(bytes: &[u8]) -> Result<(), FormatError> {
     if count == 0 || count > 256 || end > bytes.len() {
         return Err(FormatError("ICO directory count exceeds bounds"));
     }
-    for entry in bytes[6..end].chunks_exact(16) {
+    for entry in bytes[6..end].as_chunks::<16>().0 {
         let size = u64::from(u32::from_le_bytes(
             entry[8..12].try_into().expect("16-byte entry"),
         ));
