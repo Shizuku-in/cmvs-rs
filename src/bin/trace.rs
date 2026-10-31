@@ -29,6 +29,46 @@ use cmvs_rs::{
 };
 use std::{collections::BTreeMap, env, error::Error, fs::File, io::Read};
 
+const USAGE: &str = "\
+Usage: cmvs-trace <script-or-archive> [options]
+
+Runs the VM on a script or script archive and prints the trace. Read-only research tool.
+
+Input and execution:
+  --script <name>              load this ASCII basename from the archive as the initial script
+  --script-archive <archive>   supply common and main scripts; enables control handling
+  --entry <pc>                 start at this address instead of the script entry
+  --steps <budget>             VM step budget (default 10000)
+  --bootstrap                  apply the verified startup configuration
+  --virtual-tick <tick>        callback clock for control handling (default 0)
+  --frame-ms <delta>           engine frame time per wait or yield; without it time stays frozen
+  --rand-seed <seed>           enable 0x20d4 with CRT rand() from this seed
+
+Saves and platform:
+  --save-dir <directory>       scan saveNNN.dat headers read-only for menu state
+  --system-save <file>         load CSS1 persistent state for 0x2128 (no gameplay restore)
+  --record-platform <root>     recording-only platform backend using that game root
+  --continue-without-snapshot  pass main entry and 0x22b2 without building a save image
+
+Engine profile:
+  --profile <id>               force a profile; needed for synthetic or unrecorded scripts
+  --allow-presumed             research only: run legacy presumed commands
+  --allow-unreviewed           research only: run unreviewed commands with base semantics
+
+Notes:
+  - The profile is identified from the input, --script-archive and, with --record-platform,
+    the executables in that root. Every system command passes the gate first: Base,
+    Inherited, Reviewed and ContractEquivalent run existing handlers; absent and no-op
+    commands always stop; presumed and unreviewed commands stop unless allowed.
+  - --record-platform reads cursor and icon assets, applies verified state (clear color,
+    save title, pointer-gesture configuration), records SE requests without audio output
+    and decodes 0x2030 object images from 0x2011 entries. No window, drawing or input.
+  - Without --continue-without-snapshot, main transfer and 0x22b2 stop at the engine save
+    snapshot; with it only the verified live-state effect applies and saving is unavailable.
+  - Callback ticks stay separate from --frame-ms; --script-archive schedules no callbacks.
+  - The original seeds rand() from timeGetTime and draws every frame, so its values are
+    not reproducible.";
+
 // Emit source diagnostics on every return path, including a handler error or budget stop.
 struct TraceGate<'a>(CommandGate<'a>);
 impl<'a> std::ops::Deref for TraceGate<'a> {
@@ -68,11 +108,9 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut args = env::args_os().skip(1);
     let path = args
         .next()
-        .ok_or("usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap]")?;
+        .ok_or("usage: cmvs-trace <script-or-archive> [options]; see --help")?;
     if path == "--help" {
-        println!(
-            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap] [--script-archive <archive>] [--virtual-tick <tick>] [--frame-ms <delta>] [--save-dir <directory>] [--system-save <file>] [--record-platform <game-root>] [--continue-without-snapshot] [--rand-seed <seed>] [--profile <id>] [--allow-unreviewed] [--allow-presumed]\nThe engine profile is identified from the input script or archive, --script-archive and, with --record-platform, the executables in that game root; synthetic or unrecorded scripts need an explicit --profile. Every system command passes the profile gate first: Base, Inherited, Reviewed and ContractEquivalent run existing handlers; absent and no-op commands stop. Legacy presumed commands stop unless --allow-presumed; unreviewed commands stop unless --allow-unreviewed (separate research policies).\n--frame-ms supplies a positive engine-frame delta on each supported wait/yield; without it time stays frozen. Callback ticks remain separate. --script loads an isolated initial script. --script-archive supplies common/main scripts and enables explicit control handling with virtual time (default tick 0), without automatic scheduling. --bootstrap applies verified startup configuration. --save-dir enables read-only saveNNN.dat header scanning and menu state, without native UI or save restoration. --system-save explicitly enables CSS1 persistent-state loading for 0x2128; it does not restore a gameplay snapshot. --record-platform enables a recording-only backend with read-only cursor/icon assets from the explicit game root, plus verified state such as the clear color, the save title and pointer-gesture configuration, records SE playback requests without audio output, and decodes 0x2030 object images read-only from the 0x2011 entries; no native window, drawing, or input polling. Main transfer and scenario 0x22b2 stop at the engine save snapshot unless --continue-without-snapshot is given; that applies only the verified live-state effect, builds no save image, and leaves saving unavailable. --rand-seed enables 0x20d4 with the CRT rand() generator from an explicit seed; the original seeds from timeGetTime and draws every frame, so values are not reproducible."
-        );
+        println!("{USAGE}");
         return Ok(());
     }
     let mut entry = None;

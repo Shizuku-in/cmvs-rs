@@ -29,6 +29,65 @@ use winit::{
     window::{Window, WindowId},
 };
 
+const USAGE: &str = "\
+Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [options]
+
+Native research preview of a game. All game files are read only.
+
+Run control:
+  --encoding <name>                text encoding of the game (required)
+  --exit-after <seconds>           exit after 1..3600 seconds
+  --rand-seed <seed>               CRT rand() research seed (default 0)
+  --save-frame <new.png>           write the frame shown at exit to a new PNG
+
+Engine profile:
+  --profile <id>                   force a profile for research
+  --allow-presumed                 research only: run legacy presumed commands
+  --allow-unreviewed               research only: run unreviewed commands with base
+                                   semantics, logging each command's first use
+
+Saves:
+  --user-data-dir <dir>            locked user directory for system.dat, slots and cmvs.cfg
+  --system-save-output <new.dat>   export one CSS1 system save to a new file
+  --skip-auto-resume               disable startup auto-load in memory (verified games only)
+  --continue-without-snapshot      research: enter main without a save image; no saving
+
+Output:
+  --audio <record|native>          record requests only (default) or play on the device
+  --input <native|record>          map key.cfg and pointer to actions (default) or observe
+  --font <file>                    preview messages with this OpenType file or collection
+  --font-face <index>              face index within --font (default 0)
+  --record-text                    record message glyph descriptors and reveal timing only
+  --image-archive <CPZ6> --preview-image <name>
+                                   show one PB3 image instead of the scene
+
+Keys: F1 default cursor, F2..F5 registered cursor previews after a stop, Esc or close exits.
+
+Notes:
+  - The profile is identified from the start script, script archive and executables.
+    Base, Inherited, Reviewed and ContractEquivalent commands run; absent and no-op
+    commands always stop; presumed and unreviewed commands stop unless allowed.
+  - Startup runs with virtual callback tick 0 and wall-time scene updates; unknown
+    commands stop.
+  - The save snapshot is built at main entry (0x2080) and scenario points (0x22b2); live
+    state without a save format stops with an error.
+  - --user-data-dir reads its system.dat on restart (the game template only if absent),
+    keeps saveNNN.dat there (UTC labels; slot 999 keeps an overwritten slot, slot 998 the
+    state before a load), keeps system.bak on repeated saves, and writes supported
+    preferences to cmvs.cfg on graceful exit (cmvs.cfg.bak keeps the previous file).
+  - --system-save-output and --user-data-dir are mutually exclusive. Without either,
+    0x2129 stays a barrier and gameplay saves fail. Existing files are never replaced.
+  - --skip-auto-resume keeps every save file; without it startup auto-load restores the
+    saved slot.
+  - The scene preview covers the verified 2D scene, CMV6 JBPD movies and full-screen color
+    fades on a 1280x720 viewport; use a release build for movies. Transforms, other
+    transitions and blend modes are unsupported.
+  - Image preview supports PB3 type 1; aspect fit and straight alpha are preview policies.
+  - --audio native needs the audio-output feature; movie frames follow the audio source
+    position; device latency is not calibrated.
+  - --font previews Shift-JIS messages with wrapping, ruby, flat colors and outlines; glyph
+    masks differ from GDI. Without --font or --record-text, message output is a barrier.";
+
 #[cfg(feature = "wgpu-renderer")]
 struct GpuDesktop {
     renderer: cmvs_wgpu::Renderer,
@@ -701,12 +760,10 @@ fn halt_title(event: StartupEvent, script: &[u8], pc: usize) -> String {
 fn run() -> Result<(), Box<dyn Error>> {
     let mut args = env::args_os().skip(1);
     let root = args.next().ok_or(
-        "usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <seconds>]",
+        "usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [options]; see --help",
     )?;
     if root == "--help" {
-        println!(
-            "Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [--exit-after <1..3600 seconds>] [--image-archive <CPZ6> --preview-image <ASCII-basename>] [--profile <id>] [--allow-unreviewed] [--allow-presumed] [--continue-without-snapshot] [--skip-auto-resume] [--system-save-output <new.dat> | --user-data-dir <directory>] [--rand-seed <seed>] [--save-frame <new.png>] [--audio <record|native>] [--input <native|record>] [--record-text | --font <file> [--font-face <index>]]\nNative research preview only. The engine profile is identified read-only from the start script, script archive and executables; --profile selects one explicitly for research, and --allow-unreviewed runs commands not yet reviewed for that profile with the base semantics, logging each command's first use. Base, Inherited, Reviewed and ContractEquivalent use existing handlers. Legacy presumed commands stop unless --allow-presumed (research only). Absent and no-op commands always stop. Runs bounded startup with virtual callback tick 0 and explicit wall-time scene updates; stops at unknown commands. The engine save snapshot is built at main entry (0x2080) and scenario points (0x22b2); live state without a save format stops with an error. --continue-without-snapshot (research) enters main without building a save image; gameplay saving then stays unavailable. --system-save-output explicitly enables one mode-1 CSS1 export to a new file outside the game root after loading a header template; existing files are never replaced, and later system-save reads use that export. --user-data-dir instead enables a locked independent user directory, reads its system.dat on restart (falling back to the read-only game template only if absent), reads and writes gameplay slots saveNNN.dat there (labels in UTC; slot 999 keeps an overwritten slot, slot 998 the state before a load), and permits repeated CSS1 saves with a system.bak backup. It also reloads user cmvs.cfg preferences and saves supported settings plus loaded CSS1 variables on graceful exit (cmvs.cfg.bak keeps the previous configuration). These two output modes are mutually exclusive. Without either option 0x2129 stays a barrier and gameplay saves fail. --skip-auto-resume explicitly disables startup auto-load in memory for games whose record verifies it (Amatsutsumi), preserving all save files and other system-save settings; without it the startup auto-load restores the saved slot. --rand-seed sets the CRT rand() research seed (default 0). Without an explicit image, presents the verified 2D scene (top-level objects and their children) and CMV6 JBPD movies on a 1280x720 research viewport; includes timed full-screen color fades; use a release build for movie decoding; transforms, other transitions and alternate blend modes remain unsupported. --save-frame writes the frame shown at exit, in script coordinates, to a new PNG file (never overwritten); use it instead of screen captures to check rendering. Image preview supports PB3 type 1 only; aspect fit and straight-alpha blending are preview policies, not VM scene commands. F1=default cursor, F2..F5=registered cursor previews after stop, Esc/close=exit. --audio record (default) records only; --audio native requires the audio-output feature and opens the default device for Vorbis SE/BGM/movie playback, using audio source position for movie frames. Device-buffer latency is not calibrated. --input native (default) maps key.cfg bindings and pointer events to CMVS actions; --input record observes input without injecting actions. --record-text explicitly records only the supported message glyph descriptors and reveal timing; no font pixels or text drawing. --font loads an explicit OpenType file/collection face and previews the supported Shift-JIS messages with wrapping and ruby, with flat colors and outlines. Its glyph masks differ from GDI. --font-face defaults to 0. Default message output stays a barrier. All game files read-only."
-        );
+        println!("{USAGE}");
         return Ok(());
     }
     let mut encoding = None;

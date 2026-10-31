@@ -10,12 +10,23 @@ use std::{
     io::{Read, Write},
 };
 
+const USAGE: &str = "\
+Usage:
+  cmvs-save <save.dat>                                      print the header and sections
+  cmvs-save --section <0|1|2> <save.dat> <new-output-file>  export one decoded section
+  cmvs-save --records <save.dat>                            list the snapshot record framing
+  cmvs-save --vm-state <save.dat>                           validate the typed VM fields
+  cmvs-save --visual-state <save.dat>                       validate text, windows and scene
+
+Sections: 0 snapshot, 1 auxiliary, 2 script memory image. Only section 0 has the
+original additive checksum, which does not authenticate the whole file.
+--visual-state covers the supported subset and reads no resources.
+Read only: these commands never install engine state.";
+
 fn run() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = env::args_os().skip(1).collect();
     if args.len() == 1 && args[0] == "--help" {
-        println!(
-            "Usage: cmvs-save <save.dat>\n       cmvs-save --section <0|1|2> <save.dat> <new-output-file>\n       cmvs-save --records <save.dat>\n       cmvs-save --vm-state <save.dat>\n       cmvs-save --visual-state <save.dat>\nRead-only CSV2 decoding. Section 0=snapshot, 1=auxiliary, 2=script memory image. Only section 0 has the original additive checksum; this does not authenticate the full file. --records lists framing; --vm-state validates typed VM fields; --visual-state validates the supported text/window/scene subset without reading resources. These commands never install engine state."
-        );
+        println!("{USAGE}");
         return Ok(());
     }
     let records = args.len() == 2 && args[0] == "--records";
