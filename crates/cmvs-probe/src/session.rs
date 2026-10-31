@@ -131,6 +131,8 @@ pub struct Session<'a> {
     user: PathBuf,
     /// A keyboard press in progress: group, button and navigation taps so far.
     navigation: Option<(usize, usize, usize)>,
+    /// Native dialogs answered so far; each is cancelled, as a player closing it would.
+    dialogs: usize,
 }
 
 /// Executed instruction addresses by script name: the PC before each VM step.
@@ -211,6 +213,11 @@ impl<'a> Session<'a> {
             held: Vec::new(),
             user: user.to_path_buf(),
             navigation: None,
+            dialogs: 0,
+        })
+        .map(|mut session: Self| {
+            session.backend.answer_font_dialog(None);
+            session
         })
     }
     pub fn startup(&self) -> &Startup<'a> {
@@ -351,6 +358,11 @@ impl<'a> Session<'a> {
                     return Err(self.stop(stop));
                 }
             };
+            if self.backend.font_dialogs().len() > self.dialogs {
+                self.dialogs = self.backend.font_dialogs().len();
+                self.backend.answer_font_dialog(None);
+                self.event("font-dialog-cancelled", Json::Null);
+            }
             for command in self.run.take_unreviewed_notices() {
                 self.event(
                     "unreviewed-allowed",

@@ -22,11 +22,11 @@ use std::fs;
 /// Steps from a node before the graph stops expanding.
 const MAX_DEPTH: usize = 3;
 /// Trials per graph; each replays a path from a fresh start.
-const MAX_TRIALS: usize = 240;
+const MAX_TRIALS: usize = 400;
 /// Frames an action gets to settle on a page or reach a message wait.
 const STEP_FRAMES: u64 = 3600;
 /// Buttons tried per page; larger pages are sampled evenly.
-const MAX_BUTTONS: usize = 24;
+const MAX_BUTTONS: usize = 64;
 /// The message wait the in-scenario root stands at.
 const ROOT_WAIT: usize = 10;
 /// Cancel presses used to back out of a settings page before saving preferences.
