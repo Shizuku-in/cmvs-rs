@@ -122,6 +122,11 @@ impl Observation {
     pub fn waiting_for_advance(&self) -> bool {
         self.pending == Some(MESSAGE_WAIT) && self.repeat == 2
     }
+    /// A wait can resume after a script callback with its repeat count intact.
+    /// Use this for returning from a page; `waiting_for_advance` marks only a new wait.
+    pub fn in_message_wait(&self) -> bool {
+        self.pending == Some(MESSAGE_WAIT) && self.repeat >= 2
+    }
     /// Feeds the per-frame trace digest used by determinism checks.
     pub fn hash_into(&self, h: &mut Sha256) {
         h.update(&self.steps.to_le_bytes());

@@ -230,7 +230,7 @@ pub fn round_trips(runner: &Runner<'_>) -> CheckResult {
     }
 }
 
-/// Wheel up opens the backlog; wheel down, then cancel, close it again.
+/// Wheel up opens the backlog; cancel, then wheel down, close it again.
 pub fn backlog(runner: &Runner<'_>) -> CheckResult {
     if runner.options.device != Device::Mouse {
         return CheckResult::new(
@@ -278,7 +278,7 @@ pub fn backlog(runner: &Runner<'_>) -> CheckResult {
         // Right after closing, the VM should still stand in the same message wait.
         let now = Observation::of(at.session.startup(), at.session.yields());
         let still = now
-            .waiting_for_advance()
+            .in_message_wait()
             .then(|| WaitPoint::of(&at.session, &now));
         let back = match (closed_by, &still) {
             (Some(_), None) => at

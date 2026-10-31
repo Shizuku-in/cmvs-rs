@@ -1,5 +1,13 @@
 # CHRONOCLOCK 研究记录
 
+## 2026-11-01：存档分叉验证与回想检查纠正
+
+使用上一节v2存档实现的独立release探针，`--checks R2,R3 --fork save --allow-presumed --allow-unreviewed --max-steps 300000000`，同一游戏根目录、字体、种子0、鼠标、16ms，输出 `local/chronoclock/snapshot-layout-fork`。4条路线 `0.0.0 / 0.1.0 / 0.1.1 / 0.0.1` 全部回到标题，与此前重放得到的选择路径相同；后三条实际从深度1、2、2的检查点恢复，而非退回整条重放。报告SHA-256 `cee51c0001b827736bf62dfab2d0841596d5bcddd50dba588456a650d5859fff`。这验证初始选项树的快照捕获与分叉，不代替解锁后全部入口验证。
+
+旧I4“回想关闭后多推进一句”是探针误判。一次性逐帧记录表明：进入回想前同一句的等待已从repeat=2持续到62；关闭后返回同一脚本/PC、相同文字摘要，repeat继续到71及以后。原检查只认repeat=2，在返回的持续等待中找不到新等待，于是场景驱动器空闲300帧后自行发送推进，再把下一句判作失败。现在回想返回检查接受挂起0x2153且repeat>=2的持续等待，新等待事件的识别保持不变；未改运行时输入或消息语义，也未保留无助于解释该问题的输入队列实验。
+
+以新探针分别对本作研究放行及《アマツツミ》默认策略运行I4，均pass L1。两边前后文字摘要分别保持 `08e1ae3f1d59`、`c21744a80a1a`。本作报告 `local/chronoclock/backlog-wait-chrono/summary.json` SHA-256 `c9864f8f96e99b33cbef75d8e473abefd8db55975503c07dcba6414999fee762`；基准报告 `local/chronoclock/backlog-wait-base/summary.json` 为 `2a6c81a7f027e6dab129a79d2cdbfeba14fac33c038bd6dd354c9c2679e4c6a8`。逐帧记录在忽略的 `local/chronoclock/backlog-trace-1.log`。复用既有探针测试与严格Clippy，未新增测试。D2的33ms多一次等待现象仍独立保留，不能据此标为解决。
+
 ## 2026-11-01：剧情存档v2与恢复流程
 
 按独立核对的文字v2子记录启用本作受支持的快照布局，详见[语义证据](vm-semantics.md#剧情快照文字v2布局2026-11-01)。保留未知派生布局、特殊图像及活动场景效果等错误边界，不改变命令闸门与研究放行策略。默认离线API仍使用基准v3，调用方须显式选择v2；runner按档案选择。
