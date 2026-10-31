@@ -239,13 +239,7 @@ fn refused_load(session: &mut Session<'_>) -> Result<String, String> {
 pub fn damaged_saves(runner: &Runner<'_>) -> CheckResult {
     let mut options = runner.options.clone();
     options.max_steps = DAMAGED_STEPS;
-    let damaged = Runner::new(
-        runner.target,
-        runner.script,
-        &options,
-        runner.font,
-        runner.out,
-    );
+    let damaged = runner.with_options(&options);
     let template = fs::read(runner.target.root.join("save/system.dat")).ok();
     let mut cases: Vec<DamagedCase> = vec![
         ("corrupt system save", Some(garbage(4096)), None),

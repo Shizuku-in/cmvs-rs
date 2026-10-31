@@ -25,6 +25,36 @@ pub struct Choice {
     pub shape: GroupShape,
     pub buttons: usize,
     pub enabled: Vec<usize>,
+    /// Text shown with the choice, decoded as Shift-JIS, in slot order.
+    pub texts: Vec<String>,
+}
+
+/// Shift-JIS bytes of glyph codes; codes above 0xff are double-byte pairs.
+fn decode_codes(codes: impl Iterator<Item = u16>) -> String {
+    let mut bytes = Vec::new();
+    for code in codes {
+        if code > 0xff {
+            bytes.extend(code.to_be_bytes());
+        } else {
+            bytes.push(code as u8);
+        }
+    }
+    encoding_rs::SHIFT_JIS.decode(&bytes).0.into_owned()
+}
+
+/// Text currently shown: visible text objects (where placed choice options are drawn) and
+/// auxiliary texts, each as one string, in slot order.
+pub fn shown_texts(session: &Session<'_>) -> Vec<String> {
+    let messages = session.startup().messages();
+    let objects = (0..cmvs_core::message::TEXT_OBJECTS)
+        .filter_map(|slot| messages.text(slot))
+        .filter(|text| text.visible && !text.glyphs.is_empty())
+        .map(|text| decode_codes(text.glyphs.iter().map(|g| g.code)));
+    let auxiliary = (0..cmvs_core::message::AUXILIARY_TEXTS)
+        .filter_map(|slot| messages.auxiliary_text(slot))
+        .filter(|text| !text.glyphs.is_empty())
+        .map(|text| decode_codes(text.glyphs.iter().map(|g| g.code)));
+    objects.chain(auxiliary).collect()
 }
 
 #[derive(Debug, Clone)]
@@ -104,7 +134,10 @@ impl Scenario {
     }
     /// Continues a session that is already inside the scenario, for example right after a
     /// gameplay load from the start page.
-    pub fn resume(session: &Session<'_>, start: PageSignature, skip: bool) -> Self {
+    pub fn resume(session: &mut Session<'_>, start: PageSignature, skip: bool) -> Self {
+        if skip && hold_skip(session) {
+            session.note("skip-held", Json::Null);
+        }
         Self::new(session, start, skip, true)
     }
     fn new(session: &Session<'_>, start: PageSignature, skip: bool, in_scenario: bool) -> Self {
@@ -229,10 +262,22 @@ impl Scenario {
             }
             if self.pending_frames >= CHOICE_FRAMES {
                 if self.pending.len() > 1 {
-                    let slots: Vec<_> = self.pending.iter().map(|g| g.slot).collect();
-                    return Err(Stop::Error(format!(
-                        "ambiguous-choice: candidate groups {slots:?}"
-                    )));
+                    let script = o.script.escape_ascii().to_string();
+                    let preferred = session.manifest().and_then(|m| m.choice_group(&script));
+                    match preferred
+                        .and_then(|slot| self.pending.iter().position(|g| g.slot == slot))
+                    {
+                        Some(index) => {
+                            let chosen = self.pending.remove(index);
+                            self.pending = vec![chosen];
+                        }
+                        None => {
+                            let slots: Vec<_> = self.pending.iter().map(|g| g.slot).collect();
+                            return Err(Stop::Error(format!(
+                                "ambiguous-choice: candidate groups {slots:?}"
+                            )));
+                        }
+                    }
                 }
                 let shape = self.pending[0].clone();
                 let Some(group) = session.startup().buttons().group(shape.slot) else {
@@ -246,11 +291,13 @@ impl Scenario {
                     .map(|(i, _)| i)
                     .collect();
                 let buttons = group.buttons.len();
+                let texts = shown_texts(session);
                 return Ok(Some(Event::Choice(Choice {
                     observation: o,
                     shape,
                     buttons,
                     enabled,
+                    texts,
                 })));
             }
             let movie = session.startup().movies().player().is_some();

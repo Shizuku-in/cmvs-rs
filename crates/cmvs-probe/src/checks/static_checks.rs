@@ -208,3 +208,216 @@ pub fn gate_inventory(target: &Target, inventory: Option<&ScriptInventory>) -> C
         ("stopping", stopping_detail),
     ]))
 }
+
+/// Resource files under `data/`, at most three directories deep, sorted for stable output.
+fn data_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    fn walk(dir: &std::path::Path, depth: usize, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() && depth < 3 {
+                walk(&path, depth + 1, out);
+            } else if path.is_file() {
+                out.push(path);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(&root.join("data"), 0, &mut files);
+    files.sort();
+    files
+}
+
+fn extension(name: &[u8]) -> String {
+    name.rsplit(|&b| b == b'.')
+        .next()
+        .filter(|e| e.len() < name.len())
+        .map(|e| e.to_ascii_lowercase().escape_ascii().to_string())
+        .unwrap_or_default()
+}
+
+/// Checks the header a resource of this kind must have; other kinds pass on their checksum.
+fn resource_header(kind: &str, bytes: &[u8]) -> Result<(), String> {
+    match kind {
+        "pb3" => cmvs_core::pb3::Header::parse(bytes)
+            .map(|_| ())
+            .map_err(|e| e.to_string()),
+        "ogg" if !bytes.starts_with(b"OggS") => Err("missing OggS signature".into()),
+        // Scene movies are CMV6 or CMV8; CMV9 has its own container.
+        "cmv" => cmvs_core::cmv::CmvIndex::read_scene(&mut std::io::Cursor::new(bytes))
+            .map(|_| ())
+            .or_else(|first| {
+                cmvs_core::cmv9::Cmv9Index::parse(bytes)
+                    .map(|_| ())
+                    .map_err(|second| format!("{first}; as CMV9: {second}"))
+            }),
+        _ => Ok(()),
+    }
+}
+
+/// S4: every archive entry under `data/` passes its checksum and the header of its kind;
+/// loose audio and movie files have valid headers.
+pub fn resources(target: &Target) -> CheckResult {
+    const TITLE: &str = "resource archives verify and resource headers decode";
+    if let Some(missing) = target.missing(&[cap::FILES, cap::CPZ6]) {
+        return CheckResult::new(
+            "S4",
+            TITLE,
+            Outcome::Skipped(format!("missing capability {missing}")),
+        );
+    }
+    let files = target.files.as_ref().expect("files capability");
+    let script_archive = target.root.join(&files.script_archive);
+    let mut kinds: BTreeMap<String, usize> = BTreeMap::new();
+    let mut failures: Vec<Json> = Vec::new();
+    let mut failed = 0usize;
+    let mut fail = |what: String, error: String| {
+        failed += 1;
+        if failures.len() < 32 {
+            failures.push(Json::obj([
+                ("resource", Json::from(what)),
+                ("error", error.into()),
+            ]));
+        }
+    };
+    let mut archives = 0;
+    for path in data_files(&target.root) {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let kind = extension(name.as_bytes());
+        if kind == "cpz" {
+            if path == script_archive {
+                continue;
+            }
+            archives += 1;
+            let opened = File::open(&path).and_then(|mut file| {
+                let index = Cpz6Index::read(&mut file).map_err(std::io::Error::other)?;
+                Ok((file, index))
+            });
+            let (mut file, index) = match opened {
+                Ok(opened) => opened,
+                Err(e) => {
+                    fail(name, e.to_string());
+                    continue;
+                }
+            };
+            for (i, entry) in index.entries().iter().enumerate() {
+                let entry_kind = extension(&entry.name);
+                *kinds.entry(entry_kind.clone()).or_default() += 1;
+                let label = format!("{name}/{}", entry.name.escape_ascii());
+                match index.read_entry_verified(&mut file, i) {
+                    Ok(bytes) => {
+                        if let Err(e) = resource_header(&entry_kind, &bytes) {
+                            fail(label, e);
+                        }
+                    }
+                    Err(e) => fail(label, e.to_string()),
+                }
+            }
+        } else if matches!(kind.as_str(), "ogg" | "cmv") {
+            *kinds.entry(kind.clone()).or_default() += 1;
+            // Loose movies can be large: parse the index from the file itself.
+            let checked = if kind == "cmv" {
+                File::open(&path)
+                    .map_err(|e| e.to_string())
+                    .and_then(|mut f| {
+                        cmvs_core::cmv::CmvIndex::read_scene(&mut f)
+                            .map(|_| ())
+                            .map_err(|e| e.to_string())
+                    })
+            } else {
+                let mut head = Vec::new();
+                File::open(&path)
+                    .and_then(|f| f.take(4).read_to_end(&mut head))
+                    .map_err(|e| e.to_string())
+                    .and_then(|_| resource_header(&kind, &head))
+            };
+            if let Err(e) = checked {
+                fail(name, e);
+            }
+        }
+    }
+    let total: usize = kinds.values().sum();
+    let outcome = if failed > 0 {
+        Outcome::Fail(format!("{failed} of {total} resources failed"))
+    } else if total == 0 {
+        Outcome::Inconclusive("no resource archive or file was found under data/".into())
+    } else {
+        Outcome::Pass(Level::L0)
+    };
+    CheckResult::new("S4", TITLE, outcome).with(Json::obj([
+        ("archives", Json::from(archives)),
+        ("resources", total.into()),
+        (
+            "kinds",
+            Json::Obj(kinds.into_iter().map(|(k, v)| (k, Json::from(v))).collect()),
+        ),
+        ("failures", Json::Arr(failures)),
+    ]))
+}
+
+/// S5: saves shipped in the game's own `save/` directory decode with the save formats.
+pub fn bundled_saves(target: &Target) -> CheckResult {
+    const TITLE: &str = "saves shipped with the game decode";
+    let dir = target.root.join("save");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return CheckResult::new(
+            "S5",
+            TITLE,
+            Outcome::Skipped("the game has no save directory".into()),
+        );
+    };
+    let mut paths: Vec<_> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file())
+        .collect();
+    paths.sort();
+    let mut rows = Vec::new();
+    let mut failed = 0;
+    for path in paths {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let lower = name.to_ascii_lowercase();
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        let result = if lower == "system.dat" {
+            cmvs_core::system_save::Css1Save::decode(&bytes)
+                .map(|_| "CSS1 system save".to_owned())
+                .map_err(|e| e.to_string())
+        } else if lower.starts_with("save") && lower.ends_with(".dat") {
+            cmvs_core::save::Csv2Save::decode(&bytes)
+                .map_err(|e| e.to_string())
+                .and_then(|save| {
+                    cmvs_core::snapshot::EngineSnapshot::decode(&save.snapshot)
+                        .map(|_| "CSV2 gameplay save".to_owned())
+                        .map_err(|e| e.to_string())
+                })
+        } else {
+            continue;
+        };
+        failed += usize::from(result.is_err());
+        rows.push(Json::obj([
+            ("file", Json::from(name)),
+            (
+                "result",
+                result.unwrap_or_else(|e| format!("error: {e}")).into(),
+            ),
+        ]));
+    }
+    let outcome = if rows.is_empty() {
+        Outcome::Skipped("the save directory holds no system or gameplay save".into())
+    } else if failed == 0 {
+        Outcome::Pass(Level::L0)
+    } else {
+        Outcome::Fail(format!("{failed} saves failed to decode"))
+    };
+    CheckResult::new("S5", TITLE, outcome).with(Json::obj([("saves", Json::Arr(rows))]))
+}

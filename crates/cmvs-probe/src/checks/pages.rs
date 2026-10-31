@@ -193,6 +193,8 @@ fn replay<'t>(
 
 #[derive(Debug, Clone)]
 struct Node {
+    /// Readable name from the manifest, if it labels this page.
+    label: Option<String>,
     path: Vec<(Step, String)>,
     state: State,
     /// Reached from the in-scenario root.
@@ -259,6 +261,7 @@ fn build(
         }
     };
     graph.nodes.push(Node {
+        label: None,
         path: Vec::new(),
         state: start,
         in_scenario: false,
@@ -274,6 +277,7 @@ fn build(
         });
         match root {
             Ok(Some(state)) => graph.nodes.push(Node {
+                label: None,
                 path: vec![(Step::Scenario, state.place.key())],
                 state,
                 in_scenario: true,
@@ -337,6 +341,7 @@ fn build(
                             let mut path = node.path.clone();
                             path.push((step.clone(), key));
                             graph.nodes.push(Node {
+                                label: None,
                                 path,
                                 state: state.clone(),
                                 in_scenario: node.in_scenario,
@@ -381,6 +386,7 @@ impl Graph {
                             Json::arr(n.path.iter().map(|(s, _)| Json::from(s.text()))),
                         ),
                         ("place", n.state.place.json()),
+                        ("label", n.label.clone().into()),
                     ])
                 })),
             ),
@@ -413,6 +419,20 @@ impl Graph {
     }
 }
 
+/// Names pages the manifest labels, by script and group shape.
+fn label_pages(graph: &mut Graph, manifest: Option<&crate::manifest::Manifest>) {
+    let Some(manifest) = manifest else {
+        return;
+    };
+    for node in &mut graph.nodes {
+        if let Place::Page(page) = &node.state.place {
+            let groups: Vec<_> = page.groups.iter().map(|g| (g.slot, g.buttons)).collect();
+            let shape = crate::manifest::shape_text(&groups);
+            node.label = manifest.page_label(&page.script.escape_ascii().to_string(), &shape);
+        }
+    }
+}
+
 fn graph_outcome(graph: &Graph) -> Option<Outcome> {
     graph.stop.clone().map(|stop| match stop {
         Stop::Blocked(b) => Outcome::Blocked(b),
@@ -431,7 +451,8 @@ pub fn pages_and_settings(runner: &Runner<'_>, wanted: &[&str]) -> Vec<CheckResu
                 .collect();
         }
     };
-    let graph = build(runner, &[], entry, true, MAX_DEPTH);
+    let mut graph = build(runner, &[], entry, true, MAX_DEPTH);
+    label_pages(&mut graph, runner.manifest);
     let mut results = Vec::new();
     for id in wanted {
         let result = match *id {
@@ -662,7 +683,8 @@ fn persistence(runner: &Runner<'_>, entry: (usize, usize), graph: &Graph) -> Che
         return CheckResult::new(
             "C2",
             C2,
-            Outcome::Inconclusive("no setting control was found".into()),
+            graph_outcome(graph)
+                .unwrap_or(Outcome::Inconclusive("no setting control was found".into())),
         );
     };
     let result = (|| -> Result<CheckResult, Outcome> {
@@ -726,7 +748,9 @@ fn text_speed(runner: &Runner<'_>, entry: (usize, usize), graph: &Graph) -> Chec
         return CheckResult::new(
             "C3",
             C3,
-            Outcome::Inconclusive("no control changed the text speed".into()),
+            graph_outcome(graph).unwrap_or(Outcome::Inconclusive(
+                "no control changed the text speed".into(),
+            )),
         );
     };
     let result = (|| -> Result<CheckResult, Outcome> {
@@ -756,7 +780,8 @@ fn defaults(runner: &Runner<'_>, entry: (usize, usize), graph: &Graph) -> CheckR
         return CheckResult::new(
             "C4",
             C4,
-            Outcome::Inconclusive("no setting control was found".into()),
+            graph_outcome(graph)
+                .unwrap_or(Outcome::Inconclusive("no setting control was found".into())),
         );
     };
     let original = graph.nodes[edge.from].state.settings.clone();
@@ -819,46 +844,68 @@ pub fn unlocks(runner: &Runner<'_>) -> CheckResult {
     };
     let before = build(runner, &[], entry, false, 2);
     let after = build(runner, &[("system.dat", &cleared)], entry, false, 2);
-    // Pages match by script and group sizes; enabled counts may differ.
-    let shape = |p: &PageSignature| {
-        let groups: Vec<_> = p.groups.iter().map(|g| (g.slot, g.buttons)).collect();
-        format!("{} {groups:?}", p.script.escape_ascii())
+    // Groups match by script, slot and size; a page's other groups may grow with unlocks.
+    type Groups = std::collections::BTreeMap<(String, usize, usize), usize>;
+    let groups = |graph: &Graph| -> Groups {
+        let mut map = Groups::new();
+        for node in &graph.nodes {
+            if let Place::Page(p) = &node.state.place {
+                let script = p.script.escape_ascii().to_string();
+                for g in &p.groups {
+                    let enabled = map.entry((script.clone(), g.slot, g.buttons)).or_default();
+                    *enabled = (*enabled).max(g.enabled);
+                }
+            }
+        }
+        map
     };
-    let enabled = |graph: &Graph| -> std::collections::BTreeMap<String, usize> {
-        graph
-            .nodes
-            .iter()
-            .filter_map(|n| match &n.state.place {
-                Place::Page(p) => Some((shape(p), p.groups.iter().map(|g| g.enabled).sum())),
-                Place::Wait(_) => None,
-            })
-            .collect()
+    let (a, b) = (groups(&before), groups(&after));
+    // The largest group per script and slot, to see groups that grew.
+    let sizes = |m: &Groups| -> std::collections::BTreeMap<(String, usize), usize> {
+        let mut sizes = std::collections::BTreeMap::new();
+        for (script, slot, buttons) in m.keys() {
+            let size = sizes.entry((script.clone(), *slot)).or_insert(0);
+            *size = (*size).max(*buttons);
+        }
+        sizes
     };
-    let (a, b) = (enabled(&before), enabled(&after));
+    let (sa, sb) = (sizes(&a), sizes(&b));
     let mut rows = Vec::new();
     let mut lost = 0;
-    for (page, count) in &a {
-        if let Some(later) = b.get(page) {
-            lost += usize::from(later < count);
-            rows.push(Json::obj([
-                ("page", Json::from(page.as_str())),
-                ("before", (*count).into()),
-                ("after", (*later).into()),
-            ]));
-        }
+    for ((script, slot), size) in &sa {
+        let Some(later) = sb.get(&(script.clone(), *slot)) else {
+            continue;
+        };
+        let enabled_before = a.get(&(script.clone(), *slot, *size)).copied().unwrap_or(0);
+        let enabled_after = b
+            .get(&(script.clone(), *slot, *later))
+            .copied()
+            .unwrap_or(0);
+        let shrank = later < size || (later == size && enabled_after < enabled_before);
+        lost += usize::from(shrank);
+        rows.push(Json::obj([
+            ("script", Json::from(script.as_str())),
+            ("group", (*slot).into()),
+            ("buttons_before", (*size).into()),
+            ("buttons_after", (*later).into()),
+            ("enabled_before", enabled_before.into()),
+            ("enabled_after", enabled_after.into()),
+        ]));
     }
     let outcome = graph_outcome(&before)
         .or_else(|| graph_outcome(&after))
         .unwrap_or(if rows.is_empty() {
-            Outcome::Inconclusive("no page appears both before and after the cleared route".into())
+            Outcome::Inconclusive(
+                "no button group appears both before and after the cleared route".into(),
+            )
         } else if lost == 0 {
             Outcome::Pass(Level::L1)
         } else {
-            Outcome::Fail(format!("{lost} pages lost enabled buttons"))
+            Outcome::Fail(format!("{lost} button groups lost buttons"))
         });
     CheckResult::new("P4", P4, outcome).with(Json::obj([
         ("pages_before", Json::from(before.nodes.len())),
         ("pages_after", after.nodes.len().into()),
-        ("matched", Json::Arr(rows)),
+        ("groups", Json::Arr(rows)),
     ]))
 }

@@ -18,13 +18,15 @@ use crate::{
 use std::{fs, path::Path};
 
 /// Every implemented check in report order, with its one-line description.
-pub const CATALOG: [(&str, &str); 30] = [
+pub const CATALOG: [(&str, &str); 32] = [
     ("S1", "engine profile, file hashes and capabilities"),
     (
         "S2",
         "all scripts decode with valid labels and jump targets",
     ),
     ("S3", "system commands in scripts classified by gate status"),
+    ("S4", "resource archives verify and resource headers decode"),
+    ("S5", "saves shipped with the game decode"),
     ("R1", "fresh start reaches a stable interactive page"),
     (
         "D1",
@@ -103,7 +105,7 @@ pub const CATALOG: [(&str, &str); 30] = [
 ];
 /// Checks that run when `--checks` is not given; everything else plays the scenario and
 /// is opt-in.
-pub const DEFAULT: [&str; 5] = ["S1", "S2", "S3", "R1", "D1"];
+pub const DEFAULT: [&str; 7] = ["S1", "S2", "S3", "S4", "S5", "R1", "D1"];
 
 pub fn known(id: &str) -> bool {
     CATALOG.iter().any(|(c, _)| *c == id)
@@ -133,12 +135,19 @@ pub fn run(
     options: &Options,
     out: &Path,
     font: Option<&cmvs_desktop::font::FontRenderer>,
+    manifest: Option<&crate::manifest::Manifest>,
 ) -> Run {
     let wants = |id: &str| selected.contains(&id);
     let mut results = Vec::new();
     let mut events = Vec::new();
     if wants("S1") {
         results.push(static_checks::identify(target));
+    }
+    if wants("S4") {
+        results.push(static_checks::resources(target));
+    }
+    if wants("S5") {
+        results.push(static_checks::bundled_saves(target));
     }
     let inventory = if wants("S2") || wants("S3") || wants("R3") {
         let (s2, inventory) = static_checks::scripts(target);
@@ -192,7 +201,8 @@ pub fn run(
             results.push(startup::determinism_result(&first, &second));
         }
     }
-    let runner = route::Runner::new(target, &script, options, font, out);
+    let mut runner = route::Runner::new(target, &script, options, font, out);
+    runner.manifest = manifest;
     if wants("D2") {
         results.push(equivalence::frame_times(&runner));
     }

@@ -31,6 +31,29 @@ use std::{
 const ENTRY_FRAMES: u64 = 3600;
 /// The engine's system save inside a user directory.
 const SYSTEM_SAVE: &str = "system.dat";
+/// The gameplay slot a fork checkpoint is written to and loaded from.
+const FORK_SLOT: u16 = 900;
+
+fn fork_file() -> String {
+    format!("save{FORK_SLOT:03}.dat")
+}
+
+/// A saved checkpoint a branch starts from instead of replaying from the start page. The
+/// engine saves its last scenario snapshot point, so the load resumes before the choice.
+#[derive(Debug)]
+struct Fork {
+    slot: Vec<u8>,
+    system: Option<Vec<u8>>,
+    /// Depth of the choice the branch answers differently.
+    depth: usize,
+}
+
+/// A route still to run: its choice prefix, and the checkpoint to start from if any.
+#[derive(Debug, Clone)]
+struct Branch {
+    picks: Vec<Pick>,
+    fork: Option<std::rc::Rc<Fork>>,
+}
 
 /// Creates sessions with fresh user directories under the output directory.
 pub struct Runner<'t> {
@@ -39,6 +62,8 @@ pub struct Runner<'t> {
     pub options: &'t Options,
     pub font: Option<&'t cmvs_desktop::font::FontRenderer>,
     pub out: &'t Path,
+    /// Optional per-game corrections; see `manifest`.
+    pub manifest: Option<&'t crate::manifest::Manifest>,
     count: Cell<usize>,
 }
 
@@ -56,8 +81,15 @@ impl<'t> Runner<'t> {
             options,
             font,
             out,
+            manifest: None,
             count: Cell::new(0),
         }
+    }
+    /// The same game and output directory under other options.
+    pub fn with_options(&self, options: &'t Options) -> Self {
+        let mut runner = Self::new(self.target, self.script, options, self.font, self.out);
+        runner.manifest = self.manifest;
+        runner
     }
     /// A new session in a fresh user directory. With `seed`, the directory starts with
     /// that system save; without it the engine falls back to the game's own template.
@@ -87,7 +119,9 @@ impl<'t> Runner<'t> {
         for (name, bytes) in files {
             fs::write(user.join(name), bytes).map_err(|e| e.to_string())?;
         }
-        Session::start(self.target, self.script, &user, self.options, self.font)
+        let mut session = Session::start(self.target, self.script, &user, self.options, self.font)?;
+        session.set_manifest(self.manifest);
+        Ok(session)
     }
 }
 
@@ -105,7 +139,8 @@ enum Effect {
     Unchanged,
     Quit,
     Stopped(Stop),
-    Timeout,
+    /// No message wait and no settled page in time; says where the VM was.
+    Timeout(String),
 }
 
 impl Effect {
@@ -116,7 +151,7 @@ impl Effect {
             Self::Unchanged => "unchanged".into(),
             Self::Quit => "quit".into(),
             Self::Stopped(stop) => format!("stopped: {}", stop.describe()).into(),
-            Self::Timeout => "timeout".into(),
+            Self::Timeout(at) => format!("timeout at {at}").into(),
         }
     }
 }
@@ -177,7 +212,19 @@ fn try_button(
             });
         }
     }
-    Ok(Effect::Timeout)
+    let o = crate::observe::Observation::of(session.startup(), session.yields());
+    let movie = session.startup().movies().player().is_some();
+    Ok(Effect::Timeout(format!(
+        "{} / 0x{:x}, pending {}, transition {}, movie {movie}, groups {}",
+        o.script.escape_ascii(),
+        o.pc,
+        o.pending.map_or("none".into(), |c| format!(
+            "0x{:04x}",
+            0x2000 + u32::from(c)
+        )),
+        o.transition,
+        o.page.groups.len()
+    )))
 }
 
 /// The start page and the buttons that enter the scenario.
@@ -215,6 +262,17 @@ fn survey(runner: &Runner<'_>, seed: Option<&[u8]>) -> Result<Survey, Stop> {
         ("start_page", start.json()),
         ("start_buttons", Json::Arr(results)),
     ]);
+    if let Some(manifest) = runner.manifest
+        && let Some(entry) = manifest.entry()
+    {
+        if !entries.contains(&entry) {
+            manifest.disagree(format!(
+                "entry {}:{} was not recognised as a scenario entry",
+                entry.0, entry.1
+            ));
+        }
+        entries = vec![entry];
+    }
     details.set("entries", Json::arr(entries.iter().map(|e| entry_json(*e))));
     if !entries.is_empty() {
         blocked = None;
@@ -248,6 +306,8 @@ struct ChoicePoint {
     buttons: usize,
     enabled: Vec<usize>,
     picked: usize,
+    texts: Vec<String>,
+    label: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -272,7 +332,9 @@ struct Route {
     advances: u64,
     nudges: u64,
     /// Prefixes discovered by this route, still to run.
-    branches: Vec<Vec<Pick>>,
+    branches: Vec<Branch>,
+    /// Depth of the choice this route forked at, when it started from a checkpoint.
+    forked_from: Option<usize>,
     events: Vec<Json>,
     end_page: Option<PageSignature>,
 }
@@ -303,6 +365,7 @@ impl Route {
                     .map_or(Json::Null, PageSignature::json),
             ),
             ("diverged_at", self.diverged.into()),
+            ("forked_from", self.forked_from.into()),
             ("steps", self.steps.into()),
             ("yields", self.yields.into()),
             ("advances", self.advances.into()),
@@ -318,6 +381,11 @@ impl Route {
                         ("enabled", Json::arr(c.enabled.iter().map(|&i| i.into()))),
                         ("picked", c.picked.into()),
                         ("key", c.key.as_str().into()),
+                        (
+                            "texts",
+                            Json::arr(c.texts.iter().map(|t| Json::from(t.as_str()))),
+                        ),
+                        ("label", c.label.clone().into()),
                     ])
                 })),
             ),
@@ -381,27 +449,54 @@ struct TreeState<'s> {
 fn explore(
     session: &mut Session<'_>,
     entry: (usize, usize),
-    prefix: &[Pick],
+    branch: &Branch,
     tree: &mut TreeState<'_>,
     index: usize,
     route: &mut Route,
 ) -> End {
-    match explore_scenario(session, entry, prefix, tree, index, route) {
+    match explore_scenario(session, entry, branch, tree, index, route) {
         Ok(end) => end,
         Err(stop) => End::Stopped(stop),
     }
 }
 
+/// Writes a fork checkpoint at a new choice point; `None` when forking is off or the
+/// engine has no snapshot to save yet.
+fn make_fork(session: &mut Session<'_>, depth: usize) -> Option<std::rc::Rc<Fork>> {
+    if !session.fork_saves() || !session.save_slot(FORK_SLOT).ok()? {
+        return None;
+    }
+    let slot = fs::read(session.user_dir().join(fork_file())).ok()?;
+    let system = fs::read(session.user_dir().join(SYSTEM_SAVE)).ok();
+    session.note("fork-saved", Json::obj([("depth", Json::from(depth))]));
+    Some(std::rc::Rc::new(Fork {
+        slot,
+        system,
+        depth,
+    }))
+}
+
 fn explore_scenario(
     session: &mut Session<'_>,
     entry: (usize, usize),
-    prefix: &[Pick],
+    branch: &Branch,
     tree: &mut TreeState<'_>,
     index: usize,
     route: &mut Route,
 ) -> Result<End, Stop> {
+    let prefix = branch.picks.as_slice();
     let skip = session.route_skip();
-    let mut scenario = Scenario::begin(session, entry, skip)?;
+    let mut scenario = match &branch.fork {
+        None => Scenario::begin(session, entry, skip)?,
+        Some(fork) => {
+            let start = drive_to_start(session, &mut StartLog::default())?;
+            session.load_slot(FORK_SLOT).map_err(Stop::Error)?;
+            route.forked_from = Some(fork.depth);
+            Scenario::resume(session, start, skip)
+        }
+    };
+    // After a checkpoint load, the first choice may lie before the forking one.
+    let mut aligned = branch.fork.is_none();
     let end = loop {
         let choice = match scenario.next(session)? {
             Event::Wait(_) => {
@@ -417,7 +512,25 @@ fn explore_scenario(
         let o = &choice.observation;
         let script = o.script.escape_ascii().to_string();
         let key = variables_digest(session.startup());
-        let depth = route.choices.len();
+        if !aligned {
+            aligned = true;
+            let last = branch
+                .fork
+                .as_ref()
+                .map_or(0, |f| f.depth)
+                .min(prefix.len().saturating_sub(1));
+            match prefix[..=last]
+                .iter()
+                .rposition(|p| p.script == script && p.pc == o.pc)
+            {
+                Some(at) => route.picks = prefix[..at].to_vec(),
+                None => {
+                    route.diverged = Some(0);
+                    session.note("fork-misaligned", Json::Null);
+                }
+            }
+        }
+        let depth = route.picks.len();
         tree.seen
             .choice(&script, o.pc, &choice.enabled, &mut tree.found);
         // Replay the prefix while it matches where choices appear. A choice at another
@@ -442,14 +555,22 @@ fn explore_scenario(
                     break End::Merged(first);
                 }
                 tree.known.insert(key.clone(), index);
+                let fork = if choice.enabled.len() > 1 {
+                    make_fork(session, depth)
+                } else {
+                    None
+                };
                 for &alternative in choice.enabled.iter().skip(1) {
-                    let mut branch = route.picks.clone();
-                    branch.push(Pick {
+                    let mut picks = route.picks.clone();
+                    picks.push(Pick {
                         script: script.clone(),
                         pc: o.pc,
                         button: alternative,
                     });
-                    route.branches.push(branch);
+                    route.branches.push(Branch {
+                        picks,
+                        fork: fork.clone(),
+                    });
                 }
                 choice.enabled[0]
             }
@@ -468,6 +589,9 @@ fn explore_scenario(
             pc: o.pc,
             button: picked,
         });
+        let label = session
+            .manifest()
+            .and_then(|m| m.choice_label(&script, o.pc));
         route.choices.push(ChoicePoint {
             script,
             pc: o.pc,
@@ -476,6 +600,8 @@ fn explore_scenario(
             buttons: choice.buttons,
             enabled: choice.enabled.clone(),
             picked,
+            texts: choice.texts.clone(),
+            label,
         });
         scenario.answer(session, &choice, picked)?;
     };
@@ -487,7 +613,7 @@ fn explore_scenario(
 /// One explored choice tree.
 struct Tree {
     routes: Vec<Route>,
-    unexplored: Vec<Vec<Pick>>,
+    unexplored: Vec<Branch>,
     choice_points: usize,
     found: Discoveries,
     /// The system save after the last route, when routes carry it forward.
@@ -511,14 +637,34 @@ fn explore_tree(
         found: Discoveries::default(),
     };
     let mut current = seed;
-    let mut frontier: Vec<Vec<Pick>> = vec![Vec::new()];
+    let mut frontier = vec![Branch {
+        picks: Vec::new(),
+        fork: None,
+    }];
     let (mut routes, mut events) = (Vec::<Route>::new(), Vec::new());
-    while let Some(prefix) = frontier.pop() {
+    while let Some(branch) = frontier.pop() {
         if routes.len() >= runner.options.max_routes {
-            frontier.push(prefix);
+            frontier.push(branch);
             break;
         }
-        let mut session = runner.session("route", current.as_deref())?;
+        let mut session = match &branch.fork {
+            None => runner.session("route", current.as_deref())?,
+            Some(fork) => {
+                // Carried rounds keep the newest system save; fresh trees use the one the
+                // checkpoint was written with.
+                let system = if carry {
+                    current.as_deref()
+                } else {
+                    fork.system.as_deref()
+                };
+                let name = fork_file();
+                let mut files = vec![(name.as_str(), fork.slot.as_slice())];
+                if let Some(system) = system {
+                    files.push((SYSTEM_SAVE, system));
+                }
+                runner.session_with("route-fork", &files)?
+            }
+        };
         session.record_coverage();
         let mut route = Route {
             entry,
@@ -531,13 +677,14 @@ fn explore_tree(
             advances: 0,
             nudges: 0,
             branches: Vec::new(),
+            forked_from: None,
             events: Vec::new(),
             end_page: None,
         };
         route.end = explore(
             &mut session,
             entry,
-            &prefix,
+            &branch,
             &mut state,
             routes.len(),
             &mut route,
@@ -663,7 +810,11 @@ impl Tree {
         );
         into.set(
             "unexplored",
-            Json::arr(self.unexplored.iter().map(|p| Json::from(path_text(p)))),
+            Json::arr(
+                self.unexplored
+                    .iter()
+                    .map(|b| Json::from(path_text(&b.picks))),
+            ),
         );
         into.set("routes", Json::arr(self.routes.iter().map(Route::json)));
     }
@@ -680,6 +831,9 @@ const ROUNDS_TITLE: &str = "unlock rounds carrying the system save converge";
 /// The first start-page button that enters the scenario, pressing buttons in order until
 /// one does. Cheaper than a full survey for checks that only need one way in.
 pub fn scenario_entry(runner: &Runner<'_>, seed: Option<&[u8]>) -> Result<(usize, usize), Outcome> {
+    if let Some(entry) = runner.manifest.and_then(|m| m.entry()) {
+        return Ok(entry);
+    }
     let fail = |stop: Stop| match stop {
         Stop::Blocked(b) => Outcome::Blocked(b),
         other => Outcome::Fail(other.describe()),

@@ -21,13 +21,7 @@ fn trace(runner: &Runner<'_>, options: &Options, label: &str) -> Result<Vec<Wait
         Stop::Blocked(b) => Outcome::Blocked(b),
         other => Outcome::Fail(other.describe()),
     };
-    let variant = Runner::new(
-        runner.target,
-        runner.script,
-        options,
-        runner.font,
-        runner.out,
-    );
+    let variant = runner.with_options(options);
     let entry = scenario_entry(&variant, None)?;
     let mut session = variant.session(label, None).map_err(Outcome::Fail)?;
     let mut scenario = Scenario::begin(&mut session, entry, false).map_err(fail)?;

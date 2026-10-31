@@ -3,6 +3,7 @@ use cmvs_probe::{
     checks,
     device::Device,
     json::Json,
+    manifest::Manifest,
     report::{self, Outcome},
     session::Options,
     target::{Target, cap},
@@ -18,7 +19,8 @@ Checks (--checks takes a comma-separated list):";
 
 const OPTIONS: &str = "Options:
   --checks <ids>        checks to run, e.g. S2,R2,R3, or `all`
-  --profile <id>        force an engine profile instead of identifying one
+    --profile <id>        force an engine profile instead of identifying one
+  --manifest <file>     per-game corrections to automatic recognition (optional)
   --device <name>       mouse (default) or keyboard input
   --font <file>         font for glyph metrics; --font-index <n> picks a face
   --frame-ms <n>        virtual frame time in milliseconds (default 16)
@@ -26,7 +28,9 @@ const OPTIONS: &str = "Options:
   --max-steps <n>       VM step budget per session (default 50000000)
   --max-routes <n>      routes per choice tree before stopping (default 16)
   --max-rounds <n>      unlock rounds for R4, at least 2 (default 4)
-  --no-route-skip       do not hold the skip key while exploring routes
+    --no-route-skip       do not hold the skip key while exploring routes
+  --fork <mode>         replay (default) runs every route from the start; save starts
+                        branches from a checkpoint saved at the choice (needs saves)
   --allow-presumed      research only: run legacy presumed commands
   --allow-unreviewed    research only: run unreviewed commands with base semantics";
 
@@ -62,6 +66,7 @@ struct Args {
     checks: Vec<String>,
     profile: Option<String>,
     font: Option<(PathBuf, u32)>,
+    manifest: Option<PathBuf>,
     options: Options,
 }
 
@@ -71,6 +76,7 @@ fn parse() -> Result<Args, String> {
     let mut out = None;
     let mut checks = None;
     let mut profile = None;
+    let mut manifest = None;
     let (mut font, mut font_index) = (None, 0);
     let mut options = Options::default();
     while let Some(arg) = args.next() {
@@ -81,6 +87,7 @@ fn parse() -> Result<Args, String> {
             "--out" => out = Some(PathBuf::from(value()?)),
             "--checks" => checks = Some(value()?.split(',').map(|s| s.trim().to_owned()).collect()),
             "--profile" => profile = Some(value()?),
+            "--manifest" => manifest = Some(PathBuf::from(value()?)),
             "--device" => {
                 let v = value()?;
                 options.device = Device::parse(&v).ok_or(format!("unknown device {v}"))?;
@@ -93,6 +100,13 @@ fn parse() -> Result<Args, String> {
             "--max-routes" => options.max_routes = number(value()?)? as usize,
             "--max-rounds" => options.max_rounds = number(value()?)?.max(2) as usize,
             "--no-route-skip" => options.route_skip = false,
+            "--fork" => {
+                options.fork_saves = match value()?.as_str() {
+                    "replay" => false,
+                    "save" => true,
+                    other => return Err(format!("unknown fork mode {other}")),
+                }
+            }
             "--allow-presumed" => options.allow_presumed = true,
             "--allow-unreviewed" => options.allow_unreviewed = true,
             flag if flag.starts_with("--") => return Err(format!("unknown option {flag}")),
@@ -117,6 +131,7 @@ fn parse() -> Result<Args, String> {
         checks,
         profile,
         font: font.map(|f| (f, font_index)),
+        manifest,
         options,
     })
 }
@@ -153,14 +168,43 @@ fn run(args: Args) -> Result<bool, String> {
         }
         None => None,
     };
+    let manifest = match &args.manifest {
+        Some(path) => Some(Manifest::read(path)?),
+        None => None,
+    };
+    if let Some(manifest) = &manifest
+        && let Some(wanted) = manifest.profile()
+    {
+        let selected = target
+            .game
+            .as_ref()
+            .map(|g| g.selection.profile.id.as_str());
+        if selected != Some(wanted) {
+            return Err(format!(
+                "the manifest is for profile {wanted}, but {} was selected",
+                selected.unwrap_or("none")
+            ));
+        }
+        manifest.mark_profile_used();
+    }
     let selected: Vec<&str> = args.checks.iter().map(String::as_str).collect();
-    let run = checks::run(&target, &selected, &args.options, &args.out, font.as_ref());
+    let run = checks::run(
+        &target,
+        &selected,
+        &args.options,
+        &args.out,
+        font.as_ref(),
+        manifest.as_ref(),
+    );
     let initial_system = args.root.join("save/system.dat");
     let header = Json::obj([
         ("probe", Json::from(env!("CARGO_PKG_VERSION"))),
         ("target", target.identity_json()),
         ("options", args.options.json()),
-        ("manifest", Json::Null),
+        (
+            "manifest",
+            manifest.as_ref().map_or(Json::Null, Manifest::json),
+        ),
         (
             "initial_system_save_from_game",
             initial_system.is_file().into(),

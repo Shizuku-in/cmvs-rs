@@ -34,6 +34,8 @@ pub struct Options {
     pub max_rounds: usize,
     /// Route exploration holds the skip action inside the scenario to shorten routes.
     pub route_skip: bool,
+    /// Route branches start from a saved checkpoint instead of replaying from the start.
+    pub fork_saves: bool,
     pub allow_presumed: bool,
     pub allow_unreviewed: bool,
 }
@@ -48,6 +50,8 @@ impl Default for Options {
             max_routes: 16,
             max_rounds: 4,
             route_skip: true,
+            fork_saves: false,
+
             allow_presumed: false,
             allow_unreviewed: false,
         }
@@ -64,6 +68,7 @@ impl Options {
             ("max_routes", self.max_routes.into()),
             ("max_rounds", self.max_rounds.into()),
             ("route_skip", self.route_skip.into()),
+            ("fork_saves", self.fork_saves.into()),
             ("allow_presumed", self.allow_presumed.into()),
             ("allow_unreviewed", self.allow_unreviewed.into()),
         ])
@@ -116,6 +121,7 @@ pub struct Session<'a> {
     frame_ms: u32,
     max_steps: u64,
     route_skip: bool,
+    fork_saves: bool,
     queue: VecDeque<Frame>,
     pointer: [i32; 2],
     yields: u64,
@@ -133,6 +139,7 @@ pub struct Session<'a> {
     navigation: Option<(usize, usize, usize)>,
     /// Native dialogs answered so far; each is cancelled, as a player closing it would.
     dialogs: usize,
+    manifest: Option<&'a crate::manifest::Manifest>,
 }
 
 /// Executed instruction addresses by script name: the PC before each VM step.
@@ -201,6 +208,9 @@ impl<'a> Session<'a> {
             frame_ms: options.frame_ms,
             max_steps: options.max_steps,
             route_skip: options.route_skip,
+            // Forking needs gameplay saves, which need the snapshot layout.
+            fork_saves: options.fork_saves && target.has(cap::SNAPSHOT_LAYOUT),
+
             queue: VecDeque::new(),
             pointer: crate::device::OFF_SCREEN,
             yields: 0,
@@ -214,6 +224,7 @@ impl<'a> Session<'a> {
             user: user.to_path_buf(),
             navigation: None,
             dialogs: 0,
+            manifest: None,
         })
         .map(|mut session: Self| {
             session.backend.answer_font_dialog(None);
@@ -234,9 +245,18 @@ impl<'a> Session<'a> {
     pub fn hold(&mut self, codes: Vec<usize>) {
         self.held = codes;
     }
+    pub fn set_manifest(&mut self, manifest: Option<&'a crate::manifest::Manifest>) {
+        self.manifest = manifest;
+    }
+    pub fn manifest(&self) -> Option<&'a crate::manifest::Manifest> {
+        self.manifest
+    }
     /// The isolated user directory; the engine keeps `system.dat` and slot saves there.
     pub fn user_dir(&self) -> &Path {
         &self.user
+    }
+    pub fn fork_saves(&self) -> bool {
+        self.fork_saves
     }
     pub fn route_skip(&self) -> bool {
         self.route_skip

@@ -4,6 +4,7 @@
 pub mod checks;
 pub mod device;
 pub mod json;
+pub mod manifest;
 pub mod observe;
 pub mod report;
 pub mod scenario;
