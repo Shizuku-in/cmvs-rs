@@ -84,6 +84,84 @@ fn registration(code: &mut Vec<u8>, keys: [u32; 4]) {
 }
 
 #[test]
+fn cli_discovers_startup_beside_cpz7_and_respects_explicit_overrides() {
+    use std::{fs, process::Command};
+    let root = std::env::temp_dir().join(format!("cmvs-cpz7-discovery-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let archive = root.join("script.cpz");
+    let start = root.join("start.ps3");
+    let explicit_start = root.join("custom.ps3");
+    let legacy = root.join("legacy.cpz");
+    fs::write(&archive, hex(include_str!("fixtures/cpz7-keyed.hex"))).unwrap();
+    let run = |args: &[&std::ffi::OsStr]| {
+        Command::new(env!("CARGO_BIN_EXE_cmvs-cpz"))
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    assert!(
+        !run(&["--list".as_ref(), archive.as_os_str()])
+            .status
+            .success()
+    );
+    let mut code = Vec::new();
+    push(&mut code, false, 13);
+    code.extend(0x201fu16.to_le_bytes());
+    registration(&mut code, [0x10203040, 0x89abcdef, 0xfedcba98, 0x76543210]);
+    let mut encoded = memory_script(code, b"\0data\\pack\\script.cpz\0")
+        .memory_image(&[])
+        .unwrap();
+    for byte in &mut encoded[48..] {
+        *byte = byte.rotate_left(1).wrapping_add(124);
+    }
+    fs::write(&start, &encoded).unwrap();
+    let result = run(&["--list".as_ref(), archive.as_os_str()]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(String::from_utf8_lossy(&result.stdout).contains("2 files"));
+    fs::write(&explicit_start, encoded).unwrap();
+    fs::write(&start, b"invalid startup").unwrap();
+    assert!(
+        !run(&["--list".as_ref(), archive.as_os_str()])
+            .status
+            .success()
+    );
+    assert!(
+        run(&[
+            "--start-script".as_ref(),
+            explicit_start.as_os_str(),
+            "--list".as_ref(),
+            archive.as_os_str()
+        ])
+        .status
+        .success()
+    );
+    assert!(
+        run(&[
+            "--keys".as_ref(),
+            "0x10203040,0x89abcdef,0xfedcba98,0x76543210".as_ref(),
+            "--list".as_ref(),
+            archive.as_os_str()
+        ])
+        .status
+        .success()
+    );
+    fs::write(&legacy, hex(include_str!("fixtures/cpz6-0.hex"))).unwrap();
+    assert!(
+        run(&["--list".as_ref(), legacy.as_os_str()])
+            .status
+            .success()
+    );
+    for path in [&archive, &start, &explicit_start, &legacy] {
+        fs::remove_file(path).unwrap();
+    }
+    fs::remove_dir(root).unwrap();
+}
+
+#[test]
 fn startup_inspection_preserves_key_order_and_rejects_dynamic_or_ambiguous_keys() {
     use cmvs_rs::{cpz::Cpz7Parameters, script_control::cpz7_parameters_from_start};
     let keys = [0x10203040, 0x89abcdef, 0xfedcba98, 0x76543210];

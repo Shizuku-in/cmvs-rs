@@ -7,7 +7,7 @@ use std::{
     env,
     error::Error,
     fs::{File, OpenOptions},
-    io::{Read, Write},
+    io::{self, Read, Seek, Write},
     path::Path,
 };
 
@@ -20,9 +20,19 @@ Usage:
   cmvs-cpz --script <archive> <ASCII-basename>                    summarise one script
   cmvs-cpz --extract <archive> <ASCII-basename> <new-output-file> extract one entry
 
-CPZ7 (REALIVE/SEISHUNF/KUNADO) requires --start-script or --keys.
-Default CPZ7 uses four zero parameters. Resource checksums are not verified by the CLI;
+CPZ7 automatically reads start.ps3 beside the archive unless --start-script or --keys is given.
+If start.ps3 is absent, CPZ7 uses four zero parameters. Resource checksums are not verified by the CLI;
 CPZ7 header/index integrity is checked.";
+
+fn read_start(file: File) -> Result<Script, Box<dyn Error>> {
+    let mut raw = Vec::new();
+    file.take(cmvs_rs::MAX_PAYLOAD as u64 + 49)
+        .read_to_end(&mut raw)?;
+    if raw.len() > cmvs_rs::MAX_PAYLOAD + 48 {
+        return Err("startup script exceeds research limit".into());
+    }
+    Ok(Script::decode(&raw)?)
+}
 
 fn run() -> Result<(), Box<dyn Error>> {
     let mut paths: Vec<_> = env::args_os().skip(1).collect();
@@ -33,16 +43,9 @@ fn run() -> Result<(), Box<dyn Error>> {
         println!("{USAGE}");
         return Ok(());
     }
-    let start = if paths[0] == "--start-script" {
+    let mut start = if paths[0] == "--start-script" {
         let path = paths.get(1).ok_or("expected startup script path")?;
-        let mut raw = Vec::new();
-        File::open(path)?
-            .take(cmvs_rs::MAX_PAYLOAD as u64 + 49)
-            .read_to_end(&mut raw)?;
-        if raw.len() > cmvs_rs::MAX_PAYLOAD + 48 {
-            return Err("startup script exceeds research limit".into());
-        }
-        let start = Script::decode(&raw)?;
+        let start = read_start(File::open(path)?)?;
         paths.drain(..2);
         if paths.is_empty() {
             return Err("expected archive mode; use --help".into());
@@ -93,6 +96,19 @@ fn run() -> Result<(), Box<dyn Error>> {
             return Err("wrong argument count; use --help".into());
         }
         let mut file = File::open(&paths[1])?;
+        if start.is_none() && !explicit_parameters {
+            let mut magic = [0; 4];
+            file.read_exact(&mut magic)?;
+            file.rewind()?;
+            if &magic == b"CPZ7" {
+                let candidate = Path::new(&paths[1]).with_file_name("start.ps3");
+                match File::open(candidate) {
+                    Ok(file) => start = Some(read_start(file)?),
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error.into()),
+                }
+            }
+        }
         let parameters = if let Some(start) = &start {
             let basename = Path::new(&paths[1])
                 .file_name()
