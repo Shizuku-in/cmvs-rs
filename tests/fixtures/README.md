@@ -30,3 +30,4 @@ before attempting to read or allocate resource bytes.
 `cpz7-*.hex` contain synthetic archives with no game data.
 They cover directory/file keys, duplicate names, unaligned indexes and resources,
 resource modes 0/1, and invalid offsets/sizes. All checksums and index digests are valid.
+`cpz7-keyed.hex` covers four nonzero startup parameters; all CPZ7 vectors use the same index tail rule.

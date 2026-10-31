@@ -261,7 +261,7 @@ profile::check_command(selection, pc, command, allow_unreviewed)?;
 
 - 格式代际按文件签名识别，**与档案无关**。档案和游戏记录只登记预期格式，用于一致性检查。普查已证实两者独立（2022 年构建配 CPZ5）。
 - 已确认需要支持的封包有 4 代。按普查覆盖面排序：CPZ5（11 款，含两款 RE）、CPZ7（4 款）、CPZ6（2 款，已支持）、CPZ3（2 款）。主线仍是《アマツツミ》；排期时可按这个顺序考虑。
-- `ArchiveScripts` 和 `ResourceArchives` 通过 `cpz::ArchiveIndex` 按签名读取；已支持 CPZ6 和 CPZ7 的 AOITORI 变体，其他 CPZ7 变体及 CPZ3/5 尚未支持。
+- `ArchiveScripts` 和 `ResourceArchives` 通过 `cpz::ArchiveIndex` 按签名读取；已支持 CPZ6、统一参数化的 CPZ7（AOITORI 使用零参数，REALIVE/SEISHUNF/KUNADO 使用启动脚本中的每包参数）；CPZ3/5 尚未支持。
 - PS2A 容器目前看是统一的，不需要分代；若全量脚本检查发现字节码差异，再按构建登记。
 - 识别工具会打印逐项证据，例如"`script.cpz` magic=CPZ5"、"`start.ps2` PS2A"，在摸底时一眼看出格式代际。它也识别 `cvns.exe`/`PSS0`/`CPZ1`/`CPZ2` 等前代特征，报告为"CVNS 家族，未支持"，而不是笼统的"未知游戏"。
 

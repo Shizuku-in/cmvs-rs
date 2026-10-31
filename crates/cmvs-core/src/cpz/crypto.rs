@@ -113,7 +113,7 @@ impl Keys {
             digest: hash,
         }
     }
-    /// Key derivation parameters verified against AOITORI.
+    /// AOITORI, REALIVE, SEISHUNF and KUNADO share this digest state and output order.
     pub fn from_header_v7(header: &[u8]) -> Self {
         let mut keys = Self::from_header(header);
         let masks = [0x43de7c1a, 0xcc65f416, 0xd016a93d, 0x97a3ba9b];
@@ -159,6 +159,14 @@ pub(super) fn table(mut key: u32, seed: u32) -> [u8; 256] {
 }
 
 pub(super) fn outer_index(bytes: &mut [u8], key: u32) {
+    outer_index_inner(bytes, key, false);
+}
+
+pub(super) fn outer_index_v7(bytes: &mut [u8], key: u32) {
+    outer_index_inner(bytes, key, true);
+}
+
+fn outer_index_inner(bytes: &mut [u8], key: u32, countdown_tail: bool) {
     let key = key ^ 0x3795b39a;
     let table: [u32; 24] = std::array::from_fn(|i| word(&TABLE_BYTES[4 * i..]).wrapping_sub(key));
     let shift = ((key ^ (key >> 8) ^ (key >> 16) ^ (key >> 24) ^ 0xfffffffb) & 15) + 7;
@@ -172,8 +180,10 @@ pub(super) fn outer_index(bytes: &mut [u8], key: u32) {
         flag = (flag + 1) % 24;
     }
     let tail = bytes.len() / 4 * 4;
+    let length = bytes.len();
     for (i, byte) in bytes.iter_mut().enumerate().skip(tail) {
-        *byte = (*byte ^ ((table[flag] >> (4 * (i % 4))) as u8)).wrapping_sub(0x7d);
+        let shift = if countdown_tail { length - i } else { i % 4 };
+        *byte = (*byte ^ ((table[flag] >> (4 * shift)) as u8)).wrapping_sub(0x7d);
         flag = (flag + 1) % 24;
     }
 }
@@ -186,6 +196,10 @@ pub(super) fn substitute(bytes: &mut [u8], key: u32, seed: u32, xor: u8) {
 }
 
 pub(super) fn directory_index(bytes: &mut [u8], keys: &Keys) {
+    directory_index_with_step(bytes, keys, 0x10fb562a);
+}
+
+pub(super) fn directory_index_with_step(bytes: &mut [u8], keys: &Keys, step: u32) {
     substitute(bytes, keys.key, keys.digest[1], 0x3a);
     let key = keys.directory_key();
     let mut seed = 0x76548aefu32;
@@ -196,7 +210,7 @@ pub(super) fn directory_index(bytes: &mut [u8], keys: &Keys) {
             .rotate_left(3)
             .wrapping_sub(seed);
         chunk.copy_from_slice(&value.to_le_bytes());
-        seed = seed.wrapping_add(0x10fb562a);
+        seed = seed.wrapping_add(step);
         flag = (flag + 1) & 3;
     }
     let tail = bytes.len() / 4 * 4;
@@ -207,6 +221,10 @@ pub(super) fn directory_index(bytes: &mut [u8], keys: &Keys) {
 }
 
 pub(super) fn file_index(bytes: &mut [u8], directory: u32, keys: &Keys) {
+    file_index_with_step(bytes, directory, keys, 0x0139fa9b);
+}
+
+pub(super) fn file_index_with_step(bytes: &mut [u8], directory: u32, keys: &Keys, step: u32) {
     substitute(bytes, keys.key, keys.digest[2], 0x7e);
     let key = keys.file_key(directory);
     let mut seed = 0x2a65cb4fu32;
@@ -217,7 +235,7 @@ pub(super) fn file_index(bytes: &mut [u8], directory: u32, keys: &Keys) {
             .rotate_left(2)
             .wrapping_add(0x37a19e8b);
         chunk.copy_from_slice(&value.to_le_bytes());
-        seed = seed.wrapping_sub(0x0139fa9b);
+        seed = seed.wrapping_sub(step);
         flag = (flag + 1) & 3;
     }
     let tail = bytes.len() / 4 * 4;

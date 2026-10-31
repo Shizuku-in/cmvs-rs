@@ -1,7 +1,7 @@
 //! Bounded CPZ7 layout, index and resource decoding.
 //! Header checksum and encrypted index/key MD5 digests are always checked.
 //! Resource checksums are checked through `read_entry_verified`.
-//! Key derivation currently supports the AOITORI variant, not all CPZ7 games.
+//! All supported games use the same decoder with per-archive parameters.
 //!
 //! Reference: Darkness-TX
 use super::{ArchiveError, Entry, crypto, data_checksum};
@@ -12,6 +12,35 @@ use std::{
 };
 
 pub const CPZ7_HEADER_SIZE: usize = 72;
+
+/// Per-archive parameters in engine argument order (reverse of startup pushes).
+/// AOITORI uses zeros. REALIVE, SEISHUNF and KUNADO obtain these four values
+/// from their respective startup archive registrations; the decoder is identical.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Cpz7Parameters {
+    pub directory_step_xor: u32,
+    pub file_step_xor: u32,
+    pub seed_add: u32,
+    pub resource_seed_xor: u32,
+}
+
+impl From<[u32; 4]> for Cpz7Parameters {
+    fn from(
+        [
+            directory_step_xor,
+            file_step_xor,
+            seed_add,
+            resource_seed_xor,
+        ]: [u32; 4],
+    ) -> Self {
+        Self {
+            directory_step_xor,
+            file_step_xor,
+            seed_add,
+            resource_seed_xor,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cpz7Layout {
@@ -31,6 +60,7 @@ pub struct Cpz7Index {
     entries: Vec<Entry>,
     entry_keys: Vec<(u32, u32)>,
     keys: crypto::Keys,
+    parameters: Cpz7Parameters,
     file_bytes: u64,
 }
 
@@ -77,6 +107,13 @@ struct Directory {
 
 impl Cpz7Index {
     pub fn read<R: Read + Seek>(reader: &mut R) -> Result<Self, ArchiveError> {
+        Self::read_with_parameters(reader, Cpz7Parameters::default())
+    }
+
+    pub fn read_with_parameters<R: Read + Seek>(
+        reader: &mut R,
+        parameters: Cpz7Parameters,
+    ) -> Result<Self, ArchiveError> {
         let file_bytes = reader.seek(SeekFrom::End(0))?;
         reader.seek(SeekFrom::Start(0))?;
         let mut header = [0; CPZ7_HEADER_SIZE];
@@ -104,10 +141,11 @@ impl Cpz7Index {
         for (i, byte) in bytes.iter_mut().enumerate() {
             *byte ^= index_key[(i + 3) % 0x3ff];
         }
-        let keys = crypto::Keys::from_header_v7(&header);
-        crypto::outer_index(&mut bytes, keys.key);
+        let mut keys = crypto::Keys::from_header_v7(&header);
+        keys.seed = keys.seed.wrapping_add(parameters.seed_add);
+        crypto::outer_index_v7(&mut bytes, keys.key);
         let (dirs, files) = bytes.split_at_mut(layout.directory_index_bytes as usize);
-        crypto::directory_index(dirs, &keys);
+        crypto::directory_index_with_step(dirs, &keys, parameters.directory_step_xor ^ 0x10fb562a);
         let mut directories = Vec::new();
         let mut offset = 0;
         for _ in 0..layout.directory_count {
@@ -140,7 +178,12 @@ impl Cpz7Index {
             {
                 return Err(FormatError("CPZ7 file count exceeds index or research limit").into());
             }
-            crypto::file_index(block, dir.key, &keys);
+            crypto::file_index_with_step(
+                block,
+                dir.key,
+                &keys,
+                parameters.file_step_xor ^ 0x0139fa9b,
+            );
             let mut offset = 0;
             for _ in 0..dir.count {
                 let rec = record(block, offset, 29)?;
@@ -182,6 +225,7 @@ impl Cpz7Index {
             entries,
             entry_keys,
             keys,
+            parameters,
             file_bytes,
         })
     }
@@ -277,10 +321,10 @@ impl Cpz7Index {
 
     fn decrypt(&self, index: usize, bytes: &mut [u8]) {
         let (directory_key, file_key) = self.entry_keys[index];
-        let seed = self.keys.seed
-            ^ (self.keys.key ^ directory_key.wrapping_add(file_key))
-                .wrapping_add(self.layout.directory_count)
-                .wrapping_add(0xa3c61785);
+        let resource_key = (self.keys.key ^ directory_key.wrapping_add(file_key))
+            .wrapping_add(self.layout.directory_count)
+            ^ self.parameters.resource_seed_xor;
+        let seed = self.keys.seed ^ resource_key.wrapping_add(0xa3c61785);
         if self.layout.encryption_mode == 1 {
             crypto::resource(bytes, &self.keys, seed);
         }

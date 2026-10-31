@@ -1,4 +1,4 @@
-//! CPZ archive reading. Supports CPZ6 mode 1 and CPZ7 modes 0/1 (reference key parameters).
+//! CPZ archive reading. Supports CPZ6 mode 1 and CPZ7 resource modes 0/1.
 //!
 //! Version-specific implementations are kept behind this public entry point.
 
@@ -12,7 +12,7 @@ use crate::FormatError;
 use std::io::{Read, Seek, SeekFrom};
 
 pub use cpz6::{CPZ6_HEADER_SIZE, Cpz6Index, Cpz6Layout, lookup_key};
-pub use cpz7::{CPZ7_HEADER_SIZE, Cpz7Index, Cpz7Layout};
+pub use cpz7::{CPZ7_HEADER_SIZE, Cpz7Index, Cpz7Layout, Cpz7Parameters};
 pub use crypto::data_checksum;
 pub use entry::Entry;
 pub use error::ArchiveError;
@@ -92,9 +92,21 @@ pub enum ArchiveIndex {
 
 impl ArchiveIndex {
     pub fn read<R: Read + Seek>(reader: &mut R) -> Result<Self, ArchiveError> {
+        Self::read_with_cpz7_parameters(reader, Cpz7Parameters::default())
+    }
+
+    pub fn read_with_cpz7_parameters<R: Read + Seek>(
+        reader: &mut R,
+        parameters: Cpz7Parameters,
+    ) -> Result<Self, ArchiveError> {
         match read_version(reader)? {
+            ArchiveVersion::Cpz6 if parameters != Cpz7Parameters::default() => {
+                Err(FormatError("CPZ7 parameters cannot be used with CPZ6").into())
+            }
             ArchiveVersion::Cpz6 => Ok(Self::Cpz6(Cpz6Index::read(reader)?)),
-            ArchiveVersion::Cpz7 => Ok(Self::Cpz7(Cpz7Index::read(reader)?)),
+            ArchiveVersion::Cpz7 => Ok(Self::Cpz7(Cpz7Index::read_with_parameters(
+                reader, parameters,
+            )?)),
             version => Err(ArchiveError::UnsupportedVersion(version)),
         }
     }

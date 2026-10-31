@@ -1,6 +1,12 @@
 //! Public script initialization and explicit cross-script control.
 //! No save snapshot, callback scheduling, rendering, or filesystem search policy.
-use crate::{cpz::ArchiveIndex, evaluate::error, machine::Machine, ps3::Script, vm::SystemResult};
+use crate::{
+    cpz::{ArchiveIndex, Cpz7Parameters},
+    evaluate::error,
+    machine::Machine,
+    ps3::Script,
+    vm::SystemResult,
+};
 use std::{
     collections::BTreeMap,
     error::Error,
@@ -8,6 +14,107 @@ use std::{
 };
 
 pub type LoadError = Box<dyn Error>;
+
+/// Inspect literal archive registrations in the straight-line startup prefix.
+/// REALIVE's CPZ7 parameters are per archive, not a game-wide MD5 replacement.
+/// Dynamic expressions and control flow are not evaluated by this inspection helper.
+pub fn cpz7_parameters_from_start(
+    script: &Script,
+    basename: &[u8],
+) -> Result<Option<Cpz7Parameters>, crate::FormatError> {
+    use crate::{
+        FormatError,
+        bytecode::{self, InstructionKind, Term},
+    };
+    let instructions =
+        bytecode::decode_layout(script.code(), script.header.entry_pc, &script.labels())
+            .map_err(|_| FormatError("invalid startup script layout"))?;
+    let strings = script.strings()?;
+    let literal = |at: usize, kind: u16, tag: u16| -> Option<u32> {
+        let expr = instructions.get(at)?;
+        if expr.pc < script.header.entry_pc as usize {
+            return None;
+        }
+        if instructions.get(at + 1)?.opcode != 0x430 {
+            return None;
+        }
+        let InstructionKind::Expression(expression) = &expr.kind else {
+            return None;
+        };
+        if expression.kind != kind {
+            return None;
+        }
+        match expression.terms.as_slice() {
+            [
+                Term::Scalar {
+                    tag: actual, raw, ..
+                },
+            ] if *actual == tag => Some(*raw),
+            _ => None,
+        }
+    };
+    let mut pack_mode = None;
+    let mut found = None;
+    for (i, instruction) in instructions.iter().enumerate() {
+        if instruction.pc < script.header.entry_pc as usize {
+            continue;
+        }
+        match &instruction.kind {
+            InstructionKind::Jump { .. }
+            | InstructionKind::ConditionalJump { .. }
+            | InstructionKind::CompareJump { .. }
+            | InstructionKind::LongJump { .. }
+            | InstructionKind::ScriptReturn { .. } => break,
+            InstructionKind::System { command: 0x1f } => {
+                pack_mode = Some(
+                    i.checked_sub(2)
+                        .and_then(|at| literal(at, 0x200, 0x100))
+                        .ok_or(FormatError("dynamic startup archive mode"))?,
+                );
+            }
+            InstructionKind::System {
+                command: 0x268..=0x26e,
+            } if pack_mode == Some(13) => {
+                let Some(at) = i.checked_sub(12) else {
+                    return Err(FormatError("incomplete CPZ7 registration"));
+                };
+                let path_offset = literal(at + 8, 0x201, 0x120)
+                    .ok_or(FormatError("dynamic CPZ7 archive path"))?;
+                let path = strings
+                    .iter()
+                    .find(|entry| entry.offset == path_offset as usize)
+                    .ok_or(FormatError("invalid CPZ7 archive path reference"))?
+                    .bytes;
+                let name = path
+                    .rsplit(|b| matches!(b, b'/' | b'\\'))
+                    .next()
+                    .unwrap_or(path);
+                if !name.eq_ignore_ascii_case(basename) {
+                    continue;
+                }
+                if literal(at + 10, 0x200, 0x100).is_none() {
+                    return Err(FormatError("dynamic CPZ7 archive slot"));
+                }
+                let mut keys = [0; 4];
+                for (n, key) in keys.iter_mut().enumerate() {
+                    *key = literal(at + 6 - n * 2, 0x200, 0x100)
+                        .ok_or(FormatError("dynamic CPZ7 archive key"))?;
+                }
+                let parameters = Cpz7Parameters::from(keys);
+                if found.is_some_and(|previous| previous != parameters) {
+                    return Err(FormatError("conflicting CPZ7 archive registrations"));
+                }
+                found = Some(parameters);
+            }
+            _ => {}
+        }
+    }
+    match pack_mode {
+        Some(12) => Ok(Some(Cpz7Parameters::default())),
+        Some(13) => Ok(found),
+        _ => Err(FormatError("startup does not select a supported CPZ7 mode")),
+    }
+}
 
 pub trait ScriptSource {
     fn load(&mut self, name: &[u8]) -> Result<Script, LoadError>;
@@ -20,6 +127,14 @@ pub struct ArchiveScripts<R> {
 impl<R: Read + Seek> ArchiveScripts<R> {
     pub fn new(mut reader: R) -> Result<Self, LoadError> {
         let index = ArchiveIndex::read(&mut reader)?;
+        Ok(Self { reader, index })
+    }
+
+    pub fn with_cpz7_parameters(
+        mut reader: R,
+        parameters: Cpz7Parameters,
+    ) -> Result<Self, LoadError> {
+        let index = ArchiveIndex::read_with_cpz7_parameters(&mut reader, parameters)?;
         Ok(Self { reader, index })
     }
 }

@@ -1,6 +1,144 @@
 use cmvs_rs::cpz::{ArchiveIndex, ArchiveLayout, ArchiveVersion, Cpz7Index, Cpz7Layout};
 use std::io::Cursor;
 
+#[test]
+fn cpz7_uses_per_archive_keys_and_countdown_index_tails() {
+    use cmvs_rs::cpz::Cpz7Parameters;
+    let bytes = hex(include_str!("fixtures/cpz7-keyed.hex"));
+    let original_keys = [0x10203040, 0x89abcdef, 0xfedcba98, 0x76543210];
+    let parameters = Cpz7Parameters::from(original_keys);
+    let mut reader = Cursor::new(&bytes);
+    let index = ArchiveIndex::read_with_cpz7_parameters(&mut reader, parameters).unwrap();
+    for j in 0..2 {
+        let expected = [
+            b"synthetic CPZ7 payload ".as_slice(),
+            &[b'0' + j as u8],
+            b"!!!",
+        ]
+        .concat();
+        assert_eq!(index.read_entry_verified(&mut reader, j).unwrap(), expected);
+    }
+    assert!(ArchiveIndex::read(&mut Cursor::new(&bytes)).is_err());
+    let cpz6 = hex(include_str!("fixtures/cpz6-0.hex"));
+    assert!(
+        ArchiveIndex::read_with_cpz7_parameters(&mut Cursor::new(cpz6), parameters)
+            .unwrap_err()
+            .to_string()
+            .contains("cannot be used with CPZ6")
+    );
+    for n in 0..4 {
+        let mut keys = original_keys;
+        keys[n] ^= 1;
+        match ArchiveIndex::read_with_cpz7_parameters(
+            &mut Cursor::new(&bytes),
+            Cpz7Parameters::from(keys),
+        ) {
+            Err(_) => assert!(n < 2),
+            Ok(index) => {
+                let decoded = index
+                    .read_entry_verified(&mut Cursor::new(&bytes), 0)
+                    .unwrap();
+                assert_ne!(decoded, b"synthetic CPZ7 payload 0!!!");
+            }
+        }
+    }
+}
+
+fn memory_script(code: Vec<u8>, text: &[u8]) -> cmvs_rs::ps3::Script {
+    let mut bytes = b"PS2A".to_vec();
+    for field in [
+        48,
+        0,
+        0,
+        0,
+        code.len() as u32,
+        0,
+        text.len() as u32,
+        0,
+        0,
+        (code.len() + text.len()) as u32,
+        0,
+    ] {
+        bytes.extend(field.to_le_bytes());
+    }
+    bytes.extend(code);
+    bytes.extend(text);
+    cmvs_rs::ps3::Script::from_memory_image(&bytes).unwrap()
+}
+
+fn push(code: &mut Vec<u8>, string: bool, value: u32) {
+    code.extend(if string { 0x201u16 } else { 0x200 }.to_le_bytes());
+    code.extend(if string { 0x120u16 } else { 0x100 }.to_le_bytes());
+    code.extend(value.to_le_bytes());
+    code.extend(0x20fu16.to_le_bytes());
+    code.extend(0x430u16.to_le_bytes());
+}
+
+fn registration(code: &mut Vec<u8>, keys: [u32; 4]) {
+    for key in keys.into_iter().rev() {
+        push(code, false, key);
+    }
+    push(code, true, 1);
+    push(code, false, 0);
+    code.extend(0x2268u16.to_le_bytes());
+}
+
+#[test]
+fn startup_inspection_preserves_key_order_and_rejects_dynamic_or_ambiguous_keys() {
+    use cmvs_rs::{cpz::Cpz7Parameters, script_control::cpz7_parameters_from_start};
+    let keys = [0x10203040, 0x89abcdef, 0xfedcba98, 0x76543210];
+    let text = b"\0data\\pack\\script.cpz\0";
+    let mut code = Vec::new();
+    push(&mut code, false, 13);
+    code.extend(0x201fu16.to_le_bytes());
+    registration(&mut code, keys);
+    let script = memory_script(code.clone(), text);
+    assert_eq!(
+        cpz7_parameters_from_start(&script, b"SCRIPT.CPZ").unwrap(),
+        Some(Cpz7Parameters::from(keys))
+    );
+    assert_eq!(
+        cpz7_parameters_from_start(&script, b"other.cpz").unwrap(),
+        None
+    );
+    // Variable reference in place of the first literal key must not be treated as a key.
+    let mut dynamic = code.clone();
+    dynamic[16..18].copy_from_slice(&0x101u16.to_le_bytes());
+    assert!(cpz7_parameters_from_start(&memory_script(dynamic, text), b"script.cpz").is_err());
+    registration(&mut code, [1, 2, 3, 4]);
+    assert!(cpz7_parameters_from_start(&memory_script(code, text), b"script.cpz").is_err());
+
+    let mut code = Vec::new();
+    push(&mut code, false, 13);
+    code.extend(0x201fu16.to_le_bytes());
+    let jump_at = code.len();
+    code.extend(0x400u16.to_le_bytes());
+    code.extend(0u32.to_le_bytes());
+    registration(&mut code, keys);
+    let end = code.len() as u32;
+    code[jump_at + 2..jump_at + 6].copy_from_slice(&end.to_le_bytes());
+    code.extend(0x2000u16.to_le_bytes());
+    assert_eq!(
+        cpz7_parameters_from_start(&memory_script(code, text), b"script.cpz").unwrap(),
+        None
+    );
+
+    let mut code = Vec::new();
+    push(&mut code, false, 12);
+    code.extend(0x201fu16.to_le_bytes());
+    assert_eq!(
+        cpz7_parameters_from_start(&memory_script(code, text), b"script.cpz").unwrap(),
+        Some(Cpz7Parameters::default())
+    );
+    assert!(
+        cpz7_parameters_from_start(
+            &memory_script(0x2000u16.to_le_bytes().to_vec(), text),
+            b"script.cpz"
+        )
+        .is_err()
+    );
+}
+
 fn hex(text: &str) -> Vec<u8> {
     text.trim()
         .as_bytes()
@@ -131,17 +269,46 @@ fn external_archive_resources() -> Result<(), Box<dyn std::error::Error>> {
     use std::fs::File;
 
     let inputs = std::env::var_os("CMVS_CPZ7_TEST_INPUTS").ok_or("set CMVS_CPZ7_TEST_INPUTS")?;
+    let sample = std::env::var_os("CMVS_CPZ7_SAMPLE_EDGES").is_some();
     let mut archives = 0;
     for path in std::env::split_paths(&inputs) {
         let mut file = File::open(&path)?;
-        let index = ArchiveIndex::read(&mut file)?;
+        let index = if std::env::var_os("CMVS_CPZ7_STARTUP_KEYS").is_some() {
+            let start_path = path
+                .parent()
+                .ok_or("archive has no parent directory")?
+                .join("start.ps3");
+            let start = cmvs_rs::ps3::Script::decode(&std::fs::read(start_path)?)?;
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or("invalid archive basename")?;
+            let parameters =
+                cmvs_rs::script_control::cpz7_parameters_from_start(&start, name.as_bytes())?
+                    .ok_or("missing startup key registration")?;
+            ArchiveIndex::read_with_cpz7_parameters(&mut file, parameters)?
+        } else {
+            ArchiveIndex::read(&mut file)?
+        };
         assert_eq!(index.version(), ArchiveVersion::Cpz7);
         let mut bytes = 0u64;
+        let mut checked = 0;
         let mut digest = Sha256::new();
         for (i, entry) in index.entries().iter().enumerate() {
+            if sample && i != 0 && i + 1 != index.entries().len() {
+                continue;
+            }
             let data = index.read_entry_verified(&mut file, i)?;
             assert_eq!(data.len(), entry.size as usize);
             let lower = entry.name.to_ascii_lowercase();
+            if lower.ends_with(b".ps3") {
+                let script = cmvs_rs::ps3::Script::decode(&data)?;
+                cmvs_rs::bytecode::decode_layout(
+                    script.code(),
+                    script.header.entry_pc,
+                    &script.labels(),
+                )?;
+            }
             for (suffix, magic) in [
                 (b".ps3".as_slice(), b"PS2A".as_slice()),
                 (b".pb3", b"PB3B"),
@@ -157,10 +324,11 @@ fn external_archive_resources() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             bytes += data.len() as u64;
+            checked += 1;
             digest.update(&data);
         }
         eprintln!(
-            "{}: entries={} bytes={bytes} plaintext-sha256={}",
+            "{}: entries={} checked={checked} bytes={bytes} plaintext-sha256={}",
             path.display(),
             index.entries().len(),
             to_hex(&digest.finish())
