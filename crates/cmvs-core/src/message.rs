@@ -581,6 +581,7 @@ impl MessageHost {
             Some((pc, 0x151)) => self.cursor(vm, pc).map(|()| true),
             Some((pc, 0x155)) => self.glyph_parameter(vm, pc).map(|()| true),
             Some((pc, 0x11f)) => self.measure(vm, pc).map(|()| true),
+            Some((pc, 0x119)) => self.encoded_length(vm, pc).map(|()| true),
             Some((pc, 0x14e)) => self.show(vm, pc).map(|()| true),
             Some((pc, command @ (0x14b..=0x14d))) => self.presence(vm, pc, command).map(|()| true),
             Some((pc, command @ (0x14a | 0x15a))) => {
@@ -1294,6 +1295,26 @@ impl MessageHost {
         }
         Ok(())
     }
+    /// 0x2119: encoded display-byte count, without layout or text state changes.
+    /// Build-specific evidence: docs/games/chronoclock/vm-semantics.md.
+    fn encoded_length(&self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
+        let fail = |why| error(pc, 0x2119, why);
+        let index = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
+        let reference = vm.stack().peek_u32(8).map_err(|e| fail(e.0))?;
+        let bytes = vm.resolve_string(reference)?;
+        if self.text(index as usize).is_none() {
+            return Err(fail(
+                "text count needs an existing text object in slots 0..11",
+            ));
+        }
+        let count = output::encoded_length(&bytes).map_err(fail)?;
+        vm.complete_system(SystemResult(0x4008))?;
+        vm.state_mut()
+            .set_system_integer(0, count)
+            .expect("result exists");
+        Ok(())
+    }
+
     /// 0x1400731d0 -> 0x14005ca80: SP-4 text index, SP-8 string reference.
     /// System results 0/1/2/4 = success/max count/lines/last count; pops 8.
     fn measure(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {

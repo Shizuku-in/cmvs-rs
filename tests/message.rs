@@ -985,6 +985,71 @@ fn script_with_text(code: &[u8], text: &[u8]) -> Script {
 }
 
 #[test]
+fn encoded_length_skips_controls_and_counts_only_double_byte_ruby_base() {
+    for (bytes, expected) in [
+        (&b"\0"[..], 0),
+        (&b"ABC\xa6\x82\xa0\0"[..], 6),
+        (&b"A\\n\\c\\t\\wc\\ws\\wxB\0"[..], 2),
+        (&b"{ab\x82\xa0\x82\xa2/ruby\x82\xa4}Z\0"[..], 5),
+        (&b"{ascii/ruby}\0"[..], 0),
+        (&b"\x82\\\0"[..], 2),
+    ] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 300, 100]);
+        call(&mut code, 0x2119, &[0, 7]);
+        let program = script_with_text(&code, bytes);
+        let mut vm = Machine::new(&program).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 1);
+        let before = messages.text(7).unwrap().clone();
+        for i in 1..7 {
+            vm.state_mut().set_system_integer(i, 100 + i).unwrap();
+        }
+        run(&mut vm, &mut messages, 1);
+        assert_eq!(vm.state().system_integer(0), Some(expected));
+        for i in 1..7 {
+            assert_eq!(vm.state().system_integer(i), Some(100 + i));
+        }
+        assert_eq!(messages.text(7), Some(&before));
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.pc(), code.len());
+    }
+}
+
+#[test]
+fn encoded_length_rejects_malformed_input_or_missing_text_without_committing() {
+    for (bytes, slot) in [
+        (&b"\\q\0"[..], 7),
+        (&b"\\\0"[..], 7),
+        (&b"\\w\0"[..], 7),
+        (&b"\x82\0"[..], 7),
+        (&b"{base\0"[..], 7),
+        (&b"{base/ruby\0"[..], 7),
+        (&b"A\0"[..], 12),
+        (&b"A\0"[..], u32::MAX),
+        (&b"A\0"[..], 6),
+    ] {
+        let mut code = vec![];
+        create(&mut code, 0, 7, [0, 0, 300, 100]);
+        call(&mut code, 0x2119, &[0, slot]);
+        let program = script_with_text(&code, bytes);
+        let mut vm = Machine::new(&program).unwrap();
+        let mut messages = MessageHost::default();
+        run(&mut vm, &mut messages, 1);
+        let before = messages.text(7).unwrap().clone();
+        vm.state_mut().set_system_integer(0, 123).unwrap();
+        pending(&mut vm);
+        for _ in 0..2 {
+            assert!(messages.try_handle(&mut vm).is_err());
+            assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x119)));
+            assert_eq!(vm.stack().len_bytes(), 8);
+            assert_eq!(vm.state().system_integer(0), Some(123));
+            assert_eq!(messages.text(7), Some(&before));
+        }
+    }
+}
+
+#[test]
 fn recorded_output_only_release_edge_skips_reveal_not_press_edge() {
     let mut code = vec![];
     create(&mut code, 0, 7, [0, 0, 100, 100]);
