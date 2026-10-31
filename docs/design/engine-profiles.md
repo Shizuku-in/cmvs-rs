@@ -212,6 +212,8 @@ profile::check_command(selection, pc, command, allow_unreviewed)?;
 
 等出现第一个真正的 `Variant` 时，再给相关宿主的 `try_handle` 加 `&EngineProfile` 参数。现在没有已知变体，不预先改签名。
 
+> 2026-10-31：此方案由[分派层设计草案](dispatch.md)取代，变体改为在分派表中替换处理函数，宿主签名不再携带档案。
+
 ### 6.5 写死的本作常量
 
 - `load_start` 和 `Startup::new` 中的 `data/pack/start.ps3`、`data/pack/script.cpz` 改为取自 `GameRecord`。
