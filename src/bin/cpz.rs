@@ -9,22 +9,15 @@ use std::{
     io::{Read, Write},
 };
 
-const USAGE: &str = "\
-Usage:
-  cmvs-cpz <archive> [archive ...]                                print each header (64 bytes)
-  cmvs-cpz --list <archive>                                       list the index
-  cmvs-cpz --script <archive> <ASCII-basename>                    summarise one script
-  cmvs-cpz --extract <archive> <ASCII-basename> <new-output-file> extract one entry
-
-Index and entry modes decrypt CPZ6 mode 1; checksums are not verified.";
-
 fn run() -> Result<(), Box<dyn Error>> {
     let paths: Vec<_> = env::args_os().skip(1).collect();
     if paths.is_empty() {
         return Err("usage: cmvs-cpz <archive> [archive ...]".into());
     }
     if paths.len() == 1 && paths[0] == "--help" {
-        println!("{USAGE}");
+        println!(
+            "Usage: cmvs-cpz <archive> [archive ...]\n       cmvs-cpz --list <archive>\n       cmvs-cpz --script <archive> <ASCII-basename>\n       cmvs-cpz --extract <archive> <ASCII-basename> <new-output-file>\nMetadata mode reads 64 bytes. Index/resource modes decrypt CPZ6 mode 1; checksums NOT verified."
+        );
         return Ok(());
     }
     if paths[0] == "--list" || paths[0] == "--script" || paths[0] == "--extract" {

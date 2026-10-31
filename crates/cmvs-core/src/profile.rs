@@ -1,20 +1,18 @@
 //! Engine profiles: which analysed CMVS build supplies the semantics for a run.
 //! A profile covers one build (its x86/x64 executables); game records map data files to it.
 //! Selection never defaults; the command gate rejects absent and unreviewed commands.
-mod contract;
 mod gate;
 mod select;
 mod text;
 
-pub use contract::{ContractProof, ContractRules, ContractSide};
-pub use gate::{CommandGate, GateCounts, GateError, GateErrorKind};
+pub use gate::{CommandGate, GateError, GateErrorKind};
 pub use select::{
     EXECUTABLE_NAMES, Evidence, FileEvidence, Game, GameFiles, ProfileSelection, SelectionBasis,
     SelectionError,
 };
 
 use crate::exe::{Arch, Case, Dispatch, PeImage};
-use std::{collections::BTreeMap, fmt, sync::OnceLock};
+use std::{fmt, sync::OnceLock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Family {
@@ -29,16 +27,6 @@ pub enum CommandStatus {
     NoOp,
     /// Root profile only: this build is the semantic reference.
     Base,
-    /// A complete same-architecture fingerprint matches the root; proof is mandatory.
-    Inherited,
-    /// A recorded manual review found the root semantics apply; the record is mandatory.
-    Reviewed,
-    /// Complete offline contracts match under an active, registered certificate.
-    ContractEquivalent,
-    /// Comparison found no difference, but conservative limits (blocked data, indirect
-    /// calls, recursion, depth) hide part of the code; the comparable-shape proof is
-    /// mandatory. Research only: requires an explicit allow-presumed policy.
-    Presumed,
     /// Present, but not yet compared with or reviewed against the base.
     Unreviewed,
 }
@@ -49,24 +37,9 @@ impl CommandStatus {
             Self::Absent => "absent",
             Self::NoOp => "noop",
             Self::Base => "base",
-            Self::Inherited => "inherited",
-            Self::Reviewed => "reviewed",
-            Self::ContractEquivalent => "contract-equivalent",
-            Self::Presumed => "presumed",
             Self::Unreviewed => "unreviewed",
         }
     }
-}
-
-/// Identity-bound machine comparison evidence: for `Inherited` the digest covers the
-/// complete normalized handler and its dependencies, for `Presumed` everything comparable
-/// with blocked parts as placeholders. No original code bytes are embedded.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MachineProof {
-    pub arch: Arch,
-    pub base_sha256: [u8; 32],
-    pub derived_sha256: [u8; 32],
-    pub digest: [u8; 32],
 }
 
 /// One analysed executable of a build; every address is relative to this file only.
@@ -106,10 +79,6 @@ pub struct EngineProfile {
     pub base: Option<String>,
     pub binaries: Vec<Binary>,
     statuses: Vec<CommandStatus>,
-    proofs: BTreeMap<u16, MachineProof>,
-    contracts: BTreeMap<u16, [u8; 32]>,
-    /// Review records, as paths relative to `docs/` of a section headed by the command.
-    reviews: BTreeMap<u16, String>,
 }
 
 impl EngineProfile {
@@ -122,16 +91,6 @@ impl EngineProfile {
     }
     pub fn statuses(&self) -> &[CommandStatus] {
         &self.statuses
-    }
-    /// The machine comparison proof of an `Inherited` or `Presumed` command.
-    pub fn proof(&self, command: u16) -> Option<&MachineProof> {
-        self.proofs.get(&command)
-    }
-    pub fn review(&self, command: u16) -> Option<&str> {
-        self.reviews.get(&command).map(String::as_str)
-    }
-    pub fn contract_id(&self, command: u16) -> Option<&[u8; 32]> {
-        self.contracts.get(&command)
     }
     pub fn count(&self, status: CommandStatus) -> usize {
         self.statuses.iter().filter(|&&s| s == status).count()
@@ -183,9 +142,6 @@ impl EngineProfile {
                 })
                 .collect(),
             statuses,
-            proofs: BTreeMap::new(),
-            contracts: BTreeMap::new(),
-            reviews: BTreeMap::new(),
         };
         profile.validate()?;
         Ok(profile)
@@ -228,48 +184,11 @@ impl EngineProfile {
                 (CommandStatus::NoOp, Case::NoOp(_)) => true,
                 (CommandStatus::Base, Case::Handler(_)) => self.base.is_none(),
                 (CommandStatus::Unreviewed, Case::Handler(_)) => self.base.is_some(),
-                (
-                    CommandStatus::Inherited
-                    | CommandStatus::Reviewed
-                    | CommandStatus::Presumed
-                    | CommandStatus::ContractEquivalent,
-                    Case::Handler(_),
-                ) => self.base.is_some(),
                 _ => false,
             };
             if !allowed {
                 return Err(ProfileError::new(
                     "command status contradicts the switch or profile kind",
-                ));
-            }
-            if matches!(status, CommandStatus::Inherited | CommandStatus::Presumed)
-                != self.proofs.contains_key(&(command as u16))
-            {
-                return Err(ProfileError::new(
-                    "inherited and presumed status require exactly one proof",
-                ));
-            }
-            if (*status == CommandStatus::Reviewed) != self.reviews.contains_key(&(command as u16))
-            {
-                return Err(ProfileError::new(
-                    "reviewed status requires exactly one review record",
-                ));
-            }
-            if (*status == CommandStatus::ContractEquivalent)
-                != self.contracts.contains_key(&(command as u16))
-            {
-                return Err(ProfileError::new(
-                    "contract-equivalent status requires exactly one certificate",
-                ));
-            }
-            if let Some(proof) = self.proof(command as u16)
-                && !self
-                    .binaries
-                    .iter()
-                    .any(|b| b.arch == proof.arch && b.sha256 == proof.derived_sha256)
-            {
-                return Err(ProfileError::new(
-                    "comparison proof does not match derived binary",
                 ));
             }
         }
@@ -327,7 +246,6 @@ impl std::error::Error for ProfileError {}
 pub struct Registry {
     profiles: Vec<EngineProfile>,
     games: Vec<GameRecord>,
-    contracts: BTreeMap<[u8; 32], ContractProof>,
 }
 
 const BUILTIN_PROFILES: [&str; 2] = [
@@ -338,23 +256,12 @@ const BUILTIN_GAMES: &str = include_str!("../profiles/games.txt");
 
 impl Registry {
     pub fn parse(profiles: &[&str], games: &str) -> Result<Self, ProfileError> {
-        Self::parse_with_contracts(profiles, games, "", &[])
-    }
-    /// `catalog` and `active_rules` are trusted, reviewed registry inputs. Reports or
-    /// profiles alone cannot authorize contracts; no evidence is loaded from game files.
-    pub fn parse_with_contracts(
-        profiles: &[&str],
-        games: &str,
-        catalog: &str,
-        active_rules: &[ContractRules],
-    ) -> Result<Self, ProfileError> {
         let registry = Self {
             profiles: profiles
                 .iter()
                 .map(|t| text::parse_profile(t))
                 .collect::<Result<_, _>>()?,
             games: text::parse_games(games)?,
-            contracts: contract::parse_catalog(catalog, active_rules)?,
         };
         registry.validate()?;
         Ok(registry)
@@ -363,13 +270,7 @@ impl Registry {
     pub fn builtin() -> &'static Self {
         static REGISTRY: OnceLock<Registry> = OnceLock::new();
         REGISTRY.get_or_init(|| {
-            Self::parse_with_contracts(
-                &BUILTIN_PROFILES,
-                BUILTIN_GAMES,
-                include_str!("../profiles/contracts.txt"),
-                &[ContractRules::builtin()],
-            )
-            .expect("embedded profile data is valid")
+            Self::parse(&BUILTIN_PROFILES, BUILTIN_GAMES).expect("embedded profile data is valid")
         })
     }
     pub fn profiles(&self) -> &[EngineProfile] {
@@ -380,9 +281,6 @@ impl Registry {
     }
     pub fn profile(&self, id: &str) -> Option<&EngineProfile> {
         self.profiles.iter().find(|p| p.id == id)
-    }
-    pub fn contract_proof(&self, id: &[u8; 32]) -> Option<&ContractProof> {
-        self.contracts.get(id)
     }
     /// The profile and binary an executable hash was analysed as.
     pub fn binary(&self, sha256: &[u8; 32]) -> Option<(&EngineProfile, &Binary)> {
@@ -409,35 +307,6 @@ impl Registry {
                         "profile {} must derive from a root profile of its family",
                         profile.id
                     )));
-                }
-                // A review compares against root semantics, which only a Base command has.
-                if profile
-                    .reviews
-                    .keys()
-                    .any(|&command| base.status(command) != CommandStatus::Base)
-                {
-                    return Err(ProfileError::new("reviewed command has no root semantics"));
-                }
-                for (&command, proof) in &profile.proofs {
-                    if base.status(command) != CommandStatus::Base
-                        || !base
-                            .binaries
-                            .iter()
-                            .any(|b| b.arch == proof.arch && b.sha256 == proof.base_sha256)
-                    {
-                        return Err(ProfileError::new(
-                            "comparison proof does not match root binary/command",
-                        ));
-                    }
-                }
-                for (&command, id) in &profile.contracts {
-                    if base.status(command) != CommandStatus::Base {
-                        return Err(ProfileError::new("contract command has no root semantics"));
-                    }
-                    let proof = self.contracts.get(id).ok_or_else(|| {
-                        ProfileError::new("contract certificate is missing or revoked")
-                    })?;
-                    proof.bind(command, base, profile)?;
                 }
             }
         }

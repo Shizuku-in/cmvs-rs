@@ -581,8 +581,6 @@ impl MessageHost {
             Some((pc, 0x151)) => self.cursor(vm, pc).map(|()| true),
             Some((pc, 0x155)) => self.glyph_parameter(vm, pc).map(|()| true),
             Some((pc, 0x11f)) => self.measure(vm, pc).map(|()| true),
-            Some((pc, 0x112)) => self.measure_layout(vm, pc).map(|()| true),
-            Some((pc, 0x119)) => self.encoded_length(vm, pc).map(|()| true),
             Some((pc, 0x14e)) => self.show(vm, pc).map(|()| true),
             Some((pc, command @ (0x14b..=0x14d))) => self.presence(vm, pc, command).map(|()| true),
             Some((pc, command @ (0x14a | 0x15a))) => {
@@ -1296,53 +1294,6 @@ impl MessageHost {
         }
         Ok(())
     }
-    /// 0x2119: encoded display-byte count, without layout or text state changes.
-    /// Build-specific evidence: docs/games/chronoclock/vm-semantics.md.
-    fn encoded_length(&self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
-        let fail = |why| error(pc, 0x2119, why);
-        let index = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
-        let reference = vm.stack().peek_u32(8).map_err(|e| fail(e.0))?;
-        let bytes = vm.resolve_string(reference)?;
-        if self.text(index as usize).is_none() {
-            return Err(fail(
-                "text count needs an existing text object in slots 0..11",
-            ));
-        }
-        let count = output::encoded_length(&bytes).map_err(fail)?;
-        vm.complete_system(SystemResult(0x4008))?;
-        vm.state_mut()
-            .set_system_integer(0, count)
-            .expect("result exists");
-        Ok(())
-    }
-
-    /// 0x140072ed0 -> 0x14005b360: SP-4 text index, SP-8 string reference.
-    /// Read-only layout query: results 0/1/4 = lines/max bytes/final bytes; pops 8.
-    fn measure_layout(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
-        let fail = |why| error(pc, 0x2112, why);
-        let index = vm.stack().peek_u32(4).map_err(|e| fail(e.0))? as usize;
-        let reference = vm.stack().peek_u32(8).map_err(|e| fail(e.0))?;
-        let bytes = vm.resolve_string(reference)?;
-        let text = self
-            .text(index)
-            .ok_or_else(|| fail("text layout needs an existing text object in slots 0..11"))?;
-        let (flags, counts) = output::ruby_layout(text, &bytes).map_err(fail)?;
-        // This wrapper passes a 64-byte stack buffer at rsp+0x40, followed by the
-        // /GS cookie at rsp+0x80. Output's separate call uses the object's 32 flags.
-        if flags[16..].iter().any(|&marked| marked != 0) {
-            return Err(fail(
-                "text layout ruby group overwrites the caller's stack cookie",
-            ));
-        }
-        vm.complete_system(SystemResult(0x4008))?;
-        for (slot, value) in [(0, counts[0]), (1, counts[1]), (4, counts[2])] {
-            vm.state_mut()
-                .set_system_integer(slot, value)
-                .expect("known result slot");
-        }
-        Ok(())
-    }
-
     /// 0x1400731d0 -> 0x14005ca80: SP-4 text index, SP-8 string reference.
     /// System results 0/1/2/4 = success/max count/lines/last count; pops 8.
     fn measure(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {

@@ -11,8 +11,6 @@ pub enum GateErrorKind {
     NoOp,
     /// Present, but its semantics are not yet established for this build.
     Unreviewed,
-    /// Legacy shape evidence is incomplete and no research override was selected.
-    Presumed,
     /// 0x201d declares a different game than the matched record.
     GameIdMismatch { expected: u32, found: u32 },
 }
@@ -52,11 +50,6 @@ impl fmt::Display for GateError {
                 self.profile,
                 self.base.as_deref().unwrap_or("-")
             ),
-            GateErrorKind::Presumed => write!(
-                f,
-                "{site} has only legacy presumed evidence for engine profile {}; pass --allow-presumed only for research",
-                self.profile
-            ),
             GateErrorKind::GameIdMismatch { expected, found } => write!(
                 f,
                 "{site} declares game ID 0x{found:08x}, but profile {} recorded 0x{expected:08x}",
@@ -72,23 +65,7 @@ impl std::error::Error for GateError {}
 pub struct CommandGate<'a> {
     selection: ProfileSelection<'a>,
     allow_unreviewed: bool,
-    allow_presumed: bool,
     allowed: BTreeSet<u16>,
-    presumed: BTreeSet<u16>,
-    contracted: BTreeSet<u16>,
-    counts: GateCounts,
-}
-
-/// Successful gate checks by semantic source. Wait retries count again; these are
-/// dispatch attempts, not completed commands or address/branch coverage.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct GateCounts {
-    pub base: u64,
-    pub inherited: u64,
-    pub reviewed: u64,
-    pub contract_equivalent: u64,
-    pub presumed: u64,
-    pub unreviewed: u64,
 }
 
 impl<'a> CommandGate<'a> {
@@ -96,20 +73,12 @@ impl<'a> CommandGate<'a> {
         Self {
             selection,
             allow_unreviewed: false,
-            allow_presumed: false,
             allowed: BTreeSet::new(),
-            presumed: BTreeSet::new(),
-            contracted: BTreeSet::new(),
-            counts: GateCounts::default(),
         }
     }
     /// Research only: run unreviewed commands with the base semantics.
     pub fn set_allow_unreviewed(&mut self, allow: bool) {
         self.allow_unreviewed = allow;
-    }
-    /// Research only: use root semantics despite incomplete legacy shape evidence.
-    pub fn set_allow_presumed(&mut self, allow: bool) {
-        self.allow_presumed = allow;
     }
     pub fn selection(&self) -> &ProfileSelection<'a> {
         &self.selection
@@ -117,75 +86,6 @@ impl<'a> CommandGate<'a> {
     /// Unreviewed commands let through so far.
     pub fn allowed(&self) -> &BTreeSet<u16> {
         &self.allowed
-    }
-    /// Presumed commands run so far: suspects first when a run goes wrong.
-    pub fn presumed(&self) -> &BTreeSet<u16> {
-        &self.presumed
-    }
-    pub fn contracted(&self) -> &BTreeSet<u16> {
-        &self.contracted
-    }
-    pub fn counts(&self) -> GateCounts {
-        self.counts
-    }
-    pub fn summary_line(&self) -> String {
-        format!(
-            "# profile gate accepted attempts: base={} inherited={} reviewed={} contract-equivalent={} presumed={} unreviewed={} (includes wait retries; not completion/coverage)",
-            self.counts.base,
-            self.counts.inherited,
-            self.counts.reviewed,
-            self.counts.contract_equivalent,
-            self.counts.presumed,
-            self.counts.unreviewed
-        )
-    }
-    /// The presumed commands that ran, for a stop report; `None` when there were none.
-    pub fn presumed_line(&self) -> Option<String> {
-        (!self.presumed.is_empty()).then(|| {
-            let list: Vec<_> = self
-                .presumed
-                .iter()
-                .map(|c| format!("0x{:04x}", 0x2000 + c))
-                .collect();
-            format!("# legacy presumed commands attempted: {}", list.join(" "))
-        })
-    }
-    pub fn contracted_line(&self) -> Option<String> {
-        (!self.contracted.is_empty()).then(|| {
-            let list: Vec<_> = self
-                .contracted
-                .iter()
-                .map(|c| format!("0x{:04x}", 0x2000 + c))
-                .collect();
-            format!(
-                "# contract-equivalent commands attempted: {}",
-                list.join(" ")
-            )
-        })
-    }
-    /// Shared stop diagnostics for runner, trace and desktop.
-    pub fn diagnostic_lines(&self) -> Vec<String> {
-        let mut lines = vec![
-            self.summary_line(),
-            format!(
-                "# profile gate research policy: allow-presumed={} allow-unreviewed={}",
-                self.allow_presumed, self.allow_unreviewed
-            ),
-        ];
-        lines.extend(self.contracted_line());
-        lines.extend(self.presumed_line());
-        if !self.allowed.is_empty() {
-            let list: Vec<_> = self
-                .allowed
-                .iter()
-                .map(|c| format!("0x{:04x}", 0x2000 + c))
-                .collect();
-            lines.push(format!(
-                "# unreviewed commands attempted: {}",
-                list.join(" ")
-            ));
-        }
-        lines
     }
     /// Checks the pending command; returns it on the first time an unreviewed command passes.
     /// Pending commands are re-checked when a wait resumes, which is harmless.
@@ -216,33 +116,10 @@ impl<'a> CommandGate<'a> {
             }));
         }
         match profile.status(command) {
-            CommandStatus::Base => {
-                self.counts.base += 1;
-                Ok(None)
-            }
-            CommandStatus::Inherited => {
-                self.counts.inherited += 1;
-                Ok(None)
-            }
-            CommandStatus::Reviewed => {
-                self.counts.reviewed += 1;
-                Ok(None)
-            }
-            CommandStatus::ContractEquivalent => {
-                self.counts.contract_equivalent += 1;
-                self.contracted.insert(command);
-                Ok(None)
-            }
-            CommandStatus::Presumed if self.allow_presumed => {
-                self.counts.presumed += 1;
-                self.presumed.insert(command);
-                Ok(None)
-            }
-            CommandStatus::Presumed => Err(error(GateErrorKind::Presumed)),
+            CommandStatus::Base => Ok(None),
             CommandStatus::Absent => Err(error(GateErrorKind::Absent)),
             CommandStatus::NoOp => Err(error(GateErrorKind::NoOp)),
             CommandStatus::Unreviewed if self.allow_unreviewed => {
-                self.counts.unreviewed += 1;
                 Ok(self.allowed.insert(command).then_some(command))
             }
             CommandStatus::Unreviewed => Err(error(GateErrorKind::Unreviewed)),

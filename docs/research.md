@@ -1,6 +1,6 @@
 # 研究与验证约定
 
-研究必须区分格式事实、某个二进制的指令语义和宿主预览策略。主线[《アマツツミ》PC 样本](games/amatsutsumi/README.md)的[研究记录](games/amatsutsumi/research.md)与[VM 语义](games/amatsutsumi/vm-semantics.md)保留原始阶段说明；[《クロノクロック》](games/chronoclock/README.md)已在接入摸底后开始逐条语义研究，证据和验证边界独立归档。
+研究必须区分格式事实、某个二进制的指令语义和宿主预览策略。当前有完整证据档案的游戏只有[《アマツツミ》PC 样本](games/amatsutsumi/README.md)，[《クロノクロック》](games/chronoclock/README.md)只做了接入摸底；其[研究记录](games/amatsutsumi/research.md)与[VM 语义](games/amatsutsumi/vm-semantics.md)保留原始阶段说明。
 
 ## 证据与实现
 
