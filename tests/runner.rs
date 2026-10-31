@@ -1938,13 +1938,16 @@ fn chosen_faces_are_validated_before_the_command_completes() {
 #[test]
 fn first_system_save_without_template_writes_reloads_and_survives_restart() {
     use cmvs_rs::{settings::DisplayPreferences, system_save::Css1Save};
+    let profile = synthetic_profile().replace("synthetic-base", "cmvs-20160201");
+    let registry = Registry::parse(&[&profile], "").unwrap();
     for explicit_write in [false, true] {
         let mut code = vec![];
         commands::command(&mut code, 0x201d, &[0x12345678]);
-        commands::command(&mut code, 0x2091, &[2048, 260096, 0]);
-        commands::command(&mut code, 0x2092, &[2048, 2048, 0]);
-        commands::command(&mut code, 0x2093, &[1024, 1024, 0]);
-        commands::command(&mut code, 0x2094, &[64, 64, 0]);
+        // Like real startup, initialize only local banks in the script.
+        commands::command(&mut code, 0x2091, &[0, 2048, 0]);
+        commands::command(&mut code, 0x2092, &[0, 2048, 0]);
+        commands::command(&mut code, 0x2093, &[0, 1024, 0]);
+        commands::command(&mut code, 0x2094, &[0, 64, 0]);
         commands::command(&mut code, 0x2128, &[]);
         let after_load = code.len();
         commands::command(&mut code, 0x2092, &[2400, 1, 96]);
@@ -1960,7 +1963,16 @@ fn first_system_save_without_template_writes_reloads_and_survives_restart() {
             std::process::id()
         ));
         let script = root.script();
-        let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+        let game = registry
+            .identify_game(&root.0, Some("cmvs-20160201"))
+            .unwrap();
+        let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+        assert_eq!(run.machine().state().integer(2190), Some(0));
+        assert_eq!(run.machine().state().integer(4095), Some(0));
+        assert_eq!(run.machine().state().integer(4097), None);
+        assert_eq!(run.machine().state().bit(262143), Some(false));
+        assert_eq!(run.machine().state().float_bits(2047), Some(0));
+        assert_eq!(run.machine().state().string(127), Some(b"".as_slice()));
         run.set_user_data_directory(&directory).unwrap();
         // An early close can write INI, but must not manufacture a CSS1.
         run.save_preferences(DisplayPreferences::default()).unwrap();
@@ -1986,7 +1998,7 @@ fn first_system_save_without_template_writes_reloads_and_survives_restart() {
             Some(96)
         );
         drop(run);
-        let mut resumed = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+        let mut resumed = Startup::new(&script, &root.0, &game, 0).unwrap();
         resumed.set_user_data_directory(&directory).unwrap();
         while resumed.machine().pc() != after_load {
             resumed.tick(&mut backend).unwrap();

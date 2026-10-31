@@ -172,6 +172,21 @@ impl<'a> Startup<'a> {
         virtual_tick: u32,
     ) -> Result<Self, Box<dyn Error>> {
         let mut machine = Machine::new(script)?;
+        if game.selection.profile.id == "cmvs-20160201" {
+            // Verified PE zero-fill globals of the baseline build. Keep standalone
+            // research VMs and other profiles unknown until separately verified.
+            let state = machine.state_mut();
+            state
+                .fill_integers(0, 4096, 0)
+                .map_err(crate::FormatError)?;
+            state
+                .fill_bits(0, 262144, false)
+                .map_err(crate::FormatError)?;
+            state.fill_floats(0, 2048, 0).map_err(crate::FormatError)?;
+            state
+                .fill_strings(0, 128, b"")
+                .map_err(crate::FormatError)?;
+        }
         machine.set_current_name(game.files.start_name());
         // 0x14000a3c0 reads the startup settings; cmvs.cfg is optional and read only.
         let configuration = crate::settings::Configuration::read(&root.join("cmvs.cfg"))?

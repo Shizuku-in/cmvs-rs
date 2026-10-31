@@ -2349,3 +2349,11 @@ SavedImage允许kind0空名，仍要求单图/manager0/有界尺寸，保持滤�
 用户报告原版在没有 save 目录时可启动并创建 system.dat；桌面预览却在档案识别后返回 os error 2。定位到 Startup::new 中 DirectorySaves::new 无条件 canonicalize 原游戏 save 目录，早于独立用户目录选择及已有无模板 CSS1 创建路径。现将不存在的目录视为无剧情存档，保持原游戏只读，不创建目录；已有非目录路径和其他 I/O 错误仍报错。
 
 合成回归从没有 save 目录的游戏根启动，覆盖显式系统保存及正常退出首次保存、CSS1 解码与重启回读，并确认原游戏 save 目录始终未创建；存档菜单扫描缺失目录得到全部空槽。cargo fmt --check、cargo test --offline、cargo clippy --offline --all-targets -- -D warnings 通过。尚未新增真实游戏无存档原生启动/保存/重启实测，未改解码算法。
+
+### 无存档全局变量初值补全（2026-10-31）
+
+用户继缺少save目录后报告start.ps3 PC 0x1184、表达式操作符0x1198读取未知整数。定位为2190，真实脚本只初始化局部整数，既有合成首次保存测试却显式初始化持久区，因而漏掉物理全局区的初值。已按原二进制PE零填充区域补上基准档案启动初始化，证据见VM语义“首次启动全局变量初值”。回归改为仅脚本初始化局部区，同时覆盖已核对物理银行边界、范围外未知、首次写入/退出写入及重启覆盖默认值。
+
+cargo fmt --check、cargo test --offline、cargo clippy --offline --all-targets -- -D warnings及wgpu-renderer,audio-output release构建通过。真实游戏根E:/Download/AMATSUTSUMI没有save目录；使用local/amatsutsumi/first-start-2190-check独立用户目录、wgpu、字体、record音频，12秒运行21814步进入标题正常退出，生成2493字节system.dat。检查工具解码通过：game ID 0x17800016，压缩负载2131字节、解码44864字节、列表[0,0]，校验通过。相同目录重启12秒21913步再次到标题并正常保存，生成system.bak。日志保留local/first-start-native.log及local/first-start-restart-record.log，游戏根save目录始终未创建。
+
+另一次native音频重启在音频设备初始化后以0xc0000008退出，与已记录的受限执行环境问题相符，未计作native音频重启通过。上述真实首次启动/退出保存/重启验证仅为record音频；未覆盖进入剧情后存读档或Ctrl未读边界。
