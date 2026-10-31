@@ -341,8 +341,14 @@ pub struct PlatformHost {
     cursor: u32,
     icon: Option<Vec<u8>>,
     thumbnail: Option<ThumbnailConfig>,
+    /// CHRONOCLOCK device +144, initialized from WINDOW_RESOLVING.
+    others_display_use: bool,
 }
 impl PlatformHost {
+    pub fn configure_display_selection(&mut self, ini: &[u8]) {
+        self.others_display_use =
+            crate::save_menu::profile_int(ini, "WINDOW_RESOLVING", "OTHERS_DISPLAY_USE", 0) != 0;
+    }
     pub fn title(&self) -> Option<&[u8]> {
         self.title.as_deref()
     }
@@ -394,6 +400,14 @@ impl PlatformHost {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(None);
         };
+        if command == 0x2ff {
+            // 0x140078400 -> device +144: preference, not monitor availability.
+            vm.complete_system(SystemResult(0x4000))?;
+            vm.state_mut()
+                .set_system_integer(0, u32::from(self.others_display_use))
+                .expect("slot 0 exists");
+            return Ok(Some(PlatformEvent::Configured));
+        }
         if command == 0x164 {
             let raw = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x2164, e.0))?;
             backend.apply(&PlatformRequest::Fullscreen(raw != 0))?;

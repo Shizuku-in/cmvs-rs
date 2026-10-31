@@ -12,6 +12,37 @@ use std::{collections::BTreeMap, error::Error, fs, process::Command};
 mod bytecode;
 
 #[test]
+fn other_display_query_reads_configuration_without_consuming_stack_or_changing_device() {
+    for (ini, expected) in [
+        (b"".as_slice(), 0),
+        (b"[WINDOW_RESOLVING]\nOTHERS_DISPLAY_USE=0\n".as_slice(), 0),
+        (b"[WINDOW_RESOLVING]\nOTHERS_DISPLAY_USE=2\n".as_slice(), 1),
+        (b"[WINDOW_RESOLVING]\nOTHERS_DISPLAY_USE=-1\n".as_slice(), 1),
+    ] {
+        let mut code = vec![];
+        bytecode::command(&mut code, 0x22ff, &[77]);
+        let script = bytecode::script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        bytecode::pending(&mut vm);
+        vm.state_mut().set_system_integer(0, 99).unwrap();
+        vm.state_mut().set_system_integer(1, 88).unwrap();
+        let mut host = PlatformHost::default();
+        // Replacing a user configuration must also clear an earlier true value.
+        host.configure_display_selection(b"[WINDOW_RESOLVING]\nOTHERS_DISPLAY_USE=1\n");
+        host.configure_display_selection(ini);
+        let mut backend = RecordingBackend::default();
+        host.try_handle(&mut vm, &mut backend, &mut Assets::default(), &[])
+            .unwrap()
+            .unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(expected));
+        assert_eq!(vm.state().system_integer(1), Some(88));
+        assert_eq!(vm.stack().len_bytes(), 4);
+        assert_eq!(vm.pending_system(), None);
+        assert!(backend.requests().is_empty());
+    }
+}
+
+#[test]
 fn aspect_scaling_normalizes_values_and_yields_only_for_fullscreen_updates() {
     use cmvs_rs::platform::PlatformEvent;
     for fullscreen in [false, true] {

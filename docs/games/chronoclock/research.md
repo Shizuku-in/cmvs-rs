@@ -1,5 +1,15 @@
 # CHRONOCLOCK 研究记录
 
+## 2026-11-01：研究放行下的设置入口推进
+
+实现 `0x22ff` 的其他显示器使用设置查询，证据见 [VM 语义](vm-semantics.md#0x22ff其他显示器使用设置查询2026-11-01)。保持档案状态与快照格式屏障，继续使用 `--allow-presumed --allow-unreviewed`。本轮不表示其他未复核命令获得语义验证，也未实现原版多显示器切换。
+
+release `cmvs-probe`，游戏根目录 `E:/Download/Purple Software/2015-04-24_CHRONOCLOCK`，字体 `C:/Windows/Fonts/msgothic.ttc`，`--checks P1,P2,P3,C1,C2,C3,C4 --max-steps 300000000`，默认鼠标、种子0、16ms，输出独立新目录 `local/chronoclock/other-display-probe`。七项全部通过：P1/P3/C1 为 L0，P2/C2/C3/C4 为 L1。页面图12节点、290次尝试、无重放偏离、未截断；标题设置入口越过旧 `intproc.ps3 / 0x8163a / 0x22ff` 停点。
+
+C2 修改 `active_draw` 为 false，正常保存 `system.dat`、`cmvs.cfg` 后以新会话重启，值仍为 false；C3 修改文字速度后，前10个等待的帧数从1020变为1382；C4 再按同一控件恢复原设置。游戏目录只读，所有写入在探针用户目录。报告 `summary.json` SHA-256 `695942dd10a94ddd690e593c83c83c31c476c2768e1bd0b6cc831210d20470e4`；页面探针当前不记录事件，故 `events.jsonl` 为空，细节以报告为准。原生窗口、实际显示器切换、全剧情与剧情存读档不在本轮验证范围。
+
+检查：平台与 runner 既有测试（含一个新增命令行为测试）共69项通过，core 全目标严格 Clippy、格式及 diff 检查通过。下一步仍是剧情路线 `0x21fa` 的未支持运动模式。
+
 身份和建档时的结构检查见[游戏档案](README.md)，逐条语义见[VM 证据](vm-semantics.md)。原游戏只读，真实日志、存档副本和探针仅在忽略的 `local/chronoclock/`，不进入 Git。未修改资源解码算法，未引入外部源码或依赖。
 
 ## 2026-10-31：对象可见性与オートデモ

@@ -202,6 +202,8 @@ impl<'a> Startup<'a> {
         settings.check_font_face()?;
         let message_flags = MessageFlags::from_ini(text);
         let effects = crate::save_menu::profile_int(text, "SYSTEM_INFO", "EFFECT_USE", 1) != 0;
+        let mut platform = PlatformHost::default();
+        platform.configure_display_selection(text);
         Ok(Self {
             slot_edit: None,
             quit: false,
@@ -219,7 +221,7 @@ impl<'a> Startup<'a> {
             system_host: SystemSaveHost::default(),
             system_output: None,
             assets: DirectoryAssets::new(root)?,
-            platform: PlatformHost::default(),
+            platform,
             scene: SceneHost::default(),
             buttons: ButtonHost::default(),
             movies: MovieHost::default(),

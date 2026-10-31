@@ -26,6 +26,7 @@ impl Startup<'_> {
         );
         self.effects = profile_int(bytes, "SYSTEM_INFO", "EFFECT_USE", 1) != 0;
         self.audio = audio;
+        self.platform.configure_display_selection(bytes);
         self.configuration = configuration;
         Ok(())
     }

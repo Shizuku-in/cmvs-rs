@@ -1,5 +1,7 @@
 # 《クロノクロック》测试档案
 
+2026-11-01 研究放行推进：补上 `0x22ff` 的其他显示器使用设置查询，`--allow-presumed --allow-unreviewed` 下页面 P1–P3、设置 C1–C4 全部通过；覆盖12个页面与290次尝试，确认设置保存重启保持及文字速度变化。档案状态不变，剧情 `0x21fa`、派生快照布局及原生输出仍待推进。见[研究记录](research.md#2026-11-01研究放行下的设置入口推进)。
+
 2026-11-01 剧情点推进：复核 `0x22b2` 的实时语义并实现 `0x2112` 基本文字布局查询，两条登记为Reviewed。当前455条 `Inherited`、27条 `Reviewed`、3条 `ContractEquivalent`、163条旧 `Presumed`、64条 `Unreviewed`、264条 `NoOp`。显式 `--allow-presumed`、不放行未复核命令的记录runner，从步骤102340推进至105242，停在 `cdemo.ps3 / 0xfdb4 / 0x2157`；仍不生成派生剧情快照。详见[语义](vm-semantics.md#0x2112基本文字布局查询2026-11-01-复核与实现)与[研究记录](research.md#剧情点与基本布局推进2026-11-01)。
 
 2026-11-01 M3 登记时：455条 `Inherited`、25条 `Reviewed`、3条 `ContractEquivalent`、164条旧 `Presumed`、65条 `Unreviewed` 和264条 `NoOp`。三条契约来源为 `0x2008`、`0x2009`、`0x2087`，见 [M2 审计](contract-m2.md#global-pilot)及 [M3 迁移与回归](../../design/command-contracts-m3.md)。旧推定现已默认停止：严格 runner 在步骤24、`start.ps3 / 0x76 / 0x2092` 停下；显式 `--allow-presumed` 可重现下述历史 `0x22b2` 停点。该路线没有执行新增三条契约命令，不增加游戏验证范围。
