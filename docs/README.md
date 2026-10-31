@@ -18,6 +18,7 @@
 | [契约 M1 提取与证据](design/command-contracts-m1.md) | x64 case 符号执行、字段映射、原 exe 绑定、离线双边报告；未接入闸门 |
 | [契约 M2 进展](design/command-contracts-m2.md) | 进行中：全局与下标区域、指针空检查、未定义路径、栈保护、映射候选 |
 | [分派层设计草案](design/dispatch.md) | 证据层、opcode 分派表、处理函数接口与迁移阶段 |
+| [通用游戏探针设计草案](design/probe.md) | 草案：与游戏无关的整机检查（路线、输入、页面、存读档、设置、确定性）、判定等级与分阶段计划 |
 
 ## 格式与后端
 
