@@ -157,21 +157,9 @@ impl Effect {
 }
 
 fn enabled_buttons(page: &PageSignature, session: &Session<'_>) -> Vec<(usize, usize)> {
-    page.groups
-        .iter()
-        .flat_map(|g| {
-            let group = session.startup().buttons().group(g.slot);
-            group
-                .map(|grp| {
-                    grp.buttons
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, b)| b.enabled)
-                        .map(|(i, _)| (g.slot, i))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
-        })
+    crate::controls::enabled(session.startup())
+        .into_iter()
+        .filter(|(slot, _)| page.groups.iter().any(|g| g.slot == *slot))
         .collect()
 }
 

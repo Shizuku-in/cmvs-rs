@@ -78,7 +78,15 @@ impl Place {
             // the group layout of a page does not.
             Self::Page(p) => {
                 let groups: Vec<_> = p.groups.iter().map(|g| (g.slot, g.buttons)).collect();
-                format!("page {} {groups:?}", p.script.escape_ascii())
+                // List visibility changes while scrolling or switching categories.
+                // Keep those states distinct so their newly visible controls are tried.
+                let lists: Vec<_> = p
+                    .groups
+                    .iter()
+                    .filter(|g| g.slot >= cmvs_core::buttons::BUTTON_GROUPS)
+                    .map(|g| (g.slot, g.layout))
+                    .collect();
+                format!("page {} {groups:?} {lists:?}", p.script.escape_ascii())
             }
             Self::Wait(w) => format!("wait {} {:x} {}", w.script, w.pc, w.text),
         }
@@ -223,15 +231,9 @@ struct Graph {
 }
 
 fn actions_at(session: &Session<'_>) -> Vec<Step> {
-    let mut steps: Vec<Step> = (0..cmvs_core::buttons::BUTTON_GROUPS)
-        .filter_map(|g| session.startup().buttons().group(g).map(|grp| (g, grp)))
-        .flat_map(|(g, grp)| {
-            grp.buttons
-                .iter()
-                .enumerate()
-                .filter(|(_, b)| b.enabled)
-                .map(move |(i, _)| Step::Press(g, i))
-        })
+    let mut steps: Vec<Step> = crate::controls::enabled(session.startup())
+        .into_iter()
+        .map(|(g, b)| Step::Press(g, b))
         .collect();
     if steps.len() > MAX_BUTTONS {
         let total = steps.len();

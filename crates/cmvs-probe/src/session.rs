@@ -314,7 +314,14 @@ impl<'a> Session<'a> {
             .count();
         let groups = (0..cmvs_core::buttons::BUTTON_GROUPS)
             .filter(|&g| run.buttons().group(g).is_some())
-            .count();
+            .count()
+            + (cmvs_core::buttons::BUTTON_GROUPS..crate::controls::GROUPS)
+                .filter(|&g| {
+                    run.buttons()
+                        .list_group(g - cmvs_core::buttons::BUTTON_GROUPS)
+                        .is_some()
+                })
+                .count();
         let sequences = run.sequence().entries().iter().flatten().count();
         let history = run.history().entries().len();
         [objects, channels, groups, sequences, history]
@@ -322,11 +329,8 @@ impl<'a> Session<'a> {
     /// Queues an action; it takes effect over the next frames.
     pub fn act(&mut self, action: Action) -> Result<(), String> {
         if let (Device::Keyboard, Action::Press { group, button }) = (self.device, action) {
-            let present = self
-                .run
-                .buttons()
-                .group(group)
-                .is_some_and(|g| button < g.buttons.len());
+            let present =
+                crate::controls::group(&self.run, group).is_some_and(|g| button < g.buttons.len());
             if !present {
                 return Err(format!("button {group}:{button} is not present"));
             }
@@ -337,13 +341,8 @@ impl<'a> Session<'a> {
             self.navigation = Some((group, button, 0));
             return Ok(());
         }
-        let buttons = self.run.buttons();
         let frames = self.device.frames(action, &self.bindings, |g, b| {
-            let button = buttons.group(g)?.buttons.get(b)?;
-            Some([
-                button.rect[0] + button.rect[2] / 2,
-                button.rect[1] + button.rect[3] / 2,
-            ])
+            crate::controls::group(&self.run, g)?.point(b)
         })?;
         self.event(
             "action",
@@ -456,7 +455,7 @@ impl<'a> Session<'a> {
         if !self.queue.is_empty() {
             return Ok(());
         }
-        let Some(buttons) = self.run.buttons().group(group) else {
+        let Some(buttons) = crate::controls::group(&self.run, group) else {
             self.navigation = None;
             return Err(self.stop(Stop::Error(format!(
                 "keyboard navigation lost button group {group}"

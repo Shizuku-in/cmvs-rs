@@ -32,23 +32,30 @@ pub struct PageSignature {
 
 impl PageSignature {
     pub fn of(run: &Startup<'_>) -> Self {
-        let groups = (0..BUTTON_GROUPS)
+        let groups = (0..crate::controls::GROUPS)
             .filter_map(|slot| {
-                let group = run.buttons().group(slot)?;
+                let group = crate::controls::group(run, slot)?;
                 if group.buttons.is_empty() {
                     return None;
                 }
                 let mut layout = Sha256::new();
-                for button in &group.buttons {
-                    for v in button.rect {
+                if slot >= BUTTON_GROUPS {
+                    // A list may remain allocated behind its image viewer. Distinguish
+                    // polling contexts without using any game-specific address.
+                    layout.update(&(run.machine().pc() as u64).to_le_bytes());
+                }
+                for (index, button) in group.buttons.iter().enumerate() {
+                    for v in group.rect(index).unwrap_or(button.rect) {
                         layout.update(&v.div_euclid(RECT_GRID).to_le_bytes());
                     }
-                    layout.update(&[u8::from(button.enabled)]);
+                    layout.update(&[u8::from(group.enabled(index))]);
                 }
                 Some(GroupShape {
                     slot,
                     buttons: group.buttons.len(),
-                    enabled: group.buttons.iter().filter(|b| b.enabled).count(),
+                    enabled: (0..group.buttons.len())
+                        .filter(|&index| group.enabled(index))
+                        .count(),
                     layout: layout.finish(),
                 })
             })
@@ -169,11 +176,14 @@ pub fn state_digest(run: &Startup<'_>) -> String {
     for slot in 0..BUTTON_GROUPS {
         h.update(format!("{:?}", run.buttons().group(slot)).as_bytes());
     }
+    for slot in BUTTON_GROUPS..crate::controls::GROUPS {
+        h.update(format!("{:?}", run.buttons().list_group(slot - BUTTON_GROUPS)).as_bytes());
+    }
     to_hex(&h.finish())
 }
 
-/// Detects a settled page: one with an enabled button, outside message waits and scene
-/// fades, unchanged for `need` consecutive frames.
+/// Detects a settled page: enabled buttons outside pending VM commands and scene fades,
+/// unchanged for `need` consecutive frames.
 #[derive(Debug, Clone)]
 pub struct Settle {
     need: u32,
@@ -194,7 +204,7 @@ impl Settle {
         self.candidate = None;
     }
     pub fn feed(&mut self, o: &Observation) -> Option<&PageSignature> {
-        let interactive = o.page.interactive() && !o.waiting_for_advance() && !o.transition;
+        let interactive = o.page.interactive() && o.pending.is_none() && !o.transition;
         if interactive && self.candidate.as_ref() == Some(&o.page) {
             self.frames += 1;
         } else {
@@ -260,6 +270,7 @@ mod tests {
         for interrupt in [
             observation(4, 4, None, true),
             observation(4, 4, Some(MESSAGE_WAIT), false),
+            observation(4, 4, Some(0x224), false),
             observation(5, 5, None, false),
         ] {
             settle.feed(&interrupt);

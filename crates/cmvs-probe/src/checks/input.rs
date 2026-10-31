@@ -335,16 +335,7 @@ pub fn random_input(runner: &Runner<'_>) -> CheckResult {
     let from = at.session.yields();
     while at.session.yields() - from < MONKEY_FRAMES {
         if !at.session.busy() && (at.session.yields() - from).is_multiple_of(MONKEY_STEP) {
-            let buttons: Vec<(usize, usize)> = (0..cmvs_core::buttons::BUTTON_GROUPS)
-                .filter_map(|g| at.session.startup().buttons().group(g).map(|grp| (g, grp)))
-                .flat_map(|(g, grp)| {
-                    grp.buttons
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, b)| b.enabled)
-                        .map(move |(i, _)| (g, i))
-                })
-                .collect();
+            let buttons = crate::controls::enabled(at.session.startup());
             let pick = next() % 5;
             let (name, action) = match pick {
                 0 if !buttons.is_empty() => {

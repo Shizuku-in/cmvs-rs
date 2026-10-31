@@ -308,14 +308,14 @@ impl Scenario {
                     }
                 }
                 let shape = self.pending[0].clone();
-                let Some(group) = session.startup().buttons().group(shape.slot) else {
+                let Some(group) = crate::controls::group(session.startup(), shape.slot) else {
                     return Err(Stop::Error("choice group vanished".into()));
                 };
                 let enabled = group
                     .buttons
                     .iter()
                     .enumerate()
-                    .filter(|(_, b)| b.enabled)
+                    .filter(|(i, _)| group.enabled(*i))
                     .map(|(i, _)| i)
                     .collect();
                 let buttons = group.buttons.len();
