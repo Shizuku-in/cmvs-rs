@@ -62,12 +62,30 @@ impl<'t> Runner<'t> {
     /// A new session in a fresh user directory. With `seed`, the directory starts with
     /// that system save; without it the engine falls back to the game's own template.
     pub fn session(&self, label: &str, seed: Option<&[u8]>) -> Result<Session<'t>, String> {
-        let n = self.count.get();
-        self.count.set(n + 1);
-        let user = self.out.join("users").join(format!("{n:03}-{label}"));
-        fs::create_dir_all(&user).map_err(|e| e.to_string())?;
-        if let Some(seed) = seed {
-            fs::write(user.join(SYSTEM_SAVE), seed).map_err(|e| e.to_string())?;
+        let files: Vec<(&str, &[u8])> = seed.map(|s| (SYSTEM_SAVE, s)).into_iter().collect();
+        self.session_with(label, &files)
+    }
+    /// A new session whose fresh user directory first receives `files` (name, bytes).
+    pub fn session_with(
+        &self,
+        label: &str,
+        files: &[(&str, &[u8])],
+    ) -> Result<Session<'t>, String> {
+        let users = self.out.join("users");
+        fs::create_dir_all(&users).map_err(|e| e.to_string())?;
+        // Several runners may share the output directory; never reuse a user directory.
+        let user = loop {
+            let n = self.count.get();
+            self.count.set(n + 1);
+            let user = users.join(format!("{n:03}-{label}"));
+            match fs::create_dir(&user) {
+                Ok(()) => break user,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e.to_string()),
+            }
+        };
+        for (name, bytes) in files {
+            fs::write(user.join(name), bytes).map_err(|e| e.to_string())?;
         }
         Session::start(self.target, self.script, &user, self.options, self.font)
     }
@@ -658,6 +676,35 @@ pub struct RouteRun {
 
 const TREE_TITLE: &str = "choice tree explored by replay to the start page";
 const ROUNDS_TITLE: &str = "unlock rounds carrying the system save converge";
+
+/// The first start-page button that enters the scenario, pressing buttons in order until
+/// one does. Cheaper than a full survey for checks that only need one way in.
+pub fn scenario_entry(runner: &Runner<'_>, seed: Option<&[u8]>) -> Result<(usize, usize), Outcome> {
+    let fail = |stop: Stop| match stop {
+        Stop::Blocked(b) => Outcome::Blocked(b),
+        other => Outcome::Fail(other.describe()),
+    };
+    let mut session = runner
+        .session("entry-survey", seed)
+        .map_err(Outcome::Fail)?;
+    let start = drive_to_start(&mut session, &mut StartLog::default()).map_err(fail)?;
+    let buttons = enabled_buttons(&start, &session);
+    drop(session);
+    let mut blocked = None;
+    for button in buttons {
+        match try_button(runner, seed, button).map_err(Outcome::Fail)? {
+            Effect::Scenario => return Ok(button),
+            Effect::Stopped(Stop::Blocked(b)) => {
+                blocked.get_or_insert(b);
+            }
+            _ => {}
+        }
+    }
+    Err(blocked.map_or(
+        Outcome::Fail("no start-page button leads to a message wait".into()),
+        Outcome::Blocked,
+    ))
+}
 
 fn survey_failure(id: &'static str, title: &'static str, survey: &Survey) -> CheckResult {
     let outcome = match &survey.blocked {

@@ -1,6 +1,11 @@
 //! All checks. Their report IDs stay the same for every game, so results can be compared
 //! across games.
+pub mod equivalence;
+pub mod input;
+pub mod pages;
+pub mod robustness;
 pub mod route;
+pub mod saves;
 pub mod startup;
 pub mod static_checks;
 
@@ -12,10 +17,108 @@ use crate::{
 };
 use std::{fs, path::Path};
 
-/// Checks implemented so far, in run order.
-pub const IMPLEMENTED: [&str; 8] = ["S1", "S2", "S3", "R1", "D1", "R2", "R3", "R4"];
-/// Checks that run when `--checks` is not given; route exploration is long and opt-in.
+/// Every implemented check in report order, with its one-line description.
+pub const CATALOG: [(&str, &str); 30] = [
+    ("S1", "engine profile, file hashes and capabilities"),
+    (
+        "S2",
+        "all scripts decode with valid labels and jump targets",
+    ),
+    ("S3", "system commands in scripts classified by gate status"),
+    ("R1", "fresh start reaches a stable interactive page"),
+    (
+        "D1",
+        "identical input reproduces the frame trace and final state",
+    ),
+    (
+        "D2",
+        "frame times of 16 and 33 ms pass the same message waits",
+    ),
+    ("D3", "damaged system and gameplay saves fail cleanly"),
+    (
+        "I1",
+        "every input action at a message wait runs without error",
+    ),
+    ("I2", "mouse and keyboard pass the same message waits"),
+    (
+        "I3",
+        "cancel and skip round trips return to the same message wait",
+    ),
+    (
+        "I4",
+        "the backlog opens on wheel up and closes back to the same wait",
+    ),
+    ("I5", "seeded random input keeps the engine running"),
+    (
+        "P1",
+        "every reachable page is traversed from the start page and the scenario",
+    ),
+    (
+        "P2",
+        "leaving a page and coming back restores what was shown",
+    ),
+    ("P3", "quit and return-to-title controls end cleanly"),
+    (
+        "P4",
+        "pages offer no fewer enabled buttons after a cleared route",
+    ),
+    (
+        "C1",
+        "controls that change player-facing settings are found",
+    ),
+    ("C2", "a changed setting survives a restart"),
+    ("C3", "a changed text speed changes how long text takes"),
+    ("C4", "a control restores the settings a page started with"),
+    (
+        "V1",
+        "a save loaded after a restart resumes the same message waits",
+    ),
+    (
+        "V2",
+        "save, load and save again gives the same snapshot bytes",
+    ),
+    (
+        "V3",
+        "reloading in the same session resumes the same message waits",
+    ),
+    (
+        "V4",
+        "overwriting and loading keep the engine's backup slots",
+    ),
+    (
+        "V5",
+        "the system save carries the start page across a restart",
+    ),
+    ("R2", "choice tree explored by replay to the start page"),
+    ("R4", "unlock rounds carrying the system save converge"),
+    (
+        "R3",
+        "executed addresses against statically decoded instructions",
+    ),
+    (
+        "R5",
+        "a second pass with the first pass's system save is no slower",
+    ),
+    ("L1", "live resource counts stay bounded over a whole route"),
+];
+/// Checks that run when `--checks` is not given; everything else plays the scenario and
+/// is opt-in.
 pub const DEFAULT: [&str; 5] = ["S1", "S2", "S3", "R1", "D1"];
+
+pub fn known(id: &str) -> bool {
+    CATALOG.iter().any(|(c, _)| *c == id)
+}
+
+fn title(id: &str) -> &'static str {
+    CATALOG
+        .iter()
+        .find(|(c, _)| *c == id)
+        .map_or("unknown check", |(_, t)| t)
+}
+
+fn skipped(id: &'static str, why: String) -> CheckResult {
+    CheckResult::new(id, title(id), Outcome::Skipped(why))
+}
 
 pub struct Run {
     pub results: Vec<CheckResult>,
@@ -49,12 +152,13 @@ pub fn run(
     } else {
         None
     };
-    let running: Vec<&str> = ["R1", "D1", "R2", "R3", "R4"]
-        .into_iter()
-        .filter(|id| wants(id))
+    let running: Vec<&'static str> = CATALOG
+        .iter()
+        .map(|(id, _)| *id)
+        .filter(|id| !id.starts_with('S') && wants(id))
         .collect();
     if running.is_empty() {
-        return Run { results, events };
+        return finish(results, events);
     }
     let script = match target.missing(&startup::RUN_CAPABILITIES) {
         Some(missing) => Err(format!("missing capability {missing}")),
@@ -66,7 +170,7 @@ pub fn run(
             for id in running {
                 results.push(skipped(id, why.clone()));
             }
-            return Run { results, events };
+            return finish(results, events);
         }
     };
     if wants("R1") || wants("D1") {
@@ -88,14 +192,48 @@ pub fn run(
             results.push(startup::determinism_result(&first, &second));
         }
     }
-    let exploring: Vec<&str> = ["R2", "R4", "R3"]
+    let runner = route::Runner::new(target, &script, options, font, out);
+    if wants("D2") {
+        results.push(equivalence::frame_times(&runner));
+    }
+    if wants("D3") {
+        results.push(robustness::damaged_saves(&runner));
+    }
+    if wants("I1") {
+        results.push(input::actions_at_wait(&runner));
+    }
+    if wants("I2") {
+        results.push(equivalence::devices(&runner));
+    }
+    if wants("I3") {
+        results.push(input::round_trips(&runner));
+    }
+    if wants("I4") {
+        results.push(input::backlog(&runner));
+    }
+    if wants("I5") {
+        results.push(input::random_input(&runner));
+    }
+    let saves: Vec<&str> = ["V1", "V2", "V3", "V4"]
         .into_iter()
         .filter(|id| wants(id))
         .collect();
-    if exploring.is_empty() {
-        return Run { results, events };
+    if !saves.is_empty() {
+        results.extend(saves::gameplay_saves(&runner, &saves));
     }
-    let runner = route::Runner::new(target, &script, options, font, out);
+    let page_checks: Vec<&str> = ["P1", "P2", "P3", "C1", "C2", "C3", "C4"]
+        .into_iter()
+        .filter(|id| wants(id))
+        .collect();
+    if !page_checks.is_empty() {
+        results.extend(pages::pages_and_settings(&runner, &page_checks));
+    }
+    if wants("P4") {
+        results.push(pages::unlocks(&runner));
+    }
+    if wants("V5") {
+        results.push(saves::system_save(&runner));
+    }
     let mut coverage = Coverage::default();
     // Coverage alone still needs routes; the fresh tree is the cheaper source.
     if wants("R2") || (wants("R3") && !wants("R4")) {
@@ -110,21 +248,29 @@ pub fn run(
         events.append(&mut rounds.events);
         results.push(rounds.result);
     }
+    if wants("R5") {
+        results.push(robustness::read_skip(&runner));
+    }
+    if wants("L1") {
+        results.push(robustness::resources(&runner));
+    }
     if wants("R3") {
         results.push(match &inventory {
             Some(inventory) => route::coverage_result(inventory, &coverage, out),
             None => skipped("R3", "script inventory unavailable".into()),
         });
     }
-    Run { results, events }
+    finish(results, events)
 }
 
-fn skipped(id: &'static str, why: String) -> CheckResult {
-    let title = match id {
-        "R1" | "D1" => return startup::skipped(id, why),
-        "R2" => "choice tree explored by replay to the start page",
-        "R4" => "unlock rounds carrying the system save converge",
-        _ => "executed addresses against statically decoded instructions",
+/// Orders results as the catalog lists them.
+fn finish(mut results: Vec<CheckResult>, events: Vec<Json>) -> Run {
+    let order = |id: &str| {
+        CATALOG
+            .iter()
+            .position(|(c, _)| *c == id)
+            .unwrap_or(usize::MAX)
     };
-    CheckResult::new(id, title, Outcome::Skipped(why))
+    results.sort_by_key(|r| order(r.id));
+    Run { results, events }
 }

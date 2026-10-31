@@ -9,25 +9,15 @@ use cmvs_probe::{
 };
 use std::{fs, path::PathBuf, process::ExitCode};
 
-const USAGE: &str = "\
-Usage: cmvs-probe <game-root> --out <new-dir> [options]
+const HEAD: &str = "Usage: cmvs-probe <game-root> --out <new-dir> [options]
 
 Runs game-agnostic checks against a read-only game root and writes summary.json and
 events.jsonl into a new output directory. Exit code 1 when any check fails or is blocked.
 
-Checks (--checks takes a comma-separated list; default S1,S2,S3,R1,D1):
-  S1  identify the engine profile, file hashes and capabilities
-  S2  decode every script and validate labels and jump targets
-  S3  classify the system commands found in scripts by command-gate status
-  R1  from a fresh start, reach a settled start page
-  D1  run R1 twice and compare frame traces and final state (determinism)
-  R2  explore the choice tree; every route starts from the game's own system save
-  R3  compare executed addresses with all decoded instructions; writes coverage.tsv
-  R4  explore in rounds carrying the system save forward until nothing new unlocks
-  R2, R3 and R4 run whole routes and can take hours; they only run when listed.
+Checks (--checks takes a comma-separated list):";
 
-Options:
-  --checks <ids>        checks to run, e.g. S2,R2,R3
+const OPTIONS: &str = "Options:
+  --checks <ids>        checks to run, e.g. S2,R2,R3, or `all`
   --profile <id>        force an engine profile instead of identifying one
   --device <name>       mouse (default) or keyboard input
   --font <file>         font for glyph metrics; --font-index <n> picks a face
@@ -39,6 +29,32 @@ Options:
   --no-route-skip       do not hold the skip key while exploring routes
   --allow-presumed      research only: run legacy presumed commands
   --allow-unreviewed    research only: run unreviewed commands with base semantics";
+
+/// The check list comes from the catalog, so it always matches what can run.
+fn usage() -> String {
+    let mut text = format!(
+        "{HEAD}
+"
+    );
+    for (id, title) in checks::CATALOG {
+        let default = if checks::DEFAULT.contains(&id) {
+            " (default)"
+        } else {
+            ""
+        };
+        text.push_str(&format!(
+            "  {id:<3} {title}{default}
+"
+        ));
+    }
+    text.push_str(
+        "  Checks without (default) play the scenario and can take hours.
+
+",
+    );
+    text.push_str(OPTIONS);
+    text
+}
 
 struct Args {
     root: PathBuf,
@@ -84,13 +100,16 @@ fn parse() -> Result<Args, String> {
             extra => return Err(format!("unexpected argument {extra}")),
         }
     }
-    let checks: Vec<String> =
-        checks.unwrap_or_else(|| checks::DEFAULT.iter().map(|s| s.to_string()).collect());
-    if let Some(unknown) = checks
-        .iter()
-        .find(|c| !checks::IMPLEMENTED.contains(&c.as_str()))
-    {
-        return Err(format!("unknown or unimplemented check {unknown}"));
+    let checks: Vec<String> = match checks {
+        Some(list) if list == ["all"] => checks::CATALOG
+            .iter()
+            .map(|(id, _)| id.to_string())
+            .collect(),
+        Some(list) => list,
+        None => checks::DEFAULT.iter().map(|s| s.to_string()).collect(),
+    };
+    if let Some(unknown) = checks.iter().find(|c| !checks::known(c)) {
+        return Err(format!("unknown check {unknown}"));
     }
     Ok(Args {
         root: root.ok_or("missing game root")?,
@@ -109,7 +128,7 @@ fn main() -> ExitCode {
             if !e.is_empty() {
                 eprintln!("{e}");
             }
-            eprintln!("{USAGE}");
+            eprintln!("{}", usage());
             return ExitCode::from(2);
         }
     };

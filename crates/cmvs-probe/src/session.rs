@@ -262,6 +262,13 @@ impl<'a> Session<'a> {
             .load_slot(slot, &mut self.backend)
             .map_err(|e| e.to_string())
     }
+    /// Writes the user's preferences as a graceful exit does: the system save and cmvs.cfg.
+    pub fn save_preferences(&mut self) -> Result<bool, String> {
+        let display = self.run.display_preferences();
+        self.run
+            .save_preferences(display)
+            .map_err(|e| e.to_string())
+    }
     /// Player-facing settings: text, auto advance, read skip and audio mixer values.
     pub fn settings_fingerprint(&self) -> String {
         format!(

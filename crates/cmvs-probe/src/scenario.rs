@@ -155,6 +155,22 @@ impl Scenario {
     /// Runs frames until the next event.
     pub fn next(&mut self, session: &mut Session<'_>) -> Result<Event, Stop> {
         loop {
+            if let Some(event) = self.next_within(session, u64::MAX)? {
+                return Ok(event);
+            }
+        }
+    }
+    /// Runs at most `frames` frames; `None` when no event happened in that time.
+    pub fn next_within(
+        &mut self,
+        session: &mut Session<'_>,
+        frames: u64,
+    ) -> Result<Option<Event>, Stop> {
+        let from = session.yields();
+        loop {
+            if session.yields() - from >= frames {
+                return Ok(None);
+            }
             let o = session.frame()?;
             if o.waiting_for_advance() {
                 if !self.in_scenario && self.skip && hold_skip(session) {
@@ -167,7 +183,7 @@ impl Scenario {
                 self.quiet_since = o.yields;
                 self.pending.clear();
                 if !session.busy() {
-                    return Ok(Event::Wait(o));
+                    return Ok(Some(Event::Wait(o)));
                 }
                 continue;
             }
@@ -184,7 +200,7 @@ impl Scenario {
                     "route-end",
                     Json::obj([("changed", Json::from(page != self.start))]),
                 );
-                return Ok(Event::End(page));
+                return Ok(Some(Event::End(page)));
             }
             // Inside the start page's script the scenario is ending: wait for the page to
             // settle instead of reporting its buttons as a choice.
@@ -230,12 +246,12 @@ impl Scenario {
                     .map(|(i, _)| i)
                     .collect();
                 let buttons = group.buttons.len();
-                return Ok(Event::Choice(Choice {
+                return Ok(Some(Event::Choice(Choice {
                     observation: o,
                     shape,
                     buttons,
                     enabled,
-                }));
+                })));
             }
             let movie = session.startup().movies().player().is_some();
             if self.pending.is_empty() && !movie && o.yields - self.quiet_since >= NUDGE_FRAMES {
@@ -256,5 +272,112 @@ fn hold_skip(session: &mut Session<'_>) -> bool {
             true
         }
         None => false,
+    }
+}
+
+/// What is visible: the page, the shown scene objects and message windows. Two moments
+/// with the same view look the same to the player.
+pub fn view_digest(session: &Session<'_>, o: &Observation) -> String {
+    let run = session.startup();
+    let objects: Vec<_> = run
+        .scene()
+        .objects()
+        .iter()
+        .filter(|(_, object)| object.shown)
+        .map(|(slot, _)| *slot)
+        .collect();
+    let windows: Vec<bool> = (0..cmvs_core::message::MESSAGE_WINDOWS)
+        .map(|slot| run.messages().window(slot).is_some_and(|w| w.visible))
+        .collect();
+    let text = format!("{} {objects:?} {windows:?}", o.page.digest());
+    cmvs_core::digest::to_hex(&cmvs_core::digest::sha256(text.as_bytes()))[..16].to_owned()
+}
+
+/// Where a message wait stood, and a digest of the newest backlog entry (its text).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WaitPoint {
+    pub script: String,
+    pub pc: usize,
+    pub text: String,
+}
+
+impl WaitPoint {
+    pub fn of(session: &Session<'_>, o: &Observation) -> Self {
+        // Only the entry's strings: its state words may change while the backlog is shown.
+        let newest = session
+            .startup()
+            .history()
+            .entries()
+            .front()
+            .map(|entry| entry.strings.concat());
+        let text =
+            cmvs_core::digest::to_hex(&cmvs_core::digest::sha256(format!("{newest:?}").as_bytes()))
+                [..12]
+                .to_owned();
+        Self {
+            script: o.script.escape_ascii().to_string(),
+            pc: o.pc,
+            text,
+        }
+    }
+    pub fn json(&self) -> Json {
+        Json::obj([
+            ("script", Json::from(self.script.as_str())),
+            ("pc", Json::hex(self.pc as u64)),
+            ("text", self.text.as_str().into()),
+        ])
+    }
+}
+
+/// Follows the scenario for `count` message waits, advancing each and answering every
+/// choice with its first enabled button. Stops early at the end of the scenario.
+pub fn follow(
+    session: &mut Session<'_>,
+    scenario: &mut Scenario,
+    count: usize,
+) -> Result<Vec<WaitPoint>, Stop> {
+    let mut points = Vec::new();
+    while points.len() < count {
+        match scenario.next(session)? {
+            Event::Wait(o) => {
+                points.push(WaitPoint::of(session, &o));
+                if points.len() < count {
+                    scenario.advance(session)?;
+                }
+            }
+            Event::Choice(choice) => {
+                let first = choice.enabled[0];
+                scenario.answer(session, &choice, first)?;
+            }
+            Event::End(_) => break,
+        }
+    }
+    Ok(points)
+}
+
+/// The first index where two wait traces differ, or the shorter length when one is a
+/// prefix of the other; `None` when they are equal.
+pub fn first_difference(a: &[WaitPoint], b: &[WaitPoint]) -> Option<usize> {
+    a.iter()
+        .zip(b)
+        .position(|(x, y)| x != y)
+        .or((a.len() != b.len()).then(|| a.len().min(b.len())))
+}
+
+/// Explains a divergence at `at`: one trace may hold an extra wait there while the rest
+/// matches, which reads differently from a different story.
+pub fn describe_divergence(a: &[WaitPoint], b: &[WaitPoint], at: usize) -> String {
+    let rest_matches = |longer: &[WaitPoint], shorter: &[WaitPoint]| {
+        let tail = longer.get(at + 1..).unwrap_or(&[]);
+        let other = shorter.get(at..).unwrap_or(&[]);
+        let n = tail.len().min(other.len());
+        n > 0 && tail[..n] == other[..n]
+    };
+    if rest_matches(b, a) {
+        format!("the second run has one extra message wait at {at}; the rest matches")
+    } else if rest_matches(a, b) {
+        format!("the first run has one extra message wait at {at}; the rest matches")
+    } else {
+        format!("message wait {at} differs and the traces do not realign")
     }
 }
