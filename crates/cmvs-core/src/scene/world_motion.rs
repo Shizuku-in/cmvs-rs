@@ -1,5 +1,5 @@
 //! Draw state +152, 0x21f9..0x21fd; addresses refer to the documented binary hash.
-//! Linear mode 0, absolute quadratic ease-out mode 1, periodic Y modes 0x38/0x39/0x41 and X mode 0x48.
+//! Linear mode 0, absolute quadratic ease-out mode 1, sine Y modes 0x22/0x31/0x38/0x39/0x41 and X mode 0x48.
 use super::SceneHost;
 use crate::{
     bytecode::DecodeError,
@@ -39,7 +39,8 @@ pub struct WorldMotion {
 
 impl WorldMotion {
     pub(crate) fn supports_mode(mode: u32) -> bool {
-        matches!(mode as u8, 0 | 0x38 | 0x39 | 0x41 | 0x48) || mode as u8 == 1 && mode & 0x8000 == 0
+        matches!(mode as u8, 0 | 0x22 | 0x31 | 0x38 | 0x39 | 0x41 | 0x48)
+            || mode as u8 == 1 && mode & 0x8000 == 0
     }
 
     /// 0x140025530: capture the current coordinates and start at an already validated key.
@@ -63,26 +64,27 @@ impl WorldMotion {
             // cvtsi2ss uses zero-extended rdi/r8, not the decompiler's signed int casts.
             let elapsed = playback.elapsed as f32;
             let duration = key.duration as f32;
-            if matches!(key.mode as u8, 0x38 | 0x39 | 0x41 | 0x48) {
+            if matches!(key.mode as u8, 0x22 | 0x31 | 0x38 | 0x39 | 0x41 | 0x48) {
                 // 0x140025bac -> 0x140025b56: unsigned wrapping product and remainder,
                 // f32 degrees/amplitude; 0x140025310 uses f64 sin then f32 hundredths.
-                // Mode 0x41 is one full Y turn with all high 16 bits as amplitude;
-                // it has no cycle-count nibble. Evidence: chronoclock/vm-semantics.md.
-                let single_y = key.mode as u8 == 0x41;
-                let phase = if single_y {
+                // Modes 0x22/0x31 are the same half-turn Y branch; 0x41 is a full
+                // turn. All three use the full high 16 bits, without a cycle nibble.
+                // Evidence: chronoclock/vm-semantics.md.
+                let single = matches!(key.mode as u8, 0x22 | 0x31 | 0x41);
+                let phase = if single {
                     playback.elapsed % key.duration
                 } else {
                     playback.elapsed.wrapping_mul(key.mode >> 28) % key.duration
                 };
                 // 0x140025c92 -> 0x140025c09 uses full turns for X, half turns for Y.
-                let turn = if single_y || key.mode as u8 == 0x48 {
+                let turn = if matches!(key.mode as u8, 0x41 | 0x48) {
                     360.0
                 } else {
                     180.0
                 };
                 let degrees = (phase as f32 * turn) / duration;
                 let radians = (degrees / 180.0) * std::f32::consts::PI;
-                let amplitude = if single_y {
+                let amplitude = if single {
                     (key.mode >> 16) as f32 / 100.0
                 } else {
                     ((key.mode >> 16) & 0xfff) as f32 / 100.0
