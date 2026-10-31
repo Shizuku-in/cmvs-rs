@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/cmvs-core", "crates/cmvs-audio", "crates/cmvs-desktop", "crates/cmvs-native"]
+members = ["crates/cmvs-core", "crates/cmvs-audio", "crates/cmvs-desktop", "crates/cmvs-native", "crates/cmvs-wgpu"]
 default-members = ["."]
 resolver = "3"
 
@@ -16,6 +16,8 @@ unsafe_code = "forbid"
 all = "warn"
 
 [workspace.dependencies]
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "vulkan", "wgsl"] }
+pollster = "=0.4.0"
 encoding_rs = "=0.8.42"
 ico = "=0.5.0"
 softbuffer = "=0.4.8"
@@ -92,6 +94,7 @@ cmvs-desktop = { path = "crates/cmvs-desktop", optional = true }
 [features]
 default = []
 desktop = ["dep:cmvs-desktop"]
+wgpu-renderer = ["desktop", "cmvs-desktop/wgpu-renderer"]
 audio-output = ["dep:cmvs-audio", "cmvs-desktop?/audio-output"]
 
 [[bin]]

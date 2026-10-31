@@ -67,14 +67,23 @@ pub trait SaveSource {
     fn read_header(&mut self, slot: u16) -> io::Result<Option<Vec<u8>>>;
 }
 
-/// An explicitly selected existing directory; no writes or game-relative path inference.
+/// An explicitly selected directory; no writes or game-relative path inference.
+/// A missing directory represents an empty set of saves on first startup.
 pub struct DirectorySaves {
     root: PathBuf,
 }
 
 impl DirectorySaves {
     pub fn new(root: impl AsRef<Path>) -> io::Result<Self> {
-        let root = root.as_ref().canonicalize()?;
+        let root = match root.as_ref().canonicalize() {
+            Ok(root) => root,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                return Ok(Self {
+                    root: std::path::absolute(root)?,
+                });
+            }
+            Err(e) => return Err(e),
+        };
         if !root.is_dir() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,

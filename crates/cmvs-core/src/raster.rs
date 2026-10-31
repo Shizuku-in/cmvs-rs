@@ -1,13 +1,26 @@
 //! Bounded top-down straight-alpha image, explicit resource-preview compositor and an
 //! uncompressed PNG writer for research frame exports.
 use crate::{FormatError, MAX_PAYLOAD};
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct RgbaImage {
     width: u32,
     height: u32,
     pixels: Vec<u8>,
+    content_digest: std::sync::OnceLock<[u8; 32]>,
 }
+impl PartialEq for RgbaImage {
+    fn eq(&self, other: &Self) -> bool {
+        self.width == other.width && self.height == other.height && self.pixels == other.pixels
+    }
+}
+impl Eq for RgbaImage {}
 impl RgbaImage {
+    /// Lazily hashes immutable pixels once. Cache state is not part of image equality.
+    pub fn content_digest(&self) -> &[u8; 32] {
+        self.content_digest
+            .get_or_init(|| crate::digest::sha256(&self.pixels))
+    }
+
     pub fn new(width: u32, height: u32, pixels: Vec<u8>) -> Result<Self, FormatError> {
         let size = (u64::from(width) * u64::from(height))
             .checked_mul(4)
@@ -19,6 +32,7 @@ impl RgbaImage {
             width,
             height,
             pixels,
+            content_digest: std::sync::OnceLock::new(),
         })
     }
     pub fn width(&self) -> u32 {
@@ -228,4 +242,22 @@ pub fn adler32(bytes: &[u8]) -> u32 {
         b %= 65521;
     }
     (b << 16) | a
+}
+
+#[cfg(test)]
+mod content_digest_tests {
+    use super::*;
+    #[test]
+    fn digest_cache_does_not_change_equality_and_tracks_pixel_content() {
+        let first = RgbaImage::new(1, 1, vec![1, 2, 3, 4]).unwrap();
+        let second = first.clone();
+        assert_eq!(
+            first.content_digest(),
+            &crate::digest::sha256(first.pixels())
+        );
+        assert_eq!(first, second);
+        assert_eq!(first, first.clone());
+        let changed = RgbaImage::new(1, 1, vec![1, 2, 3, 5]).unwrap();
+        assert_ne!(first.content_digest(), changed.content_digest());
+    }
 }

@@ -97,3 +97,9 @@ workspace 各包声明 Rust 1.89+（本机使用 1.96.0），用于标准库 Fil
 ## 引擎档案（2026-10-30）
 
 `cmvs-core` 新增 `digest`（SHA-256）、`exe`（只读 PE 与 switch 定位）和 `profile` 模块，仍无第三方依赖。档案表与游戏记录是生成的元数据，放在 `crates/cmvs-core/profiles/`，以 `include_str!` 内嵌，不含原版代码或素材。根包新增 `cmvs-profile` 二进制（`identify`/`table`/`show`）。默认 664 项、全 workspace 全功能 712 项测试通过，另有 1/2 项默认忽略。
+
+## 可选 GPU 后端
+
+`cmvs-wgpu` 依赖 core、固定 wgpu/pollster，封装设备、纹理缓存、场景合成、窗口呈现和逻辑帧读回；desktop 在 `wgpu-renderer` 下依赖它。根 feature 同名，自动启用 desktop；默认成员与 core 依赖不变。`cargo check --offline --features wgpu-renderer` 检查 GPU 构建，`cargo check --offline -p cmvs-desktop --no-default-features` 检查 CPU-only。全 workspace 全功能测试仍需另显式执行忽略的GPU硬件检查。
+
+锁文件特意把 gpu-allocator 的宽范围 windows 依赖绑定到0.62.2，与 wgpu-hal 一致；cpal 继续使用0.54.0。更新锁文件后应检查 GPU/音频全功能构建，避免宽范围解析把这两套类型错误合并。

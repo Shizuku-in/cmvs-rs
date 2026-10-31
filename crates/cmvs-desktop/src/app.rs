@@ -29,7 +29,17 @@ use winit::{
     window::{Window, WindowId},
 };
 
+#[cfg(feature = "wgpu-renderer")]
+struct GpuDesktop {
+    renderer: cmvs_wgpu::Renderer,
+    presenter: cmvs_wgpu::Presenter,
+    instance: cmvs_wgpu::wgpu::Instance,
+    adapter: cmvs_wgpu::wgpu::Adapter,
+}
 struct App<'a> {
+    use_gpu: bool,
+    #[cfg(feature = "wgpu-renderer")]
+    gpu: Option<GpuDesktop>,
     surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
     context: Option<softbuffer::Context<Arc<Window>>>,
     window: Option<Arc<Window>>,
@@ -46,7 +56,7 @@ struct App<'a> {
     exit_after: Option<Duration>,
     deadline: Option<Instant>,
     preview_image: Option<RgbaImage>,
-    device_frame: Option<RgbaImage>,
+    device_frame: Option<Box<dyn crate::DeviceFrame>>,
     next_frame: Instant,
     last_frame: Instant,
     cursor_clock: Instant,
@@ -75,11 +85,87 @@ impl App<'_> {
         }
         Ok(self.startup.render_frame()?)
     }
+    #[cfg(feature = "wgpu-renderer")]
+    fn gpu_frame(&mut self) -> Result<cmvs_wgpu::GpuFrame, Box<dyn Error>> {
+        let renderer = &mut self.gpu.as_mut().ok_or("GPU is not initialized")?.renderer;
+        if let Some(image) = &self.preview_image {
+            return renderer.preview_image(image);
+        }
+        if let Some(image) = self.startup.movie_frame() {
+            return renderer.render_image(image, [1280, 720], self.render_mode.get() == 1);
+        }
+        let objects = match &mut self.font {
+            Some(font) => font.prepare_objects(self.startup.messages())?,
+            None => Vec::new(),
+        };
+        let mut additional: Vec<_> = objects.iter().collect();
+        if self.font.is_some() {
+            additional.extend(
+                (0..cmvs_core::message::MESSAGE_WINDOWS)
+                    .filter_map(|i| self.startup.messages().window(i))
+                    .filter(|w| w.visible && !w.hidden)
+                    .map(|w| &w.object),
+            );
+        }
+        let frame = cmvs_core::scene_render::prepare_scene(
+            self.startup.scene(),
+            Some(self.startup.camera()),
+            &additional,
+            1280,
+            720,
+        )?;
+        renderer.render(&frame)
+    }
+    #[cfg(feature = "wgpu-renderer")]
+    fn redraw_gpu(&mut self) -> Result<(), Box<dyn Error>> {
+        let window = self.window.as_ref().ok_or("no window")?.clone();
+        let size = window.inner_size();
+        if size.width == 0 || size.height == 0 {
+            return Ok(());
+        }
+        if u64::from(size.width) * u64::from(size.height) > 16 * 1024 * 1024 {
+            return Err("desktop surface exceeds research pixel limit".into());
+        }
+        let frame = self.gpu_frame()?;
+        let gpu = self.gpu.as_mut().ok_or("GPU is not initialized")?;
+        if gpu.presenter.lost {
+            gpu.presenter = cmvs_wgpu::Presenter::new(
+                gpu.instance.create_surface(window.clone())?,
+                &gpu.adapter,
+                &gpu.renderer,
+            )?;
+        }
+        let mode = if self.preview_image.is_some() {
+            1
+        } else {
+            cmvs_core::viewport::presentation_mode(
+                window.fullscreen().is_some(),
+                self.aspect_scaling.get(),
+                self.aspect_mode.get(),
+            )
+        };
+        if gpu.presenter.present(
+            &gpu.renderer,
+            &frame,
+            [size.width, size.height],
+            mode,
+            self.preview_image.is_none() && self.render_mode.get() == 1,
+            self.preview_image.is_some(),
+        )? && self.preview_image.is_none()
+        {
+            self.device_frame = Some(Box::new(frame));
+        }
+        Ok(())
+    }
     fn fail(&mut self, el: &ActiveEventLoop, error: impl std::fmt::Display) {
         self.error = Some(error.to_string());
         el.exit();
     }
     fn redraw(&mut self) -> Result<(), Box<dyn Error>> {
+        #[cfg(feature = "wgpu-renderer")]
+        if self.use_gpu {
+            return self.redraw_gpu();
+        }
         let image = self.frame()?;
         let window = self.window.as_ref().ok_or("no window")?;
         let size = window.inner_size();
@@ -122,7 +208,7 @@ impl App<'_> {
         }
         buffer.present()?;
         if self.preview_image.is_none() {
-            self.device_frame = Some(image);
+            self.device_frame = Some(Box::new(image));
         }
         Ok(())
     }
@@ -147,7 +233,7 @@ impl App<'_> {
             render_mode: &self.render_mode,
             windowed_size: &self.windowed_size,
             fonts: self.font.as_ref(),
-            device_frame: self.device_frame.as_ref(),
+            device_frame: self.device_frame.as_deref(),
         };
         backend.apply(&PlatformRequest::Cursor { id, bitmap })?;
         println!("# preview-only cursor shortcut={id}; VM state unchanged");
@@ -200,10 +286,28 @@ impl ApplicationHandler for App<'_> {
                 window.inner_size()
             };
             self.windowed_size.set([size.width, size.height]);
-            let context = softbuffer::Context::new(window.clone())?;
-            let surface = softbuffer::Surface::new(&context, window.clone())?;
-            self.surface = Some(surface);
-            self.context = Some(context);
+            #[cfg(feature = "wgpu-renderer")]
+            if self.use_gpu {
+                let instance = cmvs_wgpu::wgpu::Instance::new(
+                    cmvs_wgpu::wgpu::InstanceDescriptor::new_without_display_handle().with_env(),
+                );
+                let surface = instance.create_surface(window.clone())?;
+                let (renderer, adapter) = cmvs_wgpu::Renderer::new(&instance, Some(&surface))?;
+                println!("# GPU adapter {:?}", adapter.get_info());
+                let presenter = cmvs_wgpu::Presenter::new(surface, &adapter, &renderer)?;
+                self.gpu = Some(GpuDesktop {
+                    renderer,
+                    presenter,
+                    instance,
+                    adapter,
+                });
+            }
+            if !self.use_gpu {
+                let context = softbuffer::Context::new(window.clone())?;
+                let surface = softbuffer::Surface::new(&context, window.clone())?;
+                self.surface = Some(surface);
+                self.context = Some(context);
+            }
             self.window = Some(window.clone());
             // Startup load (0x140013bf1) applies the same capability fallback as 0x216d.
             let backend = NativeBackend {
@@ -215,7 +319,7 @@ impl ApplicationHandler for App<'_> {
                 render_mode: &self.render_mode,
                 windowed_size: &self.windowed_size,
                 fonts: self.font.as_ref(),
-                device_frame: self.device_frame.as_ref(),
+                device_frame: self.device_frame.as_deref(),
             };
             let mode =
                 cmvs_core::platform::supported_render_mode(&backend, backend.render_mode()?)?;
@@ -411,7 +515,7 @@ impl ApplicationHandler for App<'_> {
                     render_mode: &self.render_mode,
                     windowed_size: &self.windowed_size,
                     fonts: self.font.as_ref(),
-                    device_frame: self.device_frame.as_ref(),
+                    device_frame: self.device_frame.as_deref(),
                 };
                 let had_fade = self.startup.scene().fade().current().is_some();
                 let outcome = self.startup.tick(&mut backend);
@@ -579,6 +683,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut user_data_dir = None;
     let mut rand_seed = 0;
     let mut save_frame = None;
+    let mut use_gpu = false;
     let mut native_audio = false;
     let mut native_input = true;
     let mut record_text = false;
@@ -640,6 +745,15 @@ fn run() -> Result<(), Box<dyn Error>> {
                 Some("record") => false,
                 _ => return Err("input must be native or record".into()),
             };
+        } else if flag == "--renderer" {
+            use_gpu = match value.to_str() {
+                Some("cpu") => false,
+                Some("wgpu") => true,
+                _ => return Err("renderer must be cpu or wgpu".into()),
+            };
+            if use_gpu && !cfg!(feature = "wgpu-renderer") {
+                return Err("--renderer wgpu requires the wgpu-renderer build feature".into());
+            }
         } else if flag == "--audio" {
             native_audio = match value.to_str() {
                 Some("native") => true,
@@ -756,6 +870,9 @@ fn run() -> Result<(), Box<dyn Error>> {
     startup.set_random_seed(rand_seed);
     let display_preferences = startup.display_preferences();
     let mut app = App {
+        use_gpu,
+        #[cfg(feature = "wgpu-renderer")]
+        gpu: None,
         surface: None,
         context: None,
         window: None,
@@ -812,6 +929,13 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
     if let Some(path) = save_frame {
         // Script coordinates before window fitting: exactly what the renderer produced.
+        #[cfg(feature = "wgpu-renderer")]
+        let frame = if app.use_gpu {
+            app.gpu_frame()?.read()?
+        } else {
+            app.frame()?
+        };
+        #[cfg(not(feature = "wgpu-renderer"))]
         let frame = app.frame()?;
         let mut file = OpenOptions::new()
             .write(true)

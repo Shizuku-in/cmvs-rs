@@ -10,6 +10,7 @@ description = "CMVS desktop window, native input adapter and application entry p
 workspace = true
 
 [dependencies]
+cmvs-wgpu = { path = "../cmvs-wgpu", optional = true }
 cmvs-core = { path = "../cmvs-core" }
 cmvs-audio = { path = "../cmvs-audio", optional = true }
 encoding_rs.workspace = true
@@ -22,3 +23,5 @@ cmvs-native = { path = "../cmvs-native" }
 [features]
 default = []
 audio-output = ["dep:cmvs-audio"]
+
+wgpu-renderer = ["dep:cmvs-wgpu"]

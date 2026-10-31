@@ -131,6 +131,22 @@ pub fn cursor_rgba(bitmap: &CursorBitmap) -> Result<Vec<u8>, FormatError> {
     Ok(rgba)
 }
 
+/// A completed logical device frame, read only when the VM requests it.
+pub trait DeviceFrame {
+    fn read(&self) -> Result<cmvs_core::raster::RgbaImage, Box<dyn Error>>;
+}
+impl DeviceFrame for cmvs_core::raster::RgbaImage {
+    fn read(&self) -> Result<cmvs_core::raster::RgbaImage, Box<dyn Error>> {
+        Ok(self.clone())
+    }
+}
+#[cfg(feature = "wgpu-renderer")]
+impl DeviceFrame for cmvs_wgpu::GpuFrame {
+    fn read(&self) -> Result<cmvs_core::raster::RgbaImage, Box<dyn Error>> {
+        self.read()
+    }
+}
+
 pub struct NativeBackend<'a> {
     pub window: &'a Window,
     pub event_loop: &'a ActiveEventLoop,
@@ -143,13 +159,13 @@ pub struct NativeBackend<'a> {
     /// Fonts that glyphs will be drawn with; a chosen face must resolve there.
     pub fonts: Option<&'a crate::font::FontRenderer>,
     /// Last completed logical engine canvas; excludes the physical window's borders.
-    pub device_frame: Option<&'a cmvs_core::raster::RgbaImage>,
+    pub device_frame: Option<&'a dyn DeviceFrame>,
 }
 impl PlatformBackend for NativeBackend<'_> {
     fn read_device_frame(&mut self) -> Result<cmvs_core::raster::RgbaImage, Box<dyn Error>> {
         self.device_frame
-            .cloned()
-            .ok_or_else(|| "native device has no completed frame".into())
+            .ok_or("native device has no completed frame")?
+            .read()
     }
     fn windowed_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
         if self.fullscreen()? {

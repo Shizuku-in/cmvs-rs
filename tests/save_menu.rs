@@ -325,7 +325,12 @@ fn directory_reads_only_selected_slot_prefix_and_never_modifies_files() {
     assert!(source.read_header(1000).is_err());
     assert!(source.read_header(u16::MAX).is_err());
     assert!(DirectorySaves::new(&path).is_err());
-    assert!(DirectorySaves::new(root.join("absent")).is_err());
+    let absent = root.join("absent");
+    let mut empty = DirectorySaves::new(&absent).unwrap();
+    let menu = SaveMenu::scan(&mut empty, 0).unwrap();
+    assert!(menu.slots.iter().all(|slot| *slot == SlotStatus::Missing));
+    assert_eq!(menu.latest, None);
+    assert!(!absent.exists());
     assert_eq!(std::fs::read(&path).unwrap(), data);
     assert_eq!(
         std::fs::read(root.join("system.dat")).unwrap(),

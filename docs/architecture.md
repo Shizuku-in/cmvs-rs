@@ -4,7 +4,7 @@
 
 ## 目标与当前状态
 
-目标是用 Rust 实现 CMVS 全平台支持，先完成平台无关核心，再通过后端接入系统服务。已有无第三方依赖的核心、研究 CLI、Windows 桌面预览与可选音频；其他平台尚未完成构建与行为验证。
+目标是用 Rust 实现 CMVS 全平台支持，先完成平台无关核心，再通过后端接入系统服务。已有无第三方依赖的核心、研究 CLI、Windows 桌面预览、可选 wgpu 渲染与音频；其他平台尚未完成构建与行为验证。
 
 当前仅《アマツツミ》PC 样本建立了真实验证档案。五条结局选择链和 OP 已在显式预览条件下通过记录重放回到标题，鉴赏列表、四页入口、首张 CG 及滚动/惯性已通过记录重放，完整选项与原生输出仍待验证。剧情存读档已接入运行时，游戏内工具栏、存读档画面与回看经自动回调调度可用（字号范围外字形等快照状态仍显式报错），全分支和原生完整路线尚未验证；详细运行条件和证据统一见[游戏档案](games/amatsutsumi/README.md)，原有阶段步数表保留在[开发历史](games/amatsutsumi/history.md#原架构文档中的阶段验证详情)。
 
@@ -15,6 +15,7 @@
 | 包 | 职责 | 依赖边界 |
 |---|---|---|
 | `crates/cmvs-core` | 格式、资源读取、VM、命令语义、场景状态、软件呈现、动作输入与后端契约 | 无第三方依赖；包含基于 `std` 的只读文件适配器，不调用原生窗口或设备 API |
+| `crates/cmvs-wgpu` | 共享队列的 GPU 合成、纹理缓存、呈现及按需读回 | 依赖 core、wgpu、pollster；桌面通过可选 feature 接入 |
 | `crates/cmvs-audio` | Vorbis 解码、原生音频输出、源消费时钟 | 依赖 core、lewton、rodio |
 | `crates/cmvs-desktop` | 窗口、物理输入、字体光栅化与按名解析、帧显示与桌面运行入口 | 依赖 core、winit、softbuffer、ico、encoding_rs、ab_glyph；可选依赖 audio；系统服务经 cmvs-native |
 | `crates/cmvs-native` | 操作系统服务的统一接口（字体对话框、系统字体目录），按平台分模块；工作区唯一的 FFI 包 | raw-window-handle；Windows 上 windows-sys。macOS/iOS/Linux/Android/wasm 预留，返回 Unsupported |
@@ -226,4 +227,4 @@ ProfileSystemSave复用会话锁及同目录临时文件替换，分别管理cmv
 
 桌面 `FontRenderer::prepare_objects` 只生成消息文字与辅助文字的字形对象；调用方须同时把可见消息窗口加入共享队列。现有 `FontRenderer::render` 继续完成这两步并返回 CPU 合成帧，窗口图像仍按引用传递。
 
-这只是 GPU 接入的共享层准备，目前仍只有 CPU 渲染与 softbuffer 显示，尚未提供 wgpu 后端、GPU feature、后端选择或 GPU 读回。不应据此宣称 GPU 加速或新增平台验证。
+可选 `cmvs-wgpu` 消费同一队列完成 GPU 合成、窗口呈现和按需逻辑帧读回。桌面以 `--renderer cpu|wgpu` 选择，默认 CPU；core 无图形依赖。延迟截图保持原核心路径，平台验证范围和资源策略见 [wgpu 后端](backends/wgpu.md)。

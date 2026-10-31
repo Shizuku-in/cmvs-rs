@@ -33,7 +33,7 @@ cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop
 
 ## 独立用户目录
 
-`--user-data-dir` 的目录必须位于原游戏根之外。用户 `system.dat` 优先，缺失时才从原游戏只读引入 CSS1 模板；支持重复保存、`system.bak` 与会话锁。损坏文件明确报错，不自动恢复备份。无 CSS1 模板的首次保存尚不支持。
+`--user-data-dir` 的目录必须位于原游戏根之外。用户 `system.dat` 优先，缺失时才从原游戏只读引入 CSS1 模板；支持重复保存、`system.bak` 与会话锁。损坏文件明确报错，不自动恢复备份。原游戏缺少 `save` 目录时按无存档启动，不创建原游戏目录；无 CSS1 模板时可从完整运行状态首次创建系统存档，写入仍须指定独立用户目录。
 
 单次实验可改用 `--system-save-output "local/amatsutsumi/completed-system.dat"`，只允许游戏目录之外的新文件、拒绝覆盖。该选项与 `--user-data-dir` 互斥。不配置这两种方式时保留 `0x2129` 系统存档写入屏障，剧情存档报错。细节见 [CSS1](../formats/system-save-format.md)。
 
@@ -61,3 +61,7 @@ cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop
 无原版 `system.dat` 模板时，已接入从完整运行状态首次构建CSS1的路径；正常退出须已执行启动系统存档读取（缺失也算完成）。未知变量、损坏存档和读取错误仍显式报错。该新增路径已通过端到端合成回归，尚未进行真实游戏的首次启动/保存/重启实测，见[CSS1说明](../formats/system-save-format.md#无模板首次创建2026-10-31)。
 
 系统页“窗口大小初始化”在窗口模式按需请求1280×720；在全屏模式只更新未来窗口尺寸，切回窗口时请求该尺寸，当前全屏保持不变。该尺寸记录仅存在于当前会话；原生物理尺寸与DPI效果尚未人工复测，不代表整套设置已恢复默认。
+
+## 选择图形后端
+
+桌面默认 `--renderer cpu`。使用 `--features wgpu-renderer` 构建后可显式传入 `--renderer wgpu`，在 GPU 上执行场景合成、影片缩放和窗口呈现；初始化失败明确报错。CPU-only 构建保留原有运行方式。截图、依赖、限制与检查命令见 [wgpu 后端](../backends/wgpu.md)。

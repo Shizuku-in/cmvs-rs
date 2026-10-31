@@ -36,3 +36,7 @@
 `0x2322` 纹理操作常量及公式另参考 Microsoft 的 [D3DTEXTUREOP](https://learn.microsoft.com/en-us/windows/win32/direct3d9/d3dtextureop) 和 [D3DTA](https://learn.microsoft.com/en-us/windows/win32/direct3d9/d3dta) 文档（2026-10-31 读取）。仅用于解释本作二进制中已确认的纹理级状态参数，未复制外部实现或新增依赖；具体地址与边界见本作 VM 语义。
 
 图标/光标格式、音频 API、字体与 Rust 标准库的既有参考链接，以及各阶段未复制外部源码的说明，见[完整来源记录](games/amatsutsumi/references.md)。指令地址绑定[本作二进制 SHA-256](games/amatsutsumi/research.md#二进制身份)，新增游戏另建档案并保留自己的证据，流程见[研究约定](research.md)。
+
+## GPU 后端来源
+
+wgpu 30.0.1（MIT OR Apache-2.0），发布包提交 `40f4a34ebaf56f9a046231f54125ad046239d3f3`，来源 https://github.com/gfx-rs/wgpu 。pollster 0.4.0（MIT OR Apache-2.0），发布包提交 `2864daf5febd81eb33f66cb32b66ca78a9e21db7`，来源 https://github.com/zesterer/pollster 。仅使用公开API，未复制示例或上游实现。版本与校验和固定于 Cargo.lock；新增传递依赖许可登记在 THIRD_PARTY_NOTICES.txt。图形相关语义继续依据现有软件路径与绑定游戏二进制的证据，不把库的行为作为新指令证据。

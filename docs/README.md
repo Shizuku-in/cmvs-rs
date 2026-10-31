@@ -21,7 +21,7 @@
 | 图像 | [PB3 / JBP1](formats/pb3-format.md) |
 | 影片 | [JBPD](formats/jbpd-format.md)、[CMV6/8/9 场景影片](formats/cmv9-format.md) |
 | 存档 | [CSV2](formats/save-format.md)、[CSS1](formats/system-save-format.md)、[引擎快照](formats/snapshot-format.md) |
-| 平台 | [宿主接口](backends/platform-host.md)、[桌面预览](backends/desktop.md) |
+| 平台 | [宿主接口](backends/platform-host.md)、[桌面预览](backends/desktop.md)、[wgpu](backends/wgpu.md) |
 | 输入与输出 | [动作输入](backends/input.md)、[字体](backends/font-output.md)、[原生音频](backends/audio-output.md) |
 
 格式与后端文档描述已实现分支；其中保留的真实样本和阶段验证目前来自《アマツツミ》，不表示所有 CMVS 版本通用。

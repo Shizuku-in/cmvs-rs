@@ -1953,6 +1953,8 @@ fn first_system_save_without_template_writes_reloads_and_survives_restart() {
         }
         commands::command(&mut code, 0x27ff, &[]);
         let root = Root::new(&format!("first-css1-{explicit_write}"), &code, b"\0");
+        // First launch of an untouched game may have no save directory at all.
+        fs::remove_dir(root.0.join("save")).unwrap();
         let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
             "first-css1-{explicit_write}-{}",
             std::process::id()
@@ -1992,6 +1994,7 @@ fn first_system_save_without_template_writes_reloads_and_survives_restart() {
         // Check before the script writes 96 again: this value came from CSS1.
         assert_eq!(resumed.machine().state().integer(2400), Some(96));
         assert!(!root.0.join("save/system.dat").exists());
+        assert!(!root.0.join("save").exists());
         drop(resumed);
         fs::remove_dir_all(directory).unwrap();
     }
