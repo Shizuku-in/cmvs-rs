@@ -7,7 +7,7 @@ use crate::{
 use cmvs_core::{
     MAX_PAYLOAD,
     bytecode::{self, InstructionKind},
-    cpz::Cpz6Index,
+    cpz::ArchiveIndex,
     profile::CommandStatus,
     ps3::Script,
 };
@@ -72,7 +72,7 @@ pub fn identify(target: &Target) -> CheckResult {
 /// a decodable script says nothing about runtime support of its commands.
 pub fn scripts(target: &Target) -> (CheckResult, Option<ScriptInventory>) {
     const TITLE: &str = "all scripts decode with valid labels and jump targets";
-    if let Some(missing) = target.missing(&[cap::FILES, cap::CPZ6]) {
+    if let Some(missing) = target.missing(&[cap::FILES, cap::ARCHIVE]) {
         let skipped = Outcome::Skipped(format!("missing capability {missing}"));
         return (CheckResult::new("S2", TITLE, skipped), None);
     }
@@ -90,7 +90,7 @@ pub fn scripts(target: &Target) -> (CheckResult, Option<ScriptInventory>) {
     let start_name = files.start_name();
     inventory.add(start_name.escape_ascii().to_string(), start);
     let archive = File::open(target.root.join(&files.script_archive)).and_then(|mut file| {
-        let index = Cpz6Index::read(&mut file).map_err(std::io::Error::other)?;
+        let index = ArchiveIndex::read(&mut file).map_err(std::io::Error::other)?;
         Ok((file, index))
     });
     match archive {
@@ -261,7 +261,7 @@ fn resource_header(kind: &str, bytes: &[u8]) -> Result<(), String> {
 /// loose audio and movie files have valid headers.
 pub fn resources(target: &Target) -> CheckResult {
     const TITLE: &str = "resource archives verify and resource headers decode";
-    if let Some(missing) = target.missing(&[cap::FILES, cap::CPZ6]) {
+    if let Some(missing) = target.missing(&[cap::FILES, cap::ARCHIVE]) {
         return CheckResult::new(
             "S4",
             TITLE,
@@ -295,7 +295,7 @@ pub fn resources(target: &Target) -> CheckResult {
             }
             archives += 1;
             let opened = File::open(&path).and_then(|mut file| {
-                let index = Cpz6Index::read(&mut file).map_err(std::io::Error::other)?;
+                let index = ArchiveIndex::read(&mut file).map_err(std::io::Error::other)?;
                 Ok((file, index))
             });
             let (mut file, index) = match opened {

@@ -4,7 +4,7 @@ use cmvs_rs::{
     bootstrap::Bootstrap,
     buttons::ButtonHost,
     camera::CameraHost,
-    cpz::Cpz6Index,
+    cpz::ArchiveIndex,
     effect_objects,
     fade::SkipGate,
     gesture::PointerGesture,
@@ -227,7 +227,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             .to_str()
             .filter(|s| s.is_ascii())
             .ok_or("archive script basename must be ASCII")?;
-        let index = Cpz6Index::read(&mut file)?;
+        let index = ArchiveIndex::read(&mut file)?;
         initial_name = name.as_bytes().to_vec();
         index.read_entry(&mut file, index.find(name.as_bytes())?)?
     } else {

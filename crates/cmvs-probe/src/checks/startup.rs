@@ -11,7 +11,7 @@ use crate::{
 use cmvs_core::{digest::to_hex, ps3::Script, runner::load_start};
 use std::path::Path;
 
-pub const RUN_CAPABILITIES: [&str; 3] = [cap::PROFILE, cap::CPZ6, cap::KEY_CONFIG];
+pub const RUN_CAPABILITIES: [&str; 3] = [cap::PROFILE, cap::ARCHIVE, cap::KEY_CONFIG];
 
 /// Result of driving one fresh session to its first stable interactive page.
 pub struct StartRun {

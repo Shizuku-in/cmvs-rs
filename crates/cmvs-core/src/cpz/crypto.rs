@@ -1,4 +1,4 @@
-//! CPZ6 transforms based on the MIT CMVS-Engine reference; see THIRD_PARTY_NOTICES.
+//! Shared CPZ6/7 cipher primitives.
 pub(super) const TABLE_BYTES: [u8; 96] = [
     0x89, 0xf0, 0x90, 0xcd, 0x82, 0xb7, 0x82, 0xe9, 0x88, 0xab, 0x82, 0xa2, 0x8e, 0x71, 0x82, 0xcd,
     0x83, 0x8a, 0x83, 0x52, 0x82, 0xaa, 0x82, 0xa8, 0x8e, 0x64, 0x92, 0x75, 0x82, 0xab, 0x82, 0xb5,
@@ -12,7 +12,7 @@ fn word(bytes: &[u8]) -> u32 {
     u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
 }
 
-pub(super) fn digest(input: [u32; 4]) -> [u32; 4] {
+fn compress(initial: [u32; 4], block: [u32; 16]) -> [u32; 4] {
     const K: [u32; 64] = [
         0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613,
         0xfd469501, 0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193,
@@ -25,12 +25,7 @@ pub(super) fn digest(input: [u32; 4]) -> [u32; 4] {
         0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb,
         0xeb86d391,
     ];
-    let initial = [0xc74a2b01u32, 0xe7c8ab8f, 0xd8bedc4e, 0x7302a4c5];
     let [mut a, mut b, mut c, mut d] = initial;
-    let mut block = [0u32; 16];
-    block[..4].copy_from_slice(&input);
-    block[4] = 0x80;
-    block[14] = 128;
     for (i, k) in K.into_iter().enumerate() {
         let (f, g, shift) = match i {
             0..=15 => (d ^ (b & (c ^ d)), i, [7, 12, 17, 22][i % 4]),
@@ -49,13 +44,44 @@ pub(super) fn digest(input: [u32; 4]) -> [u32; 4] {
         c = b;
         b = next;
     }
-    let state = [
+    [
         a.wrapping_add(initial[0]),
         b.wrapping_add(initial[1]),
         c.wrapping_add(initial[2]),
         d.wrapping_add(initial[3]),
-    ];
+    ]
+}
+
+fn custom_digest(input: [u32; 4], initial: [u32; 4]) -> [u32; 4] {
+    let mut block = [0; 16];
+    block[..4].copy_from_slice(&input);
+    block[4] = 0x80;
+    block[14] = 128;
+    compress(initial, block)
+}
+
+pub(super) fn digest(input: [u32; 4]) -> [u32; 4] {
+    let state = custom_digest(input, [0xc74a2b01, 0xe7c8ab8f, 0xd8bedc4e, 0x7302a4c5]);
     [state[3], state[1], state[2], state[0]]
+}
+
+/// Standard MD5 for CPZ7 encrypted index integrity (not key derivation).
+pub(super) fn md5(bytes: &[u8]) -> [u8; 16] {
+    let mut state = [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476];
+    let (blocks, tail) = bytes.as_chunks::<64>();
+    for block in blocks {
+        state = compress(state, std::array::from_fn(|i| word(&block[i * 4..])));
+    }
+    let mut padding = [0u8; 128];
+    padding[..tail.len()].copy_from_slice(tail);
+    padding[tail.len()] = 0x80;
+    let length = if tail.len() < 56 { 64 } else { 128 };
+    padding[length - 8..length]
+        .copy_from_slice(&(bytes.len() as u64).wrapping_mul(8).to_le_bytes());
+    for block in padding[..length].as_chunks::<64>().0 {
+        state = compress(state, std::array::from_fn(|i| word(&block[i * 4..])));
+    }
+    std::array::from_fn(|i| state[i / 4].to_le_bytes()[i % 4])
 }
 
 #[derive(Debug, Clone)]
@@ -86,6 +112,20 @@ impl Keys {
                 .wrapping_add(0x13712765),
             digest: hash,
         }
+    }
+    /// Key derivation parameters verified against AOITORI.
+    pub fn from_header_v7(header: &[u8]) -> Self {
+        let mut keys = Self::from_header(header);
+        let masks = [0x43de7c1a, 0xcc65f416, 0xd016a93d, 0x97a3ba9b];
+        let input = std::array::from_fn(|i| word(&header[32 + 4 * i..]) ^ masks[i]);
+        let state = custom_digest(input, [0xc74a2b02, 0xe7c8ab8f, 0x38bebc4e, 0x7531a4c3]);
+        keys.digest = [
+            state[2] ^ 0x53a76d2e,
+            state[1].wrapping_add(0x5bb17fda),
+            state[0].wrapping_add(0x6853e14d),
+            state[3] ^ 0xf5c6a9a3,
+        ];
+        keys
     }
     pub fn directory_key(&self) -> [u32; 4] {
         [
@@ -205,5 +245,40 @@ pub(super) fn resource(bytes: &mut [u8], keys: &Keys, seed: u32) {
     let tail = bytes.len() / 4 * 4;
     for byte in &mut bytes[tail..] {
         *byte = table[(*byte ^ 0xae) as usize];
+    }
+}
+
+/// 0x140062fc0: wrapping sum of little-endian u32 words, then of the tail bytes, from 0x5a902b7c.
+pub fn data_checksum(bytes: &[u8]) -> u32 {
+    let (words, remainder) = bytes.as_chunks::<4>();
+    let sum = words.iter().fold(0x5a902b7c_u32, |sum, word| {
+        sum.wrapping_add(u32::from_le_bytes(*word))
+    });
+    remainder
+        .iter()
+        .fold(sum, |sum, &byte| sum.wrapping_add(u32::from(byte)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::md5;
+
+    #[test]
+    fn standard_md5_matches_independent_vectors_across_padding_boundaries() {
+        // Python hashlib outputs, including one- and two-block padding cases.
+        for (bytes, expected) in [
+            (Vec::new(), "d41d8cd98f00b204e9800998ecf8427e"),
+            (b"abc".to_vec(), "900150983cd24fb0d6963f7d28e17f72"),
+            (vec![b'a'; 55], "ef1772b6dff9a122358552954ad0df65"),
+            (vec![b'a'; 56], "3b0c8ac703f828b04c6c197006d17218"),
+            (vec![b'a'; 64], "014842d480b571495a4a0363793f7367"),
+            (vec![b'a'; 1000], "cabe45dcc9ae5b66ba86600cca6b8ba8"),
+        ] {
+            let actual: String = md5(&bytes)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            assert_eq!(actual, expected);
+        }
     }
 }

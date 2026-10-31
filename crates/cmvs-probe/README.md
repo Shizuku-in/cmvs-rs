@@ -4,7 +4,7 @@
 
 主要职责：
 
-- 通过档案层识别构建，把构建差异表示为能力集合（如 `archive:cpz6`、`key-config`、`snapshot-layout`）；缺少能力的检查记为 `skipped`。
+- 通过档案层识别构建，把构建差异表示为能力集合（如 `archive:readable`、`key-config`、`snapshot-layout`）；缺少能力的检查记为 `skipped`。
 - 在隔离用户目录中，用固定种子和虚拟帧时间运行 `Startup`；输入以抽象动作发出，由鼠标或键盘设备翻译。
 - 只用引擎层观察量（消息等待、按钮组、场景渐变、摘要值）判断状态，代码中不出现游戏身份、脚本名或脚本地址；`tests/no_game_constants.rs` 检查这条规则。
 - 输出 `summary.json` 与 `events.jsonl`，每个结果注明达到的判定等级（L0/L1/L2）。

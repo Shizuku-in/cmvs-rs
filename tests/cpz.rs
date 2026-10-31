@@ -2,6 +2,88 @@ use cmvs_rs::cpz::{CPZ6_HEADER_SIZE, Cpz6Layout};
 use cmvs_rs::cpz::{Cpz6Index, data_checksum, lookup_key};
 use std::io::Cursor;
 
+#[test]
+fn archive_dispatch_distinguishes_unsupported_unknown_and_truncated_inputs() {
+    use cmvs_rs::cpz::{ArchiveError, ArchiveIndex, ArchiveLayout, ArchiveVersion};
+
+    for (signature, version) in [
+        (b"CPZ1", ArchiveVersion::Cpz1),
+        (b"CPZ2", ArchiveVersion::Cpz2),
+        (b"CPZ3", ArchiveVersion::Cpz3),
+        (b"CPZ5", ArchiveVersion::Cpz5),
+    ] {
+        assert_eq!(ArchiveVersion::detect(signature).unwrap(), version);
+        assert!(matches!(
+            ArchiveIndex::read(&mut Cursor::new(signature)),
+            Err(ArchiveError::UnsupportedVersion(v)) if v == version
+        ));
+        assert!(matches!(
+            ArchiveLayout::read(&mut Cursor::new(signature)),
+            Err(ArchiveError::UnsupportedVersion(v)) if v == version
+        ));
+    }
+    assert!(matches!(
+        ArchiveIndex::read(&mut Cursor::new(b"CPZ4")),
+        Err(ArchiveError::UnknownSignature(signature)) if &signature == b"CPZ4"
+    ));
+    let bytes = vector(0);
+    for length in 0..bytes.len() {
+        assert!(ArchiveIndex::read(&mut Cursor::new(&bytes[..length])).is_err());
+    }
+    let mut malformed = header(2, 24, 200).to_vec();
+    malformed.resize(1000, 0);
+    assert!(matches!(
+        ArchiveIndex::read(&mut Cursor::new(malformed)),
+        Err(ArchiveError::Format(_))
+    ));
+}
+
+#[test]
+fn archive_dispatch_preserves_cpz6_reads_lookup_and_verification() {
+    use cmvs_rs::cpz::{ArchiveIndex, ArchiveLayout, ArchiveVersion};
+
+    for i in 0..8 {
+        let bytes = vector(i);
+        let mut reader = Cursor::new(bytes.clone());
+        reader.set_position(7);
+        let index = ArchiveIndex::read(&mut reader).unwrap();
+        let direct = Cpz6Index::read(&mut Cursor::new(&bytes)).unwrap();
+        assert_eq!(index.version(), ArchiveVersion::Cpz6);
+        let ArchiveLayout::Cpz6(layout) = ArchiveLayout::read(&mut reader).unwrap() else {
+            panic!("expected CPZ6 layout")
+        };
+        assert_eq!(layout, direct.layout);
+        let name = &index.entries()[0].name;
+        assert_eq!(index.find(name).unwrap(), 0);
+        assert_eq!(index.lookup(&name.to_ascii_uppercase()).unwrap(), Some(0));
+        assert_eq!(
+            index.read_entry(&mut reader, 0).unwrap(),
+            direct.read_entry(&mut Cursor::new(&bytes), 0).unwrap()
+        );
+        assert!(index.read_entry_verified(&mut reader, 0).is_err());
+        assert!(index.read_entry(&mut reader, usize::MAX).is_err());
+        let offset = index.entries()[0].offset as usize;
+        // Synthetic vectors store zero checksums. Adjust the encrypted payload to
+        // match, so this exercises both successful verification and corruption.
+        let mut valid = bytes;
+        let sum = data_checksum(&valid[offset..]);
+        let first = u32::from_le_bytes(valid[offset..offset + 4].try_into().unwrap());
+        valid[offset..offset + 4].copy_from_slice(&first.wrapping_sub(sum).to_le_bytes());
+        let mut valid_reader = Cursor::new(valid.clone());
+        assert_eq!(
+            index.read_entry_verified(&mut valid_reader, 0).unwrap(),
+            index.read_entry(&mut valid_reader, 0).unwrap()
+        );
+        let mut corrupt = valid;
+        corrupt[offset] ^= 1;
+        assert!(
+            index
+                .read_entry_verified(&mut Cursor::new(corrupt), 0)
+                .is_err()
+        );
+    }
+}
+
 fn header(dirs: u32, dir_bytes: u32, file_bytes: u32) -> [u8; CPZ6_HEADER_SIZE] {
     let mut header = [0; CPZ6_HEADER_SIZE];
     header[..4].copy_from_slice(b"CPZ6");

@@ -1,22 +1,22 @@
 use cmvs_rs::{
-    cpz::{CPZ6_HEADER_SIZE, Cpz6Index, Cpz6Layout},
+    cpz::{ArchiveIndex, ArchiveLayout},
     ps3::Script,
 };
 use std::{
     env,
     error::Error,
     fs::{File, OpenOptions},
-    io::{Read, Write},
+    io::Write,
 };
 
 const USAGE: &str = "\
 Usage:
-  cmvs-cpz <archive> [archive ...]                                print each header (64 bytes)
+  cmvs-cpz <archive> [archive ...]                                print each supported archive header
   cmvs-cpz --list <archive>                                       list the index
   cmvs-cpz --script <archive> <ASCII-basename>                    summarise one script
   cmvs-cpz --extract <archive> <ASCII-basename> <new-output-file> extract one entry
 
-Index and entry modes decrypt CPZ6 mode 1; checksums are not verified.";
+Index and entry modes support CPZ6 mode 1 and CPZ7 reference/AOITORI modes 0/1; resource checksums are not verified. CPZ7 header/index integrity is checked.";
 
 fn run() -> Result<(), Box<dyn Error>> {
     let paths: Vec<_> = env::args_os().skip(1).collect();
@@ -39,7 +39,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             return Err("wrong argument count; use --help".into());
         }
         let mut file = File::open(&paths[1])?;
-        let index = Cpz6Index::read(&mut file)?;
+        let index = ArchiveIndex::read(&mut file)?;
         if paths[0] == "--list" {
             for (i, entry) in index.entries().iter().enumerate() {
                 println!(
@@ -89,10 +89,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
     for path in paths {
         let mut file = File::open(&path)?;
-        let length = file.metadata()?.len();
-        let mut header = [0; CPZ6_HEADER_SIZE];
-        file.read_exact(&mut header)?;
-        let layout = Cpz6Layout::parse(&header, length)?;
+        let layout = ArchiveLayout::read(&mut file)?;
         println!("{path:?}: {layout:?}");
     }
     println!("# Metadata only; directory/file indexes and checksums NOT verified");

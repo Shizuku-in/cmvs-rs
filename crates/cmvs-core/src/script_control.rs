@@ -1,6 +1,6 @@
 //! Public script initialization and explicit cross-script control.
 //! No save snapshot, callback scheduling, rendering, or filesystem search policy.
-use crate::{cpz::Cpz6Index, evaluate::error, machine::Machine, ps3::Script, vm::SystemResult};
+use crate::{cpz::ArchiveIndex, evaluate::error, machine::Machine, ps3::Script, vm::SystemResult};
 use std::{
     collections::BTreeMap,
     error::Error,
@@ -15,11 +15,11 @@ pub trait ScriptSource {
 
 pub struct ArchiveScripts<R> {
     reader: R,
-    index: Cpz6Index,
+    index: ArchiveIndex,
 }
 impl<R: Read + Seek> ArchiveScripts<R> {
     pub fn new(mut reader: R) -> Result<Self, LoadError> {
-        let index = Cpz6Index::read(&mut reader)?;
+        let index = ArchiveIndex::read(&mut reader)?;
         Ok(Self { reader, index })
     }
 }

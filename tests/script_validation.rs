@@ -4,7 +4,7 @@ mod script_validation;
 #[path = "support/bytecode.rs"]
 mod synthetic;
 
-use cmvs_rs::{MAX_PAYLOAD, cpz::Cpz6Index, ps3::Script};
+use cmvs_rs::{MAX_PAYLOAD, cpz::ArchiveIndex, ps3::Script};
 use std::{
     error::Error,
     fs::{File, OpenOptions},
@@ -106,7 +106,7 @@ fn check_input(
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("cpz"))
     {
-        let index = Cpz6Index::read(&mut file)?;
+        let index = ArchiveIndex::read(&mut file)?;
         for (i, entry) in index.entries().iter().enumerate() {
             let name = entry.name.escape_ascii().to_string();
             if !entry.name.to_ascii_lowercase().ends_with(b".ps3") {

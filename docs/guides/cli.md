@@ -49,7 +49,7 @@ cargo run --offline --bin cmvs-pb3 -- "<PB3 文件>" --rgba "<新输出文件>"
 cargo run --offline --bin cmvs-cmv -- "<游戏目录>/data/video/op.cmv"
 ```
 
-`cmvs-cpz` 支持当前 CPZ6 模式 1，默认检查头部，`--list` 解析索引；CLI 读取不验证资源校验值，运行时图像读取会验证。PB3 的导出为顶向下 RGBA；CUR 的可选 `--planes <新文件>` 导出 AND/XOR 平面，不是 RGBA。具体布局和限制见[格式目录](../README.md)。
+`cmvs-cpz` 支持 CPZ6 模式 1 和 CPZ7 的 AOITORI 变体（资源模式 0/1）；默认检查头部，`--list` 列目录。CPZ7 始终验证头部及索引，CLI 提取不验证资源校验值。PB3 的导出为顶向下 RGBA；CUR 的可选 `--planes <新文件>` 导出 AND/XOR 平面，不是 RGBA。具体布局和限制见[格式目录](../README.md)。
 
 ## 存档
 
@@ -90,4 +90,4 @@ python -I tools/probe_matrix.py "<输出目录1>" "<输出目录2>" --markdown
 
 ## 外部样本审计
 
-可复用的脚本结构测试适配器接受独立 PS2A 与 CPZ6 输入，默认忽略，需显式设置输入路径。当前完整命令、报告协议及边界见[脚本审计方法](../games/amatsutsumi/script-audit.md#重复运行)。测试本身只保存合成数据，真实输入与元数据报告按游戏分开归档。
+可复用的脚本结构测试适配器接受独立 PS2A 与受支持的 CPZ6/CPZ7 输入，默认忽略，需显式设置输入路径。当前完整命令、报告协议及边界见[脚本审计方法](../games/amatsutsumi/script-audit.md#重复运行)。测试本身只保存合成数据，真实输入与元数据报告按游戏分开归档。

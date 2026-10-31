@@ -1,13 +1,12 @@
 //! Bounded CPZ6 layout, index and resource decoding. Header and index digests are not
 //! verified; resource checksums only through `read_entry_verified`.
 //! Header XOR fields follow xmoezzz/CMVS-Engine, pinned in docs/references.md.
+use super::{ArchiveError, Entry, crypto, data_checksum};
 use crate::FormatError;
 use std::{
-    fmt,
     io::{Read, Seek, SeekFrom},
     sync::Arc,
 };
-mod crypto;
 
 pub const CPZ6_HEADER_SIZE: usize = 64;
 
@@ -21,47 +20,12 @@ pub struct Cpz6Layout {
     pub data_bytes: u64,
 }
 
-#[derive(Debug)]
-pub enum ArchiveError {
-    Io(std::io::Error),
-    Format(FormatError),
-}
-impl fmt::Display for ArchiveError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Io(e) => e.fmt(f),
-            Self::Format(e) => e.fmt(f),
-        }
-    }
-}
-impl std::error::Error for ArchiveError {}
-impl From<std::io::Error> for ArchiveError {
-    fn from(e: std::io::Error) -> Self {
-        Self::Io(e)
-    }
-}
-impl From<FormatError> for ArchiveError {
-    fn from(e: FormatError) -> Self {
-        Self::Format(e)
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Entry {
-    pub directory: Arc<[u8]>,
-    pub name: Vec<u8>,
-    pub size: u32,
-    pub offset: u64,
-    pub checksum_raw: u32,
-    directory_key: u32,
-    file_key: u32,
-}
-
 /// Parsed index and derived cipher keys. Game resources remain in the caller's reader.
 #[derive(Debug)]
 pub struct Cpz6Index {
     pub layout: Cpz6Layout,
     entries: Vec<Entry>,
+    entry_keys: Vec<(u32, u32)>,
     keys: crypto::Keys,
     file_bytes: u64,
 }
@@ -148,6 +112,7 @@ impl Cpz6Index {
             return Err(FormatError("CPZ6 file index has an unassigned prefix").into());
         }
         let mut entries = Vec::new();
+        let mut entry_keys = Vec::new();
         for (i, dir) in directories.iter().enumerate() {
             let end = directories.get(i + 1).map_or(files.len(), |d| d.offset);
             let block = files
@@ -184,9 +149,8 @@ impl Cpz6Index {
                     size,
                     offset: absolute,
                     checksum_raw: read_u32(rec, 16)?,
-                    directory_key: dir.key,
-                    file_key: read_u32(rec, 20)?,
                 });
+                entry_keys.push((dir.key, read_u32(rec, 20)?));
                 offset += rec.len();
             }
             if offset != block.len() {
@@ -196,6 +160,7 @@ impl Cpz6Index {
         Ok(Self {
             layout,
             entries,
+            entry_keys,
             keys,
             file_bytes,
         })
@@ -234,8 +199,8 @@ impl Cpz6Index {
         reader: &mut R,
         index: usize,
     ) -> Result<Vec<u8>, ArchiveError> {
-        let (entry, mut bytes) = self.read_raw(reader, index)?;
-        self.decrypt(entry, &mut bytes);
+        let (_, mut bytes) = self.read_raw(reader, index)?;
+        self.decrypt(index, &mut bytes);
         Ok(bytes)
     }
 
@@ -250,7 +215,7 @@ impl Cpz6Index {
         if data_checksum(&bytes) != entry.checksum_raw {
             return Err(FormatError("CPZ6 resource checksum mismatch").into());
         }
-        self.decrypt(entry, &mut bytes);
+        self.decrypt(index, &mut bytes);
         Ok(bytes)
     }
 
@@ -279,9 +244,10 @@ impl Cpz6Index {
         Ok((entry, bytes))
     }
 
-    fn decrypt(&self, entry: &Entry, bytes: &mut [u8]) {
+    fn decrypt(&self, index: usize, bytes: &mut [u8]) {
+        let (directory_key, file_key) = self.entry_keys[index];
         let seed = self.keys.seed
-            ^ (self.keys.key ^ entry.directory_key.wrapping_add(entry.file_key))
+            ^ (self.keys.key ^ directory_key.wrapping_add(file_key))
                 .wrapping_add(self.layout.directory_count)
                 .wrapping_add(0xa3d61785);
         crypto::resource(bytes, &self.keys, seed);
@@ -307,17 +273,6 @@ pub fn lookup_key(name: &[u8]) -> Result<Vec<u8>, FormatError> {
         }
     }
     Ok(key)
-}
-
-/// 0x140062fc0: wrapping sum of little-endian u32 words, then of the tail bytes, from 0x5a902b7c.
-pub fn data_checksum(bytes: &[u8]) -> u32 {
-    let (words, remainder) = bytes.as_chunks::<4>();
-    let sum = words.iter().fold(0x5a902b7c_u32, |sum, word| {
-        sum.wrapping_add(u32::from_le_bytes(*word))
-    });
-    remainder
-        .iter()
-        .fold(sum, |sum, &byte| sum.wrapping_add(u32::from(byte)))
 }
 
 impl Cpz6Layout {

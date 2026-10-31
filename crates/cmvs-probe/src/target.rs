@@ -2,7 +2,7 @@
 //! here names a game; differences between builds are capabilities.
 use crate::json::Json;
 use cmvs_core::{
-    cpz::Cpz6Index,
+    cpz::{ArchiveIndex, ArchiveVersion},
     digest::{sha256_reader, to_hex},
     input::KeyBindings,
     profile::{Evidence, Game, GameFiles, Registry},
@@ -22,8 +22,11 @@ pub mod cap {
     pub const PROFILE: &str = "profile";
     /// The data matched a registered game record.
     pub const RECORD: &str = "record";
-    /// The script archive opens as CPZ6, the only archive the runtime reads.
+    /// The script archive opens with a supported decoder.
+    pub const ARCHIVE: &str = "archive:readable";
+    /// The successfully opened script archive uses CPZ6.
     pub const CPZ6: &str = "archive:cpz6";
+    pub const CPZ7: &str = "archive:cpz7";
     /// The root `key.cfg` parses; keyboard input is then derived from it.
     pub const KEY_CONFIG: &str = "key-config";
     /// The game record verifies the startup auto-resume preview policy.
@@ -83,12 +86,20 @@ impl Target {
             None => None,
         };
         if let Some(files) = &files
-            && File::open(root.join(&files.script_archive))
+            && let Some(index) = File::open(root.join(&files.script_archive))
                 .ok()
-                .and_then(|mut f| Cpz6Index::read(&mut f).ok())
-                .is_some()
+                .and_then(|mut f| ArchiveIndex::read(&mut f).ok())
         {
-            capabilities.insert(cap::CPZ6);
+            capabilities.insert(cap::ARCHIVE);
+            match index.version() {
+                ArchiveVersion::Cpz6 => {
+                    capabilities.insert(cap::CPZ6);
+                }
+                ArchiveVersion::Cpz7 => {
+                    capabilities.insert(cap::CPZ7);
+                }
+                _ => {}
+            }
         }
         let key_bindings = fs::read_to_string(root.join("key.cfg"))
             .ok()

@@ -1,7 +1,7 @@
 use crate::game_input::{GameInput, event_key};
 use crate::{DesktopInput, InputEvent, NativeBackend, TextEncoding};
 use cmvs_core::{
-    cpz::Cpz6Index,
+    cpz::ArchiveIndex,
     cursor::CursorBitmap,
     input::KeyBindings,
     pb3,
@@ -58,7 +58,7 @@ Output:
   --font <file>                    preview messages with this OpenType file or collection
   --font-face <index>              face index within --font (default 0)
   --record-text                    record message glyph descriptors and reveal timing only
-  --image-archive <CPZ6> --preview-image <name>
+  --image-archive <CPZ> --preview-image <name>
                                    show one PB3 image instead of the scene
 
 Keys: F1 default cursor, F2..F5 registered cursor previews after a stop, Esc or close exits.
@@ -900,7 +900,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 .filter(|v| v.is_ascii())
                 .ok_or("image basename must be ASCII")?;
             let mut file = File::open(path)?;
-            let index = Cpz6Index::read(&mut file)?;
+            let index = ArchiveIndex::read(&mut file)?;
             let bytes = index.read_entry(&mut file, index.find(name.as_bytes())?)?;
             let image = pb3::decode(&bytes)?;
             println!(

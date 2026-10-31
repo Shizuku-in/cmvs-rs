@@ -261,7 +261,7 @@ profile::check_command(selection, pc, command, allow_unreviewed)?;
 
 - 格式代际按文件签名识别，**与档案无关**。档案和游戏记录只登记预期格式，用于一致性检查。普查已证实两者独立（2022 年构建配 CPZ5）。
 - 已确认需要支持的封包有 4 代。按普查覆盖面排序：CPZ5（11 款，含两款 RE）、CPZ7（4 款）、CPZ6（2 款，已支持）、CPZ3（2 款）。主线仍是《アマツツミ》；排期时可按这个顺序考虑。
-- 目前 `ArchiveScripts` 和 `ResourceArchives` 都写死 CPZ6。由于 4 代封包已经确定存在，开始做第一个非 CPZ6 游戏时，在 `cpz` 模块引入按签名分派的枚举，脚本与资源读取层改为面向它。现在不提前写，以免在没有样本证据时定接口。
+- `ArchiveScripts` 和 `ResourceArchives` 通过 `cpz::ArchiveIndex` 按签名读取；已支持 CPZ6 和 CPZ7 的 AOITORI 变体，其他 CPZ7 变体及 CPZ3/5 尚未支持。
 - PS2A 容器目前看是统一的，不需要分代；若全量脚本检查发现字节码差异，再按构建登记。
 - 识别工具会打印逐项证据，例如"`script.cpz` magic=CPZ5"、"`start.ps2` PS2A"，在摸底时一眼看出格式代际。它也识别 `cvns.exe`/`PSS0`/`CPZ1`/`CPZ2` 等前代特征，报告为"CVNS 家族，未支持"，而不是笼统的"未知游戏"。
 
@@ -282,7 +282,7 @@ profile::check_command(selection, pc, command, allow_unreviewed)?;
 | P1 | **已完成。**`digest`、`exe`、`profile`、闸门、选择流程、CLI 参数、`cmvs-profile`；两张档案表：根档案 `cmvs-20160201`（721 个 `Base`、255 个 `NoOp`），`cmvs-20150405`（712 个 `Unreviewed`、264 个 `NoOp`），两者都登记 x86/x64；路径和常量移入记录 | 《アマツツミ》既有 trace 与重放日志除新增的 `#` 头部行外逐字节一致；CHRONOCLOCK 不加参数时停在第一个未复核命令，加 `--allow-unreviewed` 时复现 2026-10-30 的 `0x2026` 停点；`identify` 对 19 款游戏的输出与第 2 节表格一致 |
 | P2 | **已完成。**IDA导出与标准库比较工具支持x64/x86；CHRONOCLOCK以x64结果登记387条`Inherited`、325条`Unreviewed`，264条`NoOp`；x86独立比较362条匹配，报告单独保留 | 默认trace通过`0x201e`，在`start.ps3 / 0x1a / 0x201f`明确停止；基准百万步日志逐字节一致，见第13节 |
 | P3 | 按需引入`Reviewed`/`Variant`，从P2默认停点人工复核。`0x2026`及少量路径语义已提前实现并有独立证据，但不等于P3完成 | 照常走语义证据流程，不用研究放行代替档案复核 |
-| P4 | 做第一个非 CPZ6 游戏时实现封包代际分派 | 照常走格式验证流程 |
+| P4 | 已实现封包代际分派及 CPZ7 的 AOITORI 变体 | 照常走格式验证流程 |
 | 后续 | 时代锚点的选择与复核，以及锚点间的对照方法 | 另行设计 |
 
 P1 和 P2 只改闸门和元数据，不改任何命令语义。这样主线（《アマツツミ》）的行为由逐字节回归保护。

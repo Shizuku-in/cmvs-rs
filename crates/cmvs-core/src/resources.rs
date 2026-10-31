@@ -1,6 +1,6 @@
 //! Bounded read-only directory/CPZ lookup shared by image and audio backends.
 //! Slot order, case folding, checksums and path confinement follow the existing reader.
-use crate::{MAX_PAYLOAD, cpz::Cpz6Index, platform::resolve_under};
+use crate::{MAX_PAYLOAD, cpz::ArchiveIndex, platform::resolve_under};
 use std::{
     collections::BTreeMap,
     error::Error,
@@ -46,7 +46,7 @@ pub trait ResourceSource {
 struct OpenArchive {
     path: Vec<u8>,
     file: File,
-    index: Cpz6Index,
+    index: ArchiveIndex,
 }
 
 /// Archives open lazily per entry slot. A slot registered again with another path is
@@ -116,7 +116,7 @@ impl ResourceArchives {
                 return Ok(None);
             };
             let mut file = File::open(resolved)?;
-            let index = Cpz6Index::read(&mut file)?;
+            let index = ArchiveIndex::read(&mut file)?;
             self.open.insert(
                 (command, slot),
                 OpenArchive {

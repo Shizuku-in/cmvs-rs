@@ -24,3 +24,9 @@ script decode → single-step execution chain, with no original game instruction
 directory uses a different directory and file key. `cpz6-invalid-offset.hex`
 has a deliberately invalid decrypted resource offset of u64::MAX; it must fail
 before attempting to read or allocate resource bytes.
+
+## Synthetic CPZ7 vectors
+
+`cpz7-*.hex` contain synthetic archives with no game data.
+They cover directory/file keys, duplicate names, unaligned indexes and resources,
+resource modes 0/1, and invalid offsets/sizes. All checksums and index digests are valid.
