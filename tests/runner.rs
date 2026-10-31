@@ -145,14 +145,17 @@ fn runner_legacy_presumed_policy_keeps_pending_state_on_rejection() {
 }
 
 #[test]
-fn derived_command_review_does_not_enable_the_root_gameplay_snapshot_layout() {
+fn unknown_derived_layout_does_not_enable_the_root_gameplay_snapshot_format() {
     let mut code = Vec::new();
     commands::command(&mut code, 0x2000, &[]);
     let root = Root::new("derived-snapshot-layout", &code, b"");
     let registry = Registry::builtin();
-    let game = registry
+    let mut game = registry
         .identify_game(&root.0, Some("cmvs-20150405"))
         .unwrap();
+    let mut unsupported = game.selection.profile.clone();
+    unsupported.id = "synthetic-unsupported-derived".into();
+    game.selection.profile = &unsupported;
     let script = root.script();
     let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
     let pc = run.machine().pc();
@@ -175,13 +178,16 @@ fn derived_command_review_does_not_enable_the_root_gameplay_snapshot_layout() {
 }
 
 #[test]
-fn reviewed_derived_scenario_point_keeps_the_capture_format_barrier() {
+fn reviewed_unknown_derived_scenario_point_keeps_the_capture_format_barrier() {
     let mut code = Vec::new();
     commands::command(&mut code, 0x22b2, &[]);
     let root = Root::new("derived-scenario-point", &code, b"");
-    let game = Registry::builtin()
+    let mut game = Registry::builtin()
         .identify_game(&root.0, Some("cmvs-20150405"))
         .unwrap();
+    let mut unsupported = game.selection.profile.clone();
+    unsupported.id = "synthetic-unsupported-derived".into();
+    game.selection.profile = &unsupported;
     let script = root.script();
     let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
     let mut backend = RecordingBackend::default();

@@ -4,7 +4,7 @@
 
 证据限于 research.md 中 SHA-256 标识的 cmvs64.exe。写入函数 0x140069270，读取恢复函数 0x140069fd0。
 
-命令状态继承不代表快照格式继承。当前runner仅允许根档案生成或恢复此布局；派生档案显式报格式未实现，仍可选择快照屏障或无快照运行。本次已确认的旧构建子记录差异及限制见[CHRONOCLOCK 0x2080复核](../games/chronoclock/vm-semantics.md#主脚本切换与快照请求-0x20802026-10-31-复核)。
+命令状态继承不代表快照格式继承。默认 `EngineSnapshot::decode/encode` 使用本文的文字v3布局；`decode_with_layout/encode_with_layout` 可显式选择文字v2。runner对独立核对的 `cmvs-20150405` 选择v2，其余未知派生档案仍报格式未实现。v2省略文字记录的208字节禁则块，不支持扩展禁则状态；公共图像及活动场景效果的未支持子记录继续拒绝。格式证据与真实存读档范围见[CHRONOCLOCK v2支持](../games/chronoclock/vm-semantics.md#剧情快照文字v2布局2026-11-01)。
 
 ## 何时生成、由谁消费
 

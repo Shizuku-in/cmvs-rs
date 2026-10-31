@@ -1,5 +1,15 @@
 # CHRONOCLOCK 研究记录
 
+## 2026-11-01：剧情存档v2与恢复流程
+
+按独立核对的文字v2子记录启用本作受支持的快照布局，详见[语义证据](vm-semantics.md#剧情快照文字v2布局2026-11-01)。保留未知派生布局、特殊图像及活动场景效果等错误边界，不改变命令闸门与研究放行策略。默认离线API仍使用基准v3，调用方须显式选择v2；runner按档案选择。
+
+release库重建后以同一探针main在 `local/chronoclock/snapshot-layout-probe.exe` 链接独立可执行文件（长流程仍占用旧探针exe）；同一游戏根目录、字体、鼠标、种子0、16ms，`--checks V1,V2,V3,V4 --allow-presumed --allow-unreviewed --max-steps 300000000`，新输出 `local/chronoclock/snapshot-layout-saves`。四项全部pass L1：V1新会话重启读档与V3同会话读档后，20个消息等待轨迹相同，开头均多恢复存档点一句（lead=1）；V2再次保存的快照/脚本映像/辅助段逐字节相同；V4覆盖槽999和读取前槽998备份的头可解析。实际输出save003的两个文字记录（槽7、10）均为版本2，各321字节。该轮只验证剧情开头指定等待点，未宣称全部原版存档或全路线存读档兼容。
+
+报告 `summary.json` SHA-256 `182e036fe788ff6753ab1c4fb1d2bd7370c86709fd4b43415f294de8e9389d4c`。该族检查不输出逐帧事件，`events.jsonl`为空。原游戏目录只读，所有文件写入探针隔离用户目录。同一新可执行文件对《アマツツミ》默认策略执行V1–V4也全部pass L1，输出在 `local/chronoclock/snapshot-layout-base-saves`。
+
+复用现有测试，未新增测试数量：工作区离线测试949项通过、17项外部样本测试忽略；core全目标严格Clippy通过。从真实save003导出的101366字节快照以显式v2解码后重新编码逐字节一致，默认v3解码拒绝其文字记录（一次性检查留在 `local/chronoclock/snapshot-layout-roundtrip.log`）。整条路线的快照捕获和存档分叉另行运行，不将上述开头存读档检查扩展为全剧情结论。
+
 ## 2026-11-01：半波运动解开初始选项树
 
 沿用显式 `--allow-presumed --allow-unreviewed`，实现 `0x21fa` 轨道的半波Y模式 `0x22` 与同分支别名 `0x31`。原版两构建的分支、振幅、时间及计算顺序见 [语义证据](vm-semantics.md#半波模式-0x22--0x312026-11-01)。没有改档案状态、未支持模式错误或派生快照屏障。

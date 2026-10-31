@@ -1,16 +1,26 @@
 //! Text object record 0x380: writer 0x14005c790, reader 0x14005c8f0.
 //! Layout: u16 version 3, u32 +324 capacity, NUL font name (+44), +552/+556 logical size,
 //! blocks +8..+164, +176..+324 and +328..+536, u16 glyph count (then 44-byte glyphs).
+//! CHRONOCLOCK v2 (0x140059970 / 0x140059ab0) uses +344/+348 logical size and omits
+//! the last 208-byte block. Callers must select that layout explicitly.
 use super::Reader;
 use crate::{
     FormatError,
     message::{LineBreakRules, RecordedGlyph, TextObject},
+    snapshot::SnapshotLayout,
 };
 
 /// Decodes the saved fields as written; the loader's pen reset is applied by callers.
 pub(crate) fn decode(bytes: &[u8]) -> Result<TextObject, FormatError> {
+    decode_with_layout(bytes, SnapshotLayout::TextV3)
+}
+
+pub(crate) fn decode_with_layout(
+    bytes: &[u8],
+    layout: SnapshotLayout,
+) -> Result<TextObject, FormatError> {
     let mut r = Reader::new(bytes);
-    if r.u16()? != 3 {
+    if r.u16()? != layout.text_version() {
         return Err(FormatError("unsupported snapshot text version"));
     }
     let glyph_capacity = r.u32()?;
@@ -27,7 +37,10 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<TextObject, FormatError> {
     }
     let a = r.take(156)?;
     let b = r.take(148)?;
-    let c = r.take(208)?;
+    let c = match layout {
+        SnapshotLayout::TextV2 => &[0; 208],
+        SnapshotLayout::TextV3 => r.take(208)?,
+    };
     let word = |block: &[u8], at: usize| u32::from_le_bytes(block[at..at + 4].try_into().unwrap());
     // A begins at native +8, B at +176, C at +328.
     let aw = |offset: usize| word(a, offset - 8);
@@ -141,7 +154,20 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<TextObject, FormatError> {
 }
 
 /// Writer 0x14005c790: logical glyph descriptors, without pixels or reveal clocks.
+#[cfg(test)]
 pub(crate) fn encode(text: &TextObject) -> Result<Vec<u8>, FormatError> {
+    encode_with_layout(text, SnapshotLayout::TextV3)
+}
+
+pub(crate) fn encode_with_layout(
+    text: &TextObject,
+    layout: SnapshotLayout,
+) -> Result<Vec<u8>, FormatError> {
+    if layout == SnapshotLayout::TextV2 && text.line_break.is_some() {
+        return Err(FormatError(
+            "snapshot text v2 has no extended line-break rules",
+        ));
+    }
     if text.font_face.len() > 31 || text.font_face.contains(&0) {
         return Err(FormatError("snapshot font face exceeds native capacity"));
     }
@@ -202,7 +228,7 @@ pub(crate) fn encode(text: &TextObject) -> Result<Vec<u8>, FormatError> {
     }
     put(&mut c, 328, 528, text.layout_scratch[0]);
     put(&mut c, 328, 532, text.layout_scratch[1]);
-    let mut out = 3u16.to_le_bytes().to_vec();
+    let mut out = layout.text_version().to_le_bytes().to_vec();
     out.extend(text.glyph_capacity.to_le_bytes());
     out.extend(&text.font_face);
     out.push(0);
@@ -211,7 +237,9 @@ pub(crate) fn encode(text: &TextObject) -> Result<Vec<u8>, FormatError> {
     }
     out.extend(a);
     out.extend(b);
-    out.extend(c);
+    if layout == SnapshotLayout::TextV3 {
+        out.extend(c);
+    }
     out.extend((text.glyphs.len() as u16).to_le_bytes());
     for (i, glyph) in text.glyphs.iter().enumerate() {
         if !(1..=128).contains(&glyph.size) {
@@ -277,6 +305,16 @@ mod tests {
         assert_eq!(glyph.outline, [2, 0xdeadbeef]);
         assert!(glyph.shown && !glyph.active && glyph.opacity == 255);
         assert_eq!(encode(&text).unwrap(), bytes);
+        // The older writer omits the entire 208-byte C block, without changing
+        // the 44-byte glyph descriptors. A profile must choose the matching codec.
+        let mut v2 = bytes.clone();
+        v2[..2].copy_from_slice(&2u16.to_le_bytes());
+        v2.drain(15 + 304..15 + 512);
+        let layout = crate::snapshot::SnapshotLayout::TextV2;
+        assert_eq!(super::decode_with_layout(&v2, layout).unwrap(), text);
+        assert_eq!(super::encode_with_layout(&text, layout).unwrap(), v2);
+        assert!(decode(&v2).is_err());
+        assert!(super::decode_with_layout(&bytes, layout).is_err());
         let mut partial = text.clone();
         partial.glyphs[0].active = true;
         partial.glyphs[0].shown = false;

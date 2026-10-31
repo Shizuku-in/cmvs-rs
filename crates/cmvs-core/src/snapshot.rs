@@ -1,5 +1,5 @@
 //! Engine save snapshot (0x140069270): record framing and its verified live-state effect.
-//! Rust never builds an original snapshot image; skipped captures are tracked as unavailable.
+//! Captures use the supported record layouts; skipped captures are tracked as unavailable.
 use crate::{
     FormatError, bytecode::DecodeError, evaluate::error, machine::Machine, vm::SystemResult,
 };
@@ -14,6 +14,22 @@ pub use variables::LocalVariables;
 pub(crate) use visual::RESTORE_PIXELS;
 pub use visual::{SavedImage, SavedScene, SavedWindow, VisualPreview, VisualSnapshot};
 pub use vm_state::VmSnapshot;
+
+/// Supported snapshot text layouts. Special image/effect records remain bounded by
+/// their own decoders; a text layout does not grant support for unknown records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotLayout {
+    TextV2,
+    TextV3,
+}
+impl SnapshotLayout {
+    pub(crate) fn text_version(self) -> u16 {
+        match self {
+            Self::TextV2 => 2,
+            Self::TextV3 => 3,
+        }
+    }
+}
 
 fn unique_body<'a>(
     bytes: &'a [u8],

@@ -3,7 +3,7 @@
 //! their subsystem is modelled. `decode` accepts only the canonical order and `encode`
 //! reproduces it, so a decoded original snapshot re-encodes to the same bytes.
 use super::{
-    Framing, LocalVariables, SavedScene, SavedWindow, framing, parse_records,
+    Framing, LocalVariables, SavedScene, SavedWindow, SnapshotLayout, framing, parse_records,
     visual::{text, window},
 };
 use crate::{FormatError, message::TextObject};
@@ -106,6 +106,10 @@ const TAIL: [u16; 8] = [0x6e0, 0x880, 0x881, 0x882, 0x883, 0x900, 0x304, 0x310];
 
 impl EngineSnapshot {
     pub fn decode(bytes: &[u8]) -> Result<Self, FormatError> {
+        Self::decode_with_layout(bytes, SnapshotLayout::TextV3)
+    }
+
+    pub fn decode_with_layout(bytes: &[u8], layout: SnapshotLayout) -> Result<Self, FormatError> {
         let records = parse_records(bytes)?;
         let mut at = 0;
         let mut next = |tag: u16| -> Result<&[u8], FormatError> {
@@ -200,7 +204,9 @@ impl EngineSnapshot {
             last = Some((position, index));
             let body = &bytes[record.body.clone()];
             match record.tag {
-                0x380 if index < 12 => out.texts[index as usize] = Some(text::decode(body)?),
+                0x380 if index < 12 => {
+                    out.texts[index as usize] = Some(text::decode_with_layout(body, layout)?)
+                }
                 0x400 if index < 8 => {
                     out.windows[index as usize] = Some(window::decode(body, &mut nodes)?)
                 }
@@ -261,6 +267,10 @@ impl EngineSnapshot {
     }
 
     pub fn encode(&self) -> Result<Vec<u8>, FormatError> {
+        self.encode_with_layout(SnapshotLayout::TextV3)
+    }
+
+    pub fn encode_with_layout(&self, layout: SnapshotLayout) -> Result<Vec<u8>, FormatError> {
         let mut out = Writer::default();
         out.string(0x100, &self.save_title)?;
         out.string(0x101, &self.scene_title)?;
@@ -289,7 +299,9 @@ impl EngineSnapshot {
         for &(tag, limit) in &OBJECT_TABLES {
             for index in 0..limit {
                 let body = match tag {
-                    0x380 => self.texts[index as usize].as_ref().map(text::encode),
+                    0x380 => self.texts[index as usize]
+                        .as_ref()
+                        .map(|text| text::encode_with_layout(text, layout)),
                     0x400 => self.windows[index as usize].as_ref().map(window::encode),
                     0x700 => self.objects.get(&(index as u8)).map(SavedScene::encode),
                     _ => self.raw_objects.get(&(tag, index)).cloned().map(Ok),

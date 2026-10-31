@@ -10,7 +10,10 @@ use crate::{
     save::{Csv2Save, HEADER_SIZE},
     save_menu::SaveHeader,
     scene::{ClearState, ObjectImage, SceneObject},
-    snapshot::{CapturedSave, EngineSnapshot, LocalVariables, SaveImage, SavedScene, SavedWindow},
+    snapshot::{
+        CapturedSave, EngineSnapshot, LocalVariables, SaveImage, SavedScene, SavedWindow,
+        SnapshotLayout,
+    },
     text::bank_slot,
     vm::SystemResult,
 };
@@ -120,24 +123,32 @@ fn decode_bmp(bytes: &[u8]) -> Result<RgbaImage, &'static str> {
 }
 
 /// Command inheritance does not establish the wire format of gameplay snapshots.
-/// The 20150405 writer uses text record v2, eight common-image slots and no effect 9;
-/// the root writer uses text v3, sixteen slots and effect 9. Keep derived layouts
-/// blocked until their encoders and restorers have independent evidence.
+/// The independently inspected 20150405 subset uses text v2; special common-image
+/// records and active scene effects remain rejected by their existing decoders.
 pub fn snapshot_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
-    profile.base.is_none()
+    snapshot_layout(profile).is_some()
+}
+
+fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLayout> {
+    if profile.id == "cmvs-20150405" && profile.base.as_deref() == Some("cmvs-20160201") {
+        Some(SnapshotLayout::TextV2)
+    } else if profile.base.is_none() {
+        Some(SnapshotLayout::TextV3)
+    } else {
+        None
+    }
 }
 
 impl Startup<'_> {
-    fn require_snapshot_layout(&self) -> Result<(), Box<dyn Error>> {
+    fn require_snapshot_layout(&self) -> Result<SnapshotLayout, Box<dyn Error>> {
         let profile = self.gate.selection().profile;
-        if !snapshot_layout_supported(profile) {
-            return Err(format!(
+        snapshot_layout(profile).ok_or_else(|| {
+            format!(
                 "gameplay snapshot layout is not implemented for engine profile {}",
                 profile.id
             )
-            .into());
-        }
-        Ok(())
+            .into()
+        })
     }
     /// Wall-clock source for labels; the default is a fixed research time so runs repeat.
     pub fn set_save_clock(&mut self, clock: Box<dyn FnMut() -> SaveTime>) {
@@ -272,7 +283,7 @@ impl Startup<'_> {
         vm: crate::machine::VmImage,
     ) -> Result<(), Box<dyn Error>> {
         let (snapshot, script_image) = self.engine_snapshot_with(vm)?;
-        let bytes = snapshot.encode()?;
+        let bytes = snapshot.encode_with_layout(self.require_snapshot_layout()?)?;
         if bytes.len() > crate::snapshot::MAX_SNAPSHOT {
             return Err("snapshot exceeds the original 3 MiB buffer".into());
         }
@@ -418,7 +429,7 @@ impl Startup<'_> {
         slot: u16,
         backend: &mut impl PlatformBackend,
     ) -> Result<(), Box<dyn Error>> {
-        self.require_snapshot_layout()?;
+        let layout = self.require_snapshot_layout()?;
         if self.slot_edit.is_some() {
             return Err("finish the pending slot edit before loading a gameplay save".into());
         }
@@ -427,7 +438,7 @@ impl Startup<'_> {
             .read_slot(slot)?
             .ok_or("save slot to load does not exist")?;
         let save = Csv2Save::decode(&bytes)?;
-        let snapshot = EngineSnapshot::decode(&save.snapshot)?;
+        let snapshot = EngineSnapshot::decode_with_layout(&save.snapshot, layout)?;
         if slot < 950 && matches!(self.save_image, SaveImage::Captured(_)) {
             self.write_slot(LOAD_BACKUP_SLOT, true)?;
         }
