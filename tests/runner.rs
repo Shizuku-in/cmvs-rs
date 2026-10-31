@@ -30,6 +30,36 @@ fn base_registry() -> &'static Registry {
     REGISTRY.get_or_init(|| Registry::parse(&[&synthetic_profile()], "").unwrap())
 }
 
+#[test]
+fn derived_command_review_does_not_enable_the_root_gameplay_snapshot_layout() {
+    let mut code = Vec::new();
+    commands::command(&mut code, 0x2000, &[]);
+    let root = Root::new("derived-snapshot-layout", &code, b"");
+    let registry = Registry::builtin();
+    let game = registry
+        .identify_game(&root.0, Some("cmvs-20150405"))
+        .unwrap();
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    let pc = run.machine().pc();
+    let stack = run.machine().stack().len_bytes();
+    let mut backend = RecordingBackend::default();
+    for error in [
+        run.inspect_snapshot().unwrap_err(),
+        run.load_slot(0, &mut backend).unwrap_err(),
+    ] {
+        assert!(
+            error
+                .to_string()
+                .contains("snapshot layout is not implemented")
+        );
+    }
+    assert_eq!(run.machine().pc(), pc);
+    assert_eq!(run.machine().stack().len_bytes(), stack);
+    assert!(matches!(run.held_snapshot(), SaveImage::Absent));
+    assert!(!root.0.join("save/save998.dat").exists());
+}
+
 struct Root(PathBuf);
 impl Root {
     fn new(name: &str, code: &[u8], text: &[u8]) -> Self {

@@ -138,3 +138,57 @@ IDA 9.4分别导出两个构建的x64/x86，二进制身份来自各自档案，
 `--explain` 逐条查看研究路径上剩余的未复核命令：`0x2010`、`0x2012`–`0x2014`、`0x2019` 的首处差异在归档类工厂 `0x1400273d0`，`0x2011` 在 `0x140034260`，`0x201a` 在 `0x1400362f0`，都是 `0x201f` 复核中记录的取值 1、2 差异；`0x2030`、`0x2141` 为对象字段偏移不同，`0x2080` 有多处常量不同，`0x2128` 的首处差异是一处未证明的映像相对地址。
 
 《アマツツミ》百万步 trace 与 M1 日志逐字节一致。检查：`cargo fmt --check`、默认离线测试、严格 Clippy、Python 合成测试 21 项。
+
+## 2026-10-31：P3，七条归档路径注册命令复核
+
+复核 `0x2010`–`0x2014`、`0x2019`、`0x201a`，全部由 Unreviewed 登记为 Reviewed；档案现为 Inherited=455、Presumed=167、Reviewed=9、Unreviewed=81、NoOp=264。不改运行时、指纹策略、导出或自动比较报告。各命令参数、返回值、管理器及工厂地址见 [VM语义](vm-semantics.md#归档路径注册组2026-10-31-复核)。
+
+CHRONOCLOCK 使用当前 IDA 会话只读查询，输入 SHA-256 与档案一致；基准用 IDA 9.4 批处理读取新副本 `review-archives-base.i64`，输入 SHA-256 亦核对一致。完整处理函数均取槽号和字符串、拼接根目录、传入两个校验开关，返回 `0x4008`。三个工厂的类型1、2分支沿用 `0x201f` 证据，但这不是全部差异：图像工厂的路径数组/指针数组从基准 +4232/+6280 移至本作 +2152/+4200。记录步长2056、槽数10、析构/替换和校验配置操作一致，Rust路径映射不依赖原版内存布局。另两种工厂接受五槽（0..4）；读取器当前只消费音频/影片前四槽的限制保留。
+
+为避免首差异遮住后续依赖，只在两份导出的内存副本中将三对已人工核对的工厂替换成相同叶子，用现有v3 shape诊断：七条命令的工厂外可比较部分全部一致；剩余阻断来自共享字符串解析器可写全局字符串区。随后人工核对该解析器的标签、槽数、步长和越界回退，以及CPZ6构造与vtable +40校验setter。此诊断不是完整指纹继承，不改变生产算法或其他命令状态；其他归档类内部、后续加载及原生输出未验证。
+
+### 默认启动验收
+
+debug `cmvs-trace`，仍用建档参数：`--bootstrap`、`--script-archive`、`--record-platform`、`--continue-without-snapshot`、`--frame-ms 16`、`--rand-seed 0`、`--steps 1000000`，不加 `--allow-unreviewed`。本次将原CSS1复制到新的 `local/chronoclock/review-archives-input/system.dat`，`--save-dir` 与 `--system-save` 均指向该独立目录，原游戏只读。副本运行前后 SHA-256 均为 `39a93d66c3020f95f6eca644d4e1a79c9318d0f8f53366a9b7a408f5b2fa5385`；游戏档案记录原目录无剧情槽，因此没有新增剧情槽输入。
+
+原第43步 `start.ps3 / 0xde / 0x2013` 完成后推进到 `0xe0`，共13次归档路径注册全部完成。第295步停在 `start.ps3 / 0x11f8 / 0x2128`，退出码1，PC和8字节参数保持挂起；统计 base=0、inherited=5、reviewed=15、presumed=12、unreviewed=0（含等待重试的分派尝试）。执行过的推定命令为 `0x2015`、`0x2016`、`0x2092`–`0x2094`、`0x2098`、`0x22b3`。去除旧日志末尾统计、推定列表及错误行并规范化换行后，v3默认日志为本次日志的相同前缀。
+
+| 忽略目录内证据 | SHA-256 |
+|---|---|
+| `review-archives-base.json`（完整反汇编、伪代码） | `2290027b9872d0ce9fc3648c2f85105f68ac09173cf30acf77cadcdcdbd9cda5` |
+| `review-archives-chrono.json`（完整反汇编、伪代码） | `54342643438d6cf050f9987abd90269011e4320dc71ec07a6c2c5cca005a3d0a` |
+| `review-archives-compare.log`（工厂边界诊断） | `daf041e00580b03697e767c7058becaf4a7b5d45cd65f2b10d5ddc085b65a344` |
+| `review-archives-default.log` | `0b859806f8e42716c9d915ab922f3ddffccc60695ad3f310b26947acb948a67d` |
+
+研究路径还剩四条未复核命令（`0x2128`、`0x2080`、`0x2030`、`0x2141`），下一步按默认停点复核 `0x2128`。没有新增原生窗口、字体、音轨或完整剧情验证，也未改基准档案及运行代码，因此本轮不重复计入《アマツツミ》百万步回归。
+
+检查通过：`cargo fmt --check`、`cargo test --offline`（836项通过、12项忽略，含逐命令复核小节引用检查）、`cargo clippy --offline --all-targets -- -D warnings`、`git diff --check`。新旧默认trace经LF规范化后的5553字节前缀完全一致。本轮不新增外部来源、依赖或解码算法，不需新增真实解码对照；原始研究输出与分析库继续留在忽略目录。
+
+## 2026-10-31：P3，原采样路径剩余四条复核
+
+`0x2128`、`0x2080`、`0x2030`、`0x2141`登记为Reviewed；档案统计为Inherited=455、Presumed=167、Reviewed=13、Unreviewed=77、NoOp=264。各命令的两个x64构建完整哈希、case/函数、参数、返回值、状态、错误路径和支持边界见[VM语义](vm-semantics.md#系统存档读取-0x21282026-10-31-复核)。x86本轮未单独复核，不改独立指纹报告、算法或其状态。
+
+CHRONOCLOCK仍使用当前IDA会话只读查询并重新核对输入哈希；基准从 `p2-amatsu-x64.i64` 新复制为 `review-four-base.i64` 后用IDA 9.4批处理读取，哈希与档案一致。遍历v3依赖树找出全部可见差异，指令不再对齐/调用数不同的分支另按语义配对；未把诊断树当作完整继承证明。
+
+`0x2128`首差异为持久位区及镜像的映像相对地址，已与前轮位区证据核对。`0x2141`差异为文字对象缓冲指针从基准+560移至本作+352，销毁顺序和对象归属不变。`0x2030`深入图像管理器后确认2080字节字段移动、基准新增PB2A分派，以及JBP1跨基本块的映像相对查表地址；查表1024字节逐字节一致，PB3正常分支仍复用已有解码器。没有更改解码算法，PB2A及其他未实现格式继续报错。
+
+`0x2080`主脚本切换和快照实时位0效果一致，但文字记录v2/v3、公共图像8/16槽和效果类型9支持确有不同。本轮不构造伪兼容快照，也不把这些常量抹去；runner新增派生档案快照格式错误屏障，统一阻断其构造/检查和槽恢复。命令复核允许现有切换与无快照策略，不表示已支持本作原生CSV2子记录。新增合成测试验证错误不改变PC、栈和快照图像，且不生成备份槽；根档案存读档由现有合成测试回归。未来派生快照编码/恢复仍需独立证据与实现。
+
+### 默认闸门验收
+
+trace继续使用上一轮全部参数和 `review-archives-input` 独立CSS1副本，不加 `--allow-unreviewed`。越过启动`0x2128`和主脚本切换后，在第43920步 `intproc.ps3 / 0x4021a / 0x2141` 停止；命令已通过闸门，但工具缺少MessageHost。统计inherited=5962、reviewed=24、presumed=2429、unreviewed=0。上一轮默认trace在旧统计行前、LF规范化后的29803字节是新日志的逐字节前缀。
+
+完整runner探针采用 `SnapshotPolicy::ContinueWithoutImage`、记录文字、RecordingBackend、种子0、16ms、无输入、百万tick预算，默认闸门；新建 `review-four-user` 独立用户目录并复制同一CSS1。实际完成 `0x2128` 1次、`0x2080` 4次、`0x2030` 3次、`0x2141` 1次。经main/logo/menu进入cdemo后，steps=82416在 `intproc.ps3 / 0x4027c / 0x215d` 报未复核；前8参数 `[7,10,0,0,1280,54,1280,720]`，继续保持挂起。统计base=0、inherited=15058、reviewed=24、presumed=2429、unreviewed=0，统计仍是分派尝试数。执行过的推定命令完整列表保留在日志。
+
+CSS1运行前后SHA-256均为 `39a93d66c3020f95f6eca644d4e1a79c9318d0f8f53366a9b7a408f5b2fa5385`。原游戏未写入，未测试原生窗口/字形/音轨、剧情快照或完整路线。此前“剩余四条”仅描述旧采样路径；新观察到的`0x215d`不能跳过。下一步仍按新默认停点复核，不启用研究放行追历史`0x2112`。
+
+| 忽略目录内证据 | SHA-256 |
+|---|---|
+| `review-four-base.json` | `a7ab9681d26c78c1d467f66ec88bd480925edfc1433b848d50a905c3518f968d` |
+| `review-four-chrono.json` | `a9c7cd791c613dc457378c6f22afee4ba774efaa0f1a7afb33390ab46d3ae617` |
+| `review-four-audit.log` | `646e06e41d2491d309d043c24817354d9c8c5718400b9749ca66bd61878dc6f3` |
+| `review-four-image-audit.log` | `427d8d5ed5e8eaa9539d60039b92144db4efddc39885e2f75549d7e53b404e37` |
+| `review-four-default.log` | `c12ef9416c0c8781f5f6ca20055cf9151b891f7416f3fd71c7ed4059cbf77a22` |
+| `review-four-runner.log` | `5a90f791c4601bb74bf7cabda493396dd7a3a1db2fbfe7466a6f785b6c17dc09` |
+
+检查通过：`cargo fmt --check`、`cargo test --offline`（837项通过、12项忽略）、`cargo clippy --offline --all-targets -- -D warnings`、`git diff --check`。本轮无后端/feature、解码算法、依赖或外部源码变更；没有重新计入根游戏百万步回归，根快照正常行为由现有合成测试覆盖。
