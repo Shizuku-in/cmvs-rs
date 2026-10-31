@@ -88,6 +88,12 @@ pub enum PlatformRequest {
     },
 }
 pub trait PlatformBackend {
+    /// Read the latest completed engine frame in device/script pixels, including
+    /// fonts and movies. Do not redraw current VM state or reuse a held 0x2304 capture.
+    /// Absence of a completed frame is an error, not a black/empty fabricated image.
+    fn read_device_frame(&mut self) -> Result<crate::raster::RgbaImage, Box<dyn Error>> {
+        Err("platform backend does not implement device frame readback".into())
+    }
     fn window_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
         Err("platform backend does not implement window size queries".into())
     }
@@ -169,12 +175,18 @@ pub struct RecordingBackend {
     fullscreen: bool,
     aspect_mode: Option<u32>,
     aspect_scaling: Option<bool>,
+    device_frame: Option<crate::raster::RgbaImage>,
     render_mode: u32,
     window_size: Option<[u32; 2]>,
     font_answers: std::collections::VecDeque<Option<Vec<u8>>>,
     font_dialogs: Vec<Vec<u8>>,
 }
 impl RecordingBackend {
+    /// Explicit software device draw boundary. Frame producers must publish the
+    /// complete engine canvas after drawing; VM commands do not update it.
+    pub fn present_frame(&mut self, frame: crate::raster::RgbaImage) {
+        self.device_frame = Some(frame);
+    }
     pub fn requests(&self) -> &[PlatformRequest] {
         &self.requests
     }
@@ -188,6 +200,11 @@ impl RecordingBackend {
     }
 }
 impl PlatformBackend for RecordingBackend {
+    fn read_device_frame(&mut self) -> Result<crate::raster::RgbaImage, Box<dyn Error>> {
+        self.device_frame
+            .clone()
+            .ok_or_else(|| "recording device has no completed frame".into())
+    }
     fn windowed_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
         self.window_size()
     }

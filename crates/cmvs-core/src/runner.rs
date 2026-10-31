@@ -637,6 +637,12 @@ impl<'a> Startup<'a> {
         if let Some(event) = self.try_lifecycle()? {
             return Ok(event);
         }
+        if self
+            .capture
+            .try_immediate(&mut self.machine, &mut self.scene, backend)?
+        {
+            return Ok(StartupEvent::Progress);
+        }
         let id = self.bootstrap.settings().get(&0x201d).copied();
         if command == 0x129
             && let Some(output) = &mut self.system_output

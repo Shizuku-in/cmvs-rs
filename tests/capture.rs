@@ -53,6 +53,123 @@ fn frame() -> RgbaImage {
 }
 
 #[test]
+fn immediate_read_uses_the_device_frame_and_preserves_held_capture_and_object_state() {
+    use cmvs_rs::{platform::RecordingBackend, scene::ObjectImage};
+    let mut code = vec![];
+    call(&mut code, 0x2020, &[3]);
+    call(&mut code, 0x2040, &[3]);
+    call(&mut code, 0x203c, &[3, u32::MAX]);
+    call(&mut code, 0x2304, &[]);
+    call(&mut code, 0x203e, &[3, 0x8000_0000]);
+    call(&mut code, 0x203e, &[3, u32::MAX]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let (mut scene, mut capture) = (SceneHost::default(), ScreenCapture::default());
+    capture.take(frame()).unwrap();
+    for _ in 0..3 {
+        assert!(next(&mut vm, &mut scene, &mut capture).unwrap());
+    }
+    capture
+        .take(RgbaImage::new(1, 1, vec![99, 88, 77, 255]).unwrap())
+        .unwrap();
+    assert!(next(&mut vm, &mut scene, &mut capture).unwrap());
+    let held = capture.image().unwrap().clone();
+    let mut backend = RecordingBackend::default();
+    for (index, readback) in [frame(), RgbaImage::new(1, 1, vec![9, 8, 7, 128]).unwrap()]
+        .into_iter()
+        .enumerate()
+    {
+        let before = scene.objects().clone();
+        let mut expected = scene.object(3).unwrap().clone();
+        let mut pixels = readback.pixels().to_vec();
+        for p in pixels.chunks_exact_mut(4) {
+            p[3] = 255;
+        }
+        expected.image = Some(ObjectImage {
+            filter: None,
+            name: vec![],
+            alpha: false,
+            surface: false,
+            pixels: RgbaImage::new(readback.width(), readback.height(), pixels).unwrap(),
+        });
+        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        let pc = vm.pc();
+        vm.state_mut().set_system_integer(0, 12).unwrap();
+        vm.state_mut().set_system_integer(1, 34).unwrap();
+        if index == 0 {
+            assert!(
+                capture
+                    .try_immediate(&mut vm, &mut scene, &mut backend)
+                    .is_err()
+            );
+            assert_eq!(scene.objects(), &before);
+            assert_eq!(vm.pc(), pc);
+            assert_eq!(vm.stack().len_bytes(), 8);
+            assert_eq!(vm.state().system_integer(0), Some(12));
+        }
+        backend.present_frame(readback.clone());
+        assert!(
+            capture
+                .try_immediate(&mut vm, &mut scene, &mut backend)
+                .unwrap()
+        );
+        assert_eq!(scene.object(3), Some(&expected), "read {index}");
+        assert_eq!(capture.image(), Some(&held));
+        assert!(capture.requested());
+        assert_eq!(vm.pc(), pc + 2);
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.state().system_integer(0), Some(1));
+        assert_eq!(vm.state().system_integer(1), Some(34));
+        // The device read is non-consuming and does not alter the published frame.
+        use cmvs_rs::platform::PlatformBackend;
+        assert_eq!(backend.read_device_frame().unwrap(), readback);
+    }
+}
+
+#[test]
+fn immediate_invalid_targets_and_short_stack_do_not_read_or_consume() {
+    use cmvs_rs::platform::{PlatformBackend, PlatformRequest};
+    struct NoRead;
+    impl PlatformBackend for NoRead {
+        fn read_device_frame(&mut self) -> Result<RgbaImage, Box<dyn std::error::Error>> {
+            panic!("invalid target must not read device");
+        }
+        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn std::error::Error>> {
+            panic!("not a platform request");
+        }
+    }
+    for args in [
+        vec![3, 0],
+        vec![4, u32::MAX],
+        vec![256, u32::MAX],
+        vec![u32::MAX, u32::MAX],
+        vec![3],
+    ] {
+        let mut code = vec![];
+        call(&mut code, 0x2020, &[3]);
+        call(&mut code, 0x203e, &args);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        let (mut scene, mut capture) = (SceneHost::default(), ScreenCapture::default());
+        assert!(next(&mut vm, &mut scene, &mut capture).unwrap());
+        capture.take(frame()).unwrap();
+        let before = scene.objects().clone();
+        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        vm.state_mut().set_system_integer(0, 12).unwrap();
+        assert!(
+            capture
+                .try_immediate(&mut vm, &mut scene, &mut NoRead)
+                .is_err()
+        );
+        assert_eq!(scene.objects(), &before);
+        assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x3e)));
+        assert_eq!(vm.stack().len_bytes(), args.len() * 4);
+        assert_eq!(vm.state().system_integer(0), Some(12));
+        assert!(capture.image().is_some());
+    }
+}
+
+#[test]
 fn capture_is_requested_taken_with_opaque_alpha_queried_given_and_reset() {
     let mut code = vec![];
     call(&mut code, 0x2020, &[3]);

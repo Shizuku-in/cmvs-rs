@@ -46,6 +46,7 @@ struct App<'a> {
     exit_after: Option<Duration>,
     deadline: Option<Instant>,
     preview_image: Option<RgbaImage>,
+    device_frame: Option<RgbaImage>,
     next_frame: Instant,
     last_frame: Instant,
     cursor_clock: Instant,
@@ -63,7 +64,7 @@ impl App<'_> {
             return Ok(image.clone());
         }
         if let Some(image) = self.startup.movie_frame() {
-            return Ok(image.clone());
+            return Ok(movie_canvas(image, self.render_mode.get() == 1)?);
         }
         if let Some(font) = &mut self.font {
             return Ok(font.render(
@@ -120,6 +121,9 @@ impl App<'_> {
             )?;
         }
         buffer.present()?;
+        if self.preview_image.is_none() {
+            self.device_frame = Some(image);
+        }
         Ok(())
     }
     fn preview_cursor(&mut self, el: &ActiveEventLoop, id: u32) -> Result<(), Box<dyn Error>> {
@@ -143,11 +147,31 @@ impl App<'_> {
             render_mode: &self.render_mode,
             windowed_size: &self.windowed_size,
             fonts: self.font.as_ref(),
+            device_frame: self.device_frame.as_ref(),
         };
         backend.apply(&PlatformRequest::Cursor { id, bitmap })?;
         println!("# preview-only cursor shortcut={id}; VM state unchanged");
         Ok(())
     }
+}
+
+/// Movies join the same logical device canvas that readback sees, before window
+/// fitting. The current OP is already 1280x720; smaller videos retain aspect ratio.
+fn movie_canvas(image: &RgbaImage, linear: bool) -> Result<RgbaImage, cmvs_core::FormatError> {
+    let [width, height] = cmvs_core::message::RESEARCH_SCREEN;
+    if [image.width(), image.height()] == [width, height] {
+        return Ok(image.clone());
+    }
+    let mut target = vec![0; (width * height) as usize];
+    image.draw_scaled(&mut target, width, height, 1, linear)?;
+    let pixels = target
+        .into_iter()
+        .flat_map(|word| {
+            let [b, g, r, _] = word.to_le_bytes();
+            [r, g, b, 255]
+        })
+        .collect();
+    RgbaImage::new(width, height, pixels)
 }
 impl ApplicationHandler for App<'_> {
     fn resumed(&mut self, el: &ActiveEventLoop) {
@@ -191,6 +215,7 @@ impl ApplicationHandler for App<'_> {
                 render_mode: &self.render_mode,
                 windowed_size: &self.windowed_size,
                 fonts: self.font.as_ref(),
+                device_frame: self.device_frame.as_ref(),
             };
             let mode =
                 cmvs_core::platform::supported_render_mode(&backend, backend.render_mode()?)?;
@@ -386,6 +411,7 @@ impl ApplicationHandler for App<'_> {
                     render_mode: &self.render_mode,
                     windowed_size: &self.windowed_size,
                     fonts: self.font.as_ref(),
+                    device_frame: self.device_frame.as_ref(),
                 };
                 let had_fade = self.startup.scene().fade().current().is_some();
                 let outcome = self.startup.tick(&mut backend);
@@ -746,6 +772,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         exit_after,
         deadline: None,
         preview_image,
+        device_frame: None,
         next_frame: Instant::now(),
         last_frame: Instant::now(),
         cursor_clock: Instant::now(),
@@ -804,5 +831,26 @@ pub fn run_cli() {
     if let Err(error) = run() {
         eprintln!("Error: {error}");
         std::process::exit(1)
+    }
+}
+
+#[cfg(test)]
+mod readback_tests {
+    use super::*;
+
+    #[test]
+    fn movie_canvas_keeps_logical_device_dimensions_and_letterboxes_small_videos() {
+        let video = RgbaImage::new(2, 1, [200, 100, 40, 255].repeat(2)).unwrap();
+        for linear in [false, true] {
+            let frame = movie_canvas(&video, linear).unwrap();
+            assert_eq!([frame.width(), frame.height()], [1280, 720]);
+            let pixel =
+                |x: usize, y: usize| &frame.pixels()[(y * 1280 + x) * 4..(y * 1280 + x) * 4 + 4];
+            assert_eq!(pixel(640, 39), [0, 0, 0, 255]);
+            assert_eq!(pixel(640, 40), [200, 100, 40, 255]);
+            assert_eq!(pixel(640, 679), [200, 100, 40, 255]);
+            assert_eq!(pixel(640, 680), [0, 0, 0, 255]);
+            assert_eq!(movie_canvas(&frame, linear).unwrap(), frame);
+        }
     }
 }

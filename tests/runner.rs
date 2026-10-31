@@ -389,6 +389,46 @@ fn user_configuration_round_trips_live_settings_and_preserves_the_game_file() {
 }
 
 #[test]
+fn immediate_readback_retries_until_a_draw_and_ignores_unflushed_scene_changes() {
+    use cmvs_rs::raster::RgbaImage;
+    let mut code = vec![];
+    commands::command(&mut code, 0x2020, &[3]);
+    commands::command(&mut code, 0x22cb, &[0xabcdef]);
+    commands::command(&mut code, 0x203e, &[3, u32::MAX]);
+    commands::command(&mut code, 0x22cb, &[0x123456]);
+    commands::command(&mut code, 0x203e, &[3, u32::MAX]);
+    let root = Root::new("immediate-readback", &code, b"");
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut backend = RecordingBackend::default();
+    while run.machine().pc() < code.len() - 2 {
+        if run.tick(&mut backend).is_err() {
+            assert_eq!(run.machine().pending_system().unwrap().1, 0x3e);
+            assert_eq!(run.machine().stack().len_bytes(), 8);
+            assert!(run.scene().object(3).unwrap().image.is_none());
+            // Completed device pixels can differ from current, not-yet-drawn VM state.
+            backend.present_frame(RgbaImage::new(1, 1, vec![11, 22, 33, 0]).unwrap());
+            assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+        }
+    }
+    assert_eq!(run.scene().clear().color, 0x123456);
+    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(
+        run.scene()
+            .object(3)
+            .unwrap()
+            .image
+            .as_ref()
+            .unwrap()
+            .pixels
+            .pixels(),
+        &[11, 22, 33, 255]
+    );
+    assert_eq!(run.machine().stack().len_bytes(), 0);
+    assert_eq!(run.machine().state().system_integer(0), Some(1));
+}
+
+#[test]
 fn quit_is_terminal_and_does_not_execute_the_following_command() {
     let root = Root::new("quit", &[1, 0x20, 0xff, 0x27], b"");
     let script = root.script();

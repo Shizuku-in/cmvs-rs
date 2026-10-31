@@ -8,6 +8,59 @@ use cmvs_rs::{
 mod bytecode;
 
 #[test]
+#[ignore = "requires CMVS_FONT_PATH; synthetic scene and external font, no game data"]
+fn immediate_device_readback_keeps_the_completed_font_composite() {
+    use cmvs_rs::{
+        camera::CameraHost, capture::ScreenCapture, desktop::font::FontRenderer, machine::Machine,
+        message::MessageHost, message_flags::MessageFlags, platform::RecordingBackend,
+        scene::SceneHost,
+    };
+    let path = std::env::var_os("CMVS_FONT_PATH").expect("CMVS_FONT_PATH");
+    let mut font = FontRenderer::read(std::path::Path::new(&path), 0).unwrap();
+    let mut code = vec![];
+    bytecode::command(&mut code, 0x2020, &[3]);
+    bytecode::command(&mut code, 0x215d, &[0, 0, 100, 100, 100, 100, 1280, 720]);
+    bytecode::command(&mut code, 0x2159, &[0, 0, 0x8000_0000, 0]);
+    bytecode::command(&mut code, 0x203e, &[3, u32::MAX]);
+    let script = bytecode::script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_string(0, b"\x82\xa0").unwrap();
+    let mut scene = SceneHost::default();
+    let mut messages = MessageHost::default();
+    bytecode::pending(&mut vm);
+    scene.try_handle(&mut vm).unwrap();
+    bytecode::pending(&mut vm);
+    messages.try_handle(&mut vm).unwrap();
+    messages.set_record_output(true);
+    bytecode::pending(&mut vm);
+    messages
+        .try_record_poll(&mut vm, MessageFlags::default())
+        .unwrap();
+    messages.advance_frame(10_000);
+    let camera = CameraHost::default();
+    let frame = font.render(&scene, &camera, &messages).unwrap();
+    let windows: Vec<_> = (0..cmvs_rs::message::MESSAGE_WINDOWS)
+        .filter_map(|i| messages.window(i))
+        .filter(|w| w.visible && !w.hidden)
+        .map(|w| &w.object)
+        .collect();
+    let without_glyphs =
+        cmvs_rs::scene_render::render_scene(&scene, Some(&camera), &windows, 1280, 720).unwrap();
+    assert_ne!(frame, without_glyphs);
+    assert!(frame.pixels().chunks_exact(4).any(|p| p[..3] != [0; 3]));
+    let mut backend = RecordingBackend::default();
+    backend.present_frame(frame.clone());
+    bytecode::pending(&mut vm);
+    ScreenCapture::default()
+        .try_immediate(&mut vm, &mut scene, &mut backend)
+        .unwrap();
+    assert_eq!(
+        scene.object(3).unwrap().image.as_ref().unwrap().pixels,
+        frame
+    );
+}
+
+#[test]
 #[ignore = "requires CMVS_FONT_PATH; synthetic message and external font, no game data"]
 fn horizontal_glyph_reveal_crops_the_full_font_image_without_rescaling() {
     use cmvs_rs::{

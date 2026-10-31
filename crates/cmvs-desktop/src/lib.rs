@@ -142,8 +142,15 @@ pub struct NativeBackend<'a> {
     pub windowed_size: &'a std::cell::Cell<[u32; 2]>,
     /// Fonts that glyphs will be drawn with; a chosen face must resolve there.
     pub fonts: Option<&'a crate::font::FontRenderer>,
+    /// Last completed logical engine canvas; excludes the physical window's borders.
+    pub device_frame: Option<&'a cmvs_core::raster::RgbaImage>,
 }
 impl PlatformBackend for NativeBackend<'_> {
+    fn read_device_frame(&mut self) -> Result<cmvs_core::raster::RgbaImage, Box<dyn Error>> {
+        self.device_frame
+            .cloned()
+            .ok_or_else(|| "native device has no completed frame".into())
+    }
     fn windowed_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
         if self.fullscreen()? {
             Ok(self.windowed_size.get())
