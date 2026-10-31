@@ -319,6 +319,7 @@ version = "0.1.0"
 dependencies = [
  "cmvs-core",
  "cmvs-desktop",
+ "encoding_rs",
 ]
 
 [[package]]
