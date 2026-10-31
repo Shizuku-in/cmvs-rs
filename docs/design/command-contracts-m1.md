@@ -1,53 +1,73 @@
-# M1 进展：IR 比较与反汇编片段提取
+# M1：受限契约提取、证据绑定与离线报告
 
-> 2026-10-31，M1a 已实现。M1 整体尚未完成：尚无可用于生产档案的完整命令契约提取与证据校验。运行闸门和现有档案不变。
+> 2026-10-31 完成。对应[规划](command-contracts.md) M1，输入为 [M0 模型](command-contracts-m0.md)。只产出离线报告；运行闸门、档案状态和 Rust 分派均未改变，没有新增 `ContractEquivalent`。
 
-## 已实现
+## 1. 交付
 
-`tools/command_contract.py` 仅使用 Python 标准库，校验 [M0](command-contracts-m0.md) 语义体：严格字段集、位宽、表达式类型、读前定义、路径作用域、固定逻辑状态目标、条件树、参数读取及独立的栈回收事件。未知事件和不合法输入拒绝处理；已知但暂不支持的区域/退出类型返回未知。
+| 文件 | 作用 |
+|---|---|
+| `tools/command_contract.py` | IR 校验、规范化、三值比较（M1a），新增契约信封与证据校验 `compare_envelopes` |
+| `tools/contract_x64.py` | 仅标准库的 x64 整数子集解码器；不支持的编码直接报错 |
+| `tools/contract_extract.py` | 从 v3 导出对 case 块做符号执行，生成 `cmvs-command-contract-v1` 信封，可选读取原 exe 绑定字节，并输出双边报告 |
+| `tools/test_contract_extract.py`、`tools/test_command_contract.py` | 合成机器码与 IR 测试，含 M0 证据向量 |
+| `docs/games/chronoclock/contract-*.json` | 首个构建对的上下文、试点字段映射与（空）摘要；见[试点报告](../games/chronoclock/contract-m1.md) |
 
-规范化保留事件顺序、参数来源和路径条件，只统一临时名称及白名单交换律表达式。两边均完整且规范形式一致，才给出 `equivalent`。闭包缺失或存在未知项返回 `unknown`。
+旧的“常量返回片段”提取器已由完整提取器取代，不再输出 `cmvs-return-fragment-v1`。
 
-规范形式不同时，在固定预算内以同一份字节参数栈和逻辑初态执行两边，找到不同的有序事件/返回码/状态结果才给出 `different`，并输出可重放的输入及两侧观察。位运算、整数溢出、有符号比较和扩展按声明位宽执行。未找到反例始终是 `unknown`，即使所有枚举输入都相同，也不升级为等价。这个有限反例搜索不解决通用路径约束。
+## 2. 提取模型
 
-**比较器只判断所提供 IR 的关系**。目前没有验证 IR 是否忠实于二进制；调用者填写 `coverage=true` 不是可登记证明。报告中的 `scope` 固定说明这一限制；工具不读写引擎档案、不授予运行放行，也不报告游戏可玩性。
+**入口与 ABI。** 每条命令从 switch case 地址开始，入口状态来自分派器：`rbx` 为 VM 对象，`[rsp+0x20]` 是保存的 `rbx`，`[rsp+0x28]` 是分派器返回地址，分派器的 32 字节 home space 位于其上。`rax/rcx/rdx/r8–r11` 为不可用的分派器临时值，其他非易失寄存器为入口标识。命令只能在 `rsp` 回到 `+0x28`、返回地址未被改写、全部非易失寄存器复原时，以 `ret` 退出；否则判为 `cfg-gap`。直接 `call` 按真实压栈内联，`jmp` 到函数按尾调用处理。
 
-`tools/contract_extract.py` 接入现有 `cmvs-command-graph-v3` 导出，提取 x64 的常量返回函数片段。当前精确支持 `mov eax, imm32`、单字节 `nop`、`ret` 和能完全展开的直接 `call/jmp`；任何其他指令、内存访问、未知返回值、库叶子、循环、递归、缺失 CFG 或超预算都会停止并报告定位。未修改原有导出器和指纹规则。
+**参数栈。** 只识别 `movsxd SP, [VM+sp_offset]` 与 `[VM+base_offset]` 相加后的寻址：`[base+SP+k]` 成为 `stack_offset=k` 的 `read_parameter`。偏移由上下文文件按二进制登记。重叠宽度读取、SP 之上的读取以及写参数栈或 SP 都会阻断。
 
-提取报告保留导出文件、图、工具及二进制哈希，以及函数/指令索引和可用的偏移。这里的二进制身份来自输入导出，尚未独立与原 exe 或 Registry 复核。成功状态为 `extracted-fragment`，并固定 `command_contract_complete=false`：它只描述函数片段的 EAX 返回值和已排除的内存效果，**不是**完整命令契约。分派器的返回码消费、PC 和参数回收尚未接入，不能根据片段自行生成可放行契约。
+**返回码。** 退出码必须是常量。按 `SystemResult` 规则，`0x4000` 位前进 PC 并回收低字节；提取器在叶尾生成 `release_stack`。让出（`0x8000`）、重复计数（`0x2000`）、不前进或高位非零均为 `unsupported-effect`。分派器的调用者不在提取范围内，返回码规则作为两边共用的信任边界登记在上下文证据中。
 
-## 使用
+**内存与字段。** 地址只能由已知根加常量偏移组成：本地帧、参数栈或逻辑对象。对象访问必须命中字段映射 `(二进制, 基对象, 偏移, 宽度)`；带 `points_to` 的指针字段读取后得到另一个逻辑对象的根，从而形成从 VM 出发的对象来源链。读写分别生成有序 `read_state`/`write_state`，读改写指令先读后写。全局/RIP 相对地址、动态或缩放索引、未映射偏移和指针写入均阻断（`unknown-memory`、`unproven-mapping`、`unsupported-effect`）。
 
-以下命令均只读输入并把 JSON 输出到 stdout。真实导出及重定向输出放忽略的 `local/` 或仓库外，不能加入 Git。
+**表达式与路径。** 支持 `mov/movzx/movsx/movsxd/lea`、`add/sub/and/or/xor/cmp/test`、`inc/dec/neg/not`、常量移位、`push/pop`、`setcc/cmovcc`、条件与无条件局部跳转。32 位写入零扩展，8/16 位部分写入只在原值已知为零时合并，否则后续更宽的读取阻断。常量条件静态选路；其余条件按标志来源（减法、按位与、结果）转成 `eq/ult/slt`，不支持的条件码阻断。`jcc`、`setcc`、`cmovcc` 都在决策树上分叉，前置读取进入 `branch.events`。
+
+**预算与回边。** 默认每侧4096条已执行指令、64个叶路径、直接调用深度8。同一路径重回同一位置判为 `loop`，调用链中重入判为 `recursion`。只报告第一个阻断点（含函数 RVA 与指令序号），不会跳过阻断继续拼接。
+
+**helper 摘要。** 摘要按 `(二进制, 函数 RVA)` 匹配 `call` 目标，必须与导出函数节点的哈希及依赖哈希一致，否则作为证据错误拒绝。M1 只接受单路径摘要，参数是寄存器中的位向量，事件仅限状态读写；摘要不能通过尾跳转使用。首个构建对尚未登记任何摘要。
+
+## 3. 证据绑定
+
+信封 `identity` 按 M0 记录配置、二进制哈希、架构、image base、opcode 与 case RVA；`evidence` 记录导出哈希、提取器版本（四个工具源码的联合哈希）、上下文/映射/摘要文件哈希，并在 M0 字段之外新增 `binary_checked`、`mappings_used`、`summaries_used`。
+
+`compare_envelopes` 拒绝缺字段、非 x64、同一二进制、opcode 不一致及两边工具/规则版本不一致；未经原 exe 绑定的信封最多得到 `unknown`（`binary-not-checked`）。
+
+提供 `--base-exe/--derived-exe` 时，工具独立核对 exe SHA-256、PE32+ image base、唯一的分派器序言与 switch 形态、该 opcode 的表项，以及每条已执行指令的原始字节。导出会把分支位移清零，因此分支指令改为用真实编码计算目标，并核对其与导出引用一致。指令有其他引用（数据、导入等）时提取已先阻断，不需要绑定这些字段。
+
+M0 的三个证据向量：缺映射哈希和跨架构在比较器测试中拒绝；摘要函数体哈希不符在提取器测试中拒绝。
+
+## 4. 使用
 
 ```powershell
-# 两份文件各为 contract 语义体（precondition/parameters/tree/coverage）。
-python -I tools/command_contract.py local/base-contract-body.json local/derived-contract-body.json
+python -I tools/contract_extract.py BASE.json DERIVED.json `
+  --context docs/games/chronoclock/contract-context.json `
+  --mappings docs/games/chronoclock/contract-mappings.json `
+  --summaries docs/games/chronoclock/contract-summaries.json `
+  --base-exe BASE.exe --derived-exe DERIVED.exe [0x203f ...] > local/report.json
 
-# 从现有 IDA v3 导出抽取一条命令的函数片段；多数实际命令预期为 unknown。
-python -I tools/contract_extract.py local/base-x64.json 0x2000
-
-python -I tools/test_command_contract.py
 python -I tools/test_contract_extract.py
+python -I tools/test_command_contract.py
 python -I tools/test_profile_compare.py
 ```
 
-比较 CLI 退出码：等价0、差异1、未知2、输入错误3。提取 CLI：片段提取成功0、未知2、输入错误3。两种工具的成功含义不同；提取输出不能直接作为比较器输入。输入错误写为结构化诊断；不自动覆盖输入或创建候选档案。
+不给 opcode 时报告目标构建的全部 handler。报告退出码0；规则文件或输入格式错误分别为4和3。逐行状态为 `equivalent`、`different`、`unknown` 或 `invalid-evidence`（如 exe 字节不符）。真实导出、exe 和报告留在 `local/` 或仓库外。
 
-## 检查与边界
+## 5. 检查
 
-- IR 测试：13项，12项通过，1项明确跳过。已运行 M0 的18个语义向量（作为子用例）；3个证据向量尚未实现，由跳过项明确记录。映射相关向量目前只检查给定 IR/未知标志的处理，不代表真实字段映射已验证。
-- 片段提取测试：6项全部通过，涵盖未知指令/副作用、未初始化返回值、直接 helper、尾调用、循环、递归、预算、库叶子与缺失 CFG。仅合成机器码和函数图。
-- 现有指纹比较回归：25项全部通过。
-- 尚未用真实二进制评估契约接受率，未运行原游戏，也没有把任何命令改为契约等价。
+- 提取器测试10项：常量返回、已映射偏移移动判等价、未映射判未知、参数次序/回收字节/字段替换三类机器码反例判差异、错误位条件分支等价及分支反转判差异、尾调用与内联 helper、六种阻断、摘要绑定与失效、输入不变，以及合成 PE 上的指令/分支目标绑定和哈希不符拒绝。
+- 比较器测试14项：M0 的18个语义向量、2个信封证据向量、绑定规则及原有 IR 用例；无跳过项。
+- 指纹比较回归25项。
+- 解码器在两份真实导出的约21.6万条可解码指令上与 capstone 的助记符和操作数一致（立即数按位宽比较）；capstone 只用于这次仓库外核对，不是工具依赖。
 
-CLI 对同一输入文件比较的测试确认输入字节未变；JSON 重复键拒绝处理。IR 有表达式深度、事件、节点和叶路径上限；片段提取有4096条指令及8层直接调用预算。预算触发不会补齐遗漏效果。
+## 6. 限制与进入 M2 的条件
 
-## 继续完成 M1 的顺序
+- 一处阻断即放弃整条命令；报告只给出第一个原因，不是完整未知清单。
+- 字段映射与 `points_to` 依赖人工证据；`points_to` 不建模空指针路径，限制写在每条映射的 `review` 中。
+- 不支持全局区域、动态索引、导入/库调用、间接调用、循环、浮点、乘除和位移变量，这些正是首个构建对的主要阻断（见试点报告）。
+- 等价仅表示在登记的上下文、映射与工具版本下两边契约规范形式相同；不代表 Rust 实现正确，也不改变运行放行。
 
-1. 建立绑定双边二进制、ABI、VM 栈和对象来源的提取上下文；完成 M0 的3个证据向量和摘要失效检查。
-2. 扩展解码/数据流到参数读取、显式 VM 栈回收、常量返回及已证明对象字段读写，产生完整带定位的 IR；用改变字段映射、参数次序和回收量的机器码反例测试。
-3. 增加受限无环条件和错误位分支；缺失别名、未知调用和不完整失败分支保持未知。
-4. 对已登记构建只生成离线报告，核对短小字段设置命令；未通过这些条件前，M1 不标完成，不接入 `ContractEquivalent`。
-
-M0 提供的是接口目标；本次落地刻意保留生产证据和复杂提取的缺口，不把手工构造的语义体或纯函数片段冒充反汇编完整契约。
+M2 按报告中的阻断分布推进：逻辑全局区域与只读数据、动态索引表、常用 helper 的多路径摘要和导入调用模型。

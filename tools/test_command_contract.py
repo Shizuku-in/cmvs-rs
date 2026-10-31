@@ -46,9 +46,41 @@ class ContractTests(unittest.TestCase):
                 else:
                     self.assertEqual(cc.compare(base, derived)["status"], vector["expected"])
 
-    @unittest.skip("M1a compares supplied IR only; binary evidence verifier is not implemented")
+    def envelope(self, contract, sha):
+        return {"schema": cc.ENVELOPE, "contract": contract,
+                "identity": {"profile_id": "synthetic", "binary_sha256": sha, "arch": "x64",
+                             "image_base": "0x140000000", "opcode": "0x2000", "case_rva": "0x100"},
+                "evidence": {**{k: "a" * 64 for k in cc.EVIDENCE_HASHES}, "binary_checked": True,
+                             "mappings_used": [], "summaries_used": []}}
+
     def test_m0_evidence_vectors(self):
-        pass
+        # stale-summary (helper body hash) is bound at extraction time; see
+        # test_contract_extract.LiftTests.test_summary_binding.
+        changes = {"missing-proof": lambda e: e["evidence"].pop("mapping_sha256"),
+                   "cross-arch": lambda e: e["identity"].update(arch="x86")}
+        for vector in VECTORS["cases"]:
+            if vector["expected"] != "invalid-evidence" or vector["id"] not in changes:
+                continue
+            with self.subTest(vector=vector["id"]):
+                base = self.envelope(copy.deepcopy(self.base), "1" * 64)
+                derived = self.envelope(copy.deepcopy(self.base), "2" * 64)
+                self.assertEqual(cc.compare_envelopes(base, derived)["status"], "equivalent")
+                changes[vector["id"]](derived)
+                with self.assertRaises(cc.InvalidEvidence):
+                    cc.compare_envelopes(base, derived)
+
+    def test_envelope_binding_rules(self):
+        base = self.envelope(copy.deepcopy(self.base), "1" * 64)
+        same = self.envelope(copy.deepcopy(self.base), "1" * 64)
+        with self.assertRaises(cc.InvalidEvidence):
+            cc.compare_envelopes(base, same)
+        derived = self.envelope(copy.deepcopy(self.base), "2" * 64)
+        derived["evidence"]["rules_sha256"] = "b" * 64
+        with self.assertRaises(cc.InvalidEvidence):
+            cc.compare_envelopes(base, derived)
+        derived = self.envelope(copy.deepcopy(self.base), "2" * 64)
+        derived["evidence"]["binary_checked"] = False
+        self.assertEqual(cc.compare_envelopes(base, derived)["status"], "unknown")
 
     def test_alpha_renaming(self):
         other = copy.deepcopy(self.base)

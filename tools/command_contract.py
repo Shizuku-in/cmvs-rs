@@ -318,6 +318,56 @@ def compare(left, right, witness_budget=256):
     return {"status": "unknown", "reason": "normal-forms-differ-no-witness", **hashes}
 
 
+class InvalidEvidence(ValueError):
+    """Identity/version binding failure; a tool error outside the three-valued result."""
+
+
+ENVELOPE = "cmvs-command-contract-v1"
+EVIDENCE_HASHES = ("export_sha256", "extractor_revision", "rules_sha256", "mapping_sha256", "summaries_sha256")
+SHA = re.compile(r"[0-9a-f]{64}\Z")
+ADDR = re.compile(r"0x[0-9a-f]+\Z")
+
+
+def verify_envelope(envelope):
+    def need(condition, message):
+        if not condition:
+            raise InvalidEvidence(message)
+    need(isinstance(envelope, dict) and set(envelope) == {"schema", "identity", "evidence", "contract"}
+         and envelope["schema"] == ENVELOPE, "envelope fields")
+    identity, evidence = envelope["identity"], envelope["evidence"]
+    need(isinstance(identity, dict) and set(identity) == {"profile_id", "binary_sha256", "arch", "image_base",
+                                                          "opcode", "case_rva"}, "identity fields")
+    need(isinstance(identity["profile_id"], str) and identity["profile_id"], "profile id")
+    need(SHA.fullmatch(str(identity["binary_sha256"])) is not None, "binary hash")
+    need(identity["arch"] == "x64", "M1 accepts x64 only")
+    need(all(ADDR.fullmatch(str(identity[k])) for k in ("image_base", "opcode", "case_rva")), "identity address")
+    need(isinstance(evidence, dict) and set(evidence) == set(EVIDENCE_HASHES) | {
+        "binary_checked", "mappings_used", "summaries_used"}, "evidence fields")
+    need(all(SHA.fullmatch(str(evidence[k])) for k in EVIDENCE_HASHES), "evidence hash")
+    need(type(evidence["binary_checked"]) is bool, "binary check flag")
+    need(all(isinstance(evidence[k], list) and all(isinstance(i, str) for i in evidence[k])
+             for k in ("mappings_used", "summaries_used")), "dependency lists")
+
+
+def compare_envelopes(base, derived, rules=None):
+    """Verify both envelopes and their shared rule versions, then compare contracts.
+    Envelopes without original-binary binding never yield `equivalent`."""
+    for envelope in (base, derived):
+        verify_envelope(envelope)
+    a, b = base["identity"], derived["identity"]
+    if a["arch"] != b["arch"] or a["opcode"] != b["opcode"] or a["binary_sha256"] == b["binary_sha256"]:
+        raise InvalidEvidence("expected distinct same-architecture builds of one opcode")
+    for key in EVIDENCE_HASHES[1:]:
+        if base["evidence"][key] != derived["evidence"][key] or (rules and rules[key] != base["evidence"][key]):
+            raise InvalidEvidence("rule or tool version mismatch: " + key)
+    result = compare(base["contract"], derived["contract"])
+    if result["status"] == "equivalent" and not (base["evidence"]["binary_checked"]
+                                                 and derived["evidence"]["binary_checked"]):
+        return {"status": "unknown", "reason": "binary-not-checked",
+                **{k: v for k, v in result.items() if k.endswith("sha256")}}
+    return result
+
+
 def load(path):
     def pairs(items):
         result = {}

@@ -1,0 +1,44 @@
+{
+  "schema": "cmvs-contract-mappings-v1",
+  "revision": "chronoclock-m1-pilot-2026-10-31",
+  "entries": [
+    {
+      "id": "vm.main-image-manager",
+      "logical_target": {"region": "vm", "object": "vm", "field": "main_image_manager", "width": 64,
+                         "points_to": "main_image_manager"},
+      "sides": [
+        {"binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5", "arch": "x64",
+         "base_object": "vm", "offset": "0x1298", "width": 64},
+        {"binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d", "arch": "x64",
+         "base_object": "vm", "offset": "0x1298", "width": 64}
+      ],
+      "evidence": [
+        "writers: base 0x14001530b (store constructed manager) / 0x140016bd3 (teardown); derived 0x14001430b / 0x140015bd3",
+        "readers: 0x203f case base 0x1400827a7 / derived 0x14007ee40; image swap coordinator base 0x140015620+42 / derived 0x140014600+42",
+        "docs/games/chronoclock/vm-semantics.md#图像缓存提示与换图组2026-10-31-复核"
+      ],
+      "scope": "VM object rooted at dispatcher rbx; pointer field only, never written by lifted commands",
+      "review": {"source": "manual pilot review", "date": "2026-10-31", "status": "pilot",
+                 "limitations": "points_to assumes initialisation succeeded; on allocation failure both builds store the failed result and the commands dereference it without a check. Same unchecked shape on both sides, not a modelled null path."}
+    },
+    {
+      "id": "image-manager.next-read-hint",
+      "logical_target": {"region": "object", "object": "main_image_manager", "field": "next_read_cache_hint",
+                         "width": 32},
+      "sides": [
+        {"binary_sha256": "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5", "arch": "x64",
+         "base_object": "main_image_manager", "offset": "0x60d8", "width": 32},
+        {"binary_sha256": "d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d", "arch": "x64",
+         "base_object": "main_image_manager", "offset": "0x58b8", "width": 32}
+      ],
+      "evidence": [
+        "writers of 1: hint function base 0x140035a90 / derived 0x1400341f0; preload path base 0x140036ae0+106,+145 / derived 0x140034f90+106,+145",
+        "consumer: raw resource read base 0x140036820+12 reads then +22 clears / derived 0x140034cd0 same instruction indices, then test and cache lookup",
+        "docs/games/chronoclock/vm-semantics.md#图像缓存提示与换图组2026-10-31-复核 (raw read function 166 instructions each, differences only field/path displacements)"
+      ],
+      "scope": "main image manager object reached through vm.main-image-manager only; not the independent manager at VM +0x12a0",
+      "review": {"source": "manual pilot review", "date": "2026-10-31", "status": "pilot",
+                 "limitations": "consumer closure covers the raw read function in both builds; no runtime test of the cache effect"}
+    }
+  ]
+}
