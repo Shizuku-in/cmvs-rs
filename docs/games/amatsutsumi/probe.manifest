@@ -1,0 +1,5 @@
+# Probe manifest for Amatsutsumi: labels only; automatic recognition needs no corrections.
+profile cmvs-20160201 -- game record amatsutsumi
+label page intproc.ps3 0x4+1x49 settings -- page graph 2026-11-01: controls change text speed, auto advance and read skip
+label page intproc.ps3 0x4+2x3 exit dialog -- page graph 2026-11-01: button 2:0 quits
+label choice sn1012.ps3 0x318a4 first route choice -- route exploration 2026-11-01: first choice point
