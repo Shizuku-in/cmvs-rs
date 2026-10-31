@@ -54,6 +54,11 @@ pub enum Action {
     /// Mouse wheel up or down for one frame.
     WheelUp,
     WheelDown,
+    /// Wheel over a particular scroll region, rather than the last pointer position.
+    WheelAt {
+        point: [i32; 2],
+        up: bool,
+    },
 }
 
 /// Input held during one VM frame. `pointer` keeps its previous value when `None`.
@@ -158,7 +163,10 @@ impl Device {
             }
             (Self::Mouse, Action::WheelUp) => Ok(tap(MOUSE_CODES[2], None)),
             (Self::Mouse, Action::WheelDown) => Ok(tap(MOUSE_CODES[3], None)),
-            (Self::Keyboard, Action::WheelUp | Action::WheelDown) => {
+            (Self::Mouse, Action::WheelAt { point, up }) => {
+                Ok(tap(MOUSE_CODES[if up { 2 } else { 3 }], Some(point)))
+            }
+            (Self::Keyboard, Action::WheelUp | Action::WheelDown | Action::WheelAt { .. }) => {
                 Err("the keyboard device has no wheel".into())
             }
         }

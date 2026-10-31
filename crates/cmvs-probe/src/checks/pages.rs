@@ -51,6 +51,7 @@ enum Step {
     /// Enter the scenario and stop at message wait `ROOT_WAIT`.
     Scenario,
     Press(usize, usize),
+    Wheel(usize, bool),
     Cancel,
 }
 
@@ -59,6 +60,7 @@ impl Step {
         match self {
             Self::Scenario => "scenario".into(),
             Self::Press(g, b) => format!("press {g}:{b}"),
+            Self::Wheel(g, up) => format!("wheel {} group {g}", if *up { "up" } else { "down" }),
             Self::Cancel => "cancel".into(),
         }
     }
@@ -151,6 +153,12 @@ fn apply(session: &mut Session<'_>, entry: (usize, usize), step: &Step) -> Arriv
                 button: *b,
             },
             Step::Cancel => Action::Cancel,
+            Step::Wheel(group, up) => {
+                let point = crate::controls::group(session.startup(), *group)
+                    .and_then(|group| group.scroll_point())
+                    .ok_or_else(|| Stop::Error(format!("scroll group {group} is not present")))?;
+                Action::WheelAt { point, up: *up }
+            }
         };
         session.act(action).map_err(Stop::Error)?;
         let mut settle = Settle::new(STABLE_FRAMES);
@@ -240,6 +248,16 @@ fn actions_at(session: &Session<'_>) -> Vec<Step> {
         steps = (0..MAX_BUTTONS)
             .map(|i| steps[i * total / MAX_BUTTONS].clone())
             .collect();
+    }
+    if session.device() == crate::device::Device::Mouse {
+        for slot in cmvs_core::buttons::BUTTON_GROUPS..crate::controls::GROUPS {
+            if crate::controls::group(session.startup(), slot)
+                .and_then(|group| group.scroll_point())
+                .is_some()
+            {
+                steps.extend([Step::Wheel(slot, true), Step::Wheel(slot, false)]);
+            }
+        }
     }
     steps.push(Step::Cancel);
     steps

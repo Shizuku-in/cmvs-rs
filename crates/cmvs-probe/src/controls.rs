@@ -51,6 +51,13 @@ impl Group<'_> {
         let [x, y, w, h] = self.rect(index)?;
         Some([x.checked_add(w / 2)?, y.checked_add(h / 2)?])
     }
+    pub fn scroll_point(&self) -> Option<[i32; 2]> {
+        let [x, y, w, h] = self.clip?;
+        if w <= 0 || h <= 0 {
+            return None;
+        }
+        Some([x.checked_add(w / 2)?, y.checked_add(h / 2)?])
+    }
 }
 
 pub fn group<'a>(run: &'a Startup<'_>, slot: usize) -> Option<Group<'a>> {
