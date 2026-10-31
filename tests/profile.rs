@@ -7,8 +7,8 @@ use cmvs_rs::{
     exe::{Arch, Case, Dispatch, PeImage, find_dispatch},
     machine::Machine,
     profile::{
-        CommandGate, CommandStatus, EngineProfile, Evidence, Family, FileEvidence, GateErrorKind,
-        Registry, SelectionBasis, SelectionError,
+        CommandGate, CommandStatus, ContractProof, ContractRules, ContractSide, EngineProfile,
+        Evidence, Family, FileEvidence, GateErrorKind, Registry, SelectionBasis, SelectionError,
     },
 };
 use support::bytecode::{command, pending, script};
@@ -256,7 +256,7 @@ fn profile_data_parses_the_same_with_crlf_line_endings() {
 }
 
 #[test]
-fn machine_proofs_bind_both_exes_and_pass_the_default_gate() {
+fn machine_proofs_bind_both_exes_and_legacy_presumed_needs_its_own_policy() {
     let root = build("synthetic-root", None, &[0, 1, 2, 0], 1).to_text();
     let derived = build(
         "synthetic-derived",
@@ -306,6 +306,20 @@ fn machine_proofs_bind_both_exes_and_pass_the_default_gate() {
         command(&mut code, 0x201d, &[0]);
         let program = script(&code);
         let (vm, pc) = pending_machine(&program);
+        if status == CommandStatus::Presumed {
+            assert_eq!(
+                gate.check(&vm, pc, 0).unwrap_err().kind,
+                GateErrorKind::Presumed
+            );
+            assert_eq!(gate.counts().presumed, 0);
+            gate.set_allow_unreviewed(true);
+            assert_eq!(
+                gate.check(&vm, pc, 0).unwrap_err().kind,
+                GateErrorKind::Presumed
+            );
+            gate.set_allow_unreviewed(false);
+            gate.set_allow_presumed(true);
+        }
         assert_eq!(gate.check(&vm, pc, 0), Ok(None));
         assert!(gate.allowed().is_empty());
         let counts = gate.counts();
@@ -352,6 +366,223 @@ fn machine_proofs_bind_both_exes_and_pass_the_default_gate() {
         let root_no_handler = root.replace("0x2000 base", "0x2000 noop");
         assert!(Registry::parse(&[&root_no_handler, &text], "").is_err());
     }
+}
+
+fn contract_fixture() -> (EngineProfile, EngineProfile, ContractProof) {
+    let root = build("synthetic-root", None, &[0, 1, 2, 0], 1);
+    let derived = build(
+        "synthetic-derived",
+        Some("synthetic-root"),
+        &[0, 1, 2, 0],
+        3,
+    );
+    let side = |profile: &EngineProfile, export| {
+        let binary = &profile.binaries[0];
+        let Case::Handler(case_rva) = binary.cases[0] else {
+            panic!("fixture")
+        };
+        ContractSide {
+            profile: profile.id.clone(),
+            binary_sha256: binary.sha256,
+            image_base: binary.image_base,
+            case_rva,
+            export_sha256: [export; 32],
+            contract_sha256: [9; 32],
+        }
+    };
+    let proof = ContractProof {
+        arch: Arch::X64,
+        opcode: 0x2000,
+        base: side(&root, 5),
+        derived: side(&derived, 6),
+        rules: ContractRules {
+            extractor: [10; 32],
+            context: [11; 32],
+            mappings: [12; 32],
+            summaries: [13; 32],
+        },
+        report_sha256: [14; 32],
+        mappings_used: vec!["vm.flag".into()],
+        summaries_used: vec![],
+    };
+    (root, derived, proof)
+}
+
+fn certified_text(profile: &EngineProfile, proof: &ContractProof) -> String {
+    profile
+        .to_text()
+        .lines()
+        .map(|l| {
+            if l.starts_with("0x2000 ") {
+                format!(
+                    "{} contract={}",
+                    l.replace("unreviewed", "contract-equivalent"),
+                    to_hex(&proof.id())
+                )
+            } else {
+                l.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn contract_certificates_bind_round_trip_and_count_attempts_without_completing_commands() {
+    let (root, derived, proof) = contract_fixture();
+    let text = certified_text(&derived, &proof);
+    let registry = Registry::parse_with_contracts(
+        &[&root.to_text(), &text],
+        "",
+        &proof.to_line(),
+        std::slice::from_ref(&proof.rules),
+    )
+    .unwrap();
+    let profile = registry.profile("synthetic-derived").unwrap();
+    assert_eq!(profile.status(0), CommandStatus::ContractEquivalent);
+    assert_eq!(profile.proof(0), None);
+    assert_eq!(profile.review(0), None);
+    assert_eq!(profile.contract_id(0), Some(&proof.id()));
+    assert_eq!(registry.contract_proof(&proof.id()), Some(&proof));
+    assert_eq!(
+        Registry::parse_with_contracts(
+            &[&root.to_text(), &profile.to_text()],
+            "",
+            &proof.to_line(),
+            std::slice::from_ref(&proof.rules)
+        )
+        .unwrap(),
+        registry
+    );
+    assert!(Registry::parse(&[&root.to_text(), &text], "").is_err());
+    let selection = registry
+        .select(Some("synthetic-derived"), &Evidence::default())
+        .unwrap();
+    let mut gate = CommandGate::new(selection);
+    let mut code = vec![];
+    command(&mut code, 0x201d, &[0]);
+    let program = script(&code);
+    let (vm, pc) = pending_machine(&program);
+    let pending = vm.pending_system();
+    for _ in 0..2 {
+        assert_eq!(gate.check(&vm, pc, 0), Ok(None));
+    }
+    assert_eq!(gate.counts().contract_equivalent, 2);
+    assert_eq!(gate.contracted().iter().copied().collect::<Vec<_>>(), [0]);
+    assert!(gate.diagnostic_lines().join("\n").contains("0x2000"));
+    assert_eq!(vm.pending_system(), pending);
+    assert_eq!(
+        gate.check(&vm, pc, 1).unwrap_err().kind,
+        GateErrorKind::NoOp
+    );
+    assert_eq!(
+        gate.check(&vm, pc, 2).unwrap_err().kind,
+        GateErrorKind::Absent
+    );
+    assert_eq!(
+        gate.check(&vm, pc, 3).unwrap_err().kind,
+        GateErrorKind::Unreviewed
+    );
+}
+
+#[test]
+fn contract_registry_rejects_wrong_identity_domain_rules_and_revoked_evidence() {
+    let (root, derived, proof) = contract_fixture();
+    let reject = |p: &ContractProof, catalog: String, active: &[ContractRules]| {
+        assert!(
+            Registry::parse_with_contracts(
+                &[&root.to_text(), &certified_text(&derived, p)],
+                "",
+                &catalog,
+                active
+            )
+            .is_err()
+        );
+    };
+    for mutate in [
+        |p: &mut ContractProof| p.opcode += 1,
+        |p: &mut ContractProof| p.base.profile = "other-root".into(),
+        |p: &mut ContractProof| p.derived.profile = "other-derived".into(),
+        |p: &mut ContractProof| p.base.binary_sha256 = [2; 32], // other architecture
+        |p: &mut ContractProof| p.derived.binary_sha256 = [4; 32],
+        |p: &mut ContractProof| p.base.image_base += 1,
+        |p: &mut ContractProof| p.derived.image_base += 1,
+        |p: &mut ContractProof| p.base.case_rva += 1,
+        |p: &mut ContractProof| p.derived.case_rva += 1,
+        |p: &mut ContractProof| p.derived.contract_sha256 = [15; 32],
+        |p: &mut ContractProof| p.arch = Arch::X86,
+        |p: &mut ContractProof| p.mappings_used.push("vm.flag".into()),
+    ] {
+        let mut changed = proof.clone();
+        mutate(&mut changed);
+        reject(
+            &changed,
+            changed.to_line(),
+            std::slice::from_ref(&proof.rules),
+        );
+    }
+    for mutate in [
+        |r: &mut ContractRules| r.extractor = [0; 32],
+        |r: &mut ContractRules| r.context = [0; 32],
+        |r: &mut ContractRules| r.mappings = [0; 32],
+        |r: &mut ContractRules| r.summaries = [0; 32],
+    ] {
+        let mut active = proof.rules.clone();
+        mutate(&mut active);
+        reject(&proof, proof.to_line(), &[active]);
+    }
+    for bad in [
+        proof.to_line().replace("proof v1", "proof v2"),
+        proof
+            .to_line()
+            .replace("coverage=closed", "coverage=incomplete"),
+        proof
+            .to_line()
+            .replace("binary=checked", "binary=unchecked"),
+        proof
+            .to_line()
+            .replace("result=equivalent", "result=different"),
+        proof
+            .to_line()
+            .replace("model=cmvs-command-contract-v1", "model=unknown"),
+        format!("{}\n{}", proof.to_line(), proof.to_line()),
+        format!("{}\nrevoked {}", proof.to_line(), to_hex(&proof.id())),
+        String::new(),
+    ] {
+        reject(&proof, bad, std::slice::from_ref(&proof.rules));
+    }
+    reject(&proof, proof.to_line(), &[]);
+    // Retain a revoked certificate for audit even after its old rules are retired.
+    // Downgrading the profile removes all authorization; the old proof cannot resolve.
+    let revoked = format!("{}\nrevoked {}", proof.to_line(), to_hex(&proof.id()));
+    let downgraded =
+        Registry::parse_with_contracts(&[&root.to_text(), &derived.to_text()], "", &revoked, &[])
+            .unwrap();
+    assert_eq!(downgraded.contract_proof(&proof.id()), None);
+    assert_eq!(
+        downgraded.profile("synthetic-derived").unwrap().status(0),
+        CommandStatus::Unreviewed
+    );
+    // An identical certificate cannot be reused for a different opcode or a chain.
+    let text = certified_text(&derived, &proof);
+    let extra = text.lines().find(|l| l.starts_with("0x2003 ")).unwrap();
+    let with_other = text.replace(
+        extra,
+        &format!(
+            "{} contract={}",
+            extra.replace("unreviewed", "contract-equivalent"),
+            to_hex(&proof.id())
+        ),
+    );
+    assert!(
+        Registry::parse_with_contracts(
+            &[&root.to_text(), &with_other],
+            "",
+            &proof.to_line(),
+            std::slice::from_ref(&proof.rules)
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -657,6 +888,7 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
             profile.count(CommandStatus::Base)
                 + profile.count(CommandStatus::Inherited)
                 + profile.count(CommandStatus::Reviewed)
+                + profile.count(CommandStatus::ContractEquivalent)
                 + profile.count(CommandStatus::Presumed)
                 + profile.count(CommandStatus::Unreviewed),
             handlers

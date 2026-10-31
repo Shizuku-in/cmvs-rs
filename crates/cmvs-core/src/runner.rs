@@ -287,6 +287,9 @@ impl<'a> Startup<'a> {
     pub fn set_allow_unreviewed(&mut self, allow: bool) {
         self.gate.set_allow_unreviewed(allow);
     }
+    pub fn set_allow_presumed(&mut self, allow: bool) {
+        self.gate.set_allow_presumed(allow);
+    }
     pub fn gate(&self) -> &CommandGate<'a> {
         &self.gate
     }

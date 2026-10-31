@@ -1,5 +1,7 @@
 # 《クロノクロック》测试档案
 
+2026-11-01 M3 更新：当前455条 `Inherited`、25条 `Reviewed`、3条 `ContractEquivalent`、164条旧 `Presumed`、65条 `Unreviewed` 和264条 `NoOp`。三条契约来源为 `0x2008`、`0x2009`、`0x2087`，见 [M2 审计](contract-m2.md#global-pilot)及 [M3 迁移与回归](../../design/command-contracts-m3.md)。旧推定现已默认停止：严格 runner 在步骤24、`start.ps3 / 0x76 / 0x2092` 停下；显式 `--allow-presumed` 可重现下述历史 `0x22b2` 停点。该路线没有执行新增三条契约命令，不增加游戏验证范围。
+
 2026-10-30建档，基线`6475d2f`。截至2026-10-31，档案登记455条`Inherited`、167条`Presumed`、25条`Reviewed`、65条`Unreviewed`及264条`NoOp`；x86独立报告425条继承、207条推定，未直接合并。图像缓存/换图组新增三条复核后，默认闸门的无快照runner在steps=102340、`cdemo.ps3 / 0xf090 / 0x22b2`明确报未复核；本轮实际完成两次`0x203f`，另两条仅静态复核。`0x2032`、`0x2118`、`0x2176`虽然静态复核，Rust尚无处理器；复核不表示全部已实现。trace工具缺少MessageHost，旧`0x2141`属于工具处理能力屏障。剧情快照子记录存在实际构建差异，派生档案生成/恢复快照仍显式拒绝。先前研究放行下runner的`0x2112`停点保留为历史记录。见[研究记录](research.md)、[VM语义](vm-semantics.md)及[指纹报告](profiles/)。
 
 ## 样本身份

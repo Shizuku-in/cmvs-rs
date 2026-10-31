@@ -29,6 +29,32 @@ use cmvs_rs::{
 };
 use std::{collections::BTreeMap, env, error::Error, fs::File, io::Read};
 
+// Emit source diagnostics on every return path, including a handler error or budget stop.
+struct TraceGate<'a>(CommandGate<'a>);
+impl<'a> std::ops::Deref for TraceGate<'a> {
+    type Target = CommandGate<'a>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for TraceGate<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl Drop for TraceGate<'_> {
+    fn drop(&mut self) {
+        if self.0.selection().profile.base.is_some() {
+            use std::io::Write;
+            let mut stdout = std::io::stdout().lock();
+            for line in self.0.diagnostic_lines() {
+                // Diagnostics must not cause a second panic if the output pipe closed.
+                let _ = writeln!(stdout, "{line}");
+            }
+        }
+    }
+}
+
 fn number(raw: &std::ffi::OsStr) -> Result<u32, Box<dyn Error>> {
     let text = raw.to_str().ok_or("expected numeric argument")?;
     Ok(if let Some(hex) = text.strip_prefix("0x") {
@@ -45,7 +71,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         .ok_or("usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap]")?;
     if path == "--help" {
         println!(
-            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap] [--script-archive <archive>] [--virtual-tick <tick>] [--frame-ms <delta>] [--save-dir <directory>] [--system-save <file>] [--record-platform <game-root>] [--continue-without-snapshot] [--rand-seed <seed>] [--profile <id>] [--allow-unreviewed]\nThe engine profile is identified from the input script or archive, --script-archive and, with --record-platform, the executables in that game root; synthetic or unrecorded scripts need an explicit --profile. Every system command passes the profile gate first: absent and no-op commands stop, unreviewed commands stop unless --allow-unreviewed (research only, first use logged).\n--frame-ms supplies a positive engine-frame delta on each supported wait/yield; without it time stays frozen. Callback ticks remain separate. --script loads an isolated initial script. --script-archive supplies common/main scripts and enables explicit control handling with virtual time (default tick 0), without automatic scheduling. --bootstrap applies verified startup configuration. --save-dir enables read-only saveNNN.dat header scanning and menu state, without native UI or save restoration. --system-save explicitly enables CSS1 persistent-state loading for 0x2128; it does not restore a gameplay snapshot. --record-platform enables a recording-only backend with read-only cursor/icon assets from the explicit game root, plus verified state such as the clear color, the save title and pointer-gesture configuration, records SE playback requests without audio output, and decodes 0x2030 object images read-only from the 0x2011 entries; no native window, drawing, or input polling. Main transfer and scenario 0x22b2 stop at the engine save snapshot unless --continue-without-snapshot is given; that applies only the verified live-state effect, builds no save image, and leaves saving unavailable. --rand-seed enables 0x20d4 with the CRT rand() generator from an explicit seed; the original seeds from timeGetTime and draws every frame, so values are not reproducible."
+            "Usage: cmvs-trace <script-or-archive> [--script <ASCII-basename>] [--entry <pc>] [--steps <budget>] [--bootstrap] [--script-archive <archive>] [--virtual-tick <tick>] [--frame-ms <delta>] [--save-dir <directory>] [--system-save <file>] [--record-platform <game-root>] [--continue-without-snapshot] [--rand-seed <seed>] [--profile <id>] [--allow-unreviewed] [--allow-presumed]\nThe engine profile is identified from the input script or archive, --script-archive and, with --record-platform, the executables in that game root; synthetic or unrecorded scripts need an explicit --profile. Every system command passes the profile gate first: Base, Inherited, Reviewed and ContractEquivalent run existing handlers; absent and no-op commands stop. Legacy presumed commands stop unless --allow-presumed; unreviewed commands stop unless --allow-unreviewed (separate research policies).\n--frame-ms supplies a positive engine-frame delta on each supported wait/yield; without it time stays frozen. Callback ticks remain separate. --script loads an isolated initial script. --script-archive supplies common/main scripts and enables explicit control handling with virtual time (default tick 0), without automatic scheduling. --bootstrap applies verified startup configuration. --save-dir enables read-only saveNNN.dat header scanning and menu state, without native UI or save restoration. --system-save explicitly enables CSS1 persistent-state loading for 0x2128; it does not restore a gameplay snapshot. --record-platform enables a recording-only backend with read-only cursor/icon assets from the explicit game root, plus verified state such as the clear color, the save title and pointer-gesture configuration, records SE playback requests without audio output, and decodes 0x2030 object images read-only from the 0x2011 entries; no native window, drawing, or input polling. Main transfer and scenario 0x22b2 stop at the engine save snapshot unless --continue-without-snapshot is given; that applies only the verified live-state effect, builds no save image, and leaves saving unavailable. --rand-seed enables 0x20d4 with the CRT rand() generator from an explicit seed; the original seeds from timeGetTime and draws every frame, so values are not reproducible."
         );
         return Ok(());
     }
@@ -63,7 +89,12 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut random = None;
     let mut profile = None;
     let mut allow_unreviewed = false;
+    let mut allow_presumed = false;
     while let Some(flag) = args.next() {
+        if flag == "--allow-presumed" {
+            allow_presumed = true;
+            continue;
+        }
         if flag == "--allow-unreviewed" {
             allow_unreviewed = true;
             continue;
@@ -135,8 +166,14 @@ fn run() -> Result<(), Box<dyn Error>> {
     if let Some(root) = &platform_root {
         evidence.executables = Evidence::executables_in(root.as_ref())?;
     }
-    let mut gate = CommandGate::new(Registry::builtin().select(profile.as_deref(), &evidence)?);
+    let mut gate = TraceGate(CommandGate::new(
+        Registry::builtin().select(profile.as_deref(), &evidence)?,
+    ));
     gate.set_allow_unreviewed(allow_unreviewed);
+    gate.set_allow_presumed(allow_presumed);
+    if allow_presumed {
+        println!("# research policy: legacy presumed commands allowed (--allow-presumed)");
+    }
     for line in gate.selection().log_lines() {
         println!("{line}");
     }
@@ -266,12 +303,6 @@ fn run() -> Result<(), Box<dyn Error>> {
         } = event
         {
             let checked = gate.check(&machine, system_pc, command);
-            if checked.is_err() && gate.selection().profile.base.is_some() {
-                println!("{}", gate.summary_line());
-                if let Some(line) = gate.presumed_line() {
-                    println!("{line}");
-                }
-            }
             if let Some(first) = checked? {
                 println!(
                     "# UNREVIEWED system command 0x{:04x} allowed with base semantics (--allow-unreviewed, first use)",
@@ -846,12 +877,6 @@ fn run() -> Result<(), Box<dyn Error>> {
                     "# system_integer[0]={:?}",
                     machine.state().system_integer(0)
                 );
-            }
-            if gate.selection().profile.base.is_some() {
-                println!("{}", gate.summary_line());
-                if let Some(line) = gate.presumed_line() {
-                    println!("{line}");
-                }
             }
             println!(
                 "# STOP pending system=0x{:04x}; PC and parameters preserved; not game completion",

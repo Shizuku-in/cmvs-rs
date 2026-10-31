@@ -52,14 +52,14 @@ impl<'a> Lines<'a> {
     }
 }
 
-fn at(line: usize, message: impl Into<String>) -> ProfileError {
+pub(super) fn at(line: usize, message: impl Into<String>) -> ProfileError {
     ProfileError {
         line: Some(line),
         message: message.into(),
     }
 }
 
-fn hex_number(line: usize, text: &str) -> Result<u64, ProfileError> {
+pub(super) fn hex_number(line: usize, text: &str) -> Result<u64, ProfileError> {
     text.strip_prefix("0x")
         .filter(|h| !h.is_empty() && h.bytes().all(|b| b.is_ascii_hexdigit()))
         .and_then(|h| u64::from_str_radix(h, 16).ok())
@@ -70,10 +70,10 @@ fn hex_number(line: usize, text: &str) -> Result<u64, ProfileError> {
             )
         })
 }
-fn hex32(line: usize, text: &str) -> Result<u32, ProfileError> {
+pub(super) fn hex32(line: usize, text: &str) -> Result<u32, ProfileError> {
     u32::try_from(hex_number(line, text)?).map_err(|_| at(line, "value exceeds 32 bits"))
 }
-fn sha(line: usize, text: &str) -> Result<[u8; 32], ProfileError> {
+pub(super) fn sha(line: usize, text: &str) -> Result<[u8; 32], ProfileError> {
     parse_hex(text).ok_or_else(|| at(line, "expected 64 lowercase hexadecimal digits"))
 }
 fn sha_field(line: usize, text: &str) -> Result<[u8; 32], ProfileError> {
@@ -83,14 +83,18 @@ fn sha_field(line: usize, text: &str) -> Result<[u8; 32], ProfileError> {
             .ok_or_else(|| at(line, "expected sha256=<digest>"))?,
     )
 }
-fn identifier(line: usize, text: &str) -> Result<String, ProfileError> {
+pub(super) fn identifier(line: usize, text: &str) -> Result<String, ProfileError> {
     is_identifier(text)
         .then(|| text.to_owned())
         .ok_or_else(|| at(line, "expected a lowercase ASCII identifier"))
 }
 
 /// `key=value` fields in a fixed order, so the files stay diffable.
-fn fields<'a>(line: usize, words: &[&'a str], keys: &[&str]) -> Result<Vec<&'a str>, ProfileError> {
+pub(super) fn fields<'a>(
+    line: usize,
+    words: &[&'a str],
+    keys: &[&str],
+) -> Result<Vec<&'a str>, ProfileError> {
     if words.len() != keys.len() {
         return Err(at(line, format!("expected fields {}", keys.join(" "))));
     }
@@ -196,6 +200,7 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
     let mut statuses = Vec::new();
     let mut proofs = std::collections::BTreeMap::new();
     let mut reviews = std::collections::BTreeMap::new();
+    let mut contracts = std::collections::BTreeMap::new();
     while let Some((line, words)) = lines.next() {
         let proof_key = match words.get(1) {
             Some(&"inherited") => Some("inherit="),
@@ -203,7 +208,10 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
             _ => None,
         };
         let reviewed = words.get(1) == Some(&"reviewed");
-        if words.len() != 2 + binaries.len() + usize::from(proof_key.is_some() || reviewed) {
+        let contracted = words.get(1) == Some(&"contract-equivalent");
+        if words.len()
+            != 2 + binaries.len() + usize::from(proof_key.is_some() || reviewed || contracted)
+        {
             return Err(at(
                 line,
                 "command row needs status and one address per binary",
@@ -218,6 +226,7 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
             "base" => CommandStatus::Base,
             "inherited" => CommandStatus::Inherited,
             "reviewed" => CommandStatus::Reviewed,
+            "contract-equivalent" => CommandStatus::ContractEquivalent,
             "presumed" => CommandStatus::Presumed,
             "unreviewed" => CommandStatus::Unreviewed,
             _ => return Err(at(line, "unknown command status")),
@@ -253,6 +262,14 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
                 .filter(|path| is_review_path(path))
                 .ok_or_else(|| at(line, "expected review=<docs-relative .md path>"))?;
             reviews.insert(statuses.len() as u16, path.to_owned());
+        }
+        if contracted {
+            let id = words
+                .last()
+                .expect("row length checked")
+                .strip_prefix("contract=")
+                .ok_or_else(|| at(line, "expected contract=<certificate id>"))?;
+            contracts.insert(statuses.len() as u16, sha(line, id)?);
         }
         statuses.push(status);
         for (binary, word) in binaries.iter_mut().zip(&words[2..]) {
@@ -291,6 +308,7 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
         binaries,
         statuses,
         proofs,
+        contracts,
         reviews,
     };
     profile.validate()?;
@@ -352,6 +370,9 @@ impl EngineProfile {
             }
             if let Some(path) = self.review(i as u16) {
                 let _ = write!(out, " review={path}");
+            }
+            if let Some(id) = self.contract_id(i as u16) {
+                let _ = write!(out, " contract={}", to_hex(id));
             }
             if let Some(proof) = self.proof(i as u16) {
                 let key = match status {

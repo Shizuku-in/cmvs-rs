@@ -2,6 +2,8 @@
 
 > 2026-11-01，有限离线试点完成。对应[规划](command-contracts.md) M2，建立在 [M1](command-contracts-m1.md) 之上。仍只产出离线报告，运行闸门、档案状态和 Rust 分派未变。
 
+后续运行接入与旧推定策略变更见 [M3](command-contracts-m3.md)，以下保留 M2 阶段结果。
+
 ## 1. 本轮完成（M2a/M2b）
 
 | 能力 | 内容 |
