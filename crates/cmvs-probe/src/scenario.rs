@@ -246,6 +246,11 @@ impl Scenario {
             if session.busy() {
                 continue;
             }
+            // Polling a timed sequence is active execution, not a quiet confirm
+            // loop. A frame-count nudge could finish it early at one frame time.
+            if session.startup().sequence().header().active != 0 {
+                self.quiet_since = o.yields;
+            }
             // Finishing a route can unlock start-page buttons, so only the script must match.
             if self.in_scenario
                 && let Some(page) = self.settle.feed(&o)
