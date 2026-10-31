@@ -2,6 +2,7 @@
 
 python -I tools/profile_compare.py BASE.json DERIVED.json --report REPORT.tsv
     [--base-profile BASE.profile --profile DERIVED.profile --output-profile OUT.profile]
+python -I tools/profile_compare.py BASE.json DERIVED.json --explain 0x2091
 No input is modified. Incomplete, cyclic, indirect or mutable dependencies never inherit.
 FLIRT-recognized runtime functions are leaves identified by name and their own body.
 """
@@ -86,7 +87,7 @@ def fingerprint(graph, entry, max_depth=8):
         for instruction in node["instructions"]:
             if "library" in node:
                 # A leaf: refs are local branches or opaque placeholders, never walked.
-                normalized.append(instruction)
+                normalized.append({k: instruction[k] for k in ("bytes", "refs", "next")})
                 continue
             refs = []
             for ref in instruction["refs"]:
@@ -199,11 +200,110 @@ def apply_profile(base, derived, rows, base_path, derived_path):
     return "\n".join(output)+"\n"
 
 
+def where(instruction, index):
+    """Function-relative offset when the export has one, else the instruction index."""
+    offset = instruction.get("offset")
+    return f"+0x{offset:x}" if offset is not None and offset >= 0 else (
+        f"-0x{-offset:x}" if offset is not None else f"#{index}")
+
+
+def same_instruction(left, right):
+    """Semantic equality of one instruction, with function refs paired by position."""
+    if (left["bytes"], left["next"], len(left["refs"])) != (right["bytes"], right["next"], len(right["refs"])):
+        return False
+    for a, b in zip(left["refs"], right["refs"]):
+        if a["kind"] != b["kind"]:
+            return False
+        if a["kind"] not in ("function", "unknown-data") and a != b:
+            return False
+    return True
+
+
+def explain(base, derived, opcode, max_depth=8):
+    """Diagnostic only: why one command did not inherit. Never changes a status."""
+    validate(base)
+    validate(derived)
+    if base["arch"] != derived["arch"] or base["policy"] != derived["policy"]:
+        raise ValueError("only same-architecture exports with identical policies may be compared")
+    index = opcode - 0x2000
+    if not 0 <= index < len(derived["commands"]):
+        raise ValueError("opcode outside the derived switch")
+    row = compare(base, derived, max_depth)[index]
+    lines = [f"0x{opcode:04x} {row['status']}: {row['reason']}"]
+    left = base["commands"][index] if index < len(base["commands"]) else None
+    right = derived["commands"][index]
+    if right["kind"] != "handler" or left is None or left["kind"] != "handler":
+        return lines
+    pairs, seen = {}, set()
+
+    def visit(lkey, rkey, depth):
+        pad = "  " * depth
+        tag = f"{lkey} / {rkey}"
+        if (lkey, rkey) in seen:
+            lines.append(f"{pad}{tag}: see above")
+            return
+        seen.add((lkey, rkey))
+        lnode, rnode = base["functions"][lkey], derived["functions"][rkey]
+        lfp, liss = fingerprint(base, lkey, max_depth-depth)
+        rfp, riss = fingerprint(derived, rkey, max_depth-depth)
+        names = [n.get("library") for n in (lnode, rnode)]
+        label = f" [{names[0]} / {names[1]}]" if any(names) else ""
+        if lfp is not None and lfp == rfp:
+            lines.append(f"{pad}{tag}{label}: same")
+            return
+        if lfp is not None and rfp is not None:
+            lines.append(f"{pad}{tag}{label}: different")
+        else:
+            lines.append(f"{pad}{tag}{label}: incomplete base={','.join(liss) or '-'}"
+                         f" derived={','.join(riss) or '-'}")
+        for side, node in (("base", lnode), ("derived", rnode)):
+            own = set(node["issues"]) - {i for ins in node["instructions"] for i in ins.get("issues", [])}
+            if own:
+                lines.append(f"{pad}  {side} function: {','.join(sorted(own))}")
+            for offset in node.get("undecoded", []):
+                lines.append(f"{pad}  {side} undecoded at +0x{offset:x}")
+            for k, ins in enumerate(node["instructions"]):
+                if ins.get("issues"):
+                    lines.append(f"{pad}  {side} {where(ins, k)} {ins['bytes']}: {','.join(ins['issues'])}")
+        if names[0] or names[1]:
+            return
+        if lnode.get("entry_index") != rnode.get("entry_index"):
+            lines.append(f"{pad}  entry index {lnode.get('entry_index')} / {rnode.get('entry_index')}")
+        aligned = 0
+        for a, b in zip(lnode["instructions"], rnode["instructions"]):
+            if not same_instruction(a, b):
+                lines.append(f"{pad}  first difference: base {where(a, aligned)} {a['bytes']}"
+                             f" / derived {where(b, aligned)} {b['bytes']}")
+                break
+            aligned += 1
+        else:
+            if len(lnode["instructions"]) != len(rnode["instructions"]):
+                lines.append(f"{pad}  instruction count {len(lnode['instructions'])}"
+                             f" / {len(rnode['instructions'])}")
+        if depth >= max_depth:
+            lines.append(f"{pad}  depth limit; callees not explained")
+            return
+        # Callees and data are paired only within the identical instruction prefix.
+        for a, b in zip(lnode["instructions"][:aligned], rnode["instructions"][:aligned]):
+            for ra, rb in zip(a["refs"], b["refs"]):
+                if ra["kind"] == "unknown-data":
+                    pairs.setdefault((ra.get("target"), rb.get("target")), ra.get("why"))
+                elif ra["kind"] == "function":
+                    visit(ra["target"], rb["target"], depth+1)
+
+    visit(left["entry"], right["entry"], 0)
+    for (ltarget, rtarget), why in sorted(pairs.items(), key=str):
+        lines.append(f"data {ltarget} / {rtarget}: {why or 'unknown'}")
+    return lines
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("base", type=Path)
     parser.add_argument("derived", type=Path)
-    parser.add_argument("--report", required=True, type=Path)
+    parser.add_argument("--report", type=Path)
+    parser.add_argument("--explain", type=lambda text: int(text, 0), metavar="OPCODE",
+                        help="print why one command did not inherit; writes nothing")
     parser.add_argument("--max-depth", type=int, default=8)
     parser.add_argument("--base-profile", type=Path)
     parser.add_argument("--profile", type=Path)
@@ -211,6 +311,14 @@ def main():
     args = parser.parse_args()
     if not 0 <= args.max_depth <= 32:
         parser.error("max-depth must be 0..32")
+    if args.explain is not None:
+        if any((args.report, args.profile, args.base_profile, args.output_profile)):
+            parser.error("--explain only reads the two exports")
+        base, derived = [json.loads(p.read_text(encoding="utf-8-sig")) for p in (args.base, args.derived)]
+        print("\n".join(explain(base, derived, args.explain, args.max_depth)))
+        return
+    if args.report is None:
+        parser.error("--report is required unless --explain is given")
     if any((args.profile, args.base_profile, args.output_profile)) and not all((args.profile, args.base_profile, args.output_profile)):
         parser.error("all three profile options are required together")
     outputs = [p.resolve() for p in (args.report, args.output_profile) if p]

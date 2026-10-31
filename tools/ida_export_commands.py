@@ -151,7 +151,14 @@ def export_commands(profile_path, output_path):
             insn = ida_ua.insn_t()
             if not ida_bytes.is_code(ida_bytes.get_full_flags(ea)) or not ida_ua.decode_insn(insn, ea):
                 node["issues"].append("undecoded-instruction")
+                node.setdefault("undecoded", []).append(ea-start)
                 continue
+            # Diagnostic only: which instruction raised which issue (`--explain`).
+            notes = []
+
+            def flag(issue, notes=notes):
+                node["issues"].append(issue)
+                notes.append(issue)
             mnemonic = idc.print_insn_mnem(ea).lower()
             features = insn.get_canon_feature()
             call = bool(features & ida_idp.CF_CALL)
@@ -162,7 +169,7 @@ def export_commands(profile_path, output_path):
             for op in ops:
                 if op.type in (ida_ua.o_near, ida_ua.o_far):
                     if op.type == ida_ua.o_far:
-                        node["issues"].append("far-control-flow")
+                        flag("far-control-flow")
                     target = op.addr
                     other = ida_funcs.get_func(target)
                     local = not call and other is not None and other.start_ea == owner.start_ea
@@ -187,29 +194,35 @@ def export_commands(profile_path, output_path):
                         head = ida_bytes.get_item_head(target)
                         size = ida_bytes.get_item_size(head)
                         access = ida_ua.get_dtype_size(op.dtype)
-                        if (seg.perm & (ida_segment.SEGPERM_WRITE | ida_segment.SEGPERM_EXEC)
-                                or not ida_bytes.is_data(ida_bytes.get_full_flags(head))
-                                or not 0 < size <= 65536 or head+size > seg.end_ea
-                                or op.type != ida_ua.o_mem or mnemonic == "lea"
-                                or access <= 0 or target+access > head+size):
-                            node["issues"].append("unresolved-or-mutable-data")
-                            refs.append((op, {"kind": "unknown-data"}))
+                        why = ("code-address" if seg.perm & ida_segment.SEGPERM_EXEC
+                               else "writable" if seg.perm & ida_segment.SEGPERM_WRITE
+                               else "undefined" if not ida_bytes.is_data(ida_bytes.get_full_flags(head))
+                               else "item-size" if not 0 < size <= 65536 or head+size > seg.end_ea
+                               else "indexed" if op.type == ida_ua.o_displ
+                               else "immediate" if op.type != ida_ua.o_mem
+                               else "address-taken" if mnemonic == "lea"
+                               else "access-extent" if access <= 0 or target+access > head+size
+                               else None)
+                        if why:
+                            flag("unresolved-or-mutable-data")
+                            refs.append((op, {"kind": "unknown-data", "target": hex(target-image_base),
+                                              "why": why}))
                         else:
                             data = ida_bytes.get_bytes(head, size)
                             if ida_fixup.contains_fixups(head, size):
-                                node["issues"].append("relocated-data")
+                                flag("relocated-data")
                             refs.append((op, {"kind": "data", "offset": target-head,
                                               "bytes": data.hex()}))
             if (call or jump) and not library:
                 if not any(op.type in (ida_ua.o_near, ida_ua.o_far) or
                            ref["kind"] == "import" for op, ref in refs):
-                    node["issues"].append("indirect-control-flow")
+                    flag("indirect-control-flow")
             for op, ref in refs:
                 off = op.offb
                 later = [o.offb for o in ops if o.offb > off]
                 end = min(later) if later else insn.size
                 if not off or end-off not in (1, 2, 4, 8):
-                    node["issues"].append("unknown-reference-encoding")
+                    flag("unknown-reference-encoding")
                 else:
                     raw[off:end] = bytes(end-off)
             # If IDA knows another data reference that no operand explained, do not guess.
@@ -217,8 +230,9 @@ def export_commands(profile_path, output_path):
             known = {op.value if op.type == ida_ua.o_imm else op.addr for op, _ in refs}
             if not library and any(target not in known and ida_segment.getseg(target)
                                    for target in idautils.DataRefsFrom(ea)):
-                node["issues"].append("unmodeled-data-reference")
-            decoded[ea] = {"bytes": raw.hex(), "refs": [ref for _, ref in refs], "next": None}
+                flag("unmodeled-data-reference")
+            decoded[ea] = {"bytes": raw.hex(), "refs": [ref for _, ref in refs], "next": None,
+                           "offset": ea-start, "issues": notes}
             if not features & ida_idp.CF_STOP:
                 nxt = ea+insn.size
                 other = ida_funcs.get_func(nxt)
@@ -226,7 +240,7 @@ def export_commands(profile_path, output_path):
                     todo.append(nxt)
                     decoded[ea]["next"] = nxt
                 else:
-                    node["issues"].append("fallthrough-outside-function")
+                    flag("fallthrough-outside-function")
         order = {ea: i for i, ea in enumerate(sorted(decoded))}
         node["entry_index"] = order.get(start, -1)
         for ea in sorted(decoded):
@@ -234,12 +248,16 @@ def export_commands(profile_path, output_path):
             if instruction["next"] is not None:
                 if instruction["next"] not in order:
                     node["issues"].append("missing-fallthrough")
+                    instruction["issues"].append("missing-fallthrough")
                 instruction["next"] = order.get(instruction["next"], -1)
             for ref in instruction["refs"]:
                 if ref["kind"] == "local":
                     if ref["target"] not in order:
                         node["issues"].append("missing-local-target")
+                        instruction["issues"].append("missing-local-target")
                     ref["target"] = order.get(ref["target"], -1)
+            if not instruction["issues"]:
+                del instruction["issues"]
             node["instructions"].append(instruction)
         node["issues"] = sorted(set(node["issues"]))
     result = {"schema": SCHEMA, "policy": POLICY, "arch": arch, "profile": profile_id,

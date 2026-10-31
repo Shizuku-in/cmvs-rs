@@ -115,6 +115,43 @@ class ComparisonTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.status()
 
+    def test_diagnostic_fields_never_change_fingerprints(self):
+        plain = pc.compare(self.base, self.derived)[0]
+        self.make_library()
+        library = pc.compare(self.base, self.derived)[0]
+        for g in (self.base, self.derived):
+            for node in g["functions"].values():
+                node["undecoded"] = [7]
+                for k, ins in enumerate(node["instructions"]):
+                    ins["offset"], ins["issues"] = 3*k, []
+        self.assertEqual(pc.compare(self.base, self.derived)[0], library)
+        self.setUp()
+        for g in (self.base, self.derived):
+            for k, ins in enumerate(g["functions"]["0x100" if g is self.base else "0x500"]["instructions"]):
+                ins["offset"] = 5*k
+        self.assertEqual(pc.compare(self.base, self.derived)[0], plain)
+
+    def test_explain_names_the_blocking_instruction_and_data_pair(self):
+        for g, callee, target in [(self.base, "0x200", "0x1010"), (self.derived, "0x900", "0x2020")]:
+            ins = g["functions"][callee]["instructions"][0]
+            ins.update(offset=0, issues=["unresolved-or-mutable-data"])
+            ins["refs"] = [{"kind": "unknown-data", "target": target, "why": "writable"}]
+            g["functions"][callee]["issues"] = ["unresolved-or-mutable-data"]
+        text = "\n".join(pc.explain(self.base, self.derived, 0x2000))
+        self.assertIn("0x2000 unreviewed", text)
+        self.assertIn("0x200 / 0x900: incomplete", text)
+        self.assertIn("base +0x0 b801000000: unresolved-or-mutable-data", text)
+        self.assertIn("data 0x1010 / 0x2020: writable", text)
+
+    def test_explain_marks_same_subtrees_and_the_first_difference(self):
+        self.derived["functions"]["0x900"]["instructions"][0]["bytes"] = "b802000000"
+        text = pc.explain(self.base, self.derived, 0x2000)
+        self.assertEqual(text[0], "0x2000 unreviewed: different")
+        self.assertIn("  0x200 / 0x900: different", text)
+        self.assertIn("    first difference: base #0 b801000000 / derived #0 b802000000", text)
+        self.setUp()
+        self.assertIn("0x100 / 0x500: same", pc.explain(self.base, self.derived, 0x2000))
+
     def test_architecture_schema_and_missing_dependencies_rejected(self):
         for key, value in [("arch", "x86"), ("policy", "old"), ("schema", "unknown")]:
             changed = copy.deepcopy(self.derived)

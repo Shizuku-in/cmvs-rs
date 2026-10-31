@@ -93,3 +93,7 @@ IDA 9.4分别导出两个构建的x64/x86，二进制身份来自各自档案，
 [比较报告](profiles/)替换为 v2 版本：x64 `161a628bcdb1bfcadfee4483e7a27e8eed7a40033befa1cee33aaeb6fd677933`，x86 `e27c5081ea55fcee04b87a38f46097335347dcd19e15cd81a36471409b8d43bb`。x64 继承 387 → 434，x86 362 → 415，v1 的继承无一丢失。第一次导出时有一对占位名库函数（`sub_…`、`unknown_libname_N`）被当作叶子；它们因名称不同从未匹配，但编号可能偶然相同，故改为按普通函数展开并在比较工具中拒绝，重新导出后继承数不变。
 
 默认 trace 同上节参数，仍停在 `start.ps3 / 0x50 / 0x2091`，除统计行外与 M1 日志逐字节一致（`local/chronoclock/v2-default.log`）。Rust 代码未改，只更新本作档案数据，故未重跑《アマツツミ》百万步回归。检查：`cargo fmt --check`、默认离线测试 836 项（12 项忽略）、严格 Clippy、Python 合成测试 15 项。
+
+## 2026-10-31：复核辅助 `--explain`
+
+见[档案设计第 14 节](../../design/engine-profiles.md#复核辅助---explain)。带诊断字段的 x64 导出为 `local/chronoclock/v2d-*-x64.json`（基准 x64 读 `p2-amatsu-x64.i64` 临时副本，CHRONOCLOCK x64 读 `v2-chrono-x64.i64` 临时副本）；与已提交报告逐行相同。`0x2091` 的解释：处理函数 `0x7f1fa` → `0x6eb60` → `0x82330`（基准 `0x82b61` → `0x72100` → `0x85ce0`），在 `+0x32` 读取可写全局（CHRONOCLOCK `qword_140131ea0`），`+0x15` 的映像基址 `lea` 位移不同。人工复核从这两处开始。
