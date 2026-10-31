@@ -86,7 +86,7 @@
 
 从项目目录显式执行外部样本检查（游戏输入只读，报告仅含元数据）：
 
-```powershell
+```bash
 New-Item -ItemType Directory -Force local | Out-Null
 $env:CMVS_SCRIPT_TEST_INPUTS = "E:/Download/AMATSUTSUMI/data/pack/script.cpz;E:/Download/AMATSUTSUMI/data/pack/start.ps3"
 $env:CMVS_SCRIPT_TEST_REPORT = "local/script-validation-sites.tsv"
@@ -98,7 +98,7 @@ Remove-Item Env:CMVS_SCRIPT_TEST_INPUTS, Env:CMVS_SCRIPT_TEST_REPORT
 
 完成度盘点在上面的结构检查报告之外再跑分派探针并合并（不需要游戏文件，输出拒绝覆盖）。探针现开启文字记录，并为 `0x2129` 提供游戏目录外的合成用户目录；否则会将条件禁用的已实现服务误记为无入口。自检不接受panic作为这些入口已认领的证明：
 
-```powershell
+```bash
 $env:CMVS_COMMAND_INVENTORY = "local/inventory/dispatch.tsv"
 cargo test --offline --release --test command_inventory command_inventory -- --ignored --exact
 Remove-Item Env:CMVS_COMMAND_INVENTORY

@@ -4,7 +4,7 @@
 
 ## 桌面预览
 
-```powershell
+```bash
 cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --user-data-dir "local/amatsutsumi/user-data" --audio record --font "C:/Windows/Fonts/msgothic.ttc"
 ```
 
@@ -25,7 +25,7 @@ cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Downl
 
 ## 原生音频
 
-```powershell
+```bash
 cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --user-data-dir "local/amatsutsumi/user-data" --audio native --font "C:/Windows/Fonts/msgothic.ttc"
 ```
 

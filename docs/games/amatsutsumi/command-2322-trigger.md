@@ -50,7 +50,7 @@ toggle(value):
 
 检查命令（游戏只读，不依赖字体或原生窗口）：
 
-```powershell
+```bash
 $env:CMVS_GAME_ROOT='E:/Download/AMATSUTSUMI'
 cargo test --offline --release --test scene external_original_library_toggle_triggers_texture_subtract -- --ignored --exact --nocapture
 ```

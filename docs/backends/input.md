@@ -8,7 +8,7 @@ READ_SKIP已接入运行配置与已读位：开启时，遇到未读ID清脚本
 
 2026-10-27历史状态：桌面默认接入键鼠动作输入；trace 保持无输入。当时能操作标题并选择开始游戏，尚不能显示剧情。
 
-```powershell
+```bash
 cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --audio native
 # 此前只观察、不注入 VM 的桌面研究模式
 cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --input record

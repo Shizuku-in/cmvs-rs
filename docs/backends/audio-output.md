@@ -6,7 +6,7 @@
 `audio-output` 功能引入固定版本 lewton 0.10.2（Vorbis）、rodio 0.21.1（混音/播放）及 cpal 0.16.0（原生设备）。
 项目自身禁止 unsafe，没有新增 C++ 运行核心，没有调用原游戏 DLL。
 
-```powershell
+```bash
 cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --skip-auto-resume --audio native
 ```
 
@@ -74,7 +74,7 @@ BGM 淡变按宿主帧更新线性增益；停止后设备已排队的短缓冲�
 
 `cmvs-audio` 不打开设备，逐包解码 Ogg 或 CMV 的音轨，报告格式/计数/峰值；可创建新的交错小端 f32 PCM 文件，拒绝覆盖：
 
-```powershell
+```bash
 cargo run --offline --release --features audio-output --bin cmvs-audio -- "E:/Download/AMATSUTSUMI/data/video/op.cmv"
 cargo run --offline --release --features audio-output --bin cmvs-audio -- "E:/Download/AMATSUTSUMI/data/music/bgm41v.ogg" --pcm <新文件.f32>
 ```
@@ -140,7 +140,7 @@ Windows 原生设备报告 192000 Hz / 双声道，由后端重采样。175 秒�
 
 手动运行（会打开默认设备并播放短促低音量合成音）：
 
-```powershell
+```bash
 cargo test --offline --features audio-output --test audio_output native_device_smoke -- --ignored --nocapture
 ```
 

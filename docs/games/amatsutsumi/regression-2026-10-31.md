@@ -65,7 +65,7 @@ UI测试可设置 `CMVS_RUNTIME_COMMAND_TRACE` 指向新TSV文件，记录这些
 
 结构检查沿用[审计说明](script-audit.md#重复运行)。入口检查显式执行以下默认忽略测试，设置 `CMVS_GAME_ROOT`、字体路径和每个进程独立的新trace路径：
 
-```powershell
+```bash
 $env:CMVS_GAME_ROOT='E:/Download/AMATSUTSUMI'
 $env:CMVS_FONT_PATH='C:/Windows/Fonts/msgothic.ttc'
 $env:CMVS_RUNTIME_COMMAND_TRACE='local/recheck-settings-new.tsv'

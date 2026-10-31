@@ -2,7 +2,7 @@
 
 通过 `--features wgpu-renderer` 构建桌面 GPU 后端，并在运行时选择 `--renderer wgpu`。默认 `--renderer cpu` 使用软件合成和 softbuffer；只启用 `desktop` 仍能独立构建 CPU 后端。未编译 GPU feature、没有适配器、设备/资源失败均明确报错，不自动换回 CPU。
 
-```powershell
+```bash
 cargo run --offline --release --features wgpu-renderer --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --continue-without-snapshot --font "C:/Windows/Fonts/msgothic.ttc" --renderer wgpu
 ```
 
@@ -24,7 +24,7 @@ cargo run --offline --release --features wgpu-renderer --bin cmvs-desktop -- "<�
 
 ## 验证
 
-```powershell
+```bash
 cargo test --offline -p cmvs-wgpu -- --ignored --nocapture
 $env:CMVS_GAME_ROOT='<游戏目录>'
 $env:CMVS_FONT_PATH='C:/Windows/Fonts/msgothic.ttc'
@@ -38,7 +38,7 @@ cargo test --offline -p cmvs-desktop --features wgpu-renderer --test wgpu -- --i
 
 桌面预算耗尽不触发GPU合成，必须等VM实际Yield。该规则与CPU共用，详见[桌面帧边界](desktop.md#vm-时间片与完整帧边界)。Save菜单切换的专项检查可显式执行：
 
-```powershell
+```bash
 $env:CMVS_SAVE_ROOT='<只读存档来源目录，含system.dat和save000.dat>'
 cargo test --offline --release -p cmvs-desktop --features wgpu-renderer external_save_menu_renders -- --ignored --nocapture
 ```

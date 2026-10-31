@@ -4,7 +4,7 @@
 
 ## 脚本与执行跟踪
 
-```powershell
+```bash
 cargo run --offline -- "<游戏目录>/data/pack/start.ps3"
 cargo run --offline -- "<游戏目录>/data/pack/start.ps3" --payload "<新输出文件>"
 cargo run --offline --bin cmvs-disasm -- "<游戏目录>/data/pack/start.ps3"
@@ -15,7 +15,7 @@ cargo run --offline --bin cmvs-trace -- "<游戏目录>/data/pack/start.ps3" --s
 
 完整启动研究示例：
 
-```powershell
+```bash
 cargo run --offline --bin cmvs-trace -- "<游戏目录>/data/pack/start.ps3" --bootstrap --save-dir "<游戏目录>/save" --system-save "<游戏目录>/save/system.dat" --script-archive "<游戏目录>/data/pack/script.cpz" --record-platform "<游戏目录>" --continue-without-snapshot --frame-ms 16 --steps 1000000
 ```
 
@@ -25,7 +25,7 @@ trace 先识别引擎档案：输入脚本（或 `--script` 时的输入归档�
 
 ## 引擎档案
 
-```powershell
+```bash
 cargo run --offline --release --bin cmvs-profile -- identify "<游戏目录>"
 cargo run --offline --release --bin cmvs-profile -- identify "<游戏目录>" --profile cmvs-20160201
 cargo run --offline --release --bin cmvs-profile -- table "<游戏目录>" --id <新档案> [--base cmvs-20160201]
@@ -36,7 +36,7 @@ cargo run --offline --release --bin cmvs-profile -- show cmvs-20150405
 
 ## 归档与资源
 
-```powershell
+```bash
 cargo run --offline --bin cmvs-cpz -- "<游戏目录>/data/pack/script.cpz"
 cargo run --offline --bin cmvs-cpz -- --list "<游戏目录>/data/pack/script.cpz"
 cargo run --offline --bin cmvs-cpz -- --script "<游戏目录>/data/pack/script.cpz" main.ps3
@@ -49,7 +49,7 @@ cargo run --offline --bin cmvs-cmv -- "<游戏目录>/data/video/op.cmv"
 
 ## 存档
 
-```powershell
+```bash
 cargo run --offline --bin cmvs-save -- "<游戏目录>/save/save000.dat"
 cargo run --offline --bin cmvs-save -- --records "<游戏目录>/save/save000.dat"
 cargo run --offline --bin cmvs-save -- --vm-state "<游戏目录>/save/save000.dat"

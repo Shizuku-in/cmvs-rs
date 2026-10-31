@@ -421,7 +421,7 @@ intcode `afd81aeec052c49f764f3617fc165e2a3ac2fe71604c345784a1a7f5f6a5031e`。
 
 实际尾段实验（不是完整启动）：
 
-```powershell
+```bash
 cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --entry 0x1214 --script-archive "E:/Download/AMATSUTSUMI/data/pack/script.cpz"
 ```
 
@@ -1752,7 +1752,7 @@ local/gallery_motion_reference.py用Python标准库独立复算wrapping/截断/�
 
 本地复现工具为 `local/hscene_closed_replay.rs`（SHA-256 `44dd332c3f32d98f79385bfec066b7c3648b4fe080c2bd02d8686f3dff2b5115`），实际探针 `local/hscene-closed-replay.exe` 的SHA-256为 `45fe324a6b2bc4ea248ab7c7960b82c3d88ce84d75a265f4ee5b3a6fde42fda4`。`local/hscene-closed20.log` / `local/hscene-closed21.log` 的SHA-256分别为 `2a4485ecff6041562c94bf64522b6f153cfedbef3267112b4838080414d372bd` / `f751f5bebf75d15b8444403a36bea80fae85c9cef5fd6f3f79ccb6db04d8b3ba`；探针、执行PC日志、截图、哈希清单和存档副本均留在忽略的 `local/`。
 
-```powershell
+```bash
 # tag必须未被使用；探针拒绝复用已有用户目录及PC输出。
 ./local/hscene-closed-replay.exe hscene-closed20-new 20
 ./local/hscene-closed-replay.exe hscene-closed21-new 21
@@ -1797,7 +1797,7 @@ local/gallery_motion_reference.py用Python标准库独立复算wrapping/截断/�
 
 探针 `local/music_native_replay.rs` 的SHA-256为 `0a237cbd7fe6d9b48655950c247616e793c1746fd0828fdb16e62b444f15a41e`，实际 `local/music-native-replay.exe` 为 `010c8ecdafcd179f71e29b7868a47992b56b55e8ec244dbb0315c5e63c4da344`。记录/原生结果日志分别为 `local/music-verified-record.log`（`70742698fad6fe5ded6fd711bfb9772cb901bbc827b141817169147b26869f80`）与 `local/music-native1.log`（`376db087ba16173164190d9e9546c5a914d321eaa0c84772dcf0d197bf04aa43`）。探针、原生采样、PC输出、截图、存档及哈希清单均留在忽略的 `local/`，真实素材不进入Git。
 
-```powershell
+```bash
 # tag须全新；native模式需要普通桌面权限并会播放实际游戏音频。
 ./local/music-native-replay.exe music-record-new
 ./local/music-native-replay.exe music-native-new native
@@ -1844,7 +1844,7 @@ local/gallery_motion_reference.py用Python标准库独立复算wrapping/截断/�
 
 复现探针 `local/character_endpoint_replay.rs` 的SHA-256为 `f5c0867c5394564839646d4c8f1da36942ee32d3788c0052056cf0525556cffd`，实际 `local/character-endpoint-replay.exe` 为 `f8f29665d46e8fea24e5a1a8cd2b34f15a12db090777ca33199712bab9cbfdb3`；检查器为 `e1546f42834c945557bca89dbbb8407f957f05c9311ebb6349e7c3d7c9956080`。`local/character-endpoint1.log` / `-pcs.tsv` 的SHA-256分别为 `ad40d2ec6637cc8da3e86ba744e87244ee4819af25a3d14b6c8079a6e439ee79` / `ce46a437949637894938acf1966c0f7ff56a18951e16f1f25a3abecb9d490c9d`；独立报告 `local/character-endpoint1-verification.json` 为 `64bdfe7d872bf76891cafa9351255e598db4f51fb025bd0e945f4912756d2309`。真实资源、存档、探针、报告与截图均留在忽略的 `local/`。
 
-```powershell
+```bash
 # tag必须全新，避免复用用户目录或覆盖PC输出。
 ./local/character-endpoint-replay.exe character-endpoint-new
 python local/character_verify.py character-endpoint-new
@@ -1942,7 +1942,7 @@ python local/character_verify.py character-endpoint-new
 
 运行命令（release，约 3M 步/分钟）：
 
-```powershell
+```bash
 $env:CMVS_GAME_ROOT = "E:/Download/AMATSUTSUMI"
 $env:CMVS_ROUTE = "2,2,2,1"
 $env:CMVS_ROUTE_SYSTEM_OUT = "local/route-end1-system.dat"
@@ -2003,7 +2003,7 @@ END1 输出的 system.dat 与调度前相同（SHA-256 `c8fe4ac7b0e76e3e72392294
 
 外部测试（原游戏与存档只读，副本在 `CARGO_TARGET_TMPDIR`，release 约 0.4 s）：
 
-```powershell
+```bash
 $env:CMVS_GAME_ROOT = "E:/Download/AMATSUTSUMI"
 cargo test --offline --release --test save_slots external_backlog -- --ignored --nocapture
 ```

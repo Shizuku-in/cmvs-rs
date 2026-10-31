@@ -18,7 +18,7 @@ Windows、macOS、Linux、Android、iOS 是主要平台目标；当前 Windows �
 
 在项目目录中，使用 Rust 1.89 或更高版本的 stable 工具链（本机验证版本 1.96）：
 
-```powershell
+```bash
 cargo run --offline -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3"
 cargo run --offline -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --payload ../../work/start-rust-new.bin
 cargo run --offline --bin cmvs-disasm -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3"
@@ -86,7 +86,7 @@ cargo fmt --check
 平台接口、错误策略和当前支持范围见 [platform-host](../../backends/platform-host.md)。
 新增可选原生桌面预览，运行命令：
 
-```powershell
+```bash
 cargo run --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis
 ```
 
@@ -99,7 +99,7 @@ cargo run --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --e
 新增 PB3B type 1（24/32 位）有界解码及显式素材预览，四份真实素材 RGBA 均与 Python 逐字节一致。
 下面直接只读加载资源包中的 logo，无需把素材放入项目：
 
-```powershell
+```bash
 cargo run --offline --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --image-archive "E:/Download/AMATSUTSUMI/data/pack/chip.cpz" --preview-image logo.pb3
 ```
 
@@ -140,7 +140,7 @@ main.ps3 将清屏色设为 0，再经已支持的 0x22b4 调用标签 186。新
 `scene_render` 支持顶层图像的裁切、原点、位置、层次和普通 alpha 合成；子对象呈现、缩放/旋转和其他混合模式明确报错。
 下面从正常入口由脚本加载并显示品牌 logo，无需 `--preview-image`：
 
-```powershell
+```bash
 cargo run --offline --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot
 ```
 
@@ -155,7 +155,7 @@ trace 在完整选项后加 `--frame-ms 16` 会在标题空闲循环中耗尽默
 
 新增可选原生 Ogg 音频后端：SE 准备/启动/停止、BGM 两段循环与淡变、OP 音轨和基于音频源位置的影片选帧。默认仍为记录模式；真实播放使用：
 
-```powershell
+```bash
 cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --audio native
 ```
 
@@ -204,7 +204,7 @@ Windows 175 秒检查完成有音频输出的启动、标题、OP 与返回标�
 
 需要 Python 3.10+，无第三方依赖。Windows 已实际运行验证；其他系统未测试。
 
-```powershell
+```bash
 python tools/ps3_inspect.py "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --output ../../work/start-inspection.json --payload ../../work/start-payload.bin
 python -m unittest discover -s tests -v
 ```
@@ -284,7 +284,7 @@ python -m unittest discover -s tests -v
 
 当前本机 system.dat 要求恢复 save870.dat，默认会停在尚未实现的完整恢复命令，场景此时只有黑色背景。使用显式预览选项可以保留所有存档、进入标题：
 
-```powershell
+```bash
 cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --skip-auto-resume --audio record --font "C:/Windows/Fonts/msgothic.ttc"
 ```
 
@@ -294,7 +294,7 @@ cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Downl
 
 已对照确认：相同 release 构建在受限工具沙箱中使用 `--audio native` 会以 Windows 0xc0000008 退出，在普通桌面权限下则完成 18 秒品牌音效、标题 BGM、标题淡入及帧导出，退出码 0。独立合成音频设备检查也只在普通桌面权限下通过；未修改运行时解码、混音或设备设置。具体底层句柄失败点仍未定位，普通 PowerShell 中可使用有声命令：
 
-```powershell
+```bash
 cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --skip-auto-resume --audio native --font "C:/Windows/Fonts/msgothic.ttc"
 ```
 
@@ -412,7 +412,7 @@ CSS1 系统存档新文件导出 `0x2129` 已实现（2026-10-28）。默认写�
 
 例如从项目目录运行（Rust 1.89+）：
 
-```powershell
+```bash
 cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --skip-auto-resume --user-data-dir "local/user-data" --font "C:/Windows/Fonts/msgothic.ttc"
 ```
 

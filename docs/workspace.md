@@ -26,7 +26,7 @@ workspace `default-members = ["."]`，因此原来的根目录命令只选择根
 `unsafe_code = forbid`、严格 Clippy 约定由 workspace 集中定义，四个原有包均继承；`cmvs-native` 改为 deny，只在注明 SAFETY 的系统调用处局部允许 unsafe。
 外部依赖版本集中在 workspace.dependencies，Cargo.lock 保留原 registry 包版本与校验值。
 
-```powershell
+```bash
 # 原来的命令继续有效
 cargo fmt --check
 cargo test --offline

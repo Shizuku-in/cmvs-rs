@@ -8,7 +8,7 @@
 
 ## 使用
 
-```powershell
+```bash
 cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --font "C:/Windows/Fonts/msgothic.ttc" --font-face 0
 ```
 

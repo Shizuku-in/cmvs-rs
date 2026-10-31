@@ -22,7 +22,7 @@
 
 需要 Rust **1.89+ stable**；在项目根目录运行。`--offline` 要求依赖已在本机缓存。
 
-```powershell
+```bash
 cargo run --offline -- "<游戏目录>/data/pack/start.ps3"
 cargo test --offline
 ```
@@ -40,7 +40,7 @@ cargo test --offline
 
 提交前运行：
 
-```powershell
+```bash
 cargo fmt --check
 cargo test --offline
 cargo clippy --offline --all-targets -- -D warnings

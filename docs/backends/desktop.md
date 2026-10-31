@@ -12,7 +12,7 @@
 应用从正常入口处理已验证的启动命令，到未知命令暂停，暂停后仍运行窗口事件循环。自 2026-10-30 起默认在 0x2080/0x22b2 构建引擎存档快照，配合 `--user-data-dir` 执行脚本的写槽与读档（标签时间使用 UTC）；快照点存在尚无记录格式的状态时以错误停止。游戏内工具栏、存读档画面与回看由核心的自动回调调度运行，桌面只需提供输入，回看文字由字体后端绘制；F1..F12 经 `ActionInput::press_function_keys` 报告给 0x234e。原生窗口中的界面操作尚未实测。范围见[运行指南](../guides/running.md#剧情存档)。
 不生成缺失的引擎对象，不把测试背景保存为剧情快照；除读档回调 29 外不自动执行登记回调。
 
-```powershell
+```bash
 cargo run --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis
 cargo run --offline --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --exit-after 30
 cargo run --offline --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --image-archive "E:/Download/AMATSUTSUMI/data/pack/chip.cpz" --preview-image logo.pb3
@@ -62,7 +62,7 @@ PB3 素材显示验证：只读加载 chip.cpz 内的 logo.pb3（1280×720，typ
 
 ## 脚本驱动的静态场景
 
-```powershell
+```bash
 cargo run --offline --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot
 ```
 
@@ -111,7 +111,7 @@ VM 指令级错误（例如读取未写入的预留栈字节）与未处理系�
 
 以下命令从正常入口完成 logo、标题、无输入 30 秒、OP 画面播放和返回标题：
 
-```powershell
+```bash
 cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot
 ```
 
@@ -128,7 +128,7 @@ Windows release `--exit-after 170 --save-frame <新文件.png>` 已从正常入�
 
 ## 可选原生音频（当前阶段）
 
-```powershell
+```bash
 cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --audio native
 ```
 
@@ -141,7 +141,7 @@ Windows 175 秒有界检查从正常入口完成 OP 音轨、返回标题并正�
 
 `--record-text` 只记录当前支持的单行 0x2152 字形描述与逐字 alpha 计时，不生成字体像素、不绘制剧情文字。默认仍保留该命令的输出断点。该选项可加到现有显式继续命令：
 
-```powershell
+```bash
 cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --record-text
 ```
 
@@ -151,7 +151,7 @@ cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Downl
 
 显式 `--font <文件> [--font-face <TTC 索引>]` 可替代 --record-text，用相同的受限消息布局实际光栅化字形，并呈现消息窗口；face 默认为 0，只支持 shift-jis。与 --record-text 同用、缺失字形、非等色渐变、非单位缩放均显式失败。--save-frame 导出与窗口相同的字体合成路径。
 
-```powershell
+```bash
 cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --font "C:/Windows/Fonts/msgothic.ttc"
 ```
 
@@ -169,7 +169,7 @@ cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Downl
 
 推荐当前画面检查命令（静音）：
 
-```powershell
+```bash
 cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --skip-auto-resume --audio record --font "C:/Windows/Fonts/msgothic.ttc"
 ```
 
