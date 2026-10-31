@@ -174,6 +174,37 @@ fn derived_command_review_does_not_enable_the_root_gameplay_snapshot_layout() {
     assert!(!root.0.join("save/save998.dat").exists());
 }
 
+#[test]
+fn reviewed_derived_scenario_point_keeps_the_capture_format_barrier() {
+    let mut code = Vec::new();
+    commands::command(&mut code, 0x22b2, &[]);
+    let root = Root::new("derived-scenario-point", &code, b"");
+    let game = Registry::builtin()
+        .identify_game(&root.0, Some("cmvs-20150405"))
+        .unwrap();
+    let script = root.script();
+    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    let mut backend = RecordingBackend::default();
+    let pc = run.machine().pc();
+    assert!(
+        run.tick(&mut backend)
+            .unwrap_err()
+            .to_string()
+            .contains("snapshot layout is not implemented")
+    );
+    assert_eq!(run.machine().pc(), pc);
+    assert_eq!(run.machine().pending_system(), Some((pc, 0x2b2)));
+    assert!(matches!(run.held_snapshot(), SaveImage::Absent));
+    run.set_snapshot_policy(SnapshotPolicy::ContinueWithoutImage);
+    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(run.machine().pc(), pc + 2);
+    assert_eq!(run.machine().pending_system(), None);
+    assert_eq!(run.machine().repeat_count(), 0);
+    assert_eq!(run.machine().stack().len_bytes(), 0);
+    assert!(matches!(run.held_snapshot(),SaveImage::Unavailable { pc:next,.. } if *next==pc+2));
+    assert_eq!(run.gate().counts().reviewed, 2);
+}
+
 struct Root(PathBuf);
 impl Root {
     fn new(name: &str, code: &[u8], text: &[u8]) -> Self {
