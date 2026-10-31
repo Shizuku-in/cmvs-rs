@@ -29,32 +29,55 @@ pub struct Choice {
     pub texts: Vec<String>,
 }
 
-/// Shift-JIS bytes of glyph codes; codes above 0xff are double-byte pairs.
+/// Decodes glyph codes as Shift-JIS. Double-byte pairs keep the lead byte high; single
+/// bytes are stored sign-extended, so 0xff00..=0xffff is one byte.
 fn decode_codes(codes: impl Iterator<Item = u16>) -> String {
     let mut bytes = Vec::new();
     for code in codes {
-        if code > 0xff {
-            bytes.extend(code.to_be_bytes());
-        } else {
+        if code >= 0xff00 || code <= 0xff {
             bytes.push(code as u8);
+        } else {
+            bytes.extend(code.to_be_bytes());
         }
     }
     encoding_rs::SHIFT_JIS.decode(&bytes).0.into_owned()
 }
 
-/// Text currently shown: visible text objects (where placed choice options are drawn) and
-/// auxiliary texts, each as one string, in slot order.
+/// Splits glyphs into lines where their vertical position changes; choice options placed
+/// in one text object usually sit on separate lines.
+fn lines(glyphs: impl Iterator<Item = (u16, i32)>) -> Vec<String> {
+    let mut lines: Vec<Vec<u16>> = Vec::new();
+    let mut last = None;
+    for (code, y) in glyphs {
+        if last != Some(y) || lines.is_empty() {
+            lines.push(Vec::new());
+            last = Some(y);
+        }
+        lines.last_mut().expect("pushed").push(code);
+    }
+    lines
+        .into_iter()
+        .map(|codes| decode_codes(codes.into_iter()))
+        .filter(|text| !text.trim().is_empty())
+        .collect()
+}
+
+/// Text currently shown, line by line: visible text objects (where placed choice options
+/// are drawn) and auxiliary texts, in slot order.
 pub fn shown_texts(session: &Session<'_>) -> Vec<String> {
     let messages = session.startup().messages();
-    let objects = (0..cmvs_core::message::TEXT_OBJECTS)
-        .filter_map(|slot| messages.text(slot))
-        .filter(|text| text.visible && !text.glyphs.is_empty())
-        .map(|text| decode_codes(text.glyphs.iter().map(|g| g.code)));
-    let auxiliary = (0..cmvs_core::message::AUXILIARY_TEXTS)
-        .filter_map(|slot| messages.auxiliary_text(slot))
-        .filter(|text| !text.glyphs.is_empty())
-        .map(|text| decode_codes(text.glyphs.iter().map(|g| g.code)));
-    objects.chain(auxiliary).collect()
+    let mut texts = Vec::new();
+    for slot in 0..cmvs_core::message::TEXT_OBJECTS {
+        if let Some(text) = messages.text(slot).filter(|t| t.visible) {
+            texts.extend(lines(text.glyphs.iter().map(|g| (g.code, g.position[1]))));
+        }
+    }
+    for slot in 0..cmvs_core::message::AUXILIARY_TEXTS {
+        if let Some(text) = messages.auxiliary_text(slot) {
+            texts.extend(lines(text.glyphs.iter().map(|g| (g.code, g.position[1]))));
+        }
+    }
+    texts
 }
 
 #[derive(Debug, Clone)]
@@ -426,5 +449,19 @@ pub fn describe_divergence(a: &[WaitPoint], b: &[WaitPoint], at: usize) -> Strin
         format!("the first run has one extra message wait at {at}; the rest matches")
     } else {
         format!("message wait {at} differs and the traces do not realign")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decodes_sign_extended_single_bytes_and_splits_lines() {
+        // 0x82a0 is a double-byte hiragana; 0xffb1 is the half-width katakana byte 0xb1.
+        let text = decode_codes([0x82a0u16, 0xffb1, 0x0041].into_iter());
+        assert_eq!(text, "\u{3042}\u{ff71}A");
+        let split = lines([(0x0041u16, 0), (0x0042, 0), (0x0043, 30)].into_iter());
+        assert_eq!(split, ["AB", "C"]);
     }
 }
