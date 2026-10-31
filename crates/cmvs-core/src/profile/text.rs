@@ -1,5 +1,8 @@
 //! Line-oriented profile and game-record files; `#` starts a comment line.
-use super::{Binary, CommandStatus, EngineProfile, Family, GameRecord, ProfileError, RecordFile};
+use super::{
+    Binary, CommandStatus, EngineProfile, Family, GameRecord, MachineProof, ProfileError,
+    RecordFile,
+};
 use crate::{
     digest::{parse_hex, to_hex},
     exe::{Arch, Case},
@@ -49,14 +52,14 @@ impl<'a> Lines<'a> {
     }
 }
 
-fn at(line: usize, message: impl Into<String>) -> ProfileError {
+pub(super) fn at(line: usize, message: impl Into<String>) -> ProfileError {
     ProfileError {
         line: Some(line),
         message: message.into(),
     }
 }
 
-fn hex_number(line: usize, text: &str) -> Result<u64, ProfileError> {
+pub(super) fn hex_number(line: usize, text: &str) -> Result<u64, ProfileError> {
     text.strip_prefix("0x")
         .filter(|h| !h.is_empty() && h.bytes().all(|b| b.is_ascii_hexdigit()))
         .and_then(|h| u64::from_str_radix(h, 16).ok())
@@ -67,10 +70,10 @@ fn hex_number(line: usize, text: &str) -> Result<u64, ProfileError> {
             )
         })
 }
-fn hex32(line: usize, text: &str) -> Result<u32, ProfileError> {
+pub(super) fn hex32(line: usize, text: &str) -> Result<u32, ProfileError> {
     u32::try_from(hex_number(line, text)?).map_err(|_| at(line, "value exceeds 32 bits"))
 }
-fn sha(line: usize, text: &str) -> Result<[u8; 32], ProfileError> {
+pub(super) fn sha(line: usize, text: &str) -> Result<[u8; 32], ProfileError> {
     parse_hex(text).ok_or_else(|| at(line, "expected 64 lowercase hexadecimal digits"))
 }
 fn sha_field(line: usize, text: &str) -> Result<[u8; 32], ProfileError> {
@@ -80,14 +83,18 @@ fn sha_field(line: usize, text: &str) -> Result<[u8; 32], ProfileError> {
             .ok_or_else(|| at(line, "expected sha256=<digest>"))?,
     )
 }
-fn identifier(line: usize, text: &str) -> Result<String, ProfileError> {
+pub(super) fn identifier(line: usize, text: &str) -> Result<String, ProfileError> {
     is_identifier(text)
         .then(|| text.to_owned())
         .ok_or_else(|| at(line, "expected a lowercase ASCII identifier"))
 }
 
 /// `key=value` fields in a fixed order, so the files stay diffable.
-fn fields<'a>(line: usize, words: &[&'a str], keys: &[&str]) -> Result<Vec<&'a str>, ProfileError> {
+pub(super) fn fields<'a>(
+    line: usize,
+    words: &[&'a str],
+    keys: &[&str],
+) -> Result<Vec<&'a str>, ProfileError> {
     if words.len() != keys.len() {
         return Err(at(line, format!("expected fields {}", keys.join(" "))));
     }
@@ -112,6 +119,17 @@ const BINARY_KEYS: [&str; 8] = [
     "default",
     "cases",
 ];
+
+/// A review record: a relative `.md` path under `docs/`, plain ASCII, without `..`.
+fn is_review_path(path: &str) -> bool {
+    path.ends_with(".md")
+        && path
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..")
+        && path
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_./".contains(&b))
+}
 
 pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
     let mut lines = Lines::new(text);
@@ -161,9 +179,39 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
             cases: Vec::with_capacity(cases),
         });
     }
+    // One `compare <arch> base-sha256=` line per proof architecture: every machine proof
+    // of that architecture binds this root exe and the profile's own exe of the same arch.
+    let mut proof_bases: Vec<(Arch, [u8; 32], usize)> = Vec::new();
+    while lines.peek_key() == Some("compare") {
+        let (line, words) = lines.next().expect("peeked");
+        if words.len() != 3 {
+            return Err(at(line, "malformed compare line"));
+        }
+        let arch = Arch::parse(words[1]).ok_or_else(|| at(line, "unknown proof architecture"))?;
+        if !binaries.iter().any(|b| b.arch == arch) {
+            return Err(at(line, "compare architecture has no binary"));
+        }
+        if proof_bases.iter().any(|&(a, ..)| a == arch) {
+            return Err(at(line, "duplicate compare architecture"));
+        }
+        let v = fields(line, &words[2..], &["base-sha256"])?;
+        proof_bases.push((arch, sha(line, v[0])?, line));
+    }
     let mut statuses = Vec::new();
+    let mut proofs = std::collections::BTreeMap::new();
+    let mut reviews = std::collections::BTreeMap::new();
+    let mut contracts = std::collections::BTreeMap::new();
     while let Some((line, words)) = lines.next() {
-        if words.len() != 2 + binaries.len() {
+        let proof_key = match words.get(1) {
+            Some(&"inherited") => Some("inherit="),
+            Some(&"presumed") => Some("presume="),
+            _ => None,
+        };
+        let reviewed = words.get(1) == Some(&"reviewed");
+        let contracted = words.get(1) == Some(&"contract-equivalent");
+        if words.len()
+            != 2 + binaries.len() + usize::from(proof_key.is_some() || reviewed || contracted)
+        {
             return Err(at(
                 line,
                 "command row needs status and one address per binary",
@@ -176,9 +224,53 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
             "absent" => CommandStatus::Absent,
             "noop" => CommandStatus::NoOp,
             "base" => CommandStatus::Base,
+            "inherited" => CommandStatus::Inherited,
+            "reviewed" => CommandStatus::Reviewed,
+            "contract-equivalent" => CommandStatus::ContractEquivalent,
+            "presumed" => CommandStatus::Presumed,
             "unreviewed" => CommandStatus::Unreviewed,
             _ => return Err(at(line, "unknown command status")),
         };
+        if let Some(key) = proof_key {
+            let (arch, digest) = words
+                .last()
+                .expect("row length checked")
+                .strip_prefix(key)
+                .and_then(|proof| proof.split_once(':'))
+                .ok_or_else(|| at(line, format!("expected {key}<arch>:<digest>")))?;
+            let arch = Arch::parse(arch).ok_or_else(|| at(line, "unknown proof architecture"))?;
+            let &(_, base_sha256, _) = proof_bases
+                .iter()
+                .find(|&&(a, ..)| a == arch)
+                .ok_or_else(|| at(line, "proof architecture lacks a compare line"))?;
+            let derived = binaries.iter().find(|b| b.arch == arch);
+            proofs.insert(
+                statuses.len() as u16,
+                MachineProof {
+                    arch,
+                    base_sha256,
+                    derived_sha256: derived.expect("compare line checked").sha256,
+                    digest: sha(line, digest)?,
+                },
+            );
+        }
+        if reviewed {
+            let path = words
+                .last()
+                .expect("row length checked")
+                .strip_prefix("review=")
+                .filter(|path| is_review_path(path))
+                .ok_or_else(|| at(line, "expected review=<docs-relative .md path>"))?;
+            reviews.insert(statuses.len() as u16, path.to_owned());
+        }
+        if contracted {
+            let id = words
+                .last()
+                .expect("row length checked")
+                .strip_prefix("contract=")
+                .ok_or_else(|| at(line, "expected contract=<certificate id>"))?;
+            contracts.insert(statuses.len() as u16, sha(line, id)?);
+        }
         statuses.push(status);
         for (binary, word) in binaries.iter_mut().zip(&words[2..]) {
             binary.cases.push(match (*word, status) {
@@ -202,12 +294,22 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
             "command rows do not match the declared cases",
         ));
     }
+    let unused = |&&(arch, ..): &&(Arch, [u8; 32], usize)| !proofs.values().any(|p| p.arch == arch);
+    if let Some(&(.., line)) = proof_bases.iter().find(unused) {
+        return Err(at(
+            line,
+            "compare line without inherited or presumed commands",
+        ));
+    }
     let profile = EngineProfile {
         id,
         family,
         base,
         binaries,
         statuses,
+        proofs,
+        contracts,
+        reviews,
     };
     profile.validate()?;
     Ok(profile)
@@ -242,6 +344,16 @@ impl EngineProfile {
                 b.cases.len()
             );
         }
+        for b in &self.binaries {
+            if let Some(proof) = self.proofs.values().find(|p| p.arch == b.arch) {
+                let _ = writeln!(
+                    out,
+                    "compare {} base-sha256={}",
+                    b.arch.name(),
+                    to_hex(&proof.base_sha256)
+                );
+            }
+        }
         let _ = writeln!(out, "# command status {}", {
             let archs: Vec<_> = self.binaries.iter().map(|b| b.arch.name()).collect();
             archs.join(" ")
@@ -255,6 +367,24 @@ impl EngineProfile {
                     }
                     Case::Default => out.push_str(" -"),
                 }
+            }
+            if let Some(path) = self.review(i as u16) {
+                let _ = write!(out, " review={path}");
+            }
+            if let Some(id) = self.contract_id(i as u16) {
+                let _ = write!(out, " contract={}", to_hex(id));
+            }
+            if let Some(proof) = self.proof(i as u16) {
+                let key = match status {
+                    CommandStatus::Presumed => "presume",
+                    _ => "inherit",
+                };
+                let _ = write!(
+                    out,
+                    " {key}={}:{}",
+                    proof.arch.name(),
+                    to_hex(&proof.digest)
+                );
             }
             out.push('\n');
         }

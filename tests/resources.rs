@@ -3,17 +3,23 @@ use std::{
     collections::BTreeMap,
     fs,
     path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 struct Root(PathBuf);
 impl Root {
     fn new() -> Self {
+        static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
         let id = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("cmvs-resources-{}-{id}", std::process::id()));
+        let sequence = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "cmvs-resources-{}-{id}-{sequence}",
+            std::process::id()
+        ));
         fs::create_dir(&root).unwrap();
         for dir in ["a", "b", "c"] {
             fs::create_dir(root.join(dir)).unwrap();

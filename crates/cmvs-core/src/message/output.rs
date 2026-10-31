@@ -170,15 +170,56 @@ fn parse_group(bytes: &[u8], start: usize) -> Result<Group, &'static str> {
     Ok(Group { base, ruby, end: i })
 }
 
-/// 0x14005b360 (ruby layout only): from the pen, marks each line on which a group starts.
+/// 0x2119 counts encoded bytes, skipping escapes and ruby annotations. Within a
+/// ruby base the original counts double-byte pairs only, even when ASCII is present.
+pub(super) fn encoded_length(bytes: &[u8]) -> Result<u32, &'static str> {
+    let (mut i, mut count) = (0, 0u32);
+    while i < bytes.len() && bytes[i] != 0 {
+        match bytes[i] {
+            b'\\' => {
+                i += match bytes.get(i + 1) {
+                    Some(b'c' | b'n' | b't') => 2,
+                    Some(b'w') => escape_w(bytes, i)?.0,
+                    _ => return Err(ESCAPES),
+                }
+            }
+            b'{' => {
+                let group = parse_group(bytes, i + 1)?;
+                count = count
+                    .wrapping_add(2 * group.base.iter().filter(|v| v.is_some()).count() as u32);
+                i = group.end;
+            }
+            byte if lead(byte) => {
+                bytes
+                    .get(i + 1)
+                    .filter(|&&b| b != 0)
+                    .ok_or("truncated double-byte message character")?;
+                count = count.wrapping_add(2);
+                i += 2;
+            }
+            _ => {
+                count = count.wrapping_add(1);
+                i += 1;
+            }
+        }
+    }
+    Ok(count)
+}
+
+/// 0x14005b360 / CHRONOCLOCK 0x140058840: from the pen, marks ruby group lines
+/// and returns [line count, maximum encoded bytes on a line, final line bytes].
 /// Its own wrapping ignores 0x211e rules but keeps the +112 punctuation exception, so the
 /// marks can differ from the actual layout, as in the original.
-fn ruby_lines(text: &TextObject, bytes: &[u8]) -> Result<[u32; 32], &'static str> {
+pub(super) fn ruby_layout(
+    text: &TextObject,
+    bytes: &[u8],
+) -> Result<([u32; 32], [u32; 3]), &'static str> {
     let limit = line_end(text);
     let size = text.glyph_size as u32;
     let spacing = text.spacing[0] as u32;
     let mut lines = [0; 32];
     let (mut x, mut line) = (text.cursor[0] as u32, 0usize);
+    let (mut count, mut max) = (0u32, 0u32);
     let mut i = 0;
     while i < bytes.len() && bytes[i] != 0 {
         let byte = bytes[i];
@@ -188,6 +229,7 @@ fn ruby_lines(text: &TextObject, bytes: &[u8]) -> Result<[u32; 32], &'static str
                 Some(b'n') => {
                     x = text.area[0] as u32;
                     line += 1;
+                    count = 0;
                     i += 2;
                 }
                 // `\c` and `\t` are skipped here without moving the pen.
@@ -200,6 +242,7 @@ fn ruby_lines(text: &TextObject, bytes: &[u8]) -> Result<[u32; 32], &'static str
         let (advance, wrap) = if byte == b'{' {
             if x >= limit {
                 (x, line) = (text.area[0] as u32, line + 1);
+                count = 0;
             }
             // The original writes past the 32 flags from line 32 on.
             *lines
@@ -208,6 +251,8 @@ fn ruby_lines(text: &TextObject, bytes: &[u8]) -> Result<[u32; 32], &'static str
             let group = parse_group(bytes, i + 1)?;
             for _ in group.base.iter().flatten() {
                 x = x.wrapping_add(size).wrapping_add(spacing);
+                count = count.wrapping_add(2);
+                max = max.max(count);
             }
             i = group.end;
             continue;
@@ -225,10 +270,13 @@ fn ruby_lines(text: &TextObject, bytes: &[u8]) -> Result<[u32; 32], &'static str
         };
         if wrap && x >= limit {
             (x, line) = (text.area[0] as u32, line + 1);
+            count = 0;
         }
         x = x.wrapping_add(advance).wrapping_add(spacing);
+        count = count.wrapping_add(if lead(byte) { 2 } else { 1 });
+        max = max.max(count);
     }
-    Ok(lines)
+    Ok((lines, [line as u32 + 1, max, count]))
 }
 
 /// Wrap decision for a double-byte character, or for a ruby group as code 0: inline in
@@ -356,7 +404,7 @@ fn append(
     let size = text.glyph_size as u32;
     let limit = line_end(text);
     text.ruby_lines = if text.ruby {
-        ruby_lines(text, bytes)?
+        ruby_layout(text, bytes)?.0
     } else {
         [0; 32]
     };

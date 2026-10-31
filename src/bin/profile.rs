@@ -5,7 +5,17 @@ use cmvs_rs::{
 };
 use std::{env, error::Error, fs, path::Path};
 
-const USAGE: &str = "Usage: cmvs-profile identify <game-root> [--profile <id>]\n       cmvs-profile table <game-root> --id <id> [--base <id>]\n       cmvs-profile show <id>\nidentify hashes the start script, script archive and executables read-only, locates each executable's system-command switch, checks it against the embedded profile tables and reports the profile selection. table prints a new profile from the executables in a game root: present commands become base for a root profile and unreviewed with --base. show summarises an embedded profile.";
+const USAGE: &str = "\
+Usage:
+  cmvs-profile identify <game-root> [--profile <id>]
+      Hash the start script, script archive and executables read-only, locate each
+      executable's system-command switch, check it against the embedded profile tables
+      and report the profile selection.
+  cmvs-profile table <game-root> --id <id> [--base <id>]
+      Print a new profile from the executables in a game root. Present commands become
+      base for a root profile, or unreviewed with --base.
+  cmvs-profile show <id>
+      Summarise an embedded profile.";
 
 /// Signatures that identify the predecessor engine family, reported but not supported.
 const CVNS_HINTS: [&str; 3] = ["cvns.exe", "data/pack/start.pss", "pvns.exe"];
@@ -102,8 +112,12 @@ fn identify(root: &Path, explicit: Option<&str>) -> Result<(), Box<dyn Error>> {
     }
     let profile = game.selection.profile;
     println!(
-        "commands base={} unreviewed={} noop={} absent={} (of {} cases)",
+        "commands base={} inherited={} reviewed={} contract-equivalent={} presumed={} unreviewed={} noop={} absent={} (of {} cases)",
         profile.count(CommandStatus::Base),
+        profile.count(CommandStatus::Inherited),
+        profile.count(CommandStatus::Reviewed),
+        profile.count(CommandStatus::ContractEquivalent),
+        profile.count(CommandStatus::Presumed),
         profile.count(CommandStatus::Unreviewed),
         profile.count(CommandStatus::NoOp),
         profile.count(CommandStatus::Absent),
@@ -195,6 +209,10 @@ fn show(id: &str) -> Result<(), Box<dyn Error>> {
     }
     for status in [
         CommandStatus::Base,
+        CommandStatus::Inherited,
+        CommandStatus::Reviewed,
+        CommandStatus::ContractEquivalent,
+        CommandStatus::Presumed,
         CommandStatus::Unreviewed,
         CommandStatus::NoOp,
         CommandStatus::Absent,

@@ -9,6 +9,7 @@
 | cmvs-audio | crates/cmvs-audio | Vorbis 解码、原生音频和源时钟；依赖 core、lewton、rodio |
 | cmvs-desktop | crates/cmvs-desktop | 窗口、原始输入、桌面运行入口；依赖 core 和窗口库，可选依赖 audio |
 | cmvs-native | crates/cmvs-native | 操作系统服务统一接口，按平台分模块（现有 Windows，其余预留）；依赖 raw-window-handle，Windows 上 windows-sys；唯一含 FFI 的包 |
+| cmvs-probe | crates/cmvs-probe | 与游戏无关的无头整机检查；依赖 core 与 desktop 的字体模块，不打开窗口或设备；不在默认成员中 |
 | cmvs-rs | 根包 | CLI 目标、兼容重导出、现有集成测试；默认仅依赖 core |
 
 依赖方向为 `desktop → core`、`desktop → audio → core`。core 的清单没有 dependencies 或平台 feature，编译器不允许核心调用音频/窗口实现。

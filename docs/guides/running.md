@@ -10,6 +10,8 @@ cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Downl
 
 默认在 0x2080/0x22b2 构建引擎存档快照；存档、读档与系统存档都写入 `--user-data-dir`，原游戏目录保持只读。快照点上存在尚无存档格式的状态时以错误停止，不写不完整镜像，范围见[剧情存档](#剧情存档)。
 
+2026-11-01 起，M3 收紧派生档案闸门：默认只放行 `Base`、`Inherited`、`Reviewed` 与有有效登记证明的 `ContractEquivalent`。旧 `Presumed` 默认停止；重现此前依赖推定的研究路线须显式追加 `--allow-presumed`，它与 `--allow-unreviewed` 相互独立。证明通过只允许进入已有处理器，不保证处理器已实现或游戏可玩。迁移清单和撤销方法见 [M3](../design/command-contracts-m3.md)。
+
 | 选项 | 含义与限制 |
 |---|---|
 | `--encoding shift-jis` | 显式选择文本编码；另可选 `gbk`、`utf-8`，不能据此推断对应游戏已兼容 |
@@ -18,6 +20,7 @@ cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Downl
 | `--skip-auto-resume` | 研究用：首次系统存档读取成功后清零游戏记录中登记的内存整数（本作为 2198），跳过启动自动读档；只对记录了该策略的游戏可用（目前仅本作），磁盘存档保持不变 |
 | `--profile <id>` | 研究用：显式选择引擎档案。默认按启动脚本、脚本包与 exe 的哈希自动识别，未登记的游戏会拒绝启动 |
 | `--allow-unreviewed` | 研究用：用基准语义放行当前档案中未复核的命令，每个命令首次放行时打印 `# UNREVIEWED`；不存在和空操作的命令仍会停止 |
+| `--allow-presumed` | 研究用：放行仅有旧形状证据的 `Presumed`，明确记录策略、分派尝试数及命令列表；不放行 `Unreviewed` |
 | `--font <字体>` | 用桌面 OpenType 后端显示文字；字体路径由用户提供，与原版 GDI 有像素差异 |
 | `--audio record` | 仅记录音频请求，不发声 |
 
