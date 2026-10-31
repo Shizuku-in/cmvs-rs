@@ -35,3 +35,7 @@ resource modes 0/1, and invalid offsets/sizes. All checksums and index digests a
 ## Synthetic CPZ5 vectors
 
 `cpz5-5.hex` through `cpz5-9.hex` cover packing modes 5 through 9, distinct directory/file keys, duplicate names and unaligned tails. `cpz5-plain.hex` uses resource mode 0; `cpz5-offset.hex` has an authenticated invalid data range. No game data is included.
+
+## Synthetic CPZ3 vectors
+
+`cpz3-0.hex` through `cpz3-7.hex` cover all index/resource tail lengths, differing keys and duplicate names. The first payload is `synthetic CPZ3 payload` plus `i % 4` exclamation marks. Vectors 4..7 add `second payload` under the same name. `cpz3-empty.hex` has no records; `cpz3-padded.hex` includes encrypted index padding. `cpz3-offset.hex`, `cpz3-short-record.hex`, `cpz3-long-record.hex`, `cpz3-no-nul.hex` and `cpz3-empty-name.hex` have valid ciphertext checksums but invalid ranges/records/names. All data is synthetic.

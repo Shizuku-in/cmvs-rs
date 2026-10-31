@@ -24,7 +24,7 @@ fn cpz7_uses_per_archive_keys_and_countdown_index_tails() {
         ArchiveIndex::read_with_cpz7_parameters(&mut Cursor::new(cpz6), parameters)
             .unwrap_err()
             .to_string()
-            .contains("cannot be used with CPZ5/CPZ6")
+            .contains("cannot be used with CPZ3/CPZ5/CPZ6")
     );
     for n in 0..4 {
         let mut keys = original_keys;

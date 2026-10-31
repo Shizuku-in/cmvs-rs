@@ -23,7 +23,7 @@ Usage:
 
 CPZ5/7 automatically read adjacent startup scripts unless settings are explicit.
 Without startup settings, CPZ5 detects the mode from its index and CPZ7 uses zero parameters.
-CPZ5/7 header/index integrity is checked; CLI resource checksums are not verified.";
+CPZ3 index and CPZ5/7 header/index integrity is checked; CLI resource checksums are not verified.";
 
 fn read_start(file: File) -> Result<Script, Box<dyn Error>> {
     let mut raw = Vec::new();
@@ -151,6 +151,9 @@ fn run() -> Result<(), Box<dyn Error>> {
         } else {
             if explicit_mode {
                 return Err("--packing-mode requires CPZ5".into());
+            }
+            if &magic != b"CPZ7" && (explicit_parameters || start.is_some()) {
+                return Err("--keys and --start-script require CPZ5/CPZ7".into());
             }
             let parameters = if let Some(start) = &start {
                 let basename = Path::new(&paths[1])

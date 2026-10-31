@@ -49,7 +49,9 @@ cargo run --offline --bin cmvs-pb3 -- "<PB3 文件>" --rgba "<新输出文件>"
 cargo run --offline --bin cmvs-cmv -- "<游戏目录>/data/video/op.cmv"
 ```
 
-`cmvs-cpz` 支持 CPZ5（打包模式 5～9）、CPZ6 模式 1 和 CPZ7（资源模式 0/1）；读取 CPZ5/7 时自动查找封包同目录的 `start.ps3`（CPZ5 也查找 `start.ps2`），也可用 `--start-script <路径>` 或 `--keys <k0,k1,k2,k3>` 覆盖；CPZ5 可用 `--packing-mode <5..9>` 指定模式，无启动设置时按索引结构自动识别；CPZ7 未找到设置时使用零参数；默认检查头部，`--list` 列目录。CPZ5/7 始终验证头部及索引，CLI 提取不验证资源校验值。PB3 的导出为顶向下 RGBA；CUR 的可选 `--planes <新文件>` 导出 AND/XOR 平面，不是 RGBA。具体布局和限制见[格式目录](../README.md)。
+`cmvs-cpz` 支持 CPZ3、CPZ5（打包模式 5～9）、CPZ6 模式 1 和 CPZ7（资源模式 0/1）。默认检查头部，`--list` 列目录，`--extract` 提取资源，`--script` 解码 PS2A 容器；CPZ3 不需要启动参数，列目录和提取前始终验证索引密文校验值。
+
+读取 CPZ5/7 时自动查找封包同目录的 `start.ps3`（CPZ5 也查找 `start.ps2`），可用 `--start-script <路径>` 覆盖；CPZ7 另支持 `--keys <k0,k1,k2,k3>`。CPZ5 可用 `--packing-mode <5..9>` 指定模式，无启动设置时按索引结构自动识别；CPZ7 未找到设置时使用零参数。CPZ5/7 始终验证头部及索引，CLI 提取不验证资源校验值。PB3 的导出为顶向下 RGBA；CUR 的可选 `--planes <新文件>` 导出 AND/XOR 平面，不是 RGBA。具体布局和限制见[格式目录](../README.md)。
 
 ## 存档
 
