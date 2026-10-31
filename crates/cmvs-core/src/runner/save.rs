@@ -119,14 +119,18 @@ fn decode_bmp(bytes: &[u8]) -> Result<RgbaImage, &'static str> {
     RgbaImage::new(width, height, rgba).map_err(|e| e.0)
 }
 
+/// Command inheritance does not establish the wire format of gameplay snapshots.
+/// The 20150405 writer uses text record v2, eight common-image slots and no effect 9;
+/// the root writer uses text v3, sixteen slots and effect 9. Keep derived layouts
+/// blocked until their encoders and restorers have independent evidence.
+pub fn snapshot_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
+    profile.base.is_none()
+}
+
 impl Startup<'_> {
-    /// Command inheritance does not establish the wire format of gameplay snapshots.
-    /// The 20150405 writer uses text record v2, eight common-image slots and no effect 9;
-    /// the root writer uses text v3, sixteen slots and effect 9. Keep derived layouts
-    /// blocked until their encoders and restorers have independent evidence.
     fn require_snapshot_layout(&self) -> Result<(), Box<dyn Error>> {
         let profile = self.gate.selection().profile;
-        if profile.base.is_some() {
+        if !snapshot_layout_supported(profile) {
             return Err(format!(
                 "gameplay snapshot layout is not implemented for engine profile {}",
                 profile.id

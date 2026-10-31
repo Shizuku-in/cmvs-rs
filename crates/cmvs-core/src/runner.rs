@@ -45,7 +45,7 @@ mod lifecycle;
 mod preferences;
 mod save;
 mod slot_edit;
-pub use save::{SaveTime, thumbnail_bmp};
+pub use save::{SaveTime, snapshot_layout_supported, thumbnail_bmp};
 
 enum SystemOutput {
     New(NewSystemSave),

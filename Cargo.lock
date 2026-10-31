@@ -314,6 +314,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmvs-probe"
+version = "0.1.0"
+dependencies = [
+ "cmvs-core",
+ "cmvs-desktop",
+]
+
+[[package]]
 name = "cmvs-rs"
 version = "0.1.0"
 dependencies = [
