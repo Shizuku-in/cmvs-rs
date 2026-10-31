@@ -9,10 +9,10 @@ use cmvs_probe::{
 };
 use std::{fs, path::PathBuf, process::ExitCode};
 
-const USAGE: &str = "Usage: cmvs-probe <game-root> --out <new-dir> [--checks S1,S2,S3,R1,D1] \
+const USAGE: &str = "Usage: cmvs-probe <game-root> --out <new-dir> [--checks S1,S2,S3,R1,D1,R2,R3] \
 [--profile <id>] [--device mouse|keyboard] [--font <file> [--font-index <n>]] [--frame-ms <n>] \
-[--seed <n>] [--max-steps <n>] [--allow-presumed] [--allow-unreviewed]\n\
-Runs game-agnostic checks against a read-only game root and writes summary.json and \
+[--seed <n>] [--max-steps <n>] [--max-routes <n>] [--no-route-skip] [--allow-presumed] [--allow-unreviewed]\n\
+Runs game-agnostic checks (R2/R3 explore routes and only run when listed) against a read-only game root and writes summary.json and \
 events.jsonl into a new output directory. Exit code 1 when any check fails or is blocked.";
 
 struct Args {
@@ -49,6 +49,8 @@ fn parse() -> Result<Args, String> {
             "--frame-ms" => options.frame_ms = number(value()?)? as u32,
             "--seed" => options.seed = number(value()?)? as u32,
             "--max-steps" => options.max_steps = number(value()?)?,
+            "--max-routes" => options.max_routes = number(value()?)? as usize,
+            "--no-route-skip" => options.route_skip = false,
             "--allow-presumed" => options.allow_presumed = true,
             "--allow-unreviewed" => options.allow_unreviewed = true,
             flag if flag.starts_with("--") => return Err(format!("unknown option {flag}")),
@@ -57,7 +59,7 @@ fn parse() -> Result<Args, String> {
         }
     }
     let checks: Vec<String> =
-        checks.unwrap_or_else(|| checks::IMPLEMENTED.iter().map(|s| s.to_string()).collect());
+        checks.unwrap_or_else(|| checks::DEFAULT.iter().map(|s| s.to_string()).collect());
     if let Some(unknown) = checks
         .iter()
         .find(|c| !checks::IMPLEMENTED.contains(&c.as_str()))

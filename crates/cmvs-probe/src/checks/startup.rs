@@ -1,8 +1,9 @@
-//! R1 (reach the start page) and D1 (the same input twice gives the same run).
+//! Reaching the start page from a fresh start, and checking that the same input twice
+//! gives the same run.
 use crate::{
     device::Action,
     json::Json,
-    observe::{Observation, PageSignature, state_digest},
+    observe::{Observation, PageSignature, Settle, state_digest},
     report::{CheckResult, Level, Outcome},
     session::{Options, Session, Stop},
     target::{Target, cap},
@@ -10,8 +11,8 @@ use crate::{
 use cmvs_core::{digest::to_hex, ps3::Script, runner::load_start};
 use std::path::Path;
 
-/// Frames an interactive page must stay unchanged to count as the start page.
-const STABLE_FRAMES: u32 = 60;
+/// Frames an interactive page must stay unchanged to count as settled.
+pub const STABLE_FRAMES: u32 = 60;
 pub const RUN_CAPABILITIES: [&str; 3] = [cap::PROFILE, cap::CPZ6, cap::KEY_CONFIG];
 
 /// Result of driving one fresh session to its first stable interactive page.
@@ -34,9 +35,42 @@ pub fn load_script(target: &Target) -> Result<Script, String> {
     load_start(&target.root, files).map_err(|e| e.to_string())
 }
 
-/// From a fresh user directory, advance every message wait and wait for the first page
-/// with an enabled button that stays unchanged for `STABLE_FRAMES`. Nothing here knows
-/// which script shows the title; the first stable page is the start page by definition.
+/// What happened on the way to the start page.
+#[derive(Debug, Default)]
+pub struct StartLog {
+    pub scripts: Vec<String>,
+    pub advances: u64,
+    pub last: Option<Observation>,
+}
+
+/// Advances every message wait until the first settled page. Nothing here knows which
+/// script shows the title; the first settled page is the start page by definition.
+pub fn drive_to_start(
+    session: &mut Session<'_>,
+    log: &mut StartLog,
+) -> Result<PageSignature, Stop> {
+    let mut settle = Settle::new(STABLE_FRAMES);
+    loop {
+        let observation = session.frame()?;
+        let name = observation.script.escape_ascii().to_string();
+        if !log.scripts.contains(&name) {
+            log.scripts.push(name);
+        }
+        if observation.waiting_for_advance() && !session.busy() {
+            session
+                .act(Action::Advance)
+                .map_err(crate::session::Stop::Error)?;
+            log.advances += 1;
+        }
+        let settled = settle.feed(&observation).cloned();
+        log.last = Some(observation);
+        if let Some(page) = settled {
+            return Ok(page);
+        }
+    }
+}
+
+/// Drives a new session in a fresh user directory to the start page and records the run.
 pub fn run_to_start(
     target: &Target,
     script: &Script,
@@ -45,50 +79,20 @@ pub fn run_to_start(
     font: Option<&cmvs_desktop::font::FontRenderer>,
 ) -> Result<StartRun, String> {
     let mut session = Session::start(target, script, user, options, font)?;
-    let (mut stable, mut candidate) = (0u32, None::<PageSignature>);
-    let (mut reached, mut stop, mut last) = (None, None, None);
-    let mut scripts: Vec<String> = Vec::new();
-    let mut advances = 0;
-    loop {
-        let observation = match session.frame() {
-            Ok(o) => o,
-            Err(s) => {
-                stop = Some(s);
-                break;
-            }
-        };
-        let name = observation.script.escape_ascii().to_string();
-        if !scripts.contains(&name) {
-            scripts.push(name);
-        }
-        if observation.waiting_for_advance() && !session.busy() {
-            session.act(Action::Advance)?;
-            advances += 1;
-        }
-        let interactive = observation.page.interactive()
-            && !observation.waiting_for_advance()
-            && !observation.transition;
-        if interactive && candidate.as_ref() == Some(&observation.page) {
-            stable += 1;
-        } else {
-            stable = 0;
-            candidate = interactive.then(|| observation.page.clone());
-        }
-        last = Some(observation);
-        if stable >= STABLE_FRAMES {
-            reached = candidate.clone();
-            break;
-        }
-    }
+    let mut log = StartLog::default();
+    let (reached, stop) = match drive_to_start(&mut session, &mut log) {
+        Ok(page) => (Some(page), None),
+        Err(stop) => (None, Some(stop)),
+    };
     let run = session.startup();
     Ok(StartRun {
         reached,
         stop,
-        last,
-        scripts,
+        last: log.last,
+        scripts: log.scripts,
         yields: session.yields(),
         steps: run.steps(),
-        advances,
+        advances: log.advances,
         trace: session.trace_digest(),
         frames: session.frame_digests().to_vec(),
         state: state_digest(run),
@@ -134,7 +138,7 @@ impl StartRun {
 const R1_TITLE: &str = "fresh start reaches a stable interactive page";
 const D1_TITLE: &str = "identical input reproduces the frame trace and final state";
 
-pub fn r1(run: &Result<StartRun, String>) -> CheckResult {
+pub fn start_page_result(run: &Result<StartRun, String>) -> CheckResult {
     match run {
         Ok(run) => CheckResult::new("R1", R1_TITLE, run.outcome()).with(run.json()),
         Err(e) => CheckResult::new("R1", R1_TITLE, Outcome::Fail(e.clone())),
@@ -147,8 +151,11 @@ pub fn skipped(id: &'static str, why: String) -> CheckResult {
 }
 
 /// Compares two runs of the same procedure. A run that stopped early is still compared:
-/// a reproducible gate stop is deterministic, which is what D1 asserts.
-pub fn d1(first: &Result<StartRun, String>, second: &Result<StartRun, String>) -> CheckResult {
+/// a gate stop that reproduces exactly is still deterministic behaviour.
+pub fn determinism_result(
+    first: &Result<StartRun, String>,
+    second: &Result<StartRun, String>,
+) -> CheckResult {
     let (first, second) = match (first, second) {
         (Ok(a), Ok(b)) => (a, b),
         (Err(e), _) | (_, Err(e)) => {

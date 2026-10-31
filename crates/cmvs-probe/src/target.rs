@@ -1,5 +1,5 @@
-//! The game under test: identity from the profile layer and the capability set (design
-//! rules 2 and 4). Nothing here names a game; differences between builds are capabilities.
+//! The game under test: identity from the profile layer and the capability set. Nothing
+//! here names a game; differences between builds are capabilities.
 use crate::json::Json;
 use cmvs_core::{
     cpz::Cpz6Index,

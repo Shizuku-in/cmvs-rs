@@ -1,4 +1,4 @@
-//! Check results, verdict levels and the on-disk report (design section 7 and 8).
+//! Check results, verdict levels and the on-disk report.
 use crate::json::Json;
 use std::{
     fs::File,

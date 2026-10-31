@@ -71,9 +71,10 @@ CSV2 检查与解压不会恢复 VM，段导出拒绝覆盖；运行时存读档
 ```bash
 cargo run --offline --release -p cmvs-probe -- "<游戏目录>" --out "<新输出目录>" --font "<字体文件>"
 cargo run --offline --release -p cmvs-probe -- "<游戏目录>" --out "<新输出目录>" --checks R1,D1 --device keyboard
+cargo run --offline --release -p cmvs-probe -- "<游戏目录>" --out "<新输出目录>" --font "<字体文件>" --checks S2,R2,R3 --max-steps 800000000
 ```
 
-对任意已识别构建运行与游戏无关的检查，写出 `summary.json`（身份、能力、参数和各检查结果及判定等级）与 `events.jsonl`。游戏目录只读，每次运行在输出目录下新建用户目录；输出目录必须不存在。命令闸门照常生效，`--allow-presumed`/`--allow-unreviewed` 仅供研究且记入报告。任何检查失败或被闸门阻止时退出码为 1。检查清单与判定规则见[探针设计](../design/probe.md)。
+对任意已识别构建运行与游戏无关的检查，写出 `summary.json`（身份、能力、参数和各检查结果及判定等级）与 `events.jsonl`。游戏目录只读，每次运行在输出目录下新建用户目录；输出目录必须不存在。命令闸门照常生效，`--allow-presumed`/`--allow-unreviewed` 仅供研究且记入报告。R2 从标题自动找到剧情入口并按重放方式探索选项树，R3 把执行过的地址写入 `coverage.tsv`；两者耗时较长，只在显式列出时运行。任何检查失败或被闸门阻止时退出码为 1。检查清单与判定规则见[探针设计](../design/probe.md)。
 
 ## 外部样本审计
 

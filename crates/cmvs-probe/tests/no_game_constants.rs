@@ -1,4 +1,4 @@
-//! Design rule 1 (docs/design/probe.md): the probe names no game. Script name literals,
+//! The probe names no game. Script name literals,
 //! game directory names and the like belong in per-game manifests, never in code.
 use std::{fs, path::Path};
 

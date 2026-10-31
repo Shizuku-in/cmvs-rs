@@ -1,4 +1,4 @@
-//! Engine-level observations (design section 5). Judgements use only these values: no
+//! Engine-level observations. Judgements use only these values: no
 //! script name or address ever decides what state the game is in.
 use crate::json::Json;
 use cmvs_core::{
@@ -127,7 +127,7 @@ impl Observation {
         h.update(&self.steps.to_le_bytes());
         h.update(&self.script);
         h.update(&(self.pc as u64).to_le_bytes());
-        h.update(&u32::from(self.pending.map_or(u16::MAX, |c| c)).to_le_bytes());
+        h.update(&u32::from(self.pending.unwrap_or(u16::MAX)).to_le_bytes());
         h.update(&self.repeat.to_le_bytes());
         h.update(&[u8::from(self.transition)]);
         h.update(self.page.digest().as_bytes());
@@ -150,8 +150,8 @@ impl Observation {
     }
 }
 
-/// Coarse digest of VM, scene and button state for same-build comparisons (D1). Volatile
-/// fields are not excluded yet (design question 4), so it only compares runs that should be
+/// Coarse digest of VM, scene and button state for comparing two runs of the same build.
+/// Volatile fields such as timers are not excluded yet, so it only compares runs that should be
 /// identical step for step.
 pub fn state_digest(run: &Startup<'_>) -> String {
     let mut h = Sha256::new();
@@ -165,4 +165,103 @@ pub fn state_digest(run: &Startup<'_>) -> String {
         h.update(format!("{:?}", run.buttons().group(slot)).as_bytes());
     }
     to_hex(&h.finish())
+}
+
+/// Detects a settled page: one with an enabled button, outside message waits and scene
+/// fades, unchanged for `need` consecutive frames.
+#[derive(Debug, Clone)]
+pub struct Settle {
+    need: u32,
+    frames: u32,
+    candidate: Option<PageSignature>,
+}
+
+impl Settle {
+    pub fn new(need: u32) -> Self {
+        Self {
+            need,
+            frames: 0,
+            candidate: None,
+        }
+    }
+    pub fn reset(&mut self) {
+        self.frames = 0;
+        self.candidate = None;
+    }
+    pub fn feed(&mut self, o: &Observation) -> Option<&PageSignature> {
+        let interactive = o.page.interactive() && !o.waiting_for_advance() && !o.transition;
+        if interactive && self.candidate.as_ref() == Some(&o.page) {
+            self.frames += 1;
+        } else {
+            self.frames = 0;
+            self.candidate = interactive.then(|| o.page.clone());
+        }
+        if self.frames >= self.need {
+            self.candidate.as_ref()
+        } else {
+            None
+        }
+    }
+}
+
+/// Digest of the VM variable state, used to recognise the same choice point reached by
+/// different paths.
+pub fn variables_digest(run: &Startup<'_>) -> String {
+    let mut h = Sha256::new();
+    h.update(run.machine().current_name());
+    h.update(&(run.machine().pc() as u64).to_le_bytes());
+    h.update(format!("{:?}", run.machine().state()).as_bytes());
+    to_hex(&h.finish())[..32].to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn observation(
+        buttons: usize,
+        enabled: usize,
+        pending: Option<u16>,
+        fade: bool,
+    ) -> Observation {
+        Observation {
+            yields: 0,
+            steps: 0,
+            script: b"s".to_vec(),
+            pc: 0,
+            pending,
+            repeat: 2,
+            transition: fade,
+            page: PageSignature {
+                script: b"s".to_vec(),
+                groups: vec![GroupShape {
+                    slot: 0,
+                    buttons,
+                    enabled,
+                    layout: [buttons as u8; 32],
+                }],
+            },
+        }
+    }
+
+    #[test]
+    fn settle_needs_unchanged_interactive_frames_outside_waits_and_fades() {
+        let mut settle = Settle::new(2);
+        let page = observation(4, 4, None, false);
+        assert!(settle.feed(&page).is_none());
+        assert!(settle.feed(&page).is_none());
+        assert_eq!(settle.feed(&page), Some(&page.page));
+        // A fade, a message wait or a changed page restarts the count.
+        for interrupt in [
+            observation(4, 4, None, true),
+            observation(4, 4, Some(MESSAGE_WAIT), false),
+            observation(5, 5, None, false),
+        ] {
+            settle.feed(&interrupt);
+            assert!(settle.feed(&page).is_none());
+        }
+        // Disabled-only pages never settle.
+        let mut settle = Settle::new(0);
+        assert!(settle.feed(&observation(3, 0, None, false)).is_none());
+    }
 }

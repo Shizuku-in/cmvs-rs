@@ -1,5 +1,5 @@
-//! Session layer (design section 4.1): one headless run with fixed seed, virtual frame time,
-//! recording backends and an isolated user directory. The game root is only read.
+//! One headless run with fixed seed, virtual frame time, recording backends and an isolated
+//! user directory. The game root is only read.
 use crate::{
     device::{Action, Device, Frame},
     json::Json,
@@ -8,6 +8,7 @@ use crate::{
     target::{Target, cap},
 };
 use cmvs_core::{
+    audio::RecordingAudio,
     digest::Sha256,
     input::{CodeInput, KeyBindings},
     platform::RecordingBackend,
@@ -15,7 +16,10 @@ use cmvs_core::{
     ps3::Script,
     runner::{SnapshotPolicy, Startup, StartupEvent},
 };
-use std::{collections::VecDeque, path::Path};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    path::Path,
+};
 
 #[derive(Debug, Clone)]
 pub struct Options {
@@ -24,6 +28,10 @@ pub struct Options {
     pub seed: u32,
     /// Total VM steps per session; the probe's budget, not an engine limit.
     pub max_steps: u64,
+    /// Routes route exploration may run before it stops with unexplored prefixes.
+    pub max_routes: usize,
+    /// Route exploration holds the skip action inside the scenario to shorten routes.
+    pub route_skip: bool,
     pub allow_presumed: bool,
     pub allow_unreviewed: bool,
 }
@@ -35,6 +43,8 @@ impl Default for Options {
             frame_ms: 16,
             seed: 0,
             max_steps: 50_000_000,
+            max_routes: 16,
+            route_skip: true,
             allow_presumed: false,
             allow_unreviewed: false,
         }
@@ -48,6 +58,8 @@ impl Options {
             ("frame_ms", self.frame_ms.into()),
             ("seed", self.seed.into()),
             ("max_steps", self.max_steps.into()),
+            ("max_routes", self.max_routes.into()),
+            ("route_skip", self.route_skip.into()),
             ("allow_presumed", self.allow_presumed.into()),
             ("allow_unreviewed", self.allow_unreviewed.into()),
         ])
@@ -99,6 +111,7 @@ pub struct Session<'a> {
     device: Device,
     frame_ms: u32,
     max_steps: u64,
+    route_skip: bool,
     queue: VecDeque<Frame>,
     pointer: [i32; 2],
     yields: u64,
@@ -108,6 +121,34 @@ pub struct Session<'a> {
     events: Vec<Json>,
     last_script: Vec<u8>,
     last_page: Option<String>,
+    coverage: Option<Coverage>,
+    /// Codes held on every frame in addition to queued input.
+    held: Vec<usize>,
+}
+
+/// Executed instruction addresses by script name: the PC before each VM step.
+#[derive(Debug, Default, Clone)]
+pub struct Coverage {
+    pub scripts: HashMap<Vec<u8>, HashSet<u32>>,
+}
+
+impl Coverage {
+    fn record(&mut self, script: &[u8], pc: usize) {
+        let pc = pc as u32;
+        match self.scripts.get_mut(script) {
+            Some(set) => {
+                set.insert(pc);
+            }
+            None => {
+                self.scripts.insert(script.to_vec(), HashSet::from([pc]));
+            }
+        }
+    }
+    pub fn merge(&mut self, other: Coverage) {
+        for (script, pcs) in other.scripts {
+            self.scripts.entry(script).or_default().extend(pcs);
+        }
+    }
 }
 
 impl<'a> Session<'a> {
@@ -150,6 +191,7 @@ impl<'a> Session<'a> {
             device: options.device,
             frame_ms: options.frame_ms,
             max_steps: options.max_steps,
+            route_skip: options.route_skip,
             queue: VecDeque::new(),
             pointer: crate::device::OFF_SCREEN,
             yields: 0,
@@ -158,10 +200,33 @@ impl<'a> Session<'a> {
             events: Vec::new(),
             last_script: Vec::new(),
             last_page: None,
+            coverage: None,
+            held: Vec::new(),
         })
     }
     pub fn startup(&self) -> &Startup<'a> {
         &self.run
+    }
+    /// Starts recording executed addresses; costs one set insertion per VM step.
+    pub fn record_coverage(&mut self) {
+        self.coverage.get_or_insert_with(Coverage::default);
+    }
+    pub fn take_coverage(&mut self) -> Option<Coverage> {
+        self.coverage.take()
+    }
+    /// Holds `codes` on every following frame until replaced.
+    pub fn hold(&mut self, codes: Vec<usize>) {
+        self.held = codes;
+    }
+    pub fn route_skip(&self) -> bool {
+        self.route_skip
+    }
+    pub fn bindings(&self) -> &KeyBindings {
+        &self.bindings
+    }
+    /// Records a check-level event at the current location.
+    pub fn note(&mut self, kind: &str, payload: Json) {
+        self.event(kind, payload);
     }
     pub fn yields(&self) -> u64 {
         self.yields
@@ -193,6 +258,10 @@ impl<'a> Session<'a> {
         loop {
             if self.run.steps() >= self.max_steps {
                 return Err(self.stop(Stop::Budget));
+            }
+            if let Some(coverage) = &mut self.coverage {
+                let machine = self.run.machine();
+                coverage.record(machine.current_name(), machine.pc());
             }
             let event = match self.run.tick(&mut self.backend) {
                 Ok(event) => event,
@@ -235,6 +304,13 @@ impl<'a> Session<'a> {
             }
         }
         self.yields += 1;
+        // The recording backend keeps a bounded request log; a fresh one per hundred frames
+        // keeps long runs under its limit. Audio state itself lives in the core host.
+        if self.yields.is_multiple_of(100) {
+            self.run
+                .set_audio_backend(Box::new(RecordingAudio::default()))
+                .map_err(|e| Stop::Error(e.to_string()))?;
+        }
         self.run
             .advance_frame(self.frame_ms)
             .map_err(|e| Stop::Error(e.to_string()))?;
@@ -243,7 +319,7 @@ impl<'a> Session<'a> {
             self.pointer = pointer;
         }
         let mut now = [false; 128];
-        for code in frame.codes {
+        for &code in frame.codes.iter().chain(&self.held) {
             now[code] = true;
         }
         self.codes

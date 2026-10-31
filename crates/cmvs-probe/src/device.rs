@@ -1,9 +1,9 @@
 //! Abstract probe actions and the devices that translate them into engine input codes
-//! (design section 4.2). Checks only issue `Action`s, so one check covers both devices.
+//! Checks only issue `Action`s, so one check covers both devices.
 use cmvs_core::input::{KeyBindings, MOUSE_CODES};
 
 /// Engine action indices of the key.cfg bank (KEY_FUNCTION_01.. minus one). These are
-/// engine semantics recorded in docs/backends/input.md, not per-game data; builds whose
+/// engine semantics shared by all builds, not per-game data; builds whose
 /// actions differ must be represented as a capability, never as a game branch.
 pub mod engine_action {
     /// Decide: releasing it advances message waits and presses the current button.
@@ -60,6 +60,11 @@ pub struct Frame {
 /// Pointer position outside every button, so a mouse advance is never taken by a button.
 pub const OFF_SCREEN: [i32; 2] = [-1, -1];
 
+/// A non-mouse code bound to normal skip, held by route exploration whatever the device.
+pub fn skip_code(bindings: &KeyBindings) -> Option<usize> {
+    bound_key(bindings, engine_action::SKIP)
+}
+
 fn bound_key(bindings: &KeyBindings, action: usize) -> Option<usize> {
     bindings.codes()[action]
         .iter()
@@ -103,6 +108,11 @@ impl Device {
                     pointer: Some(at),
                 }];
                 frames.extend(tap(MOUSE_CODES[0], Some(at)));
+                // Leave the button so hover states do not outlive the press.
+                frames.push(Frame {
+                    codes: Vec::new(),
+                    pointer: Some(OFF_SCREEN),
+                });
                 Ok(frames)
             }
             (Self::Mouse, Action::SkipHold(_)) => Err("the mouse device has no skip".into()),
@@ -176,10 +186,11 @@ mod tests {
                 |g, b| (g == 2 && b == 1).then_some([10, 20]),
             )
             .unwrap();
-        assert_eq!(frames.len(), 3);
+        assert_eq!(frames.len(), 4);
         assert!(frames[0].codes.is_empty());
         assert_eq!(frames[1].codes, [MOUSE_CODES[0]]);
-        assert!(frames.iter().all(|f| f.pointer == Some([10, 20])));
+        assert!(frames[..3].iter().all(|f| f.pointer == Some([10, 20])));
+        assert_eq!(frames[3].pointer, Some(OFF_SCREEN));
         assert!(
             Device::Mouse
                 .frames(

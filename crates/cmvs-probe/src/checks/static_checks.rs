@@ -17,7 +17,8 @@ use std::{
     io::Read,
 };
 
-/// Static script structure shared by S2 and S3.
+/// Static script structure, shared by the decode check, the gate classification and
+/// the coverage table.
 #[derive(Debug, Default)]
 pub struct ScriptInventory {
     pub scripts: usize,
@@ -25,6 +26,8 @@ pub struct ScriptInventory {
     pub failures: Vec<(String, String)>,
     /// Full system opcode (0x2000-based) to (static sites, scripts containing it).
     pub commands: BTreeMap<u16, (usize, BTreeSet<String>)>,
+    /// Sorted instruction start addresses by the script name the VM reports.
+    pub instruction_starts: BTreeMap<String, Vec<u32>>,
 }
 
 impl ScriptInventory {
@@ -38,6 +41,10 @@ impl ScriptInventory {
         match checked {
             Ok(instructions) => {
                 self.instructions += instructions.len();
+                self.instruction_starts.insert(
+                    name.clone(),
+                    instructions.iter().map(|i| i.pc as u32).collect(),
+                );
                 for instruction in instructions {
                     if let InstructionKind::System { command } = instruction.kind {
                         let entry = self.commands.entry(0x2000 + command).or_default();
@@ -78,10 +85,10 @@ pub fn scripts(target: &Target) -> (CheckResult, Option<ScriptInventory>) {
             Ok(raw)
         })
         .map_err(|e| e.to_string());
-    inventory.add(
-        files.start_script.to_string_lossy().replace('\\', "/"),
-        start,
-    );
+    // The external start script is the one that runs; key it by the name the VM reports
+    // and skip an archive entry of the same name.
+    let start_name = files.start_name();
+    inventory.add(start_name.escape_ascii().to_string(), start);
     let archive = File::open(target.root.join(&files.script_archive)).and_then(|mut file| {
         let index = Cpz6Index::read(&mut file).map_err(std::io::Error::other)?;
         Ok((file, index))
@@ -90,7 +97,9 @@ pub fn scripts(target: &Target) -> (CheckResult, Option<ScriptInventory>) {
         Ok((mut file, index)) => {
             for (i, entry) in index.entries().iter().enumerate() {
                 let lower = entry.name.to_ascii_lowercase();
-                if !(lower.ends_with(b".ps3") || lower.ends_with(b".ps2")) {
+                if !(lower.ends_with(b".ps3") || lower.ends_with(b".ps2"))
+                    || entry.name.eq_ignore_ascii_case(&start_name)
+                {
                     continue;
                 }
                 let raw = index
@@ -148,7 +157,7 @@ pub fn gate_inventory(target: &Target, inventory: Option<&ScriptInventory>) -> C
         let why = if target.game.is_none() {
             "missing capability profile"
         } else {
-            "S2 inventory unavailable"
+            "script inventory unavailable"
         };
         return CheckResult::new("S3", TITLE, Outcome::Skipped(why.into()));
     };
