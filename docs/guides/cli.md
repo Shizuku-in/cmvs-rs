@@ -19,7 +19,7 @@ cargo run --offline --bin cmvs-trace -- "<游戏目录>/data/pack/start.ps3" --s
 cargo run --offline --bin cmvs-trace -- "<游戏目录>/data/pack/start.ps3" --bootstrap --save-dir "<游戏目录>/save" --system-save "<游戏目录>/save/system.dat" --script-archive "<游戏目录>/data/pack/script.cpz" --record-platform "<游戏目录>" --continue-without-snapshot --frame-ms 16 --steps 1000000
 ```
 
-trace 先识别引擎档案：输入脚本（或 `--script` 时的输入归档）、`--script-archive` 以及 `--record-platform` 根目录中的 exe 都参与哈希比对，结果以 `# engine profile`、`# profile evidence` 注释行打印在日志开头。未登记的游戏和合成脚本必须加 `--profile <id>`（如根档案 `cmvs-20160201`）。每个系统命令先经过档案闸门：不存在（`Absent`）和空操作（`NoOp`）的命令总是报错；`Unreviewed` 命令默认报错，`--allow-unreviewed` 用基准语义放行，并以 `# UNREVIEWED` 行记录每个命令的首次放行。闸门报错时 trace 以非零退出码结束。
+trace先识别引擎档案：输入脚本（或`--script`归档）、`--script-archive`及`--record-platform`根目录exe参与哈希比对，以`# engine profile`和`# profile evidence`打印。未登记的游戏或合成脚本需显式`--profile <id>`。命令先经闸门：Base及有完整同架构证据的Inherited进入现有分派，Absent/NoOp总是报错；Unreviewed默认报错，仅`--allow-unreviewed`研究放行并记录首次使用。派生档案停点打印各来源已放行分派尝试数（含等待重试，不等于完成或覆盖率），闸门错误以非零退出码结束。
 
 `--bootstrap` 应用已核对的初始化；`--save-dir` 只读扫描剧情槽，不会自动推断 `--system-save`。记录平台请求不创建窗口，帧时间必须显式提供；省略 `--frame-ms` 时冻结时间并在等待处停止。增加步数不能绕过未知命令、快照或完整恢复屏障。VM 地址及语义见[本作证据](../games/amatsutsumi/vm-semantics.md)。
 

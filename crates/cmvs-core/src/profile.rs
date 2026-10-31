@@ -5,14 +5,14 @@ mod gate;
 mod select;
 mod text;
 
-pub use gate::{CommandGate, GateError, GateErrorKind};
+pub use gate::{CommandGate, GateCounts, GateError, GateErrorKind};
 pub use select::{
     EXECUTABLE_NAMES, Evidence, FileEvidence, Game, GameFiles, ProfileSelection, SelectionBasis,
     SelectionError,
 };
 
 use crate::exe::{Arch, Case, Dispatch, PeImage};
-use std::{fmt, sync::OnceLock};
+use std::{collections::BTreeMap, fmt, sync::OnceLock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Family {
@@ -27,6 +27,8 @@ pub enum CommandStatus {
     NoOp,
     /// Root profile only: this build is the semantic reference.
     Base,
+    /// A complete same-architecture fingerprint matches the root; proof is mandatory.
+    Inherited,
     /// Present, but not yet compared with or reviewed against the base.
     Unreviewed,
 }
@@ -37,9 +39,20 @@ impl CommandStatus {
             Self::Absent => "absent",
             Self::NoOp => "noop",
             Self::Base => "base",
+            Self::Inherited => "inherited",
             Self::Unreviewed => "unreviewed",
         }
     }
+}
+
+/// Identity-bound evidence for one inherited command. The digest covers the complete
+/// normalized handler and its dependencies; no original code bytes are embedded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InheritanceProof {
+    pub arch: Arch,
+    pub base_sha256: [u8; 32],
+    pub derived_sha256: [u8; 32],
+    pub fingerprint: [u8; 32],
 }
 
 /// One analysed executable of a build; every address is relative to this file only.
@@ -79,6 +92,7 @@ pub struct EngineProfile {
     pub base: Option<String>,
     pub binaries: Vec<Binary>,
     statuses: Vec<CommandStatus>,
+    inheritance: BTreeMap<u16, InheritanceProof>,
 }
 
 impl EngineProfile {
@@ -91,6 +105,9 @@ impl EngineProfile {
     }
     pub fn statuses(&self) -> &[CommandStatus] {
         &self.statuses
+    }
+    pub fn inheritance(&self, command: u16) -> Option<&InheritanceProof> {
+        self.inheritance.get(&command)
     }
     pub fn count(&self, status: CommandStatus) -> usize {
         self.statuses.iter().filter(|&&s| s == status).count()
@@ -142,6 +159,7 @@ impl EngineProfile {
                 })
                 .collect(),
             statuses,
+            inheritance: BTreeMap::new(),
         };
         profile.validate()?;
         Ok(profile)
@@ -184,11 +202,29 @@ impl EngineProfile {
                 (CommandStatus::NoOp, Case::NoOp(_)) => true,
                 (CommandStatus::Base, Case::Handler(_)) => self.base.is_none(),
                 (CommandStatus::Unreviewed, Case::Handler(_)) => self.base.is_some(),
+                (CommandStatus::Inherited, Case::Handler(_)) => self.base.is_some(),
                 _ => false,
             };
             if !allowed {
                 return Err(ProfileError::new(
                     "command status contradicts the switch or profile kind",
+                ));
+            }
+            if (*status == CommandStatus::Inherited)
+                != self.inheritance.contains_key(&(command as u16))
+            {
+                return Err(ProfileError::new(
+                    "inherited status requires exactly one proof",
+                ));
+            }
+            if let Some(proof) = self.inheritance(command as u16)
+                && !self
+                    .binaries
+                    .iter()
+                    .any(|b| b.arch == proof.arch && b.sha256 == proof.derived_sha256)
+            {
+                return Err(ProfileError::new(
+                    "inheritance proof does not match derived binary",
                 ));
             }
         }
@@ -307,6 +343,18 @@ impl Registry {
                         "profile {} must derive from a root profile of its family",
                         profile.id
                     )));
+                }
+                for (&command, proof) in &profile.inheritance {
+                    if base.status(command) != CommandStatus::Base
+                        || !base
+                            .binaries
+                            .iter()
+                            .any(|b| b.arch == proof.arch && b.sha256 == proof.base_sha256)
+                    {
+                        return Err(ProfileError::new(
+                            "inheritance proof does not match root binary/command",
+                        ));
+                    }
                 }
             }
         }

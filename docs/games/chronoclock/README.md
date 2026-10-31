@@ -1,6 +1,6 @@
 # 《クロノクロック》测试档案
 
-2026-10-30 建档，基线 `6475d2f`。截至 2026-10-31，已完成接入摸底并开始逐条语义研究：实现对象可见性 `0x2026`、世界运动单周期Y摆动模式 `0x41` 及显示字节计数 `0x2119`；显式研究放行下的完整 runner 进入オートデモ，当前在 steps=102522、`cdemo.ps3 / 0x10afe / 0x2112` 文字布局测量命令停止。712 条命令仍为未复核状态，默认闸门保留。详细过程见[研究记录](research.md)，地址与边界见[VM 语义](vm-semantics.md)。
+2026-10-30建档，基线`6475d2f`。截至2026-10-31，P2已完成：档案以x64完整指纹登记387条`Inherited`，325条`Unreviewed`及264条`NoOp`；x86独立报告362条匹配，未直接合并。默认trace通过`0x201e`后在`start.ps3 / 0x1a / 0x201f`明确停止。先前已研究实现对象可见性、单周期Y摆动及显示字节计数；研究放行下runner的历史停点为steps=102522、`cdemo.ps3 / 0x10afe / 0x2112`。当前优先按P3复核默认停点，不继续追研究放行路径。见[研究记录](research.md)、[VM语义](vm-semantics.md)及[指纹报告](profiles/)。
 
 ## 样本身份
 
@@ -65,5 +65,5 @@
 - 测试日期 2026-10-30，代码 `6475d2f`，release 构建。游戏目录保持只读；输出放在忽略的 `local/chronoclock/initial/`。
 - 结构检查：照搬《アマツツミ》[脚本审计](../amatsutsumi/script-audit.md#重复运行)的命令，把 `CMVS_SCRIPT_TEST_INPUTS` 换成本作的 `script.cpz;start.ps3`。报告 SHA-256 `b75f9d6e2004728bc05e4a72df66c1df141865231995b074341b544ededb4b57`。
 - 启动 trace：`cmvs-trace <游戏目录>/data/pack/start.ps3 --bootstrap --save-dir <游戏目录>/save --system-save <游戏目录>/save/system.dat --script-archive <游戏目录>/data/pack/script.cpz --record-platform <游戏目录> --continue-without-snapshot --frame-ms 16 --rand-seed 0 --steps 1000000`。日志 SHA-256 `3904db2db18cc939ccbe9bb8e44ba8047cc79a51f381a2f4fba920d84247ad30`。不加 `--save-dir` 会停在 `start.ps3 / 0x22b3`，不加 `--rand-seed` 会停在 `logo.ps3 / 0x20d4`，两处都和《アマツツミ》行为一致。
-- 本作的引擎档案为 `cmvs-20150405`（基准 `cmvs-20160201`），游戏记录登记了上表哈希与游戏 ID `0x17700011`。712 个有处理函数的命令全部是 `Unreviewed`，264 个是 `NoOp`；`cmvs-profile identify` 确认内嵌表与两个 exe 的 switch 逐项一致。见[引擎档案层设计](../../design/engine-profiles.md)。
-- 下一步：核对并实现 `0x2112` 的文字布局测量，并继续逐条复核；全表指纹工具（设计 P2）及 `Inherited` 状态仍待实现，不以少量指令的人工核对代替。
+- P1时本作档案`cmvs-20150405`（基准`cmvs-20160201`）的712条处理命令全部为`Unreviewed`；P2已将其中387条以完整x64指纹登记为`Inherited`。264条`NoOp`不变。游戏ID`0x17700011`、原二进制与case身份均保持，见[引擎档案设计第13节](../../design/engine-profiles.md#13-p2-实施与使用2026-10-31)。
+- 下一步：P3人工复核默认`0x201f`的全局依赖，需要时增加`Reviewed`/`Variant`并保存证据；暂停沿`--allow-unreviewed`追`0x2112`。指纹继承不代表原生输出或完整游戏通过。

@@ -1,5 +1,8 @@
 //! Line-oriented profile and game-record files; `#` starts a comment line.
-use super::{Binary, CommandStatus, EngineProfile, Family, GameRecord, ProfileError, RecordFile};
+use super::{
+    Binary, CommandStatus, EngineProfile, Family, GameRecord, InheritanceProof, ProfileError,
+    RecordFile,
+};
 use crate::{
     digest::{parse_hex, to_hex},
     exe::{Arch, Case},
@@ -161,9 +164,29 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
             cases: Vec::with_capacity(cases),
         });
     }
+    // One `inherit <arch> base-sha256=` line per proof architecture: every row proof of
+    // that architecture binds this root exe and the profile's own exe of the same arch.
+    let mut proof_bases: Vec<(Arch, [u8; 32], usize)> = Vec::new();
+    while lines.peek_key() == Some("inherit") {
+        let (line, words) = lines.next().expect("peeked");
+        if words.len() != 3 {
+            return Err(at(line, "malformed inherit line"));
+        }
+        let arch = Arch::parse(words[1]).ok_or_else(|| at(line, "unknown proof architecture"))?;
+        if !binaries.iter().any(|b| b.arch == arch) {
+            return Err(at(line, "inherit architecture has no binary"));
+        }
+        if proof_bases.iter().any(|&(a, ..)| a == arch) {
+            return Err(at(line, "duplicate inherit architecture"));
+        }
+        let v = fields(line, &words[2..], &["base-sha256"])?;
+        proof_bases.push((arch, sha(line, v[0])?, line));
+    }
     let mut statuses = Vec::new();
+    let mut inheritance = std::collections::BTreeMap::new();
     while let Some((line, words)) = lines.next() {
-        if words.len() != 2 + binaries.len() {
+        let inherited = words.get(1) == Some(&"inherited");
+        if words.len() != 2 + binaries.len() + usize::from(inherited) {
             return Err(at(
                 line,
                 "command row needs status and one address per binary",
@@ -176,9 +199,33 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
             "absent" => CommandStatus::Absent,
             "noop" => CommandStatus::NoOp,
             "base" => CommandStatus::Base,
+            "inherited" => CommandStatus::Inherited,
             "unreviewed" => CommandStatus::Unreviewed,
             _ => return Err(at(line, "unknown command status")),
         };
+        if inherited {
+            let (arch, fingerprint) = words
+                .last()
+                .expect("row length checked")
+                .strip_prefix("inherit=")
+                .and_then(|proof| proof.split_once(':'))
+                .ok_or_else(|| at(line, "expected inherit=<arch>:<fingerprint>"))?;
+            let arch = Arch::parse(arch).ok_or_else(|| at(line, "unknown proof architecture"))?;
+            let &(_, base_sha256, _) = proof_bases
+                .iter()
+                .find(|&&(a, ..)| a == arch)
+                .ok_or_else(|| at(line, "proof architecture lacks an inherit line"))?;
+            let derived = binaries.iter().find(|b| b.arch == arch);
+            inheritance.insert(
+                statuses.len() as u16,
+                InheritanceProof {
+                    arch,
+                    base_sha256,
+                    derived_sha256: derived.expect("inherit line checked").sha256,
+                    fingerprint: sha(line, fingerprint)?,
+                },
+            );
+        }
         statuses.push(status);
         for (binary, word) in binaries.iter_mut().zip(&words[2..]) {
             binary.cases.push(match (*word, status) {
@@ -202,12 +249,18 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
             "command rows do not match the declared cases",
         ));
     }
+    let unused =
+        |&&(arch, ..): &&(Arch, [u8; 32], usize)| !inheritance.values().any(|p| p.arch == arch);
+    if let Some(&(.., line)) = proof_bases.iter().find(unused) {
+        return Err(at(line, "inherit line without inherited commands"));
+    }
     let profile = EngineProfile {
         id,
         family,
         base,
         binaries,
         statuses,
+        inheritance,
     };
     profile.validate()?;
     Ok(profile)
@@ -242,6 +295,16 @@ impl EngineProfile {
                 b.cases.len()
             );
         }
+        for b in &self.binaries {
+            if let Some(proof) = self.inheritance.values().find(|p| p.arch == b.arch) {
+                let _ = writeln!(
+                    out,
+                    "inherit {} base-sha256={}",
+                    b.arch.name(),
+                    to_hex(&proof.base_sha256)
+                );
+            }
+        }
         let _ = writeln!(out, "# command status {}", {
             let archs: Vec<_> = self.binaries.iter().map(|b| b.arch.name()).collect();
             archs.join(" ")
@@ -255,6 +318,14 @@ impl EngineProfile {
                     }
                     Case::Default => out.push_str(" -"),
                 }
+            }
+            if let Some(proof) = self.inheritance(i as u16) {
+                let _ = write!(
+                    out,
+                    " inherit={}:{}",
+                    proof.arch.name(),
+                    to_hex(&proof.fingerprint)
+                );
             }
             out.push('\n');
         }

@@ -66,6 +66,16 @@ pub struct CommandGate<'a> {
     selection: ProfileSelection<'a>,
     allow_unreviewed: bool,
     allowed: BTreeSet<u16>,
+    counts: GateCounts,
+}
+
+/// Successful gate checks by semantic source. Wait retries count again; these are
+/// dispatch attempts, not completed commands or address/branch coverage.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GateCounts {
+    pub base: u64,
+    pub inherited: u64,
+    pub unreviewed: u64,
 }
 
 impl<'a> CommandGate<'a> {
@@ -74,6 +84,7 @@ impl<'a> CommandGate<'a> {
             selection,
             allow_unreviewed: false,
             allowed: BTreeSet::new(),
+            counts: GateCounts::default(),
         }
     }
     /// Research only: run unreviewed commands with the base semantics.
@@ -86,6 +97,15 @@ impl<'a> CommandGate<'a> {
     /// Unreviewed commands let through so far.
     pub fn allowed(&self) -> &BTreeSet<u16> {
         &self.allowed
+    }
+    pub fn counts(&self) -> GateCounts {
+        self.counts
+    }
+    pub fn summary_line(&self) -> String {
+        format!(
+            "# profile gate accepted attempts: base={} inherited={} unreviewed={} (includes wait retries; not completion/coverage)",
+            self.counts.base, self.counts.inherited, self.counts.unreviewed
+        )
     }
     /// Checks the pending command; returns it on the first time an unreviewed command passes.
     /// Pending commands are re-checked when a wait resumes, which is harmless.
@@ -116,10 +136,18 @@ impl<'a> CommandGate<'a> {
             }));
         }
         match profile.status(command) {
-            CommandStatus::Base => Ok(None),
+            CommandStatus::Base => {
+                self.counts.base += 1;
+                Ok(None)
+            }
+            CommandStatus::Inherited => {
+                self.counts.inherited += 1;
+                Ok(None)
+            }
             CommandStatus::Absent => Err(error(GateErrorKind::Absent)),
             CommandStatus::NoOp => Err(error(GateErrorKind::NoOp)),
             CommandStatus::Unreviewed if self.allow_unreviewed => {
+                self.counts.unreviewed += 1;
                 Ok(self.allowed.insert(command).then_some(command))
             }
             CommandStatus::Unreviewed => Err(error(GateErrorKind::Unreviewed)),

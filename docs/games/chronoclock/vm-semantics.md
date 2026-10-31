@@ -20,7 +20,7 @@ Rust `SceneHost::set_shown` 复用 `SceneObject::shown`，现有 CPU/共享绘�
 
 基准 `cmvs-20160201` x64 的 SHA-256 为 `dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5`，image base 同为 `0x140000000`。只读 PE/Capstone 核对完整处理函数 `0x14006bd70..0x14006bdf8`：case `0x14008267c`、三个栈参数、对象表、子选择、布尔归一化、错误位和返回值一致；setter `0x14003a6f0` 写 `+6244`，child getter `0x14003a760` 仅接受 `<768`。因此同一核心实现可供基准使用。此处是人工语义核对，不是通用指纹继承结果。
 
-CHRONOCLOCK 档案仍有 712 条 `Unreviewed`；没有把其他指令视为已复核，也没有取消默认闸门。新增实现目前须在显式 `--allow-unreviewed` 研究运行下抵达。
+本节语义研究时档案仍有712条`Unreviewed`，通过显式`--allow-unreviewed`抵达。随后P2的完整指纹将387条登记为`Inherited`（含`0x2026`），另325条保持未复核；默认仍在启动`0x201f`停止。继承与人工语义/运行验证是不同证据，见[研究记录](research.md)。
 
 ## 世界坐标运动模式 0x41（2026-10-31）
 

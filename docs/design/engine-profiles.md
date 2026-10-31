@@ -1,6 +1,6 @@
 # 引擎档案层设计草案
 
-> 状态：**已确认；P1 已实现**（2026-10-30，结果见第 12 节）。起草基线 `15c9fa4`，第 11 节的决定当天确认。当前行为见[架构](../architecture.md#引擎档案与命令闸门)，本文保留决策记录。
+> 状态：**已确认；P1、P2 已实现**（P1见第12节，2026-10-31的P2见第13节）。起草基线 `15c9fa4`，第11节的决定2026-10-30确认。当前行为见[架构](../architecture.md#引擎档案与命令闸门)，本文保留决策记录。
 
 ## 1. 要解决的问题
 
@@ -136,7 +136,7 @@
 | `Variant(VariantId)` | 已复核，语义与基准不同 | 交给知道这个变体的宿主；宿主不认识就报错 |
 | `Unreviewed` | 有处理函数，但尚未比对、比对后不同，或基准中没有 | 默认报错；`--allow-unreviewed` 放行，每个命令首次放行时记录一次 |
 
-P1 只实现了 `Absent`、`NoOp`、`Base`、`Unreviewed`；`Inherited`、`Reviewed`、`Variant` 等到 P2/P3 需要时再加。
+P1 实现了 `Absent`、`NoOp`、`Base`、`Unreviewed`；P2增加带强制证据的 `Inherited`。`Reviewed`、`Variant` 留待P3，不把指纹不完整的命令当作已人工复核。
 
 "命令状态"表示档案对这个命令知道多少；"Rust 是否实现"仍由分派链决定。两者正交，不合并。
 
@@ -274,8 +274,8 @@ profile::check_command(selection, pc, command, allow_unreviewed)?;
 | 阶段 | 内容 | 验收 |
 |---|---|---|
 | P1 | **已完成。**`digest`、`exe`、`profile`、闸门、选择流程、CLI 参数、`cmvs-profile`；两张档案表：根档案 `cmvs-20160201`（721 个 `Base`、255 个 `NoOp`），`cmvs-20150405`（712 个 `Unreviewed`、264 个 `NoOp`），两者都登记 x86/x64；路径和常量移入记录 | 《アマツツミ》既有 trace 与重放日志除新增的 `#` 头部行外逐字节一致；CHRONOCLOCK 不加参数时停在第一个未复核命令，加 `--allow-unreviewed` 时复现 2026-10-30 的 `0x2026` 停点；`identify` 对 19 款游戏的输出与第 2 节表格一致 |
-| P2 | IDA 导出与比较工具（x64、x86），生成 CHRONOCLOCK 的 `Inherited` 状态 | CHRONOCLOCK 不加参数时 trace 的停点前移或不变，停点原因写入档案 |
-| P3 | 按需引入 `Variant`；实现 `0x2026`。它的处理函数在两个构建中相同，可以同时在两边核对 | 照常走语义证据流程 |
+| P2 | **已完成。**IDA导出与标准库比较工具支持x64/x86；CHRONOCLOCK以x64结果登记387条`Inherited`、325条`Unreviewed`，264条`NoOp`；x86独立比较362条匹配，报告单独保留 | 默认trace通过`0x201e`，在`start.ps3 / 0x1a / 0x201f`明确停止；基准百万步日志逐字节一致，见第13节 |
+| P3 | 按需引入`Reviewed`/`Variant`，从P2默认停点人工复核。`0x2026`及少量路径语义已提前实现并有独立证据，但不等于P3完成 | 照常走语义证据流程，不用研究放行代替档案复核 |
 | P4 | 做第一个非 CPZ6 游戏时实现封包代际分派 | 照常走格式验证流程 |
 | 后续 | 时代锚点的选择与复核，以及锚点间的对照方法 | 另行设计 |
 
@@ -303,3 +303,49 @@ P1 和 P2 只改闸门和元数据，不改任何命令语义。这样主线（�
 | 检查 | `cargo fmt --check`；默认 664 项、全 workspace 全功能 712 项测试通过（分别 1、2 项默认忽略）；默认与全功能严格 Clippy 通过 |
 
 合成测试中原来把 `0x27ff` 当作"未知命令"哨兵；它超出基准构建的 976 项 switch，现在由闸门报 `Absent`。runner 测试改用 2048 项全为 `Base` 的合成档案，CLI 测试改为断言闸门错误。`--skip-auto-resume` 只对记录了该策略的游戏可用，目前只有《アマツツミ》（变量 2198）；脚本在 `0x201d` 声明的游戏 ID 与记录不符时由闸门报错。
+
+## 13. P2 实施与使用（2026-10-31）
+
+语义基线`8eb8708`。本阶段只改工具、档案元数据和闸门，不新增命令语义。前期越过P2实施的可见性、模式65和字节计数作为独立研究保留；后续先复核默认停点`0x201f`，暂停沿研究放行路径追`0x2112`。
+
+### 导出与保守边界
+
+`tools/ida_export_commands.py`使用IDA 9.4的解码/函数边界接口，不需要Hex-Rays。只读校验原exe SHA-256与数据库输入身份、拒绝补丁字节，独立定位唯一switch并逐项核对档案的case入口。导出必须在原游戏目录之外。批处理只能对`local/`中的数据库副本或新建分析库运行；不要对原目录数据库执行批处理退出/保存。
+
+导出包含从每个case入口可达的指令、入口索引、局部分支/顺序边、调用依赖和只读数据。指令保留原编码中的寄存器、立即数和字段偏移，仅将已识别的控制/数据地址字段置零并附语义引用。内部目标变为指令索引，外部直接调用/尾跳变为被调函数指纹，导入保留模块和符号名。只读标量附完整已知数据项及偏移，读取越过项边界、取地址、索引读取、可写/未知数据、数据重定位、间接控制流、缺失解码均使整条依赖链不完整。
+
+`tools/profile_compare.py`仅依赖Python标准库。同架构、同策略比较；默认递归深度8，循环或深度截断均保留`Unreviewed`，不凭相同的“不完整”标记继承。这比第7节的目标更保守：尚未证明安全的数据引用不会仅替换成占位符就继承。函数入口与控制流也纳入指纹，避免只因可达指令集合相同而误判。
+
+导出含原指令字节，仅留忽略的`local/`；Git只保存档案中的哈希与[两份比较报告](../games/chronoclock/profiles/)。`python -I tools/test_profile_compare.py`使用合成函数图验证调用依赖变化、常量/寄存器/偏移、数据/导入差异、入口/CFG、截断/环、跨架构及身份绑定。
+
+### 操作示例
+
+在已打开且匹配档案的IDA会话中导入模块，调用：
+
+```python
+export_commands(".../cmvs-20160201.profile", ".../local/base-x64.json")
+```
+
+也可用`idat -A -S".../ida_export_commands.py PROFILE OUTPUT.json" LOCAL_COPY.i64`导出本地数据库副本；新建分析库时显式用`-o`指定`local/`目标。先分别导出基准与派生构建的同架构数据，再比较：
+
+```powershell
+py -3 -I tools/profile_compare.py local/base-x64.json local/derived-x64.json --report local/comparison-x64.tsv --base-profile crates/cmvs-core/profiles/cmvs-20160201.profile --profile crates/cmvs-core/profiles/cmvs-20150405.profile --output-profile local/derived.profile
+py -3 -I tools/profile_compare.py local/base-x86.json local/derived-x86.json --report local/comparison-x86.tsv
+```
+
+比较工具不覆盖输入；候选档案经Rust解析/Registry验证后再纳入仓库。不能把x86指纹与x64指纹互比，也不直接合并两份报告。本轮以x64为档案证据；x86的差异/截断不是语义差异证明，保留独立核对范围。
+
+### 档案与运行
+
+证据架构在`binary`行之后各声明一次根exe，`inherited`行在各架构case RVA之后只给出完整指纹：
+
+```text
+inherit <arch> base-sha256=<base-exe-sha256>
+0x2000 inherited 0x7ea86 0x70c36 inherit=<arch>:<complete-fingerprint>
+```
+
+派生exe即本档案同架构`binary`行的SHA-256，不再逐行重复。每个`inherit`头部行必须有对应架构的`binary`行、同架构不得重复，且至少被一条`inherited`行使用；没有头部行的架构不能给出证明。Rust以`InheritanceProof`独立保存证据，`CommandStatus::Inherited`表示分类；解析时禁止无证据继承或给其他状态加证明，验证派生exe及同架构根exe的SHA-256、根命令状态和档案家族。闸门允许`Inherited`进入现有分派，未实现的Rust命令仍会显式停止。
+
+`cmvs-profile identify/show`分别列出Base/Inherited/Unreviewed/NoOp/Absent。`CommandGate::counts`分别统计已放行的Base/Inherited/Unreviewed分派尝试；等待重试会再计数，明确不称为完成指令数或覆盖率。trace在派生档案停止时打印此统计，runner亦暴露同一统计API。根档案日志不增加新行，保持逐字节回归。
+
+CHRONOCLOCK默认trace在首条`0x201e`后进入`0x201f`，后者因可写全局依赖未继承；统计为Base=0、Inherited=1、Unreviewed=0。基准与P2使用相同种子0/16ms、同一CSS1副本、百万步预算的121639651字节日志完全一致，两边均以预算耗尽退出码1。具体输入身份、输出哈希及检查结果见[CHRONOCLOCK研究记录](../games/chronoclock/research.md)。

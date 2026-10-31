@@ -102,8 +102,9 @@ fn identify(root: &Path, explicit: Option<&str>) -> Result<(), Box<dyn Error>> {
     }
     let profile = game.selection.profile;
     println!(
-        "commands base={} unreviewed={} noop={} absent={} (of {} cases)",
+        "commands base={} inherited={} unreviewed={} noop={} absent={} (of {} cases)",
         profile.count(CommandStatus::Base),
+        profile.count(CommandStatus::Inherited),
         profile.count(CommandStatus::Unreviewed),
         profile.count(CommandStatus::NoOp),
         profile.count(CommandStatus::Absent),
@@ -195,6 +196,7 @@ fn show(id: &str) -> Result<(), Box<dyn Error>> {
     }
     for status in [
         CommandStatus::Base,
+        CommandStatus::Inherited,
         CommandStatus::Unreviewed,
         CommandStatus::NoOp,
         CommandStatus::Absent,

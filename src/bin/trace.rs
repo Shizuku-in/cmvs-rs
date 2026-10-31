@@ -265,7 +265,11 @@ fn run() -> Result<(), Box<dyn Error>> {
             command,
         } = event
         {
-            if let Some(first) = gate.check(&machine, system_pc, command)? {
+            let checked = gate.check(&machine, system_pc, command);
+            if checked.is_err() && gate.selection().profile.base.is_some() {
+                println!("{}", gate.summary_line());
+            }
+            if let Some(first) = checked? {
                 println!(
                     "# UNREVIEWED system command 0x{:04x} allowed with base semantics (--allow-unreviewed, first use)",
                     0x2000 + first
@@ -839,6 +843,9 @@ fn run() -> Result<(), Box<dyn Error>> {
                     "# system_integer[0]={:?}",
                     machine.state().system_integer(0)
                 );
+            }
+            if gate.selection().profile.base.is_some() {
+                println!("{}", gate.summary_line());
             }
             println!(
                 "# STOP pending system=0x{:04x}; PC and parameters preserved; not game completion",

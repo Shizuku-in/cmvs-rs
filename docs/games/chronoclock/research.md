@@ -41,3 +41,28 @@
 资源解码未改，无新依赖或外部源码；档案仍为712条Unreviewed，默认闸门保留。新增测试全部为合成数据。当前工作不包含原生窗口、字体音轨输出、完整剧情或全表复核。
 
 检查：`cargo fmt --check`、`cargo test --offline`（833项通过，12项忽略）、`cargo test --offline -p cmvs-core`（56项通过，1项忽略）、`cargo clippy --offline --all-targets -- -D warnings` 通过。新增核心单测1项、消息集成测试2项，扩展既有轨道命令参数覆盖。
+
+## 2026-10-31：回到P2，完整指纹与默认闸门验收
+
+先将前述语义改动提交为`8eb8708`，本阶段以其为基线，只改工具、档案与闸门。实现IDAPython导出、标准库比较、带强制证据的`Inherited`解析/验证、状态统计及闸门来源计数；具体策略和命令见[设计第13节](../../design/engine-profiles.md#13-p2-实施与使用2026-10-31)。全局/间接依赖、未知解码、取地址/索引数据和递归截断均不自动继承。
+
+IDA 9.4分别导出两个构建的x64/x86，二进制身份来自各自档案，原exe只读。CHRONOCLOCK x64使用当前IDA会话，其他三份使用`local/chronoclock/p2-*.i64`新建分析库，未切换当前会话或改写原游戏目录。工具核对输入文件哈希并拒绝数据库补丁；同一CHRONOCLOCK x64重新导出逐字节一致。原指令图JSON只留local，仓库报告仅含指纹和分类。
+
+| 比较 | 完整匹配 | 未复核 | NoOp | 报告 |
+|---|---|---|---|---|
+| x64对x64（档案采用） | 387 | 325 | 264 | [x64 TSV](profiles/cmvs-20150405-x64.tsv) |
+| x86对x86（独立核对） | 362 | 350 | 264 | [x86 TSV](profiles/cmvs-20150405-x86.tsv) |
+
+报告头保留归一化策略、深度8、两边exe和导出JSON的SHA-256；档案以`inherit x64 base-sha256=`头部行绑定根exe，继承行只记架构和完整指纹，派生exe取本档案同架构`binary`行。x64报告SHA-256 `e867b33857fda781f9f40e56cea2792ee213a79c16531766341cdd5b60905a4e`，x86报告 `fe472ddd98df13a92655e43ad82f5d6e0b4bd70a3b932245d04e246966aa865f`（LF；首次生成时工具在Windows上写出CRLF，对应哈希为`62495b45…`/`7e5c6d0e…`，内容逐行相同，工具已改为强制LF）。x86不同/截断不等于语义不同，不直接合并两份结果。
+
+### 默认运行
+
+采用建档trace参数（种子0、帧16ms、原CSS1只读、RecordingBackend、ContinueWithoutImage、百万步预算），**不加`--allow-unreviewed`**。`start.ps3 / 0xc / 0x201e`因完整匹配通过，在`start.ps3 / 0x1a / 0x201f`报未复核，退出码1，栈顶10与PC保留。统计为Base=0、Inherited=1、Unreviewed=0；统计包含等待重试的分派尝试，不能当作已完成指令数。未复核原因是可写全局依赖，下一步P3应人工复核它，不能直接沿用基准状态。
+
+默认日志`p2-default.log` SHA-256 `13dfd56569b83b66f1d17242a28259aa825caddf37fb163d3c6ecd3104de372b`。先前`0x2112`是研究放行路径的历史停点，不能替代默认兼容状态。
+
+### 基准回归与检查
+
+从Git导出`8eb8708`到忽略目录独立构建，与P2版本同参数运行《アマツツミ》trace：virtual_tick=0、种子0、16ms、百万步、RecordingBackend、ContinueWithoutImage，输入CSS1为`local/amatsutsumi/user-data/system.dat`（SHA-256 `dc20174a630f6525d70d6c4452896c716249ef2c469adf472bf6053ac0e5ef1a`），剧情槽扫描同目录；输入不写回。两份日志完整121639651字节逐字节一致，SHA-256均为`9d8e45d8e8aa5dc14202fb460f953acad04cd5f02d1d93ad83397d17bb48ca21`；两边都在第1000000步预算耗尽，退出码1。日志在`p2-amatsu-before-saved.log`、`p2-amatsu-after-saved.log`。游戏原目录没有CSS1时两版也一致早停未知变量，该早停不计入百万步验收。
+
+检查通过：`cargo fmt --check`、默认离线测试834项（12项忽略）、core离线测试56项（1项忽略）、默认/core严格Clippy、Python标准库合成指纹测试10项（含候选档案头部行）。未新增命令语义、依赖或原生设备验证；`Reviewed`/`Variant`及剩余差异人工复核仍属于P3。
