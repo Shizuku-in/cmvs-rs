@@ -15,6 +15,50 @@ use std::{
 
 pub type LoadError = Box<dyn Error>;
 
+/// Read the literal 0x201f packing-mode setting from the startup prefix.
+pub fn packing_mode_from_start(script: &Script) -> Result<u32, crate::FormatError> {
+    use crate::{
+        FormatError,
+        bytecode::{self, InstructionKind, Term},
+    };
+    let instructions =
+        bytecode::decode_layout(script.code(), script.header.entry_pc, &script.labels())
+            .map_err(|_| FormatError("invalid startup script layout"))?;
+    let mut value = None;
+    let mut pushed = None;
+    for instruction in instructions {
+        if instruction.pc < script.header.entry_pc as usize {
+            continue;
+        }
+        match instruction.kind {
+            InstructionKind::Expression(expression) if expression.kind == 0x200 => {
+                value = match expression.terms.as_slice() {
+                    [
+                        Term::Scalar {
+                            tag: 0x100, raw, ..
+                        },
+                    ] => Some(*raw),
+                    _ => None,
+                };
+            }
+            InstructionKind::Simple if instruction.opcode == 0x430 => pushed = value.take(),
+            InstructionKind::System { command: 0x1f } => {
+                return pushed.ok_or(FormatError("dynamic startup archive mode"));
+            }
+            InstructionKind::Jump { .. }
+            | InstructionKind::ConditionalJump { .. }
+            | InstructionKind::CompareJump { .. }
+            | InstructionKind::LongJump { .. }
+            | InstructionKind::ScriptReturn { .. } => break,
+            _ => {
+                value = None;
+                pushed = None;
+            }
+        }
+    }
+    Err(FormatError("startup has no literal packing-mode setting"))
+}
+
 /// Inspect literal archive registrations in the straight-line startup prefix.
 /// REALIVE's CPZ7 parameters are per archive, not a game-wide MD5 replacement.
 /// Dynamic expressions and control flow are not evaluated by this inspection helper.

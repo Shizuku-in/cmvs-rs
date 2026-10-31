@@ -1,7 +1,7 @@
 use cmvs_rs::{
-    cpz::{ArchiveIndex, ArchiveLayout, Cpz7Parameters},
+    cpz::{ArchiveIndex, ArchiveLayout, Cpz5Mode, Cpz7Parameters},
     ps3::Script,
-    script_control::cpz7_parameters_from_start,
+    script_control::{cpz7_parameters_from_start, packing_mode_from_start},
 };
 use std::{
     env,
@@ -13,16 +13,17 @@ use std::{
 
 const USAGE: &str = "\
 Usage:
-  cmvs-cpz --start-script <start.ps3> <mode> ...                  read CPZ7 keys from startup
+  cmvs-cpz --start-script <start.ps2/ps3> <mode> ...              read archive settings from startup
+  cmvs-cpz --packing-mode <5..9> <mode> ...                      select CPZ5 packing mode
   cmvs-cpz --keys <dir,file,seed,resource> <mode> ...              CPZ7 decimal/0x keys
   cmvs-cpz <archive> [archive ...]                                print each supported archive header
   cmvs-cpz --list <archive>                                       list the index
   cmvs-cpz --script <archive> <ASCII-basename>                    summarise one script
   cmvs-cpz --extract <archive> <ASCII-basename> <new-output-file> extract one entry
 
-CPZ7 automatically reads start.ps3 beside the archive unless --start-script or --keys is given.
-If start.ps3 is absent, CPZ7 uses four zero parameters. Resource checksums are not verified by the CLI;
-CPZ7 header/index integrity is checked.";
+CPZ5/7 automatically read adjacent startup scripts unless settings are explicit.
+Without startup settings, CPZ5 detects the mode from its index and CPZ7 uses zero parameters.
+CPZ5/7 header/index integrity is checked; CLI resource checksums are not verified.";
 
 fn read_start(file: File) -> Result<Script, Box<dyn Error>> {
     let mut raw = Vec::new();
@@ -54,10 +55,29 @@ fn run() -> Result<(), Box<dyn Error>> {
     } else {
         None
     };
+    let explicit_mode = paths[0] == "--packing-mode";
+    let packing_mode = if explicit_mode {
+        if start.is_some() {
+            return Err("choose either --start-script or --packing-mode".into());
+        }
+        let value: u32 = paths
+            .get(1)
+            .and_then(|s| s.to_str())
+            .ok_or("expected CPZ5 packing mode")?
+            .parse()?;
+        let mode = Cpz5Mode::try_from(value)?;
+        paths.drain(..2);
+        if paths.is_empty() {
+            return Err("expected archive mode; use --help".into());
+        }
+        Some(mode)
+    } else {
+        None
+    };
     let explicit_parameters = paths[0] == "--keys";
     let parameters = if explicit_parameters {
-        if start.is_some() {
-            return Err("choose either --start-script or --keys".into());
+        if start.is_some() || explicit_mode {
+            return Err("choose one archive settings option".into());
         }
         let raw = paths
             .get(1)
@@ -96,30 +116,54 @@ fn run() -> Result<(), Box<dyn Error>> {
             return Err("wrong argument count; use --help".into());
         }
         let mut file = File::open(&paths[1])?;
-        if start.is_none() && !explicit_parameters {
-            let mut magic = [0; 4];
-            file.read_exact(&mut magic)?;
-            file.rewind()?;
-            if &magic == b"CPZ7" {
-                let candidate = Path::new(&paths[1]).with_file_name("start.ps3");
-                match File::open(candidate) {
-                    Ok(file) => start = Some(read_start(file)?),
+        let mut magic = [0; 4];
+        file.read_exact(&mut magic)?;
+        file.rewind()?;
+        if start.is_none() && !explicit_parameters && !explicit_mode {
+            let candidates: &[&str] = match &magic {
+                b"CPZ5" => &["start.ps3", "start.ps2"],
+                b"CPZ7" => &["start.ps3"],
+                _ => &[],
+            };
+            for name in candidates {
+                match File::open(Path::new(&paths[1]).with_file_name(name)) {
+                    Ok(file) => {
+                        start = Some(read_start(file)?);
+                        break;
+                    }
                     Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                     Err(error) => return Err(error.into()),
                 }
             }
         }
-        let parameters = if let Some(start) = &start {
-            let basename = Path::new(&paths[1])
-                .file_name()
-                .and_then(|s| s.to_str())
-                .ok_or("expected UTF-8 archive basename")?;
-            cpz7_parameters_from_start(start, basename.as_bytes())?
-                .ok_or("archive has no literal key registration in startup prefix")?
+        let index = if &magic == b"CPZ5" {
+            if explicit_parameters {
+                return Err("--keys requires CPZ7".into());
+            }
+            match (packing_mode, &start) {
+                (Some(mode), _) => ArchiveIndex::read_with_cpz5_mode(&mut file, mode)?,
+                (_, Some(script)) => ArchiveIndex::read_with_cpz5_mode(
+                    &mut file,
+                    Cpz5Mode::try_from(packing_mode_from_start(script)?)?,
+                )?,
+                _ => ArchiveIndex::read(&mut file)?,
+            }
         } else {
-            parameters
+            if explicit_mode {
+                return Err("--packing-mode requires CPZ5".into());
+            }
+            let parameters = if let Some(start) = &start {
+                let basename = Path::new(&paths[1])
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .ok_or("expected UTF-8 archive basename")?;
+                cpz7_parameters_from_start(start, basename.as_bytes())?
+                    .ok_or("archive has no literal key registration in startup prefix")?
+            } else {
+                parameters
+            };
+            ArchiveIndex::read_with_cpz7_parameters(&mut file, parameters)?
         };
-        let index = ArchiveIndex::read_with_cpz7_parameters(&mut file, parameters)?;
         if paths[0] == "--list" {
             for (i, entry) in index.entries().iter().enumerate() {
                 println!(
@@ -167,7 +211,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         }
         return Ok(());
     }
-    if start.is_some() || explicit_parameters {
+    if start.is_some() || explicit_parameters || explicit_mode {
         return Err("parameter options require --list, --script or --extract".into());
     }
     for path in paths {

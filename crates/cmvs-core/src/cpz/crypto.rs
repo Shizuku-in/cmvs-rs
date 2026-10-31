@@ -52,7 +52,7 @@ fn compress(initial: [u32; 4], block: [u32; 16]) -> [u32; 4] {
     ]
 }
 
-fn custom_digest(input: [u32; 4], initial: [u32; 4]) -> [u32; 4] {
+pub(super) fn custom_digest(input: [u32; 4], initial: [u32; 4]) -> [u32; 4] {
     let mut block = [0; 16];
     block[..4].copy_from_slice(&input);
     block[4] = 0x80;

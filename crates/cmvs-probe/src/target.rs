@@ -24,6 +24,7 @@ pub mod cap {
     pub const RECORD: &str = "record";
     /// The script archive opens with a supported decoder.
     pub const ARCHIVE: &str = "archive:readable";
+    pub const CPZ5: &str = "archive:cpz5";
     /// The successfully opened script archive uses CPZ6.
     pub const CPZ6: &str = "archive:cpz6";
     pub const CPZ7: &str = "archive:cpz7";
@@ -92,6 +93,9 @@ impl Target {
         {
             capabilities.insert(cap::ARCHIVE);
             match index.version() {
+                ArchiveVersion::Cpz5 => {
+                    capabilities.insert(cap::CPZ5);
+                }
                 ArchiveVersion::Cpz6 => {
                     capabilities.insert(cap::CPZ6);
                 }

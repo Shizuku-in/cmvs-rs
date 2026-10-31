@@ -1,7 +1,8 @@
-//! CPZ archive reading. Supports CPZ6 mode 1 and CPZ7 resource modes 0/1.
+//! CPZ archive reading. Supports CPZ5 packing modes 5..9, CPZ6 and CPZ7.
 //!
 //! Version-specific implementations are kept behind this public entry point.
 
+mod cpz5;
 mod cpz6;
 mod cpz7;
 mod crypto;
@@ -11,6 +12,7 @@ mod error;
 use crate::FormatError;
 use std::io::{Read, Seek, SeekFrom};
 
+pub use cpz5::{CPZ5_HEADER_SIZE, Cpz5Index, Cpz5Layout, Cpz5Mode};
 pub use cpz6::{CPZ6_HEADER_SIZE, Cpz6Index, Cpz6Layout, lookup_key};
 pub use cpz7::{CPZ7_HEADER_SIZE, Cpz7Index, Cpz7Layout, Cpz7Parameters};
 pub use crypto::data_checksum;
@@ -57,6 +59,7 @@ fn read_version<R: Read + Seek>(reader: &mut R) -> Result<ArchiveVersion, Archiv
 /// Header-only inspection, without decrypting or authenticating the index.
 #[derive(Debug)]
 pub enum ArchiveLayout {
+    Cpz5(Cpz5Layout),
     Cpz6(Cpz6Layout),
     Cpz7(Cpz7Layout),
 }
@@ -64,6 +67,13 @@ pub enum ArchiveLayout {
 impl ArchiveLayout {
     pub fn read<R: Read + Seek>(reader: &mut R) -> Result<Self, ArchiveError> {
         match read_version(reader)? {
+            ArchiveVersion::Cpz5 => {
+                let length = reader.seek(SeekFrom::End(0))?;
+                reader.seek(SeekFrom::Start(0))?;
+                let mut header = [0; CPZ5_HEADER_SIZE];
+                reader.read_exact(&mut header)?;
+                Ok(Self::Cpz5(Cpz5Layout::parse(&header, length)?))
+            }
             ArchiveVersion::Cpz6 => {
                 let length = reader.seek(SeekFrom::End(0))?;
                 reader.seek(SeekFrom::Start(0))?;
@@ -86,6 +96,7 @@ impl ArchiveLayout {
 /// Version-dispatched archive access. Lookup and verification stay version-specific.
 #[derive(Debug)]
 pub enum ArchiveIndex {
+    Cpz5(Cpz5Index),
     Cpz6(Cpz6Index),
     Cpz7(Cpz7Index),
 }
@@ -100,9 +111,12 @@ impl ArchiveIndex {
         parameters: Cpz7Parameters,
     ) -> Result<Self, ArchiveError> {
         match read_version(reader)? {
-            ArchiveVersion::Cpz6 if parameters != Cpz7Parameters::default() => {
-                Err(FormatError("CPZ7 parameters cannot be used with CPZ6").into())
+            ArchiveVersion::Cpz5 | ArchiveVersion::Cpz6
+                if parameters != Cpz7Parameters::default() =>
+            {
+                Err(FormatError("CPZ7 parameters cannot be used with CPZ5/CPZ6").into())
             }
+            ArchiveVersion::Cpz5 => Ok(Self::Cpz5(Cpz5Index::read(reader)?)),
             ArchiveVersion::Cpz6 => Ok(Self::Cpz6(Cpz6Index::read(reader)?)),
             ArchiveVersion::Cpz7 => Ok(Self::Cpz7(Cpz7Index::read_with_parameters(
                 reader, parameters,
@@ -111,8 +125,19 @@ impl ArchiveIndex {
         }
     }
 
+    pub fn read_with_cpz5_mode<R: Read + Seek>(
+        reader: &mut R,
+        mode: Cpz5Mode,
+    ) -> Result<Self, ArchiveError> {
+        if read_version(reader)? != ArchiveVersion::Cpz5 {
+            return Err(FormatError("CPZ5 packing mode requires a CPZ5 archive").into());
+        }
+        Ok(Self::Cpz5(Cpz5Index::read_with_mode(reader, mode)?))
+    }
+
     pub fn version(&self) -> ArchiveVersion {
         match self {
+            Self::Cpz5(_) => ArchiveVersion::Cpz5,
             Self::Cpz6(_) => ArchiveVersion::Cpz6,
             Self::Cpz7(_) => ArchiveVersion::Cpz7,
         }
@@ -121,6 +146,7 @@ impl ArchiveIndex {
     /// Common archive metadata. Version-specific cipher keys remain private.
     pub fn entries(&self) -> &[Entry] {
         match self {
+            Self::Cpz5(index) => index.entries(),
             Self::Cpz6(index) => index.entries(),
             Self::Cpz7(index) => index.entries(),
         }
@@ -128,6 +154,7 @@ impl ArchiveIndex {
 
     pub fn find(&self, name: &[u8]) -> Result<usize, FormatError> {
         match self {
+            Self::Cpz5(index) => index.find(name),
             Self::Cpz6(index) => index.find(name),
             Self::Cpz7(index) => index.find(name),
         }
@@ -135,6 +162,7 @@ impl ArchiveIndex {
 
     pub fn lookup(&self, name: &[u8]) -> Result<Option<usize>, FormatError> {
         match self {
+            Self::Cpz5(index) => index.lookup(name),
             Self::Cpz6(index) => index.lookup(name),
             Self::Cpz7(index) => index.lookup(name),
         }
@@ -146,6 +174,7 @@ impl ArchiveIndex {
         entry: usize,
     ) -> Result<Vec<u8>, ArchiveError> {
         match self {
+            Self::Cpz5(index) => index.read_entry(reader, entry),
             Self::Cpz6(index) => index.read_entry(reader, entry),
             Self::Cpz7(index) => index.read_entry(reader, entry),
         }
@@ -158,6 +187,7 @@ impl ArchiveIndex {
         entry: usize,
     ) -> Result<Vec<u8>, ArchiveError> {
         match self {
+            Self::Cpz5(index) => index.read_entry_verified(reader, entry),
             Self::Cpz6(index) => index.read_entry_verified(reader, entry),
             Self::Cpz7(index) => index.read_entry_verified(reader, entry),
         }

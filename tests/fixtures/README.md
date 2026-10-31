@@ -31,3 +31,7 @@ before attempting to read or allocate resource bytes.
 They cover directory/file keys, duplicate names, unaligned indexes and resources,
 resource modes 0/1, and invalid offsets/sizes. All checksums and index digests are valid.
 `cpz7-keyed.hex` covers four nonzero startup parameters; all CPZ7 vectors use the same index tail rule.
+
+## Synthetic CPZ5 vectors
+
+`cpz5-5.hex` through `cpz5-9.hex` cover packing modes 5 through 9, distinct directory/file keys, duplicate names and unaligned tails. `cpz5-plain.hex` uses resource mode 0; `cpz5-offset.hex` has an authenticated invalid data range. No game data is included.

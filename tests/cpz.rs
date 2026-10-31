@@ -10,7 +10,6 @@ fn archive_dispatch_distinguishes_unsupported_unknown_and_truncated_inputs() {
         (b"CPZ1", ArchiveVersion::Cpz1),
         (b"CPZ2", ArchiveVersion::Cpz2),
         (b"CPZ3", ArchiveVersion::Cpz3),
-        (b"CPZ5", ArchiveVersion::Cpz5),
     ] {
         assert_eq!(ArchiveVersion::detect(signature).unwrap(), version);
         assert!(matches!(
