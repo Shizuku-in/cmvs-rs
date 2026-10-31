@@ -8,13 +8,13 @@ use crate::{
     device::Device,
     json::Json,
     report::{CheckResult, Outcome},
-    session::Options,
+    session::{Coverage, Options},
     target::Target,
 };
 use std::{fs, path::Path};
 
 /// Checks implemented so far, in run order.
-pub const IMPLEMENTED: [&str; 7] = ["S1", "S2", "S3", "R1", "D1", "R2", "R3"];
+pub const IMPLEMENTED: [&str; 8] = ["S1", "S2", "S3", "R1", "D1", "R2", "R3", "R4"];
 /// Checks that run when `--checks` is not given; route exploration is long and opt-in.
 pub const DEFAULT: [&str; 5] = ["S1", "S2", "S3", "R1", "D1"];
 
@@ -50,7 +50,7 @@ pub fn run(
     } else {
         None
     };
-    let running: Vec<&str> = ["R1", "D1", "R2", "R3"]
+    let running: Vec<&str> = ["R1", "D1", "R2", "R3", "R4"]
         .into_iter()
         .filter(|id| wants(id))
         .collect();
@@ -89,26 +89,40 @@ pub fn run(
             results.push(startup::determinism_result(&first, &second));
         }
     }
-    if wants("R2") || wants("R3") {
-        if options.device == Device::Keyboard {
-            let why = "keyboard button navigation is not implemented".to_owned();
-            for id in ["R2", "R3"].into_iter().filter(|id| wants(id)) {
-                results.push(skipped(id, why.clone()));
-            }
-            return Run { results, events };
+    let exploring: Vec<&str> = ["R2", "R4", "R3"]
+        .into_iter()
+        .filter(|id| wants(id))
+        .collect();
+    if exploring.is_empty() {
+        return Run { results, events };
+    }
+    if options.device == Device::Keyboard {
+        let why = "keyboard button navigation is not implemented".to_owned();
+        for id in exploring {
+            results.push(skipped(id, why.clone()));
         }
-        let runner = route::Runner::new(target, &script, options, font, out);
-        let mut routes = route::explore_routes(&runner);
+        return Run { results, events };
+    }
+    let runner = route::Runner::new(target, &script, options, font, out);
+    let mut coverage = Coverage::default();
+    // Coverage alone still needs routes; the fresh tree is the cheaper source.
+    if wants("R2") || (wants("R3") && !wants("R4")) {
+        let mut routes = route::explore_routes(&runner, &mut coverage);
         events.append(&mut routes.events);
         if wants("R2") {
             results.push(routes.result);
         }
-        if wants("R3") {
-            results.push(match &inventory {
-                Some(inventory) => route::coverage_result(inventory, &routes.coverage, out),
-                None => skipped("R3", "script inventory unavailable".into()),
-            });
-        }
+    }
+    if wants("R4") {
+        let mut rounds = route::unlock_rounds(&runner, &mut coverage);
+        events.append(&mut rounds.events);
+        results.push(rounds.result);
+    }
+    if wants("R3") {
+        results.push(match &inventory {
+            Some(inventory) => route::coverage_result(inventory, &coverage, out),
+            None => skipped("R3", "script inventory unavailable".into()),
+        });
     }
     Run { results, events }
 }
@@ -117,6 +131,7 @@ fn skipped(id: &'static str, why: String) -> CheckResult {
     let title = match id {
         "R1" | "D1" => return startup::skipped(id, why),
         "R2" => "choice tree explored by replay to the start page",
+        "R4" => "unlock rounds carrying the system save converge",
         _ => "executed addresses against statically decoded instructions",
     };
     CheckResult::new(id, title, Outcome::Skipped(why))

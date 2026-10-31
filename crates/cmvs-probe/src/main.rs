@@ -9,11 +9,36 @@ use cmvs_probe::{
 };
 use std::{fs, path::PathBuf, process::ExitCode};
 
-const USAGE: &str = "Usage: cmvs-probe <game-root> --out <new-dir> [--checks S1,S2,S3,R1,D1,R2,R3] \
-[--profile <id>] [--device mouse|keyboard] [--font <file> [--font-index <n>]] [--frame-ms <n>] \
-[--seed <n>] [--max-steps <n>] [--max-routes <n>] [--no-route-skip] [--allow-presumed] [--allow-unreviewed]\n\
-Runs game-agnostic checks (R2/R3 explore routes and only run when listed) against a read-only game root and writes summary.json and \
-events.jsonl into a new output directory. Exit code 1 when any check fails or is blocked.";
+const USAGE: &str = "\
+Usage: cmvs-probe <game-root> --out <new-dir> [options]
+
+Runs game-agnostic checks against a read-only game root and writes summary.json and
+events.jsonl into a new output directory. Exit code 1 when any check fails or is blocked.
+
+Checks (--checks takes a comma-separated list; default S1,S2,S3,R1,D1):
+  S1  identify the engine profile, file hashes and capabilities
+  S2  decode every script and validate labels and jump targets
+  S3  classify the system commands found in scripts by command-gate status
+  R1  from a fresh start, reach a settled start page
+  D1  run R1 twice and compare frame traces and final state (determinism)
+  R2  explore the choice tree; every route starts from the game's own system save
+  R3  compare executed addresses with all decoded instructions; writes coverage.tsv
+  R4  explore in rounds carrying the system save forward until nothing new unlocks
+  R2, R3 and R4 run whole routes and can take hours; they only run when listed.
+
+Options:
+  --checks <ids>        checks to run, e.g. S2,R2,R3
+  --profile <id>        force an engine profile instead of identifying one
+  --device <name>       mouse (default) or keyboard input
+  --font <file>         font for glyph metrics; --font-index <n> picks a face
+  --frame-ms <n>        virtual frame time in milliseconds (default 16)
+  --seed <n>            random seed (default 0)
+  --max-steps <n>       VM step budget per session (default 50000000)
+  --max-routes <n>      routes per choice tree before stopping (default 16)
+  --max-rounds <n>      unlock rounds for R4, at least 2 (default 4)
+  --no-route-skip       do not hold the skip key while exploring routes
+  --allow-presumed      research only: run legacy presumed commands
+  --allow-unreviewed    research only: run unreviewed commands with base semantics";
 
 struct Args {
     root: PathBuf,
@@ -50,6 +75,7 @@ fn parse() -> Result<Args, String> {
             "--seed" => options.seed = number(value()?)? as u32,
             "--max-steps" => options.max_steps = number(value()?)?,
             "--max-routes" => options.max_routes = number(value()?)? as usize,
+            "--max-rounds" => options.max_rounds = number(value()?)?.max(2) as usize,
             "--no-route-skip" => options.route_skip = false,
             "--allow-presumed" => options.allow_presumed = true,
             "--allow-unreviewed" => options.allow_unreviewed = true,

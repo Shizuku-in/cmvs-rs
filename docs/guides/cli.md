@@ -72,9 +72,11 @@ CSV2 检查与解压不会恢复 VM，段导出拒绝覆盖；运行时存读档
 cargo run --offline --release -p cmvs-probe -- "<游戏目录>" --out "<新输出目录>" --font "<字体文件>"
 cargo run --offline --release -p cmvs-probe -- "<游戏目录>" --out "<新输出目录>" --checks R1,D1 --device keyboard
 cargo run --offline --release -p cmvs-probe -- "<游戏目录>" --out "<新输出目录>" --font "<字体文件>" --checks S2,R2,R3 --max-steps 800000000
+cargo run --offline --release -p cmvs-probe -- "<游戏目录>" --out "<新输出目录>" --font "<字体文件>" --checks S2,R4,R3 --max-rounds 4 --max-steps 800000000
+python -I tools/probe_matrix.py "<输出目录1>" "<输出目录2>" --markdown
 ```
 
-对任意已识别构建运行与游戏无关的检查，写出 `summary.json`（身份、能力、参数和各检查结果及判定等级）与 `events.jsonl`。游戏目录只读，每次运行在输出目录下新建用户目录；输出目录必须不存在。命令闸门照常生效，`--allow-presumed`/`--allow-unreviewed` 仅供研究且记入报告。R2 从标题自动找到剧情入口并按重放方式探索选项树，R3 把执行过的地址写入 `coverage.tsv`；两者耗时较长，只在显式列出时运行。任何检查失败或被闸门阻止时退出码为 1。检查清单与判定规则见[探针设计](../design/probe.md)。
+对任意已识别构建运行与游戏无关的检查，写出 `summary.json`（身份、能力、参数和各检查结果及判定等级）与 `events.jsonl`。游戏目录只读，每次运行在输出目录下新建用户目录；输出目录必须不存在。命令闸门照常生效，`--allow-presumed`/`--allow-unreviewed` 仅供研究且记入报告。R2 从标题自动找到剧情入口并按重放方式探索选项树（每条路线都从游戏自带的系统存档开始）；R4 让每条路线接着上一条路线留下的系统存档运行，并按轮重复，直到某一轮不再发现新的选项点、按钮或标题形态；R3 把执行过的地址写入 `coverage.tsv`。这三项耗时较长，只在显式列出时运行。`tools/probe_matrix.py` 把多个输出目录汇总为"游戏 × 检查"矩阵，只读。任何检查失败或被闸门阻止时退出码为 1。检查清单与判定规则见[探针设计](../design/probe.md)。
 
 ## 外部样本审计
 

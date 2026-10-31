@@ -18,7 +18,7 @@ use cmvs_core::{
 };
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 #[derive(Debug, Clone)]
@@ -30,6 +30,8 @@ pub struct Options {
     pub max_steps: u64,
     /// Routes route exploration may run before it stops with unexplored prefixes.
     pub max_routes: usize,
+    /// Unlock rounds before stopping while routes are still being discovered.
+    pub max_rounds: usize,
     /// Route exploration holds the skip action inside the scenario to shorten routes.
     pub route_skip: bool,
     pub allow_presumed: bool,
@@ -44,6 +46,7 @@ impl Default for Options {
             seed: 0,
             max_steps: 50_000_000,
             max_routes: 16,
+            max_rounds: 4,
             route_skip: true,
             allow_presumed: false,
             allow_unreviewed: false,
@@ -59,6 +62,7 @@ impl Options {
             ("seed", self.seed.into()),
             ("max_steps", self.max_steps.into()),
             ("max_routes", self.max_routes.into()),
+            ("max_rounds", self.max_rounds.into()),
             ("route_skip", self.route_skip.into()),
             ("allow_presumed", self.allow_presumed.into()),
             ("allow_unreviewed", self.allow_unreviewed.into()),
@@ -124,6 +128,7 @@ pub struct Session<'a> {
     coverage: Option<Coverage>,
     /// Codes held on every frame in addition to queued input.
     held: Vec<usize>,
+    user: PathBuf,
 }
 
 /// Executed instruction addresses by script name: the PC before each VM step.
@@ -202,6 +207,7 @@ impl<'a> Session<'a> {
             last_page: None,
             coverage: None,
             held: Vec::new(),
+            user: user.to_path_buf(),
         })
     }
     pub fn startup(&self) -> &Startup<'a> {
@@ -217,6 +223,10 @@ impl<'a> Session<'a> {
     /// Holds `codes` on every following frame until replaced.
     pub fn hold(&mut self, codes: Vec<usize>) {
         self.held = codes;
+    }
+    /// The isolated user directory; the engine keeps `system.dat` and slot saves there.
+    pub fn user_dir(&self) -> &Path {
+        &self.user
     }
     pub fn route_skip(&self) -> bool {
         self.route_skip
@@ -291,9 +301,10 @@ impl<'a> Session<'a> {
                     self.event("main-without-snapshot", Json::Null);
                 }
                 StartupEvent::Quit => return Err(self.stop(Stop::Quit)),
+                // The event already carries the full 0x2000-based opcode.
                 StartupEvent::Unhandled { pc, command } => {
                     let blocked = Blocked {
-                        command: 0x2000 + command,
+                        command,
                         script: self.run.machine().current_name().escape_ascii().to_string(),
                         pc,
                         kind: "unhandled".into(),
