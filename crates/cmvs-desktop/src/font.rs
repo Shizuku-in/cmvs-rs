@@ -320,6 +320,23 @@ impl FontRenderer {
         cameras: &CameraHost,
         messages: &MessageHost,
     ) -> Result<RgbaImage, FormatError> {
+        let objects = self.prepare_objects(messages)?;
+        let mut additional: Vec<_> = objects.iter().collect();
+        additional.extend(
+            (0..MESSAGE_WINDOWS)
+                .filter_map(|i| messages.window(i))
+                .filter(|w| w.visible && !w.hidden)
+                .map(|w| &w.object),
+        );
+        scene_render::render_scene(scene, Some(cameras), &additional, 1280, 720)
+    }
+
+    /// Builds glyph objects without compositing a frame.
+    /// Visible message windows must also be passed to the shared scene queue.
+    pub fn prepare_objects(
+        &mut self,
+        messages: &MessageHost,
+    ) -> Result<Vec<SceneObject>, FormatError> {
         let mut objects = Vec::new();
         let mut visible_glyphs = 0;
         for text in (0..TEXT_OBJECTS)
@@ -443,14 +460,7 @@ impl FontRenderer {
             }
             objects.push(parent);
         }
-        let mut additional: Vec<_> = objects.iter().collect();
-        additional.extend(
-            (0..MESSAGE_WINDOWS)
-                .filter_map(|i| messages.window(i))
-                .filter(|w| w.visible && !w.hidden)
-                .map(|w| &w.object),
-        );
-        scene_render::render_scene(scene, Some(cameras), &additional, 1280, 720)
+        Ok(objects)
     }
 }
 

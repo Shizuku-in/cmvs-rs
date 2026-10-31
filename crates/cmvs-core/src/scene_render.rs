@@ -9,7 +9,7 @@ use crate::{
     scene::{DrawState, MaskTransition, ObjectImage, SceneHost, SceneObject},
 };
 
-enum Layer<'a> {
+pub enum Layer<'a> {
     Image {
         image: &'a ObjectImage,
         /// Source x/y/width/height.
@@ -53,7 +53,7 @@ enum Layer<'a> {
 
 /// Device blend state chosen by 0x140020340 through 0x14001bc20.
 #[derive(Clone, Copy)]
-enum Blend {
+pub enum Blend {
     /// Device mode 0: blending disabled, the texel color replaces the target.
     Replace,
     /// Device mode 1: SRCALPHA / INVSRCALPHA.
@@ -672,6 +672,48 @@ fn shifted(layer: Layer<'_>, by: [i64; 2]) -> Layer<'_> {
     }
 }
 
+/// An ordered draw operation with immutable scene resource references.
+pub type DrawCommand<'a> = Layer<'a>;
+/// Device blending selected during scene preparation.
+pub type BlendMode = Blend;
+
+/// Validated logical frame, independent of the rendering device.
+pub struct RenderFrame<'a> {
+    width: u32,
+    height: u32,
+    clear: [u8; 4],
+    commands: Vec<DrawCommand<'a>>,
+}
+impl<'a> RenderFrame<'a> {
+    pub fn dimensions(&self) -> [u32; 2] {
+        [self.width, self.height]
+    }
+    pub fn clear_color(&self) -> [u8; 4] {
+        self.clear
+    }
+    pub fn commands(&self) -> &[DrawCommand<'a>] {
+        &self.commands
+    }
+
+    /// Executes the shared command queue with the portable rasterizer.
+    pub fn render_cpu(self) -> Result<RgbaImage, FormatError> {
+        let size = (u64::from(self.width) * u64::from(self.height))
+            .checked_mul(4)
+            .ok_or(FormatError("scene surface size overflow"))?;
+        if self.width == 0 || self.height == 0 || size > MAX_PAYLOAD as u64 {
+            return Err(FormatError("invalid scene surface dimensions"));
+        }
+        let mut pixels = vec![0; size as usize];
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.copy_from_slice(&self.clear);
+        }
+        for command in self.commands {
+            draw(&mut pixels, self.width, self.height, command);
+        }
+        RgbaImage::new(self.width, self.height, pixels)
+    }
+}
+
 /// Render in script coordinates. Window aspect fitting is a separate desktop policy.
 /// Without camera state, projected objects fail explicitly.
 pub fn render(scene: &SceneHost, width: u32, height: u32) -> Result<RgbaImage, FormatError> {
@@ -699,6 +741,17 @@ pub fn render_scene(
     width: u32,
     height: u32,
 ) -> Result<RgbaImage, FormatError> {
+    prepare_scene(scene, cameras, additional, width, height)?.render_cpu()
+}
+
+/// Validates and orders scene commands without compositing pixels.
+pub fn prepare_scene<'a>(
+    scene: &'a SceneHost,
+    cameras: Option<&CameraHost>,
+    additional: &[&'a SceneObject],
+    width: u32,
+    height: u32,
+) -> Result<RenderFrame<'a>, FormatError> {
     let size = (u64::from(width) * u64::from(height))
         .checked_mul(4)
         .ok_or(FormatError("scene surface size overflow"))?;
@@ -930,10 +983,7 @@ pub fn render_scene(
     for queue in &mut projected {
         queue.sort_by(|a, b| b.order.total_cmp(&a.order));
     }
-    let mut pixels = vec![0; size as usize];
-    for p in pixels.chunks_exact_mut(4) {
-        p.copy_from_slice(&scene.clear().rgba());
-    }
+    let mut commands = Vec::new();
     for mut entry in projected.into_iter().flatten().chain(entries) {
         entry.children.sort_by(|a, b| b.0.total_cmp(&a.0));
         let layers = entry
@@ -941,10 +991,15 @@ pub fn render_scene(
             .into_iter()
             .chain(entry.children.into_iter().map(|(_, layer)| layer));
         for layer in layers {
-            draw(&mut pixels, width, height, layer);
+            commands.push(layer);
         }
     }
-    RgbaImage::new(width, height, pixels)
+    Ok(RenderFrame {
+        width,
+        height,
+        clear: scene.clear().rgba(),
+        commands,
+    })
 }
 
 /// One target pixel under the device blend state, with straight 8-bit source values.
@@ -1361,5 +1416,56 @@ mod scale_tests {
                 .unwrap()
                 .is_none()
         );
+    }
+}
+
+#[cfg(test)]
+mod prepared_frame_tests {
+    use super::*;
+
+    #[test]
+    fn prepared_queue_preserves_equal_layer_order_and_pixel_result() {
+        let scene = SceneHost::default();
+        let object = |rgb: [u8; 3]| {
+            let mut draw = DrawState::default();
+            draw.words[4..6].copy_from_slice(&[2, 1]);
+            SceneObject {
+                image: Some(ObjectImage {
+                    name: Vec::new(),
+                    filter: None,
+                    alpha: true,
+                    surface: false,
+                    pixels: RgbaImage::new(2, 1, [rgb[0], rgb[1], rgb[2], 255].repeat(2)).unwrap(),
+                }),
+                draw: Some(draw),
+                ..SceneObject::default()
+            }
+        };
+        let red = object([255, 0, 0]);
+        let blue = object([0, 0, 255]);
+        let frame = prepare_scene(&scene, None, &[&red, &blue], 2, 1).unwrap();
+        assert_eq!(frame.dimensions(), [2, 1]);
+        assert_eq!(frame.commands().len(), 2);
+        let expected: Vec<_> = [0, 0, 255]
+            .into_iter()
+            .chain([frame.clear_color()[3]])
+            .collect();
+        assert_eq!(frame.render_cpu().unwrap().pixels(), expected.repeat(2));
+        let frame = prepare_scene(&scene, None, &[&blue, &red], 2, 1).unwrap();
+        assert_eq!(&frame.render_cpu().unwrap().pixels()[..3], &[255, 0, 0]);
+    }
+
+    #[test]
+    fn preparation_rejects_bad_dimensions_and_unsupported_scene_before_drawing() {
+        let scene = SceneHost::default();
+        assert!(prepare_scene(&scene, None, &[], 0, 1).is_err());
+        assert!(prepare_scene(&scene, None, &[], u32::MAX, u32::MAX).is_err());
+        let mut draw = DrawState::default();
+        draw.words[1] = 999;
+        let object = SceneObject {
+            draw: Some(draw),
+            ..SceneObject::default()
+        };
+        assert!(prepare_scene(&scene, None, &[&object], 2, 1).is_err());
     }
 }

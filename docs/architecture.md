@@ -219,3 +219,11 @@ settings::Configuration保存有界原始INI字节，替换已实现的键并保
 ProfileSystemSave复用会话锁及同目录临时文件替换，分别管理cmvs.cfg/cmvs.cfg.bak与CSS1。桌面正常退出显式保存，错误退出不保存；核心Drop没有隐藏I/O。INI和CSS1是两个独立提交，失败保留各自备份和可重试状态，不能描述成整体事务。原生窗口状态通过DisplayPreferences传入；核心不持有winit窗口。未实现的设置继续保留原始键及其现有错误屏障，不因写配置而伪造支持。
 
 全屏/窗口尺寸分离：PlatformBackend::window_size查询当前物理客户区，windowed_size查询窗口状态（全屏时为未来恢复值）；WindowSize请求全屏时只改恢复记录。桌面App拥有尺寸Cell，NativeBackend的临时借用跨事件回调共享它，离开全屏时请求该尺寸；核心不持有winit窗口或屏幕尺寸策略。0x216e只在窗口立即调整时让出，未来尺寸更新不让出。
+
+## 共享绘制队列
+
+`scene_render::prepare_scene` 负责验证场景、计算继承/投影并稳定排序，返回借用不可变资源的 `RenderFrame`。其只读 `commands()` 提供 `DrawCommand`，`dimensions()` 与 `clear_color()` 提供逻辑画布参数，不创建像素目标或调用设备 API。`RenderFrame::render_cpu` 执行原有软件光栅化；现有 `render_scene` 等入口通过准备和执行两个步骤保持兼容。
+
+桌面 `FontRenderer::prepare_objects` 只生成消息文字与辅助文字的字形对象；调用方须同时把可见消息窗口加入共享队列。现有 `FontRenderer::render` 继续完成这两步并返回 CPU 合成帧，窗口图像仍按引用传递。
+
+这只是 GPU 接入的共享层准备，目前仍只有 CPU 渲染与 softbuffer 显示，尚未提供 wgpu 后端、GPU feature、后端选择或 GPU 读回。不应据此宣称 GPU 加速或新增平台验证。
