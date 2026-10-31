@@ -69,6 +69,52 @@ class ComparisonTests(unittest.TestCase):
         self.derived["functions"]["0x900"]["instructions"][0]["next"] = 0
         self.assertEqual(self.status(), "unreviewed")
 
+    def make_library(self, name="_malloc", raw="b801000000"):
+        for g, callee in [(self.base, "0x200"), (self.derived, "0x900")]:
+            g["functions"][callee]["library"] = name
+            g["functions"][callee]["instructions"][0]["bytes"] = raw
+            # Library internals stay opaque: no walk, no data or indirect-flow issues.
+            g["functions"][callee]["instructions"][0]["refs"] = [{"kind": "opaque"}]
+
+    def test_library_leaves_match_by_name_and_own_body(self):
+        self.make_library()
+        self.assertEqual(self.status(), "inherited")
+        self.derived["functions"]["0x900"]["library"] = "_free"
+        self.assertEqual(self.status(), "unreviewed")
+        self.make_library()
+        self.derived["functions"]["0x900"]["instructions"][0]["bytes"] = "b802000000"
+        self.assertEqual(self.status(), "unreviewed")
+        # The same body without the library mark is not a library match.
+        self.make_library()
+        del self.derived["functions"]["0x900"]["library"]
+        with self.assertRaises(ValueError):
+            self.status()
+
+    def test_placeholder_names_cannot_identify_library_leaves(self):
+        for name in ("sub_140038BA0", "unknown_libname_2", "nullsub_1", "j_free"):
+            with self.subTest(name=name):
+                self.make_library(name=name)
+                if name == "j_free":
+                    self.assertEqual(self.status(), "inherited")  # a real name after `j_`
+                    continue
+                with self.assertRaises(ValueError):
+                    self.status()
+
+    def test_library_leaves_still_report_their_own_issues(self):
+        self.make_library()
+        for g, callee in [(self.base, "0x200"), (self.derived, "0x900")]:
+            g["functions"][callee]["issues"] = ["undecoded-instruction"]
+        self.assertEqual(self.status(), "unreviewed")
+
+    def test_opaque_and_foreign_references_are_confined(self):
+        self.derived["functions"]["0x900"]["instructions"][0]["refs"] = [{"kind": "opaque"}]
+        with self.assertRaises(ValueError):
+            self.status()
+        self.make_library()
+        self.derived["functions"]["0x900"]["instructions"][0]["refs"] = [{"kind": "function", "target": "0x500"}]
+        with self.assertRaises(ValueError):
+            self.status()
+
     def test_architecture_schema_and_missing_dependencies_rejected(self):
         for key, value in [("arch", "x86"), ("policy", "old"), ("schema", "unknown")]:
             changed = copy.deepcopy(self.derived)

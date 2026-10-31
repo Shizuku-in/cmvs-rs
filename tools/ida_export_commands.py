@@ -6,11 +6,13 @@ No renaming, patching, analysis creation, or database saves are performed here.
 """
 import hashlib
 import json
+import re
 import struct
 from pathlib import Path
 
-SCHEMA = "cmvs-command-graph-v1"
-POLICY = "raw-operands-closed-cfg-readonly-data-v1"
+SCHEMA = "cmvs-command-graph-v2"
+POLICY = "raw-operands-closed-cfg-readonly-data-libraries-v2"
+PLACEHOLDER_NAME = re.compile(r"(?:sub|nullsub|j|unknown_libname)_[0-9A-Fa-f]+\Z")
 
 
 def export_commands(profile_path, output_path):
@@ -130,6 +132,14 @@ def export_commands(profile_path, output_path):
         if owner is None:
             node["issues"].append("no-function-boundary")
             continue
+        # FLIRT-recognized runtime code is a leaf identified by name and its own body;
+        # its callees and data stay opaque, as imports are identified by name.
+        # Placeholder names (addresses, per-database counters) are no identity; walk those.
+        name = idc.get_func_name(start)
+        library = (bool(owner.flags & ida_funcs.FUNC_LIB) and owner.start_ea == start
+                   and not PLACEHOLDER_NAME.match(name))
+        if library:
+            node["library"] = name
         todo, decoded = [start], {}
         while todo:
             ea = todo.pop()
@@ -159,6 +169,8 @@ def export_commands(profile_path, output_path):
                     if local:
                         todo.append(target)
                         ref = {"kind": "local", "target": target}
+                    elif library:
+                        ref = {"kind": "opaque"}
                     else:
                         ref = {"kind": "function", "target": hex(target-image_base)}
                         queue.append(target)
@@ -168,6 +180,8 @@ def export_commands(profile_path, output_path):
                     seg = ida_segment.getseg(target)
                     if target in imports:
                         refs.append((op, {"kind": "import", "name": imports[target]}))
+                    elif seg and library:
+                        refs.append((op, {"kind": "opaque"}))
                     elif seg:
                         # Unknown/writable data and function pointers prevent inheritance.
                         head = ida_bytes.get_item_head(target)
@@ -186,7 +200,7 @@ def export_commands(profile_path, output_path):
                                 node["issues"].append("relocated-data")
                             refs.append((op, {"kind": "data", "offset": target-head,
                                               "bytes": data.hex()}))
-            if call or jump:
+            if (call or jump) and not library:
                 if not any(op.type in (ida_ua.o_near, ida_ua.o_far) or
                            ref["kind"] == "import" for op, ref in refs):
                     node["issues"].append("indirect-control-flow")
@@ -199,8 +213,10 @@ def export_commands(profile_path, output_path):
                 else:
                     raw[off:end] = bytes(end-off)
             # If IDA knows another data reference that no operand explained, do not guess.
+            # Targets outside every segment are IDA type IDs (e.g. stack struct members).
             known = {op.value if op.type == ida_ua.o_imm else op.addr for op, _ in refs}
-            if any(target not in known for target in idautils.DataRefsFrom(ea)):
+            if not library and any(target not in known and ida_segment.getseg(target)
+                                   for target in idautils.DataRefsFrom(ea)):
                 node["issues"].append("unmodeled-data-reference")
             decoded[ea] = {"bytes": raw.hex(), "refs": [ref for _, ref in refs], "next": None}
             if not features & ida_idp.CF_STOP:
@@ -229,7 +245,8 @@ def export_commands(profile_path, output_path):
     result = {"schema": SCHEMA, "policy": POLICY, "arch": arch, "profile": profile_id,
               "binary_sha256": source_hash, "image_base": hex(image_base),
               "table_rva": hex(table-image_base), "commands": commands, "functions": nodes}
-    Path(output_path).write_text(json.dumps(result, sort_keys=True, separators=(",", ":"))+"\n", encoding="utf-8")
+    Path(output_path).write_text(json.dumps(result, sort_keys=True, separators=(",", ":"))+"\n",
+                                 encoding="utf-8", newline="\n")
     return {"arch": arch, "commands": len(commands), "functions": len(nodes), "output": str(output_path)}
 
 

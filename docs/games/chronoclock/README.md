@@ -1,6 +1,6 @@
 # 《クロノクロック》测试档案
 
-2026-10-30建档，基线`6475d2f`。截至2026-10-31，P2已完成：档案以x64完整指纹登记387条`Inherited`，325条`Unreviewed`及264条`NoOp`；x86独立报告362条匹配，未直接合并。M1起`0x201f`经人工复核登记为`Reviewed`，默认trace通过它后在`start.ps3 / 0x50 / 0x2091`明确停止。先前已研究实现对象可见性、单周期Y摆动及显示字节计数；研究放行下runner的历史停点为steps=102522、`cdemo.ps3 / 0x10afe / 0x2112`。当前优先按P3复核默认停点，不继续追研究放行路径。见[研究记录](research.md)、[VM语义](vm-semantics.md)及[指纹报告](profiles/)。
+2026-10-30建档，基线`6475d2f`。截至2026-10-31，指纹策略v2（运行库叶子）后，档案以x64完整指纹登记434条`Inherited`、1条`Reviewed`、277条`Unreviewed`及264条`NoOp`；x86独立报告415条匹配，未直接合并。M1起`0x201f`经人工复核登记为`Reviewed`，默认trace通过它后在`start.ps3 / 0x50 / 0x2091`明确停止。先前已研究实现对象可见性、单周期Y摆动及显示字节计数；研究放行下runner的历史停点为steps=102522、`cdemo.ps3 / 0x10afe / 0x2112`。当前优先按P3复核默认停点，不继续追研究放行路径。见[研究记录](research.md)、[VM语义](vm-semantics.md)及[指纹报告](profiles/)。
 
 ## 样本身份
 
@@ -67,4 +67,5 @@
 - 启动 trace：`cmvs-trace <游戏目录>/data/pack/start.ps3 --bootstrap --save-dir <游戏目录>/save --system-save <游戏目录>/save/system.dat --script-archive <游戏目录>/data/pack/script.cpz --record-platform <游戏目录> --continue-without-snapshot --frame-ms 16 --rand-seed 0 --steps 1000000`。日志 SHA-256 `3904db2db18cc939ccbe9bb8e44ba8047cc79a51f381a2f4fba920d84247ad30`。不加 `--save-dir` 会停在 `start.ps3 / 0x22b3`，不加 `--rand-seed` 会停在 `logo.ps3 / 0x20d4`，两处都和《アマツツミ》行为一致。
 - P1时本作档案`cmvs-20150405`（基准`cmvs-20160201`）的712条处理命令全部为`Unreviewed`；P2已将其中387条以完整x64指纹登记为`Inherited`。264条`NoOp`不变。游戏ID`0x17700011`、原二进制与case身份均保持，见[引擎档案设计第13节](../../design/engine-profiles.md#13-p2-实施与使用2026-10-31)。
 - M1（2026-10-31）：`0x201f`复核为`Reviewed`，证据见[VM语义](vm-semantics.md)，默认停点前移到`0x2091`。
-- 下一步：继续沿默认停点复核，当前为`0x2091`（工具原因：未建模/可写数据引用）；暂停沿`--allow-unreviewed`追`0x2112`。指纹继承不代表原生输出或完整游戏通过。
+- 指纹策略v2（2026-10-31）：运行库函数按库名与自身代码作为叶子比较，`Inherited`由387条增至434条，原有继承无一丢失；默认停点不变，见[引擎档案设计第14节](../../design/engine-profiles.md#14-指纹策略-v22026-10-31)。
+- 下一步：继续沿默认停点复核，当前为`0x2091`（工具原因：可写全局数据，v2未处理）；暂停沿`--allow-unreviewed`追`0x2112`。指纹继承不代表原生输出或完整游戏通过。

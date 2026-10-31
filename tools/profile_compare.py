@@ -3,6 +3,7 @@
 python -I tools/profile_compare.py BASE.json DERIVED.json --report REPORT.tsv
     [--base-profile BASE.profile --profile DERIVED.profile --output-profile OUT.profile]
 No input is modified. Incomplete, cyclic, indirect or mutable dependencies never inherit.
+FLIRT-recognized runtime functions are leaves identified by name and their own body.
 """
 import argparse
 import hashlib
@@ -10,9 +11,10 @@ import json
 import re
 from pathlib import Path
 
-SCHEMA = "cmvs-command-graph-v1"
-POLICY = "raw-operands-closed-cfg-readonly-data-v1"
+SCHEMA = "cmvs-command-graph-v2"
+POLICY = "raw-operands-closed-cfg-readonly-data-libraries-v2"
 HEX = re.compile(r"[0-9a-f]{64}\Z")
+PLACEHOLDER_NAME = re.compile(r"(?:sub|nullsub|j|unknown_libname)_[0-9A-Fa-f]+\Z")
 
 
 def digest(value):
@@ -35,6 +37,10 @@ def validate(graph):
     for node in graph["functions"].values():
         if not isinstance(node["issues"], list) or not isinstance(node["instructions"], list):
             raise ValueError("invalid function node")
+        library = node.get("library")
+        if library is not None and not (isinstance(library, str) and library
+                                        and not PLACEHOLDER_NAME.match(library)):
+            raise ValueError("library leaves need a stable, non-placeholder name")
         for instruction in node["instructions"]:
             if (instruction["next"] is not None and not 0 <= instruction["next"] < len(node["instructions"])
                     and not (instruction["next"] == -1 and "missing-fallthrough" in node["issues"])):
@@ -53,12 +59,16 @@ def validate(graph):
                     raise ValueError("invalid data dependency")
                 if kind == "import" and not ref.get("name"):
                     raise ValueError("unnamed import")
-                if kind not in ("function", "local", "data", "import", "unknown-data"):
+                if kind == "opaque" and library is None:
+                    raise ValueError("opaque references belong only to library functions")
+                if library is not None and kind not in ("local", "import", "opaque"):
+                    raise ValueError("library functions keep only local, import or opaque references")
+                if kind not in ("function", "local", "data", "import", "unknown-data", "opaque"):
                     raise ValueError("unknown reference kind")
 
 
 def fingerprint(graph, entry, max_depth=8):
-    """Hash the complete dependency tree. Cycles are deliberately incomplete in v1."""
+    """Hash the complete dependency tree down to library leaves. Cycles stay incomplete."""
     memo = {}
     def walk(key, remaining, active):
         cache_key = (key, remaining)
@@ -74,6 +84,10 @@ def fingerprint(graph, entry, max_depth=8):
             issues.add("empty-function")
         normalized = []
         for instruction in node["instructions"]:
+            if "library" in node:
+                # A leaf: refs are local branches or opaque placeholders, never walked.
+                normalized.append(instruction)
+                continue
             refs = []
             for ref in instruction["refs"]:
                 if ref["kind"] == "function":
@@ -87,7 +101,10 @@ def fingerprint(graph, entry, max_depth=8):
             normalized.append({"bytes": instruction["bytes"], "refs": refs, "next": instruction["next"]})
         if not 0 <= node.get("entry_index", -1) < len(node["instructions"]):
             issues.add("missing-entry-index")
-        result = (None, tuple(sorted(issues))) if issues else (digest([node["entry_index"], normalized]), ())
+        identity = [node["entry_index"], normalized]
+        if "library" in node:
+            identity = ["library", node["library"]] + identity
+        result = (None, tuple(sorted(issues))) if issues else (digest(identity), ())
         memo[cache_key] = result
         return result
     return walk(entry, max_depth, set())

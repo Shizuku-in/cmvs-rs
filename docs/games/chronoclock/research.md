@@ -76,3 +76,20 @@ IDA 9.4分别导出两个构建的x64/x86，二进制身份来自各自档案，
 《アマツツミ》同上节参数重跑，日志 `local/chronoclock/m1-amatsu.log`（LF）SHA-256 `4803fe2eff8f8e1d48730847e4b94f69f6e6af356b05c2580808a72f48b28d90`，与 P2 的 `p2-amatsu-after-saved.log` 去掉 CR 后的哈希相同。P2 记录的 `9d8e45d8…` 是经 PowerShell 重定向写出的 CRLF 版本，内容一致。
 
 `0x2091` 的工具原因为未建模/可写数据引用，留待下一条复核。
+
+## 2026-10-31：指纹策略 v2（运行库叶子）
+
+按[档案设计第 14 节](../../design/engine-profiles.md#14-指纹策略-v22026-10-31)改进导出与比较工具。先在当前 IDA 会话只读分类 v1 中被数据问题阻断的 469 个函数，再离线模拟各项修复的效果；运行库边界（上限 58 条）加段外引用（上限 78 条）收益最高且无需新的配对推理，故先做这两项。
+
+导出均为 IDA 9.4 `idat` 批处理：基准 x64/x86 读取 `local/chronoclock/p2-amatsu-*.i64` 的临时副本；CHRONOCLOCK x64 用 `-o` 新建分析库 `local/chronoclock/v2-chrono-x64.i64`（不再借用当前会话），x86 读取 `p2-chrono-x86.i64` 的临时副本。游戏目录除当前会话自身的 `cmvs64.exe.id0` 外无文件变化。导出 JSON 的 SHA-256：
+
+| 导出 | SHA-256 |
+|---|---|
+| 基准 x64 | `cf7a9adce3a229fc61fe52c093a5dc7a2b4bc6376aa532db405d9d1a739a0c48` |
+| CHRONOCLOCK x64 | `bab7f8b73ac6f238cb8bc575d1b4ba6b9ee61d2e18a5d434c7f6553d2927ee21` |
+| 基准 x86 | `d9dbab950e5a890c049e9a2e73843fedad98740d1a8bf9fb523539a04de53bf0` |
+| CHRONOCLOCK x86 | `2a90040813148256aa259534950be37fbd1292a5fdb4168c3e1c87d762bf60a1` |
+
+[比较报告](profiles/)替换为 v2 版本：x64 `161a628bcdb1bfcadfee4483e7a27e8eed7a40033befa1cee33aaeb6fd677933`，x86 `e27c5081ea55fcee04b87a38f46097335347dcd19e15cd81a36471409b8d43bb`。x64 继承 387 → 434，x86 362 → 415，v1 的继承无一丢失。第一次导出时有一对占位名库函数（`sub_…`、`unknown_libname_N`）被当作叶子；它们因名称不同从未匹配，但编号可能偶然相同，故改为按普通函数展开并在比较工具中拒绝，重新导出后继承数不变。
+
+默认 trace 同上节参数，仍停在 `start.ps3 / 0x50 / 0x2091`，除统计行外与 M1 日志逐字节一致（`local/chronoclock/v2-default.log`）。Rust 代码未改，只更新本作档案数据，故未重跑《アマツツミ》百万步回归。检查：`cargo fmt --check`、默认离线测试 836 项（12 项忽略）、严格 Clippy、Python 合成测试 15 项。
