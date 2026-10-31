@@ -1,7 +1,7 @@
 //! Face-name font resolution standing in for GDI's CreateFontA lookup. The explicit
 //! `--font` file serves the built-in default face; other faces are found by family name
-//! in the directories `cmvs_native::font_directories` lists for this platform (none yet
-//! outside Windows, where only the default face resolves).
+//! in the directories `cmvs_native::font_directories` lists for this platform
+//! (Windows system/user folders and Linux Fontconfig directories).
 use ab_glyph::FontVec;
 use cmvs_core::{FormatError, settings::DEFAULT_FONT_FACE};
 use std::{
@@ -196,7 +196,9 @@ fn name_records(table: &[u8]) -> Vec<String> {
             continue;
         };
         let units: Vec<u16> = raw
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| u16::from_be_bytes([pair[0], pair[1]]))
             .collect();
         if let Ok(name) = String::from_utf16(&units)

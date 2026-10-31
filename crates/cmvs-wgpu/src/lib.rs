@@ -750,7 +750,7 @@ mod tests {
                 .pixels
                 .draw_scaled(&mut target, 13, 7, 1, linear)
                 .unwrap();
-            for (pixel, expected) in actual.pixels().chunks_exact(4).zip(target) {
+            for (pixel, expected) in actual.pixels().as_chunks::<4>().0.iter().zip(target) {
                 for (a, shift) in [16, 8, 0].into_iter().enumerate() {
                     assert!(
                         pixel[a].abs_diff((expected >> shift) as u8) <= 1,

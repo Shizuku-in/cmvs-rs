@@ -22,7 +22,7 @@ pollster = "=0.4.0"
 encoding_rs = "=0.8.42"
 ico = "=0.5.0"
 softbuffer = "=0.4.8"
-winit = "=0.30.13"
+winit = { version = "=0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita-crossfont"] }
 rodio = { version = "=0.21.1", default-features = false, features = ["playback"] }
 lewton = "=0.10.2"
 ab_glyph = { version = "=0.2.32", default-features = false, features = ["std"] }

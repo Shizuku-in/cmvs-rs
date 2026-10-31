@@ -40,3 +40,7 @@
 ## GPU 后端来源
 
 wgpu 30.0.1（MIT OR Apache-2.0），发布包提交 `40f4a34ebaf56f9a046231f54125ad046239d3f3`，来源 https://github.com/gfx-rs/wgpu 。pollster 0.4.0（MIT OR Apache-2.0），发布包提交 `2864daf5febd81eb33f66cb32b66ca78a9e21db7`，来源 https://github.com/zesterer/pollster 。仅使用公开API，未复制示例或上游实现。版本与校验和固定于 Cargo.lock；新增传递依赖许可登记在 THIRD_PARTY_NOTICES.txt。图形相关语义继续依据现有软件路径与绑定游戏二进制的证据，不把库的行为作为新指令证据。
+
+## Linux 字体选择与 Wayland 标题栏（2026-10-31）
+
+winit 0.30.13 改用其 `wayland-csd-adwaita-crossfont` feature，保留 X11/Wayland；crossfont 0.8.1（Apache-2.0，发布包提交 `a93d1ee388480c1b093f41fc3c591b7a6ff8dada`，https://github.com/alacritty/crossfont）经 FreeType/Fontconfig 为标题栏逐字寻找回退字体。版本及校验和固定在 Cargo.lock，传递依赖许可登记在 THIRD_PARTY_NOTICES.txt。仅启用上游公开 feature，未复制其源码。Linux 字体服务调用已安装的 `fc-list` 与 Zenity；不分发这些工具或系统字体，不改系统字体设置。该行为是宿主适配，不新增游戏指令语义。

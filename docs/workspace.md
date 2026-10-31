@@ -103,3 +103,7 @@ workspace 各包声明 Rust 1.89+（本机使用 1.96.0），用于标准库 Fil
 `cmvs-wgpu` 依赖 core、固定 wgpu/pollster，封装设备、纹理缓存、场景合成、窗口呈现和逻辑帧读回；desktop 在 `wgpu-renderer` 下依赖它。根 feature 同名，自动启用 desktop；默认成员与 core 依赖不变。`cargo check --offline --features wgpu-renderer` 检查 GPU 构建，`cargo check --offline -p cmvs-desktop --no-default-features` 检查 CPU-only。全 workspace 全功能测试仍需另显式执行忽略的GPU硬件检查。
 
 锁文件特意把 gpu-allocator 的宽范围 windows 依赖绑定到0.62.2，与 wgpu-hal 一致；cpal 继续使用0.54.0。更新锁文件后应检查 GPU/音频全功能构建，避免宽范围解析把这两套类型错误合并。
+
+## Linux 字体服务（2026-10-31）
+
+`cmvs-native` 在 Linux 上通过 Fontconfig 的 `fc-list` 发现字体目录、通过 Zenity 选择日文字体族；字体文件解析仍留在 `cmvs-desktop`，平台无关核心不变。Wayland 标题启用 winit 的 crossfont 后端，逐字使用系统字体回退。Linux 构建需要 FreeType/Fontconfig 开发包，原生音频另需 ALSA 开发包（Ubuntu: `libfreetype-dev libfontconfig-dev libasound2-dev`）；字体选择运行时需 `fontconfig zenity` 及日文字体（例如 `fonts-noto-cjk`）。

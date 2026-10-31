@@ -47,7 +47,14 @@ fn immediate_device_readback_keeps_the_completed_font_composite() {
     let without_glyphs =
         cmvs_rs::scene_render::render_scene(&scene, Some(&camera), &windows, 1280, 720).unwrap();
     assert_ne!(frame, without_glyphs);
-    assert!(frame.pixels().chunks_exact(4).any(|p| p[..3] != [0; 3]));
+    assert!(
+        frame
+            .pixels()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|p| p[..3] != [0; 3])
+    );
     let mut backend = RecordingBackend::default();
     backend.present_frame(frame.clone());
     bytecode::pending(&mut vm);
@@ -101,7 +108,7 @@ fn horizontal_glyph_reveal_crops_the_full_font_image_without_rescaling() {
     assert_ne!(partial.pixels(), full.pixels());
     assert_ne!(partial.pixels(), blank.pixels());
     let mut revealed_later = false;
-    for (i, pixel) in partial.pixels().chunks_exact(4).enumerate() {
+    for (i, pixel) in partial.pixels().as_chunks::<4>().0.iter().enumerate() {
         let expected = if i % 1280 < crop_end {
             &full.pixels()[i * 4..i * 4 + 4]
         } else {

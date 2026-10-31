@@ -497,15 +497,19 @@ mod tests {
         let ink = |image: &RgbaImage| {
             image
                 .pixels()
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|p| u64::from(p[3]))
                 .sum::<u64>()
         };
         assert!(ink(&bold) > ink(&normal));
         for (before, after) in normal
             .pixels()
-            .chunks_exact(4)
-            .zip(bold.pixels().chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(bold.pixels().as_chunks::<4>().0.iter())
         {
             assert!(after[3] >= before[3]);
         }

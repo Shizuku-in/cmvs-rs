@@ -75,7 +75,7 @@ pub fn decode_icon(bytes: &[u8]) -> Result<IconPixels, Box<dyn Error>> {
         return Err("invalid ICO directory size".into());
     }
     // Preflight embedded dimensions before invoking a raster decoder or allocating RGBA.
-    for e in bytes[6..end].chunks_exact(16) {
+    for e in bytes[6..end].as_chunks::<16>().0.iter() {
         let w = if e[0] == 0 { 256 } else { u32::from(e[0]) };
         let h = if e[1] == 0 { 256 } else { u32::from(e[1]) };
         let n = u64::from(u32::from_le_bytes(e[8..12].try_into()?));

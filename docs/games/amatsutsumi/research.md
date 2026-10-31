@@ -2365,3 +2365,13 @@ SavedImage允许kind0空名，仍要求单图/manager0/有界尺寸，保持滤�
 cargo fmt --check、cargo test --offline、cargo clippy --offline --all-targets -- -D warnings及wgpu-renderer,audio-output release构建通过。真实游戏根E:/Download/AMATSUTSUMI没有save目录；使用local/amatsutsumi/first-start-2190-check独立用户目录、wgpu、字体、record音频，12秒运行21814步进入标题正常退出，生成2493字节system.dat。检查工具解码通过：game ID 0x17800016，压缩负载2131字节、解码44864字节、列表[0,0]，校验通过。相同目录重启12秒21913步再次到标题并正常保存，生成system.bak。日志保留local/first-start-native.log及local/first-start-restart-record.log，游戏根save目录始终未创建。
 
 另一次native音频重启在音频设备初始化后以0xc0000008退出，与已记录的受限执行环境问题相符，未计作native音频重启通过。上述真实首次启动/退出保存/重启验证仅为record音频；未覆盖进入剧情后存读档或Ctrl未读边界。
+
+### Linux 字体选择与 Wayland 启动（2026-10-31）
+
+本机 Linux Wayland（`WAYLAND_DISPLAY=wayland-0`，`DISPLAY=:0`）曾在客户端标题装饰中显示方框。标题字符串日志正常；winit 默认 sctk-adwaita/ab_glyph 标题路径只加载单个 Ubuntu Sans Bold 字体，没有逐字回退。改用上游 crossfont 标题后端；以 Ubuntu Sans Bold 11 的同一选择请求「アマツツミこころ１」，每字均成功取得非空位图，未修改系统标题字体配置。
+
+Linux 游戏内「フォント選択」接入 Fontconfig + Zenity，筛选日文与可打印 ASCII 覆盖，排除此前缺少 ASCII 的 Droid Sans Fallback。真实系统字体探针从 Fontconfig 目录经 FontLibrary 按 `Noto Sans CJK JP` 定位到文件/face，并核对英文、数字与日文字形存在；Zenity 列表可打开。完整游戏内点击、设置保存与重启选择仍待人工验证，不能用探针替代。
+
+使用只读 `/run/media/gkouen/New Volume/Download/AMATSUTSUMI`，`--encoding shift-jis --user-data-dir /tmp/cmvs-wayland-font-check-20261031 --audio native --font /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc --font-face 0 --exit-after 12`，CPU 后端、默认快照策略、未固定随机种子，从全新独立用户目录运行至标题菜单。日志记录品牌 SE、标题 SE 与 BGM 请求；22895 步后诊断期限正常退出（状态 0），写入独立用户设置。日志 `/tmp/cmvs-wayland-font-check.log`。没有进行标题栏截图判读或完整剧情验证，不宣称已验证全 Linux 支持。
+
+默认测试 825 项通过，完整 workspace/all-features 测试 909 项通过；格式、默认及完整功能严格 Clippy 通过。完整功能检查另修复此前未在默认构建检查到的后端固定分块 lint，仅作等价迭代替换。未改资源解码算法或 VM 语义。新依赖与许可见公共 references/THIRD_PARTY_NOTICES。

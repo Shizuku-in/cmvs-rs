@@ -1,6 +1,6 @@
 //! Operating-system services for CMVS hosts. Every platform module implements the same
 //! functions; platforms without an implementation report `NativeError::Unsupported`.
-//! Windows is implemented; macOS, iOS, Linux, Android and wasm are reserved.
+//! Windows and Linux provide font services; other platforms are reserved.
 use raw_window_handle::RawWindowHandle;
 use std::{fmt, path::PathBuf};
 
@@ -8,10 +8,14 @@ use std::{fmt, path::PathBuf};
 mod windows;
 #[cfg(windows)]
 use windows as platform;
-// Compiled everywhere so the fallback is still checked when only Windows is built.
-#[cfg_attr(windows, allow(dead_code))]
+#[cfg(target_os = "linux")]
+mod linux;
+// Compiled everywhere so reserved-platform services remain checked.
+#[cfg_attr(any(windows, target_os = "linux"), allow(dead_code))]
 mod unsupported;
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+use linux as platform;
+#[cfg(not(any(windows, target_os = "linux")))]
 use unsupported as platform;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
