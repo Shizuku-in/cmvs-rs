@@ -221,3 +221,26 @@ CSS1运行前后SHA-256均为 `39a93d66c3020f95f6eca644d4e1a79c9318d0f8f53366a9b
 | `review-windows-runner.log` | `d660951f9d3d1adc64e6304086ed98a602555a92d2aec50c7c19d3ad472e6978` |
 
 检查：Python合成测试25项通过，新增覆盖共享分组、全部对齐兄弟分支、父体失配停止、深度/参数边界、保守数据及输入不变；`cargo fmt --check`、`cargo test --offline`（837项通过、12项忽略）、严格Clippy和`git diff --check`通过。首次Cargo测试遇到既有资源测试按时间戳命名目录的并行撞名，已加进程内原子序号并完整重跑通过；不改变资源读取行为。
+
+## 2026-10-31：P3，图像缓存提示与换图组
+
+从默认停点`0x203f`继续，按共享差异聚合`0x2032`、`0x22c4`，复核三条并登记Reviewed。当前Inherited=455、Presumed=167、Reviewed=25、Unreviewed=65、NoOp=264。运行时、指纹策略、自动比较报告与解码算法不变；没有新增依赖或外部源码。参数、返回标志、成员对照与实现限制见[图像缓存组](vm-semantics.md#图像缓存提示与换图组2026-10-31-复核)。
+
+本作当前IDA会话输入哈希核对一致；基准从`p2-amatsu-x64.i64`复制到新的`review-cache-base.i64`，用IDA 9.4批处理只读查询，输出身份核对一致。提示位/查询状态分别移动2080字节；预加载结果取得函数58条指令、12处成员位移变化；原始读取166条指令、5处字段/路径位移变化。缓存查询/插入调用树可比较部分相同，格式分派后按资源签名配对，复用先前`0x2030`证据，不按失配父函数下的调用序号判等。未知格式与未建模模式继续显式报错。x86未独立复核。
+
+### 默认闸门验收
+
+复用上一轮完整runner探针，RecordingBackend、记录文字、种子0、每次Yield推进16ms、无输入、`ContinueWithoutImage`、百万tick预算，未启用`--allow-unreviewed`。新建`review-cache-user`并复制CSS1，运行前后SHA-256均为`39a93d66c3020f95f6eca644d4e1a79c9318d0f8f53366a9b7a408f5b2fa5385`。原游戏保持只读。
+
+两次`0x203f`在`cdemo.ps3`的PC `0x2105e`、`0x1ddf6`完成，分别记录steps=93397、93406；本轮其余两条未动态执行，`0x2032`仍无处理器。新默认停点steps=102340、`cdemo.ps3 / 0xf090 / 0x22b2`，比旧停点推进8943步。闸门分派尝试统计inherited=17179、reviewed=36、presumed=2600、base/unreviewed=0，含等待重试，不是完成数或覆盖率。已执行推定命令列表保存在日志，不额外计为人工复核。没有验证原生窗口、文字/音轨、剧情快照或完整自动演示。
+
+下一步复核`0x22b2`的实时状态更新与快照调用，仍保留派生构建快照格式屏障；没有以研究放行绕过该停点。初步诊断涉及快照子记录数量及状态数组差异，不能把它视作单一字段移动。
+
+| 忽略目录内证据 | SHA-256 |
+|---|---|
+| `review-cache-base.json` | `ffda00334aa7cd5af9df162e61f450540030ca08734e7ec4b07b551c718cf130` |
+| `review-cache-chrono.json` | `b876bd25d2a5311544eee0950619d2880dbc4182cc2165db36ca9b401f43966a` |
+| `review-cache-audit.log` | `12b17e660c5ed5cfc53fa816328570354f699b6d4dc1cdcf276226734142186f` |
+| `review-cache-runner.log` | `3a7c93e19e2f0563a8cb5e5f22241f9405f4a4048232df741082ca4b864ecf10` |
+
+检查：`cargo fmt --check`、`cargo test --offline`（837项通过、12项忽略）、`cargo clippy --offline --all-targets -- -D warnings`通过。无后端/feature或解码变更，不重复计入根游戏百万步重放。既有合成测试覆盖缓存与档案文档引用；未增加与数据改动重复的测试。

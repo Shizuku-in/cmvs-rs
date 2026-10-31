@@ -56,7 +56,7 @@ compare x64 base-sha256=dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91
 0x202f presumed 0x7ed97 0x70e14 presume=x64:7f8b8f2d708cf4a203f76e4aa148ebbfb813a42bcc3b69fbf5cc32cb22312ede
 0x2030 reviewed 0x7eda4 0x70e1e review=games/chronoclock/vm-semantics.md
 0x2031 presumed 0x7edb1 0x70e28 presume=x64:90e2fc28f99b138e4e42d96d16a5f150c8cca24b3f48ccfc23fda27e2e21816b
-0x2032 unreviewed 0x7edbe 0x70e32
+0x2032 reviewed 0x7edbe 0x70e32 review=games/chronoclock/vm-semantics.md
 0x2033 presumed 0x7edcb 0x70e3c presume=x64:fa1aec4c7c53d6ecebd63681fb5124b62232f2eac8c5a256b0616e898762c20c
 0x2034 presumed 0x7edd8 0x70e46 presume=x64:d5d27d94f7b161ccda9397160aac64ecc15dbd657fbfe72231ec5b3170dc35da
 0x2035 unreviewed 0x7ede5 0x70e50
@@ -69,7 +69,7 @@ compare x64 base-sha256=dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91
 0x203c presumed 0x7ee19 0x70e78 presume=x64:b3a31ec4ec8804c81262caf271fb6dea9a8a23ac70ddc7714927d1e2336e6f37
 0x203d presumed 0x7ee26 0x70e82 presume=x64:a390a860e4041a23b0e83afb040ad19097f6bb697179aa7402c0784f58e97340
 0x203e presumed 0x7ee33 0x70e8c presume=x64:98e4c55fc32b157c0c8a664343927e7e2e36c11b52aa6b7d87128def9cbb91e5
-0x203f unreviewed 0x7ee40 0x70e96
+0x203f reviewed 0x7ee40 0x70e96 review=games/chronoclock/vm-semantics.md
 0x2040 inherited 0x7ee57 0x70eab inherit=x64:309f080d98b2d8391fbe76b8b3f2015faa16e82e94d28e7d08d1a2907b8db987
 0x2041 inherited 0x7ee64 0x70eb5 inherit=x64:27ac7d080a74d670e0b852ae7d2d685c5af34476b2f0c5d7e2976f4fb16f0505
 0x2042 inherited 0x7ee71 0x70ebf inherit=x64:313692ebb709e789831551bb8f533c398eb0425b9f94a2ac80896b173a3934b4
@@ -714,7 +714,7 @@ compare x64 base-sha256=dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91
 0x22c1 presumed 0x8093e 0x722cd presume=x64:a30df71ddec1fadc24dc711aaa59a93eb480fbb2006c321239b63fef2f401610
 0x22c2 noop 0x7eaa7 0x70c53
 0x22c3 noop 0x7eaa7 0x70c53
-0x22c4 unreviewed 0x8094b 0x722d7
+0x22c4 reviewed 0x8094b 0x722d7 review=games/chronoclock/vm-semantics.md
 0x22c5 presumed 0x80958 0x722e1 presume=x64:c4d882e3a1b448a266f9b3606152dd86dd5321d18441a8a6869c61bcb8fc7f8c
 0x22c6 inherited 0x80965 0x722eb inherit=x64:24f85393a12d94390003f976e6186248b7bc2bc914f6ea50dcf34f6576b2302c
 0x22c7 presumed 0x80972 0x722f5 presume=x64:244253568e789308f3da9e83db90d867c5b61326a017efa2d497c3866d01d810
