@@ -76,6 +76,13 @@ fn probe(registry: &Registry, root: &Path, opcode: u16, args: &[u32]) -> String 
         Ok(run) => run,
         Err(e) => return format!("setup\t{e}"),
     };
+    // Text services are opt-in for recording hosts; leaving them disabled hides
+    // implemented message/choice commands from this inventory.
+    run.set_record_text(true);
+    if opcode == 0x2129 {
+        run.set_user_data_directory(&root.with_extension("user"))
+            .unwrap();
+    }
     let mut backend = RecordingBackend::default();
     for _ in 0..256 {
         match run.tick(&mut backend) {
@@ -114,6 +121,7 @@ fn inventory(root: &Path, opcodes: impl Iterator<Item = u16>) -> String {
         }
     }
     let _ = fs::remove_dir_all(root);
+    let _ = fs::remove_dir_all(root.with_extension("user"));
     text
 }
 
@@ -125,12 +133,23 @@ fn temp_root(name: &str) -> PathBuf {
 fn probe_separates_dispatched_and_unclaimed_commands() {
     let text = inventory(
         &temp_root("synthetic"),
-        [0x20d0, 0x2022, 0x27fe].into_iter(),
+        [
+            0x20d0, 0x2022, 0x210b, 0x2129, 0x2154, 0x2157, 0x2158, 0x238b, 0x27fe,
+        ]
+        .into_iter(),
     );
     // 0x20d0 is a pure math command; 0x2022 needs an object; no host claims 0x27fe.
     assert!(text.contains("0x20d0\tzero\thandled\t"));
     assert!(text.contains("0x2022\tzero\terror\t"));
     assert!(text.contains("0x27fe\tzero\tunhandled\t"));
+    for op in [0x210b, 0x2129, 0x2154, 0x2157, 0x2158, 0x238b] {
+        assert!(
+            text.lines()
+                .filter(|line| line.starts_with(&format!("0x{op:04x}\t")))
+                .all(|line| line.contains("\thandled\t") || line.contains("\terror\t")),
+            "implemented service 0x{op:04x} was hidden"
+        );
+    }
 }
 
 #[test]

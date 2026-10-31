@@ -12,6 +12,8 @@ use cmvs_rs::{
     snapshot::{EngineSnapshot, SavedScene},
 };
 use std::{fs, path::PathBuf};
+#[path = "support/command_trace.rs"]
+mod command_trace;
 
 fn user_directory(name: &str) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
@@ -616,6 +618,19 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         ui.frame([-1, -1], None);
     }
     ui.click(ui.button(0, 2), 120);
+    // External initial state need not open the message/audio page. The active tab
+    // has no button of its own, so select page 2 only when that tab is offered.
+    if ui
+        .run
+        .buttons()
+        .group(1)
+        .unwrap()
+        .buttons
+        .iter()
+        .any(|b| b.id == 2)
+    {
+        ui.click(ui.button(1, 2), 120);
+    }
     assert_eq!(ui.run.buttons().group(1).unwrap().buttons.len(), 291);
     font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
         .unwrap();
@@ -624,6 +639,17 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     ui.run.load_slot(0, &mut ui.backend).unwrap();
     ui.wait_for_text();
     ui.click(ui.toolbar(0), 120);
+    if ui
+        .run
+        .buttons()
+        .group(1)
+        .unwrap()
+        .buttons
+        .iter()
+        .any(|b| b.id == 2)
+    {
+        ui.click(ui.button(1, 2), 120);
+    }
     let group = ui.run.buttons().group(1).unwrap();
     assert_eq!(group.object, 64);
     assert_eq!(group.buttons.len(), 292);
@@ -1152,6 +1178,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
 
 impl Ui<'_, '_> {
     fn frame(&mut self, pointer: [i32; 2], code: Option<usize>) {
+        command_trace::begin();
         if self.frozen {
             return;
         }
@@ -1188,12 +1215,26 @@ impl Ui<'_, '_> {
                         .zip(self.run.machine().stack().peek_u32(8).ok())
                 })
                 .flatten();
+            let audited = opcode
+                .filter(|op| command_trace::newly_implemented(*op))
+                .map(|op| (op, self.run.machine().current_name().to_vec()));
             let event = self.run.tick(&mut self.backend).unwrap_or_else(|e| {
                 panic!(
-                    "{e} at {} / 0x{pc:x}",
-                    self.run.machine().current_name().escape_ascii()
+                    "{e} at {} / 0x{pc:x}, args={:?}",
+                    self.run.machine().current_name().escape_ascii(),
+                    (1..=10)
+                        .map(|i| self.run.machine().stack().peek_u32(i * 4).ok())
+                        .collect::<Vec<_>>()
                 )
             });
+            if let Some((op, script)) = audited {
+                command_trace::record(
+                    &script,
+                    pc,
+                    op,
+                    self.run.machine().pending_system().is_none(),
+                );
+            }
             if let Some(op @ (0x22b5 | 0x22b6)) = opcode
                 && self.run.machine().pending_system().is_none()
             {
