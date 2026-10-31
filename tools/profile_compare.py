@@ -3,6 +3,7 @@
 python -I tools/profile_compare.py BASE.json DERIVED.json --report REPORT.tsv
     [--base-profile BASE.profile --profile DERIVED.profile --output-profile OUT.profile]
 python -I tools/profile_compare.py BASE.json DERIVED.json --explain 0x2091
+python -I tools/profile_compare.py BASE.json DERIVED.json --group-differences [0x2140 0x215d]
 No input is modified. Incomplete, cyclic, indirect or mutable dependencies never inherit.
 FLIRT-recognized runtime functions are leaves identified by name and their own body.
 A command is presumed when only PRESUMABLE limits block it and both shapes are equal.
@@ -282,6 +283,56 @@ def same_instruction(left, right):
     return True
 
 
+def group_differences(base, derived, opcodes=None, max_depth=8):
+    """Read-only triage: group commands by their first differing function boundaries.
+
+    Walk callees only while the entire parent body aligns. A differing body is a
+    manual-review boundary, not an assertion that its descendants are equivalent.
+    Data/indirect/depth limitations remain in the ordinary comparison report.
+    """
+    if not 0 <= max_depth <= 32:
+        raise ValueError("max-depth must be 0..32")
+    rows = compare(base, derived, max_depth)
+    selected = set(opcodes) if opcodes is not None else {
+        r["opcode"] for r in rows if r["status"] == "unreviewed"}
+    if any(not 0 <= op-0x2000 < len(derived["commands"]) for op in selected):
+        raise ValueError("opcode outside the derived switch")
+    groups = {}
+    for opcode in sorted(selected):
+        index = opcode-0x2000
+        left = base["commands"][index] if index < len(base["commands"]) else None
+        right = derived["commands"][index]
+        if left is None or left["kind"] != "handler" or right["kind"] != "handler":
+            continue
+        seen = set()
+
+        def visit(lkey, rkey, remaining):
+            key = (lkey, rkey, remaining)
+            if key in seen:
+                return
+            seen.add(key)
+            a, b = base["functions"][lkey], derived["functions"][rkey]
+            same = (a.get("library") == b.get("library")
+                    and a.get("entry_index") == b.get("entry_index")
+                    and sorted(a["issues"]) == sorted(b["issues"])
+                    and len(a["instructions"]) == len(b["instructions"])
+                    and all(same_instruction(x, y) for x, y in zip(a["instructions"], b["instructions"])))
+            if not same:
+                groups.setdefault((lkey, rkey), set()).add(opcode)
+                return
+            if remaining == 0 or a.get("library") is not None:
+                return
+            for x, y in zip(a["instructions"], b["instructions"]):
+                for u, v in zip(x["refs"], y["refs"]):
+                    if u["kind"] == "function":
+                        visit(u["target"], v["target"], remaining-1)
+
+        visit(left["entry"], right["entry"], max_depth)
+    return [{"base": lkey, "derived": rkey, "opcodes": sorted(ops)}
+            for (lkey, rkey), ops in sorted(groups.items(), key=lambda item: (
+                -len(item[1]), int(item[0][0], 0), int(item[0][1], 0)))]
+
+
 def explain(base, derived, opcode, max_depth=8):
     """Diagnostic only: why one command did not inherit. Never changes a status."""
     validate(base)
@@ -367,6 +418,8 @@ def main():
     parser.add_argument("--report", type=Path)
     parser.add_argument("--explain", type=lambda text: int(text, 0), metavar="OPCODE",
                         help="print why one command did not inherit; writes nothing")
+    parser.add_argument("--group-differences", nargs="*", type=lambda text: int(text, 0), metavar="OPCODE",
+                        help="group differing function boundaries; no opcodes selects automatic unreviewed rows")
     parser.add_argument("--max-depth", type=int, default=8)
     parser.add_argument("--base-profile", type=Path)
     parser.add_argument("--profile", type=Path)
@@ -374,6 +427,19 @@ def main():
     args = parser.parse_args()
     if not 0 <= args.max_depth <= 32:
         parser.error("max-depth must be 0..32")
+    if args.group_differences is not None:
+        if any((args.report, args.profile, args.base_profile, args.output_profile)) or args.explain is not None:
+            parser.error("--group-differences only reads the two exports")
+        base, derived = [json.loads(p.read_text(encoding="utf-8-sig")) for p in (args.base, args.derived)]
+        groups = group_differences(base, derived, args.group_differences or None, args.max_depth)
+        print(f"# {base['arch']} depth={args.max_depth} base={base['binary_sha256']} derived={derived['binary_sha256']}")
+        print("# Diagnostic boundaries only; descendants below a differing body are not compared.")
+        print("# No status changes; data/indirect/depth limits still require the ordinary report.")
+        print("# Only paired handlers are shown; default selection uses automatic comparison, including manually reviewed commands.")
+        for group in groups:
+            print(f"{group['base']} / {group['derived']}\t" + " ".join(
+                f"0x{op:04x}" for op in group["opcodes"]))
+        return
     if args.explain is not None:
         if any((args.report, args.profile, args.base_profile, args.output_profile)):
             parser.error("--explain only reads the two exports")

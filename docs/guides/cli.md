@@ -25,6 +25,10 @@ trace先识别引擎档案：输入脚本（或`--script`归档）、`--script-a
 
 ## 引擎档案
 
+已有IDA导出可用 `python -I tools/profile_compare.py BASE.json DERIVED.json --group-differences` 聚合共享差异函数，或在选项后列出命令号（如 `0x2140 0x215d`）限定范围。输出包含两边exe哈希、架构与深度；仅作人工复核排序，不生成档案或更改状态。
+
+分组只沿整个自身函数体对齐的调用边展开，遇到不同函数体就停止，不断言其后代相同。它仅显示能配对的处理函数；无命令号时依据自动比较的Unreviewed列表，因此可能包含已人工Reviewed的命令。保守数据、间接调用和深度限制仍须结合普通报告及 `--explain` 检查。
+
 ```bash
 cargo run --offline --release --bin cmvs-profile -- identify "<游戏目录>"
 cargo run --offline --release --bin cmvs-profile -- identify "<游戏目录>" --profile cmvs-20160201

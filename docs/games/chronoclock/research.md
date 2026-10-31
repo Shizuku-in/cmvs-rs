@@ -192,3 +192,32 @@ CSS1运行前后SHA-256均为 `39a93d66c3020f95f6eca644d4e1a79c9318d0f8f53366a9b
 | `review-four-runner.log` | `5a90f791c4601bb74bf7cabda493396dd7a3a1db2fbfe7466a6f785b6c17dc09` |
 
 检查通过：`cargo fmt --check`、`cargo test --offline`（837项通过、12项忽略）、`cargo clippy --offline --all-targets -- -D warnings`、`git diff --check`。本轮无后端/feature、解码算法、依赖或外部源码变更；没有重新计入根游戏百万步回归，根快照正常行为由现有合成测试覆盖。
+
+## 2026-10-31：P3，按共享差异复核文字/窗口组
+
+基线 `62c9c57`。从新停点 `0x215d` 出发，新增只读诊断 `profile_compare.py --group-differences [命令号…]`，将多个命令的差异函数边界聚合。只沿自身函数体完全对齐的调用边展开，不在不同父体下面按调用次序强行配对；输出包含架构、两边exe哈希和深度，并明确不比较边界后的后代、不改变状态。没有参数时按自动Unreviewed报告选择，因此可能含已经人工Reviewed的命令。工具不引入手工叶子覆盖或字段归一化，指纹策略v3和原比较报告保持不变。
+
+窗口创建处理函数各145条指令，唯一自身差异是文字对象从0x180增至基准0x250字节。人工核对完整构造发现基准多清零208字节扩展块、后续六字渲染参数/工作缓冲/上下文字体设备字段整体移动；共同初始化与后续操作一致。构造的额外memset使调用数不同，按角色重新配对三个子函数继续检查；没有用“首处只差分配大小”代替整个构造复核。与先前析构、快照字段移动形成同一证据组。
+
+共登记九条Reviewed：`0x2140`、`0x215d`、`0x2102`、`0x2118`、`0x214e`、`0x2150`、`0x22e0`、`0x2170`、`0x2176`。后两条复用 `0x2030` 已核对的图像管理器和PB3差异链；其包装函数无新增差异。地址、参数、返回值、支持与错误边界见[共享布局组](vm-semantics.md#窗口与文字共享布局组2026-10-31-复核)。`0x2118`、`0x2176`尚无Rust处理器，Reviewed与已实现分开记录；不为未执行命令补造动态验证。档案现为Inherited=455、Presumed=167、Reviewed=22、Unreviewed=68、NoOp=264。
+
+本作当前IDA输入哈希再次确认，基准从 `p2-amatsu-x64.i64` 新复制为 `review-windows-base.i64` 批处理读取。仅查询反汇编/伪代码，原游戏只读，x86本轮未单独复核。没有新增外部资料、核心语义、解码算法、依赖或原生设备验证；不重复根游戏百万步回归。
+
+### 默认闸门验收与下一组
+
+沿用上一轮runner探针参数：RecordingBackend、记录文字、种子0、16ms、无输入、`ContinueWithoutImage`、百万tick预算，未启用 `--allow-unreviewed`。新建 `review-windows-user` 独立用户目录，复制同一CSS1；运行前后SHA-256均为 `39a93d66c3020f95f6eca644d4e1a79c9318d0f8f53366a9b7a408f5b2fa5385`。
+
+先越过旧 `intproc.ps3 / 0x4027c / 0x215d`，初次验证停在 `0x2170`；补齐这条共用图像证据后，最终到steps=93397、`cdemo.ps3 / 0x2105e / 0x203f`。实际执行本轮新增命令 `0x215d` 2次、`0x2150` 1次、`0x2170` 2次，其余六条只做静态复核。闸门统计base=0、inherited=16305、reviewed=32、presumed=2599、unreviewed=0；这是分派尝试数。已执行推定命令列表完整保留在日志，新增的 `0x2178`、`0x214a`、`0x2033` 等不计作人工复核。
+
+新停点 `0x203f` 的共享差异边界为基准 `0x140035a90` / 本作 `0x1400341f0`；下一轮可聚合 `0x2032`、`0x22c4` 排查全部边界，再决定放行。当前实际推进10981步，不表示完整自动演示、呈现、剧情或存档验证通过。
+
+| 忽略目录内证据 | SHA-256 |
+|---|---|
+| `review-windows-base.json` | `ebac8f62da872bf822dcb046f3f6f1220479ff019e2993d1c50f169c7f5893c4` |
+| `review-windows-chrono.json` | `bae42a3411f7b1cc078ac2a4e3f7a82082bd7a86544ac2daa4a1caf1b11805dc` |
+| `review-windows-audit.log` | `21c5f4b2017e115e5a9aa454b519ad9195b5c1a72e389ac724ef7b02eb4508e3` |
+| `review-windows-helpers.log` | `e511ba7d441dc628cc2fb719106d232cdbd3e7a69b078981a81fe2f3b96bc7cf` |
+| `review-windows-groups.log` | `bb38acb8cdfb0fa20ec4670015ac9aeb757b373fc807ef5c19ca705ab3a2a9d2` |
+| `review-windows-runner.log` | `d660951f9d3d1adc64e6304086ed98a602555a92d2aec50c7c19d3ad472e6978` |
+
+检查：Python合成测试25项通过，新增覆盖共享分组、全部对齐兄弟分支、父体失配停止、深度/参数边界、保守数据及输入不变；`cargo fmt --check`、`cargo test --offline`（837项通过、12项忽略）、严格Clippy和`git diff --check`通过。首次Cargo测试遇到既有资源测试按时间戳命名目录的并行撞名，已加进程内原子序号并完整重跑通过；不改变资源读取行为。

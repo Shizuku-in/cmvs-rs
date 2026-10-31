@@ -204,6 +204,54 @@ class ComparisonTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.status()
 
+    def test_group_differences_shares_a_boundary_without_mutating_inputs(self):
+        self.derived["functions"]["0x900"]["instructions"][0]["bytes"] = "b802000000"
+        for g in (self.base, self.derived):
+            g["commands"].append(dict(g["commands"][0], opcode=0x2001))
+        before = copy.deepcopy((self.base, self.derived))
+        expected = [{"base": "0x200", "derived": "0x900", "opcodes": [0x2000, 0x2001]}]
+        self.assertEqual(pc.group_differences(self.base, self.derived), expected)
+        self.assertEqual((self.base, self.derived), before)
+        self.assertEqual(self.status(), "unreviewed")
+        self.assertEqual(pc.group_differences(self.base, self.derived, [0x2001]),
+                         [dict(expected[0], opcodes=[0x2001])])
+
+    def test_group_differences_stops_at_unaligned_parent_and_respects_depth(self):
+        self.derived["functions"]["0x900"]["instructions"][0]["bytes"] = "b802000000"
+        self.assertEqual(pc.group_differences(self.base, self.derived, max_depth=0), [])
+        # A changed call encoding invalidates positional callee pairing, even when
+        # the old child addresses happen to remain in both exports.
+        self.derived["functions"]["0x500"]["instructions"][0]["bytes"] = "e900000000"
+        self.assertEqual(pc.group_differences(self.base, self.derived),
+                         [{"base": "0x100", "derived": "0x500", "opcodes": [0x2000]}])
+
+    def test_group_differences_reports_both_aligned_sibling_branches(self):
+        for g, entry, child, sibling in [(self.base, "0x100", "0x200", "0x300"),
+                                          (self.derived, "0x500", "0x900", "0xa00")]:
+            g["functions"][sibling] = copy.deepcopy(g["functions"][child])
+            g["functions"][entry]["instructions"][1] = {
+                "bytes": "e900000000", "next": None,
+                "refs": [{"kind": "function", "target": sibling}]}
+        for child in ("0x900", "0xa00"):
+            self.derived["functions"][child]["instructions"][0]["bytes"] = "b802000000"
+        self.assertEqual(pc.group_differences(self.base, self.derived), [
+            {"base": "0x200", "derived": "0x900", "opcodes": [0x2000]},
+            {"base": "0x300", "derived": "0xa00", "opcodes": [0x2000]}])
+
+    def test_group_differences_does_not_turn_blocked_data_into_body_differences(self):
+        for g, child in [(self.base, "0x200"), (self.derived, "0x900")]:
+            self.block(g, child, "0x1234")
+        self.assertEqual(self.status(), "presumed")
+        self.assertEqual(pc.group_differences(self.base, self.derived, [0x2000]), [])
+        with self.assertRaises(ValueError):
+            pc.group_differences(self.base, self.derived, [0x1fff])
+        for depth in (-1, 33):
+            with self.assertRaises(ValueError):
+                pc.group_differences(self.base, self.derived, max_depth=depth)
+        self.derived["arch"] = "x86"
+        with self.assertRaises(ValueError):
+            pc.group_differences(self.base, self.derived)
+
     def test_noop_absent_and_new_handlers_remain_separate(self):
         self.derived["commands"] += [
             {"opcode": 0x2001, "kind": "noop", "entry": "0xa00"},

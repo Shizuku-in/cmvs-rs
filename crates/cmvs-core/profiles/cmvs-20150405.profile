@@ -264,7 +264,7 @@ compare x64 base-sha256=dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91
 0x20ff presumed 0x7f680 0x71464 presume=x64:df2b525cb2604d6cb76ff637058ab869c6f3dd179c67b5964deb6f59d2cb59a8
 0x2100 unreviewed 0x7f68d 0x7146e
 0x2101 unreviewed 0x7f69a 0x71478
-0x2102 unreviewed 0x7f6a7 0x71482
+0x2102 reviewed 0x7f6a7 0x71482 review=games/chronoclock/vm-semantics.md
 0x2103 inherited 0x7f6b4 0x7148c inherit=x64:8472b8eae65b77b7a617fa8a4271f97a0cbe44779dc199eccc9cc156c65beaf9
 0x2104 presumed 0x7f6c1 0x71496 presume=x64:0143f3f2729d301dcbd85a22975daea8f2b9f8a57bc4a7e4be19213c6d451b27
 0x2105 inherited 0x7f6ce 0x714a0 inherit=x64:f21a5cb78ca4aec6807f3b6b67f8f7e91fa157c9beedef4aba0efe1c968aed28
@@ -286,7 +286,7 @@ compare x64 base-sha256=dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91
 0x2115 inherited 0x7f79e 0x71540 inherit=x64:b0a8d513b4f8d00b76c429d498fb41c1b47f0187e862832f323c255968c12bef
 0x2116 inherited 0x7f7ab 0x7154a inherit=x64:f5b0d48d48070d43af367d961c56f6ef723d68a4db17722bf93086ab2f3808e1
 0x2117 inherited 0x7f7b8 0x71554 inherit=x64:8def97aee81b8a4730dd3d184731b8421f005797115a978325f5142a9c1f3fea
-0x2118 unreviewed 0x7f7c5 0x7155e
+0x2118 reviewed 0x7f7c5 0x7155e review=games/chronoclock/vm-semantics.md
 0x2119 presumed 0x7f7d2 0x71568 presume=x64:24fa8625474e99508027ba263df548d9117fcfdba62697b6c3da0a3aeae3fbd1
 0x211a inherited 0x7f7df 0x71572 inherit=x64:8df8d9498b46340e68123ec7cfba6ef8fbf15b6be055fbc4932bb68832cbfc66
 0x211b noop 0x7eaa7 0x70c53
@@ -326,7 +326,7 @@ compare x64 base-sha256=dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91
 0x213d unreviewed 0x7f965 0x716ad
 0x213e noop 0x7eaa7 0x70c53
 0x213f noop 0x7eaa7 0x70c53
-0x2140 unreviewed 0x7f978 0x716bc
+0x2140 reviewed 0x7f978 0x716bc review=games/chronoclock/vm-semantics.md
 0x2141 reviewed 0x7f985 0x716c6 review=games/chronoclock/vm-semantics.md
 0x2142 inherited 0x7f992 0x716d0 inherit=x64:aa3fd9f34da9d78dfb19184a44be3ce32ade25a12e92f63e9d31b056500e6679
 0x2143 inherited 0x7f99f 0x716da inherit=x64:3973b5115a6fc9ea095e8e86d2f4dc7e3ca44af1a4afbc01efcf7e427ecb8c64
@@ -340,9 +340,9 @@ compare x64 base-sha256=dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91
 0x214b inherited 0x7fa07 0x7172a inherit=x64:20ec85c2cb5035d1a64e4cc207e04f0162861fca285e39afb7bee0c52fea4c14
 0x214c inherited 0x7fa14 0x71734 inherit=x64:0278bd177d0e4d4bce35d278c375153ac67949a225a475f517f297b3169c59b3
 0x214d inherited 0x7fa21 0x7173e inherit=x64:b3b556951776e4104eff489a31f04b25ac645346bdc48eb185a88071114dbcb3
-0x214e unreviewed 0x7fa2e 0x71748
+0x214e reviewed 0x7fa2e 0x71748 review=games/chronoclock/vm-semantics.md
 0x214f inherited 0x7fa3b 0x71752 inherit=x64:66a63091a4afb02e497872456bd8bd1acc991c4c9f030afab9a964da10aeee1d
-0x2150 unreviewed 0x7fa48 0x7175c
+0x2150 reviewed 0x7fa48 0x7175c review=games/chronoclock/vm-semantics.md
 0x2151 inherited 0x7fa55 0x71766 inherit=x64:47c60536f48b557212bda81ff53e668ab3ac1442eded1da2fd6b749ee5414bf8
 0x2152 unreviewed 0x7fa62 0x71770
 0x2153 unreviewed 0x7fa6f 0x7177a
@@ -355,7 +355,7 @@ compare x64 base-sha256=dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91
 0x215a inherited 0x7faca 0x717c0 inherit=x64:55cbba9d69e89de27a7087d254a15fe183aa8a473110efbebad8cd50693de5c7
 0x215b inherited 0x7fad7 0x717ca inherit=x64:35a249ec666500580f1a61f248bbc881928b2e61044679f6fa8f27242e299d61
 0x215c unreviewed 0x7fae4 0x717d4
-0x215d unreviewed 0x7faf1 0x717de
+0x215d reviewed 0x7faf1 0x717de review=games/chronoclock/vm-semantics.md
 0x215e inherited 0x7fafe 0x717e8 inherit=x64:921cb19b85248261b19fa2301ec0fa670c54187b1de14e9d1c6ca84b1b616f69
 0x215f inherited 0x7fb0b 0x717f2 inherit=x64:3d67211a8ff259b80cfcee73fccbdf24cd4bce49498ece18f9e7065ac43bbb8d
 0x2160 presumed 0x7fb18 0x717fc presume=x64:4094a9f63acaa1fd15e93562b1f11760994cbabfb6b10a3070b684009eae29fe
@@ -374,13 +374,13 @@ compare x64 base-sha256=dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91
 0x216d presumed 0x7fbca 0x71874 presume=x64:f9fdbd4bd32d33c0f43528c3acf4f1ce1e74d47ae4cce6333519f9fe8b28fc92
 0x216e presumed 0x7fbd7 0x7187e presume=x64:ba96b3f4e993558f9e51a32c82bb7aaee69f5d541b089697066331f5af23a7ba
 0x216f inherited 0x7fbf7 0x71888 inherit=x64:ed199cc9e76a899623a9a2d77a8b6af98e3f62ec2b698c9b7c18e830a10f6b04
-0x2170 unreviewed 0x7fc04 0x71892
+0x2170 reviewed 0x7fc04 0x71892 review=games/chronoclock/vm-semantics.md
 0x2171 presumed 0x7fc11 0x7189c presume=x64:dc047d2a0f120bf6b1d30740432743d1e7bde42cbce7d774b705a7c3223208fb
 0x2172 noop 0x7eaa7 0x70c53
 0x2173 noop 0x7eaa7 0x70c53
 0x2174 noop 0x7eaa7 0x70c53
 0x2175 noop 0x7eaa7 0x70c53
-0x2176 unreviewed 0x7fc1e 0x718a6
+0x2176 reviewed 0x7fc1e 0x718a6 review=games/chronoclock/vm-semantics.md
 0x2177 presumed 0x7fc2b 0x718b0 presume=x64:6be5ca206a2b6a816aee75851c47f84ed63dbaf1a7c17fdb6a671e42770b11ca
 0x2178 presumed 0x7fc38 0x718ba presume=x64:2b5912d2dde84a0a0b62e9079d8f5b1c2439d5a2b470ea45ae388b48390b6727
 0x2179 presumed 0x7fc45 0x718c4 presume=x64:67428a65b825891fdf6d4ef393819c352f6e7a64078ad5d692c4d04f3fc10ff4
@@ -742,7 +742,7 @@ compare x64 base-sha256=dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91
 0x22dd inherited 0x80ab4 0x723f8 inherit=x64:663b692f339e92df8eb21bb3c51902f5ec8e4212c1e35b66d15af2b57b82efeb
 0x22de presumed 0x80ac1 0x72402 presume=x64:317a74ddd4b0685f3c2bcd01259f610e24fc11ef6ebc0e380ab30020ae9c0d33
 0x22df inherited 0x80ace 0x7240c inherit=x64:ccc3af381a82f8216f86d8517a7a014f855d5cbd55f6c86d19849dc98de6e6b3
-0x22e0 unreviewed 0x80adb 0x72416
+0x22e0 reviewed 0x80adb 0x72416 review=games/chronoclock/vm-semantics.md
 0x22e1 inherited 0x80ae8 0x72420 inherit=x64:9a8490758d7f7456dd224df2cc5291ec6fd128fe8da81839fc623970ddd5f1c7
 0x22e2 inherited 0x80af5 0x7242a inherit=x64:fdc07591da4264b5d4942024b548d49a11004b210f160eba2f341a7d232acd46
 0x22e3 inherited 0x80b02 0x72434 inherit=x64:74921b48eac62daa6ec9ccb85a75c5579a6017e0382d8da9946d9b7db91c8015
