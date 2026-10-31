@@ -228,21 +228,21 @@ mod tests {
     fn parses_directives_and_requires_evidence() {
         let manifest = Manifest::parse(
             "# comment\nprofile cmvs-x -- record\nentry 0 1 -- survey\n\
-             choice-group a.ps3 2 -- two groups at the first choice\n\
-             label page m.ps3 0x4+1x49 config page -- seen\n\
-             label choice a.ps3 0x10 go left -- seen\n",
+             choice-group script-a 2 -- two groups at the first choice\n\
+             label page script-m 0x4+1x49 config page -- seen\n\
+             label choice script-a 0x10 go left -- seen\n",
         )
         .unwrap();
         assert_eq!(manifest.profile(), Some("cmvs-x"));
         assert_eq!(manifest.entry(), Some((0, 1)));
-        assert_eq!(manifest.choice_group("a.ps3"), Some(2));
-        assert_eq!(manifest.choice_group("b.ps3"), None);
+        assert_eq!(manifest.choice_group("script-a"), Some(2));
+        assert_eq!(manifest.choice_group("script-b"), None);
         assert_eq!(
-            manifest.page_label("m.ps3", "0x4+1x49").as_deref(),
+            manifest.page_label("script-m", "0x4+1x49").as_deref(),
             Some("config page")
         );
         assert_eq!(
-            manifest.choice_label("a.ps3", 0x10).as_deref(),
+            manifest.choice_label("script-a", 0x10).as_deref(),
             Some("go left")
         );
         assert_eq!(shape_text(&[(0, 4), (1, 49)]), "0x4+1x49");
