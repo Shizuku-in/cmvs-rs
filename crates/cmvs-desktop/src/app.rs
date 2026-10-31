@@ -37,6 +37,7 @@ struct GpuDesktop {
     adapter: cmvs_wgpu::wgpu::Adapter,
 }
 struct App<'a> {
+    frame_boundary: crate::frame_boundary::FrameBoundary,
     use_gpu: bool,
     #[cfg(feature = "wgpu-renderer")]
     gpu: Option<GpuDesktop>,
@@ -162,6 +163,11 @@ impl App<'_> {
         el.exit();
     }
     fn redraw(&mut self) -> Result<(), Box<dyn Error>> {
+        // A resize/redraw can arrive between VM budget slices. Keep the previous
+        // presented canvas until the engine, rather than the host budget, yields.
+        if self.preview_image.is_none() && !self.frame_boundary.ready() {
+            return Ok(());
+        }
         #[cfg(feature = "wgpu-renderer")]
         if self.use_gpu {
             return self.redraw_gpu();
@@ -354,7 +360,15 @@ impl ApplicationHandler for App<'_> {
             }
             WindowEvent::RedrawRequested => {
                 if let Err(error) = self.redraw() {
-                    self.fail(el, error)
+                    let renderer = if self.use_gpu { "wgpu" } else { "cpu" };
+                    let vm = self.startup.machine();
+                    let message = format!(
+                        "{renderer} frame at {} / 0x{:x} after {} steps: {error}",
+                        vm.current_name().escape_ascii(),
+                        vm.pc(),
+                        self.startup.steps()
+                    );
+                    self.fail(el, message)
                 }
             }
             WindowEvent::Resized(_) => self.window.as_ref().expect("window").request_redraw(),
@@ -467,11 +481,6 @@ impl ApplicationHandler for App<'_> {
                 el.set_control_flow(ControlFlow::WaitUntil(self.next_frame));
                 return;
             }
-            let delta = now
-                .duration_since(self.last_frame)
-                .as_millis()
-                .min(u128::from(u32::MAX)) as u32;
-            self.last_frame = now;
             self.next_frame = now + Duration::from_millis(16);
             let window = window.clone();
             self.game_input
@@ -504,6 +513,8 @@ impl ApplicationHandler for App<'_> {
                 }
                 self.input_due = false;
             }
+            let mut yielded = false;
+            let mut inactive = false;
             let start = Instant::now();
             while start.elapsed() < Duration::from_millis(8) {
                 let mut backend = NativeBackend {
@@ -528,15 +539,22 @@ impl ApplicationHandler for App<'_> {
                 if !had_fade && let Some(fade) = self.startup.scene().fade().current() {
                     println!("# fade started {fade:?}");
                 }
+                if let Ok(event) = &outcome {
+                    self.frame_boundary.observe(*event);
+                }
                 match outcome {
                     Ok(StartupEvent::Quit) => {
                         println!("# script requested quit");
                         el.exit();
                         return;
                     }
-                    Ok(StartupEvent::Inactive) => break,
+                    Ok(StartupEvent::Inactive) => {
+                        inactive = true;
+                        break;
+                    }
                     Ok(StartupEvent::Progress) => {}
                     Ok(StartupEvent::Yield) => {
+                        yielded = true;
                         self.input_due = true;
                         break;
                     }
@@ -586,6 +604,13 @@ impl ApplicationHandler for App<'_> {
                     }
                 }
             }
+            if !yielded && !inactive && !self.halted {
+                // Continue the same VM run promptly after processing window events.
+                // Do not consume another input edge, advance effects, or draw here.
+                self.next_frame = Instant::now();
+                el.set_control_flow(ControlFlow::Poll);
+                return;
+            }
             self.game_input
                 .set_aspect_mode(cmvs_core::viewport::presentation_mode(
                     window.fullscreen().is_some(),
@@ -602,7 +627,15 @@ impl ApplicationHandler for App<'_> {
                     return;
                 }
             }
-            if !self.halted {
+            // Keep the core's inactive audio/movie polling policy. Active VM
+            // budget slices, unlike inactivity, must never advance a frame.
+            if (yielded || inactive) && !self.halted {
+                let now = Instant::now();
+                let delta = now
+                    .duration_since(self.last_frame)
+                    .as_millis()
+                    .min(u128::from(u32::MAX)) as u32;
+                self.last_frame = now;
                 let had_fade = self.startup.scene().fade().current().is_some();
                 if let Err(error) = self.startup.advance_decoded_frame(delta) {
                     self.fail(el, error);
@@ -870,6 +903,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     startup.set_random_seed(rand_seed);
     let display_preferences = startup.display_preferences();
     let mut app = App {
+        frame_boundary: Default::default(),
         use_gpu,
         #[cfg(feature = "wgpu-renderer")]
         gpu: None,
@@ -928,15 +962,15 @@ fn run() -> Result<(), Box<dyn Error>> {
         println!("# user settings saved");
     }
     if let Some(path) = save_frame {
-        // Script coordinates before window fitting: exactly what the renderer produced.
-        #[cfg(feature = "wgpu-renderer")]
-        let frame = if app.use_gpu {
-            app.gpu_frame()?.read()?
+        // Export the last successfully presented canvas, never a partial VM slice.
+        let frame = if let Some(image) = &app.preview_image {
+            image.clone()
         } else {
-            app.frame()?
+            app.device_frame
+                .as_deref()
+                .ok_or("no completed device frame available for export")?
+                .read()?
         };
-        #[cfg(not(feature = "wgpu-renderer"))]
-        let frame = app.frame()?;
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)

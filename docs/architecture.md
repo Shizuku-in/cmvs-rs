@@ -228,3 +228,6 @@ ProfileSystemSave复用会话锁及同目录临时文件替换，分别管理cmv
 桌面 `FontRenderer::prepare_objects` 只生成消息文字与辅助文字的字形对象；调用方须同时把可见消息窗口加入共享队列。现有 `FontRenderer::render` 继续完成这两步并返回 CPU 合成帧，窗口图像仍按引用传递。
 
 可选 `cmvs-wgpu` 消费同一队列完成 GPU 合成、窗口呈现和按需逻辑帧读回。桌面以 `--renderer cpu|wgpu` 选择，默认 CPU；core 无图形依赖。延迟截图保持原核心路径，平台验证范围和资源策略见 [wgpu 后端](backends/wgpu.md)。
+
+
+桌面宿主通过 `FrameBoundary` 区分8ms合作式预算与VM的真实Yield：Progress/快照等中间事件不发布画面，预算耗尽后仅处理窗口事件并继续同一次运行；输入在帧边界刷新一次，场景时钟只在真实Yield后消费，Inactive保留既有核心轮询策略。CPU/wgpu的重绘和退出导出均不能读取菜单初始化中的半完成场景。详细行为见[桌面帧边界](backends/desktop.md#vm-时间片与完整帧边界)。

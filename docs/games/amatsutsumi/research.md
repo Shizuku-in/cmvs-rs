@@ -3,6 +3,14 @@
 > 适用范围：《アマツツミ》PC 样本。地址仅对[研究记录中的二进制哈希](research.md#二进制身份)有效，不能直接套用其他游戏。
 > 本文保留阶段性证据；最新验证范围见[游戏档案](README.md)。
 
+## Save菜单偶发退出与VM预算边界（2026-10-31）
+
+用户在 `こころ１` 点击Save菜单后遇到 `shown child object has no draw state`，重启后不稳定复现。检查发现桌面8ms预算耗尽后仍推进帧并请求重绘，可能停在0x2022创建子对象与后续初始化之间；这不是wgpu独有的着色器问题，CPU共用准备层也会报错。原版构造、子队列和主循环已只读复核，身份与地址见[时序证据](vm-semantics.md#save菜单子对象与宿主绘制时序2026-10-31)。
+
+新增专项重放使用外部原游戏、msgothic.ttc及 `local/amatsutsumi/user-data` 中system.dat/save000.dat的只读副本，在target下建立独立目录。加载场景进入文字等待后，按真实工具栏Save按钮，刻意在每条VM指令后切出。在 `intproc.ps3 / 0x5b22c` 重现旧绘制错误，记录281个有可见但未初始化子对象的中间tick；修正后的边界策略只在Yield后合成，Vulkan和DX12分别通过107个完整帧，其中100个存档菜单帧，每10帧读回与CPU逐字节对照，最大通道差不超过2。菜单由本作group1的70..79号槽按钮确认；初版探针错误地等候save.ps3脚本名，已纠正为实际公共脚本中的菜单状态，不计作通过。
+
+命令：设置CMVS_GAME_ROOT、CMVS_FONT_PATH和CMVS_SAVE_ROOT后，执行 `cargo test --offline --release -p cmvs-desktop --features wgpu-renderer external_save_menu_renders -- --ignored --nocapture`；分别设置WGPU_BACKEND=vulkan/dx12。该结果是合成输入、只读外部存档和GPU无窗口合成检查；尚未人工复测用户当时的物理点击/快进时序或原生音频。未知/真实Yield后的无效绘制状态继续报错。默认测试只含合成数据，实际资源、存档及日志不进入Git。 本轮格式、默认/全工作区全功能测试、两组严格Clippy与Rust1.89全目标构建检查通过；最终release原生静音窗口14秒启动/标题/最后已呈现逻辑帧导出通过，26069步、退出码0，导出标题已目视检查。
+
 ## wgpu 合成与初步实测（2026-10-31）
 
 在共享队列重构提交 `f478eb7` 基础上增加可选 GPU 后端，默认仍为 CPU。本作身份通过内置 Registry 的游戏/脚本/可执行文件哈希识别，地址仍绑定本档案既有二进制；未新增指令语义或修改解码算法。后端通用契约见 [wgpu](../../backends/wgpu.md)。

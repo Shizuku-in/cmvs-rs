@@ -2,6 +2,7 @@
 mod app;
 pub mod font;
 pub mod font_library;
+mod frame_boundary;
 pub mod game_input;
 pub use app::run_cli;
 use cmvs_core::{
