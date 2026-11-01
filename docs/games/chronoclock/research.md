@@ -1,5 +1,13 @@
 # CHRONOCLOCK 研究记录
 
+## 2026-11-01：原生OP、全屏往返与游戏内退出
+
+继续使用已验证的原生软件绘制/音频构建与隔离用户目录，`--exit-after 600` 仅作有界兜底。实际鼠标从标题MEMORIES进入其他鉴赏并播放OP；窗口连续显示不同视频画面直至尾段，随后自然回到其他鉴赏页并恢复bgm01，没有点击跳过。日志记录 `op.cmv` 音轨段offset=242579572、size=2152846及播放位置推进至120107ms；没有人工听音或音画同步质量结论。另用既有 `cmvs-cmv <op.cmv> --check-frames` 成功解码全部3074帧（21288ms），没有新增测试。
+
+返回标题的系统页后，实际切到2560×1440无边框全屏，再恢复原963×571窗口；日志分别为 `native fullscreen=true/false`，控件继续可点击。随后QUIT先选否回设置，再次QUIT选是，脚本正常请求退出，进程退出码0、输入丢弃0、用户设置保存成功，配置 `FULLSCREEN=0`；窗口清单确认已关闭。全屏切换后捕获有一个15×15辅助目标，误用该目标的点击被工具拒绝，刷新并选实际全屏画面后完成操作；没有将失败点击算作游戏问题。
+
+原始输出仍忽略：`native-window-04.log` SHA-256 `7c0b9956b6aa4f137f280a8aaeb56b3403ed807cfd75e60ac435a2c4f12fc9cb`，`op-all-frames.log` 为 `9f170447bc86edd257b96886d318f2b305a89c545fd2ab98b097f43571aaae41`。本轮不修改运行时，研究放行及未支持快照边界不变。运行指南新增本作可直接执行的启动命令，避免沿用已经不需要的禁用快照参数。
+
 ## 2026-11-01：鉴赏键盘导航限制定位
 
 对实际omake页读取列表状态：侧栏list0为 `disable_navigation=false, keep_input=true`，缩略图list1为 `disable_navigation=true, keep_input=false`。因此此前探针尝试键盘选择组7第0项时，缩略图保持 `current=None`，反复发送的下一项却改变侧栏选择；不是缩略图缺失，也不能用鼠标点击冒充纯键盘通过。原始状态记录 `local/chronoclock/gallery-nav-flags.log`。

@@ -26,6 +26,16 @@ cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Downl
 
 未指定字体且未启用 `--record-text` 时保留文字输出屏障；`--record-text` 只记录字形。关闭窗口可退出；活动游戏中的 Esc 按游戏动作绑定处理。`--exit-after <秒>` 可做有界运行，`--save-frame <新文件.png>` 可导出退出时的帧。
 
+## CHRONOCLOCK研究运行
+
+已验证的《クロノクロック》PC样本可用以下参数启动原生软件绘制窗口及音频。它仍依赖两项显式研究放行，不能省略或视为全部命令已复核；样本身份与验证范围见[游戏档案](../games/chronoclock/README.md)。
+
+```bash
+cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "E:/Download/Purple Software/2015-04-24_CHRONOCLOCK" --encoding shift-jis --user-data-dir "local/chronoclock/play-user" --audio native --font "C:/Windows/Fonts/msgothic.ttc" --allow-presumed --allow-unreviewed
+```
+
+使用独立用户目录保留本次进度。正常剧情支持本作文字v2快照，可从工具栏打开存读档；无需使用会禁用剧情存档的 `--continue-without-snapshot`。原生窗口已验证空槽保存、关闭、重启恢复及设置持久化；覆盖范围之外的特殊图像、活动场景效果快照仍显式拒绝。鉴赏缩略图列表由脚本禁止键盘导航，使用鼠标；侧栏导航和剧情键盘输入另有验证，不能据此声称整个鉴赏页支持纯键盘。
+
 ## 原生音频
 
 ```bash
