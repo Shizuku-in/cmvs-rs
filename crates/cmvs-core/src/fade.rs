@@ -1,6 +1,7 @@
 //! Engine +4616 full-screen color fade; addresses refer to the documented binary hash.
 use crate::{
-    bytecode::DecodeError, evaluate::error, input::ActionInput, machine::Machine, vm::SystemResult,
+    bytecode::DecodeError, dispatch::Call, evaluate::error, input::ActionInput, machine::Machine,
+    vm::SystemResult,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,25 +131,31 @@ pub fn try_handle_effects(vm: &mut Machine<'_>, effects: &mut bool) -> Result<bo
     let Some((pc, 0x2d1)) = vm.pending_system() else {
         return Ok(false);
     };
-    let arg = |distance| {
-        vm.stack()
-            .peek_u32(distance)
-            .map_err(|e| error(pc, 0x22d1, e.0))
-    };
-    let value = if arg(4)? != 0 {
-        Some(arg(8)? != 0)
+    handle_effects(&mut Call::new(vm, pc, 0x2d1), effects)?;
+    Ok(true)
+}
+
+pub(crate) fn handle_effects(
+    call: &mut Call<'_, '_>,
+    effects: &mut bool,
+) -> Result<(), DecodeError> {
+    let mode = call.argument(4, "mode")?;
+    let value = if mode != 0 {
+        Some(call.argument(8, "value")? != 0)
     } else {
+        call.ignore_argument(8, "unused value")?;
         None
     };
-    vm.complete_system(SystemResult(0x4008))?;
+    call.complete(0x4008)?;
     match value {
         Some(value) => *effects = value,
-        None => vm
+        None => call
+            .vm
             .state_mut()
             .set_system_integer(0, u32::from(*effects))
             .expect("slot 0 exists"),
     }
-    Ok(true)
+    Ok(())
 }
 
 #[derive(Debug, Default)]

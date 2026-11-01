@@ -1,7 +1,8 @@
 //! Engine save snapshot (0x140069270): record framing and its verified live-state effect.
 //! Captures use the supported record layouts; skipped captures are tracked as unavailable.
 use crate::{
-    FormatError, bytecode::DecodeError, evaluate::error, machine::Machine, vm::SystemResult,
+    FormatError, bytecode::DecodeError, dispatch::Call, evaluate::error, machine::Machine,
+    vm::SystemResult,
 };
 use std::ops::Range;
 
@@ -234,8 +235,14 @@ impl SaveTitle {
         let Some((pc, 0x162)) = vm.pending_system() else {
             return Ok(false);
         };
-        let raw = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x2162, e.0))?;
-        let title = vm.resolve_string(raw)?;
+        self.handle(&mut Call::new(vm, pc, 0x162))?;
+        Ok(true)
+    }
+
+    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let pc = call.pc;
+        let raw = call.argument(4, "title")?;
+        let title = call.vm.resolve_string(raw)?;
         if title.len() >= 128 {
             // The original skips the copy and sets +12056 bit 8, which is not modeled.
             return Err(error(
@@ -244,9 +251,9 @@ impl SaveTitle {
                 "save title of 128+ bytes sets an unmodeled flag",
             ));
         }
-        vm.complete_system(SystemResult(0x4004))?;
+        call.complete(0x4004)?;
         self.0 = title;
-        Ok(true)
+        Ok(())
     }
 }
 
@@ -268,18 +275,23 @@ impl SaveInfo {
         let Some((pc, command @ (0x2b9 | 0x2ba))) = vm.pending_system() else {
             return Ok(false);
         };
-        let op = command + 0x2000;
-        let first = vm.stack().peek_u32(4).map_err(|e| error(pc, op, e.0))?;
+        self.handle(&mut Call::new(vm, pc, command))?;
+        Ok(true)
+    }
+
+    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let command = call.command;
+        let first = call.argument(4, "first word")?;
         if command == 0x2b9 {
-            vm.complete_system(SystemResult(0x4004))?;
+            call.complete(0x4004)?;
             self.0[0] = Some(first);
         } else {
-            let second = vm.stack().peek_u32(8).map_err(|e| error(pc, op, e.0))?;
-            vm.complete_system(SystemResult(0x4008))?;
+            let second = call.argument(8, "second word")?;
+            call.complete(0x4008)?;
             self.0[1] = Some(first);
             self.0[2] = Some(second);
         }
-        Ok(true)
+        Ok(())
     }
     /// Loader 0x140081960: header 528/532/536, then +11832 cleared.
     pub(crate) fn restore(&mut self, words: [u32; 3]) {

@@ -780,6 +780,12 @@ impl<'a> Startup<'a> {
                 history: Some(&mut self.history),
                 strings: true,
                 math: true,
+                gesture: Some(&mut self.gesture),
+                popup: Some(&mut self.save_menu),
+                save_title: Some(&mut self.save_title),
+                save_info: Some(&mut self.save_info),
+                effects: Some(&mut self.effects),
+                effect_objects: true,
             },
         )? {
             return Ok(match flow {
@@ -921,15 +927,11 @@ impl<'a> Startup<'a> {
                 &mut self.machine,
                 &mut self.images.with_paths(self.bootstrap.paths()),
             )?
-            || self.save_title.try_handle(&mut self.machine)?
-            || self.save_info.try_handle(&mut self.machine)?
             || self.gesture.try_handle_drag_press(
                 &mut self.machine,
                 &self.input,
                 self.timers.clock(),
             )?
-            || self.gesture.try_handle(&mut self.machine)?
-            || self.save_menu.try_handle_popup(&mut self.machine)?
             || self
                 .messages
                 .try_record_poll(&mut self.machine, self.message_flags)?
@@ -978,7 +980,6 @@ impl<'a> Startup<'a> {
                 self.audio_backend.as_mut(),
             )?
             || input::try_handle(&mut self.machine, &mut self.input)?
-            || crate::fade::try_handle_effects(&mut self.machine, &mut self.effects)?
             || input::try_handle_skipping(
                 &mut self.machine,
                 &self.input,
@@ -994,7 +995,6 @@ impl<'a> Startup<'a> {
             || self
                 .capture
                 .try_handle(&mut self.machine, &mut self.scene)?
-            || crate::effect_objects::try_handle(&mut self.machine)?
             || self
                 .audio
                 .try_handle(&mut self.machine, self.audio_backend.as_mut())?

@@ -5,7 +5,6 @@ use cmvs_rs::{
     buttons::ButtonHost,
     camera::CameraHost,
     cpz::ArchiveIndex,
-    effect_objects,
     fade::SkipGate,
     gesture::PointerGesture,
     history::HistoryHost,
@@ -357,6 +356,10 @@ fn run() -> Result<(), Box<dyn Error>> {
                     settings: platform_assets.is_some().then_some(&mut settings),
                     history: platform_assets.is_some().then_some(&mut history),
                     strings: platform_assets.is_some(),
+                    gesture: platform_assets.is_some().then_some(&mut gesture),
+                    popup: platform_assets.is_some().then_some(&mut save_menu),
+                    save_title: platform_assets.is_some().then_some(&mut save_title),
+                    effect_objects: platform_assets.is_some(),
                     ..Default::default()
                 },
             )?;
@@ -400,7 +403,31 @@ fn run() -> Result<(), Box<dyn Error>> {
                         command + 0x2000,
                         machine.state().system_integer(0)
                     ),
-                    Capability::Text | Capability::Math => {
+                    Capability::SaveTitle => println!(
+                        "# save title 0x2162 = {}; recorded only",
+                        save_title.bytes().escape_ascii()
+                    ),
+                    Capability::EffectObjects => {
+                        println!("# effect object release 0x22a0: no +4024 object is modeled")
+                    }
+                    Capability::Popup => println!(
+                        "# popup menu 0x{:04x}: enabled={}; system_integer[0]={:?}; no native menu",
+                        command + 0x2000,
+                        save_menu.popup_enabled(),
+                        machine.state().system_integer(0)
+                    ),
+                    Capability::Gesture => println!(
+                        "# pointer gesture config 0x{:04x}; fields +0..+36={:?}; state only, no input",
+                        command + 0x2000,
+                        (0..=36)
+                            .step_by(4)
+                            .map(|offset| gesture.field(offset).unwrap_or(0))
+                            .collect::<Vec<_>>()
+                    ),
+                    Capability::Text
+                    | Capability::Math
+                    | Capability::SaveInfo
+                    | Capability::Effects => {
                         return Err("trace lacks the dispatched capability".into());
                     }
                 }
@@ -545,17 +572,6 @@ fn run() -> Result<(), Box<dyn Error>> {
                     }
                     continue;
                 }
-                if save_title.try_handle(&mut machine)? {
-                    println!(
-                        "# save title 0x2162 = {}; recorded only",
-                        save_title.bytes().escape_ascii()
-                    );
-                    continue;
-                }
-                if effect_objects::try_handle(&mut machine)? {
-                    println!("# effect object release 0x22a0: no +4024 object is modeled");
-                    continue;
-                }
                 if audio.try_handle(&mut machine, &mut audio_backend)? {
                     if let (
                         0xb0 | 0xba,
@@ -600,15 +616,6 @@ fn run() -> Result<(), Box<dyn Error>> {
                             audio_backend.requests().last()
                         );
                     }
-                    continue;
-                }
-                if save_menu.try_handle_popup(&mut machine)? {
-                    println!(
-                        "# popup menu 0x{:04x}: enabled={}; system_integer[0]={:?}; no native menu",
-                        command + 0x2000,
-                        save_menu.popup_enabled(),
-                        machine.state().system_integer(0)
-                    );
                     continue;
                 }
                 if camera.try_handle(&mut machine)? {
@@ -677,17 +684,6 @@ fn run() -> Result<(), Box<dyn Error>> {
                             .collect::<Vec<_>>(),
                         buttons.merged_states(),
                         machine.state().system_integer(0)
-                    );
-                    continue;
-                }
-                if gesture.try_handle(&mut machine)? {
-                    println!(
-                        "# pointer gesture config 0x{:04x}; fields +0..+36={:?}; state only, no input",
-                        command + 0x2000,
-                        (0..=36)
-                            .step_by(4)
-                            .map(|offset| gesture.field(offset).unwrap_or(0))
-                            .collect::<Vec<_>>()
                     );
                     continue;
                 }

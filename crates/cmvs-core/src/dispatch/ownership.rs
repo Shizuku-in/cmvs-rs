@@ -80,7 +80,10 @@ pub static CLAIMS: &[Claim] = &[
                 entry.command == command
                     && !matches!(
                         entry.capability,
-                        super::Capability::Text | super::Capability::Math
+                        super::Capability::Text
+                            | super::Capability::Math
+                            | super::Capability::SaveInfo
+                            | super::Capability::Effects
                     )
             })
         },
@@ -146,27 +149,7 @@ pub static CLAIMS: &[Claim] = &[
         Some(290),
         0x22a | 0x22d | 0x234 | 0x237
     ),
-    claim!(
-        "snapshot::SaveTitle::try_handle",
-        Some(330),
-        Some(70),
-        0x162
-    ),
-    claim!(
-        "snapshot::SaveInfo::try_handle",
-        Some(340),
-        None,
-        0x2b9 | 0x2ba
-    ),
     claim!("gesture::try_handle_drag_press", Some(350), None, 0x369),
-    claim!("gesture::try_handle", Some(360), Some(200),
-        0x350..=0x353 | 0x356..=0x35b | 0x360 | 0x362 | 0x364..=0x368),
-    claim!(
-        "save_menu::try_handle_popup",
-        Some(370),
-        Some(110),
-        0x2cd | 0x2ce | 0x2d3 | 0x2d4 | 0x2ee
-    ),
     claim!("message::try_record_poll", Some(400), None, 0x159),
     claim!("message::try_handle_scene", Some(410), None, 0x383 | 0x39d),
     claim!("message::try_handle", Some(420), None,
@@ -205,7 +188,6 @@ pub static CLAIMS: &[Claim] = &[
     claim!("input::try_handle", Some(540), Some(260),
         0xc8..=0xca | 0x19a | 0x19c..=0x1a4 | 0x1a6 | 0x1a8..=0x1bd
         | 0x344..=0x347 | 0x34a | 0x34b | 0x34d..=0x34f | 0x35c | 0x35d),
-    claim!("fade::try_handle_effects", Some(550), None, 0x2d1),
     claim!("input::try_handle_skipping", Some(560), Some(270), 0x2ef),
     claim!(
         "sequence::try_handle_with_hosts",
@@ -215,7 +197,6 @@ pub static CLAIMS: &[Claim] = &[
     ),
     claim!("camera::try_handle", Some(580), Some(130), 0x56 | 0x58..=0x68 | 0x6a..=0x6d | 0x9c | 0x126 | 0x260..=0x264),
     claim!("capture::try_handle", Some(590), None, 0x3c | 0x304..=0x306),
-    claim!("effect_objects::try_handle", Some(630), Some(90), 0x2a0),
     claim!("audio::try_handle", Some(640), Some(100),
         0xa0..=0xa2 | 0xa4 | 0xa6 | 0xa8..=0xaa | 0xaf..=0xb1 | 0xb3 | 0xb5..=0xb7 | 0xba
         | 0x238..=0x23f | 0x241 | 0x2d6..=0x2dd),

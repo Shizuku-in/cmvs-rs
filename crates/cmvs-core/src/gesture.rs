@@ -3,9 +3,7 @@
 //! hold result (0x2362). The frame update
 //! 0x140054a60 runs mode 0 (0x140053930) or region drag mode 1 (0x1400541a0).
 //! Mode 2 (0x140054570) remains a barrier. Fields stay named by offset.
-use crate::{
-    bytecode::DecodeError, evaluate::error, input::ActionInput, machine::Machine, vm::SystemResult,
-};
+use crate::{bytecode::DecodeError, dispatch::Call, input::ActionInput, machine::Machine};
 use std::collections::BTreeMap;
 mod drag;
 
@@ -290,37 +288,48 @@ impl PointerGesture {
     /// 0x2350..0x2364 setters (0x14007fb60..0x14007fe60) on the +4664 object, and 0x2362 /
     /// 0x14007fe20 -> 0x140053610: system result 0 = (SP-4 == 1 and +88 >= 0); pops 4.
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command)) = vm.pending_system() else {
+        let Some((pc, command @ (0x350..=0x353 | 0x356..=0x35b | 0x360 | 0x362 | 0x364..=0x368))) =
+            vm.pending_system()
+        else {
             return Ok(false);
         };
+        self.handle(&mut Call::new(vm, pc, command))?;
+        Ok(true)
+    }
+
+    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let command = call.command;
         if matches!(command, 0x367 | 0x368) {
-            vm.complete_system(SystemResult(0x4000))?;
+            call.complete(0x4000)?;
             if command == 0x367 {
                 self.set(172, -1);
             } else {
                 for (slot, offset) in [(0, 172), (4, 168), (5, 164), (6, 176)] {
-                    vm.state_mut()
+                    call.vm
+                        .state_mut()
                         .set_system_integer(slot, self.get(offset) as u32)
                         .expect("result exists");
                 }
             }
-            return Ok(true);
+            return Ok(());
         }
         if command == 0x360 {
             // 0x14007fd10 -> 0x14001cf30: system result 0 = +88 (the 0x2362 state).
-            vm.complete_system(SystemResult(0x4000))?;
-            vm.state_mut()
+            call.complete(0x4000)?;
+            call.vm
+                .state_mut()
                 .set_system_integer(0, self.get(88) as u32)
                 .expect("result exists");
-            return Ok(true);
+            return Ok(());
         }
         if command == 0x353 {
             // 0x14007fce0 -> 0x1400534c0: system result 0 = the flick direction +44.
-            vm.complete_system(SystemResult(0x4000))?;
-            vm.state_mut()
+            call.complete(0x4000)?;
+            call.vm
+                .state_mut()
                 .set_system_integer(0, self.get(44) as u32)
                 .expect("result exists");
-            return Ok(true);
+            return Ok(());
         }
         if command == 0x359 {
             // 0x14007fde0 -> 0x1400534d0: +80 is cleared when +72 and +76 are both set or
@@ -330,31 +339,35 @@ impl PointerGesture {
             if (first != 0) == (second != 0) {
                 self.set(80, 0);
             }
-            vm.complete_system(SystemResult(0x4000))?;
+            call.complete(0x4000)?;
             for (slot, value) in [(0, self.get(80)), (4, i32::from(second != 0))] {
-                vm.state_mut()
+                call.vm
+                    .state_mut()
                     .set_system_integer(slot, value as u32)
                     .expect("result exists");
             }
-            return Ok(true);
+            return Ok(());
         }
         if command == 0x365 {
-            vm.complete_system(SystemResult(0x4000))?;
+            call.complete(0x4000)?;
             let active = self.get(120) != 0;
-            vm.state_mut()
+            call.vm
+                .state_mut()
                 .set_system_integer(0, u32::from(active))
                 .expect("result exists");
             if active {
                 for (slot, offset) in [(1, 124), (2, 128), (4, 100), (5, 104)] {
-                    vm.state_mut()
+                    call.vm
+                        .state_mut()
                         .set_system_integer(slot, self.get(offset) as u32)
                         .expect("result exists");
                 }
             }
-            vm.state_mut()
+            call.vm
+                .state_mut()
                 .set_system_integer(6, self.get(176) as u32)
                 .expect("result exists");
-            return Ok(true);
+            return Ok(());
         }
         if command == 0x366 {
             // 0x14007fef0 -> 0x1400536d0: six region records at +188, stride 20.
@@ -362,12 +375,12 @@ impl PointerGesture {
             // setter keeps raw rectangle words, does not reset tracking or query input.
             let mut args = [0; 6];
             for (i, arg) in args.iter_mut().enumerate() {
-                *arg = vm
-                    .stack()
-                    .peek_u32(4 * (i + 1))
-                    .map_err(|e| error(pc, 0x2366, e.0))?;
+                *arg = call.argument(
+                    4 * (i + 1),
+                    ["region slot", "enabled", "left", "top", "width", "height"][i],
+                )?;
             }
-            vm.complete_system(SystemResult(0x4018))?;
+            call.complete(0x4018)?;
             if args[0] < 6 {
                 let base = 188 + args[0] as u16 * 20;
                 for (i, value) in [u32::from(args[1] != 0), args[2], args[3], args[4], args[5]]
@@ -377,7 +390,7 @@ impl PointerGesture {
                     self.fields.insert(base + i as u16 * 4, value);
                 }
             }
-            return Ok(true);
+            return Ok(());
         }
         let flag_field = match command {
             0x350 => Some(0),
@@ -386,18 +399,28 @@ impl PointerGesture {
             0x357 => Some(16),
             0x358 => Some(20),
             0x351 | 0x35a | 0x35b | 0x362 | 0x364 => None,
-            _ => return Ok(false),
+            _ => return Err(call.error("unregistered gesture command")),
         };
-        let op = command + 0x2000;
-        let value = |distance| {
-            vm.stack()
-                .peek_u32(distance)
-                .map_err(|e| error(pc, op, e.0))
+        let name = match command {
+            0x350 => "field 0",
+            0x352 => "field 8",
+            0x356 => "field 12",
+            0x357 => "field 16",
+            0x358 => "field 20",
+            0x351 => "first flag",
+            0x35a => "field 36",
+            0x35b => "field 32",
+            0x362 => "button",
+            _ => "mode",
         };
-        let first = value(4)?;
-        let second = if command == 0x351 { value(8)? } else { 0 };
+        let first = call.argument(4, name)?;
+        let second = if command == 0x351 {
+            call.argument(8, "second flag")?
+        } else {
+            0
+        };
         let flags = if command == 0x351 { 0x4008 } else { 0x4004 };
-        vm.complete_system(SystemResult(flags))?;
+        call.complete(flags)?;
         match (command, flag_field) {
             (_, Some(offset)) => {
                 self.fields.insert(offset, u32::from(first != 0));
@@ -410,7 +433,8 @@ impl PointerGesture {
             }
             (0x362, _) => {
                 let held = first == 1 && self.get(88) >= 0;
-                vm.state_mut()
+                call.vm
+                    .state_mut()
                     .set_system_integer(0, u32::from(held))
                     .expect("slot 0 exists");
             }
@@ -427,7 +451,7 @@ impl PointerGesture {
             }
             _ => {}
         }
-        Ok(true)
+        Ok(())
     }
 }
 

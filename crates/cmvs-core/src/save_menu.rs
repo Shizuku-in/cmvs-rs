@@ -1,7 +1,8 @@
 //! Read-only gameplay-save header scanning, signature queries and menu state.
 //! Header recognition does not validate or restore the saved engine snapshot.
 use crate::{
-    FormatError, bytecode::DecodeError, evaluate::error, machine::Machine, vm::SystemResult,
+    FormatError, bytecode::DecodeError, dispatch::Call, evaluate::error, machine::Machine,
+    vm::SystemResult,
 };
 use std::{
     error::Error,
@@ -256,34 +257,39 @@ impl SaveMenuHost {
     /// (inline) sets system result 0 to +1644 != 0, the copy of the second menu group flag
     /// 0x140092ea0 keeps (constructor 0). None needs a save directory or creates native UI.
     pub fn try_handle_popup(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command)) = vm.pending_system() else {
+        let Some((pc, command @ (0x2cd | 0x2ce | 0x2d3 | 0x2d4 | 0x2ee))) = vm.pending_system()
+        else {
             return Ok(false);
         };
+        self.handle_popup(&mut Call::new(vm, pc, command))?;
+        Ok(true)
+    }
+
+    pub(crate) fn handle_popup(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let command = call.command;
         match command {
             0x2d3 | 0x2d4 => {
                 let index = usize::from(command == 0x2d4);
-                let arg = |distance| {
-                    vm.stack()
-                        .peek_u32(distance)
-                        .map_err(|e| error(pc, command + 0x2000, e.0))
-                };
-                let value = if arg(4)? != 0 {
-                    Some(arg(8)? != 0)
+                let mode = call.argument(4, "mode")?;
+                let value = if mode != 0 {
+                    Some(call.argument(8, "value")? != 0)
                 } else {
+                    call.ignore_argument(8, "unused value")?;
                     None
                 };
-                vm.complete_system(SystemResult(0x4008))?;
+                call.complete(0x4008)?;
                 match value {
                     Some(value) => self.confirm[index] = value,
-                    None => vm
+                    None => call
+                        .vm
                         .state_mut()
                         .set_system_integer(0, u32::from(self.confirm[index]))
                         .expect("slot 0 exists"),
                 }
             }
             0x2cd => {
-                let value = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x22cd, e.0))?;
-                vm.complete_system(SystemResult(0x4004))?;
+                let value = call.argument(4, "enabled")?;
+                call.complete(0x4004)?;
                 self.popup_enabled = value != 0;
             }
             0x2ce | 0x2ee => {
@@ -292,14 +298,15 @@ impl SaveMenuHost {
                 } else {
                     self.second_group_enabled.unwrap_or(false)
                 };
-                vm.complete_system(SystemResult(0x4000))?;
-                vm.state_mut()
+                call.complete(0x4000)?;
+                call.vm
+                    .state_mut()
                     .set_system_integer(0, u32::from(value))
                     .expect("slot 0 exists");
             }
-            _ => return Ok(false),
+            _ => return Err(call.error("unregistered popup command")),
         }
-        Ok(true)
+        Ok(())
     }
     /// Returns true only when a verified command completed. No native UI is created.
     pub fn try_handle(

@@ -64,6 +64,12 @@ fn audit(handler: &str, mut probe: impl FnMut(&mut Machine<'_>) -> bool) {
             "history::try_handle" => Some(Capability::History),
             "text::try_handle" => Some(Capability::Strings),
             "math::try_handle" => Some(Capability::Math),
+            "gesture::try_handle" => Some(Capability::Gesture),
+            "save_menu::try_handle_popup" => Some(Capability::Popup),
+            "snapshot::SaveTitle::try_handle" => Some(Capability::SaveTitle),
+            "snapshot::SaveInfo::try_handle" => Some(Capability::SaveInfo),
+            "fade::try_handle_effects" => Some(Capability::Effects),
+            "effect_objects::try_handle" => Some(Capability::EffectObjects),
             _ => None,
         };
         if let Some(capability) = capability {
@@ -326,6 +332,12 @@ fn inventory_matches_wait_and_resource_host_recognition_exhaustively() {
                 history: Some(&mut cmvs_rs::history::HistoryHost::default()),
                 strings: true,
                 math: true,
+                gesture: Some(&mut cmvs_rs::gesture::PointerGesture::default()),
+                popup: Some(&mut SaveMenuHost::default()),
+                save_title: Some(&mut cmvs_rs::snapshot::SaveTitle::default()),
+                save_info: Some(&mut cmvs_rs::snapshot::SaveInfo::default()),
+                effects: Some(&mut true),
+                effect_objects: true,
             },
         )
         .map(|r| r.is_some())

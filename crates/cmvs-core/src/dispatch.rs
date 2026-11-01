@@ -6,6 +6,7 @@ pub mod ownership;
 use crate::{
     bytecode::DecodeError,
     evaluate::error,
+    gesture::PointerGesture,
     history::HistoryHost,
     input::ActionInput,
     machine::Machine,
@@ -13,7 +14,9 @@ use crate::{
     message_flags::MessageFlags,
     profile::{EngineProfile, Semantics},
     random::CrtRandom,
+    save_menu::SaveMenuHost,
     settings::SettingsHost,
+    snapshot::{SaveInfo, SaveTitle},
     timers::VmTimers,
     vm::SystemResult,
 };
@@ -34,6 +37,12 @@ pub struct Hosts<'a> {
     pub random: Option<&'a mut CrtRandom>,
     pub settings: Option<&'a mut SettingsHost>,
     pub history: Option<&'a mut HistoryHost>,
+    pub gesture: Option<&'a mut PointerGesture>,
+    pub popup: Option<&'a mut SaveMenuHost>,
+    pub save_title: Option<&'a mut SaveTitle>,
+    pub save_info: Option<&'a mut SaveInfo>,
+    pub effects: Option<&'a mut bool>,
+    pub effect_objects: bool,
     /// Availability of stateless services in this host environment.
     pub strings: bool,
     pub math: bool,
@@ -49,6 +58,12 @@ pub enum Capability {
     History,
     Strings,
     Math,
+    Gesture,
+    Popup,
+    SaveTitle,
+    SaveInfo,
+    Effects,
+    EffectObjects,
 }
 
 impl Hosts<'_> {
@@ -62,6 +77,12 @@ impl Hosts<'_> {
             Capability::History => self.history.is_some(),
             Capability::Strings => self.strings,
             Capability::Math => self.math,
+            Capability::Gesture => self.gesture.is_some(),
+            Capability::Popup => self.popup.is_some(),
+            Capability::SaveTitle => self.save_title.is_some(),
+            Capability::SaveInfo => self.save_info.is_some(),
+            Capability::Effects => self.effects.is_some(),
+            Capability::EffectObjects => self.effect_objects,
         }
     }
 }
@@ -223,7 +244,224 @@ fn root_math(_hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, De
     Ok(Flow::Done)
 }
 
+fn root_gesture(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+    hosts
+        .gesture
+        .as_deref_mut()
+        .expect("gesture capability checked")
+        .handle(call)?;
+    Ok(Flow::Done)
+}
+
+fn root_popup(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+    hosts
+        .popup
+        .as_deref_mut()
+        .expect("popup capability checked")
+        .handle_popup(call)?;
+    Ok(Flow::Done)
+}
+
+fn root_save_title(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+    hosts
+        .save_title
+        .as_deref_mut()
+        .expect("save_title capability checked")
+        .handle(call)?;
+    Ok(Flow::Done)
+}
+
+fn root_save_info(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+    hosts
+        .save_info
+        .as_deref_mut()
+        .expect("save_info capability checked")
+        .handle(call)?;
+    Ok(Flow::Done)
+}
+
+fn root_effects(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+    crate::fade::handle_effects(
+        call,
+        hosts
+            .effects
+            .as_deref_mut()
+            .expect("effects capability checked"),
+    )?;
+    Ok(Flow::Done)
+}
+
+fn root_effect_objects(
+    _hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, DecodeError> {
+    crate::effect_objects::handle(call)?;
+    Ok(Flow::Done)
+}
+
 pub static ROOT: &[Entry] = &[
+    Entry {
+        command: 0x350,
+        name: "gesture field 0",
+        capability: Capability::Gesture,
+        handler: root_gesture,
+    },
+    Entry {
+        command: 0x351,
+        name: "gesture paired flags",
+        capability: Capability::Gesture,
+        handler: root_gesture,
+    },
+    Entry {
+        command: 0x352,
+        name: "gesture field 8",
+        capability: Capability::Gesture,
+        handler: root_gesture,
+    },
+    Entry {
+        command: 0x353,
+        name: "gesture flick direction",
+        capability: Capability::Gesture,
+        handler: root_gesture,
+    },
+    Entry {
+        command: 0x356,
+        name: "gesture field 12",
+        capability: Capability::Gesture,
+        handler: root_gesture,
+    },
+    Entry {
+        command: 0x357,
+        name: "gesture field 16",
+        capability: Capability::Gesture,
+        handler: root_gesture,
+    },
+    Entry {
+        command: 0x358,
+        name: "gesture field 20",
+        capability: Capability::Gesture,
+        handler: root_gesture,
+    },
+    Entry {
+        command: 0x359,
+        name: "gesture result pair",
+        capability: Capability::Gesture,
+        handler: root_gesture,
+    },
+    Entry {
+        command: 0x35a,
+        name: "gesture field 36",
+        capability: Capability::Gesture,
+        handler: root_gesture,
+    },
+    Entry {
+        command: 0x35b,
+        name: "gesture field 32",
+        capability: Capability::Gesture,
+        handler: root_gesture,
+    },
+    Entry {
+        command: 0x360,
+        name: "gesture hold result",
+        capability: Capability::Gesture,
+        handler: root_gesture,
+    },
+    Entry {
+        command: 0x362,
+        name: "gesture held query",
+        capability: Capability::Gesture,
+        handler: root_gesture,
+    },
+    Entry {
+        command: 0x364,
+        name: "gesture mode",
+        capability: Capability::Gesture,
+        handler: root_gesture,
+    },
+    Entry {
+        command: 0x365,
+        name: "drag state query",
+        capability: Capability::Gesture,
+        handler: root_gesture,
+    },
+    Entry {
+        command: 0x366,
+        name: "gesture region",
+        capability: Capability::Gesture,
+        handler: root_gesture,
+    },
+    Entry {
+        command: 0x367,
+        name: "clear gesture field 172",
+        capability: Capability::Gesture,
+        handler: root_gesture,
+    },
+    Entry {
+        command: 0x368,
+        name: "gesture release results",
+        capability: Capability::Gesture,
+        handler: root_gesture,
+    },
+    Entry {
+        command: 0x2cd,
+        name: "popup enabled setter",
+        capability: Capability::Popup,
+        handler: root_popup,
+    },
+    Entry {
+        command: 0x2ce,
+        name: "popup enabled query",
+        capability: Capability::Popup,
+        handler: root_popup,
+    },
+    Entry {
+        command: 0x2d3,
+        name: "first confirmation setting",
+        capability: Capability::Popup,
+        handler: root_popup,
+    },
+    Entry {
+        command: 0x2d4,
+        name: "second confirmation setting",
+        capability: Capability::Popup,
+        handler: root_popup,
+    },
+    Entry {
+        command: 0x2ee,
+        name: "second menu group query",
+        capability: Capability::Popup,
+        handler: root_popup,
+    },
+    Entry {
+        command: 0x162,
+        name: "save title",
+        capability: Capability::SaveTitle,
+        handler: root_save_title,
+    },
+    Entry {
+        command: 0x2b9,
+        name: "first save header word",
+        capability: Capability::SaveInfo,
+        handler: root_save_info,
+    },
+    Entry {
+        command: 0x2ba,
+        name: "remaining save header words",
+        capability: Capability::SaveInfo,
+        handler: root_save_info,
+    },
+    Entry {
+        command: 0x2d1,
+        name: "effects setting",
+        capability: Capability::Effects,
+        handler: root_effects,
+    },
+    Entry {
+        command: 0x2a0,
+        name: "release effect object",
+        capability: Capability::EffectObjects,
+        handler: root_effect_objects,
+    },
     Entry {
         command: 0xd0,
         name: "integer absolute",
