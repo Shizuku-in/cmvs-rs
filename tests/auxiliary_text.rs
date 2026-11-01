@@ -1,8 +1,11 @@
+#[path = "support/shared_windows.rs"]
+mod shared_windows;
 use cmvs_rs::{
     machine::{Machine, Step},
     message::MessageHost,
     ps3::Script,
 };
+use shared_windows::SharedWindows;
 
 fn call(code: &mut Vec<u8>, op: u16, args: &[u32]) {
     for &arg in args.iter().rev() {
@@ -40,7 +43,7 @@ fn pending(vm: &mut Machine<'_>) {
 }
 fn run(vm: &mut Machine<'_>, messages: &mut MessageHost) {
     pending(vm);
-    assert!(messages.try_handle(vm).unwrap());
+    assert!(messages.shared_message(vm).unwrap());
 }
 
 fn stack_words(vm: &Machine<'_>) -> Vec<u32> {
@@ -200,7 +203,7 @@ fn invalid_creation_preserves_existing_owned_state_font_stack_pc_and_results() {
         let before = (vm.pc(), vm.stack().len_bytes(), vm.pending_system());
         vm.state_mut().set_system_integer(0, 123).unwrap();
         for _ in 0..2 {
-            assert!(messages.try_handle(&mut vm).is_err(), "{args:?}");
+            assert!(messages.shared_message(&mut vm).is_err(), "{args:?}");
             assert_eq!(
                 (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
                 before
@@ -222,7 +225,7 @@ fn incomplete_creation_never_installs_a_font_or_object() {
         let mut messages = MessageHost::default();
         pending(&mut vm);
         let before = (vm.pc(), vm.stack().len_bytes(), vm.pending_system());
-        assert!(messages.try_handle(&mut vm).is_err());
+        assert!(messages.shared_message(&mut vm).is_err());
         assert_eq!(
             (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
             before
@@ -272,7 +275,7 @@ fn positioning_updates_only_auxiliary_coordinates_and_preserves_results() {
         pending(&mut vm);
         let pc = vm.pc();
         assert_eq!(vm.stack().len_bytes(), 12);
-        assert!(messages.try_handle(&mut vm).unwrap());
+        assert!(messages.shared_message(&mut vm).unwrap());
         assert_eq!(vm.pc(), pc + 2);
         assert_eq!(vm.stack().len_bytes(), 0);
         assert!(vm.pending_system().is_none());
@@ -295,7 +298,7 @@ fn positioning_updates_only_auxiliary_coordinates_and_preserves_results() {
     }
     pending(&mut vm);
     let before = (vm.pc(), vm.stack().len_bytes(), vm.pending_system());
-    assert!(!messages.try_handle(&mut vm).unwrap());
+    assert!(!messages.shared_message(&mut vm).unwrap());
     assert_eq!(
         (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
         before
@@ -331,7 +334,7 @@ fn invalid_auxiliary_setter_target_keeps_pending_command_and_owned_state() {
         pending(&mut vm);
         let before = (vm.pc(), stack_words(&vm), vm.pending_system());
         for _ in 0..2 {
-            assert!(messages.try_handle(&mut vm).is_err());
+            assert!(messages.shared_message(&mut vm).is_err());
             assert_eq!((vm.pc(), stack_words(&vm), vm.pending_system()), before);
             let after = messages.auxiliary_text(7).unwrap();
             assert_eq!(after.word(8), group.word(8));
@@ -373,7 +376,7 @@ fn incomplete_auxiliary_setter_arguments_leave_group_and_stack_unchanged() {
         let group = messages.auxiliary_text(0).unwrap().clone();
         pending(&mut vm);
         let before = (vm.pc(), stack_words(&vm), vm.pending_system());
-        assert!(messages.try_handle(&mut vm).is_err());
+        assert!(messages.shared_message(&mut vm).is_err());
         assert_eq!((vm.pc(), stack_words(&vm), vm.pending_system()), before);
         let after = messages.auxiliary_text(0).unwrap();
         assert_eq!(after.word(8), group.word(8));
@@ -412,7 +415,7 @@ fn colors_update_independently_only_for_zero_high_bytes() {
         pending(&mut vm);
         let pc = vm.pc();
         assert_eq!(vm.stack().len_bytes(), 12);
-        assert!(messages.try_handle(&mut vm).unwrap());
+        assert!(messages.shared_message(&mut vm).unwrap());
         assert_eq!(vm.pc(), pc + 2);
         assert!(vm.pending_system().is_none());
         assert_eq!(vm.stack().len_bytes(), 0);
@@ -465,7 +468,7 @@ fn text_parameters_keep_sentinel_fields_and_never_reallocate_the_atlas() {
         pending(&mut vm);
         let pc = vm.pc();
         assert_eq!(vm.stack().len_bytes(), 16);
-        assert!(messages.try_handle(&mut vm).unwrap());
+        assert!(messages.shared_message(&mut vm).unwrap());
         assert_eq!(vm.pc(), pc + 2);
         assert_eq!(vm.stack().len_bytes(), 0);
         assert!(vm.pending_system().is_none());
@@ -488,7 +491,7 @@ fn text_parameters_keep_sentinel_fields_and_never_reallocate_the_atlas() {
     }
     pending(&mut vm);
     let before = (vm.pc(), stack_words(&vm), vm.pending_system());
-    assert!(!messages.try_handle(&mut vm).unwrap());
+    assert!(!messages.shared_message(&mut vm).unwrap());
     assert_eq!((vm.pc(), stack_words(&vm), vm.pending_system()), before);
 }
 
@@ -526,7 +529,7 @@ fn layout_stores_signed_float_fields_without_moving_or_resizing_the_atlas() {
         pending(&mut vm);
         let pc = vm.pc();
         assert_eq!(vm.stack().len_bytes(), 20);
-        assert!(messages.try_handle(&mut vm).unwrap());
+        assert!(messages.shared_message(&mut vm).unwrap());
         assert_eq!(vm.pc(), pc + 2);
         assert_eq!(vm.stack().len_bytes(), 0);
         assert!(vm.pending_system().is_none());
@@ -575,7 +578,7 @@ fn field_148_preserves_all_parameter_bits_without_affecting_other_state() {
         pending(&mut vm);
         let pc = vm.pc();
         assert_eq!(vm.stack().len_bytes(), 8);
-        assert!(messages.try_handle(&mut vm).unwrap());
+        assert!(messages.shared_message(&mut vm).unwrap());
         assert_eq!(vm.pc(), pc + 2);
         assert!(vm.pending_system().is_none());
         assert_eq!(vm.stack().len_bytes(), 0);
@@ -614,7 +617,7 @@ fn field_140_preserves_all_parameter_bits_without_affecting_other_state() {
         pending(&mut vm);
         let pc = vm.pc();
         assert_eq!(vm.stack().len_bytes(), 8);
-        assert!(messages.try_handle(&mut vm).unwrap());
+        assert!(messages.shared_message(&mut vm).unwrap());
         assert_eq!(vm.pc(), pc + 2);
         assert!(vm.pending_system().is_none());
         assert_eq!(vm.stack().len_bytes(), 0);
@@ -653,7 +656,7 @@ fn layer_updates_owned_draw_and_preserves_other_state() {
         pending(&mut vm);
         let pc = vm.pc();
         assert_eq!(vm.stack().len_bytes(), 8);
-        assert!(messages.try_handle(&mut vm).unwrap());
+        assert!(messages.shared_message(&mut vm).unwrap());
         assert_eq!(vm.pc(), pc + 2);
         assert!(vm.pending_system().is_none());
         assert_eq!(vm.stack().len_bytes(), 0);
@@ -731,7 +734,7 @@ fn field_144_preserves_all_parameter_bits_without_affecting_other_state() {
         pending(&mut vm);
         let pc = vm.pc();
         assert_eq!(vm.stack().len_bytes(), 8);
-        assert!(messages.try_handle(&mut vm).unwrap());
+        assert!(messages.shared_message(&mut vm).unwrap());
         assert_eq!(vm.pc(), pc + 2);
         assert!(vm.pending_system().is_none());
         assert_eq!(vm.stack().len_bytes(), 0);
@@ -774,7 +777,7 @@ fn bounds_convert_signed_parameters_without_affecting_other_state() {
         pending(&mut vm);
         let pc = vm.pc();
         assert_eq!(vm.stack().len_bytes(), 20);
-        assert!(messages.try_handle(&mut vm).unwrap());
+        assert!(messages.shared_message(&mut vm).unwrap());
         assert_eq!(vm.pc(), pc + 2);
         assert!(vm.pending_system().is_none());
         assert_eq!(vm.stack().len_bytes(), 0);
@@ -824,8 +827,10 @@ fn bound_auxiliary_position_moves_scene_with_float_roundtrip_and_detaches() {
         pending(&mut vm);
         assert!(
             scene.try_handle(&mut vm).unwrap()
-                || messages.try_handle_scene(&mut vm, &mut scene).unwrap()
-                || messages.try_handle(&mut vm).unwrap()
+                || messages
+                    .shared_auxiliary_scene(&mut vm, &mut scene)
+                    .unwrap()
+                || messages.shared_message(&mut vm).unwrap()
         );
     }
     assert_eq!(
@@ -836,8 +841,12 @@ fn bound_auxiliary_position_moves_scene_with_float_roundtrip_and_detaches() {
         vm.state_mut().set_system_integer(i, 99 + i).unwrap();
     }
     pending(&mut vm);
-    assert!(messages.try_handle(&mut vm).is_err());
-    assert!(messages.try_handle_scene(&mut vm, &mut scene).unwrap());
+    assert!(messages.shared_message(&mut vm).is_err());
+    assert!(
+        messages
+            .shared_auxiliary_scene(&mut vm, &mut scene)
+            .unwrap()
+    );
     assert_eq!(
         &scene.object(11).unwrap().draw.as_ref().unwrap().words[8..10],
         &[16777216, i32::MIN as u32]
@@ -845,8 +854,10 @@ fn bound_auxiliary_position_moves_scene_with_float_roundtrip_and_detaches() {
     for _ in 0..2 {
         pending(&mut vm);
         assert!(
-            messages.try_handle_scene(&mut vm, &mut scene).unwrap()
-                || messages.try_handle(&mut vm).unwrap()
+            messages
+                .shared_auxiliary_scene(&mut vm, &mut scene)
+                .unwrap()
+                || messages.shared_message(&mut vm).unwrap()
         );
     }
     assert_eq!(messages.auxiliary_text(0).unwrap().associated_scene, None);
@@ -878,7 +889,11 @@ fn auxiliary_association_errors_keep_target_and_pending_command() {
         pending(&mut vm);
         let p = vm.pending_system();
         let sp = vm.stack().len_bytes();
-        assert!(messages.try_handle_scene(&mut vm, &mut scene).is_err());
+        assert!(
+            messages
+                .shared_auxiliary_scene(&mut vm, &mut scene)
+                .is_err()
+        );
         assert_eq!(vm.pending_system(), p);
         assert_eq!(vm.stack().len_bytes(), sp);
         assert_eq!(messages.auxiliary_text(0).unwrap().object, before.object);
@@ -989,8 +1004,10 @@ fn auxiliary_motion_linear_sine_wrap_clock_and_bound_scene_advance_only_per_fram
             pending(&mut vm);
             assert!(
                 scene.try_handle(&mut vm).unwrap()
-                    || messages.try_handle_scene(&mut vm, &mut scene).unwrap()
-                    || messages.try_handle(&mut vm).unwrap()
+                    || messages
+                        .shared_auxiliary_scene(&mut vm, &mut scene)
+                        .unwrap()
+                    || messages.shared_message(&mut vm).unwrap()
             );
         }
         assert_eq!(
@@ -1050,7 +1067,7 @@ fn auxiliary_motion_clamps_stops_and_rejects_unknown_mode_without_changing_comma
     pending(&mut vm);
     let pc = vm.pc();
     let sp = vm.stack().len_bytes();
-    assert!(messages.try_handle(&mut vm).is_err());
+    assert!(messages.shared_message(&mut vm).is_err());
     assert_eq!(vm.pc(), pc);
     assert_eq!(vm.stack().len_bytes(), sp);
     assert_eq!(messages.auxiliary_text(0).unwrap().word(368), Some(0));
@@ -1127,22 +1144,20 @@ fn proportional_auxiliary_text_uses_advances_for_single_and_double_byte_glyphs()
         let profile = cmvs_rs::profile::Registry::builtin()
             .profile("cmvs-20171114")
             .unwrap();
-        match cmvs_rs::dispatch::run(
-            profile.semantics(vm.pending_system().unwrap().1),
-            &mut vm,
-            &mut cmvs_rs::dispatch::Hosts {
-                text: Some(cmvs_rs::dispatch::TextHosts {
-                    messages: &mut messages,
-                    input: &mut input,
-                    flags: Default::default(),
-                }),
-                ..Default::default()
-            },
-        )
-        .unwrap()
-        {
+        let command = vm.pending_system().unwrap().1;
+        let mut hosts = cmvs_rs::dispatch::Hosts::default();
+        if cmvs_rs::dispatch::uses_message_state(command) {
+            hosts.messages = Some(&mut messages);
+        } else {
+            hosts.text = Some(cmvs_rs::dispatch::TextHosts {
+                messages: &mut messages,
+                input: &mut input,
+                flags: Default::default(),
+            });
+        }
+        match cmvs_rs::dispatch::run(profile.semantics(command), &mut vm, &mut hosts).unwrap() {
             Some(cmvs_rs::dispatch::Flow::Done) => {}
-            None => assert!(messages.try_handle(&mut vm).unwrap()),
+            None => assert!(messages.shared_message(&mut vm).unwrap()),
             other => panic!("unexpected dispatch {other:?}"),
         }
     }
@@ -1184,9 +1199,9 @@ fn text_layout_wraps_keeps_closing_marks_and_shifts_voiced_marks() {
     }
     // Text output follows the explicit recording policy of 0x2152.
     pending(&mut vm);
-    assert!(!messages.try_handle(&mut vm).unwrap());
+    assert!(!messages.shared_message(&mut vm).unwrap());
     messages.set_record_output(true);
-    assert!(messages.try_handle(&mut vm).unwrap());
+    assert!(messages.shared_message(&mut vm).unwrap());
     assert_eq!(vm.stack().len_bytes(), 0);
     for i in 0..7 {
         assert_eq!(vm.state().system_integer(i), Some(10 + i));
@@ -1246,7 +1261,7 @@ fn text_layout_errors_keep_the_group_pen_and_pending_command() {
         let pen = messages.auxiliary_text(7).unwrap().word(176);
         pending(&mut vm);
         let sp = vm.stack().len_bytes();
-        assert!(messages.try_handle(&mut vm).is_err());
+        assert!(messages.shared_message(&mut vm).is_err());
         assert_eq!(vm.pending_system().map(|p| p.1), Some(0x38b));
         assert_eq!(vm.stack().len_bytes(), sp);
         let group = messages.auxiliary_text(7).unwrap();

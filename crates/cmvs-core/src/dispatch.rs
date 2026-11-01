@@ -117,7 +117,7 @@ pub struct WaitHosts<'a> {
 
 #[derive(Default)]
 pub struct Hosts<'a> {
-    pub windows: Option<&'a mut MessageHost>,
+    pub messages: Option<&'a mut MessageHost>,
     pub window_images: Option<&'a mut dyn ImageSource>,
     pub input: Option<InputHosts<'a>>,
     pub buttons: Option<&'a mut ButtonHost>,
@@ -147,6 +147,8 @@ pub struct Hosts<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Capability {
+    TextState,
+    AuxiliaryScene,
     Windows,
     WindowPointer,
     WindowButtons,
@@ -187,11 +189,12 @@ pub enum Capability {
 impl Hosts<'_> {
     fn has(&self, capability: Capability) -> bool {
         match capability {
-            Capability::Windows => self.windows.is_some(),
+            Capability::TextState | Capability::AuxiliaryScene => self.messages.is_some(),
+            Capability::Windows => self.messages.is_some(),
             Capability::WindowPointer | Capability::WindowButtons => {
-                self.windows.is_some() && self.input.is_some()
+                self.messages.is_some() && self.input.is_some()
             }
-            Capability::WindowImages => self.windows.is_some() && self.window_images.is_some(),
+            Capability::WindowImages => self.messages.is_some() && self.window_images.is_some(),
             Capability::Input => self.input.is_some(),
             Capability::Buttons => self.buttons.is_some() && self.scene.is_some(),
             Capability::ButtonInput => {
@@ -530,9 +533,38 @@ fn root_audio(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Bo
     Ok(Flow::Done)
 }
 
+fn root_text_state(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    hosts
+        .messages
+        .as_deref_mut()
+        .expect("message capability checked")
+        .handle_text_state(call)?;
+    Ok(Flow::Done)
+}
+fn root_auxiliary_scene(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    Ok(hosts
+        .messages
+        .as_deref_mut()
+        .expect("message capability checked")
+        .handle_auxiliary_scene(call, hosts.scene.as_deref_mut())?)
+}
+pub fn uses_message_state(command: u16) -> bool {
+    uses_windows(command)
+        || ROOT.iter().any(|e| {
+            e.command == command
+                && matches!(
+                    e.capability,
+                    Capability::TextState | Capability::AuxiliaryScene
+                )
+        })
+}
+
 fn root_windows(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     hosts
-        .windows
+        .messages
         .as_deref_mut()
         .expect("window capability checked")
         .handle_window(call)?;
@@ -543,7 +575,7 @@ fn root_window_pointer(
     call: &mut Call<'_, '_>,
 ) -> Result<Flow, Box<dyn Error>> {
     hosts
-        .windows
+        .messages
         .as_deref_mut()
         .expect("window capability checked")
         .handle_window_pointer(
@@ -561,7 +593,7 @@ fn root_window_buttons(
     call: &mut Call<'_, '_>,
 ) -> Result<Flow, Box<dyn Error>> {
     hosts
-        .windows
+        .messages
         .as_deref_mut()
         .expect("window capability checked")
         .handle_window_buttons(
@@ -579,7 +611,7 @@ fn root_window_images(
     call: &mut Call<'_, '_>,
 ) -> Result<Flow, Box<dyn Error>> {
     hosts
-        .windows
+        .messages
         .as_deref_mut()
         .expect("window capability checked")
         .handle_window_image(
@@ -761,6 +793,276 @@ pub fn is_wait(command: u16) -> bool {
 }
 
 pub static ROOT: &[Entry] = &[
+    Entry {
+        command: 0x100,
+        name: "create text object",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x101,
+        name: "release text object",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x102,
+        name: "text position",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x103,
+        name: "text area",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x104,
+        name: "clear text",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x105,
+        name: "text glyph geometry",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x106,
+        name: "text font face",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x107,
+        name: "text colors",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x10c,
+        name: "text pen",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x10d,
+        name: "text reveal",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x10e,
+        name: "text delay",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x10f,
+        name: "text decoration",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x110,
+        name: "text layer",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x112,
+        name: "text layout query",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x113,
+        name: "text outline mode",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x114,
+        name: "text ruby enabled",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x115,
+        name: "text ruby size",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x116,
+        name: "text ruby spacing",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x117,
+        name: "text ruby every line",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x119,
+        name: "encoded text length",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x11a,
+        name: "text glyph parameter",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x11e,
+        name: "text line break rules",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x11f,
+        name: "text measurement",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x380,
+        name: "create auxiliary text",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x382,
+        name: "release auxiliary text",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x385,
+        name: "auxiliary layout",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x386,
+        name: "clear auxiliary text",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x387,
+        name: "auxiliary text parameters",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x389,
+        name: "auxiliary colors",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x38c,
+        name: "auxiliary pen",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x38e,
+        name: "auxiliary gradient",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x38f,
+        name: "auxiliary layer",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x390,
+        name: "auxiliary measurement",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x392,
+        name: "auxiliary outline mode",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x393,
+        name: "auxiliary outline color",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x396,
+        name: "auxiliary drawing bounds",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x398,
+        name: "auxiliary position query",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x39a,
+        name: "auxiliary position bounds",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x39b,
+        name: "auxiliary moving",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x39c,
+        name: "move auxiliary text",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x39e,
+        name: "clamp auxiliary position",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x39f,
+        name: "auxiliary eased move",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x3a0,
+        name: "stop auxiliary motion",
+        capability: Capability::TextState,
+        handler: root_text_state,
+    },
+    Entry {
+        command: 0x383,
+        name: "auxiliary position",
+        capability: Capability::AuxiliaryScene,
+        handler: root_auxiliary_scene,
+    },
+    Entry {
+        command: 0x39d,
+        name: "bind auxiliary scene",
+        capability: Capability::AuxiliaryScene,
+        handler: root_auxiliary_scene,
+    },
     Entry {
         command: 0xec,
         name: "window text scale",

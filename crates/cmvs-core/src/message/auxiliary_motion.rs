@@ -1,23 +1,20 @@
 //! 0x14002e920 / 0x14002e9d0 startup and 0x14002edb0 frame interpolation.
 use super::{MessageHost, auxiliary::PositionMotion};
 use crate::{
-    FormatError, bytecode::DecodeError, evaluate::error, machine::Machine, scene::SceneHost,
-    vm::SystemResult,
+    FormatError, bytecode::DecodeError, dispatch::Call, evaluate::error, scene::SceneHost,
 };
 
 impl MessageHost {
-    pub(super) fn try_auxiliary_motion(
+    pub(super) fn handle_auxiliary_motion(
         &mut self,
-        vm: &mut Machine<'_>,
-    ) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x39c | 0x39f))) = vm.pending_system() else {
-            return Ok(false);
-        };
+        call: &mut Call<'_, '_>,
+    ) -> Result<(), DecodeError> {
+        let (pc, command) = (call.pc, call.command);
         let fail = |why| error(pc, command + 0x2000, why);
         let count = if command == 0x39c { 4 } else { 6 };
         let mut args = [0; 6];
         for (i, arg) in args.iter_mut().take(count).enumerate() {
-            *arg = vm.stack().peek_u32((i + 1) * 4).map_err(|e| fail(e.0))?;
+            *arg = call.argument((i + 1) * 4, super::text_argument_names(command)[i])?;
         }
         let slot = args[0] as usize;
         let group = self
@@ -44,9 +41,9 @@ impl MessageHost {
                 (d > 0 && b >= group.word(hi).expect("bound") as i32)
                     || (d < 0 && b <= group.word(lo).expect("bound") as i32)
             });
-        vm.complete_system(SystemResult(0x4000 | (count as u16 * 4)))?;
+        call.complete(0x4000 | (count as u16 * 4))?;
         if blocked {
-            return Ok(true);
+            return Ok(());
         }
         let target = std::array::from_fn(|i| base[i].wrapping_add(delta[i]));
         let group = self.auxiliary_texts[slot].as_mut().expect("validated");
@@ -58,7 +55,7 @@ impl MessageHost {
             start: self.auxiliary_clock,
             extra,
         });
-        Ok(true)
+        Ok(())
     }
 
     /// Auxiliary objects update after ordinary scene/window objects: the motion, then the

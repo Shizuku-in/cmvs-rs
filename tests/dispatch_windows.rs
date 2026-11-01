@@ -97,7 +97,7 @@ impl Windows {
     }
     fn hosts(&mut self, capability: Capability) -> Hosts<'_> {
         Hosts {
-            windows: Some(&mut self.messages),
+            messages: Some(&mut self.messages),
             input: matches!(
                 capability,
                 Capability::WindowPointer | Capability::WindowButtons
@@ -228,7 +228,7 @@ fn missing_inputs_sources_and_short_stacks_preserve_window_and_input_state() {
             let state = windows.snapshot();
             let mut hosts = windows.hosts(capability);
             if missing_window {
-                hosts.windows = None;
+                hosts.messages = None;
             } else if capability == Capability::WindowImages {
                 hosts.window_images = None;
             } else {

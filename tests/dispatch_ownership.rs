@@ -66,14 +66,16 @@ fn audit(handler: &str, mut probe: impl FnMut(&mut Machine<'_>) -> bool) {
             return number == 0x2ef;
         }
         if handler == "message::try_handle" {
-            return CLAIMS
-                .iter()
-                .find(|claim| claim.handler == handler)
-                .unwrap()
-                .recognizes(number)
-                || cmvs_rs::dispatch::ROOT.iter().any(|entry| {
-                    entry.command == number && entry.capability == Capability::Windows
-                });
+            return cmvs_rs::dispatch::ROOT.iter().any(|entry| {
+                entry.command == number
+                    && (matches!(
+                        entry.capability,
+                        Capability::Windows | Capability::TextState
+                    ) || matches!(number, 0x10b | 0x154 | 0x38b | 0x383))
+            });
+        }
+        if handler == "message::try_record_poll" {
+            return number == 0x159;
         }
         let capability = match handler {
             "scene::try_handle_image" => Some(Capability::SceneImages),
@@ -88,6 +90,7 @@ fn audit(handler: &str, mut probe: impl FnMut(&mut Machine<'_>) -> bool) {
             "message::try_handle_pointer" => Some(Capability::WindowPointer),
             "message::try_handle_buttons" => Some(Capability::WindowButtons),
             "message::try_handle_image" => Some(Capability::WindowImages),
+            "message::try_handle_scene" => Some(Capability::AuxiliaryScene),
             "audio::try_handle" => Some(Capability::Audio),
             "timers::try_handle" => Some(Capability::Timers),
             "message_flags::try_handle" => Some(Capability::Flags),
@@ -383,7 +386,7 @@ fn inventory_matches_wait_and_resource_host_recognition_exhaustively() {
                 save_info: Some(&mut cmvs_rs::snapshot::SaveInfo::default()),
                 effects: Some(&mut true),
                 effect_objects: true,
-                windows: Some(&mut MessageHost::default()),
+                messages: Some(&mut MessageHost::default()),
                 window_images: Some(&mut Unavailable),
                 buttons: Some(&mut cmvs_rs::buttons::ButtonHost::default()),
                 input: Some(cmvs_rs::dispatch::InputHosts {
@@ -511,7 +514,7 @@ fn all_overlaps_are_explicit_and_chain_orders_are_unique() {
         assert_eq!(
             overlaps,
             if chain == Chain::Runner {
-                vec![0x10b, 0x154, 0x159, 0x2b2, 0x34d, 0x383, 0x38b]
+                vec![0x2b2, 0x34d]
             } else {
                 vec![0x34d]
             }
@@ -523,9 +526,6 @@ fn all_overlaps_are_explicit_and_chain_orders_are_unique() {
             .all(|claim| !claim.recognizes(0x400) && !claim.recognizes(u16::MAX))
     );
     for (command, expected) in [
-        (0x10b, ["dispatch::ROOT", "message::try_handle"]),
-        (0x154, ["dispatch::ROOT", "message::try_handle"]),
-        (0x159, ["dispatch::ROOT", "message::try_record_poll"]),
         (
             0x2b2,
             [
@@ -534,8 +534,6 @@ fn all_overlaps_are_explicit_and_chain_orders_are_unique() {
             ],
         ),
         (0x34d, ["bootstrap::try_handle", "input::try_handle"]),
-        (0x383, ["message::try_handle_scene", "message::try_handle"]),
-        (0x38b, ["dispatch::ROOT", "message::try_handle"]),
     ] {
         assert_eq!(
             ownership::candidates(command, Chain::Runner)

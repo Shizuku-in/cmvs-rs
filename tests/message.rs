@@ -4098,18 +4098,18 @@ fn font_cell_step(
         .profile("cmvs-20171114")
         .unwrap();
     let mut input = ActionInput::default();
-    match cmvs_rs::dispatch::run(
-        profile.semantics(vm.pending_system().unwrap().1),
-        vm,
-        &mut cmvs_rs::dispatch::Hosts {
-            text: Some(cmvs_rs::dispatch::TextHosts {
-                messages,
-                input: &mut input,
-                flags: Default::default(),
-            }),
-            ..Default::default()
-        },
-    )? {
+    let command = vm.pending_system().unwrap().1;
+    let mut hosts = cmvs_rs::dispatch::Hosts::default();
+    if cmvs_rs::dispatch::uses_message_state(command) {
+        hosts.messages = Some(&mut *messages);
+    } else {
+        hosts.text = Some(cmvs_rs::dispatch::TextHosts {
+            messages: &mut *messages,
+            input: &mut input,
+            flags: Default::default(),
+        });
+    }
+    match cmvs_rs::dispatch::run(profile.semantics(command), vm, &mut hosts)? {
         Some(
             cmvs_rs::dispatch::Flow::Done
             | cmvs_rs::dispatch::Flow::Yield

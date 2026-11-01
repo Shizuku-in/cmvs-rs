@@ -16,6 +16,11 @@ fn accepts(vm: &Machine<'_>, capability: Capability) -> bool {
 #[allow(dead_code)]
 pub trait SharedWindows {
     fn shared_message(&mut self, vm: &mut Machine<'_>) -> Result<bool, Box<dyn std::error::Error>>;
+    fn shared_auxiliary_scene(
+        &mut self,
+        vm: &mut Machine<'_>,
+        scene: &mut cmvs_rs::scene::SceneHost,
+    ) -> Result<bool, Box<dyn std::error::Error>>;
     fn shared_window_pointer(
         &mut self,
         vm: &mut Machine<'_>,
@@ -34,14 +39,32 @@ pub trait SharedWindows {
 }
 impl SharedWindows for MessageHost {
     fn shared_message(&mut self, vm: &mut Machine<'_>) -> Result<bool, Box<dyn std::error::Error>> {
-        if !accepts(vm, Capability::Windows) {
+        if !accepts(vm, Capability::Windows) && !accepts(vm, Capability::TextState) {
             return Ok(self.try_handle(vm)?);
         }
         Ok(dispatch::run(
             Semantics::Root,
             vm,
             &mut Hosts {
-                windows: Some(self),
+                messages: Some(self),
+                ..Default::default()
+            },
+        )? == Some(Flow::Done))
+    }
+    fn shared_auxiliary_scene(
+        &mut self,
+        vm: &mut Machine<'_>,
+        scene: &mut cmvs_rs::scene::SceneHost,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        if !accepts(vm, Capability::AuxiliaryScene) {
+            return Ok(false);
+        }
+        Ok(dispatch::run(
+            Semantics::Root,
+            vm,
+            &mut Hosts {
+                messages: Some(self),
+                scene: Some(scene),
                 ..Default::default()
             },
         )? == Some(Flow::Done))
@@ -59,7 +82,7 @@ impl SharedWindows for MessageHost {
             Semantics::Root,
             vm,
             &mut Hosts {
-                windows: Some(self),
+                messages: Some(self),
                 input: Some(InputHosts {
                     input: &mut input,
                     skip: false,
@@ -81,7 +104,7 @@ impl SharedWindows for MessageHost {
             Semantics::Root,
             vm,
             &mut Hosts {
-                windows: Some(self),
+                messages: Some(self),
                 input: Some(InputHosts {
                     input,
                     skip: false,
@@ -103,7 +126,7 @@ impl SharedWindows for MessageHost {
             Semantics::Root,
             vm,
             &mut Hosts {
-                windows: Some(self),
+                messages: Some(self),
                 window_images: Some(source),
                 ..Default::default()
             },

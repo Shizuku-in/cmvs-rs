@@ -36,19 +36,41 @@ impl super::MessageHost {
         vm: &mut crate::machine::Machine<'_>,
         scene: &mut crate::scene::SceneHost,
     ) -> Result<bool, crate::bytecode::DecodeError> {
-        use crate::{evaluate::error, vm::SystemResult};
         let Some((pc, command @ (0x39d | 0x383))) = vm.pending_system() else {
             return Ok(false);
         };
-        let fail = |why| error(pc, command + 0x2000, why);
-        let slot = vm.stack().peek_u32(4).map_err(|e| fail(e.0))? as usize;
+        let mut call = crate::dispatch::Call::new(vm, pc, command);
+        if command == 0x383 {
+            let slot = call.argument(4, "auxiliary slot")? as usize;
+            let group = self
+                .auxiliary_texts
+                .get(slot)
+                .and_then(Option::as_ref)
+                .ok_or_else(|| call.error("auxiliary text group does not exist or outside 0..7"))?;
+            if group.associated_scene.is_none() {
+                return Ok(false);
+            }
+        }
+        Ok(self.handle_auxiliary_scene(&mut call, Some(scene))? == crate::dispatch::Flow::Done)
+    }
+
+    pub(crate) fn handle_auxiliary_scene(
+        &mut self,
+        call: &mut crate::dispatch::Call<'_, '_>,
+        scene: Option<&mut crate::scene::SceneHost>,
+    ) -> Result<crate::dispatch::Flow, crate::bytecode::DecodeError> {
+        use crate::dispatch::Flow;
+        let slot = call.argument(4, "auxiliary slot")? as usize;
         let group = self
             .auxiliary_texts
             .get(slot)
             .and_then(Option::as_ref)
-            .ok_or_else(|| fail("auxiliary text group does not exist or outside 0..7"))?;
-        if command == 0x39d {
-            let raw = vm.stack().peek_u32(8).map_err(|e| fail(e.0))?;
+            .ok_or_else(|| call.error("auxiliary text group does not exist or outside 0..7"))?;
+        if call.command == 0x39d {
+            let Some(scene) = scene else {
+                return Ok(Flow::Unavailable);
+            };
+            let raw = call.argument(8, "scene object")?;
             let target = if (raw as i32) < 0 {
                 None
             } else {
@@ -57,25 +79,28 @@ impl super::MessageHost {
                         .ok()
                         .filter(|s| scene.object(*s).is_some())
                         .ok_or_else(|| {
-                            fail("associated scene object does not exist or outside 0..255")
+                            call.error("associated scene object does not exist or outside 0..255")
                         })?,
                 )
             };
-            vm.complete_system(SystemResult(0x4008))?;
+            let flow = call.finish(0x4008)?;
             self.auxiliary_texts[slot]
                 .as_mut()
                 .expect("validated")
                 .associated_scene = target;
-        } else {
-            let Some(target) = group.associated_scene else {
-                return Ok(false);
+            return Ok(flow);
+        }
+        let target = group.associated_scene;
+        let x = call.argument(8, "x")?;
+        let y = call.argument(12, "y")?;
+        if let Some(target) = target {
+            let Some(scene) = scene else {
+                return Ok(Flow::Unavailable);
             };
-            let x = vm.stack().peek_u32(8).map_err(|e| fail(e.0))?;
-            let y = vm.stack().peek_u32(12).map_err(|e| fail(e.0))?;
             if scene.object(target).and_then(|o| o.draw.as_ref()).is_none() {
-                return Err(fail("associated scene object has no draw state"));
+                return Err(call.error("associated scene object has no draw state"));
             }
-            vm.complete_system(SystemResult(0x400c))?;
+            let flow = call.finish(0x400c)?;
             self.auxiliary_texts[slot]
                 .as_mut()
                 .expect("validated")
@@ -95,8 +120,15 @@ impl super::MessageHost {
                 .as_mut()
                 .expect("validated")
                 .set(DrawSetter::Position(position));
+            Ok(flow)
+        } else {
+            let flow = call.finish(0x400c)?;
+            self.auxiliary_texts[slot]
+                .as_mut()
+                .expect("validated")
+                .set_position(x, y);
+            Ok(flow)
         }
-        Ok(true)
     }
 }
 

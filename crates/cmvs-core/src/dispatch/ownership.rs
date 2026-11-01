@@ -101,6 +101,8 @@ pub static CLAIMS: &[Claim] = &[
                             | super::Capability::WindowPointer
                             | super::Capability::WindowButtons
                             | super::Capability::WindowImages
+                            | super::Capability::TextState
+                            | super::Capability::AuxiliaryScene
                     )
             })
         },
@@ -149,9 +151,6 @@ pub static CLAIMS: &[Claim] = &[
         Some(230),
         0x22f..=0x232
     ),
-    claim!("message::try_record_poll", Some(400), None, 0x159),
-    claim!("message::try_handle_scene", Some(410), None, 0x383 | 0x39d),
-    claim!("message::try_handle", Some(420), None, 0x100..=0x107 | 0x10b..=0x110 | 0x112..=0x117 | 0x119..=0x11a | 0x11e..=0x11f | 0x154 | 0x380 | 0x382..=0x383 | 0x385..=0x387 | 0x389 | 0x38b..=0x38c | 0x38e..=0x390 | 0x392..=0x393 | 0x396 | 0x398 | 0x39a..=0x39c | 0x39e..=0x3a0),
     claim!("movie::try_create_scene", Some(500), None, 0x308),
     claim!("movie::try_start_scene", Some(510), None, 0x309),
     claim!(

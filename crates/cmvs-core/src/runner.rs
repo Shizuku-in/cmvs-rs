@@ -759,7 +759,7 @@ impl<'a> Startup<'a> {
             images: None,
             waits: None,
             text: None,
-            windows: None,
+            messages: None,
             window_images: None,
             input: None,
             buttons: Some(&mut self.buttons),
@@ -778,8 +778,8 @@ impl<'a> Startup<'a> {
             effects: Some(&mut self.effects),
             effect_objects: true,
         };
-        if crate::dispatch::uses_windows(command) {
-            hosts.windows = Some(&mut self.messages);
+        if crate::dispatch::uses_message_state(command) {
+            hosts.messages = Some(&mut self.messages);
             if crate::dispatch::uses_input(command) {
                 hosts.input = Some(crate::dispatch::InputHosts {
                     input: &mut self.input,
@@ -939,13 +939,6 @@ impl<'a> Startup<'a> {
             || self.bootstrap.try_handle(&mut self.machine)?.is_some()
             || self.scene.try_handle_quake(&mut self.machine)?
             || self.scene.try_handle_strip(&mut self.machine)?
-            || self
-                .messages
-                .try_record_poll(&mut self.machine, self.message_flags)?
-            || self
-                .messages
-                .try_handle_scene(&mut self.machine, &mut self.scene)?
-            || self.messages.try_handle(&mut self.machine)?
             || self.movies.try_create_scene(
                 &mut self.machine,
                 &mut self.scene,

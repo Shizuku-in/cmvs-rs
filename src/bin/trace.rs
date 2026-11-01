@@ -441,7 +441,9 @@ fn run() -> Result<(), Box<dyn Error>> {
                     .expect("completed root command has an entry")
                     .capability;
                 match capability {
-                    Capability::Windows
+                    Capability::TextState
+                    | Capability::AuxiliaryScene
+                    | Capability::Windows
                     | Capability::WindowPointer
                     | Capability::WindowButtons
                     | Capability::WindowImages => {

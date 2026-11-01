@@ -20,7 +20,6 @@ use crate::{
     input::ActionInput,
     machine::Machine,
     scene::{self, ANIMATION_FRAMES, AnimationFrame, DrawSetter, DrawState, SceneObject},
-    vm::SystemResult,
 };
 use std::{error::Error, sync::Arc};
 mod auxiliary;
@@ -493,134 +492,126 @@ impl MessageHost {
         Ok(())
     }
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        if let Some((pc, command)) = vm.pending_system()
-            && is_window_command(command)
-        {
+        let Some((pc, command)) = vm.pending_system() else {
+            return Ok(false);
+        };
+        if is_window_command(command) {
             self.handle_window(&mut Call::new(vm, pc, command))?;
             return Ok(true);
         }
-        if self.try_auxiliary_motion(vm)? {
+        if is_text_state_command(command) {
+            self.handle_text_state(&mut Call::new(vm, pc, command))?;
             return Ok(true);
         }
-        if let Some((pc, 0x380)) = vm.pending_system() {
-            return self.create_auxiliary_text(vm, pc).map(|()| true);
-        }
-        if let Some((pc, command @ (0x38b | 0x38c | 0x390 | 0x3a0))) = vm.pending_system()
-            && (command != 0x38b || self.record_output)
-        {
-            return self.auxiliary_content(vm, pc, command).map(|()| true);
-        }
-        if let Some((
-            pc,
-            command @ (0x383 | 0x385 | 0x386 | 0x387 | 0x389 | 0x38e | 0x38f | 0x392 | 0x393
-            | 0x396 | 0x398 | 0x39a | 0x39b | 0x39e),
-        )) = vm.pending_system()
-        {
-            // 0x1400736f0 / 0x140073820 / 0x1400738f0 / 0x1400739c0: independent
-            // and 0x140073bc0: auxiliary text setters; none changes system results.
-            let opcode = 0x2000 + command;
-            let count = match command {
-                0x383 | 0x389 | 0x39e => 3,
-                0x385 | 0x396 | 0x39a => 5,
-                0x386 | 0x398 | 0x39b => 1,
-                0x38e | 0x38f | 0x392 | 0x393 => 2,
-                _ => 4,
-            };
-            let mut args = [0; 5];
-            for (i, arg) in args.iter_mut().take(count).enumerate() {
-                *arg = vm
-                    .stack()
-                    .peek_u32(4 * (i + 1))
-                    .map_err(|e| error(pc, opcode, e.0))?;
-            }
-            let slot = args[0] as usize;
-            if slot >= AUXILIARY_TEXTS {
-                return Err(error(pc, opcode, "auxiliary text group slot outside 0..7"));
-            }
-            if self.auxiliary_texts[slot].is_none() {
-                return Err(error(pc, opcode, "auxiliary text group is not created"));
-            }
-            if command == 0x383
-                && self.auxiliary_texts[slot]
-                    .as_ref()
-                    .expect("validated")
-                    .associated_scene
-                    .is_some()
-            {
-                return Err(error(
+        if command == 0x383 {
+            return match self.handle_auxiliary_scene(&mut Call::new(vm, pc, command), None)? {
+                crate::dispatch::Flow::Done => Ok(true),
+                crate::dispatch::Flow::Unavailable => Err(error(
                     pc,
-                    opcode,
+                    command + 0x2000,
                     "bound auxiliary position requires scene context",
-                ));
-            }
-            vm.complete_system(SystemResult(0x4000 | (count as u16 * 4)))?;
-            let group = self.auxiliary_texts[slot]
-                .as_mut()
-                .expect("validated group");
-            match command {
-                0x383 => group.set_position(args[1], args[2]),
-                0x386 => group.clear_content(),
-                0x39b => {
-                    vm.state_mut()
-                        .set_system_integer(
-                            0,
-                            u32::from(group.word(368).expect("modeled activity") != 0),
-                        )
-                        .expect("result exists");
-                }
-                0x398 | 0x39e => {
-                    let values = if command == 0x398 {
-                        group.position()
-                    } else {
-                        group.clamp_position(args[1], args[2])
-                    };
-                    for (slot, value) in [1, 2].into_iter().zip(values) {
-                        vm.state_mut()
-                            .set_system_integer(slot, value)
-                            .expect("result exists");
-                    }
-                }
-                0x396 => group.set_bounds([args[1], args[2], args[3], args[4]]),
-                0x39a => group.set_position_bounds([args[1], args[2], args[3], args[4]]),
-                0x385 => group.set_layout([args[1], args[2], args[3], args[4]]),
-                0x389 => group.set_colors(args[1], args[2]),
-                0x38e => group.set_field_148(args[1]),
-                0x392 => group.set_field_140(args[1]),
-                0x393 => group.set_field_144(args[1]),
-                0x38f => group.set_layer(args[1]),
-                _ => group.set_text_parameters(args[1], args[2], args[3]),
-            }
-            return Ok(true);
+                )),
+                _ => unreachable!("auxiliary position only completes or lacks scene context"),
+            };
         }
-        if let Some((pc, 0x382)) = vm.pending_system() {
-            // 0x1400735e0 releases +4328 and its owned atlas/list, preserving the
-            // separate +4392 font object and ordinary windows/text objects.
-            let slot = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x2382, e.0))?;
-            if slot >= AUXILIARY_TEXTS as u32 {
-                return Err(error(pc, 0x2382, "auxiliary text group slot outside 0..7"));
-            }
-            vm.complete_system(SystemResult(0x4004))?;
-            self.auxiliary_texts[slot as usize] = None;
-            return Ok(true);
+        if !self.record_output {
+            return Ok(false);
         }
-        match vm.pending_system() {
-            Some((pc, 0x11f)) => self.measure(vm, pc).map(|()| true),
-            Some((pc, 0x112)) => self.measure_layout(vm, pc).map(|()| true),
-            Some((pc, 0x119)) => self.encoded_length(vm, pc).map(|()| true),
-            Some((pc, command @ (0x114..=0x117 | 0x11e))) => {
-                self.text_command(vm, pc, command).map(|()| true)
-            }
-            Some((pc, 0x100)) => self.create_text(vm, pc).map(|()| true),
-            Some((pc, 0x10b)) if self.record_output => self.place_text(vm, pc).map(|()| true),
-            Some((pc, 0x154)) if self.record_output => {
-                self.place_window_text(vm, pc).map(|()| true)
-            }
-            Some((pc, command @ (0x101..=0x107 | 0x10c..=0x110 | 0x113 | 0x11a))) => {
-                self.text_setter(vm, pc, command).map(|()| true)
-            }
+        match command {
+            0x10b => self.place_text(vm, pc).map(|()| true),
+            0x154 => self.place_window_text(vm, pc).map(|()| true),
+            0x38b => self
+                .auxiliary_content(&mut Call::new(vm, pc, command))
+                .map(|()| true),
             _ => Ok(false),
         }
     }
+
+    pub(crate) fn handle_text_state(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let (pc, command) = (call.pc, call.command);
+        match command {
+            0x100 => return self.create_text(call),
+            0x101..=0x107 | 0x10c..=0x110 | 0x113 | 0x11a => return self.text_setter(call),
+            0x114..=0x117 | 0x11e => return self.text_command(call),
+            0x112 => return self.measure_layout(call),
+            0x119 => return self.encoded_length(call),
+            0x11f => return self.measure(call),
+            0x380 => return self.create_auxiliary_text(call),
+            0x38c | 0x390 | 0x3a0 => return self.auxiliary_content(call),
+            0x39c | 0x39f => return self.handle_auxiliary_motion(call),
+            _ => {}
+        }
+        if command == 0x382 {
+            let slot = call.argument(4, "auxiliary slot")?;
+            if slot >= AUXILIARY_TEXTS as u32 {
+                return Err(call.error("auxiliary text group slot outside 0..7"));
+            }
+            call.complete(0x4004)?;
+            self.auxiliary_texts[slot as usize] = None;
+            return Ok(());
+        }
+        // 0x1400736f0 / 0x140073820 / 0x1400738f0 / 0x1400739c0: independent
+        // and 0x140073bc0: auxiliary text setters; none changes system results.
+        let opcode = 0x2000 + command;
+        let count = match command {
+            0x389 | 0x39e => 3,
+            0x385 | 0x396 | 0x39a => 5,
+            0x386 | 0x398 | 0x39b => 1,
+            0x38e | 0x38f | 0x392 | 0x393 => 2,
+            _ => 4,
+        };
+        let mut args = [0; 5];
+        for (i, arg) in args.iter_mut().take(count).enumerate() {
+            *arg = call.argument(4 * (i + 1), text_argument_names(command)[i])?;
+        }
+        let slot = args[0] as usize;
+        if slot >= AUXILIARY_TEXTS {
+            return Err(error(pc, opcode, "auxiliary text group slot outside 0..7"));
+        }
+        if self.auxiliary_texts[slot].is_none() {
+            return Err(error(pc, opcode, "auxiliary text group is not created"));
+        }
+        call.complete(0x4000 | (count as u16 * 4))?;
+        let group = self.auxiliary_texts[slot]
+            .as_mut()
+            .expect("validated group");
+        match command {
+            0x386 => group.clear_content(),
+            0x39b => {
+                call.vm
+                    .state_mut()
+                    .set_system_integer(
+                        0,
+                        u32::from(group.word(368).expect("modeled activity") != 0),
+                    )
+                    .expect("result exists");
+            }
+            0x398 | 0x39e => {
+                let values = if command == 0x398 {
+                    group.position()
+                } else {
+                    group.clamp_position(args[1], args[2])
+                };
+                for (slot, value) in [1, 2].into_iter().zip(values) {
+                    call.vm
+                        .state_mut()
+                        .set_system_integer(slot, value)
+                        .expect("result exists");
+                }
+            }
+            0x396 => group.set_bounds([args[1], args[2], args[3], args[4]]),
+            0x39a => group.set_position_bounds([args[1], args[2], args[3], args[4]]),
+            0x385 => group.set_layout([args[1], args[2], args[3], args[4]]),
+            0x389 => group.set_colors(args[1], args[2]),
+            0x38e => group.set_field_148(args[1]),
+            0x392 => group.set_field_140(args[1]),
+            0x393 => group.set_field_144(args[1]),
+            0x38f => group.set_layer(args[1]),
+            _ => group.set_text_parameters(args[1], args[2], args[3]),
+        }
+        Ok(())
+    }
+
     pub(crate) fn handle_window(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
         match call.command {
             0xec => self.scale(call),
@@ -650,12 +641,8 @@ impl MessageHost {
     /// (0x140074210, 0x4004). SP-4 is the group slot, SP-8 the string or pen x, SP-12 pen y.
     /// A missing group only sets +12056 bit 0x1000, which is not modeled. Text output is
     /// recorded only in the explicit text-recording mode, as for 0x2152.
-    fn auxiliary_content(
-        &mut self,
-        vm: &mut Machine<'_>,
-        pc: usize,
-        command: u16,
-    ) -> Result<(), DecodeError> {
+    fn auxiliary_content(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let (pc, command) = (call.pc, call.command);
         let opcode = 0x2000 + command;
         let count = match command {
             0x38c => 3,
@@ -664,10 +651,7 @@ impl MessageHost {
         };
         let mut args = [0; 3];
         for (i, arg) in args.iter_mut().take(count).enumerate() {
-            *arg = vm
-                .stack()
-                .peek_u32(4 * (i + 1))
-                .map_err(|e| error(pc, opcode, e.0))?;
+            *arg = call.argument(4 * (i + 1), text_argument_names(call.command)[i])?;
         }
         let slot = args[0] as usize;
         let group = self
@@ -683,34 +667,35 @@ impl MessageHost {
             })?;
         match command {
             0x38b => {
-                let text = vm.resolve_string(args[1])?;
+                let text = call.vm.resolve_string(args[1])?;
                 let layout = group.layout(&text).map_err(|why| error(pc, opcode, why))?;
-                vm.complete_system(SystemResult(0x4008))?;
+                call.complete(0x4008)?;
                 self.auxiliary_texts[slot]
                     .as_mut()
                     .expect("validated")
                     .append(layout);
             }
             0x390 => {
-                let text = vm.resolve_string(args[1])?;
+                let text = call.vm.resolve_string(args[1])?;
                 let [lines, widest, last] =
                     group.measure(&text).map_err(|why| error(pc, opcode, why))?;
-                vm.complete_system(SystemResult(0x4008))?;
+                call.complete(0x4008)?;
                 for (index, value) in [(0, lines), (1, widest), (4, last)] {
-                    vm.state_mut()
+                    call.vm
+                        .state_mut()
                         .set_system_integer(index, value)
                         .expect("result exists");
                 }
             }
             0x38c => {
-                vm.complete_system(SystemResult(0x400c))?;
+                call.complete(0x400c)?;
                 self.auxiliary_texts[slot]
                     .as_mut()
                     .expect("validated")
                     .set_cursor(args[1], args[2]);
             }
             _ => {
-                vm.complete_system(SystemResult(0x4004))?;
+                call.complete(0x4004)?;
                 self.auxiliary_texts[slot]
                     .as_mut()
                     .expect("validated")
@@ -722,22 +707,16 @@ impl MessageHost {
     /// 0x140073280: slot, font name, glyph size, capacity; returns 0x4010 and
     /// system result 0 = object != null. Only the existing explicit default-font
     /// policy is supported; native font discovery and named faces remain errors.
-    fn create_auxiliary_text(
-        &mut self,
-        vm: &mut Machine<'_>,
-        pc: usize,
-    ) -> Result<(), DecodeError> {
+    fn create_auxiliary_text(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let pc = call.pc;
         let mut args = [0; 4];
         for (i, word) in args.iter_mut().enumerate() {
-            *word = vm
-                .stack()
-                .peek_u32(4 * (i + 1))
-                .map_err(|e| error(pc, 0x2380, e.0))?;
+            *word = call.argument(4 * (i + 1), text_argument_names(call.command)[i])?;
         }
         if args[0] >= AUXILIARY_TEXTS as u32 {
             return Err(error(pc, 0x2380, "auxiliary text group slot outside 0..7"));
         }
-        if !vm.resolve_string(args[1])?.is_empty() {
+        if !call.vm.resolve_string(args[1])?.is_empty() {
             return Err(error(
                 pc,
                 0x2380,
@@ -745,8 +724,9 @@ impl MessageHost {
             ));
         }
         let candidate = AuxiliaryText::new(args[2], args[3]).map_err(|e| error(pc, 0x2380, e.0))?;
-        vm.complete_system(SystemResult(0x4010))?;
-        vm.state_mut()
+        call.complete(0x4010)?;
+        call.vm
+            .state_mut()
             .set_system_integer(0, 1)
             .expect("slot 0 exists");
         let slot = args[0] as usize;
@@ -914,19 +894,10 @@ impl MessageHost {
     /// - 0x211e (0x14005afd0): copies the strings SP-8 and SP-12 into the 64-byte +336 and
     ///   +400 buffers with lstrcpyA, sets +332 = SP-16, clears +464 and the +528/+532 layout
     ///   counters and sets +328 = 1; pops 16.
-    fn text_command(
-        &mut self,
-        vm: &mut Machine<'_>,
-        pc: usize,
-        command: u16,
-    ) -> Result<(), DecodeError> {
+    fn text_command(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
-        let word = |distance| {
-            vm.stack()
-                .peek_u32(distance)
-                .map_err(|e| error(pc, op, e.0))
-        };
-        let index = word(4)? as i32;
+        let index = call.argument(4, text_argument_names(call.command)[0])? as i32;
         if index < 0 {
             return Err(error(
                 pc,
@@ -936,8 +907,14 @@ impl MessageHost {
         }
         let index = index as usize;
         let rules = if command == 0x11e {
-            let hanging = vm.resolve_string(word(8)?)?;
-            let inseparable = vm.resolve_string(word(12)?)?;
+            let hanging = {
+                let reference = call.argument(8, text_argument_names(call.command)[1])?;
+                call.vm.resolve_string(reference)?
+            };
+            let inseparable = {
+                let reference = call.argument(12, text_argument_names(call.command)[2])?;
+                call.vm.resolve_string(reference)?
+            };
             if hanging.len() >= 64 || inseparable.len() >= 64 {
                 return Err(error(
                     pc,
@@ -946,14 +923,14 @@ impl MessageHost {
                 ));
             }
             Some(LineBreakRules {
-                max_overflow: word(16)? as i32,
+                max_overflow: call.argument(16, text_argument_names(call.command)[3])? as i32,
                 hanging,
                 inseparable,
             })
         } else {
             None
         };
-        let value = word(8)?;
+        let value = call.argument(8, text_argument_names(call.command)[1])?;
         if self.text(index).is_none() {
             return Err(error(
                 pc,
@@ -961,7 +938,7 @@ impl MessageHost {
                 "text object index outside 0..11 or without an object sets an unmodeled flag",
             ));
         }
-        vm.complete_system(SystemResult(if rules.is_some() { 0x4010 } else { 0x4008 }))?;
+        call.complete(if rules.is_some() { 0x4010 } else { 0x4008 })?;
         let text = self.texts[index].as_mut().expect("checked above");
         match command {
             0x114 => text.ruby = value != 0,
@@ -985,13 +962,9 @@ impl MessageHost {
     /// (+324) sizes the glyph texture in 0x14005a6a0: 0 and 196 (0x215d's value) both give
     /// a 1024x2048 texture; other capacities are rejected because textures are not modeled.
     /// Replacing a text object a window caches (+2528) would leave that window stale.
-    fn create_text(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
-        let word = |distance| {
-            vm.stack()
-                .peek_u32(distance)
-                .map_err(|e| error(pc, 0x2100, e.0))
-        };
-        let index = word(4)? as i32;
+    fn create_text(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let pc = call.pc;
+        let index = call.argument(4, text_argument_names(call.command)[0])? as i32;
         if index < 0 {
             return Err(error(
                 pc,
@@ -1007,10 +980,15 @@ impl MessageHost {
                 "text object index outside 0..11 sets an unmodeled flag",
             ));
         }
-        if !vm.resolve_string(word(8)?)?.is_empty() {
+        if !{
+            let reference = call.argument(8, text_argument_names(call.command)[1])?;
+            call.vm.resolve_string(reference)?
+        }
+        .is_empty()
+        {
             return Err(error(pc, 0x2100, "font face selection is not modeled"));
         }
-        let glyph_capacity = word(12)?;
+        let glyph_capacity = call.argument(12, text_argument_names(call.command)[2])?;
         if !matches!(glyph_capacity, 0 | 196) {
             return Err(error(
                 pc,
@@ -1025,8 +1003,9 @@ impl MessageHost {
                 "replacing a text object a window uses leaves a dangling pointer",
             ));
         }
-        vm.complete_system(SystemResult(0x400c))?;
-        vm.state_mut()
+        call.complete(0x400c)?;
+        call.vm
+            .state_mut()
             .set_system_integer(0, 1)
             .expect("slot 0 exists");
         let face = self.font_slot(index);
@@ -1076,12 +1055,8 @@ impl MessageHost {
     ///   0x210f (0x14005ac30): +132 decoration. 0x2110 (0x14005ac70): +152 layer, also on
     ///   the scene object. 0x2113 (0x14005ac50): +124 outline mode, raw. 0x211a /
     ///   0x140073070 (0x14002e860, as 0x2155): +128 glyph parameter, raw.
-    fn text_setter(
-        &mut self,
-        vm: &mut Machine<'_>,
-        pc: usize,
-        command: u16,
-    ) -> Result<(), DecodeError> {
+    fn text_setter(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
         let count = match command {
             0x101 | 0x104 => 1,
@@ -1092,10 +1067,7 @@ impl MessageHost {
         };
         let mut words = [0i32; 5];
         for (i, word) in words.iter_mut().take(count).enumerate() {
-            *word = vm
-                .stack()
-                .peek_u32(4 + 4 * i)
-                .map_err(|e| error(pc, op, e.0))? as i32;
+            *word = call.argument(4 + 4 * i, text_argument_names(call.command)[i])? as i32;
         }
         let [index, a, b, c, d] = words;
         if index < 0 {
@@ -1124,7 +1096,7 @@ impl MessageHost {
                     "freeing a text object a window uses leaves a dangling pointer",
                 ));
             }
-            vm.complete_system(SystemResult(0x4004))?;
+            call.complete(0x4004)?;
             self.texts[index] = None;
             return Ok(());
         }
@@ -1136,7 +1108,7 @@ impl MessageHost {
             ));
         }
         let face = if command == 0x106 {
-            let face = vm.resolve_string(a as u32)?;
+            let face = call.vm.resolve_string(a as u32)?;
             if face.len() >= 32 || face.contains(&0) {
                 return Err(error(pc, op, "font face exceeds a LOGFONT name"));
             }
@@ -1152,7 +1124,7 @@ impl MessageHost {
                 Arc::from(face.as_slice())
             }
         });
-        vm.complete_system(SystemResult(0x4000 + 4 * count as u16))?;
+        call.complete(0x4000 + 4 * count as u16)?;
         let text = self.texts[index].as_mut().expect("checked above");
         match command {
             0x102 => text.position = [a, b],
@@ -1323,19 +1295,21 @@ impl MessageHost {
     }
     /// 0x2119: encoded display-byte count, without layout or text state changes.
     /// Build-specific evidence: docs/games/chronoclock/vm-semantics.md.
-    fn encoded_length(&self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
+    fn encoded_length(&self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let pc = call.pc;
         let fail = |why| error(pc, 0x2119, why);
-        let index = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
-        let reference = vm.stack().peek_u32(8).map_err(|e| fail(e.0))?;
-        let bytes = vm.resolve_string(reference)?;
+        let index = call.argument(4, text_argument_names(call.command)[0])?;
+        let reference = call.argument(8, text_argument_names(call.command)[1])?;
+        let bytes = call.vm.resolve_string(reference)?;
         if self.text(index as usize).is_none() {
             return Err(fail(
                 "text count needs an existing text object in slots 0..11",
             ));
         }
         let count = output::encoded_length(&bytes).map_err(fail)?;
-        vm.complete_system(SystemResult(0x4008))?;
-        vm.state_mut()
+        call.complete(0x4008)?;
+        call.vm
+            .state_mut()
             .set_system_integer(0, count)
             .expect("result exists");
         Ok(())
@@ -1343,11 +1317,12 @@ impl MessageHost {
 
     /// 0x140072ed0 -> 0x14005b360: SP-4 text index, SP-8 string reference.
     /// Read-only layout query: results 0/1/4 = lines/max bytes/final bytes; pops 8.
-    fn measure_layout(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
+    fn measure_layout(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let pc = call.pc;
         let fail = |why| error(pc, 0x2112, why);
-        let index = vm.stack().peek_u32(4).map_err(|e| fail(e.0))? as usize;
-        let reference = vm.stack().peek_u32(8).map_err(|e| fail(e.0))?;
-        let bytes = vm.resolve_string(reference)?;
+        let index = call.argument(4, text_argument_names(call.command)[0])? as usize;
+        let reference = call.argument(8, text_argument_names(call.command)[1])?;
+        let bytes = call.vm.resolve_string(reference)?;
         let text = self
             .text(index)
             .ok_or_else(|| fail("text layout needs an existing text object in slots 0..11"))?;
@@ -1359,9 +1334,10 @@ impl MessageHost {
                 "text layout ruby group overwrites the caller's stack cookie",
             ));
         }
-        vm.complete_system(SystemResult(0x4008))?;
+        call.complete(0x4008)?;
         for (slot, value) in [(0, counts[0]), (1, counts[1]), (4, counts[2])] {
-            vm.state_mut()
+            call.vm
+                .state_mut()
                 .set_system_integer(slot, value)
                 .expect("known result slot");
         }
@@ -1370,14 +1346,13 @@ impl MessageHost {
 
     /// 0x1400731d0 -> 0x14005ca80: SP-4 text index, SP-8 string reference.
     /// System results 0/1/2/4 = success/max count/lines/last count; pops 8.
-    fn measure(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
-        let word = |distance| {
-            vm.stack()
-                .peek_u32(distance)
-                .map_err(|e| error(pc, 0x211f, e.0))
+    fn measure(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let pc = call.pc;
+        let index = call.argument(4, text_argument_names(call.command)[0])? as usize;
+        let bytes = {
+            let reference = call.argument(8, text_argument_names(call.command)[1])?;
+            call.vm.resolve_string(reference)?
         };
-        let index = word(4)? as usize;
-        let bytes = vm.resolve_string(word(8)?)?;
         let text = self.text(index).ok_or_else(|| {
             error(
                 pc,
@@ -1386,13 +1361,14 @@ impl MessageHost {
             )
         })?;
         let (counts, scratch) = measure::measure(text, &bytes).map_err(|e| error(pc, 0x211f, e))?;
-        vm.complete_system(SystemResult(0x4008))?;
+        call.complete(0x4008)?;
         self.texts[index]
             .as_mut()
             .expect("checked above")
             .layout_scratch = scratch;
         for (slot, value) in [(0, 1), (1, counts[0]), (2, counts[1]), (4, counts[2])] {
-            vm.state_mut()
+            call.vm
+                .state_mut()
                 .set_system_integer(slot, value)
                 .expect("known result slot");
         }
@@ -2284,5 +2260,73 @@ fn window_argument_names(command: u16) -> &'static [&'static str] {
         ],
         0x1d1 => &["window slot", "child slot", "start frame"],
         _ => unreachable!("registered window argument schema"),
+    }
+}
+
+fn is_text_state_command(command: u16) -> bool {
+    matches!(command, 0x100..=0x107 | 0x10c..=0x110 | 0x112..=0x117 | 0x119..=0x11a | 0x11e..=0x11f | 0x380 | 0x382 | 0x385..=0x387 | 0x389 | 0x38c | 0x38e..=0x390 | 0x392..=0x393 | 0x396 | 0x398 | 0x39a..=0x39c | 0x39e..=0x3a0)
+}
+pub(super) fn text_argument_names(command: u16) -> &'static [&'static str] {
+    match command {
+        0x100 => &["text slot", "font face", "glyph capacity"],
+        0x101 | 0x104 => &["text slot"],
+        0x102 | 0x10c => &["text slot", "x", "y"],
+        0x103 => &["text slot", "left", "top", "right", "bottom"],
+        0x105 => &[
+            "text slot",
+            "glyph size",
+            "character spacing",
+            "line spacing",
+        ],
+        0x106 => &["text slot", "font face"],
+        0x107 => &["text slot", "text color", "decoration color"],
+        0x10d => &["text slot", "reveal mode", "reveal interval"],
+        0x10e => &["text slot", "character delay"],
+        0x10f => &["text slot", "decoration"],
+        0x110 => &["text slot", "layer"],
+        0x113 => &["text slot", "outline mode"],
+        0x114 | 0x117 => &["text slot", "ruby enabled"],
+        0x115 => &["text slot", "ruby size"],
+        0x116 => &["text slot", "ruby spacing"],
+        0x11a => &["text slot", "glyph parameter"],
+        0x112 | 0x119 | 0x11f => &["text slot", "text"],
+        0x11e => &[
+            "text slot",
+            "hanging characters",
+            "inseparable characters",
+            "max overflow",
+        ],
+        0x380 => &[
+            "auxiliary slot",
+            "font face",
+            "glyph size",
+            "glyph capacity",
+        ],
+        0x382 | 0x386 | 0x398 | 0x39b | 0x3a0 => &["auxiliary slot"],
+        0x383 | 0x38c | 0x39e => &["auxiliary slot", "x", "y"],
+        0x385 => &["auxiliary slot", "x", "y", "width", "height"],
+        0x387 => &[
+            "auxiliary slot",
+            "glyph size",
+            "character spacing",
+            "line spacing",
+        ],
+        0x389 => &["auxiliary slot", "text color", "decoration color"],
+        0x38b | 0x390 => &["auxiliary slot", "text"],
+        0x38e => &["auxiliary slot", "gradient"],
+        0x38f => &["auxiliary slot", "layer"],
+        0x392 => &["auxiliary slot", "outline mode"],
+        0x393 => &["auxiliary slot", "outline color"],
+        0x396 | 0x39a => &["auxiliary slot", "left", "right", "top", "bottom"],
+        0x39c => &["auxiliary slot", "delta x", "delta y", "duration"],
+        0x39f => &[
+            "auxiliary slot",
+            "mode",
+            "delta x",
+            "delta y",
+            "extra",
+            "duration",
+        ],
+        _ => unreachable!("registered text argument schema"),
     }
 }
