@@ -123,8 +123,8 @@ fn decode_bmp(bytes: &[u8]) -> Result<RgbaImage, &'static str> {
 
 /// Command inheritance does not establish the wire format of gameplay snapshots.
 /// The independently inspected 20150405 subset uses text v2, and 20171114 uses v3
-/// (docs/games/aoitori/vm-semantics.md). Special image records and active particle
-/// effects remain rejected by their existing encoders and decoders.
+/// (docs/games/aoitori/vm-semantics.md). Effect configurations have an independent
+/// build binding; unknown image, collision-mesh and effect records remain rejected.
 pub fn snapshot_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
     snapshot_layout(profile).is_some()
 }
@@ -139,6 +139,10 @@ fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLa
     } else {
         None
     }
+}
+
+fn effect_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
+    profile.id == "cmvs-20171114" && profile.base.as_deref() == Some("cmvs-20160201")
 }
 
 impl Startup<'_> {
@@ -177,10 +181,7 @@ impl Startup<'_> {
         vm: crate::machine::VmImage,
     ) -> Result<(EngineSnapshot, Vec<u8>), Box<dyn Error>> {
         self.require_snapshot_layout()?;
-        if !self.scene.particle_effects().is_empty()
-            || !self.scene.falling_effects().is_empty()
-            || !self.scene.collision_effects().is_empty()
-            || !self.scene.fragment_effects().is_empty()
+        if self.scene.has_effect_pools() && !effect_layout_supported(self.gate.selection().profile)
         {
             return Err("saving active particle effects is not implemented".into());
         }
@@ -205,6 +206,9 @@ impl Startup<'_> {
             .map(|(&slot, object)| Ok((slot, SavedScene::from_object(object)?)))
             .collect::<Result<BTreeMap<_, _>, crate::FormatError>>()?;
         let mut raw_objects = BTreeMap::new();
+        for (slot, record) in self.scene.saved_effect_pools()? {
+            raw_objects.insert((0x800, slot), record);
+        }
         raw_objects.insert((0x540, 0), self.history.saved());
         for (slot, record) in self.buttons.saved_groups() {
             raw_objects.insert((0x8c0, slot), record);
@@ -429,10 +433,7 @@ impl Startup<'_> {
         backend: &mut impl PlatformBackend,
     ) -> Result<(), Box<dyn Error>> {
         let layout = self.require_snapshot_layout()?;
-        if !self.scene.particle_effects().is_empty()
-            || !self.scene.falling_effects().is_empty()
-            || !self.scene.collision_effects().is_empty()
-            || !self.scene.fragment_effects().is_empty()
+        if self.scene.has_effect_pools() && !effect_layout_supported(self.gate.selection().profile)
         {
             return Err("loading over active particle effects is not implemented".into());
         }
@@ -488,7 +489,7 @@ impl Startup<'_> {
         if snapshot
             .raw_objects
             .keys()
-            .any(|&(tag, _)| !matches!(tag, 0x6a0 | 0x540 | 0x8c0 | 0x8c8 | 0x8e8))
+            .any(|&(tag, _)| !matches!(tag, 0x6a0 | 0x800 | 0x540 | 0x8c0 | 0x8c8 | 0x8e8))
         {
             return Err("saved camera-sequence objects are not implemented".into());
         }
@@ -512,6 +513,16 @@ impl Startup<'_> {
         // Candidate hosts first: images, windows and texts must all rebuild.
         let mut budget = crate::snapshot::RESTORE_PIXELS;
         let mut images = self.images.with_paths(self.bootstrap.paths());
+        let effect_records: Vec<_> = snapshot
+            .raw_objects
+            .iter()
+            .filter(|((tag, _), _)| *tag == 0x800)
+            .map(|(&(_, slot), body)| (slot, body.as_slice()))
+            .collect();
+        if !effect_records.is_empty() && !effect_layout_supported(self.gate.selection().profile) {
+            return Err("saved particle record layout is not implemented for this profile".into());
+        }
+        let mut restored_random = self.random.clone();
         let mut objects = BTreeMap::new();
         for (&slot, saved) in &snapshot.objects {
             objects.insert(slot, saved.load(&mut images, &mut budget)?);
@@ -528,6 +539,12 @@ impl Startup<'_> {
                 windows[slot] = Some(saved.load(&mut images, &mut budget)?);
             }
         }
+        let effects = crate::scene::SceneHost::load_effect_pools(
+            &effect_records,
+            &mut images,
+            &mut restored_random,
+            &mut budget,
+        )?;
         // Records 0x8e8 follow 0x700 and bind to the objects just rebuilt.
         let movie_records: Vec<_> = snapshot
             .raw_objects
@@ -598,6 +615,10 @@ impl Startup<'_> {
             mask,
             strip,
         );
+        self.scene.falling_effects = effects.falling_effects;
+        self.scene.particle_effects = effects.particle_effects;
+        self.scene.collision_effects = effects.collision_effects;
+        self.random = restored_random;
         self.messages.restore(texts, windows);
         let word = |at: usize| u32::from_le_bytes(header[at..at + 4].try_into().unwrap());
         self.save_info.restore([word(528), 0, word(536)]);
@@ -818,12 +839,18 @@ mod layout_tests {
             ("cmvs-20160201", SnapshotLayout::TextV3),
         ] {
             assert_eq!(snapshot_layout(registry.profile(id).unwrap()), Some(layout));
+            assert_eq!(
+                effect_layout_supported(registry.profile(id).unwrap()),
+                id == "cmvs-20171114"
+            );
         }
         let mut profile = registry.profile("cmvs-20171114").unwrap().clone();
         profile.id = "uninspected-derived".into();
         assert_eq!(snapshot_layout(&profile), None);
+        assert!(!effect_layout_supported(&profile));
         profile.id = "cmvs-20171114".into();
         profile.base = Some("uninspected-base".into());
         assert_eq!(snapshot_layout(&profile), None);
+        assert!(!effect_layout_supported(&profile));
     }
 }

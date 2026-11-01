@@ -1705,6 +1705,23 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
     for (op, word) in (0x2261..=0x2264).zip(&view_words[3..]) {
         commands::command(&mut code, op, &[*word]);
     }
+    if profile.is_some() {
+        commands::command(&mut code, 0x2011, &[0, 10]);
+        commands::command(
+            &mut code,
+            0x22a5,
+            &[
+                0,
+                0,
+                0,
+                40.0f32.to_bits(),
+                20.0f32.to_bits(),
+                0,
+                2000.0f32.to_bits(),
+                2,
+            ],
+        );
+    }
     let snapshot_pc = code.len();
     code.extend(0x22b2u16.to_le_bytes());
     commands::command(&mut code, 0x2260, &[0; 3]);
@@ -1715,9 +1732,12 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
     let root = Root::new(
         &format!("snapshot-slots-{}", profile.unwrap_or("synthetic")),
         &code,
-        b"Synthetic ",
+        b"Synthetic data\\pack\\ ",
     );
     fs::write(root.0.join("save/system.dat"), auto_resume_save(0x12345678)).unwrap();
+    if profile.is_some() {
+        fs::write(root.0.join("data/pack/Synthetic"), b"NONE").unwrap();
+    }
     let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
         "cmvs-runner-slots-{}-{}",
         std::process::id(),
@@ -1765,6 +1785,14 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
         (snapshot.active_slot, snapshot.pc, snapshot.repeat_count),
         (0, snapshot_pc as u32 + 2, 0)
     );
+    if profile.is_some() {
+        let effect =
+            cmvs_rs::snapshot::SavedEffect::decode(&snapshot.raw_objects[&(0x800, 0)]).unwrap();
+        assert_eq!(effect.image_name(), b"Synthetic");
+        assert!(
+            matches!(effect, cmvs_rs::snapshot::SavedEffect::Particles { words, .. } if words[5] == 2)
+        );
+    }
     assert_eq!(snapshot.variables.integers()[5], 42);
     assert_eq!(snapshot.variables.packed_bits()[0] & 1, 1);
     assert_eq!(snapshot.texts[7].as_ref().unwrap().glyphs.len(), 9);
@@ -1796,6 +1824,14 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
     assert_eq!(run.machine().state().integer(5), Some(42));
     assert_eq!(run.machine().state().bit(0), Some(true));
     assert_eq!(run.camera().view(0).unwrap().words, view_words);
+    if profile.is_some() {
+        assert_eq!(run.scene().particle_effects()[&0].particles.len(), 2);
+        assert_eq!(
+            run.inspect_snapshot().unwrap().raw_objects[&(0x800, 0)],
+            snapshot.raw_objects[&(0x800, 0)]
+        );
+    }
+
     let restored = run.scene().object(20).unwrap().image.as_ref().unwrap();
     assert!(restored.alpha && !restored.surface && restored.name.is_empty());
     assert!(
@@ -1855,8 +1891,46 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
     let before = run.inspect_snapshot().unwrap().encode().unwrap();
     assert!(run.load_slot(4, &mut backend).is_err());
     assert_eq!(run.inspect_snapshot().unwrap().encode().unwrap(), before);
+    if profile.is_some() {
+        let mut malformed = snapshot.clone();
+        malformed.raw_objects.get_mut(&(0x800, 0)).unwrap()[24..28]
+            .copy_from_slice(&u32::MAX.to_le_bytes());
+        let bytes = Csv2Save::encode(
+            header,
+            &malformed.encode().unwrap(),
+            &save.auxiliary,
+            &save.script_image,
+        )
+        .unwrap();
+        fs::write(directory.join("save004.dat"), bytes).unwrap();
+        let particles: Vec<_> = run.scene().particle_effects()[&0]
+            .particles
+            .iter()
+            .map(|p| p.words)
+            .collect();
+        let pc = run.machine().pc();
+        assert!(
+            run.load_slot(4, &mut backend)
+                .unwrap_err()
+                .to_string()
+                .contains("saved particle count")
+        );
+        assert_eq!(run.machine().pc(), pc);
+        assert_eq!(run.inspect_snapshot().unwrap().encode().unwrap(), before);
+        assert_eq!(
+            run.scene().particle_effects()[&0]
+                .particles
+                .iter()
+                .map(|p| p.words)
+                .collect::<Vec<_>>(),
+            particles
+        );
+    }
     drop(run);
     fs::remove_dir_all(&directory).unwrap();
+    if profile.is_some() {
+        fs::remove_file(root.0.join("data/pack/Synthetic")).unwrap();
+    }
 }
 
 #[test]

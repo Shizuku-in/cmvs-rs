@@ -19,6 +19,7 @@ pub struct Particle {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ParticleEffect {
+    pub(crate) template: Option<crate::snapshot::SavedEffect>,
     pub mode: u32,
     pub parameters: [u32; 4],
     /// Pool image is shared by its independent objects, rather than copied per particle.
@@ -53,7 +54,7 @@ pub(super) fn range(mode: u32) -> f32 {
 }
 
 impl ParticleEffect {
-    fn new(
+    pub(crate) fn new(
         mode: u32,
         parameters: [u32; 4],
         count: u32,
@@ -124,6 +125,7 @@ impl ParticleEffect {
             });
         }
         Self {
+            template: None,
             mode,
             parameters,
             pool,
@@ -204,6 +206,19 @@ impl SceneHost {
                 .error("particle parameters need finite values and positive speed")
                 .into());
         }
+        let template = crate::snapshot::SavedEffect::name_field(&name)
+            .ok()
+            .map(|name| crate::snapshot::SavedEffect::Particles {
+                words: [
+                    mode,
+                    parameters[0],
+                    parameters[1],
+                    parameters[2],
+                    parameters[3],
+                    count,
+                ],
+                name,
+            });
         let image = image::load(source, &name)?.map(|decoded| ObjectImage {
             filter: None,
             name,
@@ -216,7 +231,8 @@ impl SceneHost {
             ..Default::default()
         };
         let mut candidate_random = random.clone();
-        let effect = ParticleEffect::new(mode, parameters, count, pool, &mut candidate_random);
+        let mut effect = ParticleEffect::new(mode, parameters, count, pool, &mut candidate_random);
+        effect.template = template;
         call.complete(0x4020)?;
         self.falling_effects.remove(&(slot as u8));
         self.collision_effects.remove(&(slot as u8));

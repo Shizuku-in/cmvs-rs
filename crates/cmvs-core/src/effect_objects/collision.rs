@@ -55,6 +55,7 @@ pub struct CollisionParticle {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct CollisionEffect {
+    pub(crate) template: Option<crate::snapshot::SavedEffect>,
     pub mode: u32,
     pub parameters: [u32; 2],
     pub pool: SceneObject,
@@ -108,6 +109,7 @@ impl CollisionEffect {
             })
             .collect();
         Self {
+            template: None,
             mode,
             parameters,
             pool,
@@ -262,6 +264,12 @@ impl SceneHost {
             return Err(call.error("collision particles need bounded count and finite parameters with positive speed").into());
         }
         self.collision_triangles().map_err(|e| call.error(e))?;
+        let template = crate::snapshot::SavedEffect::name_field(&name)
+            .ok()
+            .map(|name| crate::snapshot::SavedEffect::Collision {
+                words: [mode, parameters[0], parameters[1], count],
+                name,
+            });
         let image = image::load(source, &name)?.map(|decoded| ObjectImage {
             filter: None,
             name,
@@ -274,7 +282,8 @@ impl SceneHost {
             ..Default::default()
         };
         let mut candidate_random = random.clone();
-        let effect = CollisionEffect::new(mode, parameters, count, pool, &mut candidate_random);
+        let mut effect = CollisionEffect::new(mode, parameters, count, pool, &mut candidate_random);
+        effect.template = template;
         call.complete(0x4018)?;
         self.particle_effects.remove(&(slot as u8));
         self.falling_effects.remove(&(slot as u8));
@@ -418,6 +427,7 @@ mod tests {
         scene.particle_effects.insert(
             1,
             crate::effect_objects::ParticleEffect {
+                template: None,
                 mode: 0,
                 parameters: [0; 4],
                 pool: SceneObject::default(),

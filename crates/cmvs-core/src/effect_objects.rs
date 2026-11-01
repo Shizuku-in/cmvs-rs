@@ -6,6 +6,7 @@ mod fragments;
 pub use collision::{CollisionEffect, CollisionParticle};
 pub use fragments::{Fragment, FragmentEffect};
 mod particles;
+mod snapshot;
 pub use falling::{FallingEffect, FallingParticle};
 pub use particles::{Particle, ParticleEffect};
 

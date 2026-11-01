@@ -25,6 +25,7 @@ impl FallingParticle {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct FallingEffect {
+    pub(crate) template: Option<crate::snapshot::SavedEffect>,
     /// Width, height, nominal fall duration and fully opaque distance, as f32 bits.
     pub parameters: [u32; 4],
     pub follow: bool,
@@ -56,6 +57,7 @@ impl FallingEffect {
             })
             .collect();
         Self {
+            template: None,
             parameters,
             follow,
             image,
@@ -135,7 +137,8 @@ impl SceneHost {
             call.argument(24, "opaque distance")?,
         ];
         let count = call.argument(28, "falling particle count")?;
-        let follow = call.argument(32, "follow view")? != 0;
+        let follow_word = call.argument(32, "follow view")?;
+        let follow = follow_word != 0;
         let name = call.vm.resolve_string(name_id)?;
         if slot >= 4 {
             call.complete(0x4020)?;
@@ -148,6 +151,19 @@ impl SceneHost {
         {
             return Err(call.error("falling effect needs bounded count and finite positive dimensions and duration").into());
         }
+        let template = crate::snapshot::SavedEffect::name_field(&name)
+            .ok()
+            .map(|name| crate::snapshot::SavedEffect::Falling {
+                words: [
+                    parameters[0],
+                    parameters[1],
+                    parameters[2],
+                    parameters[3],
+                    count,
+                    follow_word,
+                ],
+                name,
+            });
         let image = image::load(source, &name)?.map(|decoded| ObjectImage {
             filter: None,
             name,
@@ -156,7 +172,9 @@ impl SceneHost {
             surface: false,
         });
         let mut candidate_random = random.clone();
-        let effect = FallingEffect::new(parameters, count, follow, image, &mut candidate_random);
+        let mut effect =
+            FallingEffect::new(parameters, count, follow, image, &mut candidate_random);
+        effect.template = template;
         call.complete(0x4020)?;
         self.particle_effects.remove(&(slot as u8));
         self.collision_effects.remove(&(slot as u8));

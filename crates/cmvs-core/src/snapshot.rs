@@ -5,10 +5,12 @@ use crate::{
 };
 use std::ops::Range;
 
+mod effect;
 mod engine;
 mod variables;
 mod visual;
 mod vm_state;
+pub use effect::SavedEffect;
 pub use engine::EngineSnapshot;
 pub use variables::LocalVariables;
 pub(crate) use visual::RESTORE_PIXELS;

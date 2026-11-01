@@ -214,6 +214,7 @@ mod tests {
         run.scene.particle_effects.insert(
             0,
             crate::effect_objects::ParticleEffect {
+                template: None,
                 mode: 0,
                 parameters: [0; 4],
                 pool: Default::default(),
@@ -251,6 +252,7 @@ mod tests {
                 run.scene.collision_effects.insert(
                     2,
                     crate::effect_objects::CollisionEffect {
+                        template: None,
                         mode: 0,
                         parameters: [0; 2],
                         pool: Default::default(),
@@ -261,6 +263,7 @@ mod tests {
                 run.scene.falling_effects.insert(
                     1,
                     crate::effect_objects::FallingEffect {
+                        template: None,
                         parameters: [0; 4],
                         follow: true,
                         image: None,
@@ -284,6 +287,7 @@ mod tests {
         run.scene.collision_effects.insert(
             2,
             crate::effect_objects::CollisionEffect {
+                template: None,
                 mode: 0,
                 parameters: [0; 2],
                 pool: Default::default(),
@@ -293,6 +297,7 @@ mod tests {
         run.scene.falling_effects.insert(
             1,
             crate::effect_objects::FallingEffect {
+                template: None,
                 parameters: [0; 4],
                 follow: true,
                 image: None,
