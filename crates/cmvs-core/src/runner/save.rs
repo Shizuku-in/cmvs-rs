@@ -122,8 +122,9 @@ fn decode_bmp(bytes: &[u8]) -> Result<RgbaImage, &'static str> {
 }
 
 /// Command inheritance does not establish the wire format of gameplay snapshots.
-/// The independently inspected 20150405 subset uses text v2; special common-image
-/// records and active scene effects remain rejected by their existing decoders.
+/// The independently inspected 20150405 subset uses text v2, and 20171114 uses v3
+/// (docs/games/aoitori/vm-semantics.md). Special image records and active particle
+/// effects remain rejected by their existing encoders and decoders.
 pub fn snapshot_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
     snapshot_layout(profile).is_some()
 }
@@ -131,7 +132,9 @@ pub fn snapshot_layout_supported(profile: &crate::profile::EngineProfile) -> boo
 fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLayout> {
     if profile.id == "cmvs-20150405" && profile.base.as_deref() == Some("cmvs-20160201") {
         Some(SnapshotLayout::TextV2)
-    } else if profile.base.is_none() {
+    } else if profile.base.is_none()
+        || (profile.id == "cmvs-20171114" && profile.base.as_deref() == Some("cmvs-20160201"))
+    {
         Some(SnapshotLayout::TextV3)
     } else {
         None
@@ -800,4 +803,27 @@ fn replace_file(directory: &Path, name: &str, bytes: &[u8]) -> Result<(), Box<dy
         return Err(e.into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_layout_requires_an_independently_inspected_build() {
+        let registry = crate::profile::Registry::builtin();
+        for (id, layout) in [
+            ("cmvs-20150405", SnapshotLayout::TextV2),
+            ("cmvs-20171114", SnapshotLayout::TextV3),
+            ("cmvs-20160201", SnapshotLayout::TextV3),
+        ] {
+            assert_eq!(snapshot_layout(registry.profile(id).unwrap()), Some(layout));
+        }
+        let mut profile = registry.profile("cmvs-20171114").unwrap().clone();
+        profile.id = "uninspected-derived".into();
+        assert_eq!(snapshot_layout(&profile), None);
+        profile.id = "cmvs-20171114".into();
+        profile.base = Some("uninspected-base".into());
+        assert_eq!(snapshot_layout(&profile), None);
+    }
 }

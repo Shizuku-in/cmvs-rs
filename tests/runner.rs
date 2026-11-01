@@ -1678,6 +1678,15 @@ fn scenario_snapshot_failure_keeps_the_command_vm_and_image_unchanged() {
 
 #[test]
 fn scenario_snapshot_writes_a_slot_that_loads_back_with_backups() {
+    snapshot_slots_roundtrip(None);
+}
+
+#[test]
+fn aoitori_v3_snapshot_restores_text_scene_locals_and_backup_slots() {
+    snapshot_slots_roundtrip(Some("cmvs-20171114"));
+}
+
+fn snapshot_slots_roundtrip(profile: Option<&str>) {
     use cmvs_rs::{save::Csv2Save, snapshot::EngineSnapshot};
     // A load sets the window title from the base title 0x2160 gives.
     let mut code = string_call(0x2160);
@@ -1703,19 +1712,35 @@ fn scenario_snapshot_writes_a_slot_that_loads_back_with_backups() {
     system_call(&mut code, 0x22b6, &[3]);
     let end = code.len();
     code.extend(0x27ffu16.to_le_bytes());
-    let root = Root::new("snapshot-slots", &code, b"Synthetic ");
+    let root = Root::new(
+        &format!("snapshot-slots-{}", profile.unwrap_or("synthetic")),
+        &code,
+        b"Synthetic ",
+    );
     fs::write(root.0.join("save/system.dat"), auto_resume_save(0x12345678)).unwrap();
-    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("cmvs-runner-slots-{}", std::process::id()));
+    let directory = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "cmvs-runner-slots-{}-{}",
+        std::process::id(),
+        profile.unwrap_or("synthetic")
+    ));
     let _ = fs::remove_dir_all(&directory);
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let game = match profile {
+        Some(id) => Registry::builtin()
+            .identify_game(&root.0, Some(id))
+            .unwrap(),
+        None => root.game(),
+    };
+    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
     run.set_user_data_directory(&directory).unwrap();
     run.set_record_text(true);
     let mut backend = RecordingBackend::default();
     let run_to_end = |run: &mut Startup<'_>, backend: &mut RecordingBackend| {
         let mut captured = 0;
         loop {
+            if run.machine().pc() == end {
+                return captured;
+            }
             match run.tick(backend).unwrap() {
                 StartupEvent::Progress => {}
                 StartupEvent::Yield => run.advance_frame(400).unwrap(),
