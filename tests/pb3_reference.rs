@@ -1,8 +1,11 @@
+#[path = "support/shared_images.rs"]
+mod shared_images;
 use cmvs_rs::{
     image::{self, ImageSource},
     pb3,
     raster::RgbaImage,
 };
+use shared_images::SharedImages;
 use std::{collections::BTreeMap, error::Error};
 
 fn put(b: &mut [u8], at: usize, v: u32) {
@@ -402,13 +405,13 @@ fn reference_failure_preserves_pending_vm_stack_results_and_previous_image() {
     system(&mut vm);
     scene.try_handle(&mut vm).unwrap();
     system(&mut vm);
-    scene.try_handle_image(&mut vm, &mut source).unwrap();
+    scene.shared_image(&mut vm, &mut source).unwrap();
     system(&mut vm);
     let before = scene.objects().clone();
     let pc = vm.pc();
     let sp = vm.stack().len_bytes();
     vm.state_mut().set_system_integer(0, 123).unwrap();
-    assert!(scene.try_handle_image(&mut vm, &mut source).is_err());
+    assert!(scene.shared_image(&mut vm, &mut source).is_err());
     assert_eq!(vm.pc(), pc);
     assert_eq!(vm.pending_system(), Some((pc, 0x30)));
     assert_eq!(vm.stack().len_bytes(), sp);

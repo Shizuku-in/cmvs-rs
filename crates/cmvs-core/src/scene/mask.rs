@@ -16,7 +16,6 @@ use crate::{
     image::ImageSource,
     input::ActionInput,
     machine::{Machine, Step},
-    vm::SystemResult,
 };
 use std::error::Error;
 
@@ -227,22 +226,32 @@ impl SceneHost {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(false);
         };
-        let (channel, offset) = match channel(command) {
-            Some((channel, offset @ (0 | 3))) => (channel, offset),
-            _ => return Ok(false),
-        };
+        if !matches!(channel(command), Some((_, 0 | 3))) {
+            return Ok(false);
+        }
+        self.handle_mask(&mut Call::new(vm, pc, command), images)?;
+        Ok(true)
+    }
+
+    pub(crate) fn handle_mask(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        images: &mut dyn ImageSource,
+    ) -> Result<(), Box<dyn Error>> {
+        let (pc, command) = (call.pc, call.command);
+        let (channel, offset) = channel(command).expect("registered mask command");
         if offset == 3 {
-            vm.complete_system(SystemResult(0x4000))?;
+            call.complete(0x4000)?;
             self.finish_mask(channel);
-            return Ok(true);
+            return Ok(());
         }
         let op = command + 0x2000;
         let fail = |why| error(pc, op, why);
-        let mut args = [0u32; 5];
-        for (i, value) in args.iter_mut().enumerate() {
-            *value = vm.stack().peek_u32(4 * (i + 1)).map_err(|e| fail(e.0))?;
-        }
-        let [name, slot, duration, width, put] = args;
+        let name = call.argument(4, "mask name")?;
+        let slot = call.argument(8, "object slot")?;
+        let duration = call.argument(12, "duration")?;
+        let width = call.argument(16, "edge width")?;
+        let put = call.argument(20, "mode")?;
         let slot = u8::try_from(slot as i32)
             .ok()
             .filter(|slot| self.objects.contains_key(slot))
@@ -260,11 +269,11 @@ impl SceneHost {
         {
             return Err(fail("0x2234 would leave the previous object shaded (not modeled)").into());
         }
-        let name = vm.resolve_string(name)?;
+        let name = call.vm.resolve_string(name)?;
         let mask = load_image(images, name, pc, op)?.ok_or_else(|| {
             fail("undecodable mask leaves an unmodeled transition without shader")
         })?;
-        vm.complete_system(SystemResult(0x4014))?;
+        call.complete(0x4014)?;
         self.masks[channel] = Some(MaskTransition {
             put: put != 0,
             slot,
@@ -273,10 +282,11 @@ impl SceneHost {
             elapsed: 0,
             mask,
         });
-        vm.state_mut()
+        call.vm
+            .state_mut()
             .set_system_integer(0, 1)
             .expect("slot 0 exists");
-        Ok(true)
+        Ok(())
     }
 
     /// 0x222b / 0x140081170 and 0x2235 / 0x140081230 for their channel: system result 0 = 0;

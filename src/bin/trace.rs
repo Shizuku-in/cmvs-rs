@@ -350,38 +350,48 @@ fn run() -> Result<(), Box<dyn Error>> {
                 skip: message_flags.skip(),
                 ..SkipGate::default()
             };
-            let dispatched = cmvs_rs::dispatch::run(
-                resolved.semantics,
-                &mut machine,
-                &mut cmvs_rs::dispatch::Hosts {
-                    audio: platform_assets
-                        .is_some()
-                        .then_some(cmvs_rs::dispatch::AudioHosts {
-                            audio: &mut audio,
-                            backend: &mut audio_backend,
-                        }),
-                    waits: platform_assets
-                        .is_some()
-                        .then_some(cmvs_rs::dispatch::WaitHosts {
-                            scene: Some(&mut scene),
-                            camera: None,
-                            input: &mut input,
-                            gate: wait_gate,
+            let no_paths = BTreeMap::new();
+            let paths = bootstrap.as_ref().map_or(&no_paths, Bootstrap::paths);
+            let mut registered_images = images.as_mut().map(|images| images.with_paths(paths));
+            let mut hosts = cmvs_rs::dispatch::Hosts {
+                audio: platform_assets
+                    .is_some()
+                    .then_some(cmvs_rs::dispatch::AudioHosts {
+                        audio: &mut audio,
+                        backend: &mut audio_backend,
+                    }),
+                timers: platform_assets.is_some().then_some(&mut timers),
+                flags: platform_assets.is_some().then_some(&mut message_flags),
+                random: random.as_mut(),
+                settings: platform_assets.is_some().then_some(&mut settings),
+                history: platform_assets.is_some().then_some(&mut history),
+                strings: platform_assets.is_some(),
+                gesture: platform_assets.is_some().then_some(&mut gesture),
+                popup: platform_assets.is_some().then_some(&mut save_menu),
+                save_title: platform_assets.is_some().then_some(&mut save_title),
+                effect_objects: platform_assets.is_some(),
+                ..Default::default()
+            };
+            if cmvs_rs::dispatch::uses_images(command) {
+                hosts.images =
+                    registered_images
+                        .as_mut()
+                        .map(|source| cmvs_rs::dispatch::ImageHosts {
+                            scene: &mut scene,
+                            source,
                             change_images: false,
-                        }),
-                    timers: platform_assets.is_some().then_some(&mut timers),
-                    flags: platform_assets.is_some().then_some(&mut message_flags),
-                    random: random.as_mut(),
-                    settings: platform_assets.is_some().then_some(&mut settings),
-                    history: platform_assets.is_some().then_some(&mut history),
-                    strings: platform_assets.is_some(),
-                    gesture: platform_assets.is_some().then_some(&mut gesture),
-                    popup: platform_assets.is_some().then_some(&mut save_menu),
-                    save_title: platform_assets.is_some().then_some(&mut save_title),
-                    effect_objects: platform_assets.is_some(),
-                    ..Default::default()
-                },
-            )?;
+                        });
+            } else if platform_assets.is_some() {
+                hosts.waits = Some(cmvs_rs::dispatch::WaitHosts {
+                    scene: Some(&mut scene),
+                    camera: None,
+                    input: &mut input,
+                    gate: wait_gate,
+                    change_images: false,
+                });
+            }
+            let dispatched = cmvs_rs::dispatch::run(resolved.semantics, &mut machine, &mut hosts)?;
+
             if dispatched.is_some_and(cmvs_rs::dispatch::Flow::yields) {
                 let Some(delta) = frame_ms else {
                     println!(
@@ -422,6 +432,42 @@ fn run() -> Result<(), Box<dyn Error>> {
                     .expect("completed root command has an entry")
                     .capability;
                 match capability {
+                    Capability::SceneImages => {
+                        println!(
+                            "# scene image 0x{:04x}: system_integer[0]={:?} objects={:?}; decoded only, nothing drawn",
+                            command + 0x2000,
+                            machine.state().system_integer(0),
+                            scene
+                                .objects()
+                                .iter()
+                                .filter_map(|(slot, object)| object.image.as_ref().map(|image| (
+                                    slot,
+                                    image.name.escape_ascii().to_string(),
+                                    image.pixels.width(),
+                                    image.pixels.height(),
+                                    image.alpha
+                                )))
+                                .collect::<Vec<_>>()
+                        );
+                    }
+                    Capability::MaskImages => {
+                        let channel = if command >= 0x234 {
+                            scene.second_mask()
+                        } else {
+                            scene.mask()
+                        };
+                        println!(
+                            "# mask transition 0x{:04x}: system_integer[0]={:?} mask={:?}; shader path, nothing drawn",
+                            command + 0x2000,
+                            machine.state().system_integer(0),
+                            channel.map(|mask| (
+                                mask.slot,
+                                mask.put,
+                                mask.mask.name.escape_ascii().to_string(),
+                                mask.duration()
+                            ))
+                        );
+                    }
                     Capability::Audio => {
                         if let (
                             0xb0 | 0xba,
@@ -529,7 +575,8 @@ fn run() -> Result<(), Box<dyn Error>> {
                     Capability::Text
                     | Capability::Math
                     | Capability::SaveInfo
-                    | Capability::Effects => {
+                    | Capability::Effects
+                    | Capability::ImageChange => {
                         return Err("trace lacks the dispatched capability".into());
                     }
                 }
@@ -783,48 +830,6 @@ fn run() -> Result<(), Box<dyn Error>> {
                         "# skipping 0x22ef: script skip={} system_integer[0]={:?}; no input supplied",
                         message_flags.skip(),
                         machine.state().system_integer(0)
-                    );
-                    continue;
-                }
-                if let Some(images) = &mut images
-                    && scene.try_handle_image(&mut machine, &mut images.with_paths(paths))?
-                {
-                    println!(
-                        "# scene image 0x{:04x}: system_integer[0]={:?} objects={:?}; decoded only, nothing drawn",
-                        command + 0x2000,
-                        machine.state().system_integer(0),
-                        scene
-                            .objects()
-                            .iter()
-                            .filter_map(|(slot, object)| object.image.as_ref().map(|image| (
-                                slot,
-                                image.name.escape_ascii().to_string(),
-                                image.pixels.width(),
-                                image.pixels.height(),
-                                image.alpha
-                            )))
-                            .collect::<Vec<_>>()
-                    );
-                    continue;
-                }
-                if let Some(images) = &mut images
-                    && scene.try_handle_mask(&mut machine, &mut images.with_paths(paths))?
-                {
-                    let channel = if command >= 0x234 {
-                        scene.second_mask()
-                    } else {
-                        scene.mask()
-                    };
-                    println!(
-                        "# mask transition 0x{:04x}: system_integer[0]={:?} mask={:?}; shader path, nothing drawn",
-                        command + 0x2000,
-                        machine.state().system_integer(0),
-                        channel.map(|mask| (
-                            mask.slot,
-                            mask.put,
-                            mask.mask.name.escape_ascii().to_string(),
-                            mask.duration()
-                        ))
                     );
                     continue;
                 }

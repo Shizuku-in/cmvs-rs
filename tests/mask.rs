@@ -1,3 +1,6 @@
+#[path = "support/shared_images.rs"]
+mod shared_images;
+use shared_images::SharedImages;
 #[path = "support/shared_wait.rs"]
 mod shared_wait;
 use cmvs_rs::{
@@ -119,8 +122,8 @@ fn run(vm: &mut Machine<'_>, scene: &mut SceneHost, commands: usize) {
         pending(vm);
         assert!(
             scene.try_handle(vm).unwrap()
-                || scene.try_handle_image(vm, &mut files).unwrap()
-                || scene.try_handle_mask(vm, &mut files).unwrap()
+                || scene.shared_image(vm, &mut files).unwrap()
+                || scene.shared_mask(vm, &mut files).unwrap()
         );
     }
 }
@@ -361,7 +364,7 @@ fn creation_rejects_missing_objects_masks_and_arguments_transactionally() {
         vm.state_mut().set_system_integer(0, 9).unwrap();
         pending(&mut vm);
         let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
-        assert!(scene.try_handle_mask(&mut vm, &mut files()).is_err());
+        assert!(scene.shared_mask(&mut vm, &mut files()).is_err());
         assert_eq!(vm.pending_system(), command);
         assert_eq!(vm.stack().len_bytes(), bytes);
         assert_eq!(scene.mask().cloned(), before);
@@ -480,7 +483,7 @@ fn second_channel_rejects_shared_objects_and_replacements_that_leave_a_shader() 
         let before = (scene.mask().cloned(), scene.second_mask().cloned());
         pending(&mut vm);
         let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
-        assert!(scene.try_handle_mask(&mut vm, &mut files()).is_err());
+        assert!(scene.shared_mask(&mut vm, &mut files()).is_err());
         assert_eq!(
             (vm.pending_system(), vm.stack().len_bytes()),
             (command, bytes)
@@ -513,7 +516,7 @@ fn second_channel_rejects_shared_objects_and_replacements_that_leave_a_shader() 
         let mut vm = Machine::new(&script).unwrap();
         pending(&mut vm);
         let mut scene = SceneHost::default();
-        assert!(!scene.try_handle_mask(&mut vm, &mut files()).unwrap());
+        assert!(!scene.shared_mask(&mut vm, &mut files()).unwrap());
         let step = scene
             .shared_wait(&mut vm, SkipGate::default(), &mut ActionInput::default())
             .unwrap();

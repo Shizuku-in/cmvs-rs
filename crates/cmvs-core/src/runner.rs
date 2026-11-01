@@ -755,6 +755,11 @@ impl<'a> Startup<'a> {
                     audio: &mut self.audio,
                     backend: self.audio_backend.as_mut(),
                 }),
+                images: Some(crate::dispatch::ImageHosts {
+                    scene: &mut self.scene,
+                    source: &mut self.images.with_paths(self.bootstrap.paths()),
+                    change_images: true,
+                }),
                 waits: None,
                 text: Some(crate::dispatch::TextHosts {
                     messages: &mut self.messages,
@@ -903,18 +908,6 @@ impl<'a> Startup<'a> {
             || self.scene.try_handle(&mut self.machine)?
             || self.scene.try_handle_quake(&mut self.machine)?
             || self.scene.try_handle_strip(&mut self.machine)?
-            || self.scene.try_handle_image(
-                &mut self.machine,
-                &mut self.images.with_paths(self.bootstrap.paths()),
-            )?
-            || self.scene.try_change_image(
-                &mut self.machine,
-                &mut self.images.with_paths(self.bootstrap.paths()),
-            )?
-            || self.scene.try_handle_mask(
-                &mut self.machine,
-                &mut self.images.with_paths(self.bootstrap.paths()),
-            )?
             || self.gesture.try_handle_drag_press(
                 &mut self.machine,
                 &self.input,

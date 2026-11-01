@@ -232,30 +232,44 @@ impl SceneHost {
         let Some((pc, 0x2c4)) = vm.pending_system() else {
             return Ok(false);
         };
+        self.handle_change_image(&mut Call::new(vm, pc, 0x2c4), images)?;
+        Ok(true)
+    }
+
+    pub(crate) fn handle_change_image(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        images: &mut dyn ImageSource,
+    ) -> Result<(), Box<dyn Error>> {
+        let pc = call.pc;
         let fail = |why| error(pc, 0x22c4, why);
-        let mut args = [0; 4];
-        for (i, arg) in args.iter_mut().enumerate() {
-            *arg = vm.stack().peek_u32((i + 1) * 4).map_err(|e| fail(e.0))?;
-        }
-        let name = vm.resolve_string(args[1])?;
+        let args = [
+            call.argument(4, "object slot")?,
+            call.argument(8, "image name")?,
+            call.argument(12, "duration")?,
+            call.argument(16, "image manager")?,
+        ];
+        let name = call.vm.resolve_string(args[1])?;
         let slot = u8::try_from(args[0]).map_err(|_| fail("replacement slot outside 0..255"))?;
         let Some(_) = self.objects.get(&slot) else {
-            vm.complete_system(SystemResult(0x4010))?;
-            vm.state_mut()
+            call.complete(0x4010)?;
+            call.vm
+                .state_mut()
                 .set_system_integer(0, 0)
                 .expect("result 0 exists");
-            return Ok(true);
+            return Ok(());
         };
         if args[3] != 0 {
             return Err(fail("secondary replacement image manager is not implemented").into());
         }
         let prepared = self.prepare_image_change(slot, &name, args[2], images, pc, 0x22c4)?;
-        vm.complete_system(SystemResult(0x4010))?;
-        vm.state_mut()
+        call.complete(0x4010)?;
+        call.vm
+            .state_mut()
             .set_system_integer(0, 1)
             .expect("result 0 exists");
         self.commit_image_change(slot, prepared.expect("validated existing slot"));
-        Ok(true)
+        Ok(())
     }
 
     /// Prepare all fallible work before replacing the slot or consuming a VM command.

@@ -2,6 +2,7 @@
 //! Renderers read it each frame; this module draws nothing and owns no device.
 use crate::{
     bytecode::DecodeError,
+    dispatch::Call,
     evaluate::error,
     image::{self, ImageSource},
     machine::Machine,
@@ -853,21 +854,28 @@ impl SceneHost {
         vm: &mut Machine<'_>,
         images: &mut dyn ImageSource,
     ) -> Result<bool, Box<dyn Error>> {
-        if matches!(vm.pending_system(), Some((_, 0x3f))) {
-            // Dispatcher 0x1400827a7 -> 0x140035a90: arm, do not flush or load.
-            images.cache_next_read()?;
-            vm.complete_system(SystemResult(0x4000))?;
-            return Ok(true);
-        }
-        let Some((pc, command @ (0x30 | 0x35 | 0x38 | 0x3b))) = vm.pending_system() else {
+        let Some((pc, command @ (0x30 | 0x35 | 0x38 | 0x3b | 0x3f))) = vm.pending_system() else {
             return Ok(false);
         };
+        self.handle_image(&mut Call::new(vm, pc, command), images)?;
+        Ok(true)
+    }
+
+    pub(crate) fn handle_image(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        images: &mut dyn ImageSource,
+    ) -> Result<(), Box<dyn Error>> {
+        if call.command == 0x3f {
+            // Dispatcher 0x1400827a7 -> 0x140035a90: arm, do not flush or load.
+            images.cache_next_read()?;
+            call.complete(0x4000)?;
+            return Ok(());
+        }
+        let (pc, command) = (call.pc, call.command);
         let fail = |why| error(pc, command + 0x2000, why);
-        let raw_slot = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
-        let raw_name = vm
-            .stack()
-            .peek_u32(if command == 0x38 { 12 } else { 8 })
-            .map_err(|e| fail(e.0))?;
+        let raw_slot = call.argument(4, "object slot")?;
+        let raw_name = call.argument(if command == 0x38 { 12 } else { 8 }, "image name")?;
         // Slots >= 256 or without an object only set +12056 bit 0x10 (unmodeled);
         // negative slots would index before the table.
         let slot = u8::try_from(raw_slot as i32)
@@ -875,7 +883,7 @@ impl SceneHost {
             .filter(|slot| self.objects.contains_key(slot))
             .ok_or_else(|| fail("image load needs an existing object in slots 0..255"))?;
         let child = if command == 0x38 {
-            let id = vm.stack().peek_u32(8).map_err(|e| fail(e.0))?;
+            let id = call.argument(8, "child slot")?;
             Some(
                 u16::try_from(id)
                     .ok()
@@ -886,10 +894,10 @@ impl SceneHost {
             None
         };
         let filter = if command == 0x3b {
-            let mode = vm.stack().peek_u32(12).map_err(|e| fail(e.0))?;
-            let color = vm.stack().peek_u32(16).map_err(|e| fail(e.0))?;
+            let mode = call.argument(12, "filter mode")?;
+            let color = call.argument(16, "filter color")?;
             // Stored at image +1212; not read by the mode 2 branch.
-            let extra = vm.stack().peek_u32(20).map_err(|e| fail(e.0))?;
+            let extra = call.argument(20, "filter extra")?;
             if mode != 2 {
                 return Err(
                     fail("image filter mode not implemented; only mode 2 is verified").into(),
@@ -899,23 +907,24 @@ impl SceneHost {
         } else {
             None
         };
-        let name = vm.resolve_string(raw_name)?;
+        let name = call.vm.resolve_string(raw_name)?;
         if command == 0x35 {
-            let first = vm.stack().peek_u32(12).map_err(|e| fail(e.0))?;
-            let second = vm.stack().peek_u32(16).map_err(|e| fail(e.0))?;
+            let first = call.argument(12, "first load flag")?;
+            let second = call.argument(16, "second load flag")?;
             if first != 0 || second != 0 {
                 return Err(fail("second texture nonzero load flags are not verified").into());
             }
             let decoded = load_image(images, name, pc, 0x2035)?;
-            vm.complete_system(SystemResult(0x4010))?;
-            vm.state_mut()
+            call.complete(0x4010)?;
+            call.vm
+                .state_mut()
                 .set_system_integer(0, u32::from(decoded.is_some()))
                 .expect("slot 0 exists");
             self.objects
                 .get_mut(&slot)
                 .expect("validated")
                 .secondary_image = decoded;
-            return Ok(true);
+            return Ok(());
         }
         let mut decoded = load_image(images, name, pc, command + 0x2000)?;
         if let Some(filter) = filter
@@ -923,12 +932,13 @@ impl SceneHost {
         {
             image.apply_filter(filter)?;
         }
-        vm.complete_system(SystemResult(match command {
+        call.complete(match command {
             0x38 => 0x400c,
             0x3b => 0x4014,
             _ => 0x4008,
-        }))?;
-        vm.state_mut()
+        })?;
+        call.vm
+            .state_mut()
             .set_system_integer(0, u32::from(decoded.is_some()))
             .expect("slot 0 exists");
         let parent = self.objects.get_mut(&slot).expect("checked above");
@@ -937,7 +947,28 @@ impl SceneHost {
             None => parent,
         };
         object.image = decoded;
-        Ok(true)
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct ImageLoadError {
+    pc: usize,
+    opcode: u16,
+    cause: Box<dyn Error>,
+}
+impl std::fmt::Display for ImageLoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "PC=0x{:x} 0x{:04x}: {}",
+            self.pc, self.opcode, self.cause
+        )
+    }
+}
+impl Error for ImageLoadError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self.cause.as_ref())
     }
 }
 
@@ -952,7 +983,11 @@ pub(crate) fn load_image(
     if name.len() >= 64 {
         return Err(error(pc, op, "image name exceeds the original 64-byte buffers").into());
     }
-    let decoded = image::load(images, &name).map_err(|e| format!("PC=0x{pc:x} 0x{op:04x}: {e}"))?;
+    let decoded = image::load(images, &name).map_err(|cause| ImageLoadError {
+        pc,
+        opcode: op,
+        cause,
+    })?;
     Ok(decoded.map(|decoded| ObjectImage {
         filter: None,
         name,

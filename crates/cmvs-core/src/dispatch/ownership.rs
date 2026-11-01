@@ -94,6 +94,7 @@ pub static CLAIMS: &[Claim] = &[
                             | super::Capability::Effects
                             | super::Capability::ChangeWait
                             | super::Capability::CameraWait
+                            | super::Capability::ImageChange
                     )
             })
         },
@@ -145,19 +146,6 @@ pub static CLAIMS: &[Claim] = &[
         Some(290),
         Some(230),
         0x22f..=0x232
-    ),
-    claim!(
-        "scene::try_handle_image",
-        Some(300),
-        Some(280),
-        0x30 | 0x35 | 0x38 | 0x3b | 0x3f
-    ),
-    claim!("scene::try_change_image", Some(310), None, 0x2c4),
-    claim!(
-        "scene::try_handle_mask",
-        Some(320),
-        Some(290),
-        0x22a | 0x22d | 0x234 | 0x237
     ),
     claim!("gesture::try_handle_drag_press", Some(350), None, 0x369),
     claim!("message::try_record_poll", Some(400), None, 0x159),

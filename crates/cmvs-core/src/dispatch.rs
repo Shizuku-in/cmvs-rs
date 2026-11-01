@@ -13,6 +13,7 @@ use crate::{
     fade::SkipGate,
     gesture::PointerGesture,
     history::HistoryHost,
+    image::ImageSource,
     input::ActionInput,
     machine::{Machine, Step},
     message::{MessageHost, font_cells},
@@ -53,6 +54,12 @@ impl Error for DispatchError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(self.cause.as_ref())
     }
+}
+
+pub struct ImageHosts<'a> {
+    pub scene: &'a mut SceneHost,
+    pub source: &'a mut dyn ImageSource,
+    pub change_images: bool,
 }
 
 pub struct AudioHosts<'a> {
@@ -102,6 +109,7 @@ pub struct WaitHosts<'a> {
 
 #[derive(Default)]
 pub struct Hosts<'a> {
+    pub images: Option<ImageHosts<'a>>,
     pub audio: Option<AudioHosts<'a>>,
     pub waits: Option<WaitHosts<'a>>,
     pub text: Option<TextHosts<'a>>,
@@ -123,6 +131,9 @@ pub struct Hosts<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Capability {
+    SceneImages,
+    MaskImages,
+    ImageChange,
     Audio,
     Text,
     Timers,
@@ -149,6 +160,8 @@ pub enum Capability {
 impl Hosts<'_> {
     fn has(&self, capability: Capability) -> bool {
         match capability {
+            Capability::SceneImages | Capability::MaskImages => self.images.is_some(),
+            Capability::ImageChange => self.images.as_ref().is_some_and(|h| h.change_images),
             Capability::Audio => self.audio.is_some(),
             Capability::Text => self.text.is_some(),
             Capability::Timers => self.timers.is_some(),
@@ -468,6 +481,38 @@ fn root_audio(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Bo
     Ok(Flow::Done)
 }
 
+fn root_images(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    let h = hosts.images.as_mut().expect("image capability checked");
+    h.scene.handle_image(call, h.source)?;
+    Ok(Flow::Done)
+}
+fn root_mask_images(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    let h = hosts.images.as_mut().expect("image capability checked");
+    h.scene.handle_mask(call, h.source)?;
+    Ok(Flow::Done)
+}
+fn root_change_image(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    let h = hosts.images.as_mut().expect("image capability checked");
+    h.scene.handle_change_image(call, h.source)?;
+    Ok(Flow::Done)
+}
+
+pub fn uses_images(command: u16) -> bool {
+    ROOT.iter().any(|e| {
+        e.command == command
+            && matches!(
+                e.capability,
+                Capability::SceneImages | Capability::MaskImages | Capability::ImageChange
+            )
+    })
+}
+
 pub fn is_wait(command: u16) -> bool {
     ROOT.iter().any(|e| {
         e.command == command
@@ -484,6 +529,66 @@ pub fn is_wait(command: u16) -> bool {
 }
 
 pub static ROOT: &[Entry] = &[
+    Entry {
+        command: 0x30,
+        name: "scene image",
+        capability: Capability::SceneImages,
+        handler: root_images,
+    },
+    Entry {
+        command: 0x35,
+        name: "scene image",
+        capability: Capability::SceneImages,
+        handler: root_images,
+    },
+    Entry {
+        command: 0x38,
+        name: "scene image",
+        capability: Capability::SceneImages,
+        handler: root_images,
+    },
+    Entry {
+        command: 0x3b,
+        name: "scene image",
+        capability: Capability::SceneImages,
+        handler: root_images,
+    },
+    Entry {
+        command: 0x3f,
+        name: "scene image",
+        capability: Capability::SceneImages,
+        handler: root_images,
+    },
+    Entry {
+        command: 0x22a,
+        name: "mask transition",
+        capability: Capability::MaskImages,
+        handler: root_mask_images,
+    },
+    Entry {
+        command: 0x22d,
+        name: "mask transition",
+        capability: Capability::MaskImages,
+        handler: root_mask_images,
+    },
+    Entry {
+        command: 0x234,
+        name: "mask transition",
+        capability: Capability::MaskImages,
+        handler: root_mask_images,
+    },
+    Entry {
+        command: 0x237,
+        name: "mask transition",
+        capability: Capability::MaskImages,
+        handler: root_mask_images,
+    },
+    Entry {
+        command: 0x2c4,
+        name: "replace image",
+        capability: Capability::ImageChange,
+        handler: root_change_image,
+    },
     Entry {
         command: 0xa0,
         name: "play BGM",
