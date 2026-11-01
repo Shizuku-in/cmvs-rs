@@ -25,6 +25,8 @@ enum Undo {
     Result(Option<u32>),
     Condition(Option<bool>),
     Float(u32, Option<u32>),
+    SystemInteger(usize, Option<u32>),
+    SystemFloat(usize, Option<u32>),
     Stack(usize, StackWord),
     Data(usize, [u8; 4]),
 }
@@ -295,6 +297,8 @@ impl State {
                 Undo::Bit(index, old) => restore(&mut self.bits, index, old),
                 Undo::String(index, old) => restore(&mut self.strings, index, old),
                 Undo::Float(index, old) => restore(&mut self.floats, index, old),
+                Undo::SystemInteger(index, old) => self.system_integers[index] = old,
+                Undo::SystemFloat(index, old) => self.system_float_bits[index] = old,
                 Undo::Stack(offset, old) => {
                     let stack = stack.as_deref_mut().expect("stack writes need their stack");
                     stack.restore_at(offset, old);
@@ -658,6 +662,17 @@ impl State {
             ),
             FloatCell::FrameInt(offset) => env.load(offset, pc, op)? as i32 as f32,
             FloatCell::FrameFloat(offset) => f32::from_bits(env.load(offset, pc, op)?),
+            FloatCell::System(index) => match index {
+                0..=6 => self
+                    .system_integer(index)
+                    .ok_or_else(|| error(pc, op, "unknown integer system result"))?
+                    as i32 as f32,
+                7..=10 => f32::from_bits(
+                    self.system_float_bits(index)
+                        .ok_or_else(|| error(pc, op, "unknown float system result"))?,
+                ),
+                _ => 0.0,
+            },
         })
     }
     /// Operand writer 0x140065f00: integer storage receives the truncated value.
@@ -676,6 +691,23 @@ impl State {
             }
             FloatCell::Bit(index) => self.set_bit_journaled(index, truncate(value) != 0, journal),
             FloatCell::Float(index) => self.set_float_journaled(index, value.to_bits(), journal),
+            FloatCell::System(index) => {
+                match index {
+                    0..=6 => {
+                        let slot = &mut self.system_integers[index as usize];
+                        journal.0.push(Undo::SystemInteger(index as usize, *slot));
+                        *slot = Some(truncate(value) as u32);
+                    }
+                    7..=10 => {
+                        let index = (index - 7) as usize;
+                        let slot = &mut self.system_float_bits[index];
+                        journal.0.push(Undo::SystemFloat(index, *slot));
+                        *slot = Some(value.to_bits());
+                    }
+                    _ => {}
+                }
+                Ok(())
+            }
             FloatCell::FrameInt(offset) => {
                 return env.store(offset, truncate(value) as u32, journal, pc, op);
             }
@@ -706,6 +738,9 @@ impl State {
                 Term::Scalar {
                     tag: 0x12a, raw, ..
                 } => stack.push(FloatCell::Value(f32::from_bits(*raw))),
+                Term::Scalar {
+                    tag: 0x10f, raw, ..
+                } => stack.push(FloatCell::System(*raw)),
                 Term::Scalar {
                     pc,
                     tag: tag @ (0x103 | 0x108 | 0x129 | 0x12c),
@@ -816,6 +851,7 @@ enum FloatCell {
     Integer(u32),
     Bit(u32),
     Float(u32),
+    System(u32),
     FrameInt(usize),
     FrameFloat(usize),
 }

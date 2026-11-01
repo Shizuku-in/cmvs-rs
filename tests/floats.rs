@@ -74,6 +74,87 @@ fn script(code: &[u8]) -> Script {
 }
 
 #[test]
+fn float_system_results_convert_integer_slots_and_preserve_float_bits() {
+    let mut state = State::default();
+    for index in 0..=10 {
+        // Assignment may initialize an unknown result without reading its old value.
+        eval(
+            &mut state,
+            vec![scalar(0x10f, index), float(-2.75), op(0x170)],
+        )
+        .unwrap();
+        let expected = if index <= 6 { -2.0 } else { -2.75 };
+        assert_eq!(
+            eval(&mut state, vec![scalar(0x10f, index)]).unwrap(),
+            expected
+        );
+        if index <= 6 {
+            assert_eq!(state.system_integer(index), Some((-2i32) as u32));
+        } else {
+            assert_eq!(state.system_float_bits(index), Some((-2.75f32).to_bits()));
+        }
+        assert_eq!(
+            eval(&mut state, vec![scalar(0x10f, index), op(0x173)]).unwrap(),
+            expected + 1.0,
+        );
+    }
+    for value in [f32::NAN, f32::INFINITY, 3e9] {
+        eval(&mut state, vec![scalar(0x10f, 6), float(value), op(0x170)]).unwrap();
+        assert_eq!(state.system_integer(6), Some(i32::MIN as u32));
+    }
+    for value in [-0.0, f32::from_bits(0x7fc0_1234)] {
+        eval(&mut state, vec![scalar(0x10f, 10), float(value), op(0x170)]).unwrap();
+        assert_eq!(state.system_float_bits(10), Some(value.to_bits()));
+        assert_eq!(
+            eval(&mut state, vec![scalar(0x10f, 10)]).unwrap().to_bits(),
+            value.to_bits(),
+        );
+    }
+}
+
+#[test]
+fn float_system_result_failure_rolls_back_known_and_unknown_slots() {
+    let mut state = State::default();
+    state.set_system_integer(0, 19).unwrap();
+    state.set_system_float_bits(7, (-0.0f32).to_bits()).unwrap();
+    eval(&mut state, vec![float(3.5)]).unwrap();
+    let before = (state.result, state.condition);
+    for index in [0, 6, 7, 10] {
+        let failing = vec![
+            scalar(0x10f, index),
+            float(9.0),
+            op(0x170),
+            scalar(0x10f, index),
+            float(5.0),
+            op(0x170),
+            op(0x163),
+            scalar(0x10f, 1),
+            op(0x163),
+        ];
+        assert!(eval(&mut state, failing).is_err());
+        assert_eq!((state.result, state.condition), before);
+        assert_eq!(state.system_integer(0), Some(19));
+        assert_eq!(state.system_integer(6), None);
+        assert_eq!(state.system_float_bits(7), Some((-0.0f32).to_bits()));
+        assert_eq!(state.system_float_bits(10), None);
+    }
+    assert!(eval(&mut state, vec![scalar(0x10f, 1)]).is_err());
+    assert!(eval(&mut state, vec![scalar(0x10f, 8)]).is_err());
+    for index in [11, u32::MAX] {
+        assert_eq!(eval(&mut state, vec![scalar(0x10f, index)]).unwrap(), 0.0);
+        assert_eq!(
+            eval(
+                &mut state,
+                vec![scalar(0x10f, index), float(4.5), op(0x170)]
+            )
+            .unwrap(),
+            4.5,
+        );
+        assert_eq!(eval(&mut state, vec![scalar(0x10f, index)]).unwrap(), 0.0);
+    }
+}
+
+#[test]
 fn float_variable_assignment_matches_main_0x39210() {
     let mut state = State::default();
     let value = eval(&mut state, vec![var(0x12b, 120), float(1.0), op(0x170)]).unwrap();

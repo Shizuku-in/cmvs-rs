@@ -129,6 +129,15 @@ fn world_query_returns_raw_float_registers_for_parent_and_child() {
             command(&mut code, op, &[255, child, value]);
         }
         command(&mut code, 0x2078, &[255, child]);
+        // sn605 reads the queried XYZ through float expressions before restoring motion.
+        let query_end = code.len();
+        for index in 8u32..=10 {
+            code.extend(0x202u16.to_le_bytes());
+            code.extend(0x10fu16.to_le_bytes());
+            code.extend(index.to_le_bytes());
+            code.extend(0x20fu16.to_le_bytes());
+            code.extend(0x430u16.to_le_bytes());
+        }
         let program = script(&code);
         let mut vm = Machine::new(&program).unwrap();
         let mut scene = SceneHost::default();
@@ -141,6 +150,16 @@ fn world_query_returns_raw_float_registers_for_parent_and_child() {
             assert_eq!(vm.state().system_float_bits(index), Some(bits));
         }
         assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.pc(), query_end);
+        for bits in xyz {
+            assert!(matches!(vm.step().unwrap(), Step::Continue));
+            assert_eq!(vm.state().result, Some(bits));
+            assert!(matches!(vm.step().unwrap(), Step::Continue));
+        }
+        assert_eq!(vm.stack().len_bytes(), 12);
+        for (index, bits) in xyz.into_iter().enumerate() {
+            assert_eq!(vm.stack().read_u32_at(index * 4).unwrap(), bits);
+        }
         assert_eq!(vm.pc(), code.len());
     }
 }
