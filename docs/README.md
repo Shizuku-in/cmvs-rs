@@ -8,6 +8,7 @@
 |---|---|
 | [运行指南](guides/running.md) | 桌面预览、字体、音频、系统存档与显式运行策略 |
 | [CLI 指南](guides/cli.md) | 脚本、归档、图像、影片与存档检查工具 |
+| [分派开发指南](guides/dispatch.md) | 系统命令调用路径、处理器约定与验证入口 |
 | [架构](architecture.md) | 平台无关核心、后端契约、运行编排与错误策略 |
 | [Workspace](workspace.md) | crate 划分、feature 与检查命令 |
 | [研究约定](research.md) | 证据绑定、真实样本验证与新游戏接入 |

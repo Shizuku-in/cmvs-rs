@@ -20,4 +20,6 @@ cargo test --offline
 
 多数核心集成测试位于根包的 `tests/`，仅运行 `cargo test -p cmvs-core` 不会覆盖这些测试。
 
+系统命令的调用路径、处理器约定与检查命令见[分派开发指南](../../docs/guides/dispatch.md)。
+
 详见[架构](../../docs/architecture.md)、[引擎档案设计](../../docs/design/engine-profiles.md)和[格式文档入口](../../docs/README.md)。
