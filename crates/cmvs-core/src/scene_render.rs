@@ -190,9 +190,6 @@ fn image_layer<'a>(
         return Ok(None);
     }
     let size = [image.pixels.width(), image.pixels.height()].map(i64::from);
-    if sx < 0 || sy < 0 || sx + w > size[0] || sy + h > size[1] {
-        return Err(FormatError("scene source rectangle outside image"));
-    }
     // The mask is the object's second texture; only the case where it covers the whole,
     // equally sized image texel for texel is modeled.
     if let Some(mask) = mask {
@@ -521,10 +518,6 @@ fn projected_layer<'a>(
     // 0x140020340 skips v249/v250 <= 0.0; a NaN scale reaches the extent check below.
     if alpha <= 0 || projection.scale <= 0.0 || w <= 0 || h <= 0 {
         return Ok(None);
-    }
-    let size = [image.pixels.width(), image.pixels.height()].map(i64::from);
-    if sx < 0 || sy < 0 || sx + w > size[0] || sy + h > size[1] {
-        return Err(FormatError("scene source rectangle outside image"));
     }
     let [px, py] = projection.position;
     // 0x140024020 scales the child's local corners about its own origin first.
@@ -1275,8 +1268,11 @@ fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
     });
     for y in top.max(0)..(top + h).min(i64::from(height)) {
         for x in left.max(0)..(left + w).min(i64::from(width)) {
-            let src =
-                (((sy + y - top) * i64::from(image.pixels.width()) + sx + x - left) * 4) as usize;
+            // Scene queues set D3DTADDRESS_CLAMP. Preserve the quad and clamp its
+            // texture coordinates, including signed origins and oversized source rects.
+            let source_x = (sx + x - left).clamp(0, i64::from(image.pixels.width()) - 1);
+            let source_y = (sy + y - top).clamp(0, i64::from(image.pixels.height()) - 1);
+            let src = ((source_y * i64::from(image.pixels.width()) + source_x) * 4) as usize;
             let dst = ((y * i64::from(width) + x) * 4) as usize;
             let p = &image.pixels.pixels()[src..src + 4];
             let mut alpha = (u32::from(p[3]) * opacity + 127) / 255;
@@ -1297,6 +1293,112 @@ fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
 #[cfg(test)]
 mod scale_tests {
     use super::*;
+
+    #[test]
+    fn source_rectangles_keep_their_extent_and_clamp_texels_on_every_edge() {
+        let colors = [
+            [255, 0, 0, 255],
+            [0, 255, 0, 255],
+            [0, 0, 255, 255],
+            [255, 255, 255, 255],
+        ];
+        let image = ObjectImage {
+            name: Vec::new(),
+            filter: None,
+            alpha: true,
+            surface: false,
+            pixels: RgbaImage::new(2, 2, colors.concat()).unwrap(),
+        };
+        for (rect, position, size, expected) in [
+            (
+                [-1, -1, 4, 4],
+                [0, 0],
+                [4, 4],
+                vec![0, 0, 1, 1, 0, 0, 1, 1, 2, 2, 3, 3, 2, 2, 3, 3],
+            ),
+            ([3, 3, 2, 2], [0, 0], [2, 2], vec![3; 4]),
+            ([-4, -4, 2, 2], [0, 0], [2, 2], vec![0; 4]),
+            ([-1, -1, 4, 4], [-1, -1], [2, 2], vec![0, 1, 2, 3]),
+        ] {
+            let mut draw = DrawState::default();
+            draw.words[2..6].copy_from_slice(&rect.map(|v| v as u32));
+            draw.words[8..10].copy_from_slice(&position.map(|v| v as u32));
+            let object = SceneObject {
+                image: Some(image.clone()),
+                draw: Some(draw),
+                ..Default::default()
+            };
+            let scene = SceneHost::default();
+            let frame = prepare_scene(&scene, None, &[&object], size[0], size[1]).unwrap();
+            let Layer::Image { rect: actual, .. } = &frame.commands()[0] else {
+                panic!("unscaled quad")
+            };
+            assert_eq!(*actual, rect.map(i64::from));
+            assert_eq!(
+                frame.render_cpu().unwrap().pixels(),
+                expected
+                    .into_iter()
+                    .flat_map(|i| colors[i])
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
+    #[test]
+    fn transformed_source_rectangles_use_the_same_clamped_sampling() {
+        let image = ObjectImage {
+            name: Vec::new(),
+            filter: None,
+            alpha: true,
+            surface: false,
+            pixels: RgbaImage::new(
+                2,
+                2,
+                vec![
+                    255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+                ],
+            )
+            .unwrap(),
+        };
+        let mut words = DrawState::default().words;
+        words[2..6].copy_from_slice(&[u32::MAX, u32::MAX, 4, 4]);
+        for (scale, rotation) in [(2.0f32, 0), (1.0, 36000)] {
+            words[18..20].fill(scale.to_bits());
+            words[20] = rotation;
+            let layer = image_layer(&image, &words, [0, 0], 255, None, None)
+                .unwrap()
+                .unwrap();
+            let side = (4.0 * scale) as u32;
+            let mut pixels = vec![0; (side * side * 4) as usize];
+            draw(&mut pixels, side, side, layer);
+            assert_eq!(&pixels[..3], &[255, 0, 0]);
+            assert_eq!(
+                &pixels[pixels.len() - 4..pixels.len() - 1],
+                &[255, 255, 255]
+            );
+        }
+        let mut cameras = CameraHost::default();
+        let mut record = cameras.saved(0);
+        record[14..18].copy_from_slice(&3u32.to_le_bytes());
+        cameras.restore(0, &record).unwrap();
+        words[0] = 2;
+        words[20] = 0;
+        words[13] = 20.0f32.to_bits();
+        words[15] = 20.0f32.to_bits();
+        let draw = DrawState {
+            words,
+            ..Default::default()
+        };
+        let object = SceneObject {
+            image: Some(image),
+            draw: Some(draw),
+            ..Default::default()
+        };
+        let scene = SceneHost::default();
+        let frame = prepare_scene(&scene, Some(&cameras), &[&object], 1024, 612).unwrap();
+        assert_eq!(frame.commands().len(), 1);
+        frame.render_cpu().unwrap();
+    }
 
     fn image() -> ObjectImage {
         ObjectImage {

@@ -549,16 +549,19 @@ mod tests {
                 ]
             })
             .collect();
-        for (scale, angle, mode) in [
-            (1.0f32, 0.0f32, 1),
-            (1.0, 0.0, 2),
-            (1.5, 0.0, 1),
-            (0.75, 0.0, 2),
-            (1.0, 60.0, 1),
+        for (scale, angle, mode, rect) in [
+            (1.0f32, 0.0f32, 1, [0u32, 0, 6, 4]),
+            (1.0, 0.0, 2, [0, 0, 6, 4]),
+            (1.5, 0.0, 1, [0, 0, 6, 4]),
+            (0.75, 0.0, 2, [0, 0, 6, 4]),
+            (1.0, 60.0, 1, [0, 0, 6, 4]),
+            (1.0, 0.0, 1, [u32::MAX, u32::MAX, 8, 6]),
+            (1.5, 0.0, 1, [u32::MAX, u32::MAX, 8, 6]),
+            (1.0, 60.0, 1, [u32::MAX, u32::MAX, 8, 6]),
         ] {
             let mut draw = DrawState::default();
             draw.words[1] = mode;
-            draw.words[4..6].copy_from_slice(&[6, 4]);
+            draw.words[2..6].copy_from_slice(&rect);
             draw.words[8..10].copy_from_slice(&[2, 1]);
             draw.words[18..20].fill(scale.to_bits());
             draw.words[20] = angle.to_bits();
