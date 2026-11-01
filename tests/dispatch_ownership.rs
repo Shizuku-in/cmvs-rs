@@ -65,6 +65,16 @@ fn audit(handler: &str, mut probe: impl FnMut(&mut Machine<'_>) -> bool) {
         if handler == "input::try_handle_skipping" {
             return number == 0x2ef;
         }
+        if handler == "message::try_handle" {
+            return CLAIMS
+                .iter()
+                .find(|claim| claim.handler == handler)
+                .unwrap()
+                .recognizes(number)
+                || cmvs_rs::dispatch::ROOT.iter().any(|entry| {
+                    entry.command == number && entry.capability == Capability::Windows
+                });
+        }
         let capability = match handler {
             "scene::try_handle_image" => Some(Capability::SceneImages),
             "scene::try_handle_mask" => Some(Capability::MaskImages),
@@ -75,6 +85,9 @@ fn audit(handler: &str, mut probe: impl FnMut(&mut Machine<'_>) -> bool) {
             "buttons::try_handle_input" => Some(Capability::ButtonInput),
             "buttons::try_handle_list_input" => Some(Capability::ListInput),
             "gesture::try_handle_drag_press" => Some(Capability::DragPress),
+            "message::try_handle_pointer" => Some(Capability::WindowPointer),
+            "message::try_handle_buttons" => Some(Capability::WindowButtons),
+            "message::try_handle_image" => Some(Capability::WindowImages),
             "audio::try_handle" => Some(Capability::Audio),
             "timers::try_handle" => Some(Capability::Timers),
             "message_flags::try_handle" => Some(Capability::Flags),
@@ -370,6 +383,8 @@ fn inventory_matches_wait_and_resource_host_recognition_exhaustively() {
                 save_info: Some(&mut cmvs_rs::snapshot::SaveInfo::default()),
                 effects: Some(&mut true),
                 effect_objects: true,
+                windows: Some(&mut MessageHost::default()),
+                window_images: Some(&mut Unavailable),
                 buttons: Some(&mut cmvs_rs::buttons::ButtonHost::default()),
                 input: Some(cmvs_rs::dispatch::InputHosts {
                     input: &mut ActionInput::default(),

@@ -97,6 +97,10 @@ pub static CLAIMS: &[Claim] = &[
                             | super::Capability::ImageChange
                             | super::Capability::ListInput
                             | super::Capability::DragPress
+                            | super::Capability::Windows
+                            | super::Capability::WindowPointer
+                            | super::Capability::WindowButtons
+                            | super::Capability::WindowImages
                     )
             })
         },
@@ -147,16 +151,7 @@ pub static CLAIMS: &[Claim] = &[
     ),
     claim!("message::try_record_poll", Some(400), None, 0x159),
     claim!("message::try_handle_scene", Some(410), None, 0x383 | 0x39d),
-    claim!("message::try_handle", Some(420), None,
-        0xec | 0x100..=0x107 | 0x10b..=0x110 | 0x112..=0x117 | 0x119 | 0x11a | 0x11e | 0x11f
-        | 0x140..=0x151 | 0x154 | 0x155 | 0x15a | 0x15b | 0x15d
-        | 0x171 | 0x178..=0x17c | 0x17f | 0x180 | 0x182..=0x186 | 0x18d
-        | 0x190..=0x192 | 0x195..=0x197 | 0x1cf..=0x1d1
-        | 0x380 | 0x382 | 0x383 | 0x385..=0x387 | 0x389 | 0x38b | 0x38c | 0x38e..=0x390
-        | 0x392 | 0x393 | 0x396 | 0x398 | 0x39a..=0x39c | 0x39e..=0x3a0),
-    claim!("message::try_handle_pointer", Some(440), None, 0x15f),
-    claim!("message::try_handle_buttons", Some(450), None, 0x194),
-    claim!("message::try_handle_image", Some(460), None, 0x170 | 0x397),
+    claim!("message::try_handle", Some(420), None, 0x100..=0x107 | 0x10b..=0x110 | 0x112..=0x117 | 0x119..=0x11a | 0x11e..=0x11f | 0x154 | 0x380 | 0x382..=0x383 | 0x385..=0x387 | 0x389 | 0x38b..=0x38c | 0x38e..=0x390 | 0x392..=0x393 | 0x396 | 0x398 | 0x39a..=0x39c | 0x39e..=0x3a0),
     claim!("movie::try_create_scene", Some(500), None, 0x308),
     claim!("movie::try_start_scene", Some(510), None, 0x309),
     claim!(

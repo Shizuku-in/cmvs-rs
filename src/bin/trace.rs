@@ -441,6 +441,12 @@ fn run() -> Result<(), Box<dyn Error>> {
                     .expect("completed root command has an entry")
                     .capability;
                 match capability {
+                    Capability::Windows
+                    | Capability::WindowPointer
+                    | Capability::WindowButtons
+                    | Capability::WindowImages => {
+                        return Err("trace lacks a message window host".into());
+                    }
                     Capability::ButtonInput => {
                         let group = buttons.group(0);
                         println!(

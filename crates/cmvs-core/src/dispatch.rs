@@ -117,6 +117,8 @@ pub struct WaitHosts<'a> {
 
 #[derive(Default)]
 pub struct Hosts<'a> {
+    pub windows: Option<&'a mut MessageHost>,
+    pub window_images: Option<&'a mut dyn ImageSource>,
     pub input: Option<InputHosts<'a>>,
     pub buttons: Option<&'a mut ButtonHost>,
     /// Explicit support for auxiliary-list interaction beyond list metadata.
@@ -145,6 +147,10 @@ pub struct Hosts<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Capability {
+    Windows,
+    WindowPointer,
+    WindowButtons,
+    WindowImages,
     Input,
     Buttons,
     ButtonInput,
@@ -181,6 +187,11 @@ pub enum Capability {
 impl Hosts<'_> {
     fn has(&self, capability: Capability) -> bool {
         match capability {
+            Capability::Windows => self.windows.is_some(),
+            Capability::WindowPointer | Capability::WindowButtons => {
+                self.windows.is_some() && self.input.is_some()
+            }
+            Capability::WindowImages => self.windows.is_some() && self.window_images.is_some(),
             Capability::Input => self.input.is_some(),
             Capability::Buttons => self.buttons.is_some() && self.scene.is_some(),
             Capability::ButtonInput => {
@@ -519,6 +530,85 @@ fn root_audio(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Bo
     Ok(Flow::Done)
 }
 
+fn root_windows(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    hosts
+        .windows
+        .as_deref_mut()
+        .expect("window capability checked")
+        .handle_window(call)?;
+    Ok(Flow::Done)
+}
+fn root_window_pointer(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    hosts
+        .windows
+        .as_deref_mut()
+        .expect("window capability checked")
+        .handle_window_pointer(
+            call,
+            hosts
+                .input
+                .as_ref()
+                .expect("input capability checked")
+                .input,
+        )?;
+    Ok(Flow::Done)
+}
+fn root_window_buttons(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    hosts
+        .windows
+        .as_deref_mut()
+        .expect("window capability checked")
+        .handle_window_buttons(
+            call,
+            hosts
+                .input
+                .as_mut()
+                .expect("input capability checked")
+                .input,
+        )?;
+    Ok(Flow::Done)
+}
+fn root_window_images(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    hosts
+        .windows
+        .as_deref_mut()
+        .expect("window capability checked")
+        .handle_window_image(
+            call,
+            hosts
+                .window_images
+                .as_deref_mut()
+                .expect("image source capability checked"),
+        )?;
+    Ok(Flow::Done)
+}
+
+pub fn uses_windows(command: u16) -> bool {
+    ROOT.iter().any(|entry| {
+        entry.command == command
+            && matches!(
+                entry.capability,
+                Capability::Windows
+                    | Capability::WindowPointer
+                    | Capability::WindowButtons
+                    | Capability::WindowImages
+            )
+    })
+}
+pub fn uses_window_images(command: u16) -> bool {
+    ROOT.iter()
+        .any(|entry| entry.command == command && entry.capability == Capability::WindowImages)
+}
+
 fn root_input(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     let h = hosts.input.as_mut().expect("input capability checked");
     if call.command == 0x2ef {
@@ -600,6 +690,8 @@ pub fn uses_input(command: u16) -> bool {
                     | Capability::ButtonInput
                     | Capability::ListInput
                     | Capability::DragPress
+                    | Capability::WindowPointer
+                    | Capability::WindowButtons
             )
     })
 }
@@ -669,6 +761,306 @@ pub fn is_wait(command: u16) -> bool {
 }
 
 pub static ROOT: &[Entry] = &[
+    Entry {
+        command: 0xec,
+        name: "window text scale",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x140,
+        name: "create window",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x141,
+        name: "destroy window",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x142,
+        name: "window text layer",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x143,
+        name: "window glyph size",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x144,
+        name: "window text spacing",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x145,
+        name: "window text area",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x146,
+        name: "window text colors",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x147,
+        name: "window character delay",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x148,
+        name: "window reveal settings",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x149,
+        name: "window decoration",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x14a,
+        name: "clear window text",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x14b,
+        name: "window exists",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x14c,
+        name: "hide window",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x14d,
+        name: "window hidden",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x14e,
+        name: "show window",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x14f,
+        name: "window text pen",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x150,
+        name: "move window",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x151,
+        name: "window cursor",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x155,
+        name: "window glyph parameter",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x15a,
+        name: "window alternate position",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x15b,
+        name: "window position switch",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x15d,
+        name: "create logical window",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x171,
+        name: "release window image",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x178,
+        name: "create window child",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x179,
+        name: "destroy window child",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x17a,
+        name: "window object visibility",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x17b,
+        name: "window object exists",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x17c,
+        name: "window object logical size",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x17f,
+        name: "create window draw",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x180,
+        name: "reset window draw",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x182,
+        name: "window source rectangle",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x183,
+        name: "window object position",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x184,
+        name: "window object layer",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x185,
+        name: "window object origin",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x186,
+        name: "window object opacity",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x18d,
+        name: "window draw query",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x190,
+        name: "window button state image",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x191,
+        name: "window button hit rectangle",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x192,
+        name: "enable window button",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x195,
+        name: "window button enabled",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x196,
+        name: "set window button state",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x197,
+        name: "window button state",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x1cf,
+        name: "create window animation",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x1d0,
+        name: "window animation frame",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x1d1,
+        name: "start window animation",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x15f,
+        name: "window pointer hit",
+        capability: Capability::WindowPointer,
+        handler: root_window_pointer,
+    },
+    Entry {
+        command: 0x194,
+        name: "window button input",
+        capability: Capability::WindowButtons,
+        handler: root_window_buttons,
+    },
+    Entry {
+        command: 0x170,
+        name: "load window image",
+        capability: Capability::WindowImages,
+        handler: root_window_images,
+    },
+    Entry {
+        command: 0x397,
+        name: "auxiliary second texture",
+        capability: Capability::WindowImages,
+        handler: root_window_images,
+    },
     Entry {
         command: 0xc8,
         name: "pointer position",

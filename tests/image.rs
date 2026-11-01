@@ -1,3 +1,6 @@
+#[path = "support/shared_windows.rs"]
+mod shared_windows;
+use shared_windows::SharedWindows;
 #[path = "support/shared_images.rs"]
 mod shared_images;
 use shared_images::SharedImages;
@@ -1049,7 +1052,7 @@ fn window_image_load_replaces_the_window_object_image_without_a_result() {
     assert!(messages.try_handle(&mut vm).unwrap());
     run_to_system(&mut vm);
     assert!(!messages.try_handle(&mut vm).unwrap());
-    assert!(messages.try_handle_image(&mut vm, &mut files).unwrap());
+    assert!(messages.shared_window_image(&mut vm, &mut files).unwrap());
     assert_eq!(vm.stack().len_bytes(), 0);
     assert_eq!(vm.state().system_integer(0), Some(9));
     assert_eq!(
@@ -1079,7 +1082,7 @@ fn window_image_failures_keep_the_command_pending() {
         run_to_system(&mut vm);
         let bytes = vm.stack().len_bytes();
         assert!(
-            messages.try_handle_image(&mut vm, &mut files).is_err(),
+            messages.shared_window_image(&mut vm, &mut files).is_err(),
             "{missing}"
         );
         assert_eq!(vm.pending_system().map(|p| p.1), Some(0x170));
@@ -1749,7 +1752,7 @@ fn releasing_window_image_keeps_children_draw_text_visibility_and_stack_below_th
     run_to_system(&mut vm);
     messages.try_handle(&mut vm).unwrap();
     run_to_system(&mut vm);
-    messages.try_handle_image(&mut vm, &mut files).unwrap();
+    messages.shared_window_image(&mut vm, &mut files).unwrap();
     for _ in 0..5 {
         run_to_system(&mut vm);
         messages.try_handle(&mut vm).unwrap();
@@ -1955,7 +1958,7 @@ fn auxiliary_second_texture_replaces_only_mask_and_survives_content_clear() {
     for bytes in [opaque(), pb3(1, &[[0, 0], [0, 0], [0, 0], [128, 255]])] {
         files.0.insert(b"mask.pb3".to_vec(), bytes.clone());
         run_to_system(&mut vm);
-        assert!(messages.try_handle_image(&mut vm, &mut files).unwrap());
+        assert!(messages.shared_window_image(&mut vm, &mut files).unwrap());
         let group = messages.auxiliary_text(7).unwrap();
         assert_eq!(group.object, object);
         assert_eq!(group.atlas, before.atlas);
@@ -1989,7 +1992,7 @@ fn auxiliary_second_texture_errors_preserve_pending_command_and_previous_texture
             run_to_system(&mut vm);
             messages.try_handle(&mut vm).unwrap();
             run_to_system(&mut vm);
-            messages.try_handle_image(&mut vm, &mut files).unwrap();
+            messages.shared_window_image(&mut vm, &mut files).unwrap();
             let before = messages.auxiliary_text(7).unwrap().clone();
             if let Some(data) = data {
                 files.0.insert(b"mask.pb3".to_vec(), data);
@@ -1999,7 +2002,7 @@ fn auxiliary_second_texture_errors_preserve_pending_command_and_previous_texture
             run_to_system(&mut vm);
             let pending = vm.pending_system();
             let sp = vm.stack().len_bytes();
-            assert!(messages.try_handle_image(&mut vm, &mut files).is_err());
+            assert!(messages.shared_window_image(&mut vm, &mut files).is_err());
             assert_eq!(vm.pending_system(), pending);
             assert_eq!(vm.stack().len_bytes(), sp);
             let group = messages.auxiliary_text(7).unwrap();

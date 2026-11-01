@@ -759,6 +759,8 @@ impl<'a> Startup<'a> {
             images: None,
             waits: None,
             text: None,
+            windows: None,
+            window_images: None,
             input: None,
             buttons: Some(&mut self.buttons),
             list_input: true,
@@ -776,7 +778,16 @@ impl<'a> Startup<'a> {
             effects: Some(&mut self.effects),
             effect_objects: true,
         };
-        if crate::dispatch::uses_input(command) {
+        if crate::dispatch::uses_windows(command) {
+            hosts.windows = Some(&mut self.messages);
+            if crate::dispatch::uses_input(command) {
+                hosts.input = Some(crate::dispatch::InputHosts {
+                    input: &mut self.input,
+                    skip: message_flags.skip(),
+                    clock: Some(input_clock),
+                });
+            }
+        } else if crate::dispatch::uses_input(command) {
             hosts.input = Some(crate::dispatch::InputHosts {
                 input: &mut self.input,
                 skip: message_flags.skip(),
@@ -789,7 +800,9 @@ impl<'a> Startup<'a> {
                 flags: message_flags,
             });
         }
-        if crate::dispatch::uses_images(command) {
+        if crate::dispatch::uses_window_images(command) {
+            hosts.window_images = Some(&mut image_source);
+        } else if crate::dispatch::uses_images(command) {
             hosts.images = Some(crate::dispatch::ImageHosts {
                 scene: &mut self.scene,
                 source: &mut image_source,
@@ -933,16 +946,6 @@ impl<'a> Startup<'a> {
                 .messages
                 .try_handle_scene(&mut self.machine, &mut self.scene)?
             || self.messages.try_handle(&mut self.machine)?
-            || self
-                .messages
-                .try_handle_pointer(&mut self.machine, &self.input)?
-            || self
-                .messages
-                .try_handle_buttons(&mut self.machine, &mut self.input)?
-            || self.messages.try_handle_image(
-                &mut self.machine,
-                &mut self.images.with_paths(self.bootstrap.paths()),
-            )?
             || self.movies.try_create_scene(
                 &mut self.machine,
                 &mut self.scene,

@@ -1,3 +1,5 @@
+#[path = "support/shared_windows.rs"]
+mod shared_windows;
 use cmvs_rs::{
     input::ActionInput,
     machine::{Machine, Step},
@@ -8,6 +10,7 @@ use cmvs_rs::{
     ps3::Script,
     scene::{Animation, AnimationFrame, DrawState, SceneObject},
 };
+use shared_windows::SharedWindows;
 
 fn script(code: &[u8]) -> Script {
     let mut payload = 0u32.to_le_bytes().to_vec();
@@ -99,7 +102,7 @@ fn window_immediate_output_uses_global_outline_and_keeps_text_style() {
     let mut messages = MessageHost::default();
     run(&mut vm, &mut messages, 1);
     pending(&mut vm);
-    assert!(!messages.try_handle(&mut vm).unwrap());
+    assert!(!messages.shared_message(&mut vm).unwrap());
     messages.set_record_output(true);
     let before = messages.text(7).unwrap().outline_mode;
     messages.set_text_settings(cmvs_rs::settings::TextOutputSettings {
@@ -107,7 +110,7 @@ fn window_immediate_output_uses_global_outline_and_keeps_text_style() {
         ..Default::default()
     });
     vm.state_mut().set_system_integer(0, 123).unwrap();
-    assert!(messages.try_handle(&mut vm).unwrap());
+    assert!(messages.shared_message(&mut vm).unwrap());
     let text = messages.text(7).unwrap();
     assert_eq!(text.outline_mode, before);
     assert_eq!(text.glyphs.len(), 1);
@@ -293,7 +296,7 @@ fn empty_auxiliary_text_destruction_preserves_windows_text_and_results() {
     let mut vm = Machine::new(&script).unwrap();
     let mut messages = MessageHost::default();
     pending(&mut vm);
-    assert!(messages.try_handle(&mut vm).unwrap());
+    assert!(messages.shared_message(&mut vm).unwrap());
     let window = messages.window(0).unwrap().clone();
     let text = messages.text(0).unwrap().clone();
     for i in 0..7 {
@@ -301,7 +304,7 @@ fn empty_auxiliary_text_destruction_preserves_windows_text_and_results() {
     }
     for _ in 0..16 {
         pending(&mut vm);
-        assert!(messages.try_handle(&mut vm).unwrap());
+        assert!(messages.shared_message(&mut vm).unwrap());
         assert_eq!(messages.window(0), Some(&window));
         assert_eq!(messages.text(0), Some(&text));
         assert_eq!(vm.stack().len_bytes(), 0);
@@ -323,7 +326,7 @@ fn auxiliary_text_destruction_rejects_missing_or_invalid_slot_atomically() {
         let before = (vm.pc(), vm.stack().len_bytes(), vm.pending_system());
         let mut messages = MessageHost::default();
         for _ in 0..2 {
-            assert!(messages.try_handle(&mut vm).is_err());
+            assert!(messages.shared_message(&mut vm).is_err());
             assert_eq!(
                 (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
                 before
@@ -341,7 +344,7 @@ fn auxiliary_text_explicit_viewport_creation_stays_unhandled() {
     let mut vm = Machine::new(&script).unwrap();
     pending(&mut vm);
     let before = (vm.pc(), vm.stack().len_bytes(), vm.pending_system());
-    assert!(!MessageHost::default().try_handle(&mut vm).unwrap());
+    assert!(!MessageHost::default().shared_message(&mut vm).unwrap());
     assert_eq!(
         (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
         before
@@ -350,7 +353,7 @@ fn auxiliary_text_explicit_viewport_creation_stays_unhandled() {
 fn run(vm: &mut Machine<'_>, messages: &mut MessageHost, commands: usize) {
     for _ in 0..commands {
         pending(vm);
-        assert!(messages.try_handle(vm).unwrap());
+        assert!(messages.shared_message(vm).unwrap());
     }
 }
 
@@ -388,7 +391,7 @@ fn out_of_range_negative_slots_and_short_stacks_keep_the_command_pending() {
         let mut vm = Machine::new(&script).unwrap();
         pending(&mut vm);
         let (pc, command, bytes) = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
-        assert!(MessageHost::default().try_handle(&mut vm).is_err());
+        assert!(MessageHost::default().shared_message(&mut vm).is_err());
         assert_eq!(vm.pending_system(), command);
         assert_eq!(vm.pending_system().map(|p| p.0), Some(pc));
         assert_eq!(vm.stack().len_bytes(), bytes);
@@ -470,7 +473,7 @@ fn replacing_a_text_object_used_by_another_window_is_rejected() {
     run(&mut vm, &mut messages, 1);
     pending(&mut vm);
     let bytes = vm.stack().len_bytes();
-    assert!(messages.try_handle(&mut vm).is_err());
+    assert!(messages.shared_message(&mut vm).is_err());
     assert_eq!(vm.pending_system().map(|p| p.1), Some(0x15d));
     assert_eq!(vm.stack().len_bytes(), bytes);
     assert!(messages.window(1).is_none());
@@ -484,7 +487,7 @@ fn image_loading_stays_pending_without_an_image_source() {
         let script = script(&command.to_le_bytes());
         let mut vm = Machine::new(&script).unwrap();
         pending(&mut vm);
-        assert!(!MessageHost::default().try_handle(&mut vm).unwrap());
+        assert!(!MessageHost::default().shared_message(&mut vm).unwrap());
         assert_eq!(vm.pending_system().map(|p| p.1), Some(command - 0x2000));
     }
 }
@@ -574,7 +577,7 @@ fn setters_without_a_window_or_arguments_keep_the_command_pending() {
         run(&mut vm, &mut messages, 1);
         pending(&mut vm);
         let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
-        assert!(messages.try_handle(&mut vm).is_err());
+        assert!(messages.shared_message(&mut vm).is_err());
         assert_eq!(vm.pending_system(), command);
         assert_eq!(vm.stack().len_bytes(), bytes);
         assert_eq!(messages.text(0).map(|t| t.char_delay), Some(100));
@@ -640,7 +643,7 @@ fn window_object_commands_need_a_window_and_valid_children() {
         run(&mut vm, &mut messages, 1);
         pending(&mut vm);
         let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
-        assert!(messages.try_handle(&mut vm).is_err());
+        assert!(messages.shared_message(&mut vm).is_err());
         assert_eq!(vm.pending_system(), command);
         assert_eq!(vm.stack().len_bytes(), bytes);
         assert_eq!(messages.window(0).unwrap().object, SceneObject::default());
@@ -713,7 +716,7 @@ fn window_child_destruction_rejects_the_window_object_missing_windows_and_short_
         let before = messages.window(0).unwrap().object.clone();
         pending(&mut vm);
         let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
-        assert!(messages.try_handle(&mut vm).is_err());
+        assert!(messages.shared_message(&mut vm).is_err());
         assert_eq!(vm.pending_system(), command);
         assert_eq!(vm.stack().len_bytes(), bytes);
         assert_eq!(messages.window(0).unwrap().object, before);
@@ -777,7 +780,7 @@ fn window_draw_commands_need_a_target_and_its_draw_state() {
         run(&mut vm, &mut messages, 1);
         pending(&mut vm);
         let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
-        assert!(messages.try_handle(&mut vm).is_err());
+        assert!(messages.shared_message(&mut vm).is_err());
         assert_eq!(vm.pending_system(), command);
         assert_eq!(vm.stack().len_bytes(), bytes);
         assert_eq!(messages.window(0).unwrap().object, SceneObject::default());
@@ -839,7 +842,7 @@ fn button_commands_reject_bad_records_states_and_missing_windows() {
         run(&mut vm, &mut messages, 1);
         pending(&mut vm);
         let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
-        assert!(messages.try_handle(&mut vm).is_err());
+        assert!(messages.shared_message(&mut vm).is_err());
         assert_eq!(vm.pending_system(), command);
         assert_eq!(vm.stack().len_bytes(), bytes);
         assert!(messages.window(0).unwrap().buttons == [WindowButton::default(); WINDOW_BUTTONS]);
@@ -914,7 +917,7 @@ fn window_moves_need_a_known_mode_a_window_and_a_draw_state() {
         run(&mut vm, &mut messages, setup);
         pending(&mut vm);
         let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
-        assert!(messages.try_handle(&mut vm).is_err());
+        assert!(messages.shared_message(&mut vm).is_err());
         assert_eq!(vm.pending_system(), command);
         assert_eq!(vm.stack().len_bytes(), bytes);
         let window = messages.window(0).unwrap();
@@ -1014,7 +1017,7 @@ fn standalone_text_creation_rejects_unmodeled_arguments_atomically() {
         let before = messages.text(3).cloned();
         pending(&mut vm);
         let bytes = vm.stack().len_bytes();
-        assert!(messages.try_handle(&mut vm).is_err(), "{words:?}");
+        assert!(messages.shared_message(&mut vm).is_err(), "{words:?}");
         assert_eq!(vm.pending_system().map(|p| p.1), Some(0x100));
         assert_eq!(vm.stack().len_bytes(), bytes);
         assert_eq!(vm.state().system_integer(0), Some(9));
@@ -1104,7 +1107,7 @@ fn encoded_length_rejects_malformed_input_or_missing_text_without_committing() {
         vm.state_mut().set_system_integer(0, 123).unwrap();
         pending(&mut vm);
         for _ in 0..2 {
-            assert!(messages.try_handle(&mut vm).is_err());
+            assert!(messages.shared_message(&mut vm).is_err());
             assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x119)));
             assert_eq!(vm.stack().len_bytes(), 8);
             assert_eq!(vm.state().system_integer(0), Some(123));
@@ -2798,7 +2801,7 @@ fn basic_layout_errors_are_retryable_and_bound_the_callers_sixteen_ruby_flags() 
             vm.state_mut().set_system_integer(i, 99).unwrap();
         }
         for _ in 0..2 {
-            assert!(messages.try_handle(&mut vm).is_err(), "{bytes:?}");
+            assert!(messages.shared_message(&mut vm).is_err(), "{bytes:?}");
             assert_eq!(messages.text(7), before.as_ref());
             assert_eq!(vm.pending_system(), Some((pc, 0x112)));
             assert_eq!(vm.stack().len_bytes(), 8);
@@ -2825,7 +2828,7 @@ fn basic_layout_errors_are_retryable_and_bound_the_callers_sixteen_ruby_flags() 
         pending(&mut vm);
         let before = messages.text(7).cloned();
         let pc = vm.pc();
-        assert!(messages.try_handle(&mut vm).is_err());
+        assert!(messages.shared_message(&mut vm).is_err());
         assert_eq!(messages.text(7), before.as_ref());
         assert_eq!(vm.pending_system(), Some((pc, 0x112)));
         assert_eq!(vm.stack().len_bytes(), 4 * words.len());
@@ -3017,7 +3020,7 @@ fn text_measurement_rejects_malformed_strings_transactionally() {
         let pc = vm.pc();
         let before = messages.text(7).cloned();
         for _ in 0..2 {
-            assert!(messages.try_handle(&mut vm).is_err(), "{bytes:?}");
+            assert!(messages.shared_message(&mut vm).is_err(), "{bytes:?}");
             assert_eq!(messages.text(7), before.as_ref());
             assert_eq!(vm.pending_system(), Some((pc, 0x11f)));
             assert_eq!(vm.stack().len_bytes(), 8);
@@ -3048,7 +3051,7 @@ fn text_measurement_rejects_missing_text_bad_references_and_short_stacks() {
         pending(&mut vm);
         let pc = vm.pc();
         let before = messages.text(7).cloned();
-        assert!(messages.try_handle(&mut vm).is_err());
+        assert!(messages.shared_message(&mut vm).is_err());
         assert_eq!(messages.text(7), before.as_ref());
         assert_eq!(vm.pending_system(), Some((pc, 0x11f)));
         assert_eq!(vm.stack().len_bytes(), 4 * words.len());
@@ -3093,7 +3096,7 @@ fn text_measurement_bounds_automatic_ruby_line_access_but_not_explicit_newlines(
         pending(&mut vm);
         let before = messages.text(7).cloned();
         let command = vm.pending_system();
-        assert_eq!(messages.try_handle(&mut vm).is_ok(), success);
+        assert_eq!(messages.shared_message(&mut vm).is_ok(), success);
         assert_eq!(messages.text(7), before.as_ref());
         if success {
             assert_eq!(vm.state().system_integer(2), Some(41));
@@ -3150,7 +3153,7 @@ fn text_object_commands_reject_missing_objects_and_long_strings() {
         run(&mut vm, &mut messages, 1);
         pending(&mut vm);
         let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
-        assert!(messages.try_handle(&mut vm).is_err());
+        assert!(messages.shared_message(&mut vm).is_err());
         assert_eq!(vm.pending_system(), command);
         assert_eq!(vm.stack().len_bytes(), bytes);
         assert_eq!(messages.text(7), Some(&created_text([0, 0], [10, 10])));
@@ -3241,7 +3244,7 @@ fn frame_entries_without_an_animation_are_ignored_and_bad_targets_rejected() {
         let before = messages.window(0).unwrap().object.clone();
         pending(&mut vm);
         let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
-        assert!(messages.try_handle(&mut vm).is_err());
+        assert!(messages.shared_message(&mut vm).is_err());
         assert_eq!(vm.pending_system(), command);
         assert_eq!(vm.stack().len_bytes(), bytes);
         assert_eq!(messages.window(0).unwrap().object, before);
@@ -3378,7 +3381,7 @@ fn playback_rejects_out_of_table_frames() {
         run(&mut vm, &mut messages, 4);
         pending(&mut vm);
         let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
-        assert!(messages.try_handle(&mut vm).is_err());
+        assert!(messages.shared_message(&mut vm).is_err());
         assert_eq!(vm.pending_system(), command);
         assert_eq!(vm.stack().len_bytes(), bytes);
     }
@@ -3419,7 +3422,7 @@ fn wait_cursor_mode_keeps_offsets_for_modes_one_and_three_only() {
         run(&mut vm, &mut messages, 1);
         pending(&mut vm);
         let bytes = vm.stack().len_bytes();
-        assert!(messages.try_handle(&mut vm).is_err());
+        assert!(messages.shared_message(&mut vm).is_err());
         assert_eq!(vm.pending_system().map(|p| p.1), Some(0x151));
         assert_eq!(vm.stack().len_bytes(), bytes);
         assert_eq!(state(&messages), (0, [0, 0]));
@@ -3454,7 +3457,7 @@ fn window_opacity_caps_at_255_and_keeps_negative_values() {
     assert_eq!(opacity(&messages), u32::MAX);
     // The window object itself has no draw state.
     pending(&mut vm);
-    assert!(messages.try_handle(&mut vm).is_err());
+    assert!(messages.shared_message(&mut vm).is_err());
     assert_eq!(vm.pending_system().map(|p| p.1), Some(0x186));
 }
 
@@ -3495,7 +3498,7 @@ fn switch_state_one_position_and_text_clearing() {
         run(&mut vm, &mut messages, 1);
         pending(&mut vm);
         let bytes = vm.stack().len_bytes();
-        assert!(messages.try_handle(&mut vm).is_err());
+        assert!(messages.shared_message(&mut vm).is_err());
         assert_eq!(vm.pending_system().map(|p| p.1), Some(command - 0x2000));
         assert_eq!(vm.stack().len_bytes(), bytes);
     }
@@ -3523,7 +3526,7 @@ fn window_cursor_is_absolute_signed_unclamped_and_isolated_from_layout() {
         expected.cursor = [x as i32, y as i32];
         pending(&mut vm);
         let pc = vm.pc();
-        assert!(messages.try_handle(&mut vm).unwrap());
+        assert!(messages.shared_message(&mut vm).unwrap());
         assert_eq!(vm.pc(), pc + 2);
         assert_eq!(vm.pending_system(), None);
         assert_eq!(vm.stack().len_bytes(), 0);
@@ -3559,7 +3562,7 @@ fn window_cursor_errors_keep_the_pending_command_and_all_arguments() {
         let window = messages.window(0).cloned();
         let text = messages.text(7).cloned();
         for _ in 0..2 {
-            assert!(messages.try_handle(&mut vm).is_err());
+            assert!(messages.shared_message(&mut vm).is_err());
             assert_eq!(vm.pc(), pc);
             assert_eq!(vm.pending_system(), Some((pc, 0x14f)));
             assert_eq!(vm.stack().len_bytes(), words.len() * 4);
@@ -3612,7 +3615,7 @@ fn showing_and_hiding_a_window_toggles_window_text_and_object() {
         run(&mut vm, &mut messages, 1);
         pending(&mut vm);
         let bytes = vm.stack().len_bytes();
-        assert!(messages.try_handle(&mut vm).is_err());
+        assert!(messages.shared_message(&mut vm).is_err());
         assert_eq!(vm.pending_system().map(|p| p.1), Some(0x14e));
         assert_eq!(vm.stack().len_bytes(), bytes);
     }
@@ -3669,7 +3672,7 @@ fn window_presence_and_temporary_hiding() {
         run(&mut vm, &mut messages, 1);
         pending(&mut vm);
         let bytes = vm.stack().len_bytes();
-        assert!(messages.try_handle(&mut vm).is_err(), "{command:x}");
+        assert!(messages.shared_message(&mut vm).is_err(), "{command:x}");
         assert_eq!(vm.pending_system().map(|p| p.1), Some(command - 0x2000));
         assert_eq!(vm.stack().len_bytes(), bytes);
         assert_eq!(vm.state().system_integer(0), Some(9));
@@ -3700,8 +3703,8 @@ fn pointer_hit_test_is_relative_to_the_window_and_half_open() {
     ] {
         input.set_pointer(x, y);
         pending(&mut vm);
-        assert!(!messages.try_handle(&mut vm).unwrap());
-        assert!(messages.try_handle_pointer(&mut vm, &input).unwrap());
+        assert!(!messages.shared_message(&mut vm).unwrap());
+        assert!(messages.shared_window_pointer(&mut vm, &input).unwrap());
         hits.push(vm.state().system_integer(0));
     }
     assert_eq!(hits, [Some(1), Some(1), Some(0), Some(0), Some(0), Some(0)]);
@@ -3716,7 +3719,7 @@ fn pointer_hit_test_is_relative_to_the_window_and_half_open() {
         run(&mut vm, &mut messages, 1);
         pending(&mut vm);
         let bytes = vm.stack().len_bytes();
-        assert!(messages.try_handle_pointer(&mut vm, &input).is_err());
+        assert!(messages.shared_window_pointer(&mut vm, &input).is_err());
         assert_eq!(vm.pending_system().map(|p| p.1), Some(0x15f));
         assert_eq!(vm.stack().len_bytes(), bytes);
     }
@@ -3822,7 +3825,7 @@ fn window_glyph_parameter_errors_preserve_pending_command_stack_and_objects() {
         let window = messages.window(0).cloned();
         let text = messages.text(7).cloned();
         for _ in 0..2 {
-            assert!(messages.try_handle(&mut vm).is_err());
+            assert!(messages.shared_message(&mut vm).is_err());
             assert_eq!(vm.pc(), pc);
             assert_eq!(vm.pending_system(), Some((pc, 0x155)));
             assert_eq!(vm.stack().len_bytes(), words.len() * 4);
@@ -3866,7 +3869,7 @@ fn window_scale_rejects_bad_targets_and_truncated_arguments_without_mutation() {
         let stack = vm.stack().len_bytes();
         let window = messages.window(0).cloned();
         let text = messages.text(7).cloned();
-        assert!(messages.try_handle(&mut vm).is_err());
+        assert!(messages.shared_message(&mut vm).is_err());
         assert_eq!(vm.pending_system(), Some((pc, 0xec)));
         assert_eq!(vm.stack().len_bytes(), stack);
         assert_eq!(messages.window(0), window.as_ref());
@@ -3888,7 +3891,7 @@ fn window_image_release_rejects_missing_slots_and_short_stacks_without_mutation(
         let text = messages.text(0).unwrap().clone();
         pending(&mut vm);
         let pc = vm.pc();
-        assert!(messages.try_handle(&mut vm).is_err());
+        assert!(messages.shared_message(&mut vm).is_err());
         assert_eq!(vm.pending_system(), Some((pc, 0x171)));
         assert_eq!(vm.stack().len_bytes(), args.len() * 4);
         assert_eq!(messages.window(0), Some(&before));
@@ -3927,7 +3930,7 @@ fn window_object_presence_ignores_images_visibility_and_draw_state_and_tracks_ch
         let text = messages.text(0).unwrap().clone();
         pending(vm);
         let pc = vm.pc();
-        assert!(messages.try_handle(vm).unwrap());
+        assert!(messages.shared_message(vm).unwrap());
         assert_eq!(vm.pc(), pc + 2);
         assert_eq!(vm.state().system_integer(0), Some(result));
         assert_eq!(vm.state().system_integer(1), Some(99));
@@ -3959,7 +3962,7 @@ fn window_object_query_rejects_missing_windows_and_short_arguments_without_mutat
         let before = messages.window(0).unwrap().clone();
         pending(&mut vm);
         let pc = vm.pc();
-        assert!(messages.try_handle(&mut vm).is_err());
+        assert!(messages.shared_message(&mut vm).is_err());
         assert_eq!(vm.pending_system(), Some((pc, 0x17b)));
         assert_eq!(vm.stack().len_bytes(), args.len() * 4);
         assert_eq!(vm.state().system_integer(0), Some(17));
@@ -4041,7 +4044,7 @@ fn direct_text_destruction_and_rejected_targets_keep_state_atomic() {
         let before = messages.text(3).cloned();
         pending(&mut vm);
         let bytes = vm.stack().len_bytes();
-        assert!(messages.try_handle(&mut vm).is_err(), "{command:x}");
+        assert!(messages.shared_message(&mut vm).is_err(), "{command:x}");
         assert_eq!(vm.pending_system().map(|p| p.1), Some(command - 0x2000));
         assert_eq!(vm.stack().len_bytes(), bytes);
         assert_eq!(messages.text(3).cloned(), before);
@@ -4115,7 +4118,7 @@ fn font_cell_step(
         Some(cmvs_rs::dispatch::Flow::Unhandled | cmvs_rs::dispatch::Flow::Unavailable) => {
             Ok(false)
         }
-        None => Ok(messages.try_handle(vm)?),
+        None => Ok(messages.shared_message(vm)?),
     }
 }
 fn run_font_cells(vm: &mut Machine<'_>, messages: &mut MessageHost, count: usize) {
@@ -4277,9 +4280,9 @@ fn direct_text_output_places_glyphs_at_once_and_follows_its_own_layout() {
     run(&mut vm, &mut messages, 4);
     pending(&mut vm);
     // Without the research output policy the command stays a barrier.
-    assert!(!messages.try_handle(&mut vm).unwrap());
+    assert!(!messages.shared_message(&mut vm).unwrap());
     messages.set_record_output(true);
-    assert!(messages.try_handle(&mut vm).unwrap());
+    assert!(messages.shared_message(&mut vm).unwrap());
     assert_eq!(vm.stack().len_bytes(), 0);
     let text = messages.text(1).unwrap();
     let placed: Vec<_> = text
@@ -4325,7 +4328,7 @@ fn direct_text_output_rejects_gdi_widths_and_stalling_escapes_atomically() {
         let before = messages.text(1).cloned();
         pending(&mut vm);
         let bytes = vm.stack().len_bytes();
-        assert!(messages.try_handle(&mut vm).is_err(), "{bad:?}");
+        assert!(messages.shared_message(&mut vm).is_err(), "{bad:?}");
         assert_eq!(vm.pending_system().map(|p| p.1), Some(0x10b));
         assert_eq!(vm.stack().len_bytes(), bytes);
         assert_eq!(messages.text(1).cloned(), before);
@@ -4412,7 +4415,7 @@ fn window_button_hit_test_reports_hover_click_and_hold_and_consumes_releases() {
         input.set_pointer(pointer[0], pointer[1]);
         input.set(0, flags[0], flags[1], flags[2]).unwrap();
         pending(&mut vm);
-        assert!(messages.try_handle_buttons(&mut vm, input).unwrap());
+        assert!(messages.shared_window_buttons(&mut vm, input).unwrap());
         let results: Vec<u32> = (4..7)
             .map(|i| vm.state().system_integer(i).unwrap())
             .collect();
@@ -4445,7 +4448,7 @@ fn window_button_hit_test_reports_hover_click_and_hold_and_consumes_releases() {
     assert!(!input.released(0));
     // Slot 8 only sets an engine flag in the original; the command stays pending here.
     pending(&mut vm);
-    assert!(messages.try_handle_buttons(&mut vm, &mut input).is_err());
+    assert!(messages.shared_window_buttons(&mut vm, &mut input).is_err());
     assert!(vm.pending_system().is_some());
 }
 
@@ -4468,7 +4471,7 @@ fn window_button_state_commands_switch_the_child_source_once() {
     run(&mut vm, &mut messages, 5);
     let result = |vm: &mut Machine<'_>, messages: &mut MessageHost| {
         pending(vm);
-        assert!(messages.try_handle(vm).unwrap());
+        assert!(messages.shared_message(vm).unwrap());
         vm.state().system_integer(0)
     };
     assert_eq!(result(&mut vm, &mut messages), Some(1));
@@ -4482,7 +4485,7 @@ fn window_button_state_commands_switch_the_child_source_once() {
     // State 5 lies past the five state records.
     pending(&mut vm);
     let bytes = vm.stack().len_bytes();
-    assert!(messages.try_handle(&mut vm).is_err());
+    assert!(messages.shared_message(&mut vm).is_err());
     assert_eq!(vm.stack().len_bytes(), bytes);
 }
 
@@ -4523,7 +4526,7 @@ fn window_draw_query_and_hidden_flag_report_window_state() {
     assert_eq!(vm.state().system_integer(0), Some(1));
     // A missing child sets an engine flag in the original.
     pending(&mut vm);
-    assert!(messages.try_handle(&mut vm).is_err());
+    assert!(messages.shared_message(&mut vm).is_err());
 }
 
 #[test]
