@@ -10,6 +10,82 @@ pub struct DeviceView {
 }
 
 impl DeviceView {
+    /// Type-2 effects use inverse-view billboards (0x14002a530), so all four
+    /// corners have the same view depth. Device viewport pixel centers are integers.
+    pub fn billboard(
+        &self,
+        position: [f32; 3],
+        size: [f32; 2],
+        viewport: [u32; 2],
+    ) -> Result<Option<[f32; 4]>, &'static str> {
+        let values = self.words.map(f32::from_bits);
+        if values
+            .iter()
+            .chain(position.iter())
+            .chain(size.iter())
+            .any(|v| !v.is_finite())
+            || !(0.0..180.0).contains(&values[6])
+            || values[6] == 0.0
+            || viewport.contains(&0)
+            || size.iter().any(|&v| v <= 0.0)
+        {
+            return Err("invalid world billboard or device view parameters");
+        }
+        // 0x1400546c0 computes angles in f32, trig in f64, then truncates each
+        // direction component to a thousandth before LookAtLH normalizes it.
+        let radians = |degrees: f32| f64::from(degrees / 180.0 * std::f32::consts::PI);
+        let (pitch, yaw, roll) = (radians(values[3]), radians(values[4]), radians(values[5]));
+        let quantize = |value: f64| ((value * 1000.0) as i32) as f32 / 1000.0;
+        let direction = [
+            quantize(yaw.sin() * pitch.cos()),
+            quantize(-pitch.sin()),
+            quantize(yaw.cos() * pitch.cos()),
+        ];
+        let up = [quantize(-roll.sin()), quantize(roll.cos()), 0.0];
+        let eye = [values[0], values[1], values[2]];
+        let normalize = |v: [f32; 3]| {
+            let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            v.map(|x| x / length)
+        };
+        let cross = |a: [f32; 3], b: [f32; 3]| {
+            [
+                a[1] * b[2] - a[2] * b[1],
+                a[2] * b[0] - a[0] * b[2],
+                a[0] * b[1] - a[1] * b[0],
+            ]
+        };
+        let forward = normalize(std::array::from_fn(|i| (eye[i] + direction[i]) - eye[i]));
+        let right = normalize(cross(up, forward));
+        let up = cross(forward, right);
+        let dot = |axis: [f32; 3]| {
+            (position[0] * axis[0] + position[1] * axis[1] + position[2] * axis[2])
+                - (eye[0] * axis[0] + eye[1] * axis[1] + eye[2] * axis[2])
+        };
+        let [x, y, z] = [dot(right), dot(up), dot(forward)];
+        if ![x, y, z].iter().all(|v| v.is_finite()) {
+            return Err("degenerate device view basis");
+        }
+        // PerspectiveFovLH uses near=0.1, far=100; queue 5 tests LESS with no Z writes.
+        if z < 0.1 || z >= 100.0 {
+            return Ok(None);
+        }
+        let [width, height] = viewport.map(|v| v as f32);
+        let scale_y = 1.0 / (values[6] * (std::f32::consts::PI / 180.0) * 0.5).tan();
+        let scale_x = scale_y / (width / height);
+        let horizontal = |offset: f32| ((x + offset) * scale_x / z + 1.0) * width * 0.5;
+        let vertical = |offset: f32| (1.0 - (y + offset) * scale_y / z) * height * 0.5;
+        let quad = [
+            horizontal(-size[0] * 0.5),
+            vertical(size[1] * 0.5),
+            horizontal(size[0] * 0.5),
+            vertical(-size[1] * 0.5),
+        ];
+        if !quad.iter().all(|v| v.is_finite()) {
+            return Err("non-finite world billboard extent");
+        }
+        Ok(Some(quad))
+    }
+
     pub(super) fn new(index: usize) -> Self {
         let mut view = Self {
             words: [0; 7],
@@ -81,6 +157,33 @@ impl CameraHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn billboards_project_through_the_device_view_and_clip_near_and_far() {
+        let mut view = DeviceView::new(0);
+        view.words[6] = 90.0f32.to_bits();
+        let quad = view
+            .billboard([0.0, 1.0, 1.0], [0.1, 0.1], [40, 40])
+            .unwrap()
+            .unwrap();
+        for (actual, expected) in quad.into_iter().zip([19.0, 19.0, 21.0, 21.0]) {
+            assert!((actual - expected).abs() < 0.0001);
+        }
+        for z in [-1.0, 0.0, 0.099, 100.0, 101.0] {
+            assert_eq!(
+                view.billboard([0.0, 1.0, z], [0.1, 0.1], [40, 40]).unwrap(),
+                None
+            );
+        }
+        view.words[4] = 90.0f32.to_bits();
+        let quad = view
+            .billboard([1.0, 1.0, 0.0], [0.1, 0.1], [40, 40])
+            .unwrap()
+            .unwrap();
+        assert!((quad[0] - 19.0).abs() < 0.0001);
+        view.words[6] = f32::NAN.to_bits();
+        assert!(view.billboard([0.0; 3], [0.1; 2], [40, 40]).is_err());
+    }
+
     #[test]
     fn view_records_round_trip_both_versions_and_reset_retains_the_snapshot_mode() {
         let mut host = CameraHost::default();

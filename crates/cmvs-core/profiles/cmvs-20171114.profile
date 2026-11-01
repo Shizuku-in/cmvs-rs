@@ -678,7 +678,7 @@ compare x64 base-sha256=dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91
 0x229f noop 0x89047 0x79b33
 0x22a0 unreviewed 0x8ada2 0x7b0f4
 0x22a1 unreviewed 0x8adaf 0x7b0fe
-0x22a2 unreviewed 0x8adbc 0x7b108
+0x22a2 unreviewed 0x8adbc 0x7b108 research=falling-billboards:x64:3bccda5d7611412c6938c0c9b06b2195914cfb78763a53f2c235bb6479395ee0 evidence=games/aoitori/vm-semantics.md
 0x22a3 unreviewed 0x8adc9 0x7b112
 0x22a4 unreviewed 0x8add6 0x7b11c
 0x22a5 unreviewed 0x8ade3 0x7b126 research=particles:x64:3bccda5d7611412c6938c0c9b06b2195914cfb78763a53f2c235bb6479395ee0 evidence=games/aoitori/vm-semantics.md

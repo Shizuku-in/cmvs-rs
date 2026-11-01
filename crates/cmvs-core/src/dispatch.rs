@@ -1,4 +1,4 @@
-//! Shared static system-command routing and sparse text research overrides.
+//! Shared static system-command routing and sparse identity-bound research overrides.
 //! Gate resolution precedes dispatch. Runtime-wide operations return a checked
 //! request for the caller's orchestration; they remain pending until acknowledged.
 //! A selected override never falls through to root semantics.
@@ -1378,16 +1378,18 @@ fn root_change_image(
 }
 
 pub fn uses_images(command: u16) -> bool {
-    ROOT.iter().chain(PARTICLES).any(|e| {
-        e.command == command
-            && matches!(
-                e.capability,
-                Capability::SceneImages
-                    | Capability::MaskImages
-                    | Capability::ImageChange
-                    | Capability::ParticleImages
-            )
-    })
+    ROOT.iter()
+        .chain(RESEARCH_TABLES.iter().flat_map(|table| table.iter()))
+        .any(|e| {
+            e.command == command
+                && matches!(
+                    e.capability,
+                    Capability::SceneImages
+                        | Capability::MaskImages
+                        | Capability::ImageChange
+                        | Capability::ParticleImages
+                )
+        })
 }
 
 pub fn is_wait(command: u16) -> bool {
@@ -4468,6 +4470,27 @@ pub static PARTICLES: &[Entry] = &[Entry {
     },
 }];
 
+pub static FALLING_BILLBOARDS: &[Entry] = &[Entry {
+    command: 0x2a2,
+    name: "create falling billboard effect",
+    capability: Capability::ParticleImages,
+    handler: |hosts, call| {
+        let h = hosts
+            .images
+            .as_mut()
+            .expect("particle image capability checked");
+        h.scene.create_falling_effect(
+            call,
+            h.source,
+            hosts
+                .random
+                .as_deref_mut()
+                .expect("particle random capability checked"),
+        )?;
+        Ok(Flow::Done)
+    },
+}];
+
 pub static BACKGROUND_AUDIO: &[Entry] = &[Entry {
     command: 0x2ed,
     name: "background audio output",
@@ -4479,11 +4502,16 @@ pub static BACKGROUND_AUDIO: &[Entry] = &[Entry {
     },
 }];
 
+/// Static research tables used when provisioning shared host capabilities.
+pub static RESEARCH_TABLES: &[&[Entry]] =
+    &[FONT_CELLS, PARTICLES, BACKGROUND_AUDIO, FALLING_BILLBOARDS];
+
 pub fn research_entry(id: crate::profile::ResearchId, command: u16) -> Option<&'static Entry> {
     let entries = match id {
         crate::profile::ResearchId::FontCells => FONT_CELLS,
         crate::profile::ResearchId::Particles => PARTICLES,
         crate::profile::ResearchId::BackgroundAudio => BACKGROUND_AUDIO,
+        crate::profile::ResearchId::FallingBillboards => FALLING_BILLBOARDS,
     };
     entries.iter().find(|entry| entry.command == command)
 }
@@ -4494,6 +4522,9 @@ pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
         Semantics::Research(crate::profile::ResearchId::Particles) => "research particle override",
         Semantics::Research(crate::profile::ResearchId::BackgroundAudio) => {
             "research background audio override"
+        }
+        Semantics::Research(crate::profile::ResearchId::FallingBillboards) => {
+            "research falling billboard override"
         }
         Semantics::Root => "base semantics",
     }

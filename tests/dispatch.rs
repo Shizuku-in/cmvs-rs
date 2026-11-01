@@ -10,9 +10,14 @@ use support::bytecode::{command, pending, script};
 
 #[test]
 fn migrated_tables_have_unique_owners_and_overrides_are_build_bound() {
-    for table in [dispatch::ROOT, dispatch::FONT_CELLS] {
+    for table in std::iter::once(dispatch::ROOT).chain(dispatch::RESEARCH_TABLES.iter().copied()) {
         let owners: std::collections::BTreeSet<_> = table.iter().map(|e| e.command).collect();
         assert_eq!(owners.len(), table.len());
+        for entry in table {
+            if entry.capability == dispatch::Capability::ParticleImages {
+                assert!(dispatch::uses_images(entry.command));
+            }
+        }
     }
     let registry = Registry::builtin();
     for id in ["cmvs-20160201", "cmvs-20150405"] {

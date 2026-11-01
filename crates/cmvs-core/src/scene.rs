@@ -274,6 +274,7 @@ impl DrawState {
 #[derive(Debug, Default)]
 pub struct SceneHost {
     pub(crate) particle_effects: BTreeMap<u8, crate::effect_objects::ParticleEffect>,
+    pub(crate) falling_effects: BTreeMap<u8, crate::effect_objects::FallingEffect>,
     clear: ClearState,
     objects: BTreeMap<u8, SceneObject>,
     fade: crate::fade::FadeHost,
@@ -1051,6 +1052,7 @@ impl SceneHost {
     ) {
         *self = Self {
             particle_effects: Default::default(),
+            falling_effects: Default::default(),
             clear,
             objects,
             quake,

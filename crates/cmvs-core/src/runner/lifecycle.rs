@@ -102,6 +102,28 @@ mod tests {
             .iter()
             .position(|name| name == b"intproc.ps3")
             .unwrap() as u8;
+        run.scene.particle_effects.clear();
+        run.scene.falling_effects.insert(
+            1,
+            crate::effect_objects::FallingEffect {
+                parameters: [1.0f32.to_bits(); 4],
+                follow: true,
+                image: None,
+                particles: Vec::new(),
+            },
+        );
+        assert!(
+            run.inspect_snapshot()
+                .unwrap_err()
+                .to_string()
+                .contains("active particle effects")
+        );
+        assert!(
+            run.load_slot(0, &mut backend)
+                .unwrap_err()
+                .to_string()
+                .contains("active particle effects")
+        );
         let settings = run.settings.clone();
         let callbacks = run.control.callbacks().clone();
         // Execute the original opcodes at hash-bound intproc boundaries. This bypasses
@@ -252,6 +274,7 @@ mod tests {
         assert_eq!(&*run.messages.default_face(), b"Retained Face");
         assert_eq!(run.scene.clear(), crate::scene::ClearState::default());
         assert!(run.scene.particle_effects().is_empty());
+        assert!(run.scene.falling_effects().is_empty());
         assert!(!run.message_flags.skip());
         assert!(!run.message_flags.auto_advance());
         assert!(run.save_menu.popup_enabled());

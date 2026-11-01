@@ -162,6 +162,14 @@ release探针沿用显式 `--allow-unreviewed --allow-presumed`、msgothic字体
 
 ## 首次选择后的新停点与设置保持（2026-11-02）
 
-`local/aoitori/full-play-route-1`：R2首路线到 `sn108.ps3 / 0x3694c` 的三选项「メアリー。/小夜。/理沙。」，选择0后推进至 `sn213.ps3 / 0xbd34 / 0x22a2`，202,181,014步、85,810帧；其余两分支未探索，未到结局。类型2效果涉及独立三维视图和世界四边形，初步证据见[VM语义](vm-semantics.md#0x22a2类型2下落效果待实现)，尚未实现，不能算完整可玩。
+`local/aoitori/full-play-route-1`：R2首路线到 `sn108.ps3 / 0x3694c` 的三选项「メアリー。/小夜。/理沙。」，选择0后推进至 `sn213.ps3 / 0xbd34 / 0x22a2`，202,181,014步、85,810帧；其余两分支未探索，未到结局。类型2效果涉及独立三维视图和世界四边形，初步证据见[VM语义](vm-semantics.md#0x22a2类型2下落效果)，尚未实现，不能算完整可玩。
 
 后台音频开关补齐原版 `INACTIVE_SOUND_PLAY` 的缺省、读取和独立用户配置保存；已有settings/runner共69项回归及受影响Clippy、格式检查通过。`local/aoitori/background-audio-persistence` C2/L1通过，本轮探针实际选择的是后台绘制开关，重启保持；后台音频自身的持久化由合成回归验证，未专项原生试玩。
+
+## 类型2下落效果越过真实停点（2026-11-02）
+
+`0x22a2` 由身份绑定的研究入口创建类型2效果池，接入共享CRT rand、独立DeviceView、500ms帧上限、单次回绕和距离/底边透明度；四槽与类型5互斥，释放及RESET清理，未核对的效果存档继续拒绝。CPU/wgpu共用逆视图billboard准备并保留WRAP采样。原版依据及真实资源隔离渲染见[VM语义](vm-semantics.md#类型2下落效果实现)。修正图像能力查询仅枚举旧研究表的遗漏，统一枚举全部研究表，补入既有分派检查。
+
+`local/aoitori/falling-effect-route-fixed`：R1/L0与D1/L1通过，624帧、22,050步及启动轨迹/状态哈希不变；R2首路线选择「メアリー。」后越过 `sn213.ps3 / 0xbd34`，202,255,442步、85,840帧停在 `sn213.ps3 / 0xa4f0 / 0x22a6`。这是类型6粒子，更新时采集独立三维模型的三角形作碰撞；初步导出 `local/aoitori/collision-particles-22a6-x64.json`，尚未实现，不得复用无碰撞的类型2代替。
+
+受影响核心、分派、粒子、场景、投影、相机、runner回归与CPU/GPU合成对照通过；core/wgpu及相关测试/trace严格Clippy、格式与桌面音频/GPU构建通过。只读解码真实snow纹理并查看隔离效果帧，未操作原生窗口，未认领原版像素一致、存读档或完整路线通过。

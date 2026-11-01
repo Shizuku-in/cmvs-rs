@@ -10,6 +10,13 @@ use crate::{
 };
 
 pub enum Layer<'a> {
+    /// World-space inverse-view billboard: full texture, wrapped linear sampling,
+    /// alpha blending and no depth writes (original queue 5).
+    Billboard {
+        image: &'a ObjectImage,
+        quad: [f32; 4],
+        alpha: u32,
+    },
     Image {
         image: &'a ObjectImage,
         /// Source x/y/width/height.
@@ -986,8 +993,43 @@ pub fn prepare_scene<'a>(
     for queue in &mut projected {
         queue.sort_by(|a, b| b.order.total_cmp(&a.order));
     }
+    let mut world = Vec::new();
+    for effect in scene.falling_effects().values() {
+        let Some(image) = &effect.image else { continue };
+        let view = cameras
+            .ok_or(FormatError("world billboards need the device view"))?
+            .view(0)
+            .expect("view exists");
+        let eye = [view.words[0], view.words[1], view.words[2]].map(f32::from_bits);
+        for particle in &effect.particles {
+            if particle.opacity == 0 {
+                continue;
+            }
+            let position = particle.position();
+            let Some(quad) = view
+                .billboard(position, [0.1, 0.1], [width, height])
+                .map_err(FormatError)?
+            else {
+                continue;
+            };
+            let distance = ((position[1] - eye[1]).powi(2)
+                + (position[0] - eye[0]).powi(2)
+                + (position[2] - eye[2]).powi(2))
+            .sqrt();
+            world.push(Entry {
+                order: distance,
+                layer: Some(Layer::Billboard {
+                    image,
+                    quad,
+                    alpha: particle.opacity,
+                }),
+                children: Vec::new(),
+            });
+        }
+    }
+    world.sort_by(|a, b| b.order.total_cmp(&a.order));
     let mut commands = Vec::new();
-    for mut entry in projected.into_iter().flatten().chain(entries) {
+    for mut entry in projected.into_iter().flatten().chain(world).chain(entries) {
         entry.children.sort_by(|a, b| b.0.total_cmp(&a.0));
         let layers = entry
             .layer
@@ -1030,7 +1072,7 @@ fn put(target: &mut [u8], source: [u8; 3], alpha: u32, blend: Blend) {
 /// Pixels whose centers lie in [left, right) × [top, bottom) are covered. Texture tiling
 /// seams, power-of-two padding and the device's sub-texel precision are not modeled, so
 /// scaled output approximates the original; at unit scale on whole pixels it copies texels.
-fn draw_projected(
+fn draw_projected<const WRAP: bool>(
     pixels: &mut [u8],
     [width, height]: [u32; 2],
     image: &ObjectImage,
@@ -1053,7 +1095,7 @@ fn draw_projected(
         let ty = sy as f32 + (y as f32 - top) * step[1] - 0.5;
         for x in x0..x1 {
             let tx = sx as f32 + (x as f32 - left) * step[0] - 0.5;
-            let texel = bilinear(image, tx, ty);
+            let texel = bilinear_address::<WRAP>(image, tx, ty);
             let alpha = (u32::from(texel[3]) * opacity + 127) / 255;
             let dst = ((y * i64::from(width) + x) * 4) as usize;
             put(
@@ -1068,11 +1110,22 @@ fn draw_projected(
 
 /// Clamped bilinear sample at texel-space coordinates whose texel centers are integers.
 fn bilinear(image: &ObjectImage, tx: f32, ty: f32) -> [u8; 4] {
+    bilinear_address::<false>(image, tx, ty)
+}
+
+fn bilinear_address<const WRAP: bool>(image: &ObjectImage, tx: f32, ty: f32) -> [u8; 4] {
     let size = [image.pixels.width(), image.pixels.height()].map(i64::from);
     let texels = image.pixels.pixels();
     let [wx, wy] = [tx - tx.floor(), ty - ty.floor()];
-    let rows = [ty.floor() as i64, ty.floor() as i64 + 1].map(|r| r.clamp(0, size[1] - 1));
-    let cols = [tx.floor() as i64, tx.floor() as i64 + 1].map(|c| c.clamp(0, size[0] - 1));
+    let address = |index: i64, size: i64| {
+        if WRAP {
+            index.rem_euclid(size)
+        } else {
+            index.clamp(0, size - 1)
+        }
+    };
+    let rows = [ty.floor() as i64, ty.floor() as i64 + 1].map(|r| address(r, size[1]));
+    let cols = [tx.floor() as i64, tx.floor() as i64 + 1].map(|c| address(c, size[0]));
     let texel =
         |row: i64, col: i64, c: usize| f32::from(texels[((row * size[0] + col) * 4) as usize + c]);
     std::array::from_fn(|c| {
@@ -1205,6 +1258,23 @@ fn screen_mask<'a>(
 
 fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
     let (image, [sx, sy, w, h], [left, top], opacity, mask, screen_mask, blend) = match layer {
+        Layer::Billboard { image, quad, alpha } => {
+            draw_projected::<true>(
+                pixels,
+                [width, height],
+                image,
+                [
+                    0,
+                    0,
+                    i64::from(image.pixels.width()),
+                    i64::from(image.pixels.height()),
+                ],
+                quad,
+                alpha,
+                Blend::Alpha,
+            );
+            return;
+        }
         Layer::Image {
             image,
             rect,
@@ -1221,7 +1291,7 @@ fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
             alpha,
             blend,
         } => {
-            draw_projected(pixels, [width, height], image, rect, quad, alpha, blend);
+            draw_projected::<false>(pixels, [width, height], image, rect, quad, alpha, blend);
             return;
         }
         Layer::Rotated {
@@ -1292,6 +1362,40 @@ fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
 
 #[cfg(test)]
 mod scale_tests {
+    #[test]
+    fn world_billboard_sampling_wraps_both_texture_edges() {
+        let image = crate::scene::ObjectImage {
+            name: Vec::new(),
+            filter: None,
+            alpha: true,
+            surface: false,
+            pixels: crate::raster::RgbaImage::new(2, 1, vec![255, 0, 0, 255, 0, 0, 255, 255])
+                .unwrap(),
+        };
+        let mut pixels = vec![0; 4 * 2 * 4];
+        for pixel in pixels.as_chunks_mut::<4>().0 {
+            pixel[3] = 255;
+        }
+        super::draw(
+            &mut pixels,
+            4,
+            2,
+            super::Layer::Billboard {
+                image: &image,
+                quad: [0.0, 0.0, 4.0, 2.0],
+                alpha: 255,
+            },
+        );
+        for row in pixels.as_chunks::<16>().0 {
+            assert_eq!(
+                row,
+                &[
+                    128, 0, 128, 255, 255, 0, 0, 255, 128, 0, 128, 255, 0, 0, 255, 255
+                ]
+            );
+        }
+    }
+
     use super::*;
 
     #[test]

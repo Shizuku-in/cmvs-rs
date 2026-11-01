@@ -297,3 +297,165 @@ fn trace_reports_the_selected_particle_entry_and_requires_an_explicit_random_sou
     fs::remove_file(path).unwrap();
     fs::remove_dir(root).unwrap();
 }
+
+#[test]
+fn falling_override_preserves_pending_on_failure_and_shares_effect_slots_and_random() {
+    let arguments = [
+        0,
+        0x80000000,
+        10.0f32.to_bits(),
+        8.0f32.to_bits(),
+        12000.0f32.to_bits(),
+        6.0f32.to_bits(),
+        2,
+        1,
+    ];
+    let mut code = vec![];
+    command(&mut code, 0x22a5, &args(0, 1));
+    command(&mut code, 0x22a2, &arguments);
+    command(&mut code, 0x22a5, &args(0, 1));
+    command(&mut code, 0x22a2, &arguments);
+    command(&mut code, 0x22a0, &[0]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_string(0, b"particle.pb3").unwrap();
+    let mut scene = SceneHost::default();
+    let mut source = Images::default();
+    let mut random = CrtRandom::new(0);
+    pending(&mut vm);
+    run(&mut vm, &mut scene, &mut source, &mut random).unwrap();
+    for index in 0..2 {
+        pending(&mut vm);
+        let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
+        let original_random = random.clone();
+        let semantics = Semantics::Research(ResearchId::FallingBillboards);
+        assert_eq!(
+            dispatch::run(semantics, &mut vm, &mut Hosts::default()).unwrap(),
+            Some(Flow::Unavailable)
+        );
+        source.fail = true;
+        let execute = |vm: &mut Machine<'_>,
+                       scene: &mut SceneHost,
+                       random: &mut CrtRandom,
+                       source: &mut Images| {
+            dispatch::run(
+                semantics,
+                vm,
+                &mut Hosts {
+                    images: Some(ImageHosts {
+                        scene,
+                        source,
+                        change_images: false,
+                    }),
+                    random: Some(random),
+                    ..Default::default()
+                },
+            )
+        };
+        assert!(execute(&mut vm, &mut scene, &mut random, &mut source).is_err());
+        assert_eq!(
+            (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
+            before
+        );
+        assert_eq!(scene.particle_effects()[&0].particles.len(), 1);
+        assert!(scene.falling_effects().is_empty());
+        assert_eq!(
+            random.clone().next_value(),
+            original_random.clone().next_value()
+        );
+        source.fail = false;
+        assert_eq!(
+            execute(&mut vm, &mut scene, &mut random, &mut source).unwrap(),
+            Some(Flow::Done)
+        );
+        assert_eq!(
+            (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
+            (before.0 + 2, None, 0)
+        );
+        assert!(scene.particle_effects().is_empty());
+        assert_eq!(scene.falling_effects()[&0].particles.len(), 2);
+        let mut expected = original_random;
+        for _ in 0..8 {
+            expected.next_value();
+        }
+        assert_eq!(random.next_value(), expected.next_value());
+        pending(&mut vm);
+        if index == 0 {
+            run(&mut vm, &mut scene, &mut source, &mut random).unwrap();
+            assert!(scene.falling_effects().is_empty());
+        } else {
+            dispatch::run(
+                Semantics::Root,
+                &mut vm,
+                &mut Hosts {
+                    scene: Some(&mut scene),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert!(scene.falling_effects().is_empty());
+        }
+    }
+    for (invalid, accepted) in [
+        (
+            {
+                let mut a = arguments.to_vec();
+                a[0] = 99;
+                a[2] = f32::NAN.to_bits();
+                a[6] = u32::MAX;
+                a
+            },
+            true,
+        ),
+        (arguments[..7].to_vec(), false),
+        (
+            {
+                let mut a = arguments.to_vec();
+                a[2] = 0;
+                a
+            },
+            false,
+        ),
+        (
+            {
+                let mut a = arguments.to_vec();
+                a[6] = u32::MAX;
+                a
+            },
+            false,
+        ),
+    ] {
+        let mut code = vec![];
+        command(&mut code, 0x22a2, &invalid);
+        let script = support::bytecode::script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        vm.state_mut().set_string(0, b"particle.pb3").unwrap();
+        pending(&mut vm);
+        let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
+        let reads = source.reads;
+        let seed = random.clone().next_value();
+        let result = dispatch::run(
+            Semantics::Research(ResearchId::FallingBillboards),
+            &mut vm,
+            &mut Hosts {
+                images: Some(ImageHosts {
+                    scene: &mut scene,
+                    source: &mut source,
+                    change_images: false,
+                }),
+                random: Some(&mut random),
+                ..Default::default()
+            },
+        );
+        assert_eq!(result.is_ok(), accepted);
+        if !accepted {
+            assert_eq!(
+                (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
+                before
+            );
+        }
+        assert!(scene.falling_effects().is_empty());
+        assert_eq!(source.reads, reads);
+        assert_eq!(random.clone().next_value(), seed);
+    }
+}

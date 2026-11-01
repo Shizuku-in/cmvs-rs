@@ -11,7 +11,10 @@ struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f3
     return Vertex(vec4<f32>(xy.x / p.v[0].x * 2.0 - 1.0, 1.0 - xy.y / p.v[0].y * 2.0,0.0,1.0), p.v[1].xy + uv*p.v[1].zw);
 }
 fn load(t: texture_2d<f32>, xy: vec2<i32>) -> vec4<f32> {
-    return round(textureLoad(t, clamp(xy,vec2<i32>(0),vec2<i32>(textureDimensions(t))-1),0)*255.0);
+    let size=vec2<i32>(textureDimensions(t));
+    var at=clamp(xy,vec2<i32>(0),size-1);
+    if ((u32(p.v[4].w) & 16u)!=0u) { at=((xy % size)+size) % size; }
+    return round(textureLoad(t,at,0)*255.0);
 }
 fn sample_linear(t: texture_2d<f32>, uv: vec2<f32>) -> vec4<f32> {
     let q=uv-0.5; let f=fract(q); let xy=vec2<i32>(floor(q));

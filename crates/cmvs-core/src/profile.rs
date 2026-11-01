@@ -35,6 +35,7 @@ pub enum ResearchId {
     FontCells,
     Particles,
     BackgroundAudio,
+    FallingBillboards,
 }
 impl ResearchId {
     pub fn parse(name: &str) -> Option<Self> {
@@ -42,6 +43,7 @@ impl ResearchId {
             "font-cells" => Some(Self::FontCells),
             "particles" => Some(Self::Particles),
             "background-audio" => Some(Self::BackgroundAudio),
+            "falling-billboards" => Some(Self::FallingBillboards),
             _ => None,
         }
     }
@@ -50,6 +52,7 @@ impl ResearchId {
             Self::FontCells => "font-cells",
             Self::Particles => "particles",
             Self::BackgroundAudio => "background-audio",
+            Self::FallingBillboards => "falling-billboards",
         }
     }
 }

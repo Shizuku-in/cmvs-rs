@@ -1,6 +1,8 @@
 //! Engine +4024: four effect objects, independent of the 256 scene slots.
 use crate::{bytecode::DecodeError, dispatch::Call, machine::Machine};
+mod falling;
 mod particles;
+pub use falling::{FallingEffect, FallingParticle};
 pub use particles::{Particle, ParticleEffect};
 
 /// 0x22a0 / 0x14007dbe0: SP-4 slot 0..3 destroys and frees that object (0x140040820) when
@@ -20,6 +22,7 @@ impl crate::scene::SceneHost {
         call.complete(0x4004)?;
         if slot < 4 {
             self.particle_effects.remove(&(slot as u8));
+            self.falling_effects.remove(&(slot as u8));
         }
         Ok(())
     }

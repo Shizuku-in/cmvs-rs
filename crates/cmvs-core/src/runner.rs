@@ -370,6 +370,7 @@ impl<'a> Startup<'a> {
         )?;
         self.scene.advance_frame(delta_ms);
         self.scene.advance_particles(delta_ms, &mut self.random);
+        self.scene.advance_falling_effects(delta_ms, &self.camera);
         self.messages.advance_frame(delta_ms);
         self.messages
             .advance_auxiliary_motion(delta_ms, &mut self.scene)?;
@@ -453,6 +454,7 @@ impl<'a> Startup<'a> {
         )?;
         self.scene.advance_frame(delta_ms);
         self.scene.advance_particles(delta_ms, &mut self.random);
+        self.scene.advance_falling_effects(delta_ms, &self.camera);
         self.messages.advance_frame(delta_ms);
         self.messages
             .advance_auxiliary_motion(delta_ms, &mut self.scene)?;

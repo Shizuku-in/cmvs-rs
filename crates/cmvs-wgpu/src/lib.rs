@@ -356,6 +356,19 @@ impl Renderer {
                         *blend,
                     )
                 }
+                Layer::Billboard { image, quad, alpha } => {
+                    source = Some(&image.pixels);
+                    p[4..8].copy_from_slice(&[
+                        0.0,
+                        0.0,
+                        image.pixels.width() as f32,
+                        image.pixels.height() as f32,
+                    ]);
+                    p[3] = 1.0;
+                    p[19] = 16.0;
+                    let [l, t, r, b] = quad.map(|v| v + 0.5);
+                    ([[l, t], [r, t], [l, b], [r, b]], *alpha, Blend::Alpha)
+                }
                 Layer::Projected {
                     image,
                     rect,
@@ -591,6 +604,36 @@ mod tests {
                     "scale={scale} angle={angle} mode={mode} byte={i}: {a} != {b}"
                 );
             }
+        }
+
+        // World billboards retain queue 5's WRAP sampler at both texture edges.
+        let wrapped = ObjectImage {
+            name: Vec::new(),
+            filter: None,
+            alpha: true,
+            surface: false,
+            pixels: RgbaImage::new(2, 1, vec![255, 0, 0, 255, 0, 0, 255, 255]).unwrap(),
+        };
+        let image = gpu
+            .compose(
+                [4, 2],
+                [0, 0, 0, 255],
+                &[Layer::Billboard {
+                    image: &wrapped,
+                    quad: [0.0, 0.0, 4.0, 2.0],
+                    alpha: 255,
+                }],
+            )
+            .unwrap()
+            .read()
+            .unwrap();
+        for row in image.pixels().as_chunks::<16>().0 {
+            assert_eq!(
+                row,
+                &[
+                    128, 0, 128, 255, 255, 0, 0, 255, 128, 0, 128, 255, 0, 0, 255, 255
+                ]
+            );
         }
 
         // Coverage lookup, screen-space second texture, and texture blackening.

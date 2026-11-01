@@ -323,6 +323,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             if let Some(random) = random.as_mut() {
                 scene.advance_particles(delta, random);
             }
+            scene.advance_falling_effects(delta, &camera);
             camera.advance_frame(delta);
             movies.advance(delta);
             frame_delta = delta;
@@ -609,6 +610,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                         if let Some(random) = random.as_mut() {
                             scene.advance_particles(delta, random);
                         }
+                        scene.advance_falling_effects(delta, &camera);
                         camera.advance_frame(delta);
                         movies.advance(delta);
                         frame_delta = delta;
@@ -639,6 +641,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 if let Some(random) = random.as_mut() {
                     scene.advance_particles(delta, random);
                 }
+                scene.advance_falling_effects(delta, &camera);
                 camera.advance_frame(delta);
                 movies.advance(delta);
                 frame_delta = delta;
@@ -975,7 +978,11 @@ fn run() -> Result<(), Box<dyn Error>> {
                         save_title.bytes().escape_ascii()
                     ),
                     Capability::ParticleImages => {
-                        println!("# particle pools={}", scene.particle_effects().len())
+                        println!(
+                            "# particle pools={}; falling pools={}",
+                            scene.particle_effects().len(),
+                            scene.falling_effects().len()
+                        )
                     }
                     Capability::EffectObjects => {
                         println!("# effect object release 0x22a0: slot state updated")
