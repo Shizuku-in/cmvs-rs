@@ -956,10 +956,10 @@ compare x64 base-sha256=dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91
 0x23b5 unreviewed 0x89211 0x79c40
 0x23b6 noop 0x89047 0x79b33
 0x23b7 inherited 0x890e4 0x79b96 inherit=x64:b969924229db27b6eeb59fcb88bf9c0c2d2fe14d5163412f88694f12f246831f
-0x23b8 unreviewed 0x8b997 0x7ba18
-0x23b9 unreviewed 0x8b9a4 0x7ba22
+0x23b8 unreviewed 0x8b997 0x7ba18 research=font-cells:x64:3bccda5d7611412c6938c0c9b06b2195914cfb78763a53f2c235bb6479395ee0 evidence=games/aoitori/vm-semantics.md
+0x23b9 unreviewed 0x8b9a4 0x7ba22 research=font-cells:x64:3bccda5d7611412c6938c0c9b06b2195914cfb78763a53f2c235bb6479395ee0 evidence=games/aoitori/vm-semantics.md
 0x23ba unreviewed 0x8b9b1 0x7ba2c
-0x23bb unreviewed 0x8b9be 0x7ba36
+0x23bb unreviewed 0x8b9be 0x7ba36 research=font-cells:x64:3bccda5d7611412c6938c0c9b06b2195914cfb78763a53f2c235bb6479395ee0 evidence=games/aoitori/vm-semantics.md
 0x23bc noop 0x89047 0x79b33
 0x23bd noop 0x89047 0x79b33
 0x23be noop 0x89047 0x79b33

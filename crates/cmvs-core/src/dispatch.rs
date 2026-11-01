@@ -4449,7 +4449,40 @@ pub static FONT_CELLS: &[Entry] = &[
             )?)
         },
     },
+    Entry {
+        command: 0x3b8,
+        name: "auxiliary line-break rules",
+        capability: Capability::Text,
+        handler: |hosts, call| {
+            Ok(font_cells::auxiliary_line_break(
+                hosts.text.as_mut().expect("text capability checked"),
+                call,
+            )?)
+        },
+    },
+    Entry {
+        command: 0x3b9,
+        name: "auxiliary byte measurement",
+        capability: Capability::Text,
+        handler: auxiliary_measure,
+    },
+    Entry {
+        command: 0x3bb,
+        name: "auxiliary pixel measurement",
+        capability: Capability::Text,
+        handler: auxiliary_measure,
+    },
 ];
+
+fn auxiliary_measure(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    Ok(font_cells::auxiliary_measure(
+        hosts.text.as_mut().expect("text capability checked"),
+        call,
+    )?)
+}
 
 pub static PARTICLES: &[Entry] = &[Entry {
     command: 0x2a5,

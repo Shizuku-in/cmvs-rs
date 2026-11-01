@@ -24,6 +24,7 @@ use crate::{
 use std::{error::Error, sync::Arc};
 mod auxiliary;
 mod auxiliary_layout;
+mod auxiliary_measure;
 mod auxiliary_motion;
 pub(crate) mod font_cells;
 mod measure;

@@ -22,6 +22,7 @@ const MEASURE_FLAGS: u32 = 22;
 pub(super) struct TextLayout {
     pub(super) glyphs: Vec<AuxiliaryGlyph>,
     pub(super) pen: [f32; 2],
+    pub(super) line_break_scratch: Option<[u32; 2]>,
 }
 
 impl AuxiliaryText {
@@ -170,11 +171,15 @@ impl AuxiliaryText {
         Ok(TextLayout {
             glyphs,
             pen: [x, y],
+            line_break_scratch: None,
         })
     }
 
     /// Commits a layout of this group's current state.
     pub(super) fn append(&mut self, layout: TextLayout) {
+        if let Some(scratch) = layout.line_break_scratch {
+            self.line_break_scratch = scratch;
+        }
         for at in (212..340).step_by(4) {
             self.words.insert(at, 0);
         }

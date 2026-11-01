@@ -203,3 +203,9 @@ release探针沿用显式 `--allow-unreviewed --allow-presumed`、msgothic字体
 限步核验 `local/aoitori/unlock-without-snapshots-budget`：两轮各25,000,000步/10,144帧，均越过活动粒子快照点后用满步数预算，R4仍失败，不能认领解锁收敛。下一轮需在无快照模式提高到十亿步预算独立验证；完整快照支持仍需实现活动类型2/5/6/8的记录与恢复。
 
 Windows debug探针的默认主线程栈不足以承载嵌套快照操作，改由16MiB工作线程执行并传播失败；`local/aoitori/snapshot-v3-saves-debug-fixed` V1–V4全部通过L1，修复前溢出不再复现。探针既有11项测试、冲突参数回归及严格Clippy、格式/差异检查通过；release构建和真实数据的无快照启动检查通过。本轮没有原生窗口或音频实测。
+
+## 2026-11-02：回看辅助文字禁则与字节/像素测量
+
+基线 `e1aebeb`。按x64原版证据实现 `0x23b8` 的辅助文字禁则、`0x23b9` 的字节计数和 `0x23bb` 的像素测量，均通过身份绑定的font-cells研究声明选择；参数、栈回收、结果槽及边界见[VM语义](vm-semantics.md#回看辅助文字禁则与测量0x23b8--0x23b9--0x23bb2026-11-02)。扩展现有辅助文字夹具，覆盖零值/高位无符号溢出界限、悬挂/相同字符连续规则、两种测量及结果槽、重复测量的画笔/字形不变、字面转义、坏字符串/缺字体时的事务拒绝和重试。默认测试968项通过、14项忽略；默认/core严格Clippy、格式及差异检查通过，release探针构建通过。
+
+真实无快照探针 `local/aoitori/backlog-line-break-first` 越过原 `intproc.ps3 / 0x652e8 / 0x23b8`，显露 `0x23bb`；补齐测量后的 `local/aoitori/backlog-line-break-queries` I1/I4不再停在系统命令，而在辅助字形附着时报 `auxiliary glyph size differs from the atlas cell size`。回看尚未通过；下一步核对字号变化后的图集格布局与真实字形尺寸，不移除检查后冒充呈现正确。系统存档解锁轮次的长重放仍单独进行，本节不据运行中的探针认领收敛。

@@ -218,10 +218,16 @@ pub struct AuxiliaryText {
     pub secondary_image: Option<ObjectImage>,
     /// +1472: a non-owned scene object moved along with this text group.
     pub associated_scene: Option<u8>,
+    /// Aoitori +404..+608, configured by 0x23b8; absent in the root build.
+    pub line_break: Option<super::LineBreakRules>,
+    pub(super) line_break_scratch: [u32; 2],
     motion: Option<PositionMotion>,
 }
 
 impl AuxiliaryText {
+    pub fn line_break_scratch(&self) -> [u32; 2] {
+        self.line_break_scratch
+    }
     pub(super) fn motion(&self) -> Option<&PositionMotion> {
         self.motion.as_ref()
     }
@@ -441,6 +447,8 @@ impl AuxiliaryText {
             atlas,
             secondary_image: None,
             associated_scene: None,
+            line_break: None,
+            line_break_scratch: [0; 2],
             motion: None,
             object: SceneObject {
                 draw: Some(draw),
