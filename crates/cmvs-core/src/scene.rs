@@ -68,15 +68,27 @@ pub struct ObjectImage {
 impl ObjectImage {
     pub(crate) fn apply_filter(&mut self, parameters: [u32; 3]) -> Result<(), crate::FormatError> {
         let [mode, color, _extra] = parameters;
-        if mode != 2 {
+        if !matches!(mode, 2 | 17) {
             return Err(crate::FormatError(
-                "image filter mode not implemented; only mode 2 is verified",
+                "image filter mode not implemented; only modes 2 and 17 are verified",
             ));
         }
-        // 0x14003364c..0x1400336d9: original BGRA, ours RGBA. Alpha is untouched.
+        // Original BGRA, ours RGBA. Both verified branches leave alpha untouched.
         let [b, g, r, _] = color.to_le_bytes();
         let mut pixels = self.pixels.pixels().to_vec();
         for pixel in pixels.as_chunks_mut::<4>().0 {
+            if mode == 17 {
+                // Base 0x14003359e / Aoitori 0x140037b2e: truncate twice,
+                // including the 255/256 colour factor for white.
+                let gray = (76 * u32::from(pixel[0])
+                    + 150 * u32::from(pixel[1])
+                    + 29 * u32::from(pixel[2]))
+                    >> 8;
+                for (channel, factor) in pixel[..3].iter_mut().zip([r, g, b]) {
+                    *channel = ((gray * u32::from(factor)) >> 8) as u8;
+                }
+                continue;
+            }
             for (channel, factor) in pixel[..3].iter_mut().zip([r, g, b]) {
                 *channel = ((u32::from(*channel) * u32::from(factor)) >> 7).min(255) as u8;
             }
@@ -857,7 +869,7 @@ impl SceneHost {
     /// (0x14003bb10) and sets system result 0 to whether loading succeeded; returns 0x4008.
     /// 0x2038 uses SP-8 child slot and SP-12 name, and returns 0x400c.
     /// 0x203b / 0x14006c3b0 -> 0x14003bbc0 -> 0x140035260 adds mode/color/extra,
-    /// filters decoded pixels before upload, and returns 0x4014. Only mode 2 is verified.
+    /// filters decoded pixels before upload, and returns 0x4014. Modes 2/17 are verified.
     /// +12032 is set only by 0x212a, which stays unhandled, so its 0x140018bc0 call never runs.
     pub fn try_handle_image(
         &mut self,
@@ -906,12 +918,13 @@ impl SceneHost {
         let filter = if command == 0x3b {
             let mode = call.argument(12, "filter mode")?;
             let color = call.argument(16, "filter color")?;
-            // Stored at image +1212; not read by the mode 2 branch.
+            // Stored at image +1212; not read by the mode 2/17 branches.
             let extra = call.argument(20, "filter extra")?;
-            if mode != 2 {
-                return Err(
-                    fail("image filter mode not implemented; only mode 2 is verified").into(),
-                );
+            if !matches!(mode, 2 | 17) {
+                return Err(fail(
+                    "image filter mode not implemented; only modes 2 and 17 are verified",
+                )
+                .into());
             }
             Some([mode, color, extra])
         } else {

@@ -433,6 +433,16 @@ fn resources_use_existing_decoder_filter_and_dimension_checks() {
     let i = p.scene.object(0).unwrap().image.as_ref().unwrap();
     assert_eq!(i.pixels.pixels(), &[5, 1, 0, 255, 6, 2, 0, 255]);
     assert_eq!(i.filter, Some([2, 0x804020, 0]));
+    let mut tinted = image.clone();
+    put(&mut tinted, 24, 17);
+    put(&mut tinted, 28, 0xfff8e0);
+    let mut b = base();
+    record(&mut b, 0x700, 0, &scene(None, Some(&tinted), &[]));
+    let saved = VisualSnapshot::decode_records(&b).unwrap();
+    let restored = saved.preview(&mut Tiny).unwrap();
+    let i = restored.scene.object(0).unwrap().image.as_ref().unwrap();
+    assert_eq!(i.filter, Some([17, 0xfff8e0, 0]));
+    assert_eq!(i.pixels.pixels(), &[2, 2, 2, 255, 3, 3, 3, 255]);
     let len = image.len();
     put(&mut image, len - 8, 3);
     let mut b = base();

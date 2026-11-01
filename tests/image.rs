@@ -414,6 +414,46 @@ fn filtered_image_load_scales_rgb_with_saturation_and_preserves_alpha_and_object
 }
 
 #[test]
+fn filtered_image_load_tints_weighted_gray_with_two_truncations_and_keeps_alpha() {
+    for (planes, expected) in [
+        (
+            [[0, 0], [0, 255], [255, 0], [0, 17]],
+            [74, 72, 65, 0, 148, 144, 130, 17],
+        ),
+        (
+            [[255, 255], [0, 255], [0, 255], [128, 255]],
+            [27, 27, 24, 128, 253, 246, 222, 255],
+        ),
+        (
+            [[0, 1], [0, 1], [0, 1], [255, 64]],
+            [0, 0, 0, 255, 0, 0, 0, 64],
+        ),
+    ] {
+        let mut code = loads(20, &[]);
+        for color in [0xfff8e0, 0x55fff8e0] {
+            scene_command(&mut code, 0x203b, &[20, 0, 17, color, u32::MAX]);
+        }
+        let program = script(&code, b"a.pb3\0");
+        let mut vm = Machine::new(&program).unwrap();
+        let mut scene = SceneHost::default();
+        let mut files = Files::default();
+        files.0.insert(b"a.pb3".to_vec(), pb3(1, &planes));
+        run_to_system(&mut vm);
+        scene.try_handle(&mut vm).unwrap();
+        for color in [0xfff8e0, 0x55fff8e0] {
+            run_to_system(&mut vm);
+            scene.shared_image(&mut vm, &mut files).unwrap();
+            let image = scene.object(20).unwrap().image.as_ref().unwrap();
+            assert_eq!(image.pixels.pixels(), expected);
+            assert_eq!(image.filter, Some([17, color, u32::MAX]));
+            assert!(image.alpha);
+            assert_eq!(vm.stack().len_bytes(), 0);
+            assert_eq!(vm.state().system_integer(0), Some(1));
+        }
+    }
+}
+
+#[test]
 fn filtered_image_load_uses_128_as_identity_and_quiet_failure_clears_image() {
     let mut code = loads(20, &[0]);
     for args in [
@@ -493,10 +533,13 @@ fn filtered_image_load_rejects_unknown_modes_missing_args_and_resource_failures_
 
 #[test]
 fn replacement_inherits_filter_and_filters_new_source_once_before_common_area() {
-    for duration in [0, 100] {
+    for (mode, duration) in [2, 17]
+        .into_iter()
+        .flat_map(|mode| [0, 100].map(|d| (mode, d)))
+    {
         let mut code = loads(20, &[0]);
         scene_command(&mut code, 0x2040, &[20]);
-        scene_command(&mut code, 0x203b, &[20, 0, 2, 0x404080, 55]);
+        scene_command(&mut code, 0x203b, &[20, 0, mode, 0x404080, 55]);
         scene_command(&mut code, 0x22c4, &[20, 6, duration, 0]);
         scene_command(&mut code, 0x22c4, &[20, 0, 0, 0]);
         let program = script(&code, b"a.pb3\0b.pb3\0");
@@ -518,25 +561,43 @@ fn replacement_inherits_filter_and_filters_new_source_once_before_common_area() 
         scene.shared_change(&mut vm, &mut files).unwrap();
         let object = scene.object(20).unwrap();
         let image = object.image.as_ref().unwrap();
-        assert_eq!(image.filter, Some([2, 0x404080, 55]));
+        assert_eq!(image.filter, Some([mode, 0x404080, 55]));
         assert_eq!(
             image.pixels.pixels(),
-            &[127, 64, 100, 10, 64, 127, 200, 255]
+            if mode == 2 {
+                &[127, 64, 100, 10, 64, 127, 200, 255]
+            } else {
+                &[40, 40, 81, 10, 52, 52, 105, 255]
+            }
         );
         if duration > 0 {
             let change = object.change.as_ref().unwrap();
             assert_eq!(change.previous.image.as_ref().unwrap().filter, image.filter);
             let common = change.common.image.as_ref().unwrap();
             assert_eq!(common.filter, None);
-            assert_eq!(common.pixels.pixels(), &[0, 0, 0, 0, 64, 127, 200, 255]);
+            assert_eq!(
+                common.pixels.pixels(),
+                if mode == 2 {
+                    &[0, 0, 0, 0, 64, 127, 200, 255]
+                } else {
+                    &[0, 0, 0, 0, 52, 52, 105, 255]
+                }
+            );
         } else {
             assert!(object.change.is_none());
         }
         run_to_system(&mut vm);
         scene.shared_change(&mut vm, &mut files).unwrap();
         let image = scene.object(20).unwrap().image.as_ref().unwrap();
-        assert_eq!(image.filter, Some([2, 0x404080, 55]));
-        assert_eq!(image.pixels.pixels(), &[2, 1, 1, 255, 3, 2, 2, 255]);
+        assert_eq!(image.filter, Some([mode, 0x404080, 55]));
+        assert_eq!(
+            image.pixels.pixels(),
+            if mode == 2 {
+                &[2, 1, 1, 255, 3, 2, 2, 255]
+            } else {
+                &[0, 0, 1, 255, 1, 1, 2, 255]
+            }
+        );
         assert_eq!(vm.stack().len_bytes(), 0);
     }
 }
