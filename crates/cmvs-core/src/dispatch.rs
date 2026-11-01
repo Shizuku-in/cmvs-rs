@@ -1,6 +1,8 @@
 //! Incremental command-table migration. The text slice has root entries and sparse
 //! research overrides; other commands still use the legacy chain. Gate checks run
 //! before this table. A selected override never falls through to root semantics.
+pub mod ownership;
+
 use crate::{
     bytecode::DecodeError,
     evaluate::error,
@@ -178,7 +180,7 @@ pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
     }
 }
 
-/// Called after CommandGate::check. None delegates an unmigrated command to the
+/// Called after CommandGate::resolve. None delegates an unmigrated command to the
 /// legacy chain. Missing host capabilities cannot turn an override into root code.
 pub fn run_text(
     semantics: Semantics,

@@ -15,7 +15,10 @@ Usage:
       Print a new profile from the executables in a game root. Present commands become
       base for a root profile, or unreviewed with --base.
   cmvs-profile show <id>
-      Summarise an embedded profile.";
+      Summarise an embedded profile.
+  cmvs-profile owners [0x2000..0x23ff]
+      Print the read-only handler inventory, in runner/trace chain order.
+      Candidates are not evidence approval or runtime capability guarantees.";
 
 /// Signatures that identify the predecessor engine family, reported but not supported.
 const CVNS_HINTS: [&str; 3] = ["cvns.exe", "data/pack/start.pss", "pvns.exe"];
@@ -237,6 +240,55 @@ fn show(id: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn owners(opcode: Option<&str>) -> Result<(), Box<dyn Error>> {
+    use cmvs_rs::dispatch::ownership::{Chain, candidates};
+    let selected = opcode
+        .map(|value| {
+            value
+                .strip_prefix("0x")
+                .and_then(|hex| u16::from_str_radix(hex, 16).ok())
+                .filter(|opcode| (0x2000..0x2400).contains(opcode))
+                .map(|opcode| opcode - 0x2000)
+                .ok_or("opcode must be hexadecimal in 0x2000..0x23ff")
+        })
+        .transpose()?;
+    println!("# Handler candidates in chain order; no handlers or evidence gates executed");
+    println!("# Root/legacy inventory; research overrides in dispatch::FONT_CELLS are separate");
+    println!(
+        "# trace candidates may require optional hosts/resources/flags; root text has no trace host"
+    );
+    println!("| opcode | runner | trace |");
+    println!("|---|---|---|");
+    for command in 0..0x400 {
+        if selected.is_some_and(|selected| selected != command) {
+            continue;
+        }
+        let runner = candidates(command, Chain::Runner);
+        let trace = candidates(command, Chain::Trace);
+        if selected.is_none() && runner.is_empty() && trace.is_empty() {
+            continue;
+        }
+        let names = |claims: Vec<&cmvs_rs::dispatch::ownership::Claim>| {
+            if claims.is_empty() {
+                "—".into()
+            } else {
+                claims
+                    .iter()
+                    .map(|claim| claim.handler)
+                    .collect::<Vec<_>>()
+                    .join(" → ")
+            }
+        };
+        println!(
+            "| 0x{:04x} | {} | {} |",
+            command + 0x2000,
+            names(runner),
+            names(trace)
+        );
+    }
+    Ok(())
+}
+
 fn run() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().skip(1).collect();
     // Options follow the subcommand's positional argument as `--name value` pairs.
@@ -282,6 +334,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             )
         }
         Some("show") if args.len() == 2 => show(&args[1]),
+        Some("owners") if args.len() <= 2 => owners(args.get(1).map(String::as_str)),
         _ => Err(USAGE.into()),
     }
 }
