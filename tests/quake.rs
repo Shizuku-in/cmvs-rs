@@ -1,3 +1,5 @@
+#[path = "support/shared_state.rs"]
+mod shared_state;
 use cmvs_rs::{
     image::ImageSource,
     machine::{Machine, Step},
@@ -6,6 +8,7 @@ use cmvs_rs::{
     scene::{DrawState, ObjectImage, SceneHost, SceneObject},
     scene_render,
 };
+use shared_state::SharedState;
 use std::error::Error;
 
 fn put(b: &mut [u8], at: usize, v: u32) {
@@ -93,7 +96,7 @@ fn run(vm: &mut Machine<'_>, scene: &mut SceneHost, commands: usize) {
         pending(vm);
         assert!(
             scene.try_handle(vm).unwrap()
-                || scene.try_handle_quake(vm).unwrap()
+                || scene.shared_state(vm).unwrap()
                 || scene.try_handle_image(vm, &mut White).unwrap()
         );
     }
@@ -303,7 +306,7 @@ fn unmodeled_waveforms_bad_arguments_and_fades_under_offsets_are_errors() {
         let mut scene = SceneHost::default();
         pending(&mut vm);
         let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
-        assert!(scene.try_handle_quake(&mut vm).is_err());
+        assert!(scene.shared_state(&mut vm).is_err());
         assert_eq!(vm.pending_system(), command);
         assert_eq!(vm.stack().len_bytes(), bytes);
         assert!(scene.quake().is_none());

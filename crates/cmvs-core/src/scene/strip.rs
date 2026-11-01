@@ -14,7 +14,6 @@ use crate::{
     input::ActionInput,
     machine::{Machine, Step},
     message::RESEARCH_SCREEN,
-    vm::SystemResult,
 };
 
 /// One +40 table record and its attached object.
@@ -285,40 +284,48 @@ impl SceneHost {
         let Some((pc, command @ 0x22f..=0x232)) = vm.pending_system() else {
             return Ok(false);
         };
+        self.handle_strip(&mut Call::new(vm, pc, command))?;
+        Ok(true)
+    }
+
+    pub(crate) fn handle_strip(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
         match command {
             0x22f => {
                 let mut args = [0; 5];
                 for (i, value) in args.iter_mut().enumerate() {
-                    *value = vm
-                        .stack()
-                        .peek_u32((i + 1) * 4)
-                        .map_err(|e| error(pc, op, e.0))?;
+                    *value = call.argument(
+                        (i + 1) * 4,
+                        ["mode", "color", "size", "duration", "layer"][i],
+                    )?;
                 }
                 let wipe = StripWipe::new(args).map_err(|why| error(pc, op, why))?;
-                vm.complete_system(SystemResult(0x4014))?;
+                call.complete(0x4014)?;
                 self.strip = Some(wipe);
-                vm.state_mut()
+                call.vm
+                    .state_mut()
                     .set_system_integer(0, 1)
                     .expect("slot 0 exists");
             }
             0x230 => {
-                vm.complete_system(SystemResult(0x4000))?;
+                call.complete(0x4000)?;
                 self.finish_strip();
             }
             0x231 => {
-                vm.complete_system(SystemResult(0x4000))?;
+                call.complete(0x4000)?;
                 self.strip = None;
             }
             _ => {
-                vm.complete_system(SystemResult(0x4000))?;
+                call.complete(0x4000)?;
                 let left = self.strip.as_ref().map_or(u32::MAX, StripWipe::remaining);
-                vm.state_mut()
+                call.vm
+                    .state_mut()
                     .set_system_integer(0, left)
                     .expect("slot 0 exists");
             }
         }
-        Ok(true)
+        Ok(())
     }
 
     /// 0x2233 / 0x14007aae0: system result 0 = 0; without a wipe, or once it is finished

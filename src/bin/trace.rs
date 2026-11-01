@@ -493,6 +493,29 @@ fn run() -> Result<(), Box<dyn Error>> {
                     Capability::ListInput | Capability::DragPress => {
                         return Err("trace lacks the dispatched input capability".into());
                     }
+                    Capability::Quake => {
+                        println!(
+                            "# quake 0x{:04x}: {:?} system_integer[0]={:?}",
+                            command + 0x2000,
+                            scene.quake(),
+                            machine.state().system_integer(0)
+                        );
+                    }
+                    Capability::Strip => {
+                        println!(
+                            "# strip wipe 0x{:04x}: {:?} system_integer[0]={:?}; not drawn",
+                            command + 0x2000,
+                            scene.strip_wipe().map(|wipe| (
+                                wipe.mode,
+                                wipe.size,
+                                wipe.duration,
+                                wipe.layer,
+                                wipe.strips.len(),
+                                wipe.finished
+                            )),
+                            machine.state().system_integer(0)
+                        );
+                    }
                     Capability::Scene => {
                         println!(
                             "# scene state 0x{:04x}: {:?} rgba={:?} objects={:?}; recorded only, nothing drawn",
@@ -781,31 +804,6 @@ fn run() -> Result<(), Box<dyn Error>> {
                         "# movie 0x{:04x}: slots occupied={:?}; creation is not modeled",
                         command + 0x2000,
                         (0..3).map(|i| movies.occupied(i)).collect::<Vec<_>>()
-                    );
-                    continue;
-                }
-                if scene.try_handle_quake(&mut machine)? {
-                    println!(
-                        "# quake 0x{:04x}: {:?} system_integer[0]={:?}",
-                        command + 0x2000,
-                        scene.quake(),
-                        machine.state().system_integer(0)
-                    );
-                    continue;
-                }
-                if scene.try_handle_strip(&mut machine)? {
-                    println!(
-                        "# strip wipe 0x{:04x}: {:?} system_integer[0]={:?}; not drawn",
-                        command + 0x2000,
-                        scene.strip_wipe().map(|wipe| (
-                            wipe.mode,
-                            wipe.size,
-                            wipe.duration,
-                            wipe.layer,
-                            wipe.strips.len(),
-                            wipe.finished
-                        )),
-                        machine.state().system_integer(0)
                     );
                     continue;
                 }

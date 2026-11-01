@@ -147,6 +147,8 @@ pub struct Hosts<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Capability {
+    Quake,
+    Strip,
     TextState,
     AuxiliaryScene,
     Windows,
@@ -210,7 +212,7 @@ impl Hosts<'_> {
             Capability::DragPress => {
                 self.gesture.is_some() && self.input.as_ref().is_some_and(|h| h.clock.is_some())
             }
-            Capability::Scene => self.scene.is_some(),
+            Capability::Scene | Capability::Quake | Capability::Strip => self.scene.is_some(),
             Capability::Camera => self.camera.is_some(),
             Capability::SceneImages | Capability::MaskImages => self.images.is_some(),
             Capability::ImageChange => self.images.as_ref().is_some_and(|h| h.change_images),
@@ -728,6 +730,22 @@ pub fn uses_input(command: u16) -> bool {
     })
 }
 
+fn root_quake(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    hosts
+        .scene
+        .as_deref_mut()
+        .expect("scene capability checked")
+        .handle_quake(call)?;
+    Ok(Flow::Done)
+}
+fn root_strip(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    hosts
+        .scene
+        .as_deref_mut()
+        .expect("scene capability checked")
+        .handle_strip(call)?;
+    Ok(Flow::Done)
+}
 fn root_scene(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     hosts
         .scene
@@ -793,6 +811,60 @@ pub fn is_wait(command: u16) -> bool {
 }
 
 pub static ROOT: &[Entry] = &[
+    Entry {
+        command: 0x20c,
+        name: "quake paused",
+        capability: Capability::Quake,
+        handler: root_quake,
+    },
+    Entry {
+        command: 0x225,
+        name: "quake create",
+        capability: Capability::Quake,
+        handler: root_quake,
+    },
+    Entry {
+        command: 0x226,
+        name: "quake remaining",
+        capability: Capability::Quake,
+        handler: root_quake,
+    },
+    Entry {
+        command: 0x227,
+        name: "quake pause",
+        capability: Capability::Quake,
+        handler: root_quake,
+    },
+    Entry {
+        command: 0x229,
+        name: "quake release",
+        capability: Capability::Quake,
+        handler: root_quake,
+    },
+    Entry {
+        command: 0x22f,
+        name: "strip create",
+        capability: Capability::Strip,
+        handler: root_strip,
+    },
+    Entry {
+        command: 0x230,
+        name: "strip finish",
+        capability: Capability::Strip,
+        handler: root_strip,
+    },
+    Entry {
+        command: 0x231,
+        name: "strip release",
+        capability: Capability::Strip,
+        handler: root_strip,
+    },
+    Entry {
+        command: 0x232,
+        name: "strip remaining",
+        capability: Capability::Strip,
+        handler: root_strip,
+    },
     Entry {
         command: 0x100,
         name: "create text object",

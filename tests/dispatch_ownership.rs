@@ -78,6 +78,8 @@ fn audit(handler: &str, mut probe: impl FnMut(&mut Machine<'_>) -> bool) {
             return number == 0x159;
         }
         let capability = match handler {
+            "scene::try_handle_quake" => Some(Capability::Quake),
+            "scene::try_handle_strip" => Some(Capability::Strip),
             "scene::try_handle_image" => Some(Capability::SceneImages),
             "scene::try_handle_mask" => Some(Capability::MaskImages),
             "scene::try_change_image" => Some(Capability::ImageChange),

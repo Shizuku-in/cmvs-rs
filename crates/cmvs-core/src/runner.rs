@@ -937,8 +937,6 @@ impl<'a> Startup<'a> {
                 self.snapshot_policy == SnapshotPolicy::ContinueWithoutImage,
             )?
             || self.bootstrap.try_handle(&mut self.machine)?.is_some()
-            || self.scene.try_handle_quake(&mut self.machine)?
-            || self.scene.try_handle_strip(&mut self.machine)?
             || self.movies.try_create_scene(
                 &mut self.machine,
                 &mut self.scene,

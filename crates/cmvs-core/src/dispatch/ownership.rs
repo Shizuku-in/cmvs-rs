@@ -139,18 +139,6 @@ pub static CLAIMS: &[Claim] = &[
     ),
     claim!("bootstrap::try_handle", Some(260), Some(340),
         0x10..=0x16 | 0x19 | 0x1a | 0x1d..=0x1f | 0x90..=0x94 | 0x98 | 0x34d),
-    claim!(
-        "scene::try_handle_quake",
-        Some(280),
-        Some(220),
-        0x20c | 0x225..=0x227 | 0x229
-    ),
-    claim!(
-        "scene::try_handle_strip",
-        Some(290),
-        Some(230),
-        0x22f..=0x232
-    ),
     claim!("movie::try_create_scene", Some(500), None, 0x308),
     claim!("movie::try_start_scene", Some(510), None, 0x309),
     claim!(

@@ -1,3 +1,5 @@
+#[path = "support/shared_state.rs"]
+mod shared_state;
 use cmvs_rs::{
     fade::SkipGate,
     input::ActionInput,
@@ -6,6 +8,7 @@ use cmvs_rs::{
     scene::{SceneHost, StripWipe},
     scene_render,
 };
+use shared_state::SharedState;
 
 fn script(code: &[u8]) -> Script {
     let mut payload = 0u32.to_le_bytes().to_vec();
@@ -53,7 +56,7 @@ fn scene_with(mode: u32, size: u32, duration: u32) -> SceneHost {
     let mut vm = Machine::new(&script).unwrap();
     let mut scene = SceneHost::default();
     pending(&mut vm);
-    assert!(scene.try_handle_strip(&mut vm).unwrap());
+    assert!(scene.shared_state(&mut vm).unwrap());
     scene
 }
 /// (crop width, crop height, x, y) of strip `index`.
@@ -73,7 +76,7 @@ fn creation_lays_out_solid_strips_and_replaces_the_previous_wipe() {
     pending(&mut vm);
     let pc = vm.pc();
     vm.state_mut().set_system_integer(0, 7).unwrap();
-    assert!(scene.try_handle_strip(&mut vm).unwrap());
+    assert!(scene.shared_state(&mut vm).unwrap());
     assert_eq!((vm.pending_system(), vm.pc()), (None, pc + 2));
     assert_eq!(vm.stack().len_bytes(), 0);
     assert_eq!(vm.state().system_integer(0), Some(1));
@@ -96,7 +99,7 @@ fn creation_lays_out_solid_strips_and_replaces_the_previous_wipe() {
     }
     // 720 / 50 leaves a remainder, so a 15th row extends past the screen.
     pending(&mut vm);
-    assert!(scene.try_handle_strip(&mut vm).unwrap());
+    assert!(scene.shared_state(&mut vm).unwrap());
     let rows = scene.strip_wipe().unwrap();
     assert_eq!((rows.mode, rows.strips.len()), (2, 15));
     assert_eq!(rows.strips[14].base, [0, 700]);
@@ -183,7 +186,7 @@ fn finish_free_and_query_commands_pop_nothing() {
     let next = |vm: &mut Machine<'_>, scene: &mut SceneHost| {
         pending(vm);
         vm.state_mut().set_system_integer(0, 7).unwrap();
-        assert!(scene.try_handle_strip(vm).unwrap());
+        assert!(scene.shared_state(vm).unwrap());
         assert_eq!(vm.stack().len_bytes(), 0);
         vm.state().system_integer(0)
     };
@@ -220,7 +223,7 @@ fn wait_once(
     let mut vm = Machine::new(&script).unwrap();
     let mut scene = SceneHost::default();
     pending(&mut vm);
-    assert!(scene.try_handle_strip(&mut vm).unwrap());
+    assert!(scene.shared_state(&mut vm).unwrap());
     pending(&mut vm);
     vm.state_mut().set_system_integer(0, 7).unwrap();
     let step = scene.try_wait_strip(&mut vm, gate, input).unwrap();
@@ -319,11 +322,11 @@ fn unverified_layouts_and_short_stacks_keep_the_command_pending() {
         let mut vm = Machine::new(&script).unwrap();
         let mut scene = SceneHost::default();
         pending(&mut vm);
-        assert!(scene.try_handle_strip(&mut vm).unwrap());
+        assert!(scene.shared_state(&mut vm).unwrap());
         let before = scene.strip_wipe().cloned();
         pending(&mut vm);
         let pc = vm.pc();
-        assert!(scene.try_handle_strip(&mut vm).is_err());
+        assert!(scene.shared_state(&mut vm).is_err());
         assert_eq!(vm.pending_system(), Some((pc, 0x22f)));
         assert_eq!(vm.stack().len_bytes(), args.len() * 4);
         assert_eq!(scene.strip_wipe().cloned(), before);
@@ -347,7 +350,7 @@ fn unverified_layouts_and_short_stacks_keep_the_command_pending() {
         let script = script(&code);
         let mut vm = Machine::new(&script).unwrap();
         pending(&mut vm);
-        assert!(!SceneHost::default().try_handle_strip(&mut vm).unwrap());
+        assert!(!SceneHost::default().shared_state(&mut vm).unwrap());
         assert_eq!(vm.pending_system().map(|p| p.1), Some(op - 0x2000));
     }
 }

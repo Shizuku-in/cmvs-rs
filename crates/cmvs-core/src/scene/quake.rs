@@ -9,7 +9,6 @@ use crate::{
     dispatch::{Call, Flow},
     evaluate::error,
     machine::{Machine, Step},
-    vm::SystemResult,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -192,25 +191,32 @@ impl SceneHost {
         let Some((pc, command @ (0x20c | 0x225..=0x227 | 0x229))) = vm.pending_system() else {
             return Ok(false);
         };
+        self.handle_quake(&mut Call::new(vm, pc, command))?;
+        Ok(true)
+    }
+
+    pub(crate) fn handle_quake(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let (pc, command) = (call.pc, call.command);
         if command == 0x20c {
             // 0x14007ad00: system result 0 = a quake exists and is paused (+20,
             // 0x140052370); 0x4000.
             let paused = self.quake.as_ref().is_some_and(|q| q.paused);
-            vm.complete_system(SystemResult(0x4000))?;
-            vm.state_mut()
+            call.complete(0x4000)?;
+            call.vm
+                .state_mut()
                 .set_system_integer(0, u32::from(paused))
                 .expect("slot 0 exists");
-            return Ok(true);
+            return Ok(());
         }
         let op = command + 0x2000;
-        let arg = |distance| {
-            vm.stack()
-                .peek_u32(distance)
-                .map_err(|e| error(pc, op, e.0))
-        };
         match command {
             0x225 => {
-                let (mode, amplitude, period, count) = (arg(4)?, arg(8)?, arg(12)?, arg(16)?);
+                let (mode, amplitude, period, count) = (
+                    call.argument(4, "mode")?,
+                    call.argument(8, "amplitude")?,
+                    call.argument(12, "period")?,
+                    call.argument(16, "count")?,
+                );
                 match mode & 0xf00 {
                     0x200 => {}
                     0 if mode & 0xf0 == 0x20 => {
@@ -223,7 +229,7 @@ impl SceneHost {
                     0 => {}
                     _ => return Err(error(pc, op, "quake waveform not used by this title")),
                 }
-                vm.complete_system(SystemResult(0x4010))?;
+                call.complete(0x4010)?;
                 self.quake = Some(Quake {
                     mode,
                     amplitude: amplitude as i32,
@@ -236,7 +242,7 @@ impl SceneHost {
                 });
             }
             0x226 => {
-                vm.complete_system(SystemResult(0x4000))?;
+                call.complete(0x4000)?;
                 let left = self.quake.as_ref().map_or(u32::MAX, |quake| {
                     if quake.count == u32::MAX {
                         u32::MAX
@@ -244,23 +250,24 @@ impl SceneHost {
                         quake.count.wrapping_sub(quake.steps)
                     }
                 });
-                vm.state_mut()
+                call.vm
+                    .state_mut()
                     .set_system_integer(0, left)
                     .expect("slot 0 exists");
             }
             0x227 => {
-                let paused = arg(4)? != 0;
-                vm.complete_system(SystemResult(0x4004))?;
+                let paused = call.argument(4, "paused")? != 0;
+                call.complete(0x4004)?;
                 if let Some(quake) = &mut self.quake {
                     quake.paused = paused;
                 }
             }
             _ => {
-                vm.complete_system(SystemResult(0x4000))?;
+                call.complete(0x4000)?;
                 self.quake = None;
             }
         }
-        Ok(true)
+        Ok(())
     }
 
     /// 0x2228 / 0x14007ad50: without a quake system result 0 = 1 and 0x4004. With one, SP-4
