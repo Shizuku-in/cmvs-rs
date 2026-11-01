@@ -107,10 +107,10 @@ fn trace_contract_sources_and_legacy_research_policies_are_distinct() {
     raw.extend(code.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
     fs::write(&input, &raw).unwrap();
     for (flags, presumed, unreviewed) in [
-        (vec![], false, false),
-        (vec!["--allow-unreviewed"], false, false),
-        (vec!["--allow-presumed"], true, false),
-        (vec!["--allow-presumed", "--allow-unreviewed"], true, true),
+        (vec![], true, true),
+        (vec!["--block-unreviewed"], true, false),
+        (vec!["--block-presumed"], false, false),
+        (vec!["--block-presumed", "--block-unreviewed"], false, false),
     ] {
         let out = Command::new(env!("CARGO_BIN_EXE_cmvs-trace"))
             .arg(&input)

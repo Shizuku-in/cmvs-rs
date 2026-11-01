@@ -31,8 +31,8 @@ const OPTIONS: &str = "Options:
     --no-route-skip       do not hold the skip key while exploring routes
   --fork <mode>         replay (default) runs every route from the start; save starts
                         branches from a checkpoint saved at the choice (needs saves)
-  --allow-presumed      research only: run legacy presumed commands
-  --allow-unreviewed    research only: run unreviewed commands with base semantics";
+  --block-presumed      stop at commands with only legacy presumed evidence
+  --block-unreviewed    stop at unreviewed commands";
 
 /// The check list comes from the catalog, so it always matches what can run.
 fn usage() -> String {
@@ -107,8 +107,8 @@ fn parse() -> Result<Args, String> {
                     other => return Err(format!("unknown fork mode {other}")),
                 }
             }
-            "--allow-presumed" => options.allow_presumed = true,
-            "--allow-unreviewed" => options.allow_unreviewed = true,
+            "--block-presumed" => options.block_presumed = true,
+            "--block-unreviewed" => options.block_unreviewed = true,
             flag if flag.starts_with("--") => return Err(format!("unknown option {flag}")),
             path if root.is_none() => root = Some(PathBuf::from(path)),
             extra => return Err(format!("unexpected argument {extra}")),

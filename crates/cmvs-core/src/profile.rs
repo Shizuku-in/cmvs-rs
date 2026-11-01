@@ -29,7 +29,7 @@ pub enum Semantics {
     Research(ResearchId),
 }
 
-/// Static implementation identifiers; selecting one still requires research permission.
+/// Static implementation identifiers; execution obeys the unreviewed block policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResearchId {
     FontCells,
@@ -81,7 +81,7 @@ pub enum CommandStatus {
     ContractEquivalent,
     /// Comparison found no difference, but conservative limits (blocked data, indirect
     /// calls, recursion, depth) hide part of the code; the comparable-shape proof is
-    /// mandatory. Research only: requires an explicit allow-presumed policy.
+    /// mandatory. Allowed by default; an explicit block-presumed policy rejects it.
     Presumed,
     /// Present, but not yet compared with or reviewed against the base.
     Unreviewed,

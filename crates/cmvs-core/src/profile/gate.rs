@@ -11,7 +11,7 @@ pub enum GateErrorKind {
     NoOp,
     /// Present, but its semantics are not yet established for this build.
     Unreviewed,
-    /// Legacy shape evidence is incomplete and no research override was selected.
+    /// Legacy shape evidence is incomplete and the selected policy blocks it.
     Presumed,
     /// 0x201d declares a different game than the matched record.
     GameIdMismatch { expected: u32, found: u32 },
@@ -48,13 +48,13 @@ impl fmt::Display for GateError {
             ),
             GateErrorKind::Unreviewed => write!(
                 f,
-                "{site} is unreviewed for engine profile {} (base {}); pass --allow-unreviewed only for research",
+                "{site} is unreviewed for engine profile {} (base {}); blocked by --block-unreviewed",
                 self.profile,
                 self.base.as_deref().unwrap_or("-")
             ),
             GateErrorKind::Presumed => write!(
                 f,
-                "{site} has only legacy presumed evidence for engine profile {}; pass --allow-presumed only for research",
+                "{site} has only legacy presumed evidence for engine profile {}; blocked by --block-presumed",
                 self.profile
             ),
             GateErrorKind::GameIdMismatch { expected, found } => write!(
@@ -71,8 +71,8 @@ impl std::error::Error for GateError {}
 #[derive(Debug, Clone)]
 pub struct CommandGate<'a> {
     selection: ProfileSelection<'a>,
-    allow_unreviewed: bool,
-    allow_presumed: bool,
+    block_unreviewed: bool,
+    block_presumed: bool,
     allowed: BTreeSet<u16>,
     presumed: BTreeSet<u16>,
     contracted: BTreeSet<u16>,
@@ -107,21 +107,21 @@ impl<'a> CommandGate<'a> {
     pub fn new(selection: ProfileSelection<'a>) -> Self {
         Self {
             selection,
-            allow_unreviewed: false,
-            allow_presumed: false,
+            block_unreviewed: false,
+            block_presumed: false,
             allowed: BTreeSet::new(),
             presumed: BTreeSet::new(),
             contracted: BTreeSet::new(),
             counts: GateCounts::default(),
         }
     }
-    /// Research only: allow unreviewed commands into the selected dispatch handler.
-    pub fn set_allow_unreviewed(&mut self, allow: bool) {
-        self.allow_unreviewed = allow;
+    /// Block unreviewed commands before entering the selected dispatch handler.
+    pub fn set_block_unreviewed(&mut self, block: bool) {
+        self.block_unreviewed = block;
     }
-    /// Research only: use root semantics despite incomplete legacy shape evidence.
-    pub fn set_allow_presumed(&mut self, allow: bool) {
-        self.allow_presumed = allow;
+    /// Block commands supported only by incomplete legacy shape evidence.
+    pub fn set_block_presumed(&mut self, block: bool) {
+        self.block_presumed = block;
     }
     pub fn selection(&self) -> &ProfileSelection<'a> {
         &self.selection
@@ -180,8 +180,8 @@ impl<'a> CommandGate<'a> {
         let mut lines = vec![
             self.summary_line(),
             format!(
-                "# profile gate research policy: allow-presumed={} allow-unreviewed={}",
-                self.allow_presumed, self.allow_unreviewed
+                "# profile gate research policy: block-presumed={} block-unreviewed={}",
+                self.block_presumed, self.block_unreviewed
             ),
         ];
         lines.extend(self.contracted_line());
@@ -245,7 +245,7 @@ impl<'a> CommandGate<'a> {
                 self.contracted.insert(command);
                 Ok(None)
             }
-            CommandStatus::Presumed if self.allow_presumed => {
+            CommandStatus::Presumed if !self.block_presumed => {
                 self.counts.presumed += 1;
                 self.presumed.insert(command);
                 Ok(None)
@@ -253,7 +253,7 @@ impl<'a> CommandGate<'a> {
             CommandStatus::Presumed => Err(error(GateErrorKind::Presumed)),
             CommandStatus::Absent => Err(error(GateErrorKind::Absent)),
             CommandStatus::NoOp => Err(error(GateErrorKind::NoOp)),
-            CommandStatus::Unreviewed if self.allow_unreviewed => {
+            CommandStatus::Unreviewed if !self.block_unreviewed => {
                 self.counts.unreviewed += 1;
                 Ok(self.allowed.insert(command).then_some(command))
             }

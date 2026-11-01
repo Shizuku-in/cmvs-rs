@@ -269,12 +269,7 @@ fn trace_reports_the_selected_particle_entry_and_requires_an_explicit_random_sou
     for seeded in [false, true] {
         let mut cli = Command::new(env!("CARGO_BIN_EXE_cmvs-trace"));
         cli.arg(&path)
-            .args([
-                "--profile",
-                "cmvs-20171114",
-                "--allow-unreviewed",
-                "--record-platform",
-            ])
+            .args(["--profile", "cmvs-20171114", "--record-platform"])
             .arg(&root);
         if seeded {
             cli.args(["--rand-seed", "0"]);

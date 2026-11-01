@@ -287,12 +287,12 @@ impl<'a> Startup<'a> {
         };
         Ok(())
     }
-    /// Research only: let unreviewed commands enter the selected research handler.
-    pub fn set_allow_unreviewed(&mut self, allow: bool) {
-        self.gate.set_allow_unreviewed(allow);
+    /// Block unreviewed commands before entering the selected dispatch handler.
+    pub fn set_block_unreviewed(&mut self, block: bool) {
+        self.gate.set_block_unreviewed(block);
     }
-    pub fn set_allow_presumed(&mut self, allow: bool) {
-        self.gate.set_allow_presumed(allow);
+    pub fn set_block_presumed(&mut self, block: bool) {
+        self.gate.set_block_presumed(block);
     }
     pub fn gate(&self) -> &CommandGate<'a> {
         &self.gate

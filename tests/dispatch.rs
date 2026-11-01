@@ -71,9 +71,10 @@ fn new_command_still_requires_research_gate_and_short_stack_is_transactional() {
         )
         .unwrap();
     let mut gate = CommandGate::new(selection);
+    gate.set_block_unreviewed(true);
     let (pc, command) = vm.pending_system().unwrap();
     assert!(gate.check(&vm, pc, command).is_err());
-    gate.set_allow_unreviewed(true);
+    gate.set_block_unreviewed(false);
     assert_eq!(gate.check(&vm, pc, command).unwrap(), Some(0x3ac));
     let mut messages = MessageHost::default();
     let mut input = ActionInput::default();

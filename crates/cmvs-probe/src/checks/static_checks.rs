@@ -140,13 +140,7 @@ pub fn scripts(target: &Target) -> (CheckResult, Option<ScriptInventory>) {
 
 /// Statuses the default gate stops at.
 fn stops(status: CommandStatus) -> bool {
-    matches!(
-        status,
-        CommandStatus::Absent
-            | CommandStatus::NoOp
-            | CommandStatus::Presumed
-            | CommandStatus::Unreviewed
-    )
+    matches!(status, CommandStatus::Absent | CommandStatus::NoOp)
 }
 
 /// Classifies statically present system commands by gate status. Presence is a linear

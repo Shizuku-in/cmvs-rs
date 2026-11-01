@@ -302,6 +302,8 @@ fn machine_proofs_bind_both_exes_and_legacy_presumed_needs_its_own_policy() {
             .select(Some("synthetic-derived"), &Evidence::default())
             .unwrap();
         let mut gate = CommandGate::new(selection);
+        gate.set_block_unreviewed(true);
+        gate.set_block_presumed(true);
         let mut code = vec![];
         command(&mut code, 0x201d, &[0]);
         let program = script(&code);
@@ -312,13 +314,13 @@ fn machine_proofs_bind_both_exes_and_legacy_presumed_needs_its_own_policy() {
                 GateErrorKind::Presumed
             );
             assert_eq!(gate.counts().presumed, 0);
-            gate.set_allow_unreviewed(true);
+            gate.set_block_unreviewed(false);
             assert_eq!(
                 gate.check(&vm, pc, 0).unwrap_err().kind,
                 GateErrorKind::Presumed
             );
-            gate.set_allow_unreviewed(false);
-            gate.set_allow_presumed(true);
+            gate.set_block_unreviewed(true);
+            gate.set_block_presumed(false);
         }
         assert_eq!(gate.check(&vm, pc, 0), Ok(None));
         assert!(gate.allowed().is_empty());
@@ -337,7 +339,7 @@ fn machine_proofs_bind_both_exes_and_legacy_presumed_needs_its_own_policy() {
             status == CommandStatus::Presumed
         );
         assert!(gate.check(&vm, pc, 3).is_err());
-        gate.set_allow_unreviewed(true);
+        gate.set_block_unreviewed(false);
         assert_eq!(gate.check(&vm, pc, 3), Ok(Some(3)));
         assert_eq!(gate.counts().unreviewed, 1);
         for invalid in [
@@ -459,6 +461,8 @@ fn contract_certificates_bind_round_trip_and_count_attempts_without_completing_c
         .select(Some("synthetic-derived"), &Evidence::default())
         .unwrap();
     let mut gate = CommandGate::new(selection);
+    gate.set_block_unreviewed(true);
+    gate.set_block_presumed(true);
     let mut code = vec![];
     command(&mut code, 0x201d, &[0]);
     let program = script(&code);
@@ -615,6 +619,8 @@ fn reviewed_commands_require_a_review_record_and_pass_the_default_gate() {
         .select(Some("synthetic-derived"), &Evidence::default())
         .unwrap();
     let mut gate = CommandGate::new(selection);
+    gate.set_block_unreviewed(true);
+    gate.set_block_presumed(true);
     let mut code = vec![];
     command(&mut code, 0x201d, &[0]);
     let program = script(&code);
@@ -839,6 +845,8 @@ fn gate_rejects_absent_noop_unreviewed_and_mismatched_game_ids() {
     let recorded = script(&code);
     let (vm, pc) = pending_machine(&recorded);
     let mut gate = CommandGate::new(registry.select(None, &data).unwrap());
+    gate.set_block_unreviewed(true);
+    gate.set_block_presumed(true);
     let mut kind = |vm: &Machine, command| gate.check(vm, pc, command).map_err(|e| e.kind);
     assert_eq!(kind(&vm, 0), Err(GateErrorKind::Unreviewed));
     assert_eq!(kind(&vm, 1), Err(GateErrorKind::NoOp));
@@ -857,7 +865,7 @@ fn gate_rejects_absent_noop_unreviewed_and_mismatched_game_ids() {
             found: 0x8765_4321
         })
     );
-    gate.set_allow_unreviewed(true);
+    gate.set_block_unreviewed(false);
     let mut kind = |command| gate.check(&vm, pc, command).map_err(|e| e.kind);
     assert_eq!(kind(0), Ok(Some(0)));
     assert_eq!(kind(0), Ok(None));

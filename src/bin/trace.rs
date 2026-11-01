@@ -50,8 +50,8 @@ Saves and platform:
 
 Engine profile:
   --profile <id>               force a profile; needed for synthetic or unrecorded scripts
-  --allow-presumed             research only: run legacy presumed commands
-  --allow-unreviewed           research only: run unreviewed commands with selected semantics
+  --block-presumed             stop at commands with only legacy presumed evidence
+  --block-unreviewed           stop at unreviewed commands
 
 Notes:
   - The profile is identified from the input, --script-archive and, with --record-platform,
@@ -124,15 +124,15 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut continue_without_snapshot = false;
     let mut random = None;
     let mut profile = None;
-    let mut allow_unreviewed = false;
-    let mut allow_presumed = false;
+    let mut block_unreviewed = false;
+    let mut block_presumed = false;
     while let Some(flag) = args.next() {
-        if flag == "--allow-presumed" {
-            allow_presumed = true;
+        if flag == "--block-presumed" {
+            block_presumed = true;
             continue;
         }
-        if flag == "--allow-unreviewed" {
-            allow_unreviewed = true;
+        if flag == "--block-unreviewed" {
+            block_unreviewed = true;
             continue;
         }
         if flag == "--bootstrap" {
@@ -205,10 +205,10 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut gate = TraceGate(CommandGate::new(
         Registry::builtin().select(profile.as_deref(), &evidence)?,
     ));
-    gate.set_allow_unreviewed(allow_unreviewed);
-    gate.set_allow_presumed(allow_presumed);
-    if allow_presumed {
-        println!("# research policy: legacy presumed commands allowed (--allow-presumed)");
+    gate.set_block_unreviewed(block_unreviewed);
+    gate.set_block_presumed(block_presumed);
+    if !block_presumed {
+        println!("# research policy: legacy presumed commands allowed (default policy)");
     }
     for line in gate.selection().log_lines() {
         println!("{line}");
@@ -344,7 +344,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             let resolved = gate.resolve(&machine, system_pc, command)?;
             if let Some(first) = resolved.first_unreviewed {
                 println!(
-                    "# UNREVIEWED system command 0x{:04x} allowed with {} (--allow-unreviewed, first use)",
+                    "# UNREVIEWED system command 0x{:04x} allowed with {} (default policy, first use)",
                     0x2000 + first,
                     cmvs_rs::dispatch::semantics_name(gate.selection().profile, first)
                 );

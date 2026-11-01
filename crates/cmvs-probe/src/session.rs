@@ -36,8 +36,8 @@ pub struct Options {
     pub route_skip: bool,
     /// Route branches start from a saved checkpoint instead of replaying from the start.
     pub fork_saves: bool,
-    pub allow_presumed: bool,
-    pub allow_unreviewed: bool,
+    pub block_presumed: bool,
+    pub block_unreviewed: bool,
 }
 
 impl Default for Options {
@@ -52,8 +52,8 @@ impl Default for Options {
             route_skip: true,
             fork_saves: false,
 
-            allow_presumed: false,
-            allow_unreviewed: false,
+            block_presumed: false,
+            block_unreviewed: false,
         }
     }
 }
@@ -69,8 +69,8 @@ impl Options {
             ("max_rounds", self.max_rounds.into()),
             ("route_skip", self.route_skip.into()),
             ("fork_saves", self.fork_saves.into()),
-            ("allow_presumed", self.allow_presumed.into()),
-            ("allow_unreviewed", self.allow_unreviewed.into()),
+            ("block_presumed", self.block_presumed.into()),
+            ("block_unreviewed", self.block_unreviewed.into()),
         ])
     }
 }
@@ -178,8 +178,8 @@ impl<'a> Session<'a> {
     ) -> Result<Self, String> {
         let game = target.game.as_ref().ok_or("no engine profile selected")?;
         let mut run = Startup::new(script, &target.root, game, 0).map_err(|e| e.to_string())?;
-        run.set_allow_presumed(options.allow_presumed);
-        run.set_allow_unreviewed(options.allow_unreviewed);
+        run.set_block_presumed(options.block_presumed);
+        run.set_block_unreviewed(options.block_unreviewed);
         run.set_user_data_directory(user)
             .map_err(|e| e.to_string())?;
         // Data-driven: only records that verify the policy enable it.

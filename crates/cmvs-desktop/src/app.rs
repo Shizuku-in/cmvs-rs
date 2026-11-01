@@ -42,9 +42,8 @@ Run control:
 
 Engine profile:
   --profile <id>                   force a profile for research
-  --allow-presumed                 research only: run legacy presumed commands
-  --allow-unreviewed               research only: run unreviewed commands with base
-                                   semantics, logging each command's first use
+  --block-presumed                 stop at commands with only legacy presumed evidence
+  --block-unreviewed               stop at unreviewed commands
 
 Saves:
   --user-data-dir <dir>            locked user directory for system.dat, slots and cmvs.cfg
@@ -591,7 +590,7 @@ impl ApplicationHandler for App<'_> {
                 let outcome = self.startup.tick(&mut backend);
                 for command in self.startup.take_unreviewed_notices() {
                     println!(
-                        "# UNREVIEWED system command 0x{:04x} allowed with {} (--allow-unreviewed, first use)",
+                        "# UNREVIEWED system command 0x{:04x} allowed with {} (default policy, first use)",
                         0x2000 + command,
                         cmvs_core::dispatch::semantics_name(
                             self.startup.gate().selection().profile,
@@ -777,8 +776,8 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut snapshot_policy = SnapshotPolicy::Capture;
     let mut skip_auto_resume = false;
     let mut profile = None;
-    let mut allow_unreviewed = false;
-    let mut allow_presumed = false;
+    let mut block_unreviewed = false;
+    let mut block_presumed = false;
     let mut system_save_output = None;
     let mut user_data_dir = None;
     let mut rand_seed = 0;
@@ -794,12 +793,12 @@ fn run() -> Result<(), Box<dyn Error>> {
             skip_auto_resume = true;
             continue;
         }
-        if flag == "--allow-presumed" {
-            allow_presumed = true;
+        if flag == "--block-presumed" {
+            block_presumed = true;
             continue;
         }
-        if flag == "--allow-unreviewed" {
-            allow_unreviewed = true;
+        if flag == "--block-unreviewed" {
+            block_unreviewed = true;
             continue;
         }
         if flag == "--continue-without-snapshot" {
@@ -925,10 +924,10 @@ fn run() -> Result<(), Box<dyn Error>> {
         return Err("--user-data-dir and --system-save-output are mutually exclusive".into());
     }
     let mut startup = Startup::new(&script, root.as_ref(), &game, 0)?;
-    startup.set_allow_unreviewed(allow_unreviewed);
-    startup.set_allow_presumed(allow_presumed);
-    if allow_presumed {
-        println!("# research policy: legacy presumed commands allowed (--allow-presumed)");
+    startup.set_block_unreviewed(block_unreviewed);
+    startup.set_block_presumed(block_presumed);
+    if !block_presumed {
+        println!("# research policy: legacy presumed commands allowed (default policy)");
     }
     if let Some(path) = &user_data_dir {
         startup.set_user_data_directory(path)?;

@@ -104,12 +104,14 @@ fn research_declarations_reject_unknown_handlers_bad_bindings_and_unsafe_evidenc
 }
 
 #[test]
-fn declared_research_still_requires_unreviewed_permission_on_every_attempt() {
+fn declared_research_obeys_unreviewed_block_on_every_attempt() {
     let registry = Registry::builtin();
     let selection = registry
         .select(Some("cmvs-20171114"), &Evidence::default())
         .unwrap();
     let mut gate = CommandGate::new(selection);
+    gate.set_block_unreviewed(true);
+    gate.set_block_presumed(true);
     let mut code = vec![];
     command(&mut code, 0x23ac, &[1]);
     let script = script(&code);
@@ -120,17 +122,17 @@ fn declared_research_still_requires_unreviewed_permission_on_every_attempt() {
         gate.resolve(&vm, pc, command).err().unwrap().kind,
         GateErrorKind::Unreviewed
     );
-    gate.set_allow_presumed(true);
+    gate.set_block_presumed(false);
     assert_eq!(
         gate.resolve(&vm, pc, command).err().unwrap().kind,
         GateErrorKind::Unreviewed
     );
-    gate.set_allow_unreviewed(true);
+    gate.set_block_unreviewed(false);
     let result = gate.resolve(&vm, pc, command).unwrap();
     assert_eq!(result.semantics, Semantics::Research(ResearchId::FontCells));
     assert_eq!(result.first_unreviewed, Some(command));
     assert_eq!(gate.counts().unreviewed, 1);
-    gate.set_allow_unreviewed(false);
+    gate.set_block_unreviewed(true);
     assert_eq!(
         gate.resolve(&vm, pc, command).err().unwrap().kind,
         GateErrorKind::Unreviewed

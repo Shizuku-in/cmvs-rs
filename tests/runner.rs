@@ -120,6 +120,7 @@ fn runner_legacy_presumed_policy_keeps_pending_state_on_rejection() {
         .unwrap();
     let script = root.script();
     let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    run.set_block_presumed(true);
     let mut backend = RecordingBackend::default();
     assert!(
         run.tick(&mut backend)
@@ -129,7 +130,7 @@ fn runner_legacy_presumed_policy_keeps_pending_state_on_rejection() {
     );
     let pc = run.machine().pc();
     let pending = run.machine().pending_system();
-    run.set_allow_unreviewed(true);
+    run.set_block_unreviewed(false);
     assert!(
         run.tick(&mut backend)
             .unwrap_err()
@@ -139,7 +140,7 @@ fn runner_legacy_presumed_policy_keeps_pending_state_on_rejection() {
     assert_eq!(run.machine().pc(), pc);
     assert_eq!(run.machine().pending_system(), pending);
     assert_eq!(run.gate().counts().presumed, 0);
-    run.set_allow_presumed(true);
+    run.set_block_presumed(false);
     assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
     assert_eq!(run.gate().counts().presumed, 1);
 }
