@@ -46,8 +46,8 @@
 
 - [winit 0.30.13](https://docs.rs/winit/0.30.13/winit/)，Apache-2.0：原生事件循环、窗口、图标与光标接口。
 - [softbuffer 0.4.8](https://docs.rs/softbuffer/0.4.8/softbuffer/)，MIT OR Apache-2.0：桌面测试帧缓冲呈现。
-- [ico 0.5.0](https://docs.rs/ico/0.5.0/ico/)，MIT：预检尺寸后的 ICO 图像解码。
-- [encoding_rs 0.8.42](https://docs.rs/encoding_rs/0.8.42/encoding_rs/)，(Apache-2.0 OR MIT) AND BSD-3-Clause：显式编码的严格标题转换。
+- [ico 0.6.0](https://docs.rs/ico/0.6.0/ico/)，MIT：预检尺寸后的 ICO 图像解码。
+- [encoding_rs 0.8.44](https://docs.rs/encoding_rs/0.8.44/encoding_rs/)，(Apache-2.0 OR MIT) AND BSD-3-Clause：显式编码的严格标题转换。
 - 版本和传递依赖固定在 Cargo.lock；这些依赖只在 `desktop` 功能启用，不引入默认核心依赖。未复制库示例源码，使用公开 API 实现适配。
 
 ## 本作证据与验证约定
@@ -111,10 +111,10 @@ Rust 解码依同一哈希二进制的 `0x140037620`、`0x1400ab650`、`0x1400a0
 
 ## 可选音频输出依赖与证据
 
-- [rodio 0.21.1](https://docs.rs/rodio/0.21.1/rodio/)：MIT OR Apache-2.0；原生混音、Sink、播放位置。关闭默认功能，只启用 playback，不使用其默认解码器。
+- [rodio 0.23.0](https://docs.rs/rodio/0.23.0/rodio/)：MIT OR Apache-2.0；原生混音、Player、播放位置。关闭默认功能，只启用 playback，不使用其默认解码器。
 - [lewton 0.10.2](https://docs.rs/lewton/0.10.2/lewton/)：MIT OR Apache-2.0；纯 Rust Vorbis 包解码，流式包装与错误策略由本项目实现。
-- [cpal 0.16.0](https://docs.rs/cpal/0.16.0/cpal/)：Apache-2.0；rodio 的原生设备依赖，Windows 实测。全部版本与校验值固定于 Cargo.lock。
-- [rodio Sink::get_pos](https://docs.rs/rodio/0.21.1/rodio/struct.Sink.html#method.get_pos) 与本地固定版本 sink.rs：进度为源消费位置，约 5ms 更新，不作为 DAC 硬件时间戳。
+- [cpal 0.18.2](https://docs.rs/cpal/0.18.2/cpal/)：Apache-2.0；rodio 的原生设备依赖，Windows 实测。全部版本与校验值固定于 Cargo.lock。
+- [rodio Player::get_pos](https://docs.rs/rodio/0.23.0/rodio/struct.Player.html#method.get_pos) 与本地固定版本 player.rs：进度为源消费位置，约 5ms 更新，不作为 DAC 硬件时间戳。
 
 仅通过公开 API 使用这些库，未将外部源码复制进项目；默认核心不引入它们。
 双文件 BGM 除既有 cmvs64.exe 地址外，还只读核对本作 mog2x64.dll（SHA-256 `c51ba0c33e0153492b6cb2688701b35f0ddae309828fc21a7631ac54abb5b205`）的
@@ -238,7 +238,7 @@ PB3 type 5/6 对照既有 MIT 固定提交 a6bc9501d82264e228943f894af1b969ab98b
 
 第二遮罩通道 0x2234–0x2237 仅据同一哈希二进制的 `0x14007b370`、`0x140081230`、`0x14007b4c0`、`0x14007b500`、`0x140051d10`、`0x140052130`、`0x140052250`、`0x140051a10`、`0x140051a50`、`0x1400519c0` 及帧更新 `0x140015be6..0x140015ce0`，与既有遮罩通道函数逐一对照实现；剧本统计来自本工程工具对仓库外解包副本的线性解码。未增加外部项目、依赖或源码，未修改解码算法。0x20b7 仅定位 case 183 → `0x140071170`。
 
-位置查询 0x20b7/0x20aa 仅据同一哈希二进制的 `0x140071170`、`0x140070790`、`0x1400713f0`、`0x140087870`、`0x1400877b0`、`0x1400892f0`、`0x140086db0` 及既有 `0x140088030`/`0x140087910` 证据实现；原生后端使用已锁定的 rodio `Sink::get_pos`/`empty`/`is_paused`，无新依赖或外部源码。0x2308 仅定位 case 776 → `0x14007ef20`。
+位置查询 0x20b7/0x20aa 仅据同一哈希二进制的 `0x140071170`、`0x140070790`、`0x1400713f0`、`0x140087870`、`0x1400877b0`、`0x1400892f0`、`0x140086db0` 及既有 `0x140088030`/`0x140087910` 证据实现；原生后端使用已锁定的 rodio `Player::get_pos`/`empty`/`is_paused`，无新依赖或外部源码。0x2308 仅定位 case 776 → `0x14007ef20`。
 
 加法混合仅据同一哈希二进制的 `0x14006d6a0`、`0x14003b0f0`、`0x14001f450`、`0x140020340`（`0x14002089a` 分支及 v229 计算）、`0x14001bc20`、`0x140030170` 实现；D3D9 渲染状态编号与混合因子取自公开的 Direct3D 9 常量定义。未增加外部项目、依赖或源码。
 

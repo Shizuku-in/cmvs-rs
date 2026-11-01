@@ -103,8 +103,14 @@ workspace 各包声明 Rust 1.89+（本机使用 1.96.0），用于标准库 Fil
 
 `cmvs-wgpu` 依赖 core、固定 wgpu/pollster，封装设备、纹理缓存、场景合成、窗口呈现和逻辑帧读回；desktop 在 `wgpu-renderer` 下依赖它。根 feature 同名，自动启用 desktop；默认成员与 core 依赖不变。`cargo check --offline --features wgpu-renderer` 检查 GPU 构建，`cargo check --offline -p cmvs-desktop --no-default-features` 检查 CPU-only。全 workspace 全功能测试仍需另显式执行忽略的GPU硬件检查。
 
-锁文件特意把 gpu-allocator 的宽范围 windows 依赖绑定到0.62.2，与 wgpu-hal 一致；cpal 继续使用0.54.0。更新锁文件后应检查 GPU/音频全功能构建，避免宽范围解析把这两套类型错误合并。
+锁文件把 gpu-allocator 的宽范围 windows 依赖绑定到0.62.2，与 wgpu-hal 一致；cpal 0.18.2 也解析到同一 windows 0.62.2，不再保留旧的 0.54 分支。更新锁文件后仍应检查 GPU/音频全功能构建，避免宽范围解析把两套类型错误合并。
 
 ## Linux 字体服务（2026-10-31）
 
 `cmvs-native` 在 Linux 上通过 Fontconfig 的 `fc-list` 发现字体目录、通过 Zenity 选择日文字体族；字体文件解析仍留在 `cmvs-desktop`，平台无关核心不变。Wayland 标题启用 winit 的 crossfont 后端，逐字使用系统字体回退。Linux 构建需要 FreeType/Fontconfig 开发包，原生音频另需 ALSA 开发包（Ubuntu: `libfreetype-dev libfontconfig-dev libasound2-dev`）；字体选择运行时需 `fontconfig zenity` 及日文字体（例如 `fonts-noto-cjk`）。
+
+## 依赖升级（2026-11-02）
+
+在已安装系统开发包的 Linux 构建上升级四个固定版本：pollster 0.4.0→1.0.1、encoding_rs 0.8.42→0.8.44、ico 0.5.0→0.6.0、rodio 0.21.1→0.23.0；cpal 随 rodio 由 0.16.0 升至 0.18.2，lewton、winit、softbuffer、ab_glyph、wgpu 保持原版本。rodio 0.22 起把 OutputStream/OutputStreamBuilder/Sink 改名为 MixerDeviceSink/DeviceSinkBuilder/Player，`Source::channels/sample_rate` 改为返回 NonZero；`cmvs-audio` 只做对应改名与类型包装，播放、混音、源时钟算法未变。ico 0.6.0 的读取/解码调用方式不变，其新增文件范围校验位于既有预检之后。
+
+升级后格式检查、默认 959 项与全 workspace 全功能 1077 项测试（25 项忽略）、默认与全功能严格 Clippy 及 `desktop,audio-output` release 构建通过；Linux 原生音频设备以 48 kHz/2 声道打开，aoitori 运行到诊断退出，未做听感或音画同步实测。版本、提交与许可已同步到 references.md 和 THIRD_PARTY_NOTICES.txt；历史游戏记录中的旧版本描述保留为当时事实。

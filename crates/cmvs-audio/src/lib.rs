@@ -10,7 +10,7 @@ use cmvs_core::{
     platform::resolve_under,
     resources::{ResourceArchives, ResourceKind, ResourceSource},
 };
-use rodio::{OutputStream, OutputStreamBuilder, Sink, Source};
+use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player, Source};
 use std::{
     collections::BTreeMap,
     error::Error,
@@ -225,11 +225,13 @@ impl Source for StreamSource {
     fn current_span_len(&self) -> Option<usize> {
         None
     }
-    fn channels(&self) -> u16 {
-        self.program.channels()
+    fn channels(&self) -> rodio::ChannelCount {
+        rodio::ChannelCount::new(self.program.channels())
+            .expect("Vorbis channel count is validated non-zero")
     }
-    fn sample_rate(&self) -> u32 {
-        self.program.sample_rate()
+    fn sample_rate(&self) -> rodio::SampleRate {
+        rodio::SampleRate::new(self.program.sample_rate())
+            .expect("Vorbis sample rate is validated non-zero")
     }
     fn total_duration(&self) -> Option<Duration> {
         None
@@ -266,7 +268,7 @@ impl Envelope {
     }
 }
 struct Channel {
-    sink: Sink,
+    sink: Player,
     fault: Fault,
     envelope: Option<Envelope>,
     release_at_end: bool,
@@ -301,17 +303,17 @@ pub struct NativeAudio {
     voice_ducking: VoiceDucking,
     ducking_clock: Instant,
     // Channels must drop before the device stream.
-    stream: OutputStream,
+    stream: MixerDeviceSink,
 }
 impl NativeAudio {
     pub fn new(root: &Path) -> Result<Self, Box<dyn Error>> {
         let fault: Fault = Arc::default();
         let copy = fault.clone();
-        let mut stream = OutputStreamBuilder::from_default_device()?
+        let mut stream = DeviceSinkBuilder::from_default_device()?
             .with_error_callback(move |e| {
                 *copy.lock().unwrap() = Some(e.to_string());
             })
-            .open_stream_or_fallback()?;
+            .open_sink_or_fallback()?;
         stream.log_on_drop(false);
         println!(
             "# native audio output: {} Hz, {} channels",
@@ -377,7 +379,7 @@ impl NativeAudio {
     ) -> Channel {
         let fault: Fault = Arc::default();
         let looped = program.looped.clone();
-        let sink = Sink::connect_new(self.stream.mixer());
+        let sink = Player::connect_new(self.stream.mixer());
         sink.pause();
         let gain = volume.min(256) as f32 / 256.0;
         let envelope = (fade_ms != 0).then(|| Envelope::new(0.0, 1.0, fade_ms));

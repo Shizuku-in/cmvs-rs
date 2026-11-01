@@ -8,7 +8,7 @@ cargo run --offline --release --features wgpu-renderer --bin cmvs-desktop -- "<�
 
 ## 合成和资源
 
-`cmvs-wgpu` 依赖 core、wgpu 30.0.1、pollster 0.4.0，不向 core 引入图形依赖或 unsafe。共享 `prepare_scene` 完成所有语义校验、继承、投影与排序，GPU 严格依序执行 Image/Projected/Rotated/Solid/Fade；换图、条带、震动及父子层次已在共享队列展开。遮罩覆盖率查找表、屏幕第二纹理、纹理减法与六种混合分支由着色器/混合状态执行。
+`cmvs-wgpu` 依赖 core、wgpu 30.0.1、pollster 1.0.1，不向 core 引入图形依赖或 unsafe。共享 `prepare_scene` 完成所有语义校验、继承、投影与排序，GPU 严格依序执行 Image/Projected/Rotated/Solid/Fade；换图、条带、震动及父子层次已在共享队列展开。遮罩覆盖率查找表、屏幕第二纹理、纹理减法与六种混合分支由着色器/混合状态执行。
 
 合成目标为逻辑尺寸的 RGBA8Unorm，以原有字节颜色空间计算。非旋转图像保留点采样，投影/缩放/旋转显式执行钳位双线性和8位取整；像素中心保留现有软件路径的半像素约定。窗口表面通过非 sRGB 视图呈现，避免合成结果再被隐式 gamma 编码。窗口比例由共享 Viewport 决定，点采样/线性、黑边与预览棋盘单独呈现。
 

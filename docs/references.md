@@ -20,12 +20,12 @@
 |---|---|---|---|
 | winit | 0.30.13 | Apache-2.0 | 窗口、事件、图标与光标 |
 | softbuffer | 0.4.8 | MIT OR Apache-2.0 | 软件帧缓冲 |
-| ico | 0.5.0 | MIT | ICO 解码 |
-| encoding_rs | 0.8.42 | (Apache-2.0 OR MIT) AND BSD-3-Clause | 显式文本编码转换 |
+| ico | 0.6.0 | MIT | ICO 解码 |
+| encoding_rs | 0.8.44 | (Apache-2.0 OR MIT) AND BSD-3-Clause | 显式文本编码转换 |
 | ab_glyph | 0.2.32 | Apache-2.0 | OpenType 字形光栅化 |
-| rodio | 0.21.1 | MIT OR Apache-2.0 | 原生混音、播放与源位置 |
+| rodio | 0.23.0 | MIT OR Apache-2.0 | 原生混音、播放与源位置 |
 | lewton | 0.10.2 | MIT OR Apache-2.0 | Vorbis 解码 |
-| cpal（传递依赖） | 0.16.0 | Apache-2.0 | 原生音频设备 |
+| cpal（传递依赖） | 0.18.2 | Apache-2.0 | 原生音频设备 |
 
 这些依赖留在后端，默认核心无第三方依赖。未复制库示例源码，使用公开 API 实现适配；本机 Python/NumPy、pefile、capstone 等仅作为研究对照工具，不构成运行核心依赖。
 
@@ -39,7 +39,7 @@
 
 ## GPU 后端来源
 
-wgpu 30.0.1（MIT OR Apache-2.0），发布包提交 `40f4a34ebaf56f9a046231f54125ad046239d3f3`，来源 https://github.com/gfx-rs/wgpu 。pollster 0.4.0（MIT OR Apache-2.0），发布包提交 `2864daf5febd81eb33f66cb32b66ca78a9e21db7`，来源 https://github.com/zesterer/pollster 。仅使用公开API，未复制示例或上游实现。版本与校验和固定于 Cargo.lock；新增传递依赖许可登记在 THIRD_PARTY_NOTICES.txt。图形相关语义继续依据现有软件路径与绑定游戏二进制的证据，不把库的行为作为新指令证据。
+wgpu 30.0.1（MIT OR Apache-2.0），发布包提交 `40f4a34ebaf56f9a046231f54125ad046239d3f3`，来源 https://github.com/gfx-rs/wgpu 。pollster 1.0.1（MIT OR Apache-2.0），发布包提交 `6a1a148208326e9c5b231b16f199f5227c550774`，来源 https://github.com/zesterer/pollster 。仅使用公开API，未复制示例或上游实现。版本与校验和固定于 Cargo.lock；新增传递依赖许可登记在 THIRD_PARTY_NOTICES.txt。图形相关语义继续依据现有软件路径与绑定游戏二进制的证据，不把库的行为作为新指令证据。
 
 ## Linux 字体选择与 Wayland 标题栏（2026-10-31）
 
