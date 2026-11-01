@@ -33,17 +33,20 @@ pub enum Semantics {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResearchId {
     FontCells,
+    Particles,
 }
 impl ResearchId {
     pub fn parse(name: &str) -> Option<Self> {
         match name {
             "font-cells" => Some(Self::FontCells),
+            "particles" => Some(Self::Particles),
             _ => None,
         }
     }
     pub fn name(self) -> &'static str {
         match self {
             Self::FontCells => "font-cells",
+            Self::Particles => "particles",
         }
     }
 }

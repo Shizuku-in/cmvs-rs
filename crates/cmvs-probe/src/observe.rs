@@ -173,6 +173,9 @@ pub fn state_digest(run: &Startup<'_>) -> String {
         Err(e) => h.update(e.as_bytes()),
     }
     h.update(format!("{:?}", run.scene().objects()).as_bytes());
+    if !run.scene().particle_effects().is_empty() {
+        h.update(format!("{:?}", run.scene().particle_effects()).as_bytes());
+    }
     for slot in 0..BUTTON_GROUPS {
         h.update(format!("{:?}", run.buttons().group(slot)).as_bytes());
     }

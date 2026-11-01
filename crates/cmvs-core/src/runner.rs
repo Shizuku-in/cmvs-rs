@@ -369,6 +369,7 @@ impl<'a> Startup<'a> {
             &mut self.camera,
         )?;
         self.scene.advance_frame(delta_ms);
+        self.scene.advance_particles(delta_ms, &mut self.random);
         self.messages.advance_frame(delta_ms);
         self.messages
             .advance_auxiliary_motion(delta_ms, &mut self.scene)?;
@@ -451,6 +452,7 @@ impl<'a> Startup<'a> {
             &mut self.camera,
         )?;
         self.scene.advance_frame(delta_ms);
+        self.scene.advance_particles(delta_ms, &mut self.random);
         self.messages.advance_frame(delta_ms);
         self.messages
             .advance_auxiliary_motion(delta_ms, &mut self.scene)?;
@@ -899,7 +901,6 @@ impl<'a> Startup<'a> {
             save_title: Some(&mut self.save_title),
             save_info: Some(&mut self.save_info),
             effects: Some(&mut self.effects),
-            effect_objects: true,
         };
         if crate::dispatch::uses_message_state(command) {
             hosts.messages = Some(&mut self.messages);

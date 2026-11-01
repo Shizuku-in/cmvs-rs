@@ -51,7 +51,7 @@ Saves and platform:
 Engine profile:
   --profile <id>               force a profile; needed for synthetic or unrecorded scripts
   --allow-presumed             research only: run legacy presumed commands
-  --allow-unreviewed           research only: run unreviewed commands with base semantics
+  --allow-unreviewed           research only: run unreviewed commands with selected semantics
 
 Notes:
   - The profile is identified from the input, --script-archive and, with --record-platform,
@@ -320,6 +320,9 @@ fn run() -> Result<(), Box<dyn Error>> {
                 sequence.advance_frame(delta)?;
             }
             scene.advance_frame(delta);
+            if let Some(random) = random.as_mut() {
+                scene.advance_particles(delta, random);
+            }
             camera.advance_frame(delta);
             movies.advance(delta);
             frame_delta = delta;
@@ -404,7 +407,6 @@ fn run() -> Result<(), Box<dyn Error>> {
                 gesture: platform_assets.is_some().then_some(&mut gesture),
                 popup: None,
                 save_title: platform_assets.is_some().then_some(&mut save_title),
-                effect_objects: platform_assets.is_some(),
                 ..Default::default()
             };
             if platform_assets.is_some() {
@@ -604,6 +606,9 @@ fn run() -> Result<(), Box<dyn Error>> {
                             sequence.advance_frame(delta)?;
                         }
                         scene.advance_frame(delta);
+                        if let Some(random) = random.as_mut() {
+                            scene.advance_particles(delta, random);
+                        }
                         camera.advance_frame(delta);
                         movies.advance(delta);
                         frame_delta = delta;
@@ -631,6 +636,9 @@ fn run() -> Result<(), Box<dyn Error>> {
                     sequence.advance_frame(delta)?;
                 }
                 scene.advance_frame(delta);
+                if let Some(random) = random.as_mut() {
+                    scene.advance_particles(delta, random);
+                }
                 camera.advance_frame(delta);
                 movies.advance(delta);
                 frame_delta = delta;
@@ -646,11 +654,16 @@ fn run() -> Result<(), Box<dyn Error>> {
             }
             if dispatched == Some(cmvs_rs::dispatch::Flow::Done) {
                 use cmvs_rs::dispatch::Capability;
-                let capability = cmvs_rs::dispatch::ROOT
-                    .iter()
-                    .find(|entry| entry.command == command)
-                    .expect("completed root command has an entry")
-                    .capability;
+                let entry = match resolved.semantics {
+                    cmvs_rs::profile::Semantics::Root => cmvs_rs::dispatch::ROOT
+                        .iter()
+                        .find(|entry| entry.command == command),
+                    cmvs_rs::profile::Semantics::Research(id) => {
+                        cmvs_rs::dispatch::research_entry(id, command)
+                    }
+                }
+                .expect("completed command has a selected entry");
+                let capability = entry.capability;
                 match capability {
                     Capability::TextState
                     | Capability::AuxiliaryScene
@@ -961,8 +974,11 @@ fn run() -> Result<(), Box<dyn Error>> {
                         "# save title 0x2162 = {}; recorded only",
                         save_title.bytes().escape_ascii()
                     ),
+                    Capability::ParticleImages => {
+                        println!("# particle pools={}", scene.particle_effects().len())
+                    }
                     Capability::EffectObjects => {
-                        println!("# effect object release 0x22a0: no +4024 object is modeled")
+                        println!("# effect object release 0x22a0: slot state updated")
                     }
                     Capability::Popup => println!(
                         "# popup menu 0x{:04x}: enabled={}; system_integer[0]={:?}; no native menu",

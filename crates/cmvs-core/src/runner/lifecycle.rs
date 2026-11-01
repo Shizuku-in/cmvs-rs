@@ -211,6 +211,27 @@ mod tests {
         run.timers.begin_run(16);
         run.messages.set_record_output(true);
         run.messages.set_default_face(b"Retained Face");
+        run.scene.particle_effects.insert(
+            0,
+            crate::effect_objects::ParticleEffect {
+                mode: 0,
+                parameters: [0; 4],
+                pool: Default::default(),
+                particles: Vec::new(),
+            },
+        );
+        assert!(
+            run.inspect_snapshot()
+                .unwrap_err()
+                .to_string()
+                .contains("active particle effects")
+        );
+        assert!(
+            run.load_slot(0, &mut backend)
+                .unwrap_err()
+                .to_string()
+                .contains("active particle effects")
+        );
         let settings = run.settings.clone();
         let audio = run.audio.settings();
         let gesture = run.gesture.clone();
@@ -230,6 +251,7 @@ mod tests {
         assert_eq!(run.gesture, gesture);
         assert_eq!(&*run.messages.default_face(), b"Retained Face");
         assert_eq!(run.scene.clear(), crate::scene::ClearState::default());
+        assert!(run.scene.particle_effects().is_empty());
         assert!(!run.message_flags.skip());
         assert!(!run.message_flags.auto_advance());
         assert!(run.save_menu.popup_enabled());

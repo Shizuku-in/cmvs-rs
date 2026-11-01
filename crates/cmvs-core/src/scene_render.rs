@@ -768,16 +768,26 @@ pub fn prepare_scene<'a>(
     // Default forward queue traversal: common, previous, then current. Equal keys keep
     // this insertion order (0x14003de80 / 0x14003ddd0). Retained objects have no slot mask.
     let mut objects = Vec::new();
-    for (slot, object) in slots.chain(additional.iter().map(|&object| (None, object))) {
+    let particles = scene.particle_effects().values().flat_map(|effect| {
+        effect
+            .particles
+            .iter()
+            .map(|particle| (None, &particle.object, Some(&effect.pool)))
+    });
+    let all_objects = slots
+        .map(|(slot, object)| (slot, object, None))
+        .chain(particles)
+        .chain(additional.iter().map(|&object| (None, object, None)));
+    for (slot, object, parent) in all_objects {
         if object.shown
             && let Some(change) = &object.change
         {
-            objects.push((None, change.common.as_ref(), slot.is_none()));
-            objects.push((None, change.previous.as_ref(), slot.is_none()));
+            objects.push((None, change.common.as_ref(), slot.is_none(), None));
+            objects.push((None, change.previous.as_ref(), slot.is_none(), None));
         }
-        objects.push((slot, object, slot.is_none()));
+        objects.push((slot, object, slot.is_none(), parent));
     }
-    for (slot, object, additional_object) in objects {
+    for (slot, object, additional_object, parent) in objects {
         // 0x14003de80 returns early for +6244 == 0; no draw state means +6240 == 0.
         let Some(draw) = object.draw.as_ref().filter(|_| object.shown) else {
             continue;
@@ -807,7 +817,7 @@ pub fn prepare_scene<'a>(
                 if key.is_nan() || key <= 0.0 || d[0] == 3 && !camera.enabled() {
                     continue;
                 }
-                let layer = projected_layer(scene, Some(cameras), slot, object, draw, None)?
+                let layer = projected_layer(scene, Some(cameras), slot, object, draw, parent)?
                     .map(|(_, l)| shifted(l, by));
                 let mut entry = Entry {
                     order: key,

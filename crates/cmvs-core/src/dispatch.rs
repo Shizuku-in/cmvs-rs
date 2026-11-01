@@ -302,7 +302,6 @@ pub struct Hosts<'a> {
     pub save_title: Option<&'a mut SaveTitle>,
     pub save_info: Option<&'a mut SaveInfo>,
     pub effects: Option<&'a mut bool>,
-    pub effect_objects: bool,
     /// Availability of stateless services in this host environment.
     pub strings: bool,
     pub math: bool,
@@ -361,6 +360,7 @@ pub enum Capability {
     SaveInfo,
     Effects,
     EffectObjects,
+    ParticleImages,
     FadeWait,
     MaskWait,
     QuakeWait,
@@ -433,7 +433,8 @@ impl Hosts<'_> {
             Capability::SaveTitle => self.save_title.is_some(),
             Capability::SaveInfo => self.save_info.is_some(),
             Capability::Effects => self.effects.is_some(),
-            Capability::EffectObjects => self.effect_objects,
+            Capability::EffectObjects => self.scene.is_some(),
+            Capability::ParticleImages => self.images.is_some() && self.random.is_some(),
             Capability::FadeWait
             | Capability::MaskWait
             | Capability::QuakeWait
@@ -716,10 +717,14 @@ fn root_effects(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, 
 }
 
 fn root_effect_objects(
-    _hosts: &mut Hosts<'_>,
+    hosts: &mut Hosts<'_>,
     call: &mut Call<'_, '_>,
 ) -> Result<Flow, Box<dyn Error>> {
-    crate::effect_objects::handle(call)?;
+    hosts
+        .scene
+        .as_deref_mut()
+        .expect("effect objects capability checked")
+        .release_effect(call)?;
     Ok(Flow::Done)
 }
 
@@ -1373,11 +1378,14 @@ fn root_change_image(
 }
 
 pub fn uses_images(command: u16) -> bool {
-    ROOT.iter().any(|e| {
+    ROOT.iter().chain(PARTICLES).any(|e| {
         e.command == command
             && matches!(
                 e.capability,
-                Capability::SceneImages | Capability::MaskImages | Capability::ImageChange
+                Capability::SceneImages
+                    | Capability::MaskImages
+                    | Capability::ImageChange
+                    | Capability::ParticleImages
             )
     })
 }
@@ -4439,18 +4447,40 @@ pub static FONT_CELLS: &[Entry] = &[
     },
 ];
 
+pub static PARTICLES: &[Entry] = &[Entry {
+    command: 0x2a5,
+    name: "create particle effect",
+    capability: Capability::ParticleImages,
+    handler: |hosts, call| {
+        let h = hosts
+            .images
+            .as_mut()
+            .expect("particle image capability checked");
+        h.scene.create_particles(
+            call,
+            h.source,
+            hosts
+                .random
+                .as_deref_mut()
+                .expect("particle random capability checked"),
+        )?;
+        Ok(Flow::Done)
+    },
+}];
+
 pub fn research_entry(id: crate::profile::ResearchId, command: u16) -> Option<&'static Entry> {
     let entries = match id {
         crate::profile::ResearchId::FontCells => FONT_CELLS,
+        crate::profile::ResearchId::Particles => PARTICLES,
     };
     entries.iter().find(|entry| entry.command == command)
 }
 
 pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
-    if matches!(profile.semantics(command), Semantics::Research(_)) {
-        "research text override"
-    } else {
-        "base semantics"
+    match profile.semantics(command) {
+        Semantics::Research(crate::profile::ResearchId::FontCells) => "research text override",
+        Semantics::Research(crate::profile::ResearchId::Particles) => "research particle override",
+        Semantics::Root => "base semantics",
     }
 }
 

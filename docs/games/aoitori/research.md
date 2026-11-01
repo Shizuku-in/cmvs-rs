@@ -123,3 +123,14 @@ release探针使用 `--allow-unreviewed --allow-presumed --font C:/Windows/Fonts
 粒子 `0x22a5` 已追到创建、加载、初始化与每帧更新：类型5经 `0x140043b10` 调 `0x14004fab0`，独立对象池、随机初始化、10格精灵动画及500ms帧差上限不能省略；详见[VM语义](vm-semantics.md)。本轮未实现该命令或绕过真实停点，下一步建模资源/粒子状态、共享RNG顺序、帧推进与呈现。
 
 release探针仍使用 `--allow-unreviewed --allow-presumed`、字体msgothic、16ms帧、种子0与一亿步上限，输出 `local/aoitori/research-declarations`。全部checks与 `proportional-ruby` 逐字段相同：R1/L0、D1/L1通过；R2仍18,129,135步、8,624帧到 `sn102.ps3 / 0xa298 / 0x22a5` blocked并退出1。默认离线测试951项通过、14项忽略，core测试60项通过、1项忽略，Python工具60项通过；默认/core严格Clippy、格式、差异检查与release构建通过。
+
+
+## 2026-11-01：类型5粒子越过真实停点
+
+基线 `141475e`。`0x22a5` 以档案显式 `research=particles:x64:<exe SHA-256>` 选择研究入口；不加入ROOT，不增加宿主版本判断或责任链，727条Unreviewed状态不变。新实现加载图像、建立独立粒子池，共享CRT随机数，推进XYZ/十格动画并接入公共帧准备；`0x22a0` 释放真实池，RESET清空，未验证的活动池存档明确拒绝。参数、原版调用点与分配边界见[VM语义](vm-semantics.md#0x22a5类型5粒子对象)。
+
+release探针沿用显式 `--allow-unreviewed --allow-presumed`、msgothic字体、种子0、16ms帧与一亿步上限，输出 `local/aoitori/particle-effects-final`。R1/L0、D1/L1继续通过：22,050步、624帧、5标题按钮，启动轨迹/状态SHA-256仍分别为 `0dbfaffb34467faad1660eab21c816918a5317731187f9f945ef3ec8a480bb51`、`cd76f046f60f381a29a1bf8cd188aa95a162907a973dc13c008dfde03eb9ce46`。R2越过原 `sn102.ps3 / 0xa298 / 0x22a5`，推进至25,825,384步、11,816帧，在 `intcode.ps3 / 0x1cf74 / 0x203b` 的未实现图像滤镜模式失败并退出1；选择点0，未到结局，仍不算路线通过。
+
+九项新增回归覆盖初始化f32参考与随机序列、帧上限和重生、动画循环、共享纹理的CPU绘制、缺能力/重试/参数边界及trace所选研究入口；现有生命周期回归另覆盖RESET和活动池存档拒绝。真实墙钟、失焦恢复和原生画面/音轨未验证；下一步核对新滤镜模式。
+
+验证：默认离线测试956项通过、14项忽略；core测试64项通过、1项忽略；默认/core严格Clippy、格式及差异检查通过，release探针构建通过。

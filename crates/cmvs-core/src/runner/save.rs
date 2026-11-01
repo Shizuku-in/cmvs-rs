@@ -174,6 +174,9 @@ impl Startup<'_> {
         vm: crate::machine::VmImage,
     ) -> Result<(EngineSnapshot, Vec<u8>), Box<dyn Error>> {
         self.require_snapshot_layout()?;
+        if !self.scene.particle_effects().is_empty() {
+            return Err("saving active particle effects is not implemented".into());
+        }
         let mut variables = LocalVariables::capture(self.machine.state());
         // The captured copy holds bit 0 = 1; the live bit was cleared by the caller.
         variables.set_bit0();
@@ -419,6 +422,9 @@ impl Startup<'_> {
         backend: &mut impl PlatformBackend,
     ) -> Result<(), Box<dyn Error>> {
         let layout = self.require_snapshot_layout()?;
+        if !self.scene.particle_effects().is_empty() {
+            return Err("loading over active particle effects is not implemented".into());
+        }
         if self.slot_edit.is_some() {
             return Err("finish the pending slot edit before loading a gameplay save".into());
         }

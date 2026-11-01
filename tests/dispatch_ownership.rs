@@ -410,7 +410,6 @@ fn inventory_matches_wait_and_resource_host_recognition_exhaustively() {
                 save_title: Some(&mut cmvs_rs::snapshot::SaveTitle::default()),
                 save_info: Some(&mut cmvs_rs::snapshot::SaveInfo::default()),
                 effects: Some(&mut true),
-                effect_objects: true,
                 messages: Some(&mut MessageHost::default()),
                 window_images: Some(&mut Unavailable),
                 buttons: Some(&mut cmvs_rs::buttons::ButtonHost::default()),

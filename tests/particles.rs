@@ -1,0 +1,304 @@
+use cmvs_rs::{
+    dispatch::{self, Flow, Hosts, ImageHosts},
+    image::ImageSource,
+    machine::Machine,
+    profile::{ResearchId, Semantics},
+    random::CrtRandom,
+    scene::SceneHost,
+};
+mod support;
+use support::bytecode::{command, pending, script};
+
+#[derive(Default)]
+struct Images {
+    reads: usize,
+    fail: bool,
+}
+impl ImageSource for Images {
+    fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+        assert_eq!(name, b"particle.pb3");
+        self.reads += 1;
+        if self.fail {
+            return Err("synthetic read failure".into());
+        }
+        // Unknown magic follows the original quiet image-load failure, without skipping particles.
+        Ok(Some(b"NONE".to_vec()))
+    }
+}
+fn args(slot: u32, count: u32) -> Vec<u32> {
+    vec![
+        slot,
+        0x80000000,
+        0,
+        40.0f32.to_bits(),
+        20.0f32.to_bits(),
+        (-20.0f32).to_bits(),
+        2000.0f32.to_bits(),
+        count,
+    ]
+}
+fn run(
+    vm: &mut Machine<'_>,
+    scene: &mut SceneHost,
+    source: &mut Images,
+    random: &mut CrtRandom,
+) -> Result<Option<Flow>, dispatch::DispatchError> {
+    dispatch::run(
+        Semantics::Research(ResearchId::Particles),
+        vm,
+        &mut Hosts {
+            images: Some(ImageHosts {
+                scene,
+                source,
+                change_images: false,
+            }),
+            random: Some(random),
+            ..Default::default()
+        },
+    )
+}
+
+#[test]
+fn research_creation_needs_images_and_shared_random_and_never_uses_root() {
+    let mut code = vec![];
+    command(&mut code, 0x22a5, &args(0, 2));
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_string(0, b"particle.pb3").unwrap();
+    pending(&mut vm);
+    let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
+    let mut scene = SceneHost::default();
+    let mut source = Images::default();
+    let mut random = CrtRandom::new(0);
+    assert_eq!(
+        dispatch::run(Semantics::Root, &mut vm, &mut Hosts::default()).unwrap(),
+        None
+    );
+    for images in [false, true] {
+        let mut hosts = Hosts::default();
+        if images {
+            hosts.images = Some(ImageHosts {
+                scene: &mut scene,
+                source: &mut source,
+                change_images: false,
+            });
+        } else {
+            hosts.random = Some(&mut random);
+        }
+        assert_eq!(
+            dispatch::run(
+                Semantics::Research(ResearchId::Particles),
+                &mut vm,
+                &mut hosts
+            )
+            .unwrap(),
+            Some(Flow::Unavailable)
+        );
+        assert_eq!(
+            (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
+            before
+        );
+    }
+    assert_eq!(
+        run(&mut vm, &mut scene, &mut source, &mut random).unwrap(),
+        Some(Flow::Done)
+    );
+    assert_eq!(scene.particle_effects()[&0].particles.len(), 2);
+    assert!(scene.objects().is_empty());
+    let mut expected = CrtRandom::new(0);
+    for _ in 0..16 {
+        expected.next_value();
+    }
+    assert_eq!(random, expected);
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(
+        run(&mut vm, &mut scene, &mut source, &mut random).unwrap(),
+        None
+    );
+    assert_eq!(source.reads, 1);
+}
+
+#[test]
+fn replacement_failure_preserves_old_pool_random_and_pending_then_retries_once() {
+    let mut code = vec![];
+    command(&mut code, 0x22a5, &args(2, 1));
+    command(&mut code, 0x22a5, &args(2, 3));
+    command(&mut code, 0x22a0, &[2]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_string(0, b"particle.pb3").unwrap();
+    let mut scene = SceneHost::default();
+    let mut source = Images::default();
+    let mut random = CrtRandom::new(7);
+    pending(&mut vm);
+    run(&mut vm, &mut scene, &mut source, &mut random).unwrap();
+    pending(&mut vm);
+    let before = (
+        format!("{:?}", scene.particle_effects()),
+        random.clone(),
+        vm.pc(),
+        vm.stack().len_bytes(),
+    );
+    source.fail = true;
+    assert!(run(&mut vm, &mut scene, &mut source, &mut random).is_err());
+    assert_eq!(
+        (
+            format!("{:?}", scene.particle_effects()),
+            random.clone(),
+            vm.pc(),
+            vm.stack().len_bytes()
+        ),
+        before
+    );
+    assert!(vm.pending_system().is_some());
+    source.fail = false;
+    run(&mut vm, &mut scene, &mut source, &mut random).unwrap();
+    assert_eq!(scene.particle_effects()[&2].particles.len(), 3);
+    pending(&mut vm);
+    assert_eq!(
+        dispatch::run(
+            Semantics::Root,
+            &mut vm,
+            &mut Hosts {
+                scene: Some(&mut scene),
+                ..Default::default()
+            }
+        )
+        .unwrap(),
+        Some(Flow::Done)
+    );
+    assert!(scene.particle_effects().is_empty());
+    let before = random.clone();
+    scene.advance_particles(500, &mut random);
+    assert_eq!(random, before);
+}
+
+#[test]
+fn invalid_slots_still_resolve_names_but_skip_allocation_and_resource_reads() {
+    let mut code = vec![];
+    command(&mut code, 0x22a5, &args(u32::MAX, u32::MAX));
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    pending(&mut vm);
+    let mut scene = SceneHost::default();
+    let mut source = Images::default();
+    let mut random = CrtRandom::new(4);
+    assert!(run(&mut vm, &mut scene, &mut source, &mut random).is_err());
+    vm.state_mut().set_string(0, b"particle.pb3").unwrap();
+    assert_eq!(
+        run(&mut vm, &mut scene, &mut source, &mut random).unwrap(),
+        Some(Flow::Done)
+    );
+    assert_eq!(source.reads, 0);
+    assert_eq!(random, CrtRandom::new(4));
+    assert!(scene.particle_effects().is_empty());
+}
+
+#[test]
+fn malformed_parameters_and_short_stack_fail_before_random_or_resources() {
+    for (index, value) in [(7, 16_385), (6, 0), (3, f32::NAN.to_bits())] {
+        let mut arguments = args(0, 1);
+        arguments[index] = value;
+        let mut code = vec![];
+        command(&mut code, 0x22a5, &arguments);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        vm.state_mut().set_string(0, b"particle.pb3").unwrap();
+        pending(&mut vm);
+        let mut scene = SceneHost::default();
+        let mut source = Images::default();
+        let mut random = CrtRandom::new(4);
+        assert!(run(&mut vm, &mut scene, &mut source, &mut random).is_err());
+        assert_eq!(vm.stack().len_bytes(), 32);
+        assert!(vm.pending_system().is_some());
+        assert!(scene.particle_effects().is_empty());
+        assert_eq!(source.reads, 0);
+        assert_eq!(random, CrtRandom::new(4));
+    }
+    let mut code = vec![];
+    command(&mut code, 0x22a5, &[0]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    pending(&mut vm);
+    assert!(
+        run(
+            &mut vm,
+            &mut SceneHost::default(),
+            &mut Images::default(),
+            &mut CrtRandom::new(0)
+        )
+        .is_err()
+    );
+    assert_eq!(vm.stack().len_bytes(), 4);
+}
+
+#[test]
+fn trace_reports_the_selected_particle_entry_and_requires_an_explicit_random_source() {
+    use std::{fs, process::Command};
+    let root = std::env::temp_dir().join(format!("cmvs-particle-trace-{}", std::process::id()));
+    fs::create_dir(&root).unwrap();
+    let path = root.join("synthetic.ps3");
+    let mut arguments = args(99, 1);
+    arguments[1] = 0;
+    let mut code = Vec::new();
+    command(&mut code, 0x22a5, &arguments);
+    command(&mut code, 0x22a0, &[99]);
+    command(&mut code, 0x2003, &[]);
+    let text = b"particle.pb3\0";
+    let mut payload = 0u32.to_le_bytes().to_vec();
+    payload.extend(&code);
+    payload.extend(text);
+    let mut raw = b"PS2A".to_vec();
+    for n in [
+        48u32,
+        0,
+        0,
+        1,
+        code.len() as u32,
+        0,
+        text.len() as u32,
+        0,
+        0,
+        payload.len() as u32,
+        0,
+    ] {
+        raw.extend(n.to_le_bytes());
+    }
+    raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+    fs::write(&path, &raw).unwrap();
+    for seeded in [false, true] {
+        let mut cli = Command::new(env!("CARGO_BIN_EXE_cmvs-trace"));
+        cli.arg(&path)
+            .args([
+                "--profile",
+                "cmvs-20171114",
+                "--allow-unreviewed",
+                "--record-platform",
+            ])
+            .arg(&root);
+        if seeded {
+            cli.args(["--rand-seed", "0"]);
+        }
+        let output = cli.output().unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            output.status.success(),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(stdout.contains("# particle pools=0"), seeded, "{stdout}");
+        assert_eq!(
+            stdout.contains("# effect object release 0x22a0:"),
+            seeded,
+            "{stdout}"
+        );
+        let stop = if seeded { "0x2003" } else { "0x22a5" };
+        assert!(
+            stdout.contains(&format!("# STOP pending system={stop};")),
+            "{stdout}"
+        );
+    }
+    assert_eq!(fs::read(&path).unwrap(), raw);
+    fs::remove_file(path).unwrap();
+    fs::remove_dir(root).unwrap();
+}
