@@ -10,12 +10,12 @@
 <table>
   <tr>
     <td align="center" width="50%">
-      <img src="docs/images/amatsutsumi_windows11.png" alt="Windows Example" width="100%">
+      <img src="docs/images/amatsutsumi_windows11.webp" alt="Windows Example" width="100%">
       <br><strong>Windows</strong>
       <br><sub>Amatsutsumi</sub>
     </td>
     <td align="center" width="50%">
-      <img src="docs/images/amatsutsumi_ubuntu.png" alt="Linux Example" width="100%">
+      <img src="docs/images/amatsutsumi_ubuntu.webp" alt="Linux Example" width="100%">
       <br><strong>Linux</strong>
       <br><sub>Amatsutsumi</sub>
     </td>
