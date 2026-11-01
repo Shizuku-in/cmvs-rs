@@ -1,9 +1,12 @@
-# アオイトリ / Aoitori 测试档案
+# 《アオイトリ》测试档案
 
 ## 样本身份
 
 | 字段 | 内容 |
 |---|---|
+| 本地样本目录 | `2017-11-24_AOITORI` |
+| 英文名称 | Aoi Tori |
+| 引擎 / 脚本自报版本 | `cmvs64[ver.3.42]` / `ps3[ver.1.00]` |
 | 游戏标识 | `aoitori` |
 | 发行版本与补丁 | 目录标识 `2017-11-24_AOITORI`；具体补丁未确认 |
 | 平台、编码 | Windows PC；x86 + x64 可执行文件；研究使用 Shift-JIS |
@@ -38,7 +41,7 @@
 ## 重现
 
 ```powershell
-cargo run --offline --release -p cmvs-probe -- "E:/Download/Purple Software/2017-11-24_AOITORI" --out "local/aoitori/new-run" --checks S1,S2,S3,S5,R1,D1,R2 --font "C:/Windows/Fonts/msgothic.ttc" --allow-presumed --allow-unreviewed --max-steps 100000000
+cargo run --offline --release -p cmvs-probe -- "<游戏目录>" --out "local/aoitori/new-run" --checks S1,S2,S3,S5,R1,D1,R2 --font "<字体文件>" --allow-presumed --allow-unreviewed --max-steps 100000000
 ```
 
 输出目录必须不存在。固定种子0、16ms虚拟帧、鼠标、新用户目录；原游戏只读。包含S3和R2时预期非零退出，不能把其余通过项视为完整游戏兼容。

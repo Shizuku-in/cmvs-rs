@@ -1,0 +1,36 @@
+# 《ハピメア-Fragmentation Dream- REGRET END》测试档案
+
+## 样本身份
+
+| 字段 | 内容 |
+|---|---|
+| 游戏标识 | `hapymaherfd_re` |
+| 本地样本目录 | `2023-05-26_HAPYMAHERFD_RE` |
+| 英文名称 | Hapymaher -Fragmentation Dream- REGRET END |
+| 引擎 / 脚本自报版本 | `cmvs64[ver.3.90]` / `ps3[ver.1.00]` |
+| 发行版本与补丁 | 未确认；目录日期仅作为样本标签 |
+| 平台与架构 | Windows PC；x86 + x64 |
+| 文本编码 | 未独立确认 |
+| 引擎 profile | 尚未登记 |
+| 本地封包签名 | CPZ5（12 个包） |
+
+## 文件身份
+
+| 文件 | 架构 / image base 或签名 | SHA-256 |
+|---|---|---|
+| `cmvs32.exe` | x86 / `0x400000` | `aa2f76985e69ec5fcee2762051a234c111529e8b339d733dee188b3a62888073` |
+| `cmvs64.exe` | x64 / `0x140000000` | `dfbabd2abac5055d3ab2144a983b6c441b87b294d19607e9a4829e2ea954e86c` |
+| `data/pack/start.ps3` | `PS2A` | `dc336b0d50c848a12f6dbcd4ebee26b7c1516821ecc16625e5b2ba27f5675b85` |
+| `data/pack/script.cpz` | `CPZ5` | `fb93c8d5277be1c1cd812214ccc5a9ded679fcdbde1b98ef17a925d18a104959` |
+
+## 当前验证
+
+2026-11-02 完成只读基础登记：核对 PE 架构、image base、启动脚本及封包签名，并计算上表文件的 SHA-256。本次登记未启动原游戏或重实现引擎，也未进行 IDA 语义复核。
+
+既有启动脚本结构普查见[引擎档案设计](../../design/engine-profiles.md#2-全系列普查2026-10-30)；历史普查不代表整包脚本、命令语义或完整游戏兼容。
+
+## 下一步与来源
+
+- 先建立构建 profile 与游戏身份绑定，再记录实际运行停点；尚无本轮运行命令或完成判定。
+- 引擎与脚本自报版本来自游戏目录 `info.txt`，缺失时保留未确认。自报版本不作为二进制身份或补丁版本证明。
+- 真实游戏、原始环境报告与 IDA 数据库不入库；后续输出使用 `local/hapymaherfd_re/`。

@@ -6,6 +6,9 @@
 
 | 字段 | 已确认内容 |
 |---|---|
+| 本地样本目录 | `2016-07-29_AMATSUTSUMI` |
+| 英文名称 | Amatsutsumi |
+| 引擎 / 脚本自报版本 | `cmvs64[ver.3.26]` / `ps3[ver.1.00]` |
 | 游戏标识 | `amatsutsumi` |
 | 可执行文件 | `cmvs64.exe`，x86-64，image base `0x140000000` |
 | 二进制 SHA-256 | `dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5` |

@@ -1,6 +1,6 @@
 # 文档导航
 
-项目能力概览见[项目首页](../README.md)。这里按用途组织文档；具体游戏的兼容性以对应游戏档案为准。
+项目介绍见[项目首页](../README.md)，能力与验证范围见[当前状态](status.md)。这里按用途组织文档；具体游戏的兼容性以对应游戏档案为准。
 
 ## 使用与开发
 
@@ -35,7 +35,7 @@
 
 ## 游戏测试与证据
 
-[游戏测试目录](games/README.md)汇总各款游戏与版本：[《アマツツミ》](games/amatsutsumi/README.md)是主线，[《クロノクロック》](games/chronoclock/README.md)已开始逐条语义研究。其目录保存二进制身份、VM 语义证据、研究记录、审计报告和开发历史。
+[游戏档案目录](games/README.md)已登记 19 款 CMVS 样本，包含 16 款基础档案与 3 款已有研究的游戏：[《アマツツミ》](games/amatsutsumi/README.md)是主线，[《クロノクロック》](games/chronoclock/README.md)已开始逐条语义研究。其目录保存二进制身份、VM 语义证据、研究记录、审计报告和开发历史。
 
 《アマツツミ》审计后续命令实现状态见[21 条指令推进表](games/amatsutsumi/semantics-progress.md)。
 
