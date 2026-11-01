@@ -1,7 +1,7 @@
 //! Explicit platform requests. The recording backend is a research model, not a window.
 use crate::{
-    FormatError, MAX_PAYLOAD, cursor::CursorBitmap, evaluate::error, machine::Machine,
-    vm::SystemResult,
+    FormatError, MAX_PAYLOAD, cursor::CursorBitmap, dispatch::Call, evaluate::error,
+    machine::Machine,
 };
 use std::{
     error::Error,
@@ -400,50 +400,65 @@ impl PlatformHost {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(None);
         };
+        if !is_command(command) {
+            return Ok(None);
+        }
+        self.handle(&mut Call::new(vm, pc, command), backend, assets, cursors)
+            .map(Some)
+    }
+    pub(crate) fn handle(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &mut dyn PlatformBackend,
+        assets: &mut dyn PlatformAssets,
+        cursors: &[Vec<u8>],
+    ) -> Result<PlatformEvent, Box<dyn Error>> {
+        let (pc, command) = (call.pc, call.command);
         if command == 0x2ff {
             // 0x140078400 -> device +144: preference, not monitor availability.
-            vm.complete_system(SystemResult(0x4000))?;
-            vm.state_mut()
+            call.complete(0x4000)?;
+            call.vm
+                .state_mut()
                 .set_system_integer(0, u32::from(self.others_display_use))
                 .expect("slot 0 exists");
-            return Ok(Some(PlatformEvent::Configured));
+            return Ok(PlatformEvent::Configured);
         }
         if command == 0x164 {
-            let raw = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x2164, e.0))?;
+            let raw = call.argument(4, argument_names(command)[0])?;
             backend.apply(&PlatformRequest::Fullscreen(raw != 0))?;
-            vm.complete_system(SystemResult(0xc004))?;
-            return Ok(Some(PlatformEvent::Yield));
+            call.complete(0xc004)?;
+            return Ok(PlatformEvent::Yield);
         }
         if command == 0x16e {
             let changed = backend.reset_window_size()?;
-            vm.complete_system(SystemResult(if changed { 0xc000 } else { 0x4000 }))?;
-            return Ok(Some(if changed {
+            call.complete(if changed { 0xc000 } else { 0x4000 })?;
+            return Ok(if changed {
                 PlatformEvent::Yield
             } else {
                 PlatformEvent::Configured
-            }));
+            });
         }
         if command == 0x16d {
             // 0x140075630: negative or >= 4 selects 0; no yield or system result.
-            let raw = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x216d, e.0))? as i32;
+            let raw = call.argument(4, argument_names(command)[0])? as i32;
             let requested = if (0..4).contains(&raw) { raw as u32 } else { 0 };
             let mode = supported_render_mode(backend, requested)?;
             if mode != backend.render_mode()? {
                 backend.apply(&PlatformRequest::RenderMode(mode))?;
             }
-            vm.complete_system(SystemResult(0x4004))?;
-            return Ok(Some(PlatformEvent::Configured));
+            call.complete(0x4004)?;
+            return Ok(PlatformEvent::Configured);
         }
         if command == 0x2fd {
-            let raw = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x22fd, e.0))?;
+            let raw = call.argument(4, argument_names(command)[0])?;
             if raw != backend.aspect_mode()? {
                 backend.apply(&PlatformRequest::AspectMode(if raw > 3 { 1 } else { raw }))?;
             }
-            vm.complete_system(SystemResult(0x4004))?;
-            return Ok(Some(PlatformEvent::Configured));
+            call.complete(0x4004)?;
+            return Ok(PlatformEvent::Configured);
         }
         if command == 0x2c9 {
-            let raw = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x22c9, e.0))?;
+            let raw = call.argument(4, argument_names(command)[0])?;
             let requested = raw != 0;
             // Compare before capability fallback. An unsupported enable still
             // refreshes fullscreen presentation, even though the stored value stays 0.
@@ -457,98 +472,99 @@ impl PlatformHost {
             } else {
                 false
             };
-            vm.complete_system(SystemResult(if fullscreen { 0xc004 } else { 0x4004 }))?;
-            return Ok(Some(if fullscreen {
+            call.complete(if fullscreen { 0xc004 } else { 0x4004 })?;
+            return Ok(if fullscreen {
                 PlatformEvent::Yield
             } else {
                 PlatformEvent::Configured
-            }));
+            });
         }
         if command == 0x2ca {
             let value = backend.aspect_scaling()?;
-            vm.complete_system(SystemResult(0x4000))?;
-            vm.state_mut()
+            call.complete(0x4000)?;
+            call.vm
+                .state_mut()
                 .set_system_integer(0, u32::from(value))
                 .expect("slot 0 exists");
-            return Ok(Some(PlatformEvent::Configured));
+            return Ok(PlatformEvent::Configured);
         }
         if command == 0x2fc {
             let value = backend.aspect_mode()?;
-            vm.complete_system(SystemResult(0x4000))?;
-            vm.state_mut()
+            call.complete(0x4000)?;
+            call.vm
+                .state_mut()
                 .set_system_integer(0, value)
                 .expect("slot 0 exists");
-            return Ok(Some(PlatformEvent::Configured));
+            return Ok(PlatformEvent::Configured);
         }
         if command == 0x2c8 {
             let value = backend.stretch_filter_supported()?;
-            vm.complete_system(SystemResult(0x4000))?;
-            vm.state_mut()
+            call.complete(0x4000)?;
+            call.vm
+                .state_mut()
                 .set_system_integer(0, u32::from(value))
                 .expect("slot 0 exists");
-            return Ok(Some(PlatformEvent::Configured));
+            return Ok(PlatformEvent::Configured);
         }
         if command == 0x16f {
             // Screen viewport +152; 0x140018260 selects WS_THICKFRAME with it.
             let value = backend.resizable()?;
-            vm.complete_system(SystemResult(0x4000))?;
-            vm.state_mut()
+            call.complete(0x4000)?;
+            call.vm
+                .state_mut()
                 .set_system_integer(0, u32::from(value))
                 .expect("slot 0 exists");
-            return Ok(Some(PlatformEvent::Configured));
+            return Ok(PlatformEvent::Configured);
         }
         if command == 0x16c {
             let mode = backend.render_mode()?;
-            vm.complete_system(SystemResult(0x4000))?;
-            vm.state_mut()
+            call.complete(0x4000)?;
+            call.vm
+                .state_mut()
                 .set_system_integer(0, mode)
                 .expect("slot 0 exists");
-            return Ok(Some(PlatformEvent::Configured));
+            return Ok(PlatformEvent::Configured);
         }
         if command == 0x16b {
             // 0x140075570: D3DCAPS9.PixelShaderVersion major byte.
             let major = backend.pixel_shader_major()?;
             let value = 3 | if major >= 2 { 4 } else { 0 } | if major >= 3 { 8 } else { 0 };
-            vm.complete_system(SystemResult(0x4000))?;
-            vm.state_mut()
+            call.complete(0x4000)?;
+            call.vm
+                .state_mut()
                 .set_system_integer(0, value)
                 .expect("slot 0 exists");
-            return Ok(Some(PlatformEvent::Configured));
+            return Ok(PlatformEvent::Configured);
         }
         if command == 0x163 {
             // 0x1400753d0 -> 0x140027040 -> device +56 (zero is fullscreen).
             let fullscreen = backend.fullscreen()?;
-            vm.complete_system(SystemResult(0x4000))?;
-            vm.state_mut()
+            call.complete(0x4000)?;
+            call.vm
+                .state_mut()
                 .set_system_integer(0, u32::from(fullscreen))
                 .expect("slot 0 exists");
-            return Ok(Some(PlatformEvent::Configured));
+            return Ok(PlatformEvent::Configured);
         }
-        if !matches!(command, 0x160 | 0x161 | 0x99 | 0x8f | 0x2b0) {
-            return Ok(None);
-        }
-        let arg = vm
-            .stack()
-            .peek_u32(4)
-            .map_err(|e| error(pc, command + 0x2000, e.0))?;
+        let arg = call.argument(4, argument_names(command)[0])?;
         if command == 0x2b0 {
-            let height = vm.stack().peek_u32(8).map_err(|e| error(pc, 0x22b0, e.0))?;
-            vm.complete_system(SystemResult(0x4008))?;
+            let height = call.argument(8, argument_names(command)[1])?;
+            call.complete(0x4008)?;
             self.thumbnail = Some(ThumbnailConfig {
                 width: arg,
                 height,
                 enabled: arg != 0 && height != 0,
             });
-            return Ok(Some(PlatformEvent::Configured));
+            return Ok(PlatformEvent::Configured);
         }
         if command == 0x99 && arg == self.cursor {
-            vm.complete_system(SystemResult(0x4004))?;
-            return Ok(Some(PlatformEvent::CursorUnchanged));
+            call.complete(0x4004)?;
+            return Ok(PlatformEvent::CursorUnchanged);
         }
         let mut scene = None;
         let request = match command {
             0x161 => {
-                let name = vm.resolve_string(arg)?;
+                let name = call.vm.resolve_string(arg)?;
                 let base = self
                     .title
                     .as_deref()
@@ -564,7 +580,7 @@ impl PlatformHost {
                 PlatformRequest::Title(text)
             }
             0x160 => {
-                let title = vm.resolve_string(arg)?;
+                let title = call.vm.resolve_string(arg)?;
                 if title.len() >= 256 {
                     return Err(error(pc, 0x2160, "title exceeds research byte limit").into());
                 }
@@ -586,7 +602,7 @@ impl PlatformHost {
                 PlatformRequest::Cursor { id: arg, bitmap }
             }
             0x8f => {
-                let name = vm.resolve_string(arg)?;
+                let name = call.vm.resolve_string(arg)?;
                 let bytes = assets.read(&name)?;
                 if bytes.len() > MAX_PLATFORM_ASSET {
                     return Err("icon file exceeds research limit".into());
@@ -601,7 +617,7 @@ impl PlatformHost {
         };
         backend.apply(&request)?;
         // All parameter sizes and references have been validated before invoking the backend.
-        vm.complete_system(SystemResult(0x4004))?;
+        call.complete(0x4004)?;
         match request {
             PlatformRequest::Title(_) if command == 0x161 => {
                 self.scene_title = scene.expect("set for 0x2161");
@@ -617,6 +633,24 @@ impl PlatformHost {
                 unreachable!("handled before string requests")
             }
         }
-        Ok(Some(PlatformEvent::Applied))
+        Ok(PlatformEvent::Applied)
+    }
+}
+
+fn is_command(command: u16) -> bool {
+    matches!(command,0x8f|0x99|0x160|0x161|0x163|0x164|0x16b..=0x16f|0x2b0|0x2c8..=0x2ca|0x2fc|0x2fd|0x2ff)
+}
+fn argument_names(command: u16) -> &'static [&'static str] {
+    match command {
+        0x8f => &["icon name"],
+        0x99 => &["cursor ID"],
+        0x160 => &["window title"],
+        0x161 => &["scene title"],
+        0x164 => &["fullscreen"],
+        0x16d => &["render mode"],
+        0x2fd => &["aspect mode"],
+        0x2c9 => &["aspect scaling"],
+        0x2b0 => &["thumbnail width", "thumbnail height"],
+        _ => unreachable!("registered platform arguments"),
     }
 }

@@ -1,3 +1,5 @@
+#[path = "support/shared_environment.rs"]
+mod shared_environment;
 use cmvs_rs::{
     bootstrap::Bootstrap,
     bytecode::{self, Expression, InstructionKind},
@@ -6,6 +8,7 @@ use cmvs_rs::{
     ps3::Script,
     vm::SystemResult,
 };
+use shared_environment::SharedBootstrap;
 
 fn word(bytes: &mut Vec<u8>, value: u16) {
     bytes.extend(value.to_le_bytes());
@@ -382,7 +385,7 @@ fn run_bootstrap(vm: &mut Machine<'_>, host: &mut Bootstrap) -> Step {
             Step::Continue => {}
             Step::Yield => return Step::Yield,
             request @ Step::System { .. } => {
-                if host.try_handle(vm).unwrap().is_none() {
+                if host.shared_bootstrap(vm).unwrap().is_none() {
                     return request;
                 }
             }
@@ -486,7 +489,7 @@ fn invalid_bootstrap_range_keeps_pending_stack_and_variable_state() {
         vm.step().unwrap();
     }
     let pc = vm.pc();
-    assert!(host.try_handle(&mut vm).is_err());
+    assert!(host.shared_bootstrap(&mut vm).is_err());
     assert_eq!(vm.pc(), pc);
     assert_eq!(vm.stack().len_bytes(), 12);
     assert_eq!(vm.state().integer(8191), None);
@@ -510,7 +513,7 @@ fn bootstrap_stops_on_environment_dependent_command() {
     );
     assert_eq!(vm.stack().peek_u32(4).unwrap(), 10);
     assert_eq!(host.handled_count(), 0);
-    assert!(host.try_handle(&mut vm).unwrap().is_none());
+    assert!(host.shared_bootstrap(&mut vm).unwrap().is_none());
     assert_eq!(vm.pc(), 12);
 }
 
@@ -631,10 +634,10 @@ fn cursor_name_boundary_and_bad_reference_preserve_pending_command() {
         }
         let before = vm.pending_system();
         if len == 127 {
-            assert!(host.try_handle(&mut vm).unwrap().is_some());
+            assert!(host.shared_bootstrap(&mut vm).unwrap().is_some());
             assert_eq!(vm.state().system_integer(0), Some(1));
         } else {
-            assert!(host.try_handle(&mut vm).is_err());
+            assert!(host.shared_bootstrap(&mut vm).is_err());
             assert_eq!(vm.pending_system(), before);
             assert_eq!(vm.stack().len_bytes(), 4);
             assert!(host.cursor_names().is_empty());
@@ -650,7 +653,7 @@ fn cursor_name_boundary_and_bad_reference_preserve_pending_command() {
     while vm.pending_system().is_none() {
         vm.step().unwrap();
     }
-    assert!(host.try_handle(&mut vm).is_err());
+    assert!(host.shared_bootstrap(&mut vm).is_err());
     assert_eq!(vm.stack().peek_u32(4).unwrap(), u32::MAX);
     assert!(host.cursor_names().is_empty());
 }

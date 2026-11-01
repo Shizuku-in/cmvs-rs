@@ -29,6 +29,12 @@ impl Claim {
         {
             return Some(order);
         }
+        if chain == Chain::Runner
+            && self.handler == "dispatch::ROOT"
+            && super::uses_bootstrap(command)
+        {
+            return Some(35);
+        }
         self.order(chain)
     }
 
@@ -68,7 +74,6 @@ macro_rules! claim {
 /// state handlers with text adapters over the existing MessageHost methods.
 pub static CLAIMS: &[Claim] = &[
     claim!("runner::try_lifecycle", Some(10), None, 0x01 | 0x03),
-    claim!("capture::try_immediate", Some(20), None, 0x3e),
     claim!("system_save::try_write", Some(30), None, 0x129),
     claim!(
         "message::try_wait_with_auto",
@@ -88,7 +93,10 @@ pub static CLAIMS: &[Claim] = &[
                 entry.command == command
                     && !matches!(
                         entry.capability,
-                        super::Capability::MovieScene
+                        super::Capability::FontDialog
+                            | super::Capability::Capture
+                            | super::Capability::CaptureDevice
+                            | super::Capability::MovieScene
                             | super::Capability::MovieStart
                             | super::Capability::Text
                             | super::Capability::Math
@@ -110,10 +118,6 @@ pub static CLAIMS: &[Claim] = &[
         },
     },
     claim!("system_save::try_handle", Some(120), Some(310), 0x128),
-    claim!("runner::choose_font", Some(130), None, 0x13d),
-    claim!("platform::try_handle", Some(140), Some(60),
-        0x8f | 0x99 | 0x160 | 0x161 | 0x163 | 0x164 | 0x16b..=0x16f
-        | 0x2b0 | 0x2c8..=0x2ca | 0x2fc | 0x2fd | 0x2ff),
     claim!(
         "script_control::try_handle",
         Some(150),
@@ -139,10 +143,6 @@ pub static CLAIMS: &[Claim] = &[
         Some(10),
         0x2b2
     ),
-    claim!("bootstrap::try_handle", Some(260), Some(340),
-        0x10..=0x16 | 0x19 | 0x1a | 0x1d..=0x1f | 0x90..=0x94 | 0x98 | 0x34d),
-    claim!("input::try_handle", Some(540), Some(260), 0x34d),
-    claim!("capture::try_handle", Some(590), None, 0x3c | 0x304..=0x306),
 ];
 
 /// Potential candidates, in the actual order for the requested chain. This does

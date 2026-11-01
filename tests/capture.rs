@@ -1,3 +1,5 @@
+#[path = "support/shared_environment.rs"]
+mod shared_environment;
 use cmvs_rs::{
     capture::ScreenCapture,
     machine::{Machine, Step},
@@ -6,6 +8,7 @@ use cmvs_rs::{
     scene::SceneHost,
     scene_render,
 };
+use shared_environment::SharedCapture;
 
 fn script(code: &[u8]) -> Script {
     let mut payload = 0u32.to_le_bytes().to_vec();
@@ -43,9 +46,9 @@ fn next(
     vm: &mut Machine<'_>,
     scene: &mut SceneHost,
     capture: &mut ScreenCapture,
-) -> Result<bool, cmvs_rs::bytecode::DecodeError> {
+) -> Result<bool, Box<dyn std::error::Error>> {
     while !matches!(vm.step()?, Step::System { .. }) {}
-    Ok(scene.try_handle(vm)? || capture.try_handle(vm, scene)?)
+    Ok(scene.try_handle(vm)? || capture.shared_capture(vm, scene)?)
 }
 /// A 2x1 frame whose alpha bytes differ from 255.
 fn frame() -> RgbaImage {
@@ -99,7 +102,7 @@ fn immediate_read_uses_the_device_frame_and_preserves_held_capture_and_object_st
         if index == 0 {
             assert!(
                 capture
-                    .try_immediate(&mut vm, &mut scene, &mut backend)
+                    .shared_immediate(&mut vm, &mut scene, &mut backend)
                     .is_err()
             );
             assert_eq!(scene.objects(), &before);
@@ -110,7 +113,7 @@ fn immediate_read_uses_the_device_frame_and_preserves_held_capture_and_object_st
         backend.present_frame(readback.clone());
         assert!(
             capture
-                .try_immediate(&mut vm, &mut scene, &mut backend)
+                .shared_immediate(&mut vm, &mut scene, &mut backend)
                 .unwrap()
         );
         assert_eq!(scene.object(3), Some(&expected), "read {index}");
@@ -158,7 +161,7 @@ fn immediate_invalid_targets_and_short_stack_do_not_read_or_consume() {
         vm.state_mut().set_system_integer(0, 12).unwrap();
         assert!(
             capture
-                .try_immediate(&mut vm, &mut scene, &mut NoRead)
+                .shared_immediate(&mut vm, &mut scene, &mut NoRead)
                 .is_err()
         );
         assert_eq!(scene.objects(), &before);

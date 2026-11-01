@@ -7,9 +7,11 @@ use std::{error::Error, fmt};
 
 use crate::{
     audio::{AudioBackend, AudioHost},
+    bootstrap::Bootstrap,
     buttons::ButtonHost,
     bytecode::DecodeError,
     camera::CameraHost,
+    capture::ScreenCapture,
     evaluate::error,
     fade::SkipGate,
     gesture::PointerGesture,
@@ -20,6 +22,7 @@ use crate::{
     message::{MessageHost, font_cells},
     message_flags::MessageFlags,
     movie::{MovieHost, MovieSource},
+    platform::{PlatformAssets, PlatformBackend, PlatformEvent, PlatformHost},
     profile::{EngineProfile, Semantics},
     random::CrtRandom,
     resources::ResourceSource,
@@ -80,6 +83,7 @@ pub struct AudioHosts<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flow {
+    Platform(PlatformEvent),
     Done,
     Yield,
     Wait,
@@ -98,7 +102,10 @@ impl Flow {
     }
 
     pub fn yields(self) -> bool {
-        matches!(self, Self::Yield | Self::Wait)
+        matches!(
+            self,
+            Self::Yield | Self::Wait | Self::Platform(PlatformEvent::Yield)
+        )
     }
 
     pub(crate) fn wait_step(self) -> Step {
@@ -118,6 +125,19 @@ pub struct WaitHosts<'a> {
     pub change_images: bool,
 }
 
+pub struct PlatformHosts<'a> {
+    pub host: &'a mut PlatformHost,
+    pub backend: &'a mut dyn PlatformBackend,
+    pub assets: &'a mut dyn PlatformAssets,
+    pub cursors: &'a [Vec<u8>],
+}
+/// The existing startup setting and input-reporting modes have different effects.
+/// Callers choose explicitly; handler order never chooses the function-key policy.
+pub enum FunctionKeys<'a> {
+    Startup(&'a mut Bootstrap),
+    Input(&'a mut ActionInput),
+}
+
 pub struct SequenceHosts<'a> {
     pub host: &'a mut SequenceHost,
     pub execution: Option<SequenceContext<'a>>,
@@ -134,6 +154,11 @@ pub struct MoviePlayerHosts<'a> {
 
 #[derive(Default)]
 pub struct Hosts<'a> {
+    pub bootstrap: Option<&'a mut Bootstrap>,
+    pub function_keys: Option<FunctionKeys<'a>>,
+    pub platform: Option<PlatformHosts<'a>>,
+    pub device_frame: Option<&'a mut dyn PlatformBackend>,
+    pub capture: Option<&'a mut ScreenCapture>,
     pub sequence: Option<SequenceHosts<'a>>,
     pub movies: Option<&'a mut MovieHost>,
     pub movie_scene: Option<MovieSceneHosts<'a>>,
@@ -170,6 +195,12 @@ pub struct Hosts<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Capability {
+    Bootstrap,
+    FunctionKeys,
+    Platform,
+    FontDialog,
+    Capture,
+    CaptureDevice,
     Sequence,
     MovieState,
     MovieScene,
@@ -219,6 +250,16 @@ pub enum Capability {
 impl Hosts<'_> {
     fn has(&self, capability: Capability) -> bool {
         match capability {
+            Capability::Bootstrap => self.bootstrap.is_some(),
+            Capability::FunctionKeys => self.function_keys.is_some(),
+            Capability::Platform => self.platform.is_some(),
+            Capability::FontDialog => {
+                self.device_frame.is_some() && self.settings.is_some() && self.messages.is_some()
+            }
+            Capability::Capture => self.capture.is_some() && self.scene.is_some(),
+            Capability::CaptureDevice => {
+                self.capture.is_some() && self.scene.is_some() && self.device_frame.is_some()
+            }
             Capability::Sequence => self.sequence.is_some(),
             Capability::MovieState => self.movies.is_some(),
             Capability::MovieScene => self.movies.is_some() && self.movie_scene.is_some(),
@@ -592,7 +633,7 @@ pub fn uses_message_state(command: u16) -> bool {
             e.command == command
                 && matches!(
                     e.capability,
-                    Capability::TextState | Capability::AuxiliaryScene
+                    Capability::TextState | Capability::AuxiliaryScene | Capability::FontDialog
                 )
         })
 }
@@ -763,6 +804,123 @@ pub fn uses_input(command: u16) -> bool {
     })
 }
 
+fn root_bootstrap(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    Ok(hosts
+        .bootstrap
+        .as_deref_mut()
+        .expect("bootstrap capability checked")
+        .handle(call)?)
+}
+fn root_function_keys(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    match hosts
+        .function_keys
+        .as_mut()
+        .expect("function key capability checked")
+    {
+        FunctionKeys::Startup(host) => Ok(host.handle(call)?),
+        FunctionKeys::Input(input) => {
+            crate::input::handle(call, input)?;
+            Ok(Flow::Done)
+        }
+    }
+}
+fn root_platform(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    let h = hosts
+        .platform
+        .as_mut()
+        .expect("platform capability checked");
+    Ok(Flow::Platform(
+        h.host.handle(call, h.backend, h.assets, h.cursors)?,
+    ))
+}
+/// 0x213d / 0x140081520 seeds the modal dialog with the global face (+3160).
+/// An accepted face updates the setting and reselects only texts using the default;
+/// cancellation still completes with no arguments or result writes.
+fn root_font_dialog(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    let settings = hosts
+        .settings
+        .as_deref_mut()
+        .expect("font settings checked");
+    let messages = hosts
+        .messages
+        .as_deref_mut()
+        .expect("font messages checked");
+    let chosen = hosts
+        .device_frame
+        .as_deref_mut()
+        .expect("font backend checked")
+        .choose_font(settings.font_face())?;
+    let mut next = settings.clone();
+    if let Some(face) = &chosen {
+        next.set_font_face(face).map_err(|why| call.error(why))?;
+    }
+    call.complete(0x4000)?;
+    if chosen.is_some() {
+        *settings = next;
+        messages.set_default_face(settings.font_face());
+        messages.refresh_default_fonts();
+    }
+    Ok(Flow::Done)
+}
+fn root_capture(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    hosts
+        .capture
+        .as_deref_mut()
+        .expect("capture capability checked")
+        .handle(
+            call,
+            hosts.scene.as_deref_mut().expect("capture scene checked"),
+        )?;
+    Ok(Flow::Done)
+}
+fn root_capture_device(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    hosts
+        .capture
+        .as_deref_mut()
+        .expect("capture capability checked")
+        .handle_immediate(
+            call,
+            hosts.scene.as_deref_mut().expect("capture scene checked"),
+            hosts
+                .device_frame
+                .as_deref_mut()
+                .expect("capture device checked"),
+        )?;
+    Ok(Flow::Done)
+}
+/// Platform and capture backends must be borrowed independently of image sources.
+pub fn uses_bootstrap(command: u16) -> bool {
+    ROOT.iter().any(|e| {
+        e.command == command
+            && matches!(
+                e.capability,
+                Capability::Bootstrap | Capability::FunctionKeys
+            )
+    })
+}
+pub fn uses_platform(command: u16) -> bool {
+    ROOT.iter()
+        .any(|e| e.command == command && e.capability == Capability::Platform)
+}
+pub fn uses_device_frame(command: u16) -> bool {
+    ROOT.iter().any(|e| {
+        e.command == command
+            && matches!(
+                e.capability,
+                Capability::CaptureDevice | Capability::FontDialog
+            )
+    })
+}
+
 fn root_sequence(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     let h = hosts
         .sequence
@@ -922,6 +1080,264 @@ pub fn is_wait(command: u16) -> bool {
 }
 
 pub static ROOT: &[Entry] = &[
+    Entry {
+        command: 0x10,
+        name: "register resource path",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x11,
+        name: "register resource path",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x12,
+        name: "register resource path",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x13,
+        name: "register resource path",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x14,
+        name: "register resource path",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x15,
+        name: "register resource directory",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x16,
+        name: "register resource directory",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x19,
+        name: "register resource path",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x1a,
+        name: "register resource path",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x1d,
+        name: "startup setting",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x1e,
+        name: "startup setting",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x1f,
+        name: "startup setting",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x90,
+        name: "startup setting",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x91,
+        name: "initialize bits",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x92,
+        name: "initialize integers",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x93,
+        name: "initialize floats",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x94,
+        name: "initialize strings",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x98,
+        name: "register cursor",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x34d,
+        name: "function key policy",
+        capability: Capability::FunctionKeys,
+        handler: root_function_keys,
+    },
+    Entry {
+        command: 0x8f,
+        name: "icon",
+        capability: Capability::Platform,
+        handler: root_platform,
+    },
+    Entry {
+        command: 0x99,
+        name: "cursor",
+        capability: Capability::Platform,
+        handler: root_platform,
+    },
+    Entry {
+        command: 0x160,
+        name: "window title",
+        capability: Capability::Platform,
+        handler: root_platform,
+    },
+    Entry {
+        command: 0x161,
+        name: "scene title",
+        capability: Capability::Platform,
+        handler: root_platform,
+    },
+    Entry {
+        command: 0x163,
+        name: "fullscreen query",
+        capability: Capability::Platform,
+        handler: root_platform,
+    },
+    Entry {
+        command: 0x164,
+        name: "fullscreen set",
+        capability: Capability::Platform,
+        handler: root_platform,
+    },
+    Entry {
+        command: 0x16b,
+        name: "shader capability",
+        capability: Capability::Platform,
+        handler: root_platform,
+    },
+    Entry {
+        command: 0x16c,
+        name: "render mode query",
+        capability: Capability::Platform,
+        handler: root_platform,
+    },
+    Entry {
+        command: 0x16d,
+        name: "render mode set",
+        capability: Capability::Platform,
+        handler: root_platform,
+    },
+    Entry {
+        command: 0x16e,
+        name: "reset window size",
+        capability: Capability::Platform,
+        handler: root_platform,
+    },
+    Entry {
+        command: 0x16f,
+        name: "resizable",
+        capability: Capability::Platform,
+        handler: root_platform,
+    },
+    Entry {
+        command: 0x2b0,
+        name: "thumbnail config",
+        capability: Capability::Platform,
+        handler: root_platform,
+    },
+    Entry {
+        command: 0x2c8,
+        name: "stretch filter",
+        capability: Capability::Platform,
+        handler: root_platform,
+    },
+    Entry {
+        command: 0x2c9,
+        name: "aspect scaling set",
+        capability: Capability::Platform,
+        handler: root_platform,
+    },
+    Entry {
+        command: 0x2ca,
+        name: "aspect scaling query",
+        capability: Capability::Platform,
+        handler: root_platform,
+    },
+    Entry {
+        command: 0x2fc,
+        name: "aspect mode query",
+        capability: Capability::Platform,
+        handler: root_platform,
+    },
+    Entry {
+        command: 0x2fd,
+        name: "aspect mode set",
+        capability: Capability::Platform,
+        handler: root_platform,
+    },
+    Entry {
+        command: 0x2ff,
+        name: "display selection",
+        capability: Capability::Platform,
+        handler: root_platform,
+    },
+    Entry {
+        command: 0x13d,
+        name: "font dialog",
+        capability: Capability::FontDialog,
+        handler: root_font_dialog,
+    },
+    Entry {
+        command: 0x3c,
+        name: "give screen capture",
+        capability: Capability::Capture,
+        handler: root_capture,
+    },
+    Entry {
+        command: 0x304,
+        name: "request screen capture",
+        capability: Capability::Capture,
+        handler: root_capture,
+    },
+    Entry {
+        command: 0x305,
+        name: "release screen capture",
+        capability: Capability::Capture,
+        handler: root_capture,
+    },
+    Entry {
+        command: 0x306,
+        name: "screen capture present",
+        capability: Capability::Capture,
+        handler: root_capture,
+    },
+    Entry {
+        command: 0x3e,
+        name: "read device frame",
+        capability: Capability::CaptureDevice,
+        handler: root_capture_device,
+    },
     Entry {
         command: 0x280,
         name: "reset sequence",

@@ -105,7 +105,11 @@ fn all_control_entries_require_their_own_context_and_complete_once() {
         assert_eq!(expected.len(), count);
         assert_eq!(expected, actual);
     }
-    assert!(!dispatch::ROOT.iter().any(|entry| entry.command == 0x34d));
+    assert!(
+        dispatch::ROOT
+            .iter()
+            .any(|entry| entry.command == 0x34d && entry.capability == Capability::FunctionKeys)
+    );
     for (opcode, args, capability) in cases() {
         let mut controls = Controls::default();
         controls.setup();

@@ -12,7 +12,7 @@ use crate::{
     gesture::PointerGesture,
     history::HistoryHost,
     image::ImageArchives,
-    input::{self, ActionInput},
+    input::ActionInput,
     machine::{Machine, Step},
     message::MessageHost,
     message_flags::MessageFlags,
@@ -600,27 +600,6 @@ impl<'a> Startup<'a> {
         }
         Ok(event)
     }
-    /// 0x213d / 0x140081520: the modal font dialog starts from the global face (+3160).
-    /// On OK the choice becomes global (0x140007f20) and the twelve text objects that
-    /// request the default face reselect it (0x14005ab40). Returns 0x4000 either way.
-    fn choose_font(&mut self, backend: &mut impl PlatformBackend) -> Result<(), Box<dyn Error>> {
-        let (pc, _) = self.machine.pending_system().expect("checked by caller");
-        let chosen = backend.choose_font(self.settings.font_face())?;
-        let mut settings = self.settings.clone();
-        if let Some(face) = &chosen {
-            settings
-                .set_font_face(face)
-                .map_err(|why| crate::evaluate::error(pc, 0x213d, why))?;
-        }
-        self.machine
-            .complete_system(crate::vm::SystemResult(0x4000))?;
-        if chosen.is_some() {
-            self.settings = settings;
-            self.messages.set_default_face(self.settings.font_face());
-            self.messages.refresh_default_fonts();
-        }
-        Ok(())
-    }
     fn step_once(
         &mut self,
         backend: &mut impl PlatformBackend,
@@ -660,12 +639,6 @@ impl<'a> Startup<'a> {
         if let Some(event) = self.try_lifecycle()? {
             return Ok(event);
         }
-        if self
-            .capture
-            .try_immediate(&mut self.machine, &mut self.scene, backend)?
-        {
-            return Ok(StartupEvent::Progress);
-        }
         let id = self.bootstrap.settings().get(&0x201d).copied();
         if command == 0x129
             && let Some(output) = &mut self.system_output
@@ -675,6 +648,24 @@ impl<'a> Startup<'a> {
         {
             self.system_source = FileSystemSave::new(output.path());
             return Ok(StartupEvent::Progress);
+        }
+        if crate::dispatch::uses_bootstrap(command) {
+            let mut hosts = crate::dispatch::Hosts::default();
+            if command == 0x34d {
+                hosts.function_keys =
+                    Some(crate::dispatch::FunctionKeys::Startup(&mut self.bootstrap));
+            } else {
+                hosts.bootstrap = Some(&mut self.bootstrap);
+            }
+            let flow = crate::dispatch::run(resolved.semantics, &mut self.machine, &mut hosts)?;
+            return Ok(if flow == Some(crate::dispatch::Flow::Done) {
+                StartupEvent::Progress
+            } else {
+                StartupEvent::Unhandled {
+                    pc,
+                    command: command + 0x2000,
+                }
+            });
         }
         if matches!(command, 0xa0 | 0xa4 | 0xa6 | 0xb0 | 0xba | 0x2d6 | 0x2d7) {
             self.audio_backend.configure_paths(self.bootstrap.paths())?;
@@ -702,6 +693,9 @@ impl<'a> Startup<'a> {
             self.resume_run = flow.yields();
             return Ok(match flow {
                 crate::dispatch::Flow::Done => StartupEvent::Progress,
+                crate::dispatch::Flow::Platform(_) => {
+                    unreachable!("wait handler returned a platform event")
+                }
                 crate::dispatch::Flow::Yield | crate::dispatch::Flow::Wait => StartupEvent::Yield,
                 crate::dispatch::Flow::Unhandled | crate::dispatch::Flow::Unavailable => {
                     StartupEvent::Unhandled {
@@ -759,6 +753,11 @@ impl<'a> Startup<'a> {
             .with_paths(self.bootstrap.paths(), ResourceKind::SceneMovie);
         let is_movie_player = crate::dispatch::uses_movie_player(command);
         let mut hosts = crate::dispatch::Hosts {
+            bootstrap: None,
+            function_keys: None,
+            platform: None,
+            device_frame: None,
+            capture: Some(&mut self.capture),
             sequence: None,
             movies: Some(&mut self.movies),
             movie_scene: None,
@@ -811,6 +810,16 @@ impl<'a> Startup<'a> {
                 flags: message_flags,
             });
         }
+        if crate::dispatch::uses_platform(command) {
+            hosts.platform = Some(crate::dispatch::PlatformHosts {
+                host: &mut self.platform,
+                backend,
+                assets: &mut self.assets,
+                cursors: self.bootstrap.cursor_names(),
+            });
+        } else if crate::dispatch::uses_device_frame(command) {
+            hosts.device_frame = Some(backend);
+        }
         if is_movie_player {
             hosts.movie_player = Some(crate::dispatch::MoviePlayerHosts {
                 source: &mut movie_source,
@@ -855,6 +864,15 @@ impl<'a> Startup<'a> {
         {
             return Ok(match flow {
                 crate::dispatch::Flow::Done => StartupEvent::Progress,
+                crate::dispatch::Flow::Platform(event) => {
+                    let yields = event == crate::platform::PlatformEvent::Yield;
+                    self.resume_run = yields;
+                    if yields {
+                        StartupEvent::Yield
+                    } else {
+                        StartupEvent::Progress
+                    }
+                }
                 crate::dispatch::Flow::Yield | crate::dispatch::Flow::Wait => {
                     self.message_flags = message_flags;
                     self.resume_run = true;
@@ -892,24 +910,6 @@ impl<'a> Startup<'a> {
                 self.auto_resume_checked = true;
             }
             return Ok(StartupEvent::Progress);
-        }
-        if matches!(self.machine.pending_system(), Some((_, 0x13d))) {
-            self.choose_font(backend)?;
-            return Ok(StartupEvent::Progress);
-        }
-        if let Some(event) = self.platform.try_handle(
-            &mut self.machine,
-            backend,
-            &mut self.assets,
-            self.bootstrap.cursor_names(),
-        )? {
-            let yields = event == crate::platform::PlatformEvent::Yield;
-            self.resume_run = yields;
-            return Ok(if yields {
-                StartupEvent::Yield
-            } else {
-                StartupEvent::Progress
-            });
         }
         if let Some(event) = self
             .control
@@ -976,11 +976,6 @@ impl<'a> Startup<'a> {
                 &mut self.machine,
                 self.snapshot_policy == SnapshotPolicy::ContinueWithoutImage,
             )?
-            || self.bootstrap.try_handle(&mut self.machine)?.is_some()
-            || (command == 0x34d && input::try_handle(&mut self.machine, &mut self.input)?)
-            || self
-                .capture
-                .try_handle(&mut self.machine, &mut self.scene)?
         {
             return Ok(StartupEvent::Progress);
         }

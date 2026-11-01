@@ -4,12 +4,12 @@
 //! consuming this held image or its pending request. Addresses bind the documented hash.
 use crate::{
     bytecode::DecodeError,
+    dispatch::Call,
     evaluate::error,
     machine::Machine,
     platform::PlatformBackend,
     raster::RgbaImage,
     scene::{ObjectImage, SceneHost},
-    vm::SystemResult,
 };
 
 #[derive(Debug, Default)]
@@ -34,16 +34,26 @@ impl ScreenCapture {
         let Some((pc, 0x3e)) = vm.pending_system() else {
             return Ok(false);
         };
+        self.handle_immediate(&mut Call::new(vm, pc, 0x3e), scene, backend)?;
+        Ok(true)
+    }
+    pub(crate) fn handle_immediate(
+        &self,
+        call: &mut Call<'_, '_>,
+        scene: &mut SceneHost,
+        backend: &mut dyn PlatformBackend,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let pc = call.pc;
         let fail = |why| error(pc, 0x203e, why);
-        let slot = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
-        let child = vm.stack().peek_u32(8).map_err(|e| fail(e.0))? as i32;
+        let slot = call.argument(4, "object slot")?;
+        let child = call.argument(8, "child slot")? as i32;
         let slot = u8::try_from(slot)
             .ok()
             .filter(|_| child < 0)
             .filter(|slot| scene.object(*slot).is_some())
             .ok_or_else(|| fail("device image needs an existing object in slots 0..255 itself"))?;
         let frame = opaque(backend.read_device_frame()?)?;
-        vm.complete_system(SystemResult(0x4008))?;
+        call.complete(0x4008)?;
         scene.object_mut(slot).expect("validated").image = Some(ObjectImage {
             filter: None,
             name: Vec::new(),
@@ -51,10 +61,11 @@ impl ScreenCapture {
             alpha: false,
             surface: false,
         });
-        vm.state_mut()
+        call.vm
+            .state_mut()
             .set_system_integer(0, 1)
             .expect("result 0 exists");
-        Ok(true)
+        Ok(())
     }
     pub fn requested(&self) -> bool {
         self.requested
@@ -84,19 +95,29 @@ impl ScreenCapture {
         let Some((pc, command @ (0x3c | 0x304..=0x306))) = vm.pending_system() else {
             return Ok(false);
         };
+        self.handle(&mut Call::new(vm, pc, command), scene)?;
+        Ok(true)
+    }
+    pub(crate) fn handle(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        scene: &mut SceneHost,
+    ) -> Result<(), DecodeError> {
+        let command = call.command;
         if command == 0x3c {
-            return self.give(vm, pc, scene);
+            return self.give(call, scene);
         }
-        vm.complete_system(SystemResult(0x4000))?;
+        call.complete(0x4000)?;
         match command {
             0x304 => self.requested = true,
             0x305 => *self = Self::default(),
-            _ => vm
+            _ => call
+                .vm
                 .state_mut()
                 .set_system_integer(0, u32::from(self.image.is_some()))
                 .expect("result 0 exists"),
         }
-        Ok(true)
+        Ok(())
     }
 
     /// 0x203c / 0x14006c580: SP-4 slot (signed < 256 with an object) and SP-8, which must be
@@ -104,20 +125,13 @@ impl ScreenCapture {
     /// image (+6176) and builds one from the capture (0x140032f80: empty name, +1152 = 0);
     /// result 0 = success, then the capture is reset (0x1400158a0). Pops 8. Without a
     /// capture the original keeps an empty image object, which Rust rejects.
-    fn give(
-        &mut self,
-        vm: &mut Machine<'_>,
-        pc: usize,
-        scene: &mut SceneHost,
-    ) -> Result<bool, DecodeError> {
+    fn give(&mut self, call: &mut Call<'_, '_>, scene: &mut SceneHost) -> Result<(), DecodeError> {
+        let pc = call.pc;
         let fail = |why| error(pc, 0x203c, why);
-        let word = |distance| {
-            vm.stack()
-                .peek_u32(distance)
-                .map(|value| value as i32)
-                .map_err(|e| fail(e.0))
-        };
-        let (slot, child) = (word(4)?, word(8)?);
+        let (slot, child) = (
+            call.argument(4, "object slot")? as i32,
+            call.argument(8, "child slot")? as i32,
+        );
         let object = u8::try_from(slot)
             .ok()
             .filter(|_| child < 0)
@@ -128,7 +142,7 @@ impl ScreenCapture {
                 "screen image without a capture leaves an empty image object",
             ));
         }
-        vm.complete_system(SystemResult(0x4008))?;
+        call.complete(0x4008)?;
         object.image = Some(ObjectImage {
             filter: None,
             name: Vec::new(),
@@ -137,10 +151,11 @@ impl ScreenCapture {
             surface: false,
         });
         *self = Self::default();
-        vm.state_mut()
+        call.vm
+            .state_mut()
             .set_system_integer(0, 1)
             .expect("result 0 exists");
-        Ok(true)
+        Ok(())
     }
 }
 

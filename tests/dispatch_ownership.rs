@@ -77,7 +77,19 @@ fn audit(handler: &str, mut probe: impl FnMut(&mut Machine<'_>) -> bool) {
         if handler == "message::try_record_poll" {
             return number == 0x159;
         }
+        if handler == "bootstrap::try_handle" {
+            return cmvs_rs::dispatch::ROOT.iter().any(|e| {
+                e.command == number
+                    && matches!(
+                        e.capability,
+                        Capability::Bootstrap | Capability::FunctionKeys
+                    )
+            });
+        }
         let capability = match handler {
+            "platform::try_handle" => Some(Capability::Platform),
+            "capture::try_handle" => Some(Capability::Capture),
+            "capture::try_immediate" => Some(Capability::CaptureDevice),
             "movie::try_create_scene" => Some(Capability::MovieScene),
             "movie::try_start_scene" => Some(Capability::MovieStart),
             "movie::try_handle" => Some(Capability::MovieState),
@@ -409,6 +421,18 @@ fn inventory_matches_wait_and_resource_host_recognition_exhaustively() {
                     source: &mut Unavailable,
                     change_images: true,
                 }),
+                bootstrap: Some(&mut cmvs_rs::bootstrap::Bootstrap::default()),
+                function_keys: Some(cmvs_rs::dispatch::FunctionKeys::Startup(
+                    &mut cmvs_rs::bootstrap::Bootstrap::default(),
+                )),
+                platform: Some(cmvs_rs::dispatch::PlatformHosts {
+                    host: &mut cmvs_rs::platform::PlatformHost::default(),
+                    backend: &mut cmvs_rs::platform::RecordingBackend::default(),
+                    assets: &mut Unavailable,
+                    cursors: &[],
+                }),
+                device_frame: Some(&mut cmvs_rs::platform::RecordingBackend::default()),
+                capture: Some(&mut cmvs_rs::capture::ScreenCapture::default()),
                 movies: Some(&mut cmvs_rs::movie::MovieHost::default()),
                 movie_scene: Some(cmvs_rs::dispatch::MovieSceneHosts {
                     scene: &mut cmvs_rs::scene::SceneHost::default(),
@@ -536,9 +560,9 @@ fn all_overlaps_are_explicit_and_chain_orders_are_unique() {
         assert_eq!(
             overlaps,
             if chain == Chain::Runner {
-                vec![0x2b2, 0x34d]
+                vec![0x2b2]
             } else {
-                vec![0x34d]
+                vec![]
             }
         );
     }
@@ -547,16 +571,14 @@ fn all_overlaps_are_explicit_and_chain_orders_are_unique() {
             .iter()
             .all(|claim| !claim.recognizes(0x400) && !claim.recognizes(u16::MAX))
     );
-    for (command, expected) in [
-        (
-            0x2b2,
-            [
-                "runner::capture_snapshot",
-                "snapshot::SaveImage::try_handle",
-            ],
-        ),
-        (0x34d, ["bootstrap::try_handle", "input::try_handle"]),
-    ] {
+    let (command, expected) = (
+        0x2b2,
+        [
+            "runner::capture_snapshot",
+            "snapshot::SaveImage::try_handle",
+        ],
+    );
+    {
         assert_eq!(
             ownership::candidates(command, Chain::Runner)
                 .iter()
@@ -606,23 +628,17 @@ fn inventory_tracks_chain_entry_calls() {
 }
 
 #[test]
-fn known_priority_difference_is_visible_without_changing_behavior() {
+fn function_key_public_apis_preserve_both_explicit_policy_effects() {
     let names = |chain| {
         ownership::candidates(0x34d, chain)
             .iter()
             .map(|c| c.handler)
             .collect::<Vec<_>>()
     };
-    assert_eq!(
-        names(Chain::Runner),
-        ["bootstrap::try_handle", "input::try_handle"]
-    );
-    assert_eq!(
-        names(Chain::Trace),
-        ["input::try_handle", "bootstrap::try_handle"]
-    );
-    // Both recognize the opcode, but their effects differ. This is a dispatch
-    // migration decision, not a conflict the inventory can silently resolve.
+    assert_eq!(names(Chain::Runner), ["dispatch::ROOT"]);
+    assert_eq!(names(Chain::Trace), ["dispatch::ROOT"]);
+    // Compatibility APIs retain both effects. ROOT chooses through an explicit
+    // Startup/Input context, covered separately by the environment batch tests.
     let mut code = vec![];
     command(&mut code, 0x234d, &[]);
     let script = script(&code);

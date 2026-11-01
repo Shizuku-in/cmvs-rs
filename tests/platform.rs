@@ -1,3 +1,5 @@
+#[path = "support/shared_environment.rs"]
+mod shared_environment;
 use cmvs_rs::{
     cursor::CursorBitmap,
     machine::{Machine, Step},
@@ -7,6 +9,7 @@ use cmvs_rs::{
     },
     ps3::Script,
 };
+use shared_environment::SharedPlatform;
 use std::{collections::BTreeMap, error::Error, fs, process::Command};
 #[path = "support/bytecode.rs"]
 mod bytecode;
@@ -31,7 +34,7 @@ fn other_display_query_reads_configuration_without_consuming_stack_or_changing_d
         host.configure_display_selection(b"[WINDOW_RESOLVING]\nOTHERS_DISPLAY_USE=1\n");
         host.configure_display_selection(ini);
         let mut backend = RecordingBackend::default();
-        host.try_handle(&mut vm, &mut backend, &mut Assets::default(), &[])
+        host.shared_platform(&mut vm, &mut backend, &mut Assets::default(), &[])
             .unwrap()
             .unwrap();
         assert_eq!(vm.state().system_integer(0), Some(expected));
@@ -71,7 +74,7 @@ fn aspect_scaling_normalizes_values_and_yields_only_for_fullscreen_updates() {
             let pc = vm.pc();
             vm.state_mut().set_system_integer(0, 77).unwrap();
             assert_eq!(
-                host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+                host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
                     .unwrap(),
                 Some(if changed && fullscreen {
                     PlatformEvent::Yield
@@ -83,7 +86,7 @@ fn aspect_scaling_normalizes_values_and_yields_only_for_fullscreen_updates() {
             assert_eq!(vm.stack().len_bytes(), 0);
             assert_eq!(vm.state().system_integer(0), Some(77));
             bytecode::pending(&mut vm);
-            host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+            host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
                 .unwrap();
             assert_eq!(vm.state().system_integer(0), Some(u32::from(value)));
             assert_eq!(backend.aspect_mode().unwrap(), 3);
@@ -150,7 +153,7 @@ fn unsupported_scaling_enable_still_refreshes_fullscreen_and_retries_failures() 
             let pending = vm.pending_system();
             vm.state_mut().set_system_integer(0, 99).unwrap();
             assert!(
-                host.try_handle(&mut vm, &mut backend, &mut Assets::default(), &[])
+                host.shared_platform(&mut vm, &mut backend, &mut Assets::default(), &[])
                     .is_err()
             );
             assert_eq!(vm.pending_system(), pending);
@@ -162,7 +165,7 @@ fn unsupported_scaling_enable_still_refreshes_fullscreen_and_retries_failures() 
             for attempt in 0..2 {
                 let refresh = attempt == 0 || !supported;
                 assert_eq!(
-                    host.try_handle(&mut vm, &mut backend, &mut Assets::default(), &[])
+                    host.shared_platform(&mut vm, &mut backend, &mut Assets::default(), &[])
                         .unwrap(),
                     Some(if refresh && fullscreen {
                         PlatformEvent::Yield
@@ -209,14 +212,14 @@ fn equal_scaling_request_needs_no_capabilities_but_unknown_queries_fail() {
     let mut host = PlatformHost::default();
     bytecode::pending(&mut vm);
     assert!(
-        host.try_handle(&mut vm, &mut Equal, &mut Assets::default(), &[])
+        host.shared_platform(&mut vm, &mut Equal, &mut Assets::default(), &[])
             .is_ok()
     );
     bytecode::pending(&mut vm);
     vm.state_mut().set_system_integer(0, 77).unwrap();
     let before = vm.pending_system();
     assert!(
-        host.try_handle(&mut vm, &mut Unknown, &mut Assets::default(), &[])
+        host.shared_platform(&mut vm, &mut Unknown, &mut Assets::default(), &[])
             .is_err()
     );
     assert_eq!(vm.pending_system(), before);
@@ -237,7 +240,7 @@ fn window_size_reset_yields_only_when_it_changes_and_preserves_results() {
         bytecode::pending(&mut vm);
         vm.state_mut().set_system_integer(0, 77).unwrap();
         assert_eq!(
-            host.try_handle(&mut vm, &mut backend, &mut Assets::default(), &[])
+            host.shared_platform(&mut vm, &mut backend, &mut Assets::default(), &[])
                 .unwrap(),
             Some(expected)
         );
@@ -272,7 +275,7 @@ fn fixed_window_reset_is_a_noop_and_fullscreen_reset_records_the_future_size() {
     backend.apply(&PlatformRequest::Fullscreen(true)).unwrap();
     vm.state_mut().set_system_integer(0, 77).unwrap();
     assert_eq!(
-        host.try_handle(&mut vm, &mut backend, &mut Assets::default(), &[])
+        host.shared_platform(&mut vm, &mut backend, &mut Assets::default(), &[])
             .unwrap(),
         Some(cmvs_rs::platform::PlatformEvent::Configured)
     );
@@ -282,7 +285,7 @@ fn fixed_window_reset_is_a_noop_and_fullscreen_reset_records_the_future_size() {
     let mut vm = Machine::new(&script).unwrap();
     bytecode::pending(&mut vm);
     assert_eq!(
-        host.try_handle(&mut vm, &mut Fixed, &mut Assets::default(), &[])
+        host.shared_platform(&mut vm, &mut Fixed, &mut Assets::default(), &[])
             .unwrap(),
         Some(cmvs_rs::platform::PlatformEvent::Configured)
     );
@@ -335,7 +338,7 @@ fn fullscreen_reset_changes_only_recorded_size_and_retries_backend_failure() {
     bytecode::pending(&mut vm);
     let before = vm.pending_system();
     assert!(
-        host.try_handle(&mut vm, &mut backend, &mut Assets::default(), &[])
+        host.shared_platform(&mut vm, &mut backend, &mut Assets::default(), &[])
             .is_err()
     );
     assert_eq!(vm.pending_system(), before);
@@ -343,7 +346,7 @@ fn fullscreen_reset_changes_only_recorded_size_and_retries_backend_failure() {
     backend.fail = false;
     for _ in 0..2 {
         assert_eq!(
-            host.try_handle(&mut vm, &mut backend, &mut Assets::default(), &[])
+            host.shared_platform(&mut vm, &mut backend, &mut Assets::default(), &[])
                 .unwrap(),
             Some(cmvs_rs::platform::PlatformEvent::Configured)
         );
@@ -371,12 +374,12 @@ fn aspect_mode_normalizes_invalid_words_preserves_results_and_skips_equal_reques
     for value in [1, 0, 2, 3, 3, 1, 1] {
         vm.state_mut().set_system_integer(0, 77).unwrap();
         bytecode::pending(&mut vm);
-        host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+        host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
             .unwrap();
         assert_eq!(vm.state().system_integer(0), Some(77));
         assert_eq!(vm.stack().len_bytes(), 0);
         bytecode::pending(&mut vm);
-        host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+        host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
             .unwrap();
         assert_eq!(vm.state().system_integer(0), Some(value));
     }
@@ -403,14 +406,14 @@ fn render_mode_clamps_words_falls_back_without_linear_support_and_skips_equal_re
         vm.state_mut().set_system_integer(0, 77).unwrap();
         bytecode::pending(&mut vm);
         assert_eq!(
-            host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+            host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
                 .unwrap(),
             Some(cmvs_rs::platform::PlatformEvent::Configured)
         );
         assert_eq!(vm.state().system_integer(0), Some(77));
         assert_eq!(vm.stack().len_bytes(), 0);
         bytecode::pending(&mut vm);
-        host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+        host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
             .unwrap();
         assert_eq!(vm.state().system_integer(0), Some(value));
     }
@@ -443,7 +446,7 @@ fn render_mode_clamps_words_falls_back_without_linear_support_and_skips_equal_re
     let mut vm = Machine::new(&script).unwrap();
     bytecode::pending(&mut vm);
     let mut device = PointOnly(1);
-    host.try_handle(&mut vm, &mut device, &mut assets, &[])
+    host.shared_platform(&mut vm, &mut device, &mut assets, &[])
         .unwrap();
     assert_eq!(device.0, 0);
 }
@@ -484,7 +487,7 @@ fn shader_render_modes_on_capable_devices_and_backend_failures_stay_barriers() {
         let mut device = device;
         assert!(
             PlatformHost::default()
-                .try_handle(&mut vm, &mut device, &mut Assets::default(), &[])
+                .shared_platform(&mut vm, &mut device, &mut Assets::default(), &[])
                 .is_err()
         );
         assert_eq!(vm.pending_system(), before);
@@ -498,7 +501,7 @@ fn shader_render_modes_on_capable_devices_and_backend_failures_stay_barriers() {
     let mut vm = Machine::new(&script).unwrap();
     bytecode::pending(&mut vm);
     PlatformHost::default()
-        .try_handle(&mut vm, &mut Device(2, false), &mut Assets::default(), &[])
+        .shared_platform(&mut vm, &mut Device(2, false), &mut Assets::default(), &[])
         .unwrap();
     assert_eq!(vm.stack().len_bytes(), 0);
 }
@@ -520,7 +523,7 @@ fn fullscreen_changes_yield_preserve_results_and_query_the_new_backend_mode() {
         vm.state_mut().set_system_integer(0, 77).unwrap();
         bytecode::pending(&mut vm);
         assert_eq!(
-            host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+            host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
                 .unwrap(),
             Some(PlatformEvent::Yield)
         );
@@ -531,7 +534,7 @@ fn fullscreen_changes_yield_preserve_results_and_query_the_new_backend_mode() {
             Some(&PlatformRequest::Fullscreen(value))
         );
         bytecode::pending(&mut vm);
-        host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+        host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
             .unwrap();
         assert_eq!(vm.state().system_integer(0), Some(u32::from(value)));
     }
@@ -559,7 +562,7 @@ fn failed_display_changes_retain_pending_command_stack_and_results() {
         vm.state_mut().set_system_integer(0, 77).unwrap();
         assert!(
             PlatformHost::default()
-                .try_handle(&mut vm, &mut Reject, &mut Assets::default(), &[])
+                .shared_platform(&mut vm, &mut Reject, &mut Assets::default(), &[])
                 .is_err()
         );
         assert_eq!(vm.pending_system(), before);
@@ -587,7 +590,7 @@ fn fullscreen_query_uses_backend_state_and_needs_no_arguments_or_assets() {
         bytecode::pending(&mut vm);
         let mut host = PlatformHost::default();
         let mut assets = Assets::default();
-        host.try_handle(&mut vm, &mut Display(fullscreen), &mut assets, &[])
+        host.shared_platform(&mut vm, &mut Display(fullscreen), &mut assets, &[])
             .unwrap();
         assert_eq!(vm.state().system_integer(0), Some(u32::from(fullscreen)));
         assert_eq!(vm.stack().len_bytes(), 0);
@@ -629,7 +632,7 @@ fn graphics_and_resizing_queries_report_explicit_backend_capabilities() {
         let mut assets = Assets::default();
         for expected in [flags, 2, 1, 1, 2] {
             bytecode::pending(&mut vm);
-            host.try_handle(&mut vm, &mut Device(major, true), &mut assets, &[])
+            host.shared_platform(&mut vm, &mut Device(major, true), &mut assets, &[])
                 .unwrap();
             assert_eq!(vm.state().system_integer(0), Some(expected));
             assert_eq!(vm.stack().len_bytes(), 0);
@@ -783,14 +786,14 @@ fn title_and_icon_requests_preserve_byte_encoding_and_registers() {
     let mut host = PlatformHost::default();
     let mut backend = RecordingBackend::default();
     assert!(
-        host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+        host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
             .unwrap()
             .is_none()
     );
     for _ in 0..2 {
         pending(&mut vm);
         let pc = vm.pc();
-        host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+        host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
             .unwrap();
         assert_eq!(vm.pc(), pc + 2);
         assert_eq!(vm.stack().len_bytes(), 0);
@@ -804,7 +807,7 @@ fn title_and_icon_requests_preserve_byte_encoding_and_registers() {
     pending(&mut vm);
     let pc = vm.pc();
     assert!(
-        host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+        host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
             .unwrap()
             .is_none()
     );
@@ -826,14 +829,14 @@ fn backend_failure_preserves_vm_and_host_for_retry() {
     let mut assets = Assets::default();
     let before = vm.pending_system();
     assert!(
-        host.try_handle(&mut vm, &mut RejectBackend, &mut assets, &[])
+        host.shared_platform(&mut vm, &mut RejectBackend, &mut assets, &[])
             .is_err()
     );
     assert_eq!(vm.pending_system(), before);
     assert_eq!(vm.stack().len_bytes(), 4);
     assert_eq!(host.title(), None);
     let mut backend = RecordingBackend::default();
-    host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+    host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
         .unwrap();
     assert_eq!(host.title(), Some(b"title".as_slice()));
 }
@@ -847,7 +850,7 @@ fn scene_title_composes_window_text_and_keeps_base_title() {
     let mut vm = Machine::new(&orphan).unwrap();
     pending(&mut vm);
     assert!(
-        host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+        host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
             .is_err()
     );
     assert_eq!((vm.stack().len_bytes(), backend.requests().len()), (4, 0));
@@ -860,15 +863,15 @@ fn scene_title_composes_window_text_and_keeps_base_title() {
     let mut vm = Machine::new(&script).unwrap();
     assert_eq!(host.scene_title(), b"");
     pending(&mut vm);
-    host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+    host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
         .unwrap();
     pending(&mut vm);
     assert!(
-        host.try_handle(&mut vm, &mut RejectBackend, &mut assets, &[])
+        host.shared_platform(&mut vm, &mut RejectBackend, &mut assets, &[])
             .is_err()
     );
     assert_eq!(host.scene_title(), b"");
-    host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+    host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
         .unwrap();
     assert_eq!(host.title(), Some(b"Game".as_slice()));
     assert_eq!(host.scene_title(), b"- main -");
@@ -879,7 +882,7 @@ fn scene_title_composes_window_text_and_keeps_base_title() {
     pending(&mut vm);
     let before = vm.pending_system();
     assert!(
-        host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+        host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
             .is_err()
     );
     assert_eq!(vm.pending_system(), before);
@@ -898,7 +901,7 @@ fn cursor_selection_reads_once_default_restores_and_invalid_id_stops() {
     let names = [b"mouse.cur".to_vec()];
     for expected in [1, 1, 0] {
         pending(&mut vm);
-        host.try_handle(&mut vm, &mut backend, &mut assets, &names)
+        host.shared_platform(&mut vm, &mut backend, &mut assets, &names)
             .unwrap();
         assert_eq!(host.cursor(), expected);
     }
@@ -914,7 +917,7 @@ fn cursor_selection_reads_once_default_restores_and_invalid_id_stops() {
     pending(&mut vm);
     let before = vm.pending_system();
     assert!(
-        host.try_handle(&mut vm, &mut backend, &mut assets, &names)
+        host.shared_platform(&mut vm, &mut backend, &mut assets, &names)
             .is_err()
     );
     assert_eq!(vm.pending_system(), before);
@@ -931,23 +934,23 @@ fn cursor_io_decode_and_backend_errors_do_not_commit_selection() {
     let mut host = PlatformHost::default();
     let names = [b"mouse.cur".to_vec()];
     assert!(
-        host.try_handle(&mut vm, &mut backend, &mut assets, &names)
+        host.shared_platform(&mut vm, &mut backend, &mut assets, &names)
             .is_err()
     );
     assets.files.insert(b"mouse.cur".to_vec(), vec![0; 22]);
     assert!(
-        host.try_handle(&mut vm, &mut backend, &mut assets, &names)
+        host.shared_platform(&mut vm, &mut backend, &mut assets, &names)
             .is_err()
     );
     assets.files.insert(b"mouse.cur".to_vec(), cur());
     assert!(
-        host.try_handle(&mut vm, &mut RejectBackend, &mut assets, &names)
+        host.shared_platform(&mut vm, &mut RejectBackend, &mut assets, &names)
             .is_err()
     );
     assert_eq!(host.cursor(), 0);
     assert_eq!(vm.stack().len_bytes(), 4);
     assert!(backend.requests().is_empty());
-    host.try_handle(&mut vm, &mut backend, &mut assets, &names)
+    host.shared_platform(&mut vm, &mut backend, &mut assets, &names)
         .unwrap();
     assert_eq!(host.cursor(), 1);
 }
@@ -963,7 +966,7 @@ fn title_limit_and_icon_directory_errors_do_not_invoke_backend() {
         let mut host = PlatformHost::default();
         let mut assets = Assets::default();
         let mut backend = RecordingBackend::default();
-        let result = host.try_handle(&mut vm, &mut backend, &mut assets, &[]);
+        let result = host.shared_platform(&mut vm, &mut backend, &mut assets, &[]);
         assert_eq!(result.is_ok(), len == 255);
         assert_eq!(backend.requests().len(), usize::from(len == 255));
     }
@@ -980,7 +983,7 @@ fn title_limit_and_icon_directory_errors_do_not_invoke_backend() {
         let mut backend = RecordingBackend::default();
         assert!(
             PlatformHost::default()
-                .try_handle(&mut vm, &mut backend, &mut assets, &[])
+                .shared_platform(&mut vm, &mut backend, &mut assets, &[])
                 .is_err()
         );
         assert!(backend.requests().is_empty());
@@ -998,7 +1001,7 @@ fn thumbnail_argument_order_is_retained_and_gesture_commands_are_not_platform() 
     // 0x22b0 lacks the second argument: must fail without replacing configuration.
     pending(&mut vm);
     assert!(
-        host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+        host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
             .is_err()
     );
     assert_eq!(host.thumbnail(), None);
@@ -1029,7 +1032,7 @@ fn thumbnail_argument_order_is_retained_and_gesture_commands_are_not_platform() 
     let image = Script::decode(&raw).unwrap();
     let mut vm = Machine::new(&image).unwrap();
     pending(&mut vm);
-    host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+    host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
         .unwrap();
     assert_eq!(
         host.thumbnail(),
@@ -1045,7 +1048,7 @@ fn thumbnail_argument_order_is_retained_and_gesture_commands_are_not_platform() 
     let mut vm = Machine::new(&gesture).unwrap();
     pending(&mut vm);
     assert!(
-        host.try_handle(&mut vm, &mut backend, &mut assets, &[])
+        host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
             .unwrap()
             .is_none()
     );

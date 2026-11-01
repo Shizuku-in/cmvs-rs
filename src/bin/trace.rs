@@ -9,7 +9,7 @@ use cmvs_rs::{
     gesture::PointerGesture,
     history::HistoryHost,
     image::ImageArchives,
-    input::{self, ActionInput},
+    input::ActionInput,
     machine::{Machine, Step},
     message_flags::MessageFlags,
     movie::{DirectoryMovies, MovieHost},
@@ -350,6 +350,39 @@ fn run() -> Result<(), Box<dyn Error>> {
                 skip: message_flags.skip(),
                 ..SkipGate::default()
             };
+            if cmvs_rs::dispatch::uses_bootstrap(command) {
+                let mut hosts = cmvs_rs::dispatch::Hosts::default();
+                if command == 0x34d {
+                    if platform_assets.is_some() {
+                        hosts.function_keys =
+                            Some(cmvs_rs::dispatch::FunctionKeys::Input(&mut input));
+                    } else if let Some(host) = &mut bootstrap {
+                        hosts.function_keys = Some(cmvs_rs::dispatch::FunctionKeys::Startup(host));
+                    }
+                } else {
+                    hosts.bootstrap = bootstrap.as_mut();
+                }
+                if cmvs_rs::dispatch::run(resolved.semantics, &mut machine, &mut hosts)?
+                    == Some(cmvs_rs::dispatch::Flow::Done)
+                {
+                    if command == 0x34d && platform_assets.is_some() {
+                        println!(
+                            "# input 0x{:04x}: system_integer[0]={:?} [4]={:?}; no input supplied",
+                            command + 0x2000,
+                            machine.state().system_integer(0),
+                            machine.state().system_integer(4)
+                        );
+                    } else {
+                        println!(
+                            "# bootstrap applied 0x{:04x} -> pc=0x{:04x} {:?}",
+                            command + 0x2000,
+                            machine.pc(),
+                            Step::Continue
+                        );
+                    }
+                    continue;
+                }
+            }
             let no_paths = BTreeMap::new();
             let paths = bootstrap.as_ref().map_or(&no_paths, Bootstrap::paths);
             let mut registered_images = images.as_mut().map(|images| images.with_paths(paths));
@@ -434,8 +467,81 @@ fn run() -> Result<(), Box<dyn Error>> {
                     });
                 }
             }
+            let previous = platform_backend.requests().len();
+            if let Some(assets) = &mut platform_assets {
+                hosts.platform = Some(cmvs_rs::dispatch::PlatformHosts {
+                    host: &mut platform_host,
+                    backend: &mut platform_backend,
+                    assets,
+                    cursors: bootstrap
+                        .as_ref()
+                        .map(Bootstrap::cursor_names)
+                        .unwrap_or(&[]),
+                });
+            }
             let dispatched = cmvs_rs::dispatch::run(resolved.semantics, &mut machine, &mut hosts)?;
 
+            if let Some(cmvs_rs::dispatch::Flow::Platform(event)) = dispatched {
+                println!(
+                    "# platform recording 0x{:04x} {event:?}; requests={} thumbnail={:?}",
+                    command + 0x2000,
+                    platform_backend.requests().len(),
+                    platform_host.thumbnail()
+                );
+                if platform_backend.requests().len() > previous {
+                    match platform_backend.requests().last().expect("new request") {
+                        PlatformRequest::Fullscreen(value) => {
+                            println!("# recorded fullscreen={value}")
+                        }
+                        PlatformRequest::AspectMode(value) => {
+                            println!("# recorded aspect mode={value}")
+                        }
+                        PlatformRequest::AspectScaling(value) => {
+                            println!("# recorded aspect scaling={value}")
+                        }
+                        PlatformRequest::RenderMode(value) => {
+                            println!("# recorded render mode={value}")
+                        }
+                        PlatformRequest::WindowSize(value) => {
+                            println!("# recorded window size={value:?}")
+                        }
+                        PlatformRequest::Title(bytes) => {
+                            println!("# recorded title={}", bytes.escape_ascii())
+                        }
+                        PlatformRequest::Cursor { id, bitmap } => println!(
+                            "# recorded cursor={id} dimensions={:?}",
+                            bitmap
+                                .as_ref()
+                                .map(|b| (b.width(), b.height(), b.hotspot()))
+                        ),
+                        PlatformRequest::Icon { name, bytes } => println!(
+                            "# recorded icon={} bytes={} (directory validated, pixels opaque)",
+                            name.escape_ascii(),
+                            bytes.len()
+                        ),
+                    }
+                }
+                if event == cmvs_rs::platform::PlatformEvent::Yield {
+                    if let Some(delta) = frame_ms {
+                        if let (Some(images), Some(config)) = (&mut images, &bootstrap) {
+                            sequence.advance_frame_with_hosts(
+                                delta,
+                                &mut scene,
+                                &mut images.with_paths(config.paths()),
+                                &mut camera,
+                            )?;
+                        } else {
+                            sequence.advance_frame(delta)?;
+                        }
+                        scene.advance_frame(delta);
+                        camera.advance_frame(delta);
+                        movies.advance(delta);
+                        frame_delta = delta;
+                    }
+                    resume_run = true;
+                }
+                continue;
+            }
             if dispatched.is_some_and(cmvs_rs::dispatch::Flow::yields) {
                 let Some(delta) = frame_ms else {
                     println!(
@@ -567,6 +673,14 @@ fn run() -> Result<(), Box<dyn Error>> {
                                 other => format!("{other:?}"),
                             })
                         );
+                    }
+                    Capability::Bootstrap
+                    | Capability::FunctionKeys
+                    | Capability::Platform
+                    | Capability::FontDialog
+                    | Capability::Capture
+                    | Capability::CaptureDevice => {
+                        return Err("unexpected environment dispatch flow".into());
                     }
                     Capability::MovieScene | Capability::MovieStart => {
                         return Err("trace lacks scene movie playback".into());
@@ -786,88 +900,6 @@ fn run() -> Result<(), Box<dyn Error>> {
                 );
                 continue;
             }
-            if let Some(assets) = &mut platform_assets {
-                let cursors = bootstrap
-                    .as_ref()
-                    .map(Bootstrap::cursor_names)
-                    .unwrap_or(&[]);
-                let previous = platform_backend.requests().len();
-                if let Some(event) = platform_host.try_handle(
-                    &mut machine,
-                    &mut platform_backend,
-                    assets,
-                    cursors,
-                )? {
-                    println!(
-                        "# platform recording 0x{:04x} {event:?}; requests={} thumbnail={:?}",
-                        command + 0x2000,
-                        platform_backend.requests().len(),
-                        platform_host.thumbnail()
-                    );
-                    if platform_backend.requests().len() > previous {
-                        match platform_backend.requests().last().expect("new request") {
-                            PlatformRequest::Fullscreen(value) => {
-                                println!("# recorded fullscreen={value}")
-                            }
-                            PlatformRequest::AspectMode(value) => {
-                                println!("# recorded aspect mode={value}")
-                            }
-                            PlatformRequest::AspectScaling(value) => {
-                                println!("# recorded aspect scaling={value}")
-                            }
-                            PlatformRequest::RenderMode(value) => {
-                                println!("# recorded render mode={value}")
-                            }
-                            PlatformRequest::WindowSize(value) => {
-                                println!("# recorded window size={value:?}")
-                            }
-                            PlatformRequest::Title(bytes) => {
-                                println!("# recorded title={}", bytes.escape_ascii())
-                            }
-                            PlatformRequest::Cursor { id, bitmap } => println!(
-                                "# recorded cursor={id} dimensions={:?}",
-                                bitmap
-                                    .as_ref()
-                                    .map(|b| (b.width(), b.height(), b.hotspot()))
-                            ),
-                            PlatformRequest::Icon { name, bytes } => println!(
-                                "# recorded icon={} bytes={} (directory validated, pixels opaque)",
-                                name.escape_ascii(),
-                                bytes.len()
-                            ),
-                        }
-                    }
-                    if event == cmvs_rs::platform::PlatformEvent::Yield {
-                        if let Some(delta) = frame_ms {
-                            if let (Some(images), Some(config)) = (&mut images, &bootstrap) {
-                                sequence.advance_frame_with_hosts(
-                                    delta,
-                                    &mut scene,
-                                    &mut images.with_paths(config.paths()),
-                                    &mut camera,
-                                )?;
-                            } else {
-                                sequence.advance_frame(delta)?;
-                            }
-                            scene.advance_frame(delta);
-                            camera.advance_frame(delta);
-                            movies.advance(delta);
-                            frame_delta = delta;
-                        }
-                        resume_run = true;
-                    }
-                    continue;
-                }
-                if command == 0x34d && input::try_handle(&mut machine, &mut input)? {
-                    println!(
-                        "# input 0x{:04x}: system_integer[0]={:?} [4]={:?}; no input supplied",
-                        command + 0x2000,
-                        machine.state().system_integer(0),
-                        machine.state().system_integer(4)
-                    );
-                    continue;
-                }
-            }
             if let Some(source) = &mut system_source {
                 let game_id = bootstrap
                     .as_ref()
@@ -955,14 +987,6 @@ fn run() -> Result<(), Box<dyn Error>> {
                 continue;
             }
             if let Some(host) = &mut bootstrap {
-                if let Some(event) = host.try_handle(&mut machine)? {
-                    println!(
-                        "# bootstrap applied 0x{:04x} -> pc=0x{:04x} {event:?}",
-                        command + 0x2000,
-                        machine.pc()
-                    );
-                    continue;
-                }
                 println!(
                     "# bootstrap handled={} registered_paths={}",
                     host.handled_count(),

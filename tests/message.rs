@@ -4118,6 +4118,9 @@ fn font_cell_step(
         Some(cmvs_rs::dispatch::Flow::Unhandled | cmvs_rs::dispatch::Flow::Unavailable) => {
             Ok(false)
         }
+        Some(cmvs_rs::dispatch::Flow::Platform(_)) => {
+            unreachable!("text handler returned platform flow")
+        }
         None => Ok(messages.shared_message(vm)?),
     }
 }
