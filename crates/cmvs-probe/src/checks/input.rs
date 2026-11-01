@@ -4,7 +4,7 @@ use super::route::{Runner, scenario_entry};
 use crate::{
     device::{Action, Device, skip_code},
     json::Json,
-    observe::Observation,
+    observe::{Observation, Settle},
     report::{CheckResult, Level, Outcome},
     scenario::{Event, Scenario, WaitPoint, follow, view_digest},
     session::{Session, Stop},
@@ -81,26 +81,32 @@ fn frames(session: &mut Session<'_>, count: u64) -> Result<(), Stop> {
 
 /// What the scenario did after an action.
 fn effect(at: &mut AtWait<'_>) -> Result<String, Stop> {
-    Ok(
-        match at.scenario.next_within(&mut at.session, EFFECT_FRAMES)? {
-            Some(Event::Wait(o)) => {
-                if WaitPoint::of(&at.session, &o) == at.point {
-                    "same wait".into()
-                } else {
-                    "advanced".into()
-                }
-            }
-            Some(Event::Choice(c)) => format!("page with group {}", c.shape.slot),
-            Some(Event::End(_)) => "start page".into(),
-            None => {
-                if current_view(&at.session) == at.view {
-                    "no visible change".into()
-                } else {
-                    "view changed".into()
-                }
-            }
-        },
-    )
+    // An input can open a page with several control groups, such as the backlog.
+    // Observe it directly: scenario choice detection would reject that page as
+    // ambiguous and can inject unrelated confirmation input while waiting.
+    frames(&mut at.session, SETTLE_FRAMES)?;
+    let mut settle = Settle::new(crate::scenario::STABLE_FRAMES);
+    for _ in 0..EFFECT_FRAMES {
+        let o = at.session.frame()?;
+        if at.session.busy() {
+            continue;
+        }
+        if o.in_message_wait() {
+            return Ok(if WaitPoint::of(&at.session, &o) == at.point {
+                "same wait".into()
+            } else {
+                "advanced".into()
+            });
+        }
+        if let Some(page) = settle.feed(&o) {
+            return Ok(format!("page with {} groups", page.groups.len()));
+        }
+    }
+    Ok(if current_view(&at.session) == at.view {
+        "no visible change".into()
+    } else {
+        "view changed".into()
+    })
 }
 
 fn actions(device: Device) -> Vec<(&'static str, Option<Action>)> {
