@@ -2,7 +2,9 @@
 use crate::{bytecode::DecodeError, dispatch::Call, machine::Machine};
 mod collision;
 mod falling;
+mod fragments;
 pub use collision::{CollisionEffect, CollisionParticle};
+pub use fragments::{Fragment, FragmentEffect};
 mod particles;
 pub use falling::{FallingEffect, FallingParticle};
 pub use particles::{Particle, ParticleEffect};
@@ -26,6 +28,7 @@ impl crate::scene::SceneHost {
             self.particle_effects.remove(&(slot as u8));
             self.falling_effects.remove(&(slot as u8));
             self.collision_effects.remove(&(slot as u8));
+            self.fragment_effects.remove(&(slot as u8));
         }
         Ok(())
     }
@@ -55,6 +58,9 @@ impl crate::scene::SceneHost {
             }
             if let Some(effect) = self.collision_effects.get_mut(&slot) {
                 effect.advance(delta, &triangles, random);
+            }
+            if let Some(effect) = self.fragment_effects.get_mut(&slot) {
+                effect.advance(delta);
             }
         }
         Ok(())

@@ -9,6 +9,64 @@ use cmvs_rs::{
 mod support;
 use support::bytecode::{command, pending, script};
 
+#[test]
+fn fragment_dispatch_transfers_source_and_preserves_pending_when_random_is_missing() {
+    let mut code = vec![];
+    command(&mut code, 0x2020, &[29]);
+    command(&mut code, 0x22a8, &[0, 29, 20, 1000]);
+    command(&mut code, 0x22a0, &[0]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut scene = SceneHost::default();
+    pending(&mut vm);
+    scene.try_handle(&mut vm).unwrap();
+    pending(&mut vm);
+    let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
+    assert_eq!(
+        dispatch::run(
+            Semantics::Research(ResearchId::Fragments),
+            &mut vm,
+            &mut Hosts {
+                scene: Some(&mut scene),
+                ..Default::default()
+            }
+        )
+        .unwrap(),
+        Some(Flow::Unavailable)
+    );
+    assert_eq!(
+        (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
+        before
+    );
+    assert!(scene.object(29).is_some());
+    let mut random = CrtRandom::new(0);
+    dispatch::run(
+        Semantics::Research(ResearchId::Fragments),
+        &mut vm,
+        &mut Hosts {
+            scene: Some(&mut scene),
+            random: Some(&mut random),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(scene.object(29).is_none());
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert!(scene.fragment_effects()[&0].fragments.is_empty());
+    assert_eq!(random, CrtRandom::new(0));
+    pending(&mut vm);
+    dispatch::run(
+        Semantics::Root,
+        &mut vm,
+        &mut Hosts {
+            scene: Some(&mut scene),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(scene.fragment_effects().is_empty());
+}
+
 #[derive(Default)]
 struct Images {
     reads: usize,

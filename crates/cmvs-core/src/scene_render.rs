@@ -791,19 +791,34 @@ pub fn prepare_scene<'a>(
                             .map(|particle| (None, &particle.object, Some(&effect.pool)))
                     }),
             )
+            .chain(
+                scene
+                    .fragment_effects()
+                    .get(&slot)
+                    .into_iter()
+                    .filter(|effect| effect.pool.shown)
+                    .flat_map(|effect| {
+                        std::iter::once((None, &effect.pool, None)).chain(
+                            effect
+                                .fragments
+                                .iter()
+                                .map(|fragment| (None, &fragment.object, Some(&effect.pool))),
+                        )
+                    }),
+            )
     });
     let all_objects = slots
-        .map(|(slot, object)| (slot, object, None))
-        .chain(particles)
-        .chain(additional.iter().map(|&object| (None, object, None)));
-    for (slot, object, parent) in all_objects {
+        .map(|(slot, object)| (slot, object, None, false))
+        .chain(particles.map(|(slot, object, parent)| (slot, object, parent, false)))
+        .chain(additional.iter().map(|&object| (None, object, None, true)));
+    for (slot, object, parent, additional_object) in all_objects {
         if object.shown
             && let Some(change) = &object.change
         {
-            objects.push((None, change.common.as_ref(), slot.is_none(), None));
-            objects.push((None, change.previous.as_ref(), slot.is_none(), None));
+            objects.push((None, change.common.as_ref(), additional_object, None));
+            objects.push((None, change.previous.as_ref(), additional_object, None));
         }
-        objects.push((slot, object, slot.is_none(), parent));
+        objects.push((slot, object, additional_object, parent));
     }
     for (slot, object, additional_object, parent) in objects {
         // 0x14003de80 returns early for +6244 == 0; no draw state means +6240 == 0.
@@ -821,7 +836,7 @@ pub fn prepare_scene<'a>(
         // glyphs as layer 1; 0x14003b420 applies it only with the top-level object's +6248
         // bit 0x100, children included.
         let by = match scene.quake() {
-            Some(quake) if object.flags & 0x100 != 0 => {
+            Some(quake) if parent.map_or(object.flags, |pool| pool.flags) & 0x100 != 0 => {
                 quake.offset(additional_object).map(i64::from)
             }
             _ => [0, 0],
@@ -889,7 +904,11 @@ pub fn prepare_scene<'a>(
         check(d, false)?;
         let position = [d[8] as i32, d[9] as i32].map(i64::from);
         let mask = slot.and_then(|slot| scene.mask_on(slot));
-        let layer = match &object.image {
+        let layer = match object
+            .image
+            .as_ref()
+            .or_else(|| parent.and_then(|pool| pool.image.as_ref()))
+        {
             Some(image) => image_layer(
                 image,
                 d,

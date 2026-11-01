@@ -177,6 +177,7 @@ impl Startup<'_> {
         if !self.scene.particle_effects().is_empty()
             || !self.scene.falling_effects().is_empty()
             || !self.scene.collision_effects().is_empty()
+            || !self.scene.fragment_effects().is_empty()
         {
             return Err("saving active particle effects is not implemented".into());
         }
@@ -428,6 +429,7 @@ impl Startup<'_> {
         if !self.scene.particle_effects().is_empty()
             || !self.scene.falling_effects().is_empty()
             || !self.scene.collision_effects().is_empty()
+            || !self.scene.fragment_effects().is_empty()
         {
             return Err("loading over active particle effects is not implemented".into());
         }

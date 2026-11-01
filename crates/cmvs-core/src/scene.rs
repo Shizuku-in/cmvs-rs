@@ -276,6 +276,7 @@ impl DrawState {
 
 #[derive(Debug, Default)]
 pub struct SceneHost {
+    pub(crate) fragment_effects: BTreeMap<u8, crate::effect_objects::FragmentEffect>,
     pub(crate) collision_effects: BTreeMap<u8, crate::effect_objects::CollisionEffect>,
     pub(crate) particle_effects: BTreeMap<u8, crate::effect_objects::ParticleEffect>,
     pub(crate) falling_effects: BTreeMap<u8, crate::effect_objects::FallingEffect>,
@@ -325,6 +326,9 @@ impl SceneHost {
     }
     pub fn objects(&self) -> &BTreeMap<u8, SceneObject> {
         &self.objects
+    }
+    pub(crate) fn take_object(&mut self, slot: u8) -> Option<SceneObject> {
+        self.objects.remove(&slot)
     }
     /// For other verified command families that drive scene objects (0x2215).
     pub(crate) fn object_mut(&mut self, slot: u8) -> Option<&mut SceneObject> {
@@ -1058,6 +1062,7 @@ impl SceneHost {
             particle_effects: Default::default(),
             falling_effects: Default::default(),
             collision_effects: Default::default(),
+            fragment_effects: Default::default(),
             clear,
             objects,
             quake,

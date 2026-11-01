@@ -791,7 +791,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                             machine.state().system_integer(0)
                         );
                     }
-                    Capability::Scene => {
+                    Capability::Scene | Capability::SceneRandom => {
                         println!(
                             "# scene state 0x{:04x}: {:?} rgba={:?} objects={:?}; recorded only, nothing drawn",
                             command + 0x2000,

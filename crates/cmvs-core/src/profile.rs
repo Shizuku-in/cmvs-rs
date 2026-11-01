@@ -37,6 +37,7 @@ pub enum ResearchId {
     BackgroundAudio,
     FallingBillboards,
     CollisionParticles,
+    Fragments,
 }
 impl ResearchId {
     pub fn parse(name: &str) -> Option<Self> {
@@ -46,6 +47,7 @@ impl ResearchId {
             "background-audio" => Some(Self::BackgroundAudio),
             "falling-billboards" => Some(Self::FallingBillboards),
             "collision-particles" => Some(Self::CollisionParticles),
+            "fragments" => Some(Self::Fragments),
             _ => None,
         }
     }
@@ -56,6 +58,7 @@ impl ResearchId {
             Self::BackgroundAudio => "background-audio",
             Self::FallingBillboards => "falling-billboards",
             Self::CollisionParticles => "collision-particles",
+            Self::Fragments => "fragments",
         }
     }
 }

@@ -18,13 +18,15 @@ fn declared_research_round_trips_and_does_not_depend_on_the_profile_name() {
     let renamed = DERIVED.replacen("profile cmvs-20171114", "profile synthetic-research", 1);
     let registry = Registry::parse(&[ROOT, &renamed], "").unwrap();
     let profile = registry.profile("synthetic-research").unwrap();
-    assert_eq!(profile.research_overrides().count(), 15);
+    assert_eq!(profile.research_overrides().count(), 16);
     for (command, entry) in profile.research_overrides() {
         assert_eq!(profile.status(command), CommandStatus::Unreviewed);
         let expected = if command == 0x2a5 {
             ResearchId::Particles
         } else if matches!(command, 0x2a6 | 0x330..=0x332) {
             ResearchId::CollisionParticles
+        } else if command == 0x2a8 {
+            ResearchId::Fragments
         } else if command == 0x2a2 {
             ResearchId::FallingBillboards
         } else if command == 0x2ed {

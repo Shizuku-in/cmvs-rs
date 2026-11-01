@@ -361,6 +361,7 @@ pub enum Capability {
     Effects,
     EffectObjects,
     ParticleImages,
+    SceneRandom,
     FadeWait,
     MaskWait,
     QuakeWait,
@@ -435,6 +436,7 @@ impl Hosts<'_> {
             Capability::Effects => self.effects.is_some(),
             Capability::EffectObjects => self.scene.is_some(),
             Capability::ParticleImages => self.images.is_some() && self.random.is_some(),
+            Capability::SceneRandom => self.scene.is_some() && self.random.is_some(),
             Capability::FadeWait
             | Capability::MaskWait
             | Capability::QuakeWait
@@ -4491,6 +4493,26 @@ pub static FALLING_BILLBOARDS: &[Entry] = &[Entry {
     },
 }];
 
+pub static FRAGMENTS: &[Entry] = &[Entry {
+    command: 0x2a8,
+    name: "create image fragment effect",
+    capability: Capability::SceneRandom,
+    handler: |hosts, call| {
+        hosts
+            .scene
+            .as_deref_mut()
+            .expect("scene random capability checked")
+            .create_fragments(
+                call,
+                hosts
+                    .random
+                    .as_deref_mut()
+                    .expect("scene random capability checked"),
+            )?;
+        Ok(Flow::Done)
+    },
+}];
+
 pub static COLLISION_PARTICLES: &[Entry] = &[
     Entry {
         command: 0x2a6,
@@ -4558,6 +4580,7 @@ pub static RESEARCH_TABLES: &[&[Entry]] = &[
     BACKGROUND_AUDIO,
     FALLING_BILLBOARDS,
     COLLISION_PARTICLES,
+    FRAGMENTS,
 ];
 
 pub fn research_entry(id: crate::profile::ResearchId, command: u16) -> Option<&'static Entry> {
@@ -4567,6 +4590,7 @@ pub fn research_entry(id: crate::profile::ResearchId, command: u16) -> Option<&'
         crate::profile::ResearchId::BackgroundAudio => BACKGROUND_AUDIO,
         crate::profile::ResearchId::FallingBillboards => FALLING_BILLBOARDS,
         crate::profile::ResearchId::CollisionParticles => COLLISION_PARTICLES,
+        crate::profile::ResearchId::Fragments => FRAGMENTS,
     };
     entries.iter().find(|entry| entry.command == command)
 }
@@ -4583,6 +4607,9 @@ pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
         }
         Semantics::Research(crate::profile::ResearchId::CollisionParticles) => {
             "research collision particle override"
+        }
+        Semantics::Research(crate::profile::ResearchId::Fragments) => {
+            "research image fragment override"
         }
         Semantics::Root => "base semantics",
     }

@@ -233,9 +233,21 @@ mod tests {
                 .contains("active particle effects")
         );
         run.scene.particle_effects.clear();
-        for collision in [false, true] {
+        for kind in 0..3 {
             run.scene.falling_effects.clear();
-            if collision {
+            run.scene.collision_effects.clear();
+            if kind == 2 {
+                run.scene.fragment_effects.insert(
+                    3,
+                    crate::effect_objects::FragmentEffect {
+                        parameters: [20, 1000],
+                        elapsed: 0,
+                        complete: false,
+                        pool: Default::default(),
+                        fragments: Vec::new(),
+                    },
+                );
+            } else if kind == 1 {
                 run.scene.collision_effects.insert(
                     2,
                     crate::effect_objects::CollisionEffect {
@@ -269,6 +281,15 @@ mod tests {
                     .contains("active particle effects")
             );
         }
+        run.scene.collision_effects.insert(
+            2,
+            crate::effect_objects::CollisionEffect {
+                mode: 0,
+                parameters: [0; 2],
+                pool: Default::default(),
+                particles: Vec::new(),
+            },
+        );
         run.scene.falling_effects.insert(
             1,
             crate::effect_objects::FallingEffect {
@@ -300,6 +321,7 @@ mod tests {
         assert!(run.scene.particle_effects().is_empty());
         assert!(run.scene.falling_effects().is_empty());
         assert!(run.scene.collision_effects().is_empty());
+        assert!(run.scene.fragment_effects().is_empty());
         assert!(!run.message_flags.skip());
         assert!(!run.message_flags.auto_advance());
         assert!(run.save_menu.popup_enabled());
