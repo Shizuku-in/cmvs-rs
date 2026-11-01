@@ -1,6 +1,7 @@
-//! Incremental command-table migration. Root entries share one dispatch path;
-//! text research overrides are sparse. Other commands still use the legacy chain. Gate checks run
-//! before this table. A selected override never falls through to root semantics.
+//! Shared static system-command routing and sparse text research overrides.
+//! Gate resolution precedes dispatch. Runtime-wide operations return a checked
+//! request for the caller's orchestration; they remain pending until acknowledged.
+//! A selected override never falls through to root semantics.
 pub mod ownership;
 
 use std::{error::Error, fmt};
@@ -85,6 +86,7 @@ pub struct AudioHosts<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flow {
+    Runtime(RuntimeCall),
     Control(ControlEvent),
     SystemSave(SystemSaveEvent),
     SystemWritten,
@@ -130,6 +132,92 @@ pub struct WaitHosts<'a> {
     pub change_images: bool,
 }
 
+/// Work requiring the runtime's complete host set. The VM remains pending until
+/// the caller executes the request and acknowledges the original invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeOperation {
+    Quit,
+    Reset,
+    CaptureSnapshot,
+    SaveSlot {
+        slot: u32,
+    },
+    LoadSlot {
+        slot: u32,
+    },
+    EditSlots {
+        first: u32,
+        second: u32,
+    },
+    Thumbnail,
+    LatestSlot {
+        start: i32,
+        count: i32,
+    },
+    SlotInfo {
+        slot: i32,
+        object: u32,
+        child: i32,
+        label_slot: u32,
+        text_slot: u32,
+    },
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeCall {
+    pc: usize,
+    command: u16,
+    arguments: u64,
+    operation: RuntimeOperation,
+    stack_len: usize,
+    values: [u32; 5],
+}
+impl RuntimeCall {
+    pub fn operation(&self) -> RuntimeOperation {
+        self.operation
+    }
+    pub fn pc(&self) -> usize {
+        self.pc
+    }
+    pub fn command(&self) -> u16 {
+        self.command
+    }
+    /// Reject stale work before any runtime side effect or VM acknowledgement.
+    pub fn validate(&self, vm: &Machine<'_>) -> Result<(), DecodeError> {
+        if vm.pending_system() != Some((self.pc, self.command))
+            || vm.stack().len_bytes() != self.stack_len
+            || (0..self.arguments.count_ones() as usize)
+                .any(|i| vm.stack().peek_u32(4 * (i + 1)).ok() != Some(self.values[i]))
+        {
+            return Err(error(
+                self.pc,
+                self.command + 0x2000,
+                "runtime request no longer matches the pending command",
+            ));
+        }
+        Ok(())
+    }
+    pub fn complete(&self, vm: &mut Machine<'_>, flags: u16) -> Result<Flow, DecodeError> {
+        self.validate(vm)?;
+        Call {
+            vm,
+            pc: self.pc,
+            command: self.command,
+            arguments: self.arguments,
+        }
+        .finish(flags)
+    }
+}
+pub struct SnapshotHosts<'a> {
+    pub image: &'a mut crate::snapshot::SaveImage,
+    pub capture: bool,
+    pub continue_without_image: bool,
+}
+pub struct MessageWaitHosts<'a> {
+    pub messages: &'a mut MessageHost,
+    pub input: &'a mut ActionInput,
+    pub flags: MessageFlags,
+    pub context: crate::message::AutoAdvanceContext<'a>,
+}
 pub struct ScriptHosts<'a> {
     pub host: &'a mut ScriptControl,
     pub source: &'a mut dyn ScriptSource,
@@ -174,6 +262,9 @@ pub struct MoviePlayerHosts<'a> {
 
 #[derive(Default)]
 pub struct Hosts<'a> {
+    pub runtime: bool,
+    pub snapshot: Option<SnapshotHosts<'a>>,
+    pub message_wait: Option<MessageWaitHosts<'a>>,
     pub scripts: Option<ScriptHosts<'a>>,
     pub system_read: Option<SystemReadHosts<'a>>,
     pub system_write: Option<SystemWriteHosts<'a>>,
@@ -219,6 +310,9 @@ pub struct Hosts<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Capability {
+    Runtime,
+    Snapshot,
+    MessageWait,
     ScriptControl,
     SystemRead,
     SystemWrite,
@@ -278,6 +372,9 @@ pub enum Capability {
 impl Hosts<'_> {
     fn has(&self, capability: Capability) -> bool {
         match capability {
+            Capability::Runtime => self.runtime,
+            Capability::Snapshot => self.snapshot.is_some(),
+            Capability::MessageWait => self.message_wait.is_some(),
             Capability::ScriptControl => self.scripts.is_some(),
             Capability::SystemRead => self.system_read.is_some(),
             Capability::SystemWrite => self.system_write.is_some(),
@@ -439,6 +536,28 @@ impl<'a, 'script> Call<'a, 'script> {
         self.vm.call_script(slot, target)
     }
 
+    fn defer(&self, operation: RuntimeOperation, bytes: usize) -> Result<Flow, DecodeError> {
+        if bytes > 20 {
+            return Err(self.error("runtime request exceeds its parameter capacity"));
+        }
+        self.require_arguments(bytes)?;
+        let mut values = [0; 5];
+        for (i, value) in values.iter_mut().take(bytes / 4).enumerate() {
+            *value = self
+                .vm
+                .stack()
+                .peek_u32(4 * (i + 1))
+                .map_err(|_| self.error("runtime argument is unknown"))?;
+        }
+        Ok(Flow::Runtime(RuntimeCall {
+            pc: self.pc,
+            command: self.command,
+            arguments: self.arguments,
+            operation,
+            stack_len: self.vm.stack().len_bytes(),
+            values,
+        }))
+    }
     pub fn complete(&mut self, flags: u16) -> Result<(), DecodeError> {
         self.finish(flags).map(|_| ())
     }
@@ -860,6 +979,105 @@ pub fn uses_input(command: u16) -> bool {
     })
 }
 
+fn root_runtime(_hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    use RuntimeOperation::*;
+    let (operation, bytes) = match call.command {
+        1 => (Quit, 0),
+        3 => (Reset, 0),
+        0x2b5 => (
+            LoadSlot {
+                slot: call.argument(4, "save slot")?,
+            },
+            4,
+        ),
+        0x2b6 => (
+            SaveSlot {
+                slot: call.argument(4, "save slot")?,
+            },
+            4,
+        ),
+        0x28c | 0x28e => (
+            EditSlots {
+                first: call.argument(4, "first slot")?,
+                second: call.argument(8, "second slot")?,
+            },
+            8,
+        ),
+        0x2b8 => (Thumbnail, 0),
+        0x2b7 => (
+            LatestSlot {
+                start: call.argument(4, "first slot")? as i32,
+                count: call.argument(8, "slot count")? as i32,
+            },
+            8,
+        ),
+        0x2bd => {
+            let (slot, object, child) = (
+                call.argument(4, "save slot")? as i32,
+                call.argument(8, "object slot")?,
+                call.argument(12, "child slot")? as i32,
+            );
+            let label_slot = crate::text::bank_slot(call.argument(16, "label destination")?)
+                .ok_or_else(|| {
+                    call.error("label destination outside the string bank is not modeled")
+                })?;
+            let text_slot = crate::text::bank_slot(call.argument(20, "text destination")?)
+                .ok_or_else(|| {
+                    call.error("text destination outside the string bank is not modeled")
+                })?;
+            (
+                SlotInfo {
+                    slot,
+                    object,
+                    child,
+                    label_slot,
+                    text_slot,
+                },
+                20,
+            )
+        }
+        _ => unreachable!("registered runtime command"),
+    };
+    Ok(call.defer(operation, bytes)?)
+}
+fn root_snapshot(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    let h = hosts
+        .snapshot
+        .as_mut()
+        .expect("snapshot capability checked");
+    if h.capture {
+        return Ok(if hosts.runtime {
+            call.defer(RuntimeOperation::CaptureSnapshot, 0)?
+        } else {
+            Flow::Unavailable
+        });
+    }
+    if !h.continue_without_image {
+        return Ok(Flow::Unavailable);
+    }
+    h.image.handle_unavailable(call)?;
+    Ok(Flow::Done)
+}
+fn root_message_wait(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    let h = hosts
+        .message_wait
+        .as_mut()
+        .expect("message wait capability checked");
+    Ok(h.messages.handle_wait(call, h.input, h.flags, h.context)?)
+}
+pub fn is_message_wait(command: u16) -> bool {
+    ROOT.iter()
+        .any(|e| e.command == command && e.capability == Capability::MessageWait)
+}
+pub fn is_lifecycle(command: u16) -> bool {
+    ROOT.iter().any(|e| {
+        e.command == command && e.capability == Capability::Runtime && matches!(command, 1 | 3)
+    })
+}
+
 fn root_script_control(
     hosts: &mut Hosts<'_>,
     call: &mut Call<'_, '_>,
@@ -1180,6 +1398,78 @@ pub fn is_wait(command: u16) -> bool {
 }
 
 pub static ROOT: &[Entry] = &[
+    Entry {
+        command: 0x1,
+        name: "quit runtime",
+        capability: Capability::Runtime,
+        handler: root_runtime,
+    },
+    Entry {
+        command: 0x3,
+        name: "reset runtime",
+        capability: Capability::Runtime,
+        handler: root_runtime,
+    },
+    Entry {
+        command: 0x28c,
+        name: "swap save slots",
+        capability: Capability::Runtime,
+        handler: root_runtime,
+    },
+    Entry {
+        command: 0x28e,
+        name: "move save slot",
+        capability: Capability::Runtime,
+        handler: root_runtime,
+    },
+    Entry {
+        command: 0x2b5,
+        name: "load save slot",
+        capability: Capability::Runtime,
+        handler: root_runtime,
+    },
+    Entry {
+        command: 0x2b6,
+        name: "write save slot",
+        capability: Capability::Runtime,
+        handler: root_runtime,
+    },
+    Entry {
+        command: 0x2b8,
+        name: "build thumbnail",
+        capability: Capability::Runtime,
+        handler: root_runtime,
+    },
+    Entry {
+        command: 0x2b7,
+        name: "latest save slot",
+        capability: Capability::Runtime,
+        handler: root_runtime,
+    },
+    Entry {
+        command: 0x2bd,
+        name: "save slot information",
+        capability: Capability::Runtime,
+        handler: root_runtime,
+    },
+    Entry {
+        command: 0x2b2,
+        name: "snapshot policy",
+        capability: Capability::Snapshot,
+        handler: root_snapshot,
+    },
+    Entry {
+        command: 0x153,
+        name: "message wait",
+        capability: Capability::MessageWait,
+        handler: root_message_wait,
+    },
+    Entry {
+        command: 0x158,
+        name: "timed message wait",
+        capability: Capability::MessageWait,
+        handler: root_message_wait,
+    },
     Entry {
         command: 0x80,
         name: "replace main script",

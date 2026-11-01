@@ -3,6 +3,7 @@
 //! 0x140069fd0), thumbnails 0x22b8 (0x14006b4a0) and the slot queries 0x22b7 / 0x22bd.
 use super::{Startup, SystemOutput};
 use crate::{
+    dispatch::RuntimeCall,
     evaluate::error,
     message::{MESSAGE_WINDOWS, TEXT_OBJECTS},
     platform::PlatformBackend,
@@ -14,8 +15,6 @@ use crate::{
         CapturedSave, EngineSnapshot, LocalVariables, SaveImage, SavedScene, SavedWindow,
         SnapshotLayout,
     },
-    text::bank_slot,
-    vm::SystemResult,
 };
 use std::{collections::BTreeMap, error::Error, fs, io::Write, path::Path};
 
@@ -379,46 +378,36 @@ impl Startup<'_> {
     }
 
     /// 0x22b6 / 0x1400812f0: SP-4 slot; slots above 999 are ignored. Returns 0x4004.
-    pub(super) fn try_save_slot(&mut self) -> Result<bool, Box<dyn Error>> {
-        let Some((pc, 0x2b6)) = self.machine.pending_system() else {
-            return Ok(false);
-        };
-        let slot = self
-            .machine
-            .stack()
-            .peek_u32(4)
-            .map_err(|e| error(pc, 0x22b6, e.0))?;
+    pub(super) fn handle_save_slot(
+        &mut self,
+        request: &RuntimeCall,
+        slot: u32,
+    ) -> Result<(), Box<dyn Error>> {
         if slot <= 999 {
             self.write_slot(slot as u16, false)?;
         }
-        self.machine.complete_system(SystemResult(0x4004))?;
-        Ok(true)
+        request.complete(&mut self.machine, 0x4004)?;
+        Ok(())
     }
 
     /// 0x22b5 / 0x140082340: SP-4 slot. The load replaces the VM, so the result flags are
     /// applied by hand: 0x2000 (repeat + 1) when the restored repeat count is nonzero, else
     /// 0 (repeat reset, nothing popped, the restored PC runs next).
-    pub(super) fn try_load_slot(
+    pub(super) fn handle_load_slot(
         &mut self,
+        request: &RuntimeCall,
+        slot: u32,
         backend: &mut impl PlatformBackend,
-    ) -> Result<bool, Box<dyn Error>> {
-        let Some((pc, 0x2b5)) = self.machine.pending_system() else {
-            return Ok(false);
-        };
-        let slot = self
-            .machine
-            .stack()
-            .peek_u32(4)
-            .map_err(|e| error(pc, 0x22b5, e.0))?;
+    ) -> Result<(), Box<dyn Error>> {
         if slot > 999 {
-            self.machine.complete_system(SystemResult(0x4004))?;
-            return Ok(true);
+            request.complete(&mut self.machine, 0x4004)?;
+            return Ok(());
         }
         self.load_slot(slot as u16, backend)?;
         let repeat = self.machine.repeat_count();
         self.machine
             .set_repeat_count(if repeat != 0 { repeat + 1 } else { 0 });
-        Ok(true)
+        Ok(())
     }
 
     /// The load 0x22b5 performs, from any point between VM steps: the slot replaces the VM
@@ -625,10 +614,7 @@ impl Startup<'_> {
     /// 0x22b8: 0x14006b4a0 builds the thumbnail from the screen capture when one exists,
     /// otherwise from the frame; returns 0x4000. Text glyphs drawn by the desktop font
     /// backend are not part of the core frame.
-    pub(super) fn try_thumbnail(&mut self) -> Result<bool, Box<dyn Error>> {
-        if !matches!(self.machine.pending_system(), Some((_, 0x2b8))) {
-            return Ok(false);
-        }
+    pub(super) fn handle_thumbnail(&mut self, request: &RuntimeCall) -> Result<(), Box<dyn Error>> {
         let config = self
             .platform
             .thumbnail()
@@ -638,24 +624,19 @@ impl Startup<'_> {
             None => self.render_frame()?,
         };
         let bmp = thumbnail_bmp(&frame, config.width, config.height);
-        self.machine.complete_system(SystemResult(0x4000))?;
+        request.complete(&mut self.machine, 0x4000)?;
         self.thumbnail = Some(bmp);
-        Ok(true)
+        Ok(())
     }
 
     /// 0x22b7 / 0x14007caf0: SP-4 first slot, SP-8 count. System result 0 is the slot in
     /// range whose label orders latest (0x140093490), or -1; out of range also gives -1.
-    pub(super) fn try_latest_slot(&mut self) -> Result<bool, Box<dyn Error>> {
-        let Some((pc, 0x2b7)) = self.machine.pending_system() else {
-            return Ok(false);
-        };
-        let arg = |d| {
-            self.machine
-                .stack()
-                .peek_u32(d)
-                .map_err(|e| error(pc, 0x22b7, e.0))
-        };
-        let (start, count) = (arg(4)? as i32, arg(8)? as i32);
+    pub(super) fn handle_latest_slot(
+        &mut self,
+        request: &RuntimeCall,
+        start: i32,
+        count: i32,
+    ) -> Result<(), Box<dyn Error>> {
         let mut latest = u32::MAX;
         if start >= 0 && count.wrapping_add(start) <= 999 {
             let mut best = 0;
@@ -670,12 +651,12 @@ impl Startup<'_> {
                 }
             }
         }
-        self.machine.complete_system(SystemResult(0x4008))?;
+        request.complete(&mut self.machine, 0x4008)?;
         self.machine
             .state_mut()
             .set_system_integer(0, latest)
             .expect("slot 0 exists");
-        Ok(true)
+        Ok(())
     }
 
     /// 0x22bd / 0x14007cf10: SP-4 slot, SP-8 object, SP-12 child (negative = the object
@@ -683,41 +664,41 @@ impl Startup<'_> {
     /// second text (+272). Results 0 = found, 1 = label order key, 4..6 = header 528..536;
     /// the thumbnail becomes the target image (a blank opaque black one when the header
     /// enables thumbnails but the file has none). Returns 0x4014.
-    pub(super) fn try_slot_info(&mut self) -> Result<bool, Box<dyn Error>> {
-        let Some((pc, 0x2bd)) = self.machine.pending_system() else {
-            return Ok(false);
-        };
+    pub(super) fn handle_slot_info(
+        &mut self,
+        request: &RuntimeCall,
+        slot: i32,
+        object: u32,
+        child: i32,
+        label_slot: u32,
+        text_slot: u32,
+    ) -> Result<(), Box<dyn Error>> {
+        let pc = request.pc();
         let fail = |why: &'static str| error(pc, 0x22bd, why);
-        let arg = |d| self.machine.stack().peek_u32(d).map_err(|e| fail(e.0));
-        let (slot, object, child) = (arg(4)? as i32, arg(8)?, arg(12)? as i32);
-        let label_slot = bank_slot(arg(16)?)
-            .ok_or_else(|| fail("label destination outside the string bank is not modeled"))?;
-        let text_slot = bank_slot(arg(20)?)
-            .ok_or_else(|| fail("text destination outside the string bank is not modeled"))?;
         if slot < 0 || object > 255 || slot > 999 {
-            self.machine.complete_system(SystemResult(0x4014))?;
+            request.complete(&mut self.machine, 0x4014)?;
             self.machine
                 .state_mut()
                 .set_system_integer(0, 0)
                 .expect("slot 0 exists");
-            return Ok(true);
+            return Ok(());
         }
         let Some(bytes) = self.saves.read_slot(slot as u16)? else {
-            self.machine.complete_system(SystemResult(0x4014))?;
+            request.complete(&mut self.machine, 0x4014)?;
             self.machine
                 .state_mut()
                 .set_system_integer(0, 0)
                 .expect("slot 0 exists");
-            return Ok(true);
+            return Ok(());
         };
         if bytes.len() < HEADER_SIZE || &bytes[..3] != b"CSV" || !(b'2'..=b'9').contains(&bytes[3])
         {
-            self.machine.complete_system(SystemResult(0x4014))?;
+            request.complete(&mut self.machine, 0x4014)?;
             self.machine
                 .state_mut()
                 .set_system_integer(0, 0)
                 .expect("slot 0 exists");
-            return Ok(true);
+            return Ok(());
         }
         let header = SaveHeader::parse(&bytes[..HEADER_SIZE])?;
         let c_string = |field: &[u8]| {
@@ -770,7 +751,7 @@ impl Startup<'_> {
         if label.len() >= 1024 || text.len() >= 1024 {
             return Err(fail("save label overflows its string slot").into());
         }
-        self.machine.complete_system(SystemResult(0x4014))?;
+        request.complete(&mut self.machine, 0x4014)?;
         let state = self.machine.state_mut();
         state
             .set_string(label_slot, &label)
@@ -785,7 +766,7 @@ impl Startup<'_> {
         ] {
             state.set_system_integer(index, value).expect("slot exists");
         }
-        Ok(true)
+        Ok(())
     }
 }
 

@@ -1,13 +1,14 @@
 //! QUIT and RESET for the hash-bound cmvs-20160201 layout.
 use super::{Startup, StartupEvent};
-use crate::{script_control::ScriptSource, vm::SystemResult};
+use crate::{dispatch::RuntimeCall, script_control::ScriptSource};
 use std::error::Error;
 
 impl<'a> Startup<'a> {
-    pub(super) fn try_lifecycle(&mut self) -> Result<Option<StartupEvent>, Box<dyn Error>> {
-        let Some((_, command @ (0x01 | 0x03))) = self.machine.pending_system() else {
-            return Ok(None);
-        };
+    pub(super) fn handle_lifecycle(
+        &mut self,
+        request: &RuntimeCall,
+    ) -> Result<StartupEvent, Box<dyn Error>> {
+        let command = request.command();
         // Load/validate the replacement before destructive cleanup. Failure leaves RESET
         // pending, with the old VM and hosts intact; no game file is ever written.
         let replacement = if command == 0x03 {
@@ -25,13 +26,13 @@ impl<'a> Startup<'a> {
         self.audio
             .stop_for_lifecycle(self.audio_backend.as_mut(), command == 0x03)?;
         if command == 0x01 {
-            self.machine.complete_system(SystemResult(0x4000))?;
+            request.complete(&mut self.machine, 0x4000)?;
             self.movies.restore(Default::default());
             self.quit = true;
-            return Ok(Some(StartupEvent::Quit));
+            return Ok(StartupEvent::Quit);
         }
         self.finish_reset(replacement.expect("RESET replacement prepared"));
-        Ok(Some(StartupEvent::Progress))
+        Ok(StartupEvent::Progress)
     }
 
     fn finish_reset(&mut self, replacement: crate::machine::PreparedMain<'a>) {

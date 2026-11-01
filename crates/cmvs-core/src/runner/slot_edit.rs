@@ -1,6 +1,6 @@
 //! 0x228c / 0x140068dd0 and 0x228e / 0x1400690b0, restricted to the locked user directory.
 use super::Startup;
-use crate::{evaluate::error, vm::SystemResult};
+use crate::dispatch::RuntimeCall;
 use std::{error::Error, fs, io, path::PathBuf};
 
 enum Operation {
@@ -91,17 +91,13 @@ impl SlotEdit {
 }
 
 impl Startup<'_> {
-    pub(super) fn try_edit_slots(&mut self) -> Result<bool, Box<dyn Error>> {
-        let Some((pc, command @ (0x28c | 0x28e))) = self.machine.pending_system() else {
-            return Ok(false);
-        };
-        let arg = |distance| {
-            self.machine
-                .stack()
-                .peek_u32(distance)
-                .map_err(|e| error(pc, command + 0x2000, e.0))
-        };
-        let (first, second) = (arg(4)?, arg(8)?);
+    pub(super) fn handle_edit_slots(
+        &mut self,
+        request: &RuntimeCall,
+        first: u32,
+        second: u32,
+    ) -> Result<(), Box<dyn Error>> {
+        let (pc, command) = (request.pc(), request.command());
         if first <= 999 && second <= 999 {
             let identity = (pc, command, first, second);
             if self.slot_edit.is_none() {
@@ -116,8 +112,8 @@ impl Startup<'_> {
                 self.save_menu.refresh_slots(&mut self.saves)?;
             }
         }
-        self.machine.complete_system(SystemResult(0x4008))?;
+        request.complete(&mut self.machine, 0x4008)?;
         self.slot_edit = None;
-        Ok(true)
+        Ok(())
     }
 }

@@ -2,7 +2,6 @@
 //! Captures use the supported record layouts; skipped captures are tracked as unavailable.
 use crate::{
     FormatError, bytecode::DecodeError, dispatch::Call, evaluate::error, machine::Machine,
-    vm::SystemResult,
 };
 use std::ops::Range;
 
@@ -192,17 +191,26 @@ impl SaveImage {
         if !continue_without_image {
             return Ok(false);
         }
+        self.handle_unavailable(&mut Call::new(vm, pc, 0x2b2))?;
+        Ok(true)
+    }
+    pub(crate) fn handle_unavailable(
+        &mut self,
+        call: &mut Call<'_, '_>,
+    ) -> Result<(), DecodeError> {
+        let pc = call.pc;
         // Validate/apply the only fallible live-state change before completing the
         // verified no-argument command. Completion advances PC and resets repeat.
-        vm.state_mut()
+        call.vm
+            .state_mut()
             .set_bit(0, false)
             .map_err(|why| error(pc, 0x22b2, why))?;
-        vm.complete_system(SystemResult(0x4000))?;
+        call.complete(0x4000)?;
         *self = Self::Unavailable {
-            script: vm.current_name().to_vec(),
-            pc: vm.pc(),
+            script: call.vm.current_name().to_vec(),
+            pc: call.vm.pc(),
         };
-        Ok(true)
+        Ok(())
     }
 
     /// Applies 0x140069270's only VM-visible effect without building the image:

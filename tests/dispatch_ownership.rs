@@ -87,6 +87,8 @@ fn audit(handler: &str, mut probe: impl FnMut(&mut Machine<'_>) -> bool) {
             });
         }
         let capability = match handler {
+            "message::try_wait_with_auto" => Some(Capability::MessageWait),
+            "snapshot::SaveImage::try_handle" => Some(Capability::Snapshot),
             "script_control::try_handle" => Some(Capability::ScriptControl),
             "system_save::try_handle" => Some(Capability::SystemRead),
             "system_save::try_write" => Some(Capability::SystemWrite),
@@ -425,6 +427,24 @@ fn inventory_matches_wait_and_resource_host_recognition_exhaustively() {
                     source: &mut Unavailable,
                     change_images: true,
                 }),
+                runtime: true,
+                snapshot: Some(cmvs_rs::dispatch::SnapshotHosts {
+                    image: &mut cmvs_rs::snapshot::SaveImage::default(),
+                    capture: false,
+                    continue_without_image: true,
+                }),
+                message_wait: Some(cmvs_rs::dispatch::MessageWaitHosts {
+                    messages: &mut MessageHost::default(),
+                    input: &mut ActionInput::default(),
+                    flags: Default::default(),
+                    context: cmvs_rs::message::AutoAdvanceContext {
+                        settings: Default::default(),
+                        delta_ms: 0,
+                        gesture_result: false,
+                        read_eligible: true,
+                        audio: &RecordingAudio::default(),
+                    },
+                }),
                 scripts: Some(cmvs_rs::dispatch::ScriptHosts {
                     host: &mut cmvs_rs::script_control::ScriptControl::new(0),
                     source: &mut Unavailable,
@@ -577,36 +597,20 @@ fn all_overlaps_are_explicit_and_chain_orders_are_unique() {
         let overlaps: Vec<_> = (0..0x400)
             .filter(|&command| ownership::candidates(command, chain).len() > 1)
             .collect();
-        assert_eq!(
-            overlaps,
-            if chain == Chain::Runner {
-                vec![0x2b2]
-            } else {
-                vec![]
-            }
-        );
+        assert_eq!(overlaps, Vec::<u16>::new());
     }
     assert!(
         CLAIMS
             .iter()
             .all(|claim| !claim.recognizes(0x400) && !claim.recognizes(u16::MAX))
     );
-    let (command, expected) = (
-        0x2b2,
-        [
-            "runner::capture_snapshot",
-            "snapshot::SaveImage::try_handle",
-        ],
+    assert_eq!(
+        ownership::candidates(0x2b2, Chain::Runner)
+            .iter()
+            .map(|c| c.handler)
+            .collect::<Vec<_>>(),
+        ["dispatch::ROOT"]
     );
-    {
-        assert_eq!(
-            ownership::candidates(command, Chain::Runner)
-                .iter()
-                .map(|c| c.handler)
-                .collect::<Vec<_>>(),
-            expected
-        );
-    }
 }
 
 #[test]

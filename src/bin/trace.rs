@@ -489,6 +489,11 @@ fn run() -> Result<(), Box<dyn Error>> {
             if hosts.save_source.is_some() || platform_assets.is_some() {
                 hosts.popup = Some(&mut save_menu);
             }
+            hosts.snapshot = Some(cmvs_rs::dispatch::SnapshotHosts {
+                image: &mut save_image,
+                capture: false,
+                continue_without_image: continue_without_snapshot,
+            });
             let previous = platform_backend.requests().len();
             if let Some(assets) = &mut platform_assets {
                 hosts.platform = Some(cmvs_rs::dispatch::PlatformHosts {
@@ -877,6 +882,14 @@ fn run() -> Result<(), Box<dyn Error>> {
                             );
                         }
                     }
+                    Capability::Snapshot => {
+                        println!(
+                            "# scenario snapshot NOT built; bit[0] and repeat count cleared; save image unavailable: {save_image:?}"
+                        );
+                    }
+                    Capability::Runtime | Capability::MessageWait => {
+                        return Err("trace lacks runtime orchestration".into());
+                    }
                     Capability::SaveMenu => {
                         println!(
                             "# save menu applied 0x{:04x}; second_group_enabled={:?}",
@@ -993,12 +1006,6 @@ fn run() -> Result<(), Box<dyn Error>> {
                     command + 0x2000
                 );
                 return Ok(());
-            }
-            if save_image.try_handle(&mut machine, continue_without_snapshot)? {
-                println!(
-                    "# scenario snapshot NOT built; bit[0] and repeat count cleared; save image unavailable: {save_image:?}"
-                );
-                continue;
             }
             if let Some(host) = &mut bootstrap {
                 println!(

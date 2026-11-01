@@ -1,16 +1,16 @@
 //! Manual/automatic 0x2153 / 0x140076880 -> 0x14005e220 with an explicit read policy.
 //! A pointer gesture result gates completion; the +12244 bypass (0x2340) completes like the
 //! skip flag. Automatic advance uses explicit frame time and voice playback status.
-use super::{MessageHost, RESEARCH_SCREEN, window_slot};
+use super::{MessageHost, RESEARCH_SCREEN, call_window_slot};
 use crate::{
     audio::{AudioBackend, RecordingAudio},
     bytecode::DecodeError,
+    dispatch::{Call, Flow},
     evaluate::error,
     input::ActionInput,
     machine::{Machine, Step},
     message_flags::MessageFlags,
     settings::AutoAdvanceSettings,
-    vm::SystemResult,
 };
 
 #[derive(Clone, Copy)]
@@ -53,18 +53,26 @@ impl MessageHost {
         flags: MessageFlags,
         context: AutoAdvanceContext<'_>,
     ) -> Result<Option<Step>, DecodeError> {
-        if matches!(vm.pending_system(), Some((_, 0x158))) {
-            return self.try_wait_timed(vm, context);
-        }
-        let Some((pc, 0x153)) = vm.pending_system() else {
+        let Some((pc, command @ (0x153 | 0x158))) = vm.pending_system() else {
             return Ok(None);
         };
-        let slot = window_slot(vm, pc, 0x2153)?;
-        let _read = vm.stack().peek_u32(8).map_err(|e| error(pc, 0x2153, e.0))?;
-        let voice = vm
-            .stack()
-            .peek_u32(12)
-            .map_err(|e| error(pc, 0x2153, e.0))? as i32;
+        self.handle_wait(&mut Call::new(vm, pc, command), input, flags, context)
+            .map(|flow| Some(flow.wait_step()))
+    }
+    pub(crate) fn handle_wait(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        input: &mut ActionInput,
+        flags: MessageFlags,
+        context: AutoAdvanceContext<'_>,
+    ) -> Result<Flow, DecodeError> {
+        if call.command == 0x158 {
+            return self.wait_timed(call, context);
+        }
+        let pc = call.pc;
+        let slot = call_window_slot(call)?;
+        let _read = call.argument(8, "read identifier")?;
+        let voice = call.argument(12, "voice channel")? as i32;
         let mut window = self
             .window(slot)
             .ok_or_else(|| error(pc, 0x2153, "missing message window sets an unmodeled flag"))?
@@ -73,7 +81,7 @@ impl MessageHost {
             .text(window.text)
             .ok_or_else(|| error(pc, 0x2153, "message window without its text object"))?;
         if window.hidden {
-            return vm.yield_pending_system().map(Some);
+            return call.wait(12);
         }
         let mut done = !context.gesture_result
             && (input.held(7)
@@ -180,9 +188,9 @@ impl MessageHost {
             }
         }
         let step = if done {
-            vm.complete_system(SystemResult(0x400c))?
+            call.finish(0x400c)?
         } else {
-            vm.yield_pending_system()?
+            call.wait(12)?
         };
         self.windows[slot] = Some(window);
         self.auto_elapsed = if done { 0 } else { elapsed };
@@ -192,22 +200,20 @@ impl MessageHost {
         if advance {
             input.consume(20);
         }
-        Ok(Some(step))
+        Ok(step)
     }
 
     /// 0x2158 / 0x140076a40 -> 0x14005d4e0: an unconditional timed wait,
     /// independent of manual input, script auto/skip flags and 0x2153's timer.
-    fn try_wait_timed(
+    fn wait_timed(
         &mut self,
-        vm: &mut Machine<'_>,
+        call: &mut Call<'_, '_>,
         context: AutoAdvanceContext<'_>,
-    ) -> Result<Option<Step>, DecodeError> {
-        let (pc, _) = vm.pending_system().expect("checked by caller");
-        let slot = window_slot(vm, pc, 0x2158)?;
-        let voice = vm
-            .stack()
-            .peek_u32(12)
-            .map_err(|e| error(pc, 0x2158, e.0))? as i32;
+    ) -> Result<Flow, DecodeError> {
+        let pc = call.pc;
+        let slot = call_window_slot(call)?;
+        let voice = call.argument(12, "voice channel")? as i32;
+        call.ignore_argument(8, "unused read identifier")?;
         let mut window = self
             .window(slot)
             .ok_or_else(|| error(pc, 0x2158, "missing window sets an unmodeled flag"))?
@@ -216,7 +222,7 @@ impl MessageHost {
             .text(window.text)
             .ok_or_else(|| error(pc, 0x2158, "window without text object"))?;
         if window.hidden {
-            return vm.yield_pending_system().map(Some);
+            return call.wait(12);
         }
         let mut elapsed = self.timed_elapsed.wrapping_add(context.delta_ms);
         let done = if voice >= 0 && context.settings.sync_voice {
@@ -265,12 +271,12 @@ impl MessageHost {
             }
         }
         let step = if done {
-            vm.complete_system(SystemResult(0x400c))?
+            call.finish(0x400c)?
         } else {
-            vm.yield_pending_system()?
+            call.wait(12)?
         };
         self.windows[slot] = Some(window);
         self.timed_elapsed = if done { 0 } else { elapsed };
-        Ok(Some(step))
+        Ok(step)
     }
 }

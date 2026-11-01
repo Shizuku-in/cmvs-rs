@@ -1,3 +1,6 @@
+#[path = "support/shared_message_wait.rs"]
+mod shared_message_wait;
+use shared_message_wait::SharedMessageWait;
 #[path = "support/shared_windows.rs"]
 mod shared_windows;
 use cmvs_rs::{
@@ -260,7 +263,7 @@ fn timed_window_wait_ignores_manual_skip_and_auto_flags_and_finishes_without_yie
         for step in expected {
             assert_eq!(
                 messages
-                    .try_wait_with_auto(
+                    .shared_wait_auto(
                         &mut vm,
                         &mut input,
                         message_flags(true, auto, true),
@@ -1187,7 +1190,7 @@ fn message_wait_preserves_parameters_shows_pen_cursor_and_advances_on_release() 
     for count in 1..=2 {
         assert_eq!(
             messages
-                .try_wait(&mut vm, &mut input, wait_flags(false, false))
+                .shared_wait(&mut vm, &mut input, wait_flags(false, false))
                 .unwrap(),
             Some(Step::Yield)
         );
@@ -1201,7 +1204,7 @@ fn message_wait_preserves_parameters_shows_pen_cursor_and_advances_on_release() 
     }
     input.set(0, true, true, false).unwrap();
     messages
-        .try_wait(&mut vm, &mut input, wait_flags(false, false))
+        .shared_wait(&mut vm, &mut input, wait_flags(false, false))
         .unwrap();
     assert!(vm.pending_system().is_some());
     assert!(input.pressed(0));
@@ -1209,7 +1212,7 @@ fn message_wait_preserves_parameters_shows_pen_cursor_and_advances_on_release() 
     input.set(1, true, true, true).unwrap();
     assert_eq!(
         messages
-            .try_wait(&mut vm, &mut input, wait_flags(false, false))
+            .shared_wait(&mut vm, &mut input, wait_flags(false, false))
             .unwrap(),
         Some(Step::Continue)
     );
@@ -1247,7 +1250,7 @@ fn message_wait_button_edges_are_inclusive_and_drag_release_does_not_advance() {
         input.set_pointer(140, 260);
         input.set(0, true, true, false).unwrap();
         messages
-            .try_wait(&mut vm, &mut input, wait_flags(false, false))
+            .shared_wait(&mut vm, &mut input, wait_flags(false, false))
             .unwrap();
         assert_eq!(messages.window(0).unwrap().pressed_button, 0);
         if outside {
@@ -1255,7 +1258,7 @@ fn message_wait_button_edges_are_inclusive_and_drag_release_does_not_advance() {
         }
         input.set(0, false, false, true).unwrap();
         messages
-            .try_wait(&mut vm, &mut input, wait_flags(false, false))
+            .shared_wait(&mut vm, &mut input, wait_flags(false, false))
             .unwrap();
         assert!(vm.pending_system().is_some());
         assert!(!input.released(0));
@@ -1263,7 +1266,7 @@ fn message_wait_button_edges_are_inclusive_and_drag_release_does_not_advance() {
         input.set_pointer(141, 261);
         input.set(0, false, false, true).unwrap();
         messages
-            .try_wait(&mut vm, &mut input, wait_flags(false, false))
+            .shared_wait(&mut vm, &mut input, wait_flags(false, false))
             .unwrap();
         assert!(vm.pending_system().is_none());
     }
@@ -1284,7 +1287,7 @@ fn message_wait_skip_flags_and_actions_complete_without_consuming_other_edges() 
         input.set(action, true, true, true).unwrap();
         assert_eq!(
             messages
-                .try_wait(&mut vm, &mut input, wait_flags(skip, false))
+                .shared_wait(&mut vm, &mut input, wait_flags(skip, false))
                 .unwrap(),
             Some(Step::Continue)
         );
@@ -1314,7 +1317,7 @@ fn message_wait_action_twenty_release_advances_outside_buttons_and_consumes_both
             input.set_pointer(140, 260);
             input.set(0, true, true, false).unwrap();
             messages
-                .try_wait(&mut vm, &mut input, wait_flags(false, false))
+                .shared_wait(&mut vm, &mut input, wait_flags(false, false))
                 .unwrap();
             assert_eq!(messages.window(0).unwrap().pressed_button, 0);
             input.set(0, false, false, true).unwrap();
@@ -1329,7 +1332,7 @@ fn message_wait_action_twenty_release_advances_outside_buttons_and_consumes_both
         input.set(20, false, false, true).unwrap();
         input.set(1, true, true, true).unwrap();
         let step = messages
-            .try_wait(&mut vm, &mut input, wait_flags(false, false))
+            .shared_wait(&mut vm, &mut input, wait_flags(false, false))
             .unwrap();
         assert!(input.pressed(1) && input.released(1));
         if hovered {
@@ -1366,7 +1369,7 @@ fn message_wait_bypass_completes_like_skip_before_auto_advance_without_consuming
     // Auto advance alone is an explicit barrier; the bypass completes before reaching it.
     assert_eq!(
         messages
-            .try_wait(&mut vm, &mut input, message_flags(false, true, true))
+            .shared_wait(&mut vm, &mut input, message_flags(false, true, true))
             .unwrap(),
         Some(Step::Continue)
     );
@@ -1395,7 +1398,7 @@ fn message_wait_hidden_window_ignores_skip_and_preserves_all_input_and_children(
     let old = input.clone();
     assert_eq!(
         messages
-            .try_wait(&mut vm, &mut input, message_flags(true, true, true))
+            .shared_wait(&mut vm, &mut input, message_flags(true, true, true))
             .unwrap(),
         Some(Step::Yield)
     );
@@ -1436,7 +1439,7 @@ fn message_wait_rejects_missing_cursor_draw_and_bad_arguments_atomically() {
         let old = input.clone();
         assert!(
             messages
-                .try_wait(&mut vm, &mut input, wait_flags(false, auto))
+                .shared_wait(&mut vm, &mut input, wait_flags(false, auto))
                 .is_err()
         );
         assert_eq!(messages.window(0), before.as_ref());
@@ -1506,7 +1509,7 @@ fn unread_wait_blocks_normal_skip_but_force_skip_and_bypass_still_advance() {
         let old = input.clone();
         assert_eq!(
             messages
-                .try_wait_with_auto(
+                .shared_wait_auto(
                     &mut vm,
                     &mut input,
                     message_flags(skip, false, bypass),
@@ -1559,7 +1562,7 @@ fn unread_output_can_be_revealed_by_held_skip_while_the_following_wait_still_sto
     pending(&mut vm);
     assert_eq!(
         messages
-            .try_wait_with_auto(
+            .shared_wait_auto(
                 &mut vm,
                 &mut input,
                 flags,
@@ -1580,7 +1583,7 @@ fn unread_output_can_be_revealed_by_held_skip_while_the_following_wait_still_sto
     input.set(0, false, false, true).unwrap();
     assert_eq!(
         messages
-            .try_wait_with_auto(
+            .shared_wait_auto(
                 &mut vm,
                 &mut input,
                 flags,
@@ -1631,7 +1634,7 @@ fn pointer_gesture_result_blocks_auto_manual_and_skip_without_advancing_timer() 
     };
     assert_eq!(
         messages
-            .try_wait_with_auto(&mut vm, &mut input, wait_flags(true, true), context)
+            .shared_wait_auto(&mut vm, &mut input, wait_flags(true, true), context)
             .unwrap(),
         Some(Step::Yield)
     );
@@ -1640,7 +1643,7 @@ fn pointer_gesture_result_blocks_auto_manual_and_skip_without_advancing_timer() 
     for expected in [Step::Yield, Step::Continue] {
         assert_eq!(
             messages
-                .try_wait_with_auto(
+                .shared_wait_auto(
                     &mut vm,
                     &mut input,
                     wait_flags(false, true),
@@ -1699,7 +1702,7 @@ fn automatic_wait_uses_frame_delta_and_resets_after_manual_or_timed_completion()
     for expected in [Step::Yield, Step::Yield, Step::Continue] {
         assert_eq!(
             messages
-                .try_wait_with_auto(
+                .shared_wait_auto(
                     &mut vm,
                     &mut input,
                     wait_flags(false, true),
@@ -1719,7 +1722,7 @@ fn automatic_wait_uses_frame_delta_and_resets_after_manual_or_timed_completion()
     pending(&mut vm);
     assert_eq!(
         messages
-            .try_wait_with_auto(
+            .shared_wait_auto(
                 &mut vm,
                 &mut input,
                 wait_flags(false, true),
@@ -1737,7 +1740,7 @@ fn automatic_wait_uses_frame_delta_and_resets_after_manual_or_timed_completion()
     input.set(0, false, false, true).unwrap();
     assert_eq!(
         messages
-            .try_wait(&mut vm, &mut input, wait_flags(false, true))
+            .shared_wait(&mut vm, &mut input, wait_flags(false, true))
             .unwrap(),
         Some(Step::Continue)
     );
@@ -1746,7 +1749,7 @@ fn automatic_wait_uses_frame_delta_and_resets_after_manual_or_timed_completion()
     for expected in [Step::Yield, Step::Continue] {
         assert_eq!(
             messages
-                .try_wait_with_auto(
+                .shared_wait_auto(
                     &mut vm,
                     &mut input,
                     wait_flags(false, true),
@@ -1795,7 +1798,7 @@ fn automatic_wait_restarts_timer_while_voice_plays_and_waits_after_it_ends() {
         };
         assert_eq!(
             messages
-                .try_wait_with_auto(
+                .shared_wait_auto(
                     &mut vm,
                     &mut input,
                     wait_flags(false, true),
@@ -1832,7 +1835,7 @@ fn automatic_wait_voice_query_failure_preserves_timer_command_input_and_window()
     let settings = AutoAdvanceSettings::default();
     assert!(
         messages
-            .try_wait_with_auto(
+            .shared_wait_auto(
                 &mut vm,
                 &mut input,
                 wait_flags(false, true),
@@ -1856,7 +1859,7 @@ fn automatic_wait_voice_query_failure_preserves_timer_command_input_and_window()
     assert_eq!(vm.stack().len_bytes(), 12);
     assert_eq!(
         messages
-            .try_wait_with_auto(
+            .shared_wait_auto(
                 &mut vm,
                 &mut input,
                 wait_flags(false, true),
@@ -1901,7 +1904,7 @@ fn automatic_wait_hidden_window_pauses_timer_and_sync_off_ignores_voice_device()
     };
     assert_eq!(
         messages
-            .try_wait_with_auto(
+            .shared_wait_auto(
                 &mut vm,
                 &mut input,
                 wait_flags(false, true),
@@ -1924,7 +1927,7 @@ fn automatic_wait_hidden_window_pauses_timer_and_sync_off_ignores_voice_device()
     for expected in [Step::Yield, Step::Continue] {
         assert_eq!(
             messages
-                .try_wait_with_auto(
+                .shared_wait_auto(
                     &mut vm,
                     &mut input,
                     wait_flags(false, true),
@@ -4119,7 +4122,8 @@ fn font_cell_step(
             Ok(false)
         }
         Some(
-            cmvs_rs::dispatch::Flow::Control(_)
+            cmvs_rs::dispatch::Flow::Runtime(_)
+            | cmvs_rs::dispatch::Flow::Control(_)
             | cmvs_rs::dispatch::Flow::SystemSave(_)
             | cmvs_rs::dispatch::Flow::SystemWritten
             | cmvs_rs::dispatch::Flow::Platform(_),

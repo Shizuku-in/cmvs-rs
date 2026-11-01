@@ -1,4 +1,4 @@
-//! Read-only inventory of the two existing dispatch chains.
+//! Read-only shared ownership and runner/trace capability inventory.
 //!
 //! Commands use the VM's zero-based system-command number (opcode - 0x2000).
 //! A claim means a handler can recognize a command, not that its arguments,
@@ -38,6 +38,14 @@ impl Claim {
         if chain == Chain::Runner && self.handler == "dispatch::ROOT" && command == 0x129 {
             return Some(30);
         }
+        if chain == Chain::Runner && self.handler == "dispatch::ROOT" {
+            if super::is_lifecycle(command) {
+                return Some(10);
+            }
+            if super::is_message_wait(command) {
+                return Some(100);
+            }
+        }
         self.order(chain)
     }
 
@@ -58,82 +66,48 @@ impl Claim {
     }
 }
 
-macro_rules! claim {
-    ($handler:literal, $runner:expr, $trace:expr, $($pattern:pat_param)|+) => {
-        Claim {
-            handler: $handler,
-            runner_order: $runner,
-            trace_order: $trace,
-            runner_wait_order: None,
-            accepts: |command| matches!(command, $($pattern)|+),
-            trace_accepts: |command| matches!(command, $($pattern)|+),
-        }
-    };
-}
-
-/// All public chain entry points, including direct handling in runner. Internal
-/// delegates (scene fade/motion, button lists, auxiliary motion, audio branches)
-/// are folded into the entry that calls them. The root table combines migrated
-/// state handlers with text adapters over the existing MessageHost methods.
-pub static CLAIMS: &[Claim] = &[
-    claim!("runner::try_lifecycle", Some(10), None, 0x01 | 0x03),
-    claim!(
-        "message::try_wait_with_auto",
-        Some(100),
-        None,
-        0x153 | 0x158
-    ),
-    Claim {
-        handler: "dispatch::ROOT",
-        runner_order: Some(110),
-        runner_wait_order: Some(40),
-        // Trace exposes state hosts conditionally and has no text capability.
-        trace_order: Some(0),
-        accepts: |command| super::ROOT.iter().any(|entry| entry.command == command),
-        trace_accepts: |command| {
-            super::ROOT.iter().any(|entry| {
-                entry.command == command
-                    && !matches!(
-                        entry.capability,
-                        super::Capability::SystemWrite
-                            | super::Capability::FontDialog
-                            | super::Capability::Capture
-                            | super::Capability::CaptureDevice
-                            | super::Capability::MovieScene
-                            | super::Capability::MovieStart
-                            | super::Capability::Text
-                            | super::Capability::Math
-                            | super::Capability::SaveInfo
-                            | super::Capability::Effects
-                            | super::Capability::ChangeWait
-                            | super::Capability::CameraWait
-                            | super::Capability::ImageChange
-                            | super::Capability::ListInput
-                            | super::Capability::DragPress
-                            | super::Capability::Windows
-                            | super::Capability::WindowPointer
-                            | super::Capability::WindowButtons
-                            | super::Capability::WindowImages
-                            | super::Capability::TextState
-                            | super::Capability::AuxiliaryScene
-                    )
-            })
-        },
+/// Both environments route registered commands through ROOT. Capability filtering
+/// records which commands each environment can expose, not evidence approval or
+/// a promise that resource checks, runtime requests, or waits will complete.
+pub static CLAIMS: &[Claim] = &[Claim {
+    handler: "dispatch::ROOT",
+    runner_order: Some(110),
+    runner_wait_order: Some(40),
+    // Trace exposes state hosts conditionally and has no text capability.
+    trace_order: Some(0),
+    accepts: |command| super::ROOT.iter().any(|entry| entry.command == command),
+    trace_accepts: |command| {
+        super::ROOT.iter().any(|entry| {
+            entry.command == command
+                && !matches!(
+                    entry.capability,
+                    super::Capability::Runtime
+                        | super::Capability::MessageWait
+                        | super::Capability::SystemWrite
+                        | super::Capability::FontDialog
+                        | super::Capability::Capture
+                        | super::Capability::CaptureDevice
+                        | super::Capability::MovieScene
+                        | super::Capability::MovieStart
+                        | super::Capability::Text
+                        | super::Capability::Math
+                        | super::Capability::SaveInfo
+                        | super::Capability::Effects
+                        | super::Capability::ChangeWait
+                        | super::Capability::CameraWait
+                        | super::Capability::ImageChange
+                        | super::Capability::ListInput
+                        | super::Capability::DragPress
+                        | super::Capability::Windows
+                        | super::Capability::WindowPointer
+                        | super::Capability::WindowButtons
+                        | super::Capability::WindowImages
+                        | super::Capability::TextState
+                        | super::Capability::AuxiliaryScene
+                )
+        })
     },
-    claim!("runner::capture_snapshot", Some(160), None, 0x2b2),
-    claim!("runner::try_load_slot", Some(170), None, 0x2b5),
-    claim!("runner::try_edit_slots", Some(180), None, 0x28c | 0x28e),
-    claim!("runner::try_save_slot", Some(190), None, 0x2b6),
-    claim!("runner::try_thumbnail", Some(200), None, 0x2b8),
-    claim!("runner::try_latest_slot", Some(210), None, 0x2b7),
-    claim!("runner::try_slot_info", Some(220), None, 0x2bd),
-    claim!(
-        "snapshot::SaveImage::try_handle",
-        Some(240),
-        Some(10),
-        0x2b2
-    ),
-];
+}];
 
 /// Potential candidates, in the actual order for the requested chain. This does
 /// not resolve state-dependent ownership or run a handler/evidence gate.

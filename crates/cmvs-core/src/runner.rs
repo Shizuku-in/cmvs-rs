@@ -600,6 +600,42 @@ impl<'a> Startup<'a> {
         }
         Ok(event)
     }
+    fn handle_runtime(
+        &mut self,
+        request: crate::dispatch::RuntimeCall,
+        backend: &mut impl PlatformBackend,
+    ) -> Result<StartupEvent, Box<dyn Error>> {
+        use crate::dispatch::RuntimeOperation::*;
+        request.validate(&self.machine)?;
+        match request.operation() {
+            Quit | Reset => return self.handle_lifecycle(&request),
+            CaptureSnapshot => {
+                let pc = request.pc();
+                let mut vm = self
+                    .machine
+                    .capture_vm()
+                    .map_err(|why| crate::evaluate::error(pc, 0x22b2, why))?;
+                vm.pc = pc as u32 + 2;
+                vm.repeat_count = 0;
+                self.capture_snapshot(vm)?;
+                request.complete(&mut self.machine, 0x4000)?;
+                return Ok(StartupEvent::SnapshotCaptured);
+            }
+            LoadSlot { slot } => self.handle_load_slot(&request, slot, backend)?,
+            SaveSlot { slot } => self.handle_save_slot(&request, slot)?,
+            EditSlots { first, second } => self.handle_edit_slots(&request, first, second)?,
+            Thumbnail => self.handle_thumbnail(&request)?,
+            LatestSlot { start, count } => self.handle_latest_slot(&request, start, count)?,
+            SlotInfo {
+                slot,
+                object,
+                child,
+                label_slot,
+                text_slot,
+            } => self.handle_slot_info(&request, slot, object, child, label_slot, text_slot)?,
+        }
+        Ok(StartupEvent::Progress)
+    }
     fn step_once(
         &mut self,
         backend: &mut impl PlatformBackend,
@@ -636,8 +672,24 @@ impl<'a> Startup<'a> {
         if let Some(first) = resolved.first_unreviewed {
             self.notices.push(first);
         }
-        if let Some(event) = self.try_lifecycle()? {
-            return Ok(event);
+        if crate::dispatch::is_lifecycle(command) {
+            let flow = crate::dispatch::run(
+                resolved.semantics,
+                &mut self.machine,
+                &mut crate::dispatch::Hosts {
+                    runtime: true,
+                    ..Default::default()
+                },
+            )?;
+            return match flow {
+                Some(crate::dispatch::Flow::Runtime(request)) => {
+                    self.handle_runtime(request, backend)
+                }
+                _ => Ok(StartupEvent::Unhandled {
+                    pc,
+                    command: command + 0x2000,
+                }),
+            };
         }
         let id = self.bootstrap.settings().get(&0x201d).copied();
         if command == 0x129
@@ -709,7 +761,8 @@ impl<'a> Startup<'a> {
             self.resume_run = flow.yields();
             return Ok(match flow {
                 crate::dispatch::Flow::Done => StartupEvent::Progress,
-                crate::dispatch::Flow::Control(_)
+                crate::dispatch::Flow::Runtime(_)
+                | crate::dispatch::Flow::Control(_)
                 | crate::dispatch::Flow::SystemSave(_)
                 | crate::dispatch::Flow::SystemWritten
                 | crate::dispatch::Flow::Platform(_) => {
@@ -737,27 +790,39 @@ impl<'a> Startup<'a> {
         } else {
             (self.message_flags, true)
         };
-        if let Some(step) = self.messages.try_wait_with_auto(
-            &mut self.machine,
-            &mut self.input,
-            message_flags,
-            crate::message::AutoAdvanceContext {
-                settings: self.settings.auto_advance(),
-                delta_ms: self.timers.delta_ms(),
-                gesture_result: self
-                    .gesture
-                    .field(88)
-                    .is_some_and(|value| value as i32 >= 0),
-                read_eligible,
-                audio: self.audio_backend.as_ref(),
-            },
-        )? {
+        if crate::dispatch::is_message_wait(command) {
+            let flow = crate::dispatch::run(
+                resolved.semantics,
+                &mut self.machine,
+                &mut crate::dispatch::Hosts {
+                    message_wait: Some(crate::dispatch::MessageWaitHosts {
+                        messages: &mut self.messages,
+                        input: &mut self.input,
+                        flags: message_flags,
+                        context: crate::message::AutoAdvanceContext {
+                            settings: self.settings.auto_advance(),
+                            delta_ms: self.timers.delta_ms(),
+                            gesture_result: self
+                                .gesture
+                                .field(88)
+                                .is_some_and(|value| value as i32 >= 0),
+                            read_eligible,
+                            audio: self.audio_backend.as_ref(),
+                        },
+                    }),
+                    ..Default::default()
+                },
+            )?
+            .expect("registered message wait");
             self.message_flags = message_flags;
-            self.resume_run = step == Step::Yield;
-            return Ok(if step == Step::Yield {
-                StartupEvent::Yield
-            } else {
-                StartupEvent::Progress
+            self.resume_run = flow.yields();
+            return Ok(match flow {
+                crate::dispatch::Flow::Done => StartupEvent::Progress,
+                crate::dispatch::Flow::Wait | crate::dispatch::Flow::Yield => StartupEvent::Yield,
+                _ => StartupEvent::Unhandled {
+                    pc,
+                    command: command + 0x2000,
+                },
             });
         }
         if command == 0x128
@@ -782,6 +847,14 @@ impl<'a> Startup<'a> {
             .with_paths(self.bootstrap.paths(), ResourceKind::SceneMovie);
         let is_movie_player = crate::dispatch::uses_movie_player(command);
         let mut hosts = crate::dispatch::Hosts {
+            runtime: true,
+            message_wait: None,
+            snapshot: Some(crate::dispatch::SnapshotHosts {
+                image: &mut self.save_image,
+                capture: self.snapshot_policy == SnapshotPolicy::Capture,
+                continue_without_image: self.snapshot_policy
+                    == SnapshotPolicy::ContinueWithoutImage,
+            }),
             scripts: Some(crate::dispatch::ScriptHosts {
                 host: &mut self.control,
                 source: &mut self.source,
@@ -902,6 +975,9 @@ impl<'a> Startup<'a> {
         }
         if let Some(flow) = crate::dispatch::run(resolved.semantics, &mut self.machine, &mut hosts)?
         {
+            if let crate::dispatch::Flow::Runtime(request) = flow {
+                return self.handle_runtime(request, backend);
+            }
             if let crate::dispatch::Flow::SystemSave(event) = flow {
                 if !self.auto_resume_checked {
                     if let Some((_, integer)) = self.skip_auto_resume
@@ -943,7 +1019,8 @@ impl<'a> Startup<'a> {
                 return Ok(StartupEvent::Progress);
             }
             return Ok(match flow {
-                crate::dispatch::Flow::Control(_)
+                crate::dispatch::Flow::Runtime(_)
+                | crate::dispatch::Flow::Control(_)
                 | crate::dispatch::Flow::SystemSave(_)
                 | crate::dispatch::Flow::SystemWritten => {
                     unreachable!("storage event handled before ordinary flow")
@@ -970,39 +1047,6 @@ impl<'a> Startup<'a> {
                     }
                 }
             });
-        }
-        if self.snapshot_policy == SnapshotPolicy::Capture
-            && let Some((pc, 0x2b2)) = self.machine.pending_system()
-        {
-            // 0x14007c9a0 serializes with PC + 2 and repeat 0, which completing the
-            // no-argument command then produces; a failed capture keeps it pending.
-            let mut vm = self
-                .machine
-                .capture_vm()
-                .map_err(|why| crate::evaluate::error(pc, 0x22b2, why))?;
-            vm.pc = pc as u32 + 2;
-            vm.repeat_count = 0;
-            self.capture_snapshot(vm)?;
-            self.machine
-                .complete_system(crate::vm::SystemResult(0x4000))?;
-            return Ok(StartupEvent::SnapshotCaptured);
-        }
-        if self.try_load_slot(backend)? {
-            return Ok(StartupEvent::Progress);
-        }
-        if self.try_edit_slots()?
-            || self.try_save_slot()?
-            || self.try_thumbnail()?
-            || self.try_latest_slot()?
-            || self.try_slot_info()?
-        {
-            return Ok(StartupEvent::Progress);
-        }
-        if self.save_image.try_handle(
-            &mut self.machine,
-            self.snapshot_policy == SnapshotPolicy::ContinueWithoutImage,
-        )? {
-            return Ok(StartupEvent::Progress);
         }
         Ok(StartupEvent::Unhandled {
             pc,
