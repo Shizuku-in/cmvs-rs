@@ -879,10 +879,16 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
     let registry = Registry::builtin();
     let base = registry.profile("cmvs-20160201").unwrap();
     let chrono = registry.profile("cmvs-20150405").unwrap();
+    let aoitori = registry.profile("cmvs-20171114").unwrap();
     assert_eq!(base.base, None);
     assert_eq!(chrono.base.as_deref(), Some("cmvs-20160201"));
-    for (profile, handlers, noops) in [(base, 721, 255), (chrono, 712, 264)] {
-        assert_eq!(profile.statuses().len(), 976);
+    assert_eq!(aoitori.base.as_deref(), Some("cmvs-20160201"));
+    for (profile, cases, handlers, noops) in [
+        (base, 976, 721, 255),
+        (chrono, 976, 712, 264),
+        (aoitori, 992, 734, 258),
+    ] {
+        assert_eq!(profile.statuses().len(), cases);
         assert_eq!(profile.binaries.len(), 2);
         assert_eq!(
             profile.count(CommandStatus::Base)
@@ -907,6 +913,7 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
         games,
         [
             ("amatsutsumi", "cmvs-20160201", Some(2198)),
+            ("aoitori", "cmvs-20171114", None),
             ("chronoclock", "cmvs-20150405", None)
         ]
     );

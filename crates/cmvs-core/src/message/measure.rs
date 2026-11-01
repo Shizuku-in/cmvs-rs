@@ -22,15 +22,15 @@ pub(super) fn line_break_kind(rules: &LineBreakRules, code: u16) -> Result<u8, &
     Ok(0)
 }
 
-struct Layout<'a> {
-    text: &'a TextObject,
-    x: u32,
-    y: u32,
-    line: u32,
-    count: u32,
-    max: u32,
-    overflow: u32,
-    previous: u16,
+pub(super) struct Layout<'a> {
+    pub(super) text: &'a TextObject,
+    pub(super) x: u32,
+    pub(super) y: u32,
+    pub(super) line: u32,
+    pub(super) count: u32,
+    pub(super) max: u32,
+    pub(super) overflow: u32,
+    pub(super) previous: u16,
 }
 
 /// 0x140008080: Shift-JIS lead bytes, without checking the trail byte.
@@ -39,14 +39,14 @@ pub(super) fn lead(byte: u8) -> bool {
 }
 
 impl Layout<'_> {
-    fn limit(&self) -> u32 {
+    pub(super) fn limit(&self) -> u32 {
         (self.text.area[0] as u32)
             .wrapping_add(self.text.area[2] as u32)
             .wrapping_sub(self.text.spacing[0] as u32)
             .wrapping_sub(self.text.glyph_size as u32)
     }
 
-    fn newline(&mut self, reset: bool, ruby: bool) -> Result<(), &'static str> {
+    pub(super) fn newline(&mut self, reset: bool, ruby: bool) -> Result<(), &'static str> {
         self.line += 1;
         // The original indexes the 32-word ruby-line array even when every-line is set.
         if ruby {
@@ -79,7 +79,7 @@ impl Layout<'_> {
         }
     }
 
-    fn wide_wrap(&mut self, code: u16) -> Result<(), &'static str> {
+    pub(super) fn wide_wrap(&mut self, code: u16) -> Result<(), &'static str> {
         if self.text.line_break.is_some() {
             if self.x < self.limit() {
                 self.previous = code;
@@ -117,7 +117,7 @@ impl Layout<'_> {
         self.max = self.max.max(self.count);
     }
 
-    fn ruby_wrap(&mut self) -> Result<(), &'static str> {
+    pub(super) fn ruby_wrap(&mut self) -> Result<(), &'static str> {
         if self.x < self.limit() {
             if self.text.line_break.is_some() {
                 self.previous = 0;

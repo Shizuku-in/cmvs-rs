@@ -92,6 +92,18 @@ pub struct GateCounts {
 }
 
 impl<'a> CommandGate<'a> {
+    pub fn resolve(
+        &mut self,
+        vm: &Machine<'_>,
+        pc: usize,
+        command: u16,
+    ) -> Result<super::ResolvedCommand, GateError> {
+        let first_unreviewed = self.check(vm, pc, command)?;
+        Ok(super::ResolvedCommand {
+            semantics: self.selection.profile.semantics(command),
+            first_unreviewed,
+        })
+    }
     pub fn new(selection: ProfileSelection<'a>) -> Self {
         Self {
             selection,
@@ -103,7 +115,7 @@ impl<'a> CommandGate<'a> {
             counts: GateCounts::default(),
         }
     }
-    /// Research only: run unreviewed commands with the base semantics.
+    /// Research only: allow unreviewed commands into the selected dispatch handler.
     pub fn set_allow_unreviewed(&mut self, allow: bool) {
         self.allow_unreviewed = allow;
     }

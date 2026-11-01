@@ -172,19 +172,22 @@ impl<'a> Startup<'a> {
         virtual_tick: u32,
     ) -> Result<Self, Box<dyn Error>> {
         let mut machine = Machine::new(script)?;
-        if game.selection.profile.id == "cmvs-20160201" {
-            // Verified PE zero-fill globals of the baseline build. Keep standalone
+        if let Some([integers, bits, floats, strings]) = game.selection.profile.initial_globals() {
+            // Verified PE zero-fill globals of these builds (Aoitori evidence:
+            // docs/games/aoitori/vm-semantics.md). Keep standalone
             // research VMs and other profiles unknown until separately verified.
             let state = machine.state_mut();
             state
-                .fill_integers(0, 4096, 0)
+                .fill_integers(0, integers, 0)
                 .map_err(crate::FormatError)?;
             state
-                .fill_bits(0, 262144, false)
+                .fill_bits(0, bits, false)
                 .map_err(crate::FormatError)?;
-            state.fill_floats(0, 2048, 0).map_err(crate::FormatError)?;
             state
-                .fill_strings(0, 128, b"")
+                .fill_floats(0, floats, 0)
+                .map_err(crate::FormatError)?;
+            state
+                .fill_strings(0, strings, b"")
                 .map_err(crate::FormatError)?;
         }
         machine.set_current_name(game.files.start_name());
@@ -285,7 +288,7 @@ impl<'a> Startup<'a> {
         };
         Ok(())
     }
-    /// Research only: let unreviewed commands run with the base profile's semantics.
+    /// Research only: let unreviewed commands enter the selected research handler.
     pub fn set_allow_unreviewed(&mut self, allow: bool) {
         self.gate.set_allow_unreviewed(allow);
     }
@@ -651,7 +654,8 @@ impl<'a> Startup<'a> {
                 StartupEvent::Progress
             });
         };
-        if let Some(first) = self.gate.check(&self.machine, pc, command)? {
+        let resolved = self.gate.resolve(&self.machine, pc, command)?;
+        if let Some(first) = resolved.first_unreviewed {
             self.notices.push(first);
         }
         if let Some(event) = self.try_lifecycle()? {
@@ -761,13 +765,27 @@ impl<'a> Startup<'a> {
                 StartupEvent::Progress
             });
         }
-        if let Some(step) =
-            self.messages
-                .try_record_output(&mut self.machine, &mut self.input, message_flags)?
-        {
-            self.message_flags = message_flags;
-            self.resume_run = step == Step::Yield;
-            return Ok(StartupEvent::Yield);
+        if let Some(flow) = crate::dispatch::run_text(
+            resolved.semantics,
+            &mut self.machine,
+            Some(&mut crate::dispatch::TextHosts {
+                messages: &mut self.messages,
+                input: &mut self.input,
+                flags: message_flags,
+            }),
+        )? {
+            return Ok(match flow {
+                crate::dispatch::Flow::Done => StartupEvent::Progress,
+                crate::dispatch::Flow::Yield => {
+                    self.message_flags = message_flags;
+                    self.resume_run = true;
+                    StartupEvent::Yield
+                }
+                crate::dispatch::Flow::Unhandled => StartupEvent::Unhandled {
+                    pc,
+                    command: command + 0x2000,
+                },
+            });
         }
         if command == 0x128
             && let Some((game_id, _)) = self.skip_auto_resume

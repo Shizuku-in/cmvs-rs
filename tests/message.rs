@@ -4023,6 +4023,127 @@ fn direct_half_width_text_uses_backend_ink_extent_with_minimum_half_size_and_wra
     assert_eq!(text.cursor, [27, 25]);
 }
 
+fn font_cell_step(
+    vm: &mut Machine<'_>,
+    messages: &mut MessageHost,
+) -> Result<bool, cmvs_rs::bytecode::DecodeError> {
+    let profile = cmvs_rs::profile::Registry::builtin()
+        .profile("cmvs-20171114")
+        .unwrap();
+    let mut input = ActionInput::default();
+    match cmvs_rs::dispatch::run_text(
+        profile.semantics(vm.pending_system().unwrap().1),
+        vm,
+        Some(&mut cmvs_rs::dispatch::TextHosts {
+            messages,
+            input: &mut input,
+            flags: Default::default(),
+        }),
+    )? {
+        Some(cmvs_rs::dispatch::Flow::Done | cmvs_rs::dispatch::Flow::Yield) => Ok(true),
+        Some(cmvs_rs::dispatch::Flow::Unhandled) => Ok(false),
+        None => messages.try_handle(vm),
+    }
+}
+fn run_font_cells(vm: &mut Machine<'_>, messages: &mut MessageHost, count: usize) {
+    for _ in 0..count {
+        pending(vm);
+        assert!(font_cell_step(vm, messages).unwrap());
+    }
+}
+
+#[test]
+fn proportional_output_uses_cell_advance_and_switches_back_without_changing_results() {
+    #[derive(Debug)]
+    struct Metrics;
+    impl cmvs_rs::message::GlyphMetrics for Metrics {
+        fn ink_width(&self, _: &[u8], _: u16, _: u32) -> Result<u32, &'static str> {
+            Ok(17)
+        }
+        fn advance_width(&self, _: &[u8], code: u16, _: u32, _: bool) -> Result<u32, &'static str> {
+            Ok(if code == 0x82a0 { 13 } else { 3 })
+        }
+    }
+    let mut code = vec![];
+    direct_output(&mut code);
+    call(&mut code, 0x23ac, &[u32::MAX]);
+    call(&mut code, 0x210b, &[1, 1]);
+    call(&mut code, 0x23ac, &[0]);
+    call(&mut code, 0x210b, &[1, 1]);
+    let script = script_with_text(&code, b"\0W\x82\xa0\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    messages.set_record_output(true);
+    messages.set_glyph_metrics(Box::new(Metrics));
+    run_font_cells(&mut vm, &mut messages, 4);
+    vm.state_mut().set_system_integer(0, 123).unwrap();
+    run_font_cells(&mut vm, &mut messages, 4);
+    let text = messages.text(1).unwrap();
+    assert_eq!(
+        text.glyphs.iter().map(|g| g.position).collect::<Vec<_>>(),
+        [[10, 5], [13, 5], [26, 5], [43, 5]]
+    );
+    assert_eq!(text.cursor, [63, 5]);
+    assert_eq!(vm.state().system_integer(0), Some(123));
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
+fn proportional_output_without_metrics_keeps_pending_stack_and_text() {
+    let mut code = vec![];
+    direct_output(&mut code);
+    call(&mut code, 0x23ac, &[1]);
+    call(&mut code, 0x210b, &[1, 1]);
+    let script = script_with_text(&code, b"\0\x82\xa0\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    messages.set_record_output(true);
+    run_font_cells(&mut vm, &mut messages, 5);
+    pending(&mut vm);
+    let before = messages.text(1).unwrap().clone();
+    let stack = vm.stack().len_bytes();
+    assert!(
+        font_cell_step(&mut vm, &mut messages)
+            .unwrap_err()
+            .to_string()
+            .contains("font metrics")
+    );
+    assert_eq!(messages.text(1), Some(&before));
+    assert_eq!(vm.stack().len_bytes(), stack);
+    assert_eq!(vm.pending_system().map(|p| p.1), Some(0x10b));
+}
+
+#[test]
+fn pixel_measurement_uses_advance_width_preserves_pen_and_skips_ruby_annotation() {
+    #[derive(Debug)]
+    struct Metrics;
+    impl cmvs_rs::message::GlyphMetrics for Metrics {
+        fn ink_width(&self, _: &[u8], _: u16, _: u32) -> Result<u32, &'static str> {
+            Ok(99)
+        }
+        fn advance_width(&self, _: &[u8], code: u16, _: u32, _: bool) -> Result<u32, &'static str> {
+            Ok(if code == 0x82a0 { 13 } else { 3 })
+        }
+    }
+    let mut code = vec![];
+    direct_output(&mut code);
+    call(&mut code, 0x23ac, &[1]);
+    call(&mut code, 0x211d, &[1, 1]);
+    let script = script_with_text(&code, b"\0W{\x82\xa0/\x82\xa2}\\nW\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    messages.set_glyph_metrics(Box::new(Metrics));
+    run_font_cells(&mut vm, &mut messages, 5);
+    let before = messages.text(1).unwrap().clone();
+    run_font_cells(&mut vm, &mut messages, 1);
+    assert_eq!(messages.text(1).unwrap().cursor, before.cursor);
+    assert_eq!(messages.text(1).unwrap().glyphs, before.glyphs);
+    for (slot, expected) in [(0, 1), (1, 16), (2, 2), (4, 3)] {
+        assert_eq!(vm.state().system_integer(slot), Some(expected));
+    }
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
 #[test]
 fn device_window_creation_matches_explicit_viewport_and_cleans_six_words() {
     let mut code = vec![];

@@ -11,6 +11,15 @@ executable cmvs32.exe sha256=8b09e6b23e0eeaecccf6a584cb94720d239c00f177ed02036ab
 policy skip-auto-resume integer=2198
 end
 
+game aoitori
+profile cmvs-20171114
+start data/pack/start.ps3 sha256=10afc37c05c970a898ea263b2a45e553813be8753302754349d8b9c1b801f5fe
+archive data/pack/script.cpz sha256=d2a22d23d600a75ecbabef3c28fa9bdcbe69a33aed756487c9c515e021295cc7
+game-id 0x1810a032
+executable cmvs64.exe sha256=3bccda5d7611412c6938c0c9b06b2195914cfb78763a53f2c235bb6479395ee0
+executable cmvs32.exe sha256=b1621c5b504a800344316d72dc4477fbf13a00f15f8308470952429f4013003a
+end
+
 game chronoclock
 profile cmvs-20150405
 start data/pack/start.ps3 sha256=d4263a32830bb385fabfa7e06c2fde2d70e072722e3ed6c317292e7086fb6dce

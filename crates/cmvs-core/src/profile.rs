@@ -21,6 +21,19 @@ pub enum Family {
     Cmvs,
 }
 
+/// Selected only after the command gate authorizes the dispatch attempt.
+/// Research semantics do not constitute a Reviewed or contract proof.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Semantics {
+    Root,
+    ResearchFontCells,
+}
+
+pub struct ResolvedCommand {
+    pub semantics: Semantics,
+    pub first_unreviewed: Option<u16>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandStatus {
     /// The switch's default (returns 0); every command beyond the switch is absent too.
@@ -113,6 +126,27 @@ pub struct EngineProfile {
 }
 
 impl EngineProfile {
+    pub fn semantics(&self, command: u16) -> Semantics {
+        if self.id == "cmvs-20171114"
+            && self.status(command) == CommandStatus::Unreviewed
+            && matches!(
+                command,
+                0x10b | 0x11d | 0x152 | 0x154 | 0x157 | 0x159 | 0x38b | 0x3ac
+            )
+        {
+            Semantics::ResearchFontCells
+        } else {
+            Semantics::Root
+        }
+    }
+    /// Verified loader zero-fill bank sizes, in integer/bit/float/string order.
+    /// This is startup layout evidence, independent of command research policy.
+    pub(crate) fn initial_globals(&self) -> Option<[u32; 4]> {
+        match self.id.as_str() {
+            "cmvs-20160201" | "cmvs-20171114" => Some([4096, 262144, 2048, 128]),
+            _ => None,
+        }
+    }
     /// Status of system command `0x2000 + command`; cases beyond the switch are absent.
     pub fn status(&self, command: u16) -> CommandStatus {
         self.statuses
@@ -330,9 +364,10 @@ pub struct Registry {
     contracts: BTreeMap<[u8; 32], ContractProof>,
 }
 
-const BUILTIN_PROFILES: [&str; 2] = [
+const BUILTIN_PROFILES: [&str; 3] = [
     include_str!("../profiles/cmvs-20160201.profile"),
     include_str!("../profiles/cmvs-20150405.profile"),
+    include_str!("../profiles/cmvs-20171114.profile"),
 ];
 const BUILTIN_GAMES: &str = include_str!("../profiles/games.txt");
 

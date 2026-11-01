@@ -25,6 +25,7 @@ use std::{error::Error, sync::Arc};
 mod auxiliary;
 mod auxiliary_layout;
 mod auxiliary_motion;
+pub(crate) mod font_cells;
 mod measure;
 mod output;
 mod wait;
@@ -182,6 +183,16 @@ pub struct TextObject {
 /// The core applies the original minimum half-size advance and spacing separately.
 /// `face` is the font object's face in the game encoding.
 pub trait GlyphMetrics: std::fmt::Debug {
+    /// Cell advance (GDI gmCellIncX), distinct from the visible ink extent.
+    fn advance_width(
+        &self,
+        _face: &[u8],
+        _code: u16,
+        _size: u32,
+        _bold: bool,
+    ) -> Result<u32, &'static str> {
+        Err("font backend does not implement proportional glyph advances")
+    }
     fn ink_width(&self, face: &[u8], code: u16, size: u32) -> Result<u32, &'static str>;
     fn styled_ink_width(
         &self,
@@ -199,6 +210,8 @@ pub trait GlyphMetrics: std::fmt::Debug {
 
 #[derive(Debug, Default)]
 pub struct MessageHost {
+    /// State owned by the separately dispatched font-cell text implementation.
+    font_cells: font_cells::State,
     output_settings: crate::settings::TextOutputSettings,
     /// Global dword_1401015c4, shared by all message windows and retained while paused.
     auto_elapsed: u32,

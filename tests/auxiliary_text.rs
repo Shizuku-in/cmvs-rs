@@ -1095,6 +1095,61 @@ fn run_calls(vm: &mut Machine<'_>, messages: &mut MessageHost, count: usize) {
         run(vm, messages);
     }
 }
+
+#[test]
+fn proportional_auxiliary_text_uses_advances_for_single_and_double_byte_glyphs() {
+    #[derive(Debug)]
+    struct Metrics;
+    impl cmvs_rs::message::GlyphMetrics for Metrics {
+        fn ink_width(&self, _: &[u8], _: u16, _: u32) -> Result<u32, &'static str> {
+            Ok(99)
+        }
+        fn advance_width(&self, _: &[u8], code: u16, _: u32, _: bool) -> Result<u32, &'static str> {
+            Ok(if code == 0x82a0 { 13 } else { 3 })
+        }
+    }
+    let script = content_script(
+        &[
+            (0x2380, &[7, 0, 24, 64]),
+            (0x2385, &[7, 0, 0, 100, 100]),
+            (0x23ac, &[1]),
+            (0x238b, &[7, 1]),
+        ],
+        b"W\x82\xa0",
+    );
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    messages.set_record_output(true);
+    messages.set_glyph_metrics(Box::new(Metrics));
+    for _ in 0..4 {
+        pending(&mut vm);
+        let mut input = cmvs_rs::input::ActionInput::default();
+        let profile = cmvs_rs::profile::Registry::builtin()
+            .profile("cmvs-20171114")
+            .unwrap();
+        match cmvs_rs::dispatch::run_text(
+            profile.semantics(vm.pending_system().unwrap().1),
+            &mut vm,
+            Some(&mut cmvs_rs::dispatch::TextHosts {
+                messages: &mut messages,
+                input: &mut input,
+                flags: Default::default(),
+            }),
+        )
+        .unwrap()
+        {
+            Some(cmvs_rs::dispatch::Flow::Done) => {}
+            None => assert!(messages.try_handle(&mut vm).unwrap()),
+            other => panic!("unexpected dispatch {other:?}"),
+        }
+    }
+    let group = messages.auxiliary_text(7).unwrap();
+    assert_eq!(
+        group.glyphs.iter().map(|g| g.position).collect::<Vec<_>>(),
+        [[0, 0], [3, 0]]
+    );
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
 /// Group 7 with 24-pixel glyphs: area at (100, 50), 110 wide, glyph spacing 2, line spacing 6,
 /// so the wrap test fires once the pen reaches 210 - 26 = 184.
 const AREA: [(u16, &[u32]); 3] = [

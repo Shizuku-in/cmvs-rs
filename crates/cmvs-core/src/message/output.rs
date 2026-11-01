@@ -79,7 +79,7 @@ impl RecordedGlyph {
 /// Line feed of 0x14005bc90 and 0x14005b120: the new line reserves the ruby height when it is
 /// marked or every line reserves it, then the pen returns to the area's left edge. The
 /// original reads past the 32 ruby-line flags from line 32 on.
-fn new_line(
+pub(super) fn new_line(
     text: &TextObject,
     line: &mut u32,
     x: &mut u32,
@@ -105,7 +105,7 @@ const ESCAPES: &str = "text escape that does not advance in the original";
 /// `\w` and its selector skip three bytes in 0x14005b360/0x14005bc90; a missing selector
 /// would step past the terminator. Returns the length and Some(instant) for `\wc` (true)
 /// and `\ws` (false); other selectors change nothing.
-fn escape_w(bytes: &[u8], i: usize) -> Result<(usize, Option<bool>), &'static str> {
+pub(super) fn escape_w(bytes: &[u8], i: usize) -> Result<(usize, Option<bool>), &'static str> {
     match bytes.get(i + 2) {
         Some(b'c') => Ok((3, Some(true))),
         Some(b's') => Ok((3, Some(false))),
@@ -115,7 +115,7 @@ fn escape_w(bytes: &[u8], i: usize) -> Result<(usize, Option<bool>), &'static st
 }
 
 /// Line end shared by the layout functions: area x + width − spacing x − glyph size.
-fn line_end(text: &TextObject) -> u32 {
+pub(super) fn line_end(text: &TextObject) -> u32 {
     (text.area[0] as u32)
         .wrapping_add(text.area[2] as u32)
         .wrapping_sub(text.spacing[0] as u32)
@@ -124,16 +124,16 @@ fn line_end(text: &TextObject) -> u32 {
 
 /// One `{base/ruby}` group as 0x14005bc90 walks it: each loop iteration is a double-byte
 /// character (Some) or a single byte (None), the closing `/` or `}` included.
-struct Group {
-    base: Vec<Option<u16>>,
-    ruby: Vec<Option<u16>>,
+pub(super) struct Group {
+    pub(super) base: Vec<Option<u16>>,
+    pub(super) ruby: Vec<Option<u16>>,
     /// Index just after the closing brace.
-    end: usize,
+    pub(super) end: usize,
 }
 
 /// Parses the group whose `{` precedes `start`. The original reads past a terminator
 /// instead of stopping, so a missing `/` or `}` is an error.
-fn parse_group(bytes: &[u8], start: usize) -> Result<Group, &'static str> {
+pub(super) fn parse_group(bytes: &[u8], start: usize) -> Result<Group, &'static str> {
     fn part(
         bytes: &[u8],
         i: &mut usize,
@@ -283,7 +283,12 @@ pub(super) fn ruby_layout(
 /// 0x14005bc90 without rules (the +112 punctuation exception), 0x14005b120 (a2 = 0) with
 /// them. Past the line end, +528 counts hanging characters and repeats of an inseparable
 /// one; past the unsigned limit they wrap as well.
-fn wraps(text: &mut TextObject, code: u16, x: u32, limit: u32) -> Result<bool, &'static str> {
+pub(super) fn wraps(
+    text: &mut TextObject,
+    code: u16,
+    x: u32,
+    limit: u32,
+) -> Result<bool, &'static str> {
     Ok(match &text.line_break {
         None => x >= limit && !matches!(code, 0x8141 | 0x8142 | 0x8176 | 0x8178),
         Some(_) if x < limit => {
@@ -306,7 +311,7 @@ fn wraps(text: &mut TextObject, code: u16, x: u32, limit: u32) -> Result<bool, &
 
 /// 0x14005a830: a glyph shown at once; 0x14005b5a0 may then delay its reveal. Window
 /// output passes settings +1528 (1) as the outline mode, direct output text +124.
-fn push(
+pub(super) fn push(
     text: &mut TextObject,
     code: u16,
     [x, y]: [u32; 2],
@@ -344,7 +349,7 @@ fn push(
 /// 0x14005b5a0 using the current output settings. After `\wc` (a5 != 0)
 /// it returns 0 at once, leaving the glyph shown and restarting the delay. Otherwise a
 /// nonzero interval hides the glyph until `delay` has passed and returns delay + interval.
-fn retime(
+pub(super) fn retime(
     text: &mut TextObject,
     glyph: Option<usize>,
     delay: u32,
@@ -658,6 +663,26 @@ fn place(
     Ok(())
 }
 
+pub(super) type AppendLayout =
+    fn(&MessageHost, &mut TextObject, &[u8], bool) -> Result<(), &'static str>;
+pub(super) type PlaceLayout =
+    fn(&MessageHost, &mut TextObject, &[u8], Option<u32>) -> Result<(), &'static str>;
+fn root_append(
+    host: &MessageHost,
+    text: &mut TextObject,
+    bytes: &[u8],
+    skip: bool,
+) -> Result<(), &'static str> {
+    append(text, bytes, skip, host.output_settings)
+}
+fn root_place(
+    host: &MessageHost,
+    text: &mut TextObject,
+    bytes: &[u8],
+    outline: Option<u32>,
+) -> Result<(), &'static str> {
+    place(text, bytes, host.glyph_metrics.as_deref(), outline)
+}
 impl MessageHost {
     /// 0x2159 / 0x140076cf0 -> 0x14005d870: explicit initialization/poll,
     /// unlike the yielding 0x2152. SP-8 is unused; SP-16 == 0 appends once.
@@ -665,6 +690,14 @@ impl MessageHost {
         &mut self,
         vm: &mut Machine<'_>,
         flags: MessageFlags,
+    ) -> Result<bool, DecodeError> {
+        self.try_record_poll_with_layout(vm, flags, root_append)
+    }
+    pub(super) fn try_record_poll_with_layout(
+        &mut self,
+        vm: &mut Machine<'_>,
+        flags: MessageFlags,
+        append_layout: AppendLayout,
     ) -> Result<bool, DecodeError> {
         let Some((pc, 0x159)) = vm.pending_system() else {
             return Ok(false);
@@ -689,7 +722,7 @@ impl MessageHost {
             .ok_or_else(|| error(pc, 0x2159, "window without text object"))?
             .clone();
         if initialize {
-            append(&mut candidate, &bytes, flags.skip(), self.output_settings)
+            append_layout(self, &mut candidate, &bytes, flags.skip())
                 .map_err(|why| error(pc, 0x2159, why))?;
         }
         let done = !window.hidden && !candidate.glyphs.iter().any(|g| g.active);
@@ -707,6 +740,14 @@ impl MessageHost {
         &mut self,
         vm: &mut Machine<'_>,
         pc: usize,
+    ) -> Result<(), DecodeError> {
+        self.place_text_with_layout(vm, pc, root_place)
+    }
+    pub(super) fn place_text_with_layout(
+        &mut self,
+        vm: &mut Machine<'_>,
+        pc: usize,
+        place_layout: PlaceLayout,
     ) -> Result<(), DecodeError> {
         let word = |distance| {
             vm.stack()
@@ -727,8 +768,7 @@ impl MessageHost {
                 )
             })?
             .clone();
-        place(&mut candidate, &bytes, self.glyph_metrics.as_deref(), None)
-            .map_err(|why| error(pc, 0x210b, why))?;
+        place_layout(self, &mut candidate, &bytes, None).map_err(|why| error(pc, 0x210b, why))?;
         vm.complete_system(SystemResult(0x4008))?;
         self.texts[index as usize] = Some(candidate);
         Ok(())
@@ -739,6 +779,14 @@ impl MessageHost {
         &mut self,
         vm: &mut Machine<'_>,
         pc: usize,
+    ) -> Result<(), DecodeError> {
+        self.place_window_text_with_layout(vm, pc, root_place)
+    }
+    pub(super) fn place_window_text_with_layout(
+        &mut self,
+        vm: &mut Machine<'_>,
+        pc: usize,
+        place_layout: PlaceLayout,
     ) -> Result<(), DecodeError> {
         let slot = window_slot(vm, pc, 0x2154)?;
         let raw = vm.stack().peek_u32(8).map_err(|e| error(pc, 0x2154, e.0))?;
@@ -751,10 +799,10 @@ impl MessageHost {
             .text(index)
             .ok_or_else(|| error(pc, 0x2154, "window without text object"))?
             .clone();
-        place(
+        place_layout(
+            self,
             &mut candidate,
             &bytes,
-            self.glyph_metrics.as_deref(),
             Some(self.output_settings.outline),
         )
         .map_err(|why| error(pc, 0x2154, why))?;
@@ -770,6 +818,15 @@ impl MessageHost {
         vm: &mut Machine<'_>,
         input: &mut ActionInput,
         flags: MessageFlags,
+    ) -> Result<Option<Step>, DecodeError> {
+        self.try_record_output_with_layout(vm, input, flags, root_append)
+    }
+    pub(super) fn try_record_output_with_layout(
+        &mut self,
+        vm: &mut Machine<'_>,
+        input: &mut ActionInput,
+        flags: MessageFlags,
+        append_layout: AppendLayout,
     ) -> Result<Option<Step>, DecodeError> {
         let Some((pc, command @ (0x152 | 0x157))) = vm.pending_system() else {
             return Ok(None);
@@ -794,7 +851,7 @@ impl MessageHost {
             .ok_or_else(|| error(pc, op, "message window without text"))?
             .clone();
         if vm.repeat_count() == 0 {
-            append(&mut candidate, &bytes, flags.skip(), self.output_settings)
+            append_layout(self, &mut candidate, &bytes, flags.skip())
                 .map_err(|why| error(pc, op, why))?;
         }
         let active = candidate.glyphs.iter().any(|g| g.active);

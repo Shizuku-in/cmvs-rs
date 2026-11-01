@@ -20,8 +20,8 @@ const MEASURE_FLAGS: u32 = 22;
 
 /// Glyph records and the final pen of one 0x238b call, applied by `append`.
 pub(super) struct TextLayout {
-    glyphs: Vec<AuxiliaryGlyph>,
-    pen: [f32; 2],
+    pub(super) glyphs: Vec<AuxiliaryGlyph>,
+    pub(super) pen: [f32; 2],
 }
 
 impl AuxiliaryText {

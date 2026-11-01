@@ -340,12 +340,24 @@ fn run() -> Result<(), Box<dyn Error>> {
             command,
         } = event
         {
-            let checked = gate.check(&machine, system_pc, command);
-            if let Some(first) = checked? {
+            let resolved = gate.resolve(&machine, system_pc, command)?;
+            if let Some(first) = resolved.first_unreviewed {
                 println!(
-                    "# UNREVIEWED system command 0x{:04x} allowed with base semantics (--allow-unreviewed, first use)",
-                    0x2000 + first
+                    "# UNREVIEWED system command 0x{:04x} allowed with {} (--allow-unreviewed, first use)",
+                    0x2000 + first,
+                    cmvs_rs::dispatch::semantics_name(gate.selection().profile, first)
                 );
+            }
+            // Trace has no text host. Resolve through the same table as runner:
+            // an unavailable research override remains pending, never root fallback.
+            if cmvs_rs::dispatch::run_text(resolved.semantics, &mut machine, None)?
+                == Some(cmvs_rs::dispatch::Flow::Unhandled)
+            {
+                println!(
+                    "# STOP pending system=0x{:04x}; selected text handler needs a text host; PC and parameters preserved; not game completion",
+                    command + 0x2000
+                );
+                return Ok(());
             }
             if save_image.try_handle(&mut machine, continue_without_snapshot)? {
                 println!(

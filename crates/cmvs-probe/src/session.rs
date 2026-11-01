@@ -392,7 +392,17 @@ impl<'a> Session<'a> {
             for command in self.run.take_unreviewed_notices() {
                 self.event(
                     "unreviewed-allowed",
-                    Json::obj([("command", Json::hex(0x2000 + u64::from(command)))]),
+                    Json::obj([
+                        ("command", Json::hex(0x2000 + u64::from(command))),
+                        (
+                            "semantics",
+                            cmvs_core::dispatch::semantics_name(
+                                self.run.gate().selection().profile,
+                                command,
+                            )
+                            .into(),
+                        ),
+                    ]),
                 );
             }
             match event {

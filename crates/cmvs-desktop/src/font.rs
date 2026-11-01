@@ -43,6 +43,24 @@ impl std::fmt::Debug for PreviewMetrics {
     }
 }
 impl cmvs_core::message::GlyphMetrics for PreviewMetrics {
+    fn advance_width(
+        &self,
+        face: &[u8],
+        code: u16,
+        size: u32,
+        _bold: bool,
+    ) -> Result<u32, &'static str> {
+        if !(1..=128).contains(&size) {
+            return Err("glyph size outside 1..128 preview range");
+        }
+        let ch = character(code).map_err(|e| e.0)?;
+        let font = self.font(face, ch)?;
+        let advance = font.as_scaled(size as f32).h_advance(font.glyph_id(ch));
+        if !advance.is_finite() || advance < 0.0 || advance > u16::MAX as f32 {
+            return Err("invalid proportional font advance");
+        }
+        Ok(advance.round() as u32)
+    }
     fn styled_ink_width(
         &self,
         face: &[u8],

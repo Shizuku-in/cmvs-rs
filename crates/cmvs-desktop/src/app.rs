@@ -591,8 +591,12 @@ impl ApplicationHandler for App<'_> {
                 let outcome = self.startup.tick(&mut backend);
                 for command in self.startup.take_unreviewed_notices() {
                     println!(
-                        "# UNREVIEWED system command 0x{:04x} allowed with base semantics (--allow-unreviewed, first use)",
-                        0x2000 + command
+                        "# UNREVIEWED system command 0x{:04x} allowed with {} (--allow-unreviewed, first use)",
+                        0x2000 + command,
+                        cmvs_core::dispatch::semantics_name(
+                            self.startup.gate().selection().profile,
+                            command
+                        )
                     );
                 }
                 if !had_fade && let Some(fade) = self.startup.scene().fade().current() {
