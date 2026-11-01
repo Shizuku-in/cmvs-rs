@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUSTFLAGS: -D warnings
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  test:
+    name: test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-latest
+          - name: windows
+            os: windows-latest
+          - name: macos-arm64
+            os: macos-latest
+          - name: macos-x86_64
+            os: macos-15-intel
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Linux system packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libfreetype-dev libfontconfig-dev libasound2-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy (default)
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Clippy (workspace, all features)
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Test (default)
+        run: cargo test --locked
+      - name: Test (workspace, all features)
+        run: cargo test --locked --workspace --all-features
+      - name: Check CPU-only desktop
+        run: cargo check --locked -p cmvs-desktop --no-default-features
+
+  msrv:
+    name: msrv (1.89)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Linux system packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libfreetype-dev libfontconfig-dev libasound2-dev
+      - uses: dtolnay/rust-toolchain@1.89.0
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked --workspace --all-targets --all-features
+
+  python-tools:
+    name: python tools
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Run synthetic tool tests
+        run: |
+          for test in tools/test_*.py; do
+            echo "::group::$test"
+            python -I "$test"
+            echo "::endgroup::"
+          done
