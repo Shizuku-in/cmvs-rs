@@ -954,6 +954,9 @@ fn run() -> Result<(), Box<dyn Error>> {
     startup.set_save_clock(Box::new(utc_save_time));
     startup.set_record_text(record_text || font.is_some());
     if let Some(font) = &font {
+        if let Some(directory) = &user_data_dir {
+            font.set_user_directory(directory)?;
+        }
         startup.set_glyph_metrics(font.metrics());
         // 0x14000b666: a configured face that cannot be found becomes the default.
         if !font.has_face(startup.settings().font_face()) {

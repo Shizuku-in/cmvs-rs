@@ -21,6 +21,9 @@ pub struct FontLibrary {
     /// Lowercased family name -> font file and collection index; built on first use.
     index: Option<BTreeMap<String, (PathBuf, u32)>>,
     directories: Vec<PathBuf>,
+    /// Unicode names live outside the game's fixed-width legacy font fields.
+    unicode_names: BTreeMap<Vec<u8>, String>,
+    unicode_directory: Option<PathBuf>,
 }
 
 impl FontLibrary {
@@ -30,6 +33,8 @@ impl FontLibrary {
             loaded: BTreeMap::new(),
             index: None,
             directories: cmvs_native::font_directories(),
+            unicode_names: BTreeMap::new(),
+            unicode_directory: None,
         }
     }
     /// Research override of the searched directories.
@@ -38,6 +43,88 @@ impl FontLibrary {
             directories,
             ..Self::new(default)
         }
+    }
+    pub fn set_user_directory(&mut self, directory: &Path) {
+        self.unicode_directory = Some(directory.join("font-faces"));
+    }
+    /// A stable ASCII handle fits the VM/CSV2 LOGFONT field. The actual family
+    /// name stays Unicode, including across restarts, in an immutable UTF-8 file.
+    pub fn register_unicode(&mut self, name: &str) -> Result<Vec<u8>, FormatError> {
+        if name.is_empty() || name.len() > 512 || name.chars().any(char::is_control) {
+            return Err(FormatError("invalid Unicode font family name"));
+        }
+        let key = format!(
+            "CMVS-U-{}",
+            &cmvs_core::digest::to_hex(&cmvs_core::digest::sha256(name.as_bytes()))[..24]
+        )
+        .into_bytes();
+        if let Some(directory) = &self.unicode_directory {
+            std::fs::create_dir_all(directory)
+                .map_err(|_| FormatError("cannot create Unicode font directory"))?;
+            let path = directory.join(std::str::from_utf8(&key).expect("ASCII handle"));
+            // Existing mappings are immutable: another session cannot silently
+            // change which font an older gameplay save refers to.
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+            {
+                Ok(mut file) => {
+                    use std::io::Write;
+                    file.write_all(name.as_bytes())
+                        .and_then(|()| file.sync_all())
+                        .map_err(|_| FormatError("cannot save Unicode font name"))?;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if std::fs::read(&path).ok().as_deref() != Some(name.as_bytes()) {
+                        return Err(FormatError(
+                            "Unicode font handle conflicts with stored name",
+                        ));
+                    }
+                }
+                Err(_) => return Err(FormatError("cannot save Unicode font name")),
+            }
+        }
+        self.unicode_names.insert(key.clone(), name.to_owned());
+        Ok(key)
+    }
+    pub fn family_name(&mut self, face: &[u8]) -> Result<String, FormatError> {
+        if let Some(name) = self.unicode_names.get(face) {
+            return Ok(name.clone());
+        }
+        if face.starts_with(b"CMVS-U-") {
+            if face.len() != 31 || !face[7..].iter().all(u8::is_ascii_hexdigit) {
+                return Err(FormatError("invalid Unicode font handle"));
+            }
+            let directory = self
+                .unicode_directory
+                .as_ref()
+                .ok_or(FormatError("Unicode font mapping is unavailable"))?;
+            let mut bytes = Vec::new();
+            File::open(directory.join(std::str::from_utf8(face).expect("ASCII handle")))
+                .and_then(|file| file.take(513).read_to_end(&mut bytes))
+                .map_err(|_| FormatError("cannot read Unicode font name"))?;
+            let name = String::from_utf8(bytes)
+                .map_err(|_| FormatError("font family name is not valid UTF-8"))?;
+            if name.is_empty()
+                || name.len() > 512
+                || name.chars().any(char::is_control)
+                || format!(
+                    "CMVS-U-{}",
+                    &cmvs_core::digest::to_hex(&cmvs_core::digest::sha256(name.as_bytes()))[..24]
+                )
+                .as_bytes()
+                    != face
+            {
+                return Err(FormatError("invalid stored Unicode font name"));
+            }
+            self.unicode_names.insert(face.to_vec(), name.clone());
+            return Ok(name);
+        }
+        encoding_rs::SHIFT_JIS
+            .decode_without_bom_handling_and_without_replacement(face)
+            .map(|name| name.into_owned())
+            .ok_or(FormatError("font face is not valid Shift-JIS"))
     }
     /// The font for a face in the game encoding (Shift-JIS).
     pub fn face(&mut self, face: &[u8]) -> Result<Arc<FontVec>, FormatError> {
@@ -80,10 +167,7 @@ impl FontLibrary {
         }
     }
     fn locate(&mut self, face: &[u8]) -> Result<Option<(PathBuf, u32)>, FormatError> {
-        let (name, _, invalid) = encoding_rs::SHIFT_JIS.decode(face);
-        if invalid {
-            return Err(FormatError("font face is not valid Shift-JIS"));
-        }
+        let name = self.family_name(face)?;
         let key = name.to_lowercase();
         let index = match &self.index {
             Some(index) => index,
@@ -252,6 +336,41 @@ mod tests {
             &library.for_character(b"missing", 'あ'),
             &default
         ));
+        let directory = std::env::temp_dir().join(format!(
+            "cmvs-unicode-font-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        library.set_user_directory(&directory);
+        let handle = library.register_unicode("萝莉体").unwrap();
+        assert_eq!(handle.len(), 31);
+        cmvs_core::settings::SettingsHost::default()
+            .set_font_face(&handle)
+            .unwrap();
+        let mut restarted = FontLibrary::with_directories(default.clone(), Vec::new());
+        restarted.set_user_directory(&directory);
+        assert_eq!(restarted.family_name(&handle).unwrap(), "萝莉体");
+        assert_eq!(restarted.register_unicode("萝莉体").unwrap(), handle);
+        assert!(
+            restarted
+                .family_name(b"CMVS-U-../../../../../../../../..")
+                .is_err()
+        );
+        std::fs::write(
+            directory
+                .join("font-faces")
+                .join(std::str::from_utf8(&handle).unwrap()),
+            "wrong name",
+        )
+        .unwrap();
+        let mut corrupt = FontLibrary::with_directories(default.clone(), Vec::new());
+        corrupt.set_user_directory(&directory);
+        assert!(corrupt.family_name(&handle).is_err());
+        assert!(Arc::ptr_eq(&corrupt.for_character(&handle, 'あ'), &default));
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     /// One sfnt face whose only table is `name`, holding the given (platform, encoding,

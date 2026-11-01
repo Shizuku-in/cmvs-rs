@@ -207,15 +207,24 @@ impl PlatformBackend for NativeBackend<'_> {
     fn choose_font(&mut self, current: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
         use winit::raw_window_handle::HasWindowHandle;
         let owner = self.window.window_handle()?.as_raw();
-        let current = self.encoding.decode(current)?;
+        let current = match self.fonts {
+            Some(fonts) => fonts
+                .family_name(current)
+                .unwrap_or_else(|_| "ＭＳ ゴシック".to_owned()),
+            None => self.encoding.decode(current)?,
+        };
         let Some(face) = cmvs_native::choose_font(owner, &current)? else {
             println!("# native font dialog cancelled");
             return Ok(None);
         };
-        let bytes = match self.encoding.encode(&face) {
+        let selected = match self.fonts {
+            Some(fonts) => fonts.select_unicode_face(&face),
+            None => self.encoding.encode(&face),
+        };
+        let bytes = match selected {
             Ok(bytes) => bytes,
-            Err(_) => {
-                println!("# native font {face} name is not representable; using default font");
+            Err(error) => {
+                println!("# native font {face} is unavailable ({error}); using default font");
                 return Ok(Some(cmvs_core::settings::DEFAULT_FONT_FACE.to_vec()));
             }
         };

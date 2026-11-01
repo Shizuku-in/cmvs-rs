@@ -231,6 +231,28 @@ impl FontRenderer {
             .lock()
             .is_ok_and(|mut library| library.contains(face))
     }
+    pub fn set_user_directory(&self, directory: &Path) -> Result<(), FormatError> {
+        self.library
+            .lock()
+            .map_err(|_| FormatError("font library lock poisoned"))?
+            .set_user_directory(directory);
+        Ok(())
+    }
+    pub fn family_name(&self, face: &[u8]) -> Result<String, FormatError> {
+        self.library
+            .lock()
+            .map_err(|_| FormatError("font library lock poisoned"))?
+            .family_name(face)
+    }
+    pub fn select_unicode_face(&self, name: &str) -> Result<Vec<u8>, FormatError> {
+        let mut library = self
+            .library
+            .lock()
+            .map_err(|_| FormatError("font library lock poisoned"))?;
+        let face = library.register_unicode(name)?;
+        library.face(&face)?;
+        Ok(face)
+    }
     fn font(&self, face: &[u8], ch: char) -> Result<Arc<FontVec>, FormatError> {
         self.library
             .lock()
