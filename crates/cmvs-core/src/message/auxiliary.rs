@@ -209,6 +209,8 @@ pub struct AuxiliaryText {
     /// +416: atlas cells in use. Only atlas creation (0x14002e2f0) clears the table;
     /// 0x2386 drops the records without releasing their cells.
     pub(super) cells: BTreeSet<u16>,
+    /// Live atlas writes by cell. Cleared records leak cell numbers, but no longer draw.
+    pub(super) atlas_regions: BTreeMap<u16, [u32; 4]>,
     pub atlas: AuxiliaryGlyphAtlas,
     /// Owned atlas scene object; backing texture metadata belongs to `atlas`.
     /// It is not a scene slot and must never be drawn using guessed texture pixels.
@@ -342,6 +344,7 @@ impl AuxiliaryText {
         self.object.children.clear();
         self.glyphs.clear();
         self.attached.clear();
+        self.atlas_regions.clear();
         self.words.insert(176, self.words[&16]);
         self.words.insert(180, self.words[&20]);
     }
@@ -444,6 +447,7 @@ impl AuxiliaryText {
             glyphs: Vec::new(),
             attached: Vec::new(),
             cells: BTreeSet::new(),
+            atlas_regions: BTreeMap::new(),
             atlas,
             secondary_image: None,
             associated_scene: None,

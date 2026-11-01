@@ -1415,7 +1415,7 @@ fn exhausted_cells_leave_glyphs_detached_and_cells_must_fit_the_atlas() {
                 (0x2387, &[7, 30, u32::MAX, u32::MAX]),
                 (0x238b, &[7, 1]),
             ],
-            1,
+            16,
         ),
     ] {
         let script = content_script(&calls, &b"\x82\xa0".repeat(glyphs));
@@ -1679,4 +1679,65 @@ fn font_cell_auxiliary_fixed_width_literals_use_half_cells() {
         group.glyphs.iter().map(|g| g.position).collect::<Vec<_>>(),
         [[0, 0], [12, 0], [24, 0], [36, 0], [48, 0], [60, 0], [72, 0]]
     );
+}
+
+#[test]
+fn auxiliary_smaller_raster_uses_the_original_grid_without_reallocating() {
+    let script = content_script(
+        &[
+            (0x2380, &[7, 0, 30, 0]),
+            (0x2385, &[7, 0, 0, 1000, 700]),
+            (0x2387, &[7, 28, 0, 0]),
+            (0x238b, &[7, 1]),
+        ],
+        &b"\x82\xa0".repeat(141),
+    );
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    messages.set_record_output(true);
+    run_calls(&mut vm, &mut messages, 4);
+    let mut scene = cmvs_rs::scene::SceneHost::default();
+    messages.advance_auxiliary_motion(16, &mut scene).unwrap();
+    let group = messages.auxiliary_text(7).unwrap();
+    assert_eq!((group.atlas.cell_side, group.atlas.grid_side), (36, 28));
+    assert_eq!(group.atlas.texture_size, [1024, 1024]);
+    assert_eq!(group.attached_glyphs().count(), 141);
+    assert!(group.attached_glyphs().all(|g| g.size == 28));
+}
+
+#[test]
+fn auxiliary_resizing_rejects_live_atlas_overlap_but_clear_releases_the_pixels() {
+    let script = content_script(
+        &[
+            (0x2380, &[7, 0, 30, 0]),
+            (0x238b, &[7, 1]),
+            (0x2387, &[7, 28, 0, 0]),
+            (0x238b, &[7, 1]),
+            (0x2386, &[7]),
+            (0x238b, &[7, 1]),
+        ],
+        b"\x82\xa0",
+    );
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    messages.set_record_output(true);
+    let mut scene = cmvs_rs::scene::SceneHost::default();
+    run_calls(&mut vm, &mut messages, 2);
+    messages.advance_auxiliary_motion(16, &mut scene).unwrap();
+    assert_eq!(messages.auxiliary_text(7).unwrap().glyphs[0].cell, 1);
+    run_calls(&mut vm, &mut messages, 2);
+    assert!(
+        messages
+            .advance_auxiliary_motion(16, &mut scene)
+            .unwrap_err()
+            .to_string()
+            .contains("overlaps")
+    );
+    let group = messages.auxiliary_text(7).unwrap();
+    assert_eq!(group.glyphs[0].cell, 1);
+    assert_eq!(group.glyphs[1].cell, 0);
+    run_calls(&mut vm, &mut messages, 2);
+    messages.advance_auxiliary_motion(16, &mut scene).unwrap();
+    // The cell number leaks through clear, but the deleted glyph no longer samples it.
+    assert_eq!(messages.auxiliary_text(7).unwrap().glyphs[0].cell, 2);
 }

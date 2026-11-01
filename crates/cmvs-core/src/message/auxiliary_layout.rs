@@ -312,14 +312,16 @@ impl AuxiliaryText {
                 if glyph.cell != 0 {
                     self.attached.retain(|&i| i != index);
                     self.cells.remove(&glyph.cell);
+                    self.atlas_regions.remove(&glyph.cell);
                     self.glyphs[index].cell = 0;
                 }
             } else if glyph.cell == 0 {
                 let Some(cell) = (1..CELLS).find(|c| !self.cells.contains(c)) else {
                     continue;
                 };
-                self.check_cell(cell)?;
+                let region = self.check_cell(cell, glyph.size)?;
                 self.cells.insert(cell);
+                self.atlas_regions.insert(cell, region);
                 self.glyphs[index].cell = cell;
                 self.glyphs[index].layer = self.words[&172];
                 self.attached.push(index);
@@ -329,9 +331,10 @@ impl AuxiliaryText {
     }
 
     /// 0x14002eb10 scales the descriptor by +352 / +360 and places the cell with the atlas
-    /// grid from creation, but sizes it from the current +48. Only the unscaled case with
-    /// the creation size is modeled, and the cell must lie inside the atlas texture.
-    fn check_cell(&self, cell: u16) -> Result<(), FormatError> {
+    /// grid from creation, but sizes it from the current +48 (Aoitori: 0x1400313c0).
+    /// Direct glyph rendering is equivalent only when the whole uploaded quad fits and
+    /// no live glyph's pixels are overwritten. Mixed cached raster sizes stay rejected.
+    fn check_cell(&self, cell: u16, glyph_size: u32) -> Result<[u32; 4], FormatError> {
         if [352, 356, 360].map(|at| self.words[&at])
             != [RESEARCH_SCREEN[0], RESEARCH_SCREEN[1], RESEARCH_SCREEN[0]]
         {
@@ -339,18 +342,39 @@ impl AuxiliaryText {
         }
         let side =
             (self.words[&352].wrapping_mul(self.words[&48]) / self.words[&360]).wrapping_add(6);
-        if side != self.atlas.cell_side {
+        if glyph_size != self.words[&48] {
             return Err(FormatError(
-                "auxiliary glyph size differs from the atlas cell size",
+                "auxiliary cached glyph size differs from the current raster size",
             ));
         }
-        let pages = self.atlas.texture_size[1] / self.atlas.texture_size[0];
-        if u32::from(cell) / self.atlas.cells_per_page >= pages {
-            return Err(FormatError(
-                "auxiliary glyph cell lies outside the atlas texture",
-            ));
+        let overflow = "auxiliary glyph cell lies outside the atlas texture";
+        let cell = u32::from(cell);
+        let x = side
+            .checked_mul(cell % self.atlas.grid_side)
+            .ok_or(FormatError(overflow))?;
+        let y = (cell / self.atlas.cells_per_page)
+            .checked_mul(self.atlas.texture_size[0])
+            .and_then(|page| {
+                side.checked_mul((cell % self.atlas.cells_per_page) / self.atlas.grid_side)
+                    .and_then(|row| page.checked_add(row))
+            })
+            .ok_or(FormatError(overflow))?;
+        // Native upload copies min(glyph size + 5, raster side); the child samples +4.
+        // With matching raster sizes the entire sampled quad is freshly written.
+        let extent = glyph_size.checked_add(5).ok_or(FormatError(overflow))?;
+        if x.checked_add(extent)
+            .is_none_or(|v| v > self.atlas.texture_size[0])
+            || y.checked_add(extent)
+                .is_none_or(|v| v > self.atlas.texture_size[1])
+        {
+            return Err(FormatError(overflow));
         }
-        Ok(())
+        if self.atlas_regions.values().any(|&[old_x, old_y, w, h]| {
+            x < old_x + w && old_x < x + extent && y < old_y + h && old_y < y + extent
+        }) {
+            return Err(FormatError("auxiliary atlas write overlaps a live glyph"));
+        }
+        Ok([x, y, extent, extent])
     }
 
     /// Placement of the atlas object for the backend: its mode-5 draw state takes the float
