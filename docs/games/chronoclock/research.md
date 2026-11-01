@@ -1,5 +1,11 @@
 # CHRONOCLOCK 研究记录
 
+## 2026-11-01：鉴赏键盘导航限制定位
+
+对实际omake页读取列表状态：侧栏list0为 `disable_navigation=false, keep_input=true`，缩略图list1为 `disable_navigation=true, keep_input=false`。因此此前探针尝试键盘选择组7第0项时，缩略图保持 `current=None`，反复发送的下一项却改变侧栏选择；不是缩略图缺失，也不能用鼠标点击冒充纯键盘通过。原始状态记录 `local/chronoclock/gallery-nav-flags.log`。
+
+探针现在对明确禁止导航的列表，在排入任何输入前返回 `keyboard navigation is disabled for group 7`；不改游戏状态或强制解除禁止标志。实际同页复验记录 `gallery-nav-denied.log`：拒绝后页面签名不变、输入队列为空。普通列表及剧情键盘输入策略不变；既有严格Clippy与格式检查通过，未新增测试。缩略图需使用鼠标，这项限制保留并给出具体原因。
+
 ## 2026-11-01：全检查结果与I1页面误识别修正
 
 此前启动的 `playflow-all-v2` 已正常结束（探针退出码1），不是挂起或超时。实际构建为 `94e4f43`，包含列表控件、v2快照及序列空闲修正，不含后续滚轮边。参数 `--checks all --fork save --allow-presumed --allow-unreviewed --max-steps 300000000`，鼠标、种子0、16ms、MS Gothic，输出独立用户目录。32项中30项通过：S1/S2/S4/S5、R1–R5、D1–D3、I2–I5、P1–P4、C1–C4、V1–V5、L1；S3按默认闸门静态报告130条脚本命令会停止，此结果不因研究放行而改为通过。

@@ -1,5 +1,7 @@
 # cmvs-probe
 
+Keyboard presses reject list groups whose script state disables navigation before sending input. This avoids moving another active group's selection while trying to reach a mouse-only list.
+
 与游戏无关的无头整机检查工具。设计、通用性规则与分阶段计划见[通用游戏探针设计草案](../../docs/design/probe.md)。依赖 `cmvs-core`，并借用 `cmvs-desktop` 的字体模块提供字形度量；不打开窗口或音频设备。
 
 主要职责：
