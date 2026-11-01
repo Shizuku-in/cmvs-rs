@@ -4031,17 +4031,22 @@ fn font_cell_step(
         .profile("cmvs-20171114")
         .unwrap();
     let mut input = ActionInput::default();
-    match cmvs_rs::dispatch::run_text(
+    match cmvs_rs::dispatch::run(
         profile.semantics(vm.pending_system().unwrap().1),
         vm,
-        Some(&mut cmvs_rs::dispatch::TextHosts {
-            messages,
-            input: &mut input,
-            flags: Default::default(),
-        }),
+        &mut cmvs_rs::dispatch::Hosts {
+            text: Some(cmvs_rs::dispatch::TextHosts {
+                messages,
+                input: &mut input,
+                flags: Default::default(),
+            }),
+            ..Default::default()
+        },
     )? {
         Some(cmvs_rs::dispatch::Flow::Done | cmvs_rs::dispatch::Flow::Yield) => Ok(true),
-        Some(cmvs_rs::dispatch::Flow::Unhandled) => Ok(false),
+        Some(cmvs_rs::dispatch::Flow::Unhandled | cmvs_rs::dispatch::Flow::Unavailable) => {
+            Ok(false)
+        }
         None => messages.try_handle(vm),
     }
 }

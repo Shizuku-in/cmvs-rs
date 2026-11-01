@@ -765,14 +765,19 @@ impl<'a> Startup<'a> {
                 StartupEvent::Progress
             });
         }
-        if let Some(flow) = crate::dispatch::run_text(
+        if let Some(flow) = crate::dispatch::run(
             resolved.semantics,
             &mut self.machine,
-            Some(&mut crate::dispatch::TextHosts {
-                messages: &mut self.messages,
-                input: &mut self.input,
-                flags: message_flags,
-            }),
+            &mut crate::dispatch::Hosts {
+                text: Some(crate::dispatch::TextHosts {
+                    messages: &mut self.messages,
+                    input: &mut self.input,
+                    flags: message_flags,
+                }),
+                timers: Some(&mut self.timers),
+                flags: Some(&mut self.message_flags),
+                random: Some(&mut self.random),
+            },
         )? {
             return Ok(match flow {
                 crate::dispatch::Flow::Done => StartupEvent::Progress,
@@ -781,10 +786,12 @@ impl<'a> Startup<'a> {
                     self.resume_run = true;
                     StartupEvent::Yield
                 }
-                crate::dispatch::Flow::Unhandled => StartupEvent::Unhandled {
-                    pc,
-                    command: command + 0x2000,
-                },
+                crate::dispatch::Flow::Unhandled | crate::dispatch::Flow::Unavailable => {
+                    StartupEvent::Unhandled {
+                        pc,
+                        command: command + 0x2000,
+                    }
+                }
             });
         }
         if command == 0x128
@@ -895,7 +902,6 @@ impl<'a> Startup<'a> {
                 &mut self.machine,
                 self.snapshot_policy == SnapshotPolicy::ContinueWithoutImage,
             )?
-            || self.timers.try_handle(&mut self.machine)?
             || self.bootstrap.try_handle(&mut self.machine)?.is_some()
             || self.scene.try_handle(&mut self.machine)?
             || self.scene.try_handle_quake(&mut self.machine)?
@@ -921,7 +927,6 @@ impl<'a> Startup<'a> {
             )?
             || self.gesture.try_handle(&mut self.machine)?
             || self.save_menu.try_handle_popup(&mut self.machine)?
-            || self.message_flags.try_handle(&mut self.machine)?
             || self.settings.try_handle(&mut self.machine)?
             || self
                 .messages
@@ -988,7 +993,6 @@ impl<'a> Startup<'a> {
             || self
                 .capture
                 .try_handle(&mut self.machine, &mut self.scene)?
-            || self.random.try_handle(&mut self.machine)?
             || crate::math::try_handle(&mut self.machine)?
             || text::try_handle(&mut self.machine)?
             || crate::effect_objects::try_handle(&mut self.machine)?

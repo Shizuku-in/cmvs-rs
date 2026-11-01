@@ -348,10 +348,52 @@ fn run() -> Result<(), Box<dyn Error>> {
                     cmvs_rs::dispatch::semantics_name(gate.selection().profile, first)
                 );
             }
-            // Trace has no text host. Resolve through the same table as runner:
-            // an unavailable research override remains pending, never root fallback.
-            if cmvs_rs::dispatch::run_text(resolved.semantics, &mut machine, None)?
-                == Some(cmvs_rs::dispatch::Flow::Unhandled)
+            let dispatched = cmvs_rs::dispatch::run(
+                resolved.semantics,
+                &mut machine,
+                &mut cmvs_rs::dispatch::Hosts {
+                    timers: platform_assets.is_some().then_some(&mut timers),
+                    flags: platform_assets.is_some().then_some(&mut message_flags),
+                    random: random.as_mut(),
+                    ..Default::default()
+                },
+            )?;
+            if dispatched == Some(cmvs_rs::dispatch::Flow::Done) {
+                use cmvs_rs::dispatch::Capability;
+                let capability = cmvs_rs::dispatch::ROOT
+                    .iter()
+                    .find(|entry| entry.command == command)
+                    .expect("completed root command has an entry")
+                    .capability;
+                match capability {
+                    Capability::Timers => println!(
+                        "# timer 0x{:04x}: values={:?} system_integer[0]={:?}",
+                        command + 0x2000,
+                        timers.values(),
+                        machine.state().system_integer(0)
+                    ),
+                    Capability::Flags => println!(
+                        "# message flag 0x{:04x}: skip={} auto_advance={} bypass={}; system_integer[0]={:?}",
+                        command + 0x2000,
+                        message_flags.skip(),
+                        message_flags.auto_advance(),
+                        message_flags.bypass(),
+                        machine.state().system_integer(0)
+                    ),
+                    Capability::Random => println!(
+                        "# rand 0x20d4: system_integer[0]={:?} (explicit research seed)",
+                        machine.state().system_integer(0)
+                    ),
+                    Capability::Text => return Err("trace has no text host".into()),
+                }
+                continue;
+            }
+            // Root commands without an optional host retain the original stop
+            // diagnostics below. A selected research override stops immediately.
+            if matches!(
+                dispatched,
+                Some(cmvs_rs::dispatch::Flow::Unhandled | cmvs_rs::dispatch::Flow::Unavailable)
+            ) && resolved.semantics != cmvs_rs::profile::Semantics::Root
             {
                 println!(
                     "# STOP pending system=0x{:04x}; selected text handler needs a text host; PC and parameters preserved; not game completion",
@@ -643,17 +685,6 @@ fn run() -> Result<(), Box<dyn Error>> {
                     );
                     continue;
                 }
-                if message_flags.try_handle(&mut machine)? {
-                    println!(
-                        "# message flag 0x{:04x}: skip={} auto_advance={} bypass={}; system_integer[0]={:?}",
-                        command + 0x2000,
-                        message_flags.skip(),
-                        message_flags.auto_advance(),
-                        message_flags.bypass(),
-                        machine.state().system_integer(0)
-                    );
-                    continue;
-                }
                 if gesture.try_handle(&mut machine)? {
                     println!(
                         "# pointer gesture config 0x{:04x}; fields +0..+36={:?}; state only, no input",
@@ -696,15 +727,6 @@ fn run() -> Result<(), Box<dyn Error>> {
                             wipe.strips.len(),
                             wipe.finished
                         )),
-                        machine.state().system_integer(0)
-                    );
-                    continue;
-                }
-                if timers.try_handle(&mut machine)? {
-                    println!(
-                        "# timer 0x{:04x}: values={:?} system_integer[0]={:?}",
-                        command + 0x2000,
-                        timers.values(),
                         machine.state().system_integer(0)
                     );
                     continue;
@@ -807,15 +829,6 @@ fn run() -> Result<(), Box<dyn Error>> {
                     );
                     continue;
                 }
-            }
-            if let Some(random) = &mut random
-                && random.try_handle(&mut machine)?
-            {
-                println!(
-                    "# rand 0x20d4: system_integer[0]={:?} (explicit research seed)",
-                    machine.state().system_integer(0)
-                );
-                continue;
             }
             if let Some(source) = &mut system_source {
                 let game_id = bootstrap

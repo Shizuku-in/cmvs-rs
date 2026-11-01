@@ -1127,14 +1127,17 @@ fn proportional_auxiliary_text_uses_advances_for_single_and_double_byte_glyphs()
         let profile = cmvs_rs::profile::Registry::builtin()
             .profile("cmvs-20171114")
             .unwrap();
-        match cmvs_rs::dispatch::run_text(
+        match cmvs_rs::dispatch::run(
             profile.semantics(vm.pending_system().unwrap().1),
             &mut vm,
-            Some(&mut cmvs_rs::dispatch::TextHosts {
-                messages: &mut messages,
-                input: &mut input,
-                flags: Default::default(),
-            }),
+            &mut cmvs_rs::dispatch::Hosts {
+                text: Some(cmvs_rs::dispatch::TextHosts {
+                    messages: &mut messages,
+                    input: &mut input,
+                    flags: Default::default(),
+                }),
+                ..Default::default()
+            },
         )
         .unwrap()
         {

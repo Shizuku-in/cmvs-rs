@@ -1,6 +1,82 @@
 use std::{fs, process::Command};
 
 #[test]
+fn trace_state_dispatch_preserves_optional_hosts_seed_and_log_formats() {
+    let root = std::env::temp_dir().join(format!("cmvs-cli-shared-state-{}", std::process::id()));
+    fs::create_dir(&root).unwrap();
+    let input = root.join("synthetic.ps3");
+    for (opcode, args, log) in [
+        (0x2008u16, vec![], "# timer 0x2008: values="),
+        (
+            0x22eb,
+            vec![1u32, 1],
+            "# message flag 0x22eb: skip=true auto_advance=false bypass=false;",
+        ),
+        (
+            0x20d4,
+            vec![10],
+            "# rand 0x20d4: system_integer[0]=Some(8) (explicit research seed)",
+        ),
+    ] {
+        let mut code = vec![];
+        for value in args.iter().rev() {
+            code.extend(0x440u16.to_le_bytes());
+            code.extend(4u16.to_le_bytes());
+            code.extend(value.to_le_bytes());
+        }
+        code.extend(opcode.to_le_bytes());
+        code.extend(0x2003u16.to_le_bytes());
+        let mut raw = b"PS2A".to_vec();
+        for n in [
+            48u32,
+            0,
+            0,
+            0,
+            code.len() as u32,
+            0,
+            0,
+            0,
+            0,
+            code.len() as u32,
+            0,
+        ] {
+            raw.extend(n.to_le_bytes());
+        }
+        raw.extend(code.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+        fs::write(&input, &raw).unwrap();
+        for record in [false, true] {
+            for seed in [false, true] {
+                let mut cli = Command::new(env!("CARGO_BIN_EXE_cmvs-trace"));
+                cli.arg(&input).args(["--profile", "cmvs-20160201"]);
+                if record {
+                    cli.arg("--record-platform").arg(&root);
+                }
+                if seed {
+                    cli.args(["--rand-seed", "0"]);
+                }
+                let output = cli.output().unwrap();
+                let stdout = String::from_utf8(output.stdout).unwrap();
+                assert!(
+                    output.status.success(),
+                    "{stdout}\n{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+                let available = if opcode == 0x20d4 { seed } else { record };
+                assert_eq!(stdout.contains(log), available, "{stdout}");
+                let stop = if available { 0x2003 } else { opcode };
+                assert!(
+                    stdout.contains(&format!("# STOP pending system=0x{stop:04x};")),
+                    "{stdout}"
+                );
+            }
+        }
+        assert_eq!(fs::read(&input).unwrap(), raw);
+    }
+    fs::remove_file(input).unwrap();
+    fs::remove_dir(root).unwrap();
+}
+
+#[test]
 fn trace_contract_sources_and_legacy_research_policies_are_distinct() {
     let root = std::env::temp_dir().join(format!("cmvs-cli-contract-{}", std::process::id()));
     fs::create_dir(&root).unwrap();

@@ -54,12 +54,28 @@ impl cmvs_rs::movie::MovieSource for Unavailable {
 /// either finish without arguments or report a stack/target/capability error.
 /// This intentionally verifies routing, not the command's execution semantics.
 fn audit(handler: &str, mut probe: impl FnMut(&mut Machine<'_>) -> bool) {
-    let claim = CLAIMS
-        .iter()
-        .find(|claim| claim.handler == handler)
-        .unwrap();
+    let recognizes = |number| {
+        use cmvs_rs::dispatch::Capability;
+        let capability = match handler {
+            "timers::try_handle" => Some(Capability::Timers),
+            "message_flags::try_handle" => Some(Capability::Flags),
+            "random::try_handle" => Some(Capability::Random),
+            _ => None,
+        };
+        if let Some(capability) = capability {
+            cmvs_rs::dispatch::ROOT
+                .iter()
+                .any(|entry| entry.command == number && entry.capability == capability)
+        } else {
+            CLAIMS
+                .iter()
+                .find(|claim| claim.handler == handler)
+                .unwrap()
+                .recognizes(number)
+        }
+    };
     // Command zero yields inside Machine and never reaches either host chain.
-    assert!(!claim.recognizes(0));
+    assert!(!recognizes(0));
     for number in 1..0x400 {
         let mut code = vec![];
         command(&mut code, number + 0x2000, &[]);
@@ -68,7 +84,7 @@ fn audit(handler: &str, mut probe: impl FnMut(&mut Machine<'_>) -> bool) {
         pending(&mut vm);
         assert_eq!(
             probe(&mut vm),
-            claim.recognizes(number),
+            recognizes(number),
             "{handler} 0x{:04x}",
             number + 0x2000
         );
@@ -290,14 +306,19 @@ fn inventory_matches_wait_and_resource_host_recognition_exhaustively() {
     audit("dispatch::ROOT", |vm| {
         let mut messages = MessageHost::default();
         messages.set_record_output(true);
-        cmvs_rs::dispatch::run_text(
+        cmvs_rs::dispatch::run(
             cmvs_rs::profile::Semantics::Root,
             vm,
-            Some(&mut cmvs_rs::dispatch::TextHosts {
-                messages: &mut messages,
-                input: &mut ActionInput::default(),
-                flags: Default::default(),
-            }),
+            &mut cmvs_rs::dispatch::Hosts {
+                text: Some(cmvs_rs::dispatch::TextHosts {
+                    messages: &mut messages,
+                    input: &mut ActionInput::default(),
+                    flags: Default::default(),
+                }),
+                timers: Some(&mut cmvs_rs::timers::VmTimers::default()),
+                flags: Some(&mut cmvs_rs::message_flags::MessageFlags::default()),
+                random: Some(&mut CrtRandom::new(0)),
+            },
         )
         .map(|r| r.is_some())
         .unwrap_or(true)

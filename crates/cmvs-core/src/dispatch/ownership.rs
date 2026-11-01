@@ -17,6 +17,7 @@ pub struct Claim {
     pub runner_order: Option<u16>,
     pub trace_order: Option<u16>,
     accepts: fn(u16) -> bool,
+    trace_accepts: fn(u16) -> bool,
 }
 
 impl Claim {
@@ -25,6 +26,10 @@ impl Claim {
             Chain::Runner => self.runner_order,
             Chain::Trace => self.trace_order,
         }
+    }
+
+    pub fn recognizes_in(&self, command: u16, chain: Chain) -> bool {
+        self.recognizes(command) && (chain != Chain::Trace || (self.trace_accepts)(command))
     }
 
     pub fn recognizes(&self, command: u16) -> bool {
@@ -39,14 +44,15 @@ macro_rules! claim {
             runner_order: $runner,
             trace_order: $trace,
             accepts: |command| matches!(command, $($pattern)|+),
+            trace_accepts: |command| matches!(command, $($pattern)|+),
         }
     };
 }
 
 /// All public chain entry points, including direct handling in runner. Internal
 /// delegates (scene fade/motion, button lists, auxiliary motion, audio branches)
-/// are folded into the entry that calls them. The root text table is an adapter
-/// over the same MessageHost methods, not an independent semantic owner.
+/// are folded into the entry that calls them. The root table combines migrated
+/// state handlers with text adapters over the existing MessageHost methods.
 pub static CLAIMS: &[Claim] = &[
     claim!("runner::try_lifecycle", Some(10), None, 0x01 | 0x03),
     claim!("capture::try_immediate", Some(20), None, 0x3e),
@@ -66,10 +72,14 @@ pub static CLAIMS: &[Claim] = &[
     Claim {
         handler: "dispatch::ROOT",
         runner_order: Some(110),
-        // Trace passes no TextHosts. Root entries defer; selected research
-        // overrides stop explicitly and are listed separately in FONT_CELLS.
-        trace_order: None,
+        // Trace exposes state hosts conditionally and has no text capability.
+        trace_order: Some(0),
         accepts: |command| super::ROOT.iter().any(|entry| entry.command == command),
+        trace_accepts: |command| {
+            super::ROOT.iter().any(|entry| {
+                entry.command == command && entry.capability != super::Capability::Text
+            })
+        },
     },
     claim!("system_save::try_handle", Some(120), Some(310), 0x128),
     claim!("runner::choose_font", Some(130), None, 0x13d),
@@ -100,12 +110,6 @@ pub static CLAIMS: &[Claim] = &[
         Some(240),
         Some(10),
         0x2b2
-    ),
-    claim!(
-        "timers::try_handle",
-        Some(250),
-        Some(240),
-        0x08 | 0x09 | 0x0b | 0x0c | 0x0e | 0x0f
     ),
     claim!("bootstrap::try_handle", Some(260), Some(340),
         0x10..=0x16 | 0x19 | 0x1a | 0x1d..=0x1f | 0x90..=0x94 | 0x98 | 0x34d),
@@ -159,12 +163,6 @@ pub static CLAIMS: &[Claim] = &[
         Some(110),
         0x2cd | 0x2ce | 0x2d3 | 0x2d4 | 0x2ee
     ),
-    claim!(
-        "message_flags::try_handle",
-        Some(380),
-        Some(190),
-        0x2d0 | 0x2e5 | 0x2eb | 0x340
-    ),
     claim!("settings::try_handle", Some(390), Some(180),
         0x2d5 | 0x2de..=0x2e4 | 0x2e6..=0x2e9 | 0x2f8),
     claim!("message::try_record_poll", Some(400), None, 0x159),
@@ -216,7 +214,6 @@ pub static CLAIMS: &[Claim] = &[
     ),
     claim!("camera::try_handle", Some(580), Some(130), 0x56 | 0x58..=0x68 | 0x6a..=0x6d | 0x9c | 0x126 | 0x260..=0x264),
     claim!("capture::try_handle", Some(590), None, 0x3c | 0x304..=0x306),
-    claim!("random::try_handle", Some(600), Some(300), 0xd4),
     claim!("math::try_handle", Some(610), None, 0xd0..=0xd3),
     claim!(
         "text::try_handle",
@@ -235,7 +232,7 @@ pub static CLAIMS: &[Claim] = &[
 pub fn candidates(command: u16, chain: Chain) -> Vec<&'static Claim> {
     let mut claims: Vec<_> = CLAIMS
         .iter()
-        .filter(|claim| claim.order(chain).is_some() && claim.recognizes(command))
+        .filter(|claim| claim.order(chain).is_some() && claim.recognizes_in(command, chain))
         .collect();
     claims.sort_by_key(|claim| claim.order(chain));
     claims

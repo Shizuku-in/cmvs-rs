@@ -4,7 +4,7 @@
 //! configuration helper writes either boolean. The +1548 mode starts at zero and
 //! 0x140092d40 writes it while selecting popup menu items 0x809d..0x809f.
 //! The bypass flag is engine +12244, outside that block, but read by the same message waits.
-use crate::{bytecode::DecodeError, evaluate::error, machine::Machine, vm::SystemResult};
+use crate::{bytecode::DecodeError, dispatch::Call, machine::Machine};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct MessageFlags {
@@ -74,56 +74,54 @@ impl MessageFlags {
     /// 0x2340 (inline 0x1400847fa) sets the bypass to bool(SP-4) and pops 4 bytes; it has no
     /// query form and leaves the system results alone.
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        if let Some((pc, 0x340)) = vm.pending_system() {
-            let value = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x2340, e.0))?;
-            vm.complete_system(SystemResult(0x4004))?;
+        let Some((pc, command @ (0x340 | 0x2d0 | 0x2eb | 0x2e5))) = vm.pending_system() else {
+            return Ok(false);
+        };
+        self.handle(&mut Call::new(vm, pc, command))?;
+        Ok(true)
+    }
+
+    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        if call.command == 0x340 {
+            let value = call.argument(4, "bypass")?;
+            call.complete(0x4004)?;
             self.bypass = value != 0;
-            return Ok(true);
+            return Ok(());
         }
-        if let Some((pc, 0x2d0)) = vm.pending_system() {
-            let mode = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x22d0, e.0))?;
-            let value = if mode != 0 {
-                let raw = vm.stack().peek_u32(8).map_err(|e| error(pc, 0x22d0, e.0))?;
-                Some(((raw as i32).wrapping_abs() % 3) as u32)
-            } else {
-                None
-            };
-            vm.complete_system(SystemResult(0x4008))?;
+        let mode = call.argument(4, "mode")?;
+        let raw = if mode != 0 {
+            Some(call.argument(8, "value")?)
+        } else {
+            call.ignore_argument(8, "unused value")?;
+            None
+        };
+        if call.command == 0x2d0 {
+            let value = raw.map(|raw| ((raw as i32).wrapping_abs() % 3) as u32);
+            call.complete(0x4008)?;
             if let Some(value) = value {
                 self.mode_1548 = value;
             } else {
-                vm.state_mut()
+                call.vm
+                    .state_mut()
                     .set_system_integer(0, self.mode_1548)
                     .expect("slot 0 exists");
             }
-            return Ok(true);
+            return Ok(());
         }
-        let Some((pc, command @ (0x2eb | 0x2e5))) = vm.pending_system() else {
-            return Ok(false);
-        };
-        let arg = |distance| {
-            vm.stack()
-                .peek_u32(distance)
-                .map_err(|e| error(pc, command + 0x2000, e.0))
-        };
-        let value = if arg(4)? != 0 {
-            Some(arg(8)? != 0)
-        } else {
-            None
-        };
-        vm.complete_system(SystemResult(0x4008))?;
-        let flag = if command == 0x2eb {
+        call.complete(0x4008)?;
+        let flag = if call.command == 0x2eb {
             &mut self.skip
         } else {
             &mut self.auto_advance
         };
-        match value {
-            Some(active) => *flag = active,
-            None => vm
+        if let Some(raw) = raw {
+            *flag = raw != 0;
+        } else {
+            call.vm
                 .state_mut()
                 .set_system_integer(0, u32::from(*flag))
-                .expect("slot 0 exists"),
+                .expect("slot 0 exists");
         }
-        Ok(true)
+        Ok(())
     }
 }

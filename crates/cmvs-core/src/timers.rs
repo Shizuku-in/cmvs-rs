@@ -1,6 +1,6 @@
 //! Ten cumulative VM timers at engine +14748 (snapshot record 0x109), and the
 //! independent 0x200e/0x200f stopwatch at +0x4160.
-use crate::{bytecode::DecodeError, evaluate::error, machine::Machine, vm::SystemResult};
+use crate::{bytecode::DecodeError, dispatch::Call, machine::Machine};
 
 pub const TIMER_SLOTS: usize = 10;
 
@@ -45,46 +45,54 @@ impl VmTimers {
         else {
             return Ok(false);
         };
+        self.handle(&mut Call::new(vm, pc, command))?;
+        Ok(true)
+    }
+
+    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let command = call.command;
         // Inline 0x140082437 / 0x14008244d: system result 0 = the frame time (0x140007eb0)
         // or the frame delta (0x140007ed0), here the explicit research clock; 0x4000.
         if matches!(command, 0x08 | 0x09) {
-            vm.complete_system(SystemResult(0x4000))?;
+            call.complete(0x4000)?;
             let value = if command == 0x08 {
                 self.clock
             } else {
                 self.delta
             };
-            vm.state_mut()
+            call.vm
+                .state_mut()
                 .set_system_integer(0, value)
                 .expect("slot 0 exists");
-            return Ok(true);
+            return Ok(());
         }
         // 0x1400824f0/0x140082506: no arguments, independent of the ten timer slots.
         if matches!(command, 0x0e | 0x0f) {
-            vm.complete_system(SystemResult(0x4000))?;
+            call.complete(0x4000)?;
             if command == 0x0e {
                 self.marked_at = self.clock;
             } else {
-                vm.state_mut()
+                call.vm
+                    .state_mut()
                     .set_system_integer(0, self.clock.wrapping_sub(self.marked_at))
                     .expect("slot 0 exists");
             }
-            return Ok(true);
+            return Ok(());
         }
-        let fail = |why| error(pc, command + 0x2000, why);
-        let slot = vm.stack().peek_u32(4).map_err(|e| fail(e.0))? as usize;
+        let slot = call.argument(4, "timer slot")? as usize;
         let value = *self
             .values
             .get(slot)
-            .ok_or_else(|| fail("timer slot outside 0..9"))?;
-        vm.complete_system(SystemResult(0x4004))?;
+            .ok_or_else(|| call.error("timer slot outside 0..9"))?;
+        call.complete(0x4004)?;
         if command == 0x0b {
             self.values[slot] = 0;
         } else {
-            vm.state_mut()
+            call.vm
+                .state_mut()
                 .set_system_integer(0, value)
                 .expect("slot 0 exists");
         }
-        Ok(true)
+        Ok(())
     }
 }
