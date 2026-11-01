@@ -10,14 +10,26 @@
 <table>
   <tr>
     <td align="center" width="50%">
-      <img src="docs/images/amatsutsumi_windows11.webp" alt="Windows Example" width="100%">
+      <img src="docs/images/amatsutsumi_windows11.webp" alt="Windows Example of Amatsutsumi" width="100%">
       <br><strong>Windows</strong>
       <br><sub>Amatsutsumi</sub>
     </td>
     <td align="center" width="50%">
-      <img src="docs/images/amatsutsumi_ubuntu.webp" alt="Linux Example" width="100%">
+      <img src="docs/images/amatsutsumi_ubuntu.webp" alt="Linux Example of Amatsutsumi" width="100%">
       <br><strong>Linux</strong>
       <br><sub>Amatsutsumi</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/aoitori_windows11.webp" alt="Windows Example of Aoitori" width="100%">
+      <br><strong>Windows</strong>
+      <br><sub>Aoitori</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/aoitori_ubuntu.webp" alt="Linux Example of Aoitori" width="100%">
+      <br><strong>Linux</strong>
+      <br><sub>Aoitori</sub>
     </td>
   </tr>
 </table>
