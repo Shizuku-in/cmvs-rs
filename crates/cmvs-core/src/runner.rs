@@ -749,13 +749,24 @@ impl<'a> Startup<'a> {
         }
         let mut image_source = self.images.with_paths(self.bootstrap.paths());
         let input_clock = self.timers.clock();
+        let movie_settings = self.audio.settings();
+        let mut movie_source = DirectoryMovies {
+            root: &self.root,
+            directory: self.bootstrap.paths().get(&(0x2015, 0)).map(Vec::as_slice),
+        };
+        let mut scene_movie_source = self
+            .scene_movies
+            .with_paths(self.bootstrap.paths(), ResourceKind::SceneMovie);
+        let is_movie_player = crate::dispatch::uses_movie_player(command);
         let mut hosts = crate::dispatch::Hosts {
-            audio: Some(crate::dispatch::AudioHosts {
-                audio: &mut self.audio,
-                backend: self.audio_backend.as_mut(),
-            }),
+            sequence: None,
+            movies: Some(&mut self.movies),
+            movie_scene: None,
+            movie_player: None,
+            scene_movie_playback: true,
+            audio: None,
             scene: None,
-            camera: Some(&mut self.camera),
+            camera: None,
             images: None,
             waits: None,
             text: None,
@@ -800,16 +811,45 @@ impl<'a> Startup<'a> {
                 flags: message_flags,
             });
         }
-        if crate::dispatch::uses_window_images(command) {
-            hosts.window_images = Some(&mut image_source);
-        } else if crate::dispatch::uses_images(command) {
-            hosts.images = Some(crate::dispatch::ImageHosts {
-                scene: &mut self.scene,
-                source: &mut image_source,
-                change_images: true,
+        if is_movie_player {
+            hosts.movie_player = Some(crate::dispatch::MoviePlayerHosts {
+                source: &mut movie_source,
+                settings: movie_settings,
+                backend: self.audio_backend.as_mut(),
             });
         } else {
-            hosts.scene = Some(&mut self.scene);
+            hosts.audio = Some(crate::dispatch::AudioHosts {
+                audio: &mut self.audio,
+                backend: self.audio_backend.as_mut(),
+            });
+        }
+        if crate::dispatch::uses_sequence(command) {
+            hosts.sequence = Some(crate::dispatch::SequenceHosts {
+                host: &mut self.sequence,
+                execution: Some(crate::sequence::SequenceContext {
+                    scene: &mut self.scene,
+                    images: &mut image_source,
+                    camera: Some(&mut self.camera),
+                }),
+            });
+        } else {
+            hosts.camera = Some(&mut self.camera);
+            if crate::dispatch::uses_movie_scene(command) {
+                hosts.movie_scene = Some(crate::dispatch::MovieSceneHosts {
+                    scene: &mut self.scene,
+                    source: &mut scene_movie_source,
+                });
+            } else if crate::dispatch::uses_window_images(command) {
+                hosts.window_images = Some(&mut image_source);
+            } else if crate::dispatch::uses_images(command) {
+                hosts.images = Some(crate::dispatch::ImageHosts {
+                    scene: &mut self.scene,
+                    source: &mut image_source,
+                    change_images: true,
+                });
+            } else {
+                hosts.scene = Some(&mut self.scene);
+            }
         }
         if let Some(flow) = crate::dispatch::run(resolved.semantics, &mut self.machine, &mut hosts)?
         {
@@ -937,31 +977,7 @@ impl<'a> Startup<'a> {
                 self.snapshot_policy == SnapshotPolicy::ContinueWithoutImage,
             )?
             || self.bootstrap.try_handle(&mut self.machine)?.is_some()
-            || self.movies.try_create_scene(
-                &mut self.machine,
-                &mut self.scene,
-                &mut self
-                    .scene_movies
-                    .with_paths(self.bootstrap.paths(), ResourceKind::SceneMovie),
-            )?
-            || self.movies.try_start_scene(&mut self.machine)?
-            || self.movies.try_handle(&mut self.machine)?
-            || self.movies.try_handle_player(
-                &mut self.machine,
-                &mut DirectoryMovies {
-                    root: &self.root,
-                    directory: self.bootstrap.paths().get(&(0x2015, 0)).map(Vec::as_slice),
-                },
-                self.audio.settings(),
-                self.audio_backend.as_mut(),
-            )?
             || (command == 0x34d && input::try_handle(&mut self.machine, &mut self.input)?)
-            || self.sequence.try_handle_with_hosts(
-                &mut self.machine,
-                &mut self.scene,
-                &mut self.images.with_paths(self.bootstrap.paths()),
-                &mut self.camera,
-            )?
             || self
                 .capture
                 .try_handle(&mut self.machine, &mut self.scene)?

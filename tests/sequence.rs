@@ -1,3 +1,6 @@
+#[path = "support/shared_media.rs"]
+mod shared_media;
+use shared_media::SharedSequence;
 mod support;
 use cmvs_rs::{
     machine::Machine,
@@ -19,13 +22,13 @@ fn reset_zeroes_the_header_and_pops_nothing() {
     vm.state_mut().set_system_integer(0, 3).unwrap();
     let mut sequence = SequenceHost::default();
     pending(&mut vm);
-    assert!(sequence.try_handle(&mut vm).unwrap());
+    assert!(sequence.shared_sequence(&mut vm).unwrap());
     assert_eq!(sequence.header(), SequenceHeader::default());
     assert_eq!(vm.stack().len_bytes(), 4);
     assert_eq!(vm.state().system_integer(0), Some(3));
     // Other commands of the family stay pending.
     pending(&mut vm);
-    assert!(!sequence.try_handle(&mut vm).unwrap());
+    assert!(!sequence.shared_sequence(&mut vm).unwrap());
     assert_eq!(vm.pending_system().map(|p| p.1), Some(0x28b));
 }
 
@@ -43,11 +46,11 @@ fn count_query_preserves_stack_header_and_other_results() {
     vm.state_mut().set_system_integer(0, 99).unwrap();
     vm.state_mut().set_system_integer(4, 7).unwrap();
     let mut sequence = SequenceHost::default();
-    assert!(!sequence.try_handle(&mut vm).unwrap());
+    assert!(!sequence.shared_sequence(&mut vm).unwrap());
     for _ in 0..2 {
         pending(&mut vm);
         let pc = vm.pc();
-        assert!(sequence.try_handle(&mut vm).unwrap());
+        assert!(sequence.shared_sequence(&mut vm).unwrap());
         assert_eq!(vm.pc(), pc + 2);
         assert_eq!(vm.state().system_integer(0), Some(0));
         assert_eq!(vm.state().system_integer(4), Some(7));
@@ -56,7 +59,7 @@ fn count_query_preserves_stack_header_and_other_results() {
         assert_eq!(sequence.header(), SequenceHeader::default());
     }
     pending(&mut vm);
-    assert!(!sequence.try_handle(&mut vm).unwrap());
+    assert!(!sequence.shared_sequence(&mut vm).unwrap());
     assert_eq!(vm.pending_system().map(|p| p.1), Some(0x28b));
 }
 
@@ -100,7 +103,7 @@ fn current_index_query_returns_minus_one_when_inactive_and_does_not_consume_para
         pending(&mut vm);
         let pc = vm.pc();
         let header = sequence.header();
-        assert!(sequence.try_handle(&mut vm).unwrap());
+        assert!(sequence.shared_sequence(&mut vm).unwrap());
         assert_eq!(vm.pc(), pc + 2);
         assert_eq!(vm.pending_system(), None);
         assert_eq!(vm.state().system_integer(0), Some(u32::MAX));
@@ -115,7 +118,7 @@ fn current_index_query_returns_minus_one_when_inactive_and_does_not_consume_para
 
 fn run(vm: &mut Machine<'_>, sequence: &mut SequenceHost) {
     pending(vm);
-    assert!(sequence.try_handle(vm).unwrap());
+    assert!(sequence.shared_sequence(vm).unwrap());
 }
 
 #[test]
@@ -348,7 +351,7 @@ fn failed_wait_append_preserves_active_sequence_and_unknown_actions_remain_pendi
     vm.state_mut().set_system_integer(0, 123).unwrap();
     pending(&mut vm);
     for _ in 0..2 {
-        assert!(host.try_handle(&mut vm).is_err());
+        assert!(host.shared_sequence(&mut vm).is_err());
         assert_eq!(host.header(), header);
         assert_eq!(host.entries(), &entries);
         assert_eq!(host.clock(), 25);
@@ -360,7 +363,7 @@ fn failed_wait_append_preserves_active_sequence_and_unknown_actions_remain_pendi
         let program = script(&opcode.to_le_bytes());
         let mut vm = Machine::new(&program).unwrap();
         pending(&mut vm);
-        assert!(!host.try_handle(&mut vm).unwrap());
+        assert!(!host.shared_sequence(&mut vm).unwrap());
         assert_eq!(vm.pending_system(), Some((0, opcode - 0x2000)));
         assert_eq!(host.header(), header);
         assert_eq!(host.entries(), &entries);
@@ -436,7 +439,7 @@ fn camera_sequence_immediate_paths_quantize_xyz_without_cancelling_old_motion() 
         }
         if finish {
             pending(&mut vm);
-            host.try_handle_with_hosts(&mut vm, &mut scene, &mut NoImages, &mut camera)
+            host.shared_sequence_hosts(&mut vm, &mut scene, &mut NoImages, &mut camera)
                 .unwrap();
         } else {
             host.advance_frame_with_hosts(0, &mut scene, &mut NoImages, &mut camera)
@@ -572,11 +575,11 @@ fn motion_sequence_fast_finish_skips_without_changing_existing_track_or_validati
         pending(&mut vm);
         if with_scene {
             assert!(
-                host.try_handle_with_images(&mut vm, &mut scene, &mut NoImages)
+                host.shared_sequence_images(&mut vm, &mut scene, &mut NoImages)
                     .unwrap()
             );
         } else {
-            assert!(host.try_handle(&mut vm).unwrap());
+            assert!(host.shared_sequence(&mut vm).unwrap());
         }
         assert_eq!(scene.object(20), Some(&before));
         assert_eq!(host.header(), SequenceHeader::default());
@@ -619,9 +622,9 @@ fn subtype_one_motion_runs_normally_but_fast_finish_snaps_and_removes_the_old_tr
         if finish {
             pending(&mut vm);
             let before = host.header();
-            assert!(host.try_handle(&mut vm).is_err());
+            assert!(host.shared_sequence(&mut vm).is_err());
             assert_eq!(host.header(), before);
-            host.try_handle_with_images(&mut vm, &mut scene, &mut NoImages)
+            host.shared_sequence_images(&mut vm, &mut scene, &mut NoImages)
                 .unwrap();
         } else {
             host.advance_frame_with_images(0, &mut scene, &mut NoImages)
@@ -716,7 +719,7 @@ fn motion_append_preserves_raw_bits_caps_at_sixteen_and_missing_args_are_transac
     let entries = host.entries().clone();
     pending(&mut vm);
     for _ in 0..2 {
-        assert!(host.try_handle(&mut vm).is_err());
+        assert!(host.shared_sequence(&mut vm).is_err());
         assert_eq!(host.header(), header);
         assert_eq!(host.entries(), &entries);
         assert_eq!(vm.stack().len_bytes(), 20);

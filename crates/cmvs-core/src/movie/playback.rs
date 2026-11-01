@@ -1,6 +1,6 @@
 //! 0x2309 -> 0x1400385a0, mode 0 update 0x140039330; hash-bound in vm-semantics.md.
 use super::{MOVIE_SLOTS, MovieHost};
-use crate::{FormatError, evaluate::error, machine::Machine, scene::SceneHost, vm::SystemResult};
+use crate::{FormatError, dispatch::Call, evaluate::error, machine::Machine, scene::SceneHost};
 use std::error::Error;
 pub const MOVIE_SEGMENTS: usize = 16;
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -83,21 +83,34 @@ impl MovieHost {
         let Some((pc, 0x309)) = vm.pending_system() else {
             return Ok(false);
         };
+        self.handle_start_scene(&mut Call::new(vm, pc, 0x309))?;
+        Ok(true)
+    }
+    pub(crate) fn handle_start_scene(
+        &mut self,
+        call: &mut Call<'_, '_>,
+    ) -> Result<(), Box<dyn Error>> {
+        let pc = call.pc;
         let fail = |why| error(pc, 0x2309, why);
-        let arg = |at| vm.stack().peek_u32(at).map_err(|e| fail(e.0));
-        let (slot, key, start, end) = (arg(4)?, arg(8)?, arg(12)?, arg(16)?);
+        let (slot, key, start, end) = (
+            call.argument(4, "player slot")?,
+            call.argument(8, "segment")?,
+            call.argument(12, "start frame")?,
+            call.argument(16, "end frame")?,
+        );
         if slot as usize >= MOVIE_SLOTS {
             return Err(fail("movie slot outside 0..2 sets an unmodeled flag").into());
         }
         let Some(movie) = &self.slots[slot as usize] else {
-            vm.complete_system(SystemResult(0x4014))?;
-            return Ok(true);
+            call.ignore_argument(20, "unused loop")?;
+            call.complete(0x4014)?;
+            return Ok(());
         };
         if key as usize >= MOVIE_SEGMENTS {
             return Err(fail("movie segment outside 0..15").into());
         }
         let segment = MovieSegment {
-            looping: arg(20)? != 0,
+            looping: call.argument(20, "loop")? != 0,
             start,
             end: if end == u32::MAX {
                 movie.index.max_sequence() - 1
@@ -105,7 +118,7 @@ impl MovieHost {
                 end
             },
         };
-        vm.complete_system(SystemResult(0x4014))?;
+        call.complete(0x4014)?;
         let p = &mut self.slots[slot as usize]
             .as_mut()
             .expect("validated")
@@ -120,7 +133,7 @@ impl MovieHost {
             p.elapsed = 0;
             p.last_tick = self.scene_clock;
         }
-        Ok(true)
+        Ok(())
     }
     /// Main loop 0x14000e400 updates slots before VM/scene effects. Decode the final
     /// target only; each player's failed update retains its time/frame/image for retry.

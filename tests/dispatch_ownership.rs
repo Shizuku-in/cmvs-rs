@@ -78,6 +78,11 @@ fn audit(handler: &str, mut probe: impl FnMut(&mut Machine<'_>) -> bool) {
             return number == 0x159;
         }
         let capability = match handler {
+            "movie::try_create_scene" => Some(Capability::MovieScene),
+            "movie::try_start_scene" => Some(Capability::MovieStart),
+            "movie::try_handle" => Some(Capability::MovieState),
+            "movie::try_handle_player" => Some(Capability::MoviePlayer),
+            "sequence::try_handle_with_hosts" => Some(Capability::Sequence),
             "scene::try_handle_quake" => Some(Capability::Quake),
             "scene::try_handle_strip" => Some(Capability::Strip),
             "scene::try_handle_image" => Some(Capability::SceneImages),
@@ -404,6 +409,21 @@ fn inventory_matches_wait_and_resource_host_recognition_exhaustively() {
                     source: &mut Unavailable,
                     change_images: true,
                 }),
+                movies: Some(&mut cmvs_rs::movie::MovieHost::default()),
+                movie_scene: Some(cmvs_rs::dispatch::MovieSceneHosts {
+                    scene: &mut cmvs_rs::scene::SceneHost::default(),
+                    source: &mut Unavailable,
+                }),
+                movie_player: Some(cmvs_rs::dispatch::MoviePlayerHosts {
+                    source: &mut Unavailable,
+                    settings: Default::default(),
+                    backend: &mut cmvs_rs::audio::RecordingAudio::default(),
+                }),
+                scene_movie_playback: true,
+                sequence: Some(cmvs_rs::dispatch::SequenceHosts {
+                    host: &mut cmvs_rs::sequence::SequenceHost::default(),
+                    execution: None,
+                }),
                 audio: Some(cmvs_rs::dispatch::AudioHosts {
                     audio: &mut cmvs_rs::audio::AudioHost::default(),
                     backend: &mut RecordingAudio::default(),
@@ -580,10 +600,6 @@ fn inventory_tracks_chain_entry_calls() {
             if name.starts_with("try_") {
                 *expected.entry(name.to_string()).or_default() += 1;
             }
-        }
-        if chain == Chain::Trace {
-            // The sequence entry has a capability-dependent legacy fallback.
-            *expected.entry("try_handle".to_string()).or_default() += 1;
         }
         assert_eq!(actual, expected, "{chain:?} entry inventory drifted");
     }

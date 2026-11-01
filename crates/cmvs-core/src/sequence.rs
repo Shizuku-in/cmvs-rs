@@ -3,8 +3,8 @@
 //! 0x140014b10; addresses refer to the documented binary hash. Wait entries and their
 //! start/stop/finish lifecycle, image replacement and XYZ motion entries are modeled; other actions stay unhandled.
 use crate::{
-    camera::CameraHost, evaluate::error, image::ImageSource, machine::Machine, scene::SceneHost,
-    vm::SystemResult,
+    camera::CameraHost, dispatch::Call, evaluate::error, image::ImageSource, machine::Machine,
+    scene::SceneHost,
 };
 use std::error::Error;
 
@@ -75,6 +75,14 @@ pub struct SequenceHost {
     entries: [Option<SequenceEntry>; SEQUENCE_ENTRIES],
     /// Explicit wrapping millisecond clock, independent of callback registration ticks.
     clock: u32,
+}
+
+/// Optional execution context for finishing scene actions; absence preserves the
+/// headless sequence API's explicit action-specific errors.
+pub struct SequenceContext<'a> {
+    pub scene: &'a mut SceneHost,
+    pub images: &'a mut dyn ImageSource,
+    pub camera: Option<&'a mut CameraHost>,
 }
 
 impl SequenceHost {
@@ -241,12 +249,17 @@ impl SequenceHost {
         scene: &mut SceneHost,
         images: &mut dyn ImageSource,
     ) -> Result<bool, Box<dyn Error>> {
-        if !matches!(vm.pending_system(), Some((_, 0x284))) {
-            return self.try_handle(vm);
-        }
-        self.run_images(true, scene, images)?;
-        vm.complete_system(SystemResult(0x4000))?;
-        self.header = SequenceHeader::default();
+        let Some((pc, command @ 0x280..=0x28a)) = vm.pending_system() else {
+            return Ok(false);
+        };
+        self.handle(
+            &mut Call::new(vm, pc, command),
+            Some(SequenceContext {
+                scene,
+                images,
+                camera: None,
+            }),
+        )?;
         Ok(true)
     }
 
@@ -257,26 +270,40 @@ impl SequenceHost {
         images: &mut dyn ImageSource,
         camera: &mut CameraHost,
     ) -> Result<bool, Box<dyn Error>> {
-        if !matches!(vm.pending_system(), Some((_, 0x284))) {
-            return self.try_handle(vm);
-        }
-        self.run_with_camera(true, scene, images, Some(camera))?;
-        vm.complete_system(SystemResult(0x4000))?;
-        self.header = SequenceHeader::default();
+        let Some((pc, command @ 0x280..=0x28a)) = vm.pending_system() else {
+            return Ok(false);
+        };
+        self.handle(
+            &mut Call::new(vm, pc, command),
+            Some(SequenceContext {
+                scene,
+                images,
+                camera: Some(camera),
+            }),
+        )?;
         Ok(true)
     }
     /// 0x2280: the dispatcher calls 0x140014320 inline, zeroing the five header words, and
     /// returns 0x4000 (nothing popped). Entries keep their bytes but are no longer run.
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, Box<dyn Error>> {
-        if let Some((pc, 0x287)) = vm.pending_system() {
+        let Some((pc, command @ 0x280..=0x28a)) = vm.pending_system() else {
+            return Ok(false);
+        };
+        self.handle(&mut Call::new(vm, pc, command), None)?;
+        Ok(true)
+    }
+    pub(crate) fn handle(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        context: Option<SequenceContext<'_>>,
+    ) -> Result<(), Box<dyn Error>> {
+        let (pc, command) = (call.pc, call.command);
+        if command == 0x287 {
             let mut args = [0; 5];
             for (i, arg) in args.iter_mut().enumerate() {
-                *arg = vm
-                    .stack()
-                    .peek_u32((i + 1) * 4)
-                    .map_err(|e| error(pc, 0x2287, e.0))?;
+                *arg = call.argument((i + 1) * 4, argument_names(command)[i])?;
             }
-            vm.complete_system(SystemResult(0x4014))?;
+            call.complete(0x4014)?;
             if self.header.count < SEQUENCE_ENTRIES as u32 {
                 self.entries[self.header.count as usize] = Some(SequenceEntry::CameraMotion {
                     mode: args[0],
@@ -286,17 +313,14 @@ impl SequenceHost {
                 });
                 self.header.count += 1;
             }
-            return Ok(true);
+            return Ok(());
         }
-        if let Some((pc, command @ (0x289 | 0x28a))) = vm.pending_system() {
+        if matches!(command, 0x289 | 0x28a) {
             let mut args = [0; 6];
             for (i, arg) in args.iter_mut().enumerate() {
-                *arg = vm
-                    .stack()
-                    .peek_u32((i + 1) * 4)
-                    .map_err(|e| error(pc, command + 0x2000, e.0))?;
+                *arg = call.argument((i + 1) * 4, argument_names(command)[i])?;
             }
-            vm.complete_system(SystemResult(0x4018))?;
+            call.complete(0x4018)?;
             if self.header.count < SEQUENCE_ENTRIES as u32 {
                 self.entries[self.header.count as usize] = Some(SequenceEntry::WorldMotion {
                     snap_on_finish: command == 0x289,
@@ -308,17 +332,14 @@ impl SequenceHost {
                 });
                 self.header.count += 1;
             }
-            return Ok(true);
+            return Ok(());
         }
-        if let Some((pc, 0x288)) = vm.pending_system() {
+        if command == 0x288 {
             let mut args = [0; 3];
             for (i, arg) in args.iter_mut().enumerate() {
-                *arg = vm
-                    .stack()
-                    .peek_u32((i + 1) * 4)
-                    .map_err(|e| error(pc, 0x2288, e.0))?;
+                *arg = call.argument((i + 1) * 4, argument_names(command)[i])?;
             }
-            let name = vm.resolve_string(args[1])?;
+            let name = call.vm.resolve_string(args[1])?;
             let entry = if self.header.count < SEQUENCE_ENTRIES as u32 {
                 if name.len() >= 64 {
                     return Err(error(pc, 0x2288, "sequence image name exceeds 63 bytes").into());
@@ -332,30 +353,31 @@ impl SequenceHost {
             } else {
                 None
             };
-            vm.complete_system(SystemResult(0x400c))?;
+            call.complete(0x400c)?;
             if let Some(entry) = entry {
                 self.entries[self.header.count as usize] = Some(entry);
                 self.header.count += 1;
             }
-            return Ok(true);
+            return Ok(());
         }
-        let Some((pc, command @ 0x280..=0x286)) = vm.pending_system() else {
-            return Ok(false);
-        };
         if command == 0x286 {
-            let duration = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x2286, e.0))?;
-            vm.complete_system(SystemResult(0x4004))?;
+            let duration = call.argument(4, "duration")?;
+            call.complete(0x4004)?;
             // 0x1400143e0: ignore an append at capacity but still complete the command.
             if self.header.count < SEQUENCE_ENTRIES as u32 {
                 self.entries[self.header.count as usize] = Some(SequenceEntry::Wait { duration });
                 self.header.count += 1;
             }
-            return Ok(true);
+            return Ok(());
         }
         if command == 0x284 {
-            self.run(true, missing_scene)?;
+            if let Some(context) = context {
+                self.run_with_camera(true, context.scene, context.images, context.camera)?;
+            } else {
+                self.run(true, missing_scene)?;
+            }
         }
-        vm.complete_system(SystemResult(0x4000))?;
+        call.complete(0x4000)?;
         if command == 0x280 {
             self.header = SequenceHeader::default();
         } else if command == 0x282 {
@@ -382,11 +404,21 @@ impl SequenceHost {
             } else {
                 self.header.count
             };
-            vm.state_mut()
+            call.vm
+                .state_mut()
                 .set_system_integer(0, value)
                 .expect("slot 0 exists");
         }
-        Ok(true)
+        Ok(())
+    }
+}
+
+fn argument_names(command: u16) -> &'static [&'static str] {
+    match command {
+        0x287 => &["mode", "x", "y", "z", "duration"],
+        0x288 => &["object slot", "image name", "duration"],
+        0x289 | 0x28a => &["object slot", "x", "y", "z", "mode", "duration"],
+        _ => unreachable!("registered sequence argument schema"),
     }
 }
 

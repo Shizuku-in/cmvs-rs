@@ -88,7 +88,9 @@ pub static CLAIMS: &[Claim] = &[
                 entry.command == command
                     && !matches!(
                         entry.capability,
-                        super::Capability::Text
+                        super::Capability::MovieScene
+                            | super::Capability::MovieStart
+                            | super::Capability::Text
                             | super::Capability::Math
                             | super::Capability::SaveInfo
                             | super::Capability::Effects
@@ -139,27 +141,7 @@ pub static CLAIMS: &[Claim] = &[
     ),
     claim!("bootstrap::try_handle", Some(260), Some(340),
         0x10..=0x16 | 0x19 | 0x1a | 0x1d..=0x1f | 0x90..=0x94 | 0x98 | 0x34d),
-    claim!("movie::try_create_scene", Some(500), None, 0x308),
-    claim!("movie::try_start_scene", Some(510), None, 0x309),
-    claim!(
-        "movie::try_handle",
-        Some(520),
-        Some(150),
-        0x30a..=0x30c | 0x31a
-    ),
-    claim!(
-        "movie::try_handle_player",
-        Some(530),
-        Some(250),
-        0xc0..=0xc2
-    ),
     claim!("input::try_handle", Some(540), Some(260), 0x34d),
-    claim!(
-        "sequence::try_handle_with_hosts",
-        Some(570),
-        Some(140),
-        0x280..=0x28a
-    ),
     claim!("capture::try_handle", Some(590), None, 0x3c | 0x304..=0x306),
 ];
 

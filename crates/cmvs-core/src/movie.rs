@@ -16,10 +16,10 @@ use crate::{
     audio::{AudioBackend, AudioRequest, AudioSettings, MovieAudioClock},
     bytecode::DecodeError,
     cmv::CmvIndex,
+    dispatch::Call,
     evaluate::error,
     machine::Machine,
     platform::resolve_under,
-    vm::SystemResult,
 };
 use std::{error::Error, fs::File, io, path::Path};
 
@@ -317,10 +317,26 @@ impl MovieHost {
         let Some((pc, 0x308)) = vm.pending_system() else {
             return Ok(false);
         };
+        self.handle_create_scene(&mut Call::new(vm, pc, 0x308), scene, source)?;
+        Ok(true)
+    }
+
+    pub(crate) fn handle_create_scene(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        scene: &mut crate::scene::SceneHost,
+        source: &mut dyn crate::resources::ResourceSource,
+    ) -> Result<(), Box<dyn Error>> {
+        let pc = call.pc;
         let fail = |why| error(pc, 0x2308, why);
-        let arg = |at| vm.stack().peek_u32(at).map_err(|e| fail(e.0));
-        let (slot, object, name, frame) = (arg(4)?, arg(8)?, arg(12)?, arg(20)?);
-        let name = vm.resolve_string(name)?;
+        let (slot, object, name, frame) = (
+            call.argument(4, "player slot")?,
+            call.argument(8, "object slot")?,
+            call.argument(12, "movie name")?,
+            call.argument(20, "initial frame")?,
+        );
+        let name = call.vm.resolve_string(name)?;
+        call.ignore_argument(16, "unused load parameter")?;
         if slot as usize >= MOVIE_SLOTS {
             return Err(fail("movie slot outside 0..2 sets an unmodeled flag").into());
         }
@@ -353,7 +369,7 @@ impl MovieHost {
             draw: Some(draw),
             ..crate::scene::SceneObject::default()
         };
-        vm.complete_system(SystemResult(0x4014))?;
+        call.complete(0x4014)?;
         scene.replace_movie_object(object_slot, object);
         self.slots[slot as usize] = Some(SceneMovie {
             object_slot,
@@ -364,7 +380,7 @@ impl MovieHost {
             base,
             playback,
         });
-        Ok(true)
+        Ok(())
     }
 
     /// 0x230a / 0x14007f390: SP-4 slot compared unsigned against 2; destroys and clears the
@@ -380,8 +396,14 @@ impl MovieHost {
         let Some((pc, command @ (0x30a..=0x30c | 0x31a))) = vm.pending_system() else {
             return Ok(false);
         };
+        self.handle(&mut Call::new(vm, pc, command))?;
+        Ok(true)
+    }
+
+    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
-        let slot = vm.stack().peek_u32(4).map_err(|e| error(pc, op, e.0))? as usize;
+        let slot = call.argument(4, "player slot")? as usize;
         if slot >= MOVIE_SLOTS {
             return Err(error(
                 pc,
@@ -389,7 +411,7 @@ impl MovieHost {
                 "movie slot outside 0..2 sets an unmodeled flag",
             ));
         }
-        vm.complete_system(SystemResult(0x4004))?;
+        call.complete(0x4004)?;
         if command == 0x30a {
             self.slots[slot] = None;
         } else if matches!(command, 0x30b | 0x30c) {
@@ -406,11 +428,12 @@ impl MovieHost {
             }
         } else {
             let active = self.slots[slot].as_ref().is_some_and(|m| m.playback.active);
-            vm.state_mut()
+            call.vm
+                .state_mut()
                 .set_system_integer(0, u32::from(active))
                 .expect("slot 0 exists");
         }
-        Ok(true)
+        Ok(())
     }
 
     /// 0x20c0 / 0x140071500: SP-4 name; destroys any player, opens root + 0x2015 entry +
@@ -428,11 +451,23 @@ impl MovieHost {
         let Some((pc, command @ 0xc0..=0xc2)) = vm.pending_system() else {
             return Ok(false);
         };
+        self.handle_player(&mut Call::new(vm, pc, command), source, settings, backend)?;
+        Ok(true)
+    }
+
+    pub(crate) fn handle_player(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        source: &mut dyn MovieSource,
+        settings: AudioSettings,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
         match command {
             0xc0 => {
-                let raw = vm.stack().peek_u32(4).map_err(|e| error(pc, op, e.0))?;
-                let name = vm.resolve_string(raw)?;
+                let raw = call.argument(4, "movie name")?;
+                let name = call.vm.resolve_string(raw)?;
                 let opened = source.open(&name)?;
                 let image = if self.decode_frames {
                     opened
@@ -459,8 +494,9 @@ impl MovieHost {
                     // (the open stored the device pointer first).
                     backend.stop_movie_audio()?;
                 }
-                vm.complete_system(SystemResult(0x4004))?;
-                vm.state_mut()
+                call.complete(0x4004)?;
+                call.vm
+                    .state_mut()
                     .set_system_integer(0, u32::from(opened.is_some()))
                     .expect("slot 0 exists");
                 self.player = opened.map(|(path, index)| Movie {
@@ -475,18 +511,19 @@ impl MovieHost {
                 if self.player.is_some() {
                     backend.stop_movie_audio()?;
                 }
-                vm.complete_system(SystemResult(0x4000))?;
+                call.complete(0x4000)?;
                 self.player = None;
             }
             _ => {
                 let frame = self.player.as_ref().map_or(u32::MAX, |movie| movie.frame);
-                vm.complete_system(SystemResult(0x4000))?;
-                vm.state_mut()
+                call.complete(0x4000)?;
+                call.vm
+                    .state_mut()
                     .set_system_integer(0, frame)
                     .expect("slot 0 exists");
             }
         }
-        Ok(true)
+        Ok(())
     }
 
     /// Frame update (main loop 0x14000e4a4 -> 0x140037bb0): a later frame index is decoded

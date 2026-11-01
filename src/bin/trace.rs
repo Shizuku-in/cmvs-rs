@@ -353,15 +353,15 @@ fn run() -> Result<(), Box<dyn Error>> {
             let no_paths = BTreeMap::new();
             let paths = bootstrap.as_ref().map_or(&no_paths, Bootstrap::paths);
             let mut registered_images = images.as_mut().map(|images| images.with_paths(paths));
+            let is_movie_player = cmvs_rs::dispatch::uses_movie_player(command);
+            let movie_settings = audio.settings();
+            let mut movie_source = movie_root.as_ref().map(|root| DirectoryMovies {
+                root,
+                directory: paths.get(&(0x2015, 0)).map(Vec::as_slice),
+            });
             let mut hosts = cmvs_rs::dispatch::Hosts {
                 buttons: platform_assets.is_some().then_some(&mut buttons),
-                camera: platform_assets.is_some().then_some(&mut camera),
-                audio: platform_assets
-                    .is_some()
-                    .then_some(cmvs_rs::dispatch::AudioHosts {
-                        audio: &mut audio,
-                        backend: &mut audio_backend,
-                    }),
+                movies: platform_assets.is_some().then_some(&mut movies),
                 timers: platform_assets.is_some().then_some(&mut timers),
                 flags: platform_assets.is_some().then_some(&mut message_flags),
                 random: random.as_mut(),
@@ -374,30 +374,65 @@ fn run() -> Result<(), Box<dyn Error>> {
                 effect_objects: platform_assets.is_some(),
                 ..Default::default()
             };
-            if cmvs_rs::dispatch::uses_images(command) {
-                hosts.images =
-                    registered_images
-                        .as_mut()
-                        .map(|source| cmvs_rs::dispatch::ImageHosts {
-                            scene: &mut scene,
-                            source,
-                            change_images: false,
-                        });
-            } else if platform_assets.is_some() && cmvs_rs::dispatch::is_wait(command) {
-                hosts.waits = Some(cmvs_rs::dispatch::WaitHosts {
-                    scene: Some(&mut scene),
-                    camera: None,
-                    input: &mut input,
-                    gate: wait_gate,
-                    change_images: false,
+            if platform_assets.is_some() {
+                if is_movie_player {
+                    hosts.movie_player =
+                        movie_source
+                            .as_mut()
+                            .map(|source| cmvs_rs::dispatch::MoviePlayerHosts {
+                                source,
+                                settings: movie_settings,
+                                backend: &mut audio_backend,
+                            });
+                } else {
+                    hosts.audio = Some(cmvs_rs::dispatch::AudioHosts {
+                        audio: &mut audio,
+                        backend: &mut audio_backend,
+                    });
+                }
+            }
+            if platform_assets.is_some() && cmvs_rs::dispatch::uses_sequence(command) {
+                hosts.sequence = Some(cmvs_rs::dispatch::SequenceHosts {
+                    host: &mut sequence,
+                    execution: if bootstrap.is_some() {
+                        registered_images.as_mut().map(|images| {
+                            cmvs_rs::sequence::SequenceContext {
+                                scene: &mut scene,
+                                images,
+                                camera: Some(&mut camera),
+                            }
+                        })
+                    } else {
+                        None
+                    },
                 });
-            } else if platform_assets.is_some() {
-                hosts.scene = Some(&mut scene);
-                hosts.input = Some(cmvs_rs::dispatch::InputHosts {
-                    input: &mut input,
-                    skip: wait_gate.skip,
-                    clock: None,
-                });
+            } else {
+                hosts.camera = platform_assets.is_some().then_some(&mut camera);
+                if cmvs_rs::dispatch::uses_images(command) {
+                    hosts.images =
+                        registered_images
+                            .as_mut()
+                            .map(|source| cmvs_rs::dispatch::ImageHosts {
+                                scene: &mut scene,
+                                source,
+                                change_images: false,
+                            });
+                } else if platform_assets.is_some() && cmvs_rs::dispatch::is_wait(command) {
+                    hosts.waits = Some(cmvs_rs::dispatch::WaitHosts {
+                        scene: Some(&mut scene),
+                        camera: None,
+                        input: &mut input,
+                        gate: wait_gate,
+                        change_images: false,
+                    });
+                } else if platform_assets.is_some() {
+                    hosts.scene = Some(&mut scene);
+                    hosts.input = Some(cmvs_rs::dispatch::InputHosts {
+                        input: &mut input,
+                        skip: wait_gate.skip,
+                        clock: None,
+                    });
+                }
             }
             let dispatched = cmvs_rs::dispatch::run(resolved.semantics, &mut machine, &mut hosts)?;
 
@@ -492,6 +527,49 @@ fn run() -> Result<(), Box<dyn Error>> {
                     }
                     Capability::ListInput | Capability::DragPress => {
                         return Err("trace lacks the dispatched input capability".into());
+                    }
+                    Capability::Sequence => {
+                        println!(
+                            "# sequence 0x{:04x}: header={:?}",
+                            command + 0x2000,
+                            sequence.header()
+                        );
+                    }
+                    Capability::MovieState => {
+                        println!(
+                            "# movie 0x{:04x}: slots occupied={:?}; creation is not modeled",
+                            command + 0x2000,
+                            (0..3).map(|i| movies.occupied(i)).collect::<Vec<_>>()
+                        );
+                    }
+                    Capability::MoviePlayer => {
+                        println!(
+                            "# movie 0x{:04x}: player={} system_integer[0]={:?}; frames not decoded, last audio request={:?}",
+                            command + 0x2000,
+                            movies.player().map_or("none".into(), |m| format!(
+                                "{} frame={}/{} rate={}/{}",
+                                m.path.escape_ascii(),
+                                m.frame,
+                                m.index.header.max_sequence,
+                                m.index.header.rate,
+                                m.index.header.rate_time
+                            )),
+                            machine.state().system_integer(0),
+                            audio_backend.requests().last().map(|r| match r {
+                                AudioRequest::PlayMovieAudio {
+                                    offset,
+                                    size,
+                                    volume,
+                                    ..
+                                } => format!(
+                                    "PlayMovieAudio offset={offset} size={size} volume={volume}"
+                                ),
+                                other => format!("{other:?}"),
+                            })
+                        );
+                    }
+                    Capability::MovieScene | Capability::MovieStart => {
+                        return Err("trace lacks scene movie playback".into());
                     }
                     Capability::Quake => {
                         println!(
@@ -778,72 +856,6 @@ fn run() -> Result<(), Box<dyn Error>> {
                         }
                         resume_run = true;
                     }
-                    continue;
-                }
-                let handled_sequence =
-                    if let (Some(images), Some(config)) = (&mut images, &bootstrap) {
-                        sequence.try_handle_with_hosts(
-                            &mut machine,
-                            &mut scene,
-                            &mut images.with_paths(config.paths()),
-                            &mut camera,
-                        )?
-                    } else {
-                        sequence.try_handle(&mut machine)?
-                    };
-                if handled_sequence {
-                    println!(
-                        "# sequence 0x{:04x}: header={:?}",
-                        command + 0x2000,
-                        sequence.header()
-                    );
-                    continue;
-                }
-                if movies.try_handle(&mut machine)? {
-                    println!(
-                        "# movie 0x{:04x}: slots occupied={:?}; creation is not modeled",
-                        command + 0x2000,
-                        (0..3).map(|i| movies.occupied(i)).collect::<Vec<_>>()
-                    );
-                    continue;
-                }
-                let no_paths = BTreeMap::new();
-                let paths = bootstrap.as_ref().map_or(&no_paths, Bootstrap::paths);
-                if let Some(root) = &movie_root
-                    && movies.try_handle_player(
-                        &mut machine,
-                        &mut DirectoryMovies {
-                            root,
-                            directory: paths.get(&(0x2015, 0)).map(Vec::as_slice),
-                        },
-                        audio.settings(),
-                        &mut audio_backend,
-                    )?
-                {
-                    println!(
-                        "# movie 0x{:04x}: player={} system_integer[0]={:?}; frames not decoded, last audio request={:?}",
-                        command + 0x2000,
-                        movies.player().map_or("none".into(), |m| format!(
-                            "{} frame={}/{} rate={}/{}",
-                            m.path.escape_ascii(),
-                            m.frame,
-                            m.index.header.max_sequence,
-                            m.index.header.rate,
-                            m.index.header.rate_time
-                        )),
-                        machine.state().system_integer(0),
-                        audio_backend.requests().last().map(|r| match r {
-                            AudioRequest::PlayMovieAudio {
-                                offset,
-                                size,
-                                volume,
-                                ..
-                            } => format!(
-                                "PlayMovieAudio offset={offset} size={size} volume={volume}"
-                            ),
-                            other => format!("{other:?}"),
-                        })
-                    );
                     continue;
                 }
                 if command == 0x34d && input::try_handle(&mut machine, &mut input)? {

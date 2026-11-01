@@ -19,10 +19,13 @@ use crate::{
     machine::{Machine, Step},
     message::{MessageHost, font_cells},
     message_flags::MessageFlags,
+    movie::{MovieHost, MovieSource},
     profile::{EngineProfile, Semantics},
     random::CrtRandom,
+    resources::ResourceSource,
     save_menu::SaveMenuHost,
     scene::SceneHost,
+    sequence::{SequenceContext, SequenceHost},
     settings::SettingsHost,
     snapshot::{SaveInfo, SaveTitle},
     timers::VmTimers,
@@ -115,8 +118,28 @@ pub struct WaitHosts<'a> {
     pub change_images: bool,
 }
 
+pub struct SequenceHosts<'a> {
+    pub host: &'a mut SequenceHost,
+    pub execution: Option<SequenceContext<'a>>,
+}
+pub struct MovieSceneHosts<'a> {
+    pub scene: &'a mut SceneHost,
+    pub source: &'a mut dyn ResourceSource,
+}
+pub struct MoviePlayerHosts<'a> {
+    pub source: &'a mut dyn MovieSource,
+    pub settings: crate::audio::AudioSettings,
+    pub backend: &'a mut dyn AudioBackend,
+}
+
 #[derive(Default)]
 pub struct Hosts<'a> {
+    pub sequence: Option<SequenceHosts<'a>>,
+    pub movies: Option<&'a mut MovieHost>,
+    pub movie_scene: Option<MovieSceneHosts<'a>>,
+    pub movie_player: Option<MoviePlayerHosts<'a>>,
+    /// Scene playback is unavailable in tools that only expose slot queries.
+    pub scene_movie_playback: bool,
     pub messages: Option<&'a mut MessageHost>,
     pub window_images: Option<&'a mut dyn ImageSource>,
     pub input: Option<InputHosts<'a>>,
@@ -147,6 +170,11 @@ pub struct Hosts<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Capability {
+    Sequence,
+    MovieState,
+    MovieScene,
+    MovieStart,
+    MoviePlayer,
     Quake,
     Strip,
     TextState,
@@ -191,6 +219,11 @@ pub enum Capability {
 impl Hosts<'_> {
     fn has(&self, capability: Capability) -> bool {
         match capability {
+            Capability::Sequence => self.sequence.is_some(),
+            Capability::MovieState => self.movies.is_some(),
+            Capability::MovieScene => self.movies.is_some() && self.movie_scene.is_some(),
+            Capability::MovieStart => self.movies.is_some() && self.scene_movie_playback,
+            Capability::MoviePlayer => self.movies.is_some() && self.movie_player.is_some(),
             Capability::TextState | Capability::AuxiliaryScene => self.messages.is_some(),
             Capability::Windows => self.messages.is_some(),
             Capability::WindowPointer | Capability::WindowButtons => {
@@ -730,6 +763,84 @@ pub fn uses_input(command: u16) -> bool {
     })
 }
 
+fn root_sequence(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    let h = hosts
+        .sequence
+        .as_mut()
+        .expect("sequence capability checked");
+    let context = h.execution.as_mut().map(|c| SequenceContext {
+        scene: &mut *c.scene,
+        images: &mut *c.images,
+        camera: c.camera.as_deref_mut(),
+    });
+    h.host.handle(call, context)?;
+    Ok(Flow::Done)
+}
+fn root_movie_state(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    hosts
+        .movies
+        .as_deref_mut()
+        .expect("movie capability checked")
+        .handle(call)?;
+    Ok(Flow::Done)
+}
+fn root_movie_start(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    hosts
+        .movies
+        .as_deref_mut()
+        .expect("movie capability checked")
+        .handle_start_scene(call)?;
+    Ok(Flow::Done)
+}
+fn root_movie_scene(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    let h = hosts
+        .movie_scene
+        .as_mut()
+        .expect("scene movie capability checked");
+    hosts
+        .movies
+        .as_deref_mut()
+        .expect("movie capability checked")
+        .handle_create_scene(call, h.scene, h.source)?;
+    Ok(Flow::Done)
+}
+fn root_movie_player(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    let h = hosts
+        .movie_player
+        .as_mut()
+        .expect("movie player capability checked");
+    hosts
+        .movies
+        .as_deref_mut()
+        .expect("movie capability checked")
+        .handle_player(call, h.source, h.settings, h.backend)?;
+    Ok(Flow::Done)
+}
+pub fn uses_sequence(command: u16) -> bool {
+    ROOT.iter()
+        .any(|e| e.command == command && e.capability == Capability::Sequence)
+}
+pub fn uses_movie_scene(command: u16) -> bool {
+    ROOT.iter()
+        .any(|e| e.command == command && e.capability == Capability::MovieScene)
+}
+pub fn uses_movie_player(command: u16) -> bool {
+    ROOT.iter()
+        .any(|e| e.command == command && e.capability == Capability::MoviePlayer)
+}
+
 fn root_quake(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     hosts
         .scene
@@ -811,6 +922,126 @@ pub fn is_wait(command: u16) -> bool {
 }
 
 pub static ROOT: &[Entry] = &[
+    Entry {
+        command: 0x280,
+        name: "reset sequence",
+        capability: Capability::Sequence,
+        handler: root_sequence,
+    },
+    Entry {
+        command: 0x281,
+        name: "sequence index",
+        capability: Capability::Sequence,
+        handler: root_sequence,
+    },
+    Entry {
+        command: 0x282,
+        name: "start sequence",
+        capability: Capability::Sequence,
+        handler: root_sequence,
+    },
+    Entry {
+        command: 0x283,
+        name: "stop sequence",
+        capability: Capability::Sequence,
+        handler: root_sequence,
+    },
+    Entry {
+        command: 0x284,
+        name: "finish sequence",
+        capability: Capability::Sequence,
+        handler: root_sequence,
+    },
+    Entry {
+        command: 0x285,
+        name: "sequence count",
+        capability: Capability::Sequence,
+        handler: root_sequence,
+    },
+    Entry {
+        command: 0x286,
+        name: "append sequence wait",
+        capability: Capability::Sequence,
+        handler: root_sequence,
+    },
+    Entry {
+        command: 0x287,
+        name: "append camera motion",
+        capability: Capability::Sequence,
+        handler: root_sequence,
+    },
+    Entry {
+        command: 0x288,
+        name: "append image replacement",
+        capability: Capability::Sequence,
+        handler: root_sequence,
+    },
+    Entry {
+        command: 0x289,
+        name: "append snapping world motion",
+        capability: Capability::Sequence,
+        handler: root_sequence,
+    },
+    Entry {
+        command: 0x28a,
+        name: "append world motion",
+        capability: Capability::Sequence,
+        handler: root_sequence,
+    },
+    Entry {
+        command: 0x308,
+        name: "create scene movie",
+        capability: Capability::MovieScene,
+        handler: root_movie_scene,
+    },
+    Entry {
+        command: 0x309,
+        name: "start scene movie",
+        capability: Capability::MovieStart,
+        handler: root_movie_start,
+    },
+    Entry {
+        command: 0x30a,
+        name: "destroy scene movie",
+        capability: Capability::MovieState,
+        handler: root_movie_state,
+    },
+    Entry {
+        command: 0x30b,
+        name: "resume scene movie",
+        capability: Capability::MovieState,
+        handler: root_movie_state,
+    },
+    Entry {
+        command: 0x30c,
+        name: "pause scene movie",
+        capability: Capability::MovieState,
+        handler: root_movie_state,
+    },
+    Entry {
+        command: 0x31a,
+        name: "scene movie active",
+        capability: Capability::MovieState,
+        handler: root_movie_state,
+    },
+    Entry {
+        command: 0xc0,
+        name: "open movie",
+        capability: Capability::MoviePlayer,
+        handler: root_movie_player,
+    },
+    Entry {
+        command: 0xc1,
+        name: "stop movie",
+        capability: Capability::MoviePlayer,
+        handler: root_movie_player,
+    },
+    Entry {
+        command: 0xc2,
+        name: "movie frame",
+        capability: Capability::MoviePlayer,
+        handler: root_movie_player,
+    },
     Entry {
         command: 0x20c,
         name: "quake paused",
