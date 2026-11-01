@@ -85,6 +85,7 @@ python -I tools/probe_matrix.py "<输出目录1>" "<输出目录2>" --markdown
 - 命令闸门照常生效；`--allow-presumed`/`--allow-unreviewed` 仅供研究，并记入报告。
 - `--device keyboard` 使用 `key.cfg` 中的按键，按钮通过导航键沿按钮链接选中。
 - `--fork save` 让路线分支从选项处写下的检查点读档开始，而不是每次从头重放；构建缺少快照布局能力时自动退回重放。
+- `--without-snapshots` 显式选择无快照研究：保留快照命令的实时状态影响，但不生成可保存图像；V1–V4标为跳过，不能与 `--fork save` 合用。适用于已知部分快照布局、但剧情中的活动效果仍无法保存的构建，不代表存读档通过。
 - `--manifest` 读取可选的每游戏纠正清单，格式见[探针设计第 16 节](../design/probe.md#16-完整实现2026-11-01)。
 - `tools/probe_matrix.py` 把多个输出目录汇总为"游戏 × 检查"矩阵，只读。
 

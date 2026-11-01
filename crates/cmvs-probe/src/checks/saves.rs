@@ -121,6 +121,11 @@ pub fn gameplay_saves(runner: &Runner<'_>, wanted: &[&str]) -> Vec<CheckResult> 
             .map(|&(id, title)| CheckResult::new(id, title, outcome.clone()))
             .collect()
     };
+    if !runner.options.capture_snapshots {
+        return all(Outcome::Skipped(
+            "snapshot capture disabled by --without-snapshots".into(),
+        ));
+    }
     if !runner.target.has(cap::SNAPSHOT_LAYOUT) {
         return all(Outcome::Skipped(format!(
             "missing capability {}",

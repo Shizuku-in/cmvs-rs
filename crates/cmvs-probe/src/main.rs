@@ -31,6 +31,7 @@ const OPTIONS: &str = "Options:
     --no-route-skip       do not hold the skip key while exploring routes
   --fork <mode>         replay (default) runs every route from the start; save starts
                         branches from a checkpoint saved at the choice (needs saves)
+  --without-snapshots   research only: continue without save images; skips V1-V4
   --block-presumed      stop at commands with only legacy presumed evidence
   --block-unreviewed    stop at unreviewed commands";
 
@@ -71,7 +72,10 @@ struct Args {
 }
 
 fn parse() -> Result<Args, String> {
-    let mut args = std::env::args().skip(1);
+    parse_args(std::env::args().skip(1))
+}
+
+fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut root = None;
     let mut out = None;
     let mut checks = None;
@@ -100,6 +104,7 @@ fn parse() -> Result<Args, String> {
             "--max-routes" => options.max_routes = number(value()?)? as usize,
             "--max-rounds" => options.max_rounds = number(value()?)?.max(2) as usize,
             "--no-route-skip" => options.route_skip = false,
+            "--without-snapshots" => options.capture_snapshots = false,
             "--fork" => {
                 options.fork_saves = match value()?.as_str() {
                     "replay" => false,
@@ -113,6 +118,9 @@ fn parse() -> Result<Args, String> {
             path if root.is_none() => root = Some(PathBuf::from(path)),
             extra => return Err(format!("unexpected argument {extra}")),
         }
+    }
+    if options.fork_saves && !options.capture_snapshots {
+        return Err("--fork save requires snapshot capture".into());
     }
     let checks: Vec<String> = match checks {
         Some(list) if list == ["all"] => checks::CATALOG
@@ -147,7 +155,19 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    match run(args) {
+    // Snapshot capture and restore contain bounded VM banks and object tables. In
+    // debug builds their nested stack frames exceed Windows' default main stack.
+    let result = std::thread::Builder::new()
+        .name("cmvs-probe".into())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || run(args));
+    let result = match result {
+        Ok(worker) => worker
+            .join()
+            .unwrap_or_else(|_| Err("probe worker panicked".into())),
+        Err(e) => Err(format!("could not start probe worker: {e}")),
+    };
+    match result {
         Ok(clean) => ExitCode::from(u8::from(!clean)),
         Err(e) => {
             eprintln!("cmvs-probe: {e}");
@@ -226,4 +246,30 @@ fn run(args: Args) -> Result<bool, String> {
     }
     println!("report: {}", args.out.join("summary.json").display());
     Ok(clean)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_args;
+
+    #[test]
+    fn disabling_snapshots_cannot_claim_saved_forks() {
+        for flags in [
+            vec!["--without-snapshots", "--fork", "save"],
+            vec!["--fork", "save", "--without-snapshots"],
+        ] {
+            let error = parse_args(flags.into_iter().map(String::from))
+                .err()
+                .unwrap();
+            assert_eq!(error, "--fork save requires snapshot capture");
+        }
+        let args = parse_args(
+            ["game-root", "--out", "new-report", "--without-snapshots"]
+                .into_iter()
+                .map(String::from),
+        )
+        .unwrap();
+        assert!(!args.options.capture_snapshots);
+        assert!(!args.options.fork_saves);
+    }
 }

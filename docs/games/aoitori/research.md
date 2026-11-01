@@ -193,3 +193,13 @@ release探针沿用显式 `--allow-unreviewed --allow-presumed`、msgothic字体
 `local/aoitori/snapshot-v3-saves-release` 使用msgothic、种子0、16ms帧、1000万步上限，V1/V2/V3/V4均通过L1；两种读回各对齐20个消息等待，再保存的三个负载逐字节一致，备份槽通过。默认离线测试963项通过、14项忽略，受影响snapshot回归7项及核心档案选择回归通过；默认与core严格Clippy、格式和差异检查通过。release探针构建通过；debug探针此次触发Windows默认主线程栈溢出，未计为通过，后续需单独处理。没有新做原生窗口操作、原版存档互操作或任意剧情点存读档验证。
 
 独立功能审计 `local/aoitori/functional-audit` 仍使用无快照基线：I3/P2/P3通过；I1/I4在回看入口遇 `intproc.ps3 / 0x652e8 / 0x23b8` 未实现，P1用满400次探索预算，C1–C4本轮未找到设置控制而inconclusive，不能据此覆盖此前设置通过的限定结论。新增回看屏障待独立研究，未用空桩跳过。
+
+## 2026-11-02：三个首选分支重放收口与快照边界
+
+`local/aoitori/fragment-routes-verified`（基线 `d6c0c8d`，无快照）：R1/L0、D1/L1、R2/L0通过。3路线、1选择点、3次回到标题、未探索前缀0；首选0/1/2分别208,039,161步/95,503帧、219,821,405步/101,075帧、209,233,240步/95,671帧。「小夜。」越过原 `sn311.ps3 / 0x31e50 / 0x22a8`，没有新未实现停项。完整报告SHA-256 `fed2560a286a93b38f6111980aa49ea295886b5e1923d3a0346c604eef3c26e2`。各路线独立从模板开始，不能推为系统存档解锁轮次或全游戏完成。
+
+`local/aoitori/unlock-rounds-v3` 以 `5961981` 的快照子集尝试R4/R3及存档分叉：两轮均18,013,298步在活动粒子的快照处显式失败，没有到达选项或建立分叉。R3仅表示记录覆盖统计产生，不能替代R4。保留此保存屏障；探针增加显式 `--without-snapshots`，报告记录 `capture_snapshots=false`，会话使用ContinueWithoutImage，V1–V4跳过，不允许与 `--fork save` 合用，不在保存失败后静默降级。`local/aoitori/snapshot-disabled-smoke` R1/D1通过，四项保存检查明确跳过；冲突参数在创建输出目录前拒绝。
+
+限步核验 `local/aoitori/unlock-without-snapshots-budget`：两轮各25,000,000步/10,144帧，均越过活动粒子快照点后用满步数预算，R4仍失败，不能认领解锁收敛。下一轮需在无快照模式提高到十亿步预算独立验证；完整快照支持仍需实现活动类型2/5/6/8的记录与恢复。
+
+Windows debug探针的默认主线程栈不足以承载嵌套快照操作，改由16MiB工作线程执行并传播失败；`local/aoitori/snapshot-v3-saves-debug-fixed` V1–V4全部通过L1，修复前溢出不再复现。探针既有11项测试、冲突参数回归及严格Clippy、格式/差异检查通过；release构建和真实数据的无快照启动检查通过。本轮没有原生窗口或音频实测。

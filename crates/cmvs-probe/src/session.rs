@@ -36,6 +36,8 @@ pub struct Options {
     pub route_skip: bool,
     /// Route branches start from a saved checkpoint instead of replaying from the start.
     pub fork_saves: bool,
+    /// Explicit research mode: keep snapshot commands' live effects but no save image.
+    pub capture_snapshots: bool,
     pub block_presumed: bool,
     pub block_unreviewed: bool,
 }
@@ -51,6 +53,7 @@ impl Default for Options {
             max_rounds: 4,
             route_skip: true,
             fork_saves: false,
+            capture_snapshots: true,
 
             block_presumed: false,
             block_unreviewed: false,
@@ -69,6 +72,7 @@ impl Options {
             ("max_rounds", self.max_rounds.into()),
             ("route_skip", self.route_skip.into()),
             ("fork_saves", self.fork_saves.into()),
+            ("capture_snapshots", self.capture_snapshots.into()),
             ("block_presumed", self.block_presumed.into()),
             ("block_unreviewed", self.block_unreviewed.into()),
         ])
@@ -186,7 +190,7 @@ impl<'a> Session<'a> {
         if target.has(cap::AUTO_RESUME_POLICY) {
             run.set_skip_auto_resume(true)?;
         }
-        if !target.has(cap::SNAPSHOT_LAYOUT) {
+        if !options.capture_snapshots || !target.has(cap::SNAPSHOT_LAYOUT) {
             // Capability, not a game branch: the live-state effect still applies.
             run.set_snapshot_policy(SnapshotPolicy::ContinueWithoutImage);
         }
@@ -209,7 +213,9 @@ impl<'a> Session<'a> {
             max_steps: options.max_steps,
             route_skip: options.route_skip,
             // Forking needs gameplay saves, which need the snapshot layout.
-            fork_saves: options.fork_saves && target.has(cap::SNAPSHOT_LAYOUT),
+            fork_saves: options.fork_saves
+                && options.capture_snapshots
+                && target.has(cap::SNAPSHOT_LAYOUT),
 
             queue: VecDeque::new(),
             pointer: crate::device::OFF_SCREEN,
