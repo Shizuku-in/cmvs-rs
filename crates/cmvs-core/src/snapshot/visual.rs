@@ -468,6 +468,11 @@ impl SavedScene {
     /// Capture side: the record of a live object, rejecting what the writer here cannot
     /// express. Disposal marks are not saved, as in the original.
     pub(crate) fn from_object(object: &SceneObject) -> Result<Self, FormatError> {
+        if object.collision_vertices.is_some() {
+            return Err(FormatError(
+                "collision mesh snapshot records are not implemented",
+            ));
+        }
         // 0x14003a4a0 writes the current image/draw, not +14504..+14532
         // (replacement flag, retained objects and clock). Loading resets the
         // draw fade to 256; capturing must not cancel the live replacement.

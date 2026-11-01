@@ -321,9 +321,8 @@ fn run() -> Result<(), Box<dyn Error>> {
             }
             scene.advance_frame(delta);
             if let Some(random) = random.as_mut() {
-                scene.advance_particles(delta, random);
+                scene.advance_effect_pools(delta, random, &camera)?;
             }
-            scene.advance_falling_effects(delta, &camera);
             camera.advance_frame(delta);
             movies.advance(delta);
             frame_delta = delta;
@@ -608,9 +607,8 @@ fn run() -> Result<(), Box<dyn Error>> {
                         }
                         scene.advance_frame(delta);
                         if let Some(random) = random.as_mut() {
-                            scene.advance_particles(delta, random);
+                            scene.advance_effect_pools(delta, random, &camera)?;
                         }
-                        scene.advance_falling_effects(delta, &camera);
                         camera.advance_frame(delta);
                         movies.advance(delta);
                         frame_delta = delta;
@@ -639,9 +637,8 @@ fn run() -> Result<(), Box<dyn Error>> {
                 }
                 scene.advance_frame(delta);
                 if let Some(random) = random.as_mut() {
-                    scene.advance_particles(delta, random);
+                    scene.advance_effect_pools(delta, random, &camera)?;
                 }
-                scene.advance_falling_effects(delta, &camera);
                 camera.advance_frame(delta);
                 movies.advance(delta);
                 frame_delta = delta;

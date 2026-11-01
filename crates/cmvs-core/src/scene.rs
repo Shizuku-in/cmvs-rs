@@ -102,6 +102,8 @@ impl ObjectImage {
 /// A 0x38c8-byte object freshly built by 0x14003a3c0, including 768 child pointers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SceneObject {
+    /// Optional +6208 collision vertex buffer, in raw f32 words; triples form triangles.
+    pub collision_vertices: Option<Vec<[u32; 3]>>,
     /// None until 0x2030 loads an image; a quiet decode failure also leaves it empty.
     pub image: Option<ObjectImage>,
     /// +6184: second texture loaded by 0x2035, separate from the main image.
@@ -183,6 +185,7 @@ impl Default for SceneObject {
         Self {
             image: None,
             secondary_image: None,
+            collision_vertices: None,
             children: BTreeMap::new(),
             draw: None,
             flags: 0x7fff_ffff,
@@ -273,6 +276,7 @@ impl DrawState {
 
 #[derive(Debug, Default)]
 pub struct SceneHost {
+    pub(crate) collision_effects: BTreeMap<u8, crate::effect_objects::CollisionEffect>,
     pub(crate) particle_effects: BTreeMap<u8, crate::effect_objects::ParticleEffect>,
     pub(crate) falling_effects: BTreeMap<u8, crate::effect_objects::FallingEffect>,
     clear: ClearState,
@@ -1053,6 +1057,7 @@ impl SceneHost {
         *self = Self {
             particle_effects: Default::default(),
             falling_effects: Default::default(),
+            collision_effects: Default::default(),
             clear,
             objects,
             quake,

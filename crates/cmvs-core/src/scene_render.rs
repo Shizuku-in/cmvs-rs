@@ -768,11 +768,29 @@ pub fn prepare_scene<'a>(
     // Default forward queue traversal: common, previous, then current. Equal keys keep
     // this insertion order (0x14003de80 / 0x14003ddd0). Retained objects have no slot mask.
     let mut objects = Vec::new();
-    let particles = scene.particle_effects().values().flat_map(|effect| {
-        effect
-            .particles
-            .iter()
-            .map(|particle| (None, &particle.object, Some(&effect.pool)))
+    let particles = (0..4).flat_map(|slot| {
+        scene
+            .particle_effects()
+            .get(&slot)
+            .into_iter()
+            .flat_map(|effect| {
+                effect
+                    .particles
+                    .iter()
+                    .map(|particle| (None, &particle.object, Some(&effect.pool)))
+            })
+            .chain(
+                scene
+                    .collision_effects()
+                    .get(&slot)
+                    .into_iter()
+                    .flat_map(|effect| {
+                        effect
+                            .particles
+                            .iter()
+                            .map(|particle| (None, &particle.object, Some(&effect.pool)))
+                    }),
+            )
     });
     let all_objects = slots
         .map(|(slot, object)| (slot, object, None))

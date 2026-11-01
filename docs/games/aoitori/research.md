@@ -173,3 +173,9 @@ release探针沿用显式 `--allow-unreviewed --allow-presumed`、msgothic字体
 `local/aoitori/falling-effect-route-fixed`：R1/L0与D1/L1通过，624帧、22,050步及启动轨迹/状态哈希不变；R2首路线选择「メアリー。」后越过 `sn213.ps3 / 0xbd34`，202,255,442步、85,840帧停在 `sn213.ps3 / 0xa4f0 / 0x22a6`。这是类型6粒子，更新时采集独立三维模型的三角形作碰撞；初步导出 `local/aoitori/collision-particles-22a6-x64.json`，尚未实现，不得复用无碰撞的类型2代替。
 
 受影响核心、分派、粒子、场景、投影、相机、runner回归与CPU/GPU合成对照通过；core/wgpu及相关测试/trace严格Clippy、格式与桌面音频/GPU构建通过。只读解码真实snow纹理并查看隔离效果帧，未操作原生窗口，未认领原版像素一致、存读档或完整路线通过。
+
+## 类型6碰撞粒子越过真实停点（2026-11-02）
+
+`0x22a6` 及碰撞顶点注册 `0x2330/31/32` 使用身份绑定的 `collision-particles` 研究入口，保持共享分派及Unreviewed。类型6消费5次初始化rand、按120ms上限推进和两次rand重生；四槽混合类型按槽顺序更新。碰撞来自普通场景槽20–27，此前“独立三维模型”的判断更正，依据及真实snow纹理隔离渲染见[VM语义](vm-semantics.md#0x22a6类型6碰撞粒子)。未知效果/碰撞存档继续拒绝。
+
+`local/aoitori/collision-type6-route`：R1/L0、D1/L1通过，624帧、22,050步及5标题按钮；首路线选择「メアリー。」后越过原停点，208,039,161步、95,503帧回到标题。R2因两条前缀未探索而inconclusive，不能算完整选择树通过；其余首选项以独立多路线探针继续探索。受影响核心、分派、场景、快照与runner回归及严格Clippy、格式、桌面音频/GPU构建通过；新增混合池回归确认共享RNG顺序，未操作原生窗口。

@@ -31,7 +31,7 @@ fn unit(random: &mut CrtRandom) -> f32 {
 }
 
 // CVTTSS2SI returns the indefinite integer for NaN or values outside the i32 range.
-fn hundredth(value: f32) -> f32 {
+pub(super) fn hundredth(value: f32) -> f32 {
     let value = value * 100.0;
     let integer = if (-2147483648.0..2147483648.0).contains(&value) {
         value as i32
@@ -41,7 +41,7 @@ fn hundredth(value: f32) -> f32 {
     integer as f32 / 100.0
 }
 
-fn range(mode: u32) -> f32 {
+pub(super) fn range(mode: u32) -> f32 {
     match (mode >> 24) & 15 {
         1 => 15.0,
         2 => 10.0,
@@ -131,7 +131,7 @@ impl ParticleEffect {
         }
     }
 
-    fn advance(&mut self, delta: u32, random: &mut CrtRandom) {
+    pub(super) fn advance(&mut self, delta: u32, random: &mut CrtRandom) {
         let [base_x, base_z, _, _] = self.parameters.map(f32::from_bits);
         let time = delta.min(500) as f32 * 10.0;
         for particle in &mut self.particles {
@@ -219,6 +219,7 @@ impl SceneHost {
         let effect = ParticleEffect::new(mode, parameters, count, pool, &mut candidate_random);
         call.complete(0x4020)?;
         self.falling_effects.remove(&(slot as u8));
+        self.collision_effects.remove(&(slot as u8));
         self.particle_effects.insert(slot as u8, effect);
         *random = candidate_random;
         Ok(())

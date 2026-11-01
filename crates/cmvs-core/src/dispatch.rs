@@ -4491,6 +4491,55 @@ pub static FALLING_BILLBOARDS: &[Entry] = &[Entry {
     },
 }];
 
+pub static COLLISION_PARTICLES: &[Entry] = &[
+    Entry {
+        command: 0x2a6,
+        name: "create collision particle effect",
+        capability: Capability::ParticleImages,
+        handler: |hosts, call| {
+            let h = hosts
+                .images
+                .as_mut()
+                .expect("particle image capability checked");
+            h.scene.create_collision_effect(
+                call,
+                h.source,
+                hosts
+                    .random
+                    .as_deref_mut()
+                    .expect("particle random capability checked"),
+            )?;
+            Ok(Flow::Done)
+        },
+    },
+    Entry {
+        command: 0x330,
+        name: "create collision mesh",
+        capability: Capability::Scene,
+        handler: collision_mesh,
+    },
+    Entry {
+        command: 0x331,
+        name: "release collision mesh",
+        capability: Capability::Scene,
+        handler: collision_mesh,
+    },
+    Entry {
+        command: 0x332,
+        name: "append collision vertex",
+        capability: Capability::Scene,
+        handler: collision_mesh,
+    },
+];
+fn collision_mesh(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    hosts
+        .scene
+        .as_deref_mut()
+        .expect("scene capability checked")
+        .handle_collision_mesh(call)?;
+    Ok(Flow::Done)
+}
+
 pub static BACKGROUND_AUDIO: &[Entry] = &[Entry {
     command: 0x2ed,
     name: "background audio output",
@@ -4503,8 +4552,13 @@ pub static BACKGROUND_AUDIO: &[Entry] = &[Entry {
 }];
 
 /// Static research tables used when provisioning shared host capabilities.
-pub static RESEARCH_TABLES: &[&[Entry]] =
-    &[FONT_CELLS, PARTICLES, BACKGROUND_AUDIO, FALLING_BILLBOARDS];
+pub static RESEARCH_TABLES: &[&[Entry]] = &[
+    FONT_CELLS,
+    PARTICLES,
+    BACKGROUND_AUDIO,
+    FALLING_BILLBOARDS,
+    COLLISION_PARTICLES,
+];
 
 pub fn research_entry(id: crate::profile::ResearchId, command: u16) -> Option<&'static Entry> {
     let entries = match id {
@@ -4512,6 +4566,7 @@ pub fn research_entry(id: crate::profile::ResearchId, command: u16) -> Option<&'
         crate::profile::ResearchId::Particles => PARTICLES,
         crate::profile::ResearchId::BackgroundAudio => BACKGROUND_AUDIO,
         crate::profile::ResearchId::FallingBillboards => FALLING_BILLBOARDS,
+        crate::profile::ResearchId::CollisionParticles => COLLISION_PARTICLES,
     };
     entries.iter().find(|entry| entry.command == command)
 }
@@ -4525,6 +4580,9 @@ pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
         }
         Semantics::Research(crate::profile::ResearchId::FallingBillboards) => {
             "research falling billboard override"
+        }
+        Semantics::Research(crate::profile::ResearchId::CollisionParticles) => {
+            "research collision particle override"
         }
         Semantics::Root => "base semantics",
     }

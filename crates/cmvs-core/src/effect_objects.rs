@@ -1,6 +1,8 @@
 //! Engine +4024: four effect objects, independent of the 256 scene slots.
 use crate::{bytecode::DecodeError, dispatch::Call, machine::Machine};
+mod collision;
 mod falling;
+pub use collision::{CollisionEffect, CollisionParticle};
 mod particles;
 pub use falling::{FallingEffect, FallingParticle};
 pub use particles::{Particle, ParticleEffect};
@@ -23,6 +25,37 @@ impl crate::scene::SceneHost {
         if slot < 4 {
             self.particle_effects.remove(&(slot as u8));
             self.falling_effects.remove(&(slot as u8));
+            self.collision_effects.remove(&(slot as u8));
+        }
+        Ok(())
+    }
+}
+
+impl crate::scene::SceneHost {
+    /// Pool updates follow the four original slots so mixed types share CRT draws in order.
+    pub fn advance_effect_pools(
+        &mut self,
+        delta: u32,
+        random: &mut crate::random::CrtRandom,
+        cameras: &crate::camera::CameraHost,
+    ) -> Result<(), crate::FormatError> {
+        let triangles = if self.collision_effects.is_empty() {
+            Vec::new()
+        } else {
+            self.collision_triangles().map_err(crate::FormatError)?
+        };
+        let view = cameras.view(0).expect("view exists");
+        let position = [view.words[0], view.words[1], view.words[2]].map(f32::from_bits);
+        for slot in 0..4 {
+            if let Some(effect) = self.particle_effects.get_mut(&slot) {
+                effect.advance(delta, random);
+            }
+            if let Some(effect) = self.falling_effects.get_mut(&slot) {
+                effect.advance(delta, position);
+            }
+            if let Some(effect) = self.collision_effects.get_mut(&slot) {
+                effect.advance(delta, &triangles, random);
+            }
         }
         Ok(())
     }

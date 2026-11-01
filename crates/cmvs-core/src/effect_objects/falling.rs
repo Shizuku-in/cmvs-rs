@@ -159,6 +159,7 @@ impl SceneHost {
         let effect = FallingEffect::new(parameters, count, follow, image, &mut candidate_random);
         call.complete(0x4020)?;
         self.particle_effects.remove(&(slot as u8));
+        self.collision_effects.remove(&(slot as u8));
         self.falling_effects.insert(slot as u8, effect);
         *random = candidate_random;
         Ok(())

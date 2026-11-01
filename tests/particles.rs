@@ -459,3 +459,132 @@ fn falling_override_preserves_pending_on_failure_and_shares_effect_slots_and_ran
         assert_eq!(random.clone().next_value(), seed);
     }
 }
+
+fn run_collision(
+    vm: &mut Machine<'_>,
+    scene: &mut SceneHost,
+    source: &mut Images,
+    random: &mut CrtRandom,
+) -> Result<Option<Flow>, dispatch::DispatchError> {
+    let command = vm.pending_system().unwrap().1;
+    let mut hosts = Hosts {
+        random: Some(random),
+        ..Default::default()
+    };
+    if dispatch::uses_images(command) {
+        hosts.images = Some(ImageHosts {
+            scene,
+            source,
+            change_images: false,
+        });
+    } else {
+        hosts.scene = Some(scene);
+    }
+    dispatch::run(
+        Semantics::Research(ResearchId::CollisionParticles),
+        vm,
+        &mut hosts,
+    )
+}
+
+#[test]
+fn collision_mesh_commands_bound_vertices_and_particle_creation_retries_atomically() {
+    let mut code = vec![];
+    command(&mut code, 0x2020, &[20]);
+    command(&mut code, 0x2330, &[20]);
+    for index in 0..130 {
+        command(
+            &mut code,
+            0x2332,
+            &[
+                20,
+                (index as f32).to_bits(),
+                2.0f32.to_bits(),
+                3.0f32.to_bits(),
+            ],
+        );
+    }
+    command(&mut code, 0x2331, &[20]);
+    command(&mut code, 0x2332, &[20, 0, 0, 0]);
+    command(
+        &mut code,
+        0x22a6,
+        &[0, 0x80000000, 0, 15.0f32.to_bits(), 5000.0f32.to_bits(), 2],
+    );
+    command(&mut code, 0x22a0, &[0]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_string(0, b"particle.pb3").unwrap();
+    vm.state_mut().set_system_integer(0, 123).unwrap();
+    let mut scene = SceneHost::default();
+    let mut source = Images::default();
+    let mut random = CrtRandom::new(0);
+    pending(&mut vm);
+    scene.try_handle(&mut vm).unwrap();
+    for index in 0..133 {
+        pending(&mut vm);
+        let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
+        assert_eq!(
+            dispatch::run(
+                Semantics::Research(ResearchId::CollisionParticles),
+                &mut vm,
+                &mut Hosts::default()
+            )
+            .unwrap(),
+            Some(Flow::Unavailable)
+        );
+        assert_eq!(
+            (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
+            before
+        );
+        assert_eq!(
+            run_collision(&mut vm, &mut scene, &mut source, &mut random).unwrap(),
+            Some(Flow::Done)
+        );
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.state().system_integer(0), Some(123));
+        if index == 130 {
+            assert_eq!(
+                scene
+                    .object(20)
+                    .unwrap()
+                    .collision_vertices
+                    .as_ref()
+                    .unwrap()
+                    .len(),
+                128
+            );
+        }
+    }
+    assert!(scene.object(20).unwrap().collision_vertices.is_none());
+    pending(&mut vm);
+    let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
+    source.fail = true;
+    assert!(run_collision(&mut vm, &mut scene, &mut source, &mut random).is_err());
+    assert_eq!(
+        (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
+        before
+    );
+    assert!(scene.collision_effects().is_empty());
+    assert_eq!(random.clone().next_value(), CrtRandom::new(0).next_value());
+    source.fail = false;
+    run_collision(&mut vm, &mut scene, &mut source, &mut random).unwrap();
+    assert_eq!(scene.collision_effects()[&0].particles.len(), 2);
+    assert!(scene.particle_effects().is_empty() && scene.falling_effects().is_empty());
+    let mut expected = CrtRandom::new(0);
+    for _ in 0..10 {
+        expected.next_value();
+    }
+    assert_eq!(random.next_value(), expected.next_value());
+    pending(&mut vm);
+    dispatch::run(
+        Semantics::Root,
+        &mut vm,
+        &mut Hosts {
+            scene: Some(&mut scene),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(scene.collision_effects().is_empty());
+}
