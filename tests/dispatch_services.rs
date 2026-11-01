@@ -175,7 +175,7 @@ fn setting_queries_preserve_the_difference_between_ignored_and_required_words() 
         );
         if matches!(opcode, 0x22de | 0x22e1..=0x22e3) {
             assert_eq!(
-                outcome.unwrap_err().reason,
+                outcome.unwrap_err().as_decode().unwrap().reason,
                 if opcode == 0x22de {
                     "font reference"
                 } else {
@@ -232,7 +232,7 @@ fn service_parameter_failures_preserve_vm_destination_and_hosts() {
             },
         )
         .unwrap_err();
-        assert_eq!(error.reason, reason);
+        assert_eq!(error.as_decode().unwrap().reason, reason);
         assert_eq!(
             (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
             before

@@ -90,7 +90,7 @@ fn new_command_still_requires_research_gate_and_short_stack_is_transactional() {
         },
     )
     .unwrap_err();
-    assert_eq!(error.reason, "enabled");
+    assert_eq!(error.as_decode().unwrap().reason, "enabled");
     assert_eq!(vm.stack().len_bytes(), 0);
     assert_eq!(vm.pending_system().map(|p| p.1), Some(0x3ac));
 }
@@ -218,7 +218,7 @@ fn state_dispatch_errors_name_arguments_and_preserve_vm_and_hosts() {
             },
         )
         .unwrap_err();
-        assert_eq!(error.reason, reason);
+        assert_eq!(error.as_decode().unwrap().reason, reason);
         assert_eq!(
             (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
             before

@@ -1,5 +1,5 @@
 use cmvs_rs::{
-    bytecode::DecodeError,
+    dispatch::DispatchError,
     dispatch::{self, Flow, Hosts, WaitHosts},
     fade::SkipGate,
     input::ActionInput,
@@ -14,7 +14,7 @@ pub trait SharedSceneWait {
         vm: &mut Machine<'_>,
         gate: SkipGate,
         input: &mut ActionInput,
-    ) -> Result<Option<Step>, DecodeError>;
+    ) -> Result<Option<Step>, DispatchError>;
 }
 
 impl SharedSceneWait for SceneHost {
@@ -23,7 +23,7 @@ impl SharedSceneWait for SceneHost {
         vm: &mut Machine<'_>,
         gate: SkipGate,
         input: &mut ActionInput,
-    ) -> Result<Option<Step>, DecodeError> {
+    ) -> Result<Option<Step>, DispatchError> {
         if !vm
             .pending_system()
             .is_some_and(|(_, command)| dispatch::is_wait(command))

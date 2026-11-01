@@ -57,6 +57,7 @@ fn audit(handler: &str, mut probe: impl FnMut(&mut Machine<'_>) -> bool) {
     let recognizes = |number| {
         use cmvs_rs::dispatch::Capability;
         let capability = match handler {
+            "audio::try_handle" => Some(Capability::Audio),
             "timers::try_handle" => Some(Capability::Timers),
             "message_flags::try_handle" => Some(Capability::Flags),
             "random::try_handle" => Some(Capability::Random),
@@ -351,6 +352,10 @@ fn inventory_matches_wait_and_resource_host_recognition_exhaustively() {
                 save_info: Some(&mut cmvs_rs::snapshot::SaveInfo::default()),
                 effects: Some(&mut true),
                 effect_objects: true,
+                audio: Some(cmvs_rs::dispatch::AudioHosts {
+                    audio: &mut cmvs_rs::audio::AudioHost::default(),
+                    backend: &mut RecordingAudio::default(),
+                }),
             },
         )
         .map(|r| r.is_some())

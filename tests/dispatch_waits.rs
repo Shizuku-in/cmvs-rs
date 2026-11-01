@@ -16,7 +16,7 @@ fn run(
     camera: &mut CameraHost,
     input: &mut ActionInput,
     gate: SkipGate,
-) -> Result<Option<Flow>, cmvs_rs::bytecode::DecodeError> {
+) -> Result<Option<Flow>, cmvs_rs::dispatch::DispatchError> {
     dispatch::run(
         Semantics::Root,
         vm,
@@ -255,6 +255,8 @@ fn wait_parameter_errors_preserve_the_command_and_do_not_consume_input() {
                 SkipGate::default()
             )
             .unwrap_err()
+            .as_decode()
+            .unwrap()
             .reason,
             reason
         );

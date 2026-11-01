@@ -3,7 +3,10 @@
 //! before this table. A selected override never falls through to root semantics.
 pub mod ownership;
 
+use std::{error::Error, fmt};
+
 use crate::{
+    audio::{AudioBackend, AudioHost},
     bytecode::DecodeError,
     camera::CameraHost,
     evaluate::error,
@@ -23,6 +26,39 @@ use crate::{
     timers::VmTimers,
     vm::SystemResult,
 };
+
+/// A command failure with its original typed cause and dispatch location.
+/// Display delegates to the cause to preserve existing diagnostics.
+#[derive(Debug)]
+pub struct DispatchError {
+    pub pc: usize,
+    /// VM command number (opcode minus 0x2000), including for backend failures.
+    pub command: u16,
+    cause: Box<dyn Error>,
+}
+
+impl DispatchError {
+    pub fn as_decode(&self) -> Option<&DecodeError> {
+        self.cause.downcast_ref()
+    }
+}
+
+impl fmt::Display for DispatchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.cause.fmt(f)
+    }
+}
+
+impl Error for DispatchError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(self.cause.as_ref())
+    }
+}
+
+pub struct AudioHosts<'a> {
+    pub audio: &'a mut AudioHost,
+    pub backend: &'a mut dyn AudioBackend,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flow {
@@ -66,6 +102,7 @@ pub struct WaitHosts<'a> {
 
 #[derive(Default)]
 pub struct Hosts<'a> {
+    pub audio: Option<AudioHosts<'a>>,
     pub waits: Option<WaitHosts<'a>>,
     pub text: Option<TextHosts<'a>>,
     pub timers: Option<&'a mut VmTimers>,
@@ -86,6 +123,7 @@ pub struct Hosts<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Capability {
+    Audio,
     Text,
     Timers,
     Flags,
@@ -111,6 +149,7 @@ pub enum Capability {
 impl Hosts<'_> {
     fn has(&self, capability: Capability) -> bool {
         match capability {
+            Capability::Audio => self.audio.is_some(),
             Capability::Text => self.text.is_some(),
             Capability::Timers => self.timers.is_some(),
             Capability::Flags => self.flags.is_some(),
@@ -221,7 +260,7 @@ impl<'a, 'script> Call<'a, 'script> {
     }
 }
 
-type Handler = fn(&mut Hosts<'_>, &mut Call<'_, '_>) -> Result<Flow, DecodeError>;
+type Handler = fn(&mut Hosts<'_>, &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>>;
 pub struct Entry {
     pub command: u16,
     pub name: &'static str,
@@ -229,7 +268,7 @@ pub struct Entry {
     pub handler: Handler,
 }
 
-fn root_text(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+fn root_text(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     let hosts = hosts.text.as_mut().expect("text capability checked");
     Ok(if hosts.messages.try_handle(call.vm)? {
         Flow::Done
@@ -237,7 +276,7 @@ fn root_text(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Dec
         Flow::Unhandled
     })
 }
-fn root_output(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+fn root_output(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     let hosts = hosts.text.as_mut().expect("text capability checked");
     Ok(
         match hosts
@@ -249,7 +288,7 @@ fn root_output(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, D
         },
     )
 }
-fn root_poll(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+fn root_poll(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     let hosts = hosts.text.as_mut().expect("text capability checked");
     Ok(if hosts.messages.try_record_poll(call.vm, hosts.flags)? {
         Flow::Done
@@ -258,7 +297,7 @@ fn root_poll(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Dec
     })
 }
 
-fn root_timers(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+fn root_timers(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     hosts
         .timers
         .as_deref_mut()
@@ -267,7 +306,7 @@ fn root_timers(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, D
     Ok(Flow::Done)
 }
 
-fn root_flags(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+fn root_flags(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     hosts
         .flags
         .as_deref_mut()
@@ -276,7 +315,7 @@ fn root_flags(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, De
     Ok(Flow::Done)
 }
 
-fn root_random(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+fn root_random(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     hosts
         .random
         .as_deref_mut()
@@ -285,7 +324,7 @@ fn root_random(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, D
     Ok(Flow::Done)
 }
 
-fn root_settings(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+fn root_settings(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     hosts
         .settings
         .as_deref_mut()
@@ -294,7 +333,7 @@ fn root_settings(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow,
     Ok(Flow::Done)
 }
 
-fn root_history(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+fn root_history(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     hosts
         .history
         .as_deref_mut()
@@ -303,17 +342,17 @@ fn root_history(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, 
     Ok(Flow::Done)
 }
 
-fn root_strings(_hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+fn root_strings(_hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     crate::text::handle(call)?;
     Ok(Flow::Done)
 }
 
-fn root_math(_hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+fn root_math(_hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     crate::math::handle(call)?;
     Ok(Flow::Done)
 }
 
-fn root_gesture(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+fn root_gesture(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     hosts
         .gesture
         .as_deref_mut()
@@ -322,7 +361,7 @@ fn root_gesture(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, 
     Ok(Flow::Done)
 }
 
-fn root_popup(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+fn root_popup(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     hosts
         .popup
         .as_deref_mut()
@@ -331,7 +370,7 @@ fn root_popup(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, De
     Ok(Flow::Done)
 }
 
-fn root_save_title(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+fn root_save_title(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     hosts
         .save_title
         .as_deref_mut()
@@ -340,7 +379,7 @@ fn root_save_title(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flo
     Ok(Flow::Done)
 }
 
-fn root_save_info(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+fn root_save_info(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     hosts
         .save_info
         .as_deref_mut()
@@ -349,7 +388,7 @@ fn root_save_info(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow
     Ok(Flow::Done)
 }
 
-fn root_effects(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+fn root_effects(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     crate::fade::handle_effects(
         call,
         hosts
@@ -363,58 +402,70 @@ fn root_effects(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, 
 fn root_effect_objects(
     _hosts: &mut Hosts<'_>,
     call: &mut Call<'_, '_>,
-) -> Result<Flow, DecodeError> {
+) -> Result<Flow, Box<dyn Error>> {
     crate::effect_objects::handle(call)?;
     Ok(Flow::Done)
 }
 
-fn root_wait_fade(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+fn root_wait_fade(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     let h = hosts.waits.as_mut().expect("wait context checked");
-    h.scene
+    Ok(h.scene
         .as_deref_mut()
         .expect("scene wait capability checked")
         .fade_mut()
-        .handle_wait(call, h.gate, h.input)
+        .handle_wait(call, h.gate, h.input)?)
 }
 
-fn root_wait_mask(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+fn root_wait_mask(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     let h = hosts.waits.as_mut().expect("wait context checked");
-    h.scene
+    Ok(h.scene
         .as_deref_mut()
         .expect("scene wait capability checked")
-        .handle_wait_mask(call, h.gate, h.input)
+        .handle_wait_mask(call, h.gate, h.input)?)
 }
 
-fn root_wait_quake(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+fn root_wait_quake(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     let h = hosts.waits.as_mut().expect("wait context checked");
-    h.scene
+    Ok(h.scene
         .as_deref_mut()
         .expect("scene wait capability checked")
-        .handle_wait_quake(call)
+        .handle_wait_quake(call)?)
 }
 
-fn root_wait_strip(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+fn root_wait_strip(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     let h = hosts.waits.as_mut().expect("wait context checked");
-    h.scene
+    Ok(h.scene
         .as_deref_mut()
         .expect("scene wait capability checked")
-        .handle_wait_strip(call, h.gate, h.input)
+        .handle_wait_strip(call, h.gate, h.input)?)
 }
 
-fn root_wait_change(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+fn root_wait_change(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
     let h = hosts.waits.as_mut().expect("wait context checked");
-    h.scene
+    Ok(h.scene
         .as_deref_mut()
         .expect("scene wait capability checked")
-        .handle_wait_change(call, h.gate, h.input)
+        .handle_wait_change(call, h.gate, h.input)?)
 }
 
-fn root_wait_camera(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+fn root_wait_camera(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
     let h = hosts.waits.as_mut().expect("wait context checked");
-    h.camera
+    Ok(h.camera
         .as_deref_mut()
         .expect("camera wait capability checked")
-        .handle_wait_move(call, h.gate, h.input)
+        .handle_wait_move(call, h.gate, h.input)?)
+}
+
+fn root_audio(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    let h = hosts.audio.as_mut().expect("audio capability checked");
+    h.audio.handle(call, h.backend)?;
+    Ok(Flow::Done)
 }
 
 pub fn is_wait(command: u16) -> bool {
@@ -433,6 +484,204 @@ pub fn is_wait(command: u16) -> bool {
 }
 
 pub static ROOT: &[Entry] = &[
+    Entry {
+        command: 0xa0,
+        name: "play BGM",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0xa1,
+        name: "stop BGM",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0xa2,
+        name: "fade BGM",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0xa4,
+        name: "play BGM pair",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0xa6,
+        name: "play voice",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0xa8,
+        name: "stop voice",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0xa9,
+        name: "fade voice",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0xaa,
+        name: "voice position",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0xaf,
+        name: "play voice with rate",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0xb0,
+        name: "play SE",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0xb1,
+        name: "start SE",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0xb3,
+        name: "stop SE",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0xb5,
+        name: "stop all SE",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0xb6,
+        name: "fade SE",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0xb7,
+        name: "SE position",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0xba,
+        name: "fade in SE",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0x238,
+        name: "set ducking percent",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0x239,
+        name: "get ducking percent",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0x23a,
+        name: "set ducking fade",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0x23b,
+        name: "get ducking fade",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0x23c,
+        name: "set ducking wait",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0x23d,
+        name: "get ducking wait",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0x23e,
+        name: "set ducking use",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0x23f,
+        name: "get ducking use",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0x241,
+        name: "stop channel 15",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0x2d6,
+        name: "audio settings",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0x2d7,
+        name: "audio settings",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0x2d8,
+        name: "audio settings",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0x2d9,
+        name: "audio settings",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0x2da,
+        name: "audio settings",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0x2db,
+        name: "audio settings",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0x2dc,
+        name: "audio settings",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
+    Entry {
+        command: 0x2dd,
+        name: "audio settings",
+        capability: Capability::Audio,
+        handler: root_audio,
+    },
     Entry {
         command: 0x224,
         name: "wait fade",
@@ -923,7 +1172,10 @@ pub static FONT_CELLS: &[Entry] = &[
         name: "font-cell direct text",
         capability: Capability::Text,
         handler: |hosts, call| {
-            font_cells::direct_text(hosts.text.as_mut().expect("text capability checked"), call)
+            Ok(font_cells::direct_text(
+                hosts.text.as_mut().expect("text capability checked"),
+                call,
+            )?)
         },
     },
     Entry {
@@ -931,7 +1183,10 @@ pub static FONT_CELLS: &[Entry] = &[
         name: "pixel text measurement",
         capability: Capability::Text,
         handler: |hosts, call| {
-            font_cells::measure_text(hosts.text.as_mut().expect("text capability checked"), call)
+            Ok(font_cells::measure_text(
+                hosts.text.as_mut().expect("text capability checked"),
+                call,
+            )?)
         },
     },
     Entry {
@@ -939,7 +1194,10 @@ pub static FONT_CELLS: &[Entry] = &[
         name: "font-cell append window",
         capability: Capability::Text,
         handler: |hosts, call| {
-            font_cells::append_window(hosts.text.as_mut().expect("text capability checked"), call)
+            Ok(font_cells::append_window(
+                hosts.text.as_mut().expect("text capability checked"),
+                call,
+            )?)
         },
     },
     Entry {
@@ -947,7 +1205,10 @@ pub static FONT_CELLS: &[Entry] = &[
         name: "font-cell direct window",
         capability: Capability::Text,
         handler: |hosts, call| {
-            font_cells::direct_window(hosts.text.as_mut().expect("text capability checked"), call)
+            Ok(font_cells::direct_window(
+                hosts.text.as_mut().expect("text capability checked"),
+                call,
+            )?)
         },
     },
     Entry {
@@ -955,7 +1216,10 @@ pub static FONT_CELLS: &[Entry] = &[
         name: "font-cell append window",
         capability: Capability::Text,
         handler: |hosts, call| {
-            font_cells::append_window(hosts.text.as_mut().expect("text capability checked"), call)
+            Ok(font_cells::append_window(
+                hosts.text.as_mut().expect("text capability checked"),
+                call,
+            )?)
         },
     },
     Entry {
@@ -963,7 +1227,10 @@ pub static FONT_CELLS: &[Entry] = &[
         name: "font-cell poll window",
         capability: Capability::Text,
         handler: |hosts, call| {
-            font_cells::poll_window(hosts.text.as_mut().expect("text capability checked"), call)
+            Ok(font_cells::poll_window(
+                hosts.text.as_mut().expect("text capability checked"),
+                call,
+            )?)
         },
     },
     Entry {
@@ -971,7 +1238,10 @@ pub static FONT_CELLS: &[Entry] = &[
         name: "font-cell auxiliary text",
         capability: Capability::Text,
         handler: |hosts, call| {
-            font_cells::auxiliary_text(hosts.text.as_mut().expect("text capability checked"), call)
+            Ok(font_cells::auxiliary_text(
+                hosts.text.as_mut().expect("text capability checked"),
+                call,
+            )?)
         },
     },
     Entry {
@@ -979,7 +1249,10 @@ pub static FONT_CELLS: &[Entry] = &[
         name: "font-cell mode",
         capability: Capability::Text,
         handler: |hosts, call| {
-            font_cells::set_mode(hosts.text.as_mut().expect("text capability checked"), call)
+            Ok(font_cells::set_mode(
+                hosts.text.as_mut().expect("text capability checked"),
+                call,
+            )?)
         },
     },
 ];
@@ -999,7 +1272,7 @@ pub fn run(
     semantics: Semantics,
     vm: &mut Machine<'_>,
     hosts: &mut Hosts<'_>,
-) -> Result<Option<Flow>, DecodeError> {
+) -> Result<Option<Flow>, DispatchError> {
     let Some((pc, command)) = vm.pending_system() else {
         return Ok(None);
     };
@@ -1021,5 +1294,7 @@ pub fn run(
     if !hosts.has(entry.capability) {
         return Ok(Some(Flow::Unavailable));
     }
-    (entry.handler)(hosts, &mut Call::new(vm, pc, command)).map(Some)
+    (entry.handler)(hosts, &mut Call::new(vm, pc, command))
+        .map(Some)
+        .map_err(|cause| DispatchError { pc, command, cause })
 }

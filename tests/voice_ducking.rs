@@ -1,4 +1,7 @@
+#[path = "support/shared_audio.rs"]
+mod shared_audio;
 use cmvs_rs::audio::{VoiceActivity, VoiceDucking, VoiceDuckingSettings};
+use shared_audio::SharedAudio;
 
 const TALKING: [VoiceActivity; 1] = [VoiceActivity {
     playing: true,
@@ -179,7 +182,7 @@ fn ducking_commands_preserve_other_fields_results_and_exact_clamp_rules() {
         let mut backend = RecordingAudio::default();
         vm.state_mut().set_system_integer(0, 77).unwrap();
         pending(&mut vm);
-        host.try_handle(&mut vm, &mut backend).unwrap();
+        host.shared_handle(&mut vm, &mut backend).unwrap();
         assert_eq!(vm.state().system_integer(0), Some(77));
         assert_eq!(vm.stack().len_bytes(), 0);
         let mut settings = VoiceDuckingSettings {
@@ -198,7 +201,7 @@ fn ducking_commands_preserve_other_fields_results_and_exact_clamp_rules() {
             &[AudioRequest::ConfigureVoiceDucking { settings }]
         );
         pending(&mut vm);
-        host.try_handle(&mut vm, &mut backend).unwrap();
+        host.shared_handle(&mut vm, &mut backend).unwrap();
         assert_eq!(vm.state().system_integer(0), Some(expected));
     }
 }
@@ -229,7 +232,7 @@ fn failed_ducking_configuration_preserves_pending_command_and_parameters() {
     let mut host = AudioHost::default();
     pending(&mut vm);
     let pc = vm.pc();
-    assert!(host.try_handle(&mut vm, &mut Reject).is_err());
+    assert!(host.shared_handle(&mut vm, &mut Reject).is_err());
     assert_eq!(vm.pc(), pc);
     assert_eq!(vm.stack().len_bytes(), 4);
     assert!(vm.pending_system().is_some());

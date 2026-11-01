@@ -751,6 +751,10 @@ impl<'a> Startup<'a> {
             resolved.semantics,
             &mut self.machine,
             &mut crate::dispatch::Hosts {
+                audio: Some(crate::dispatch::AudioHosts {
+                    audio: &mut self.audio,
+                    backend: self.audio_backend.as_mut(),
+                }),
                 waits: None,
                 text: Some(crate::dispatch::TextHosts {
                     messages: &mut self.messages,
@@ -979,9 +983,6 @@ impl<'a> Startup<'a> {
             || self
                 .capture
                 .try_handle(&mut self.machine, &mut self.scene)?
-            || self
-                .audio
-                .try_handle(&mut self.machine, self.audio_backend.as_mut())?
         {
             return Ok(StartupEvent::Progress);
         }

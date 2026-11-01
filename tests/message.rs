@@ -4090,7 +4090,7 @@ fn direct_half_width_text_uses_backend_ink_extent_with_minimum_half_size_and_wra
 fn font_cell_step(
     vm: &mut Machine<'_>,
     messages: &mut MessageHost,
-) -> Result<bool, cmvs_rs::bytecode::DecodeError> {
+) -> Result<bool, Box<dyn std::error::Error>> {
     let profile = cmvs_rs::profile::Registry::builtin()
         .profile("cmvs-20171114")
         .unwrap();
@@ -4115,7 +4115,7 @@ fn font_cell_step(
         Some(cmvs_rs::dispatch::Flow::Unhandled | cmvs_rs::dispatch::Flow::Unavailable) => {
             Ok(false)
         }
-        None => messages.try_handle(vm),
+        None => Ok(messages.try_handle(vm)?),
     }
 }
 fn run_font_cells(vm: &mut Machine<'_>, messages: &mut MessageHost, count: usize) {

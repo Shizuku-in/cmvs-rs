@@ -210,7 +210,7 @@ fn popup_and_effect_queries_ignore_unknown_words_but_setters_require_them() {
                 assert_eq!(vm.state().system_integer(0), Some(1));
                 assert_eq!(vm.stack().len_bytes(), 4);
             } else {
-                assert_eq!(outcome.unwrap_err().reason, "value");
+                assert_eq!(outcome.unwrap_err().as_decode().unwrap().reason, "value");
                 assert_eq!(
                     (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
                     before
@@ -269,7 +269,7 @@ fn metadata_failures_preserve_pending_command_results_and_existing_fields() {
             },
         )
         .unwrap_err();
-        assert_eq!(error.reason, reason);
+        assert_eq!(error.as_decode().unwrap().reason, reason);
         assert_eq!(
             (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
             before

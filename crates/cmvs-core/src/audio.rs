@@ -2,7 +2,7 @@
 //! The recording backend keeps requests only; no sound is loaded or played.
 pub mod compress;
 pub mod ducking;
-use crate::{evaluate::error, machine::Machine, vm::SystemResult};
+use crate::{dispatch::Call, evaluate::error, machine::Machine};
 pub use compress::{VoiceCompressor, VoiceMixer};
 pub use ducking::{VoiceActivity, VoiceDucking, VoiceDuckingSettings};
 use std::error::Error;
@@ -482,14 +482,30 @@ impl AudioHost {
     pub fn channel(&self, index: usize) -> Option<&SeChannel> {
         self.channels.get(index).and_then(Option::as_ref)
     }
-    /// 0x20b0 / 0x140070b70: SP-4 channel, SP-8 name, SP-12 volume, SP-16 loop, SP-20 flag.
+    /// Compatibility entry for the audio commands registered in the shared table.
     pub fn try_handle(
         &mut self,
         vm: &mut Machine<'_>,
         backend: &mut dyn AudioBackend,
     ) -> Result<bool, Box<dyn Error>> {
-        match vm.pending_system() {
-            Some((_, command @ (0x239 | 0x23b | 0x23d | 0x23f))) => {
+        let Some((pc, command)) = vm.pending_system() else {
+            return Ok(false);
+        };
+        if !matches!(command, 0xa0..=0xa2 | 0xa4 | 0xa6 | 0xa8..=0xaa | 0xaf..=0xb1 | 0xb3 | 0xb5..=0xb7 | 0xba | 0x238..=0x23f | 0x241 | 0x2d6..=0x2dd)
+        {
+            return Ok(false);
+        }
+        self.handle(&mut Call::new(vm, pc, command), backend)?;
+        Ok(true)
+    }
+
+    pub(crate) fn handle(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        match call.command {
+            command @ (0x239 | 0x23b | 0x23d | 0x23f) => {
                 // Device constructor 0x140087440, queried by 0x140087d00.
                 let value = match command {
                     0x239 => self.voice_ducking.percent,
@@ -497,17 +513,15 @@ impl AudioHost {
                     0x23d => self.voice_ducking.wait_ms,
                     _ => u32::from(self.voice_ducking.include_fading),
                 };
-                vm.complete_system(SystemResult(0x4000))?;
-                vm.state_mut()
+                call.complete(0x4000)?;
+                call.vm
+                    .state_mut()
                     .set_system_integer(0, value)
                     .expect("slot 0 exists");
-                return Ok(true);
+                return Ok(());
             }
-            Some((pc, command @ (0x238 | 0x23a | 0x23c | 0x23e))) => {
-                let raw = vm
-                    .stack()
-                    .peek_u32(4)
-                    .map_err(|e| error(pc, command + 0x2000, e.0))?;
+            command @ (0x238 | 0x23a | 0x23c | 0x23e) => {
+                let raw = call.argument(4, "value")?;
                 let mut settings = self.voice_ducking;
                 match command {
                     0x238 => settings.percent = (raw as i32).clamp(0, 100) as u32,
@@ -517,46 +531,52 @@ impl AudioHost {
                 }
                 settings.percent = settings.percent.min(100);
                 backend.configure_voice_ducking(settings)?;
-                vm.complete_system(SystemResult(0x4004))?;
+                call.complete(0x4004)?;
                 self.voice_ducking = settings;
-                return Ok(true);
+                return Ok(());
             }
-            Some((_, 0x2d6..=0x2dd)) => return self.try_settings_query(vm, backend),
-            Some((_, 0xa8)) => return self.try_voice_stop(vm, backend),
-            Some((_, 0xa9)) => return self.try_voice_fade_out(vm, backend),
-            Some((_, 0xa6 | 0xaf)) => return self.try_voice_play(vm, backend),
-            Some((_, 0xb1)) => return self.try_start(vm, backend),
-            Some((_, 0xb3)) => return self.try_stop(vm, backend),
-            Some((_, 0xb5)) => return self.try_stop_all(vm, backend),
-            Some((_, 0x241)) => return self.try_channel15_stop(vm, backend),
-            Some((_, 0xb6)) => return self.try_fade_out(vm, backend),
-            Some((_, 0xa0 | 0xa4)) => return self.try_bgm(vm, backend),
-            Some((_, 0xa2)) => return self.try_bgm_fade_out(vm, backend),
-            Some((_, 0xa1)) => return self.try_bgm_stop(vm, backend),
-            Some((_, 0xaa | 0xb7)) => return self.try_position(vm, backend),
+            0x2d6..=0x2dd => return self.try_settings_query(call, backend),
+            0xa8 => return self.try_voice_stop(call, backend),
+            0xa9 => return self.try_voice_fade_out(call, backend),
+            0xa6 | 0xaf => return self.try_voice_play(call, backend),
+            0xb1 => return self.try_start(call, backend),
+            0xb3 => return self.try_stop(call, backend),
+            0xb5 => return self.try_stop_all(call, backend),
+            0x241 => return self.try_channel15_stop(call, backend),
+            0xb6 => return self.try_fade_out(call, backend),
+            0xa0 | 0xa4 => return self.try_bgm(call, backend),
+            0xa2 => return self.try_bgm_fade_out(call, backend),
+            0xa1 => return self.try_bgm_stop(call, backend),
+            0xaa | 0xb7 => return self.try_position(call, backend),
             _ => {}
         }
-        // 0x20b0 / 0x140070b70 and 0x20ba / 0x140070cd0 differ only in 0x20ba's SP-16 fade-in
+        // 0x20b0 / 0x140070b70: channel, name, volume, loop, start in callee order.
+        // 0x20ba / 0x140070cd0 differs only in its SP-16 fade-in
         // time (passed as 0x140088390's sixth argument), which shifts loop and flag by 4.
-        let Some((pc, command @ (0xb0 | 0xba))) = vm.pending_system() else {
-            return Ok(false);
-        };
+        let command = call.command;
+        let pc = call.pc;
+        debug_assert!(matches!(command, 0xb0 | 0xba));
         let op = command + 0x2000;
-        let arg = |distance| {
-            vm.stack()
-                .peek_u32(distance)
-                .map_err(|e| error(pc, op, e.0))
-        };
         let shift = if command == 0xba { 4 } else { 0 };
-        let channel = arg(4)?;
-        let (name, volume) = (arg(8)?, arg(12)? as i32);
-        let fade_in_ms = if command == 0xba { arg(16)? } else { 0 };
-        let (looped, flag) = (arg(16 + shift)? != 0, arg(20 + shift)? != 0);
+        let channel = call.argument(4, "channel")?;
+        let (name, volume) = (
+            call.argument(8, "name")?,
+            call.argument(12, "volume")? as i32,
+        );
+        let fade_in_ms = if command == 0xba {
+            call.argument(16, "fade milliseconds")?
+        } else {
+            0
+        };
+        let (looped, flag) = (
+            call.argument(16 + shift, "loop")? != 0,
+            call.argument(20 + shift, "start")? != 0,
+        );
         if channel as usize >= SE_CHANNELS {
             // The original only sets +12056 bit 0x200, which is not modeled.
             return Err(error(pc, op, "SE channel outside 0..5 sets an unmodeled flag").into());
         }
-        let name = vm.resolve_string(name)?;
+        let name = call.vm.resolve_string(name)?;
         if name.len() > NAME_CAPACITY {
             return Err(error(pc, op, "SE file name exceeds the 32-byte record").into());
         }
@@ -577,9 +597,10 @@ impl AudioHost {
         } else {
             None
         };
-        vm.complete_system(SystemResult(0x4014 + shift as u16))?;
+        call.complete(0x4014 + shift as u16)?;
         if let Some(started) = started {
-            vm.state_mut()
+            call.vm
+                .state_mut()
                 .set_system_integer(0, u32::from(started))
                 .expect("slot 0 exists");
         }
@@ -590,24 +611,19 @@ impl AudioHost {
             flag,
         });
         self.played[channel as usize] = 256;
-        Ok(true)
+        Ok(())
     }
     /// Configuration reads and live volume writes use the same playback settings.
     /// Commit writes only after the backend accepts the channel gain transaction.
     fn try_settings_query(
         &mut self,
-        vm: &mut Machine<'_>,
+        call: &mut Call<'_, '_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<bool, Box<dyn Error>> {
-        let (pc, command) = vm.pending_system().expect("pending configuration command");
-        let arg = |distance| {
-            vm.stack()
-                .peek_u32(distance)
-                .map_err(|e| error(pc, command + 0x2000, e.0))
-        };
-        if arg(4)? != 0 {
+    ) -> Result<(), Box<dyn Error>> {
+        let (pc, command) = (call.pc, call.command);
+        if call.argument(4, "mode")? != 0 {
             if command >= 0x2d9 {
-                let value = (arg(8)? as i32).clamp(0, 256) as u32;
+                let value = (call.argument(8, "value")? as i32).clamp(0, 256) as u32;
                 let mut settings = self.settings;
                 match command {
                     0x2d9 => settings.master = value,
@@ -641,11 +657,11 @@ impl AudioHost {
                     }
                 }
                 backend.set_volumes(&channels)?;
-                vm.complete_system(SystemResult(0x4008))?;
+                call.complete(0x4008)?;
                 self.settings = settings;
-                return Ok(true);
+                return Ok(());
             }
-            let enabled = arg(8)? != 0;
+            let enabled = call.argument(8, "value")? != 0;
             let current = match command {
                 0x2d6 => self.settings.bgm_enabled,
                 0x2d7 => self.settings.se_enabled,
@@ -654,11 +670,13 @@ impl AudioHost {
             if current != enabled {
                 self.set_enabled(command, enabled, pc, backend)?;
             }
-            vm.complete_system(SystemResult(0x4008))?;
-            return Ok(true);
+            call.complete(0x4008)?;
+            return Ok(());
         }
         if command >= 0x2d9 {
-            arg(8)?;
+            call.argument(8, "value")?;
+        } else {
+            call.ignore_argument(8, "value")?;
         }
         let value = match command {
             0x2d6 => u32::from(self.settings.bgm_enabled),
@@ -671,11 +689,12 @@ impl AudioHost {
             0x2dd => self.settings.movie,
             _ => unreachable!(),
         };
-        vm.complete_system(SystemResult(0x4008))?;
-        vm.state_mut()
+        call.complete(0x4008)?;
+        call.vm
+            .state_mut()
             .set_system_integer(0, value)
             .expect("slot 0 exists");
-        Ok(true)
+        Ok(())
     }
 
     /// 0x140017430/17580/17720: USE switches are not equivalent to muting gains.
@@ -756,12 +775,12 @@ impl AudioHost {
     /// 0x20a9 / 0x140070740: SP-4 voice channel, SP-8 duration; no enable flag gate.
     fn try_voice_fade_out(
         &mut self,
-        vm: &mut Machine<'_>,
+        call: &mut Call<'_, '_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<bool, Box<dyn Error>> {
-        let (pc, _) = vm.pending_system().expect("checked pending command");
-        let channel = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x20a9, e.0))?;
-        let fade_ms = vm.stack().peek_u32(8).map_err(|e| error(pc, 0x20a9, e.0))?;
+    ) -> Result<(), Box<dyn Error>> {
+        let pc = call.pc;
+        let channel = call.argument(4, "channel")?;
+        let fade_ms = call.argument(8, "fade milliseconds")?;
         if channel as usize >= VOICE_CHANNELS {
             return Err(error(
                 pc,
@@ -771,18 +790,18 @@ impl AudioHost {
             .into());
         }
         backend.fade_out_voice(channel as u8, fade_ms)?;
-        vm.complete_system(SystemResult(0x4008))?;
-        Ok(true)
+        call.complete(0x4008)?;
+        Ok(())
     }
 
     /// 0x20a8 / 0x140070650: SP-4 voice channel, device +5; no enable flag gate.
     fn try_voice_stop(
         &mut self,
-        vm: &mut Machine<'_>,
+        call: &mut Call<'_, '_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<bool, Box<dyn Error>> {
-        let (pc, _) = vm.pending_system().expect("checked pending command");
-        let channel = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x20a8, e.0))?;
+    ) -> Result<(), Box<dyn Error>> {
+        let pc = call.pc;
+        let channel = call.argument(4, "channel")?;
         if channel as usize >= VOICE_CHANNELS {
             return Err(error(
                 pc,
@@ -792,8 +811,8 @@ impl AudioHost {
             .into());
         }
         backend.stop_voice(channel as u8)?;
-        vm.complete_system(SystemResult(0x4004))?;
-        Ok(true)
+        call.complete(0x4004)?;
+        Ok(())
     }
 
     /// 0x20a6 / 0x1400703b0: SP-4 voice channel (unsigned, above 3 only sets +12056 bit
@@ -805,16 +824,20 @@ impl AudioHost {
     /// above 3.0 (NaN is kept), and returns 0x4014.
     fn try_voice_play(
         &mut self,
-        vm: &mut Machine<'_>,
+        call: &mut Call<'_, '_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<bool, Box<dyn Error>> {
-        let (pc, _) = vm.pending_system().expect("checked pending command");
-        let op = 0x2000 + vm.pending_system().expect("checked pending command").1;
+    ) -> Result<(), Box<dyn Error>> {
+        let pc = call.pc;
+        let op = 0x2000 + call.command;
         let fail = |why| error(pc, op, why);
-        let arg = |distance| vm.stack().peek_u32(distance).map_err(|e| fail(e.0));
-        let (channel, name, volume, start) = (arg(4)?, arg(8)?, arg(12)? as i32, arg(16)? != 0);
+        let (channel, name, volume, start) = (
+            call.argument(4, "channel")?,
+            call.argument(8, "name")?,
+            call.argument(12, "volume")? as i32,
+            call.argument(16, "start")? != 0,
+        );
         let rate = if op == 0x20af {
-            let rate = f32::from_bits(arg(20)?);
+            let rate = f32::from_bits(call.argument(20, "rate")?);
             // 0x14007051e..0x140070534 keeps NaN, which a range check would replace.
             #[allow(clippy::manual_range_contains)]
             let out_of_range = 1.0 > rate || rate > 3.0;
@@ -825,7 +848,7 @@ impl AudioHost {
         if channel as usize >= VOICE_CHANNELS {
             return Err(fail("voice channel outside 0..3 sets an unmodeled flag").into());
         }
-        let name = vm.resolve_string(name)?;
+        let name = call.vm.resolve_string(name)?;
         let loaded = if self.settings.voice_enabled {
             // 0x140088390 releases the channel and then refuses names of 32 bytes or more;
             // that failure path is not modeled.
@@ -848,73 +871,73 @@ impl AudioHost {
         } else {
             None
         };
-        vm.complete_system(SystemResult(if op == 0x20af { 0x4014 } else { 0x4010 }))?;
-        let state = vm.state_mut();
+        call.complete(if op == 0x20af { 0x4014 } else { 0x4010 })?;
+        let state = call.vm.state_mut();
         state
             .set_system_integer(0, u32::from(loaded == Some(true)))
             .expect("slot 0 exists");
         if loaded.is_some() {
             state.forget_system_integer(4).expect("slot 4 exists");
         }
-        Ok(true)
+        Ok(())
     }
 
     /// 0x20b1 / 0x140070e40: SP-4 channel, SP-8 loop; returns 0x4008, no result write.
     fn try_start(
         &mut self,
-        vm: &mut Machine<'_>,
+        call: &mut Call<'_, '_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<bool, Box<dyn Error>> {
-        let (pc, _) = vm.pending_system().expect("checked pending command");
+    ) -> Result<(), Box<dyn Error>> {
+        let pc = call.pc;
         let fail = |why| error(pc, 0x20b1, why);
-        let channel = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
-        let looped = vm.stack().peek_u32(8).map_err(|e| fail(e.0))? != 0;
+        let channel = call.argument(4, "channel")?;
+        let looped = call.argument(8, "loop")? != 0;
         if channel as usize >= SE_CHANNELS {
             return Err(fail("SE channel outside 0..5 sets an unmodeled flag").into());
         }
         if self.settings.se_enabled {
             backend.start(channel as u8, looped)?;
         }
-        vm.complete_system(SystemResult(0x4008))?;
+        call.complete(0x4008)?;
         // The constructor zeroes all six 52-byte records, even without a prior 0x20b0.
         let record = self.channels[channel as usize].get_or_insert_with(SeChannel::default);
         record.looped = looped;
         record.flag = true;
-        Ok(true)
+        Ok(())
     }
 
     /// 0x20b3 / 0x140070f60: SP-4 channel; returns 0x4004, no result write.
     fn try_stop(
         &mut self,
-        vm: &mut Machine<'_>,
+        call: &mut Call<'_, '_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<bool, Box<dyn Error>> {
-        let (pc, _) = vm.pending_system().expect("checked pending command");
+    ) -> Result<(), Box<dyn Error>> {
+        let pc = call.pc;
         let fail = |why| error(pc, 0x20b3, why);
-        let channel = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
+        let channel = call.argument(4, "channel")?;
         if channel as usize >= SE_CHANNELS {
             return Err(fail("SE channel outside 0..5 sets an unmodeled flag").into());
         }
         // Unlike 0x20b0/0x20b1, the original stops the device channel without checking SE_USE.
         backend.stop(channel as u8)?;
-        vm.complete_system(SystemResult(0x4004))?;
+        call.complete(0x4004)?;
         // An empty name keeps the SE menu toggle (0x140017580) from replaying the channel.
         let record = self.channels[channel as usize].get_or_insert_with(SeChannel::default);
         record.name.clear();
         record.flag = false;
-        Ok(true)
+        Ok(())
     }
 
     /// 0x2241 / 0x1400713a0: SP-4 must be zero; stop device channel 15.
     /// No SE_USE check or channel-record writes; returns 0x4004, no result write.
     fn try_channel15_stop(
         &mut self,
-        vm: &mut Machine<'_>,
+        call: &mut Call<'_, '_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<bool, Box<dyn Error>> {
-        let (pc, _) = vm.pending_system().expect("checked pending command");
+    ) -> Result<(), Box<dyn Error>> {
+        let pc = call.pc;
         let fail = |why| error(pc, 0x2241, why);
-        let slot = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
+        let slot = call.argument(4, "slot")?;
         if slot != 0 {
             return Err(fail(
                 "device channel 15 slot must be 0; other values set an unmodeled flag",
@@ -922,8 +945,8 @@ impl AudioHost {
             .into());
         }
         backend.stop_channel15()?;
-        vm.complete_system(SystemResult(0x4004))?;
-        Ok(true)
+        call.complete(0x4004)?;
+        Ok(())
     }
 
     /// 0x20b5 / 0x140071090: stop all six SE channels, clearing only their names.
@@ -932,15 +955,15 @@ impl AudioHost {
     /// pending VM command. Retrying safely stops the already empty channels again.
     fn try_stop_all(
         &mut self,
-        vm: &mut Machine<'_>,
+        call: &mut Call<'_, '_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<bool, Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error>> {
         for (channel, record) in self.channels.iter_mut().enumerate() {
             backend.stop(channel as u8)?;
             record.get_or_insert_with(SeChannel::default).name.clear();
         }
-        vm.complete_system(SystemResult(0x4000))?;
-        Ok(true)
+        call.complete(0x4000)?;
+        Ok(())
     }
 
     /// 0x20b6 / 0x1400710f0: SP-4 channel (unsigned, above 5 only sets +12056 bit 0x200),
@@ -948,23 +971,23 @@ impl AudioHost {
     /// SE_USE check; it clears only the record's name, keeping loop, volume and flag.
     fn try_fade_out(
         &mut self,
-        vm: &mut Machine<'_>,
+        call: &mut Call<'_, '_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<bool, Box<dyn Error>> {
-        let (pc, _) = vm.pending_system().expect("checked pending command");
+    ) -> Result<(), Box<dyn Error>> {
+        let pc = call.pc;
         let fail = |why| error(pc, 0x20b6, why);
-        let channel = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
-        let fade_ms = vm.stack().peek_u32(8).map_err(|e| fail(e.0))?;
+        let channel = call.argument(4, "channel")?;
+        let fade_ms = call.argument(8, "fade milliseconds")?;
         if channel as usize >= SE_CHANNELS {
             return Err(fail("SE channel outside 0..5 sets an unmodeled flag").into());
         }
         backend.fade_out_se(channel as u8, fade_ms)?;
-        vm.complete_system(SystemResult(0x4008))?;
+        call.complete(0x4008)?;
         self.channels[channel as usize]
             .get_or_insert_with(SeChannel::default)
             .name
             .clear();
-        Ok(true)
+        Ok(())
     }
 
     /// 0x20b7 / 0x140071170 (SE channel 0..5) and 0x20aa / 0x140070790 (voice channel
@@ -973,12 +996,12 @@ impl AudioHost {
     /// +12056 bits 0x200 / 0x400 (unmodeled, rejected here).
     fn try_position(
         &mut self,
-        vm: &mut Machine<'_>,
+        call: &mut Call<'_, '_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<bool, Box<dyn Error>> {
-        let (pc, command) = vm.pending_system().expect("checked pending command");
+    ) -> Result<(), Box<dyn Error>> {
+        let (pc, command) = (call.pc, call.command);
         let fail = |why| error(pc, command + 0x2000, why);
-        let channel = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
+        let channel = call.argument(4, "channel")?;
         let position = if command == 0xb7 {
             if channel as usize >= SE_CHANNELS {
                 return Err(fail("SE channel outside 0..5 sets an unmodeled flag").into());
@@ -990,11 +1013,12 @@ impl AudioHost {
             }
             backend.voice_position(channel as u8)?
         };
-        vm.complete_system(SystemResult(0x4004))?;
-        vm.state_mut()
+        call.complete(0x4004)?;
+        call.vm
+            .state_mut()
             .set_system_integer(0, position.unwrap_or(u32::MAX))
             .expect("slot 0 exists");
-        Ok(true)
+        Ok(())
     }
 
     /// 0x20a0 / 0x1400701b0: SP-4 name, SP-8 fade, SP-12 loop; returns 0x400c.
@@ -1002,25 +1026,25 @@ impl AudioHost {
     /// returns 0x4010. Both call 0x14008a240 and write no system result.
     fn try_bgm(
         &mut self,
-        vm: &mut Machine<'_>,
+        call: &mut Call<'_, '_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<bool, Box<dyn Error>> {
-        let (pc, command) = vm.pending_system().expect("checked pending command");
+    ) -> Result<(), Box<dyn Error>> {
+        let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
         let pair = command == 0xa4;
-        let arg = |distance| {
-            vm.stack()
-                .peek_u32(distance)
-                .map_err(|e| error(pc, op, e.0))
-        };
-        let primary = vm.resolve_string(arg(4)?)?;
+        let primary_ref = call.argument(4, "primary name")?;
+        let primary = call.vm.resolve_string(primary_ref)?;
         let secondary = if pair {
-            vm.resolve_string(arg(8)?)?
+            let reference = call.argument(8, "secondary name")?;
+            call.vm.resolve_string(reference)?
         } else {
             Vec::new()
         };
         let base = if pair { 8 } else { 4 };
-        let (fade_ms, looped) = (arg(base + 4)?, arg(base + 8)? != 0);
+        let (fade_ms, looped) = (
+            call.argument(base + 4, "fade milliseconds")?,
+            call.argument(base + 8, "loop")? != 0,
+        );
         // 0x140088390/0x140088b00 refuse names of 32 bytes or more after stopping the
         // channel; that failure path is not modeled.
         if primary.len() >= 32 || secondary.len() >= 32 {
@@ -1044,7 +1068,7 @@ impl AudioHost {
                 flag_1576: self.settings.bgm_flag_1576,
             })?;
         }
-        vm.complete_system(SystemResult(if pair { 0x4010 } else { 0x400c }))?;
+        call.complete(if pair { 0x4010 } else { 0x400c })?;
         // When disabled, the second 0x14008a0a0 clears +156 again; the time stamp at +160
         // is not modeled.
         self.bgm = BgmState {
@@ -1053,7 +1077,7 @@ impl AudioHost {
             channel,
             playing: enabled,
         };
-        Ok(true)
+        Ok(())
     }
 
     /// 0x20a2 / 0x140070320 → 0x14008a1c0: SP-4 fade milliseconds; returns 0x4004 with no
@@ -1061,22 +1085,21 @@ impl AudioHost {
     /// channel fades out and the channel flips to (channel - 1) & 1.
     fn try_bgm_fade_out(
         &mut self,
-        vm: &mut Machine<'_>,
+        call: &mut Call<'_, '_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<bool, Box<dyn Error>> {
-        let (pc, _) = vm.pending_system().expect("checked pending command");
-        let fade_ms = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x20a2, e.0))?;
+    ) -> Result<(), Box<dyn Error>> {
+        let fade_ms = call.argument(4, "fade milliseconds")?;
         let mut channel = self.bgm.channel;
         if self.settings.bgm_enabled {
             backend.fade_out_bgm(channel, fade_ms)?;
             channel = channel.wrapping_sub(1) & 1;
         }
-        vm.complete_system(SystemResult(0x4004))?;
+        call.complete(0x4004)?;
         self.bgm = BgmState {
             channel,
             ..BgmState::default()
         };
-        Ok(true)
+        Ok(())
     }
 
     /// 0x20a1: the dispatcher calls 0x14008a0a0 inline and returns 0x4000 (nothing popped).
@@ -1084,20 +1107,20 @@ impl AudioHost {
     /// channel resets to 0.
     fn try_bgm_stop(
         &mut self,
-        vm: &mut Machine<'_>,
+        call: &mut Call<'_, '_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<bool, Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error>> {
         let mut channel = self.bgm.channel;
         if self.settings.bgm_enabled {
             backend.stop_bgm()?;
             channel = 0;
         }
-        vm.complete_system(SystemResult(0x4000))?;
+        call.complete(0x4000)?;
         self.bgm = BgmState {
             channel,
             ..BgmState::default()
         };
-        Ok(true)
+        Ok(())
     }
 }
 

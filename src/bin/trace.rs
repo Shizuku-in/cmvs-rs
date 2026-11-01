@@ -354,6 +354,12 @@ fn run() -> Result<(), Box<dyn Error>> {
                 resolved.semantics,
                 &mut machine,
                 &mut cmvs_rs::dispatch::Hosts {
+                    audio: platform_assets
+                        .is_some()
+                        .then_some(cmvs_rs::dispatch::AudioHosts {
+                            audio: &mut audio,
+                            backend: &mut audio_backend,
+                        }),
                     waits: platform_assets
                         .is_some()
                         .then_some(cmvs_rs::dispatch::WaitHosts {
@@ -416,6 +422,51 @@ fn run() -> Result<(), Box<dyn Error>> {
                     .expect("completed root command has an entry")
                     .capability;
                 match capability {
+                    Capability::Audio => {
+                        if let (
+                            0xb0 | 0xba,
+                            Some(AudioRequest::PlaySe {
+                                channel,
+                                name,
+                                volume,
+                                looped,
+                                ..
+                            }),
+                        ) = (command, audio_backend.requests().last())
+                        {
+                            println!(
+                                "# audio 0x20b0 recorded SE[{channel}]={} volume={volume} loop={looped}; not loaded/played, system_integer[0]={:?}",
+                                name.escape_ascii(),
+                                machine.state().system_integer(0)
+                            );
+                        } else if let (0xb1, Some(AudioRequest::StartSe { channel, looped })) =
+                            (command, audio_backend.requests().last())
+                        {
+                            println!(
+                                "# audio 0x20b1 recorded start SE[{channel}] loop={looped}; no playback, system_integer[0]={:?}",
+                                machine.state().system_integer(0)
+                            );
+                        } else if let (0xb3, Some(AudioRequest::StopSe { channel })) =
+                            (command, audio_backend.requests().last())
+                        {
+                            println!(
+                                "# audio 0x20b3 recorded stop SE[{channel}]; record={:?}, system_integer[0]={:?}",
+                                audio.channel(usize::from(*channel)),
+                                machine.state().system_integer(0)
+                            );
+                        } else if matches!(command, 0xa0..=0xa2 | 0xa4) {
+                            let bgm = audio.bgm();
+                            println!(
+                                "# audio 0x{:04x} BGM channel={} primary={} secondary={} playing={}; last request={:?}; not loaded/played",
+                                command + 0x2000,
+                                bgm.channel,
+                                bgm.primary.escape_ascii(),
+                                bgm.secondary.escape_ascii(),
+                                bgm.playing,
+                                audio_backend.requests().last()
+                            );
+                        }
+                    }
                     Capability::Timers => println!(
                         "# timer 0x{:04x}: values={:?} system_integer[0]={:?}",
                         command + 0x2000,
@@ -572,52 +623,6 @@ fn run() -> Result<(), Box<dyn Error>> {
                             frame_delta = delta;
                         }
                         resume_run = true;
-                    }
-                    continue;
-                }
-                if audio.try_handle(&mut machine, &mut audio_backend)? {
-                    if let (
-                        0xb0 | 0xba,
-                        Some(AudioRequest::PlaySe {
-                            channel,
-                            name,
-                            volume,
-                            looped,
-                            ..
-                        }),
-                    ) = (command, audio_backend.requests().last())
-                    {
-                        println!(
-                            "# audio 0x20b0 recorded SE[{channel}]={} volume={volume} loop={looped}; not loaded/played, system_integer[0]={:?}",
-                            name.escape_ascii(),
-                            machine.state().system_integer(0)
-                        );
-                    } else if let (0xb1, Some(AudioRequest::StartSe { channel, looped })) =
-                        (command, audio_backend.requests().last())
-                    {
-                        println!(
-                            "# audio 0x20b1 recorded start SE[{channel}] loop={looped}; no playback, system_integer[0]={:?}",
-                            machine.state().system_integer(0)
-                        );
-                    } else if let (0xb3, Some(AudioRequest::StopSe { channel })) =
-                        (command, audio_backend.requests().last())
-                    {
-                        println!(
-                            "# audio 0x20b3 recorded stop SE[{channel}]; record={:?}, system_integer[0]={:?}",
-                            audio.channel(usize::from(*channel)),
-                            machine.state().system_integer(0)
-                        );
-                    } else if matches!(command, 0xa0..=0xa2 | 0xa4) {
-                        let bgm = audio.bgm();
-                        println!(
-                            "# audio 0x{:04x} BGM channel={} primary={} secondary={} playing={}; last request={:?}; not loaded/played",
-                            command + 0x2000,
-                            bgm.channel,
-                            bgm.primary.escape_ascii(),
-                            bgm.secondary.escape_ascii(),
-                            bgm.playing,
-                            audio_backend.requests().last()
-                        );
                     }
                     continue;
                 }
