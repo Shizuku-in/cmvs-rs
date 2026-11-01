@@ -25,7 +25,7 @@ fn migrated_tables_have_unique_owners_and_overrides_are_build_bound() {
     for entry in dispatch::FONT_CELLS {
         assert_eq!(
             derived.semantics(entry.command),
-            cmvs_rs::profile::Semantics::ResearchFontCells
+            cmvs_rs::profile::Semantics::Research(cmvs_rs::profile::ResearchId::FontCells)
         );
         assert_eq!(
             derived.status(entry.command),
@@ -141,7 +141,12 @@ fn state_entries_preserve_missing_capabilities_and_execute_once_when_available()
         };
         // An explicitly selected semantic source cannot fall back to these root entries.
         assert_eq!(
-            dispatch::run(Semantics::ResearchFontCells, &mut vm, &mut hosts).unwrap(),
+            dispatch::run(
+                Semantics::Research(cmvs_rs::profile::ResearchId::FontCells),
+                &mut vm,
+                &mut hosts
+            )
+            .unwrap(),
             Some(Flow::Unhandled)
         );
         assert_eq!((vm.pc(), vm.stack().len_bytes()), before);

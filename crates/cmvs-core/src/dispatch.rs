@@ -4439,16 +4439,23 @@ pub static FONT_CELLS: &[Entry] = &[
     },
 ];
 
+pub fn research_entry(id: crate::profile::ResearchId, command: u16) -> Option<&'static Entry> {
+    let entries = match id {
+        crate::profile::ResearchId::FontCells => FONT_CELLS,
+    };
+    entries.iter().find(|entry| entry.command == command)
+}
+
 pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
-    if profile.semantics(command) == Semantics::ResearchFontCells {
+    if matches!(profile.semantics(command), Semantics::Research(_)) {
         "research text override"
     } else {
         "base semantics"
     }
 }
 
-/// Called after CommandGate::resolve. None delegates an unmigrated command to the
-/// legacy chain. Unavailable preserves the pending command and arguments; the
+/// Called after CommandGate::resolve. None means no pending command or no root
+/// entry. Unavailable preserves the pending command and arguments; the
 /// caller may report the missing capability, but must not try another handler.
 pub fn run(
     semantics: Semantics,
@@ -4458,17 +4465,9 @@ pub fn run(
     let Some((pc, command)) = vm.pending_system() else {
         return Ok(None);
     };
-    let specific = if semantics == Semantics::ResearchFontCells {
-        FONT_CELLS
-    } else {
-        &[]
-    }
-    .iter()
-    .find(|e| e.command == command);
-    let entry = if semantics == Semantics::ResearchFontCells {
-        specific
-    } else {
-        ROOT.iter().find(|e| e.command == command)
+    let entry = match semantics {
+        Semantics::Research(id) => research_entry(id, command),
+        Semantics::Root => ROOT.iter().find(|e| e.command == command),
     };
     let Some(entry) = entry else {
         return Ok((semantics != Semantics::Root).then_some(Flow::Unhandled));

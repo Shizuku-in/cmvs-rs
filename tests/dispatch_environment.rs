@@ -202,7 +202,12 @@ fn environment_batch_has_exact_owners_and_only_completes_once() {
             Some(Flow::Unavailable)
         );
         assert_eq!(
-            dispatch::run(Semantics::ResearchFontCells, &mut vm, &mut state.hosts(cap)).unwrap(),
+            dispatch::run(
+                Semantics::Research(cmvs_rs::profile::ResearchId::FontCells),
+                &mut vm,
+                &mut state.hosts(cap)
+            )
+            .unwrap(),
             Some(Flow::Unhandled)
         );
         assert_eq!(

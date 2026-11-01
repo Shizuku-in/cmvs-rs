@@ -91,7 +91,12 @@ fn inactive_waits_check_capabilities_then_complete_without_yield_or_frame_advanc
             ..Default::default()
         };
         assert_eq!(
-            dispatch::run(Semantics::ResearchFontCells, &mut vm, &mut hosts).unwrap(),
+            dispatch::run(
+                Semantics::Research(cmvs_rs::profile::ResearchId::FontCells),
+                &mut vm,
+                &mut hosts
+            )
+            .unwrap(),
             Some(Flow::Unhandled)
         );
         assert_eq!(

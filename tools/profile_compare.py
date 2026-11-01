@@ -246,6 +246,19 @@ def apply_profile(base, derived, rows, base_path, derived_path):
             # Manual review records outrank a fresh comparison and are kept verbatim.
             if rows[int(words[0], 0)-0x2000]["status"] in ("noop", "absent"):
                 raise ValueError("reviewed command is not a handler in the export")
+        elif words[0].startswith("0x") and any(w.startswith("research=") for w in words):
+            # An explicit implementation choice cannot become root semantics merely
+            # because a new fingerprint report looks equivalent.
+            if words[1] != "unreviewed" or rows[int(words[0], 0)-0x2000]["status"] in ("noop", "absent"):
+                raise ValueError("research override must remain an unreviewed handler")
+            metadata = words[2+len(binaries):]
+            if len(metadata) != 2 or not metadata[0].startswith("research=") or not metadata[1].startswith("evidence="):
+                raise ValueError("malformed research override")
+            implementation, arch, digest = metadata[0][len("research="):].split(":")
+            binding = next((dict(w.split("=", 1) for w in binary[2:])
+                            for binary in binaries if binary[1] == arch), None)
+            if not implementation or binding is None or binding["sha256"] != digest:
+                raise ValueError("research override binary identity differs from profile")
         elif words[0].startswith("0x"):
             result = rows[int(words[0], 0)-0x2000]
             if words[1] not in ("unreviewed", "inherited", "presumed", "noop", "absent"):

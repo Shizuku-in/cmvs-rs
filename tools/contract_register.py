@@ -74,6 +74,8 @@ def register(args):
         if op not in derived_rows or root_rows.get(op, [None, None])[1] != "base":
             raise ValueError("pilot command lacks root semantics")
         old = derived_rows[op]
+        if any(word.startswith("research=") for word in old):
+            raise ValueError("will not replace an explicit research implementation with root semantics")
         if old[1] not in ("presumed", "unreviewed", "contract-equivalent"):
             raise ValueError("will not replace inherited or manually reviewed evidence")
         row = ce.compare_pair(*loaded, rules, op, images)

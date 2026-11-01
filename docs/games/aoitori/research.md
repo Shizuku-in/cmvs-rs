@@ -113,3 +113,13 @@ release探针使用 `--allow-unreviewed --allow-presumed --font C:/Windows/Fonts
 五项新增合成回归通过，覆盖比例ruby的位置、时序、等待后完成、度量失败重试及原数组边界。未进行原生窗口、GDI像素或真实音轨验证，研究放行不提升727条Unreviewed的证据状态。下一步核对 `0x22a5` 的对象类型5加载、配置与推进，保留真实停点。
 
 默认离线测试947项通过、14项忽略；core测试60项通过、1项忽略。默认/core全target严格Clippy、格式、差异与文档链接检查通过，release探针构建通过。
+
+## 2026-11-01：研究覆盖声明与粒子语义前置
+
+基线 `b1e18c3`。按分派约束继续推进：先把八条现有文字覆盖从档案ID/opcode硬编码选择迁为档案行显式 `research=font-cells:x64:<exe SHA-256> evidence=games/aoitori/vm-semantics.md`，由 `Semantics::Research(ResearchId)` 查静态处理器；不新增宿主版本判断，也不扩展旧试探链。声明限派生档案的Unreviewed处理入口，校验原exe架构/哈希、实现ID、对应命令的处理器及证据路径；证据文档存在、包含命令与哈希由仓库测试核对。改名档案仍按声明选择，未知实现、错身份或缺表项拒绝加载。正式Variant状态与默认放行证据尚未实现，本轮不提升研究覆盖为正式复核结论。
+
+候选比较工具保留显式研究行，不以新指纹结果静默改成根语义；契约登记工具拒绝覆盖研究实现。修改比较工具导致现有契约的提取器版本失效，按原exe重新提取全部712条并重登记原三条证书。新旧报告逐字段比较，只有 `rules.extractor_revision` 改变，29条等价/683条未知及全部提取内容相同，刷新过程见[契约记录](../chronoclock/research.md)。
+
+粒子 `0x22a5` 已追到创建、加载、初始化与每帧更新：类型5经 `0x140043b10` 调 `0x14004fab0`，独立对象池、随机初始化、10格精灵动画及500ms帧差上限不能省略；详见[VM语义](vm-semantics.md)。本轮未实现该命令或绕过真实停点，下一步建模资源/粒子状态、共享RNG顺序、帧推进与呈现。
+
+release探针仍使用 `--allow-unreviewed --allow-presumed`、字体msgothic、16ms帧、种子0与一亿步上限，输出 `local/aoitori/research-declarations`。全部checks与 `proportional-ruby` 逐字段相同：R1/L0、D1/L1通过；R2仍18,129,135步、8,624帧到 `sn102.ps3 / 0xa298 / 0x22a5` blocked并退出1。默认离线测试951项通过、14项忽略，core测试60项通过、1项忽略，Python工具60项通过；默认/core严格Clippy、格式、差异检查与release构建通过。

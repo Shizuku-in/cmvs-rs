@@ -81,7 +81,7 @@ class RegistrationTests(unittest.TestCase):
             self.assertEqual(cr.register(args), result)
 
     def test_rejects_stale_forged_incomplete_report_and_changed_exe(self):
-        for variant in ("rules", "acceptance", "contract", "missing-row", "exe", "reviewed", "unselected"):
+        for variant in ("rules", "acceptance", "contract", "missing-row", "exe", "reviewed", "research", "unselected"):
             with self.subTest(variant=variant), tempfile.TemporaryDirectory() as directory:
                 args = self.fixture(directory)
                 report = json.loads(Path(args.report).read_text(encoding="utf-8"))
@@ -96,6 +96,9 @@ class RegistrationTests(unittest.TestCase):
                 if variant == "reviewed":
                     p = Path(args.derived_profile)
                     p.write_text(p.read_text(encoding="utf-8").replace("unreviewed", "reviewed"), encoding="utf-8")
+                if variant == "research":
+                    p = Path(args.derived_profile)
+                    p.write_text(p.read_text(encoding="utf-8").rstrip() + " research=font-cells:x64:" + "2"*64 + " evidence=games/x/vm-semantics.md\n", encoding="utf-8")
                 if variant == "unselected": args.opcodes = []
                 with self.assertRaises((ValueError, ce.cc.InvalidEvidence)):
                     cr.register(args)

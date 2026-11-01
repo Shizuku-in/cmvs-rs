@@ -102,7 +102,7 @@ fn batch_has_exact_owners_and_each_command_completes_with_only_its_own_host() {
         );
         assert_eq!(
             dispatch::run(
-                Semantics::ResearchFontCells,
+                Semantics::Research(cmvs_rs::profile::ResearchId::FontCells),
                 &mut vm,
                 &mut Hosts {
                     scene: Some(&mut scene),

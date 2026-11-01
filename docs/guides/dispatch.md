@@ -8,6 +8,10 @@ runner 与 trace 共用 [dispatch](../../crates/cmvs-core/src/dispatch.rs)。已
 
 `Hosts` 显式提供所需能力；缺能力返回 `Unavailable`，不能当作成功完成。runner 负责运行时编排，trace 按工具支持范围提供能力。
 
+后续游戏语义推进也遵循此边界：复用共享分派，差异放独立覆盖，宿主不增加版本判断。不继续扩展临时的档案ID/opcode分支；需要新的差异选择时先落实正式变体声明与证据绑定。研究放行不会自动升级证据状态。
+
+现有研究覆盖由档案行的 `research=<实现>:<架构>:<exe SHA-256> evidence=<docs相对路径>` 声明，加载时校验身份及处理器存在。它仍要求Unreviewed研究放行，不等于正式Variant默认放行；比较与契约登记工具不能静默将其改回根语义。
+
 ## 新增或修改命令
 
 1. 在 ROOT 登记 opcode、能力和处理器；语义差异放入显式覆盖表。

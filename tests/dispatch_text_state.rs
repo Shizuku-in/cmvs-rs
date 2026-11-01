@@ -99,7 +99,12 @@ fn all_text_state_commands_have_one_owner_and_complete_once() {
             Some(Flow::Unavailable)
         );
         assert_eq!(
-            dispatch::run(Semantics::ResearchFontCells, &mut vm, &mut state.hosts()).unwrap(),
+            dispatch::run(
+                Semantics::Research(cmvs_rs::profile::ResearchId::FontCells),
+                &mut vm,
+                &mut state.hosts()
+            )
+            .unwrap(),
             Some(Flow::Unhandled)
         );
         assert_eq!(

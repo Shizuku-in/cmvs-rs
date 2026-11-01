@@ -80,7 +80,7 @@ fn all_audio_entries_require_the_pair_and_complete_once() {
         let mut backend = RecordingAudio::default();
         assert_eq!(
             dispatch::run(
-                Semantics::ResearchFontCells,
+                Semantics::Research(cmvs_rs::profile::ResearchId::FontCells),
                 &mut vm,
                 &mut Hosts {
                     audio: Some(AudioHosts {

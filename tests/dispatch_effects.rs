@@ -74,7 +74,7 @@ fn effects_have_unique_owners_and_preserve_missing_capabilities() {
             );
             assert_eq!(
                 dispatch::run(
-                    Semantics::ResearchFontCells,
+                    Semantics::Research(cmvs_rs::profile::ResearchId::FontCells),
                     &mut vm,
                     &mut Hosts {
                         scene: Some(&mut scene),

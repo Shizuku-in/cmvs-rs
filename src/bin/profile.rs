@@ -253,7 +253,7 @@ fn owners(opcode: Option<&str>) -> Result<(), Box<dyn Error>> {
         })
         .transpose()?;
     println!("# Handler candidates in chain order; no handlers or evidence gates executed");
-    println!("# Root/legacy inventory; research overrides in dispatch::FONT_CELLS are separate");
+    println!("# Shared root inventory; profile-declared research overrides are separate");
     println!(
         "# trace candidates may require optional hosts/resources/flags; root text has no trace host"
     );

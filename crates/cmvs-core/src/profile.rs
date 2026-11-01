@@ -26,7 +26,35 @@ pub enum Family {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Semantics {
     Root,
-    ResearchFontCells,
+    Research(ResearchId),
+}
+
+/// Static implementation identifiers; selecting one still requires research permission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResearchId {
+    FontCells,
+}
+impl ResearchId {
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "font-cells" => Some(Self::FontCells),
+            _ => None,
+        }
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::FontCells => "font-cells",
+        }
+    }
+}
+
+/// A declared research implementation and its executable-bound evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResearchOverride {
+    pub id: ResearchId,
+    pub arch: Arch,
+    pub binary_sha256: [u8; 32],
+    pub evidence: String,
 }
 
 pub struct ResolvedCommand {
@@ -123,21 +151,21 @@ pub struct EngineProfile {
     contracts: BTreeMap<u16, [u8; 32]>,
     /// Review records, as paths relative to `docs/` of a section headed by the command.
     reviews: BTreeMap<u16, String>,
+    research: BTreeMap<u16, ResearchOverride>,
 }
 
 impl EngineProfile {
     pub fn semantics(&self, command: u16) -> Semantics {
-        if self.id == "cmvs-20171114"
-            && self.status(command) == CommandStatus::Unreviewed
-            && matches!(
-                command,
-                0x10b | 0x11d | 0x152 | 0x154 | 0x157 | 0x159 | 0x38b | 0x3ac
-            )
-        {
-            Semantics::ResearchFontCells
-        } else {
-            Semantics::Root
-        }
+        self.research(command)
+            .map_or(Semantics::Root, |entry| Semantics::Research(entry.id))
+    }
+    pub fn research(&self, command: u16) -> Option<&ResearchOverride> {
+        self.research.get(&command)
+    }
+    pub fn research_overrides(&self) -> impl Iterator<Item = (u16, &ResearchOverride)> {
+        self.research
+            .iter()
+            .map(|(&command, entry)| (command, entry))
     }
     /// Verified loader zero-fill bank sizes, in integer/bit/float/string order.
     /// This is startup layout evidence, independent of command research policy.
@@ -220,6 +248,7 @@ impl EngineProfile {
             proofs: BTreeMap::new(),
             contracts: BTreeMap::new(),
             reviews: BTreeMap::new(),
+            research: BTreeMap::new(),
         };
         profile.validate()?;
         Ok(profile)
@@ -275,6 +304,25 @@ impl EngineProfile {
                 return Err(ProfileError::new(
                     "command status contradicts the switch or profile kind",
                 ));
+            }
+            if let Some(research) = self.research(command as u16) {
+                if *status != CommandStatus::Unreviewed || self.base.is_none() {
+                    return Err(ProfileError::new(
+                        "research override requires an unreviewed derived command",
+                    ));
+                }
+                if !self.binaries.iter().any(|binary| {
+                    binary.arch == research.arch && binary.sha256 == research.binary_sha256
+                }) {
+                    return Err(ProfileError::new(
+                        "research evidence does not match the profile binary",
+                    ));
+                }
+                if crate::dispatch::research_entry(research.id, command as u16).is_none() {
+                    return Err(ProfileError::new(
+                        "research override has no registered handler",
+                    ));
+                }
             }
             if matches!(status, CommandStatus::Inherited | CommandStatus::Presumed)
                 != self.proofs.contains_key(&(command as u16))

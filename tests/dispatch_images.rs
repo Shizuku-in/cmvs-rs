@@ -166,7 +166,7 @@ fn all_image_entries_preserve_missing_capabilities_and_complete_once() {
         }
         assert_eq!(
             dispatch::run(
-                Semantics::ResearchFontCells,
+                Semantics::Research(cmvs_rs::profile::ResearchId::FontCells),
                 &mut vm,
                 &mut Hosts {
                     images: Some(ImageHosts {

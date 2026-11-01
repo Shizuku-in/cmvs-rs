@@ -126,7 +126,7 @@ fn all_control_entries_require_their_own_context_and_complete_once() {
         );
         assert_eq!(
             dispatch::run(
-                Semantics::ResearchFontCells,
+                Semantics::Research(cmvs_rs::profile::ResearchId::FontCells),
                 &mut vm,
                 &mut controls.hosts(capability)
             )

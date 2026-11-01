@@ -271,7 +271,7 @@ compare x64 base-sha256=dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91
 0x2108 unreviewed 0x89cd6 0x7a3d0
 0x2109 unreviewed 0x89ce3 0x7a3da
 0x210a unreviewed 0x89cf0 0x7a3e4
-0x210b unreviewed 0x89cfd 0x7a3ee
+0x210b unreviewed 0x89cfd 0x7a3ee research=font-cells:x64:3bccda5d7611412c6938c0c9b06b2195914cfb78763a53f2c235bb6479395ee0 evidence=games/aoitori/vm-semantics.md
 0x210c unreviewed 0x89d0a 0x7a3f8
 0x210d unreviewed 0x89d17 0x7a402
 0x210e unreviewed 0x89d24 0x7a40c
@@ -289,7 +289,7 @@ compare x64 base-sha256=dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91
 0x211a unreviewed 0x89dc0 0x7a484
 0x211b noop 0x89047 0x79b33
 0x211c unreviewed 0x89dcd 0x7a48e
-0x211d unreviewed 0x89dda 0x7a498
+0x211d unreviewed 0x89dda 0x7a498 research=font-cells:x64:3bccda5d7611412c6938c0c9b06b2195914cfb78763a53f2c235bb6479395ee0 evidence=games/aoitori/vm-semantics.md
 0x211e unreviewed 0x89de7 0x7a4a2
 0x211f unreviewed 0x89df4 0x7a4ac
 0x2120 unreviewed 0x89e01 0x7a4b6
@@ -342,14 +342,14 @@ compare x64 base-sha256=dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91
 0x214f unreviewed 0x8a043 0x7a682
 0x2150 unreviewed 0x8a050 0x7a68c
 0x2151 unreviewed 0x8a05d 0x7a696
-0x2152 unreviewed 0x8a06a 0x7a6a0
+0x2152 unreviewed 0x8a06a 0x7a6a0 research=font-cells:x64:3bccda5d7611412c6938c0c9b06b2195914cfb78763a53f2c235bb6479395ee0 evidence=games/aoitori/vm-semantics.md
 0x2153 unreviewed 0x8a077 0x7a6aa
-0x2154 unreviewed 0x8a084 0x7a6b4
+0x2154 unreviewed 0x8a084 0x7a6b4 research=font-cells:x64:3bccda5d7611412c6938c0c9b06b2195914cfb78763a53f2c235bb6479395ee0 evidence=games/aoitori/vm-semantics.md
 0x2155 unreviewed 0x8a091 0x7a6be
 0x2156 unreviewed 0x8a09e 0x7a6c8
-0x2157 unreviewed 0x8a0ab 0x7a6d2
+0x2157 unreviewed 0x8a0ab 0x7a6d2 research=font-cells:x64:3bccda5d7611412c6938c0c9b06b2195914cfb78763a53f2c235bb6479395ee0 evidence=games/aoitori/vm-semantics.md
 0x2158 unreviewed 0x8a0b8 0x7a6dc
-0x2159 unreviewed 0x8a0c5 0x7a6e6
+0x2159 unreviewed 0x8a0c5 0x7a6e6 research=font-cells:x64:3bccda5d7611412c6938c0c9b06b2195914cfb78763a53f2c235bb6479395ee0 evidence=games/aoitori/vm-semantics.md
 0x215a unreviewed 0x8a0d2 0x7a6f0
 0x215b unreviewed 0x8a0df 0x7a6fa
 0x215c unreviewed 0x8a0ec 0x7a704
@@ -911,7 +911,7 @@ compare x64 base-sha256=dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91
 0x2388 unreviewed 0x8b809 0x7b8e2
 0x2389 unreviewed 0x8b816 0x7b8ec
 0x238a unreviewed 0x8b823 0x7b8f6
-0x238b unreviewed 0x8b830 0x7b900
+0x238b unreviewed 0x8b830 0x7b900 research=font-cells:x64:3bccda5d7611412c6938c0c9b06b2195914cfb78763a53f2c235bb6479395ee0 evidence=games/aoitori/vm-semantics.md
 0x238c unreviewed 0x8b83d 0x7b90a
 0x238d unreviewed 0x8b84a 0x7b914
 0x238e unreviewed 0x8b857 0x7b91e
@@ -944,7 +944,7 @@ compare x64 base-sha256=dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91
 0x23a9 noop 0x89047 0x79b33
 0x23aa noop 0x89047 0x79b33
 0x23ab noop 0x89047 0x79b33
-0x23ac unreviewed 0x8b975 0x7b9fa
+0x23ac unreviewed 0x8b975 0x7b9fa research=font-cells:x64:3bccda5d7611412c6938c0c9b06b2195914cfb78763a53f2c235bb6479395ee0 evidence=games/aoitori/vm-semantics.md
 0x23ad noop 0x89047 0x79b33
 0x23ae unreviewed 0x890e4 0x79b96
 0x23af noop 0x89047 0x79b33

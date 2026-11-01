@@ -104,7 +104,12 @@ fn each_service_uses_only_its_declared_capability_and_completes_once() {
             ..Default::default()
         };
         assert_eq!(
-            dispatch::run(Semantics::ResearchFontCells, &mut vm, &mut hosts).unwrap(),
+            dispatch::run(
+                Semantics::Research(cmvs_rs::profile::ResearchId::FontCells),
+                &mut vm,
+                &mut hosts
+            )
+            .unwrap(),
             Some(Flow::Unhandled)
         );
         assert_eq!(
