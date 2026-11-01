@@ -63,6 +63,8 @@ cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop
 
 ## 设置保存与重启
 
+字体选择有回退保护：名称无法用游戏编码表示，或字体文件无法加载时，使用 `--font` 提供的默认字体；所选字体仅缺个别字符或可绘制轮廓时，按字符回退到该默认字体。字宽测量与绘制使用同一个字体选择规则，避免缺字直接终止游戏。默认字体本身也缺字时可显示其缺字字形，故仍应提供覆盖游戏文字的默认字体。
+
 提供 `--user-data-dir` 时，优先读取该目录的 `cmvs.cfg`；首次没有用户配置时，从原游戏的只读配置开始。桌面正常退出（含诊断倒计时退出）保存当前已实现的设置，生成或替换用户 `cmvs.cfg`，旧配置留在 `cmvs.cfg.bak`。VM错误退出不自动保存。没有独立用户目录或使用单次 `--system-save-output` 时不写配置。无窗口库调用方需显式调用 `Startup::save_preferences`，Drop不执行可能失败的保存。
 
 目前保存音量与声音开关、语音压低BGM、文字速度/描边/粗体/显现、语音停止方式、未读停止、自动送页、后台运行、画面效果、保存/读取确认及光标自动隐藏。原配置中的未知键、其他设置和原始文本字节保留。全屏与比例偏好使用 `[CMVS_RS_DESKTOP]` 的 FULLSCREEN/ASPECT_MODE/ASPECT_SCALING，适配当前单显示器无边框全屏；不改原版D3D适配器配置。系统页绘制模式沿用原版 `[GRAPHIC_CONFIG]` 的 ASPECT_RATIO_FILTER（0为线性、1为点采样），桌面按此选择软件双线性或最近邻缩放。`--font` 文件作为内置缺省面ＭＳ ゴシック；游戏内「フォント選択」在Windows上打开系统字体对话框，在Linux上打开Zenity日文字体族列表，所选面写入 `[MESSAGE_INFO]` 的 FONT 并从系统字体目录载入，启动时找不到配置面则换回缺省。Linux需要安装fontconfig、zenity与日文字体；其他平台的字体对话框尚未实现。

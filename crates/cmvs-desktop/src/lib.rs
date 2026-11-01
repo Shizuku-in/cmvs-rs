@@ -212,11 +212,18 @@ impl PlatformBackend for NativeBackend<'_> {
             println!("# native font dialog cancelled");
             return Ok(None);
         };
-        let bytes = self.encoding.encode(&face)?;
+        let bytes = match self.encoding.encode(&face) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                println!("# native font {face} name is not representable; using default font");
+                return Ok(Some(cmvs_core::settings::DEFAULT_FONT_FACE.to_vec()));
+            }
+        };
         if let Some(fonts) = self.fonts
             && !fonts.has_face(&bytes)
         {
-            return Err(format!("chosen font face {face} has no loadable font file").into());
+            println!("# native font {face} is not loadable; using default font");
+            return Ok(Some(cmvs_core::settings::DEFAULT_FONT_FACE.to_vec()));
         }
         println!("# native font dialog chose {face}");
         Ok(Some(bytes))

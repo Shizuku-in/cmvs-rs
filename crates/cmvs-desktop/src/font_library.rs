@@ -2,7 +2,7 @@
 //! `--font` file serves the built-in default face; other faces are found by family name
 //! in the directories `cmvs_native::font_directories` lists for this platform
 //! (Windows system/user folders and Linux Fontconfig directories).
-use ab_glyph::FontVec;
+use ab_glyph::{Font, FontVec};
 use cmvs_core::{FormatError, settings::DEFAULT_FONT_FACE};
 use std::{
     collections::BTreeMap,
@@ -66,9 +66,18 @@ impl FontLibrary {
     }
     /// Startup existence check (0x140007f80): whether a face can be resolved.
     pub fn contains(&mut self, face: &[u8]) -> bool {
-        face == DEFAULT_FONT_FACE
-            || self.loaded.contains_key(face)
-            || matches!(self.locate(face), Ok(Some(_)))
+        self.face(face).is_ok()
+    }
+    /// Resolve each character identically for layout and rasterization. Missing or
+    /// unusable selected faces fall back to the explicit default supplied by --font.
+    pub fn for_character(&mut self, face: &[u8], ch: char) -> Arc<FontVec> {
+        let font = self.face(face).unwrap_or_else(|_| self.default.clone());
+        let id = font.glyph_id(ch);
+        if id.0 != 0 && (ch.is_whitespace() || font.outline(id).is_some()) {
+            font
+        } else {
+            self.default.clone()
+        }
     }
     fn locate(&mut self, face: &[u8]) -> Result<Option<(PathBuf, u32)>, FormatError> {
         let (name, _, invalid) = encoding_rs::SHIFT_JIS.decode(face);
@@ -214,6 +223,36 @@ fn name_records(table: &[u8]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires CMVS_FONT_PATH (Japanese) and CMVS_PARTIAL_FONT_PATH (Latin-only)"]
+    fn missing_characters_fall_back_without_replacing_supported_characters() {
+        let load = |key| {
+            Arc::new(
+                FontVec::try_from_vec(std::fs::read(std::env::var_os(key).unwrap()).unwrap())
+                    .unwrap(),
+            )
+        };
+        let default = load("CMVS_FONT_PATH");
+        let partial = load("CMVS_PARTIAL_FONT_PATH");
+        assert_ne!(default.glyph_id('あ').0, 0);
+        assert_eq!(partial.glyph_id('あ').0, 0);
+        assert_ne!(partial.glyph_id('A').0, 0);
+        let mut library = FontLibrary::with_directories(default.clone(), Vec::new());
+        library.loaded.insert(b"partial".to_vec(), partial.clone());
+        assert!(Arc::ptr_eq(
+            &library.for_character(b"partial", 'あ'),
+            &default
+        ));
+        assert!(Arc::ptr_eq(
+            &library.for_character(b"partial", 'A'),
+            &partial
+        ));
+        assert!(Arc::ptr_eq(
+            &library.for_character(b"missing", 'あ'),
+            &default
+        ));
+    }
 
     /// One sfnt face whose only table is `name`, holding the given (platform, encoding,
     /// name ID, UTF-16 string) records.
