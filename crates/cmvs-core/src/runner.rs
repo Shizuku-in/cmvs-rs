@@ -526,6 +526,9 @@ impl<'a> Startup<'a> {
         mut backend: Box<dyn AudioBackend>,
     ) -> Result<(), Box<dyn Error>> {
         backend.configure_voice_ducking(self.audio.voice_ducking())?;
+        if !self.audio.output_enabled() {
+            backend.set_output_enabled(false)?;
+        }
         self.audio_backend = backend;
         Ok(())
     }
@@ -581,6 +584,10 @@ impl<'a> Startup<'a> {
         if self.quit {
             return Ok(StartupEvent::Quit);
         }
+        self.audio.sync_output_activity(
+            self.focused || self.settings.active_draw(),
+            self.audio_backend.as_mut(),
+        )?;
         if !self.frame_running() {
             return Ok(StartupEvent::Inactive);
         }

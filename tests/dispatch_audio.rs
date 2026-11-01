@@ -264,3 +264,132 @@ fn trace_preserves_optional_audio_and_stop_diagnostics() {
     fs::remove_file(path).unwrap();
     fs::remove_dir(root).unwrap();
 }
+
+#[test]
+fn background_audio_override_queries_writes_and_gates_without_stopping_playback() {
+    use cmvs_rs::profile::ResearchId;
+    let mut code = vec![];
+    for args in [[0, 999], [7, 0], [0, 0], [1, u32::MAX]] {
+        command(&mut code, 0x22ed, &args);
+    }
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut audio = AudioHost::default();
+    let mut backend = RecordingAudio::default();
+    let semantics = Semantics::Research(ResearchId::BackgroundAudio);
+    for (index, expected) in [true, false, false, true].into_iter().enumerate() {
+        pending(&mut vm);
+        let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
+        assert_eq!(
+            dispatch::run(semantics, &mut vm, &mut Hosts::default()).unwrap(),
+            Some(Flow::Unavailable)
+        );
+        assert_eq!(
+            (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
+            before
+        );
+        assert_eq!(run(&mut vm, &mut audio, &mut backend).unwrap(), None);
+        assert_eq!(
+            dispatch::run(
+                semantics,
+                &mut vm,
+                &mut Hosts {
+                    audio: Some(AudioHosts {
+                        audio: &mut audio,
+                        backend: &mut backend
+                    }),
+                    ..Default::default()
+                }
+            )
+            .unwrap(),
+            Some(Flow::Done)
+        );
+        assert_eq!(
+            (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
+            (before.0 + 2, None, 0)
+        );
+        assert_eq!(audio.background_output(), expected);
+        assert_eq!(
+            vm.state().system_integer(0).unwrap(),
+            u32::from(if index % 2 == 0 { expected } else { !expected })
+        );
+        if index == 1 {
+            assert!(audio.output_enabled());
+            audio.sync_output_activity(false, &mut backend).unwrap();
+            assert!(!audio.output_enabled());
+            audio.sync_output_activity(true, &mut backend).unwrap();
+            assert!(audio.output_enabled());
+            audio.sync_output_activity(false, &mut backend).unwrap();
+        }
+    }
+    assert!(audio.output_enabled());
+    assert_eq!(
+        backend.requests(),
+        &[
+            AudioRequest::SetOutputEnabled { enabled: false },
+            AudioRequest::SetOutputEnabled { enabled: true },
+            AudioRequest::SetOutputEnabled { enabled: false },
+            AudioRequest::SetOutputEnabled { enabled: true },
+        ]
+    );
+}
+
+#[test]
+fn background_audio_errors_preserve_state_and_allow_retry() {
+    use cmvs_rs::profile::ResearchId;
+    let semantics = Semantics::Research(ResearchId::BackgroundAudio);
+    let mut audio = AudioHost::default();
+    let mut backend = RecordingAudio::default();
+    audio.sync_output_activity(false, &mut backend).unwrap();
+    for args in [vec![1, 0], vec![1], vec![0]] {
+        let mut code = vec![];
+        command(&mut code, 0x22ed, &args);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        pending(&mut vm);
+        let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
+        assert!(
+            dispatch::run(
+                semantics,
+                &mut vm,
+                &mut Hosts {
+                    audio: Some(AudioHosts {
+                        audio: &mut audio,
+                        backend: &mut Reject
+                    }),
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(
+            (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
+            before
+        );
+        assert!(audio.background_output());
+        assert!(audio.output_enabled());
+        if args.len() == 2 {
+            dispatch::run(
+                semantics,
+                &mut vm,
+                &mut Hosts {
+                    audio: Some(AudioHosts {
+                        audio: &mut audio,
+                        backend: &mut backend,
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert!(!audio.background_output());
+            assert!(!audio.output_enabled());
+            assert!(audio.sync_output_activity(true, &mut Reject).is_err());
+            assert!(!audio.output_enabled());
+            audio.sync_output_activity(true, &mut backend).unwrap();
+            assert!(audio.output_enabled());
+            // A new host isolates the short-stack cases from the successful write.
+            audio = AudioHost::default();
+            audio.sync_output_activity(false, &mut backend).unwrap();
+        }
+    }
+}

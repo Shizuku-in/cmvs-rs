@@ -91,6 +91,10 @@ pub struct SePlayback {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AudioRequest {
+    /// Silence output while consuming audio normally; playback and gains are retained.
+    SetOutputEnabled {
+        enabled: bool,
+    },
     ConfigureVoiceDucking {
         settings: VoiceDuckingSettings,
     },
@@ -189,6 +193,12 @@ pub enum AudioRequest {
 }
 
 pub trait AudioBackend {
+    /// Apply a device-wide output gate without stopping streams or changing their gains.
+    /// Err leaves the gate unchanged.
+    fn set_output_enabled(&mut self, _enabled: bool) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement output gating".into())
+    }
+
     /// Queue a full parameter change atomically; active cycles keep their old values.
     fn configure_voice_ducking(
         &mut self,
@@ -316,6 +326,10 @@ impl RecordingAudio {
     }
 }
 impl AudioBackend for RecordingAudio {
+    fn set_output_enabled(&mut self, enabled: bool) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::SetOutputEnabled { enabled })
+    }
+
     fn fade_out_voice(&mut self, channel: u8, fade_ms: u32) -> Result<(), Box<dyn Error>> {
         self.record(AudioRequest::FadeOutVoice { channel, fade_ms })
     }
@@ -387,6 +401,9 @@ impl AudioBackend for RecordingAudio {
 
 #[derive(Debug)]
 pub struct AudioHost {
+    background_output: bool,
+    output_active: bool,
+    output_enabled: bool,
     settings: AudioSettings,
     /// Device +2424/+2428/+2432/+2436, including the most recent queued update.
     voice_ducking: VoiceDuckingSettings,
@@ -438,6 +455,9 @@ impl AudioHost {
     }
     pub fn new(settings: AudioSettings) -> Self {
         Self {
+            background_output: true,
+            output_active: true,
+            output_enabled: true,
             settings,
             voice_ducking: VoiceDuckingSettings::default(),
             channels: Default::default(),
@@ -445,6 +465,55 @@ impl AudioHost {
             played: [0; SE_CHANNELS],
             bgm: BgmState::default(),
         }
+    }
+    pub fn background_output(&self) -> bool {
+        self.background_output
+    }
+    pub fn output_enabled(&self) -> bool {
+        self.output_enabled
+    }
+    /// The device combines its foreground flag with the script's background switch.
+    pub fn sync_output_activity(
+        &mut self,
+        active: bool,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let enabled = active || self.background_output;
+        if enabled != self.output_enabled {
+            backend.set_output_enabled(enabled)?;
+        }
+        self.output_active = active;
+        self.output_enabled = enabled;
+        Ok(())
+    }
+    /// Identity-bound 0x22ed research entry; the root build has no handler.
+    pub(crate) fn handle_background_output(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let write = call.argument(4, "write")? != 0;
+        let background = if write {
+            call.argument(8, "background output")? != 0
+        } else {
+            call.ignore_argument(8, "unused background output")?;
+            self.background_output
+        };
+        if write {
+            let enabled = self.output_active || background;
+            if enabled != self.output_enabled {
+                backend.set_output_enabled(enabled)?;
+            }
+            call.complete(0x4008)?;
+            self.background_output = background;
+            self.output_enabled = enabled;
+        } else {
+            call.complete(0x4008)?;
+            call.vm
+                .state_mut()
+                .set_system_integer(0, u32::from(background))?;
+        }
+        Ok(())
     }
     pub fn bgm(&self) -> &BgmState {
         &self.bgm

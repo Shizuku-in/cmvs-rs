@@ -34,12 +34,14 @@ pub enum Semantics {
 pub enum ResearchId {
     FontCells,
     Particles,
+    BackgroundAudio,
 }
 impl ResearchId {
     pub fn parse(name: &str) -> Option<Self> {
         match name {
             "font-cells" => Some(Self::FontCells),
             "particles" => Some(Self::Particles),
+            "background-audio" => Some(Self::BackgroundAudio),
             _ => None,
         }
     }
@@ -47,6 +49,7 @@ impl ResearchId {
         match self {
             Self::FontCells => "font-cells",
             Self::Particles => "particles",
+            Self::BackgroundAudio => "background-audio",
         }
     }
 }

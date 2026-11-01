@@ -152,6 +152,7 @@ struct Compression {
     last: bool,
 }
 struct StreamSource {
+    output_enabled: Arc<AtomicBool>,
     program: VorbisProgram,
     compression: Option<Compression>,
     fault: Fault,
@@ -205,7 +206,13 @@ impl Iterator for StreamSource {
             self.pcm()
         };
         match sample {
-            Ok(sample) => sample.map(|x| f32::from(x) / 32768.0),
+            Ok(sample) => sample.map(|x| {
+                if self.output_enabled.load(Ordering::Relaxed) {
+                    f32::from(x) / 32768.0
+                } else {
+                    0.0
+                }
+            }),
             Err(e) => {
                 *self.fault.lock().unwrap() = Some(e.to_string());
                 self.failed = true;
@@ -278,6 +285,7 @@ impl Channel {
 
 /// Opened only with the desktop's explicit `--audio native` option.
 pub struct NativeAudio {
+    output_enabled: Arc<AtomicBool>,
     root: PathBuf,
     paths: BTreeMap<(u16, u32), Vec<u8>>,
     archives: ResourceArchives,
@@ -311,6 +319,7 @@ impl NativeAudio {
             stream.config().channel_count()
         );
         Ok(Self {
+            output_enabled: Arc::new(AtomicBool::new(true)),
             root: root.canonicalize()?,
             paths: BTreeMap::new(),
             archives: ResourceArchives::new(root)?,
@@ -374,6 +383,7 @@ impl NativeAudio {
         let envelope = (fade_ms != 0).then(|| Envelope::new(0.0, 1.0, fade_ms));
         sink.set_volume(if envelope.is_some() { 0.0 } else { gain });
         sink.append(StreamSource {
+            output_enabled: self.output_enabled.clone(),
             program,
             compression,
             fault: fault.clone(),
@@ -440,6 +450,11 @@ impl NativeAudio {
     }
 }
 impl AudioBackend for NativeAudio {
+    fn set_output_enabled(&mut self, enabled: bool) -> Result<(), Box<dyn Error>> {
+        self.output_enabled.store(enabled, Ordering::Relaxed);
+        Ok(())
+    }
+
     fn configure_voice_ducking(
         &mut self,
         settings: VoiceDuckingSettings,
@@ -809,6 +824,41 @@ impl AudioBackend for NativeAudio {
             Ok(Some(MovieAudioClock::Playing {
                 position_ms: movie.sink.get_pos().as_millis().min(u128::from(u32::MAX)) as u32,
             }))
+        }
+    }
+}
+
+#[cfg(test)]
+mod output_gate_tests {
+    use super::*;
+
+    #[test]
+    fn muting_consumes_pcm_and_resuming_preserves_the_stream_position() {
+        let bytes = include_bytes!("../../../tests/fixtures/audio/mono440.ogg");
+        let gate = Arc::new(AtomicBool::new(true));
+        let mut source = StreamSource {
+            output_enabled: gate.clone(),
+            program: VorbisProgram::new(bytes.to_vec(), None, false).unwrap(),
+            compression: None,
+            fault: Arc::default(),
+            failed: false,
+        };
+        let mut reference = VorbisProgram::new(bytes.to_vec(), None, false).unwrap();
+        let mut samples = vec![];
+        while let Some(pcm) = reference.next_sample().unwrap() {
+            samples.push(pcm);
+        }
+        assert!(samples.len() > 3);
+        let muted = samples.len() / 3..samples.len() * 2 / 3;
+        for (index, pcm) in samples.into_iter().enumerate() {
+            let enabled = !muted.contains(&index);
+            gate.store(enabled, Ordering::Relaxed);
+            let expected = if enabled {
+                f32::from((pcm * 32768.0).clamp(-32768.0, 32767.0) as i16) / 32768.0
+            } else {
+                0.0
+            };
+            assert_eq!(source.next().unwrap(), expected);
         }
     }
 }

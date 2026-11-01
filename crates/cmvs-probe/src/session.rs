@@ -299,10 +299,11 @@ impl<'a> Session<'a> {
     /// Player-facing settings: text, auto advance, read skip and audio mixer values.
     pub fn settings_fingerprint(&self) -> String {
         format!(
-            "{:?} {:?} {:?}",
+            "{:?} {:?} {:?} background_output: {}",
             self.run.settings(),
             self.run.audio().settings(),
-            self.run.audio().voice_ducking()
+            self.run.audio().voice_ducking(),
+            self.run.audio().background_output()
         )
     }
     /// Live resource counts that a long run should not grow without bound.

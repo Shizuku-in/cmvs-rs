@@ -4468,10 +4468,22 @@ pub static PARTICLES: &[Entry] = &[Entry {
     },
 }];
 
+pub static BACKGROUND_AUDIO: &[Entry] = &[Entry {
+    command: 0x2ed,
+    name: "background audio output",
+    capability: Capability::Audio,
+    handler: |hosts, call| {
+        let h = hosts.audio.as_mut().expect("audio capability checked");
+        h.audio.handle_background_output(call, h.backend)?;
+        Ok(Flow::Done)
+    },
+}];
+
 pub fn research_entry(id: crate::profile::ResearchId, command: u16) -> Option<&'static Entry> {
     let entries = match id {
         crate::profile::ResearchId::FontCells => FONT_CELLS,
         crate::profile::ResearchId::Particles => PARTICLES,
+        crate::profile::ResearchId::BackgroundAudio => BACKGROUND_AUDIO,
     };
     entries.iter().find(|entry| entry.command == command)
 }
@@ -4480,6 +4492,9 @@ pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
     match profile.semantics(command) {
         Semantics::Research(crate::profile::ResearchId::FontCells) => "research text override",
         Semantics::Research(crate::profile::ResearchId::Particles) => "research particle override",
+        Semantics::Research(crate::profile::ResearchId::BackgroundAudio) => {
+            "research background audio override"
+        }
         Semantics::Root => "base semantics",
     }
 }

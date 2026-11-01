@@ -753,7 +753,7 @@ compare x64 base-sha256=dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91
 0x22ea unreviewed 0x8b17f 0x7b3be
 0x22eb unreviewed 0x8b18c 0x7b3c8
 0x22ec unreviewed 0x8b199 0x7b3d2
-0x22ed unreviewed 0x8b1a6 0x7b3dc
+0x22ed unreviewed 0x8b1a6 0x7b3dc research=background-audio:x64:3bccda5d7611412c6938c0c9b06b2195914cfb78763a53f2c235bb6479395ee0 evidence=games/aoitori/vm-semantics.md
 0x22ee unreviewed 0x8b1b3 0x7b3e6
 0x22ef unreviewed 0x8b1d3 0x7b401
 0x22f0 unreviewed 0x8b1e0 0x7b40b
