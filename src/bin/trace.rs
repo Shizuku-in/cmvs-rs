@@ -24,7 +24,6 @@ use cmvs_rs::{
     sequence::SequenceHost,
     snapshot::{SaveImage, SaveTitle},
     system_save::{FileSystemSave, SystemSaveHost},
-    text,
     timers::VmTimers,
 };
 use std::{collections::BTreeMap, env, error::Error, fs::File, io::Read};
@@ -355,6 +354,9 @@ fn run() -> Result<(), Box<dyn Error>> {
                     timers: platform_assets.is_some().then_some(&mut timers),
                     flags: platform_assets.is_some().then_some(&mut message_flags),
                     random: random.as_mut(),
+                    settings: platform_assets.is_some().then_some(&mut settings),
+                    history: platform_assets.is_some().then_some(&mut history),
+                    strings: platform_assets.is_some(),
                     ..Default::default()
                 },
             )?;
@@ -384,7 +386,23 @@ fn run() -> Result<(), Box<dyn Error>> {
                         "# rand 0x20d4: system_integer[0]={:?} (explicit research seed)",
                         machine.state().system_integer(0)
                     ),
-                    Capability::Text => return Err("trace has no text host".into()),
+                    Capability::Settings => println!(
+                        "# configuration 0x{:04x}; system_integer[0]={:?}",
+                        command + 0x2000,
+                        machine.state().system_integer(0)
+                    ),
+                    Capability::History => println!(
+                        "# history entries={} (newest first; no history UI)",
+                        history.entries().len()
+                    ),
+                    Capability::Strings => println!(
+                        "# text 0x{:04x}: system_integer[0]={:?}",
+                        command + 0x2000,
+                        machine.state().system_integer(0)
+                    ),
+                    Capability::Text | Capability::Math => {
+                        return Err("trace lacks the dispatched capability".into());
+                    }
                 }
                 continue;
             }
@@ -534,14 +552,6 @@ fn run() -> Result<(), Box<dyn Error>> {
                     );
                     continue;
                 }
-                if text::try_handle(&mut machine)? {
-                    println!(
-                        "# text 0x{:04x}: system_integer[0]={:?}",
-                        command + 0x2000,
-                        machine.state().system_integer(0)
-                    );
-                    continue;
-                }
                 if effect_objects::try_handle(&mut machine)? {
                     println!("# effect object release 0x22a0: no +4024 object is modeled");
                     continue;
@@ -598,13 +608,6 @@ fn run() -> Result<(), Box<dyn Error>> {
                         command + 0x2000,
                         save_menu.popup_enabled(),
                         machine.state().system_integer(0)
-                    );
-                    continue;
-                }
-                if history.try_handle(&mut machine)? {
-                    println!(
-                        "# history entries={} (newest first; no history UI)",
-                        history.entries().len()
                     );
                     continue;
                 }
@@ -673,14 +676,6 @@ fn run() -> Result<(), Box<dyn Error>> {
                             )))
                             .collect::<Vec<_>>(),
                         buttons.merged_states(),
-                        machine.state().system_integer(0)
-                    );
-                    continue;
-                }
-                if settings.try_handle(&mut machine)? {
-                    println!(
-                        "# configuration 0x{:04x}; system_integer[0]={:?}",
-                        command + 0x2000,
                         machine.state().system_integer(0)
                     );
                     continue;

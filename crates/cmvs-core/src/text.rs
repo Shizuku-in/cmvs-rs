@@ -1,31 +1,37 @@
 //! Stateless string utility commands of the 0x20f0..0x20ff group; only verified ones are handled.
 use crate::{
-    bytecode::DecodeError,
-    evaluate::error,
-    machine::Machine,
-    vm::{StringRef, SystemResult},
+    bytecode::DecodeError, dispatch::Call, evaluate::error, machine::Machine, vm::StringRef,
 };
 
 pub fn try_handle(vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-    match vm.pending_system() {
-        Some((pc, 0xf1)) => compare(vm, pc).map(|()| true),
-        Some((pc, 0xf3)) => substring(vm, pc).map(|()| true),
-        Some((pc, 0xf8)) => strlen(vm, pc).map(|()| true),
-        Some((pc, 0xfc)) => format(vm, pc).map(|()| true),
-        _ => Ok(false),
+    let Some((pc, command @ (0xf1 | 0xf3 | 0xf8 | 0xfc))) = vm.pending_system() else {
+        return Ok(false);
+    };
+    handle(&mut Call::new(vm, pc, command))?;
+    Ok(true)
+}
+
+pub(crate) fn handle(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    match call.command {
+        0xf1 => compare(call),
+        0xf3 => substring(call),
+        0xf8 => strlen(call),
+        0xfc => format(call),
+        _ => Err(call.error("unregistered string utility")),
     }
 }
 
 /// 0x20f3 / 0x1400744d0: byte offset/count, copying complete Shift-JIS pairs.
 /// Result 0 counts characters copied, not bytes. An empty range leaves the
 /// destination untouched, including when the source already ends at the offset.
-fn substring(vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
-    let arg = |distance| {
-        vm.stack()
-            .peek_u32(distance)
-            .map_err(|e| error(pc, 0x20f3, e.0))
-    };
-    let (target, source, start, count) = (arg(4)?, arg(8)?, arg(12)? as i32, arg(16)? as i32);
+fn substring(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    let pc = call.pc;
+    let (target, source, start, count) = (
+        call.argument(4, "destination")?,
+        call.argument(8, "source")?,
+        call.argument(12, "byte offset")? as i32,
+        call.argument(16, "byte count")? as i32,
+    );
     let slot = bank_slot(target).ok_or_else(|| {
         error(
             pc,
@@ -33,7 +39,7 @@ fn substring(vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
             "substring destination outside the string bank is not modeled",
         )
     })?;
-    let bytes = vm.resolve_string(source)?;
+    let bytes = call.vm.resolve_string(source)?;
     let end = start.wrapping_add(count);
     let mut position = start;
     let mut output = Vec::new();
@@ -78,13 +84,15 @@ fn substring(vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
             "overlapping substring source and destination is not modeled",
         ));
     }
-    vm.complete_system(SystemResult(0x4010))?;
+    call.complete(0x4010)?;
     if copied != 0 {
-        vm.state_mut()
+        call.vm
+            .state_mut()
             .set_string(slot, &output)
             .expect("validated destination");
     }
-    vm.state_mut()
+    call.vm
+        .state_mut()
         .set_system_integer(0, copied)
         .expect("slot 0 exists");
     Ok(())
@@ -92,18 +100,18 @@ fn substring(vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
 
 /// 0x20f1 / 0x140074400: system result 0 = 1 when the SP-4 and SP-8 strings are equal under
 /// 0x140008140, else 0; returns 0x4008.
-fn compare(vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
-    let arg = |distance| {
-        vm.stack()
-            .peek_u32(distance)
-            .map_err(|e| error(pc, 0x20f1, e.0))
-    };
-    let (first, second) = (arg(4)?, arg(8)?);
-    let first = vm.resolve_string(first)?;
-    let second = vm.resolve_string(second)?;
+fn compare(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    let pc = call.pc;
+    let (first, second) = (
+        call.argument(4, "first string")?,
+        call.argument(8, "second string")?,
+    );
+    let first = call.vm.resolve_string(first)?;
+    let second = call.vm.resolve_string(second)?;
     let equal = equal_ignoring_ascii_case(&first, &second).map_err(|why| error(pc, 0x20f1, why))?;
-    vm.complete_system(SystemResult(0x4008))?;
-    vm.state_mut()
+    call.complete(0x4008)?;
+    call.vm
+        .state_mut()
         .set_system_integer(0, u32::from(equal))
         .expect("slot 0 exists");
     Ok(())
@@ -137,11 +145,12 @@ fn equal_ignoring_ascii_case(first: &[u8], second: &[u8]) -> Result<bool, &'stat
 }
 
 /// 0x20f8 / 0x1400747c0: system result 0 = lstrlenA of the SP-4 string reference.
-fn strlen(vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
-    let raw = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x20f8, e.0))?;
-    let length = vm.resolve_string(raw)?.len() as u32;
-    vm.complete_system(SystemResult(0x4004))?;
-    vm.state_mut()
+fn strlen(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    let raw = call.argument(4, "string")?;
+    let length = call.vm.resolve_string(raw)?.len() as u32;
+    call.complete(0x4004)?;
+    call.vm
+        .state_mut()
         .set_system_integer(0, length)
         .expect("slot 0 exists");
     Ok(())
@@ -152,13 +161,13 @@ fn strlen(vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
 /// result. The original writes unbounded into the destination; only a string-bank slot
 /// (1024 bytes, index > 127 meaning slot 0 as in 0x14006b850) is modeled, and it must not
 /// be the format's own slot.
-fn format(vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
-    let arg = |distance| {
-        vm.stack()
-            .peek_u32(distance)
-            .map_err(|e| error(pc, 0x20fc, e.0))
-    };
-    let (target, pattern, value) = (arg(4)?, arg(8)?, arg(12)?);
+fn format(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    let pc = call.pc;
+    let (target, pattern, value) = (
+        call.argument(4, "destination")?,
+        call.argument(8, "format string")?,
+        call.argument(12, "format value")?,
+    );
     let slot = bank_slot(target).ok_or_else(|| {
         error(
             pc,
@@ -169,7 +178,7 @@ fn format(vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
     if bank_slot(pattern) == Some(slot) {
         return Err(error(pc, 0x20fc, "format string overlaps its destination"));
     }
-    let bytes = vm.resolve_string(pattern)?;
+    let bytes = call.vm.resolve_string(pattern)?;
     let output = sprintf(&bytes, value).map_err(|why| error(pc, 0x20fc, why))?;
     if output.len() >= 1024 {
         return Err(error(
@@ -178,8 +187,9 @@ fn format(vm: &mut Machine<'_>, pc: usize) -> Result<(), DecodeError> {
             "formatted string overflows its 1024-byte slot",
         ));
     }
-    vm.complete_system(SystemResult(0x400c))?;
-    vm.state_mut()
+    call.complete(0x400c)?;
+    call.vm
+        .state_mut()
         .set_string(slot, &output)
         .expect("slot and length checked above");
     Ok(())

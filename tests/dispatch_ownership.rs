@@ -60,6 +60,10 @@ fn audit(handler: &str, mut probe: impl FnMut(&mut Machine<'_>) -> bool) {
             "timers::try_handle" => Some(Capability::Timers),
             "message_flags::try_handle" => Some(Capability::Flags),
             "random::try_handle" => Some(Capability::Random),
+            "settings::try_handle" => Some(Capability::Settings),
+            "history::try_handle" => Some(Capability::History),
+            "text::try_handle" => Some(Capability::Strings),
+            "math::try_handle" => Some(Capability::Math),
             _ => None,
         };
         if let Some(capability) = capability {
@@ -318,6 +322,10 @@ fn inventory_matches_wait_and_resource_host_recognition_exhaustively() {
                 timers: Some(&mut cmvs_rs::timers::VmTimers::default()),
                 flags: Some(&mut cmvs_rs::message_flags::MessageFlags::default()),
                 random: Some(&mut CrtRandom::new(0)),
+                settings: Some(&mut cmvs_rs::settings::SettingsHost::default()),
+                history: Some(&mut cmvs_rs::history::HistoryHost::default()),
+                strings: true,
+                math: true,
             },
         )
         .map(|r| r.is_some())

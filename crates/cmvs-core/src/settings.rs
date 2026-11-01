@@ -1,5 +1,5 @@
 //! Runtime configuration commands, researched against cmvs-20160201 x64.
-use crate::{bytecode::DecodeError, evaluate::error, machine::Machine, vm::SystemResult};
+use crate::{bytecode::DecodeError, dispatch::Call, evaluate::error, machine::Machine};
 mod profile;
 pub(crate) use profile::render_mode_to_ini;
 pub use profile::{Configuration, DisplayPreferences, MAX_CONFIGURATION};
@@ -183,143 +183,143 @@ impl SettingsHost {
     /// Read writes the global font name to the destination and result 0 = 1. A write only
     /// changes the global face used by font objects created afterwards.
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        if let Some((pc, command)) = vm.pending_system() {
-            if command == 0x2e9 {
-                let mode = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x22e9, e.0))?;
-                let value = if mode != 0 {
-                    let raw = vm.stack().peek_u32(8).map_err(|e| error(pc, 0x22e9, e.0))?;
-                    Some(if raw > 4 { 0 } else { raw })
-                } else {
-                    None
-                };
-                vm.complete_system(SystemResult(0x4008))?;
-                if let Some(value) = value {
-                    self.cursor_auto_clear = value;
-                } else {
-                    vm.state_mut()
-                        .set_system_integer(0, self.cursor_auto_clear)
-                        .expect("slot 0 exists");
-                }
-                return Ok(true);
-            }
-            if matches!(command, 0x2d5 | 0x2e0 | 0x2e4) {
-                let op = command + 0x2000;
-                let mode = vm.stack().peek_u32(4).map_err(|e| error(pc, op, e.0))?;
-                let value = if mode != 0 {
-                    Some(vm.stack().peek_u32(8).map_err(|e| error(pc, op, e.0))? != 0)
-                } else {
-                    None
-                };
-                vm.complete_system(SystemResult(0x4008))?;
-                let field = if command == 0x2d5 {
-                    &mut self.active_draw
-                } else if command == 0x2e0 {
-                    &mut self.text.bold
-                } else {
-                    &mut self.read_skip
-                };
-                if let Some(value) = value {
-                    *field = value;
-                } else {
-                    vm.state_mut()
-                        .set_system_integer(0, u32::from(*field))
-                        .expect("slot 0 exists");
-                }
-                return Ok(true);
-            }
-            if matches!(command, 0x2df | 0x2e1..=0x2e3) {
-                let mode = vm
-                    .stack()
-                    .peek_u32(4)
-                    .map_err(|e| error(pc, command + 0x2000, e.0))?;
-                let raw = if mode != 0 || command != 0x2df {
-                    vm.stack()
-                        .peek_u32(8)
-                        .map_err(|e| error(pc, command + 0x2000, e.0))?
-                } else {
-                    0
-                };
-                let field = match command {
-                    0x2df => &mut self.text.outline,
-                    0x2e1 => &mut self.text.speed,
-                    0x2e2 => &mut self.text.reveal_mode,
-                    _ => &mut self.text.reveal_duration,
-                };
-                vm.complete_system(SystemResult(0x4008))?;
-                if mode != 0 {
-                    *field = match command {
-                        0x2df => ((raw as i32).wrapping_abs() % 3) as u32,
-                        0x2e1 => (raw as i32).clamp(0, 10) as u32,
-                        0x2e2 => (raw as i32).clamp(0, 2) as u32,
-                        _ => (raw as i32).clamp(0, 4) as u32,
-                    };
-                } else {
-                    vm.state_mut()
-                        .set_system_integer(0, *field)
-                        .expect("slot 0 exists");
-                }
-                return Ok(true);
-            }
-            let auto_index = match command {
-                0x2e7 => Some(0),
-                0x2e8 => Some(1),
-                0x2f8 => Some(2),
-                0x2e6 => Some(3),
-                _ => None,
-            };
-            if let Some(index) = auto_index {
-                let mode = vm
-                    .stack()
-                    .peek_u32(4)
-                    .map_err(|e| error(pc, command + 0x2000, e.0))?;
-                let value = if mode != 0 {
-                    let raw = vm
-                        .stack()
-                        .peek_u32(8)
-                        .map_err(|e| error(pc, command + 0x2000, e.0))?;
-                    Some(if index == 3 { u32::from(raw != 0) } else { raw })
-                } else {
-                    None
-                };
-                vm.complete_system(SystemResult(0x4008))?;
-                let field = match index {
-                    0 => &mut self.auto.base,
-                    1 => &mut self.auto.per_glyph,
-                    2 => &mut self.auto.voice_wait,
-                    _ => {
-                        if let Some(value) = value {
-                            self.auto.sync_voice = value != 0;
-                        } else {
-                            vm.state_mut()
-                                .set_system_integer(0, u32::from(self.auto.sync_voice))
-                                .expect("slot 0 exists");
-                        }
-                        return Ok(true);
-                    }
-                };
-                if let Some(value) = value {
-                    *field = value;
-                } else {
-                    vm.state_mut()
-                        .set_system_integer(0, *field)
-                        .expect("slot 0 exists");
-                }
-                return Ok(true);
-            }
-        }
-        let Some((pc, 0x2de)) = vm.pending_system() else {
+        let Some((pc, command @ (0x2d5 | 0x2de..=0x2e4 | 0x2e6..=0x2e9 | 0x2f8))) =
+            vm.pending_system()
+        else {
             return Ok(false);
         };
-        let arg = |distance| {
-            vm.stack()
-                .peek_u32(distance)
-                .map_err(|e| error(pc, 0x22de, e.0))
+        self.handle(&mut Call::new(vm, pc, command))?;
+        Ok(true)
+    }
+
+    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let pc = call.pc;
+        let command = call.command;
+        if command == 0x2e9 {
+            let mode = call.argument(4, "mode")?;
+            let value = if mode != 0 {
+                let raw = call.argument(8, "value")?;
+                Some(if raw > 4 { 0 } else { raw })
+            } else {
+                call.ignore_argument(8, "unused value")?;
+                None
+            };
+            call.complete(0x4008)?;
+            if let Some(value) = value {
+                self.cursor_auto_clear = value;
+            } else {
+                call.vm
+                    .state_mut()
+                    .set_system_integer(0, self.cursor_auto_clear)
+                    .expect("slot 0 exists");
+            }
+            return Ok(());
+        }
+        if matches!(command, 0x2d5 | 0x2e0 | 0x2e4) {
+            let mode = call.argument(4, "mode")?;
+            let value = if mode != 0 {
+                Some(call.argument(8, "value")? != 0)
+            } else {
+                call.ignore_argument(8, "unused value")?;
+                None
+            };
+            call.complete(0x4008)?;
+            let field = if command == 0x2d5 {
+                &mut self.active_draw
+            } else if command == 0x2e0 {
+                &mut self.text.bold
+            } else {
+                &mut self.read_skip
+            };
+            if let Some(value) = value {
+                *field = value;
+            } else {
+                call.vm
+                    .state_mut()
+                    .set_system_integer(0, u32::from(*field))
+                    .expect("slot 0 exists");
+            }
+            return Ok(());
+        }
+        if matches!(command, 0x2df | 0x2e1..=0x2e3) {
+            let mode = call.argument(4, "mode")?;
+            let raw = if mode != 0 || command != 0x2df {
+                call.argument(8, "value")?
+            } else {
+                call.ignore_argument(8, "unused value")?;
+                0
+            };
+            let field = match command {
+                0x2df => &mut self.text.outline,
+                0x2e1 => &mut self.text.speed,
+                0x2e2 => &mut self.text.reveal_mode,
+                _ => &mut self.text.reveal_duration,
+            };
+            call.complete(0x4008)?;
+            if mode != 0 {
+                *field = match command {
+                    0x2df => ((raw as i32).wrapping_abs() % 3) as u32,
+                    0x2e1 => (raw as i32).clamp(0, 10) as u32,
+                    0x2e2 => (raw as i32).clamp(0, 2) as u32,
+                    _ => (raw as i32).clamp(0, 4) as u32,
+                };
+            } else {
+                call.vm
+                    .state_mut()
+                    .set_system_integer(0, *field)
+                    .expect("slot 0 exists");
+            }
+            return Ok(());
+        }
+        let auto_index = match command {
+            0x2e7 => Some(0),
+            0x2e8 => Some(1),
+            0x2f8 => Some(2),
+            0x2e6 => Some(3),
+            _ => None,
         };
-        let (write, reference) = (arg(4)? != 0, arg(8)?);
+        if let Some(index) = auto_index {
+            let mode = call.argument(4, "mode")?;
+            let value = if mode != 0 {
+                let raw = call.argument(8, "value")?;
+                Some(if index == 3 { u32::from(raw != 0) } else { raw })
+            } else {
+                call.ignore_argument(8, "unused value")?;
+                None
+            };
+            call.complete(0x4008)?;
+            let field = match index {
+                0 => &mut self.auto.base,
+                1 => &mut self.auto.per_glyph,
+                2 => &mut self.auto.voice_wait,
+                _ => {
+                    if let Some(value) = value {
+                        self.auto.sync_voice = value != 0;
+                    } else {
+                        call.vm
+                            .state_mut()
+                            .set_system_integer(0, u32::from(self.auto.sync_voice))
+                            .expect("slot 0 exists");
+                    }
+                    return Ok(());
+                }
+            };
+            if let Some(value) = value {
+                *field = value;
+            } else {
+                call.vm
+                    .state_mut()
+                    .set_system_integer(0, *field)
+                    .expect("slot 0 exists");
+            }
+            return Ok(());
+        }
+        let write = call.argument(4, "mode")? != 0;
+        let reference = call.argument(8, "font reference")?;
         if write {
-            let face = vm.resolve_string(reference)?;
+            let face = call.vm.resolve_string(reference)?;
             validate_face(&face).map_err(|why| error(pc, 0x22de, why))?;
-            vm.complete_system(SystemResult(0x4008))?;
+            call.complete(0x4008)?;
             self.font_face = face;
         } else {
             let slot = crate::text::bank_slot(reference).ok_or_else(|| {
@@ -329,15 +329,17 @@ impl SettingsHost {
                     "font name destination outside the string bank is not modeled",
                 )
             })?;
-            vm.complete_system(SystemResult(0x4008))?;
-            vm.state_mut()
+            call.complete(0x4008)?;
+            call.vm
+                .state_mut()
                 .set_string(slot, &self.font_face)
                 .expect("bounded font name and valid slot");
-            vm.state_mut()
+            call.vm
+                .state_mut()
                 .set_system_integer(0, 1)
                 .expect("slot 0 exists");
         }
-        Ok(true)
+        Ok(())
     }
 }
 

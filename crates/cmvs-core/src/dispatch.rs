@@ -6,12 +6,14 @@ pub mod ownership;
 use crate::{
     bytecode::DecodeError,
     evaluate::error,
+    history::HistoryHost,
     input::ActionInput,
     machine::Machine,
     message::{MessageHost, font_cells},
     message_flags::MessageFlags,
     profile::{EngineProfile, Semantics},
     random::CrtRandom,
+    settings::SettingsHost,
     timers::VmTimers,
     vm::SystemResult,
 };
@@ -30,6 +32,11 @@ pub struct Hosts<'a> {
     pub timers: Option<&'a mut VmTimers>,
     pub flags: Option<&'a mut MessageFlags>,
     pub random: Option<&'a mut CrtRandom>,
+    pub settings: Option<&'a mut SettingsHost>,
+    pub history: Option<&'a mut HistoryHost>,
+    /// Availability of stateless services in this host environment.
+    pub strings: bool,
+    pub math: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +45,10 @@ pub enum Capability {
     Timers,
     Flags,
     Random,
+    Settings,
+    History,
+    Strings,
+    Math,
 }
 
 impl Hosts<'_> {
@@ -47,6 +58,10 @@ impl Hosts<'_> {
             Capability::Timers => self.timers.is_some(),
             Capability::Flags => self.flags.is_some(),
             Capability::Random => self.random.is_some(),
+            Capability::Settings => self.settings.is_some(),
+            Capability::History => self.history.is_some(),
+            Capability::Strings => self.strings,
+            Capability::Math => self.math,
         }
     }
 }
@@ -180,7 +195,209 @@ fn root_random(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, D
     Ok(Flow::Done)
 }
 
+fn root_settings(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+    hosts
+        .settings
+        .as_deref_mut()
+        .expect("settings capability checked")
+        .handle(call)?;
+    Ok(Flow::Done)
+}
+
+fn root_history(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+    hosts
+        .history
+        .as_deref_mut()
+        .expect("history capability checked")
+        .handle(call)?;
+    Ok(Flow::Done)
+}
+
+fn root_strings(_hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+    crate::text::handle(call)?;
+    Ok(Flow::Done)
+}
+
+fn root_math(_hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+    crate::math::handle(call)?;
+    Ok(Flow::Done)
+}
+
 pub static ROOT: &[Entry] = &[
+    Entry {
+        command: 0xd0,
+        name: "integer absolute",
+        capability: Capability::Math,
+        handler: root_math,
+    },
+    Entry {
+        command: 0xd1,
+        name: "integer clamp",
+        capability: Capability::Math,
+        handler: root_math,
+    },
+    Entry {
+        command: 0xd2,
+        name: "integer maximum",
+        capability: Capability::Math,
+        handler: root_math,
+    },
+    Entry {
+        command: 0xd3,
+        name: "integer minimum",
+        capability: Capability::Math,
+        handler: root_math,
+    },
+    Entry {
+        command: 0xf1,
+        name: "compare strings",
+        capability: Capability::Strings,
+        handler: root_strings,
+    },
+    Entry {
+        command: 0xf3,
+        name: "substring",
+        capability: Capability::Strings,
+        handler: root_strings,
+    },
+    Entry {
+        command: 0xf8,
+        name: "string byte length",
+        capability: Capability::Strings,
+        handler: root_strings,
+    },
+    Entry {
+        command: 0xfc,
+        name: "format string",
+        capability: Capability::Strings,
+        handler: root_strings,
+    },
+    Entry {
+        command: 0x12f,
+        name: "clear history",
+        capability: Capability::History,
+        handler: root_history,
+    },
+    Entry {
+        command: 0x130,
+        name: "history count",
+        capability: Capability::History,
+        handler: root_history,
+    },
+    Entry {
+        command: 0x131,
+        name: "history string 1",
+        capability: Capability::History,
+        handler: root_history,
+    },
+    Entry {
+        command: 0x132,
+        name: "history string 2",
+        capability: Capability::History,
+        handler: root_history,
+    },
+    Entry {
+        command: 0x133,
+        name: "history string 0",
+        capability: Capability::History,
+        handler: root_history,
+    },
+    Entry {
+        command: 0x134,
+        name: "history string 3",
+        capability: Capability::History,
+        handler: root_history,
+    },
+    Entry {
+        command: 0x135,
+        name: "history word",
+        capability: Capability::History,
+        handler: root_history,
+    },
+    Entry {
+        command: 0x136,
+        name: "append history",
+        capability: Capability::History,
+        handler: root_history,
+    },
+    Entry {
+        command: 0x2d5,
+        name: "active drawing",
+        capability: Capability::Settings,
+        handler: root_settings,
+    },
+    Entry {
+        command: 0x2de,
+        name: "font face",
+        capability: Capability::Settings,
+        handler: root_settings,
+    },
+    Entry {
+        command: 0x2df,
+        name: "text outline",
+        capability: Capability::Settings,
+        handler: root_settings,
+    },
+    Entry {
+        command: 0x2e0,
+        name: "text bold",
+        capability: Capability::Settings,
+        handler: root_settings,
+    },
+    Entry {
+        command: 0x2e1,
+        name: "text speed",
+        capability: Capability::Settings,
+        handler: root_settings,
+    },
+    Entry {
+        command: 0x2e2,
+        name: "text reveal mode",
+        capability: Capability::Settings,
+        handler: root_settings,
+    },
+    Entry {
+        command: 0x2e3,
+        name: "text reveal duration",
+        capability: Capability::Settings,
+        handler: root_settings,
+    },
+    Entry {
+        command: 0x2e4,
+        name: "read skip",
+        capability: Capability::Settings,
+        handler: root_settings,
+    },
+    Entry {
+        command: 0x2e6,
+        name: "automatic voice sync",
+        capability: Capability::Settings,
+        handler: root_settings,
+    },
+    Entry {
+        command: 0x2e7,
+        name: "automatic base delay",
+        capability: Capability::Settings,
+        handler: root_settings,
+    },
+    Entry {
+        command: 0x2e8,
+        name: "automatic glyph delay",
+        capability: Capability::Settings,
+        handler: root_settings,
+    },
+    Entry {
+        command: 0x2e9,
+        name: "cursor auto clear",
+        capability: Capability::Settings,
+        handler: root_settings,
+    },
+    Entry {
+        command: 0x2f8,
+        name: "automatic voice wait",
+        capability: Capability::Settings,
+        handler: root_settings,
+    },
     Entry {
         command: 0x8,
         name: "frame clock",

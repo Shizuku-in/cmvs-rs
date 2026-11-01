@@ -77,7 +77,11 @@ pub static CLAIMS: &[Claim] = &[
         accepts: |command| super::ROOT.iter().any(|entry| entry.command == command),
         trace_accepts: |command| {
             super::ROOT.iter().any(|entry| {
-                entry.command == command && entry.capability != super::Capability::Text
+                entry.command == command
+                    && !matches!(
+                        entry.capability,
+                        super::Capability::Text | super::Capability::Math
+                    )
             })
         },
     },
@@ -163,8 +167,6 @@ pub static CLAIMS: &[Claim] = &[
         Some(110),
         0x2cd | 0x2ce | 0x2d3 | 0x2d4 | 0x2ee
     ),
-    claim!("settings::try_handle", Some(390), Some(180),
-        0x2d5 | 0x2de..=0x2e4 | 0x2e6..=0x2e9 | 0x2f8),
     claim!("message::try_record_poll", Some(400), None, 0x159),
     claim!("message::try_handle_scene", Some(410), None, 0x383 | 0x39d),
     claim!("message::try_handle", Some(420), None,
@@ -174,7 +176,6 @@ pub static CLAIMS: &[Claim] = &[
         | 0x190..=0x192 | 0x195..=0x197 | 0x1cf..=0x1d1
         | 0x380 | 0x382 | 0x383 | 0x385..=0x387 | 0x389 | 0x38b | 0x38c | 0x38e..=0x390
         | 0x392 | 0x393 | 0x396 | 0x398 | 0x39a..=0x39c | 0x39e..=0x3a0),
-    claim!("history::try_handle", Some(430), Some(120), 0x12f..=0x136),
     claim!("message::try_handle_pointer", Some(440), None, 0x15f),
     claim!("message::try_handle_buttons", Some(450), None, 0x194),
     claim!("message::try_handle_image", Some(460), None, 0x170 | 0x397),
@@ -214,13 +215,6 @@ pub static CLAIMS: &[Claim] = &[
     ),
     claim!("camera::try_handle", Some(580), Some(130), 0x56 | 0x58..=0x68 | 0x6a..=0x6d | 0x9c | 0x126 | 0x260..=0x264),
     claim!("capture::try_handle", Some(590), None, 0x3c | 0x304..=0x306),
-    claim!("math::try_handle", Some(610), None, 0xd0..=0xd3),
-    claim!(
-        "text::try_handle",
-        Some(620),
-        Some(80),
-        0xf1 | 0xf3 | 0xf8 | 0xfc
-    ),
     claim!("effect_objects::try_handle", Some(630), Some(90), 0x2a0),
     claim!("audio::try_handle", Some(640), Some(100),
         0xa0..=0xa2 | 0xa4 | 0xa6 | 0xa8..=0xaa | 0xaf..=0xb1 | 0xb3 | 0xb5..=0xb7 | 0xba

@@ -31,7 +31,6 @@ use crate::{
         FileSystemSave, NewSystemSave, ProfileSystemSave, SystemSaveEvent, SystemSaveHost,
         SystemSaveSink,
     },
-    text,
     timers::VmTimers,
 };
 use std::{
@@ -777,6 +776,10 @@ impl<'a> Startup<'a> {
                 timers: Some(&mut self.timers),
                 flags: Some(&mut self.message_flags),
                 random: Some(&mut self.random),
+                settings: Some(&mut self.settings),
+                history: Some(&mut self.history),
+                strings: true,
+                math: true,
             },
         )? {
             return Ok(match flow {
@@ -927,7 +930,6 @@ impl<'a> Startup<'a> {
             )?
             || self.gesture.try_handle(&mut self.machine)?
             || self.save_menu.try_handle_popup(&mut self.machine)?
-            || self.settings.try_handle(&mut self.machine)?
             || self
                 .messages
                 .try_record_poll(&mut self.machine, self.message_flags)?
@@ -935,7 +937,6 @@ impl<'a> Startup<'a> {
                 .messages
                 .try_handle_scene(&mut self.machine, &mut self.scene)?
             || self.messages.try_handle(&mut self.machine)?
-            || self.history.try_handle(&mut self.machine)?
             || self
                 .messages
                 .try_handle_pointer(&mut self.machine, &self.input)?
@@ -993,8 +994,6 @@ impl<'a> Startup<'a> {
             || self
                 .capture
                 .try_handle(&mut self.machine, &mut self.scene)?
-            || crate::math::try_handle(&mut self.machine)?
-            || text::try_handle(&mut self.machine)?
             || crate::effect_objects::try_handle(&mut self.machine)?
             || self
                 .audio

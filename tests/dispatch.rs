@@ -101,10 +101,12 @@ fn state_entries_preserve_missing_capabilities_and_execute_once_when_available()
         dispatch::Capability, message_flags::MessageFlags, profile::Semantics, random::CrtRandom,
         timers::VmTimers,
     };
-    for entry in dispatch::ROOT
-        .iter()
-        .filter(|entry| entry.capability != Capability::Text)
-    {
+    for entry in dispatch::ROOT.iter().filter(|entry| {
+        matches!(
+            entry.capability,
+            Capability::Timers | Capability::Flags | Capability::Random
+        )
+    }) {
         let args: &[u32] = match entry.command {
             0x0b | 0x0c => &[2],
             0xd4 => &[10],

@@ -1,6 +1,6 @@
 //! Engine +4320 history list: append 0x2136, clear 0x212f and the queries 0x2130..0x2135.
 //! Addresses are bound to the binary hash in research.md.
-use crate::{bytecode::DecodeError, evaluate::error, machine::Machine, vm::SystemResult};
+use crate::{bytecode::DecodeError, dispatch::Call, evaluate::error, machine::Machine};
 use std::collections::VecDeque;
 
 /// 0x14005e7e0 constructs a list with capacity 128.
@@ -28,27 +28,31 @@ impl HistoryHost {
     }
 
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        // 0x140083240 -> 0x14005e800 frees the nodes and their dynamic strings,
-        // then clears the head pointer. The configured capacity is unchanged.
-        if matches!(vm.pending_system(), Some((_, 0x12f))) {
-            vm.complete_system(SystemResult(0x4000))?;
-            self.entries.clear();
-            return Ok(true);
-        }
-        if let Some((pc, command @ 0x130..=0x135)) = vm.pending_system() {
-            return self.query(vm, pc, command).map(|()| true);
-        }
-        let Some((pc, 0x136)) = vm.pending_system() else {
+        let Some((pc, command @ 0x12f..=0x136)) = vm.pending_system() else {
             return Ok(false);
         };
-        let word = |distance| {
-            vm.stack()
-                .peek_u32(distance)
-                .map_err(|e| error(pc, 0x2136, e.0))
-        };
+        self.handle(&mut Call::new(vm, pc, command))?;
+        Ok(true)
+    }
+
+    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let pc = call.pc;
+        let command = call.command;
+        // 0x140083240 -> 0x14005e800 frees the nodes and their dynamic strings,
+        // then clears the head pointer. The configured capacity is unchanged.
+        if command == 0x12f {
+            call.complete(0x4000)?;
+            self.entries.clear();
+            return Ok(());
+        }
+        if (0x130..=0x135).contains(&command) {
+            return self.query(call);
+        }
         let mut strings: [Vec<u8>; 4] = Default::default();
         for (i, bytes) in strings.iter_mut().enumerate() {
-            *bytes = vm.resolve_string(word(4 + 4 * i)?)?;
+            let name = ["string 0", "string 1", "string 2", "string 3"][i];
+            let reference = call.argument(4 + 4 * i, name)?;
+            *bytes = call.vm.resolve_string(reference)?;
             if let Some(end) = bytes.iter().position(|b| *b == 0) {
                 bytes.truncate(end);
             }
@@ -69,15 +73,18 @@ impl HistoryHost {
         }
         let mut words = [0; 6];
         for (i, value) in words.iter_mut().enumerate() {
-            *value = word(20 + 4 * i)?;
+            *value = call.argument(
+                20 + 4 * i,
+                ["word 0", "word 1", "word 2", "word 3", "word 4", "word 5"][i],
+            )?;
         }
-        vm.complete_system(SystemResult(0x4028))?;
+        call.complete(0x4028)?;
         // 0x14005ee00 removes the tail before adding the new head.
         while self.entries.len() >= HISTORY_CAPACITY {
             self.entries.pop_back();
         }
         self.entries.push_front(HistoryEntry { strings, words });
-        Ok(true)
+        Ok(())
     }
 
     /// 0x2130 / 0x140075730 -> 0x14005e9c0: system result 0 = entry count; 0x4000. The
@@ -87,26 +94,33 @@ impl HistoryHost {
     /// for a missing entry; 0x2135 (0x14005e9e0) sets system result 0 to word SP-8 % 6
     /// (unsigned), or -1 for a missing entry. All return 0x4008. Destinations other than
     /// the string bank are not modeled.
-    fn query(&mut self, vm: &mut Machine<'_>, pc: usize, command: u16) -> Result<(), DecodeError> {
+    fn query(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let pc = call.pc;
+        let command = call.command;
         let op = command + 0x2000;
         if command == 0x130 {
-            vm.complete_system(SystemResult(0x4000))?;
-            vm.state_mut()
+            call.complete(0x4000)?;
+            call.vm
+                .state_mut()
                 .set_system_integer(0, self.entries.len() as u32)
                 .expect("slot 0 exists");
             return Ok(());
         }
-        let word = |distance| {
-            vm.stack()
-                .peek_u32(distance)
-                .map_err(|e| error(pc, op, e.0))
-        };
-        let entry = self.entries.get((word(4)? as i32).max(0) as usize);
-        let argument = word(8)?;
+        let index = call.argument(4, "entry index")? as i32;
+        let entry = self.entries.get(index.max(0) as usize);
+        let argument = call.argument(
+            8,
+            if command == 0x135 {
+                "word index"
+            } else {
+                "destination"
+            },
+        )?;
         if command == 0x135 {
             let value = entry.map_or(u32::MAX, |e| e.words[(argument % 6) as usize]);
-            vm.complete_system(SystemResult(0x4008))?;
-            vm.state_mut()
+            call.complete(0x4008)?;
+            call.vm
+                .state_mut()
                 .set_system_integer(0, value)
                 .expect("slot 0 exists");
             return Ok(());
@@ -123,8 +137,9 @@ impl HistoryHost {
         if text.len() >= 1024 {
             return Err(error(pc, op, "history string overflows its destination"));
         }
-        vm.complete_system(SystemResult(0x4008))?;
-        vm.state_mut()
+        call.complete(0x4008)?;
+        call.vm
+            .state_mut()
             .set_string(slot, text)
             .map_err(|why| error(pc, op, why))?;
         Ok(())
