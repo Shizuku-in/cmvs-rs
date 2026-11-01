@@ -1,6 +1,6 @@
 //! Draw-state rotation track; addresses refer to the documented binary hash.
 use super::{ANIMATION_FRAMES, SceneHost};
-use crate::{bytecode::DecodeError, evaluate::error, machine::Machine, vm::SystemResult};
+use crate::{bytecode::DecodeError, dispatch::Call, evaluate::error};
 
 /// Keys in the 0x94-byte rotation track (0x1400263d0 zeroes them all).
 pub const ROTATION_KEYS: usize = 8;
@@ -111,12 +111,8 @@ fn sine(angle: i32, amplitude: i32) -> i32 {
 impl SceneHost {
     /// 0x21e5..0x21e9: native wrappers 0x14006df30..0x14006e1d0.
     /// Slot/child, then constructor angle; key/next/mode/duration/angle; start key.
-    pub(super) fn rotation(
-        &mut self,
-        vm: &mut Machine<'_>,
-        pc: usize,
-        command: u16,
-    ) -> Result<bool, DecodeError> {
+    pub(super) fn rotation(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
         let count = match command {
             0x1e6 => 5,
@@ -125,10 +121,7 @@ impl SceneHost {
         };
         let mut args = [0i32; 7];
         for (i, arg) in args.iter_mut().take(count + 2).enumerate() {
-            *arg = vm
-                .stack()
-                .peek_u32(4 + 4 * i)
-                .map_err(|e| error(pc, op, e.0))? as i32;
+            *arg = call.argument(4 + 4 * i, super::argument_names(call.command)[i])? as i32;
         }
         let [slot, child, a, b, c, d, e] = args;
         let slot = u8::try_from(slot)
@@ -166,7 +159,7 @@ impl SceneHost {
             .draw
             .as_mut()
             .ok_or_else(|| error(pc, op, "effect target has no draw state"))?;
-        vm.complete_system(SystemResult(0x4008 + 4 * count as u16))?;
+        call.complete(0x4008 + 4 * count as u16)?;
         let magnitude = |value: i32| (value % 360) * 100;
         match command {
             0x1e5 => {
@@ -210,11 +203,12 @@ impl SceneHost {
                     Some(track) if !track.playing => u32::MAX - 1,
                     Some(track) => track.current,
                 };
-                vm.state_mut()
+                call.vm
+                    .state_mut()
                     .set_system_integer(0, result)
                     .expect("slot 0 exists");
             }
         }
-        Ok(true)
+        Ok(())
     }
 }

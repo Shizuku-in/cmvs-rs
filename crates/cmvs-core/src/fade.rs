@@ -5,7 +5,6 @@ use crate::{
     evaluate::error,
     input::ActionInput,
     machine::Machine,
-    vm::SystemResult,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -244,14 +243,24 @@ impl FadeHost {
         }
     }
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command @ 0x220..=0x223)) = vm.pending_system() else {
+        let Some((pc, command)) = vm.pending_system() else {
             return Ok(false);
         };
+        if !matches!(command, 0x220..=0x223) {
+            return Ok(false);
+        }
+        self.handle(&mut Call::new(vm, pc, command))?;
+        Ok(true)
+    }
+
+    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let (pc, command) = (call.pc, call.command);
+
         let fail = |why| error(pc, command + 0x2000, why);
         let next = if command == 0x220 {
             let mut args = [0; 4];
             for (i, value) in args.iter_mut().enumerate() {
-                *value = vm.stack().peek_u32((i + 1) * 4).map_err(|e| fail(e.0))?;
+                *value = call.argument((i + 1) * 4, fade_argument_names(call.command)[i])?;
             }
             if args[0] > 1 {
                 return Err(fail("unsupported fade direction (expected 0 or 1)"));
@@ -269,11 +278,14 @@ impl FadeHost {
             None
         };
         let remaining = self.current.as_ref().map_or(u32::MAX, Fade::remaining);
-        vm.complete_system(SystemResult(if command == 0x220 { 0x4010 } else { 0x4000 }))?;
+        call.complete(if command == 0x220 { 0x4010 } else { 0x4000 })?;
         match command {
             0x220 => {
                 self.current = next;
-                vm.state_mut().set_system_integer(0, 1).expect("slot 0");
+                call.vm
+                    .state_mut()
+                    .set_system_integer(0, 1)
+                    .expect("slot 0");
             }
             0x221 => self.current = None,
             0x222 => {
@@ -281,14 +293,19 @@ impl FadeHost {
                     self.current = None;
                 }
             }
-            0x223 => vm
+            0x223 => call
+                .vm
                 .state_mut()
                 .set_system_integer(0, remaining)
                 .expect("slot 0"),
             _ => unreachable!(),
         }
-        Ok(true)
+        Ok(())
     }
+}
+
+fn fade_argument_names(_: u16) -> &'static [&'static str] {
+    &["direction", "color", "duration", "order"]
 }
 
 #[cfg(test)]

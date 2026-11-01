@@ -60,6 +60,8 @@ fn audit(handler: &str, mut probe: impl FnMut(&mut Machine<'_>) -> bool) {
             "scene::try_handle_image" => Some(Capability::SceneImages),
             "scene::try_handle_mask" => Some(Capability::MaskImages),
             "scene::try_change_image" => Some(Capability::ImageChange),
+            "scene::try_handle" => Some(Capability::Scene),
+            "camera::try_handle" => Some(Capability::Camera),
             "audio::try_handle" => Some(Capability::Audio),
             "timers::try_handle" => Some(Capability::Timers),
             "message_flags::try_handle" => Some(Capability::Flags),
@@ -355,6 +357,8 @@ fn inventory_matches_wait_and_resource_host_recognition_exhaustively() {
                 save_info: Some(&mut cmvs_rs::snapshot::SaveInfo::default()),
                 effects: Some(&mut true),
                 effect_objects: true,
+                scene: Some(&mut SceneHost::default()),
+                camera: Some(&mut CameraHost::default()),
                 images: Some(cmvs_rs::dispatch::ImageHosts {
                     scene: &mut SceneHost::default(),
                     source: &mut Unavailable,

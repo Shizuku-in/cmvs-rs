@@ -1,3 +1,6 @@
+#[path = "support/shared_state.rs"]
+mod shared_state;
+use shared_state::SharedState;
 mod support;
 use cmvs_rs::{
     machine::Machine,
@@ -8,7 +11,7 @@ use support::bytecode::{command, pending, script};
 fn run(vm: &mut Machine<'_>, scene: &mut SceneHost, count: usize) {
     for _ in 0..count {
         pending(vm);
-        assert!(scene.try_handle(vm).unwrap());
+        assert!(scene.shared_state(vm).unwrap());
     }
 }
 fn setup(code: &mut Vec<u8>) {
@@ -191,7 +194,7 @@ fn scene_animation_invalid_indices_are_transactional_but_absent_track_is_noop() 
         let old = scene.object(20).unwrap().clone();
         let pc = vm.pc();
         let stack = vm.stack().len_bytes();
-        assert!(scene.try_handle(&mut vm).is_err());
+        assert!(scene.shared_state(&mut vm).is_err());
         assert_eq!(scene.object(20), Some(&old));
         assert_eq!(vm.pc(), pc);
         assert_eq!(vm.stack().len_bytes(), stack);

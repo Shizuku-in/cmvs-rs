@@ -1,3 +1,6 @@
+#[path = "support/shared_state.rs"]
+mod shared_state;
+use shared_state::SharedState;
 mod support;
 use cmvs_rs::{
     machine::Machine,
@@ -10,7 +13,7 @@ fn f(v: f32) -> u32 {
 fn run(vm: &mut Machine<'_>, scene: &mut SceneHost, count: usize) {
     for _ in 0..count {
         pending(vm);
-        assert!(scene.try_handle(vm).unwrap());
+        assert!(scene.shared_state(vm).unwrap());
     }
 }
 fn setup(code: &mut Vec<u8>, base: [u32; 2]) {
@@ -162,7 +165,7 @@ fn scale_invalid_parameters_preserve_pending_command_and_absent_track_is_noop() 
         pending(&mut vm);
         let old = scene.object(20).unwrap().clone();
         let before = vm.pending_system();
-        assert!(scene.try_handle(&mut vm).is_err());
+        assert!(scene.shared_state(&mut vm).is_err());
         assert_eq!(scene.object(20), Some(&old));
         assert_eq!(vm.pending_system(), before);
         assert_eq!(vm.stack().len_bytes(), args.len() * 4);

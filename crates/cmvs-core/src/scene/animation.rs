@@ -1,6 +1,6 @@
 //! Draw-state frame animation, shared by window and scene commands; addresses are hash-bound.
 use super::SceneHost;
-use crate::{bytecode::DecodeError, evaluate::error, machine::Machine, vm::SystemResult};
+use crate::{bytecode::DecodeError, dispatch::Call, evaluate::error};
 /// Frame entries in the 0x510-byte animation object (0x140026060 zeroes them all).
 pub const ANIMATION_FRAMES: usize = 64;
 
@@ -96,13 +96,12 @@ impl Default for Animation {
 }
 
 impl SceneHost {
-    pub(super) fn try_frame_animation(
+    pub(super) fn handle_frame_animation(
         &mut self,
-        vm: &mut Machine<'_>,
-    ) -> Result<bool, DecodeError> {
-        let Some((pc, command @ 0x1ef..=0x1f3)) = vm.pending_system() else {
-            return Ok(false);
-        };
+        call: &mut Call<'_, '_>,
+    ) -> Result<(), DecodeError> {
+        let (pc, command) = (call.pc, call.command);
+
         let fail = |why| error(pc, command + 0x2000, why);
         let count = match command {
             0x1f0 => 11,
@@ -111,7 +110,7 @@ impl SceneHost {
         };
         let mut args = [0; 11];
         for (i, a) in args.iter_mut().take(count).enumerate() {
-            *a = vm.stack().peek_u32((i + 1) * 4).map_err(|e| fail(e.0))?;
+            *a = call.argument((i + 1) * 4, super::argument_names(call.command)[i])?;
         }
         let slot = u8::try_from(args[0])
             .ok()
@@ -141,7 +140,7 @@ impl SceneHost {
                 return Err(fail("next animation frame outside 0..63"));
             }
         }
-        vm.complete_system(SystemResult(0x4000 | (count * 4) as u16))?;
+        call.complete(0x4000 | (count * 4) as u16)?;
         let parent = self.objects.get_mut(&slot).expect("validated parent");
         let object = match child {
             Some(id) => parent.children.get_mut(&id).expect("validated child"),
@@ -173,11 +172,12 @@ impl SceneHost {
                 let value = draw.animation.as_ref().map_or(u32::MAX, |a| {
                     if a.playing { a.current } else { u32::MAX - 1 }
                 });
-                vm.state_mut()
+                call.vm
+                    .state_mut()
                     .set_system_integer(0, value)
                     .expect("result exists");
             }
         }
-        Ok(true)
+        Ok(())
     }
 }

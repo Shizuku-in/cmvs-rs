@@ -13,7 +13,6 @@ use crate::{
     input::ActionInput,
     machine::{Machine, Step},
     raster::RgbaImage,
-    vm::SystemResult,
 };
 use std::error::Error;
 
@@ -120,13 +119,15 @@ impl SceneHost {
     /// 0x22c5 / 0x14007d3c0 cancels the slot object's replacement, restoring factor 256.
     /// 0x22c6 / 0x14007d400 writes whether +14504 or +14508 is active to result 0.
     /// Both take only SP-4, return 0x4004 and do not advance time or yield.
-    pub(super) fn control_change(
-        &mut self,
-        vm: &mut Machine<'_>,
-        pc: usize,
-        command: u16,
-    ) -> Result<bool, DecodeError> {
-        let slot = self.change_slot(vm, pc, command)?;
+    pub(super) fn control_change(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let (pc, command) = (call.pc, call.command);
+        let raw = call.argument(4, "object slot")?;
+        let slot = u8::try_from(raw)
+            .ok()
+            .filter(|s| self.objects.contains_key(s))
+            .ok_or_else(|| {
+                call.error("replacement control needs an existing object in slots 0..255")
+            })?;
         if command == 0x2c5 && self.objects[&slot].draw.is_none() {
             return Err(error(
                 pc,
@@ -135,28 +136,19 @@ impl SceneHost {
             ));
         }
         let active = self.objects[&slot].change.is_some();
-        vm.complete_system(SystemResult(0x4004))?;
+        call.complete(0x4004)?;
         if command == 0x2c5 {
             self.objects
                 .get_mut(&slot)
                 .expect("validated")
                 .cancel_change();
         } else {
-            vm.state_mut()
+            call.vm
+                .state_mut()
                 .set_system_integer(0, u32::from(active))
                 .expect("result 0 exists");
         }
-        Ok(true)
-    }
-
-    fn change_slot(&self, vm: &Machine<'_>, pc: usize, command: u16) -> Result<u8, DecodeError> {
-        let fail = |why| error(pc, command + 0x2000, why);
-        let raw = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
-        // The original sign-extends and indexes the slot table without bounds/null checks.
-        u8::try_from(raw)
-            .ok()
-            .filter(|s| self.objects.contains_key(s))
-            .ok_or_else(|| fail("replacement control needs an existing object in slots 0..255"))
+        Ok(())
     }
 
     /// 0x22c7 / 0x14007d440: SP-4 slot, SP-8 skippable. While active return 0xa000,

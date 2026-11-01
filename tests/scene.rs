@@ -1,3 +1,6 @@
+#[path = "support/shared_state.rs"]
+mod shared_state;
+use shared_state::SharedState;
 mod support;
 use cmvs_rs::{
     machine::{Machine, Step},
@@ -74,7 +77,7 @@ fn visibility_invalid_targets_and_truncated_parameters_preserve_pending_state() 
         pending(&mut vm);
         let before = scene.object(20).unwrap().clone();
         for _ in 0..2 {
-            assert!(scene.try_handle(&mut vm).is_err());
+            assert!(scene.shared_state(&mut vm).is_err());
             assert_eq!(scene.object(20), Some(&before));
             assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x26)));
             assert_eq!(vm.stack().len_bytes(), args.len() * 4);
@@ -208,7 +211,7 @@ fn clear_color_keeps_raw_word_and_renders_low_24_bits_opaque() {
             command: 0x2cb
         }
     );
-    assert!(scene.try_handle(&mut vm).unwrap());
+    assert!(scene.shared_state(&mut vm).unwrap());
     assert_eq!((vm.pc(), vm.stack().len_bytes()), (10, 0));
     assert_eq!(scene.clear().color, 0x80_12_34_56);
     assert_eq!(scene.clear().rgba(), [0x12, 0x34, 0x56, 255]);
@@ -222,7 +225,7 @@ fn depth_flag_is_normalized_and_missing_argument_keeps_pending_state() {
     let mut scene = SceneHost::default();
     vm.step().unwrap();
     vm.step().unwrap();
-    assert!(scene.try_handle(&mut vm).unwrap());
+    assert!(scene.shared_state(&mut vm).unwrap());
     assert!(scene.clear().depth);
     assert_eq!(
         vm.step().unwrap(),
@@ -231,7 +234,7 @@ fn depth_flag_is_normalized_and_missing_argument_keeps_pending_state() {
             command: 0x250
         }
     );
-    assert!(scene.try_handle(&mut vm).is_err());
+    assert!(scene.shared_state(&mut vm).is_err());
     assert_eq!(vm.pending_system(), Some((10, 0x250)));
     assert_eq!(vm.pc(), 10);
     assert!(scene.clear().depth);
@@ -242,10 +245,10 @@ fn other_commands_are_left_pending() {
     let script = script(&push_then(1, &[0x22cc]));
     let mut vm = Machine::new(&script).unwrap();
     let mut scene = SceneHost::default();
-    assert!(!scene.try_handle(&mut vm).unwrap());
+    assert!(!scene.shared_state(&mut vm).unwrap());
     vm.step().unwrap();
     vm.step().unwrap();
-    assert!(!scene.try_handle(&mut vm).unwrap());
+    assert!(!scene.shared_state(&mut vm).unwrap());
     assert_eq!(vm.pending_system(), Some((8, 0x2cc)));
     assert_eq!(scene.clear(), ClearState::default());
 }
@@ -262,7 +265,7 @@ fn object_slots_are_rebuilt_destroyed_and_bounded() {
     for expected in [true, true, false, false] {
         vm.step().unwrap();
         vm.step().unwrap();
-        assert!(scene.try_handle(&mut vm).unwrap());
+        assert!(scene.shared_state(&mut vm).unwrap());
         assert_eq!(scene.object(10).is_some(), expected);
         assert_eq!(vm.stack().len_bytes(), 0);
     }
@@ -271,7 +274,7 @@ fn object_slots_are_rebuilt_destroyed_and_bounded() {
         let mut vm = Machine::new(&program).unwrap();
         vm.step().unwrap();
         vm.step().unwrap();
-        assert!(scene.try_handle(&mut vm).is_err());
+        assert!(scene.shared_state(&mut vm).is_err());
         assert_eq!(vm.pending_system(), Some((8, 0x20)));
     }
     assert!(scene.objects().is_empty());
@@ -279,17 +282,14 @@ fn object_slots_are_rebuilt_destroyed_and_bounded() {
     let mut vm = Machine::new(&program).unwrap();
     vm.step().unwrap();
     vm.step().unwrap();
-    scene.try_handle(&mut vm).unwrap();
+    scene.shared_state(&mut vm).unwrap();
     assert_eq!(scene.object(3), Some(&SceneObject::default()));
 }
 
-fn next(
-    vm: &mut Machine<'_>,
-    scene: &mut SceneHost,
-) -> Result<bool, cmvs_rs::bytecode::DecodeError> {
+fn next(vm: &mut Machine<'_>, scene: &mut SceneHost) -> Result<bool, Box<dyn std::error::Error>> {
     loop {
         if matches!(vm.step()?, Step::System { .. }) {
-            return scene.try_handle(vm);
+            return Ok(scene.shared_state(vm)?);
         }
     }
 }
@@ -696,7 +696,7 @@ fn objects_move_between_slots_and_existence_queries_report_them() {
     let mut scene = SceneHost::default();
     let step = |vm: &mut Machine<'_>, scene: &mut SceneHost| {
         pending(vm);
-        assert!(scene.try_handle(vm).unwrap());
+        assert!(scene.shared_state(vm).unwrap());
     };
     for _ in 0..4 {
         step(&mut vm, &mut scene);
@@ -732,11 +732,11 @@ fn object_moves_and_queries_reject_bad_slots_and_self_moves() {
         let mut scene = SceneHost::default();
         if setup {
             pending(&mut vm);
-            assert!(scene.try_handle(&mut vm).unwrap());
+            assert!(scene.shared_state(&mut vm).unwrap());
         }
         pending(&mut vm);
         let bytes = vm.stack().len_bytes();
-        assert!(scene.try_handle(&mut vm).is_err());
+        assert!(scene.shared_state(&mut vm).is_err());
         assert_eq!(vm.pending_system().map(|p| p.1), Some(command - 0x2000));
         assert_eq!(vm.stack().len_bytes(), bytes);
         assert_eq!(vm.state().system_integer(0), Some(9));
@@ -762,7 +762,7 @@ fn tracked(code: &mut Vec<u8>, slot: u32, base: u32, keys: &[(u32, u32, u32, u32
 fn run_all(vm: &mut Machine<'_>, scene: &mut SceneHost, commands: usize) {
     for _ in 0..commands {
         pending(vm);
-        assert!(scene.try_handle(vm).unwrap(), "{:?}", vm.pending_system());
+        assert!(scene.shared_state(vm).unwrap(), "{:?}", vm.pending_system());
     }
 }
 fn opacity(scene: &SceneHost, slot: u8) -> u32 {
@@ -906,7 +906,10 @@ fn opacity_commands_reject_bad_targets_and_keys() {
         run_all(&mut vm, &mut scene, 1 + usize::from(draw));
         pending(&mut vm);
         let bytes = vm.stack().len_bytes();
-        assert!(scene.try_handle(&mut vm).is_err(), "{command:x} {words:?}");
+        assert!(
+            scene.shared_state(&mut vm).is_err(),
+            "{command:x} {words:?}"
+        );
         assert_eq!(vm.pending_system().map(|p| p.1), Some(command - 0x2000));
         assert_eq!(vm.stack().len_bytes(), bytes);
         assert_eq!(vm.state().system_integer(0), Some(9));
@@ -1179,7 +1182,7 @@ fn world_motion_invalid_targets_indices_modes_and_missing_args_are_transactional
         let before = scene.object(1).unwrap().clone();
         vm.state_mut().set_system_integer(0, 123).unwrap();
         for _ in 0..2 {
-            assert!(scene.try_handle(&mut vm).is_err(), "{op:x} {args:?}");
+            assert!(scene.shared_state(&mut vm).is_err(), "{op:x} {args:?}");
             assert_eq!(scene.object(1), Some(&before));
             assert_eq!(vm.pending_system(), Some((code.len() - 2, op - 0x2000)));
             assert_eq!(vm.pc(), code.len() - 2);
@@ -1498,7 +1501,7 @@ fn child_deletion_invalid_parent_and_missing_arguments_preserve_pending_state() 
         let before = scene.object(20).unwrap().clone();
         vm.state_mut().set_system_integer(0, 123).unwrap();
         for _ in 0..2 {
-            assert!(scene.try_handle(&mut vm).is_err());
+            assert!(scene.shared_state(&mut vm).is_err());
             assert_eq!(scene.object(20), Some(&before));
             assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x23)));
             assert_eq!(vm.stack().len_bytes(), args.len() * 4);
@@ -1558,7 +1561,7 @@ fn subqueue_flag_invalid_targets_and_missing_parameters_are_transactional() {
         pending(&mut vm);
         let before = scene.object(20).unwrap().clone();
         for _ in 0..2 {
-            assert!(scene.try_handle(&mut vm).is_err());
+            assert!(scene.shared_state(&mut vm).is_err());
             assert_eq!(scene.object(20), Some(&before));
             assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x2d)));
             assert_eq!(vm.stack().len_bytes(), args.len() * 4);
@@ -1591,7 +1594,7 @@ fn texture_subtract_normalizes_boolean_targets_and_keeps_other_state() {
     for (child, value) in [(false, 1), (true, 1), (false, 0)] {
         pending(&mut vm);
         let pc = vm.pc();
-        assert!(scene.try_handle(&mut vm).unwrap());
+        assert!(scene.shared_state(&mut vm).unwrap());
         let target = if child {
             expected.children.get_mut(&2).unwrap()
         } else {
@@ -1632,7 +1635,7 @@ fn texture_subtract_rejects_invalid_targets_without_consuming_the_command() {
         pending(&mut vm);
         let pc = vm.pc();
         vm.state_mut().set_system_integer(0, 123).unwrap();
-        assert!(scene.try_handle(&mut vm).is_err());
+        assert!(scene.shared_state(&mut vm).is_err());
         assert_eq!(scene.objects(), &before);
         assert_eq!(vm.pending_system(), Some((pc, 0x322)));
         assert_eq!(vm.stack().len_bytes(), 12);
@@ -1658,7 +1661,7 @@ fn second_texture_mode_preserves_draw_state_and_targets_parent_or_child() {
     let mut scene = SceneHost::default();
     for _ in 0..4 {
         pending(&mut vm);
-        scene.try_handle(&mut vm).unwrap();
+        scene.shared_state(&mut vm).unwrap();
     }
     let before = scene.object(7).unwrap().clone();
     for i in 0..7 {
@@ -1667,7 +1670,7 @@ fn second_texture_mode_preserves_draw_state_and_targets_parent_or_child() {
     for (child, value) in [(None, 4), (Some(2), u32::MAX)] {
         pending(&mut vm);
         let pc = vm.pc();
-        assert!(scene.try_handle(&mut vm).unwrap());
+        assert!(scene.shared_state(&mut vm).unwrap());
         let parent = scene.object(7).unwrap();
         let object = child.map_or(parent, |id| parent.children.get(&id).unwrap());
         assert_eq!(object.draw.as_ref().unwrap().texture_mode, value);
@@ -1727,7 +1730,7 @@ fn external_original_library_toggle_triggers_texture_subtract() {
     while setup_vm.pc() < code.len() {
         pending(&mut setup_vm);
         assert!(
-            scene.try_handle(&mut setup_vm).unwrap()
+            scene.shared_state(&mut setup_vm).unwrap()
                 || capture
                     .try_immediate(&mut setup_vm, &mut scene, &mut backend)
                     .unwrap()
@@ -1764,7 +1767,7 @@ fn external_original_library_toggle_triggers_texture_subtract() {
                 if command == 0x322 {
                     hits.push(pc);
                 }
-                assert!(scene.try_handle(&mut vm).unwrap());
+                assert!(scene.shared_state(&mut vm).unwrap());
             }
         }
         panic!("original toggle function did not return");

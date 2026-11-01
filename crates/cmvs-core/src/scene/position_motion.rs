@@ -1,6 +1,6 @@
 //! Integer XY motion at DrawState +144 (0x21f4..0x21f8), bound to the documented binary.
 use super::SceneHost;
-use crate::{bytecode::DecodeError, evaluate::error, machine::Machine, vm::SystemResult};
+use crate::{bytecode::DecodeError, dispatch::Call, evaluate::error};
 pub const POSITION_KEYS: usize = 16;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PositionKey {
@@ -99,13 +99,12 @@ fn sine(angle: i32, amplitude: i32) -> i32 {
     (radians.sin() * f64::from(amplitude)) as i32
 }
 impl SceneHost {
-    pub(super) fn try_position_motion(
+    pub(super) fn handle_position_motion(
         &mut self,
-        vm: &mut Machine<'_>,
-    ) -> Result<bool, DecodeError> {
-        let Some((pc, command @ 0x1f4..=0x1f8)) = vm.pending_system() else {
-            return Ok(false);
-        };
+        call: &mut Call<'_, '_>,
+    ) -> Result<(), DecodeError> {
+        let (pc, command) = (call.pc, call.command);
+
         let fail = |why| error(pc, command + 0x2000, why);
         let count = match command {
             0x1f5 => 8,
@@ -114,7 +113,7 @@ impl SceneHost {
         };
         let mut args = [0; 8];
         for (i, a) in args.iter_mut().take(count).enumerate() {
-            *a = vm.stack().peek_u32((i + 1) * 4).map_err(|e| fail(e.0))?;
+            *a = call.argument((i + 1) * 4, super::argument_names(call.command)[i])?;
         }
         let slot = u8::try_from(args[0])
             .ok()
@@ -156,7 +155,7 @@ impl SceneHost {
                 }
             }
         }
-        vm.complete_system(SystemResult(0x4000 | (count * 4) as u16))?;
+        call.complete(0x4000 | (count * 4) as u16)?;
         let parent = self.objects.get_mut(&slot).expect("validated parent");
         let object = match child {
             Some(id) => parent.children.get_mut(&id).expect("validated child"),
@@ -193,12 +192,13 @@ impl SceneHost {
                 let value = draw.position_motion.as_ref().map_or(u32::MAX, |m| {
                     m.playback.as_ref().map_or(u32::MAX - 1, |p| p.current)
                 });
-                vm.state_mut()
+                call.vm
+                    .state_mut()
                     .set_system_integer(0, value)
                     .expect("result exists");
             }
         }
-        Ok(true)
+        Ok(())
     }
 }
 

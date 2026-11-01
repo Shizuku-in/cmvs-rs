@@ -354,6 +354,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             let paths = bootstrap.as_ref().map_or(&no_paths, Bootstrap::paths);
             let mut registered_images = images.as_mut().map(|images| images.with_paths(paths));
             let mut hosts = cmvs_rs::dispatch::Hosts {
+                camera: platform_assets.is_some().then_some(&mut camera),
                 audio: platform_assets
                     .is_some()
                     .then_some(cmvs_rs::dispatch::AudioHosts {
@@ -381,7 +382,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                             source,
                             change_images: false,
                         });
-            } else if platform_assets.is_some() {
+            } else if platform_assets.is_some() && cmvs_rs::dispatch::is_wait(command) {
                 hosts.waits = Some(cmvs_rs::dispatch::WaitHosts {
                     scene: Some(&mut scene),
                     camera: None,
@@ -389,6 +390,8 @@ fn run() -> Result<(), Box<dyn Error>> {
                     gate: wait_gate,
                     change_images: false,
                 });
+            } else if platform_assets.is_some() {
+                hosts.scene = Some(&mut scene);
             }
             let dispatched = cmvs_rs::dispatch::run(resolved.semantics, &mut machine, &mut hosts)?;
 
@@ -432,6 +435,29 @@ fn run() -> Result<(), Box<dyn Error>> {
                     .expect("completed root command has an entry")
                     .capability;
                 match capability {
+                    Capability::Scene => {
+                        println!(
+                            "# scene state 0x{:04x}: {:?} rgba={:?} objects={:?}; recorded only, nothing drawn",
+                            command + 0x2000,
+                            scene.clear(),
+                            scene.clear().rgba(),
+                            scene.objects().keys().collect::<Vec<_>>()
+                        );
+                    }
+                    Capability::Camera => {
+                        let floats = |c: usize| {
+                            camera
+                                .camera(c)
+                                .map(|cam| (0..19).map(|i| cam.float(i)).collect::<Vec<_>>())
+                        };
+                        println!(
+                            "# camera 0x{:04x}: camera0 words0..18 as f32={:?} camera1={:?} moving={}; stored only, 2D rendering unaffected",
+                            command + 0x2000,
+                            floats(0),
+                            floats(1),
+                            camera.moving()
+                        );
+                    }
                     Capability::SceneImages => {
                         println!(
                             "# scene image 0x{:04x}: system_integer[0]={:?} objects={:?}; decoded only, nothing drawn",
@@ -673,21 +699,6 @@ fn run() -> Result<(), Box<dyn Error>> {
                     }
                     continue;
                 }
-                if camera.try_handle(&mut machine)? {
-                    let floats = |c: usize| {
-                        camera
-                            .camera(c)
-                            .map(|cam| (0..19).map(|i| cam.float(i)).collect::<Vec<_>>())
-                    };
-                    println!(
-                        "# camera 0x{:04x}: camera0 words0..18 as f32={:?} camera1={:?} moving={}; stored only, 2D rendering unaffected",
-                        command + 0x2000,
-                        floats(0),
-                        floats(1),
-                        camera.moving()
-                    );
-                    continue;
-                }
                 let handled_sequence =
                     if let (Some(images), Some(config)) = (&mut images, &bootstrap) {
                         sequence.try_handle_with_hosts(
@@ -739,16 +750,6 @@ fn run() -> Result<(), Box<dyn Error>> {
                             .collect::<Vec<_>>(),
                         buttons.merged_states(),
                         machine.state().system_integer(0)
-                    );
-                    continue;
-                }
-                if scene.try_handle(&mut machine)? {
-                    println!(
-                        "# scene state 0x{:04x}: {:?} rgba={:?} objects={:?}; recorded only, nothing drawn",
-                        command + 0x2000,
-                        scene.clear(),
-                        scene.clear().rgba(),
-                        scene.objects().keys().collect::<Vec<_>>()
                     );
                     continue;
                 }

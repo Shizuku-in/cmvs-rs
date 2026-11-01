@@ -2,9 +2,8 @@
 use super::SceneHost;
 use crate::{
     bytecode::DecodeError,
+    dispatch::Call,
     evaluate::{error, truncate},
-    machine::Machine,
-    vm::SystemResult,
 };
 
 pub const SCALE_KEYS: usize = 8;
@@ -71,10 +70,12 @@ impl ScaleMotion {
     }
 }
 impl SceneHost {
-    pub(super) fn try_scale_motion(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command @ 0x1e0..=0x1e4)) = vm.pending_system() else {
-            return Ok(false);
-        };
+    pub(super) fn handle_scale_motion(
+        &mut self,
+        call: &mut Call<'_, '_>,
+    ) -> Result<(), DecodeError> {
+        let (pc, command) = (call.pc, call.command);
+
         let fail = |why| error(pc, command + 0x2000, why);
         let count = match command {
             0x1e0 => 4,
@@ -84,7 +85,7 @@ impl SceneHost {
         };
         let mut args = [0; 8];
         for (i, arg) in args.iter_mut().take(count).enumerate() {
-            *arg = vm.stack().peek_u32((i + 1) * 4).map_err(|e| fail(e.0))?;
+            *arg = call.argument((i + 1) * 4, super::argument_names(call.command)[i])?;
         }
         let slot = u8::try_from(args[0])
             .ok()
@@ -119,7 +120,7 @@ impl SceneHost {
                 }
             }
         }
-        vm.complete_system(SystemResult(0x4000 | (count * 4) as u16))?;
+        call.complete(0x4000 | (count * 4) as u16)?;
         let parent = self.objects.get_mut(&slot).expect("validated parent");
         let object = match child {
             Some(id) => parent.children.get_mut(&id).expect("validated child"),
@@ -164,12 +165,13 @@ impl SceneHost {
                 let result = draw.scale_motion.as_ref().map_or(u32::MAX, |m| {
                     m.playback.as_ref().map_or(u32::MAX - 1, |p| p.current)
                 });
-                vm.state_mut()
+                call.vm
+                    .state_mut()
                     .set_system_integer(0, result)
                     .expect("result exists");
             }
         }
-        Ok(true)
+        Ok(())
     }
 }
 

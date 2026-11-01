@@ -109,6 +109,8 @@ pub struct WaitHosts<'a> {
 
 #[derive(Default)]
 pub struct Hosts<'a> {
+    pub scene: Option<&'a mut SceneHost>,
+    pub camera: Option<&'a mut CameraHost>,
     pub images: Option<ImageHosts<'a>>,
     pub audio: Option<AudioHosts<'a>>,
     pub waits: Option<WaitHosts<'a>>,
@@ -131,6 +133,8 @@ pub struct Hosts<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Capability {
+    Scene,
+    Camera,
     SceneImages,
     MaskImages,
     ImageChange,
@@ -160,6 +164,8 @@ pub enum Capability {
 impl Hosts<'_> {
     fn has(&self, capability: Capability) -> bool {
         match capability {
+            Capability::Scene => self.scene.is_some(),
+            Capability::Camera => self.camera.is_some(),
             Capability::SceneImages | Capability::MaskImages => self.images.is_some(),
             Capability::ImageChange => self.images.as_ref().is_some_and(|h| h.change_images),
             Capability::Audio => self.audio.is_some(),
@@ -481,6 +487,23 @@ fn root_audio(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Bo
     Ok(Flow::Done)
 }
 
+fn root_scene(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    hosts
+        .scene
+        .as_deref_mut()
+        .expect("scene capability checked")
+        .handle(call)?;
+    Ok(Flow::Done)
+}
+fn root_camera(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    hosts
+        .camera
+        .as_deref_mut()
+        .expect("camera capability checked")
+        .handle(call)?;
+    Ok(Flow::Done)
+}
+
 fn root_images(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     let h = hosts.images.as_mut().expect("image capability checked");
     h.scene.handle_image(call, h.source)?;
@@ -529,6 +552,624 @@ pub fn is_wait(command: u16) -> bool {
 }
 
 pub static ROOT: &[Entry] = &[
+    Entry {
+        command: 0x20,
+        name: "create object",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x21,
+        name: "destroy object",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x22,
+        name: "create child",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x23,
+        name: "destroy child",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x26,
+        name: "object visibility",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x27,
+        name: "object exists",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x28,
+        name: "move object slot",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x2a,
+        name: "object logical size",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x2d,
+        name: "attach child queue",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x2e,
+        name: "clear object flag",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x2f,
+        name: "destroy all objects",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x33,
+        name: "image information",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x34,
+        name: "image pixel",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x40,
+        name: "create draw state",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x42,
+        name: "draw coordinate mode",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x43,
+        name: "draw solid fill",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x44,
+        name: "draw source rectangle",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x45,
+        name: "draw position",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x46,
+        name: "draw origin",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x47,
+        name: "draw layer",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x48,
+        name: "draw opacity",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x49,
+        name: "draw scale",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x4a,
+        name: "draw rotation",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x4b,
+        name: "draw blend mode",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x4c,
+        name: "draw camera mode",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x50,
+        name: "create child draw state",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x70,
+        name: "draw reference depth",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x71,
+        name: "draw vertical offset",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x72,
+        name: "draw world x",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x73,
+        name: "draw world y",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x74,
+        name: "draw world z",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x75,
+        name: "draw depth bias",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x78,
+        name: "world position query",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1e0,
+        name: "create scale motion",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1e1,
+        name: "set key scale motion",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1e2,
+        name: "start scale motion",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1e3,
+        name: "stop scale motion",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1e4,
+        name: "query scale motion",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1e5,
+        name: "create rotation track",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1e6,
+        name: "set key rotation track",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1e7,
+        name: "start rotation track",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1e8,
+        name: "stop rotation track",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1e9,
+        name: "query rotation track",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1ea,
+        name: "create opacity track",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1eb,
+        name: "set key opacity track",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1ec,
+        name: "start opacity track",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1ed,
+        name: "stop opacity track",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1ee,
+        name: "query opacity track",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1ef,
+        name: "create frame animation",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1f0,
+        name: "set key frame animation",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1f1,
+        name: "start frame animation",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1f2,
+        name: "stop frame animation",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1f3,
+        name: "query frame animation",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1f4,
+        name: "create position motion",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1f5,
+        name: "set key position motion",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1f6,
+        name: "start position motion",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1f7,
+        name: "stop position motion",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1f8,
+        name: "query position motion",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1f9,
+        name: "create world motion",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1fa,
+        name: "set key world motion",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1fb,
+        name: "start world motion",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1fc,
+        name: "stop world motion",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x1fd,
+        name: "query world motion",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x220,
+        name: "create fade",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x221,
+        name: "release fade",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x222,
+        name: "finish fade",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x223,
+        name: "fade remaining",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x250,
+        name: "clear depth",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x2c5,
+        name: "cancel image change",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x2c6,
+        name: "image change active",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x2cb,
+        name: "clear color",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x321,
+        name: "second texture mode",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x322,
+        name: "second texture subtraction",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x329,
+        name: "reset object effects",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x56,
+        name: "project coordinates",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x58,
+        name: "set camera geometry",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x59,
+        name: "set camera viewport",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x5a,
+        name: "set camera position",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x5b,
+        name: "set camera angle",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x5c,
+        name: "set camera depth offset",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x5d,
+        name: "set camera center",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x5e,
+        name: "set camera enabled",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x5f,
+        name: "set camera type",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x60,
+        name: "set camera geometry",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x61,
+        name: "set camera viewport",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x62,
+        name: "set camera position",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x63,
+        name: "set camera angle",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x64,
+        name: "set camera depth offset",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x65,
+        name: "set camera center",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x66,
+        name: "set camera snapshot mode",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x67,
+        name: "set camera scale",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x68,
+        name: "stop camera move",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x6a,
+        name: "camera moving",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x6b,
+        name: "move camera XZ",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x6c,
+        name: "move camera XYZ",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x6d,
+        name: "move camera Y",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x9c,
+        name: "camera effect",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x126,
+        name: "screen size",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x260,
+        name: "view position",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x261,
+        name: "view angle x",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x262,
+        name: "view angle y",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x263,
+        name: "view angle z",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x264,
+        name: "view field of view",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
     Entry {
         command: 0x30,
         name: "scene image",

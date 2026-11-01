@@ -29,28 +29,21 @@ impl CameraHost {
         self.views.get(index)
     }
 
-    pub(super) fn set_view(
-        &mut self,
-        vm: &mut Machine<'_>,
-        pc: usize,
-        command: u16,
-    ) -> Result<bool, DecodeError> {
+    pub(super) fn set_view(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let command = call.command;
         let count = if command == 0x260 { 3 } else { 1 };
         let mut values = [0; 3];
         for (i, value) in values[..count].iter_mut().enumerate() {
-            *value = vm
-                .stack()
-                .peek_u32((i + 1) * 4)
-                .map_err(|e| error(pc, command + 0x2000, e.0))?;
+            *value = call.argument((i + 1) * 4, argument_names(call.command)[i])?;
         }
-        vm.complete_system(SystemResult(0x4000 | (count * 4) as u16))?;
+        call.complete(0x4000 | (count * 4) as u16)?;
         let words = &mut self.views[0].words;
         if command == 0x260 {
             words[..3].copy_from_slice(&values);
         } else {
             words[3 + usize::from(command - 0x261)] = values[0];
         }
-        Ok(true)
+        Ok(())
     }
 
     /// Record 0x882/0x883, 0x1400501d0: u16 2, +92, then seven raw float words.

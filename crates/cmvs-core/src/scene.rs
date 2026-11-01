@@ -7,7 +7,6 @@ use crate::{
     image::{self, ImageSource},
     machine::Machine,
     raster::RgbaImage,
-    vm::SystemResult,
 };
 use std::{collections::BTreeMap, error::Error};
 mod animation;
@@ -322,32 +321,43 @@ impl SceneHost {
         self.objects.insert(slot, object);
     }
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        if let Some((pc, command @ 0x1e5..=0x1e9)) = vm.pending_system() {
-            return self.rotation(vm, pc, command);
-        }
-        if matches!(vm.pending_system(), Some((_, 0x1e0..=0x1e4))) {
-            return self.try_scale_motion(vm);
-        }
-        if matches!(vm.pending_system(), Some((_, 0x1ef..=0x1f3))) {
-            return self.try_frame_animation(vm);
-        }
-        if matches!(vm.pending_system(), Some((_, 0x1f4..=0x1f8))) {
-            return self.try_position_motion(vm);
-        }
-        if matches!(vm.pending_system(), Some((_, 0x1f9..=0x1fd))) {
-            return self.try_world_motion(vm);
-        }
-        if self.fade.try_handle(vm)? {
-            return Ok(true);
-        }
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(false);
         };
+        if !matches!(command, 0x20..=0x23 | 0x26..=0x28 | 0x2a | 0x2d..=0x2f | 0x33 | 0x34 | 0x40 | 0x42..=0x4c | 0x50 | 0x70..=0x75 | 0x78 | 0x1e0..=0x1fd | 0x220..=0x223 | 0x250 | 0x2c5 | 0x2c6 | 0x2cb | 0x321 | 0x322 | 0x329)
+        {
+            return Ok(false);
+        }
+        self.handle(&mut Call::new(vm, pc, command))?;
+        Ok(true)
+    }
+
+    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let (pc, command) = (call.pc, call.command);
+        if matches!(call.command, 0x1e5..=0x1e9) {
+            return self.rotation(call);
+        }
+        if matches!(call.command, 0x1e0..=0x1e4) {
+            return self.handle_scale_motion(call);
+        }
+        if matches!(call.command, 0x1ef..=0x1f3) {
+            return self.handle_frame_animation(call);
+        }
+        if matches!(call.command, 0x1f4..=0x1f8) {
+            return self.handle_position_motion(call);
+        }
+        if matches!(call.command, 0x1f9..=0x1fd) {
+            return self.handle_world_motion(call);
+        }
+        if matches!(call.command, 0x220..=0x223) {
+            return self.fade.handle(call);
+        }
+
         if command == 0x78 {
-            return self.world_position(vm, pc);
+            return self.world_position(call);
         }
         if command == 0x329 {
-            let slot = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x2329, e.0))?;
+            let slot = call.argument(4, argument_names(call.command)[0])?;
             let object = u8::try_from(slot)
                 .ok()
                 .and_then(|slot| self.objects.get_mut(&slot))
@@ -358,55 +368,55 @@ impl SceneHost {
                         "effect reset needs an existing object in slots 0..255",
                     )
                 })?;
-            vm.complete_system(SystemResult(0x4004))?;
+            call.complete(0x4004)?;
             // 0x14003b6a0 -> 0x14003a880: resets the special-effect header and
             // destroys every child, retaining the parent image/draw state and flags.
             // Special-effect creation (0x2328) is still an explicit barrier.
             object.children.clear();
-            return Ok(true);
+            return Ok(());
         }
         if matches!(command, 0x2c5 | 0x2c6) {
-            return self.control_change(vm, pc, command);
+            return self.control_change(call);
         }
         if matches!(
             command,
             0x22 | 0x2d | 0x2e | 0x40 | 0x42..=0x4c | 0x50 | 0x70..=0x75 | 0x321 | 0x322
         ) {
-            return self.handle_object(vm, pc, command);
+            return self.handle_object(call);
         }
         if command == 0x23 {
-            return self.destroy_child(vm, pc);
+            return self.destroy_child(call);
         }
         if command == 0x26 {
-            return self.set_shown(vm, pc);
+            return self.set_shown(call);
         }
         if matches!(command, 0x27 | 0x28) {
-            return self.query_or_move(vm, pc, command);
+            return self.query_or_move(call);
         }
         if command == 0x33 {
-            return self.image_info(vm, pc);
+            return self.image_info(call);
         }
         if command == 0x34 {
-            return self.pixel(vm, pc);
+            return self.pixel(call);
         }
         if command == 0x2a {
-            return self.set_logical_size(vm, pc);
+            return self.set_logical_size(call);
         }
         if matches!(command, 0x1ea..=0x1ee) {
-            return self.opacity(vm, pc, command);
+            return self.opacity(call);
         }
         if command == 0x2f {
             // 0x14006bc50 runs the 0x2021 destructor on all 256 slots and pops nothing.
             // The +4616 fade overlay owns its object outside this table, so it survives.
-            vm.complete_system(SystemResult(0x4000))?;
+            call.complete(0x4000)?;
             self.objects.clear();
-            return Ok(true);
+            return Ok(());
         }
         if !matches!(command, 0x2cb | 0x250 | 0x20 | 0x21) {
-            return Ok(false);
+            return Err(call.error("unregistered command"));
         }
         let op = command + 0x2000;
-        let value = vm.stack().peek_u32(4).map_err(|e| error(pc, op, e.0))?;
+        let value = call.argument(4, argument_names(call.command)[0])?;
         let slot = if matches!(command, 0x20 | 0x21) {
             // 0x14006bb00/0x14006bbc0 compare signed against 256: larger values only set
             // +12056 bit 0x10 (unmodeled) and negative values would index before the table.
@@ -417,7 +427,7 @@ impl SceneHost {
         } else {
             None
         };
-        vm.complete_system(SystemResult(0x4004))?;
+        call.complete(0x4004)?;
         match (command, slot) {
             (0x2cb, _) => self.clear.color = value,
             (0x250, _) => self.clear.depth = value != 0,
@@ -430,17 +440,18 @@ impl SceneHost {
             }
             _ => unreachable!("slot is parsed for object commands"),
         }
-        Ok(true)
+        Ok(())
     }
 
     /// 0x2026: SP-4 object, SP-8 child (negative selects self), SP-12 boolean.
     /// Evidence and build-specific addresses: docs/games/chronoclock/vm-semantics.md.
     /// Missing/invalid targets stay explicit errors: VM +12056 bit 0x10 is unmodeled.
-    fn set_shown(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<bool, DecodeError> {
+    fn set_shown(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let pc = call.pc;
         let fail = |why| error(pc, 0x2026, why);
-        let slot = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
-        let child = vm.stack().peek_u32(8).map_err(|e| fail(e.0))? as i32;
-        let shown = vm.stack().peek_u32(12).map_err(|e| fail(e.0))? != 0;
+        let slot = call.argument(4, argument_names(call.command)[0])?;
+        let child = call.argument(8, argument_names(call.command)[1])? as i32;
+        let shown = call.argument(12, argument_names(call.command)[2])? != 0;
         let parent = u8::try_from(slot)
             .ok()
             .and_then(|slot| self.objects.get_mut(&slot))
@@ -454,23 +465,24 @@ impl SceneHost {
                 .and_then(|id| parent.children.get_mut(&id))
                 .ok_or_else(|| fail("visibility needs an existing child in slots 0..767"))?
         };
-        vm.complete_system(SystemResult(0x400c))?;
+        call.complete(0x400c)?;
         target.shown = shown;
-        Ok(true)
+        Ok(())
     }
 
     /// 0x2023 / 0x14006bd10 -> 0x14003a7d0: remove SP-8 from parent SP-4.
     /// The child index is unsigned: values >=768, including negative i32 bits, are no-ops.
     /// Drop owns the subtree, images and effect state; parent flags/state remain untouched.
-    fn destroy_child(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<bool, DecodeError> {
+    fn destroy_child(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let pc = call.pc;
         let fail = |why| error(pc, 0x2023, why);
-        let raw = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
-        let child = vm.stack().peek_u32(8).map_err(|e| fail(e.0))?;
+        let raw = call.argument(4, argument_names(call.command)[0])?;
+        let child = call.argument(8, argument_names(call.command)[1])?;
         let slot = u8::try_from(raw).map_err(|_| fail("object slot outside 0..255"))?;
         if !self.objects.contains_key(&slot) {
             return Err(fail("child deletion needs an existing parent object"));
         }
-        vm.complete_system(SystemResult(0x4008))?;
+        call.complete(0x4008)?;
         if child < 768 {
             self.objects
                 .get_mut(&slot)
@@ -478,7 +490,7 @@ impl SceneHost {
                 .children
                 .remove(&(child as u16));
         }
-        Ok(true)
+        Ok(())
     }
 
     /// SP-4 slot (signed < 256; larger values only set +12056 bit 0x10, negative ones would
@@ -488,18 +500,12 @@ impl SceneHost {
     /// - 0x2028 / 0x14006bea0: SP-8 is the source slot (same bounds). Destroys the target
     ///   object, moves the source pointer into the target and clears the source. With the
     ///   same occupied slot the original stores the pointer it just freed, which Rust rejects.
-    fn query_or_move(
-        &mut self,
-        vm: &mut Machine<'_>,
-        pc: usize,
-        command: u16,
-    ) -> Result<bool, DecodeError> {
+    fn query_or_move(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
-        let word = |distance| {
-            vm.stack()
-                .peek_u32(distance)
+        let mut word = |distance| {
+            call.argument(distance, argument_names(command)[distance / 4 - 1])
                 .map(|value| value as i32)
-                .map_err(|e| error(pc, op, e.0))
         };
         let slot = |value: i32| {
             u8::try_from(value).map_err(|_| error(pc, op, "object slot outside 0..255"))
@@ -513,11 +519,12 @@ impl SceneHost {
                 Some(object) => u16::try_from(second)
                     .is_ok_and(|id| id < 768 && object.children.contains_key(&id)),
             };
-            vm.complete_system(SystemResult(0x4008))?;
-            vm.state_mut()
+            call.complete(0x4008)?;
+            call.vm
+                .state_mut()
                 .set_system_integer(0, u32::from(exists))
                 .expect("slot 0 exists");
-            return Ok(true);
+            return Ok(());
         }
         let source = slot(second)?;
         if source == target && self.objects.contains_key(&target) {
@@ -527,12 +534,12 @@ impl SceneHost {
                 "moving an object onto its own slot leaves a freed pointer",
             ));
         }
-        vm.complete_system(SystemResult(0x4008))?;
+        call.complete(0x4008)?;
         self.objects.remove(&target);
         if let Some(object) = self.objects.remove(&source) {
             self.objects.insert(target, object);
         }
-        Ok(true)
+        Ok(())
     }
 
     /// 0x2033 / 0x14006c7c0: SP-4 slot (signed < 256 with an object; otherwise only +12056
@@ -540,8 +547,9 @@ impl SceneHost {
     /// image +1040) gives system results 1/2 = width/height (+1144/+1148) and 3 = the
     /// 32-bit flag (+1152), and result 0 = 1; without one only result 0 = 0 is written.
     /// Pops 4 bytes.
-    fn image_info(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<bool, DecodeError> {
-        let raw = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x2033, e.0))? as i32;
+    fn image_info(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let pc = call.pc;
+        let raw = call.argument(4, argument_names(call.command)[0])? as i32;
         let object = u8::try_from(raw)
             .ok()
             .and_then(|slot| self.objects.get(&slot))
@@ -559,8 +567,8 @@ impl SceneHost {
                 u32::from(image.alpha),
             ]
         });
-        vm.complete_system(SystemResult(0x4004))?;
-        let state = vm.state_mut();
+        call.complete(0x4004)?;
+        let state = call.vm.state_mut();
         state
             .set_system_integer(0, u32::from(info.is_some()))
             .expect("slot 0 exists");
@@ -571,7 +579,7 @@ impl SceneHost {
                     .expect("slots 1..3 exist");
             }
         }
-        Ok(true)
+        Ok(())
     }
 
     /// 0x2034 / 0x14006ca80: SP-4 slot (as 0x2033), SP-8 child (negative selects the object,
@@ -579,11 +587,12 @@ impl SceneHost {
     /// (0x140030190): the BGRA dword of the CPU copy at +1160, or 0 outside +1144/+1148 or
     /// without an image. Only file-loaded, unfiltered images are verified to keep that copy
     /// equal to the decoded pixels. Pops 16.
-    fn pixel(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<bool, DecodeError> {
+    fn pixel(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let pc = call.pc;
         let fail = |why| error(pc, 0x2034, why);
         let mut args = [0; 4];
         for (i, arg) in args.iter_mut().enumerate() {
-            *arg = vm.stack().peek_u32(4 * (i + 1)).map_err(|e| fail(e.0))?;
+            *arg = call.argument(4 * (i + 1), argument_names(call.command)[i])?;
         }
         let [slot, child, x, y] = args;
         let object = u8::try_from(slot as i32)
@@ -620,22 +629,24 @@ impl SceneHost {
                 }
             }
         };
-        vm.complete_system(SystemResult(0x4010))?;
-        vm.state_mut()
+        call.complete(0x4010)?;
+        call.vm
+            .state_mut()
             .set_system_integer(0, value)
             .expect("slot 0 exists");
-        Ok(true)
+        Ok(())
     }
 
     /// 0x202a / 0x14006c160 -> 0x14003b410: SP-4 slot (signed; 256 and above only set +12056
     /// bit 0x10), SP-8 child (negative selects the object, 0x14003a760 otherwise), SP-12/SP-16
     /// logical width/height written to +6256/+6260. A missing object or child (none at 768
     /// and above) would be dereferenced. Pops 16.
-    fn set_logical_size(&mut self, vm: &mut Machine<'_>, pc: usize) -> Result<bool, DecodeError> {
+    fn set_logical_size(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let pc = call.pc;
         let fail = |why| error(pc, 0x202a, why);
         let mut args = [0; 4];
         for (i, arg) in args.iter_mut().enumerate() {
-            *arg = vm.stack().peek_u32(4 * (i + 1)).map_err(|e| fail(e.0))?;
+            *arg = call.argument(4 * (i + 1), argument_names(call.command)[i])?;
         }
         let [slot, child, width, height] = args;
         let object = u8::try_from(slot as i32)
@@ -651,17 +662,13 @@ impl SceneHost {
                 .and_then(|id| object.children.get_mut(&id))
                 .ok_or_else(|| fail("logical size needs an existing child in slots 0..767"))?
         };
-        vm.complete_system(SystemResult(0x4010))?;
+        call.complete(0x4010)?;
         target.logical_size = [width, height];
-        Ok(true)
+        Ok(())
     }
 
-    fn handle_object(
-        &mut self,
-        vm: &mut Machine<'_>,
-        pc: usize,
-        command: u16,
-    ) -> Result<bool, DecodeError> {
+    fn handle_object(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let (pc, command) = (call.pc, call.command);
         let fail = |why| error(pc, command + 0x2000, why);
         let count = match command {
             0x40 => 1,
@@ -674,7 +681,7 @@ impl SceneHost {
         };
         let mut args = Vec::with_capacity(count);
         for i in 1..=count {
-            args.push(vm.stack().peek_u32(i * 4).map_err(|e| fail(e.0))?);
+            args.push(call.argument(i * 4, argument_names(call.command)[i - 1])?);
         }
         let slot = u8::try_from(args[0]).map_err(|_| fail("object slot outside 0..255"))?;
         let parent = self
@@ -707,7 +714,7 @@ impl SceneHost {
                 return Err(fail("object has no draw state"));
             }
         }
-        vm.complete_system(SystemResult(0x4000 | (count * 4) as u16))?;
+        call.complete(0x4000 | (count * 4) as u16)?;
         let parent = self.objects.get_mut(&slot).expect("validated");
         if command == 0x22 {
             let flags = if parent.draw.is_some() {
@@ -807,14 +814,15 @@ impl SceneHost {
                 _ => unreachable!(),
             }
         }
-        Ok(true)
+        Ok(())
     }
 
     /// 0x2078 / 0x14006f4c0 -> 0x14003b210: raw XYZ to float results 8..10.
-    fn world_position(&self, vm: &mut Machine<'_>, pc: usize) -> Result<bool, DecodeError> {
+    fn world_position(&self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let pc = call.pc;
         let fail = |why| error(pc, 0x2078, why);
-        let slot = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
-        let child = vm.stack().peek_u32(8).map_err(|e| fail(e.0))? as i32;
+        let slot = call.argument(4, argument_names(call.command)[0])?;
+        let child = call.argument(8, argument_names(call.command)[1])? as i32;
         let parent = u8::try_from(slot)
             .ok()
             .and_then(|slot| self.objects.get(&slot))
@@ -834,13 +842,14 @@ impl SceneHost {
             .ok_or_else(|| fail("world query needs a draw state"))?
             .words;
         let xyz = [words[11], words[12], words[13]];
-        vm.complete_system(SystemResult(0x4008))?;
+        call.complete(0x4008)?;
         for (index, bits) in (8..=10).zip(xyz) {
-            vm.state_mut()
+            call.vm
+                .state_mut()
                 .set_system_float_bits(index, bits)
                 .expect("float result exists");
         }
-        Ok(true)
+        Ok(())
     }
 
     /// 0x2030 / 0x14006c220: SP-4 object slot, SP-8 file name. Rebuilds the object image
@@ -1034,5 +1043,105 @@ impl SceneHost {
             masks: [mask, None],
             strip,
         };
+    }
+}
+
+fn argument_names(command: u16) -> &'static [&'static str] {
+    match command {
+        0x2f | 0x221..=0x223 => &[],
+        0x2cb => &["clear color"],
+        0x250 => &["clear depth"],
+        0x20 | 0x21 | 0x33 | 0x40 | 0x329 | 0x2c5 | 0x2c6 => &["object slot"],
+        0x22 | 0x23 | 0x27 | 0x2d | 0x2e | 0x42 | 0x50 | 0x78 => &["object slot", "child slot"],
+        0x28 => &["target slot", "source slot"],
+        0x26 => &["object slot", "child slot", "shown"],
+        0x2a => &["object slot", "child slot", "width", "height"],
+        0x34 => &["object slot", "child slot", "x", "y"],
+        0x43 => &["object slot", "child slot", "width", "height", "color"],
+        0x44 => &[
+            "object slot",
+            "child slot",
+            "source x",
+            "source y",
+            "width",
+            "height",
+        ],
+        0x45 | 0x46 | 0x49 => &["object slot", "child slot", "x", "y"],
+        0x47 => &["object slot", "child slot", "layer"],
+        0x48 => &["object slot", "child slot", "opacity"],
+        0x4a => &["object slot", "child slot", "rotation"],
+        0x4b | 0x4c | 0x321 => &["object slot", "child slot", "mode"],
+        0x322 => &["object slot", "child slot", "subtract"],
+        0x70 => &["object slot", "child slot", "reference depth"],
+        0x71 => &["object slot", "child slot", "vertical offset"],
+        0x72 => &["object slot", "child slot", "world x"],
+        0x73 => &["object slot", "child slot", "world y"],
+        0x74 => &["object slot", "child slot", "world z"],
+        0x75 => &["object slot", "child slot", "depth bias"],
+        0x1e0 => &["object slot", "child slot", "base x", "base y"],
+        0x1e1 | 0x1f5 => &[
+            "object slot",
+            "child slot",
+            "key",
+            "next key",
+            "mode",
+            "duration",
+            "x",
+            "y",
+        ],
+        0x1e2 | 0x1e7 | 0x1ec | 0x1f1 | 0x1f6 | 0x1fb => {
+            &["object slot", "child slot", "start key"]
+        }
+        0x1e5 => &["object slot", "child slot", "angle"],
+        0x1e6 => &[
+            "object slot",
+            "child slot",
+            "key",
+            "next key",
+            "mode",
+            "duration",
+            "angle",
+        ],
+        0x1ea => &["object slot", "child slot", "opacity"],
+        0x1eb => &[
+            "object slot",
+            "child slot",
+            "key",
+            "next key",
+            "hold",
+            "duration",
+            "opacity",
+        ],
+        0x1f0 => &[
+            "object slot",
+            "child slot",
+            "frame",
+            "next frame",
+            "duration",
+            "source x",
+            "source y",
+            "width",
+            "height",
+            "origin x",
+            "origin y",
+        ],
+        0x1fa => &[
+            "object slot",
+            "child slot",
+            "key",
+            "next key",
+            "mode",
+            "duration",
+            "x",
+            "y",
+            "z",
+        ],
+        0x1e3..=0x1e4
+        | 0x1e8..=0x1e9
+        | 0x1ed..=0x1ef
+        | 0x1f2..=0x1f4
+        | 0x1f7..=0x1f9
+        | 0x1fc..=0x1fd => &["object slot", "child slot"],
+        _ => unreachable!("registered scene argument schema"),
     }
 }

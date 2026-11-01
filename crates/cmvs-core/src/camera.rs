@@ -14,7 +14,6 @@ use crate::{
     input::ActionInput,
     machine::{Machine, Step},
     message::RESEARCH_SCREEN,
-    vm::SystemResult,
 };
 mod view;
 pub use view::DeviceView;
@@ -267,12 +266,8 @@ impl CameraHost {
 
     /// 0x206b/0x206c/0x206d -> 0x14004f5b0/0x14004f680/0x14004f820.
     /// Camera 0 only; first argument mode, last duration, intervening floats XZ/XYZ/Y.
-    fn start_move(
-        &mut self,
-        vm: &mut Machine<'_>,
-        pc: usize,
-        command: u16,
-    ) -> Result<bool, DecodeError> {
+    fn start_move(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let (pc, command) = (call.pc, call.command);
         let fail = |why| error(pc, command + 0x2000, why);
         let count = match command {
             0x6b => 4,
@@ -281,7 +276,7 @@ impl CameraHost {
         };
         let mut args = [0; 5];
         for (i, arg) in args.iter_mut().take(count).enumerate() {
-            *arg = vm.stack().peek_u32((i + 1) * 4).map_err(|e| fail(e.0))?;
+            *arg = call.argument((i + 1) * 4, argument_names(call.command)[i])?;
         }
         if args[0] > 1 {
             return Err(fail("camera motion interpolation mode is not implemented"));
@@ -295,9 +290,9 @@ impl CameraHost {
         for (i, &axis) in axes.iter().enumerate() {
             target[axis] = hundredths(f32::from_bits(args[i + 1])).to_bits();
         }
-        vm.complete_system(SystemResult(0x4000 | (count * 4) as u16))?;
+        call.complete(0x4000 | (count * 4) as u16)?;
         self.commit_move(target, args[0], args[count - 1]);
-        Ok(true)
+        Ok(())
     }
 
     fn commit_move(&mut self, target: [u32; 3], mode: u32, duration: u32) {
@@ -389,40 +384,52 @@ impl CameraHost {
         Ok(flow)
     }
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        if let Some((pc, command @ 0x260..=0x264)) = vm.pending_system() {
-            return self.set_view(vm, pc, command);
+        let Some((pc, command)) = vm.pending_system() else {
+            return Ok(false);
+        };
+        if !matches!(command, 0x56 | 0x58..=0x68 | 0x6a..=0x6d | 0x9c | 0x126 | 0x260..=0x264) {
+            return Ok(false);
         }
-        if let Some((pc, command @ 0x6b..=0x6d)) = vm.pending_system() {
-            return self.start_move(vm, pc, command);
+        self.handle(&mut Call::new(vm, pc, command))?;
+        Ok(true)
+    }
+
+    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let (pc, command) = (call.pc, call.command);
+        if matches!(call.command, 0x260..=0x264) {
+            return self.set_view(call);
         }
-        if matches!(vm.pending_system(), Some((_, 0x6a))) {
+        if matches!(call.command, 0x6b..=0x6d) {
+            return self.start_move(call);
+        }
+        if matches!(call.command, 0x6a) {
             // 0x206a / 0x14006fe80 -> camera 0 (0x140027070) -> 0x14004f5a0.
             // No stack parameters: return only the boolean of camera +84.
             let result = u32::from(self.moving());
-            vm.complete_system(SystemResult(0x4000))?;
-            vm.state_mut()
+            call.complete(0x4000)?;
+            call.vm
+                .state_mut()
                 .set_system_integer(0, result)
                 .expect("result 0 exists");
-            return Ok(true);
+            return Ok(());
         }
-        if matches!(vm.pending_system(), Some((_, 0x126))) {
+        if matches!(call.command, 0x126) {
             // 0x2126 / 0x1400756f0: no stack parameters; results 1/2 = device +24/+28
             // (0x140027020/0x140027030). Only startup code (0x140010370/0x140011320) sets
             // them from cmvs.cfg, which selects 1280x720 here: the research viewport.
-            vm.complete_system(SystemResult(0x4000))?;
+            call.complete(0x4000)?;
             for (slot, value) in [(1, RESEARCH_SCREEN[0]), (2, RESEARCH_SCREEN[1])] {
-                vm.state_mut()
+                call.vm
+                    .state_mut()
                     .set_system_integer(slot, value)
                     .expect("results 1/2 exist");
             }
-            return Ok(true);
+            return Ok(());
         }
-        if let Some((pc, 0x56)) = vm.pending_system() {
-            return self.project_query(vm, pc);
+        if call.command == 0x56 {
+            return self.project_query(call);
         }
-        let Some((pc, command @ (0x58..=0x68 | 0x9c))) = vm.pending_system() else {
-            return Ok(false);
-        };
+
         let op = command + 0x2000;
         let fail = |why| error(pc, op, why);
         // Commands 0x2060..0x2065 address camera 0 directly and take one argument less.
@@ -435,13 +442,13 @@ impl CameraHost {
         let count = values + usize::from(indexed);
         let mut args = Vec::with_capacity(count);
         for i in 1..=count {
-            args.push(vm.stack().peek_u32(i * 4).map_err(|e| fail(e.0))?);
+            args.push(call.argument(i * 4, argument_names(call.command)[i - 1])?);
         }
         if command == 0x68 {
             // 0x2068 / 0x14006fd50 -> 0x14004f550: zero cancels, nonzero finishes.
-            vm.complete_system(SystemResult(0x4004))?;
+            call.complete(0x4004)?;
             self.cameras[0].stop_move(args[0] != 0);
-            return Ok(true);
+            return Ok(());
         }
         let camera = if indexed {
             // 0x140027090 indexes the screen object's pointers without a bound; only
@@ -454,7 +461,7 @@ impl CameraHost {
             0
         };
         let f = |i: usize| f32::from_bits(args[i]);
-        vm.complete_system(SystemResult(0x4000 | (count * 4) as u16))?;
+        call.complete(0x4000 | (count * 4) as u16)?;
         let target = &mut self.cameras[camera];
         match command {
             // 0x14004ecd0: +28, +32, +24.
@@ -501,17 +508,18 @@ impl CameraHost {
             }
             _ => unreachable!("matched above"),
         }
-        Ok(true)
+        Ok(())
     }
 
     /// 0x2056 / 0x14006fa20: SP-4 camera, SP-8 query mode, SP-12..20 XYZ,
     /// SP-24 vertical offset, SP-28 reference depth. Returns 0x401c and writes only
     /// integer system results 1..3 with cvttss2si (including its indefinite i32 value).
-    fn project_query(&self, vm: &mut Machine<'_>, pc: usize) -> Result<bool, DecodeError> {
+    fn project_query(&self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let pc = call.pc;
         let fail = |why| error(pc, 0x2056, why);
         let mut args = [0; 7];
         for (i, arg) in args.iter_mut().enumerate() {
-            *arg = vm.stack().peek_u32(4 * (i + 1)).map_err(|e| fail(e.0))?;
+            *arg = call.argument(4 * (i + 1), argument_names(call.command)[i])?;
         }
         let camera = self
             .cameras
@@ -524,13 +532,14 @@ impl CameraHost {
             f32::from_bits(args[6]),
         );
         let result = point.map(truncate);
-        vm.complete_system(SystemResult(0x401c))?;
+        call.complete(0x401c)?;
         for (index, value) in (1..=3).zip(result) {
-            vm.state_mut()
+            call.vm
+                .state_mut()
                 .set_system_integer(index, value as u32)
                 .expect("system results 1..3 exist");
         }
-        Ok(true)
+        Ok(())
     }
 }
 
@@ -615,6 +624,47 @@ impl CameraHost {
         }
         camera[15..19].copy_from_slice(&words[3 + body..7 + body]);
         Ok(())
+    }
+}
+
+fn argument_names(command: u16) -> &'static [&'static str] {
+    match command {
+        0x56 => &[
+            "camera index",
+            "query mode",
+            "x",
+            "y",
+            "z",
+            "vertical offset",
+            "reference depth",
+        ],
+        0x58 => &["camera index", "width", "height", "reference depth"],
+        0x59 => &["camera index", "width", "height"],
+        0x5a => &["camera index", "x", "y", "z"],
+        0x5b => &["camera index", "angle"],
+        0x5c => &["camera index", "depth offset"],
+        0x5d => &["camera index", "center x", "center y"],
+        0x5e => &["camera index", "enabled"],
+        0x5f => &["camera index", "type"],
+        0x60 => &["width", "height", "reference depth"],
+        0x61 => &["width", "height"],
+        0x62 | 0x260 => &["x", "y", "z"],
+        0x63 => &["angle"],
+        0x64 => &["depth offset"],
+        0x65 => &["center x", "center y"],
+        0x66 => &["camera index", "snapshot mode"],
+        0x67 => &["camera index", "scale x", "scale y"],
+        0x68 => &["finish"],
+        0x6a | 0x126 => &[],
+        0x6b => &["mode", "x", "z", "duration"],
+        0x6c => &["mode", "x", "y", "z", "duration"],
+        0x6d => &["mode", "y", "duration"],
+        0x9c => &["camera index", "effect"],
+        0x261 => &["angle x"],
+        0x262 => &["angle y"],
+        0x263 => &["angle z"],
+        0x264 => &["field of view"],
+        _ => unreachable!("registered camera argument schema"),
     }
 }
 

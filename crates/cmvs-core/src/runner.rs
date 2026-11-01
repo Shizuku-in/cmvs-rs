@@ -747,40 +747,46 @@ impl<'a> Startup<'a> {
                 StartupEvent::Progress
             });
         }
-        if let Some(flow) = crate::dispatch::run(
-            resolved.semantics,
-            &mut self.machine,
-            &mut crate::dispatch::Hosts {
-                audio: Some(crate::dispatch::AudioHosts {
-                    audio: &mut self.audio,
-                    backend: self.audio_backend.as_mut(),
-                }),
-                images: Some(crate::dispatch::ImageHosts {
-                    scene: &mut self.scene,
-                    source: &mut self.images.with_paths(self.bootstrap.paths()),
-                    change_images: true,
-                }),
-                waits: None,
-                text: Some(crate::dispatch::TextHosts {
-                    messages: &mut self.messages,
-                    input: &mut self.input,
-                    flags: message_flags,
-                }),
-                timers: Some(&mut self.timers),
-                flags: Some(&mut self.message_flags),
-                random: Some(&mut self.random),
-                settings: Some(&mut self.settings),
-                history: Some(&mut self.history),
-                strings: true,
-                math: true,
-                gesture: Some(&mut self.gesture),
-                popup: Some(&mut self.save_menu),
-                save_title: Some(&mut self.save_title),
-                save_info: Some(&mut self.save_info),
-                effects: Some(&mut self.effects),
-                effect_objects: true,
-            },
-        )? {
+        let mut image_source = self.images.with_paths(self.bootstrap.paths());
+        let mut hosts = crate::dispatch::Hosts {
+            audio: Some(crate::dispatch::AudioHosts {
+                audio: &mut self.audio,
+                backend: self.audio_backend.as_mut(),
+            }),
+            scene: None,
+            camera: Some(&mut self.camera),
+            images: None,
+            waits: None,
+            text: Some(crate::dispatch::TextHosts {
+                messages: &mut self.messages,
+                input: &mut self.input,
+                flags: message_flags,
+            }),
+            timers: Some(&mut self.timers),
+            flags: Some(&mut self.message_flags),
+            random: Some(&mut self.random),
+            settings: Some(&mut self.settings),
+            history: Some(&mut self.history),
+            strings: true,
+            math: true,
+            gesture: Some(&mut self.gesture),
+            popup: Some(&mut self.save_menu),
+            save_title: Some(&mut self.save_title),
+            save_info: Some(&mut self.save_info),
+            effects: Some(&mut self.effects),
+            effect_objects: true,
+        };
+        if crate::dispatch::uses_images(command) {
+            hosts.images = Some(crate::dispatch::ImageHosts {
+                scene: &mut self.scene,
+                source: &mut image_source,
+                change_images: true,
+            });
+        } else {
+            hosts.scene = Some(&mut self.scene);
+        }
+        if let Some(flow) = crate::dispatch::run(resolved.semantics, &mut self.machine, &mut hosts)?
+        {
             return Ok(match flow {
                 crate::dispatch::Flow::Done => StartupEvent::Progress,
                 crate::dispatch::Flow::Yield | crate::dispatch::Flow::Wait => {
@@ -905,7 +911,6 @@ impl<'a> Startup<'a> {
                 self.snapshot_policy == SnapshotPolicy::ContinueWithoutImage,
             )?
             || self.bootstrap.try_handle(&mut self.machine)?.is_some()
-            || self.scene.try_handle(&mut self.machine)?
             || self.scene.try_handle_quake(&mut self.machine)?
             || self.scene.try_handle_strip(&mut self.machine)?
             || self.gesture.try_handle_drag_press(
@@ -972,7 +977,6 @@ impl<'a> Startup<'a> {
                 &mut self.images.with_paths(self.bootstrap.paths()),
                 &mut self.camera,
             )?
-            || self.camera.try_handle(&mut self.machine)?
             || self
                 .capture
                 .try_handle(&mut self.machine, &mut self.scene)?

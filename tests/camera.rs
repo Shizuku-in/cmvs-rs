@@ -1,8 +1,11 @@
+#[path = "support/shared_state.rs"]
+mod shared_state;
 use cmvs_rs::{
     camera::CameraHost,
     machine::{Machine, Step},
     ps3::Script,
 };
+use shared_state::SharedState;
 
 fn script(code: &[u8]) -> Script {
     let mut payload = 0u32.to_le_bytes().to_vec();
@@ -43,7 +46,7 @@ fn ending_without_a_running_move_only_pops_the_argument() {
         vm.state_mut().set_system_integer(0, 4).unwrap();
         let mut camera = CameraHost::default();
         pending(&mut vm);
-        assert!(camera.try_handle(&mut vm).unwrap());
+        assert!(camera.shared_state(&mut vm).unwrap());
         assert_eq!((vm.pc(), vm.stack().len_bytes()), (code.len(), 0));
         assert_eq!(vm.state().system_integer(0), Some(4));
         assert!(!camera.moving());
@@ -55,7 +58,7 @@ fn a_missing_argument_keeps_the_command_pending() {
     let script = script(&0x2068u16.to_le_bytes());
     let mut vm = Machine::new(&script).unwrap();
     pending(&mut vm);
-    assert!(CameraHost::default().try_handle(&mut vm).is_err());
+    assert!(CameraHost::default().shared_state(&mut vm).is_err());
     assert_eq!(vm.pending_system().map(|p| p.1), Some(0x68));
 }
 
@@ -96,7 +99,7 @@ fn independent_view_setters_preserve_float_bits_other_axes_and_screen_cameras() 
     vm.state_mut().set_system_integer(0, 123).unwrap();
     for _ in 0..5 {
         pending(&mut vm);
-        assert!(host.try_handle(&mut vm).unwrap());
+        assert!(host.shared_state(&mut vm).unwrap());
     }
     assert_eq!(host.view(0).unwrap().words, values);
     assert_eq!(host.view(1), Some(&other));
@@ -116,7 +119,7 @@ fn incomplete_view_pose_does_not_commit_a_partial_xyz() {
     let before = host.view(0).unwrap().clone();
     pending(&mut vm);
     for _ in 0..2 {
-        assert!(host.try_handle(&mut vm).is_err());
+        assert!(host.shared_state(&mut vm).is_err());
         assert_eq!(host.view(0), Some(&before));
         assert_eq!(vm.stack().len_bytes(), 8);
     }
@@ -156,7 +159,7 @@ fn indexed_and_camera0_setters_write_their_fields() {
     let mut host = CameraHost::default();
     for _ in 0..11 {
         pending(&mut vm);
-        assert!(host.try_handle(&mut vm).unwrap());
+        assert!(host.shared_state(&mut vm).unwrap());
     }
     assert_eq!(vm.stack().len_bytes(), 0);
     let c = host.camera(1).unwrap();
@@ -188,7 +191,7 @@ fn bad_indices_and_short_stacks_keep_the_command_pending() {
         pending(&mut vm);
         let mut host = CameraHost::default();
         let bytes = vm.stack().len_bytes();
-        assert!(host.try_handle(&mut vm).is_err());
+        assert!(host.shared_state(&mut vm).is_err());
         assert_eq!(vm.stack().len_bytes(), bytes);
         assert_eq!(host.camera(0), Some(&Default::default()));
     }
@@ -202,7 +205,7 @@ fn integer_at_152_is_set_by_0x209c() {
     let mut vm = Machine::new(&script).unwrap();
     let mut host = CameraHost::default();
     pending(&mut vm);
-    assert!(host.try_handle(&mut vm).unwrap());
+    assert!(host.shared_state(&mut vm).unwrap());
     assert_eq!(host.camera(1).unwrap().words[38], 7);
     assert_eq!(vm.stack().len_bytes(), 0);
 }
@@ -229,13 +232,13 @@ fn projection_query_without_perspective_truncates_xyz_and_preserves_other_result
             let mut vm = Machine::new(&program).unwrap();
             let mut host = CameraHost::default();
             pending(&mut vm);
-            host.try_handle(&mut vm).unwrap();
+            host.shared_state(&mut vm).unwrap();
             let before = host.camera(1).unwrap().clone();
             for i in 0..7 {
                 vm.state_mut().set_system_integer(i, 100 + i).unwrap();
             }
             pending(&mut vm);
-            assert!(host.try_handle(&mut vm).unwrap());
+            assert!(host.shared_state(&mut vm).unwrap());
             let expected = if point[0] == f(12.75) {
                 [12, -9, 0]
             } else {
@@ -287,12 +290,12 @@ fn perspective_query_uses_selected_camera_position_scale_and_reference_depth() {
     let mut host = CameraHost::default();
     for _ in 0..6 {
         pending(&mut vm);
-        host.try_handle(&mut vm).unwrap();
+        host.shared_state(&mut vm).unwrap();
     }
     let before = host.camera(1).unwrap().clone();
     for _ in 0..3 {
         pending(&mut vm);
-        host.try_handle(&mut vm).unwrap();
+        host.shared_state(&mut vm).unwrap();
         // Relative depth 20, ratio 2, horizontal/vertical scale 25/100.
         assert_eq!(
             [1, 2, 3].map(|i| vm.state().system_integer(i)),
@@ -303,7 +306,7 @@ fn perspective_query_uses_selected_camera_position_scale_and_reference_depth() {
         assert_eq!(vm.stack().len_bytes(), 0);
     }
     pending(&mut vm);
-    host.try_handle(&mut vm).unwrap();
+    host.shared_state(&mut vm).unwrap();
     assert_eq!(
         [1, 2, 3].map(|i| vm.state().system_integer(i)),
         [Some(i32::MIN as u32), Some(i32::MIN as u32), Some(0)]
@@ -332,7 +335,7 @@ fn projection_query_errors_keep_camera_stack_results_and_pending_command() {
             .map(|i| vm.stack().peek_u32(i * 4).unwrap())
             .collect();
         for _ in 0..2 {
-            assert!(host.try_handle(&mut vm).is_err());
+            assert!(host.shared_state(&mut vm).is_err());
             assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x56)));
             assert_eq!(vm.pc(), code.len() - 2);
             assert_eq!(vm.stack().len_bytes(), before.len() * 4);
@@ -362,12 +365,12 @@ fn camera_move_query_has_no_parameters_and_preserves_stack_cameras_and_other_res
         let program = script(&code);
         let mut vm = Machine::new(&program).unwrap();
         let mut host = CameraHost::default();
-        assert!(!host.try_handle(&mut vm).unwrap());
+        assert!(!host.shared_state(&mut vm).unwrap());
         for i in 0..7 {
             vm.state_mut().set_system_integer(i, 100 + i).unwrap();
         }
         pending(&mut vm);
-        assert!(host.try_handle(&mut vm).unwrap());
+        assert!(host.shared_state(&mut vm).unwrap());
         assert_eq!(vm.state().system_integer(0), Some(0));
         for i in 1..7 {
             assert_eq!(vm.state().system_integer(i), Some(100 + i));
@@ -403,7 +406,7 @@ fn device_size_query_writes_results_one_and_two_without_popping() {
         vm.state_mut().set_system_integer(i, 100 + i).unwrap();
     }
     pending(&mut vm);
-    assert!(host.try_handle(&mut vm).unwrap());
+    assert!(host.shared_state(&mut vm).unwrap());
     let results: Vec<_> = (0..7).map(|i| vm.state().system_integer(i)).collect();
     assert_eq!(
         results,
@@ -451,14 +454,14 @@ fn camera_motion_axes_quantization_queries_and_unclamped_time_match_original() {
         let mut host = CameraHost::default();
         vm.state_mut().set_system_integer(1, 123).unwrap();
         pending(&mut vm);
-        host.try_handle(&mut vm).unwrap();
+        host.shared_state(&mut vm).unwrap();
         assert!(host.moving());
         assert_eq!(move_xyz(&host), [0.0, 3.0, 0.0], "starting does not move");
         host.advance_frame(delta);
         assert_eq!(move_xyz(&host), expected);
         let before = host.camera(0).unwrap().clone();
         pending(&mut vm);
-        host.try_handle(&mut vm).unwrap();
+        host.shared_state(&mut vm).unwrap();
         assert_eq!(vm.state().system_integer(0), Some(1));
         assert_eq!(host.camera(0), Some(&before));
         host.advance_frame(400 - delta);
@@ -468,7 +471,7 @@ fn camera_motion_axes_quantization_queries_and_unclamped_time_match_original() {
             move_xyz(&host)
         );
         pending(&mut vm);
-        host.try_handle(&mut vm).unwrap();
+        host.shared_state(&mut vm).unwrap();
         assert_eq!(vm.state().system_integer(0), Some(0));
         assert_eq!(vm.state().system_integer(1), Some(123));
         assert_eq!((vm.pc(), vm.stack().len_bytes()), (code.len(), 0));
@@ -488,18 +491,18 @@ fn camera_motion_restarts_from_current_position_and_stop_selects_cancel_or_finis
         let mut vm = Machine::new(&program).unwrap();
         let mut host = CameraHost::default();
         pending(&mut vm);
-        host.try_handle(&mut vm).unwrap();
+        host.shared_state(&mut vm).unwrap();
         host.advance_frame(200);
         assert_eq!(move_xyz(&host), [5.0, 8.0, 5.0]);
         pending(&mut vm);
-        host.try_handle(&mut vm).unwrap();
+        host.shared_state(&mut vm).unwrap();
         let camera = host.camera(0).unwrap();
         assert_eq!([30, 31, 32].map(|i| camera.float(i)), [5.0, 8.0, 5.0]);
         assert_eq!(camera.float(23), 20.12);
         host.advance_frame(100);
         let current = move_xyz(&host);
         pending(&mut vm);
-        host.try_handle(&mut vm).unwrap();
+        host.shared_state(&mut vm).unwrap();
         let expected = if finish == 0 {
             current
         } else {
@@ -510,7 +513,7 @@ fn camera_motion_restarts_from_current_position_and_stop_selects_cancel_or_finis
         host.advance_frame(1000);
         assert_eq!(move_xyz(&host), expected);
         pending(&mut vm);
-        host.try_handle(&mut vm).unwrap();
+        host.shared_state(&mut vm).unwrap();
         assert!(host.moving());
         assert_eq!(
             move_xyz(&host),
@@ -548,13 +551,13 @@ fn projection_during_camera_motion_distinguishes_current_and_target_positions() 
     let mut host = CameraHost::default();
     for _ in 0..6 {
         pending(&mut vm);
-        host.try_handle(&mut vm).unwrap();
+        host.shared_state(&mut vm).unwrap();
     }
     host.advance_frame(200);
     assert_eq!(move_xyz(&host), [4.0, 4.0, 6.0]);
     for expected in [[1140, 1028, 0], [1025, 1362, 0]] {
         pending(&mut vm);
-        host.try_handle(&mut vm).unwrap();
+        host.shared_state(&mut vm).unwrap();
         assert_eq!(
             [1, 2, 3].map(|i| vm.state().system_integer(i)),
             expected.map(Some)
@@ -573,7 +576,7 @@ fn camera_motion_wait_natural_finish_and_skip_follow_input_short_circuit_rules()
         let mut vm = Machine::new(&program).unwrap();
         let mut host = CameraHost::default();
         pending(&mut vm);
-        host.try_handle(&mut vm).unwrap();
+        host.shared_state(&mut vm).unwrap();
         pending(&mut vm);
         let pc = vm.pc();
         let mut input = ActionInput::default();
@@ -638,7 +641,7 @@ fn camera_motion_bad_mode_or_short_parameters_preserve_active_move_stack_and_res
         let mut vm = Machine::new(&program).unwrap();
         let mut host = CameraHost::default();
         pending(&mut vm);
-        host.try_handle(&mut vm).unwrap();
+        host.shared_state(&mut vm).unwrap();
         host.advance_frame(100);
         let expected = host.camera(0).unwrap().clone();
         pending(&mut vm);
@@ -653,7 +656,7 @@ fn camera_motion_bad_mode_or_short_parameters_preserve_active_move_stack_and_res
                         .is_err()
                 );
             } else {
-                assert!(host.try_handle(&mut vm).is_err());
+                assert!(host.shared_state(&mut vm).is_err());
             }
             assert_eq!(host.camera(0), Some(&expected));
             assert_eq!(input, before_input);

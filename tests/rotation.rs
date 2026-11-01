@@ -1,3 +1,6 @@
+#[path = "support/shared_state.rs"]
+mod shared_state;
+use shared_state::SharedState;
 mod support;
 use cmvs_rs::{
     machine::Machine,
@@ -7,7 +10,7 @@ use support::bytecode::{command, pending, script};
 fn run(vm: &mut Machine<'_>, scene: &mut SceneHost, count: usize) {
     for _ in 0..count {
         pending(vm);
-        assert!(scene.try_handle(vm).unwrap());
+        assert!(scene.shared_state(vm).unwrap());
     }
 }
 fn setup(code: &mut Vec<u8>, base: i32) {
@@ -105,7 +108,7 @@ fn invalid_keys_modes_and_zero_sine_period_keep_pending_command_and_scene() {
         let before = scene.object(20).unwrap().clone();
         let pc = vm.pc();
         let sp = vm.stack().len_bytes();
-        assert!(scene.try_handle(&mut vm).is_err());
+        assert!(scene.shared_state(&mut vm).is_err());
         assert_eq!(scene.object(20).unwrap(), &before);
         assert_eq!((vm.pc(), vm.stack().len_bytes()), (pc, sp));
         assert!(vm.pending_system().is_some());
