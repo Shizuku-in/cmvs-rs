@@ -139,12 +139,12 @@ fn mcu(dcs: [i32; 6]) -> Vec<(i32, Vec<Ac>)> {
     dcs.iter().map(|&dc| (dc, Vec::new())).collect()
 }
 
-/// Wraps JBP1 data (and an optional alpha run stream) in a PB3B type 3 file.
-fn pb3_file(width: u16, height: u16, bpp: u16, jbp: &[u8], alpha: &[u8]) -> Vec<u8> {
+/// Wraps JBP1 data (and an optional alpha run stream) in a PB3B type 2/3 file.
+fn pb3_file(kind: u16, width: u16, height: u16, bpp: u16, jbp: &[u8], alpha: &[u8]) -> Vec<u8> {
     let mut b = vec![0u8; 52];
     b[..4].copy_from_slice(b"PB3B");
     b[8] = 1;
-    b[28..30].copy_from_slice(&3u16.to_le_bytes());
+    b[28..30].copy_from_slice(&kind.to_le_bytes());
     b[30..32].copy_from_slice(&width.to_le_bytes());
     b[32..34].copy_from_slice(&height.to_le_bytes());
     b[34..36].copy_from_slice(&bpp.to_le_bytes());
@@ -211,42 +211,44 @@ fn one_horizontal_coefficient_gives_the_first_cosine_row() {
 }
 
 #[test]
-fn pb3_type3_crops_padded_rows_and_fills_alpha() {
-    // 20x10 needs two 16x16 MCUs: left luma level 10, right level -20.
-    let mut blocks = mcu([80, 80, 80, 80, 0, 0]);
-    blocks.extend(mcu([-160, -160, -160, -160, 0, 0]));
-    let jbp = stream(20, 10, &blocks, FLAGS);
-    let rgba = pb3::decode(&pb3_file(20, 10, 24, &jbp, &[])).unwrap();
-    assert_eq!((rgba.width(), rgba.height()), (20, 10));
-    let pixels = rgba.pixels();
-    for y in 0..10 {
-        for x in 0..20 {
-            let level = if x < 16 { 138 } else { 108 };
-            assert_eq!(
-                pixels[(y * 20 + x) * 4..][..4],
-                [level, level, level, 255],
-                "{x},{y}"
-            );
+fn pb3_types2_and3_crop_padded_rows_and_fill_alpha() {
+    for kind in [2, 3] {
+        // 20x10 needs two 16x16 MCUs: left luma level 10, right level -20.
+        let mut blocks = mcu([80, 80, 80, 80, 0, 0]);
+        blocks.extend(mcu([-160, -160, -160, -160, 0, 0]));
+        let jbp = stream(20, 10, &blocks, FLAGS);
+        let rgba = pb3::decode(&pb3_file(kind, 20, 10, 24, &jbp, &[])).unwrap();
+        assert_eq!((rgba.width(), rgba.height()), (20, 10));
+        let pixels = rgba.pixels();
+        for y in 0..10 {
+            for x in 0..20 {
+                let level = if x < 16 { 138 } else { 108 };
+                assert_eq!(
+                    pixels[(y * 20 + x) * 4..][..4],
+                    [level, level, level, 255],
+                    "{x},{y}"
+                );
+            }
         }
+        // 32 bits: alpha runs of 0xff/0x00 with counts and stand-alone literals.
+        let mut alpha = vec![0xff, 150, 0x40, 0x00, 48, 0x80];
+        let decoded = image::decode(&pb3_file(kind, 20, 10, 32, &jbp, &alpha))
+            .unwrap()
+            .unwrap();
+        assert!(decoded.alpha);
+        let a: Vec<u8> = decoded.pixels.pixels()[3..]
+            .iter()
+            .step_by(4)
+            .copied()
+            .collect();
+        assert_eq!(a[..150], [0xff; 150]);
+        assert_eq!(a[150], 0x40);
+        assert_eq!(a[151..199], [0; 48]);
+        assert_eq!(a[199], 0x80);
+        // A run past the last pixel is rejected: 150 + 1 + 50 covers 201 of 200 pixels.
+        alpha[4] = 50;
+        assert!(pb3::decode(&pb3_file(kind, 20, 10, 32, &jbp, &alpha)).is_err());
     }
-    // 32 bits: alpha runs of 0xff/0x00 with counts and stand-alone literals.
-    let mut alpha = vec![0xff, 150, 0x40, 0x00, 48, 0x80];
-    let decoded = image::decode(&pb3_file(20, 10, 32, &jbp, &alpha))
-        .unwrap()
-        .unwrap();
-    assert!(decoded.alpha);
-    let a: Vec<u8> = decoded.pixels.pixels()[3..]
-        .iter()
-        .step_by(4)
-        .copied()
-        .collect();
-    assert_eq!(a[..150], [0xff; 150]);
-    assert_eq!(a[150], 0x40);
-    assert_eq!(a[151..199], [0; 48]);
-    assert_eq!(a[199], 0x80);
-    // A run past the last pixel is rejected: 150 + 1 + 50 covers 201 of 200 pixels.
-    alpha[4] = 50;
-    assert!(pb3::decode(&pb3_file(20, 10, 32, &jbp, &alpha)).is_err());
 }
 
 #[test]
@@ -270,5 +272,9 @@ fn malformed_streams_are_rejected() {
     long[44 + 128 + 1] = 63;
     assert!(jbp1::decode(&long).is_err());
     // PB3 and JBP1 sizes must agree.
-    assert!(pb3::decode(&pb3_file(16, 15, 24, &good, &[])).is_err());
+    for kind in [2, 3] {
+        assert!(pb3::decode(&pb3_file(kind, 16, 15, 24, &good, &[])).is_err());
+        assert!(pb3::decode(&pb3_file(kind, 16, 16, 8, &good, &[])).is_err());
+        assert!(pb3::decode(&pb3_file(kind, 16, 16, 32, &good, &[255])).is_err());
+    }
 }

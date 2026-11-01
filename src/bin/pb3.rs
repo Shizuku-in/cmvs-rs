@@ -9,7 +9,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = env::args_os().skip(1).collect();
     if args.len() == 1 && args[0] == "--help" {
         println!(
-            "Usage: cmvs-pb3 <file.pb3> [--rgba <new-output-file>]\nMetadata mode only parses the header. RGBA export supports PB3B type 1, 24/32-bit. Top-down straight RGBA; no VM draw commands or checksum verification."
+            "Usage: cmvs-pb3 <file.pb3> [--rgba <new-output-file>]\nMetadata mode only parses the header. RGBA export supports standalone PB3B types 1/2/3/5. Top-down straight RGBA; no VM draw commands or checksum verification."
         );
         return Ok(());
     }

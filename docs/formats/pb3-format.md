@@ -1,8 +1,8 @@
-# PB3B type 1、type 3 JBP1 与 type 5/6 参考图像
+# PB3B type 1、type 2/3 JBP1 与 type 5/6 参考图像
 
 > 本文描述已核对的实现分支，真实样本与历史验证来自[《アマツツミ》](../games/amatsutsumi/README.md)。其他游戏或引擎版本需单独验证；下文历史停点不代表最新完成度。
 
-当前实现 type 1（24/32 位）、type 3（JBP1）、type 5（32 位通道差分）与带资源上下文的 type 6（参考底图上的块替换）。type 2/4/7/8 与其他 codec 仍明确报未支持；各类型边界和验证范围见下文。
+当前实现 type 1（24/32 位）、type 2/3（JBP1）、type 5（32 位通道差分）与带资源上下文的 type 6（参考底图上的块替换）。type 4/7/8 与其他 codec 仍明确报未支持；各类型边界和验证范围见下文。
 参考固定 MIT 提交 a6bc9501d82264e228943f894af1b969ab98bee5 的 PB3B.cpp、CPB.cpp，
 结合 research.md 指定哈希版本的 0x140036ae0、0x1400a0230 进行核对。
 
@@ -92,3 +92,9 @@ types 5/6 只提供流起点，按声明输出长度停止；尾部密钥取样�
 - st-coc_a107（同尺寸）RGBA SHA-256：`36bc38bbfdef20455024940f70fd9bdd32d44a511277314454f2af89bf73edb6`。
 - 新增 9 项合成集成测试：差分回绕/跨行、BGRA/alpha、边缘裁切、掩码跨行/字节、坏流/偏移/名称、嵌套/循环/深度/字节预算、删除底图及更改注册路径后的缓存复用、失败时 VM 的 PC/SP/结果/旧图像保留。另 1 项 core 单元测试核对递归提交与 LRU 顺序。默认 429 项、全功能 450 项通过，另 1 项硬件测试默认忽略；fmt 和两组严格 Clippy 通过。无新依赖。
 - release 核心以显式 skip-auto-resume、文字/音频记录、种子 0、16ms 和 65 次点击重放：鼠标 481970 步、Enter 482010 步均越过原加载屏障，停于 **sn1001.ps3 / PC=0x1f98c / 未处理命令 0x2056 / SP=80**。模式 2 投影绘制仍未实现，本轮不是原生窗口完整呈现验证。原游戏及存档只读。
+
+## Type 2：复用JBP1路径（2026-11-02）
+
+[Aoitori](../games/aoitori/README.md) 的 `bg300c2.pb3` 为1280×1024、32位type 2，JBP1 flags仍为 `0x58c00002`。只读核对该档案x64：`0x14003b0b0` 的case 2/3共同调用 `0x1400a76f0`，再经 `0x1400bb010` 解码JBP1；裁剪、24位补alpha及32位alpha游程与既有路径相同。因此开放共享type 2分派，不改变熵解码、IDCT、颜色转换或参考图像流程；此前type 2未支持的记录为历史范围。仍只接受已验证的JBP1 flags。
+
+实图输入SHA-256 `c9d3e69f9d8cc43b209e0293c514a2b393ab9aef3baefe9827e00f3b78e7a040`，RGBA `44fb69fd734c530651a7a24f12a10dabcc78309b271ee99b73a062e5651eb8c6`。从文件偏移70768独立解析22277字节alpha流，1,310,720个alpha与Rust输出逐字节一致；这不等于独立验证全部RGB像素。现有JBP1用例扩展到type 2/3，覆盖裁剪、24/32位、alpha游程及坏尺寸/位深/截断；未新增测试文件。只读证据 `local/aoitori/pb3-type2-x64.json` SHA-256 `dda3b6b9d3e7b95114a276cf47f11898e0eb90b4a9fea0d48fd4df26362793a8`，原始资源、解码预览及独立alpha结果留在 `local/aoitori/`。

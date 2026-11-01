@@ -1,4 +1,4 @@
-//! PB3B header, types 1/3/5 and contextual type-6 replacement blocks. Other codecs are
+//! PB3B header, types 1/2/3/5 and contextual type-6 replacement blocks. Other codecs are
 //! explicitly unsupported. Format reference: pinned MIT CMVS-Engine PB3B.cpp/CPB.cpp/JBP1.cpp;
 //! checked against current IDA.
 use crate::{FormatError, MAX_PAYLOAD, jbp1, raster::RgbaImage};
@@ -258,14 +258,14 @@ pub fn decode_with_base(raw: &[u8], base: RgbaImage) -> Result<RgbaImage, Format
     RgbaImage::new(u32::from(h.width), u32::from(h.height), pixels)
 }
 
-/// 0x1400a0700 for type 3: JBP1 data at offset 52 decodes to padded samples, rows are
+/// 0x1400a0700 for types 2/3: JBP1 data at offset 52 decodes to padded samples, rows are
 /// cropped to the PB3 width, and alpha is 255 for 24 bits or run-length coded at the +44
 /// offset for 32 bits: 0x00/0xff bytes are followed by a repeat count, others stand alone.
 /// The original does not stop a run at the last pixel; Rust rejects such runs. The JBP1
 /// size must match the PB3 size, which the original uses unchecked for cropping.
 fn decode_jbp1(raw: &[u8], h: &Header) -> Result<RgbaImage, FormatError> {
     if !matches!(h.bpp, 24 | 32) {
-        return Err(FormatError("invalid PB3 type-3 bit depth"));
+        return Err(FormatError("invalid PB3 JBP1 bit depth"));
     }
     let image = jbp1::decode(&raw[52..])?;
     if image.width != h.width || image.height != h.height {
@@ -288,11 +288,11 @@ fn decode_jbp1(raw: &[u8], h: &Header) -> Result<RgbaImage, FormatError> {
         while pixel < width * height {
             let value = *raw
                 .get(at)
-                .ok_or(FormatError("truncated PB3 type-3 alpha runs"))?;
+                .ok_or(FormatError("truncated PB3 JBP1 alpha runs"))?;
             let count = if matches!(value, 0 | 255) {
                 let count = *raw
                     .get(at + 1)
-                    .ok_or(FormatError("truncated PB3 type-3 alpha runs"))?;
+                    .ok_or(FormatError("truncated PB3 JBP1 alpha runs"))?;
                 at += 2;
                 usize::from(count)
             } else {
@@ -300,7 +300,7 @@ fn decode_jbp1(raw: &[u8], h: &Header) -> Result<RgbaImage, FormatError> {
                 1
             };
             if count > width * height - pixel {
-                return Err(FormatError("PB3 type-3 alpha run passes the last pixel"));
+                return Err(FormatError("PB3 JBP1 alpha run passes the last pixel"));
             }
             for alpha in pixels[pixel * 4 + 3..(pixel + count) * 4]
                 .iter_mut()
@@ -316,7 +316,7 @@ fn decode_jbp1(raw: &[u8], h: &Header) -> Result<RgbaImage, FormatError> {
 
 pub fn decode(raw: &[u8]) -> Result<RgbaImage, FormatError> {
     let h = Header::parse(raw)?;
-    if h.kind == 3 {
+    if matches!(h.kind, 2 | 3) {
         return decode_jbp1(raw, &h);
     }
     if h.kind == 5 {
@@ -327,7 +327,7 @@ pub fn decode(raw: &[u8]) -> Result<RgbaImage, FormatError> {
     }
     if h.kind != 1 {
         return Err(FormatError(
-            "PB3 codec not implemented; standalone types 1, 3 and 5 are supported",
+            "PB3 codec not implemented; standalone types 1, 2, 3 and 5 are supported",
         ));
     }
     if !matches!(h.bpp, 24 | 32) || h.block == 0 {

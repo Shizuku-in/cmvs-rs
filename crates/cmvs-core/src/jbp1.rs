@@ -1,4 +1,4 @@
-//! Bounded JBP1 decoder for PB3B type 3; addresses refer to the documented cmvs64.exe hash.
+//! Bounded JBP1 decoder for PB3B types 2/3; addresses refer to the documented cmvs64.exe hash.
 //! 0x1400a0ad0 reads the header, 0x1400b4020 the trees, streams and MCU layout,
 //! 0x1400b3c80 dequantizes and runs the scalar integer IDCT, and the 768-byte table at
 //! 0x1400e47b0 clamps the color conversion. Entropy coding is shared with JBPD.
