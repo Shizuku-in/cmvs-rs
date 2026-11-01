@@ -402,7 +402,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 history: platform_assets.is_some().then_some(&mut history),
                 strings: platform_assets.is_some(),
                 gesture: platform_assets.is_some().then_some(&mut gesture),
-                popup: platform_assets.is_some().then_some(&mut save_menu),
+                popup: None,
                 save_title: platform_assets.is_some().then_some(&mut save_title),
                 effect_objects: platform_assets.is_some(),
                 ..Default::default()
@@ -467,6 +467,28 @@ fn run() -> Result<(), Box<dyn Error>> {
                     });
                 }
             }
+            hosts.system_read =
+                system_source
+                    .as_mut()
+                    .map(|source| cmvs_rs::dispatch::SystemReadHosts {
+                        host: &mut system_host,
+                        source,
+                        game_id: bootstrap
+                            .as_ref()
+                            .and_then(|host| host.settings().get(&0x201d).copied()),
+                    });
+            hosts.scripts = script_source
+                .as_mut()
+                .map(|source| cmvs_rs::dispatch::ScriptHosts {
+                    host: &mut control,
+                    source,
+                });
+            hosts.save_source = saves
+                .as_mut()
+                .map(|source| source as &mut dyn cmvs_rs::save_menu::SaveSource);
+            if hosts.save_source.is_some() || platform_assets.is_some() {
+                hosts.popup = Some(&mut save_menu);
+            }
             let previous = platform_backend.requests().len();
             if let Some(assets) = &mut platform_assets {
                 hosts.platform = Some(cmvs_rs::dispatch::PlatformHosts {
@@ -481,6 +503,49 @@ fn run() -> Result<(), Box<dyn Error>> {
             }
             let dispatched = cmvs_rs::dispatch::run(resolved.semantics, &mut machine, &mut hosts)?;
 
+            if let Some(cmvs_rs::dispatch::Flow::SystemSave(event)) = dispatched {
+                println!(
+                    "# system save {event:?}; known integers={} known bits={}",
+                    machine.state().integers().len(),
+                    machine.state().bits().len()
+                );
+                continue;
+            }
+            if let Some(cmvs_rs::dispatch::Flow::Control(event)) = dispatched {
+                println!(
+                    "# script control 0x{:04x}: {event:?}; slot={} script={} pc=0x{:x} callbacks={}",
+                    command + 0x2000,
+                    machine.current_slot(),
+                    machine.current_name().escape_ascii(),
+                    machine.pc(),
+                    control.callbacks().len()
+                );
+                if event == ControlEvent::MainPreparedNeedsSnapshot && continue_without_snapshot {
+                    save_image.capture_unavailable(&mut machine)?;
+                    println!(
+                        "# main snapshot NOT built; bit[0] cleared as in original; save image unavailable from {}:0x{:x}",
+                        machine.current_name().escape_ascii(),
+                        machine.pc()
+                    );
+                    continue;
+                }
+                if event == ControlEvent::MainPreparedNeedsSnapshot {
+                    println!(
+                        "# STOP main context prepared; original engine snapshot still requires a host implementation"
+                    );
+                    for (slot, name) in machine.loaded_names() {
+                        println!("# loaded[{slot}]={}", name.escape_ascii());
+                    }
+                    println!(
+                        "# known integers={} known bits={} stack_bytes={}",
+                        machine.state().integers().len(),
+                        machine.state().bits().len(),
+                        machine.stack().len_bytes()
+                    );
+                    return Ok(());
+                }
+                continue;
+            }
             if let Some(cmvs_rs::dispatch::Flow::Platform(event)) = dispatched {
                 println!(
                     "# platform recording 0x{:04x} {event:?}; requests={} thumbnail={:?}",
@@ -812,6 +877,41 @@ fn run() -> Result<(), Box<dyn Error>> {
                             );
                         }
                     }
+                    Capability::SaveMenu => {
+                        println!(
+                            "# save menu applied 0x{:04x}; second_group_enabled={:?}",
+                            command + 0x2000,
+                            save_menu.second_group_enabled()
+                        );
+                        if command == 0x2bb {
+                            println!(
+                                "# save signature result={:?}; signature recognition only, no snapshot restoration",
+                                machine.state().system_integer(0)
+                            );
+                        } else if command == 0x2b3 {
+                            let menu = save_menu.menu().expect("completed scan");
+                            println!(
+                                "# save slots={} latest={:?}; header recognition only, no snapshot restoration",
+                                menu.slots.len(),
+                                menu.latest
+                            );
+                            for (slot, status) in menu.slots.iter().enumerate() {
+                                match status {
+                                    SlotStatus::Recognized(header) => println!(
+                                        "# save[{slot:03}] label={} key=0x{:08x}",
+                                        header.label.escape_ascii(),
+                                        header.ordering_key
+                                    ),
+                                    other => println!("# save[{slot:03}]={other:?}"),
+                                }
+                            }
+                        }
+                    }
+                    Capability::ScriptControl
+                    | Capability::SystemRead
+                    | Capability::SystemWrite => {
+                        return Err("unexpected storage completion flow".into());
+                    }
                     Capability::Timers => println!(
                         "# timer 0x{:04x}: values={:?} system_integer[0]={:?}",
                         command + 0x2000,
@@ -898,92 +998,6 @@ fn run() -> Result<(), Box<dyn Error>> {
                 println!(
                     "# scenario snapshot NOT built; bit[0] and repeat count cleared; save image unavailable: {save_image:?}"
                 );
-                continue;
-            }
-            if let Some(source) = &mut system_source {
-                let game_id = bootstrap
-                    .as_ref()
-                    .and_then(|host| host.settings().get(&0x201d).copied());
-                if let Some(event) = system_host.try_handle(&mut machine, source, game_id)? {
-                    println!(
-                        "# system save {event:?}; known integers={} known bits={}",
-                        machine.state().integers().len(),
-                        machine.state().bits().len()
-                    );
-                    continue;
-                }
-            }
-            let control_event = if let Some(source) = &mut script_source {
-                control.try_handle(&mut machine, source)?
-            } else {
-                None
-            };
-            if let Some(event) = control_event {
-                println!(
-                    "# script control 0x{:04x}: {event:?}; slot={} script={} pc=0x{:x} callbacks={}",
-                    command + 0x2000,
-                    machine.current_slot(),
-                    machine.current_name().escape_ascii(),
-                    machine.pc(),
-                    control.callbacks().len()
-                );
-                if event == ControlEvent::MainPreparedNeedsSnapshot && continue_without_snapshot {
-                    save_image.capture_unavailable(&mut machine)?;
-                    println!(
-                        "# main snapshot NOT built; bit[0] cleared as in original; save image unavailable from {}:0x{:x}",
-                        machine.current_name().escape_ascii(),
-                        machine.pc()
-                    );
-                    continue;
-                }
-                if event == ControlEvent::MainPreparedNeedsSnapshot {
-                    println!(
-                        "# STOP main context prepared; original engine snapshot still requires a host implementation"
-                    );
-                    for (slot, name) in machine.loaded_names() {
-                        println!("# loaded[{slot}]={}", name.escape_ascii());
-                    }
-                    println!(
-                        "# known integers={} known bits={} stack_bytes={}",
-                        machine.state().integers().len(),
-                        machine.state().bits().len(),
-                        machine.stack().len_bytes()
-                    );
-                    return Ok(());
-                }
-                continue;
-            }
-            if let Some(source) = &mut saves
-                && save_menu.try_handle(&mut machine, source)?
-            {
-                println!(
-                    "# save menu applied 0x{:04x}; second_group_enabled={:?}",
-                    command + 0x2000,
-                    save_menu.second_group_enabled()
-                );
-                if command == 0x2bb {
-                    println!(
-                        "# save signature result={:?}; signature recognition only, no snapshot restoration",
-                        machine.state().system_integer(0)
-                    );
-                } else if command == 0x2b3 {
-                    let menu = save_menu.menu().expect("completed scan");
-                    println!(
-                        "# save slots={} latest={:?}; header recognition only, no snapshot restoration",
-                        menu.slots.len(),
-                        menu.latest
-                    );
-                    for (slot, status) in menu.slots.iter().enumerate() {
-                        match status {
-                            SlotStatus::Recognized(header) => println!(
-                                "# save[{slot:03}] label={} key=0x{:08x}",
-                                header.label.escape_ascii(),
-                                header.ordering_key
-                            ),
-                            other => println!("# save[{slot:03}]={other:?}"),
-                        }
-                    }
-                }
                 continue;
             }
             if let Some(host) = &mut bootstrap {

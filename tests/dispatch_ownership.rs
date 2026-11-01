@@ -87,6 +87,10 @@ fn audit(handler: &str, mut probe: impl FnMut(&mut Machine<'_>) -> bool) {
             });
         }
         let capability = match handler {
+            "script_control::try_handle" => Some(Capability::ScriptControl),
+            "system_save::try_handle" => Some(Capability::SystemRead),
+            "system_save::try_write" => Some(Capability::SystemWrite),
+            "save_menu::try_handle" => Some(Capability::SaveMenu),
             "platform::try_handle" => Some(Capability::Platform),
             "capture::try_handle" => Some(Capability::Capture),
             "capture::try_immediate" => Some(Capability::CaptureDevice),
@@ -421,6 +425,22 @@ fn inventory_matches_wait_and_resource_host_recognition_exhaustively() {
                     source: &mut Unavailable,
                     change_images: true,
                 }),
+                scripts: Some(cmvs_rs::dispatch::ScriptHosts {
+                    host: &mut cmvs_rs::script_control::ScriptControl::new(0),
+                    source: &mut Unavailable,
+                }),
+                system_read: Some(cmvs_rs::dispatch::SystemReadHosts {
+                    host: &mut cmvs_rs::system_save::SystemSaveHost::default(),
+                    source: &mut Unavailable,
+                    game_id: None,
+                }),
+                system_write: Some(cmvs_rs::dispatch::SystemWriteHosts {
+                    host: &mut cmvs_rs::system_save::SystemSaveHost::default(),
+                    sink: &mut Unavailable,
+                    random: &mut cmvs_rs::random::CrtRandom::new(0),
+                    game_id: None,
+                }),
+                save_source: Some(&mut Unavailable),
                 bootstrap: Some(&mut cmvs_rs::bootstrap::Bootstrap::default()),
                 function_keys: Some(cmvs_rs::dispatch::FunctionKeys::Startup(
                     &mut cmvs_rs::bootstrap::Bootstrap::default(),

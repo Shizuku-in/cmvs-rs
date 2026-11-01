@@ -1,3 +1,5 @@
+#[path = "support/shared_storage.rs"]
+mod shared_storage;
 use cmvs_rs::{
     MAX_PAYLOAD,
     evaluate::State,
@@ -8,6 +10,7 @@ use cmvs_rs::{
         SystemSaveHost, SystemSaveSink, SystemSaveSource,
     },
 };
+use shared_storage::SharedSystem;
 use std::{fs, io, process::Command};
 
 #[test]
@@ -111,24 +114,24 @@ fn writer_failure_keeps_rng_vm_and_template_then_commits_exactly_four_draws() {
     let mut random = CrtRandom::new(19);
     let before = random.clone();
     assert!(
-        host.try_write(&mut vm, &mut sink, &mut random, Some(0x12345678))
+        host.shared_write(&mut vm, &mut sink, &mut random, Some(0x12345678))
             .is_err()
     );
     host.loaded = Some(template);
     assert!(
-        host.try_write(&mut vm, &mut sink, &mut random, Some(1))
+        host.shared_write(&mut vm, &mut sink, &mut random, Some(1))
             .is_err()
     );
     sink.fail = true;
     assert!(
-        host.try_write(&mut vm, &mut sink, &mut random, Some(0x12345678))
+        host.shared_write(&mut vm, &mut sink, &mut random, Some(0x12345678))
             .is_err()
     );
     assert_eq!(random, before);
     assert_eq!(vm.pending_system(), pending);
     assert!(sink.raw.is_empty());
     sink.fail = false;
-    host.try_write(&mut vm, &mut sink, &mut random, Some(0x12345678))
+    host.shared_write(&mut vm, &mut sink, &mut random, Some(0x12345678))
         .unwrap();
     let mut expected = before;
     for _ in 0..4 {
@@ -448,24 +451,24 @@ fn host_io_format_and_identifier_errors_leave_vm_and_lists_for_retry() {
     let mut vm = Machine::new(&script).unwrap();
     let mut source = Source::default();
     let mut host = SystemSaveHost::default();
-    assert_eq!(host.try_handle(&mut vm, &mut source, None).unwrap(), None);
+    assert_eq!(host.shared_read(&mut vm, &mut source, None).unwrap(), None);
     assert_eq!(source.calls, 0);
     assert!(matches!(
         vm.step().unwrap(),
         Step::System { command: 0x128, .. }
     ));
     source.fail = true;
-    assert!(host.try_handle(&mut vm, &mut source, None).is_err());
+    assert!(host.shared_read(&mut vm, &mut source, None).is_err());
     source.fail = false;
     source.raw = Some(vec![0; 360]);
-    assert!(host.try_handle(&mut vm, &mut source, None).is_err());
+    assert!(host.shared_read(&mut vm, &mut source, None).is_err());
     source.raw = Some(fixture(&body(), [0, 0]));
-    assert!(host.try_handle(&mut vm, &mut source, Some(1)).is_err());
+    assert!(host.shared_read(&mut vm, &mut source, Some(1)).is_err());
     assert_eq!(vm.pc(), 0);
     assert_eq!(vm.state().integer(2048), None);
     assert!(host.loaded.is_none());
     assert_eq!(
-        host.try_handle(&mut vm, &mut source, Some(0x12345678))
+        host.shared_read(&mut vm, &mut source, Some(0x12345678))
             .unwrap(),
         Some(SystemSaveEvent::Applied)
     );
@@ -483,20 +486,20 @@ fn missing_source_keeps_existing_state_and_zero_counts_keep_existing_lists() {
     let mut source = Source::default();
     vm.step().unwrap();
     assert_eq!(
-        host.try_handle(&mut vm, &mut source, None).unwrap(),
+        host.shared_read(&mut vm, &mut source, None).unwrap(),
         Some(SystemSaveEvent::Missing)
     );
     assert_eq!(vm.state().integer(2048), Some(123));
     host.lists[0] = Some(vec![b"old".to_vec()]);
     source.raw = Some(fixture(&body(), [0, 0]));
     vm.step().unwrap();
-    host.try_handle(&mut vm, &mut source, Some(0x12345678))
+    host.shared_read(&mut vm, &mut source, Some(0x12345678))
         .unwrap();
     assert_eq!(host.lists[0], Some(vec![b"old".to_vec()]));
     assert_eq!(host.lists[1], None);
     vm.step().unwrap();
     let calls = source.calls;
-    assert_eq!(host.try_handle(&mut vm, &mut source, None).unwrap(), None);
+    assert_eq!(host.shared_read(&mut vm, &mut source, None).unwrap(), None);
     assert_eq!(source.calls, calls);
 }
 
@@ -515,7 +518,7 @@ fn nonempty_list_replaces_only_its_corresponding_host_list() {
         lists: [Some(vec![b"kept".to_vec()]), Some(vec![b"old".to_vec()])],
         ..SystemSaveHost::default()
     };
-    host.try_handle(&mut vm, &mut source, Some(0x12345678))
+    host.shared_read(&mut vm, &mut source, Some(0x12345678))
         .unwrap();
     assert_eq!(
         host.lists,

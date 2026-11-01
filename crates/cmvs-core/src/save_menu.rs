@@ -1,9 +1,6 @@
 //! Read-only gameplay-save header scanning, signature queries and menu state.
 //! Header recognition does not validate or restore the saved engine snapshot.
-use crate::{
-    FormatError, bytecode::DecodeError, dispatch::Call, evaluate::error, machine::Machine,
-    vm::SystemResult,
-};
+use crate::{FormatError, bytecode::DecodeError, dispatch::Call, machine::Machine};
 use std::{
     error::Error,
     fs::File,
@@ -152,7 +149,7 @@ pub struct SaveMenu {
 }
 
 impl SaveMenu {
-    pub fn scan(source: &mut impl SaveSource, requested: i32) -> io::Result<Self> {
+    pub fn scan(source: &mut (impl SaveSource + ?Sized), requested: i32) -> io::Result<Self> {
         let count = if requested < 0 {
             10
         } else {
@@ -320,10 +317,25 @@ impl SaveMenuHost {
         if !matches!(command, 0x2b3 | 0x2b4 | 0x2bb) {
             return Ok(false);
         }
-        let argument = vm
-            .stack()
-            .peek_u32(4)
-            .map_err(|e| error(pc, command + 0x2000, e.0))?;
+        self.handle(&mut Call::new(vm, pc, command), source)?;
+        Ok(true)
+    }
+    pub(crate) fn handle(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        source: &mut dyn SaveSource,
+    ) -> Result<(), Box<dyn Error>> {
+        let command = call.command;
+        let argument = call.argument(
+            4,
+            if command == 0x2b3 {
+                "slot count"
+            } else if command == 0x2b4 {
+                "second group enabled"
+            } else {
+                "save slot"
+            },
+        )?;
         if command == 0x2bb {
             // 0x14007cb60 reads up to 64 bytes and tests only CSV[2-9]. Unlike the
             // menu scan, this accepts a signature without a valid date/label/body.
@@ -336,19 +348,20 @@ impl SaveMenuHost {
             } else {
                 false
             };
-            vm.complete_system(SystemResult(0x4004))?;
-            vm.state_mut()
+            call.complete(0x4004)?;
+            call.vm
+                .state_mut()
                 .set_system_integer(0, u32::from(recognized))
                 .expect("slot 0 exists");
         } else if command == 0x2b3 {
             let menu = SaveMenu::scan(source, argument as i32)?;
-            vm.complete_system(SystemResult(0x4004))?;
+            call.complete(0x4004)?;
             self.menu = Some(menu);
         } else {
-            vm.complete_system(SystemResult(0x4004))?;
+            call.complete(0x4004)?;
             self.second_group_enabled = Some(argument != 0);
         }
-        Ok(true)
+        Ok(())
     }
 }
 

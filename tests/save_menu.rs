@@ -1,8 +1,11 @@
+#[path = "support/shared_storage.rs"]
+mod shared_storage;
 use cmvs_rs::{
     machine::{Machine, Step},
     ps3::Script,
     save_menu::{DirectorySaves, SaveHeader, SaveMenu, SaveMenuHost, SaveSource, SlotStatus},
 };
+use shared_storage::SharedSaveMenu;
 use std::{collections::BTreeMap, io};
 
 fn header(version: u8, label: &[u8]) -> Vec<u8> {
@@ -157,11 +160,11 @@ fn commands_consume_parameters_toggle_and_preserve_unknown_commands() {
     let mut vm = Machine::new(&script).unwrap();
     let mut source = MemorySaves::default();
     let mut host = SaveMenuHost::default();
-    assert!(!host.try_handle(&mut vm, &mut source).unwrap());
+    assert!(!host.shared_menu(&mut vm, &mut source).unwrap());
     for enabled in [None, Some(false), Some(true)] {
         pending(&mut vm);
         let pc = vm.pc();
-        assert!(host.try_handle(&mut vm, &mut source).unwrap());
+        assert!(host.shared_menu(&mut vm, &mut source).unwrap());
         assert_eq!(vm.pc(), pc + 2);
         assert_eq!(vm.stack().len_bytes(), 0);
         assert_eq!(host.second_group_enabled(), enabled);
@@ -170,7 +173,7 @@ fn commands_consume_parameters_toggle_and_preserve_unknown_commands() {
     assert_eq!(source.calls, [0, 1]); // toggles perform no I/O
     pending(&mut vm);
     let before = vm.pending_system();
-    assert!(!host.try_handle(&mut vm, &mut source).unwrap());
+    assert!(!host.shared_menu(&mut vm, &mut source).unwrap());
     assert_eq!(vm.pending_system(), before);
 }
 
@@ -181,17 +184,17 @@ fn io_failure_keeps_previous_menu_and_pending_parameters_for_retry() {
     let mut source = MemorySaves::default();
     let mut host = SaveMenuHost::default();
     pending(&mut vm);
-    host.try_handle(&mut vm, &mut source).unwrap();
+    host.shared_menu(&mut vm, &mut source).unwrap();
     let old = host.menu().unwrap().clone();
     pending(&mut vm);
     let before = vm.pending_system();
     source.fail_at = Some(1);
-    assert!(host.try_handle(&mut vm, &mut source).is_err());
+    assert!(host.shared_menu(&mut vm, &mut source).is_err());
     assert_eq!(host.menu(), Some(&old));
     assert_eq!(vm.pending_system(), before);
     assert_eq!(vm.stack().peek_u32(4).unwrap(), 2);
     source.fail_at = None;
-    assert!(host.try_handle(&mut vm, &mut source).unwrap());
+    assert!(host.shared_menu(&mut vm, &mut source).unwrap());
     assert_eq!(host.menu().unwrap().slots.len(), 2);
 }
 
@@ -203,7 +206,7 @@ fn missing_argument_does_not_read_source() {
     let mut source = MemorySaves::default();
     let mut host = SaveMenuHost::default();
     pending(&mut vm);
-    assert!(host.try_handle(&mut vm, &mut source).is_err());
+    assert!(host.shared_menu(&mut vm, &mut source).is_err());
     assert!(source.calls.is_empty());
     assert_eq!(vm.pc(), 8);
     assert!(host.menu().is_none());
@@ -243,7 +246,7 @@ fn signature_query_accepts_versions_without_menu_labels_and_preserves_menu_state
     let mut host = SaveMenuHost::default();
     for _ in 0..2 {
         pending(&mut vm);
-        host.try_handle(&mut vm, &mut source).unwrap();
+        host.shared_menu(&mut vm, &mut source).unwrap();
     }
     let menu = host.menu().unwrap().clone();
     source.calls.clear();
@@ -255,7 +258,7 @@ fn signature_query_accepts_versions_without_menu_labels_and_preserves_menu_state
     {
         pending(&mut vm);
         let pc = vm.pc();
-        assert!(host.try_handle(&mut vm, &mut source).unwrap());
+        assert!(host.shared_menu(&mut vm, &mut source).unwrap());
         assert_eq!(vm.state().system_integer(0), Some(u32::from(expected)));
         assert_eq!(vm.state().system_integer(4), Some(0xfeed));
         assert_eq!(vm.stack().len_bytes(), 0);
@@ -281,7 +284,7 @@ fn signature_query_io_failure_and_missing_parameter_are_transactional() {
     vm.state_mut().set_system_integer(0, 9).unwrap();
     pending(&mut vm);
     let before = vm.pending_system();
-    assert!(host.try_handle(&mut vm, &mut source).is_err());
+    assert!(host.shared_menu(&mut vm, &mut source).is_err());
     assert_eq!(vm.pending_system(), before);
     assert_eq!(vm.pc(), 8);
     assert_eq!(vm.stack().len_bytes(), 4);
@@ -290,14 +293,14 @@ fn signature_query_io_failure_and_missing_parameter_are_transactional() {
     assert!(host.menu().is_none());
     source.fail_at = None;
     source.files.insert(870, b"CSV2".to_vec());
-    assert!(host.try_handle(&mut vm, &mut source).unwrap());
+    assert!(host.shared_menu(&mut vm, &mut source).unwrap());
     assert_eq!(vm.state().system_integer(0), Some(1));
     assert_eq!(vm.stack().len_bytes(), 0);
 
     let mut vm = Machine::at(&program, 8).unwrap();
     pending(&mut vm);
     source.calls.clear();
-    assert!(host.try_handle(&mut vm, &mut source).is_err());
+    assert!(host.shared_menu(&mut vm, &mut source).is_err());
     assert_eq!(vm.pending_system(), Some((8, 0x2bb)));
     assert_eq!(vm.stack().len_bytes(), 0);
     assert!(source.calls.is_empty());

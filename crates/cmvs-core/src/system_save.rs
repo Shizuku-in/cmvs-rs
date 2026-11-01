@@ -2,7 +2,7 @@
 mod pack;
 mod profile;
 mod write;
-use crate::{FormatError, MAX_PAYLOAD, evaluate::State, machine::Machine, vm::SystemResult};
+use crate::{FormatError, MAX_PAYLOAD, dispatch::Call, evaluate::State, machine::Machine};
 pub use profile::ProfileSystemSave;
 use std::{
     error::Error,
@@ -290,23 +290,32 @@ impl SystemSaveHost {
         source: &mut impl SystemSaveSource,
         game_id: Option<u32>,
     ) -> Result<Option<SystemSaveEvent>, Box<dyn Error>> {
-        if !matches!(vm.pending_system(), Some((_, 0x128))) {
+        let Some((pc, 0x128)) = vm.pending_system() else {
             return Ok(None);
-        }
+        };
+        self.handle_read(&mut Call::new(vm, pc, 0x128), source, game_id)
+            .map(Some)
+    }
+    pub(crate) fn handle_read(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        source: &mut dyn SystemSaveSource,
+        game_id: Option<u32>,
+    ) -> Result<SystemSaveEvent, Box<dyn Error>> {
         let Some(raw) = source.read()? else {
-            vm.complete_system(SystemResult(0x4000))?;
-            return Ok(Some(SystemSaveEvent::Missing));
+            call.complete(0x4000)?;
+            return Ok(SystemSaveEvent::Missing);
         };
         let save = Css1Save::decode(&raw)?;
-        let candidate = save.applied(vm.state(), game_id)?;
-        vm.complete_system(SystemResult(0x4000))?;
-        *vm.state_mut() = candidate;
+        let candidate = save.applied(call.vm.state(), game_id)?;
+        call.complete(0x4000)?;
+        *call.vm.state_mut() = candidate;
         for (current, new) in self.lists.iter_mut().zip(&save.lists) {
             if !new.is_empty() {
                 *current = Some(new.clone());
             }
         }
         self.loaded = Some(save);
-        Ok(Some(SystemSaveEvent::Applied))
+        Ok(SystemSaveEvent::Applied)
     }
 }

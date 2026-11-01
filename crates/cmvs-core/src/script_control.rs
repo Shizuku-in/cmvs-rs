@@ -2,10 +2,10 @@
 //! No save snapshot, callback scheduling, rendering, or filesystem search policy.
 use crate::{
     cpz::{ArchiveIndex, Cpz7Parameters},
+    dispatch::Call,
     evaluate::error,
     machine::Machine,
     ps3::Script,
-    vm::SystemResult,
 };
 use std::{
     collections::BTreeMap,
@@ -285,50 +285,72 @@ impl ScriptControl {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(None);
         };
+        if !matches!(command, 0x80 | 0x81 | 0x83 | 0x88..=0x8c) {
+            return Ok(None);
+        }
+        self.handle(&mut Call::new(vm, pc, command), source)
+            .map(Some)
+    }
+    pub(crate) fn handle(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        source: &mut dyn ScriptSource,
+    ) -> Result<ControlEvent, LoadError> {
+        let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
-        let argument = |distance| {
-            vm.stack()
-                .peek_u32(distance)
-                .map_err(|e| error(pc, op, e.0))
-        };
         let flags = match command {
             0x81 => {
-                let slot = argument(4)?;
+                let slot = call.argument(4, argument_names(command)[0])?;
                 if slot >= 3 {
                     return Err(error(pc, op, "common slot must be 0..2").into());
                 }
-                let name = vm.resolve_string(argument(8)?)?;
+                let name = {
+                    let raw = call.argument(8, argument_names(command)[1])?;
+                    call.vm.resolve_string(raw)?
+                };
                 let script = source.load(&name)?;
-                vm.enter_common(slot, name, script)?;
-                return Ok(Some(ControlEvent::CommonEntered {
-                    slot: vm.current_slot(),
-                }));
+                call.enter_common(slot, name, script)?;
+                return Ok(ControlEvent::CommonEntered {
+                    slot: call.vm.current_slot(),
+                });
             }
             0x80 => {
-                let name = vm.resolve_string(argument(4)?)?;
+                let name = {
+                    let raw = call.argument(4, argument_names(command)[0])?;
+                    call.vm.resolve_string(raw)?
+                };
                 let script = source.load(&name)?;
-                vm.switch_main_core(name, script)?;
+                call.switch_main(name, script)?;
                 self.main_replaced();
-                return Ok(Some(ControlEvent::MainPreparedNeedsSnapshot));
+                return Ok(ControlEvent::MainPreparedNeedsSnapshot);
             }
             0x89 | 0x8c => {
-                self.settings.insert(op, u32::from(argument(4)? != 0));
+                self.settings.insert(
+                    op,
+                    u32::from(call.argument(4, argument_names(command)[0])? != 0),
+                );
                 0x4004
             }
             0x83 => {
-                let high = argument(4)?;
-                let low = argument(8)?;
+                let high = call.argument(4, argument_names(command)[0])?;
+                let low = call.argument(8, argument_names(command)[1])?;
                 self.settings.insert(op, low | high.wrapping_shl(16));
                 0x4008
             }
             0x88 => {
-                let slot = argument(4)?;
-                let target = argument(8)?;
-                let parameters = [argument(20)?, argument(16)?, argument(12)?];
+                let slot = call.argument(4, argument_names(command)[0])?;
+                let target = call.argument(8, argument_names(command)[1])?;
+                let parameters = [
+                    call.argument(20, argument_names(command)[4])?,
+                    call.argument(16, argument_names(command)[3])?,
+                    call.argument(12, argument_names(command)[2])?,
+                ];
                 if slot > 63 {
                     return Err(error(pc, op, "callback slot outside 0..63").into());
                 }
-                if target != u32::MAX && !vm.is_boundary(vm.current_slot(), target as usize) {
+                if target != u32::MAX
+                    && !call.vm.is_boundary(call.vm.current_slot(), target as usize)
+                {
                     return Err(
                         error(pc, op, "callback target is not an instruction boundary").into(),
                     );
@@ -336,7 +358,7 @@ impl ScriptControl {
                 self.callbacks.insert(
                     slot as u8,
                     Callback {
-                        script_slot: vm.current_slot(),
+                        script_slot: call.vm.current_slot(),
                         target,
                         parameters,
                         registered_tick: self.virtual_tick,
@@ -346,17 +368,17 @@ impl ScriptControl {
                 0x4014
             }
             0x8a => {
-                let slot = (argument(4)? & 63) as u8;
+                let slot = (call.argument(4, argument_names(command)[0])? & 63) as u8;
                 let callback = self
                     .callbacks
                     .get(&slot)
                     .filter(|c| c.enabled)
                     .ok_or_else(|| error(pc, op, "callback is absent or disabled"))?;
-                vm.call_script(callback.script_slot, callback.target as usize)?;
-                return Ok(Some(ControlEvent::Applied));
+                call.call_script(callback.script_slot, callback.target as usize)?;
+                return Ok(ControlEvent::Applied);
             }
             0x8b => {
-                let slot = argument(4)?;
+                let slot = call.argument(4, argument_names(command)[0])?;
                 if slot > 63 {
                     return Err(error(pc, op, "callback slot outside 0..63").into());
                 }
@@ -366,10 +388,28 @@ impl ScriptControl {
                 }
                 0x4004
             }
-            _ => return Ok(None),
+            _ => unreachable!("registered script-control command"),
         };
-        vm.complete_system(SystemResult(flags))?;
-        Ok(Some(ControlEvent::Applied))
+        call.complete(flags)?;
+        Ok(ControlEvent::Applied)
+    }
+}
+
+fn argument_names(command: u16) -> &'static [&'static str] {
+    match command {
+        0x80 => &["main script"],
+        0x81 => &["common slot", "common script"],
+        0x83 => &["high word", "low word"],
+        0x88 => &[
+            "callback slot",
+            "target PC",
+            "parameter 12",
+            "parameter 16",
+            "parameter 20",
+        ],
+        0x89 | 0x8c => &["enabled"],
+        0x8a | 0x8b => &["callback slot"],
+        _ => unreachable!("registered script-control arguments"),
     }
 }
 

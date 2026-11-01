@@ -26,11 +26,13 @@ use crate::{
     profile::{EngineProfile, Semantics},
     random::CrtRandom,
     resources::ResourceSource,
-    save_menu::SaveMenuHost,
+    save_menu::{SaveMenuHost, SaveSource},
     scene::SceneHost,
+    script_control::{ControlEvent, ScriptControl, ScriptSource},
     sequence::{SequenceContext, SequenceHost},
     settings::SettingsHost,
     snapshot::{SaveInfo, SaveTitle},
+    system_save::{SystemSaveEvent, SystemSaveHost, SystemSaveSink, SystemSaveSource},
     timers::VmTimers,
     vm::SystemResult,
 };
@@ -83,6 +85,9 @@ pub struct AudioHosts<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Flow {
+    Control(ControlEvent),
+    SystemSave(SystemSaveEvent),
+    SystemWritten,
     Platform(PlatformEvent),
     Done,
     Yield,
@@ -125,6 +130,21 @@ pub struct WaitHosts<'a> {
     pub change_images: bool,
 }
 
+pub struct ScriptHosts<'a> {
+    pub host: &'a mut ScriptControl,
+    pub source: &'a mut dyn ScriptSource,
+}
+pub struct SystemReadHosts<'a> {
+    pub host: &'a mut SystemSaveHost,
+    pub source: &'a mut dyn SystemSaveSource,
+    pub game_id: Option<u32>,
+}
+pub struct SystemWriteHosts<'a> {
+    pub host: &'a mut SystemSaveHost,
+    pub sink: &'a mut dyn SystemSaveSink,
+    pub random: &'a mut CrtRandom,
+    pub game_id: Option<u32>,
+}
 pub struct PlatformHosts<'a> {
     pub host: &'a mut PlatformHost,
     pub backend: &'a mut dyn PlatformBackend,
@@ -154,6 +174,10 @@ pub struct MoviePlayerHosts<'a> {
 
 #[derive(Default)]
 pub struct Hosts<'a> {
+    pub scripts: Option<ScriptHosts<'a>>,
+    pub system_read: Option<SystemReadHosts<'a>>,
+    pub system_write: Option<SystemWriteHosts<'a>>,
+    pub save_source: Option<&'a mut dyn SaveSource>,
     pub bootstrap: Option<&'a mut Bootstrap>,
     pub function_keys: Option<FunctionKeys<'a>>,
     pub platform: Option<PlatformHosts<'a>>,
@@ -195,6 +219,10 @@ pub struct Hosts<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Capability {
+    ScriptControl,
+    SystemRead,
+    SystemWrite,
+    SaveMenu,
     Bootstrap,
     FunctionKeys,
     Platform,
@@ -250,6 +278,10 @@ pub enum Capability {
 impl Hosts<'_> {
     fn has(&self, capability: Capability) -> bool {
         match capability {
+            Capability::ScriptControl => self.scripts.is_some(),
+            Capability::SystemRead => self.system_read.is_some(),
+            Capability::SystemWrite => self.system_write.is_some(),
+            Capability::SaveMenu => self.popup.is_some() && self.save_source.is_some(),
             Capability::Bootstrap => self.bootstrap.is_some(),
             Capability::FunctionKeys => self.function_keys.is_some(),
             Capability::Platform => self.platform.is_some(),
@@ -381,6 +413,30 @@ impl<'a, 'script> Call<'a, 'script> {
             return Err(self.error("named arguments disagree with command stack cleanup"));
         }
         Ok(())
+    }
+
+    /// Transfers validate named parameters without completing the old instruction.
+    /// Machine owns the return frame or main replacement and clears pending once.
+    pub fn enter_common(
+        &mut self,
+        slot: u32,
+        name: Vec<u8>,
+        script: crate::ps3::Script,
+    ) -> Result<(), DecodeError> {
+        self.require_arguments(8)?;
+        self.vm.enter_common(slot, name, script)
+    }
+    pub fn switch_main(
+        &mut self,
+        name: Vec<u8>,
+        script: crate::ps3::Script,
+    ) -> Result<(), DecodeError> {
+        self.require_arguments(4)?;
+        self.vm.switch_main_core(name, script)
+    }
+    pub fn call_script(&mut self, slot: u8, target: usize) -> Result<(), DecodeError> {
+        self.require_arguments(4)?;
+        self.vm.call_script(slot, target)
     }
 
     pub fn complete(&mut self, flags: u16) -> Result<(), DecodeError> {
@@ -804,6 +860,50 @@ pub fn uses_input(command: u16) -> bool {
     })
 }
 
+fn root_script_control(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    let h = hosts.scripts.as_mut().expect("script capability checked");
+    Ok(Flow::Control(h.host.handle(call, h.source)?))
+}
+fn root_system_read(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    let h = hosts
+        .system_read
+        .as_mut()
+        .expect("system read capability checked");
+    Ok(Flow::SystemSave(
+        h.host.handle_read(call, h.source, h.game_id)?,
+    ))
+}
+fn root_system_write(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    let h = hosts
+        .system_write
+        .as_mut()
+        .expect("system write capability checked");
+    h.host.handle_write(call, h.sink, h.random, h.game_id)?;
+    Ok(Flow::SystemWritten)
+}
+fn root_save_menu(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    hosts
+        .popup
+        .as_deref_mut()
+        .expect("save menu checked")
+        .handle(
+            call,
+            hosts
+                .save_source
+                .as_deref_mut()
+                .expect("save source checked"),
+        )?;
+    Ok(Flow::Done)
+}
 fn root_bootstrap(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     Ok(hosts
         .bootstrap
@@ -1080,6 +1180,84 @@ pub fn is_wait(command: u16) -> bool {
 }
 
 pub static ROOT: &[Entry] = &[
+    Entry {
+        command: 0x80,
+        name: "replace main script",
+        capability: Capability::ScriptControl,
+        handler: root_script_control,
+    },
+    Entry {
+        command: 0x81,
+        name: "enter common script",
+        capability: Capability::ScriptControl,
+        handler: root_script_control,
+    },
+    Entry {
+        command: 0x83,
+        name: "script control words",
+        capability: Capability::ScriptControl,
+        handler: root_script_control,
+    },
+    Entry {
+        command: 0x88,
+        name: "register callback",
+        capability: Capability::ScriptControl,
+        handler: root_script_control,
+    },
+    Entry {
+        command: 0x89,
+        name: "automatic callbacks",
+        capability: Capability::ScriptControl,
+        handler: root_script_control,
+    },
+    Entry {
+        command: 0x8a,
+        name: "call callback",
+        capability: Capability::ScriptControl,
+        handler: root_script_control,
+    },
+    Entry {
+        command: 0x8b,
+        name: "disable callback",
+        capability: Capability::ScriptControl,
+        handler: root_script_control,
+    },
+    Entry {
+        command: 0x8c,
+        name: "suspend callbacks",
+        capability: Capability::ScriptControl,
+        handler: root_script_control,
+    },
+    Entry {
+        command: 0x128,
+        name: "read system save",
+        capability: Capability::SystemRead,
+        handler: root_system_read,
+    },
+    Entry {
+        command: 0x129,
+        name: "write system save",
+        capability: Capability::SystemWrite,
+        handler: root_system_write,
+    },
+    Entry {
+        command: 0x2b3,
+        name: "scan save menu",
+        capability: Capability::SaveMenu,
+        handler: root_save_menu,
+    },
+    Entry {
+        command: 0x2b4,
+        name: "second save group",
+        capability: Capability::SaveMenu,
+        handler: root_save_menu,
+    },
+    Entry {
+        command: 0x2bb,
+        name: "save signature",
+        capability: Capability::SaveMenu,
+        handler: root_save_menu,
+    },
     Entry {
         command: 0x10,
         name: "register resource path",

@@ -35,6 +35,9 @@ impl Claim {
         {
             return Some(35);
         }
+        if chain == Chain::Runner && self.handler == "dispatch::ROOT" && command == 0x129 {
+            return Some(30);
+        }
         self.order(chain)
     }
 
@@ -74,7 +77,6 @@ macro_rules! claim {
 /// state handlers with text adapters over the existing MessageHost methods.
 pub static CLAIMS: &[Claim] = &[
     claim!("runner::try_lifecycle", Some(10), None, 0x01 | 0x03),
-    claim!("system_save::try_write", Some(30), None, 0x129),
     claim!(
         "message::try_wait_with_auto",
         Some(100),
@@ -93,7 +95,8 @@ pub static CLAIMS: &[Claim] = &[
                 entry.command == command
                     && !matches!(
                         entry.capability,
-                        super::Capability::FontDialog
+                        super::Capability::SystemWrite
+                            | super::Capability::FontDialog
                             | super::Capability::Capture
                             | super::Capability::CaptureDevice
                             | super::Capability::MovieScene
@@ -117,13 +120,6 @@ pub static CLAIMS: &[Claim] = &[
             })
         },
     },
-    claim!("system_save::try_handle", Some(120), Some(310), 0x128),
-    claim!(
-        "script_control::try_handle",
-        Some(150),
-        Some(320),
-        0x80 | 0x81 | 0x83 | 0x88..=0x8c
-    ),
     claim!("runner::capture_snapshot", Some(160), None, 0x2b2),
     claim!("runner::try_load_slot", Some(170), None, 0x2b5),
     claim!("runner::try_edit_slots", Some(180), None, 0x28c | 0x28e),
@@ -131,12 +127,6 @@ pub static CLAIMS: &[Claim] = &[
     claim!("runner::try_thumbnail", Some(200), None, 0x2b8),
     claim!("runner::try_latest_slot", Some(210), None, 0x2b7),
     claim!("runner::try_slot_info", Some(220), None, 0x2bd),
-    claim!(
-        "save_menu::try_handle",
-        Some(230),
-        Some(330),
-        0x2b3 | 0x2b4 | 0x2bb
-    ),
     claim!(
         "snapshot::SaveImage::try_handle",
         Some(240),

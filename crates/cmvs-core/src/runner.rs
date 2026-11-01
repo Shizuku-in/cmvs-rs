@@ -642,12 +642,28 @@ impl<'a> Startup<'a> {
         let id = self.bootstrap.settings().get(&0x201d).copied();
         if command == 0x129
             && let Some(output) = &mut self.system_output
-            && self
-                .system_host
-                .try_write(&mut self.machine, output, &mut self.random, id)?
         {
-            self.system_source = FileSystemSave::new(output.path());
-            return Ok(StartupEvent::Progress);
+            let flow = crate::dispatch::run(
+                resolved.semantics,
+                &mut self.machine,
+                &mut crate::dispatch::Hosts {
+                    system_write: Some(crate::dispatch::SystemWriteHosts {
+                        host: &mut self.system_host,
+                        sink: output,
+                        random: &mut self.random,
+                        game_id: id,
+                    }),
+                    ..Default::default()
+                },
+            )?;
+            if flow == Some(crate::dispatch::Flow::SystemWritten) {
+                self.system_source = FileSystemSave::new(output.path());
+                return Ok(StartupEvent::Progress);
+            }
+            return Ok(StartupEvent::Unhandled {
+                pc,
+                command: command + 0x2000,
+            });
         }
         if crate::dispatch::uses_bootstrap(command) {
             let mut hosts = crate::dispatch::Hosts::default();
@@ -693,7 +709,10 @@ impl<'a> Startup<'a> {
             self.resume_run = flow.yields();
             return Ok(match flow {
                 crate::dispatch::Flow::Done => StartupEvent::Progress,
-                crate::dispatch::Flow::Platform(_) => {
+                crate::dispatch::Flow::Control(_)
+                | crate::dispatch::Flow::SystemSave(_)
+                | crate::dispatch::Flow::SystemWritten
+                | crate::dispatch::Flow::Platform(_) => {
                     unreachable!("wait handler returned a platform event")
                 }
                 crate::dispatch::Flow::Yield | crate::dispatch::Flow::Wait => StartupEvent::Yield,
@@ -741,6 +760,16 @@ impl<'a> Startup<'a> {
                 StartupEvent::Progress
             });
         }
+        if command == 0x128
+            && let Some((game_id, _)) = self.skip_auto_resume
+            && !self.auto_resume_checked
+            && id != Some(game_id)
+        {
+            return Err(format!(
+                "skip-auto-resume is only verified for recorded game ID 0x{game_id:08x}"
+            )
+            .into());
+        }
         let mut image_source = self.images.with_paths(self.bootstrap.paths());
         let input_clock = self.timers.clock();
         let movie_settings = self.audio.settings();
@@ -753,6 +782,17 @@ impl<'a> Startup<'a> {
             .with_paths(self.bootstrap.paths(), ResourceKind::SceneMovie);
         let is_movie_player = crate::dispatch::uses_movie_player(command);
         let mut hosts = crate::dispatch::Hosts {
+            scripts: Some(crate::dispatch::ScriptHosts {
+                host: &mut self.control,
+                source: &mut self.source,
+            }),
+            system_read: Some(crate::dispatch::SystemReadHosts {
+                host: &mut self.system_host,
+                source: &mut self.system_source,
+                game_id: id,
+            }),
+            system_write: None,
+            save_source: Some(&mut self.saves),
             bootstrap: None,
             function_keys: None,
             platform: None,
@@ -862,7 +902,52 @@ impl<'a> Startup<'a> {
         }
         if let Some(flow) = crate::dispatch::run(resolved.semantics, &mut self.machine, &mut hosts)?
         {
+            if let crate::dispatch::Flow::SystemSave(event) = flow {
+                if !self.auto_resume_checked {
+                    if let Some((_, integer)) = self.skip_auto_resume
+                        && event == SystemSaveEvent::Applied
+                    {
+                        self.machine.state_mut().set_integer(integer, 0)?;
+                        self.auto_resume_skipped = true;
+                    }
+                    self.auto_resume_checked = true;
+                }
+                return Ok(StartupEvent::Progress);
+            }
+            if let crate::dispatch::Flow::Control(event) = flow {
+                if event == ControlEvent::MainPreparedNeedsSnapshot {
+                    match self.snapshot_policy {
+                        SnapshotPolicy::Barrier => {
+                            self.main_barrier = true;
+                            return Ok(StartupEvent::MainPreparedNeedsSnapshot);
+                        }
+                        SnapshotPolicy::ContinueWithoutImage => {
+                            self.save_image.capture_unavailable(&mut self.machine)?;
+                            return Ok(StartupEvent::MainEnteredWithoutSnapshot);
+                        }
+                        SnapshotPolicy::Capture => {
+                            // Main is already loaded; a failed capture keeps the barrier sticky
+                            // instead of running main without an image.
+                            let captured = match self.machine.capture_vm() {
+                                Ok(vm) => self.capture_snapshot(vm),
+                                Err(why) => Err(why.into()),
+                            };
+                            if let Err(why) = captured {
+                                self.main_barrier = true;
+                                return Err(why);
+                            }
+                            return Ok(StartupEvent::SnapshotCaptured);
+                        }
+                    }
+                }
+                return Ok(StartupEvent::Progress);
+            }
             return Ok(match flow {
+                crate::dispatch::Flow::Control(_)
+                | crate::dispatch::Flow::SystemSave(_)
+                | crate::dispatch::Flow::SystemWritten => {
+                    unreachable!("storage event handled before ordinary flow")
+                }
                 crate::dispatch::Flow::Done => StartupEvent::Progress,
                 crate::dispatch::Flow::Platform(event) => {
                     let yields = event == crate::platform::PlatformEvent::Yield;
@@ -885,62 +970,6 @@ impl<'a> Startup<'a> {
                     }
                 }
             });
-        }
-        if command == 0x128
-            && let Some((game_id, _)) = self.skip_auto_resume
-            && !self.auto_resume_checked
-            && id != Some(game_id)
-        {
-            return Err(format!(
-                "skip-auto-resume is only verified for recorded game ID 0x{game_id:08x}"
-            )
-            .into());
-        }
-        if let Some(event) =
-            self.system_host
-                .try_handle(&mut self.machine, &mut self.system_source, id)?
-        {
-            if !self.auto_resume_checked {
-                if let Some((_, integer)) = self.skip_auto_resume
-                    && event == SystemSaveEvent::Applied
-                {
-                    self.machine.state_mut().set_integer(integer, 0)?;
-                    self.auto_resume_skipped = true;
-                }
-                self.auto_resume_checked = true;
-            }
-            return Ok(StartupEvent::Progress);
-        }
-        if let Some(event) = self
-            .control
-            .try_handle(&mut self.machine, &mut self.source)?
-        {
-            if event == ControlEvent::MainPreparedNeedsSnapshot {
-                match self.snapshot_policy {
-                    SnapshotPolicy::Barrier => {
-                        self.main_barrier = true;
-                        return Ok(StartupEvent::MainPreparedNeedsSnapshot);
-                    }
-                    SnapshotPolicy::ContinueWithoutImage => {
-                        self.save_image.capture_unavailable(&mut self.machine)?;
-                        return Ok(StartupEvent::MainEnteredWithoutSnapshot);
-                    }
-                    SnapshotPolicy::Capture => {
-                        // Main is already loaded; a failed capture keeps the barrier sticky
-                        // instead of running main without an image.
-                        let captured = match self.machine.capture_vm() {
-                            Ok(vm) => self.capture_snapshot(vm),
-                            Err(why) => Err(why.into()),
-                        };
-                        if let Err(why) = captured {
-                            self.main_barrier = true;
-                            return Err(why);
-                        }
-                        return Ok(StartupEvent::SnapshotCaptured);
-                    }
-                }
-            }
-            return Ok(StartupEvent::Progress);
         }
         if self.snapshot_policy == SnapshotPolicy::Capture
             && let Some((pc, 0x2b2)) = self.machine.pending_system()
@@ -969,14 +998,10 @@ impl<'a> Startup<'a> {
         {
             return Ok(StartupEvent::Progress);
         }
-        if self
-            .save_menu
-            .try_handle(&mut self.machine, &mut self.saves)?
-            || self.save_image.try_handle(
-                &mut self.machine,
-                self.snapshot_policy == SnapshotPolicy::ContinueWithoutImage,
-            )?
-        {
+        if self.save_image.try_handle(
+            &mut self.machine,
+            self.snapshot_policy == SnapshotPolicy::ContinueWithoutImage,
+        )? {
             return Ok(StartupEvent::Progress);
         }
         Ok(StartupEvent::Unhandled {

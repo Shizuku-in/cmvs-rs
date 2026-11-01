@@ -1,3 +1,5 @@
+#[path = "support/shared_storage.rs"]
+mod shared_storage;
 use cmvs_rs::{
     bytecode::{self, InstructionKind},
     machine::{Machine, Step},
@@ -5,6 +7,7 @@ use cmvs_rs::{
     script_control::{ControlEvent, LoadError, ScriptControl, ScriptSource},
     vm::SystemResult,
 };
+use shared_storage::SharedControl;
 use std::collections::BTreeMap;
 
 fn word(b: &mut Vec<u8>, v: u16) {
@@ -118,7 +121,7 @@ fn run(
             Step::Yield => return None,
             Step::System { .. } => {
                 let event = host
-                    .try_handle(vm, source)
+                    .shared_control(vm, source)
                     .unwrap()
                     .expect("unhandled synthetic command");
                 if event == ControlEvent::MainPreparedNeedsSnapshot {
@@ -148,7 +151,7 @@ fn common_initialization_uses_header_entry_and_restores_caller_stack_and_pc() {
     source.add(b"a.ps3", &common, &[0], &[], 2);
     pending(&mut vm);
     assert_eq!(
-        host.try_handle(&mut vm, &mut source).unwrap(),
+        host.shared_control(&mut vm, &mut source).unwrap(),
         Some(ControlEvent::CommonEntered { slot: 1 })
     );
     assert_eq!(vm.current_slot(), 1);
@@ -200,7 +203,7 @@ fn failed_load_and_invalid_slot_preserve_the_pending_request() {
         let mut source = MemorySource::default();
         assert!(
             ScriptControl::new(0)
-                .try_handle(&mut vm, &mut source)
+                .shared_control(&mut vm, &mut source)
                 .is_err()
         );
         assert_eq!(vm.pc(), pc);
@@ -223,7 +226,7 @@ fn malformed_loaded_bytecode_is_not_installed() {
     source.add(b"bad.ps3", &[0xff, 0xff], &[0], &[], 0);
     assert!(
         ScriptControl::new(0)
-            .try_handle(&mut vm, &mut source)
+            .shared_control(&mut vm, &mut source)
             .is_err()
     );
     assert_eq!(vm.current_slot(), 0);
@@ -338,7 +341,7 @@ fn repeat_counter_survives_common_initialization_return() {
     source.add(b"a.ps3", &common, &[0], &[], 0);
     pending(&mut vm);
     ScriptControl::new(0)
-        .try_handle(&mut vm, &mut source)
+        .shared_control(&mut vm, &mut source)
         .unwrap();
     assert_eq!(vm.repeat_count(), 0);
     vm.step().unwrap();
@@ -357,7 +360,7 @@ fn reset_main_from_common_script_discards_frames_without_popping_arguments() {
     source.add(b"common.ps3", &[3, 0x20], &[0], &[], 0);
     let mut control = ScriptControl::new(0);
     pending(&mut vm);
-    control.try_handle(&mut vm, &mut source).unwrap();
+    control.shared_control(&mut vm, &mut source).unwrap();
     assert!(matches!(pending(&mut vm), Step::System { command: 3, .. }));
     assert_eq!(vm.current_slot(), 1);
     assert!(vm.stack().len_bytes() > 0);
@@ -409,11 +412,11 @@ fn callback_disable_blocks_explicit_dispatch_without_consuming_request() {
     loop {
         let request = pending(&mut vm);
         if let Step::System { command: 0x8a, .. } = request {
-            assert!(host.try_handle(&mut vm, &mut source).is_err());
+            assert!(host.shared_control(&mut vm, &mut source).is_err());
             assert_eq!(vm.step().unwrap(), request);
             break;
         }
-        host.try_handle(&mut vm, &mut source).unwrap();
+        host.shared_control(&mut vm, &mut source).unwrap();
     }
     assert!(!host.callbacks()[&5].enabled);
     assert_eq!(host.callbacks()[&5].target, u32::MAX);
@@ -446,11 +449,11 @@ fn common_script_cannot_replace_its_currently_executing_slot() {
     source.add(b"a.ps3", &code, &[0], b"a.ps3\0", 0);
     let mut host = ScriptControl::new(0);
     pending(&mut vm);
-    host.try_handle(&mut vm, &mut source).unwrap();
+    host.shared_control(&mut vm, &mut source).unwrap();
     pending(&mut vm);
     let pc = vm.pc();
     let len = vm.stack().len_bytes();
-    assert!(host.try_handle(&mut vm, &mut source).is_err());
+    assert!(host.shared_control(&mut vm, &mut source).is_err());
     assert_eq!(vm.current_slot(), 1);
     assert_eq!(vm.pc(), pc);
     assert_eq!(vm.stack().len_bytes(), len);

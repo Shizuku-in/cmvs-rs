@@ -1,6 +1,6 @@
 //! Mode-1 CSS1 output from fully known state (0x1400179e0). Original game stays read-only.
 use super::{Css1Save, KEY, PAYLOAD_OFFSET, pack};
-use crate::{FormatError, evaluate::State, machine::Machine, random::CrtRandom, vm::SystemResult};
+use crate::{FormatError, dispatch::Call, evaluate::State, machine::Machine, random::CrtRandom};
 use std::{
     error::Error,
     fs::OpenOptions,
@@ -212,12 +212,22 @@ impl super::SystemSaveHost {
         random: &mut CrtRandom,
         game_id: Option<u32>,
     ) -> Result<bool, Box<dyn Error>> {
-        if !matches!(vm.pending_system(), Some((_, 0x129))) {
+        let Some((pc, 0x129)) = vm.pending_system() else {
             return Ok(false);
-        }
-        self.write_now(vm.state(), sink, random, game_id)?;
-        vm.complete_system(SystemResult(0x4000))?;
+        };
+        self.handle_write(&mut Call::new(vm, pc, 0x129), sink, random, game_id)?;
         Ok(true)
+    }
+    pub(crate) fn handle_write(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        sink: &mut dyn SystemSaveSink,
+        random: &mut CrtRandom,
+        game_id: Option<u32>,
+    ) -> Result<(), Box<dyn Error>> {
+        self.write_now(call.vm.state(), sink, random, game_id)?;
+        call.complete(0x4000)?;
+        Ok(())
     }
 
     /// The CSS1 writer 0x1400179e0 itself, which the slot writer 0x140080b20 also calls.
