@@ -159,3 +159,9 @@ release探针沿用显式 `--allow-unreviewed --allow-presumed`、msgothic字体
 `local/aoitori/background-audio-22ed`：R1/L0、D1/L1通过，22,050步/624帧及两项哈希保持不变；标题5按钮均到达后续页面。P1发现44个状态、400次尝试且重放分歧0，预算耗尽，不能认领全页遍历通过；本轮没有新未实现指令停点。`local/aoitori/background-audio-controls` 的C1/L0通过，设置指纹已包含后台音频。使用原有CSS1模板的隔离副本，未重跑长剧情，未操作原生窗口。
 
 相关分派、档案、音频、设置、runner与PCM门控回归通过，core/audio/probe及受影响测试的严格Clippy、格式和桌面音频构建通过。下一步优先验证设置开关持久化与页面往返；剧情快照仍无已核对布局。
+
+## 首次选择后的新停点与设置保持（2026-11-02）
+
+`local/aoitori/full-play-route-1`：R2首路线到 `sn108.ps3 / 0x3694c` 的三选项「メアリー。/小夜。/理沙。」，选择0后推进至 `sn213.ps3 / 0xbd34 / 0x22a2`，202,181,014步、85,810帧；其余两分支未探索，未到结局。类型2效果涉及独立三维视图和世界四边形，初步证据见[VM语义](vm-semantics.md#0x22a2类型2下落效果待实现)，尚未实现，不能算完整可玩。
+
+后台音频开关补齐原版 `INACTIVE_SOUND_PLAY` 的缺省、读取和独立用户配置保存；已有settings/runner共69项回归及受影响Clippy、格式检查通过。`local/aoitori/background-audio-persistence` C2/L1通过，本轮探针实际选择的是后台绘制开关，重启保持；后台音频自身的持久化由合成回归验证，未专项原生试玩。

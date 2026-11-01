@@ -529,6 +529,8 @@ impl AudioHost {
     pub fn from_ini(text: &[u8]) -> Self {
         let mut host = Self::default();
         let int = |key, default| crate::save_menu::profile_int(text, "SOUND_INFO", key, default);
+        // Aoitori 0x14000d1d7: INI defaults to 1 and any nonzero word enables output.
+        host.background_output = int("INACTIVE_SOUND_PLAY", 1) != 0;
         host.settings.bgm_enabled = int("MUSIC_USE", 1) != 0;
         host.settings.se_enabled = int("SE_USE", 1) != 0;
         host.settings.voice_enabled = int("VOICE_USE", 1) != 0;

@@ -83,6 +83,10 @@ impl Startup<'_> {
         let audio = self.audio.settings();
         let duck = self.audio.voice_ducking();
         for (key, value) in [
+            (
+                "INACTIVE_SOUND_PLAY",
+                u32::from(self.audio.background_output()),
+            ),
             ("MUSIC_USE", u32::from(audio.bgm_enabled)),
             ("SE_USE", u32::from(audio.se_enabled)),
             ("VOICE_USE", u32::from(audio.voice_enabled)),

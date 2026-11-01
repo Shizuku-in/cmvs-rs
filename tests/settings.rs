@@ -759,6 +759,14 @@ fn audio_ini_initializes_query_values_and_preserves_startup_volume_words() {
         host.try_handle(&mut vm, &mut backend).unwrap();
         assert_eq!(vm.state().system_integer(0), Some(value));
     }
+    assert!(AudioHost::from_ini(&[]).background_output());
+    for (raw, expected) in [("0", false), ("1", true), ("-1", true), ("7", true)] {
+        let ini = format!("[SOUND_INFO]\nINACTIVE_SOUND_PLAY={raw}\n");
+        assert_eq!(
+            AudioHost::from_ini(ini.as_bytes()).background_output(),
+            expected
+        );
+    }
     assert_eq!(AudioHost::from_ini(&[]).settings().master, 100);
     assert_eq!(
         AudioHost::from_ini(b"[SOUND_INFO]\nMASTER_VOLUME=-1\n")
