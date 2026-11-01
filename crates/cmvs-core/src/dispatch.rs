@@ -5,16 +5,19 @@ pub mod ownership;
 
 use crate::{
     bytecode::DecodeError,
+    camera::CameraHost,
     evaluate::error,
+    fade::SkipGate,
     gesture::PointerGesture,
     history::HistoryHost,
     input::ActionInput,
-    machine::Machine,
+    machine::{Machine, Step},
     message::{MessageHost, font_cells},
     message_flags::MessageFlags,
     profile::{EngineProfile, Semantics},
     random::CrtRandom,
     save_menu::SaveMenuHost,
+    scene::SceneHost,
     settings::SettingsHost,
     snapshot::{SaveInfo, SaveTitle},
     timers::VmTimers,
@@ -25,12 +28,45 @@ use crate::{
 pub enum Flow {
     Done,
     Yield,
+    Wait,
     Unhandled,
     Unavailable,
 }
 
+impl Flow {
+    pub(crate) fn from_step(step: Step, pending: bool) -> Self {
+        match step {
+            Step::Continue => Self::Done,
+            Step::Yield if pending => Self::Wait,
+            Step::Yield => Self::Yield,
+            _ => unreachable!("command completion only returns continue or yield"),
+        }
+    }
+
+    pub fn yields(self) -> bool {
+        matches!(self, Self::Yield | Self::Wait)
+    }
+
+    pub(crate) fn wait_step(self) -> Step {
+        match self {
+            Self::Done => Step::Continue,
+            Self::Yield | Self::Wait => Step::Yield,
+            _ => unreachable!("wait handlers only return done, yield or wait"),
+        }
+    }
+}
+
+pub struct WaitHosts<'a> {
+    pub scene: Option<&'a mut SceneHost>,
+    pub camera: Option<&'a mut CameraHost>,
+    pub input: &'a mut ActionInput,
+    pub gate: SkipGate,
+    pub change_images: bool,
+}
+
 #[derive(Default)]
 pub struct Hosts<'a> {
+    pub waits: Option<WaitHosts<'a>>,
     pub text: Option<TextHosts<'a>>,
     pub timers: Option<&'a mut VmTimers>,
     pub flags: Option<&'a mut MessageFlags>,
@@ -64,6 +100,12 @@ pub enum Capability {
     SaveInfo,
     Effects,
     EffectObjects,
+    FadeWait,
+    MaskWait,
+    QuakeWait,
+    StripWait,
+    ChangeWait,
+    CameraWait,
 }
 
 impl Hosts<'_> {
@@ -83,6 +125,15 @@ impl Hosts<'_> {
             Capability::SaveInfo => self.save_info.is_some(),
             Capability::Effects => self.effects.is_some(),
             Capability::EffectObjects => self.effect_objects,
+            Capability::FadeWait
+            | Capability::MaskWait
+            | Capability::QuakeWait
+            | Capability::StripWait => self.waits.as_ref().is_some_and(|h| h.scene.is_some()),
+            Capability::ChangeWait => self
+                .waits
+                .as_ref()
+                .is_some_and(|h| h.scene.is_some() && h.change_images),
+            Capability::CameraWait => self.waits.as_ref().is_some_and(|h| h.camera.is_some()),
         }
     }
 }
@@ -140,13 +191,33 @@ impl<'a, 'script> Call<'a, 'script> {
     pub fn error(&self, why: &'static str) -> DecodeError {
         error(self.pc, self.command + 0x2000, why)
     }
-    pub fn complete(&mut self, flags: u16) -> Result<(), DecodeError> {
-        let words = u32::from(flags & 0x0fff) / 4;
+    fn require_arguments(&self, bytes: usize) -> Result<(), DecodeError> {
+        if bytes > 256 || !bytes.is_multiple_of(4) {
+            return Err(self.error("invalid command argument byte count"));
+        }
+        let words = (bytes / 4) as u32;
         let expected = 1u64.checked_shl(words).unwrap_or(0).wrapping_sub(1);
         if self.arguments != expected {
             return Err(self.error("named arguments disagree with command stack cleanup"));
         }
-        self.vm.complete_system(SystemResult(flags)).map(|_| ())
+        Ok(())
+    }
+
+    pub fn complete(&mut self, flags: u16) -> Result<(), DecodeError> {
+        self.finish(flags).map(|_| ())
+    }
+
+    pub fn finish(&mut self, flags: u16) -> Result<Flow, DecodeError> {
+        self.require_arguments(SystemResult(flags).cleanup_bytes())?;
+        let step = self.vm.complete_system(SystemResult(flags))?;
+        Ok(Flow::from_step(step, false))
+    }
+
+    /// Validate the retained arguments before yielding without advancing PC or SP.
+    pub fn wait(&mut self, bytes: usize) -> Result<Flow, DecodeError> {
+        self.require_arguments(bytes)?;
+        self.vm.yield_pending_system()?;
+        Ok(Flow::Wait)
     }
 }
 
@@ -169,14 +240,12 @@ fn root_text(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Dec
 fn root_output(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
     let hosts = hosts.text.as_mut().expect("text capability checked");
     Ok(
-        if hosts
+        match hosts
             .messages
             .try_record_output(call.vm, hosts.input, hosts.flags)?
-            .is_some()
         {
-            Flow::Yield
-        } else {
-            Flow::Unhandled
+            Some(step) => Flow::from_step(step, call.vm.pending_system().is_some()),
+            None => Flow::Unhandled,
         },
     )
 }
@@ -299,7 +368,113 @@ fn root_effect_objects(
     Ok(Flow::Done)
 }
 
+fn root_wait_fade(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+    let h = hosts.waits.as_mut().expect("wait context checked");
+    h.scene
+        .as_deref_mut()
+        .expect("scene wait capability checked")
+        .fade_mut()
+        .handle_wait(call, h.gate, h.input)
+}
+
+fn root_wait_mask(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+    let h = hosts.waits.as_mut().expect("wait context checked");
+    h.scene
+        .as_deref_mut()
+        .expect("scene wait capability checked")
+        .handle_wait_mask(call, h.gate, h.input)
+}
+
+fn root_wait_quake(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+    let h = hosts.waits.as_mut().expect("wait context checked");
+    h.scene
+        .as_deref_mut()
+        .expect("scene wait capability checked")
+        .handle_wait_quake(call)
+}
+
+fn root_wait_strip(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+    let h = hosts.waits.as_mut().expect("wait context checked");
+    h.scene
+        .as_deref_mut()
+        .expect("scene wait capability checked")
+        .handle_wait_strip(call, h.gate, h.input)
+}
+
+fn root_wait_change(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+    let h = hosts.waits.as_mut().expect("wait context checked");
+    h.scene
+        .as_deref_mut()
+        .expect("scene wait capability checked")
+        .handle_wait_change(call, h.gate, h.input)
+}
+
+fn root_wait_camera(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, DecodeError> {
+    let h = hosts.waits.as_mut().expect("wait context checked");
+    h.camera
+        .as_deref_mut()
+        .expect("camera wait capability checked")
+        .handle_wait_move(call, h.gate, h.input)
+}
+
+pub fn is_wait(command: u16) -> bool {
+    ROOT.iter().any(|e| {
+        e.command == command
+            && matches!(
+                e.capability,
+                Capability::FadeWait
+                    | Capability::MaskWait
+                    | Capability::QuakeWait
+                    | Capability::StripWait
+                    | Capability::ChangeWait
+                    | Capability::CameraWait
+            )
+    })
+}
+
 pub static ROOT: &[Entry] = &[
+    Entry {
+        command: 0x224,
+        name: "wait fade",
+        capability: Capability::FadeWait,
+        handler: root_wait_fade,
+    },
+    Entry {
+        command: 0x22b,
+        name: "wait first mask",
+        capability: Capability::MaskWait,
+        handler: root_wait_mask,
+    },
+    Entry {
+        command: 0x235,
+        name: "wait second mask",
+        capability: Capability::MaskWait,
+        handler: root_wait_mask,
+    },
+    Entry {
+        command: 0x228,
+        name: "wait quake",
+        capability: Capability::QuakeWait,
+        handler: root_wait_quake,
+    },
+    Entry {
+        command: 0x233,
+        name: "wait strip wipe",
+        capability: Capability::StripWait,
+        handler: root_wait_strip,
+    },
+    Entry {
+        command: 0x2c7,
+        name: "wait image change",
+        capability: Capability::ChangeWait,
+        handler: root_wait_change,
+    },
+    Entry {
+        command: 0x69,
+        name: "wait camera move",
+        capability: Capability::CameraWait,
+        handler: root_wait_camera,
+    },
     Entry {
         command: 0x350,
         name: "gesture field 0",

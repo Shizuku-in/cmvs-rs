@@ -70,6 +70,12 @@ fn audit(handler: &str, mut probe: impl FnMut(&mut Machine<'_>) -> bool) {
             "snapshot::SaveInfo::try_handle" => Some(Capability::SaveInfo),
             "fade::try_handle_effects" => Some(Capability::Effects),
             "effect_objects::try_handle" => Some(Capability::EffectObjects),
+            "fade::try_wait" => Some(Capability::FadeWait),
+            "scene::try_wait_mask" => Some(Capability::MaskWait),
+            "scene::try_wait_quake" => Some(Capability::QuakeWait),
+            "scene::try_wait_change" => Some(Capability::ChangeWait),
+            "scene::try_wait_strip" => Some(Capability::StripWait),
+            "camera::try_wait_move" => Some(Capability::CameraWait),
             _ => None,
         };
         if let Some(capability) = capability {
@@ -320,6 +326,13 @@ fn inventory_matches_wait_and_resource_host_recognition_exhaustively() {
             cmvs_rs::profile::Semantics::Root,
             vm,
             &mut cmvs_rs::dispatch::Hosts {
+                waits: Some(cmvs_rs::dispatch::WaitHosts {
+                    scene: Some(&mut SceneHost::default()),
+                    camera: Some(&mut CameraHost::default()),
+                    input: &mut ActionInput::default(),
+                    gate: SkipGate::default(),
+                    change_images: true,
+                }),
                 text: Some(cmvs_rs::dispatch::TextHosts {
                     messages: &mut messages,
                     input: &mut ActionInput::default(),

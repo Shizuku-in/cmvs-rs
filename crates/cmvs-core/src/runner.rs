@@ -683,49 +683,32 @@ impl<'a> Startup<'a> {
             effects: self.effects,
             skip: self.message_flags.skip(),
         };
-        if let Some(step) =
-            self.scene
-                .fade_mut()
-                .try_wait(&mut self.machine, gate, &mut self.input)?
-        {
-            self.resume_run = step == Step::Yield;
-            return Ok(if step == Step::Yield {
-                StartupEvent::Yield
-            } else {
-                StartupEvent::Progress
-            });
-        }
-        let waited = match self
-            .scene
-            .try_wait_mask(&mut self.machine, gate, &mut self.input)?
-        {
-            Some(step) => Some(step),
-            None => self.scene.try_wait_quake(&mut self.machine)?,
-        };
-        let waited = match waited {
-            Some(step) => Some(step),
-            None => self
-                .scene
-                .try_wait_change(&mut self.machine, gate, &mut self.input)?,
-        };
-        let waited = match waited {
-            Some(step) => Some(step),
-            None => self
-                .scene
-                .try_wait_strip(&mut self.machine, gate, &mut self.input)?,
-        };
-        let waited = match waited {
-            Some(step) => Some(step),
-            None => self
-                .camera
-                .try_wait_move(&mut self.machine, gate, &mut self.input)?,
-        };
-        if let Some(step) = waited {
-            self.resume_run = step == Step::Yield;
-            return Ok(if step == Step::Yield {
-                StartupEvent::Yield
-            } else {
-                StartupEvent::Progress
+        if crate::dispatch::is_wait(command) {
+            let flow = crate::dispatch::run(
+                resolved.semantics,
+                &mut self.machine,
+                &mut crate::dispatch::Hosts {
+                    waits: Some(crate::dispatch::WaitHosts {
+                        scene: Some(&mut self.scene),
+                        camera: Some(&mut self.camera),
+                        input: &mut self.input,
+                        gate,
+                        change_images: true,
+                    }),
+                    ..Default::default()
+                },
+            )?
+            .expect("registered wait has a dispatch result");
+            self.resume_run = flow.yields();
+            return Ok(match flow {
+                crate::dispatch::Flow::Done => StartupEvent::Progress,
+                crate::dispatch::Flow::Yield | crate::dispatch::Flow::Wait => StartupEvent::Yield,
+                crate::dispatch::Flow::Unhandled | crate::dispatch::Flow::Unavailable => {
+                    StartupEvent::Unhandled {
+                        pc,
+                        command: command + 0x2000,
+                    }
+                }
             });
         }
         let (message_flags, read_eligible) = if matches!(command, 0x152 | 0x153) {
@@ -768,6 +751,7 @@ impl<'a> Startup<'a> {
             resolved.semantics,
             &mut self.machine,
             &mut crate::dispatch::Hosts {
+                waits: None,
                 text: Some(crate::dispatch::TextHosts {
                     messages: &mut self.messages,
                     input: &mut self.input,
@@ -790,7 +774,7 @@ impl<'a> Startup<'a> {
         )? {
             return Ok(match flow {
                 crate::dispatch::Flow::Done => StartupEvent::Progress,
-                crate::dispatch::Flow::Yield => {
+                crate::dispatch::Flow::Yield | crate::dispatch::Flow::Wait => {
                     self.message_flags = message_flags;
                     self.resume_run = true;
                     StartupEvent::Yield

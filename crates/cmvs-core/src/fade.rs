@@ -1,6 +1,10 @@
 //! Engine +4616 full-screen color fade; addresses refer to the documented binary hash.
 use crate::{
-    bytecode::DecodeError, dispatch::Call, evaluate::error, input::ActionInput, machine::Machine,
+    bytecode::DecodeError,
+    dispatch::{Call, Flow},
+    evaluate::error,
+    input::ActionInput,
+    machine::Machine,
     vm::SystemResult,
 };
 
@@ -177,32 +181,51 @@ impl FadeHost {
         let Some((pc, 0x224)) = vm.pending_system() else {
             return Ok(None);
         };
-        let skippable = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x2224, e.0))? != 0;
+        self.handle_wait(&mut Call::new(vm, pc, 0x224), gate, input)
+            .map(|flow| Some(flow.wait_step()))
+    }
+
+    pub(crate) fn handle_wait(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        gate: SkipGate,
+        input: &mut ActionInput,
+    ) -> Result<Flow, DecodeError> {
+        let skippable = call.argument(4, "skippable")? != 0;
         let active = self
             .current
             .as_ref()
             .is_some_and(|f| (f.remaining() as i32) >= 0);
         if !active {
-            let step = vm.complete_system(SystemResult(0x4004))?;
-            vm.state_mut().set_system_integer(0, 0).expect("slot 0");
-            return Ok(Some(step));
+            let flow = call.finish(0x4004)?;
+            call.vm
+                .state_mut()
+                .set_system_integer(0, 0)
+                .expect("slot 0");
+            return Ok(flow);
         }
         let immediate = !gate.effects || input.skip_held() || gate.skip;
         let decided = skippable && !immediate && input.released(0);
         if skippable && (immediate || decided) {
-            let step = vm.complete_system(SystemResult(0xc004))?;
+            let flow = call.finish(0xc004)?;
             if decided {
                 input.consume(0);
             }
-            vm.state_mut().set_system_integer(0, 1).expect("slot 0");
+            call.vm
+                .state_mut()
+                .set_system_integer(0, 1)
+                .expect("slot 0");
             if self.current.as_mut().is_some_and(Fade::finish) {
                 self.current = None;
             }
-            return Ok(Some(step));
+            return Ok(flow);
         }
-        let step = vm.yield_pending_system()?;
-        vm.state_mut().set_system_integer(0, 0).expect("slot 0");
-        Ok(Some(step))
+        let flow = call.wait(4)?;
+        call.vm
+            .state_mut()
+            .set_system_integer(0, 0)
+            .expect("slot 0");
+        Ok(flow)
     }
     pub fn current(&self) -> Option<&Fade> {
         self.current.as_ref()

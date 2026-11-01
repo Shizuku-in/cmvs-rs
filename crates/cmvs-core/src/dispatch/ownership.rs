@@ -16,11 +16,23 @@ pub struct Claim {
     pub handler: &'static str,
     pub runner_order: Option<u16>,
     pub trace_order: Option<u16>,
+    runner_wait_order: Option<u16>,
     accepts: fn(u16) -> bool,
     trace_accepts: fn(u16) -> bool,
 }
 
 impl Claim {
+    pub fn order_for(&self, command: u16, chain: Chain) -> Option<u16> {
+        if chain == Chain::Runner
+            && let Some(order) = self.runner_wait_order
+            && super::is_wait(command)
+        {
+            return Some(order);
+        }
+        self.order(chain)
+    }
+
+    /// Default call position; order_for includes command-specific early stages.
     pub fn order(&self, chain: Chain) -> Option<u16> {
         match chain {
             Chain::Runner => self.runner_order,
@@ -43,6 +55,7 @@ macro_rules! claim {
             handler: $handler,
             runner_order: $runner,
             trace_order: $trace,
+            runner_wait_order: None,
             accepts: |command| matches!(command, $($pattern)|+),
             trace_accepts: |command| matches!(command, $($pattern)|+),
         }
@@ -57,12 +70,6 @@ pub static CLAIMS: &[Claim] = &[
     claim!("runner::try_lifecycle", Some(10), None, 0x01 | 0x03),
     claim!("capture::try_immediate", Some(20), None, 0x3e),
     claim!("system_save::try_write", Some(30), None, 0x129),
-    claim!("fade::try_wait", Some(40), Some(20), 0x224),
-    claim!("scene::try_wait_mask", Some(50), Some(30), 0x22b | 0x235),
-    claim!("scene::try_wait_quake", Some(60), Some(40), 0x228),
-    claim!("scene::try_wait_change", Some(70), None, 0x2c7),
-    claim!("scene::try_wait_strip", Some(80), Some(50), 0x233),
-    claim!("camera::try_wait_move", Some(90), None, 0x69),
     claim!(
         "message::try_wait_with_auto",
         Some(100),
@@ -72,6 +79,7 @@ pub static CLAIMS: &[Claim] = &[
     Claim {
         handler: "dispatch::ROOT",
         runner_order: Some(110),
+        runner_wait_order: Some(40),
         // Trace exposes state hosts conditionally and has no text capability.
         trace_order: Some(0),
         accepts: |command| super::ROOT.iter().any(|entry| entry.command == command),
@@ -84,6 +92,8 @@ pub static CLAIMS: &[Claim] = &[
                             | super::Capability::Math
                             | super::Capability::SaveInfo
                             | super::Capability::Effects
+                            | super::Capability::ChangeWait
+                            | super::Capability::CameraWait
                     )
             })
         },
@@ -207,8 +217,10 @@ pub static CLAIMS: &[Claim] = &[
 pub fn candidates(command: u16, chain: Chain) -> Vec<&'static Claim> {
     let mut claims: Vec<_> = CLAIMS
         .iter()
-        .filter(|claim| claim.order(chain).is_some() && claim.recognizes_in(command, chain))
+        .filter(|claim| {
+            claim.order_for(command, chain).is_some() && claim.recognizes_in(command, chain)
+        })
         .collect();
-    claims.sort_by_key(|claim| claim.order(chain));
+    claims.sort_by_key(|claim| claim.order_for(command, chain));
     claims
 }

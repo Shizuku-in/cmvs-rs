@@ -156,6 +156,70 @@ fn yielding_append_outputs_once_and_does_not_consume_release_or_bypass_reveal() 
 }
 
 #[test]
+fn shared_append_flow_distinguishes_pending_wait_from_completed_yield() {
+    use cmvs_rs::{
+        dispatch::{self, Flow, Hosts, TextHosts},
+        profile::Semantics,
+    };
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 300, 100]);
+    call(&mut code, 0x2157, &[0, 123, 0]);
+    let program = script_with_text(&code, b"\x82\xa0\x82\xa2\0");
+    let mut vm = Machine::new(&program).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 1);
+    messages.set_record_output(true);
+    pending(&mut vm);
+    let pc = vm.pc();
+    let mut input = ActionInput::default();
+    for repeat in 1..=3 {
+        assert_eq!(
+            dispatch::run(
+                Semantics::Root,
+                &mut vm,
+                &mut Hosts {
+                    text: Some(TextHosts {
+                        messages: &mut messages,
+                        input: &mut input,
+                        flags: Default::default()
+                    }),
+                    ..Default::default()
+                }
+            )
+            .unwrap(),
+            Some(Flow::Wait)
+        );
+        assert_eq!(
+            (vm.pc(), vm.stack().len_bytes(), vm.repeat_count()),
+            (pc, 12, repeat)
+        );
+        assert_eq!(messages.text(7).unwrap().glyphs.len(), 2);
+    }
+    messages.advance_frame(1000);
+    assert_eq!(
+        dispatch::run(
+            Semantics::Root,
+            &mut vm,
+            &mut Hosts {
+                text: Some(TextHosts {
+                    messages: &mut messages,
+                    input: &mut input,
+                    flags: Default::default()
+                }),
+                ..Default::default()
+            }
+        )
+        .unwrap(),
+        Some(Flow::Yield)
+    );
+    assert_eq!(vm.pending_system(), None);
+    assert_eq!(
+        (vm.pc(), vm.stack().len_bytes(), vm.repeat_count()),
+        (pc + 2, 0, 0)
+    );
+}
+
+#[test]
 fn timed_window_wait_ignores_manual_skip_and_auto_flags_and_finishes_without_yield() {
     use cmvs_rs::{message::AutoAdvanceContext, settings::AutoAdvanceSettings};
     for (voice, auto) in [(-1i32, false), (-1, true), (5, false), (5, true)] {
@@ -4043,7 +4107,11 @@ fn font_cell_step(
             ..Default::default()
         },
     )? {
-        Some(cmvs_rs::dispatch::Flow::Done | cmvs_rs::dispatch::Flow::Yield) => Ok(true),
+        Some(
+            cmvs_rs::dispatch::Flow::Done
+            | cmvs_rs::dispatch::Flow::Yield
+            | cmvs_rs::dispatch::Flow::Wait,
+        ) => Ok(true),
         Some(cmvs_rs::dispatch::Flow::Unhandled | cmvs_rs::dispatch::Flow::Unavailable) => {
             Ok(false)
         }

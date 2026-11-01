@@ -6,6 +6,7 @@
 use super::{DrawState, ObjectImage, SceneHost, SceneObject, load_image};
 use crate::{
     bytecode::DecodeError,
+    dispatch::{Call, Flow},
     evaluate::error,
     fade::SkipGate,
     image::ImageSource,
@@ -170,36 +171,55 @@ impl SceneHost {
         let Some((pc, 0x2c7)) = vm.pending_system() else {
             return Ok(None);
         };
-        let slot = self.change_slot(vm, pc, 0x2c7)?;
-        let skippable = vm.stack().peek_u32(8).map_err(|e| error(pc, 0x22c7, e.0))? != 0;
+        self.handle_wait_change(&mut Call::new(vm, pc, 0x2c7), gate, input)
+            .map(|flow| Some(flow.wait_step()))
+    }
+
+    pub(crate) fn handle_wait_change(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        gate: SkipGate,
+        input: &mut ActionInput,
+    ) -> Result<Flow, DecodeError> {
+        let raw = call.argument(4, "object slot")?;
+        let slot = u8::try_from(raw)
+            .ok()
+            .filter(|s| self.objects.contains_key(s))
+            .ok_or_else(|| {
+                call.error("replacement control needs an existing object in slots 0..255")
+            })?;
+        let skippable = call.argument(8, "skippable")? != 0;
         if self.objects[&slot].change.is_none() {
-            let step = vm.complete_system(SystemResult(0x4008))?;
-            vm.state_mut()
+            let flow = call.finish(0x4008)?;
+            call.vm
+                .state_mut()
                 .set_system_integer(0, 0)
                 .expect("result 0 exists");
-            return Ok(Some(step));
+            return Ok(flow);
         }
         let immediate = !gate.effects || input.skip_held() || gate.skip;
         let released = skippable && !immediate && input.released(0);
         if skippable && (immediate || released) {
-            let step = vm.complete_system(SystemResult(0xc008))?;
+            let flow = call.finish(0xc008)?;
             if released {
                 input.consume(0);
             }
-            vm.state_mut()
+            call.vm
+                .state_mut()
                 .set_system_integer(0, 1)
                 .expect("result 0 exists");
             self.objects
                 .get_mut(&slot)
                 .expect("validated")
                 .cancel_change();
-            return Ok(Some(step));
+            return Ok(flow);
         }
-        let step = vm.yield_pending_system()?;
-        vm.state_mut()
+        let flow = call.wait(8)?;
+        call.vm
+            .state_mut()
             .set_system_integer(0, 0)
             .expect("result 0 exists");
-        Ok(Some(step))
+        Ok(flow)
     }
 
     /// SP-4 unsigned slot (unbounded in the original), SP-8 name, SP-12 duration,

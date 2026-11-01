@@ -346,10 +346,23 @@ fn run() -> Result<(), Box<dyn Error>> {
                     cmvs_rs::dispatch::semantics_name(gate.selection().profile, first)
                 );
             }
+            let wait_gate = SkipGate {
+                skip: message_flags.skip(),
+                ..SkipGate::default()
+            };
             let dispatched = cmvs_rs::dispatch::run(
                 resolved.semantics,
                 &mut machine,
                 &mut cmvs_rs::dispatch::Hosts {
+                    waits: platform_assets
+                        .is_some()
+                        .then_some(cmvs_rs::dispatch::WaitHosts {
+                            scene: Some(&mut scene),
+                            camera: None,
+                            input: &mut input,
+                            gate: wait_gate,
+                            change_images: false,
+                        }),
                     timers: platform_assets.is_some().then_some(&mut timers),
                     flags: platform_assets.is_some().then_some(&mut message_flags),
                     random: random.as_mut(),
@@ -363,6 +376,38 @@ fn run() -> Result<(), Box<dyn Error>> {
                     ..Default::default()
                 },
             )?;
+            if dispatched.is_some_and(cmvs_rs::dispatch::Flow::yields) {
+                let Some(delta) = frame_ms else {
+                    println!(
+                        "# WAIT fade/mask transition at pc=0x{:x}; PC and stack preserved; supply --frame-ms to advance engine frames",
+                        machine.pc()
+                    );
+                    return Ok(());
+                };
+                if let (Some(images), Some(config)) = (&mut images, &bootstrap) {
+                    sequence.advance_frame_with_hosts(
+                        delta,
+                        &mut scene,
+                        &mut images.with_paths(config.paths()),
+                        &mut camera,
+                    )?;
+                } else {
+                    sequence.advance_frame(delta)?;
+                }
+                scene.advance_frame(delta);
+                camera.advance_frame(delta);
+                movies.advance(delta);
+                frame_delta = delta;
+                resume_run = true;
+                println!(
+                    "# frame delta_ms={delta} fade={:?} mask={:?}",
+                    scene.fade().current(),
+                    scene
+                        .mask()
+                        .map(|mask| (mask.slot, mask.elapsed, mask.duration()))
+                );
+                continue;
+            }
             if dispatched == Some(cmvs_rs::dispatch::Flow::Done) {
                 use cmvs_rs::dispatch::Capability;
                 let capability = cmvs_rs::dispatch::ROOT
@@ -424,6 +469,12 @@ fn run() -> Result<(), Box<dyn Error>> {
                             .map(|offset| gesture.field(offset).unwrap_or(0))
                             .collect::<Vec<_>>()
                     ),
+                    Capability::FadeWait
+                    | Capability::MaskWait
+                    | Capability::QuakeWait
+                    | Capability::StripWait
+                    | Capability::ChangeWait
+                    | Capability::CameraWait => {}
                     Capability::Text
                     | Capability::Math
                     | Capability::SaveInfo
@@ -453,54 +504,6 @@ fn run() -> Result<(), Box<dyn Error>> {
                 continue;
             }
             if let Some(assets) = &mut platform_assets {
-                let gate = SkipGate {
-                    skip: message_flags.skip(),
-                    ..SkipGate::default()
-                };
-                let waited = match scene.fade_mut().try_wait(&mut machine, gate, &mut input)? {
-                    Some(event) => Some(event),
-                    None => match scene.try_wait_mask(&mut machine, gate, &mut input)? {
-                        Some(event) => Some(event),
-                        None => match scene.try_wait_quake(&mut machine)? {
-                            Some(event) => Some(event),
-                            None => scene.try_wait_strip(&mut machine, gate, &mut input)?,
-                        },
-                    },
-                };
-                if let Some(event) = waited {
-                    if event == Step::Yield {
-                        let Some(delta) = frame_ms else {
-                            println!(
-                                "# WAIT fade/mask transition at pc=0x{:x}; PC and stack preserved; supply --frame-ms to advance engine frames",
-                                machine.pc()
-                            );
-                            return Ok(());
-                        };
-                        if let (Some(images), Some(config)) = (&mut images, &bootstrap) {
-                            sequence.advance_frame_with_hosts(
-                                delta,
-                                &mut scene,
-                                &mut images.with_paths(config.paths()),
-                                &mut camera,
-                            )?;
-                        } else {
-                            sequence.advance_frame(delta)?;
-                        }
-                        scene.advance_frame(delta);
-                        camera.advance_frame(delta);
-                        movies.advance(delta);
-                        frame_delta = delta;
-                        resume_run = true;
-                        println!(
-                            "# frame delta_ms={delta} fade={:?} mask={:?}",
-                            scene.fade().current(),
-                            scene
-                                .mask()
-                                .map(|mask| (mask.slot, mask.elapsed, mask.duration()))
-                        );
-                    }
-                    continue;
-                }
                 let cursors = bootstrap
                     .as_ref()
                     .map(Bootstrap::cursor_names)

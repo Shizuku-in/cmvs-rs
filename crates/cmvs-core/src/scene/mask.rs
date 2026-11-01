@@ -10,6 +10,7 @@
 use super::{ObjectImage, SceneHost, load_image};
 use crate::{
     bytecode::DecodeError,
+    dispatch::{Call, Flow},
     evaluate::error,
     fade::SkipGate,
     image::ImageSource,
@@ -293,30 +294,52 @@ impl SceneHost {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(None);
         };
-        let Some((channel, 1)) = channel(command) else {
+        let Some((_, 1)) = channel(command) else {
             return Ok(None);
         };
-        let op = command + 0x2000;
-        let skippable = vm.stack().peek_u32(4).map_err(|e| error(pc, op, e.0))? != 0;
+        self.handle_wait_mask(&mut Call::new(vm, pc, command), gate, input)
+            .map(|flow| Some(flow.wait_step()))
+    }
+
+    pub(crate) fn handle_wait_mask(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        gate: SkipGate,
+        input: &mut ActionInput,
+    ) -> Result<Flow, DecodeError> {
+        let command = call.command;
+        let Some((channel, 1)) = channel(command) else {
+            return Err(call.error("unregistered mask wait"));
+        };
+        let skippable = call.argument(4, "skippable")? != 0;
         if self.masks[channel].is_none() {
-            let step = vm.complete_system(SystemResult(0x4004))?;
-            vm.state_mut().set_system_integer(0, 0).expect("slot 0");
-            return Ok(Some(step));
+            let flow = call.finish(0x4004)?;
+            call.vm
+                .state_mut()
+                .set_system_integer(0, 0)
+                .expect("slot 0");
+            return Ok(flow);
         }
         let immediate = !gate.effects || input.skip_held() || gate.skip;
         let released = skippable && !immediate && input.released(0);
         if skippable && (immediate || released) {
-            let step = vm.complete_system(SystemResult(0xc004))?;
+            let flow = call.finish(0xc004)?;
             if released {
                 input.consume(0);
             }
-            vm.state_mut().set_system_integer(0, 1).expect("slot 0");
+            call.vm
+                .state_mut()
+                .set_system_integer(0, 1)
+                .expect("slot 0");
             self.finish_mask(channel);
-            return Ok(Some(step));
+            return Ok(flow);
         }
-        let step = vm.yield_pending_system()?;
-        vm.state_mut().set_system_integer(0, 0).expect("slot 0");
-        Ok(Some(step))
+        let flow = call.wait(4)?;
+        call.vm
+            .state_mut()
+            .set_system_integer(0, 0)
+            .expect("slot 0");
+        Ok(flow)
     }
 }
 

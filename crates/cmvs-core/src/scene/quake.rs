@@ -6,6 +6,7 @@
 use super::SceneHost;
 use crate::{
     bytecode::DecodeError,
+    dispatch::{Call, Flow},
     evaluate::error,
     machine::{Machine, Step},
     vm::SystemResult,
@@ -269,19 +270,28 @@ impl SceneHost {
         let Some((pc, 0x228)) = vm.pending_system() else {
             return Ok(None);
         };
-        let wait = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x2228, e.0))? != 0;
-        let (step, result) = match &self.quake {
-            None => (vm.complete_system(SystemResult(0x4004))?, 1),
-            Some(_) if wait => (vm.yield_pending_system()?, 0),
+        self.handle_wait_quake(&mut Call::new(vm, pc, 0x228))
+            .map(|flow| Some(flow.wait_step()))
+    }
+
+    pub(crate) fn handle_wait_quake(
+        &mut self,
+        call: &mut Call<'_, '_>,
+    ) -> Result<Flow, DecodeError> {
+        let wait = call.argument(4, "wait")? != 0;
+        let (flow, result) = match &self.quake {
+            None => (call.finish(0x4004)?, 1),
+            Some(_) if wait => (call.wait(4)?, 0),
             Some(_) => {
-                let step = vm.complete_system(SystemResult(0xc004))?;
+                let flow = call.finish(0xc004)?;
                 self.quake = None;
-                (step, 1)
+                (flow, 1)
             }
         };
-        vm.state_mut()
+        call.vm
+            .state_mut()
             .set_system_integer(0, result)
             .expect("slot 0 exists");
-        Ok(Some(step))
+        Ok(flow)
     }
 }

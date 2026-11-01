@@ -1,3 +1,5 @@
+#[path = "support/shared_wait.rs"]
+mod shared_wait;
 use cmvs_rs::{
     fade::SkipGate,
     image::ImageSource,
@@ -7,6 +9,7 @@ use cmvs_rs::{
     scene::SceneHost,
     scene_render,
 };
+use shared_wait::SharedSceneWait;
 use std::{collections::BTreeMap, error::Error};
 
 fn put(b: &mut [u8], at: usize, v: u32) {
@@ -234,7 +237,7 @@ fn wait(scene: &mut SceneHost, skippable: u32, gate: SkipGate, input: &mut Actio
     let mut vm = Machine::new(&script).unwrap();
     vm.state_mut().set_system_integer(0, 9).unwrap();
     pending(&mut vm);
-    let step = scene.try_wait_mask(&mut vm, gate, input).unwrap().unwrap();
+    let step = scene.shared_wait(&mut vm, gate, input).unwrap().unwrap();
     let done = vm.pending_system().is_none();
     assert_eq!(vm.stack().len_bytes(), if done { 0 } else { 4 });
     let result = vm.state().system_integer(0).unwrap();
@@ -418,7 +421,7 @@ fn second_channel_shades_its_target_and_waits_and_finishes_with_its_own_commands
     let mut input = ActionInput::default();
     input.set(0, false, false, true).unwrap();
     let step = scene
-        .try_wait_mask(&mut vm, SkipGate::default(), &mut input)
+        .shared_wait(&mut vm, SkipGate::default(), &mut input)
         .unwrap();
     assert_eq!(step, Some(Step::Yield));
     assert!(!input.released(0) && scene.second_mask().is_none());
@@ -512,7 +515,7 @@ fn second_channel_rejects_shared_objects_and_replacements_that_leave_a_shader() 
         let mut scene = SceneHost::default();
         assert!(!scene.try_handle_mask(&mut vm, &mut files()).unwrap());
         let step = scene
-            .try_wait_mask(&mut vm, SkipGate::default(), &mut ActionInput::default())
+            .shared_wait(&mut vm, SkipGate::default(), &mut ActionInput::default())
             .unwrap();
         assert_eq!(step, None);
         assert_eq!(vm.pending_system().map(|p| p.1), Some(op - 0x2000));

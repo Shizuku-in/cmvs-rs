@@ -1,3 +1,5 @@
+#[path = "support/shared_wait.rs"]
+mod shared_wait;
 use cmvs_rs::{
     cpz::{Cpz6Index, data_checksum},
     fade::SkipGate,
@@ -9,6 +11,7 @@ use cmvs_rs::{
     raster::RgbaImage,
     scene::{ObjectImage, SceneHost},
 };
+use shared_wait::SharedSceneWait;
 use std::{collections::BTreeMap, error::Error, fs, io::Cursor, path::PathBuf};
 
 fn put(b: &mut [u8], at: usize, v: u32) {
@@ -1353,7 +1356,7 @@ fn replacement_wait_retries_without_advancing_time_then_completes_without_yield(
     };
     for repeat in 1..=3 {
         assert_eq!(
-            scene.try_wait_change(&mut vm, gate, &mut input).unwrap(),
+            scene.shared_wait(&mut vm, gate, &mut input).unwrap(),
             Some(Step::Yield)
         );
         assert_eq!(
@@ -1366,12 +1369,12 @@ fn replacement_wait_retries_without_advancing_time_then_completes_without_yield(
     }
     scene.advance_frame(499);
     assert_eq!(
-        scene.try_wait_change(&mut vm, gate, &mut input).unwrap(),
+        scene.shared_wait(&mut vm, gate, &mut input).unwrap(),
         Some(Step::Yield)
     );
     scene.advance_frame(1);
     assert_eq!(
-        scene.try_wait_change(&mut vm, gate, &mut input).unwrap(),
+        scene.shared_wait(&mut vm, gate, &mut input).unwrap(),
         Some(Step::Continue)
     );
     assert_eq!(
@@ -1380,10 +1383,7 @@ fn replacement_wait_retries_without_advancing_time_then_completes_without_yield(
     );
     assert_eq!(vm.state().system_integer(0), Some(0));
     assert_eq!(input, before_input);
-    assert_eq!(
-        scene.try_wait_change(&mut vm, gate, &mut input).unwrap(),
-        None
-    );
+    assert_eq!(scene.shared_wait(&mut vm, gate, &mut input).unwrap(), None);
 }
 
 #[test]
@@ -1414,7 +1414,7 @@ fn replacement_wait_skip_flags_preserve_input_while_released_action_zero_is_cons
             expected_input.consume(0);
         }
         assert_eq!(
-            scene.try_wait_change(&mut vm, gate, &mut input).unwrap(),
+            scene.shared_wait(&mut vm, gate, &mut input).unwrap(),
             Some(Step::Yield)
         );
         assert_eq!((vm.pc(), vm.stack().len_bytes()), (code.len(), 0));
@@ -1464,7 +1464,7 @@ fn replacement_control_errors_preserve_scene_parameters_results_and_input() {
             if opcode == 0x22c7 {
                 assert!(
                     scene
-                        .try_wait_change(&mut vm, SkipGate::default(), &mut input)
+                        .shared_wait(&mut vm, SkipGate::default(), &mut input)
                         .is_err()
                 );
             } else {
@@ -1506,7 +1506,7 @@ fn replacement_control_without_draw_allows_query_and_inactive_wait_but_rejects_c
     input.set(0, false, false, true).unwrap();
     assert_eq!(
         scene
-            .try_wait_change(
+            .shared_wait(
                 &mut vm,
                 SkipGate {
                     effects: false,

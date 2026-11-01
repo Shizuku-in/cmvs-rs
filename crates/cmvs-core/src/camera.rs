@@ -8,6 +8,7 @@
 //! ease-out branches. 0x2126 queries the screen device size at +1968 -> +8.
 use crate::{
     bytecode::DecodeError,
+    dispatch::{Call, Flow},
     evaluate::{error, truncate},
     fade::SkipGate,
     input::ActionInput,
@@ -347,32 +348,45 @@ impl CameraHost {
         let Some((pc, 0x69)) = vm.pending_system() else {
             return Ok(None);
         };
-        let skippable = vm.stack().peek_u32(4).map_err(|e| error(pc, 0x2069, e.0))? != 0;
+        self.handle_wait_move(&mut Call::new(vm, pc, 0x69), gate, input)
+            .map(|flow| Some(flow.wait_step()))
+    }
+
+    pub(crate) fn handle_wait_move(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        gate: SkipGate,
+        input: &mut ActionInput,
+    ) -> Result<Flow, DecodeError> {
+        let skippable = call.argument(4, "skippable")? != 0;
         if !self.moving() {
-            let step = vm.complete_system(SystemResult(0x4004))?;
-            vm.state_mut()
+            let flow = call.finish(0x4004)?;
+            call.vm
+                .state_mut()
                 .set_system_integer(0, 0)
                 .expect("result 0 exists");
-            return Ok(Some(step));
+            return Ok(flow);
         }
         let immediate = !gate.effects || input.skip_held() || gate.skip;
         let released = skippable && !immediate && input.released(0);
         if skippable && (immediate || released) {
-            let step = vm.complete_system(SystemResult(0xc004))?;
+            let flow = call.finish(0xc004)?;
             if released {
                 input.consume(0);
             }
-            vm.state_mut()
+            call.vm
+                .state_mut()
                 .set_system_integer(0, 1)
                 .expect("result 0 exists");
             self.cameras[0].stop_move(true);
-            return Ok(Some(step));
+            return Ok(flow);
         }
-        let step = vm.yield_pending_system()?;
-        vm.state_mut()
+        let flow = call.wait(4)?;
+        call.vm
+            .state_mut()
             .set_system_integer(0, 0)
             .expect("result 0 exists");
-        Ok(Some(step))
+        Ok(flow)
     }
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
         if let Some((pc, command @ 0x260..=0x264)) = vm.pending_system() {

@@ -705,7 +705,7 @@ pub(crate) fn append_window(
             hosts.flags,
             append_layout,
         )? {
-            Some(_) => Flow::Yield,
+            Some(step) => Flow::from_step(step, call.vm.pending_system().is_some()),
             None => Flow::Unhandled,
         },
     )
