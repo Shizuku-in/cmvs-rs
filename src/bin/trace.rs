@@ -354,6 +354,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             let paths = bootstrap.as_ref().map_or(&no_paths, Bootstrap::paths);
             let mut registered_images = images.as_mut().map(|images| images.with_paths(paths));
             let mut hosts = cmvs_rs::dispatch::Hosts {
+                buttons: platform_assets.is_some().then_some(&mut buttons),
                 camera: platform_assets.is_some().then_some(&mut camera),
                 audio: platform_assets
                     .is_some()
@@ -392,6 +393,11 @@ fn run() -> Result<(), Box<dyn Error>> {
                 });
             } else if platform_assets.is_some() {
                 hosts.scene = Some(&mut scene);
+                hosts.input = Some(cmvs_rs::dispatch::InputHosts {
+                    input: &mut input,
+                    skip: wait_gate.skip,
+                    clock: None,
+                });
             }
             let dispatched = cmvs_rs::dispatch::run(resolved.semantics, &mut machine, &mut hosts)?;
 
@@ -435,6 +441,50 @@ fn run() -> Result<(), Box<dyn Error>> {
                     .expect("completed root command has an entry")
                     .capability;
                 match capability {
+                    Capability::ButtonInput => {
+                        let group = buttons.group(0);
+                        println!(
+                            "# button input 0x{:04x}: group0 current={:?} pressed={:?}; system_integer[0]={:?}; no input supplied",
+                            command + 0x2000,
+                            group.and_then(|g| g.current),
+                            group.map(|g| g.pressed_visual),
+                            machine.state().system_integer(0).map(|v| v as i32)
+                        );
+                    }
+                    Capability::Buttons => {
+                        println!(
+                            "# button 0x{:04x}: groups={:?} merged_states={}; system_integer[0]={:?}; scene state only, no input",
+                            command + 0x2000,
+                            (0..6)
+                                .filter_map(|i| buttons.group(i).map(|g| (
+                                    i,
+                                    g.object,
+                                    g.buttons.len()
+                                )))
+                                .collect::<Vec<_>>(),
+                            buttons.merged_states(),
+                            machine.state().system_integer(0)
+                        );
+                    }
+                    Capability::Input => {
+                        if command == 0x2ef {
+                            println!(
+                                "# skipping 0x22ef: script skip={} system_integer[0]={:?}; no input supplied",
+                                message_flags.skip(),
+                                machine.state().system_integer(0)
+                            );
+                        } else {
+                            println!(
+                                "# input 0x{:04x}: system_integer[0]={:?} [4]={:?}; no input supplied",
+                                command + 0x2000,
+                                machine.state().system_integer(0),
+                                machine.state().system_integer(4)
+                            );
+                        }
+                    }
+                    Capability::ListInput | Capability::DragPress => {
+                        return Err("trace lacks the dispatched input capability".into());
+                    }
                     Capability::Scene => {
                         println!(
                             "# scene state 0x{:04x}: {:?} rgba={:?} objects={:?}; recorded only, nothing drawn",
@@ -726,33 +776,6 @@ fn run() -> Result<(), Box<dyn Error>> {
                     );
                     continue;
                 }
-                if buttons.try_handle_input(&mut machine, &mut scene, &mut input)? {
-                    let group = buttons.group(0);
-                    println!(
-                        "# button input 0x{:04x}: group0 current={:?} pressed={:?}; system_integer[0]={:?}; no input supplied",
-                        command + 0x2000,
-                        group.and_then(|g| g.current),
-                        group.map(|g| g.pressed_visual),
-                        machine.state().system_integer(0).map(|v| v as i32)
-                    );
-                    continue;
-                }
-                if buttons.try_handle(&mut machine, &mut scene)? {
-                    println!(
-                        "# button 0x{:04x}: groups={:?} merged_states={}; system_integer[0]={:?}; scene state only, no input",
-                        command + 0x2000,
-                        (0..6)
-                            .filter_map(|i| buttons.group(i).map(|g| (
-                                i,
-                                g.object,
-                                g.buttons.len()
-                            )))
-                            .collect::<Vec<_>>(),
-                        buttons.merged_states(),
-                        machine.state().system_integer(0)
-                    );
-                    continue;
-                }
                 if scene.try_handle_quake(&mut machine)? {
                     println!(
                         "# quake 0x{:04x}: {:?} system_integer[0]={:?}",
@@ -817,20 +840,12 @@ fn run() -> Result<(), Box<dyn Error>> {
                     );
                     continue;
                 }
-                if input::try_handle(&mut machine, &mut input)? {
+                if command == 0x34d && input::try_handle(&mut machine, &mut input)? {
                     println!(
                         "# input 0x{:04x}: system_integer[0]={:?} [4]={:?}; no input supplied",
                         command + 0x2000,
                         machine.state().system_integer(0),
                         machine.state().system_integer(4)
-                    );
-                    continue;
-                }
-                if input::try_handle_skipping(&mut machine, &input, message_flags.skip())? {
-                    println!(
-                        "# skipping 0x22ef: script skip={} system_integer[0]={:?}; no input supplied",
-                        message_flags.skip(),
-                        machine.state().system_integer(0)
                     );
                     continue;
                 }

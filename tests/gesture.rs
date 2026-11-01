@@ -273,7 +273,23 @@ fn drag_press_query_can_force_tracking_without_consuming_the_press() {
     let before = input.clone();
     for active in [0, 1] {
         while !matches!(vm.step().unwrap(), Step::System { .. }) {}
-        assert!(gesture.try_handle_drag_press(&mut vm, &input, 123).unwrap());
+        assert_eq!(
+            cmvs_rs::dispatch::run(
+                cmvs_rs::profile::Semantics::Root,
+                &mut vm,
+                &mut cmvs_rs::dispatch::Hosts {
+                    input: Some(cmvs_rs::dispatch::InputHosts {
+                        input: &mut input,
+                        skip: false,
+                        clock: Some(123)
+                    }),
+                    gesture: Some(&mut gesture),
+                    ..Default::default()
+                }
+            )
+            .unwrap(),
+            Some(cmvs_rs::dispatch::Flow::Done)
+        );
         assert_eq!(vm.state().system_integer(0), Some(1));
         assert_eq!(gesture.field(120), Some(active));
         assert_eq!(input, before);

@@ -3,7 +3,7 @@
 //! codes (tables at +944 + 10 * action) and per-code frame counters (+1540 now, +2564 before).
 //! KeyBindings reads the verified key.cfg bank; hosts without native input supply the
 //! default: no action active. Physical event translation stays in the desktop backend.
-use crate::{bytecode::DecodeError, machine::Machine, vm::SystemResult};
+use crate::{bytecode::DecodeError, dispatch::Call, machine::Machine};
 
 pub const ACTIONS: usize = 24;
 /// Input codes behind the mouse flags at +1184 + 12 * i (0x140055260): left button, right
@@ -266,11 +266,24 @@ pub fn try_handle(vm: &mut Machine<'_>, input: &mut ActionInput) -> Result<bool,
     let Some((pc, command)) = vm.pending_system() else {
         return Ok(false);
     };
+    if !recognizes(command) {
+        return Ok(false);
+    }
+    handle(&mut Call::new(vm, pc, command), input)?;
+    Ok(true)
+}
+
+fn recognizes(command: u16) -> bool {
+    matches!(command, 0xc8..=0xca | 0x19a | 0x19c..=0x1a4 | 0x1a6 | 0x1a8..=0x1bd | 0x344..=0x347 | 0x34a | 0x34b | 0x34d..=0x34f | 0x35c | 0x35d)
+}
+
+pub(crate) fn handle(call: &mut Call<'_, '_>, input: &mut ActionInput) -> Result<(), DecodeError> {
+    let command = call.command;
     if matches!(command, 0xc8 | 0xc9) {
         // 0x140074ed0: system results 1/2 = pointer x/y (0x1400565a0); 0x140074f00: system
         // result 0 = +936 (0x1400565c0). Both return 0x4000.
-        vm.complete_system(SystemResult(0x4000))?;
-        let state = vm.state_mut();
+        call.complete(0x4000)?;
+        let state = call.vm.state_mut();
         if command == 0xc8 {
             let [x, y] = input.pointer();
             state
@@ -284,65 +297,65 @@ pub fn try_handle(vm: &mut Machine<'_>, input: &mut ActionInput) -> Result<bool,
                 .set_system_integer(0, u32::from(input.pointer_moved))
                 .expect("result exists");
         }
-        return Ok(true);
+        return Ok(());
     }
     if matches!(command, 0x35c | 0x35d) {
         // 0x140078b60 / 0x140078be0: system result 0 = action 0 / 1 went down on this frame
         // (0x140054d80 / 0x140054dc0); 0x4000.
         let pressed = input.pressed(usize::from(command == 0x35d));
-        vm.complete_system(SystemResult(0x4000))?;
-        vm.state_mut()
+        call.complete(0x4000)?;
+        call.vm
+            .state_mut()
             .set_system_integer(0, u32::from(pressed))
             .expect("slot 0 exists");
-        return Ok(true);
+        return Ok(());
     }
     if command == 0x19a {
         // Inline 0x14008370b: 0x140059560 on the +4656 input object, 0x4000.
-        vm.complete_system(SystemResult(0x4000))?;
+        call.complete(0x4000)?;
         input.clear_all_edges();
-        return Ok(true);
+        return Ok(());
     }
     if matches!(command, 0x34d..=0x34f) {
         // 0x140055230 sets +0x5fc, 0x140055240 reads +0x600 into system result 0 and
         // 0x140055250 clears it; all return 0x4000 and pop nothing.
-        vm.complete_system(SystemResult(0x4000))?;
+        call.complete(0x4000)?;
         match command {
             0x34d => input.function_keys = true,
-            0x34e => vm
+            0x34e => call
+                .vm
                 .state_mut()
                 .set_system_integer(0, input.function_key)
                 .expect("slot 0 exists"),
             _ => input.function_key = 0,
         }
-        return Ok(true);
+        return Ok(());
     }
     if command == 0xca {
         // 0x140074f30: inclusive signed rectangle, no normalization or consumption.
         let mut rect = [0; 4];
         for (i, value) in rect.iter_mut().enumerate() {
-            *value = vm
-                .stack()
-                .peek_u32((i + 1) * 4)
-                .map_err(|e| crate::evaluate::error(pc, 0x20ca, e.0))? as i32;
+            *value = call.argument((i + 1) * 4, ["left", "top", "width", "height"][i])? as i32;
         }
         let [left, top, width, height] = rect;
         let [x, y] = input.pointer();
         let hit =
             x >= left && x <= left.wrapping_add(width) && y >= top && y <= top.wrapping_add(height);
-        vm.complete_system(SystemResult(0x4010))?;
-        vm.state_mut()
+        call.complete(0x4010)?;
+        call.vm
+            .state_mut()
             .set_system_integer(0, u32::from(hit))
             .expect("result exists");
-        return Ok(true);
+        return Ok(());
     }
     let Some(&(_, action)) = ACTION_COMMANDS.iter().find(|&&(query, action)| {
         command == query || (command == query + 1 && !matches!(action, 7 | 8))
     }) else {
-        return Ok(false);
+        return Err(call.error("unregistered input command"));
     };
-    vm.complete_system(SystemResult(0x4000))?;
+    call.complete(0x4000)?;
     if command & 1 == 0 {
-        let state = vm.state_mut();
+        let state = call.vm.state_mut();
         state
             .set_system_integer(0, u32::from(input.released(action)))
             .expect("slot 0 exists");
@@ -352,7 +365,7 @@ pub fn try_handle(vm: &mut Machine<'_>, input: &mut ActionInput) -> Result<bool,
     } else {
         input.consume(action);
     }
-    Ok(true)
+    Ok(())
 }
 
 /// 0x22ef / 0x14007c8e0: system result 0 = 1 when the +1520 script skip flag (0x22eb) is set
@@ -362,12 +375,22 @@ pub fn try_handle_skipping(
     input: &ActionInput,
     skip: bool,
 ) -> Result<bool, DecodeError> {
-    let Some((_, 0x2ef)) = vm.pending_system() else {
+    let Some((pc, 0x2ef)) = vm.pending_system() else {
         return Ok(false);
     };
-    vm.complete_system(SystemResult(0x4000))?;
-    vm.state_mut()
+    handle_skipping(&mut Call::new(vm, pc, 0x2ef), input, skip)?;
+    Ok(true)
+}
+
+pub(crate) fn handle_skipping(
+    call: &mut Call<'_, '_>,
+    input: &ActionInput,
+    skip: bool,
+) -> Result<(), DecodeError> {
+    call.complete(0x4000)?;
+    call.vm
+        .state_mut()
         .set_system_integer(0, u32::from(skip || input.skip_held()))
         .expect("slot 0 exists");
-    Ok(true)
+    Ok(())
 }

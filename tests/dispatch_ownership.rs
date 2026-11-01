@@ -56,12 +56,25 @@ impl cmvs_rs::movie::MovieSource for Unavailable {
 fn audit(handler: &str, mut probe: impl FnMut(&mut Machine<'_>) -> bool) {
     let recognizes = |number| {
         use cmvs_rs::dispatch::Capability;
+        if handler == "input::try_handle" {
+            return number == 0x34d
+                || cmvs_rs::dispatch::ROOT.iter().any(|e| {
+                    e.command == number && e.capability == Capability::Input && e.command != 0x2ef
+                });
+        }
+        if handler == "input::try_handle_skipping" {
+            return number == 0x2ef;
+        }
         let capability = match handler {
             "scene::try_handle_image" => Some(Capability::SceneImages),
             "scene::try_handle_mask" => Some(Capability::MaskImages),
             "scene::try_change_image" => Some(Capability::ImageChange),
             "scene::try_handle" => Some(Capability::Scene),
             "camera::try_handle" => Some(Capability::Camera),
+            "buttons::try_handle" => Some(Capability::Buttons),
+            "buttons::try_handle_input" => Some(Capability::ButtonInput),
+            "buttons::try_handle_list_input" => Some(Capability::ListInput),
+            "gesture::try_handle_drag_press" => Some(Capability::DragPress),
             "audio::try_handle" => Some(Capability::Audio),
             "timers::try_handle" => Some(Capability::Timers),
             "message_flags::try_handle" => Some(Capability::Flags),
@@ -357,6 +370,13 @@ fn inventory_matches_wait_and_resource_host_recognition_exhaustively() {
                 save_info: Some(&mut cmvs_rs::snapshot::SaveInfo::default()),
                 effects: Some(&mut true),
                 effect_objects: true,
+                buttons: Some(&mut cmvs_rs::buttons::ButtonHost::default()),
+                input: Some(cmvs_rs::dispatch::InputHosts {
+                    input: &mut ActionInput::default(),
+                    skip: false,
+                    clock: Some(0),
+                }),
+                list_input: true,
                 scene: Some(&mut SceneHost::default()),
                 camera: Some(&mut CameraHost::default()),
                 images: Some(cmvs_rs::dispatch::ImageHosts {

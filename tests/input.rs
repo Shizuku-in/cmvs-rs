@@ -1,5 +1,8 @@
+#[allow(dead_code)]
+#[path = "support/shared_controls.rs"]
+mod shared_controls;
 use cmvs_rs::{
-    input::{self, ActionInput},
+    input::ActionInput,
     machine::{Machine, Step},
     ps3::Script,
 };
@@ -48,15 +51,15 @@ fn queries_report_release_and_hold_of_actions_zero_and_one() {
     input.set(0, true, true, false).unwrap();
     input.set(1, false, false, true).unwrap();
     pending(&mut vm);
-    assert!(input::try_handle(&mut vm, &mut input).unwrap());
+    assert!(shared_controls::input(&mut vm, &mut input).unwrap());
     assert_eq!(results(&vm), (Some(0), Some(1)));
     pending(&mut vm);
-    assert!(input::try_handle(&mut vm, &mut input).unwrap());
+    assert!(shared_controls::input(&mut vm, &mut input).unwrap());
     assert_eq!(results(&vm), (Some(1), Some(0)));
     // Queries leave the flags alone; hosts without input report nothing active.
     assert_eq!(vm.stack().len_bytes(), 0);
     pending(&mut vm);
-    assert!(input::try_handle(&mut vm, &mut ActionInput::default()).unwrap());
+    assert!(shared_controls::input(&mut vm, &mut ActionInput::default()).unwrap());
     assert_eq!(results(&vm), (Some(0), Some(0)));
     assert!(input.pressed(0) && input.released(1));
 }
@@ -71,16 +74,16 @@ fn consuming_clears_press_and_release_but_keeps_hold() {
     input.set(1, true, true, true).unwrap();
     input.set(2, true, true, true).unwrap();
     pending(&mut vm);
-    assert!(input::try_handle(&mut vm, &mut input).unwrap());
+    assert!(shared_controls::input(&mut vm, &mut input).unwrap());
     assert_eq!(vm.state().system_integer(0), Some(7));
     assert!(input.held(0) && !input.pressed(0) && !input.released(0));
     assert!(input.pressed(1));
     pending(&mut vm);
-    assert!(input::try_handle(&mut vm, &mut input).unwrap());
+    assert!(shared_controls::input(&mut vm, &mut input).unwrap());
     assert!(input.held(1) && !input.pressed(1) && !input.released(1));
     assert!(input.pressed(2) && input.released(2));
     pending(&mut vm);
-    assert!(input::try_handle(&mut vm, &mut input).unwrap());
+    assert!(shared_controls::input(&mut vm, &mut input).unwrap());
     assert_eq!(results(&vm), (Some(0), Some(1)));
 }
 
@@ -103,7 +106,7 @@ fn skipping_reports_the_script_flag_or_held_skip_actions() {
         let mut vm = Machine::new(&script).unwrap();
         vm.state_mut().set_system_integer(0, 9).unwrap();
         pending(&mut vm);
-        assert!(input::try_handle_skipping(&mut vm, &input, skip).unwrap());
+        assert!(shared_controls::skipping(&mut vm, &input, skip).unwrap());
         assert_eq!(vm.state().system_integer(0), Some(expected));
         assert_eq!(vm.pending_system(), None);
     }
@@ -155,7 +158,7 @@ fn every_query_reads_only_its_own_action() {
             let script = commands(&[op]);
             let mut vm = Machine::new(&script).unwrap();
             pending(&mut vm);
-            assert!(input::try_handle(&mut vm, &mut input).unwrap());
+            assert!(shared_controls::input(&mut vm, &mut input).unwrap());
             assert_eq!(results(&vm), expected, "{op:#x}");
             assert_eq!(input, before, "{op:#x} must not consume");
             assert_eq!((vm.pending_system(), vm.pc()), (None, 2));
@@ -175,7 +178,7 @@ fn every_consumer_clears_only_its_own_action() {
         let mut vm = Machine::new(&script).unwrap();
         vm.state_mut().set_system_integer(0, 7).unwrap();
         pending(&mut vm);
-        assert!(input::try_handle(&mut vm, &mut input).unwrap());
+        assert!(shared_controls::input(&mut vm, &mut input).unwrap());
         assert_eq!(vm.state().system_integer(0), Some(7));
         assert_eq!((vm.pending_system(), vm.pc()), (None, 2));
         for a in 0..24 {
@@ -197,7 +200,7 @@ fn neighbouring_commands_are_left_pending() {
         let script = commands(&[op]);
         let mut vm = Machine::new(&script).unwrap();
         pending(&mut vm);
-        assert!(!input::try_handle(&mut vm, &mut ActionInput::default()).unwrap());
+        assert!(!shared_controls::input(&mut vm, &mut ActionInput::default()).unwrap());
         assert_eq!(vm.pending_system().map(|p| p.1), Some(op - 0x2000));
     }
 }
@@ -220,7 +223,7 @@ fn pointer_rectangle_query_includes_right_and_bottom_edges_and_preserves_input()
     for (point, expected) in [([10, 20], 1), ([40, 60], 1), ([41, 60], 0), ([40, 61], 0)] {
         input.set_pointer(point[0], point[1]);
         pending(&mut vm);
-        assert!(input::try_handle(&mut vm, &mut input).unwrap());
+        assert!(shared_controls::input(&mut vm, &mut input).unwrap());
         assert_eq!(vm.state().system_integer(0), Some(expected));
         assert_eq!(vm.stack().len_bytes(), 0);
         assert!(input.released(0));
@@ -236,7 +239,7 @@ fn pointer_function_key_and_press_queries_read_the_per_frame_state() {
     let mut input = ActionInput::default();
     let step = |vm: &mut Machine<'_>, input: &mut ActionInput| {
         pending(vm);
-        assert!(input::try_handle(vm, input).unwrap());
+        assert!(shared_controls::input(vm, input).unwrap());
         vm.state().system_integer(0)
     };
     input.set_pointer(-3, 700);

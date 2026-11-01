@@ -748,6 +748,7 @@ impl<'a> Startup<'a> {
             });
         }
         let mut image_source = self.images.with_paths(self.bootstrap.paths());
+        let input_clock = self.timers.clock();
         let mut hosts = crate::dispatch::Hosts {
             audio: Some(crate::dispatch::AudioHosts {
                 audio: &mut self.audio,
@@ -757,11 +758,10 @@ impl<'a> Startup<'a> {
             camera: Some(&mut self.camera),
             images: None,
             waits: None,
-            text: Some(crate::dispatch::TextHosts {
-                messages: &mut self.messages,
-                input: &mut self.input,
-                flags: message_flags,
-            }),
+            text: None,
+            input: None,
+            buttons: Some(&mut self.buttons),
+            list_input: true,
             timers: Some(&mut self.timers),
             flags: Some(&mut self.message_flags),
             random: Some(&mut self.random),
@@ -776,6 +776,19 @@ impl<'a> Startup<'a> {
             effects: Some(&mut self.effects),
             effect_objects: true,
         };
+        if crate::dispatch::uses_input(command) {
+            hosts.input = Some(crate::dispatch::InputHosts {
+                input: &mut self.input,
+                skip: message_flags.skip(),
+                clock: Some(input_clock),
+            });
+        } else {
+            hosts.text = Some(crate::dispatch::TextHosts {
+                messages: &mut self.messages,
+                input: &mut self.input,
+                flags: message_flags,
+            });
+        }
         if crate::dispatch::uses_images(command) {
             hosts.images = Some(crate::dispatch::ImageHosts {
                 scene: &mut self.scene,
@@ -913,11 +926,6 @@ impl<'a> Startup<'a> {
             || self.bootstrap.try_handle(&mut self.machine)?.is_some()
             || self.scene.try_handle_quake(&mut self.machine)?
             || self.scene.try_handle_strip(&mut self.machine)?
-            || self.gesture.try_handle_drag_press(
-                &mut self.machine,
-                &self.input,
-                self.timers.clock(),
-            )?
             || self
                 .messages
                 .try_record_poll(&mut self.machine, self.message_flags)?
@@ -935,18 +943,6 @@ impl<'a> Startup<'a> {
                 &mut self.machine,
                 &mut self.images.with_paths(self.bootstrap.paths()),
             )?
-            || self
-                .buttons
-                .try_handle(&mut self.machine, &mut self.scene)?
-            || self.buttons.try_handle_list_input(
-                &mut self.machine,
-                &mut self.scene,
-                &mut self.input,
-                &self.gesture,
-            )?
-            || self
-                .buttons
-                .try_handle_input(&mut self.machine, &mut self.scene, &mut self.input)?
             || self.movies.try_create_scene(
                 &mut self.machine,
                 &mut self.scene,
@@ -965,12 +961,7 @@ impl<'a> Startup<'a> {
                 self.audio.settings(),
                 self.audio_backend.as_mut(),
             )?
-            || input::try_handle(&mut self.machine, &mut self.input)?
-            || input::try_handle_skipping(
-                &mut self.machine,
-                &self.input,
-                self.message_flags.skip(),
-            )?
+            || (command == 0x34d && input::try_handle(&mut self.machine, &mut self.input)?)
             || self.sequence.try_handle_with_hosts(
                 &mut self.machine,
                 &mut self.scene,

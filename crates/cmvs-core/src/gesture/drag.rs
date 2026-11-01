@@ -14,11 +14,17 @@ impl PointerGesture {
         let Some((pc, 0x369)) = vm.pending_system() else {
             return Ok(false);
         };
-        let force = vm
-            .stack()
-            .peek_u32(4)
-            .map_err(|e| crate::evaluate::error(pc, 0x2369, e.0))?
-            != 0;
+        self.handle_drag_press(&mut crate::dispatch::Call::new(vm, pc, 0x369), input, now)?;
+        Ok(true)
+    }
+
+    pub(crate) fn handle_drag_press(
+        &mut self,
+        call: &mut crate::dispatch::Call<'_, '_>,
+        input: &ActionInput,
+        now: u32,
+    ) -> Result<(), crate::bytecode::DecodeError> {
+        let force = call.argument(4, "force")? != 0;
         let [x, y] = input.pointer();
         let hit = self.get(4) == 1
             && input.mouse(LEFT)[PRESSED]
@@ -31,7 +37,7 @@ impl PointerGesture {
                     && x < left.wrapping_add(w)
                     && y < top.wrapping_add(h)
             });
-        vm.complete_system(crate::vm::SystemResult(0x4004))?;
+        call.complete(0x4004)?;
         if hit
             && force
             && self.get(120) == 0
@@ -60,10 +66,11 @@ impl PointerGesture {
                 self.set(at, value);
             }
         }
-        vm.state_mut()
+        call.vm
+            .state_mut()
             .set_system_integer(0, u32::from(hit))
             .expect("result exists");
-        Ok(true)
+        Ok(())
     }
 
     pub(super) fn frame_drag(&mut self, input: &mut ActionInput, now: u32) {

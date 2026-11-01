@@ -1,3 +1,6 @@
+#[allow(dead_code)]
+#[path = "support/shared_controls.rs"]
+mod shared_controls;
 use cmvs_rs::{
     buttons::{Button, ButtonHost, ButtonImage},
     input::ActionInput,
@@ -5,6 +8,7 @@ use cmvs_rs::{
     ps3::Script,
     scene::SceneHost,
 };
+use shared_controls::SharedControls;
 
 /// Arguments are listed from SP-4 outward.
 fn call(code: &mut Vec<u8>, op: u16, args: &[u32]) {
@@ -40,7 +44,7 @@ fn script(code: &[u8]) -> Script {
 /// Runs to the next system command and offers it to the scene, then to the buttons.
 fn next(vm: &mut Machine<'_>, scene: &mut SceneHost, buttons: &mut ButtonHost) -> bool {
     while !matches!(vm.step().unwrap(), Step::System { .. }) {}
-    scene.try_handle(vm).unwrap() || buttons.try_handle(vm, scene).unwrap()
+    scene.try_handle(vm).unwrap() || buttons.shared_buttons(vm, scene).unwrap()
 }
 /// Scene object 10 plus button group 2 bound to it.
 fn prelude(code: &mut Vec<u8>) {
@@ -176,7 +180,10 @@ fn invalid_slots_missing_objects_and_short_stacks_keep_the_command_pending() {
         next(&mut vm, &mut scene, &mut buttons);
         while !matches!(vm.step().unwrap(), Step::System { .. }) {}
         let (pc, bytes) = (vm.pc(), vm.stack().len_bytes());
-        assert!(buttons.try_handle(&mut vm, &mut scene).is_err(), "{op:#x}");
+        assert!(
+            buttons.shared_buttons(&mut vm, &mut scene).is_err(),
+            "{op:#x}"
+        );
         assert_eq!(vm.pending_system(), Some((pc, op - 0x2000)));
         assert_eq!(vm.stack().len_bytes(), bytes);
         assert_eq!(buttons.group(2).unwrap().buttons, vec![]);
@@ -249,7 +256,7 @@ fn show_checks_every_target_before_writing() {
         while !matches!(vm.step().unwrap(), Step::System { .. }) {}
         let before = scene.object(10).unwrap().clone();
         assert!(
-            buttons.try_handle(&mut vm, &mut scene).is_err(),
+            buttons.shared_buttons(&mut vm, &mut scene).is_err(),
             "{missing_draw}"
         );
         assert_eq!(scene.object(10).unwrap(), &before);
@@ -292,7 +299,7 @@ fn frame(
     input: &mut ActionInput,
 ) -> i32 {
     while !matches!(vm.step().unwrap(), Step::System { .. }) {}
-    assert!(buttons.try_handle_input(vm, scene, input).unwrap());
+    assert!(buttons.shared_button_input(vm, scene, input).unwrap());
     vm.state().system_integer(0).unwrap() as i32
 }
 fn run_setup(vm: &mut Machine<'_>, scene: &mut SceneHost, buttons: &mut ButtonHost) {
@@ -419,7 +426,7 @@ fn missing_state_children_keep_the_frame_uncommitted() {
     // The hover image names child 0, which does not exist.
     assert!(
         buttons
-            .try_handle_input(&mut vm, &mut scene, &mut input)
+            .shared_button_input(&mut vm, &mut scene, &mut input)
             .is_err()
     );
     assert_eq!(buttons.group(2).unwrap().current, None);
@@ -472,7 +479,7 @@ fn auxiliary_list_destruction_rejects_missing_or_invalid_slot_atomically() {
         let mut buttons = ButtonHost::default();
         let mut scene = SceneHost::default();
         for _ in 0..2 {
-            assert!(buttons.try_handle(&mut vm, &mut scene).is_err());
+            assert!(buttons.shared_buttons(&mut vm, &mut scene).is_err());
             assert_eq!(
                 (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
                 (pc, sp, pending)
@@ -493,7 +500,7 @@ fn auxiliary_list_creation_stays_a_barrier_for_empty_only_destruction() {
         let (pc, sp, pending) = (vm.pc(), vm.stack().len_bytes(), vm.pending_system());
         assert!(
             !ButtonHost::default()
-                .try_handle(&mut vm, &mut SceneHost::default())
+                .shared_buttons(&mut vm, &mut SceneHost::default())
                 .unwrap()
         );
         assert_eq!(
@@ -586,7 +593,7 @@ fn auxiliary_list_invalid_and_short_commands_preserve_old_group() {
         while !matches!(vm.step().unwrap(), Step::System { .. }) {}
         let pending = vm.pending_system();
         let sp = vm.stack().len_bytes();
-        assert!(buttons.try_handle(&mut vm, &mut scene).is_err());
+        assert!(buttons.shared_buttons(&mut vm, &mut scene).is_err());
         assert_eq!(buttons.list_group(7), Some(&before));
         assert_eq!(vm.pending_system(), pending);
         assert_eq!(vm.stack().len_bytes(), sp);
@@ -636,7 +643,7 @@ fn list_input_offsets_hits_by_parent_and_keeps_input_when_configured() {
             while !matches!(vm.step().unwrap(), Step::System { .. }) {}
             assert!(
                 buttons
-                    .try_handle_list_input(
+                    .shared_list_input(
                         &mut vm,
                         &mut scene,
                         &mut input,
@@ -680,7 +687,7 @@ fn list_input_hit_area_is_half_open_and_navigation_can_be_disabled() {
         input.set_pointer(point[0], point[1]);
         while !matches!(vm.step().unwrap(), Step::System { .. }) {}
         buttons
-            .try_handle_list_input(
+            .shared_list_input(
                 &mut vm,
                 &mut scene,
                 &mut input,
@@ -720,7 +727,7 @@ fn list_input_missing_visual_keeps_group_input_and_pending_command_unchanged() {
     let sp = vm.stack().len_bytes();
     assert!(
         buttons
-            .try_handle_list_input(
+            .shared_list_input(
                 &mut vm,
                 &mut scene,
                 &mut input,
@@ -776,7 +783,10 @@ fn scaled_group_creation_accepts_the_device_scale_only() {
         let (mut scene, mut buttons) = (SceneHost::default(), ButtonHost::default());
         assert!(next(&mut vm, &mut scene, &mut buttons));
         while !matches!(vm.step().unwrap(), Step::System { .. }) {}
-        assert_eq!(buttons.try_handle(&mut vm, &mut scene).is_ok(), accepted);
+        assert_eq!(
+            buttons.shared_buttons(&mut vm, &mut scene).is_ok(),
+            accepted
+        );
         assert_eq!(buttons.group(2).is_some(), accepted);
         assert_eq!(vm.stack().len_bytes(), if accepted { 0 } else { 16 });
     }

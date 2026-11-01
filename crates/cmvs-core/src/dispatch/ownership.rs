@@ -95,6 +95,8 @@ pub static CLAIMS: &[Claim] = &[
                             | super::Capability::ChangeWait
                             | super::Capability::CameraWait
                             | super::Capability::ImageChange
+                            | super::Capability::ListInput
+                            | super::Capability::DragPress
                     )
             })
         },
@@ -143,7 +145,6 @@ pub static CLAIMS: &[Claim] = &[
         Some(230),
         0x22f..=0x232
     ),
-    claim!("gesture::try_handle_drag_press", Some(350), None, 0x369),
     claim!("message::try_record_poll", Some(400), None, 0x159),
     claim!("message::try_handle_scene", Some(410), None, 0x383 | 0x39d),
     claim!("message::try_handle", Some(420), None,
@@ -156,15 +157,6 @@ pub static CLAIMS: &[Claim] = &[
     claim!("message::try_handle_pointer", Some(440), None, 0x15f),
     claim!("message::try_handle_buttons", Some(450), None, 0x194),
     claim!("message::try_handle_image", Some(460), None, 0x170 | 0x397),
-    claim!("buttons::try_handle", Some(470), Some(170),
-        0x87 | 0x210..=0x215 | 0x21b | 0x370..=0x376 | 0x378 | 0x379 | 0x37c..=0x37f),
-    claim!("buttons::try_handle_list_input", Some(480), None, 0x377),
-    claim!(
-        "buttons::try_handle_input",
-        Some(490),
-        Some(160),
-        0x216 | 0x217 | 0x21a
-    ),
     claim!("movie::try_create_scene", Some(500), None, 0x308),
     claim!("movie::try_start_scene", Some(510), None, 0x309),
     claim!(
@@ -179,10 +171,7 @@ pub static CLAIMS: &[Claim] = &[
         Some(250),
         0xc0..=0xc2
     ),
-    claim!("input::try_handle", Some(540), Some(260),
-        0xc8..=0xca | 0x19a | 0x19c..=0x1a4 | 0x1a6 | 0x1a8..=0x1bd
-        | 0x344..=0x347 | 0x34a | 0x34b | 0x34d..=0x34f | 0x35c | 0x35d),
-    claim!("input::try_handle_skipping", Some(560), Some(270), 0x2ef),
+    claim!("input::try_handle", Some(540), Some(260), 0x34d),
     claim!(
         "sequence::try_handle_with_hosts",
         Some(570),

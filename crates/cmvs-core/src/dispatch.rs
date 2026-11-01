@@ -7,6 +7,7 @@ use std::{error::Error, fmt};
 
 use crate::{
     audio::{AudioBackend, AudioHost},
+    buttons::ButtonHost,
     bytecode::DecodeError,
     camera::CameraHost,
     evaluate::error,
@@ -54,6 +55,13 @@ impl Error for DispatchError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         Some(self.cause.as_ref())
     }
+}
+
+pub struct InputHosts<'a> {
+    pub input: &'a mut ActionInput,
+    pub skip: bool,
+    /// Current host clock for drag initiation; absence keeps that capability unavailable.
+    pub clock: Option<u32>,
 }
 
 pub struct ImageHosts<'a> {
@@ -109,6 +117,10 @@ pub struct WaitHosts<'a> {
 
 #[derive(Default)]
 pub struct Hosts<'a> {
+    pub input: Option<InputHosts<'a>>,
+    pub buttons: Option<&'a mut ButtonHost>,
+    /// Explicit support for auxiliary-list interaction beyond list metadata.
+    pub list_input: bool,
     pub scene: Option<&'a mut SceneHost>,
     pub camera: Option<&'a mut CameraHost>,
     pub images: Option<ImageHosts<'a>>,
@@ -133,6 +145,11 @@ pub struct Hosts<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Capability {
+    Input,
+    Buttons,
+    ButtonInput,
+    ListInput,
+    DragPress,
     Scene,
     Camera,
     SceneImages,
@@ -164,6 +181,21 @@ pub enum Capability {
 impl Hosts<'_> {
     fn has(&self, capability: Capability) -> bool {
         match capability {
+            Capability::Input => self.input.is_some(),
+            Capability::Buttons => self.buttons.is_some() && self.scene.is_some(),
+            Capability::ButtonInput => {
+                self.buttons.is_some() && self.scene.is_some() && self.input.is_some()
+            }
+            Capability::ListInput => {
+                self.buttons.is_some()
+                    && self.scene.is_some()
+                    && self.input.is_some()
+                    && self.gesture.is_some()
+                    && self.list_input
+            }
+            Capability::DragPress => {
+                self.gesture.is_some() && self.input.as_ref().is_some_and(|h| h.clock.is_some())
+            }
             Capability::Scene => self.scene.is_some(),
             Capability::Camera => self.camera.is_some(),
             Capability::SceneImages | Capability::MaskImages => self.images.is_some(),
@@ -487,6 +519,91 @@ fn root_audio(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Bo
     Ok(Flow::Done)
 }
 
+fn root_input(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    let h = hosts.input.as_mut().expect("input capability checked");
+    if call.command == 0x2ef {
+        crate::input::handle_skipping(call, h.input, h.skip)?;
+    } else {
+        crate::input::handle(call, h.input)?;
+    }
+    Ok(Flow::Done)
+}
+fn root_buttons(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    hosts
+        .buttons
+        .as_deref_mut()
+        .expect("buttons capability checked")
+        .handle(
+            call,
+            hosts
+                .scene
+                .as_deref_mut()
+                .expect("scene capability checked"),
+        )?;
+    Ok(Flow::Done)
+}
+fn root_button_input(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    let h = hosts.input.as_mut().expect("input capability checked");
+    hosts
+        .buttons
+        .as_deref_mut()
+        .expect("buttons capability checked")
+        .handle_input(
+            call,
+            hosts
+                .scene
+                .as_deref_mut()
+                .expect("scene capability checked"),
+            h.input,
+        )?;
+    Ok(Flow::Done)
+}
+fn root_list_input(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    let h = hosts.input.as_mut().expect("input capability checked");
+    hosts
+        .buttons
+        .as_deref_mut()
+        .expect("buttons capability checked")
+        .handle_list_input(
+            call,
+            hosts
+                .scene
+                .as_deref_mut()
+                .expect("scene capability checked"),
+            h.input,
+            hosts
+                .gesture
+                .as_deref()
+                .expect("gesture capability checked"),
+        )?;
+    Ok(Flow::Done)
+}
+fn root_drag_press(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    let h = hosts.input.as_mut().expect("input capability checked");
+    hosts
+        .gesture
+        .as_deref_mut()
+        .expect("gesture capability checked")
+        .handle_drag_press(call, h.input, h.clock.expect("clock capability checked"))?;
+    Ok(Flow::Done)
+}
+
+pub fn uses_input(command: u16) -> bool {
+    ROOT.iter().any(|entry| {
+        entry.command == command
+            && matches!(
+                entry.capability,
+                Capability::Input
+                    | Capability::ButtonInput
+                    | Capability::ListInput
+                    | Capability::DragPress
+            )
+    })
+}
+
 fn root_scene(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     hosts
         .scene
@@ -552,6 +669,444 @@ pub fn is_wait(command: u16) -> bool {
 }
 
 pub static ROOT: &[Entry] = &[
+    Entry {
+        command: 0xc8,
+        name: "pointer position",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0xc9,
+        name: "pointer moved",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0xca,
+        name: "pointer rectangle",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x19a,
+        name: "clear input edges",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x19c,
+        name: "query input action 15",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x19d,
+        name: "consume input action 15",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x19e,
+        name: "query input action 16",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x19f,
+        name: "consume input action 16",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1a0,
+        name: "query input action 0",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1a1,
+        name: "consume input action 0",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1a2,
+        name: "query input action 1",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1a3,
+        name: "consume input action 1",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1a4,
+        name: "query input action 7",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1a6,
+        name: "query input action 8",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1a8,
+        name: "query input action 6",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1a9,
+        name: "consume input action 6",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1aa,
+        name: "query input action 9",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1ab,
+        name: "consume input action 9",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1ac,
+        name: "query input action 10",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1ad,
+        name: "consume input action 10",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1ae,
+        name: "query input action 11",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1af,
+        name: "consume input action 11",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1b0,
+        name: "query input action 12",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1b1,
+        name: "consume input action 12",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1b2,
+        name: "query input action 13",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1b3,
+        name: "consume input action 13",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1b4,
+        name: "query input action 14",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1b5,
+        name: "consume input action 14",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1b6,
+        name: "query input action 2",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1b7,
+        name: "consume input action 2",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1b8,
+        name: "query input action 3",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1b9,
+        name: "consume input action 3",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1ba,
+        name: "query input action 4",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1bb,
+        name: "consume input action 4",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1bc,
+        name: "query input action 5",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x1bd,
+        name: "consume input action 5",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x344,
+        name: "query input action 22",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x345,
+        name: "consume input action 22",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x346,
+        name: "query input action 23",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x347,
+        name: "consume input action 23",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x34a,
+        name: "query input action 20",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x34b,
+        name: "consume input action 20",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x34e,
+        name: "query function key",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x34f,
+        name: "clear function key",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x35c,
+        name: "left press",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x35d,
+        name: "right press",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x2ef,
+        name: "query skipping",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
+        command: 0x87,
+        name: "merge button states",
+        capability: Capability::Buttons,
+        handler: root_buttons,
+    },
+    Entry {
+        command: 0x210,
+        name: "create button group",
+        capability: Capability::Buttons,
+        handler: root_buttons,
+    },
+    Entry {
+        command: 0x211,
+        name: "release button group",
+        capability: Capability::Buttons,
+        handler: root_buttons,
+    },
+    Entry {
+        command: 0x212,
+        name: "append button",
+        capability: Capability::Buttons,
+        handler: root_buttons,
+    },
+    Entry {
+        command: 0x213,
+        name: "button rectangle",
+        capability: Capability::Buttons,
+        handler: root_buttons,
+    },
+    Entry {
+        command: 0x214,
+        name: "button state image",
+        capability: Capability::Buttons,
+        handler: root_buttons,
+    },
+    Entry {
+        command: 0x215,
+        name: "show buttons",
+        capability: Capability::Buttons,
+        handler: root_buttons,
+    },
+    Entry {
+        command: 0x21b,
+        name: "create scaled button group",
+        capability: Capability::Buttons,
+        handler: root_buttons,
+    },
+    Entry {
+        command: 0x370,
+        name: "create list group",
+        capability: Capability::Buttons,
+        handler: root_buttons,
+    },
+    Entry {
+        command: 0x371,
+        name: "release list group",
+        capability: Capability::Buttons,
+        handler: root_buttons,
+    },
+    Entry {
+        command: 0x372,
+        name: "append list button",
+        capability: Capability::Buttons,
+        handler: root_buttons,
+    },
+    Entry {
+        command: 0x373,
+        name: "list button rectangle",
+        capability: Capability::Buttons,
+        handler: root_buttons,
+    },
+    Entry {
+        command: 0x374,
+        name: "list button state image",
+        capability: Capability::Buttons,
+        handler: root_buttons,
+    },
+    Entry {
+        command: 0x375,
+        name: "show list buttons",
+        capability: Capability::Buttons,
+        handler: root_buttons,
+    },
+    Entry {
+        command: 0x376,
+        name: "current list button",
+        capability: Capability::Buttons,
+        handler: root_buttons,
+    },
+    Entry {
+        command: 0x378,
+        name: "deactivate list group",
+        capability: Capability::Buttons,
+        handler: root_buttons,
+    },
+    Entry {
+        command: 0x379,
+        name: "list navigation links",
+        capability: Capability::Buttons,
+        handler: root_buttons,
+    },
+    Entry {
+        command: 0x37c,
+        name: "list keep input",
+        capability: Capability::Buttons,
+        handler: root_buttons,
+    },
+    Entry {
+        command: 0x37d,
+        name: "list hit area",
+        capability: Capability::Buttons,
+        handler: root_buttons,
+    },
+    Entry {
+        command: 0x37e,
+        name: "list disable navigation",
+        capability: Capability::Buttons,
+        handler: root_buttons,
+    },
+    Entry {
+        command: 0x37f,
+        name: "list hit point",
+        capability: Capability::Buttons,
+        handler: root_buttons,
+    },
+    Entry {
+        command: 0x216,
+        name: "current button",
+        capability: Capability::ButtonInput,
+        handler: root_button_input,
+    },
+    Entry {
+        command: 0x217,
+        name: "update buttons",
+        capability: Capability::ButtonInput,
+        handler: root_button_input,
+    },
+    Entry {
+        command: 0x21a,
+        name: "select button",
+        capability: Capability::ButtonInput,
+        handler: root_button_input,
+    },
+    Entry {
+        command: 0x377,
+        name: "update list buttons",
+        capability: Capability::ListInput,
+        handler: root_list_input,
+    },
+    Entry {
+        command: 0x369,
+        name: "drag press",
+        capability: Capability::DragPress,
+        handler: root_drag_press,
+    },
     Entry {
         command: 0x20,
         name: "create object",

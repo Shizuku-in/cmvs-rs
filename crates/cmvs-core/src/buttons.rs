@@ -5,8 +5,8 @@
 //! an explicit pointer scale). 0x2218/0x2219 stay unhandled.
 //! Auxiliary list groups at engine +4552 are handled in `list`.
 use crate::{
-    bytecode::DecodeError, evaluate::error, input::ActionInput, machine::Machine, scene::SceneHost,
-    vm::SystemResult,
+    bytecode::DecodeError, dispatch::Call, evaluate::error, input::ActionInput, machine::Machine,
+    scene::SceneHost,
 };
 
 mod list;
@@ -129,12 +129,26 @@ impl ButtonHost {
         vm: &mut Machine<'_>,
         scene: &mut SceneHost,
     ) -> Result<bool, DecodeError> {
-        if self.try_handle_list(vm, scene)? {
-            return Ok(true);
-        }
-        let Some((pc, command @ (0x87 | 0x210..=0x215 | 0x21b))) = vm.pending_system() else {
+        let Some((pc, command)) = vm.pending_system() else {
             return Ok(false);
         };
+        if !matches!(command, 0x87 | 0x210..=0x215 | 0x21b | 0x370..=0x376 | 0x378..=0x379 | 0x37c..=0x37f)
+        {
+            return Ok(false);
+        }
+        self.handle(&mut Call::new(vm, pc, command), scene)?;
+        Ok(true)
+    }
+
+    pub(crate) fn handle(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        scene: &mut SceneHost,
+    ) -> Result<(), DecodeError> {
+        let (pc, command) = (call.pc, call.command);
+        if matches!(call.command, 0x370..=0x376 | 0x378..=0x379 | 0x37c..=0x37f) {
+            return self.handle_list(call, scene);
+        }
         let op = command + 0x2000;
         let fail = |why| error(pc, op, why);
         let count = match command {
@@ -146,12 +160,12 @@ impl ButtonHost {
         };
         let mut args = Vec::with_capacity(count);
         for i in 1..=count {
-            args.push(vm.stack().peek_u32(i * 4).map_err(|e| fail(e.0))?);
+            args.push(call.argument(i * 4, argument_names(call.command)[i - 1])?);
         }
         if command == 0x87 {
-            vm.complete_system(SystemResult(0x4004))?;
+            call.complete(0x4004)?;
             self.merged_states = args[0] != 0;
-            return Ok(true);
+            return Ok(());
         }
         let slot = Self::slot(args[0]).ok_or_else(|| fail("button group slot outside 0..5"))?;
         if command == 0x21b {
@@ -167,7 +181,7 @@ impl ButtonHost {
                 .ok()
                 .filter(|object| scene.object(*object).is_some())
                 .ok_or_else(|| fail("button group needs an existing scene object"))?;
-            vm.complete_system(SystemResult(if command == 0x210 { 0x4008 } else { 0x4010 }))?;
+            call.complete(if command == 0x210 { 0x4008 } else { 0x4010 })?;
             self.groups[slot] = Some(ButtonGroup {
                 object,
                 buttons: Vec::new(),
@@ -175,12 +189,12 @@ impl ButtonHost {
                 pressed_visual: false,
                 press_target: None,
             });
-            return Ok(true);
+            return Ok(());
         }
         if command == 0x211 {
-            vm.complete_system(SystemResult(0x4004))?;
+            call.complete(0x4004)?;
             self.groups[slot] = None;
-            return Ok(true);
+            return Ok(());
         }
         let group = self.groups[slot]
             .as_mut()
@@ -193,16 +207,15 @@ impl ButtonHost {
                 .map(|button| button.images[if button.enabled { 0 } else { 3 }])
                 .collect::<Vec<_>>();
             apply_images(scene, group.object, &images, true).map_err(fail)?;
-            vm.complete_system(SystemResult(0x4004))
-                .expect("arguments were checked");
+            call.complete(0x4004).expect("arguments were checked");
             group.current = None;
-            return Ok(true);
+            return Ok(());
         }
         let id = args[1];
         if command == 0x212 && group.buttons.len() >= BUTTON_LIMIT {
             return Err(fail("button count exceeds research limit"));
         }
-        vm.complete_system(SystemResult(0x4000 | (count * 4) as u16))?;
+        call.complete(0x4000 | (count * 4) as u16)?;
         let buttons = &mut group.buttons;
         if command == 0x212 {
             // 0x14005f070 appends and links the node after the previous tail.
@@ -217,20 +230,21 @@ impl ButtonHost {
                 links: [previous.unwrap_or(-1), -1, -1, -1],
                 images: Default::default(),
             });
-            vm.state_mut()
+            call.vm
+                .state_mut()
                 .set_system_integer(0, 1)
                 .expect("slot 0 exists");
-            return Ok(true);
+            return Ok(());
         }
         // Setters update the first node with the id; an unknown id is a silent no-op.
         let Some(button) = buttons.iter_mut().find(|button| button.id == id) else {
-            return Ok(true);
+            return Ok(());
         };
         if command == 0x213 {
             for (field, value) in button.rect.iter_mut().zip(&args[2..6]) {
                 *field = *value as i32;
             }
-            return Ok(true);
+            return Ok(());
         }
         let image = ButtonImage {
             child: args[3] as i32,
@@ -251,7 +265,7 @@ impl ButtonHost {
         for &record in records {
             button.images[record] = image;
         }
-        Ok(true)
+        Ok(())
     }
 
     /// 0x2216 (0x1400798c0 → 0x14005f4a0): system result 0 = hovered id or -1.
@@ -267,8 +281,19 @@ impl ButtonHost {
         let Some((pc, command @ (0x216 | 0x217 | 0x21a))) = vm.pending_system() else {
             return Ok(false);
         };
+        self.handle_input(&mut Call::new(vm, pc, command), scene, input)?;
+        Ok(true)
+    }
+
+    pub(crate) fn handle_input(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        scene: &mut SceneHost,
+        input: &mut ActionInput,
+    ) -> Result<(), DecodeError> {
+        let (pc, command) = (call.pc, call.command);
         let fail = |why| error(pc, command + 0x2000, why);
-        let raw = vm.stack().peek_u32(4).map_err(|e| fail(e.0))?;
+        let raw = call.argument(4, argument_names(call.command)[0])?;
         let group = Self::slot(raw)
             .and_then(|slot| self.groups[slot].as_mut())
             .ok_or_else(|| fail("button group slot is empty or outside 0..5"))?;
@@ -277,8 +302,8 @@ impl ButtonHost {
             // button gives 0. Otherwise a pointer outside its rectangle is moved to the centre
             // when the flag is set (0x140056530, SetCursorPos); a different current button
             // gets image 0 back and the target image 1, and becomes current; result 1.
-            let id = vm.stack().peek_u32(8).map_err(|e| fail(e.0))?;
-            let warp = vm.stack().peek_u32(12).map_err(|e| fail(e.0))? != 0;
+            let id = call.argument(8, argument_names(call.command)[1])?;
+            let warp = call.argument(12, argument_names(call.command)[2])? != 0;
             let target = group
                 .buttons
                 .iter()
@@ -301,32 +326,33 @@ impl ButtonHost {
                     apply_images(scene, group.object, &images, false).map_err(fail)?;
                 }
             }
-            vm.complete_system(SystemResult(0x400c))
-                .expect("arguments were checked");
+            call.complete(0x400c).expect("arguments were checked");
             if let Some(i) = target {
                 group.current = Some(i);
             }
             if let Some([x, y]) = moved {
                 input.warp_pointer(x, y);
             }
-            vm.state_mut()
+            call.vm
+                .state_mut()
                 .set_system_integer(0, u32::from(target.is_some()))
                 .expect("slot 0 exists");
-            return Ok(true);
+            return Ok(());
         }
         if command == 0x216 {
             let result = group.current.map_or(NOTHING, |i| group.buttons[i].id);
-            vm.complete_system(SystemResult(0x4004))?;
-            vm.state_mut()
+            call.complete(0x4004)?;
+            call.vm
+                .state_mut()
                 .set_system_integer(0, result)
                 .expect("slot 0 exists");
-            return Ok(true);
+            return Ok(());
         }
         let frame = Frame::plan(group, input);
         apply_images(scene, group.object, &frame.images, false).map_err(fail)?;
-        vm.complete_system(SystemResult(0x4004))
-            .expect("argument was checked");
-        vm.state_mut()
+        call.complete(0x4004).expect("named arguments were checked");
+        call.vm
+            .state_mut()
             .set_system_integer(0, frame.result)
             .expect("slot 0 exists");
         group.current = frame.current;
@@ -338,7 +364,7 @@ impl ButtonHost {
         if let Some([x, y]) = frame.warp {
             input.warp_pointer(x, y);
         }
-        Ok(true)
+        Ok(())
     }
 }
 
@@ -580,5 +606,34 @@ impl ButtonHost {
         self.groups = restored_groups;
         self.lists = restored_lists;
         Ok(())
+    }
+}
+
+fn argument_names(command: u16) -> &'static [&'static str] {
+    match command {
+        0x87 => &["merged states"],
+        0x210 | 0x370 => &["group slot", "object slot"],
+        0x211 | 0x215..=0x217 | 0x371 | 0x375..=0x378 | 0x37f => &["group slot"],
+        0x212 | 0x372 => &["group slot", "button id"],
+        0x213 | 0x373 => &["group slot", "button id", "left", "top", "width", "height"],
+        0x214 | 0x374 => &[
+            "group slot",
+            "button id",
+            "state",
+            "child slot",
+            "source x",
+            "source y",
+            "width",
+            "height",
+            "origin x",
+            "origin y",
+        ],
+        0x21a => &["group slot", "button id", "warp"],
+        0x21b => &["group slot", "object slot", "screen width", "screen height"],
+        0x379 => &["group slot", "button id", "previous", "next", "up", "down"],
+        0x37c => &["group slot", "keep input"],
+        0x37d => &["group slot", "left", "top", "width", "height"],
+        0x37e => &["group slot", "disable navigation"],
+        _ => unreachable!("registered button argument schema"),
     }
 }

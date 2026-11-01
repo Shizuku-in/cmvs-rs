@@ -1,7 +1,7 @@
 //! Engine +4552 list groups, distinct from the six ordinary button groups.
 use super::{BUTTON_LIMIT, BUTTON_STATES, Button, ButtonHost, ButtonImage, apply_images};
 use crate::{
-    bytecode::DecodeError, evaluate::error, machine::Machine, scene::SceneHost, vm::SystemResult,
+    bytecode::DecodeError, dispatch::Call, evaluate::error, machine::Machine, scene::SceneHost,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,8 +37,20 @@ impl ButtonHost {
         let Some((pc, 0x377)) = vm.pending_system() else {
             return Ok(false);
         };
+        self.handle_list_input(&mut Call::new(vm, pc, 0x377), scene, input, gesture)?;
+        Ok(true)
+    }
+
+    pub(crate) fn handle_list_input(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        scene: &mut SceneHost,
+        input: &mut crate::input::ActionInput,
+        gesture: &crate::gesture::PointerGesture,
+    ) -> Result<(), DecodeError> {
+        let pc = call.pc;
         let fail = |why| error(pc, 0x2377, why);
-        let slot = vm.stack().peek_u32(4).map_err(|e| fail(e.0))? as usize;
+        let slot = call.argument(4, super::argument_names(call.command)[0])? as usize;
         let group = self
             .lists
             .get(slot)
@@ -110,8 +122,9 @@ impl ButtonHost {
             frame.consumed.retain(|action| !matches!(action, 0 | 1));
         }
         apply_images(scene, group.object, &frame.images, false).map_err(fail)?;
-        vm.complete_system(SystemResult(0x4004))?;
-        vm.state_mut()
+        call.complete(0x4004)?;
+        call.vm
+            .state_mut()
             .set_system_integer(0, frame.result)
             .expect("result exists");
         let group = self.lists[slot].as_mut().expect("validated");
@@ -125,19 +138,15 @@ impl ButtonHost {
         if let Some([x, y]) = frame.warp {
             input.warp_pointer(x, y);
         }
-        Ok(true)
+        Ok(())
     }
 
-    pub(super) fn try_handle_list(
+    pub(super) fn handle_list(
         &mut self,
-        vm: &mut Machine<'_>,
+        call: &mut Call<'_, '_>,
         scene: &mut SceneHost,
-    ) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x370..=0x376 | 0x378..=0x379 | 0x37c..=0x37f))) =
-            vm.pending_system()
-        else {
-            return Ok(false);
-        };
+    ) -> Result<(), DecodeError> {
+        let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
         let fail = |why| error(pc, op, why);
         let count = match command {
@@ -149,7 +158,7 @@ impl ButtonHost {
         };
         let mut args = [0; 10];
         for (i, arg) in args.iter_mut().take(count).enumerate() {
-            *arg = vm.stack().peek_u32((i + 1) * 4).map_err(|e| fail(e.0))?;
+            *arg = call.argument((i + 1) * 4, super::argument_names(call.command)[i])?;
         }
         let slot = args[0] as usize;
         if slot >= 8 {
@@ -161,7 +170,7 @@ impl ButtonHost {
             if scene.object(object).is_none() {
                 return Err(fail("auxiliary list object does not exist"));
             }
-            vm.complete_system(SystemResult(0x4008))?;
+            call.complete(0x4008)?;
             self.lists[slot] = Some(ListGroup {
                 object,
                 buttons: Vec::new(),
@@ -175,12 +184,12 @@ impl ButtonHost {
                 hit_area: [0, 0, 1280, 720],
                 hit_point: None,
             });
-            return Ok(true);
+            return Ok(());
         }
         if command == 0x371 {
-            vm.complete_system(SystemResult(0x4004))?;
+            call.complete(0x4004)?;
             self.lists[slot] = None;
-            return Ok(true);
+            return Ok(());
         }
         let group = self.lists[slot]
             .as_ref()
@@ -205,7 +214,7 @@ impl ButtonHost {
                 .collect();
             apply_images(scene, group.object, &images, true).map_err(fail)?;
         }
-        vm.complete_system(SystemResult(0x4000 | (count as u16 * 4)))?;
+        call.complete(0x4000 | (count as u16 * 4))?;
         let group = self.lists[slot].as_mut().expect("validated");
         match command {
             0x372 => {
@@ -220,7 +229,8 @@ impl ButtonHost {
                     links: [previous, -1, -1, -1],
                     images: [ButtonImage::default(); BUTTON_STATES],
                 });
-                vm.state_mut()
+                call.vm
+                    .state_mut()
                     .set_system_integer(0, 1)
                     .expect("result exists");
             }
@@ -248,7 +258,8 @@ impl ButtonHost {
             0x375 => group.current = None,
             0x376 => {
                 let result = group.current.map_or(u32::MAX, |i| group.buttons[i].id);
-                vm.state_mut()
+                call.vm
+                    .state_mut()
                     .set_system_integer(0, result)
                     .expect("result exists");
             }
@@ -258,13 +269,14 @@ impl ButtonHost {
             0x37e => group.disable_navigation = args[1] != 0,
             0x37f => {
                 for (slot, value) in [1, 2].into_iter().zip(hit_point.expect("validated")) {
-                    vm.state_mut()
+                    call.vm
+                        .state_mut()
                         .set_system_integer(slot, value as u32)
                         .expect("result exists");
                 }
             }
             _ => unreachable!(),
         }
-        Ok(true)
+        Ok(())
     }
 }
