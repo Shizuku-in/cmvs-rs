@@ -1,7 +1,7 @@
 //! Face-name font resolution standing in for GDI's CreateFontA lookup. The explicit
 //! `--font` file serves the built-in default face; other faces are found by family name
 //! in the directories `cmvs_native::font_directories` lists for this platform
-//! (Windows system/user folders and Linux Fontconfig directories).
+//! (Windows/macOS system/user folders and Linux Fontconfig directories).
 use ab_glyph::{Font, FontVec};
 use cmvs_core::{FormatError, settings::DEFAULT_FONT_FACE};
 use std::{
