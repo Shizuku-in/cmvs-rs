@@ -56,7 +56,7 @@ fn create(direction: u32, duration: u32) -> FadeHost {
 }
 
 #[test]
-fn additional_objects_use_stable_layers_and_validate_their_source_rectangles() {
+fn additional_objects_use_stable_layers_and_clamp_source_coordinates() {
     use cmvs_rs::{
         raster::RgbaImage,
         scene::{DrawState, ObjectImage, SceneObject},
@@ -96,7 +96,12 @@ fn additional_objects_use_stable_layers_and_validate_their_source_rectangles() {
     );
     red.shown = true;
     red.draw.as_mut().unwrap().words[2] = 1;
-    assert!(scene_render::render_with_objects(&scene, &[&blue, &red], 1, 1).is_err());
+    assert_eq!(
+        scene_render::render_with_objects(&scene, &[&blue, &red], 1, 1)
+            .unwrap()
+            .pixels(),
+        &[255, 0, 0, 255]
+    );
 }
 
 #[test]
