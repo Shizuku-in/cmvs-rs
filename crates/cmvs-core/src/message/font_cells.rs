@@ -89,10 +89,10 @@ fn append(
             continue;
         }
         if byte == b'{' {
-            if proportional && text.ruby {
-                return Err("proportional ruby annotation layout is not implemented");
-            }
             let group = parse_group(bytes, i + 1)?;
+            if proportional && group.base.iter().flatten().count() > 32 {
+                return Err("ruby base exceeds the original's 32 glyph positions");
+            }
             i = group.end;
             if wraps(text, 0, x, limit)? {
                 new_line(text, &mut line, &mut x, &mut y)?;
@@ -101,10 +101,14 @@ fn append(
                 }
             }
             let (start, ruby_y, group_delay) = (x, y.wrapping_sub(text.ruby_size as u32), delay);
+            let mut base_cells = Vec::new();
             for item in &group.base {
                 if let Some(code) = *item {
                     last = Some(push(text, code, [x, y], size, settings.outline)?);
                     let width = output_width(text, code, size, proportional, metrics)?;
+                    if proportional {
+                        base_cells.push((x, width));
+                    }
                     x = x.wrapping_add(width).wrapping_add(text.spacing[0] as u32);
                 }
                 delay = retime(text, last, delay, interval, instant, settings)?;
@@ -116,7 +120,30 @@ fn append(
             let count = group.ruby.iter().flatten().count() as u32;
             let width = x.wrapping_sub(start) << 10;
             let total = count.wrapping_mul(ruby_size) << 10;
-            let (mut ruby_x, step) = if total <= width {
+            let ruby_widths = if proportional {
+                group
+                    .ruby
+                    .iter()
+                    .flatten()
+                    .map(|&code| output_width(text, code, ruby_size, true, metrics))
+                    .collect::<Result<Vec<_>, _>>()?
+            } else {
+                Vec::new()
+            };
+            // 0x1400611f0: proportional ruby ignores extra ruby spacing. A run of
+            // middle dots matching the base count is centred on each base cell.
+            let dots = proportional
+                && base_cells.len() == ruby_widths.len()
+                && group.ruby.iter().flatten().all(|&code| code == 0x8145);
+            let (mut ruby_x, step) = if proportional {
+                let total = ruby_widths.iter().fold(0u32, |sum, &w| sum.wrapping_add(w));
+                (
+                    (start << 10)
+                        .wrapping_add(width >> 1)
+                        .wrapping_sub((total << 10) >> 1),
+                    0,
+                )
+            } else if total <= width {
                 let gap = (width - total).checked_div(count.wrapping_mul(2)).ok_or(
                     "ruby annotation without double-byte characters divides by zero in the original",
                 )?;
@@ -132,16 +159,30 @@ fn append(
                 )
             };
             let mut ruby_delay = group_delay;
+            let mut ruby_index = 0;
             for item in &group.ruby {
                 if let Some(code) = *item {
+                    let glyph_x = if dots {
+                        let (base_x, base_width) = base_cells[ruby_index];
+                        base_x
+                            .wrapping_add(base_width >> 1)
+                            .wrapping_sub(ruby_widths[ruby_index] >> 1)
+                    } else {
+                        ruby_x >> 10
+                    };
                     last = Some(push(
                         text,
                         code,
-                        [ruby_x >> 10, ruby_y],
+                        [glyph_x, ruby_y],
                         ruby_size,
                         settings.outline,
                     )?);
-                    ruby_x = ruby_x.wrapping_add(step);
+                    ruby_x = ruby_x.wrapping_add(if proportional {
+                        ruby_widths[ruby_index] << 10
+                    } else {
+                        step
+                    });
+                    ruby_index += 1;
                 }
                 ruby_delay = retime(text, last, ruby_delay, interval, instant, settings)?;
             }

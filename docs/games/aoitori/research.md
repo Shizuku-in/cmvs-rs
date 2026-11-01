@@ -103,3 +103,13 @@ runner和trace先调用证据层`CommandGate::resolve`，获得放行后的语�
 基线 `af53429`。生命周期、槽服务、快照策略和消息等待共12条进入ROOT，已知491条命令均由共享表认领，旧链与重叠清零；运行时操作通过保留pending的类型化请求执行，恢复/重置和快照屏障按原编排处理。批次范围、独立基线断言、真实RESET/QUIT及384组trace比较见[分派设计](../../design/dispatch.md)第25节。完整设计验收仍待收尾，不以入口数量升级兼容性证据。
 
 `local/aoitori/runtime-dispatch` R1/L0、D1/L1通过，启动仍22,050步、624帧、标题5按钮，轨迹与状态哈希与前轮相同；R2仍503,793步、1,393帧停在同一比例ruby屏障并退出1，报告checks与脚本/存档批次完全相同。
+
+## 2026-11-01：恢复Aoitori语义推进，比例ruby
+
+基线 `57a9348`。按 `semantics-x64.json` 中 `0x1400611f0` 的独立比例分支实现普通注音实测宽度居中及等长中点逐字对齐，保留无符号22.10、水平间距、单字节忽略及渐显重计时；异常不提交候选文字。实现与下一命令证据见[VM语义](vm-semantics.md)。未改根语义、档案状态或默认放行策略。
+
+release探针使用 `--allow-unreviewed --allow-presumed --font C:/Windows/Fonts/msgothic.ttc --max-steps 100000000`，输出 `local/aoitori/proportional-ruby`。R1/L0、D1/L1通过，checks前两项与 `runtime-dispatch` 完全相同：22,050步、624帧、标题5按钮，轨迹及状态哈希不变。R2越过原 `sn101.ps3 / 0x12f62 / 0x2152` 屏障，首路线18,129,135步、8,624帧到 `sn102.ps3 / 0xa298 / 0x22a5` 后blocked，探针退出1；选择点0，未到结局，不记为路线通过。
+
+五项新增合成回归通过，覆盖比例ruby的位置、时序、等待后完成、度量失败重试及原数组边界。未进行原生窗口、GDI像素或真实音轨验证，研究放行不提升727条Unreviewed的证据状态。下一步核对 `0x22a5` 的对象类型5加载、配置与推进，保留真实停点。
+
+默认离线测试947项通过、14项忽略；core测试60项通过、1项忽略。默认/core全target严格Clippy、格式、差异与文档链接检查通过，release探针构建通过。

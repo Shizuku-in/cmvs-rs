@@ -4201,6 +4201,185 @@ fn proportional_output_without_metrics_keeps_pending_stack_and_text() {
     assert_eq!(vm.pending_system().map(|p| p.1), Some(0x10b));
 }
 
+#[derive(Debug)]
+struct RubyAdvances {
+    fail: bool,
+}
+impl cmvs_rs::message::GlyphMetrics for RubyAdvances {
+    fn ink_width(&self, _: &[u8], _: u16, _: u32) -> Result<u32, &'static str> {
+        Err("ruby must use cell advance")
+    }
+    fn advance_width(&self, _: &[u8], code: u16, size: u32, _: bool) -> Result<u32, &'static str> {
+        match (size, code) {
+            (10, 0x82a0) => Ok(13),
+            (10, 0x82a2) => Ok(9),
+            (10, 0x82a8) => Ok(7),
+            (4, _) if self.fail => Err("synthetic ruby metrics failure"),
+            (4, 0x82a4 | 0x8145) => Ok(3),
+            (4, 0x82a6) => Ok(5),
+            _ => Err("unexpected ruby metrics request"),
+        }
+    }
+}
+fn font_cell_ruby_code() -> Vec<u8> {
+    let mut code = vec![];
+    create(&mut code, 0, 7, [0, 0, 200, 100]);
+    call(&mut code, 0x2143, &[10, 0]);
+    call(&mut code, 0x2114, &[1, 7]);
+    call(&mut code, 0x2115, &[4, 7]);
+    call(&mut code, 0x2116, &[999, 7]);
+    call(&mut code, 0x2105, &[0, 2, 10, 7]);
+    call(&mut code, 0x23ac, &[1]);
+    call(&mut code, 0x2152, &[0, 0, 0]);
+    code
+}
+fn prepare_font_cell_ruby(vm: &mut Machine<'_>, messages: &mut MessageHost, fail: bool) {
+    run(vm, messages, 6);
+    messages.set_record_output(true);
+    messages.set_glyph_metrics(Box::new(RubyAdvances { fail }));
+    run_font_cells(vm, messages, 1);
+    pending(vm);
+}
+
+#[test]
+fn proportional_ruby_centres_actual_advances_and_preserves_base_reveal_timing() {
+    let script = script_with_text(
+        &font_cell_ruby_code(),
+        b"{\x82\xa0\x82\xa2/\x82\xa4\x82\xa6}\x82\xa8\0",
+    );
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    prepare_font_cell_ruby(&mut vm, &mut messages, false);
+    assert!(font_cell_step(&mut vm, &mut messages).unwrap());
+    assert_eq!(
+        layout(&messages),
+        [
+            (0x82a0, [0, 4], 10, 0),
+            (0x82a2, [15, 4], 10, 80),
+            (0x82a4, [9, 0], 4, 0),
+            (0x82a6, [12, 0], 4, 80),
+            (0x82a8, [26, 4], 10, 120),
+        ]
+    );
+    assert_eq!(messages.text(7).unwrap().cursor, [35, 4]);
+    assert_eq!(vm.pending_system().map(|p| p.1), Some(0x152));
+    assert_eq!(vm.stack().len_bytes(), 12);
+    messages.advance_frame(1000);
+    assert!(font_cell_step(&mut vm, &mut messages).unwrap());
+    assert_eq!(messages.text(7).unwrap().glyphs.len(), 5);
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert!(vm.pending_system().is_none());
+}
+
+#[test]
+fn proportional_ruby_aligns_only_matching_middle_dot_runs_to_individual_cells() {
+    for (ruby, expected) in [
+        (b"\x81\x45\x81\x45".as_slice(), vec![5, 18]),
+        (b"\x81\x45".as_slice(), vec![11]),
+        (b"\x81\x45\x82\xa6".as_slice(), vec![9, 12]),
+    ] {
+        let mut bytes = b"{\x82\xa0\x82\xa2/".to_vec();
+        bytes.extend_from_slice(ruby);
+        bytes.extend_from_slice(b"}\0");
+        let script = script_with_text(&font_cell_ruby_code(), &bytes);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        prepare_font_cell_ruby(&mut vm, &mut messages, false);
+        assert!(font_cell_step(&mut vm, &mut messages).unwrap());
+        let text = messages.text(7).unwrap();
+        assert_eq!(
+            text.glyphs[2..]
+                .iter()
+                .map(|g| g.position[0])
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(text.cursor, [26, 4]);
+    }
+}
+
+#[test]
+fn proportional_ruby_keeps_unsigned_centring_and_allows_empty_annotation() {
+    for (bytes, expected) in [
+        (
+            b"{\x82\xa0/\x82\xa6\x82\xa6\x82\xa6\x82\xa6}\0".as_slice(),
+            vec![4194301, 2, 7, 12],
+        ),
+        (b"{\x82\xa0/a}\0".as_slice(), vec![]),
+    ] {
+        let script = script_with_text(&font_cell_ruby_code(), bytes);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        prepare_font_cell_ruby(&mut vm, &mut messages, false);
+        assert!(font_cell_step(&mut vm, &mut messages).unwrap());
+        let text = messages.text(7).unwrap();
+        assert_eq!(
+            text.glyphs[1..]
+                .iter()
+                .map(|g| g.position[0])
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert_eq!(text.cursor, [15, 4]);
+    }
+}
+
+#[test]
+fn proportional_ruby_metrics_failure_is_atomic_and_retryable() {
+    let script = script_with_text(&font_cell_ruby_code(), b"{\x82\xa0/\x82\xa4}\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    prepare_font_cell_ruby(&mut vm, &mut messages, true);
+    let before = messages.text(7).unwrap().clone();
+    let pending = vm.pending_system();
+    let sp = vm.stack().len_bytes();
+    assert!(
+        font_cell_step(&mut vm, &mut messages)
+            .unwrap_err()
+            .to_string()
+            .contains("synthetic ruby metrics failure")
+    );
+    assert_eq!(messages.text(7), Some(&before));
+    assert_eq!(vm.pending_system(), pending);
+    assert_eq!(vm.stack().len_bytes(), sp);
+    messages.set_glyph_metrics(Box::new(RubyAdvances { fail: false }));
+    assert!(font_cell_step(&mut vm, &mut messages).unwrap());
+    assert_eq!(messages.text(7).unwrap().glyphs[1].position, [6, 0]);
+}
+
+#[test]
+fn proportional_ruby_bounds_the_original_base_position_array() {
+    for count in [32, 33] {
+        let mut bytes = vec![b'{'];
+        for _ in 0..count {
+            bytes.extend_from_slice(b"\x82\xa0");
+        }
+        bytes.extend_from_slice(b"/\x82\xa4}\0");
+        let script = script_with_text(&font_cell_ruby_code(), &bytes);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::default();
+        prepare_font_cell_ruby(&mut vm, &mut messages, false);
+        let before = messages.text(7).unwrap().clone();
+        let pending = vm.pending_system();
+        let sp = vm.stack().len_bytes();
+        let result = font_cell_step(&mut vm, &mut messages);
+        if count == 32 {
+            assert!(result.unwrap());
+            assert_eq!(messages.text(7).unwrap().glyphs.len(), 33);
+        } else {
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("32 glyph positions")
+            );
+            assert_eq!(messages.text(7), Some(&before));
+            assert_eq!(vm.pending_system(), pending);
+            assert_eq!(vm.stack().len_bytes(), sp);
+        }
+    }
+}
+
 #[test]
 fn pixel_measurement_uses_advance_width_preserves_pen_and_skips_ruby_annotation() {
     #[derive(Debug)]
