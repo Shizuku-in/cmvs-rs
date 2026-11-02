@@ -11,7 +11,7 @@
 | [《初恋サクラメント》 / hassaku](hassaku/README.md) | `2010-12-24_HASSAKU` | 基础档案；尚无构建 profile 或运行验证 |
 | [《未来ノスタルジア》 / miranosu](miranosu/README.md) | `2011-09-02_MIRANOSU` | 基础档案；尚无构建 profile 或运行验证 |
 | [《しあわせ家族部》 / kazokubu](kazokubu/README.md) | `2012-05-25_KAZOKUBU` | 基础档案；尚无构建 profile 或运行验证 |
-| [《ハピメア》 / hapymaher](hapymaher/README.md) | `2013-02-28_HAPYMAHER` | 基础档案；尚无构建 profile 或运行验证 |
+| [《ハピメア》 / hapymaher](hapymaher/README.md) | `2013-02-28_HAPYMAHER` | 开头I1–I5/V1–V4及已观察P2通过；4条选择链回标题，37个前缀和完整页面遍历待推进 |
 | [《ハピメア-Fragmentation Dream-》 / hapymaherfd](hapymaherfd/README.md) | `2014-02-28_HAPYMAHERFD` | 基础档案；尚无构建 profile 或运行验证 |
 | [《クロノクロック》 / chronoclock](chronoclock/README.md) | `2015-04-24_CHRONOCLOCK` | 已有构建 profile、语义研究与运行验证 |
 | [《アマツツミ》 / amatsutsumi](amatsutsumi/README.md) | `2016-07-29_AMATSUTSUMI` | 已有语义研究、路线重放及部分原生验证 |

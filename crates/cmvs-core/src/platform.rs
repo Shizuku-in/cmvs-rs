@@ -28,7 +28,8 @@ impl DirectoryAssets {
     }
 }
 /// A bounded ASCII game-relative path, split on `/` or `\`, that must resolve inside the
-/// canonical `root`. A missing file surfaces as the canonicalize `io::Error`.
+/// canonical `root`. Repeated interior separators name the same directory. A missing
+/// file surfaces as the canonicalize `io::Error`.
 pub fn resolve_under(root: &Path, name: &[u8]) -> Result<PathBuf, Box<dyn Error>> {
     if name.is_empty()
         || name.len() >= 2048
@@ -38,9 +39,16 @@ pub fn resolve_under(root: &Path, name: &[u8]) -> Result<PathBuf, Box<dyn Error>
     {
         return Err("game path must be a bounded ASCII relative path".into());
     }
+    let separator = |b| matches!(b, b'/' | b'\\');
+    if separator(name[0]) || separator(name[name.len() - 1]) {
+        return Err("invalid game path component".into());
+    }
     let mut path = root.to_path_buf();
-    for part in name.split(|b| matches!(b, b'/' | b'\\')) {
-        if part.is_empty() || part == b"." || part == b".." {
+    for part in name
+        .split(|&b| separator(b))
+        .filter(|part| !part.is_empty())
+    {
+        if part == b"." || part == b".." {
             return Err("invalid game path component".into());
         }
         path.push(std::str::from_utf8(part)?);

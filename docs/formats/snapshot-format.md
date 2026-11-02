@@ -4,7 +4,7 @@
 
 证据限于 research.md 中 SHA-256 标识的 cmvs64.exe。写入函数 0x140069270，读取恢复函数 0x140069fd0。
 
-命令状态继承不代表快照格式继承。默认 `EngineSnapshot::decode/encode` 使用本文的文字v3布局；`decode_with_layout/encode_with_layout` 可显式选择文字v2。runner对独立核对的 `cmvs-20150405` 选择v2，`cmvs-20171114` 选择v3（[Aoitori证据与边界](../games/aoitori/vm-semantics.md#剧情快照-v3-子集2026-11-02)），其余未知派生档案仍报格式未实现。v2省略文字记录的208字节禁则块，不支持扩展禁则状态；公共图像及活动场景效果的未支持子记录继续拒绝。格式证据与真实存读档范围见[CHRONOCLOCK v2支持](../games/chronoclock/vm-semantics.md#剧情快照文字v2布局2026-11-01)。
+命令状态继承不代表快照格式继承。默认 `EngineSnapshot::decode/encode` 使用本文的文字v3布局；`decode_with_layout/encode_with_layout` 可显式选择文字v2。runner对独立核对的 `cmvs-20130131` / `cmvs-20150405` 选择v2，`cmvs-20171114` 选择v3（[Aoitori证据与边界](../games/aoitori/vm-semantics.md#剧情快照-v3-子集2026-11-02)），其余未知派生档案仍报格式未实现。v2省略文字记录的208字节禁则块，不支持扩展禁则状态；公共图像及活动场景效果的未支持子记录继续拒绝。20130131另拒绝按钮列表及≥512的子槽，见[Hapymaher证据](../games/hapymaher/vm-semantics.md#剧情快照-v2-子集2026-11-02)；其他v2证据见[CHRONOCLOCK](../games/chronoclock/vm-semantics.md#剧情快照文字v2布局2026-11-01)。
 
 ## 何时生成、由谁消费
 

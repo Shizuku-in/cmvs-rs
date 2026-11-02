@@ -454,6 +454,38 @@ fn filtered_image_load_tints_weighted_gray_with_two_truncations_and_keeps_alpha(
 }
 
 #[test]
+fn horizontal_filter_weights_edges_alpha_and_sampling_stride_and_retains_parameters() {
+    for (mode, extra, expected) in [
+        (256, 0, [181, 85, 218, 5, 122, 43, 236, 11]),
+        (256, 1, [181, 85, 218, 5, 122, 43, 236, 11]),
+        (256, 0x20002, [240, 128, 200, 0, 64, 1, 255, 17]),
+        (512, 0, [152, 64, 227, 8, 152, 64, 227, 8]),
+        (512, 0x20002, [240, 128, 200, 0, 64, 1, 255, 17]),
+    ] {
+        let mut code = loads(20, &[]);
+        scene_command(&mut code, 0x203b, &[20, 0, mode, 0xff123456, extra]);
+        let program = script(&code, b"a.pb3\0");
+        let mut vm = Machine::new(&program).unwrap();
+        let mut scene = SceneHost::default();
+        let mut files = Files::default();
+        files.0.insert(
+            b"a.pb3".to_vec(),
+            pb3(1, &[[200, 255], [128, 1], [240, 64], [0, 17]]),
+        );
+        run_to_system(&mut vm);
+        scene.try_handle(&mut vm).unwrap();
+        run_to_system(&mut vm);
+        scene.shared_image(&mut vm, &mut files).unwrap();
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.state().system_integer(0), Some(1));
+        let object = scene.object(20).unwrap();
+        let image = object.image.as_ref().unwrap();
+        assert_eq!(image.pixels.pixels(), expected);
+        assert_eq!(image.filter, Some([mode, 0xff123456, extra]));
+    }
+}
+
+#[test]
 fn filtered_image_load_uses_128_as_identity_and_quiet_failure_clears_image() {
     let mut code = loads(20, &[0]);
     for args in [
@@ -500,6 +532,8 @@ fn filtered_image_load_uses_128_as_identity_and_quiet_failure_clears_image() {
 fn filtered_image_load_rejects_unknown_modes_missing_args_and_resource_failures_transactionally() {
     for args in [
         vec![20, 0, 1, 0x808080, 0],
+        vec![20, 0, 256, 0, 0x30001],
+        vec![20, 0, 512, 0, 0x30001],
         vec![20, 0, 2, 0x808080],
         vec![20, 6, 2, 0x808080, 0],
         vec![20, 14, 2, 0x808080, 0],

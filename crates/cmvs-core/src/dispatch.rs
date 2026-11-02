@@ -4526,25 +4526,40 @@ pub static FALLING_BILLBOARDS: &[Entry] = &[Entry {
     },
 }];
 
-pub static FRAGMENTS: &[Entry] = &[Entry {
-    command: 0x2a8,
-    name: "create image fragment effect",
-    capability: Capability::SceneRandom,
-    handler: |hosts, call| {
-        hosts
-            .scene
-            .as_deref_mut()
-            .expect("scene random capability checked")
-            .create_fragments(
-                call,
-                hosts
-                    .random
-                    .as_deref_mut()
-                    .expect("scene random capability checked"),
-            )?;
-        Ok(Flow::Done)
+pub static FRAGMENTS: &[Entry] = &[
+    Entry {
+        command: 0x2a8,
+        name: "create image fragment effect",
+        capability: Capability::SceneRandom,
+        handler: |hosts, call| {
+            hosts
+                .scene
+                .as_deref_mut()
+                .expect("scene random capability checked")
+                .create_fragments(
+                    call,
+                    hosts
+                        .random
+                        .as_deref_mut()
+                        .expect("scene random capability checked"),
+                )?;
+            Ok(Flow::Done)
+        },
     },
-}];
+    Entry {
+        command: 0x2ae,
+        name: "query image fragment completion",
+        capability: Capability::Scene,
+        handler: |hosts, call| {
+            hosts
+                .scene
+                .as_deref()
+                .expect("scene capability checked")
+                .query_fragments(call)?;
+            Ok(Flow::Done)
+        },
+    },
+];
 
 pub static COLLISION_PARTICLES: &[Entry] = &[
     Entry {

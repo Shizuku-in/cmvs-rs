@@ -273,7 +273,7 @@ impl SavedImage {
             return Err(FormatError("unsupported snapshot image filter flag"));
         }
         let filter = (h[5] != 0).then_some([h[6], h[7], h[8]]);
-        if filter.is_some_and(|p| !matches!(p[0], 2 | 17)) {
+        if filter.is_some_and(|p| !matches!(p[0], 2 | 17 | 256 | 512)) {
             return Err(FormatError("unsupported snapshot image filter"));
         }
         let name = r.string(64)?.to_vec();

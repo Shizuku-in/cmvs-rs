@@ -146,6 +146,27 @@ fn shared_reader_confines_audio_paths_and_rejects_file_roots() {
 }
 
 #[test]
+fn repeated_interior_separators_resolve_without_accepting_rooted_or_dot_paths() {
+    use cmvs_rs::platform::{DirectoryAssets, PlatformAssets};
+    let root = Root::new();
+    root.put("a/same.bin", b"valid");
+    let mut assets = DirectoryAssets::new(&root.0).unwrap();
+    for name in [b"a\\\\same.bin".as_slice(), b"a//same.bin", b"a\\/same.bin"] {
+        assert_eq!(assets.read(name).unwrap(), b"valid");
+    }
+    for name in [
+        b"\\a\\same.bin".as_slice(),
+        b"//a/same.bin",
+        b"a/same.bin/",
+        b"a//../a/same.bin",
+        b"a//./same.bin",
+        b"a//C:/same.bin",
+    ] {
+        assert!(assets.read(name).is_err(), "{name:?}");
+    }
+}
+
+#[test]
 fn scene_movie_registration_is_independent_and_searches_only_four_slots() {
     let root = Root::new();
     root.put("a/same.bin", b"image");

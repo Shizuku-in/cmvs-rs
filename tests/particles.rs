@@ -67,6 +67,71 @@ fn fragment_dispatch_transfers_source_and_preserves_pending_when_random_is_missi
     assert!(scene.fragment_effects().is_empty());
 }
 
+#[test]
+fn fragment_completion_query_preserves_errors_and_reports_pending_and_finished() {
+    let mut code = vec![];
+    command(&mut code, 0x2020, &[29]);
+    command(&mut code, 0x22a8, &[0, 29, 20, 1000]);
+    for slot in [0, 0, 4, 1] {
+        command(&mut code, 0x22ae, &[slot]);
+    }
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut scene = SceneHost::default();
+    let mut random = CrtRandom::new(0);
+    pending(&mut vm);
+    scene.try_handle(&mut vm).unwrap();
+    pending(&mut vm);
+    dispatch::run(
+        Semantics::Research(ResearchId::Fragments),
+        &mut vm,
+        &mut Hosts {
+            scene: Some(&mut scene),
+            random: Some(&mut random),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    vm.state_mut().set_system_integer(1, 123).unwrap();
+    for expected in [0, u32::MAX, u32::MAX] {
+        pending(&mut vm);
+        dispatch::run(
+            Semantics::Research(ResearchId::Fragments),
+            &mut vm,
+            &mut Hosts {
+                scene: Some(&mut scene),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(expected));
+        assert_eq!(vm.state().system_integer(1), Some(123));
+        assert_eq!(vm.stack().len_bytes(), 0);
+        scene
+            .advance_effect_pools(16, &mut random, &Default::default())
+            .unwrap();
+    }
+    pending(&mut vm);
+    let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
+    assert!(
+        dispatch::run(
+            Semantics::Research(ResearchId::Fragments),
+            &mut vm,
+            &mut Hosts {
+                scene: Some(&mut scene),
+                ..Default::default()
+            }
+        )
+        .is_err()
+    );
+    assert_eq!(
+        (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
+        before
+    );
+    assert_eq!(vm.state().system_integer(0), Some(u32::MAX));
+    assert_eq!(random, CrtRandom::new(0));
+}
+
 #[derive(Default)]
 struct Images {
     reads: usize,

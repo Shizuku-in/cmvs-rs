@@ -67,13 +67,61 @@ pub struct ObjectImage {
 
 impl ObjectImage {
     pub(crate) fn apply_filter(&mut self, parameters: [u32; 3]) -> Result<(), crate::FormatError> {
-        let [mode, color, _extra] = parameters;
-        if !matches!(mode, 2 | 17) {
+        let [mode, color, extra] = parameters;
+        if !matches!(mode, 2 | 17 | 256 | 512) {
             return Err(crate::FormatError(
-                "image filter mode not implemented; only modes 2 and 17 are verified",
+                "image filter mode not implemented; only modes 2, 17, 256 and 512 are verified",
             ));
         }
-        // Original BGRA, ours RGBA. Both verified branches leave alpha untouched.
+        // Hapymaher 0x14002c6e0: modes 256/512 filter rows with triangular/uniform
+        // weights, including alpha. Sampling starts at -radius even if it skips the centre.
+        if matches!(mode, 256 | 512) {
+            let radius = (extra & 0xffff).max(1) as i32;
+            let step = (extra >> 16).max(1) as usize;
+            let width = self.pixels.width() as usize;
+            let row_bytes = width * 4;
+            let mut pixels = self.pixels.pixels().to_vec();
+            for (source, target) in self
+                .pixels
+                .pixels()
+                .chunks_exact(row_bytes)
+                .zip(pixels.chunks_exact_mut(row_bytes))
+            {
+                for (x, pixel) in target.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                    let (mut sums, mut weights) = ([0u32; 4], 0u32);
+                    for offset in (-radius..=radius).step_by(step) {
+                        let sample = x as i64 + i64::from(offset);
+                        if !(0..width as i64).contains(&sample) {
+                            continue;
+                        }
+                        let weight = if mode == 256 {
+                            (radius - offset.abs() + 1) as u32
+                        } else {
+                            1
+                        };
+                        weights = weights.wrapping_add(weight);
+                        for (channel, sum) in sums.iter_mut().enumerate() {
+                            *sum = sum
+                                .wrapping_add(weight.wrapping_mul(u32::from(
+                                    source[sample as usize * 4 + channel],
+                                )));
+                        }
+                    }
+                    if weights == 0 {
+                        return Err(crate::FormatError(
+                            "horizontal image filter has no in-bounds samples",
+                        ));
+                    }
+                    for (channel, sum) in pixel.iter_mut().zip(sums) {
+                        *channel = (sum / weights) as u8;
+                    }
+                }
+            }
+            self.pixels = RgbaImage::new(self.pixels.width(), self.pixels.height(), pixels)?;
+            self.filter = Some(parameters);
+            return Ok(());
+        }
+        // Original BGRA, ours RGBA. Colour modes leave alpha untouched.
         let [b, g, r, _] = color.to_le_bytes();
         let mut pixels = self.pixels.pixels().to_vec();
         for pixel in pixels.as_chunks_mut::<4>().0 {
@@ -927,11 +975,11 @@ impl SceneHost {
         let filter = if command == 0x3b {
             let mode = call.argument(12, "filter mode")?;
             let color = call.argument(16, "filter color")?;
-            // Stored at image +1212; not read by the mode 2/17 branches.
+            // Modes 256/512 use low/high words as radius and sampling step.
             let extra = call.argument(20, "filter extra")?;
-            if !matches!(mode, 2 | 17) {
+            if !matches!(mode, 2 | 17 | 256 | 512) {
                 return Err(fail(
-                    "image filter mode not implemented; only modes 2 and 17 are verified",
+                    "image filter mode not implemented; only modes 2, 17, 256 and 512 are verified",
                 )
                 .into());
             }

@@ -1090,7 +1090,6 @@ fn asset_paths_and_cursor_cli_are_bounded_and_read_only() {
         b"icons/../mouse.cur",
         b"/icons/mouse.cur",
         b"C:\\mouse.cur",
-        b"icons//mouse.cur",
         b"\xff",
     ] {
         assert!(assets.read(name).is_err());

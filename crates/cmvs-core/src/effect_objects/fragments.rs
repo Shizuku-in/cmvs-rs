@@ -112,6 +112,28 @@ impl FragmentEffect {
 }
 
 impl SceneHost {
+    /// Hapymaher 0x140072370 -> 0x140037840: only the inspected type-8 branch.
+    pub(crate) fn query_fragments(&self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let slot = call.argument(4, "effect slot")?;
+        let value = if slot < 4 {
+            let effect = self
+                .fragment_effects
+                .get(&(slot as u8))
+                .ok_or_else(|| call.error("fragment query needs an existing type-8 effect"))?;
+            Some(if effect.complete { u32::MAX } else { 0 })
+        } else {
+            None
+        };
+        call.complete(0x4004)?;
+        if let Some(value) = value {
+            call.vm
+                .state_mut()
+                .set_system_integer(0, value)
+                .expect("result slot exists");
+        }
+        Ok(())
+    }
+
     pub fn fragment_effects(&self) -> &BTreeMap<u8, FragmentEffect> {
         &self.fragment_effects
     }
