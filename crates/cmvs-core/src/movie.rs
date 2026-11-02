@@ -123,6 +123,7 @@ pub struct SceneMovie {
     data: Vec<u8>,
     base: Option<crate::raster::RgbaImage>,
     pub playback: MoviePlayback,
+    load_mode: u32,
 }
 
 /// Container-specific scene frame decoding; timing and object ownership are shared.
@@ -308,16 +309,18 @@ impl MovieHost {
     /// 0x2308 / 0x14007ef20: SP-4 player, SP-8 object, SP-12 name, SP-20 initial frame.
     /// SP-16 is not read; return 0x4014 without writing a system result. Decode before
     /// committing so an I/O/format error retains the pending command and old objects.
+    /// 0x230e additionally consumes SP-24 as the load mode and returns 0x4018.
+    /// Archive modes 2/3 are supported; loose-file modes 0/1 stay explicit barriers.
     pub fn try_create_scene(
         &mut self,
         vm: &mut Machine<'_>,
         scene: &mut crate::scene::SceneHost,
         source: &mut dyn crate::resources::ResourceSource,
     ) -> Result<bool, Box<dyn Error>> {
-        let Some((pc, 0x308)) = vm.pending_system() else {
+        let Some((pc, command @ (0x308 | 0x30e))) = vm.pending_system() else {
             return Ok(false);
         };
-        self.handle_create_scene(&mut Call::new(vm, pc, 0x308), scene, source)?;
+        self.handle_create_scene(&mut Call::new(vm, pc, command), scene, source)?;
         Ok(true)
     }
 
@@ -328,7 +331,8 @@ impl MovieHost {
         source: &mut dyn crate::resources::ResourceSource,
     ) -> Result<(), Box<dyn Error>> {
         let pc = call.pc;
-        let fail = |why| error(pc, 0x2308, why);
+        let op = call.command + 0x2000;
+        let fail = |why| error(pc, op, why);
         let (slot, object, name, frame) = (
             call.argument(4, "player slot")?,
             call.argument(8, "object slot")?,
@@ -337,6 +341,16 @@ impl MovieHost {
         );
         let name = call.vm.resolve_string(name)?;
         call.ignore_argument(16, "unused load parameter")?;
+        let load_mode = if call.command == 0x30e {
+            call.argument(24, "movie load mode")?
+        } else {
+            SCENE_MODE
+        };
+        // MIRANOSU 0x1400328a0: 2/3 read the registered archive; 0/1 open a loose
+        // filename instead. Streaming mode 3 is decoded from bounded resident bytes.
+        if !matches!(load_mode, 2 | 3) {
+            return Err(fail("loose-file scene movie load modes are not implemented").into());
+        }
         if slot as usize >= MOVIE_SLOTS {
             return Err(fail("movie slot outside 0..2 sets an unmodeled flag").into());
         }
@@ -369,7 +383,11 @@ impl MovieHost {
             draw: Some(draw),
             ..crate::scene::SceneObject::default()
         };
-        call.complete(0x4014)?;
+        call.complete(if call.command == 0x30e {
+            0x4018
+        } else {
+            0x4014
+        })?;
         scene.replace_movie_object(object_slot, object);
         self.slots[slot as usize] = Some(SceneMovie {
             object_slot,
@@ -379,6 +397,7 @@ impl MovieHost {
             data,
             base,
             playback,
+            load_mode,
         });
         Ok(())
     }
@@ -393,7 +412,7 @@ impl MovieHost {
     /// time only when active. 0x230c / 0x14007f470 pauses (0x1400384f0). Both preserve
     /// active/frame/segments and system results; empty slots are no-ops.
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x30a..=0x30c | 0x31a))) = vm.pending_system() else {
+        let Some((pc, command @ (0x30a..=0x30c | 0x31a | 0x31e))) = vm.pending_system() else {
             return Ok(false);
         };
         self.handle(&mut Call::new(vm, pc, command))?;
@@ -426,6 +445,13 @@ impl MovieHost {
                     movie.playback.paused = true;
                 }
             }
+        } else if command == 0x31e {
+            // MIRANOSU 0x140072ee0 -> 0x1400310b0: empty slots return zero.
+            let frame = self.slots[slot].as_ref().map_or(0, |movie| movie.frame);
+            call.vm
+                .state_mut()
+                .set_system_integer(0, frame)
+                .expect("slot 0 exists");
         } else {
             let active = self.slots[slot].as_ref().is_some_and(|m| m.playback.active);
             call.vm
@@ -557,6 +583,7 @@ struct SceneRecord {
     name: Vec<u8>,
     frame: u32,
     playback: MoviePlayback,
+    load_mode: u32,
 }
 impl SceneRecord {
     fn encode(&self) -> Vec<u8> {
@@ -580,7 +607,7 @@ impl SceneRecord {
         for word in head
             .into_iter()
             .chain(segments)
-            .chain([self.frame, 0, SCENE_MODE, 0])
+            .chain([self.frame, 0, self.load_mode, 0])
         {
             body.extend(word.to_le_bytes());
         }
@@ -595,7 +622,7 @@ impl SceneRecord {
         if slot as usize >= MOVIE_SLOTS || word(2) != u32::from(slot) {
             return Err("scene movie record names another player slot");
         }
-        if [word(286), word(290), word(294)] != [0, SCENE_MODE, 0] {
+        if word(286) != 0 || !matches!(word(290), 2 | 3) || word(294) != 0 {
             return Err("scene movie load mode or control fields are not implemented");
         }
         let object_slot = u8::try_from(word(6)).map_err(|_| "scene movie object outside 0..255")?;
@@ -627,6 +654,7 @@ impl SceneRecord {
             object_slot,
             name: name[..end].to_vec(),
             frame: word(282),
+            load_mode: SCENE_MODE, // The native reader reopens streaming mode 3 as mode 2.
             playback: MoviePlayback {
                 segments,
                 current,
@@ -652,6 +680,7 @@ impl MovieHost {
                 name: movie.name.clone(),
                 frame: movie.frame,
                 playback: movie.playback.clone(),
+                load_mode: movie.load_mode,
             };
             out.push((record.slot, record.encode()));
         }
@@ -699,6 +728,7 @@ impl MovieHost {
             }
             object.image = Some(index.frame_image(&record.name, pixels));
             players[slot as usize] = Some(SceneMovie {
+                load_mode: record.load_mode,
                 object_slot: record.object_slot,
                 name: record.name,
                 frame: record.frame,
@@ -738,6 +768,7 @@ mod tests {
             object_slot: 255,
             name: b"synthetic.cmv".to_vec(),
             frame: 9,
+            load_mode: SCENE_MODE,
             playback,
         }
     }
@@ -753,6 +784,13 @@ mod tests {
         let mut expected = record.clone();
         expected.playback.last_tick = 77;
         assert_eq!(SceneRecord::decode(2, &body, 77).unwrap(), expected);
+        let mut streaming = record.clone();
+        streaming.load_mode = 3;
+        assert_eq!(streaming.encode()[290..294], 3u32.to_le_bytes());
+        assert_eq!(
+            SceneRecord::decode(2, &streaming.encode(), 77).unwrap(),
+            expected
+        );
         let mut idle = record;
         idle.playback.pending = None;
         let body = idle.encode();
@@ -774,7 +812,7 @@ mod tests {
             (78, 16), // pending segment
             (82, 2),  // active flag
             (286, 1), // +48
-            (290, 3), // load mode
+            (290, 1), // loose-file load mode
             (294, 1), // +56
         ] {
             let mut bad = body.clone();

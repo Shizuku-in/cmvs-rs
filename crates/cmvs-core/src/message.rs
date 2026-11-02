@@ -621,6 +621,22 @@ impl MessageHost {
     }
 
     pub(crate) fn handle_window(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        if call.command == 0x15e {
+            // MIRANOSU 0x14006b310 -> 0x140052290: window +12/+16, not text pen.
+            let slot = call_window_slot(call)?;
+            let point = self.windows[slot]
+                .as_ref()
+                .ok_or_else(|| call.error("window position query needs an existing window"))?
+                .position;
+            call.complete(0x4004)?;
+            for (slot, value) in [1, 2].into_iter().zip(point) {
+                call.vm
+                    .state_mut()
+                    .set_system_integer(slot, value as u32)
+                    .expect("result exists");
+            }
+            return Ok(());
+        }
         match call.command {
             0xec => self.scale(call),
             0x141 => self.destroy(call),
@@ -2183,10 +2199,11 @@ impl MessageHost {
 }
 
 fn is_window_command(command: u16) -> bool {
-    matches!(command, 0xec | 0x140..=0x151 | 0x155 | 0x15a | 0x15b | 0x15d | 0x171 | 0x178..=0x17c | 0x17f | 0x180 | 0x182..=0x186 | 0x18d | 0x190..=0x192 | 0x195..=0x197 | 0x1cf..=0x1d1)
+    matches!(command, 0xec | 0x140..=0x151 | 0x155 | 0x15a | 0x15b | 0x15d | 0x15e | 0x171 | 0x178..=0x17c | 0x17f | 0x180 | 0x182..=0x186 | 0x18d | 0x190..=0x192 | 0x195..=0x197 | 0x1cf..=0x1d1)
 }
 fn window_argument_names(command: u16) -> &'static [&'static str] {
     match command {
+        0x15e => &["window slot"],
         0x140 => &["window slot", "text slot", "x", "y", "width", "height"],
         0x15d => &[
             "window slot",

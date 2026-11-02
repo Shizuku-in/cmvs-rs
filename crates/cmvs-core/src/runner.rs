@@ -664,6 +664,7 @@ impl<'a> Startup<'a> {
             LoadSlot { slot } => self.handle_load_slot(&request, slot, backend)?,
             SaveSlot { slot } => self.handle_save_slot(&request, slot)?,
             EditSlots { first, second } => self.handle_edit_slots(&request, first, second)?,
+            SetSlotInfo { slot, values } => self.handle_set_slot_info(&request, slot, values)?,
             Thumbnail => self.handle_thumbnail(&request)?,
             LatestSlot { start, count } => self.handle_latest_slot(&request, start, count)?,
             SlotInfo {

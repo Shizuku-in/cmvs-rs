@@ -374,6 +374,44 @@ fn destroying_constructor_empty_windows_pops_the_slot_only() {
 }
 
 #[test]
+fn position_query_returns_moved_window_origin_and_preserves_other_results() {
+    let mut code = vec![];
+    create(&mut code, 0, 0, [10, (-20i32) as u32, 100, 80]);
+    call(&mut code, 0x2180, &[u32::MAX, 0]);
+    call(&mut code, 0x214f, &[77, 66, 0]); // Text pen is independent of the window.
+    call(&mut code, 0x2150, &[4, 3, 1, 0]); // Relative window move.
+    call(&mut code, 0x215e, &[0]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 4);
+    for slot in [0, 3, 4, 5, 6] {
+        vm.state_mut().set_system_integer(slot, 99).unwrap();
+    }
+    run(&mut vm, &mut messages, 1);
+    assert_eq!(vm.state().system_integer(1), Some(13));
+    assert_eq!(vm.state().system_integer(2), Some((-16i32) as u32));
+    for slot in [0, 3, 4, 5, 6] {
+        assert_eq!(vm.state().system_integer(slot), Some(99));
+    }
+    assert_eq!(messages.text(0).unwrap().cursor, [66, 77]);
+    assert_eq!(vm.stack().len_bytes(), 0);
+    for args in [vec![], vec![8], vec![u32::MAX], vec![1]] {
+        let mut code = vec![];
+        call(&mut code, 0x215e, &args);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        pending(&mut vm);
+        let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
+        assert!(messages.shared_message(&mut vm).is_err());
+        assert_eq!(
+            (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
+            before
+        );
+    }
+}
+
+#[test]
 fn out_of_range_negative_slots_and_short_stacks_keep_the_command_pending() {
     let mut cases = vec![
         destroy(&[8]),

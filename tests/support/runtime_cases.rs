@@ -8,6 +8,7 @@ pub fn cases() -> Vec<(u16, Vec<u32>, Capability)> {
         (0x22b5, vec![1000], Capability::Runtime),
         (0x22b6, vec![1000], Capability::Runtime),
         (0x22b8, vec![], Capability::Runtime),
+        (0x22be, vec![3, 0x12345678, 0xabcdef01], Capability::Runtime),
         (0x22b7, vec![0, 2], Capability::Runtime),
         (
             0x22bd,

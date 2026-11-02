@@ -1682,6 +1682,109 @@ fn scenario_snapshot_writes_a_slot_that_loads_back_with_backups() {
 }
 
 #[test]
+fn slot_metadata_updates_only_two_header_words_in_the_user_directory() {
+    for (case, slot, signature, length, expected) in [
+        ("v2", 3, b"CSV2", 700, true),
+        ("v9", 3, b"CSV9", 600, true),
+        ("bad", 3, b"BAD2", 700, false),
+        ("missing", 3, b"CSV2", 0, false),
+        ("range", 1000, b"CSV2", 700, false),
+    ] {
+        let mut code = vec![];
+        commands::command(&mut code, 0x22be, &[slot, 0xdeadbeef, 0x87654321]);
+        let end = code.len();
+        commands::command(&mut code, 0x2000, &[]);
+        let root = Root::new(&format!("slot-metadata-{case}"), &code, b"");
+        let source = root.0.join("save/save003.dat");
+        fs::write(&source, b"original source").unwrap();
+        let script = root.script();
+        let game = root.game();
+        let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+        let user = root.0.with_extension("user");
+        run.set_user_data_directory(&user).unwrap();
+        let mut bytes: Vec<_> = (0..length).map(|n| n as u8).collect();
+        if length > 0 {
+            bytes[..4].copy_from_slice(signature);
+            fs::write(user.join("save003.dat"), &bytes).unwrap();
+        }
+        let mut backend = RecordingBackend::default();
+        while run.machine().pc() != end {
+            run.tick(&mut backend).unwrap();
+        }
+        assert_eq!(
+            run.machine().state().system_integer(0),
+            Some(u32::from(expected))
+        );
+        if expected {
+            bytes[532..536].copy_from_slice(&0xdeadbeefu32.to_le_bytes());
+            bytes[536..540].copy_from_slice(&0x87654321u32.to_le_bytes());
+        }
+        if length > 0 {
+            assert_eq!(fs::read(user.join("save003.dat")).unwrap(), bytes);
+        } else {
+            assert!(!user.join("save003.dat").exists());
+        }
+        assert_eq!(fs::read(source).unwrap(), b"original source");
+        assert!(!user.join("save999.dat").exists());
+        drop(run);
+        fs::remove_dir_all(user).unwrap();
+    }
+}
+
+#[test]
+fn slot_metadata_failures_preserve_file_and_pending_command_for_retry() {
+    let mut code = vec![];
+    commands::command(&mut code, 0x22be, &[3, 1, 2]);
+    let root = Root::new("slot-metadata-retry", &code, b"");
+    let script = root.script();
+    let game = root.game();
+    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    let mut backend = RecordingBackend::default();
+    for _ in 0..3 {
+        run.tick(&mut backend).unwrap();
+    }
+    assert!(
+        run.tick(&mut backend)
+            .unwrap_err()
+            .to_string()
+            .contains("--user-data-dir")
+    );
+    drop(run);
+    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    let user = root.0.with_extension("user");
+    run.set_user_data_directory(&user).unwrap();
+    let mut bytes = vec![0; 700];
+    bytes[..4].copy_from_slice(b"CSV2");
+    fs::write(user.join("save003.dat"), b"CSV2short").unwrap();
+    for _ in 0..3 {
+        run.tick(&mut backend).unwrap();
+    }
+    let pc = run.machine().pc();
+    assert!(
+        run.tick(&mut backend)
+            .unwrap_err()
+            .to_string()
+            .contains("600-byte")
+    );
+    assert_eq!(fs::read(user.join("save003.dat")).unwrap(), b"CSV2short");
+    fs::write(user.join("save003.dat"), &bytes).unwrap();
+    fs::create_dir(user.join(".save003.dat.tmp")).unwrap();
+    assert!(run.tick(&mut backend).is_err());
+    assert_eq!(run.machine().pc(), pc);
+    assert_eq!(run.machine().stack().len_bytes(), 12);
+    assert_eq!(run.machine().pending_system(), Some((pc, 0x2be)));
+    assert_eq!(fs::read(user.join("save003.dat")).unwrap(), bytes);
+    fs::remove_dir(user.join(".save003.dat.tmp")).unwrap();
+    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    bytes[532..536].copy_from_slice(&1u32.to_le_bytes());
+    bytes[536..540].copy_from_slice(&2u32.to_le_bytes());
+    assert_eq!(fs::read(user.join("save003.dat")).unwrap(), bytes);
+    assert_eq!(run.machine().state().system_integer(0), Some(1));
+    drop(run);
+    fs::remove_dir_all(user).unwrap();
+}
+
+#[test]
 fn ps2_canvas_queries_pointer_and_v2_saves_keep_four_by_three_coordinates() {
     use cmvs_rs::{
         save::Csv2Save,

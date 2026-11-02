@@ -432,6 +432,47 @@ impl Startup<'_> {
         self.write_slot(slot, false)
     }
 
+    /// MIRANOSU 0x22be -> 0x140070780: change only CSV header words 532/536.
+    /// Missing or unrecognized slots report zero; I/O failures leave the VM pending.
+    pub(super) fn handle_set_slot_info(
+        &mut self,
+        request: &RuntimeCall,
+        slot: u32,
+        values: [u32; 2],
+    ) -> Result<(), Box<dyn Error>> {
+        let changed = if slot > 999 {
+            false
+        } else {
+            let directory = self.slot_directory()?;
+            let name = format!("save{slot:03}.dat");
+            match self.saves.read_slot(slot as u16)? {
+                None => false,
+                Some(mut bytes) => {
+                    let recognized = bytes.get(..3) == Some(b"CSV")
+                        && bytes.get(3).is_some_and(|v| (b'2'..=b'9').contains(v));
+                    if !recognized {
+                        false
+                    } else {
+                        if bytes.len() < HEADER_SIZE {
+                            return Err(
+                                "slot metadata needs a complete 600-byte save header".into()
+                            );
+                        }
+                        bytes[532..536].copy_from_slice(&values[0].to_le_bytes());
+                        bytes[536..540].copy_from_slice(&values[1].to_le_bytes());
+                        replace_file(&directory, &name, &bytes)?;
+                        true
+                    }
+                }
+            }
+        };
+        request.complete(&mut self.machine, 0x400c)?;
+        self.machine
+            .state_mut()
+            .set_system_integer(0, u32::from(changed))?;
+        Ok(())
+    }
+
     /// 0x22b6 / 0x1400812f0: SP-4 slot; slots above 999 are ignored. Returns 0x4004.
     pub(super) fn handle_save_slot(
         &mut self,

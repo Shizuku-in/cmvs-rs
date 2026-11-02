@@ -149,6 +149,10 @@ pub enum RuntimeOperation {
         first: u32,
         second: u32,
     },
+    SetSlotInfo {
+        slot: u32,
+        values: [u32; 2],
+    },
     Thumbnail,
     LatestSlot {
         start: i32,
@@ -1011,6 +1015,16 @@ fn root_runtime(_hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow,
             8,
         ),
         0x2b8 => (Thumbnail, 0),
+        0x2be => (
+            SetSlotInfo {
+                slot: call.argument(4, "save slot")?,
+                values: [
+                    call.argument(8, "first metadata word")?,
+                    call.argument(12, "second metadata word")?,
+                ],
+            },
+            12,
+        ),
         0x2b7 => (
             LatestSlot {
                 start: call.argument(4, "first slot")? as i32,
@@ -1470,6 +1484,12 @@ pub static ROOT: &[Entry] = &[
         handler: root_runtime,
     },
     Entry {
+        command: 0x2be,
+        name: "set save slot metadata",
+        capability: Capability::Runtime,
+        handler: root_runtime,
+    },
+    Entry {
         command: 0x2b2,
         name: "snapshot policy",
         capability: Capability::Snapshot,
@@ -1896,6 +1916,12 @@ pub static ROOT: &[Entry] = &[
         handler: root_movie_scene,
     },
     Entry {
+        command: 0x30e,
+        name: "create scene movie with load mode",
+        capability: Capability::MovieScene,
+        handler: root_movie_scene,
+    },
+    Entry {
         command: 0x309,
         name: "start scene movie",
         capability: Capability::MovieStart,
@@ -1922,6 +1948,12 @@ pub static ROOT: &[Entry] = &[
     Entry {
         command: 0x31a,
         name: "scene movie active",
+        capability: Capability::MovieState,
+        handler: root_movie_state,
+    },
+    Entry {
+        command: 0x31e,
+        name: "scene movie frame",
         capability: Capability::MovieState,
         handler: root_movie_state,
     },
@@ -2548,6 +2580,12 @@ pub static ROOT: &[Entry] = &[
         name: "window pointer hit",
         capability: Capability::WindowPointer,
         handler: root_window_pointer,
+    },
+    Entry {
+        command: 0x15e,
+        name: "window position query",
+        capability: Capability::Windows,
+        handler: root_windows,
     },
     Entry {
         command: 0x194,

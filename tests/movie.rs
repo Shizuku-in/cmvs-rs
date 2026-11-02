@@ -73,7 +73,7 @@ fn destroying_constructor_empty_slots_completes_without_a_result() {
 
 #[test]
 fn out_of_range_slots_and_short_stacks_keep_the_command_pending() {
-    for op in [0x230au16, 0x231a] {
+    for op in [0x230au16, 0x231a, 0x231e] {
         for code in [
             slot_command(op, &[3]),
             slot_command(op, &[u32::MAX]),
@@ -473,6 +473,43 @@ fn scene_movie_creation_replaces_the_object_without_changing_results_or_starting
     assert_eq!(scene.objects(), &old);
     assert!(movies.player().is_none());
 }
+
+#[test]
+fn explicit_archive_movie_modes_create_a_player_and_reject_other_sources_atomically() {
+    for mode in [2u32, 3, 0, 1, u32::MAX] {
+        let mut code = vec![];
+        for arg in [mode, 0, 0xdeadbeef, 0, 28, 0] {
+            code.extend(0x440u16.to_le_bytes());
+            code.extend(4u16.to_le_bytes());
+            code.extend(arg.to_le_bytes());
+        }
+        code.extend(0x230eu16.to_le_bytes());
+        let parsed = program(&code, b"synthetic.cmv\0");
+        let mut vm = Machine::new(&parsed).unwrap();
+        let mut movies = MovieHost::default();
+        let mut scene = cmvs_rs::scene::SceneHost::default();
+        let mut files = SceneFiles(Some(slot_fixture::movie(false)));
+        pending(&mut vm);
+        vm.state_mut().set_system_integer(0, 99).unwrap();
+        let pc = vm.pc();
+        let result = movies.shared_create_scene(&mut vm, &mut scene, &mut files);
+        if matches!(mode, 2 | 3) {
+            assert!(result.unwrap());
+            assert_eq!((vm.pc(), vm.stack().len_bytes()), (pc + 2, 0));
+            assert_eq!(movies.scene_player(0).unwrap().object_slot, 28);
+            assert_eq!(movies.scene_player(0).unwrap().frame, 0);
+            assert!(!movies.scene_player(0).unwrap().playback.active);
+            assert!(scene.object(28).unwrap().image.is_some());
+        } else {
+            assert!(result.unwrap_err().to_string().contains("loose-file"));
+            assert_eq!(vm.pc(), pc);
+            assert_eq!(vm.stack().len_bytes(), 24);
+            assert!(!movies.occupied(0));
+            assert!(scene.objects().is_empty());
+        }
+        assert_eq!(vm.state().system_integer(0), Some(99));
+    }
+}
 #[test]
 fn failed_scene_movie_creation_preserves_command_stack_results_and_scene() {
     for (slot, object, frame, data) in [
@@ -840,6 +877,36 @@ fn scene_activity_query_follows_start_and_completion_and_reports_empty_slots_as_
     movies.shared_movie(&mut vm).unwrap();
     assert_eq!(query_result(&mut vm, &mut movies), Some(0));
     assert!(!movies.occupied(0));
+}
+
+#[test]
+fn scene_frame_query_reads_retained_frame_and_zero_for_empty_player() {
+    let mut code = slot_command(0x231e, &[0, 2]);
+    scene_start(&mut code, &[0, 0, 0, u32::MAX, 0]);
+    code.extend(slot_command(0x231e, &[0]));
+    code.extend(destroy(&[0]));
+    code.extend(slot_command(0x231e, &[0]));
+    let (script, mut files) = scene_play_fixture(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut movies = MovieHost::default();
+    let mut scene = cmvs_rs::scene::SceneHost::default();
+    pending(&mut vm);
+    movies
+        .shared_create_scene(&mut vm, &mut scene, &mut files)
+        .unwrap();
+    assert_eq!(query_result(&mut vm, &mut movies), Some(0));
+    assert_eq!(query_result(&mut vm, &mut movies), Some(0));
+    pending(&mut vm);
+    movies.shared_start_scene(&mut vm).unwrap();
+    movies.advance_scene(267, &mut scene).unwrap();
+    let playback = movies.scene_player(0).unwrap().playback.clone();
+    let objects = scene.objects().clone();
+    assert_eq!(query_result(&mut vm, &mut movies), Some(3));
+    assert_eq!(movies.scene_player(0).unwrap().playback, playback);
+    assert_eq!(scene.objects(), &objects);
+    pending(&mut vm);
+    movies.shared_movie(&mut vm).unwrap();
+    assert_eq!(query_result(&mut vm, &mut movies), Some(0));
 }
 #[test]
 fn scene_playback_rejects_destroyed_bindings_without_committing_its_frame_or_time() {

@@ -151,7 +151,7 @@ impl State {
 }
 #[test]
 fn media_commands_require_their_own_capability_and_complete_once() {
-    assert_eq!(cases().len(), 20);
+    assert_eq!(cases().len(), 22);
     for (opcode, args, cap) in cases() {
         let entries: Vec<_> = dispatch::ROOT
             .iter()
@@ -264,7 +264,7 @@ fn missing_media_dependencies_and_short_arguments_preserve_pending_state() {
 fn movie_source_failures_keep_typed_cause_and_allow_retry() {
     for (opcode, args, cap) in cases()
         .into_iter()
-        .filter(|(op, _, _)| matches!(op, 0x2308 | 0x20c0))
+        .filter(|(op, _, _)| matches!(op, 0x2308 | 0x230e | 0x20c0))
     {
         let mut state = State::default();
         state.source.fail = true;
