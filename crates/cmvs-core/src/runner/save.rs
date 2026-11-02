@@ -122,7 +122,7 @@ fn decode_bmp(bytes: &[u8]) -> Result<RgbaImage, &'static str> {
 }
 
 /// Command inheritance does not establish the wire format of gameplay snapshots.
-/// The independently inspected 20130131/20150405 subsets use text v2, and 20171114 uses v3
+/// The independently inspected 20130131/20140217/20150405 subsets use text v2, and 20171114 uses v3
 /// (docs/games/aoitori/vm-semantics.md). Effect configurations have an independent
 /// build binding; unknown image, collision-mesh and effect records remain rejected.
 pub fn snapshot_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
@@ -130,8 +130,10 @@ pub fn snapshot_layout_supported(profile: &crate::profile::EngineProfile) -> boo
 }
 
 fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLayout> {
-    if matches!(profile.id.as_str(), "cmvs-20130131" | "cmvs-20150405")
-        && profile.base.as_deref() == Some("cmvs-20160201")
+    if matches!(
+        profile.id.as_str(),
+        "cmvs-20130131" | "cmvs-20140217" | "cmvs-20150405"
+    ) && profile.base.as_deref() == Some("cmvs-20160201")
     {
         Some(SnapshotLayout::TextV2)
     } else if profile.base.is_none()
@@ -147,7 +149,8 @@ fn effect_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
     profile.id == "cmvs-20171114" && profile.base.as_deref() == Some("cmvs-20160201")
 }
 
-/// 20130131 writer 0x1400330b0 visits 512 children; 0x14005fb90 has no 0x8c8 table.
+/// 20130131 writer 0x1400330b0 and 20140217 writer 0x1400375d0 visit 512 children.
+/// The former has no lists; the latter's list record layout is not enabled here.
 fn validate_20130131_records<'a>(
     scenes: impl Iterator<Item = &'a SavedScene>,
     has_lists: bool,
@@ -159,17 +162,20 @@ fn validate_20130131_records<'a>(
             .all(|(&slot, child)| slot < 512 && scene_supported(child))
     }
     if has_lists {
-        return Err("button-list snapshot records do not exist in cmvs-20130131".into());
+        return Err("button-list snapshot records are not supported for this build".into());
     }
     if !scenes.into_iter().all(scene_supported) {
-        return Err("snapshot child slot exceeds cmvs-20130131 table".into());
+        return Err("snapshot child slot exceeds this build's 512-entry table".into());
     }
     Ok(())
 }
 
 impl Startup<'_> {
     fn validate_build_snapshot(&self, snapshot: &EngineSnapshot) -> Result<(), Box<dyn Error>> {
-        if self.gate.selection().profile.id == "cmvs-20130131" {
+        if matches!(
+            self.gate.selection().profile.id.as_str(),
+            "cmvs-20130131" | "cmvs-20140217"
+        ) {
             validate_20130131_records(
                 snapshot
                     .objects
@@ -871,6 +877,7 @@ mod layout_tests {
         let registry = crate::profile::Registry::builtin();
         for (id, layout) in [
             ("cmvs-20130131", SnapshotLayout::TextV2),
+            ("cmvs-20140217", SnapshotLayout::TextV2),
             ("cmvs-20150405", SnapshotLayout::TextV2),
             ("cmvs-20171114", SnapshotLayout::TextV3),
             ("cmvs-20160201", SnapshotLayout::TextV3),

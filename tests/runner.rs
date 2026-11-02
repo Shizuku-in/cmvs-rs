@@ -2280,7 +2280,12 @@ fn chosen_faces_are_validated_before_the_command_completes() {
 fn verified_startup_globals_are_zero_but_unverified_profiles_remain_unknown() {
     let root = Root::new("verified-globals", &[0, 0x20], b"\0");
     let script = root.script();
-    for id in ["cmvs-20160201", "cmvs-20171114", "synthetic-base"] {
+    for id in [
+        "cmvs-20140217",
+        "cmvs-20160201",
+        "cmvs-20171114",
+        "synthetic-base",
+    ] {
         let profile = synthetic_profile().replace("synthetic-base", id);
         let registry = Registry::parse(&[&profile], "").unwrap();
         let game = registry.identify_game(&root.0, Some(id)).unwrap();

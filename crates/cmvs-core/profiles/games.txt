@@ -10,6 +10,15 @@ executable cmvs64.exe sha256=637d2928efab89e7b5fc68b2d0801cfdefbfa65558b69378580
 executable cmvs32.exe sha256=8048c7615b019d3b2ef867ad2bcc108f27092c7712250794d27d33e6cd7f2930
 end
 
+game hapymaherfd
+profile cmvs-20140217
+start data/pack/start.ps3 sha256=5c8f2d51a859fb396782ca8ecedef77398d61191debeff29315e52693574b828
+archive data/pack/script.cpz sha256=13f8699c9ca44cd43731526aaf0abb5166026c2248d028aadcdd0d80ebcd1ea6
+game-id 0x17500003
+executable cmvs64.exe sha256=04e37c27be28aa0ffe5661a2757e766488316ccdb8c8698da2ea7677675b5aaa
+executable cmvs32.exe sha256=c6d85a84da362ba86d31b5763e0867e6e8df5e7243b4da34d9aafe2b1689f4cd
+end
+
 game amatsutsumi
 profile cmvs-20160201
 start data/pack/start.ps3 sha256=c338313949a803e834acf0d746c93f09c4d41f558af8fb6c13ab1ee55aff2bd0

@@ -186,7 +186,7 @@ impl EngineProfile {
     /// This is startup layout evidence, independent of command gate policy.
     pub(crate) fn initial_globals(&self) -> Option<[u32; 4]> {
         match self.id.as_str() {
-            "cmvs-20160201" | "cmvs-20171114" => Some([4096, 262144, 2048, 128]),
+            "cmvs-20140217" | "cmvs-20160201" | "cmvs-20171114" => Some([4096, 262144, 2048, 128]),
             _ => None,
         }
     }
@@ -427,11 +427,12 @@ pub struct Registry {
     contracts: BTreeMap<[u8; 32], ContractProof>,
 }
 
-const BUILTIN_PROFILES: [&str; 4] = [
+const BUILTIN_PROFILES: [&str; 5] = [
     include_str!("../profiles/cmvs-20160201.profile"),
     include_str!("../profiles/cmvs-20150405.profile"),
     include_str!("../profiles/cmvs-20171114.profile"),
     include_str!("../profiles/cmvs-20130131.profile"),
+    include_str!("../profiles/cmvs-20140217.profile"),
 ];
 const BUILTIN_GAMES: &str = include_str!("../profiles/games.txt");
 
