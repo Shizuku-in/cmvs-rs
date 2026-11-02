@@ -60,7 +60,7 @@ Output:
   --image-archive <CPZ> --preview-image <name>
                                    show one PB3 image instead of the scene
 
-Keys: F1 default cursor, F2..F5 registered cursor previews after a stop, Esc or close exits.
+Keys: F1 default cursor, F2..F5 registered cursor previews after a stop; close requests exit.
 
 Notes:
   - The profile is identified from the start script, script archive and executables.
@@ -420,7 +420,9 @@ impl ApplicationHandler for App<'_> {
         match event {
             WindowEvent::CloseRequested => {
                 println!("# close requested");
-                el.exit();
+                if self.halted || self.preview_image.is_some() || !self.startup.request_close() {
+                    el.exit();
+                }
             }
             WindowEvent::RedrawRequested => {
                 if let Err(error) = self.redraw() {

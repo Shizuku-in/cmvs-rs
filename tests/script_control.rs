@@ -534,3 +534,43 @@ fn due_callbacks_follow_the_setting_window_visibility_and_the_block_flag() {
         );
     }
 }
+
+#[test]
+fn window_close_dispatches_confirmation_once_and_can_be_requested_again() {
+    for setting in [0, 1] {
+        let slots = [26, 28];
+        let (code, starts) = dispatch_registrations(&slots, setting, 1);
+        let script = script(&code, &[], &[], 0);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut host = ScriptControl::new(0);
+        assert!(!host.request_close());
+        run(&mut vm, &mut host, &mut MemorySource::default());
+        assert!(host.request_close());
+        assert!(host.due_callbacks([false; 8]).is_empty());
+        let mut unblock = Vec::new();
+        push(&mut unblock, int(0));
+        word(&mut unblock, 0x208c);
+        word(&mut unblock, 0x2000);
+        let unblock_script = self::script(&unblock, &[], &[], 0);
+        let mut unblock_vm = Machine::new(&unblock_script).unwrap();
+        run(&mut unblock_vm, &mut host, &mut MemorySource::default());
+        let mut expected = vec![(0, starts[0] as usize)];
+        if setting != 0 {
+            expected.push((0, starts[1] as usize));
+        }
+        assert_eq!(host.due_callbacks([false; 8]), expected);
+        for _ in 0..2 {
+            assert!(host.request_close());
+            assert!(host.request_close());
+            let mut expected = vec![(0, starts[0] as usize)];
+            if setting != 0 {
+                expected.push((0, starts[1] as usize));
+            }
+            assert_eq!(host.due_callbacks([false; 8]), expected);
+            assert_eq!(
+                host.due_callbacks([false; 8]),
+                vec![(0, starts[1] as usize)]
+            );
+        }
+    }
+}

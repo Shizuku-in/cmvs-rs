@@ -217,6 +217,7 @@ pub struct ScriptControl {
     callbacks: BTreeMap<u8, Callback>,
     settings: BTreeMap<u16, u32>,
     virtual_tick: u32,
+    close_requested: bool,
 }
 
 impl ScriptControl {
@@ -226,22 +227,32 @@ impl ScriptControl {
             callbacks: BTreeMap::new(),
             settings: BTreeMap::new(),
             virtual_tick,
+            close_requested: false,
         }
     }
     pub fn callbacks(&self) -> &BTreeMap<u8, Callback> {
         &self.callbacks
     }
+    /// Queue a host close request for the script's confirmation handler, if registered.
+    pub fn request_close(&mut self) -> bool {
+        if !self.callbacks.get(&26).is_some_and(|c| c.enabled) {
+            return false;
+        }
+        self.close_requested = true;
+        true
+    }
     /// The automatic dispatch 0x140064f50 runs at every VM run entry: nothing while the
     /// 0x208c flag (+12240) is set. With the 0x2089 setting (+14788) the registered entries
     /// 3..6 and 28 are due every time, 10..17 while message window 0..7 is shown (+4) and
     /// 26 when its dispatch word is set; without it only 26 (word set) or else 28. Entry 26's
-    /// word is set only by the window-close paths (0x140009cd0, menu 32756), which Rust
-    /// does not model, so it is never due here. Returned in push order: the last one runs
+    /// word is set by the host window-close path. Requests survive blocking and are
+    /// consumed once dispatched. Returned in push order: the last one runs
     /// first.
-    pub fn due_callbacks(&self, windows_shown: [bool; 8]) -> Vec<(u8, usize)> {
+    pub fn due_callbacks(&mut self, windows_shown: [bool; 8]) -> Vec<(u8, usize)> {
         if self.settings.get(&0x208c).copied().unwrap_or(0) != 0 {
             return Vec::new();
         }
+        let close_requested = std::mem::take(&mut self.close_requested);
         let registered = |index: u8| {
             self.callbacks
                 .get(&index)
@@ -249,12 +260,15 @@ impl ScriptControl {
                 .map(|c| (c.script_slot, c.target as usize))
         };
         if self.settings.get(&0x2089).copied().unwrap_or(0) == 0 {
-            return registered(28).into_iter().collect();
+            return registered(if close_requested { 26 } else { 28 })
+                .into_iter()
+                .collect();
         }
         (0..32u8)
             .filter(|&index| match index {
                 3..=6 | 28 => true,
                 10..=17 => windows_shown[usize::from(index - 10)],
+                26 => close_requested,
                 _ => false,
             })
             .filter_map(registered)

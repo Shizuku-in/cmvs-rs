@@ -307,6 +307,10 @@ impl<'a> Startup<'a> {
     pub fn bootstrap(&self) -> &Bootstrap {
         &self.bootstrap
     }
+    /// Ask the registered script callback to confirm a host window close.
+    pub fn request_close(&mut self) -> bool {
+        self.control.request_close()
+    }
     pub fn control(&self) -> &ScriptControl {
         &self.control
     }
