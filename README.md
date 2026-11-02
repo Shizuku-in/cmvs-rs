@@ -9,27 +9,37 @@
 
 <table>
   <tr>
-    <td align="center" width="50%">
+    <th colspan="3">Amatsutsumi</th>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
       <img src="docs/images/amatsutsumi_windows11.webp" alt="Windows Example of Amatsutsumi" width="100%">
       <br><strong>Windows</strong>
-      <br><sub>Amatsutsumi</sub>
     </td>
-    <td align="center" width="50%">
+    <td align="center" width="33%">
       <img src="docs/images/amatsutsumi_ubuntu.webp" alt="Linux Example of Amatsutsumi" width="100%">
       <br><strong>Linux</strong>
-      <br><sub>Amatsutsumi</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/images/amatsutsumi_android.webp" alt="Android Example of Amatsutsumi" width="100%">
+      <br><strong>Android</strong>
     </td>
   </tr>
   <tr>
-    <td align="center" width="50%">
+    <th colspan="3">Aoitori</th>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
       <img src="docs/images/aoitori_windows11.webp" alt="Windows Example of Aoitori" width="100%">
       <br><strong>Windows</strong>
-      <br><sub>Aoitori</sub>
     </td>
-    <td align="center" width="50%">
+    <td align="center" width="33%">
       <img src="docs/images/aoitori_ubuntu.webp" alt="Linux Example of Aoitori" width="100%">
       <br><strong>Linux</strong>
-      <br><sub>Aoitori</sub>
+    </td>
+    <td align="center" width="33%">
+      <img src="docs/images/aoitori_android.webp" alt="Android Example of Aoitori" width="100%">
+      <br><strong>Android</strong>
     </td>
   </tr>
 </table>
