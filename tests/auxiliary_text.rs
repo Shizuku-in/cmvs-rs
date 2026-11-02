@@ -54,6 +54,87 @@ fn stack_words(vm: &Machine<'_>) -> Vec<u32> {
 }
 
 #[test]
+fn auxiliary_font_change_preserves_existing_glyphs_and_survives_group_recreation() {
+    use cmvs_rs::dispatch::{self, Flow, Hosts, TextHosts};
+    let mut code = vec![];
+    for (op, args) in [
+        (0x2380, vec![7, 0, 25, 32]),
+        (0x238b, vec![7, 9]),
+        (0x2388, vec![7, 1]),
+        (0x238b, vec![7, 9]),
+        (0x2382, vec![7]),
+        (0x2380, vec![7, 0, 25, 32]),
+        (0x2388, vec![7, 0]),
+        (0x2388, vec![8, 1]),
+    ] {
+        call(&mut code, op, &args);
+    }
+    let script = script(&code, b"\0NewFace\0A\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    messages.set_record_output(true);
+    messages.set_default_face(b"FirstFace");
+    run(&mut vm, &mut messages);
+    let select = |vm: &mut Machine<'_>, messages: &mut MessageHost| {
+        pending(vm);
+        let mut input = cmvs_rs::input::ActionInput::default();
+        let profile = cmvs_rs::profile::Registry::builtin()
+            .profile("cmvs-20190305")
+            .unwrap();
+        dispatch::run(
+            profile.semantics(vm.pending_system().unwrap().1),
+            vm,
+            &mut Hosts {
+                text: Some(TextHosts {
+                    messages,
+                    input: &mut input,
+                    flags: Default::default(),
+                }),
+                ..Default::default()
+            },
+        )
+    };
+    assert_eq!(select(&mut vm, &mut messages).unwrap(), Some(Flow::Done));
+    let before = messages.auxiliary_text(7).unwrap().clone();
+    assert_eq!(before.glyphs[0].code, u16::from(b'A'));
+    vm.state_mut().set_system_integer(0, 99).unwrap();
+    assert_eq!(select(&mut vm, &mut messages).unwrap(), Some(Flow::Done));
+    let group = messages.auxiliary_text(7).unwrap();
+    assert_eq!(&*group.face, b"NewFace");
+    assert_eq!(group.glyphs, before.glyphs);
+    assert_eq!(group.atlas, before.atlas);
+    assert_eq!(group.object, before.object);
+    assert_eq!(vm.state().system_integer(0), Some(99));
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(select(&mut vm, &mut messages).unwrap(), Some(Flow::Done));
+    let group = messages.auxiliary_text(7).unwrap();
+    assert_eq!(&*group.glyphs[0].face, b"FirstFace");
+    assert_eq!(&*group.glyphs[1].face, b"NewFace");
+    run(&mut vm, &mut messages);
+    run(&mut vm, &mut messages);
+    assert_eq!(&*messages.auxiliary_text(7).unwrap().face, b"NewFace");
+    messages.set_default_face(b"NextDefault");
+    vm.state_mut().set_system_integer(0, 99).unwrap();
+    assert_eq!(select(&mut vm, &mut messages).unwrap(), Some(Flow::Done));
+    assert_eq!(&*messages.auxiliary_text(7).unwrap().face, b"NextDefault");
+    assert!(select(&mut vm, &mut messages).is_err());
+    assert_eq!(vm.pending_system().unwrap().1, 0x388);
+    assert_eq!(vm.stack().len_bytes(), 8);
+    assert_eq!(vm.state().system_integer(0), Some(99));
+    let before = messages.auxiliary_text(7).unwrap().clone();
+    let mut code = vec![];
+    call(&mut code, 0x2388, &[7, 0]);
+    let text = [vec![b'X'; 64], vec![0]].concat();
+    let script = self::script(&code, &text);
+    let mut vm = Machine::new(&script).unwrap();
+    assert!(select(&mut vm, &mut messages).is_err());
+    assert_eq!(vm.pending_system().unwrap().1, 0x388);
+    assert_eq!(vm.stack().len_bytes(), 8);
+    assert_eq!(messages.auxiliary_text(7).unwrap().face, before.face);
+    assert_eq!(messages.auxiliary_text(7).unwrap().glyphs, before.glyphs);
+}
+
+#[test]
 fn construction_owns_a_separate_atlas_and_preserves_constructor_defaults() {
     let mut code = vec![];
     call(&mut code, 0x2380, &[7, 0, 25, 32]);

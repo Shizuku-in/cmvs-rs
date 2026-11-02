@@ -276,7 +276,11 @@ fn background_audio_override_queries_writes_and_gates_without_stopping_playback(
     let mut vm = Machine::new(&script).unwrap();
     let mut audio = AudioHost::default();
     let mut backend = RecordingAudio::default();
-    let semantics = Semantics::Variant(VariantId::BackgroundAudio);
+    let semantics = cmvs_rs::profile::Registry::builtin()
+        .profile("cmvs-20190305")
+        .unwrap()
+        .semantics(0x2ed);
+    assert_eq!(semantics, Semantics::Variant(VariantId::BackgroundAudio));
     for (index, expected) in [true, false, false, true].into_iter().enumerate() {
         pending(&mut vm);
         let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());

@@ -653,6 +653,62 @@ fn reset_missing_main_keeps_the_command_pending_and_old_state_intact() {
 }
 
 #[test]
+fn recording_frames_advance_mgv_and_release_it_at_the_nominal_end() {
+    use cmvs_rs::{mgv, raster::RgbaImage};
+    #[derive(Debug)]
+    struct Decoder;
+    impl mgv::Decoder for Decoder {
+        fn frame(&mut self, frame: u32) -> Result<RgbaImage, Box<dyn Error>> {
+            Ok(RgbaImage::new(1, 1, vec![frame as u8, 0, 0, 255])?)
+        }
+    }
+    #[derive(Debug)]
+    struct Factory;
+    impl mgv::DecoderFactory for Factory {
+        fn open(
+            &self,
+            _: Box<dyn mgv::ReadSeek>,
+            _: &mgv::MgvIndex,
+        ) -> Result<Box<dyn mgv::Decoder>, Box<dyn Error>> {
+            Ok(Box::new(Decoder))
+        }
+    }
+    let mut code = vec![];
+    commands::command(&mut code, 0x2015, &[14]);
+    commands::command(&mut code, 0x20c4, &[0]);
+    commands::command(&mut code, 0x2000, &[]);
+    let root = Root::new("mgv-recording-clock", &code, b"synthetic.mgv\0\0");
+    let mut movie = b"MGV1".to_vec();
+    for word in [32u32, 1, 1, 3, 0x00010001, 1, 10, 1, 1 << 16, 2 << 16] {
+        movie.extend(word.to_le_bytes());
+    }
+    movie.extend([0, 0]);
+    fs::write(root.0.join("synthetic.mgv"), movie).unwrap();
+    let script = root.script();
+    let game = Registry::builtin()
+        .identify_game(&root.0, Some("cmvs-20190305"))
+        .unwrap();
+    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    run.set_block_unreviewed(false);
+    run.set_mgv_factory(Box::new(Factory));
+    let mut backend = RecordingBackend::default();
+    for _ in 0..20 {
+        run.tick(&mut backend).unwrap();
+        if run.movies().has_player() {
+            break;
+        }
+    }
+    assert!(run.movies().has_player());
+    assert_eq!(run.movies().player_image().unwrap().pixels()[0], 0);
+    run.advance_frame(100).unwrap();
+    assert_eq!(run.movies().player_image().unwrap().pixels()[0], 1);
+    run.advance_frame(100).unwrap();
+    assert_eq!(run.movies().player_image().unwrap().pixels()[0], 2);
+    run.advance_frame(100).unwrap();
+    assert!(!run.movies().has_player());
+}
+
+#[test]
 fn inactive_policy_freezes_vm_and_scene_but_keeps_audio_updates_without_time_catchup() {
     use cmvs_rs::audio::{AudioBackend, AudioRequest};
     use std::sync::{

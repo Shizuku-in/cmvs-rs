@@ -40,6 +40,7 @@ pub enum VariantId {
     Fragments,
     KeyedArchives,
     DisplayCount,
+    FullscreenMonitor,
     MgvPlayer,
 }
 impl VariantId {
@@ -53,6 +54,7 @@ impl VariantId {
             "fragments" => Some(Self::Fragments),
             "keyed-archives" => Some(Self::KeyedArchives),
             "display-count" => Some(Self::DisplayCount),
+            "fullscreen-monitor" => Some(Self::FullscreenMonitor),
             "mgv-player" => Some(Self::MgvPlayer),
             _ => None,
         }
@@ -67,6 +69,7 @@ impl VariantId {
             Self::Fragments => "fragments",
             Self::KeyedArchives => "keyed-archives",
             Self::DisplayCount => "display-count",
+            Self::FullscreenMonitor => "fullscreen-monitor",
             Self::MgvPlayer => "mgv-player",
         }
     }

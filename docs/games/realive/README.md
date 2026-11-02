@@ -27,9 +27,17 @@
 
 2026-11-03：`S1–S4/L0` 通过（80 个脚本、3,324,733 条指令、444 种未复核命令；10 个资源包及松散文件共 42,679 项）。无头启动 `R1/L0` 到达标题（624 帧、22,403 步、5 个启用按钮）；`D1/D2/I2/I3/I4/P2` 通过 L1，`D3/I1/I5` 通过 L0。
 
-MGV1 两段影片共 4,867 个播放帧、4,743 个 Theora 解码帧；全帧解码完成，Y/Cb/Cr 与原 DLL 逐帧一致，播放帧表的重复映射保留。`0x20c4–0x20c6` 已接入，新增路线重放未完成，不计 `R2/V5` 通过。既有页面探索 261 次、14 状态，`P1/P3/C1–C4` 停于 `intproc.ps3:0x6ce14` 的 `0x23c5`。默认放行未复核命令；全路线、剧情快照、实机画面与听感未验证。
+MGV1 两段影片共 4,867 个播放帧、4,743 个 Theora 解码帧；全帧解码完成，Y/Cb/Cr 与原 DLL 逐帧一致，播放帧表的重复映射保留。修复无头帧入口遗漏 MGV 推进后，`R2` 首选分支走过 4 个选项点，运行 100,000,000 步、45,624 帧，至 `sn404.ps3:0x160a6` 耗尽预算，不计路线通过；`V5` 未重跑。页面探索 261 次、14 状态，`P1/P3/C1–C4` 新停于 `intproc.ps3:0x76c86` 的 `0x22f9`。默认放行未复核命令；全路线、剧情快照、实机画面与听感未验证。
 
 ## 命令证据
+
+`0x2388`：`0x14009a090` 的 SP-4/SP-8 为辅助文字槽/字体字符串，调用 `0x140041940` → `0x14006bc10` 重新选择字体并清除字体缓存，再由 `0x14006b470` 清缓存，返回 `0x4008`，结果槽不变。仅更新后续字形的字体，保留既有字形和 atlas；空串重新选择当前默认字体，槽位字体在文字组重建后仍保留。绑定 `font-cells`；不存在的文字组、超过 63 字节的字体名及后端无法解析的字体显式报错，保持 `Unreviewed`，不宣称 GDI 字体回退一致。
+
+`0x238b`：`0x14009a440` → `0x140041cd0` 按 SP-4/SP-8 的辅助文字槽/字符串输出，返回 `0x4008`，结果槽不变；半宽字符在固定模式使用半个字形大小，比例模式读取实际 cell 宽（`0x1400420cc–0x140042442`）。为本构建补绑既有 `font-cells`，避免误用旧版未初始化半宽步进语义，保持 `Unreviewed`。
+
+`0x22ed`：`0x140085f40` 的 SP-4 为读写标志，非零时将 SP-8 归一为后台播放开关；零时查询音频对象 +2796 写结果槽 0，均返回 `0x4008`。`0x14009f240/0x14009fee0` 为 getter/setter，参数和结果规则与既有 `background-audio` 一致，绑定该变体并保持 `Unreviewed`。
+
+`0x23c5`：同下列 x64 身份，`0x140085e10` → `0x140031340` 读取设备 +148 的全屏显示器选择模式，写结果槽 0、返回 `0x4000`，不收参数。初始化 `0x140023b70` 从 `WINDOW_RESOLVING/FULL_SCREEN_MONITOR_MODE` 读取默认 0；`0x140031720` 将超出显示器数量的 1..4 回退为 0，5 保留为跟随窗口，未知值显式报错。绑定 `fullscreen-monitor`，保持 `Unreviewed`；设置命令 `0x23c6` 尚未接入。
 
 `0x23ac`（以下地址均绑定上表 x64 SHA-256、image base `0x140000000`）：case `0x140081c15` → `0x140098cc0` 从 SP-4 读取 u32，经 `0x14001fa90` 将非零归一值写入 `0x14011ab9c`，返回 `0x4004`，系统结果不变。getter `0x14001f700` 被字体缓存 `0x14006b4e0`、`0x14006b920` 及文字输出 `0x14006f4c0`、`0x1400702e0` 使用，选择字形 cell 前进宽度。仅绑定下列已检查的文字处理器，保持 `Unreviewed`；其他文字变体、版式一致性及 x86 语义未验证。
 
@@ -43,6 +51,6 @@ MGV1 两段影片共 4,867 个播放帧、4,743 个 Theora 解码帧；全帧解
 
 MGV1：`mog3x64.dll` SHA-256 `053156399e46565fcac4d5c4ce2ebede8bdb8abf1caaec46a29a5f76d2192a83`，image base `0x180000000`。`MGV_InputFile` RVA `0x22cf0` 读取 32 字节头、每帧 4 字节映射、独立 Ogg/Vorbis 音轨及 Ogg/Theora 流；映射高 16 位为解码包号，低 16 位为关键帧标志。引擎 `0x14001c180` 复用映射帧；`0x20c4/0x20c5/0x20c6` 经 `0x14009b9d0/0x14009bbb0/0x14009bb70` 打开/关闭/查询帧号，返回 `0x4004/0x4000/0x4000`，打开设置结果槽 0 为成功值，空播放器查询为 -1。实现按映射解码依赖帧；RGBA 使用 BT.601 预览转换，保持 `Unreviewed`，不宣称原 GPU 像素一致。
 
-- MGV1 复现：`cargo run --offline --release --features desktop --bin cmvs-mgv -- "<movie.mgv>" --check-frames`。对照见 `local/realive/mgv-reference.json`、`theora-{op,op2}-all.log`，播放帧映射检查见 `mgv-{op,op2}-decoded.log`。既有游戏探针报告位于 `local/realive/{routes-03,input-04,pages-02,robustness-01}/summary.json`；静态报告保留于 `startup-02/resources-01`。
+- MGV1 复现：`cargo run --offline --release --features desktop --bin cmvs-mgv -- "<movie.mgv>" --check-frames`。对照见 `local/realive/mgv-reference.json`、`theora-{op,op2}-all.log`，播放帧映射检查见 `mgv-{op,op2}-decoded.log`。游戏探针报告位于 `local/realive/{routes-05,input-04,pages-06,robustness-01}/summary.json`；静态报告保留于 `startup-02/resources-01`。新增命令及 MGV 无头推进回归、受影响测试、Clippy 与格式检查通过。
 - 引擎与脚本自报版本来自游戏目录 `info.txt`，缺失时保留未确认。自报版本不作为二进制身份或补丁版本证明。
 - 真实游戏、原始环境报告与 IDA 数据库不入库；后续输出使用 `local/realive/`。

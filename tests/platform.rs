@@ -15,6 +15,70 @@ use std::{collections::BTreeMap, error::Error, fs, process::Command};
 mod bytecode;
 
 #[test]
+fn fullscreen_monitor_query_normalizes_unavailable_displays_and_preserves_errors() {
+    use cmvs_rs::{
+        dispatch::{self, Hosts, PlatformHosts},
+        profile::Registry,
+    };
+    struct Displays(Result<u32, &'static str>);
+    impl PlatformBackend for Displays {
+        fn display_count(&self) -> Result<u32, Box<dyn Error>> {
+            self.0.map_err(Into::into)
+        }
+        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+            unreachable!()
+        }
+    }
+    for (mode, count, expected) in [
+        (0, Err("unused"), Some(0)),
+        (1, Ok(1), Some(1)),
+        (2, Ok(1), Some(0)),
+        (4, Ok(4), Some(4)),
+        (5, Err("unused"), Some(5)),
+        (2, Err("unavailable"), None),
+        (6, Ok(4), None),
+    ] {
+        let mut code = vec![];
+        bytecode::command(&mut code, 0x23c5, &[77]);
+        let script = bytecode::script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        bytecode::pending(&mut vm);
+        let pc = vm.pc();
+        vm.state_mut().set_system_integer(0, 99).unwrap();
+        vm.state_mut().set_system_integer(1, 88).unwrap();
+        let mut host = PlatformHost::default();
+        host.configure_display_selection(
+            format!("[WINDOW_RESOLVING]\nFULL_SCREEN_MONITOR_MODE={mode}\n").as_bytes(),
+        );
+        let mut backend = Displays(count);
+        let mut assets = Assets::default();
+        let profile = Registry::builtin().profile("cmvs-20190305").unwrap();
+        let result = dispatch::run(
+            profile.semantics(0x3c5),
+            &mut vm,
+            &mut Hosts {
+                platform: Some(PlatformHosts {
+                    host: &mut host,
+                    backend: &mut backend,
+                    assets: &mut assets,
+                    cursors: &[],
+                }),
+                ..Default::default()
+            },
+        );
+        assert_eq!(result.is_ok(), expected.is_some());
+        assert_eq!(vm.state().system_integer(0), Some(expected.unwrap_or(99)));
+        assert_eq!(vm.state().system_integer(1), Some(88));
+        assert_eq!(vm.stack().len_bytes(), 4);
+        assert_eq!(
+            vm.pending_system(),
+            expected.is_none().then_some((pc, 0x3c5))
+        );
+        assert_eq!(vm.pc(), pc + if expected.is_some() { 2 } else { 0 });
+    }
+}
+
+#[test]
 fn display_count_query_uses_backend_value_and_preserves_pending_on_failure() {
     use cmvs_rs::{
         dispatch::{self, Hosts, PlatformHosts},

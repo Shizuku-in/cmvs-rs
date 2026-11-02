@@ -194,7 +194,7 @@ pub struct AuxiliaryGlyph {
 /// glyphs currently attached to the atlas object. Glyph pixels belong to the backend.
 #[derive(Debug, Clone)]
 pub struct AuxiliaryText {
-    /// Face of the slot's persistent +4392 font object, fixed when it was created.
+    /// Current face of the slot's persistent font object; existing glyphs own their face.
     pub face: std::sync::Arc<[u8]>,
     pub(super) words: BTreeMap<u16, u32>,
     /// +184: glyph records in layout order.

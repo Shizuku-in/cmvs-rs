@@ -668,7 +668,7 @@ impl MovieHost {
         }
         Ok(())
     }
-    fn advance_mgv(
+    pub(crate) fn advance_mgv(
         &mut self,
         delta_ms: u32,
         clock: Option<MovieAudioClock>,

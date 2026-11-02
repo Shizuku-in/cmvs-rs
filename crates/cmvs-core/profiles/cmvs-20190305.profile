@@ -754,7 +754,7 @@ binary x86 file=cmvs32.exe sha256=6705a43d85121b56961515f3dd0a0766a14a91ffa76df8
 0x22ea unreviewed 0x81422 0x742f4
 0x22eb unreviewed 0x8142f 0x742fe
 0x22ec unreviewed 0x8143c 0x74308
-0x22ed unreviewed 0x81449 0x74312
+0x22ed unreviewed 0x81449 0x74312 variant=background-audio:x64:02b71aac3d3d1ced1d0312b6c37748cf12df9cffd9585fb07787e6ca43199f00 evidence=games/realive/README.md
 0x22ee unreviewed 0x81456 0x7431c
 0x22ef unreviewed 0x81476 0x74337
 0x22f0 unreviewed 0x81483 0x74341
@@ -909,10 +909,10 @@ binary x86 file=cmvs32.exe sha256=6705a43d85121b56961515f3dd0a0766a14a91ffa76df8
 0x2385 unreviewed 0x81a82 0x747dc
 0x2386 unreviewed 0x81a8f 0x747e6
 0x2387 unreviewed 0x81a9c 0x747f0
-0x2388 unreviewed 0x81aa9 0x747fa
+0x2388 unreviewed 0x81aa9 0x747fa variant=font-cells:x64:02b71aac3d3d1ced1d0312b6c37748cf12df9cffd9585fb07787e6ca43199f00 evidence=games/realive/README.md
 0x2389 unreviewed 0x81ab6 0x74804
 0x238a unreviewed 0x81ac3 0x7480e
-0x238b unreviewed 0x81ad0 0x74818
+0x238b unreviewed 0x81ad0 0x74818 variant=font-cells:x64:02b71aac3d3d1ced1d0312b6c37748cf12df9cffd9585fb07787e6ca43199f00 evidence=games/realive/README.md
 0x238c unreviewed 0x81add 0x74822
 0x238d unreviewed 0x81aea 0x7482c
 0x238e unreviewed 0x81af7 0x74836
@@ -970,7 +970,7 @@ binary x86 file=cmvs32.exe sha256=6705a43d85121b56961515f3dd0a0766a14a91ffa76df8
 0x23c2 unreviewed 0x81c85 0x7496c
 0x23c3 noop 0x7f217 0x72a25
 0x23c4 noop 0x7f217 0x72a25
-0x23c5 unreviewed 0x81c92 0x74976
+0x23c5 unreviewed 0x81c92 0x74976 variant=fullscreen-monitor:x64:02b71aac3d3d1ced1d0312b6c37748cf12df9cffd9585fb07787e6ca43199f00 evidence=games/realive/README.md
 0x23c6 unreviewed 0x81c9f 0x74980
 0x23c7 unreviewed 0x81cac 0x7498a variant=display-count:x64:02b71aac3d3d1ced1d0312b6c37748cf12df9cffd9585fb07787e6ca43199f00 evidence=games/realive/README.md
 0x23c8 noop 0x7f217 0x72a25

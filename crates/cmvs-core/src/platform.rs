@@ -382,11 +382,17 @@ pub struct PlatformHost {
     thumbnail: Option<ThumbnailConfig>,
     /// CHRONOCLOCK device +144, initialized from WINDOW_RESOLVING.
     others_display_use: bool,
+    fullscreen_monitor_mode: u32,
+    fullscreen_monitor_initialized: bool,
 }
 impl PlatformHost {
     pub fn configure_display_selection(&mut self, ini: &[u8]) {
         self.others_display_use =
             crate::save_menu::profile_int(ini, "WINDOW_RESOLVING", "OTHERS_DISPLAY_USE", 0) != 0;
+        self.fullscreen_monitor_mode =
+            crate::save_menu::profile_int(ini, "WINDOW_RESOLVING", "FULL_SCREEN_MONITOR_MODE", 0)
+                as u32;
+        self.fullscreen_monitor_initialized = false;
     }
     pub fn title(&self) -> Option<&[u8]> {
         self.title.as_deref()
@@ -453,6 +459,29 @@ impl PlatformHost {
         cursors: &[Vec<u8>],
     ) -> Result<PlatformEvent, Box<dyn Error>> {
         let (pc, command) = (call.pc, call.command);
+        if command == 0x3c5 {
+            // REALIVE device +148: mode 0=primary, 1..4=explicit, 5=window monitor.
+            let mode = self.fullscreen_monitor_mode;
+            if mode > 5 {
+                return Err("unsupported fullscreen monitor mode".into());
+            }
+            let mode = if !self.fullscreen_monitor_initialized
+                && (1..=4).contains(&mode)
+                && backend.display_count()? < mode
+            {
+                0
+            } else {
+                mode
+            };
+            call.complete(0x4000)?;
+            self.fullscreen_monitor_mode = mode;
+            self.fullscreen_monitor_initialized = true;
+            call.vm
+                .state_mut()
+                .set_system_integer(0, mode)
+                .expect("slot 0 exists");
+            return Ok(PlatformEvent::Configured);
+        }
         if command == 0x3c7 {
             let count = backend.display_count()?;
             call.complete(0x4000)?;

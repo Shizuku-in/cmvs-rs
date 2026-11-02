@@ -482,6 +482,7 @@ impl<'a> Startup<'a> {
             return Ok(());
         }
         self.movies.advance_scene(delta_ms, &mut self.scene)?;
+        self.movies.advance_mgv(delta_ms, None)?;
         self.movies.advance(delta_ms);
         if !self.frame_running() {
             self.frame_delta = 0;

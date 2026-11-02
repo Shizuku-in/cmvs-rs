@@ -4517,6 +4517,13 @@ pub static DISPLAY_COUNT: &[Entry] = &[Entry {
     handler: root_platform,
 }];
 
+pub static FULLSCREEN_MONITOR: &[Entry] = &[Entry {
+    command: 0x3c5,
+    name: "fullscreen monitor selection mode",
+    capability: Capability::Platform,
+    handler: root_platform,
+}];
+
 pub static FONT_CELLS: &[Entry] = &[
     Entry {
         command: 0x10b,
@@ -4579,6 +4586,17 @@ pub static FONT_CELLS: &[Entry] = &[
         capability: Capability::Text,
         handler: |hosts, call| {
             Ok(font_cells::poll_window(
+                hosts.text.as_mut().expect("text capability checked"),
+                call,
+            )?)
+        },
+    },
+    Entry {
+        command: 0x388,
+        name: "auxiliary font face",
+        capability: Capability::Text,
+        handler: |hosts, call| {
+            Ok(font_cells::auxiliary_face(
                 hosts.text.as_mut().expect("text capability checked"),
                 call,
             )?)
@@ -4782,6 +4800,7 @@ pub static BACKGROUND_AUDIO: &[Entry] = &[Entry {
 pub static VARIANT_TABLES: &[&[Entry]] = &[
     MGV_PLAYER,
     DISPLAY_COUNT,
+    FULLSCREEN_MONITOR,
     KEYED_ARCHIVES,
     FONT_CELLS,
     PARTICLES,
@@ -4795,6 +4814,7 @@ pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'st
     let entries = match id {
         crate::profile::VariantId::MgvPlayer => MGV_PLAYER,
         crate::profile::VariantId::DisplayCount => DISPLAY_COUNT,
+        crate::profile::VariantId::FullscreenMonitor => FULLSCREEN_MONITOR,
         crate::profile::VariantId::KeyedArchives => KEYED_ARCHIVES,
         crate::profile::VariantId::FontCells => FONT_CELLS,
         crate::profile::VariantId::Particles => PARTICLES,
@@ -4810,6 +4830,9 @@ pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
     match profile.semantics(command) {
         Semantics::Variant(crate::profile::VariantId::MgvPlayer) => "variant MGV player",
         Semantics::Variant(crate::profile::VariantId::DisplayCount) => "variant display count",
+        Semantics::Variant(crate::profile::VariantId::FullscreenMonitor) => {
+            "variant fullscreen monitor"
+        }
         Semantics::Variant(crate::profile::VariantId::KeyedArchives) => "variant keyed archives",
         Semantics::Variant(crate::profile::VariantId::FontCells) => "variant text override",
         Semantics::Variant(crate::profile::VariantId::Particles) => "variant particle override",
