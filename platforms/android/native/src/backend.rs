@@ -10,6 +10,7 @@ use std::{cell::RefCell, error::Error, fs::File, io::Read, path::PathBuf, rc::Rc
 
 pub(super) struct MobileBackend {
     pub display: DisplayPreferences,
+    screen_size: [u32; 2],
     pub frame: Option<Arc<GpuFrame>>,
     pub font: Rc<RefCell<FontRenderer>>,
     pub font_pending: bool,
@@ -24,12 +25,14 @@ impl MobileBackend {
         directory: PathBuf,
         font: Rc<RefCell<FontRenderer>>,
         display: DisplayPreferences,
+        screen_size: [u32; 2],
     ) -> Self {
         Self {
             app,
             directory,
             font,
             display,
+            screen_size,
             frame: None,
             font_pending: false,
             title: String::new(),
@@ -45,15 +48,18 @@ impl MobileBackend {
 }
 
 impl PlatformBackend for MobileBackend {
+    fn logical_size(&self) -> [u32; 2] {
+        self.screen_size
+    }
     fn read_device_frame(&mut self) -> Result<RgbaImage, Box<dyn Error>> {
         self.frame.as_ref().ok_or("no completed game frame")?.read()
     }
     // Android owns the physical window; scripts operate on a virtual game window.
     fn window_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
-        Ok([1280, 720])
+        Ok(self.screen_size)
     }
     fn windowed_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
-        Ok([1280, 720])
+        Ok(self.screen_size)
     }
     fn fullscreen(&self) -> Result<bool, Box<dyn Error>> {
         Ok(self.display.fullscreen)
@@ -131,7 +137,7 @@ impl PlatformBackend for MobileBackend {
             PlatformRequest::AspectMode(mode) if *mode <= 3 => self.display.aspect_mode = *mode,
             PlatformRequest::AspectScaling(value) => self.display.aspect_scaling = *value,
             PlatformRequest::RenderMode(mode) if *mode <= 1 => self.display.render_mode = *mode,
-            PlatformRequest::WindowSize([1280, 720]) => {}
+            PlatformRequest::WindowSize(size) if *size == self.screen_size => {}
             PlatformRequest::Title(bytes) => {
                 self.title = encoding_rs::SHIFT_JIS
                     .decode_without_bom_handling_and_without_replacement(bytes)

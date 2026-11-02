@@ -2,7 +2,6 @@
 //! and the glyph half of the 0x14002edb0 frame update, which attaches glyphs inside the
 //! bounds to atlas cells and detaches the others. Addresses refer to the documented binary.
 use super::{
-    RESEARCH_SCREEN,
     auxiliary::{AuxiliaryGlyph, AuxiliaryText},
     measure::lead,
 };
@@ -336,7 +335,11 @@ impl AuxiliaryText {
     /// no live glyph's pixels are overwritten. Mixed cached raster sizes stay rejected.
     fn check_cell(&self, cell: u16, glyph_size: u32) -> Result<[u32; 4], FormatError> {
         if [352, 356, 360].map(|at| self.words[&at])
-            != [RESEARCH_SCREEN[0], RESEARCH_SCREEN[1], RESEARCH_SCREEN[0]]
+            != [
+                self.object.logical_size[0],
+                self.object.logical_size[1],
+                self.object.logical_size[0],
+            ]
         {
             return Err(FormatError("scaled auxiliary glyphs are not verified"));
         }

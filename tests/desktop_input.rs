@@ -5,6 +5,26 @@ use cmvs_rs::{
 };
 
 #[test]
+fn four_by_three_canvas_maps_bottom_buttons_and_cursor_warps() {
+    let canvas = [1024, 768];
+    let viewport = Viewport::for_canvas(canvas, [1280, 720], 1).unwrap();
+    assert_eq!(viewport.to_script([100.0, 360.0]), None);
+    let mut game = GameInput::default();
+    game.set_screen_size(cmvs_rs::viewport::ScreenSize::new(canvas).unwrap());
+    for mode in 0..=3 {
+        game.set_aspect_mode(mode);
+        let target = game.warp([1280, 960], [1000, 755]).unwrap();
+        assert_eq!(
+            Viewport::for_canvas(canvas, [1280, 960], mode)
+                .unwrap()
+                .to_script(target),
+            Some([1000, 755])
+        );
+        assert_eq!(game.cursor_position([1280, 960]), Some([1000, 755]));
+    }
+}
+
+#[test]
 fn cover_and_stretch_mapping_and_navigation_use_the_selected_mode() {
     let cover = Viewport::with_mode([1000, 1000], 2).unwrap();
     assert!(cover.to_script([0.0, 500.0]).unwrap()[0] > 0);

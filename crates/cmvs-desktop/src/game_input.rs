@@ -36,14 +36,24 @@ pub struct GameInput {
     wheel: f64,
     focused: bool,
     aspect_mode: Option<u32>,
+    screen_size: cmvs_core::viewport::ScreenSize,
 }
 impl GameInput {
+    pub fn set_screen_size(&mut self, size: cmvs_core::viewport::ScreenSize) {
+        self.screen_size = size;
+    }
     pub fn set_aspect_mode(&mut self, mode: u32) {
         self.aspect_mode = Some(mode);
     }
     pub fn cursor_position(&self, size: [u32; 2]) -> Option<[i32; 2]> {
-        self.pointer
-            .and_then(|p| Viewport::with_mode(size, self.aspect_mode.unwrap_or(1))?.to_script(p))
+        self.pointer.and_then(|p| {
+            Viewport::for_canvas(
+                self.screen_size.pixels(),
+                size,
+                self.aspect_mode.unwrap_or(1),
+            )?
+            .to_script(p)
+        })
     }
     pub fn key(&mut self, key: KeyCode, pressed: bool) {
         if !self.focused {
@@ -144,7 +154,12 @@ impl GameInput {
         input.set_pointer(x, y);
     }
     pub fn warp(&mut self, size: [u32; 2], script: [i32; 2]) -> Option<[f64; 2]> {
-        let point = Viewport::with_mode(size, self.aspect_mode.unwrap_or(1))?.to_window(script);
+        let point = Viewport::for_canvas(
+            self.screen_size.pixels(),
+            size,
+            self.aspect_mode.unwrap_or(1),
+        )?
+        .to_window(script);
         self.pointer = Some(point);
         Some(point)
     }

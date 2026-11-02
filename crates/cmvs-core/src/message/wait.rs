@@ -1,7 +1,7 @@
 //! Manual/automatic 0x2153 / 0x140076880 -> 0x14005e220 with an explicit read policy.
 //! A pointer gesture result gates completion; the +12244 bypass (0x2340) completes like the
 //! skip flag. Automatic advance uses explicit frame time and voice playback status.
-use super::{MessageHost, RESEARCH_SCREEN, call_window_slot};
+use super::{MessageHost, call_window_slot};
 use crate::{
     audio::{AudioBackend, RecordingAudio},
     bytecode::DecodeError,
@@ -96,8 +96,8 @@ impl MessageHost {
             }
             let [px, py] = input.pointer();
             let [px, py] = [px, py].map(|value| value as u32);
-            let px = (px.wrapping_mul(text.logical_size[0] as u32) / RESEARCH_SCREEN[0]) as i32;
-            let py = (py.wrapping_mul(text.logical_size[1] as u32) / RESEARCH_SCREEN[1]) as i32;
+            let px = (px.wrapping_mul(text.logical_size[0] as u32) / self.screen_size()[0]) as i32;
+            let py = (py.wrapping_mul(text.logical_size[1] as u32) / self.screen_size()[1]) as i32;
             let mut hovered = false;
             for (index, button) in window.buttons.iter().enumerate().filter(|(_, b)| b.enabled) {
                 let [x, y, w, h] = button.hit.map(i32::from);

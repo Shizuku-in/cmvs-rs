@@ -85,6 +85,20 @@ impl Configuration {
     pub fn bytes(&self) -> &[u8] {
         &self.0
     }
+    /// Logical canvas from WINDOW_RESOLVING, rather than the selected window mode.
+    pub fn screen_size(&self) -> Result<crate::viewport::ScreenSize, FormatError> {
+        let raw = crate::save_menu::profile_string(&self.0, "WINDOW_RESOLVING", "BASE", b"", 128);
+        if raw.is_empty() {
+            return Ok(Default::default());
+        }
+        let invalid = || FormatError("invalid logical screen size in WINDOW_RESOLVING/BASE");
+        let text = std::str::from_utf8(&raw).map_err(|_| invalid())?;
+        let (width, height) = text.split_once(',').ok_or_else(invalid)?;
+        crate::viewport::ScreenSize::new([
+            width.trim().parse().map_err(|_| invalid())?,
+            height.trim().parse().map_err(|_| invalid())?,
+        ])
+    }
     pub fn set_integer(&mut self, section: &str, key: &str, value: u32) -> Result<(), FormatError> {
         Self::check_name(section, key)?;
         // Signed formatting preserves raw u32 words through the original profile-int reader.

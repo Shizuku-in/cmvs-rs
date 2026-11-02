@@ -13,7 +13,6 @@ use crate::{
     fade::SkipGate,
     input::ActionInput,
     machine::{Machine, Step},
-    message::RESEARCH_SCREEN,
 };
 mod view;
 pub use view::DeviceView;
@@ -223,6 +222,7 @@ fn hundredths(value: f32) -> f32 {
 
 #[derive(Debug, Clone)]
 pub struct CameraHost {
+    screen_size: crate::viewport::ScreenSize,
     cameras: [Camera; CAMERAS],
     views: [DeviceView; CAMERAS],
 }
@@ -230,6 +230,7 @@ pub struct CameraHost {
 impl Default for CameraHost {
     fn default() -> Self {
         Self {
+            screen_size: Default::default(),
             cameras: Default::default(),
             views: std::array::from_fn(DeviceView::new),
         }
@@ -237,6 +238,9 @@ impl Default for CameraHost {
 }
 
 impl CameraHost {
+    pub(crate) fn set_screen_size(&mut self, size: crate::viewport::ScreenSize) {
+        self.screen_size = size;
+    }
     /// 0x14004e760 resets the camera parameters and motion, leaving padding alone.
     pub(crate) fn reset(&mut self) {
         for view in &mut self.views {
@@ -416,9 +420,9 @@ impl CameraHost {
         if matches!(call.command, 0x126) {
             // 0x2126 / 0x1400756f0: no stack parameters; results 1/2 = device +24/+28
             // (0x140027020/0x140027030). Only startup code (0x140010370/0x140011320) sets
-            // them from cmvs.cfg, which selects 1280x720 here: the research viewport.
+            // them from cmvs.cfg; use the same logical canvas as rendering and input.
             call.complete(0x4000)?;
-            for (slot, value) in [(1, RESEARCH_SCREEN[0]), (2, RESEARCH_SCREEN[1])] {
+            for (slot, value) in [1, 2].into_iter().zip(self.screen_size.pixels()) {
                 call.vm
                     .state_mut()
                     .set_system_integer(slot, value)

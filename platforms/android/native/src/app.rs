@@ -110,7 +110,7 @@ impl Player<'_> {
         if let Some(image) = self.startup.movie_frame() {
             return Ok(Arc::new(graphics.renderer.render_image(
                 image,
-                [1280, 720],
+                self.startup.screen_size(),
                 self.backend.display.render_mode == 1,
             )?));
         }
@@ -130,8 +130,8 @@ impl Player<'_> {
             self.startup.scene(),
             Some(self.startup.camera()),
             &additional,
-            1280,
-            720,
+            self.startup.screen_size()[0],
+            self.startup.screen_size()[1],
         )?;
         Ok(Arc::new(graphics.renderer.render(&frame)?))
     }
@@ -177,7 +177,9 @@ impl Player<'_> {
                 .ok_or("no graphics device")?
                 .window
                 .dimensions();
-            if let Some(viewport) = Viewport::with_mode(size, self.backend.mode()) {
+            if let Some(viewport) =
+                Viewport::for_canvas(self.startup.screen_size(), size, self.backend.mode())
+            {
                 self.touch
                     .frame(&self.bindings, viewport, self.startup.input_mut());
                 self.input_due = false;
@@ -279,8 +281,11 @@ impl Player<'_> {
         let Some(graphics) = &self.graphics else {
             return InputStatus::Unhandled;
         };
-        let Some(viewport) = Viewport::with_mode(graphics.window.dimensions(), self.backend.mode())
-        else {
+        let Some(viewport) = Viewport::for_canvas(
+            self.startup.screen_size(),
+            graphics.window.dimensions(),
+            self.backend.mode(),
+        ) else {
             return InputStatus::Unhandled;
         };
         let phase = match motion.action() {
@@ -373,8 +378,13 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
         .take(65537)
         .read_to_string(&mut keys)?;
     let bindings = KeyBindings::parse(&keys)?;
-    let mut backend =
-        MobileBackend::new(app.clone(), directory, font, startup.display_preferences());
+    let mut backend = MobileBackend::new(
+        app.clone(),
+        directory,
+        font,
+        startup.display_preferences(),
+        startup.screen_size(),
+    );
     backend.display.render_mode =
         cmvs_core::platform::supported_render_mode(&backend, backend.display.render_mode)?;
     let mut player = Player {

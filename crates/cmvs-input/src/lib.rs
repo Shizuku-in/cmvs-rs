@@ -4,7 +4,7 @@
 use cmvs_core::input::{ActionInput, CodeInput, KeyBindings};
 use std::collections::BTreeSet;
 
-/// Shared fixed-point display geometry for the 1280x720 logical scene.
+/// Shared fixed-point display geometry for a logical game canvas.
 #[derive(Debug, Clone, Copy)]
 pub struct Viewport(cmvs_core::viewport::Viewport);
 impl Viewport {
@@ -12,7 +12,10 @@ impl Viewport {
         Self::with_mode(size, 1)
     }
     pub fn with_mode(size: [u32; 2], mode: u32) -> Option<Self> {
-        cmvs_core::viewport::Viewport::new([1280, 720], size, mode)
+        Self::for_canvas([1280, 720], size, mode)
+    }
+    pub fn for_canvas(canvas: [u32; 2], size: [u32; 2], mode: u32) -> Option<Self> {
+        cmvs_core::viewport::Viewport::new(canvas, size, mode)
             .ok()
             .map(Self)
     }

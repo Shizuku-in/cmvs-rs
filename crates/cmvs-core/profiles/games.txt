@@ -1,6 +1,15 @@
 # Game records: data hashes identify a game; executables confirm the build of its profile.
 # Hashes are evidence from docs/games/<game>/; game files themselves never enter the repository.
 
+game miranosu
+profile cmvs-20110525
+start data/pack/start.ps2 sha256=2e8c7261ea801f59c9e80b9cdbde89832c0a65f7b622e2fa4551509b1cfe5143
+archive data/pack/script.cpz sha256=bd70dba1785ec45494e73c451e6d492a91fd2eb0e56787dc60bce96c9b06effe
+game-id 0x17500003
+executable cmvs64.exe sha256=9870e6d5cbd5242b9c686aae20fe10697e87328a66d322cfdb2c80021cb645c5
+executable cmvs32.exe sha256=78c2283990f3fec167a8097e5e56304edbad7e94d5367eae9e3f5cfa56b4cc4e
+end
+
 game hapymaher
 profile cmvs-20130131
 start data/pack/start.ps3 sha256=62fc84b6231432a0aed498065329b630f76ef4c9e114c1bf6dbdc4e564c0399e

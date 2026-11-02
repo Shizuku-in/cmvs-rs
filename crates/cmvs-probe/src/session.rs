@@ -207,9 +207,13 @@ impl<'a> Session<'a> {
             }
         }
         run.set_random_seed(options.seed);
+        let mut backend = RecordingBackend::default();
+        backend.set_screen_size(
+            cmvs_core::viewport::ScreenSize::new(run.screen_size()).map_err(|e| e.to_string())?,
+        );
         Ok(Self {
             run,
-            backend: RecordingBackend::default(),
+            backend,
             codes: CodeInput::default(),
             bindings: target.key_bindings.clone().unwrap_or_default(),
             device: options.device,

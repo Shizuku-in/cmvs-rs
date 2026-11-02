@@ -379,7 +379,7 @@ impl FontRenderer {
     }
 
     /// Adds glyph images and visible message-window objects to the core's layer queue.
-    /// Current layout uses the 1280x720 research viewport and finite nonnegative text scale.
+    /// Text coordinates match the logical device canvas; scales must be finite and nonnegative.
     pub fn render(
         &mut self,
         scene: &SceneHost,
@@ -394,7 +394,10 @@ impl FontRenderer {
                 .filter(|w| w.visible && !w.hidden)
                 .map(|w| &w.object),
         );
-        scene_render::render_scene(scene, Some(cameras), &additional, 1280, 720)
+        {
+            let [width, height] = messages.screen_size();
+            scene_render::render_scene(scene, Some(cameras), &additional, width, height)
+        }
     }
 
     /// Builds glyph objects without compositing a frame.
@@ -409,9 +412,9 @@ impl FontRenderer {
             .filter_map(|i| messages.text(i))
             .filter(|t| t.visible && !t.glyphs.is_empty())
         {
-            if text.logical_size != [1280, 720] {
+            if text.logical_size != messages.screen_size().map(|v| v as i32) {
                 return Err(FormatError(
-                    "font preview requires 1280x720 text coordinates",
+                    "font preview requires text coordinates matching the logical screen",
                 ));
             }
             let scale = f32::from_bits(text.scale_bits);

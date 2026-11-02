@@ -107,6 +107,7 @@ pub enum SnapshotPolicy {
 }
 pub struct Startup<'a> {
     slot_edit: Option<slot_edit::SlotEdit>,
+    main_script_name: &'static [u8],
     quit: bool,
     focused: bool,
     machine: Machine<'a>,
@@ -193,6 +194,15 @@ impl<'a> Startup<'a> {
         // 0x14000a3c0 reads the startup settings; cmvs.cfg is optional and read only.
         let configuration = crate::settings::Configuration::read(&root.join("cmvs.cfg"))?
             .unwrap_or(crate::settings::Configuration::new(Vec::new())?);
+        let screen_size = configuration.screen_size()?;
+        let mut scene = SceneHost::default();
+        scene.set_screen_size(screen_size);
+        let mut buttons = ButtonHost::default();
+        buttons.set_screen_size(screen_size);
+        let mut camera = CameraHost::default();
+        camera.set_screen_size(screen_size);
+        let mut messages = MessageHost::default();
+        messages.set_screen_size(screen_size);
         let text = configuration.bytes();
         let mut save_menu = SaveMenuHost::default();
         save_menu.set_confirmations(
@@ -208,6 +218,11 @@ impl<'a> Startup<'a> {
         platform.configure_display_selection(text);
         Ok(Self {
             slot_edit: None,
+            main_script_name: if game.files.start_name() == b"start.ps2" {
+                b"main.ps2"
+            } else {
+                b"main.ps3"
+            },
             quit: false,
             machine,
             gate: CommandGate::new(game.selection.clone()),
@@ -224,13 +239,13 @@ impl<'a> Startup<'a> {
             system_output: None,
             assets: DirectoryAssets::new(root)?,
             platform,
-            scene: SceneHost::default(),
-            buttons: ButtonHost::default(),
+            scene,
+            buttons,
             movies: MovieHost::default(),
             scene_movies: ResourceArchives::new(root)?,
             root: root.canonicalize()?,
             sequence: SequenceHost::default(),
-            camera: CameraHost::default(),
+            camera,
             capture: ScreenCapture::default(),
             // No verified key bindings yet: no action is active (see `input`).
             input: ActionInput::default(),
@@ -244,7 +259,7 @@ impl<'a> Startup<'a> {
             gesture: PointerGesture::default(),
             message_flags,
             settings,
-            messages: MessageHost::default(),
+            messages,
             history: HistoryHost::default(),
             // Explicit research seed, like the virtual tick; the original seeds from timeGetTime.
             random: CrtRandom::new(0),
@@ -335,11 +350,21 @@ impl<'a> Startup<'a> {
     pub fn set_decode_movie_frames(&mut self, enabled: bool) {
         self.movies.set_decode_frames(enabled);
     }
+    pub fn screen_size(&self) -> [u32; 2] {
+        self.messages.screen_size()
+    }
     pub fn render_frame(&self) -> Result<crate::raster::RgbaImage, crate::FormatError> {
         match self.movie_frame() {
             Some(image) => Ok(image.clone()),
             None => {
-                crate::scene_render::render_scene(&self.scene, Some(&self.camera), &[], 1280, 720)
+                let [width, height] = self.screen_size();
+                crate::scene_render::render_scene(
+                    &self.scene,
+                    Some(&self.camera),
+                    &[],
+                    width,
+                    height,
+                )
             }
         }
     }
@@ -412,7 +437,7 @@ impl<'a> Startup<'a> {
             .filter(|window| window.visible && !window.hidden)
             .map(|window| &window.object)
             .collect();
-        let [width, height] = crate::message::RESEARCH_SCREEN;
+        let [width, height] = self.screen_size();
         let frame = crate::scene_render::render_scene(
             &self.scene,
             Some(&self.camera),

@@ -12,9 +12,9 @@ impl<'a> Startup<'a> {
         // Load/validate the replacement before destructive cleanup. Failure leaves RESET
         // pending, with the old VM and hosts intact; no game file is ever written.
         let replacement = if command == 0x03 {
-            let script = self.source.load(b"main.ps3")?;
+            let script = self.source.load(self.main_script_name)?;
             Some(crate::machine::Machine::prepare_main(
-                b"main.ps3".to_vec(),
+                self.main_script_name.to_vec(),
                 script,
             )?)
         } else {
@@ -40,9 +40,13 @@ impl<'a> Startup<'a> {
         self.control.main_replaced();
         self.save_image = Default::default();
         self.thumbnail = None;
+        let screen_size =
+            crate::viewport::ScreenSize::new(self.screen_size()).expect("validated at startup");
         self.scene = Default::default();
+        self.scene.set_screen_size(screen_size);
         self.camera.reset();
         self.buttons = Default::default();
+        self.buttons.set_screen_size(screen_size);
         self.movies.restore(Default::default());
         self.messages.reset_objects();
         self.history = Default::default();

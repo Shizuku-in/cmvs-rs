@@ -148,6 +148,7 @@ impl DeviceFrame for cmvs_wgpu::GpuFrame {
 }
 
 pub struct NativeBackend<'a> {
+    pub logical_size: [u32; 2],
     pub window: &'a Window,
     pub event_loop: &'a ActiveEventLoop,
     pub encoding: TextEncoding,
@@ -164,6 +165,9 @@ pub struct NativeBackend<'a> {
     pub masked_cursor: &'a std::cell::RefCell<Option<cmvs_native::MaskedCursor>>,
 }
 impl PlatformBackend for NativeBackend<'_> {
+    fn logical_size(&self) -> [u32; 2] {
+        self.logical_size
+    }
     fn read_device_frame(&mut self) -> Result<cmvs_core::raster::RgbaImage, Box<dyn Error>> {
         self.device_frame
             .ok_or("native device has no completed frame")?
@@ -241,9 +245,7 @@ impl PlatformBackend for NativeBackend<'_> {
     fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>> {
         match request {
             PlatformRequest::WindowSize(size) => {
-                if *size != [1280, 720] {
-                    return Err("unsupported window size request".into());
-                }
+                cmvs_core::viewport::ScreenSize::new(*size)?;
                 self.windowed_size.set(*size);
                 if !self.fullscreen()? {
                     let _ = self

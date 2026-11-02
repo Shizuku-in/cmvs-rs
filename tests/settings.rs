@@ -7,6 +7,33 @@ mod bytecode;
 use bytecode::{command, pending, script};
 
 #[test]
+fn logical_canvas_uses_base_and_rejects_invalid_allocation_sizes() {
+    use cmvs_rs::settings::Configuration;
+    assert_eq!(
+        Configuration::new(vec![])
+            .unwrap()
+            .screen_size()
+            .unwrap()
+            .pixels(),
+        [1280, 720]
+    );
+    let config = Configuration::new(b"[RESOLVING_POWER_INFO]\nWINDOW_WIDTH=800\nWINDOW_HEIGHT=600\n[WINDOW_RESOLVING]\nBASE=1024, 768\nMODE01=640,480\n".to_vec()).unwrap();
+    assert_eq!(config.screen_size().unwrap().pixels(), [1024, 768]);
+    for value in [
+        "0,768",
+        "-1,768",
+        "4294967295,768",
+        "1024",
+        "1024,768,1",
+        "bad,768",
+    ] {
+        let config =
+            Configuration::new(format!("[WINDOW_RESOLVING]\nBASE={value}\n").into_bytes()).unwrap();
+        assert!(config.screen_size().is_err(), "{value}");
+    }
+}
+
+#[test]
 fn cursor_auto_clear_reads_ini_and_normalizes_unsigned_modes_without_changing_results() {
     assert_eq!(SettingsHost::from_ini(&[]).cursor_auto_clear(), 1);
     assert_eq!(

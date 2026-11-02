@@ -13,7 +13,6 @@ use crate::{
     fade::SkipGate,
     input::ActionInput,
     machine::{Machine, Step},
-    message::RESEARCH_SCREEN,
 };
 
 /// One +40 table record and its attached object.
@@ -71,7 +70,7 @@ impl StripWipe {
     /// modes leave the +48 count uninitialized for the 0x6e..0x71 update branches (built by
     /// 0x2247 instead) and are not used with 0x222f by this title. A zero size divides by
     /// zero in the original.
-    fn new(args: [u32; 5]) -> Result<Self, &'static str> {
+    fn new(args: [u32; 5], screen: [u32; 2]) -> Result<Self, &'static str> {
         let [mode, color, size, duration, layer] = args;
         if !matches!(mode, 0 | 2 | 10 | 12) {
             return Err("strip wipe mode is not verified (expected 0, 2, 10 or 12)");
@@ -79,7 +78,6 @@ impl StripWipe {
         if size == 0 {
             return Err("strip wipe size 0 divides by zero");
         }
-        let screen = RESEARCH_SCREEN;
         let columns = matches!(mode, 0 | 10);
         let span = if columns { screen[0] } else { screen[1] };
         let count = span / size + u32::from(span % size != 0);
@@ -207,7 +205,7 @@ impl StripWipe {
     /// Reader: 0x140052700 rebuilds the wipe without strips and 0x140052c90 ignores the
     /// saved progress. A revealing wipe (modes 10/12) is freed; a covering one becomes the
     /// finished full-screen cover of 0x140052d70 with elapsed = duration.
-    pub(crate) fn restore(record: &[u8]) -> Result<Option<Self>, &'static str> {
+    pub(crate) fn restore(record: &[u8], screen: [u32; 2]) -> Result<Option<Self>, &'static str> {
         if record.len() != 56 {
             return Err("strip wipe record length differs from the original");
         }
@@ -227,7 +225,6 @@ impl StripWipe {
         if mode >= 10 {
             return Ok(None);
         }
-        let screen = RESEARCH_SCREEN;
         Ok(Some(Self {
             mode,
             color,
@@ -300,7 +297,8 @@ impl SceneHost {
                         ["mode", "color", "size", "duration", "layer"][i],
                     )?;
                 }
-                let wipe = StripWipe::new(args).map_err(|why| error(pc, op, why))?;
+                let wipe =
+                    StripWipe::new(args, self.screen_size()).map_err(|why| error(pc, op, why))?;
                 call.complete(0x4014)?;
                 self.strip = Some(wipe);
                 call.vm
@@ -395,16 +393,16 @@ mod tests {
     #[test]
     fn strip_records_restore_covers_finished_and_drop_reveals() {
         for mode in [0, 2, 10, 12] {
-            let mut wipe = StripWipe::new([mode, 0x12_3456, 100, 500, 9]).unwrap();
+            let mut wipe = StripWipe::new([mode, 0x12_3456, 100, 500, 9], [1280, 720]).unwrap();
             wipe.advance(200);
             let saved = wipe.saved();
             assert_eq!(saved.len(), 56);
-            let restored = StripWipe::restore(&saved).unwrap();
+            let restored = StripWipe::restore(&saved, [1280, 720]).unwrap();
             if mode >= 10 {
                 assert!(restored.is_none());
                 continue;
             }
-            let mut expected = StripWipe::new([mode, 0x12_3456, 100, 500, 9]).unwrap();
+            let mut expected = StripWipe::new([mode, 0x12_3456, 100, 500, 9], [1280, 720]).unwrap();
             expected.finish();
             expected.elapsed = 500;
             assert_eq!(restored.unwrap(), expected);
@@ -413,12 +411,17 @@ mod tests {
 
     #[test]
     fn strip_records_reject_inconsistent_or_unverified_wipes() {
-        let saved = StripWipe::new([0, 1, 100, 500, 9]).unwrap().saved();
+        let saved = StripWipe::new([0, 1, 100, 500, 9], [1280, 720])
+            .unwrap()
+            .saved();
         for (at, value) in [(0, 2), (0, 4), (8, 7), (16, 3)] {
             let mut bad = saved.clone();
             bad[at..at + 4].copy_from_slice(&(value as u32).to_le_bytes());
-            assert!(StripWipe::restore(&bad).is_err(), "offset {at}");
+            assert!(
+                StripWipe::restore(&bad, [1280, 720]).is_err(),
+                "offset {at}"
+            );
         }
-        assert!(StripWipe::restore(&saved[..52]).is_err());
+        assert!(StripWipe::restore(&saved[..52], [1280, 720]).is_err());
     }
 }

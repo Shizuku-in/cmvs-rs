@@ -1682,6 +1682,74 @@ fn scenario_snapshot_writes_a_slot_that_loads_back_with_backups() {
 }
 
 #[test]
+fn ps2_canvas_queries_pointer_and_v2_saves_keep_four_by_three_coordinates() {
+    use cmvs_rs::{
+        save::Csv2Save,
+        snapshot::{EngineSnapshot, SnapshotLayout},
+    };
+    let mut code = string_call(0x2160);
+    commands::command(&mut code, 0x201d, &[0x12345678]);
+    commands::command(&mut code, 0x2128, &[]);
+    commands::command(&mut code, 0x2126, &[]);
+    commands::command(&mut code, 0x2140, &[0, 0, 0, 0, 1024, 768]);
+    commands::command(&mut code, 0x215f, &[0, 1000, 740, 24, 28]);
+    let snapshot_pc = code.len();
+    commands::command(&mut code, 0x22b2, &[]);
+    commands::command(&mut code, 0x2000, &[]);
+    let root = Root::new("ps2-canvas-save", &code, b"Synthetic\0");
+    fs::rename(
+        root.0.join("data/pack/start.ps3"),
+        root.0.join("data/pack/start.ps2"),
+    )
+    .unwrap();
+    fs::write(
+        root.0.join("cmvs.cfg"),
+        b"[WINDOW_RESOLVING]\nBASE=1024,768\n",
+    )
+    .unwrap();
+    fs::write(root.0.join("save/system.dat"), auto_resume_save(0x12345678)).unwrap();
+    let game = Registry::builtin()
+        .identify_game(&root.0, Some("cmvs-20110525"))
+        .unwrap();
+    let script = load_start(&root.0, &game.files).unwrap();
+    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    let user = root.0.with_extension("user");
+    run.set_user_data_directory(&user).unwrap();
+    run.input_mut().set_pointer(1010, 755);
+    let mut backend = RecordingBackend::default();
+    backend.set_screen_size(cmvs_rs::viewport::ScreenSize::new([1024, 768]).unwrap());
+    while run.machine().pc() != snapshot_pc {
+        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    }
+    assert_eq!(run.machine().state().system_integer(0), Some(1));
+    assert_eq!(run.machine().state().system_integer(1), Some(1024));
+    assert_eq!(run.machine().state().system_integer(2), Some(768));
+    assert_eq!(run.messages().text(0).unwrap().logical_size, [1024, 768]);
+    let frame = run.render_frame().unwrap();
+    assert_eq!([frame.width(), frame.height()], [1024, 768]);
+    assert_eq!(
+        run.tick(&mut backend).unwrap(),
+        StartupEvent::SnapshotCaptured
+    );
+    assert!(run.save_slot(3).unwrap());
+    let bytes = fs::read(user.join("save003.dat")).unwrap();
+    let save = Csv2Save::decode(&bytes).unwrap();
+    let snapshot =
+        EngineSnapshot::decode_with_layout(&save.snapshot, SnapshotLayout::TextV2).unwrap();
+    assert_eq!(
+        snapshot.texts[0].as_ref().unwrap().logical_size,
+        [1024, 768]
+    );
+    run.load_slot(3, &mut backend).unwrap();
+    assert_eq!(run.machine().current_name(), b"start.ps2");
+    assert_eq!(run.scene().screen_size(), [1024, 768]);
+    assert_eq!(run.messages().screen_size(), [1024, 768]);
+    assert_eq!(run.machine().pc(), snapshot_pc + 2);
+    drop(run);
+    fs::remove_dir_all(user).unwrap();
+}
+
+#[test]
 fn aoitori_v3_snapshot_restores_text_scene_locals_and_backup_slots() {
     snapshot_slots_roundtrip(Some("cmvs-20171114"));
 }

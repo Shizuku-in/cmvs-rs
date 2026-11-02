@@ -79,7 +79,7 @@ Notes:
   - --skip-auto-resume keeps every save file; without it startup auto-load restores the
     saved slot.
   - The scene preview covers the verified 2D scene, CMV6 JBPD movies and full-screen color
-    fades on a 1280x720 viewport; use a release build for movies. Transforms, other
+    fades on the configured logical canvas; use a release build for movies. Transforms, other
     transitions and blend modes are unsupported.
   - Image preview supports PB3 type 1; aspect fit and straight alpha are preview policies.
   - --audio native needs the audio-output feature; movie frames follow the audio source
@@ -135,7 +135,11 @@ impl App<'_> {
             return Ok(image.clone());
         }
         if let Some(image) = self.startup.movie_frame() {
-            return Ok(movie_canvas(image, self.render_mode.get() == 1)?);
+            return Ok(movie_canvas(
+                image,
+                self.startup.screen_size(),
+                self.render_mode.get() == 1,
+            )?);
         }
         if let Some(font) = &mut self.font {
             return Ok(font.render(
@@ -153,7 +157,11 @@ impl App<'_> {
             return renderer.preview_image(image);
         }
         if let Some(image) = self.startup.movie_frame() {
-            return renderer.render_image(image, [1280, 720], self.render_mode.get() == 1);
+            return renderer.render_image(
+                image,
+                self.startup.screen_size(),
+                self.render_mode.get() == 1,
+            );
         }
         let objects = match &mut self.font {
             Some(font) => font.prepare_objects(self.startup.messages())?,
@@ -172,8 +180,8 @@ impl App<'_> {
             self.startup.scene(),
             Some(self.startup.camera()),
             &additional,
-            1280,
-            720,
+            self.startup.screen_size()[0],
+            self.startup.screen_size()[1],
         )?;
         renderer.render(&frame)
     }
@@ -291,6 +299,7 @@ impl App<'_> {
             Some(Arc::new(CursorBitmap::decode(&self.assets.read(name)?)?))
         };
         let mut backend = NativeBackend {
+            logical_size: self.startup.screen_size(),
             window: self.window.as_ref().ok_or("no window")?,
             event_loop: el,
             encoding: self.encoding,
@@ -310,9 +319,12 @@ impl App<'_> {
 }
 
 /// Movies join the same logical device canvas that readback sees, before window
-/// fitting. The current OP is already 1280x720; smaller videos retain aspect ratio.
-fn movie_canvas(image: &RgbaImage, linear: bool) -> Result<RgbaImage, cmvs_core::FormatError> {
-    let [width, height] = cmvs_core::message::RESEARCH_SCREEN;
+/// fitting. Videos retain aspect ratio inside the logical game canvas.
+fn movie_canvas(
+    image: &RgbaImage,
+    [width, height]: [u32; 2],
+    linear: bool,
+) -> Result<RgbaImage, cmvs_core::FormatError> {
     if [image.width(), image.height()] == [width, height] {
         return Ok(image.clone());
     }
@@ -343,13 +355,20 @@ impl ApplicationHandler for App<'_> {
                                 .fullscreen
                                 .then_some(winit::window::Fullscreen::Borderless(None)),
                         )
-                        .with_inner_size(LogicalSize::new(960.0, 540.0))
+                        .with_inner_size(LogicalSize::new(
+                            self.windowed_size.get()[0] as f64,
+                            self.windowed_size.get()[1] as f64,
+                        ))
                         .with_visible(false),
                 )?,
             );
             // Attributes use logical units; deferred window restoration uses physical pixels.
             let size = if window.fullscreen().is_some() {
-                LogicalSize::new(960.0, 540.0).to_physical::<u32>(window.scale_factor())
+                LogicalSize::new(
+                    self.windowed_size.get()[0] as f64,
+                    self.windowed_size.get()[1] as f64,
+                )
+                .to_physical::<u32>(window.scale_factor())
             } else {
                 window.inner_size()
             };
@@ -379,6 +398,7 @@ impl ApplicationHandler for App<'_> {
             self.window = Some(window.clone());
             // Startup load (0x140013bf1) applies the same capability fallback as 0x216d.
             let backend = NativeBackend {
+                logical_size: self.startup.screen_size(),
                 window: &window,
                 event_loop: el,
                 encoding: self.encoding,
@@ -404,8 +424,10 @@ impl ApplicationHandler for App<'_> {
             window.set_visible(true);
             window.request_redraw();
             println!(
-                "# native window created; explicit_image_preview={}; 2D scene viewport=1280x720",
-                self.preview_image.is_some()
+                "# native window created; explicit_image_preview={}; 2D scene viewport={}x{}",
+                self.preview_image.is_some(),
+                self.startup.screen_size()[0],
+                self.startup.screen_size()[1]
             );
             Ok(())
         })();
@@ -584,6 +606,7 @@ impl ApplicationHandler for App<'_> {
             let start = Instant::now();
             while start.elapsed() < Duration::from_millis(8) {
                 let mut backend = NativeBackend {
+                    logical_size: self.startup.screen_size(),
                     window: &window,
                     event_loop: el,
                     encoding: self.encoding,
@@ -989,6 +1012,13 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
     startup.set_random_seed(rand_seed);
     let display_preferences = startup.display_preferences();
+    let canvas = startup.screen_size();
+    let mut game_input = GameInput::default();
+    game_input.set_screen_size(cmvs_core::viewport::ScreenSize::new(canvas)?);
+    let window_size = [
+        960,
+        (960u64 * u64::from(canvas[1]) / u64::from(canvas[0])) as u32,
+    ];
     let mut app = App {
         #[cfg(windows)]
         masked_cursor: Default::default(),
@@ -1003,7 +1033,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         assets: DirectoryAssets::new(&root)?,
         encoding,
         input: DesktopInput::default(),
-        game_input: GameInput::default(),
+        game_input,
         bindings,
         native_input,
         input_due: true,
@@ -1022,7 +1052,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         aspect_mode: std::cell::Cell::new(display_preferences.aspect_mode),
         aspect_scaling: std::cell::Cell::new(display_preferences.aspect_scaling),
         render_mode: std::cell::Cell::new(display_preferences.render_mode),
-        windowed_size: std::cell::Cell::new([960, 540]),
+        windowed_size: std::cell::Cell::new(window_size),
     };
     let event_loop = EventLoop::new()?;
     let outcome = event_loop.run_app(&mut app);
@@ -1094,16 +1124,24 @@ mod readback_tests {
     #[test]
     fn movie_canvas_keeps_logical_device_dimensions_and_letterboxes_small_videos() {
         let video = RgbaImage::new(2, 1, [200, 100, 40, 255].repeat(2)).unwrap();
-        for linear in [false, true] {
-            let frame = movie_canvas(&video, linear).unwrap();
-            assert_eq!([frame.width(), frame.height()], [1280, 720]);
-            let pixel =
-                |x: usize, y: usize| &frame.pixels()[(y * 1280 + x) * 4..(y * 1280 + x) * 4 + 4];
-            assert_eq!(pixel(640, 39), [0, 0, 0, 255]);
-            assert_eq!(pixel(640, 40), [200, 100, 40, 255]);
-            assert_eq!(pixel(640, 679), [200, 100, 40, 255]);
-            assert_eq!(pixel(640, 680), [0, 0, 0, 255]);
-            assert_eq!(movie_canvas(&frame, linear).unwrap(), frame);
+        for [width, height] in [[1280, 720], [1024, 768]] {
+            for linear in [false, true] {
+                let frame = movie_canvas(&video, [width, height], linear).unwrap();
+                assert_eq!([frame.width(), frame.height()], [width, height]);
+                let pixel = |y| {
+                    let at = ((y * width + width / 2) * 4) as usize;
+                    &frame.pixels()[at..at + 4]
+                };
+                let top = (height - width / 2) / 2;
+                assert_eq!(pixel(top - 1), [0, 0, 0, 255]);
+                assert_eq!(pixel(top), [200, 100, 40, 255]);
+                assert_eq!(pixel(height - top - 1), [200, 100, 40, 255]);
+                assert_eq!(pixel(height - top), [0, 0, 0, 255]);
+                assert_eq!(
+                    movie_canvas(&frame, [width, height], linear).unwrap(),
+                    frame
+                );
+            }
         }
     }
 }

@@ -211,6 +211,7 @@ pub trait GlyphMetrics: std::fmt::Debug {
 
 #[derive(Debug, Default)]
 pub struct MessageHost {
+    screen_size: crate::viewport::ScreenSize,
     /// State owned by the separately dispatched font-cell text implementation.
     font_cells: font_cells::State,
     output_settings: crate::settings::TextOutputSettings,
@@ -236,6 +237,12 @@ pub struct MessageHost {
 }
 
 impl MessageHost {
+    pub fn screen_size(&self) -> [u32; 2] {
+        self.screen_size.pixels()
+    }
+    pub(crate) fn set_screen_size(&mut self, size: crate::viewport::ScreenSize) {
+        self.screen_size = size;
+    }
     /// 0x140080700 frees windows, text and auxiliary text lists, retaining font devices.
     pub(crate) fn reset_objects(&mut self) {
         self.windows = Default::default();
@@ -386,8 +393,8 @@ impl MessageHost {
             ((value as u32).wrapping_mul(logical as u32) / screen) as i32
         };
         let (px, py) = (
-            scale(px, logical[0], RESEARCH_SCREEN[0]),
-            scale(py, logical[1], RESEARCH_SCREEN[1]),
+            scale(px, logical[0], self.screen_size()[0]),
+            scale(py, logical[1], self.screen_size()[1]),
         );
         let [x, y, w, h] = args;
         let left = x.wrapping_add(window.position[0]);
@@ -443,8 +450,8 @@ impl MessageHost {
             value.wrapping_mul(logical).wrapping_div(screen as i32)
         };
         let (px, py) = (
-            scale(px, logical[0], RESEARCH_SCREEN[0]),
-            scale(py, logical[1], RESEARCH_SCREEN[1]),
+            scale(px, logical[0], self.screen_size()[0]),
+            scale(py, logical[1], self.screen_size()[1]),
         );
         call.complete(0x4004)?;
         let window = self.windows[slot].as_mut().expect("checked above");
@@ -724,7 +731,8 @@ impl MessageHost {
                 "auxiliary font face selection is not modeled",
             ));
         }
-        let candidate = AuxiliaryText::new(args[2], args[3]).map_err(|e| error(pc, 0x2380, e.0))?;
+        let candidate = AuxiliaryText::new(args[2], args[3], self.screen_size())
+            .map_err(|e| error(pc, 0x2380, e.0))?;
         call.complete(0x4010)?;
         call.vm
             .state_mut()
@@ -957,8 +965,8 @@ impl MessageHost {
     ///
     /// Constructor 0x14005c550 without 0x14005d3b0: the memset leaves position, area, pen,
     /// glyph size and spacing 0; colours 0xffffff, +144 delay 30, +148 shown, +152 layer 1,
-    /// ruby size 12. The logical size (+552/+556) repeats screen info +8/+12, which the
-    /// research viewport stands in for. The face is copied into +44 and selected on the
+    /// ruby size 12. The logical size (+552/+556) repeats the configured screen info +8/+12.
+    /// The face is copied into +44 and selected on the
     /// font object (0x140059b90); only the default empty face is modeled. The capacity
     /// (+324) sizes the glyph texture in 0x14005a6a0: 0 and 196 (0x215d's value) both give
     /// a 1024x2048 texture; other capacities are rejected because textures are not modeled.
@@ -1015,7 +1023,7 @@ impl MessageHost {
             face,
             bold: self.font_bold[index],
             scale_bits: 1.0f32.to_bits(),
-            logical_size: RESEARCH_SCREEN.map(|v| v as i32),
+            logical_size: self.screen_size().map(|v| v as i32),
             position: [0, 0],
             area: [0; 4],
             cursor: [0, 0],
@@ -2020,7 +2028,7 @@ impl MessageHost {
         let [x, y, width, height] = [12, 16, 20, 24].map(&mut word);
         let (position, size) = ([x?, y?], [width?, height?]);
         let logical_size = if command == 0x140 {
-            RESEARCH_SCREEN.map(|v| v as i32)
+            self.screen_size().map(|v| v as i32)
         } else {
             [word(28)?, word(32)?]
         };

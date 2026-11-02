@@ -9,7 +9,7 @@
 | [《メモリア》 / memoria](memoria/README.md) | `2009-08-28_MEMORIA` | 基础档案；尚无构建 profile 或运行验证 |
 | [《夏に奏でる僕らの詩》 / natsuuta](natsuuta/README.md) | `2010-03-26_NATSUUTA` | 基础档案；尚无构建 profile 或运行验证 |
 | [《初恋サクラメント》 / hassaku](hassaku/README.md) | `2010-12-24_HASSAKU` | 基础档案；尚无构建 profile 或运行验证 |
-| [《未来ノスタルジア》 / miranosu](miranosu/README.md) | `2011-09-02_MIRANOSU` | 基础档案；尚无构建 profile 或运行验证 |
+| [《未来ノスタルジア》 / miranosu](miranosu/README.md) | `2011-09-02_MIRANOSU` | 已绑定构建、适配1024×768与v2快照子集；待实机验收 |
 | [《しあわせ家族部》 / kazokubu](kazokubu/README.md) | `2012-05-25_KAZOKUBU` | 基础档案；尚无构建 profile 或运行验证 |
 | [《ハピメア》 / hapymaher](hapymaher/README.md) | `2013-02-28_HAPYMAHER` | 开头I1–I5/V1–V4及已观察P2通过；4条选择链回标题，37个前缀和完整页面遍历待推进 |
 | [《ハピメア-Fragmentation Dream-》 / hapymaherfd](hapymaherfd/README.md) | `2014-02-28_HAPYMAHERFD` | 基础档案；尚无构建 profile 或运行验证 |

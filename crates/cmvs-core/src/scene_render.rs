@@ -4,7 +4,6 @@
 use crate::{
     FormatError, MAX_PAYLOAD,
     camera::CameraHost,
-    message::RESEARCH_SCREEN,
     raster::RgbaImage,
     scene::{DrawState, MaskTransition, ObjectImage, SceneHost, SceneObject},
 };
@@ -416,12 +415,12 @@ fn child_layer<'a>(
 }
 
 /// 0x14003b350 scales drawing by the device width (+24) over the logical width (+6256), or
-/// over the screen width (+8) while that is zero. Both device widths are the research
-/// viewport, so only another logical width would change the factor; that is not modeled.
-fn unit_screen_scale(object: &SceneObject) -> Result<(), FormatError> {
+/// over the screen width (+8) while that is zero. Rendering uses the configured logical
+/// canvas; another per-object logical width would change the factor and remains rejected.
+fn unit_screen_scale(object: &SceneObject, screen: [u32; 2]) -> Result<(), FormatError> {
     match object.logical_size[0] {
         0 => Ok(()),
-        width if width == RESEARCH_SCREEN[0] => Ok(()),
+        width if width == screen[0] => Ok(()),
         _ => Err(FormatError("logical screen scaling is not modeled")),
     }
 }
@@ -825,7 +824,7 @@ pub fn prepare_scene<'a>(
         let Some(draw) = object.draw.as_ref().filter(|_| object.shown) else {
             continue;
         };
-        unit_screen_scale(object)?;
+        unit_screen_scale(object, scene.screen_size())?;
         if object.secondary_image.is_some() && matches!(draw.words[0], 2 | 3) {
             return Err(FormatError(
                 "projected second texture rendering is not verified",
@@ -871,7 +870,7 @@ pub fn prepare_scene<'a>(
                                 "nested projected children or child image replacement is not verified",
                             ));
                         }
-                        unit_screen_scale(child)?;
+                        unit_screen_scale(child, scene.screen_size())?;
                         // Bound this implementation to the observed inherited, attached image path.
                         if child.flags & 3 != 3 {
                             return Err(FormatError(
@@ -949,7 +948,7 @@ pub fn prepare_scene<'a>(
                 if words[0] != d[0] || order(words) < 0.0 {
                     continue;
                 }
-                unit_screen_scale(child)?;
+                unit_screen_scale(child, scene.screen_size())?;
                 check(words, false)?;
                 let Some(layer) = child_layer(object, d, child, words)? else {
                     continue;

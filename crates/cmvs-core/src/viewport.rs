@@ -1,6 +1,24 @@
 //! Shared display rectangle for software presentation and pointer conversion.
 use crate::{FormatError, MAX_PAYLOAD};
 
+/// Validated logical device size, independent of the physical window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScreenSize([u32; 2]);
+impl Default for ScreenSize {
+    fn default() -> Self {
+        Self([1280, 720])
+    }
+}
+impl ScreenSize {
+    pub fn new(size: [u32; 2]) -> Result<Self, FormatError> {
+        Viewport::new(size, size, 1)?;
+        Ok(Self(size))
+    }
+    pub fn pixels(self) -> [u32; 2] {
+        self.0
+    }
+}
+
 /// Software desktop policy for the independent fullscreen scaling enable switch.
 /// A disabled switch keeps script pixels unscaled when they fit the desktop;
 /// smaller borderless desktops retain mode zero's existing contain fallback.

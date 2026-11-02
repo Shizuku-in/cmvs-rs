@@ -174,14 +174,20 @@ impl ButtonHost {
             self.lists[slot] = Some(ListGroup {
                 object,
                 buttons: Vec::new(),
-                screen: [1280, 720, 1280, 720, 1280, 720],
+                screen: {
+                    let [w, h] = self.screen_size.pixels();
+                    [w, h, w, h, w, h]
+                },
                 active: true,
                 current: None,
                 pressed_visual: false,
                 press_target: None,
                 keep_input: false,
                 disable_navigation: false,
-                hit_area: [0, 0, 1280, 720],
+                hit_area: {
+                    let [w, h] = self.screen_size.pixels();
+                    [0, 0, w as i32, h as i32]
+                },
                 hit_point: None,
             });
             return Ok(());

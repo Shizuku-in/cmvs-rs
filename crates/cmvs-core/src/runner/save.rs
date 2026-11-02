@@ -122,7 +122,7 @@ fn decode_bmp(bytes: &[u8]) -> Result<RgbaImage, &'static str> {
 }
 
 /// Command inheritance does not establish the wire format of gameplay snapshots.
-/// The independently inspected 20130131/20140217/20150405 subsets use text v2, and 20171114 uses v3
+/// The independently inspected 20110525/20130131/20140217/20150405 subsets use text v2, and 20171114 uses v3
 /// (docs/games/aoitori/vm-semantics.md). Effect configurations have an independent
 /// build binding; unknown image, collision-mesh and effect records remain rejected.
 pub fn snapshot_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
@@ -132,7 +132,7 @@ pub fn snapshot_layout_supported(profile: &crate::profile::EngineProfile) -> boo
 fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLayout> {
     if matches!(
         profile.id.as_str(),
-        "cmvs-20130131" | "cmvs-20140217" | "cmvs-20150405"
+        "cmvs-20110525" | "cmvs-20130131" | "cmvs-20140217" | "cmvs-20150405"
     ) && profile.base.as_deref() == Some("cmvs-20160201")
     {
         Some(SnapshotLayout::TextV2)
@@ -149,8 +149,8 @@ fn effect_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
     profile.id == "cmvs-20171114" && profile.base.as_deref() == Some("cmvs-20160201")
 }
 
-/// 20130131 writer 0x1400330b0 and 20140217 writer 0x1400375d0 visit 512 children.
-/// The former has no lists; the latter's list record layout is not enabled here.
+/// 20110525 writer 0x1400332e0, 20130131 0x1400330b0 and 20140217 0x1400375d0 visit 512 children.
+/// Button-list records are absent or not enabled for these older layouts.
 fn validate_20130131_records<'a>(
     scenes: impl Iterator<Item = &'a SavedScene>,
     has_lists: bool,
@@ -174,7 +174,7 @@ impl Startup<'_> {
     fn validate_build_snapshot(&self, snapshot: &EngineSnapshot) -> Result<(), Box<dyn Error>> {
         if matches!(
             self.gate.selection().profile.id.as_str(),
-            "cmvs-20130131" | "cmvs-20140217"
+            "cmvs-20110525" | "cmvs-20130131" | "cmvs-20140217"
         ) {
             validate_20130131_records(
                 snapshot
@@ -516,7 +516,7 @@ impl Startup<'_> {
             .map(crate::fade::Fade::restore)
             .transpose()?;
         let strip = match snapshot.effects[3].as_deref() {
-            Some(record) => crate::scene::StripWipe::restore(record)?,
+            Some(record) => crate::scene::StripWipe::restore(record, self.screen_size())?,
             None => None,
         };
         // 0x6a0 holds D3D render-target allocation metadata, not overlay pixels.
@@ -876,6 +876,7 @@ mod layout_tests {
     fn snapshot_layout_requires_an_independently_inspected_build() {
         let registry = crate::profile::Registry::builtin();
         for (id, layout) in [
+            ("cmvs-20110525", SnapshotLayout::TextV2),
             ("cmvs-20130131", SnapshotLayout::TextV2),
             ("cmvs-20140217", SnapshotLayout::TextV2),
             ("cmvs-20150405", SnapshotLayout::TextV2),

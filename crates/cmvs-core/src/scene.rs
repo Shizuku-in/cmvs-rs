@@ -324,6 +324,7 @@ impl DrawState {
 
 #[derive(Debug, Default)]
 pub struct SceneHost {
+    screen_size: crate::viewport::ScreenSize,
     pub(crate) fragment_effects: BTreeMap<u8, crate::effect_objects::FragmentEffect>,
     pub(crate) collision_effects: BTreeMap<u8, crate::effect_objects::CollisionEffect>,
     pub(crate) particle_effects: BTreeMap<u8, crate::effect_objects::ParticleEffect>,
@@ -339,6 +340,12 @@ pub struct SceneHost {
     strip: Option<StripWipe>,
 }
 impl SceneHost {
+    pub fn screen_size(&self) -> [u32; 2] {
+        self.screen_size.pixels()
+    }
+    pub(crate) fn set_screen_size(&mut self, size: crate::viewport::ScreenSize) {
+        self.screen_size = size;
+    }
     pub(crate) fn snapshot_preview(clear: ClearState, objects: BTreeMap<u8, SceneObject>) -> Self {
         Self {
             clear,
@@ -1107,6 +1114,7 @@ impl SceneHost {
         strip: Option<StripWipe>,
     ) {
         *self = Self {
+            screen_size: self.screen_size,
             particle_effects: Default::default(),
             falling_effects: Default::default(),
             collision_effects: Default::default(),

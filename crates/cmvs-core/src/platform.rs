@@ -102,6 +102,9 @@ pub enum FontDialogResult {
 }
 
 pub trait PlatformBackend {
+    fn logical_size(&self) -> [u32; 2] {
+        crate::viewport::ScreenSize::default().pixels()
+    }
     /// Read the latest completed engine frame in device/script pixels, including
     /// fonts and movies. Do not redraw current VM state or reuse a held 0x2304 capture.
     /// Absence of a completed frame is an error, not a black/empty fabricated image.
@@ -121,11 +124,11 @@ pub trait PlatformBackend {
         if !self.resizable()? {
             return Ok(false);
         }
-        if self.windowed_size()? == [1280, 720] {
+        if self.windowed_size()? == self.logical_size() {
             return Ok(false);
         }
         let fullscreen = self.fullscreen()?;
-        self.apply(&PlatformRequest::WindowSize([1280, 720]))?;
+        self.apply(&PlatformRequest::WindowSize(self.logical_size()))?;
         Ok(!fullscreen)
     }
     /// 0x2163 queries the device's current display mode, not the startup preference.
@@ -192,6 +195,7 @@ pub fn supported_render_mode(
 }
 #[derive(Default)]
 pub struct RecordingBackend {
+    screen_size: crate::viewport::ScreenSize,
     requests: Vec<PlatformRequest>,
     bytes: usize,
     fullscreen: bool,
@@ -204,6 +208,9 @@ pub struct RecordingBackend {
     font_dialogs: Vec<Vec<u8>>,
 }
 impl RecordingBackend {
+    pub fn set_screen_size(&mut self, size: crate::viewport::ScreenSize) {
+        self.screen_size = size;
+    }
     /// Explicit software device draw boundary. Frame producers must publish the
     /// complete engine canvas after drawing; VM commands do not update it.
     pub fn present_frame(&mut self, frame: crate::raster::RgbaImage) {
@@ -222,6 +229,9 @@ impl RecordingBackend {
     }
 }
 impl PlatformBackend for RecordingBackend {
+    fn logical_size(&self) -> [u32; 2] {
+        self.screen_size.pixels()
+    }
     fn read_device_frame(&mut self) -> Result<crate::raster::RgbaImage, Box<dyn Error>> {
         self.device_frame
             .clone()
@@ -269,8 +279,8 @@ impl PlatformBackend for RecordingBackend {
         Ok(self.fullscreen)
     }
     fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>> {
-        if matches!(request, PlatformRequest::WindowSize(size) if *size != [1280, 720]) {
-            return Err("unsupported window size request".into());
+        if let PlatformRequest::WindowSize(size) = request {
+            crate::viewport::ScreenSize::new(*size)?;
         }
         if matches!(request, PlatformRequest::AspectMode(mode) if *mode > 3) {
             return Err("invalid aspect mode".into());

@@ -63,6 +63,7 @@ const NOTHING: u32 = u32::MAX;
 
 #[derive(Debug, Default, Clone)]
 pub struct ButtonHost {
+    screen_size: crate::viewport::ScreenSize,
     groups: [Option<ButtonGroup>; BUTTON_GROUPS],
     lists: [Option<ListGroup>; 8],
     /// dword_140101448 (zero-filled .data tail), set only by 0x2087.
@@ -111,6 +112,9 @@ fn apply_images(
 }
 
 impl ButtonHost {
+    pub(crate) fn set_screen_size(&mut self, size: crate::viewport::ScreenSize) {
+        self.screen_size = size;
+    }
     pub fn group(&self, slot: usize) -> Option<&ButtonGroup> {
         self.groups.get(slot).and_then(Option::as_ref)
     }
@@ -171,7 +175,7 @@ impl ButtonHost {
         if command == 0x21b {
             // 0x1400794e0: as 0x2210, but the group's pointer scale (+40/+44) is SP-12 /
             // SP-16 over the device size (+24/+28) instead of the device size itself.
-            if [args[2], args[3]] != crate::message::RESEARCH_SCREEN {
+            if [args[2], args[3]] != self.screen_size.pixels() {
                 return Err(fail("a button group with a pointer scale is not modeled"));
             }
         }
@@ -508,7 +512,7 @@ impl ButtonHost {
     /// 0x2218/0x2219 touch it), the count, then each node +8..+112 (enabled, id, rect,
     /// links, four images; 104 bytes).
     pub(crate) fn saved_groups(&self) -> Vec<(u16, Vec<u8>)> {
-        let screen = crate::message::RESEARCH_SCREEN;
+        let screen = self.screen_size.pixels();
         let mut out = Vec::new();
         for (slot, group) in self.groups.iter().enumerate() {
             let Some(group) = group else { continue };
@@ -570,7 +574,7 @@ impl ButtonHost {
         let mut restored_groups: [Option<ButtonGroup>; BUTTON_GROUPS] = Default::default();
         for &(slot, body) in groups {
             let (object, scale) = record_binding(body)?;
-            if scale != crate::message::RESEARCH_SCREEN {
+            if scale != self.screen_size.pixels() {
                 return Err("a restored button group with a pointer scale is not modeled");
             }
             *restored_groups
@@ -586,7 +590,7 @@ impl ButtonHost {
         let mut restored_lists: [Option<ListGroup>; 8] = Default::default();
         for &(slot, body) in lists {
             let (object, scale) = record_binding(body)?;
-            let [w, h] = crate::message::RESEARCH_SCREEN;
+            let [w, h] = self.screen_size.pixels();
             *restored_lists
                 .get_mut(usize::from(slot))
                 .ok_or("list group record outside 0..7")? = Some(ListGroup {

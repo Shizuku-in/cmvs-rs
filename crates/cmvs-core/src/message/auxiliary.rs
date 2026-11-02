@@ -1,5 +1,4 @@
 //! Engine +4328 auxiliary text objects (0x14002fa40), distinct from TextObject.
-use super::RESEARCH_SCREEN;
 use crate::{
     FormatError, MAX_PAYLOAD,
     raster::RgbaImage,
@@ -133,18 +132,14 @@ impl super::MessageHost {
 }
 
 impl AuxiliaryGlyphAtlas {
-    fn new(glyph_size: u32, capacity: u32) -> Result<Self, FormatError> {
+    fn new(glyph_size: u32, capacity: u32, screen: [u32; 2]) -> Result<Self, FormatError> {
         let fail = FormatError("auxiliary glyph atlas exceeds supported allocation geometry");
         if (glyph_size as i32) < 0 {
             return Err(fail);
         }
         // 0x14002e325..0x14002e337. Reject overflowing source arithmetic instead
         // of reproducing allocations based on the native implementation's wrap.
-        let cell_side = glyph_size
-            .checked_mul(RESEARCH_SCREEN[0])
-            .ok_or(fail.clone())?
-            / RESEARCH_SCREEN[0]
-            + 6;
+        let cell_side = glyph_size.checked_mul(screen[0]).ok_or(fail.clone())? / screen[0] + 6;
         let capacity = if capacity == 0 { 512 } else { capacity };
         let side = if capacity <= 64 { 512u32 } else { 1024u32 };
         let grid_side = side / cell_side;
@@ -401,16 +396,20 @@ impl AuxiliaryText {
         })
     }
 
-    pub(super) fn new(glyph_size: u32, capacity: u32) -> Result<Self, FormatError> {
-        let atlas = AuxiliaryGlyphAtlas::new(glyph_size, capacity)?;
+    pub(super) fn new(
+        glyph_size: u32,
+        capacity: u32,
+        screen: [u32; 2],
+    ) -> Result<Self, FormatError> {
+        let atlas = AuxiliaryGlyphAtlas::new(glyph_size, capacity, screen)?;
         let mut words: BTreeMap<_, _> = (8..184)
             .step_by(4)
             .chain((192..340).step_by(4))
             .map(|at| (at, 0))
             .collect();
         for (offset, value) in [
-            (40, (RESEARCH_SCREEN[0] as f32).to_bits()),
-            (44, (RESEARCH_SCREEN[1] as f32).to_bits()),
+            (40, (screen[0] as f32).to_bits()),
+            (44, (screen[1] as f32).to_bits()),
             (48, glyph_size),
             (124, 0),
             (128, 1),
@@ -434,7 +433,7 @@ impl AuxiliaryText {
         ] {
             words.insert(offset, value);
         }
-        for (i, value) in RESEARCH_SCREEN.into_iter().cycle().take(6).enumerate() {
+        for (i, value) in screen.into_iter().cycle().take(6).enumerate() {
             words.insert(344 + 4 * i as u16, value);
         }
         let mut draw = DrawState::default();
@@ -456,7 +455,7 @@ impl AuxiliaryText {
             motion: None,
             object: SceneObject {
                 draw: Some(draw),
-                logical_size: RESEARCH_SCREEN,
+                logical_size: screen,
                 ..SceneObject::default()
             },
         })
