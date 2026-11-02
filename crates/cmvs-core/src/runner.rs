@@ -399,25 +399,7 @@ impl<'a> Startup<'a> {
             self.audio_backend.stop_movie_audio()?;
         }
         self.movies.advance_scene(delta_ms, &mut self.scene)?;
-        if !self.frame_running() {
-            self.frame_delta = 0;
-            return Ok(());
-        }
-        self.sequence.advance_frame_with_hosts(
-            delta_ms,
-            &mut self.scene,
-            &mut self.images.with_paths(self.bootstrap.paths()),
-            &mut self.camera,
-        )?;
-        self.scene.advance_frame(delta_ms);
-        self.scene
-            .advance_effect_pools(delta_ms, &mut self.random, &self.camera)?;
-        self.messages.advance_frame(delta_ms);
-        self.messages
-            .advance_auxiliary_motion(delta_ms, &mut self.scene)?;
-        self.camera.advance_frame(delta_ms);
-        self.frame_delta = delta_ms;
-        self.take_capture()
+        self.advance_frame_state(delta_ms)
     }
     /// The main loop 0x14000e400 draws after the updates (0x140015900, then 0x140009c90);
     /// the draw 0x140015fc0 ends with 0x1400157b0, which serves a pending 0x2304 request.
@@ -484,6 +466,9 @@ impl<'a> Startup<'a> {
         self.movies.advance_scene(delta_ms, &mut self.scene)?;
         self.movies.advance_mgv(delta_ms, None)?;
         self.movies.advance(delta_ms);
+        self.advance_frame_state(delta_ms)
+    }
+    fn advance_frame_state(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error>> {
         if !self.frame_running() {
             self.frame_delta = 0;
             return Ok(());
