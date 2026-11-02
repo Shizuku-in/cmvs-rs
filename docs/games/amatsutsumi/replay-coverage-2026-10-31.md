@@ -137,9 +137,9 @@
 | `local/recheck-20261031/gallery.rs` | `33ba769d08d3f370f9352a42658ae276c21d71037962dac562751fc9710970cc` |
 | `local/recheck-20261031/gallery-final.exe` | `b749582b04a7795d963b364fc19ce3ec27e9f54da99a45b3426bc81edea4260b` |
 | `local/script_coverage.py` | `e84b8944705183adfcb7d722af741bda29a24a72922c3e6a5e5c798982a9907d` |
-| `E:/Download/AMATSUTSUMI/cmvs64.exe` | `dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5` |
-| `E:/Download/AMATSUTSUMI/data/pack/script.cpz` | `92b367e8c3d2791f1dd2ca8426581974fbb640d2766f2e82ab12383d2f5359e4` |
-| `E:/Download/AMATSUTSUMI/data/pack/start.ps3` | `c338313949a803e834acf0d746c93f09c4d41f558af8fb6c13ab1ee55aff2bd0` |
+| `<游戏目录>/cmvs64.exe` | `dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5` |
+| `<游戏目录>/data/pack/script.cpz` | `92b367e8c3d2791f1dd2ca8426581974fbb640d2766f2e82ab12383d2f5359e4` |
+| `<游戏目录>/data/pack/start.ps3` | `c338313949a803e834acf0d746c93f09c4d41f558af8fb6c13ab1ee55aff2bd0` |
 | `local/recheck-20261031/kokoro.log` | `36bade0c7b9f2a82fb6cb1729c9031bfc408cd327d720555988531d097ad7718` |
 | `local/audit-recheck20261031-kokoro-pcs.tsv` | `050f76f0f0ba89cd56c5f76dfa65b5b8a84796f287300d3b9d84368fcd446df8` |
 | `local/recheck-20261031/kyoko.log` | `c0ca68b1b5d358eccd5f7c4b87498a478cd22dc76ce3e860446d3d442bcecef1` |

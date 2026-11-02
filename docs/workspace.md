@@ -32,7 +32,7 @@ workspace `default-members = ["."]`，因此原来的根目录命令只选择根
 cargo fmt --check
 cargo test --offline
 cargo clippy --offline --all-targets -- -D warnings
-cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --audio native
+cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --continue-without-snapshot --audio native
 
 # 覆盖所有子包、后端及兼容入口
 cargo fmt --all --check

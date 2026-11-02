@@ -223,7 +223,7 @@ trace 的计时器与消息标志仍受原 `--record-platform` 资源条件控�
 
 从 `9ea501a` 的 Git archive 单独构建旧 `cmvs-trace`，与当前版本进行只读比较：计时器、消息标志、随机数、未知查询字四组脚本，各配记录开关、随机种子、帧时钟开关，共32组，退出码、stdout、stderr逐字节一致。日志及结果在忽略目录 `target/dispatch-trace-*`，不把测试数据或构建产物纳入Git。
 
-《アマツツミ》同参数启动trace的迁移前后日志均13,853字节，SHA-256 `43876cb9c68f6d199f6c094432ba8648383cf4de47cb28b2f082381b55e1aa72`，退出码均0，仍在既有 `0x22b3` 停止。参数为 `start.ps3 --script-archive script.cpz --record-platform <root> --bootstrap --continue-without-snapshot --frame-ms 16 --rand-seed 0 --steps 1000000`；本轮路径使用 `E:/Download/AMATSUTSUMI`，与旧记录的反斜杠路径文本不同，因此不与其日志哈希混用。预算100万步，但没有执行满，不记为百万步覆盖。
+《アマツツミ》同参数启动trace的迁移前后日志均13,853字节，SHA-256 `43876cb9c68f6d199f6c094432ba8648383cf4de47cb28b2f082381b55e1aa72`，退出码均0，仍在既有 `0x22b3` 停止。参数为 `start.ps3 --script-archive script.cpz --record-platform <root> --bootstrap --continue-without-snapshot --frame-ms 16 --rand-seed 0 --steps 1000000`；本轮路径使用 `<游戏目录>`，与旧记录的反斜杠路径文本不同，因此不与其日志哈希混用。预算100万步，但没有执行满，不记为百万步覆盖。
 
 Aoitori继续使用显式 `--allow-presumed --allow-unreviewed`，`local/aoitori/shared-dispatch` 的 R1/L0、D1/L1 通过：仍为22,050步、624帧、标题5按钮；两次启动轨迹 SHA-256 均为 `0dbfaffb34467faad1660eab21c816918a5317731187f9f945ef3ec8a480bb51`，状态 SHA-256 均为 `cd76f046f60f381a29a1bf8cd188aa95a162907a973dc13c008dfde03eb9ce46`，与迁移前相同。本轮未重跑R2，不据此推进ruby停点或提升证据状态。
 

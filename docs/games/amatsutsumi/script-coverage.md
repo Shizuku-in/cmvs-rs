@@ -133,10 +133,10 @@
 | 输入 | SHA-256 |
 |---|---|
 | `local/script-audit-sites.tsv` | `8fac5f6b980ebfef96e4eb61c3414674f58537f1201536978b75a22b59f20f41` |
-| `E:/Download/AMATSUTSUMI/data/pack/script.cpz` | `92b367e8c3d2791f1dd2ca8426581974fbb640d2766f2e82ab12383d2f5359e4` |
-| `E:/Download/AMATSUTSUMI/data/pack/start.ps3` | `c338313949a803e834acf0d746c93f09c4d41f558af8fb6c13ab1ee55aff2bd0` |
-| `E:/Download/AMATSUTSUMI/cmvs64.exe` | `dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5` |
-| `E:/Download/AMATSUTSUMI/save/system.dat` | `ace328a04d320626ee61ef69e1668d90e1c7a2a862e5fbd8c0a2dfa92f089410` |
+| `<游戏目录>/data/pack/script.cpz` | `92b367e8c3d2791f1dd2ca8426581974fbb640d2766f2e82ab12383d2f5359e4` |
+| `<游戏目录>/data/pack/start.ps3` | `c338313949a803e834acf0d746c93f09c4d41f558af8fb6c13ab1ee55aff2bd0` |
+| `<游戏目录>/cmvs64.exe` | `dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5` |
+| `<游戏目录>/save/system.dat` | `ace328a04d320626ee61ef69e1668d90e1c7a2a862e5fbd8c0a2dfa92f089410` |
 | `local/audit-replay.exe` | `d7fc4bed24283ec4297269d55d87ef8da55680b0ca9e0521693867b6f0594e7e` |
 | `local/audit-targeted.exe` | `ab0ea53c0b2c30424715da76c8aebc05a19075d79ff5bb72cf2c4a7609e9a0a6` |
 | `local/audit-final.exe` | `3e4a7f471f7cc5d03462a276621c2d08aa8039891b9c9dc40f7d7aa8dbf1e7b2` |

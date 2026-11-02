@@ -19,26 +19,26 @@ Windows、macOS、Linux、Android、iOS 是主要平台目标；当前 Windows �
 在项目目录中，使用 Rust 1.89 或更高版本的 stable 工具链（本机验证版本 1.96）：
 
 ```bash
-cargo run --offline -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3"
-cargo run --offline -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --payload ../../work/start-rust-new.bin
-cargo run --offline --bin cmvs-disasm -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3"
-cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --steps 10000
-cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --bootstrap
-cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --bootstrap --save-dir "E:/Download/AMATSUTSUMI/save"
-cargo run --offline --bin cmvs-cpz -- "E:/Download/AMATSUTSUMI/data/pack/script.cpz"
-cargo run --offline --bin cmvs-cpz -- --list "E:/Download/AMATSUTSUMI/data/pack/script.cpz"
-cargo run --offline --bin cmvs-cpz -- --script "E:/Download/AMATSUTSUMI/data/pack/script.cpz" main.ps3
-cargo run --offline --bin cmvs-save -- "E:/Download/AMATSUTSUMI/save/save000.dat"
-cargo run --offline --bin cmvs-save -- --records "E:/Download/AMATSUTSUMI/save/save000.dat"
-cargo run --offline --bin cmvs-system-save -- "E:/Download/AMATSUTSUMI/save/system.dat"
-cargo run --offline --bin cmvs-cursor -- "E:/Download/AMATSUTSUMI/data/icon/01.cur"
+cargo run --offline -- "<游戏目录>/data/pack/start.ps3"
+cargo run --offline -- "<游戏目录>/data/pack/start.ps3" --payload ../../work/start-rust-new.bin
+cargo run --offline --bin cmvs-disasm -- "<游戏目录>/data/pack/start.ps3"
+cargo run --offline --bin cmvs-trace -- "<游戏目录>/data/pack/start.ps3" --steps 10000
+cargo run --offline --bin cmvs-trace -- "<游戏目录>/data/pack/start.ps3" --bootstrap
+cargo run --offline --bin cmvs-trace -- "<游戏目录>/data/pack/start.ps3" --bootstrap --save-dir "<游戏目录>/save"
+cargo run --offline --bin cmvs-cpz -- "<游戏目录>/data/pack/script.cpz"
+cargo run --offline --bin cmvs-cpz -- --list "<游戏目录>/data/pack/script.cpz"
+cargo run --offline --bin cmvs-cpz -- --script "<游戏目录>/data/pack/script.cpz" main.ps3
+cargo run --offline --bin cmvs-save -- "<游戏目录>/save/save000.dat"
+cargo run --offline --bin cmvs-save -- --records "<游戏目录>/save/save000.dat"
+cargo run --offline --bin cmvs-system-save -- "<游戏目录>/save/system.dat"
+cargo run --offline --bin cmvs-cursor -- "<游戏目录>/data/icon/01.cur"
 cargo run --offline --bin cmvs-pb3 -- "../../work/logo.pb3"
-cargo run --offline --bin cmvs-cmv -- "E:/Download/AMATSUTSUMI/data/video/op.cmv"
-cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --bootstrap --save-dir "E:/Download/AMATSUTSUMI/save" --system-save "E:/Download/AMATSUTSUMI/save/system.dat" --script-archive "E:/Download/AMATSUTSUMI/data/pack/script.cpz"
-cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --bootstrap --save-dir "E:/Download/AMATSUTSUMI/save" --system-save "E:/Download/AMATSUTSUMI/save/system.dat" --script-archive "E:/Download/AMATSUTSUMI/data/pack/script.cpz" --record-platform "E:/Download/AMATSUTSUMI"
-cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --bootstrap --save-dir "E:/Download/AMATSUTSUMI/save" --system-save "E:/Download/AMATSUTSUMI/save/system.dat" --script-archive "E:/Download/AMATSUTSUMI/data/pack/script.cpz" --record-platform "E:/Download/AMATSUTSUMI" --continue-without-snapshot
-cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/script.cpz" --script main.ps3
-cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --entry 0x1214 --script-archive "E:/Download/AMATSUTSUMI/data/pack/script.cpz"
+cargo run --offline --bin cmvs-cmv -- "<游戏目录>/data/video/op.cmv"
+cargo run --offline --bin cmvs-trace -- "<游戏目录>/data/pack/start.ps3" --bootstrap --save-dir "<游戏目录>/save" --system-save "<游戏目录>/save/system.dat" --script-archive "<游戏目录>/data/pack/script.cpz"
+cargo run --offline --bin cmvs-trace -- "<游戏目录>/data/pack/start.ps3" --bootstrap --save-dir "<游戏目录>/save" --system-save "<游戏目录>/save/system.dat" --script-archive "<游戏目录>/data/pack/script.cpz" --record-platform "<游戏目录>"
+cargo run --offline --bin cmvs-trace -- "<游戏目录>/data/pack/start.ps3" --bootstrap --save-dir "<游戏目录>/save" --system-save "<游戏目录>/save/system.dat" --script-archive "<游戏目录>/data/pack/script.cpz" --record-platform "<游戏目录>" --continue-without-snapshot
+cargo run --offline --bin cmvs-trace -- "<游戏目录>/data/pack/script.cpz" --script main.ps3
+cargo run --offline --bin cmvs-trace -- "<游戏目录>/data/pack/start.ps3" --entry 0x1214 --script-archive "<游戏目录>/data/pack/script.cpz"
 cargo test --offline
 cargo clippy --offline --all-targets -- -D warnings
 cargo fmt --check
@@ -87,7 +87,7 @@ cargo fmt --check
 新增可选原生桌面预览，运行命令：
 
 ```bash
-cargo run --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis
+cargo run --features desktop --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis
 ```
 
 原生窗口已实测显示日文标题、提交 32×32 图标，从正常入口执行 479 步到主快照断点并保持响应。
@@ -100,7 +100,7 @@ cargo run --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --e
 下面直接只读加载资源包中的 logo，无需把素材放入项目：
 
 ```bash
-cargo run --offline --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --image-archive "E:/Download/AMATSUTSUMI/data/pack/chip.cpz" --preview-image logo.pb3
+cargo run --offline --features desktop --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --image-archive "<游戏目录>/data/pack/chip.cpz" --preview-image logo.pb3
 ```
 
 用户已确认 logo 比例正常、无花屏并可关闭。图像按比例居中、以透明度合成到预览背景上；
@@ -141,7 +141,7 @@ main.ps3 将清屏色设为 0，再经已支持的 0x22b4 调用标签 186。新
 下面从正常入口由脚本加载并显示品牌 logo，无需 `--preview-image`：
 
 ```bash
-cargo run --offline --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot
+cargo run --offline --features desktop --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --continue-without-snapshot
 ```
 
 Windows 实测显示完整 Purple Software logo，截图与 Esc 退出已验证；第 944 次 step 在 logo.ps3 / PC=0x364ea 停于 0x2220。
@@ -156,7 +156,7 @@ trace 在完整选项后加 `--frame-ms 16` 会在标题空闲循环中耗尽默
 新增可选原生 Ogg 音频后端：SE 准备/启动/停止、BGM 两段循环与淡变、OP 音轨和基于音频源位置的影片选帧。默认仍为记录模式；真实播放使用：
 
 ```bash
-cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --audio native
+cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --continue-without-snapshot --audio native
 ```
 
 Windows 175 秒检查完成有音频输出的启动、标题、OP 与返回标题；四份真实音轨的完整 PCM 样本数与 Python/FFmpeg 一致，浮点最大绝对误差低于 6.6e-7。音频源时钟尚未校准设备缓冲延迟；默认核心仍无依赖，原游戏只读。支持范围和证据见 [audio-output](../../backends/audio-output.md)。现已接入真实键鼠动作输入，见下文。
@@ -205,7 +205,7 @@ Windows 175 秒检查完成有音频输出的启动、标题、OP 与返回标�
 需要 Python 3.10+，无第三方依赖。Windows 已实际运行验证；其他系统未测试。
 
 ```bash
-python tools/ps3_inspect.py "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --output ../../work/start-inspection.json --payload ../../work/start-payload.bin
+python tools/ps3_inspect.py "<游戏目录>/data/pack/start.ps3" --output ../../work/start-inspection.json --payload ../../work/start-payload.bin
 python -m unittest discover -s tests -v
 ```
 
@@ -285,7 +285,7 @@ python -m unittest discover -s tests -v
 当前本机 system.dat 要求恢复 save870.dat，默认会停在尚未实现的完整恢复命令，场景此时只有黑色背景。使用显式预览选项可以保留所有存档、进入标题：
 
 ```bash
-cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --skip-auto-resume --audio record --font "C:/Windows/Fonts/msgothic.ttc"
+cargo run --offline --release --features desktop --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --continue-without-snapshot --skip-auto-resume --audio record --font "C:/Windows/Fonts/msgothic.ttc"
 ```
 
 `--skip-auto-resume` 是宿主预览策略：仅在首次系统存档读取成功后把内存整数 2198 设为 0，其他持久设置与磁盘文件不变。只允许已核对的本作游戏 ID，默认不启用，也不伪造 0x22bb 的查询结果或忽略 0x22b5。全量读写存档仍未实现。停于自动恢复或其他未实现命令时，窗口标题会显示暂停原因。
@@ -295,7 +295,7 @@ cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Downl
 已对照确认：相同 release 构建在受限工具沙箱中使用 `--audio native` 会以 Windows 0xc0000008 退出，在普通桌面权限下则完成 18 秒品牌音效、标题 BGM、标题淡入及帧导出，退出码 0。独立合成音频设备检查也只在普通桌面权限下通过；未修改运行时解码、混音或设备设置。具体底层句柄失败点仍未定位，普通 PowerShell 中可使用有声命令：
 
 ```bash
-cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --skip-auto-resume --audio native --font "C:/Windows/Fonts/msgothic.ttc"
+cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --continue-without-snapshot --skip-auto-resume --audio native --font "C:/Windows/Fonts/msgothic.ttc"
 ```
 
 音频设备检查与验证边界见 [audio-output](../../backends/audio-output.md)。
@@ -413,7 +413,7 @@ CSS1 系统存档新文件导出 `0x2129` 已实现（2026-10-28）。默认写�
 例如从项目目录运行（Rust 1.89+）：
 
 ```bash
-cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --skip-auto-resume --user-data-dir "local/user-data" --font "C:/Windows/Fonts/msgothic.ttc"
+cargo run --offline --release --features desktop --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --continue-without-snapshot --skip-auto-resume --user-data-dir "local/user-data" --font "C:/Windows/Fonts/msgothic.ttc"
 ```
 
 第二项选择后的響子分支验证通过（2026-10-29，无核心代码变更）：sn1012 选第二项，再在 sn2010 选第一项，即选择链 `[2,1]`。鼠标/Ctrl 均走完 sn2001..sn2010、sn2501..sn2508 及片尾，保存后恢复五按钮标题；鼠标累计 18262 次消息推进，新增路径的 7868 个消息等待帧和 Ctrl 的 180 个定期抽样帧呈现成功。两份 CSS1 完全相同，新进程加载后響子通关位 2151=true。原游戏及既有首条路线目录保持不变；默认 587 项、全功能 632 项测试和格式、严格 Clippy 通过。当前已验证选择链 `[1]` 与 `[2,1]` 的记录重放闭环，尚不代表其他选择链、原生窗口/真实音频完整流程或完整剧情存档恢复已验证。

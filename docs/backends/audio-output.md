@@ -7,7 +7,7 @@
 项目自身禁止 unsafe，没有新增 C++ 运行核心，没有调用原游戏 DLL。
 
 ```bash
-cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --skip-auto-resume --audio native
+cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --continue-without-snapshot --skip-auto-resume --audio native
 ```
 
 `--audio record` 或不提供该参数继续记录请求，不打开音频设备。
@@ -75,8 +75,8 @@ BGM 淡变按宿主帧更新线性增益；停止后设备已排队的短缓冲�
 `cmvs-audio` 不打开设备，逐包解码 Ogg 或 CMV 的音轨，报告格式/计数/峰值；可创建新的交错小端 f32 PCM 文件，拒绝覆盖：
 
 ```bash
-cargo run --offline --release --features audio-output --bin cmvs-audio -- "E:/Download/AMATSUTSUMI/data/video/op.cmv"
-cargo run --offline --release --features audio-output --bin cmvs-audio -- "E:/Download/AMATSUTSUMI/data/music/bgm41v.ogg" --pcm <新文件.f32>
+cargo run --offline --release --features audio-output --bin cmvs-audio -- "<游戏目录>/data/video/op.cmv"
+cargo run --offline --release --features audio-output --bin cmvs-audio -- "<游戏目录>/data/music/bgm41v.ogg" --pcm <新文件.f32>
 ```
 
 Python 调用本机 FFmpeg，比较四份真实输入的完整交错 f32 PCM，样本数全部相同：

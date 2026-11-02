@@ -9,7 +9,7 @@
 ## 使用
 
 ```bash
-cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --font "C:/Windows/Fonts/msgothic.ttc" --font-face 0
+cargo run --offline --release --features desktop --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --continue-without-snapshot --font "C:/Windows/Fonts/msgothic.ttc" --font-face 0
 ```
 
 字体必须显式给路径，face 默认为 0。支持 OpenType 文件和 TTC 集合的指定 face，不自动寻找字体或读取注册表。原游戏、字体均只读，不把系统字体分发到项目。`--font-face` 单独使用、字体无效或超过 32 MiB、字形不存在、编码无效均报错。`--font` 当前要求 shift-jis，与 `--record-text` 互斥。

@@ -88,7 +88,7 @@
 
 ```bash
 New-Item -ItemType Directory -Force local | Out-Null
-$env:CMVS_SCRIPT_TEST_INPUTS = "E:/Download/AMATSUTSUMI/data/pack/script.cpz;E:/Download/AMATSUTSUMI/data/pack/start.ps3"
+$env:CMVS_SCRIPT_TEST_INPUTS = "<游戏目录>/data/pack/script.cpz;<游戏目录>/data/pack/start.ps3"
 $env:CMVS_SCRIPT_TEST_REPORT = "local/script-validation-sites.tsv"
 cargo test --offline --release --test script_validation external_script_structure -- --ignored --exact --nocapture
 Remove-Item Env:CMVS_SCRIPT_TEST_INPUTS, Env:CMVS_SCRIPT_TEST_REPORT

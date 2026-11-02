@@ -17,7 +17,7 @@
 
 Windows / NVIDIA GeForce RTX 5070 Ti / 驱动610.88：Vulkan、DX12分别显式执行合成硬件测试通过，覆盖普通/黑化的覆盖、alpha及加法分支、缩放/旋转、遮罩查找表、屏幕第二纹理、纯色/fade、非256对齐行宽读回、重复读回、内容更新与缓存复用；独立合成场景最大通道差不超过2，透明预览像素读回精确一致，影片点/线性缩放与CPU差不超过1。
 
-外部固定时钟检查：`CMVS_GAME_ROOT=E:/Download/AMATSUTSUMI`、`CMVS_FONT_PATH=C:/Windows/Fonts/msgothic.ttc`，执行 `cargo test --offline --release -p cmvs-desktop --features wgpu-renderer --test wgpu -- --ignored --nocapture`。固定种子0、16ms、显式跳过启动自动恢复、ContinueWithoutImage、记录音频，标题合成点击后以Ctrl/消息点击推进。8000个让出帧中每200帧抽查一次完整场景，共40帧，从logo、标题路径到 `sn1004.ps3 / 0xf808`；所有逐字节比较的最大通道差均为0..2，超过2的字节数为0。不是8000帧逐帧GPU检查，也不是第四话以后的画面覆盖。首次debug检查因VM指令预算不足失败；增加预算后的首轮release检查在第7600帧后触及记录音频4096条上限失败；按既有长路线测试定期重建记录后端后，完整检查通过。
+外部固定时钟检查：`CMVS_GAME_ROOT=<游戏目录>`、`CMVS_FONT_PATH=C:/Windows/Fonts/msgothic.ttc`，执行 `cargo test --offline --release -p cmvs-desktop --features wgpu-renderer --test wgpu -- --ignored --nocapture`。固定种子0、16ms、显式跳过启动自动恢复、ContinueWithoutImage、记录音频，标题合成点击后以Ctrl/消息点击推进。8000个让出帧中每200帧抽查一次完整场景，共40帧，从logo、标题路径到 `sn1004.ps3 / 0xf808`；所有逐字节比较的最大通道差均为0..2，超过2的字节数为0。不是8000帧逐帧GPU检查，也不是第四话以后的画面覆盖。首次debug检查因VM指令预算不足失败；增加预算后的首轮release检查在第7600帧后触及记录音频4096条上限失败；按既有长路线测试定期重建记录后端后，完整检查通过。
 
 同一最终release检查40帧：CPU光栅化总计1.3682436秒，GPU准备/资源/提交总计1.1784716秒，按需读回77.3393毫秒；逐个样本紧接重复渲染并等待完成共100.9306毫秒，累计纹理上传232684980字节。字体/公共队列准备不在这些计时内。它们是宿主时钟数据，不是GPU timestamp，也不是完整游戏FPS；测试期间存在其他构建任务，不能据此宣称固定加速比。首次实现因每个绘制命令重复计算整图SHA-256，GPU路径40帧耗时约39.8秒；不可变图像首次计算后缓存摘要，消除了这项重复工作，像素结果不变。
 
@@ -61,7 +61,7 @@ Vulkan原生release窗口以 `--renderer wgpu --exit-after 14 --save-frame local
 
 复核 IDA 输入 SHA-256 `dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5`，逐调用检查 `0x14006b8d0`、`0x140080700`、`0x140080530`、`0x140008cb0` 及相机/音频清理函数；参数、返回标志和状态边界见 [VM 语义](vm-semantics.md#quit-与-reset2026-10-31)。无新第三方来源或解码算法修改。
 
-外部检查命令：`$env:CMVS_GAME_ROOT='E:/Download/AMATSUTSUMI'; cargo test --offline -p cmvs-core external_reset_reenters -- --ignored --nocapture`。原游戏只读，输出在全新临时用户目录。固定随机种子 0、16ms、记录文字/音频，从正常入口重放到标题；利用 VM 调度直接执行真实 intproc 的 `0x41328 / 0x2003`，核对清空快照/场景/调用栈及保留设置/公共回调，再重放到标题，执行 `0x41800 / 0x2001` 并确认终态，551395 步通过。该检查跳过确认 UI，不代表标题/工具栏物理点击、原生窗口销毁或音轨实测。
+外部检查命令：`$env:CMVS_GAME_ROOT='<游戏目录>'; cargo test --offline -p cmvs-core external_reset_reenters -- --ignored --nocapture`。原游戏只读，输出在全新临时用户目录。固定随机种子 0、16ms、记录文字/音频，从正常入口重放到标题；利用 VM 调度直接执行真实 intproc 的 `0x41328 / 0x2003`，核对清空快照/场景/调用栈及保留设置/公共回调，再重放到标题，执行 `0x41800 / 0x2001` 并确认终态，551395 步通过。该检查跳过确认 UI，不代表标题/工具栏物理点击、原生窗口销毁或音轨实测。
 
 
 <details>
@@ -249,7 +249,7 @@ END2系统存档副本的新目录正常入口重放，0x2380(0,空名,25,32)完
 
 ## 二进制身份
 
-- 文件：`E:/Download/AMATSUTSUMI/cmvs64.exe`
+- 文件：`<游戏目录>/cmvs64.exe`
 - SHA-256：`dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5`
 - Image base：`0x140000000`，x86-64，IDA 识别 3150 个函数。
 - 导入包含 Direct3D 9、GDI 字体接口和 mog2x64 音频接口。重实现需要替代这些平台依赖。
@@ -422,7 +422,7 @@ intcode `afd81aeec052c49f764f3617fc165e2a3ac2fe71604c345784a1a7f5f6a5031e`。
 实际尾段实验（不是完整启动）：
 
 ```bash
-cargo run --offline --bin cmvs-trace -- "E:/Download/AMATSUTSUMI/data/pack/start.ps3" --entry 0x1214 --script-archive "E:/Download/AMATSUTSUMI/data/pack/script.cpz"
+cargo run --offline --bin cmvs-trace -- "<游戏目录>/data/pack/start.ps3" --entry 0x1214 --script-archive "<游戏目录>/data/pack/script.cpz"
 ```
 
 共进行 172 次 step。先执行 intproc 的初始化入口 0x5efa2，返回 start，再执行 intcode 的入口 0，返回 start。
@@ -583,7 +583,7 @@ ICO 仍只验证目录/范围并保留原始资源，未实现像素解码或显
 `c8e647fbb36bfaf8dfed3da5e62e9554c15d92e1b3b3e461e0c981c7877aa121`。
 本机 CSS1 整数 2190 为 0，正常路径跳过自定义光标选择，没有声称真实启动执行了 0x2099。
 
-正常入口完整研究命令在此前四个显式选项上追加 `--record-platform E:/Download/AMATSUTSUMI`：
+正常入口完整研究命令在此前四个显式选项上追加 `--record-platform <游戏目录>`：
 共 479 次 step，两个公共脚本初始化均从原始入口到达并返回；13 个回调登记，
 最终主切换准备槽 0=main.ps3、1=intproc.ps3、2=intcode.ps3，PC=0x38d1e、SP=0，
 已知整数 4097、位变量 262144。在 `MainPreparedNeedsSnapshot` 停止，未略过快照。
@@ -1382,7 +1382,7 @@ IDA 输入再次确认为同一 SHA-256。反汇编 `0x14006d730` 显示 SP-12/S
 
 ## 0x231a 场景影片活动查询（2026-10-28）
 
-再次确认 IDA 输入 `E:/Download/AMATSUTSUMI/cmvs64.exe` 的 SHA-256 为 `dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5`。反汇编 `0x14007f610`：`movsxd` 读取 SP-4 后 `cmp ecx,2; ja` 置 +12056 位 0x1000000；空槽把零指针写入 +82816；非空槽调用 `0x140038590`（`mov eax,[rcx+44h]; ret`），`setnz` 后写 +82816；三条路径均返回 0x4004。`0x140038590` 的唯一调用者是该函数；`0x1400385a0` 的反编译确认 +68 为 0x2309 设置的活动标志。
+再次确认 IDA 输入 `<游戏目录>/cmvs64.exe` 的 SHA-256 为 `dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5`。反汇编 `0x14007f610`：`movsxd` 读取 SP-4 后 `cmp ecx,2; ja` 置 +12056 位 0x1000000；空槽把零指针写入 +82816；非空槽调用 `0x140038590`（`mov eax,[rcx+44h]; ret`），`setnz` 后写 +82816；三条路径均返回 0x4004。`0x140038590` 的唯一调用者是该函数；`0x1400385a0` 的反编译确认 +68 为 0x2309 设置的活动标志。
 
 `sn1002.ps3` 线性反汇编显示 0x4e46 的 0x2309 在旧停点 0x4e64 之前，0x4e48..0x4f4a 为等待/跳过循环，0x4f50 后释放槽 2 与对象 28。新探针 `local/movie_query_replay.rs` 记录查询结果变化、影片帧及与 `local/mv-ic01-*.rgba` 的逐字节比较；两条重放 135 帧全部出现，四帧比较一致，分别在 10462930/10462970 步停于 `sn1002.ps3 / 0x2ca48 / 0x2126`。
 
@@ -1392,7 +1392,7 @@ IDA 输入再次确认为同一 SHA-256。反汇编 `0x14006d730` 显示 SP-12/S
 
 ## 0x2075 投影深度排序偏移（2026-10-28）
 
-IDA 输入 `E:/Download/AMATSUTSUMI/cmvs64.exe` 重新计算的 SHA-256 为 `dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5`。分发表 case 117 经 `0x140082a3b` 到 `0x14006f5b0`，反汇编确认 SP-12 的 movss → xmm1 → `0x14003b200` → `0x14001f590` 写绘制状态 +108，返回 0x400c；构造 `0x14001ee40` 将其清零。唯一读取者 `0x14001f360` 返回 +108 + Z，`0x14003de80` 经 `0x14004ef30` 减相机 Z 作为投影队列键，键不大于 0 时不入队。`0x14001f520` 在换图 `0x14003c900` 中复制 +88..+108。
+IDA 输入 `<游戏目录>/cmvs64.exe` 重新计算的 SHA-256 为 `dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5`。分发表 case 117 经 `0x140082a3b` 到 `0x14006f5b0`，反汇编确认 SP-12 的 movss → xmm1 → `0x14003b200` → `0x14001f590` 写绘制状态 +108，返回 0x400c；构造 `0x14001ee40` 将其清零。唯一读取者 `0x14001f360` 返回 +108 + Z，`0x14003de80` 经 `0x14004ef30` 减相机 Z 作为投影队列键，键不大于 0 时不入队。`0x14001f520` 在换图 `0x14003c900` 中复制 +88..+108。
 
 用户原生窗口按住 Ctrl 时停于 `sn1001.ps3 / 0x21e82 / 0x2075`；探针 `local/ctrl_skip_replay.rs` 每帧按住 Ctrl，在第 1052259 步复现，参数 `[21, -1, 0.0]`。实现后 11 次真实调用的偏移均为 0.0，Ctrl 路径 0 次点击、第 10104707 步到 `sn1002.ps3 / 0x2ca48 / 0x2126`，其后 1372 个让出帧 FontRenderer 呈现通过。默认 516 项、全功能 546 项测试、格式、两组严格 Clippy 和完整功能桌面 release 构建通过，硬件检查 1 项忽略。详细证据与边界见 vm-semantics.md。
 
@@ -1405,7 +1405,7 @@ IDA 输入重新计算的 SHA-256 仍为 `dc74d2001387ae1aefbdc4204216de5ebb9d38
 
 ## 0x21fa 模式 0x38：周期 Y 偏移（2026-10-28）
 
-本节地址仅绑定 `E:/Download/AMATSUTSUMI/cmvs64.exe` SHA-256 `dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5`；本轮重新计算文件哈希，并核对 IDA 输入身份。
+本节地址仅绑定 `<游戏目录>/cmvs64.exe` SHA-256 `dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5`；本轮重新计算文件哈希，并核对 IDA 输入身份。
 
 `0x140025570` 的 case 56 在 `0x140025bac` 读取模式：振幅为 `f32((mode >> 16) & 0xfff) / 100`，周期数为无符号 `mode >> 28`。先以 u32 回绕乘积 `elapsed * 周期数` 对当前键时长取余，再以 f32 顺序求 `phase * 180 / duration` 度数。`0x140025b56` → `0x140025310` 把度数除 180、乘 f32 π 后转 f64 调用 sin，结果与转为 f64 的振幅相乘，再转 f32；乘 100 后 cvttss2si、转回 f32 除 100，得到百分位偏移。`0x140025b87..0x140025ba1` 原样保留基准 X/Z，从基准 Y 减去偏移。常量 `0x1400d9e70/0x1400d9e78/0x1400dbe80` 分别为 100、180、f32 π。该分支是每周期重置的半正弦，不用 360 度；不读取目标 XYZ 或 0x8000 相对位。到键边界时仍沿用既有目标吸附、键链和结束规则。其他未核对模式继续明确报错。
 
@@ -1943,7 +1943,7 @@ python local/character_verify.py character-endpoint-new
 运行命令（release，约 3M 步/分钟）：
 
 ```bash
-$env:CMVS_GAME_ROOT = "E:/Download/AMATSUTSUMI"
+$env:CMVS_GAME_ROOT = "<游戏目录>"
 $env:CMVS_ROUTE = "2,2,2,1"
 $env:CMVS_ROUTE_SYSTEM_OUT = "local/route-end1-system.dat"
 cargo test --offline --release --test save_slots external_route -- --ignored --nocapture
@@ -2004,7 +2004,7 @@ END1 输出的 system.dat 与调度前相同（SHA-256 `c8fe4ac7b0e76e3e72392294
 外部测试（原游戏与存档只读，副本在 `CARGO_TARGET_TMPDIR`，release 约 0.4 s）：
 
 ```bash
-$env:CMVS_GAME_ROOT = "E:/Download/AMATSUTSUMI"
+$env:CMVS_GAME_ROOT = "<游戏目录>"
 cargo test --offline --release --test save_slots external_backlog -- --ignored --nocapture
 ```
 
@@ -2133,7 +2133,7 @@ SE整组更新先准备全部候选再替换，首个设备修改后无可失败
 
 ## 设置页文字粗体（2026-10-31）
 
-基线 `851be00`。IDA 输入仍为 `E:/Download/AMATSUTSUMI/cmvs64.exe`，x64/base 0x140000000，重新读取SHA-256为 `dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5`。核对0x22e0、配置传播、字体缓存、构造和CreateFontA字重表后，接入TEXT_BOLD与运行时布尔读写；语义和地址见[VM证据](vm-semantics.md#设置页文字粗体2026-10-31)。核心只记录字重，字体与mask合成仍在桌面后端；未增加依赖或系统API。
+基线 `851be00`。IDA 输入仍为 `<游戏目录>/cmvs64.exe`，x64/base 0x140000000，重新读取SHA-256为 `dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5`。核对0x22e0、配置传播、字体缓存、构造和CreateFontA字重表后，接入TEXT_BOLD与运行时布尔读写；语义和地址见[VM证据](vm-semantics.md#设置页文字粗体2026-10-31)。核心只记录字重，字体与mask合成仍在桌面后端；未增加依赖或系统API。
 
 真实设置回归在其他页逻辑坐标(472,107)/(576,107)关闭、开启、再关闭粗体，核对全局配置与默认字体文字对象的字重；开启后等待演示文字的下一次重新输出，确认产生加粗字形并使用真实字体呈现。此前仅等待30帧时恰逢演示文字清空阶段，因此字形断言失败；调整为等待实际重发事件（最多600帧），未放宽字重断言。最终 `external_system_settings_entries_render_and_return` release通过（5.52s），421个设置页呈现帧，之后316帧自动送页产生三条历史和三次语音淡出，关闭后240帧不再推进。原游戏与原配置只读，用户存档在target/tmp独立副本；这是合成输入、记录音频和无窗口呈现，未新增原生窗口/设备听音验证。
 
@@ -2362,7 +2362,7 @@ SavedImage允许kind0空名，仍要求单图/manager0/有界尺寸，保持滤�
 
 用户继缺少save目录后报告start.ps3 PC 0x1184、表达式操作符0x1198读取未知整数。定位为2190，真实脚本只初始化局部整数，既有合成首次保存测试却显式初始化持久区，因而漏掉物理全局区的初值。已按原二进制PE零填充区域补上基准档案启动初始化，证据见VM语义“首次启动全局变量初值”。回归改为仅脚本初始化局部区，同时覆盖已核对物理银行边界、范围外未知、首次写入/退出写入及重启覆盖默认值。
 
-cargo fmt --check、cargo test --offline、cargo clippy --offline --all-targets -- -D warnings及wgpu-renderer,audio-output release构建通过。真实游戏根E:/Download/AMATSUTSUMI没有save目录；使用local/amatsutsumi/first-start-2190-check独立用户目录、wgpu、字体、record音频，12秒运行21814步进入标题正常退出，生成2493字节system.dat。检查工具解码通过：game ID 0x17800016，压缩负载2131字节、解码44864字节、列表[0,0]，校验通过。相同目录重启12秒21913步再次到标题并正常保存，生成system.bak。日志保留local/first-start-native.log及local/first-start-restart-record.log，游戏根save目录始终未创建。
+cargo fmt --check、cargo test --offline、cargo clippy --offline --all-targets -- -D warnings及wgpu-renderer,audio-output release构建通过。真实游戏根<游戏目录>没有save目录；使用local/amatsutsumi/first-start-2190-check独立用户目录、wgpu、字体、record音频，12秒运行21814步进入标题正常退出，生成2493字节system.dat。检查工具解码通过：game ID 0x17800016，压缩负载2131字节、解码44864字节、列表[0,0]，校验通过。相同目录重启12秒21913步再次到标题并正常保存，生成system.bak。日志保留local/first-start-native.log及local/first-start-restart-record.log，游戏根save目录始终未创建。
 
 另一次native音频重启在音频设备初始化后以0xc0000008退出，与已记录的受限执行环境问题相符，未计作native音频重启通过。上述真实首次启动/退出保存/重启验证仅为record音频；未覆盖进入剧情后存读档或Ctrl未读边界。
 

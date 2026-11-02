@@ -13,9 +13,9 @@
 不生成缺失的引擎对象，不把测试背景保存为剧情快照；除读档回调 29 外不自动执行登记回调。
 
 ```bash
-cargo run --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis
-cargo run --offline --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --exit-after 30
-cargo run --offline --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --image-archive "E:/Download/AMATSUTSUMI/data/pack/chip.cpz" --preview-image logo.pb3
+cargo run --features desktop --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis
+cargo run --offline --features desktop --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --exit-after 30
+cargo run --offline --features desktop --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --image-archive "<游戏目录>/data/pack/chip.cpz" --preview-image logo.pb3
 cargo test --offline
 cargo test --offline --features desktop
 cargo clippy --offline --features desktop --all-targets -- -D warnings
@@ -63,7 +63,7 @@ PB3 素材显示验证：只读加载 chip.cpz 内的 logo.pb3（1280×720，typ
 ## 脚本驱动的静态场景
 
 ```bash
-cargo run --offline --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot
+cargo run --offline --features desktop --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --continue-without-snapshot
 ```
 
 不指定显式素材时，`scene_render` 按 VM 场景状态呈现，采用 1280×720 本作研究视口，再按比例适配窗口；缩放默认最近邻，绘制模式1为软件双线性（见[平台宿主](platform-host.md#绘制模式与缩放滤镜2026-10-31)）。
@@ -112,7 +112,7 @@ VM 指令级错误（例如读取未写入的预留栈字节）与未处理系�
 以下命令从正常入口完成 logo、标题、无输入 30 秒、OP 画面播放和返回标题：
 
 ```bash
-cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot
+cargo run --offline --release --features desktop --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --continue-without-snapshot
 ```
 
 桌面明确启用 JBPD 解码，以实际毫秒换算目标帧，变化时只读读取目标资源，不重复解码同一帧。
@@ -129,7 +129,7 @@ Windows release `--exit-after 170 --save-frame <新文件.png>` 已从正常入�
 ## 可选原生音频（当前阶段）
 
 ```bash
-cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --audio native
+cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --continue-without-snapshot --audio native
 ```
 
 默认不加 `--audio native` 仍为记录后端。原生模式已接入 Ogg SE、BGM 前奏/循环与淡变、影片音轨，影片选帧跟随音频源位置。
@@ -142,7 +142,7 @@ Windows 175 秒有界检查从正常入口完成 OP 音轨、返回标题并正�
 `--record-text` 只记录当前支持的单行 0x2152 字形描述与逐字 alpha 计时，不生成字体像素、不绘制剧情文字。默认仍保留该命令的输出断点。该选项可加到现有显式继续命令：
 
 ```bash
-cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --record-text
+cargo run --offline --release --features desktop --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --continue-without-snapshot --record-text
 ```
 
 本轮仅用仓库外无窗口鼠标/键盘重放验证，记录模式到 sn1001.ps3 / 0xf6f2 / 0x2136，未新增原生窗口实测。支持分支、设置约束与默认停点见 vm-semantics.md；字体后端、消息窗口/文字合成仍待实现。
@@ -152,7 +152,7 @@ cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Downl
 显式 `--font <文件> [--font-face <TTC 索引>]` 可替代 --record-text，用相同的受限消息布局实际光栅化字形，并呈现消息窗口；face 默认为 0，只支持 shift-jis。与 --record-text 同用、缺失字形、非等色渐变、非单位缩放均显式失败。--save-frame 导出与窗口相同的字体合成路径。
 
 ```bash
-cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --font "C:/Windows/Fonts/msgothic.ttc"
+cargo run --offline --release --features desktop --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --continue-without-snapshot --font "C:/Windows/Fonts/msgothic.ttc"
 ```
 
 首句文字及消息窗口已在无窗口真实重放导出帧中核对；16 秒 Windows 窗口检查验证启动、标题与导出，退出码 0，本轮未在窗口中操作开始游戏。字体、基线和边缘使用 OpenType/ab_glyph 策略，与 GDI 有像素差异，支持边界及证据见 [font-output](font-output.md)。
@@ -170,7 +170,7 @@ cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Downl
 推荐当前画面检查命令（静音）：
 
 ```bash
-cargo run --offline --release --features desktop --bin cmvs-desktop -- "E:/Download/AMATSUTSUMI" --encoding shift-jis --continue-without-snapshot --skip-auto-resume --audio record --font "C:/Windows/Fonts/msgothic.ttc"
+cargo run --offline --release --features desktop --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --continue-without-snapshot --skip-auto-resume --audio record --font "C:/Windows/Fonts/msgothic.ttc"
 ```
 
 默认未启用该选项时，Windows 原生窗口仍在第 808 步暂停，现把暂停原因和启动选项提示显示在窗口标题中；其他未实现命令显示命令号与脚本/PC，快照屏障显示显式继续选项。提示不是 VM 命令或脚本标题修改。

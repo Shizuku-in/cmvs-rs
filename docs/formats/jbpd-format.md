@@ -48,8 +48,8 @@ IDCT 逐项保留原 SSE 的 i32 回绕、i16 饱和、算术右移及舍入偏�
 ## 工具与验证
 
 ```bash
-cargo run --offline --release --bin cmvs-cmv -- "E:/Download/AMATSUTSUMI/data/video/op.cmv" --frame 1000 <新文件.png>
-cargo run --offline --release --bin cmvs-cmv -- "E:/Download/AMATSUTSUMI/data/video/op.cmv" --check-frames
+cargo run --offline --release --bin cmvs-cmv -- "<游戏目录>/data/video/op.cmv" --frame 1000 <新文件.png>
+cargo run --offline --release --bin cmvs-cmv -- "<游戏目录>/data/video/op.cmv" --check-frames
 ```
 
 `.rgba` 扩展名导出原始 RGBA，其余输出为 PNG；拒绝覆盖已有文件。
