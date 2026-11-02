@@ -29,6 +29,8 @@
 
 这些依赖留在后端，默认核心无第三方依赖。未复制库示例源码，使用公开 API 实现适配；本机 Python/NumPy、pefile、capstone 等仅作为研究对照工具，不构成运行核心依赖。
 
+MGV1 后端使用 [oxideav-theora 0.0.12](https://github.com/OxideAV/oxideav-theora/tree/fb46b4791f860db085869491dfeac6f4463a86ad)（MIT）、[oxideav-core 0.1.41](https://github.com/OxideAV/oxideav-core/tree/11fcf35a26be9912e95a8a032c183fcef8fd6d56)（MIT）及既有 ogg 0.8.0（MIT OR Apache-2.0）；仅调用公开解码 API，不复制实现。固定版本及校验和见 Cargo.lock，新增传递依赖为 serde_json 1.0.154、itoa 1.0.18、zmij 1.0.23（均 MIT OR Apache-2.0）。合成 Theora 用例由 FFmpeg/libtheora 生成；真实视频 YUV 另与身份绑定的原 DLL 逐帧对照。
+
 ## 规范与本作证据
 
 `0x22c9` 的能力回退另参考 Microsoft [D3DCAPS9](https://learn.microsoft.com/en-us/windows/win32/api/d3d9caps/ns-d3d9caps-d3dcaps9) 与 [D3DPTFILTERCAPS](https://learn.microsoft.com/en-us/windows/win32/direct3d9/d3dptfiltercaps) 文档（2026-10-31 读取），仅用于解释二进制复制的能力结构及放大过滤标志。无新增源码复用或第三方依赖。

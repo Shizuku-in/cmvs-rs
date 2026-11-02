@@ -40,6 +40,7 @@ pub enum VariantId {
     Fragments,
     KeyedArchives,
     DisplayCount,
+    MgvPlayer,
 }
 impl VariantId {
     pub fn parse(name: &str) -> Option<Self> {
@@ -52,6 +53,7 @@ impl VariantId {
             "fragments" => Some(Self::Fragments),
             "keyed-archives" => Some(Self::KeyedArchives),
             "display-count" => Some(Self::DisplayCount),
+            "mgv-player" => Some(Self::MgvPlayer),
             _ => None,
         }
     }
@@ -65,6 +67,7 @@ impl VariantId {
             Self::Fragments => "fragments",
             Self::KeyedArchives => "keyed-archives",
             Self::DisplayCount => "display-count",
+            Self::MgvPlayer => "mgv-player",
         }
     }
 }

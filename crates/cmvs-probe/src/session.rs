@@ -186,6 +186,7 @@ impl<'a> Session<'a> {
     ) -> Result<Self, String> {
         let game = target.game.as_ref().ok_or("no engine profile selected")?;
         let mut run = Startup::new(script, &target.root, game, 0).map_err(|e| e.to_string())?;
+        run.set_mgv_factory(Box::new(cmvs_desktop::video::TheoraFactory));
         run.set_block_presumed(options.block_presumed);
         run.set_block_unreviewed(options.block_unreviewed);
         run.set_user_data_directory(user)

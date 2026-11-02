@@ -81,6 +81,11 @@ name = "cmvs-cmv"
 path = "src/bin/cmv.rs"
 
 [[bin]]
+name = "cmvs-mgv"
+path = "src/bin/mgv.rs"
+required-features = ["desktop"]
+
+[[bin]]
 name = "cmvs-audio"
 path = "src/bin/audio.rs"
 required-features = ["audio-output"]

@@ -354,7 +354,10 @@ impl<'a> Startup<'a> {
         &self.movies
     }
     pub fn movie_frame(&self) -> Option<&crate::raster::RgbaImage> {
-        self.movies.player().and_then(|m| m.image.as_ref())
+        self.movies.player_image()
+    }
+    pub fn set_mgv_factory(&mut self, factory: Box<dyn crate::mgv::DecoderFactory>) {
+        self.movies.set_mgv_factory(factory);
     }
     pub fn set_decode_movie_frames(&mut self, enabled: bool) {
         self.movies.set_decode_frames(enabled);
@@ -383,7 +386,7 @@ impl<'a> Startup<'a> {
         }
         self.audio_backend.update()?;
         let clock = self.audio_backend.movie_clock()?;
-        let had_movie = self.movies.player().is_some();
+        let had_movie = self.movies.has_player();
         self.movies.advance_with_clock(
             delta_ms,
             clock,
@@ -392,7 +395,7 @@ impl<'a> Startup<'a> {
                 directory: self.bootstrap.paths().get(&(0x2015, 0)).map(Vec::as_slice),
             },
         )?;
-        if had_movie && self.movies.player().is_none() && clock.is_some() {
+        if had_movie && !self.movies.has_player() && clock.is_some() {
             self.audio_backend.stop_movie_audio()?;
         }
         self.movies.advance_scene(delta_ms, &mut self.scene)?;
@@ -425,7 +428,7 @@ impl<'a> Startup<'a> {
         if !self.capture.requested() {
             return Ok(());
         }
-        if self.movies.player().is_some() {
+        if self.movies.has_player() {
             return Err("screen capture during a full-screen movie is not verified".into());
         }
         let texts = (0..crate::message::TEXT_OBJECTS).filter_map(|i| self.messages.text(i));
@@ -901,7 +904,7 @@ impl<'a> Startup<'a> {
         let mut scene_movie_source = self
             .scene_movies
             .with_paths(self.bootstrap.paths(), ResourceKind::SceneMovie);
-        let is_movie_player = crate::dispatch::uses_movie_player(command);
+        let is_movie_player = crate::dispatch::uses_movie_player_for(resolved.semantics, command);
         let mut hosts = crate::dispatch::Hosts {
             runtime: true,
             message_wait: None,

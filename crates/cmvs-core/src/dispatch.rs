@@ -1357,6 +1357,14 @@ pub fn uses_movie_player(command: u16) -> bool {
     ROOT.iter()
         .any(|e| e.command == command && e.capability == Capability::MoviePlayer)
 }
+pub fn uses_movie_player_for(semantics: Semantics, command: u16) -> bool {
+    match semantics {
+        Semantics::Root => uses_movie_player(command),
+        Semantics::Variant(id) => {
+            variant_entry(id, command).is_some_and(|e| e.capability == Capability::MoviePlayer)
+        }
+    }
+}
 
 fn root_quake(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     hosts
@@ -4469,6 +4477,39 @@ pub static KEYED_ARCHIVES: &[Entry] = &[
     },
 ];
 
+fn mgv_player(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    let h = hosts
+        .movie_player
+        .as_mut()
+        .expect("movie player capability checked");
+    hosts
+        .movies
+        .as_deref_mut()
+        .expect("movie capability checked")
+        .handle_mgv(call, h.source, h.settings, h.backend)?;
+    Ok(Flow::Done)
+}
+pub static MGV_PLAYER: &[Entry] = &[
+    Entry {
+        command: 0xc4,
+        name: "open MGV player",
+        capability: Capability::MoviePlayer,
+        handler: mgv_player,
+    },
+    Entry {
+        command: 0xc5,
+        name: "stop MGV player",
+        capability: Capability::MoviePlayer,
+        handler: mgv_player,
+    },
+    Entry {
+        command: 0xc6,
+        name: "MGV player frame",
+        capability: Capability::MoviePlayer,
+        handler: mgv_player,
+    },
+];
+
 pub static DISPLAY_COUNT: &[Entry] = &[Entry {
     command: 0x3c7,
     name: "available display count",
@@ -4739,6 +4780,7 @@ pub static BACKGROUND_AUDIO: &[Entry] = &[Entry {
 
 /// Static variant tables used when provisioning shared host capabilities.
 pub static VARIANT_TABLES: &[&[Entry]] = &[
+    MGV_PLAYER,
     DISPLAY_COUNT,
     KEYED_ARCHIVES,
     FONT_CELLS,
@@ -4751,6 +4793,7 @@ pub static VARIANT_TABLES: &[&[Entry]] = &[
 
 pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'static Entry> {
     let entries = match id {
+        crate::profile::VariantId::MgvPlayer => MGV_PLAYER,
         crate::profile::VariantId::DisplayCount => DISPLAY_COUNT,
         crate::profile::VariantId::KeyedArchives => KEYED_ARCHIVES,
         crate::profile::VariantId::FontCells => FONT_CELLS,
@@ -4765,6 +4808,7 @@ pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'st
 
 pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
     match profile.semantics(command) {
+        Semantics::Variant(crate::profile::VariantId::MgvPlayer) => "variant MGV player",
         Semantics::Variant(crate::profile::VariantId::DisplayCount) => "variant display count",
         Semantics::Variant(crate::profile::VariantId::KeyedArchives) => "variant keyed archives",
         Semantics::Variant(crate::profile::VariantId::FontCells) => "variant text override",

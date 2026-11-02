@@ -201,7 +201,7 @@ fn try_button(
         }
     }
     let o = crate::observe::Observation::of(session.startup(), session.yields());
-    let movie = session.startup().movies().player().is_some();
+    let movie = session.startup().movies().has_player();
     Ok(Effect::Timeout(format!(
         "{} / 0x{:x}, pending {}, transition {}, movie {movie}, groups {}",
         o.script.escape_ascii(),

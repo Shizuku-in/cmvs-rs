@@ -309,7 +309,7 @@ pub fn resources(target: &Target) -> CheckResult {
                     Err(e) => fail(label, e.to_string()),
                 }
             }
-        } else if matches!(kind.as_str(), "ogg" | "cmv") {
+        } else if matches!(kind.as_str(), "ogg" | "cmv" | "mgv") {
             *kinds.entry(kind.clone()).or_default() += 1;
             // Loose movies can be large: parse the index from the file itself.
             let checked = if kind == "cmv" {
@@ -317,6 +317,14 @@ pub fn resources(target: &Target) -> CheckResult {
                     .map_err(|e| e.to_string())
                     .and_then(|mut f| {
                         cmvs_core::cmv::CmvIndex::read_scene(&mut f)
+                            .map(|_| ())
+                            .map_err(|e| e.to_string())
+                    })
+            } else if kind == "mgv" {
+                File::open(&path)
+                    .map_err(|e| e.to_string())
+                    .and_then(|mut f| {
+                        cmvs_core::mgv::MgvIndex::read(&mut f)
                             .map(|_| ())
                             .map_err(|e| e.to_string())
                     })

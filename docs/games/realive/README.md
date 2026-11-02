@@ -27,7 +27,7 @@
 
 2026-11-03：`S1–S4/L0` 通过（80 个脚本、3,324,733 条指令、444 种未复核命令；10 个资源包及松散文件共 42,679 项）。无头启动 `R1/L0` 到达标题（624 帧、22,403 步、5 个启用按钮）；`D1/D2/I2/I3/I4/P2` 通过 L1，`D3/I1/I5` 通过 L0。
 
-剧情 `R2` 在无快照研究模式执行 26,409,147 步后停于 `sn102b.ps3:0x51768` 的 `0x20c4`：新播放器使用未支持的 MGV1（`data/video/*.mgv`）；`V5` 同停点。页面探索 261 次、14 状态，`P1/P3/C1–C4` 停于 `intproc.ps3:0x6ce14` 的 `0x23c5`（显示选择模式查询）。默认放行未复核命令；未验证全路线、剧情快照、实机画面或音轨。
+MGV1 两段影片共 4,867 个播放帧、4,743 个 Theora 解码帧；全帧解码完成，Y/Cb/Cr 与原 DLL 逐帧一致，播放帧表的重复映射保留。`0x20c4–0x20c6` 已接入，新增路线重放未完成，不计 `R2/V5` 通过。既有页面探索 261 次、14 状态，`P1/P3/C1–C4` 停于 `intproc.ps3:0x6ce14` 的 `0x23c5`。默认放行未复核命令；全路线、剧情快照、实机画面与听感未验证。
 
 ## 命令证据
 
@@ -41,6 +41,8 @@
 
 ## 下一步与来源
 
-- 下一步推进 `0x23c5/0x23c6` 的显示选择状态与 MGV1 播放链。剧情复现：`cargo run --offline --release -p cmvs-probe -- "<游戏目录>" --out "<新输出目录>" --checks R2 --font "<字体文件>" --max-steps 1000000000 --without-snapshots`；种子 0、16ms 虚拟帧、鼠标。报告位于 `local/realive/{routes-03,input-04,pages-02,robustness-01}/summary.json`；静态报告保留于 `startup-02/resources-01`。
+MGV1：`mog3x64.dll` SHA-256 `053156399e46565fcac4d5c4ce2ebede8bdb8abf1caaec46a29a5f76d2192a83`，image base `0x180000000`。`MGV_InputFile` RVA `0x22cf0` 读取 32 字节头、每帧 4 字节映射、独立 Ogg/Vorbis 音轨及 Ogg/Theora 流；映射高 16 位为解码包号，低 16 位为关键帧标志。引擎 `0x14001c180` 复用映射帧；`0x20c4/0x20c5/0x20c6` 经 `0x14009b9d0/0x14009bbb0/0x14009bb70` 打开/关闭/查询帧号，返回 `0x4004/0x4000/0x4000`，打开设置结果槽 0 为成功值，空播放器查询为 -1。实现按映射解码依赖帧；RGBA 使用 BT.601 预览转换，保持 `Unreviewed`，不宣称原 GPU 像素一致。
+
+- MGV1 复现：`cargo run --offline --release --features desktop --bin cmvs-mgv -- "<movie.mgv>" --check-frames`。对照见 `local/realive/mgv-reference.json`、`theora-{op,op2}-all.log`，播放帧映射检查见 `mgv-{op,op2}-decoded.log`。既有游戏探针报告位于 `local/realive/{routes-03,input-04,pages-02,robustness-01}/summary.json`；静态报告保留于 `startup-02/resources-01`。
 - 引擎与脚本自报版本来自游戏目录 `info.txt`，缺失时保留未确认。自报版本不作为二进制身份或补丁版本证明。
 - 真实游戏、原始环境报告与 IDA 数据库不入库；后续输出使用 `local/realive/`。

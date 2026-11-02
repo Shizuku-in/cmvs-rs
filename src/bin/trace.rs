@@ -392,7 +392,8 @@ fn run() -> Result<(), Box<dyn Error>> {
             let no_paths = BTreeMap::new();
             let paths = bootstrap.as_ref().map_or(&no_paths, Bootstrap::paths);
             let mut registered_images = images.as_mut().map(|images| images.with_paths(paths));
-            let is_movie_player = cmvs_rs::dispatch::uses_movie_player(command);
+            let is_movie_player =
+                cmvs_rs::dispatch::uses_movie_player_for(resolved.semantics, command);
             let movie_settings = audio.settings();
             let mut movie_source = movie_root.as_ref().map(|root| DirectoryMovies {
                 root,

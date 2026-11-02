@@ -20,7 +20,7 @@ impl<'a> Startup<'a> {
         } else {
             None
         };
-        if self.movies.player().is_some() {
+        if self.movies.has_player() {
             self.audio_backend.stop_movie_audio()?;
         }
         self.audio

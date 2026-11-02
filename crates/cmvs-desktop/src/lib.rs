@@ -3,6 +3,7 @@ mod app;
 pub use cmvs_font::{font, font_library};
 mod frame_boundary;
 pub mod game_input;
+pub mod video;
 pub use app::run_cli;
 use cmvs_core::{
     FormatError,

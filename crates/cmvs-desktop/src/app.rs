@@ -975,6 +975,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         );
     }
     startup.set_decode_movie_frames(true);
+    startup.set_mgv_factory(Box::new(crate::video::TheoraFactory));
     if native_audio {
         #[cfg(feature = "audio-output")]
         {

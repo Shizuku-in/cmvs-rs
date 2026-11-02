@@ -47,6 +47,7 @@ cargo run --offline --bin cmvs-cpz -- --script "<游戏目录>/data/pack/script.
 cargo run --offline --bin cmvs-cursor -- "<游戏目录>/data/icon/01.cur"
 cargo run --offline --bin cmvs-pb3 -- "<PB3 文件>" --rgba "<新输出文件>"
 cargo run --offline --bin cmvs-cmv -- "<游戏目录>/data/video/op.cmv"
+cargo run --offline --release --features desktop --bin cmvs-mgv -- "<游戏目录>/data/video/op.mgv" --check-frames
 ```
 
 `cmvs-cpz` 支持 CPZ3、CPZ5（打包模式 5～9）、CPZ6 模式 1 和 CPZ7（资源模式 0/1）。默认检查头部，`--list` 列目录，`--extract` 提取资源，`--script` 解码 PS2A 容器；CPZ3 不需要启动参数，列目录和提取前始终验证索引密文校验值。

@@ -328,7 +328,7 @@ impl Scenario {
                     texts,
                 })));
             }
-            let movie = session.startup().movies().player().is_some();
+            let movie = session.startup().movies().has_player();
             if self.pending.is_empty() && !movie && o.yields - self.quiet_since >= NUDGE_FRAMES {
                 session.act(Action::Advance).map_err(Stop::Error)?;
                 self.nudges += 1;

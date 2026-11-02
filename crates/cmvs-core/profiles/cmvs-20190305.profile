@@ -201,9 +201,9 @@ binary x86 file=cmvs32.exe sha256=6705a43d85121b56961515f3dd0a0766a14a91ffa76df8
 0x20c1 unreviewed 0x7fb7b 0x73097
 0x20c2 unreviewed 0x7fb88 0x730a1
 0x20c3 noop 0x7f217 0x72a25
-0x20c4 unreviewed 0x7fb95 0x730ab
-0x20c5 unreviewed 0x7fba2 0x730b5
-0x20c6 unreviewed 0x7fbaf 0x730bf
+0x20c4 unreviewed 0x7fb95 0x730ab variant=mgv-player:x64:02b71aac3d3d1ced1d0312b6c37748cf12df9cffd9585fb07787e6ca43199f00 evidence=games/realive/README.md
+0x20c5 unreviewed 0x7fba2 0x730b5 variant=mgv-player:x64:02b71aac3d3d1ced1d0312b6c37748cf12df9cffd9585fb07787e6ca43199f00 evidence=games/realive/README.md
+0x20c6 unreviewed 0x7fbaf 0x730bf variant=mgv-player:x64:02b71aac3d3d1ced1d0312b6c37748cf12df9cffd9585fb07787e6ca43199f00 evidence=games/realive/README.md
 0x20c7 noop 0x7f217 0x72a25
 0x20c8 unreviewed 0x7fbbc 0x730c9
 0x20c9 unreviewed 0x7fbc9 0x730d3
