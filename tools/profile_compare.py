@@ -240,25 +240,27 @@ def apply_profile(base, derived, rows, base_path, derived_path):
     proof_keys = {"inherited": "inherit", "presumed": "presume"}
     output, proofs = [], False
     for words in right:
+        if any(word.startswith("research=") for word in words):
+            raise ValueError("legacy research binding must be migrated to variant=")
         if words[0] == "compare":
             continue
         if words[0].startswith("0x") and words[1] == "reviewed":
             # Manual review records outrank a fresh comparison and are kept verbatim.
             if rows[int(words[0], 0)-0x2000]["status"] in ("noop", "absent"):
                 raise ValueError("reviewed command is not a handler in the export")
-        elif words[0].startswith("0x") and any(w.startswith("research=") for w in words):
+        elif words[0].startswith("0x") and any(w.startswith("variant=") for w in words):
             # An explicit implementation choice cannot become root semantics merely
             # because a new fingerprint report looks equivalent.
             if words[1] != "unreviewed" or rows[int(words[0], 0)-0x2000]["status"] in ("noop", "absent"):
-                raise ValueError("research override must remain an unreviewed handler")
+                raise ValueError("variant override must remain an unreviewed handler")
             metadata = words[2+len(binaries):]
-            if len(metadata) != 2 or not metadata[0].startswith("research=") or not metadata[1].startswith("evidence="):
-                raise ValueError("malformed research override")
-            implementation, arch, digest = metadata[0][len("research="):].split(":")
+            if len(metadata) != 2 or not metadata[0].startswith("variant=") or not metadata[1].startswith("evidence="):
+                raise ValueError("malformed variant override")
+            implementation, arch, digest = metadata[0][len("variant="):].split(":")
             binding = next((dict(w.split("=", 1) for w in binary[2:])
                             for binary in binaries if binary[1] == arch), None)
             if not implementation or binding is None or binding["sha256"] != digest:
-                raise ValueError("research override binary identity differs from profile")
+                raise ValueError("variant override binary identity differs from profile")
         elif words[0].startswith("0x"):
             result = rows[int(words[0], 0)-0x2000]
             if words[1] not in ("unreviewed", "inherited", "presumed", "noop", "absent"):

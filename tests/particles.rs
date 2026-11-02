@@ -2,7 +2,7 @@ use cmvs_rs::{
     dispatch::{self, Flow, Hosts, ImageHosts},
     image::ImageSource,
     machine::Machine,
-    profile::{ResearchId, Semantics},
+    profile::{Semantics, VariantId},
     random::CrtRandom,
     scene::SceneHost,
 };
@@ -24,7 +24,7 @@ fn fragment_dispatch_transfers_source_and_preserves_pending_when_random_is_missi
     let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
     assert_eq!(
         dispatch::run(
-            Semantics::Research(ResearchId::Fragments),
+            Semantics::Variant(VariantId::Fragments),
             &mut vm,
             &mut Hosts {
                 scene: Some(&mut scene),
@@ -41,7 +41,7 @@ fn fragment_dispatch_transfers_source_and_preserves_pending_when_random_is_missi
     assert!(scene.object(29).is_some());
     let mut random = CrtRandom::new(0);
     dispatch::run(
-        Semantics::Research(ResearchId::Fragments),
+        Semantics::Variant(VariantId::Fragments),
         &mut vm,
         &mut Hosts {
             scene: Some(&mut scene),
@@ -83,7 +83,7 @@ fn fragment_completion_query_preserves_errors_and_reports_pending_and_finished()
     scene.try_handle(&mut vm).unwrap();
     pending(&mut vm);
     dispatch::run(
-        Semantics::Research(ResearchId::Fragments),
+        Semantics::Variant(VariantId::Fragments),
         &mut vm,
         &mut Hosts {
             scene: Some(&mut scene),
@@ -96,7 +96,7 @@ fn fragment_completion_query_preserves_errors_and_reports_pending_and_finished()
     for expected in [0, u32::MAX, u32::MAX] {
         pending(&mut vm);
         dispatch::run(
-            Semantics::Research(ResearchId::Fragments),
+            Semantics::Variant(VariantId::Fragments),
             &mut vm,
             &mut Hosts {
                 scene: Some(&mut scene),
@@ -115,7 +115,7 @@ fn fragment_completion_query_preserves_errors_and_reports_pending_and_finished()
     let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
     assert!(
         dispatch::run(
-            Semantics::Research(ResearchId::Fragments),
+            Semantics::Variant(VariantId::Fragments),
             &mut vm,
             &mut Hosts {
                 scene: Some(&mut scene),
@@ -167,7 +167,7 @@ fn run(
     random: &mut CrtRandom,
 ) -> Result<Option<Flow>, dispatch::DispatchError> {
     dispatch::run(
-        Semantics::Research(ResearchId::Particles),
+        Semantics::Variant(VariantId::Particles),
         vm,
         &mut Hosts {
             images: Some(ImageHosts {
@@ -210,7 +210,7 @@ fn research_creation_needs_images_and_shared_random_and_never_uses_root() {
         }
         assert_eq!(
             dispatch::run(
-                Semantics::Research(ResearchId::Particles),
+                Semantics::Variant(VariantId::Particles),
                 &mut vm,
                 &mut hosts
             )
@@ -451,7 +451,7 @@ fn falling_override_preserves_pending_on_failure_and_shares_effect_slots_and_ran
         pending(&mut vm);
         let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
         let original_random = random.clone();
-        let semantics = Semantics::Research(ResearchId::FallingBillboards);
+        let semantics = Semantics::Variant(VariantId::FallingBillboards);
         assert_eq!(
             dispatch::run(semantics, &mut vm, &mut Hosts::default()).unwrap(),
             Some(Flow::Unavailable)
@@ -558,7 +558,7 @@ fn falling_override_preserves_pending_on_failure_and_shares_effect_slots_and_ran
         let reads = source.reads;
         let seed = random.clone().next_value();
         let result = dispatch::run(
-            Semantics::Research(ResearchId::FallingBillboards),
+            Semantics::Variant(VariantId::FallingBillboards),
             &mut vm,
             &mut Hosts {
                 images: Some(ImageHosts {
@@ -604,7 +604,7 @@ fn run_collision(
         hosts.scene = Some(scene);
     }
     dispatch::run(
-        Semantics::Research(ResearchId::CollisionParticles),
+        Semantics::Variant(VariantId::CollisionParticles),
         vm,
         &mut hosts,
     )
@@ -649,7 +649,7 @@ fn collision_mesh_commands_bound_vertices_and_particle_creation_retries_atomical
         let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
         assert_eq!(
             dispatch::run(
-                Semantics::Research(ResearchId::CollisionParticles),
+                Semantics::Variant(VariantId::CollisionParticles),
                 &mut vm,
                 &mut Hosts::default()
             )

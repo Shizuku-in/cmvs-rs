@@ -1,7 +1,7 @@
 //! Line-oriented profile and game-record files; `#` starts a comment line.
 use super::{
     Binary, CommandStatus, EngineProfile, Family, GameRecord, MachineProof, ProfileError,
-    RecordFile, ResearchId, ResearchOverride,
+    RecordFile, VariantBinding, VariantId,
 };
 use crate::{
     digest::{parse_hex, to_hex},
@@ -201,7 +201,7 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
     let mut proofs = std::collections::BTreeMap::new();
     let mut reviews = std::collections::BTreeMap::new();
     let mut contracts = std::collections::BTreeMap::new();
-    let mut research = std::collections::BTreeMap::new();
+    let mut variant = std::collections::BTreeMap::new();
     while let Some((line, words)) = lines.next() {
         let proof_key = match words.get(1) {
             Some(&"inherited") => Some("inherit="),
@@ -210,11 +210,11 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
         };
         let reviewed = words.get(1) == Some(&"reviewed");
         let contracted = words.get(1) == Some(&"contract-equivalent");
-        let researched = words.iter().any(|word| word.starts_with("research="));
+        let has_variant = words.iter().any(|word| word.starts_with("variant="));
         if words.len()
             != 2 + binaries.len()
                 + usize::from(proof_key.is_some() || reviewed || contracted)
-                + 2 * usize::from(researched)
+                + 2 * usize::from(has_variant)
         {
             return Err(at(
                 line,
@@ -235,37 +235,36 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
             "unreviewed" => CommandStatus::Unreviewed,
             _ => return Err(at(line, "unknown command status")),
         };
-        if researched {
+        if has_variant {
             let fields = &words[2 + binaries.len()..];
             if status != CommandStatus::Unreviewed || fields.len() != 2 {
-                return Err(at(line, "research override requires an unreviewed command"));
+                return Err(at(line, "variant override requires an unreviewed command"));
             }
             let (name, binding) = fields[0]
-                .strip_prefix("research=")
+                .strip_prefix("variant=")
                 .and_then(|value| value.split_once(':'))
-                .ok_or_else(|| at(line, "expected research=<implementation>:<arch>:<sha256>"))?;
+                .ok_or_else(|| at(line, "expected variant=<implementation>:<arch>:<sha256>"))?;
             let (arch, binary_hash) = binding.split_once(':').ok_or_else(|| {
                 at(
                     line,
-                    "research binding needs architecture and binary SHA-256",
+                    "variant binding needs architecture and binary SHA-256",
                 )
             })?;
-            let id = ResearchId::parse(name)
-                .ok_or_else(|| at(line, "unknown research implementation"))?;
-            let arch =
-                Arch::parse(arch).ok_or_else(|| at(line, "unknown research architecture"))?;
+            let id =
+                VariantId::parse(name).ok_or_else(|| at(line, "unknown variant implementation"))?;
+            let arch = Arch::parse(arch).ok_or_else(|| at(line, "unknown variant architecture"))?;
             let binary_sha256 = sha(line, binary_hash)?;
             let _binary = binaries
                 .iter()
                 .find(|binary| binary.arch == arch)
-                .ok_or_else(|| at(line, "research architecture has no binary"))?;
+                .ok_or_else(|| at(line, "variant architecture has no binary"))?;
             let evidence = fields[1]
                 .strip_prefix("evidence=")
                 .filter(|path| is_review_path(path))
                 .ok_or_else(|| at(line, "expected evidence=<docs-relative .md path>"))?;
-            research.insert(
+            variant.insert(
                 statuses.len() as u16,
-                ResearchOverride {
+                VariantBinding {
                     id,
                     arch,
                     binary_sha256,
@@ -352,7 +351,7 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
         proofs,
         contracts,
         reviews,
-        research,
+        variant,
     };
     profile.validate()?;
     Ok(profile)
@@ -429,14 +428,14 @@ impl EngineProfile {
                     to_hex(&proof.digest)
                 );
             }
-            if let Some(research) = self.research(i as u16) {
+            if let Some(variant) = self.variant(i as u16) {
                 let _ = write!(
                     out,
-                    " research={}:{}:{} evidence={}",
-                    research.id.name(),
-                    research.arch.name(),
-                    to_hex(&research.binary_sha256),
-                    research.evidence
+                    " variant={}:{}:{} evidence={}",
+                    variant.id.name(),
+                    variant.arch.name(),
+                    to_hex(&variant.binary_sha256),
+                    variant.evidence
                 );
             }
             out.push('\n');

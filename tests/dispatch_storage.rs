@@ -223,7 +223,7 @@ fn storage_commands_use_one_owner_and_explicit_events() {
         );
         assert_eq!(
             dispatch::run(
-                Semantics::Research(cmvs_rs::profile::ResearchId::FontCells),
+                Semantics::Variant(cmvs_rs::profile::VariantId::FontCells),
                 &mut vm,
                 &mut state.hosts(cap)
             )

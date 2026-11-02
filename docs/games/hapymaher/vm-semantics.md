@@ -44,6 +44,6 @@ case `0x140077eaa` → `0x140072cb0`，SP向下四字为效果槽、源对象槽
 
 ### 0x22ae：碎片完成查询
 
-case `0x140077eb7` → `0x140072370`，SP-4为效果槽，返回 `0x4004`。槽0..3时调用上述类型分派，把类型8的未完成0/完成ffffffff写入系统整数0；其他结果槽不变。越界槽只回收参数、不写结果。原版空效果会解引用空指针，Rust明确报错并保留PC、参数和结果；尚未核对的其他效果类型也拒绝。本构建该命令单独绑定 `research=fragments`，不是无条件开放所有构建或类型的查询。原始包装证据 `local/hapymaher/fragment-query-x64.json`，SHA-256 `72b327dc79547a0d352da221d50aab6a1e4d8e5bf91b1fd9fd9c43aea0b196ee`。
+case `0x140077eb7` → `0x140072370`，SP-4为效果槽，返回 `0x4004`。槽0..3时调用上述类型分派，把类型8的未完成0/完成ffffffff写入系统整数0；其他结果槽不变。越界槽只回收参数、不写结果。原版空效果会解引用空指针，Rust明确报错并保留PC、参数和结果；尚未核对的其他效果类型也拒绝。本构建该命令单独绑定 `variant=fragments`，不是无条件开放所有构建或类型的查询。原始包装证据 `local/hapymaher/fragment-query-x64.json`，SHA-256 `72b327dc79547a0d352da221d50aab6a1e4d8e5bf91b1fd9fd9c43aea0b196ee`。
 
-将本构建 `0x22a8` / `0x22ae` 绑定 `research=fragments:x64:<本页SHA-256>`，命令仍为Unreviewed且服从禁止未复核命令策略；新增类型8完成查询，未修改其他构建的绑定或碎片推进算法。只读证据（17个函数、推进汇编及浮点常量）保存在 `local/hapymaher/fragment-effect-x64.json`，SHA-256 `6b1196b175176e5ce6537b71a1adb14f60b80521ec3518381edc8bf417ad7dd7`；路径停点与运行结果见[研究记录](research.md)。
+将本构建 `0x22a8` / `0x22ae` 绑定 `variant=fragments:x64:<本页SHA-256>`，命令仍为Unreviewed且服从禁止未复核命令策略；新增类型8完成查询，未修改其他构建的绑定或碎片推进算法。只读证据（17个函数、推进汇编及浮点常量）保存在 `local/hapymaher/fragment-effect-x64.json`，SHA-256 `6b1196b175176e5ce6537b71a1adb14f60b80521ec3518381edc8bf417ad7dd7`；路径停点与运行结果见[研究记录](research.md)。

@@ -80,7 +80,7 @@ fn all_audio_entries_require_the_pair_and_complete_once() {
         let mut backend = RecordingAudio::default();
         assert_eq!(
             dispatch::run(
-                Semantics::Research(cmvs_rs::profile::ResearchId::FontCells),
+                Semantics::Variant(cmvs_rs::profile::VariantId::FontCells),
                 &mut vm,
                 &mut Hosts {
                     audio: Some(AudioHosts {
@@ -267,7 +267,7 @@ fn trace_preserves_optional_audio_and_stop_diagnostics() {
 
 #[test]
 fn background_audio_override_queries_writes_and_gates_without_stopping_playback() {
-    use cmvs_rs::profile::ResearchId;
+    use cmvs_rs::profile::VariantId;
     let mut code = vec![];
     for args in [[0, 999], [7, 0], [0, 0], [1, u32::MAX]] {
         command(&mut code, 0x22ed, &args);
@@ -276,7 +276,7 @@ fn background_audio_override_queries_writes_and_gates_without_stopping_playback(
     let mut vm = Machine::new(&script).unwrap();
     let mut audio = AudioHost::default();
     let mut backend = RecordingAudio::default();
-    let semantics = Semantics::Research(ResearchId::BackgroundAudio);
+    let semantics = Semantics::Variant(VariantId::BackgroundAudio);
     for (index, expected) in [true, false, false, true].into_iter().enumerate() {
         pending(&mut vm);
         let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
@@ -336,8 +336,8 @@ fn background_audio_override_queries_writes_and_gates_without_stopping_playback(
 
 #[test]
 fn background_audio_errors_preserve_state_and_allow_retry() {
-    use cmvs_rs::profile::ResearchId;
-    let semantics = Semantics::Research(ResearchId::BackgroundAudio);
+    use cmvs_rs::profile::VariantId;
+    let semantics = Semantics::Variant(VariantId::BackgroundAudio);
     let mut audio = AudioHost::default();
     let mut backend = RecordingAudio::default();
     audio.sync_output_activity(false, &mut backend).unwrap();

@@ -155,7 +155,7 @@ fn exact_window_batch_completes_with_only_the_required_context() {
         );
         assert_eq!(
             dispatch::run(
-                Semantics::Research(cmvs_rs::profile::ResearchId::FontCells),
+                Semantics::Variant(cmvs_rs::profile::VariantId::FontCells),
                 &mut vm,
                 &mut windows.hosts(capability)
             )

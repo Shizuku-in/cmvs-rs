@@ -105,7 +105,7 @@ fn each_service_uses_only_its_declared_capability_and_completes_once() {
         };
         assert_eq!(
             dispatch::run(
-                Semantics::Research(cmvs_rs::profile::ResearchId::FontCells),
+                Semantics::Variant(cmvs_rs::profile::VariantId::FontCells),
                 &mut vm,
                 &mut hosts
             )

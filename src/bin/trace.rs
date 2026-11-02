@@ -658,8 +658,8 @@ fn run() -> Result<(), Box<dyn Error>> {
                     cmvs_rs::profile::Semantics::Root => cmvs_rs::dispatch::ROOT
                         .iter()
                         .find(|entry| entry.command == command),
-                    cmvs_rs::profile::Semantics::Research(id) => {
-                        cmvs_rs::dispatch::research_entry(id, command)
+                    cmvs_rs::profile::Semantics::Variant(id) => {
+                        cmvs_rs::dispatch::variant_entry(id, command)
                     }
                 }
                 .expect("completed command has a selected entry");
@@ -1015,7 +1015,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 continue;
             }
             // Root commands without an optional host retain the original stop
-            // diagnostics below. A selected research override stops immediately.
+            // diagnostics below. A selected variant stops immediately.
             if matches!(
                 dispatched,
                 Some(cmvs_rs::dispatch::Flow::Unhandled | cmvs_rs::dispatch::Flow::Unavailable)

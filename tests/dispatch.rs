@@ -10,7 +10,7 @@ use support::bytecode::{command, pending, script};
 
 #[test]
 fn migrated_tables_have_unique_owners_and_overrides_are_build_bound() {
-    for table in std::iter::once(dispatch::ROOT).chain(dispatch::RESEARCH_TABLES.iter().copied()) {
+    for table in std::iter::once(dispatch::ROOT).chain(dispatch::VARIANT_TABLES.iter().copied()) {
         let owners: std::collections::BTreeSet<_> = table.iter().map(|e| e.command).collect();
         assert_eq!(owners.len(), table.len());
         for entry in table {
@@ -30,7 +30,7 @@ fn migrated_tables_have_unique_owners_and_overrides_are_build_bound() {
     for entry in dispatch::FONT_CELLS {
         assert_eq!(
             derived.semantics(entry.command),
-            cmvs_rs::profile::Semantics::Research(cmvs_rs::profile::ResearchId::FontCells)
+            cmvs_rs::profile::Semantics::Variant(cmvs_rs::profile::VariantId::FontCells)
         );
         assert_eq!(
             derived.status(entry.command),
@@ -148,7 +148,7 @@ fn state_entries_preserve_missing_capabilities_and_execute_once_when_available()
         // An explicitly selected semantic source cannot fall back to these root entries.
         assert_eq!(
             dispatch::run(
-                Semantics::Research(cmvs_rs::profile::ResearchId::FontCells),
+                Semantics::Variant(cmvs_rs::profile::VariantId::FontCells),
                 &mut vm,
                 &mut hosts
             )

@@ -100,7 +100,7 @@ fn all_text_state_commands_have_one_owner_and_complete_once() {
         );
         assert_eq!(
             dispatch::run(
-                Semantics::Research(cmvs_rs::profile::ResearchId::FontCells),
+                Semantics::Variant(cmvs_rs::profile::VariantId::FontCells),
                 &mut vm,
                 &mut state.hosts()
             )

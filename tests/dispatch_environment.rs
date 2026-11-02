@@ -203,7 +203,7 @@ fn environment_batch_has_exact_owners_and_only_completes_once() {
         );
         assert_eq!(
             dispatch::run(
-                Semantics::Research(cmvs_rs::profile::ResearchId::FontCells),
+                Semantics::Variant(cmvs_rs::profile::VariantId::FontCells),
                 &mut vm,
                 &mut state.hosts(cap)
             )

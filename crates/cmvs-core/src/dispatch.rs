@@ -1,4 +1,4 @@
-//! Shared static system-command routing and sparse identity-bound research overrides.
+//! Shared static system-command routing and sparse identity-bound variant overrides.
 //! Gate resolution precedes dispatch. Runtime-wide operations return a checked
 //! request for the caller's orchestration; they remain pending until acknowledged.
 //! A selected override never falls through to root semantics.
@@ -1381,7 +1381,7 @@ fn root_change_image(
 
 pub fn uses_images(command: u16) -> bool {
     ROOT.iter()
-        .chain(RESEARCH_TABLES.iter().flat_map(|table| table.iter()))
+        .chain(VARIANT_TABLES.iter().flat_map(|table| table.iter()))
         .any(|e| {
             e.command == command
                 && matches!(
@@ -4358,8 +4358,8 @@ pub static ROOT: &[Entry] = &[
     },
 ];
 
-/// Research-only overrides: all selected commands remain Unreviewed in the
-/// bound profile. This is not a registered Reviewed/ContractEquivalent variant.
+/// Build-specific variants, selected only through an explicit profile binding.
+/// Implementation selection does not upgrade the command's evidence status.
 pub static FONT_CELLS: &[Entry] = &[
     Entry {
         command: 0x10b,
@@ -4621,8 +4621,8 @@ pub static BACKGROUND_AUDIO: &[Entry] = &[Entry {
     },
 }];
 
-/// Static research tables used when provisioning shared host capabilities.
-pub static RESEARCH_TABLES: &[&[Entry]] = &[
+/// Static variant tables used when provisioning shared host capabilities.
+pub static VARIANT_TABLES: &[&[Entry]] = &[
     FONT_CELLS,
     PARTICLES,
     BACKGROUND_AUDIO,
@@ -4631,33 +4631,33 @@ pub static RESEARCH_TABLES: &[&[Entry]] = &[
     FRAGMENTS,
 ];
 
-pub fn research_entry(id: crate::profile::ResearchId, command: u16) -> Option<&'static Entry> {
+pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'static Entry> {
     let entries = match id {
-        crate::profile::ResearchId::FontCells => FONT_CELLS,
-        crate::profile::ResearchId::Particles => PARTICLES,
-        crate::profile::ResearchId::BackgroundAudio => BACKGROUND_AUDIO,
-        crate::profile::ResearchId::FallingBillboards => FALLING_BILLBOARDS,
-        crate::profile::ResearchId::CollisionParticles => COLLISION_PARTICLES,
-        crate::profile::ResearchId::Fragments => FRAGMENTS,
+        crate::profile::VariantId::FontCells => FONT_CELLS,
+        crate::profile::VariantId::Particles => PARTICLES,
+        crate::profile::VariantId::BackgroundAudio => BACKGROUND_AUDIO,
+        crate::profile::VariantId::FallingBillboards => FALLING_BILLBOARDS,
+        crate::profile::VariantId::CollisionParticles => COLLISION_PARTICLES,
+        crate::profile::VariantId::Fragments => FRAGMENTS,
     };
     entries.iter().find(|entry| entry.command == command)
 }
 
 pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
     match profile.semantics(command) {
-        Semantics::Research(crate::profile::ResearchId::FontCells) => "research text override",
-        Semantics::Research(crate::profile::ResearchId::Particles) => "research particle override",
-        Semantics::Research(crate::profile::ResearchId::BackgroundAudio) => {
-            "research background audio override"
+        Semantics::Variant(crate::profile::VariantId::FontCells) => "variant text override",
+        Semantics::Variant(crate::profile::VariantId::Particles) => "variant particle override",
+        Semantics::Variant(crate::profile::VariantId::BackgroundAudio) => {
+            "variant background audio override"
         }
-        Semantics::Research(crate::profile::ResearchId::FallingBillboards) => {
-            "research falling billboard override"
+        Semantics::Variant(crate::profile::VariantId::FallingBillboards) => {
+            "variant falling billboard override"
         }
-        Semantics::Research(crate::profile::ResearchId::CollisionParticles) => {
-            "research collision particle override"
+        Semantics::Variant(crate::profile::VariantId::CollisionParticles) => {
+            "variant collision particle override"
         }
-        Semantics::Research(crate::profile::ResearchId::Fragments) => {
-            "research image fragment override"
+        Semantics::Variant(crate::profile::VariantId::Fragments) => {
+            "variant image fragment override"
         }
         Semantics::Root => "base semantics",
     }
@@ -4675,7 +4675,7 @@ pub fn run(
         return Ok(None);
     };
     let entry = match semantics {
-        Semantics::Research(id) => research_entry(id, command),
+        Semantics::Variant(id) => variant_entry(id, command),
         Semantics::Root => ROOT.iter().find(|e| e.command == command),
     };
     let Some(entry) = entry else {

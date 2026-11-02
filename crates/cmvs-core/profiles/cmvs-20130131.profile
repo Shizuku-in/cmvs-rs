@@ -685,13 +685,13 @@ binary x86 file=cmvs32.exe sha256=8048c7615b019d3b2ef867ad2bcc108f27092c77122507
 0x22a5 unreviewed 0x77e83 0x6a9e7
 0x22a6 unreviewed 0x77e90 0x6a9f1
 0x22a7 unreviewed 0x77e9d 0x6a9fb
-0x22a8 unreviewed 0x77eaa 0x6aa05 research=fragments:x64:637d2928efab89e7b5fc68b2d0801cfdefbfa65558b69378580c145c52b8c05b evidence=games/hapymaher/vm-semantics.md
+0x22a8 unreviewed 0x77eaa 0x6aa05 variant=fragments:x64:637d2928efab89e7b5fc68b2d0801cfdefbfa65558b69378580c145c52b8c05b evidence=games/hapymaher/vm-semantics.md
 0x22a9 noop 0x76237 0x694f3
 0x22aa noop 0x76237 0x694f3
 0x22ab noop 0x76237 0x694f3
 0x22ac noop 0x76237 0x694f3
 0x22ad noop 0x76237 0x694f3
-0x22ae unreviewed 0x77eb7 0x6aa0f research=fragments:x64:637d2928efab89e7b5fc68b2d0801cfdefbfa65558b69378580c145c52b8c05b evidence=games/hapymaher/vm-semantics.md
+0x22ae unreviewed 0x77eb7 0x6aa0f variant=fragments:x64:637d2928efab89e7b5fc68b2d0801cfdefbfa65558b69378580c145c52b8c05b evidence=games/hapymaher/vm-semantics.md
 0x22af unreviewed 0x77ec4 0x6aa19
 0x22b0 unreviewed 0x77ed1 0x6aa23
 0x22b1 unreviewed 0x77ede 0x6aa2d

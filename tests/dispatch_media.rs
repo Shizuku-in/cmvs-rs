@@ -173,7 +173,7 @@ fn media_commands_require_their_own_capability_and_complete_once() {
         );
         assert_eq!(
             dispatch::run(
-                Semantics::Research(cmvs_rs::profile::ResearchId::FontCells),
+                Semantics::Variant(cmvs_rs::profile::VariantId::FontCells),
                 &mut vm,
                 &mut state.hosts(cap)
             )
