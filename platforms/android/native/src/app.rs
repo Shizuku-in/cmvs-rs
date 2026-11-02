@@ -4,6 +4,7 @@ use android_activity::{
     AndroidApp, InputStatus, MainEvent, PollEvent,
     input::{InputEvent, MotionAction},
 };
+use cmvs_audio::{HostAudioControl, NativeAudio};
 use cmvs_core::{
     input::KeyBindings,
     platform::resolve_under,
@@ -36,6 +37,7 @@ struct Graphics {
     window: Arc<AndroidWindow>,
 }
 struct Player<'a> {
+    audio_control: HostAudioControl,
     graphics: Option<Graphics>,
     startup: Startup<'a>,
     backend: MobileBackend,
@@ -55,12 +57,14 @@ impl Player<'_> {
     }
     fn sync_input(&mut self) {
         let active = self.active();
+        self.audio_control.set_active(active);
         self.touch.focus(active, self.startup.input_mut());
         self.startup.set_focused(active);
         self.next_frame = Instant::now();
         self.last_frame = self.next_frame;
     }
     fn release_surface(&mut self) {
+        self.audio_control.set_active(false);
         self.touch.focus(false, self.startup.input_mut());
         self.startup.set_focused(false);
         self.graphics = None;
@@ -351,6 +355,11 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
     startup.set_block_unreviewed(false);
     startup.set_block_presumed(false);
     startup.set_user_data_directory(&user)?;
+    let audio = NativeAudio::new(&root)?;
+    let audio_control = audio.host_control();
+    audio_control.set_active(false);
+    startup.set_audio_backend(Box::new(audio))?;
+    log::info!("Native Vorbis audio enabled");
     startup.set_decode_movie_frames(true);
     startup.set_record_text(true);
     startup.set_glyph_metrics(font.borrow().metrics());
@@ -369,6 +378,7 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
     backend.display.render_mode =
         cmvs_core::platform::supported_render_mode(&backend, backend.display.render_mode)?;
     let mut player = Player {
+        audio_control,
         graphics: None,
         startup,
         backend,

@@ -41,7 +41,7 @@ public final class LauncherActivity extends Activity {
         layout.setPadding(pad, pad, pad, pad);
         scroll.addView(layout);
         text(layout, "CMVS").setTextSize(24);
-        text(layout, "当前支持 Shift-JIS 游戏；暂不播放声音。\n导入会复制游戏文件并占用额外空间，原目录不会修改。");
+        text(layout, "当前支持 Shift-JIS 游戏，支持 BGM、语音和音效。\n导入会复制游戏文件并占用额外空间，原目录不会修改。");
         gameLabel = text(layout, "");
         gameButton = button(layout, "导入游戏目录", () -> pick(GAME));
         fontLabel = text(layout, "");

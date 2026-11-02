@@ -153,6 +153,7 @@ struct Compression {
 }
 struct StreamSource {
     output_enabled: Arc<AtomicBool>,
+    host_control: HostAudioControl,
     program: VorbisProgram,
     compression: Option<Compression>,
     fault: Fault,
@@ -207,7 +208,9 @@ impl Iterator for StreamSource {
         };
         match sample {
             Ok(sample) => sample.map(|x| {
-                if self.output_enabled.load(Ordering::Relaxed) {
+                if self.output_enabled.load(Ordering::Relaxed)
+                    && self.host_control.active.load(Ordering::Relaxed)
+                {
                     f32::from(x) / 32768.0
                 } else {
                     0.0
@@ -285,9 +288,22 @@ impl Channel {
     }
 }
 
-/// Opened only with the desktop's explicit `--audio native` option.
+/// Host lifecycle gate, independent of the game's own sound settings.
+/// Muting keeps consuming audio, matching the existing output gate policy.
+#[derive(Clone)]
+pub struct HostAudioControl {
+    active: Arc<AtomicBool>,
+}
+impl HostAudioControl {
+    pub fn set_active(&self, active: bool) {
+        self.active.store(active, Ordering::Relaxed);
+    }
+}
+
+/// Native output shared by desktop and Android hosts.
 pub struct NativeAudio {
     output_enabled: Arc<AtomicBool>,
+    host_control: HostAudioControl,
     root: PathBuf,
     paths: BTreeMap<(u16, u32), Vec<u8>>,
     archives: ResourceArchives,
@@ -322,6 +338,9 @@ impl NativeAudio {
         );
         Ok(Self {
             output_enabled: Arc::new(AtomicBool::new(true)),
+            host_control: HostAudioControl {
+                active: Arc::new(AtomicBool::new(true)),
+            },
             root: root.canonicalize()?,
             paths: BTreeMap::new(),
             archives: ResourceArchives::new(root)?,
@@ -336,6 +355,9 @@ impl NativeAudio {
             ducking_clock: Instant::now(),
             stream,
         })
+    }
+    pub fn host_control(&self) -> HostAudioControl {
+        self.host_control.clone()
     }
     /// Observe BGM device channel 0 or 1 without changing playback or advancing time.
     /// Returns source consumption milliseconds, excluding device-buffer latency;
@@ -386,6 +408,7 @@ impl NativeAudio {
         sink.set_volume(if envelope.is_some() { 0.0 } else { gain });
         sink.append(StreamSource {
             output_enabled: self.output_enabled.clone(),
+            host_control: self.host_control.clone(),
             program,
             compression,
             fault: fault.clone(),
@@ -835,11 +858,15 @@ mod output_gate_tests {
     use super::*;
 
     #[test]
-    fn muting_consumes_pcm_and_resuming_preserves_the_stream_position() {
+    fn host_and_game_mutes_are_independent_and_preserve_stream_consumption() {
         let bytes = include_bytes!("../../../tests/fixtures/audio/mono440.ogg");
         let gate = Arc::new(AtomicBool::new(true));
+        let host = HostAudioControl {
+            active: Arc::new(AtomicBool::new(true)),
+        };
         let mut source = StreamSource {
             output_enabled: gate.clone(),
+            host_control: host.clone(),
             program: VorbisProgram::new(bytes.to_vec(), None, false).unwrap(),
             compression: None,
             fault: Arc::default(),
@@ -850,11 +877,16 @@ mod output_gate_tests {
         while let Some(pcm) = reference.next_sample().unwrap() {
             samples.push(pcm);
         }
-        assert!(samples.len() > 3);
-        let muted = samples.len() / 3..samples.len() * 2 / 3;
+        assert!(samples.len() > 8);
+        let length = samples.len();
         for (index, pcm) in samples.into_iter().enumerate() {
-            let enabled = !muted.contains(&index);
-            gate.store(enabled, Ordering::Relaxed);
+            // Exercise all four gate combinations and then resume both gates.
+            let phase = index * 8 / length;
+            let game_enabled = phase & 1 == 0;
+            let host_enabled = phase & 2 == 0;
+            gate.store(game_enabled, Ordering::Relaxed);
+            host.set_active(host_enabled);
+            let enabled = game_enabled && host_enabled;
             let expected = if enabled {
                 f32::from((pcm * 32768.0).clamp(-32768.0, 32767.0) as i16) / 32768.0
             } else {
