@@ -682,7 +682,7 @@ binary x86 file=cmvs32.exe sha256=78c2283990f3fec167a8097e5e56304edbad7e94d5367e
 0x22a2 unreviewed 0x76d3c 0x62aeb
 0x22a3 unreviewed 0x76d49 0x62af3
 0x22a4 unreviewed 0x76d56 0x62afb
-0x22a5 unreviewed 0x76d63 0x62b03
+0x22a5 unreviewed 0x76d63 0x62b03 variant=particles:x64:9870e6d5cbd5242b9c686aae20fe10697e87328a66d322cfdb2c80021cb645c5 evidence=games/miranosu/vm-semantics.md
 0x22a6 unreviewed 0x76d70 0x62b0b
 0x22a7 unreviewed 0x76d7d 0x62b13
 0x22a8 noop 0x751c7 0x61b4c

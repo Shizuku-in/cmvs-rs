@@ -164,6 +164,7 @@ fn state_entries_preserve_missing_capabilities_and_execute_once_when_available()
         assert_eq!(vm.pc(), script.code().len());
         assert_eq!(vm.stack().len_bytes(), 0);
         let expected_result = match entry.command {
+            0x07 => 0,
             0x08 | 0x09 | 0x0c | 0x0f => 120,
             0xd4 => random_result,
             _ => 42,

@@ -172,3 +172,25 @@ fn frame_clock_and_delta_queries_follow_the_last_run_entry() {
     assert_eq!(query(&mut vm, &mut timers), Some(u32::MAX));
     assert_eq!(vm.stack().len_bytes(), 0);
 }
+
+#[test]
+fn uptime_seconds_truncates_wraps_and_preserves_stack_and_other_results() {
+    let mut code = vec![];
+    command(&mut code, 0x2007, 0x12345678);
+    for _ in 0..4 {
+        code.extend(0x2007u16.to_le_bytes());
+    }
+    let script = program(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut timers = VmTimers::default();
+    vm.state_mut().set_system_integer(1, 99).unwrap();
+    for (delta, expected) in [(999, 0), (1, 1), (0, 1), (u32::MAX - 1000, 4294967), (2, 0)] {
+        timers.begin_run(delta);
+        pending(&mut vm);
+        assert!(timers.try_handle(&mut vm).unwrap());
+        assert_eq!(vm.state().system_integer(0), Some(expected));
+        assert_eq!(vm.state().system_integer(1), Some(99));
+        assert_eq!(vm.stack().len_bytes(), 4);
+        assert_eq!(vm.stack().peek_u32(4).unwrap(), 0x12345678);
+    }
+}

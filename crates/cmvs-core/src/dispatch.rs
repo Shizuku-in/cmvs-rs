@@ -4298,6 +4298,12 @@ pub static ROOT: &[Entry] = &[
         handler: root_settings,
     },
     Entry {
+        command: 0x7,
+        name: "uptime seconds",
+        capability: Capability::Timers,
+        handler: root_timers,
+    },
+    Entry {
         command: 0x8,
         name: "frame clock",
         capability: Capability::Timers,

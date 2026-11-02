@@ -407,7 +407,7 @@ impl State {
     }
     fn read(&self, cell: Cell, env: &Env, pc: usize, op: u16) -> Result<i32, DecodeError> {
         match cell {
-            Cell::Value(value) => Ok(value),
+            Cell::Value(value) | Cell::Literal(value) => Ok(value),
             Cell::Frame(offset) => Ok(env.load(offset, pc, op)? as i32),
             Cell::Data(offset) => Ok(env.load_data(offset)),
             Cell::Integer(index) => self
@@ -436,6 +436,9 @@ impl State {
             Cell::Frame(offset) => return env.store(offset, value as u32, journal, pc, op),
             Cell::Integer(index) => self.set_integer_journaled(index, value, journal),
             Cell::Bit(index) => self.set_bit_journaled(index, value != 0, journal),
+            // The native integer writer has no 0x100 case: discard the write,
+            // while the evaluator still returns the computed assignment value.
+            Cell::Literal(_) => Ok(()),
             Cell::Value(_) => Err("assignment requires a writable variable"),
         }
         .map_err(|why| error(pc, op, why))
@@ -462,7 +465,7 @@ impl State {
             match term {
                 Term::Scalar {
                     tag: 0x100, raw, ..
-                } => stack.push(Cell::Value(*raw as i32)),
+                } => stack.push(Cell::Literal(*raw as i32)),
                 Term::Scalar {
                     pc,
                     tag: 0x10e,
@@ -883,6 +886,7 @@ fn float_binary(pc: usize, opcode: u16, left: f32, right: f32) -> Result<f32, De
 #[derive(Clone, Copy)]
 enum Cell {
     Value(i32),
+    Literal(i32),
     Integer(u32),
     Bit(u32),
     /// Absolute stack byte offset of a frame word.

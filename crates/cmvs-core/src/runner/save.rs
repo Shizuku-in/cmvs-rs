@@ -146,7 +146,15 @@ fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLa
 }
 
 fn effect_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
-    profile.id == "cmvs-20171114" && profile.base.as_deref() == Some("cmvs-20160201")
+    matches!(profile.id.as_str(), "cmvs-20110525" | "cmvs-20171114")
+        && profile.base.as_deref() == Some("cmvs-20160201")
+}
+
+fn effect_record_supported(profile: &crate::profile::EngineProfile, body: &[u8]) -> bool {
+    effect_layout_supported(profile)
+        // MIRANOSU's type-5 writer/reader are independently inspected. Other
+        // configurations still need their own runtime and snapshot evidence.
+        && (profile.id != "cmvs-20110525" || body.get(..4) == Some(&[1, 0, 5, 0]))
 }
 
 /// 20110525 writer 0x1400332e0, 20130131 0x1400330b0 and 20140217 0x1400375d0 visit 512 children.
@@ -247,6 +255,11 @@ impl Startup<'_> {
             .collect::<Result<BTreeMap<_, _>, crate::FormatError>>()?;
         let mut raw_objects = BTreeMap::new();
         for (slot, record) in self.scene.saved_effect_pools()? {
+            if !effect_record_supported(self.gate.selection().profile, &record) {
+                return Err(
+                    "saved particle effect type is not implemented for this profile".into(),
+                );
+            }
             raw_objects.insert((0x800, slot), record);
         }
         raw_objects.insert((0x540, 0), self.history.saved());
@@ -602,7 +615,10 @@ impl Startup<'_> {
             .filter(|((tag, _), _)| *tag == 0x800)
             .map(|(&(_, slot), body)| (slot, body.as_slice()))
             .collect();
-        if !effect_records.is_empty() && !effect_layout_supported(self.gate.selection().profile) {
+        if effect_records
+            .iter()
+            .any(|(_, body)| !effect_record_supported(self.gate.selection().profile, body))
+        {
             return Err("saved particle record layout is not implemented for this profile".into());
         }
         let mut restored_random = self.random.clone();
@@ -927,7 +943,7 @@ mod layout_tests {
             assert_eq!(snapshot_layout(registry.profile(id).unwrap()), Some(layout));
             assert_eq!(
                 effect_layout_supported(registry.profile(id).unwrap()),
-                id == "cmvs-20171114"
+                matches!(id, "cmvs-20110525" | "cmvs-20171114")
             );
         }
         let mut profile = registry.profile("cmvs-20171114").unwrap().clone();
@@ -938,6 +954,20 @@ mod layout_tests {
         profile.base = Some("uninspected-base".into());
         assert_eq!(snapshot_layout(&profile), None);
         assert!(!effect_layout_supported(&profile));
+    }
+
+    #[test]
+    fn older_effect_layout_only_accepts_the_inspected_type_five() {
+        let registry = crate::profile::Registry::builtin();
+        let profile = registry.profile("cmvs-20110525").unwrap();
+        for kind in [2, 5, 6, 8] {
+            assert_eq!(
+                effect_record_supported(profile, &[1, 0, kind, 0]),
+                kind == 5
+            );
+        }
+        assert!(!effect_record_supported(profile, &[1, 0]));
+        assert!(!effect_record_supported(profile, &[2, 0, 5, 0]));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! Aoitori type-5 particle pool; executable-bound evidence is in games/aoitori/vm-semantics.md.
+//! Type-5 particle pool; executable-bound evidence is in games/{aoitori,miranosu}/vm-semantics.md.
 use crate::{
     dispatch::Call,
     image::{self, ImageSource},

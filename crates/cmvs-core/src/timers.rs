@@ -41,7 +41,8 @@ impl VmTimers {
         }
     }
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x08 | 0x09 | 0x0b | 0x0c | 0x0e | 0x0f))) = vm.pending_system()
+        let Some((pc, command @ (0x07 | 0x08 | 0x09 | 0x0b | 0x0c | 0x0e | 0x0f))) =
+            vm.pending_system()
         else {
             return Ok(false);
         };
@@ -53,12 +54,14 @@ impl VmTimers {
         let command = call.command;
         // Inline 0x140082437 / 0x14008244d: system result 0 = the frame time (0x140007eb0)
         // or the frame delta (0x140007ed0), here the explicit research clock; 0x4000.
-        if matches!(command, 0x08 | 0x09) {
+        if matches!(command, 0x07..=0x09) {
             call.complete(0x4000)?;
-            let value = if command == 0x08 {
-                self.clock
-            } else {
-                self.delta
+            let value = match command {
+                // MIRANOSU 0x140075201 -> 0x140003a70: wrapping uptime in ms,
+                // divided by 1000. Use the host's explicit clock for replay.
+                0x07 => self.clock / 1000,
+                0x08 => self.clock,
+                _ => self.delta,
             };
             call.vm
                 .state_mut()

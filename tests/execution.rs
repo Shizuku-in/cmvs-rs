@@ -194,15 +194,36 @@ fn failed_outer_expression_rolls_back_all_nested_assignments() {
 }
 
 #[test]
-fn literal_cannot_be_assigned_and_policy_limits_are_atomic() {
+fn literal_assignment_discards_the_write_and_policy_limits_are_atomic() {
     let code = expr(
         0x200,
         vec![scalar(0x100, 1), scalar(0x100, 2), operator(0x170)],
     );
-    assert!(evaluate(&mut State::default(), &code).is_err());
+    assert_eq!(evaluate(&mut State::default(), &code).unwrap(), 2);
     let mut state = State::new(100, 100);
     assert!(evaluate(&mut state, &assignment(0x101, 8, 7)).is_err()); // slot 4096 unavailable
     assert_eq!(state.integer(8), None);
+}
+
+#[test]
+fn literal_assignment_can_feed_a_writable_destination_and_rolls_back_on_later_error() {
+    // The real backlog initializes a frame local with the result of `0 = 0`.
+    let literal_write = expr(
+        0x200,
+        vec![scalar(0x100, 0), scalar(0x100, 0), operator(0x170)],
+    );
+    let code = expr(
+        0x200,
+        vec![reference(0x101, 8), literal_write, operator(0x170)],
+    );
+    let mut state = State::default();
+    state.set_integer(8, 42).unwrap();
+    assert_eq!(evaluate(&mut state, &code).unwrap(), 0);
+    assert_eq!(state.integer(8), Some(0));
+    state.set_integer(8, 42).unwrap();
+    let failed = expr(0x200, vec![code, scalar(0x100, 0), operator(0x161)]);
+    assert!(evaluate(&mut state, &failed).is_err());
+    assert_eq!(state.integer(8), Some(42));
 }
 
 #[test]
