@@ -42,7 +42,7 @@ impl<'a> Startup<'a> {
         self.thumbnail = None;
         let screen_size =
             crate::viewport::ScreenSize::new(self.screen_size()).expect("validated at startup");
-        self.scene = Default::default();
+        self.scene = crate::scene::SceneHost::for_profile(self.gate.selection().profile);
         self.scene.set_screen_size(screen_size);
         self.camera.reset();
         self.buttons = Default::default();

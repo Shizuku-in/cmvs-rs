@@ -10,6 +10,8 @@ use crate::{
 };
 use std::{collections::BTreeMap, error::Error};
 mod animation;
+mod child_slots;
+pub(crate) use child_slots::ChildSlots;
 mod change;
 mod mask;
 mod opacity;
@@ -156,7 +158,8 @@ pub struct SceneObject {
     pub image: Option<ObjectImage>,
     /// +6184: second texture loaded by 0x2035, separate from the main image.
     pub secondary_image: Option<ObjectImage>,
-    /// 768 child pointers at +8, addressed by 0x2022/0x2038/0x2050.
+    /// Child pointers at +8, addressed by 0x2022/0x2038/0x2050. The host selects
+    /// the inspected build capacity (768 in the base layout, 1024 in REALIVE).
     pub children: BTreeMap<u16, SceneObject>,
     /// +6192, initialized by 0x14001ee40: the first 88 bytes and the modeled later fields.
     pub draw: Option<DrawState>,
@@ -324,6 +327,7 @@ impl DrawState {
 
 #[derive(Debug, Default)]
 pub struct SceneHost {
+    child_slots: ChildSlots,
     screen_size: crate::viewport::ScreenSize,
     pub(crate) fragment_effects: BTreeMap<u8, crate::effect_objects::FragmentEffect>,
     pub(crate) collision_effects: BTreeMap<u8, crate::effect_objects::CollisionEffect>,
@@ -340,6 +344,14 @@ pub struct SceneHost {
     strip: Option<StripWipe>,
 }
 impl SceneHost {
+    /// Construct runtime hosts for the independently inspected child-table layout.
+    pub fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
+        Self {
+            child_slots: ChildSlots::for_profile(profile),
+            ..Self::default()
+        }
+    }
+
     pub fn screen_size(&self) -> [u32; 2] {
         self.screen_size.pixels()
     }
@@ -401,7 +413,7 @@ impl SceneHost {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(false);
         };
-        if !matches!(command, 0x20..=0x23 | 0x26..=0x28 | 0x2a | 0x2d..=0x2f | 0x33 | 0x34 | 0x40 | 0x42..=0x4c | 0x50 | 0x70..=0x75 | 0x78 | 0x1e0..=0x1fd | 0x220..=0x223 | 0x250 | 0x2c5 | 0x2c6 | 0x2cb | 0x321 | 0x322 | 0x329)
+        if !matches!(command, 0x20..=0x23 | 0x25..=0x28 | 0x2a | 0x2d..=0x2f | 0x33 | 0x34 | 0x40 | 0x42..=0x4c | 0x50 | 0x70..=0x75 | 0x78 | 0x1e0..=0x1fd | 0x220..=0x223 | 0x250 | 0x2c5 | 0x2c6 | 0x2cb | 0x321 | 0x322 | 0x329)
         {
             return Ok(false);
         }
@@ -457,7 +469,7 @@ impl SceneHost {
         }
         if matches!(
             command,
-            0x22 | 0x2d | 0x2e | 0x40 | 0x42..=0x4c | 0x50 | 0x70..=0x75 | 0x321 | 0x322
+            0x22 | 0x25 | 0x2d | 0x2e | 0x40 | 0x42..=0x4c | 0x50 | 0x70..=0x75 | 0x321 | 0x322
         ) {
             return self.handle_object(call);
         }
@@ -538,9 +550,11 @@ impl SceneHost {
         } else {
             u16::try_from(child)
                 .ok()
-                .filter(|id| *id < 768)
+                .filter(|id| *id < self.child_slots.count())
                 .and_then(|id| parent.children.get_mut(&id))
-                .ok_or_else(|| fail("visibility needs an existing child in slots 0..767"))?
+                .ok_or_else(|| {
+                    fail("visibility needs an existing child within this build's child table")
+                })?
         };
         call.complete(0x400c)?;
         target.shown = shown;
@@ -560,7 +574,7 @@ impl SceneHost {
             return Err(fail("child deletion needs an existing parent object"));
         }
         call.complete(0x4008)?;
-        if child < 768 {
+        if child < u32::from(self.child_slots.count()) {
             self.objects
                 .get_mut(&slot)
                 .expect("validated parent")
@@ -593,8 +607,9 @@ impl SceneHost {
             let exists = match self.objects.get(&target) {
                 None => false,
                 Some(_) if second < 0 => true,
-                Some(object) => u16::try_from(second)
-                    .is_ok_and(|id| id < 768 && object.children.contains_key(&id)),
+                Some(object) => u16::try_from(second).is_ok_and(|id| {
+                    id < self.child_slots.count() && object.children.contains_key(&id)
+                }),
             };
             call.complete(0x4008)?;
             call.vm
@@ -681,9 +696,11 @@ impl SceneHost {
         } else {
             u16::try_from(child)
                 .ok()
-                .filter(|id| *id < 768)
+                .filter(|id| *id < self.child_slots.count())
                 .and_then(|id| object.children.get(&id))
-                .ok_or_else(|| fail("pixel query needs an existing child in slots 0..767"))?
+                .ok_or_else(|| {
+                    fail("pixel query needs an existing child within this build's child table")
+                })?
         };
         let value = match &target.image {
             None => 0,
@@ -735,9 +752,11 @@ impl SceneHost {
         } else {
             u16::try_from(child)
                 .ok()
-                .filter(|id| *id < 768)
+                .filter(|id| *id < self.child_slots.count())
                 .and_then(|id| object.children.get_mut(&id))
-                .ok_or_else(|| fail("logical size needs an existing child in slots 0..767"))?
+                .ok_or_else(|| {
+                    fail("logical size needs an existing child within this build's child table")
+                })?
         };
         call.complete(0x4010)?;
         target.logical_size = [width, height];
@@ -749,7 +768,7 @@ impl SceneHost {
         let fail = |why| error(pc, command + 0x2000, why);
         let count = match command {
             0x40 => 1,
-            0x22 | 0x2d | 0x2e | 0x42 | 0x50 => 2,
+            0x22 | 0x25 | 0x2d | 0x2e | 0x42 | 0x50 => 2,
             0x43 => 5,
             0x44 => 6,
             0x45 | 0x46 | 0x49 => 4,
@@ -765,8 +784,16 @@ impl SceneHost {
             .objects
             .get(&slot)
             .ok_or_else(|| fail("object slot does not exist"))?;
+        // REALIVE's create helper ignores unsigned indices outside its 1024-entry table.
+        if command == 0x22
+            && self.child_slots == ChildSlots::Extended
+            && args[1] >= u32::from(self.child_slots.count())
+        {
+            call.complete(0x4008)?;
+            return Ok(());
+        }
         let child = if command == 0x40
-            || (matches!(command, 0x2d | 0x2e | 0x42..=0x4c | 0x70..=0x75 | 0x321 | 0x322)
+            || (matches!(command, 0x25 | 0x2d | 0x2e | 0x42..=0x4c | 0x70..=0x75 | 0x321 | 0x322)
                 && (args[1] as i32) < 0)
         {
             None
@@ -774,8 +801,8 @@ impl SceneHost {
             Some(
                 u16::try_from(args[1])
                     .ok()
-                    .filter(|v| *v < 768)
-                    .ok_or_else(|| fail("child slot outside 0..767"))?,
+                    .filter(|v| *v < self.child_slots.count())
+                    .ok_or_else(|| fail("child slot outside this build's table"))?,
             )
         };
         if command != 0x22 {
@@ -823,6 +850,8 @@ impl SceneHost {
             match command {
                 // 0x202d / 0x14006bfe0 -> 0x14003a720: attach to the parent subqueue.
                 0x2d => object.flags |= 2,
+                // REALIVE 0x14008fa70 -> 0x14004ee10.
+                0x25 => object.flags &= !2,
                 // 0x202e / 0x14006c0a0 -> 0x14003a740: clear +6248 bit 0x100.
                 0x2e => object.flags &= !0x100,
                 0x40 | 0x50 => object.draw = Some(DrawState::default()),
@@ -909,9 +938,11 @@ impl SceneHost {
         } else {
             u16::try_from(child)
                 .ok()
-                .filter(|&id| id < 768)
+                .filter(|&id| id < self.child_slots.count())
                 .and_then(|id| parent.children.get(&id))
-                .ok_or_else(|| fail("world query needs an existing child in slots 0..767"))?
+                .ok_or_else(|| {
+                    fail("world query needs an existing child within this build's child table")
+                })?
         };
         let words = &object
             .draw
@@ -973,8 +1004,13 @@ impl SceneHost {
             Some(
                 u16::try_from(id)
                     .ok()
-                    .filter(|id| *id < 768 && self.objects[&slot].children.contains_key(id))
-                    .ok_or_else(|| fail("image load needs an existing child in slots 0..767"))?,
+                    .filter(|id| {
+                        *id < self.child_slots.count()
+                            && self.objects[&slot].children.contains_key(id)
+                    })
+                    .ok_or_else(|| {
+                        fail("image load needs an existing child within this build's child table")
+                    })?,
             )
         } else {
             None
@@ -1115,6 +1151,7 @@ impl SceneHost {
     ) {
         *self = Self {
             screen_size: self.screen_size,
+            child_slots: self.child_slots,
             particle_effects: Default::default(),
             falling_effects: Default::default(),
             collision_effects: Default::default(),
@@ -1135,7 +1172,9 @@ fn argument_names(command: u16) -> &'static [&'static str] {
         0x2cb => &["clear color"],
         0x250 => &["clear depth"],
         0x20 | 0x21 | 0x33 | 0x40 | 0x329 | 0x2c5 | 0x2c6 => &["object slot"],
-        0x22 | 0x23 | 0x27 | 0x2d | 0x2e | 0x42 | 0x50 | 0x78 => &["object slot", "child slot"],
+        0x22 | 0x23 | 0x25 | 0x27 | 0x2d | 0x2e | 0x42 | 0x50 | 0x78 => {
+            &["object slot", "child slot"]
+        }
         0x28 => &["target slot", "source slot"],
         0x26 => &["object slot", "child slot", "shown"],
         0x2a => &["object slot", "child slot", "width", "height"],

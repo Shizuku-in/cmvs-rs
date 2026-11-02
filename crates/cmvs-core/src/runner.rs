@@ -195,13 +195,13 @@ impl<'a> Startup<'a> {
         let configuration = crate::settings::Configuration::read(&root.join("cmvs.cfg"))?
             .unwrap_or(crate::settings::Configuration::new(Vec::new())?);
         let screen_size = configuration.screen_size()?;
-        let mut scene = SceneHost::default();
+        let mut scene = SceneHost::for_profile(game.selection.profile);
         scene.set_screen_size(screen_size);
         let mut buttons = ButtonHost::default();
         buttons.set_screen_size(screen_size);
         let mut camera = CameraHost::default();
         camera.set_screen_size(screen_size);
-        let mut messages = MessageHost::default();
+        let mut messages = MessageHost::for_profile(game.selection.profile);
         messages.set_screen_size(screen_size);
         let text = configuration.bytes();
         let mut save_menu = SaveMenuHost::default();

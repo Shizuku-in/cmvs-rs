@@ -42,7 +42,7 @@ binary x86 file=cmvs32.exe sha256=6705a43d85121b56961515f3dd0a0766a14a91ffa76df8
 0x2022 unreviewed 0x7f477 0x72b5d
 0x2023 unreviewed 0x7f484 0x72b67
 0x2024 noop 0x7f217 0x72a25
-0x2025 unreviewed 0x7f491 0x72b71
+0x2025 unreviewed 0x7f491 0x72b71 variant=object-queue:x64:02b71aac3d3d1ced1d0312b6c37748cf12df9cffd9585fb07787e6ca43199f00 evidence=games/realive/README.md
 0x2026 unreviewed 0x7f49e 0x72b7b
 0x2027 unreviewed 0x7f4ab 0x72b85
 0x2028 unreviewed 0x7f4b8 0x72b8f

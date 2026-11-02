@@ -130,8 +130,19 @@ impl SceneHost {
             .ok_or_else(|| error(pc, op, "effect needs an existing object in slots 0..255"))?;
         let child = match u16::try_from(child) {
             Err(_) if child < 0 => None,
-            Ok(id) if id < 768 && self.objects[&slot].children.contains_key(&id) => Some(id),
-            _ => return Err(error(pc, op, "effect child outside 0..767 or missing")),
+            Ok(id)
+                if id < self.child_slots.count()
+                    && self.objects[&slot].children.contains_key(&id) =>
+            {
+                Some(id)
+            }
+            _ => {
+                return Err(error(
+                    pc,
+                    op,
+                    "effect child outside this build's table or missing",
+                ));
+            }
         };
         let key_ok = |index: i32| usize::try_from(index).is_ok_and(|i| i < ROTATION_KEYS);
         if (matches!(command, 0x1e6 | 0x1e7) && !key_ok(a))

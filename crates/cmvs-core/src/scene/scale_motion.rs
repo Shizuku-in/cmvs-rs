@@ -98,8 +98,10 @@ impl SceneHost {
             Some(
                 u16::try_from(args[1])
                     .ok()
-                    .filter(|id| *id < 768 && parent.children.contains_key(id))
-                    .ok_or_else(|| fail("scale motion child outside 0..767 or missing"))?,
+                    .filter(|id| *id < self.child_slots.count() && parent.children.contains_key(id))
+                    .ok_or_else(|| {
+                        fail("scale motion child outside this build's table or missing")
+                    })?,
             )
         };
         let object = child.map_or(parent, |id| &parent.children[&id]);

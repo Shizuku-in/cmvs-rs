@@ -21,7 +21,7 @@ fn realive_font_bindings_are_limited_to_the_inspected_commands() {
         .filter(|(_, binding)| binding.id == VariantId::FontCells)
         .map(|(command, _)| command)
         .collect();
-    assert_eq!(bindings, [0x11d, 0x3ac, 0x3b8, 0x3b9, 0x3bb]);
+    assert_eq!(bindings, [0x11d, 0x388, 0x38b, 0x3ac, 0x3b8, 0x3b9, 0x3bb]);
     assert_eq!(profile.status(0x3ac), CommandStatus::Unreviewed);
     assert_eq!(
         profile.semantics(0x3ac),

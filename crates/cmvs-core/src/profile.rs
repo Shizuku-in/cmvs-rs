@@ -34,6 +34,7 @@ pub enum Semantics {
 pub enum VariantId {
     FontCells,
     TextAlpha,
+    ObjectQueue,
     Particles,
     BackgroundAudio,
     FallingBillboards,
@@ -47,6 +48,7 @@ pub enum VariantId {
 impl VariantId {
     pub fn parse(name: &str) -> Option<Self> {
         match name {
+            "object-queue" => Some(Self::ObjectQueue),
             "text-alpha" => Some(Self::TextAlpha),
             "font-cells" => Some(Self::FontCells),
             "particles" => Some(Self::Particles),
@@ -63,6 +65,7 @@ impl VariantId {
     }
     pub fn name(self) -> &'static str {
         match self {
+            Self::ObjectQueue => "object-queue",
             Self::TextAlpha => "text-alpha",
             Self::FontCells => "font-cells",
             Self::Particles => "particles",

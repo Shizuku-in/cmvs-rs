@@ -212,6 +212,7 @@ pub trait GlyphMetrics: std::fmt::Debug {
 
 #[derive(Debug, Default)]
 pub struct MessageHost {
+    child_slots: crate::scene::ChildSlots,
     screen_size: crate::viewport::ScreenSize,
     /// State owned by the separately dispatched font-cell text implementation.
     font_cells: font_cells::State,
@@ -238,6 +239,14 @@ pub struct MessageHost {
 }
 
 impl MessageHost {
+    /// Construct window-object hosts using the selected runtime child-table layout.
+    pub fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
+        Self {
+            child_slots: crate::scene::ChildSlots::for_profile(profile),
+            ..Self::default()
+        }
+    }
+
     pub fn screen_size(&self) -> [u32; 2] {
         self.screen_size.pixels()
     }
@@ -820,14 +829,15 @@ impl MessageHost {
         let child = call.argument(8, window_argument_names(call.command)[1])? as i32;
         let target = self.windows[slot]
             .as_ref()
-            .and_then(|window| window_target(&window.object, child))
+            .and_then(|window| window_target(&window.object, child, self.child_slots.count()))
             .ok_or_else(|| error(pc, op, "message window or window child does not exist"))?;
         if !matches!(command, 0x17a | 0x17c | 0x180) && target.draw.is_none() {
             return Err(error(pc, op, "window object has no draw state"));
         }
         call.complete(0x4008 + 4 * count as u16)?;
         let window = self.windows[slot].as_mut().expect("checked above");
-        let target = window_target_mut(&mut window.object, child).expect("checked above");
+        let target = window_target_mut(&mut window.object, child, self.child_slots.count())
+            .expect("checked above");
         let [a, b, c, d] = args;
         let setter = match command {
             0x17a => {
@@ -1262,14 +1272,14 @@ impl MessageHost {
         }
         let target = self.windows[slot]
             .as_ref()
-            .and_then(|window| window_target(&window.object, child))
+            .and_then(|window| window_target(&window.object, child, self.child_slots.count()))
             .ok_or_else(|| error(pc, op, "message window or window child does not exist"))?;
         if target.draw.is_none() {
             return Err(error(pc, op, "window object has no draw state"));
         }
         call.complete(0x4008 + 4 * count as u16)?;
         let window = self.windows[slot].as_mut().expect("checked above");
-        let draw = window_target_mut(&mut window.object, child)
+        let draw = window_target_mut(&mut window.object, child, self.child_slots.count())
             .and_then(|target| target.draw.as_mut())
             .expect("checked above");
         if command == 0x1cf {
@@ -1756,11 +1766,18 @@ impl MessageHost {
         let child = match u16::try_from(child) {
             Err(_) if child < 0 => None,
             Ok(id)
-                if id < 768 && (command == 0x178 || window.object.children.contains_key(&id)) =>
+                if id < self.child_slots.count()
+                    && (command == 0x178 || window.object.children.contains_key(&id)) =>
             {
                 Some(id)
             }
-            _ => return Err(error(pc, op, "window child outside 0..767 or missing")),
+            _ => {
+                return Err(error(
+                    pc,
+                    op,
+                    "window child outside this build's table or missing",
+                ));
+            }
         };
         call.complete(0x4008)?;
         let object = &mut self.windows[slot].as_mut().expect("checked above").object;
@@ -1821,7 +1838,7 @@ impl MessageHost {
         call.complete(0x4008)?;
         let object = &mut self.windows[slot].as_mut().expect("checked above").object;
         if let Ok(id) = u16::try_from(child)
-            && id < 768
+            && id < self.child_slots.count()
         {
             object.children.remove(&id);
         }
@@ -1841,7 +1858,7 @@ impl MessageHost {
                 "message window slot without a window sets an unmodeled flag",
             )
         })?;
-        let exists = window_target(&window.object, child).is_some();
+        let exists = window_target(&window.object, child, self.child_slots.count()).is_some();
         call.complete(0x4008)?;
         call.vm
             .state_mut()
@@ -2133,17 +2150,21 @@ impl MessageHost {
 }
 
 /// 0x14005d280: a negative child selects the object itself, others an existing child.
-fn window_target(object: &SceneObject, child: i32) -> Option<&SceneObject> {
+fn window_target(object: &SceneObject, child: i32, child_slots: u16) -> Option<&SceneObject> {
     match u16::try_from(child) {
         Err(_) if child < 0 => Some(object),
-        Ok(id) if id < 768 => object.children.get(&id),
+        Ok(id) if id < child_slots => object.children.get(&id),
         _ => None,
     }
 }
-fn window_target_mut(object: &mut SceneObject, child: i32) -> Option<&mut SceneObject> {
+fn window_target_mut(
+    object: &mut SceneObject,
+    child: i32,
+    child_slots: u16,
+) -> Option<&mut SceneObject> {
     match u16::try_from(child) {
         Err(_) if child < 0 => Some(object),
-        Ok(id) if id < 768 => object.children.get_mut(&id),
+        Ok(id) if id < child_slots => object.children.get_mut(&id),
         _ => None,
     }
 }
