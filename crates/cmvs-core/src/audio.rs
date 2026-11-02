@@ -1234,20 +1234,18 @@ impl AudioHost {
         }
         out
     }
+}
 
-    /// Loader 0x140081960 then reader 0x140069fd0: stop BGM (0x14008a0a0) and every device
-    /// sound (0x1400879e0 / 0x140089060), clear the channel records, then restart a saved
-    /// BGM without fade and with looping (0x14008a240), and replay each named SE channel
-    /// (0x140088390 on channel + 9, starting at once only when looped and flagged). SE_USE
-    /// is not consulted by the loader.
-    pub(crate) fn restore(
-        &mut self,
-        bgm: &[Vec<u8>; 2],
-        record: &[u8],
-        backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+pub(crate) struct SavedAudio<'a> {
+    bgm: &'a [Vec<u8>; 2],
+    channels: [Option<SeChannel>; SE_CHANNELS],
+    played: [u32; SE_CHANNELS],
+}
+
+impl<'a> SavedAudio<'a> {
+    pub(crate) fn decode(bgm: &'a [Vec<u8>; 2], record: &[u8]) -> Result<Self, &'static str> {
         if record.len() != SAVED_CHANNELS {
-            return Err("SE channel record has unexpected length".into());
+            return Err("SE channel record has unexpected length");
         }
         let mut channels: [Option<SeChannel>; SE_CHANNELS] = Default::default();
         let mut played = [0; SE_CHANNELS];
@@ -1260,7 +1258,7 @@ impl AudioHost {
                 .ok_or("SE name lacks its terminator")?;
             let name = raw[..end].to_vec();
             if !name.is_empty() && (word(40) != 256 || word(44) != 0) {
-                return Err("saved SE pitch or pan settings are not modeled".into());
+                return Err("saved SE pitch or pan settings are not modeled");
             }
             played[i] = word(40);
             if raw.iter().any(|&b| b != 0) {
@@ -1273,8 +1271,32 @@ impl AudioHost {
             }
         }
         if bgm.iter().any(|name| name.len() >= 32) {
-            return Err("saved BGM name exceeds the device limit".into());
+            return Err("saved BGM name exceeds the device limit");
         }
+        Ok(Self {
+            bgm,
+            channels,
+            played,
+        })
+    }
+}
+
+impl AudioHost {
+    /// Loader 0x140081960 then reader 0x140069fd0: stop BGM (0x14008a0a0) and every device
+    /// sound (0x1400879e0 / 0x140089060), clear the channel records, then restart a saved
+    /// BGM without fade and with looping (0x14008a240), and replay each named SE channel
+    /// (0x140088390 on channel + 9, starting at once only when looped and flagged). SE_USE
+    /// is not consulted by the loader.
+    pub(crate) fn restore(
+        &mut self,
+        saved: SavedAudio<'_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let SavedAudio {
+            bgm,
+            channels,
+            played,
+        } = saved;
         let enabled = self.settings.bgm_enabled;
         if enabled {
             backend.stop_bgm()?;

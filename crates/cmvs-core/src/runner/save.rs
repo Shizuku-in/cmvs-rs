@@ -3,6 +3,7 @@
 //! 0x140069fd0), thumbnails 0x22b8 (0x14006b4a0) and the slot queries 0x22b7 / 0x22bd.
 use super::{Startup, SystemOutput};
 use crate::{
+    audio::SavedAudio,
     dispatch::RuntimeCall,
     evaluate::error,
     message::{MESSAGE_WINDOWS, TEXT_OBJECTS},
@@ -542,10 +543,11 @@ impl Startup<'_> {
         let save = Csv2Save::decode(&bytes)?;
         let snapshot = EngineSnapshot::decode_with_layout(&save.snapshot, layout)?;
         self.validate_build_snapshot(&snapshot)?;
+        let audio = SavedAudio::decode(&snapshot.bgm, &snapshot.sound_channels)?;
         if slot < 950 && matches!(self.save_image, SaveImage::Captured(_)) {
             self.write_slot(LOAD_BACKUP_SLOT, true)?;
         }
-        self.restore_snapshot(&save, &bytes[..HEADER_SIZE], &snapshot, backend)
+        self.restore_snapshot(&save, &bytes[..HEADER_SIZE], &snapshot, audio, backend)
     }
 
     /// Loader 0x140081960 and reader 0x140069fd0 over the Rust hosts. Everything fallible
@@ -556,6 +558,7 @@ impl Startup<'_> {
         save: &Csv2Save,
         header: &[u8],
         snapshot: &EngineSnapshot,
+        audio: SavedAudio<'_>,
         backend: &mut impl PlatformBackend,
     ) -> Result<(), Box<dyn Error>> {
         if snapshot.word_11144 != 1 {
@@ -729,11 +732,7 @@ impl Startup<'_> {
             snapshot: save.snapshot.clone(),
             script_image: save.script_image.clone(),
         }));
-        self.audio.restore(
-            &snapshot.bgm,
-            &snapshot.sound_channels,
-            self.audio_backend.as_mut(),
-        )?;
+        self.audio.restore(audio, self.audio_backend.as_mut())?;
         self.platform
             .restore_scene_title(snapshot.scene_title.clone(), backend)?;
         if let Some(callback) = self

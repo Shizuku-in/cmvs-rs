@@ -2053,6 +2053,26 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
     assert!(!directory.join("save998.dat").exists());
     assert!(!directory.join("save999.dat").exists());
 
+    // A malformed audio record must be rejected before switching to the saved VM and scene.
+    let header: &[u8; 600] = first[..600].try_into().unwrap();
+    let mut bad_audio = snapshot.clone();
+    bad_audio.sound_channels[..32].fill(b'x');
+    let bytes = Csv2Save::encode(
+        header,
+        &bad_audio.encode().unwrap(),
+        &save.auxiliary,
+        &save.script_image,
+    )
+    .unwrap();
+    fs::write(directory.join("save005.dat"), bytes).unwrap();
+    let error = run.load_slot(5, &mut backend).unwrap_err();
+    assert_eq!(error.to_string(), "SE name lacks its terminator");
+    assert_eq!(run.machine().pc(), end);
+    assert_eq!(run.machine().state().integer(5), Some(7));
+    let live = run.scene().object(20).unwrap().image.as_ref().unwrap();
+    assert_eq!(&live.pixels.pixels()[..4], &[0x11, 0x22, 0x33, 255]);
+    assert!(!directory.join("save998.dat").exists());
+
     // Loading slot 3 first keeps the held image as slot 998, then resumes after 0x22b2
     // with the captured locals, bit 0 included.
     run.load_slot(3, &mut backend).unwrap();
@@ -2116,7 +2136,6 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
             .raw_objects
             .insert((0x6a0, index), target.clone());
     }
-    let header: &[u8; 600] = first[..600].try_into().unwrap();
     let changed = Csv2Save::encode(
         header,
         &with_targets.encode().unwrap(),
