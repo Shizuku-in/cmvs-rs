@@ -498,7 +498,7 @@ fn user_configuration_round_trips_live_settings_and_preserves_the_game_file() {
     }
     code.extend(0x2000u16.to_le_bytes());
     let root = Root::new("preferences", &code, b"");
-    let original = b"[SOUND_INFO]\nINACTIVE_SOUND_PLAY=0\n[MESSAGE_INFO]\nTEXT_WAIT=2\nTEXT_BOLD=0\n[FUTURE]\nUNKNOWN=\x82\xa0\n";
+    let original = b"[SOUND_INFO]\nINACTIVE_SOUND_PLAY=0\n[MESSAGE_INFO]\nTEXT_WAIT=2\nTEXT_BOLD=0\nTEXT_REVISION_ALPHA=1\n[FUTURE]\nUNKNOWN=\x82\xa0\n";
     fs::write(root.0.join("cmvs.cfg"), original).unwrap();
     let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("target")
@@ -517,6 +517,7 @@ fn user_configuration_round_trips_live_settings_and_preserves_the_game_file() {
     }
     assert!(yielded);
     let settings = run.settings().clone();
+    assert!(settings.text_output().revision_alpha);
     let audio = run.audio().settings();
     let duck = run.audio().voice_ducking();
     let flags = run.message_flags();

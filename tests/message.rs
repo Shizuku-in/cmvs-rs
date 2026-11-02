@@ -64,6 +64,7 @@ fn created_text(position: [i32; 2], size: [u32; 2]) -> TextObject {
         font_face: Vec::new(),
         face: cmvs_rs::settings::DEFAULT_FONT_FACE.into(),
         bold: false,
+        revision_alpha: false,
         scale_bits: 1.0f32.to_bits(),
         logical_size: [1280, 720],
         position,
@@ -2102,6 +2103,7 @@ fn configured_text_reveal_modes_durations_and_outline_only_affect_new_glyphs() {
             messages.set_record_output(true);
             messages.set_text_settings(TextOutputSettings {
                 bold: false,
+                revision_alpha: false,
                 speed: 3,
                 outline: 2,
                 reveal_mode: mode,
@@ -2119,6 +2121,7 @@ fn configured_text_reveal_modes_durations_and_outline_only_affect_new_glyphs() {
             // Changing the current settings must not re-time existing glyphs.
             messages.set_text_settings(TextOutputSettings {
                 bold: false,
+                revision_alpha: false,
                 speed: 10,
                 outline: 0,
                 reveal_mode: 0,
@@ -2174,6 +2177,7 @@ fn bold_updates_default_text_fonts_but_preserves_uploaded_glyphs_and_named_fonts
     for bold in [false, true] {
         messages.set_text_settings(TextOutputSettings {
             bold,
+            revision_alpha: bold,
             speed: 0,
             ..Default::default()
         });
@@ -2187,6 +2191,10 @@ fn bold_updates_default_text_fonts_but_preserves_uploaded_glyphs_and_named_fonts
         glyphs.iter().map(|g| g.bold).collect::<Vec<_>>(),
         [false, true]
     );
+    assert_eq!(
+        glyphs.iter().map(|g| g.revision_alpha).collect::<Vec<_>>(),
+        [false, true]
+    );
     // Set a named face via the bank; it retains its weight through global changes.
     vm.state_mut()
         .set_string(0, cmvs_rs::settings::DEFAULT_FONT_FACE)
@@ -2194,6 +2202,7 @@ fn bold_updates_default_text_fonts_but_preserves_uploaded_glyphs_and_named_fonts
     run(&mut vm, &mut messages, 1);
     messages.set_text_settings(TextOutputSettings {
         bold: false,
+        revision_alpha: false,
         speed: 0,
         ..Default::default()
     });
@@ -2203,6 +2212,7 @@ fn bold_updates_default_text_fonts_but_preserves_uploaded_glyphs_and_named_fonts
         .try_record_poll(&mut vm, wait_flags(false, false))
         .unwrap();
     assert!(messages.text(7).unwrap().glyphs[2].bold);
+    assert!(!messages.text(7).unwrap().glyphs[2].revision_alpha);
 }
 
 #[test]

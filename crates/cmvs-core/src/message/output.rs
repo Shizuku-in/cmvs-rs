@@ -24,6 +24,8 @@ pub struct RecordedGlyph {
     /// The text object's font face when the glyph was rasterized (game encoding).
     pub face: std::sync::Arc<[u8]>,
     pub bold: bool,
+    /// Alpha curve selected when the glyph was rasterized.
+    pub revision_alpha: bool,
     pub code: u16,
     pub position: [i32; 2],
     pub size: u32,
@@ -325,6 +327,7 @@ pub(super) fn push(
         snapshot_indices: None,
         face: text.face.clone(),
         bold: text.bold,
+        revision_alpha: text.revision_alpha,
         code,
         position: [x as i32, y as i32],
         size,

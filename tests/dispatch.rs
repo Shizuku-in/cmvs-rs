@@ -27,7 +27,9 @@ fn migrated_tables_have_unique_owners_and_overrides_are_build_bound() {
         }));
     }
     let derived = registry.profile("cmvs-20171114").unwrap();
-    for entry in dispatch::FONT_CELLS {
+    // The face setter has only been inspected for REALIVE.
+    assert_eq!(derived.semantics(0x388), cmvs_rs::profile::Semantics::Root);
+    for entry in dispatch::FONT_CELLS.iter().filter(|e| e.command != 0x388) {
         assert_eq!(
             derived.semantics(entry.command),
             cmvs_rs::profile::Semantics::Variant(cmvs_rs::profile::VariantId::FontCells)

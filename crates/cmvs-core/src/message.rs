@@ -123,6 +123,7 @@ pub struct TextObject {
     pub face: Arc<[u8]>,
     /// +108: weight of the persistent font object, captured by each new glyph.
     pub bold: bool,
+    pub revision_alpha: bool,
     /// Uniform scale of the text's scene object, kept as f32 bits (0x20ec).
     pub scale_bits: u32,
     /// Configuration words 4/5 (+552/+556): the script-space size that 0x14005aac0 divides
@@ -258,6 +259,15 @@ impl MessageHost {
                     text.bold = settings.bold;
                     self.font_bold[index] = settings.bold;
                 }
+            }
+        }
+        // Cache invalidation affects future glyphs in every font, including named faces.
+        if self.output_settings.revision_alpha != settings.revision_alpha {
+            for text in self.texts.iter_mut().flatten() {
+                text.revision_alpha = settings.revision_alpha;
+            }
+            for group in self.auxiliary_texts.iter_mut().flatten() {
+                group.revision_alpha = settings.revision_alpha;
             }
         }
         self.output_settings = settings;
@@ -767,6 +777,7 @@ impl MessageHost {
         let face = self.default_face();
         let mut candidate = candidate;
         candidate.face = self.auxiliary_font_faces[slot].get_or_insert(face).clone();
+        candidate.revision_alpha = self.output_settings.revision_alpha;
         // The native overwrite leaks its old object; Rust drops owned state.
         self.auxiliary_texts[slot] = Some(candidate);
         Ok(())
@@ -1046,6 +1057,7 @@ impl MessageHost {
             font_face: Vec::new(),
             face,
             bold: self.font_bold[index],
+            revision_alpha: self.output_settings.revision_alpha,
             scale_bits: 1.0f32.to_bits(),
             logical_size: self.screen_size().map(|v| v as i32),
             position: [0, 0],
@@ -2074,6 +2086,7 @@ impl MessageHost {
             font_face: Vec::new(),
             face,
             bold: self.font_bold[text],
+            revision_alpha: self.output_settings.revision_alpha,
             scale_bits: 1.0f32.to_bits(),
             logical_size,
             position,
@@ -2192,11 +2205,13 @@ impl MessageHost {
                 };
                 text.face = self.font_faces[index].get_or_insert(face).clone();
                 self.font_bold[index] = text.bold;
+                text.revision_alpha = self.output_settings.revision_alpha;
                 // 0x14005c8f0 redraws every descriptor with the restored text font;
                 // reveal state and the old rasterized face are not serialized.
                 for glyph in &mut text.glyphs {
                     glyph.face = text.face.clone();
                     glyph.bold = text.bold;
+                    glyph.revision_alpha = text.revision_alpha;
                 }
             }
         }

@@ -66,6 +66,7 @@ impl Startup<'_> {
         for (key, value) in [
             ("TEXT_GANG", text.outline),
             ("TEXT_BOLD", u32::from(text.bold)),
+            ("TEXT_REVISION_ALPHA", u32::from(text.revision_alpha)),
             ("TEXT_WAIT", text.speed),
             ("EFFECT_TYPE", text.reveal_mode),
             ("EFFECT_TIMER", text.reveal_duration),

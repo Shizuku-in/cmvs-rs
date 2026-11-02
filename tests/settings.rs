@@ -150,6 +150,7 @@ fn text_settings_round_trip_clamps_preserve_results_and_keep_outline_signed_rema
         host.text_output(),
         cmvs_rs::settings::TextOutputSettings {
             bold: false,
+            revision_alpha: false,
             speed: 7,
             outline: 2,
             reveal_mode: 0,
@@ -824,4 +825,88 @@ fn substring_counts_complete_pairs_and_does_not_clear_an_empty_copy() {
         assert_eq!(vm.state().system_integer(0), Some(characters));
         assert_eq!(vm.stack().len_bytes(), 0);
     }
+}
+
+#[test]
+fn realive_alpha_revision_round_trips_and_preserves_pending_errors() {
+    use cmvs_rs::{
+        dispatch::{self, Flow, Hosts},
+        profile::Registry,
+    };
+    let profile = Registry::builtin().profile("cmvs-20190305").unwrap();
+    let semantics = profile.semantics(0x2f9);
+    assert!(
+        SettingsHost::from_ini(b"[MESSAGE_INFO]\nTEXT_REVISION_ALPHA=-1\n")
+            .text_output()
+            .revision_alpha
+    );
+    let mut code = vec![];
+    for raw in [u32::MAX, 0, 2] {
+        command(&mut code, 0x22f9, &[1, raw]);
+        command(&mut code, 0x22f9, &[0, 0]);
+    }
+    command(&mut code, 0x22f9, &[1]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut settings = SettingsHost::default();
+    for expected in [1, 0, 1] {
+        vm.state_mut().set_system_integer(0, 77).unwrap();
+        pending(&mut vm);
+        let before = (vm.pc(), vm.stack().len_bytes(), vm.pending_system());
+        assert_eq!(
+            dispatch::run(semantics, &mut vm, &mut Hosts::default()).unwrap(),
+            Some(Flow::Unavailable)
+        );
+        assert_eq!(
+            (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
+            before
+        );
+        for result in [77, expected] {
+            assert_eq!(
+                dispatch::run(
+                    semantics,
+                    &mut vm,
+                    &mut Hosts {
+                        settings: Some(&mut settings),
+                        ..Default::default()
+                    }
+                )
+                .unwrap(),
+                Some(Flow::Done)
+            );
+            assert_eq!(vm.state().system_integer(0), Some(result));
+            assert_eq!(vm.stack().len_bytes(), 0);
+            if result == 77 {
+                pending(&mut vm);
+            }
+        }
+        assert_eq!(u32::from(settings.text_output().revision_alpha), expected);
+    }
+    pending(&mut vm);
+    let before = (
+        vm.pc(),
+        vm.stack().len_bytes(),
+        vm.pending_system(),
+        settings.clone(),
+    );
+    assert!(
+        dispatch::run(
+            semantics,
+            &mut vm,
+            &mut Hosts {
+                settings: Some(&mut settings),
+                ..Default::default()
+            }
+        )
+        .is_err()
+    );
+    assert_eq!(
+        (
+            vm.pc(),
+            vm.stack().len_bytes(),
+            vm.pending_system(),
+            settings
+        ),
+        before
+    );
 }

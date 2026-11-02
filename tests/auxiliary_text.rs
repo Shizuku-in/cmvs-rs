@@ -106,9 +106,15 @@ fn auxiliary_font_change_preserves_existing_glyphs_and_survives_group_recreation
     assert_eq!(group.object, before.object);
     assert_eq!(vm.state().system_integer(0), Some(99));
     assert_eq!(vm.stack().len_bytes(), 0);
+    messages.set_text_settings(cmvs_rs::settings::TextOutputSettings {
+        revision_alpha: true,
+        ..Default::default()
+    });
     assert_eq!(select(&mut vm, &mut messages).unwrap(), Some(Flow::Done));
     let group = messages.auxiliary_text(7).unwrap();
     assert_eq!(&*group.glyphs[0].face, b"FirstFace");
+    assert!(!group.glyphs[0].revision_alpha);
+    assert!(group.glyphs[1].revision_alpha);
     assert_eq!(&*group.glyphs[1].face, b"NewFace");
     run(&mut vm, &mut messages);
     run(&mut vm, &mut messages);

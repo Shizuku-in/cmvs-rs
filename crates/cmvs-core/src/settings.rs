@@ -20,6 +20,7 @@ pub struct SettingsHost {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TextOutputSettings {
     pub bold: bool,
+    pub revision_alpha: bool,
     pub speed: u32,
     pub outline: u32,
     pub reveal_mode: u32,
@@ -29,6 +30,7 @@ impl Default for TextOutputSettings {
     fn default() -> Self {
         Self {
             bold: false,
+            revision_alpha: false,
             speed: 4,
             outline: 1,
             reveal_mode: 1,
@@ -141,6 +143,7 @@ impl SettingsHost {
             read_skip: int("READ_SKIP", 1) != 0,
             text: TextOutputSettings {
                 bold: int("TEXT_BOLD", 0) != 0,
+                revision_alpha: int("TEXT_REVISION_ALPHA", 0) != 0,
                 speed: int("TEXT_WAIT", 2),
                 outline: int("TEXT_GANG", 0),
                 reveal_mode: int("EFFECT_TYPE", 1),
@@ -183,7 +186,7 @@ impl SettingsHost {
     /// Read writes the global font name to the destination and result 0 = 1. A write only
     /// changes the global face used by font objects created afterwards.
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x2d5 | 0x2de..=0x2e4 | 0x2e6..=0x2e9 | 0x2f8))) =
+        let Some((pc, command @ (0x2d5 | 0x2de..=0x2e4 | 0x2e6..=0x2e9 | 0x2f8 | 0x2f9))) =
             vm.pending_system()
         else {
             return Ok(false);
@@ -215,7 +218,7 @@ impl SettingsHost {
             }
             return Ok(());
         }
-        if matches!(command, 0x2d5 | 0x2e0 | 0x2e4) {
+        if matches!(command, 0x2d5 | 0x2e0 | 0x2e4 | 0x2f9) {
             let mode = call.argument(4, "mode")?;
             let value = if mode != 0 {
                 Some(call.argument(8, "value")? != 0)
@@ -228,6 +231,8 @@ impl SettingsHost {
                 &mut self.active_draw
             } else if command == 0x2e0 {
                 &mut self.text.bold
+            } else if command == 0x2f9 {
+                &mut self.text.revision_alpha
             } else {
                 &mut self.read_skip
             };

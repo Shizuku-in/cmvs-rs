@@ -97,6 +97,7 @@ pub(crate) fn decode_with_layout(
             }
             .into(),
             bold: aw(108) != 0,
+            revision_alpha: false,
             code: (w[1] >> 16) as u16,
             position: [w[4] as i32, w[5] as i32],
             size: w[6],
@@ -125,6 +126,7 @@ pub(crate) fn decode_with_layout(
         font_face,
         face,
         bold: aw(108) != 0,
+        revision_alpha: false,
         scale_bits: 1.0f32.to_bits(),
         logical_size,
         position: [aw(8) as i32, aw(12) as i32],
@@ -328,6 +330,24 @@ mod tests {
         let last = bytes.len() - 44;
         bytes[last + 4] = 41;
         assert!(decode(&bytes).is_err());
+        // Native descriptors omit the global alpha curve; load redraws with current settings.
+        let mut revised = text.clone();
+        revised.glyphs[0].revision_alpha = true;
+        let decoded = decode(&encode(&revised).unwrap()).unwrap();
+        assert!(!decoded.glyphs[0].revision_alpha);
+        for enabled in [true, false] {
+            let mut host = crate::message::MessageHost::default();
+            host.set_text_settings(crate::settings::TextOutputSettings {
+                revision_alpha: enabled,
+                ..Default::default()
+            });
+            let mut texts = std::array::from_fn(|_| None);
+            texts[0] = Some(decoded.clone());
+            host.restore(texts, std::array::from_fn(|_| None));
+            let loaded = host.text(0).unwrap();
+            assert_eq!(loaded.revision_alpha, enabled);
+            assert_eq!(loaded.glyphs[0].revision_alpha, enabled);
+        }
         let mut named = text;
         named.font_face = b"Face A".to_vec();
         assert_eq!(

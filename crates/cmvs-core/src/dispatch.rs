@@ -4785,6 +4785,13 @@ fn collision_mesh(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow
     Ok(Flow::Done)
 }
 
+pub static TEXT_ALPHA: &[Entry] = &[Entry {
+    command: 0x2f9,
+    name: "text alpha revision",
+    capability: Capability::Settings,
+    handler: root_settings,
+}];
+
 pub static BACKGROUND_AUDIO: &[Entry] = &[Entry {
     command: 0x2ed,
     name: "background audio output",
@@ -4805,6 +4812,7 @@ pub static VARIANT_TABLES: &[&[Entry]] = &[
     FONT_CELLS,
     PARTICLES,
     BACKGROUND_AUDIO,
+    TEXT_ALPHA,
     FALLING_BILLBOARDS,
     COLLISION_PARTICLES,
     FRAGMENTS,
@@ -4816,6 +4824,7 @@ pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'st
         crate::profile::VariantId::DisplayCount => DISPLAY_COUNT,
         crate::profile::VariantId::FullscreenMonitor => FULLSCREEN_MONITOR,
         crate::profile::VariantId::KeyedArchives => KEYED_ARCHIVES,
+        crate::profile::VariantId::TextAlpha => TEXT_ALPHA,
         crate::profile::VariantId::FontCells => FONT_CELLS,
         crate::profile::VariantId::Particles => PARTICLES,
         crate::profile::VariantId::BackgroundAudio => BACKGROUND_AUDIO,
@@ -4834,6 +4843,7 @@ pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
             "variant fullscreen monitor"
         }
         Semantics::Variant(crate::profile::VariantId::KeyedArchives) => "variant keyed archives",
+        Semantics::Variant(crate::profile::VariantId::TextAlpha) => "variant text alpha revision",
         Semantics::Variant(crate::profile::VariantId::FontCells) => "variant text override",
         Semantics::Variant(crate::profile::VariantId::Particles) => "variant particle override",
         Semantics::Variant(crate::profile::VariantId::BackgroundAudio) => {

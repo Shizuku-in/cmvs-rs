@@ -172,6 +172,7 @@ impl AuxiliaryGlyphAtlas {
 pub struct AuxiliaryGlyph {
     /// The group's +4392 font face (game encoding) when the glyph was laid out.
     pub face: std::sync::Arc<[u8]>,
+    pub revision_alpha: bool,
     /// Descriptor word 0 high half: Shift-JIS pair, lead byte high.
     pub code: u16,
     /// Descriptor words 3/4: truncated pen position relative to the group position.
@@ -196,6 +197,7 @@ pub struct AuxiliaryGlyph {
 pub struct AuxiliaryText {
     /// Current face of the slot's persistent font object; existing glyphs own their face.
     pub face: std::sync::Arc<[u8]>,
+    pub revision_alpha: bool,
     pub(super) words: BTreeMap<u16, u32>,
     /// +184: glyph records in layout order.
     pub glyphs: Vec<AuxiliaryGlyph>,
@@ -442,6 +444,7 @@ impl AuxiliaryText {
         draw.set(DrawSetter::Layer(1));
         Ok(Self {
             face: std::sync::Arc::from(crate::settings::DEFAULT_FONT_FACE),
+            revision_alpha: false,
             words,
             glyphs: Vec::new(),
             attached: Vec::new(),
