@@ -1180,7 +1180,12 @@ fn root_font_dialog(
         .device_frame
         .as_deref_mut()
         .expect("font backend checked")
-        .choose_font(settings.font_face())?;
+        .poll_font_dialog(settings.font_face())?;
+    let chosen = match chosen {
+        crate::platform::FontDialogResult::Pending => return Ok(Flow::Wait),
+        crate::platform::FontDialogResult::Cancelled => None,
+        crate::platform::FontDialogResult::Selected(face) => Some(face),
+    };
     let mut next = settings.clone();
     if let Some(face) = &chosen {
         next.set_font_face(face).map_err(|why| call.error(why))?;

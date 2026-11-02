@@ -95,6 +95,12 @@ pub enum PlatformRequest {
         bytes: Arc<Vec<u8>>,
     },
 }
+pub enum FontDialogResult {
+    Pending,
+    Cancelled,
+    Selected(Vec<u8>),
+}
+
 pub trait PlatformBackend {
     /// Read the latest completed engine frame in device/script pixels, including
     /// fonts and movies. Do not redraw current VM state or reuse a held 0x2304 capture.
@@ -149,6 +155,14 @@ pub trait PlatformBackend {
     /// Ok(None) is a cancelled dialog; Ok(Some) the chosen face in the game encoding.
     fn choose_font(&mut self, _current: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
         Err("platform backend does not implement the font dialog".into())
+    }
+    /// Mobile dialogs complete asynchronously while the host processes lifecycle
+    /// events. Synchronous desktop dialogs keep the existing choose_font path.
+    fn poll_font_dialog(&mut self, current: &[u8]) -> Result<FontDialogResult, Box<dyn Error>> {
+        Ok(match self.choose_font(current)? {
+            Some(face) => FontDialogResult::Selected(face),
+            None => FontDialogResult::Cancelled,
+        })
     }
     /// 0=unscaled when it fits, 1=contain, 2=cover, 3=stretch (0x14001a360).
     fn aspect_mode(&self) -> Result<u32, Box<dyn Error>> {

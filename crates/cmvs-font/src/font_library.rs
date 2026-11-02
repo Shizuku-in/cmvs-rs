@@ -128,11 +128,54 @@ impl FontLibrary {
     }
     /// The font for a face in the game encoding (Shift-JIS).
     pub fn face(&mut self, face: &[u8]) -> Result<Arc<FontVec>, FormatError> {
-        if face == DEFAULT_FONT_FACE {
-            return Ok(self.default.clone());
-        }
         if let Some(font) = self.loaded.get(face) {
             return Ok(font.clone());
+        }
+        if face.starts_with(b"CMVS-F-") {
+            if face.len() != 31 || !face[7..].iter().all(u8::is_ascii_hexdigit) {
+                return Err(FormatError("invalid imported font handle"));
+            }
+            let directory = self
+                .unicode_directory
+                .as_ref()
+                .ok_or(FormatError("font directory unavailable"))?;
+            let mut bytes = Vec::new();
+            File::open(directory.join(std::str::from_utf8(face).expect("ASCII handle")))
+                .and_then(|file| file.take((MAX_FONT + 5) as u64).read_to_end(&mut bytes))
+                .map_err(|_| FormatError("cannot read imported font"))?;
+            if bytes.len() < 4 || bytes.len() > MAX_FONT + 4 || imported_key(&bytes) != face {
+                return Err(FormatError("invalid imported font data"));
+            }
+            let index = u32::from_le_bytes(bytes[..4].try_into().expect("four bytes"));
+            let font = Arc::new(
+                FontVec::try_from_vec_and_index(bytes[4..].to_vec(), index)
+                    .map_err(|_| FormatError("invalid imported font face"))?,
+            );
+            self.loaded.insert(face.to_vec(), font.clone());
+            return Ok(font);
+        }
+        if let Some(directory) = &self.unicode_directory {
+            let mapping = directory.join(named_key(face));
+            match File::open(mapping) {
+                Ok(file) => {
+                    let mut reference = Vec::new();
+                    file.take(32)
+                        .read_to_end(&mut reference)
+                        .map_err(|_| FormatError("cannot read imported font name"))?;
+                    if reference.len() != 31 || !reference.starts_with(b"CMVS-F-") {
+                        return Err(FormatError("invalid imported font reference"));
+                    }
+                    let font = self.face(&reference)?;
+                    self.loaded.insert(face.to_vec(), font.clone());
+                    return Ok(font);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(FormatError("cannot read imported font name")),
+            }
+        }
+        if face == DEFAULT_FONT_FACE {
+            self.loaded.insert(face.to_vec(), self.default.clone());
+            return Ok(self.default.clone());
         }
         let (path, index) = self.locate(face)?.ok_or(FormatError(
             "font face not found in the system font directories",
@@ -150,6 +193,63 @@ impl FontLibrary {
         );
         self.loaded.insert(face.to_vec(), font.clone());
         Ok(font)
+    }
+    /// Keep an immutable font copy so game saves can resolve the same face later.
+    pub fn import_file(&mut self, bytes: Vec<u8>, index: u32) -> Result<Vec<u8>, FormatError> {
+        if bytes.len() > MAX_FONT {
+            return Err(FormatError("font exceeds 32 MiB research limit"));
+        }
+        let font = Arc::new(
+            FontVec::try_from_vec_and_index(bytes.clone(), index)
+                .map_err(|_| FormatError("invalid OpenType font or collection face index"))?,
+        );
+        let stored: Vec<_> = index.to_le_bytes().into_iter().chain(bytes).collect();
+        let key = imported_key(&stored);
+        let directory = self
+            .unicode_directory
+            .as_ref()
+            .ok_or(FormatError("font directory unavailable"))?;
+        std::fs::create_dir_all(directory)
+            .map_err(|_| FormatError("cannot create font directory"))?;
+        let path = directory.join(std::str::from_utf8(&key).expect("ASCII handle"));
+        if path.exists() {
+            let mut existing = Vec::new();
+            File::open(&path)
+                .and_then(|file| file.take((MAX_FONT + 5) as u64).read_to_end(&mut existing))
+                .map_err(|_| FormatError("cannot check imported font"))?;
+            if existing != stored {
+                return Err(FormatError("stored font handle conflict"));
+            }
+        } else {
+            use std::io::Write;
+            let temporary = path.with_extension("tmp");
+            let mut file =
+                File::create(&temporary).map_err(|_| FormatError("cannot create imported font"))?;
+            file.write_all(&stored)
+                .and_then(|()| file.sync_all())
+                .map_err(|_| FormatError("cannot write imported font"))?;
+            drop(file);
+            std::fs::rename(temporary, path)
+                .map_err(|_| FormatError("cannot publish imported font"))?;
+        }
+        self.loaded.insert(key.clone(), font);
+        Ok(key)
+    }
+    /// Use the real family name in the game's font field when its encoding permits.
+    pub fn name_imported_font(&mut self, name: &[u8], key: &[u8]) -> Result<(), FormatError> {
+        let font = self.face(key)?;
+        let directory = self
+            .unicode_directory
+            .as_ref()
+            .ok_or(FormatError("font directory unavailable"))?;
+        let path = directory.join(named_key(name));
+        let temporary = path.with_extension("tmp");
+        std::fs::write(&temporary, key)
+            .map_err(|_| FormatError("cannot save imported font name"))?;
+        std::fs::rename(temporary, path)
+            .map_err(|_| FormatError("cannot publish imported font name"))?;
+        self.loaded.insert(name.to_vec(), font);
+        Ok(())
     }
     /// Startup existence check (0x140007f80): whether a face can be resolved.
     pub fn contains(&mut self, face: &[u8]) -> bool {
@@ -175,6 +275,21 @@ impl FontLibrary {
         };
         Ok(index.get(&key).cloned())
     }
+}
+
+fn imported_key(bytes: &[u8]) -> Vec<u8> {
+    format!(
+        "CMVS-F-{}",
+        &cmvs_core::digest::to_hex(&cmvs_core::digest::sha256(bytes))[..24]
+    )
+    .into_bytes()
+}
+
+fn named_key(face: &[u8]) -> String {
+    format!(
+        "file-{}",
+        &cmvs_core::digest::to_hex(&cmvs_core::digest::sha256(face))[..24]
+    )
 }
 
 /// First file wins for a name, scanning directories in order and files sorted by path.

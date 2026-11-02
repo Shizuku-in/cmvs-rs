@@ -1,5 +1,6 @@
 //! Native event adapter for the verified CMVS input-code table. No Windows APIs in core.
 use cmvs_core::input::{ActionInput, CodeInput, KeyBindings};
+pub use cmvs_input::Viewport;
 use std::collections::BTreeSet;
 use winit::{
     event::MouseButton,
@@ -146,26 +147,6 @@ impl GameInput {
         let point = Viewport::with_mode(size, self.aspect_mode.unwrap_or(1))?.to_window(script);
         self.pointer = Some(point);
         Some(point)
-    }
-}
-
-/// Shared fixed-point display geometry for the 1280x720 logical scene.
-#[derive(Debug, Clone, Copy)]
-pub struct Viewport(cmvs_core::viewport::Viewport);
-impl Viewport {
-    pub fn new(size: [u32; 2]) -> Option<Self> {
-        Self::with_mode(size, 1)
-    }
-    pub fn with_mode(size: [u32; 2], mode: u32) -> Option<Self> {
-        cmvs_core::viewport::Viewport::new([1280, 720], size, mode)
-            .ok()
-            .map(Self)
-    }
-    pub fn to_script(self, point: [f64; 2]) -> Option<[i32; 2]> {
-        self.0.to_source(point)
-    }
-    pub fn to_window(self, point: [i32; 2]) -> [f64; 2] {
-        self.0.to_target(point)
     }
 }
 

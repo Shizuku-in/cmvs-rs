@@ -271,6 +271,41 @@ impl FontRenderer {
         library.face(&face)?;
         Ok(face)
     }
+    pub fn import_font(&self, path: &Path, index: u32) -> Result<Vec<u8>, Box<dyn Error>> {
+        let mut bytes = Vec::new();
+        File::open(path)?
+            .take(MAX_FONT as u64 + 1)
+            .read_to_end(&mut bytes)?;
+        let name = crate::font_library::family_names(path)?
+            .into_iter()
+            .find(|(face, _)| *face == index)
+            .and_then(|(_, names)| {
+                names.into_iter().find_map(|name| {
+                    if name.chars().any(char::is_control) {
+                        return None;
+                    }
+                    let (encoded, _, unmappable) = encoding_rs::SHIFT_JIS.encode(&name);
+                    (!unmappable
+                        && !encoded.is_empty()
+                        && encoded.len() <= 31
+                        && !encoded.contains(&0)
+                        && !encoded.starts_with(b"CMVS-F-")
+                        && !encoded.starts_with(b"CMVS-U-"))
+                    .then(|| encoded.into_owned())
+                })
+            });
+        let mut library = self
+            .library
+            .lock()
+            .map_err(|_| FormatError("font library lock poisoned"))?;
+        let key = library.import_file(bytes, index)?;
+        if let Some(name) = name {
+            library.name_imported_font(&name, &key)?;
+            Ok(name)
+        } else {
+            Ok(key)
+        }
+    }
     fn font(&self, face: &[u8], ch: char) -> Result<Arc<FontVec>, FormatError> {
         self.library
             .lock()

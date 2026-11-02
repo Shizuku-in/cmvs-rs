@@ -13,12 +13,13 @@ workspace = true
 [dependencies]
 cmvs-wgpu = { path = "../cmvs-wgpu", optional = true }
 cmvs-core = { path = "../cmvs-core" }
+cmvs-input = { path = "../cmvs-input" }
+cmvs-font = { path = "../cmvs-font" }
 cmvs-audio = { path = "../cmvs-audio", optional = true }
 encoding_rs.workspace = true
 ico.workspace = true
 softbuffer.workspace = true
 winit.workspace = true
-ab_glyph.workspace = true
 cmvs-native = { path = "../cmvs-native" }
 
 [features]

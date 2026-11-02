@@ -1,0 +1,17 @@
+[package]
+name = "cmvs-font"
+license.workspace = true
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Shared CMVS OpenType glyph rendering and font resolution"
+
+[lints]
+workspace = true
+
+[dependencies]
+cmvs-core = { path = "../cmvs-core" }
+cmvs-native = { path = "../cmvs-native" }
+encoding_rs.workspace = true
+ab_glyph.workspace = true

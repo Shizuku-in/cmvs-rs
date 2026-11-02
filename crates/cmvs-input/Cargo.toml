@@ -1,0 +1,14 @@
+[package]
+license.workspace = true
+name = "cmvs-input"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Platform-independent CMVS host touch input and viewport adapter"
+
+[lints]
+workspace = true
+
+[dependencies]
+cmvs-core = { path = "../cmvs-core" }

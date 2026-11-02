@@ -1,0 +1,32 @@
+[package]
+license.workspace = true
+name = "cmvs-android"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Android game launcher and native runtime"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Rust 2024 requires an unsafe attribute for the Android entry symbol.
+# Only that entry point allows it; its body contains no unsafe operations.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
+
+[dependencies]
+cmvs-core = { path = "../../../crates/cmvs-core" }
+cmvs-input = { path = "../../../crates/cmvs-input" }
+cmvs-font = { path = "../../../crates/cmvs-font" }
+encoding_rs.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+cmvs-wgpu = { path = "../../../crates/cmvs-wgpu" }
+cmvs-native = { path = "../../../crates/cmvs-native" }
+android-activity = { version = "=0.6.1", features = ["native-activity"] }
+android_logger = "=0.15.1"
+log = "=0.4.34"
