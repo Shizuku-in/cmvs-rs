@@ -13,7 +13,7 @@ workspace = true
 [dependencies]
 cmvs-wgpu = { path = "../cmvs-wgpu", optional = true }
 cmvs-core = { path = "../cmvs-core" }
-ogg = "=0.8.0"
+ogg = "=0.9.2"
 oxideav-theora = "=0.0.12"
 oxideav-core = "=0.1.41"
 cmvs-input = { path = "../cmvs-input" }

@@ -30,4 +30,4 @@ cmvs-wgpu = { path = "../../../crates/cmvs-wgpu" }
 cmvs-native = { path = "../../../crates/cmvs-native" }
 android-activity = { version = "=0.6.1", features = ["native-activity"] }
 android_logger = "=0.15.1"
-log = "=0.4.34"
+log = "=0.4.35"
