@@ -1,10 +1,7 @@
-//! Movies; addresses refer to the documented binary hash.
+//! Movie sources, shared host and scene-player persistence.
 //!
-//! The full-screen player at engine +4472 (0x38-byte object, constructor 0x1400375e0) is
-//! driven by 0x20c0 (open and play), 0x20c1 (stop) and 0x20c2 (current frame). It opens a
-//! CMV6 file below the 0x2015 video directory, starts the Ogg soundtrack on audio device
-//! channel 2 and advances one frame index per decoded frame. Desktop enables JBPD decoding;
-//! timing-only research remains explicit. The clock still stands in for soundtrack position.
+//! Full-screen CMV and MGV player commands/timing live in `cmv_player` and `mgv_player`.
+//! Scene segment playback lives in `playback`.
 //!
 //! Engine +4480 holds three scene players. 0x2308 creates a stopped CMV6/CMV9 player and
 //! initializes its bound scene object; 0x230a destroys the player, retaining that image.
@@ -13,18 +10,18 @@
 //! playback modes, audio-bearing slots and the other creation
 //! variant remain unhandled.
 use crate::{
-    audio::{AudioBackend, AudioRequest, AudioSettings, MovieAudioClock},
-    bytecode::DecodeError,
-    cmv::CmvIndex,
-    dispatch::Call,
-    evaluate::error,
-    machine::Machine,
-    platform::resolve_under,
+    audio::MovieAudioClock, bytecode::DecodeError, cmv::CmvIndex, dispatch::Call, evaluate::error,
+    machine::Machine, platform::resolve_under,
 };
 use std::{error::Error, fs::File, io, path::Path};
 
 pub const MOVIE_SLOTS: usize = 3;
+mod cmv_player;
+mod mgv_player;
 mod playback;
+
+pub use cmv_player::Movie;
+use mgv_player::MgvMovie;
 pub use playback::{MOVIE_SEGMENTS, MoviePlayback, MovieSegment};
 
 /// The game-relative path the soundtrack request names and the parsed container.
@@ -101,35 +98,6 @@ impl DirectoryMovies<'_> {
             Err(e) => return Err(e.into()),
         };
         Ok(Some((relative, file)))
-    }
-}
-
-/// The +4472 player while a movie runs.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Movie {
-    pub path: Vec<u8>,
-    pub index: CmvIndex,
-    /// +44: the frame index 0x20c2 reports; frame 0 is decoded when opening.
-    pub frame: u32,
-    /// Milliseconds since opening, standing in for the soundtrack position.
-    pub elapsed: u32,
-    pub image: Option<crate::raster::RgbaImage>,
-}
-
-impl Movie {
-    /// 0x140037bb0 maps a soundtrack position in ms to a frame; rates of 100 or more use
-    /// doubles. Decode mode +4 = (+1636 = 0) % 3 skips no frames.
-    fn target(&self) -> u32 {
-        self.target_at(self.elapsed)
-    }
-    fn target_at(&self, elapsed: u32) -> u32 {
-        let (rate, time) = (self.index.header.rate, self.index.header.rate_time);
-        if rate < 100 {
-            elapsed.wrapping_mul(rate) / 1000 / time
-        } else {
-            (f64::from(rate as i32) / 1000.0 / f64::from(time as i32) * f64::from(elapsed as i32))
-                as i32 as u32
-        }
     }
 }
 
@@ -250,16 +218,6 @@ const SCENE_RECORD: usize = 298;
 /// 0x2308 passes load mode 2; the reader reads 3 as 2.
 const SCENE_MODE: u32 = 2;
 
-#[derive(Debug)]
-struct MgvMovie {
-    path: Vec<u8>,
-    index: crate::mgv::MgvIndex,
-    decoder: Box<dyn crate::mgv::Decoder>,
-    frame: u32,
-    elapsed: u32,
-    image: crate::raster::RgbaImage,
-}
-
 #[derive(Debug, Default)]
 pub struct MovieHost {
     /// The constructor (0x140014fc2..0x140014fd0) stores null in all three pointers.
@@ -306,40 +264,7 @@ impl MovieHost {
         source: &mut dyn MovieSource,
     ) -> Result<(), Box<dyn Error>> {
         self.advance_mgv(delta_ms, clock)?;
-        let Some(movie) = &self.player else {
-            return Ok(());
-        };
-        if clock == Some(MovieAudioClock::Ended) {
-            self.player = None;
-            return Ok(());
-        }
-        let elapsed = match clock {
-            Some(MovieAudioClock::Playing { position_ms }) => position_ms.max(movie.elapsed),
-            _ => movie.elapsed.saturating_add(delta_ms),
-        };
-        let target = movie.target_at(elapsed);
-        let image = if target > movie.frame
-            && target < movie.index.header.max_sequence
-            && self.decode_frames
-        {
-            Some(source.frame(&movie.path, &movie.index, target)?)
-        } else {
-            None
-        };
-        if target >= movie.index.header.max_sequence {
-            self.player = None;
-            return Ok(());
-        }
-        let movie = self.player.as_mut().expect("checked active player");
-        movie.elapsed = elapsed;
-        if target > movie.frame {
-            movie.frame = target;
-            movie.image = None;
-        }
-        if let Some(image) = image {
-            movie.image = Some(image);
-        }
-        Ok(())
+        self.advance_cmv_with_clock(delta_ms, clock, source)
     }
     pub fn occupied(&self, slot: usize) -> bool {
         self.slots.get(slot).is_some_and(Option::is_some)
@@ -505,224 +430,6 @@ impl MovieHost {
                 .expect("slot 0 exists");
         }
         Ok(())
-    }
-
-    /// 0x20c0 / 0x140071500: SP-4 name; destroys any player, opens root + 0x2015 entry +
-    /// name, starts the soundtrack at (+1612 * +1628) >> 8 and sets system result 0 to
-    /// whether the file opened; returns 0x4004. 0x20c1 / 0x140071680 destroys the player
-    /// (stopping channel 2) and returns 0x4000. 0x20c2 / 0x1400716d0 sets system result 0
-    /// to the frame index, or -1 without a player, and returns 0x4000.
-    pub fn try_handle_player(
-        &mut self,
-        vm: &mut Machine<'_>,
-        source: &mut dyn MovieSource,
-        settings: AudioSettings,
-        backend: &mut dyn AudioBackend,
-    ) -> Result<bool, Box<dyn Error>> {
-        let Some((pc, command @ 0xc0..=0xc2)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle_player(&mut Call::new(vm, pc, command), source, settings, backend)?;
-        Ok(true)
-    }
-
-    pub(crate) fn handle_player(
-        &mut self,
-        call: &mut Call<'_, '_>,
-        source: &mut dyn MovieSource,
-        settings: AudioSettings,
-        backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
-        let (pc, command) = (call.pc, call.command);
-        let op = command + 0x2000;
-        match command {
-            0xc0 => {
-                let raw = call.argument(4, "movie name")?;
-                let name = call.vm.resolve_string(raw)?;
-                let opened = source.open(&name)?;
-                let image = if self.decode_frames {
-                    opened
-                        .as_ref()
-                        .map(|(path, index)| source.frame(path, index, 0))
-                        .transpose()?
-                } else {
-                    None
-                };
-                if let Some((path, index)) = &opened {
-                    // 0x1400397e0/0x1400397b0 fetch the soundtrack; a CMV without one is the
-                    // MOG_INputMemory crash RxCMVS notes, so it is rejected here.
-                    let audio = index
-                        .audio()
-                        .ok_or_else(|| error(pc, op, "CMV without an Ogg soundtrack"))?;
-                    backend.play_movie_audio(&AudioRequest::PlayMovieAudio {
-                        path: path.clone(),
-                        offset: audio.file_offset(&index.header),
-                        size: audio.stored_size,
-                        volume: settings.master.wrapping_mul(settings.movie) >> 8,
-                    })?;
-                } else {
-                    // The failed player is destroyed at once; its destructor stops channel 2
-                    // (the open stored the device pointer first).
-                    backend.stop_movie_audio()?;
-                }
-                call.complete(0x4004)?;
-                call.vm
-                    .state_mut()
-                    .set_system_integer(0, u32::from(opened.is_some()))
-                    .expect("slot 0 exists");
-                self.player = opened.map(|(path, index)| Movie {
-                    path,
-                    index,
-                    frame: 0,
-                    elapsed: 0,
-                    image,
-                });
-            }
-            0xc1 => {
-                if self.player.is_some() {
-                    backend.stop_movie_audio()?;
-                }
-                call.complete(0x4000)?;
-                self.player = None;
-            }
-            _ => {
-                let frame = self.player.as_ref().map_or(u32::MAX, |movie| movie.frame);
-                call.complete(0x4000)?;
-                call.vm
-                    .state_mut()
-                    .set_system_integer(0, frame)
-                    .expect("slot 0 exists");
-            }
-        }
-        Ok(())
-    }
-
-    pub(crate) fn handle_mgv(
-        &mut self,
-        call: &mut Call<'_, '_>,
-        source: &mut dyn MovieSource,
-        settings: AudioSettings,
-        backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
-        match call.command {
-            0xc4 => {
-                let raw = call.argument(4, "MGV movie name")?;
-                let name = call.vm.resolve_string(raw)?;
-                let opened = source.open_mgv(&name)?;
-                let candidate = if let Some((path, index, reader)) = opened {
-                    let factory = self
-                        .mgv_factory
-                        .as_ref()
-                        .ok_or("MGV decoder backend unavailable")?;
-                    let mut decoder = factory.open(reader, &index)?;
-                    let image = decoder.frame(0)?;
-                    Some(MgvMovie {
-                        path,
-                        index,
-                        decoder,
-                        image,
-                        frame: 0,
-                        elapsed: 0,
-                    })
-                } else {
-                    None
-                };
-                if let Some(movie) = &candidate {
-                    if movie.index.audio_size == 0 {
-                        return Err(
-                            "MGV without an Ogg soundtrack is not supported for playback".into(),
-                        );
-                    }
-                    backend.play_movie_audio(&AudioRequest::PlayMovieAudio {
-                        path: movie.path.clone(),
-                        offset: movie.index.audio_offset,
-                        size: movie.index.audio_size,
-                        volume: settings.master.wrapping_mul(settings.movie) >> 8,
-                    })?;
-                } else {
-                    backend.stop_movie_audio()?;
-                }
-                call.complete(0x4004)?;
-                call.vm
-                    .state_mut()
-                    .set_system_integer(0, u32::from(candidate.is_some()))
-                    .expect("slot 0 exists");
-                self.mgv_player = candidate;
-            }
-            0xc5 => {
-                if self.mgv_player.is_some() {
-                    backend.stop_movie_audio()?;
-                }
-                call.complete(0x4000)?;
-                self.mgv_player = None;
-            }
-            0xc6 => {
-                let frame = self.mgv_player.as_ref().map_or(u32::MAX, |m| m.frame);
-                call.complete(0x4000)?;
-                call.vm
-                    .state_mut()
-                    .set_system_integer(0, frame)
-                    .expect("slot 0 exists");
-            }
-            _ => unreachable!("MGV player dispatch"),
-        }
-        Ok(())
-    }
-    pub(crate) fn advance_mgv(
-        &mut self,
-        delta_ms: u32,
-        clock: Option<MovieAudioClock>,
-    ) -> Result<(), Box<dyn Error>> {
-        let Some(movie) = &mut self.mgv_player else {
-            return Ok(());
-        };
-        if clock == Some(MovieAudioClock::Ended) {
-            self.mgv_player = None;
-            return Ok(());
-        }
-        let elapsed = match clock {
-            Some(MovieAudioClock::Playing { position_ms }) => position_ms.max(movie.elapsed),
-            _ => movie.elapsed.saturating_add(delta_ms),
-        };
-        let frame = if movie.index.rate < 100 {
-            elapsed.wrapping_mul(movie.index.rate) / 1000 / movie.index.rate_time
-        } else {
-            (f64::from(movie.index.rate) / 1000.0 / f64::from(movie.index.rate_time)
-                * f64::from(elapsed)) as u32
-        };
-        if frame as usize >= movie.index.frames.len() {
-            movie.decoder.finish()?;
-            self.mgv_player = None;
-        } else if frame > movie.frame {
-            let image = movie.decoder.frame(frame)?;
-            movie.frame = frame;
-            movie.elapsed = elapsed;
-            movie.image = image;
-        } else {
-            movie.elapsed = elapsed;
-        }
-        Ok(())
-    }
-
-    /// Frame update (main loop 0x14000e4a4 -> 0x140037bb0): a later frame index is decoded
-    /// and becomes current; an index at or past `max_sequence` fails to decode and the main
-    /// loop destroys the player. That happens when the soundtrack has ended, so no stop
-    /// request is needed here.
-    pub fn advance(&mut self, delta_ms: u32) {
-        let Some(movie) = &mut self.player else {
-            return;
-        };
-        movie.elapsed = movie.elapsed.saturating_add(delta_ms);
-        let target = movie.target();
-        if target <= movie.frame {
-            return;
-        }
-        if target >= movie.index.header.max_sequence {
-            self.player = None;
-        } else {
-            movie.frame = target;
-            movie.image = None;
-        }
     }
 }
 
