@@ -161,6 +161,8 @@ pub struct NativeBackend<'a> {
     pub fonts: Option<&'a crate::font::FontRenderer>,
     /// Last completed logical engine canvas; excludes the physical window's borders.
     pub device_frame: Option<&'a dyn DeviceFrame>,
+    #[cfg(windows)]
+    pub masked_cursor: &'a std::cell::RefCell<Option<cmvs_native::MaskedCursor>>,
 }
 impl PlatformBackend for NativeBackend<'_> {
     fn read_device_frame(&mut self) -> Result<cmvs_core::raster::RgbaImage, Box<dyn Error>> {
@@ -304,6 +306,27 @@ impl PlatformBackend for NativeBackend<'_> {
                 println!("# native icon={}x{}", image.width, image.height);
             }
             PlatformRequest::Cursor { id, bitmap } => {
+                #[cfg(windows)]
+                if let Some(bitmap) = bitmap
+                    && bitmap
+                        .xor_rgb()
+                        .iter()
+                        .zip(bitmap.and_mask())
+                        .any(|(rgb, and)| *and && *rgb != [0, 0, 0])
+                {
+                    use winit::raw_window_handle::HasWindowHandle;
+                    let (hx, hy) = bitmap.hotspot();
+                    let cursor = cmvs_native::MaskedCursor::attach(
+                        self.window.window_handle()?.as_raw(),
+                        [bitmap.width(), bitmap.height()],
+                        [hx, hy],
+                        bitmap.xor_rgb(),
+                        bitmap.and_mask(),
+                    )?;
+                    self.masked_cursor.replace(Some(cursor));
+                    println!("# native cursor={id} (AND/XOR)");
+                    return Ok(());
+                }
                 if let Some(bitmap) = bitmap {
                     let rgba = cursor_rgba(bitmap)?;
                     let (hx, hy) = bitmap.hotspot();
@@ -315,8 +338,12 @@ impl PlatformBackend for NativeBackend<'_> {
                         hy,
                     )?;
                     let cursor = self.event_loop.create_custom_cursor(source);
+                    #[cfg(windows)]
+                    self.masked_cursor.replace(None);
                     self.window.set_cursor(cursor);
                 } else {
+                    #[cfg(windows)]
+                    self.masked_cursor.replace(None);
                     self.window.set_cursor(CursorIcon::Default);
                 }
                 println!("# native cursor={id}");

@@ -8,6 +8,8 @@ use std::{fmt, path::PathBuf};
 mod windows;
 #[cfg(windows)]
 use windows as platform;
+#[cfg(windows)]
+pub use windows::cursor::MaskedCursor;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(any(target_os = "macos", test))]

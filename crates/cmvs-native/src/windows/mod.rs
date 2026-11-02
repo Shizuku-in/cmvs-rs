@@ -1,4 +1,5 @@
 //! Win32 implementations.
+pub(crate) mod cursor;
 mod font_dialog;
 use crate::NativeError;
 use raw_window_handle::RawWindowHandle;
