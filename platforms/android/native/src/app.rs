@@ -120,12 +120,7 @@ impl Player<'_> {
             .borrow_mut()
             .prepare_objects(self.startup.messages())?;
         let mut additional: Vec<_> = objects.iter().collect();
-        additional.extend(
-            (0..cmvs_core::message::MESSAGE_WINDOWS)
-                .filter_map(|slot| self.startup.messages().window(slot))
-                .filter(|window| window.visible && !window.hidden)
-                .map(|window| &window.object),
-        );
+        additional.extend(self.startup.messages().visible_window_objects());
         let frame = cmvs_core::scene_render::prepare_scene(
             self.startup.scene(),
             Some(self.startup.camera()),

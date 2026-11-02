@@ -1,7 +1,6 @@
 #![cfg(feature = "wgpu-renderer")]
 use cmvs_core::{
     input::{CodeInput, KeyBindings},
-    message::MESSAGE_WINDOWS,
     platform::RecordingBackend,
     profile::Registry,
     runner::{SnapshotPolicy, Startup, StartupEvent, load_start},
@@ -77,12 +76,7 @@ fn external_fixed_clock_gpu_scene_comparison() -> Result<(), Box<dyn Error>> {
             } else {
                 let objects = font.prepare_objects(run.messages())?;
                 let mut additional: Vec<_> = objects.iter().collect();
-                additional.extend(
-                    (0..MESSAGE_WINDOWS)
-                        .filter_map(|i| run.messages().window(i))
-                        .filter(|w| w.visible && !w.hidden)
-                        .map(|w| &w.object),
-                );
+                additional.extend(run.messages().visible_window_objects());
                 let frame = prepare_scene(run.scene(), Some(run.camera()), &additional, 1280, 720)?;
                 let clock = Instant::now();
                 let output = gpu.render(&frame)?;

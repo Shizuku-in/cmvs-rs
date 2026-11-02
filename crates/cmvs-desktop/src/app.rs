@@ -169,12 +169,7 @@ impl App<'_> {
         };
         let mut additional: Vec<_> = objects.iter().collect();
         if self.font.is_some() {
-            additional.extend(
-                (0..cmvs_core::message::MESSAGE_WINDOWS)
-                    .filter_map(|i| self.startup.messages().window(i))
-                    .filter(|w| w.visible && !w.hidden)
-                    .map(|w| &w.object),
-            );
+            additional.extend(self.startup.messages().visible_window_objects());
         }
         let frame = cmvs_core::scene_render::prepare_scene(
             self.startup.scene(),

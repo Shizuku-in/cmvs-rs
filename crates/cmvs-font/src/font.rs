@@ -5,7 +5,7 @@ use ab_glyph::{Font, FontVec, ScaleFont, point};
 use cmvs_core::{
     FormatError,
     camera::CameraHost,
-    message::{AUXILIARY_TEXTS, MESSAGE_WINDOWS, MessageHost, RecordedGlyph, TEXT_OBJECTS},
+    message::{AUXILIARY_TEXTS, MessageHost, RecordedGlyph, TEXT_OBJECTS},
     raster::RgbaImage,
     scene::{DrawState, ObjectImage, SceneHost, SceneObject},
     scene_render,
@@ -388,12 +388,7 @@ impl FontRenderer {
     ) -> Result<RgbaImage, FormatError> {
         let objects = self.prepare_objects(messages)?;
         let mut additional: Vec<_> = objects.iter().collect();
-        additional.extend(
-            (0..MESSAGE_WINDOWS)
-                .filter_map(|i| messages.window(i))
-                .filter(|w| w.visible && !w.hidden)
-                .map(|w| &w.object),
-        );
+        additional.extend(messages.visible_window_objects());
         {
             let [width, height] = messages.screen_size();
             scene_render::render_scene(scene, Some(cameras), &additional, width, height)

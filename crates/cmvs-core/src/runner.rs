@@ -426,11 +426,7 @@ impl<'a> Startup<'a> {
         {
             return Err("screen capture over auxiliary glyphs needs the font backend".into());
         }
-        let windows: Vec<_> = (0..crate::message::MESSAGE_WINDOWS)
-            .filter_map(|i| self.messages.window(i))
-            .filter(|window| window.visible && !window.hidden)
-            .map(|window| &window.object)
-            .collect();
+        let windows: Vec<_> = self.messages.visible_window_objects().collect();
         let [width, height] = self.screen_size();
         let frame = crate::scene_render::render_scene(
             &self.scene,

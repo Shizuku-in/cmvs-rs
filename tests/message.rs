@@ -3676,6 +3676,10 @@ fn window_presence_and_temporary_hiding() {
     call(&mut code, 0x214c, &[1, 2]);
     // Hiding the window clears the temporary flag.
     call(&mut code, 0x214e, &[0, 2]);
+    // Create a lower slot last, then show both windows.
+    create(&mut code, 0, 5, [0, 0, 100, 100]);
+    call(&mut code, 0x214e, &[1, 2]);
+    call(&mut code, 0x214e, &[1, 0]);
     let program = script(&code);
     let mut vm = Machine::new(&program).unwrap();
     let mut messages = MessageHost::default();
@@ -3688,14 +3692,28 @@ fn window_presence_and_temporary_hiding() {
     run(&mut vm, &mut messages, 2);
     let window = messages.window(2).unwrap();
     assert!(window.visible && window.hidden && !window.object.shown);
+    assert!(messages.visible_window_objects().next().is_none());
     assert!(!messages.text(7).unwrap().visible);
     run(&mut vm, &mut messages, 1);
     let window = messages.window(2).unwrap();
     assert!(!window.hidden && window.object.shown);
+    assert_eq!(
+        messages.visible_window_objects().collect::<Vec<_>>(),
+        [&window.object]
+    );
     assert!(messages.text(7).unwrap().visible);
     run(&mut vm, &mut messages, 2);
     let window = messages.window(2).unwrap();
     assert!(!window.visible && !window.hidden && !window.object.shown);
+    assert!(messages.visible_window_objects().next().is_none());
+    run(&mut vm, &mut messages, 3);
+    assert_eq!(
+        messages
+            .visible_window_objects()
+            .map(std::ptr::from_ref)
+            .collect::<Vec<_>>(),
+        [0, 2].map(|slot| std::ptr::from_ref(&messages.window(slot).unwrap().object))
+    );
     assert_eq!(vm.stack().len_bytes(), 0);
     for (command, words) in [
         (0x214bu16, vec![8]),

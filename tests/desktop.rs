@@ -39,11 +39,7 @@ fn immediate_device_readback_keeps_the_completed_font_composite() {
     messages.advance_frame(10_000);
     let camera = CameraHost::default();
     let frame = font.render(&scene, &camera, &messages).unwrap();
-    let windows: Vec<_> = (0..cmvs_rs::message::MESSAGE_WINDOWS)
-        .filter_map(|i| messages.window(i))
-        .filter(|w| w.visible && !w.hidden)
-        .map(|w| &w.object)
-        .collect();
+    let windows: Vec<_> = messages.visible_window_objects().collect();
     let without_glyphs =
         cmvs_rs::scene_render::render_scene(&scene, Some(&camera), &windows, 1280, 720).unwrap();
     assert_ne!(frame, without_glyphs);

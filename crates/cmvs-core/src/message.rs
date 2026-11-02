@@ -326,6 +326,14 @@ impl MessageHost {
     pub fn window(&self, slot: usize) -> Option<&MessageWindow> {
         self.windows.get(slot)?.as_ref()
     }
+    /// Window objects for rendering, in ascending window slot order.
+    pub fn visible_window_objects(&self) -> impl Iterator<Item = &SceneObject> {
+        self.windows
+            .iter()
+            .flatten()
+            .filter(|window| window.visible && !window.hidden)
+            .map(|window| &window.object)
+    }
     pub fn text(&self, index: usize) -> Option<&TextObject> {
         self.texts.get(index)?.as_ref()
     }
