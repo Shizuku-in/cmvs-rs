@@ -225,6 +225,13 @@ pub trait AudioBackend {
     ) -> Result<(), Box<dyn Error>> {
         Ok(())
     }
+    /// Supply per-slot CPZ7 keys before loading a sound. Recording backends need no I/O.
+    fn configure_archive_parameters(
+        &mut self,
+        _parameters: &std::collections::BTreeMap<(u16, u32), crate::cpz::Cpz7Parameters>,
+    ) -> Result<(), Box<dyn Error>> {
+        Ok(())
+    }
     /// Maintain output/fades and surface asynchronous decoder/device failures.
     fn update(&mut self) -> Result<(), Box<dyn Error>> {
         Ok(())

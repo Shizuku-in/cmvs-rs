@@ -888,6 +888,9 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
     let base = registry.profile("cmvs-20160201").unwrap();
     let chrono = registry.profile("cmvs-20150405").unwrap();
     let aoitori = registry.profile("cmvs-20171114").unwrap();
+    let realive = registry.profile("cmvs-20190305").unwrap();
+    assert_eq!(realive.base.as_deref(), Some("cmvs-20160201"));
+    assert_eq!(realive.count(CommandStatus::Unreviewed), 749);
     let miranosu = registry.profile("cmvs-20110525").unwrap();
     assert_eq!(miranosu.base.as_deref(), Some("cmvs-20160201"));
     assert_eq!(miranosu.count(CommandStatus::Unreviewed), 614);
@@ -906,6 +909,7 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
         (base, 976, 721, 255),
         (chrono, 976, 712, 264),
         (aoitori, 992, 734, 258),
+        (realive, 992, 749, 243),
         (hapymaher, 928, 639, 289),
         (hapymaherfd, 976, 701, 275),
     ] {
@@ -936,9 +940,10 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
             ("miranosu", "cmvs-20110525", None),
             ("hapymaher", "cmvs-20130131", None),
             ("hapymaherfd", "cmvs-20140217", None),
+            ("chronoclock", "cmvs-20150405", None),
             ("amatsutsumi", "cmvs-20160201", Some(2198)),
             ("aoitori", "cmvs-20171114", None),
-            ("chronoclock", "cmvs-20150405", None)
+            ("realive", "cmvs-20190305", None)
         ]
     );
 }

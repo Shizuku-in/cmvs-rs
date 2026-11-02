@@ -77,6 +77,52 @@ fn resource_families_and_slot_limits_are_independent() {
         None
     );
 }
+
+#[test]
+fn keyed_archives_reopen_when_only_the_parameters_change() {
+    use cmvs_rs::cpz::{ArchiveIndex, Cpz7Parameters};
+    let root = Root::new();
+    let bytes: Vec<_> = include_str!("fixtures/cpz7-keyed.hex")
+        .trim()
+        .as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap())
+        .collect();
+    let keys = Cpz7Parameters::from([0x10203040, 0x89abcdef, 0xfedcba98, 0x76543210]);
+    let index =
+        ArchiveIndex::read_with_cpz7_parameters(&mut std::io::Cursor::new(&bytes), keys).unwrap();
+    let name = &index.entries()[0].name;
+    root.put("a/same.bin", &bytes);
+    let paths = BTreeMap::from([((0x2011, 0), b"a\\same.bin".to_vec())]);
+    let mut archives = ResourceArchives::new(&root.0).unwrap();
+    archives.configure_parameters(&BTreeMap::from([((0x2011, 0), keys)]));
+    assert_eq!(
+        archives
+            .with_paths(&paths, ResourceKind::Image)
+            .read(name)
+            .unwrap()
+            .unwrap(),
+        b"synthetic CPZ7 payload 0!!!"
+    );
+    archives.configure_parameters(&BTreeMap::new());
+    assert!(
+        archives
+            .with_paths(&paths, ResourceKind::Image)
+            .read(name)
+            .is_err()
+    );
+    archives.configure_parameters(&BTreeMap::from([((0x2011, 0), keys)]));
+    assert_eq!(
+        archives
+            .with_paths(&paths, ResourceKind::Image)
+            .read(name)
+            .unwrap()
+            .unwrap(),
+        b"synthetic CPZ7 payload 0!!!"
+    );
+}
 #[test]
 fn audio_roots_search_in_order_and_follow_reregistration() {
     let root = Root::new();

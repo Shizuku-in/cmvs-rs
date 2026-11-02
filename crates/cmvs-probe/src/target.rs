@@ -88,9 +88,7 @@ impl Target {
             None => None,
         };
         if let Some(files) = &files
-            && let Some(index) = File::open(root.join(&files.script_archive))
-                .ok()
-                .and_then(|mut f| ArchiveIndex::read(&mut f).ok())
+            && let Ok((_, index)) = open_archive(root, files, &root.join(&files.script_archive))
         {
             capabilities.insert(cap::ARCHIVE);
             match index.version() {
@@ -178,4 +176,34 @@ impl Target {
             })
             .collect()
     }
+}
+
+/// Shared by capability discovery and static checks, so keyed archives use the same policy.
+pub fn open_archive(
+    root: &Path,
+    files: &GameFiles,
+    path: &Path,
+) -> Result<(File, ArchiveIndex), std::io::Error> {
+    use std::io::{Read, Seek};
+    let mut file = File::open(path)?;
+    let mut magic = [0; 4];
+    file.read_exact(&mut magic)?;
+    file.rewind()?;
+    if &magic != b"CPZ7" {
+        let index = ArchiveIndex::read(&mut file).map_err(std::io::Error::other)?;
+        return Ok((file, index));
+    }
+    let mut raw = Vec::new();
+    File::open(root.join(&files.start_script))?
+        .take(cmvs_core::MAX_PAYLOAD as u64 + 49)
+        .read_to_end(&mut raw)?;
+    let script = cmvs_core::ps3::Script::decode(&raw).map_err(std::io::Error::other)?;
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or_else(|| std::io::Error::other("archive basename is not UTF-8"))?;
+    let index =
+        cmvs_core::script_control::archive_index_from_start(&mut file, &script, name.as_bytes())
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+    Ok((file, index))
 }

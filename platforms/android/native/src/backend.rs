@@ -48,6 +48,9 @@ impl MobileBackend {
 }
 
 impl PlatformBackend for MobileBackend {
+    fn display_count(&self) -> Result<u32, Box<dyn Error>> {
+        Ok(1)
+    }
     fn logical_size(&self) -> [u32; 2] {
         self.screen_size
     }

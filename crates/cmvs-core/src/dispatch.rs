@@ -1251,9 +1251,24 @@ pub fn uses_bootstrap(command: u16) -> bool {
             )
     })
 }
+pub fn uses_bootstrap_for(semantics: Semantics, command: u16) -> bool {
+    match semantics {
+        Semantics::Root => uses_bootstrap(command),
+        Semantics::Variant(id) => variant_entry(id, command)
+            .is_some_and(|entry| entry.capability == Capability::Bootstrap),
+    }
+}
 pub fn uses_platform(command: u16) -> bool {
     ROOT.iter()
         .any(|e| e.command == command && e.capability == Capability::Platform)
+}
+pub fn uses_platform_for(semantics: Semantics, command: u16) -> bool {
+    match semantics {
+        Semantics::Root => uses_platform(command),
+        Semantics::Variant(id) => {
+            variant_entry(id, command).is_some_and(|entry| entry.capability == Capability::Platform)
+        }
+    }
 }
 pub fn uses_device_frame(command: u16) -> bool {
     ROOT.iter().any(|e| {
@@ -4409,6 +4424,58 @@ pub static ROOT: &[Entry] = &[
 
 /// Build-specific variants, selected only through an explicit profile binding.
 /// Implementation selection does not upgrade the command's evidence status.
+pub static KEYED_ARCHIVES: &[Entry] = &[
+    Entry {
+        command: 0x268,
+        name: "register keyed script archive",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x269,
+        name: "register keyed image archive",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x26a,
+        name: "register keyed sound archive",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x26b,
+        name: "register keyed music archive",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x26c,
+        name: "register keyed voice archive",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x26d,
+        name: "register keyed movie archive",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x26e,
+        name: "register keyed scene movie archive",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+];
+
+pub static DISPLAY_COUNT: &[Entry] = &[Entry {
+    command: 0x3c7,
+    name: "available display count",
+    capability: Capability::Platform,
+    handler: root_platform,
+}];
+
 pub static FONT_CELLS: &[Entry] = &[
     Entry {
         command: 0x10b,
@@ -4672,6 +4739,8 @@ pub static BACKGROUND_AUDIO: &[Entry] = &[Entry {
 
 /// Static variant tables used when provisioning shared host capabilities.
 pub static VARIANT_TABLES: &[&[Entry]] = &[
+    DISPLAY_COUNT,
+    KEYED_ARCHIVES,
     FONT_CELLS,
     PARTICLES,
     BACKGROUND_AUDIO,
@@ -4682,6 +4751,8 @@ pub static VARIANT_TABLES: &[&[Entry]] = &[
 
 pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'static Entry> {
     let entries = match id {
+        crate::profile::VariantId::DisplayCount => DISPLAY_COUNT,
+        crate::profile::VariantId::KeyedArchives => KEYED_ARCHIVES,
         crate::profile::VariantId::FontCells => FONT_CELLS,
         crate::profile::VariantId::Particles => PARTICLES,
         crate::profile::VariantId::BackgroundAudio => BACKGROUND_AUDIO,
@@ -4694,6 +4765,8 @@ pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'st
 
 pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
     match profile.semantics(command) {
+        Semantics::Variant(crate::profile::VariantId::DisplayCount) => "variant display count",
+        Semantics::Variant(crate::profile::VariantId::KeyedArchives) => "variant keyed archives",
         Semantics::Variant(crate::profile::VariantId::FontCells) => "variant text override",
         Semantics::Variant(crate::profile::VariantId::Particles) => "variant particle override",
         Semantics::Variant(crate::profile::VariantId::BackgroundAudio) => {

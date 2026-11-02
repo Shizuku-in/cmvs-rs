@@ -16,7 +16,7 @@
 | [《クロノクロック》 / chronoclock](chronoclock/README.md) | `2015-04-24_CHRONOCLOCK` | 已有构建 profile、语义研究与运行验证 |
 | [《アマツツミ》 / amatsutsumi](amatsutsumi/README.md) | `2016-07-29_AMATSUTSUMI` | 已有语义研究、路线重放及部分原生验证 |
 | [《アオイトリ》 / aoitori](aoitori/README.md) | `2017-11-24_AOITORI` | 已有构建 profile；标题及首段剧情研究中 |
-| [《リアライブ》 / realive](realive/README.md) | `2019-03-29_REALIVE` | 基础档案；尚无构建 profile 或运行验证 |
+| [《リアライブ》 / realive](realive/README.md) | `2019-03-29_REALIVE` | 标题、确定性及输入/回看探针通过；剧情停于 `0x20c4` MGV1，设置停于 `0x23c5` |
 | [《青春フラジャイル》 / seishunf](seishunf/README.md) | `2020-08-28_SEISHUNF` | 基础档案；尚无构建 profile 或运行验证 |
 | [《クナド国記》 / kunado](kunado/README.md) | `2021-12-24_KUNADO` | 基础档案；尚无构建 profile 或运行验证 |
 | [《ハピメア REGRET END》 / hapymaher_re](hapymaher_re/README.md) | `2023-05-26_HAPYMAHER_RE` | 基础档案；尚无构建 profile 或运行验证 |

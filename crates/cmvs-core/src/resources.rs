@@ -1,6 +1,10 @@
 //! Bounded read-only directory/CPZ lookup shared by image and audio backends.
 //! Slot order, case folding, checksums and path confinement follow the existing reader.
-use crate::{MAX_PAYLOAD, cpz::ArchiveIndex, platform::resolve_under};
+use crate::{
+    MAX_PAYLOAD,
+    cpz::{ArchiveIndex, Cpz7Parameters},
+    platform::resolve_under,
+};
 use std::{
     collections::BTreeMap,
     error::Error,
@@ -54,6 +58,7 @@ struct OpenArchive {
 pub struct ResourceArchives {
     root: PathBuf,
     open: BTreeMap<(u16, u32), OpenArchive>,
+    parameters: BTreeMap<(u16, u32), Cpz7Parameters>,
 }
 
 impl ResourceArchives {
@@ -65,7 +70,15 @@ impl ResourceArchives {
         Ok(Self {
             root,
             open: BTreeMap::new(),
+            parameters: BTreeMap::new(),
         })
+    }
+
+    /// Reopen a slot when its keys change, even if its path stays the same.
+    pub fn configure_parameters(&mut self, parameters: &BTreeMap<(u16, u32), Cpz7Parameters>) {
+        self.open
+            .retain(|slot, _| self.parameters.get(slot) == parameters.get(slot));
+        self.parameters.clone_from(parameters);
     }
 
     /// Bind the explicit registrations for one engine resource family.
@@ -116,7 +129,12 @@ impl ResourceArchives {
                 return Ok(None);
             };
             let mut file = File::open(resolved)?;
-            let index = ArchiveIndex::read(&mut file)?;
+            let parameters = self
+                .parameters
+                .get(&(command, slot))
+                .copied()
+                .unwrap_or_default();
+            let index = ArchiveIndex::read_with_cpz7_parameters(&mut file, parameters)?;
             self.open.insert(
                 (command, slot),
                 OpenArchive {

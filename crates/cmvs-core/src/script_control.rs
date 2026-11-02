@@ -15,6 +15,27 @@ use std::{
 
 pub type LoadError = Box<dyn Error>;
 
+/// Open an archive using its literal startup registration when CPZ7 requires keys.
+/// Other archive versions keep their existing detection policy.
+pub fn archive_index_from_start<R: Read + Seek>(
+    reader: &mut R,
+    script: &Script,
+    basename: &[u8],
+) -> Result<ArchiveIndex, LoadError> {
+    reader.rewind()?;
+    let mut magic = [0; 4];
+    reader.read_exact(&mut magic)?;
+    reader.rewind()?;
+    if &magic == b"CPZ7" {
+        let parameters = cpz7_parameters_from_start(script, basename)?.ok_or(
+            crate::FormatError("archive has no literal CPZ7 startup registration"),
+        )?;
+        Ok(ArchiveIndex::read_with_cpz7_parameters(reader, parameters)?)
+    } else {
+        Ok(ArchiveIndex::read(reader)?)
+    }
+}
+
 /// Read the literal 0x201f packing-mode setting from the startup prefix.
 pub fn packing_mode_from_start(script: &Script) -> Result<u32, crate::FormatError> {
     use crate::{
@@ -169,6 +190,10 @@ pub struct ArchiveScripts<R> {
     index: ArchiveIndex,
 }
 impl<R: Read + Seek> ArchiveScripts<R> {
+    pub fn from_start(mut reader: R, script: &Script, basename: &[u8]) -> Result<Self, LoadError> {
+        let index = archive_index_from_start(&mut reader, script, basename)?;
+        Ok(Self { reader, index })
+    }
     pub fn new(mut reader: R) -> Result<Self, LoadError> {
         let index = ArchiveIndex::read(&mut reader)?;
         Ok(Self { reader, index })

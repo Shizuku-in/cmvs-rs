@@ -15,6 +15,62 @@ use std::{collections::BTreeMap, error::Error, fs, process::Command};
 mod bytecode;
 
 #[test]
+fn display_count_query_uses_backend_value_and_preserves_pending_on_failure() {
+    use cmvs_rs::{
+        dispatch::{self, Hosts, PlatformHosts},
+        profile::Registry,
+    };
+    struct Displays(Result<u32, &'static str>);
+    impl PlatformBackend for Displays {
+        fn display_count(&self) -> Result<u32, Box<dyn Error>> {
+            self.0.map_err(Into::into)
+        }
+        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+            unreachable!()
+        }
+    }
+    for answer in [Ok(1), Ok(3), Err("enumeration unavailable")] {
+        let mut code = vec![];
+        bytecode::command(&mut code, 0x23c7, &[77]);
+        let script = bytecode::script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        bytecode::pending(&mut vm);
+        let pc = vm.pc();
+        vm.state_mut().set_system_integer(0, 99).unwrap();
+        vm.state_mut().set_system_integer(1, 88).unwrap();
+        let mut backend = Displays(answer);
+        let mut host = PlatformHost::default();
+        let mut assets = Assets::default();
+        let profile = Registry::builtin().profile("cmvs-20190305").unwrap();
+        let result = dispatch::run(
+            profile.semantics(0x3c7),
+            &mut vm,
+            &mut Hosts {
+                platform: Some(PlatformHosts {
+                    host: &mut host,
+                    backend: &mut backend,
+                    assets: &mut assets,
+                    cursors: &[],
+                }),
+                ..Default::default()
+            },
+        );
+        if let Ok(expected) = answer {
+            assert!(result.is_ok());
+            assert_eq!(vm.pending_system(), None);
+            assert_eq!(vm.pc(), pc + 2);
+            assert_eq!(vm.state().system_integer(0), Some(expected));
+        } else {
+            assert!(result.is_err());
+            assert_eq!(vm.pending_system(), Some((pc, 0x3c7)));
+            assert_eq!(vm.state().system_integer(0), Some(99));
+        }
+        assert_eq!(vm.stack().len_bytes(), 4);
+        assert_eq!(vm.state().system_integer(1), Some(88));
+    }
+}
+
+#[test]
 fn other_display_query_reads_configuration_without_consuming_stack_or_changing_device() {
     for (ini, expected) in [
         (b"".as_slice(), 0),

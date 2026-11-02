@@ -38,6 +38,8 @@ pub enum VariantId {
     FallingBillboards,
     CollisionParticles,
     Fragments,
+    KeyedArchives,
+    DisplayCount,
 }
 impl VariantId {
     pub fn parse(name: &str) -> Option<Self> {
@@ -48,6 +50,8 @@ impl VariantId {
             "falling-billboards" => Some(Self::FallingBillboards),
             "collision-particles" => Some(Self::CollisionParticles),
             "fragments" => Some(Self::Fragments),
+            "keyed-archives" => Some(Self::KeyedArchives),
+            "display-count" => Some(Self::DisplayCount),
             _ => None,
         }
     }
@@ -59,6 +63,8 @@ impl VariantId {
             Self::FallingBillboards => "falling-billboards",
             Self::CollisionParticles => "collision-particles",
             Self::Fragments => "fragments",
+            Self::KeyedArchives => "keyed-archives",
+            Self::DisplayCount => "display-count",
         }
     }
 }
@@ -427,13 +433,14 @@ pub struct Registry {
     contracts: BTreeMap<[u8; 32], ContractProof>,
 }
 
-const BUILTIN_PROFILES: [&str; 6] = [
+const BUILTIN_PROFILES: [&str; 7] = [
     include_str!("../profiles/cmvs-20110525.profile"),
-    include_str!("../profiles/cmvs-20160201.profile"),
-    include_str!("../profiles/cmvs-20150405.profile"),
-    include_str!("../profiles/cmvs-20171114.profile"),
     include_str!("../profiles/cmvs-20130131.profile"),
     include_str!("../profiles/cmvs-20140217.profile"),
+    include_str!("../profiles/cmvs-20150405.profile"),
+    include_str!("../profiles/cmvs-20160201.profile"),
+    include_str!("../profiles/cmvs-20171114.profile"),
+    include_str!("../profiles/cmvs-20190305.profile"),
 ];
 const BUILTIN_GAMES: &str = include_str!("../profiles/games.txt");
 

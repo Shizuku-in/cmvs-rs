@@ -14,6 +14,64 @@ const DERIVED: &str = include_str!("../crates/cmvs-core/profiles/cmvs-20171114.p
 const HASH: &str = "3bccda5d7611412c6938c0c9b06b2195914cfb78763a53f2c235bb6479395ee0";
 
 #[test]
+fn realive_font_bindings_are_limited_to_the_inspected_commands() {
+    let profile = Registry::builtin().profile("cmvs-20190305").unwrap();
+    let bindings: Vec<_> = profile
+        .variant_bindings()
+        .filter(|(_, binding)| binding.id == VariantId::FontCells)
+        .map(|(command, _)| command)
+        .collect();
+    assert_eq!(bindings, [0x11d, 0x3ac, 0x3b8, 0x3b9, 0x3bb]);
+    assert_eq!(profile.status(0x3ac), CommandStatus::Unreviewed);
+    assert_eq!(
+        profile.semantics(0x3ac),
+        Semantics::Variant(VariantId::FontCells)
+    );
+    assert_eq!(profile.semantics(0x10b), Semantics::Root);
+    let binding = profile.variant(0x3ac).unwrap();
+    assert_eq!(
+        to_hex(&binding.binary_sha256),
+        "02b71aac3d3d1ced1d0312b6c37748cf12df9cffd9585fb07787e6ca43199f00"
+    );
+    let mut code = vec![];
+    command(&mut code, 0x23ac, &[u32::MAX]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    pending(&mut vm);
+    let pc = vm.pc();
+    vm.state_mut().set_system_integer(0, 123).unwrap();
+    assert_eq!(
+        dispatch::run(
+            profile.semantics(0x3ac),
+            &mut vm,
+            &mut dispatch::Hosts::default()
+        )
+        .unwrap(),
+        Some(dispatch::Flow::Unavailable)
+    );
+    assert_eq!(vm.stack().len_bytes(), 4);
+    assert_eq!(vm.pc(), pc);
+    let mut messages = cmvs_rs::message::MessageHost::default();
+    let mut input = cmvs_rs::input::ActionInput::default();
+    let mut hosts = dispatch::Hosts {
+        text: Some(dispatch::TextHosts {
+            messages: &mut messages,
+            input: &mut input,
+            flags: Default::default(),
+        }),
+        ..Default::default()
+    };
+    assert_eq!(
+        dispatch::run(profile.semantics(0x3ac), &mut vm, &mut hosts).unwrap(),
+        Some(dispatch::Flow::Done)
+    );
+    assert_eq!(vm.pending_system(), None);
+    assert_eq!(vm.pc(), pc + 2);
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(123));
+}
+
+#[test]
 fn declared_variant_round_trips_and_does_not_depend_on_the_profile_name() {
     let renamed = DERIVED.replacen("profile cmvs-20171114", "profile synthetic-variant", 1);
     let registry = Registry::parse(&[ROOT, &renamed], "").unwrap();

@@ -231,7 +231,16 @@ impl<'a> Startup<'a> {
             focused: true,
             bootstrap: Bootstrap::default(),
             control: ScriptControl::new(virtual_tick),
-            source: ArchiveScripts::new(File::open(root.join(&game.files.script_archive))?)?,
+            source: ArchiveScripts::from_start(
+                File::open(root.join(&game.files.script_archive))?,
+                script,
+                game.files
+                    .script_archive
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .ok_or(crate::FormatError("archive basename is not UTF-8"))?
+                    .as_bytes(),
+            )?,
             saves: DirectorySaves::new(root.join("save"))?,
             save_menu,
             system_source: FileSystemSave::new(root.join("save/system.dat")),
@@ -758,7 +767,7 @@ impl<'a> Startup<'a> {
                 command: command + 0x2000,
             });
         }
-        if crate::dispatch::uses_bootstrap(command) {
+        if crate::dispatch::uses_bootstrap_for(resolved.semantics, command) {
             let mut hosts = crate::dispatch::Hosts::default();
             if command == 0x34d {
                 hosts.function_keys =
@@ -767,6 +776,10 @@ impl<'a> Startup<'a> {
                 hosts.bootstrap = Some(&mut self.bootstrap);
             }
             let flow = crate::dispatch::run(resolved.semantics, &mut self.machine, &mut hosts)?;
+            self.images
+                .configure_parameters(self.bootstrap.archive_parameters());
+            self.scene_movies
+                .configure_parameters(self.bootstrap.archive_parameters());
             return Ok(if flow == Some(crate::dispatch::Flow::Done) {
                 StartupEvent::Progress
             } else {
@@ -778,6 +791,8 @@ impl<'a> Startup<'a> {
         }
         if matches!(command, 0xa0 | 0xa4 | 0xa6 | 0xb0 | 0xba | 0x2d6 | 0x2d7) {
             self.audio_backend.configure_paths(self.bootstrap.paths())?;
+            self.audio_backend
+                .configure_archive_parameters(self.bootstrap.archive_parameters())?;
         }
         let gate = SkipGate {
             effects: self.effects,
@@ -963,7 +978,7 @@ impl<'a> Startup<'a> {
                 flags: message_flags,
             });
         }
-        if crate::dispatch::uses_platform(command) {
+        if crate::dispatch::uses_platform_for(resolved.semantics, command) {
             hosts.platform = Some(crate::dispatch::PlatformHosts {
                 host: &mut self.platform,
                 backend,

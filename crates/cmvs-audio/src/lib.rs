@@ -545,6 +545,13 @@ impl AudioBackend for NativeAudio {
         }
         Ok(())
     }
+    fn configure_archive_parameters(
+        &mut self,
+        parameters: &BTreeMap<(u16, u32), cmvs_core::cpz::Cpz7Parameters>,
+    ) -> Result<(), Box<dyn Error>> {
+        self.archives.configure_parameters(parameters);
+        Ok(())
+    }
     fn play(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error>> {
         let AudioRequest::PlaySe {
             channel,

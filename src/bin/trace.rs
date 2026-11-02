@@ -353,7 +353,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 skip: message_flags.skip(),
                 ..SkipGate::default()
             };
-            if cmvs_rs::dispatch::uses_bootstrap(command) {
+            if cmvs_rs::dispatch::uses_bootstrap_for(resolved.semantics, command) {
                 let mut hosts = cmvs_rs::dispatch::Hosts::default();
                 if command == 0x34d {
                     if platform_assets.is_some() {
@@ -368,6 +368,9 @@ fn run() -> Result<(), Box<dyn Error>> {
                 if cmvs_rs::dispatch::run(resolved.semantics, &mut machine, &mut hosts)?
                     == Some(cmvs_rs::dispatch::Flow::Done)
                 {
+                    if let (Some(images), Some(config)) = (&mut images, &bootstrap) {
+                        images.configure_parameters(config.archive_parameters());
+                    }
                     if command == 0x34d && platform_assets.is_some() {
                         println!(
                             "# input 0x{:04x}: system_integer[0]={:?} [4]={:?}; no input supplied",

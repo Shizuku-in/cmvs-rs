@@ -2,6 +2,7 @@
 //! Unhandled environment-dependent commands remain pending in the VM.
 use crate::{
     bytecode::DecodeError,
+    cpz::Cpz7Parameters,
     dispatch::Call,
     evaluate::error,
     machine::{Machine, Step},
@@ -12,6 +13,7 @@ use std::collections::BTreeMap;
 pub struct Bootstrap {
     settings: BTreeMap<u16, u32>,
     paths: BTreeMap<(u16, u32), Vec<u8>>,
+    archive_parameters: BTreeMap<(u16, u32), Cpz7Parameters>,
     handled: usize,
     cursors: Vec<Vec<u8>>,
 }
@@ -25,6 +27,9 @@ impl Bootstrap {
     /// Absolute save roots, archive loading and file lookup precedence remain separate.
     pub fn paths(&self) -> &BTreeMap<(u16, u32), Vec<u8>> {
         &self.paths
+    }
+    pub fn archive_parameters(&self) -> &BTreeMap<(u16, u32), Cpz7Parameters> {
+        &self.archive_parameters
     }
     pub fn handled_count(&self) -> usize {
         self.handled
@@ -50,6 +55,35 @@ impl Bootstrap {
     ) -> Result<crate::dispatch::Flow, DecodeError> {
         let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
+        if let 0x268..=0x26e = command {
+            let target = [0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2019, 0x201a]
+                [usize::from(command - 0x268)];
+            let slot = call.argument(4, "path slot")?;
+            let raw = call.argument(8, "resource path")?;
+            let keys = [
+                call.argument(12, "directory key")?,
+                call.argument(16, "file key")?,
+                call.argument(20, "index seed")?,
+                call.argument(24, "resource key")?,
+            ];
+            let path = call.vm.resolve_string(raw)?;
+            if path.len() >= 2048 {
+                return Err(error(pc, op, "resource path too long"));
+            }
+            let limit = match target {
+                0x2011 => 10,
+                0x2019 => 7,
+                _ => 5,
+            };
+            let event = call.finish(0x4018)?;
+            // The original ignores out-of-range slots, but still consumes all six words.
+            if slot < limit {
+                self.paths.insert((target, slot), path);
+                self.archive_parameters.insert((target, slot), keys.into());
+            }
+            self.handled += 1;
+            return Ok(event);
+        }
         if command == 0x98 {
             let raw = call.argument(4, "cursor name")?;
             let name = call.vm.resolve_string(raw)?;
@@ -112,6 +146,7 @@ impl Bootstrap {
                     return Err(error(pc, op, "resource path too long"));
                 }
                 self.paths.insert((op, slot), path);
+                self.archive_parameters.remove(&(op, slot));
                 0x4008
             }
             0x15 | 0x16 => {

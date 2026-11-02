@@ -1,5 +1,6 @@
 //! Font-cell text semantics, independently selected by the dispatch table.
-//! Evidence is bound to cmvs-20171114 in docs/games/aoitori/vm-semantics.md.
+//! Executable-bound profile declarations select the inspected command subset;
+//! each binding points to its game evidence under docs/games/.
 use super::{
     MessageHost, TextObject,
     auxiliary::{AuxiliaryGlyph, AuxiliaryText},

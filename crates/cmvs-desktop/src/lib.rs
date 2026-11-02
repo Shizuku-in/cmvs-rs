@@ -165,6 +165,9 @@ pub struct NativeBackend<'a> {
     pub masked_cursor: &'a std::cell::RefCell<Option<cmvs_native::MaskedCursor>>,
 }
 impl PlatformBackend for NativeBackend<'_> {
+    fn display_count(&self) -> Result<u32, Box<dyn Error>> {
+        Ok(self.window.available_monitors().count().try_into()?)
+    }
     fn logical_size(&self) -> [u32; 2] {
         self.logical_size
     }

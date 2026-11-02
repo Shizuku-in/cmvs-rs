@@ -102,6 +102,10 @@ pub enum FontDialogResult {
 }
 
 pub trait PlatformBackend {
+    /// Number of available host displays; recording backends expose one virtual display.
+    fn display_count(&self) -> Result<u32, Box<dyn Error>> {
+        Err("platform backend does not implement display count queries".into())
+    }
     fn logical_size(&self) -> [u32; 2] {
         crate::viewport::ScreenSize::default().pixels()
     }
@@ -229,6 +233,9 @@ impl RecordingBackend {
     }
 }
 impl PlatformBackend for RecordingBackend {
+    fn display_count(&self) -> Result<u32, Box<dyn Error>> {
+        Ok(1)
+    }
     fn logical_size(&self) -> [u32; 2] {
         self.screen_size.pixels()
     }
@@ -446,6 +453,15 @@ impl PlatformHost {
         cursors: &[Vec<u8>],
     ) -> Result<PlatformEvent, Box<dyn Error>> {
         let (pc, command) = (call.pc, call.command);
+        if command == 0x3c7 {
+            let count = backend.display_count()?;
+            call.complete(0x4000)?;
+            call.vm
+                .state_mut()
+                .set_system_integer(0, count)
+                .expect("slot 0 exists");
+            return Ok(PlatformEvent::Configured);
+        }
         if command == 0x2ff {
             // 0x140078400 -> device +144: preference, not monitor availability.
             call.complete(0x4000)?;

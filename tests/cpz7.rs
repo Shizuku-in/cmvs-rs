@@ -217,6 +217,115 @@ fn startup_inspection_preserves_key_order_and_rejects_dynamic_or_ambiguous_keys(
     );
 }
 
+#[test]
+fn startup_archive_reader_uses_per_archive_keys_and_keeps_legacy_detection() {
+    use cmvs_rs::script_control::{ArchiveScripts, archive_index_from_start};
+    let mut code = Vec::new();
+    push(&mut code, false, 13);
+    code.extend(0x201fu16.to_le_bytes());
+    registration(&mut code, [0x10203040, 0x89abcdef, 0xfedcba98, 0x76543210]);
+    let script = memory_script(code, b"\0data\\pack\\script.cpz\0");
+    let bytes = hex(include_str!("fixtures/cpz7-keyed.hex"));
+    let mut reader = Cursor::new(bytes.clone());
+    reader.set_position(8);
+    let index = archive_index_from_start(&mut reader, &script, b"SCRIPT.CPZ").unwrap();
+    assert_eq!(
+        index.read_entry_verified(&mut reader, 0).unwrap(),
+        b"synthetic CPZ7 payload 0!!!"
+    );
+    assert!(ArchiveScripts::from_start(Cursor::new(bytes.clone()), &script, b"script.cpz").is_ok());
+    assert!(archive_index_from_start(&mut Cursor::new(bytes), &script, b"other.cpz").is_err());
+    let legacy_start = memory_script(0x2000u16.to_le_bytes().to_vec(), b"");
+    let mut legacy = Cursor::new(hex(include_str!("fixtures/cpz6-0.hex")));
+    let index = archive_index_from_start(&mut legacy, &legacy_start, b"legacy.cpz").unwrap();
+    assert_eq!(index.version(), cmvs_rs::cpz::ArchiveVersion::Cpz6);
+    assert!(index.read_entry(&mut legacy, 0).is_ok());
+}
+
+#[test]
+fn keyed_registrations_preserve_families_key_order_and_retry_state() {
+    use cmvs_rs::{
+        bootstrap::Bootstrap,
+        dispatch::{self, Flow, Hosts},
+        machine::Machine,
+        profile::{Registry, Semantics},
+    };
+    let profile = Registry::builtin().profile("cmvs-20190305").unwrap();
+    let keys = [0x10203040, 0x89abcdef, 0xfedcba98, 0x76543210];
+    for (offset, target) in [0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2019, 0x201a]
+        .into_iter()
+        .enumerate()
+    {
+        let limit: u32 = match target {
+            0x2011 => 10,
+            0x2019 => 7,
+            _ => 5,
+        };
+        for (short, slot) in [(false, 0u32), (false, limit - 1), (false, limit), (true, 0)] {
+            let command = 0x268 + offset as u16;
+            let mut code = vec![];
+            registration(&mut code, keys);
+            let end = code.len();
+            code[end - 10..end - 6].copy_from_slice(&slot.to_le_bytes());
+            code[end - 2..].copy_from_slice(&(command + 0x2000).to_le_bytes());
+            if short {
+                code.drain(..12);
+            }
+            let script = memory_script(code, b"\0data\\pack\\script.cpz\0");
+            let mut vm = Machine::new(&script).unwrap();
+            while vm.pending_system().is_none() {
+                vm.step().unwrap();
+            }
+            vm.state_mut().set_system_integer(0, 123).unwrap();
+            let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
+            let mut bootstrap = Bootstrap::default();
+            assert_eq!(
+                dispatch::run(Semantics::Root, &mut vm, &mut Hosts::default()).unwrap(),
+                None
+            );
+            assert_eq!(
+                dispatch::run(profile.semantics(command), &mut vm, &mut Hosts::default()).unwrap(),
+                Some(Flow::Unavailable)
+            );
+            let result = dispatch::run(
+                profile.semantics(command),
+                &mut vm,
+                &mut Hosts {
+                    bootstrap: Some(&mut bootstrap),
+                    ..Default::default()
+                },
+            );
+            if short {
+                assert!(result.is_err());
+                assert_eq!(
+                    (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
+                    before
+                );
+                assert!(bootstrap.paths().is_empty());
+                assert!(bootstrap.archive_parameters().is_empty());
+            } else {
+                assert_eq!(result.unwrap(), Some(Flow::Done));
+                if slot < limit {
+                    assert_eq!(
+                        bootstrap.paths().get(&(target, slot)).unwrap(),
+                        b"data\\pack\\script.cpz"
+                    );
+                    assert_eq!(
+                        bootstrap.archive_parameters().get(&(target, slot)),
+                        Some(&keys.into())
+                    );
+                } else {
+                    assert!(bootstrap.paths().is_empty());
+                    assert!(bootstrap.archive_parameters().is_empty());
+                }
+                assert_eq!(vm.stack().len_bytes(), 0);
+                assert_eq!(vm.pending_system(), None);
+            }
+            assert_eq!(vm.state().system_integer(0), Some(123));
+        }
+    }
+}
+
 fn hex(text: &str) -> Vec<u8> {
     text.trim()
         .as_bytes()
