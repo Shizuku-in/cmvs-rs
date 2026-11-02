@@ -76,6 +76,8 @@ impl PlatformAssets for DirectoryAssets {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlatformRequest {
     Fullscreen(bool),
+    /// Fullscreen display preference: 0 primary, 1..4 explicit, 5 follows window.
+    FullscreenMonitor(u32),
     AspectMode(u32),
     /// Active display's scaling enable (+172). In fullscreen, refresh presentation
     /// resources before acknowledging; keep the saved windowed client size intact.
@@ -102,6 +104,12 @@ pub enum FontDialogResult {
 }
 
 pub trait PlatformBackend {
+    /// Select a fullscreen target; return whether the selected display changed.
+    /// Mode 5 must return true even when the current target is unchanged.
+    fn select_fullscreen_monitor(&mut self, _mode: u32) -> Result<bool, Box<dyn Error>> {
+        Err("platform backend does not implement fullscreen monitor selection".into())
+    }
+
     /// Number of available host displays; recording backends expose one virtual display.
     fn display_count(&self) -> Result<u32, Box<dyn Error>> {
         Err("platform backend does not implement display count queries".into())
@@ -233,6 +241,12 @@ impl RecordingBackend {
     }
 }
 impl PlatformBackend for RecordingBackend {
+    fn select_fullscreen_monitor(&mut self, mode: u32) -> Result<bool, Box<dyn Error>> {
+        self.apply(&PlatformRequest::FullscreenMonitor(mode))?;
+        // One virtual display: every supported mode resolves to the same target.
+        Ok(mode == 5)
+    }
+
     fn display_count(&self) -> Result<u32, Box<dyn Error>> {
         Ok(1)
     }
@@ -286,6 +300,9 @@ impl PlatformBackend for RecordingBackend {
         Ok(self.fullscreen)
     }
     fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+        if matches!(request, PlatformRequest::FullscreenMonitor(mode) if *mode > 5) {
+            return Err("unsupported fullscreen monitor mode".into());
+        }
         if let PlatformRequest::WindowSize(size) = request {
             crate::viewport::ScreenSize::new(*size)?;
         }
@@ -296,7 +313,8 @@ impl PlatformBackend for RecordingBackend {
             return Err("unsupported render mode".into());
         }
         let size = match request {
-            PlatformRequest::Fullscreen(_)
+            PlatformRequest::FullscreenMonitor(_)
+            | PlatformRequest::Fullscreen(_)
             | PlatformRequest::AspectMode(_)
             | PlatformRequest::AspectScaling(_)
             | PlatformRequest::RenderMode(_)
@@ -386,6 +404,10 @@ pub struct PlatformHost {
     fullscreen_monitor_initialized: bool,
 }
 impl PlatformHost {
+    pub fn fullscreen_monitor_mode(&self) -> u32 {
+        self.fullscreen_monitor_mode
+    }
+
     pub fn configure_display_selection(&mut self, ini: &[u8]) {
         self.others_display_use =
             crate::save_menu::profile_int(ini, "WINDOW_RESOLVING", "OTHERS_DISPLAY_USE", 0) != 0;
@@ -459,6 +481,29 @@ impl PlatformHost {
         cursors: &[Vec<u8>],
     ) -> Result<PlatformEvent, Box<dyn Error>> {
         let (pc, command) = (call.pc, call.command);
+        if command == 0x3c6 {
+            let raw = call.argument(4, "fullscreen monitor mode")?;
+            if raw > 5 {
+                return Err("unsupported fullscreen monitor mode".into());
+            }
+            let mode = if (1..=4).contains(&raw) && backend.display_count()? < raw {
+                0
+            } else {
+                raw
+            };
+            // Read fallible state before applying the request, so retry keeps host and VM intact.
+            let fullscreen = backend.fullscreen()?;
+            let changed = backend.select_fullscreen_monitor(mode)?;
+            let yield_frame = changed && fullscreen;
+            call.complete(if yield_frame { 0xc004 } else { 0x4004 })?;
+            self.fullscreen_monitor_mode = mode;
+            self.fullscreen_monitor_initialized = true;
+            return Ok(if yield_frame {
+                PlatformEvent::Yield
+            } else {
+                PlatformEvent::Configured
+            });
+        }
         if command == 0x3c5 {
             // REALIVE device +148: mode 0=primary, 1..4=explicit, 5=window monitor.
             let mode = self.fullscreen_monitor_mode;
@@ -702,7 +747,8 @@ impl PlatformHost {
             PlatformRequest::Title(bytes) => self.title = Some(bytes),
             PlatformRequest::Cursor { id, .. } => self.cursor = id,
             PlatformRequest::Icon { name, .. } => self.icon = Some(name),
-            PlatformRequest::Fullscreen(_)
+            PlatformRequest::FullscreenMonitor(_)
+            | PlatformRequest::Fullscreen(_)
             | PlatformRequest::AspectMode(_)
             | PlatformRequest::AspectScaling(_)
             | PlatformRequest::RenderMode(_)

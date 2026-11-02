@@ -127,6 +127,7 @@ struct App<'a> {
     aspect_mode: std::cell::Cell<u32>,
     aspect_scaling: std::cell::Cell<bool>,
     render_mode: std::cell::Cell<u32>,
+    fullscreen_monitor: std::cell::RefCell<crate::FullscreenMonitor>,
     windowed_size: std::cell::Cell<[u32; 2]>,
 }
 impl App<'_> {
@@ -301,6 +302,7 @@ impl App<'_> {
             aspect_mode: &self.aspect_mode,
             aspect_scaling: &self.aspect_scaling,
             render_mode: &self.render_mode,
+            fullscreen_monitor: &self.fullscreen_monitor,
             windowed_size: &self.windowed_size,
             fonts: self.font.as_ref(),
             device_frame: self.device_frame.as_deref(),
@@ -344,12 +346,6 @@ impl ApplicationHandler for App<'_> {
                 el.create_window(
                     Window::default_attributes()
                         .with_title("cmvs-rs")
-                        .with_fullscreen(
-                            self.startup
-                                .display_preferences()
-                                .fullscreen
-                                .then_some(winit::window::Fullscreen::Borderless(None)),
-                        )
                         .with_inner_size(LogicalSize::new(
                             self.windowed_size.get()[0] as f64,
                             self.windowed_size.get()[1] as f64,
@@ -358,16 +354,15 @@ impl ApplicationHandler for App<'_> {
                 )?,
             );
             // Attributes use logical units; deferred window restoration uses physical pixels.
-            let size = if window.fullscreen().is_some() {
-                LogicalSize::new(
-                    self.windowed_size.get()[0] as f64,
-                    self.windowed_size.get()[1] as f64,
-                )
-                .to_physical::<u32>(window.scale_factor())
-            } else {
-                window.inner_size()
-            };
+            let size = window.inner_size();
             self.windowed_size.set([size.width, size.height]);
+            if self.startup.display_preferences().fullscreen {
+                let mut selection = self.fullscreen_monitor.borrow_mut();
+                let monitor = crate::FullscreenMonitor::resolve(&window, selection.mode)?;
+                selection.selected = monitor.clone();
+                window.set_fullscreen(Some(winit::window::Fullscreen::Borderless(monitor)));
+            }
+
             #[cfg(feature = "wgpu-renderer")]
             if self.use_gpu {
                 let instance = cmvs_wgpu::wgpu::Instance::new(
@@ -400,6 +395,7 @@ impl ApplicationHandler for App<'_> {
                 aspect_mode: &self.aspect_mode,
                 aspect_scaling: &self.aspect_scaling,
                 render_mode: &self.render_mode,
+                fullscreen_monitor: &self.fullscreen_monitor,
                 windowed_size: &self.windowed_size,
                 fonts: self.font.as_ref(),
                 device_frame: self.device_frame.as_deref(),
@@ -608,6 +604,7 @@ impl ApplicationHandler for App<'_> {
                     aspect_mode: &self.aspect_mode,
                     aspect_scaling: &self.aspect_scaling,
                     render_mode: &self.render_mode,
+                    fullscreen_monitor: &self.fullscreen_monitor,
                     windowed_size: &self.windowed_size,
                     fonts: self.font.as_ref(),
                     device_frame: self.device_frame.as_deref(),
@@ -1008,6 +1005,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
     startup.set_random_seed(rand_seed);
     let display_preferences = startup.display_preferences();
+    let fullscreen_monitor_mode = startup.platform().fullscreen_monitor_mode();
     let canvas = startup.screen_size();
     let mut game_input = GameInput::default();
     game_input.set_screen_size(cmvs_core::viewport::ScreenSize::new(canvas)?);
@@ -1048,6 +1046,9 @@ fn run() -> Result<(), Box<dyn Error>> {
         aspect_mode: std::cell::Cell::new(display_preferences.aspect_mode),
         aspect_scaling: std::cell::Cell::new(display_preferences.aspect_scaling),
         render_mode: std::cell::Cell::new(display_preferences.render_mode),
+        fullscreen_monitor: std::cell::RefCell::new(crate::FullscreenMonitor::new(
+            fullscreen_monitor_mode,
+        )),
         windowed_size: std::cell::Cell::new(window_size),
     };
     let event_loop = EventLoop::new()?;

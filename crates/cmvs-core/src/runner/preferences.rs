@@ -104,6 +104,11 @@ impl Startup<'_> {
             configuration.set_integer("SOUND_INFO", key, value)?;
         }
         configuration.set_integer(
+            "WINDOW_RESOLVING",
+            "FULL_SCREEN_MONITOR_MODE",
+            self.platform.fullscreen_monitor_mode(),
+        )?;
+        configuration.set_integer(
             "CMVS_RS_DESKTOP",
             "FULLSCREEN",
             u32::from(display.fullscreen),

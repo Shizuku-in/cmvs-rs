@@ -943,14 +943,14 @@ impl<'a> Startup<'a> {
         };
         if crate::dispatch::uses_message_state(command) {
             hosts.messages = Some(&mut self.messages);
-            if crate::dispatch::uses_input(command) {
+            if crate::dispatch::uses_input_for(resolved.semantics, command) {
                 hosts.input = Some(crate::dispatch::InputHosts {
                     input: &mut self.input,
                     skip: message_flags.skip(),
                     clock: Some(input_clock),
                 });
             }
-        } else if crate::dispatch::uses_input(command) {
+        } else if crate::dispatch::uses_input_for(resolved.semantics, command) {
             hosts.input = Some(crate::dispatch::InputHosts {
                 input: &mut self.input,
                 skip: message_flags.skip(),

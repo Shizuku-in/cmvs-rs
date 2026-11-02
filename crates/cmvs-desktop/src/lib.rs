@@ -148,7 +148,42 @@ impl DeviceFrame for cmvs_wgpu::GpuFrame {
     }
 }
 
+/// Display selection survives the short-lived NativeBackend borrowed each frame.
+pub struct FullscreenMonitor {
+    mode: u32,
+    selected: Option<winit::monitor::MonitorHandle>,
+}
+impl FullscreenMonitor {
+    pub fn new(mode: u32) -> Self {
+        Self {
+            mode,
+            selected: None,
+        }
+    }
+    fn resolve(
+        window: &Window,
+        mode: u32,
+    ) -> Result<Option<winit::monitor::MonitorHandle>, Box<dyn Error>> {
+        let monitor = match mode {
+            0 => window
+                .primary_monitor()
+                .or_else(|| window.current_monitor()),
+            1..=4 => window
+                .available_monitors()
+                .nth((mode - 1) as usize)
+                .or_else(|| window.primary_monitor())
+                .or_else(|| window.current_monitor()),
+            5 => window.current_monitor(),
+            _ => return Err("unsupported fullscreen monitor mode".into()),
+        };
+        // None delegates default selection to the compositor when monitor handles
+        // are not exposed (e.g. a not-yet-mapped Wayland window).
+        Ok(monitor)
+    }
+}
+
 pub struct NativeBackend<'a> {
+    pub fullscreen_monitor: &'a std::cell::RefCell<FullscreenMonitor>,
     pub logical_size: [u32; 2],
     pub window: &'a Window,
     pub event_loop: &'a ActiveEventLoop,
@@ -166,6 +201,24 @@ pub struct NativeBackend<'a> {
     pub masked_cursor: &'a std::cell::RefCell<Option<cmvs_native::MaskedCursor>>,
 }
 impl PlatformBackend for NativeBackend<'_> {
+    fn select_fullscreen_monitor(&mut self, mode: u32) -> Result<bool, Box<dyn Error>> {
+        let target = FullscreenMonitor::resolve(self.window, mode)?;
+        let mut state = self.fullscreen_monitor.borrow_mut();
+        let previous = match &state.selected {
+            Some(monitor) => Some(monitor.clone()),
+            None => FullscreenMonitor::resolve(self.window, state.mode)?,
+        };
+        let changed = mode == 5 || target != previous;
+        if changed && self.window.fullscreen().is_some() {
+            self.window
+                .set_fullscreen(Some(winit::window::Fullscreen::Borderless(target.clone())));
+            self.window.request_redraw();
+        }
+        state.mode = mode;
+        state.selected = target;
+        Ok(changed)
+    }
+
     fn display_count(&self) -> Result<u32, Box<dyn Error>> {
         Ok(self.window.available_monitors().count().try_into()?)
     }
@@ -281,16 +334,26 @@ impl PlatformBackend for NativeBackend<'_> {
                 self.window.request_redraw();
                 println!("# native render mode={mode}");
             }
+            PlatformRequest::FullscreenMonitor(mode) => {
+                self.select_fullscreen_monitor(*mode)?;
+            }
             PlatformRequest::Fullscreen(value) => {
                 let was_fullscreen = self.fullscreen()?;
+                let target = if *value {
+                    let mode = self.fullscreen_monitor.borrow().mode;
+                    Some(winit::window::Fullscreen::Borderless(
+                        FullscreenMonitor::resolve(self.window, mode)?,
+                    ))
+                } else {
+                    None
+                };
                 if *value && !was_fullscreen {
                     self.windowed_size.set(self.window_size()?);
                 }
-                self.window.set_fullscreen(
-                    value.then(|| {
-                        winit::window::Fullscreen::Borderless(self.window.current_monitor())
-                    }),
-                );
+                if let Some(winit::window::Fullscreen::Borderless(monitor)) = &target {
+                    self.fullscreen_monitor.borrow_mut().selected = monitor.clone();
+                }
+                self.window.set_fullscreen(target);
                 if !value && was_fullscreen {
                     let [width, height] = self.windowed_size.get();
                     let _ = self

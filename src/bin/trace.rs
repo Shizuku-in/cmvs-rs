@@ -566,6 +566,9 @@ fn run() -> Result<(), Box<dyn Error>> {
                 );
                 if platform_backend.requests().len() > previous {
                     match platform_backend.requests().last().expect("new request") {
+                        PlatformRequest::FullscreenMonitor(mode) => {
+                            println!("# fullscreen monitor mode={mode}")
+                        }
                         PlatformRequest::Fullscreen(value) => {
                             println!("# recorded fullscreen={value}")
                         }

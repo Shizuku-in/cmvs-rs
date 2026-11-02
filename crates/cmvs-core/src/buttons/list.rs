@@ -20,6 +20,26 @@ pub struct ListGroup {
     pub hit_point: Option<[i32; 2]>,
 }
 
+fn list_position(scene: &SceneHost, object: u8) -> Result<[i32; 2], &'static str> {
+    let draw = scene
+        .object(object)
+        .and_then(|o| o.draw.as_ref())
+        .ok_or("auxiliary list object has no draw state")?;
+    let position = match draw.words[0] {
+        0 => [draw.words[8], draw.words[9]].map(|v| v as i32),
+        5 => [draw.words[11], draw.words[12]].map(|v| {
+            let f = f32::from_bits(v);
+            if !(-2147483648.0..2147483648.0).contains(&f) {
+                i32::MIN
+            } else {
+                f as i32
+            }
+        }),
+        _ => return Err("auxiliary list hit testing needs 2D or font coordinates"),
+    };
+    Ok(position)
+}
+
 impl ButtonHost {
     pub fn list_group(&self, slot: usize) -> Option<&ListGroup> {
         self.lists.get(slot)?.as_ref()
@@ -56,26 +76,7 @@ impl ButtonHost {
             .get(slot)
             .and_then(Option::as_ref)
             .ok_or_else(|| fail("auxiliary list group does not exist or outside 0..7"))?;
-        let draw = scene
-            .object(group.object)
-            .and_then(|o| o.draw.as_ref())
-            .ok_or_else(|| fail("auxiliary list object has no draw state"))?;
-        let position = match draw.words[0] {
-            0 => [draw.words[8], draw.words[9]].map(|v| v as i32),
-            5 => [draw.words[11], draw.words[12]].map(|v| {
-                let f = f32::from_bits(v);
-                if !(-2147483648.0..2147483648.0).contains(&f) {
-                    i32::MIN
-                } else {
-                    f as i32
-                }
-            }),
-            _ => {
-                return Err(fail(
-                    "auxiliary list hit testing needs 2D or font coordinates",
-                ));
-            }
-        };
+        let position = list_position(scene, group.object).map_err(fail)?;
         let mut view = super::ButtonGroup {
             object: group.object,
             buttons: group.buttons.clone(),
@@ -138,6 +139,71 @@ impl ButtonHost {
         if let Some([x, y]) = frame.warp {
             input.warp_pointer(x, y);
         }
+        Ok(())
+    }
+
+    /// REALIVE 0x140097810 -> 0x14001b2d0; explicit list selection, not input polling.
+    pub(crate) fn handle_list_select(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        scene: &mut SceneHost,
+        input: &mut crate::input::ActionInput,
+    ) -> Result<(), DecodeError> {
+        let slot = call.argument(4, "list slot")? as usize;
+        let id = call.argument(8, "button id")?;
+        let warp = call.argument(12, "warp")? != 0;
+        let group = self
+            .lists
+            .get(slot)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| call.error("auxiliary list group does not exist or outside 0..7"))?;
+        let target = group
+            .buttons
+            .iter()
+            .position(|b| b.id == id)
+            .filter(|&i| group.buttons[i].enabled);
+        let mut moved = None;
+        if let Some(index) = target {
+            let position = list_position(scene, group.object).map_err(|why| call.error(why))?;
+            let [x, y, w, h] = group.buttons[index].rect;
+            let [x, y] = [x.wrapping_add(position[0]), y.wrapping_add(position[1])];
+            let scale = |value: i32, numerator: u32, denominator: u32| {
+                value
+                    .wrapping_mul(numerator as i32)
+                    .checked_div(denominator as i32)
+                    .ok_or_else(|| call.error("invalid auxiliary list coordinate scale"))
+            };
+            let point = input.pointer();
+            let [px, py] = [
+                scale(point[0], group.screen[4], group.screen[0])?,
+                scale(point[1], group.screen[5], group.screen[1])?,
+            ];
+            if warp && !(px >= x && py >= y && px < x.wrapping_add(w) && py < y.wrapping_add(h)) {
+                moved = Some([
+                    scale(x.wrapping_add(w / 2), group.screen[0], group.screen[4])?,
+                    scale(y.wrapping_add(h / 2), group.screen[1], group.screen[5])?,
+                ]);
+            }
+            if group.current != Some(index) {
+                let mut images = Vec::new();
+                if let Some(old) = group.current {
+                    images.push(group.buttons[old].images[0]);
+                }
+                images.push(group.buttons[index].images[1]);
+                apply_images(scene, group.object, &images, false).map_err(|why| call.error(why))?;
+            }
+        }
+        call.complete(0x400c)?;
+        if let Some(index) = target {
+            self.lists[slot].as_mut().expect("validated").current = Some(index);
+        }
+        if let Some([x, y]) = moved {
+            input.warp_pointer(x, y);
+        }
+        call.vm
+            .state_mut()
+            .set_system_integer(0, u32::from(target.is_some()))
+            .expect("result exists");
         Ok(())
     }
 

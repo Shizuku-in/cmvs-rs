@@ -975,19 +975,28 @@ fn root_drag_press(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flo
     Ok(Flow::Done)
 }
 
+fn input_capability(capability: Capability) -> bool {
+    matches!(
+        capability,
+        Capability::Input
+            | Capability::ButtonInput
+            | Capability::ListInput
+            | Capability::DragPress
+            | Capability::WindowPointer
+            | Capability::WindowButtons
+    )
+}
 pub fn uses_input(command: u16) -> bool {
-    ROOT.iter().any(|entry| {
-        entry.command == command
-            && matches!(
-                entry.capability,
-                Capability::Input
-                    | Capability::ButtonInput
-                    | Capability::ListInput
-                    | Capability::DragPress
-                    | Capability::WindowPointer
-                    | Capability::WindowButtons
-            )
-    })
+    ROOT.iter()
+        .any(|entry| entry.command == command && input_capability(entry.capability))
+}
+pub fn uses_input_for(semantics: Semantics, command: u16) -> bool {
+    match semantics {
+        Semantics::Root => uses_input(command),
+        Semantics::Variant(id) => {
+            variant_entry(id, command).is_some_and(|entry| input_capability(entry.capability))
+        }
+    }
 }
 
 fn root_runtime(_hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
@@ -4517,12 +4526,20 @@ pub static DISPLAY_COUNT: &[Entry] = &[Entry {
     handler: root_platform,
 }];
 
-pub static FULLSCREEN_MONITOR: &[Entry] = &[Entry {
-    command: 0x3c5,
-    name: "fullscreen monitor selection mode",
-    capability: Capability::Platform,
-    handler: root_platform,
-}];
+pub static FULLSCREEN_MONITOR: &[Entry] = &[
+    Entry {
+        command: 0x3c5,
+        name: "fullscreen monitor selection mode",
+        capability: Capability::Platform,
+        handler: root_platform,
+    },
+    Entry {
+        command: 0x3c6,
+        name: "select fullscreen monitor",
+        capability: Capability::Platform,
+        handler: root_platform,
+    },
+];
 
 pub static FONT_CELLS: &[Entry] = &[
     Entry {
@@ -4785,6 +4802,28 @@ fn collision_mesh(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow
     Ok(Flow::Done)
 }
 
+pub static LIST_SELECT: &[Entry] = &[Entry {
+    command: 0x37a,
+    name: "select list button",
+    capability: Capability::ButtonInput,
+    handler: |hosts, call| {
+        let h = hosts.input.as_mut().expect("input capability checked");
+        hosts
+            .buttons
+            .as_deref_mut()
+            .expect("buttons capability checked")
+            .handle_list_select(
+                call,
+                hosts
+                    .scene
+                    .as_deref_mut()
+                    .expect("scene capability checked"),
+                h.input,
+            )?;
+        Ok(Flow::Done)
+    },
+}];
+
 pub static OBJECT_QUEUE: &[Entry] = &[Entry {
     command: 0x25,
     name: "detach child queue",
@@ -4821,6 +4860,7 @@ pub static VARIANT_TABLES: &[&[Entry]] = &[
     BACKGROUND_AUDIO,
     TEXT_ALPHA,
     OBJECT_QUEUE,
+    LIST_SELECT,
     FALLING_BILLBOARDS,
     COLLISION_PARTICLES,
     FRAGMENTS,
@@ -4832,6 +4872,7 @@ pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'st
         crate::profile::VariantId::DisplayCount => DISPLAY_COUNT,
         crate::profile::VariantId::FullscreenMonitor => FULLSCREEN_MONITOR,
         crate::profile::VariantId::KeyedArchives => KEYED_ARCHIVES,
+        crate::profile::VariantId::ListSelect => LIST_SELECT,
         crate::profile::VariantId::ObjectQueue => OBJECT_QUEUE,
         crate::profile::VariantId::TextAlpha => TEXT_ALPHA,
         crate::profile::VariantId::FontCells => FONT_CELLS,
@@ -4852,6 +4893,7 @@ pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
             "variant fullscreen monitor"
         }
         Semantics::Variant(crate::profile::VariantId::KeyedArchives) => "variant keyed archives",
+        Semantics::Variant(crate::profile::VariantId::ListSelect) => "variant list selection",
         Semantics::Variant(crate::profile::VariantId::ObjectQueue) => "variant object queue",
         Semantics::Variant(crate::profile::VariantId::TextAlpha) => "variant text alpha revision",
         Semantics::Variant(crate::profile::VariantId::FontCells) => "variant text override",

@@ -791,3 +791,144 @@ fn scaled_group_creation_accepts_the_device_scale_only() {
         assert_eq!(vm.stack().len_bytes(), if accepted { 0 } else { 16 });
     }
 }
+
+#[test]
+fn realive_list_selection_warps_relative_to_object_and_preserves_poll_state() {
+    use cmvs_rs::{
+        dispatch::{self, Flow, Hosts, InputHosts},
+        profile::Registry,
+    };
+    let mut code = vec![];
+    call(&mut code, 0x2020, &[10]);
+    call(&mut code, 0x2040, &[10]);
+    call(&mut code, 0x2045, &[10, u32::MAX, 100, 50]);
+    for child in [3, 4] {
+        call(&mut code, 0x2022, &[10, child]);
+        call(&mut code, 0x2050, &[10, child]);
+    }
+    call(&mut code, 0x2370, &[7, 10]);
+    for (id, child) in [(9, 3), (11, 4)] {
+        call(&mut code, 0x2372, &[7, id]);
+        call(&mut code, 0x2373, &[7, id, 10, 20, 30, 40]);
+        for state in 0..4 {
+            call(
+                &mut code,
+                0x2374,
+                &[7, id, state, child, state * 10, 0, 4, 5, 0, 0],
+            );
+        }
+    }
+    call(&mut code, 0x2375, &[7]);
+    let setup = code.len();
+    for args in [[7, 9, 1], [7, 11, 0], [7, 99, 1]] {
+        call(&mut code, 0x237a, &args);
+    }
+    // An invalid target image must keep the current selection and pointer intact.
+    call(&mut code, 0x2374, &[7, 9, 1, 500, 0, 0, 4, 5, 0, 0]);
+    call(&mut code, 0x237a, &[7, 9, 1]);
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let (mut scene, mut buttons) = (SceneHost::default(), ButtonHost::default());
+    while vm.pc() < setup {
+        assert!(next(&mut vm, &mut scene, &mut buttons));
+    }
+    let mut input = ActionInput::default();
+    input.set_pointer(0, 0);
+    input.set(0, true, true, false).unwrap();
+    let profile = Registry::builtin().profile("cmvs-20190305").unwrap();
+    let semantics = profile.semantics(0x37a);
+    for expected in [Some(0), Some(1), None] {
+        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        let before = (vm.pc(), vm.stack().len_bytes(), vm.pending_system());
+        assert_eq!(
+            dispatch::run(semantics, &mut vm, &mut Hosts::default()).unwrap(),
+            Some(Flow::Unavailable)
+        );
+        assert_eq!(
+            (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
+            before
+        );
+        assert_eq!(
+            dispatch::run(
+                semantics,
+                &mut vm,
+                &mut Hosts {
+                    buttons: Some(&mut buttons),
+                    scene: Some(&mut scene),
+                    input: Some(InputHosts {
+                        input: &mut input,
+                        skip: false,
+                        clock: None
+                    }),
+                    ..Default::default()
+                }
+            )
+            .unwrap(),
+            Some(Flow::Done)
+        );
+        assert_eq!(
+            vm.state().system_integer(0),
+            Some(u32::from(expected.is_some()))
+        );
+        assert_eq!(
+            buttons.list_group(7).unwrap().current,
+            Some(if expected == Some(0) { 0 } else { 1 })
+        );
+        assert_eq!(buttons.list_group(7).unwrap().hit_point, None);
+        assert_eq!(input.pointer(), [125, 90]);
+        assert!(input.pressed(0));
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
+    assert_eq!(
+        scene.object(10).unwrap().children[&3]
+            .draw
+            .as_ref()
+            .unwrap()
+            .words[2],
+        0
+    );
+    assert_eq!(
+        scene.object(10).unwrap().children[&4]
+            .draw
+            .as_ref()
+            .unwrap()
+            .words[2],
+        10
+    );
+    assert!(next(&mut vm, &mut scene, &mut buttons));
+    while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+    let before = (
+        buttons.list_group(7).unwrap().clone(),
+        scene.object(10).unwrap().clone(),
+        input.clone(),
+        vm.pc(),
+        vm.stack().len_bytes(),
+    );
+    assert!(
+        dispatch::run(
+            semantics,
+            &mut vm,
+            &mut Hosts {
+                buttons: Some(&mut buttons),
+                scene: Some(&mut scene),
+                input: Some(InputHosts {
+                    input: &mut input,
+                    skip: false,
+                    clock: None
+                }),
+                ..Default::default()
+            }
+        )
+        .is_err()
+    );
+    assert_eq!(
+        (
+            buttons.list_group(7).unwrap().clone(),
+            scene.object(10).unwrap().clone(),
+            input,
+            vm.pc(),
+            vm.stack().len_bytes()
+        ),
+        before
+    );
+}

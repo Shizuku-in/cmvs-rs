@@ -2717,3 +2717,77 @@ fn realive_startup_uses_the_extended_child_table() {
     }
     assert!(run.scene().object(7).unwrap().children.contains_key(&1023));
 }
+
+#[test]
+fn realive_fullscreen_monitor_selection_survives_configuration_restart() {
+    let mut code = vec![];
+    commands::command(&mut code, 0x23c6, &[5]);
+    commands::command(&mut code, 0x2000, &[]);
+    let root = Root::new("realive-monitor-preference", &code, b"");
+    let script = root.script();
+    let game = Registry::builtin()
+        .identify_game(&root.0, Some("cmvs-20190305"))
+        .unwrap();
+    let directory = root
+        .0
+        .with_file_name(format!("cmvs-realive-monitor-user-{}", std::process::id()));
+    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    run.set_user_data_directory(&directory).unwrap();
+    run.set_block_unreviewed(false);
+    let mut backend = RecordingBackend::default();
+    for _ in 0..20 {
+        if run.tick(&mut backend).unwrap() == StartupEvent::Yield {
+            break;
+        }
+    }
+    assert_eq!(run.platform().fullscreen_monitor_mode(), 5);
+    assert_eq!(backend.requests(), [PlatformRequest::FullscreenMonitor(5)]);
+    run.save_preferences(Default::default()).unwrap();
+    drop(run);
+    let mut resumed = Startup::new(&script, &root.0, &game, 0).unwrap();
+    resumed.set_user_data_directory(&directory).unwrap();
+    assert_eq!(resumed.platform().fullscreen_monitor_mode(), 5);
+    drop(resumed);
+    assert!(directory.starts_with(std::env::temp_dir()));
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn realive_list_selection_receives_input_and_scene_hosts_in_startup() {
+    let mut code = vec![];
+    for (op, args) in [
+        (0x2020, vec![10]),
+        (0x2040, vec![10]),
+        (0x2022, vec![10, 3]),
+        (0x2050, vec![10, 3]),
+        (0x2370, vec![7, 10]),
+        (0x2372, vec![7, 9]),
+        (0x2373, vec![7, 9, 10, 20, 30, 40]),
+        (0x2374, vec![7, 9, 1, 3, 10, 0, 4, 5, 0, 0]),
+        (0x237a, vec![7, 9, 1]),
+        (0x2000, vec![]),
+    ] {
+        commands::command(&mut code, op, &args);
+    }
+    let root = Root::new("realive-list-select", &code, b"");
+    let script = root.script();
+    let game = Registry::builtin()
+        .identify_game(&root.0, Some("cmvs-20190305"))
+        .unwrap();
+    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    run.set_block_unreviewed(false);
+    let mut backend = RecordingBackend::default();
+    let mut yielded = false;
+    for _ in 0..100 {
+        let event = run.tick(&mut backend).unwrap();
+        assert!(!matches!(event, StartupEvent::Unhandled { .. }));
+        if event == StartupEvent::Yield {
+            yielded = true;
+            break;
+        }
+    }
+    assert!(yielded);
+    assert_eq!(run.buttons().list_group(7).unwrap().current, Some(0));
+    assert_eq!(run.input().pointer(), [25, 40]);
+    assert_eq!(run.machine().state().system_integer(0), Some(1));
+}

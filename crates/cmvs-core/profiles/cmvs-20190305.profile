@@ -895,7 +895,7 @@ binary x86 file=cmvs32.exe sha256=6705a43d85121b56961515f3dd0a0766a14a91ffa76df8
 0x2377 unreviewed 0x819cc 0x74750
 0x2378 unreviewed 0x819d9 0x7475a
 0x2379 unreviewed 0x819e6 0x74764
-0x237a unreviewed 0x819f3 0x7476e
+0x237a unreviewed 0x819f3 0x7476e variant=list-select:x64:02b71aac3d3d1ced1d0312b6c37748cf12df9cffd9585fb07787e6ca43199f00 evidence=games/realive/README.md
 0x237b unreviewed 0x81a00 0x74778
 0x237c unreviewed 0x81a0d 0x74782
 0x237d unreviewed 0x81a1a 0x7478c
@@ -971,7 +971,7 @@ binary x86 file=cmvs32.exe sha256=6705a43d85121b56961515f3dd0a0766a14a91ffa76df8
 0x23c3 noop 0x7f217 0x72a25
 0x23c4 noop 0x7f217 0x72a25
 0x23c5 unreviewed 0x81c92 0x74976 variant=fullscreen-monitor:x64:02b71aac3d3d1ced1d0312b6c37748cf12df9cffd9585fb07787e6ca43199f00 evidence=games/realive/README.md
-0x23c6 unreviewed 0x81c9f 0x74980
+0x23c6 unreviewed 0x81c9f 0x74980 variant=fullscreen-monitor:x64:02b71aac3d3d1ced1d0312b6c37748cf12df9cffd9585fb07787e6ca43199f00 evidence=games/realive/README.md
 0x23c7 unreviewed 0x81cac 0x7498a variant=display-count:x64:02b71aac3d3d1ced1d0312b6c37748cf12df9cffd9585fb07787e6ca43199f00 evidence=games/realive/README.md
 0x23c8 noop 0x7f217 0x72a25
 0x23c9 noop 0x7f217 0x72a25
