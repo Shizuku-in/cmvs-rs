@@ -2073,6 +2073,37 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
     assert_eq!(&live.pixels.pixels()[..4], &[0x11, 0x22, 0x33, 255]);
     assert!(!directory.join("save998.dat").exists());
 
+    // Callback 29 must fit the restored stack and target the restored script.
+    let before = run.inspect_snapshot().unwrap();
+    let requests = backend.requests().len();
+    let mut callback = snapshot.clone();
+    let target_offset = 4 + 28 * 29 + 8;
+    for (target, sp, expected) in [
+        (
+            snapshot_pc + 1,
+            0,
+            "callback target is not an instruction boundary",
+        ),
+        (end, snapshot.stack.len() - 8, "parameter stack limit"),
+    ] {
+        callback.callbacks[target_offset..target_offset + 4]
+            .copy_from_slice(&(target as u32).to_le_bytes());
+        callback.stack_pointer = sp as u32;
+        let bytes = Csv2Save::encode(
+            header,
+            &callback.encode().unwrap(),
+            &save.auxiliary,
+            &save.script_image,
+        )
+        .unwrap();
+        fs::write(directory.join("save005.dat"), bytes).unwrap();
+        let error = run.load_slot(5, &mut backend).unwrap_err();
+        assert_eq!(error.to_string(), expected);
+        assert_eq!(run.inspect_snapshot().unwrap(), before);
+        assert_eq!(backend.requests().len(), requests);
+        assert!(!directory.join("save998.dat").exists());
+    }
+
     // Loading slot 3 first keeps the held image as slot 998, then resumes after 0x22b2
     // with the captured locals, bit 0 included.
     run.load_slot(3, &mut backend).unwrap();
@@ -2123,6 +2154,17 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
     assert_eq!(run_to_end(&mut run, &mut backend), 0);
     assert_eq!(fs::read(directory.join("save999.dat")).unwrap(), first);
     assert_eq!(fs::read(&slot).unwrap(), first);
+    if profile.is_none() {
+        let oversized = directory.join("save006.dat");
+        let size = cmvs_rs::MAX_PAYLOAD as u64 + 1;
+        fs::File::create(&oversized).unwrap().set_len(size).unwrap();
+        let system = fs::read(directory.join("system.dat")).unwrap();
+        let error = run.save_slot(6).unwrap_err();
+        assert_eq!(error.to_string(), "save exceeds research limit");
+        assert_eq!(fs::metadata(&oversized).unwrap().len(), size);
+        assert_eq!(fs::read(directory.join("save999.dat")).unwrap(), first);
+        assert_eq!(fs::read(directory.join("system.dat")).unwrap(), system);
+    }
     assert!(run.load_slot(4, &mut backend).is_err());
     assert!(run.save_slot(1000).is_err());
     // 0x6a0 is an allocation descriptor, not saved overlay pixels. The native
@@ -2224,6 +2266,35 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
             particles
         );
     }
+    // The new main has a callback at offset 2, inside an instruction in the old main.
+    assert!(!run.machine().is_boundary(0, 2));
+    let new_main = commands::script(&[0x00, 0x20, 0x14, 0x04, 0, 0]);
+    let new_image = new_main.memory_image(&[]).unwrap();
+    callback.script_sizes[0] = new_image.len() as u32;
+    callback.script_data.clear();
+    callback.callbacks[target_offset..target_offset + 4].copy_from_slice(&2u32.to_le_bytes());
+    callback.pc = 0;
+    callback.repeat_count = 7;
+    callback.stack_pointer = (callback.stack.len() - 12) as u32;
+    let bytes = Csv2Save::encode(
+        header,
+        &callback.encode().unwrap(),
+        &save.auxiliary,
+        &new_image,
+    )
+    .unwrap();
+    fs::write(directory.join("save005.dat"), bytes).unwrap();
+    run.load_slot(5, &mut backend).unwrap();
+    assert_eq!(run.machine().pc(), 2);
+    assert_eq!(run.machine().repeat_count(), 0);
+    assert_eq!(run.machine().stack().len_bytes(), callback.stack.len());
+    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(run.machine().pc(), 0);
+    assert_eq!(run.machine().repeat_count(), 7);
+    assert_eq!(
+        run.machine().stack().len_bytes(),
+        callback.stack_pointer as usize
+    );
     drop(run);
     fs::remove_dir_all(&directory).unwrap();
     if profile.is_some() {

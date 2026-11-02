@@ -93,6 +93,17 @@ pub struct VmImage {
     pub main_data: Vec<u8>,
 }
 
+pub(crate) struct RestoredVm<'a> {
+    main: Image<'a>,
+    slot: u8,
+    pc: usize,
+    repeat_count: u32,
+    pub(crate) state: State,
+    stack: ParameterStack,
+    frames: Vec<usize>,
+    cross_calls: Vec<u8>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
     Continue,
@@ -211,6 +222,16 @@ impl<'a> Machine<'a> {
     /// the saved names. Registers outside the snapshot (expression result, condition, string
     /// accumulator) keep their current values, as in the original.
     pub fn restore_vm(&mut self, image: &VmImage) -> Result<(), &'static str> {
+        let restored = self.prepare_restore(image, None)?;
+        self.install_restore(restored);
+        Ok(())
+    }
+
+    pub(crate) fn prepare_restore(
+        &self,
+        image: &VmImage,
+        callback: Option<(u8, usize)>,
+    ) -> Result<RestoredVm<'a>, &'static str> {
         let mut script = Script::from_memory_image(&image.main_image).map_err(|e| e.0)?;
         script
             .apply_snapshot_data(&image.main_data)
@@ -239,7 +260,7 @@ impl<'a> Machine<'a> {
         if frames.iter().any(|&base| base > sp) {
             return Err("saved call frame lies above the stack pointer");
         }
-        let stack = ParameterStack::from_saved(&image.stack, sp, 65536).map_err(|e| e.0)?;
+        let mut stack = ParameterStack::from_saved(&image.stack, sp, 65536).map_err(|e| e.0)?;
         let entry = script.header.entry_pc;
         let main = Image::prepare(Cow::Owned(script), image.script_names[0].clone(), entry)
             .map_err(|_| "saved main script layout is invalid")?;
@@ -252,39 +273,58 @@ impl<'a> Machine<'a> {
             }
         }
         let slot = image.active_slot as u8;
-        if slot == 0 && !main.instructions.contains_key(&(image.pc as usize)) {
+        let is_boundary = |slot, pc| match slot {
+            0 => main.instructions.contains_key(&pc),
+            _ => self.is_boundary(slot, pc),
+        };
+        if !is_boundary(slot, image.pc as usize) {
             return Err("saved PC is not an instruction boundary");
         }
-        if slot != 0 && !self.is_boundary(slot, image.pc as usize) {
-            return Err("saved PC is not an instruction boundary");
-        }
-        self.images.insert(0, main);
-        self.slot = slot;
-        self.pc = image.pc as usize;
-        self.repeat_count = image.repeat_count;
-        self.stack = stack;
-        self.frames = frames;
-        self.cross_calls.clear();
-        self.pending = None;
-        self.state = candidate_state;
-        Ok(())
+        let mut cross_calls = Vec::new();
+        let (slot, pc, repeat_count) = if let Some((target_slot, target)) = callback {
+            if !is_boundary(target_slot, target) {
+                return Err("callback target is not an instruction boundary");
+            }
+            Self::push_callback_frame(&mut stack, image.repeat_count, image.pc, slot)?;
+            cross_calls.push(slot);
+            (target_slot, target, 0)
+        } else {
+            (slot, image.pc as usize, image.repeat_count)
+        };
+        Ok(RestoredVm {
+            main,
+            slot,
+            pc,
+            repeat_count,
+            state: candidate_state,
+            stack,
+            frames,
+            cross_calls,
+        })
     }
 
-    /// 0x140068770: when callback `index` is registered, push the current repeat count, PC
-    /// and slot as a cross-script return frame and continue at the callback with repeat 0.
-    pub(crate) fn enter_callback(&mut self, slot: u8, target: usize) -> Result<(), &'static str> {
-        if !self.is_boundary(slot, target) {
-            return Err("callback target is not an instruction boundary");
-        }
-        let mut stack = self.stack.clone();
-        for value in [self.repeat_count, self.pc as u32, u32::from(self.slot)] {
+    pub(crate) fn install_restore(&mut self, restored: RestoredVm<'a>) {
+        self.images.insert(0, restored.main);
+        self.slot = restored.slot;
+        self.pc = restored.pc;
+        self.repeat_count = restored.repeat_count;
+        self.stack = restored.stack;
+        self.frames = restored.frames;
+        self.cross_calls = restored.cross_calls;
+        self.pending = None;
+        self.state = restored.state;
+    }
+
+    /// 0x140068770: push the return context onto the candidate stack.
+    fn push_callback_frame(
+        stack: &mut ParameterStack,
+        repeat: u32,
+        pc: u32,
+        slot: u8,
+    ) -> Result<(), &'static str> {
+        for value in [repeat, pc, u32::from(slot)] {
             stack.push_u32(value).map_err(|e| e.0)?;
         }
-        self.stack = stack;
-        self.cross_calls.push(self.slot);
-        self.slot = slot;
-        self.pc = target;
-        self.repeat_count = 0;
         Ok(())
     }
     /// 0x140064f50: push the current repeat count, PC and slot, then a (0, target, slot)
@@ -306,9 +346,7 @@ impl<'a> Machine<'a> {
             .chain(due[..due.len() - 1].iter().map(|&(s, t)| (0, t as u32, s)));
         let mut cross_calls = self.cross_calls.clone();
         for (repeat, pc, frame_slot) in frames {
-            for value in [repeat, pc, u32::from(frame_slot)] {
-                stack.push_u32(value).map_err(|e| e.0)?;
-            }
+            Self::push_callback_frame(&mut stack, repeat, pc, frame_slot)?;
             cross_calls.push(frame_slot);
         }
         self.stack = stack;

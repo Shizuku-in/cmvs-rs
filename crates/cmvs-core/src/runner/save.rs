@@ -402,7 +402,6 @@ impl Startup<'_> {
             return Err("entering the save callback 30 after a write is not modeled".into());
         }
         let directory = self.slot_directory()?;
-        let path = directory.join(format!("save{slot:03}.dat"));
         let mut header = captured.header;
         let now = label_time((self.save_clock)()).into_bytes();
         for i in [0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18] {
@@ -422,8 +421,9 @@ impl Startup<'_> {
             &captured.script_image,
         )?;
         // 0x140068b50: keep the previous version of slots below 950 as slot 999.
-        if slot < 950 && path.try_exists()? {
-            let previous = fs::read(&path)?;
+        if slot < 950
+            && let Some(previous) = self.saves.read_slot(slot)?
+        {
             replace_file(&directory, &format!("save{BACKUP_SLOT:03}.dat"), &previous)?;
         }
         // 0x1400179e0: the system save is written with every slot.
@@ -543,11 +543,7 @@ impl Startup<'_> {
         let save = Csv2Save::decode(&bytes)?;
         let snapshot = EngineSnapshot::decode_with_layout(&save.snapshot, layout)?;
         self.validate_build_snapshot(&snapshot)?;
-        let audio = SavedAudio::decode(&snapshot.bgm, &snapshot.sound_channels)?;
-        if slot < 950 && matches!(self.save_image, SaveImage::Captured(_)) {
-            self.write_slot(LOAD_BACKUP_SLOT, true)?;
-        }
-        self.restore_snapshot(&save, &bytes[..HEADER_SIZE], &snapshot, audio, backend)
+        self.restore_snapshot(slot, &save, &bytes[..HEADER_SIZE], &snapshot, backend)
     }
 
     /// Loader 0x140081960 and reader 0x140069fd0 over the Rust hosts. Everything fallible
@@ -555,10 +551,10 @@ impl Startup<'_> {
     /// host changes; audio and window-title requests then go to the backends.
     fn restore_snapshot(
         &mut self,
+        slot: u16,
         save: &Csv2Save,
         header: &[u8],
         snapshot: &EngineSnapshot,
-        audio: SavedAudio<'_>,
         backend: &mut impl PlatformBackend,
     ) -> Result<(), Box<dyn Error>> {
         if snapshot.word_11144 != 1 {
@@ -595,7 +591,15 @@ impl Startup<'_> {
         if snapshot.sound_device != [1, 0, 0, 0, 0, 0] {
             return Err("saved sound device buffers are not implemented".into());
         }
-        let vm = crate::machine::VmImage {
+        let audio = SavedAudio::decode(&snapshot.bgm, &snapshot.sound_channels)?;
+        let mut control = self.control.clone();
+        control.restore_callbacks(&snapshot.callbacks)?;
+        let callback = control
+            .callbacks()
+            .get(&LOAD_CALLBACK)
+            .filter(|c| c.enabled)
+            .map(|c| (c.script_slot, c.target as usize));
+        let image = crate::machine::VmImage {
             script_names: snapshot.script_names.clone(),
             script_sizes: snapshot.script_sizes,
             active_slot: snapshot.active_slot,
@@ -609,6 +613,11 @@ impl Startup<'_> {
             main_image: save.script_image.clone(),
             main_data: snapshot.script_data.clone(),
         };
+        let mut vm = self.machine.prepare_restore(&image, callback)?;
+        snapshot.variables.apply_to_state(&mut vm.state)?;
+        if slot < 950 && matches!(self.save_image, SaveImage::Captured(_)) {
+            self.write_slot(LOAD_BACKUP_SLOT, true)?;
+        }
         // Candidate hosts first: images, windows and texts must all rebuild.
         let mut budget = crate::snapshot::RESTORE_PIXELS;
         let mut images = self.images.with_paths(self.bootstrap.paths());
@@ -682,17 +691,8 @@ impl Startup<'_> {
         camera_host.restore(1, &snapshot.cameras[1])?;
         camera_host.restore_view(0, &snapshot.cameras[2])?;
         camera_host.restore_view(1, &snapshot.cameras[3])?;
-        let mut control = self.control.clone();
-        control.restore_callbacks(&snapshot.callbacks)?;
         self.platform.restored_title(&snapshot.scene_title)?;
-        // The local banks are validated against a copy before the VM changes.
-        snapshot
-            .variables
-            .apply_to_state(&mut self.machine.state().clone())?;
-        self.machine.restore_vm(&vm)?;
-        snapshot
-            .variables
-            .apply_to_state(self.machine.state_mut())?;
+        self.machine.install_restore(vm);
         // Commit the hosts.
         self.history = history;
         self.sequence = sequence;
@@ -735,15 +735,6 @@ impl Startup<'_> {
         self.audio.restore(audio, self.audio_backend.as_mut())?;
         self.platform
             .restore_scene_title(snapshot.scene_title.clone(), backend)?;
-        if let Some(callback) = self
-            .control
-            .callbacks()
-            .get(&LOAD_CALLBACK)
-            .filter(|c| c.enabled)
-        {
-            let (slot, target) = (callback.script_slot, callback.target as usize);
-            self.machine.enter_callback(slot, target)?;
-        }
         Ok(())
     }
 
