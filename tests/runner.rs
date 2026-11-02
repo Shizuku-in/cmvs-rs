@@ -1705,7 +1705,13 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
     for (op, word) in (0x2261..=0x2264).zip(&view_words[3..]) {
         commands::command(&mut code, op, &[*word]);
     }
+    let collision_points =
+        [[-1.0f32, 2.0, 0.0], [1.0, 2.0, 0.0], [0.0, 2.0, 1.0]].map(|p| p.map(f32::to_bits));
     if profile.is_some() {
+        commands::command(&mut code, 0x2330, &[20]);
+        for point in collision_points {
+            commands::command(&mut code, 0x2332, &[20, point[0], point[1], point[2]]);
+        }
         commands::command(&mut code, 0x2011, &[0, 10]);
         commands::command(
             &mut code,
@@ -1724,6 +1730,9 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
     }
     let snapshot_pc = code.len();
     code.extend(0x22b2u16.to_le_bytes());
+    if profile.is_some() {
+        commands::command(&mut code, 0x2331, &[20]);
+    }
     commands::command(&mut code, 0x2260, &[0; 3]);
     system_call(&mut code, 0x2092, &[5, 1, 7]);
     system_call(&mut code, 0x22b6, &[3]);
@@ -1786,6 +1795,11 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
         (0, snapshot_pc as u32 + 2, 0)
     );
     if profile.is_some() {
+        assert_eq!(
+            snapshot.objects[&20].collision_vertices.as_deref(),
+            Some(collision_points.as_slice())
+        );
+        assert_eq!(run.scene().object(20).unwrap().collision_vertices, None);
         let effect =
             cmvs_rs::snapshot::SavedEffect::decode(&snapshot.raw_objects[&(0x800, 0)]).unwrap();
         assert_eq!(effect.image_name(), b"Synthetic");
@@ -1825,6 +1839,14 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
     assert_eq!(run.machine().state().bit(0), Some(true));
     assert_eq!(run.camera().view(0).unwrap().words, view_words);
     if profile.is_some() {
+        assert_eq!(
+            run.scene()
+                .object(20)
+                .unwrap()
+                .collision_vertices
+                .as_deref(),
+            Some(collision_points.as_slice())
+        );
         assert_eq!(run.scene().particle_effects()[&0].particles.len(), 2);
         assert_eq!(
             run.inspect_snapshot().unwrap().raw_objects[&(0x800, 0)],
@@ -1892,6 +1914,36 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
     assert!(run.load_slot(4, &mut backend).is_err());
     assert_eq!(run.inspect_snapshot().unwrap().encode().unwrap(), before);
     if profile.is_some() {
+        // Corrupt the on-disk 0x749 count rather than asking the checked encoder
+        // to produce an invalid scene. The old VM, mesh and particles must survive.
+        let mut mesh_bytes = snapshot.encode().unwrap();
+        let mut mesh_header = 0x749u16.to_le_bytes().to_vec();
+        mesh_header.extend(44u32.to_le_bytes());
+        mesh_header.extend(0u32.to_le_bytes());
+        mesh_header.extend(3u32.to_le_bytes());
+        let at = mesh_bytes
+            .windows(mesh_header.len())
+            .position(|w| w == mesh_header)
+            .unwrap();
+        mesh_bytes[at + 10..at + 14].copy_from_slice(&u32::MAX.to_le_bytes());
+        let bytes =
+            Csv2Save::encode(header, &mesh_bytes, &save.auxiliary, &save.script_image).unwrap();
+        fs::write(directory.join("save004.dat"), bytes).unwrap();
+        assert!(
+            run.load_slot(4, &mut backend)
+                .unwrap_err()
+                .to_string()
+                .contains("collision vertex count")
+        );
+        assert_eq!(run.inspect_snapshot().unwrap().encode().unwrap(), before);
+        assert_eq!(
+            run.scene()
+                .object(20)
+                .unwrap()
+                .collision_vertices
+                .as_deref(),
+            Some(collision_points.as_slice())
+        );
         let mut malformed = snapshot.clone();
         malformed.raw_objects.get_mut(&(0x800, 0)).unwrap()[24..28]
             .copy_from_slice(&u32::MAX.to_le_bytes());

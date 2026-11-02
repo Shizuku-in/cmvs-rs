@@ -404,7 +404,12 @@ mod tests {
             scene.collision_triangles().unwrap(),
             vec![[[11.0, 22.0, 33.0]; 3]]
         );
-        assert!(crate::snapshot::SavedScene::from_object(scene.object(20).unwrap()).is_err());
+        assert_eq!(
+            crate::snapshot::SavedScene::from_object(scene.object(20).unwrap())
+                .unwrap()
+                .collision_vertices,
+            Some(vec![point; 3]),
+        );
         scene
             .object_mut(20)
             .unwrap()

@@ -9,6 +9,7 @@ use crate::{
     scene::{ClearState, DrawState, ObjectImage, SceneHost, SceneObject},
 };
 use std::{collections::BTreeMap, error::Error};
+mod collision;
 mod draw;
 pub(super) mod text;
 pub(super) mod window;
@@ -26,6 +27,29 @@ mod tests {
     impl ImageSource for NoImages {
         fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
             panic!("retained replacement resources must not be loaded");
+        }
+    }
+
+    #[test]
+    fn collision_mesh_roundtrip_preserves_empty_and_full_streams_in_children() {
+        for count in [0, 1, 3, 128] {
+            let vertices =
+                vec![[(-0.0f32).to_bits(), (-2.75f32).to_bits(), 1.5f32.to_bits()]; count];
+            let child = SceneObject {
+                collision_vertices: Some(vertices.clone()),
+                draw: Some(DrawState::default()),
+                ..SceneObject::default()
+            };
+            let mut parent = SceneObject::default();
+            parent.flags |= 0x8000_0000;
+            parent.children.insert(767, child);
+            let saved = SavedScene::from_object(&parent).unwrap();
+            let decoded = SavedScene::decode(&saved.encode().unwrap(), 0, &mut 0).unwrap();
+            assert_eq!(decoded, saved);
+            let loaded = decoded.load(&mut NoImages, &mut 0).unwrap();
+            assert_eq!(loaded.collision_vertices, None);
+            assert_eq!(loaded.children[&767].collision_vertices, Some(vertices));
+            assert_eq!(loaded.children[&767].draw, parent.children[&767].draw);
         }
     }
 
@@ -346,6 +370,8 @@ pub struct SavedScene {
     pub image: Option<SavedImage>,
     pub secondary_image: Option<SavedImage>,
     pub draw: Option<DrawState>,
+    /// Optional 0x749 vertex stream, including an allocated but empty mesh.
+    pub collision_vertices: Option<Vec<[u32; 3]>>,
     /// +6264..+6304; only the inactive effect branch (word 0 == 0) is supported.
     pub effect_words: [u32; 11],
     pub children: BTreeMap<u16, SavedScene>,
@@ -373,6 +399,7 @@ impl SavedScene {
         let mut image = None;
         let mut secondary_image = None;
         let mut draw = None;
+        let mut collision_vertices = None;
         // The native format has a fixed optional-chunk order, followed by an
         // untagged 44-byte effect block; do not scan arbitrary words for tags.
         for tag in [0x740, 0x741, 0x745, 0x749, 0x780] {
@@ -382,6 +409,7 @@ impl SavedScene {
                 match tag {
                     0x740 => image = Some(SavedImage::decode(bytes)?),
                     0x741 => secondary_image = Some(SavedImage::decode(bytes)?),
+                    0x749 => collision_vertices = Some(collision::decode(bytes)?),
                     0x780 => draw = Some(draw::decode(bytes)?),
                     _ => {
                         return Err(FormatError(
@@ -424,6 +452,7 @@ impl SavedScene {
             image,
             secondary_image,
             draw,
+            collision_vertices,
             effect_words,
             children,
         })
@@ -451,6 +480,9 @@ impl SavedScene {
         if let Some(image) = &self.secondary_image {
             chunk(&mut out, 0x741, &image.encode());
         }
+        if let Some(vertices) = &self.collision_vertices {
+            chunk(&mut out, 0x749, &collision::encode(vertices)?);
+        }
         if let Some(draw) = &self.draw {
             chunk(&mut out, 0x780, &draw::encode(draw)?);
         }
@@ -468,10 +500,8 @@ impl SavedScene {
     /// Capture side: the record of a live object, rejecting what the writer here cannot
     /// express. Disposal marks are not saved, as in the original.
     pub(crate) fn from_object(object: &SceneObject) -> Result<Self, FormatError> {
-        if object.collision_vertices.is_some() {
-            return Err(FormatError(
-                "collision mesh snapshot records are not implemented",
-            ));
+        if let Some(vertices) = &object.collision_vertices {
+            collision::validate(vertices)?;
         }
         // 0x14003a4a0 writes the current image/draw, not +14504..+14532
         // (replacement flag, retained objects and clock). Loading resets the
@@ -496,6 +526,7 @@ impl SavedScene {
                 .map(SavedImage::from_image)
                 .transpose()?,
             draw: object.draw.clone(),
+            collision_vertices: object.collision_vertices.clone(),
             effect_words: [0; 11],
             children,
         })
@@ -510,6 +541,7 @@ impl SavedScene {
             flags: self.flags,
             logical_size: self.logical_size,
             draw: self.draw.clone(),
+            collision_vertices: self.collision_vertices.clone(),
             ..SceneObject::default()
         };
         if let Some(draw) = &mut object.draw {
