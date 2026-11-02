@@ -32,6 +32,8 @@ pub struct Options {
     pub max_routes: usize,
     /// Unlock rounds before stopping while routes are still being discovered.
     pub max_rounds: usize,
+    /// Actions tried while traversing a page graph.
+    pub max_page_trials: usize,
     /// Route exploration holds the skip action inside the scenario to shorten routes.
     pub route_skip: bool,
     /// Route branches start from a saved checkpoint instead of replaying from the start.
@@ -51,6 +53,7 @@ impl Default for Options {
             max_steps: 50_000_000,
             max_routes: 16,
             max_rounds: 4,
+            max_page_trials: 400,
             route_skip: true,
             fork_saves: false,
             capture_snapshots: true,
@@ -70,6 +73,7 @@ impl Options {
             ("max_steps", self.max_steps.into()),
             ("max_routes", self.max_routes.into()),
             ("max_rounds", self.max_rounds.into()),
+            ("max_page_trials", self.max_page_trials.into()),
             ("route_skip", self.route_skip.into()),
             ("fork_saves", self.fork_saves.into()),
             ("capture_snapshots", self.capture_snapshots.into()),

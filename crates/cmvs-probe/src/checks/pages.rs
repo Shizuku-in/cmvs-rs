@@ -21,8 +21,6 @@ use std::fs;
 
 /// Steps from a node before the graph stops expanding.
 const MAX_DEPTH: usize = 3;
-/// Trials per graph; each replays a path from a fresh start.
-const MAX_TRIALS: usize = 400;
 /// Frames an action gets to settle on a page or reach a message wait.
 const STEP_FRAMES: u64 = 3600;
 /// Buttons tried per page; larger pages are sampled evenly.
@@ -383,7 +381,7 @@ fn build(
             }
         };
         for step in steps {
-            if graph.trials >= MAX_TRIALS {
+            if graph.trials >= runner.options.max_page_trials {
                 graph.truncated = true;
                 return graph;
             }
@@ -572,7 +570,7 @@ fn traversal(graph: &Graph) -> CheckResult {
         if graph.nodes.len() < 2 {
             Outcome::Inconclusive("no page beyond the start page was reached".into())
         } else if graph.truncated {
-            Outcome::Inconclusive(format!("the trial budget of {MAX_TRIALS} ran out"))
+            Outcome::Inconclusive(format!("the trial budget of {} ran out", graph.trials))
         } else {
             Outcome::Pass(Level::L0)
         }

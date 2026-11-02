@@ -28,6 +28,7 @@ const OPTIONS: &str = "Options:
   --max-steps <n>       VM step budget per session (default 50000000)
   --max-routes <n>      routes per choice tree before stopping (default 16)
   --max-rounds <n>      unlock rounds for R4, at least 2 (default 4)
+  --max-page-trials <n> actions tried per page graph (default 400)
     --no-route-skip       do not hold the skip key while exploring routes
   --fork <mode>         replay (default) runs every route from the start; save starts
                         branches from a checkpoint saved at the choice (needs saves)
@@ -103,6 +104,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
             "--max-steps" => options.max_steps = number(value()?)?,
             "--max-routes" => options.max_routes = number(value()?)? as usize,
             "--max-rounds" => options.max_rounds = number(value()?)?.max(2) as usize,
+            "--max-page-trials" => options.max_page_trials = number(value()?)? as usize,
             "--no-route-skip" => options.route_skip = false,
             "--without-snapshots" => options.capture_snapshots = false,
             "--fork" => {
