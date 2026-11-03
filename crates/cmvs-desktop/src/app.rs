@@ -33,63 +33,62 @@ use winit::{
 const USAGE: &str = "\
 Usage: cmvs-desktop <game-root> --encoding <auto|shift-jis|gbk|utf-8> [options]
 
-Native research preview of a game. All game files are read only.
+Open a native research preview. Game files are read only.
 
-Run control:
-  --encoding <name>                auto, shift-jis, gbk or utf-8 (required)
-  --exit-after <seconds>           exit after 1..3600 seconds
-  --rand-seed <seed>               CRT rand() research seed (default 0)
-  --save-frame <new.png>           write the frame shown at exit to a new PNG
+Required:
+  --encoding <name>       auto, shift-jis, gbk or utf-8
+                         auto infers from startup script text and prints the result;
+                         ambiguous samples require an explicit encoding
 
-Engine profile:
-  --profile <id>                   force a profile for research
-  --block-presumed                 stop at commands with only legacy presumed evidence
-  --block-unreviewed               stop at unreviewed commands
+Display, text and audio:
+  --renderer <name>       cpu (default) or wgpu (needs wgpu-renderer build feature)
+  --font <file>           OpenType font file or collection for message rendering
+                         requires shift-jis; cannot combine with --record-text
+  --font-face <index>     zero-based collection face; requires --font (default 0)
+  --record-text          record glyphs and reveal timing without drawing text
+  --audio <name>          record (default) or native (needs audio-output build feature)
+  --input <name>          native (default, reads key.cfg) or record (no live input)
+  --save-frame <new.png>  export the displayed frame on exit; refuses overwrite
+  --image-archive <CPZ> --preview-image <name>
+                         show an ASCII-named PB3 image instead of the VM scene
 
 Saves:
-  --user-data-dir <dir>            locked user directory for system.dat, slots and cmvs.cfg
-  --system-save-output <new.dat>   export one CSS1 system save to a new file
-  --skip-auto-resume               disable startup auto-load in memory (verified games only)
-  --continue-without-snapshot      research: enter main without a save image; no saving
+  --user-data-dir <dir>   keep system.dat, save slots and cmvs.cfg in this directory
+                         directory is locked during use; existing user saves update
+  --system-save-output <new.dat>
+                         export a CSS1 save; refuses overwrite; excludes --user-data-dir
+  --skip-auto-resume      disable startup auto-load in memory (verified games only)
+  --continue-without-snapshot
+                         research: continue without save images; saving unavailable
 
-Output:
-  --audio <record|native>          record requests only (default) or play on the device
-  --input <native|record>          map key.cfg and pointer to actions (default) or observe
-  --font <file>                    preview messages with this OpenType file or collection
-  --font-face <index>              face index within --font (default 0)
-  --record-text                    record message glyph descriptors and reveal timing only
-  --image-archive <CPZ> --preview-image <name>
-                                   show one PB3 image instead of the scene
+Run control and research:
+  --exit-after <seconds>  exit after 1..3600 seconds
+  --rand-seed <seed>      CRT random seed, decimal u32 (default 0)
+  --profile <id>          force an engine profile; otherwise identify the game build
+  --block-presumed       stop at commands with only legacy presumed evidence
+  --block-unreviewed     stop at unreviewed commands
+  -h, --help             show this help
 
-Keys: F1 default cursor, F2..F5 registered cursor previews after a stop; close requests exit.
+Examples (quote paths containing spaces):
+  cmvs-desktop game-root --encoding auto --font font.ttf --user-data-dir user-data
+  cmvs-desktop game-root --encoding auto --record-text --exit-after 10
+
+Build:
+  cargo build --release --features desktop --bin cmvs-desktop
+  Add audio-output and/or wgpu-renderer to enable native audio and GPU rendering.
 
 Notes:
-  - --encoding auto infers encoding from complete strings in the first 256 KiB of startup
-    script text and prints the result. Ambiguous samples require an explicit encoding.
-  - The profile is identified from the start script, script archive and executables.
-    Base, Inherited, Reviewed and ContractEquivalent commands run; absent and no-op
-    commands always stop; presumed and unreviewed commands run by default, unless blocked
-    by --block-presumed and --block-unreviewed respectively.
-  - Startup runs with virtual callback tick 0 and wall-time scene updates; unknown
-    commands stop.
-  - The save snapshot is built at main entry (0x2080) and scenario points (0x22b2); live
-    state without a save format stops with an error.
-  - --user-data-dir reads its system.dat on restart (the game template only if absent),
-    keeps saveNNN.dat there (UTC labels; slot 999 keeps an overwritten slot, slot 998 the
-    state before a load), keeps system.bak on repeated saves, and writes supported
-    preferences to cmvs.cfg on graceful exit (cmvs.cfg.bak keeps the previous file).
-  - --system-save-output and --user-data-dir are mutually exclusive. Without either,
-    0x2129 stays a barrier and gameplay saves fail. Existing files are never replaced.
-  - --skip-auto-resume keeps every save file; without it startup auto-load restores the
-    saved slot.
-  - The scene preview covers the verified 2D scene, CMV6 JBPD movies and full-screen color
-    fades on the configured logical canvas; use a release build for movies. Transforms, other
-    transitions and blend modes are unsupported.
-  - Image preview supports PB3 type 1; aspect fit and straight alpha are preview policies.
-  - --audio native needs the audio-output feature; movie frames follow the audio source
-    position; device latency is not calibrated.
-  - --font previews Shift-JIS messages with wrapping, ruby, flat colors and outlines; glyph
-    masks differ from GDI. Without --font or --record-text, message output is a barrier.";
+  Without --font or --record-text, message output stops at a barrier.
+  --font currently renders Shift-JIS only; encoding selection does not add GBK/UTF-8
+  message rendering. Glyph pixels differ from the original GDI backend.
+  Auto detection samples complete strings in the first 256 KiB of startup text.
+  Known game builds are identified from scripts, archives and executable hashes.
+  Presumed/unreviewed commands run by default; absent/no-op commands always stop.
+  Save snapshots are built at main entry and scenario points. Unsupported snapshot
+  state stops with an error. Gameplay saving requires --user-data-dir.
+  Startup auto-load is enabled unless --skip-auto-resume is specified.
+  Close the window to exit. Esc follows the game's bindings.
+  F1 selects the default cursor; F2..F5 preview registered cursors after a stop.";
 
 #[cfg(feature = "wgpu-renderer")]
 struct GpuDesktop {
@@ -794,9 +793,12 @@ fn run() -> Result<(), Box<dyn Error>> {
     let root = args.next().ok_or(
         "usage: cmvs-desktop <game-root> --encoding <auto|shift-jis|gbk|utf-8> [options]; see --help",
     )?;
-    if root == "--help" {
+    if root == "--help" || root == "-h" {
         println!("{USAGE}");
         return Ok(());
+    }
+    if root.to_string_lossy().starts_with('-') {
+        return Err(format!("unknown option {}", root.to_string_lossy()).into());
     }
     let mut encoding = None;
     let mut exit_after = None;
@@ -818,6 +820,10 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut font_path = None;
     let mut font_face = None;
     while let Some(flag) = args.next() {
+        if flag == "--help" || flag == "-h" {
+            println!("{USAGE}");
+            return Ok(());
+        }
         if flag == "--skip-auto-resume" {
             skip_auto_resume = true;
             continue;
@@ -838,7 +844,31 @@ fn run() -> Result<(), Box<dyn Error>> {
             record_text = true;
             continue;
         }
-        let value = args.next().ok_or("missing option value")?;
+        if ![
+            "--profile",
+            "--encoding",
+            "--exit-after",
+            "--rand-seed",
+            "--system-save-output",
+            "--user-data-dir",
+            "--preview-image",
+            "--image-archive",
+            "--save-frame",
+            "--font",
+            "--font-face",
+            "--input",
+            "--renderer",
+            "--audio",
+        ]
+        .iter()
+        .any(|name| flag == *name)
+        {
+            return Err(format!("unknown option {}", flag.to_string_lossy()).into());
+        }
+        let value = args
+            .next()
+            .filter(|v| !v.to_string_lossy().starts_with("--") && v != "-h")
+            .ok_or_else(|| format!("{} requires a value", flag.to_string_lossy()))?;
         if flag == "--profile" {
             profile = Some(
                 value
@@ -901,6 +931,20 @@ fn run() -> Result<(), Box<dyn Error>> {
     if font_face.is_some() && font_path.is_none() {
         return Err("--font-face requires --font".into());
     }
+    if font_path.is_some()
+        && (record_text
+            || matches!(choice, EncodingChoice::Explicit(encoding) if encoding != TextEncoding::ShiftJis))
+    {
+        return Err(
+            "--font requires shift-jis encoding and cannot be combined with --record-text".into(),
+        );
+    }
+    if system_save_output.is_some() && user_data_dir.is_some() {
+        return Err("--user-data-dir and --system-save-output are mutually exclusive".into());
+    }
+    if preview_name.is_some() != image_archive.is_some() {
+        return Err("preview-image and image-archive must be supplied together".into());
+    }
     let root = PathBuf::from(root).canonicalize()?;
     let game = Registry::builtin().identify_game(root.as_ref(), profile.as_deref())?;
     for line in game.selection.log_lines() {
@@ -961,9 +1005,6 @@ fn run() -> Result<(), Box<dyn Error>> {
         }
         _ => return Err("preview-image and image-archive must be supplied together".into()),
     };
-    if system_save_output.is_some() && user_data_dir.is_some() {
-        return Err("--user-data-dir and --system-save-output are mutually exclusive".into());
-    }
     let mut startup = Startup::new(&script, root.as_ref(), &game, 0)?;
     startup.set_block_unreviewed(block_unreviewed);
     startup.set_block_presumed(block_presumed);
@@ -1125,7 +1166,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 }
 pub fn run_cli() {
     if let Err(error) = run() {
-        eprintln!("Error: {error}");
+        eprintln!("Error: {error}\nRun 'cmvs-desktop --help' for usage.");
         std::process::exit(1)
     }
 }

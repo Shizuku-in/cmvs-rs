@@ -12,22 +12,39 @@ use std::{
 
 const USAGE: &str = "\
 Usage:
-  cmvs-save <save.dat>                                      print the header and sections
-  cmvs-save --section <0|1|2> <save.dat> <new-output-file>  export one decoded section
-  cmvs-save --records <save.dat>                            list the snapshot record framing
-  cmvs-save --vm-state <save.dat>                           validate the typed VM fields
-  cmvs-save --visual-state <save.dat>                       validate text, windows and scene
+  cmvs-save <save.dat>
+  cmvs-save --section <0|1|2> <save.dat> <new-file>
+  cmvs-save --records <save.dat>
+  cmvs-save --vm-state <save.dat>
+  cmvs-save --visual-state <save.dat>
+
+Modes (choose one):
+  <save.dat>      print the CSV2 header and sections
+  --section      export one decoded section; output must not already exist
+  --records      list snapshot record framing
+  --vm-state     validate typed VM fields; does not install engine state
+  --visual-state validate supported text, window and scene records; reads no resources
+  -h, --help      show this help
 
 Sections: 0 snapshot, 1 auxiliary, 2 script memory image. Only section 0 has the
 original additive checksum, which does not authenticate the whole file.
 --visual-state covers the supported subset and reads no resources.
-Read only: these commands never install engine state.";
+Read only: these commands never install engine state.
+Example: cmvs-save --section 0 save/save000.dat snapshot.bin";
 
 fn run() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = env::args_os().skip(1).collect();
-    if args.len() == 1 && args[0] == "--help" {
+    if args.len() == 1 && (args[0] == "--help" || args[0] == "-h") {
         println!("{USAGE}");
         return Ok(());
+    }
+    if let Some(flag) = args.first()
+        && flag.to_string_lossy().starts_with('-')
+        && !["--section", "--records", "--vm-state", "--visual-state"]
+            .iter()
+            .any(|name| flag == *name)
+    {
+        return Err(format!("unknown option {}", flag.to_string_lossy()).into());
     }
     let records = args.len() == 2 && args[0] == "--records";
     let vm_state = args.len() == 2 && args[0] == "--vm-state";
@@ -41,7 +58,11 @@ fn run() -> Result<(), Box<dyn Error>> {
             return Err("section must be 0, 1 or 2".into());
         }
         Some(index)
-    } else if records || vm_state || visual_state || (args.len() == 1 && args[0] != "--section") {
+    } else if records
+        || vm_state
+        || visual_state
+        || (args.len() == 1 && !args[0].to_string_lossy().starts_with('-'))
+    {
         None
     } else {
         return Err("wrong argument count; use --help".into());
@@ -179,7 +200,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("Error: {error}");
+        eprintln!("Error: {error}\nRun 'cmvs-save --help' for usage.");
         std::process::exit(1);
     }
 }

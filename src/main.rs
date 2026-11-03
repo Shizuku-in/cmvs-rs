@@ -8,22 +8,40 @@ use std::{
     path::PathBuf,
 };
 
+const USAGE: &str = "\
+Usage: cmvs-inspect <script> [--payload <new-file>]
+
+Inspect a PS2A script (.ps2/.ps3) without executing the VM.
+Print header, segment sizes and strings as hexadecimal bytes.
+
+Options:
+  --payload <new-file>  export the decoded payload without its header
+  -h, --help            show this help
+
+Output files must not already exist. Input files are read only.
+Example: cmvs-inspect data/pack/start.ps3";
+
 fn run() -> Result<(), Box<dyn Error>> {
     let mut args = env::args_os().skip(1);
     let Some(input) = args.next() else {
         return Err("usage: cmvs-inspect <script> [--payload <new-output-file>]".into());
     };
     if input == OsStr::new("--help") || input == OsStr::new("-h") {
-        println!(
-            "Usage: cmvs-inspect <script> [--payload <new-output-file>]\nRead-only PS2A inspection. Text displayed as hex; no VM execution."
-        );
+        println!("{USAGE}");
         return Ok(());
+    }
+    if input.to_string_lossy().starts_with('-') {
+        return Err(format!("unknown option {}", input.to_string_lossy()).into());
     }
     let output = match args.next() {
         Some(flag) if flag == OsStr::new("--payload") => {
             Some(PathBuf::from(args.next().ok_or("missing payload path")?))
         }
-        Some(_) => return Err("unknown option".into()),
+        Some(flag) if flag == "--help" || flag == "-h" => {
+            println!("{USAGE}");
+            return Ok(());
+        }
+        Some(flag) => return Err(format!("unknown option {}", flag.to_string_lossy()).into()),
         None => None,
     };
     if args.next().is_some() {
@@ -68,7 +86,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("Error: {error}");
+        eprintln!("Error: {error}\nRun 'cmvs-inspect --help' for usage.");
         std::process::exit(1);
     }
 }

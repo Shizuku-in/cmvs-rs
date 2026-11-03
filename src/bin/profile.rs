@@ -16,9 +16,16 @@ Usage:
       base for a root profile, or unreviewed with --base.
   cmvs-profile show <id>
       Summarise an embedded profile.
-  cmvs-profile owners [0x2000..0x23ff]
+  cmvs-profile owners [<command>]
       Print the read-only handler inventory, in runner/trace chain order.
-      Candidates are not evidence approval or runtime capability guarantees.";
+      Candidates are not evidence approval or runtime capability guarantees.
+      Command must be 0x-prefixed hexadecimal in 0x2000..0x23ff.
+
+Options:
+  -h, --help  show this help (also after a subcommand)
+
+Example: cmvs-profile identify game-root
+Example: cmvs-profile owners 0x2140";
 
 /// Signatures that identify the predecessor engine family, reported but not supported.
 const CVNS_HINTS: [&str; 3] = ["cvns.exe", "data/pack/start.pss", "pvns.exe"];
@@ -291,23 +298,30 @@ fn owners(opcode: Option<&str>) -> Result<(), Box<dyn Error>> {
 
 fn run() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = env::args().skip(1).collect();
+    if matches!(args.as_slice(), [flag] if flag == "--help" || flag == "-h")
+        || matches!(args.as_slice(), [command, flag]
+            if ["identify", "table", "show", "owners"].contains(&command.as_str())
+                && (flag == "--help" || flag == "-h"))
+    {
+        println!("{USAGE}");
+        return Ok(());
+    }
     // Options follow the subcommand's positional argument as `--name value` pairs.
     let options = |allowed: &[&str]| -> Result<Vec<(String, String)>, Box<dyn Error>> {
         let rest = args.get(2..).unwrap_or_default();
-        if rest.len() % 2 != 0 {
-            return Err("missing option value".into());
+        let mut parsed = Vec::new();
+        let mut rest = rest.iter();
+        while let Some(flag) = rest.next() {
+            if !allowed.contains(&flag.as_str()) {
+                return Err(format!("unknown option {flag}").into());
+            }
+            let value = rest
+                .next()
+                .filter(|v| !v.starts_with("--") && *v != "-h")
+                .ok_or_else(|| format!("{flag} requires a value"))?;
+            parsed.push((flag.clone(), value.clone()));
         }
-        rest.as_chunks::<2>()
-            .0
-            .iter()
-            .map(|pair| {
-                if allowed.contains(&pair[0].as_str()) {
-                    Ok((pair[0].clone(), pair[1].clone()))
-                } else {
-                    Err(format!("unknown option {}", pair[0]).into())
-                }
-            })
-            .collect()
+        Ok(parsed)
     };
     let find = |options: &[(String, String)], name: &str| {
         options
@@ -316,10 +330,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             .map(|(_, value)| value.clone())
     };
     match args.first().map(String::as_str) {
-        Some("--help") | None => {
-            println!("{USAGE}");
-            Ok(())
-        }
+        None => Err("missing subcommand: identify, table, show or owners".into()),
         Some("identify") if args.len() >= 2 => {
             let options = options(&["--profile"])?;
             identify(Path::new(&args[1]), find(&options, "--profile").as_deref())
@@ -335,13 +346,16 @@ fn run() -> Result<(), Box<dyn Error>> {
         }
         Some("show") if args.len() == 2 => show(&args[1]),
         Some("owners") if args.len() <= 2 => owners(args.get(1).map(String::as_str)),
-        _ => Err(USAGE.into()),
+        Some(command) if ["identify", "table", "show", "owners"].contains(&command) => {
+            Err(format!("invalid arguments for {command}").into())
+        }
+        Some(command) => Err(format!("unknown subcommand {command}").into()),
     }
 }
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("Error: {error}");
+        eprintln!("Error: {error}\nRun 'cmvs-profile --help' for usage.");
         std::process::exit(1);
     }
 }

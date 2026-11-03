@@ -5,13 +5,31 @@ use std::{
     fs::{File, OpenOptions},
     io::{Read, Write},
 };
+const USAGE: &str = "\
+Usage: cmvs-cursor <file.cur> [--planes <new-file> | --rgba <new-file>]
+
+Inspect a single-image, 8-bit or 32-bit BI_RGB Windows cursor.
+Without export options, print metadata only. Does not display a native cursor.
+
+Options (choose at most one export):
+  --planes <new-file>  export top-down AND/R/G/B bytes per pixel (no alpha)
+                      AND is 0 or 255
+  --rgba <new-file>    export top-down straight RGBA; rejects legacy inversion
+  -h, --help           show this help
+
+Exports are raw pixels without a header. Output files must not already exist.
+Example: cmvs-cursor 01.cur --rgba cursor.rgba";
+
 fn run() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = env::args_os().skip(1).collect();
-    if args.len() == 1 && args[0] == "--help" {
-        println!(
-            "Usage: cmvs-cursor <file.cur> [--planes <new-output-file> | --rgba <new-output-file>]\nSingle-image 8-bit or 32-bit BI_RGB CUR. Raw planes are top-down 4-byte pixels: AND (0 or 255), red, green, blue, excluding alpha. RGBA output rejects legacy inversion. No native cursor display."
-        );
+    if args.len() == 1 && (args[0] == "--help" || args[0] == "-h") {
+        println!("{USAGE}");
         return Ok(());
+    }
+    if let Some(flag) = args.first()
+        && flag.to_string_lossy().starts_with('-')
+    {
+        return Err(format!("unknown option {}", flag.to_string_lossy()).into());
     }
     if args.len() != 1 && !(args.len() == 3 && (args[1] == "--planes" || args[1] == "--rgba")) {
         return Err("wrong arguments; use --help".into());
@@ -54,7 +72,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 }
 fn main() {
     if let Err(error) = run() {
-        eprintln!("Error: {error}");
+        eprintln!("Error: {error}\nRun 'cmvs-cursor --help' for usage.");
         std::process::exit(1)
     }
 }

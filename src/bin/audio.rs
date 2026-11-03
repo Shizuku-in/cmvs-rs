@@ -6,16 +6,31 @@ use std::{
     fs::{File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
 };
+const USAGE: &str = "\
+Usage: cmvs-audio <file.ogg|movie.cmv> [--pcm <new.f32>]
+
+Decode Vorbis without opening an audio device. CMV input selects its Ogg resource.
+Report channels, sample rate, sample count, duration and peak amplitude.
+
+Options:
+  --pcm <new.f32>  export interleaved little-endian f32 PCM (no header)
+  -h, --help       show this help
+
+Output files must not already exist. Input files are read only.
+Build: cargo build --features audio-output --bin cmvs-audio
+Example: cmvs-audio voice.ogg --pcm voice.f32";
+
 fn run() -> Result<(), Box<dyn Error>> {
     let mut args = env::args_os().skip(1);
     let path = args
         .next()
         .ok_or("usage: cmvs-audio <file.ogg|movie.cmv> [--pcm <new.f32>]")?;
-    if path == "--help" {
-        println!(
-            "Usage: cmvs-audio <file.ogg|movie.cmv> [--pcm <new.f32>]\nDecode Vorbis read-only without opening a device. CMV input selects its Ogg resource. Optional output is interleaved little-endian f32 PCM; refuses overwrite. Reports channels, rate, sample count, duration and peak."
-        );
+    if path == "--help" || path == "-h" {
+        println!("{USAGE}");
         return Ok(());
+    }
+    if path.to_string_lossy().starts_with('-') {
+        return Err(format!("unknown option {}", path.to_string_lossy()).into());
     }
     let output = match (args.next(), args.next(), args.next()) {
         (None, None, None) => None,
@@ -69,7 +84,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 }
 fn main() {
     if let Err(error) = run() {
-        eprintln!("Error: {error}");
+        eprintln!("Error: {error}\nRun 'cmvs-audio --help' for usage.");
         std::process::exit(1);
     }
 }

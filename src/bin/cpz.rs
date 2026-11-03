@@ -13,17 +13,29 @@ use std::{
 
 const USAGE: &str = "\
 Usage:
-  cmvs-cpz --start-script <start.ps2/ps3> <mode> ...              read archive settings from startup
-  cmvs-cpz --packing-mode <5..9> <mode> ...                      select CPZ5 packing mode
-  cmvs-cpz --keys <dir,file,seed,resource> <mode> ...              CPZ7 decimal/0x keys
-  cmvs-cpz <archive> [archive ...]                                print each supported archive header
-  cmvs-cpz --list <archive>                                       list the index
-  cmvs-cpz --script <archive> <ASCII-basename>                    summarise one script
-  cmvs-cpz --extract <archive> <ASCII-basename> <new-output-file> extract one entry
+  cmvs-cpz <archive> [archive ...]
+  cmvs-cpz [settings] --list <archive>
+  cmvs-cpz [settings] --script <archive> <ASCII-basename>
+  cmvs-cpz [settings] --extract <archive> <ASCII-basename> <new-file>
+
+Modes:
+  <archive> [...]  print headers only; indexes/checksums are not verified
+  --list           list index entries and stored checksums
+  --script         decode and summarise one PS2A script
+  --extract        decode one entry to a new file; refuses overwrite
+
+Settings (choose at most one; place before the mode):
+  --start-script <file>   read CPZ5/7 settings from start.ps2 or start.ps3
+  --packing-mode <5..9>   select a CPZ5 packing mode
+  --keys <k0,k1,k2,k3>    four CPZ7 keys, each decimal or 0x-prefixed
+  -h, --help             show this help
 
 CPZ5/7 automatically read adjacent startup scripts unless settings are explicit.
 Without startup settings, CPZ5 detects the mode from its index and CPZ7 uses zero parameters.
-CPZ3 index and CPZ5/7 header/index integrity is checked; CLI resource checksums are not verified.";
+Index modes verify CPZ3 index and CPZ5/7 header/index integrity.
+Resource checksums are not verified. Input archives are read only.
+Example: cmvs-cpz --list data/pack/script.cpz
+Example: cmvs-cpz --packing-mode 5 --extract script.cpz main.ps3 main.ps3";
 
 fn read_start(file: File) -> Result<Script, Box<dyn Error>> {
     let mut raw = Vec::new();
@@ -40,7 +52,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     if paths.is_empty() {
         return Err("usage: cmvs-cpz <archive> [archive ...]".into());
     }
-    if paths.len() == 1 && paths[0] == "--help" {
+    if paths.len() == 1 && (paths[0] == "--help" || paths[0] == "-h") {
         println!("{USAGE}");
         return Ok(());
     }
@@ -217,6 +229,12 @@ fn run() -> Result<(), Box<dyn Error>> {
     if start.is_some() || explicit_parameters || explicit_mode {
         return Err("parameter options require --list, --script or --extract".into());
     }
+    if let Some(flag) = paths
+        .iter()
+        .find(|path| path.to_string_lossy().starts_with('-'))
+    {
+        return Err(format!("unknown option {}", flag.to_string_lossy()).into());
+    }
     for path in paths {
         let mut file = File::open(&path)?;
         let layout = ArchiveLayout::read(&mut file)?;
@@ -228,7 +246,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("Error: {error}");
+        eprintln!("Error: {error}\nRun 'cmvs-cpz --help' for usage.");
         std::process::exit(1);
     }
 }

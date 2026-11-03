@@ -5,14 +5,26 @@ use cmvs_rs::{
 };
 use std::{collections::BTreeMap, env, error::Error, fs::File, io::Read};
 
+const USAGE: &str = "\
+Usage: cmvs-disasm <script>
+
+Decode PS2A bytecode linearly and print instructions and command counts.
+Does not execute the VM or follow branches. Input files are read only.
+
+Options:
+  -h, --help  show this help
+
+Example: cmvs-disasm data/pack/start.ps3";
+
 fn run() -> Result<(), Box<dyn Error>> {
     let mut args = env::args_os().skip(1);
     let path = args.next().ok_or("usage: cmvs-disasm <script>")?;
-    if path == "--help" {
-        println!(
-            "Usage: cmvs-disasm <script>\nLinear structural decoding; does not execute or follow branches."
-        );
+    if path == "--help" || path == "-h" {
+        println!("{USAGE}");
         return Ok(());
+    }
+    if path.to_string_lossy().starts_with('-') {
+        return Err(format!("unknown option {}", path.to_string_lossy()).into());
     }
     if args.next().is_some() {
         return Err("too many arguments".into());
@@ -66,7 +78,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("Error: {error}");
+        eprintln!("Error: {error}\nRun 'cmvs-disasm --help' for usage.");
         std::process::exit(1);
     }
 }

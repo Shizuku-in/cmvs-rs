@@ -35,11 +35,11 @@ Runs the VM on a script or script archive and prints the trace. Read-only resear
 Input and execution:
   --script <name>              load this ASCII basename from the archive as the initial script
   --script-archive <archive>   supply common and main scripts; enables control handling
-  --entry <pc>                 start at this address instead of the script entry
-  --steps <budget>             VM step budget (default 10000)
+  --entry <pc>                 byte address, decimal or 0x-prefixed (default script entry)
+  --steps <budget>             VM step budget, 1..1000000 (default 10000)
   --bootstrap                  apply the verified startup configuration
   --virtual-tick <tick>        callback clock for control handling (default 0)
-  --frame-ms <delta>           engine frame time per wait or yield; without it time stays frozen
+  --frame-ms <delta>           positive engine frame time per wait/yield; default frozen
   --rand-seed <seed>           enable 0x20d4 with CRT rand() from this seed
 
 Saves and platform:
@@ -52,6 +52,10 @@ Engine profile:
   --profile <id>               force a profile; needed for synthetic or unrecorded scripts
   --block-presumed             stop at commands with only legacy presumed evidence
   --block-unreviewed           stop at unreviewed commands
+  -h, --help                   show this help
+
+Example:
+  cmvs-trace data/pack/start.ps3 --steps 10000
 
 Notes:
   - The profile is identified from the input, --script-archive and, with --record-platform,
@@ -108,9 +112,12 @@ fn run() -> Result<(), Box<dyn Error>> {
     let path = args
         .next()
         .ok_or("usage: cmvs-trace <script-or-archive> [options]; see --help")?;
-    if path == "--help" {
+    if path == "--help" || path == "-h" {
         println!("{USAGE}");
         return Ok(());
+    }
+    if path.to_string_lossy().starts_with('-') {
+        return Err(format!("unknown option {}", path.to_string_lossy()).into());
     }
     let mut entry = None;
     let mut budget = 10000u32;
@@ -128,6 +135,10 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut block_unreviewed = false;
     let mut block_presumed = false;
     while let Some(flag) = args.next() {
+        if flag == "--help" || flag == "-h" {
+            println!("{USAGE}");
+            return Ok(());
+        }
         if flag == "--block-presumed" {
             block_presumed = true;
             continue;
@@ -144,7 +155,28 @@ fn run() -> Result<(), Box<dyn Error>> {
             continue_without_snapshot = true;
             continue;
         }
-        let value = args.next().ok_or("missing option value")?;
+        if ![
+            "--profile",
+            "--entry",
+            "--steps",
+            "--script",
+            "--script-archive",
+            "--virtual-tick",
+            "--frame-ms",
+            "--save-dir",
+            "--system-save",
+            "--rand-seed",
+            "--record-platform",
+        ]
+        .iter()
+        .any(|name| flag == *name)
+        {
+            return Err(format!("unknown option {}", flag.to_string_lossy()).into());
+        }
+        let value = args
+            .next()
+            .filter(|v| !v.to_string_lossy().starts_with("--") && v != "-h")
+            .ok_or_else(|| format!("{} requires a value", flag.to_string_lossy()))?;
         if flag == "--profile" {
             profile = Some(
                 value
@@ -1072,7 +1104,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("Error: {error}");
+        eprintln!("Error: {error}\nRun 'cmvs-trace --help' for usage.");
         std::process::exit(1);
     }
 }

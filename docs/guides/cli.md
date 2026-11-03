@@ -2,6 +2,16 @@
 
 所有命令从项目根目录执行。这里使用 `<游戏目录>` 和 `<新输出文件>` 作为占位符，请替换后运行。工具只支持已核对的格式分支，不能据解析成功推断整款游戏可运行。当前真实样本验证来自[《アマツツミ》](../games/amatsutsumi/README.md)。
 
+每个工具均支持 `-h` / `--help`，帮助输出到标准输出并以0退出；参数错误输出到标准错误并以非零状态退出，同时提示帮助入口。路径含空格时使用引号。导出文件必须不存在，`cmvs-probe --out` 也必须指定新目录；桌面端独立用户目录中的存档和配置则会正常更新。
+
+```bash
+cargo run --offline --bin cmvs-cpz -- --help
+cargo run --offline --features desktop --bin cmvs-desktop -- --help
+cargo run --offline --features audio-output --bin cmvs-audio -- --help
+```
+
+`cargo run` 的 `--` 用于分隔Cargo选项与工具参数。`cmvs-desktop`、`cmvs-mgv` 需要 `desktop` feature，`cmvs-audio` 需要 `audio-output`；`cmvs-probe` 使用 `-p cmvs-probe` 运行。
+
 ## 脚本与执行跟踪
 
 ```bash

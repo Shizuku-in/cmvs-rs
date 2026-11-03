@@ -7,17 +7,49 @@ use std::{
     io::Write,
 };
 
+const USAGE: &str = "\
+Usage: cmvs-cmv <movie.cmv> [--check-frames | --frame <index> <new-file>]
+
+Inspect a CMV6 movie. Without options, print its header and resource index.
+
+Options (choose at most one):
+  --check-frames             decode every JBPD frame without exporting
+  --frame <index> <new-file>  export one frame; index is zero-based
+                            .rgba writes raw top-down RGBA; otherwise writes PNG
+  -h, --help                 show this help
+
+Output files must not already exist. Input files are read only.
+Ogg audio is located but not decoded; use cmvs-audio to inspect it.
+Example: cmvs-cmv op.cmv --frame 0 frame.png";
+
 fn run() -> Result<(), Box<dyn Error>> {
     let path = env::args_os().nth(1).ok_or("usage: cmvs-cmv <movie.cmv>")?;
-    if path == "--help" {
-        println!(
-            "Usage: cmvs-cmv <movie.cmv> [--frame <index> <new.png|new.rgba> | --check-frames]\nWithout options prints the CMV6 header/index summary. --frame decodes one JBPD frame and creates a new PNG (or raw RGBA when the extension is .rgba); existing files are never overwritten. --check-frames decodes every frame without exporting it. Ogg audio is located, not decoded. All game files read-only."
-        );
+    if path == "--help" || path == "-h" {
+        println!("{USAGE}");
         return Ok(());
     }
+    if path.to_string_lossy().starts_with('-') {
+        return Err(format!("unknown option {}", path.to_string_lossy()).into());
+    }
+    let args: Vec<_> = env::args_os().skip(2).collect();
+    if !(args.is_empty()
+        || args.as_slice() == ["--check-frames"]
+        || (args.len() == 3 && args[0] == "--frame"))
+    {
+        return Err("expected --check-frames or --frame <index> <new-file>".into());
+    }
+    let frame = if args.len() == 3 {
+        Some(
+            args[1]
+                .to_str()
+                .and_then(|s| s.parse::<u32>().ok())
+                .ok_or("--frame index must be a non-negative decimal integer")?,
+        )
+    } else {
+        None
+    };
     let mut file = File::open(path)?;
     let index = CmvIndex::read(&mut file)?;
-    let args: Vec<_> = env::args_os().skip(2).collect();
     if args.as_slice() == ["--check-frames"] {
         let start = std::time::Instant::now();
         let mut count = 0;
@@ -33,11 +65,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         );
         return Ok(());
     }
-    if !args.is_empty() {
-        if args.len() != 3 || args[0] != "--frame" {
-            return Err("usage: cmvs-cmv <movie.cmv> --frame <index> <new.png|new.rgba>".into());
-        }
-        let frame = args[1].to_str().ok_or("frame index is not text")?.parse()?;
+    if let Some(frame) = frame {
         let image = index.decode_frame(&mut file, frame)?;
         let bytes = if std::path::Path::new(&args[2])
             .extension()
@@ -115,7 +143,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 
 fn main() {
     if let Err(error) = run() {
-        eprintln!("Error: {error}");
+        eprintln!("Error: {error}\nRun 'cmvs-cmv --help' for usage.");
         std::process::exit(1)
     }
 }

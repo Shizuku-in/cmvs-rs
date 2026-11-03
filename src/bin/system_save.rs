@@ -1,13 +1,29 @@
 use cmvs_rs::system_save::{Css1Save, FileSystemSave, SystemSaveSource};
 use std::{env, error::Error, fs::OpenOptions, io::Write};
 
+const USAGE: &str = "\
+Usage: cmvs-system-save <system.dat> [--payload <new-file>]
+
+Decode a CSS1 system save and print its layout and persistent variable ranges.
+The original checksum covers only the compressed payload.
+
+Options:
+  --payload <new-file>  export the decoded payload
+  -h, --help            show this help
+
+Output files must not already exist. Does not restore engine state or modify saves.
+Example: cmvs-system-save save/system.dat";
+
 fn run() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = env::args_os().skip(1).collect();
-    if args.len() == 1 && args[0] == "--help" {
-        println!(
-            "Usage: cmvs-system-save <system.dat> [--payload <new-output-file>]\nRead-only CSS1 decoding; original checksum covers compressed payload only. Does not write game saves or restore an engine snapshot."
-        );
+    if args.len() == 1 && (args[0] == "--help" || args[0] == "-h") {
+        println!("{USAGE}");
         return Ok(());
+    }
+    if let Some(flag) = args.first()
+        && flag.to_string_lossy().starts_with('-')
+    {
+        return Err(format!("unknown option {}", flag.to_string_lossy()).into());
     }
     if args.len() != 1 && !(args.len() == 3 && args[1] == "--payload") {
         return Err("wrong argument count; use --help".into());
@@ -42,7 +58,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 }
 fn main() {
     if let Err(error) = run() {
-        eprintln!("Error: {error}");
+        eprintln!("Error: {error}\nRun 'cmvs-system-save --help' for usage.");
         std::process::exit(1);
     }
 }

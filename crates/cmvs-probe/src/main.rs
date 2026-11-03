@@ -19,22 +19,28 @@ Checks (--checks takes a comma-separated list):";
 
 const OPTIONS: &str = "Options:
   --checks <ids>        checks to run, e.g. S2,R2,R3, or `all`
-    --profile <id>        force an engine profile instead of identifying one
+  --out <new-dir>       required; create reports here (directory must not exist)
+  --profile <id>        force an engine profile instead of identifying one
   --manifest <file>     per-game corrections to automatic recognition (optional)
   --device <name>       mouse (default) or keyboard input
-  --font <file>         font for glyph metrics; --font-index <n> picks a face
-  --frame-ms <n>        virtual frame time in milliseconds (default 16)
-  --seed <n>            random seed (default 0)
-  --max-steps <n>       VM step budget per session (default 50000000)
-  --max-routes <n>      routes per choice tree before stopping (default 16)
+  --font <file>         font for glyph metrics
+  --font-index <n>      collection face index; requires --font (default 0)
+  --frame-ms <n>        positive virtual frame time in milliseconds (default 16)
+  --seed <n>            decimal u32 random seed (default 0)
+  --max-steps <n>       positive VM step budget per session (default 50000000)
+  --max-routes <n>      positive route limit per choice tree (default 16)
   --max-rounds <n>      unlock rounds for R4, at least 2 (default 4)
-  --max-page-trials <n> actions tried per page graph (default 400)
-    --no-route-skip       do not hold the skip key while exploring routes
+  --max-page-trials <n> positive action limit per page graph (default 400)
+  --no-route-skip       do not hold the skip key while exploring routes
   --fork <mode>         replay (default) runs every route from the start; save starts
                         branches from a checkpoint saved at the choice (needs saves)
   --without-snapshots   research only: continue without save images; skips V1-V4
   --block-presumed      stop at commands with only legacy presumed evidence
-  --block-unreviewed    stop at unreviewed commands";
+  --block-unreviewed    stop at unreviewed commands
+  -h, --help           show this help
+
+Example: cmvs-probe game-root --out new-report --checks S1,S2
+Exit codes: 0 completed, 1 failed/blocked checks, 2 argument or runtime error.";
 
 /// The check list comes from the catalog, so it always matches what can run.
 fn usage() -> String {
@@ -76,17 +82,26 @@ fn parse() -> Result<Args, String> {
     parse_args(std::env::args().skip(1))
 }
 
+fn number<T: std::str::FromStr>(value: String, option: &str) -> Result<T, String> {
+    value
+        .parse()
+        .map_err(|_| format!("{option}: invalid or out-of-range integer {value}"))
+}
+
 fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut root = None;
     let mut out = None;
     let mut checks = None;
     let mut profile = None;
     let mut manifest = None;
-    let (mut font, mut font_index) = (None, 0);
+    let (mut font, mut font_index) = (None, None);
     let mut options = Options::default();
     while let Some(arg) = args.next() {
-        let mut value = || args.next().ok_or(format!("{arg} needs a value"));
-        let number = |v: String| v.parse::<u64>().map_err(|_| format!("bad number {v}"));
+        let mut value = || {
+            args.next()
+                .filter(|v| !v.starts_with("--") && v != "-h")
+                .ok_or_else(|| format!("{arg} needs a value"))
+        };
         match arg.as_str() {
             "--help" | "-h" => return Err(String::new()),
             "--out" => out = Some(PathBuf::from(value()?)),
@@ -98,13 +113,13 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
                 options.device = Device::parse(&v).ok_or(format!("unknown device {v}"))?;
             }
             "--font" => font = Some(PathBuf::from(value()?)),
-            "--font-index" => font_index = number(value()?)? as u32,
-            "--frame-ms" => options.frame_ms = number(value()?)? as u32,
-            "--seed" => options.seed = number(value()?)? as u32,
-            "--max-steps" => options.max_steps = number(value()?)?,
-            "--max-routes" => options.max_routes = number(value()?)? as usize,
-            "--max-rounds" => options.max_rounds = number(value()?)?.max(2) as usize,
-            "--max-page-trials" => options.max_page_trials = number(value()?)? as usize,
+            "--font-index" => font_index = Some(number(value()?, &arg)?),
+            "--frame-ms" => options.frame_ms = number(value()?, &arg)?,
+            "--seed" => options.seed = number(value()?, &arg)?,
+            "--max-steps" => options.max_steps = number(value()?, &arg)?,
+            "--max-routes" => options.max_routes = number(value()?, &arg)?,
+            "--max-rounds" => options.max_rounds = number(value()?, &arg)?,
+            "--max-page-trials" => options.max_page_trials = number(value()?, &arg)?,
             "--no-route-skip" => options.route_skip = false,
             "--without-snapshots" => options.capture_snapshots = false,
             "--fork" => {
@@ -116,13 +131,28 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
             }
             "--block-presumed" => options.block_presumed = true,
             "--block-unreviewed" => options.block_unreviewed = true,
-            flag if flag.starts_with("--") => return Err(format!("unknown option {flag}")),
+            flag if flag.starts_with('-') => return Err(format!("unknown option {flag}")),
             path if root.is_none() => root = Some(PathBuf::from(path)),
             extra => return Err(format!("unexpected argument {extra}")),
         }
     }
     if options.fork_saves && !options.capture_snapshots {
         return Err("--fork save requires snapshot capture".into());
+    }
+    if font_index.is_some() && font.is_none() {
+        return Err("--font-index requires --font".into());
+    }
+    if options.frame_ms == 0
+        || options.max_steps == 0
+        || options.max_routes == 0
+        || options.max_page_trials == 0
+    {
+        return Err(
+            "--frame-ms, --max-steps, --max-routes and --max-page-trials must be positive".into(),
+        );
+    }
+    if options.max_rounds < 2 {
+        return Err("--max-rounds must be at least 2".into());
     }
     let checks: Vec<String> = match checks {
         Some(list) if list == ["all"] => checks::CATALOG
@@ -140,7 +170,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
         out: out.ok_or("missing --out")?,
         checks,
         profile,
-        font: font.map(|f| (f, font_index)),
+        font: font.map(|f| (f, font_index.unwrap_or(0))),
         manifest,
         options,
     })
@@ -150,10 +180,11 @@ fn main() -> ExitCode {
     let args = match parse() {
         Ok(args) => args,
         Err(e) => {
-            if !e.is_empty() {
-                eprintln!("{e}");
+            if e.is_empty() {
+                println!("{}", usage());
+                return ExitCode::SUCCESS;
             }
-            eprintln!("{}", usage());
+            eprintln!("Error: {e}\nRun 'cmvs-probe --help' for usage.");
             return ExitCode::from(2);
         }
     };

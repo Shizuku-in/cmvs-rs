@@ -8,14 +8,50 @@ use std::{
     fs::{File, OpenOptions},
     io::Write,
 };
-fn main() -> Result<(), Box<dyn Error>> {
+const USAGE: &str = "\
+Usage: cmvs-mgv <movie.mgv> [--check-frames | --frame <index> <new-file>]
+
+Inspect an MGV1 movie. Without options, print header and packet counts.
+
+Options (choose at most one):
+  --check-frames             decode all video packets and print RGBA hashes
+  --frame <index> <new-file>  export one frame; index is zero-based
+                            .rgba writes raw top-down RGBA; otherwise writes PNG
+  -h, --help                 show this help
+
+Output files must not already exist. Input files are read only.
+Audio is not decoded. Video decoding uses the portable Theora backend.
+Build: cargo build --features desktop --bin cmvs-mgv
+Example: cmvs-mgv op.mgv --frame 0 frame.png";
+
+fn run() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.is_empty() || args[0] == "--help" {
-        println!(
-            "Usage: cmvs-mgv <movie.mgv> [--check-frames | --frame <index> <new.png|new.rgba>]"
-        );
+    if args.len() == 1 && (args[0] == "--help" || args[0] == "-h") {
+        println!("{USAGE}");
         return Ok(());
     }
+    if args.is_empty() {
+        return Err("missing movie path".into());
+    }
+    if args[0].to_string_lossy().starts_with('-') {
+        return Err(format!("unknown option {}", args[0].to_string_lossy()).into());
+    }
+    if !(args.len() == 1
+        || (args.len() == 2 && args[1] == "--check-frames")
+        || (args.len() == 4 && args[1] == "--frame"))
+    {
+        return Err("expected --check-frames or --frame <index> <new-file>".into());
+    }
+    let frame = if args.len() == 4 {
+        Some(
+            args[2]
+                .to_str()
+                .and_then(|s| s.parse::<u32>().ok())
+                .ok_or("--frame index must be a non-negative decimal integer")?,
+        )
+    } else {
+        None
+    };
     let mut file = File::open(&args[0])?;
     let index = MgvIndex::read(&mut file)?;
     println!(
@@ -53,8 +89,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             index.frames.len(),
             index.packet_count()
         );
-    } else if args.len() == 4 && args[1] == "--frame" {
-        let frame = args[2].to_str().ok_or("frame is not text")?.parse()?;
+    } else if let Some(frame) = frame {
         let image = decoder.frame(frame)?;
         let bytes = if std::path::Path::new(&args[3])
             .extension()
@@ -73,4 +108,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         return Err("invalid MGV options; use --help".into());
     }
     Ok(())
+}
+
+fn main() {
+    if let Err(error) = run() {
+        eprintln!("Error: {error}\nRun 'cmvs-mgv --help' for usage.");
+        std::process::exit(1);
+    }
 }
