@@ -1,6 +1,3 @@
-> [!WARNING]
-> 项目处于开发中，尚未实现完整 CMVS 游戏兼容。
-
 # cmvs-rs
 
 用 **Rust** 研究并重实现 Purple SOFTWARE 的 CMVS 引擎。
