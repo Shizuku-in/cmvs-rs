@@ -1,5 +1,6 @@
 //! Optional native window/input adapter. Static scene rendering lives in `scene_render`.
 mod app;
+mod encoding;
 pub use cmvs_font::{font, font_library};
 mod frame_boundary;
 pub mod game_input;

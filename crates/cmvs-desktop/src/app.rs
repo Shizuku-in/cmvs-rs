@@ -1,3 +1,4 @@
+use crate::encoding::EncodingChoice;
 use crate::game_input::{GameInput, event_key};
 use crate::{DesktopInput, InputEvent, NativeBackend, TextEncoding};
 use cmvs_core::{
@@ -30,12 +31,12 @@ use winit::{
 };
 
 const USAGE: &str = "\
-Usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [options]
+Usage: cmvs-desktop <game-root> --encoding <auto|shift-jis|gbk|utf-8> [options]
 
 Native research preview of a game. All game files are read only.
 
 Run control:
-  --encoding <name>                text encoding of the game (required)
+  --encoding <name>                auto, shift-jis, gbk or utf-8 (required)
   --exit-after <seconds>           exit after 1..3600 seconds
   --rand-seed <seed>               CRT rand() research seed (default 0)
   --save-frame <new.png>           write the frame shown at exit to a new PNG
@@ -63,6 +64,8 @@ Output:
 Keys: F1 default cursor, F2..F5 registered cursor previews after a stop; close requests exit.
 
 Notes:
+  - --encoding auto infers encoding from complete strings in the first 256 KiB of startup
+    script text and prints the result. Ambiguous samples require an explicit encoding.
   - The profile is identified from the start script, script archive and executables.
     Base, Inherited, Reviewed and ContractEquivalent commands run; absent and no-op
     commands always stop; presumed and unreviewed commands run by default, unless blocked
@@ -789,7 +792,7 @@ fn halt_title(event: StartupEvent, script: &[u8], pc: usize) -> String {
 fn run() -> Result<(), Box<dyn Error>> {
     let mut args = env::args_os().skip(1);
     let root = args.next().ok_or(
-        "usage: cmvs-desktop <game-root> --encoding <shift-jis|gbk|utf-8> [options]; see --help",
+        "usage: cmvs-desktop <game-root> --encoding <auto|shift-jis|gbk|utf-8> [options]; see --help",
     )?;
     if root == "--help" {
         println!("{USAGE}");
@@ -843,7 +846,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                     .map_err(|_| "profile id must be ASCII")?,
             );
         } else if flag == "--encoding" {
-            encoding = Some(TextEncoding::parse(
+            encoding = Some(EncodingChoice::parse(
                 value.to_str().ok_or("invalid encoding")?,
             )?);
         } else if flag == "--exit-after" {
@@ -893,9 +896,27 @@ fn run() -> Result<(), Box<dyn Error>> {
             return Err("unknown option".into());
         }
     }
-    let encoding = encoding.ok_or("select title encoding explicitly with --encoding")?;
+    let choice =
+        encoding.ok_or("select text encoding with --encoding auto, shift-jis, gbk or utf-8")?;
     if font_face.is_some() && font_path.is_none() {
         return Err("--font-face requires --font".into());
+    }
+    let root = PathBuf::from(root).canonicalize()?;
+    let game = Registry::builtin().identify_game(root.as_ref(), profile.as_deref())?;
+    for line in game.selection.log_lines() {
+        println!("{line}");
+    }
+    let script = load_start(root.as_ref(), &game.files)?;
+    let encoding = choice.resolve(script.text())?;
+    if choice == EncodingChoice::Auto {
+        let name = match encoding {
+            TextEncoding::ShiftJis => "shift-jis",
+            TextEncoding::Gbk => "gbk",
+            TextEncoding::Utf8 => "utf-8",
+        };
+        println!(
+            "# auto encoding={name}; inferred from startup script text; override with --encoding <name> if incorrect"
+        );
     }
     if font_path.is_some() && (record_text || encoding != TextEncoding::ShiftJis) {
         return Err(
@@ -906,7 +927,6 @@ fn run() -> Result<(), Box<dyn Error>> {
         .as_ref()
         .map(|path| crate::font::FontRenderer::read(path, font_face.unwrap_or(0)))
         .transpose()?;
-    let root = PathBuf::from(root).canonicalize()?;
     let bindings = if native_input {
         use std::io::Read;
         let mut text = String::new();
@@ -941,11 +961,6 @@ fn run() -> Result<(), Box<dyn Error>> {
         }
         _ => return Err("preview-image and image-archive must be supplied together".into()),
     };
-    let game = Registry::builtin().identify_game(root.as_ref(), profile.as_deref())?;
-    for line in game.selection.log_lines() {
-        println!("{line}");
-    }
-    let script = load_start(root.as_ref(), &game.files)?;
     if system_save_output.is_some() && user_data_dir.is_some() {
         return Err("--user-data-dir and --system-save-output are mutually exclusive".into());
     }
