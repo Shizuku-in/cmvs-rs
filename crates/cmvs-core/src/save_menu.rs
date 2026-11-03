@@ -1,9 +1,10 @@
 //! Read-only gameplay-save header scanning, signature queries and menu state.
 //! Header recognition does not validate or restore the saved engine snapshot.
+use crate::filesystem as fs;
+use crate::filesystem::File;
 use crate::{FormatError, bytecode::DecodeError, dispatch::Call, machine::Machine};
 use std::{
     error::Error,
-    fs::File,
     io::{self, Read},
     path::{Path, PathBuf},
 };
@@ -73,16 +74,16 @@ pub struct DirectorySaves {
 
 impl DirectorySaves {
     pub fn new(root: impl AsRef<Path>) -> io::Result<Self> {
-        let root = match root.as_ref().canonicalize() {
+        let root = match fs::canonicalize(root.as_ref()) {
             Ok(root) => root,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 return Ok(Self {
-                    root: std::path::absolute(root)?,
+                    root: fs::absolute(root)?,
                 });
             }
             Err(e) => return Err(e),
         };
-        if !root.is_dir() {
+        if !fs::is_dir(&root) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "save root is not a directory",

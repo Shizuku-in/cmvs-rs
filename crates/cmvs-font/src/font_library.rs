@@ -228,6 +228,7 @@ impl FontLibrary {
             file.write_all(&stored)
                 .and_then(|()| file.sync_all())
                 .map_err(|_| FormatError("cannot write imported font"))?;
+            #[cfg_attr(target_arch = "wasm32", allow(clippy::drop_non_drop))]
             drop(file);
             std::fs::rename(temporary, path)
                 .map_err(|_| FormatError("cannot publish imported font"))?;

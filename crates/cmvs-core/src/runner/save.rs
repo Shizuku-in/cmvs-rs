@@ -2,6 +2,7 @@
 //! 0x2080 and 0x22b2, slot writes 0x22b6 (0x140080b20), loads 0x22b5 (0x140081960 then
 //! 0x140069fd0), thumbnails 0x22b8 (0x14006b4a0) and the slot queries 0x22b7 / 0x22bd.
 use super::{Startup, SystemOutput};
+use crate::filesystem as fs;
 use crate::{
     audio::SavedAudio,
     dispatch::RuntimeCall,
@@ -17,7 +18,7 @@ use crate::{
         SnapshotLayout,
     },
 };
-use std::{collections::BTreeMap, error::Error, fs, io::Write, path::Path};
+use std::{collections::BTreeMap, error::Error, io::Write, path::Path};
 
 /// Local wall-clock fields for save labels: year, month, day, hour, minute, second.
 pub type SaveTime = [u16; 6];

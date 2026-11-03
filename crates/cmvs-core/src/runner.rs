@@ -1,6 +1,8 @@
 //! Bounded real-data startup orchestration for the researched Amatsutsumi layout.
 //! Snapshots remain barriers unless the caller explicitly continues without an image.
 //! Every system command first passes the selected engine profile's gate.
+use crate::filesystem as fs;
+use crate::filesystem::File;
 use crate::{
     MAX_PAYLOAD,
     audio::{AudioBackend, AudioHost, RecordingAudio},
@@ -35,7 +37,6 @@ use crate::{
 };
 use std::{
     error::Error,
-    fs::File,
     io::Read,
     path::{Path, PathBuf},
 };
@@ -252,7 +253,7 @@ impl<'a> Startup<'a> {
             buttons,
             movies: MovieHost::default(),
             scene_movies: ResourceArchives::new(root)?,
-            root: root.canonicalize()?,
+            root: fs::canonicalize(root)?,
             sequence: SequenceHost::default(),
             camera,
             capture: ScreenCapture::default(),
@@ -579,7 +580,7 @@ impl<'a> Startup<'a> {
         let saves = DirectorySaves::new(profile.directory())?;
         let configuration = profile.read_configuration()?;
         let primary = profile.path();
-        let source = if primary.try_exists()? {
+        let source = if fs::try_exists(&primary)? {
             primary
         } else {
             self.root.join("save/system.dat")

@@ -5,14 +5,15 @@
 
 | 包 | 位置 | 职责与依赖 |
 |---|---|---|
-| cmvs-core | crates/cmvs-core | 格式、VM、命令语义、场景、动作输入、宿主契约和标准文件系统适配器；无依赖 |
+| cmvs-core | crates/cmvs-core | 格式、VM、命令语义、场景、动作输入、宿主契约和文件系统适配器；原生无依赖，wasm32 使用 wasm-bindgen |
 | cmvs-audio | crates/cmvs-audio | Vorbis 解码、原生音频和源时钟；依赖 core、lewton、rodio |
 | cmvs-desktop | crates/cmvs-desktop | 窗口、原始输入、桌面运行入口；依赖 core 和窗口库，可选依赖 audio |
-| cmvs-native | crates/cmvs-native | 操作系统服务统一接口，按平台分模块（现有 Windows，其余预留）；依赖 raw-window-handle，Windows 上 windows-sys；唯一含 FFI 的包 |
+| cmvs-native | crates/cmvs-native | 操作系统服务统一接口，按平台分模块（现有 Windows，其余预留）；依赖 raw-window-handle，Windows 上 windows-sys；原生系统 FFI 包 |
 | cmvs-probe | crates/cmvs-probe | 与游戏无关的无头整机检查；依赖 core 与 desktop 的字体模块，不打开窗口或设备；不在默认成员中 |
+| cmvs-web | platforms/web/native | 浏览器 Worker 宿主、软件画面与输入；依赖 core、font、wasm-bindgen、self_cell |
 | cmvs-rs | 根包 | CLI 目标、兼容重导出、现有集成测试；默认仅依赖 core |
 
-依赖方向为 `desktop → core`、`desktop → audio → core`。core 的清单没有 dependencies 或平台 feature，编译器不允许核心调用音频/窗口实现。
+依赖方向为 `desktop → core`、`desktop → audio → core`。core 不依赖音频/窗口实现；wasm32 目标通过 wasm-bindgen 导入 Worker 文件接口，原生目标仍转发 std 文件系统。
 格式、VM、场景和软件呈现继续作为 core 内部模块，未进一步拆包。
 core 中的 std 文件读取器可在各平台编译，不含原生窗口或设备 API；其他平台构建仍待验证。
 
@@ -23,7 +24,7 @@ core 中的 std 文件读取器可在各平台编译，不含原生窗口或设�
 ## 功能选择与检查
 
 根 feature 名保持 `desktop` 和 `audio-output`。`audio-output` 通过弱依赖 feature 转发给已启用的 desktop，单独启用音频不会拉入窗口库。
-workspace `default-members = ["."]`，因此原来的根目录命令只选择根包，默认仍无第三方依赖。
+workspace `default-members = ["."]`，因此原来的根目录命令只选择根包，原生默认仍无第三方依赖。
 `unsafe_code = forbid`、严格 Clippy 约定由 workspace 集中定义，四个原有包均继承；`cmvs-native` 改为 deny，只在注明 SAFETY 的系统调用处局部允许 unsafe。
 外部依赖版本集中在 workspace.dependencies，Cargo.lock 保留原 registry 包版本与校验值。
 

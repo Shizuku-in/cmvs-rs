@@ -1,9 +1,10 @@
 //! Mode-1 CSS1 output from fully known state (0x1400179e0). Original game stays read-only.
 use super::{Css1Save, KEY, PAYLOAD_OFFSET, pack};
+use crate::filesystem as fs;
+use crate::filesystem::OpenOptions;
 use crate::{FormatError, dispatch::Call, evaluate::State, machine::Machine, random::CrtRandom};
 use std::{
     error::Error,
-    fs::OpenOptions,
     io::{self, Write},
     path::{Path, PathBuf},
 };
@@ -171,14 +172,14 @@ impl NewSystemSave {
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
-        let parent = parent.canonicalize()?;
-        if parent.starts_with(game_root.canonicalize()?) {
+        let parent = fs::canonicalize(parent)?;
+        if parent.starts_with(fs::canonicalize(game_root)?) {
             return Err(io::Error::other(
                 "CSS1 output must be outside the read-only game root",
             ));
         }
         let path = parent.join(name);
-        if path.try_exists()? {
+        if fs::try_exists(&path)? {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 "CSS1 output already exists",

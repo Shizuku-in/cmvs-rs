@@ -1,7 +1,7 @@
 //! Byte-preserving INI updates; original game files are never written.
 use crate::FormatError;
+use crate::filesystem::File;
 use std::{
-    fs::File,
     io::{self, Read},
     path::Path,
 };

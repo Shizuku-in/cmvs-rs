@@ -1,7 +1,8 @@
 //! 0x228c / 0x140068dd0 and 0x228e / 0x1400690b0, restricted to the locked user directory.
 use super::Startup;
 use crate::dispatch::RuntimeCall;
-use std::{error::Error, fs, io, path::PathBuf};
+use crate::filesystem as fs;
+use std::{error::Error, io, path::PathBuf};
 
 enum Operation {
     Remove(String),
@@ -23,8 +24,8 @@ impl SlotEdit {
         let (_, command, first, second) = identity;
         let a = format!("save{first:03}.dat");
         let b = format!("save{second:03}.dat");
-        let a_exists = directory.join(&a).try_exists()?;
-        let b_exists = directory.join(&b).try_exists()?;
+        let a_exists = fs::try_exists(directory.join(&a))?;
+        let b_exists = fs::try_exists(directory.join(&b))?;
         let scratch = if command == 0x28c {
             "savetemp.dat"
         } else {
@@ -75,7 +76,7 @@ impl SlotEdit {
                     // The original uses MoveFileA, which rejects an occupied target.
                     // The profile lock excludes competing engine sessions; also reject
                     // unexpected destinations instead of deliberately replacing them.
-                    if self.directory.join(to).try_exists()? {
+                    if fs::try_exists(self.directory.join(to))? {
                         return Err(io::Error::new(
                             io::ErrorKind::AlreadyExists,
                             "slot rename target already exists",

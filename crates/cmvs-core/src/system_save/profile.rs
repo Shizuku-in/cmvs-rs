@@ -1,7 +1,8 @@
 //! Explicit user-directory storage policy, independent of original CMVS file replacement.
 use super::{Css1Save, FileSystemSave, SystemSaveSink, SystemSaveSource};
+use crate::filesystem as fs;
+use crate::filesystem::{File, OpenOptions};
 use std::{
-    fs::{self, File, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
@@ -21,10 +22,10 @@ fn regular_file(path: &Path) -> io::Result<bool> {
 }
 
 fn external_directory(path: &Path, game_root: &Path) -> io::Result<PathBuf> {
-    let game_root = game_root.canonicalize()?;
+    let game_root = fs::canonicalize(game_root)?;
     let mut ancestor = path.to_path_buf();
     let mut missing = Vec::new();
-    while !ancestor.try_exists()? {
+    while !fs::try_exists(&ancestor)? {
         let name = ancestor
             .file_name()
             .ok_or_else(|| io::Error::other("profile path needs an existing ancestor"))?
@@ -36,7 +37,7 @@ fn external_directory(path: &Path, game_root: &Path) -> io::Result<PathBuf> {
             .unwrap_or(Path::new("."))
             .to_owned();
     }
-    let mut resolved = ancestor.canonicalize()?;
+    let mut resolved = fs::canonicalize(&ancestor)?;
     for name in missing.into_iter().rev() {
         resolved.push(name);
     }
@@ -46,7 +47,7 @@ fn external_directory(path: &Path, game_root: &Path) -> io::Result<PathBuf> {
         ));
     }
     fs::create_dir_all(&resolved)?;
-    let resolved = resolved.canonicalize()?;
+    let resolved = fs::canonicalize(&resolved)?;
     if resolved.starts_with(game_root) {
         return Err(io::Error::other(
             "user data directory resolves inside the read-only game root",
@@ -155,7 +156,7 @@ impl ProfileSystemSave {
             let id = TEMP_ID.fetch_add(1, Ordering::Relaxed);
             let path = self
                 .directory
-                .join(format!(".cmvs-system-{}-{id}.tmp", std::process::id()));
+                .join(format!(".cmvs-system-{}-{id}.tmp", fs::session_id()));
             let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
                 Ok(file) => file,
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,

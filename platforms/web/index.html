@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CMVS · WebAssembly</title>
+<style>
+:root {
+  color-scheme: light;
+  font: 14px/1.6 system-ui, sans-serif;
+  color: #34312b;
+  background: #f5f1e8;
+  --line: #d7d0c3;
+  --muted: #746e63;
+}
+* { box-sizing: border-box; }
+body { max-width: 1328px; margin: auto; padding: 40px 24px 24px; }
+h1 { margin: 0; font-size: 22px; font-weight: 500; letter-spacing: .04em; }
+h1 span { margin-left: 8px; color: var(--muted); font-size: 14px; font-weight: 400; letter-spacing: 0; }
+p { margin: 8px 0 28px; color: var(--muted); }
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 20px 16px;
+  padding: 24px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+label { display: grid; gap: 8px; font-size: 13px; }
+input, button { font: inherit; color: inherit; border-radius: 0; }
+input[type=file] { width: 240px; max-width: 100%; font-size: 12px; color: var(--muted); }
+input[type=text], input[type=number] {
+  height: 36px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  background: #faf7f0;
+}
+input[type=text] { width: 240px; max-width: 100%; }
+input[type=number] { width: 72px; }
+button, input::file-selector-button {
+  min-height: 36px;
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  color: #34312b;
+  cursor: pointer;
+}
+input::file-selector-button { margin-right: 10px; font: inherit; }
+button:hover:not(:disabled), input::file-selector-button:hover { background: #e9e3d7; }
+#start { border-color: #484339; background: #484339; color: #faf7f0; }
+#start:hover:not(:disabled) { background: #302d27; }
+button:disabled { opacity: .35; cursor: default; }
+input:focus-visible, button:focus-visible, summary:focus-visible, canvas:focus-visible {
+  outline: 2px solid #85775e;
+  outline-offset: 3px;
+}
+input[type=checkbox] { accent-color: #655b4a; }
+.check { display: flex; align-items: center; gap: 8px; }
+details { margin-top: 16px; color: var(--muted); font-size: 13px; }
+summary { width: fit-content; cursor: pointer; }
+details[open] summary { margin-bottom: 20px; }
+details label { margin-bottom: 16px; }
+details p { max-width: 880px; margin-bottom: 0; }
+#stage {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 240px;
+  margin-top: 24px;
+  border: 1px solid var(--line);
+  background: #eae4d8;
+  overflow: hidden;
+}
+canvas {
+  display: block;
+  max-width: 100%;
+  max-height: 85vh;
+  width: auto;
+  height: auto;
+  touch-action: none;
+  image-rendering: pixelated;
+}
+#stage:fullscreen { border: 0; background: #000; }
+#stage:fullscreen canvas { max-width: 100vw; max-height: 100vh; }
+#status {
+  margin: 12px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font: 12px/1.6 system-ui, sans-serif;
+}
+@media (max-width: 600px) {
+  body { padding: 24px 16px 16px; }
+  .controls { gap: 16px 12px; padding: 20px 0; }
+  .controls > label:not(:nth-child(3)) { width: 100%; }
+  input[type=file] { width: 100%; }
+  #stage { margin-top: 20px; min-height: 160px; }
+}
+</style>
+<h1>CMVS <span>WebAssembly</span></h1>
+<p>选择本地游戏目录和日文字体，在浏览器中运行。游戏文件留在本机，存档保存在当前浏览器。</p>
+<form id="setup" class="controls">
+<label>游戏目录<input id="game" type="file" webkitdirectory multiple required></label>
+<label>字体（TTF / OTF / TTC）<input id="font" type="file" accept=".ttf,.otf,.ttc" required></label>
+<label>字体索引<input id="face" type="number" min="0" max="255" value="0" required></label>
+<button id="start">启动</button>
+<button id="stop" type="button" disabled>停止</button>
+<button id="fullscreen" type="button">全屏</button>
+<button id="export" type="button" disabled>导出存档</button>
+</form>
+<details><summary>启动选项与当前限制</summary>
+<label>导入存档备份（可选，将替换本游戏的浏览器存档）<input id="backup" type="file" accept=".json"></label>
+<label>引擎档案（留空自动识别）<input id="profile" type="text" placeholder="自动识别"></label>
+<label class="check"><input id="skip" type="checkbox">跳过自动续读（仅支持已登记游戏）</label>
+<p>当前为软件渲染预览：支持鼠标、触摸点击和 key.cfg 键位。音频输出、MGV 视频和字体选择对话框尚未接入；遇到不支持的指令会显示错误并停下。游戏脚本的全屏设置作用于虚拟画布；使用“全屏”按钮进入浏览器全屏。</p>
+</details>
+<div id="stage"><canvas id="canvas" width="1280" height="720" tabindex="0" aria-label="游戏画面"></canvas></div>
+<pre id="status" role="status">等待选择游戏目录与字体。</pre>
+<script type="module" src="./main.mjs"></script>
+</html>

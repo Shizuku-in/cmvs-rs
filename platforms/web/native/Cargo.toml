@@ -1,0 +1,19 @@
+[package]
+name = "cmvs-web"
+license.workspace = true
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[lints]
+workspace = true
+
+[dependencies]
+cmvs-core = { path = "../../../crates/cmvs-core" }
+cmvs-font = { path = "../../../crates/cmvs-font" }
+wasm-bindgen.workspace = true
+self_cell.workspace = true

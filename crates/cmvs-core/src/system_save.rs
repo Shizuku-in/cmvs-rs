@@ -1,4 +1,5 @@
 //! CSS1 persistent variable data; optional exclusive-file export, no gameplay snapshot restore.
+use crate::filesystem::File;
 mod pack;
 mod profile;
 mod write;
@@ -6,7 +7,6 @@ use crate::{FormatError, MAX_PAYLOAD, dispatch::Call, evaluate::State, machine::
 pub use profile::ProfileSystemSave;
 use std::{
     error::Error,
-    fs::File,
     io::{self, Read},
     path::{Path, PathBuf},
 };

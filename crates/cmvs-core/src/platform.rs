@@ -1,11 +1,12 @@
 //! Explicit platform requests. The recording backend is a research model, not a window.
+use crate::filesystem as fs;
+use crate::filesystem::File;
 use crate::{
     FormatError, MAX_PAYLOAD, cursor::CursorBitmap, dispatch::Call, evaluate::error,
     machine::Machine,
 };
 use std::{
     error::Error,
-    fs::File,
     io::Read,
     path::{Path, PathBuf},
     sync::Arc,
@@ -20,8 +21,8 @@ pub struct DirectoryAssets {
 }
 impl DirectoryAssets {
     pub fn new(root: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
-        let root = root.as_ref().canonicalize()?;
-        if !root.is_dir() {
+        let root = fs::canonicalize(root.as_ref())?;
+        if !fs::is_dir(&root) {
             return Err("platform asset root is not a directory".into());
         }
         Ok(Self { root })
@@ -53,7 +54,7 @@ pub fn resolve_under(root: &Path, name: &[u8]) -> Result<PathBuf, Box<dyn Error>
         }
         path.push(std::str::from_utf8(part)?);
     }
-    let path = path.canonicalize()?;
+    let path = fs::canonicalize(path)?;
     if !path.starts_with(root) {
         return Err("game path resolves outside root".into());
     }

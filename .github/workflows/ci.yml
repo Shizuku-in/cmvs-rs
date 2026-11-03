@@ -129,3 +129,23 @@ jobs:
             python -I "$test"
             echo "::endgroup::"
           done
+
+  wasm:
+    name: browser wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-dejavu-core
+      - run: cargo install wasm-bindgen-cli --version 0.2.130 --locked
+      - run: cargo clippy --locked -p cmvs-web --target wasm32-unknown-unknown -- -D warnings
+      - run: sh platforms/web/build.sh
+      - run: node --test platforms/web/filesystem.test.mjs
+      - run: node platforms/web/smoke.mjs

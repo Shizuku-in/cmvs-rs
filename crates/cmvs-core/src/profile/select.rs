@@ -1,10 +1,10 @@
 //! Profile selection from read-only evidence: data hashes identify the game, executables confirm.
 use super::{EngineProfile, GameRecord, Registry};
 use crate::digest::{sha256_reader, to_hex};
+use crate::filesystem as fs;
+use crate::filesystem::File;
 use std::{
-    fmt,
-    fs::File,
-    io,
+    fmt, io,
     path::{Path, PathBuf},
 };
 
@@ -41,7 +41,7 @@ impl Evidence {
     pub fn executables_in(root: &Path) -> io::Result<Vec<FileEvidence>> {
         EXECUTABLE_NAMES
             .iter()
-            .filter(|name| root.join(name).is_file())
+            .filter(|name| fs::is_file(root.join(name)))
             .map(|name| FileEvidence::read(&root.join(name), *name))
             .collect()
     }
@@ -58,14 +58,14 @@ impl GameFiles {
     pub fn discover(root: &Path) -> Result<Self, SelectionError> {
         let found: Vec<_> = START_SCRIPTS
             .iter()
-            .filter(|p| root.join(p).is_file())
+            .filter(|p| fs::is_file(root.join(p)))
             .collect();
         let start = match found.as_slice() {
             [one] => PathBuf::from(one),
             [] => return Err(SelectionError::MissingFile(START_SCRIPTS.join(" or "))),
             _ => return Err(SelectionError::AmbiguousStartScript),
         };
-        if !root.join(SCRIPT_ARCHIVE).is_file() {
+        if !fs::is_file(root.join(SCRIPT_ARCHIVE)) {
             return Err(SelectionError::MissingFile(SCRIPT_ARCHIVE.into()));
         }
         Ok(Self {

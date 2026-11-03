@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/cmvs-core", "crates/cmvs-input", "crates/cmvs-font", "crates/cmvs-audio", "crates/cmvs-desktop", "crates/cmvs-native", "crates/cmvs-wgpu", "crates/cmvs-probe", "platforms/android/native"]
+members = ["crates/cmvs-core", "crates/cmvs-input", "crates/cmvs-font", "crates/cmvs-audio", "crates/cmvs-desktop", "crates/cmvs-native", "crates/cmvs-wgpu", "crates/cmvs-probe", "platforms/android/native", "platforms/web/native"]
 default-members = ["."]
 resolver = "3"
 
@@ -19,6 +19,8 @@ all = "warn"
 [workspace.dependencies]
 wgpu = { version = "=30.0.1", default-features = false, features = ["std", "parking_lot", "dx12", "metal", "vulkan", "wgsl"] }
 pollster = "=1.0.1"
+wasm-bindgen = "=0.2.130"
+self_cell = "=1.2.2"
 encoding_rs = "=0.8.44"
 ico = "=0.6.0"
 softbuffer = "=0.4.8"

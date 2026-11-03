@@ -9,11 +9,12 @@
 //! active; 0x230b/0x230c resume/pause while retaining the frame. Other slot controls,
 //! playback modes, audio-bearing slots and the other creation
 //! variant remain unhandled.
+use crate::filesystem::File;
 use crate::{
     audio::MovieAudioClock, bytecode::DecodeError, cmv::CmvIndex, dispatch::Call, evaluate::error,
     machine::Machine, platform::resolve_under,
 };
-use std::{error::Error, fs::File, io, path::Path};
+use std::{error::Error, io, path::Path};
 
 pub const MOVIE_SLOTS: usize = 3;
 mod cmv_player;

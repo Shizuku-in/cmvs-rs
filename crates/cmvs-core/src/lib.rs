@@ -65,3 +65,6 @@ impl std::error::Error for FormatError {}
 
 /// A research-tool allocation bound, not an inferred engine format limit.
 pub const MAX_PAYLOAD: usize = 64 * 1024 * 1024;
+
+/// Host filesystem adapter; native builds retain standard filesystem semantics.
+pub mod filesystem;

@@ -46,3 +46,9 @@ wgpu 30.0.1（MIT OR Apache-2.0），发布包提交 `40f4a34ebaf56f9a046231f541
 ## Linux 字体选择与 Wayland 标题栏（2026-10-31）
 
 winit 0.30.13 改用其 `wayland-csd-adwaita-crossfont` feature，保留 X11/Wayland；crossfont 0.8.1（Apache-2.0，发布包提交 `a93d1ee388480c1b093f41fc3c591b7a6ff8dada`，https://github.com/alacritty/crossfont）经 FreeType/Fontconfig 为标题栏逐字寻找回退字体。版本及校验和固定在 Cargo.lock，传递依赖许可登记在 THIRD_PARTY_NOTICES.txt。仅启用上游公开 feature，未复制其源码。Linux 字体服务调用已安装的 `fc-list` 与 Zenity；不分发这些工具或系统字体，不改系统字体设置。该行为是宿主适配，不新增游戏指令语义。
+
+## WebAssembly 宿主
+
+wasm-bindgen 0.2.130（MIT OR Apache-2.0，<https://github.com/wasm-bindgen/wasm-bindgen>）用于导入浏览器 Worker 文件接口和导出运行器。self_cell 1.2.2（选择 Apache-2.0，<https://github.com/Voultapher/self_cell>，发布包提交 `3b0f5c363ca8adbece7cb3c93c978e6153e3a4b7`）用于管理脚本与借用它的运行器生命周期。仅使用公开 API，未复制上游源码；版本和校验和固定在 Cargo.lock，许可登记见 THIRD_PARTY_NOTICES.txt。
+
+浏览器文件适配遵循 [Rust wasm32 目标说明](https://doc.rust-lang.org/stable/rustc/platform-support/wasm32-unknown-unknown.html) 中标准文件系统不可用的边界，采用独立 Worker 同步读取接口；JavaScript 导出使用 [wasm-bindgen 的结构体接口](https://wasm-bindgen.github.io/wasm-bindgen/contributing/design/exporting-rust-struct.html)。这些资料只用于宿主适配，不作为游戏指令语义证据。

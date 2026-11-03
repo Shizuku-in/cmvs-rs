@@ -1,5 +1,7 @@
 //! Bounded read-only directory/CPZ lookup shared by image and audio backends.
 //! Slot order, case folding, checksums and path confinement follow the existing reader.
+use crate::filesystem as fs;
+use crate::filesystem::File;
 use crate::{
     MAX_PAYLOAD,
     cpz::{ArchiveIndex, Cpz7Parameters},
@@ -8,7 +10,6 @@ use crate::{
 use std::{
     collections::BTreeMap,
     error::Error,
-    fs::File,
     io::{self, Read},
     path::{Path, PathBuf},
 };
@@ -63,8 +64,8 @@ pub struct ResourceArchives {
 
 impl ResourceArchives {
     pub fn new(root: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
-        let root = root.as_ref().canonicalize()?;
-        if !root.is_dir() {
+        let root = fs::canonicalize(root.as_ref())?;
+        if !fs::is_dir(&root) {
             return Err("resource root is not a directory".into());
         }
         Ok(Self {
