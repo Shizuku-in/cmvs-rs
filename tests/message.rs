@@ -4834,32 +4834,32 @@ fn font_objects_keep_their_face_glyphs_capture_it_and_the_dialog_refreshes_defau
 
 #[test]
 fn realive_window_children_share_the_extended_table_for_draw_query_and_destroy() {
-    let profile = cmvs_rs::profile::Registry::builtin()
-        .profile("cmvs-20190305")
-        .unwrap();
-    let mut code = vec![];
-    create(&mut code, 7, 10, [0, 0, 1280, 54]);
-    call(&mut code, 0x2178, &[1023, 7]);
-    call(&mut code, 0x2180, &[1023, 7]);
-    call(&mut code, 0x217b, &[1023, 7]);
-    call(&mut code, 0x2179, &[1024, 7]);
-    call(&mut code, 0x2179, &[1023, 7]);
-    call(&mut code, 0x217b, &[1023, 7]);
-    call(&mut code, 0x2178, &[1024, 7]);
-    let script = script(&code);
-    let mut vm = Machine::new(&script).unwrap();
-    let mut messages = MessageHost::for_profile(profile);
-    run(&mut vm, &mut messages, 4);
-    assert_eq!(vm.state().system_integer(0), Some(1));
-    let before = messages.window(7).unwrap().object.clone();
-    assert!(before.children[&1023].draw.is_some());
-    run(&mut vm, &mut messages, 1);
-    assert_eq!(messages.window(7).unwrap().object, before);
-    run(&mut vm, &mut messages, 2);
-    assert_eq!(vm.state().system_integer(0), Some(0));
-    assert!(messages.window(7).unwrap().object.children.is_empty());
-    pending(&mut vm);
-    assert!(messages.shared_message(&mut vm).is_err());
-    assert_eq!(vm.stack().len_bytes(), 8);
-    assert_eq!(vm.pending_system().unwrap().1, 0x178);
+    for id in ["cmvs-20190305", "cmvs-20190405"] {
+        let profile = cmvs_rs::profile::Registry::builtin().profile(id).unwrap();
+        let mut code = vec![];
+        create(&mut code, 7, 10, [0, 0, 1280, 54]);
+        call(&mut code, 0x2178, &[1023, 7]);
+        call(&mut code, 0x2180, &[1023, 7]);
+        call(&mut code, 0x217b, &[1023, 7]);
+        call(&mut code, 0x2179, &[1024, 7]);
+        call(&mut code, 0x2179, &[1023, 7]);
+        call(&mut code, 0x217b, &[1023, 7]);
+        call(&mut code, 0x2178, &[1024, 7]);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::for_profile(profile);
+        run(&mut vm, &mut messages, 4);
+        assert_eq!(vm.state().system_integer(0), Some(1));
+        let before = messages.window(7).unwrap().object.clone();
+        assert!(before.children[&1023].draw.is_some());
+        run(&mut vm, &mut messages, 1);
+        assert_eq!(messages.window(7).unwrap().object, before);
+        run(&mut vm, &mut messages, 2);
+        assert_eq!(vm.state().system_integer(0), Some(0));
+        assert!(messages.window(7).unwrap().object.children.is_empty());
+        pending(&mut vm);
+        assert!(messages.shared_message(&mut vm).is_err());
+        assert_eq!(vm.stack().len_bytes(), 8);
+        assert_eq!(vm.pending_system().unwrap().1, 0x178);
+    }
 }

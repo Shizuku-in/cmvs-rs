@@ -17,7 +17,7 @@
 | [《アマツツミ》 / amatsutsumi](amatsutsumi/README.md) | `2016-07-29_AMATSUTSUMI` | 已有语义研究、路线重放及部分原生验证 |
 | [《アオイトリ》 / aoitori](aoitori/README.md) | `2017-11-24_AOITORI` | 已有构建 profile；标题及首段剧情研究中 |
 | [《リアライブ》 / realive](realive/README.md) | `2019-03-29_REALIVE` | 标题、确定性及输入/回看探针通过；MGV1 全帧已对照；17 条选择路径、3 轮共 50 次均回标题，`R4/L1` 解锁收敛，`R3/L0` 覆盖率 31.3%；剧情快照 `V1–V4/L1` 通过；页面 `P1/P3/C1/L0`、设置 `C2–C4/L1` 通过 |
-| [《青春フラジャイル》 / seishunf](seishunf/README.md) | `2020-08-28_SEISHUNF` | 89 个脚本结构检查、标题与输入/回看通过；菜单停点已解除，退出及部分设置通过；首选路线经过 5 个选项回标题，7 个分支前缀、页面完整覆盖与快照布局待推进 |
+| [《青春フラジャイル》 / seishunf](seishunf/README.md) | `2020-08-28_SEISHUNF` | 89 个脚本结构检查、标题与输入/回看通过；菜单停点已解除；首选路线经过 5 个选项回标题；快照 V1–V4 及正常桌面启动通过，7 个分支前缀与页面完整覆盖待推进 |
 | [《クナド国記》 / kunado](kunado/README.md) | `2021-12-24_KUNADO` | 基础档案；尚无构建 profile 或运行验证 |
 | [《ハピメア REGRET END》 / hapymaher_re](hapymaher_re/README.md) | `2023-05-26_HAPYMAHER_RE` | 基础档案；尚无构建 profile 或运行验证 |
 | [《ハピメア-Fragmentation Dream- REGRET END》 / hapymaherfd_re](hapymaherfd_re/README.md) | `2023-05-26_HAPYMAHERFD_RE` | 基础档案；尚无构建 profile 或运行验证 |

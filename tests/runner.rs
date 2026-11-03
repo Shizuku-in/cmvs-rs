@@ -2698,24 +2698,26 @@ fn first_system_save_without_template_writes_reloads_and_survives_restart() {
 
 #[test]
 fn realive_startup_uses_the_extended_child_table() {
-    let mut code = vec![];
-    commands::command(&mut code, 0x2020, &[7]);
-    commands::command(&mut code, 0x2022, &[7, 1023]);
-    commands::command(&mut code, 0x2000, &[]);
-    let root = Root::new("realive-child-startup", &code, b"");
-    let script = root.script();
-    let game = Registry::builtin()
-        .identify_game(&root.0, Some("cmvs-20190305"))
-        .unwrap();
-    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
-    run.set_block_unreviewed(false);
-    let mut backend = RecordingBackend::default();
-    for _ in 0..20 {
-        if run.tick(&mut backend).unwrap() == StartupEvent::Yield {
-            break;
+    for id in ["cmvs-20190305", "cmvs-20190405"] {
+        let mut code = vec![];
+        commands::command(&mut code, 0x2020, &[7]);
+        commands::command(&mut code, 0x2022, &[7, 1023]);
+        commands::command(&mut code, 0x2000, &[]);
+        let root = Root::new("realive-child-startup", &code, b"");
+        let script = root.script();
+        let game = Registry::builtin()
+            .identify_game(&root.0, Some(id))
+            .unwrap();
+        let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+        run.set_block_unreviewed(false);
+        let mut backend = RecordingBackend::default();
+        for _ in 0..20 {
+            if run.tick(&mut backend).unwrap() == StartupEvent::Yield {
+                break;
+            }
         }
+        assert!(run.scene().object(7).unwrap().children.contains_key(&1023));
     }
-    assert!(run.scene().object(7).unwrap().children.contains_key(&1023));
 }
 
 #[test]
