@@ -13,7 +13,7 @@ use cmvs_core::{
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::File,
-    io::Read,
+    io::{Read, Seek},
 };
 
 /// Static script structure, shared by the decode check, the gate classification and
@@ -251,6 +251,27 @@ fn resource_header(kind: &str, bytes: &[u8]) -> Result<(), String> {
     }
 }
 
+fn loose_cmv_header(reader: &mut (impl Read + Seek)) -> Result<(), String> {
+    let mut magic = [0; 4];
+    reader.read_exact(&mut magic).map_err(|e| e.to_string())?;
+    reader.rewind().map_err(|e| e.to_string())?;
+    if &magic == b"CMV9" {
+        // This parser needs the static block. Keep the same bound as archive resources.
+        let mut bytes = Vec::new();
+        reader
+            .take(MAX_PAYLOAD as u64 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        cmvs_core::cmv9::Cmv9Index::parse(&bytes)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    } else {
+        cmvs_core::cmv::CmvIndex::read_scene(reader)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+}
+
 /// S4: every archive entry under `data/` passes its checksum and the header of its kind;
 /// loose audio and movie files have valid headers.
 pub fn resources(target: &Target) -> CheckResult {
@@ -315,11 +336,7 @@ pub fn resources(target: &Target) -> CheckResult {
             let checked = if kind == "cmv" {
                 File::open(&path)
                     .map_err(|e| e.to_string())
-                    .and_then(|mut f| {
-                        cmvs_core::cmv::CmvIndex::read_scene(&mut f)
-                            .map(|_| ())
-                            .map_err(|e| e.to_string())
-                    })
+                    .and_then(|mut f| loose_cmv_header(&mut f))
             } else if kind == "mgv" {
                 File::open(&path)
                     .map_err(|e| e.to_string())
@@ -419,4 +436,26 @@ pub fn bundled_saves(target: &Target) -> CheckResult {
         Outcome::Fail(format!("{failed} saves failed to decode"))
     };
     CheckResult::new("S5", TITLE, outcome).with(Json::obj([("saves", Json::Arr(rows))]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loose_cmv9_uses_the_same_header_validation_as_archived_movies() {
+        let mut bytes = b"CMV9".to_vec();
+        for word in [72u32, 72, 0, 0, 15, 1, 16, 16, 24, 0] {
+            bytes.extend(word.to_le_bytes());
+        }
+        // One empty index entry, followed by an eight-byte static block.
+        bytes.extend([0; 20]);
+        bytes.extend(8u32.to_le_bytes());
+        bytes.extend([0; 4]);
+        assert!(resource_header("cmv", &bytes).is_ok());
+        assert!(loose_cmv_header(&mut std::io::Cursor::new(&bytes)).is_ok());
+        bytes[4..8].copy_from_slice(&73u32.to_le_bytes());
+        assert!(resource_header("cmv", &bytes).is_err());
+        assert!(loose_cmv_header(&mut std::io::Cursor::new(&bytes)).is_err());
+    }
 }

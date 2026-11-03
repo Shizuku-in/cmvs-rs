@@ -784,9 +784,9 @@ impl SceneHost {
             .objects
             .get(&slot)
             .ok_or_else(|| fail("object slot does not exist"))?;
-        // REALIVE's create helper ignores unsigned indices outside its 1024-entry table.
+        // Independently inspected create helpers ignore unsigned overflow of their table.
         if command == 0x22
-            && self.child_slots == ChildSlots::Extended
+            && self.child_slots != ChildSlots::Base
             && args[1] >= u32::from(self.child_slots.count())
         {
             call.complete(0x4008)?;

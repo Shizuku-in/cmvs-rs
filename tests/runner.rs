@@ -1919,12 +1919,19 @@ fn kunado_v4_snapshot_restores_text_scene_particles_locals_and_backup_slots() {
     snapshot_slots_roundtrip(Some("cmvs-20211006"));
 }
 
+#[test]
+fn kazokubu_v2_snapshot_restores_text_scene_particles_locals_and_backup_slots() {
+    snapshot_slots_roundtrip(Some("cmvs-20120309"));
+}
+
 fn snapshot_slots_roundtrip(profile: Option<&str>) {
     use cmvs_rs::{
         save::Csv2Save,
         snapshot::{EngineSnapshot, SnapshotLayout},
     };
-    let layout = if profile == Some("cmvs-20211006") {
+    let layout = if profile == Some("cmvs-20120309") {
+        SnapshotLayout::TextV2
+    } else if profile == Some("cmvs-20211006") {
         SnapshotLayout::TextV3SceneV4
     } else {
         SnapshotLayout::TextV3
@@ -1975,6 +1982,10 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
     if profile == Some("cmvs-20211006") {
         commands::command(&mut code, 0x2022, &[20, 1023]);
         commands::command(&mut code, 0x2178, &[0, 1023]);
+    }
+    if profile == Some("cmvs-20120309") {
+        commands::command(&mut code, 0x2022, &[20, 511]);
+        commands::command(&mut code, 0x2178, &[0, 511]);
     }
     let snapshot_pc = code.len();
     code.extend(0x22b2u16.to_le_bytes());
@@ -2038,6 +2049,15 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
     let save = Csv2Save::decode(&first).unwrap();
     assert_eq!(&first[16..36], b"2000-01-01 00:00:00 ");
     let snapshot = EngineSnapshot::decode_with_layout(&save.snapshot, layout).unwrap();
+    if profile == Some("cmvs-20120309") {
+        for children in [
+            &snapshot.objects[&20].children,
+            &snapshot.windows[0].as_ref().unwrap().scene.children,
+        ] {
+            assert!(children.contains_key(&511));
+            assert!(!children.contains_key(&512));
+        }
+    }
     assert_eq!(
         (snapshot.active_slot, snapshot.pc, snapshot.repeat_count),
         (0, snapshot_pc as u32 + 2, 0)

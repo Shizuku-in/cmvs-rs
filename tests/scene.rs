@@ -1846,25 +1846,30 @@ fn flag_clear_command_drops_bit_0x100_of_the_object_or_child() {
 }
 
 #[test]
-fn realive_child_table_supports_high_slots_and_ignores_unsigned_create_overflow() {
-    for id in ["cmvs-20190305", "cmvs-20190405", "cmvs-20211006"] {
+fn inspected_child_tables_support_the_last_slot_and_ignore_unsigned_create_overflow() {
+    for (id, limit) in [
+        ("cmvs-20120309", 512),
+        ("cmvs-20190305", 1024),
+        ("cmvs-20190405", 1024),
+        ("cmvs-20211006", 1024),
+    ] {
         let profile = cmvs_rs::profile::Registry::builtin().profile(id).unwrap();
         let mut code = vec![];
         for (op, args) in [
             (0x2020, vec![7]),
-            (0x2022, vec![7, 768]),
-            (0x2022, vec![7, 1023]),
-            (0x2050, vec![7, 1023]),
-            (0x2045, vec![7, 1023, 23, 45]),
-            (0x2026, vec![7, 1023, 0]),
-            (0x2027, vec![7, 1023]),
-            (0x2022, vec![7, 1024]),
+            (0x2022, vec![7, (limit - 256)]),
+            (0x2022, vec![7, (limit - 1)]),
+            (0x2050, vec![7, (limit - 1)]),
+            (0x2045, vec![7, (limit - 1), 23, 45]),
+            (0x2026, vec![7, (limit - 1), 0]),
+            (0x2027, vec![7, (limit - 1)]),
+            (0x2022, vec![7, limit]),
             (0x2022, vec![7, u32::MAX]),
-            (0x2023, vec![7, 1024]),
-            (0x2023, vec![7, 1023]),
-            (0x2027, vec![7, 1023]),
-            (0x2027, vec![7, 768]),
-            (0x2045, vec![7, 1024, 1, 2]),
+            (0x2023, vec![7, limit]),
+            (0x2023, vec![7, (limit - 1)]),
+            (0x2027, vec![7, (limit - 1)]),
+            (0x2027, vec![7, (limit - 256)]),
+            (0x2045, vec![7, limit, 1, 2]),
         ] {
             command(&mut code, op, &args);
         }
@@ -1876,9 +1881,9 @@ fn realive_child_table_supports_high_slots_and_ignores_unsigned_create_overflow(
         let parent = scene.object(7).unwrap().clone();
         assert_eq!(
             parent.children.keys().copied().collect::<Vec<_>>(),
-            [768, 1023]
+            [(limit - 256) as u16, (limit - 1) as u16]
         );
-        let child = &parent.children[&1023];
+        let child = &parent.children[&((limit - 1) as u16)];
         assert!(!child.shown);
         assert_eq!(&child.draw.as_ref().unwrap().words[8..10], &[23, 45]);
         vm.state_mut().set_system_integer(0, 77).unwrap();

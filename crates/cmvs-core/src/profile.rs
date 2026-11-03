@@ -448,8 +448,9 @@ pub struct Registry {
     contracts: BTreeMap<[u8; 32], ContractProof>,
 }
 
-const BUILTIN_PROFILES: [&str; 9] = [
+const BUILTIN_PROFILES: [&str; 10] = [
     include_str!("../profiles/cmvs-20110525.profile"),
+    include_str!("../profiles/cmvs-20120309.profile"),
     include_str!("../profiles/cmvs-20130131.profile"),
     include_str!("../profiles/cmvs-20140217.profile"),
     include_str!("../profiles/cmvs-20150405.profile"),

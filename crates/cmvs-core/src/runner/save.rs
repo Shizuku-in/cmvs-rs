@@ -124,7 +124,7 @@ fn decode_bmp(bytes: &[u8]) -> Result<RgbaImage, &'static str> {
 }
 
 /// Command inheritance does not establish the wire format of gameplay snapshots.
-/// The independently inspected 20110525/20130131/20140217/20150405 subsets use text v2;
+/// The independently inspected 20110525/20120309/20130131/20140217/20150405 subsets use text v2;
 /// 20171114 uses v3, and 20190305/20190405/20211006 use text v3 with scene v4
 /// (docs/games/{aoitori,realive,seishunf,kunado}). Effect configurations have an independent
 /// build binding; unknown image, collision-mesh and effect records remain rejected.
@@ -132,11 +132,24 @@ pub fn snapshot_layout_supported(profile: &crate::profile::EngineProfile) -> boo
     snapshot_layout(profile).is_some()
 }
 
+fn inspected_20120309(profile: &crate::profile::EngineProfile) -> bool {
+    profile.id == "cmvs-20120309"
+        && profile
+            .binary(
+                &crate::digest::parse_hex(
+                    "f93d90d45dad95588f91425fa5d4fe20be0d97e1978ccb4ae0e83ca6e09aa15e",
+                )
+                .expect("static SHA-256"),
+            )
+            .is_some()
+}
+
 fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLayout> {
-    if matches!(
+    if (matches!(
         profile.id.as_str(),
         "cmvs-20110525" | "cmvs-20130131" | "cmvs-20140217" | "cmvs-20150405"
-    ) && profile.base.as_deref() == Some("cmvs-20160201")
+    ) || inspected_20120309(profile))
+        && profile.base.as_deref() == Some("cmvs-20160201")
     {
         Some(SnapshotLayout::TextV2)
     } else if profile.base.as_deref() == Some("cmvs-20160201")
@@ -174,6 +187,7 @@ fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLa
 
 fn effect_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
     (matches!(profile.id.as_str(), "cmvs-20110525" | "cmvs-20171114")
+        || inspected_20120309(profile)
         || (profile.id == "cmvs-20211006"
             && profile
                 .binary(
@@ -188,13 +202,14 @@ fn effect_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
 
 fn effect_record_supported(profile: &crate::profile::EngineProfile, body: &[u8]) -> bool {
     effect_layout_supported(profile)
-        // MIRANOSU and KUNADO's type-5 writer/readers are independently inspected. Other
+        // MIRANOSU, KAZOKUBU and KUNADO's type-5 writer/readers are independently inspected. Other
         // configurations still need their own runtime and snapshot evidence.
-        && (!matches!(profile.id.as_str(), "cmvs-20110525" | "cmvs-20211006")
+        && (!matches!(profile.id.as_str(), "cmvs-20110525" | "cmvs-20120309" | "cmvs-20211006")
             || body.get(..4) == Some(&[1, 0, 5, 0]))
 }
 
-/// 20110525 writer 0x1400332e0, 20130131 0x1400330b0 and 20140217 0x1400375d0 visit 512 children.
+/// Writers 20110525 0x1400332e0, 20120309 0x140033e60, 20130131 0x1400330b0
+/// and 20140217 0x1400375d0 visit 512 children.
 /// Button-list records are absent or not enabled for these older layouts.
 fn validate_20130131_records<'a>(
     scenes: impl Iterator<Item = &'a SavedScene>,
@@ -219,7 +234,7 @@ impl Startup<'_> {
     fn validate_build_snapshot(&self, snapshot: &EngineSnapshot) -> Result<(), Box<dyn Error>> {
         if matches!(
             self.gate.selection().profile.id.as_str(),
-            "cmvs-20110525" | "cmvs-20130131" | "cmvs-20140217"
+            "cmvs-20110525" | "cmvs-20120309" | "cmvs-20130131" | "cmvs-20140217"
         ) {
             validate_20130131_records(
                 snapshot
@@ -960,6 +975,7 @@ mod layout_tests {
         let registry = crate::profile::Registry::builtin();
         for (id, layout) in [
             ("cmvs-20110525", SnapshotLayout::TextV2),
+            ("cmvs-20120309", SnapshotLayout::TextV2),
             ("cmvs-20130131", SnapshotLayout::TextV2),
             ("cmvs-20140217", SnapshotLayout::TextV2),
             ("cmvs-20150405", SnapshotLayout::TextV2),
@@ -972,7 +988,10 @@ mod layout_tests {
             assert_eq!(snapshot_layout(registry.profile(id).unwrap()), Some(layout));
             assert_eq!(
                 effect_layout_supported(registry.profile(id).unwrap()),
-                matches!(id, "cmvs-20110525" | "cmvs-20171114" | "cmvs-20211006")
+                matches!(
+                    id,
+                    "cmvs-20110525" | "cmvs-20120309" | "cmvs-20171114" | "cmvs-20211006"
+                )
             );
         }
         let mut profile = registry.profile("cmvs-20171114").unwrap().clone();
@@ -988,7 +1007,7 @@ mod layout_tests {
     #[test]
     fn restricted_effect_layout_only_accepts_the_inspected_type_five() {
         let registry = crate::profile::Registry::builtin();
-        for id in ["cmvs-20110525", "cmvs-20211006"] {
+        for id in ["cmvs-20110525", "cmvs-20120309", "cmvs-20211006"] {
             let profile = registry.profile(id).unwrap();
             for kind in [2, 5, 6, 8] {
                 assert_eq!(
@@ -999,11 +1018,14 @@ mod layout_tests {
             assert!(!effect_record_supported(profile, &[1, 0]));
             assert!(!effect_record_supported(profile, &[2, 0, 5, 0]));
         }
-        let mut profile = registry.profile("cmvs-20211006").unwrap().clone();
-        for binary in &mut profile.binaries {
-            binary.sha256 = [0; 32];
+        for id in ["cmvs-20120309", "cmvs-20211006"] {
+            let mut profile = registry.profile(id).unwrap().clone();
+            for binary in &mut profile.binaries {
+                binary.sha256 = [0; 32];
+            }
+            assert_eq!(snapshot_layout(&profile), None);
+            assert!(!effect_record_supported(&profile, &[1, 0, 5, 0]));
         }
-        assert!(!effect_record_supported(&profile, &[1, 0, 5, 0]));
     }
 
     #[test]

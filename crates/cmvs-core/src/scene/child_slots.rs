@@ -3,12 +3,26 @@ use crate::profile::EngineProfile;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum ChildSlots {
+    Legacy,
     #[default]
     Base,
     Extended,
 }
 impl ChildSlots {
     pub(crate) fn for_profile(profile: &EngineProfile) -> Self {
+        // Independent 512-entry create/destroy helpers: docs/games/kazokubu.
+        if profile.id == "cmvs-20120309"
+            && profile
+                .binary(
+                    &crate::digest::parse_hex(
+                        "f93d90d45dad95588f91425fa5d4fe20be0d97e1978ccb4ae0e83ca6e09aa15e",
+                    )
+                    .expect("static SHA-256"),
+                )
+                .is_some()
+        {
+            return Self::Legacy;
+        }
         // Independent x64 evidence: docs/games/{realive,seishunf,kunado}.
         if [
             (
@@ -38,6 +52,7 @@ impl ChildSlots {
     }
     pub(crate) fn count(self) -> u16 {
         match self {
+            Self::Legacy => 512,
             Self::Base => 768,
             Self::Extended => 1024,
         }
@@ -50,9 +65,14 @@ mod tests {
     #[test]
     fn extended_table_requires_the_inspected_profile_and_binary_identity() {
         let registry = crate::profile::Registry::builtin();
-        for id in ["cmvs-20190305", "cmvs-20190405", "cmvs-20211006"] {
+        for (id, count) in [
+            ("cmvs-20120309", 512),
+            ("cmvs-20190305", 1024),
+            ("cmvs-20190405", 1024),
+            ("cmvs-20211006", 1024),
+        ] {
             let profile = registry.profile(id).unwrap();
-            assert_eq!(ChildSlots::for_profile(profile).count(), 1024);
+            assert_eq!(ChildSlots::for_profile(profile).count(), count);
             assert!(crate::runner::snapshot_layout_supported(profile));
             let mut scene = super::super::SceneHost::for_profile(profile);
             scene.restore(
@@ -63,7 +83,7 @@ mod tests {
                 None,
                 None,
             );
-            assert_eq!(scene.child_slots.count(), 1024);
+            assert_eq!(scene.child_slots.count(), count);
 
             for id in ["cmvs-20160201", "cmvs-20171114"] {
                 assert_eq!(
