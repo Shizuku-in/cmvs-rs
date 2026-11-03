@@ -12,5 +12,9 @@ workspace = true
 
 [dependencies]
 cmvs-core = { path = "../cmvs-core" }
-rodio.workspace = true
+rodio = { workspace = true, optional = true }
 lewton.workspace = true
+
+[features]
+default = ["native"]
+native = ["dep:rodio"]

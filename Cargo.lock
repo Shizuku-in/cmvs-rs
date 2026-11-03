@@ -398,6 +398,7 @@ dependencies = [
 name = "cmvs-web"
 version = "0.1.0"
 dependencies = [
+ "cmvs-audio",
  "cmvs-core",
  "cmvs-font",
  "self_cell",

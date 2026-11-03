@@ -1,6 +1,8 @@
 # cmvs-audio
 
-CMVS 的可选音频后端，负责 Vorbis 流式解码与原生设备播放。依赖 `cmvs-core`、`lewton` 和 `rodio`，不依赖桌面窗口包。
+CMVS 的可选音频后端，负责 Vorbis 流式解码与原生设备播放。解码依赖 `cmvs-core`、`lewton`；默认 `native` feature 启用 `rodio`，不依赖桌面窗口包。
+
+浏览器宿主通过 `default-features = false` 复用 `Vorbis` 与 `VorbisProgram`，不引入原生音频设备。
 
 主要职责：
 

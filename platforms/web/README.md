@@ -1,6 +1,6 @@
 # 浏览器运行器
 
-这是复用现有 CMVS VM、软件渲染与字体后端的 wasm 预览入口。游戏目录由用户选择，文件不上传；资源包由独立 Worker 按需读取片段。引擎档案仍按现有数据哈希识别，不会默认选择未知游戏。
+这是复用现有 CMVS VM、软件渲染、字体与 Vorbis 解码器的 wasm 预览入口。游戏目录由用户选择，文件不上传；资源包由独立 Worker 按需读取片段。引擎档案仍按现有数据哈希识别，不会默认选择未知游戏。
 
 ## 构建与启动
 
@@ -27,7 +27,7 @@ python3 -m http.server 8000 --bind 127.0.0.1 --directory platforms/web
 
 打开 <http://localhost:8000>，选择包含 `data/pack` 的游戏根目录和可显示日文的 TTF/OTF/TTC 字体，然后启动。TTC 可指定字体索引。生成文件位于忽略的 `platforms/web/pkg`，部署时将该目录和 HTML/MJS 文件一起提供；服务器须正确提供 `.wasm`（`application/wasm`）和 JavaScript MIME 类型。无需 npm 依赖、跨源隔离或外部 CDN。
 
-需要支持模块 Worker、FileReaderSync、目录选择、IndexedDB 和 Web Locks 的现代浏览器；使用 localhost 或 HTTPS。当前浏览器兼容性与真实游戏交互仍待人工验证。
+需要支持 Web Audio、模块 Worker、FileReaderSync、目录选择、IndexedDB 和 Web Locks 的现代浏览器；使用 localhost 或 HTTPS。当前浏览器兼容性与真实游戏交互仍待人工验证。
 
 ## 输入与存档
 
@@ -38,13 +38,13 @@ python3 -m http.server 8000 --bind 127.0.0.1 --directory platforms/web
 
 ## 范围与验证
 
-当前支持软件场景与文字呈现、已支持的 CMV 解码和核心存读档路径。音频采用明确的静音预览后端，加载结果与记录后端一致，未模拟真实播放时钟。MGV 解码、系统字体搜索、字体选择对话框与原生光标尚未接入。脚本的显示设置作用于虚拟设备；浏览器全屏由用户点击页面按钮触发。
+当前支持软件场景与文字呈现、已支持的 CMV 解码和核心存读档路径。音频通过 Web Audio 输出 BGM、语音、音效及 CMV 内嵌 Vorbis 音轨，支持前奏与循环段、准备后启动、音量、淡入淡出、语音压低 BGM 与单声道加速压缩。启动按钮启用浏览器音频；解码器按消费进度补充约 250～350 ms 的 PCM，不预解码整首曲目。播放位置来自已排程音频的消费时间，扣除启动等待与欠载空白，不宣称为校准后的扬声器时间。MGV 解码、系统字体搜索、字体选择对话框与原生光标尚未接入。脚本的显示设置作用于虚拟设备；浏览器全屏由用户点击页面按钮触发。
 
-未知格式、未实现指令与已有核心限制继续显式报错；这不是完整 CMVS 兼容性声明。当前通过 native/wasm Clippy、JS 文件系统回归和实际 wasm 合成执行验证（资源包读取、预算切片、完整帧、CSS1 写入与备份、配置保存、重启回读、退出）。尚未验证真实游戏的浏览器完整路线、IndexedDB 配额及移动设备性能。
+未知格式、未实现指令与已有核心限制继续显式报错；这不是完整 CMVS 兼容性声明。当前通过 native/wasm Clippy、JS 文件系统回归和实际 wasm 合成执行验证（资源包读取、预算切片、完整帧、CSS1 写入与备份、配置保存、重启回读、退出）。音频调度通过合成回归，wasm smoke 覆盖 BGM/音效/普通及加速语音的实际 Vorbis 解码、队列上限、补充与退出清理。尚未进行浏览器设备听音，未验证真实游戏的浏览器完整路线、IndexedDB 配额及移动设备性能。
 
 ```sh
 cargo clippy --locked -p cmvs-web --target wasm32-unknown-unknown -- -D warnings
-node --test platforms/web/filesystem.test.mjs
+node --test platforms/web/filesystem.test.mjs platforms/web/audio.test.mjs
 node platforms/web/smoke.mjs
 ```
 

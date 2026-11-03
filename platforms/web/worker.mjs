@@ -1,5 +1,12 @@
 import init, { WebRuntime, identify } from './pkg/cmvs_web.js';
 import { BrowserFiles } from './filesystem.mjs';
+import { AudioBridge } from './audio-bridge.mjs';
+const audio = new AudioBridge();
+globalThis.cmvsAudio = audio;
+function flushAudio() {
+  const commands=audio.take();
+  if(commands.length) postMessage({type:'audio',commands},commands.filter(c=>c.pcm).map(c=>c.pcm.buffer));
+}
 
 const reader = new FileReaderSync();
 const files = new BrowserFiles(blob => new Uint8Array(reader.readAsArrayBuffer(blob)));
@@ -67,6 +74,7 @@ async function tick() {
     const keys = new Uint8Array([...held, ...pulses]);
     if (runtime.needs_input()) pulses.clear();
     const result = runtime.tick(Math.round(now - lastFrame), keys, ...pointer, focused);
+    flushAudio();
     if (result === 1) {
       lastFrame = now;
       const pixels = runtime.pixels();
@@ -82,6 +90,7 @@ onmessage = async ({ data }) => {
   try {
     if (data.type === 'start') await start(data);
     else if (data.type === 'tick') await tick();
+    else if (data.type === 'audio-clock') audio.report(data.clock);
     else if (data.type === 'input') {
       if (data.key !== undefined) data.down ? held.add(data.key) : held.delete(data.key);
       if (data.pulse !== undefined) pulses.add(data.pulse);

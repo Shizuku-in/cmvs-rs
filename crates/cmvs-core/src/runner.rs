@@ -543,6 +543,10 @@ impl<'a> Startup<'a> {
     pub fn save_image(&self) -> &SaveImage {
         &self.save_image
     }
+    /// Service host-driven output independently of VM/frame progression, including inactivity.
+    pub fn poll_audio_output(&mut self) -> Result<(), Box<dyn Error>> {
+        self.audio_backend.update()
+    }
     pub fn audio(&self) -> &AudioHost {
         &self.audio
     }

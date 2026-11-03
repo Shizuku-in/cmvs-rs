@@ -90,6 +90,7 @@ impl WebRuntime {
         self.session
             .with_dependent_mut(|_, startup| -> Result<u8, Box<dyn Error>> {
                 startup.set_focused(focused);
+                startup.poll_audio_output()?;
                 if !focused {
                     codes.clear(startup.input_mut());
                     *functions = 0;
@@ -160,7 +161,7 @@ impl WebRuntime {
             startup.set_user_data_directory(Path::new("/user"))?;
             startup.set_skip_auto_resume(skip)?;
             startup.set_glyph_metrics(font.metrics());
-            startup.set_audio_backend(Box::new(audio::SilentAudio))?;
+            startup.set_audio_backend(Box::new(audio::BrowserAudio::new(root)?))?;
             startup.set_decode_movie_frames(true);
             Ok(startup)
         })?;
