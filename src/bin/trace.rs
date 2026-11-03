@@ -57,7 +57,8 @@ Notes:
   - The profile is identified from the input, --script-archive and, with --record-platform,
     the executables in that root. Every system command passes the gate first: Base,
     Inherited, Reviewed and ContractEquivalent run existing handlers; absent and no-op
-    commands always stop; presumed and unreviewed commands stop unless allowed.
+    commands always stop; presumed and unreviewed commands run by default, unless blocked
+    by --block-presumed and --block-unreviewed respectively.
   - --record-platform reads cursor and icon assets, applies verified state (clear color,
     save title, pointer-gesture configuration), records SE requests without audio output
     and decodes 0x2030 object images from 0x2011 entries. No window, drawing or input.

@@ -10,7 +10,7 @@ cargo run --offline --release --features desktop --bin cmvs-desktop -- "<游戏�
 
 默认在 0x2080/0x22b2 构建引擎存档快照；存档、读档与系统存档都写入 `--user-data-dir`，原游戏目录保持只读。快照点上存在尚无存档格式的状态时以错误停止，不写不完整镜像，范围见[剧情存档](#剧情存档)。
 
-2026-11-01 起，M3 收紧派生档案闸门：默认只放行 `Base`、`Inherited`、`Reviewed` 与有有效登记证明的 `ContractEquivalent`。旧 `Presumed` 默认停止；重现此前依赖推定的研究路线须显式追加 `--allow-presumed`，它与 `--allow-unreviewed` 相互独立。证明通过只允许进入已有处理器，不保证处理器已实现或游戏可玩。迁移清单和撤销方法见 [M3](../design/command-contracts-m3.md)。
+当前默认放行 `Presumed` 和 `Unreviewed`，分别使用 `--block-presumed`、`--block-unreviewed` 显式阻止；两项互不隐含。`Absent`、`NoOp` 始终停止。默认放行不代表语义已复核、处理器完整或游戏可玩。`Base`、`Inherited`、`Reviewed` 与具有有效登记证明的 `ContractEquivalent` 进入已有分派，证明要求不变。见 [M3](../design/command-contracts-m3.md)。
 
 | 选项 | 含义与限制 |
 |---|---|
@@ -19,8 +19,8 @@ cargo run --offline --release --features desktop --bin cmvs-desktop -- "<游戏�
 | `--continue-without-snapshot` | 研究用：不构建快照，只应用已核对的实时影响并继续；此后剧情存档不可用 |
 | `--skip-auto-resume` | 研究用：首次系统存档读取成功后清零游戏记录中登记的内存整数（本作为 2198），跳过启动自动读档；只对记录了该策略的游戏可用（目前仅本作），磁盘存档保持不变 |
 | `--profile <id>` | 研究用：显式选择引擎档案。默认按启动脚本、脚本包与 exe 的哈希自动识别，未登记的游戏会拒绝启动 |
-| `--allow-unreviewed` | 研究用：用基准语义放行当前档案中未复核的命令，每个命令首次放行时打印 `# UNREVIEWED`；不存在和空操作的命令仍会停止 |
-| `--allow-presumed` | 研究用：放行仅有旧形状证据的 `Presumed`，明确记录策略、分派尝试数及命令列表；不放行 `Unreviewed` |
+| `--block-unreviewed` | 阻止未复核命令；默认按基准语义放行并在首次使用时打印 `# UNREVIEWED` |
+| `--block-presumed` | 阻止仅有旧形状证据的 `Presumed`；默认放行并记录策略、分派尝试数及命令列表 |
 | `--font <字体>` | 用桌面 OpenType 后端显示文字；字体路径由用户提供，与原版 GDI 有像素差异 |
 | `--audio record` | 仅记录音频请求，不发声 |
 
@@ -28,10 +28,10 @@ cargo run --offline --release --features desktop --bin cmvs-desktop -- "<游戏�
 
 ## CHRONOCLOCK研究运行
 
-已验证的《クロノクロック》PC样本可用以下参数启动原生软件绘制窗口及音频。它仍依赖两项显式研究放行，不能省略或视为全部命令已复核；样本身份与验证范围见[游戏档案](../games/chronoclock/README.md)。
+已验证的《クロノクロック》PC样本可用以下参数启动原生软件绘制窗口及音频。它仍依赖旧推定和未复核命令的默认放行，不能视为全部命令已复核；样本身份与验证范围见[游戏档案](../games/chronoclock/README.md)。
 
 ```bash
-cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --user-data-dir "local/chronoclock/play-user" --audio native --font "C:/Windows/Fonts/msgothic.ttc" --allow-presumed --allow-unreviewed
+cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --user-data-dir "local/chronoclock/play-user" --audio native --font "C:/Windows/Fonts/msgothic.ttc"
 ```
 
 使用独立用户目录保留本次进度。正常剧情支持本作文字v2快照，可从工具栏打开存读档；无需使用会禁用剧情存档的 `--continue-without-snapshot`。原生窗口已验证空槽保存、关闭、重启恢复及设置持久化；覆盖范围之外的特殊图像、活动场景效果快照仍显式拒绝。鉴赏缩略图列表由脚本禁止键盘导航，使用鼠标；侧栏导航和剧情键盘输入另有验证，不能据此声称整个鉴赏页支持纯键盘。

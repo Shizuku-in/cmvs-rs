@@ -1,10 +1,14 @@
 # 未发布变更
 
-## 2026-11-01：派生档案契约与默认闸门
+## 当前命令闸门策略
+
+当前默认放行 `Presumed` 和 `Unreviewed`，分别使用 `--block-presumed`、`--block-unreviewed` 显式阻止；两项互不隐含。`Absent`、`NoOp` 始终停止。默认放行不代表语义已复核、处理器完整或游戏可玩。 CLI 已移除旧 `--allow-presumed` / `--allow-unreviewed`；库调用方改用 `Startup::set_block_presumed` / `Startup::set_block_unreviewed`。
+
+## 2026-11-01：派生档案契约与默认闸门（历史）
 
 新增独立 `ContractEquivalent` 证据来源，CHRONOCLOCK 的 `0x2008`、`0x2009`、`0x2087` 使用经离线提取、原 exe 绑定及人工审计的登记证明。
 
-**行为变更：旧 `Presumed` 不再默认放行。** runner、trace、桌面统一停止这类命令；需要继续此前研究路线时，显式使用 `--allow-presumed`（库调用方用 `Startup::set_allow_presumed`）。它不隐含 `--allow-unreviewed`，后者也不会放行旧推定。不存在和空操作命令仍然停止。
+**当时的行为变更：旧 `Presumed` 不再默认放行。** runner、trace、桌面统一停止这类命令；需要继续此前研究路线时，显式使用 `--allow-presumed`（库调用方用 `Startup::set_allow_presumed`）。它不隐含 `--allow-unreviewed`，后者也不会放行旧推定。不存在和空操作命令仍然停止。
 
 证明过期、缺失或撤销时 Registry 拒绝加载；契约放行后的未实现处理器仍保持待处理状态。新增日志统计分派尝试，包含等待重试，不代表完成或覆盖率。游戏可玩性与已验证范围未升级。
 

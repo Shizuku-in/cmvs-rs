@@ -65,7 +65,8 @@ Keys: F1 default cursor, F2..F5 registered cursor previews after a stop; close r
 Notes:
   - The profile is identified from the start script, script archive and executables.
     Base, Inherited, Reviewed and ContractEquivalent commands run; absent and no-op
-    commands always stop; presumed and unreviewed commands stop unless allowed.
+    commands always stop; presumed and unreviewed commands run by default, unless blocked
+    by --block-presumed and --block-unreviewed respectively.
   - Startup runs with virtual callback tick 0 and wall-time scene updates; unknown
     commands stop.
   - The save snapshot is built at main entry (0x2080) and scenario points (0x22b2); live

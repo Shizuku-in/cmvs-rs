@@ -1,5 +1,7 @@
 # Aoitori研究记录
 
+> 当前策略：默认放行旧推定与未复核命令，分别用 `--block-presumed`、`--block-unreviewed` 阻止。下文带日期的阶段记录、旧 `--allow-*` 参数和停点保留当时行为，不作为当前启动用法；当前参数见[运行指南](../../guides/running.md)。
+
 ## 2026-11-01：登记、启动与文字分派切片
 
 基线 `b4911e7` 加工作区修改；明确启用 `--allow-presumed --allow-unreviewed`，不提升证据状态。原目录无system.dat模板，使用全新独立用户目录；种子0、16ms、鼠标、MS Gothic字体度量。探针记录输出，不代表原生绘制或播放。

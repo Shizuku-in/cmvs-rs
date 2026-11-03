@@ -1,12 +1,14 @@
 # M3：契约证明、运行闸门与旧推定迁移
 
+> 当前策略：默认放行旧推定与未复核命令，分别用 `--block-presumed`、`--block-unreviewed` 阻止。下文带日期的阶段记录、旧 `--allow-*` 参数和停点保留当时行为，不作为当前启动用法；当前参数见[运行指南](../guides/running.md)。
+
 2026-11-01。建立在 [M2 离线试点](command-contracts-m2.md) 上；当前只登记人工核对过的三个 x64 契约，未扩大游戏验证范围。
 
-## 运行策略变更
+## M3 当时的运行策略变更
 
 默认允许 `Base`、`Inherited`、`Reviewed`、`ContractEquivalent` 进入已有 Rust 分派。旧 `Presumed` 不再默认放行，必须显式选择 `--allow-presumed`；`Unreviewed` 仍须独立的 `--allow-unreviewed`。两项研究策略互不隐含，`Absent`、`NoOp` 继续停止。runner 的 `set_allow_presumed`、trace 和桌面参数都委托同一个 `CommandGate`。
 
-这项默认收紧同时记录在[运行指南](../guides/running.md)和[未发布变更](../release-notes.md)。
+这项当时的默认收紧记录在[运行指南](../guides/running.md)和[未发布变更](../release-notes.md)。
 
 CHRONOCLOCK 全部976条档案行的[迁移清单](../games/chronoclock/contract-m3-migration.tsv) SHA-256 为 `f21fe7741e181ec8d6772d252d5f20f6145e6014409ff62c8a96f1efbd22afab`。仅三条旧推定升级：
 
