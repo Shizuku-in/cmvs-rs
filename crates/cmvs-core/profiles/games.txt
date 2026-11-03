@@ -64,3 +64,12 @@ game-id 0x1810a032
 executable cmvs64.exe sha256=02b71aac3d3d1ced1d0312b6c37748cf12df9cffd9585fb07787e6ca43199f00
 executable cmvs32.exe sha256=6705a43d85121b56961515f3dd0a0766a14a91ffa76df8866d8c7d6133a56a44
 end
+
+game seishunf
+profile cmvs-20190405
+start data/pack/start.ps3 sha256=1bf85540cc22dbc56845c9a5f683e34c8485dc6eda504e2578431639fb1c74bc
+archive data/pack/script.cpz sha256=558859b1e3ca064b6c189cfc685b36bf4f506433ee613179ba85a306c7d017fa
+game-id 0x1920a045
+executable cmvs64.exe sha256=c1742b5873e6d03f5cc7bc6f5b3b23655ec67e7cddf307deefa75349caed33be
+executable cmvs32.exe sha256=1d47c85d947a111440974184dc3ee4530d188f1b54e8b75538b5b2156c2e67d8
+end

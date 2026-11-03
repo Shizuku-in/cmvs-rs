@@ -119,17 +119,7 @@ pub fn decode_icon(bytes: &[u8]) -> Result<IconPixels, Box<dyn Error>> {
 }
 
 pub fn cursor_rgba(bitmap: &CursorBitmap) -> Result<Vec<u8>, FormatError> {
-    let mut rgba = Vec::with_capacity(bitmap.width() * bitmap.height() * 4);
-    for (rgb, and) in bitmap.xor_rgb().iter().zip(bitmap.and_mask()) {
-        if *and && *rgb != [0, 0, 0] {
-            return Err(FormatError(
-                "native RGBA cursor cannot represent AND/XOR inversion",
-            ));
-        }
-        rgba.extend_from_slice(rgb);
-        rgba.push(if *and { 0 } else { 255 });
-    }
-    Ok(rgba)
+    bitmap.rgba()
 }
 
 /// A completed logical device frame, read only when the VM requests it.
@@ -376,6 +366,7 @@ impl PlatformBackend for NativeBackend<'_> {
             PlatformRequest::Cursor { id, bitmap } => {
                 #[cfg(windows)]
                 if let Some(bitmap) = bitmap
+                    && bitmap.alpha().is_none()
                     && bitmap
                         .xor_rgb()
                         .iter()

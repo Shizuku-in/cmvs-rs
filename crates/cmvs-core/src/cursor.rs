@@ -1,4 +1,4 @@
-//! Current game's single-image, 8-bit BI_RGB CUR files. No OS cursor handles.
+//! Single-image, 8-bit and 32-bit BI_RGB CUR files. No OS cursor handles.
 //! Preserve AND/XOR semantics; not every legacy cursor can be represented by RGBA.
 use crate::FormatError;
 
@@ -50,6 +50,7 @@ pub struct CursorBitmap {
     hotspot: (u16, u16),
     xor_rgb: Vec<[u8; 3]>,
     and_mask: Vec<bool>,
+    alpha: Option<Vec<u8>>,
 }
 impl CursorBitmap {
     pub fn width(&self) -> usize {
@@ -61,12 +62,35 @@ impl CursorBitmap {
     pub fn hotspot(&self) -> (u16, u16) {
         self.hotspot
     }
-    /// Top-down RGB XOR values, with one corresponding AND bit per pixel.
+    /// Top-down RGB values: XOR colors for legacy cursors, straight colors with alpha.
     pub fn xor_rgb(&self) -> &[[u8; 3]] {
         &self.xor_rgb
     }
     pub fn and_mask(&self) -> &[bool] {
         &self.and_mask
+    }
+    /// A nonzero 32-bit alpha plane selects alpha blending instead of AND/XOR.
+    pub fn alpha(&self) -> Option<&[u8]> {
+        self.alpha.as_deref()
+    }
+    /// Straight RGBA for native cursors; legacy inversion cannot be represented.
+    pub fn rgba(&self) -> Result<Vec<u8>, FormatError> {
+        let mut out = Vec::with_capacity(self.width * self.height * 4);
+        for (i, rgb) in self.xor_rgb.iter().enumerate() {
+            let alpha = if let Some(alpha) = &self.alpha {
+                alpha[i]
+            } else {
+                if self.and_mask[i] && *rgb != [0, 0, 0] {
+                    return Err(FormatError(
+                        "native RGBA cursor cannot represent AND/XOR inversion",
+                    ));
+                }
+                if self.and_mask[i] { 0 } else { 255 }
+            };
+            out.extend_from_slice(rgb);
+            out.push(alpha);
+        }
+        Ok(out)
     }
     pub fn decode(raw: &[u8]) -> Result<Self, FormatError> {
         if raw.len() < 22 || word(raw, 0) != 0 || word(raw, 2) != 2 || word(raw, 4) != 1 {
@@ -96,14 +120,20 @@ impl CursorBitmap {
             || dword(b, 4) != width as u32
             || dword(b, 8) != 2 * height as u32
             || word(b, 12) != 1
-            || word(b, 14) != 8
+            || !matches!(word(b, 14), 8 | 32)
             || dword(b, 16) != 0
         {
             return Err(FormatError(
-                "unsupported CUR DIB layout; expected bottom-up 8-bit BI_RGB",
+                "unsupported CUR DIB layout; expected bottom-up 8-bit or 32-bit BI_RGB",
             ));
         }
-        let colors = if dword(b, 32) == 0 {
+        let bits = word(b, 14);
+        let colors = if bits == 32 {
+            if dword(b, 32) != 0 {
+                return Err(FormatError("32-bit CUR palette is unsupported"));
+            }
+            0
+        } else if dword(b, 32) == 0 {
             256
         } else {
             dword(b, 32) as usize
@@ -111,7 +141,11 @@ impl CursorBitmap {
         if colors > 256 {
             return Err(FormatError("CUR palette exceeds 256 entries"));
         }
-        let xor_stride = width.div_ceil(4) * 4;
+        let xor_stride = if bits == 32 {
+            width * 4
+        } else {
+            width.div_ceil(4) * 4
+        };
         let and_stride = width.div_ceil(32) * 4;
         let pixels = 40 + colors * 4;
         let mask = pixels + xor_stride * height;
@@ -120,13 +154,20 @@ impl CursorBitmap {
         }
         let mut xor_rgb = Vec::with_capacity(width * height);
         let mut and_mask = Vec::with_capacity(width * height);
+        let mut alpha = Vec::with_capacity(if bits == 32 { width * height } else { 0 });
         for y in (0..height).rev() {
             for x in 0..width {
-                let index = usize::from(b[pixels + y * xor_stride + x]);
-                if index >= colors {
-                    return Err(FormatError("CUR pixel index outside palette"));
-                }
-                let color = 40 + index * 4;
+                let color = if bits == 32 {
+                    let color = pixels + y * xor_stride + x * 4;
+                    alpha.push(b[color + 3]);
+                    color
+                } else {
+                    let index = usize::from(b[pixels + y * xor_stride + x]);
+                    if index >= colors {
+                        return Err(FormatError("CUR pixel index outside palette"));
+                    }
+                    40 + index * 4
+                };
                 xor_rgb.push([b[color + 2], b[color + 1], b[color]]);
                 and_mask.push(b[mask + y * and_stride + x / 8] & (128 >> (x % 8)) != 0);
             }
@@ -137,12 +178,28 @@ impl CursorBitmap {
             hotspot,
             xor_rgb,
             and_mask,
+            alpha: alpha.iter().any(|&a| a != 0).then_some(alpha),
         })
     }
     /// Composites over exactly one cursor-sized top-down RGB background.
     pub fn composite(&self, background: &[[u8; 3]]) -> Result<Vec<[u8; 3]>, FormatError> {
         if background.len() != self.xor_rgb.len() {
             return Err(FormatError("cursor background dimensions differ"));
+        }
+        if let Some(alpha) = &self.alpha {
+            return Ok(background
+                .iter()
+                .zip(&self.xor_rgb)
+                .zip(alpha)
+                .map(|((old, rgb), a)| {
+                    std::array::from_fn(|i| {
+                        ((u32::from(rgb[i]) * u32::from(*a)
+                            + u32::from(old[i]) * (255 - u32::from(*a))
+                            + 127)
+                            / 255) as u8
+                    })
+                })
+                .collect());
         }
         Ok(background
             .iter()

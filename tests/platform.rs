@@ -16,65 +16,67 @@ mod bytecode;
 
 #[test]
 fn fullscreen_monitor_query_normalizes_unavailable_displays_and_preserves_errors() {
-    use cmvs_rs::{
-        dispatch::{self, Hosts, PlatformHosts},
-        profile::Registry,
-    };
-    struct Displays(Result<u32, &'static str>);
-    impl PlatformBackend for Displays {
-        fn display_count(&self) -> Result<u32, Box<dyn Error>> {
-            self.0.map_err(Into::into)
+    for id in ["cmvs-20190305", "cmvs-20190405"] {
+        use cmvs_rs::{
+            dispatch::{self, Hosts, PlatformHosts},
+            profile::Registry,
+        };
+        struct Displays(Result<u32, &'static str>);
+        impl PlatformBackend for Displays {
+            fn display_count(&self) -> Result<u32, Box<dyn Error>> {
+                self.0.map_err(Into::into)
+            }
+            fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+                unreachable!()
+            }
         }
-        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
-            unreachable!()
+        for (mode, count, expected) in [
+            (0, Err("unused"), Some(0)),
+            (1, Ok(1), Some(1)),
+            (2, Ok(1), Some(0)),
+            (4, Ok(4), Some(4)),
+            (5, Err("unused"), Some(5)),
+            (2, Err("unavailable"), None),
+            (6, Ok(4), None),
+        ] {
+            let mut code = vec![];
+            bytecode::command(&mut code, 0x23c5, &[77]);
+            let script = bytecode::script(&code);
+            let mut vm = Machine::new(&script).unwrap();
+            bytecode::pending(&mut vm);
+            let pc = vm.pc();
+            vm.state_mut().set_system_integer(0, 99).unwrap();
+            vm.state_mut().set_system_integer(1, 88).unwrap();
+            let mut host = PlatformHost::default();
+            host.configure_display_selection(
+                format!("[WINDOW_RESOLVING]\nFULL_SCREEN_MONITOR_MODE={mode}\n").as_bytes(),
+            );
+            let mut backend = Displays(count);
+            let mut assets = Assets::default();
+            let profile = Registry::builtin().profile(id).unwrap();
+            let result = dispatch::run(
+                profile.semantics(0x3c5),
+                &mut vm,
+                &mut Hosts {
+                    platform: Some(PlatformHosts {
+                        host: &mut host,
+                        backend: &mut backend,
+                        assets: &mut assets,
+                        cursors: &[],
+                    }),
+                    ..Default::default()
+                },
+            );
+            assert_eq!(result.is_ok(), expected.is_some());
+            assert_eq!(vm.state().system_integer(0), Some(expected.unwrap_or(99)));
+            assert_eq!(vm.state().system_integer(1), Some(88));
+            assert_eq!(vm.stack().len_bytes(), 4);
+            assert_eq!(
+                vm.pending_system(),
+                expected.is_none().then_some((pc, 0x3c5))
+            );
+            assert_eq!(vm.pc(), pc + if expected.is_some() { 2 } else { 0 });
         }
-    }
-    for (mode, count, expected) in [
-        (0, Err("unused"), Some(0)),
-        (1, Ok(1), Some(1)),
-        (2, Ok(1), Some(0)),
-        (4, Ok(4), Some(4)),
-        (5, Err("unused"), Some(5)),
-        (2, Err("unavailable"), None),
-        (6, Ok(4), None),
-    ] {
-        let mut code = vec![];
-        bytecode::command(&mut code, 0x23c5, &[77]);
-        let script = bytecode::script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        bytecode::pending(&mut vm);
-        let pc = vm.pc();
-        vm.state_mut().set_system_integer(0, 99).unwrap();
-        vm.state_mut().set_system_integer(1, 88).unwrap();
-        let mut host = PlatformHost::default();
-        host.configure_display_selection(
-            format!("[WINDOW_RESOLVING]\nFULL_SCREEN_MONITOR_MODE={mode}\n").as_bytes(),
-        );
-        let mut backend = Displays(count);
-        let mut assets = Assets::default();
-        let profile = Registry::builtin().profile("cmvs-20190305").unwrap();
-        let result = dispatch::run(
-            profile.semantics(0x3c5),
-            &mut vm,
-            &mut Hosts {
-                platform: Some(PlatformHosts {
-                    host: &mut host,
-                    backend: &mut backend,
-                    assets: &mut assets,
-                    cursors: &[],
-                }),
-                ..Default::default()
-            },
-        );
-        assert_eq!(result.is_ok(), expected.is_some());
-        assert_eq!(vm.state().system_integer(0), Some(expected.unwrap_or(99)));
-        assert_eq!(vm.state().system_integer(1), Some(88));
-        assert_eq!(vm.stack().len_bytes(), 4);
-        assert_eq!(
-            vm.pending_system(),
-            expected.is_none().then_some((pc, 0x3c5))
-        );
-        assert_eq!(vm.pc(), pc + if expected.is_some() { 2 } else { 0 });
     }
 }
 
@@ -813,6 +815,52 @@ fn cursor_bottom_up_palette_and_mask_preserve_all_compositing_cases() {
     assert!(c.composite(&[]).is_err());
 }
 
+fn alpha_cur() -> Vec<u8> {
+    let mut b = cur();
+    b.resize(86, 0);
+    put(&mut b, 14, 64);
+    put(&mut b, 54, 0);
+    b[36] = 32;
+    // Bottom row first, then top row. Alpha takes precedence over conflicting AND bits.
+    b[62..78].copy_from_slice(&[
+        30, 20, 10, 255, 0, 0, 255, 128, 60, 50, 40, 0, 255, 255, 255, 255,
+    ]);
+    b[78..86].copy_from_slice(&[0xc0, 0, 0, 0, 0xc0, 0, 0, 0]);
+    b
+}
+
+#[test]
+fn cursor_argb_preserves_alpha_orientation_and_uses_mask_only_when_alpha_is_absent() {
+    let raw = alpha_cur();
+    let cursor = CursorBitmap::decode(&raw).unwrap();
+    assert_eq!(cursor.alpha(), Some([0, 255, 255, 128].as_slice()));
+    assert_eq!(cursor.hotspot(), (1, 0));
+    assert_eq!(
+        cursor.rgba().unwrap(),
+        [
+            40, 50, 60, 0, 255, 255, 255, 255, 10, 20, 30, 255, 255, 0, 0, 128
+        ]
+    );
+    assert_eq!(
+        cursor.composite(&[[10, 20, 30]; 4]).unwrap(),
+        [[10, 20, 30], [255, 255, 255], [10, 20, 30], [133, 10, 15]]
+    );
+    for end in 0..raw.len() {
+        assert!(CursorBitmap::decode(&raw[..end]).is_err());
+    }
+    let mut legacy = raw;
+    for i in (65..78).step_by(4) {
+        legacy[i] = 0;
+    }
+    let cursor = CursorBitmap::decode(&legacy).unwrap();
+    assert_eq!(cursor.alpha(), None);
+    assert!(cursor.rgba().is_err());
+    assert_eq!(
+        cursor.composite(&[[10, 20, 30]; 4]).unwrap(),
+        [[34, 38, 34], [245, 235, 225], [0, 0, 0], [245, 20, 30]]
+    );
+}
+
 #[test]
 fn cursor_truncation_invalid_ranges_and_unsupported_variants_fail() {
     let raw = cur();
@@ -1237,99 +1285,73 @@ fn asset_paths_and_cursor_cli_are_bounded_and_read_only() {
 
 #[test]
 fn fullscreen_monitor_setter_normalizes_modes_and_yields_only_for_fullscreen_refresh() {
-    use cmvs_rs::{
-        dispatch::{self, Flow, Hosts, PlatformHosts},
-        profile::Registry,
-    };
-    struct Displays {
-        fullscreen: bool,
-        selected: u32,
-        fail: bool,
-        modes: Vec<u32>,
-    }
-    impl PlatformBackend for Displays {
-        fn display_count(&self) -> Result<u32, Box<dyn Error>> {
-            Ok(2)
-        }
-        fn fullscreen(&self) -> Result<bool, Box<dyn Error>> {
-            Ok(self.fullscreen)
-        }
-        fn select_fullscreen_monitor(&mut self, mode: u32) -> Result<bool, Box<dyn Error>> {
-            if self.fail {
-                return Err("selection failed".into());
-            }
-            let target = match mode {
-                0 => 0,
-                1..=4 => mode - 1,
-                5 => 1,
-                _ => unreachable!(),
-            };
-            let changed = mode == 5 || target != self.selected;
-            self.selected = target;
-            self.modes.push(mode);
-            Ok(changed)
-        }
-        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
-            unreachable!()
-        }
-    }
-    let profile = Registry::builtin().profile("cmvs-20190305").unwrap();
-    for (raw, fullscreen, fail, expected, yielded) in [
-        (0, false, false, Some(0), false),
-        (1, true, false, Some(1), false),
-        (2, true, false, Some(2), true),
-        (2, false, false, Some(2), false),
-        (5, true, false, Some(5), true),
-        (5, false, false, Some(5), false),
-        (4, true, false, Some(0), false),
-        (6, true, false, None, false),
-        (2, true, true, None, false),
-    ] {
-        let mut code = vec![];
-        bytecode::command(&mut code, 0x23c6, &[raw]);
-        bytecode::command(&mut code, 0x23c5, &[]);
-        let script = bytecode::script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        bytecode::pending(&mut vm);
-        vm.state_mut().set_system_integer(0, 99).unwrap();
-        let before = (vm.pc(), vm.stack().len_bytes(), vm.pending_system());
-        let mut host = PlatformHost::default();
-        let mut backend = Displays {
-            fullscreen,
-            selected: 0,
-            fail,
-            modes: vec![],
+    for id in ["cmvs-20190305", "cmvs-20190405"] {
+        use cmvs_rs::{
+            dispatch::{self, Flow, Hosts, PlatformHosts},
+            profile::Registry,
         };
-        let mut assets = Assets::default();
-        let result = dispatch::run(
-            profile.semantics(0x3c6),
-            &mut vm,
-            &mut Hosts {
-                platform: Some(PlatformHosts {
-                    host: &mut host,
-                    backend: &mut backend,
-                    assets: &mut assets,
-                    cursors: &[],
-                }),
-                ..Default::default()
-            },
-        );
-        assert_eq!(vm.state().system_integer(0), Some(99));
-        if let Some(mode) = expected {
-            assert_eq!(
-                result.unwrap(),
-                Some(Flow::Platform(if yielded {
-                    cmvs_rs::platform::PlatformEvent::Yield
-                } else {
-                    cmvs_rs::platform::PlatformEvent::Configured
-                }))
-            );
-            assert_eq!(backend.modes, [mode]);
-            assert_eq!(host.fullscreen_monitor_mode(), mode);
-            assert_eq!(vm.stack().len_bytes(), 0);
+        struct Displays {
+            fullscreen: bool,
+            selected: u32,
+            fail: bool,
+            modes: Vec<u32>,
+        }
+        impl PlatformBackend for Displays {
+            fn display_count(&self) -> Result<u32, Box<dyn Error>> {
+                Ok(2)
+            }
+            fn fullscreen(&self) -> Result<bool, Box<dyn Error>> {
+                Ok(self.fullscreen)
+            }
+            fn select_fullscreen_monitor(&mut self, mode: u32) -> Result<bool, Box<dyn Error>> {
+                if self.fail {
+                    return Err("selection failed".into());
+                }
+                let target = match mode {
+                    0 => 0,
+                    1..=4 => mode - 1,
+                    5 => 1,
+                    _ => unreachable!(),
+                };
+                let changed = mode == 5 || target != self.selected;
+                self.selected = target;
+                self.modes.push(mode);
+                Ok(changed)
+            }
+            fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+                unreachable!()
+            }
+        }
+        let profile = Registry::builtin().profile(id).unwrap();
+        for (raw, fullscreen, fail, expected, yielded) in [
+            (0, false, false, Some(0), false),
+            (1, true, false, Some(1), false),
+            (2, true, false, Some(2), true),
+            (2, false, false, Some(2), false),
+            (5, true, false, Some(5), true),
+            (5, false, false, Some(5), false),
+            (4, true, false, Some(0), false),
+            (6, true, false, None, false),
+            (2, true, true, None, false),
+        ] {
+            let mut code = vec![];
+            bytecode::command(&mut code, 0x23c6, &[raw]);
+            bytecode::command(&mut code, 0x23c5, &[]);
+            let script = bytecode::script(&code);
+            let mut vm = Machine::new(&script).unwrap();
             bytecode::pending(&mut vm);
-            dispatch::run(
-                profile.semantics(0x3c5),
+            vm.state_mut().set_system_integer(0, 99).unwrap();
+            let before = (vm.pc(), vm.stack().len_bytes(), vm.pending_system());
+            let mut host = PlatformHost::default();
+            let mut backend = Displays {
+                fullscreen,
+                selected: 0,
+                fail,
+                modes: vec![],
+            };
+            let mut assets = Assets::default();
+            let result = dispatch::run(
+                profile.semantics(0x3c6),
                 &mut vm,
                 &mut Hosts {
                     platform: Some(PlatformHosts {
@@ -1340,17 +1362,45 @@ fn fullscreen_monitor_setter_normalizes_modes_and_yields_only_for_fullscreen_ref
                     }),
                     ..Default::default()
                 },
-            )
-            .unwrap();
-            assert_eq!(vm.state().system_integer(0), Some(mode));
-        } else {
-            assert!(result.is_err());
-            assert_eq!(
-                (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
-                before
             );
-            assert_eq!(host.fullscreen_monitor_mode(), 0);
-            assert!(backend.modes.is_empty());
+            assert_eq!(vm.state().system_integer(0), Some(99));
+            if let Some(mode) = expected {
+                assert_eq!(
+                    result.unwrap(),
+                    Some(Flow::Platform(if yielded {
+                        cmvs_rs::platform::PlatformEvent::Yield
+                    } else {
+                        cmvs_rs::platform::PlatformEvent::Configured
+                    }))
+                );
+                assert_eq!(backend.modes, [mode]);
+                assert_eq!(host.fullscreen_monitor_mode(), mode);
+                assert_eq!(vm.stack().len_bytes(), 0);
+                bytecode::pending(&mut vm);
+                dispatch::run(
+                    profile.semantics(0x3c5),
+                    &mut vm,
+                    &mut Hosts {
+                        platform: Some(PlatformHosts {
+                            host: &mut host,
+                            backend: &mut backend,
+                            assets: &mut assets,
+                            cursors: &[],
+                        }),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                assert_eq!(vm.state().system_integer(0), Some(mode));
+            } else {
+                assert!(result.is_err());
+                assert_eq!(
+                    (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
+                    before
+                );
+                assert_eq!(host.fullscreen_monitor_mode(), 0);
+                assert!(backend.modes.is_empty());
+            }
         }
     }
 }

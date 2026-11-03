@@ -207,6 +207,14 @@ fn native_cursor_preserves_transparency_and_rejects_inverting_pixels() {
     );
     assert_eq!(cursor_rgba(&cursor([0, 0, 0], true)).unwrap(), [0, 0, 0, 0]);
     assert!(cursor_rgba(&cursor([255, 255, 255], true)).is_err());
+    let mut alpha = icon();
+    alpha[2] = 2;
+    alpha[10..14].fill(0);
+    let bitmap = CursorBitmap::decode(&alpha).unwrap();
+    assert_eq!(
+        cursor_rgba(&bitmap).unwrap(),
+        [10, 20, 30, 255, 40, 50, 60, 128]
+    );
 }
 #[test]
 fn focus_loss_clears_held_keys_and_buttons_and_history_is_bounded() {

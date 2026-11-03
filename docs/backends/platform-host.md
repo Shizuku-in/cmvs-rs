@@ -32,13 +32,15 @@
 单个文件上限 4 MiB。文件错误或不支持的 CUR/ICO 结构中止命令；不模拟原版缺失图像的宽松失败。
 其他编码路径、覆盖搜索顺序、运行时多分辨率选择尚未实现。
 
-CUR 解码范围：一个目录条目、40 字节 BITMAPINFOHEADER、正高度、1 plane、8 bpp、BI_RGB，
-1..256 项调色板，目录尺寸与 DIB 双倍高度一致。PNG、动画、多条目及其他位深明确报未支持。
+CUR 解码范围：一个目录条目、40 字节 BITMAPINFOHEADER、正高度、1 plane、8 或 32 bpp、BI_RGB，
+8 位使用 1..256 项调色板，32 位直接存 BGRA；目录尺寸与 DIB 双倍高度一致。PNG、动画、多条目及其他位深明确报未支持。
 两个平面按 DWORD 行对齐，磁盘自底向上，解码后自顶向下。
 保留热点及每像素 AND 位和 RGB XOR 色值；合成公式为 `(背景 AND mask) XOR color`。
 这保留了反色像素；不能直接把所有结果视为带透明度的 RGBA。
 依据为 Microsoft [彩色图标格式说明](https://devblogs.microsoft.com/oldnewthing/20101019-00/?p=12503)
 及 [Cursor 概述](https://learn.microsoft.com/en-us/windows/win32/menurc/about-cursors)，与本地真实文件核对。
+
+2026-11-03 扩展 32 位分支：任一 alpha 非零时按 straight-alpha 合成并忽略 AND 遮罩；alpha 全零时仍按旧 AND/XOR 方式处理。独立保存 AND 平面，RGBA 导出保留半透明，旧式反色仍显式报错；规则见 Microsoft [alpha 图标说明](https://devblogs.microsoft.com/oldnewthing/20101021-00/?p=12483)。Seishun Fragile 四份真实 CUR 的全部 4,096 个 RGBA 像素与 Pillow 12.3.0 独立解码一致，详见该游戏档案；原生指针显示未实测。
 
 本机记录模式使用已有 CSS1 数据，整数 2190 为 0，因此启动分支没有选择自定义光标。
 四份 CUR 通过独立解码实验验证，0x2099 的读取/切换/失败重试用合成 VM 测试覆盖。

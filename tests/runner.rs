@@ -2720,36 +2720,38 @@ fn realive_startup_uses_the_extended_child_table() {
 
 #[test]
 fn realive_fullscreen_monitor_selection_survives_configuration_restart() {
-    let mut code = vec![];
-    commands::command(&mut code, 0x23c6, &[5]);
-    commands::command(&mut code, 0x2000, &[]);
-    let root = Root::new("realive-monitor-preference", &code, b"");
-    let script = root.script();
-    let game = Registry::builtin()
-        .identify_game(&root.0, Some("cmvs-20190305"))
-        .unwrap();
-    let directory = root
-        .0
-        .with_file_name(format!("cmvs-realive-monitor-user-{}", std::process::id()));
-    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
-    run.set_user_data_directory(&directory).unwrap();
-    run.set_block_unreviewed(false);
-    let mut backend = RecordingBackend::default();
-    for _ in 0..20 {
-        if run.tick(&mut backend).unwrap() == StartupEvent::Yield {
-            break;
+    for id in ["cmvs-20190305", "cmvs-20190405"] {
+        let mut code = vec![];
+        commands::command(&mut code, 0x23c6, &[5]);
+        commands::command(&mut code, 0x2000, &[]);
+        let root = Root::new("realive-monitor-preference", &code, b"");
+        let script = root.script();
+        let game = Registry::builtin()
+            .identify_game(&root.0, Some(id))
+            .unwrap();
+        let directory = root
+            .0
+            .with_file_name(format!("cmvs-realive-monitor-user-{}", std::process::id()));
+        let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+        run.set_user_data_directory(&directory).unwrap();
+        run.set_block_unreviewed(false);
+        let mut backend = RecordingBackend::default();
+        for _ in 0..20 {
+            if run.tick(&mut backend).unwrap() == StartupEvent::Yield {
+                break;
+            }
         }
+        assert_eq!(run.platform().fullscreen_monitor_mode(), 5);
+        assert_eq!(backend.requests(), [PlatformRequest::FullscreenMonitor(5)]);
+        run.save_preferences(Default::default()).unwrap();
+        drop(run);
+        let mut resumed = Startup::new(&script, &root.0, &game, 0).unwrap();
+        resumed.set_user_data_directory(&directory).unwrap();
+        assert_eq!(resumed.platform().fullscreen_monitor_mode(), 5);
+        drop(resumed);
+        assert!(directory.starts_with(std::env::temp_dir()));
+        fs::remove_dir_all(directory).unwrap();
     }
-    assert_eq!(run.platform().fullscreen_monitor_mode(), 5);
-    assert_eq!(backend.requests(), [PlatformRequest::FullscreenMonitor(5)]);
-    run.save_preferences(Default::default()).unwrap();
-    drop(run);
-    let mut resumed = Startup::new(&script, &root.0, &game, 0).unwrap();
-    resumed.set_user_data_directory(&directory).unwrap();
-    assert_eq!(resumed.platform().fullscreen_monitor_mode(), 5);
-    drop(resumed);
-    assert!(directory.starts_with(std::env::temp_dir()));
-    fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]

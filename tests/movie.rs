@@ -233,6 +233,7 @@ impl MovieSource for MgvTestSource {
     }
 }
 fn mgv_step(
+    id: &str,
     vm: &mut Machine<'_>,
     movies: &mut MovieHost,
     source: &mut MgvTestSource,
@@ -243,7 +244,7 @@ fn mgv_step(
         profile::Registry,
     };
     let command = vm.pending_system().unwrap().1;
-    let profile = Registry::builtin().profile("cmvs-20190305").unwrap();
+    let profile = Registry::builtin().profile(id).unwrap();
     assert_eq!(
         dispatch::run(
             profile.semantics(command),
@@ -274,90 +275,94 @@ fn mgv_code(queries: usize) -> Vec<u8> {
 }
 #[test]
 fn mgv_player_decodes_before_commit_queries_nominal_frame_and_stops_audio() {
-    use cmvs_rs::audio::MovieAudioClock;
-    let script = program(&mgv_code(2), b"synthetic.mgv\0");
-    let mut vm = Machine::new(&script).unwrap();
-    let failure = std::rc::Rc::new(std::cell::Cell::new(false));
-    let mut movies = MovieHost::default();
-    movies.set_mgv_factory(Box::new(MgvTestFactory(failure.clone())));
-    let mut source = MgvTestSource { missing: false };
-    let mut audio = RecordingAudio::default();
-    pending(&mut vm);
-    mgv_step(&mut vm, &mut movies, &mut source, &mut audio).unwrap();
-    assert!(movies.has_player());
-    assert!(movies.player().is_none());
-    assert_eq!(vm.stack().len_bytes(), 0);
-    assert_eq!(vm.state().system_integer(0), Some(1));
-    assert!(matches!(
-        &audio.requests()[0],
-        AudioRequest::PlayMovieAudio {
-            offset: 64,
-            size: 8,
-            ..
-        }
-    ));
-    failure.set(true);
-    assert!(movies.advance_with_clock(100, None, &mut source).is_err());
-    assert_eq!(movies.player_image().unwrap().pixels(), [0, 0, 0, 255]);
-    failure.set(false);
-    movies
-        .advance_with_clock(
-            50000,
-            Some(MovieAudioClock::Playing { position_ms: 100 }),
-            &mut source,
-        )
-        .unwrap();
-    assert_eq!(movies.player_image().unwrap().pixels(), [1, 0, 0, 255]);
-    pending(&mut vm);
-    mgv_step(&mut vm, &mut movies, &mut source, &mut audio).unwrap();
-    assert_eq!(vm.state().system_integer(0), Some(1));
-    movies.advance_with_clock(300, None, &mut source).unwrap();
-    assert!(!movies.has_player());
-    pending(&mut vm);
-    mgv_step(&mut vm, &mut movies, &mut source, &mut audio).unwrap();
-    assert_eq!(vm.state().system_integer(0), Some(u32::MAX));
+    for id in ["cmvs-20190305", "cmvs-20190405"] {
+        use cmvs_rs::audio::MovieAudioClock;
+        let script = program(&mgv_code(2), b"synthetic.mgv\0");
+        let mut vm = Machine::new(&script).unwrap();
+        let failure = std::rc::Rc::new(std::cell::Cell::new(false));
+        let mut movies = MovieHost::default();
+        movies.set_mgv_factory(Box::new(MgvTestFactory(failure.clone())));
+        let mut source = MgvTestSource { missing: false };
+        let mut audio = RecordingAudio::default();
+        pending(&mut vm);
+        mgv_step(id, &mut vm, &mut movies, &mut source, &mut audio).unwrap();
+        assert!(movies.has_player());
+        assert!(movies.player().is_none());
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.state().system_integer(0), Some(1));
+        assert!(matches!(
+            &audio.requests()[0],
+            AudioRequest::PlayMovieAudio {
+                offset: 64,
+                size: 8,
+                ..
+            }
+        ));
+        failure.set(true);
+        assert!(movies.advance_with_clock(100, None, &mut source).is_err());
+        assert_eq!(movies.player_image().unwrap().pixels(), [0, 0, 0, 255]);
+        failure.set(false);
+        movies
+            .advance_with_clock(
+                50000,
+                Some(MovieAudioClock::Playing { position_ms: 100 }),
+                &mut source,
+            )
+            .unwrap();
+        assert_eq!(movies.player_image().unwrap().pixels(), [1, 0, 0, 255]);
+        pending(&mut vm);
+        mgv_step(id, &mut vm, &mut movies, &mut source, &mut audio).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(1));
+        movies.advance_with_clock(300, None, &mut source).unwrap();
+        assert!(!movies.has_player());
+        pending(&mut vm);
+        mgv_step(id, &mut vm, &mut movies, &mut source, &mut audio).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(u32::MAX));
+    }
 }
 #[test]
 fn mgv_missing_files_backend_and_frame_failures_leave_explicit_results_or_pending_commands() {
-    for (missing, install, fail) in [
-        (true, false, false),
-        (false, false, false),
-        (false, true, true),
-        (false, true, false),
-    ] {
-        let script = program(&mgv_code(0), b"synthetic.mgv\0");
-        let mut vm = Machine::new(&script).unwrap();
-        let mut movies = MovieHost::default();
-        if install {
-            movies.set_mgv_factory(Box::new(MgvTestFactory(std::rc::Rc::new(
-                std::cell::Cell::new(fail),
-            ))));
-        }
-        let mut source = MgvTestSource { missing };
-        let mut audio = RecordingAudio::default();
-        pending(&mut vm);
-        let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
-        let result = mgv_step(&mut vm, &mut movies, &mut source, &mut audio);
-        if missing {
-            assert!(result.is_ok());
-            assert!(!movies.has_player());
-            assert_eq!(vm.state().system_integer(0), Some(0));
-        } else if !install || fail {
-            assert!(result.is_err());
-            assert_eq!(
-                (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
-                before
-            );
-            assert!(audio.requests().is_empty());
-        } else {
-            result.unwrap();
+    for id in ["cmvs-20190305", "cmvs-20190405"] {
+        for (missing, install, fail) in [
+            (true, false, false),
+            (false, false, false),
+            (false, true, true),
+            (false, true, false),
+        ] {
+            let script = program(&mgv_code(0), b"synthetic.mgv\0");
+            let mut vm = Machine::new(&script).unwrap();
+            let mut movies = MovieHost::default();
+            if install {
+                movies.set_mgv_factory(Box::new(MgvTestFactory(std::rc::Rc::new(
+                    std::cell::Cell::new(fail),
+                ))));
+            }
+            let mut source = MgvTestSource { missing };
+            let mut audio = RecordingAudio::default();
             pending(&mut vm);
-            mgv_step(&mut vm, &mut movies, &mut source, &mut audio).unwrap();
-            assert!(!movies.has_player());
-            assert!(matches!(
-                audio.requests().last(),
-                Some(AudioRequest::StopMovieAudio)
-            ));
+            let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
+            let result = mgv_step(id, &mut vm, &mut movies, &mut source, &mut audio);
+            if missing {
+                assert!(result.is_ok());
+                assert!(!movies.has_player());
+                assert_eq!(vm.state().system_integer(0), Some(0));
+            } else if !install || fail {
+                assert!(result.is_err());
+                assert_eq!(
+                    (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
+                    before
+                );
+                assert!(audio.requests().is_empty());
+            } else {
+                result.unwrap();
+                pending(&mut vm);
+                mgv_step(id, &mut vm, &mut movies, &mut source, &mut audio).unwrap();
+                assert!(!movies.has_player());
+                assert!(matches!(
+                    audio.requests().last(),
+                    Some(AudioRequest::StopMovieAudio)
+                ));
+            }
         }
     }
 }
