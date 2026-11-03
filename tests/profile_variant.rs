@@ -35,13 +35,25 @@ fn modern_font_bindings_are_limited_to_the_inspected_commands() {
             .filter(|(_, binding)| binding.id == VariantId::FontCells)
             .map(|(command, _)| command)
             .collect();
-        assert_eq!(bindings, [0x11d, 0x388, 0x38b, 0x3ac, 0x3b8, 0x3b9, 0x3bb]);
+        let mut expected = vec![0x11d, 0x388, 0x38b, 0x3ac, 0x3b8, 0x3b9, 0x3bb];
+        if id == "cmvs-20211006" {
+            expected.extend([0x10b, 0x152, 0x154, 0x157, 0x159]);
+            expected.sort_unstable();
+        }
+        assert_eq!(bindings, expected);
         assert_eq!(profile.status(0x3ac), CommandStatus::Unreviewed);
         assert_eq!(
             profile.semantics(0x3ac),
             Semantics::Variant(VariantId::FontCells)
         );
-        assert_eq!(profile.semantics(0x10b), Semantics::Root);
+        assert_eq!(
+            profile.semantics(0x10b),
+            if id == "cmvs-20211006" {
+                Semantics::Variant(VariantId::FontCells)
+            } else {
+                Semantics::Root
+            }
+        );
         let binding = profile.variant(0x3ac).unwrap();
         assert_eq!(to_hex(&binding.binary_sha256), hash);
         let mut code = vec![];

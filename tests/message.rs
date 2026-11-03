@@ -4163,8 +4163,15 @@ fn font_cell_step(
     vm: &mut Machine<'_>,
     messages: &mut MessageHost,
 ) -> Result<bool, Box<dyn std::error::Error>> {
+    font_cell_profile_step(vm, messages, "cmvs-20171114")
+}
+fn font_cell_profile_step(
+    vm: &mut Machine<'_>,
+    messages: &mut MessageHost,
+    profile_id: &str,
+) -> Result<bool, Box<dyn std::error::Error>> {
     let profile = cmvs_rs::profile::Registry::builtin()
-        .profile("cmvs-20171114")
+        .profile(profile_id)
         .unwrap();
     let mut input = ActionInput::default();
     let command = vm.pending_system().unwrap().1;
@@ -4203,6 +4210,54 @@ fn run_font_cells(vm: &mut Machine<'_>, messages: &mut MessageHost, count: usize
     for _ in 0..count {
         pending(vm);
         assert!(font_cell_step(vm, messages).unwrap());
+    }
+}
+
+#[test]
+fn kunado_measurement_and_all_main_output_paths_share_proportional_advances() {
+    #[derive(Debug)]
+    struct Metrics;
+    impl cmvs_rs::message::GlyphMetrics for Metrics {
+        fn ink_width(&self, _: &[u8], _: u16, _: u32) -> Result<u32, &'static str> {
+            Ok(20)
+        }
+        fn advance_width(&self, _: &[u8], _: u16, _: u32, _: bool) -> Result<u32, &'static str> {
+            Ok(10)
+        }
+    }
+    for op in [0x210b, 0x2152, 0x2154, 0x2157, 0x2159] {
+        let mut code = vec![];
+        create(&mut code, 0, 1, [0, 0, 300, 100]);
+        call(&mut code, 0x2103, &[100, 70, 5, 10, 1]);
+        call(&mut code, 0x2105, &[0, 0, 20, 1]);
+        call(&mut code, 0x23ac, &[1]);
+        call(&mut code, 0x211d, &[1, 1]);
+        match op {
+            0x210b => call(&mut code, op, &[1, 1]),
+            0x2154 => call(&mut code, op, &[1, 0]),
+            0x2159 => call(&mut code, op, &[0, 1, u32::MAX, 0]),
+            _ => call(&mut code, op, &[1, u32::MAX, 0]),
+        }
+        let program = script_with_text(&code, b"\0\x82\xa0\x82\xa0\x82\xa0\x82\xa0\x82\xa0\0");
+        let mut vm = Machine::new(&program).unwrap();
+        let mut messages = MessageHost::default();
+        messages.set_record_output(true);
+        messages.set_glyph_metrics(Box::new(Metrics));
+        for _ in 0..5 {
+            pending(&mut vm);
+            assert!(font_cell_profile_step(&mut vm, &mut messages, "cmvs-20211006").unwrap());
+        }
+        assert_eq!(vm.state().system_integer(2), Some(1));
+        assert_eq!(vm.state().system_integer(1), Some(50));
+        pending(&mut vm);
+        assert!(font_cell_profile_step(&mut vm, &mut messages, "cmvs-20211006").unwrap());
+        let text = messages.text(1).unwrap();
+        assert_eq!(
+            text.glyphs.iter().map(|g| g.position).collect::<Vec<_>>(),
+            [[10, 5], [20, 5], [30, 5], [40, 5], [50, 5]],
+            "{op:x}"
+        );
+        assert_eq!(text.cursor, [60, 5], "{op:x}");
     }
 }
 

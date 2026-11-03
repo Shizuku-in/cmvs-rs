@@ -272,7 +272,7 @@ binary x86 file=cmvs32.exe sha256=4b42514abba732bd3f4bf71cbc8a7862831074fd8905a7
 0x2108 unreviewed 0x801aa 0x73897
 0x2109 unreviewed 0x801b7 0x738a1
 0x210a unreviewed 0x801c4 0x738ab
-0x210b unreviewed 0x801d1 0x738b5
+0x210b unreviewed 0x801d1 0x738b5 variant=font-cells:x64:58e993a82e741ea73d3d1b5d89363dcaf435e72e6d505324e1de0c0ba5486631 evidence=games/kunado/README.md
 0x210c unreviewed 0x801de 0x738bf
 0x210d unreviewed 0x801eb 0x738c9
 0x210e unreviewed 0x801f8 0x738d3
@@ -343,14 +343,14 @@ binary x86 file=cmvs32.exe sha256=4b42514abba732bd3f4bf71cbc8a7862831074fd8905a7
 0x214f unreviewed 0x80517 0x73b49
 0x2150 unreviewed 0x80524 0x73b53
 0x2151 unreviewed 0x80531 0x73b5d
-0x2152 unreviewed 0x8053e 0x73b67
+0x2152 unreviewed 0x8053e 0x73b67 variant=font-cells:x64:58e993a82e741ea73d3d1b5d89363dcaf435e72e6d505324e1de0c0ba5486631 evidence=games/kunado/README.md
 0x2153 unreviewed 0x8054b 0x73b71
-0x2154 unreviewed 0x80558 0x73b7b
+0x2154 unreviewed 0x80558 0x73b7b variant=font-cells:x64:58e993a82e741ea73d3d1b5d89363dcaf435e72e6d505324e1de0c0ba5486631 evidence=games/kunado/README.md
 0x2155 unreviewed 0x80565 0x73b85
 0x2156 unreviewed 0x80572 0x73b8f
-0x2157 unreviewed 0x8057f 0x73b99
+0x2157 unreviewed 0x8057f 0x73b99 variant=font-cells:x64:58e993a82e741ea73d3d1b5d89363dcaf435e72e6d505324e1de0c0ba5486631 evidence=games/kunado/README.md
 0x2158 unreviewed 0x8058c 0x73ba3
-0x2159 unreviewed 0x80599 0x73bad
+0x2159 unreviewed 0x80599 0x73bad variant=font-cells:x64:58e993a82e741ea73d3d1b5d89363dcaf435e72e6d505324e1de0c0ba5486631 evidence=games/kunado/README.md
 0x215a unreviewed 0x805a6 0x73bb7
 0x215b unreviewed 0x805b3 0x73bc1
 0x215c unreviewed 0x805c0 0x73bcb
