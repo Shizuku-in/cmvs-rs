@@ -3,7 +3,7 @@
 //! fields of the camera selected by SP-4 (0x140027090), 0x2060..0x2065 the same fields of camera 0
 //! (0x140027070). Fields stay raw words named by offset. The original renderer uses them
 //! for coordinate modes 2/3 (0x140020340 -> 0x14004ef40); the software renderer supports
-//! cameras of type 3 without rotation (`project_object`). 0x2056 queries projected
+//! cameras of type 3 (`project_object`), with screen roll applied by scene_render. 0x2056 queries projected
 //! integer coordinates without rendering. Camera 0 motion supports linear and quadratic
 //! ease-out branches. 0x2126 queries the screen device size at +1968 -> +8.
 use crate::{

@@ -304,15 +304,49 @@ fn objects_fade_in_between_depth_nine_and_ten_and_vanish_nearer() {
 }
 
 #[test]
+fn camera_roll_rotates_about_screen_center_after_object_rotation() {
+    let mut code = vec![];
+    camera(&mut code);
+    projected(&mut code, 1, 6, [0.0, 0.0, 10.0], 10.0);
+    command(&mut code, 0x205b, &[0, f(90.0)]);
+    let frame = render(&code);
+    for y in 0..4 {
+        for x in 0..8 {
+            assert_eq!(
+                frame[y * 8 + x],
+                if x == 3 && y >= 2 { [255; 3] } else { [0; 3] }
+            );
+        }
+    }
+    // Compose the local object angle first, then roll its device-space vertices.
+    command(&mut code, 0x204a, &[1, u32::MAX, 90]);
+    let frame = render(&code);
+    for y in 0..4 {
+        for x in 0..8 {
+            assert_eq!(
+                frame[y * 8 + x],
+                if (2..4).contains(&x) && y == 1 {
+                    [255; 3]
+                } else {
+                    [0; 3]
+                }
+            );
+        }
+    }
+    // Setter normalizes negative and multi-turn angles before rendering.
+    command(&mut code, 0x205b, &[0, f(-450.0)]);
+    assert_eq!(render(&code), frame);
+}
+
+#[test]
 fn unverified_projection_paths_fail_explicitly() {
     let mut base = vec![];
     camera(&mut base);
     projected(&mut base, 1, 0, [0.0, 0.0, 10.0], 10.0);
     let (scene, _) = build(&base);
     assert!(scene_render::render(&scene, 8, 4).is_err());
-    let variants: [&[(u16, &[u32])]; 5] = [
+    let variants: [&[(u16, &[u32])]; 4] = [
         &[(0x205f, &[0, 1])],
-        &[(0x205b, &[0, f(10.0)])],
         &[(0x209c, &[0, 1])],
         &[(0x2022, &[1, 0]), (0x2040, &[1])],
         &[(0x222a, &[12, 1, 100, 50, 1])],
@@ -395,6 +429,8 @@ fn non_finite_projected_extents_are_reported_and_near_nan_depth_is_clipped() {
     let mut code = vec![];
     camera(&mut code);
     projected(&mut code, 1, 0, [f32::INFINITY, 0.0, 10.0], 10.0);
+    assert!(rejected(&code));
+    command(&mut code, 0x205b, &[0, f(90.0)]);
     assert!(rejected(&code));
     command(&mut code, 0x2074, &[1, u32::MAX, f(f32::NAN)]);
     assert!(render(&code).iter().all(|p| *p == [0; 3]));

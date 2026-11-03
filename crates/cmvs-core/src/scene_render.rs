@@ -313,6 +313,18 @@ fn rotated_local(
         .map(|[x, y]| [hundredths(sin * y + cos * x), hundredths(cos * y - x * sin)])
 }
 
+/// KUNADO 0x140061130 -> 0x140036200: roll is truncated to signed hundredths,
+/// reduced modulo 36000, and applied only when positive. Round screen coordinates
+/// before rotating about half the camera's screen size, then truncate to hundredths.
+fn camera_roll_point(point: [f32; 2], center: [f32; 2], roll: i32) -> [f32; 2] {
+    let [x, y] = [0, 1].map(|i| (point[i] + 0.5).floor() - center[i]);
+    let theta = (360.0 - roll as f32 / 100.0) * 0.017_453_292;
+    let (sin, cos) = (f64::from(theta).sin() as f32, f64::from(theta).cos() as f32);
+    let rotated =
+        [sin * y + cos * x, cos * y - x * sin].map(|v| truncate(v * 100.0) as f32 / 100.0);
+    [0, 1].map(|i| rotated[i] + center[i])
+}
+
 /// Untextured 2D branch of 0x140020340 / 0x1400233e0. The color's alpha byte
 /// selects child image inheritance, but vertex alpha comes from opacity and fade.
 fn solid_layer<'a>(
@@ -432,7 +444,9 @@ fn unit_screen_scale(object: &SceneObject, screen: [u32; 2]) -> Result<(), Forma
 /// and scale (0x1400238a0, device factor 1 on the 1280x720 viewport) minus the device's
 /// half-pixel offset. The object's own angle rotates its local corners before projection
 /// scaling. Inherited attached children reuse the parent projection and origin; masks,
-/// camera rotation, rotated parents of children and effect targets are not verified.
+/// rotated parents of children and effect targets are not verified. Camera roll follows
+/// KUNADO 0x140061130/0x140036200; +52 also shifts projection horizontally, while
+/// +48 and the copied +52 angle are unused by that vertex transform.
 fn projected_layer<'a>(
     scene: &SceneHost,
     cameras: Option<&CameraHost>,
@@ -476,10 +490,7 @@ fn projected_layer<'a>(
             "camera effect targets (0x209c) are not modeled",
         ));
     }
-    // +48, +52 (also a horizontal shift) and +56 (screen roll) feed rotations.
-    if camera.words[12..15].iter().any(|&word| word != 0) {
-        return Err(FormatError("camera rotation is not modeled"));
-    }
+    let camera_roll = truncate(camera.float(14) * 100.0) % 36000;
     let inherited = parent
         .filter(|_| object.flags & 1 != 0)
         .and_then(|p| p.draw.as_ref())
@@ -553,10 +564,35 @@ fn projected_layer<'a>(
         ));
     }
     let degrees = words[20] as i32 as f32 / 100.0;
-    if degrees != 0.0 {
-        let origin = [words[6] as i16, words[7] as i16].map(i64::from);
-        let corners = rotated_local(local, origin, [w, h], degrees)
-            .map(|c| [0, 1].map(|i| ((c[i] - offset[i]) * scale[i] + [px, py][i]) - 0.5));
+    if degrees != 0.0 || camera_roll > 0 {
+        let corners = if degrees != 0.0 {
+            let origin = [words[6] as i16, words[7] as i16].map(i64::from);
+            rotated_local(local, origin, [w, h], degrees)
+        } else {
+            [
+                [0.0, 0.0],
+                [w as f32, 0.0],
+                [0.0, h as f32],
+                [w as f32, h as f32],
+            ]
+            .map(|c| [0, 1].map(|i| (c[i] + origin[i]) * local[i]))
+        };
+        let corners = corners.map(|c| [0, 1].map(|i| (c[i] - offset[i]) * scale[i] + [px, py][i]));
+        if !corners.as_flattened().iter().all(|v| v.is_finite()) {
+            return Err(FormatError("projected object has a non-finite extent"));
+        }
+        let corners = corners.map(|point| {
+            let point = if camera_roll > 0 {
+                camera_roll_point(
+                    point,
+                    [camera.float(9) * 0.5, camera.float(10) * 0.5],
+                    camera_roll,
+                )
+            } else {
+                point
+            };
+            point.map(|v| v - 0.5)
+        });
         if !corners.as_flattened().iter().all(|v| v.is_finite()) {
             return Err(FormatError("projected object has a non-finite extent"));
         }
@@ -1612,6 +1648,23 @@ mod scale_tests {
         assert!(check(&words, true).is_ok());
         words[18] = 1.0f32.to_bits();
         assert!(solid_layer(&words, [0, 0], 255).is_err());
+    }
+
+    #[test]
+    fn camera_roll_rounds_device_positions_before_rotating_and_uses_camera_center() {
+        assert_eq!(
+            camera_roll_point([5.49, 2.49], [4.0, 2.0], 9000),
+            [4.0, 3.0]
+        );
+        assert_eq!(camera_roll_point([5.5, 2.5], [4.0, 2.0], 9000), [3.0, 4.0]);
+        assert_eq!(
+            camera_roll_point([-0.5, -0.5], [0.0, 0.0], 9000),
+            [0.0, 0.0]
+        );
+        assert_eq!(
+            camera_roll_point([5.0, 3.0], [4.0, 2.0], 4500),
+            [4.0, 2.0 + 1.41]
+        );
     }
 
     #[test]
