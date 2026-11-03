@@ -1875,6 +1875,14 @@ pub static ROOT: &[Entry] = &[
         capability: Capability::CaptureDevice,
         handler: root_capture_device,
     },
+    // ASUKIMI x86 0x440390 -> 0x4215c0 -> 0x41c2b0 reads the completed
+    // device frame as an opaque image. See docs/games/asukimi.
+    Entry {
+        command: 0x3d,
+        name: "read legacy device frame",
+        capability: Capability::CaptureDevice,
+        handler: root_capture_device,
+    },
     Entry {
         command: 0x280,
         name: "reset sequence",
@@ -2544,6 +2552,12 @@ pub static ROOT: &[Entry] = &[
     Entry {
         command: 0x186,
         name: "window object opacity",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x187,
+        name: "window object blend mode",
         capability: Capability::Windows,
         handler: root_windows,
     },
@@ -4850,7 +4864,159 @@ pub static BACKGROUND_AUDIO: &[Entry] = &[Entry {
 }];
 
 /// Static variant tables used when provisioning shared host capabilities.
+fn variant_input_press(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    let h = hosts.input.as_mut().expect("input capability checked");
+    crate::input::handle_press(call, h.input)?;
+    Ok(Flow::Done)
+}
+
+pub static INPUT_PRESS: &[Entry] = &[
+    Entry {
+        command: 0x19c,
+        name: "input down edge",
+        capability: Capability::Input,
+        handler: variant_input_press,
+    },
+    Entry {
+        command: 0x19e,
+        name: "input down edge",
+        capability: Capability::Input,
+        handler: variant_input_press,
+    },
+    Entry {
+        command: 0x1a0,
+        name: "input down edge",
+        capability: Capability::Input,
+        handler: variant_input_press,
+    },
+    Entry {
+        command: 0x1a2,
+        name: "input down edge",
+        capability: Capability::Input,
+        handler: variant_input_press,
+    },
+    Entry {
+        command: 0x1a4,
+        name: "input down edge",
+        capability: Capability::Input,
+        handler: variant_input_press,
+    },
+    Entry {
+        command: 0x1a6,
+        name: "input down edge",
+        capability: Capability::Input,
+        handler: variant_input_press,
+    },
+    Entry {
+        command: 0x1a8,
+        name: "input down edge",
+        capability: Capability::Input,
+        handler: variant_input_press,
+    },
+    Entry {
+        command: 0x1aa,
+        name: "input down edge",
+        capability: Capability::Input,
+        handler: variant_input_press,
+    },
+    Entry {
+        command: 0x1ac,
+        name: "input down edge",
+        capability: Capability::Input,
+        handler: variant_input_press,
+    },
+    Entry {
+        command: 0x1ae,
+        name: "input down edge",
+        capability: Capability::Input,
+        handler: variant_input_press,
+    },
+    Entry {
+        command: 0x1b0,
+        name: "input down edge",
+        capability: Capability::Input,
+        handler: variant_input_press,
+    },
+    Entry {
+        command: 0x1b2,
+        name: "input down edge",
+        capability: Capability::Input,
+        handler: variant_input_press,
+    },
+    Entry {
+        command: 0x1b4,
+        name: "input down edge",
+        capability: Capability::Input,
+        handler: variant_input_press,
+    },
+    Entry {
+        command: 0x1b6,
+        name: "input down edge",
+        capability: Capability::Input,
+        handler: variant_input_press,
+    },
+    Entry {
+        command: 0x1b8,
+        name: "input down edge",
+        capability: Capability::Input,
+        handler: variant_input_press,
+    },
+    Entry {
+        command: 0x1ba,
+        name: "input down edge",
+        capability: Capability::Input,
+        handler: variant_input_press,
+    },
+    Entry {
+        command: 0x1bc,
+        name: "input down edge",
+        capability: Capability::Input,
+        handler: variant_input_press,
+    },
+    Entry {
+        command: 0x2f0,
+        name: "input down edge",
+        capability: Capability::Input,
+        handler: variant_input_press,
+    },
+    Entry {
+        command: 0x2f1,
+        name: "input down edge",
+        capability: Capability::Input,
+        handler: variant_input_press,
+    },
+    Entry {
+        command: 0x2f2,
+        name: "input down edge",
+        capability: Capability::Input,
+        handler: variant_input_press,
+    },
+    Entry {
+        command: 0x2f3,
+        name: "input down edge",
+        capability: Capability::Input,
+        handler: variant_input_press,
+    },
+    Entry {
+        command: 0x2f4,
+        name: "input down edge",
+        capability: Capability::Input,
+        handler: variant_input_press,
+    },
+    Entry {
+        command: 0x2f5,
+        name: "input down edge",
+        capability: Capability::Input,
+        handler: variant_input_press,
+    },
+];
+
+/// Static variant tables used when provisioning shared host capabilities.
 pub static VARIANT_TABLES: &[&[Entry]] = &[
+    INPUT_PRESS,
     MGV_PLAYER,
     DISPLAY_COUNT,
     FULLSCREEN_MONITOR,
@@ -4868,6 +5034,7 @@ pub static VARIANT_TABLES: &[&[Entry]] = &[
 
 pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'static Entry> {
     let entries = match id {
+        crate::profile::VariantId::InputPress => INPUT_PRESS,
         crate::profile::VariantId::MgvPlayer => MGV_PLAYER,
         crate::profile::VariantId::DisplayCount => DISPLAY_COUNT,
         crate::profile::VariantId::FullscreenMonitor => FULLSCREEN_MONITOR,
@@ -4887,6 +5054,7 @@ pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'st
 
 pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
     match profile.semantics(command) {
+        Semantics::Variant(crate::profile::VariantId::InputPress) => "variant input down edge",
         Semantics::Variant(crate::profile::VariantId::MgvPlayer) => "variant MGV player",
         Semantics::Variant(crate::profile::VariantId::DisplayCount) => "variant display count",
         Semantics::Variant(crate::profile::VariantId::FullscreenMonitor) => {

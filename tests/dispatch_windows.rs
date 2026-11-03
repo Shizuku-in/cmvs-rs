@@ -120,7 +120,7 @@ impl Windows {
 #[test]
 fn exact_window_batch_completes_with_only_the_required_context() {
     for (capability, count) in [
-        (Capability::Windows, 47),
+        (Capability::Windows, 48),
         (Capability::WindowPointer, 1),
         (Capability::WindowButtons, 1),
         (Capability::WindowImages, 2),

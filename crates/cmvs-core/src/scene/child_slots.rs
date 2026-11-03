@@ -3,6 +3,7 @@ use crate::profile::EngineProfile;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum ChildSlots {
+    Early,
     Legacy,
     #[default]
     Base,
@@ -10,6 +11,19 @@ pub(crate) enum ChildSlots {
 }
 impl ChildSlots {
     pub(crate) fn for_profile(profile: &EngineProfile) -> Self {
+        // Independent x86 256-entry helpers: docs/games/asukimi.
+        if profile.id == "cmvs-20071117"
+            && profile
+                .binary(
+                    &crate::digest::parse_hex(
+                        "caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c9715a20e7a5f36d02b",
+                    )
+                    .expect("static SHA-256"),
+                )
+                .is_some()
+        {
+            return Self::Early;
+        }
         // Independent 512-entry create/destroy helpers: docs/games/kazokubu.
         if profile.id == "cmvs-20120309"
             && profile
@@ -52,6 +66,7 @@ impl ChildSlots {
     }
     pub(crate) fn count(self) -> u16 {
         match self {
+            Self::Early => 256,
             Self::Legacy => 512,
             Self::Base => 768,
             Self::Extended => 1024,
@@ -65,6 +80,12 @@ mod tests {
     #[test]
     fn extended_table_requires_the_inspected_profile_and_binary_identity() {
         let registry = crate::profile::Registry::builtin();
+        let early = registry.profile("cmvs-20071117").unwrap();
+        assert_eq!(ChildSlots::for_profile(early).count(), 256);
+        assert!(!crate::runner::snapshot_layout_supported(early));
+        let mut changed = early.clone();
+        changed.binaries[0].sha256 = [0; 32];
+        assert_eq!(ChildSlots::for_profile(&changed).count(), 768);
         for (id, count) in [
             ("cmvs-20120309", 512),
             ("cmvs-20190305", 1024),

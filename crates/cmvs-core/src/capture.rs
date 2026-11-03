@@ -31,10 +31,10 @@ impl ScreenCapture {
         scene: &mut SceneHost,
         backend: &mut impl PlatformBackend,
     ) -> Result<bool, Box<dyn std::error::Error>> {
-        let Some((pc, 0x3e)) = vm.pending_system() else {
+        let Some((pc, command @ (0x3d | 0x3e))) = vm.pending_system() else {
             return Ok(false);
         };
-        self.handle_immediate(&mut Call::new(vm, pc, 0x3e), scene, backend)?;
+        self.handle_immediate(&mut Call::new(vm, pc, command), scene, backend)?;
         Ok(true)
     }
     pub(crate) fn handle_immediate(
@@ -44,7 +44,8 @@ impl ScreenCapture {
         backend: &mut dyn PlatformBackend,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let pc = call.pc;
-        let fail = |why| error(pc, 0x203e, why);
+        let op = call.command + 0x2000;
+        let fail = |why| error(pc, op, why);
         let slot = call.argument(4, "object slot")?;
         let child = call.argument(8, "child slot")? as i32;
         let slot = u8::try_from(slot)

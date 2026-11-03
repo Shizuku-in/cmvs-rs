@@ -801,6 +801,30 @@ fn window_draw_commands_reuse_scene_draw_fields() {
 }
 
 #[test]
+fn window_blend_mode_changes_parent_and_child_and_ignores_invalid_values() {
+    let mut code = vec![];
+    create(&mut code, 0, 0, [0, 0, 10, 10]);
+    call(&mut code, 0x2180, &[u32::MAX, 0]);
+    call(&mut code, 0x2178, &[5, 0]);
+    call(&mut code, 0x2180, &[5, 0]);
+    for mode in [0, 1, 2, 3, 4, u32::MAX] {
+        call(&mut code, 0x2187, &[mode, u32::MAX, 0]);
+        call(&mut code, 0x2187, &[mode, 5, 0]);
+    }
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::default();
+    run(&mut vm, &mut messages, 4);
+    for mode in [0, 1, 2, 3, 3, 3] {
+        run(&mut vm, &mut messages, 2);
+        let object = &messages.window(0).unwrap().object;
+        assert_eq!(object.draw.as_ref().unwrap().words[1], mode);
+        assert_eq!(object.children[&5].draw.as_ref().unwrap().words[1], mode);
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
+}
+
+#[test]
 fn window_draw_commands_need_a_target_and_its_draw_state() {
     let mut cases = vec![];
     for (command, words) in [
@@ -809,6 +833,7 @@ fn window_draw_commands_need_a_target_and_its_draw_state() {
         (0x2180, vec![768, 0]),
         (0x2180, vec![u32::MAX, 1]),
         (0x2182, vec![0, 0, u32::MAX, 0]),
+        (0x2187, vec![2, u32::MAX, 0]),
     ] {
         let mut code = vec![];
         create(&mut code, 0, 0, [0, 0, 10, 10]);
@@ -4890,6 +4915,7 @@ fn font_objects_keep_their_face_glyphs_capture_it_and_the_dialog_refreshes_defau
 #[test]
 fn inspected_window_children_share_the_table_for_draw_query_and_destroy() {
     for (id, limit) in [
+        ("cmvs-20071117", 256),
         ("cmvs-20120309", 512),
         ("cmvs-20190305", 1024),
         ("cmvs-20190405", 1024),

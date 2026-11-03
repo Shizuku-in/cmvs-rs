@@ -85,6 +85,40 @@ impl Configuration {
     pub fn bytes(&self) -> &[u8] {
         &self.0
     }
+    /// Logical canvas with independently verified build-specific configuration schemas.
+    pub fn screen_size_for_profile(
+        &self,
+        profile: &crate::profile::EngineProfile,
+    ) -> Result<crate::viewport::ScreenSize, FormatError> {
+        // ASUKIMI x86 0x404e00 selects the old WINDOW_SIZE schema and calls
+        // 0x403430 with the logical size; docs/games/asukimi.
+        if profile.id == "cmvs-20071117"
+            && profile
+                .binary(
+                    &crate::digest::parse_hex(
+                        "caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c9715a20e7a5f36d02b",
+                    )
+                    .expect("static SHA-256"),
+                )
+                .is_some()
+        {
+            let value = |section, key, default| {
+                crate::save_menu::profile_int(&self.0, section, key, default) as u32
+            };
+            let pixels = match value("CMVS_SYSTEM_MAIN", "WINDOW_SIZE", 1) {
+                0 => [640, 480],
+                2 => [1024, 768],
+                9 => [
+                    value("RESOLVING_POWER_INFO", "WINDOW_WIDTH", 800),
+                    value("RESOLVING_POWER_INFO", "WINDOW_HEIGHT", 600),
+                ],
+                _ => [800, 600],
+            };
+            return crate::viewport::ScreenSize::new(pixels);
+        }
+        self.screen_size()
+    }
+
     /// Logical canvas from WINDOW_RESOLVING, rather than the selected window mode.
     pub fn screen_size(&self) -> Result<crate::viewport::ScreenSize, FormatError> {
         let raw = crate::save_menu::profile_string(&self.0, "WINDOW_RESOLVING", "BASE", b"", 128);

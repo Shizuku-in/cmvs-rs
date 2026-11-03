@@ -63,7 +63,7 @@ fn immediate_read_uses_the_device_frame_and_preserves_held_capture_and_object_st
     call(&mut code, 0x2040, &[3]);
     call(&mut code, 0x203c, &[3, u32::MAX]);
     call(&mut code, 0x2304, &[]);
-    call(&mut code, 0x203e, &[3, 0x8000_0000]);
+    call(&mut code, 0x203d, &[3, 0x8000_0000]);
     call(&mut code, 0x203e, &[3, u32::MAX]);
     let program = script(&code);
     let mut vm = Machine::new(&program).unwrap();

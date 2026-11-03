@@ -673,7 +673,7 @@ impl MessageHost {
             0x17b => self.object_presence(call),
             0x171 => self.release_image(call),
             0x179 => self.destroy_child(call),
-            0x17a | 0x17c | 0x180 | 0x182..=0x186 => self.draw(call),
+            0x17a | 0x17c | 0x180 | 0x182..=0x187 => self.draw(call),
             0x190..=0x192 | 0x195..=0x197 => self.button(call),
             0x150 => self.move_window(call),
             0x18d => self.draw_query(call),
@@ -819,7 +819,7 @@ impl MessageHost {
         let count = match command {
             0x180 => 0,
             0x182 => 4,
-            0x17a | 0x184 | 0x186 => 1,
+            0x17a | 0x184 | 0x186 | 0x187 => 1,
             _ => 2,
         };
         let mut args = [0u32; 4];
@@ -858,6 +858,14 @@ impl MessageHost {
             0x183 => DrawSetter::Position([a, b]),
             0x184 => DrawSetter::Layer(a),
             0x186 => DrawSetter::Opacity(a),
+            // ASUKIMI x86 0x446ea0 -> 0x420c60; docs/games/asukimi.
+            // Values outside 0..=3 leave the current blend mode intact.
+            0x187 => {
+                if a <= 3 {
+                    target.draw.as_mut().expect("checked above").words[1] = a;
+                }
+                return Ok(());
+            }
             _ => DrawSetter::Origin([a, b]),
         };
         target.draw.as_mut().expect("checked above").set(setter);
@@ -2243,7 +2251,7 @@ impl MessageHost {
 }
 
 fn is_window_command(command: u16) -> bool {
-    matches!(command, 0xec | 0x140..=0x151 | 0x155 | 0x15a | 0x15b | 0x15d | 0x15e | 0x171 | 0x178..=0x17c | 0x17f | 0x180 | 0x182..=0x186 | 0x18d | 0x190..=0x192 | 0x195..=0x197 | 0x1cf..=0x1d1)
+    matches!(command, 0xec | 0x140..=0x151 | 0x155 | 0x15a | 0x15b | 0x15d | 0x15e | 0x171 | 0x178..=0x17c | 0x17f | 0x180 | 0x182..=0x187 | 0x18d | 0x190..=0x192 | 0x195..=0x197 | 0x1cf..=0x1d1)
 }
 fn window_argument_names(command: u16) -> &'static [&'static str] {
     match command {
@@ -2294,6 +2302,7 @@ fn window_argument_names(command: u16) -> &'static [&'static str] {
         0x183 | 0x185 => &["window slot", "child slot", "x", "y"],
         0x184 => &["window slot", "child slot", "layer"],
         0x186 => &["window slot", "child slot", "opacity"],
+        0x187 => &["window slot", "child slot", "blend mode"],
         0x190 => &[
             "window slot",
             "button index",

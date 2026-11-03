@@ -58,6 +58,7 @@ pub fn cases() -> Vec<(u16, Vec<u32>, Capability)> {
         (0x2184, vec![0x0, 0xffffffff, 0x2], Capability::Windows),
         (0x2185, vec![0x0, 0xffffffff, 0x1, 0x0], Capability::Windows),
         (0x2186, vec![0x0, 0xffffffff, 0x80], Capability::Windows),
+        (0x2187, vec![0x0, 0xffffffff, 0x2], Capability::Windows),
         (0x218d, vec![0x0, 0xffffffff], Capability::Windows),
         (
             0x2190,

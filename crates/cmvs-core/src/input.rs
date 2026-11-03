@@ -257,6 +257,37 @@ const ACTION_COMMANDS: [(u16, usize); 20] = [
     (0x34a, 20),
 ];
 
+/// ASUKIMI x86 queries report the down edge, unlike the base build's up edge.
+/// The additional 0x22f0/2/4 pairs address actions 17/18/19; docs/games/asukimi.
+pub(crate) fn handle_press(
+    call: &mut Call<'_, '_>,
+    input: &mut ActionInput,
+) -> Result<(), DecodeError> {
+    let command = call.command;
+    let action = if (0x2f0..=0x2f5).contains(&command) {
+        17 + usize::from((command - 0x2f0) / 2)
+    } else {
+        ACTION_COMMANDS
+            .iter()
+            .find(|&&(query, _)| query == command)
+            .map(|&(_, action)| action)
+            .ok_or_else(|| call.error("unregistered press query"))?
+    };
+    call.complete(0x4000)?;
+    if command & 1 == 0 {
+        let state = call.vm.state_mut();
+        state
+            .set_system_integer(0, u32::from(input.pressed(action)))
+            .expect("slot 0 exists");
+        state
+            .set_system_integer(4, u32::from(input.held(action)))
+            .expect("slot 4 exists");
+    } else {
+        input.consume(action);
+    }
+    Ok(())
+}
+
 /// Even commands of ACTION_COMMANDS (0x140078b10 and identical siblings up to 0x140078fd0;
 /// 0x1400791b0, 0x140079200 and 0x1400792a0 for 0x2344/0x2346/0x234a): system result 0 =
 /// action released, system result 4 (+82832) = held. The following odd command (inline

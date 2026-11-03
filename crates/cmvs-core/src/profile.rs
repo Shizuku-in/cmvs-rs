@@ -32,6 +32,7 @@ pub enum Semantics {
 /// Static implementation identifiers; execution obeys the unreviewed block policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VariantId {
+    InputPress,
     FontCells,
     TextAlpha,
     ObjectQueue,
@@ -49,6 +50,7 @@ pub enum VariantId {
 impl VariantId {
     pub fn parse(name: &str) -> Option<Self> {
         match name {
+            "input-press" => Some(Self::InputPress),
             "list-select" => Some(Self::ListSelect),
             "object-queue" => Some(Self::ObjectQueue),
             "text-alpha" => Some(Self::TextAlpha),
@@ -67,6 +69,7 @@ impl VariantId {
     }
     pub fn name(self) -> &'static str {
         match self {
+            Self::InputPress => "input-press",
             Self::ListSelect => "list-select",
             Self::ObjectQueue => "object-queue",
             Self::TextAlpha => "text-alpha",
@@ -448,7 +451,8 @@ pub struct Registry {
     contracts: BTreeMap<[u8; 32], ContractProof>,
 }
 
-const BUILTIN_PROFILES: [&str; 10] = [
+const BUILTIN_PROFILES: [&str; 11] = [
+    include_str!("../profiles/cmvs-20071117.profile"),
     include_str!("../profiles/cmvs-20110525.profile"),
     include_str!("../profiles/cmvs-20120309.profile"),
     include_str!("../profiles/cmvs-20130131.profile"),
