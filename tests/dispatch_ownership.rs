@@ -139,8 +139,16 @@ fn audit(handler: &str, mut probe: impl FnMut(&mut Machine<'_>) -> bool) {
             _ => None,
         };
         if let Some(capability) = capability {
+            // These compatibility entry points also recognize independently
+            // bound variants, which are deliberately absent from ROOT.
+            let variants = match handler {
+                "scene::try_handle" => cmvs_rs::dispatch::OBJECT_QUEUE,
+                "settings::try_handle" => cmvs_rs::dispatch::TEXT_ALPHA,
+                _ => &[],
+            };
             cmvs_rs::dispatch::ROOT
                 .iter()
+                .chain(variants)
                 .any(|entry| entry.command == number && entry.capability == capability)
         } else {
             CLAIMS
