@@ -36,6 +36,22 @@ test('consumption clock excludes initial scheduling delay and underrun silence',
   context.currentTime=.47;assert.ok(Math.abs(device.clock().positions[0][2]-150)<.001);
   context.currentTime=.6;assert.equal(device.clock().positions[0][2],-1);
 });
+test('queued buffers do not advance consumption or trigger unbounded refills',()=>{
+  const context=new Context(),device=new AudioDevice(context),bridge=new AudioBridge();
+  device.apply(start);bridge.begin(9,1,8000,1,1,0);
+  let sent=0;
+  for(let tick=0;tick<200;tick++) {
+    context.currentTime=tick*.025;
+    bridge.report(device.clock());
+    const consumed=bridge.position(9,1);
+    assert.ok(Math.abs(consumed-Math.max(0,context.currentTime-.03)*1000)<.001);
+    while(sent-consumed<250) {device.apply(chunk);sent+=100;}
+    assert.ok(sent-consumed<=350);
+    assert.ok(Math.abs(device.clock().positions[0][2]-consumed)<.001);
+    const last=context.sources.at(-1);
+    assert.ok(last.time+last.buffer.duration-context.currentTime<.4);
+  }
+});
 test('replacing or stopping a channel cancels queued sources and ignores stale PCM',()=>{
   const context=new Context(),device=new AudioDevice(context);
   device.apply(start);device.apply(chunk);const old=context.sources[0];

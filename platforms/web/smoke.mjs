@@ -10,12 +10,15 @@ const mount=(path,bytes) => fs.mount(path,{size:bytes.length,slice:(start,end)=>
 const words=[], text=[0];
 function string(value) {const at=text.length;text.push(...new TextEncoder().encode(value),0);return at;}
 const audioPath=string('audio\\'), tone=string('tone.ogg'), loop=string('loop.ogg'),voice=string('voice.ogg');
+const message=string('\\wcA');
 function command(op,args=[]) {
   for (const arg of [...args].reverse()) words.push(0x40,0x04,4,0,arg&255,(arg>>>8)&255,(arg>>>16)&255,(arg>>>24)&255);
   words.push(op&255,op>>>8);
 }
 // More than one cooperative budget, followed by a first-launch system save.
 for(let i=0;i<2100;i++) command(0x201e,[1]);
+command(0x215d,[0,7,0,0,64,48,64,48]);
+command(0x2152,[0,0xffffffff,message]);
 command(0x201d,[0x12345678]);
 command(0x2091,[0,2048,0]); command(0x2092,[0,2048,0]);
 command(0x2093,[0,1024,0]); command(0x2094,[0,64,0]);
@@ -50,6 +53,8 @@ runtime.set_clock(new Uint16Array([2026,1,1,12,0,0]));
 assert.equal(runtime.tick(16,new Uint8Array([1]),8,8,true),0);
 assert.equal(runtime.needs_input(),false);
 assert.throws(() => runtime.pixels(),/no completed frame/);
+// Text output yields once before the following script commands resume.
+assert.equal(runtime.tick(16,new Uint8Array(),-1,-1,true),1);
 assert.equal(runtime.tick(16,new Uint8Array(),-1,-1,true),1);
 assert.equal(runtime.width(),64); assert.equal(runtime.height(),48);
 assert.equal(new TextDecoder().decode(fs.read('/user/system.dat',0,4)),'CSS1');
@@ -83,6 +88,7 @@ fs.restore(saves);
 const resumed=new WebRuntime(new Uint8Array(readFileSync(font)),0,profile,false);
 assert.equal(resumed.tick(16,new Uint8Array(),-1,-1,true),0);
 assert.equal(resumed.tick(16,new Uint8Array(),-1,-1,true),1);
+assert.equal(resumed.tick(16,new Uint8Array(),-1,-1,true),1);
 assert.ok(fs.size('/user/system.bak')>0);
 resumed.free();
-console.log('Wasm smoke passed: archive I/O, budget slices, complete frame, CSS1 writes/backups, preferences, restart, streaming BGM/SE/voice, refill, quit, drop');
+console.log('Wasm smoke passed: archive I/O, budget slices, text output, complete frame, CSS1 writes/backups, preferences, restart, streaming BGM/SE/voice, refill, quit, drop');

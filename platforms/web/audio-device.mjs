@@ -73,7 +73,9 @@ export class AudioDevice {
         channel.items=[];channel.ended=true;
       }
       let frames=channel.completed;
-      for(const item of channel.items) frames=Math.max(frames,item.before+Math.max(0,Math.min(item.frames,(time-item.start)*channel.rate)));
+      for(const item of channel.items) {
+        if(time>=item.start) frames=Math.max(frames,item.before+Math.min(item.frames,(time-item.start)*channel.rate));
+      }
       const ended=channel.ended || (channel.eof && frames>=channel.frames);
       positions.push([id,channel.epoch,ended?-1:frames/channel.rate*1000]);
     }

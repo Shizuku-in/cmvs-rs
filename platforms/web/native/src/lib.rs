@@ -160,6 +160,7 @@ impl WebRuntime {
             let mut startup = Startup::new(script, root, &game, 0)?;
             startup.set_user_data_directory(Path::new("/user"))?;
             startup.set_skip_auto_resume(skip)?;
+            startup.set_record_text(true);
             startup.set_glyph_metrics(font.metrics());
             startup.set_audio_backend(Box::new(audio::BrowserAudio::new(root)?))?;
             startup.set_decode_movie_frames(true);
