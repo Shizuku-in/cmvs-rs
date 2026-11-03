@@ -3,9 +3,17 @@ use crate::{
     FormatError,
     message::{MessageWindow, WindowButton},
     scene::SceneObject,
+    snapshot::SnapshotLayout,
 };
 
 pub(crate) fn decode(bytes: &[u8], nodes: &mut usize) -> Result<SavedWindow, FormatError> {
+    decode_with_layout(bytes, nodes, SnapshotLayout::TextV3)
+}
+pub(crate) fn decode_with_layout(
+    bytes: &[u8],
+    nodes: &mut usize,
+    layout: SnapshotLayout,
+) -> Result<SavedWindow, FormatError> {
     let mut r = Reader::new(bytes);
     let text = usize::from(r.u16()?);
     if text >= 12 || r.u16()? != 3 {
@@ -31,7 +39,7 @@ pub(crate) fn decode(bytes: &[u8], nodes: &mut usize) -> Result<SavedWindow, For
         button.state_word = word(at + 72);
         button_words[i] = word(at + 72);
     }
-    let scene = SavedScene::decode(r.chunk()?, 0, nodes)?;
+    let scene = SavedScene::decode_with_layout(r.chunk()?, 0, nodes, layout)?;
     r.finish()?;
     Ok(SavedWindow {
         state: MessageWindow {
@@ -60,7 +68,10 @@ pub(crate) fn decode(bytes: &[u8], nodes: &mut usize) -> Result<SavedWindow, For
 }
 
 /// Window writer 0x14005d050: the record decoded above, from a window and its scene.
-pub(crate) fn encode(window: &SavedWindow) -> Result<Vec<u8>, crate::FormatError> {
+pub(crate) fn encode_with_layout(
+    window: &SavedWindow,
+    layout: SnapshotLayout,
+) -> Result<Vec<u8>, crate::FormatError> {
     let state = &window.state;
     let mut raw = vec![0u8; 2496];
     let mut word = |at: usize, value: u32| raw[at..at + 4].copy_from_slice(&value.to_le_bytes());
@@ -103,7 +114,7 @@ pub(crate) fn encode(window: &SavedWindow) -> Result<Vec<u8>, crate::FormatError
         out.extend(size.to_le_bytes());
     }
     out.extend(raw);
-    let scene = window.scene.encode()?;
+    let scene = window.scene.encode_with_layout(layout)?;
     out.extend((scene.len() as u32).to_le_bytes());
     out.extend(scene);
     Ok(out)

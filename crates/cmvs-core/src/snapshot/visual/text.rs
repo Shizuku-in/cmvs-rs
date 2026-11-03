@@ -39,7 +39,7 @@ pub(crate) fn decode_with_layout(
     let b = r.take(148)?;
     let c = match layout {
         SnapshotLayout::TextV2 => &[0; 208],
-        SnapshotLayout::TextV3 => r.take(208)?,
+        SnapshotLayout::TextV3 | SnapshotLayout::TextV3SceneV4 => r.take(208)?,
     };
     let word = |block: &[u8], at: usize| u32::from_le_bytes(block[at..at + 4].try_into().unwrap());
     // A begins at native +8, B at +176, C at +328.
@@ -239,7 +239,7 @@ pub(crate) fn encode_with_layout(
     }
     out.extend(a);
     out.extend(b);
-    if layout == SnapshotLayout::TextV3 {
+    if layout.text_version() == 3 {
         out.extend(c);
     }
     out.extend((text.glyphs.len() as u16).to_le_bytes());

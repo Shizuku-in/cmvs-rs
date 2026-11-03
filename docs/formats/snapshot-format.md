@@ -6,6 +6,8 @@
 
 命令状态继承不代表快照格式继承。默认 `EngineSnapshot::decode/encode` 使用本文的文字v3布局；`decode_with_layout/encode_with_layout` 可显式选择文字v2。runner对独立核对的 `cmvs-20130131` / `cmvs-20150405` 选择v2，`cmvs-20171114` 选择v3（[Aoitori证据与边界](../games/aoitori/vm-semantics.md#剧情快照-v3-子集2026-11-02)），其余未知派生档案仍报格式未实现。v2省略文字记录的208字节禁则块，不支持扩展禁则状态；公共图像及活动场景效果的未支持子记录继续拒绝。20130131另拒绝按钮列表及≥512的子槽，见[Hapymaher证据](../games/hapymaher/vm-semantics.md#剧情快照-v2-子集2026-11-02)；其他v2证据见[CHRONOCLOCK](../games/chronoclock/vm-semantics.md#剧情快照文字v2布局2026-11-01)。
 
+REALIVE（`cmvs-20190305`）独立选择 `TextV3SceneV4`：文字 v3、消息窗口 v3、场景 v4。场景头只保留 kind/shown/flags/width/height 五个 u32，递归子槽上限 1024；旧布局保留 768。必须用 `decode_with_layout/encode_with_layout` 显式选择；默认 API 仍为基准布局。证据与验证边界见 [REALIVE 快照](../games/realive/README.md#剧情快照2026-11-03)。
+
 ## 何时生成、由谁消费
 
 - 0x2080 / `0x1400810f0`：先由 `0x140080530` 装载主脚本，再调用 0x140069270，返回 0（不前进 PC、不回收参数）。

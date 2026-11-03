@@ -136,6 +136,36 @@ fn synthetic_stream_round_trips_with_raw_objects_and_effects() {
 }
 
 #[test]
+fn realive_engine_round_trips_scene_v4_and_rejects_other_layouts() {
+    use cmvs_rs::snapshot::SnapshotLayout;
+    // Native scene v4: marker/version, kind/shown/flags/width/height,
+    // 44-byte inactive effect block and terminator.
+    let scene = |flags: u32| {
+        let mut out = vec![255, 255, 4, 0];
+        for n in [0u32, 1, flags, 1280, 720] {
+            out.extend(n.to_le_bytes());
+        }
+        out.extend([0; 44]);
+        out
+    };
+    let mut child = scene(0);
+    child.extend(0xf0f0u16.to_le_bytes());
+    let mut parent = scene(0x8000_0000);
+    long(&mut parent, 0x700, Some(1023), &child);
+    parent.extend(0xf0f0u16.to_le_bytes());
+    let bytes = stream(&[(0x700, Some(255), parent)]);
+    let layout = SnapshotLayout::TextV3SceneV4;
+    let snapshot = EngineSnapshot::decode_with_layout(&bytes, layout).unwrap();
+    assert_eq!(
+        snapshot.objects[&255].children[&1023].logical_size,
+        [1280, 720]
+    );
+    assert_eq!(snapshot.encode_with_layout(layout).unwrap(), bytes);
+    assert!(EngineSnapshot::decode(&bytes).is_err());
+    assert!(snapshot.encode().is_err());
+}
+
+#[test]
 fn records_out_of_writer_order_or_beyond_tables_are_rejected() {
     let swapped = [
         (0x8c8, Some(1), b"b".to_vec()),

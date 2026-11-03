@@ -17,18 +17,27 @@ pub(crate) use visual::RESTORE_PIXELS;
 pub use visual::{SavedImage, SavedScene, SavedWindow, VisualPreview, VisualSnapshot};
 pub use vm_state::VmSnapshot;
 
-/// Supported snapshot text layouts. Special image/effect records remain bounded by
-/// their own decoders; a text layout does not grant support for unknown records.
+/// Supported snapshot text and scene layouts. Special image/effect records remain
+/// bounded by their own decoders; a layout does not grant support for unknown records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SnapshotLayout {
     TextV2,
     TextV3,
+    /// REALIVE: text v3, scene v4 with 1024 child slots.
+    TextV3SceneV4,
 }
 impl SnapshotLayout {
     pub(crate) fn text_version(self) -> u16 {
         match self {
             Self::TextV2 => 2,
-            Self::TextV3 => 3,
+            Self::TextV3 | Self::TextV3SceneV4 => 3,
+        }
+    }
+    pub(crate) fn child_slots(self) -> u16 {
+        if self == Self::TextV3SceneV4 {
+            1024
+        } else {
+            768
         }
     }
 }

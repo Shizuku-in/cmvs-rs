@@ -123,8 +123,9 @@ fn decode_bmp(bytes: &[u8]) -> Result<RgbaImage, &'static str> {
 }
 
 /// Command inheritance does not establish the wire format of gameplay snapshots.
-/// The independently inspected 20110525/20130131/20140217/20150405 subsets use text v2, and 20171114 uses v3
-/// (docs/games/aoitori/vm-semantics.md). Effect configurations have an independent
+/// The independently inspected 20110525/20130131/20140217/20150405 subsets use text v2;
+/// 20171114 uses v3, and 20190305 uses text v3 with scene v4
+/// (docs/games/{aoitori,realive}). Effect configurations have an independent
 /// build binding; unknown image, collision-mesh and effect records remain rejected.
 pub fn snapshot_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
     snapshot_layout(profile).is_some()
@@ -137,6 +138,18 @@ fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLa
     ) && profile.base.as_deref() == Some("cmvs-20160201")
     {
         Some(SnapshotLayout::TextV2)
+    } else if profile.id == "cmvs-20190305"
+        && profile.base.as_deref() == Some("cmvs-20160201")
+        && profile
+            .binary(
+                &crate::digest::parse_hex(
+                    "02b71aac3d3d1ced1d0312b6c37748cf12df9cffd9585fb07787e6ca43199f00",
+                )
+                .expect("static SHA-256"),
+            )
+            .is_some()
+    {
+        Some(SnapshotLayout::TextV3SceneV4)
     } else if profile.base.is_none()
         || (profile.id == "cmvs-20171114" && profile.base.as_deref() == Some("cmvs-20160201"))
     {
@@ -928,6 +941,7 @@ mod layout_tests {
             ("cmvs-20140217", SnapshotLayout::TextV2),
             ("cmvs-20150405", SnapshotLayout::TextV2),
             ("cmvs-20171114", SnapshotLayout::TextV3),
+            ("cmvs-20190305", SnapshotLayout::TextV3SceneV4),
             ("cmvs-20160201", SnapshotLayout::TextV3),
         ] {
             assert_eq!(snapshot_layout(registry.profile(id).unwrap()), Some(layout));

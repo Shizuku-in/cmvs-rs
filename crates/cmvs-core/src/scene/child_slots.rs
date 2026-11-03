@@ -36,7 +36,7 @@ mod tests {
         let registry = crate::profile::Registry::builtin();
         let profile = registry.profile("cmvs-20190305").unwrap();
         assert_eq!(ChildSlots::for_profile(profile).count(), 1024);
-        assert!(!crate::runner::snapshot_layout_supported(profile));
+        assert!(crate::runner::snapshot_layout_supported(profile));
         let mut scene = super::super::SceneHost::for_profile(profile);
         scene.restore(
             Default::default(),
@@ -59,5 +59,6 @@ mod tests {
             binary.sha256 = [0; 32];
         }
         assert_eq!(ChildSlots::for_profile(&changed).count(), 768);
+        assert!(!crate::runner::snapshot_layout_supported(&changed));
     }
 }

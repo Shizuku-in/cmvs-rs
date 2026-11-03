@@ -1,6 +1,6 @@
 //! Bounded, version-specific visual records. This is an offline component preview,
 //! never a replacement for the engine snapshot loader. Evidence: snapshot-format.md.
-use super::{SnapshotRecord, parse_records, unique_body};
+use super::{SnapshotLayout, SnapshotRecord, parse_records, unique_body};
 use crate::{
     FormatError,
     image::{self, ImageSource},
@@ -28,6 +28,65 @@ mod tests {
         fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
             panic!("retained replacement resources must not be loaded");
         }
+    }
+
+    #[test]
+    fn realive_scene_header_and_nested_child_limits_are_layout_specific() {
+        let layout = SnapshotLayout::TextV3SceneV4;
+        let mut parent = SceneObject {
+            flags: 0x8000_0000,
+            logical_size: [1280, 720],
+            ..SceneObject::default()
+        };
+        parent.children.insert(1023, SceneObject::default());
+        let saved = SavedScene::from_object(&parent).unwrap();
+        let bytes = saved.encode_with_layout(layout).unwrap();
+        assert_eq!(&bytes[..4], &[255, 255, 4, 0]);
+        assert_eq!(&bytes[16..24], &[0, 5, 0, 0, 208, 2, 0, 0]);
+        assert_eq!(
+            SavedScene::decode_with_layout(&bytes, 0, &mut 0, layout).unwrap(),
+            saved
+        );
+        assert!(SavedScene::decode(&bytes, 0, &mut 0).is_err());
+        assert!(saved.encode().is_err());
+
+        let state = MessageWindow {
+            text: 0,
+            visible: true,
+            hidden: false,
+            position: [0; 2],
+            switch_positions: [[0; 2]; 2],
+            size: [1280, 720],
+            cursor_mode: 0,
+            cursor_offset: [0; 2],
+            position_switch: false,
+            object: SceneObject::default(),
+            buttons: [crate::message::WindowButton::default(); 32],
+            pressed_button: -1,
+            switch_state: 0,
+        };
+        let mut window = SavedWindow::from_window(&state, [1280, 720]).unwrap();
+        window.scene = saved.clone();
+        let bytes = window::encode_with_layout(&window, layout).unwrap();
+        assert_eq!(
+            window::decode_with_layout(&bytes, &mut 0, layout)
+                .unwrap()
+                .scene,
+            saved
+        );
+        assert!(window::decode(&bytes, &mut 0).is_err());
+
+        let mut invalid = saved;
+        let leaf = invalid.children.remove(&1023).unwrap();
+        invalid.children.insert(1024, leaf);
+        assert!(invalid.encode_with_layout(layout).is_err());
+        // Put an invalid child index into the otherwise valid native record.
+        let mut parent = SavedScene::from_object(&parent)
+            .unwrap()
+            .encode_with_layout(layout)
+            .unwrap();
+        parent[70..72].copy_from_slice(&1024u16.to_le_bytes());
+        assert!(SavedScene::decode_with_layout(&parent, 0, &mut 0, layout).is_err());
     }
 
     #[test]
@@ -382,6 +441,14 @@ impl SavedScene {
         depth: usize,
         nodes: &mut usize,
     ) -> Result<Self, FormatError> {
+        Self::decode_with_layout(bytes, depth, nodes, SnapshotLayout::TextV3)
+    }
+    pub(super) fn decode_with_layout(
+        bytes: &[u8],
+        depth: usize,
+        nodes: &mut usize,
+        layout: SnapshotLayout,
+    ) -> Result<Self, FormatError> {
         if depth > MAX_DEPTH || *nodes == MAX_NODES {
             return Err(FormatError(
                 "snapshot scene nesting or node budget exceeded",
@@ -389,10 +456,16 @@ impl SavedScene {
         }
         *nodes += 1;
         let mut r = Reader::new(bytes);
-        if r.u16()? != 0xffff || r.u16()? != 3 {
+        let extended = layout == SnapshotLayout::TextV3SceneV4;
+        if r.u16()? != 0xffff || r.u16()? != if extended { 4 } else { 3 } {
             return Err(FormatError("unsupported snapshot scene version"));
         }
-        let h = r.words::<8>()?;
+        let h = if extended {
+            let h = r.words::<5>()?;
+            [h[0], h[1], h[2], 0, 0, 0, h[3], h[4]]
+        } else {
+            r.words::<8>()?
+        };
         if h[0] > 1 || h[3..6] != [0; 3] {
             return Err(FormatError("unsupported snapshot scene kind or metadata"));
         }
@@ -433,10 +506,13 @@ impl SavedScene {
             r.u16()?;
             let slot = r.u16()?;
             let body = r.chunk()?;
-            if slot >= 768 || children.contains_key(&slot) {
+            if slot >= layout.child_slots() || children.contains_key(&slot) {
                 return Err(FormatError("snapshot child slot is invalid or duplicated"));
             }
-            children.insert(slot, Self::decode(body, depth + 1, nodes)?);
+            children.insert(
+                slot,
+                Self::decode_with_layout(body, depth + 1, nodes, layout)?,
+            );
         }
         if !children.is_empty() && h[2] & 0x8000_0000 == 0 {
             return Err(FormatError("snapshot children lack inheritance flag"));
@@ -458,22 +534,33 @@ impl SavedScene {
         })
     }
     /// Scene writer 0x14003a4a0 for the supported subset (see `decode`).
+    #[cfg(test)]
     pub(crate) fn encode(&self) -> Result<Vec<u8>, FormatError> {
+        self.encode_with_layout(SnapshotLayout::TextV3)
+    }
+    pub(crate) fn encode_with_layout(
+        &self,
+        layout: SnapshotLayout,
+    ) -> Result<Vec<u8>, FormatError> {
         let mut out = 0xffffu16.to_le_bytes().to_vec();
-        out.extend(3u16.to_le_bytes());
-        words(
-            &mut out,
-            &[
-                u32::from(self.draw.is_some()),
-                u32::from(self.shown),
-                self.flags,
-                0,
-                0,
-                0,
-                self.logical_size[0],
-                self.logical_size[1],
-            ],
-        );
+        let extended = layout == SnapshotLayout::TextV3SceneV4;
+        out.extend(if extended { 4u16 } else { 3u16 }.to_le_bytes());
+        let header = [
+            u32::from(self.draw.is_some()),
+            u32::from(self.shown),
+            self.flags,
+            0,
+            0,
+            0,
+            self.logical_size[0],
+            self.logical_size[1],
+        ];
+        if extended {
+            words(&mut out, &header[..3]);
+            words(&mut out, &header[6..]);
+        } else {
+            words(&mut out, &header);
+        }
         if let Some(image) = &self.image {
             chunk(&mut out, 0x740, &image.encode());
         }
@@ -488,9 +575,12 @@ impl SavedScene {
         }
         words(&mut out, &self.effect_words);
         for (&slot, child) in &self.children {
+            if slot >= layout.child_slots() {
+                return Err(FormatError("snapshot child slot is invalid or duplicated"));
+            }
             out.extend(0x700u16.to_le_bytes());
             out.extend(slot.to_le_bytes());
-            let body = child.encode()?;
+            let body = child.encode_with_layout(layout)?;
             out.extend((body.len() as u32).to_le_bytes());
             out.extend(body);
         }

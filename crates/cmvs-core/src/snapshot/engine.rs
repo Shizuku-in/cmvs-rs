@@ -208,11 +208,14 @@ impl EngineSnapshot {
                     out.texts[index as usize] = Some(text::decode_with_layout(body, layout)?)
                 }
                 0x400 if index < 8 => {
-                    out.windows[index as usize] = Some(window::decode(body, &mut nodes)?)
+                    out.windows[index as usize] =
+                        Some(window::decode_with_layout(body, &mut nodes, layout)?)
                 }
                 0x700 if index < 256 => {
-                    out.objects
-                        .insert(index as u8, SavedScene::decode(body, 0, &mut nodes)?);
+                    out.objects.insert(
+                        index as u8,
+                        SavedScene::decode_with_layout(body, 0, &mut nodes, layout)?,
+                    );
                 }
                 0x600 | 0x610 | 0x620 | 0x630 => {
                     out.effects[usize::from((record.tag - 0x600) / 0x10)] = Some(body.to_vec());
@@ -302,8 +305,13 @@ impl EngineSnapshot {
                     0x380 => self.texts[index as usize]
                         .as_ref()
                         .map(|text| text::encode_with_layout(text, layout)),
-                    0x400 => self.windows[index as usize].as_ref().map(window::encode),
-                    0x700 => self.objects.get(&(index as u8)).map(SavedScene::encode),
+                    0x400 => self.windows[index as usize]
+                        .as_ref()
+                        .map(|w| window::encode_with_layout(w, layout)),
+                    0x700 => self
+                        .objects
+                        .get(&(index as u8))
+                        .map(|s| s.encode_with_layout(layout)),
                     _ => self.raw_objects.get(&(tag, index)).cloned().map(Ok),
                 };
                 if let Some(body) = body {
