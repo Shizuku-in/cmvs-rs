@@ -24,6 +24,10 @@ fn modern_font_bindings_are_limited_to_the_inspected_commands() {
             "cmvs-20190405",
             "c1742b5873e6d03f5cc7bc6f5b3b23655ec67e7cddf307deefa75349caed33be",
         ),
+        (
+            "cmvs-20211006",
+            "58e993a82e741ea73d3d1b5d89363dcaf435e72e6d505324e1de0c0ba5486631",
+        ),
     ] {
         let profile = Registry::builtin().profile(id).unwrap();
         let bindings: Vec<_> = profile

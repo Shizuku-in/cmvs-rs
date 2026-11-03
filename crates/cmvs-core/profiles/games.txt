@@ -73,3 +73,12 @@ game-id 0x1920a045
 executable cmvs64.exe sha256=c1742b5873e6d03f5cc7bc6f5b3b23655ec67e7cddf307deefa75349caed33be
 executable cmvs32.exe sha256=1d47c85d947a111440974184dc3ee4530d188f1b54e8b75538b5b2156c2e67d8
 end
+
+game kunado
+profile cmvs-20211006
+start data/pack/start.ps3 sha256=08e371cc3af967a12e4a45d7063d0644a8fc4d589a08348b2d9a4b919efda4ad
+archive data/pack/script.cpz sha256=d3e2309180801dcff74abf2597e2d07b21c29c1b7afd0ab51b5c9a13fbd81ea9
+game-id 0x2020a053
+executable cmvs64.exe sha256=58e993a82e741ea73d3d1b5d89363dcaf435e72e6d505324e1de0c0ba5486631
+executable cmvs32.exe sha256=4b42514abba732bd3f4bf71cbc8a7862831074fd8905a7b128fc195b30279999
+end
