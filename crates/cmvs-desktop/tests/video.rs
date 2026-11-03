@@ -61,3 +61,54 @@ fn geometry_and_packet_corruption_fail_without_poisoning_repeatable_errors() {
     assert!(decoder.finish().is_err());
     assert!(decoder.finish().is_err());
 }
+
+#[test]
+fn padded_container_preserves_the_coding_surface_and_picture_container_crops() {
+    use ogg::{PacketReader, PacketWriteEndInfo, PacketWriter};
+    let bytes = fixture();
+    let index = MgvIndex::read(&mut Cursor::new(&bytes)).unwrap();
+    let mut original = TheoraStream::open(Box::new(Cursor::new(bytes.clone())), &index).unwrap();
+    let full = original.frame(0).unwrap();
+    let mut reader = PacketReader::new(Cursor::new(&bytes[index.video_offset as usize..]));
+    let mut writer = PacketWriter::new(Vec::new());
+    let mut first = true;
+    while let Some(mut packet) = reader.read_packet().unwrap() {
+        if first {
+            // A 24x24 picture at (4, 8) inside the existing 32x32 coding surface.
+            packet.data[14..20].copy_from_slice(&[0, 0, 24, 0, 0, 24]);
+            packet.data[20..22].copy_from_slice(&[4, 8]);
+            first = false;
+        }
+        let end = if packet.last_in_stream() {
+            PacketWriteEndInfo::EndStream
+        } else {
+            PacketWriteEndInfo::EndPage
+        };
+        let serial = packet.stream_serial();
+        let granule = packet.absgp_page();
+        writer
+            .write_packet(packet.data, serial, end, granule)
+            .unwrap();
+    }
+    let video = writer.into_inner();
+    let mut padded = bytes[..index.video_offset as usize].to_vec();
+    padded[8..12].copy_from_slice(&(video.len() as u32).to_le_bytes());
+    padded.extend(video);
+    let index = MgvIndex::read(&mut Cursor::new(&padded)).unwrap();
+    let mut decoder = TheoraStream::open(Box::new(Cursor::new(padded.clone())), &index).unwrap();
+    assert_eq!(decoder.frame(0).unwrap(), full);
+    let mut picture = index.clone();
+    picture.width = 24;
+    picture.height = 24;
+    let mut decoder = TheoraStream::open(Box::new(Cursor::new(padded.clone())), &picture).unwrap();
+    let cropped = decoder.frame(0).unwrap();
+    assert_eq!((cropped.width(), cropped.height()), (24, 24));
+    for row in 0..24 {
+        assert_eq!(
+            &cropped.pixels()[row * 24 * 4..(row + 1) * 24 * 4],
+            &full.pixels()[(row * 32 + 4) * 4..(row * 32 + 28) * 4]
+        );
+    }
+    picture.height = 25;
+    assert!(TheoraStream::open(Box::new(Cursor::new(padded)), &picture).is_err());
+}

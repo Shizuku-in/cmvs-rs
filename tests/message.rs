@@ -4250,7 +4250,10 @@ fn kunado_measurement_and_all_main_output_paths_share_proportional_advances() {
             Ok(10)
         }
     }
-    for op in [0x210b, 0x2152, 0x2154, 0x2157, 0x2159] {
+    for (profile, op) in ["cmvs-20211006", "cmvs-20221105"]
+        .into_iter()
+        .flat_map(|profile| [0x210b, 0x2152, 0x2154, 0x2157, 0x2159].map(|op| (profile, op)))
+    {
         let mut code = vec![];
         create(&mut code, 0, 1, [0, 0, 300, 100]);
         call(&mut code, 0x2103, &[100, 70, 5, 10, 1]);
@@ -4270,12 +4273,12 @@ fn kunado_measurement_and_all_main_output_paths_share_proportional_advances() {
         messages.set_glyph_metrics(Box::new(Metrics));
         for _ in 0..5 {
             pending(&mut vm);
-            assert!(font_cell_profile_step(&mut vm, &mut messages, "cmvs-20211006").unwrap());
+            assert!(font_cell_profile_step(&mut vm, &mut messages, profile).unwrap());
         }
         assert_eq!(vm.state().system_integer(2), Some(1));
         assert_eq!(vm.state().system_integer(1), Some(50));
         pending(&mut vm);
-        assert!(font_cell_profile_step(&mut vm, &mut messages, "cmvs-20211006").unwrap());
+        assert!(font_cell_profile_step(&mut vm, &mut messages, profile).unwrap());
         let text = messages.text(1).unwrap();
         assert_eq!(
             text.glyphs.iter().map(|g| g.position).collect::<Vec<_>>(),
@@ -4920,6 +4923,7 @@ fn inspected_window_children_share_the_table_for_draw_query_and_destroy() {
         ("cmvs-20190305", 1024),
         ("cmvs-20190405", 1024),
         ("cmvs-20211006", 1024),
+        ("cmvs-20221105", 1024),
     ] {
         let profile = cmvs_rs::profile::Registry::builtin().profile(id).unwrap();
         let mut code = vec![];

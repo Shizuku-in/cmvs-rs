@@ -895,6 +895,8 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
     assert_eq!(seishunf.base.as_deref(), Some("cmvs-20160201"));
     assert_eq!(seishunf.count(CommandStatus::Unreviewed), 749);
     let kunado = registry.profile("cmvs-20211006").unwrap();
+    let hapymaher_re = registry.profile("cmvs-20221105").unwrap();
+    assert_eq!(hapymaher_re.base.as_deref(), Some("cmvs-20160201"));
     assert_eq!(kunado.base.as_deref(), Some("cmvs-20160201"));
     assert_eq!(kunado.count(CommandStatus::Unreviewed), 749);
     let miranosu = registry.profile("cmvs-20110525").unwrap();
@@ -928,6 +930,7 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
         (realive, 992, 749, 243),
         (seishunf, 992, 749, 243),
         (kunado, 992, 749, 243),
+        (hapymaher_re, 992, 749, 243),
         (hapymaher, 928, 639, 289),
         (hapymaherfd, 976, 701, 275),
     ] {
@@ -965,7 +968,8 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
             ("aoitori", "cmvs-20171114", None),
             ("realive", "cmvs-20190305", None),
             ("seishunf", "cmvs-20190405", None),
-            ("kunado", "cmvs-20211006", None)
+            ("kunado", "cmvs-20211006", None),
+            ("hapymaher_re", "cmvs-20221105", None)
         ]
     );
 }

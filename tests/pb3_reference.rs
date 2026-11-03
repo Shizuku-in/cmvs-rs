@@ -269,11 +269,23 @@ fn contextual_loader_rejects_cycles_missing_bases_and_deep_chains() {
 }
 
 #[test]
+fn contextual_loader_accepts_individually_bounded_files_and_planes_above_64_mib_combined() {
+    let mut raw = delta(1, 1, &[[1, 2, 3, 4]]);
+    // Type 5 stops at the declared pixel count. Zero key-sample padding keeps
+    // this synthetic header valid while taking the file to its individual limit.
+    raw.resize(cmvs_rs::MAX_PAYLOAD, 0);
+    let mut source = Files::default();
+    source.files.insert(b"large.pb3".to_vec(), raw);
+    let got = image::load(&mut source, b"large.pb3").unwrap().unwrap();
+    assert_eq!(got.pixels.pixels(), &[3, 2, 1, 4]);
+}
+
+#[test]
 fn contextual_loader_checks_chain_byte_budget_before_allocating_decoded_planes() {
     let mut source = Files::default();
-    // Each header declares a 32 MiB image. Together with raw bytes this exceeds
+    // Each header declares a 64 MiB image. Together with raw bytes this exceeds
     // the chain budget, so the tiny, deliberately incomplete base is never decoded.
-    let size = 4096 | (2048 << 16);
+    let size = 4096 | (4096 << 16);
     source.files.insert(
         b"top.pb3".to_vec(),
         mutate(patch(1, 1, b"base", &[0x80], &[]), 30, size),

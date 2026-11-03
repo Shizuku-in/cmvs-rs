@@ -37,7 +37,7 @@ impl ChildSlots {
         {
             return Self::Legacy;
         }
-        // Independent x64 evidence: docs/games/{realive,seishunf,kunado}.
+        // Independent x64 evidence: docs/games/{realive,seishunf,kunado,hapymaher_re}.
         if [
             (
                 "cmvs-20190305",
@@ -50,6 +50,10 @@ impl ChildSlots {
             (
                 "cmvs-20211006",
                 "58e993a82e741ea73d3d1b5d89363dcaf435e72e6d505324e1de0c0ba5486631",
+            ),
+            (
+                "cmvs-20221105",
+                "dfbabd2abac5055d3ab2144a983b6c441b87b294d19607e9a4829e2ea954e86c",
             ),
         ]
         .iter()
@@ -91,6 +95,7 @@ mod tests {
             ("cmvs-20190305", 1024),
             ("cmvs-20190405", 1024),
             ("cmvs-20211006", 1024),
+            ("cmvs-20221105", 1024),
         ] {
             let profile = registry.profile(id).unwrap();
             assert_eq!(ChildSlots::for_profile(profile).count(), count);

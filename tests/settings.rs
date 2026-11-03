@@ -56,6 +56,17 @@ fn logical_canvas_uses_base_and_rejects_invalid_allocation_sizes() {
     );
     let config = Configuration::new(b"[RESOLVING_POWER_INFO]\nWINDOW_WIDTH=800\nWINDOW_HEIGHT=600\n[WINDOW_RESOLVING]\nBASE=1024, 768\nMODE01=640,480\n".to_vec()).unwrap();
     assert_eq!(config.screen_size().unwrap().pixels(), [1024, 768]);
+    let hd = Configuration::new(
+        b"[WINDOW_RESOLVING]\nBASE=1920,1080\nSELECT=1\nMODE01=1024,576\n".to_vec(),
+    )
+    .unwrap();
+    let profile = cmvs_rs::profile::Registry::builtin()
+        .profile("cmvs-20221105")
+        .unwrap();
+    assert_eq!(
+        hd.screen_size_for_profile(profile).unwrap().pixels(),
+        [1920, 1080]
+    );
     for value in [
         "0,768",
         "-1,768",

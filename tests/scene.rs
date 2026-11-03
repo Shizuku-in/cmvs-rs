@@ -1853,6 +1853,7 @@ fn inspected_child_tables_support_the_last_slot_and_ignore_unsigned_create_overf
         ("cmvs-20190305", 1024),
         ("cmvs-20190405", 1024),
         ("cmvs-20211006", 1024),
+        ("cmvs-20221105", 1024),
     ] {
         let profile = cmvs_rs::profile::Registry::builtin().profile(id).unwrap();
         let mut code = vec![];

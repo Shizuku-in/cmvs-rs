@@ -1917,6 +1917,7 @@ fn aoitori_v3_snapshot_restores_text_scene_locals_and_backup_slots() {
 #[test]
 fn kunado_v4_snapshot_restores_text_scene_particles_locals_and_backup_slots() {
     snapshot_slots_roundtrip(Some("cmvs-20211006"));
+    snapshot_slots_roundtrip(Some("cmvs-20221105"));
 }
 
 #[test]
@@ -1931,7 +1932,7 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
     };
     let layout = if profile == Some("cmvs-20120309") {
         SnapshotLayout::TextV2
-    } else if profile == Some("cmvs-20211006") {
+    } else if matches!(profile, Some("cmvs-20211006" | "cmvs-20221105")) {
         SnapshotLayout::TextV3SceneV4
     } else {
         SnapshotLayout::TextV3
@@ -1979,7 +1980,7 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
             ],
         );
     }
-    if profile == Some("cmvs-20211006") {
+    if matches!(profile, Some("cmvs-20211006" | "cmvs-20221105")) {
         commands::command(&mut code, 0x2022, &[20, 1023]);
         commands::command(&mut code, 0x2178, &[0, 1023]);
     }
@@ -2077,7 +2078,7 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
             matches!(effect, cmvs_rs::snapshot::SavedEffect::Particles { words, .. } if words[5] == 2)
         );
     }
-    if profile == Some("cmvs-20211006") {
+    if matches!(profile, Some("cmvs-20211006" | "cmvs-20221105")) {
         assert!(snapshot.objects[&20].children.contains_key(&1023));
         assert!(
             snapshot.windows[0]
@@ -2188,7 +2189,7 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
         );
     }
 
-    if profile == Some("cmvs-20211006") {
+    if matches!(profile, Some("cmvs-20211006" | "cmvs-20221105")) {
         assert!(run.scene().object(20).unwrap().children.contains_key(&1023));
         assert!(
             run.inspect_snapshot().unwrap().windows[0]

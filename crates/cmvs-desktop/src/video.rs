@@ -124,8 +124,9 @@ impl TheoraStream {
         let packet = packets.read_packet_expected()?;
         let serial = packet.stream_serial();
         let ident = codec(theora::decode_identification_header(&packet.data))?;
-        if ident.picw != u32::from(index.width)
-            || ident.pich != u32::from(index.height)
+        let container = (u32::from(index.width), u32::from(index.height));
+        if (container != (ident.picw, ident.pich)
+            && container != (ident.coded_width(), ident.coded_height()))
             || u64::from(ident.frn) * u64::from(index.rate_time)
                 != u64::from(index.rate) * u64::from(ident.frd)
             || ident.pf != theora::PixelFormat::Yuv420
@@ -174,7 +175,7 @@ impl TheoraStream {
             }
             let frame = codec(self.decoder.decode_frame(&packet.data))?;
             if self.next_packet == target {
-                self.cached = Some(to_rgba(&self.ident, &frame.frame)?);
+                self.cached = Some(to_rgba(&self.ident, &frame.frame, &self.index)?);
             }
             self.next_packet += 1;
             self.failed = false;
@@ -212,16 +213,25 @@ impl mgv::Decoder for TheoraStream {
 fn to_rgba(
     ident: &TheoraIdentHeader,
     frame: &theora::ReconstructedFrame,
+    index: &MgvIndex,
 ) -> Result<RgbaImage, FormatError> {
-    let width = ident.picw as usize;
-    let height = ident.pich as usize;
+    // Some MGV headers describe the padded coding surface (e.g. 1920x1088),
+    // which the native DLL returns in full, including pixels outside the picture.
+    let width = usize::from(index.width);
+    let height = usize::from(index.height);
+    let picture = (u32::from(index.width), u32::from(index.height)) == (ident.picw, ident.pich);
+    let [left, bottom] = if picture {
+        [usize::from(ident.picx), usize::from(ident.picy)]
+    } else {
+        [0, 0]
+    };
     let mut rgba = Vec::with_capacity(width * height * 4);
     let yw = frame.dims_y.width as usize;
     let cw = frame.dims_cb.width as usize;
     for row in 0..height {
-        let y = usize::from(ident.picy) + height - 1 - row;
+        let y = bottom + height - 1 - row;
         for column in 0..width {
-            let x = usize::from(ident.picx) + column;
+            let x = left + column;
             let luma = i32::from(frame.samples_y[y * yw + x]) - 16;
             let cb = i32::from(frame.samples_cb[(y / 2) * cw + x / 2]) - 128;
             let cr = i32::from(frame.samples_cr[(y / 2) * cw + x / 2]) - 128;
@@ -235,5 +245,5 @@ fn to_rgba(
             ]);
         }
     }
-    RgbaImage::new(ident.picw, ident.pich, rgba)
+    RgbaImage::new(u32::from(index.width), u32::from(index.height), rgba)
 }

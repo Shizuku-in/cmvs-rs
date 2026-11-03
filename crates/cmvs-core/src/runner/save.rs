@@ -125,8 +125,8 @@ fn decode_bmp(bytes: &[u8]) -> Result<RgbaImage, &'static str> {
 
 /// Command inheritance does not establish the wire format of gameplay snapshots.
 /// The independently inspected 20110525/20120309/20130131/20140217/20150405 subsets use text v2;
-/// 20171114 uses v3, and 20190305/20190405/20211006 use text v3 with scene v4
-/// (docs/games/{aoitori,realive,seishunf,kunado}). Effect configurations have an independent
+/// 20171114 uses v3, and 20190305/20190405/20211006/20221105 use text v3 with scene v4
+/// (docs/games/{aoitori,realive,seishunf,kunado,hapymaher_re}). Effect configurations have an independent
 /// build binding; unknown image, collision-mesh and effect records remain rejected.
 pub fn snapshot_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
     snapshot_layout(profile).is_some()
@@ -138,6 +138,18 @@ fn inspected_20120309(profile: &crate::profile::EngineProfile) -> bool {
             .binary(
                 &crate::digest::parse_hex(
                     "f93d90d45dad95588f91425fa5d4fe20be0d97e1978ccb4ae0e83ca6e09aa15e",
+                )
+                .expect("static SHA-256"),
+            )
+            .is_some()
+}
+
+fn inspected_20221105(profile: &crate::profile::EngineProfile) -> bool {
+    profile.id == "cmvs-20221105"
+        && profile
+            .binary(
+                &crate::digest::parse_hex(
+                    "dfbabd2abac5055d3ab2144a983b6c441b87b294d19607e9a4829e2ea954e86c",
                 )
                 .expect("static SHA-256"),
             )
@@ -166,6 +178,10 @@ fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLa
                 "cmvs-20211006",
                 "58e993a82e741ea73d3d1b5d89363dcaf435e72e6d505324e1de0c0ba5486631",
             ),
+            (
+                "cmvs-20221105",
+                "dfbabd2abac5055d3ab2144a983b6c441b87b294d19607e9a4829e2ea954e86c",
+            ),
         ]
         .iter()
         .any(|(id, hash)| {
@@ -188,6 +204,7 @@ fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLa
 fn effect_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
     (matches!(profile.id.as_str(), "cmvs-20110525" | "cmvs-20171114")
         || inspected_20120309(profile)
+        || inspected_20221105(profile)
         || (profile.id == "cmvs-20211006"
             && profile
                 .binary(
@@ -201,10 +218,17 @@ fn effect_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
 }
 
 fn effect_record_supported(profile: &crate::profile::EngineProfile, body: &[u8]) -> bool {
+    if inspected_20221105(profile)
+        && profile.base.as_deref() == Some("cmvs-20160201")
+        && body == [1, 0, 8, 0]
+    {
+        // The native type-8 writer emits only this header; its reader discards it.
+        return true;
+    }
     effect_layout_supported(profile)
-        // MIRANOSU, KAZOKUBU and KUNADO's type-5 writer/readers are independently inspected. Other
+        // These builds' type-5 writer/readers are independently inspected. Other
         // configurations still need their own runtime and snapshot evidence.
-        && (!matches!(profile.id.as_str(), "cmvs-20110525" | "cmvs-20120309" | "cmvs-20211006")
+        && (!matches!(profile.id.as_str(), "cmvs-20110525" | "cmvs-20120309" | "cmvs-20211006" | "cmvs-20221105")
             || body.get(..4) == Some(&[1, 0, 5, 0]))
 }
 
@@ -983,6 +1007,7 @@ mod layout_tests {
             ("cmvs-20190305", SnapshotLayout::TextV3SceneV4),
             ("cmvs-20190405", SnapshotLayout::TextV3SceneV4),
             ("cmvs-20211006", SnapshotLayout::TextV3SceneV4),
+            ("cmvs-20221105", SnapshotLayout::TextV3SceneV4),
             ("cmvs-20160201", SnapshotLayout::TextV3),
         ] {
             assert_eq!(snapshot_layout(registry.profile(id).unwrap()), Some(layout));
@@ -990,7 +1015,11 @@ mod layout_tests {
                 effect_layout_supported(registry.profile(id).unwrap()),
                 matches!(
                     id,
-                    "cmvs-20110525" | "cmvs-20120309" | "cmvs-20171114" | "cmvs-20211006"
+                    "cmvs-20110525"
+                        | "cmvs-20120309"
+                        | "cmvs-20171114"
+                        | "cmvs-20211006"
+                        | "cmvs-20221105"
                 )
             );
         }
@@ -1007,18 +1036,24 @@ mod layout_tests {
     #[test]
     fn restricted_effect_layout_only_accepts_the_inspected_type_five() {
         let registry = crate::profile::Registry::builtin();
-        for id in ["cmvs-20110525", "cmvs-20120309", "cmvs-20211006"] {
+        for id in [
+            "cmvs-20110525",
+            "cmvs-20120309",
+            "cmvs-20211006",
+            "cmvs-20221105",
+        ] {
             let profile = registry.profile(id).unwrap();
             for kind in [2, 5, 6, 8] {
                 assert_eq!(
                     effect_record_supported(profile, &[1, 0, kind, 0]),
-                    kind == 5
+                    kind == 5 || (id == "cmvs-20221105" && kind == 8)
                 );
             }
             assert!(!effect_record_supported(profile, &[1, 0]));
             assert!(!effect_record_supported(profile, &[2, 0, 5, 0]));
+            assert!(!effect_record_supported(profile, &[1, 0, 8, 0, 0]));
         }
-        for id in ["cmvs-20120309", "cmvs-20211006"] {
+        for id in ["cmvs-20120309", "cmvs-20211006", "cmvs-20221105"] {
             let mut profile = registry.profile(id).unwrap().clone();
             for binary in &mut profile.binaries {
                 binary.sha256 = [0; 32];

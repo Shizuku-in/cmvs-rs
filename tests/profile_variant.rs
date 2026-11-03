@@ -92,6 +92,13 @@ fn asukimi_queries_use_the_down_edge_and_extra_actions_can_be_consumed() {
 
 #[test]
 fn modern_font_bindings_are_limited_to_the_inspected_commands() {
+    let remake = Registry::builtin().profile("cmvs-20221105").unwrap();
+    for command in [0x2a8, 0x2ae] {
+        assert_eq!(
+            remake.semantics(command),
+            Semantics::Variant(VariantId::Fragments)
+        );
+    }
     for (id, hash) in [
         (
             "cmvs-20190305",
@@ -105,6 +112,10 @@ fn modern_font_bindings_are_limited_to_the_inspected_commands() {
             "cmvs-20211006",
             "58e993a82e741ea73d3d1b5d89363dcaf435e72e6d505324e1de0c0ba5486631",
         ),
+        (
+            "cmvs-20221105",
+            "dfbabd2abac5055d3ab2144a983b6c441b87b294d19607e9a4829e2ea954e86c",
+        ),
     ] {
         let profile = Registry::builtin().profile(id).unwrap();
         let bindings: Vec<_> = profile
@@ -113,7 +124,7 @@ fn modern_font_bindings_are_limited_to_the_inspected_commands() {
             .map(|(command, _)| command)
             .collect();
         let mut expected = vec![0x11d, 0x388, 0x38b, 0x3ac, 0x3b8, 0x3b9, 0x3bb];
-        if id == "cmvs-20211006" {
+        if matches!(id, "cmvs-20211006" | "cmvs-20221105") {
             expected.extend([0x10b, 0x152, 0x154, 0x157, 0x159]);
             expected.sort_unstable();
         }
@@ -125,7 +136,7 @@ fn modern_font_bindings_are_limited_to_the_inspected_commands() {
         );
         assert_eq!(
             profile.semantics(0x10b),
-            if id == "cmvs-20211006" {
+            if matches!(id, "cmvs-20211006" | "cmvs-20221105") {
                 Semantics::Variant(VariantId::FontCells)
             } else {
                 Semantics::Root

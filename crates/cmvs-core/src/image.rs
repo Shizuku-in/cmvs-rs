@@ -116,7 +116,8 @@ pub fn decode(bytes: &[u8]) -> Result<Option<DecodedImage>, FormatError> {
 }
 
 /// Contextual loading through the same registered source for all reference images.
-/// Bounds are research limits: 16 active files and 64 MiB total raw/decoded bytes.
+/// Bounds are research limits: 16 active files and 128 MiB total raw/decoded bytes.
+/// Each individual file and RGBA plane still has the 64 MiB payload limit.
 pub fn load(
     source: &mut dyn ImageSource,
     name: &[u8],
@@ -128,7 +129,7 @@ fn charge(bytes: usize, budget: &mut usize) -> Result<(), Box<dyn Error>> {
     *budget = budget
         .checked_add(bytes)
         .ok_or("PB3 reference budget overflow")?;
-    if *budget > crate::MAX_PAYLOAD {
+    if *budget > crate::MAX_PAYLOAD * 2 {
         return Err("PB3 reference chain exceeds the byte budget".into());
     }
     Ok(())

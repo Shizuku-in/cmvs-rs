@@ -100,3 +100,12 @@ game-id 0x2020a053
 executable cmvs64.exe sha256=58e993a82e741ea73d3d1b5d89363dcaf435e72e6d505324e1de0c0ba5486631
 executable cmvs32.exe sha256=4b42514abba732bd3f4bf71cbc8a7862831074fd8905a7b128fc195b30279999
 end
+
+game hapymaher_re
+profile cmvs-20221105
+start data/pack/start.ps3 sha256=3f5089503ee7e8c1e139db98c1446d131382bd12997330d1f5a5ff20177bccea
+archive data/pack/script.cpz sha256=3c944d1e4d042e819782e1d0e3bf3fa85ce553a1f0dc9e8f2589465afa97caf4
+game-id 0x17600013
+executable cmvs64.exe sha256=dfbabd2abac5055d3ab2144a983b6c441b87b294d19607e9a4829e2ea954e86c
+executable cmvs32.exe sha256=aa2f76985e69ec5fcee2762051a234c111529e8b339d733dee188b3a62888073
+end
