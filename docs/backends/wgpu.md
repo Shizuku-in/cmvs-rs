@@ -24,6 +24,8 @@ cargo run --offline --release --features wgpu-renderer --bin cmvs-desktop -- "<�
 
 ## 验证
 
+浏览器宿主使用同一合成器，通过异步初始化、Worker OffscreenCanvas 呈现和按需异步截图读回适配 WebGPU。原生 `Renderer::new` 与同步读回保持原接口；浏览器使用 `Renderer::new_async` 和 `GpuFrame::read_async`。浏览器构建及回归入口见 [Web 后端](../../platforms/web/README.md)。
+
 ```bash
 cargo test --offline -p cmvs-wgpu -- --ignored --nocapture
 $env:CMVS_GAME_ROOT='<游戏目录>'

@@ -18,3 +18,8 @@ cmvs-audio = { path = "../../../crates/cmvs-audio", default-features = false }
 cmvs-font = { path = "../../../crates/cmvs-font" }
 wasm-bindgen.workspace = true
 self_cell.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+cmvs-wgpu = { path = "../../../crates/cmvs-wgpu", features = ["webgpu"] }
+web-sys = { version = "=0.3.107", features = ["OffscreenCanvas"] }
+wasm-bindgen-futures = "=0.4.80"

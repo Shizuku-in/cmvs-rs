@@ -12,4 +12,9 @@ workspace = true
 [dependencies]
 cmvs-core = { path = "../cmvs-core" }
 wgpu.workspace = true
+
+[features]
+webgpu = ["wgpu/webgpu"]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster.workspace = true

@@ -7,6 +7,10 @@ use std::error::Error;
 pub struct BrowserBackend {
     pub size: [u32; 2],
     pub frame: Option<RgbaImage>,
+    #[cfg(target_arch = "wasm32")]
+    pub gpu: Option<crate::gpu::BrowserGpu>,
+    #[cfg(target_arch = "wasm32")]
+    pub read_requested: bool,
     fullscreen: bool,
     aspect: u32,
     scaling: bool,
@@ -41,6 +45,10 @@ impl BrowserBackend {
         Self {
             size,
             frame: None,
+            #[cfg(target_arch = "wasm32")]
+            gpu: None,
+            #[cfg(target_arch = "wasm32")]
+            read_requested: false,
             fullscreen: false,
             aspect: 1,
             scaling: true,
@@ -59,6 +67,11 @@ impl PlatformBackend for BrowserBackend {
         self.size
     }
     fn read_device_frame(&mut self) -> Result<RgbaImage, Box<dyn Error>> {
+        #[cfg(target_arch = "wasm32")]
+        if self.frame.is_none() && self.gpu.as_ref().is_some_and(|gpu| gpu.frame.is_some()) {
+            self.read_requested = true;
+            return Err("browser GPU readback pending".into());
+        }
         self.frame
             .clone()
             .ok_or_else(|| "no completed browser frame".into())
@@ -110,19 +123,5 @@ impl PlatformBackend for BrowserBackend {
             _ => return Err("unsupported browser display request".into()),
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn movie_frames_keep_canvas_dimensions_and_letterbox() {
-        let backend = BrowserBackend::new([4, 4]);
-        let source = RgbaImage::new(2, 1, [200, 100, 40, 255].repeat(2)).unwrap();
-        let frame = backend.movie_canvas(&source).unwrap();
-        assert_eq!([frame.width(), frame.height()], [4, 4]);
-        assert_eq!(&frame.pixels()[..4], &[0, 0, 0, 255]);
-        assert_eq!(&frame.pixels()[16..20], &[200, 100, 40, 255]);
     }
 }

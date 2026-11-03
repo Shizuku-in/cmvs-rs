@@ -1,6 +1,6 @@
 # cmvs-wgpu
 
-CMVS 的可选 GPU 合成后端，依赖 `cmvs-core`、`wgpu` 和 `pollster`。消费 Core 生成的绘制队列，管理 GPU 资源、场景合成、窗口呈现与逻辑帧读回。
+CMVS 的可选 GPU 合成后端，依赖 `cmvs-core`、`wgpu`，原生目标另用 `pollster`。消费 Core 生成的绘制队列，管理 GPU 资源、场景合成、窗口呈现与逻辑帧读回。
 
 主要职责：
 
@@ -18,5 +18,7 @@ cargo check --offline --features wgpu-renderer
 ```
 
 根包的 `wgpu-renderer` feature 自动启用桌面及本后端，运行时还需指定 `--renderer wgpu`。GPU 硬件测试默认忽略，需在具备适配器的环境中显式执行；常规编译检查不代表设备验证通过。
+
+浏览器通过 `webgpu` feature 接入同一合成器，使用异步初始化与按需异步读回；宿主与按需人工验证说明见 [Web 后端](../../platforms/web/README.md)。
 
 详见[wgpu 后端](../../docs/backends/wgpu.md)、[桌面后端](../../docs/backends/desktop.md)和[依赖与许可](../../docs/references.md)。

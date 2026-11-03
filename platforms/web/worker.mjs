@@ -11,7 +11,7 @@ function flushAudio() {
 const reader = new FileReaderSync();
 const files = new BrowserFiles(blob => new Uint8Array(reader.readAsArrayBuffer(blob)));
 globalThis.cmvsFs = files;
-let runtime, database, saveKey, busy = false, lastFrame = 0;
+let runtime, database, saveKey, busy = false, lastFrame = 0, useGpu = false;
 const held = new Set(), pulses = new Set();
 let pointer = [-1, -1], focused = true;
 function transaction(mode, work) {
@@ -61,6 +61,8 @@ async function start(message) {
   }
   files.restore(saved);
   runtime = new WebRuntime(new Uint8Array(await message.font.arrayBuffer()), message.face, message.profile, message.skip);
+  useGpu = Boolean(message.canvas);
+  if (useGpu) await runtime.enable_gpu(message.canvas);
   lastFrame = performance.now();
   postMessage({ type: 'ready', width: runtime.width(), height: runtime.height(), saveKey });
 }
@@ -73,12 +75,14 @@ async function tick() {
     runtime.set_clock(new Uint16Array([date.getFullYear(),date.getMonth()+1,date.getDate(),date.getHours(),date.getMinutes(),date.getSeconds()]));
     const keys = new Uint8Array([...held, ...pulses]);
     if (runtime.needs_input()) pulses.clear();
-    const result = runtime.tick(Math.round(now - lastFrame), keys, ...pointer, focused);
+    const result = useGpu
+      ? await runtime.tick_gpu(Math.round(now - lastFrame), keys, ...pointer, focused)
+      : runtime.tick(Math.round(now - lastFrame), keys, ...pointer, focused);
     flushAudio();
     if (result === 1) {
       lastFrame = now;
-      const pixels = runtime.pixels();
-      postMessage({ type: 'frame', width: runtime.width(), height: runtime.height(), pixels, renderMode: runtime.render_mode() }, [pixels.buffer]);
+      const pixels = useGpu ? undefined : runtime.pixels();
+      postMessage({ type: 'frame', width: runtime.width(), height: runtime.height(), pixels, renderMode: runtime.render_mode() }, pixels ? [pixels.buffer] : []);
     }
     if (result === 2) runtime.save_preferences();
     await persist();
@@ -86,7 +90,7 @@ async function tick() {
     else postMessage({ type: 'next', delay: result === 0 ? 0 : result === 3 ? 100 : 16 });
   } finally { busy = false; }
 }
-onmessage = async ({ data }) => {
+async function handleMessage(data) {
   try {
     if (data.type === 'start') await start(data);
     else if (data.type === 'tick') await tick();
@@ -110,4 +114,11 @@ onmessage = async ({ data }) => {
   } catch (error) {
     postMessage({ type: 'error', text: String(error?.stack || error) });
   }
+}
+// Input and audio clocks remain live while mapping a screenshot. Runtime mutations
+// wait for the current tick to release its wasm borrow before stop/export can run.
+let pending = Promise.resolve();
+onmessage = ({data}) => {
+  if (data.type === 'input' || data.type === 'audio-clock') void handleMessage(data);
+  else pending = pending.then(() => handleMessage(data));
 };

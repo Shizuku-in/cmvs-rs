@@ -19,7 +19,7 @@
 | `crates/cmvs-audio` | Vorbis 解码、原生音频输出、源消费时钟 | 依赖 core、lewton；默认 native feature 启用 rodio |
 | `crates/cmvs-desktop` | 窗口、物理输入、字体光栅化与按名解析、帧显示与桌面运行入口 | 依赖 core、winit、softbuffer、ico、encoding_rs、ab_glyph；可选依赖 audio；系统服务经 cmvs-native |
 | `crates/cmvs-native` | 操作系统服务的统一接口（字体对话框、系统字体目录），按平台分模块；原生系统 FFI 包 | raw-window-handle；Windows 上 windows-sys。macOS/iOS/Linux/Android/wasm 预留，返回 Unsupported |
-| `platforms/web/native` | wasm Worker 宿主、软件画面、文字与输入 | 依赖 core、font、无原生设备 feature 的 audio、wasm-bindgen、self_cell；[当前范围](backends/web.md) |
+| `platforms/web/native` | wasm Worker 宿主、CPU/WebGPU 画面、文字与输入 | 依赖 core、font、无原生设备 feature 的 audio、wasm-bindgen、self_cell；[当前范围](backends/web.md) |
 | 根包 `cmvs-rs` | 检查 CLI、`cmvs_rs` 兼容重导出、集成测试 | 默认仅依赖 core；通过 `desktop`、`audio-output` 选择后端 |
 
 依赖方向为 `desktop → core`、`desktop → audio → core`。格式、VM 和软件呈现目前保持为 core 内部模块，不新增 C++ 运行核心。后续平台应复用核心语义，通过后端接入系统服务。

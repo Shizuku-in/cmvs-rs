@@ -49,6 +49,8 @@ winit 0.30.13 改用其 `wayland-csd-adwaita-crossfont` feature，保留 X11/Way
 
 ## WebAssembly 宿主
 
+WebGPU 宿主复用上述 wgpu，并通过 web-sys 0.3.107 和 wasm-bindgen-futures 0.4.80（均 MIT OR Apache-2.0，同属 wasm-bindgen 项目）连接 OffscreenCanvas 与异步初始化/截图。`wgpu/webgpu` 另外启用 termcolor 1.4.1（Unlicense OR MIT，选择 MIT）用于传递的着色器诊断。仅使用公开 API，固定版本、校验和及许可分别见 Cargo.lock 与 THIRD_PARTY_NOTICES.txt。
+
 wasm-bindgen 0.2.130（MIT OR Apache-2.0，<https://github.com/wasm-bindgen/wasm-bindgen>）用于导入浏览器 Worker 文件接口和导出运行器。self_cell 1.2.2（选择 Apache-2.0，<https://github.com/Voultapher/self_cell>，发布包提交 `3b0f5c363ca8adbece7cb3c93c978e6153e3a4b7`）用于管理脚本与借用它的运行器生命周期。仅使用公开 API，未复制上游源码；版本和校验和固定在 Cargo.lock，许可登记见 THIRD_PARTY_NOTICES.txt。
 
 浏览器文件适配遵循 [Rust wasm32 目标说明](https://doc.rust-lang.org/stable/rustc/platform-support/wasm32-unknown-unknown.html) 中标准文件系统不可用的边界，采用独立 Worker 同步读取接口；JavaScript 导出使用 [wasm-bindgen 的结构体接口](https://wasm-bindgen.github.io/wasm-bindgen/contributing/design/exporting-rust-struct.html)。这些资料只用于宿主适配，不作为游戏指令语义证据。

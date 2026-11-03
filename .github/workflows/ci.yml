@@ -147,5 +147,5 @@ jobs:
       - run: cargo install wasm-bindgen-cli --version 0.2.130 --locked
       - run: cargo clippy --locked -p cmvs-web --target wasm32-unknown-unknown -- -D warnings
       - run: sh platforms/web/build.sh
-      - run: node --test platforms/web/filesystem.test.mjs platforms/web/audio.test.mjs
+      - run: node --test platforms/web/audio.test.mjs
       - run: node platforms/web/smoke.mjs

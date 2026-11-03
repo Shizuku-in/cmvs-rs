@@ -194,6 +194,15 @@ https://crates.io/crates/wasm-bindgen/0.2.130
 https://github.com/wasm-bindgen/wasm-bindgen
 Used for browser host imports and JavaScript runtime exports.
 
+Browser WebGPU host additions (public APIs; no vendored source):
+web-sys 0.3.107: MIT OR Apache-2.0
+wasm-bindgen-futures 0.4.80: MIT OR Apache-2.0
+https://github.com/wasm-bindgen/wasm-bindgen
+Used for OffscreenCanvas bindings and asynchronous JavaScript exports.
+termcolor 1.4.1: Unlicense OR MIT (used under MIT)
+https://github.com/BurntSushi/termcolor
+Transitive shader diagnostic dependency enabled by wgpu/webgpu.
+
 self_cell 1.2.2 - Apache-2.0 OR GPL-2.0-only (used under Apache-2.0)
 https://crates.io/crates/self_cell/1.2.2
 https://github.com/Voultapher/self_cell

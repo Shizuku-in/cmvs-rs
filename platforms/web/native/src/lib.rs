@@ -1,6 +1,8 @@
 //! Browser game host. JavaScript owns files, scheduling and presentation.
 mod audio;
 mod backend;
+#[cfg(target_arch = "wasm32")]
+mod gpu;
 use backend::BrowserBackend;
 use cmvs_core::{
     input::{CodeInput, KeyBindings},
@@ -36,6 +38,44 @@ pub struct WebRuntime {
 }
 #[wasm_bindgen]
 impl WebRuntime {
+    #[cfg(target_arch = "wasm32")]
+    pub async fn enable_gpu(&mut self, canvas: web_sys::OffscreenCanvas) -> Result<(), JsValue> {
+        if self.backend.gpu.is_some() {
+            return Err(js_error("WebGPU is already initialized"));
+        }
+        self.backend.gpu = Some(
+            gpu::BrowserGpu::new(canvas, self.backend.size)
+                .await
+                .map_err(js_error)?,
+        );
+        self.backend.frame = None;
+        Ok(())
+    }
+    /// An immediate screenshot suspends at its pending command until mapping completes.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn tick_gpu(
+        &mut self,
+        delta_ms: u32,
+        keys: Vec<u8>,
+        x: i32,
+        y: i32,
+        focused: bool,
+    ) -> Result<u8, JsValue> {
+        loop {
+            let result = self.tick(delta_ms, &keys, x, y, focused)?;
+            if result != 4 {
+                return Ok(result);
+            }
+            self.backend.read_requested = false;
+            let frame = self
+                .backend
+                .gpu
+                .as_ref()
+                .and_then(|gpu| gpu.frame.as_ref())
+                .ok_or_else(|| js_error("no completed GPU frame"))?;
+            self.backend.frame = Some(frame.read_async().await.map_err(js_error)?);
+        }
+    }
     #[wasm_bindgen(constructor)]
     pub fn new(
         font: Vec<u8>,
@@ -110,10 +150,31 @@ impl WebRuntime {
                     *input_due = false;
                 }
                 for _ in 0..4000 {
-                    match startup.tick(backend)? {
+                    let event = match startup.tick(backend) {
+                        Ok(event) => event,
+                        Err(error) => {
+                            #[cfg(target_arch = "wasm32")]
+                            if backend.read_requested {
+                                return Ok(4);
+                            }
+                            return Err(error);
+                        }
+                    };
+                    match event {
                         StartupEvent::Progress | StartupEvent::SnapshotCaptured => {}
                         StartupEvent::Yield => {
                             startup.advance_decoded_frame(delta_ms.min(250))?;
+                            #[cfg(target_arch = "wasm32")]
+                            {
+                                let display = backend.preferences();
+                                if let Some(gpu) = &mut backend.gpu {
+                                    if gpu.draw(startup, font, display)? {
+                                        backend.frame = None;
+                                    }
+                                    *input_due = true;
+                                    return Ok(1);
+                                }
+                            }
                             let frame = if let Some(image) = startup.movie_frame() {
                                 backend.movie_canvas(image)?
                             } else {
@@ -141,6 +202,22 @@ impl WebRuntime {
             .as_ref()
             .map(|frame| frame.pixels().to_vec())
             .ok_or_else(|| js_error("no completed frame"))
+    }
+    /// Explicit GPU readback for exports and verification; normal frames stay on the GPU.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn pixels_async(&self) -> Result<Vec<u8>, JsValue> {
+        if let Some(gpu) = &self.backend.gpu {
+            let frame = gpu
+                .frame
+                .as_ref()
+                .ok_or_else(|| js_error("no completed GPU frame"))?;
+            return frame
+                .read_async()
+                .await
+                .map(|image| image.pixels().to_vec())
+                .map_err(js_error);
+        }
+        self.pixels()
     }
 }
 impl WebRuntime {

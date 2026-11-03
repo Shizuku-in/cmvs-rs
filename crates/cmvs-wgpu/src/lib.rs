@@ -24,7 +24,7 @@ impl GpuFrame {
     pub fn dimensions(&self) -> [u32; 2] {
         self.size
     }
-    pub fn read(&self) -> Result<RgbaImage> {
+    fn begin_read(&self) -> wgpu::Buffer {
         let [w, h] = self.size;
         let pitch = (w * 4).div_ceil(256) * 256;
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -51,12 +51,51 @@ impl GpuFrame {
             },
         );
         self.queue.submit([encoder.finish()]);
+        buffer
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn read(&self) -> Result<RgbaImage> {
+        let buffer = self.begin_read();
         let (tx, rx) = std::sync::mpsc::channel();
         buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
         self.device.poll(wgpu::PollType::wait_indefinitely())?;
         rx.recv()??;
+        self.finish_read(&buffer)
+    }
+    /// Browser mappings complete through the event loop, without blocking the Worker.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn read_async(&self) -> Result<RgbaImage> {
+        let buffer = self.begin_read();
+        let state = Arc::new(Mutex::new((None, None::<std::task::Waker>)));
+        let callback = state.clone();
+        buffer
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let mut state = callback.lock().expect("readback lock");
+                state.0 = Some(result);
+                let waker = state.1.take();
+                drop(state);
+                if let Some(waker) = waker {
+                    waker.wake();
+                }
+            });
+        std::future::poll_fn(|cx| {
+            let mut state = state.lock().expect("readback lock");
+            if let Some(result) = state.0.take() {
+                std::task::Poll::Ready(result)
+            } else {
+                state.1 = Some(cx.waker().clone());
+                std::task::Poll::Pending
+            }
+        })
+        .await?;
+        self.finish_read(&buffer)
+    }
+    fn finish_read(&self, buffer: &wgpu::Buffer) -> Result<RgbaImage> {
+        let [w, h] = self.size;
+        let pitch = (w * 4).div_ceil(256) * 256;
         let bytes = buffer.slice(..).get_mapped_range()?;
         let mut pixels = Vec::with_capacity((w * h * 4) as usize);
         for row in bytes.chunks_exact(pitch as usize) {
@@ -86,19 +125,29 @@ pub struct Renderer {
     pub uploaded_bytes: u64,
 }
 impl Renderer {
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new(
         instance: &wgpu::Instance,
         surface: Option<&wgpu::Surface<'_>>,
     ) -> Result<(Self, wgpu::Adapter)> {
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            compatible_surface: surface,
-            ..Default::default()
-        }))?;
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        pollster::block_on(Self::new_async(instance, surface))
+    }
+    pub async fn new_async(
+        instance: &wgpu::Instance,
+        surface: Option<&wgpu::Surface<'_>>,
+    ) -> Result<(Self, wgpu::Adapter)> {
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                compatible_surface: surface,
+                ..Default::default()
+            })
+            .await?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
                 label: Some("CMVS GPU"),
                 ..Default::default()
-            }))?;
+            })
+            .await?;
         let errors = Arc::new(Mutex::new(None));
         let sink = errors.clone();
         device.on_uncaptured_error(Arc::new(move |error| {
