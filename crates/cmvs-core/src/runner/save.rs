@@ -766,6 +766,10 @@ impl Startup<'_> {
         camera_host.restore(1, &snapshot.cameras[1])?;
         camera_host.restore_view(0, &snapshot.cameras[2])?;
         camera_host.restore_view(1, &snapshot.cameras[3])?;
+        // Auto-resume can load before any playback command has configured the backend.
+        self.audio_backend.configure_paths(self.bootstrap.paths())?;
+        self.audio_backend
+            .configure_archive_parameters(self.bootstrap.archive_parameters())?;
         self.platform.restored_title(&snapshot.scene_title)?;
         self.machine.install_restore(vm);
         // Commit the hosts.

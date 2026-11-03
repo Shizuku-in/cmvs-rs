@@ -1915,6 +1915,108 @@ fn aoitori_v3_snapshot_restores_text_scene_locals_and_backup_slots() {
 }
 
 #[test]
+fn load_before_first_audio_command_configures_resources_before_replaying_bgm() {
+    use cmvs_rs::audio::{AudioBackend, AudioRequest, VoiceDuckingSettings};
+    use std::{cell::Cell, rc::Rc};
+    struct Audio {
+        paths_ready: bool,
+        configured: bool,
+        played: Rc<Cell<bool>>,
+    }
+    impl AudioBackend for Audio {
+        fn configure_voice_ducking(
+            &mut self,
+            _: VoiceDuckingSettings,
+        ) -> Result<(), Box<dyn Error>> {
+            Ok(())
+        }
+        fn configure_paths(
+            &mut self,
+            paths: &std::collections::BTreeMap<(u16, u32), Vec<u8>>,
+        ) -> Result<(), Box<dyn Error>> {
+            assert_eq!(
+                paths.get(&(0x2013, 0)).map(Vec::as_slice),
+                Some(&b"Synthetic"[..])
+            );
+            self.paths_ready = true;
+            self.configured = false;
+            Ok(())
+        }
+        fn configure_archive_parameters(
+            &mut self,
+            _: &std::collections::BTreeMap<(u16, u32), cmvs_rs::cpz::Cpz7Parameters>,
+        ) -> Result<(), Box<dyn Error>> {
+            assert!(self.paths_ready);
+            self.configured = true;
+            Ok(())
+        }
+        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+            Ok(true)
+        }
+        fn stop(&mut self, _: u8) -> Result<(), Box<dyn Error>> {
+            Ok(())
+        }
+        fn stop_voice(&mut self, _: u8) -> Result<(), Box<dyn Error>> {
+            Ok(())
+        }
+        fn stop_channel15(&mut self) -> Result<(), Box<dyn Error>> {
+            Ok(())
+        }
+        fn stop_bgm(&mut self) -> Result<(), Box<dyn Error>> {
+            Ok(())
+        }
+        fn play_bgm(&mut self, request: &AudioRequest) -> Result<(), Box<dyn Error>> {
+            assert!(
+                self.configured,
+                "restored audio needs resource paths and archive parameters"
+            );
+            assert!(
+                matches!(request, AudioRequest::PlayBgm { primary, .. } if primary == b"Synthetic")
+            );
+            self.played.set(true);
+            Ok(())
+        }
+    }
+    let mut code = vec![];
+    commands::command(&mut code, 0x201d, &[0x12345678]);
+    commands::command(&mut code, 0x2013, &[0, 0]);
+    commands::command(&mut code, 0x2128, &[]);
+    commands::command(&mut code, 0x2160, &[0]);
+    let audio_pc = code.len();
+    commands::command(&mut code, 0x20a0, &[0, 0, 1]);
+    commands::command(&mut code, 0x22b2, &[]);
+    commands::command(&mut code, 0x2000, &[]);
+    let root = Root::new("resume-audio-paths", &code, b"Synthetic\0");
+    fs::write(root.0.join("save/system.dat"), auto_resume_save(0x12345678)).unwrap();
+    let script = root.script();
+    let game = root.game();
+    let user = root.0.with_extension("user");
+    let mut backend = RecordingBackend::default();
+    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    run.set_user_data_directory(&user).unwrap();
+    while run.tick(&mut backend).unwrap() != StartupEvent::SnapshotCaptured {}
+    assert!(run.save_slot(3).unwrap());
+    drop(run);
+    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    run.set_user_data_directory(&user).unwrap();
+    // Register resources, then load without executing any playback command.
+    while run.machine().pc() != audio_pc {
+        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    }
+    let played = Rc::new(Cell::new(false));
+    run.set_audio_backend(Box::new(Audio {
+        paths_ready: false,
+        configured: false,
+        played: played.clone(),
+    }))
+    .unwrap();
+    run.load_slot(3, &mut backend).unwrap();
+    assert!(played.get());
+    drop(run);
+    fs::remove_dir_all(user).unwrap();
+}
+
+#[test]
 fn kunado_v4_snapshot_restores_text_scene_particles_locals_and_backup_slots() {
     snapshot_slots_roundtrip(Some("cmvs-20211006"));
     snapshot_slots_roundtrip(Some("cmvs-20221105"));
