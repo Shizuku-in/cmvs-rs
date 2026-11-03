@@ -125,8 +125,8 @@ fn decode_bmp(bytes: &[u8]) -> Result<RgbaImage, &'static str> {
 
 /// Command inheritance does not establish the wire format of gameplay snapshots.
 /// The independently inspected 20110525/20130131/20140217/20150405 subsets use text v2;
-/// 20171114 uses v3, and 20190305/20190405 use text v3 with scene v4
-/// (docs/games/{aoitori,realive,seishunf}). Effect configurations have an independent
+/// 20171114 uses v3, and 20190305/20190405/20211006 use text v3 with scene v4
+/// (docs/games/{aoitori,realive,seishunf,kunado}). Effect configurations have an independent
 /// build binding; unknown image, collision-mesh and effect records remain rejected.
 pub fn snapshot_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
     snapshot_layout(profile).is_some()
@@ -149,6 +149,10 @@ fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLa
                 "cmvs-20190405",
                 "c1742b5873e6d03f5cc7bc6f5b3b23655ec67e7cddf307deefa75349caed33be",
             ),
+            (
+                "cmvs-20211006",
+                "58e993a82e741ea73d3d1b5d89363dcaf435e72e6d505324e1de0c0ba5486631",
+            ),
         ]
         .iter()
         .any(|(id, hash)| {
@@ -169,15 +173,25 @@ fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLa
 }
 
 fn effect_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
-    matches!(profile.id.as_str(), "cmvs-20110525" | "cmvs-20171114")
+    (matches!(profile.id.as_str(), "cmvs-20110525" | "cmvs-20171114")
+        || (profile.id == "cmvs-20211006"
+            && profile
+                .binary(
+                    &crate::digest::parse_hex(
+                        "58e993a82e741ea73d3d1b5d89363dcaf435e72e6d505324e1de0c0ba5486631",
+                    )
+                    .expect("static SHA-256"),
+                )
+                .is_some()))
         && profile.base.as_deref() == Some("cmvs-20160201")
 }
 
 fn effect_record_supported(profile: &crate::profile::EngineProfile, body: &[u8]) -> bool {
     effect_layout_supported(profile)
-        // MIRANOSU's type-5 writer/reader are independently inspected. Other
+        // MIRANOSU and KUNADO's type-5 writer/readers are independently inspected. Other
         // configurations still need their own runtime and snapshot evidence.
-        && (profile.id != "cmvs-20110525" || body.get(..4) == Some(&[1, 0, 5, 0]))
+        && (!matches!(profile.id.as_str(), "cmvs-20110525" | "cmvs-20211006")
+            || body.get(..4) == Some(&[1, 0, 5, 0]))
 }
 
 /// 20110525 writer 0x1400332e0, 20130131 0x1400330b0 and 20140217 0x1400375d0 visit 512 children.
@@ -952,12 +966,13 @@ mod layout_tests {
             ("cmvs-20171114", SnapshotLayout::TextV3),
             ("cmvs-20190305", SnapshotLayout::TextV3SceneV4),
             ("cmvs-20190405", SnapshotLayout::TextV3SceneV4),
+            ("cmvs-20211006", SnapshotLayout::TextV3SceneV4),
             ("cmvs-20160201", SnapshotLayout::TextV3),
         ] {
             assert_eq!(snapshot_layout(registry.profile(id).unwrap()), Some(layout));
             assert_eq!(
                 effect_layout_supported(registry.profile(id).unwrap()),
-                matches!(id, "cmvs-20110525" | "cmvs-20171114")
+                matches!(id, "cmvs-20110525" | "cmvs-20171114" | "cmvs-20211006")
             );
         }
         let mut profile = registry.profile("cmvs-20171114").unwrap().clone();
@@ -971,17 +986,24 @@ mod layout_tests {
     }
 
     #[test]
-    fn older_effect_layout_only_accepts_the_inspected_type_five() {
+    fn restricted_effect_layout_only_accepts_the_inspected_type_five() {
         let registry = crate::profile::Registry::builtin();
-        let profile = registry.profile("cmvs-20110525").unwrap();
-        for kind in [2, 5, 6, 8] {
-            assert_eq!(
-                effect_record_supported(profile, &[1, 0, kind, 0]),
-                kind == 5
-            );
+        for id in ["cmvs-20110525", "cmvs-20211006"] {
+            let profile = registry.profile(id).unwrap();
+            for kind in [2, 5, 6, 8] {
+                assert_eq!(
+                    effect_record_supported(profile, &[1, 0, kind, 0]),
+                    kind == 5
+                );
+            }
+            assert!(!effect_record_supported(profile, &[1, 0]));
+            assert!(!effect_record_supported(profile, &[2, 0, 5, 0]));
         }
-        assert!(!effect_record_supported(profile, &[1, 0]));
-        assert!(!effect_record_supported(profile, &[2, 0, 5, 0]));
+        let mut profile = registry.profile("cmvs-20211006").unwrap().clone();
+        for binary in &mut profile.binaries {
+            binary.sha256 = [0; 32];
+        }
+        assert!(!effect_record_supported(&profile, &[1, 0, 5, 0]));
     }
 
     #[test]

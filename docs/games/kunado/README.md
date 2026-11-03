@@ -35,6 +35,24 @@
 
 既有启动脚本结构普查见[引擎档案设计](../../design/engine-profiles.md#2-全系列普查2026-10-30)；历史普查不代表整包脚本、命令语义或完整游戏兼容。
 
+## 剧情快照（2026-11-03）
+
+已为本构建独立绑定 `TextV3SceneV4`，并开放已核对的 type 5 活动粒子创建记录；正常运行无需 `--continue-without-snapshot`。真实 `V1–V4/L1` 均通过：重启恢复、快照字节往返、同会话恢复及覆盖/加载备份槽，报告 `local/kunado/snapshot-03/summary.json`。探针以样本附带系统存档作为初始状态，所有写入均在隔离目录。合成回归复用既有存读档夹具，覆盖文字、场景、局部变量、相机、活动粒子重建、备份槽和失败时状态不变，并验证普通对象与消息窗口的子槽 1023 保存后可恢复。其他活动效果类型仍拒绝。
+
+证据绑定上表 x64 SHA-256：`0x2080` → `0x1400976e0`、`0x22b2` → `0x140097480`，写入 `0x14007d300`；读档 `0x1400970a0` → `0x14007e210` → `0x140082ef0`。文字 `0x14006d400` / 恢复 `0x14006f4c0` 为 v3（156/148/208 字节块、44 字节字形）；消息窗口 `0x140071900` / 恢复 `0x140072a00` 为 v3，2496 字节状态后嵌套场景；场景 `0x14004e390` / 恢复 `0x14004f1c0` 为 v4，标记 `ffff/0004` 后写 kind、shown、flags、width、height 五个 u32，递归遍历 1024 子槽。图像 `0x140043c20` 为 v3，绘制 `0x140034f50` 为 v4。普通对象创建/销毁/查询 `0x14004d4a0` / `0x14004d5b0` / `0x14004e120` 的上限均为 1024，窗口 `0x1400719e0` / `0x1400718e0` 复用该表；运行时上限与快照布局分别绑定构建身份。
+
+`0x800` 写入 `0x1400525b0` / 读取 `0x140052e80`：版本 1、type 5，共 60 字节（6 个参数 word、32 字节图名）。写入仅保存创建配置；读取经 `0x14005dca0` 载入图像，再由 `0x14005dc40` 重新初始化粒子，不恢复逐粒子运行位置。主证据 `local/kunado/snapshot-evidence.json`，SHA-256 `b128511afbfbcd5f590e55279ac53e94cf954289af0ddf0b59759626c02d9d28`；绘制及子对象补充证据为同目录 `snapshot-components.json`、`snapshot-child-{wrappers,helpers}.json`。命令保持 `Unreviewed`。
+
+桌面 release（含音频输出）已重建。使用默认快照策略、Shift-JIS 与微软雅黑字体运行 8 秒，越过原先 `main.ps3/0x3f7aa` 停点，18,524 步后诊断正常退出，日志 `local/kunado/snapshot-desktop-02.log`。这只验证原生启动路径，不代表画面、听感、窗口内存读档或原版存档互操作已核对。
+
+带快照的首选路线 `0.0.0` 经 3 个选择点，以 364,322,643 步、173,744 次帧推进回到标题，无新的快照停点；仍有 `0.0.1`、`0.1` 两个分支前缀，`R2` 保持 `inconclusive`。`R3/L0` 通过：覆盖 39/59 个脚本、671,165/2,384,834 个静态指令位置（约 28.1%），无未匹配脚本。报告 `local/kunado/snapshot-routes-01/summary.json`。本轮字体使用微软雅黑，不将步数与此前 MS Gothic 无快照运行直接视作同配置对照。受影响的快照、场景、窗口与 runner 回归、Clippy 和格式检查通过。
+
+复现存读档检查：
+
+```powershell
+cargo run --offline --release -p cmvs-probe -- "<游戏目录>" --out "local/kunado/new-snapshot" --checks V1,V2,V3,V4 --font "<字体文件>"
+```
+
 ## 命令证据（2026-11-03）
 
 下列地址均绑定上表 x64 SHA-256、image base `0x140000000`。仅选择已检查命令的既有研究处理器，保持 `Unreviewed`；x86 仅登记 switch，不宣称独立语义验证。
@@ -54,7 +72,7 @@
 
 ```powershell
 cargo run --offline --release -p cmvs-probe -- "<游戏目录>" --out "local/kunado/new-startup" --checks S1,S2,S3,S4,R1,D1 --font "<字体文件>"
-cargo run --offline --release -p cmvs-probe -- "<游戏目录>" --out "local/kunado/new-route" --checks R2,R3 --without-snapshots --max-routes 1 --max-steps 1000000000 --font "<字体文件>"
+cargo run --offline --release -p cmvs-probe -- "<游戏目录>" --out "local/kunado/new-route" --checks R2,R3 --max-routes 1 --max-steps 1000000000 --font "<字体文件>"
 ```
 
 固定种子 0、16ms 虚拟帧、鼠标、隔离用户目录；探针复制目录既有 `save/system.dat` 作为初始状态（SHA-256 `daa99a419d58dc9f2c9432ae024ed69fc6c4bd549c6a61a5590dadea02cd918b`），不是空白系统存档。原游戏只读，输出目录必须不存在。第二条为无快照研究运行，不能据此认领存读档能力。

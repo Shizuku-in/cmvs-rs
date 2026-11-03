@@ -1847,7 +1847,7 @@ fn flag_clear_command_drops_bit_0x100_of_the_object_or_child() {
 
 #[test]
 fn realive_child_table_supports_high_slots_and_ignores_unsigned_create_overflow() {
-    for id in ["cmvs-20190305", "cmvs-20190405"] {
+    for id in ["cmvs-20190305", "cmvs-20190405", "cmvs-20211006"] {
         let profile = cmvs_rs::profile::Registry::builtin().profile(id).unwrap();
         let mut code = vec![];
         for (op, args) in [

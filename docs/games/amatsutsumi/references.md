@@ -29,13 +29,6 @@
 - 当前仅作为研究资料：`etc/note.md`、`etc/CMVS_Symbol.json` 和脚本处理实现。
 - 未将其源码整合入工程。符号来自其他游戏，不能直接套用；旧笔记中 0x0400 的 NOP 标注已被本作反证。
 
-## cokkeijigen/cmvs-android-amatsutsumi
-
-- 地址：https://github.com/cokkeijigen/cmvs-android-amatsutsumi
-- 此前已核实 README 描述本作 GBK 与字体 Hook，不是完整引擎重实现。
-- 尚未固定提交、完成许可审查或纳入源码依赖。
-- 后续用于分析 Android 版的线索，代码复用前重新核对。
-
 ## Windows 图标/光标格式说明
 
 - Microsoft [The evolution of the ICO file format, part 2](https://devblogs.microsoft.com/oldnewthing/20101019-00/?p=12503)：DIB、双倍高度、调色板及 AND/XOR 平面语义。

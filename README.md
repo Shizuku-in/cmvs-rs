@@ -68,9 +68,8 @@ cargo test --offline
 - [文档导航与归档规则](docs/README.md)：按用途查找资料。
 - [架构](docs/architecture.md)与 [Workspace](docs/workspace.md)：模块职责、依赖和完整检查命令。
 - [研究约定](docs/research.md)：证据要求及新游戏接入步骤。
-- [引擎档案层](docs/design/engine-profiles.md)：按构建选择命令语义的闸门，以及 2007–2023 全系列普查。
+- [引擎档案层](docs/design/engine-profiles.md)：按构建选择命令语义的闸门。
 - [参考与许可](docs/references.md)：固定提交、第三方依赖和复用边界。
-- [开发历史](docs/games/amatsutsumi/history.md)：原 README 的阶段记录与旧停点。
 
 提交前运行：
 

@@ -4834,7 +4834,7 @@ fn font_objects_keep_their_face_glyphs_capture_it_and_the_dialog_refreshes_defau
 
 #[test]
 fn realive_window_children_share_the_extended_table_for_draw_query_and_destroy() {
-    for id in ["cmvs-20190305", "cmvs-20190405"] {
+    for id in ["cmvs-20190305", "cmvs-20190405", "cmvs-20211006"] {
         let profile = cmvs_rs::profile::Registry::builtin().profile(id).unwrap();
         let mut code = vec![];
         create(&mut code, 7, 10, [0, 0, 1280, 54]);

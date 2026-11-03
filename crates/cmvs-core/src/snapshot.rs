@@ -23,7 +23,7 @@ pub use vm_state::VmSnapshot;
 pub enum SnapshotLayout {
     TextV2,
     TextV3,
-    /// REALIVE: text v3, scene v4 with 1024 child slots.
+    /// Text v3, scene v4 with 1024 child slots (REALIVE and verified later builds).
     TextV3SceneV4,
 }
 impl SnapshotLayout {

@@ -1914,8 +1914,22 @@ fn aoitori_v3_snapshot_restores_text_scene_locals_and_backup_slots() {
     snapshot_slots_roundtrip(Some("cmvs-20171114"));
 }
 
+#[test]
+fn kunado_v4_snapshot_restores_text_scene_particles_locals_and_backup_slots() {
+    snapshot_slots_roundtrip(Some("cmvs-20211006"));
+}
+
 fn snapshot_slots_roundtrip(profile: Option<&str>) {
-    use cmvs_rs::{save::Csv2Save, snapshot::EngineSnapshot};
+    use cmvs_rs::{
+        save::Csv2Save,
+        snapshot::{EngineSnapshot, SnapshotLayout},
+    };
+    let layout = if profile == Some("cmvs-20211006") {
+        SnapshotLayout::TextV3SceneV4
+    } else {
+        SnapshotLayout::TextV3
+    };
+    let collision = profile == Some("cmvs-20171114");
     // A load sets the window title from the base title 0x2160 gives.
     let mut code = string_call(0x2160);
     system_call(&mut code, 0x201d, &[0x12345678]);
@@ -1935,11 +1949,13 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
     }
     let collision_points =
         [[-1.0f32, 2.0, 0.0], [1.0, 2.0, 0.0], [0.0, 2.0, 1.0]].map(|p| p.map(f32::to_bits));
-    if profile.is_some() {
+    if collision {
         commands::command(&mut code, 0x2330, &[20]);
         for point in collision_points {
             commands::command(&mut code, 0x2332, &[20, point[0], point[1], point[2]]);
         }
+    }
+    if profile.is_some() {
         commands::command(&mut code, 0x2011, &[0, 10]);
         commands::command(
             &mut code,
@@ -1956,9 +1972,13 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
             ],
         );
     }
+    if profile == Some("cmvs-20211006") {
+        commands::command(&mut code, 0x2022, &[20, 1023]);
+        commands::command(&mut code, 0x2178, &[0, 1023]);
+    }
     let snapshot_pc = code.len();
     code.extend(0x22b2u16.to_le_bytes());
-    if profile.is_some() {
+    if collision {
         commands::command(&mut code, 0x2331, &[20]);
     }
     commands::command(&mut code, 0x2260, &[0; 3]);
@@ -2017,22 +2037,35 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
     let first = fs::read(&slot).unwrap();
     let save = Csv2Save::decode(&first).unwrap();
     assert_eq!(&first[16..36], b"2000-01-01 00:00:00 ");
-    let snapshot = EngineSnapshot::decode(&save.snapshot).unwrap();
+    let snapshot = EngineSnapshot::decode_with_layout(&save.snapshot, layout).unwrap();
     assert_eq!(
         (snapshot.active_slot, snapshot.pc, snapshot.repeat_count),
         (0, snapshot_pc as u32 + 2, 0)
     );
-    if profile.is_some() {
+    if collision {
         assert_eq!(
             snapshot.objects[&20].collision_vertices.as_deref(),
             Some(collision_points.as_slice())
         );
         assert_eq!(run.scene().object(20).unwrap().collision_vertices, None);
+    }
+    if profile.is_some() {
         let effect =
             cmvs_rs::snapshot::SavedEffect::decode(&snapshot.raw_objects[&(0x800, 0)]).unwrap();
         assert_eq!(effect.image_name(), b"Synthetic");
         assert!(
             matches!(effect, cmvs_rs::snapshot::SavedEffect::Particles { words, .. } if words[5] == 2)
+        );
+    }
+    if profile == Some("cmvs-20211006") {
+        assert!(snapshot.objects[&20].children.contains_key(&1023));
+        assert!(
+            snapshot.windows[0]
+                .as_ref()
+                .unwrap()
+                .scene
+                .children
+                .contains_key(&1023)
         );
     }
     assert_eq!(snapshot.variables.integers()[5], 42);
@@ -2060,7 +2093,7 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
     bad_audio.sound_channels[..32].fill(b'x');
     let bytes = Csv2Save::encode(
         header,
-        &bad_audio.encode().unwrap(),
+        &bad_audio.encode_with_layout(layout).unwrap(),
         &save.auxiliary,
         &save.script_image,
     )
@@ -2092,7 +2125,7 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
         callback.stack_pointer = sp as u32;
         let bytes = Csv2Save::encode(
             header,
-            &callback.encode().unwrap(),
+            &callback.encode_with_layout(layout).unwrap(),
             &save.auxiliary,
             &save.script_image,
         )
@@ -2117,7 +2150,7 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
     assert_eq!(run.machine().state().integer(5), Some(42));
     assert_eq!(run.machine().state().bit(0), Some(true));
     assert_eq!(run.camera().view(0).unwrap().words, view_words);
-    if profile.is_some() {
+    if collision {
         assert_eq!(
             run.scene()
                 .object(20)
@@ -2126,6 +2159,8 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
                 .as_deref(),
             Some(collision_points.as_slice())
         );
+    }
+    if profile.is_some() {
         assert_eq!(run.scene().particle_effects()[&0].particles.len(), 2);
         assert_eq!(
             run.inspect_snapshot().unwrap().raw_objects[&(0x800, 0)],
@@ -2133,6 +2168,17 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
         );
     }
 
+    if profile == Some("cmvs-20211006") {
+        assert!(run.scene().object(20).unwrap().children.contains_key(&1023));
+        assert!(
+            run.inspect_snapshot().unwrap().windows[0]
+                .as_ref()
+                .unwrap()
+                .scene
+                .children
+                .contains_key(&1023)
+        );
+    }
     let restored = run.scene().object(20).unwrap().image.as_ref().unwrap();
     assert!(restored.alpha && !restored.surface && restored.name.is_empty());
     assert!(
@@ -2181,7 +2227,7 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
     }
     let changed = Csv2Save::encode(
         header,
-        &with_targets.encode().unwrap(),
+        &with_targets.encode_with_layout(layout).unwrap(),
         &save.auxiliary,
         &save.script_image,
     )
@@ -2193,19 +2239,29 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
     with_targets.raw_objects.get_mut(&(0x6a0, 1)).unwrap()[0] = 1;
     let changed = Csv2Save::encode(
         header,
-        &with_targets.encode().unwrap(),
+        &with_targets.encode_with_layout(layout).unwrap(),
         &save.auxiliary,
         &save.script_image,
     )
     .unwrap();
     fs::write(directory.join("save004.dat"), changed).unwrap();
-    let before = run.inspect_snapshot().unwrap().encode().unwrap();
+    let before = run
+        .inspect_snapshot()
+        .unwrap()
+        .encode_with_layout(layout)
+        .unwrap();
     assert!(run.load_slot(4, &mut backend).is_err());
-    assert_eq!(run.inspect_snapshot().unwrap().encode().unwrap(), before);
-    if profile.is_some() {
+    assert_eq!(
+        run.inspect_snapshot()
+            .unwrap()
+            .encode_with_layout(layout)
+            .unwrap(),
+        before
+    );
+    if collision {
         // Corrupt the on-disk 0x749 count rather than asking the checked encoder
         // to produce an invalid scene. The old VM, mesh and particles must survive.
-        let mut mesh_bytes = snapshot.encode().unwrap();
+        let mut mesh_bytes = snapshot.encode_with_layout(layout).unwrap();
         let mut mesh_header = 0x749u16.to_le_bytes().to_vec();
         mesh_header.extend(44u32.to_le_bytes());
         mesh_header.extend(0u32.to_le_bytes());
@@ -2224,7 +2280,13 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
                 .to_string()
                 .contains("collision vertex count")
         );
-        assert_eq!(run.inspect_snapshot().unwrap().encode().unwrap(), before);
+        assert_eq!(
+            run.inspect_snapshot()
+                .unwrap()
+                .encode_with_layout(layout)
+                .unwrap(),
+            before
+        );
         assert_eq!(
             run.scene()
                 .object(20)
@@ -2233,12 +2295,14 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
                 .as_deref(),
             Some(collision_points.as_slice())
         );
+    }
+    if profile.is_some() {
         let mut malformed = snapshot.clone();
         malformed.raw_objects.get_mut(&(0x800, 0)).unwrap()[24..28]
             .copy_from_slice(&u32::MAX.to_le_bytes());
         let bytes = Csv2Save::encode(
             header,
-            &malformed.encode().unwrap(),
+            &malformed.encode_with_layout(layout).unwrap(),
             &save.auxiliary,
             &save.script_image,
         )
@@ -2257,7 +2321,13 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
                 .contains("saved particle count")
         );
         assert_eq!(run.machine().pc(), pc);
-        assert_eq!(run.inspect_snapshot().unwrap().encode().unwrap(), before);
+        assert_eq!(
+            run.inspect_snapshot()
+                .unwrap()
+                .encode_with_layout(layout)
+                .unwrap(),
+            before
+        );
         assert_eq!(
             run.scene().particle_effects()[&0]
                 .particles
@@ -2279,7 +2349,7 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
     callback.stack_pointer = (callback.stack.len() - 12) as u32;
     let bytes = Csv2Save::encode(
         header,
-        &callback.encode().unwrap(),
+        &callback.encode_with_layout(layout).unwrap(),
         &save.auxiliary,
         &new_image,
     )

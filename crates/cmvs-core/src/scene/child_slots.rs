@@ -9,7 +9,7 @@ pub(crate) enum ChildSlots {
 }
 impl ChildSlots {
     pub(crate) fn for_profile(profile: &EngineProfile) -> Self {
-        // Independent x64 evidence: docs/games/{realive,seishunf}.
+        // Independent x64 evidence: docs/games/{realive,seishunf,kunado}.
         if [
             (
                 "cmvs-20190305",
@@ -18,6 +18,10 @@ impl ChildSlots {
             (
                 "cmvs-20190405",
                 "c1742b5873e6d03f5cc7bc6f5b3b23655ec67e7cddf307deefa75349caed33be",
+            ),
+            (
+                "cmvs-20211006",
+                "58e993a82e741ea73d3d1b5d89363dcaf435e72e6d505324e1de0c0ba5486631",
             ),
         ]
         .iter()
@@ -46,7 +50,7 @@ mod tests {
     #[test]
     fn extended_table_requires_the_inspected_profile_and_binary_identity() {
         let registry = crate::profile::Registry::builtin();
-        for id in ["cmvs-20190305", "cmvs-20190405"] {
+        for id in ["cmvs-20190305", "cmvs-20190405", "cmvs-20211006"] {
             let profile = registry.profile(id).unwrap();
             assert_eq!(ChildSlots::for_profile(profile).count(), 1024);
             assert!(crate::runner::snapshot_layout_supported(profile));

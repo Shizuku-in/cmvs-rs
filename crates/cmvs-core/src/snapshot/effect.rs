@@ -1,5 +1,6 @@
 //! 0x800 configuration records: Aoitori 0x140042fd0 / 0x140043120;
 //! MIRANOSU type 5: 0x140037130 / 0x140037260 (other types remain gated).
+//! KUNADO type 5: 0x1400525b0 / 0x140052e80 (other types remain gated).
 use crate::FormatError;
 
 /// The native writer stores creation parameters, not the live particle simulation.

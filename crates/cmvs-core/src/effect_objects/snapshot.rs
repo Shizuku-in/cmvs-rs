@@ -1,4 +1,4 @@
-//! Identity-bound runtime rebuilding of Aoitori's creation-only 0x800 records.
+//! Identity-bound runtime rebuilding of creation-only 0x800 records.
 use super::{CollisionEffect, FallingEffect, ParticleEffect};
 use crate::{
     FormatError,
