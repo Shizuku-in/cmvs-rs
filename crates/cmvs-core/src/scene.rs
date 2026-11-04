@@ -338,6 +338,7 @@ impl DrawState {
 #[derive(Debug, Default)]
 pub struct SceneHost {
     child_slots: ChildSlots,
+    inspected_20071117: bool,
     screen_size: crate::viewport::ScreenSize,
     pub(crate) fragment_effects: BTreeMap<u8, crate::effect_objects::FragmentEffect>,
     pub(crate) collision_effects: BTreeMap<u8, crate::effect_objects::CollisionEffect>,
@@ -358,6 +359,7 @@ impl SceneHost {
     pub fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
         Self {
             child_slots: ChildSlots::for_profile(profile),
+            inspected_20071117: profile.is_inspected_20071117(),
             ..Self::default()
         }
     }
@@ -1030,9 +1032,7 @@ impl SceneHost {
             let color = call.argument(16, "filter color")?;
             // Modes 256/512 use low/high words as radius and sampling step.
             let extra = call.argument(20, "filter extra")?;
-            if !(matches!(mode, 2 | 17 | 256 | 512)
-                || mode == 1 && self.child_slots == ChildSlots::Slots256)
-            {
+            if !(matches!(mode, 2 | 17 | 256 | 512) || mode == 1 && self.inspected_20071117) {
                 return Err(fail(
                     "image filter mode not implemented; only modes 2, 17, 256 and 512 are verified",
                 )
@@ -1164,6 +1164,7 @@ impl SceneHost {
         *self = Self {
             screen_size: self.screen_size,
             child_slots: self.child_slots,
+            inspected_20071117: self.inspected_20071117,
             particle_effects: Default::default(),
             falling_effects: Default::default(),
             collision_effects: Default::default(),

@@ -223,15 +223,7 @@ fn reset_type_1_2_defaults(camera: &mut Camera) {
 }
 
 fn supports_projection_types_1_2(profile: &crate::profile::EngineProfile) -> bool {
-    profile.id == "cmvs-20071117"
-        && profile
-            .binary(
-                &crate::digest::parse_hex(
-                    "caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c9715a20e7a5f36d02b",
-                )
-                .expect("static SHA-256"),
-            )
-            .is_some()
+    profile.is_inspected_20071117()
 }
 
 /// cmvs-20071117 x86: 0x410c10 -> 0x42df60, projection types 1 and 2.

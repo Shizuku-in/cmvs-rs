@@ -180,10 +180,8 @@ impl WorldMotion {
 
 impl SceneHost {
     fn supports_world_motion_mode(&self, mode: u32) -> bool {
-        // Slots256 is selected only by the inspected profile and executable hash.
         WorldMotion::supports_mode(mode)
-            || self.child_slots == super::ChildSlots::Slots256
-                && matches!(mode as u8, 0x20 | 0x21 | 0x30)
+            || self.inspected_20071117 && matches!(mode as u8, 0x20 | 0x21 | 0x30)
     }
 
     /// 0x228a normal execution: replace +152, write key 0, and capture the execution-time
@@ -353,6 +351,17 @@ mod tests {
                 elapsed: 0,
             }),
             ..WorldMotion::default()
+        }
+    }
+
+    #[test]
+    fn slot_capacity_does_not_enable_build_specific_modes() {
+        let scene = super::super::SceneHost {
+            child_slots: super::super::ChildSlots::Slots256,
+            ..Default::default()
+        };
+        for mode in [0x20, 0x21, 0x30] {
+            assert!(!scene.supports_world_motion_mode(mode));
         }
     }
 

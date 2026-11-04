@@ -11,7 +11,7 @@ use std::{
 
 /// Holds compressed bytes and one decoded packet, never an entire PCM recording.
 pub struct VorbisProgram {
-    bytes: Vec<Arc<[u8]>>,
+    pub(crate) bytes: Vec<Arc<[u8]>>,
     reader: Vorbis,
     pub(crate) looped: Arc<AtomicBool>,
     buffer: Vec<f32>,
@@ -40,6 +40,9 @@ impl VorbisProgram {
         if let Some(secondary) = secondary {
             bytes.push(secondary.into());
         }
+        Self::from_shared(bytes, looped)
+    }
+    pub(crate) fn from_shared(bytes: Vec<Arc<[u8]>>, looped: bool) -> Result<Self, Box<dyn Error>> {
         let reader = Vorbis::new(bytes[0].clone())?;
         let channels = reader.channels();
         let rate = reader.sample_rate();
@@ -77,6 +80,11 @@ impl VorbisProgram {
         };
         result.refill()?;
         Ok(result)
+    }
+    /// Prepare playback from the beginning without changing the current decoder.
+    /// Compressed data is shared; decoder state and loop control are independent.
+    pub fn restarted(&self, looped: bool) -> Result<Self, Box<dyn Error>> {
+        Self::from_shared(self.bytes.clone(), looped)
     }
     pub fn set_looped(&self, value: bool) {
         self.looped.store(value, Ordering::Relaxed);

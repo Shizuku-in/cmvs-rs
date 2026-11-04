@@ -157,17 +157,7 @@ fn inspected_20221105(profile: &crate::profile::EngineProfile) -> bool {
 }
 
 fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLayout> {
-    if profile.id == "cmvs-20071117"
-        && profile.base.as_deref() == Some("cmvs-20160201")
-        && profile
-            .binary(
-                &crate::digest::parse_hex(
-                    "caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c9715a20e7a5f36d02b",
-                )
-                .expect("static SHA-256"),
-            )
-            .is_some()
-    {
+    if profile.is_inspected_20071117() {
         return Some(SnapshotLayout::TextV1SceneV1);
     }
     if (matches!(
@@ -277,8 +267,12 @@ impl Startup<'_> {
             self.bootstrap.settings().get(&0x201d).copied()
         }
     }
-    fn validate_build_snapshot(&self, snapshot: &EngineSnapshot) -> Result<(), Box<dyn Error>> {
-        if self.require_snapshot_layout()? == SnapshotLayout::TextV1SceneV1 {
+    fn validate_build_snapshot(
+        &self,
+        snapshot: &EngineSnapshot,
+        layout: SnapshotLayout,
+    ) -> Result<(), Box<dyn Error>> {
+        if layout == SnapshotLayout::TextV1SceneV1 {
             if snapshot.effects[2].is_some() {
                 return Err("old mask snapshot records are not implemented".into());
             }
@@ -434,7 +428,7 @@ impl Startup<'_> {
             sound_channels: self.audio.saved_channels(),
             sound_device: vec![1, 0, 0, 0, 0, 0],
         };
-        self.validate_build_snapshot(&snapshot)?;
+        self.validate_build_snapshot(&snapshot, layout)?;
         Ok((snapshot, vm.main_image))
     }
 
@@ -658,8 +652,15 @@ impl Startup<'_> {
             .ok_or("save slot to load does not exist")?;
         let save = Csv2Save::decode(&bytes)?;
         let snapshot = EngineSnapshot::decode_with_layout(&save.snapshot, layout)?;
-        self.validate_build_snapshot(&snapshot)?;
-        self.restore_snapshot(slot, &save, &bytes[..HEADER_SIZE], &snapshot, backend)
+        self.validate_build_snapshot(&snapshot, layout)?;
+        self.restore_snapshot(
+            slot,
+            &save,
+            &bytes[..HEADER_SIZE],
+            &snapshot,
+            layout,
+            backend,
+        )
     }
 
     /// Loader 0x140081960 and reader 0x140069fd0 over the Rust hosts. Everything fallible
@@ -671,6 +672,7 @@ impl Startup<'_> {
         save: &Csv2Save,
         header: &[u8],
         snapshot: &EngineSnapshot,
+        layout: SnapshotLayout,
         backend: &mut impl PlatformBackend,
     ) -> Result<(), Box<dyn Error>> {
         if snapshot.word_11144 != 1 {
@@ -779,7 +781,6 @@ impl Startup<'_> {
             .filter(|((tag, _), _)| *tag == 0x8e8)
             .map(|(&(_, slot), body)| (slot, body.as_slice()))
             .collect();
-        let layout = self.require_snapshot_layout()?;
         let players = self.movies.load_scene_players_with_layout(
             &movie_records,
             &mut objects,
@@ -798,7 +799,6 @@ impl Startup<'_> {
                 .collect()
         };
         let mut buttons = self.buttons.clone();
-        let layout = self.require_snapshot_layout()?;
         buttons.restore_with_layout(&records(0x8c0), &records(0x8c8), layout)?;
         let mut texts: [Option<_>; TEXT_OBJECTS] = snapshot.texts.clone();
         if layout == SnapshotLayout::TextV1SceneV1 {

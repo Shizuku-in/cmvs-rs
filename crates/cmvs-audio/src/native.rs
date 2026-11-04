@@ -154,6 +154,7 @@ impl Envelope {
     }
 }
 struct Channel {
+    bytes: Vec<Arc<[u8]>>,
     sink: Player,
     fault: Fault,
     envelope: Option<Envelope>,
@@ -289,6 +290,7 @@ impl NativeAudio {
         let gain = volume.min(256) as f32 / 256.0;
         let envelope = (fade_ms != 0).then(|| Envelope::new(0.0, 1.0, fade_ms));
         sink.set_volume(if envelope.is_some() { 0.0 } else { gain });
+        let bytes = program.bytes.clone();
         sink.append(StreamSource {
             output_enabled: self.output_enabled.clone(),
             host_control: self.host_control.clone(),
@@ -298,6 +300,7 @@ impl NativeAudio {
             failed: false,
         });
         Channel {
+            bytes,
             sink,
             fault,
             envelope,
@@ -482,6 +485,18 @@ impl AudioBackend for NativeAudio {
             channel.looped.store(looped, Ordering::Relaxed);
             channel.sink.play();
         }
+        Ok(())
+    }
+    fn restart_se(&mut self, channel: u8, looped: bool) -> Result<(), Box<dyn Error>> {
+        let slot = usize::from(channel);
+        let Some(current) = self.se.get(slot).ok_or("SE channel out of range")? else {
+            return Ok(());
+        };
+        let program = VorbisProgram::from_shared(current.bytes.clone(), looped)?;
+        let candidate = self.prepare(program, (current.gain * 256.0) as u32, 0);
+        // All fallible preparation precedes replacing the old device channel.
+        self.se[slot] = Some(candidate);
+        self.se[slot].as_ref().unwrap().sink.play();
         Ok(())
     }
     fn stop_voice(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {

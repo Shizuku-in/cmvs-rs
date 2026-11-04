@@ -240,6 +240,20 @@ impl EngineProfile {
     pub fn count(&self, status: CommandStatus) -> usize {
         self.statuses.iter().filter(|&&s| s == status).count()
     }
+    /// Independently inspected ASUKIMI build and its inherited command schema.
+    pub(crate) fn is_inspected_20071117(&self) -> bool {
+        self.id == "cmvs-20071117"
+            && self.base.as_deref() == Some("cmvs-20160201")
+            && self
+                .binary(
+                    &crate::digest::parse_hex(
+                        "caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c9715a20e7a5f36d02b",
+                    )
+                    .expect("static SHA-256"),
+                )
+                .is_some()
+    }
+
     pub fn binary(&self, sha256: &[u8; 32]) -> Option<&Binary> {
         self.binaries.iter().find(|b| &b.sha256 == sha256)
     }

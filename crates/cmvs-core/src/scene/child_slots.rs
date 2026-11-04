@@ -12,16 +12,7 @@ pub(crate) enum ChildSlots {
 impl ChildSlots {
     pub(crate) fn for_profile(profile: &EngineProfile) -> Self {
         // Independent x86 256-entry helpers: docs/games/asukimi.
-        if profile.id == "cmvs-20071117"
-            && profile
-                .binary(
-                    &crate::digest::parse_hex(
-                        "caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c9715a20e7a5f36d02b",
-                    )
-                    .expect("static SHA-256"),
-                )
-                .is_some()
-        {
+        if profile.is_inspected_20071117() {
             return Self::Slots256;
         }
         // Independent 512-entry create/destroy helpers: docs/games/kazokubu.
@@ -90,6 +81,22 @@ mod tests {
         let mut changed = profile.clone();
         changed.binaries[0].sha256 = [0; 32];
         assert_eq!(ChildSlots::for_profile(&changed).count(), 768);
+        let mut changed = profile.clone();
+        changed.base = Some("unverified-base".into());
+        assert_eq!(ChildSlots::for_profile(&changed).count(), 768);
+        assert!(!crate::runner::snapshot_layout_supported(&changed));
+        let mut scene = super::super::SceneHost::for_profile(profile);
+        assert!(scene.inspected_20071117);
+        scene.restore(
+            Default::default(),
+            Default::default(),
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!(scene.inspected_20071117);
+        assert!(!super::super::SceneHost::for_profile(&changed).inspected_20071117);
         for (id, count) in [
             ("cmvs-20120309", 512),
             ("cmvs-20190305", 1024),

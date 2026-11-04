@@ -92,16 +92,7 @@ impl Configuration {
     ) -> Result<crate::viewport::ScreenSize, FormatError> {
         // ASUKIMI x86 0x404e00 selects the old WINDOW_SIZE schema and calls
         // 0x403430 with the logical size; docs/games/asukimi.
-        if profile.id == "cmvs-20071117"
-            && profile
-                .binary(
-                    &crate::digest::parse_hex(
-                        "caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c9715a20e7a5f36d02b",
-                    )
-                    .expect("static SHA-256"),
-                )
-                .is_some()
-        {
+        if profile.is_inspected_20071117() {
             let value = |section, key, default| {
                 crate::save_menu::profile_int(&self.0, section, key, default) as u32
             };

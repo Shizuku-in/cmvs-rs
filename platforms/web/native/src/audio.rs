@@ -334,6 +334,43 @@ impl AudioBackend for BrowserAudio {
         }
         self.start_slot(id, 0)
     }
+    fn restart_se(&mut self, channel: u8, looped: bool) -> Result<(), Box<dyn Error>> {
+        let id = Self::se(channel)?;
+        let Some(current) = &self.slots[id] else {
+            return Ok(());
+        };
+        let mut candidate = Channel::new(current.program.restarted(looped)?, 0);
+        candidate.volume = current.volume;
+        // Decode the initial queue before releasing the old channel, so failures
+        // leave its playback and clock intact. No fallible work follows install.
+        let count = candidate.program.sample_rate() as usize
+            * usize::from(candidate.program.channels())
+            / 4;
+        let mut pcm = Vec::with_capacity(count);
+        for _ in 0..count {
+            match candidate.next()? {
+                Some(sample) => pcm.push(f32::from(sample) / 32768.0),
+                None => {
+                    candidate.drained = true;
+                    break;
+                }
+            }
+        }
+        candidate.sent = pcm.len() as u64;
+        self.install(id, Some(candidate), false, 0)?;
+        let channel = self.slots[id].as_mut().unwrap();
+        begin(
+            id as u32,
+            channel.epoch,
+            channel.program.sample_rate(),
+            u32::from(channel.program.channels()),
+            channel.volume,
+            0,
+        );
+        channel.started = true;
+        samples(id as u32, channel.epoch, &pcm, channel.drained);
+        Ok(())
+    }
     fn stop(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
         let id = Self::se(channel)?;
         self.release(id);

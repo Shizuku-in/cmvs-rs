@@ -69,6 +69,30 @@ fn single_file_loop_and_exhausted_source_are_stable() {
     }
 }
 #[test]
+fn restart_rewinds_active_and_exhausted_sources_with_independent_loop_control() {
+    let expected = samples(FIRST);
+    for consumed in [0, 123, expected.len() + 1] {
+        let mut old = VorbisProgram::new(FIRST.to_vec(), None, false).unwrap();
+        for _ in 0..consumed {
+            old.next_sample().unwrap();
+        }
+        let mut restarted = old.restarted(true).unwrap();
+        for _ in 0..2 {
+            for &sample in &expected {
+                assert_eq!(restarted.next_sample().unwrap(), Some(sample));
+            }
+        }
+        assert_eq!(old.next_sample().unwrap(), expected.get(consumed).copied());
+        let mut once = restarted.restarted(false).unwrap();
+        for &sample in &expected {
+            assert_eq!(once.next_sample().unwrap(), Some(sample));
+        }
+        assert_eq!(once.next_sample().unwrap(), None);
+        assert_eq!(restarted.next_sample().unwrap(), Some(expected[0]));
+    }
+}
+
+#[test]
 fn malformed_headers_and_packets_fail_before_output() {
     for bytes in [vec![], b"OggS".to_vec(), FIRST[..100].to_vec()] {
         assert!(VorbisProgram::new(bytes, None, false).is_err());
@@ -190,6 +214,16 @@ fn native_device_smoke() -> Result<(), Box<dyn std::error::Error>> {
             .is_some_and(|position| position > before)
     );
     assert_eq!(audio.se_position(1)?, None);
+    let before_restart = audio.se_position(0)?.unwrap();
+    audio.restart_se(0, true)?;
+    assert!(audio.se_position(0)?.unwrap() < before_restart);
+    audio.restart_se(1, false)?; // prepared channel also starts from the beginning
+    pump(&mut audio)?;
+    assert!(audio.se_position(0)?.is_some());
+    assert_eq!(audio.se_position(1)?, None);
+    audio.restart_se(5, false)?; // empty channel stays empty
+    assert_eq!(audio.se_position(5)?, None);
+    assert!(audio.restart_se(6, false).is_err());
     audio.configure_se(&Default::default())?;
     assert_eq!(audio.se_position(0)?, None);
     assert_eq!(audio.se_position(1)?, None);
