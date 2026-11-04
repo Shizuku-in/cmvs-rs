@@ -202,7 +202,7 @@ fn v1_stream(objects: &[(u16, Option<u16>, Vec<u8>)]) -> Vec<u8> {
 }
 
 #[test]
-fn text_v1_scene_v1_wire_records_roundtrip_and_reject_modern_or_out_of_range_state() {
+fn text_v1_scene_v1_wire_records_roundtrip_and_reject_unsupported_or_out_of_range_state() {
     use cmvs_rs::snapshot::SnapshotLayout;
     let layout = SnapshotLayout::TextV1SceneV1;
     let mut text = 1u16.to_le_bytes().to_vec();

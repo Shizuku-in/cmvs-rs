@@ -237,10 +237,10 @@ fn effect_record_supported(profile: &crate::profile::EngineProfile, body: &[u8])
 
 /// Writers 20110525 0x1400332e0, 20120309 0x140033e60, 20130131 0x1400330b0
 /// and 20140217 0x1400375d0 visit 512 children.
-/// Button-list records are absent or not enabled for these older layouts.
-fn validate_20130131_records<'a>(
+/// Button-list records are absent or not enabled for these four builds.
+fn validate_512_child_slots_without_button_lists<'a>(
     scenes: impl Iterator<Item = &'a SavedScene>,
-    has_lists: bool,
+    has_button_lists: bool,
 ) -> Result<(), Box<dyn Error>> {
     fn scene_supported(scene: &SavedScene) -> bool {
         scene
@@ -248,7 +248,7 @@ fn validate_20130131_records<'a>(
             .iter()
             .all(|(&slot, child)| slot < 512 && scene_supported(child))
     }
-    if has_lists {
+    if has_button_lists {
         return Err("button-list snapshot records are not supported for this build".into());
     }
     if !scenes.into_iter().all(scene_supported) {
@@ -288,7 +288,7 @@ impl Startup<'_> {
             self.gate.selection().profile.id.as_str(),
             "cmvs-20110525" | "cmvs-20120309" | "cmvs-20130131" | "cmvs-20140217"
         ) {
-            validate_20130131_records(
+            validate_512_child_slots_without_button_lists(
                 snapshot
                     .objects
                     .values()
@@ -1127,15 +1127,21 @@ mod layout_tests {
     }
 
     #[test]
-    fn older_snapshot_rejects_lists_and_nested_children_beyond_its_table() {
+    fn snapshot_with_512_child_slots_rejects_button_lists_and_out_of_range_nested_children() {
         let leaf = SavedScene::from_object(&SceneObject::default()).unwrap();
         let mut parent = leaf.clone();
         parent.children.insert(511, leaf.clone());
-        assert!(validate_20130131_records(std::iter::once(&parent), false).is_ok());
-        assert!(validate_20130131_records(std::iter::once(&parent), true).is_err());
+        assert!(
+            validate_512_child_slots_without_button_lists(std::iter::once(&parent), false).is_ok()
+        );
+        assert!(
+            validate_512_child_slots_without_button_lists(std::iter::once(&parent), true).is_err()
+        );
         let mut nested = leaf.clone();
         nested.children.insert(512, leaf);
         parent.children.insert(0, nested);
-        assert!(validate_20130131_records(std::iter::once(&parent), false).is_err());
+        assert!(
+            validate_512_child_slots_without_button_lists(std::iter::once(&parent), false).is_err()
+        );
     }
 }

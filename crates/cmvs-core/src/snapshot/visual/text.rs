@@ -314,7 +314,7 @@ mod tests {
         assert_eq!(glyph.outline, [2, 0xdeadbeef]);
         assert!(glyph.shown && !glyph.active && glyph.opacity == 255);
         assert_eq!(encode(&text).unwrap(), bytes);
-        // The older writer omits the entire 208-byte C block, without changing
+        // The text v2 writer omits the entire 208-byte C block, without changing
         // the 44-byte glyph descriptors. A profile must choose the matching codec.
         let mut v2 = bytes.clone();
         v2[..2].copy_from_slice(&2u16.to_le_bytes());

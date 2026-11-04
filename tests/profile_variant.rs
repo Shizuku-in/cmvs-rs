@@ -91,7 +91,7 @@ fn asukimi_queries_use_the_down_edge_and_extra_actions_can_be_consumed() {
 }
 
 #[test]
-fn modern_font_bindings_are_limited_to_the_inspected_commands() {
+fn font_cells_bindings_are_limited_to_the_inspected_commands() {
     let remake = Registry::builtin().profile("cmvs-20221105").unwrap();
     for command in [0x2a8, 0x2ae] {
         assert_eq!(

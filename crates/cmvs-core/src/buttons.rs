@@ -544,12 +544,12 @@ impl ButtonHost {
             if count > 4096 || body.len() != 12 + 104 * count {
                 return Err("invalid v1 button record length");
             }
-            let mut modern = 0x20000u32.to_le_bytes().to_vec();
+            let mut v2_record = 0x20000u32.to_le_bytes().to_vec();
             for size in self.screen_size.pixels() {
-                modern.extend(size.to_le_bytes());
+                v2_record.extend(size.to_le_bytes());
             }
-            modern.extend(&body[4..]);
-            converted.push((slot, modern));
+            v2_record.extend(&body[4..]);
+            converted.push((slot, v2_record));
         }
         let records: Vec<_> = converted
             .iter()

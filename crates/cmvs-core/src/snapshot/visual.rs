@@ -540,13 +540,13 @@ impl SavedScene {
         }
         *nodes += 1;
         let mut r = Reader::new(bytes);
-        let extended = layout == SnapshotLayout::TextV3SceneV4;
+        let scene_v4 = layout == SnapshotLayout::TextV3SceneV4;
         let text_v1_scene_v1 = layout == SnapshotLayout::TextV1SceneV1;
         if r.u16()? != 0xffff
             || r.u16()?
                 != if text_v1_scene_v1 {
                     1
-                } else if extended {
+                } else if scene_v4 {
                     4
                 } else {
                     3
@@ -554,7 +554,7 @@ impl SavedScene {
         {
             return Err(FormatError("unsupported snapshot scene version"));
         }
-        let h = if extended {
+        let h = if scene_v4 {
             let h = r.words::<5>()?;
             [h[0], h[1], h[2], 0, 0, 0, h[3], h[4]]
         } else if text_v1_scene_v1 {
@@ -646,7 +646,7 @@ impl SavedScene {
         layout: SnapshotLayout,
     ) -> Result<Vec<u8>, FormatError> {
         let mut out = 0xffffu16.to_le_bytes().to_vec();
-        let extended = layout == SnapshotLayout::TextV3SceneV4;
+        let scene_v4 = layout == SnapshotLayout::TextV3SceneV4;
         let text_v1_scene_v1 = layout == SnapshotLayout::TextV1SceneV1;
         if text_v1_scene_v1 && (self.collision_vertices.is_some() || self.effect_words != [0; 11]) {
             return Err(FormatError(
@@ -656,7 +656,7 @@ impl SavedScene {
         out.extend(
             if text_v1_scene_v1 {
                 1u16
-            } else if extended {
+            } else if scene_v4 {
                 4u16
             } else {
                 3u16
@@ -673,7 +673,7 @@ impl SavedScene {
             self.logical_size[0],
             self.logical_size[1],
         ];
-        if extended {
+        if scene_v4 {
             words(&mut out, &header[..3]);
             words(&mut out, &header[6..]);
         } else if text_v1_scene_v1 {

@@ -91,7 +91,7 @@ fn cli_discovers_startup_beside_cpz7_and_respects_explicit_overrides() {
     let archive = root.join("script.cpz");
     let start = root.join("start.ps3");
     let explicit_start = root.join("custom.ps3");
-    let legacy = root.join("legacy.cpz");
+    let cpz6 = root.join("cpz6.cpz");
     fs::write(&archive, hex(include_str!("fixtures/cpz7-keyed.hex"))).unwrap();
     let run = |args: &[&std::ffi::OsStr]| {
         Command::new(env!("CARGO_BIN_EXE_cmvs-cpz"))
@@ -149,13 +149,9 @@ fn cli_discovers_startup_beside_cpz7_and_respects_explicit_overrides() {
         .status
         .success()
     );
-    fs::write(&legacy, hex(include_str!("fixtures/cpz6-0.hex"))).unwrap();
-    assert!(
-        run(&["--list".as_ref(), legacy.as_os_str()])
-            .status
-            .success()
-    );
-    for path in [&archive, &start, &explicit_start, &legacy] {
+    fs::write(&cpz6, hex(include_str!("fixtures/cpz6-0.hex"))).unwrap();
+    assert!(run(&["--list".as_ref(), cpz6.as_os_str()]).status.success());
+    for path in [&archive, &start, &explicit_start, &cpz6] {
         fs::remove_file(path).unwrap();
     }
     fs::remove_dir(root).unwrap();
@@ -218,7 +214,7 @@ fn startup_inspection_preserves_key_order_and_rejects_dynamic_or_ambiguous_keys(
 }
 
 #[test]
-fn startup_archive_reader_uses_per_archive_keys_and_keeps_legacy_detection() {
+fn startup_archive_reader_uses_per_archive_keys_and_detects_cpz6() {
     use cmvs_rs::script_control::{ArchiveScripts, archive_index_from_start};
     let mut code = Vec::new();
     push(&mut code, false, 13);
@@ -235,11 +231,11 @@ fn startup_archive_reader_uses_per_archive_keys_and_keeps_legacy_detection() {
     );
     assert!(ArchiveScripts::from_start(Cursor::new(bytes.clone()), &script, b"script.cpz").is_ok());
     assert!(archive_index_from_start(&mut Cursor::new(bytes), &script, b"other.cpz").is_err());
-    let legacy_start = memory_script(0x2000u16.to_le_bytes().to_vec(), b"");
-    let mut legacy = Cursor::new(hex(include_str!("fixtures/cpz6-0.hex")));
-    let index = archive_index_from_start(&mut legacy, &legacy_start, b"legacy.cpz").unwrap();
+    let cpz6_start = memory_script(0x2000u16.to_le_bytes().to_vec(), b"");
+    let mut cpz6 = Cursor::new(hex(include_str!("fixtures/cpz6-0.hex")));
+    let index = archive_index_from_start(&mut cpz6, &cpz6_start, b"cpz6.cpz").unwrap();
     assert_eq!(index.version(), cmvs_rs::cpz::ArchiveVersion::Cpz6);
-    assert!(index.read_entry(&mut legacy, 0).is_ok());
+    assert!(index.read_entry(&mut cpz6, 0).is_ok());
 }
 
 #[test]
