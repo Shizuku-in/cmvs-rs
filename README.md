@@ -1,6 +1,6 @@
 # cmvs-rs
 
-[简体中文](README.md) | [English](README.en.md)
+简体中文 | [English](README.en.md)
 
 用 **Rust** 研究并重实现 Purple SOFTWARE 的 CMVS 引擎。
 
