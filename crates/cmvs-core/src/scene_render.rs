@@ -177,6 +177,16 @@ fn check(words: &[u32; 22], projected: bool) -> Result<(), FormatError> {
     Ok(())
 }
 
+/// Harouse x86 0x411120's jump table sends both modes 0 and 1 to 0x411142.
+/// Keep the stored mode for child matching; normalize only the validation copy.
+fn check_screen(words: &[u32; 22], allow_mode_one: bool) -> Result<(), FormatError> {
+    let mut checked = *words;
+    if allow_mode_one && checked[0] == 1 {
+        checked[0] = 0;
+    }
+    check(&checked, false)
+}
+
 /// Order key as inserted by 0x14003ddd0: the layer word as i32, converted to f32.
 fn order(words: &[u32; 22]) -> f32 {
     words[10] as i32 as f32
@@ -937,7 +947,7 @@ pub fn prepare_scene<'a>(
             }
             _ => {}
         }
-        check(d, false)?;
+        check_screen(d, scene.allow_screen_coordinates_one)?;
         let position = [d[8] as i32, d[9] as i32].map(i64::from);
         let mask = slot.and_then(|slot| scene.mask_on(slot));
         let layer = match object
@@ -986,7 +996,7 @@ pub fn prepare_scene<'a>(
                     continue;
                 }
                 unit_screen_scale(child, scene.screen_size())?;
-                check(words, false)?;
+                check_screen(words, scene.allow_screen_coordinates_one)?;
                 let Some(layer) = child_layer(object, d, child, words)? else {
                     continue;
                 };
@@ -1585,6 +1595,87 @@ mod scale_tests {
             pixels: RgbaImage::new(2, 2, [255, 0, 0, 255].repeat(4)).unwrap(),
             surface: false,
         }
+    }
+
+    #[test]
+    fn inspected_screen_mode_one_draws_parent_and_inherited_children_after_restore() {
+        let mut draw = DrawState::default();
+        draw.words[0] = 1;
+        draw.words[4..6].fill(1);
+        draw.words[8] = 1;
+        let mut child_draw = draw.clone();
+        child_draw.words[17] = 128;
+        let child = SceneObject {
+            flags: 3,
+            draw: Some(child_draw.clone()),
+            ..Default::default()
+        };
+        // A child with another coordinate mode does not join this parent's queue.
+        child_draw.words[0] = 0;
+        child_draw.words[8] = 0;
+        let different_mode = SceneObject {
+            flags: 3,
+            draw: Some(child_draw),
+            ..Default::default()
+        };
+        let parent = SceneObject {
+            flags: 0x8000_0000,
+            image: Some(image()),
+            draw: Some(draw),
+            children: std::collections::BTreeMap::from([(0, child), (1, different_mode)]),
+            ..Default::default()
+        };
+        let profile = crate::profile::Registry::builtin()
+            .profile("cmvs-20080719")
+            .unwrap();
+        let mut scene = SceneHost::for_profile(profile);
+        scene.restore(
+            Default::default(),
+            std::collections::BTreeMap::from([(10, parent.clone())]),
+            None,
+            None,
+            None,
+            None,
+        );
+        let frame = render(&scene, 4, 1).unwrap();
+        let rgb: Vec<_> = frame
+            .pixels()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| p[..3].to_vec())
+            .collect();
+        assert_eq!(rgb, [[0, 0, 0], [255, 0, 0], [128, 0, 0], [0, 0, 0]]);
+        assert_eq!(scene.object(10).unwrap().draw.as_ref().unwrap().words[0], 1);
+        for change in 0..3 {
+            let mut unknown = profile.clone();
+            match change {
+                0 => unknown.id = "uninspected".into(),
+                1 => unknown.binaries[0].sha256 = [0; 32],
+                _ => unknown.base = Some("uninspected".into()),
+            }
+            let mut scene = SceneHost::for_profile(&unknown);
+            scene.restore(
+                Default::default(),
+                std::collections::BTreeMap::from([(10, parent.clone())]),
+                None,
+                None,
+                None,
+                None,
+            );
+            assert!(render(&scene, 4, 1).is_err());
+        }
+        let mut invalid = parent;
+        invalid.draw.as_mut().unwrap().words[1] = 3;
+        scene.restore(
+            Default::default(),
+            std::collections::BTreeMap::from([(10, invalid)]),
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!(render(&scene, 4, 1).is_err());
     }
 
     #[test]

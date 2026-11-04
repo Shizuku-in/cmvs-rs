@@ -124,6 +124,7 @@ pub(super) fn range(mode: u32) -> f32 {
 }
 
 impl ParticleEffect {
+    #[cfg(test)]
     pub(crate) fn new(
         mode: u32,
         parameters: [u32; 4],
@@ -134,7 +135,7 @@ impl ParticleEffect {
         Self::new_with_arithmetic(mode, parameters, count, pool, random, false)
     }
 
-    fn new_with_arithmetic(
+    pub(crate) fn new_with_arithmetic(
         mode: u32,
         parameters: [u32; 4],
         count: u32,
@@ -331,8 +332,7 @@ impl SceneHost {
             &mut candidate_random,
             x87_arithmetic,
         );
-        // The inspected x87 build has no supported snapshot layout.
-        effect.template = if x87_arithmetic { None } else { template };
+        effect.template = template;
         call.complete(0x4020)?;
         self.falling_effects.remove(&(slot as u8));
         self.collision_effects.remove(&(slot as u8));

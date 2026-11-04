@@ -33,69 +33,72 @@ mod tests {
     #[test]
     fn v1_world_tracks_restore_and_continue_without_losing_axes_or_timing() {
         use crate::scene::{MotionKey, MotionPlayback, WorldMotion};
-        let layout = SnapshotLayout::TextV1SceneV1;
-        for mode in [0x20, 0x21, 0x00c80030, 0x00c80040] {
-            let mut track = WorldMotion {
-                playback: Some(MotionPlayback {
-                    base: [1f32.to_bits(), 2f32.to_bits(), 0x80000000],
-                    start: 0,
-                    current: 0,
-                    elapsed: 100,
-                }),
-                ..Default::default()
-            };
-            track.keys[0] = MotionKey {
-                next: -1,
-                xyz: [4f32.to_bits(), 5f32.to_bits(), 6f32.to_bits()],
-                mode,
-                duration: 400,
-            };
-            let mut object = SceneObject {
-                draw: Some(DrawState {
-                    world_motion: Some(Box::new(track.clone())),
+        for layout in [SnapshotLayout::TextV1SceneV1, SnapshotLayout::TextV1SceneV2] {
+            for mode in [0x20, 0x21, 0x00c80030, 0x00c80040] {
+                let mut track = WorldMotion {
+                    playback: Some(MotionPlayback {
+                        base: [1f32.to_bits(), 2f32.to_bits(), 0x80000000],
+                        start: 0,
+                        current: 0,
+                        elapsed: 100,
+                    }),
                     ..Default::default()
-                }),
-                ..Default::default()
-            };
-            object.draw.as_mut().unwrap().words[11..14]
-                .copy_from_slice(&track.playback.as_ref().unwrap().base);
-            let saved = SavedScene::from_object(&object).unwrap();
-            let bytes = saved.encode_with_layout(layout).unwrap();
-            let decoded = SavedScene::decode_with_layout(&bytes, 0, &mut 0, layout).unwrap();
-            let loaded = decoded.load(&mut NoImages, &mut 0).unwrap();
-            assert_eq!(
-                loaded.draw.as_ref().unwrap().world_motion.as_deref(),
-                Some(&track)
-            );
-            let mut scene =
-                SceneHost::snapshot_preview(ClearState::default(), BTreeMap::from([(20, loaded)]));
-            scene.advance_frame(100);
-            let draw = scene.object(20).unwrap().draw.as_ref().unwrap();
-            let middle = match mode {
-                0x20 => 3f32,
-                0x21 => 2.25,
-                0x00c80040 => 2.0,
-                _ => 0.0,
-            };
-            assert_eq!(
-                &draw.words[11..14],
-                &[1f32.to_bits(), middle.to_bits(), 0x80000000]
-            );
-            if mode == 0x00c80040 {
-                scene.advance_frame(100);
-                let draw = scene.object(20).unwrap().draw.as_ref().unwrap();
+                };
+                track.keys[0] = MotionKey {
+                    next: -1,
+                    xyz: [4f32.to_bits(), 5f32.to_bits(), 6f32.to_bits()],
+                    mode,
+                    duration: 400,
+                };
+                let mut object = SceneObject {
+                    draw: Some(DrawState {
+                        world_motion: Some(Box::new(track.clone())),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                };
+                object.draw.as_mut().unwrap().words[11..14]
+                    .copy_from_slice(&track.playback.as_ref().unwrap().base);
+                let saved = SavedScene::from_object(&object).unwrap();
+                let bytes = saved.encode_with_layout(layout).unwrap();
+                let decoded = SavedScene::decode_with_layout(&bytes, 0, &mut 0, layout).unwrap();
+                let loaded = decoded.load(&mut NoImages, &mut 0).unwrap();
                 assert_eq!(
-                    &draw.words[11..14],
-                    &[(-1f32).to_bits(), 2f32.to_bits(), 0x80000000]
+                    loaded.draw.as_ref().unwrap().world_motion.as_deref(),
+                    Some(&track)
+                );
+                let mut scene = SceneHost::snapshot_preview(
+                    ClearState::default(),
+                    BTreeMap::from([(20, loaded)]),
                 );
                 scene.advance_frame(100);
-            } else {
-                scene.advance_frame(200);
+                let draw = scene.object(20).unwrap().draw.as_ref().unwrap();
+                let middle = match mode {
+                    0x20 => 3f32,
+                    0x21 => 2.25,
+                    0x00c80040 => 2.0,
+                    _ => 0.0,
+                };
+                assert_eq!(
+                    &draw.words[11..14],
+                    &[1f32.to_bits(), middle.to_bits(), 0x80000000]
+                );
+                if mode == 0x00c80040 {
+                    scene.advance_frame(100);
+                    let draw = scene.object(20).unwrap().draw.as_ref().unwrap();
+                    assert_eq!(
+                        &draw.words[11..14],
+                        &[(-1f32).to_bits(), 2f32.to_bits(), 0x80000000]
+                    );
+                    scene.advance_frame(100);
+                } else {
+                    scene.advance_frame(200);
+                }
+                let draw = scene.object(20).unwrap().draw.as_ref().unwrap();
+                assert_eq!(&draw.words[11..14], &track.keys[0].xyz);
+                assert!(draw.world_motion.is_none());
+                assert!(SavedScene::decode(&bytes, 0, &mut 0).is_err());
             }
-            let draw = scene.object(20).unwrap().draw.as_ref().unwrap();
-            assert_eq!(&draw.words[11..14], &track.keys[0].xyz);
-            assert!(draw.world_motion.is_none());
-            assert!(SavedScene::decode(&bytes, 0, &mut 0).is_err());
         }
     }
 
@@ -557,6 +560,8 @@ impl SavedScene {
             || r.u16()?
                 != if text_v1_scene_v1 {
                     1
+                } else if layout == SnapshotLayout::TextV1SceneV2 {
+                    2
                 } else if scene_v4 {
                     4
                 } else {
@@ -568,7 +573,7 @@ impl SavedScene {
         let h = if scene_v4 {
             let h = r.words::<5>()?;
             [h[0], h[1], h[2], 0, 0, 0, h[3], h[4]]
-        } else if text_v1_scene_v1 {
+        } else if layout.text_version() == 1 {
             let h = r.words::<6>()?;
             [h[0], h[1], h[2], h[3], 0, 0, h[4], h[5]]
         } else {
@@ -590,7 +595,7 @@ impl SavedScene {
                 match tag {
                     0x740 => image = Some(SavedImage::decode_with_layout(bytes, layout)?),
                     0x741 => secondary_image = Some(SavedImage::decode_with_layout(bytes, layout)?),
-                    0x749 if !text_v1_scene_v1 => {
+                    0x749 if layout.text_version() != 1 => {
                         collision_vertices = Some(collision::decode(bytes)?)
                     }
                     0x780 => draw = Some(draw::decode_with_layout(bytes, layout)?),
@@ -659,6 +664,9 @@ impl SavedScene {
         let mut out = 0xffffu16.to_le_bytes().to_vec();
         let scene_v4 = layout == SnapshotLayout::TextV3SceneV4;
         let text_v1_scene_v1 = layout == SnapshotLayout::TextV1SceneV1;
+        if layout == SnapshotLayout::TextV1SceneV2 && self.collision_vertices.is_some() {
+            return Err(FormatError("scene v2 has no collision mesh representation"));
+        }
         if text_v1_scene_v1 && (self.collision_vertices.is_some() || self.effect_words != [0; 11]) {
             return Err(FormatError(
                 "scene v1 has no collision or image-change representation",
@@ -667,6 +675,8 @@ impl SavedScene {
         out.extend(
             if text_v1_scene_v1 {
                 1u16
+            } else if layout == SnapshotLayout::TextV1SceneV2 {
+                2u16
             } else if scene_v4 {
                 4u16
             } else {
@@ -687,7 +697,7 @@ impl SavedScene {
         if scene_v4 {
             words(&mut out, &header[..3]);
             words(&mut out, &header[6..]);
-        } else if text_v1_scene_v1 {
+        } else if layout.text_version() == 1 {
             words(&mut out, &header[..4]);
             words(&mut out, &header[6..]);
         } else {

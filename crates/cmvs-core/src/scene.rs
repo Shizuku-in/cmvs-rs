@@ -340,6 +340,7 @@ pub struct SceneHost {
     child_slots: ChildSlots,
     allow_filter_mode_one: bool,
     allow_legacy_sine_modes: bool,
+    pub(crate) allow_screen_coordinates_one: bool,
     screen_size: crate::viewport::ScreenSize,
     pub(crate) fragment_effects: BTreeMap<u8, crate::effect_objects::FragmentEffect>,
     pub(crate) collision_effects: BTreeMap<u8, crate::effect_objects::CollisionEffect>,
@@ -362,6 +363,7 @@ impl SceneHost {
             child_slots: ChildSlots::for_profile(profile),
             allow_filter_mode_one: profile.is_inspected_20071117(),
             allow_legacy_sine_modes: profile.uses_legacy_sine_modes(),
+            allow_screen_coordinates_one: profile.is_inspected_20080719(),
             ..Self::default()
         }
     }
@@ -1203,6 +1205,7 @@ impl SceneHost {
             child_slots: self.child_slots,
             allow_filter_mode_one: self.allow_filter_mode_one,
             allow_legacy_sine_modes: self.allow_legacy_sine_modes,
+            allow_screen_coordinates_one: self.allow_screen_coordinates_one,
             particle_effects: Default::default(),
             falling_effects: Default::default(),
             collision_effects: Default::default(),

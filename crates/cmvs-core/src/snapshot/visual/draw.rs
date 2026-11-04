@@ -35,7 +35,7 @@ enum AnimationSnapshotFormat {
 
 impl AnimationSnapshotFormat {
     fn for_layout(layout: SnapshotLayout) -> Self {
-        if layout == SnapshotLayout::TextV1SceneV1 {
+        if layout.text_version() == 1 {
             Self::V1
         } else {
             Self::V2
@@ -114,7 +114,7 @@ pub(super) fn decode_with_layout(
     }
     if r.peek() == Some(0x795) {
         r.u16()?;
-        let allow_legacy_sine_modes = text_v1_scene_v1;
+        let allow_legacy_sine_modes = layout.text_version() == 1;
         out.world_motion = Some(Box::new(world(r.chunk()?, allow_legacy_sine_modes)?));
     }
     if r.peek().is_some_and(|tag| (0x790..=0x795).contains(&tag)) {

@@ -1910,77 +1910,90 @@ fn ps2_canvas_queries_pointer_and_v2_saves_keep_four_by_three_coordinates() {
 }
 
 #[test]
-fn asukimi_snapshot_roundtrip_uses_v1_records_and_zero_css1_identity() {
+fn old_snapshot_roundtrip_uses_build_layout_and_zero_css1_identity() {
     use cmvs_rs::{
         save::Csv2Save,
         snapshot::{EngineSnapshot, SnapshotLayout},
         system_save::Css1Save,
     };
-    let mut code = string_call(0x2160);
-    commands::command(&mut code, 0x2128, &[]);
-    commands::command(&mut code, 0x2140, &[0, 0, 0, 0, 800, 600]);
-    commands::command(&mut code, 0x2020, &[20]);
-    commands::command(&mut code, 0x2040, &[20]);
-    commands::command(&mut code, 0x2073, &[20, u32::MAX, 2f32.to_bits()]);
-    let pc = code.len();
-    commands::command(&mut code, 0x22b2, &[]);
-    commands::command(&mut code, 0x2073, &[20, u32::MAX, 9f32.to_bits()]);
-    let end = code.len();
-    commands::command(&mut code, 0x2000, &[]);
-    let root = Root::new("asukimi-v1-save", &code, b"Synthetic\0");
-    fs::rename(
-        root.0.join("data/pack/start.ps3"),
-        root.0.join("data/pack/start.ps2"),
-    )
-    .unwrap();
-    fs::write(root.0.join("save/system.dat"), auto_resume_save(0)).unwrap();
-    let game = Registry::builtin()
-        .identify_game(&root.0, Some("cmvs-20071117"))
+    for (profile, layout) in [
+        ("cmvs-20071117", SnapshotLayout::TextV1SceneV1),
+        ("cmvs-20080719", SnapshotLayout::TextV1SceneV2),
+    ] {
+        let mut code = string_call(0x2160);
+        commands::command(&mut code, 0x2128, &[]);
+        commands::command(&mut code, 0x2140, &[0, 0, 0, 0, 800, 600]);
+        commands::command(&mut code, 0x2020, &[20]);
+        commands::command(&mut code, 0x2040, &[20]);
+        commands::command(&mut code, 0x2073, &[20, u32::MAX, 2f32.to_bits()]);
+        let pc = code.len();
+        commands::command(&mut code, 0x22b2, &[]);
+        commands::command(&mut code, 0x2073, &[20, u32::MAX, 9f32.to_bits()]);
+        let end = code.len();
+        commands::command(&mut code, 0x2000, &[]);
+        let root = Root::new(profile, &code, b"Synthetic\0");
+        fs::rename(
+            root.0.join("data/pack/start.ps3"),
+            root.0.join("data/pack/start.ps2"),
+        )
         .unwrap();
-    let script = load_start(&root.0, &game.files).unwrap();
-    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
-    let user = root.0.with_extension("user");
-    run.set_user_data_directory(&user).unwrap();
-    let mut backend = RecordingBackend::default();
-    while run.machine().pc() != pc {
-        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+        fs::write(root.0.join("save/system.dat"), auto_resume_save(0)).unwrap();
+        let game = Registry::builtin()
+            .identify_game(&root.0, Some(profile))
+            .unwrap();
+        let script = load_start(&root.0, &game.files).unwrap();
+        let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+        let user = root.0.with_extension("user");
+        run.set_user_data_directory(&user).unwrap();
+        assert_eq!(run.screen_size(), [800, 600]);
+        let frame = run.render_frame().unwrap();
+        assert_eq!([frame.width(), frame.height()], [800, 600]);
+
+        let mut backend = RecordingBackend::default();
+        backend.set_screen_size(cmvs_rs::viewport::ScreenSize::new([800, 600]).unwrap());
+        while run.machine().pc() != pc {
+            assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+        }
+        assert_eq!(
+            run.tick(&mut backend).unwrap(),
+            StartupEvent::SnapshotCaptured
+        );
+        assert!(run.save_slot(3).unwrap());
+        let bytes = fs::read(user.join("save003.dat")).unwrap();
+        let save = Csv2Save::decode(&bytes).unwrap();
+        let parsed = EngineSnapshot::decode_with_layout(&save.snapshot, layout).unwrap();
+        assert!(parsed.record_6e0.is_empty());
+        assert_eq!(parsed.texts[0].as_ref().unwrap().logical_size, [0, 0]);
+        while run.machine().pc() != end {
+            run.tick(&mut backend).unwrap();
+        }
+        run.load_slot(3, &mut backend).unwrap();
+        assert_eq!(run.machine().pc(), pc + 2);
+        assert_eq!(run.machine().current_name(), b"start.ps2");
+        assert_eq!(
+            run.scene().object(20).unwrap().draw.as_ref().unwrap().words[12],
+            2f32.to_bits()
+        );
+        assert_eq!(
+            run.messages().text(0).unwrap().logical_size,
+            run.messages().screen_size().map(|v| v as i32)
+        );
+        assert_eq!(run.scene().screen_size(), [800, 600]);
+        assert!(run.save_slot(4).unwrap());
+        let second = Csv2Save::decode(&fs::read(user.join("save004.dat")).unwrap()).unwrap();
+        assert_eq!(second.snapshot, save.snapshot);
+        assert_eq!(second.script_image, save.script_image);
+        assert!(user.join("save998.dat").is_file());
+        assert_eq!(
+            Css1Save::decode(&fs::read(user.join("system.dat")).unwrap())
+                .unwrap()
+                .layout()
+                .game_id,
+            0
+        );
+        drop(run);
+        fs::remove_dir_all(user).unwrap();
     }
-    assert_eq!(
-        run.tick(&mut backend).unwrap(),
-        StartupEvent::SnapshotCaptured
-    );
-    assert!(run.save_slot(3).unwrap());
-    let bytes = fs::read(user.join("save003.dat")).unwrap();
-    let save = Csv2Save::decode(&bytes).unwrap();
-    let parsed =
-        EngineSnapshot::decode_with_layout(&save.snapshot, SnapshotLayout::TextV1SceneV1).unwrap();
-    assert!(parsed.record_6e0.is_empty());
-    assert_eq!(parsed.texts[0].as_ref().unwrap().logical_size, [0, 0]);
-    while run.machine().pc() != end {
-        run.tick(&mut backend).unwrap();
-    }
-    run.load_slot(3, &mut backend).unwrap();
-    assert_eq!(run.machine().pc(), pc + 2);
-    assert_eq!(run.machine().current_name(), b"start.ps2");
-    assert_eq!(
-        run.scene().object(20).unwrap().draw.as_ref().unwrap().words[12],
-        2f32.to_bits()
-    );
-    assert_eq!(run.messages().text(0).unwrap().logical_size, [800, 600]);
-    assert!(run.save_slot(4).unwrap());
-    let second = Csv2Save::decode(&fs::read(user.join("save004.dat")).unwrap()).unwrap();
-    assert_eq!(second.snapshot, save.snapshot);
-    assert_eq!(second.script_image, save.script_image);
-    assert!(user.join("save998.dat").is_file());
-    assert_eq!(
-        Css1Save::decode(&fs::read(user.join("system.dat")).unwrap())
-            .unwrap()
-            .layout()
-            .game_id,
-        0
-    );
-    drop(run);
-    fs::remove_dir_all(user).unwrap();
 }
 
 #[test]

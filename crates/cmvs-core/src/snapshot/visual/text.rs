@@ -32,18 +32,20 @@ pub(crate) fn decode_with_layout(
         return Err(FormatError("snapshot font face exceeds native capacity"));
     }
     // V1 reconstructs at the current device size; no size is stored in its record.
-    let logical_size = if layout == SnapshotLayout::TextV1SceneV1 {
+    let logical_size = if layout.text_version() == 1 {
         [0; 2]
     } else {
         r.words::<2>()?.map(|v| v as i32)
     };
-    if layout != SnapshotLayout::TextV1SceneV1 && logical_size.iter().any(|&v| v <= 0) {
+    if layout.text_version() != 1 && logical_size.iter().any(|&v| v <= 0) {
         return Err(FormatError("snapshot text logical size must be positive"));
     }
     let a = r.take(156)?;
     let b = r.take(148)?;
     let c = match layout {
-        SnapshotLayout::TextV1SceneV1 | SnapshotLayout::TextV2 => &[0; 208],
+        SnapshotLayout::TextV1SceneV1 | SnapshotLayout::TextV1SceneV2 | SnapshotLayout::TextV2 => {
+            &[0; 208]
+        }
         SnapshotLayout::TextV3 | SnapshotLayout::TextV3SceneV4 => r.take(208)?,
     };
     let word = |block: &[u8], at: usize| u32::from_le_bytes(block[at..at + 4].try_into().unwrap());
@@ -239,7 +241,7 @@ pub(crate) fn encode_with_layout(
     out.extend(text.glyph_capacity.to_le_bytes());
     out.extend(&text.font_face);
     out.push(0);
-    if layout != SnapshotLayout::TextV1SceneV1 {
+    if layout.text_version() != 1 {
         for size in text.logical_size {
             out.extend((size as u32).to_le_bytes());
         }

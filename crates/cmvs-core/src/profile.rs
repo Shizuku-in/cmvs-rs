@@ -277,17 +277,21 @@ impl EngineProfile {
 
     /// Independently inspected x86 sine interpolation; docs/games/{asukimi,harouse}.
     pub(crate) fn uses_legacy_sine_modes(&self) -> bool {
-        self.is_inspected_20071117()
-            || self.id == "cmvs-20080719"
-                && self.base.as_deref() == Some("cmvs-20160201")
-                && self
-                    .binary(
-                        &crate::digest::parse_hex(
-                            "afe3b3a895e7b3ba5f78e6f6464296f1d028e87307c8de5a568b88fd6086491e",
-                        )
-                        .expect("static SHA-256"),
+        self.is_inspected_20071117() || self.is_inspected_20080719()
+    }
+
+    /// Independently inspected Harouse build; capabilities still bind separately.
+    pub(crate) fn is_inspected_20080719(&self) -> bool {
+        self.id == "cmvs-20080719"
+            && self.base.as_deref() == Some("cmvs-20160201")
+            && self
+                .binary(
+                    &crate::digest::parse_hex(
+                        "afe3b3a895e7b3ba5f78e6f6464296f1d028e87307c8de5a568b88fd6086491e",
                     )
-                    .is_some()
+                    .expect("static SHA-256"),
+                )
+                .is_some()
     }
 
     pub fn binary(&self, sha256: &[u8; 32]) -> Option<&Binary> {

@@ -15,7 +15,7 @@ pub(crate) fn decode_with_layout(
     layout: SnapshotLayout,
 ) -> Result<SavedWindow, FormatError> {
     let mut r = Reader::new(bytes);
-    let text_v1_scene_v1 = layout == SnapshotLayout::TextV1SceneV1;
+    let text_v1_scene_v1 = layout.text_version() == 1;
     let text = usize::from(r.u16()?);
     if text >= if text_v1_scene_v1 { 8 } else { 12 }
         || r.u16()? != if text_v1_scene_v1 { 1 } else { 3 }
@@ -89,7 +89,7 @@ pub(crate) fn encode_with_layout(
     layout: SnapshotLayout,
 ) -> Result<Vec<u8>, crate::FormatError> {
     let state = &window.state;
-    let text_v1_scene_v1 = layout == SnapshotLayout::TextV1SceneV1;
+    let text_v1_scene_v1 = layout.text_version() == 1;
     if text_v1_scene_v1
         && (state.text >= 8
             || state.buttons[16..]

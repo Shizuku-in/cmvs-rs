@@ -160,6 +160,9 @@ fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLa
     if profile.is_inspected_20071117() {
         return Some(SnapshotLayout::TextV1SceneV1);
     }
+    if profile.is_inspected_20080719() {
+        return Some(SnapshotLayout::TextV1SceneV2);
+    }
     if (matches!(
         profile.id.as_str(),
         "cmvs-20110525" | "cmvs-20130131" | "cmvs-20140217" | "cmvs-20150405"
@@ -206,6 +209,7 @@ fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLa
 
 fn effect_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
     (matches!(profile.id.as_str(), "cmvs-20110525" | "cmvs-20171114")
+        || profile.is_inspected_20080719()
         || inspected_20120309(profile)
         || inspected_20221105(profile)
         || (profile.id == "cmvs-20211006"
@@ -231,7 +235,7 @@ fn effect_record_supported(profile: &crate::profile::EngineProfile, body: &[u8])
     effect_layout_supported(profile)
         // These builds' type-5 writer/readers are independently inspected. Other
         // configurations still need their own runtime and snapshot evidence.
-        && (!matches!(profile.id.as_str(), "cmvs-20110525" | "cmvs-20120309" | "cmvs-20211006" | "cmvs-20221105")
+        && (!matches!(profile.id.as_str(), "cmvs-20080719" | "cmvs-20110525" | "cmvs-20120309" | "cmvs-20211006" | "cmvs-20221105")
             || body.get(..4) == Some(&[1, 0, 5, 0]))
 }
 
@@ -259,9 +263,11 @@ fn validate_512_child_slots_without_button_lists<'a>(
 
 impl Startup<'_> {
     pub(super) fn system_save_identifier(&self) -> Option<u32> {
-        // 0x40bdf0 zeroes the CSS1 header and never writes offset 68. This is a
-        // format constant for the inspected build, not a recovered game identifier.
-        if snapshot_layout(self.gate.selection().profile) == Some(SnapshotLayout::TextV1SceneV1) {
+        // 20071117 0x40bdf0 / 20080719 0x40bea0 zero the CSS1 header and never
+        // write offset 68: a format constant, not a recovered game identifier.
+        if self.gate.selection().profile.is_inspected_20071117()
+            || self.gate.selection().profile.is_inspected_20080719()
+        {
             Some(0)
         } else {
             self.bootstrap.settings().get(&0x201d).copied()
@@ -272,15 +278,13 @@ impl Startup<'_> {
         snapshot: &EngineSnapshot,
         layout: SnapshotLayout,
     ) -> Result<(), Box<dyn Error>> {
-        if layout == SnapshotLayout::TextV1SceneV1 {
+        if layout.text_version() == 1 {
             if snapshot.effects[2].is_some() {
                 return Err("old mask snapshot records are not implemented".into());
             }
-            if let Some(&(tag, _)) = snapshot
-                .raw_objects
-                .keys()
-                .find(|&&(tag, _)| matches!(tag, 0x800 | 0x8c8))
-            {
+            if let Some(&(tag, _)) = snapshot.raw_objects.keys().find(|&&(tag, _)| {
+                tag == 0x8c8 || tag == 0x800 && layout == SnapshotLayout::TextV1SceneV1
+            }) {
                 return Err(format!("old snapshot record {tag:#x} is not implemented").into());
             }
         }
@@ -409,7 +413,7 @@ impl Startup<'_> {
                 self.scene.saved_mask(),
                 self.scene.saved_strip(),
             ],
-            record_6e0: if layout == SnapshotLayout::TextV1SceneV1 {
+            record_6e0: if layout.text_version() == 1 {
                 if self.sequence.saved()? != crate::sequence::SequenceHost::default().saved()? {
                     return Err("sequence state has no v1 snapshot representation".into());
                 }
@@ -773,6 +777,7 @@ impl Startup<'_> {
             &mut images,
             &mut restored_random,
             &mut budget,
+            self.gate.selection().profile.is_inspected_20080719(),
         )?;
         // Records 0x8e8 follow 0x700 and bind to the objects just rebuilt.
         let movie_records: Vec<_> = snapshot
@@ -801,7 +806,7 @@ impl Startup<'_> {
         let mut buttons = self.buttons.clone();
         buttons.restore_with_layout(&records(0x8c0), &records(0x8c8), layout)?;
         let mut texts: [Option<_>; TEXT_OBJECTS] = snapshot.texts.clone();
-        if layout == SnapshotLayout::TextV1SceneV1 {
+        if layout.text_version() == 1 {
             for text in texts.iter_mut().flatten() {
                 text.logical_size = self.messages.screen_size().map(|v| v as i32);
             }
@@ -809,7 +814,7 @@ impl Startup<'_> {
         let mut history = self.history.clone();
         history.restore(&snapshot.raw_objects[&(0x540, 0)])?;
         let mut sequence = self.sequence.clone();
-        if layout == SnapshotLayout::TextV1SceneV1 {
+        if layout.text_version() == 1 {
             sequence = crate::sequence::SequenceHost::default();
         } else {
             sequence.restore(&snapshot.record_6e0)?;
@@ -1056,6 +1061,7 @@ mod layout_tests {
         let registry = crate::profile::Registry::builtin();
         for (id, layout) in [
             ("cmvs-20071117", SnapshotLayout::TextV1SceneV1),
+            ("cmvs-20080719", SnapshotLayout::TextV1SceneV2),
             ("cmvs-20110525", SnapshotLayout::TextV2),
             ("cmvs-20120309", SnapshotLayout::TextV2),
             ("cmvs-20130131", SnapshotLayout::TextV2),
@@ -1073,7 +1079,8 @@ mod layout_tests {
                 effect_layout_supported(registry.profile(id).unwrap()),
                 matches!(
                     id,
-                    "cmvs-20110525"
+                    "cmvs-20080719"
+                        | "cmvs-20110525"
                         | "cmvs-20120309"
                         | "cmvs-20171114"
                         | "cmvs-20211006"
@@ -1095,6 +1102,7 @@ mod layout_tests {
     fn restricted_effect_layout_only_accepts_the_inspected_type_five() {
         let registry = crate::profile::Registry::builtin();
         for id in [
+            "cmvs-20080719",
             "cmvs-20110525",
             "cmvs-20120309",
             "cmvs-20211006",
@@ -1113,6 +1121,7 @@ mod layout_tests {
         }
         for id in [
             "cmvs-20071117",
+            "cmvs-20080719",
             "cmvs-20120309",
             "cmvs-20211006",
             "cmvs-20221105",

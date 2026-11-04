@@ -23,6 +23,8 @@ pub use vm_state::VmSnapshot;
 pub enum SnapshotLayout {
     /// Inspected 20071117: text/window/scene v1, draw v3 and a single BGM name.
     TextV1SceneV1,
+    /// Inspected 20080719: text/window v1, scene v2, draw/movie v4, paired BGM.
+    TextV1SceneV2,
     TextV2,
     TextV3,
     /// Text v3, scene v4 with 1024 child slots (REALIVE and verified later builds).
@@ -31,13 +33,13 @@ pub enum SnapshotLayout {
 impl SnapshotLayout {
     pub(crate) fn text_version(self) -> u16 {
         match self {
-            Self::TextV1SceneV1 => 1,
+            Self::TextV1SceneV1 | Self::TextV1SceneV2 => 1,
             Self::TextV2 => 2,
             Self::TextV3 | Self::TextV3SceneV4 => 3,
         }
     }
     pub(crate) fn child_slots(self) -> u16 {
-        if self == Self::TextV1SceneV1 {
+        if self.text_version() == 1 {
             256
         } else if self == Self::TextV3SceneV4 {
             1024

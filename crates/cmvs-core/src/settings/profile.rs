@@ -90,9 +90,9 @@ impl Configuration {
         &self,
         profile: &crate::profile::EngineProfile,
     ) -> Result<crate::viewport::ScreenSize, FormatError> {
-        // ASUKIMI x86 0x404e00 selects the old WINDOW_SIZE schema and calls
-        // 0x403430 with the logical size; docs/games/asukimi.
-        if profile.is_inspected_20071117() {
+        // ASUKIMI 0x404e00 and Harouse 0x40538c select WINDOW_SIZE; Harouse's
+        // 0x40d0f0 sets the logical device size. Evidence: docs/games/{asukimi,harouse}.
+        if profile.is_inspected_20071117() || profile.is_inspected_20080719() {
             let value = |section, key, default| {
                 crate::save_menu::profile_int(&self.0, section, key, default) as u32
             };

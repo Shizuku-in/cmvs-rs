@@ -52,6 +52,7 @@ impl SceneHost {
         source: &mut dyn ImageSource,
         random: &mut CrtRandom,
         budget: &mut usize,
+        x87_arithmetic: bool,
     ) -> Result<Self, Box<dyn Error>> {
         let mut templates = BTreeMap::new();
         for &(slot, bytes) in records {
@@ -96,7 +97,7 @@ impl SceneHost {
                     scene.falling_effects.insert(slot as u8, effect);
                 }
                 SavedEffect::Particles { words, .. } => {
-                    let mut effect = ParticleEffect::new(
+                    let mut effect = ParticleEffect::new_with_arithmetic(
                         words[0],
                         words[1..5].try_into().unwrap(),
                         words[5],
@@ -105,6 +106,7 @@ impl SceneHost {
                             ..Default::default()
                         },
                         random,
+                        x87_arithmetic,
                     );
                     effect.template = Some(template);
                     scene.particle_effects.insert(slot as u8, effect);
@@ -143,72 +145,79 @@ mod tests {
     }
     #[test]
     fn mixed_pools_reinitialize_in_slot_order_and_capture_only_the_creation_templates() {
-        let f = f32::to_bits;
-        let templates = [
-            (
-                2,
-                SavedEffect::Collision {
-                    words: [0, f(15.0), f(1000.0), 1],
-                    name: SavedEffect::name_field(b"collision").unwrap(),
-                },
-            ),
-            (
-                0,
-                SavedEffect::Falling {
-                    words: [f(100.0), f(80.0), f(2000.0), f(5.0), 1, 7],
-                    name: SavedEffect::name_field(b"falling").unwrap(),
-                },
-            ),
-            (3, SavedEffect::Fragments),
-            (
-                1,
-                SavedEffect::Particles {
-                    words: [0, f(40.0), f(20.0), f(-20.0), f(2000.0), 1],
-                    name: SavedEffect::name_field(b"particles").unwrap(),
-                },
-            ),
-        ];
-        let bytes: Vec<_> = templates
-            .iter()
-            .map(|(s, t)| (*s, t.encode().unwrap()))
-            .collect();
-        let records: Vec<_> = bytes.iter().map(|(s, b)| (*s, b.as_slice())).collect();
-        let mut images = Images::default();
-        let mut random = CrtRandom::new(0);
-        let mut scene =
-            SceneHost::load_effect_pools(&records, &mut images, &mut random, &mut 0).unwrap();
-        assert_eq!(
-            images.0,
-            [
-                b"falling".to_vec(),
-                b"particles".to_vec(),
-                b"collision".to_vec()
-            ]
-        );
-        // Native initializers consume 4 / 8 / 5 CRT draws per particle respectively.
-        let mut reference = CrtRandom::new(0);
-        for _ in 0..17 {
-            reference.next_value();
+        for x87 in [false, true] {
+            let f = f32::to_bits;
+            let templates = [
+                (
+                    2,
+                    SavedEffect::Collision {
+                        words: [0, f(15.0), f(1000.0), 1],
+                        name: SavedEffect::name_field(b"collision").unwrap(),
+                    },
+                ),
+                (
+                    0,
+                    SavedEffect::Falling {
+                        words: [f(100.0), f(80.0), f(2000.0), f(5.0), 1, 7],
+                        name: SavedEffect::name_field(b"falling").unwrap(),
+                    },
+                ),
+                (3, SavedEffect::Fragments),
+                (
+                    1,
+                    SavedEffect::Particles {
+                        words: [0, f(40.0), f(20.0), f(-20.0), f(2000.0), 1],
+                        name: SavedEffect::name_field(b"particles").unwrap(),
+                    },
+                ),
+            ];
+            let bytes: Vec<_> = templates
+                .iter()
+                .map(|(s, t)| (*s, t.encode().unwrap()))
+                .collect();
+            let records: Vec<_> = bytes.iter().map(|(s, b)| (*s, b.as_slice())).collect();
+            let mut images = Images::default();
+            let mut random = CrtRandom::new(0);
+            let mut scene =
+                SceneHost::load_effect_pools(&records, &mut images, &mut random, &mut 0, x87)
+                    .unwrap();
+            assert_eq!(
+                images.0,
+                [
+                    b"falling".to_vec(),
+                    b"particles".to_vec(),
+                    b"collision".to_vec()
+                ]
+            );
+            // Native initializers consume 4 / 8 / 5 CRT draws per particle respectively.
+            let mut reference = CrtRandom::new(0);
+            for _ in 0..17 {
+                reference.next_value();
+            }
+            assert_eq!(random, reference);
+            assert_eq!(scene.particle_effects[&1].x87_arithmetic, x87);
+            assert!(scene.fragment_effects.is_empty());
+            assert!(scene.falling_effects[&0].follow);
+            let before = scene.saved_effect_pools().unwrap();
+            scene
+                .advance_effect_pools(500, &mut random, &crate::camera::CameraHost::default())
+                .unwrap();
+            assert_eq!(scene.saved_effect_pools().unwrap(), before);
+            assert_eq!(
+                before.iter().map(|(s, _)| *s).collect::<Vec<_>>(),
+                [0, 1, 2]
+            );
+            for (slot, body) in before {
+                assert_eq!(body, bytes.iter().find(|(s, _)| *s == slot).unwrap().1);
+            }
+            let seed = random.clone();
+            let mut invalid = records.clone();
+            invalid.push((4, records[0].1));
+            assert!(
+                SceneHost::load_effect_pools(&invalid, &mut images, &mut random, &mut 0, x87)
+                    .is_err()
+            );
+            assert_eq!(random, seed);
         }
-        assert_eq!(random, reference);
-        assert!(scene.fragment_effects.is_empty());
-        assert!(scene.falling_effects[&0].follow);
-        let before = scene.saved_effect_pools().unwrap();
-        scene
-            .advance_effect_pools(500, &mut random, &crate::camera::CameraHost::default())
-            .unwrap();
-        assert_eq!(scene.saved_effect_pools().unwrap(), before);
-        assert_eq!(
-            before.iter().map(|(s, _)| *s).collect::<Vec<_>>(),
-            [0, 1, 2]
-        );
-        for (slot, body) in before {
-            assert_eq!(body, bytes.iter().find(|(s, _)| *s == slot).unwrap().1);
-        }
-        let seed = random.clone();
-        let mut invalid = records.clone();
-        invalid.push((4, records[0].1));
-        assert!(SceneHost::load_effect_pools(&invalid, &mut images, &mut random, &mut 0).is_err());
-        assert_eq!(random, seed);
     }
 }

@@ -313,3 +313,84 @@ fn text_v1_scene_v1_wire_records_roundtrip_and_reject_unsupported_or_out_of_rang
         assert!(EngineSnapshot::decode_with_layout(&bytes[..end], layout).is_err());
     }
 }
+
+#[test]
+fn scene_v2_wire_uses_six_header_words_effect_block_and_paired_bgm_without_sequence() {
+    use cmvs_rs::snapshot::SnapshotLayout;
+    let layout = SnapshotLayout::TextV1SceneV2;
+    let mut scene = vec![255, 255, 2, 0];
+    for word in [1u32, 1, 0, 0, 800, 600] {
+        scene.extend(word.to_le_bytes());
+    }
+    let mut image = Vec::new();
+    for word in [3u32, 0, 0, 3, 0, 0, 0, 0, 0, 1] {
+        image.extend(word.to_le_bytes());
+    }
+    image.extend([0, 0]);
+    for word in [0u32, 2, 1] {
+        image.extend(word.to_le_bytes());
+    }
+    long(&mut scene, 0x740, None, &image);
+    let mut draw = vec![4, 0, 0, 0];
+    for word in cmvs_rs::scene::DrawState::default().words {
+        draw.extend(word.to_le_bytes());
+    }
+    draw.extend([0; 24]);
+    let mut animation = vec![1, 0];
+    animation.extend([0; 656]);
+    long(&mut draw, 0x793, None, &animation);
+    draw.extend(0x7789u16.to_le_bytes());
+    long(&mut scene, 0x780, None, &draw);
+    scene.extend([0; 44]);
+    scene.extend(0xf0f0u16.to_le_bytes());
+    let modern = stream(&[(0x700, Some(20), scene)]);
+    let mut bytes = Vec::new();
+    for record in parse_records(&modern).unwrap() {
+        if record.tag == 0x304 {
+            bytes.extend(0x304u16.to_le_bytes());
+            for name in [b"bgm01\0", b"bgm02\0"] {
+                bytes.extend((name.len() as u16).to_le_bytes());
+                bytes.extend(name);
+            }
+        } else if record.tag != 0x6e0 {
+            bytes.extend(&modern[record.offset..record.body.end]);
+        }
+    }
+    let saved = EngineSnapshot::decode_with_layout(&bytes, layout).unwrap();
+    assert_eq!(saved.objects[&20].logical_size, [800, 600]);
+    assert_eq!(
+        saved.objects[&20].image.as_ref().unwrap().surface,
+        Some(true)
+    );
+    assert_eq!(saved.bgm, [b"bgm01".to_vec(), b"bgm02".to_vec()]);
+    assert_eq!(saved.encode_with_layout(layout).unwrap(), bytes);
+    for wrong in [
+        SnapshotLayout::TextV1SceneV1,
+        SnapshotLayout::TextV2,
+        SnapshotLayout::TextV3,
+    ] {
+        assert!(EngineSnapshot::decode_with_layout(&bytes, wrong).is_err());
+    }
+    for mutation in 0..4 {
+        let mut bad = saved.clone();
+        match mutation {
+            0 => bad.record_6e0.push(0),
+            1 => {
+                bad.raw_objects.insert((0x8c8, 0), vec![]);
+            }
+            2 => {
+                bad.objects.get_mut(&20).unwrap().collision_vertices = Some(vec![]);
+            }
+            _ => {
+                let child = bad.objects[&20].clone();
+                bad.objects
+                    .get_mut(&20)
+                    .unwrap()
+                    .children
+                    .insert(256, child);
+            }
+        }
+        assert!(bad.encode_with_layout(layout).is_err());
+    }
+    assert!(EngineSnapshot::decode_with_layout(&bytes[..bytes.len() - 1], layout).is_err());
+}

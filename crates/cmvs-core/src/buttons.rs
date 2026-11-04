@@ -513,8 +513,9 @@ impl ButtonHost {
         layout: crate::snapshot::SnapshotLayout,
     ) -> Vec<(u16, Vec<u8>)> {
         let mut groups = self.saved_groups();
-        if layout == crate::snapshot::SnapshotLayout::TextV1SceneV1 {
-            // 0x437240: object u16, version 1, active, count, then 104-byte nodes.
+        if layout.text_version() == 1 {
+            // 20071117 0x437240 / 20080719 0x439610: object u16, version 1,
+            // active, count, then 104-byte nodes.
             for (_, body) in &mut groups {
                 body[2..4].copy_from_slice(&1u16.to_le_bytes());
                 body.drain(4..12);
@@ -529,7 +530,7 @@ impl ButtonHost {
         lists: &[(u16, &[u8])],
         layout: crate::snapshot::SnapshotLayout,
     ) -> Result<(), &'static str> {
-        if layout != crate::snapshot::SnapshotLayout::TextV1SceneV1 {
+        if layout.text_version() != 1 {
             return self.restore(groups, lists);
         }
         if !lists.is_empty() {

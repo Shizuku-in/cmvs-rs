@@ -7,40 +7,48 @@ mod bytecode;
 use bytecode::{command, pending, script};
 
 #[test]
-fn asukimi_canvas_uses_the_old_window_size_schema_only_for_its_binary() {
+fn inspected_old_builds_use_their_window_size_schema_only_for_their_binary() {
     use cmvs_rs::{profile::Registry, settings::Configuration};
-    let profile = Registry::builtin().profile("cmvs-20071117").unwrap();
-    for (ini, expected) in [
-        ("", [800, 600]),
-        ("[CMVS_SYSTEM_MAIN]\nWINDOW_SIZE=0\n", [640, 480]),
-        ("[CMVS_SYSTEM_MAIN]\nWINDOW_SIZE=2\n", [1024, 768]),
-        (
-            "[CMVS_SYSTEM_MAIN]\nWINDOW_SIZE=9\n[RESOLVING_POWER_INFO]\nWINDOW_WIDTH=960\nWINDOW_HEIGHT=720\n",
-            [960, 720],
-        ),
-    ] {
-        let config = Configuration::new(ini.as_bytes().to_vec()).unwrap();
+    for id in ["cmvs-20071117", "cmvs-20080719"] {
+        let profile = Registry::builtin().profile(id).unwrap();
+        for (ini, expected) in [
+            ("", [800, 600]),
+            ("[CMVS_SYSTEM_MAIN]\nWINDOW_SIZE=1\n", [800, 600]),
+            (
+                "[CMVS_SYSTEM_MAIN]\nWINDOW_SIZE=9\n[RESOLVING_POWER_INFO]\nWINDOW_WIDTH=800\nWINDOW_HEIGHT=600\nFULL_SCREEN_WIDTH=1920\nFULL_SCREEN_HEIGHT=1080\n[WINDOW_RESOLVING]\nBASE=1280,720\n",
+                [800, 600],
+            ),
+            ("[CMVS_SYSTEM_MAIN]\nWINDOW_SIZE=0\n", [640, 480]),
+            ("[CMVS_SYSTEM_MAIN]\nWINDOW_SIZE=2\n", [1024, 768]),
+            (
+                "[CMVS_SYSTEM_MAIN]\nWINDOW_SIZE=9\n[RESOLVING_POWER_INFO]\nWINDOW_WIDTH=960\nWINDOW_HEIGHT=720\n",
+                [960, 720],
+            ),
+        ] {
+            let config = Configuration::new(ini.as_bytes().to_vec()).unwrap();
+            assert_eq!(
+                config.screen_size_for_profile(profile).unwrap().pixels(),
+                expected
+            );
+            assert_eq!(config.screen_size().unwrap().pixels(), [1280, 720]);
+        }
+        let invalid = Configuration::new(
+            b"[CMVS_SYSTEM_MAIN]\nWINDOW_SIZE=9\n[RESOLVING_POWER_INFO]\nWINDOW_WIDTH=-1\n"
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(invalid.screen_size_for_profile(profile).is_err());
+        let mut changed = profile.clone();
+        changed.binaries[0].sha256 = [0; 32];
         assert_eq!(
-            config.screen_size_for_profile(profile).unwrap().pixels(),
-            expected
+            Configuration::new(vec![])
+                .unwrap()
+                .screen_size_for_profile(&changed)
+                .unwrap()
+                .pixels(),
+            [1280, 720]
         );
-        assert_eq!(config.screen_size().unwrap().pixels(), [1280, 720]);
     }
-    let invalid = Configuration::new(
-        b"[CMVS_SYSTEM_MAIN]\nWINDOW_SIZE=9\n[RESOLVING_POWER_INFO]\nWINDOW_WIDTH=-1\n".to_vec(),
-    )
-    .unwrap();
-    assert!(invalid.screen_size_for_profile(profile).is_err());
-    let mut changed = profile.clone();
-    changed.binaries[0].sha256 = [0; 32];
-    assert_eq!(
-        Configuration::new(vec![])
-            .unwrap()
-            .screen_size_for_profile(&changed)
-            .unwrap()
-            .pixels(),
-        [1280, 720]
-    );
 }
 
 #[test]
