@@ -172,7 +172,7 @@ pub(crate) fn encode_with_layout(
 ) -> Result<Vec<u8>, FormatError> {
     if layout.text_version() < 3 && text.line_break.is_some() {
         return Err(FormatError(
-            "snapshot text v2 has no extended line-break rules",
+            "snapshot text v1/v2 cannot store line-break rules",
         ));
     }
     if text.font_face.len() > 31 || text.font_face.contains(&0) {

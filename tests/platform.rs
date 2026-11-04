@@ -848,11 +848,11 @@ fn cursor_argb_preserves_alpha_orientation_and_uses_mask_only_when_alpha_is_abse
     for end in 0..raw.len() {
         assert!(CursorBitmap::decode(&raw[..end]).is_err());
     }
-    let mut legacy = raw;
+    let mut without_alpha = raw;
     for i in (65..78).step_by(4) {
-        legacy[i] = 0;
+        without_alpha[i] = 0;
     }
-    let cursor = CursorBitmap::decode(&legacy).unwrap();
+    let cursor = CursorBitmap::decode(&without_alpha).unwrap();
     assert_eq!(cursor.alpha(), None);
     assert!(cursor.rgba().is_err());
     assert_eq!(

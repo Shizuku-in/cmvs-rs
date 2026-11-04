@@ -195,14 +195,14 @@ mod tests {
             let mut restored = CameraHost::default();
             restored.restore_view(index, &bytes).unwrap();
             assert_eq!(restored.views[index], host.views[index]);
-            let mut old = 1u16.to_le_bytes().to_vec();
-            old.extend_from_slice(&bytes[6..]);
+            let mut v1_record = 1u16.to_le_bytes().to_vec();
+            v1_record.extend_from_slice(&bytes[6..]);
             restored.views[index].snapshot_mode = 23;
-            restored.restore_view(index, &old).unwrap();
+            restored.restore_view(index, &v1_record).unwrap();
             assert_eq!(restored.views[index].words, words);
             assert_eq!(restored.views[index].snapshot_mode, 23);
             let before = restored.views[index].clone();
-            for bad in [&bytes[..33], &old[..29], &[3u8, 0][..]] {
+            for bad in [&bytes[..33], &v1_record[..29], &[3u8, 0][..]] {
                 assert!(restored.restore_view(index, bad).is_err());
                 assert_eq!(restored.views[index], before);
             }

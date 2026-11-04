@@ -603,7 +603,7 @@ impl AuxiliaryText {
                 continue;
             }
             if first == b'{' {
-                // The newer proportional path wraps the group as a whole, unlike
+                // The FontCells proportional path wraps the group as a whole, unlike
                 // the root build's per-character auxiliary ruby-base layout.
                 if proportional && self.wraps_font_cells(x, 0, true, &mut scratch)? {
                     wrap(&mut x, &mut y, &mut line, &mut scratch)?;

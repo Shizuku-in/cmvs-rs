@@ -390,9 +390,9 @@ impl SavedImage {
         let text_v1_scene_v1 = layout == SnapshotLayout::TextV1SceneV1;
         let mut r = Reader::new(bytes);
         let h = if text_v1_scene_v1 {
-            let old = r.words::<9>()?;
+            let v2_header = r.words::<9>()?;
             let mut h = [0; 10];
-            h[..9].copy_from_slice(&old);
+            h[..9].copy_from_slice(&v2_header);
             h
         } else {
             r.words::<10>()?

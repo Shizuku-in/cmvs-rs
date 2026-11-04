@@ -41,9 +41,9 @@ pub(super) fn decode_with_layout(
     }
     let words = r.words::<22>()?;
     let extra = if text_v1_scene_v1 {
-        let old = r.words::<5>()?;
+        let v3_extra = r.words::<5>()?;
         let mut extra = [0; 6];
-        extra[..5].copy_from_slice(&old);
+        extra[..5].copy_from_slice(&v3_extra);
         extra
     } else {
         r.words::<6>()?

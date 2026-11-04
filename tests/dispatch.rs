@@ -64,7 +64,7 @@ fn missing_text_capability_preserves_pending_override_and_never_uses_root() {
 }
 
 #[test]
-fn new_command_still_requires_research_gate_and_short_stack_is_transactional() {
+fn font_cell_mode_requires_research_gate_and_short_stack_is_transactional() {
     let mut code = vec![];
     command(&mut code, 0x23ac, &[]);
     let script = script(&code);
