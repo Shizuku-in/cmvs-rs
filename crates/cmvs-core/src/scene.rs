@@ -796,7 +796,7 @@ impl SceneHost {
             .ok_or_else(|| fail("object slot does not exist"))?;
         // Independently inspected create helpers ignore unsigned overflow of their table.
         if command == 0x22
-            && self.child_slots != ChildSlots::Base
+            && self.child_slots != ChildSlots::Slots768
             && args[1] >= u32::from(self.child_slots.count())
         {
             call.complete(0x4008)?;
@@ -974,7 +974,7 @@ impl SceneHost {
     /// (0x14003bb10) and sets system result 0 to whether loading succeeded; returns 0x4008.
     /// 0x2038 uses SP-8 child slot and SP-12 name, and returns 0x400c.
     /// 0x203b / 0x14006c3b0 -> 0x14003bbc0 -> 0x140035260 adds mode/color/extra,
-    /// filters decoded pixels before upload, and returns 0x4014. Mode 1 is early-build-only.
+    /// filters decoded pixels before upload, and returns 0x4014. Mode 1 requires the inspected cmvs-20071117 profile and hash.
     /// +12032 is set only by 0x212a, which stays unhandled, so its 0x140018bc0 call never runs.
     pub fn try_handle_image(
         &mut self,
@@ -1031,7 +1031,7 @@ impl SceneHost {
             // Modes 256/512 use low/high words as radius and sampling step.
             let extra = call.argument(20, "filter extra")?;
             if !(matches!(mode, 2 | 17 | 256 | 512)
-                || mode == 1 && self.child_slots == ChildSlots::Early)
+                || mode == 1 && self.child_slots == ChildSlots::Slots256)
             {
                 return Err(fail(
                     "image filter mode not implemented; only modes 2, 17, 256 and 512 are verified",

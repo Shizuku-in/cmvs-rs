@@ -951,7 +951,7 @@ fn motion_xyz(scene: &SceneHost, slot: u8) -> [f32; 3] {
 }
 
 #[test]
-fn early_world_motion_y_arch_uses_build_specific_amplitude_and_snaps_at_the_boundary() {
+fn y_half_turn_modes_use_distinct_amplitudes_and_snap_at_the_boundary() {
     let profile = cmvs_rs::profile::Registry::builtin()
         .profile("cmvs-20071117")
         .unwrap();
@@ -1011,7 +1011,7 @@ fn early_world_motion_y_arch_uses_build_specific_amplitude_and_snaps_at_the_boun
 }
 
 #[test]
-fn early_world_motion_mode_requires_the_inspected_profile_and_hash() {
+fn y_half_turn_mode_requires_the_inspected_profile_and_hash() {
     let profile = cmvs_rs::profile::Registry::builtin()
         .profile("cmvs-20071117")
         .unwrap();

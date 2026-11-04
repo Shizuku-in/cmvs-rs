@@ -146,7 +146,7 @@ fn build_with_cameras(code: &[u8], mut cameras: CameraHost) -> (SceneHost, Camer
 }
 
 #[test]
-fn early_projection_keeps_its_scale_fade_and_profile_boundary() {
+fn type_one_projection_keeps_its_scale_fade_and_profile_boundary() {
     let profile = cmvs_rs::profile::Registry::builtin()
         .profile("cmvs-20071117")
         .unwrap();
@@ -205,7 +205,7 @@ fn early_projection_keeps_its_scale_fade_and_profile_boundary() {
 }
 
 #[test]
-fn early_type_one_objects_reach_the_common_renderer() {
+fn type_one_objects_reach_the_common_renderer() {
     let profile = cmvs_rs::profile::Registry::builtin()
         .profile("cmvs-20071117")
         .unwrap();
@@ -227,7 +227,7 @@ fn early_type_one_objects_reach_the_common_renderer() {
 }
 
 #[test]
-fn early_type_two_preserves_vertical_scale_height_bias_and_near_clip() {
+fn type_two_preserves_vertical_scale_height_bias_and_near_clip() {
     let profile = cmvs_rs::profile::Registry::builtin()
         .profile("cmvs-20071117")
         .unwrap();

@@ -123,7 +123,7 @@ pub enum AudioRequest {
         channel: u8,
         looped: bool,
     },
-    /// Hash-bound early 0x20b4: restart even an active sound from its beginning.
+    /// Hash-bound cmvs-20071117 0x20b4: restart even an active sound from its beginning.
     RestartSe {
         channel: u8,
         looped: bool,
@@ -974,7 +974,7 @@ impl AudioHost {
     }
 
     /// 0x20b1 / 0x140070e40: SP-4 channel, SP-8 loop; returns 0x4008, no result write.
-    /// Hash-bound early 0x20b4 / 0x4434d0 uses restart instead of start-if-not-playing.
+    /// Hash-bound cmvs-20071117 0x20b4 / 0x4434d0 uses restart instead of start-if-not-playing.
     fn try_start(
         &mut self,
         call: &mut Call<'_, '_>,

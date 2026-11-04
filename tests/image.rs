@@ -414,7 +414,7 @@ fn filtered_image_load_scales_rgb_with_saturation_and_preserves_alpha_and_object
 }
 
 #[test]
-fn early_filtered_image_uses_integer_mean_plus_one_and_preserves_alpha() {
+fn filter_mode_one_uses_integer_mean_plus_one_and_preserves_alpha() {
     let profile = cmvs_rs::profile::Registry::builtin()
         .profile("cmvs-20071117")
         .unwrap();
@@ -472,7 +472,7 @@ fn early_filtered_image_uses_integer_mean_plus_one_and_preserves_alpha() {
 }
 
 #[test]
-fn early_filter_mode_one_rejects_unverified_builds_and_resource_errors_without_committing() {
+fn filter_mode_one_rejects_unverified_builds_and_resource_errors_without_committing() {
     let profile = cmvs_rs::profile::Registry::builtin()
         .profile("cmvs-20071117")
         .unwrap();

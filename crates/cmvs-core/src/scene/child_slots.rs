@@ -3,11 +3,11 @@ use crate::profile::EngineProfile;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum ChildSlots {
-    Early,
-    Legacy,
+    Slots256,
+    Slots512,
     #[default]
-    Base,
-    Extended,
+    Slots768,
+    Slots1024,
 }
 impl ChildSlots {
     pub(crate) fn for_profile(profile: &EngineProfile) -> Self {
@@ -22,7 +22,7 @@ impl ChildSlots {
                 )
                 .is_some()
         {
-            return Self::Early;
+            return Self::Slots256;
         }
         // Independent 512-entry create/destroy helpers: docs/games/kazokubu.
         if profile.id == "cmvs-20120309"
@@ -35,7 +35,7 @@ impl ChildSlots {
                 )
                 .is_some()
         {
-            return Self::Legacy;
+            return Self::Slots512;
         }
         // Independent x64 evidence: docs/games/{realive,seishunf,kunado,hapymaher_re}.
         if [
@@ -63,17 +63,17 @@ impl ChildSlots {
                     .binary(&crate::digest::parse_hex(hash).expect("static SHA-256"))
                     .is_some()
         }) {
-            Self::Extended
+            Self::Slots1024
         } else {
-            Self::Base
+            Self::Slots768
         }
     }
     pub(crate) fn count(self) -> u16 {
         match self {
-            Self::Early => 256,
-            Self::Legacy => 512,
-            Self::Base => 768,
-            Self::Extended => 1024,
+            Self::Slots256 => 256,
+            Self::Slots512 => 512,
+            Self::Slots768 => 768,
+            Self::Slots1024 => 1024,
         }
     }
 }
@@ -82,12 +82,12 @@ impl ChildSlots {
 mod tests {
     use super::*;
     #[test]
-    fn extended_table_requires_the_inspected_profile_and_binary_identity() {
+    fn child_table_capacity_requires_the_inspected_profile_and_binary_identity() {
         let registry = crate::profile::Registry::builtin();
-        let early = registry.profile("cmvs-20071117").unwrap();
-        assert_eq!(ChildSlots::for_profile(early).count(), 256);
-        assert!(crate::runner::snapshot_layout_supported(early));
-        let mut changed = early.clone();
+        let profile = registry.profile("cmvs-20071117").unwrap();
+        assert_eq!(ChildSlots::for_profile(profile).count(), 256);
+        assert!(crate::runner::snapshot_layout_supported(profile));
+        let mut changed = profile.clone();
         changed.binaries[0].sha256 = [0; 32];
         assert_eq!(ChildSlots::for_profile(&changed).count(), 768);
         for (id, count) in [

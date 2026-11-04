@@ -15,16 +15,22 @@ pub(crate) fn decode_with_layout(
     layout: SnapshotLayout,
 ) -> Result<SavedWindow, FormatError> {
     let mut r = Reader::new(bytes);
-    let early = layout == SnapshotLayout::TextV1SceneV1;
+    let text_v1_scene_v1 = layout == SnapshotLayout::TextV1SceneV1;
     let text = usize::from(r.u16()?);
-    if text >= if early { 8 } else { 12 } || r.u16()? != if early { 1 } else { 3 } {
+    if text >= if text_v1_scene_v1 { 8 } else { 12 }
+        || r.u16()? != if text_v1_scene_v1 { 1 } else { 3 }
+    {
         return Err(FormatError(
             "unsupported snapshot window version or text slot",
         ));
     }
-    let logical_size = if early { [0; 2] } else { r.words::<2>()? };
-    let raw = r.take(if early { 1280 } else { 2496 })?;
-    let switch_at = if early { 1256 } else { 2472 };
+    let logical_size = if text_v1_scene_v1 {
+        [0; 2]
+    } else {
+        r.words::<2>()?
+    };
+    let raw = r.take(if text_v1_scene_v1 { 1280 } else { 2496 })?;
+    let switch_at = if text_v1_scene_v1 { 1256 } else { 2472 };
     let word = |at: usize| u32::from_le_bytes(raw[at..at + 4].try_into().unwrap());
     let half = |at: usize| u16::from_le_bytes(raw[at..at + 2].try_into().unwrap());
     if word(0) as usize != text || raw[34..40] != [0; 6] {
@@ -35,7 +41,7 @@ pub(crate) fn decode_with_layout(
     for (i, button) in buttons
         .iter_mut()
         .enumerate()
-        .take(if early { 16 } else { 32 })
+        .take(if text_v1_scene_v1 { 16 } else { 32 })
     {
         let at = 40 + 76 * i;
         button.enabled = word(at) != 0;
@@ -66,7 +72,7 @@ pub(crate) fn decode_with_layout(
             pressed_button: -1,
             switch_state: word(switch_at + 20),
         },
-        logical_size: if early {
+        logical_size: if text_v1_scene_v1 {
             scene.logical_size
         } else {
             logical_size
@@ -83,8 +89,8 @@ pub(crate) fn encode_with_layout(
     layout: SnapshotLayout,
 ) -> Result<Vec<u8>, crate::FormatError> {
     let state = &window.state;
-    let early = layout == SnapshotLayout::TextV1SceneV1;
-    if early
+    let text_v1_scene_v1 = layout == SnapshotLayout::TextV1SceneV1;
+    if text_v1_scene_v1
         && (state.text >= 8
             || state.buttons[16..]
                 .iter()
@@ -95,9 +101,9 @@ pub(crate) fn encode_with_layout(
             "window v1 supports only eight texts and sixteen buttons",
         ));
     }
-    let switch_at = if early { 1256 } else { 2472 };
-    let count = if early { 16 } else { 32 };
-    let mut raw = vec![0u8; if early { 1280 } else { 2496 }];
+    let switch_at = if text_v1_scene_v1 { 1256 } else { 2472 };
+    let count = if text_v1_scene_v1 { 16 } else { 32 };
+    let mut raw = vec![0u8; if text_v1_scene_v1 { 1280 } else { 2496 }];
     let mut word = |at: usize, value: u32| raw[at..at + 4].copy_from_slice(&value.to_le_bytes());
     word(0, state.text as u32);
     word(4, u32::from(state.visible));
@@ -133,8 +139,8 @@ pub(crate) fn encode_with_layout(
         }
     }
     let mut out = (state.text as u16).to_le_bytes().to_vec();
-    out.extend(if early { 1u16 } else { 3u16 }.to_le_bytes());
-    if !early {
+    out.extend(if text_v1_scene_v1 { 1u16 } else { 3u16 }.to_le_bytes());
+    if !text_v1_scene_v1 {
         for size in window.logical_size {
             out.extend(size.to_le_bytes());
         }

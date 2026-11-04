@@ -35,7 +35,7 @@ fn cases() -> Vec<(u16, Vec<u32>)> {
 }
 
 #[test]
-fn early_se_restart_is_variant_only_and_preserves_record_and_results() {
+fn se_restart_is_variant_only_and_preserves_record_and_results() {
     use cmvs_rs::{
         audio::AudioSettings,
         profile::{Registry, VariantId},
@@ -101,7 +101,7 @@ fn early_se_restart_is_variant_only_and_preserves_record_and_results() {
 }
 
 #[test]
-fn early_se_restart_rejects_bad_arguments_and_unsupported_backends_before_commit() {
+fn se_restart_rejects_bad_arguments_and_unsupported_backends_before_commit() {
     use cmvs_rs::profile::{Semantics, VariantId};
     struct Unsupported;
     impl AudioBackend for Unsupported {

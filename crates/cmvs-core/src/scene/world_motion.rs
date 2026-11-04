@@ -1,6 +1,6 @@
 //! Draw state +152, 0x21f9..0x21fd; addresses refer to the documented binary hash.
 //! Linear mode 0, absolute quadratic ease-out mode 1, sine Y modes 0x22/0x31/0x38/0x39/0x41 and X mode 0x48.
-//! The inspected early build additionally admits Y half-turn modes 0x20/0x21/0x30.
+//! The inspected cmvs-20071117 build additionally admits Y half-turn modes 0x20/0x21/0x30.
 use super::SceneHost;
 use crate::{
     bytecode::DecodeError,
@@ -180,9 +180,9 @@ impl WorldMotion {
 
 impl SceneHost {
     fn supports_world_motion_mode(&self, mode: u32) -> bool {
-        // Early is selected only by the inspected profile and executable hash.
+        // Slots256 is selected only by the inspected profile and executable hash.
         WorldMotion::supports_mode(mode)
-            || self.child_slots == super::ChildSlots::Early
+            || self.child_slots == super::ChildSlots::Slots256
                 && matches!(mode as u8, 0x20 | 0x21 | 0x30)
     }
 

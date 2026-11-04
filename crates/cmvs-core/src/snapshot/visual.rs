@@ -387,9 +387,9 @@ impl SavedImage {
         })
     }
     fn decode_with_layout(bytes: &[u8], layout: SnapshotLayout) -> Result<Self, FormatError> {
-        let early = layout == SnapshotLayout::TextV1SceneV1;
+        let text_v1_scene_v1 = layout == SnapshotLayout::TextV1SceneV1;
         let mut r = Reader::new(bytes);
-        let h = if early {
+        let h = if text_v1_scene_v1 {
             let old = r.words::<9>()?;
             let mut h = [0; 10];
             h[..9].copy_from_slice(&old);
@@ -397,7 +397,7 @@ impl SavedImage {
         } else {
             r.words::<10>()?
         };
-        if h[0] != if early { 2 } else { 3 } {
+        if h[0] != if text_v1_scene_v1 { 2 } else { 3 } {
             return Err(FormatError("unsupported snapshot image version"));
         }
         // Kind 3 is a blank surface with its alpha flag; the loader ignores its filter.
@@ -414,7 +414,9 @@ impl SavedImage {
             return Err(FormatError("unsupported snapshot image filter flag"));
         }
         let filter = (h[5] != 0).then_some([h[6], h[7], h[8]]);
-        if filter.is_some_and(|p| !(matches!(p[0], 2 | 17 | 256 | 512) || early && p[0] == 1)) {
+        if filter
+            .is_some_and(|p| !(matches!(p[0], 2 | 17 | 256 | 512) || text_v1_scene_v1 && p[0] == 1))
+        {
             return Err(FormatError("unsupported snapshot image filter"));
         }
         let name = r.string(64)?.to_vec();
@@ -539,10 +541,10 @@ impl SavedScene {
         *nodes += 1;
         let mut r = Reader::new(bytes);
         let extended = layout == SnapshotLayout::TextV3SceneV4;
-        let early = layout == SnapshotLayout::TextV1SceneV1;
+        let text_v1_scene_v1 = layout == SnapshotLayout::TextV1SceneV1;
         if r.u16()? != 0xffff
             || r.u16()?
-                != if early {
+                != if text_v1_scene_v1 {
                     1
                 } else if extended {
                     4
@@ -555,7 +557,7 @@ impl SavedScene {
         let h = if extended {
             let h = r.words::<5>()?;
             [h[0], h[1], h[2], 0, 0, 0, h[3], h[4]]
-        } else if early {
+        } else if text_v1_scene_v1 {
             let h = r.words::<6>()?;
             [h[0], h[1], h[2], h[3], 0, 0, h[4], h[5]]
         } else {
@@ -577,7 +579,9 @@ impl SavedScene {
                 match tag {
                     0x740 => image = Some(SavedImage::decode_with_layout(bytes, layout)?),
                     0x741 => secondary_image = Some(SavedImage::decode_with_layout(bytes, layout)?),
-                    0x749 if !early => collision_vertices = Some(collision::decode(bytes)?),
+                    0x749 if !text_v1_scene_v1 => {
+                        collision_vertices = Some(collision::decode(bytes)?)
+                    }
                     0x780 => draw = Some(draw::decode_with_layout(bytes, layout)?),
                     _ => {
                         return Err(FormatError(
@@ -590,7 +594,11 @@ impl SavedScene {
         if (h[0] == 1) != draw.is_some() {
             return Err(FormatError("snapshot scene kind disagrees with draw state"));
         }
-        let effect_words = if early { [0; 11] } else { r.words::<11>()? };
+        let effect_words = if text_v1_scene_v1 {
+            [0; 11]
+        } else {
+            r.words::<11>()?
+        };
         if effect_words[0] != 0 {
             return Err(FormatError(
                 "snapshot scene image change is not implemented",
@@ -639,14 +647,14 @@ impl SavedScene {
     ) -> Result<Vec<u8>, FormatError> {
         let mut out = 0xffffu16.to_le_bytes().to_vec();
         let extended = layout == SnapshotLayout::TextV3SceneV4;
-        let early = layout == SnapshotLayout::TextV1SceneV1;
-        if early && (self.collision_vertices.is_some() || self.effect_words != [0; 11]) {
+        let text_v1_scene_v1 = layout == SnapshotLayout::TextV1SceneV1;
+        if text_v1_scene_v1 && (self.collision_vertices.is_some() || self.effect_words != [0; 11]) {
             return Err(FormatError(
                 "scene v1 has no collision or image-change representation",
             ));
         }
         out.extend(
-            if early {
+            if text_v1_scene_v1 {
                 1u16
             } else if extended {
                 4u16
@@ -668,7 +676,7 @@ impl SavedScene {
         if extended {
             words(&mut out, &header[..3]);
             words(&mut out, &header[6..]);
-        } else if early {
+        } else if text_v1_scene_v1 {
             words(&mut out, &header[..4]);
             words(&mut out, &header[6..]);
         } else {
@@ -686,7 +694,7 @@ impl SavedScene {
         if let Some(draw) = &self.draw {
             chunk(&mut out, 0x780, &draw::encode_with_layout(draw, layout)?);
         }
-        if !early {
+        if !text_v1_scene_v1 {
             words(&mut out, &self.effect_words);
         }
         for (&slot, child) in &self.children {
