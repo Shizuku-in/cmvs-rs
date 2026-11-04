@@ -8,6 +8,8 @@
 
 REALIVE（`cmvs-20190305`）独立选择 `TextV3SceneV4`：文字 v3、消息窗口 v3、场景 v4。场景头只保留 kind/shown/flags/width/height 五个 u32，递归子槽上限 1024；旧布局保留 768。必须用 `decode_with_layout/encode_with_layout` 显式选择；默认 API 仍为基准布局。证据与验证边界见 [REALIVE 快照](../games/realive/README.md#剧情快照2026-11-03)。
 
+`TextV1SceneV1` 对应已独立核对的文字/窗口/场景 v1、绘制状态 v3、图像/相机/场景视频 v2。文字不存逻辑尺寸，加载时取设备尺寸；窗口有 16 个按钮，场景递归子槽上限 256，帧动画有 32 项。记录流省略 `0x6e0`，BGM 为单个 `0x300` 短字符串，不能作为现代 `0x304` 双字符串解析。运行时仅由 `cmvs-20071117` 和已登记二进制哈希启用；布局名称本身不证明某个构建兼容。旧 mask/粒子及其他未核对记录继续拒绝，详见 [Asukimi 快照](../games/asukimi/README.md#旧版-snapshottextv1scenev1)。
+
 ## 何时生成、由谁消费
 
 - 0x2080 / `0x1400810f0`：先由 `0x140080530` 装载主脚本，再调用 0x140069270，返回 0（不前进 PC、不回收参数）。

@@ -157,6 +157,19 @@ fn inspected_20221105(profile: &crate::profile::EngineProfile) -> bool {
 }
 
 fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLayout> {
+    if profile.id == "cmvs-20071117"
+        && profile.base.as_deref() == Some("cmvs-20160201")
+        && profile
+            .binary(
+                &crate::digest::parse_hex(
+                    "caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c9715a20e7a5f36d02b",
+                )
+                .expect("static SHA-256"),
+            )
+            .is_some()
+    {
+        return Some(SnapshotLayout::TextV1SceneV1);
+    }
     if (matches!(
         profile.id.as_str(),
         "cmvs-20110525" | "cmvs-20130131" | "cmvs-20140217" | "cmvs-20150405"
@@ -255,7 +268,28 @@ fn validate_20130131_records<'a>(
 }
 
 impl Startup<'_> {
+    pub(super) fn system_save_identifier(&self) -> Option<u32> {
+        // 0x40bdf0 zeroes the CSS1 header and never writes offset 68. This is a
+        // format constant for the inspected build, not a recovered game identifier.
+        if snapshot_layout(self.gate.selection().profile) == Some(SnapshotLayout::TextV1SceneV1) {
+            Some(0)
+        } else {
+            self.bootstrap.settings().get(&0x201d).copied()
+        }
+    }
     fn validate_build_snapshot(&self, snapshot: &EngineSnapshot) -> Result<(), Box<dyn Error>> {
+        if self.require_snapshot_layout()? == SnapshotLayout::TextV1SceneV1 {
+            if snapshot.effects[2].is_some() {
+                return Err("old mask snapshot records are not implemented".into());
+            }
+            if let Some(&(tag, _)) = snapshot
+                .raw_objects
+                .keys()
+                .find(|&&(tag, _)| matches!(tag, 0x800 | 0x8c8))
+            {
+                return Err(format!("old snapshot record {tag:#x} is not implemented").into());
+            }
+        }
         if matches!(
             self.gate.selection().profile.id.as_str(),
             "cmvs-20110525" | "cmvs-20120309" | "cmvs-20130131" | "cmvs-20140217"
@@ -304,7 +338,7 @@ impl Startup<'_> {
         &self,
         vm: crate::machine::VmImage,
     ) -> Result<(EngineSnapshot, Vec<u8>), Box<dyn Error>> {
-        self.require_snapshot_layout()?;
+        let layout = self.require_snapshot_layout()?;
         if self.scene.has_effect_pools() && !effect_layout_supported(self.gate.selection().profile)
         {
             return Err("saving active particle effects is not implemented".into());
@@ -339,13 +373,13 @@ impl Startup<'_> {
             raw_objects.insert((0x800, slot), record);
         }
         raw_objects.insert((0x540, 0), self.history.saved());
-        for (slot, record) in self.buttons.saved_groups() {
+        for (slot, record) in self.buttons.saved_groups_with_layout(layout) {
             raw_objects.insert((0x8c0, slot), record);
         }
         for (slot, record) in self.buttons.saved_lists() {
             raw_objects.insert((0x8c8, slot), record);
         }
-        for (slot, record) in self.movies.saved_scene_players() {
+        for (slot, record) in self.movies.saved_scene_players_with_layout(layout) {
             raw_objects.insert((0x8e8, slot), record);
         }
         let (second_group, popup) = self.save_menu.saved_flags();
@@ -381,7 +415,14 @@ impl Startup<'_> {
                 self.scene.saved_mask(),
                 self.scene.saved_strip(),
             ],
-            record_6e0: self.sequence.saved()?,
+            record_6e0: if layout == SnapshotLayout::TextV1SceneV1 {
+                if self.sequence.saved()? != crate::sequence::SequenceHost::default().saved()? {
+                    return Err("sequence state has no v1 snapshot representation".into());
+                }
+                Vec::new()
+            } else {
+                self.sequence.saved()?
+            },
             cameras: [
                 self.camera.saved(0),
                 self.camera.saved(1),
@@ -502,7 +543,7 @@ impl Startup<'_> {
             replace_file(&directory, &format!("save{BACKUP_SLOT:03}.dat"), &previous)?;
         }
         // 0x1400179e0: the system save is written with every slot.
-        let id = self.bootstrap.settings().get(&0x201d).copied();
+        let id = self.system_save_identifier();
         if let Some(output) = &mut self.system_output {
             self.system_host
                 .write_now(self.machine.state(), output, &mut self.random, id)?;
@@ -738,13 +779,15 @@ impl Startup<'_> {
             .filter(|((tag, _), _)| *tag == 0x8e8)
             .map(|(&(_, slot), body)| (slot, body.as_slice()))
             .collect();
-        let players = self.movies.load_scene_players(
+        let layout = self.require_snapshot_layout()?;
+        let players = self.movies.load_scene_players_with_layout(
             &movie_records,
             &mut objects,
             &mut self.scene_movies.with_paths(
                 self.bootstrap.paths(),
                 crate::resources::ResourceKind::SceneMovie,
             ),
+            layout,
         )?;
         let records = |tag: u16| -> Vec<(u16, &[u8])> {
             snapshot
@@ -755,12 +798,22 @@ impl Startup<'_> {
                 .collect()
         };
         let mut buttons = self.buttons.clone();
-        buttons.restore(&records(0x8c0), &records(0x8c8))?;
-        let texts: [Option<_>; TEXT_OBJECTS] = snapshot.texts.clone();
+        let layout = self.require_snapshot_layout()?;
+        buttons.restore_with_layout(&records(0x8c0), &records(0x8c8), layout)?;
+        let mut texts: [Option<_>; TEXT_OBJECTS] = snapshot.texts.clone();
+        if layout == SnapshotLayout::TextV1SceneV1 {
+            for text in texts.iter_mut().flatten() {
+                text.logical_size = self.messages.screen_size().map(|v| v as i32);
+            }
+        }
         let mut history = self.history.clone();
         history.restore(&snapshot.raw_objects[&(0x540, 0)])?;
         let mut sequence = self.sequence.clone();
-        sequence.restore(&snapshot.record_6e0)?;
+        if layout == SnapshotLayout::TextV1SceneV1 {
+            sequence = crate::sequence::SequenceHost::default();
+        } else {
+            sequence.restore(&snapshot.record_6e0)?;
+        }
         let mut camera_host = self.camera.clone();
         camera_host.restore(0, &snapshot.cameras[0])?;
         camera_host.restore(1, &snapshot.cameras[1])?;
@@ -1002,6 +1055,7 @@ mod layout_tests {
     fn snapshot_layout_requires_an_independently_inspected_build() {
         let registry = crate::profile::Registry::builtin();
         for (id, layout) in [
+            ("cmvs-20071117", SnapshotLayout::TextV1SceneV1),
             ("cmvs-20110525", SnapshotLayout::TextV2),
             ("cmvs-20120309", SnapshotLayout::TextV2),
             ("cmvs-20130131", SnapshotLayout::TextV2),
@@ -1057,7 +1111,12 @@ mod layout_tests {
             assert!(!effect_record_supported(profile, &[2, 0, 5, 0]));
             assert!(!effect_record_supported(profile, &[1, 0, 8, 0, 0]));
         }
-        for id in ["cmvs-20120309", "cmvs-20211006", "cmvs-20221105"] {
+        for id in [
+            "cmvs-20071117",
+            "cmvs-20120309",
+            "cmvs-20211006",
+            "cmvs-20221105",
+        ] {
             let mut profile = registry.profile(id).unwrap().clone();
             for binary in &mut profile.binaries {
                 binary.sha256 = [0; 32];

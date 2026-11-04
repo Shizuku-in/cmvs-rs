@@ -86,7 +86,7 @@ mod tests {
         let registry = crate::profile::Registry::builtin();
         let early = registry.profile("cmvs-20071117").unwrap();
         assert_eq!(ChildSlots::for_profile(early).count(), 256);
-        assert!(!crate::runner::snapshot_layout_supported(early));
+        assert!(crate::runner::snapshot_layout_supported(early));
         let mut changed = early.clone();
         changed.binaries[0].sha256 = [0; 32];
         assert_eq!(ChildSlots::for_profile(&changed).count(), 768);

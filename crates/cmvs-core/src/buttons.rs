@@ -508,6 +508,56 @@ fn record_binding(body: &[u8]) -> Result<(u8, [u32; 2]), &'static str> {
 }
 
 impl ButtonHost {
+    pub(crate) fn saved_groups_with_layout(
+        &self,
+        layout: crate::snapshot::SnapshotLayout,
+    ) -> Vec<(u16, Vec<u8>)> {
+        let mut groups = self.saved_groups();
+        if layout == crate::snapshot::SnapshotLayout::TextV1SceneV1 {
+            // 0x437240: object u16, version 1, active, count, then 104-byte nodes.
+            for (_, body) in &mut groups {
+                body[2..4].copy_from_slice(&1u16.to_le_bytes());
+                body.drain(4..12);
+            }
+        }
+        groups
+    }
+
+    pub(crate) fn restore_with_layout(
+        &mut self,
+        groups: &[(u16, &[u8])],
+        lists: &[(u16, &[u8])],
+        layout: crate::snapshot::SnapshotLayout,
+    ) -> Result<(), &'static str> {
+        if layout != crate::snapshot::SnapshotLayout::TextV1SceneV1 {
+            return self.restore(groups, lists);
+        }
+        if !lists.is_empty() {
+            return Err("button lists have no v1 snapshot layout");
+        }
+        let mut converted = Vec::new();
+        for &(slot, body) in groups {
+            if body.len() < 12 || body[..4] != [0, 0, 1, 0] {
+                return Err("unsupported v1 button record header");
+            }
+            let count = u32::from_le_bytes(body[8..12].try_into().unwrap()) as usize;
+            if count > 4096 || body.len() != 12 + 104 * count {
+                return Err("invalid v1 button record length");
+            }
+            let mut modern = 0x20000u32.to_le_bytes().to_vec();
+            for size in self.screen_size.pixels() {
+                modern.extend(size.to_le_bytes());
+            }
+            modern.extend(&body[4..]);
+            converted.push((slot, modern));
+        }
+        let records: Vec<_> = converted
+            .iter()
+            .map(|(slot, body)| (*slot, body.as_slice()))
+            .collect();
+        self.restore(&records, &[])
+    }
+
     /// Records 0x8c0 (0x14005efd0): header, +8 (the constructor's 1; only the unimplemented
     /// 0x2218/0x2219 touch it), the count, then each node +8..+112 (enabled, id, rect,
     /// links, four images; 104 bytes).

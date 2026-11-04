@@ -588,6 +588,17 @@ impl CameraHost {
     /// then words 15..18. A running move saves its targets as the base words.
     pub(crate) fn saved(&self, index: usize) -> Vec<u8> {
         let w = &self.cameras[index].words;
+        if self.early_projection {
+            // 0x42dca0: v2, words 37/38, base 0..14 snapped to move targets,
+            // then center 15/16. It never persists a running move or scale 17/18.
+            let mut camera = self.cameras[index].clone();
+            camera.stop_move(true);
+            let mut out = 2u16.to_le_bytes().to_vec();
+            for word in w[37..39].iter().chain(&camera.words[..17]) {
+                out.extend(word.to_le_bytes());
+            }
+            return out;
+        }
         let mut out = 3u16.to_le_bytes().to_vec();
         let mut put = |words: &[u32]| {
             for word in words {
@@ -633,6 +644,24 @@ impl CameraHost {
 
     /// Reader 0x14004ea90 for version 3; words 19/20 and 40.. keep their current values.
     pub(crate) fn restore(&mut self, index: usize, record: &[u8]) -> Result<(), &'static str> {
+        if self.early_projection {
+            if record.len() != 78 || record[..2] != [2, 0] {
+                return Err("unsupported early camera snapshot version or size");
+            }
+            let words: Vec<_> = record[2..]
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| u32::from_le_bytes(*b))
+                .collect();
+            let camera = &mut self.cameras[index];
+            *camera = Camera::default();
+            early::reset_defaults(camera);
+            camera.words[37..39].copy_from_slice(&words[..2]);
+            camera.words[..17].copy_from_slice(&words[2..]);
+            camera.words[21..37].fill(0);
+            return Ok(());
+        }
         let words: Vec<u32> = record
             .get(2..)
             .filter(|_| record.len() % 4 == 2 && record[..2] == [3, 0])
@@ -710,6 +739,32 @@ fn argument_names(command: u16) -> &'static [&'static str] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn v2_camera_snapshot_snaps_targets_without_saving_live_motion() {
+        let profile = crate::profile::Registry::builtin()
+            .profile("cmvs-20071117")
+            .unwrap();
+        let mut host = CameraHost::for_profile(profile);
+        let w = &mut host.cameras[0].words;
+        w[21] = 1;
+        w[22] = 0x80000000;
+        w[23..26].copy_from_slice(&[1f32.to_bits(), 2f32.to_bits(), 3f32.to_bits()]);
+        w[26] = 4f32.to_bits();
+        w[37..39].copy_from_slice(&[7, 8]);
+        let before = host.cameras[0].clone();
+        let record = host.saved(0);
+        assert_eq!(record.len(), 78);
+        assert_eq!(&record[..10], &[2, 0, 7, 0, 0, 0, 8, 0, 0, 0]);
+        assert_eq!(host.cameras[0], before);
+        host.restore(0, &record).unwrap();
+        assert_eq!(&host.cameras[0].words[1..4], &before.words[23..26]);
+        assert_eq!(host.cameras[0].words[12], before.words[26]);
+        assert_eq!(&host.cameras[0].words[21..37], &[0; 16]);
+        assert_eq!(host.saved(0), record);
+        assert!(CameraHost::default().restore(0, &record).is_err());
+        assert!(host.restore(0, &record[..77]).is_err());
+    }
 
     #[test]
     fn projection_uses_alternate_position_only_for_query_mode_one_during_move() {

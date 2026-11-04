@@ -31,14 +31,19 @@ pub(crate) fn decode_with_layout(
     if font_face.len() > 31 {
         return Err(FormatError("snapshot font face exceeds native capacity"));
     }
-    let logical_size = r.words::<2>()?.map(|v| v as i32);
-    if logical_size.iter().any(|&v| v <= 0) {
+    // V1 reconstructs at the current device size; no size is stored in its record.
+    let logical_size = if layout == SnapshotLayout::TextV1SceneV1 {
+        [0; 2]
+    } else {
+        r.words::<2>()?.map(|v| v as i32)
+    };
+    if layout != SnapshotLayout::TextV1SceneV1 && logical_size.iter().any(|&v| v <= 0) {
         return Err(FormatError("snapshot text logical size must be positive"));
     }
     let a = r.take(156)?;
     let b = r.take(148)?;
     let c = match layout {
-        SnapshotLayout::TextV2 => &[0; 208],
+        SnapshotLayout::TextV1SceneV1 | SnapshotLayout::TextV2 => &[0; 208],
         SnapshotLayout::TextV3 | SnapshotLayout::TextV3SceneV4 => r.take(208)?,
     };
     let word = |block: &[u8], at: usize| u32::from_le_bytes(block[at..at + 4].try_into().unwrap());
@@ -165,7 +170,7 @@ pub(crate) fn encode_with_layout(
     text: &TextObject,
     layout: SnapshotLayout,
 ) -> Result<Vec<u8>, FormatError> {
-    if layout == SnapshotLayout::TextV2 && text.line_break.is_some() {
+    if layout.text_version() < 3 && text.line_break.is_some() {
         return Err(FormatError(
             "snapshot text v2 has no extended line-break rules",
         ));
@@ -234,8 +239,10 @@ pub(crate) fn encode_with_layout(
     out.extend(text.glyph_capacity.to_le_bytes());
     out.extend(&text.font_face);
     out.push(0);
-    for size in text.logical_size {
-        out.extend((size as u32).to_le_bytes());
+    if layout != SnapshotLayout::TextV1SceneV1 {
+        for size in text.logical_size {
+            out.extend((size as u32).to_le_bytes());
+        }
     }
     out.extend(a);
     out.extend(b);

@@ -124,10 +124,10 @@ impl Startup<'_> {
             "ASPECT_RATIO_FILTER",
             crate::settings::render_mode_to_ini(display.render_mode),
         )?;
+        let id = self.system_save_identifier();
         let Some(SystemOutput::Profile(profile)) = &mut self.system_output else {
             unreachable!()
         };
-        let id = self.bootstrap.settings().get(&0x201d).copied();
         // Only persist CSS1 after the startup load command has completed,
         // including its missing-file branch. Earlier exits may precede variable
         // initialization and must not manufacture persistent defaults.

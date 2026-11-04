@@ -187,3 +187,129 @@ fn records_out_of_writer_order_or_beyond_tables_are_rejected() {
     let without_title = &bytes[13..];
     assert!(EngineSnapshot::decode(without_title).is_err());
 }
+
+fn v1_stream(objects: &[(u16, Option<u16>, Vec<u8>)]) -> Vec<u8> {
+    let bytes = stream(objects);
+    let mut out = Vec::new();
+    for record in parse_records(&bytes).unwrap() {
+        match record.tag {
+            0x6e0 => {}
+            0x304 => short(&mut out, 0x300, b"bgm01\0"),
+            _ => out.extend(&bytes[record.offset..record.body.end]),
+        }
+    }
+    out
+}
+
+#[test]
+fn text_v1_scene_v1_wire_records_roundtrip_and_reject_modern_or_out_of_range_state() {
+    use cmvs_rs::snapshot::SnapshotLayout;
+    let layout = SnapshotLayout::TextV1SceneV1;
+    let mut text = 1u16.to_le_bytes().to_vec();
+    text.extend(196u32.to_le_bytes());
+    text.push(0);
+    let mut fields = [0u8; 304];
+    fields[104..108].copy_from_slice(&1u32.to_le_bytes()); // font mode
+    fields[160..164].copy_from_slice(&148u32.to_le_bytes()); // ruby block size
+    text.extend(fields);
+    text.extend(0u16.to_le_bytes());
+    let scene = |kind: u32, flags: u32| {
+        let mut out = vec![255, 255, 1, 0];
+        for word in [kind, 1, flags, 0, 800, 600] {
+            out.extend(word.to_le_bytes());
+        }
+        out
+    };
+    let mut child = scene(0, 0);
+    child.extend(0xf0f0u16.to_le_bytes());
+    let mut draw = vec![3, 0, 0, 0];
+    for word in cmvs_rs::scene::DrawState::default().words {
+        draw.extend(word.to_le_bytes());
+    }
+    draw.extend([0; 20]);
+    let mut frames = 1u16.to_le_bytes().to_vec();
+    frames.extend([0; 656]); // four header words and 32 twenty-byte entries
+    long(&mut draw, 0x793, None, &frames);
+    let mut world = 1u16.to_le_bytes().to_vec();
+    world.extend([0; 28]);
+    for _ in 0..8 {
+        for word in [u32::MAX, 0, 0, 0, 0x21, 1350] {
+            world.extend(word.to_le_bytes());
+        }
+    }
+    long(&mut draw, 0x795, None, &world);
+    draw.extend(0x7789u16.to_le_bytes());
+    let mut image = Vec::new();
+    for word in [2u32, 0, 0, 0, 0, 1, 1, 0xffe0e0, 0] {
+        image.extend(word.to_le_bytes());
+    }
+    image.extend(b"synthetic.pb3\0\0");
+    for word in [0u32, 2, 1] {
+        image.extend(word.to_le_bytes());
+    }
+    let mut parent = scene(1, 0x80000000);
+    long(&mut parent, 0x740, None, &image);
+    long(&mut parent, 0x780, None, &draw);
+    long(&mut parent, 0x700, Some(255), &child);
+    parent.extend(0xf0f0u16.to_le_bytes());
+    let mut window = vec![0, 0, 1, 0];
+    window.extend([0; 1280]);
+    window.extend((child.len() as u32).to_le_bytes());
+    window.extend(&child);
+    let bytes = v1_stream(&[
+        (0x380, Some(0), text),
+        (0x400, Some(0), window),
+        (0x700, Some(20), parent),
+    ]);
+    let saved = EngineSnapshot::decode_with_layout(&bytes, layout).unwrap();
+    assert_eq!(saved.encode_with_layout(layout).unwrap(), bytes);
+    assert!(EngineSnapshot::decode(&bytes).is_err());
+    assert_eq!(
+        saved.objects[&20].image.as_ref().unwrap().filter,
+        Some([1, 0xffe0e0, 0])
+    );
+    assert_eq!(
+        saved.objects[&20]
+            .children
+            .keys()
+            .copied()
+            .collect::<Vec<_>>(),
+        [255]
+    );
+    assert!(saved.record_6e0.is_empty());
+    assert_eq!(saved.bgm, [b"bgm01".to_vec(), vec![]]);
+    for mutate in [0, 1, 2, 3] {
+        let mut bad = saved.clone();
+        match mutate {
+            0 => {
+                let c = bad
+                    .objects
+                    .get_mut(&20)
+                    .unwrap()
+                    .children
+                    .remove(&255)
+                    .unwrap();
+                bad.objects.get_mut(&20).unwrap().children.insert(256, c);
+            }
+            1 => bad.texts[8] = bad.texts[0].clone(),
+            2 => bad.bgm[1] = b"second".to_vec(),
+            _ => {
+                bad.objects
+                    .get_mut(&20)
+                    .unwrap()
+                    .draw
+                    .as_mut()
+                    .unwrap()
+                    .animation
+                    .as_mut()
+                    .unwrap()
+                    .frames[32]
+                    .duration = 1
+            }
+        }
+        assert!(bad.encode_with_layout(layout).is_err());
+    }
+    for end in [1, 3, bytes.len() - 1] {
+        assert!(EngineSnapshot::decode_with_layout(&bytes[..end], layout).is_err());
+    }
+}

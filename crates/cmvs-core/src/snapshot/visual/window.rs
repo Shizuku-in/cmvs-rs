@@ -15,14 +15,16 @@ pub(crate) fn decode_with_layout(
     layout: SnapshotLayout,
 ) -> Result<SavedWindow, FormatError> {
     let mut r = Reader::new(bytes);
+    let early = layout == SnapshotLayout::TextV1SceneV1;
     let text = usize::from(r.u16()?);
-    if text >= 12 || r.u16()? != 3 {
+    if text >= if early { 8 } else { 12 } || r.u16()? != if early { 1 } else { 3 } {
         return Err(FormatError(
             "unsupported snapshot window version or text slot",
         ));
     }
-    let logical_size = r.words::<2>()?;
-    let raw = r.take(2496)?;
+    let logical_size = if early { [0; 2] } else { r.words::<2>()? };
+    let raw = r.take(if early { 1280 } else { 2496 })?;
+    let switch_at = if early { 1256 } else { 2472 };
     let word = |at: usize| u32::from_le_bytes(raw[at..at + 4].try_into().unwrap());
     let half = |at: usize| u16::from_le_bytes(raw[at..at + 2].try_into().unwrap());
     if word(0) as usize != text || raw[34..40] != [0; 6] {
@@ -30,7 +32,11 @@ pub(crate) fn decode_with_layout(
     }
     let mut buttons = [WindowButton::default(); 32];
     let mut button_words = [0; 32];
-    for (i, button) in buttons.iter_mut().enumerate() {
+    for (i, button) in buttons
+        .iter_mut()
+        .enumerate()
+        .take(if early { 16 } else { 32 })
+    {
         let at = 40 + 76 * i;
         button.enabled = word(at) != 0;
         button.states =
@@ -49,20 +55,24 @@ pub(crate) fn decode_with_layout(
             position: [word(12) as i32, word(16) as i32],
             size: [word(20) as i32, word(24) as i32],
             switch_positions: [
-                [word(2480) as i32, word(2484) as i32],
-                [word(2472) as i32, word(2476) as i32],
+                [word(switch_at + 8) as i32, word(switch_at + 12) as i32],
+                [word(switch_at) as i32, word(switch_at + 4) as i32],
             ],
             cursor_mode: half(28),
             cursor_offset: [half(30) as i16, half(32) as i16],
-            position_switch: word(2488) != 0,
+            position_switch: word(switch_at + 16) != 0,
             object: SceneObject::default(),
             buttons,
             pressed_button: -1,
-            switch_state: word(2492),
+            switch_state: word(switch_at + 20),
         },
-        logical_size,
+        logical_size: if early {
+            scene.logical_size
+        } else {
+            logical_size
+        },
         button_words,
-        switch_state: word(2492),
+        switch_state: word(switch_at + 20),
         scene,
     })
 }
@@ -73,7 +83,21 @@ pub(crate) fn encode_with_layout(
     layout: SnapshotLayout,
 ) -> Result<Vec<u8>, crate::FormatError> {
     let state = &window.state;
-    let mut raw = vec![0u8; 2496];
+    let early = layout == SnapshotLayout::TextV1SceneV1;
+    if early
+        && (state.text >= 8
+            || state.buttons[16..]
+                .iter()
+                .any(|b| *b != WindowButton::default())
+            || window.button_words[16..] != [0; 16])
+    {
+        return Err(FormatError(
+            "window v1 supports only eight texts and sixteen buttons",
+        ));
+    }
+    let switch_at = if early { 1256 } else { 2472 };
+    let count = if early { 16 } else { 32 };
+    let mut raw = vec![0u8; if early { 1280 } else { 2496 }];
     let mut word = |at: usize, value: u32| raw[at..at + 4].copy_from_slice(&value.to_le_bytes());
     word(0, state.text as u32);
     word(4, u32::from(state.visible));
@@ -82,13 +106,13 @@ pub(crate) fn encode_with_layout(
     word(16, state.position[1] as u32);
     word(20, state.size[0] as u32);
     word(24, state.size[1] as u32);
-    word(2472, state.switch_positions[1][0] as u32);
-    word(2476, state.switch_positions[1][1] as u32);
-    word(2480, state.switch_positions[0][0] as u32);
-    word(2484, state.switch_positions[0][1] as u32);
-    word(2488, u32::from(state.position_switch));
-    word(2492, window.switch_state);
-    for (i, button) in state.buttons.iter().enumerate() {
+    word(switch_at, state.switch_positions[1][0] as u32);
+    word(switch_at + 4, state.switch_positions[1][1] as u32);
+    word(switch_at + 8, state.switch_positions[0][0] as u32);
+    word(switch_at + 12, state.switch_positions[0][1] as u32);
+    word(switch_at + 16, u32::from(state.position_switch));
+    word(switch_at + 20, window.switch_state);
+    for (i, button) in state.buttons.iter().enumerate().take(count) {
         let at = 40 + 76 * i;
         word(at, u32::from(button.enabled));
         word(at + 72, window.button_words[i]);
@@ -97,7 +121,7 @@ pub(crate) fn encode_with_layout(
     half(28, state.cursor_mode);
     half(30, state.cursor_offset[0] as u16);
     half(32, state.cursor_offset[1] as u16);
-    for (i, button) in state.buttons.iter().enumerate() {
+    for (i, button) in state.buttons.iter().enumerate().take(count) {
         let at = 40 + 76 * i;
         for (s, values) in button.states.iter().enumerate() {
             for (n, &value) in values.iter().enumerate() {
@@ -109,9 +133,11 @@ pub(crate) fn encode_with_layout(
         }
     }
     let mut out = (state.text as u16).to_le_bytes().to_vec();
-    out.extend(3u16.to_le_bytes());
-    for size in window.logical_size {
-        out.extend(size.to_le_bytes());
+    out.extend(if early { 1u16 } else { 3u16 }.to_le_bytes());
+    if !early {
+        for size in window.logical_size {
+            out.extend(size.to_le_bytes());
+        }
     }
     out.extend(raw);
     let scene = window.scene.encode_with_layout(layout)?;

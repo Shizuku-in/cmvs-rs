@@ -731,7 +731,7 @@ impl<'a> Startup<'a> {
                 }),
             };
         }
-        let id = self.bootstrap.settings().get(&0x201d).copied();
+        let id = self.system_save_identifier();
         if command == 0x129
             && let Some(output) = &mut self.system_output
         {
