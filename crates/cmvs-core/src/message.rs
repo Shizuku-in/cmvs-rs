@@ -213,6 +213,8 @@ pub trait GlyphMetrics: std::fmt::Debug {
 #[derive(Debug, Default)]
 pub struct MessageHost {
     child_slots: crate::scene::ChildSlots,
+    /// Inspected 2007 text creation uses eight slots and accepts explicit faces.
+    legacy_text_creation: bool,
     screen_size: crate::viewport::ScreenSize,
     /// State owned by the separately dispatched font-cell text implementation.
     font_cells: font_cells::State,
@@ -243,6 +245,7 @@ impl MessageHost {
     pub fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
         Self {
             child_slots: crate::scene::ChildSlots::for_profile(profile),
+            legacy_text_creation: profile.is_inspected_20071117(),
             ..Self::default()
         }
     }
@@ -1020,7 +1023,8 @@ impl MessageHost {
     /// glyph size and spacing 0; colours 0xffffff, +144 delay 30, +148 shown, +152 layer 1,
     /// ruby size 12. The logical size (+552/+556) repeats the configured screen info +8/+12.
     /// The face is copied into +44 and selected on the
-    /// font object (0x140059b90); only the default empty face is modeled. The capacity
+    /// font object (0x140059b90); explicit faces are enabled only for the inspected
+    /// 2007 constructor (0x444410 -> 0x4356a0 -> 0x4338a0). The capacity
     /// (+324) sizes the glyph texture in 0x14005a6a0: 0 and 196 (0x215d's value) both give
     /// a 1024x2048 texture; other capacities are rejected because textures are not modeled.
     /// Replacing a text object a window caches (+2528) would leave that window stale.
@@ -1035,19 +1039,22 @@ impl MessageHost {
             ));
         }
         let index = index as usize;
-        if index >= TEXT_OBJECTS {
+        if index
+            >= if self.legacy_text_creation {
+                8
+            } else {
+                TEXT_OBJECTS
+            }
+        {
             return Err(error(
                 pc,
                 0x2100,
-                "text object index outside 0..11 sets an unmodeled flag",
+                "text object index outside the selected table sets an unmodeled flag",
             ));
         }
-        if !{
-            let reference = call.argument(8, text_argument_names(call.command)[1])?;
-            call.vm.resolve_string(reference)?
-        }
-        .is_empty()
-        {
+        let reference = call.argument(8, text_argument_names(call.command)[1])?;
+        let requested_face = call.vm.resolve_string(reference)?;
+        if !requested_face.is_empty() && !self.legacy_text_creation {
             return Err(error(pc, 0x2100, "font face selection is not modeled"));
         }
         let glyph_capacity = call.argument(12, text_argument_names(call.command)[2])?;
@@ -1070,9 +1077,17 @@ impl MessageHost {
             .state_mut()
             .set_system_integer(0, 1)
             .expect("slot 0 exists");
-        let face = self.font_slot(index);
+        let mut face = self.font_slot(index);
+        if self.legacy_text_creation {
+            face = if requested_face.is_empty() {
+                self.default_face()
+            } else {
+                Arc::from(requested_face.as_slice())
+            };
+            self.font_faces[index] = Some(face.clone());
+        }
         self.texts[index] = Some(TextObject {
-            font_face: Vec::new(),
+            font_face: requested_face,
             face,
             bold: self.font_bold[index],
             revision_alpha: self.output_settings.revision_alpha,

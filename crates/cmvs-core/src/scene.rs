@@ -339,7 +339,7 @@ impl DrawState {
 pub struct SceneHost {
     child_slots: ChildSlots,
     allow_filter_mode_one: bool,
-    allow_y_half_turn_modes: bool,
+    allow_legacy_sine_modes: bool,
     screen_size: crate::viewport::ScreenSize,
     pub(crate) fragment_effects: BTreeMap<u8, crate::effect_objects::FragmentEffect>,
     pub(crate) collision_effects: BTreeMap<u8, crate::effect_objects::CollisionEffect>,
@@ -361,7 +361,7 @@ impl SceneHost {
         Self {
             child_slots: ChildSlots::for_profile(profile),
             allow_filter_mode_one: profile.is_inspected_20071117(),
-            allow_y_half_turn_modes: profile.is_inspected_20071117(),
+            allow_legacy_sine_modes: profile.is_inspected_20071117(),
             ..Self::default()
         }
     }
@@ -1171,7 +1171,7 @@ impl SceneHost {
             screen_size: self.screen_size,
             child_slots: self.child_slots,
             allow_filter_mode_one: self.allow_filter_mode_one,
-            allow_y_half_turn_modes: self.allow_y_half_turn_modes,
+            allow_legacy_sine_modes: self.allow_legacy_sine_modes,
             particle_effects: Default::default(),
             falling_effects: Default::default(),
             collision_effects: Default::default(),

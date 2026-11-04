@@ -3,7 +3,7 @@
 | 游戏 | 样本目录 | 登记与研究 |
 |---|---|---|
 | [《プリミティブ リンク》 / puriring](puriring/README.md) | `2007-02-02_PURIRING_withDVDValidation` | 基础档案；尚无构建 profile 或运行验证 |
-| [《明日の君と逢うために》 / asukimi](asukimi/README.md) | `2007-11-30_ASUKIMI` | 已绑定 x86 构建、256 子槽、按下边沿与 800×600 画布；旧版快照写入、同会话及重启读回短段通过，路线推进至 snky04；预加载音频、部分快照记录及完整路线仍待验证，另有 1 个空表达式脚本 |
+| [《明日の君と逢うために》 / asukimi](asukimi/README.md) | `2007-11-30_ASUKIMI` | 已绑定 x86 构建、256 子槽、按下边沿与 800×600 画布；旧版快照写入、同会话及重启读回短段通过，世界坐标动画 0x40 已接入，独立完整绘制重放越过 snky06 旧停点并运行至 1,200 万步预算；V1–V4 存读档通过，设置页滑块与字体对话框可操作；部分快照记录、完整路线及原生存档界面仍待验证，另有 1 个空表达式脚本 |
 | [《春色桜瀬》 / harouse](harouse/README.md) | `2008-07-31_HAROUSE` | 基础档案；尚无构建 profile 或运行验证 |
 | [《明日の七海と逢うために〜明日の君と逢うために〜FAN DISC》 / asunana](asunana/README.md) | `2008-10-24_ASUNANA` | 基础档案；尚无构建 profile 或运行验证 |
 | [《メモリア》 / memoria](memoria/README.md) | `2009-08-28_MEMORIA` | 基础档案；尚无构建 profile 或运行验证 |

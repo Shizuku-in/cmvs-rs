@@ -1,6 +1,6 @@
 //! Draw state +152, 0x21f9..0x21fd; addresses refer to the documented binary hash.
 //! Linear mode 0, absolute quadratic ease-out mode 1, sine Y modes 0x22/0x31/0x38/0x39/0x41 and X mode 0x48.
-//! The inspected cmvs-20071117 build additionally admits Y half-turn modes 0x20/0x21/0x30.
+//! The inspected cmvs-20071117 build additionally admits Y half-turn modes 0x20/0x21/0x30 and X full-turn mode 0x40.
 use super::SceneHost;
 use crate::{
     bytecode::DecodeError,
@@ -64,21 +64,28 @@ impl WorldMotion {
             // cvtsi2ss uses zero-extended rdi/r8, not the decompiler's signed int casts.
             let elapsed = playback.elapsed as f32;
             let duration = key.duration as f32;
-            if matches!(key.mode as u8, 0x20 | 0x21 | 0x30) {
-                // cmvs-20071117 0x414af0 cases 32/33/48 -> 0x42db70: positive
-                // unit/quarter Y arch or negative arch using the full high word / 100.
+            if matches!(key.mode as u8, 0x20 | 0x21 | 0x30 | 0x40) {
+                // cmvs-20071117 0x414af0 cases 32/33/48/64 -> 0x42db70:
+                // Y half-turn arches or X full-turn oscillation; full high word / 100.
                 // Admission is profile-bound below; bit 0x8000 is ignored.
                 let amplitude = match key.mode as u8 {
                     0x20 => 1.0,
                     0x21 => 0.25,
                     _ => (f64::from(key.mode >> 16) / 100.0) as f32,
                 };
-                let degrees = (f64::from(playback.elapsed % key.duration) * 180.0
+                let turn = if key.mode as u8 == 0x40 { 360.0 } else { 180.0 };
+                let degrees = (f64::from(playback.elapsed % key.duration) * turn
                     / f64::from(duration)) as f32;
                 let radians = f64::from(degrees) / 180.0 * f64::from(std::f32::consts::PI);
                 let sine = (radians.sin() * f64::from(amplitude)) as f32;
                 let offset = ((f64::from(sine) * 100.0) as i32 as f64 / 100.0) as f32;
                 words[11] = playback.base[0];
+                if key.mode as u8 == 0x40 {
+                    words[11] = (f32::from_bits(playback.base[0]) + offset).to_bits();
+                    words[12] = playback.base[1];
+                    words[13] = playback.base[2];
+                    return None;
+                }
                 let base_y = f32::from_bits(playback.base[1]);
                 words[12] = if key.mode as u8 != 0x30 {
                     base_y + offset
@@ -181,7 +188,7 @@ impl WorldMotion {
 impl SceneHost {
     fn supports_world_motion_mode(&self, mode: u32) -> bool {
         WorldMotion::supports_mode(mode)
-            || self.allow_y_half_turn_modes && matches!(mode as u8, 0x20 | 0x21 | 0x30)
+            || self.allow_legacy_sine_modes && matches!(mode as u8, 0x20 | 0x21 | 0x30 | 0x40)
     }
 
     /// 0x228a normal execution: replace +152, write key 0, and capture the execution-time
@@ -355,14 +362,14 @@ mod tests {
     }
 
     #[test]
-    fn filter_and_half_turn_capabilities_are_independent_of_each_other_and_slot_capacity() {
-        for (allow_filter_mode_one, allow_y_half_turn_modes) in
+    fn filter_and_legacy_sine_capabilities_are_independent_of_each_other_and_slot_capacity() {
+        for (allow_filter_mode_one, allow_legacy_sine_modes) in
             [(false, false), (true, false), (false, true), (true, true)]
         {
             let mut scene = super::super::SceneHost {
                 child_slots: super::super::ChildSlots::Slots256,
                 allow_filter_mode_one,
-                allow_y_half_turn_modes,
+                allow_legacy_sine_modes,
                 ..Default::default()
             };
             // Both before and after restoring scene state, only the selected
@@ -371,10 +378,10 @@ mod tests {
                 assert_eq!(scene.supports_image_filter_mode(1), allow_filter_mode_one);
                 assert!(scene.supports_image_filter_mode(2));
                 assert!(scene.supports_world_motion_mode(0));
-                for mode in [0x20, 0x21, 0x30] {
+                for mode in [0x20, 0x21, 0x30, 0x40] {
                     assert_eq!(
                         scene.supports_world_motion_mode(mode),
-                        allow_y_half_turn_modes
+                        allow_legacy_sine_modes
                     );
                 }
                 scene.restore(

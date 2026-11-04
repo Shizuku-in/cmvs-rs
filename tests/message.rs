@@ -1062,6 +1062,51 @@ fn standalone_text_creation_uses_constructor_values_and_overwrites_in_place() {
 }
 
 #[test]
+fn legacy_text_creation_reselects_named_and_default_faces_only_for_the_inspected_build() {
+    let profile = cmvs_rs::profile::Registry::builtin()
+        .profile("cmvs-20071117")
+        .unwrap();
+    let mut code = vec![];
+    call(&mut code, 0x2100, &[196, 1, 7]);
+    call(&mut code, 0x2100, &[196, 11, 7]);
+    call(&mut code, 0x2100, &[196, 0, 7]);
+    let script = script_with_text(&code, b"\0MS Gothic\0Other\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::for_profile(profile);
+    for face in [b"MS Gothic".as_slice(), b"Other", b""] {
+        run(&mut vm, &mut messages, 1);
+        let text = messages.text(7).unwrap();
+        assert_eq!(text.font_face, face);
+        assert_eq!(
+            text.face.as_ref(),
+            if face.is_empty() {
+                messages.default_face()
+            } else {
+                std::sync::Arc::from(face)
+            }
+            .as_ref()
+        );
+    }
+    let mut wrong_hash = profile.clone();
+    wrong_hash.binaries[0].sha256 = [0; 32];
+    let mut messages = MessageHost::for_profile(&wrong_hash);
+    let mut vm = Machine::new(&script).unwrap();
+    pending(&mut vm);
+    let before = (vm.pc(), vm.stack().len_bytes());
+    assert!(messages.shared_message(&mut vm).is_err());
+    assert_eq!((vm.pc(), vm.stack().len_bytes()), before);
+    assert!(!messages.font_present(7));
+    let mut code = vec![];
+    call(&mut code, 0x2100, &[196, 0, 8]);
+    let script = script_with_text(&code, b"\0");
+    let mut vm = Machine::new(&script).unwrap();
+    let mut messages = MessageHost::for_profile(profile);
+    pending(&mut vm);
+    assert!(messages.shared_message(&mut vm).is_err());
+    assert!(!messages.font_present(8));
+}
+
+#[test]
 fn standalone_text_creation_rejects_unmodeled_arguments_atomically() {
     // Index 12, negative index, a named face, an unverified capacity, a window's text.
     for (words, window) in [

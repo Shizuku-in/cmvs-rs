@@ -34,7 +34,7 @@ mod tests {
     fn v1_world_tracks_restore_and_continue_without_losing_axes_or_timing() {
         use crate::scene::{MotionKey, MotionPlayback, WorldMotion};
         let layout = SnapshotLayout::TextV1SceneV1;
-        for mode in [0x20, 0x21, 0x00c80030] {
+        for mode in [0x20, 0x21, 0x00c80030, 0x00c80040] {
             let mut track = WorldMotion {
                 playback: Some(MotionPlayback {
                     base: [1f32.to_bits(), 2f32.to_bits(), 0x80000000],
@@ -74,13 +74,24 @@ mod tests {
             let middle = match mode {
                 0x20 => 3f32,
                 0x21 => 2.25,
+                0x00c80040 => 2.0,
                 _ => 0.0,
             };
             assert_eq!(
                 &draw.words[11..14],
                 &[1f32.to_bits(), middle.to_bits(), 0x80000000]
             );
-            scene.advance_frame(200);
+            if mode == 0x00c80040 {
+                scene.advance_frame(100);
+                let draw = scene.object(20).unwrap().draw.as_ref().unwrap();
+                assert_eq!(
+                    &draw.words[11..14],
+                    &[(-1f32).to_bits(), 2f32.to_bits(), 0x80000000]
+                );
+                scene.advance_frame(100);
+            } else {
+                scene.advance_frame(200);
+            }
             let draw = scene.object(20).unwrap().draw.as_ref().unwrap();
             assert_eq!(&draw.words[11..14], &track.keys[0].xyz);
             assert!(draw.world_motion.is_none());

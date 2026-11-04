@@ -4852,6 +4852,69 @@ pub static TEXT_ALPHA: &[Entry] = &[Entry {
     handler: root_settings,
 }];
 
+pub static POLAR_POINT: &[Entry] = &[Entry {
+    command: 0xd8,
+    name: "integer polar point",
+    capability: Capability::Math,
+    handler: |_hosts, call| {
+        crate::math::handle_polar_point(call)?;
+        Ok(Flow::Done)
+    },
+}];
+
+pub static AUDIO_PRELOAD: &[Entry] = &[
+    Entry {
+        command: 0x248,
+        name: "preload audio",
+        capability: Capability::Audio,
+        handler: |hosts, call| {
+            let h = hosts.audio.as_mut().expect("audio capability checked");
+            h.audio.handle_preload(call, h.backend)?;
+            Ok(Flow::Done)
+        },
+    },
+    Entry {
+        command: 0x249,
+        name: "release preloaded audio",
+        capability: Capability::Audio,
+        handler: |hosts, call| {
+            let h = hosts.audio.as_mut().expect("audio capability checked");
+            h.audio.handle_preload(call, h.backend)?;
+            Ok(Flow::Done)
+        },
+    },
+    Entry {
+        command: 0x24a,
+        name: "play preloaded audio",
+        capability: Capability::Audio,
+        handler: |hosts, call| {
+            let h = hosts.audio.as_mut().expect("audio capability checked");
+            h.audio.handle_preload(call, h.backend)?;
+            Ok(Flow::Done)
+        },
+    },
+    Entry {
+        command: 0x24b,
+        name: "stop preloaded audio",
+        capability: Capability::Audio,
+        handler: |hosts, call| {
+            let h = hosts.audio.as_mut().expect("audio capability checked");
+            h.audio.handle_preload(call, h.backend)?;
+            Ok(Flow::Done)
+        },
+    },
+    Entry {
+        command: 0x24f,
+        name: "preloaded audio volume",
+        capability: Capability::Audio,
+        handler: |hosts, call| {
+            let h = hosts.audio.as_mut().expect("audio capability checked");
+            h.audio.handle_preload(call, h.backend)?;
+            Ok(Flow::Done)
+        },
+    },
+];
+
 pub static SE_RESTART: &[Entry] = &[Entry {
     command: 0xb4,
     name: "restart SE channel",
@@ -5032,6 +5095,8 @@ pub static VARIANT_TABLES: &[&[Entry]] = &[
     PARTICLES,
     BACKGROUND_AUDIO,
     SE_RESTART,
+    AUDIO_PRELOAD,
+    POLAR_POINT,
     TEXT_ALPHA,
     OBJECT_QUEUE,
     LIST_SELECT,
@@ -5054,6 +5119,8 @@ pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'st
         crate::profile::VariantId::Particles => PARTICLES,
         crate::profile::VariantId::BackgroundAudio => BACKGROUND_AUDIO,
         crate::profile::VariantId::SeRestart => SE_RESTART,
+        crate::profile::VariantId::AudioPreload => AUDIO_PRELOAD,
+        crate::profile::VariantId::PolarPoint => POLAR_POINT,
         crate::profile::VariantId::FallingBillboards => FALLING_BILLBOARDS,
         crate::profile::VariantId::CollisionParticles => COLLISION_PARTICLES,
         crate::profile::VariantId::Fragments => FRAGMENTS,
@@ -5088,6 +5155,8 @@ pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
             "variant image fragment override"
         }
         Semantics::Variant(crate::profile::VariantId::SeRestart) => "variant SE restart",
+        Semantics::Variant(crate::profile::VariantId::AudioPreload) => "variant audio preload",
+        Semantics::Variant(crate::profile::VariantId::PolarPoint) => "variant integer polar point",
         Semantics::Root => "base semantics",
     }
 }

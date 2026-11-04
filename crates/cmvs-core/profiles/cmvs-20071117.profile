@@ -220,7 +220,7 @@ binary x86 file=cmvs.exe sha256=caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c97
 0x20d5 unreviewed 0x4de3a
 0x20d6 unreviewed 0x4de42
 0x20d7 unreviewed 0x4de4a
-0x20d8 unreviewed 0x4de52
+0x20d8 unreviewed 0x4de52 variant=polar-point:x86:caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c9715a20e7a5f36d02b evidence=games/asukimi/README.md
 0x20d9 unreviewed 0x4de5a
 0x20da unreviewed 0x4de62
 0x20db unreviewed 0x4de6a
@@ -588,14 +588,14 @@ binary x86 file=cmvs.exe sha256=caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c97
 0x2245 noop 0x4d99b
 0x2246 noop 0x4d99b
 0x2247 noop 0x4d99b
-0x2248 unreviewed 0x4e73f
-0x2249 unreviewed 0x4e747
-0x224a unreviewed 0x4e74f
-0x224b unreviewed 0x4e757
+0x2248 unreviewed 0x4e73f variant=audio-preload:x86:caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c9715a20e7a5f36d02b evidence=games/asukimi/README.md
+0x2249 unreviewed 0x4e747 variant=audio-preload:x86:caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c9715a20e7a5f36d02b evidence=games/asukimi/README.md
+0x224a unreviewed 0x4e74f variant=audio-preload:x86:caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c9715a20e7a5f36d02b evidence=games/asukimi/README.md
+0x224b unreviewed 0x4e757 variant=audio-preload:x86:caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c9715a20e7a5f36d02b evidence=games/asukimi/README.md
 0x224c noop 0x4d99b
 0x224d noop 0x4d99b
 0x224e noop 0x4d99b
-0x224f unreviewed 0x4e75f
+0x224f unreviewed 0x4e75f variant=audio-preload:x86:caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c9715a20e7a5f36d02b evidence=games/asukimi/README.md
 0x2250 unreviewed 0x4e767
 0x2251 noop 0x4d99b
 0x2252 noop 0x4d99b

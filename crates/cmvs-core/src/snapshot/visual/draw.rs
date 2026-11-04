@@ -114,8 +114,8 @@ pub(super) fn decode_with_layout(
     }
     if r.peek() == Some(0x795) {
         r.u16()?;
-        let allow_y_half_turn_modes = text_v1_scene_v1;
-        out.world_motion = Some(Box::new(world(r.chunk()?, allow_y_half_turn_modes)?));
+        let allow_legacy_sine_modes = text_v1_scene_v1;
+        out.world_motion = Some(Box::new(world(r.chunk()?, allow_legacy_sine_modes)?));
     }
     if r.peek().is_some_and(|tag| (0x790..=0x795).contains(&tag)) {
         return Err(FormatError(
@@ -471,7 +471,7 @@ fn position(bytes: &[u8]) -> Result<PositionMotion, FormatError> {
     Ok(PositionMotion { playback, keys })
 }
 
-fn world(bytes: &[u8], allow_y_half_turn_modes: bool) -> Result<WorldMotion, FormatError> {
+fn world(bytes: &[u8], allow_legacy_sine_modes: bool) -> Result<WorldMotion, FormatError> {
     let mut r = track(bytes, WORLD_SIZE)?;
     let [play, x, y, z, start, current, elapsed] = r.words::<7>()?;
     let mut keys = [MotionKey::default(); WORLD_MOTION_KEYS];
@@ -479,7 +479,7 @@ fn world(bytes: &[u8], allow_y_half_turn_modes: bool) -> Result<WorldMotion, For
         let [next, kx, ky, kz, mode, duration] = r.words::<6>()?;
         if !keys_in_range(next as i32, WORLD_MOTION_KEYS)
             || !(WorldMotion::supports_mode(mode)
-                || allow_y_half_turn_modes && matches!(mode as u8, 0x20 | 0x21 | 0x30))
+                || allow_legacy_sine_modes && matches!(mode as u8, 0x20 | 0x21 | 0x30 | 0x40))
         {
             return Err(FormatError("snapshot world motion key is not supported"));
         }

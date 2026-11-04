@@ -184,8 +184,24 @@ impl HostAudioControl {
     }
 }
 
+/// 2007 0x450030: DirectSound hundredth-decibel conversion; invalid positive gains
+/// leave the existing device volume untouched.
+fn preloaded_gain(volume: u32) -> Option<f32> {
+    let db = if volume == 0 {
+        -10000
+    } else {
+        let fraction = (f64::from(volume) / 256.0) as f32;
+        let logarithm = f64::from(fraction).log10() as f32;
+        (f64::from(logarithm) * 4000.0) as i32
+    };
+    (-10000..=0)
+        .contains(&db)
+        .then(|| 10f32.powf(db as f32 / 2000.0))
+}
+
 /// Native output shared by desktop and Android hosts.
 pub struct NativeAudio {
+    preloaded: [Option<Channel>; cmvs_core::audio::PRELOADED_SOUNDS],
     output_enabled: Arc<AtomicBool>,
     host_control: HostAudioControl,
     root: PathBuf,
@@ -221,6 +237,7 @@ impl NativeAudio {
             stream.config().channel_count()
         );
         Ok(Self {
+            preloaded: std::array::from_fn(|_| None),
             output_enabled: Arc::new(AtomicBool::new(true)),
             host_control: HostAudioControl {
                 active: Arc::new(AtomicBool::new(true)),
@@ -361,6 +378,79 @@ impl NativeAudio {
     }
 }
 impl AudioBackend for NativeAudio {
+    fn preload(&mut self, slot: u8, name: &[u8]) -> Result<bool, Box<dyn Error>> {
+        let index = usize::from(slot);
+        if index >= self.preloaded.len() {
+            return Err("preloaded sound slot out of range".into());
+        }
+        let sound = self
+            .load(ResourceKind::SoundEffect, name)?
+            .map(|data| VorbisProgram::new(data, None, false))
+            .transpose()?;
+        let loaded = sound.is_some();
+        self.preloaded[index] = sound.map(|program| self.prepare(program, 256, 0));
+        Ok(loaded)
+    }
+    fn release_preloaded(&mut self, slot: u8) -> Result<(), Box<dyn Error>> {
+        *self
+            .preloaded
+            .get_mut(usize::from(slot))
+            .ok_or("preloaded sound slot out of range")? = None;
+        Ok(())
+    }
+
+    fn play_preloaded(
+        &mut self,
+        slot: u8,
+        looped: bool,
+        volume: u32,
+    ) -> Result<(), Box<dyn Error>> {
+        let index = usize::from(slot);
+        let current = self
+            .preloaded
+            .get(index)
+            .ok_or("preloaded sound slot out of range")?;
+        if let Some(current) = current {
+            current.check()?;
+            if current.sink.empty() {
+                let program = VorbisProgram::from_shared(current.bytes.clone(), looped)?;
+                let mut candidate = self.prepare(program, 256, 0);
+                candidate.gain = current.gain;
+                candidate.sink.set_volume(current.gain);
+                self.preloaded[index] = Some(candidate);
+            }
+            let current = self.preloaded[index].as_mut().unwrap();
+            current.looped.store(looped, Ordering::Relaxed);
+            if let Some(gain) = preloaded_gain(volume) {
+                current.gain = gain;
+                current.sink.set_volume(gain);
+            }
+            current.sink.play();
+        }
+        Ok(())
+    }
+    fn stop_preloaded(&mut self, slot: u8) -> Result<(), Box<dyn Error>> {
+        if let Some(current) = self
+            .preloaded
+            .get(usize::from(slot))
+            .ok_or("preloaded sound slot out of range")?
+        {
+            current.sink.pause();
+        }
+        Ok(())
+    }
+    fn set_preloaded_volume(&mut self, slot: u8, volume: u32) -> Result<(), Box<dyn Error>> {
+        if let Some(current) = self
+            .preloaded
+            .get_mut(usize::from(slot))
+            .ok_or("preloaded sound slot out of range")?
+            && let Some(gain) = preloaded_gain(volume)
+        {
+            current.gain = gain;
+            current.sink.set_volume(gain);
+        }
+        Ok(())
+    }
     fn set_output_enabled(&mut self, enabled: bool) -> Result<(), Box<dyn Error>> {
         self.output_enabled.store(enabled, Ordering::Relaxed);
         Ok(())
@@ -711,6 +801,9 @@ impl AudioBackend for NativeAudio {
                 *channel = None;
             }
         }
+        for channel in self.preloaded.iter().flatten() {
+            channel.check()?;
+        }
         for channel in &mut self.bgm {
             Self::tick_channel(channel)?;
         }
@@ -761,6 +854,15 @@ impl AudioBackend for NativeAudio {
 #[cfg(test)]
 mod output_gate_tests {
     use super::*;
+
+    #[test]
+    fn preloaded_volume_uses_directsound_logarithmic_gain_and_rejects_positive_db() {
+        assert_eq!(preloaded_gain(256), Some(1.0));
+        let half = preloaded_gain(128).unwrap();
+        assert!((half - 0.25).abs() < 0.001);
+        assert_eq!(preloaded_gain(0), Some(0.00001));
+        assert_eq!(preloaded_gain(512), None);
+    }
 
     #[test]
     fn host_and_game_mutes_are_independent_and_preserve_stream_consumption() {

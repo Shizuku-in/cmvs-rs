@@ -11,6 +11,8 @@ use std::error::Error;
 pub const SE_CHANNELS: usize = 6;
 /// Four voice channels map to device channels 5..8 (0x140070650).
 pub const VOICE_CHANNELS: usize = 4;
+/// Independent prepared-sound pool in the inspected 2007 device.
+pub const PRELOADED_SOUNDS: usize = 24;
 /// The file name occupies +1656..+1688 of each channel record.
 const NAME_CAPACITY: usize = 31;
 
@@ -91,6 +93,25 @@ pub struct SePlayback {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AudioRequest {
+    Preload {
+        slot: u8,
+        name: Vec<u8>,
+    },
+    ReleasePreloaded {
+        slot: u8,
+    },
+    PlayPreloaded {
+        slot: u8,
+        looped: bool,
+        volume: u32,
+    },
+    StopPreloaded {
+        slot: u8,
+    },
+    SetPreloadedVolume {
+        slot: u8,
+        volume: u32,
+    },
     /// Silence output while consuming audio normally; playback and gains are retained.
     SetOutputEnabled {
         enabled: bool,
@@ -198,6 +219,28 @@ pub enum AudioRequest {
 }
 
 pub trait AudioBackend {
+    /// Replace an independent prepared sound without starting it. Missing resources
+    /// clear the slot and return false; Err preserves the slot for retry.
+    fn preload(&mut self, _slot: u8, _name: &[u8]) -> Result<bool, Box<dyn Error>> {
+        Err("audio backend does not implement preloading".into())
+    }
+    fn release_preloaded(&mut self, _slot: u8) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement releasing preloaded sounds".into())
+    }
+    fn play_preloaded(
+        &mut self,
+        _slot: u8,
+        _looped: bool,
+        _volume: u32,
+    ) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement playing preloaded sounds".into())
+    }
+    fn stop_preloaded(&mut self, _slot: u8) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement stopping preloaded sounds".into())
+    }
+    fn set_preloaded_volume(&mut self, _slot: u8, _volume: u32) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement preloaded sound volumes".into())
+    }
     /// Apply a device-wide output gate without stopping streams or changing their gains.
     /// Err leaves the gate unchanged.
     fn set_output_enabled(&mut self, _enabled: bool) -> Result<(), Box<dyn Error>> {
@@ -343,6 +386,34 @@ impl RecordingAudio {
     }
 }
 impl AudioBackend for RecordingAudio {
+    fn play_preloaded(
+        &mut self,
+        slot: u8,
+        looped: bool,
+        volume: u32,
+    ) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::PlayPreloaded {
+            slot,
+            looped,
+            volume,
+        })
+    }
+    fn stop_preloaded(&mut self, slot: u8) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::StopPreloaded { slot })
+    }
+    fn set_preloaded_volume(&mut self, slot: u8, volume: u32) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::SetPreloadedVolume { slot, volume })
+    }
+    fn preload(&mut self, slot: u8, name: &[u8]) -> Result<bool, Box<dyn Error>> {
+        self.record(AudioRequest::Preload {
+            slot,
+            name: name.to_vec(),
+        })?;
+        Ok(false)
+    }
+    fn release_preloaded(&mut self, slot: u8) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::ReleasePreloaded { slot })
+    }
     fn set_output_enabled(&mut self, enabled: bool) -> Result<(), Box<dyn Error>> {
         self.record(AudioRequest::SetOutputEnabled { enabled })
     }
@@ -442,6 +513,56 @@ impl Default for AudioHost {
 }
 
 impl AudioHost {
+    /// cmvs-20071117 0x442fb0/0x443050, selected only by the hash-bound variant.
+    pub(crate) fn handle_preload(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let slot = call.argument(4, "preloaded sound slot")?;
+        if slot >= PRELOADED_SOUNDS as u32 {
+            return Err(error(call.pc, call.command, "preloaded sound slot outside 0..23").into());
+        }
+        if call.command == 0x248 {
+            let reference = call.argument(8, "sound name")?;
+            let name = call.vm.resolve_string(reference)?;
+            // The original drops the old sound before rejecting a too-long name.
+            let loaded = if name.len() > NAME_CAPACITY {
+                backend.release_preloaded(slot as u8)?;
+                false
+            } else {
+                backend.preload(slot as u8, &name)?
+            };
+            call.complete(0x4008)?;
+            call.vm
+                .state_mut()
+                .set_system_integer(0, u32::from(loaded))?;
+        } else if call.command == 0x249 {
+            backend.release_preloaded(slot as u8)?;
+            call.complete(0x4004)?;
+        } else if call.command == 0x24a {
+            let scale = call.argument(8, "volume")? as i32;
+            let looped = call.argument(12, "loop")? != 0;
+            let mut volume = self.settings.master.wrapping_mul(self.settings.se) >> 8;
+            if scale > 0 {
+                volume = volume.wrapping_mul(scale as u32) >> 8;
+            }
+            if self.settings.se_enabled {
+                backend.play_preloaded(slot as u8, looped, volume)?;
+            }
+            call.complete(0x400c)?;
+        } else if call.command == 0x24b {
+            backend.stop_preloaded(slot as u8)?;
+            call.complete(0x4004)?;
+        } else {
+            let volume = self.settings.master.wrapping_mul(self.settings.se) >> 8;
+            if self.settings.se_enabled {
+                backend.set_preloaded_volume(slot as u8, volume)?;
+            }
+            call.complete(0x4004)?;
+        }
+        Ok(())
+    }
     /// QUIT/RESET: 0x14008a0a0 followed by 0x1400879e0. RESET also zeroes
     /// engine +1656..+1968, the six SE records. Mixer preferences survive.
     pub(crate) fn stop_for_lifecycle(
