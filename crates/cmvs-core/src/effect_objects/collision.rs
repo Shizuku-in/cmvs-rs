@@ -433,6 +433,7 @@ mod tests {
             1,
             crate::effect_objects::ParticleEffect {
                 template: None,
+                x87_arithmetic: false,
                 mode: 0,
                 parameters: [0; 4],
                 pool: SceneObject::default(),

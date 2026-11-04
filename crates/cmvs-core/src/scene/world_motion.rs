@@ -1,6 +1,6 @@
 //! Draw state +152, 0x21f9..0x21fd; addresses refer to the documented binary hash.
 //! Linear mode 0, absolute quadratic ease-out mode 1, sine Y modes 0x22/0x31/0x38/0x39/0x41 and X mode 0x48.
-//! The inspected cmvs-20071117 build additionally admits Y half-turn modes 0x20/0x21/0x30 and X full-turn mode 0x40.
+//! Inspected early x86 builds additionally admit Y half-turn modes 0x20/0x21/0x30 and X full-turn mode 0x40.
 use super::SceneHost;
 use crate::{
     bytecode::DecodeError,
@@ -65,7 +65,7 @@ impl WorldMotion {
             let elapsed = playback.elapsed as f32;
             let duration = key.duration as f32;
             if matches!(key.mode as u8, 0x20 | 0x21 | 0x30 | 0x40) {
-                // cmvs-20071117 0x414af0 cases 32/33/48/64 -> 0x42db70:
+                // ASUKIMI 0x414af0 -> 0x42db70; HAROUSE 0x415010 -> 0x4256e0:
                 // Y half-turn arches or X full-turn oscillation; full high word / 100.
                 // Admission is profile-bound below; bit 0x8000 is ignored.
                 let amplitude = match key.mode as u8 {

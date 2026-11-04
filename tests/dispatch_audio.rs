@@ -190,61 +190,60 @@ fn se_restart_is_variant_only_and_preserves_record_and_results() {
         audio::AudioSettings,
         profile::{Registry, VariantId},
     };
-    let semantics = Registry::builtin()
-        .profile("cmvs-20071117")
-        .unwrap()
-        .semantics(0xb4);
-    assert_eq!(semantics, Semantics::Variant(VariantId::SeRestart));
-    for enabled in [true, false] {
-        let mut audio = AudioHost::new(AudioSettings {
-            se_enabled: enabled,
-            ..Default::default()
-        });
-        let mut backend = RecordingAudio::default();
-        for looped in [7, 0] {
-            let mut code = vec![];
-            command(&mut code, 0x20b4, &[3, looped]);
-            let script = script(&code);
-            let mut vm = Machine::new(&script).unwrap();
-            pending(&mut vm);
-            vm.state_mut().set_system_integer(0, 123).unwrap();
-            assert_eq!(run(&mut vm, &mut audio, &mut backend).unwrap(), None);
-            assert_eq!(
-                dispatch::run(semantics, &mut vm, &mut Hosts::default()).unwrap(),
-                Some(Flow::Unavailable)
-            );
-            assert_eq!(
-                dispatch::run(
-                    semantics,
-                    &mut vm,
-                    &mut Hosts {
-                        audio: Some(AudioHosts {
-                            audio: &mut audio,
-                            backend: &mut backend
-                        }),
-                        ..Default::default()
-                    }
-                )
-                .unwrap(),
-                Some(Flow::Done)
-            );
-            assert_eq!(vm.stack().len_bytes(), 0);
-            assert_eq!(vm.state().system_integer(0), Some(123));
-            let record = audio.channel(3).unwrap();
-            assert!(record.flag);
-            assert_eq!(record.looped, looped != 0);
-            assert!(record.name.is_empty());
-            assert_eq!(record.volume, 0);
-            if enabled {
+    for id in ["cmvs-20071117", "cmvs-20080719"] {
+        let semantics = Registry::builtin().profile(id).unwrap().semantics(0xb4);
+        assert_eq!(semantics, Semantics::Variant(VariantId::SeRestart));
+        for enabled in [true, false] {
+            let mut audio = AudioHost::new(AudioSettings {
+                se_enabled: enabled,
+                ..Default::default()
+            });
+            let mut backend = RecordingAudio::default();
+            for looped in [7, 0] {
+                let mut code = vec![];
+                command(&mut code, 0x20b4, &[3, looped]);
+                let script = script(&code);
+                let mut vm = Machine::new(&script).unwrap();
+                pending(&mut vm);
+                vm.state_mut().set_system_integer(0, 123).unwrap();
+                assert_eq!(run(&mut vm, &mut audio, &mut backend).unwrap(), None);
                 assert_eq!(
-                    backend.requests().last(),
-                    Some(&AudioRequest::RestartSe {
-                        channel: 3,
-                        looped: looped != 0
-                    })
+                    dispatch::run(semantics, &mut vm, &mut Hosts::default()).unwrap(),
+                    Some(Flow::Unavailable)
                 );
-            } else {
-                assert!(backend.requests().is_empty());
+                assert_eq!(
+                    dispatch::run(
+                        semantics,
+                        &mut vm,
+                        &mut Hosts {
+                            audio: Some(AudioHosts {
+                                audio: &mut audio,
+                                backend: &mut backend
+                            }),
+                            ..Default::default()
+                        }
+                    )
+                    .unwrap(),
+                    Some(Flow::Done)
+                );
+                assert_eq!(vm.stack().len_bytes(), 0);
+                assert_eq!(vm.state().system_integer(0), Some(123));
+                let record = audio.channel(3).unwrap();
+                assert!(record.flag);
+                assert_eq!(record.looped, looped != 0);
+                assert!(record.name.is_empty());
+                assert_eq!(record.volume, 0);
+                if enabled {
+                    assert_eq!(
+                        backend.requests().last(),
+                        Some(&AudioRequest::RestartSe {
+                            channel: 3,
+                            looped: looped != 0
+                        })
+                    );
+                } else {
+                    assert!(backend.requests().is_empty());
+                }
             }
         }
     }
@@ -286,6 +285,110 @@ fn se_restart_rejects_bad_arguments_and_unsupported_backends_before_commit() {
             before
         );
         assert!((0..6).all(|i| audio.channel(i).is_none()));
+    }
+}
+
+#[test]
+fn se_gain_uses_bound_dispatch_without_consuming_results_or_changing_channel_records() {
+    use cmvs_rs::{
+        audio::AudioSettings,
+        profile::{Registry, VariantId},
+    };
+    let semantics = Registry::builtin()
+        .profile("cmvs-20080719")
+        .unwrap()
+        .semantics(0xb8);
+    assert_eq!(semantics, Semantics::Variant(VariantId::SeGain));
+    for enabled in [true, false] {
+        for multiplier in [0, 32, 256, u32::MAX] {
+            let mut audio = AudioHost::new(AudioSettings {
+                se_enabled: enabled,
+                ..Default::default()
+            });
+            let mut backend = RecordingAudio::default();
+            let mut code = vec![];
+            command(&mut code, 0x20b8, &[5, multiplier]);
+            let program = script(&code);
+            let mut vm = Machine::new(&program).unwrap();
+            pending(&mut vm);
+            vm.state_mut().set_system_integer(0, 123).unwrap();
+            assert_eq!(run(&mut vm, &mut audio, &mut backend).unwrap(), None);
+            assert_eq!(
+                dispatch::run(
+                    semantics,
+                    &mut vm,
+                    &mut Hosts {
+                        audio: Some(AudioHosts {
+                            audio: &mut audio,
+                            backend: &mut backend
+                        }),
+                        ..Default::default()
+                    }
+                )
+                .unwrap(),
+                Some(Flow::Done)
+            );
+            assert_eq!(
+                backend.requests(),
+                &[AudioRequest::SetSeGain {
+                    channel: 5,
+                    multiplier
+                }]
+            );
+            assert_eq!(vm.stack().len_bytes(), 0);
+            assert_eq!(vm.state().system_integer(0), Some(123));
+            assert!((0..6).all(|slot| audio.channel(slot).is_none()));
+        }
+    }
+}
+
+#[test]
+fn se_gain_rejects_invalid_parameters_and_backend_failure_before_commit() {
+    use cmvs_rs::profile::{Registry, Semantics};
+    struct Unsupported;
+    impl AudioBackend for Unsupported {
+        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+            Ok(false)
+        }
+    }
+    let semantics = Registry::builtin()
+        .profile("cmvs-20080719")
+        .unwrap()
+        .semantics(0xb8);
+    assert_ne!(semantics, Semantics::Root);
+    for args in [
+        vec![],
+        vec![1],
+        vec![6, 32],
+        vec![u32::MAX, 32],
+        vec![1, 32],
+    ] {
+        let mut code = vec![];
+        command(&mut code, 0x20b8, &args);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        pending(&mut vm);
+        let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
+        let mut audio = AudioHost::default();
+        assert!(
+            dispatch::run(
+                semantics,
+                &mut vm,
+                &mut Hosts {
+                    audio: Some(AudioHosts {
+                        audio: &mut audio,
+                        backend: &mut Unsupported
+                    }),
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(
+            (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
+            before
+        );
+        assert!((0..6).all(|slot| audio.channel(slot).is_none()));
     }
 }
 

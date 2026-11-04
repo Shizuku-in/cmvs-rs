@@ -93,6 +93,10 @@ pub struct SePlayback {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AudioRequest {
+    SetSeGain {
+        channel: u8,
+        multiplier: u32,
+    },
     Preload {
         slot: u8,
         name: Vec<u8>,
@@ -219,6 +223,10 @@ pub enum AudioRequest {
 }
 
 pub trait AudioBackend {
+    /// Independent raw /256 multiplier; preserve playback, base volume and envelopes.
+    fn set_se_gain(&mut self, _channel: u8, _multiplier: u32) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement SE gain multipliers".into())
+    }
     /// Replace an independent prepared sound without starting it. Missing resources
     /// clear the slot and return false; Err preserves the slot for retry.
     fn preload(&mut self, _slot: u8, _name: &[u8]) -> Result<bool, Box<dyn Error>> {
@@ -386,6 +394,12 @@ impl RecordingAudio {
     }
 }
 impl AudioBackend for RecordingAudio {
+    fn set_se_gain(&mut self, channel: u8, multiplier: u32) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::SetSeGain {
+            channel,
+            multiplier,
+        })
+    }
     fn play_preloaded(
         &mut self,
         slot: u8,
@@ -501,7 +515,7 @@ pub struct AudioHost {
     channels: [Option<SeChannel>; SE_CHANNELS],
     mixer: VoiceMixer,
     /// Channel record +40 (+1696): 0x20b0/0x20ba store 256 with each play, the constructor
-    /// zeroes it, and stopping keeps it. Only the snapshot reads it here.
+    /// zeroes it, and stopping keeps it. HAROUSE 0x20b8 writes the raw gain multiplier.
     played: [u32; SE_CHANNELS],
     bgm: BgmState,
 }
@@ -946,11 +960,11 @@ impl AudioHost {
                         if let Some(se) = &self.channels[index]
                             && !se.name.is_empty()
                         {
-                            if self.played[index] < 256 {
+                            if self.played[index] != 256 {
                                 return Err(error(
                                     pc,
                                     command + 0x2000,
-                                    "SE pitch restoration is not implemented",
+                                    "SE gain multiplier restoration is not implemented",
                                 )
                                 .into());
                             }
@@ -1091,6 +1105,25 @@ impl AudioHost {
         if loaded.is_some() {
             state.forget_system_integer(4).expect("slot 4 exists");
         }
+        Ok(())
+    }
+
+    /// HAROUSE 0x447750 -> 0x456290, device slot channel+9 and record +40.
+    pub(crate) fn set_se_gain(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let channel = call.argument(4, "SE channel")? as usize;
+        let multiplier = call.argument(8, "SE gain multiplier")?;
+        if channel >= SE_CHANNELS {
+            return Err(call
+                .error("SE channel outside 0..5 sets an unmodeled flag")
+                .into());
+        }
+        backend.set_se_gain(channel as u8, multiplier)?;
+        call.complete(0x4008)?;
+        self.played[channel] = multiplier;
         Ok(())
     }
 
@@ -1352,8 +1385,8 @@ impl AudioHost {
     }
 
     /// Record 0x310: name (+0, 32 bytes), loop (+32), volume (+36), +40, +44, flag (+48) per
-    /// channel. 0x20b0/0x20ba store 256 and 0 at +40/+44; only unimplemented commands change
-    /// them. A stopped channel keeps its old name behind a cleared first byte in the
+    /// channel. 0x20b0/0x20ba store 256 and 0 at +40/+44; the inspected 0x20b8 changes +40.
+    /// A stopped channel keeps its old name behind a cleared first byte in the
     /// original; Rust writes the cleared name as zeros.
     pub(crate) fn saved_channels(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(SAVED_CHANNELS);
@@ -1398,7 +1431,7 @@ impl<'a> SavedAudio<'a> {
                 .ok_or("SE name lacks its terminator")?;
             let name = raw[..end].to_vec();
             if !name.is_empty() && (word(40) != 256 || word(44) != 0) {
-                return Err("saved SE pitch or pan settings are not modeled");
+                return Err("saved SE gain multiplier or pan settings are not modeled");
             }
             played[i] = word(40);
             if raw.iter().any(|&b| b != 0) {
@@ -1502,6 +1535,68 @@ impl AudioHost {
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+
+    #[test]
+    fn se_gain_updates_saved_multiplier_only_and_backend_failure_is_retryable() {
+        let mut code = vec![];
+        for value in [32u32, 1] {
+            code.extend(0x440u16.to_le_bytes());
+            code.extend(4u16.to_le_bytes());
+            code.extend(value.to_le_bytes());
+        }
+        code.extend(0x20b8u16.to_le_bytes());
+        let mut payload = 0u32.to_le_bytes().to_vec();
+        payload.extend(&code);
+        let mut raw = b"PS2A".to_vec();
+        for n in [
+            48,
+            0,
+            0,
+            1,
+            code.len() as u32,
+            0,
+            0,
+            0,
+            0,
+            payload.len() as u32,
+            0,
+        ] {
+            raw.extend(n.to_le_bytes());
+        }
+        raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+        let script = crate::ps3::Script::decode(&raw).unwrap();
+        let mut vm = Machine::new(&script).unwrap();
+        while !matches!(vm.step().unwrap(), crate::machine::Step::System { .. }) {}
+        let pc = vm.pc();
+        let mut host = AudioHost::default();
+        host.channels[1] = Some(SeChannel {
+            name: b"sound".to_vec(),
+            looped: true,
+            volume: 128,
+            flag: true,
+        });
+        host.played[1] = 256;
+        let before = host.saved_channels();
+        let mut full = RecordingAudio {
+            requests: vec![AudioRequest::StopBgm; 4096],
+        };
+        assert!(
+            host.set_se_gain(&mut Call::new(&mut vm, pc, 0xb8), &mut full)
+                .is_err()
+        );
+        assert_eq!(host.saved_channels(), before);
+        assert_eq!(vm.stack().len_bytes(), 8);
+        assert_eq!(vm.pending_system(), Some((pc, 0xb8)));
+        host.set_se_gain(
+            &mut Call::new(&mut vm, pc, 0xb8),
+            &mut RecordingAudio::default(),
+        )
+        .unwrap();
+        let mut expected = before;
+        expected[52 + 40..52 + 44].copy_from_slice(&32u32.to_le_bytes());
+        assert_eq!(host.saved_channels(), expected);
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
 
     #[test]
     fn lifecycle_stops_all_supported_channels_and_reset_clears_se_records() {

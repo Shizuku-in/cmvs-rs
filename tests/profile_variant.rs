@@ -14,79 +14,87 @@ const DERIVED: &str = include_str!("../crates/cmvs-core/profiles/cmvs-20171114.p
 const HASH: &str = "3bccda5d7611412c6938c0c9b06b2195914cfb78763a53f2c235bb6479395ee0";
 
 #[test]
-fn asukimi_queries_use_the_down_edge_and_extra_actions_can_be_consumed() {
-    let profile = Registry::builtin().profile("cmvs-20071117").unwrap();
-    let queries = [
-        0x19c, 0x19e, 0x1a0, 0x1a2, 0x1a4, 0x1a6, 0x1a8, 0x1aa, 0x1ac, 0x1ae, 0x1b0, 0x1b2, 0x1b4,
-        0x1b6, 0x1b8, 0x1ba, 0x1bc, 0x2f0, 0x2f2, 0x2f4,
-    ];
-    let actions = [
-        15, 16, 0, 1, 7, 8, 6, 9, 10, 11, 12, 13, 14, 2, 3, 4, 5, 17, 18, 19,
-    ];
-    for (query, action) in queries.into_iter().zip(actions) {
-        let binding = profile.variant(query).unwrap();
-        assert_eq!(binding.id, VariantId::InputPress);
-        assert_eq!(
-            to_hex(&binding.binary_sha256),
-            "caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c9715a20e7a5f36d02b"
-        );
-        for (pressed, released, held) in [
-            (true, false, true),
-            (false, true, false),
-            (false, false, true),
-        ] {
+fn inspected_early_queries_use_the_down_edge_and_extra_actions_can_be_consumed() {
+    for (id, hash) in [
+        (
+            "cmvs-20071117",
+            "caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c9715a20e7a5f36d02b",
+        ),
+        (
+            "cmvs-20080719",
+            "afe3b3a895e7b3ba5f78e6f6464296f1d028e87307c8de5a568b88fd6086491e",
+        ),
+    ] {
+        let profile = Registry::builtin().profile(id).unwrap();
+        let queries = [
+            0x19c, 0x19e, 0x1a0, 0x1a2, 0x1a4, 0x1a6, 0x1a8, 0x1aa, 0x1ac, 0x1ae, 0x1b0, 0x1b2,
+            0x1b4, 0x1b6, 0x1b8, 0x1ba, 0x1bc, 0x2f0, 0x2f2, 0x2f4,
+        ];
+        let actions = [
+            15, 16, 0, 1, 7, 8, 6, 9, 10, 11, 12, 13, 14, 2, 3, 4, 5, 17, 18, 19,
+        ];
+        for (query, action) in queries.into_iter().zip(actions) {
+            let binding = profile.variant(query).unwrap();
+            assert_eq!(binding.id, VariantId::InputPress);
+            assert_eq!(to_hex(&binding.binary_sha256), hash);
+            for (pressed, released, held) in [
+                (true, false, true),
+                (false, true, false),
+                (false, false, true),
+            ] {
+                let mut code = vec![];
+                command(&mut code, query + 0x2000, &[]);
+                command(&mut code, query + 0x2000, &[]);
+                let script = script(&code);
+                let mut vm = Machine::new(&script).unwrap();
+                let mut input = cmvs_rs::input::ActionInput::default();
+                input.set(action, held, pressed, released).unwrap();
+                for _ in 0..2 {
+                    pending(&mut vm);
+                    let mut hosts = dispatch::Hosts {
+                        input: Some(dispatch::InputHosts {
+                            input: &mut input,
+                            skip: false,
+                            clock: None,
+                        }),
+                        ..Default::default()
+                    };
+                    assert_eq!(
+                        dispatch::run(profile.semantics(query), &mut vm, &mut hosts).unwrap(),
+                        Some(dispatch::Flow::Done)
+                    );
+                    assert_eq!(vm.state().system_integer(0), Some(u32::from(pressed)));
+                    assert_eq!(vm.state().system_integer(4), Some(u32::from(held)));
+                    assert_eq!(vm.stack().len_bytes(), 0);
+                }
+            }
+        }
+        for query in [0x2f0, 0x2f2, 0x2f4] {
             let mut code = vec![];
-            command(&mut code, query + 0x2000, &[]);
-            command(&mut code, query + 0x2000, &[]);
+            command(&mut code, query + 0x2001, &[]);
             let script = script(&code);
             let mut vm = Machine::new(&script).unwrap();
             let mut input = cmvs_rs::input::ActionInput::default();
-            input.set(action, held, pressed, released).unwrap();
-            for _ in 0..2 {
-                pending(&mut vm);
-                let mut hosts = dispatch::Hosts {
-                    input: Some(dispatch::InputHosts {
-                        input: &mut input,
-                        skip: false,
-                        clock: None,
-                    }),
-                    ..Default::default()
-                };
-                assert_eq!(
-                    dispatch::run(profile.semantics(query), &mut vm, &mut hosts).unwrap(),
-                    Some(dispatch::Flow::Done)
-                );
-                assert_eq!(vm.state().system_integer(0), Some(u32::from(pressed)));
-                assert_eq!(vm.state().system_integer(4), Some(u32::from(held)));
-                assert_eq!(vm.stack().len_bytes(), 0);
-            }
+            let action = 17 + usize::from((query - 0x2f0) / 2);
+            input.set(action, true, true, false).unwrap();
+            vm.state_mut().set_system_integer(0, 77).unwrap();
+            pending(&mut vm);
+            let mut hosts = dispatch::Hosts {
+                input: Some(dispatch::InputHosts {
+                    input: &mut input,
+                    skip: false,
+                    clock: None,
+                }),
+                ..Default::default()
+            };
+            assert_eq!(
+                dispatch::run(profile.semantics(query + 1), &mut vm, &mut hosts).unwrap(),
+                Some(dispatch::Flow::Done)
+            );
+            assert!(!input.pressed(action));
+            assert!(input.held(action));
+            assert_eq!(vm.state().system_integer(0), Some(77));
         }
-    }
-    for query in [0x2f0, 0x2f2, 0x2f4] {
-        let mut code = vec![];
-        command(&mut code, query + 0x2001, &[]);
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        let mut input = cmvs_rs::input::ActionInput::default();
-        let action = 17 + usize::from((query - 0x2f0) / 2);
-        input.set(action, true, true, false).unwrap();
-        vm.state_mut().set_system_integer(0, 77).unwrap();
-        pending(&mut vm);
-        let mut hosts = dispatch::Hosts {
-            input: Some(dispatch::InputHosts {
-                input: &mut input,
-                skip: false,
-                clock: None,
-            }),
-            ..Default::default()
-        };
-        assert_eq!(
-            dispatch::run(profile.semantics(query + 1), &mut vm, &mut hosts).unwrap(),
-            Some(dispatch::Flow::Done)
-        );
-        assert!(!input.pressed(action));
-        assert!(input.held(action));
-        assert_eq!(vm.state().system_integer(0), Some(77));
     }
 }
 

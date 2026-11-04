@@ -1001,7 +1001,7 @@ impl<'a> Startup<'a> {
             });
         } else {
             hosts.camera = Some(&mut self.camera);
-            if crate::dispatch::uses_movie_scene(command) {
+            if crate::dispatch::uses_movie_scene_for(resolved.semantics, command) {
                 hosts.movie_scene = Some(crate::dispatch::MovieSceneHosts {
                     scene: &mut self.scene,
                     source: &mut scene_movie_source,

@@ -952,154 +952,52 @@ fn motion_xyz(scene: &SceneHost, slot: u8) -> [f32; 3] {
 
 #[test]
 fn y_half_turn_modes_use_distinct_amplitudes_and_snap_at_the_boundary() {
-    let profile = cmvs_rs::profile::Registry::builtin()
-        .profile("cmvs-20071117")
-        .unwrap();
-    for (mode, quarter_y, middle_y) in [
-        (0x20, 2.7, 3.0),
-        (0xffff8020, 2.7, 3.0),
-        (0x21, 2.17, 2.25),
-        (0xffff8021, 2.17, 2.25),
-        (0x00c80030, 2.0 - 1.41, 0.0),
-        (0x00c88030, 2.0 - 1.41, 0.0),
-        // The f32 amplitude 40.96 lies below the decimal value: truncates to 40.95.
-        (0x10000030, 2.0 - 28.96, 2.0 - 40.95),
-        (0x30, 2.0, 2.0),
-    ] {
-        let mut code = vec![];
-        motion_setup(&mut code, 20, [1.0, 2.0, 3.0]);
-        command(
-            &mut code,
-            0x21fa,
-            &[
-                20,
-                u32::MAX,
-                0,
-                u32::MAX,
-                mode,
-                400,
-                4f32.to_bits(),
-                36f32.to_bits(),
-                24f32.to_bits(),
-            ],
-        );
-        command(&mut code, 0x21fb, &[20, u32::MAX, 0]);
-        let program = script(&code);
-        let mut vm = Machine::new(&program).unwrap();
-        let mut scene = SceneHost::for_profile(profile);
-        run_all(&mut vm, &mut scene, 8);
-        assert_eq!(vm.stack().len_bytes(), 0);
-        scene.advance_frame(100);
-        assert_eq!(motion_xyz(&scene, 20), [1.0, quarter_y, 3.0]);
-        scene.advance_frame(100);
-        assert_eq!(motion_xyz(&scene, 20), [1.0, middle_y, 3.0]);
-        scene.advance_frame(100);
-        assert_eq!(motion_xyz(&scene, 20), [1.0, quarter_y, 3.0]);
-        scene.advance_frame(100);
-        assert_eq!(motion_xyz(&scene, 20), [4.0, 36.0, 24.0]);
-        assert!(
-            scene
-                .object(20)
-                .unwrap()
-                .draw
-                .as_ref()
-                .unwrap()
-                .world_motion
-                .is_none()
-        );
-    }
-}
-
-#[test]
-fn legacy_x_full_turn_uses_full_amplitude_and_preserves_yz_bits() {
-    let profile = cmvs_rs::profile::Registry::builtin()
-        .profile("cmvs-20071117")
-        .unwrap();
-    for (mode, amplitude) in [
-        (0x00c80040, 2.0f32),
-        (0x00c88040, 2.0),
-        (0x10000040, 40.95),
-        (0x40, 0.0),
-    ] {
-        let mut code = vec![];
-        motion_setup(&mut code, 20, [1.0, -0.0, 3.0]);
-        command(
-            &mut code,
-            0x21fa,
-            &[
-                20,
-                u32::MAX,
-                0,
-                u32::MAX,
-                mode,
-                400,
-                4f32.to_bits(),
-                36f32.to_bits(),
-                24f32.to_bits(),
-            ],
-        );
-        command(&mut code, 0x21fb, &[20, u32::MAX, 0]);
-        let program = script(&code);
-        let mut vm = Machine::new(&program).unwrap();
-        let mut scene = SceneHost::for_profile(profile);
-        run_all(&mut vm, &mut scene, 8);
-        for x in [1.0 + amplitude, 1.0, 1.0 - amplitude] {
-            scene.advance_frame(100);
-            let xyz = motion_xyz(&scene, 20);
-            assert_eq!(
-                xyz.map(f32::to_bits),
-                [x.to_bits(), (-0.0f32).to_bits(), 3f32.to_bits()]
-            );
-        }
-        scene.advance_frame(100);
-        assert_eq!(motion_xyz(&scene, 20), [4.0, 36.0, 24.0]);
-        assert!(
-            scene
-                .object(20)
-                .unwrap()
-                .draw
-                .as_ref()
-                .unwrap()
-                .world_motion
-                .is_none()
-        );
-    }
-}
-
-#[test]
-fn y_half_turn_mode_requires_the_inspected_profile_and_hash() {
-    let profile = cmvs_rs::profile::Registry::builtin()
-        .profile("cmvs-20071117")
-        .unwrap();
-    let mut changed_hash = profile.clone();
-    changed_hash.binaries[0].sha256 = [0; 32];
-    let mut changed_id = profile.clone();
-    changed_id.id = "synthetic-unverified".into();
-    for mode in [0x20, 0x21, 0x00c80030, 0x00c80040] {
-        for mut scene in [
-            SceneHost::default(),
-            SceneHost::for_profile(&changed_hash),
-            SceneHost::for_profile(&changed_id),
+    for id in ["cmvs-20071117", "cmvs-20080719"] {
+        let profile = cmvs_rs::profile::Registry::builtin().profile(id).unwrap();
+        for (mode, quarter_y, middle_y) in [
+            (0x20, 2.7, 3.0),
+            (0xffff8020, 2.7, 3.0),
+            (0x21, 2.17, 2.25),
+            (0xffff8021, 2.17, 2.25),
+            (0x00c80030, 2.0 - 1.41, 0.0),
+            (0x00c88030, 2.0 - 1.41, 0.0),
+            (0x00280030, 2.0 - 0.28, 2.0 - 0.4),
+            // The f32 amplitude 40.96 lies below the decimal value: truncates to 40.95.
+            (0x10000030, 2.0 - 28.96, 2.0 - 40.95),
+            (0x30, 2.0, 2.0),
         ] {
             let mut code = vec![];
             motion_setup(&mut code, 20, [1.0, 2.0, 3.0]);
             command(
                 &mut code,
                 0x21fa,
-                &[20, u32::MAX, 0, u32::MAX, mode, 400, 0, 0, 0],
+                &[
+                    20,
+                    u32::MAX,
+                    0,
+                    u32::MAX,
+                    mode,
+                    400,
+                    4f32.to_bits(),
+                    36f32.to_bits(),
+                    24f32.to_bits(),
+                ],
             );
+            command(&mut code, 0x21fb, &[20, u32::MAX, 0]);
             let program = script(&code);
             let mut vm = Machine::new(&program).unwrap();
-            run_all(&mut vm, &mut scene, 6);
-            pending(&mut vm);
-            let pc = vm.pc();
-            let stack = vm.stack().len_bytes();
-            assert!(scene.try_handle(&mut vm).is_err());
-            assert_eq!(vm.pc(), pc);
-            assert_eq!(vm.stack().len_bytes(), stack);
-            assert_eq!(vm.pending_system(), Some((pc, 0x1fa)));
-            assert_eq!(motion_xyz(&scene, 20), [1.0, 2.0, 3.0]);
-            assert_eq!(
+            let mut scene = SceneHost::for_profile(profile);
+            run_all(&mut vm, &mut scene, 8);
+            assert_eq!(vm.stack().len_bytes(), 0);
+            scene.advance_frame(100);
+            assert_eq!(motion_xyz(&scene, 20), [1.0, quarter_y, 3.0]);
+            scene.advance_frame(100);
+            assert_eq!(motion_xyz(&scene, 20), [1.0, middle_y, 3.0]);
+            scene.advance_frame(100);
+            assert_eq!(motion_xyz(&scene, 20), [1.0, quarter_y, 3.0]);
+            scene.advance_frame(100);
+            assert_eq!(motion_xyz(&scene, 20), [4.0, 36.0, 24.0]);
+            assert!(
                 scene
                     .object(20)
                     .unwrap()
@@ -1107,12 +1005,118 @@ fn y_half_turn_mode_requires_the_inspected_profile_and_hash() {
                     .as_ref()
                     .unwrap()
                     .world_motion
+                    .is_none()
+            );
+        }
+    }
+}
+
+#[test]
+fn legacy_x_full_turn_uses_full_amplitude_and_preserves_yz_bits() {
+    for id in ["cmvs-20071117", "cmvs-20080719"] {
+        let profile = cmvs_rs::profile::Registry::builtin().profile(id).unwrap();
+        for (mode, amplitude) in [
+            (0x00c80040, 2.0f32),
+            (0x00c88040, 2.0),
+            (0x10000040, 40.95),
+            (0x40, 0.0),
+        ] {
+            let mut code = vec![];
+            motion_setup(&mut code, 20, [1.0, -0.0, 3.0]);
+            command(
+                &mut code,
+                0x21fa,
+                &[
+                    20,
+                    u32::MAX,
+                    0,
+                    u32::MAX,
+                    mode,
+                    400,
+                    4f32.to_bits(),
+                    36f32.to_bits(),
+                    24f32.to_bits(),
+                ],
+            );
+            command(&mut code, 0x21fb, &[20, u32::MAX, 0]);
+            let program = script(&code);
+            let mut vm = Machine::new(&program).unwrap();
+            let mut scene = SceneHost::for_profile(profile);
+            run_all(&mut vm, &mut scene, 8);
+            for x in [1.0 + amplitude, 1.0, 1.0 - amplitude] {
+                scene.advance_frame(100);
+                let xyz = motion_xyz(&scene, 20);
+                assert_eq!(
+                    xyz.map(f32::to_bits),
+                    [x.to_bits(), (-0.0f32).to_bits(), 3f32.to_bits()]
+                );
+            }
+            scene.advance_frame(100);
+            assert_eq!(motion_xyz(&scene, 20), [4.0, 36.0, 24.0]);
+            assert!(
+                scene
+                    .object(20)
+                    .unwrap()
+                    .draw
                     .as_ref()
                     .unwrap()
-                    .keys[0]
-                    .mode,
-                0
+                    .world_motion
+                    .is_none()
             );
+        }
+    }
+}
+
+#[test]
+fn y_half_turn_mode_requires_the_inspected_profile_and_hash() {
+    for id in ["cmvs-20071117", "cmvs-20080719"] {
+        let profile = cmvs_rs::profile::Registry::builtin().profile(id).unwrap();
+        let mut changed_hash = profile.clone();
+        changed_hash.binaries[0].sha256 = [0; 32];
+        let mut changed_id = profile.clone();
+        changed_id.id = "synthetic-unverified".into();
+        let mut changed_base = profile.clone();
+        changed_base.base = None;
+        for mode in [0x20, 0x21, 0x00c80030, 0x00c80040] {
+            for mut scene in [
+                SceneHost::default(),
+                SceneHost::for_profile(&changed_hash),
+                SceneHost::for_profile(&changed_id),
+                SceneHost::for_profile(&changed_base),
+            ] {
+                let mut code = vec![];
+                motion_setup(&mut code, 20, [1.0, 2.0, 3.0]);
+                command(
+                    &mut code,
+                    0x21fa,
+                    &[20, u32::MAX, 0, u32::MAX, mode, 400, 0, 0, 0],
+                );
+                let program = script(&code);
+                let mut vm = Machine::new(&program).unwrap();
+                run_all(&mut vm, &mut scene, 6);
+                pending(&mut vm);
+                let pc = vm.pc();
+                let stack = vm.stack().len_bytes();
+                assert!(scene.try_handle(&mut vm).is_err());
+                assert_eq!(vm.pc(), pc);
+                assert_eq!(vm.stack().len_bytes(), stack);
+                assert_eq!(vm.pending_system(), Some((pc, 0x1fa)));
+                assert_eq!(motion_xyz(&scene, 20), [1.0, 2.0, 3.0]);
+                assert_eq!(
+                    scene
+                        .object(20)
+                        .unwrap()
+                        .draw
+                        .as_ref()
+                        .unwrap()
+                        .world_motion
+                        .as_ref()
+                        .unwrap()
+                        .keys[0]
+                        .mode,
+                    0
+                );
+            }
         }
     }
 }

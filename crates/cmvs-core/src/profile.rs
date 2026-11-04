@@ -32,14 +32,17 @@ pub enum Semantics {
 /// Static implementation identifiers; execution obeys the unreviewed block policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VariantId {
+    ScreenCoordinates,
     InputPress,
     FontCells,
     TextAlpha,
     ObjectQueue,
     ListSelect,
     Particles,
+    ParticlesX87,
     BackgroundAudio,
     SeRestart,
+    SeGain,
     AudioPreload,
     PolarPoint,
     FallingBillboards,
@@ -49,18 +52,23 @@ pub enum VariantId {
     DisplayCount,
     FullscreenMonitor,
     MgvPlayer,
+    MovieSeek,
+    MovieControl,
 }
 impl VariantId {
     pub fn parse(name: &str) -> Option<Self> {
         match name {
+            "screen-coordinates" => Some(Self::ScreenCoordinates),
             "input-press" => Some(Self::InputPress),
             "list-select" => Some(Self::ListSelect),
             "object-queue" => Some(Self::ObjectQueue),
             "text-alpha" => Some(Self::TextAlpha),
             "font-cells" => Some(Self::FontCells),
             "particles" => Some(Self::Particles),
+            "particles-x87" => Some(Self::ParticlesX87),
             "background-audio" => Some(Self::BackgroundAudio),
             "se-restart" => Some(Self::SeRestart),
+            "se-gain" => Some(Self::SeGain),
             "audio-preload" => Some(Self::AudioPreload),
             "polar-point" => Some(Self::PolarPoint),
             "falling-billboards" => Some(Self::FallingBillboards),
@@ -70,19 +78,24 @@ impl VariantId {
             "display-count" => Some(Self::DisplayCount),
             "fullscreen-monitor" => Some(Self::FullscreenMonitor),
             "mgv-player" => Some(Self::MgvPlayer),
+            "movie-seek" => Some(Self::MovieSeek),
+            "movie-control" => Some(Self::MovieControl),
             _ => None,
         }
     }
     pub fn name(self) -> &'static str {
         match self {
+            Self::ScreenCoordinates => "screen-coordinates",
             Self::InputPress => "input-press",
             Self::ListSelect => "list-select",
             Self::ObjectQueue => "object-queue",
             Self::TextAlpha => "text-alpha",
             Self::FontCells => "font-cells",
             Self::Particles => "particles",
+            Self::ParticlesX87 => "particles-x87",
             Self::BackgroundAudio => "background-audio",
             Self::SeRestart => "se-restart",
+            Self::SeGain => "se-gain",
             Self::AudioPreload => "audio-preload",
             Self::PolarPoint => "polar-point",
             Self::FallingBillboards => "falling-billboards",
@@ -92,6 +105,8 @@ impl VariantId {
             Self::DisplayCount => "display-count",
             Self::FullscreenMonitor => "fullscreen-monitor",
             Self::MgvPlayer => "mgv-player",
+            Self::MovieSeek => "movie-seek",
+            Self::MovieControl => "movie-control",
         }
     }
 }
@@ -258,6 +273,21 @@ impl EngineProfile {
                     .expect("static SHA-256"),
                 )
                 .is_some()
+    }
+
+    /// Independently inspected x86 sine interpolation; docs/games/{asukimi,harouse}.
+    pub(crate) fn uses_legacy_sine_modes(&self) -> bool {
+        self.is_inspected_20071117()
+            || self.id == "cmvs-20080719"
+                && self.base.as_deref() == Some("cmvs-20160201")
+                && self
+                    .binary(
+                        &crate::digest::parse_hex(
+                            "afe3b3a895e7b3ba5f78e6f6464296f1d028e87307c8de5a568b88fd6086491e",
+                        )
+                        .expect("static SHA-256"),
+                    )
+                    .is_some()
     }
 
     pub fn binary(&self, sha256: &[u8; 32]) -> Option<&Binary> {
@@ -474,8 +504,9 @@ pub struct Registry {
     contracts: BTreeMap<[u8; 32], ContractProof>,
 }
 
-const BUILTIN_PROFILES: [&str; 12] = [
+const BUILTIN_PROFILES: [&str; 13] = [
     include_str!("../profiles/cmvs-20071117.profile"),
+    include_str!("../profiles/cmvs-20080719.profile"),
     include_str!("../profiles/cmvs-20110525.profile"),
     include_str!("../profiles/cmvs-20120309.profile"),
     include_str!("../profiles/cmvs-20130131.profile"),

@@ -6,9 +6,9 @@
 //! Engine +4480 holds three scene players. 0x2308 creates a stopped CMV6/CMV9 player and
 //! initializes its bound scene object; 0x230a destroys the player, retaining that image.
 //! 0x2309 starts default-mode segment playback and 0x231a queries whether a player is
-//! active; 0x230b/0x230c resume/pause while retaining the frame. Other slot controls,
-//! playback modes, audio-bearing slots and the other creation
-//! variant remain unhandled.
+//! active; 0x230b/0x230c resume/pause while retaining the frame. Inspected legacy
+//! variants additionally query segments/frames, seek, apply queued segments, and
+//! select mode 0/10 or a stop frame. Audio-clock mode 15 remains unavailable.
 use crate::filesystem::File;
 use crate::{
     audio::MovieAudioClock, bytecode::DecodeError, cmv::CmvIndex, dispatch::Call, evaluate::error,
@@ -475,8 +475,8 @@ impl MovieHost {
     }
 }
 
-/// The parts of record 0x8e8 Rust models. +48 and +56 keep their constructor zero: only
-/// unimplemented commands (0x14007f4c0, 0x14007f520) set them.
+/// The parts of record 0x8e8 Rust models. Nonzero mode/stop-frame fields are encoded
+/// faithfully, but their snapshot restore remains explicitly unsupported.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SceneRecord {
     slot: u16,
@@ -505,11 +505,12 @@ impl SceneRecord {
             .segments
             .iter()
             .flat_map(|s| [u32::from(s.looping), s.start, s.end]);
-        for word in head
-            .into_iter()
-            .chain(segments)
-            .chain([self.frame, 0, self.load_mode, 0])
-        {
+        for word in head.into_iter().chain(segments).chain([
+            self.frame,
+            p.mode,
+            self.load_mode,
+            p.stop_frame,
+        ]) {
             body.extend(word.to_le_bytes());
         }
         body
@@ -557,6 +558,8 @@ impl SceneRecord {
             frame: word(282),
             load_mode: SCENE_MODE, // The native reader reopens streaming mode 3 as mode 2.
             playback: MoviePlayback {
+                mode: 0,
+                stop_frame: 0,
                 segments,
                 current,
                 pending: (pending != u32::MAX).then_some(pending as usize),

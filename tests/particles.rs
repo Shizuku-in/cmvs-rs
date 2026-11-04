@@ -166,8 +166,24 @@ fn run(
     source: &mut Images,
     random: &mut CrtRandom,
 ) -> Result<Option<Flow>, dispatch::DispatchError> {
-    dispatch::run(
+    run_as(
         Semantics::Variant(VariantId::Particles),
+        vm,
+        scene,
+        source,
+        random,
+    )
+}
+
+fn run_as(
+    semantics: Semantics,
+    vm: &mut Machine<'_>,
+    scene: &mut SceneHost,
+    source: &mut Images,
+    random: &mut CrtRandom,
+) -> Result<Option<Flow>, dispatch::DispatchError> {
+    dispatch::run(
+        semantics,
         vm,
         &mut Hosts {
             images: Some(ImageHosts {
@@ -179,6 +195,63 @@ fn run(
             ..Default::default()
         },
     )
+}
+
+#[test]
+fn inspected_x87_binding_uses_its_arithmetic_and_preserves_failed_replacement() {
+    let profile = cmvs_rs::profile::Registry::builtin()
+        .profile("cmvs-20080719")
+        .unwrap();
+    let semantics = profile.semantics(0x2a5);
+    assert_eq!(semantics, Semantics::Variant(VariantId::ParticlesX87));
+    assert_eq!(
+        profile.status(0x2a5),
+        cmvs_rs::profile::CommandStatus::Unreviewed
+    );
+    let mut code = vec![];
+    command(&mut code, 0x22a5, &args(0, 1));
+    command(&mut code, 0x22a5, &args(0, 2));
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    vm.state_mut().set_string(0, b"particle.pb3").unwrap();
+    vm.state_mut().set_system_integer(0, 123).unwrap();
+    let mut scene = SceneHost::for_profile(profile);
+    let mut source = Images::default();
+    let mut random = CrtRandom::new(0);
+    pending(&mut vm);
+    assert_eq!(
+        run_as(semantics, &mut vm, &mut scene, &mut source, &mut random).unwrap(),
+        Some(Flow::Done)
+    );
+    assert_eq!(
+        scene.particle_effects()[&0].particles[0].words[5],
+        1102857417
+    );
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(123));
+    pending(&mut vm);
+    let before = (
+        format!("{:?}", scene.particle_effects()),
+        random.clone(),
+        vm.pc(),
+        vm.stack().len_bytes(),
+    );
+    source.fail = true;
+    assert!(run_as(semantics, &mut vm, &mut scene, &mut source, &mut random).is_err());
+    assert_eq!(
+        (
+            format!("{:?}", scene.particle_effects()),
+            random.clone(),
+            vm.pc(),
+            vm.stack().len_bytes()
+        ),
+        before
+    );
+    assert_eq!(vm.pending_system().map(|p| p.1), Some(0x2a5));
+    source.fail = false;
+    run_as(semantics, &mut vm, &mut scene, &mut source, &mut random).unwrap();
+    assert_eq!(scene.particle_effects()[&0].particles.len(), 2);
+    assert_eq!(vm.stack().len_bytes(), 0);
 }
 
 #[test]

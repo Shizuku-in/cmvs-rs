@@ -162,6 +162,7 @@ struct Channel {
     looped: Arc<AtomicBool>,
     gain: f32,
     duck_gain: f32,
+    script_gain: f32,
 }
 impl Channel {
     fn check(&self) -> Result<(), Box<dyn Error>> {
@@ -325,6 +326,7 @@ impl NativeAudio {
             looped,
             gain,
             duck_gain: 1.0,
+            script_gain: 1.0,
         }
     }
     fn fade(channel: &mut Option<Channel>, ms: u32) {
@@ -338,7 +340,9 @@ impl NativeAudio {
     }
     fn set_gain(channel: &mut Channel, gain: f32) {
         channel.sink.set_volume(
-            gain * channel.duck_gain * channel.envelope.as_ref().map_or(1.0, Envelope::value),
+            gain * channel.duck_gain
+                * channel.script_gain
+                * channel.envelope.as_ref().map_or(1.0, Envelope::value),
         );
         channel.gain = gain;
     }
@@ -365,7 +369,7 @@ impl NativeAudio {
         if let Some(fade) = current.envelope {
             current
                 .sink
-                .set_volume(current.gain * current.duck_gain * fade.value());
+                .set_volume(current.gain * current.duck_gain * current.script_gain * fade.value());
             if fade.finished() {
                 if current.release_at_end {
                     *channel = None;
@@ -378,6 +382,17 @@ impl NativeAudio {
     }
 }
 impl AudioBackend for NativeAudio {
+    fn set_se_gain(&mut self, channel: u8, multiplier: u32) -> Result<(), Box<dyn Error>> {
+        let slot = self
+            .se
+            .get_mut(usize::from(channel))
+            .ok_or("SE channel out of range")?;
+        if let Some(sound) = slot {
+            sound.script_gain = multiplier as f32 / 256.0;
+            Self::set_gain(sound, sound.gain);
+        }
+        Ok(())
+    }
     fn preload(&mut self, slot: u8, name: &[u8]) -> Result<bool, Box<dyn Error>> {
         let index = usize::from(slot);
         if index >= self.preloaded.len() {
@@ -583,7 +598,9 @@ impl AudioBackend for NativeAudio {
             return Ok(());
         };
         let program = VorbisProgram::from_shared(current.bytes.clone(), looped)?;
-        let candidate = self.prepare(program, (current.gain * 256.0) as u32, 0);
+        let mut candidate = self.prepare(program, (current.gain * 256.0) as u32, 0);
+        candidate.script_gain = current.script_gain;
+        Self::set_gain(&mut candidate, current.gain);
         // All fallible preparation precedes replacing the old device channel.
         self.se[slot] = Some(candidate);
         self.se[slot].as_ref().unwrap().sink.play();

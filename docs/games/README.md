@@ -4,7 +4,7 @@
 |---|---|---|
 | [《プリミティブ リンク》 / puriring](puriring/README.md) | `2007-02-02_PURIRING_withDVDValidation` | 基础档案；尚无构建 profile 或运行验证 |
 | [《明日の君と逢うために》 / asukimi](asukimi/README.md) | `2007-11-30_ASUKIMI` | 已绑定 x86 构建、256 子槽、按下边沿与 800×600 画布；旧版快照写入、同会话及重启读回短段通过，世界坐标动画 0x40 已接入，独立完整绘制重放越过 snky06 旧停点并运行至 1,200 万步预算；V1–V4 存读档通过，设置页滑块与字体对话框可操作；部分快照记录、完整路线及原生存档界面仍待验证，另有 1 个空表达式脚本 |
-| [《春色桜瀬》 / harouse](harouse/README.md) | `2008-07-31_HAROUSE` | 基础档案；尚无构建 profile 或运行验证 |
+| [《春色桜瀬》 / harouse](harouse/README.md) | `2008-07-31_HAROUSE` | 独立 x86 构建与 CPZ5 接入；143 个脚本、28,053 项资源头检查通过，记录模式标题、确定性及 I1–I5 通过；SE 倍率/重播已接入，快进首次选项后遇到无快照存档屏障，不快进推进 763 个消息等待至 800 万步预算；软件绘制、快照与原生输出仍有缺口 |
 | [《明日の七海と逢うために〜明日の君と逢うために〜FAN DISC》 / asunana](asunana/README.md) | `2008-10-24_ASUNANA` | 基础档案；尚无构建 profile 或运行验证 |
 | [《メモリア》 / memoria](memoria/README.md) | `2009-08-28_MEMORIA` | 基础档案；尚无构建 profile 或运行验证 |
 | [《夏に奏でる僕らの詩》 / natsuuta](natsuuta/README.md) | `2010-03-26_NATSUUTA` | 基础档案；尚无构建 profile 或运行验证 |

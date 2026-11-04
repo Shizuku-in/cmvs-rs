@@ -1362,6 +1362,13 @@ pub fn uses_movie_scene(command: u16) -> bool {
     ROOT.iter()
         .any(|e| e.command == command && e.capability == Capability::MovieScene)
 }
+pub fn uses_movie_scene_for(semantics: Semantics, command: u16) -> bool {
+    match semantics {
+        Semantics::Root => uses_movie_scene(command),
+        Semantics::Variant(id) => variant_entry(id, command)
+            .is_some_and(|entry| entry.capability == Capability::MovieScene),
+    }
+}
 pub fn uses_movie_player(command: u16) -> bool {
     ROOT.iter()
         .any(|e| e.command == command && e.capability == Capability::MoviePlayer)
@@ -4706,10 +4713,96 @@ pub static PARTICLES: &[Entry] = &[Entry {
                 .random
                 .as_deref_mut()
                 .expect("particle random capability checked"),
+            false,
         )?;
         Ok(Flow::Done)
     },
 }];
+
+pub static PARTICLES_X87: &[Entry] = &[Entry {
+    command: 0x2a5,
+    name: "create x87 particle effect",
+    capability: Capability::ParticleImages,
+    handler: |hosts, call| {
+        let h = hosts
+            .images
+            .as_mut()
+            .expect("particle image capability checked");
+        h.scene.create_particles(
+            call,
+            h.source,
+            hosts
+                .random
+                .as_deref_mut()
+                .expect("particle random capability checked"),
+            true,
+        )?;
+        Ok(Flow::Done)
+    },
+}];
+
+pub static MOVIE_CONTROL: &[Entry] = &[
+    Entry {
+        command: 0x31d,
+        name: "scene movie stop frame",
+        capability: Capability::MovieState,
+        handler: legacy_movie_control,
+    },
+    Entry {
+        command: 0x30d,
+        name: "scene movie playback mode",
+        capability: Capability::MovieState,
+        handler: legacy_movie_control,
+    },
+    Entry {
+        command: 0x30f,
+        name: "scene movie segment and frame",
+        capability: Capability::MovieState,
+        handler: legacy_movie_control,
+    },
+];
+
+fn legacy_movie_control(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    hosts
+        .movies
+        .as_deref_mut()
+        .expect("movie capability checked")
+        .legacy_control(call)?;
+    Ok(Flow::Done)
+}
+
+pub static MOVIE_SEEK: &[Entry] = &[
+    Entry {
+        command: 0x31c,
+        name: "apply queued movie segment",
+        capability: Capability::MovieScene,
+        handler: legacy_movie_seek,
+    },
+    Entry {
+        command: 0x31b,
+        name: "seek scene movie frame",
+        capability: Capability::MovieScene,
+        handler: legacy_movie_seek,
+    },
+];
+fn legacy_movie_seek(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    let h = hosts
+        .movie_scene
+        .as_mut()
+        .expect("movie scene capability checked");
+    hosts
+        .movies
+        .as_deref_mut()
+        .expect("movie capability checked")
+        .seek_scene(call, h.scene)?;
+    Ok(Flow::Done)
+}
 
 pub static FALLING_BILLBOARDS: &[Entry] = &[Entry {
     command: 0x2a2,
@@ -4915,11 +5008,36 @@ pub static AUDIO_PRELOAD: &[Entry] = &[
     },
 ];
 
+pub static SCREEN_COORDINATES: &[Entry] = &[Entry {
+    command: 0x4e,
+    name: "screen coordinate mode",
+    capability: Capability::Scene,
+    handler: |hosts, call| {
+        hosts
+            .scene
+            .as_deref_mut()
+            .expect("scene capability checked")
+            .screen_coordinates(call)?;
+        Ok(Flow::Done)
+    },
+}];
+
 pub static SE_RESTART: &[Entry] = &[Entry {
     command: 0xb4,
     name: "restart SE channel",
     capability: Capability::Audio,
     handler: root_audio,
+}];
+
+pub static SE_GAIN: &[Entry] = &[Entry {
+    command: 0xb8,
+    name: "SE gain multiplier",
+    capability: Capability::Audio,
+    handler: |hosts, call| {
+        let h = hosts.audio.as_mut().expect("audio capability checked");
+        h.audio.set_se_gain(call, h.backend)?;
+        Ok(Flow::Done)
+    },
 }];
 
 pub static BACKGROUND_AUDIO: &[Entry] = &[Entry {
@@ -5086,6 +5204,10 @@ pub static INPUT_PRESS: &[Entry] = &[
 
 /// Static variant tables used when provisioning shared host capabilities.
 pub static VARIANT_TABLES: &[&[Entry]] = &[
+    SE_GAIN,
+    MOVIE_CONTROL,
+    MOVIE_SEEK,
+    SCREEN_COORDINATES,
     INPUT_PRESS,
     MGV_PLAYER,
     DISPLAY_COUNT,
@@ -5093,6 +5215,7 @@ pub static VARIANT_TABLES: &[&[Entry]] = &[
     KEYED_ARCHIVES,
     FONT_CELLS,
     PARTICLES,
+    PARTICLES_X87,
     BACKGROUND_AUDIO,
     SE_RESTART,
     AUDIO_PRELOAD,
@@ -5107,6 +5230,10 @@ pub static VARIANT_TABLES: &[&[Entry]] = &[
 
 pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'static Entry> {
     let entries = match id {
+        crate::profile::VariantId::SeGain => SE_GAIN,
+        crate::profile::VariantId::MovieControl => MOVIE_CONTROL,
+        crate::profile::VariantId::MovieSeek => MOVIE_SEEK,
+        crate::profile::VariantId::ScreenCoordinates => SCREEN_COORDINATES,
         crate::profile::VariantId::InputPress => INPUT_PRESS,
         crate::profile::VariantId::MgvPlayer => MGV_PLAYER,
         crate::profile::VariantId::DisplayCount => DISPLAY_COUNT,
@@ -5117,6 +5244,7 @@ pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'st
         crate::profile::VariantId::TextAlpha => TEXT_ALPHA,
         crate::profile::VariantId::FontCells => FONT_CELLS,
         crate::profile::VariantId::Particles => PARTICLES,
+        crate::profile::VariantId::ParticlesX87 => PARTICLES_X87,
         crate::profile::VariantId::BackgroundAudio => BACKGROUND_AUDIO,
         crate::profile::VariantId::SeRestart => SE_RESTART,
         crate::profile::VariantId::AudioPreload => AUDIO_PRELOAD,
@@ -5130,6 +5258,14 @@ pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'st
 
 pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
     match profile.semantics(command) {
+        Semantics::Variant(crate::profile::VariantId::SeGain) => "variant SE gain multiplier",
+        Semantics::Variant(crate::profile::VariantId::MovieControl) => {
+            "variant scene movie control"
+        }
+        Semantics::Variant(crate::profile::VariantId::MovieSeek) => "variant scene movie seek",
+        Semantics::Variant(crate::profile::VariantId::ScreenCoordinates) => {
+            "variant screen coordinates"
+        }
         Semantics::Variant(crate::profile::VariantId::InputPress) => "variant input down edge",
         Semantics::Variant(crate::profile::VariantId::MgvPlayer) => "variant MGV player",
         Semantics::Variant(crate::profile::VariantId::DisplayCount) => "variant display count",
@@ -5142,6 +5278,9 @@ pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
         Semantics::Variant(crate::profile::VariantId::TextAlpha) => "variant text alpha revision",
         Semantics::Variant(crate::profile::VariantId::FontCells) => "variant text override",
         Semantics::Variant(crate::profile::VariantId::Particles) => "variant particle override",
+        Semantics::Variant(crate::profile::VariantId::ParticlesX87) => {
+            "variant x87 particle override"
+        }
         Semantics::Variant(crate::profile::VariantId::BackgroundAudio) => {
             "variant background audio override"
         }

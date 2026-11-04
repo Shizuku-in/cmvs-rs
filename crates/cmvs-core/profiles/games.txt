@@ -10,6 +10,15 @@ game-id 0x00000000
 executable cmvs.exe sha256=caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c9715a20e7a5f36d02b
 end
 
+game harouse
+profile cmvs-20080719
+start data/pack/start.ps2 sha256=375c8705bd17e4219f90deba01c8fa57538d2e8182adf9daf96d6ca71e45ffd9
+archive data/pack/script.cpz sha256=ebc450c1953a863151e509f53715aeaea882c7d7aad3454e1efcbd7f95167b47
+# 0x201d is a no-op; no game ID is supplied by the startup script.
+game-id 0x00000000
+executable cmvs.exe sha256=afe3b3a895e7b3ba5f78e6f6464296f1d028e87307c8de5a568b88fd6086491e
+end
+
 game miranosu
 profile cmvs-20110525
 start data/pack/start.ps2 sha256=2e8c7261ea801f59c9e80b9cdbde89832c0a65f7b622e2fa4551509b1cfe5143

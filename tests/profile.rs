@@ -911,6 +911,13 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
     assert_eq!(asukimi.statuses().len(), 864);
     assert_eq!(asukimi.count(CommandStatus::Unreviewed), 519);
     assert_eq!(asukimi.count(CommandStatus::NoOp), 345);
+    let harouse = registry.profile("cmvs-20080719").unwrap();
+    assert_eq!(harouse.base.as_deref(), Some("cmvs-20160201"));
+    assert_eq!(harouse.binaries.len(), 1);
+    assert_eq!(harouse.statuses().len(), 864);
+    assert_eq!(harouse.count(CommandStatus::Unreviewed), 539);
+    assert_eq!(harouse.count(CommandStatus::NoOp), 325);
+    assert_eq!(harouse.status(0x1d), CommandStatus::NoOp);
     let hapymaher = registry.profile("cmvs-20130131").unwrap();
     let hapymaherfd = registry.profile("cmvs-20140217").unwrap();
     assert_eq!(hapymaherfd.base.as_deref(), Some("cmvs-20160201"));
@@ -959,6 +966,7 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
         games,
         [
             ("asukimi", "cmvs-20071117", None),
+            ("harouse", "cmvs-20080719", None),
             ("miranosu", "cmvs-20110525", None),
             ("kazokubu", "cmvs-20120309", None),
             ("hapymaher", "cmvs-20130131", None),

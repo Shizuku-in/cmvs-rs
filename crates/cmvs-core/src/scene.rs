@@ -361,7 +361,7 @@ impl SceneHost {
         Self {
             child_slots: ChildSlots::for_profile(profile),
             allow_filter_mode_one: profile.is_inspected_20071117(),
-            allow_legacy_sine_modes: profile.is_inspected_20071117(),
+            allow_legacy_sine_modes: profile.uses_legacy_sine_modes(),
             ..Self::default()
         }
     }
@@ -778,6 +778,37 @@ impl SceneHost {
         };
         call.complete(0x4010)?;
         target.logical_size = [width, height];
+        Ok(())
+    }
+
+    /// HAROUSE x86 0x444ce0: select screen coordinate mode 0 or 1.
+    pub(crate) fn screen_coordinates(
+        &mut self,
+        call: &mut Call<'_, '_>,
+    ) -> Result<(), DecodeError> {
+        let pc = call.pc;
+        let fail = |why| error(pc, 0x204e, why);
+        let slot = call.argument(4, "object slot")?;
+        let child = call.argument(8, "child slot")? as i32;
+        let mode = call.argument(12, "mode")?;
+        let parent = u8::try_from(slot)
+            .ok()
+            .and_then(|slot| self.objects.get_mut(&slot))
+            .ok_or_else(|| fail("object slot does not exist"))?;
+        let object = if child < 0 {
+            parent
+        } else {
+            u8::try_from(child)
+                .ok()
+                .and_then(|child| parent.children.get_mut(&u16::from(child)))
+                .ok_or_else(|| fail("child object does not exist in slots 0..255"))?
+        };
+        let draw = object
+            .draw
+            .as_mut()
+            .ok_or_else(|| fail("object has no draw state"))?;
+        call.complete(0x400c)?;
+        draw.words[0] = u32::from(mode != 0);
         Ok(())
     }
 

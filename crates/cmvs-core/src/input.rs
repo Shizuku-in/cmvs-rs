@@ -257,8 +257,8 @@ const ACTION_COMMANDS: [(u16, usize); 20] = [
     (0x34a, 20),
 ];
 
-/// ASUKIMI x86 queries report the down edge, unlike the base build's up edge.
-/// The additional 0x22f0/2/4 pairs address actions 17/18/19; docs/games/asukimi.
+/// Inspected early x86 queries report the down edge, unlike the base build's up edge.
+/// The additional 0x22f0/2/4 pairs address actions 17/18/19; docs/games/{asukimi,harouse}.
 pub(crate) fn handle_press(
     call: &mut Call<'_, '_>,
     input: &mut ActionInput,
