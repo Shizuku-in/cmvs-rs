@@ -505,8 +505,9 @@ fn projected_layer<'a>(
     };
     let projection_words = inherited.unwrap_or(words);
     let world = [11, 12, 13].map(|i| f32::from_bits(projection_words[i]));
-    let Some(projection) = camera
+    let Some(projection) = cameras
         .project_object(
+            (words[0] - 2) as usize,
             world,
             f32::from_bits(projection_words[16]),
             f32::from_bits(projection_words[15]),

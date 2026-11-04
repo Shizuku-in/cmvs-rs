@@ -70,9 +70,9 @@ pub struct ObjectImage {
 impl ObjectImage {
     pub(crate) fn apply_filter(&mut self, parameters: [u32; 3]) -> Result<(), crate::FormatError> {
         let [mode, color, extra] = parameters;
-        if !matches!(mode, 2 | 17 | 256 | 512) {
+        if !matches!(mode, 1 | 2 | 17 | 256 | 512) {
             return Err(crate::FormatError(
-                "image filter mode not implemented; only modes 2, 17, 256 and 512 are verified",
+                "image filter mode not implemented; only modes 1, 2, 17, 256 and 512 are verified",
             ));
         }
         // Hapymaher 0x14002c6e0: modes 256/512 filter rows with triangular/uniform
@@ -127,6 +127,16 @@ impl ObjectImage {
         let [b, g, r, _] = color.to_le_bytes();
         let mut pixels = self.pixels.pixels().to_vec();
         for pixel in pixels.as_chunks_mut::<4>().0 {
+            if mode == 1 {
+                // cmvs-20071117 0x41c640: integer RGB mean + 1, then tint /256.
+                // White maps exactly to the tint, and the original alpha is untouched.
+                let gray =
+                    (u32::from(pixel[0]) + u32::from(pixel[1]) + u32::from(pixel[2])) / 3 + 1;
+                for (channel, factor) in pixel[..3].iter_mut().zip([r, g, b]) {
+                    *channel = ((gray * u32::from(factor)) >> 8) as u8;
+                }
+                continue;
+            }
             if mode == 17 {
                 // Base 0x14003359e / Aoitori 0x140037b2e: truncate twice,
                 // including the 255/256 colour factor for white.
@@ -964,7 +974,7 @@ impl SceneHost {
     /// (0x14003bb10) and sets system result 0 to whether loading succeeded; returns 0x4008.
     /// 0x2038 uses SP-8 child slot and SP-12 name, and returns 0x400c.
     /// 0x203b / 0x14006c3b0 -> 0x14003bbc0 -> 0x140035260 adds mode/color/extra,
-    /// filters decoded pixels before upload, and returns 0x4014. Modes 2/17 are verified.
+    /// filters decoded pixels before upload, and returns 0x4014. Mode 1 is early-build-only.
     /// +12032 is set only by 0x212a, which stays unhandled, so its 0x140018bc0 call never runs.
     pub fn try_handle_image(
         &mut self,
@@ -1020,7 +1030,9 @@ impl SceneHost {
             let color = call.argument(16, "filter color")?;
             // Modes 256/512 use low/high words as radius and sampling step.
             let extra = call.argument(20, "filter extra")?;
-            if !matches!(mode, 2 | 17 | 256 | 512) {
+            if !(matches!(mode, 2 | 17 | 256 | 512)
+                || mode == 1 && self.child_slots == ChildSlots::Early)
+            {
                 return Err(fail(
                     "image filter mode not implemented; only modes 2, 17, 256 and 512 are verified",
                 )

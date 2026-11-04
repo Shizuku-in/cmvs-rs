@@ -40,6 +40,8 @@ pub struct Options {
     pub fork_saves: bool,
     /// Explicit research mode: keep snapshot commands' live effects but no save image.
     pub capture_snapshots: bool,
+    /// Composite completed software frames for commands that read the device.
+    pub render_frames: bool,
     pub block_presumed: bool,
     pub block_unreviewed: bool,
 }
@@ -57,6 +59,7 @@ impl Default for Options {
             route_skip: true,
             fork_saves: false,
             capture_snapshots: true,
+            render_frames: false,
 
             block_presumed: false,
             block_unreviewed: false,
@@ -77,6 +80,7 @@ impl Options {
             ("route_skip", self.route_skip.into()),
             ("fork_saves", self.fork_saves.into()),
             ("capture_snapshots", self.capture_snapshots.into()),
+            ("render_frames", self.render_frames.into()),
             ("block_presumed", self.block_presumed.into()),
             ("block_unreviewed", self.block_unreviewed.into()),
         ])
@@ -123,6 +127,8 @@ fn gate_kind(kind: GateErrorKind) -> &'static str {
 pub struct Session<'a> {
     run: Startup<'a>,
     backend: RecordingBackend,
+    render_frames: bool,
+    font: Option<cmvs_desktop::font::FontRenderer>,
     codes: CodeInput,
     bindings: KeyBindings,
     device: Device,
@@ -184,6 +190,9 @@ impl<'a> Session<'a> {
         options: &Options,
         font: Option<&cmvs_desktop::font::FontRenderer>,
     ) -> Result<Self, String> {
+        if options.render_frames && font.is_none() {
+            return Err("software frame rendering requires a font".into());
+        }
         let game = target.game.as_ref().ok_or("no engine profile selected")?;
         let mut run = Startup::new(script, &target.root, game, 0).map_err(|e| e.to_string())?;
         run.set_mgv_factory(Box::new(cmvs_desktop::video::TheoraFactory));
@@ -215,6 +224,12 @@ impl<'a> Session<'a> {
         Ok(Self {
             run,
             backend,
+            render_frames: options.render_frames,
+            font: if options.render_frames {
+                font.cloned()
+            } else {
+                None
+            },
             codes: CodeInput::default(),
             bindings: target.key_bindings.clone().unwrap_or_default(),
             device: options.device,
@@ -449,9 +464,20 @@ impl<'a> Session<'a> {
                 .set_audio_backend(Box::new(RecordingAudio::default()))
                 .map_err(|e| Stop::Error(e.to_string()))?;
         }
-        self.run
-            .advance_frame(self.frame_ms)
-            .map_err(|e| Stop::Error(e.to_string()))?;
+        let advanced = if self.render_frames {
+            self.run.advance_decoded_frame(self.frame_ms)
+        } else {
+            self.run.advance_frame(self.frame_ms)
+        };
+        advanced.map_err(|e| self.stop(Stop::Error(e.to_string())))?;
+        // Match the desktop: update after a VM yield, then publish the complete
+        // canvas before the next VM slice can request device readback.
+        if self.render_frames {
+            let image = self
+                .completed_frame()
+                .map_err(|e| self.stop(Stop::Error(e)))?;
+            self.backend.present_frame(image);
+        }
         // Keyboard navigation moves the system cursor to the new button; the host takes it.
         if let Some(warp) = self.run.input_mut().take_warp() {
             self.pointer = warp;
@@ -479,6 +505,23 @@ impl<'a> Session<'a> {
             .push(digest[..8].try_into().expect("eight bytes"));
         self.note_changes(&observation);
         Ok(observation)
+    }
+
+    fn completed_frame(&mut self) -> Result<cmvs_core::raster::RgbaImage, String> {
+        if let Some(movie) = self.run.movie_frame() {
+            use cmvs_core::platform::PlatformBackend;
+            return cmvs_desktop::movie_canvas(
+                movie,
+                self.run.screen_size(),
+                self.backend.render_mode().map_err(|e| e.to_string())? == 1,
+            )
+            .map_err(|e| e.to_string());
+        }
+        self.font
+            .as_mut()
+            .ok_or("software frame rendering requires a font")?
+            .render(self.run.scene(), self.run.camera(), self.run.messages())
+            .map_err(|e| e.to_string())
     }
     /// One step of a keyboard press: tap "next" until the target is current, then decide.
     fn navigate(&mut self) -> Result<(), Stop> {
@@ -554,5 +597,110 @@ impl<'a> Session<'a> {
     }
     pub fn take_events(&mut self) -> Vec<Json> {
         std::mem::take(&mut self.events)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cmvs_core::{platform::PlatformBackend, runner::load_start};
+
+    #[test]
+    #[ignore = "requires CMVS_TEST_FONT; uses only synthetic scripts and archives"]
+    fn yielded_frames_enable_device_capture_on_the_next_vm_slice() {
+        let font = cmvs_desktop::font::FontRenderer::read(
+            Path::new(&std::env::var("CMVS_TEST_FONT").expect("set CMVS_TEST_FONT")),
+            0,
+        )
+        .unwrap();
+        let root = std::env::temp_dir().join(format!("cmvs-probe-frames-{}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        let game_root = root.join("game");
+        std::fs::create_dir_all(game_root.join("data/pack")).unwrap();
+        // Yield, create a parent object, capture the previous device frame, yield.
+        let mut code = 0x2000u16.to_le_bytes().to_vec();
+        for (op, args) in [(0x2020u16, vec![3u32]), (0x203d, vec![3, u32::MAX])] {
+            for arg in args.into_iter().rev() {
+                code.extend(0x440u16.to_le_bytes());
+                code.extend(4u16.to_le_bytes());
+                code.extend(arg.to_le_bytes());
+            }
+            code.extend(op.to_le_bytes());
+        }
+        code.extend(0x2000u16.to_le_bytes());
+        let mut raw = b"PS2A".to_vec();
+        for word in [
+            48,
+            0,
+            0,
+            0,
+            code.len() as u32,
+            0,
+            0,
+            0,
+            0,
+            code.len() as u32,
+            0,
+        ] {
+            raw.extend(word.to_le_bytes());
+        }
+        raw.extend(code.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+        let start = game_root.join(["data", "pack", "start"].join("/") + ".ps3");
+        std::fs::write(start, raw).unwrap();
+        let archive: Vec<u8> = include_str!("../../../tests/fixtures/cpz6-script.hex")
+            .trim()
+            .as_bytes()
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap())
+            .collect();
+        std::fs::write(game_root.join("data/pack/script.cpz"), archive).unwrap();
+        let target = Target::open(&game_root, Some("cmvs-20160201"));
+        let script = load_start(&game_root, &target.game.as_ref().unwrap().files).unwrap();
+        for render_frames in [false, true] {
+            let options = Options {
+                render_frames,
+                capture_snapshots: false,
+                ..Options::default()
+            };
+            let user = root.join(if render_frames {
+                "rendered"
+            } else {
+                "recorded"
+            });
+            std::fs::create_dir(&user).unwrap();
+            let mut session =
+                Session::start(&target, &script, &user, &options, Some(&font)).unwrap();
+            assert!(session.backend.read_device_frame().is_err());
+            session.frame().unwrap();
+            if render_frames {
+                let previous = session.backend.read_device_frame().unwrap();
+                assert_eq!(
+                    [previous.width(), previous.height()],
+                    session.run.screen_size()
+                );
+                session.frame().unwrap();
+                let captured = session
+                    .run
+                    .scene()
+                    .object(3)
+                    .unwrap()
+                    .image
+                    .as_ref()
+                    .unwrap();
+                assert_eq!(captured.pixels.pixels(), previous.pixels());
+            } else {
+                assert!(session.backend.read_device_frame().is_err());
+                assert!(
+                    session
+                        .frame()
+                        .unwrap_err()
+                        .describe()
+                        .contains("no completed frame")
+                );
+            }
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

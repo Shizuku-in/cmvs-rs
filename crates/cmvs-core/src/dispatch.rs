@@ -4852,6 +4852,13 @@ pub static TEXT_ALPHA: &[Entry] = &[Entry {
     handler: root_settings,
 }];
 
+pub static SE_RESTART: &[Entry] = &[Entry {
+    command: 0xb4,
+    name: "restart SE channel",
+    capability: Capability::Audio,
+    handler: root_audio,
+}];
+
 pub static BACKGROUND_AUDIO: &[Entry] = &[Entry {
     command: 0x2ed,
     name: "background audio output",
@@ -5024,6 +5031,7 @@ pub static VARIANT_TABLES: &[&[Entry]] = &[
     FONT_CELLS,
     PARTICLES,
     BACKGROUND_AUDIO,
+    SE_RESTART,
     TEXT_ALPHA,
     OBJECT_QUEUE,
     LIST_SELECT,
@@ -5045,6 +5053,7 @@ pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'st
         crate::profile::VariantId::FontCells => FONT_CELLS,
         crate::profile::VariantId::Particles => PARTICLES,
         crate::profile::VariantId::BackgroundAudio => BACKGROUND_AUDIO,
+        crate::profile::VariantId::SeRestart => SE_RESTART,
         crate::profile::VariantId::FallingBillboards => FALLING_BILLBOARDS,
         crate::profile::VariantId::CollisionParticles => COLLISION_PARTICLES,
         crate::profile::VariantId::Fragments => FRAGMENTS,
@@ -5078,6 +5087,7 @@ pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
         Semantics::Variant(crate::profile::VariantId::Fragments) => {
             "variant image fragment override"
         }
+        Semantics::Variant(crate::profile::VariantId::SeRestart) => "variant SE restart",
         Semantics::Root => "base semantics",
     }
 }

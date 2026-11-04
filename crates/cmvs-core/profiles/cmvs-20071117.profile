@@ -184,7 +184,7 @@ binary x86 file=cmvs.exe sha256=caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c97
 0x20b1 unreviewed 0x4dd7a
 0x20b2 unreviewed 0x4dd82
 0x20b3 unreviewed 0x4dd8a
-0x20b4 unreviewed 0x4dd92
+0x20b4 unreviewed 0x4dd92 variant=se-restart:x86:caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c9715a20e7a5f36d02b evidence=games/asukimi/README.md
 0x20b5 unreviewed 0x4dd9a
 0x20b6 unreviewed 0x4dda2
 0x20b7 unreviewed 0x4ddaa

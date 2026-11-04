@@ -23,6 +23,7 @@ const MAX_FONT: usize = 32 * 1024 * 1024;
 
 /// The explicit font file (TTC face selected explicitly) serves the built-in default
 /// face; faces named by glyphs are resolved through `FontLibrary`.
+#[derive(Clone)]
 pub struct FontRenderer {
     library: Arc<Mutex<FontLibrary>>,
     cache: BTreeMap<(Arc<[u8]>, [u32; 9]), RgbaImage>,

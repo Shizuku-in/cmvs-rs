@@ -25,6 +25,7 @@ const OPTIONS: &str = "Options:
   --device <name>       mouse (default) or keyboard input
   --font <file>         font for glyph metrics
   --font-index <n>      collection face index; requires --font (default 0)
+  --render-frames       composite software device frames at VM yields; requires --font
   --frame-ms <n>        positive virtual frame time in milliseconds (default 16)
   --seed <n>            decimal u32 random seed (default 0)
   --max-steps <n>       positive VM step budget per session (default 50000000)
@@ -122,6 +123,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
             "--max-page-trials" => options.max_page_trials = number(value()?, &arg)?,
             "--no-route-skip" => options.route_skip = false,
             "--without-snapshots" => options.capture_snapshots = false,
+            "--render-frames" => options.render_frames = true,
             "--fork" => {
                 options.fork_saves = match value()?.as_str() {
                     "replay" => false,
@@ -141,6 +143,9 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Args, String> {
     }
     if font_index.is_some() && font.is_none() {
         return Err("--font-index requires --font".into());
+    }
+    if options.render_frames && font.is_none() {
+        return Err("--render-frames requires --font".into());
     }
     if options.frame_ms == 0
         || options.max_steps == 0
@@ -284,6 +289,29 @@ fn run(args: Args) -> Result<bool, String> {
 #[cfg(test)]
 mod tests {
     use super::parse_args;
+
+    #[test]
+    fn rendering_requires_a_font_and_is_opt_in() {
+        let parse = |flags: &[&str]| {
+            parse_args(
+                ["game-root", "--out", "new-report"]
+                    .into_iter()
+                    .chain(flags.iter().copied())
+                    .map(String::from),
+            )
+        };
+        assert!(!parse(&[]).unwrap().options.render_frames);
+        assert_eq!(
+            parse(&["--render-frames"]).err().unwrap(),
+            "--render-frames requires --font"
+        );
+        assert!(
+            parse(&["--font", "font.ttf", "--render-frames"])
+                .unwrap()
+                .options
+                .render_frames
+        );
+    }
 
     #[test]
     fn disabling_snapshots_cannot_claim_saved_forks() {

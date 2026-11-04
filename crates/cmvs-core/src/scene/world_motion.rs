@@ -1,5 +1,6 @@
 //! Draw state +152, 0x21f9..0x21fd; addresses refer to the documented binary hash.
 //! Linear mode 0, absolute quadratic ease-out mode 1, sine Y modes 0x22/0x31/0x38/0x39/0x41 and X mode 0x48.
+//! The inspected early build additionally admits Y half-turn modes 0x20/0x21/0x30.
 use super::SceneHost;
 use crate::{
     bytecode::DecodeError,
@@ -63,6 +64,31 @@ impl WorldMotion {
             // cvtsi2ss uses zero-extended rdi/r8, not the decompiler's signed int casts.
             let elapsed = playback.elapsed as f32;
             let duration = key.duration as f32;
+            if matches!(key.mode as u8, 0x20 | 0x21 | 0x30) {
+                // cmvs-20071117 0x414af0 cases 32/33/48 -> 0x42db70: positive
+                // unit/quarter Y arch or negative arch using the full high word / 100.
+                // Admission is profile-bound below; bit 0x8000 is ignored.
+                let amplitude = match key.mode as u8 {
+                    0x20 => 1.0,
+                    0x21 => 0.25,
+                    _ => (f64::from(key.mode >> 16) / 100.0) as f32,
+                };
+                let degrees = (f64::from(playback.elapsed % key.duration) * 180.0
+                    / f64::from(duration)) as f32;
+                let radians = f64::from(degrees) / 180.0 * f64::from(std::f32::consts::PI);
+                let sine = (radians.sin() * f64::from(amplitude)) as f32;
+                let offset = ((f64::from(sine) * 100.0) as i32 as f64 / 100.0) as f32;
+                words[11] = playback.base[0];
+                let base_y = f32::from_bits(playback.base[1]);
+                words[12] = if key.mode as u8 != 0x30 {
+                    base_y + offset
+                } else {
+                    base_y - offset
+                }
+                .to_bits();
+                words[13] = playback.base[2];
+                return None;
+            }
             if matches!(key.mode as u8, 0x22 | 0x31 | 0x38 | 0x39 | 0x41 | 0x48) {
                 // 0x140025bac -> 0x140025b56: unsigned wrapping product and remainder,
                 // f32 degrees/amplitude; 0x140025310 uses f64 sin then f32 hundredths.
@@ -153,6 +179,13 @@ impl WorldMotion {
 }
 
 impl SceneHost {
+    fn supports_world_motion_mode(&self, mode: u32) -> bool {
+        // Early is selected only by the inspected profile and executable hash.
+        WorldMotion::supports_mode(mode)
+            || self.child_slots == super::ChildSlots::Early
+                && matches!(mode as u8, 0x20 | 0x21 | 0x30)
+    }
+
     /// 0x228a normal execution: replace +152, write key 0, and capture the execution-time
     /// XYZ. The sequence owns timing/fast-finish decisions; this method owns scene state.
     pub(crate) fn replace_world_motion(
@@ -256,7 +289,7 @@ impl SceneHost {
                 if (args[3] as i32) >= WORLD_MOTION_KEYS as i32 {
                     return Err(fail("world motion next key outside 0..7"));
                 }
-                if !WorldMotion::supports_mode(args[4]) {
+                if !self.supports_world_motion_mode(args[4]) {
                     return Err(fail("world motion interpolation mode is not implemented"));
                 }
             }

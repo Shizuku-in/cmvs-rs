@@ -3,7 +3,7 @@
 //! fields of the camera selected by SP-4 (0x140027090), 0x2060..0x2065 the same fields of camera 0
 //! (0x140027070). Fields stay raw words named by offset. The original renderer uses them
 //! for coordinate modes 2/3 (0x140020340 -> 0x14004ef40); the software renderer supports
-//! cameras of type 3 (`project_object`), with screen roll applied by scene_render. 0x2056 queries projected
+//! cameras of type 3 and the hash-bound early types 1/2, with screen roll applied by scene_render. 0x2056 queries projected
 //! integer coordinates without rendering. Camera 0 motion supports linear and quadratic
 //! ease-out branches. 0x2126 queries the screen device size at +1968 -> +8.
 use crate::{
@@ -14,6 +14,7 @@ use crate::{
     input::ActionInput,
     machine::{Machine, Step},
 };
+mod early;
 mod view;
 pub use view::DeviceView;
 
@@ -222,6 +223,7 @@ fn hundredths(value: f32) -> f32 {
 
 #[derive(Debug, Clone)]
 pub struct CameraHost {
+    early_projection: bool,
     screen_size: crate::viewport::ScreenSize,
     cameras: [Camera; CAMERAS],
     views: [DeviceView; CAMERAS],
@@ -230,6 +232,7 @@ pub struct CameraHost {
 impl Default for CameraHost {
     fn default() -> Self {
         Self {
+            early_projection: false,
             screen_size: Default::default(),
             cameras: Default::default(),
             views: std::array::from_fn(DeviceView::new),
@@ -238,6 +241,35 @@ impl Default for CameraHost {
 }
 
 impl CameraHost {
+    pub fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
+        let mut host = Self {
+            early_projection: early::supported(profile),
+            ..Self::default()
+        };
+        if host.early_projection {
+            for camera in &mut host.cameras {
+                early::reset_defaults(camera);
+            }
+        }
+        host
+    }
+
+    /// Select only projection semantics bound to this host's engine profile.
+    pub fn project_object(
+        &self,
+        index: usize,
+        world: [f32; 3],
+        offset: f32,
+        reference: f32,
+    ) -> Result<Option<ObjectProjection>, &'static str> {
+        let camera = self.camera(index).ok_or("invalid projection camera")?;
+        if self.early_projection {
+            early::project(camera, world, offset, reference)
+        } else {
+            camera.project_object(world, offset, reference)
+        }
+    }
+
     pub(crate) fn set_screen_size(&mut self, size: crate::viewport::ScreenSize) {
         self.screen_size = size;
     }
@@ -249,6 +281,9 @@ impl CameraHost {
         for camera in &mut self.cameras {
             let retained = [19, 20, 37, 38, 39].map(|i| camera.words[i]);
             *camera = Camera::default();
+            if self.early_projection {
+                early::reset_defaults(camera);
+            }
             for (i, value) in [19, 20, 37, 38, 39].into_iter().zip(retained) {
                 camera.words[i] = value;
             }

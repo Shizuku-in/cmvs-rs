@@ -414,6 +414,105 @@ fn filtered_image_load_scales_rgb_with_saturation_and_preserves_alpha_and_object
 }
 
 #[test]
+fn early_filtered_image_uses_integer_mean_plus_one_and_preserves_alpha() {
+    let profile = cmvs_rs::profile::Registry::builtin()
+        .profile("cmvs-20071117")
+        .unwrap();
+    for (planes, expected) in [
+        (
+            [[0, 255], [0, 255], [0, 255], [0, 17]],
+            [0, 0, 0, 0, 255, 248, 224, 17],
+        ),
+        (
+            [[0, 0], [0, 255], [255, 0], [128, 255]],
+            [85, 83, 75, 128, 85, 83, 75, 255],
+        ),
+        (
+            [[0, 1], [0, 1], [1, 1], [17, 128]],
+            [0, 0, 0, 17, 1, 1, 1, 128],
+        ),
+    ] {
+        let mut code = loads(20, &[]);
+        for (color, extra) in [(0xfff8e0, 0), (0x55fff8e0, u32::MAX)] {
+            scene_command(&mut code, 0x203b, &[20, 0, 1, color, extra]);
+        }
+        scene_command(&mut code, 0x2030, &[20, 0]);
+        scene_command(&mut code, 0x203b, &[20, 6, 1, 0xfff8e0, 0]);
+        let program = script(&code, b"a.pb3\0bad\0");
+        let mut vm = Machine::new(&program).unwrap();
+        let mut scene = SceneHost::for_profile(profile);
+        let mut files = Files::default();
+        let source = pb3(1, &planes);
+        let original = decode(&source).unwrap().unwrap().pixels;
+        files.0.insert(b"a.pb3".to_vec(), source);
+        files.0.insert(b"bad".to_vec(), b"XYZW".to_vec());
+        run_to_system(&mut vm);
+        scene.try_handle(&mut vm).unwrap();
+        for (color, extra) in [(0xfff8e0, 0), (0x55fff8e0, u32::MAX)] {
+            run_to_system(&mut vm);
+            scene.shared_image(&mut vm, &mut files).unwrap();
+            let image = scene.object(20).unwrap().image.as_ref().unwrap();
+            assert_eq!(image.pixels.pixels(), expected);
+            assert_eq!(image.filter, Some([1, color, extra]));
+            assert_eq!(vm.stack().len_bytes(), 0);
+            assert_eq!(vm.state().system_integer(0), Some(1));
+        }
+        run_to_system(&mut vm);
+        scene.shared_image(&mut vm, &mut files).unwrap();
+        assert_eq!(
+            scene.object(20).unwrap().image.as_ref().unwrap().pixels,
+            original
+        );
+        run_to_system(&mut vm);
+        scene.shared_image(&mut vm, &mut files).unwrap();
+        assert!(scene.object(20).unwrap().image.is_none());
+        assert_eq!(vm.state().system_integer(0), Some(0));
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
+}
+
+#[test]
+fn early_filter_mode_one_rejects_unverified_builds_and_resource_errors_without_committing() {
+    let profile = cmvs_rs::profile::Registry::builtin()
+        .profile("cmvs-20071117")
+        .unwrap();
+    let mut changed_hash = profile.clone();
+    changed_hash.binaries[0].sha256 = [0; 32];
+    let mut changed_id = profile.clone();
+    changed_id.id = "synthetic-unverified".into();
+    for (profile, name, include_extra) in [
+        (&changed_hash, 0, true),
+        (&changed_id, 0, true),
+        (profile, 6, true),
+        (profile, 0, false),
+    ] {
+        let mut code = loads(20, &[0]);
+        let mut args = vec![20, name, 1, 0xfff8e0];
+        if include_extra {
+            args.push(0);
+        }
+        scene_command(&mut code, 0x203b, &args);
+        let program = script(&code, b"a.pb3\0missing\0");
+        let mut vm = Machine::new(&program).unwrap();
+        let mut scene = SceneHost::for_profile(profile);
+        let mut files = Files::default();
+        files.0.insert(b"a.pb3".to_vec(), opaque());
+        run_to_system(&mut vm);
+        scene.try_handle(&mut vm).unwrap();
+        run_to_system(&mut vm);
+        scene.shared_image(&mut vm, &mut files).unwrap();
+        let old = scene.object(20).unwrap().clone();
+        run_to_system(&mut vm);
+        let pending = vm.pending_system();
+        assert!(scene.shared_image(&mut vm, &mut files).is_err());
+        assert_eq!(scene.object(20), Some(&old));
+        assert_eq!(vm.pending_system(), pending);
+        assert_eq!(vm.stack().len_bytes(), args.len() * 4);
+        assert_eq!(vm.state().system_integer(0), Some(1));
+    }
+}
+
+#[test]
 fn filtered_image_load_tints_weighted_gray_with_two_truncations_and_keeps_alpha() {
     for (planes, expected) in [
         (
@@ -567,7 +666,7 @@ fn filtered_image_load_rejects_unknown_modes_missing_args_and_resource_failures_
 
 #[test]
 fn replacement_inherits_filter_and_filters_new_source_once_before_common_area() {
-    for (mode, duration) in [2, 17]
+    for (mode, duration) in [1, 2, 17]
         .into_iter()
         .flat_map(|mode| [0, 100].map(|d| (mode, d)))
     {
@@ -578,7 +677,15 @@ fn replacement_inherits_filter_and_filters_new_source_once_before_common_area() 
         scene_command(&mut code, 0x22c4, &[20, 0, 0, 0]);
         let program = script(&code, b"a.pb3\0b.pb3\0");
         let mut vm = Machine::new(&program).unwrap();
-        let mut scene = SceneHost::default();
+        let mut scene = if mode == 1 {
+            SceneHost::for_profile(
+                cmvs_rs::profile::Registry::builtin()
+                    .profile("cmvs-20071117")
+                    .unwrap(),
+            )
+        } else {
+            SceneHost::default()
+        };
         let mut files = Files::default();
         files.0.insert(b"a.pb3".to_vec(), opaque());
         files.0.insert(
@@ -598,7 +705,9 @@ fn replacement_inherits_filter_and_filters_new_source_once_before_common_area() 
         assert_eq!(image.filter, Some([mode, 0x404080, 55]));
         assert_eq!(
             image.pixels.pixels(),
-            if mode == 2 {
+            if mode == 1 {
+                &[40, 40, 81, 10, 48, 48, 97, 255]
+            } else if mode == 2 {
                 &[127, 64, 100, 10, 64, 127, 200, 255]
             } else {
                 &[40, 40, 81, 10, 52, 52, 105, 255]
@@ -611,7 +720,9 @@ fn replacement_inherits_filter_and_filters_new_source_once_before_common_area() 
             assert_eq!(common.filter, None);
             assert_eq!(
                 common.pixels.pixels(),
-                if mode == 2 {
+                if mode == 1 {
+                    &[0, 0, 0, 0, 48, 48, 97, 255]
+                } else if mode == 2 {
                     &[0, 0, 0, 0, 64, 127, 200, 255]
                 } else {
                     &[0, 0, 0, 0, 52, 52, 105, 255]
@@ -626,7 +737,9 @@ fn replacement_inherits_filter_and_filters_new_source_once_before_common_area() 
         assert_eq!(image.filter, Some([mode, 0x404080, 55]));
         assert_eq!(
             image.pixels.pixels(),
-            if mode == 2 {
+            if mode == 1 {
+                &[1, 1, 2, 255, 1, 1, 2, 255]
+            } else if mode == 2 {
                 &[2, 1, 1, 255, 3, 2, 2, 255]
             } else {
                 &[0, 0, 1, 255, 1, 1, 2, 255]

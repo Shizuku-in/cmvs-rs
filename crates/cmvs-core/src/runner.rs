@@ -200,7 +200,7 @@ impl<'a> Startup<'a> {
         scene.set_screen_size(screen_size);
         let mut buttons = ButtonHost::default();
         buttons.set_screen_size(screen_size);
-        let mut camera = CameraHost::default();
+        let mut camera = CameraHost::for_profile(game.selection.profile);
         camera.set_screen_size(screen_size);
         let mut messages = MessageHost::for_profile(game.selection.profile);
         messages.set_screen_size(screen_size);

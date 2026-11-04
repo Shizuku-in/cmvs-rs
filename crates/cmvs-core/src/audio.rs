@@ -123,6 +123,11 @@ pub enum AudioRequest {
         channel: u8,
         looped: bool,
     },
+    /// Hash-bound early 0x20b4: restart even an active sound from its beginning.
+    RestartSe {
+        channel: u8,
+        looped: bool,
+    },
     /// 0x140087910: stop and release the device channel's sound, prepared or active.
     StopSe {
         channel: u8,
@@ -249,6 +254,11 @@ pub trait AudioBackend {
     fn start(&mut self, _channel: u8, _looped: bool) -> Result<(), Box<dyn Error>> {
         Err("audio backend does not implement starting a prepared SE channel".into())
     }
+    /// Restart an existing sound, including an active sound; missing sounds are unchanged.
+    /// Err preserves the device for retry. This is distinct from start-if-not-playing.
+    fn restart_se(&mut self, _channel: u8, _looped: bool) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement restarting an SE channel".into())
+    }
     /// Stop channel + 9 at once (no fade) and release its sound; an empty channel is a no-op.
     /// The original waits until its mixer thread has freed the slot, so Ok means released.
     fn stop(&mut self, _channel: u8) -> Result<(), Box<dyn Error>> {
@@ -365,6 +375,9 @@ impl AudioBackend for RecordingAudio {
     }
     fn start(&mut self, channel: u8, looped: bool) -> Result<(), Box<dyn Error>> {
         self.record(AudioRequest::StartSe { channel, looped })
+    }
+    fn restart_se(&mut self, channel: u8, looped: bool) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::RestartSe { channel, looped })
     }
     fn stop(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
         self.record(AudioRequest::StopSe { channel })
@@ -617,7 +630,7 @@ impl AudioHost {
             0xa8 => return self.try_voice_stop(call, backend),
             0xa9 => return self.try_voice_fade_out(call, backend),
             0xa6 | 0xaf => return self.try_voice_play(call, backend),
-            0xb1 => return self.try_start(call, backend),
+            0xb1 | 0xb4 => return self.try_start(call, backend),
             0xb3 => return self.try_stop(call, backend),
             0xb5 => return self.try_stop_all(call, backend),
             0x241 => return self.try_channel15_stop(call, backend),
@@ -961,20 +974,26 @@ impl AudioHost {
     }
 
     /// 0x20b1 / 0x140070e40: SP-4 channel, SP-8 loop; returns 0x4008, no result write.
+    /// Hash-bound early 0x20b4 / 0x4434d0 uses restart instead of start-if-not-playing.
     fn try_start(
         &mut self,
         call: &mut Call<'_, '_>,
         backend: &mut dyn AudioBackend,
     ) -> Result<(), Box<dyn Error>> {
         let pc = call.pc;
-        let fail = |why| error(pc, 0x20b1, why);
+        let op = call.command + 0x2000;
+        let fail = |why| error(pc, op, why);
         let channel = call.argument(4, "channel")?;
         let looped = call.argument(8, "loop")? != 0;
         if channel as usize >= SE_CHANNELS {
             return Err(fail("SE channel outside 0..5 sets an unmodeled flag").into());
         }
         if self.settings.se_enabled {
-            backend.start(channel as u8, looped)?;
+            if call.command == 0xb4 {
+                backend.restart_se(channel as u8, looped)?;
+            } else {
+                backend.start(channel as u8, looped)?;
+            }
         }
         call.complete(0x4008)?;
         // The constructor zeroes all six 52-byte records, even without a prior 0x20b0.

@@ -320,7 +320,7 @@ impl App<'_> {
 
 /// Movies join the same logical device canvas that readback sees, before window
 /// fitting. Videos retain aspect ratio inside the logical game canvas.
-fn movie_canvas(
+pub fn movie_canvas(
     image: &RgbaImage,
     [width, height]: [u32; 2],
     linear: bool,
