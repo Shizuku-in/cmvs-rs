@@ -323,6 +323,24 @@ fn rotated_local(
         .map(|[x, y]| [hundredths(sin * y + cos * x), hundredths(cos * y - x * sin)])
 }
 
+/// HAROUSE 0x413a10 -> 0x4126c0: rotate projected, scaled child corners
+/// around the parent's origin, before adding the projected position. x87 keeps
+/// products in extended precision until integer truncation; f64 approximates it.
+fn projected_parent_rotation([x, y]: [f32; 2], degrees: f32) -> [f32; 2] {
+    let theta = ((360.0 - f64::from(degrees)) * f64::from(0.017_453_292f32)) as f32;
+    let (sin, cos) = (f64::from(theta).sin() as f32, f64::from(theta).cos() as f32);
+    let (sin, cos, x, y) = (f64::from(sin), f64::from(cos), f64::from(x), f64::from(y));
+    [sin * y + cos * x, cos * y - x * sin].map(|v| {
+        let value = v * 100.0;
+        let integer = if !(-2_147_483_648.0..2_147_483_648.0).contains(&value) {
+            i32::MIN
+        } else {
+            value as i32
+        };
+        (f64::from(integer) / 100.0) as f32
+    })
+}
+
 /// KUNADO 0x140061130 -> 0x140036200: roll is truncated to signed hundredths,
 /// reduced modulo 36000, and applied only when positive. Round screen coordinates
 /// before rotating about half the camera's screen size, then truncate to hundredths.
@@ -454,7 +472,8 @@ fn unit_screen_scale(object: &SceneObject, screen: [u32; 2]) -> Result<(), Forma
 /// and scale (0x1400238a0, device factor 1 on the 1280x720 viewport) minus the device's
 /// half-pixel offset. The object's own angle rotates its local corners before projection
 /// scaling. Inherited attached children reuse the parent projection and origin; masks,
-/// rotated parents of children and effect targets are not verified. Camera roll follows
+/// effect targets are not verified. Parent rotation is enabled only for the inspected
+/// HAROUSE build. Camera roll follows
 /// KUNADO 0x140061130/0x140036200; +52 also shifts projection horizontally, while
 /// +48 and the copied +52 angle are unused by that vertex transform.
 fn projected_layer<'a>(
@@ -569,13 +588,14 @@ fn projected_layer<'a>(
     // 0x140024020 rotates the scaled local corners by the object's own angle; 0x1400238a0
     // then subtracts the offset, applies the projection scale, rotates by its +52 argument
     // (the parent's angle for an inherited child, 0 otherwise) and adds the position.
-    if inherited.is_some_and(|p| p[20] != 0) {
+    let parent_angle = inherited.map_or(0, |p| p[20] as i32);
+    if parent_angle != 0 && !scene.allow_projected_parent_rotation {
         return Err(FormatError(
             "children of a rotated projected parent are not verified",
         ));
     }
     let degrees = words[20] as i32 as f32 / 100.0;
-    if degrees != 0.0 || camera_roll > 0 {
+    if degrees != 0.0 || parent_angle != 0 || camera_roll > 0 {
         let corners = if degrees != 0.0 {
             let origin = [words[6] as i16, words[7] as i16].map(i64::from);
             rotated_local(local, origin, [w, h], degrees)
@@ -588,7 +608,18 @@ fn projected_layer<'a>(
             ]
             .map(|c| [0, 1].map(|i| (c[i] + origin[i]) * local[i]))
         };
-        let corners = corners.map(|c| [0, 1].map(|i| (c[i] - offset[i]) * scale[i] + [px, py][i]));
+        let corners = corners.map(|c| [0, 1].map(|i| (c[i] - offset[i]) * scale[i]));
+        if !corners.as_flattened().iter().all(|v| v.is_finite()) {
+            return Err(FormatError("projected object has a non-finite extent"));
+        }
+        let corners = corners.map(|point| {
+            let point = if parent_angle != 0 {
+                projected_parent_rotation(point, (f64::from(parent_angle) / 100.0) as f32)
+            } else {
+                point
+            };
+            [point[0] + px, point[1] + py]
+        });
         if !corners.as_flattened().iter().all(|v| v.is_finite()) {
             return Err(FormatError("projected object has a non-finite extent"));
         }

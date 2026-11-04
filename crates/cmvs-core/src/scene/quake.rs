@@ -15,7 +15,8 @@ use crate::{
 pub struct Quake {
     /// +0, SP-4. Low nibble: 0 shakes every queue item, 1 only slot objects, 2 only the
     /// message windows and text objects. Bits 4..7: direction (0 horizontal, 0x10
-    /// vertical, 0x30 rotating corners). Bits 8..11: waveform (0 steps, 0x200 damped cosine).
+    /// vertical, 0x30 rotating corners). Bits 8..11: waveform (0 steps,
+    /// 0x100 triangle for the inspected old build, 0x200 damped cosine).
     pub mode: u32,
     /// +4, SP-8.
     pub amplitude: i32,
@@ -38,14 +39,19 @@ pub const SAVED_QUAKE: usize = 56;
 
 impl Quake {
     /// Record 0x600: the constructor words +0..+12, then the whole 0x28-byte object.
-    /// +16 is zeroed by the constructor 0x1400522b0 and written by no implemented command.
+    /// +16 is zeroed by the constructor; the inspected triangle waveform toggles
+    /// it once per period, so it equals the low bit of the completed period count.
     pub(crate) fn saved(&self) -> Vec<u8> {
         let object = [
             self.mode,
             self.amplitude as u32,
             self.period,
             self.count,
-            0,
+            if self.mode & 0xf00 == 0x100 {
+                self.steps & 1
+            } else {
+                0
+            },
             u32::from(self.paused),
             self.elapsed,
             self.steps,
@@ -65,7 +71,12 @@ impl Quake {
         }
         let word =
             |i: usize| u32::from_le_bytes(record[16 + 4 * i..20 + 4 * i].try_into().unwrap());
-        if word(4) != 0 || word(5) > 1 {
+        let phase = if word(0) & 0xf00 == 0x100 {
+            word(7) & 1
+        } else {
+            0
+        };
+        if word(4) != phase || word(5) > 1 || word(0) & 0xf00 == 0x100 && word(2) == 0 {
             return Err("saved quake state is not modeled");
         }
         Ok(Self {
@@ -102,6 +113,9 @@ impl Quake {
         if self.mode & 0xf00 == 0x200 {
             return self.damped();
         }
+        if self.mode & 0xf00 == 0x100 {
+            return self.triangle();
+        }
         let mut done = false;
         while self.elapsed >= self.period {
             self.elapsed -= self.period;
@@ -127,6 +141,36 @@ impl Quake {
                 done = true;
             }
             self.steps = self.steps.wrapping_add(1);
+        }
+        done
+    }
+
+    /// HAROUSE 0x43b1a3: each whole period toggles +16. Since it starts at
+    /// zero and steps increments in the same loop, its value is steps & 1.
+    fn triangle(&mut self) -> bool {
+        let mut done = false;
+        while self.elapsed >= self.period {
+            self.elapsed -= self.period;
+            if self.count != u32::MAX && self.count < self.steps {
+                done = true;
+            }
+            self.steps = self.steps.wrapping_add(1);
+        }
+        let value = (self.elapsed as i32)
+            .wrapping_mul(self.amplitude)
+            .wrapping_mul(2)
+            .wrapping_div(self.period as i32);
+        let twice = self.amplitude.wrapping_mul(2);
+        let value = match (self.steps & 1, value < self.amplitude) {
+            (0, true) => value.wrapping_neg(),
+            (0, false) => value.wrapping_sub(twice),
+            (_, true) => value,
+            (_, false) => twice.wrapping_sub(value),
+        };
+        match self.mode & 0xf0 {
+            0 => self.offset = [value, 0],
+            0x10 => self.offset = [0, value],
+            _ => {}
         }
         done
     }
@@ -186,7 +230,8 @@ impl SceneHost {
     /// 0 = count − steps, or −1 for an endless or missing quake. 0x2227 / 0x14007acc0: pauses
     /// while SP-4 is nonzero; pops 4. 0x2229 / 0x14007adf0: frees the quake. 0x2226 and
     /// 0x2229 return 0x4000. Waveforms the scripts never use stay unmodeled errors: 0x100 and
-    /// step direction 0x20, whose rand() shares the CRT state with 0x20d4.
+    /// step direction 0x20, whose rand() shares the CRT state with 0x20d4. The
+    /// inspected HAROUSE build additionally enables the 0x100 triangle waveform.
     pub fn try_handle_quake(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
         let Some((pc, command @ (0x20c | 0x225..=0x227 | 0x229))) = vm.pending_system() else {
             return Ok(false);
@@ -218,6 +263,11 @@ impl SceneHost {
                     call.argument(16, "count")?,
                 );
                 match mode & 0xf00 {
+                    0x100 if self.allow_triangle_quake && matches!(mode & 0xf0, 0 | 0x10) => {
+                        if period == 0 {
+                            return Err(error(pc, op, "triangle quake needs a nonzero period"));
+                        }
+                    }
                     0x200 => {}
                     0 if mode & 0xf0 == 0x20 => {
                         return Err(error(
@@ -300,5 +350,59 @@ impl SceneHost {
             .set_system_integer(0, result)
             .expect("slot 0 exists");
         Ok(flow)
+    }
+}
+
+#[cfg(test)]
+mod triangle_tests {
+    use super::*;
+    fn quake() -> Quake {
+        Quake {
+            mode: 0x102,
+            amplitude: 24,
+            period: 80,
+            count: 3,
+            paused: false,
+            elapsed: 0,
+            steps: 0,
+            offset: [0, 0],
+        }
+    }
+    #[test]
+    fn triangle_cycles_preserve_phase_through_pause_save_and_restore() {
+        let mut q = quake();
+        let mut offsets = Vec::new();
+        for _ in 0..5 {
+            assert!(!q.advance(20));
+            offsets.push(q.offset[0]);
+        }
+        assert_eq!(offsets, [-12, -24, -12, 0, 12]);
+        let record = q.saved();
+        assert_eq!(u32::from_le_bytes(record[32..36].try_into().unwrap()), 1);
+        let mut restored = Quake::restore(&record).unwrap();
+        restored.paused = true;
+        let before = restored.clone();
+        assert!(!restored.advance(100));
+        assert_eq!(restored, before);
+        restored.paused = false;
+        for _ in 0..14 {
+            assert_eq!(q.advance(20), restored.advance(20));
+            assert_eq!(q, restored);
+        }
+        assert!(q.advance(20));
+        assert!(restored.advance(20));
+        assert_eq!(q.steps, 5);
+        let mut invalid = record;
+        invalid[32..36].copy_from_slice(&0u32.to_le_bytes());
+        assert!(Quake::restore(&invalid).is_err());
+    }
+    #[test]
+    fn triangle_counts_all_elapsed_periods_and_never_finishes_an_endless_quake() {
+        let mut q = quake();
+        q.mode = 0x110;
+        q.count = u32::MAX;
+        assert!(!q.advance(260));
+        assert_eq!((q.steps, q.elapsed, q.offset), (3, 20, [0, 12]));
+        assert_eq!(Quake::restore(&q.saved()).unwrap(), q);
     }
 }

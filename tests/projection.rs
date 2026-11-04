@@ -742,3 +742,113 @@ fn projected_child_stays_in_parent_group_and_unsupported_flags_still_fail() {
         "mismatched coordinate modes do not enqueue"
     );
 }
+
+#[test]
+fn harouse_projected_child_rotates_with_parent_after_its_own_local_rotation() {
+    let profile = cmvs_rs::profile::Registry::builtin()
+        .profile("cmvs-20080719")
+        .unwrap();
+    for (parent_angle, child_angle, expected) in [
+        (90, 0, vec![(3, 3), (3, 4)]),
+        (90, 90, vec![(2, 2), (3, 2)]),
+        (270, 0, vec![(4, 0)]),
+    ] {
+        let mut code = vec![];
+        camera(&mut code);
+        projected(&mut code, 1, 6, [0.0, 0.0, 10.0], 10.0);
+        command(&mut code, 0x2044, &[1, u32::MAX, 0, 0, 0, 0]);
+        projected_child(&mut code);
+        command(&mut code, 0x2045, &[1, 0, 1, 0]);
+        command(&mut code, 0x204a, &[1, u32::MAX, parent_angle]);
+        command(&mut code, 0x204a, &[1, 0, child_angle]);
+        let (scene, cameras) = build(&code);
+        let object = scene.object(1).unwrap();
+        let bound = SceneHost::for_profile(profile);
+        let frame = scene_render::render_scene(&bound, Some(&cameras), &[object], 8, 8).unwrap();
+        for y in 0..8 {
+            for x in 0..8 {
+                let p = &frame.pixels()[(y * 8 + x) * 4..(y * 8 + x) * 4 + 3];
+                assert_eq!(
+                    p,
+                    if expected.contains(&(x, y)) {
+                        &[255; 3]
+                    } else {
+                        &[0; 3]
+                    },
+                    "parent={parent_angle} child={child_angle} x={x} y={y}"
+                );
+            }
+        }
+        for changed in 0..3 {
+            let mut unknown = profile.clone();
+            match changed {
+                0 => unknown.id = "unknown".into(),
+                1 => unknown.binaries[0].sha256 = [0; 32],
+                _ => unknown.base = Some("unknown".into()),
+            }
+            assert!(
+                scene_render::render_scene(
+                    &SceneHost::for_profile(&unknown),
+                    Some(&cameras),
+                    &[object],
+                    8,
+                    8
+                )
+                .is_err()
+            );
+        }
+        assert!(
+            scene_render::render_scene(&SceneHost::default(), Some(&cameras), &[object], 8, 8)
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn harouse_parent_rotation_keeps_child_origin_nonuniform_scale_and_opacity() {
+    let profile = cmvs_rs::profile::Registry::builtin()
+        .profile("cmvs-20080719")
+        .unwrap();
+    let mut code = vec![];
+    camera(&mut code);
+    projected(&mut code, 1, 6, [0.0, 0.0, 10.0], 10.0);
+    command(&mut code, 0x2044, &[1, u32::MAX, 0, 0, 0, 0]);
+    projected_child(&mut code);
+    command(&mut code, 0x2046, &[1, u32::MAX, 1, 0]);
+    command(&mut code, 0x2045, &[1, 0, 2, 0]);
+    command(&mut code, 0x2046, &[1, 0, 1, 0]);
+    command(&mut code, 0x2049, &[1, u32::MAX, f(2.0), f(1.0)]);
+    command(&mut code, 0x2049, &[1, 0, f(0.5), f(1.0)]);
+    command(&mut code, 0x204a, &[1, u32::MAX, 90]);
+    command(&mut code, 0x2048, &[1, u32::MAX, 128]);
+    command(&mut code, 0x2048, &[1, 0, 128]);
+    let (scene, cameras) = build(&code);
+    let bound = SceneHost::for_profile(profile);
+    let frame =
+        scene_render::render_scene(&bound, Some(&cameras), &[scene.object(1).unwrap()], 8, 8)
+            .unwrap();
+    for y in 0..8 {
+        for x in 0..8 {
+            assert_eq!(
+                &frame.pixels()[(y * 8 + x) * 4..(y * 8 + x) * 4 + 3],
+                if x == 3 && (3..5).contains(&y) {
+                    &[64; 3]
+                } else {
+                    &[0; 3]
+                },
+                "x={x} y={y}"
+            );
+        }
+    }
+    let mut invalid = scene.object(1).unwrap().clone();
+    invalid.draw.as_mut().unwrap().words[18] = f(f32::MAX);
+    invalid
+        .children
+        .get_mut(&0)
+        .unwrap()
+        .draw
+        .as_mut()
+        .unwrap()
+        .words[18] = f(f32::MAX);
+    assert!(scene_render::render_scene(&bound, Some(&cameras), &[&invalid], 8, 8).is_err());
+}

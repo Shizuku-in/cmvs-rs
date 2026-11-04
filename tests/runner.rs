@@ -1926,6 +1926,9 @@ fn old_snapshot_roundtrip_uses_build_layout_and_zero_css1_identity() {
         commands::command(&mut code, 0x2020, &[20]);
         commands::command(&mut code, 0x2040, &[20]);
         commands::command(&mut code, 0x2073, &[20, u32::MAX, 2f32.to_bits()]);
+        if profile == "cmvs-20080719" {
+            commands::command(&mut code, 0x2225, &[0x102, 24, 80, u32::MAX]);
+        }
         let pc = code.len();
         commands::command(&mut code, 0x22b2, &[]);
         commands::command(&mut code, 0x2073, &[20, u32::MAX, 9f32.to_bits()]);
@@ -1953,6 +1956,10 @@ fn old_snapshot_roundtrip_uses_build_layout_and_zero_css1_identity() {
         backend.set_screen_size(cmvs_rs::viewport::ScreenSize::new([800, 600]).unwrap());
         while run.machine().pc() != pc {
             assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+        }
+        if profile == "cmvs-20080719" {
+            run.advance_frame(100).unwrap();
+            assert_eq!(run.scene().quake().unwrap().offset, [12, 0]);
         }
         assert_eq!(
             run.tick(&mut backend).unwrap(),
@@ -1991,6 +1998,17 @@ fn old_snapshot_roundtrip_uses_build_layout_and_zero_css1_identity() {
                 .game_id,
             0
         );
+        if profile == "cmvs-20080719" {
+            assert_eq!(
+                (
+                    run.scene().quake().unwrap().steps,
+                    run.scene().quake().unwrap().elapsed
+                ),
+                (1, 20)
+            );
+            run.advance_frame(20).unwrap();
+            assert_eq!(run.scene().quake().unwrap().offset, [24, 0]);
+        }
         drop(run);
         fs::remove_dir_all(user).unwrap();
     }

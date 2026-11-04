@@ -686,6 +686,11 @@ impl Startup<'_> {
             .as_deref()
             .map(crate::scene::Quake::restore)
             .transpose()?;
+        if quake.as_ref().is_some_and(|q| q.mode & 0xf00 == 0x100)
+            && !self.scene.allow_triangle_quake
+        {
+            return Err("triangle quake restore requires the inspected build".into());
+        }
         let fade = snapshot.effects[1]
             .as_deref()
             .map(crate::fade::Fade::restore)

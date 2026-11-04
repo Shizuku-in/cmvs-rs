@@ -342,3 +342,40 @@ fn pause_query_reports_a_paused_quake_only() {
     assert_eq!(results[5], Some(0));
     assert_eq!(vm.stack().len_bytes(), 0);
 }
+
+#[test]
+fn triangle_quake_requires_the_inspected_harouse_build_and_nonzero_period() {
+    let profile = cmvs_rs::profile::Registry::builtin()
+        .profile("cmvs-20080719")
+        .unwrap();
+    let code = quake_code(0x102, 24, 80, 3);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::for_profile(profile);
+    run(&mut vm, &mut scene, 1);
+    scene.advance_frame(20);
+    assert_eq!(scene.quake().unwrap().offset, [-12, 0]);
+    assert_eq!(scene.quake().unwrap().offset(false), [0, 0]);
+    for i in 0..3 {
+        let mut wrong = profile.clone();
+        match i {
+            0 => wrong.id = "unknown".into(),
+            1 => wrong.binaries[0].sha256 = [0; 32],
+            _ => wrong.base = Some("unknown".into()),
+        }
+        let mut scene = SceneHost::for_profile(&wrong);
+        let mut vm = Machine::new(&program).unwrap();
+        pending(&mut vm);
+        assert!(scene.shared_state(&mut vm).is_err());
+        assert_eq!(vm.stack().len_bytes(), 16);
+        assert!(scene.quake().is_none());
+    }
+    let code = quake_code(0x102, 24, 0, 3);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    pending(&mut vm);
+    let before = scene.quake().cloned();
+    assert!(scene.shared_state(&mut vm).is_err());
+    assert_eq!(scene.quake(), before.as_ref());
+    assert_eq!(vm.stack().len_bytes(), 16);
+}
