@@ -98,6 +98,21 @@ pub enum PlatformRequest {
         bytes: Arc<Vec<u8>>,
     },
 }
+/// 0x213c strings use the selected game's encoding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextDialogRequest {
+    pub title: Vec<u8>,
+    pub prompt: Vec<u8>,
+    pub initial: Vec<u8>,
+    /// ANSI edit limit: 100 bytes allows 50 full-width Shift-JIS characters.
+    pub max_bytes: u32,
+}
+pub enum TextDialogResult {
+    Pending,
+    Cancelled,
+    Accepted(Vec<u8>),
+}
+
 pub enum FontDialogResult {
     Pending,
     Cancelled,
@@ -167,6 +182,12 @@ pub trait PlatformBackend {
     fn linear_stretch_supported(&self) -> Result<bool, Box<dyn Error>> {
         Err("platform backend does not implement linear stretch queries".into())
     }
+    fn poll_text_dialog(
+        &mut self,
+        _request: &TextDialogRequest,
+    ) -> Result<TextDialogResult, Box<dyn Error>> {
+        Err("platform backend does not implement the text dialog".into())
+    }
     /// 0x213d's modal font dialog, seeded with the global face in the game encoding.
     /// Ok(None) is a cancelled dialog; Ok(Some) the chosen face in the game encoding.
     fn choose_font(&mut self, _current: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
@@ -219,6 +240,8 @@ pub struct RecordingBackend {
     window_size: Option<[u32; 2]>,
     font_answers: std::collections::VecDeque<Option<Vec<u8>>>,
     font_dialogs: Vec<Vec<u8>>,
+    text_answers: std::collections::VecDeque<Option<Vec<u8>>>,
+    text_dialogs: Vec<TextDialogRequest>,
 }
 impl RecordingBackend {
     pub fn set_screen_size(&mut self, size: crate::viewport::ScreenSize) {
@@ -232,6 +255,12 @@ impl RecordingBackend {
     pub fn requests(&self) -> &[PlatformRequest] {
         &self.requests
     }
+    pub fn answer_text_dialog(&mut self, answer: Option<Vec<u8>>) {
+        self.text_answers.push_back(answer);
+    }
+    pub fn text_dialogs(&self) -> &[TextDialogRequest] {
+        &self.text_dialogs
+    }
     /// Scripted result for the next font dialog; without one the dialog is an error.
     pub fn answer_font_dialog(&mut self, answer: Option<Vec<u8>>) {
         self.font_answers.push_back(answer);
@@ -242,6 +271,24 @@ impl RecordingBackend {
     }
 }
 impl PlatformBackend for RecordingBackend {
+    fn poll_text_dialog(
+        &mut self,
+        request: &TextDialogRequest,
+    ) -> Result<TextDialogResult, Box<dyn Error>> {
+        if self.text_dialogs.len() >= 4096 {
+            return Err("recorded text dialogs exceed research limits".into());
+        }
+        let answer = self
+            .text_answers
+            .pop_front()
+            .ok_or("recording backend has no scripted text dialog answer")?;
+        self.text_dialogs.push(request.clone());
+        Ok(match answer {
+            Some(text) => TextDialogResult::Accepted(text),
+            None => TextDialogResult::Cancelled,
+        })
+    }
+
     fn select_fullscreen_monitor(&mut self, mode: u32) -> Result<bool, Box<dyn Error>> {
         self.apply(&PlatformRequest::FullscreenMonitor(mode))?;
         // One virtual display: every supported mode resolves to the same target.

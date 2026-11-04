@@ -245,7 +245,8 @@ impl MessageHost {
     pub fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
         Self {
             child_slots: crate::scene::ChildSlots::for_profile(profile),
-            legacy_text_creation: profile.is_inspected_20071117(),
+            legacy_text_creation: profile.is_inspected_20071117()
+                || profile.is_inspected_20080719(),
             ..Self::default()
         }
     }
@@ -1024,7 +1025,8 @@ impl MessageHost {
     /// ruby size 12. The logical size (+552/+556) repeats the configured screen info +8/+12.
     /// The face is copied into +44 and selected on the
     /// font object (0x140059b90); explicit faces are enabled only for the inspected
-    /// 2007 constructor (0x444410 -> 0x4356a0 -> 0x4338a0). The capacity
+    /// 2007 constructor (0x444410 -> 0x4356a0 -> 0x4338a0) and the 2008
+    /// constructor (0x448560 -> 0x437a70 -> 0x435c50). The capacity
     /// (+324) sizes the glyph texture in 0x14005a6a0: 0 and 196 (0x215d's value) both give
     /// a 1024x2048 texture; other capacities are rejected because textures are not modeled.
     /// Replacing a text object a window caches (+2528) would leave that window stale.

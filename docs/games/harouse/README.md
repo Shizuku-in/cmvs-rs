@@ -159,3 +159,22 @@ CSS1 写入 `0x40bea0` 清零头后写偏移 72，偏移 68 保持零，因此�
 完整绘制复现于 `menu.ps2 / 0x2139c`：对象 10 的 `title_chip99d.pb3` 及五个按钮子节点均为坐标模式 1，原先二维验证仅接受模式 0，因而报 `unsupported scene transform or blend mode`。同一哈希的绘制入口 `0x411120` 经表 `0x412124`，模式 0/1 均跳至 `0x411142`；模式 2/3 另走 `0x4119ca`。证据为 `local/harouse/screen-render-evidence.json`。现在仅为已绑定构建开放模式 1 的既有二维路径，保留原始坐标模式用于父子匹配，不改变混合模式或放宽其他转换检查；读档后保留该能力。
 
 `probe-screen-mode-one/` 开启 `--render-frames`，R1/L0、D1/L1、I4/L1、V1–V4/L1 均通过。`title-render-fixed/title.png` 独立输出 800×600 标题图，四个可操作按钮的稳定页面成立。I1 在 advance/cancel/滚轮动作后，skip 另报 `children of a rotated projected parent are not verified`，本轮未开放该绘制分支；这与已修复的标题模式 1 屏障不同，不能据此宣称完整绘制游玩通过。12 项绘制单元与 58 项分派/场景回归通过，1 项既有用例忽略，覆盖父图、子节点继承贴图及透明度、坐标模式匹配、恢复后能力与错误身份拒绝。严格 Clippy、格式与差异检查通过；含原生音频的 release 桌面程序已重编译，未进行原生窗口视觉或听感验证。
+
+
+### SAVE / LOAD 菜单字体与选槽往返（2026-11-05）
+
+菜单在 `code+0x4349e / 0x2100` 指定非空字体名时，旧实现报 `font face selection is not modeled`。同一已绑定 x86 构建的 `0x448560` 验证文字索引小于 8，经 `0x437a70` 复制字体名并调用 `0x435c50` 选择字体；空名取全局默认。只读证据为 `local/harouse/text-create-evidence.json`。现在仅为该已检查构建启用既有旧版文字创建路径，保留容量、越界索引及悬空窗口检查，错误身份仍拒绝。
+
+隔离输入重放从 `snky01.ps2 / 0x6824` 点击工具栏 SAVE，进入 18 槽页面，选择首槽、确认写出 `save000.dat`，切换 LOAD 后选择该槽并确认，回到同一剧情位置并生成备份 `save998.dat`。`local/harouse/menu-face-rendered/` 开启逐帧软件绘制完成上述流程，另有 `menu-face-save/` 页面图和 `menu-face-roundtrip/` 独立重放；没有操作原生窗口，未外推至所有页签、任意剧情存档或原版互操作。已有文字回归扩展至本构建，文字模块 125 项通过；core all-targets 严格 Clippy、格式与差异检查通过，含原生音频的 release 桌面程序已重新构建。
+
+
+### 0x213c / 0x22bc：存档评论 EDIT（2026-11-05）
+
+同一已绑定 x86 哈希独立核对：`0x213c → 0x452d0e → 0x4524c0 → 0x451820`；确认路径 `0x45b3f0 → 0x403b10`。评论写入 `0x22bc → 0x44e9c0`。前者读取标题、提示、初始文字、ANSI 字节限制、输出字符串引用及第六标志（旧 helper 不使用该标志），返回 `0x4018`；确认返回系统结果 1，取消返回 0，保留初始评论。确认先过滤半角字符，过滤后为空也回退初始文字。后者仅修改 CSV2–CSV9 的 600 字节头中偏移 272 的评论字符串，返回 `0x4008` 和写入结果，保留其余头字段及全部载荷。两入口只经哈希绑定的 `text-dialog` 研究变体开放，仍为 Unreviewed；只读证据见 `local/harouse/text-dialog-evidence.json`。
+
+平台层新增显式文字对话框请求、Pending/取消/确认结果和记录后端；Windows 桌面接入带输入框的模态对话框，按脚本字节限制提供全角字符容量。回归覆盖两构建的确认、取消、空输入回退、半角过滤、无效结果不消耗参数，以及缺失/损坏/越界存档和修改评论保留载荷；分派 10 项、profile 16 项、评论 runner 用例通过。core/desktop/native all-targets 严格 Clippy、格式与差异检查通过，含原生音频的 release 桌面已构建。未操作原生窗口或验证输入法交互，其他平台的文字对话框仍显式不支持。
+
+真实逐帧绘制重放 `local/harouse/menu-edit-verified3/` 完成 SAVE 首槽保存、EDIT 确认、再次 EDIT 取消、切换 LOAD 并读回 `snky01.ps2 / 0x6824`；评论字段为全角「あい」。
+
+
+后续已补齐 Linux Zenity 与 macOS osascript 评论输入框，复用相同请求和确认/取消结果；两端在确认时按 Unicode 字符边界限制长度，再交由核心执行游戏编码校验及全角过滤。平台服务协议、Linux 参数及 macOS 取消/错误分支已在 Windows 主机测试，未认领 Linux/macOS 原生窗口或构建通过；依赖和运行范围见[运行指南](../../guides/running.md#存档评论编辑框)。

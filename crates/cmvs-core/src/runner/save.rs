@@ -923,6 +923,41 @@ impl Startup<'_> {
         Ok(())
     }
 
+    /// Old 0x22bc patches only the 256-byte comment field in the 600-byte header.
+    pub(super) fn handle_set_slot_comment(
+        &mut self,
+        request: &RuntimeCall,
+        slot: u32,
+        text: u32,
+    ) -> Result<(), Box<dyn Error>> {
+        let comment = self.machine.resolve_string(text)?;
+        if comment.len() >= 256 {
+            return Err(error(request.pc(), 0x22bc, "save comment exceeds native capacity").into());
+        }
+        let mut changed = false;
+        if slot <= 999
+            && let Some(mut bytes) = self.saves.read_slot(slot as u16)?
+            && bytes.len() >= HEADER_SIZE
+            && &bytes[..3] == b"CSV"
+            && (b'2'..=b'9').contains(&bytes[3])
+        {
+            bytes[272..272 + comment.len()].copy_from_slice(&comment);
+            bytes[272 + comment.len()] = 0;
+            replace_file(
+                &self.slot_directory()?,
+                &format!("save{slot:03}.dat"),
+                &bytes,
+            )?;
+            changed = true;
+        }
+        request.complete(&mut self.machine, 0x4008)?;
+        self.machine
+            .state_mut()
+            .set_system_integer(0, u32::from(changed))
+            .expect("slot zero exists");
+        Ok(())
+    }
+
     /// 0x22bd / 0x14007cf10: SP-4 slot, SP-8 object, SP-12 child (negative = the object
     /// itself, recreated), SP-16/SP-20 string destinations for the label (+16) and the
     /// second text (+272). Results 0 = found, 1 = label order key, 4..6 = header 528..536;

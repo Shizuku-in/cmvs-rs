@@ -801,6 +801,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                     | Capability::FunctionKeys
                     | Capability::Platform
                     | Capability::FontDialog
+                    | Capability::TextDialog
                     | Capability::Capture
                     | Capability::CaptureDevice => {
                         return Err("unexpected environment dispatch flow".into());

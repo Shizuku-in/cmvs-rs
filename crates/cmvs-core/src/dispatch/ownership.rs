@@ -85,6 +85,7 @@ pub static CLAIMS: &[Claim] = &[Claim {
                         | super::Capability::MessageWait
                         | super::Capability::SystemWrite
                         | super::Capability::FontDialog
+                        | super::Capability::TextDialog
                         | super::Capability::Capture
                         | super::Capability::CaptureDevice
                         | super::Capability::MovieScene

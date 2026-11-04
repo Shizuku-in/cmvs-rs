@@ -26,3 +26,20 @@ pub fn font_directories() -> Vec<PathBuf> {
     }
     directories
 }
+
+mod text_dialog;
+pub fn edit_text(
+    owner: RawWindowHandle,
+    title: &str,
+    prompt: &str,
+    initial: &str,
+    max_chars: u32,
+) -> Result<Option<String>, NativeError> {
+    let RawWindowHandle::Win32(handle) = owner else {
+        return Err(NativeError::Unsupported(
+            "the text dialog for a non-Win32 window",
+        ));
+    };
+    text_dialog::edit_text(handle.hwnd.get() as _, title, prompt, initial, max_chars)
+        .map_err(NativeError::Failed)
+}

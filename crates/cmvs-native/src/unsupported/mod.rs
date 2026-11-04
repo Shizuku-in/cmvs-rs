@@ -10,3 +10,13 @@ pub fn choose_font(_owner: RawWindowHandle, _current: &str) -> Result<Option<Str
 pub fn font_directories() -> Vec<PathBuf> {
     Vec::new()
 }
+
+pub fn edit_text(
+    _owner: RawWindowHandle,
+    _title: &str,
+    _prompt: &str,
+    _initial: &str,
+    _max_chars: u32,
+) -> Result<Option<String>, NativeError> {
+    Err(NativeError::Unsupported("the native text dialog"))
+}

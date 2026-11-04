@@ -387,3 +387,127 @@ fn shared_flag_queries_discard_unknown_value_words_without_reading_them() {
         assert_eq!(flags, MessageFlags::default());
     }
 }
+
+#[test]
+fn old_text_dialog_commits_accept_cancel_and_empty_results() {
+    use cmvs_rs::platform::RecordingBackend;
+    for name in ["cmvs-20071117", "cmvs-20080719"] {
+        let profile = Registry::builtin().profile(name).unwrap();
+        for (answer, result, text) in [
+            (Some(b"A\x82\xa0x".to_vec()), 1, b"\x82\xa0".as_slice()),
+            (None, 0, b"old comment".as_slice()),
+            (Some(vec![]), 1, b"old comment".as_slice()),
+        ] {
+            let mut code = vec![];
+            command(
+                &mut code,
+                0x213c,
+                &[0x80000000, 0x80000001, 0x80000002, 32, 0x80000003, 1],
+            );
+            let program = script(&code);
+            let mut vm = Machine::new(&program).unwrap();
+            for (i, value) in [b"Title".as_slice(), b"Prompt", b"old comment", b"before"]
+                .iter()
+                .enumerate()
+            {
+                vm.state_mut().set_string(i as u32, value).unwrap();
+            }
+            pending(&mut vm);
+            let mut backend = RecordingBackend::default();
+            backend.answer_text_dialog(answer);
+            let mut hosts = Hosts {
+                device_frame: Some(&mut backend),
+                ..Default::default()
+            };
+            assert_eq!(
+                dispatch::run(profile.semantics(0x13c), &mut vm, &mut hosts).unwrap(),
+                Some(Flow::Done)
+            );
+            assert_eq!(vm.state().system_integer(0), Some(result));
+            assert_eq!(vm.state().string(3), Some(text));
+            assert_eq!(vm.stack().len_bytes(), 0);
+            assert!(vm.pending_system().is_none());
+            assert_eq!(backend.text_dialogs()[0].initial, b"old comment");
+            assert_eq!(backend.text_dialogs()[0].max_bytes, 32);
+        }
+    }
+}
+
+#[test]
+fn old_text_dialog_waits_and_rejects_invalid_results_atomically() {
+    use cmvs_rs::platform::{
+        PlatformBackend, PlatformRequest, RecordingBackend, TextDialogRequest, TextDialogResult,
+    };
+    struct Pending;
+    impl PlatformBackend for Pending {
+        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn std::error::Error>> {
+            unreachable!()
+        }
+        fn poll_text_dialog(
+            &mut self,
+            _: &TextDialogRequest,
+        ) -> Result<TextDialogResult, Box<dyn std::error::Error>> {
+            Ok(TextDialogResult::Pending)
+        }
+    }
+    let profile = Registry::builtin().profile("cmvs-20080719").unwrap();
+    let mut code = vec![];
+    command(
+        &mut code,
+        0x213c,
+        &[0x80000000, 0x80000000, 0x80000000, 32, 0x80000000, 0],
+    );
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    vm.state_mut().set_string(0, b"unchanged").unwrap();
+    vm.state_mut().set_system_integer(0, 9).unwrap();
+    pending(&mut vm);
+    let before = (vm.pc(), vm.stack().len_bytes(), vm.pending_system());
+    assert_eq!(
+        dispatch::run(
+            profile.semantics(0x13c),
+            &mut vm,
+            &mut Hosts {
+                device_frame: Some(&mut Pending),
+                ..Default::default()
+            }
+        )
+        .unwrap(),
+        Some(Flow::Wait)
+    );
+    let mut backend = RecordingBackend::default();
+    for answer in [vec![b'x'; 256], b"bad\0comment".to_vec()] {
+        backend.answer_text_dialog(Some(answer));
+        assert!(
+            dispatch::run(
+                profile.semantics(0x13c),
+                &mut vm,
+                &mut Hosts {
+                    device_frame: Some(&mut backend),
+                    ..Default::default()
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(
+            (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
+            before
+        );
+        assert_eq!(vm.state().system_integer(0), Some(9));
+        assert_eq!(vm.state().string(0), Some(b"unchanged".as_slice()));
+    }
+    for name in ["cmvs-20071117", "cmvs-20080719"] {
+        let mut wrong = Registry::builtin().profile(name).unwrap().clone();
+        wrong.binaries[0].sha256 = [0; 32];
+        assert!(Registry::parse(&[&wrong.to_text()], "").is_err());
+        assert_eq!(
+            dispatch::run(
+                cmvs_rs::profile::Semantics::Root,
+                &mut vm,
+                &mut Hosts::default()
+            )
+            .unwrap(),
+            None
+        );
+    }
+}

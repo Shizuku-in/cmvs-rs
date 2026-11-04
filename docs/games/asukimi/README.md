@@ -191,3 +191,15 @@ cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop
 ```bash
 cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --user-data-dir "local/asukimi/play" --font "<日文字体>" --audio native
 ```
+
+
+### 0x213c / 0x22bc：存档评论 EDIT（2026-11-05）
+
+同一已绑定 x86 哈希独立核对：`0x213c → 0x44e09b → 0x44d890 → 0x44cbf0`；确认路径 `0x45fb90 → 0x403c30`。评论写入 `0x22bc → 0x44a370`。前者读取标题、提示、初始文字、ANSI 字节限制、输出字符串引用及第六标志（旧 helper 不使用该标志），返回 `0x4018`；确认返回系统结果 1，取消返回 0，保留初始评论。确认先过滤半角字符，过滤后为空也回退初始文字。后者仅修改 CSV2–CSV9 的 600 字节头中偏移 272 的评论字符串，返回 `0x4008` 和写入结果，保留其余头字段及全部载荷。两入口只经哈希绑定的 `text-dialog` 研究变体开放，仍为 Unreviewed；只读证据见 `local/asukimi/text-dialog-evidence.json`。
+
+平台层新增显式文字对话框请求、Pending/取消/确认结果和记录后端；Windows 桌面接入带输入框的模态对话框，按脚本字节限制提供全角字符容量。回归覆盖两构建的确认、取消、空输入回退、半角过滤、无效结果不消耗参数，以及缺失/损坏/越界存档和修改评论保留载荷；分派 10 项、profile 16 项、评论 runner 用例通过。core/desktop/native all-targets 严格 Clippy、格式与差异检查通过，含原生音频的 release 桌面已构建。未操作原生窗口或验证输入法交互，其他平台的文字对话框仍显式不支持。
+
+真实逐帧绘制重放 `local/asukimi/menu-edit-load-verified/` 先通过槽 API 建立开头存档，再从工具栏 LOAD 页点击 EDIT，确认写入全角「あい」、再次取消后保持评论，选择存档并确认返回 `snky00.ps2`。本次未验证该作工具栏 SAVE 的完整流程。
+
+
+后续已补齐 Linux Zenity 与 macOS osascript 评论输入框，复用相同请求和确认/取消结果；两端在确认时按 Unicode 字符边界限制长度，再交由核心执行游戏编码校验及全角过滤。平台服务协议、Linux 参数及 macOS 取消/错误分支已在 Windows 主机测试，未认领 Linux/macOS 原生窗口或构建通过；依赖和运行范围见[运行指南](../../guides/running.md#存档评论编辑框)。

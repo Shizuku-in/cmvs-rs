@@ -320,7 +320,7 @@ binary x86 file=cmvs.exe sha256=afe3b3a895e7b3ba5f78e6f6464296f1d028e87307c8de5a
 0x2139 noop 0x525dc
 0x213a unreviewed 0x52cfe
 0x213b unreviewed 0x52d06
-0x213c unreviewed 0x52d0e
+0x213c unreviewed 0x52d0e variant=text-dialog:x86:afe3b3a895e7b3ba5f78e6f6464296f1d028e87307c8de5a568b88fd6086491e evidence=games/harouse/README.md
 0x213d unreviewed 0x52d16
 0x213e noop 0x525dc
 0x213f noop 0x525dc
@@ -704,7 +704,7 @@ binary x86 file=cmvs.exe sha256=afe3b3a895e7b3ba5f78e6f6464296f1d028e87307c8de5a
 0x22b9 unreviewed 0x53468
 0x22ba unreviewed 0x53470
 0x22bb unreviewed 0x53478
-0x22bc unreviewed 0x53480
+0x22bc unreviewed 0x53480 variant=text-dialog:x86:afe3b3a895e7b3ba5f78e6f6464296f1d028e87307c8de5a568b88fd6086491e evidence=games/harouse/README.md
 0x22bd unreviewed 0x53488
 0x22be noop 0x525dc
 0x22bf noop 0x525dc

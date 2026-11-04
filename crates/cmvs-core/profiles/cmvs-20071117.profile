@@ -320,7 +320,7 @@ binary x86 file=cmvs.exe sha256=caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c97
 0x2139 noop 0x4d99b
 0x213a unreviewed 0x4e08b
 0x213b unreviewed 0x4e093
-0x213c unreviewed 0x4e09b
+0x213c unreviewed 0x4e09b variant=text-dialog:x86:caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c9715a20e7a5f36d02b evidence=games/asukimi/README.md
 0x213d unreviewed 0x4e0a3
 0x213e noop 0x4d99b
 0x213f noop 0x4d99b
@@ -704,7 +704,7 @@ binary x86 file=cmvs.exe sha256=caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c97
 0x22b9 unreviewed 0x4e88b
 0x22ba unreviewed 0x4e893
 0x22bb unreviewed 0x4e89b
-0x22bc unreviewed 0x4e8a3
+0x22bc unreviewed 0x4e8a3 variant=text-dialog:x86:caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c9715a20e7a5f36d02b evidence=games/asukimi/README.md
 0x22bd unreviewed 0x4e8ab
 0x22be noop 0x4d99b
 0x22bf noop 0x4d99b

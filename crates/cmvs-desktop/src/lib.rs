@@ -257,6 +257,34 @@ impl PlatformBackend for NativeBackend<'_> {
     fn fullscreen(&self) -> Result<bool, Box<dyn Error>> {
         Ok(self.window.fullscreen().is_some())
     }
+    fn poll_text_dialog(
+        &mut self,
+        request: &cmvs_core::platform::TextDialogRequest,
+    ) -> Result<cmvs_core::platform::TextDialogResult, Box<dyn Error>> {
+        use winit::raw_window_handle::HasWindowHandle;
+        let owner = self.window.window_handle()?.as_raw();
+        let title = self.encoding.decode(&request.title)?;
+        let prompt = self.encoding.decode(&request.prompt)?;
+        let initial = self.encoding.decode(&request.initial)?;
+        Ok(
+            match cmvs_native::edit_text(
+                owner,
+                &title,
+                &prompt,
+                &initial,
+                if request.max_bytes == 0 {
+                    127
+                } else {
+                    request.max_bytes.min(255) / 2
+                },
+            )? {
+                Some(text) => {
+                    cmvs_core::platform::TextDialogResult::Accepted(self.encoding.encode(&text)?)
+                }
+                None => cmvs_core::platform::TextDialogResult::Cancelled,
+            },
+        )
+    }
     fn choose_font(&mut self, current: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
         use winit::raw_window_handle::HasWindowHandle;
         let owner = self.window.window_handle()?.as_raw();

@@ -32,6 +32,7 @@ pub enum Semantics {
 /// Static implementation identifiers; execution obeys the unreviewed block policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VariantId {
+    TextDialog,
     ScreenCoordinates,
     InputPress,
     FontCells,
@@ -58,6 +59,7 @@ pub enum VariantId {
 impl VariantId {
     pub fn parse(name: &str) -> Option<Self> {
         match name {
+            "text-dialog" => Some(Self::TextDialog),
             "screen-coordinates" => Some(Self::ScreenCoordinates),
             "input-press" => Some(Self::InputPress),
             "list-select" => Some(Self::ListSelect),
@@ -85,6 +87,7 @@ impl VariantId {
     }
     pub fn name(self) -> &'static str {
         match self {
+            Self::TextDialog => "text-dialog",
             Self::ScreenCoordinates => "screen-coordinates",
             Self::InputPress => "input-press",
             Self::ListSelect => "list-select",

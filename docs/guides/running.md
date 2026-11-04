@@ -98,3 +98,10 @@ cargo run --release --features desktop,audio-output --bin cmvs-desktop -- "/path
 请提供实际安装且覆盖游戏日文的 OpenType 字体路径；TTC 可用 `--font-face` 选择索引。游戏内字体选择使用系统自带 osascript/AppKit，取消保留当前设置；选择窗口独立显示，期间 VM 暂停。字体发现包含 `/System/Library/Fonts`、其 `Supplemental` 子目录、`/Library/Fonts` 和 `~/Library/Fonts`。宿主仍会验证选中字体能否由 OpenType 后端载入，不支持的系统字体格式不能用于显示。
 
 GPU 路径可用 `--features wgpu-renderer,audio-output` 与 `--renderer wgpu`，依赖已启用 Metal。CI 配置检查 Apple Silicon / Intel 的构建和原生服务单元测试；尚未在本次开发环境执行 macOS 构建、窗口、声音、字体选择或 Metal 实机验证，也未提供 `.app` 打包、签名及公证。
+
+
+## 存档评论编辑框
+
+已检查旧构建的存档 EDIT 使用原生文字输入框：Windows 内置模态窗口，Linux 使用 Zenity（需安装 `zenity`），macOS 使用系统自带 `/usr/bin/osascript` 的输入对话框，无额外依赖。Linux 的 X11 窗口传递父窗口标识；Wayland 和 macOS 对话框独立显示，期间 VM 暂停。
+
+确认后沿用已核对构建的全角过滤及空输入回退规则，取消不更改存档评论。Linux/macOS 在确认时按字符边界截取至脚本给定的全角容量，保留前后空格；编码及存档字段容量仍由核心检查。后端启动失败会报错，不会伪装成取消。协议与启动参数测试可在 Windows 上运行；本次尚未在 Linux/macOS 实测弹窗、输入法、焦点或原生构建。

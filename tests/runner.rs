@@ -3075,3 +3075,43 @@ fn realive_list_selection_receives_input_and_scene_hosts_in_startup() {
     assert_eq!(run.input().pointer(), [25, 40]);
     assert_eq!(run.machine().state().system_integer(0), Some(1));
 }
+
+#[test]
+fn old_save_comment_edit_preserves_payload_and_rejects_missing_or_invalid_slots() {
+    for profile in ["cmvs-20071117", "cmvs-20080719"] {
+        let mut code = vec![];
+        for slot in [0, 1, 2, 3, 1000] {
+            commands::command(&mut code, 0x22bc, &[slot, 0]);
+        }
+        let root = Root::new(&format!("comment-{profile}"), &code, b"updated\0");
+        fs::write(root.0.join("save/system.dat"), auto_resume_save(0)).unwrap();
+        let game = Registry::builtin()
+            .identify_game(&root.0, Some(profile))
+            .unwrap();
+        let script = load_start(&root.0, &game.files).unwrap();
+        let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+        let user = root.0.with_extension("user");
+        run.set_user_data_directory(&user).unwrap();
+        let mut original = vec![0x5a; 900];
+        original[..4].copy_from_slice(b"CSV2");
+        fs::write(user.join("save000.dat"), &original).unwrap();
+        fs::write(user.join("save002.dat"), b"CSV2").unwrap();
+        fs::write(user.join("save003.dat"), vec![0; 600]).unwrap();
+        let mut backend = RecordingBackend::default();
+        for (i, expected) in [1, 0, 0, 0, 0].into_iter().enumerate() {
+            let end = (i + 1) * 18;
+            while run.machine().pc() < end {
+                run.tick(&mut backend).unwrap();
+            }
+            assert_eq!(run.machine().state().system_integer(0), Some(expected));
+            assert_eq!(run.machine().stack().len_bytes(), 0);
+        }
+        let mut expected = original;
+        expected[272..280].copy_from_slice(b"updated\0");
+        assert_eq!(fs::read(user.join("save000.dat")).unwrap(), expected);
+        assert_eq!(fs::read(user.join("save002.dat")).unwrap(), b"CSV2");
+        assert!(!user.join("save001.dat").exists());
+        drop(run);
+        fs::remove_dir_all(user).unwrap();
+    }
+}

@@ -149,6 +149,10 @@ pub enum RuntimeOperation {
         first: u32,
         second: u32,
     },
+    SetSlotComment {
+        slot: u32,
+        text: u32,
+    },
     SetSlotInfo {
         slot: u32,
         values: [u32; 2],
@@ -324,6 +328,7 @@ pub enum Capability {
     FunctionKeys,
     Platform,
     FontDialog,
+    TextDialog,
     Capture,
     CaptureDevice,
     Sequence,
@@ -387,6 +392,7 @@ impl Hosts<'_> {
             Capability::Bootstrap => self.bootstrap.is_some(),
             Capability::FunctionKeys => self.function_keys.is_some(),
             Capability::Platform => self.platform.is_some(),
+            Capability::TextDialog => self.device_frame.is_some(),
             Capability::FontDialog => {
                 self.device_frame.is_some() && self.settings.is_some() && self.messages.is_some()
             }
@@ -1023,6 +1029,13 @@ fn root_runtime(_hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow,
             },
             8,
         ),
+        0x2bc => (
+            SetSlotComment {
+                slot: call.argument(4, "save slot")?,
+                text: call.argument(8, "comment")?,
+            },
+            8,
+        ),
         0x2b8 => (Thumbnail, 0),
         0x2be => (
             SetSlotInfo {
@@ -1184,6 +1197,91 @@ fn root_platform(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow,
         h.host.handle(call, h.backend, h.assets, h.cursors)?,
     ))
 }
+/// Old 0x213c returns a full-width comment and a confirmation result.
+fn variant_text_dialog(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    use crate::platform::{TextDialogRequest, TextDialogResult};
+    let mut strings = Vec::new();
+    for distance in [4, 8, 12, 20] {
+        let raw = call.argument(distance, "text dialog string")?;
+        strings.push(call.vm.resolve_string(raw)?);
+    }
+    let output = call.argument(20, "text dialog output")?;
+    let crate::vm::StringRef::StringBank(index) = crate::vm::StringRef::decode(output) else {
+        return Err(call
+            .error("text dialog output requires a writable string slot")
+            .into());
+    };
+    let index = if index > 127 { 0 } else { index };
+    let request = TextDialogRequest {
+        title: strings[0].clone(),
+        prompt: strings[1].clone(),
+        initial: strings[2].clone(),
+        max_bytes: call.argument(16, "text dialog character limit")?,
+    };
+    // The inspected old helper ignores this sixth flag after the wrapper normalizes it.
+    call.argument(24, "text dialog flag")?;
+    if request.title.len() >= 144 || request.prompt.len() >= 256 || request.initial.len() >= 256 {
+        return Err(call
+            .error("text dialog strings exceed native capacity")
+            .into());
+    }
+    let answer = hosts
+        .device_frame
+        .as_deref_mut()
+        .expect("text dialog backend checked")
+        .poll_text_dialog(&request)?;
+    let (accepted, text) = match answer {
+        TextDialogResult::Pending => return Ok(Flow::Wait),
+        TextDialogResult::Cancelled => (false, request.initial.clone()),
+        TextDialogResult::Accepted(text) => (true, text),
+    };
+    if text.len() >= 256 || text.contains(&0) {
+        return Err(call
+            .error("text dialog result exceeds native capacity")
+            .into());
+    }
+    // 0x403b10 keeps only Shift-JIS double-byte characters before the empty fallback.
+    let text = if accepted {
+        let mut full_width = Vec::new();
+        let mut i = 0;
+        while i < text.len() {
+            if matches!(text[i], 0x81..=0x9f | 0xe0..=0xfc) {
+                let pair = text.get(i..i + 2).ok_or_else(|| {
+                    call.error("text dialog has a truncated double-byte character")
+                })?;
+                full_width.extend_from_slice(pair);
+                i += 2;
+            } else {
+                i += 1;
+            }
+        }
+        if full_width.is_empty() {
+            request.initial.clone()
+        } else {
+            full_width
+        }
+    } else {
+        text
+    };
+    // Validate the write before consuming arguments or committing any VM state.
+    let mut next = call.vm.state().clone();
+    next.set_string(index, &text)
+        .map_err(|why| call.error(why))?;
+    call.complete(0x4018)?;
+    call.vm
+        .state_mut()
+        .set_string(index, &text)
+        .expect("validated string slot");
+    call.vm
+        .state_mut()
+        .set_system_integer(0, u32::from(accepted))
+        .expect("slot zero exists");
+    Ok(Flow::Done)
+}
+
 /// 0x213d / 0x140081520 seeds the modal dialog with the global face (+3160).
 /// An accepted face updates the setting and reselects only texts using the default;
 /// cancellation still completes with no arguments or result writes.
@@ -1277,6 +1375,13 @@ pub fn uses_platform_for(semantics: Semantics, command: u16) -> bool {
         Semantics::Variant(id) => {
             variant_entry(id, command).is_some_and(|entry| entry.capability == Capability::Platform)
         }
+    }
+}
+pub fn uses_device_frame_for(semantics: Semantics, command: u16) -> bool {
+    match semantics {
+        Semantics::Root => uses_device_frame(command),
+        Semantics::Variant(id) => variant_entry(id, command)
+            .is_some_and(|entry| entry.capability == Capability::TextDialog),
     }
 }
 pub fn uses_device_frame(command: u16) -> bool {
@@ -5203,7 +5308,23 @@ pub static INPUT_PRESS: &[Entry] = &[
 ];
 
 /// Static variant tables used when provisioning shared host capabilities.
+pub static TEXT_DIALOG: &[Entry] = &[
+    Entry {
+        command: 0x2bc,
+        name: "save comment",
+        capability: Capability::Runtime,
+        handler: root_runtime,
+    },
+    Entry {
+        command: 0x13c,
+        name: "text input dialog",
+        capability: Capability::TextDialog,
+        handler: variant_text_dialog,
+    },
+];
+
 pub static VARIANT_TABLES: &[&[Entry]] = &[
+    TEXT_DIALOG,
     SE_GAIN,
     MOVIE_CONTROL,
     MOVIE_SEEK,
@@ -5230,6 +5351,7 @@ pub static VARIANT_TABLES: &[&[Entry]] = &[
 
 pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'static Entry> {
     let entries = match id {
+        crate::profile::VariantId::TextDialog => TEXT_DIALOG,
         crate::profile::VariantId::SeGain => SE_GAIN,
         crate::profile::VariantId::MovieControl => MOVIE_CONTROL,
         crate::profile::VariantId::MovieSeek => MOVIE_SEEK,
@@ -5258,6 +5380,7 @@ pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'st
 
 pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
     match profile.semantics(command) {
+        Semantics::Variant(crate::profile::VariantId::TextDialog) => "variant text dialog",
         Semantics::Variant(crate::profile::VariantId::SeGain) => "variant SE gain multiplier",
         Semantics::Variant(crate::profile::VariantId::MovieControl) => {
             "variant scene movie control"
