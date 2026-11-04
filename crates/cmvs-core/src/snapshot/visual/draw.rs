@@ -26,6 +26,37 @@ const OPACITY_SIZE: usize = 0x94;
 const POSITION_SIZE: usize = 0x114;
 const WORLD_SIZE: usize = 0xdc;
 
+/// Record 0x793: version 1 has 32 frames; version 2 has 64.
+#[derive(Clone, Copy)]
+enum AnimationSnapshotFormat {
+    V1,
+    V2,
+}
+
+impl AnimationSnapshotFormat {
+    fn for_layout(layout: SnapshotLayout) -> Self {
+        if layout == SnapshotLayout::TextV1SceneV1 {
+            Self::V1
+        } else {
+            Self::V2
+        }
+    }
+
+    fn version(self) -> u16 {
+        match self {
+            Self::V1 => 1,
+            Self::V2 => 2,
+        }
+    }
+
+    fn frame_count(self) -> usize {
+        match self {
+            Self::V1 => 32,
+            Self::V2 => 64,
+        }
+    }
+}
+
 #[cfg(test)]
 pub(super) fn decode(bytes: &[u8]) -> Result<DrawState, FormatError> {
     decode_with_layout(bytes, SnapshotLayout::TextV3)
@@ -72,7 +103,10 @@ pub(super) fn decode_with_layout(
     }
     if r.peek() == Some(0x793) {
         r.u16()?;
-        out.animation = Some(Box::new(animation(r.chunk()?, text_v1_scene_v1)?));
+        out.animation = Some(Box::new(animation(
+            r.chunk()?,
+            AnimationSnapshotFormat::for_layout(layout),
+        )?));
     }
     if r.peek() == Some(0x794) {
         r.u16()?;
@@ -80,7 +114,8 @@ pub(super) fn decode_with_layout(
     }
     if r.peek() == Some(0x795) {
         r.u16()?;
-        out.world_motion = Some(Box::new(world(r.chunk()?, text_v1_scene_v1)?));
+        let allow_y_half_turn_modes = text_v1_scene_v1;
+        out.world_motion = Some(Box::new(world(r.chunk()?, allow_y_half_turn_modes)?));
     }
     if r.peek().is_some_and(|tag| (0x790..=0x795).contains(&tag)) {
         return Err(FormatError(
@@ -174,8 +209,9 @@ pub(crate) fn encode_with_layout(
         put_track(&mut out, 0x792, &words);
     }
     if let Some(animation) = &draw.animation {
-        let count = if text_v1_scene_v1 { 32 } else { 64 };
-        if text_v1_scene_v1
+        let format = AnimationSnapshotFormat::for_layout(layout);
+        let count = format.frame_count();
+        if matches!(format, AnimationSnapshotFormat::V1)
             && (animation.frames[32..]
                 .iter()
                 .any(|f| *f != AnimationFrame::default())
@@ -184,9 +220,7 @@ pub(crate) fn encode_with_layout(
         {
             return Err(FormatError("animation v1 supports only 32 frames"));
         }
-        let mut body = if text_v1_scene_v1 { 1u16 } else { 2u16 }
-            .to_le_bytes()
-            .to_vec();
+        let mut body = format.version().to_le_bytes().to_vec();
         for word in [
             u32::from(animation.playing),
             animation.start,
@@ -437,7 +471,7 @@ fn position(bytes: &[u8]) -> Result<PositionMotion, FormatError> {
     Ok(PositionMotion { playback, keys })
 }
 
-fn world(bytes: &[u8], text_v1_scene_v1: bool) -> Result<WorldMotion, FormatError> {
+fn world(bytes: &[u8], allow_y_half_turn_modes: bool) -> Result<WorldMotion, FormatError> {
     let mut r = track(bytes, WORLD_SIZE)?;
     let [play, x, y, z, start, current, elapsed] = r.words::<7>()?;
     let mut keys = [MotionKey::default(); WORLD_MOTION_KEYS];
@@ -445,7 +479,7 @@ fn world(bytes: &[u8], text_v1_scene_v1: bool) -> Result<WorldMotion, FormatErro
         let [next, kx, ky, kz, mode, duration] = r.words::<6>()?;
         if !keys_in_range(next as i32, WORLD_MOTION_KEYS)
             || !(WorldMotion::supports_mode(mode)
-                || text_v1_scene_v1 && matches!(mode as u8, 0x20 | 0x21 | 0x30))
+                || allow_y_half_turn_modes && matches!(mode as u8, 0x20 | 0x21 | 0x30))
         {
             return Err(FormatError("snapshot world motion key is not supported"));
         }
@@ -471,9 +505,9 @@ fn world(bytes: &[u8], text_v1_scene_v1: bool) -> Result<WorldMotion, FormatErro
     Ok(WorldMotion { playback, keys })
 }
 
-fn animation(bytes: &[u8], text_v1_scene_v1: bool) -> Result<Animation, FormatError> {
+fn animation(bytes: &[u8], format: AnimationSnapshotFormat) -> Result<Animation, FormatError> {
     let mut r = Reader::new(bytes);
-    if r.u16()? != if text_v1_scene_v1 { 1 } else { 2 } {
+    if r.u16()? != format.version() {
         return Err(FormatError("unsupported snapshot animation version"));
     }
     let h = r.words::<4>()?;
@@ -481,7 +515,7 @@ fn animation(bytes: &[u8], text_v1_scene_v1: bool) -> Result<Animation, FormatEr
         return Err(FormatError("unsupported snapshot animation play flag"));
     }
     let mut frames = [AnimationFrame::default(); 64];
-    let count = if text_v1_scene_v1 { 32 } else { 64 };
+    let count = format.frame_count();
     for frame in &mut frames[..count] {
         frame.next = r.u32()? as i32;
         for word in &mut frame.words {

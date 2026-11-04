@@ -181,7 +181,7 @@ impl WorldMotion {
 impl SceneHost {
     fn supports_world_motion_mode(&self, mode: u32) -> bool {
         WorldMotion::supports_mode(mode)
-            || self.inspected_20071117 && matches!(mode as u8, 0x20 | 0x21 | 0x30)
+            || self.allow_y_half_turn_modes && matches!(mode as u8, 0x20 | 0x21 | 0x30)
     }
 
     /// 0x228a normal execution: replace +152, write key 0, and capture the execution-time
@@ -355,13 +355,37 @@ mod tests {
     }
 
     #[test]
-    fn slot_capacity_does_not_enable_build_specific_modes() {
-        let scene = super::super::SceneHost {
-            child_slots: super::super::ChildSlots::Slots256,
-            ..Default::default()
-        };
-        for mode in [0x20, 0x21, 0x30] {
-            assert!(!scene.supports_world_motion_mode(mode));
+    fn filter_and_half_turn_capabilities_are_independent_of_each_other_and_slot_capacity() {
+        for (allow_filter_mode_one, allow_y_half_turn_modes) in
+            [(false, false), (true, false), (false, true), (true, true)]
+        {
+            let mut scene = super::super::SceneHost {
+                child_slots: super::super::ChildSlots::Slots256,
+                allow_filter_mode_one,
+                allow_y_half_turn_modes,
+                ..Default::default()
+            };
+            // Both before and after restoring scene state, only the selected
+            // capability may enable its additional commands.
+            for _ in 0..2 {
+                assert_eq!(scene.supports_image_filter_mode(1), allow_filter_mode_one);
+                assert!(scene.supports_image_filter_mode(2));
+                assert!(scene.supports_world_motion_mode(0));
+                for mode in [0x20, 0x21, 0x30] {
+                    assert_eq!(
+                        scene.supports_world_motion_mode(mode),
+                        allow_y_half_turn_modes
+                    );
+                }
+                scene.restore(
+                    Default::default(),
+                    Default::default(),
+                    None,
+                    None,
+                    None,
+                    None,
+                );
+            }
         }
     }
 

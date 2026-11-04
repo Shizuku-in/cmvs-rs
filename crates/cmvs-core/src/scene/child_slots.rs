@@ -86,7 +86,8 @@ mod tests {
         assert_eq!(ChildSlots::for_profile(&changed).count(), 768);
         assert!(!crate::runner::snapshot_layout_supported(&changed));
         let mut scene = super::super::SceneHost::for_profile(profile);
-        assert!(scene.inspected_20071117);
+        assert!(scene.allow_filter_mode_one);
+        assert!(scene.allow_y_half_turn_modes);
         scene.restore(
             Default::default(),
             Default::default(),
@@ -95,8 +96,11 @@ mod tests {
             None,
             None,
         );
-        assert!(scene.inspected_20071117);
-        assert!(!super::super::SceneHost::for_profile(&changed).inspected_20071117);
+        assert!(scene.allow_filter_mode_one);
+        assert!(scene.allow_y_half_turn_modes);
+        let scene = super::super::SceneHost::for_profile(&changed);
+        assert!(!scene.allow_filter_mode_one);
+        assert!(!scene.allow_y_half_turn_modes);
         for (id, count) in [
             ("cmvs-20120309", 512),
             ("cmvs-20190305", 1024),

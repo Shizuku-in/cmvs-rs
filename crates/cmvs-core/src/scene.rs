@@ -338,7 +338,8 @@ impl DrawState {
 #[derive(Debug, Default)]
 pub struct SceneHost {
     child_slots: ChildSlots,
-    inspected_20071117: bool,
+    allow_filter_mode_one: bool,
+    allow_y_half_turn_modes: bool,
     screen_size: crate::viewport::ScreenSize,
     pub(crate) fragment_effects: BTreeMap<u8, crate::effect_objects::FragmentEffect>,
     pub(crate) collision_effects: BTreeMap<u8, crate::effect_objects::CollisionEffect>,
@@ -359,9 +360,14 @@ impl SceneHost {
     pub fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
         Self {
             child_slots: ChildSlots::for_profile(profile),
-            inspected_20071117: profile.is_inspected_20071117(),
+            allow_filter_mode_one: profile.is_inspected_20071117(),
+            allow_y_half_turn_modes: profile.is_inspected_20071117(),
             ..Self::default()
         }
+    }
+
+    fn supports_image_filter_mode(&self, mode: u32) -> bool {
+        matches!(mode, 2 | 17 | 256 | 512) || mode == 1 && self.allow_filter_mode_one
     }
 
     pub fn screen_size(&self) -> [u32; 2] {
@@ -1032,7 +1038,7 @@ impl SceneHost {
             let color = call.argument(16, "filter color")?;
             // Modes 256/512 use low/high words as radius and sampling step.
             let extra = call.argument(20, "filter extra")?;
-            if !(matches!(mode, 2 | 17 | 256 | 512) || mode == 1 && self.inspected_20071117) {
+            if !self.supports_image_filter_mode(mode) {
                 return Err(fail(
                     "image filter mode not implemented; only modes 2, 17, 256 and 512 are verified",
                 )
@@ -1164,7 +1170,8 @@ impl SceneHost {
         *self = Self {
             screen_size: self.screen_size,
             child_slots: self.child_slots,
-            inspected_20071117: self.inspected_20071117,
+            allow_filter_mode_one: self.allow_filter_mode_one,
+            allow_y_half_turn_modes: self.allow_y_half_turn_modes,
             particle_effects: Default::default(),
             falling_effects: Default::default(),
             collision_effects: Default::default(),
