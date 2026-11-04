@@ -24,7 +24,9 @@
 
 ## 当前验证
 
-2026-11-02 完成只读基础登记：核对 PE 架构、image base、启动脚本及封包签名，并计算上表文件的 SHA-256。本次登记未启动原游戏或重实现引擎，也未进行 IDA 语义复核。
+800×600 画布、旧版快照 V1–V4、设置页及 LOAD 页评论 EDIT 确认/取消和读回已验证。完整绘制重放越过 snky06 旧停点至 1,200 万步预算，完整路线与原生存档界面仍待验证。
+
+下文按阶段保留研究记录；旧停点、无快照参数和当时的限制不代表当前状态。基础身份登记于 2026-11-02，后续接入与验证见各节。
 
 既有启动脚本结构普查见[引擎档案设计](../../design/engine-profiles.md#2-全系列普查2026-10-30)；历史普查不代表整包脚本、命令语义或完整游戏兼容。
 
@@ -92,12 +94,12 @@ S2 普查 126 个脚本，其中 `snsy13.ps2 / 0x2937a` 遇到空表达式。原
 - `probe-final-start`：修正 800×600 画布后，S1/R1/D1/I1/I2/I3/I4 再次通过，启动步数/帧数不变。`scenario-frame-800/frame.png` 抽查 `snky00.ps2 / 0x7232` 第 6 个消息等待，背景/气泡/文字位于 800×600 画布内；未作原版逐像素对照。
 - `desktop-readonly.log`：CPU 桌面窗口、无快照、原生音频启动 8 秒正常退出，9,243 步，保存的画面为 800×600。后端提交 `bgm35.ogg` 44.1kHz 双声道，未做听感或手动完整游玩。此前使用独立用户目录的运行在退出写 CSS1 时失败，故目前不给出可保存的启动承诺。
 
-本轮未开放老版快照/存读档，未完成路线、页面、影片及其他平台验证。用于只读预览的命令（不支持剧情存档）：
+当轮尚未开放旧版存读档；后续已接入，见下文旧版快照与设置记录。当前正常启动使用独立用户目录：
 
 默认 `cargo test --offline`、严格 Clippy、格式与差异检查通过；核心子槽布局及受影响的 profile/变体、场景、窗口、抓图和配置回归通过，桌面含原生音频的 release 构建通过。检查日志位于 `local/asukimi/`；未运行全 workspace 或其他平台检查。
 
 ```bash
-cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --font "<日文字体>" --audio native --continue-without-snapshot
+cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --font "<日文字体>" --audio native --user-data-dir "<独立用户目录>"
 ```
 
 ## 探针完成帧接入（2026-11-04）
