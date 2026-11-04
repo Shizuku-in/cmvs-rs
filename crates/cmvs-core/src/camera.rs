@@ -215,15 +215,74 @@ impl Camera {
     }
 }
 
-/// cmvs-20071117 x86: constructor 0x42dc10.
-fn reset_type_1_2_defaults(camera: &mut Camera) {
-    // 0x42dc10: the types 1/2 constructor's height is 614, with center Y = 307.
-    camera.words[10] = 614.0f32.to_bits();
-    camera.words[16] = 307.0f32.to_bits();
+/// Independently selected runtime behavior, constructor values and wire format.
+#[derive(Debug, Clone, Copy)]
+struct CameraConfig {
+    object_projection: ObjectProjectionSet,
+    default_height: f32,
+    default_center_y: f32,
+    snapshot_format: CameraSnapshotFormat,
 }
 
-fn supports_projection_types_1_2(profile: &crate::profile::EngineProfile) -> bool {
-    profile.is_inspected_20071117()
+impl Default for CameraConfig {
+    fn default() -> Self {
+        Self {
+            object_projection: ObjectProjectionSet::Type3,
+            default_height: 612.0,
+            default_center_y: 306.0,
+            snapshot_format: CameraSnapshotFormat::V3,
+        }
+    }
+}
+
+impl CameraConfig {
+    fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
+        if profile.is_inspected_20071117() {
+            // Constructor 0x42dc10, projection 0x42df60, snapshot 0x42dca0.
+            Self {
+                object_projection: ObjectProjectionSet::Types1And2,
+                default_height: 614.0,
+                default_center_y: 307.0,
+                snapshot_format: CameraSnapshotFormat::V2,
+            }
+        } else {
+            Self::default()
+        }
+    }
+
+    fn default_camera(self) -> Camera {
+        let mut camera = Camera::default();
+        camera.set(10, self.default_height);
+        camera.set(16, self.default_center_y);
+        camera
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ObjectProjectionSet {
+    Types1And2,
+    Type3,
+}
+
+impl ObjectProjectionSet {
+    fn project(
+        self,
+        camera: &Camera,
+        world: [f32; 3],
+        offset: f32,
+        reference: f32,
+    ) -> Result<Option<ObjectProjection>, &'static str> {
+        match self {
+            Self::Types1And2 => project_types_1_2(camera, world, offset, reference),
+            Self::Type3 => camera.project_object(world, offset, reference),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CameraSnapshotFormat {
+    V2,
+    V3,
 }
 
 /// cmvs-20071117 x86: 0x410c10 -> 0x42df60, projection types 1 and 2.
@@ -328,7 +387,7 @@ fn hundredths(value: f32) -> f32 {
 
 #[derive(Debug, Clone)]
 pub struct CameraHost {
-    projection_types_1_2: bool,
+    config: CameraConfig,
     screen_size: crate::viewport::ScreenSize,
     cameras: [Camera; CAMERAS],
     views: [DeviceView; CAMERAS],
@@ -336,27 +395,22 @@ pub struct CameraHost {
 
 impl Default for CameraHost {
     fn default() -> Self {
-        Self {
-            projection_types_1_2: false,
-            screen_size: Default::default(),
-            cameras: Default::default(),
-            views: std::array::from_fn(DeviceView::new),
-        }
+        Self::with_config(CameraConfig::default())
     }
 }
 
 impl CameraHost {
     pub fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
-        let mut host = Self {
-            projection_types_1_2: supports_projection_types_1_2(profile),
-            ..Self::default()
-        };
-        if host.projection_types_1_2 {
-            for camera in &mut host.cameras {
-                reset_type_1_2_defaults(camera);
-            }
+        Self::with_config(CameraConfig::for_profile(profile))
+    }
+
+    fn with_config(config: CameraConfig) -> Self {
+        Self {
+            config,
+            screen_size: Default::default(),
+            cameras: std::array::from_fn(|_| config.default_camera()),
+            views: std::array::from_fn(DeviceView::new),
         }
-        host
     }
 
     /// Select only projection semantics bound to this host's engine profile.
@@ -368,11 +422,9 @@ impl CameraHost {
         reference: f32,
     ) -> Result<Option<ObjectProjection>, &'static str> {
         let camera = self.camera(index).ok_or("invalid projection camera")?;
-        if self.projection_types_1_2 {
-            project_types_1_2(camera, world, offset, reference)
-        } else {
-            camera.project_object(world, offset, reference)
-        }
+        self.config
+            .object_projection
+            .project(camera, world, offset, reference)
     }
 
     pub(crate) fn set_screen_size(&mut self, size: crate::viewport::ScreenSize) {
@@ -385,10 +437,7 @@ impl CameraHost {
         }
         for camera in &mut self.cameras {
             let retained = [19, 20, 37, 38, 39].map(|i| camera.words[i]);
-            *camera = Camera::default();
-            if self.projection_types_1_2 {
-                reset_type_1_2_defaults(camera);
-            }
+            *camera = self.config.default_camera();
             for (i, value) in [19, 20, 37, 38, 39].into_iter().zip(retained) {
                 camera.words[i] = value;
             }
@@ -688,15 +737,27 @@ impl CameraHost {
 }
 
 impl CameraHost {
+    pub(crate) fn saved(&self, index: usize) -> Vec<u8> {
+        self.config.snapshot_format.encode(&self.cameras[index])
+    }
+
+    pub(crate) fn restore(&mut self, index: usize, record: &[u8]) -> Result<(), &'static str> {
+        self.config
+            .snapshot_format
+            .restore(&mut self.cameras[index], record)
+    }
+}
+
+impl CameraSnapshotFormat {
     /// Records 0x880/0x881, writer 0x14004e7f0: version 3, words 37..39, then by the mode in
     /// word 39 the base words 0..14 (mode 0 and 1) and the motion words 21..36 (mode 1),
     /// then words 15..18. A running move saves its targets as the base words.
-    pub(crate) fn saved(&self, index: usize) -> Vec<u8> {
-        let w = &self.cameras[index].words;
-        if self.projection_types_1_2 {
+    fn encode(self, camera: &Camera) -> Vec<u8> {
+        let w = &camera.words;
+        if self == Self::V2 {
             // 0x42dca0: v2, words 37/38, base 0..14 snapped to move targets,
             // then center 15/16. It never persists a running move or scale 17/18.
-            let mut camera = self.cameras[index].clone();
+            let mut camera = camera.clone();
             camera.stop_move(true);
             let mut out = 2u16.to_le_bytes().to_vec();
             for word in w[37..39].iter().chain(&camera.words[..17]) {
@@ -747,9 +808,10 @@ impl CameraHost {
         out
     }
 
-    /// Reader 0x14004ea90 for version 3; words 19/20 and 40.. keep their current values.
-    pub(crate) fn restore(&mut self, index: usize, record: &[u8]) -> Result<(), &'static str> {
-        if self.projection_types_1_2 {
+    /// Reader 0x14004ea90 for version 3; retains words 19/20.
+    /// Version 2 (0x42dca0 writer) restores a stationary camera without scale fields.
+    fn restore(self, camera: &mut Camera, record: &[u8]) -> Result<(), &'static str> {
+        if self == Self::V2 {
             if record.len() != 78 || record[..2] != [2, 0] {
                 return Err("unsupported v2 camera snapshot version or size");
             }
@@ -759,9 +821,7 @@ impl CameraHost {
                 .iter()
                 .map(|b| u32::from_le_bytes(*b))
                 .collect();
-            let camera = &mut self.cameras[index];
             *camera = Camera::default();
-            reset_type_1_2_defaults(camera);
             camera.words[37..39].copy_from_slice(&words[..2]);
             camera.words[..17].copy_from_slice(&words[2..]);
             camera.words[21..37].fill(0);
@@ -785,7 +845,7 @@ impl CameraHost {
         if words.len() != expected {
             return Err("camera record length disagrees with its mode");
         }
-        let camera = &mut self.cameras[index].words;
+        let camera = &mut camera.words;
         camera[37..40].copy_from_slice(&words[..3]);
         if body != 0 {
             camera[..15].copy_from_slice(&words[3..18]);
@@ -844,6 +904,41 @@ fn argument_names(command: u16) -> &'static [&'static str] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn projection_defaults_and_snapshot_format_are_independent() {
+        // Synthetic combination: no engine build is inferred to support it.
+        let mut host = CameraHost::with_config(CameraConfig {
+            object_projection: ObjectProjectionSet::Type3,
+            default_height: 700.0,
+            default_center_y: 350.0,
+            snapshot_format: CameraSnapshotFormat::V2,
+        });
+        for camera in &host.cameras {
+            assert_eq!(camera.float(10), 700.0);
+            assert_eq!(camera.float(16), 350.0);
+        }
+        host.cameras[0].words[0] = 3;
+        let point = [1.0, 2.0, 20.0];
+        let expected = host.cameras[0].project_object(point, 0.5, 20.0).unwrap();
+        assert!(expected.is_some());
+        assert_eq!(host.project_object(0, point, 0.5, 20.0), Ok(expected));
+        let record = host.saved(0);
+        assert_eq!(&record[..2], &[2, 0]);
+        assert_eq!(record.len(), 78);
+        host.restore(0, &record).unwrap();
+        assert_eq!(host.project_object(0, point, 0.5, 20.0), Ok(expected));
+        assert_eq!(host.saved(0), record);
+
+        host.cameras[0].set(10, 1.0);
+        host.cameras[0].set(16, 2.0);
+        host.reset();
+        assert_eq!(host.cameras[0].float(10), 700.0);
+        assert_eq!(host.cameras[0].float(16), 350.0);
+        host.cameras[0].words[0] = 3;
+        assert_eq!(host.project_object(0, point, 0.5, 20.0), Ok(expected));
+        assert_eq!(host.saved(0), record);
+    }
 
     #[test]
     fn type_1_2_defaults_survive_reset_and_type_two_uses_the_horizontal_shift() {
