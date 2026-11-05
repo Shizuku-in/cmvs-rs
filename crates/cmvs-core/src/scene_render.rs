@@ -8,6 +8,8 @@ use crate::{
     scene::{DrawState, MaskTransition, ObjectImage, SceneHost, SceneObject},
 };
 
+pub mod shader;
+
 pub enum Layer<'a> {
     /// World-space inverse-view billboard: full texture, wrapped linear sampling,
     /// alpha blending and no depth writes (original queue 5).

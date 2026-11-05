@@ -1,7 +1,10 @@
 //! GPU execution of validated CMVS draw commands, with lazy logical-frame readback.
 use cmvs_core::{
     raster::RgbaImage,
-    scene_render::{Blend, Layer, RenderFrame},
+    scene_render::{
+        Layer, RenderFrame,
+        shader::{ShaderBlend, shader_draw},
+    },
 };
 use std::{
     collections::HashMap,
@@ -378,142 +381,20 @@ impl Renderer {
         let dummy = self.texture(&white)?;
         let mut draws = Vec::with_capacity(commands.len());
         for command in commands {
-            let mut p = [0f32; 280];
-            p[..2].copy_from_slice(&[w as f32, h as f32]);
-            let mut source = None;
-            let mut mask = None;
-            let mut screen = None;
-            let (corners, alpha, blend) = match command {
-                Layer::Image {
-                    image,
-                    rect,
-                    corner,
-                    alpha,
-                    mask: m,
-                    screen_mask: s,
-                    blend,
-                } => {
-                    source = Some(&image.pixels);
-                    mask = *m;
-                    screen = s.map(|s| &s.pixels);
-                    p[4..8].copy_from_slice(&rect.map(|v| v as f32));
-                    let [x, y] = corner.map(|v| v as f32);
-                    let [cw, ch] = [rect[2] as f32, rect[3] as f32];
-                    (
-                        [[x, y], [x + cw, y], [x, y + ch], [x + cw, y + ch]],
-                        *alpha,
-                        *blend,
-                    )
-                }
-                Layer::Billboard { image, quad, alpha } => {
-                    source = Some(&image.pixels);
-                    p[4..8].copy_from_slice(&[
-                        0.0,
-                        0.0,
-                        image.pixels.width() as f32,
-                        image.pixels.height() as f32,
-                    ]);
-                    p[3] = 1.0;
-                    p[19] = 16.0;
-                    let [l, t, r, b] = quad.map(|v| v + 0.5);
-                    ([[l, t], [r, t], [l, b], [r, b]], *alpha, Blend::Alpha)
-                }
-                Layer::Projected {
-                    image,
-                    rect,
-                    quad,
-                    alpha,
-                    blend,
-                } => {
-                    source = Some(&image.pixels);
-                    p[4..8].copy_from_slice(&rect.map(|v| v as f32));
-                    p[3] = 1.0;
-                    let [l, t, r, b] = quad.map(|v| v + 0.5);
-                    ([[l, t], [r, t], [l, b], [r, b]], *alpha, *blend)
-                }
-                Layer::Rotated {
-                    image,
-                    rect,
-                    corners,
-                    alpha,
-                    blend,
-                } => {
-                    source = Some(&image.pixels);
-                    p[4..8].copy_from_slice(&rect.map(|v| v as f32));
-                    p[3] = 1.0;
-                    (corners.map(|c| c.map(|v| v + 0.5)), *alpha, *blend)
-                }
-                Layer::Solid {
-                    rect,
-                    color,
-                    alpha,
-                    blend,
-                } => {
-                    p[16..19].copy_from_slice(&color.map(f32::from));
-                    p[19] = 1.0;
-                    let [x, y, cw, ch] = rect.map(|v| v as f32);
-                    (
-                        [[x, y], [x + cw, y], [x, y + ch], [x + cw, y + ch]],
-                        *alpha,
-                        *blend,
-                    )
-                }
-                Layer::Fade(fade) => {
-                    let [b, g, r, _] = fade.color.to_le_bytes();
-                    p[16..19].copy_from_slice(&[r, g, b].map(f32::from));
-                    p[19] = 1.0;
-                    (
-                        [
-                            [0.0, 0.0],
-                            [w as f32, 0.0],
-                            [0.0, h as f32],
-                            [w as f32, h as f32],
-                        ],
-                        fade.opacity.clamp(0, 255) as u32,
-                        Blend::Alpha,
-                    )
-                }
+            let draw = shader_draw(command, size);
+            let mode = match draw.blend {
+                ShaderBlend::Replace => 0,
+                ShaderBlend::Alpha => 1,
+                ShaderBlend::Additive => 2,
             };
-            p[2] = alpha as f32;
-            for (i, c) in corners.iter().enumerate() {
-                p[8 + i * 2..10 + i * 2].copy_from_slice(c);
-            }
-            let mode = match blend {
-                Blend::Replace | Blend::BlackReplace => 0,
-                Blend::Alpha | Blend::BlackAlpha => 1,
-                _ => 2,
-            };
-            if matches!(
-                blend,
-                Blend::BlackReplace | Blend::BlackAlpha | Blend::BlackAdditive
-            ) {
-                p[19] += 2.0;
-            }
-            if let Some(m) = mask {
-                p[19] += 4.0;
-                for green in 0..256 {
-                    p[24 + green] = m.coverage(green as u8);
+            let mut textures = [dummy.clone(), dummy.clone(), dummy.clone()];
+            for (texture, image) in textures.iter_mut().zip(draw.textures) {
+                if let Some(image) = image {
+                    *texture = self.texture(image)?;
                 }
             }
-            if screen.is_some() {
-                p[19] += 8.0;
-            }
-            let textures = [
-                match source {
-                    Some(i) => self.texture(i)?,
-                    None => dummy.clone(),
-                },
-                match mask {
-                    Some(m) => self.texture(&m.mask.pixels)?,
-                    None => dummy.clone(),
-                },
-                match screen {
-                    Some(i) => self.texture(i)?,
-                    None => dummy.clone(),
-                },
-            ];
             let views = textures.map(|t| t.create_view(&Default::default()));
-            let data: Vec<u8> = p.iter().flat_map(|f| f.to_le_bytes()).collect();
+            let data: Vec<u8> = draw.params.iter().flat_map(|f| f.to_le_bytes()).collect();
             let buffer = self
                 .device
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -591,6 +472,7 @@ mod tests {
     use super::*;
     use cmvs_core::{
         scene::{DrawState, ObjectImage, SceneHost, SceneObject},
+        scene_render::Blend,
         scene_render::prepare_scene,
     };
     #[test]
