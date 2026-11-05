@@ -28,6 +28,6 @@ pub use input::{SwitchInput, Touch, button};
 #[cfg(target_os = "horizon")]
 pub use keyboard::software_keyboard;
 #[cfg(target_os = "horizon")]
-pub use performance::set_cpu_boost;
+pub use performance::{set_cpu_boost, show_system_error};
 #[cfg(target_os = "horizon")]
 pub use window::SwitchWindow;

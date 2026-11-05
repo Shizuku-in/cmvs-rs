@@ -484,10 +484,8 @@ u32 cmvs_gpu_error(char *out, u32 capacity) {
 int cmvs_gpu_begin_frame(void) {
     if (status() != CMVS_GPU_OK)
         return CMVS_GPU_ERROR;
-    if (g.pass != PASS_NONE) {
-        fail("GPU frame started inside a canvas pass");
-        return CMVS_GPU_ERROR;
-    }
+    /* A frame abandoned by a host error left its pass open; its commands are harmless. */
+    g.pass = PASS_NONE;
     idle();
     return status();
 }

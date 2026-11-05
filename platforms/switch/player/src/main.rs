@@ -1,7 +1,9 @@
 mod audio;
 mod backend;
 mod boost;
+mod canvas;
 mod controls;
+mod error_screen;
 mod gpu;
 mod library;
 mod menu;
@@ -9,7 +11,8 @@ mod text_input;
 #[cfg(target_os = "horizon")]
 mod sys {
     pub use cmvs_native::{
-        SwitchAudioOut, SwitchGpu, SwitchWindow, set_cpu_boost, shared_font, software_keyboard,
+        SwitchAudioOut, SwitchGpu, SwitchWindow, set_cpu_boost, shared_font, show_system_error,
+        software_keyboard,
     };
 }
 #[cfg(not(target_os = "horizon"))]
@@ -34,6 +37,9 @@ use std::{
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const BASE: &str = "sdmc:/switch/cmvs-rs";
+const LOG_PATH: &str = "sdmc:/switch/cmvs-rs/error.log";
+/// `LOG_PATH` as the player sees it on the SD card.
+const LOG: &str = "switch/cmvs-rs/error.log";
 pub(crate) const SCREEN: [u32; 2] = [1280, 720];
 /// VM budget per loop iteration before polling input and the applet again.
 const BUDGET: Duration = Duration::from_millis(8);
@@ -357,40 +363,130 @@ fn choose(
     }
 }
 
+/// Shows `message` until the player leaves the page. When the page itself cannot be
+/// shown (for example after a GPU failure), the system error dialog stands in.
+fn show_error(
+    window: &mut sys::SwitchWindow,
+    gpu: Option<&mut gpu::GpuRenderer>,
+    font: &ab_glyph::FontVec,
+    game: Option<&str>,
+    message: &str,
+    can_return: bool,
+) -> error_screen::ErrorChoice {
+    // The page titles the game; the log and the system dialog name it inline.
+    let logged = match game {
+        Some(game) => format!("{game}: {message}"),
+        None => message.to_owned(),
+    };
+    report(&logged);
+    let page = |window: &mut sys::SwitchWindow| -> Result<error_screen::ErrorChoice> {
+        let first = window.poll();
+        if first.exit {
+            return Ok(error_screen::ErrorChoice::Exit);
+        }
+        let image = error_screen::draw(font, game, message, LOG, can_return);
+        show(window, gpu, &image)?;
+        let mut prompt = error_screen::ErrorPrompt::new(&first, can_return);
+        loop {
+            let sample = window.poll();
+            if sample.exit {
+                return Ok(error_screen::ErrorChoice::Exit);
+            }
+            if let Some(choice) = prompt.poll(&sample) {
+                return Ok(choice);
+            }
+            std::thread::sleep(IDLE);
+        }
+    };
+    page(window).unwrap_or_else(|page_error| {
+        system_error(&format!("{logged}\n\nThe error page failed: {page_error}"));
+        error_screen::ErrorChoice::Exit
+    })
+}
+
+/// Logs and shows an error through the system dialog, for failures without a page.
+fn system_error(message: &str) {
+    report(message);
+    let summary: String = message
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .take(200)
+        .collect();
+    sys::show_system_error(&summary, &format!("{message}\n\nSaved to {LOG}"));
+}
+
 /// One game starts directly; several are offered in a menu that games return to.
-fn session(window: &mut sys::SwitchWindow, mut gpu: Option<&mut gpu::GpuRenderer>) -> Result<()> {
+/// Errors are shown here; with a game list, the player may go back to it.
+fn session(
+    window: &mut sys::SwitchWindow,
+    mut gpu: Option<&mut gpu::GpuRenderer>,
+    font: &ab_glyph::FontVec,
+) {
     let base = Path::new(BASE);
-    let games = library::discover(base)?;
-    match games.as_slice() {
-        [] => Err(format!("no games found: put each game directory in {BASE}/games/").into()),
-        [game] => run(window, gpu, &game.root).map(|_| ()),
-        _ => {
-            let font = ab_glyph::FontVec::try_from_vec_and_index(font_bytes(base)?, 0)
-                .map_err(|_| "invalid menu font")?;
-            let mut selected = library::last_started(base, &games);
-            while let Some(index) = choose(window, gpu.as_deref_mut(), &games, &font, selected)? {
-                selected = index;
-                library::remember(base, &games[index]);
-                let ended = run(window, gpu.as_deref_mut(), &games[index].root)
-                    .map_err(|error| format!("{}: {error}", games[index].name))?;
-                if let Some(gpu) = gpu.as_deref_mut() {
-                    gpu.clear_cache();
-                }
-                if ended == Ended::Exit {
-                    break;
+    let games = match library::discover(base) {
+        Ok(games) if !games.is_empty() => games,
+        Ok(_) => {
+            let message = format!("no games found: put each game directory in {BASE}/games/");
+            show_error(window, gpu, font, None, &message, false);
+            return;
+        }
+        Err(error) => {
+            let message = format!("cannot list games: {error}");
+            show_error(window, gpu, font, None, &message, false);
+            return;
+        }
+    };
+    let single = games.len() == 1;
+    let mut selected = library::last_started(base, &games);
+    loop {
+        if !single {
+            match choose(window, gpu.as_deref_mut(), &games, font, selected) {
+                Ok(Some(index)) => selected = index,
+                Ok(None) => return,
+                Err(error) => {
+                    show_error(window, gpu, font, None, &error.to_string(), false);
+                    return;
                 }
             }
-            Ok(())
+            library::remember(base, &games[selected]);
+        }
+        let game = &games[selected];
+        let result = run(window, gpu.as_deref_mut(), &game.root);
+        if let Some(gpu) = gpu.as_deref_mut() {
+            gpu.clear_cache();
+        }
+        match result {
+            Ok(Ended::Exit) => return,
+            Ok(Ended::Quit) if single => return,
+            Ok(Ended::Quit) => {}
+            Err(error) => {
+                let name = Some(game.name.as_str());
+                let choice = show_error(
+                    window,
+                    gpu.as_deref_mut(),
+                    font,
+                    name,
+                    &error.to_string(),
+                    !single,
+                );
+                if choice == error_screen::ErrorChoice::Exit {
+                    return;
+                }
+            }
         }
     }
 }
 
 fn main() {
+    // A panic aborts the process; leave its message where errors are expected.
+    std::panic::set_hook(Box::new(|info| report(&format!("panic: {info}"))));
     // The window lives until main returns, after the error log is written: dropping
     // it unlocks exit, after which a pending HOME close may end the process.
     let gpu = match read_renderer_setting().and_then(|text| use_gpu(text.as_deref())) {
         Ok(gpu) => gpu,
-        Err(error) => return report(&error.to_string()),
+        Err(error) => return system_error(&error.to_string()),
     };
     let opened = if gpu {
         sys::SwitchWindow::open_gpu().map(|(window, gpu)| (window, Some(gpu)))
@@ -401,20 +497,24 @@ fn main() {
     };
     let (mut window, gpu) = match opened {
         Ok(opened) => opened,
-        Err(error) => return report(&error),
+        Err(error) => return system_error(&error),
     };
     let mut gpu = match gpu.map(gpu::GpuRenderer::new).transpose() {
         Ok(gpu) => gpu,
-        Err(error) => return report(&error.to_string()),
+        Err(error) => return system_error(&error.to_string()),
     };
-    if let Err(error) = session(&mut window, gpu.as_mut()) {
-        report(&error.to_string());
-    }
+    let font = match font_bytes(Path::new(BASE)).and_then(|bytes| {
+        Ok(ab_glyph::FontVec::try_from_vec_and_index(bytes, 0).map_err(|_| "invalid font")?)
+    }) {
+        Ok(font) => font,
+        Err(error) => return system_error(&format!("cannot load the font: {error}")),
+    };
+    session(&mut window, gpu.as_mut(), &font);
 }
 
 fn report(error: &str) {
     eprintln!("Switch player: {error}");
-    let _ = std::fs::write(format!("{BASE}/error.log"), error);
+    let _ = std::fs::write(LOG_PATH, error);
 }
 
 #[cfg(test)]

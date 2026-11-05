@@ -1,12 +1,15 @@
 //! Game selection screen, shown when more than one game is installed.
-use crate::{SCREEN, library::GameEntry};
-use ab_glyph::{Font, FontVec, PxScale, ScaleFont, point};
+use crate::{
+    SCREEN,
+    canvas::{BRIGHT, Canvas, DIM, HIGHLIGHT, MARGIN, TEXT},
+    library::GameEntry,
+};
+use ab_glyph::FontVec;
 use cmvs_core::raster::RgbaImage;
 use cmvs_native::{SwitchInput, button};
 
 /// Rows shown at once.
 pub const ROWS: usize = 10;
-const MARGIN: i32 = 64;
 const LIST_TOP: i32 = 136;
 const ROW_HEIGHT: i32 = 52;
 const STICK_THRESHOLD: i32 = 16000;
@@ -176,107 +179,6 @@ fn direction_bits(sample: &SwitchInput) -> u32 {
     bits
 }
 
-const BACKGROUND: [u8; 3] = [24, 30, 42];
-const HIGHLIGHT: [u8; 3] = [46, 104, 196];
-const TEXT: [u8; 3] = [200, 208, 224];
-const BRIGHT: [u8; 3] = [255, 255, 255];
-const DIM: [u8; 3] = [120, 132, 152];
-
-struct Canvas {
-    pixels: Vec<u8>,
-}
-impl Canvas {
-    fn new() -> Self {
-        let mut pixels = Vec::with_capacity((SCREEN[0] * SCREEN[1] * 4) as usize);
-        for _ in 0..SCREEN[0] * SCREEN[1] {
-            pixels.extend_from_slice(&[BACKGROUND[0], BACKGROUND[1], BACKGROUND[2], 255]);
-        }
-        Self { pixels }
-    }
-    fn blend(&mut self, x: i32, y: i32, color: [u8; 3], coverage: f32) {
-        if x < 0 || y < 0 || x >= SCREEN[0] as i32 || y >= SCREEN[1] as i32 {
-            return;
-        }
-        let at = (y as usize * SCREEN[0] as usize + x as usize) * 4;
-        let c = coverage.clamp(0.0, 1.0);
-        for (i, channel) in color.iter().enumerate() {
-            let under = f32::from(self.pixels[at + i]);
-            self.pixels[at + i] = (under + (f32::from(*channel) - under) * c).round() as u8;
-        }
-    }
-    fn fill(&mut self, [x, y, w, h]: [i32; 4], color: [u8; 3]) {
-        for row in y..y + h {
-            for column in x..x + w {
-                self.blend(column, row, color, 1.0);
-            }
-        }
-    }
-    fn text_width(font: &FontVec, px: f32, text: &str) -> f32 {
-        let font = font.as_scaled(PxScale::from(px));
-        let mut width = 0.0;
-        let mut previous = None;
-        for ch in text.chars() {
-            let id = font.glyph_id(ch);
-            if let Some(previous) = previous {
-                width += font.kern(previous, id);
-            }
-            width += font.h_advance(id);
-            previous = Some(id);
-        }
-        width
-    }
-    /// Draws one line with its baseline at `y`, shortened with an ellipsis to fit.
-    fn text(
-        &mut self,
-        font: &FontVec,
-        px: f32,
-        [x, y]: [f32; 2],
-        max: f32,
-        text: &str,
-        color: [u8; 3],
-    ) {
-        let mut line = text.to_owned();
-        if Self::text_width(font, px, &line) > max {
-            let ellipsis = if font.glyph_id('…').0 != 0 {
-                "…"
-            } else {
-                "..."
-            };
-            let mut chars: Vec<char> = text.chars().collect();
-            while !chars.is_empty() {
-                chars.pop();
-                line = chars.iter().collect::<String>() + ellipsis;
-                if Self::text_width(font, px, &line) <= max {
-                    break;
-                }
-            }
-        }
-        let scaled = font.as_scaled(PxScale::from(px));
-        let mut caret = x;
-        let mut previous = None;
-        for ch in line.chars() {
-            let id = scaled.glyph_id(ch);
-            if let Some(previous) = previous {
-                caret += scaled.kern(previous, id);
-            }
-            let glyph = id.with_scale_and_position(px, point(caret, y));
-            caret += scaled.h_advance(id);
-            previous = Some(id);
-            if let Some(outline) = font.outline_glyph(glyph) {
-                let bounds = outline.px_bounds();
-                outline.draw(|gx, gy, coverage| {
-                    self.blend(
-                        bounds.min.x as i32 + gx as i32,
-                        bounds.min.y as i32 + gy as i32,
-                        color,
-                        coverage,
-                    );
-                });
-            }
-        }
-    }
-}
-
 /// Renders the screen; `loading` replaces the controls hint once a game is chosen.
 pub fn draw(menu: &Menu, games: &[GameEntry], font: &FontVec, loading: bool) -> RgbaImage {
     let mut canvas = Canvas::new();
@@ -327,7 +229,7 @@ pub fn draw(menu: &Menu, games: &[GameEntry], font: &FontVec, loading: bool) -> 
         "A: Start    L / R: Page    +: Exit".into()
     };
     canvas.text(font, 24.0, [MARGIN as f32, 692.0], width as f32, &hint, DIM);
-    RgbaImage::new(SCREEN[0], SCREEN[1], canvas.pixels).expect("screen-sized image")
+    canvas.finish()
 }
 
 #[cfg(test)]
@@ -443,5 +345,9 @@ fn menu_preview() {
     };
     let menu = Menu::new(11, games.len(), &initial);
     let image = draw(&menu, &games, &font, false);
-    std::fs::write(std::env::var("CMVS_MENU_PNG").expect("CMVS_MENU_PNG"), image.to_png()).unwrap();
+    std::fs::write(
+        std::env::var("CMVS_MENU_PNG").expect("CMVS_MENU_PNG"),
+        image.to_png(),
+    )
+    .unwrap();
 }

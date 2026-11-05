@@ -78,6 +78,10 @@ pub fn set_cpu_boost(_: bool) -> bool {
     false
 }
 
+pub fn show_system_error(_: &str, _: &str) -> bool {
+    false
+}
+
 pub fn shared_font() -> Option<Vec<u8>> {
     None
 }

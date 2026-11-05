@@ -24,3 +24,22 @@ int cmvs_nx_set_cpu_boost(int enabled) {
     Result rc = appletSetCpuBoostMode(enabled ? ApmCpuBoostMode_FastLoad : ApmCpuBoostMode_Normal);
     return R_SUCCEEDED(rc) ? 0 : -1;
 }
+
+/* Shows the error applet, blocking until dismissed. The application variant (the one
+   games use) is fatal outside application mode, where the system variant stands in.
+   Returns 0 when it was shown. */
+int cmvs_nx_show_error(const char *dialog, const char *details) {
+    Result rc;
+    if (appletGetAppletType() == AppletType_Application) {
+        ErrorApplicationConfig config;
+        rc = errorApplicationCreate(&config, dialog, details);
+        if (R_SUCCEEDED(rc))
+            rc = errorApplicationShow(&config);
+    } else {
+        ErrorSystemConfig config;
+        rc = errorSystemCreate(&config, dialog, details);
+        if (R_SUCCEEDED(rc))
+            rc = errorSystemShow(&config);
+    }
+    return R_SUCCEEDED(rc) ? 0 : -1;
+}

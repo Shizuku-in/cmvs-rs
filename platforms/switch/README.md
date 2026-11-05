@@ -24,7 +24,10 @@ docker run --rm -v "$PWD:/src" -w /src cmvs-switch-build sh platforms/switch/scr
 可选 `renderer.txt` 选择渲染器：`gpu`（缺省）或 `cpu`（软件合成，旧路径）；其他内容报错。GPU 初始化或运行失败
 直接报错写入 `error.log`，不自动换回 CPU。
 
-用户数据位于 `users/<游戏标识>/`，运行错误（含脚本名、PC 与步数）写入 `error.log`。
+用户数据位于 `users/<游戏标识>/`，运行错误（含脚本名、PC 与步数）写入 `error.log`，并显示错误页：
+有游戏列表时 A 回到列表，+ 退出；只有一个游戏时 A / + 退出。窗口打开前、GPU 失败或字体不可用等无法绘制错误页时，
+改用系统错误对话框（应用接管模式用应用版，其他模式用系统版；Ryujinx 只实现应用版），完整内容在“详情”中。
+Rust panic 仍直接中止，但消息会写入 `error.log`。
 存档时间与桌面、Android 一致按 UTC 记录。
 
 ## 操作
