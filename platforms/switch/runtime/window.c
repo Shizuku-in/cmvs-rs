@@ -4,24 +4,30 @@ static Framebuffer fb;
 static PadState pad;
 static bool opened;
 int cmvs_nx_open(void) {
-    if (opened) return -1;
+    if (opened)
+        return -1;
     Result rc = framebufferCreate(&fb, nwindowGetDefault(), 1280, 720, PIXEL_FORMAT_RGBA_8888, 2);
-    if (R_FAILED(rc)) return -1;
+    if (R_FAILED(rc))
+        return -1;
     rc = framebufferMakeLinear(&fb);
-    if (R_FAILED(rc)) { framebufferClose(&fb); return -1; }
+    if (R_FAILED(rc)) {
+        framebufferClose(&fb);
+        return -1;
+    }
     padConfigureInput(1, HidNpadStyleSet_NpadStandard);
     padInitializeDefault(&pad);
     opened = true;
     return 0;
 }
 unsigned cmvs_nx_poll(void) {
-    if (!appletMainLoop()) return 1;
+    if (!appletMainLoop())
+        return 1;
     padUpdate(&pad);
     u64 held = padGetButtons(&pad);
-    return ((held & HidNpadButton_Plus) ? 1 : 0)
-        | ((held & HidNpadButton_A) ? 2 : 0) | ((held & HidNpadButton_B) ? 4 : 0)
-        | ((held & HidNpadButton_Left) ? 8 : 0) | ((held & HidNpadButton_Right) ? 16 : 0)
-        | ((held & HidNpadButton_Up) ? 32 : 0) | ((held & HidNpadButton_Down) ? 64 : 0);
+    return ((held & HidNpadButton_Plus) ? 1 : 0) | ((held & HidNpadButton_A) ? 2 : 0) |
+           ((held & HidNpadButton_B) ? 4 : 0) | ((held & HidNpadButton_Left) ? 8 : 0) |
+           ((held & HidNpadButton_Right) ? 16 : 0) | ((held & HidNpadButton_Up) ? 32 : 0) |
+           ((held & HidNpadButton_Down) ? 64 : 0);
 }
 void cmvs_nx_present(const u32 *pixels) {
     u32 stride;
@@ -35,4 +41,8 @@ void cmvs_nx_present(const u32 *pixels) {
     }
     framebufferEnd(&fb);
 }
-void cmvs_nx_close(void) { if (opened) framebufferClose(&fb); opened = false; }
+void cmvs_nx_close(void) {
+    if (opened)
+        framebufferClose(&fb);
+    opened = false;
+}

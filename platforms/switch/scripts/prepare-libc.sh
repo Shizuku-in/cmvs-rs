@@ -1,7 +1,7 @@
 #!/bin/sh
 # Private build-std dependency copy; never modify Cargo's registry or host libc.
 set -eu
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 mkdir -p build
 if [ ! -f build/libc-0.2.178/.cmvs-patched ]; then
     curl -fsSL https://static.crates.io/crates/libc/libc-0.2.178.crate -o build/libc.crate
