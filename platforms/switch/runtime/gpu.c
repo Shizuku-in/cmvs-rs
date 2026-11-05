@@ -537,6 +537,14 @@ int cmvs_gpu_create_texture(u32 width, u32 height, const u8 *rgba, u32 *out) {
     }
     dkImageInitialize(&t->image, &layout, t->own ? t->own : pools[t->pool].block, t->offset);
 
+    if (bytes <= STAGING_SIZE && g.staging_used + bytes > STAGING_SIZE) {
+        idle();
+        if (g.pass == PASS_CANVAS)
+            bind_canvas_pass();
+    }
+    /* Reserve before staging: a command flush resets g.staging_used. */
+    reserve(COST_SMALL);
+
     /* Stage the pixels; a texture larger than the whole staging buffer uses its own. */
     DkMemBlock temporary = NULL;
     DkGpuAddr source;
@@ -550,17 +558,11 @@ int cmvs_gpu_create_texture(u32 width, u32 height, const u8 *rgba, u32 *out) {
         memcpy(dkMemBlockGetCpuAddr(temporary), rgba, bytes);
         source = dkMemBlockGetGpuAddr(temporary);
     } else {
-        if (g.staging_used + bytes > STAGING_SIZE) {
-            idle();
-            if (g.pass == PASS_CANVAS)
-                bind_canvas_pass();
-        }
         u32 at = g.staging_used;
         g.staging_used = ALIGN(at + bytes, 256);
         memcpy((u8 *)dkMemBlockGetCpuAddr(g.staging) + at, rgba, bytes);
         source = dkMemBlockGetGpuAddr(g.staging) + at;
     }
-    reserve(COST_SMALL);
     DkImageView view;
     dkImageViewDefaults(&view, &t->image);
     DkCopyBuf copy = {source, 0, 0};
