@@ -12,7 +12,7 @@ pub(crate) enum ChildSlots {
 impl ChildSlots {
     pub(crate) fn for_profile(profile: &EngineProfile) -> Self {
         // Independent x86 256-entry helpers: docs/games/asukimi.
-        if profile.is_inspected_20071117() {
+        if profile.is_inspected_20071117() || profile.is_inspected_20080903() {
             return Self::Slots256;
         }
         // Independent 512-entry create/destroy helpers: docs/games/kazokubu.

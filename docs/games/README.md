@@ -5,7 +5,7 @@
 | [《プリミティブ リンク》 / puriring](puriring/README.md) | `2007-02-02_PURIRING_withDVDValidation` | 仅基础档案，尚未适配运行 |
 | [《明日の君と逢うために》 / asukimi](asukimi/README.md) | `2007-11-30_ASUKIMI` | 存读档、设置及评论编辑已验证；完整路线与原生存档界面待验证 |
 | [《春色桜瀬》 / harouse](harouse/README.md) | `2008-07-31_HAROUSE` | 首选路线回标题，存读档及评论编辑通过；仍有 9 个分支前缀待探索 |
-| [《明日の七海と逢うために〜明日の君と逢うために〜FAN DISC》 / asunana](asunana/README.md) | `2008-10-24_ASUNANA` | 仅基础档案，尚未适配运行 |
+| [《明日の七海と逢うために〜明日の君と逢うために〜FAN DISC》 / asunana](asunana/README.md) | `2008-10-24_ASUNANA` | 基本游玩接入；四轮解锁收敛、存读档与绘制检查通过 |
 | [《メモリア》 / memoria](memoria/README.md) | `2009-08-28_MEMORIA` | 仅基础档案，尚未适配运行 |
 | [《夏に奏でる僕らの詩》 / natsuuta](natsuuta/README.md) | `2010-03-26_NATSUUTA` | 仅基础档案，尚未适配运行 |
 | [《初恋サクラメント》 / hassaku](hassaku/README.md) | `2010-12-24_HASSAKU` | 仅基础档案，尚未适配运行 |

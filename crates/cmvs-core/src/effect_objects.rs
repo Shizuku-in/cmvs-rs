@@ -5,6 +5,8 @@ mod falling;
 mod fragments;
 pub use collision::{CollisionEffect, CollisionParticle};
 pub use fragments::{Fragment, FragmentEffect};
+mod rain;
+pub(crate) use rain::RainEffect;
 mod particles;
 mod snapshot;
 pub use falling::{FallingEffect, FallingParticle};
@@ -26,6 +28,7 @@ impl crate::scene::SceneHost {
         let slot = call.argument(4, "slot")?;
         call.complete(0x4004)?;
         if slot < 4 {
+            self.rain_effects.remove(&(slot as u8));
             self.particle_effects.remove(&(slot as u8));
             self.falling_effects.remove(&(slot as u8));
             self.collision_effects.remove(&(slot as u8));
@@ -51,6 +54,9 @@ impl crate::scene::SceneHost {
         let view = cameras.view(0).expect("view exists");
         let position = [view.words[0], view.words[1], view.words[2]].map(f32::from_bits);
         for slot in 0..4 {
+            if let Some(effect) = self.rain_effects.get_mut(&slot) {
+                effect.advance(delta, random);
+            }
             if let Some(effect) = self.particle_effects.get_mut(&slot) {
                 effect.advance(delta, random);
             }

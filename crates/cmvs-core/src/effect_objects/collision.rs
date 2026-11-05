@@ -285,6 +285,7 @@ impl SceneHost {
         let mut effect = CollisionEffect::new(mode, parameters, count, pool, &mut candidate_random);
         effect.template = template;
         call.complete(0x4018)?;
+        self.rain_effects.remove(&(slot as u8));
         self.particle_effects.remove(&(slot as u8));
         self.falling_effects.remove(&(slot as u8));
         self.fragment_effects.remove(&(slot as u8));

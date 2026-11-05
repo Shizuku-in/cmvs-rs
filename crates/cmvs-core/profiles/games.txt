@@ -19,6 +19,14 @@ game-id 0x00000000
 executable cmvs.exe sha256=afe3b3a895e7b3ba5f78e6f6464296f1d028e87307c8de5a568b88fd6086491e
 end
 
+game asunana
+profile cmvs-20080903
+start data/pack/start.ps2 sha256=c224f482437395fc30503a3bc622221c246b295c4e2adc91d76ca3e9cb689df4
+archive data/pack/script.cpz sha256=4d2dae6ee1e310c2d6c78efefd03f2a1732619e6f49ce64840be99ca9c6fd6b8
+game-id 0x00000000
+executable cmvs.exe sha256=f77ecbfd39d1076c66915544d73b9c2d2c5876fbabeaef3d589050b6094d13ac
+end
+
 game miranosu
 profile cmvs-20110525
 start data/pack/start.ps2 sha256=2e8c7261ea801f59c9e80b9cdbde89832c0a65f7b622e2fa4551509b1cfe5143

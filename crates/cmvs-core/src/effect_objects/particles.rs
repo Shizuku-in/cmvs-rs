@@ -337,6 +337,7 @@ impl SceneHost {
         self.falling_effects.remove(&(slot as u8));
         self.collision_effects.remove(&(slot as u8));
         self.fragment_effects.remove(&(slot as u8));
+        self.rain_effects.remove(&(slot as u8));
         self.particle_effects.insert(slot as u8, effect);
         *random = candidate_random;
         Ok(())

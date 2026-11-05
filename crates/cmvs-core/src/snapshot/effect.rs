@@ -7,6 +7,10 @@ use crate::FormatError;
 /// Name padding is retained for lossless decoding; only bytes before NUL name a resource.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SavedEffect {
+    Rain {
+        words: [u32; 6],
+        name: [u8; 32],
+    },
     Falling {
         words: [u32; 6],
         name: [u8; 32],
@@ -38,7 +42,8 @@ impl SavedEffect {
 
     pub fn image_name(&self) -> &[u8] {
         match self {
-            Self::Falling { name, .. }
+            Self::Rain { name, .. }
+            | Self::Falling { name, .. }
             | Self::Particles { name, .. }
             | Self::Collision { name, .. } => {
                 &name[..name.iter().position(|&b| b == 0).unwrap_or(name.len())]
@@ -49,6 +54,18 @@ impl SavedEffect {
 
     fn validate(&self) -> Result<(), FormatError> {
         let (parameters, count, name) = match self {
+            Self::Rain { words, name } => {
+                if words[5] == 0
+                    || ((words[0] >> 8) & 0xf) > 6
+                    || !matches!(
+                        words[0] & 0xf0,
+                        0 | 0x10 | 0x20 | 0x30 | 0x40 | 0x50 | 0x60 | 0x70 | 0x80 | 0xa0
+                    )
+                {
+                    return Err(FormatError("unsupported rain mode or emission interval"));
+                }
+                (&words[1..5], 0, name)
+            }
             Self::Falling { words, name } => (&words[..4], words[4], name),
             Self::Particles { words, name } => (&words[1..5], words[5], name),
             Self::Collision { words, name } => (&words[1..3], words[3], name),
@@ -81,7 +98,7 @@ impl SavedEffect {
         }
         let kind = u16::from_le_bytes(bytes[2..4].try_into().unwrap());
         let words = match kind {
-            2 | 5 => 6,
+            2 | 4 | 5 => 6,
             6 => 4,
             8 if bytes.len() == 4 => return Ok(Self::Fragments),
             _ => return Err(FormatError("unsupported saved particle effect type")),
@@ -95,6 +112,10 @@ impl SavedEffect {
         let name = bytes[4 + words * 4..].try_into().unwrap();
         let effect = match kind {
             2 => Self::Falling {
+                words: std::array::from_fn(word),
+                name,
+            },
+            4 => Self::Rain {
                 words: std::array::from_fn(word),
                 name,
             },
@@ -115,6 +136,7 @@ impl SavedEffect {
     pub fn encode(&self) -> Result<Vec<u8>, FormatError> {
         self.validate()?;
         let (kind, words, name): (u16, &[u32], &[u8]) = match self {
+            Self::Rain { words, name } => (4, words, name),
             Self::Falling { words, name } => (2, words, name),
             Self::Particles { words, name } => (5, words, name),
             Self::Collision { words, name } => (6, words, name),
@@ -155,6 +177,7 @@ mod tests {
                 5,
                 vec![0x85000000, f(-40.0), f(15.0), f(-20.0), f(2000.0), 8],
             ),
+            (4, vec![0x1000, 0, 0, f(12.0), f(250.0), 16]),
             (6, vec![0x41000000, f(10.0), f(1000.0), 4]),
         ] {
             let bytes = record(kind, &words);

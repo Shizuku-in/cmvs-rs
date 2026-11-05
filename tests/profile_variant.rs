@@ -24,6 +24,10 @@ fn inspected_early_queries_use_the_down_edge_and_extra_actions_can_be_consumed()
             "cmvs-20080719",
             "afe3b3a895e7b3ba5f78e6f6464296f1d028e87307c8de5a568b88fd6086491e",
         ),
+        (
+            "cmvs-20080903",
+            "f77ecbfd39d1076c66915544d73b9c2d2c5876fbabeaef3d589050b6094d13ac",
+        ),
     ] {
         let profile = Registry::builtin().profile(id).unwrap();
         let queries = [

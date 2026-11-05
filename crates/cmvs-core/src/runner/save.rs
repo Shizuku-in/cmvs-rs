@@ -160,7 +160,7 @@ fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLa
     if profile.is_inspected_20071117() {
         return Some(SnapshotLayout::TextV1SceneV1);
     }
-    if profile.is_inspected_20080719() {
+    if profile.is_inspected_20080719() || profile.is_inspected_20080903() {
         return Some(SnapshotLayout::TextV1SceneV2);
     }
     if (matches!(
@@ -210,6 +210,7 @@ fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLa
 fn effect_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
     (matches!(profile.id.as_str(), "cmvs-20110525" | "cmvs-20171114")
         || profile.is_inspected_20080719()
+        || profile.is_inspected_20080903()
         || inspected_20120309(profile)
         || inspected_20221105(profile)
         || (profile.id == "cmvs-20211006"
@@ -225,6 +226,9 @@ fn effect_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
 }
 
 fn effect_record_supported(profile: &crate::profile::EngineProfile, body: &[u8]) -> bool {
+    if profile.is_inspected_20080903() || body.get(..4) == Some(&[1, 0, 4, 0]) {
+        return profile.is_inspected_20080903() && body.get(..4) == Some(&[1, 0, 4, 0]);
+    }
     if inspected_20221105(profile)
         && profile.base.as_deref() == Some("cmvs-20160201")
         && body == [1, 0, 8, 0]
@@ -267,6 +271,7 @@ impl Startup<'_> {
         // write offset 68: a format constant, not a recovered game identifier.
         if self.gate.selection().profile.is_inspected_20071117()
             || self.gate.selection().profile.is_inspected_20080719()
+            || self.gate.selection().profile.is_inspected_20080903()
         {
             Some(0)
         } else {
@@ -859,6 +864,7 @@ impl Startup<'_> {
             mask,
             strip,
         );
+        self.scene.rain_effects = effects.rain_effects;
         self.scene.falling_effects = effects.falling_effects;
         self.scene.particle_effects = effects.particle_effects;
         self.scene.collision_effects = effects.collision_effects;
@@ -1102,6 +1108,7 @@ mod layout_tests {
         for (id, layout) in [
             ("cmvs-20071117", SnapshotLayout::TextV1SceneV1),
             ("cmvs-20080719", SnapshotLayout::TextV1SceneV2),
+            ("cmvs-20080903", SnapshotLayout::TextV1SceneV2),
             ("cmvs-20110525", SnapshotLayout::TextV2),
             ("cmvs-20120309", SnapshotLayout::TextV2),
             ("cmvs-20130131", SnapshotLayout::TextV2),
@@ -1120,6 +1127,7 @@ mod layout_tests {
                 matches!(
                     id,
                     "cmvs-20080719"
+                        | "cmvs-20080903"
                         | "cmvs-20110525"
                         | "cmvs-20120309"
                         | "cmvs-20171114"
@@ -1143,16 +1151,19 @@ mod layout_tests {
         let registry = crate::profile::Registry::builtin();
         for id in [
             "cmvs-20080719",
+            "cmvs-20080903",
             "cmvs-20110525",
             "cmvs-20120309",
             "cmvs-20211006",
             "cmvs-20221105",
         ] {
             let profile = registry.profile(id).unwrap();
-            for kind in [2, 5, 6, 8] {
+            for kind in [2, 4, 5, 6, 8] {
                 assert_eq!(
                     effect_record_supported(profile, &[1, 0, kind, 0]),
-                    kind == 5 || (id == "cmvs-20221105" && kind == 8)
+                    (id != "cmvs-20080903" && kind == 5)
+                        || (id == "cmvs-20221105" && kind == 8)
+                        || (id == "cmvs-20080903" && kind == 4)
                 );
             }
             assert!(!effect_record_supported(profile, &[1, 0]));
@@ -1162,6 +1173,7 @@ mod layout_tests {
         for id in [
             "cmvs-20071117",
             "cmvs-20080719",
+            "cmvs-20080903",
             "cmvs-20120309",
             "cmvs-20211006",
             "cmvs-20221105",

@@ -883,6 +883,18 @@ pub fn prepare_scene<'a>(
                         )
                     }),
             )
+            .chain(
+                scene
+                    .rain_effects
+                    .get(&slot)
+                    .into_iter()
+                    .flat_map(|effect| {
+                        effect
+                            .particles
+                            .iter()
+                            .map(|p| (None, &p.object, Some(&effect.pool)))
+                    }),
+            )
     });
     let all_objects = slots
         .map(|(slot, object)| (slot, object, None, false))

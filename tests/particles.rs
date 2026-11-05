@@ -160,6 +160,44 @@ fn args(slot: u32, count: u32) -> Vec<u32> {
         count,
     ]
 }
+
+#[test]
+fn rain_binding_preserves_pending_arguments_and_rng_on_image_failure() {
+    let profile = cmvs_rs::profile::Registry::builtin()
+        .profile("cmvs-20080903")
+        .unwrap();
+    let semantics = profile.semantics(0x2a4);
+    assert_eq!(semantics, Semantics::Variant(VariantId::Rain));
+    let mut code = vec![];
+    command(&mut code, 0x22a4, &args(0, 16));
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    vm.state_mut().set_string(0, b"particle.pb3").unwrap();
+    vm.state_mut().set_system_integer(0, 123).unwrap();
+    pending(&mut vm);
+    let mut scene = SceneHost::for_profile(profile);
+    let mut source = Images {
+        fail: true,
+        ..Default::default()
+    };
+    let mut random = CrtRandom::new(0);
+    let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
+    assert!(run_as(semantics, &mut vm, &mut scene, &mut source, &mut random).is_err());
+    assert_eq!(
+        (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
+        before
+    );
+    assert_eq!(random, CrtRandom::new(0));
+    assert_eq!(vm.state().system_integer(0), Some(123));
+    source.fail = false;
+    assert_eq!(
+        run_as(semantics, &mut vm, &mut scene, &mut source, &mut random).unwrap(),
+        Some(Flow::Done)
+    );
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert!(vm.pending_system().is_none());
+    assert_eq!(random, CrtRandom::new(0));
+}
 fn run(
     vm: &mut Machine<'_>,
     scene: &mut SceneHost,

@@ -4802,6 +4802,20 @@ fn auxiliary_measure(
     )?)
 }
 
+pub static RAIN: &[Entry] = &[Entry {
+    command: 0x2a4,
+    name: "create rain streak effect",
+    capability: Capability::ParticleImages,
+    handler: |hosts, call| {
+        let h = hosts
+            .images
+            .as_mut()
+            .expect("particle image capability checked");
+        h.scene.create_rain(call, h.source)?;
+        Ok(Flow::Done)
+    },
+}];
+
 pub static PARTICLES: &[Entry] = &[Entry {
     command: 0x2a5,
     name: "create particle effect",
@@ -5337,6 +5351,7 @@ pub static VARIANT_TABLES: &[&[Entry]] = &[
     FONT_CELLS,
     PARTICLES,
     PARTICLES_X87,
+    RAIN,
     BACKGROUND_AUDIO,
     SE_RESTART,
     AUDIO_PRELOAD,
@@ -5367,6 +5382,7 @@ pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'st
         crate::profile::VariantId::FontCells => FONT_CELLS,
         crate::profile::VariantId::Particles => PARTICLES,
         crate::profile::VariantId::ParticlesX87 => PARTICLES_X87,
+        crate::profile::VariantId::Rain => RAIN,
         crate::profile::VariantId::BackgroundAudio => BACKGROUND_AUDIO,
         crate::profile::VariantId::SeRestart => SE_RESTART,
         crate::profile::VariantId::AudioPreload => AUDIO_PRELOAD,
@@ -5401,6 +5417,7 @@ pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
         Semantics::Variant(crate::profile::VariantId::TextAlpha) => "variant text alpha revision",
         Semantics::Variant(crate::profile::VariantId::FontCells) => "variant text override",
         Semantics::Variant(crate::profile::VariantId::Particles) => "variant particle override",
+        Semantics::Variant(crate::profile::VariantId::Rain) => "variant rain streaks",
         Semantics::Variant(crate::profile::VariantId::ParticlesX87) => {
             "variant x87 particle override"
         }

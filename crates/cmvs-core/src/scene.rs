@@ -344,6 +344,7 @@ pub struct SceneHost {
     pub(crate) allow_projected_parent_rotation: bool,
     pub(crate) allow_triangle_quake: bool,
     screen_size: crate::viewport::ScreenSize,
+    pub(crate) rain_effects: BTreeMap<u8, crate::effect_objects::RainEffect>,
     pub(crate) fragment_effects: BTreeMap<u8, crate::effect_objects::FragmentEffect>,
     pub(crate) collision_effects: BTreeMap<u8, crate::effect_objects::CollisionEffect>,
     pub(crate) particle_effects: BTreeMap<u8, crate::effect_objects::ParticleEffect>,
@@ -365,7 +366,8 @@ impl SceneHost {
             child_slots: ChildSlots::for_profile(profile),
             allow_filter_mode_one: profile.is_inspected_20071117(),
             allow_legacy_sine_modes: profile.uses_legacy_sine_modes(),
-            allow_screen_coordinates_one: profile.is_inspected_20080719(),
+            allow_screen_coordinates_one: profile.is_inspected_20080719()
+                || profile.is_inspected_20080903(),
             allow_projected_parent_rotation: profile.is_inspected_20080719(),
             allow_triangle_quake: profile.is_inspected_20080719(),
             ..Self::default()
@@ -1212,6 +1214,7 @@ impl SceneHost {
             allow_screen_coordinates_one: self.allow_screen_coordinates_one,
             allow_projected_parent_rotation: self.allow_projected_parent_rotation,
             allow_triangle_quake: self.allow_triangle_quake,
+            rain_effects: Default::default(),
             particle_effects: Default::default(),
             falling_effects: Default::default(),
             collision_effects: Default::default(),

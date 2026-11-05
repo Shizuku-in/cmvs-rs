@@ -176,6 +176,7 @@ impl SceneHost {
             FallingEffect::new(parameters, count, follow, image, &mut candidate_random);
         effect.template = template;
         call.complete(0x4020)?;
+        self.rain_effects.remove(&(slot as u8));
         self.particle_effects.remove(&(slot as u8));
         self.collision_effects.remove(&(slot as u8));
         self.fragment_effects.remove(&(slot as u8));

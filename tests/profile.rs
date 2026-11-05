@@ -911,6 +911,11 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
     assert_eq!(asukimi.statuses().len(), 864);
     assert_eq!(asukimi.count(CommandStatus::Unreviewed), 519);
     assert_eq!(asukimi.count(CommandStatus::NoOp), 345);
+    let asunana = registry.profile("cmvs-20080903").unwrap();
+    assert_eq!(asunana.base.as_deref(), Some("cmvs-20160201"));
+    assert_eq!(asunana.binaries.len(), 1);
+    assert_eq!(asunana.statuses().len(), 864);
+    assert_eq!(asunana.status(0x1d), CommandStatus::NoOp);
     let harouse = registry.profile("cmvs-20080719").unwrap();
     assert_eq!(harouse.base.as_deref(), Some("cmvs-20160201"));
     assert_eq!(harouse.binaries.len(), 1);
@@ -965,6 +970,7 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
     assert_eq!(
         games,
         [
+            ("asunana", "cmvs-20080903", None),
             ("asukimi", "cmvs-20071117", None),
             ("harouse", "cmvs-20080719", None),
             ("miranosu", "cmvs-20110525", None),

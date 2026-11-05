@@ -41,6 +41,7 @@ pub enum VariantId {
     ListSelect,
     Particles,
     ParticlesX87,
+    Rain,
     BackgroundAudio,
     SeRestart,
     SeGain,
@@ -68,6 +69,7 @@ impl VariantId {
             "font-cells" => Some(Self::FontCells),
             "particles" => Some(Self::Particles),
             "particles-x87" => Some(Self::ParticlesX87),
+            "rain" => Some(Self::Rain),
             "background-audio" => Some(Self::BackgroundAudio),
             "se-restart" => Some(Self::SeRestart),
             "se-gain" => Some(Self::SeGain),
@@ -96,6 +98,7 @@ impl VariantId {
             Self::FontCells => "font-cells",
             Self::Particles => "particles",
             Self::ParticlesX87 => "particles-x87",
+            Self::Rain => "rain",
             Self::BackgroundAudio => "background-audio",
             Self::SeRestart => "se-restart",
             Self::SeGain => "se-gain",
@@ -280,7 +283,7 @@ impl EngineProfile {
 
     /// Independently inspected x86 sine interpolation; docs/games/{asukimi,harouse}.
     pub(crate) fn uses_legacy_sine_modes(&self) -> bool {
-        self.is_inspected_20071117() || self.is_inspected_20080719()
+        self.is_inspected_20071117() || self.is_inspected_20080719() || self.is_inspected_20080903()
     }
 
     /// Independently inspected Harouse build; capabilities still bind separately.
@@ -291,6 +294,20 @@ impl EngineProfile {
                 .binary(
                     &crate::digest::parse_hex(
                         "afe3b3a895e7b3ba5f78e6f6464296f1d028e87307c8de5a568b88fd6086491e",
+                    )
+                    .expect("static SHA-256"),
+                )
+                .is_some()
+    }
+
+    /// Independently inspected ASUNANA x86 build; docs/games/asunana.
+    pub(crate) fn is_inspected_20080903(&self) -> bool {
+        self.id == "cmvs-20080903"
+            && self.base.as_deref() == Some("cmvs-20160201")
+            && self
+                .binary(
+                    &crate::digest::parse_hex(
+                        "f77ecbfd39d1076c66915544d73b9c2d2c5876fbabeaef3d589050b6094d13ac",
                     )
                     .expect("static SHA-256"),
                 )
@@ -511,9 +528,10 @@ pub struct Registry {
     contracts: BTreeMap<[u8; 32], ContractProof>,
 }
 
-const BUILTIN_PROFILES: [&str; 13] = [
+const BUILTIN_PROFILES: [&str; 14] = [
     include_str!("../profiles/cmvs-20071117.profile"),
     include_str!("../profiles/cmvs-20080719.profile"),
+    include_str!("../profiles/cmvs-20080903.profile"),
     include_str!("../profiles/cmvs-20110525.profile"),
     include_str!("../profiles/cmvs-20120309.profile"),
     include_str!("../profiles/cmvs-20130131.profile"),

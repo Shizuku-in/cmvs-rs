@@ -391,7 +391,7 @@ fn shared_flag_queries_discard_unknown_value_words_without_reading_them() {
 #[test]
 fn old_text_dialog_commits_accept_cancel_and_empty_results() {
     use cmvs_rs::platform::RecordingBackend;
-    for name in ["cmvs-20071117", "cmvs-20080719"] {
+    for name in ["cmvs-20071117", "cmvs-20080719", "cmvs-20080903"] {
         let profile = Registry::builtin().profile(name).unwrap();
         for (answer, result, text) in [
             (Some(b"A\x82\xa0x".to_vec()), 1, b"\x82\xa0".as_slice()),
@@ -496,7 +496,7 @@ fn old_text_dialog_waits_and_rejects_invalid_results_atomically() {
         assert_eq!(vm.state().system_integer(0), Some(9));
         assert_eq!(vm.state().string(0), Some(b"unchanged".as_slice()));
     }
-    for name in ["cmvs-20071117", "cmvs-20080719"] {
+    for name in ["cmvs-20071117", "cmvs-20080719", "cmvs-20080903"] {
         let mut wrong = Registry::builtin().profile(name).unwrap().clone();
         wrong.binaries[0].sha256 = [0; 32];
         assert!(Registry::parse(&[&wrong.to_text()], "").is_err());

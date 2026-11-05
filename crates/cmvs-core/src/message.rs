@@ -246,7 +246,8 @@ impl MessageHost {
         Self {
             child_slots: crate::scene::ChildSlots::for_profile(profile),
             legacy_text_creation: profile.is_inspected_20071117()
-                || profile.is_inspected_20080719(),
+                || profile.is_inspected_20080719()
+                || profile.is_inspected_20080903(),
             ..Self::default()
         }
     }

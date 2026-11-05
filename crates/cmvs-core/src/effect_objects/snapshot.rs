@@ -11,7 +11,8 @@ use std::{collections::BTreeMap, error::Error};
 
 impl SceneHost {
     pub(crate) fn has_effect_pools(&self) -> bool {
-        !self.particle_effects.is_empty()
+        !self.rain_effects.is_empty()
+            || !self.particle_effects.is_empty()
             || !self.falling_effects.is_empty()
             || !self.collision_effects.is_empty()
             || !self.fragment_effects.is_empty()
@@ -31,6 +32,9 @@ impl SceneHost {
             }
             Ok(())
         };
+        for (&slot, effect) in &self.rain_effects {
+            insert(slot, Some(&effect.template))?;
+        }
         for (&slot, effect) in &self.falling_effects {
             insert(slot, effect.template.as_ref())?;
         }
@@ -85,6 +89,19 @@ impl SceneHost {
                     ))?;
             }
             match &template {
+                SavedEffect::Rain { words, name } => {
+                    scene.rain_effects.insert(
+                        slot as u8,
+                        super::RainEffect::new(
+                            *words,
+                            SceneObject {
+                                image,
+                                ..Default::default()
+                            },
+                            *name,
+                        ),
+                    );
+                }
                 SavedEffect::Falling { words, .. } => {
                     let mut effect = FallingEffect::new(
                         words[..4].try_into().unwrap(),
