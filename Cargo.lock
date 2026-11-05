@@ -396,6 +396,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmvs-switch"
+version = "0.1.0"
+dependencies = [
+ "cmvs-core",
+ "cmvs-font",
+ "cmvs-native",
+]
+
+[[package]]
 name = "cmvs-web"
 version = "0.1.0"
 dependencies = [

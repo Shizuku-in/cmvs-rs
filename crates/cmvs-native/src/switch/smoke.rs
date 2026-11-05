@@ -55,3 +55,34 @@ pub extern "C" fn cmvs_switch_probe() -> i32 {
         }
     }
 }
+
+fn inspect_game(root: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    let game = cmvs_core::profile::Registry::builtin().identify_game(root, None)?;
+    let record = game
+        .selection
+        .record
+        .ok_or("game has no registered identity")?;
+    println!(
+        "Game: {}\nProfile: {}",
+        record.game, game.selection.profile.id
+    );
+    let script = cmvs_core::runner::load_start(root, &game.files)?;
+    println!("Startup script decoded: {} code bytes", script.code().len());
+    let startup = cmvs_core::runner::Startup::new(&script, root, &game, 0)?;
+    println!("VM initialized; canvas: {:?}", startup.screen_size());
+    println!("Inspection complete. Playback is not connected yet.");
+    Ok(())
+}
+
+// SAFETY: unique pointer-free C ABI entry, using abort rather than unwinding.
+#[allow(unsafe_code)]
+#[unsafe(no_mangle)]
+pub extern "C" fn cmvs_switch_inspect_game() -> i32 {
+    match inspect_game(std::path::Path::new("sdmc:/switch/cmvs-rs/game")) {
+        Ok(()) => 0,
+        Err(error) => {
+            println!("Game initialization failed: {error}");
+            1
+        }
+    }
+}

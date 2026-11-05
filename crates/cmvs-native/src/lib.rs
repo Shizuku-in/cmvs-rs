@@ -109,4 +109,6 @@ mod tests {
 }
 
 #[cfg(target_os = "horizon")]
-mod switch_smoke;
+mod switch;
+#[cfg(target_os = "horizon")]
+pub use switch::SwitchWindow;

@@ -13,5 +13,6 @@
   "panic-strategy": "abort",
   "has-thread-local": false,
   "linker": "aarch64-none-elf-gcc",
-  "executables": true
+  "executables": true,
+  "relocation-model": "pic"
 }
