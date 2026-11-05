@@ -32,3 +32,9 @@ windows-sys = { version = "=0.61.2", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Threading",
 ] }
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[target.'cfg(target_os = "horizon")'.dependencies]
+cmvs-core = { path = "../cmvs-core" }

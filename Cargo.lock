@@ -370,6 +370,7 @@ name = "cmvs-native"
 version = "0.1.0"
 dependencies = [
  "android-activity",
+ "cmvs-core",
  "jni",
  "ndk",
  "raw-window-handle",

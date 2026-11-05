@@ -107,3 +107,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(target_os = "horizon")]
+mod switch_smoke;
