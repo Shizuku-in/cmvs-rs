@@ -45,9 +45,14 @@ docker run --rm -v "$PWD:/src" -w /src cmvs-switch-build sh platforms/switch/scr
 - 音频：`cmvs-audio` 的 `mixer` 模式（与桌面同一套声道逻辑，不含 cpal），专用线程在 CPU 核心 1
   上以 48 kHz 立体声、4×1024 帧缓冲写入 audout，最多约 85 ms 排队。
 - `runtime/libc.c` 补上 libnx newlib 缺少、而 Rust std 线程与 `HashMap` 需要的 `sysconf`/`getrandom`。
-- 输入策略位于 `player/src/controls.rs`，可在开发机上 `cargo test -p cmvs-switch`。
+- 输入策略位于 `player/src/controls.rs`，软键盘的编码转换位于 `player/src/text_input.rs`，
+  均可在开发机上 `cargo test -p cmvs-switch`。
 
-暂未接入系统软键盘（存档注释等文本输入会报错）与字体选择对话框。
+存档注释等文本输入使用系统软键盘，游戏标题与提示显示在键盘上方；上限沿用桌面宿主（字节上限折算为全角字数，最多 127 字）。
+文字按 Shift-JIS 保存（cmvs-font 目前只渲染 Shift-JIS）：无法表示的字符会在键盘内提示并要求修改；
+与原版一致，引擎只保留全角字符，全为半角时沿用原注释。键盘关闭时仍按住的按键在松开前不生效。
+
+暂未接入字体选择对话框。
 
 `scripts/build-smoke.sh` 另生成诊断程序 `cmvs-switch-smoke.nro`，可检查文件读取、
 核心 SHA-256，并按 A 检查游戏初始化；保持原名放在同一 SD 卡目录。

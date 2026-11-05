@@ -45,3 +45,13 @@ impl SwitchAudioOut {
 pub fn shared_font() -> Option<Vec<u8>> {
     None
 }
+
+pub fn software_keyboard(
+    _: &str,
+    _: &str,
+    _: &str,
+    _: u32,
+    _: impl FnMut(&str) -> Result<(), String>,
+) -> Result<Option<String>, &'static str> {
+    Err(UNAVAILABLE)
+}

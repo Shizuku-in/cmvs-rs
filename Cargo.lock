@@ -403,6 +403,7 @@ dependencies = [
  "cmvs-core",
  "cmvs-font",
  "cmvs-native",
+ "encoding_rs",
 ]
 
 [[package]]

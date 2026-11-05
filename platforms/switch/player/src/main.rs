@@ -1,9 +1,10 @@
 mod audio;
 mod backend;
 mod controls;
+mod text_input;
 #[cfg(target_os = "horizon")]
 mod sys {
-    pub use cmvs_native::{SwitchAudioOut, SwitchWindow, shared_font};
+    pub use cmvs_native::{SwitchAudioOut, SwitchWindow, shared_font, software_keyboard};
 }
 #[cfg(not(target_os = "horizon"))]
 #[path = "stub.rs"]
@@ -114,6 +115,7 @@ fn run(window: &mut sys::SwitchWindow) -> Result<()> {
         display: startup.display_preferences(),
         size,
         frame: None,
+        modal_shown: false,
     };
     backend.display.render_mode =
         cmvs_core::platform::supported_render_mode(&backend, backend.display.render_mode)?;
@@ -168,6 +170,13 @@ fn run(window: &mut sys::SwitchWindow) -> Result<()> {
                     startup.steps()
                 )
             })?;
+            if std::mem::take(&mut backend.modal_shown) {
+                // Time inside the keyboard is not game time, and the button that
+                // closed it must not click the game.
+                controls.suppress_held(startup.input_mut());
+                last_frame = Instant::now();
+                last_poll = last_frame;
+            }
             match event {
                 StartupEvent::Progress | StartupEvent::SnapshotCaptured => {}
                 StartupEvent::Quit => {

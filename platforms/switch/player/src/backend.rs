@@ -1,5 +1,5 @@
 use cmvs_core::{
-    platform::{PlatformBackend, PlatformRequest},
+    platform::{PlatformBackend, PlatformRequest, TextDialogRequest, TextDialogResult},
     raster::RgbaImage,
     settings::DisplayPreferences,
 };
@@ -8,6 +8,8 @@ pub struct Backend {
     pub display: DisplayPreferences,
     pub size: [u32; 2],
     pub frame: Option<RgbaImage>,
+    /// A modal system applet ran since the host last cleared this.
+    pub modal_shown: bool,
 }
 impl PlatformBackend for Backend {
     fn logical_size(&self) -> [u32; 2] {
@@ -49,6 +51,15 @@ impl PlatformBackend for Backend {
     fn aspect_scaling(&self) -> Result<bool, Box<dyn Error>> {
         Ok(self.display.aspect_scaling)
     }
+    fn poll_text_dialog(
+        &mut self,
+        request: &TextDialogRequest,
+    ) -> Result<TextDialogResult, Box<dyn Error>> {
+        self.modal_shown = true;
+        crate::text_input::edit(request, &mut |title, prompt, initial, limit, check| {
+            crate::sys::software_keyboard(title, prompt, initial, limit, check)
+        })
+    }
     fn choose_font(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
         Ok(None)
     }
@@ -82,6 +93,7 @@ mod tests {
             display: DisplayPreferences::default(),
             size: [1280, 720],
             frame: None,
+            modal_shown: false,
         };
         let previous = backend.display.render_mode;
         assert!(backend.apply(&PlatformRequest::RenderMode(9)).is_err());

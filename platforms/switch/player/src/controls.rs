@@ -61,6 +61,8 @@ pub struct Controls {
     wheel_next: u32,
     quit_ms: u32,
     focused: bool,
+    /// Buttons ignored until released: held across a focus change or system applet.
+    blocked: u32,
 }
 
 impl Controls {
@@ -78,22 +80,30 @@ impl Controls {
             wheel_next: 0,
             quit_ms: 0,
             focused: true,
+            blocked: 0,
         }
     }
 
-    /// Losing focus cancels held input without producing release clicks.
+    /// Losing focus cancels held input without producing release clicks; on return,
+    /// buttons and contacts still held from the system UI are ignored until released.
     pub fn focus(&mut self, focused: bool, input: &mut ActionInput) {
         if self.focused == focused {
             return;
         }
         self.focused = focused;
+        self.suppress_held(input);
+    }
+
+    /// After a modal system applet: cancels held input without release clicks and
+    /// ignores whatever is still held (such as the button that closed it) until released.
+    pub fn suppress_held(&mut self, input: &mut ActionInput) {
         self.history.clear(input);
         self.held.fill(false);
         self.latched.fill(false);
-        // A contact still held across the focus change must lift first.
         self.touch = TouchState::Blocked;
         self.wheel = None;
         self.quit_ms = 0;
+        self.blocked = u32::MAX;
     }
 
     /// `viewport` maps 1280x720 panel pixels to the script canvas; `dt_ms` is the time
@@ -103,9 +113,11 @@ impl Controls {
             return;
         }
         let dt_ms = dt_ms.min(MAX_STEP_MS);
+        self.blocked &= sample.buttons;
+        let buttons = sample.buttons & !self.blocked;
         self.held.fill(false);
         for (mask, code) in BUTTONS {
-            self.held[code] = sample.buttons & mask != 0;
+            self.held[code] = buttons & mask != 0;
         }
         self.track_touch(sample, viewport);
         self.held[MOUSE_LEFT] |= matches!(self.touch, TouchState::Primary(_));
@@ -113,8 +125,8 @@ impl Controls {
             *latched |= held;
         }
         self.move_cursor(sample.sticks[0], dt_ms);
-        self.scroll(sample, dt_ms);
-        self.quit_ms = if sample.buttons & button::PLUS != 0 {
+        self.scroll(buttons, sample.sticks[1][1], dt_ms);
+        self.quit_ms = if buttons & button::PLUS != 0 {
             self.quit_ms.saturating_add(dt_ms)
         } else {
             0
@@ -174,11 +186,10 @@ impl Controls {
     }
 
     /// L/R and the right stick send wheel notches: one at once, then repeating.
-    fn scroll(&mut self, sample: &SwitchInput, dt_ms: u32) {
-        let stick = sample.sticks[1][1];
-        let code = if sample.buttons & button::L != 0 || f64::from(stick) > STICK_DEAD_ZONE * 2.0 {
+    fn scroll(&mut self, buttons: u32, stick: i32, dt_ms: u32) {
+        let code = if buttons & button::L != 0 || f64::from(stick) > STICK_DEAD_ZONE * 2.0 {
             Some(WHEEL_UP)
-        } else if sample.buttons & button::R != 0 || f64::from(-stick) > STICK_DEAD_ZONE * 2.0 {
+        } else if buttons & button::R != 0 || f64::from(-stick) > STICK_DEAD_ZONE * 2.0 {
             Some(WHEEL_DOWN)
         } else {
             None
@@ -411,6 +422,28 @@ mod tests {
         controls.poll(&sample(0), viewport, 8);
         controls.frame(&b, &mut input);
         assert_eq!(input.mouse(0), [false, false, false]);
+        assert!(!controls.quit_requested());
+    }
+
+    #[test]
+    fn buttons_held_from_a_system_applet_wait_for_release() {
+        let viewport = view([1280, 720]);
+        let mut controls = Controls::new([1280, 720]);
+        let mut input = ActionInput::default();
+        let b = bindings();
+        controls.suppress_held(&mut input);
+        for _ in 0..3 {
+            controls.poll(&sample(button::A | button::PLUS), viewport, 500);
+            controls.frame(&b, &mut input);
+            assert_eq!(input.mouse(0), [false, false, false]);
+        }
+        assert!(!controls.quit_requested());
+        // Releasing A unblocks it alone; + stays ignored while still held.
+        controls.poll(&sample(button::PLUS), viewport, 500);
+        controls.frame(&b, &mut input);
+        controls.poll(&sample(button::A | button::PLUS), viewport, 500);
+        controls.frame(&b, &mut input);
+        assert_eq!(input.mouse(0), [false, true, true]);
         assert!(!controls.quit_requested());
     }
 }

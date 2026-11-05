@@ -6,6 +6,8 @@ mod audio;
 mod font;
 mod input;
 #[cfg(target_os = "horizon")]
+mod keyboard;
+#[cfg(target_os = "horizon")]
 mod smoke;
 #[cfg(target_os = "horizon")]
 mod window;
@@ -15,5 +17,7 @@ pub use audio::SwitchAudioOut;
 #[cfg(target_os = "horizon")]
 pub use font::shared_font;
 pub use input::{SwitchInput, Touch, button};
+#[cfg(target_os = "horizon")]
+pub use keyboard::software_keyboard;
 #[cfg(target_os = "horizon")]
 pub use window::SwitchWindow;
