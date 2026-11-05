@@ -4,6 +4,9 @@
 mod audio;
 #[cfg(target_os = "horizon")]
 mod font;
+mod gpu;
+#[cfg(target_os = "horizon")]
+mod gpu_device;
 mod input;
 #[cfg(target_os = "horizon")]
 mod keyboard;
@@ -16,6 +19,9 @@ mod window;
 pub use audio::SwitchAudioOut;
 #[cfg(target_os = "horizon")]
 pub use font::shared_font;
+pub use gpu::{GpuError, GpuTexture};
+#[cfg(target_os = "horizon")]
+pub use gpu_device::SwitchGpu;
 pub use input::{SwitchInput, Touch, button};
 #[cfg(target_os = "horizon")]
 pub use keyboard::software_keyboard;

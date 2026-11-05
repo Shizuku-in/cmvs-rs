@@ -1,6 +1,6 @@
 # Switch Homebrew（开发中）
 
-实验性软件渲染播放器，支持游戏加载、文字、Vorbis 音频、手柄与触摸输入及核心存档路径。
+实验性播放器，默认 deko3d GPU 合成，可切回软件渲染；支持游戏加载、文字、Vorbis 音频、手柄与触摸输入及核心存档路径。
 未知游戏及未实现指令会报错。
 
 ## 构建
@@ -17,6 +17,9 @@ docker run --rm -v "$PWD:/src" -w /src cmvs-switch-build sh platforms/switch/scr
 将 `platforms/switch/build/cmvs-switch.nro` 放到 SD 卡 `switch/cmvs-rs/`，同目录下放原始游戏目录 `game/`。
 可选放入日文字体 `font.ttf`（字体索引 0）；缺省时使用系统共享字体（日/美/欧标准字库）。
 通过 hbmenu 的应用接管模式启动。
+
+可选 `renderer.txt` 选择渲染器：`gpu`（缺省）或 `cpu`（软件合成，旧路径）；其他内容报错。GPU 初始化或运行失败
+直接报错写入 `error.log`，不自动换回 CPU。
 
 用户数据位于 `users/<游戏标识>/`，运行错误（含脚本名、PC 与步数）写入 `error.log`。
 存档时间与桌面、Android 一致按 UTC 记录。
@@ -41,7 +44,14 @@ docker run --rm -v "$PWD:/src" -w /src cmvs-switch-build sh platforms/switch/scr
 
 ## 实现说明
 
-- 画面：1280×720 RGBA 线性帧缓冲，核心 CPU 合成后按显示设置缩放。
+- 画面（GPU）：`runtime/gpu.c` 用 deko3d 执行与 cmvs-wgpu 相同的共享绘制队列，参数布局见
+  `cmvs_core::scene_render::shader`；`runtime/shaders/*.glsl` 是 `scene.wgsl`/`present.wgsl` 的 GLSL 移植，
+  构建时由 `uam` 编译嵌入 NRO。逻辑画布为 RGBA8，按显示设置缩放到 1280×720 交换链（双缓冲、垂直同步），
+  主机十字光标画在交换链上，不进入设备读回。纹理按像素 SHA-256 与尺寸缓存，留存上限 128 MiB、LRU 淘汰，
+  当前帧用到的纹理不淘汰；影片帧每帧直接上传，不进缓存。字形光栅化与影片解码仍在 CPU。
+  每帧开始时等待上一帧 GPU 完成后回收命令与暂存内存，GPU 工作与下一段 VM 执行重叠；
+  释放的纹理在 GPU 空闲后才回收内存。设备截图只在引擎请求时读回最近一次呈现的逻辑画布。
+- 画面（CPU）：1280×720 RGBA 线性帧缓冲，核心 CPU 合成后按显示设置缩放。
 - 音频：`cmvs-audio` 的 `mixer` 模式（与桌面同一套声道逻辑，不含 cpal），专用线程在 CPU 核心 1
   上以 48 kHz 立体声、4×1024 帧缓冲写入 audout，最多约 85 ms 排队。
 - `runtime/libc.c` 补上 libnx newlib 缺少、而 Rust std 线程与 `HashMap` 需要的 `sysconf`/`getrandom`。
@@ -62,3 +72,6 @@ docker run --rm -v "$PWD:/src" -w /src cmvs-switch-build sh platforms/switch/scr
 2026-11-06 在 Ryujinx 1.3.3（固件 22.5.0，主机模式）运行《アマツツミ》PC 版：启动、系统共享字体文字、
 BGM、手柄操作、存档（含同槽覆盖、移动与特殊槽）及长按 + 退出保存设置通过，可正常游玩。
 未验证：真机、触摸（需掌机模式）、软键盘（该作无存档注释）、HOME 关闭保存（Ryujinx 退出锁为空实现）。
+
+2026-11-06 同环境以 GPU 渲染器（缺省）运行同作：画面方向、背景、立绘、半透明消息窗与文字正确，60 FPS 流畅游玩，
+游玩中存档写入正常、日志无错误。未逐像素对比 CPU 输出；影片、遮罩过渡与世界公告板路径未专门检查，真机未验证。

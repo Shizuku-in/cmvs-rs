@@ -1,10 +1,13 @@
 mod audio;
 mod backend;
 mod controls;
+mod gpu;
 mod text_input;
 #[cfg(target_os = "horizon")]
 mod sys {
-    pub use cmvs_native::{SwitchAudioOut, SwitchWindow, shared_font, software_keyboard};
+    pub use cmvs_native::{
+        SwitchAudioOut, SwitchGpu, SwitchWindow, shared_font, software_keyboard,
+    };
 }
 #[cfg(not(target_os = "horizon"))]
 #[path = "stub.rs"]
@@ -28,7 +31,7 @@ use std::{
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const BASE: &str = "sdmc:/switch/cmvs-rs";
-const SCREEN: [u32; 2] = [1280, 720];
+pub(crate) const SCREEN: [u32; 2] = [1280, 720];
 /// VM budget per loop iteration before polling input and the applet again.
 const BUDGET: Duration = Duration::from_millis(8);
 const IDLE: Duration = Duration::from_millis(16);
@@ -48,6 +51,46 @@ fn load_font(base: &Path) -> Result<FontRenderer> {
         }
         Err(error) => Err(error.into()),
     }
+}
+
+/// `renderer.txt` beside the program holds `gpu` (the default when absent) or `cpu`.
+fn use_gpu(setting: Option<&str>) -> Result<bool> {
+    match setting.map(str::trim) {
+        None | Some("gpu") => Ok(true),
+        Some("cpu") => Ok(false),
+        Some(other) => Err(format!("renderer.txt must be gpu or cpu, not {other:?}").into()),
+    }
+}
+
+fn read_renderer_setting() -> Result<Option<String>> {
+    match std::fs::read_to_string(Path::new(BASE).join("renderer.txt")) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn render_gpu(
+    startup: &Startup<'_>,
+    font: &mut FontRenderer,
+    gpu: &mut gpu::GpuRenderer,
+    linear: bool,
+) -> Result<()> {
+    let size = startup.screen_size();
+    if let Some(frame) = startup.movie_frame() {
+        return gpu.render_movie(frame, size, linear);
+    }
+    let objects = font.prepare_objects(startup.messages())?;
+    let mut extra: Vec<_> = objects.iter().collect();
+    extra.extend(startup.messages().visible_window_objects());
+    let frame = cmvs_core::scene_render::prepare_scene(
+        startup.scene(),
+        Some(startup.camera()),
+        &extra,
+        size[0],
+        size[1],
+    )?;
+    gpu.render(&frame)
 }
 
 fn render(startup: &Startup<'_>, font: &mut FontRenderer) -> Result<RgbaImage> {
@@ -82,7 +125,7 @@ fn draw_cursor(surface: &mut [u32], view: Viewport, pointer: [i32; 2]) {
     }
 }
 
-fn run(window: &mut sys::SwitchWindow) -> Result<()> {
+fn run(window: &mut sys::SwitchWindow, gpu: Option<sys::SwitchGpu>) -> Result<()> {
     let base = Path::new(BASE);
     let root = base.join("game");
     let game = Registry::builtin().identify_game(&root, None)?;
@@ -115,12 +158,16 @@ fn run(window: &mut sys::SwitchWindow) -> Result<()> {
         display: startup.display_preferences(),
         size,
         frame: None,
+        gpu: gpu.map(gpu::GpuRenderer::new).transpose()?,
         modal_shown: false,
     };
     backend.display.render_mode =
         cmvs_core::platform::supported_render_mode(&backend, backend.display.render_mode)?;
 
-    let mut surface = vec![0u32; (SCREEN[0] * SCREEN[1]) as usize];
+    let mut surface = match backend.gpu {
+        Some(_) => Vec::new(),
+        None => vec![0u32; (SCREEN[0] * SCREEN[1]) as usize],
+    };
     let mut controls = Controls::new(size);
     let mut focused = true;
     let mut input_due = true;
@@ -192,20 +239,23 @@ fn run(window: &mut sys::SwitchWindow) -> Result<()> {
                     let now = Instant::now();
                     startup.advance_decoded_frame(millis(now.duration_since(last_frame)))?;
                     last_frame = now;
-                    let frame = render(&startup, &mut font)?;
-                    surface.fill(0);
-                    frame.draw_scaled(
-                        &mut surface,
-                        SCREEN[0],
-                        SCREEN[1],
-                        mode,
-                        backend.display.render_mode == 1,
-                    )?;
-                    if controls.cursor_visible() {
-                        draw_cursor(&mut surface, view, controls.pointer());
+                    let linear = backend.display.render_mode == 1;
+                    if let Some(gpu) = &mut backend.gpu {
+                        render_gpu(&startup, &mut font, gpu, linear)?;
+                        let cursor = controls
+                            .cursor_visible()
+                            .then(|| view.to_target(controls.pointer()));
+                        gpu.present(mode, linear, cursor)?;
+                    } else {
+                        let frame = render(&startup, &mut font)?;
+                        surface.fill(0);
+                        frame.draw_scaled(&mut surface, SCREEN[0], SCREEN[1], mode, linear)?;
+                        if controls.cursor_visible() {
+                            draw_cursor(&mut surface, view, controls.pointer());
+                        }
+                        window.present(&surface)?;
+                        backend.frame = Some(frame);
                     }
-                    window.present(&surface)?;
-                    backend.frame = Some(frame);
                     input_due = true;
                     break;
                 }
@@ -220,11 +270,22 @@ fn run(window: &mut sys::SwitchWindow) -> Result<()> {
 fn main() {
     // The window lives until main returns, after the error log is written: dropping
     // it unlocks exit, after which a pending HOME close may end the process.
-    let mut window = match sys::SwitchWindow::open() {
-        Ok(window) => window,
-        Err(error) => return report(error),
+    let gpu = match read_renderer_setting().and_then(|text| use_gpu(text.as_deref())) {
+        Ok(gpu) => gpu,
+        Err(error) => return report(&error.to_string()),
     };
-    if let Err(error) = run(&mut window) {
+    let opened = if gpu {
+        sys::SwitchWindow::open_gpu().map(|(window, gpu)| (window, Some(gpu)))
+    } else {
+        sys::SwitchWindow::open()
+            .map(|window| (window, None))
+            .map_err(String::from)
+    };
+    let (mut window, gpu) = match opened {
+        Ok(opened) => opened,
+        Err(error) => return report(&error),
+    };
+    if let Err(error) = run(&mut window, gpu) {
         report(&error.to_string());
     }
 }
@@ -232,4 +293,16 @@ fn main() {
 fn report(error: &str) {
     eprintln!("Switch player: {error}");
     let _ = std::fs::write(format!("{BASE}/error.log"), error);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn renderer_setting_defaults_to_gpu_and_rejects_unknown_names() {
+        assert!(use_gpu(None).unwrap());
+        assert!(use_gpu(Some("gpu\n")).unwrap());
+        assert!(!use_gpu(Some(" cpu\r\n")).unwrap());
+        assert!(use_gpu(Some("vulkan")).is_err());
+    }
 }

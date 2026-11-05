@@ -7,7 +7,9 @@ use std::error::Error;
 pub struct Backend {
     pub display: DisplayPreferences,
     pub size: [u32; 2],
+    /// Last software frame; unused when `gpu` renders.
     pub frame: Option<RgbaImage>,
+    pub gpu: Option<crate::gpu::GpuRenderer>,
     /// A modal system applet ran since the host last cleared this.
     pub modal_shown: bool,
 }
@@ -64,6 +66,9 @@ impl PlatformBackend for Backend {
         Ok(None)
     }
     fn read_device_frame(&mut self) -> Result<RgbaImage, Box<dyn Error>> {
+        if let Some(gpu) = &mut self.gpu {
+            return gpu.read();
+        }
         self.frame
             .clone()
             .ok_or_else(|| "no completed frame".into())
@@ -93,6 +98,7 @@ mod tests {
             display: DisplayPreferences::default(),
             size: [1280, 720],
             frame: None,
+            gpu: None,
             modal_shown: false,
         };
         let previous = backend.display.render_mode;

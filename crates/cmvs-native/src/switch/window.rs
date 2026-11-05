@@ -23,17 +23,30 @@ const FLAG_EXIT: u32 = 1;
 const FLAG_FOCUSED: u32 = 2;
 
 unsafe extern "C" {
-    fn cmvs_nx_open() -> i32;
+    fn cmvs_nx_open(framebuffer: i32) -> i32;
     fn cmvs_nx_poll(out: *mut NxInput);
     fn cmvs_nx_present(pixels: *const u32);
     fn cmvs_nx_close();
 }
 
-pub struct SwitchWindow(PhantomData<Rc<()>>);
+pub struct SwitchWindow {
+    framebuffer: bool,
+    _thread: PhantomData<Rc<()>>,
+}
 impl SwitchWindow {
-    /// Also locks application exit until drop, so closing from HOME is reported by
-    /// [`SwitchWindow::poll`] instead of terminating the process (system timeout 15 s).
+    /// Software presentation through [`SwitchWindow::present`]. Also locks application
+    /// exit until drop, so closing from HOME is reported by [`SwitchWindow::poll`]
+    /// instead of terminating the process (system timeout 15 s).
     pub fn open() -> Result<Self, &'static str> {
+        Self::open_with(true)
+    }
+    /// Input and applet handling only, leaving the display to the deko3d compositor.
+    pub fn open_gpu() -> Result<(Self, super::gpu_device::SwitchGpu), String> {
+        let window = Self::open_with(false)?;
+        let gpu = super::gpu_device::SwitchGpu::open()?;
+        Ok((window, gpu))
+    }
+    fn open_with(framebuffer: bool) -> Result<Self, &'static str> {
         if OWNED
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_err()
@@ -41,11 +54,14 @@ impl SwitchWindow {
             return Err("Switch window already open");
         }
         // SAFETY: C rejects a second owner and cleans up partial initialization.
-        if unsafe { cmvs_nx_open() } != 0 {
+        if unsafe { cmvs_nx_open(i32::from(framebuffer)) } != 0 {
             OWNED.store(false, Ordering::Release);
             return Err("libnx framebuffer initialization failed");
         }
-        Ok(Self(PhantomData))
+        Ok(Self {
+            framebuffer,
+            _thread: PhantomData,
+        })
     }
     pub fn poll(&mut self) -> SwitchInput {
         let mut raw = NxInput::default();
@@ -67,6 +83,9 @@ impl SwitchWindow {
         }
     }
     pub fn present(&mut self, pixels: &[u32]) -> Result<(), &'static str> {
+        if !self.framebuffer {
+            return Err("Switch window was opened for the GPU");
+        }
         if pixels.len() != 1280 * 720 {
             return Err("invalid Switch canvas length");
         }

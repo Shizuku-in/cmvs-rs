@@ -24,19 +24,26 @@ enum {
 static Framebuffer fb;
 static PadState pad;
 static bool opened;
+static bool has_framebuffer;
 static bool exit_locked;
 
-int cmvs_nx_open(void) {
+/* Without the software framebuffer, the default window is left to the deko3d
+   swapchain in gpu.c. */
+int cmvs_nx_open(int framebuffer) {
     if (opened)
         return -1;
-    Result rc = framebufferCreate(&fb, nwindowGetDefault(), 1280, 720, PIXEL_FORMAT_RGBA_8888, 2);
-    if (R_FAILED(rc))
-        return -1;
-    rc = framebufferMakeLinear(&fb);
-    if (R_FAILED(rc)) {
-        framebufferClose(&fb);
-        return -1;
+    if (framebuffer) {
+        Result rc =
+            framebufferCreate(&fb, nwindowGetDefault(), 1280, 720, PIXEL_FORMAT_RGBA_8888, 2);
+        if (R_FAILED(rc))
+            return -1;
+        rc = framebufferMakeLinear(&fb);
+        if (R_FAILED(rc)) {
+            framebufferClose(&fb);
+            return -1;
+        }
     }
+    has_framebuffer = framebuffer != 0;
     padConfigureInput(1, HidNpadStyleSet_NpadStandard);
     padInitializeDefault(&pad);
     hidInitializeTouchScreen();
@@ -90,6 +97,8 @@ void cmvs_nx_poll(CmvsNxInput *out) {
 }
 
 void cmvs_nx_present(const u32 *pixels) {
+    if (!has_framebuffer)
+        return;
     u32 stride;
     u8 *out = framebufferBegin(&fb, &stride);
     for (unsigned y = 0; y < 720; ++y) {
@@ -103,8 +112,9 @@ void cmvs_nx_present(const u32 *pixels) {
 }
 
 void cmvs_nx_close(void) {
-    if (opened)
+    if (has_framebuffer)
         framebufferClose(&fb);
+    has_framebuffer = false;
     if (exit_locked)
         appletUnlockExit();
     exit_locked = false;
