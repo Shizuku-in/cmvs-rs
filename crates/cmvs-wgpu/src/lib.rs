@@ -1,6 +1,6 @@
 //! GPU execution of validated CMVS draw commands, with lazy logical-frame readback.
 use cmvs_core::{
-    raster::RgbaImage,
+    raster::{CacheKey, RgbaImage},
     scene_render::{
         Layer, RenderFrame,
         shader::{ShaderBlend, shader_draw},
@@ -15,6 +15,10 @@ pub use wgpu;
 use wgpu::util::DeviceExt;
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const CACHE_LIMIT: usize = 128 * 1024 * 1024;
+/// Movie frames live apart from the content cache so replaced frames never evict
+/// static images. Each player shows one frame (three scene slots and the full-screen
+/// player), which leaves room for images that stopped players retain.
+const FRAME_TEXTURES: usize = 8;
 
 /// An immutable submitted logical frame. Readback is performed only on demand.
 pub struct GpuFrame {
@@ -123,6 +127,7 @@ pub struct Renderer {
     pipelines: [wgpu::RenderPipeline; 3],
     cache: HashMap<([u8; 32], u32, u32), Cached>,
     cache_bytes: usize,
+    frames: HashMap<u64, Cached>,
     clock: u64,
     errors: Arc<Mutex<Option<String>>>,
     pub uploaded_bytes: u64,
@@ -248,6 +253,7 @@ impl Renderer {
             pipelines,
             cache: HashMap::new(),
             cache_bytes: 0,
+            frames: HashMap::new(),
             clock: 0,
             errors,
             uploaded_bytes: 0,
@@ -268,7 +274,10 @@ impl Renderer {
         {
             return Err("GPU image exceeds device texture limits".into());
         }
-        let key = (*image.content_digest(), w, h);
+        let key = match image.cache_key() {
+            CacheKey::Frame(id) => return Ok(self.frame_texture(id, image)),
+            CacheKey::Content(digest, w, h) => (digest, w, h),
+        };
         self.clock += 1;
         if let Some(cached) = self.cache.get_mut(&key) {
             cached.used = self.clock;
@@ -284,6 +293,48 @@ impl Renderer {
                 .0;
             self.cache_bytes -= self.cache.remove(&oldest).expect("cache entry").bytes;
         }
+        let texture = self.upload(image);
+        if bytes <= CACHE_LIMIT {
+            self.cache.insert(
+                key,
+                Cached {
+                    texture: texture.clone(),
+                    bytes,
+                    used: self.clock,
+                },
+            );
+            self.cache_bytes += bytes;
+        }
+        Ok(texture)
+    }
+    fn frame_texture(&mut self, id: u64, image: &RgbaImage) -> wgpu::Texture {
+        self.clock += 1;
+        if let Some(cached) = self.frames.get_mut(&id) {
+            cached.used = self.clock;
+            return cached.texture.clone();
+        }
+        if self.frames.len() >= FRAME_TEXTURES {
+            let oldest = *self
+                .frames
+                .iter()
+                .min_by_key(|(_, c)| c.used)
+                .expect("nonempty frames")
+                .0;
+            self.frames.remove(&oldest);
+        }
+        let texture = self.upload(image);
+        self.frames.insert(
+            id,
+            Cached {
+                texture: texture.clone(),
+                bytes: image.pixels().len(),
+                used: self.clock,
+            },
+        );
+        texture
+    }
+    fn upload(&mut self, image: &RgbaImage) -> wgpu::Texture {
+        let [w, h] = [image.width(), image.height()];
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("CMVS image"),
             size: wgpu::Extent3d {
@@ -310,19 +361,8 @@ impl Renderer {
             },
             texture.size(),
         );
-        self.uploaded_bytes += bytes as u64;
-        if bytes <= CACHE_LIMIT {
-            self.cache.insert(
-                key,
-                Cached {
-                    texture: texture.clone(),
-                    bytes,
-                    used: self.clock,
-                },
-            );
-            self.cache_bytes += bytes;
-        }
-        Ok(texture)
+        self.uploaded_bytes += image.pixels().len() as u64;
+        texture
     }
     pub fn render(&mut self, frame: &RenderFrame<'_>) -> Result<GpuFrame> {
         self.compose(frame.dimensions(), frame.clear_color(), frame.commands())

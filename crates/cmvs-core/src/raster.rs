@@ -7,6 +7,18 @@ pub struct RgbaImage {
     height: u32,
     pixels: Vec<u8>,
     content_digest: std::sync::OnceLock<[u8; 32]>,
+    /// Set for decoded movie frames, which replace each other and are never shared.
+    frame: Option<u64>,
+}
+
+/// How a texture cache recognizes an image without comparing pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CacheKey {
+    /// Equal pixel content and dimensions share one texture.
+    Content([u8; 32], u32, u32),
+    /// One decoded movie frame and its clones. Hashing it would cost more than the
+    /// decode, and no other image shares its content.
+    Frame(u64),
 }
 impl PartialEq for RgbaImage {
     fn eq(&self, other: &Self) -> bool {
@@ -21,6 +33,21 @@ impl RgbaImage {
             .get_or_init(|| crate::digest::sha256(&self.pixels))
     }
 
+    /// Marks a decoded movie frame with an identity unique within the process.
+    pub fn into_frame(mut self) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        self.frame = Some(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+        self
+    }
+
+    /// Movie frames are keyed by identity; every other image by its content digest.
+    pub fn cache_key(&self) -> CacheKey {
+        match self.frame {
+            Some(frame) => CacheKey::Frame(frame),
+            None => CacheKey::Content(*self.content_digest(), self.width, self.height),
+        }
+    }
+
     pub fn new(width: u32, height: u32, pixels: Vec<u8>) -> Result<Self, FormatError> {
         let size = (u64::from(width) * u64::from(height))
             .checked_mul(4)
@@ -33,6 +60,7 @@ impl RgbaImage {
             height,
             pixels,
             content_digest: std::sync::OnceLock::new(),
+            frame: None,
         })
     }
     pub fn width(&self) -> u32 {
@@ -259,5 +287,20 @@ mod content_digest_tests {
         assert_eq!(first, first.clone());
         let changed = RgbaImage::new(1, 1, vec![1, 2, 3, 5]).unwrap();
         assert_ne!(first.content_digest(), changed.content_digest());
+    }
+    #[test]
+    fn frames_have_their_own_identity_and_keep_it_when_cloned() {
+        let image = RgbaImage::new(1, 1, vec![1, 2, 3, 4]).unwrap();
+        let content = image.cache_key();
+        assert_eq!(
+            content,
+            CacheKey::Content(crate::digest::sha256(image.pixels()), 1, 1)
+        );
+        let first = image.clone().into_frame();
+        let second = image.into_frame();
+        assert!(matches!(first.cache_key(), CacheKey::Frame(_)));
+        assert_ne!(first.cache_key(), second.cache_key());
+        assert_eq!(first.cache_key(), first.clone().cache_key());
+        assert_eq!(first, second, "identity is not part of equality");
     }
 }

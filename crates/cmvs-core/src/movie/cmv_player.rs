@@ -70,7 +70,11 @@ impl MovieHost {
             && target < movie.index.header.max_sequence
             && self.decode_frames
         {
-            Some(source.frame(&movie.path, &movie.index, target)?)
+            Some(
+                source
+                    .frame(&movie.path, &movie.index, target)?
+                    .into_frame(),
+            )
         } else {
             None
         };
@@ -125,7 +129,7 @@ impl MovieHost {
                 let image = if self.decode_frames {
                     opened
                         .as_ref()
-                        .map(|(path, index)| source.frame(path, index, 0))
+                        .map(|(path, index)| source.frame(path, index, 0).map(|i| i.into_frame()))
                         .transpose()?
                 } else {
                     None

@@ -158,6 +158,7 @@ impl SceneMovieIndex {
                 base.ok_or("CMV9 scene base image unavailable")?,
             )?),
         }
+        .map(crate::raster::RgbaImage::into_frame)
     }
 }
 impl SceneMovieIndex {

@@ -4,7 +4,7 @@
 //! the GPU. Readback happens only when the engine requests a device frame.
 use crate::{SCREEN, sys::SwitchGpu};
 use cmvs_core::{
-    raster::RgbaImage,
+    raster::{CacheKey, RgbaImage},
     scene_render::{
         Blend, Layer, RenderFrame,
         shader::{BASE_FLOATS, ShaderBlend, shader_draw},
@@ -17,6 +17,10 @@ use std::{collections::HashMap, error::Error};
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 /// Retained texture bytes, as in cmvs-wgpu; not a bound on total GPU memory.
 const CACHE_LIMIT: usize = 128 * 1024 * 1024;
+/// Movie frames live apart from the content cache so replaced frames never evict
+/// static images. Each player shows one frame (three scene slots and the full-screen
+/// player), which leaves room for images that stopped players retain.
+const FRAME_TEXTURES: usize = 8;
 
 struct Cached {
     texture: GpuTexture,
@@ -28,6 +32,7 @@ pub struct GpuRenderer {
     gpu: SwitchGpu,
     cache: HashMap<([u8; 32], u32, u32), Cached>,
     cache_bytes: usize,
+    frames: HashMap<u64, Cached>,
     clock: u64,
     /// Clock when the current frame began; textures used since are never evicted.
     frame_start: u64,
@@ -44,6 +49,7 @@ impl GpuRenderer {
             gpu,
             cache: HashMap::new(),
             cache_bytes: 0,
+            frames: HashMap::new(),
             clock: 0,
             frame_start: 0,
             white,
@@ -54,7 +60,8 @@ impl GpuRenderer {
 
     /// Releases every cached texture, e.g. before another game starts.
     pub fn clear_cache(&mut self) {
-        for (_, cached) in self.cache.drain() {
+        let cached = self.cache.drain().map(|(_, c)| c);
+        for cached in cached.chain(self.frames.drain().map(|(_, c)| c)) {
             self.gpu.release_texture(cached.texture);
         }
         self.cache_bytes = 0;
@@ -72,6 +79,22 @@ impl GpuRenderer {
         self.gpu.begin_canvas(size, clear)?;
         self.canvas = Some(size);
         Ok(())
+    }
+
+    /// Releases the least recently used movie frame not needed by the current frame.
+    fn evict_frame(&mut self) -> bool {
+        let Some(id) = self
+            .frames
+            .iter()
+            .filter(|(_, c)| c.used <= self.frame_start)
+            .min_by_key(|(_, c)| c.used)
+            .map(|(id, _)| *id)
+        else {
+            return false;
+        };
+        let cached = self.frames.remove(&id).expect("frame entry");
+        self.gpu.release_texture(cached.texture);
+        true
     }
 
     /// Releases the least recently used texture not needed by the current frame.
@@ -98,7 +121,7 @@ impl GpuRenderer {
                 .gpu
                 .create_texture(image.width(), image.height(), image.pixels())
             {
-                Err(GpuError::OutOfMemory) if self.evict_one() => {}
+                Err(GpuError::OutOfMemory) if self.evict_frame() || self.evict_one() => {}
                 result => return Ok(result?),
             }
         }
@@ -110,7 +133,10 @@ impl GpuRenderer {
         image: &RgbaImage,
         transient: &mut Vec<GpuTexture>,
     ) -> Result<GpuTexture> {
-        let key = (*image.content_digest(), image.width(), image.height());
+        let key = match image.cache_key() {
+            CacheKey::Frame(id) => return self.frame_texture(id, image),
+            CacheKey::Content(digest, width, height) => (digest, width, height),
+        };
         self.clock += 1;
         if let Some(cached) = self.cache.get_mut(&key) {
             cached.used = self.clock;
@@ -132,6 +158,29 @@ impl GpuRenderer {
         } else {
             transient.push(texture);
         }
+        Ok(texture)
+    }
+
+    fn frame_texture(&mut self, id: u64, image: &RgbaImage) -> Result<GpuTexture> {
+        self.clock += 1;
+        if let Some(cached) = self.frames.get_mut(&id) {
+            cached.used = self.clock;
+            return Ok(cached.texture);
+        }
+        if self.frames.len() >= FRAME_TEXTURES {
+            self.evict_frame();
+        }
+        let texture = self.upload(image)?;
+        let bytes = image.pixels().len();
+        let used = self.clock;
+        self.frames.insert(
+            id,
+            Cached {
+                texture,
+                bytes,
+                used,
+            },
+        );
         Ok(texture)
     }
 
