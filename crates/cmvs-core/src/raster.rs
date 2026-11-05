@@ -50,6 +50,11 @@ impl RgbaImage {
         self
     }
 
+    /// The decoded movie frame identity, without hashing other images.
+    pub fn frame_id(&self) -> Option<u64> {
+        self.frame
+    }
+
     /// Movie frames are keyed by identity; every other image by its content digest.
     pub fn cache_key(&self) -> CacheKey {
         match self.frame {
@@ -327,6 +332,11 @@ mod content_digest_tests {
         let first = image.clone().into_frame();
         let second = image.into_frame();
         assert!(matches!(first.cache_key(), CacheKey::Frame(_)));
+        assert_eq!(
+            first.cache_key(),
+            CacheKey::Frame(first.frame_id().unwrap())
+        );
+        assert_eq!(RgbaImage::new(1, 1, vec![0; 4]).unwrap().frame_id(), None);
         assert_ne!(first.cache_key(), second.cache_key());
         assert_eq!(first.cache_key(), first.clone().cache_key());
         assert_eq!(first, second, "identity is not part of equality");

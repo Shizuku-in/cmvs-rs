@@ -226,16 +226,23 @@ impl GpuRenderer {
     }
 
     /// Fits an image (a decoded movie frame, a host screen) onto an opaque canvas of
-    /// `size`. Such images change every time, so they bypass the cache and its digest.
+    /// `size`. A movie frame stays in the frame cache, so a frame shown again (the
+    /// display outpaces the movie) is not uploaded again. Host screens bypass the
+    /// cache and its digest.
     pub fn render_image(&mut self, image: &RgbaImage, size: [u32; 2], linear: bool) -> Result<()> {
         self.begin_frame()?;
         let source = [image.width(), image.height()];
         let view = Viewport::new(source, size, 1)?;
-        let texture = self.upload(image)?;
+        let (texture, transient) = match image.frame_id() {
+            Some(id) => (self.frame_texture(id, image)?, false),
+            None => (self.upload(image)?, true),
+        };
         let result = self
             .begin_canvas(size, [0, 0, 0, 255])
             .and_then(|()| Ok(self.gpu.scale(texture, view_params(view, source, linear))?));
-        self.gpu.release_texture(texture);
+        if transient {
+            self.gpu.release_texture(texture);
+        }
         result
     }
 
