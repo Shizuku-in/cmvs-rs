@@ -970,9 +970,9 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
     assert_eq!(
         games,
         [
-            ("asunana", "cmvs-20080903", None),
             ("asukimi", "cmvs-20071117", None),
             ("harouse", "cmvs-20080719", None),
+            ("asunana", "cmvs-20080903", None),
             ("miranosu", "cmvs-20110525", None),
             ("kazokubu", "cmvs-20120309", None),
             ("hapymaher", "cmvs-20130131", None),
@@ -983,9 +983,20 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
             ("realive", "cmvs-20190305", None),
             ("seishunf", "cmvs-20190405", None),
             ("kunado", "cmvs-20211006", None),
-            ("hapymaher_re", "cmvs-20221105", None)
+            ("hapymaher_re", "cmvs-20221105", None),
+            ("hapymaherfd_re", "cmvs-20221105", None)
         ]
     );
+    let remakes: Vec<_> = registry
+        .games()
+        .iter()
+        .filter(|game| game.profile == "cmvs-20221105")
+        .collect();
+    assert_eq!(remakes[0].game_id, 0x1760_0013);
+    assert_eq!(remakes[1].game_id, 0x1760_0015);
+    assert_ne!(remakes[0].start_script, remakes[1].start_script);
+    assert_ne!(remakes[0].script_archive, remakes[1].script_archive);
+    assert_eq!(remakes[0].executables, remakes[1].executables);
 }
 
 #[test]

@@ -126,3 +126,12 @@ game-id 0x17600013
 executable cmvs64.exe sha256=dfbabd2abac5055d3ab2144a983b6c441b87b294d19607e9a4829e2ea954e86c
 executable cmvs32.exe sha256=aa2f76985e69ec5fcee2762051a234c111529e8b339d733dee188b3a62888073
 end
+
+game hapymaherfd_re
+profile cmvs-20221105
+start data/pack/start.ps3 sha256=dc336b0d50c848a12f6dbcd4ebee26b7c1516821ecc16625e5b2ba27f5675b85
+archive data/pack/script.cpz sha256=fb93c8d5277be1c1cd812214ccc5a9ded679fcdbde1b98ef17a925d18a104959
+game-id 0x17600015
+executable cmvs64.exe sha256=dfbabd2abac5055d3ab2144a983b6c441b87b294d19607e9a4829e2ea954e86c
+executable cmvs32.exe sha256=aa2f76985e69ec5fcee2762051a234c111529e8b339d733dee188b3a62888073
+end
