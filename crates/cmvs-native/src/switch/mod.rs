@@ -11,6 +11,8 @@ mod input;
 #[cfg(target_os = "horizon")]
 mod keyboard;
 #[cfg(target_os = "horizon")]
+mod performance;
+#[cfg(target_os = "horizon")]
 mod smoke;
 #[cfg(target_os = "horizon")]
 mod window;
@@ -25,5 +27,7 @@ pub use gpu_device::SwitchGpu;
 pub use input::{SwitchInput, Touch, button};
 #[cfg(target_os = "horizon")]
 pub use keyboard::software_keyboard;
+#[cfg(target_os = "horizon")]
+pub use performance::set_cpu_boost;
 #[cfg(target_os = "horizon")]
 pub use window::SwitchWindow;

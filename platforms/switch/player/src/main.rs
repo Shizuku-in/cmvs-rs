@@ -1,12 +1,13 @@
 mod audio;
 mod backend;
+mod boost;
 mod controls;
 mod gpu;
 mod text_input;
 #[cfg(target_os = "horizon")]
 mod sys {
     pub use cmvs_native::{
-        SwitchAudioOut, SwitchGpu, SwitchWindow, shared_font, software_keyboard,
+        SwitchAudioOut, SwitchGpu, SwitchWindow, set_cpu_boost, shared_font, software_keyboard,
     };
 }
 #[cfg(not(target_os = "horizon"))]
@@ -126,6 +127,10 @@ fn draw_cursor(surface: &mut [u32], view: Viewport, pointer: [i32; 2]) {
 }
 
 fn run(window: &mut sys::SwitchWindow, gpu: Option<sys::SwitchGpu>) -> Result<()> {
+    // Boosted through game loading; normal clocks return when this drops.
+    let mut load = boost::LoadBoost::starting();
+    let mut cpu_boost = boost::CpuBoost::default();
+    cpu_boost.apply(load.wanted(true));
     let base = Path::new(BASE);
     let root = base.join("game");
     let game = Registry::builtin().identify_game(&root, None)?;
@@ -189,6 +194,7 @@ fn run(window: &mut sys::SwitchWindow, gpu: Option<sys::SwitchGpu>) -> Result<()
             controls.focus(focused, startup.input_mut());
             last_frame = now;
         }
+        cpu_boost.apply(load.wanted(focused));
         let mode = presentation_mode(
             backend.display.fullscreen,
             backend.display.aspect_scaling,
@@ -208,6 +214,7 @@ fn run(window: &mut sys::SwitchWindow, gpu: Option<sys::SwitchGpu>) -> Result<()
         }
         let budget = Instant::now();
         while budget.elapsed() < BUDGET {
+            let tick = Instant::now();
             let event = startup.tick(&mut backend).map_err(|error| {
                 let vm = startup.machine();
                 format!(
@@ -223,6 +230,9 @@ fn run(window: &mut sys::SwitchWindow, gpu: Option<sys::SwitchGpu>) -> Result<()
                 controls.suppress_held(startup.input_mut());
                 last_frame = Instant::now();
                 last_poll = last_frame;
+                load.interrupted();
+            } else {
+                load.ran(tick.elapsed());
             }
             match event {
                 StartupEvent::Progress | StartupEvent::SnapshotCaptured => {}
@@ -231,12 +241,14 @@ fn run(window: &mut sys::SwitchWindow, gpu: Option<sys::SwitchGpu>) -> Result<()
                     return Ok(());
                 }
                 StartupEvent::Inactive => {
+                    load.interrupted();
                     std::thread::sleep(IDLE);
                     last_frame = Instant::now();
                     break;
                 }
                 StartupEvent::Yield => {
                     let now = Instant::now();
+                    load.frame(now);
                     startup.advance_decoded_frame(millis(now.duration_since(last_frame)))?;
                     last_frame = now;
                     let linear = backend.display.render_mode == 1;

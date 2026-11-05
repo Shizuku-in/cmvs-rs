@@ -17,3 +17,10 @@ size_t cmvs_nx_shared_font(void *out, size_t capacity) {
     plExit();
     return size;
 }
+
+/* FastLoad boost: CPU 1785 MHz, GPU throttled to minimum. Fails outside application
+   mode or before 7.0.0. Returns 0 on success. */
+int cmvs_nx_set_cpu_boost(int enabled) {
+    Result rc = appletSetCpuBoostMode(enabled ? ApmCpuBoostMode_FastLoad : ApmCpuBoostMode_Normal);
+    return R_SUCCEEDED(rc) ? 0 : -1;
+}

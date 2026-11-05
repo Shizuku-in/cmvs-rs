@@ -52,6 +52,9 @@ docker run --rm -v "$PWD:/src" -w /src cmvs-switch-build sh platforms/switch/scr
   每帧开始时等待上一帧 GPU 完成后回收命令与暂存内存，GPU 工作与下一段 VM 执行重叠；
   释放的纹理在 GPU 空闲后才回收内存。设备截图只在引擎请求时读回最近一次呈现的逻辑画布。
 - 画面（CPU）：1280×720 RGBA 线性帧缓冲，核心 CPU 合成后按显示设置缩放。
+- 加载提频：启动加载期间及 VM 连续运行 50 ms 未产出画面时请求 CPU 提频（FastLoad，CPU 1785 MHz；系统同时把 GPU
+  降到最低频率），画面连续 500 ms 正常产出后恢复。只计 VM 时间，渲染、呈现、软键盘与后台空闲不计入，
+  因此 GPU 降频不会让提频持续；失焦时不提频，退出时恢复常规频率。应用接管模式以外或 7.0.0 以前系统拒绝时不再尝试。
 - 音频：`cmvs-audio` 的 `mixer` 模式（与桌面同一套声道逻辑，不含 cpal），专用线程在 CPU 核心 1
   上以 48 kHz 立体声、4×1024 帧缓冲写入 audout，最多约 85 ms 排队。
 - `runtime/libc.c` 补上 libnx newlib 缺少、而 Rust std 线程与 `HashMap` 需要的 `sysconf`/`getrandom`。

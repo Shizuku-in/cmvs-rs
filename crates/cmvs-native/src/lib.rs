@@ -111,4 +111,6 @@ mod tests {
 mod switch;
 pub use switch::{GpuError, GpuTexture, SwitchInput, Touch, button};
 #[cfg(target_os = "horizon")]
-pub use switch::{SwitchAudioOut, SwitchGpu, SwitchWindow, shared_font, software_keyboard};
+pub use switch::{
+    SwitchAudioOut, SwitchGpu, SwitchWindow, set_cpu_boost, shared_font, software_keyboard,
+};
