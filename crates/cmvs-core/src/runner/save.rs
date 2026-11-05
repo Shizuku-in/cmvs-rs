@@ -1123,7 +1123,7 @@ fn replace_file(directory: &Path, name: &str, bytes: &[u8]) -> Result<(), Box<dy
     file.write_all(bytes)?;
     file.sync_all()?;
     drop(file);
-    if let Err(e) = fs::rename(&temporary, directory.join(name)) {
+    if let Err(e) = fs::replace(&temporary, directory.join(name)) {
         let _ = fs::remove_file(&temporary);
         return Err(e.into());
     }

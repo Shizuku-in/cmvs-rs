@@ -62,7 +62,7 @@ struct StagedFile {
 }
 impl StagedFile {
     fn commit(mut self, target: &Path) -> io::Result<()> {
-        fs::rename(&self.path, target)?;
+        fs::replace(&self.path, target)?;
         self.committed = true;
         Ok(())
     }
@@ -77,6 +77,8 @@ impl Drop for StagedFile {
 
 /// One session owns an OS file lock. Close/crash releases the lock automatically;
 /// the empty lock file remains and must not be removed while a session owns it.
+/// Horizon has no file locks and runs one application at a time, so there the file
+/// only marks the directory.
 pub struct ProfileSystemSave {
     directory: PathBuf,
     _lock: File,
@@ -97,6 +99,7 @@ impl ProfileSystemSave {
         if lock.metadata()?.len() != 0 {
             return Err(io::Error::other("profile lock file must be empty"));
         }
+        #[cfg(not(target_os = "horizon"))]
         lock.try_lock().map_err(|error| {
             io::Error::other(format!("cannot lock user data directory: {error}"))
         })?;
