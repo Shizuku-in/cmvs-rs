@@ -1,7 +1,7 @@
 # Switch Homebrew（开发中）
 
 实验性软件渲染播放器，支持游戏加载、文字、Vorbis 音频、手柄与触摸输入及核心存档路径。
-未经过真机验证；未知游戏及未实现指令会报错。
+未知游戏及未实现指令会报错。
 
 ## 构建
 
@@ -57,3 +57,8 @@ docker run --rm -v "$PWD:/src" -w /src cmvs-switch-build sh platforms/switch/scr
 `scripts/build-smoke.sh` 另生成诊断程序 `cmvs-switch-smoke.nro`，可检查文件读取、
 核心 SHA-256，并按 A 检查游戏初始化；保持原名放在同一 SD 卡目录。
 
+## 测试状态
+
+2026-11-06 在 Ryujinx 1.3.3（固件 22.5.0，主机模式）运行《アマツツミ》PC 版：启动、系统共享字体文字、
+BGM、手柄操作、存档（含同槽覆盖、移动与特殊槽）及长按 + 退出保存设置通过，可正常游玩。
+未验证：真机、触摸（需掌机模式）、软键盘（该作无存档注释）、HOME 关闭保存（Ryujinx 退出锁为空实现）。
