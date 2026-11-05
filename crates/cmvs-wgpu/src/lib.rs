@@ -13,6 +13,7 @@ use std::{
 };
 pub use wgpu;
 use wgpu::util::DeviceExt;
+mod bindings;
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const CACHE_LIMIT: usize = 128 * 1024 * 1024;
 /// Movie frames live apart from the content cache so replaced frames never evict
@@ -114,7 +115,7 @@ impl GpuFrame {
     }
 }
 struct Cached {
-    texture: wgpu::Texture,
+    view: wgpu::TextureView,
     bytes: usize,
     used: u64,
 }
@@ -123,6 +124,7 @@ pub struct Renderer {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     layout: wgpu::BindGroupLayout,
+    bindings: bindings::DrawBindings,
     scaling: Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline)>,
     pipelines: [wgpu::RenderPipeline; 3],
     cache: HashMap<([u8; 32], u32, u32), Cached>,
@@ -171,8 +173,10 @@ impl Renderer {
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
+                has_dynamic_offset: true,
+                min_binding_size: wgpu::BufferSize::new(
+                    (cmvs_core::scene_render::shader::PARAM_FLOATS * 4) as u64,
+                ),
             },
             count: None,
         }];
@@ -245,10 +249,12 @@ impl Renderer {
                 cache: None,
             })
         });
+        let bindings = bindings::DrawBindings::new(&device);
         let renderer = Self {
             device,
             queue,
             layout,
+            bindings,
             scaling: None,
             pipelines,
             cache: HashMap::new(),
@@ -267,7 +273,7 @@ impl Renderer {
         }
         Ok(())
     }
-    fn texture(&mut self, image: &RgbaImage) -> Result<wgpu::Texture> {
+    fn texture(&mut self, image: &RgbaImage) -> Result<wgpu::TextureView> {
         let [w, h] = [image.width(), image.height()];
         if w > self.device.limits().max_texture_dimension_2d
             || h > self.device.limits().max_texture_dimension_2d
@@ -281,7 +287,7 @@ impl Renderer {
         self.clock += 1;
         if let Some(cached) = self.cache.get_mut(&key) {
             cached.used = self.clock;
-            return Ok(cached.texture.clone());
+            return Ok(cached.view.clone());
         }
         let bytes = image.pixels().len();
         while self.cache_bytes + bytes > CACHE_LIMIT && !self.cache.is_empty() {
@@ -298,7 +304,7 @@ impl Renderer {
             self.cache.insert(
                 key,
                 Cached {
-                    texture: texture.clone(),
+                    view: texture.clone(),
                     bytes,
                     used: self.clock,
                 },
@@ -307,11 +313,11 @@ impl Renderer {
         }
         Ok(texture)
     }
-    fn frame_texture(&mut self, id: u64, image: &RgbaImage) -> wgpu::Texture {
+    fn frame_texture(&mut self, id: u64, image: &RgbaImage) -> wgpu::TextureView {
         self.clock += 1;
         if let Some(cached) = self.frames.get_mut(&id) {
             cached.used = self.clock;
-            return cached.texture.clone();
+            return cached.view.clone();
         }
         if self.frames.len() >= FRAME_TEXTURES {
             let oldest = *self
@@ -326,14 +332,14 @@ impl Renderer {
         self.frames.insert(
             id,
             Cached {
-                texture: texture.clone(),
+                view: texture.clone(),
                 bytes: image.pixels().len(),
                 used: self.clock,
             },
         );
         texture
     }
-    fn upload(&mut self, image: &RgbaImage) -> wgpu::Texture {
+    fn upload(&mut self, image: &RgbaImage) -> wgpu::TextureView {
         let [w, h] = [image.width(), image.height()];
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("CMVS image"),
@@ -362,14 +368,15 @@ impl Renderer {
             texture.size(),
         );
         self.uploaded_bytes += image.pixels().len() as u64;
-        texture
+        texture.create_view(&Default::default())
     }
     pub fn render(&mut self, frame: &RenderFrame<'_>) -> Result<GpuFrame> {
         self.compose(frame.dimensions(), frame.clear_color(), frame.commands())
     }
     /// Preserves the source alpha for the desktop checkerboard preview path.
     pub fn preview_image(&mut self, image: &RgbaImage) -> Result<GpuFrame> {
-        let texture = self.texture(image)?;
+        self.bindings.clear();
+        let texture = self.texture(image)?.texture().clone();
         Ok(GpuFrame {
             texture,
             device: self.device.clone(),
@@ -401,6 +408,7 @@ impl Renderer {
         {
             return Err("invalid GPU canvas size".into());
         }
+        self.bindings.prepare(&self.device, commands.len())?;
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("logical canvas"),
             size: wgpu::Extent3d {
@@ -420,51 +428,22 @@ impl Renderer {
         let white = RgbaImage::new(1, 1, vec![255; 4])?;
         let dummy = self.texture(&white)?;
         let mut draws = Vec::with_capacity(commands.len());
-        for command in commands {
+        for (index, command) in commands.iter().enumerate() {
             let draw = shader_draw(command, size);
             let mode = match draw.blend {
                 ShaderBlend::Replace => 0,
                 ShaderBlend::Alpha => 1,
                 ShaderBlend::Additive => 2,
             };
-            let mut textures = [dummy.clone(), dummy.clone(), dummy.clone()];
-            for (texture, image) in textures.iter_mut().zip(draw.textures) {
+            let mut views = [dummy.clone(), dummy.clone(), dummy.clone()];
+            for (view, image) in views.iter_mut().zip(draw.textures) {
                 if let Some(image) = image {
-                    *texture = self.texture(image)?;
+                    *view = self.texture(image)?;
                 }
             }
-            let views = textures.map(|t| t.create_view(&Default::default()));
-            let data: Vec<u8> = draw.params.iter().flat_map(|f| f.to_le_bytes()).collect();
-            let buffer = self
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("draw parameters"),
-                    contents: &data,
-                    usage: wgpu::BufferUsages::UNIFORM,
-                });
-            let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: None,
-                layout: &self.layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&views[0]),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(&views[1]),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: wgpu::BindingResource::TextureView(&views[2]),
-                    },
-                ],
-            });
-            draws.push((mode, group));
+            let offset = self.bindings.write(index, draw.used_params());
+            let group = self.bindings.group(&self.device, &self.layout, views);
+            draws.push((mode, group, offset));
         }
         let mut encoder = self.device.create_command_encoder(&Default::default());
         let view = texture.create_view(&Default::default());
@@ -487,13 +466,24 @@ impl Renderer {
                 })],
                 ..Default::default()
             });
-            for (mode, group) in &draws {
-                pass.set_pipeline(&self.pipelines[*mode]);
-                pass.set_bind_group(0, group, &[]);
+            let mut bound_mode = None;
+            for (mode, group, offset) in &draws {
+                if bound_mode != Some(*mode) {
+                    pass.set_pipeline(&self.pipelines[*mode]);
+                    bound_mode = Some(*mode);
+                }
+                pass.set_bind_group(0, group, &[*offset]);
                 pass.draw(0..4, 0..1);
             }
         }
+        self.bindings.upload(&self.queue);
         self.queue.submit([encoder.finish()]);
+        self.bindings.retain(
+            self.cache
+                .values()
+                .chain(self.frames.values())
+                .map(|c| &c.view),
+        );
         self.check()?;
         Ok(GpuFrame {
             texture,
@@ -637,15 +627,24 @@ mod tests {
             .compose(
                 [3, 1],
                 [20, 30, 40, 255],
-                &[Layer::Image {
-                    image: &image,
-                    rect: [0, 0, 3, 1],
-                    corner: [0, 0],
-                    alpha: 180,
-                    mask: Some(&transition),
-                    screen_mask: Some(&mask_image),
-                    blend: Blend::Alpha,
-                }],
+                &[
+                    Layer::Solid {
+                        rect: [0, 0, 3, 1],
+                        color: [20, 30, 40],
+                        alpha: 255,
+                        blend: Blend::Replace,
+                    },
+                    // The full coverage table must work at a nonzero dynamic offset.
+                    Layer::Image {
+                        image: &image,
+                        rect: [0, 0, 3, 1],
+                        corner: [0, 0],
+                        alpha: 180,
+                        mask: Some(&transition),
+                        screen_mask: Some(&mask_image),
+                        blend: Blend::Alpha,
+                    },
+                ],
             )
             .unwrap()
             .read()
@@ -756,25 +755,37 @@ mod tests {
             gpu.preview_image(&image.pixels).unwrap().read().unwrap(),
             image.pixels
         );
-        for linear in [false, true] {
-            let actual = gpu
-                .render_image(&image.pixels, [13, 7], linear)
-                .unwrap()
-                .read()
-                .unwrap();
-            let mut target = vec![0; 13 * 7];
-            image
-                .pixels
-                .draw_scaled(&mut target, 13, 7, 1, linear)
-                .unwrap();
-            for (pixel, expected) in actual.pixels().as_chunks::<4>().0.iter().zip(target) {
-                for (a, shift) in [16, 8, 0].into_iter().enumerate() {
-                    assert!(
-                        pixel[a].abs_diff((expected >> shift) as u8) <= 1,
-                        "movie scaling mismatch"
-                    );
+        // Include 1:1, both letterbox directions, and actual scaling. Transparent
+        // source pixels must still be premultiplied over the opaque black canvas.
+        for [w, h] in [[3, 1], [3, 5], [7, 1], [13, 7]] {
+            let mut point = None;
+            for linear in [false, true] {
+                let actual = gpu
+                    .render_image(&image.pixels, [w, h], linear)
+                    .unwrap()
+                    .read()
+                    .unwrap();
+                let mut target = vec![0; (w * h) as usize];
+                image
+                    .pixels
+                    .draw_scaled(&mut target, w, h, 1, linear)
+                    .unwrap();
+                for (pixel, expected) in actual.pixels().as_chunks::<4>().0.iter().zip(target) {
+                    for (a, shift) in [16, 8, 0].into_iter().enumerate() {
+                        assert!(
+                            pixel[a].abs_diff((expected >> shift) as u8) <= 1,
+                            "movie scaling mismatch"
+                        );
+                    }
+                    assert_eq!(pixel[3], 255);
                 }
-                assert_eq!(pixel[3], 255);
+                if [w, h] != [13, 7] {
+                    if let Some(point) = &point {
+                        assert_eq!(&actual, point, "1:1 point and linear must agree");
+                    } else {
+                        point = Some(actual);
+                    }
+                }
             }
         }
         gpu.check().unwrap();

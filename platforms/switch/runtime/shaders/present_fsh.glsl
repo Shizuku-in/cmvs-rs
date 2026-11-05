@@ -16,7 +16,11 @@ void main() {
         return;
     }
     vec4 c;
-    if (p.source.z > 0.0) {
+    // Integer-aligned 1:1 presentation has zero bilinear weights, even in linear mode.
+    if (all(equal(p.source.xy, p.rect.zw)) && all(equal(p.rect.xy, floor(p.rect.xy)))) {
+        c = texel(ivec2(floor(q)));
+        c.rgb *= c.a;
+    } else if (p.source.z > 0.0) {
         vec2 coord = floor(q * p.source.xy / p.rect.zw * 256.0) - 128.0;
         vec2 uv = clamp(coord, vec2(0.0), (p.source.xy - 1.0) * 256.0) / 256.0;
         ivec2 lo = ivec2(floor(uv));
