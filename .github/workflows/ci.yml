@@ -149,3 +149,70 @@ jobs:
       - run: sh platforms/web/build.sh
       - run: node --test platforms/web/audio.test.mjs
       - run: node platforms/web/smoke.mjs
+
+  # Host jobs compile cmvs-android as an empty crate; this checks the real
+  # Android code and builds the APK.
+  android:
+    name: android apk
+    runs-on: ubuntu-latest
+    env:
+      # Keep in sync with platforms/android/app/build.gradle.kts.
+      ANDROID_NDK_VERSION: 30.0.16248370
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Clippy
+        run: cargo clippy --locked -p cmvs-android --target aarch64-linux-android -- -D warnings
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v5
+      - name: Install NDK
+        run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ANDROID_NDK_VERSION"'
+      - run: cargo install cargo-ndk --version 4.1.2 --locked
+      - name: Build APK
+        working-directory: platforms/android
+        run: sh gradlew assembleDebug -PrustAbis=arm64-v8a,x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cmvs-android
+          path: platforms/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
+  # Host jobs only compile the off-Horizon stubs; this builds the real NRO.
+  switch:
+    name: switch homebrew
+    runs-on: ubuntu-latest
+    # Keep in sync with platforms/switch/Dockerfile.
+    container: devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282
+    env:
+      RUST_TOOLCHAIN: nightly-2026-01-20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup.sh
+          sh /tmp/rustup.sh -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN" --component rust-src
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          echo "/opt/devkitpro/devkitA64/bin:/opt/devkitpro/tools/bin" >> "$GITHUB_PATH"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build player
+        run: sh platforms/switch/scripts/build-player.sh
+      - name: Build smoke test
+        run: sh platforms/switch/scripts/build-smoke.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cmvs-switch
+          path: |
+            platforms/switch/build/cmvs-switch.nro
+            platforms/switch/build/cmvs-switch-smoke.nro
+          if-no-files-found: error

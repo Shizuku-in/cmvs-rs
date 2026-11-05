@@ -107,3 +107,11 @@ mod tests {
         ));
     }
 }
+
+mod switch;
+pub use switch::{GpuError, GpuTexture, SwitchInput, Touch, button};
+#[cfg(target_os = "horizon")]
+pub use switch::{
+    SwitchAudioOut, SwitchGpu, SwitchWindow, set_cpu_boost, shared_font, show_system_error,
+    software_keyboard,
+};

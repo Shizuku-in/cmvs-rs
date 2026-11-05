@@ -94,6 +94,10 @@ pub fn remove_file(path: impl AsRef<Path>) -> io::Result<()> {
     }
     host_operation("remove", &path, "").map_err(host_error)
 }
+/// Moves `from` over `to`, replacing an existing file (the host rename overwrites).
+pub fn replace(from: impl AsRef<Path>, to: impl AsRef<Path>) -> io::Result<()> {
+    rename(from, to)
+}
 pub fn rename(from: impl AsRef<Path>, to: impl AsRef<Path>) -> io::Result<()> {
     let from = normalized(from)?;
     if host_size(&from) == -1.0 {

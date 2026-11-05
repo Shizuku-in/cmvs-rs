@@ -11,7 +11,10 @@ fn texel(xy:vec2<i32>)->vec4<f32> {return textureLoad(image,clamp(xy,vec2<i32>(0
     let q=at.xy-p.rect.xy;
     if (any(q<vec2<f32>(0.0)) || any(q>=p.rect.zw)) {return vec4<f32>(background,1.0);}
     var c:vec4<f32>;
-    if (p.source.z>0.0) {
+    // Integer-aligned 1:1 presentation has zero bilinear weights, even in linear mode.
+    if (all(p.source.xy==p.rect.zw) && all(p.rect.xy==floor(p.rect.xy))) {
+        c=texel(vec2<i32>(floor(q)));c=vec4<f32>(c.rgb*c.a,c.a);
+    } else if (p.source.z>0.0) {
         let coord=floor(q*p.source.xy/p.rect.zw*256.0)-128.0;
         let uv=clamp(coord,vec2<f32>(0.0),(p.source.xy-1.0)*256.0)/256.0;
         let lo=vec2<i32>(floor(uv));let f=fract(uv);

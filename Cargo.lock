@@ -370,6 +370,7 @@ name = "cmvs-native"
 version = "0.1.0"
 dependencies = [
  "android-activity",
+ "cmvs-core",
  "jni",
  "ndk",
  "raw-window-handle",
@@ -392,6 +393,18 @@ dependencies = [
  "cmvs-audio",
  "cmvs-core",
  "cmvs-desktop",
+]
+
+[[package]]
+name = "cmvs-switch"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "cmvs-audio",
+ "cmvs-core",
+ "cmvs-font",
+ "cmvs-native",
+ "encoding_rs",
 ]
 
 [[package]]

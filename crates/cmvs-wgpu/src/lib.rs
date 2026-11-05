@@ -1,7 +1,10 @@
 //! GPU execution of validated CMVS draw commands, with lazy logical-frame readback.
 use cmvs_core::{
-    raster::RgbaImage,
-    scene_render::{Blend, Layer, RenderFrame},
+    raster::{CacheKey, RgbaImage},
+    scene_render::{
+        Layer, RenderFrame,
+        shader::{ShaderBlend, shader_draw},
+    },
 };
 use std::{
     collections::HashMap,
@@ -10,8 +13,13 @@ use std::{
 };
 pub use wgpu;
 use wgpu::util::DeviceExt;
+mod bindings;
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const CACHE_LIMIT: usize = 128 * 1024 * 1024;
+/// Movie frames live apart from the content cache so replaced frames never evict
+/// static images. Each player shows one frame (three scene slots and the full-screen
+/// player), which leaves room for images that stopped players retain.
+const FRAME_TEXTURES: usize = 8;
 
 /// An immutable submitted logical frame. Readback is performed only on demand.
 pub struct GpuFrame {
@@ -107,7 +115,7 @@ impl GpuFrame {
     }
 }
 struct Cached {
-    texture: wgpu::Texture,
+    view: wgpu::TextureView,
     bytes: usize,
     used: u64,
 }
@@ -116,10 +124,12 @@ pub struct Renderer {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     layout: wgpu::BindGroupLayout,
+    bindings: bindings::DrawBindings,
     scaling: Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline)>,
     pipelines: [wgpu::RenderPipeline; 3],
     cache: HashMap<([u8; 32], u32, u32), Cached>,
     cache_bytes: usize,
+    frames: HashMap<u64, Cached>,
     clock: u64,
     errors: Arc<Mutex<Option<String>>>,
     pub uploaded_bytes: u64,
@@ -163,8 +173,10 @@ impl Renderer {
             visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
+                has_dynamic_offset: true,
+                min_binding_size: wgpu::BufferSize::new(
+                    (cmvs_core::scene_render::shader::PARAM_FLOATS * 4) as u64,
+                ),
             },
             count: None,
         }];
@@ -237,14 +249,17 @@ impl Renderer {
                 cache: None,
             })
         });
+        let bindings = bindings::DrawBindings::new(&device);
         let renderer = Self {
             device,
             queue,
             layout,
+            bindings,
             scaling: None,
             pipelines,
             cache: HashMap::new(),
             cache_bytes: 0,
+            frames: HashMap::new(),
             clock: 0,
             errors,
             uploaded_bytes: 0,
@@ -258,18 +273,21 @@ impl Renderer {
         }
         Ok(())
     }
-    fn texture(&mut self, image: &RgbaImage) -> Result<wgpu::Texture> {
+    fn texture(&mut self, image: &RgbaImage) -> Result<wgpu::TextureView> {
         let [w, h] = [image.width(), image.height()];
         if w > self.device.limits().max_texture_dimension_2d
             || h > self.device.limits().max_texture_dimension_2d
         {
             return Err("GPU image exceeds device texture limits".into());
         }
-        let key = (*image.content_digest(), w, h);
+        let key = match image.cache_key() {
+            CacheKey::Frame(id) => return Ok(self.frame_texture(id, image)),
+            CacheKey::Content(digest, w, h) => (digest, w, h),
+        };
         self.clock += 1;
         if let Some(cached) = self.cache.get_mut(&key) {
             cached.used = self.clock;
-            return Ok(cached.texture.clone());
+            return Ok(cached.view.clone());
         }
         let bytes = image.pixels().len();
         while self.cache_bytes + bytes > CACHE_LIMIT && !self.cache.is_empty() {
@@ -281,6 +299,48 @@ impl Renderer {
                 .0;
             self.cache_bytes -= self.cache.remove(&oldest).expect("cache entry").bytes;
         }
+        let texture = self.upload(image);
+        if bytes <= CACHE_LIMIT {
+            self.cache.insert(
+                key,
+                Cached {
+                    view: texture.clone(),
+                    bytes,
+                    used: self.clock,
+                },
+            );
+            self.cache_bytes += bytes;
+        }
+        Ok(texture)
+    }
+    fn frame_texture(&mut self, id: u64, image: &RgbaImage) -> wgpu::TextureView {
+        self.clock += 1;
+        if let Some(cached) = self.frames.get_mut(&id) {
+            cached.used = self.clock;
+            return cached.view.clone();
+        }
+        if self.frames.len() >= FRAME_TEXTURES {
+            let oldest = *self
+                .frames
+                .iter()
+                .min_by_key(|(_, c)| c.used)
+                .expect("nonempty frames")
+                .0;
+            self.frames.remove(&oldest);
+        }
+        let texture = self.upload(image);
+        self.frames.insert(
+            id,
+            Cached {
+                view: texture.clone(),
+                bytes: image.pixels().len(),
+                used: self.clock,
+            },
+        );
+        texture
+    }
+    fn upload(&mut self, image: &RgbaImage) -> wgpu::TextureView {
+        let [w, h] = [image.width(), image.height()];
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("CMVS image"),
             size: wgpu::Extent3d {
@@ -307,26 +367,16 @@ impl Renderer {
             },
             texture.size(),
         );
-        self.uploaded_bytes += bytes as u64;
-        if bytes <= CACHE_LIMIT {
-            self.cache.insert(
-                key,
-                Cached {
-                    texture: texture.clone(),
-                    bytes,
-                    used: self.clock,
-                },
-            );
-            self.cache_bytes += bytes;
-        }
-        Ok(texture)
+        self.uploaded_bytes += image.pixels().len() as u64;
+        texture.create_view(&Default::default())
     }
     pub fn render(&mut self, frame: &RenderFrame<'_>) -> Result<GpuFrame> {
         self.compose(frame.dimensions(), frame.clear_color(), frame.commands())
     }
     /// Preserves the source alpha for the desktop checkerboard preview path.
     pub fn preview_image(&mut self, image: &RgbaImage) -> Result<GpuFrame> {
-        let texture = self.texture(image)?;
+        self.bindings.clear();
+        let texture = self.texture(image)?.texture().clone();
         Ok(GpuFrame {
             texture,
             device: self.device.clone(),
@@ -358,6 +408,7 @@ impl Renderer {
         {
             return Err("invalid GPU canvas size".into());
         }
+        self.bindings.prepare(&self.device, commands.len())?;
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("logical canvas"),
             size: wgpu::Extent3d {
@@ -377,173 +428,22 @@ impl Renderer {
         let white = RgbaImage::new(1, 1, vec![255; 4])?;
         let dummy = self.texture(&white)?;
         let mut draws = Vec::with_capacity(commands.len());
-        for command in commands {
-            let mut p = [0f32; 280];
-            p[..2].copy_from_slice(&[w as f32, h as f32]);
-            let mut source = None;
-            let mut mask = None;
-            let mut screen = None;
-            let (corners, alpha, blend) = match command {
-                Layer::Image {
-                    image,
-                    rect,
-                    corner,
-                    alpha,
-                    mask: m,
-                    screen_mask: s,
-                    blend,
-                } => {
-                    source = Some(&image.pixels);
-                    mask = *m;
-                    screen = s.map(|s| &s.pixels);
-                    p[4..8].copy_from_slice(&rect.map(|v| v as f32));
-                    let [x, y] = corner.map(|v| v as f32);
-                    let [cw, ch] = [rect[2] as f32, rect[3] as f32];
-                    (
-                        [[x, y], [x + cw, y], [x, y + ch], [x + cw, y + ch]],
-                        *alpha,
-                        *blend,
-                    )
-                }
-                Layer::Billboard { image, quad, alpha } => {
-                    source = Some(&image.pixels);
-                    p[4..8].copy_from_slice(&[
-                        0.0,
-                        0.0,
-                        image.pixels.width() as f32,
-                        image.pixels.height() as f32,
-                    ]);
-                    p[3] = 1.0;
-                    p[19] = 16.0;
-                    let [l, t, r, b] = quad.map(|v| v + 0.5);
-                    ([[l, t], [r, t], [l, b], [r, b]], *alpha, Blend::Alpha)
-                }
-                Layer::Projected {
-                    image,
-                    rect,
-                    quad,
-                    alpha,
-                    blend,
-                } => {
-                    source = Some(&image.pixels);
-                    p[4..8].copy_from_slice(&rect.map(|v| v as f32));
-                    p[3] = 1.0;
-                    let [l, t, r, b] = quad.map(|v| v + 0.5);
-                    ([[l, t], [r, t], [l, b], [r, b]], *alpha, *blend)
-                }
-                Layer::Rotated {
-                    image,
-                    rect,
-                    corners,
-                    alpha,
-                    blend,
-                } => {
-                    source = Some(&image.pixels);
-                    p[4..8].copy_from_slice(&rect.map(|v| v as f32));
-                    p[3] = 1.0;
-                    (corners.map(|c| c.map(|v| v + 0.5)), *alpha, *blend)
-                }
-                Layer::Solid {
-                    rect,
-                    color,
-                    alpha,
-                    blend,
-                } => {
-                    p[16..19].copy_from_slice(&color.map(f32::from));
-                    p[19] = 1.0;
-                    let [x, y, cw, ch] = rect.map(|v| v as f32);
-                    (
-                        [[x, y], [x + cw, y], [x, y + ch], [x + cw, y + ch]],
-                        *alpha,
-                        *blend,
-                    )
-                }
-                Layer::Fade(fade) => {
-                    let [b, g, r, _] = fade.color.to_le_bytes();
-                    p[16..19].copy_from_slice(&[r, g, b].map(f32::from));
-                    p[19] = 1.0;
-                    (
-                        [
-                            [0.0, 0.0],
-                            [w as f32, 0.0],
-                            [0.0, h as f32],
-                            [w as f32, h as f32],
-                        ],
-                        fade.opacity.clamp(0, 255) as u32,
-                        Blend::Alpha,
-                    )
-                }
+        for (index, command) in commands.iter().enumerate() {
+            let draw = shader_draw(command, size);
+            let mode = match draw.blend {
+                ShaderBlend::Replace => 0,
+                ShaderBlend::Alpha => 1,
+                ShaderBlend::Additive => 2,
             };
-            p[2] = alpha as f32;
-            for (i, c) in corners.iter().enumerate() {
-                p[8 + i * 2..10 + i * 2].copy_from_slice(c);
-            }
-            let mode = match blend {
-                Blend::Replace | Blend::BlackReplace => 0,
-                Blend::Alpha | Blend::BlackAlpha => 1,
-                _ => 2,
-            };
-            if matches!(
-                blend,
-                Blend::BlackReplace | Blend::BlackAlpha | Blend::BlackAdditive
-            ) {
-                p[19] += 2.0;
-            }
-            if let Some(m) = mask {
-                p[19] += 4.0;
-                for green in 0..256 {
-                    p[24 + green] = m.coverage(green as u8);
+            let mut views = [dummy.clone(), dummy.clone(), dummy.clone()];
+            for (view, image) in views.iter_mut().zip(draw.textures) {
+                if let Some(image) = image {
+                    *view = self.texture(image)?;
                 }
             }
-            if screen.is_some() {
-                p[19] += 8.0;
-            }
-            let textures = [
-                match source {
-                    Some(i) => self.texture(i)?,
-                    None => dummy.clone(),
-                },
-                match mask {
-                    Some(m) => self.texture(&m.mask.pixels)?,
-                    None => dummy.clone(),
-                },
-                match screen {
-                    Some(i) => self.texture(i)?,
-                    None => dummy.clone(),
-                },
-            ];
-            let views = textures.map(|t| t.create_view(&Default::default()));
-            let data: Vec<u8> = p.iter().flat_map(|f| f.to_le_bytes()).collect();
-            let buffer = self
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("draw parameters"),
-                    contents: &data,
-                    usage: wgpu::BufferUsages::UNIFORM,
-                });
-            let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: None,
-                layout: &self.layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&views[0]),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(&views[1]),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: wgpu::BindingResource::TextureView(&views[2]),
-                    },
-                ],
-            });
-            draws.push((mode, group));
+            let offset = self.bindings.write(index, draw.used_params());
+            let group = self.bindings.group(&self.device, &self.layout, views);
+            draws.push((mode, group, offset));
         }
         let mut encoder = self.device.create_command_encoder(&Default::default());
         let view = texture.create_view(&Default::default());
@@ -566,13 +466,24 @@ impl Renderer {
                 })],
                 ..Default::default()
             });
-            for (mode, group) in &draws {
-                pass.set_pipeline(&self.pipelines[*mode]);
-                pass.set_bind_group(0, group, &[]);
+            let mut bound_mode = None;
+            for (mode, group, offset) in &draws {
+                if bound_mode != Some(*mode) {
+                    pass.set_pipeline(&self.pipelines[*mode]);
+                    bound_mode = Some(*mode);
+                }
+                pass.set_bind_group(0, group, &[*offset]);
                 pass.draw(0..4, 0..1);
             }
         }
+        self.bindings.upload(&self.queue);
         self.queue.submit([encoder.finish()]);
+        self.bindings.retain(
+            self.cache
+                .values()
+                .chain(self.frames.values())
+                .map(|c| &c.view),
+        );
         self.check()?;
         Ok(GpuFrame {
             texture,
@@ -591,6 +502,7 @@ mod tests {
     use super::*;
     use cmvs_core::{
         scene::{DrawState, ObjectImage, SceneHost, SceneObject},
+        scene_render::Blend,
         scene_render::prepare_scene,
     };
     #[test]
@@ -715,15 +627,24 @@ mod tests {
             .compose(
                 [3, 1],
                 [20, 30, 40, 255],
-                &[Layer::Image {
-                    image: &image,
-                    rect: [0, 0, 3, 1],
-                    corner: [0, 0],
-                    alpha: 180,
-                    mask: Some(&transition),
-                    screen_mask: Some(&mask_image),
-                    blend: Blend::Alpha,
-                }],
+                &[
+                    Layer::Solid {
+                        rect: [0, 0, 3, 1],
+                        color: [20, 30, 40],
+                        alpha: 255,
+                        blend: Blend::Replace,
+                    },
+                    // The full coverage table must work at a nonzero dynamic offset.
+                    Layer::Image {
+                        image: &image,
+                        rect: [0, 0, 3, 1],
+                        corner: [0, 0],
+                        alpha: 180,
+                        mask: Some(&transition),
+                        screen_mask: Some(&mask_image),
+                        blend: Blend::Alpha,
+                    },
+                ],
             )
             .unwrap()
             .read()
@@ -834,25 +755,37 @@ mod tests {
             gpu.preview_image(&image.pixels).unwrap().read().unwrap(),
             image.pixels
         );
-        for linear in [false, true] {
-            let actual = gpu
-                .render_image(&image.pixels, [13, 7], linear)
-                .unwrap()
-                .read()
-                .unwrap();
-            let mut target = vec![0; 13 * 7];
-            image
-                .pixels
-                .draw_scaled(&mut target, 13, 7, 1, linear)
-                .unwrap();
-            for (pixel, expected) in actual.pixels().as_chunks::<4>().0.iter().zip(target) {
-                for (a, shift) in [16, 8, 0].into_iter().enumerate() {
-                    assert!(
-                        pixel[a].abs_diff((expected >> shift) as u8) <= 1,
-                        "movie scaling mismatch"
-                    );
+        // Include 1:1, both letterbox directions, and actual scaling. Transparent
+        // source pixels must still be premultiplied over the opaque black canvas.
+        for [w, h] in [[3, 1], [3, 5], [7, 1], [13, 7]] {
+            let mut point = None;
+            for linear in [false, true] {
+                let actual = gpu
+                    .render_image(&image.pixels, [w, h], linear)
+                    .unwrap()
+                    .read()
+                    .unwrap();
+                let mut target = vec![0; (w * h) as usize];
+                image
+                    .pixels
+                    .draw_scaled(&mut target, w, h, 1, linear)
+                    .unwrap();
+                for (pixel, expected) in actual.pixels().as_chunks::<4>().0.iter().zip(target) {
+                    for (a, shift) in [16, 8, 0].into_iter().enumerate() {
+                        assert!(
+                            pixel[a].abs_diff((expected >> shift) as u8) <= 1,
+                            "movie scaling mismatch"
+                        );
+                    }
+                    assert_eq!(pixel[3], 255);
                 }
-                assert_eq!(pixel[3], 255);
+                if [w, h] != [13, 7] {
+                    if let Some(point) = &point {
+                        assert_eq!(&actual, point, "1:1 point and linear must agree");
+                    } else {
+                        point = Some(actual);
+                    }
+                }
             }
         }
         gpu.check().unwrap();

@@ -229,7 +229,8 @@ pub(crate) fn scale_image(
     {
         return Err("GPU canvas exceeds device limits".into());
     }
-    let source = renderer.texture(image)?.create_view(&Default::default());
+    renderer.bindings.clear();
+    let source = renderer.texture(image)?;
     let data = [
         viewport.left as f32,
         viewport.top as f32,

@@ -23,6 +23,38 @@ use std::{collections::BTreeMap, error::Error, io::Write, path::Path};
 /// Local wall-clock fields for save labels: year, month, day, hour, minute, second.
 pub type SaveTime = [u16; 6];
 
+/// UTC save label fields for `seconds` since 1970-01-01 (proleptic Gregorian calendar).
+pub fn save_time_from_unix(seconds: u64) -> SaveTime {
+    let (days, rest) = ((seconds / 86_400) as i64, seconds % 86_400);
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    [
+        year.clamp(0, i64::from(u16::MAX)) as u16,
+        month as u16,
+        day as u16,
+        (rest / 3600) as u16,
+        (rest / 60 % 60) as u16,
+        (rest % 60) as u16,
+    ]
+}
+
+/// Host save clock in UTC: the standard library has no local time zone without platform
+/// calls, so every host labels saves identically. A clock before 1970 reads as the epoch.
+pub fn utc_save_time() -> SaveTime {
+    save_time_from_unix(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs()),
+    )
+}
+
 /// Constructor value of +12080, written to header offset 8; only an unimplemented
 /// command changes it.
 const HEADER_WORD_8: u32 = 0x1_0000;
@@ -1091,7 +1123,7 @@ fn replace_file(directory: &Path, name: &str, bytes: &[u8]) -> Result<(), Box<dy
     file.write_all(bytes)?;
     file.sync_all()?;
     drop(file);
-    if let Err(e) = fs::rename(&temporary, directory.join(name)) {
+    if let Err(e) = fs::replace(&temporary, directory.join(name)) {
         let _ = fs::remove_file(&temporary);
         return Err(e.into());
     }
@@ -1101,6 +1133,15 @@ fn replace_file(directory: &Path, name: &str, bytes: &[u8]) -> Result<(), Box<dy
 #[cfg(test)]
 mod layout_tests {
     use super::*;
+
+    #[test]
+    fn unix_seconds_map_to_utc_civil_fields() {
+        assert_eq!(save_time_from_unix(0), [1970, 1, 1, 0, 0, 0]);
+        // Leap day and the last second of a century leap year.
+        assert_eq!(save_time_from_unix(951_782_400), [2000, 2, 29, 0, 0, 0]);
+        assert_eq!(save_time_from_unix(978_307_199), [2000, 12, 31, 23, 59, 59]);
+        assert_eq!(save_time_from_unix(1_793_912_645), [2026, 11, 5, 21, 4, 5]);
+    }
 
     #[test]
     fn snapshot_layout_requires_an_independently_inspected_build() {

@@ -1,24 +1,66 @@
 //! Bounded top-down straight-alpha image, explicit resource-preview compositor and an
 //! uncompressed PNG writer for research frame exports.
 use crate::{FormatError, MAX_PAYLOAD};
+use std::sync::{Arc, OnceLock};
+
+#[derive(Debug)]
+struct ImageData {
+    pixels: Vec<u8>,
+    content_digest: OnceLock<[u8; 32]>,
+}
+
 #[derive(Debug, Clone)]
 pub struct RgbaImage {
     width: u32,
     height: u32,
-    pixels: Vec<u8>,
-    content_digest: std::sync::OnceLock<[u8; 32]>,
+    // Clones share both immutable pixels and the digest, including when the first
+    // cache lookup happens on a temporary clone (e.g. a prepared glyph object).
+    data: Arc<ImageData>,
+    /// Set for decoded movie frames, which replace each other and are never shared.
+    frame: Option<u64>,
+}
+
+/// How a texture cache recognizes an image without comparing pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CacheKey {
+    /// Equal pixel content and dimensions share one texture.
+    Content([u8; 32], u32, u32),
+    /// One decoded movie frame and its clones. Hashing it would cost more than the
+    /// decode, and no other image shares its content.
+    Frame(u64),
 }
 impl PartialEq for RgbaImage {
     fn eq(&self, other: &Self) -> bool {
-        self.width == other.width && self.height == other.height && self.pixels == other.pixels
+        self.width == other.width && self.height == other.height && self.pixels() == other.pixels()
     }
 }
 impl Eq for RgbaImage {}
 impl RgbaImage {
     /// Lazily hashes immutable pixels once. Cache state is not part of image equality.
     pub fn content_digest(&self) -> &[u8; 32] {
-        self.content_digest
-            .get_or_init(|| crate::digest::sha256(&self.pixels))
+        self.data
+            .content_digest
+            .get_or_init(|| crate::digest::sha256(self.pixels()))
+    }
+
+    /// Marks a decoded movie frame with an identity unique within the process.
+    pub fn into_frame(mut self) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        self.frame = Some(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+        self
+    }
+
+    /// The decoded movie frame identity, without hashing other images.
+    pub fn frame_id(&self) -> Option<u64> {
+        self.frame
+    }
+
+    /// Movie frames are keyed by identity; every other image by its content digest.
+    pub fn cache_key(&self) -> CacheKey {
+        match self.frame {
+            Some(frame) => CacheKey::Frame(frame),
+            None => CacheKey::Content(*self.content_digest(), self.width, self.height),
+        }
     }
 
     pub fn new(width: u32, height: u32, pixels: Vec<u8>) -> Result<Self, FormatError> {
@@ -31,8 +73,11 @@ impl RgbaImage {
         Ok(Self {
             width,
             height,
-            pixels,
-            content_digest: std::sync::OnceLock::new(),
+            data: Arc::new(ImageData {
+                pixels,
+                content_digest: OnceLock::new(),
+            }),
+            frame: None,
         })
     }
     pub fn width(&self) -> u32 {
@@ -42,7 +87,7 @@ impl RgbaImage {
         self.height
     }
     pub fn pixels(&self) -> &[u8] {
-        &self.pixels
+        &self.data.pixels
     }
     /// Nearest-neighbor, centered aspect fit over 0x00RRGGBB; not CMVS scene blending.
     pub fn draw_fit(&self, target: &mut [u32], width: u32, height: u32) -> Result<(), FormatError> {
@@ -64,7 +109,7 @@ impl RgbaImage {
                 let sx = x * u64::from(self.width) / w;
                 let sy = y * u64::from(self.height) / h;
                 let at = ((sy * u64::from(self.width) + sx) * 4) as usize;
-                let p = &self.pixels[at..at + 4];
+                let p = &self.pixels()[at..at + 4];
                 let dst = &mut target[((top + y) * u64::from(width) + left + x) as usize];
                 let alpha = u32::from(p[3]);
                 let channel = |i: usize, shift: u32| {
@@ -132,7 +177,7 @@ impl RgbaImage {
                     ];
                     let mut sums = [0u64; 4];
                     for (at, weight) in weights {
-                        let p = &self.pixels[at * 4..at * 4 + 4];
+                        let p = &self.pixels()[at * 4..at * 4 + 4];
                         let alpha = u64::from(p[3]);
                         for (channel, sum) in sums[..3].iter_mut().enumerate() {
                             *sum += weight * u64::from(p[channel]) * alpha;
@@ -157,7 +202,7 @@ impl RgbaImage {
                 let sx = (x - view.left) as u64 * u64::from(self.width) / u64::from(view.width);
                 let sy = (y - view.top) as u64 * u64::from(self.height) / u64::from(view.height);
                 let at = ((sy * u64::from(self.width) + sx) * 4) as usize;
-                let p = &self.pixels[at..at + 4];
+                let p = &self.pixels()[at..at + 4];
                 let dst = &mut target[y as usize * width as usize + x as usize];
                 let alpha = u32::from(p[3]);
                 let channel = |i: usize, shift: u32| {
@@ -175,7 +220,7 @@ impl RgbaImage {
     pub fn to_png(&self) -> Vec<u8> {
         let row = self.width as usize * 4;
         let mut raw = Vec::with_capacity((row + 1) * self.height as usize);
-        for line in self.pixels.chunks_exact(row) {
+        for line in self.pixels().chunks_exact(row) {
             raw.push(0);
             raw.extend_from_slice(line);
         }
@@ -248,6 +293,22 @@ pub fn adler32(bytes: &[u8]) -> u32 {
 mod content_digest_tests {
     use super::*;
     #[test]
+    fn temporary_clones_share_pixels_and_initialize_the_cached_digest() {
+        let cached = RgbaImage::new(1, 1, vec![1, 2, 3, 4]).unwrap();
+        let prepared = cached.clone();
+        assert!(std::ptr::eq(cached.pixels(), prepared.pixels()));
+        assert!(cached.data.content_digest.get().is_none());
+        let key = prepared.cache_key();
+        drop(prepared);
+        assert_eq!(
+            cached.data.content_digest.get(),
+            Some(&crate::digest::sha256(cached.pixels()))
+        );
+        assert_eq!(cached.clone().cache_key(), key);
+        assert_eq!(cached, RgbaImage::new(1, 1, vec![1, 2, 3, 4]).unwrap());
+    }
+
+    #[test]
     fn digest_cache_does_not_change_equality_and_tracks_pixel_content() {
         let first = RgbaImage::new(1, 1, vec![1, 2, 3, 4]).unwrap();
         let second = first.clone();
@@ -259,5 +320,25 @@ mod content_digest_tests {
         assert_eq!(first, first.clone());
         let changed = RgbaImage::new(1, 1, vec![1, 2, 3, 5]).unwrap();
         assert_ne!(first.content_digest(), changed.content_digest());
+    }
+    #[test]
+    fn frames_have_their_own_identity_and_keep_it_when_cloned() {
+        let image = RgbaImage::new(1, 1, vec![1, 2, 3, 4]).unwrap();
+        let content = image.cache_key();
+        assert_eq!(
+            content,
+            CacheKey::Content(crate::digest::sha256(image.pixels()), 1, 1)
+        );
+        let first = image.clone().into_frame();
+        let second = image.into_frame();
+        assert!(matches!(first.cache_key(), CacheKey::Frame(_)));
+        assert_eq!(
+            first.cache_key(),
+            CacheKey::Frame(first.frame_id().unwrap())
+        );
+        assert_eq!(RgbaImage::new(1, 1, vec![0; 4]).unwrap().frame_id(), None);
+        assert_ne!(first.cache_key(), second.cache_key());
+        assert_eq!(first.cache_key(), first.clone().cache_key());
+        assert_eq!(first, second, "identity is not part of equality");
     }
 }

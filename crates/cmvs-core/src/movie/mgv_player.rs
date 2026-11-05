@@ -35,7 +35,7 @@ impl MovieHost {
                         .as_ref()
                         .ok_or("MGV decoder backend unavailable")?;
                     let mut decoder = factory.open(reader, &index)?;
-                    let image = decoder.frame(0)?;
+                    let image = decoder.frame(0)?.into_frame();
                     Some(MgvMovie {
                         path,
                         index,
@@ -114,7 +114,7 @@ impl MovieHost {
             movie.decoder.finish()?;
             self.mgv_player = None;
         } else if frame > movie.frame {
-            let image = movie.decoder.frame(frame)?;
+            let image = movie.decoder.frame(frame)?.into_frame();
             movie.frame = frame;
             movie.elapsed = elapsed;
             movie.image = image;

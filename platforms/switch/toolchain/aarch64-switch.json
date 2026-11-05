@@ -1,0 +1,18 @@
+{
+  "arch": "aarch64",
+  "llvm-target": "aarch64-unknown-none-elf",
+  "data-layout": "e-m:e-p270:32:32-p271:32:32-p272:64:64-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128-Fn32",
+  "os": "horizon",
+  "env": "newlib",
+  "vendor": "nintendo",
+  "target-family": "unix",
+  "target-endian": "little",
+  "target-pointer-width": 64,
+  "target-c-int-width": 32,
+  "max-atomic-width": 64,
+  "panic-strategy": "abort",
+  "has-thread-local": false,
+  "linker": "aarch64-none-elf-gcc",
+  "executables": true,
+  "relocation-model": "pic"
+}

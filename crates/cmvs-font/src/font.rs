@@ -1,6 +1,7 @@
 //! Explicit OpenType font preview. Script layout stays in core; this backend replaces
 //! the original GDI mask rasterizer, so its pixels are not claimed to match GDI.
 use crate::font_library::FontLibrary;
+use crate::glyph_cache::GlyphCache;
 use ab_glyph::{Font, FontVec, ScaleFont, point};
 use cmvs_core::{
     FormatError,
@@ -11,7 +12,6 @@ use cmvs_core::{
     scene_render,
 };
 use std::{
-    collections::BTreeMap,
     error::Error,
     fs::File,
     io::Read,
@@ -26,7 +26,7 @@ const MAX_FONT: usize = 32 * 1024 * 1024;
 #[derive(Clone)]
 pub struct FontRenderer {
     library: Arc<Mutex<FontLibrary>>,
-    cache: BTreeMap<(Arc<[u8]>, [u32; 9]), RgbaImage>,
+    cache: GlyphCache,
 }
 
 struct PreviewMetrics(Arc<Mutex<FontLibrary>>);
@@ -238,14 +238,14 @@ impl FontRenderer {
             .map_err(|_| FormatError("invalid OpenType font or collection face index"))?;
         Ok(Self {
             library: Arc::new(Mutex::new(FontLibrary::new(Arc::new(font)))),
-            cache: BTreeMap::new(),
+            cache: GlyphCache::default(),
         })
     }
     /// Uses `library` (sharing its explicit default font) for every face.
     pub fn with_library(library: FontLibrary) -> Self {
         Self {
             library: Arc::new(Mutex::new(library)),
-            cache: BTreeMap::new(),
+            cache: GlyphCache::default(),
         }
     }
     /// Matches this renderer's fonts; OpenType ink bounds replace GDI's
@@ -387,9 +387,6 @@ impl FontRenderer {
             embolden(&mut mask, side);
         }
         let image = paint(&mask, side, glyph.colors, glyph.gradient, glyph.outline)?;
-        if self.cache.len() >= 128 {
-            self.cache.clear();
-        }
         self.cache.insert(key, image.clone());
         Ok(image)
     }
@@ -619,6 +616,17 @@ mod tests {
             metrics.ink_width(&glyph.face, glyph.code, glyph.size),
             metrics.ink_width(face, glyph.code, glyph.size)
         );
+        // Keep one style hot while more than a cacheful of other colors is painted.
+        // Sharing its original pixel allocation proves it was not rasterized again.
+        let hot = font.glyph(&glyph).unwrap();
+        for color in 0..256 {
+            glyph.colors = [color; 2];
+            font.glyph(&glyph).unwrap();
+            glyph.colors = [0xffffff; 2];
+            let hit = font.glyph(&glyph).unwrap();
+            assert!(std::ptr::eq(hit.pixels(), hot.pixels()));
+        }
+        assert_eq!(font.cache.len(), 128);
     }
     #[test]
     fn alpha_revision_preserves_endpoints_and_increases_partial_coverage() {
