@@ -108,7 +108,7 @@ mod tests {
     }
 }
 
-#[cfg(target_os = "horizon")]
 mod switch;
 #[cfg(target_os = "horizon")]
-pub use switch::SwitchWindow;
+pub use switch::{SwitchAudioOut, SwitchWindow, shared_font};
+pub use switch::{SwitchInput, Touch, button};

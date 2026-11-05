@@ -1,4 +1,5 @@
-//! Optional Rust Vorbis streaming and native output. Engine state stays in `audio`.
+//! Optional Rust Vorbis streaming, mixing and native output. Engine state stays in `audio`.
+//! With only the `mixer` feature the host pulls mixed PCM through [`PcmOutput`].
 use crate::VorbisProgram;
 use cmvs_core::{
     MAX_PAYLOAD,
@@ -9,7 +10,12 @@ use cmvs_core::{
     platform::resolve_under,
     resources::{ResourceArchives, ResourceKind, ResourceSource},
 };
-use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player, Source};
+#[cfg(feature = "native")]
+use rodio::{DeviceSinkBuilder, MixerDeviceSink};
+use rodio::{
+    Player, Source,
+    mixer::{Mixer, MixerSource},
+};
 use std::{
     collections::BTreeMap,
     error::Error,
@@ -200,7 +206,7 @@ fn preloaded_gain(volume: u32) -> Option<f32> {
         .then(|| 10f32.powf(db as f32 / 2000.0))
 }
 
-/// Native output shared by desktop and Android hosts.
+/// Engine audio channels shared by desktop, Android and pull-output hosts.
 pub struct NativeAudio {
     preloaded: [Option<Channel>; cmvs_core::audio::PRELOADED_SOUNDS],
     output_enabled: Arc<AtomicBool>,
@@ -219,10 +225,30 @@ pub struct NativeAudio {
     last_movie_report_ms: u32,
     voice_ducking: VoiceDucking,
     ducking_clock: Instant,
+    mixer: Mixer,
     // Channels must drop before the device stream.
-    stream: MixerDeviceSink,
+    #[cfg(feature = "native")]
+    _device: Option<MixerDeviceSink>,
+}
+
+/// Host side of a pull-mode mixer: interleaved samples at the requested rate and
+/// channel count. Pull it from one thread; the engine backend may live elsewhere.
+pub struct PcmOutput(MixerSource);
+impl PcmOutput {
+    /// Fills `out` completely. Gaps without any active channel are silence, so a
+    /// device that keeps running never underflows because the game is quiet.
+    pub fn fill_i16(&mut self, out: &mut [i16]) {
+        for sample in out {
+            *sample = self
+                .0
+                .next()
+                .map_or(0, |x| (x * 32768.0).clamp(-32768.0, 32767.0) as i16);
+        }
+    }
 }
 impl NativeAudio {
+    /// Plays through the default system output device.
+    #[cfg(feature = "native")]
     pub fn new(root: &Path) -> Result<Self, Box<dyn Error>> {
         let fault: Fault = Arc::default();
         let copy = fault.clone();
@@ -237,6 +263,27 @@ impl NativeAudio {
             stream.config().sample_rate(),
             stream.config().channel_count()
         );
+        let mut audio = Self::with_mixer(root, stream.mixer().clone(), fault)?;
+        audio._device = Some(stream);
+        Ok(audio)
+    }
+    /// Mixes into a host-pulled stream instead of a system device, for platforms the
+    /// device layer does not support. `rate` and `channels` describe the host output.
+    pub fn pull(
+        root: &Path,
+        rate: u32,
+        channels: u16,
+    ) -> Result<(Self, PcmOutput), Box<dyn Error>> {
+        let (mixer, source) = rodio::mixer::mixer(
+            rodio::ChannelCount::new(channels).ok_or("output channel count is zero")?,
+            rodio::SampleRate::new(rate).ok_or("output sample rate is zero")?,
+        );
+        Ok((
+            Self::with_mixer(root, mixer, Arc::default())?,
+            PcmOutput(source),
+        ))
+    }
+    fn with_mixer(root: &Path, mixer: Mixer, fault: Fault) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
             preloaded: std::array::from_fn(|_| None),
             output_enabled: Arc::new(AtomicBool::new(true)),
@@ -255,7 +302,9 @@ impl NativeAudio {
             last_movie_report_ms: 0,
             voice_ducking: VoiceDucking::default(),
             ducking_clock: Instant::now(),
-            stream,
+            mixer,
+            #[cfg(feature = "native")]
+            _device: None,
         })
     }
     pub fn host_control(&self) -> HostAudioControl {
@@ -303,7 +352,9 @@ impl NativeAudio {
     ) -> Channel {
         let fault: Fault = Arc::default();
         let looped = program.looped.clone();
-        let sink = Player::connect_new(self.stream.mixer());
+        // Queue the stream before connecting: the mixer fixes its resampler from the
+        // player's reported format, and an empty player reports a placeholder rate.
+        let (sink, queue) = Player::new();
         sink.pause();
         let gain = volume.min(256) as f32 / 256.0;
         let envelope = (fade_ms != 0).then(|| Envelope::new(0.0, 1.0, fade_ms));
@@ -317,6 +368,7 @@ impl NativeAudio {
             fault: fault.clone(),
             failed: false,
         });
+        self.mixer.add(queue);
         Channel {
             bytes,
             sink,
@@ -871,6 +923,33 @@ impl AudioBackend for NativeAudio {
 #[cfg(test)]
 mod output_gate_tests {
     use super::*;
+
+    #[test]
+    fn pull_output_resamples_channels_and_pads_with_silence() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/audio");
+        let bytes = std::fs::read(root.join("mono440.ogg")).unwrap();
+        let (audio, mut output) = NativeAudio::pull(&root, 48_000, 2).unwrap();
+        let mut silence = [1i16; 64];
+        output.fill_i16(&mut silence);
+        assert!(silence.iter().all(|&x| x == 0));
+
+        let mut reference = VorbisProgram::new(bytes.clone(), None, false).unwrap();
+        let mut frames = 0u64;
+        while reference.next_sample().unwrap().is_some() {
+            frames += 1;
+        }
+        let expected = frames * 48_000 / u64::from(reference.sample_rate());
+        let channel = audio.prepare(VorbisProgram::new(bytes, None, false).unwrap(), 256, 0);
+        channel.sink.play();
+        let mut pcm = vec![0i16; (expected as usize + 4800) * 2];
+        output.fill_i16(&mut pcm);
+        // Mono input is duplicated to both output channels.
+        assert!(pcm.chunks(2).all(|frame| frame[0] == frame[1]));
+        let audible = pcm.chunks(2).rposition(|f| f[0] != 0).unwrap() as u64 + 1;
+        assert!(audible.abs_diff(expected) < 480, "{audible} vs {expected}");
+        assert!(pcm[pcm.len() - 2000..].iter().all(|&x| x == 0));
+        assert!(channel.sink.empty());
+    }
 
     #[test]
     fn preloaded_volume_uses_directsound_logarithmic_gain_and_rejects_positive_db() {

@@ -16,7 +16,7 @@
 |---|---|---|
 | `crates/cmvs-core` | 格式、资源读取、VM、命令语义、场景状态、软件呈现、动作输入与后端契约 | 原生目标无第三方依赖；包含基于 `std` 的只读文件适配器，wasm32 通过 wasm-bindgen 接入 Worker 文件接口，不调用原生窗口或设备 API |
 | `crates/cmvs-wgpu` | 共享队列的 GPU 合成、纹理缓存、呈现及按需读回 | 依赖 core、wgpu、pollster；桌面通过可选 feature 接入 |
-| `crates/cmvs-audio` | Vorbis 解码、原生音频输出、源消费时钟 | 依赖 core、lewton；默认 native feature 启用 rodio |
+| `crates/cmvs-audio` | Vorbis 解码、混音、原生音频输出、源消费时钟 | 依赖 core、lewton；`mixer` feature 启用 rodio 混音（宿主拉取 PCM，Switch 使用），默认 `native` 再接系统设备 |
 | `crates/cmvs-desktop` | 窗口、物理输入、字体光栅化与按名解析、帧显示与桌面运行入口 | 依赖 core、winit、softbuffer、ico、encoding_rs、ab_glyph；可选依赖 audio；系统服务经 cmvs-native |
 | `crates/cmvs-native` | 操作系统服务的统一接口（字体对话框、系统字体目录），按平台分模块；原生系统 FFI 包 | raw-window-handle；Windows 上 windows-sys。macOS/iOS/Linux/Android/wasm 预留，返回 Unsupported |
 | `platforms/web/native` | wasm Worker 宿主、CPU/WebGPU 画面、文字与输入 | 依赖 core、font、无原生设备 feature 的 audio、wasm-bindgen、self_cell；[当前范围](backends/web.md) |

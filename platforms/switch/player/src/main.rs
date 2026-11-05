@@ -1,35 +1,88 @@
+mod audio;
 mod backend;
+mod controls;
+#[cfg(target_os = "horizon")]
+mod sys {
+    pub use cmvs_native::{SwitchAudioOut, SwitchWindow, shared_font};
+}
+#[cfg(not(target_os = "horizon"))]
+#[path = "stub.rs"]
+mod sys;
+
 use cmvs_core::{
-    input::{CodeInput, KeyBindings},
+    input::KeyBindings,
     profile::Registry,
+    raster::RgbaImage,
     runner::{Startup, StartupEvent, load_start},
+    viewport::{Viewport, presentation_mode},
 };
 use cmvs_font::font::FontRenderer;
-#[cfg(target_os = "horizon")]
-use cmvs_native::SwitchWindow;
+use controls::Controls;
 use std::{
     error::Error,
-    io::Read,
+    io::{ErrorKind, Read},
     path::Path,
     time::{Duration, Instant},
 };
-// Allows the complete host to be type-checked on development machines.
-#[cfg(not(target_os = "horizon"))]
-struct SwitchWindow;
-#[cfg(not(target_os = "horizon"))]
-impl SwitchWindow {
-    fn open() -> Result<Self, &'static str> {
-        Err("Switch host requires Horizon")
-    }
-    fn poll(&mut self) -> u32 {
-        1
-    }
-    fn present(&mut self, _: &[u32]) -> Result<(), &'static str> {
-        Err("Switch host requires Horizon")
+
+type Result<T> = std::result::Result<T, Box<dyn Error>>;
+const BASE: &str = "sdmc:/switch/cmvs-rs";
+const SCREEN: [u32; 2] = [1280, 720];
+/// VM budget per loop iteration before polling input and the applet again.
+const BUDGET: Duration = Duration::from_millis(8);
+const IDLE: Duration = Duration::from_millis(16);
+
+fn millis(duration: Duration) -> u32 {
+    duration.as_millis().min(u128::from(u32::MAX)) as u32
+}
+
+/// `font.ttf` beside the program wins; otherwise the system's shared Japanese font.
+fn load_font(base: &Path) -> Result<FontRenderer> {
+    let path = base.join("font.ttf");
+    match std::fs::metadata(&path) {
+        Ok(_) => FontRenderer::read(&path, 0),
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            let bytes = sys::shared_font().ok_or("no font.ttf and no system shared font")?;
+            Ok(FontRenderer::from_bytes(bytes, 0)?)
+        }
+        Err(error) => Err(error.into()),
     }
 }
-fn run() -> Result<(), Box<dyn Error>> {
-    let base = Path::new("sdmc:/switch/cmvs-rs");
+
+fn render(startup: &Startup<'_>, font: &mut FontRenderer) -> Result<RgbaImage> {
+    if let Some(frame) = startup.movie_frame() {
+        return Ok(frame.clone());
+    }
+    let objects = font.prepare_objects(startup.messages())?;
+    let mut extra: Vec<_> = objects.iter().collect();
+    extra.extend(startup.messages().visible_window_objects());
+    let size = startup.screen_size();
+    Ok(cmvs_core::scene_render::render_scene(
+        startup.scene(),
+        Some(startup.camera()),
+        &extra,
+        size[0],
+        size[1],
+    )?)
+}
+
+/// Host-only crosshair; the engine screenshot readback never includes it.
+fn draw_cursor(surface: &mut [u32], view: Viewport, pointer: [i32; 2]) {
+    let at = view.to_target(pointer);
+    for d in -5..=5 {
+        for (x, y) in [
+            (at[0] as i32 + d, at[1] as i32),
+            (at[0] as i32, at[1] as i32 + d),
+        ] {
+            if (0..SCREEN[0] as i32).contains(&x) && (0..SCREEN[1] as i32).contains(&y) {
+                surface[y as usize * SCREEN[0] as usize + x as usize] = 0xffffff;
+            }
+        }
+    }
+}
+
+fn run(window: &mut sys::SwitchWindow) -> Result<()> {
+    let base = Path::new(BASE);
     let root = base.join("game");
     let game = Registry::builtin().identify_game(&root, None)?;
     let record = game.selection.record.ok_or("unregistered game")?;
@@ -39,9 +92,13 @@ fn run() -> Result<(), Box<dyn Error>> {
     startup.set_user_data_directory(&user)?;
     startup.set_block_unreviewed(false);
     startup.set_block_presumed(false);
+    let (audio, audio_thread) = audio::AudioThread::start(&root)?;
+    let audio_control = audio.host_control();
+    startup.set_audio_backend(Box::new(audio))?;
     startup.set_decode_movie_frames(true);
     startup.set_record_text(true);
-    let mut font = FontRenderer::read(&base.join("font.ttf"), 0)?;
+    startup.set_save_clock(Box::new(cmvs_core::runner::utc_save_time));
+    let mut font = load_font(base)?;
     font.set_user_directory(&user)?;
     startup.set_glyph_metrics(font.metrics());
     if !font.has_face(startup.settings().font_face()) {
@@ -60,92 +117,83 @@ fn run() -> Result<(), Box<dyn Error>> {
     };
     backend.display.render_mode =
         cmvs_core::platform::supported_render_mode(&backend, backend.display.render_mode)?;
-    let mut window = SwitchWindow::open()?;
-    let mut surface = vec![0u32; 1280 * 720];
-    let mut codes = CodeInput::default();
-    let mut pointer = [size[0] as i32 / 2, size[1] as i32 / 2];
+
+    let mut surface = vec![0u32; (SCREEN[0] * SCREEN[1]) as usize];
+    let mut controls = Controls::new(size);
+    let mut focused = true;
     let mut input_due = true;
-    let mut last = Instant::now();
+    let mut last_poll = Instant::now();
+    let mut last_frame = last_poll;
     loop {
-        let buttons = window.poll();
-        if buttons & 1 != 0 {
+        let sample = window.poll();
+        if sample.exit {
+            break;
+        }
+        audio_thread.check()?;
+        let now = Instant::now();
+        let dt = millis(now.duration_since(last_poll));
+        last_poll = now;
+        if sample.focused != focused {
+            focused = sample.focused;
+            audio_control.set_active(focused);
+            startup.set_focused(focused);
+            controls.focus(focused, startup.input_mut());
+            last_frame = now;
+        }
+        let mode = presentation_mode(
+            backend.display.fullscreen,
+            backend.display.aspect_scaling,
+            backend.display.aspect_mode,
+        );
+        let view = Viewport::new(size, SCREEN, mode)?;
+        controls.poll(&sample, view, dt);
+        if controls.quit_requested() {
             break;
         }
         if input_due {
             if let Some(warp) = startup.input_mut().take_warp() {
-                pointer = warp;
+                controls.warp(warp);
             }
-            pointer[0] = (pointer[0] + if buttons & 16 != 0 { 8 } else { 0 }
-                - if buttons & 8 != 0 { 8 } else { 0 })
-            .clamp(0, size[0] as i32 - 1);
-            pointer[1] = (pointer[1] + if buttons & 64 != 0 { 8 } else { 0 }
-                - if buttons & 32 != 0 { 8 } else { 0 })
-            .clamp(0, size[1] as i32 - 1);
-            let mut held = [false; 128];
-            held[1] = buttons & 2 != 0;
-            held[3] = buttons & 4 != 0;
-            codes.update(&bindings, &held, startup.input_mut());
-            startup.input_mut().set_pointer(pointer[0], pointer[1]);
+            controls.frame(&bindings, startup.input_mut());
             input_due = false;
         }
         let budget = Instant::now();
-        let mut quit = false;
-        while budget.elapsed() < Duration::from_millis(8) {
-            match startup.tick(&mut backend)? {
+        while budget.elapsed() < BUDGET {
+            let event = startup.tick(&mut backend).map_err(|error| {
+                let vm = startup.machine();
+                format!(
+                    "{error}\nat {} / 0x{:x} after {} steps",
+                    vm.current_name().escape_ascii(),
+                    vm.pc(),
+                    startup.steps()
+                )
+            })?;
+            match event {
                 StartupEvent::Progress | StartupEvent::SnapshotCaptured => {}
                 StartupEvent::Quit => {
-                    quit = true;
+                    startup.save_preferences(backend.display)?;
+                    return Ok(());
+                }
+                StartupEvent::Inactive => {
+                    std::thread::sleep(IDLE);
+                    last_frame = Instant::now();
                     break;
                 }
                 StartupEvent::Yield => {
                     let now = Instant::now();
-                    startup.advance_decoded_frame(
-                        now.duration_since(last).as_millis().min(u32::MAX as u128) as u32,
-                    )?;
-                    last = now;
-                    let frame = if let Some(frame) = startup.movie_frame() {
-                        frame.clone()
-                    } else {
-                        let objects = font.prepare_objects(startup.messages())?;
-                        let mut extra: Vec<_> = objects.iter().collect();
-                        extra.extend(startup.messages().visible_window_objects());
-                        cmvs_core::scene_render::render_scene(
-                            startup.scene(),
-                            Some(startup.camera()),
-                            &extra,
-                            size[0],
-                            size[1],
-                        )?
-                    };
+                    startup.advance_decoded_frame(millis(now.duration_since(last_frame)))?;
+                    last_frame = now;
+                    let frame = render(&startup, &mut font)?;
                     surface.fill(0);
                     frame.draw_scaled(
                         &mut surface,
-                        1280,
-                        720,
-                        cmvs_core::viewport::presentation_mode(
-                            backend.display.fullscreen,
-                            backend.display.aspect_scaling,
-                            backend.display.aspect_mode,
-                        ),
+                        SCREEN[0],
+                        SCREEN[1],
+                        mode,
                         backend.display.render_mode == 1,
                     )?;
-                    // Cursor is host-only; exclude it from engine screenshot readback.
-                    let mode = cmvs_core::viewport::presentation_mode(
-                        backend.display.fullscreen,
-                        backend.display.aspect_scaling,
-                        backend.display.aspect_mode,
-                    );
-                    let view = cmvs_core::viewport::Viewport::new(size, [1280, 720], mode)?;
-                    let at = view.to_target(pointer);
-                    for d in -5..=5 {
-                        for (x, y) in [
-                            (at[0] as i32 + d, at[1] as i32),
-                            (at[0] as i32, at[1] as i32 + d),
-                        ] {
-                            if (0..1280).contains(&x) && (0..720).contains(&y) {
-                                surface[y as usize * 1280 + x as usize] = 0xffffff;
-                            }
-                        }
+                    if controls.cursor_visible() {
+                        draw_cursor(&mut surface, view, controls.pointer());
                     }
                     window.present(&surface)?;
                     backend.frame = Some(frame);
@@ -155,16 +203,24 @@ fn run() -> Result<(), Box<dyn Error>> {
                 event => return Err(format!("game stopped: {event:?}").into()),
             }
         }
-        if quit {
-            break;
-        }
     }
     startup.save_preferences(backend.display)?;
     Ok(())
 }
+
 fn main() {
-    if let Err(error) = run() {
-        eprintln!("Switch player: {error}");
-        let _ = std::fs::write("sdmc:/switch/cmvs-rs/error.log", error.to_string());
+    // The window lives until main returns, after the error log is written: dropping
+    // it unlocks exit, after which a pending HOME close may end the process.
+    let mut window = match sys::SwitchWindow::open() {
+        Ok(window) => window,
+        Err(error) => return report(error),
+    };
+    if let Err(error) = run(&mut window) {
+        report(&error.to_string());
     }
+}
+
+fn report(error: &str) {
+    eprintln!("Switch player: {error}");
+    let _ = std::fs::write(format!("{BASE}/error.log"), error);
 }

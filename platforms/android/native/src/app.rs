@@ -367,7 +367,7 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
     if !font.borrow().has_face(startup.settings().font_face()) {
         startup.set_font_face(cmvs_core::settings::DEFAULT_FONT_FACE)?;
     }
-    startup.set_save_clock(Box::new(utc_save_time));
+    startup.set_save_clock(Box::new(cmvs_core::runner::utc_save_time));
     let mut keys = String::new();
     File::open(root.join("key.cfg"))?
         .take(65537)
@@ -431,27 +431,4 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
     }
     player.persist()?;
     Ok(())
-}
-
-// Save labels use UTC consistently with the desktop host.
-fn utc_save_time() -> cmvs_core::runner::SaveTime {
-    let seconds = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs());
-    let (days, rest) = ((seconds / 86400) as i64, seconds % 86400);
-    let z = days + 719468;
-    let era = z.div_euclid(146097);
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    [
-        (yoe + era * 400 + i64::from(month <= 2)) as u16,
-        month as u16,
-        (doy - (153 * mp + 2) / 5 + 1) as u16,
-        (rest / 3600) as u16,
-        (rest / 60 % 60) as u16,
-        (rest % 60) as u16,
-    ]
 }

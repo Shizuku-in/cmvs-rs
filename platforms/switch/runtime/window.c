@@ -1,8 +1,31 @@
 #include <switch.h>
 #include <stdbool.h>
+#include <string.h>
+
+/* Must match `NxInput` in crates/cmvs-native/src/switch/window.rs. */
+#define CMVS_NX_TOUCHES 4
+typedef struct {
+    u32 id;
+    u32 x;
+    u32 y;
+} CmvsNxTouch;
+typedef struct {
+    u32 buttons;
+    u32 flags;
+    s32 sticks[2][2];
+    u32 touch_count;
+    CmvsNxTouch touches[CMVS_NX_TOUCHES];
+} CmvsNxInput;
+enum {
+    CMVS_FLAG_EXIT = 1,
+    CMVS_FLAG_FOCUSED = 2,
+};
+
 static Framebuffer fb;
 static PadState pad;
 static bool opened;
+static bool exit_locked;
+
 int cmvs_nx_open(void) {
     if (opened)
         return -1;
@@ -16,19 +39,56 @@ int cmvs_nx_open(void) {
     }
     padConfigureInput(1, HidNpadStyleSet_NpadStandard);
     padInitializeDefault(&pad);
+    hidInitializeTouchScreen();
+    /* Closing from HOME then arrives as an exit request instead of killing the
+       process, so the host can persist settings. Unavailable in applet mode. */
+    exit_locked = R_SUCCEEDED(appletLockExit());
     opened = true;
     return 0;
 }
-unsigned cmvs_nx_poll(void) {
-    if (!appletMainLoop())
-        return 1;
-    padUpdate(&pad);
-    u64 held = padGetButtons(&pad);
-    return ((held & HidNpadButton_Plus) ? 1 : 0) | ((held & HidNpadButton_A) ? 2 : 0) |
-           ((held & HidNpadButton_B) ? 4 : 0) | ((held & HidNpadButton_Left) ? 8 : 0) |
-           ((held & HidNpadButton_Right) ? 16 : 0) | ((held & HidNpadButton_Up) ? 32 : 0) |
-           ((held & HidNpadButton_Down) ? 64 : 0);
+
+static u32 map_buttons(u64 held) {
+    static const u64 order[] = {
+        HidNpadButton_Plus, HidNpadButton_A,     HidNpadButton_B,      HidNpadButton_X,
+        HidNpadButton_Y,    HidNpadButton_L,     HidNpadButton_R,      HidNpadButton_ZL,
+        HidNpadButton_ZR,   HidNpadButton_Minus, HidNpadButton_Up,     HidNpadButton_Down,
+        HidNpadButton_Left, HidNpadButton_Right, HidNpadButton_StickL, HidNpadButton_StickR,
+    };
+    u32 result = 0;
+    for (unsigned i = 0; i < sizeof(order) / sizeof(order[0]); ++i) {
+        if (held & order[i])
+            result |= 1u << i;
+    }
+    return result;
 }
+
+void cmvs_nx_poll(CmvsNxInput *out) {
+    memset(out, 0, sizeof(*out));
+    if (!appletMainLoop()) {
+        out->flags = CMVS_FLAG_EXIT;
+        return;
+    }
+    if (appletGetFocusState() == AppletFocusState_InFocus)
+        out->flags |= CMVS_FLAG_FOCUSED;
+    padUpdate(&pad);
+    out->buttons = map_buttons(padGetButtons(&pad));
+    for (unsigned i = 0; i < 2; ++i) {
+        HidAnalogStickState stick = padGetStickPos(&pad, i);
+        out->sticks[i][0] = stick.x;
+        out->sticks[i][1] = stick.y;
+    }
+    HidTouchScreenState touch = {0};
+    if (hidGetTouchScreenStates(&touch, 1) != 0) {
+        u32 count = touch.count < CMVS_NX_TOUCHES ? touch.count : CMVS_NX_TOUCHES;
+        for (u32 i = 0; i < count; ++i) {
+            out->touches[i].id = touch.touches[i].finger_id;
+            out->touches[i].x = touch.touches[i].x;
+            out->touches[i].y = touch.touches[i].y;
+        }
+        out->touch_count = count;
+    }
+}
+
 void cmvs_nx_present(const u32 *pixels) {
     u32 stride;
     u8 *out = framebufferBegin(&fb, &stride);
@@ -41,8 +101,12 @@ void cmvs_nx_present(const u32 *pixels) {
     }
     framebufferEnd(&fb);
 }
+
 void cmvs_nx_close(void) {
     if (opened)
         framebufferClose(&fb);
+    if (exit_locked)
+        appletUnlockExit();
+    exit_locked = false;
     opened = false;
 }

@@ -5,7 +5,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
-description = "Optional CMVS streaming Vorbis decoder and native audio backend"
+description = "Optional CMVS streaming Vorbis decoder, software mixer and native audio backend"
 
 [lints]
 workspace = true
@@ -17,4 +17,7 @@ lewton.workspace = true
 
 [features]
 default = ["native"]
-native = ["dep:rodio"]
+# Engine channel state and software mixing; the host pulls PCM (no OS audio device).
+mixer = ["dep:rodio"]
+# Mixer output through the default system device.
+native = ["mixer", "rodio/playback"]

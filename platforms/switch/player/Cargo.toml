@@ -11,3 +11,4 @@ workspace = true
 cmvs-core = { path = "../../../crates/cmvs-core" }
 cmvs-native = { path = "../../../crates/cmvs-native" }
 cmvs-font = { path = "../../../crates/cmvs-font" }
+cmvs-audio = { path = "../../../crates/cmvs-audio", default-features = false, features = ["mixer"] }
