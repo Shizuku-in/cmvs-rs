@@ -399,6 +399,7 @@ dependencies = [
 name = "cmvs-switch"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
  "cmvs-audio",
  "cmvs-core",
  "cmvs-font",

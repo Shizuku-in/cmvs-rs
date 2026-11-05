@@ -3,6 +3,8 @@ mod backend;
 mod boost;
 mod controls;
 mod gpu;
+mod library;
+mod menu;
 mod text_input;
 #[cfg(target_os = "horizon")]
 mod sys {
@@ -42,16 +44,23 @@ fn millis(duration: Duration) -> u32 {
 }
 
 /// `font.ttf` beside the program wins; otherwise the system's shared Japanese font.
-fn load_font(base: &Path) -> Result<FontRenderer> {
-    let path = base.join("font.ttf");
-    match std::fs::metadata(&path) {
-        Ok(_) => FontRenderer::read(&path, 0),
+fn font_bytes(base: &Path) -> Result<Vec<u8>> {
+    match std::fs::read(base.join("font.ttf")) {
+        Ok(bytes) => Ok(bytes),
         Err(error) if error.kind() == ErrorKind::NotFound => {
-            let bytes = sys::shared_font().ok_or("no font.ttf and no system shared font")?;
-            Ok(FontRenderer::from_bytes(bytes, 0)?)
+            Ok(sys::shared_font().ok_or("no font.ttf and no system shared font")?)
         }
         Err(error) => Err(error.into()),
     }
+}
+
+/// How a game session ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ended {
+    /// The game quit, or the player held + to leave it.
+    Quit,
+    /// The system asked the application to close.
+    Exit,
 }
 
 /// `renderer.txt` beside the program holds `gpu` (the default when absent) or `cpu`.
@@ -79,7 +88,7 @@ fn render_gpu(
 ) -> Result<()> {
     let size = startup.screen_size();
     if let Some(frame) = startup.movie_frame() {
-        return gpu.render_movie(frame, size, linear);
+        return gpu.render_image(frame, size, linear);
     }
     let objects = font.prepare_objects(startup.messages())?;
     let mut extra: Vec<_> = objects.iter().collect();
@@ -126,28 +135,31 @@ fn draw_cursor(surface: &mut [u32], view: Viewport, pointer: [i32; 2]) {
     }
 }
 
-fn run(window: &mut sys::SwitchWindow, gpu: Option<sys::SwitchGpu>) -> Result<()> {
+fn run(
+    window: &mut sys::SwitchWindow,
+    gpu: Option<&mut gpu::GpuRenderer>,
+    root: &Path,
+) -> Result<Ended> {
     // Boosted through game loading; normal clocks return when this drops.
     let mut load = boost::LoadBoost::starting();
     let mut cpu_boost = boost::CpuBoost::default();
     cpu_boost.apply(load.wanted(true));
     let base = Path::new(BASE);
-    let root = base.join("game");
-    let game = Registry::builtin().identify_game(&root, None)?;
+    let game = Registry::builtin().identify_game(root, None)?;
     let record = game.selection.record.ok_or("unregistered game")?;
-    let script = load_start(&root, &game.files)?;
-    let mut startup = Startup::new(&script, &root, &game, 0)?;
+    let script = load_start(root, &game.files)?;
+    let mut startup = Startup::new(&script, root, &game, 0)?;
     let user = base.join("users").join(&record.game);
     startup.set_user_data_directory(&user)?;
     startup.set_block_unreviewed(false);
     startup.set_block_presumed(false);
-    let (audio, audio_thread) = audio::AudioThread::start(&root)?;
+    let (audio, audio_thread) = audio::AudioThread::start(root)?;
     let audio_control = audio.host_control();
     startup.set_audio_backend(Box::new(audio))?;
     startup.set_decode_movie_frames(true);
     startup.set_record_text(true);
     startup.set_save_clock(Box::new(cmvs_core::runner::utc_save_time));
-    let mut font = load_font(base)?;
+    let mut font = FontRenderer::from_bytes(font_bytes(base)?, 0)?;
     font.set_user_directory(&user)?;
     startup.set_glyph_metrics(font.metrics());
     if !font.has_face(startup.settings().font_face()) {
@@ -163,7 +175,7 @@ fn run(window: &mut sys::SwitchWindow, gpu: Option<sys::SwitchGpu>) -> Result<()
         display: startup.display_preferences(),
         size,
         frame: None,
-        gpu: gpu.map(gpu::GpuRenderer::new).transpose()?,
+        gpu,
         modal_shown: false,
     };
     backend.display.render_mode =
@@ -174,14 +186,16 @@ fn run(window: &mut sys::SwitchWindow, gpu: Option<sys::SwitchGpu>) -> Result<()
         None => vec![0u32; (SCREEN[0] * SCREEN[1]) as usize],
     };
     let mut controls = Controls::new(size);
+    // The button that started the game must not click it.
+    controls.suppress_held(startup.input_mut());
     let mut focused = true;
     let mut input_due = true;
     let mut last_poll = Instant::now();
     let mut last_frame = last_poll;
-    loop {
+    let ended = loop {
         let sample = window.poll();
         if sample.exit {
-            break;
+            break Ended::Exit;
         }
         audio_thread.check()?;
         let now = Instant::now();
@@ -203,7 +217,7 @@ fn run(window: &mut sys::SwitchWindow, gpu: Option<sys::SwitchGpu>) -> Result<()
         let view = Viewport::new(size, SCREEN, mode)?;
         controls.poll(&sample, view, dt);
         if controls.quit_requested() {
-            break;
+            break Ended::Quit;
         }
         if input_due {
             if let Some(warp) = startup.input_mut().take_warp() {
@@ -238,7 +252,7 @@ fn run(window: &mut sys::SwitchWindow, gpu: Option<sys::SwitchGpu>) -> Result<()
                 StartupEvent::Progress | StartupEvent::SnapshotCaptured => {}
                 StartupEvent::Quit => {
                     startup.save_preferences(backend.display)?;
-                    return Ok(());
+                    return Ok(Ended::Quit);
                 }
                 StartupEvent::Inactive => {
                     load.interrupted();
@@ -274,9 +288,101 @@ fn run(window: &mut sys::SwitchWindow, gpu: Option<sys::SwitchGpu>) -> Result<()
                 event => return Err(format!("game stopped: {event:?}").into()),
             }
         }
-    }
+    };
     startup.save_preferences(backend.display)?;
-    Ok(())
+    Ok(ended)
+}
+
+/// Shows a full-screen host image through whichever renderer is active.
+fn show(
+    window: &mut sys::SwitchWindow,
+    gpu: Option<&mut gpu::GpuRenderer>,
+    image: &RgbaImage,
+) -> Result<()> {
+    if let Some(gpu) = gpu {
+        gpu.render_image(image, SCREEN, false)?;
+        return gpu.present(1, false, None);
+    }
+    let mut surface = vec![0u32; (SCREEN[0] * SCREEN[1]) as usize];
+    image.draw_scaled(&mut surface, SCREEN[0], SCREEN[1], 1, false)?;
+    Ok(window.present(&surface)?)
+}
+
+/// Runs the selection screen; `None` when the player or the system closes it.
+fn choose(
+    window: &mut sys::SwitchWindow,
+    mut gpu: Option<&mut gpu::GpuRenderer>,
+    games: &[library::GameEntry],
+    font: &ab_glyph::FontVec,
+    selected: usize,
+) -> Result<Option<usize>> {
+    let first = window.poll();
+    if first.exit {
+        return Ok(None);
+    }
+    let mut menu = menu::Menu::new(selected, games.len(), &first);
+    let mut dirty = true;
+    let mut last = Instant::now();
+    loop {
+        let sample = window.poll();
+        if sample.exit {
+            return Ok(None);
+        }
+        let now = Instant::now();
+        let dt = millis(now.duration_since(last));
+        last = now;
+        match menu.poll(&sample, dt) {
+            menu::MenuAction::Idle => {}
+            menu::MenuAction::Moved => dirty = true,
+            menu::MenuAction::Exit => return Ok(None),
+            menu::MenuAction::Launch(index) => {
+                // Identification and loading take a while; say what is happening.
+                show(
+                    window,
+                    gpu.as_deref_mut(),
+                    &menu::draw(&menu, games, font, true),
+                )?;
+                return Ok(Some(index));
+            }
+        }
+        if dirty && sample.focused {
+            show(
+                window,
+                gpu.as_deref_mut(),
+                &menu::draw(&menu, games, font, false),
+            )?;
+            dirty = false;
+        }
+        std::thread::sleep(IDLE);
+    }
+}
+
+/// One game starts directly; several are offered in a menu that games return to.
+fn session(window: &mut sys::SwitchWindow, mut gpu: Option<&mut gpu::GpuRenderer>) -> Result<()> {
+    let base = Path::new(BASE);
+    let games = library::discover(base)?;
+    match games.as_slice() {
+        [] => Err(format!("no games found: put each game directory in {BASE}/games/").into()),
+        [game] => run(window, gpu, &game.root).map(|_| ()),
+        _ => {
+            let font = ab_glyph::FontVec::try_from_vec_and_index(font_bytes(base)?, 0)
+                .map_err(|_| "invalid menu font")?;
+            let mut selected = library::last_started(base, &games);
+            while let Some(index) = choose(window, gpu.as_deref_mut(), &games, &font, selected)? {
+                selected = index;
+                library::remember(base, &games[index]);
+                let ended = run(window, gpu.as_deref_mut(), &games[index].root)
+                    .map_err(|error| format!("{}: {error}", games[index].name))?;
+                if let Some(gpu) = gpu.as_deref_mut() {
+                    gpu.clear_cache();
+                }
+                if ended == Ended::Exit {
+                    break;
+                }
+            }
+            Ok(())
+        }
+    }
 }
 
 fn main() {
@@ -297,7 +403,11 @@ fn main() {
         Ok(opened) => opened,
         Err(error) => return report(&error),
     };
-    if let Err(error) = run(&mut window, gpu) {
+    let mut gpu = match gpu.map(gpu::GpuRenderer::new).transpose() {
+        Ok(gpu) => gpu,
+        Err(error) => return report(&error.to_string()),
+    };
+    if let Err(error) = session(&mut window, gpu.as_mut()) {
         report(&error.to_string());
     }
 }

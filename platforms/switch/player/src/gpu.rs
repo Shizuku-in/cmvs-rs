@@ -52,6 +52,14 @@ impl GpuRenderer {
         })
     }
 
+    /// Releases every cached texture, e.g. before another game starts.
+    pub fn clear_cache(&mut self) {
+        for (_, cached) in self.cache.drain() {
+            self.gpu.release_texture(cached.texture);
+        }
+        self.cache_bytes = 0;
+    }
+
     fn begin_frame(&mut self) -> Result<()> {
         self.gpu.begin_frame()?;
         self.frame_start = self.clock;
@@ -168,9 +176,9 @@ impl GpuRenderer {
         Ok(())
     }
 
-    /// Fits a decoded movie frame onto an opaque logical canvas. Frames change every
-    /// time, so they bypass the content cache and its digest.
-    pub fn render_movie(&mut self, image: &RgbaImage, size: [u32; 2], linear: bool) -> Result<()> {
+    /// Fits an image (a decoded movie frame, a host screen) onto an opaque canvas of
+    /// `size`. Such images change every time, so they bypass the cache and its digest.
+    pub fn render_image(&mut self, image: &RgbaImage, size: [u32; 2], linear: bool) -> Result<()> {
         self.begin_frame()?;
         let source = [image.width(), image.height()];
         let view = Viewport::new(source, size, 1)?;

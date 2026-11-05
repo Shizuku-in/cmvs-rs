@@ -14,7 +14,10 @@ docker run --rm -v "$PWD:/src" -w /src cmvs-switch-build sh platforms/switch/scr
 
 ## 部署
 
-将 `platforms/switch/build/cmvs-switch.nro` 放到 SD 卡 `switch/cmvs-rs/`，同目录下放原始游戏目录 `game/`。
+将 `platforms/switch/build/cmvs-switch.nro` 放到 SD 卡 `switch/cmvs-rs/`，每个原始游戏目录放在同目录的
+`games/<任意名称>/` 下；旧的单游戏目录 `game/` 仍然可用，列在最前。只有一个游戏时直接启动；多个时显示选择列表，
+名称即目录名，选中后才识别游戏（识别需要读取并校验脚本与可执行文件）。上次启动的游戏记录在 `last-game.txt`，下次默认选中。
+在游戏内长按 + 或游戏自身退出后回到列表；从 HOME 关闭则直接退出程序。
 可选放入日文字体 `font.ttf`（字体索引 0）；缺省时使用系统共享字体（日/美/欧标准字库）。
 通过 hbmenu 的应用接管模式启动。
 
@@ -37,7 +40,10 @@ docker run --rm -v "$PWD:/src" -w /src cmvs-switch-build sh platforms/switch/scr
 | Y / X | Enter / Esc |
 | ZR / ZL | Ctrl / Shift |
 | L、R、右摇杆上下 | 滚轮上 / 下，按住 400 ms 后每 100 ms 重复 |
-| 长按 + 1 秒 | 保存设置并退出 |
+| 长按 + 1 秒 | 保存设置并退出（有多个游戏时回到列表） |
+
+选择列表：方向键或摇杆上下移动（按住 400 ms 后连续移动），L / R 翻页，A 启动，+ 退出程序；
+触摸点选一行，再点已选中的行启动。进入列表或游戏时仍按住的按键需先松开。
 
 从 HOME 菜单关闭软件时，程序先保存设置再退出；若系统拒绝锁定退出（例如相册小程序模式），仍可能被直接终止。
 切到 HOME 或覆盖层时输入取消、音频静音，引擎按游戏的后台绘制设置暂停。

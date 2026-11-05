@@ -4,16 +4,16 @@ use cmvs_core::{
     settings::DisplayPreferences,
 };
 use std::error::Error;
-pub struct Backend {
+pub struct Backend<'a> {
     pub display: DisplayPreferences,
     pub size: [u32; 2],
     /// Last software frame; unused when `gpu` renders.
     pub frame: Option<RgbaImage>,
-    pub gpu: Option<crate::gpu::GpuRenderer>,
+    pub gpu: Option<&'a mut crate::gpu::GpuRenderer>,
     /// A modal system applet ran since the host last cleared this.
     pub modal_shown: bool,
 }
-impl PlatformBackend for Backend {
+impl PlatformBackend for Backend<'_> {
     fn logical_size(&self) -> [u32; 2] {
         self.size
     }
