@@ -41,8 +41,8 @@ impl AudioReader {
     }
 }
 
-/// Holds source bytes and one decoded block. The historical public name is retained.
-pub struct VorbisProgram {
+/// Streams Ogg Vorbis or PCM WAVE audio, retaining source bytes and one decoded block.
+pub struct AudioProgram {
     pub(crate) bytes: Vec<Arc<[u8]>>,
     reader: AudioReader,
     pub(crate) looped: Arc<AtomicBool>,
@@ -53,7 +53,7 @@ pub struct VorbisProgram {
     channels: u16,
     rate: u32,
 }
-impl VorbisProgram {
+impl AudioProgram {
     /// With looping enabled, primary plays once, then secondary repeats. Without
     /// looping the original does not switch to secondary (MOG_Replay is never called).
     pub fn new(

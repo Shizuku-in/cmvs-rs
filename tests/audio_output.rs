@@ -1,6 +1,6 @@
 #![cfg(feature = "audio-output")]
 use cmvs_rs::{
-    audio_output::{Envelope, VorbisProgram},
+    audio_output::{AudioProgram, Envelope},
     vorbis::Vorbis,
 };
 use std::sync::Arc;
@@ -8,7 +8,7 @@ const FIRST: &[u8] = include_bytes!("fixtures/audio/mono440.ogg");
 const SECOND: &[u8] = include_bytes!("fixtures/audio/mono880.ogg");
 const VOICE: &[u8] = include_bytes!("fixtures/audio/mono660voice.ogg");
 fn samples(bytes: &[u8]) -> Vec<f32> {
-    let mut program = VorbisProgram::new(bytes.to_vec(), None, false).unwrap();
+    let mut program = AudioProgram::new(bytes.to_vec(), None, false).unwrap();
     let mut samples = vec![];
     while let Some(v) = program.next_sample().unwrap() {
         samples.push(v);
@@ -34,7 +34,7 @@ fn vorbis_decodes_synthetic_packets_and_reports_format() {
 fn two_file_bgm_plays_intro_once_and_repeats_second() {
     let first = samples(FIRST);
     let second = samples(SECOND);
-    let mut program = VorbisProgram::new(FIRST.to_vec(), Some(SECOND.to_vec()), true).unwrap();
+    let mut program = AudioProgram::new(FIRST.to_vec(), Some(SECOND.to_vec()), true).unwrap();
     let actual: Vec<_> = (0..first.len() + second.len() * 3)
         .map(|_| program.next_sample().unwrap().unwrap())
         .collect();
@@ -45,7 +45,7 @@ fn two_file_bgm_plays_intro_once_and_repeats_second() {
             second
         );
     }
-    let mut program = VorbisProgram::new(FIRST.to_vec(), Some(SECOND.to_vec()), false).unwrap();
+    let mut program = AudioProgram::new(FIRST.to_vec(), Some(SECOND.to_vec()), false).unwrap();
     for v in first {
         assert_eq!(program.next_sample().unwrap(), Some(v));
     }
@@ -54,13 +54,13 @@ fn two_file_bgm_plays_intro_once_and_repeats_second() {
 #[test]
 fn single_file_loop_and_exhausted_source_are_stable() {
     let first = samples(FIRST);
-    let mut program = VorbisProgram::new(FIRST.to_vec(), None, true).unwrap();
+    let mut program = AudioProgram::new(FIRST.to_vec(), None, true).unwrap();
     for _ in 0..3 {
         for &v in &first {
             assert_eq!(program.next_sample().unwrap(), Some(v));
         }
     }
-    let mut program = VorbisProgram::new(FIRST.to_vec(), None, false).unwrap();
+    let mut program = AudioProgram::new(FIRST.to_vec(), None, false).unwrap();
     for _ in 0..first.len() {
         program.next_sample().unwrap();
     }
@@ -72,7 +72,7 @@ fn single_file_loop_and_exhausted_source_are_stable() {
 fn restart_rewinds_active_and_exhausted_sources_with_independent_loop_control() {
     let expected = samples(FIRST);
     for consumed in [0, 123, expected.len() + 1] {
-        let mut old = VorbisProgram::new(FIRST.to_vec(), None, false).unwrap();
+        let mut old = AudioProgram::new(FIRST.to_vec(), None, false).unwrap();
         for _ in 0..consumed {
             old.next_sample().unwrap();
         }
@@ -95,13 +95,13 @@ fn restart_rewinds_active_and_exhausted_sources_with_independent_loop_control() 
 #[test]
 fn malformed_headers_and_packets_fail_before_output() {
     for bytes in [vec![], b"OggS".to_vec(), FIRST[..100].to_vec()] {
-        assert!(VorbisProgram::new(bytes, None, false).is_err());
+        assert!(AudioProgram::new(bytes, None, false).is_err());
     }
-    assert!(VorbisProgram::new(FIRST.to_vec(), Some(b"bad secondary".to_vec()), true).is_err());
+    assert!(AudioProgram::new(FIRST.to_vec(), Some(b"bad secondary".to_vec()), true).is_err());
     let mut corrupt = FIRST.to_vec();
     let last = corrupt.len() - 1;
     corrupt[last] ^= 0xff;
-    let result = VorbisProgram::new(corrupt, None, false);
+    let result = AudioProgram::new(corrupt, None, false);
     if let Ok(mut program) = result {
         let mut failed = false;
         for _ in 0..2048 {

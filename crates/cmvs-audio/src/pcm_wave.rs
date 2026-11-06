@@ -101,7 +101,7 @@ impl PcmWave {
 
 #[cfg(test)]
 mod tests {
-    use crate::VorbisProgram;
+    use crate::AudioProgram;
     fn fixture() -> Vec<u8> {
         let mut b = b"RIFF".to_vec();
         b.extend(48u32.to_le_bytes());
@@ -122,7 +122,7 @@ mod tests {
     }
     #[test]
     fn pcm_samples_loop_restart_and_eof() {
-        let mut p = VorbisProgram::new(fixture(), None, true).unwrap();
+        let mut p = AudioProgram::new(fixture(), None, true).unwrap();
         assert_eq!((p.channels(), p.sample_rate()), (2, 44100));
         let expected = [-1.0, 32767.0 / 32768.0, 0.0, 0.5, -0.5, 0.0];
         for _ in 0..3 {
@@ -141,19 +141,19 @@ mod tests {
     fn rejects_truncation_and_unsupported_pcm() {
         let b = fixture();
         for n in 0..b.len() {
-            assert!(VorbisProgram::new(b[..n].to_vec(), None, false).is_err());
+            assert!(AudioProgram::new(b[..n].to_vec(), None, false).is_err());
         }
         for (offset, value) in [(20, 3), (22, 0), (32, 2), (34, 24), (40, 11)] {
             let mut bad = b.clone();
             bad[offset] = value;
-            assert!(VorbisProgram::new(bad, None, false).is_err());
+            assert!(AudioProgram::new(bad, None, false).is_err());
         }
     }
     #[test]
     #[ignore = "requires CMVS_TEST_WAV pointing to a local game resource"]
     fn external_wave_decodes_to_end() {
         let bytes = std::fs::read(std::env::var_os("CMVS_TEST_WAV").unwrap()).unwrap();
-        let mut p = VorbisProgram::new(bytes, None, false).unwrap();
+        let mut p = AudioProgram::new(bytes, None, false).unwrap();
         let mut count = 0usize;
         while let Some(s) = p.next_sample().unwrap() {
             assert!(s.is_finite());

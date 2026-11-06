@@ -1,6 +1,6 @@
 //! Optional Rust Vorbis streaming, mixing and native output. Engine state stays in `audio`.
 //! With only the `mixer` feature the host pulls mixed PCM through [`PcmOutput`].
-use crate::VorbisProgram;
+use crate::AudioProgram;
 use cmvs_core::{
     MAX_PAYLOAD,
     audio::{
@@ -45,7 +45,7 @@ struct StreamSource {
     /// Device-wide /256 software mixer gain shared by every channel.
     mixer_gain: Arc<AtomicU32>,
     host_control: HostAudioControl,
-    program: VorbisProgram,
+    program: AudioProgram,
     compression: Option<Compression>,
     fault: Fault,
     failed: bool,
@@ -350,12 +350,12 @@ impl NativeAudio {
         }
         self.archives.with_paths(&self.paths, kind).read(name)
     }
-    fn prepare(&self, program: VorbisProgram, volume: u32, fade_ms: u32) -> Channel {
+    fn prepare(&self, program: AudioProgram, volume: u32, fade_ms: u32) -> Channel {
         self.prepare_with(program, None, volume, fade_ms)
     }
     fn prepare_with(
         &self,
-        program: VorbisProgram,
+        program: AudioProgram,
         compression: Option<Compression>,
         volume: u32,
         fade_ms: u32,
@@ -463,7 +463,7 @@ impl AudioBackend for NativeAudio {
         }
         let sound = self
             .load(ResourceKind::SoundEffect, name)?
-            .map(|data| VorbisProgram::new(data, None, false))
+            .map(|data| AudioProgram::new(data, None, false))
             .transpose()?;
         let loaded = sound.is_some();
         self.preloaded[index] = sound.map(|program| self.prepare(program, 256, 0));
@@ -491,7 +491,7 @@ impl AudioBackend for NativeAudio {
         if let Some(current) = current {
             current.check()?;
             if current.sink.empty() {
-                let program = VorbisProgram::from_shared(current.bytes.clone(), looped)?;
+                let program = AudioProgram::from_shared(current.bytes.clone(), looped)?;
                 let mut candidate = self.prepare(program, 256, 0);
                 candidate.gain = current.gain;
                 candidate.sink.set_volume(current.gain);
@@ -556,7 +556,7 @@ impl AudioBackend for NativeAudio {
             if let Some(request) = request
                 && let Some(data) = self.load(ResourceKind::SoundEffect, &request.name)?
             {
-                let program = VorbisProgram::new(data, None, request.looped)?;
+                let program = AudioProgram::new(data, None, request.looped)?;
                 prepared[index] = Some(self.prepare(program, request.volume, 0));
             }
         }
@@ -630,7 +630,7 @@ impl AudioBackend for NativeAudio {
             self.se[*channel as usize] = None;
             return Ok(false);
         };
-        let program = VorbisProgram::new(data, None, *looped)?;
+        let program = AudioProgram::new(data, None, *looped)?;
         println!(
             "# native SE[{channel}] {}: {} Hz, {} channels, prepared={}, loop={looped}",
             name.escape_ascii(),
@@ -664,7 +664,7 @@ impl AudioBackend for NativeAudio {
         let Some(current) = self.se.get(slot).ok_or("SE channel out of range")? else {
             return Ok(());
         };
-        let program = VorbisProgram::from_shared(current.bytes.clone(), looped)?;
+        let program = AudioProgram::from_shared(current.bytes.clone(), looped)?;
         let mut candidate = self.prepare(program, (current.gain * 256.0) as u32, 0);
         candidate.script_gain = current.script_gain;
         Self::set_gain(&mut candidate, current.gain);
@@ -710,7 +710,7 @@ impl AudioBackend for NativeAudio {
         let Some(data) = data else {
             return Ok(false);
         };
-        let program = VorbisProgram::new(data, None, false)?;
+        let program = AudioProgram::new(data, None, false)?;
         let rate = f32::from_bits(*rate_bits);
         let compression =
             match VoiceCompressor::new(rate, program.sample_rate(), program.channels())? {
@@ -786,7 +786,7 @@ impl AudioBackend for NativeAudio {
                     .ok_or("BGM loop resource missing")?,
             )
         };
-        let program = VorbisProgram::new(first, second, *looped)?;
+        let program = AudioProgram::new(first, second, *looped)?;
         println!(
             "# native BGM[{channel}] {} + {}: {} Hz, {} channels, loop={looped}, fade_ms={fade_ms}",
             primary.escape_ascii(),
@@ -844,7 +844,7 @@ impl AudioBackend for NativeAudio {
         file.seek(SeekFrom::Start(*offset))?;
         let mut bytes = vec![0; *size as usize];
         file.read_exact(&mut bytes)?;
-        let candidate = self.prepare(VorbisProgram::new(bytes, None, false)?, *volume, 0);
+        let candidate = self.prepare(AudioProgram::new(bytes, None, false)?, *volume, 0);
         self.movie = Some(candidate);
         self.last_movie_report_ms = 0;
         println!(
@@ -948,13 +948,13 @@ mod output_gate_tests {
         output.fill_i16(&mut silence);
         assert!(silence.iter().all(|&x| x == 0));
 
-        let mut reference = VorbisProgram::new(bytes.clone(), None, false).unwrap();
+        let mut reference = AudioProgram::new(bytes.clone(), None, false).unwrap();
         let mut frames = 0u64;
         while reference.next_sample().unwrap().is_some() {
             frames += 1;
         }
         let expected = frames * 48_000 / u64::from(reference.sample_rate());
-        let channel = audio.prepare(VorbisProgram::new(bytes, None, false).unwrap(), 256, 0);
+        let channel = audio.prepare(AudioProgram::new(bytes, None, false).unwrap(), 256, 0);
         channel.sink.play();
         let mut pcm = vec![0i16; (expected as usize + 4800) * 2];
         output.fill_i16(&mut pcm);
@@ -986,12 +986,12 @@ mod output_gate_tests {
             output_enabled: gate.clone(),
             mixer_gain: Arc::new(AtomicU32::new(256)),
             host_control: host.clone(),
-            program: VorbisProgram::new(bytes.to_vec(), None, false).unwrap(),
+            program: AudioProgram::new(bytes.to_vec(), None, false).unwrap(),
             compression: None,
             fault: Arc::default(),
             failed: false,
         };
-        let mut reference = VorbisProgram::new(bytes.to_vec(), None, false).unwrap();
+        let mut reference = AudioProgram::new(bytes.to_vec(), None, false).unwrap();
         let mut samples = vec![];
         while let Some(pcm) = reference.next_sample().unwrap() {
             samples.push(pcm);

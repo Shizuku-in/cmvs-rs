@@ -1,5 +1,5 @@
 //! Read-only bounded Vorbis verification; no audio device is opened.
-use cmvs_rs::{MAX_PAYLOAD, audio_output::VorbisProgram, cmv::CmvIndex};
+use cmvs_rs::{MAX_PAYLOAD, audio_output::AudioProgram, cmv::CmvIndex};
 use std::{
     env,
     error::Error,
@@ -56,7 +56,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         file.take(MAX_PAYLOAD as u64 + 1).read_to_end(&mut bytes)?;
         bytes
     };
-    let mut program = VorbisProgram::new(bytes, None, false)?;
+    let mut program = AudioProgram::new(bytes, None, false)?;
     let mut output = output
         .map(|p| OpenOptions::new().write(true).create_new(true).open(p))
         .transpose()?
