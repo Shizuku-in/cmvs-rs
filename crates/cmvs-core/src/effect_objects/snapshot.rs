@@ -11,7 +11,8 @@ use std::{collections::BTreeMap, error::Error};
 
 impl SceneHost {
     pub(crate) fn has_effect_pools(&self) -> bool {
-        !self.rain_effects.is_empty()
+        !self.legacy_flakes.is_empty()
+            || !self.rain_effects.is_empty()
             || !self.particle_effects.is_empty()
             || !self.falling_effects.is_empty()
             || !self.collision_effects.is_empty()
@@ -43,6 +44,7 @@ impl SceneHost {
                 LegacyEffect::Magic(_) => 0x54,
                 LegacyEffect::Sprites(_) => 0x55,
                 LegacyEffect::FloatingPlanes(_) => 0x56,
+                LegacyEffect::Vortex(_) => 0x57,
             };
             if slot >= 4 {
                 return Err(FormatError("legacy effect slot exceeds 3"));
@@ -62,6 +64,9 @@ impl SceneHost {
             }
             Ok(())
         };
+        for (&slot, effect) in &self.legacy_flakes {
+            insert(slot, Some(&effect.template))?;
+        }
         for (&slot, effect) in &self.rain_effects {
             insert(slot, Some(&effect.template))?;
         }
@@ -119,6 +124,20 @@ impl SceneHost {
                     ))?;
             }
             match &template {
+                SavedEffect::LegacyFlakes { words, name } => {
+                    scene.legacy_flakes.insert(
+                        slot as u8,
+                        super::LegacyFlakes::new(
+                            *words,
+                            SceneObject {
+                                image,
+                                ..Default::default()
+                            },
+                            *name,
+                            random,
+                        ),
+                    );
+                }
                 SavedEffect::Rain { words, name } | SavedEffect::LegacyRain { words, name } => {
                     let construct = if matches!(template, SavedEffect::LegacyRain { .. }) {
                         super::RainEffect::new_legacy

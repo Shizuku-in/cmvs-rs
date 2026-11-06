@@ -1063,7 +1063,7 @@ fn standalone_text_creation_uses_constructor_values_and_overwrites_in_place() {
 
 #[test]
 fn legacy_text_creation_reselects_named_and_default_faces_only_for_the_inspected_build() {
-    for name in ["cmvs-20071117", "cmvs-20080719"] {
+    for name in ["cmvs-20070119", "cmvs-20071117", "cmvs-20080719"] {
         let profile = cmvs_rs::profile::Registry::builtin().profile(name).unwrap();
         let mut code = vec![];
         call(&mut code, 0x2100, &[196, 1, 7]);

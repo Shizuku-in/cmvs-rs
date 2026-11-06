@@ -9,7 +9,10 @@ mod curtain;
 mod legacy;
 mod magic;
 mod sprites;
+mod vortex;
 pub use legacy::{LegacyEffect, SnowField, Walk, WorldQuad};
+mod legacy_flakes;
+pub(crate) use legacy_flakes::LegacyFlakes;
 mod rain;
 pub(crate) use rain::RainEffect;
 mod particles;
@@ -55,6 +58,9 @@ impl crate::scene::SceneHost {
         let view = cameras.view(0).expect("view exists");
         let position = [view.words[0], view.words[1], view.words[2]].map(f32::from_bits);
         for slot in 0..4 {
+            if let Some(effect) = self.legacy_flakes.get_mut(&slot) {
+                effect.advance(delta);
+            }
             if let Some(effect) = self.rain_effects.get_mut(&slot) {
                 effect.advance(delta, random);
             }

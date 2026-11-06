@@ -5291,6 +5291,20 @@ fn legacy_magic(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, 
         .create_magic(call, images.source, audio.backend, camera, random)?;
     Ok(Flow::Done)
 }
+fn legacy_vortex(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    let (Some(images), Some(audio), Some(camera), Some(random)) = (
+        hosts.images.as_mut(),
+        hosts.audio.as_mut(),
+        hosts.camera.as_deref_mut(),
+        hosts.random.as_deref_mut(),
+    ) else {
+        return Ok(Flow::Unavailable);
+    };
+    images
+        .scene
+        .create_vortex(call, images.source, audio.backend, camera, random)?;
+    Ok(Flow::Done)
+}
 fn legacy_curtain(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     let (Some(images), Some(audio), Some(camera)) = (
         hosts.images.as_mut(),
@@ -5373,6 +5387,26 @@ fn legacy_set(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Bo
 /// cmvs-20070119 effect slots of types 0x50.. ; see effect_objects::legacy.
 pub static LEGACY_EFFECTS: &[Entry] = &[
     Entry {
+        command: 0x2a3,
+        name: "create legacy falling flakes",
+        capability: Capability::ParticleImages,
+        handler: |hosts, call| {
+            let h = hosts
+                .images
+                .as_mut()
+                .expect("particle image capability checked");
+            h.scene.create_legacy_flakes(
+                call,
+                h.source,
+                hosts
+                    .random
+                    .as_deref_mut()
+                    .expect("particle random capability checked"),
+            )?;
+            Ok(Flow::Done)
+        },
+    },
+    Entry {
         command: 0x2a1,
         name: "create legacy rain streak effect",
         capability: Capability::ParticleImages,
@@ -5408,6 +5442,12 @@ pub static LEGACY_EFFECTS: &[Entry] = &[
         name: "create floating planes effect",
         capability: Capability::SceneImages,
         handler: legacy_floating_planes,
+    },
+    Entry {
+        command: 0x297,
+        name: "create vortex effect",
+        capability: Capability::SceneImages,
+        handler: legacy_vortex,
     },
     Entry {
         command: 0x290,
@@ -5549,6 +5589,21 @@ pub static IMAGE_TABLES: &[Entry] = &[
         handler: root_images,
     },
 ];
+
+pub static WINDOW_FULL_MOVE: &[Entry] = &[Entry {
+    command: 0x2ec,
+    name: "window full move",
+    capability: Capability::Platform,
+    handler: |hosts, call| {
+        hosts
+            .platform
+            .as_mut()
+            .expect("platform capability checked")
+            .host
+            .handle_window_full_move(call)?;
+        Ok(Flow::Done)
+    },
+}];
 
 pub static BACKGROUND_AUDIO: &[Entry] = &[Entry {
     command: 0x2ed,
@@ -5736,6 +5791,7 @@ pub static VARIANT_TABLES: &[&[Entry]] = &[
     ACTIVATION_PASS,
     WINDOW_SCALE_MOTION,
     VIEW_MOTION,
+    WINDOW_FULL_MOVE,
     LEGACY_EFFECTS,
     WINDOW_CHILD_IMAGE,
     DRAW_QUERY,
@@ -5774,6 +5830,7 @@ pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'st
         crate::profile::VariantId::ActivationPass => ACTIVATION_PASS,
         crate::profile::VariantId::WindowScaleMotion => WINDOW_SCALE_MOTION,
         crate::profile::VariantId::ViewMotion => VIEW_MOTION,
+        crate::profile::VariantId::WindowFullMove => WINDOW_FULL_MOVE,
         crate::profile::VariantId::LegacyEffects => LEGACY_EFFECTS,
         crate::profile::VariantId::WindowChildImage => WINDOW_CHILD_IMAGE,
         crate::profile::VariantId::DrawQuery => DRAW_QUERY,
@@ -5814,6 +5871,7 @@ pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
         Semantics::Variant(crate::profile::VariantId::ActivationPass) => "variant activation check reported as passed",
         Semantics::Variant(crate::profile::VariantId::WindowScaleMotion) => "variant window scale motion",
         Semantics::Variant(crate::profile::VariantId::ViewMotion) => "variant device view motion",
+        Semantics::Variant(crate::profile::VariantId::WindowFullMove) => "variant unscaled fullscreen origin",
         Semantics::Variant(crate::profile::VariantId::LegacyEffects) => "variant legacy effect slots",
         Semantics::Variant(crate::profile::VariantId::WindowChildImage) => "variant window child image",
         Semantics::Variant(crate::profile::VariantId::DrawQuery) => "variant object draw query",

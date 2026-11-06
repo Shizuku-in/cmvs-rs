@@ -27,6 +27,9 @@ impl Startup<'_> {
         self.effects = profile_int(bytes, "SYSTEM_INFO", "EFFECT_USE", 1) != 0;
         self.audio = audio;
         self.platform.configure_display_selection(bytes);
+        if self.gate.selection().profile.is_inspected_20070119() {
+            self.platform.configure_window_full_move(bytes);
+        }
         self.configuration = configuration;
         Ok(())
     }
@@ -47,6 +50,13 @@ impl Startup<'_> {
             return Err("invalid saved display aspect or render mode".into());
         }
         let mut configuration = self.configuration.clone();
+        if self.gate.selection().profile.is_inspected_20070119() {
+            configuration.set_integer(
+                "SYSTEM_INFO",
+                "WINDOW_FULL_MOVE_USE",
+                u32::from(self.platform.window_full_move()),
+            )?;
+        }
         let text = self.settings.text_output();
         let auto = self.settings.auto_advance();
         let [load, save] = self.save_menu.confirmations();

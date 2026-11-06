@@ -278,11 +278,15 @@ fn base_effect_layout_supported(profile: &crate::profile::EngineProfile) -> bool
 
 fn effect_record_supported(profile: &crate::profile::EngineProfile, body: &[u8]) -> bool {
     if profile.is_inspected_20070119() {
-        return body.len() == 60 && matches!(body.get(..4), Some([1, 0, 1 | 2, 0]))
+        return body.len() == 52 && body.get(..4) == Some(&[1, 0, 3, 0])
+            || body.len() == 60 && matches!(body.get(..4), Some([1, 0, 1 | 2, 0]))
             || body.len() == 4
                 && body[..2] == [1, 0]
                 && (0x50..=0x57).contains(&body[2])
                 && body[3] == 0;
+    }
+    if body.get(..4) == Some(&[1, 0, 3, 0]) {
+        return false;
     }
     if base_effect_layout_supported(profile) {
         return body.get(..4) == Some(&[1, 0, 2, 0]) || body == [1, 0, 8, 0];
@@ -972,6 +976,7 @@ impl Startup<'_> {
             mask,
             strip,
         );
+        self.scene.legacy_flakes = effects.legacy_flakes;
         self.scene.rain_effects = effects.rain_effects;
         self.scene.falling_effects = effects.falling_effects;
         self.scene.particle_effects = effects.particle_effects;
@@ -1326,6 +1331,30 @@ mod layout_tests {
         assert!(
             validate_512_child_slots_without_button_lists(std::iter::once(&parent), false).is_err()
         );
+    }
+
+    #[test]
+    fn legacy_flakes_records_require_the_inspected_identity_and_exact_length() {
+        let registry = crate::profile::Registry::builtin();
+        let mut body = vec![0; 52];
+        body[..4].copy_from_slice(&[1, 0, 3, 0]);
+        for profile in registry.profiles() {
+            assert_eq!(
+                effect_record_supported(profile, &body),
+                profile.id == "cmvs-20070119",
+                "{}",
+                profile.id
+            );
+        }
+        let mut profile = registry.profile("cmvs-20070119").unwrap().clone();
+        assert!(!effect_record_supported(&profile, &body[..51]));
+        body.push(0);
+        assert!(!effect_record_supported(&profile, &body));
+        body.pop();
+        for binary in &mut profile.binaries {
+            binary.sha256 = [0; 32];
+        }
+        assert!(!effect_record_supported(&profile, &body));
     }
 
     #[test]

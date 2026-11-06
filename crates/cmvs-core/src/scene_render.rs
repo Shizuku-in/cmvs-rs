@@ -887,6 +887,18 @@ pub fn prepare_scene<'a>(
             )
             .chain(
                 scene
+                    .legacy_flakes
+                    .get(&slot)
+                    .into_iter()
+                    .flat_map(|effect| {
+                        effect
+                            .particles
+                            .iter()
+                            .map(|p| (None, &p.object, Some(&effect.pool)))
+                    }),
+            )
+            .chain(
+                scene
                     .rain_effects
                     .get(&slot)
                     .into_iter()
@@ -1136,18 +1148,29 @@ pub fn prepare_scene<'a>(
     }
     // The engine enqueues the fade after ordinary object slots (0x140015da0).
     if let Some(fade) = scene.fade().current() {
-        // The overlay is a layer 0 queue item; its translated extent is not verified.
-        if scene
-            .quake()
-            .is_some_and(|quake| quake.offset(false) != [0, 0])
-        {
-            return Err(FormatError(
-                "fade overlay under a quake offset is not verified",
-            ));
-        }
+        // PURIRING 0x42ab20 creates a screen-sized solid at (0,0), with the
+        // constructor's quake flag set. 0x407b10 enqueues it as a slot object;
+        // 0x407c90 / 0x42bb90 apply that queue's offset without expanding it.
+        let [x, y] = scene.quake().map_or([0, 0], |quake| quake.offset(false));
+        let layer = if [x, y] == [0, 0] {
+            Layer::Fade(fade)
+        } else {
+            let [b, g, r, _] = fade.color.to_le_bytes();
+            Layer::Solid {
+                rect: [
+                    i64::from(x),
+                    i64::from(y),
+                    i64::from(width),
+                    i64::from(height),
+                ],
+                color: [r, g, b],
+                alpha: fade.opacity.clamp(0, 255) as u32,
+                blend: Blend::Alpha,
+            }
+        };
         entries.push(Entry {
             order: fade.order as f32,
-            layer: Some(Layer::Fade(fade)),
+            layer: Some(layer),
             children: Vec::new(),
         });
     }
@@ -1531,8 +1554,9 @@ fn tessellate_world_quad<'a>(
             return;
         }
         let texel = |t: f32, n: f32| (t * n).round() as i64;
-        let [x0, x1] = [u0, u1].map(|u| texel(u, size[0]));
-        let [y0, y1] = [v0, v1].map(|v| texel(v, size[1]));
+        let [left, top, right, bottom] = quad.uv;
+        let [x0, x1] = [u0, u1].map(|u| texel(left + u * (right - left), size[0]));
+        let [y0, y1] = [v0, v1].map(|v| texel(top + v * (bottom - top), size[1]));
         if x1 <= x0 || y1 <= y0 {
             return;
         }
@@ -1714,6 +1738,7 @@ mod scale_tests {
         let projection = view.projection([64, 64]).unwrap();
         let mut quad = crate::effect_objects::WorldQuad {
             image: &image,
+            uv: [0.0, 0.0, 1.0, 1.0],
             corners: [
                 [-20.0, 20.0, 1.0],
                 [20.0, 20.0, 1.0],
@@ -1748,6 +1773,63 @@ mod scale_tests {
         let mut layers = Vec::new();
         tessellate_world_quad(&quad, &projection, &mut layers);
         assert!(layers.is_empty());
+    }
+
+    #[test]
+    fn world_mesh_uses_the_selected_atlas_tile_after_tessellation() {
+        let mut pixels = [255, 0, 0, 255].repeat(64 * 64);
+        for y in 16..32 {
+            for x in 32..48 {
+                pixels[(y * 64 + x) * 4..(y * 64 + x) * 4 + 4].copy_from_slice(&[0, 255, 0, 255]);
+            }
+        }
+        let image = ObjectImage {
+            name: Vec::new(),
+            filter: None,
+            alpha: false,
+            surface: false,
+            pixels: RgbaImage::new(64, 64, pixels).unwrap(),
+        };
+        let camera = crate::camera::CameraHost::default();
+        let mut view = camera.view(0).unwrap().clone();
+        view.words = [0.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 90.0].map(f32::to_bits);
+        let quad = crate::effect_objects::WorldQuad {
+            image: &image,
+            uv: [0.5, 0.25, 0.75, 0.5],
+            corners: [
+                [-1.0, 1.0, 1.0],
+                [1.0, 1.0, 1.0],
+                [-1.0, -1.0, 1.0],
+                [1.0, -1.0, 1.0],
+            ],
+            position: [0.0, 0.0, 1.0],
+            alpha: 255,
+            blend: Blend::Replace,
+            late: false,
+        };
+        let mut layers = Vec::new();
+        tessellate_world_quad(&quad, &view.projection([64, 64]).unwrap(), &mut layers);
+        assert!(layers.len() > 1);
+        for layer in &layers {
+            let Layer::Rotated {
+                rect: [x, y, w, h], ..
+            } = layer
+            else {
+                panic!("wrong layer");
+            };
+            assert!(*x >= 32 && x + w <= 48 && *y >= 16 && y + h <= 32);
+        }
+        let frame = RenderFrame {
+            width: 64,
+            height: 64,
+            clear: [0, 0, 0, 255],
+            commands: layers,
+        };
+        let pixels = frame.render_cpu().unwrap();
+        assert_eq!(
+            &pixels.pixels()[(32 * 64 + 32) * 4..(32 * 64 + 32) * 4 + 4],
+            &[0, 255, 0, 255]
+        );
     }
 
     #[test]

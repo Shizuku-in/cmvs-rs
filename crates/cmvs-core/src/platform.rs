@@ -2,8 +2,8 @@
 use crate::filesystem as fs;
 use crate::filesystem::File;
 use crate::{
-    FormatError, MAX_PAYLOAD, cursor::CursorBitmap, dispatch::Call, evaluate::error,
-    machine::Machine,
+    FormatError, MAX_PAYLOAD, bytecode::DecodeError, cursor::CursorBitmap, dispatch::Call,
+    evaluate::error, machine::Machine,
 };
 use std::{
     error::Error,
@@ -450,8 +450,42 @@ pub struct PlatformHost {
     others_display_use: bool,
     fullscreen_monitor_mode: u32,
     fullscreen_monitor_initialized: bool,
+    window_full_move: bool,
 }
 impl PlatformHost {
+    /// Legacy device +56: omit the centered origin in unscaled fullscreen mode.
+    pub fn window_full_move(&self) -> bool {
+        self.window_full_move
+    }
+    /// Called only for builds whose legacy display setting has been inspected.
+    pub fn configure_window_full_move(&mut self, ini: &[u8]) {
+        self.window_full_move =
+            crate::save_menu::profile_int(ini, "SYSTEM_INFO", "WINDOW_FULL_MOVE_USE", 0) != 0;
+    }
+    /// cmvs-20070119 0x43bae0: read/write boolean, always consumes two words.
+    pub(crate) fn handle_window_full_move(
+        &mut self,
+        call: &mut Call<'_, '_>,
+    ) -> Result<(), DecodeError> {
+        let mode = call.argument(4, "mode")?;
+        let value = if mode != 0 {
+            Some(call.argument(8, "value")? != 0)
+        } else {
+            call.ignore_argument(8, "unused value")?;
+            None
+        };
+        call.complete(0x4008)?;
+        if let Some(value) = value {
+            self.window_full_move = value;
+        } else {
+            call.vm
+                .state_mut()
+                .set_system_integer(0, u32::from(self.window_full_move))
+                .expect("slot 0 exists");
+        }
+        Ok(())
+    }
+
     pub fn fullscreen_monitor_mode(&self) -> u32 {
         self.fullscreen_monitor_mode
     }

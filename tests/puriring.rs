@@ -247,6 +247,198 @@ fn floating_planes_use_command_296_and_consume_two_words_for_an_invalid_slot() {
 }
 
 #[test]
+fn vortex_binding_uses_one_word_and_keeps_failed_creation_pending() {
+    use cmvs_rs::{dispatch::ImageHosts, image::ImageSource, random::CrtRandom, scene::SceneHost};
+    struct FailingImages(usize);
+    impl ImageSource for FailingImages {
+        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+            self.0 += 1;
+            Err("synthetic image failure".into())
+        }
+    }
+    assert_eq!(
+        semantics(0x297),
+        Semantics::Variant(VariantId::LegacyEffects)
+    );
+    assert_eq!(
+        Registry::builtin()
+            .profile("cmvs-20071117")
+            .unwrap()
+            .semantics(0x297),
+        Semantics::Root
+    );
+    for slot in [4, u32::MAX, 0] {
+        let mut code = vec![];
+        command(&mut code, 0x2297, &[slot]);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        pending(&mut vm);
+        vm.state_mut().set_system_integer(0, 77).unwrap();
+        let before = (vm.pc(), vm.stack().len_bytes());
+        let mut scene = SceneHost::default();
+        let mut images = FailingImages(0);
+        let mut random = CrtRandom::new(0);
+        let mut camera = CameraHost::default();
+        let old_camera = camera.view(0).unwrap().words;
+        let mut audio = AudioHost::default();
+        let mut backend = RecordingAudio::default();
+        let out = dispatch::run(
+            semantics(0x297),
+            &mut vm,
+            &mut Hosts {
+                images: Some(ImageHosts {
+                    scene: &mut scene,
+                    source: &mut images,
+                    change_images: false,
+                }),
+                audio: Some(AudioHosts {
+                    audio: &mut audio,
+                    backend: &mut backend,
+                }),
+                camera: Some(&mut camera),
+                random: Some(&mut random),
+                ..Default::default()
+            },
+        );
+        assert_eq!(out.is_err(), slot == 0);
+        assert_eq!(images.0, usize::from(slot == 0));
+        assert_eq!(random, CrtRandom::new(0));
+        assert_eq!(camera.view(0).unwrap().words, old_camera);
+        assert_eq!(vm.state().system_integer(0), Some(77));
+        assert!(scene.legacy_effects().is_empty());
+        if slot == 0 {
+            assert_eq!((vm.pc(), vm.stack().len_bytes()), before);
+        } else {
+            assert_eq!(out.unwrap(), Some(Flow::Done));
+            assert_eq!(vm.stack().len_bytes(), 0);
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires CMVS_GAME_ROOT pointing to read-only PURIRING resources"]
+fn external_vortex_creates_switches_renders_and_releases() {
+    use cmvs_rs::{
+        audio::AudioSettings, dispatch::ImageHosts, effect_objects::LegacyEffect,
+        image::ImageArchives, random::CrtRandom, scene::SceneHost, scene_render,
+    };
+    let root =
+        std::path::PathBuf::from(std::env::var_os("CMVS_GAME_ROOT").expect("CMVS_GAME_ROOT"));
+    let mut archives = ImageArchives::new(&root).unwrap();
+    let paths = [
+        "up.cpz",
+        "event.cpz",
+        "bg.cpz",
+        "chip.cpz",
+        "stand.cpz",
+        "face.cpz",
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, name)| ((0x2011, i as u32), format!("data/pack/{name}").into_bytes()))
+    .collect();
+    let mut images = archives.with_paths(&paths);
+    let mut scene = SceneHost::default();
+    let profile = Registry::builtin().profile(PROFILE).unwrap();
+    let mut camera = CameraHost::for_profile(profile);
+    let mut random = CrtRandom::new(0);
+    let mut audio = AudioHost::default();
+    let mut backend = RecordingAudio::default();
+    let mut code = vec![];
+    command(&mut code, 0x2297, &[1]);
+    command(&mut code, 0x22af, &[1, 10, 123, 456]);
+    command(&mut code, 0x22ae, &[1]);
+    command(&mut code, 0x22a0, &[1]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    pending(&mut vm);
+    vm.state_mut().set_system_integer(0, 77).unwrap();
+    assert_eq!(
+        dispatch::run(
+            semantics(0x297),
+            &mut vm,
+            &mut Hosts {
+                images: Some(ImageHosts {
+                    scene: &mut scene,
+                    source: &mut images,
+                    change_images: false
+                }),
+                audio: Some(AudioHosts {
+                    audio: &mut audio,
+                    backend: &mut backend
+                }),
+                camera: Some(&mut camera),
+                random: Some(&mut random),
+                ..Default::default()
+            }
+        )
+        .unwrap(),
+        Some(Flow::Done)
+    );
+    assert_eq!(vm.state().system_integer(0), Some(77));
+    let first = scene_render::render_scene(&scene, Some(&camera), &[], 1024, 614).unwrap();
+    pending(&mut vm);
+    assert_eq!(
+        dispatch::run(
+            semantics(0x2af),
+            &mut vm,
+            &mut Hosts {
+                scene: Some(&mut scene),
+                ..Default::default()
+            }
+        )
+        .unwrap(),
+        Some(Flow::Done)
+    );
+    scene
+        .advance_legacy_effects(200, &mut camera, AudioSettings::default(), &mut backend)
+        .unwrap();
+    let second = scene_render::render_scene(&scene, Some(&camera), &[], 1024, 614).unwrap();
+    assert_ne!(first.pixels(), second.pixels());
+    assert!(second.pixels().chunks_exact(4).any(|p| p[..3] != [0, 0, 0]));
+    let LegacyEffect::Vortex(vortex) = &scene.legacy_effects()[&1] else {
+        panic!("wrong type");
+    };
+    assert_eq!(vortex.scene.meshes.len(), 200);
+    assert_eq!(
+        vortex.scene.images[vortex.scene.meshes[2].image].name,
+        b"__ev-xx004e.pb3"
+    );
+    assert_eq!(
+        vortex.scene.images[vortex.scene.meshes[3].image].name,
+        b"__ev-xx004b2.pb3"
+    );
+    pending(&mut vm);
+    dispatch::run(
+        semantics(0x2ae),
+        &mut vm,
+        &mut Hosts {
+            scene: Some(&mut scene),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(vm.state().system_integer(0), Some(0));
+    pending(&mut vm);
+    dispatch::run(
+        semantics(0x2a0),
+        &mut vm,
+        &mut Hosts {
+            scene: Some(&mut scene),
+            audio: Some(AudioHosts {
+                audio: &mut audio,
+                backend: &mut backend,
+            }),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(scene.legacy_effects().is_empty());
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert!(backend.requests().is_empty());
+}
+
+#[test]
 fn hundredth_degree_polar_point_preserves_other_results_and_signed_radius() {
     assert_eq!(semantics(0xd9), Semantics::Variant(VariantId::PolarPoint));
     for (angle, radius, expected) in [
@@ -402,4 +594,64 @@ fn external_snapshot_load_restores_scene_and_reencodes() {
     );
     drop(run);
     std::fs::remove_dir_all(user).unwrap();
+}
+
+#[test]
+fn window_full_move_queries_ignore_the_value_and_writes_preserve_system_results() {
+    use cmvs_rs::{
+        dispatch::PlatformHosts,
+        platform::{DirectoryAssets, PlatformHost, RecordingBackend},
+    };
+    let variant = Semantics::Variant(VariantId::WindowFullMove);
+    assert_eq!(semantics(0x2ec), variant);
+    assert_eq!(
+        Registry::builtin()
+            .profile("cmvs-20071117")
+            .unwrap()
+            .semantics(0x2ec),
+        Semantics::Root
+    );
+    let mut host = PlatformHost::default();
+    host.configure_window_full_move(b"[SYSTEM_INFO]\nWINDOW_FULL_MOVE_USE=-1\n");
+    assert!(host.window_full_move());
+    let mut backend = RecordingBackend::default();
+    let mut assets = DirectoryAssets::new(std::path::Path::new(".")).unwrap();
+    for (mode, value, expected) in [
+        (0, u32::MAX, true),
+        (1, 0, false),
+        (0, u32::MAX, false),
+        (u32::MAX, 2, true),
+    ] {
+        let mut code = vec![];
+        command(&mut code, 0x22ec, &[mode, value]);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        pending(&mut vm);
+        vm.state_mut().set_system_integer(0, 77).unwrap();
+        vm.state_mut().set_system_integer(1, 88).unwrap();
+        assert_eq!(
+            dispatch::run(
+                variant,
+                &mut vm,
+                &mut Hosts {
+                    platform: Some(PlatformHosts {
+                        host: &mut host,
+                        backend: &mut backend,
+                        assets: &mut assets,
+                        cursors: &[]
+                    }),
+                    ..Default::default()
+                }
+            )
+            .unwrap(),
+            Some(Flow::Done)
+        );
+        assert_eq!(host.window_full_move(), expected);
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(
+            vm.state().system_integer(0),
+            Some(if mode == 0 { u32::from(expected) } else { 77 })
+        );
+        assert_eq!(vm.state().system_integer(1), Some(88));
+    }
 }

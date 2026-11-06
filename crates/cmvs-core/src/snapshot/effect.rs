@@ -7,6 +7,10 @@ use crate::FormatError;
 /// Name padding is retained for lossless decoding; only bytes before NUL name a resource.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SavedEffect {
+    LegacyFlakes {
+        words: [u32; 4],
+        name: [u8; 32],
+    },
     LegacyRain {
         words: [u32; 6],
         name: [u8; 32],
@@ -46,7 +50,8 @@ impl SavedEffect {
 
     pub fn image_name(&self) -> &[u8] {
         match self {
-            Self::LegacyRain { name, .. }
+            Self::LegacyFlakes { name, .. }
+            | Self::LegacyRain { name, .. }
             | Self::Rain { name, .. }
             | Self::Falling { name, .. }
             | Self::Particles { name, .. }
@@ -59,6 +64,7 @@ impl SavedEffect {
 
     fn validate(&self) -> Result<(), FormatError> {
         let (parameters, count, name) = match self {
+            Self::LegacyFlakes { words, name } => (&words[1..3], words[3], name),
             Self::LegacyRain { words, name } => {
                 if words[5] == 0 {
                     return Err(FormatError("legacy rain interval must be positive"));
@@ -110,7 +116,7 @@ impl SavedEffect {
         let kind = u16::from_le_bytes(bytes[2..4].try_into().unwrap());
         let words = match kind {
             1 | 2 | 4 | 5 => 6,
-            6 => 4,
+            3 | 6 => 4,
             8 if bytes.len() == 4 => return Ok(Self::Fragments),
             _ => return Err(FormatError("unsupported saved particle effect type")),
         };
@@ -122,6 +128,10 @@ impl SavedEffect {
         let word = |i| u32::from_le_bytes(bytes[4 + i * 4..8 + i * 4].try_into().unwrap());
         let name = bytes[4 + words * 4..].try_into().unwrap();
         let effect = match kind {
+            3 => Self::LegacyFlakes {
+                words: std::array::from_fn(word),
+                name,
+            },
             1 => Self::LegacyRain {
                 words: std::array::from_fn(word),
                 name,
@@ -151,6 +161,7 @@ impl SavedEffect {
     pub fn encode(&self) -> Result<Vec<u8>, FormatError> {
         self.validate()?;
         let (kind, words, name): (u16, &[u32], &[u8]) = match self {
+            Self::LegacyFlakes { words, name } => (3, words, name),
             Self::LegacyRain { words, name } => (1, words, name),
             Self::Rain { words, name } => (4, words, name),
             Self::Falling { words, name } => (2, words, name),
@@ -188,6 +199,7 @@ mod tests {
     fn creation_records_preserve_raw_parameters_and_name_padding_without_particle_positions() {
         let f = f32::to_bits;
         for (kind, words) in [
+            (3, vec![0x1003, f(2.0), f(1000.0), 300]),
             (2, vec![f(120.0), f(100.0), f(2000.0), f(5.0), 3, 7]),
             (
                 5,

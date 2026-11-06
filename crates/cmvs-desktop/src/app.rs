@@ -206,10 +206,11 @@ impl App<'_> {
         let mode = if self.preview_image.is_some() {
             1
         } else {
-            cmvs_core::viewport::presentation_mode(
+            cmvs_core::viewport::presentation_mode_with_full_move(
                 window.fullscreen().is_some(),
                 self.aspect_scaling.get(),
                 self.aspect_mode.get(),
+                self.startup.platform().window_full_move(),
             )
         };
         if gpu.presenter.present(
@@ -266,10 +267,11 @@ impl App<'_> {
         if self.preview_image.is_some() {
             image.draw_fit(&mut buffer, size.width, size.height)?;
         } else {
-            let mode = cmvs_core::viewport::presentation_mode(
+            let mode = cmvs_core::viewport::presentation_mode_with_full_move(
                 window.fullscreen().is_some(),
                 self.aspect_scaling.get(),
                 self.aspect_mode.get(),
+                self.startup.platform().window_full_move(),
             );
             image.draw_scaled(
                 &mut buffer,
@@ -566,10 +568,11 @@ impl ApplicationHandler for App<'_> {
             self.next_frame = now + Duration::from_millis(16);
             let window = window.clone();
             self.game_input
-                .set_aspect_mode(cmvs_core::viewport::presentation_mode(
+                .set_aspect_mode(cmvs_core::viewport::presentation_mode_with_full_move(
                     window.fullscreen().is_some(),
                     self.aspect_scaling.get(),
                     self.aspect_mode.get(),
+                    self.startup.platform().window_full_move(),
                 ));
             if self.input_due && self.native_input && self.preview_image.is_none() {
                 let size = window.inner_size();
@@ -707,10 +710,11 @@ impl ApplicationHandler for App<'_> {
                 return;
             }
             self.game_input
-                .set_aspect_mode(cmvs_core::viewport::presentation_mode(
+                .set_aspect_mode(cmvs_core::viewport::presentation_mode_with_full_move(
                     window.fullscreen().is_some(),
                     self.aspect_scaling.get(),
                     self.aspect_mode.get(),
+                    self.startup.platform().window_full_move(),
                 ));
             if let Some(point) = self.startup.input_mut().take_warp() {
                 let size = window.inner_size();

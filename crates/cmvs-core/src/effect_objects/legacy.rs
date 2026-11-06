@@ -1,5 +1,5 @@
 //! cmvs-20070119 effect slots of types 0x50.. (engine +2928, four slots shared with the
-//! particle pools); evidence and addresses are in games/puriring/README.md.
+//! particle pools); evidence and addresses are in games/puriring/research.md.
 use crate::{
     audio::{AudioBackend, AudioSettings},
     camera::CameraHost,
@@ -13,6 +13,8 @@ use std::error::Error;
 /// A textured world-space quad of the old 3D queues (mesh FVF 0x142, triangle strip).
 pub struct WorldQuad<'a> {
     pub image: &'a ObjectImage,
+    /// Normalized texture rectangle (left, top, right, bottom).
+    pub uv: [f32; 4],
     /// Strip order: top-left, top-right, bottom-left, bottom-right of the texture.
     pub corners: [[f32; 3]; 4],
     /// Object position; the queue key is its distance from the view (0x422f20).
@@ -24,13 +26,15 @@ pub struct WorldQuad<'a> {
     pub late: bool,
 }
 
-/// One 4-vertex mesh object of 0x416c10 (white diffuse, texture (0,0)..(1,1) in strip
+/// One 4-vertex mesh object of 0x416c10 (white diffuse, texture rectangle in strip
 /// order). The world matrix of 0x410c30 is scale, then Y, X and Z rotations (degrees,
 /// skipped while zero), then the translation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LegacyMesh {
     /// Index into the effect's images; the mesh child draws with its parent's image.
     pub image: usize,
+    /// Normalized texture rectangle, defaulting to the full image.
+    pub uv: [f32; 4],
     pub corners: [[f32; 3]; 4],
     /// +12..+20 position and +24/+28/+32 X/Y/Z rotation.
     pub position: [f32; 3],
@@ -49,6 +53,7 @@ impl LegacyMesh {
     pub(super) fn new(image: usize, corners: [[f32; 3]; 4], position: [f32; 3]) -> Self {
         Self {
             image,
+            uv: [0.0, 0.0, 1.0, 1.0],
             corners,
             position,
             rotation: [0.0; 3],
@@ -104,6 +109,7 @@ impl MeshScene {
             .filter(|mesh| mesh.alpha > 0)
             .map(|mesh| WorldQuad {
                 image: &self.images[mesh.image],
+                uv: mesh.uv,
                 corners: mesh.world(),
                 position: mesh.position,
                 alpha: mesh.alpha,
@@ -422,6 +428,7 @@ pub enum LegacyEffect {
     Walk(Walk),
     Circle(Box<Circle>),
     FloatingPlanes(Box<FloatingPlanes>),
+    Vortex(Box<super::vortex::Vortex>),
 }
 impl LegacyEffect {
     pub fn quads(&self) -> Vec<WorldQuad<'_>> {
@@ -431,6 +438,7 @@ impl LegacyEffect {
             Self::SnowField(field) => field.scene.quads(),
             Self::Circle(circle) => circle.scene.quads(),
             Self::FloatingPlanes(planes) => planes.scene.quads(),
+            Self::Vortex(vortex) => vortex.scene.quads(),
             Self::Walk(_) | Self::Sprites(_) => Vec::new(),
         }
     }
@@ -612,6 +620,7 @@ impl SceneHost {
 
     /// Creating any effect type replaces whatever the slot held (0x418aa0).
     pub(crate) fn clear_effect_slot(&mut self, slot: u8) {
+        self.legacy_flakes.remove(&slot);
         self.rain_effects.remove(&slot);
         self.particle_effects.remove(&slot);
         self.falling_effects.remove(&slot);
@@ -909,6 +918,7 @@ impl SceneHost {
             LegacyEffect::Walk(walk) if walk.state != 0 => walk.state,
             // 0x417c90 case 0x52: the state, or -1 while a request is pending.
             LegacyEffect::Circle(circle) if circle.requested == -1 => circle.state,
+            LegacyEffect::Vortex(_) => 0,
             _ => u32::MAX,
         })
     }
@@ -949,6 +959,7 @@ impl SceneHost {
         }
         call.complete(0x4010)?;
         match self.legacy_effects.get_mut(&(slot as u8)) {
+            Some(LegacyEffect::Vortex(vortex)) if slot <= 3 => vortex.request(value),
             Some(LegacyEffect::Walk(walk)) if slot <= 3 && matches!(value, 1..=3) => {
                 walk.requested = value as i32;
             }
@@ -1003,6 +1014,7 @@ impl SceneHost {
                     )?;
                 }
                 Some(LegacyEffect::FloatingPlanes(planes)) => planes.advance(delta),
+                Some(LegacyEffect::Vortex(vortex)) => vortex.advance(delta),
                 Some(LegacyEffect::Sprites(sprites)) => sprites.advance(
                     delta,
                     backend,

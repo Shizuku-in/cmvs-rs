@@ -27,8 +27,8 @@ binary x86 file=cmvs.exe sha256=5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279
 0x2014 unreviewed 0x3eeb5
 0x2015 unreviewed 0x3eebd
 0x2016 unreviewed 0x3eec5
-0x2017 unreviewed 0x3eecd variant=image-tables:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x2018 unreviewed 0x3eed5 variant=image-tables:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x2017 unreviewed 0x3eecd variant=image-tables:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x2018 unreviewed 0x3eed5 variant=image-tables:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x2019 noop 0x3ee2b
 0x201a noop 0x3ee2b
 0x201b noop 0x3ee2b
@@ -54,7 +54,7 @@ binary x86 file=cmvs.exe sha256=5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279
 0x202f unreviewed 0x3ef15
 0x2030 unreviewed 0x3ef1d
 0x2031 unreviewed 0x3ef25
-0x2032 unreviewed 0x3ef2d variant=image-tables:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x2032 unreviewed 0x3ef2d variant=image-tables:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x2033 unreviewed 0x3ef35
 0x2034 noop 0x3ee2b
 0x2035 noop 0x3ee2b
@@ -82,8 +82,8 @@ binary x86 file=cmvs.exe sha256=5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279
 0x204b unreviewed 0x3efb7
 0x204c noop 0x3ee2b
 0x204d noop 0x3ee2b
-0x204e unreviewed 0x3efbf variant=screen-coordinates:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x204f unreviewed 0x3efc7 variant=draw-query:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x204e unreviewed 0x3efbf variant=screen-coordinates:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x204f unreviewed 0x3efc7 variant=draw-query:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x2050 unreviewed 0x3efcf
 0x2051 unreviewed 0x3efd7
 0x2052 noop 0x3ee2b
@@ -114,7 +114,7 @@ binary x86 file=cmvs.exe sha256=5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279
 0x206b unreviewed 0x3f01f
 0x206c unreviewed 0x3f027
 0x206d unreviewed 0x3f02f
-0x206e unreviewed 0x3f037 variant=camera-move-x:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x206e unreviewed 0x3f037 variant=camera-move-x:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x206f unreviewed 0x3f03f
 0x2070 unreviewed 0x3f047
 0x2071 unreviewed 0x3f04f
@@ -169,7 +169,7 @@ binary x86 file=cmvs.exe sha256=5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279
 0x20a2 unreviewed 0x3f112
 0x20a3 unreviewed 0x3f11a
 0x20a4 noop 0x3ee2b
-0x20a5 unreviewed 0x3f122 variant=mixer-gain:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x20a5 unreviewed 0x3f122 variant=mixer-gain:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x20a6 unreviewed 0x3f12a
 0x20a7 unreviewed 0x3f132
 0x20a8 unreviewed 0x3f13a
@@ -184,7 +184,7 @@ binary x86 file=cmvs.exe sha256=5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279
 0x20b1 unreviewed 0x3f17a
 0x20b2 unreviewed 0x3f182
 0x20b3 unreviewed 0x3f18a
-0x20b4 unreviewed 0x3f192 variant=se-restart:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x20b4 unreviewed 0x3f192 variant=se-restart:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x20b5 unreviewed 0x3f19a
 0x20b6 unreviewed 0x3f1a2
 0x20b7 unreviewed 0x3f1aa
@@ -220,8 +220,8 @@ binary x86 file=cmvs.exe sha256=5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279
 0x20d5 unreviewed 0x3f23a
 0x20d6 unreviewed 0x3f242
 0x20d7 unreviewed 0x3f24a
-0x20d8 unreviewed 0x3f252 variant=polar-point:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x20d9 unreviewed 0x3f25a variant=polar-point:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x20d8 unreviewed 0x3f252 variant=polar-point:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x20d9 unreviewed 0x3f25a variant=polar-point:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x20da unreviewed 0x3f262
 0x20db unreviewed 0x3f26a
 0x20dc unreviewed 0x3f272
@@ -320,7 +320,7 @@ binary x86 file=cmvs.exe sha256=5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279
 0x2139 noop 0x3ee2b
 0x213a unreviewed 0x3f48b
 0x213b unreviewed 0x3f493
-0x213c unreviewed 0x3f49b variant=text-dialog:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x213c unreviewed 0x3f49b variant=text-dialog:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x213d unreviewed 0x3f4a3
 0x213e noop 0x3ee2b
 0x213f noop 0x3ee2b
@@ -378,7 +378,7 @@ binary x86 file=cmvs.exe sha256=5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279
 0x2173 noop 0x3ee2b
 0x2174 noop 0x3ee2b
 0x2175 noop 0x3ee2b
-0x2176 unreviewed 0x3f5c7 variant=window-child-image:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x2176 unreviewed 0x3f5c7 variant=window-child-image:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x2177 unreviewed 0x3f5cf
 0x2178 unreviewed 0x3f5d7
 0x2179 unreviewed 0x3f5df
@@ -416,45 +416,45 @@ binary x86 file=cmvs.exe sha256=5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279
 0x2199 noop 0x3ee2b
 0x219a unreviewed 0x3f667
 0x219b noop 0x3ee2b
-0x219c unreviewed 0x3f679 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x219c unreviewed 0x3f679 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x219d unreviewed 0x3f681
-0x219e unreviewed 0x3f693 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x219e unreviewed 0x3f693 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x219f unreviewed 0x3f69b
-0x21a0 unreviewed 0x3f6ad variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x21a0 unreviewed 0x3f6ad variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x21a1 unreviewed 0x3f6b5
-0x21a2 unreviewed 0x3f6c7 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x21a2 unreviewed 0x3f6c7 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x21a3 unreviewed 0x3f6cf
-0x21a4 unreviewed 0x3f6e1 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x21a4 unreviewed 0x3f6e1 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x21a5 noop 0x3ee2b
-0x21a6 unreviewed 0x3f6e9 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x21a6 unreviewed 0x3f6e9 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x21a7 noop 0x3ee2b
-0x21a8 unreviewed 0x3f6f1 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x21a8 unreviewed 0x3f6f1 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x21a9 unreviewed 0x3f6f9
-0x21aa unreviewed 0x3f70b variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x21aa unreviewed 0x3f70b variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x21ab unreviewed 0x3f713
-0x21ac unreviewed 0x3f725 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x21ac unreviewed 0x3f725 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x21ad unreviewed 0x3f72d
-0x21ae unreviewed 0x3f73f variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x21ae unreviewed 0x3f73f variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x21af unreviewed 0x3f747
-0x21b0 unreviewed 0x3f759 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x21b0 unreviewed 0x3f759 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x21b1 unreviewed 0x3f761
-0x21b2 unreviewed 0x3f773 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x21b2 unreviewed 0x3f773 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x21b3 unreviewed 0x3f77b
-0x21b4 unreviewed 0x3f78d variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x21b4 unreviewed 0x3f78d variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x21b5 unreviewed 0x3f795
-0x21b6 unreviewed 0x3f7a7 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x21b6 unreviewed 0x3f7a7 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x21b7 unreviewed 0x3f7af
-0x21b8 unreviewed 0x3f7c1 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x21b8 unreviewed 0x3f7c1 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x21b9 unreviewed 0x3f7c9
-0x21ba unreviewed 0x3f7db variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x21ba unreviewed 0x3f7db variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x21bb unreviewed 0x3f7e3
-0x21bc unreviewed 0x3f7f5 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x21bc unreviewed 0x3f7f5 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x21bd unreviewed 0x3f7fd
 0x21be noop 0x3ee2b
 0x21bf noop 0x3ee2b
-0x21c0 unreviewed 0x3f80f variant=window-scale-motion:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x21c1 unreviewed 0x3f817 variant=window-scale-motion:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x21c2 unreviewed 0x3f81f variant=window-scale-motion:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x21c0 unreviewed 0x3f80f variant=window-scale-motion:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x21c1 unreviewed 0x3f817 variant=window-scale-motion:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x21c2 unreviewed 0x3f81f variant=window-scale-motion:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x21c3 unreviewed 0x3f827
 0x21c4 noop 0x3ee2b
 0x21c5 unreviewed 0x3f82f
@@ -588,14 +588,14 @@ binary x86 file=cmvs.exe sha256=5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279
 0x2245 noop 0x3ee2b
 0x2246 noop 0x3ee2b
 0x2247 noop 0x3ee2b
-0x2248 unreviewed 0x3fb1f variant=audio-preload:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x2249 unreviewed 0x3fb27 variant=audio-preload:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x224a unreviewed 0x3fb2f variant=audio-preload:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x224b unreviewed 0x3fb37 variant=audio-preload:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x2248 unreviewed 0x3fb1f variant=audio-preload:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x2249 unreviewed 0x3fb27 variant=audio-preload:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x224a unreviewed 0x3fb2f variant=audio-preload:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x224b unreviewed 0x3fb37 variant=audio-preload:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x224c noop 0x3ee2b
 0x224d noop 0x3ee2b
 0x224e noop 0x3ee2b
-0x224f unreviewed 0x3fb3f variant=audio-preload:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x224f unreviewed 0x3fb3f variant=audio-preload:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x2250 unreviewed 0x3fb47
 0x2251 noop 0x3ee2b
 0x2252 noop 0x3ee2b
@@ -628,11 +628,11 @@ binary x86 file=cmvs.exe sha256=5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279
 0x226d noop 0x3ee2b
 0x226e noop 0x3ee2b
 0x226f noop 0x3ee2b
-0x2270 unreviewed 0x3fb77 variant=view-motion:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x2271 unreviewed 0x3fb7f variant=view-motion:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x2272 unreviewed 0x3fb87 variant=view-motion:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x2273 unreviewed 0x3fb8f variant=view-motion:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x2274 unreviewed 0x3fb97 variant=view-motion:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x2270 unreviewed 0x3fb77 variant=view-motion:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x2271 unreviewed 0x3fb7f variant=view-motion:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x2272 unreviewed 0x3fb87 variant=view-motion:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x2273 unreviewed 0x3fb8f variant=view-motion:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x2274 unreviewed 0x3fb97 variant=view-motion:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x2275 unreviewed 0x3fb9f
 0x2276 noop 0x3ee2b
 0x2277 noop 0x3ee2b
@@ -660,14 +660,14 @@ binary x86 file=cmvs.exe sha256=5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279
 0x228d noop 0x3ee2b
 0x228e noop 0x3ee2b
 0x228f noop 0x3ee2b
-0x2290 unreviewed 0x3fba7 variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x2291 unreviewed 0x3fbaf variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x2292 unreviewed 0x3fbb7 variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x2293 unreviewed 0x3fbbf variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x2294 unreviewed 0x3fbc7 variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x2295 unreviewed 0x3fbcf variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x2296 unreviewed 0x3fbd7 variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x2297 unreviewed 0x3fbdf
+0x2290 unreviewed 0x3fba7 variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x2291 unreviewed 0x3fbaf variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x2292 unreviewed 0x3fbb7 variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x2293 unreviewed 0x3fbbf variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x2294 unreviewed 0x3fbc7 variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x2295 unreviewed 0x3fbcf variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x2296 unreviewed 0x3fbd7 variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x2297 unreviewed 0x3fbdf variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x2298 noop 0x3ee2b
 0x2299 noop 0x3ee2b
 0x229a noop 0x3ee2b
@@ -676,10 +676,10 @@ binary x86 file=cmvs.exe sha256=5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279
 0x229d noop 0x3ee2b
 0x229e noop 0x3ee2b
 0x229f noop 0x3ee2b
-0x22a0 unreviewed 0x3fbe7 variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x22a1 unreviewed 0x3fbef variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x22a2 unreviewed 0x3fbf7 variant=falling-billboards:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x22a3 unreviewed 0x3fbff
+0x22a0 unreviewed 0x3fbe7 variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x22a1 unreviewed 0x3fbef variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x22a2 unreviewed 0x3fbf7 variant=falling-billboards:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x22a3 unreviewed 0x3fbff variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x22a4 noop 0x3ee2b
 0x22a5 noop 0x3ee2b
 0x22a6 noop 0x3ee2b
@@ -690,8 +690,8 @@ binary x86 file=cmvs.exe sha256=5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279
 0x22ab noop 0x3ee2b
 0x22ac noop 0x3ee2b
 0x22ad noop 0x3ee2b
-0x22ae unreviewed 0x3fc07 variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x22af unreviewed 0x3fc0f variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x22ae unreviewed 0x3fc07 variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x22af unreviewed 0x3fc0f variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x22b0 unreviewed 0x3fc17
 0x22b1 unreviewed 0x3fc1f
 0x22b2 unreviewed 0x3fc27
@@ -704,12 +704,12 @@ binary x86 file=cmvs.exe sha256=5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279
 0x22b9 unreviewed 0x3fc63
 0x22ba unreviewed 0x3fc6b
 0x22bb unreviewed 0x3fc73
-0x22bc unreviewed 0x3fc7b variant=text-dialog:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x22bc unreviewed 0x3fc7b variant=text-dialog:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x22bd unreviewed 0x3fc83
 0x22be noop 0x3ee2b
 0x22bf noop 0x3ee2b
-0x22c0 unreviewed 0x3fc8b variant=activation-pass:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x22c1 unreviewed 0x3fc93 variant=activation-pass:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x22c0 unreviewed 0x3fc8b variant=activation-pass:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x22c1 unreviewed 0x3fc93 variant=activation-pass:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x22c2 noop 0x3ee2b
 0x22c3 noop 0x3ee2b
 0x22c4 unreviewed 0x3fc9b
@@ -752,16 +752,16 @@ binary x86 file=cmvs.exe sha256=5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279
 0x22e9 unreviewed 0x3fdcf
 0x22ea unreviewed 0x3fdd7
 0x22eb unreviewed 0x3fddf
-0x22ec unreviewed 0x3fde7
+0x22ec unreviewed 0x3fde7 variant=window-full-move:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x22ed noop 0x3ee2b
 0x22ee unreviewed 0x3fdef
 0x22ef unreviewed 0x3fe07
-0x22f0 unreviewed 0x3fe0f variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x22f1 unreviewed 0x3fe17 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x22f2 unreviewed 0x3fe29 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x22f3 unreviewed 0x3fe31 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x22f4 unreviewed 0x3fe43 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
-0x22f5 unreviewed 0x3fe4b variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x22f0 unreviewed 0x3fe0f variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x22f1 unreviewed 0x3fe17 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x22f2 unreviewed 0x3fe29 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x22f3 unreviewed 0x3fe31 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x22f4 unreviewed 0x3fe43 variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
+0x22f5 unreviewed 0x3fe4b variant=input-press:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/research.md
 0x22f6 noop 0x3ee2b
 0x22f7 noop 0x3ee2b
 0x22f8 noop 0x3ee2b

@@ -361,6 +361,7 @@ pub struct SceneHost {
     /// cmvs-20070119 0x4076f0: a nonzero 0x22c4 selector loads from the stand table.
     pub(crate) allow_stand_change_table: bool,
     screen_size: crate::viewport::ScreenSize,
+    pub(crate) legacy_flakes: BTreeMap<u8, crate::effect_objects::LegacyFlakes>,
     pub(crate) rain_effects: BTreeMap<u8, crate::effect_objects::RainEffect>,
     pub(crate) fragment_effects: BTreeMap<u8, crate::effect_objects::FragmentEffect>,
     pub(crate) collision_effects: BTreeMap<u8, crate::effect_objects::CollisionEffect>,
@@ -1296,6 +1297,7 @@ impl SceneHost {
             allow_triangle_quake: self.allow_triangle_quake,
             allow_stand_change_table: self.allow_stand_change_table,
             allow_legacy_triangle_quake: self.allow_legacy_triangle_quake,
+            legacy_flakes: Default::default(),
             rain_effects: Default::default(),
             particle_effects: Default::default(),
             falling_effects: Default::default(),

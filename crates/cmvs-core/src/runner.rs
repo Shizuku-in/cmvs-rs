@@ -219,6 +219,9 @@ impl<'a> Startup<'a> {
         let effects = crate::save_menu::profile_int(text, "SYSTEM_INFO", "EFFECT_USE", 1) != 0;
         let mut platform = PlatformHost::default();
         platform.configure_display_selection(text);
+        if game.selection.profile.is_inspected_20070119() {
+            platform.configure_window_full_move(text);
+        }
         Ok(Self {
             slot_edit: None,
             main_script_name: if game.files.start_name() == b"start.ps2" {
