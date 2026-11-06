@@ -101,6 +101,17 @@ pub struct ViewProjection {
 impl ViewProjection {
     pub const NEAR: f32 = 0.1;
     pub const FAR: f32 = 100.0;
+    /// Reject a quad only when all corners are outside the same side plane.
+    /// Test before perspective division so cells crossing the near plane are safe.
+    pub(crate) fn outside_sides(&self, points: &[[f32; 3]; 4]) -> bool {
+        (0..2).any(|axis| {
+            [-1.0, 1.0].into_iter().any(|sign| {
+                points
+                    .iter()
+                    .all(|p| sign * p[axis] * self.scale[axis] > p[2])
+            })
+        })
+    }
     /// View-space X/Y/Z of a world point; Z is the depth along the view direction.
     pub fn view(&self, point: [f32; 3]) -> [f32; 3] {
         self.axes.map(|axis| {

@@ -1489,6 +1489,12 @@ fn tessellate_world_quad<'a>(
     ) {
         let corners = [[u0, v0], [u1, v0], [u0, v1], [u1, v1]];
         let view = corners.map(|[u, v]| projection.view(world(u, v)));
+        // Offscreen cells near the eye can project to enormous rectangles. Splitting
+        // those invisible cells to the depth limit creates hundreds of thousands of
+        // draws; homogeneous side-plane rejection preserves every visible cell.
+        if projection.outside_sides(&view) {
+            return;
+        }
         let near = view.iter().filter(|p| p[2] < ViewProjection::NEAR).count();
         if view.iter().all(|p| p[2] >= ViewProjection::FAR) || near == 4 && depth > 2 {
             return;
@@ -1693,6 +1699,57 @@ fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
 
 #[cfg(test)]
 mod scale_tests {
+    #[test]
+    fn oversized_world_mesh_culls_invisible_cells_and_preserves_visible_pixels() {
+        let image = ObjectImage {
+            name: Vec::new(),
+            filter: None,
+            alpha: false,
+            surface: false,
+            pixels: RgbaImage::new(512, 512, vec![255; 512 * 512 * 4]).unwrap(),
+        };
+        let camera = crate::camera::CameraHost::default();
+        let mut view = camera.view(0).unwrap().clone();
+        view.words = [0.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 90.0].map(f32::to_bits);
+        let projection = view.projection([64, 64]).unwrap();
+        let mut quad = crate::effect_objects::WorldQuad {
+            image: &image,
+            corners: [
+                [-20.0, 20.0, 1.0],
+                [20.0, 20.0, 1.0],
+                [-20.0, -20.0, 1.0],
+                [20.0, -20.0, 1.0],
+            ],
+            position: [0.0; 3],
+            alpha: 255,
+            blend: Blend::Replace,
+            late: false,
+        };
+        let mut layers = Vec::new();
+        tessellate_world_quad(&quad, &projection, &mut layers);
+        assert!(!layers.is_empty() && layers.len() < 100);
+        let frame = RenderFrame {
+            width: 64,
+            height: 64,
+            clear: [0, 0, 0, 255],
+            commands: layers,
+        };
+        assert!(
+            frame
+                .render_cpu()
+                .unwrap()
+                .pixels()
+                .iter()
+                .all(|&v| v == 255)
+        );
+        for corner in &mut quad.corners {
+            corner[0] += 50.0;
+        }
+        let mut layers = Vec::new();
+        tessellate_world_quad(&quad, &projection, &mut layers);
+        assert!(layers.is_empty());
+    }
+
     #[test]
     fn world_billboard_sampling_wraps_both_texture_edges() {
         let image = crate::scene::ObjectImage {
