@@ -1,5 +1,5 @@
-//! Bounded, device-independent Vorbis intro and loop playback.
-use crate::vorbis::Vorbis;
+//! Bounded, device-independent Vorbis/PCM WAVE intro and loop playback.
+use crate::{pcm_wave::PcmWave, vorbis::Vorbis};
 use cmvs_core::MAX_PAYLOAD;
 use std::{
     error::Error,
@@ -9,10 +9,42 @@ use std::{
     },
 };
 
-/// Holds compressed bytes and one decoded packet, never an entire PCM recording.
+enum AudioReader {
+    Vorbis(Vorbis),
+    Wave(PcmWave),
+}
+impl AudioReader {
+    fn new(bytes: Arc<[u8]>) -> Result<Self, Box<dyn Error>> {
+        if bytes.starts_with(b"RIFF") {
+            Ok(Self::Wave(PcmWave::new(bytes)?))
+        } else {
+            Ok(Self::Vorbis(Vorbis::new(bytes)?))
+        }
+    }
+    fn channels(&self) -> u16 {
+        match self {
+            Self::Vorbis(v) => v.channels(),
+            Self::Wave(w) => w.channels,
+        }
+    }
+    fn sample_rate(&self) -> u32 {
+        match self {
+            Self::Vorbis(v) => v.sample_rate(),
+            Self::Wave(w) => w.rate,
+        }
+    }
+    fn packet(&mut self) -> Result<Option<Vec<f32>>, Box<dyn Error>> {
+        match self {
+            Self::Vorbis(v) => v.packet(),
+            Self::Wave(w) => Ok(w.packet()),
+        }
+    }
+}
+
+/// Holds source bytes and one decoded block. The historical public name is retained.
 pub struct VorbisProgram {
     pub(crate) bytes: Vec<Arc<[u8]>>,
-    reader: Vorbis,
+    reader: AudioReader,
     pub(crate) looped: Arc<AtomicBool>,
     buffer: Vec<f32>,
     at: usize,
@@ -34,7 +66,7 @@ impl VorbisProgram {
             .checked_add(secondary.as_ref().map_or(0, Vec::len))
             .is_none_or(|n| n > MAX_PAYLOAD)
         {
-            return Err("combined Ogg resources exceed research limit".into());
+            return Err("combined audio resources exceed research limit".into());
         }
         let mut bytes: Vec<Arc<[u8]>> = vec![primary.into()];
         if let Some(secondary) = secondary {
@@ -43,11 +75,11 @@ impl VorbisProgram {
         Self::from_shared(bytes, looped)
     }
     pub(crate) fn from_shared(bytes: Vec<Arc<[u8]>>, looped: bool) -> Result<Self, Box<dyn Error>> {
-        let reader = Vorbis::new(bytes[0].clone())?;
+        let reader = AudioReader::new(bytes[0].clone())?;
         let channels = reader.channels();
         let rate = reader.sample_rate();
         if bytes.len() == 2 {
-            let mut second = Vorbis::new(bytes[1].clone())?;
+            let mut second = AudioReader::new(bytes[1].clone())?;
             if second.channels() != channels || second.sample_rate() != rate {
                 return Err("BGM intro and loop formats differ".into());
             }
@@ -117,7 +149,7 @@ impl VorbisProgram {
                         self.finished = true;
                         return Ok(());
                     }
-                    self.reader = Vorbis::new(self.bytes.last().unwrap().clone())?;
+                    self.reader = AudioReader::new(self.bytes.last().unwrap().clone())?;
                     self.cycle_has_pcm = false;
                 }
             }

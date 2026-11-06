@@ -11,6 +11,7 @@ use crate::{
 use std::{collections::BTreeMap, error::Error};
 mod collision;
 mod draw;
+mod legacy;
 pub(super) mod text;
 pub(super) mod window;
 
@@ -378,6 +379,9 @@ fn words(out: &mut Vec<u8>, words: &[u32]) {
 
 impl SavedImage {
     fn encode_with_layout(&self, layout: SnapshotLayout) -> Result<Vec<u8>, FormatError> {
+        if layout == SnapshotLayout::TextV1SceneLegacy {
+            return self.encode_legacy();
+        }
         let mut bytes = self.encode();
         if layout == SnapshotLayout::TextV1SceneV1 {
             if self.surface == Some(true) {
@@ -428,6 +432,9 @@ impl SavedImage {
         })
     }
     fn decode_with_layout(bytes: &[u8], layout: SnapshotLayout) -> Result<Self, FormatError> {
+        if layout == SnapshotLayout::TextV1SceneLegacy {
+            return Self::decode_legacy(bytes);
+        }
         let text_v1_scene_v1 = layout == SnapshotLayout::TextV1SceneV1;
         let mut r = Reader::new(bytes);
         let h = if text_v1_scene_v1 {
@@ -580,6 +587,9 @@ impl SavedScene {
             ));
         }
         *nodes += 1;
+        if layout == SnapshotLayout::TextV1SceneLegacy {
+            return Self::decode_legacy(bytes, depth, nodes);
+        }
         let mut r = Reader::new(bytes);
         let scene_v4 = layout == SnapshotLayout::TextV3SceneV4;
         let text_v1_scene_v1 = layout == SnapshotLayout::TextV1SceneV1;
@@ -697,6 +707,9 @@ impl SavedScene {
         &self,
         layout: SnapshotLayout,
     ) -> Result<Vec<u8>, FormatError> {
+        if layout == SnapshotLayout::TextV1SceneLegacy {
+            return self.encode_legacy();
+        }
         let mut out = 0xffffu16.to_le_bytes().to_vec();
         let scene_v4 = layout == SnapshotLayout::TextV3SceneV4;
         let text_v1_scene_v1 = layout == SnapshotLayout::TextV1SceneV1;

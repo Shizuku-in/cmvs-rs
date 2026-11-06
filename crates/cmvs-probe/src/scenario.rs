@@ -135,6 +135,7 @@ pub struct Scenario {
     settle: Settle,
     quiet_since: u64,
     in_scenario: bool,
+    advancing_wait: bool,
     pub advances: u64,
     pub nudges: u64,
 }
@@ -174,6 +175,7 @@ impl Scenario {
             settle: Settle::new(STABLE_FRAMES),
             quiet_since: session.yields(),
             in_scenario,
+            advancing_wait: false,
             advances: 0,
             nudges: 0,
         }
@@ -184,6 +186,7 @@ impl Scenario {
     /// Advances the current message wait.
     pub fn advance(&mut self, session: &mut Session<'_>) -> Result<(), Stop> {
         session.act(Action::Advance).map_err(Stop::Error)?;
+        self.advancing_wait = true;
         self.advances += 1;
         self.quiet_since = session.yields();
         Ok(())
@@ -228,7 +231,15 @@ impl Scenario {
                 return Ok(None);
             }
             let o = session.frame()?;
-            if o.waiting_for_advance() {
+            if !o.in_message_wait() {
+                self.advancing_wait = false;
+            }
+            // Re-observing a wait (e.g. immediately after saving) must still
+            // return it after the VM advances its repeat counter beyond two.
+            if o.in_message_wait() {
+                if self.advancing_wait {
+                    continue;
+                }
                 if !self.in_scenario && self.skip && hold_skip(session) {
                     session.note("skip-held", Json::Null);
                 }

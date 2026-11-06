@@ -46,7 +46,7 @@ pub struct LegacyMesh {
 impl Eq for LegacyMesh {}
 
 impl LegacyMesh {
-    fn new(image: usize, corners: [[f32; 3]; 4], position: [f32; 3]) -> Self {
+    pub(super) fn new(image: usize, corners: [[f32; 3]; 4], position: [f32; 3]) -> Self {
         Self {
             image,
             corners,
@@ -59,7 +59,7 @@ impl LegacyMesh {
             additive: false,
         }
     }
-    fn blended(mut self, late: bool) -> Self {
+    pub(super) fn blended(mut self, late: bool) -> Self {
         self.blended = true;
         self.late = late;
         self
@@ -173,6 +173,52 @@ impl SnowField {
             self.scene.meshes[self.next].position = [0.0, 0.0, covered + 30.0];
             self.next = (self.next + 1) % 3;
             self.covered = (covered + 10.0).to_bits();
+        }
+    }
+}
+
+/// Type 0x56: 0x41e8e0 geometry and 0x41e740 frame update.
+#[derive(Debug, PartialEq, Eq)]
+pub struct FloatingPlanes {
+    pub scene: MeshScene,
+    pub clock: u32,
+}
+impl FloatingPlanes {
+    fn new(images: Vec<ObjectImage>) -> Self {
+        let mut meshes = vec![LegacyMesh::new(0, upright(7.5, 9.0), [0.0, -3.0, 8.7])];
+        for (position, x, z) in [
+            ([-0.86, 0.6, 3.0], 5.0, -10.0),
+            ([0.8, 1.4, 4.0], -15.0, 10.0),
+            ([-0.6, 2.2, 5.0], -15.0, -10.0),
+            ([0.6, 3.0, 6.0], -18.0, 10.0),
+            ([-0.4, 3.8, 7.0], -18.0, -10.0),
+            ([0.4, 4.6, 8.0], -18.0, 10.0),
+            ([-0.2, 5.4, 9.0], -18.0, -10.0),
+        ] {
+            let mut mesh = LegacyMesh::new(1, flat(1.0, 0.0), position).blended(true);
+            mesh.rotation = [x, 0.0, z];
+            meshes.push(mesh);
+        }
+        Self {
+            scene: MeshScene { images, meshes },
+            clock: 0,
+        }
+    }
+    fn advance(&mut self, delta: u32) {
+        self.clock = self.clock.wrapping_add(delta.min(200));
+        let angle = self.clock.wrapping_mul(3600) / 120000 % 3600;
+        let phase = self.clock % 2000;
+        let alpha = if phase < 1000 {
+            255 - 63 * phase / 1000
+        } else {
+            192 + 63 * (phase - 1000) / 1000
+        };
+        for (mesh, offset) in self.scene.meshes[1..]
+            .iter_mut()
+            .zip([720, 0, 1720, 480, 1500, 640, 1280])
+        {
+            mesh.rotation[1] = ((angle + offset) % 3600) as f32 / 10.0;
+            mesh.alpha = alpha;
         }
     }
 }
@@ -369,16 +415,23 @@ pub struct Walk {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum LegacyEffect {
+    Magic(Box<super::magic::Magic>),
+    Curtain(Box<super::curtain::Curtain>),
+    Sprites(Box<super::sprites::Sprites>),
     SnowField(Box<SnowField>),
     Walk(Walk),
     Circle(Box<Circle>),
+    FloatingPlanes(Box<FloatingPlanes>),
 }
 impl LegacyEffect {
     pub fn quads(&self) -> Vec<WorldQuad<'_>> {
         match self {
+            Self::Magic(magic) => magic.scene.quads(),
+            Self::Curtain(curtain) => curtain.quads(),
             Self::SnowField(field) => field.scene.quads(),
             Self::Circle(circle) => circle.scene.quads(),
-            Self::Walk(_) => Vec::new(),
+            Self::FloatingPlanes(planes) => planes.scene.quads(),
+            Self::Walk(_) | Self::Sprites(_) => Vec::new(),
         }
     }
 }
@@ -396,7 +449,7 @@ fn floats<const N: usize>(words: [u32; N]) -> [f32; N] {
 }
 
 /// 0x422170: cosine and sine of `degrees` times `length`, each truncated to hundredths.
-fn quarter(degrees: f32, length: f32) -> (f32, f32) {
+pub(super) fn quarter(degrees: f32, length: f32) -> (f32, f32) {
     let radians = if degrees == 0.0 {
         0.0
     } else {
@@ -678,6 +731,126 @@ impl SceneHost {
         Ok(())
     }
 
+    /// 0x2296 / 0x43c910 reads only the slot but returns 0x4008.
+    pub(crate) fn create_floating_planes(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        source: &mut dyn ImageSource,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let slot = call.argument(4, "effect slot")?;
+        call.ignore_argument(8, "unused")?;
+        if slot > 3 {
+            call.complete(0x4008)?;
+            return Ok(());
+        }
+        let mut images = Vec::new();
+        for name in [b"po_bg510c.pb3".as_slice(), b"it008d2.pb3"] {
+            let decoded = image::load(source, name)?
+                .ok_or_else(|| call.error("floating planes image did not decode"))?;
+            images.push(ObjectImage {
+                filter: None,
+                name: name.to_vec(),
+                pixels: decoded.pixels,
+                alpha: decoded.alpha,
+                surface: false,
+            });
+        }
+        self.release_legacy(slot as u8, backend)?;
+        call.complete(0x4008)?;
+        self.clear_effect_slot(slot as u8);
+        self.legacy_effects.insert(
+            slot as u8,
+            LegacyEffect::FloatingPlanes(Box::new(FloatingPlanes::new(images))),
+        );
+        Ok(())
+    }
+
+    pub(crate) fn create_magic(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        source: &mut dyn ImageSource,
+        backend: &mut dyn AudioBackend,
+        camera: &mut CameraHost,
+        random: &mut crate::random::CrtRandom,
+    ) -> Result<(), Box<dyn Error>> {
+        let slot = call.argument(4, "effect slot")?;
+        if slot > 3 {
+            call.complete(0x4004)?;
+            return Ok(());
+        }
+        let magic = super::magic::Magic::new(source, random)?;
+        self.release_legacy(slot as u8, backend)?;
+        backend.preload(16, b"st03_magic1b.wav")?;
+        call.complete(0x4004)?;
+        self.clear_effect_slot(slot as u8);
+        camera.set_view_position([0.0, 1.0, 0.0]);
+        camera.set_view_angle(0, 0.0);
+        camera.set_view_angle(1, 0.0);
+        self.legacy_effects
+            .insert(slot as u8, LegacyEffect::Magic(Box::new(magic)));
+        Ok(())
+    }
+
+    pub(crate) fn create_curtain(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        source: &mut dyn ImageSource,
+        backend: &mut dyn AudioBackend,
+        camera: &mut CameraHost,
+    ) -> Result<(), Box<dyn Error>> {
+        let slot = call.argument(4, "effect slot")?;
+        if slot > 3 {
+            call.complete(0x4004)?;
+            return Ok(());
+        }
+        let curtain = super::curtain::Curtain::new(source)?;
+        self.release_legacy(slot as u8, backend)?;
+        call.complete(0x4004)?;
+        self.clear_effect_slot(slot as u8);
+        camera.set_view_position([0.0, 3.2, 0.0]);
+        camera.set_view_angle(0, 0.0);
+        camera.set_view_angle(1, 0.0);
+        self.legacy_effects
+            .insert(slot as u8, LegacyEffect::Curtain(Box::new(curtain)));
+        Ok(())
+    }
+
+    pub(crate) fn create_sprites(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        source: &mut dyn ImageSource,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let slot = call.argument(4, "effect slot")?;
+        if slot > 3 {
+            call.complete(0x4004)?;
+            return Ok(());
+        }
+        let mut images = Vec::new();
+        for name in [b"ci001a.pb3", b"ci001b.pb3", b"ci001c.pb3"] {
+            let decoded = image::load(source, name)?
+                .ok_or_else(|| call.error("sprite effect image did not decode"))?;
+            images.push(ObjectImage {
+                filter: None,
+                name: name.to_vec(),
+                pixels: decoded.pixels,
+                alpha: decoded.alpha,
+                surface: false,
+            });
+        }
+        self.release_legacy(slot as u8, backend)?;
+        self.clear_effect_slot(slot as u8);
+        backend.preload(16, b"SE035a.ogg")?;
+        backend.preload(17, b"SE037b.ogg")?;
+        call.complete(0x4004)?;
+        self.legacy_effects.insert(
+            slot as u8,
+            LegacyEffect::Sprites(Box::new(super::sprites::Sprites::new(images))),
+        );
+        Ok(())
+    }
+
     /// The destructor side effects of 0x418aa0 for types that own device resources.
     pub(crate) fn release_legacy(
         &mut self,
@@ -692,6 +865,13 @@ impl SceneHost {
                 backend.stop(1)?;
             }
             // 0x41bd20 releases the two prepared sounds.
+            Some(LegacyEffect::Magic(_)) => {
+                backend.release_preloaded(16)?;
+            }
+            Some(LegacyEffect::Sprites(_)) => {
+                backend.release_preloaded(16)?;
+                backend.release_preloaded(17)?;
+            }
             Some(LegacyEffect::Circle(_)) => {
                 for (sound, _) in CIRCLE_SOUNDS {
                     backend.release_preloaded(sound)?;
@@ -723,6 +903,9 @@ impl SceneHost {
     /// while idle); a snow field reports -1. Other types use the shared query.
     pub(crate) fn query_legacy_effect(&self, slot: u8) -> Option<u32> {
         self.legacy_effects.get(&slot).map(|effect| match effect {
+            LegacyEffect::Magic(magic) if magic.requested == -1 => magic.state,
+            LegacyEffect::Curtain(curtain) if curtain.requested == -1 => curtain.state,
+            LegacyEffect::Sprites(sprites) if sprites.requested == -1 => sprites.state,
             LegacyEffect::Walk(walk) if walk.state != 0 => walk.state,
             // 0x417c90 case 0x52: the state, or -1 while a request is pending.
             LegacyEffect::Circle(circle) if circle.requested == -1 => circle.state,
@@ -747,6 +930,22 @@ impl SceneHost {
             return Err(call
                 .error("effect parameter needs an existing effect")
                 .into());
+        }
+        if slot <= 3
+            && let Some(LegacyEffect::Sprites(sprites)) = self.legacy_effects.get_mut(&(slot as u8))
+        {
+            sprites.request(value)?;
+        }
+        if slot <= 3
+            && let Some(LegacyEffect::Curtain(curtain)) = self.legacy_effects.get_mut(&(slot as u8))
+            && (1..=5).contains(&value)
+        {
+            curtain.requested = value as i32;
+        }
+        if slot <= 3
+            && let Some(LegacyEffect::Magic(magic)) = self.legacy_effects.get_mut(&(slot as u8))
+        {
+            magic.request(value);
         }
         call.complete(0x4010)?;
         match self.legacy_effects.get_mut(&(slot as u8)) {
@@ -803,6 +1002,18 @@ impl SceneHost {
                         },
                     )?;
                 }
+                Some(LegacyEffect::FloatingPlanes(planes)) => planes.advance(delta),
+                Some(LegacyEffect::Sprites(sprites)) => sprites.advance(
+                    delta,
+                    backend,
+                    settings.master.wrapping_mul(settings.se) >> 8,
+                )?,
+                Some(LegacyEffect::Curtain(curtain)) => curtain.advance(delta)?,
+                Some(LegacyEffect::Magic(magic)) => magic.advance(
+                    delta,
+                    backend,
+                    settings.master.wrapping_mul(settings.se) >> 8,
+                )?,
                 None => {}
             }
         }
@@ -823,6 +1034,26 @@ mod tests {
             alpha: false,
             surface: false,
         }
+    }
+
+    #[test]
+    fn floating_planes_cap_time_and_pulse_without_moving_the_background() {
+        let mut planes = FloatingPlanes::new(vec![image(b"wall"), image(b"plane")]);
+        let wall = planes.scene.meshes[0].clone();
+        assert_eq!(planes.scene.meshes.len(), 8);
+        planes.advance(1000);
+        assert_eq!(planes.clock, 200);
+        assert_eq!(planes.scene.meshes[1].rotation, [5.0, 72.6, -10.0]);
+        for _ in 0..4 {
+            planes.advance(200);
+        }
+        assert_eq!(planes.scene.meshes[1].alpha, 192);
+        for _ in 0..5 {
+            planes.advance(200);
+        }
+        assert_eq!(planes.scene.meshes[1].alpha, 255);
+        assert_eq!(planes.scene.meshes[0], wall);
+        assert!(planes.scene.quads()[1].late);
     }
 
     #[test]

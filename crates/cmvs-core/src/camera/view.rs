@@ -405,8 +405,11 @@ impl CameraHost {
     /// Record 0x882/0x883, 0x1400501d0: u16 2, +92, then seven raw float words.
     pub(crate) fn saved_view(&self, index: usize) -> Vec<u8> {
         let view = &self.views[index];
-        let mut out = 2u16.to_le_bytes().to_vec();
-        out.extend(view.snapshot_mode.to_le_bytes());
+        let legacy = self.config.snapshot_format == super::CameraSnapshotFormat::V1;
+        let mut out = (if legacy { 1u16 } else { 2u16 }).to_le_bytes().to_vec();
+        if !legacy {
+            out.extend(view.snapshot_mode.to_le_bytes());
+        }
         for word in view.words {
             out.extend(word.to_le_bytes());
         }

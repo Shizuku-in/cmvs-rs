@@ -189,6 +189,9 @@ fn inspected_20221105(profile: &crate::profile::EngineProfile) -> bool {
 }
 
 fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLayout> {
+    if profile.is_inspected_20070119() {
+        return Some(SnapshotLayout::TextV1SceneLegacy);
+    }
     if profile.is_inspected_20071117() {
         return Some(SnapshotLayout::TextV1SceneV1);
     }
@@ -274,6 +277,13 @@ fn base_effect_layout_supported(profile: &crate::profile::EngineProfile) -> bool
 }
 
 fn effect_record_supported(profile: &crate::profile::EngineProfile, body: &[u8]) -> bool {
+    if profile.is_inspected_20070119() {
+        return body.len() == 60 && matches!(body.get(..4), Some([1, 0, 1 | 2, 0]))
+            || body.len() == 4
+                && body[..2] == [1, 0]
+                && (0x50..=0x57).contains(&body[2])
+                && body[3] == 0;
+    }
     if base_effect_layout_supported(profile) {
         return body.get(..4) == Some(&[1, 0, 2, 0]) || body == [1, 0, 8, 0];
     }
@@ -298,6 +308,15 @@ fn effect_state_supported(
     profile: &crate::profile::EngineProfile,
     scene: &crate::scene::SceneHost,
 ) -> bool {
+    if profile.is_inspected_20070119() {
+        return scene
+            .saved_effect_pools_with_legacy(true)
+            .is_ok_and(|records| {
+                records
+                    .iter()
+                    .all(|(_, body)| effect_record_supported(profile, body))
+            });
+    }
     effect_layout_supported(profile)
         && (!base_effect_layout_supported(profile)
             || scene.saved_effect_pools().is_ok_and(|records| {
@@ -433,7 +452,10 @@ impl Startup<'_> {
             .map(|(&slot, object)| Ok((slot, SavedScene::from_object(object)?)))
             .collect::<Result<BTreeMap<_, _>, crate::FormatError>>()?;
         let mut raw_objects = BTreeMap::new();
-        for (slot, record) in self.scene.saved_effect_pools()? {
+        for (slot, record) in self
+            .scene
+            .saved_effect_pools_with_legacy(layout == SnapshotLayout::TextV1SceneLegacy)?
+        {
             if !effect_record_supported(self.gate.selection().profile, &record) {
                 return Err(
                     "saved particle effect type is not implemented for this profile".into(),
@@ -494,9 +516,17 @@ impl Startup<'_> {
             },
             cameras: [
                 self.camera.saved(0),
-                self.camera.saved(1),
+                if layout == SnapshotLayout::TextV1SceneLegacy {
+                    Vec::new()
+                } else {
+                    self.camera.saved(1)
+                },
                 self.camera.saved_view(0),
-                self.camera.saved_view(1),
+                if layout == SnapshotLayout::TextV1SceneLegacy {
+                    Vec::new()
+                } else {
+                    self.camera.saved_view(1)
+                },
             ],
             script_data: vm.main_data.clone(),
             bgm: self.audio.saved_bgm(),
@@ -849,6 +879,13 @@ impl Startup<'_> {
                 windows[slot] = Some(saved.load(&mut images, &mut budget)?);
             }
         }
+        // Native 0x4179f0 discards the bodyless old scene effects on load.
+        let effect_records: Vec<_> = effect_records
+            .into_iter()
+            .filter(|(_, body)| {
+                !(layout == SnapshotLayout::TextV1SceneLegacy && body.len() == 4 && body[2] >= 0x50)
+            })
+            .collect();
         let effects = crate::scene::SceneHost::load_effect_pools(
             &effect_records,
             &mut images,
@@ -898,9 +935,13 @@ impl Startup<'_> {
         }
         let mut camera_host = self.camera.clone();
         camera_host.restore(0, &snapshot.cameras[0])?;
-        camera_host.restore(1, &snapshot.cameras[1])?;
+        if layout != SnapshotLayout::TextV1SceneLegacy {
+            camera_host.restore(1, &snapshot.cameras[1])?;
+        }
         camera_host.restore_view(0, &snapshot.cameras[2])?;
-        camera_host.restore_view(1, &snapshot.cameras[3])?;
+        if layout != SnapshotLayout::TextV1SceneLegacy {
+            camera_host.restore_view(1, &snapshot.cameras[3])?;
+        }
         // Auto-resume can load before any playback command has configured the backend.
         self.audio_backend.configure_paths(self.bootstrap.paths())?;
         self.audio_backend
@@ -1184,6 +1225,7 @@ mod layout_tests {
     fn snapshot_layout_requires_an_independently_inspected_build() {
         let registry = crate::profile::Registry::builtin();
         for (id, layout) in [
+            ("cmvs-20070119", SnapshotLayout::TextV1SceneLegacy),
             ("cmvs-20071117", SnapshotLayout::TextV1SceneV1),
             ("cmvs-20080719", SnapshotLayout::TextV1SceneV2),
             ("cmvs-20080903", SnapshotLayout::TextV1SceneV2),
@@ -1250,6 +1292,7 @@ mod layout_tests {
             assert!(!effect_record_supported(profile, &[1, 0, 8, 0, 0]));
         }
         for id in [
+            "cmvs-20070119",
             "cmvs-20071117",
             "cmvs-20080719",
             "cmvs-20080903",

@@ -22,3 +22,5 @@ cargo check --offline --features desktop,audio-output
 根包的 `audio-output` feature 引入本包；桌面播放还需在运行时指定 `--audio native`。默认记录模式不会打开音频设备，硬件测试需单独显式运行。
 
 详见[音频后端](../../docs/backends/audio-output.md)、[运行指南](../../docs/guides/running.md)和[依赖与许可](../../docs/references.md)。
+
+PCM WAVE：支持 RIFF/WAVE 中 8–192 kHz、单/双声道、16 位有符号 PCM；沿用音量、循环、预加载和重播路径。按块读取样本，校验 chunk 边界、格式和完整帧；其他 WAV 编码显式报错。`VorbisProgram` 保留历史 API 名称，现在也接受这种 PCM WAVE。

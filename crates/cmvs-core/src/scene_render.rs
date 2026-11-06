@@ -898,9 +898,20 @@ pub fn prepare_scene<'a>(
                     }),
             )
     });
+    let sprites = scene
+        .legacy_effects()
+        .values()
+        .flat_map(|effect| match effect {
+            crate::effect_objects::LegacyEffect::Sprites(sprites) => sprites.objects.as_slice(),
+            crate::effect_objects::LegacyEffect::Curtain(curtain) => {
+                std::slice::from_ref(&curtain.background)
+            }
+            _ => &[],
+        });
     let all_objects = slots
         .map(|(slot, object)| (slot, object, None, false))
         .chain(particles.map(|(slot, object, parent)| (slot, object, parent, false)))
+        .chain(sprites.map(|object| (None, object, None, false)))
         .chain(additional.iter().map(|&object| (None, object, None, true)));
     type QueuedObject<'a> = (Option<u8>, &'a SceneObject, bool, Option<&'a SceneObject>);
     fn collect<'a>(
@@ -1208,6 +1219,51 @@ pub fn prepare_scene<'a>(
                     image,
                     quad,
                     alpha: particle.opacity,
+                }),
+                children: Vec::new(),
+            });
+        }
+    }
+    for effect in scene.legacy_effects().values() {
+        let crate::effect_objects::LegacyEffect::Magic(magic) = effect else {
+            continue;
+        };
+        let view = cameras
+            .ok_or(FormatError("magic sparks need the device view"))?
+            .view(0)
+            .expect("view exists");
+        let eye = [view.words[0], view.words[1], view.words[2]].map(f32::from_bits);
+        for spark in &magic.sparks {
+            if spark.alpha == 0 {
+                continue;
+            }
+            let position = spark.xyz.map(f32::from_bits);
+            let Some(quad) = view
+                .billboard(position, [0.1, 0.1], [width, height])
+                .map_err(FormatError)?
+            else {
+                continue;
+            };
+            let distance = position
+                .iter()
+                .zip(eye)
+                .map(|(p, e)| (p - e) * (p - e))
+                .sum::<f32>()
+                .sqrt();
+            let image = &magic.spark_image;
+            world.push(Entry {
+                order: distance,
+                layer: Some(Layer::Projected {
+                    image,
+                    rect: [
+                        0,
+                        0,
+                        i64::from(image.pixels.width()),
+                        i64::from(image.pixels.height()),
+                    ],
+                    quad,
+                    alpha: spark.alpha,
+                    blend: Blend::Additive,
                 }),
                 children: Vec::new(),
             });

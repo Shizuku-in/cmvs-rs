@@ -194,3 +194,212 @@ fn separate_image_tables_and_window_scale_motion_are_bound_only_here() {
     assert!(dispatch::is_wait_for(profile.semantics(0x271), 0x271));
     assert!(!dispatch::is_wait(0x271));
 }
+
+#[test]
+fn floating_planes_use_command_296_and_consume_two_words_for_an_invalid_slot() {
+    use cmvs_rs::{dispatch::ImageHosts, image::ImageSource, scene::SceneHost};
+    struct NoImages;
+    impl ImageSource for NoImages {
+        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+            panic!("invalid slots must not read images");
+        }
+    }
+    assert_eq!(
+        semantics(0x296),
+        Semantics::Variant(VariantId::LegacyEffects)
+    );
+    assert_eq!(
+        semantics(0x295),
+        Semantics::Variant(VariantId::LegacyEffects)
+    );
+    let mut code = vec![];
+    command(&mut code, 0x2296, &[4, 123]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    pending(&mut vm);
+    vm.state_mut().set_system_integer(0, 77).unwrap();
+    let mut scene = SceneHost::default();
+    let mut source = NoImages;
+    let mut audio = AudioHost::default();
+    let mut backend = RecordingAudio::default();
+    let flow = dispatch::run(
+        semantics(0x296),
+        &mut vm,
+        &mut Hosts {
+            images: Some(ImageHosts {
+                scene: &mut scene,
+                source: &mut source,
+                change_images: false,
+            }),
+            audio: Some(AudioHosts {
+                audio: &mut audio,
+                backend: &mut backend,
+            }),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(flow, Some(Flow::Done));
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(77));
+    assert!(scene.legacy_effects().is_empty());
+    assert!(backend.requests().is_empty());
+}
+
+#[test]
+fn hundredth_degree_polar_point_preserves_other_results_and_signed_radius() {
+    assert_eq!(semantics(0xd9), Semantics::Variant(VariantId::PolarPoint));
+    for (angle, radius, expected) in [
+        (0i32, -100i32, [-100, 0]),
+        (4500, 100, [70, 70]),
+        (-4500, 100, [70, -70]),
+        (4500, -100, [-70, -70]),
+    ] {
+        let mut code = vec![];
+        command(&mut code, 0x20d9, &[angle as u32, radius as u32]);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        pending(&mut vm);
+        vm.state_mut().set_system_integer(0, 77).unwrap();
+        vm.state_mut().set_system_integer(3, 88).unwrap();
+        assert_eq!(
+            dispatch::run(
+                semantics(0xd9),
+                &mut vm,
+                &mut Hosts {
+                    math: true,
+                    ..Default::default()
+                }
+            )
+            .unwrap(),
+            Some(Flow::Done)
+        );
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.state().system_integer(0), Some(77));
+        assert_eq!(vm.state().system_integer(3), Some(88));
+        for (i, value) in expected.into_iter().enumerate() {
+            assert_eq!(
+                vm.state().system_integer((i + 1) as u32),
+                Some(value as u32)
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires CMVS_GAME_ROOT and CMVS_PURIRING_SAVE pointing to read-only game resources and a CSV2 save"]
+fn external_snapshot_load_restores_scene_and_reencodes() {
+    use cmvs_rs::{
+        platform::RecordingBackend,
+        runner::{Startup, StartupEvent, load_start},
+        save::Csv2Save,
+        snapshot::{EngineSnapshot, SnapshotLayout},
+    };
+    let root =
+        std::path::PathBuf::from(std::env::var_os("CMVS_GAME_ROOT").expect("CMVS_GAME_ROOT"));
+    let input = std::path::PathBuf::from(
+        std::env::var_os("CMVS_PURIRING_SAVE").expect("CMVS_PURIRING_SAVE"),
+    );
+    let bytes = std::fs::read(input).unwrap();
+    let save = Csv2Save::decode(&bytes).unwrap();
+    let layout = SnapshotLayout::TextV1SceneLegacy;
+    let snapshot = EngineSnapshot::decode_with_layout(&save.snapshot, layout).unwrap();
+    assert_eq!(snapshot.encode_with_layout(layout).unwrap(), save.snapshot);
+    let game = Registry::builtin().identify_game(&root, None).unwrap();
+    assert_eq!(game.selection.profile.id, PROFILE);
+    let script = load_start(&root, &game.files).unwrap();
+    let mut run = Startup::new(&script, &root, &game, 0).unwrap();
+    let user = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "puriring-load-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&user).unwrap();
+    std::fs::write(user.join("save003.dat"), bytes).unwrap();
+    run.set_user_data_directory(&user).unwrap();
+    run.set_record_text(true);
+    let mut backend = RecordingBackend::default();
+    let mut entered = false;
+    for _ in 0..1_000_000 {
+        match run.tick(&mut backend).unwrap() {
+            StartupEvent::SnapshotCaptured => {
+                entered = true;
+                break;
+            }
+            StartupEvent::Yield => run.advance_frame(16).unwrap(),
+            StartupEvent::Progress => {}
+            event => panic!("unexpected bootstrap event: {event:?}"),
+        }
+    }
+    assert!(entered);
+    run.load_slot(3, &mut backend).unwrap();
+    run.render_frame().unwrap();
+    assert!(run.save_slot(4).unwrap());
+    let second = Csv2Save::decode(&std::fs::read(user.join("save004.dat")).unwrap()).unwrap();
+    assert_eq!(second.snapshot, save.snapshot);
+    // Exercise the restored VM, not just its cached save image. Each decide release
+    // is delivered at a message wait; scene clocks advance at real frame boundaries.
+    let mut traces = Vec::new();
+    for _ in 0..2 {
+        run.input_mut().set(0, false, false, false).unwrap();
+        run.load_slot(3, &mut backend).unwrap();
+        let bindings = cmvs_rs::input::KeyBindings::parse(
+            &std::fs::read_to_string(root.join("key.cfg")).unwrap(),
+        )
+        .unwrap();
+        let mut codes = cmvs_rs::input::CodeInput::default();
+        let mut taps = std::collections::VecDeque::new();
+        run.input_mut().set_pointer(-1, -1);
+        let mut trace = Vec::new();
+        let mut was_waiting = false;
+        for _ in 0..2_000_000 {
+            match run.tick(&mut backend).unwrap() {
+                StartupEvent::Yield => {
+                    run.advance_frame(16).unwrap();
+                    let waiting = run
+                        .machine()
+                        .pending_system()
+                        .is_some_and(|(_, c)| c == 0x153)
+                        && run.machine().repeat_count() >= 2;
+                    if waiting && !was_waiting {
+                        let history = run.history().entries().front().map(|h| h.strings.clone());
+                        trace.push((
+                            run.machine().current_name().to_vec(),
+                            run.machine().pc(),
+                            history,
+                        ));
+                    }
+                    was_waiting = waiting;
+                    if waiting && taps.is_empty() {
+                        taps.extend([true, false]);
+                    }
+                    let mut now = [false; 128];
+                    now[cmvs_rs::input::MOUSE_CODES[0]] = taps.pop_front().unwrap_or(false);
+                    codes.update(&bindings, &now, run.input_mut());
+                    if trace.len() >= 20 {
+                        break;
+                    }
+                }
+                StartupEvent::Progress | StartupEvent::SnapshotCaptured => {}
+                event => panic!("unexpected restored event: {event:?}"),
+            }
+        }
+        assert_eq!(
+            trace.len(),
+            20,
+            "restored execution stopped at {:?}/{:#x}",
+            run.machine().current_name(),
+            run.machine().pc()
+        );
+        traces.push(trace);
+    }
+    assert!(
+        traces[0] == traces[1],
+        "repeated loads must resume the same 20 message waits and backlog texts"
+    );
+    drop(run);
+    std::fs::remove_dir_all(user).unwrap();
+}

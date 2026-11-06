@@ -20,12 +20,36 @@ impl SceneHost {
     }
 
     pub(crate) fn saved_effect_pools(&self) -> Result<Vec<(u16, Vec<u8>)>, FormatError> {
-        if !self.legacy_effects.is_empty() {
+        self.saved_effect_pools_with_legacy(false)
+    }
+
+    pub(crate) fn saved_effect_pools_with_legacy(
+        &self,
+        legacy: bool,
+    ) -> Result<Vec<(u16, Vec<u8>)>, FormatError> {
+        if !legacy && !self.legacy_effects.is_empty() {
             return Err(FormatError(
                 "snapshots of cmvs-20070119 legacy effect slots are not implemented",
             ));
         }
         let mut records = BTreeMap::new();
+        for (&slot, effect) in &self.legacy_effects {
+            use super::LegacyEffect;
+            let kind = match effect {
+                LegacyEffect::SnowField(_) => 0x50,
+                LegacyEffect::Walk(_) => 0x51,
+                LegacyEffect::Circle(_) => 0x52,
+                LegacyEffect::Curtain(_) => 0x53,
+                LegacyEffect::Magic(_) => 0x54,
+                LegacyEffect::Sprites(_) => 0x55,
+                LegacyEffect::FloatingPlanes(_) => 0x56,
+            };
+            if slot >= 4 {
+                return Err(FormatError("legacy effect slot exceeds 3"));
+            }
+            records.insert(u16::from(slot), vec![1, 0, kind, 0]);
+        }
+
         let mut insert = |slot: u8, template: Option<&SavedEffect>| -> Result<(), FormatError> {
             let template =
                 template.ok_or(FormatError("particle creation template is unavailable"))?;
@@ -95,10 +119,15 @@ impl SceneHost {
                     ))?;
             }
             match &template {
-                SavedEffect::Rain { words, name } => {
+                SavedEffect::Rain { words, name } | SavedEffect::LegacyRain { words, name } => {
+                    let construct = if matches!(template, SavedEffect::LegacyRain { .. }) {
+                        super::RainEffect::new_legacy
+                    } else {
+                        super::RainEffect::new
+                    };
                     scene.rain_effects.insert(
                         slot as u8,
-                        super::RainEffect::new(
+                        construct(
                             *words,
                             SceneObject {
                                 image,
@@ -158,6 +187,25 @@ impl SceneHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn puriring_effect_save_keeps_only_native_type_header_without_mutating_state() {
+        let mut scene = SceneHost::default();
+        let mut sprites = super::super::sprites::Sprites::new(Vec::new());
+        sprites.request(8).unwrap();
+        scene
+            .legacy_effects
+            .insert(2, super::super::LegacyEffect::Sprites(Box::new(sprites)));
+        assert!(scene.saved_effect_pools().is_err());
+        assert_eq!(
+            scene.saved_effect_pools_with_legacy(true).unwrap(),
+            vec![(2, vec![1, 0, 0x55, 0])]
+        );
+        let super::super::LegacyEffect::Sprites(sprites) = &scene.legacy_effects[&2] else {
+            panic!()
+        };
+        assert_eq!(sprites.requested, 8);
+    }
+
     #[derive(Default)]
     struct Images(Vec<Vec<u8>>);
     impl ImageSource for Images {

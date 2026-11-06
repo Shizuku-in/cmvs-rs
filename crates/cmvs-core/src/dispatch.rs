@@ -5109,15 +5109,24 @@ pub static TEXT_ALPHA: &[Entry] = &[Entry {
     handler: root_settings,
 }];
 
-pub static POLAR_POINT: &[Entry] = &[Entry {
-    command: 0xd8,
-    name: "integer polar point",
-    capability: Capability::Math,
-    handler: |_hosts, call| {
-        crate::math::handle_polar_point(call)?;
-        Ok(Flow::Done)
+pub static POLAR_POINT: &[Entry] = &[
+    Entry {
+        command: 0xd8,
+        name: "integer polar point",
+        capability: Capability::Math,
+        handler: polar_point,
     },
-}];
+    Entry {
+        command: 0xd9,
+        name: "hundredth-degree polar point",
+        capability: Capability::Math,
+        handler: polar_point,
+    },
+];
+fn polar_point(_hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    crate::math::handle_polar_point(call)?;
+    Ok(Flow::Done)
+}
 
 pub static AUDIO_PRELOAD: &[Entry] = &[
     Entry {
@@ -5256,6 +5265,54 @@ fn legacy_snow_field(
     h.scene.create_snow_field(call, h.source)?;
     Ok(Flow::Done)
 }
+fn legacy_floating_planes(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    let (Some(images), Some(audio)) = (hosts.images.as_mut(), hosts.audio.as_mut()) else {
+        return Ok(Flow::Unavailable);
+    };
+    images
+        .scene
+        .create_floating_planes(call, images.source, audio.backend)?;
+    Ok(Flow::Done)
+}
+fn legacy_magic(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    let (Some(images), Some(audio), Some(camera), Some(random)) = (
+        hosts.images.as_mut(),
+        hosts.audio.as_mut(),
+        hosts.camera.as_deref_mut(),
+        hosts.random.as_deref_mut(),
+    ) else {
+        return Ok(Flow::Unavailable);
+    };
+    images
+        .scene
+        .create_magic(call, images.source, audio.backend, camera, random)?;
+    Ok(Flow::Done)
+}
+fn legacy_curtain(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    let (Some(images), Some(audio), Some(camera)) = (
+        hosts.images.as_mut(),
+        hosts.audio.as_mut(),
+        hosts.camera.as_deref_mut(),
+    ) else {
+        return Ok(Flow::Unavailable);
+    };
+    images
+        .scene
+        .create_curtain(call, images.source, audio.backend, camera)?;
+    Ok(Flow::Done)
+}
+fn legacy_sprites(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    let (Some(images), Some(audio)) = (hosts.images.as_mut(), hosts.audio.as_mut()) else {
+        return Ok(Flow::Unavailable);
+    };
+    images
+        .scene
+        .create_sprites(call, images.source, audio.backend)?;
+    Ok(Flow::Done)
+}
 fn legacy_circle(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     let (Some(images), Some(audio)) = (hosts.images.as_mut(), hosts.audio.as_mut()) else {
         return Ok(Flow::Unavailable);
@@ -5315,6 +5372,43 @@ fn legacy_set(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Bo
 
 /// cmvs-20070119 effect slots of types 0x50.. ; see effect_objects::legacy.
 pub static LEGACY_EFFECTS: &[Entry] = &[
+    Entry {
+        command: 0x2a1,
+        name: "create legacy rain streak effect",
+        capability: Capability::ParticleImages,
+        handler: |hosts, call| {
+            let h = hosts
+                .images
+                .as_mut()
+                .expect("particle image capability checked");
+            h.scene.create_rain(call, h.source)?;
+            Ok(Flow::Done)
+        },
+    },
+    Entry {
+        command: 0x294,
+        name: "create magic effect",
+        capability: Capability::SceneImages,
+        handler: legacy_magic,
+    },
+    Entry {
+        command: 0x293,
+        name: "create curtain effect",
+        capability: Capability::SceneImages,
+        handler: legacy_curtain,
+    },
+    Entry {
+        command: 0x295,
+        name: "create sprite effect",
+        capability: Capability::SceneImages,
+        handler: legacy_sprites,
+    },
+    Entry {
+        command: 0x296,
+        name: "create floating planes effect",
+        capability: Capability::SceneImages,
+        handler: legacy_floating_planes,
+    },
     Entry {
         command: 0x290,
         name: "create snow field effect",

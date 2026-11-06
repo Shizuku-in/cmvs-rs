@@ -111,7 +111,8 @@ impl EngineSnapshot {
 
     pub fn decode_with_layout(bytes: &[u8], layout: SnapshotLayout) -> Result<Self, FormatError> {
         let text_v1 = layout.text_version() == 1;
-        let text_v1_scene_v1 = layout == SnapshotLayout::TextV1SceneV1;
+        let legacy = layout == SnapshotLayout::TextV1SceneLegacy;
+        let text_v1_scene_v1 = legacy || layout == SnapshotLayout::TextV1SceneV1;
         let records = parse_records(bytes)?;
         let mut at = 0;
         let mut next = |tag: u16| -> Result<&[u8], FormatError> {
@@ -250,7 +251,7 @@ impl EngineSnapshot {
         };
         let mut tail: Vec<&[u8]> = Vec::with_capacity(TAIL.len());
         for tag in TAIL {
-            if text_v1 && tag == 0x6e0 {
+            if text_v1 && tag == 0x6e0 || legacy && matches!(tag, 0x881 | 0x883) {
                 tail.push(&[]);
             } else {
                 tail.push(next(if text_v1_scene_v1 && tag == 0x304 {
@@ -292,7 +293,8 @@ impl EngineSnapshot {
 
     pub fn encode_with_layout(&self, layout: SnapshotLayout) -> Result<Vec<u8>, FormatError> {
         let text_v1 = layout.text_version() == 1;
-        let text_v1_scene_v1 = layout == SnapshotLayout::TextV1SceneV1;
+        let legacy = layout == SnapshotLayout::TextV1SceneLegacy;
+        let text_v1_scene_v1 = legacy || layout == SnapshotLayout::TextV1SceneV1;
         if text_v1
             && (self.texts[8..].iter().any(Option::is_some)
                 || self.windows[4..].iter().any(Option::is_some)
@@ -356,6 +358,14 @@ impl EngineSnapshot {
             out.record(0x6e0, None, &self.record_6e0)?;
         }
         for (i, camera) in self.cameras.iter().enumerate() {
+            if legacy && matches!(i, 1 | 3) {
+                if !camera.is_empty() {
+                    return Err(FormatError(
+                        "legacy snapshot has only camera zero and view zero",
+                    ));
+                }
+                continue;
+            }
             out.record(0x880 + i as u16, None, camera)?;
         }
         out.record(0x900, None, &self.script_data)?;

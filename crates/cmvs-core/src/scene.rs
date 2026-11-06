@@ -350,6 +350,8 @@ impl DrawState {
 pub struct SceneHost {
     child_slots: ChildSlots,
     allow_filter_mode_one: bool,
+    allow_rotation_hold: bool,
+    legacy_world_motion: bool,
     allow_legacy_sine_modes: bool,
     pub(crate) allow_screen_coordinates_one: bool,
     pub(crate) allow_projected_parent_rotation: bool,
@@ -381,6 +383,8 @@ impl SceneHost {
         Self {
             child_slots: ChildSlots::for_profile(profile),
             allow_filter_mode_one: profile.is_inspected_20071117(),
+            allow_rotation_hold: profile.is_inspected_20070119(),
+            legacy_world_motion: profile.is_inspected_20070119(),
             allow_legacy_sine_modes: profile.uses_legacy_sine_modes(),
             allow_screen_coordinates_one: profile.is_inspected_20070119()
                 || profile.is_inspected_20080719()
@@ -1284,6 +1288,8 @@ impl SceneHost {
             screen_size: self.screen_size,
             child_slots: self.child_slots,
             allow_filter_mode_one: self.allow_filter_mode_one,
+            allow_rotation_hold: self.allow_rotation_hold,
+            legacy_world_motion: self.legacy_world_motion,
             allow_legacy_sine_modes: self.allow_legacy_sine_modes,
             allow_screen_coordinates_one: self.allow_screen_coordinates_one,
             allow_projected_parent_rotation: self.allow_projected_parent_rotation,

@@ -340,8 +340,13 @@ impl NativeAudio {
         if name.is_empty() {
             return Ok(None);
         }
-        if !name.to_ascii_lowercase().ends_with(b".ogg") {
-            return Err("native audio supports verified Ogg Vorbis resources only".into());
+        let lower = name.to_ascii_lowercase();
+        if !lower.ends_with(b".ogg") && !lower.ends_with(b".wav") {
+            return Err(format!(
+                "unsupported audio resource: {} (expected Ogg Vorbis or PCM WAVE)",
+                String::from_utf8_lossy(name)
+            )
+            .into());
         }
         self.archives.with_paths(&self.paths, kind).read(name)
     }
