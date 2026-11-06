@@ -1610,14 +1610,14 @@ pub static ROOT: &[Entry] = &[
         handler: root_runtime,
     },
     Entry {
-        command: 0x2b8,
-        name: "build thumbnail",
+        command: 0x2b7,
+        name: "latest save slot",
         capability: Capability::Runtime,
         handler: root_runtime,
     },
     Entry {
-        command: 0x2b7,
-        name: "latest save slot",
+        command: 0x2b8,
+        name: "build thumbnail",
         capability: Capability::Runtime,
         handler: root_runtime,
     },
@@ -1981,17 +1981,17 @@ pub static ROOT: &[Entry] = &[
         capability: Capability::Capture,
         handler: root_capture,
     },
-    Entry {
-        command: 0x3e,
-        name: "read device frame",
-        capability: Capability::CaptureDevice,
-        handler: root_capture_device,
-    },
     // ASUKIMI x86 0x440390 -> 0x4215c0 -> 0x41c2b0 reads the completed
     // device frame as an opaque image. See docs/games/asukimi.
     Entry {
         command: 0x3d,
         name: "read legacy device frame",
+        capability: Capability::CaptureDevice,
+        handler: root_capture_device,
+    },
+    Entry {
+        command: 0x3e,
+        name: "read device frame",
         capability: Capability::CaptureDevice,
         handler: root_capture_device,
     },
@@ -2590,6 +2590,12 @@ pub static ROOT: &[Entry] = &[
         handler: root_windows,
     },
     Entry {
+        command: 0x15e,
+        name: "window position query",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
         command: 0x171,
         name: "release window image",
         capability: Capability::Windows,
@@ -2738,12 +2744,6 @@ pub static ROOT: &[Entry] = &[
         name: "window pointer hit",
         capability: Capability::WindowPointer,
         handler: root_window_pointer,
-    },
-    Entry {
-        command: 0x15e,
-        name: "window position query",
-        capability: Capability::Windows,
-        handler: root_windows,
     },
     Entry {
         command: 0x194,
@@ -2980,6 +2980,12 @@ pub static ROOT: &[Entry] = &[
         handler: root_input,
     },
     Entry {
+        command: 0x2ef,
+        name: "query skipping",
+        capability: Capability::Input,
+        handler: root_input,
+    },
+    Entry {
         command: 0x344,
         name: "query input action 22",
         capability: Capability::Input,
@@ -3036,12 +3042,6 @@ pub static ROOT: &[Entry] = &[
     Entry {
         command: 0x35d,
         name: "right press",
-        capability: Capability::Input,
-        handler: root_input,
-    },
-    Entry {
-        command: 0x2ef,
-        name: "query skipping",
         capability: Capability::Input,
         handler: root_input,
     },
@@ -3610,6 +3610,12 @@ pub static ROOT: &[Entry] = &[
         handler: root_scene,
     },
     Entry {
+        command: 0x2ae,
+        name: "query image fragment completion",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
         command: 0x2c5,
         name: "cancel image change",
         capability: Capability::Scene,
@@ -3636,6 +3642,12 @@ pub static ROOT: &[Entry] = &[
     Entry {
         command: 0x322,
         name: "second texture subtraction",
+        capability: Capability::Scene,
+        handler: root_scene,
+    },
+    Entry {
+        command: 0x328,
+        name: "object row wave or afterimages",
         capability: Capability::Scene,
         handler: root_scene,
     },
@@ -4280,6 +4292,18 @@ pub static ROOT: &[Entry] = &[
         name: "release effect object",
         capability: Capability::EffectObjects,
         handler: root_effect_objects,
+    },
+    Entry {
+        command: 0x2a2,
+        name: "create falling billboard effect",
+        capability: Capability::ParticleImages,
+        handler: FALLING_BILLBOARDS[0].handler,
+    },
+    Entry {
+        command: 0x2a8,
+        name: "create image fragment effect",
+        capability: Capability::SceneRandom,
+        handler: FRAGMENTS[0].handler,
     },
     Entry {
         command: 0xd0,
@@ -5364,6 +5388,7 @@ pub static VARIANT_TABLES: &[&[Entry]] = &[
     FRAGMENTS,
 ];
 
+#[rustfmt::skip]
 pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'static Entry> {
     let entries = match id {
         crate::profile::VariantId::TextDialog => TEXT_DIALOG,
@@ -5394,23 +5419,18 @@ pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'st
     entries.iter().find(|entry| entry.command == command)
 }
 
+#[rustfmt::skip]
 pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
     match profile.semantics(command) {
         Semantics::Variant(crate::profile::VariantId::TextDialog) => "variant text dialog",
         Semantics::Variant(crate::profile::VariantId::SeGain) => "variant SE gain multiplier",
-        Semantics::Variant(crate::profile::VariantId::MovieControl) => {
-            "variant scene movie control"
-        }
+        Semantics::Variant(crate::profile::VariantId::MovieControl) => "variant scene movie control",
         Semantics::Variant(crate::profile::VariantId::MovieSeek) => "variant scene movie seek",
-        Semantics::Variant(crate::profile::VariantId::ScreenCoordinates) => {
-            "variant screen coordinates"
-        }
+        Semantics::Variant(crate::profile::VariantId::ScreenCoordinates) => "variant screen coordinates",
         Semantics::Variant(crate::profile::VariantId::InputPress) => "variant input down edge",
         Semantics::Variant(crate::profile::VariantId::MgvPlayer) => "variant MGV player",
         Semantics::Variant(crate::profile::VariantId::DisplayCount) => "variant display count",
-        Semantics::Variant(crate::profile::VariantId::FullscreenMonitor) => {
-            "variant fullscreen monitor"
-        }
+        Semantics::Variant(crate::profile::VariantId::FullscreenMonitor) => "variant fullscreen monitor",
         Semantics::Variant(crate::profile::VariantId::KeyedArchives) => "variant keyed archives",
         Semantics::Variant(crate::profile::VariantId::ListSelect) => "variant list selection",
         Semantics::Variant(crate::profile::VariantId::ObjectQueue) => "variant object queue",
@@ -5418,21 +5438,11 @@ pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
         Semantics::Variant(crate::profile::VariantId::FontCells) => "variant text override",
         Semantics::Variant(crate::profile::VariantId::Particles) => "variant particle override",
         Semantics::Variant(crate::profile::VariantId::Rain) => "variant rain streaks",
-        Semantics::Variant(crate::profile::VariantId::ParticlesX87) => {
-            "variant x87 particle override"
-        }
-        Semantics::Variant(crate::profile::VariantId::BackgroundAudio) => {
-            "variant background audio override"
-        }
-        Semantics::Variant(crate::profile::VariantId::FallingBillboards) => {
-            "variant falling billboard override"
-        }
-        Semantics::Variant(crate::profile::VariantId::CollisionParticles) => {
-            "variant collision particle override"
-        }
-        Semantics::Variant(crate::profile::VariantId::Fragments) => {
-            "variant image fragment override"
-        }
+        Semantics::Variant(crate::profile::VariantId::ParticlesX87) => "variant x87 particle override",
+        Semantics::Variant(crate::profile::VariantId::BackgroundAudio) => "variant background audio override",
+        Semantics::Variant(crate::profile::VariantId::FallingBillboards) => "variant falling billboard override",
+        Semantics::Variant(crate::profile::VariantId::CollisionParticles) => "variant collision particle override",
+        Semantics::Variant(crate::profile::VariantId::Fragments) => "variant image fragment override",
         Semantics::Variant(crate::profile::VariantId::SeRestart) => "variant SE restart",
         Semantics::Variant(crate::profile::VariantId::AudioPreload) => "variant audio preload",
         Semantics::Variant(crate::profile::VariantId::PolarPoint) => "variant integer polar point",

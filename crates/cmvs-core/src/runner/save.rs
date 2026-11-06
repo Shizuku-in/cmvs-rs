@@ -240,6 +240,9 @@ fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLa
 }
 
 fn effect_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
+    if base_effect_layout_supported(profile) {
+        return true;
+    }
     (matches!(profile.id.as_str(), "cmvs-20110525" | "cmvs-20171114")
         || profile.is_inspected_20080719()
         || profile.is_inspected_20080903()
@@ -257,7 +260,23 @@ fn effect_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
         && profile.base.as_deref() == Some("cmvs-20160201")
 }
 
+fn base_effect_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
+    profile.id == "cmvs-20160201"
+        && profile.base.is_none()
+        && profile
+            .binary(
+                &crate::digest::parse_hex(
+                    "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
+                )
+                .expect("static SHA-256"),
+            )
+            .is_some()
+}
+
 fn effect_record_supported(profile: &crate::profile::EngineProfile, body: &[u8]) -> bool {
+    if base_effect_layout_supported(profile) {
+        return body.get(..4) == Some(&[1, 0, 2, 0]) || body == [1, 0, 8, 0];
+    }
     if profile.is_inspected_20080903() || body.get(..4) == Some(&[1, 0, 4, 0]) {
         return profile.is_inspected_20080903() && body.get(..4) == Some(&[1, 0, 4, 0]);
     }
@@ -273,6 +292,19 @@ fn effect_record_supported(profile: &crate::profile::EngineProfile, body: &[u8])
         // configurations still need their own runtime and snapshot evidence.
         && (!matches!(profile.id.as_str(), "cmvs-20080719" | "cmvs-20110525" | "cmvs-20120309" | "cmvs-20211006" | "cmvs-20221105")
             || body.get(..4) == Some(&[1, 0, 5, 0]))
+}
+
+fn effect_state_supported(
+    profile: &crate::profile::EngineProfile,
+    scene: &crate::scene::SceneHost,
+) -> bool {
+    effect_layout_supported(profile)
+        && (!base_effect_layout_supported(profile)
+            || scene.saved_effect_pools().is_ok_and(|records| {
+                records
+                    .iter()
+                    .all(|(_, body)| effect_record_supported(profile, body))
+            }))
 }
 
 /// Writers 20110525 0x1400332e0, 20120309 0x140033e60, 20130131 0x1400330b0
@@ -374,7 +406,8 @@ impl Startup<'_> {
         vm: crate::machine::VmImage,
     ) -> Result<(EngineSnapshot, Vec<u8>), Box<dyn Error>> {
         let layout = self.require_snapshot_layout()?;
-        if self.scene.has_effect_pools() && !effect_layout_supported(self.gate.selection().profile)
+        if self.scene.has_effect_pools()
+            && !effect_state_supported(self.gate.selection().profile, &self.scene)
         {
             return Err("saving active particle effects is not implemented".into());
         }
@@ -680,7 +713,8 @@ impl Startup<'_> {
         backend: &mut impl PlatformBackend,
     ) -> Result<(), Box<dyn Error>> {
         let layout = self.require_snapshot_layout()?;
-        if self.scene.has_effect_pools() && !effect_layout_supported(self.gate.selection().profile)
+        if self.scene.has_effect_pools()
+            && !effect_state_supported(self.gate.selection().profile, &self.scene)
         {
             return Err("loading over active particle effects is not implemented".into());
         }
@@ -1172,6 +1206,7 @@ mod layout_tests {
                         | "cmvs-20110525"
                         | "cmvs-20120309"
                         | "cmvs-20171114"
+                        | "cmvs-20160201"
                         | "cmvs-20211006"
                         | "cmvs-20221105"
                 )
@@ -1245,5 +1280,21 @@ mod layout_tests {
         assert!(
             validate_512_child_slots_without_button_lists(std::iter::once(&parent), false).is_err()
         );
+    }
+
+    #[test]
+    fn base_effect_records_require_identity_and_only_accept_falling_and_fragments() {
+        let registry = crate::profile::Registry::builtin();
+        let base = registry.profile("cmvs-20160201").unwrap();
+        assert!(effect_record_supported(base, &[1, 0, 8, 0]));
+        assert!(effect_record_supported(base, &[1, 0, 2, 0]));
+        assert!(!effect_record_supported(base, &[1, 0, 5, 0]));
+        assert!(!effect_record_supported(base, &[1, 0, 8, 0, 0]));
+        let mut changed = base.clone();
+        for binary in &mut changed.binaries {
+            binary.sha256 = [0; 32];
+        }
+        assert!(!effect_layout_supported(&changed));
+        assert!(!effect_record_supported(&changed, &[1, 0, 8, 0]));
     }
 }

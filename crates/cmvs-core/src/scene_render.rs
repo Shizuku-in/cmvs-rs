@@ -902,14 +902,39 @@ pub fn prepare_scene<'a>(
         .map(|(slot, object)| (slot, object, None, false))
         .chain(particles.map(|(slot, object, parent)| (slot, object, parent, false)))
         .chain(additional.iter().map(|&object| (None, object, None, true)));
-    for (slot, object, parent, additional_object) in all_objects {
-        if object.shown
-            && let Some(change) = &object.change
-        {
-            objects.push((None, change.common.as_ref(), additional_object, None));
-            objects.push((None, change.previous.as_ref(), additional_object, None));
+    type QueuedObject<'a> = (Option<u8>, &'a SceneObject, bool, Option<&'a SceneObject>);
+    fn collect<'a>(
+        out: &mut Vec<QueuedObject<'a>>,
+        slot: Option<u8>,
+        object: &'a SceneObject,
+        additional: bool,
+        parent: Option<&'a SceneObject>,
+    ) -> Result<(), FormatError> {
+        if !object.shown {
+            return Ok(());
         }
-        objects.push((slot, object, additional_object, parent));
+        if let Some(effect) = object.special_effect.as_ref().filter(|e| e.words[0] != 0) {
+            effect.validate_live(
+                object
+                    .draw
+                    .as_ref()
+                    .ok_or(FormatError("object effect has no draw state"))?,
+            )?;
+            // Active effects queue only their independent list (0x14003de80).
+            for child in &effect.children {
+                collect(out, None, child, additional, Some(object))?;
+            }
+        } else {
+            if let Some(change) = &object.change {
+                collect(out, None, &change.common, additional, None)?;
+                collect(out, None, &change.previous, additional, None)?;
+            }
+            out.push((slot, object, additional, parent));
+        }
+        Ok(())
+    }
+    for (slot, object, parent, additional_object) in all_objects {
+        collect(&mut objects, slot, object, additional_object, parent)?;
     }
     for (slot, object, additional_object, parent) in objects {
         // 0x14003de80 returns early for +6244 == 0; no draw state means +6240 == 0.

@@ -116,11 +116,19 @@ impl SceneHost {
     pub(crate) fn query_fragments(&self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
         let slot = call.argument(4, "effect slot")?;
         let value = if slot < 4 {
-            let effect = self
-                .fragment_effects
-                .get(&(slot as u8))
-                .ok_or_else(|| call.error("fragment query needs an existing type-8 effect"))?;
-            Some(if effect.complete { u32::MAX } else { 0 })
+            let slot = slot as u8;
+            if let Some(effect) = self.fragment_effects.get(&slot) {
+                Some(if effect.complete { u32::MAX } else { 0 })
+            } else if self.falling_effects.contains_key(&slot)
+                || self.particle_effects.contains_key(&slot)
+                || self.collision_effects.contains_key(&slot)
+                || self.rain_effects.contains_key(&slot)
+            {
+                // BASE 0x14003f0d0: these types take the default -1 branch.
+                Some(u32::MAX)
+            } else {
+                return Err(call.error("effect query needs an existing effect"));
+            }
         } else {
             None
         };

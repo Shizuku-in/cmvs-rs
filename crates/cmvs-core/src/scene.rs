@@ -10,9 +10,9 @@ use crate::{
 };
 use std::{collections::BTreeMap, error::Error};
 mod animation;
-mod child_slots;
-pub(crate) use child_slots::ChildSlots;
 mod change;
+mod child_slots;
+mod image_effect;
 mod mask;
 mod opacity;
 mod position_motion;
@@ -23,6 +23,8 @@ mod strip;
 mod world_motion;
 pub use animation::{ANIMATION_FRAMES, Animation, AnimationFrame};
 pub use change::ImageChange;
+pub(crate) use child_slots::ChildSlots;
+pub use image_effect::ObjectEffect;
 pub use mask::MaskTransition;
 pub use opacity::{OPACITY_KEYS, OpacityKey, OpacityTrack};
 pub use position_motion::{POSITION_KEYS, PositionKey, PositionMotion, PositionPlayback};
@@ -186,6 +188,8 @@ pub struct SceneObject {
     pub dispose: bool,
     /// +14504/+14512/+14520: software image replacement and retained objects.
     pub change: Option<Box<ImageChange>>,
+    /// +6264..+6304 and the independent +6152 list, separate from ordinary children.
+    pub special_effect: Option<Box<ObjectEffect>>,
 }
 impl SceneObject {
     /// 0x14003d0c0 limited to scale (+112), rotation (+120), opacity (+128), frame animation (+136), XY (+144), and XYZ (+152) of
@@ -239,6 +243,12 @@ impl SceneObject {
             self.children.retain(|_, child| !child.dispose);
         }
         self.advance_change(delta);
+        if let Some(effect) = self.special_effect.as_mut()
+            && effect.words[0] != 0
+            && let Some(draw) = self.draw.as_ref()
+        {
+            effect.advance(delta, draw);
+        }
     }
 }
 impl Default for SceneObject {
@@ -254,6 +264,7 @@ impl Default for SceneObject {
             logical_size: [0, 0],
             dispose: false,
             change: None,
+            special_effect: None,
         }
     }
 }
@@ -439,7 +450,7 @@ impl SceneHost {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(false);
         };
-        if !matches!(command, 0x20..=0x23 | 0x25..=0x28 | 0x2a | 0x2d..=0x2f | 0x33 | 0x34 | 0x40 | 0x42..=0x4c | 0x50 | 0x70..=0x75 | 0x78 | 0x1e0..=0x1fd | 0x220..=0x223 | 0x250 | 0x2c5 | 0x2c6 | 0x2cb | 0x321 | 0x322 | 0x329)
+        if !matches!(command, 0x20..=0x23 | 0x25..=0x28 | 0x2a | 0x2d..=0x2f | 0x33 | 0x34 | 0x40 | 0x42..=0x4c | 0x50 | 0x70..=0x75 | 0x78 | 0x1e0..=0x1fd | 0x220..=0x223 | 0x250 | 0x2ae | 0x2c5 | 0x2c6 | 0x2cb | 0x321 | 0x322 | 0x328 | 0x329)
         {
             return Ok(false);
         }
@@ -449,6 +460,12 @@ impl SceneHost {
 
     pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
+        if command == 0x328 {
+            return self.create_object_effect(call);
+        }
+        if command == 0x2ae {
+            return self.query_fragments(call);
+        }
         if matches!(call.command, 0x1e5..=0x1e9) {
             return self.rotation(call);
         }
@@ -485,9 +502,10 @@ impl SceneHost {
                 })?;
             call.complete(0x4004)?;
             // 0x14003b6a0 -> 0x14003a880: resets the special-effect header and
-            // destroys every child, retaining the parent image/draw state and flags.
-            // Special-effect creation (0x2328) is still an explicit barrier.
-            object.children.clear();
+            // destroys the independent +6152 list. Ordinary +8 child slots remain.
+            if let Some(effect) = &mut object.special_effect {
+                effect.reset();
+            }
             return Ok(());
         }
         if matches!(command, 0x2c5 | 0x2c6) {

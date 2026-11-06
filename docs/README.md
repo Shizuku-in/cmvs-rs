@@ -1,49 +1,28 @@
 # 文档导航
 
-项目介绍见[项目首页](../README.md)，能力与验证范围见[当前状态](status.md)。这里按用途组织文档；具体游戏的兼容性以对应游戏档案为准。
+## 使用
 
-## 使用与开发
+- [运行指南](guides/running.md)：桌面运行、字体、音频、存档与运行策略。
+- [CLI 指南](guides/cli.md)：脚本、资源和存档检查工具。
+- [Web](../platforms/web/README.md)与 [Switch](../platforms/switch/README.md)：各平台的构建、操作与验证范围。
 
-| 文档 | 用途 |
-|---|---|
-| [运行指南](guides/running.md) | 桌面预览、字体、音频、系统存档与显式运行策略 |
-| [CLI 指南](guides/cli.md) | 脚本、归档、图像、影片与存档检查工具 |
-| [分派开发指南](guides/dispatch.md) | 系统命令调用路径、处理器约定与验证入口 |
-| [架构](architecture.md) | 平台无关核心、后端契约、运行编排与错误策略 |
-| [Workspace](workspace.md) | crate 划分、feature 与检查命令 |
-| [研究约定](research.md) | 证据绑定、真实样本验证与新游戏接入 |
-| [参考与许可](references.md) | 固定参考提交、依赖许可与使用边界 |
-| [引擎档案层设计](design/engine-profiles.md) | 多构建识别、命令状态闸门、全系列普查与分阶段计划 |
-| [脚本可见契约比较规划](design/command-contracts.md) | 草案：契约等价放行、旧推定迁移、可玩与已验证边界、工具实施和验收 |
-| [契约 M0 模型与验收向量](design/command-contracts-m0.md) | 首版 IR、完整性规则、字段映射与摘要证据格式、M1 支持边界 |
-| [契约 M1 提取与证据](design/command-contracts-m1.md) | x64 case 符号执行、字段映射、原 exe 绑定、离线双边报告；未接入闸门 |
-| [契约 M2 进展](design/command-contracts-m2.md) | 进行中：全局与下标区域、指针空检查、未定义路径、栈保护、映射候选 |
-| [分派层设计草案](design/dispatch.md) | 证据层、opcode 分派表、处理函数接口与迁移阶段 |
-| [通用游戏探针](design/probe.md) | 已实现：与游戏无关的整机检查（静态、路线、输入、页面、存读档、设置、确定性、长时间运行）、判定等级、清单格式与实施记录 |
+## 开发
 
-## 格式与后端
+- [架构](architecture.md)与 [Workspace](workspace.md)：模块职责、依赖、feature 和检查命令。
+- [分派开发指南](guides/dispatch.md)：系统命令入口、处理器约定与测试。
+- [引擎档案](design/engine-profiles.md)与[契约比较](design/command-contracts.md)：构建识别、语义证据和命令闸门。
+- [通用游戏探针](design/probe.md)：路线、输入、页面、存读档及设置验证。
+- [格式文档](formats/)与[后端文档](backends/)：数据布局、渲染、输入、字体和音频接口。
 
-| 分类 | 文档 |
-|---|---|
-| 图像 | [PB3 / JBP1](formats/pb3-format.md) |
-| 影片 | [JBPD](formats/jbpd-format.md)、[CMV6/8/9 场景影片](formats/cmv9-format.md) |
-| 存档 | [CSV2](formats/save-format.md)、[CSS1](formats/system-save-format.md)、[引擎快照](formats/snapshot-format.md) |
-| 平台 | [宿主接口](backends/platform-host.md)、[桌面预览](backends/desktop.md)、[wgpu](backends/wgpu.md)、[WebAssembly](backends/web.md) |
-| 输入与输出 | [动作输入](backends/input.md)、[字体](backends/font-output.md)、[原生音频](backends/audio-output.md) |
+## 游戏与证据
 
-格式与后端文档描述已实现分支；其中保留的真实样本和阶段验证目前来自《アマツツミ》，不表示所有 CMVS 版本通用。
+- [游戏档案目录](games/README.md)：各游戏的样本身份、支持范围与验证结果。
+- [研究约定](research.md)：证据要求及新游戏接入流程。
+- [参考与许可](references.md)：参考实现、依赖与复用边界。
+- [发布说明](release-notes.md)：行为变更及迁移说明。
 
-## 游戏测试与证据
+## 归档约定
 
-[游戏档案目录](games/README.md)已登记 19 款 CMVS 样本，包含 16 款基础档案与 3 款已有研究的游戏：[《アマツツミ》](games/amatsutsumi/README.md)是主线，[《クロノクロック》](games/chronoclock/README.md)已开始逐条语义研究。其目录保存二进制身份、VM 语义证据、研究记录、审计报告和开发历史。
-
-《アマツツミ》审计后续命令实现状态见[21 条指令推进表](games/amatsutsumi/semantics-progress.md)。
-
-## 归档规则
-
-- 项目首页只保留目标、当前能力、主要限制和入口。日常命令放 `guides/`。
-- 通用模块职责放架构文档；格式布局放 `formats/`；系统接口与设备行为放 `backends/`。
-- 游戏专属路径、地址、版本差异、路线、覆盖率和实测结果放 `games/<游戏标识>/`。新游戏使用[档案模板](games/TEMPLATE.md)，先登记身份，再记录测试结果。
-- 游戏档案 `README.md` 维护最新状态；`research.md` 记过程，`vm-semantics.md` 记逐条语义，覆盖报告保留采集时快照。历史结论不随新进展回写。
-- 参考仓库与公共依赖统一登记在 [references.md](references.md)；游戏专属来源说明放对应档案。不要反复向项目首页追加研究流水。
-- 仓库只保存说明、哈希和必要元数据；真实游戏、探针输出和 IDA 数据库留在仓库外或忽略的 `local/`。文档内相对链接相对于文档目录，命令均从项目根目录执行。
+- 通用职责放架构文档，格式放 `formats/`，系统接口放 `backends/`；游戏专属地址、版本差异和实测结果放 `games/<游戏标识>/`。
+- 游戏档案保留当前结论、支持边界和必要证据；覆盖报告注明采集基线与输入哈希，不将实现变化计为新增验证。
+- 真实游戏、探针输出和 IDA 数据库留在仓库外或忽略的 `local/`。文档相对链接以所在目录为准，命令从项目根目录执行。
