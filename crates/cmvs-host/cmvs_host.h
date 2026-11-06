@@ -10,6 +10,11 @@ extern "C" {
  * Errors likewise belong to the handle. Native audio owns its callback thread. */
 typedef struct CmvsHost CmvsHost;
 uint32_t cmvs_host_api_version(void);
+#ifdef __ANDROID__
+/* Before native audio: retain a JNI global Application context until process
+ * exit. This replaces ndk-glue initialization; do not use both. Idempotent. */
+int32_t cmvs_host_initialize_android(void *java_vm, void *application_context);
+#endif
 CmvsHost *cmvs_host_create(void);
 int32_t cmvs_host_open(CmvsHost *, const char *game, const char *user,
                        const char *font, int32_t native_audio);

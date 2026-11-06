@@ -7,6 +7,31 @@ use std::{
     path::Path,
 };
 
+#[cfg(target_os = "android")]
+static ANDROID_INITIALIZED: std::sync::Once = std::sync::Once::new();
+
+#[cfg(target_os = "android")]
+pub(crate) fn android_initialized() -> bool {
+    ANDROID_INITIALIZED.is_completed()
+}
+
+// SAFETY: the embedding owns initialization (no ndk-glue), calls before audio,
+// and retains the JavaVM and global Application reference for the process.
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cmvs_host_initialize_android(
+    java_vm: *mut std::ffi::c_void,
+    application_context: *mut std::ffi::c_void,
+) -> i32 {
+    if java_vm.is_null() || application_context.is_null() {
+        return -1;
+    }
+    ANDROID_INITIALIZED.call_once(|| unsafe {
+        ndk_context::initialize_android_context(java_vm, application_context);
+    });
+    0
+}
+
 pub struct Handle {
     player: Option<Player>,
     error: CString,
@@ -170,6 +195,29 @@ pub unsafe extern "C" fn cmvs_host_pixels(handle: *const Handle) -> *const u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "android")]
+    #[test]
+    fn android_audio_without_a_context_returns_an_error() {
+        unsafe {
+            assert_eq!(
+                cmvs_host_initialize_android(std::ptr::null_mut(), std::ptr::null_mut()),
+                -1
+            );
+            let h = cmvs_host_create();
+            assert_eq!(
+                cmvs_host_open(h, c"game".as_ptr(), c"user".as_ptr(), c"font".as_ptr(), 1),
+                -1
+            );
+            assert!(
+                CStr::from_ptr(cmvs_host_error(h))
+                    .to_str()
+                    .unwrap()
+                    .contains("Android application context")
+            );
+            cmvs_host_destroy(h);
+        }
+    }
+
     #[test]
     fn unopened_handles_and_null_paths_fail_without_panicking() {
         unsafe {

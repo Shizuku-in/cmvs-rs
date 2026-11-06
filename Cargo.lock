@@ -365,6 +365,7 @@ dependencies = [
  "cmvs-audio",
  "cmvs-core",
  "cmvs-font",
+ "ndk-context",
  "self_cell",
 ]
 

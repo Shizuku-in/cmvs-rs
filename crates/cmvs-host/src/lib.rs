@@ -79,6 +79,12 @@ impl Player {
         font_path: &Path,
         native_audio: bool,
     ) -> Result<Self, Box<dyn Error>> {
+        #[cfg(target_os = "android")]
+        if native_audio && !ffi::android_initialized() {
+            return Err(
+                "initialize the CMVS Android application context before native audio".into(),
+            );
+        }
         let game = Registry::builtin().identify_game(root, None)?;
         let font = FontRenderer::read(font_path, 0)?;
         font.set_user_directory(user)?;

@@ -20,3 +20,6 @@ cmvs-core = { path = "../cmvs-core" }
 cmvs-font = { path = "../cmvs-font" }
 cmvs-audio = { path = "../cmvs-audio" }
 self_cell.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+ndk-context = "=0.1.1"
