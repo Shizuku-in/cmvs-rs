@@ -4,8 +4,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* API 1: calls for one handle must be serialized. Paths are UTF-8; game files
- * are read-only, user must be outside game. Destroy once, including failed open.
+/* API 1: calls for one handle must be serialized. Paths are UTF-8.
+ * Destroy once, including failed open.
  * Pixels are RGBA8, tightly packed width*height*4; borrowed until next mutation.
  * Errors likewise belong to the handle. Native audio owns its callback thread. */
 typedef struct CmvsHost CmvsHost;
@@ -16,8 +16,16 @@ uint32_t cmvs_host_api_version(void);
 int32_t cmvs_host_initialize_android(void *java_vm, void *application_context);
 #endif
 CmvsHost *cmvs_host_create(void);
+/* External profile: game files are read-only; user must be outside game. */
 int32_t cmvs_host_open(CmvsHost *, const char *game, const char *user,
                        const char *font, int32_t native_audio);
+/* Opt into game/savedata. Import legacy saves once without overwriting local
+ * files; use legacy_user only when savedata is not writable. Lock contention
+ * or corrupt saves are errors, not reasons to open a different save profile.
+ * legacy_user must be a stable per-game directory outside the game. */
+int32_t cmvs_host_open_game_savedata(CmvsHost *, const char *game,
+                                    const char *legacy_user, const char *font,
+                                    int32_t native_audio);
 void cmvs_host_destroy(CmvsHost *);
 /* Tick: -1 error, 0 cooperative slice, 1 complete frame, 2 quit, 3 inactive. */
 int32_t cmvs_host_tick(CmvsHost *, uint32_t delta_ms);

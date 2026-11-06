@@ -278,3 +278,36 @@ fn failed_primary_replacement_preserves_old_file_and_synced_backup() {
     assert_eq!(fs::read(profile.path()).unwrap(), fixture(2));
     assert_eq!(fs::read(profile.backup_path()).unwrap(), fixture(1));
 }
+
+#[test]
+fn explicit_game_savedata_reopens_settings_and_system_saves_under_one_lock() {
+    use cmvs_rs::{save_menu::DirectorySaves, settings::Configuration};
+    let root = Root::new();
+    let directory = root.game().join("savedata");
+    assert!(ProfileSystemSave::open(&directory, &root.game()).is_err());
+    let mut profile = ProfileSystemSave::open_game_savedata(&root.game()).unwrap();
+    assert!(ProfileSystemSave::open_game_savedata(&root.game()).is_err());
+    profile.write(&fixture(7)).unwrap();
+    profile.write(&fixture(8)).unwrap();
+    let configuration = Configuration::new(b"[S]\nX=123\n".to_vec()).unwrap();
+    profile.write_configuration(&configuration).unwrap();
+    assert!(DirectorySaves::new(profile.directory()).is_ok());
+    assert_eq!(fs::read(directory.join("system.bak")).unwrap(), fixture(7));
+    drop(profile);
+    let reopened = ProfileSystemSave::open_game_savedata(&root.game()).unwrap();
+    assert_eq!(fs::read(reopened.path()).unwrap(), fixture(8));
+    assert_eq!(reopened.read_configuration().unwrap(), Some(configuration));
+    assert!(!root.game().join("system.dat").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn game_savedata_cannot_redirect_writes_to_game_resources() {
+    use std::os::unix::fs::symlink;
+    let root = Root::new();
+    let resources = root.game().join("data");
+    fs::create_dir(&resources).unwrap();
+    symlink(&resources, root.game().join("savedata")).unwrap();
+    assert!(ProfileSystemSave::open_game_savedata(&root.game()).is_err());
+    assert!(fs::read_dir(resources).unwrap().next().is_none());
+}

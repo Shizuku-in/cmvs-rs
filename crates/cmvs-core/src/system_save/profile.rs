@@ -86,6 +86,35 @@ pub struct ProfileSystemSave {
 impl ProfileSystemSave {
     pub fn open(directory: &Path, game_root: &Path) -> io::Result<Self> {
         let directory = external_directory(directory, game_root)?;
+        Self::open_directory(directory)
+    }
+    /// Explicitly opt into the game's own savedata directory. Other game files
+    /// remain read-only, and a symlink may not redirect writes into resources.
+    pub fn open_game_savedata(game_root: &Path) -> io::Result<Self> {
+        let game_root = fs::canonicalize(game_root)?;
+        let directory = game_root.join("savedata");
+        match fs::create_dir_all(&directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+        let metadata = fs::symlink_metadata(&directory)?;
+        if !fs::is_dir(&directory) || metadata.file_type().is_symlink() {
+            return Err(io::Error::other("savedata must be a real directory"));
+        }
+        let directory = fs::canonicalize(directory)?;
+        if directory.parent() != Some(game_root.as_path()) {
+            return Err(io::Error::other(
+                "savedata resolves outside the game directory",
+            ));
+        }
+        let profile = Self::open_directory(directory)?;
+        // Opening an existing lock alone does not prove that saves can be
+        // created or atomically replaced in this directory.
+        drop(profile.stage(&[])?);
+        Ok(profile)
+    }
+    fn open_directory(directory: PathBuf) -> io::Result<Self> {
         let lock_path = directory.join(".cmvs-system.lock");
         if regular_file(&lock_path)? && fs::metadata(&lock_path)?.len() != 0 {
             return Err(io::Error::other("profile lock file must be empty"));

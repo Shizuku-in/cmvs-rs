@@ -82,6 +82,27 @@ pub unsafe extern "C" fn cmvs_host_open(
     font: *const c_char,
     audio: i32,
 ) -> i32 {
+    unsafe { open(handle, game, user, font, audio, false) }
+}
+/// Explicit game-local storage policy; `user` remains the legacy/fallback path.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn cmvs_host_open_game_savedata(
+    handle: *mut Handle,
+    game: *const c_char,
+    user: *const c_char,
+    font: *const c_char,
+    audio: i32,
+) -> i32 {
+    unsafe { open(handle, game, user, font, audio, true) }
+}
+unsafe fn open(
+    handle: *mut Handle,
+    game: *const c_char,
+    user: *const c_char,
+    font: *const c_char,
+    audio: i32,
+    game_savedata: bool,
+) -> i32 {
     let Some(h) = (unsafe { handle.as_mut() }) else {
         return -1;
     };
@@ -93,7 +114,12 @@ pub unsafe extern "C" fn cmvs_host_open(
         let game = unsafe { CStr::from_ptr(game) }.to_str()?;
         let user = unsafe { CStr::from_ptr(user) }.to_str()?;
         let font = unsafe { CStr::from_ptr(font) }.to_str()?;
-        Player::open(
+        let open_player = if game_savedata {
+            Player::open_game_savedata
+        } else {
+            Player::open
+        };
+        open_player(
             Path::new(game),
             Path::new(user),
             Path::new(font),

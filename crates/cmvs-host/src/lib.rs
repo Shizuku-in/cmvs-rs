@@ -3,6 +3,9 @@
 mod backend;
 #[allow(unsafe_code)]
 mod ffi;
+#[cfg(all(test, unix))]
+mod savedata_replay;
+mod storage;
 
 use backend::HostBackend;
 use cmvs_core::{
@@ -11,6 +14,7 @@ use cmvs_core::{
     ps3::Script,
     raster::RgbaImage,
     runner::{Startup, StartupEvent, load_start},
+    system_save::ProfileSystemSave,
 };
 use cmvs_font::font::FontRenderer;
 use std::{error::Error, io::Read, path::Path};
@@ -79,6 +83,34 @@ impl Player {
         font_path: &Path,
         native_audio: bool,
     ) -> Result<Self, Box<dyn Error>> {
+        Self::open_with_profile(
+            root,
+            || Ok(ProfileSystemSave::open(user, root)?),
+            font_path,
+            native_audio,
+        )
+    }
+    /// Prefer game/savedata, importing old external saves without replacing
+    /// existing files. Read-only media retains the external per-game profile.
+    pub fn open_game_savedata(
+        root: &Path,
+        legacy: &Path,
+        font_path: &Path,
+        native_audio: bool,
+    ) -> Result<Self, Box<dyn Error>> {
+        Self::open_with_profile(
+            root,
+            || Ok(storage::game_savedata(root, legacy)?),
+            font_path,
+            native_audio,
+        )
+    }
+    fn open_with_profile(
+        root: &Path,
+        open_profile: impl FnOnce() -> Result<ProfileSystemSave, Box<dyn Error>>,
+        font_path: &Path,
+        native_audio: bool,
+    ) -> Result<Self, Box<dyn Error>> {
         #[cfg(target_os = "android")]
         if native_audio && !ffi::android_initialized() {
             return Err(
@@ -87,12 +119,13 @@ impl Player {
         }
         let game = Registry::builtin().identify_game(root, None)?;
         let font = FontRenderer::read(font_path, 0)?;
-        font.set_user_directory(user)?;
+        let profile = open_profile()?;
+        font.set_user_directory(profile.directory())?;
         let script = load_start(root, &game.files)?;
         let mut audio_control = None;
         let session = Session::try_new(script, |script| -> Result<Startup<'_>, Box<dyn Error>> {
             let mut startup = Startup::new(script, root, &game, 0)?;
-            startup.set_user_data_directory(user)?;
+            startup.set_save_profile(profile)?;
             startup.set_save_clock(Box::new(cmvs_core::runner::utc_save_time));
             startup.set_record_text(true);
             startup.set_glyph_metrics(font.metrics());

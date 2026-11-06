@@ -583,6 +583,14 @@ impl<'a> Startup<'a> {
             return Err("select one system-save output mode before VM execution".into());
         }
         let profile = ProfileSystemSave::open(path, &self.root)?;
+        self.set_save_profile(profile)
+    }
+    /// Install an already locked profile, including an explicitly selected
+    /// game-local savedata profile. The lock remains owned by this session.
+    pub fn set_save_profile(&mut self, profile: ProfileSystemSave) -> Result<(), Box<dyn Error>> {
+        if self.steps != 0 || self.system_output.is_some() {
+            return Err("select one system-save output mode before VM execution".into());
+        }
         let saves = DirectorySaves::new(profile.directory())?;
         let configuration = profile.read_configuration()?;
         let primary = profile.path();

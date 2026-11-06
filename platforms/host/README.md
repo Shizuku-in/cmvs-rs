@@ -5,6 +5,16 @@
 builds the Rust static library and exports the platform's native link libraries.
 Hosts own presentation, input coordinates, writable save paths and font files.
 
+`cmvs_host_open` keeps game resources read-only and uses an explicit external
+user directory. Embedding applications that want portable game-local saves can
+instead call `cmvs_host_open_game_savedata`: gameplay slots, system progress,
+settings and font preferences then live in `<game>/savedata/`. Its external
+path is the old per-game profile and the fallback for read-only game media.
+Existing external saves are imported once under both profile locks, without
+overwriting local files or deleting the originals. Only permission/read-only
+errors select the fallback; lock contention and corrupt saves remain errors.
+The game-local directory must be a real directory, not a symlink to resources.
+
 Supported targets are macOS arm64/x86_64, iOS device/simulator, Android
 arm64-v8a/armeabi-v7a/x86_64/x86 (API 26+), and Linux aarch64/x86_64 with glibc.
 Install Rust stable and the corresponding `rustup target` before building.
@@ -44,3 +54,17 @@ when the player closes, including failed opens. The `system_profile` integration
 tests cover competing sessions, save replacement, backups and reopening. Set
 `CMVS_TEST_TMPDIR` to a writable directory when running those tests on a device
 whose filesystem differs from the build machine.
+
+An optional Amatsutsumi regression plays into the opening, writes a gameplay
+slot, closes the player, reloads it and compares the resaved snapshot bytes:
+
+```sh
+CMVS_TEST_GAME=/path/to/game CMVS_TEST_FONT=/path/to/font.otf \
+  CMVS_TEST_TMPDIR=/path/to/existing/output-directory \
+  cargo test -p cmvs-host --release amatsutsumi_game_savedata_survives_player_restart \
+  -- --ignored --nocapture
+```
+
+The output directory must be on the game's filesystem: the fixture hard-links
+read-only resources and creates its own `savedata`, leaving the original game
+and saves unchanged. Generated evidence and game assets must not be committed.
