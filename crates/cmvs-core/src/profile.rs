@@ -50,6 +50,10 @@ pub enum VariantId {
     ActivationPass,
     WindowScaleMotion,
     ViewMotion,
+    LegacyEffects,
+    WindowChildImage,
+    DrawQuery,
+    CameraMoveX,
     AudioPreload,
     PolarPoint,
     FallingBillboards,
@@ -83,6 +87,10 @@ impl VariantId {
             "activation-pass" => Some(Self::ActivationPass),
             "window-scale-motion" => Some(Self::WindowScaleMotion),
             "view-motion" => Some(Self::ViewMotion),
+            "legacy-effects" => Some(Self::LegacyEffects),
+            "window-child-image" => Some(Self::WindowChildImage),
+            "draw-query" => Some(Self::DrawQuery),
+            "camera-move-x" => Some(Self::CameraMoveX),
             "audio-preload" => Some(Self::AudioPreload),
             "polar-point" => Some(Self::PolarPoint),
             "falling-billboards" => Some(Self::FallingBillboards),
@@ -117,6 +125,10 @@ impl VariantId {
             Self::ActivationPass => "activation-pass",
             Self::WindowScaleMotion => "window-scale-motion",
             Self::ViewMotion => "view-motion",
+            Self::LegacyEffects => "legacy-effects",
+            Self::WindowChildImage => "window-child-image",
+            Self::DrawQuery => "draw-query",
+            Self::CameraMoveX => "camera-move-x",
             Self::AudioPreload => "audio-preload",
             Self::PolarPoint => "polar-point",
             Self::FallingBillboards => "falling-billboards",
@@ -256,9 +268,9 @@ impl EngineProfile {
     pub(crate) fn initial_globals(&self) -> Option<[u32; 4]> {
         match self.id.as_str() {
             "cmvs-20140217" | "cmvs-20160201" | "cmvs-20171114" => Some([4096, 262144, 2048, 128]),
-            // docs/games/puriring: .data file bytes end at 0x4ae000; banks at 0x4b6708,
-            // 0x4dc710 (one byte per bit), 0x4da710 and 0x4ba710 are contiguous.
-            "cmvs-20070119" => Some([4096, 32768, 2048, 128]),
+            // docs/games/puriring: .data file bytes end at 0x4ae000; the banks at 0x4b6708,
+            // 0x4dc710 (0x8000 bytes of packed bits, 0x440be0), 0x4da710 and 0x4ba710.
+            "cmvs-20070119" => Some([4096, 262144, 2048, 128]),
             _ => None,
         }
     }
@@ -293,6 +305,20 @@ impl EngineProfile {
                 .binary(
                     &crate::digest::parse_hex(
                         "caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c9715a20e7a5f36d02b",
+                    )
+                    .expect("static SHA-256"),
+                )
+                .is_some()
+    }
+
+    /// Independently inspected Primitive Link build; docs/games/puriring.
+    pub(crate) fn is_inspected_20070119(&self) -> bool {
+        self.id == "cmvs-20070119"
+            && self.base.as_deref() == Some("cmvs-20160201")
+            && self
+                .binary(
+                    &crate::digest::parse_hex(
+                        "5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602",
                     )
                     .expect("static SHA-256"),
                 )

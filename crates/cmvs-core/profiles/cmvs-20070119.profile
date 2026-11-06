@@ -82,8 +82,8 @@ binary x86 file=cmvs.exe sha256=5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279
 0x204b unreviewed 0x3efb7
 0x204c noop 0x3ee2b
 0x204d noop 0x3ee2b
-0x204e unreviewed 0x3efbf
-0x204f unreviewed 0x3efc7
+0x204e unreviewed 0x3efbf variant=screen-coordinates:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x204f unreviewed 0x3efc7 variant=draw-query:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
 0x2050 unreviewed 0x3efcf
 0x2051 unreviewed 0x3efd7
 0x2052 noop 0x3ee2b
@@ -114,7 +114,7 @@ binary x86 file=cmvs.exe sha256=5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279
 0x206b unreviewed 0x3f01f
 0x206c unreviewed 0x3f027
 0x206d unreviewed 0x3f02f
-0x206e unreviewed 0x3f037
+0x206e unreviewed 0x3f037 variant=camera-move-x:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
 0x206f unreviewed 0x3f03f
 0x2070 unreviewed 0x3f047
 0x2071 unreviewed 0x3f04f
@@ -378,7 +378,7 @@ binary x86 file=cmvs.exe sha256=5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279
 0x2173 noop 0x3ee2b
 0x2174 noop 0x3ee2b
 0x2175 noop 0x3ee2b
-0x2176 unreviewed 0x3f5c7
+0x2176 unreviewed 0x3f5c7 variant=window-child-image:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
 0x2177 unreviewed 0x3f5cf
 0x2178 unreviewed 0x3f5d7
 0x2179 unreviewed 0x3f5df
@@ -660,9 +660,9 @@ binary x86 file=cmvs.exe sha256=5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279
 0x228d noop 0x3ee2b
 0x228e noop 0x3ee2b
 0x228f noop 0x3ee2b
-0x2290 unreviewed 0x3fba7
-0x2291 unreviewed 0x3fbaf
-0x2292 unreviewed 0x3fbb7
+0x2290 unreviewed 0x3fba7 variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x2291 unreviewed 0x3fbaf variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x2292 unreviewed 0x3fbb7 variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
 0x2293 unreviewed 0x3fbbf
 0x2294 unreviewed 0x3fbc7
 0x2295 unreviewed 0x3fbcf
@@ -676,9 +676,9 @@ binary x86 file=cmvs.exe sha256=5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279
 0x229d noop 0x3ee2b
 0x229e noop 0x3ee2b
 0x229f noop 0x3ee2b
-0x22a0 unreviewed 0x3fbe7
+0x22a0 unreviewed 0x3fbe7 variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
 0x22a1 unreviewed 0x3fbef
-0x22a2 unreviewed 0x3fbf7
+0x22a2 unreviewed 0x3fbf7 variant=falling-billboards:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
 0x22a3 unreviewed 0x3fbff
 0x22a4 noop 0x3ee2b
 0x22a5 noop 0x3ee2b
@@ -690,8 +690,8 @@ binary x86 file=cmvs.exe sha256=5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279
 0x22ab noop 0x3ee2b
 0x22ac noop 0x3ee2b
 0x22ad noop 0x3ee2b
-0x22ae unreviewed 0x3fc07
-0x22af unreviewed 0x3fc0f
+0x22ae unreviewed 0x3fc07 variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
+0x22af unreviewed 0x3fc0f variant=legacy-effects:x86:5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602 evidence=games/puriring/README.md
 0x22b0 unreviewed 0x3fc17
 0x22b1 unreviewed 0x3fc1f
 0x22b2 unreviewed 0x3fc27

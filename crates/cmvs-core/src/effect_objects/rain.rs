@@ -268,10 +268,7 @@ impl SceneHost {
             name_field,
         );
         call.complete(0x4020)?;
-        self.particle_effects.remove(&(slot as u8));
-        self.falling_effects.remove(&(slot as u8));
-        self.collision_effects.remove(&(slot as u8));
-        self.fragment_effects.remove(&(slot as u8));
+        self.clear_effect_slot(slot as u8);
         self.rain_effects.insert(slot as u8, effect);
         Ok(())
     }

@@ -2,7 +2,7 @@
 
 | 游戏 | 样本目录 | 登记与研究 |
 |---|---|---|
-| [《プリミティブ リンク》 / puriring](puriring/README.md) | `2007-02-02_PURIRING_withDVDValidation` | 接入中：激活/光盘校验已按通过处理，启动越过 `protect.ps2`，停于标题前特效层 `0x2290` |
+| [《プリミティブ リンク》 / puriring](puriring/README.md) | `2007-02-02_PURIRING_withDVDValidation` | 接入中：激活/光盘校验按通过处理；logo、序章、OP 与 `st01` 可运行，停于 `st02` 特效层 `0x2295` |
 | [《明日の君と逢うために》 / asukimi](asukimi/README.md) | `2007-11-30_ASUKIMI` | 存读档、设置及评论编辑已验证；完整路线与原生存档界面待验证 |
 | [《春色桜瀬》 / harouse](harouse/README.md) | `2008-07-31_HAROUSE` | 首选路线回标题，存读档及评论编辑通过；仍有 9 个分支前缀待探索 |
 | [《明日の七海と逢うために〜明日の君と逢うために〜FAN DISC》 / asunana](asunana/README.md) | `2008-10-24_ASUNANA` | 基本游玩接入；四轮解锁收敛、存读档与绘制检查通过 |

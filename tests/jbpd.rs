@@ -198,6 +198,7 @@ fn cmv_frame_checks_container_dimensions_lengths_and_index() {
             offset: 0,
         }],
         alpha: false,
+        jbp1: false,
     };
     assert_eq!(
         index

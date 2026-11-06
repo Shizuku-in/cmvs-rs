@@ -182,10 +182,7 @@ impl SceneHost {
         call.complete(0x4010)?;
         effect.pool = self.take_object(source).expect("validated source");
         effect.pool.logical_size = size;
-        self.rain_effects.remove(&(slot as u8));
-        self.particle_effects.remove(&(slot as u8));
-        self.falling_effects.remove(&(slot as u8));
-        self.collision_effects.remove(&(slot as u8));
+        self.clear_effect_slot(slot as u8);
         self.fragment_effects.insert(slot as u8, effect);
         *random = candidate_random;
         Ok(())

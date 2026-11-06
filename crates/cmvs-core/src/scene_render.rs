@@ -1147,6 +1147,39 @@ pub fn prepare_scene<'a>(
         queue.sort_by(|a, b| b.order.total_cmp(&a.order));
     }
     let mut world = Vec::new();
+    // cmvs-20070119 legacy effect meshes: queue 1 (no blending) then queue 5, each from the
+    // farthest object (0x407c90 / 0x417290 insert by descending view distance).
+    let mut opaque = Vec::new();
+    if !scene.legacy_effects().is_empty() {
+        let cameras = cameras.ok_or(FormatError("legacy effect meshes need the device view"))?;
+        let view = cameras.view(0).expect("view exists");
+        let projection = view.projection([width, height]).map_err(FormatError)?;
+        let eye = [view.words[0], view.words[1], view.words[2]].map(f32::from_bits);
+        for effect in scene.legacy_effects().values() {
+            for quad in effect.quads() {
+                let distance = quad
+                    .position
+                    .iter()
+                    .zip(eye)
+                    .map(|(p, e)| (p - e) * (p - e))
+                    .sum::<f32>()
+                    .sqrt();
+                let mut layers = Vec::new();
+                tessellate_world_quad(&quad, &projection, &mut layers);
+                let entry = Entry {
+                    order: distance,
+                    layer: None,
+                    children: layers.into_iter().map(|layer| (0.0, layer)).collect(),
+                };
+                if !quad.late {
+                    opaque.push(entry);
+                } else {
+                    world.push(entry);
+                }
+            }
+        }
+    }
+    opaque.sort_by(|a, b| b.order.total_cmp(&a.order));
     for effect in scene.falling_effects().values() {
         let Some(image) = &effect.image else { continue };
         let view = cameras
@@ -1182,7 +1215,13 @@ pub fn prepare_scene<'a>(
     }
     world.sort_by(|a, b| b.order.total_cmp(&a.order));
     let mut commands = Vec::new();
-    for mut entry in projected.into_iter().flatten().chain(world).chain(entries) {
+    for mut entry in projected
+        .into_iter()
+        .flatten()
+        .chain(opaque)
+        .chain(world)
+        .chain(entries)
+    {
         entry.children.sort_by(|a, b| b.0.total_cmp(&a.0));
         let layers = entry
             .layer
@@ -1361,6 +1400,89 @@ fn draw_rotated(
             }
         }
     }
+}
+
+/// A world-space quad of the old 3D queues as device-space `Rotated` cells. The device
+/// interpolates texture coordinates perspective-correctly and clips at the near plane; here
+/// the quad is subdivided in world space until each cell is small on screen and shallow in
+/// depth, so affine cells stay within a fraction of a pixel. Cells crossing the near plane
+/// are subdivided further and dropped at the depth limit; cells beyond the far plane are
+/// dropped. Cells sample integer texel sub-rectangles with clamped addressing, whereas the
+/// device's 3D stage wraps.
+fn tessellate_world_quad<'a>(
+    quad: &crate::effect_objects::WorldQuad<'a>,
+    projection: &crate::camera::ViewProjection,
+    out: &mut Vec<Layer<'a>>,
+) {
+    use crate::camera::ViewProjection;
+    let size = [quad.image.pixels.width(), quad.image.pixels.height()].map(|v| v as f32);
+    let lerp = |a: [f32; 3], b: [f32; 3], t: f32| std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t);
+    let world = |u: f32, v: f32| {
+        let [tl, tr, bl, br] = quad.corners;
+        lerp(lerp(tl, tr, u), lerp(bl, br, u), v)
+    };
+    #[allow(clippy::too_many_arguments)]
+    fn cell<'a>(
+        quad: &crate::effect_objects::WorldQuad<'a>,
+        projection: &ViewProjection,
+        world: &dyn Fn(f32, f32) -> [f32; 3],
+        size: [f32; 2],
+        [u0, v0, u1, v1]: [f32; 4],
+        depth: u32,
+        out: &mut Vec<Layer<'a>>,
+    ) {
+        let corners = [[u0, v0], [u1, v0], [u0, v1], [u1, v1]];
+        let view = corners.map(|[u, v]| projection.view(world(u, v)));
+        let near = view.iter().filter(|p| p[2] < ViewProjection::NEAR).count();
+        if view.iter().all(|p| p[2] >= ViewProjection::FAR) || near == 4 && depth > 2 {
+            return;
+        }
+        let screen = view.map(|p| projection.screen(p));
+        let extent = screen
+            .iter()
+            .flat_map(|a| {
+                screen
+                    .iter()
+                    .map(move |b| (a[0] - b[0]).abs().max((a[1] - b[1]).abs()))
+            })
+            .fold(0.0f32, f32::max);
+        let zs = view.map(|p| p[2]);
+        let (low, high) = zs
+            .iter()
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(l, h), &z| {
+                (l.min(z), h.max(z))
+            });
+        let fine = near == 0 && extent <= 48.0 && high <= low * 1.08;
+        if !fine && depth < 9 {
+            let (um, vm) = ((u0 + u1) * 0.5, (v0 + v1) * 0.5);
+            for rect in [
+                [u0, v0, um, vm],
+                [um, v0, u1, vm],
+                [u0, vm, um, v1],
+                [um, vm, u1, v1],
+            ] {
+                cell(quad, projection, world, size, rect, depth + 1, out);
+            }
+            return;
+        }
+        if near != 0 || !screen.iter().flatten().all(|v| v.is_finite()) {
+            return;
+        }
+        let texel = |t: f32, n: f32| (t * n).round() as i64;
+        let [x0, x1] = [u0, u1].map(|u| texel(u, size[0]));
+        let [y0, y1] = [v0, v1].map(|v| texel(v, size[1]));
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        out.push(Layer::Rotated {
+            image: quad.image,
+            rect: [x0, y0, x1 - x0, y1 - y0],
+            corners: screen,
+            alpha: quad.alpha,
+            blend: quad.blend,
+        });
+    }
+    cell(quad, projection, &world, size, [0.0, 0.0, 1.0, 1.0], 0, out);
 }
 
 /// 0x140020340 mode 4 maps the second texture over the device viewport.

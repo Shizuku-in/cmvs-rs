@@ -16,9 +16,15 @@ impl SceneHost {
             || !self.falling_effects.is_empty()
             || !self.collision_effects.is_empty()
             || !self.fragment_effects.is_empty()
+            || !self.legacy_effects.is_empty()
     }
 
     pub(crate) fn saved_effect_pools(&self) -> Result<Vec<(u16, Vec<u8>)>, FormatError> {
+        if !self.legacy_effects.is_empty() {
+            return Err(FormatError(
+                "snapshots of cmvs-20070119 legacy effect slots are not implemented",
+            ));
+        }
         let mut records = BTreeMap::new();
         let mut insert = |slot: u8, template: Option<&SavedEffect>| -> Result<(), FormatError> {
             let template =

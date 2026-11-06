@@ -354,12 +354,17 @@ pub struct SceneHost {
     pub(crate) allow_screen_coordinates_one: bool,
     pub(crate) allow_projected_parent_rotation: bool,
     pub(crate) allow_triangle_quake: bool,
+    /// cmvs-20070119 0x42b9d0: every nonzero waveform nibble is the triangle wave.
+    pub(crate) allow_legacy_triangle_quake: bool,
+    /// cmvs-20070119 0x4076f0: a nonzero 0x22c4 selector loads from the stand table.
+    pub(crate) allow_stand_change_table: bool,
     screen_size: crate::viewport::ScreenSize,
     pub(crate) rain_effects: BTreeMap<u8, crate::effect_objects::RainEffect>,
     pub(crate) fragment_effects: BTreeMap<u8, crate::effect_objects::FragmentEffect>,
     pub(crate) collision_effects: BTreeMap<u8, crate::effect_objects::CollisionEffect>,
     pub(crate) particle_effects: BTreeMap<u8, crate::effect_objects::ParticleEffect>,
     pub(crate) falling_effects: BTreeMap<u8, crate::effect_objects::FallingEffect>,
+    pub(crate) legacy_effects: BTreeMap<u8, crate::effect_objects::LegacyEffect>,
     clear: ClearState,
     objects: BTreeMap<u8, SceneObject>,
     fade: crate::fade::FadeHost,
@@ -377,10 +382,13 @@ impl SceneHost {
             child_slots: ChildSlots::for_profile(profile),
             allow_filter_mode_one: profile.is_inspected_20071117(),
             allow_legacy_sine_modes: profile.uses_legacy_sine_modes(),
-            allow_screen_coordinates_one: profile.is_inspected_20080719()
+            allow_screen_coordinates_one: profile.is_inspected_20070119()
+                || profile.is_inspected_20080719()
                 || profile.is_inspected_20080903(),
             allow_projected_parent_rotation: profile.is_inspected_20080719(),
             allow_triangle_quake: profile.is_inspected_20080719(),
+            allow_stand_change_table: profile.is_inspected_20070119(),
+            allow_legacy_triangle_quake: profile.is_inspected_20070119(),
             ..Self::default()
         }
     }
@@ -807,6 +815,48 @@ impl SceneHost {
         Ok(())
     }
 
+    /// cmvs-20070119 0x204f / 0x432d20: SP-4 slot below 256, SP-8 child (negative = the
+    /// object). System results 0..3 = draw words 17 (opacity), 8, 9, 10; float results 8/9 =
+    /// words 18/19 (scale), as the window query 0x218d. Returns 0x4008; a missing slot only
+    /// sets +8108 bit 0x10 in the original and is an error here.
+    pub(crate) fn draw_query(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let pc = call.pc;
+        let fail = |why| error(pc, 0x204f, why);
+        let slot = call.argument(4, "object slot")?;
+        let child = call.argument(8, "child slot")? as i32;
+        let object = u8::try_from(slot)
+            .ok()
+            .and_then(|slot| self.objects.get(&slot))
+            .ok_or_else(|| fail("draw query needs an existing object in slots 0..255"))?;
+        let object = if child < 0 {
+            object
+        } else {
+            u16::try_from(child)
+                .ok()
+                .filter(|id| *id < 256)
+                .and_then(|id| object.children.get(&id))
+                .ok_or_else(|| fail("draw query child is missing or outside 0..255"))?
+        };
+        let words = object
+            .draw
+            .as_ref()
+            .ok_or_else(|| fail("draw query target has no draw state"))?
+            .words;
+        call.complete(0x4008)?;
+        let state = call.vm.state_mut();
+        for (index, word) in [(0, 17), (1, 8), (2, 9), (3, 10)] {
+            state
+                .set_system_integer(index, words[word])
+                .expect("result exists");
+        }
+        for (index, word) in [(8, 18), (9, 19)] {
+            state
+                .set_system_float_bits(index, words[word])
+                .expect("result exists");
+        }
+        Ok(())
+    }
+
     /// HAROUSE x86 0x444ce0: select screen coordinate mode 0 or 1.
     pub(crate) fn screen_coordinates(
         &mut self,
@@ -1061,6 +1111,7 @@ impl SceneHost {
         if call.command == 0x32 {
             // cmvs-20070119 0x4329b0: arm the stand table's next-read cache (+5651), then
             // load like 0x2030; returns 0x400c although SP-12 is not read.
+            call.argument(12, "unused stand argument")?;
             images.cache_next_read()?;
         }
         if call.command == 0x3f {
@@ -1237,9 +1288,12 @@ impl SceneHost {
             allow_screen_coordinates_one: self.allow_screen_coordinates_one,
             allow_projected_parent_rotation: self.allow_projected_parent_rotation,
             allow_triangle_quake: self.allow_triangle_quake,
+            allow_stand_change_table: self.allow_stand_change_table,
+            allow_legacy_triangle_quake: self.allow_legacy_triangle_quake,
             rain_effects: Default::default(),
             particle_effects: Default::default(),
             falling_effects: Default::default(),
+            legacy_effects: Default::default(),
             collision_effects: Default::default(),
             fragment_effects: Default::default(),
             clear,

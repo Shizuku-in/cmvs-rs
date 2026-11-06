@@ -331,9 +331,10 @@ fn validate_512_child_slots_without_button_lists<'a>(
 
 impl Startup<'_> {
     pub(super) fn system_save_identifier(&self) -> Option<u32> {
-        // 20071117 0x40bdf0 / 20080719 0x40bea0 zero the CSS1 header and never
-        // write offset 68: a format constant, not a recovered game identifier.
-        if self.gate.selection().profile.is_inspected_20071117()
+        // 20070119 0x408b00 / 20071117 0x40bdf0 / 20080719 0x40bea0 zero the CSS1
+        // header and never write offset 68: a format constant, not a game identifier.
+        if self.gate.selection().profile.is_inspected_20070119()
+            || self.gate.selection().profile.is_inspected_20071117()
             || self.gate.selection().profile.is_inspected_20080719()
             || self.gate.selection().profile.is_inspected_20080903()
         {
@@ -934,6 +935,8 @@ impl Startup<'_> {
         self.scene.falling_effects = effects.falling_effects;
         self.scene.particle_effects = effects.particle_effects;
         self.scene.collision_effects = effects.collision_effects;
+        // Legacy slots are never saved (saving them is rejected), so a load clears them.
+        self.scene.legacy_effects.clear();
         self.random = restored_random;
         self.messages.restore(texts, windows);
         let word = |at: usize| u32::from_le_bytes(header[at..at + 4].try_into().unwrap());

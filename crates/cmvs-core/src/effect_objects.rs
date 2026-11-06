@@ -5,6 +5,8 @@ mod falling;
 mod fragments;
 pub use collision::{CollisionEffect, CollisionParticle};
 pub use fragments::{Fragment, FragmentEffect};
+mod legacy;
+pub use legacy::{LegacyEffect, SnowField, Walk, WorldQuad};
 mod rain;
 pub(crate) use rain::RainEffect;
 mod particles;
@@ -28,11 +30,7 @@ impl crate::scene::SceneHost {
         let slot = call.argument(4, "slot")?;
         call.complete(0x4004)?;
         if slot < 4 {
-            self.rain_effects.remove(&(slot as u8));
-            self.particle_effects.remove(&(slot as u8));
-            self.falling_effects.remove(&(slot as u8));
-            self.collision_effects.remove(&(slot as u8));
-            self.fragment_effects.remove(&(slot as u8));
+            self.clear_effect_slot(slot as u8);
         }
         Ok(())
     }

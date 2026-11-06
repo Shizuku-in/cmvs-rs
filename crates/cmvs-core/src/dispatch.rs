@@ -916,6 +916,7 @@ pub fn uses_windows(command: u16) -> bool {
 }
 pub fn uses_window_images(command: u16) -> bool {
     ROOT.iter()
+        .chain(VARIANT_TABLES.iter().flat_map(|table| table.iter()))
         .any(|entry| entry.command == command && entry.capability == Capability::WindowImages)
 }
 
@@ -5247,6 +5248,139 @@ pub static ACTIVATION_PASS: &[Entry] = &[
     },
 ];
 
+fn legacy_snow_field(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    let h = hosts.images.as_mut().expect("image capability checked");
+    h.scene.create_snow_field(call, h.source)?;
+    Ok(Flow::Done)
+}
+fn legacy_circle(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    let (Some(images), Some(audio)) = (hosts.images.as_mut(), hosts.audio.as_mut()) else {
+        return Ok(Flow::Unavailable);
+    };
+    images
+        .scene
+        .create_circle(call, images.source, audio.backend)?;
+    Ok(Flow::Done)
+}
+fn legacy_walk(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    let (Some(scene), Some(camera), Some(audio)) = (
+        hosts.scene.as_deref_mut(),
+        hosts.camera.as_deref_mut(),
+        hosts.audio.as_mut(),
+    ) else {
+        return Ok(Flow::Unavailable);
+    };
+    scene.create_walk(call, camera, audio.backend)?;
+    Ok(Flow::Done)
+}
+fn legacy_release(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    let (Some(scene), Some(audio)) = (hosts.scene.as_deref_mut(), hosts.audio.as_mut()) else {
+        return Ok(Flow::Unavailable);
+    };
+    scene.release_effect_with_audio(call, audio.backend)?;
+    Ok(Flow::Done)
+}
+fn legacy_query(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    let scene = hosts
+        .scene
+        .as_deref_mut()
+        .expect("scene capability checked");
+    let slot = call.argument(4, "effect slot")?;
+    match (slot < 4)
+        .then(|| scene.query_legacy_effect(slot as u8))
+        .flatten()
+    {
+        Some(value) => {
+            call.complete(0x4004)?;
+            call.vm
+                .state_mut()
+                .set_system_integer(0, value)
+                .expect("result slot exists");
+        }
+        None => scene.query_fragments(call)?,
+    }
+    Ok(Flow::Done)
+}
+fn legacy_set(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    let scene = hosts
+        .scene
+        .as_deref_mut()
+        .expect("scene capability checked");
+    scene.set_legacy_effect(call)?;
+    Ok(Flow::Done)
+}
+
+/// cmvs-20070119 effect slots of types 0x50.. ; see effect_objects::legacy.
+pub static LEGACY_EFFECTS: &[Entry] = &[
+    Entry {
+        command: 0x290,
+        name: "create snow field effect",
+        capability: Capability::SceneImages,
+        handler: legacy_snow_field,
+    },
+    Entry {
+        command: 0x292,
+        name: "create circle effect",
+        capability: Capability::SceneImages,
+        handler: legacy_circle,
+    },
+    Entry {
+        command: 0x291,
+        name: "create walk effect",
+        capability: Capability::Scene,
+        handler: legacy_walk,
+    },
+    Entry {
+        command: 0x2a0,
+        name: "release effect object",
+        capability: Capability::Scene,
+        handler: legacy_release,
+    },
+    Entry {
+        command: 0x2ae,
+        name: "query effect object",
+        capability: Capability::Scene,
+        handler: legacy_query,
+    },
+    Entry {
+        command: 0x2af,
+        name: "set effect object parameter",
+        capability: Capability::Scene,
+        handler: legacy_set,
+    },
+];
+
+pub static CAMERA_MOVE_X: &[Entry] = &[Entry {
+    command: 0x6e,
+    name: "move camera X",
+    capability: Capability::Camera,
+    handler: root_camera,
+}];
+
+pub static DRAW_QUERY: &[Entry] = &[Entry {
+    command: 0x4f,
+    name: "object draw query",
+    capability: Capability::Scene,
+    handler: |hosts, call| {
+        hosts
+            .scene
+            .as_deref_mut()
+            .expect("scene capability checked")
+            .draw_query(call)?;
+        Ok(Flow::Done)
+    },
+}];
+
+pub static WINDOW_CHILD_IMAGE: &[Entry] = &[Entry {
+    command: 0x176,
+    name: "window child image",
+    capability: Capability::WindowImages,
+    handler: root_window_images,
+}];
+
 pub static VIEW_MOTION: &[Entry] = &[
     Entry {
         command: 0x270,
@@ -5508,6 +5642,10 @@ pub static VARIANT_TABLES: &[&[Entry]] = &[
     ACTIVATION_PASS,
     WINDOW_SCALE_MOTION,
     VIEW_MOTION,
+    LEGACY_EFFECTS,
+    WINDOW_CHILD_IMAGE,
+    DRAW_QUERY,
+    CAMERA_MOVE_X,
     MOVIE_CONTROL,
     MOVIE_SEEK,
     SCREEN_COORDINATES,
@@ -5542,6 +5680,10 @@ pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'st
         crate::profile::VariantId::ActivationPass => ACTIVATION_PASS,
         crate::profile::VariantId::WindowScaleMotion => WINDOW_SCALE_MOTION,
         crate::profile::VariantId::ViewMotion => VIEW_MOTION,
+        crate::profile::VariantId::LegacyEffects => LEGACY_EFFECTS,
+        crate::profile::VariantId::WindowChildImage => WINDOW_CHILD_IMAGE,
+        crate::profile::VariantId::DrawQuery => DRAW_QUERY,
+        crate::profile::VariantId::CameraMoveX => CAMERA_MOVE_X,
         crate::profile::VariantId::MovieControl => MOVIE_CONTROL,
         crate::profile::VariantId::MovieSeek => MOVIE_SEEK,
         crate::profile::VariantId::ScreenCoordinates => SCREEN_COORDINATES,
@@ -5578,6 +5720,10 @@ pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
         Semantics::Variant(crate::profile::VariantId::ActivationPass) => "variant activation check reported as passed",
         Semantics::Variant(crate::profile::VariantId::WindowScaleMotion) => "variant window scale motion",
         Semantics::Variant(crate::profile::VariantId::ViewMotion) => "variant device view motion",
+        Semantics::Variant(crate::profile::VariantId::LegacyEffects) => "variant legacy effect slots",
+        Semantics::Variant(crate::profile::VariantId::WindowChildImage) => "variant window child image",
+        Semantics::Variant(crate::profile::VariantId::DrawQuery) => "variant object draw query",
+        Semantics::Variant(crate::profile::VariantId::CameraMoveX) => "variant camera X move",
         Semantics::Variant(crate::profile::VariantId::MovieControl) => "variant scene movie control",
         Semantics::Variant(crate::profile::VariantId::MovieSeek) => "variant scene movie seek",
         Semantics::Variant(crate::profile::VariantId::ScreenCoordinates) => "variant screen coordinates",

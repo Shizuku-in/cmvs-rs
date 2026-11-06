@@ -485,6 +485,13 @@ impl<'a> Startup<'a> {
         self.messages
             .advance_auxiliary_motion(delta_ms, &mut self.scene)?;
         self.camera.advance_frame(delta_ms);
+        // cmvs-20070119 0x407810 updates the effect slots after the view motion.
+        self.scene.advance_legacy_effects(
+            delta_ms,
+            &mut self.camera,
+            self.audio.settings(),
+            self.audio_backend.as_mut(),
+        )?;
         self.frame_delta = delta_ms;
         self.take_capture()
     }

@@ -89,7 +89,83 @@ impl ViewMotion {
     }
 }
 
+/// The device view and projection of one frame: LookAtLH from the quantized view direction
+/// (0x1400546c0 / cmvs-20070119 0x422cb0) and PerspectiveFovLH with near 0.1 and far 100.
+#[derive(Debug, Clone, Copy)]
+pub struct ViewProjection {
+    eye: [f32; 3],
+    axes: [[f32; 3]; 3],
+    scale: [f32; 2],
+    viewport: [f32; 2],
+}
+impl ViewProjection {
+    pub const NEAR: f32 = 0.1;
+    pub const FAR: f32 = 100.0;
+    /// View-space X/Y/Z of a world point; Z is the depth along the view direction.
+    pub fn view(&self, point: [f32; 3]) -> [f32; 3] {
+        self.axes.map(|axis| {
+            (point[0] * axis[0] + point[1] * axis[1] + point[2] * axis[2])
+                - (self.eye[0] * axis[0] + self.eye[1] * axis[1] + self.eye[2] * axis[2])
+        })
+    }
+    /// Device coordinates of a view-space point in front of the near plane; device
+    /// viewport pixel centers are integers.
+    pub fn screen(&self, [x, y, z]: [f32; 3]) -> [f32; 2] {
+        let [width, height] = self.viewport;
+        [
+            (x * self.scale[0] / z + 1.0) * width * 0.5,
+            (1.0 - y * self.scale[1] / z) * height * 0.5,
+        ]
+    }
+}
+
 impl DeviceView {
+    pub fn projection(&self, viewport: [u32; 2]) -> Result<ViewProjection, &'static str> {
+        let values = self.words.map(f32::from_bits);
+        if values.iter().any(|v| !v.is_finite())
+            || !(0.0..180.0).contains(&values[6])
+            || values[6] == 0.0
+            || viewport.contains(&0)
+        {
+            return Err("invalid device view parameters");
+        }
+        let radians = |degrees: f32| f64::from(degrees / 180.0 * std::f32::consts::PI);
+        let (pitch, yaw, roll) = (radians(values[3]), radians(values[4]), radians(values[5]));
+        let quantize = |value: f64| ((value * 1000.0) as i32) as f32 / 1000.0;
+        let direction = [
+            quantize(yaw.sin() * pitch.cos()),
+            quantize(-pitch.sin()),
+            quantize(yaw.cos() * pitch.cos()),
+        ];
+        let up = [quantize(-roll.sin()), quantize(roll.cos()), 0.0];
+        let eye = [values[0], values[1], values[2]];
+        let normalize = |v: [f32; 3]| {
+            let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            v.map(|x| x / length)
+        };
+        let cross = |a: [f32; 3], b: [f32; 3]| {
+            [
+                a[1] * b[2] - a[2] * b[1],
+                a[2] * b[0] - a[0] * b[2],
+                a[0] * b[1] - a[1] * b[0],
+            ]
+        };
+        let forward = normalize(std::array::from_fn(|i| (eye[i] + direction[i]) - eye[i]));
+        let right = normalize(cross(up, forward));
+        let up = cross(forward, right);
+        if ![forward, right, up].iter().flatten().all(|v| v.is_finite()) {
+            return Err("degenerate device view basis");
+        }
+        let [width, height] = viewport.map(|v| v as f32);
+        let scale_y = 1.0 / (values[6] * (std::f32::consts::PI / 180.0) * 0.5).tan();
+        Ok(ViewProjection {
+            eye,
+            axes: [right, up, forward],
+            scale: [scale_y / (width / height), scale_y],
+            viewport: [width, height],
+        })
+    }
+
     /// Type-2 effects use inverse-view billboards (0x14002a530), so all four
     /// corners have the same view depth. Device viewport pixel centers are integers.
     pub fn billboard(
@@ -186,6 +262,15 @@ impl CameraHost {
         self.views.get(index)
     }
 
+    /// Direct writes of 0x422ea0 / 0x422ee0 / 0x422ef0 from engine code (not the VM).
+    pub(crate) fn set_view_position(&mut self, position: [f32; 3]) {
+        for (word, value) in self.views[0].words[..3].iter_mut().zip(position) {
+            *word = value.to_bits();
+        }
+    }
+    pub(crate) fn set_view_angle(&mut self, axis: usize, degrees: f32) {
+        self.views[0].words[3 + axis] = degrees.to_bits();
+    }
     pub(super) fn advance_view(&mut self, delta: u32) {
         let view = &mut self.views[0];
         if let Some(motion) = view.motion.as_mut()

@@ -47,6 +47,9 @@ pub struct CmvIndex {
     /// CMV8 (0x1400390b0 type 4) frames are 32-bit JBPE images with alpha; CMV6 frames are
     /// opaque 24-bit JBPD images.
     pub alpha: bool,
+    /// CMV4 (cmvs-20070119 op.cmv) keeps the CMV6 container with opaque JBP1 frames; that
+    /// player checks no signature (docs/games/puriring).
+    pub jbp1: bool,
 }
 
 impl CmvIndex {
@@ -72,10 +75,15 @@ impl CmvIndex {
         reader
             .read_exact(&mut head)
             .map_err(|_| FormatError("CMV header truncated"))?;
-        let alpha = match &head[..4] {
-            b"CMV6" => false,
-            b"CMV8" if allow_alpha => true,
-            _ => return Err(FormatError("only the verified CMV6 signature is supported")),
+        let (alpha, jbp1) = match &head[..4] {
+            b"CMV6" => (false, false),
+            b"CMV4" => (false, true),
+            b"CMV8" if allow_alpha => (true, false),
+            _ => {
+                return Err(FormatError(
+                    "only the verified CMV4/CMV6 signatures are supported",
+                ));
+            }
         };
         let word = |i: usize| u32::from_le_bytes(head[4 + 4 * i..8 + 4 * i].try_into().unwrap());
         let header = CmvHeader {
@@ -127,6 +135,7 @@ impl CmvIndex {
             header,
             entries,
             alpha,
+            jbp1,
         })
     }
     /// The Ogg soundtrack the player hands to device channel 2.
@@ -168,7 +177,21 @@ impl CmvIndex {
         reader.seek(SeekFrom::Start(entry.file_offset(&self.header)))?;
         let mut data = vec![0; entry.stored_size as usize];
         reader.read_exact(&mut data)?;
-        let image = if self.alpha {
+        let image = if self.jbp1 {
+            let frame = crate::jbp1::decode(&data)?;
+            let (width, height) = (usize::from(frame.width), usize::from(frame.height));
+            let mut pixels = vec![255; width * height * 4];
+            for y in 0..height {
+                for x in 0..width {
+                    let from = (y * frame.padded_width + x) * 3;
+                    let to = (y * width + x) * 4;
+                    pixels[to] = frame.bgr[from + 2];
+                    pixels[to + 1] = frame.bgr[from + 1];
+                    pixels[to + 2] = frame.bgr[from];
+                }
+            }
+            crate::raster::RgbaImage::new(width as u32, height as u32, pixels)?
+        } else if self.alpha {
             crate::jbpd::decode_alpha(&data)?
         } else {
             crate::jbpd::decode(&data)?

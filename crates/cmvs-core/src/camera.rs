@@ -15,7 +15,7 @@ use crate::{
     machine::{Machine, Step},
 };
 mod view;
-pub use view::DeviceView;
+pub use view::{DeviceView, ViewProjection};
 
 pub const CAMERAS: usize = 2;
 pub const CAMERA_WORDS: usize = 40;
@@ -484,6 +484,7 @@ impl CameraHost {
         let axes: &[usize] = match command {
             0x6b => &[0, 2],
             0x6c => &[0, 1, 2],
+            0x6e => &[0],
             _ => &[1],
         };
         for (i, &axis) in axes.iter().enumerate() {
@@ -601,7 +602,8 @@ impl CameraHost {
         if matches!(call.command, 0x270 | 0x272..=0x274) {
             return self.view_motion(call);
         }
-        if matches!(call.command, 0x6b..=0x6d) {
+        // 0x206e only through the cmvs-20070119 variant (0x434960 -> 0x422780: X only).
+        if matches!(call.command, 0x6b..=0x6e) {
             return self.start_move(call);
         }
         if matches!(call.command, 0x6a) {
@@ -901,6 +903,7 @@ fn argument_names(command: u16) -> &'static [&'static str] {
         0x6b => &["mode", "x", "z", "duration"],
         0x6c => &["mode", "x", "y", "z", "duration"],
         0x6d => &["mode", "y", "duration"],
+        0x6e => &["mode", "x", "duration"],
         0x9c => &["camera index", "effect"],
         0x261 => &["angle x"],
         0x262 => &["angle y"],

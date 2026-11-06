@@ -2053,6 +2053,9 @@ impl MessageHost {
             group.secondary_image = Some(image);
             return Ok(());
         }
+        if call.command == 0x176 {
+            return self.window_child_image(call, images);
+        }
         let slot = call_window_slot(call)?;
         let raw = call.argument(8, window_argument_names(call.command)[1])?;
         let name = call.vm.resolve_string(raw)?;
@@ -2077,6 +2080,37 @@ impl MessageHost {
             .expect("checked above")
             .object
             .image = Some(image);
+        Ok(())
+    }
+    /// cmvs-20070119 0x2176 / 0x438670: SP-4 window (below 4), SP-8 child through 0x429070
+    /// (negative = the window object), SP-12 image. The target's image is released
+    /// (0x4163e0) and reloaded from the 0x2011 entries (0x416590); a decode failure only sets
+    /// +8108 bit 0x80 and leaves no image. Returns 0x400c without a result write.
+    fn window_child_image(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        images: &mut dyn ImageSource,
+    ) -> Result<(), Box<dyn Error>> {
+        let pc = call.pc;
+        let slot = call.argument(4, "window slot")?;
+        let child = call.argument(8, "child slot")? as i32;
+        let raw = call.argument(12, "image name")?;
+        let children = self.child_slots.count();
+        if slot >= 4
+            || self.windows[slot as usize]
+                .as_ref()
+                .and_then(|window| window_target(&window.object, child, children))
+                .is_none()
+        {
+            return Err(error(pc, 0x2176, "message window or window child does not exist").into());
+        }
+        let name = call.vm.resolve_string(raw)?;
+        let image = scene::load_image(images, name, pc, 0x2176)?;
+        call.complete(0x400c)?;
+        let window = self.windows[slot as usize].as_mut().expect("checked above");
+        window_target_mut(&mut window.object, child, children)
+            .expect("checked above")
+            .image = image;
         Ok(())
     }
     /// 0x215b / 0x140076b80 and 0x2142..0x2149 / 0x140076060..0x140076370: SP-4 window
