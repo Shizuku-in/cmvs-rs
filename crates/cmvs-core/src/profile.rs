@@ -45,6 +45,11 @@ pub enum VariantId {
     BackgroundAudio,
     SeRestart,
     SeGain,
+    MixerGain,
+    ImageTables,
+    ActivationPass,
+    WindowScaleMotion,
+    ViewMotion,
     AudioPreload,
     PolarPoint,
     FallingBillboards,
@@ -73,6 +78,11 @@ impl VariantId {
             "background-audio" => Some(Self::BackgroundAudio),
             "se-restart" => Some(Self::SeRestart),
             "se-gain" => Some(Self::SeGain),
+            "mixer-gain" => Some(Self::MixerGain),
+            "image-tables" => Some(Self::ImageTables),
+            "activation-pass" => Some(Self::ActivationPass),
+            "window-scale-motion" => Some(Self::WindowScaleMotion),
+            "view-motion" => Some(Self::ViewMotion),
             "audio-preload" => Some(Self::AudioPreload),
             "polar-point" => Some(Self::PolarPoint),
             "falling-billboards" => Some(Self::FallingBillboards),
@@ -102,6 +112,11 @@ impl VariantId {
             Self::BackgroundAudio => "background-audio",
             Self::SeRestart => "se-restart",
             Self::SeGain => "se-gain",
+            Self::MixerGain => "mixer-gain",
+            Self::ImageTables => "image-tables",
+            Self::ActivationPass => "activation-pass",
+            Self::WindowScaleMotion => "window-scale-motion",
+            Self::ViewMotion => "view-motion",
             Self::AudioPreload => "audio-preload",
             Self::PolarPoint => "polar-point",
             Self::FallingBillboards => "falling-billboards",
@@ -241,6 +256,9 @@ impl EngineProfile {
     pub(crate) fn initial_globals(&self) -> Option<[u32; 4]> {
         match self.id.as_str() {
             "cmvs-20140217" | "cmvs-20160201" | "cmvs-20171114" => Some([4096, 262144, 2048, 128]),
+            // docs/games/puriring: .data file bytes end at 0x4ae000; banks at 0x4b6708,
+            // 0x4dc710 (one byte per bit), 0x4da710 and 0x4ba710 are contiguous.
+            "cmvs-20070119" => Some([4096, 32768, 2048, 128]),
             _ => None,
         }
     }
@@ -528,7 +546,8 @@ pub struct Registry {
     contracts: BTreeMap<[u8; 32], ContractProof>,
 }
 
-const BUILTIN_PROFILES: [&str; 14] = [
+const BUILTIN_PROFILES: [&str; 15] = [
+    include_str!("../profiles/cmvs-20070119.profile"),
     include_str!("../profiles/cmvs-20071117.profile"),
     include_str!("../profiles/cmvs-20080719.profile"),
     include_str!("../profiles/cmvs-20080903.profile"),

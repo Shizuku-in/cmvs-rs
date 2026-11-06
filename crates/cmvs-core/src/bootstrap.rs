@@ -84,6 +84,26 @@ impl Bootstrap {
             self.handled += 1;
             return Ok(event);
         }
+        if let 0x17 | 0x18 = command {
+            // cmvs-20070119 0x4359d0 / 0x435a50: SP-4 slot, SP-8 path appended to the game
+            // root; separate tables at engine +0xC28 (stand images, ten searched slots)
+            // and +0xC2C (seven slots). Reached only through the hash-bound variant.
+            let slot = call.argument(4, "path slot")?;
+            let raw = call.argument(8, "resource path")?;
+            let limit = if command == 0x17 { 10 } else { 7 };
+            if slot >= limit {
+                return Err(error(pc, op, "resource path slot outside supported range"));
+            }
+            let path = call.vm.resolve_string(raw)?;
+            if path.len() >= 2048 {
+                return Err(error(pc, op, "resource path too long"));
+            }
+            let event = call.finish(0x4008)?;
+            self.paths.insert((op, slot), path);
+            self.archive_parameters.remove(&(op, slot));
+            self.handled += 1;
+            return Ok(event);
+        }
         if command == 0x98 {
             let raw = call.argument(4, "cursor name")?;
             let name = call.vm.resolve_string(raw)?;

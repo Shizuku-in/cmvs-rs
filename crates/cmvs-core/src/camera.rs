@@ -460,6 +460,7 @@ impl CameraHost {
         for camera in &mut self.cameras {
             camera.advance_move(delta);
         }
+        self.advance_view(delta);
     }
 
     /// 0x206b/0x206c/0x206d -> 0x14004f5b0/0x14004f680/0x14004f820.
@@ -596,6 +597,9 @@ impl CameraHost {
         let (pc, command) = (call.pc, call.command);
         if matches!(call.command, 0x260..=0x264) {
             return self.set_view(call);
+        }
+        if matches!(call.command, 0x270 | 0x272..=0x274) {
+            return self.view_motion(call);
         }
         if matches!(call.command, 0x6b..=0x6d) {
             return self.start_move(call);

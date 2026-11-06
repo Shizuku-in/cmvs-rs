@@ -795,6 +795,14 @@ fn root_wait_camera(
         .handle_wait_move(call, h.gate, h.input)?)
 }
 
+fn root_wait_view(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+    let h = hosts.waits.as_mut().expect("wait context checked");
+    Ok(h.camera
+        .as_deref_mut()
+        .expect("camera wait capability checked")
+        .handle_wait_view(call, h.gate, h.input)?)
+}
+
 fn root_audio(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     let h = hosts.audio.as_mut().expect("audio capability checked");
     h.audio.handle(call, h.backend)?;
@@ -893,16 +901,18 @@ fn root_window_images(
 }
 
 pub fn uses_windows(command: u16) -> bool {
-    ROOT.iter().any(|entry| {
-        entry.command == command
-            && matches!(
-                entry.capability,
-                Capability::Windows
-                    | Capability::WindowPointer
-                    | Capability::WindowButtons
-                    | Capability::WindowImages
-            )
-    })
+    ROOT.iter()
+        .chain(VARIANT_TABLES.iter().flat_map(|table| table.iter()))
+        .any(|entry| {
+            entry.command == command
+                && matches!(
+                    entry.capability,
+                    Capability::Windows
+                        | Capability::WindowPointer
+                        | Capability::WindowButtons
+                        | Capability::WindowImages
+                )
+        })
 }
 pub fn uses_window_images(command: u16) -> bool {
     ROOT.iter()
@@ -1557,19 +1567,29 @@ pub fn uses_images(command: u16) -> bool {
         })
 }
 
+fn is_wait_capability(capability: Capability) -> bool {
+    matches!(
+        capability,
+        Capability::FadeWait
+            | Capability::MaskWait
+            | Capability::QuakeWait
+            | Capability::StripWait
+            | Capability::ChangeWait
+            | Capability::CameraWait
+    )
+}
 pub fn is_wait(command: u16) -> bool {
-    ROOT.iter().any(|e| {
-        e.command == command
-            && matches!(
-                e.capability,
-                Capability::FadeWait
-                    | Capability::MaskWait
-                    | Capability::QuakeWait
-                    | Capability::StripWait
-                    | Capability::ChangeWait
-                    | Capability::CameraWait
-            )
-    })
+    ROOT.iter()
+        .any(|e| e.command == command && is_wait_capability(e.capability))
+}
+/// Waits of the selected semantics, including profile-bound variants.
+pub fn is_wait_for(semantics: Semantics, command: u16) -> bool {
+    match semantics {
+        Semantics::Root => is_wait(command),
+        Semantics::Variant(id) => {
+            variant_entry(id, command).is_some_and(|e| is_wait_capability(e.capability))
+        }
+    }
 }
 
 pub static ROOT: &[Entry] = &[
@@ -5183,6 +5203,125 @@ pub static SE_GAIN: &[Entry] = &[Entry {
     },
 }];
 
+pub static MIXER_GAIN: &[Entry] = &[Entry {
+    command: 0xa5,
+    name: "device mixer gain",
+    capability: Capability::Audio,
+    handler: |hosts, call| {
+        let h = hosts.audio.as_mut().expect("audio capability checked");
+        h.audio.set_mixer_gain(call, h.backend)?;
+        Ok(Flow::Done)
+    },
+}];
+
+/// cmvs-20070119 0x22c0 (0x43d310) / 0x22c1 (0x43d3a0) read SP-4 without other
+/// arguments, return 0x4004 and set the system result to `SP-4 == 1 && check`, where the
+/// check verifies the retail activation file `comap.dat` (0x22c0 first runs `reg.exe`).
+/// The activation and disc checks are deliberately not reimplemented: the check is
+/// reported as passed, with no file, process, registry or drive access.
+fn activation_pass(
+    _hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    let mode = call.argument(4, "check mode")?;
+    call.complete(0x4004)?;
+    call.vm
+        .state_mut()
+        .set_system_integer(0, u32::from(mode == 1))
+        .expect("slot zero exists");
+    Ok(Flow::Done)
+}
+
+pub static ACTIVATION_PASS: &[Entry] = &[
+    Entry {
+        command: 0x2c0,
+        name: "activation check (reported as passed)",
+        capability: Capability::Math,
+        handler: activation_pass,
+    },
+    Entry {
+        command: 0x2c1,
+        name: "activation check (reported as passed)",
+        capability: Capability::Math,
+        handler: activation_pass,
+    },
+];
+
+pub static VIEW_MOTION: &[Entry] = &[
+    Entry {
+        command: 0x270,
+        name: "stop view motion",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x271,
+        name: "wait view motion",
+        capability: Capability::CameraWait,
+        handler: root_wait_view,
+    },
+    Entry {
+        command: 0x272,
+        name: "view moving",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x273,
+        name: "move view position",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+    Entry {
+        command: 0x274,
+        name: "move view angles",
+        capability: Capability::Camera,
+        handler: root_camera,
+    },
+];
+
+pub static WINDOW_SCALE_MOTION: &[Entry] = &[
+    Entry {
+        command: 0x1c0,
+        name: "create window scale motion",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x1c1,
+        name: "set key window scale motion",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x1c2,
+        name: "start window scale motion",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+];
+
+pub static IMAGE_TABLES: &[Entry] = &[
+    Entry {
+        command: 0x17,
+        name: "register stand image archive",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x18,
+        name: "register auxiliary image archive",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x32,
+        name: "stand scene image",
+        capability: Capability::SceneImages,
+        handler: root_images,
+    },
+];
+
 pub static BACKGROUND_AUDIO: &[Entry] = &[Entry {
     command: 0x2ed,
     name: "background audio output",
@@ -5364,6 +5503,11 @@ pub static TEXT_DIALOG: &[Entry] = &[
 pub static VARIANT_TABLES: &[&[Entry]] = &[
     TEXT_DIALOG,
     SE_GAIN,
+    MIXER_GAIN,
+    IMAGE_TABLES,
+    ACTIVATION_PASS,
+    WINDOW_SCALE_MOTION,
+    VIEW_MOTION,
     MOVIE_CONTROL,
     MOVIE_SEEK,
     SCREEN_COORDINATES,
@@ -5393,6 +5537,11 @@ pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'st
     let entries = match id {
         crate::profile::VariantId::TextDialog => TEXT_DIALOG,
         crate::profile::VariantId::SeGain => SE_GAIN,
+        crate::profile::VariantId::MixerGain => MIXER_GAIN,
+        crate::profile::VariantId::ImageTables => IMAGE_TABLES,
+        crate::profile::VariantId::ActivationPass => ACTIVATION_PASS,
+        crate::profile::VariantId::WindowScaleMotion => WINDOW_SCALE_MOTION,
+        crate::profile::VariantId::ViewMotion => VIEW_MOTION,
         crate::profile::VariantId::MovieControl => MOVIE_CONTROL,
         crate::profile::VariantId::MovieSeek => MOVIE_SEEK,
         crate::profile::VariantId::ScreenCoordinates => SCREEN_COORDINATES,
@@ -5424,6 +5573,11 @@ pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
     match profile.semantics(command) {
         Semantics::Variant(crate::profile::VariantId::TextDialog) => "variant text dialog",
         Semantics::Variant(crate::profile::VariantId::SeGain) => "variant SE gain multiplier",
+        Semantics::Variant(crate::profile::VariantId::MixerGain) => "variant device mixer gain",
+        Semantics::Variant(crate::profile::VariantId::ImageTables) => "variant separate image tables",
+        Semantics::Variant(crate::profile::VariantId::ActivationPass) => "variant activation check reported as passed",
+        Semantics::Variant(crate::profile::VariantId::WindowScaleMotion) => "variant window scale motion",
+        Semantics::Variant(crate::profile::VariantId::ViewMotion) => "variant device view motion",
         Semantics::Variant(crate::profile::VariantId::MovieControl) => "variant scene movie control",
         Semantics::Variant(crate::profile::VariantId::MovieSeek) => "variant scene movie seek",
         Semantics::Variant(crate::profile::VariantId::ScreenCoordinates) => "variant screen coordinates",

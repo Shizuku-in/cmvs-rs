@@ -1058,6 +1058,11 @@ impl SceneHost {
         call: &mut Call<'_, '_>,
         images: &mut dyn ImageSource,
     ) -> Result<(), Box<dyn Error>> {
+        if call.command == 0x32 {
+            // cmvs-20070119 0x4329b0: arm the stand table's next-read cache (+5651), then
+            // load like 0x2030; returns 0x400c although SP-12 is not read.
+            images.cache_next_read()?;
+        }
         if call.command == 0x3f {
             // Dispatcher 0x1400827a7 -> 0x140035a90: arm, do not flush or load.
             images.cache_next_read()?;
@@ -1131,7 +1136,7 @@ impl SceneHost {
             image.apply_filter(filter)?;
         }
         call.complete(match command {
-            0x38 => 0x400c,
+            0x38 | 0x32 => 0x400c,
             0x3b => 0x4014,
             _ => 0x4008,
         })?;

@@ -24,7 +24,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -42,6 +42,8 @@ struct Compression {
 }
 struct StreamSource {
     output_enabled: Arc<AtomicBool>,
+    /// Device-wide /256 software mixer gain shared by every channel.
+    mixer_gain: Arc<AtomicU32>,
     host_control: HostAudioControl,
     program: VorbisProgram,
     compression: Option<Compression>,
@@ -100,7 +102,8 @@ impl Iterator for StreamSource {
                 if self.output_enabled.load(Ordering::Relaxed)
                     && self.host_control.active.load(Ordering::Relaxed)
                 {
-                    f32::from(x) / 32768.0
+                    let gain = self.mixer_gain.load(Ordering::Relaxed);
+                    f32::from(x) / 32768.0 * gain as f32 / 256.0
                 } else {
                     0.0
                 }
@@ -210,6 +213,7 @@ fn preloaded_gain(volume: u32) -> Option<f32> {
 pub struct NativeAudio {
     preloaded: [Option<Channel>; cmvs_core::audio::PRELOADED_SOUNDS],
     output_enabled: Arc<AtomicBool>,
+    mixer_gain: Arc<AtomicU32>,
     host_control: HostAudioControl,
     root: PathBuf,
     paths: BTreeMap<(u16, u32), Vec<u8>>,
@@ -287,6 +291,7 @@ impl NativeAudio {
         Ok(Self {
             preloaded: std::array::from_fn(|_| None),
             output_enabled: Arc::new(AtomicBool::new(true)),
+            mixer_gain: Arc::new(AtomicU32::new(256)),
             host_control: HostAudioControl {
                 active: Arc::new(AtomicBool::new(true)),
             },
@@ -362,6 +367,7 @@ impl NativeAudio {
         let bytes = program.bytes.clone();
         sink.append(StreamSource {
             output_enabled: self.output_enabled.clone(),
+            mixer_gain: self.mixer_gain.clone(),
             host_control: self.host_control.clone(),
             program,
             compression,
@@ -516,6 +522,10 @@ impl AudioBackend for NativeAudio {
             current.gain = gain;
             current.sink.set_volume(gain);
         }
+        Ok(())
+    }
+    fn set_mixer_gain(&mut self, gain: u32) -> Result<(), Box<dyn Error>> {
+        self.mixer_gain.store(gain.min(256), Ordering::Relaxed);
         Ok(())
     }
     fn set_output_enabled(&mut self, enabled: bool) -> Result<(), Box<dyn Error>> {
@@ -969,6 +979,7 @@ mod output_gate_tests {
         };
         let mut source = StreamSource {
             output_enabled: gate.clone(),
+            mixer_gain: Arc::new(AtomicU32::new(256)),
             host_control: host.clone(),
             program: VorbisProgram::new(bytes.to_vec(), None, false).unwrap(),
             compression: None,

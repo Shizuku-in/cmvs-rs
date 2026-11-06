@@ -970,6 +970,7 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
     assert_eq!(
         games,
         [
+            ("puriring", "cmvs-20070119", None),
             ("asukimi", "cmvs-20071117", None),
             ("harouse", "cmvs-20080719", None),
             ("asunana", "cmvs-20080903", None),

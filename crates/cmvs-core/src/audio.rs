@@ -93,6 +93,10 @@ pub struct SePlayback {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AudioRequest {
+    /// Device-wide software mixer gain on the 256 scale (cmvs-20070119 0x20a5).
+    SetMixerGain {
+        gain: u32,
+    },
     SetSeGain {
         channel: u8,
         multiplier: u32,
@@ -223,6 +227,11 @@ pub enum AudioRequest {
 }
 
 pub trait AudioBackend {
+    /// Device-wide /256 gain applied by the software mixer to every channel's samples,
+    /// on top of each channel's own volume. Err leaves the gain unchanged.
+    fn set_mixer_gain(&mut self, _gain: u32) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement a device mixer gain".into())
+    }
     /// Independent raw /256 multiplier; preserve playback, base volume and envelopes.
     fn set_se_gain(&mut self, _channel: u8, _multiplier: u32) -> Result<(), Box<dyn Error>> {
         Err("audio backend does not implement SE gain multipliers".into())
@@ -394,6 +403,9 @@ impl RecordingAudio {
     }
 }
 impl AudioBackend for RecordingAudio {
+    fn set_mixer_gain(&mut self, gain: u32) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::SetMixerGain { gain })
+    }
     fn set_se_gain(&mut self, channel: u8, multiplier: u32) -> Result<(), Box<dyn Error>> {
         self.record(AudioRequest::SetSeGain {
             channel,
@@ -1105,6 +1117,20 @@ impl AudioHost {
         if loaded.is_some() {
             state.forget_system_integer(4).expect("slot 4 exists");
         }
+        Ok(())
+    }
+
+    /// cmvs-20070119 0x20a5 -> 0x434aa0 -> 0x4427e0: SP-4 is clamped (unsigned) to 256 and
+    /// stored at device +0x904; the mixer 0x441b50 multiplies every channel by it >> 8.
+    /// Returns 0x4004 without a result write.
+    pub(crate) fn set_mixer_gain(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let gain = call.argument(4, "mixer gain")?.min(256);
+        backend.set_mixer_gain(gain)?;
+        call.complete(0x4004)?;
         Ok(())
     }
 

@@ -791,7 +791,7 @@ impl<'a> Startup<'a> {
             effects: self.effects,
             skip: self.message_flags.skip(),
         };
-        if crate::dispatch::is_wait(command) {
+        if crate::dispatch::is_wait_for(resolved.semantics, command) {
             let flow = crate::dispatch::run(
                 resolved.semantics,
                 &mut self.machine,

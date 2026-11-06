@@ -7,6 +7,86 @@ pub struct DeviceView {
     pub words: [u32; 7],
     /// +92, writer 0x1400501d0 version 2; reset leaves it unchanged.
     pub snapshot_mode: u32,
+    /// +28..+88 transient motion; only the hash-bound cmvs-20070119 commands start it.
+    pub motion: Option<ViewMotion>,
+}
+
+/// cmvs-20070119 view motion (0x423240 / 0x4232a0, frame update 0x4233b0). Either the
+/// position (words 0..2) or the X/Y angles (words 3/4) move from the words current at the
+/// start toward `target`; words outside the moving group are left alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ViewMotion {
+    /// +32: 0 linear, 1 sine ease-out, 2 cosine ease-in; other values hold until the end.
+    pub mode: u32,
+    /// +56 duration and +88 elapsed milliseconds.
+    pub duration: u32,
+    pub elapsed: u32,
+    /// +60 moves the position, +64 the angles.
+    pub position: bool,
+    pub angles: bool,
+    /// +68..+84 start words 0..4 and +36..+52 targets.
+    pub start: [u32; 5],
+    pub target: [u32; 5],
+}
+
+/// 0x422170: cosine and sine of `degrees` times `length`, each truncated to hundredths.
+fn quarter(degrees: f32, length: f32) -> (f32, f32) {
+    let radians = if degrees == 0.0 {
+        0.0
+    } else {
+        f64::from(degrees) / 180.0 * f64::from(std::f32::consts::PI)
+    };
+    let hundredths = |value: f64| {
+        let value = value as f32;
+        ((f64::from(value) * 100.0) as i32) as f64 / 100.0
+    };
+    (
+        hundredths(radians.cos() * f64::from(length)) as f32,
+        hundredths(radians.sin() * f64::from(length)) as f32,
+    )
+}
+
+impl ViewMotion {
+    fn finish(&self, words: &mut [u32; 7]) {
+        if self.position {
+            words[..3].copy_from_slice(&self.target[..3]);
+        }
+        if self.angles {
+            words[3..5].copy_from_slice(&self.target[3..]);
+        }
+    }
+    /// One frame of 0x4233b0; returns false once the motion has ended.
+    fn advance(&mut self, delta: u32, words: &mut [u32; 7]) -> bool {
+        self.elapsed = self.elapsed.wrapping_add(delta);
+        if self.elapsed >= self.duration {
+            self.finish(words);
+            return false;
+        }
+        let t = self.elapsed as f32;
+        let d = self.duration as f32;
+        let ranges = [(self.position, 0..3), (self.angles, 3..5)];
+        for (_, range) in ranges.into_iter().filter(|(moving, _)| *moving) {
+            for i in range {
+                let start = f32::from_bits(self.start[i]);
+                let difference = f32::from_bits(self.target[i]) - start;
+                let offset = match self.mode {
+                    0 => {
+                        let scaled = f64::from(difference) * f64::from(t) / f64::from(d);
+                        (((scaled * 100.0) as i32) as f64 / 100.0) as f32
+                    }
+                    1 => quarter((f64::from(t) * 90.0 / f64::from(d)) as f32, difference).1,
+                    2 => {
+                        let degrees =
+                            (((90.0 * f64::from(t) / f64::from(d)) * 100.0) as i32) as f64 / 100.0;
+                        difference - quarter(degrees as f32, difference).0
+                    }
+                    _ => continue,
+                };
+                words[i] = (offset + start).to_bits();
+            }
+        }
+        true
+    }
 }
 
 impl DeviceView {
@@ -90,6 +170,7 @@ impl DeviceView {
         let mut view = Self {
             words: [0; 7],
             snapshot_mode: u32::from(index == 0),
+            motion: None,
         };
         view.reset();
         view
@@ -103,6 +184,120 @@ impl DeviceView {
 impl CameraHost {
     pub fn view(&self, index: usize) -> Option<&DeviceView> {
         self.views.get(index)
+    }
+
+    pub(super) fn advance_view(&mut self, delta: u32) {
+        let view = &mut self.views[0];
+        if let Some(motion) = view.motion.as_mut()
+            && !motion.advance(delta, &mut view.words)
+        {
+            view.motion = None;
+        }
+    }
+    pub fn view_moving(&self) -> bool {
+        self.views[0].motion.is_some()
+    }
+    fn stop_view(&mut self, finish: bool) {
+        let view = &mut self.views[0];
+        if let Some(motion) = view.motion.take()
+            && finish
+        {
+            motion.finish(&mut view.words);
+        }
+    }
+
+    /// cmvs-20070119 view motion on the single device view (engine +1900 -> +12):
+    /// - 0x2270 / 0x43d070: stop; SP-4 nonzero jumps to the targets (0x423200); pops 4.
+    /// - 0x2272 / 0x43d160: system result = moving; pops nothing.
+    /// - 0x2273 / 0x43d190: SP-4 mode, SP-8..SP-16 XYZ, SP-20 duration; pops 20.
+    /// - 0x2274 / 0x43d200: SP-4 mode, SP-8/SP-12 X/Y angles, SP-16 duration; pops 16.
+    pub(super) fn view_motion(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let command = call.command;
+        match command {
+            0x270 => {
+                let finish = call.argument(4, "finish")? != 0;
+                call.complete(0x4004)?;
+                self.stop_view(finish);
+            }
+            0x272 => {
+                call.complete(0x4000)?;
+                let moving = u32::from(self.view_moving());
+                call.vm
+                    .state_mut()
+                    .set_system_integer(0, moving)
+                    .expect("result 0 exists");
+            }
+            _ => {
+                let count = if command == 0x273 { 5 } else { 4 };
+                let mut args = [0u32; 5];
+                const NAMES: [&str; 5] =
+                    ["mode", "first target", "second target", "third", "fourth"];
+                for (i, arg) in args.iter_mut().take(count).enumerate() {
+                    *arg = call.argument((i + 1) * 4, NAMES[i])?;
+                }
+                call.complete(0x4000 | (count * 4) as u16)?;
+                let view = &mut self.views[0];
+                let mut start = [0; 5];
+                start.copy_from_slice(&view.words[..5]);
+                // Targets of the group that does not move keep the previous motion's values.
+                let mut target = view.motion.as_ref().map_or(start, |m| m.target);
+                let (position, angles, duration) = if command == 0x273 {
+                    target[..3].copy_from_slice(&args[1..4]);
+                    (true, false, args[4])
+                } else {
+                    target[3..].copy_from_slice(&args[1..3]);
+                    (false, true, args[3])
+                };
+                view.motion = Some(ViewMotion {
+                    mode: args[0],
+                    duration,
+                    elapsed: 0,
+                    position,
+                    angles,
+                    start,
+                    target,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// cmvs-20070119 0x2271 / 0x43d0a0: wait on the view motion with the gates of 0x2069.
+    pub(crate) fn handle_wait_view(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        gate: SkipGate,
+        input: &mut ActionInput,
+    ) -> Result<Flow, DecodeError> {
+        let skippable = call.argument(4, "skippable")? != 0;
+        if !self.view_moving() {
+            let flow = call.finish(0x4004)?;
+            call.vm
+                .state_mut()
+                .set_system_integer(0, 0)
+                .expect("result 0 exists");
+            return Ok(flow);
+        }
+        let immediate = !gate.effects || input.skip_held() || gate.skip;
+        let released = skippable && !immediate && input.released(0);
+        if skippable && (immediate || released) {
+            let flow = call.finish(0xc004)?;
+            if released {
+                input.consume(0);
+            }
+            call.vm
+                .state_mut()
+                .set_system_integer(0, 1)
+                .expect("result 0 exists");
+            self.stop_view(true);
+            return Ok(flow);
+        }
+        let flow = call.wait(4)?;
+        call.vm
+            .state_mut()
+            .set_system_integer(0, 0)
+            .expect("result 0 exists");
+        Ok(flow)
     }
 
     pub(super) fn set_view(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
@@ -147,6 +342,7 @@ impl CameraHost {
         let word = |at| u32::from_le_bytes(record[at..at + 4].try_into().unwrap());
         let view = &mut self.views[index];
         view.words = std::array::from_fn(|i| word(offset + i * 4));
+        view.motion = None;
         if offset == 6 {
             view.snapshot_mode = word(2);
         }

@@ -688,6 +688,7 @@ impl MessageHost {
             0x14b..=0x14d => self.presence(call),
             0x14a | 0x15a => self.window_text(call),
             0x1cf..=0x1d1 => self.animation(call),
+            0x1c0..=0x1c2 => self.scale_motion(call),
             _ => Err(call.error("unregistered window command")),
         }
     }
@@ -794,6 +795,98 @@ impl MessageHost {
         candidate.revision_alpha = self.output_settings.revision_alpha;
         // The native overwrite leaks its old object; Rust drops owned state.
         self.auxiliary_texts[slot] = Some(candidate);
+        Ok(())
+    }
+    /// cmvs-20070119 0x21c0 / 0x438af0, 0x21c1 / 0x438b70 and 0x21c2 / 0x438c20: the
+    /// draw-state +88 scale track of a window object (SP-4 window below 4, SP-8 child
+    /// through 0x429070, negative = the window object). Arguments and the 0xb8-byte track match
+    /// scene 0x21e0..0x21e2: create with base X/Y floats (0x40ef10, pops 16), set key
+    /// SP-12 with next/mode/duration/X/Y (0x40f010, pops 32), start at key SP-12
+    /// (0x40b930, pops 12). Set/start without a track are no-ops; the frame update is
+    /// 0x40f080, the shared scale interpolation. Missing windows, children or draw states
+    /// only set +8108 bit 0x10000 in the original and are errors here.
+    fn scale_motion(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        use crate::scene::{SCALE_KEYS, ScaleKey, ScaleMotion, ScalePlayback};
+        let (pc, command) = (call.pc, call.command);
+        let op = command + 0x2000;
+        let fail = |why| error(pc, op, why);
+        let count = match command {
+            0x1c0 => 4,
+            0x1c1 => 8,
+            _ => 3,
+        };
+        const NAMES: [&str; 8] = [
+            "window slot",
+            "child slot",
+            "first argument",
+            "second argument",
+            "mode",
+            "duration",
+            "target x",
+            "target y",
+        ];
+        let mut args = [0u32; 8];
+        for (i, arg) in args.iter_mut().take(count).enumerate() {
+            *arg = call.argument((i + 1) * 4, NAMES[i])?;
+        }
+        if args[0] >= 4 {
+            return Err(fail("window scale motion slot outside this build's 0..3"));
+        }
+        let slot = args[0] as usize;
+        let children = self.child_slots.count();
+        let draw = self.windows[slot]
+            .as_ref()
+            .and_then(|window| window_target(&window.object, args[1] as i32, children))
+            .ok_or_else(|| fail("message window or window child does not exist"))?
+            .draw
+            .as_ref()
+            .ok_or_else(|| fail("window scale motion target has no draw state"))?;
+        if draw.scale_motion.is_some() {
+            if command != 0x1c0 && args[2] >= SCALE_KEYS as u32 {
+                return Err(fail("scale key outside 0..7"));
+            }
+            if command == 0x1c1 {
+                if (args[3] as i32) >= SCALE_KEYS as i32 {
+                    return Err(fail("next scale key outside 0..7"));
+                }
+                if !matches!(args[4] as u8, 0 | 1) {
+                    return Err(fail("scale motion mode not implemented"));
+                }
+            }
+        }
+        call.complete(0x4000 | (count * 4) as u16)?;
+        let window = self.windows[slot].as_mut().expect("validated window");
+        let draw = window_target_mut(&mut window.object, args[1] as i32, children)
+            .and_then(|target| target.draw.as_mut())
+            .expect("validated draw state");
+        match command {
+            0x1c0 => {
+                draw.scale_motion = Some(Box::new(ScaleMotion {
+                    base: [args[2], args[3]],
+                    playback: None,
+                    keys: [ScaleKey::default(); SCALE_KEYS],
+                }))
+            }
+            0x1c1 => {
+                if let Some(motion) = draw.scale_motion.as_mut() {
+                    motion.keys[args[2] as usize] = ScaleKey {
+                        next: args[3] as i32,
+                        mode: args[4],
+                        duration: args[5],
+                        xy: [args[6], args[7]],
+                    };
+                }
+            }
+            _ => {
+                if let Some(motion) = draw.scale_motion.as_mut() {
+                    motion.playback = Some(ScalePlayback {
+                        start: args[2],
+                        current: args[2],
+                        elapsed: 0,
+                    });
+                }
+            }
+        }
         Ok(())
     }
     /// 0x2178 / 0x140077180 (0x14005d2a0) and 0x217f / 0x1400773d0: SP-4 window slot, SP-8
