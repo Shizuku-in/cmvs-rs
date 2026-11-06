@@ -359,6 +359,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmvs-host"
+version = "0.1.0"
+dependencies = [
+ "cmvs-audio",
+ "cmvs-core",
+ "cmvs-font",
+ "self_cell",
+]
+
+[[package]]
 name = "cmvs-input"
 version = "0.1.0"
 dependencies = [

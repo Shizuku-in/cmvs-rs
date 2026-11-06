@@ -825,6 +825,43 @@ fn selection_needs_data_evidence_and_confirms_every_present_executable() {
     );
 }
 
+#[test]
+fn startup_variants_require_exact_data_and_identical_archive_semantics() {
+    let root = build("synthetic-root", None, &[0, 1], 1).to_text();
+    let derived = build("synthetic-derived", Some("synthetic-root"), &[0, 1], 3).to_text();
+    let original = games(&[7; 32], &[8; 32], &[3; 32]);
+    let variant = games(&[9; 32], &[8; 32], &[3; 32]).replace("game synthetic", "game updated");
+    let records = format!("{original}{variant}");
+    let registry = Registry::parse(&[&root, &derived], &records).unwrap();
+    let evidence = Evidence {
+        start_script: Some(file("start.ps3", 9)),
+        script_archive: Some(file("script.cpz", 8)),
+        executables: vec![file("cmvs64.exe", 3)],
+    };
+    assert_eq!(
+        registry
+            .select(None, &evidence)
+            .unwrap()
+            .record
+            .unwrap()
+            .game,
+        "updated"
+    );
+    assert!(
+        registry
+            .select(
+                None,
+                &Evidence {
+                    start_script: Some(file("start.ps3", 10)),
+                    ..evidence
+                }
+            )
+            .is_err()
+    );
+    let conflicting = format!("{original}{}", variant.replace("0x12345678", "0x87654321"));
+    assert!(Registry::parse(&[&root, &derived], &conflicting).is_err());
+}
+
 /// A machine stopped at the script's first system command, and that command's PC.
 fn pending_machine(program: &cmvs_rs::ps3::Script) -> (Machine<'_>, usize) {
     let mut vm = Machine::new(program).unwrap();
@@ -979,6 +1016,7 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
             ("hapymaherfd", "cmvs-20140217", None),
             ("chronoclock", "cmvs-20150405", None),
             ("amatsutsumi", "cmvs-20160201", Some(2198)),
+            ("amatsutsumi-103", "cmvs-20160201", Some(2198)),
             ("aoitori", "cmvs-20171114", None),
             ("realive", "cmvs-20190305", None),
             ("seishunf", "cmvs-20190405", None),

@@ -656,7 +656,14 @@ impl Registry {
             if earlier.iter().any(|g| {
                 g.game == game.game
                     || g.start_script.sha256 == game.start_script.sha256
-                    || g.script_archive.sha256 == game.script_archive.sha256
+                    // An updated startup can share an unchanged script archive.
+                    // Archive-only identification must still select identical
+                    // semantics, save identity and executable confirmation rules.
+                    || (g.script_archive.sha256 == game.script_archive.sha256
+                        && (g.profile != game.profile
+                            || g.game_id != game.game_id
+                            || g.executables != game.executables
+                            || g.skip_auto_resume != game.skip_auto_resume))
             }) {
                 return Err(ProfileError::new(format!(
                     "game {} duplicates an earlier record",

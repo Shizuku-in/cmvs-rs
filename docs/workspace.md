@@ -11,6 +11,7 @@
 | cmvs-native | crates/cmvs-native | 操作系统服务统一接口，按平台分模块（现有 Windows，其余预留）；依赖 raw-window-handle，Windows 上 windows-sys；原生系统 FFI 包 |
 | cmvs-probe | crates/cmvs-probe | 与游戏无关的无头整机检查；依赖 core 与 desktop 的字体模块，不打开窗口或设备；不在默认成员中 |
 | cmvs-web | platforms/web/native | 浏览器 Worker 宿主、软件画面与输入；依赖 core、font、无原生设备 feature 的 audio、wasm-bindgen、self_cell |
+| cmvs-host | crates/cmvs-host | 不拥有窗口的原生播放器、帧与输入生命周期及 C ABI；依赖 core、font、audio、self_cell，供 iOS 等外部宿主使用 |
 | cmvs-rs | 根包 | CLI 目标、兼容重导出、现有集成测试；默认仅依赖 core |
 
 依赖方向为 `desktop → core`、`desktop → audio → core`。core 不依赖音频/窗口实现；wasm32 目标通过 wasm-bindgen 导入 Worker 文件接口，原生目标仍转发 std 文件系统。
