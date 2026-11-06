@@ -37,3 +37,10 @@ and belongs to the embedding host, in place of `ndk-glue`/`android-activity`
 initialization. Those runtimes must not also initialize the same `ndk-context`.
 Without initialization the player returns an error instead of entering CPAL
 with an absent Android context. Other platforms need no JNI initialization.
+
+Android save directories use nonblocking OS file locks through rustix because
+Rust's standard file-lock API does not support Android. The lock is released
+when the player closes, including failed opens. The `system_profile` integration
+tests cover competing sessions, save replacement, backups and reopening. Set
+`CMVS_TEST_TMPDIR` to a writable directory when running those tests on a device
+whose filesystem differs from the build machine.

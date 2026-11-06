@@ -81,16 +81,19 @@ fn failed_configuration_replacement_preserves_primary_and_backup_for_retry() {
 }
 struct Root(PathBuf);
 impl Root {
+    fn parent() -> PathBuf {
+        std::env::var_os("CMVS_TEST_TMPDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target"))
+    }
     fn new() -> Self {
         // The managed Windows sandbox's virtual Temp denies rename. Use an owned
         // workspace fixture to exercise the actual same-directory rename operation.
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join(format!(
-                "cmvs-profile-{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
+        let root = Self::parent().join(format!(
+            "cmvs-profile-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
         fs::create_dir(&root).unwrap();
         fs::create_dir(root.join("game")).unwrap();
         Self(root)
@@ -108,10 +111,7 @@ impl Drop for Root {
         let target = self.0.canonicalize().unwrap();
         assert_eq!(
             target.parent().unwrap(),
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("target")
-                .canonicalize()
-                .unwrap()
+            Self::parent().canonicalize().unwrap()
         );
         assert!(
             target

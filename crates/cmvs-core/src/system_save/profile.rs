@@ -99,9 +99,19 @@ impl ProfileSystemSave {
         if lock.metadata()?.len() != 0 {
             return Err(io::Error::other("profile lock file must be empty"));
         }
+        // std::fs::File locking is unsupported on Android. Use the same
+        // nonblocking OS flock there, retaining the descriptor until drop.
+        #[cfg(target_os = "android")]
+        let locked = rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive)
+            .map_err(io::Error::from);
+        #[cfg(not(any(target_os = "android", target_os = "horizon")))]
+        let locked = lock.try_lock().map_err(io::Error::from);
         #[cfg(not(target_os = "horizon"))]
-        lock.try_lock().map_err(|error| {
-            io::Error::other(format!("cannot lock user data directory: {error}"))
+        locked.map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("cannot lock user data directory: {error}"),
+            )
         })?;
         let profile = Self {
             directory,
