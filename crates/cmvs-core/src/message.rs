@@ -215,6 +215,7 @@ pub struct MessageHost {
     child_slots: crate::scene::ChildSlots,
     /// Inspected 2007 text creation uses eight slots and accepts explicit faces.
     legacy_text_creation: bool,
+    named_text_faces: bool,
     screen_size: crate::viewport::ScreenSize,
     /// State owned by the separately dispatched font-cell text implementation.
     font_cells: font_cells::State,
@@ -243,13 +244,15 @@ pub struct MessageHost {
 impl MessageHost {
     /// Construct window-object hosts using the selected runtime child-table layout.
     pub fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
+        let legacy_text_creation = profile.is_inspected_20070119()
+            || profile.is_inspected_20071117()
+            || profile.is_inspected_20080719()
+            || profile.is_inspected_20080903()
+            || profile.is_inspected_20090815();
         Self {
             child_slots: crate::scene::ChildSlots::for_profile(profile),
-            legacy_text_creation: profile.is_inspected_20070119()
-                || profile.is_inspected_20071117()
-                || profile.is_inspected_20080719()
-                || profile.is_inspected_20080903()
-                || profile.is_inspected_20090815(),
+            legacy_text_creation,
+            named_text_faces: legacy_text_creation || profile.is_inspected_20101211(),
             ..Self::default()
         }
     }
@@ -680,7 +683,7 @@ impl MessageHost {
             0x17b => self.object_presence(call),
             0x171 => self.release_image(call),
             0x179 => self.destroy_child(call),
-            0x17a | 0x17c | 0x180 | 0x182..=0x187 => self.draw(call),
+            0x17a | 0x17c | 0x180 | 0x182..=0x187 | 0x18b => self.draw(call),
             0x190..=0x192 | 0x195..=0x197 => self.button(call),
             0x150 => self.move_window(call),
             0x18d => self.draw_query(call),
@@ -955,6 +958,12 @@ impl MessageHost {
                 return Ok(());
             }
             0x182 => DrawSetter::Source([a, b, c, d]),
+            // HASSAKU x64 0x14006b700 -> 0x140033b00 -> 0x14001ad60:
+            // preserve both floating-point words without scaling or normalization.
+            0x18b => {
+                target.draw.as_mut().expect("checked above").words[18..20].copy_from_slice(&[a, b]);
+                return Ok(());
+            }
             0x183 => DrawSetter::Position([a, b]),
             0x184 => DrawSetter::Layer(a),
             0x186 => DrawSetter::Opacity(a),
@@ -1123,7 +1132,8 @@ impl MessageHost {
     /// font object (0x140059b90); explicit faces are enabled only for the inspected
     /// 2007 constructors (PURIRING 0x4361b0 -> 0x428c20 -> 0x426ee0,
     /// ASUKIMI 0x444410 -> 0x4356a0 -> 0x4338a0) and the 2008
-    /// constructor (0x448560 -> 0x437a70 -> 0x435c50). The capacity
+    /// constructor (0x448560 -> 0x437a70 -> 0x435c50), plus HASSAKU x64
+    /// 0x140050b40 -> 0x14004e4f0 (twelve text slots). The capacity
     /// (+324) sizes the glyph texture in 0x14005a6a0: 0 and 196 (0x215d's value) both give
     /// a 1024x2048 texture; other capacities are rejected because textures are not modeled.
     /// Replacing a text object a window caches (+2528) would leave that window stale.
@@ -1153,7 +1163,7 @@ impl MessageHost {
         }
         let reference = call.argument(8, text_argument_names(call.command)[1])?;
         let requested_face = call.vm.resolve_string(reference)?;
-        if !requested_face.is_empty() && !self.legacy_text_creation {
+        if !requested_face.is_empty() && !self.named_text_faces {
             return Err(error(pc, 0x2100, "font face selection is not modeled"));
         }
         let glyph_capacity = call.argument(12, text_argument_names(call.command)[2])?;
@@ -1177,7 +1187,7 @@ impl MessageHost {
             .set_system_integer(0, 1)
             .expect("slot 0 exists");
         let mut face = self.font_slot(index);
-        if self.legacy_text_creation {
+        if self.named_text_faces {
             face = if requested_face.is_empty() {
                 self.default_face()
             } else {
@@ -1966,6 +1976,27 @@ impl MessageHost {
         }
         Ok(())
     }
+    /// HASSAKU 0x140011010 / 0x140010e70 targets a child of window 0.
+    pub(crate) fn sequence_image_change(
+        &mut self,
+        child: u32,
+        name: &[u8],
+        duration: u32,
+        images: &mut dyn ImageSource,
+        pc: usize,
+    ) -> Result<(), Box<dyn Error>> {
+        let count = self.child_slots.count();
+        let Some(window) = self.windows[0].as_mut() else {
+            return Ok(());
+        };
+        let Some(target) = window_target_mut(&mut window.object, child as i32, count) else {
+            return Ok(());
+        };
+        let prepared = target.prepare_image_change(name, duration, images, pc, 0x228b)?;
+        target.commit_image_change(prepared);
+        Ok(())
+    }
+
     /// 0x217b / 0x1400772d0 -> 0x14005d280: tests the window's own object
     /// (negative child) or a child pointer, regardless of image, visibility or draw state.
     /// Existing window with missing/out-of-range child returns 0, not an error.
@@ -2448,6 +2479,7 @@ fn window_argument_names(command: u16) -> &'static [&'static str] {
             "height",
         ],
         0x183 | 0x185 => &["window slot", "child slot", "x", "y"],
+        0x18b => &["window slot", "child slot", "scale x", "scale y"],
         0x184 => &["window slot", "child slot", "layer"],
         0x186 => &["window slot", "child slot", "opacity"],
         0x187 => &["window slot", "child slot", "blend mode"],

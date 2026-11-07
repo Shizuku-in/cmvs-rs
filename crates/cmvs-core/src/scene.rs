@@ -354,6 +354,7 @@ pub struct SceneHost {
     legacy_world_motion: bool,
     allow_legacy_sine_modes: bool,
     pub(crate) allow_screen_coordinates_one: bool,
+    pub(crate) allow_logical_screen_scale: bool,
     pub(crate) allow_projected_parent_rotation: bool,
     /// HAROUSE 0x43b0b0 and MEMORIA 0x43e2f0: horizontal/vertical 0x100 triangle wave.
     pub(crate) allow_triangle_quake: bool,
@@ -389,6 +390,7 @@ impl SceneHost {
             allow_filter_mode_one: profile.is_inspected_20071117()
                 || profile.is_inspected_20090815(),
             allow_rotation_hold: profile.is_inspected_20070119(),
+            allow_logical_screen_scale: profile.is_inspected_20101211(),
             legacy_world_motion: profile.is_inspected_20070119(),
             allow_legacy_sine_modes: profile.uses_legacy_sine_modes(),
             allow_screen_coordinates_one: profile.is_inspected_20070119()
@@ -1300,6 +1302,7 @@ impl SceneHost {
             legacy_world_motion: self.legacy_world_motion,
             allow_legacy_sine_modes: self.allow_legacy_sine_modes,
             allow_screen_coordinates_one: self.allow_screen_coordinates_one,
+            allow_logical_screen_scale: self.allow_logical_screen_scale,
             allow_projected_parent_rotation: self.allow_projected_parent_rotation,
             allow_triangle_quake: self.allow_triangle_quake,
             allow_stand_change_table: self.allow_stand_change_table,

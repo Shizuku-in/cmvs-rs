@@ -1,4 +1,4 @@
-//! PB3B header, types 1/2/3/5 and contextual type-6 replacement blocks. Other codecs are
+//! PB3B header, types 1/2/3/5/7 and contextual type-6/8 replacement blocks. Other codecs are
 //! explicitly unsupported. Format reference: pinned MIT CMVS-Engine PB3B.cpp/CPB.cpp/JBP1.cpp;
 //! checked against current IDA.
 use crate::{FormatError, MAX_PAYLOAD, jbp1, raster::RgbaImage};
@@ -165,15 +165,39 @@ fn offset(base: usize, relative: u32) -> Result<usize, FormatError> {
         .ok_or(FormatError("PB3 offset overflow"))
 }
 
+/// HASSAKU x64 0x140091f00: one split LZSS stream of interleaved BGRA bytes.
+fn decode_interleaved(raw: &[u8], h: &Header) -> Result<RgbaImage, FormatError> {
+    if h.bpp != 32 {
+        return Err(FormatError("PB3 type 7 requires 32 bits per pixel"));
+    }
+    let flag_at = offset(60, u32_at(raw, 52)?)?;
+    let data_at = offset(60, u32_at(raw, 56)?)?;
+    let flags = raw
+        .get(flag_at..data_at)
+        .ok_or(FormatError("invalid PB3 type-7 flag offsets"))?;
+    let data = raw
+        .get(data_at..)
+        .ok_or(FormatError("invalid PB3 type-7 data offset"))?;
+    let (mut pixels, _, _) = lzss_prefix(
+        flags,
+        data,
+        usize::from(h.width) * usize::from(h.height) * 4,
+    )?;
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
+    }
+    RgbaImage::new(u32::from(h.width), u32::from(h.height), pixels)
+}
+
 /// 0x140036ae0 case 6: encrypted, NUL-terminated 32-byte stem plus `.pb3`.
 /// Unlike the reference extractor, the original recursively decodes any supported base.
 pub fn reference_name(raw: &[u8]) -> Result<Option<Vec<u8>>, FormatError> {
     let h = Header::parse(raw)?;
-    if h.kind != 6 {
+    if !matches!(h.kind, 6 | 8) {
         return Ok(None);
     }
     if h.bpp != 32 {
-        return Err(FormatError("PB3 type 6 requires 32 bits per pixel"));
+        return Err(FormatError("PB3 types 6/8 require 32 bits per pixel"));
     }
     let key = [
         0xa6, 0x75, 0xf3, 0x9c, 0xc5, 0x69, 0x78, 0xa3, 0x3e, 0xa5, 0x4f, 0x79, 0x59, 0xfe, 0x3a,
@@ -201,8 +225,8 @@ pub fn reference_name(raw: &[u8]) -> Result<Option<Vec<u8>>, FormatError> {
 /// A one bit preserves the base, including its alpha; there is no alpha blending.
 pub fn decode_with_base(raw: &[u8], base: RgbaImage) -> Result<RgbaImage, FormatError> {
     let h = Header::parse(raw)?;
-    if h.kind != 6 || h.bpp != 32 {
-        return Err(FormatError("expected a 32-bit PB3 type-6 image"));
+    if !matches!(h.kind, 6 | 8) || h.bpp != 32 {
+        return Err(FormatError("expected a 32-bit PB3 type-6/8 image"));
     }
     if base.width() != u32::from(h.width) || base.height() != u32::from(h.height) {
         return Err(FormatError(
@@ -319,15 +343,20 @@ pub fn decode(raw: &[u8]) -> Result<RgbaImage, FormatError> {
     if matches!(h.kind, 2 | 3) {
         return decode_jbp1(raw, &h);
     }
+    if h.kind == 7 {
+        return decode_interleaved(raw, &h);
+    }
     if h.kind == 5 {
         return decode_delta(raw, &h);
     }
-    if h.kind == 6 {
-        return Err(FormatError("PB3 type 6 requires a reference image source"));
+    if matches!(h.kind, 6 | 8) {
+        return Err(FormatError(
+            "PB3 types 6/8 require a reference image source",
+        ));
     }
     if h.kind != 1 {
         return Err(FormatError(
-            "PB3 codec not implemented; standalone types 1, 2, 3 and 5 are supported",
+            "PB3 codec not implemented; standalone types 1, 2, 3, 5 and 7 are supported",
         ));
     }
     if !matches!(h.bpp, 24 | 32) || h.block == 0 {

@@ -34,7 +34,7 @@
 
 - PS2A 支持分段、字节变换、解压、标签与脚本装载。
 - `cpz::ArchiveIndex` / `ArchiveLayout` 按签名分派；当前支持 CPZ3、CPZ5 打包模式 5～9、CPZ6 模式 1 和 CPZ7（资源模式 0/1）。CPZ7 使用每包参数，默认为零；CPZ3 无需启动参数，始终验证索引密文校验值；CPZ5/7 验证头部与索引摘要。公共资源读取验证各格式的数据校验值，CPZ6 头部/索引摘要尚未验证。
-- PB3 支持 type 1、type 3/JBP1、type 5，以及需要参考底图的 type 6；其他分支显式报错。type 5/6 已有 23 个不同真实输出与独立 Python 逐字节对照，未宣称全包覆盖。
+- PB3 支持 type 1、type 2/3 JBP1、type 5/7，以及需要参考底图的 type 6/8；其他分支显式报错。type 5/6 已有 23 个不同真实输出与独立 Python 逐字节对照，未宣称全包覆盖。
 - CMV6 与 JBPD 支持已核对的全屏影片容器和帧解码；无实际音轨的 CMV6 与静音 CMV9 支持 0x2308 初始场景绑定、默认模式 0 的段播放与循环，CMV9 另缓存静态底图，其他槽控制仍未实现。影片计时、画面解码和设备音轨播放分开。
 - MGV1 按名义帧表解码 Ogg/Theora。容器尺寸须精确等于 Theora picture 或 coded 尺寸；前者裁可见区域，后者保留整个编码表面（如 1920×1088），再按逻辑画布呈现。帧率、YUV420 与像素预算校验保留，见[Hapymaher RE](games/hapymaher_re/README.md#1080p-素材边界)。
 
@@ -42,7 +42,7 @@
 
 `image` 在共享读取层之上负责图像来源与解码分派，供场景、消息窗口和遮罩共同使用：
 
-- `pb3::decode` 无 I/O；type 6 通过 `decode_with_base` 或 `image::load` 获得参考上下文，不猜底图路径。
+- `pb3::decode` 无 I/O；type 6/8 通过 `decode_with_base` 或 `image::load` 获得参考上下文，不猜底图路径。
 - `image::load` 经同一 `ImageSource` 与注册源递归读取底图，拒绝循环，限制最多 16 个活动文件及累计原始/RGBA 声明长度 128 MiB；单文件与单图仍分别限制 64 MiB。
 - `image/cache.rs` 保存 `0x203f` 的下一次读取提示与原始字节 LRU，当前留存上限 32 MiB/1024 项；启动容量配置尚未接入。它与 CPZ 索引缓存及已解码 RGBA 分开。
 - `ImageRead` 延迟提交 token 使底图原始字节先于外层提交；解码失败也完成该缓存提交，但不提交 VM 命令或替换旧图像。直接 raw read 在返回前提交。

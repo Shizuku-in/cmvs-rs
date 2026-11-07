@@ -40,6 +40,15 @@ pub enum Layer<'a> {
         alpha: u32,
         blend: Blend,
     },
+    /// A logically scaled image with the original texture-space transition mask.
+    ProjectedMasked {
+        image: &'a ObjectImage,
+        rect: [i64; 4],
+        quad: [f32; 4],
+        alpha: u32,
+        mask: &'a MaskTransition,
+        blend: Blend,
+    },
     /// A rotated 2D image: device-space corners in strip order top-left, top-right,
     /// bottom-left, bottom-right of the source rectangle.
     Rotated {
@@ -202,6 +211,7 @@ fn image_layer<'a>(
     alpha: i64,
     mask: Option<&'a MaskTransition>,
     inherited: Option<([f32; 2], [f32; 2])>,
+    screen_scale: f32,
 ) -> Result<Option<Layer<'a>>, FormatError> {
     let [sx, sy, w, h] = [2, 3, 4, 5].map(|i| i64::from(words[i] as i16));
     if w <= 0 || h <= 0 || alpha <= 0 {
@@ -230,7 +240,7 @@ fn image_layer<'a>(
             return Ok(None);
         }
         let origin = [words[6] as i16, words[7] as i16].map(i64::from);
-        let corners = rotated_corners(position, scale, origin, [w, h], degrees);
+        let corners = rotated_corners(position, scale, origin, [w, h], degrees, screen_scale);
         if !corners.as_flattened().iter().all(|v| v.is_finite()) {
             return Err(FormatError("rotated 2D image extent is not finite"));
         }
@@ -242,8 +252,8 @@ fn image_layer<'a>(
             blend: blend(words, image, alpha, false)?,
         }));
     }
-    if inherited.is_some() || scale != [1.0; 2] {
-        if mask.is_some() {
+    if inherited.is_some() || scale != [1.0; 2] || screen_scale != 1.0 {
+        if mask.is_some() && screen_scale == 1.0 {
             return Err(FormatError("scaled 2D mask rendering is not verified"));
         }
         let (position, scale) = inherited.unwrap_or((position.map(|v| v as f32), scale));
@@ -252,13 +262,24 @@ fn image_layer<'a>(
         }
         let origin = [words[6] as i16, words[7] as i16].map(f32::from);
         let quad = [
-            position[0] - origin[0] * scale[0] - 0.5,
-            position[1] - origin[1] * scale[1] - 0.5,
-            position[0] + (w as f32 - origin[0]) * scale[0] - 0.5,
-            position[1] + (h as f32 - origin[1]) * scale[1] - 0.5,
-        ];
+            position[0] - origin[0] * scale[0],
+            position[1] - origin[1] * scale[1],
+            position[0] + (w as f32 - origin[0]) * scale[0],
+            position[1] + (h as f32 - origin[1]) * scale[1],
+        ]
+        .map(|v| v * screen_scale - 0.5);
         if !quad.iter().all(|v| v.is_finite()) {
             return Err(FormatError("scaled 2D image extent is not finite"));
+        }
+        if let Some(mask) = mask {
+            return Ok(Some(Layer::ProjectedMasked {
+                image,
+                rect: [sx, sy, w, h],
+                quad,
+                alpha: alpha.min(255) as u32,
+                mask,
+                blend: blend(words, image, alpha, true)?,
+            }));
         }
         return Ok(Some(Layer::Projected {
             image,
@@ -300,9 +321,14 @@ fn rotated_corners(
     origin: [i64; 2],
     size: [i64; 2],
     degrees: f32,
+    screen_scale: f32,
 ) -> [[f32; 2]; 4] {
-    rotated_local(scale, origin, size, degrees)
-        .map(|[x, y]| [x + position[0] - 0.5, y + position[1] - 0.5])
+    rotated_local(scale, origin, size, degrees).map(|[x, y]| {
+        [
+            (x + position[0]) * screen_scale - 0.5,
+            (y + position[1]) * screen_scale - 0.5,
+        ]
+    })
 }
 
 /// Local corners top-left, top-right, bottom-left, bottom-right: the scaled offsets from
@@ -361,6 +387,7 @@ fn solid_layer<'a>(
     words: &[u32; 22],
     position: [i64; 2],
     alpha: i64,
+    screen_scale: f32,
 ) -> Result<Option<Layer<'a>>, FormatError> {
     let [w, h] = [4, 5].map(|i| i64::from(words[i] as i16));
     if w <= 0 || h <= 0 || alpha <= 0 {
@@ -378,12 +405,18 @@ fn solid_layer<'a>(
     }
     let [b, g, r, _] = words[14].to_le_bytes();
     Ok(Some(Layer::Solid {
-        rect: [
-            position[0] - i64::from(words[6] as i16),
-            position[1] - i64::from(words[7] as i16),
-            w,
-            h,
-        ],
+        // Solid layers store covered pixel bounds. Match the native float vertex
+        // multiply followed by -0.5 before taking the integer pixel-center span.
+        rect: {
+            let [x, y] = [0, 1].map(|i| position[i] - i64::from(words[6 + i] as i16));
+            if screen_scale == 1.0 {
+                [x, y, w, h]
+            } else {
+                let [l, t, r, b] =
+                    [x, y, x + w, y + h].map(|v| (v as f32 * screen_scale - 0.5).ceil() as i64);
+                [l, t, r - l, b - t]
+            }
+        },
         color: [r, g, b],
         alpha: alpha.min(255) as u32,
         blend: if alpha >= 255 {
@@ -404,6 +437,7 @@ fn child_layer<'a>(
     parent_words: &[u32; 22],
     child: &'a SceneObject,
     words: &[u32; 22],
+    screen_scale: f32,
 ) -> Result<Option<Layer<'a>>, FormatError> {
     let image = child.image.as_ref().or_else(|| {
         parent
@@ -448,22 +482,51 @@ fn child_layer<'a>(
         None
     };
     match image {
-        Some(image) => image_layer(image, words, position, alpha, None, inherited),
+        Some(image) => image_layer(image, words, position, alpha, None, inherited, screen_scale),
         None if inherited.is_some() && words[4] as i16 > 0 && words[5] as i16 > 0 => {
             Err(FormatError("scaled solid child rendering is not verified"))
         }
-        None => solid_layer(words, position, alpha),
+        None => solid_layer(words, position, alpha, screen_scale),
     }
 }
 
-/// 0x14003b350 scales drawing by the device width (+24) over the logical width (+6256), or
-/// over the screen width (+8) while that is zero. Rendering uses the configured logical
-/// canvas; another per-object logical width would change the factor and remains rejected.
-fn unit_screen_scale(object: &SceneObject, screen: [u32; 2]) -> Result<(), FormatError> {
-    match object.logical_size[0] {
-        0 => Ok(()),
-        width if width == screen[0] => Ok(()),
-        _ => Err(FormatError("logical screen scaling is not modeled")),
+/// HASSAKU 0x140033d40 walks the parent chain while inheritance bit 0 is set,
+/// then divides the device width by that ancestor's logical width (zero = canvas).
+/// Its vertex builders apply this one factor to both axes, before the -0.5 offset.
+fn logical_screen_scale(
+    scene: &SceneHost,
+    object: &SceneObject,
+    parent_scale: Option<f32>,
+) -> Result<f32, FormatError> {
+    if !scene.allow_logical_screen_scale {
+        return match object.logical_size[0] {
+            0 => Ok(1.0),
+            width if width == scene.screen_size()[0] => Ok(1.0),
+            _ => Err(FormatError("logical screen scaling is not modeled")),
+        };
+    }
+    let factor = if object.flags & 1 != 0
+        && let Some(factor) = parent_scale
+    {
+        factor
+    } else {
+        let width = object.logical_size[0];
+        if width == 0 {
+            1.0
+        } else {
+            scene.screen_size()[0] as f32 / width as f32
+        }
+    };
+    Ok(factor)
+}
+
+fn require_unit_projection_scale(factor: f32) -> Result<(), FormatError> {
+    if factor == 1.0 {
+        Ok(())
+    } else {
+        Err(FormatError(
+            "logical screen scaling of camera projections is not modeled",
+        ))
     }
 }
 
@@ -720,6 +783,24 @@ fn shifted(layer: Layer<'_>, by: [i64; 2]) -> Layer<'_> {
                 blend,
             }
         }
+        Layer::ProjectedMasked {
+            image,
+            rect,
+            quad,
+            alpha,
+            mask,
+            blend,
+        } => {
+            let [x, y] = by.map(|v| v as f32);
+            Layer::ProjectedMasked {
+                image,
+                rect,
+                quad: [quad[0] + x, quad[1] + y, quad[2] + x, quad[3] + y],
+                alpha,
+                mask,
+                blend,
+            }
+        }
         Layer::Rotated {
             image,
             rect,
@@ -964,7 +1045,10 @@ pub fn prepare_scene<'a>(
         let Some(draw) = object.draw.as_ref().filter(|_| object.shown) else {
             continue;
         };
-        unit_screen_scale(object, scene.screen_size())?;
+        let parent_scale = parent
+            .map(|p| logical_screen_scale(scene, p, None))
+            .transpose()?;
+        let screen_scale = logical_screen_scale(scene, object, parent_scale)?;
         if object.secondary_image.is_some() && matches!(draw.words[0], 2 | 3) {
             return Err(FormatError(
                 "projected second texture rendering is not verified",
@@ -982,6 +1066,7 @@ pub fn prepare_scene<'a>(
         };
         match d[0] {
             2 | 3 => {
+                require_unit_projection_scale(screen_scale)?;
                 let cameras =
                     cameras.ok_or(FormatError("camera projection needs the camera state"))?;
                 let camera = cameras.camera((d[0] - 2) as usize).expect("camera exists");
@@ -1010,7 +1095,11 @@ pub fn prepare_scene<'a>(
                                 "nested projected children or child image replacement is not verified",
                             ));
                         }
-                        unit_screen_scale(child, scene.screen_size())?;
+                        require_unit_projection_scale(logical_screen_scale(
+                            scene,
+                            child,
+                            Some(screen_scale),
+                        )?)?;
                         // Bound this implementation to the observed inherited, attached image path.
                         if child.flags & 3 != 3 {
                             return Err(FormatError(
@@ -1055,11 +1144,13 @@ pub fn prepare_scene<'a>(
                 i64::from((d[17].wrapping_mul(d[21]) as i32) >> 8),
                 mask,
                 None,
+                screen_scale,
             )?,
             None => solid_layer(
                 d,
                 position,
                 i64::from((d[17].wrapping_mul(d[21]) as i32) >> 8),
+                screen_scale,
             )?,
         }
         .map(|layer| texture_operation(layer, draw.texture_subtract != 0))
@@ -1088,9 +1179,9 @@ pub fn prepare_scene<'a>(
                 if words[0] != d[0] || order(words) < 0.0 {
                     continue;
                 }
-                unit_screen_scale(child, scene.screen_size())?;
+                let child_scale = logical_screen_scale(scene, child, Some(screen_scale))?;
                 check_screen(words, scene.allow_screen_coordinates_one)?;
-                let Some(layer) = child_layer(object, d, child, words)? else {
+                let Some(layer) = child_layer(object, d, child, words, child_scale)? else {
                     continue;
                 };
                 let layer = texture_operation(
@@ -1350,8 +1441,9 @@ fn draw_projected<const WRAP: bool>(
     [sx, sy, w, h]: [i64; 4],
     [left, top, right, bottom]: [f32; 4],
     opacity: u32,
-    blend: Blend,
+    shading: (Blend, Option<&MaskTransition>),
 ) {
+    let (blend, mask) = shading;
     let step = [w as f32 / (right - left), h as f32 / (bottom - top)];
     let span = |from: f32, to: f32, limit: u32| {
         let limit = limit as f32;
@@ -1367,7 +1459,16 @@ fn draw_projected<const WRAP: bool>(
         for x in x0..x1 {
             let tx = sx as f32 + (x as f32 - left) * step[0] - 0.5;
             let texel = bilinear_address::<WRAP>(image, tx, ty);
-            let alpha = (u32::from(texel[3]) * opacity + 127) / 255;
+            let mut alpha = (u32::from(texel[3]) * opacity + 127) / 255;
+            if let Some(mask) = mask {
+                // The shared mask shader uses point sampling at floor(source UV).
+                let mw = i64::from(mask.mask.pixels.width());
+                let mh = i64::from(mask.mask.pixels.height());
+                let mx = ((tx + 0.5).floor() as i64).clamp(0, mw - 1);
+                let my = ((ty + 0.5).floor() as i64).clamp(0, mh - 1);
+                let green = mask.mask.pixels.pixels()[((my * mw + mx) * 4 + 1) as usize];
+                alpha = (alpha as f32 * mask.coverage(green)).round() as u32;
+            }
             let dst = ((y * i64::from(width) + x) * 4) as usize;
             put(
                 &mut pixels[dst..dst + 3],
@@ -1632,7 +1733,7 @@ fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
                 ],
                 quad,
                 alpha,
-                Blend::Alpha,
+                (Blend::Alpha, None),
             );
             return;
         }
@@ -1652,7 +1753,34 @@ fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
             alpha,
             blend,
         } => {
-            draw_projected::<false>(pixels, [width, height], image, rect, quad, alpha, blend);
+            draw_projected::<false>(
+                pixels,
+                [width, height],
+                image,
+                rect,
+                quad,
+                alpha,
+                (blend, None),
+            );
+            return;
+        }
+        Layer::ProjectedMasked {
+            image,
+            rect,
+            quad,
+            alpha,
+            mask,
+            blend,
+        } => {
+            draw_projected::<false>(
+                pixels,
+                [width, height],
+                image,
+                rect,
+                quad,
+                alpha,
+                (blend, Some(mask)),
+            );
             return;
         }
         Layer::Rotated {
@@ -1986,7 +2114,7 @@ mod scale_tests {
         for (scale, rotation) in [(2.0f32, 0), (1.0, 36000)] {
             words[18..20].fill(scale.to_bits());
             words[20] = rotation;
-            let layer = image_layer(&image, &words, [0, 0], 255, None, None)
+            let layer = image_layer(&image, &words, [0, 0], 255, None, None, 1.0)
                 .unwrap()
                 .unwrap();
             let side = (4.0 * scale) as u32;
@@ -2118,7 +2246,7 @@ mod scale_tests {
         let mut words = DrawState::default().words;
         words[4..8].copy_from_slice(&[2, 2, 1, 1]);
         words[18..20].copy_from_slice(&[1.5f32.to_bits(), 2.0f32.to_bits()]);
-        let layer = image_layer(&image, &words, [4, 5], 255, None, None)
+        let layer = image_layer(&image, &words, [4, 5], 255, None, None, 1.0)
             .unwrap()
             .unwrap();
         let Layer::Projected { quad, .. } = &layer else {
@@ -2131,10 +2259,196 @@ mod scale_tests {
         assert_eq!(&pixels[(3 * 8 + 5) * 4..(3 * 8 + 5) * 4 + 3], &[0, 0, 0]);
         words[18] = 0;
         assert!(
-            image_layer(&image, &words, [4, 5], 255, None, None)
+            image_layer(&image, &words, [4, 5], 255, None, None, 1.0)
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn hassaku_logical_width_scales_both_axes_and_survives_restore() {
+        let profile = crate::profile::Registry::builtin()
+            .profile("cmvs-20101211")
+            .unwrap();
+        let mut scene = SceneHost::for_profile(profile);
+        scene.set_screen_size(crate::viewport::ScreenSize::new([8, 4]).unwrap());
+        let mut draw = DrawState::default();
+        draw.words[4..6].copy_from_slice(&[12, 6]);
+        draw.words[14] = 0xffff_0000;
+        // Same 3:2 ratio as the real 1920x1080 object on a 1280x720 canvas.
+        // Height is deliberately unrelated: the native factor uses width only.
+        let object = SceneObject {
+            draw: Some(draw),
+            logical_size: [12, 99],
+            ..Default::default()
+        };
+        scene.restore(
+            Default::default(),
+            std::collections::BTreeMap::from([(29, object.clone())]),
+            None,
+            None,
+            None,
+            None,
+        );
+        let frame = render(&scene, 8, 4).unwrap();
+        assert!(
+            frame
+                .pixels()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| *p == [255, 0, 0, 255])
+        );
+        assert_eq!(scene.object(29), Some(&object));
+        for change in 0..3 {
+            let mut unknown = profile.clone();
+            match change {
+                0 => unknown.id = "uninspected".into(),
+                1 => {
+                    for binary in &mut unknown.binaries {
+                        binary.sha256 = [0; 32];
+                    }
+                }
+                _ => unknown.base = Some("uninspected".into()),
+            }
+            let mut rejected = SceneHost::for_profile(&unknown);
+            rejected.set_screen_size(crate::viewport::ScreenSize::new([8, 4]).unwrap());
+            rejected.restore(
+                Default::default(),
+                std::collections::BTreeMap::from([(29, object.clone())]),
+                None,
+                None,
+                None,
+                None,
+            );
+            assert!(render(&rejected, 8, 4).is_err());
+        }
+    }
+
+    #[test]
+    fn logical_image_vertices_scale_position_origin_and_extent_before_half_pixel() {
+        let image = image();
+        let mut words = DrawState::default().words;
+        words[4..8].copy_from_slice(&[2, 2, 1, 1]);
+        words[18..20].copy_from_slice(&[1.5f32.to_bits(), 2.0f32.to_bits()]);
+        let Layer::Projected { quad, .. } =
+            image_layer(&image, &words, [4, 5], 255, None, None, 0.5)
+                .unwrap()
+                .unwrap()
+        else {
+            panic!("logical quad")
+        };
+        assert_eq!(quad, [0.75, 1.0, 2.25, 3.0]);
+        words[18..20].fill(1.0f32.to_bits());
+        words[20] = 9000;
+        let Layer::Rotated { corners, .. } =
+            image_layer(&image, &words, [4, 5], 255, None, None, 0.5)
+                .unwrap()
+                .unwrap()
+        else {
+            panic!("logical rotated quad")
+        };
+        assert_eq!(corners, [[2.0, 1.5], [2.0, 2.5], [1.0, 1.5], [1.0, 2.5]]);
+        // Fractional solid edges use pixel centers, including negative coordinates.
+        words[20] = 0;
+        let Layer::Solid { rect, .. } = solid_layer(&words, [-1, 3], 255, 0.75).unwrap().unwrap()
+        else {
+            panic!("logical solid")
+        };
+        assert_eq!(rect, [-2, 1, 2, 2]);
+    }
+
+    #[test]
+    fn logical_scale_inheritance_uses_parent_factor_even_with_an_explicit_child_width() {
+        let profile = crate::profile::Registry::builtin()
+            .profile("cmvs-20101211")
+            .unwrap();
+        let mut scene = SceneHost::for_profile(profile);
+        scene.set_screen_size(crate::viewport::ScreenSize::new([8, 4]).unwrap());
+        let mut child = SceneObject {
+            logical_size: [4, 1],
+            flags: 3,
+            ..Default::default()
+        };
+        assert_eq!(
+            logical_screen_scale(&scene, &child, Some(0.5)).unwrap(),
+            0.5
+        );
+        child.flags = 2;
+        assert_eq!(
+            logical_screen_scale(&scene, &child, Some(0.5)).unwrap(),
+            2.0
+        );
+        child.logical_size[0] = 0;
+        assert_eq!(
+            logical_screen_scale(&scene, &child, Some(0.5)).unwrap(),
+            1.0
+        );
+        child.flags = 3;
+        child.logical_size[0] = 4;
+        let mut p = DrawState::default().words;
+        p[8..10].copy_from_slice(&[2, 4]);
+        let mut c = DrawState::default().words;
+        c[4..6].copy_from_slice(&[2, 2]);
+        c[8..10].copy_from_slice(&[1, 3]);
+        child.image = Some(image());
+        let Layer::Projected { quad, .. } =
+            child_layer(&SceneObject::default(), &p, &child, &c, 0.5)
+                .unwrap()
+                .unwrap()
+        else {
+            panic!("inherited logical quad")
+        };
+        assert_eq!(quad, [1.0, 3.0, 2.0, 4.0]);
+        assert!(require_unit_projection_scale(0.5).is_err());
+    }
+
+    #[test]
+    fn logical_mask_scales_geometry_and_keeps_source_space_mask_samples() {
+        let image = ObjectImage {
+            pixels: RgbaImage::new(2, 1, [255, 0, 0, 255].repeat(2)).unwrap(),
+            ..image()
+        };
+        let mask = MaskTransition {
+            put: true,
+            slot: 29,
+            ramp: 100,
+            width: 0,
+            elapsed: 50,
+            mask: ObjectImage {
+                pixels: RgbaImage::new(2, 1, vec![0, 0, 0, 255, 0, 255, 0, 255]).unwrap(),
+                ..image.clone()
+            },
+        };
+        let mut words = DrawState::default().words;
+        words[4..6].copy_from_slice(&[2, 1]);
+        let layer = image_layer(&image, &words, [0, 0], 180, Some(&mask), None, 2.0)
+            .unwrap()
+            .unwrap();
+        let packed = shader::shader_draw(&layer, [4, 2]);
+        assert_eq!(packed.flags(), shader::flags::MASK);
+        assert_eq!(packed.params[3], 1.0);
+        assert_eq!(
+            packed.params[8..16],
+            [0.0, 0.0, 4.0, 0.0, 0.0, 2.0, 4.0, 2.0]
+        );
+        assert_eq!(packed.textures[1], Some(&mask.mask.pixels));
+        for green in 0..256 {
+            assert_eq!(packed.params[24 + green], mask.coverage(green as u8));
+        }
+        let mut pixels = [0, 0, 0, 255].repeat(8);
+        // A transition shader also ignores the ordinary texture subtraction stage.
+        draw(&mut pixels, 4, 2, texture_operation(layer, true));
+        for y in 0..2 {
+            for x in 0..4 {
+                let green = if x < 2 { 0 } else { 255 };
+                let red = (180.0 * mask.coverage(green)).round() as u8;
+                assert_eq!(
+                    &pixels[(y * 4 + x) * 4..(y * 4 + x + 1) * 4],
+                    &[red, 0, 0, 255]
+                );
+            }
+        }
     }
 
     #[test]
@@ -2150,7 +2464,8 @@ mod scale_tests {
             ..SceneObject::default()
         };
         let parent = SceneObject::default();
-        let Layer::Projected { quad, .. } = child_layer(&parent, &p, &child, &c).unwrap().unwrap()
+        let Layer::Projected { quad, .. } =
+            child_layer(&parent, &p, &child, &c, 1.0).unwrap().unwrap()
         else {
             panic!("inherited quad")
         };
@@ -2168,12 +2483,12 @@ mod scale_tests {
         words[18] = 1.5f32.to_bits();
         words[4..6].fill(2);
         assert!(check(&words, false).is_ok());
-        assert!(solid_layer(&words, [0, 0], 255).is_err());
+        assert!(solid_layer(&words, [0, 0], 255, 1.0).is_err());
         words[20] = 1;
         assert!(check(&words, false).is_ok());
         assert!(check(&words, true).is_ok());
         words[18] = 1.0f32.to_bits();
-        assert!(solid_layer(&words, [0, 0], 255).is_err());
+        assert!(solid_layer(&words, [0, 0], 255, 1.0).is_err());
     }
 
     #[test]
@@ -2203,7 +2518,7 @@ mod scale_tests {
         let mut words = DrawState::default().words;
         words[4..6].copy_from_slice(&[2, 1]);
         words[20] = 9000;
-        let layer = image_layer(&image, &words, [4, 5], 255, None, None)
+        let layer = image_layer(&image, &words, [4, 5], 255, None, None, 1.0)
             .unwrap()
             .unwrap();
         let Layer::Rotated { corners, .. } = &layer else {
@@ -2242,10 +2557,10 @@ mod scale_tests {
             elapsed: 0,
             mask: image.clone(),
         };
-        assert!(image_layer(&image, &words, [0, 0], 255, Some(&mask), None).is_err());
+        assert!(image_layer(&image, &words, [0, 0], 255, Some(&mask), None, 1.0).is_err());
         words[18] = 0;
         assert!(
-            image_layer(&image, &words, [0, 0], 255, None, None)
+            image_layer(&image, &words, [0, 0], 255, None, None, 1.0)
                 .unwrap()
                 .is_none()
         );

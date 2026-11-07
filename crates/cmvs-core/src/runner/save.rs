@@ -156,7 +156,7 @@ fn decode_bmp(bytes: &[u8]) -> Result<RgbaImage, &'static str> {
 }
 
 /// Command inheritance does not establish the wire format of gameplay snapshots.
-/// The independently inspected 20110525/20120309/20130131/20140217/20150405 subsets use text v2;
+/// The independently inspected 20101211/20110525/20120309/20130131/20140217/20150405 subsets use text v2;
 /// 20171114 uses v3, and 20190305/20190405/20211006/20221105 use text v3 with scene v4
 /// (docs/games/{aoitori,realive,seishunf,kunado,hapymaher_re}). Effect configurations have an independent
 /// build binding; unknown image, collision-mesh and effect records remain rejected.
@@ -200,6 +200,9 @@ fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLa
     }
     if profile.is_inspected_20080719() || profile.is_inspected_20080903() {
         return Some(SnapshotLayout::TextV1SceneV2);
+    }
+    if profile.is_inspected_20101211() {
+        return Some(SnapshotLayout::TextV2);
     }
     if (matches!(
         profile.id.as_str(),
@@ -342,22 +345,29 @@ fn effect_state_supported(
 
 /// Writers 20110525 0x1400332e0, 20120309 0x140033e60, 20130131 0x1400330b0
 /// and 20140217 0x1400375d0 visit 512 children.
-/// Button-list records are absent or not enabled for these four builds.
-fn validate_512_child_slots_without_button_lists<'a>(
+/// HASSAKU 0x140033000 visits 256. Button-list records are absent or not enabled
+/// for these builds.
+fn validate_child_slots_without_button_lists<'a>(
     scenes: impl Iterator<Item = &'a SavedScene>,
     has_button_lists: bool,
+    capacity: u16,
 ) -> Result<(), Box<dyn Error>> {
-    fn scene_supported(scene: &SavedScene) -> bool {
+    fn scene_supported(scene: &SavedScene, capacity: u16) -> bool {
         scene
             .children
             .iter()
-            .all(|(&slot, child)| slot < 512 && scene_supported(child))
+            .all(|(&slot, child)| slot < capacity && scene_supported(child, capacity))
     }
     if has_button_lists {
         return Err("button-list snapshot records are not supported for this build".into());
     }
-    if !scenes.into_iter().all(scene_supported) {
-        return Err("snapshot child slot exceeds this build's 512-entry table".into());
+    if !scenes
+        .into_iter()
+        .all(|scene| scene_supported(scene, capacity))
+    {
+        return Err(
+            format!("snapshot child slot exceeds this build's {capacity}-entry table").into(),
+        );
     }
     Ok(())
 }
@@ -392,16 +402,24 @@ impl Startup<'_> {
                 return Err(format!("old snapshot record {tag:#x} is not implemented").into());
             }
         }
-        if matches!(
-            self.gate.selection().profile.id.as_str(),
-            "cmvs-20110525" | "cmvs-20120309" | "cmvs-20130131" | "cmvs-20140217"
-        ) {
-            validate_512_child_slots_without_button_lists(
+        let profile = self.gate.selection().profile;
+        if profile.is_inspected_20101211()
+            || matches!(
+                profile.id.as_str(),
+                "cmvs-20110525" | "cmvs-20120309" | "cmvs-20130131" | "cmvs-20140217"
+            )
+        {
+            validate_child_slots_without_button_lists(
                 snapshot
                     .objects
                     .values()
                     .chain(snapshot.windows.iter().flatten().map(|w| &w.scene)),
                 snapshot.raw_objects.keys().any(|&(tag, _)| tag == 0x8c8),
+                if profile.is_inspected_20101211() {
+                    256
+                } else {
+                    512
+                },
             )?;
         }
         Ok(())
@@ -1245,6 +1263,7 @@ mod layout_tests {
             ("cmvs-20080719", SnapshotLayout::TextV1SceneV2),
             ("cmvs-20080903", SnapshotLayout::TextV1SceneV2),
             ("cmvs-20090815", SnapshotLayout::TextV1SceneV2Collision),
+            ("cmvs-20101211", SnapshotLayout::TextV2),
             ("cmvs-20110525", SnapshotLayout::TextV2),
             ("cmvs-20120309", SnapshotLayout::TextV2),
             ("cmvs-20130131", SnapshotLayout::TextV2),
@@ -1313,6 +1332,7 @@ mod layout_tests {
             "cmvs-20071117",
             "cmvs-20080719",
             "cmvs-20080903",
+            "cmvs-20101211",
             "cmvs-20120309",
             "cmvs-20211006",
             "cmvs-20221105",
@@ -1327,22 +1347,35 @@ mod layout_tests {
     }
 
     #[test]
-    fn snapshot_with_512_child_slots_rejects_button_lists_and_out_of_range_nested_children() {
-        let leaf = SavedScene::from_object(&SceneObject::default()).unwrap();
-        let mut parent = leaf.clone();
-        parent.children.insert(511, leaf.clone());
-        assert!(
-            validate_512_child_slots_without_button_lists(std::iter::once(&parent), false).is_ok()
-        );
-        assert!(
-            validate_512_child_slots_without_button_lists(std::iter::once(&parent), true).is_err()
-        );
-        let mut nested = leaf.clone();
-        nested.children.insert(512, leaf);
-        parent.children.insert(0, nested);
-        assert!(
-            validate_512_child_slots_without_button_lists(std::iter::once(&parent), false).is_err()
-        );
+    fn snapshot_child_capacity_rejects_button_lists_and_out_of_range_nested_children() {
+        for capacity in [256, 512] {
+            let leaf = SavedScene::from_object(&SceneObject::default()).unwrap();
+            let mut parent = leaf.clone();
+            parent.children.insert(capacity - 1, leaf.clone());
+            assert!(
+                validate_child_slots_without_button_lists(
+                    std::iter::once(&parent),
+                    false,
+                    capacity
+                )
+                .is_ok()
+            );
+            assert!(
+                validate_child_slots_without_button_lists(std::iter::once(&parent), true, capacity)
+                    .is_err()
+            );
+            let mut nested = leaf.clone();
+            nested.children.insert(capacity, leaf);
+            parent.children.insert(0, nested);
+            assert!(
+                validate_child_slots_without_button_lists(
+                    std::iter::once(&parent),
+                    false,
+                    capacity
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]

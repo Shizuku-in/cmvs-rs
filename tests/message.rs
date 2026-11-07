@@ -1107,6 +1107,43 @@ fn legacy_text_creation_reselects_named_and_default_faces_only_for_the_inspected
 }
 
 #[test]
+fn hassaku_named_fonts_keep_the_twelve_slot_text_table() {
+    let profile = cmvs_rs::profile::Registry::builtin()
+        .profile("cmvs-20101211")
+        .unwrap();
+    for index in [8, 11, 12] {
+        let mut code = vec![];
+        call(&mut code, 0x2100, &[196, 1, index]);
+        let script = script_with_text(&code, b"\0MS Gothic\0");
+        let mut vm = Machine::new(&script).unwrap();
+        let mut messages = MessageHost::for_profile(profile);
+        pending(&mut vm);
+        assert_eq!(messages.shared_message(&mut vm).is_ok(), index < 12);
+        if index < 12 {
+            assert_eq!(
+                messages.text(index as usize).unwrap().face.as_ref(),
+                b"MS Gothic"
+            );
+            assert_eq!(vm.stack().len_bytes(), 0);
+        } else {
+            assert_eq!(vm.stack().len_bytes(), 12);
+        }
+    }
+    let mut changed = profile.clone();
+    for binary in &mut changed.binaries {
+        binary.sha256 = [0; 32];
+    }
+    let mut messages = MessageHost::for_profile(&changed);
+    let mut code = vec![];
+    call(&mut code, 0x2100, &[196, 1, 11]);
+    let script = script_with_text(&code, b"\0MS Gothic\0");
+    let mut vm = Machine::new(&script).unwrap();
+    pending(&mut vm);
+    assert!(messages.shared_message(&mut vm).is_err());
+    assert_eq!(vm.stack().len_bytes(), 12);
+}
+
+#[test]
 fn standalone_text_creation_rejects_unmodeled_arguments_atomically() {
     // Index 12, negative index, a named face, an unverified capacity, a window's text.
     for (words, window) in [

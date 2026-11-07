@@ -151,6 +151,7 @@ impl SharedSequence for SequenceHost {
                         scene,
                         images,
                         camera: None,
+                        messages: None,
                     }),
                 }),
                 ..Default::default()
@@ -174,6 +175,7 @@ impl SharedSequence for SequenceHost {
                         scene,
                         images,
                         camera: Some(camera),
+                        messages: None,
                     }),
                 }),
                 ..Default::default()

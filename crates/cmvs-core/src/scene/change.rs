@@ -279,10 +279,31 @@ impl SceneHost {
         pc: usize,
         opcode: u16,
     ) -> Result<Option<PreparedChange>, Box<dyn Error>> {
+        self.objects
+            .get(&slot)
+            .map(|old| old.prepare_image_change(name, duration, images, pc, opcode))
+            .transpose()
+    }
+
+    pub(crate) fn commit_image_change(&mut self, slot: u8, prepared: PreparedChange) {
+        self.objects
+            .get_mut(&slot)
+            .expect("validated slot")
+            .commit_image_change(prepared);
+    }
+}
+
+impl SceneObject {
+    pub(crate) fn prepare_image_change(
+        &self,
+        name: &[u8],
+        duration: u32,
+        images: &mut dyn ImageSource,
+        pc: usize,
+        opcode: u16,
+    ) -> Result<PreparedChange, Box<dyn Error>> {
         let fail = |why| error(pc, opcode, why);
-        let Some(old) = self.objects.get(&slot) else {
-            return Ok(None);
-        };
+        let old = self;
         if old.secondary_image.is_some() {
             return Err(
                 fail("replacement of an object with a second texture is not verified").into(),
@@ -342,22 +363,22 @@ impl SceneHost {
         } else {
             None
         };
-        Ok(Some(PreparedChange {
+        Ok(PreparedChange {
             image,
             draw,
             common,
             duration,
-        }))
+        })
     }
 
-    pub(crate) fn commit_image_change(&mut self, slot: u8, prepared: PreparedChange) {
+    pub(crate) fn commit_image_change(&mut self, prepared: PreparedChange) {
         let PreparedChange {
             image,
             mut draw,
             common,
             duration,
         } = prepared;
-        let mut previous = self.objects.remove(&slot).expect("validated slot");
+        let mut previous = std::mem::take(self);
         previous.cancel_change();
         let old_draw = previous.draw.as_mut().expect("validated draw");
         draw.scale_motion = old_draw.scale_motion.take();
@@ -381,7 +402,7 @@ impl SceneHost {
                 elapsed: 0,
             }));
         }
-        self.objects.insert(slot, replacement);
+        *self = replacement;
     }
 }
 

@@ -4,7 +4,7 @@
 //! start/stop/finish lifecycle, image replacement and XYZ motion entries are modeled; other actions stay unhandled.
 use crate::{
     camera::CameraHost, dispatch::Call, evaluate::error, image::ImageSource, machine::Machine,
-    scene::SceneHost,
+    message::MessageHost, scene::SceneHost,
 };
 use std::error::Error;
 
@@ -32,6 +32,13 @@ pub enum SequenceEntry {
     },
     Wait {
         duration: u32,
+    },
+    /// Type 5/subtype 0: replace a child of message window 0.
+    ReplaceWindowImage {
+        child: u32,
+        name: Vec<u8>,
+        duration: u32,
+        pc: usize,
     },
     /// Type 3/subtype 0; the owned name is captured at append, not at execution.
     ReplaceImage {
@@ -83,6 +90,7 @@ pub struct SequenceContext<'a> {
     pub scene: &'a mut SceneHost,
     pub images: &'a mut dyn ImageSource,
     pub camera: Option<&'a mut CameraHost>,
+    pub messages: Option<&'a mut MessageHost>,
 }
 
 impl SequenceHost {
@@ -133,7 +141,19 @@ impl SequenceHost {
         camera: &mut CameraHost,
     ) -> Result<(), Box<dyn Error>> {
         self.clock = self.clock.wrapping_add(delta);
-        self.run_with_camera(false, scene, images, Some(camera))
+        self.run_with_camera(false, scene, images, Some(camera), None)
+    }
+
+    pub(crate) fn advance_frame_with_windows(
+        &mut self,
+        delta: u32,
+        scene: &mut SceneHost,
+        images: &mut dyn ImageSource,
+        camera: &mut CameraHost,
+        messages: &mut MessageHost,
+    ) -> Result<(), Box<dyn Error>> {
+        self.clock = self.clock.wrapping_add(delta);
+        self.run_with_camera(false, scene, images, Some(camera), Some(messages))
     }
 
     fn run_images(
@@ -142,7 +162,7 @@ impl SequenceHost {
         scene: &mut SceneHost,
         images: &mut dyn ImageSource,
     ) -> Result<(), Box<dyn Error>> {
-        self.run_with_camera(finish, scene, images, None)
+        self.run_with_camera(finish, scene, images, None, None)
     }
 
     fn run_with_camera(
@@ -151,6 +171,7 @@ impl SequenceHost {
         scene: &mut SceneHost,
         images: &mut dyn ImageSource,
         mut camera: Option<&mut CameraHost>,
+        mut messages: Option<&mut MessageHost>,
     ) -> Result<(), Box<dyn Error>> {
         self.run(finish, |entry, finish| {
             match entry {
@@ -164,6 +185,23 @@ impl SequenceHost {
                         .as_deref_mut()
                         .ok_or_else(|| error(*pc, 0x2287, "camera sequence needs a camera host"))?;
                     camera.sequence_move(*xyz, *mode, *duration, finish, *pc)?;
+                }
+                SequenceEntry::ReplaceWindowImage {
+                    child,
+                    name,
+                    duration,
+                    pc,
+                } => {
+                    let messages = messages.as_deref_mut().ok_or_else(|| {
+                        error(*pc, 0x228b, "window image sequence needs message windows")
+                    })?;
+                    messages.sequence_image_change(
+                        *child,
+                        name,
+                        if finish { 0 } else { *duration },
+                        images,
+                        *pc,
+                    )?;
                 }
                 SequenceEntry::ReplaceImage {
                     slot: raw,
@@ -258,6 +296,7 @@ impl SequenceHost {
                 scene,
                 images,
                 camera: None,
+                messages: None,
             }),
         )?;
         Ok(true)
@@ -279,6 +318,7 @@ impl SequenceHost {
                 scene,
                 images,
                 camera: Some(camera),
+                messages: None,
             }),
         )?;
         Ok(true)
@@ -334,7 +374,7 @@ impl SequenceHost {
             }
             return Ok(());
         }
-        if command == 0x288 {
+        if matches!(command, 0x288 | 0x28b) {
             let mut args = [0; 3];
             for (i, arg) in args.iter_mut().enumerate() {
                 *arg = call.argument((i + 1) * 4, argument_names(command)[i])?;
@@ -342,13 +382,27 @@ impl SequenceHost {
             let name = call.vm.resolve_string(args[1])?;
             let entry = if self.header.count < SEQUENCE_ENTRIES as u32 {
                 if name.len() >= 64 {
-                    return Err(error(pc, 0x2288, "sequence image name exceeds 63 bytes").into());
+                    return Err(error(
+                        pc,
+                        command + 0x2000,
+                        "sequence image name exceeds 63 bytes",
+                    )
+                    .into());
                 }
-                Some(SequenceEntry::ReplaceImage {
-                    slot: args[0],
-                    name,
-                    duration: args[2],
-                    pc,
+                Some(if command == 0x28b {
+                    SequenceEntry::ReplaceWindowImage {
+                        child: args[0],
+                        name,
+                        duration: args[2],
+                        pc,
+                    }
+                } else {
+                    SequenceEntry::ReplaceImage {
+                        slot: args[0],
+                        name,
+                        duration: args[2],
+                        pc,
+                    }
                 })
             } else {
                 None
@@ -372,7 +426,13 @@ impl SequenceHost {
         }
         if command == 0x284 {
             if let Some(context) = context {
-                self.run_with_camera(true, context.scene, context.images, context.camera)?;
+                self.run_with_camera(
+                    true,
+                    context.scene,
+                    context.images,
+                    context.camera,
+                    context.messages,
+                )?;
             } else {
                 self.run(true, missing_scene)?;
             }
@@ -417,6 +477,7 @@ fn argument_names(command: u16) -> &'static [&'static str] {
     match command {
         0x287 => &["mode", "x", "y", "z", "duration"],
         0x288 => &["object slot", "image name", "duration"],
+        0x28b => &["window child", "image name", "duration"],
         0x289 | 0x28a => &["object slot", "x", "y", "z", "mode", "duration"],
         _ => unreachable!("registered sequence argument schema"),
     }
@@ -439,6 +500,9 @@ fn missing_scene(entry: &SequenceEntry, finish: bool) -> Result<(), Box<dyn Erro
             "motion sequence needs scene",
         )
         .into()),
+        SequenceEntry::ReplaceWindowImage { pc, .. } => {
+            Err(error(*pc, 0x228b, "window image sequence needs message windows").into())
+        }
         SequenceEntry::ReplaceImage { pc, .. } => {
             Err(error(*pc, 0x2288, "image sequence needs scene and image source").into())
         }
@@ -488,11 +552,24 @@ impl SequenceHost {
                     name,
                     duration,
                     ..
+                })
+                | Some(SequenceEntry::ReplaceWindowImage {
+                    child: slot,
+                    name,
+                    duration,
+                    ..
                 }) => {
                     if name.len() >= 64 {
                         return Err("sequence image name exceeds its field");
                     }
-                    put(0, 3);
+                    put(
+                        0,
+                        if matches!(entry, Some(SequenceEntry::ReplaceWindowImage { .. })) {
+                            5
+                        } else {
+                            3
+                        },
+                    );
                     put(8, *slot);
                     put(76, *duration);
                     raw[12..12 + name.len()].copy_from_slice(name);
@@ -547,6 +624,12 @@ impl SequenceHost {
             *entry = match (at(0), at(4)) {
                 (0, _) if raw.iter().all(|&b| b == 0) => None,
                 (1, 0) => Some(SequenceEntry::Wait { duration: at(76) }),
+                (5, 0) if name.len() < 64 => Some(SequenceEntry::ReplaceWindowImage {
+                    child: at(8),
+                    name: name.to_vec(),
+                    duration: at(76),
+                    pc: 0,
+                }),
                 (3, 0) => Some(SequenceEntry::ReplaceImage {
                     slot: at(8),
                     name: name.to_vec(),
@@ -582,6 +665,153 @@ impl SequenceHost {
 #[cfg(test)]
 mod motion_snapshot_tests {
     use super::*;
+    #[test]
+    fn window_sequence_defers_io_retries_failures_and_finishes_without_a_transition() {
+        use crate::{
+            message::MessageWindow,
+            raster::RgbaImage,
+            scene::{DrawState, ObjectImage, SceneObject},
+        };
+        struct Source {
+            reads: usize,
+            fail: bool,
+        }
+        impl ImageSource for Source {
+            fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+                assert_eq!(name, b"new.pb3");
+                self.reads += 1;
+                if self.fail {
+                    return Err("synthetic resource failure".into());
+                }
+                let mut raw = vec![0; 112];
+                raw[..4].copy_from_slice(b"PB3B");
+                raw[28] = 7;
+                raw[30] = 1;
+                raw[32] = 1;
+                raw[34] = 32;
+                raw[56] = 1;
+                raw[61..65].copy_from_slice(&[1, 2, 3, 255]);
+                let n = raw.len();
+                for i in 0..44 {
+                    raw[8 + i] = raw[8 + i].wrapping_add(raw[n - 47 + i]) ^ raw[n - 3 + i % 2];
+                }
+                Ok(Some(raw))
+            }
+        }
+        let object = SceneObject {
+            draw: Some(DrawState::default()),
+            image: Some(ObjectImage {
+                filter: None,
+                name: b"old.pb3".to_vec(),
+                pixels: RgbaImage::new(1, 1, vec![9, 8, 7, 255]).unwrap(),
+                alpha: true,
+                surface: false,
+            }),
+            ..Default::default()
+        };
+        for child in [u32::MAX, 255, 256] {
+            let mut parent = object.clone();
+            parent.children.insert(255, object.clone());
+            parent.flags |= 0x8000_0000;
+            let mut windows = std::array::from_fn(|_| None);
+            windows[0] = Some(MessageWindow {
+                text: 0,
+                visible: true,
+                hidden: false,
+                position: [0; 2],
+                switch_positions: [[0; 2]; 2],
+                size: [1; 2],
+                cursor_mode: 0,
+                cursor_offset: [0; 2],
+                position_switch: false,
+                object: parent,
+                buttons: Default::default(),
+                pressed_button: -1,
+                switch_state: 0,
+            });
+            let mut messages = MessageHost::for_profile(
+                crate::profile::Registry::builtin()
+                    .profile("cmvs-20101211")
+                    .unwrap(),
+            );
+            messages.restore(Default::default(), windows);
+            let mut host = SequenceHost::default();
+            host.header.active = 1;
+            host.header.count = 2;
+            host.entries[0] = Some(SequenceEntry::Wait { duration: 30 });
+            host.entries[1] = Some(SequenceEntry::ReplaceWindowImage {
+                child,
+                name: b"new.pb3".to_vec(),
+                duration: 100,
+                pc: 0,
+            });
+            let bytes = host.saved().unwrap();
+            let mut restored = SequenceHost::default();
+            restored.restore(&bytes).unwrap();
+            assert_eq!(restored.entries, host.entries);
+            assert_eq!(restored.saved().unwrap(), bytes);
+            let mut source = Source {
+                reads: 0,
+                fail: true,
+            };
+            let mut scene = SceneHost::default();
+            let mut camera = CameraHost::default();
+            host.advance_frame_with_windows(
+                29,
+                &mut scene,
+                &mut source,
+                &mut camera,
+                &mut messages,
+            )
+            .unwrap();
+            assert_eq!(source.reads, 0);
+            let before = messages.window(0).unwrap().clone();
+            let result = host.advance_frame_with_windows(
+                1,
+                &mut scene,
+                &mut source,
+                &mut camera,
+                &mut messages,
+            );
+            assert_eq!(result.is_ok(), child == 256);
+            assert_eq!(messages.window(0), Some(&before));
+            if child == 256 {
+                assert_eq!(source.reads, 0);
+                continue;
+            }
+            assert_eq!(host.header.index, 1);
+            source.fail = false;
+            host.advance_frame_with_windows(0, &mut scene, &mut source, &mut camera, &mut messages)
+                .unwrap();
+            let target = |m: &MessageHost| {
+                let object = &m.window(0).unwrap().object;
+                if child == u32::MAX {
+                    object.clone()
+                } else {
+                    object.children[&255].clone()
+                }
+            };
+            assert_eq!(
+                target(&messages).image.as_ref().unwrap().pixels.pixels(),
+                &[3, 2, 1, 255]
+            );
+            assert!(target(&messages).change.is_some());
+            messages.advance_frame(100);
+            assert!(target(&messages).change.is_none());
+            host.header.active = 1;
+            host.header.index = 1;
+            host.run_with_camera(
+                true,
+                &mut scene,
+                &mut source,
+                Some(&mut camera),
+                Some(&mut messages),
+            )
+            .unwrap();
+            assert!(target(&messages).change.is_none());
+            assert_eq!(host.header.active, 0);
+        }
+    }
     #[test]
     fn camera_sequence_entry_round_trips_raw_parameters() {
         let mut host = SequenceHost::default();

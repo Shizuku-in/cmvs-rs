@@ -15,6 +15,63 @@ mod window_cases;
 use support::bytecode::{command, pending};
 use window_cases::{cases, image_bytes, setup};
 
+#[test]
+fn hassaku_window_scale_preserves_raw_words_and_rejects_missing_targets_atomically() {
+    let profile = cmvs_rs::profile::Registry::builtin()
+        .profile("cmvs-20101211")
+        .unwrap();
+    let semantics = profile.semantics(0x18b);
+    assert!(matches!(semantics, Semantics::Variant(_)));
+    assert!(!dispatch::ROOT.iter().any(|entry| entry.command == 0x18b));
+    for child in [u32::MAX, 16] {
+        let mut windows = Windows::default();
+        windows.setup();
+        let mut code = vec![];
+        command(&mut code, 0x218b, &[0, child, 0x8000_0000, 0x7fc0_1234]);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        vm.state_mut().set_system_integer(0, 77).unwrap();
+        pending(&mut vm);
+        let before = windows.messages.window(0).unwrap().object.clone();
+        assert_eq!(
+            dispatch::run(semantics, &mut vm, &mut windows.hosts(Capability::Windows)).unwrap(),
+            Some(Flow::Done)
+        );
+        let mut expected = before;
+        let target = if child == u32::MAX {
+            &mut expected
+        } else {
+            expected.children.get_mut(&16).unwrap()
+        };
+        target.draw.as_mut().unwrap().words[18..20].copy_from_slice(&[0x8000_0000, 0x7fc0_1234]);
+        assert_eq!(windows.messages.window(0).unwrap().object, expected);
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.state().system_integer(0), Some(77));
+    }
+    for args in [
+        vec![1, u32::MAX, 1, 2],
+        vec![0, 255, 1, 2],
+        vec![0, 256, 1, 2],
+        vec![0, u32::MAX, 1],
+    ] {
+        let mut windows = Windows::default();
+        windows.setup();
+        let mut code = vec![];
+        command(&mut code, 0x218b, &args);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        pending(&mut vm);
+        let before = windows.snapshot();
+        let pending = vm.pending_system();
+        assert!(
+            dispatch::run(semantics, &mut vm, &mut windows.hosts(Capability::Windows)).is_err()
+        );
+        assert_eq!(windows.snapshot(), before);
+        assert_eq!(vm.pending_system(), pending);
+        assert_eq!(vm.stack().len_bytes(), args.len() * 4);
+    }
+}
+
 fn bytes(code: &[u8]) -> Vec<u8> {
     let text = b"\0a.pb3\0";
     let mut raw = b"PS2A".to_vec();

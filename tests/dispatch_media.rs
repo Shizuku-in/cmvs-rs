@@ -110,6 +110,7 @@ impl State {
                         scene: &mut self.scene,
                         images: &mut self.source,
                         camera: Some(&mut self.camera),
+                        messages: None,
                     }),
                 })
             }

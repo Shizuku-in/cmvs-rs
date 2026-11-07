@@ -1421,6 +1421,7 @@ fn root_sequence(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow,
         scene: &mut *c.scene,
         images: &mut *c.images,
         camera: c.camera.as_deref_mut(),
+        messages: c.messages.as_deref_mut(),
     });
     h.host.handle(call, context)?;
     Ok(Flow::Done)
@@ -1479,6 +1480,7 @@ fn root_movie_player(
 }
 pub fn uses_sequence(command: u16) -> bool {
     ROOT.iter()
+        .chain(SEQUENCE_WINDOW_IMAGE.iter())
         .any(|e| e.command == command && e.capability == Capability::Sequence)
 }
 pub fn uses_movie_scene(command: u16) -> bool {
@@ -5565,6 +5567,20 @@ pub static DRAW_QUERY: &[Entry] = &[Entry {
     },
 }];
 
+pub static SEQUENCE_WINDOW_IMAGE: &[Entry] = &[Entry {
+    command: 0x28b,
+    name: "append window image replacement",
+    capability: Capability::Sequence,
+    handler: root_sequence,
+}];
+
+pub static WINDOW_DRAW_SCALE: &[Entry] = &[Entry {
+    command: 0x18b,
+    name: "window draw scale",
+    capability: Capability::Windows,
+    handler: root_windows,
+}];
+
 pub static WINDOW_CHILD_IMAGE: &[Entry] = &[Entry {
     command: 0x176,
     name: "window child image",
@@ -5851,6 +5867,8 @@ pub static VARIANT_TABLES: &[&[Entry]] = &[
     WINDOW_FULL_MOVE,
     LEGACY_EFFECTS,
     WINDOW_CHILD_IMAGE,
+    WINDOW_DRAW_SCALE,
+    SEQUENCE_WINDOW_IMAGE,
     DRAW_QUERY,
     CAMERA_MOVE_X,
     MOVIE_CONTROL,
@@ -5892,6 +5910,8 @@ pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'st
         crate::profile::VariantId::WindowFullMove => WINDOW_FULL_MOVE,
         crate::profile::VariantId::LegacyEffects => LEGACY_EFFECTS,
         crate::profile::VariantId::WindowChildImage => WINDOW_CHILD_IMAGE,
+        crate::profile::VariantId::WindowDrawScale => WINDOW_DRAW_SCALE,
+        crate::profile::VariantId::SequenceWindowImage => SEQUENCE_WINDOW_IMAGE,
         crate::profile::VariantId::DrawQuery => DRAW_QUERY,
         crate::profile::VariantId::CameraMoveX => CAMERA_MOVE_X,
         crate::profile::VariantId::MovieControl => MOVIE_CONTROL,
@@ -5935,6 +5955,8 @@ pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
         Semantics::Variant(crate::profile::VariantId::WindowFullMove) => "variant unscaled fullscreen origin",
         Semantics::Variant(crate::profile::VariantId::LegacyEffects) => "variant legacy effect slots",
         Semantics::Variant(crate::profile::VariantId::WindowChildImage) => "variant window child image",
+        Semantics::Variant(crate::profile::VariantId::WindowDrawScale) => "variant window draw scale",
+        Semantics::Variant(crate::profile::VariantId::SequenceWindowImage) => "variant sequence window image",
         Semantics::Variant(crate::profile::VariantId::DrawQuery) => "variant object draw query",
         Semantics::Variant(crate::profile::VariantId::CameraMoveX) => "variant camera X move",
         Semantics::Variant(crate::profile::VariantId::MovieControl) => "variant scene movie control",

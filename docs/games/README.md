@@ -8,7 +8,7 @@
 | [《明日の七海と逢うために〜明日の君と逢うために〜FAN DISC》 / asunana](asunana/README.md) | `2008-10-24_ASUNANA` | 基本游玩接入；四轮解锁收敛、存读档与绘制检查通过 |
 | [《メモリア》 / memoria](memoria/README.md) | `2009-08-28_MEMORIA` | 初步接入：首次启动路线经 `snky`/`snha` 回标题，R1/D1、I1–I4 与 V1–V4 通过；其他路线与原生音画待验证 |
 | [《夏に奏でる僕らの詩》 / natsuuta](natsuuta/README.md) | `2010-03-26_NATSUUTA` | 仅基础档案，尚未适配运行 |
-| [《初恋サクラメント》 / hassaku](hassaku/README.md) | `2010-12-24_HASSAKU` | 仅基础档案，尚未适配运行 |
+| [《初恋サクラメント》 / hassaku](hassaku/README.md) | `2010-12-24_HASSAKU` | 首选链经 7 个选择点回标题，标题/输入/存读档与部分设置通过；18 个分支前缀及原生音画待验证 |
 | [《未来ノスタルジア》 / miranosu](miranosu/README.md) | `2011-09-02_MIRANOSU` | 16 条探索路线回标题，存读档通过；仍有 42 个分支前缀待探索 |
 | [《しあわせ家族部》 / kazokubu](kazokubu/README.md) | `2012-05-25_KAZOKUBU` | 首选路线回标题，存读档通过；仍有 6 个分支前缀待探索 |
 | [《ハピメア》 / hapymaher](hapymaher/README.md) | `2013-02-28_HAPYMAHER` | 4 条选择链回标题，存读档通过；仍有 37 个分支前缀待探索 |

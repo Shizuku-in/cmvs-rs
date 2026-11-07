@@ -1037,6 +1037,7 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
     assert_eq!(hapymaher.count(CommandStatus::Unreviewed), 639);
     assert_eq!(hapymaher.status(0x3a0), CommandStatus::Absent);
     for (profile, cases, handlers, noops) in [
+        (registry.profile("cmvs-20101211").unwrap(), 864, 597, 267),
         (miranosu, 864, 614, 250),
         (kazokubu, 864, 620, 244),
         (base, 976, 721, 255),
@@ -1078,6 +1079,7 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
             ("harouse", "cmvs-20080719", None),
             ("asunana", "cmvs-20080903", None),
             ("memoria", "cmvs-20090815", None),
+            ("hassaku", "cmvs-20101211", None),
             ("miranosu", "cmvs-20110525", None),
             ("kazokubu", "cmvs-20120309", None),
             ("hapymaher", "cmvs-20130131", None),

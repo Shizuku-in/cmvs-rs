@@ -53,6 +53,8 @@ pub enum VariantId {
     WindowFullMove,
     LegacyEffects,
     WindowChildImage,
+    WindowDrawScale,
+    SequenceWindowImage,
     DrawQuery,
     CameraMoveX,
     AudioPreload,
@@ -93,6 +95,8 @@ impl VariantId {
             "window-full-move" => Some(Self::WindowFullMove),
             "legacy-effects" => Some(Self::LegacyEffects),
             "window-child-image" => Some(Self::WindowChildImage),
+            "window-draw-scale" => Some(Self::WindowDrawScale),
+            "sequence-window-image" => Some(Self::SequenceWindowImage),
             "draw-query" => Some(Self::DrawQuery),
             "camera-move-x" => Some(Self::CameraMoveX),
             "audio-preload" => Some(Self::AudioPreload),
@@ -134,6 +138,8 @@ impl VariantId {
             Self::WindowFullMove => "window-full-move",
             Self::LegacyEffects => "legacy-effects",
             Self::WindowChildImage => "window-child-image",
+            Self::WindowDrawScale => "window-draw-scale",
+            Self::SequenceWindowImage => "sequence-window-image",
             Self::DrawQuery => "draw-query",
             Self::CameraMoveX => "camera-move-x",
             Self::AudioPreload => "audio-preload",
@@ -384,6 +390,20 @@ impl EngineProfile {
                 .is_some()
     }
 
+    /// Independently inspected HASSAKU x64 build; docs/games/hassaku.
+    pub(crate) fn is_inspected_20101211(&self) -> bool {
+        self.id == "cmvs-20101211"
+            && self.base.as_deref() == Some("cmvs-20160201")
+            && self
+                .binary(
+                    &crate::digest::parse_hex(
+                        "158409c71cf14c3dedb7d051585e5f48e56dbc621bb19e56d084cd4fe8d4352f",
+                    )
+                    .expect("static SHA-256"),
+                )
+                .is_some()
+    }
+
     pub fn binary(&self, sha256: &[u8; 32]) -> Option<&Binary> {
         self.binaries.iter().find(|b| &b.sha256 == sha256)
     }
@@ -599,12 +619,13 @@ pub struct Registry {
     contracts: BTreeMap<[u8; 32], ContractProof>,
 }
 
-const BUILTIN_PROFILES: [&str; 16] = [
+const BUILTIN_PROFILES: [&str; 17] = [
     include_str!("../profiles/cmvs-20070119.profile"),
     include_str!("../profiles/cmvs-20071117.profile"),
     include_str!("../profiles/cmvs-20080719.profile"),
     include_str!("../profiles/cmvs-20080903.profile"),
     include_str!("../profiles/cmvs-20090815.profile"),
+    include_str!("../profiles/cmvs-20101211.profile"),
     include_str!("../profiles/cmvs-20110525.profile"),
     include_str!("../profiles/cmvs-20120309.profile"),
     include_str!("../profiles/cmvs-20130131.profile"),

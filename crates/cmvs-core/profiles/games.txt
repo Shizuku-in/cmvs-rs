@@ -44,6 +44,15 @@ game-id 0x00000000
 executable cmvs.exe sha256=36fa780a5d2b8df4ac6a6e48a2f78708b79aa10d22eb575a5ae74742d902f71a
 end
 
+game hassaku
+profile cmvs-20101211
+start data/pack/start.ps2 sha256=43f70567b72c0ec52561caffe51731cf92cde76abdcd58a018e93ccb4044aabb
+archive data/pack/script.cpz sha256=c1519a12a43618b290c62d0a550303ee16c94275c382762f2ebd2e59f0523bc9
+game-id 0x17300001
+executable cmvs64.exe sha256=158409c71cf14c3dedb7d051585e5f48e56dbc621bb19e56d084cd4fe8d4352f
+executable cmvs32.exe sha256=88a6a42d39c6879f0a8ebb9c593ef2263d87d49f6e2a3cdeb37dde526f3bacb9
+end
+
 game miranosu
 profile cmvs-20110525
 start data/pack/start.ps2 sha256=2e8c7261ea801f59c9e80b9cdbde89832c0a65f7b622e2fa4551509b1cfe5143

@@ -92,7 +92,7 @@ pub struct DecodedImage {
 /// PB3 type outside 1..8: the load returns 0 without a MessageBox.
 pub fn decode(bytes: &[u8]) -> Result<Option<DecodedImage>, FormatError> {
     let unsupported = FormatError(
-        "image codec not implemented; standalone PB3 types 1, 2, 3 and 5 are supported",
+        "image codec not implemented; standalone PB3 types 1, 2, 3, 5 and 7 are supported",
     );
     let magic = bytes
         .get(..4)
@@ -101,12 +101,14 @@ pub fn decode(bytes: &[u8]) -> Result<Option<DecodedImage>, FormatError> {
         b"PB3B" => {
             let header = pb3::Header::parse(bytes)?;
             match header.kind {
-                1 | 2 | 3 | 5 => Ok(Some(DecodedImage {
+                1 | 2 | 3 | 5 | 7 => Ok(Some(DecodedImage {
                     pixels: pb3::decode(bytes)?,
                     alpha: header.bpp == 32,
                 })),
-                6 => Err(FormatError("PB3 type 6 requires a reference image source")),
-                4 | 7 | 8 => Err(unsupported),
+                6 | 8 => Err(FormatError(
+                    "PB3 types 6/8 require a reference image source",
+                )),
+                4 => Err(unsupported),
                 _ => Ok(None),
             }
         }

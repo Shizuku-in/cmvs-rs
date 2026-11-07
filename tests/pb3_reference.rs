@@ -94,6 +94,72 @@ fn base(w: u32, h: u32) -> RgbaImage {
     RgbaImage::new(w, h, [20, 30, 40, 50].repeat((w * h) as usize)).unwrap()
 }
 
+fn interleaved(w: u16, h: u16, flags: &[u8], data: &[u8]) -> Vec<u8> {
+    let mut raw = header(7, w, h);
+    put(&mut raw, 52, 24);
+    put(&mut raw, 56, 24 + flags.len() as u32);
+    raw.extend(flags);
+    raw.extend(data);
+    finish(raw)
+}
+
+#[test]
+fn type7_interleaved_bgra_supports_literal_and_overlapping_reference_tokens() {
+    let literal = interleaved(2, 1, &[0], &[1, 2, 3, 4, 5, 6, 7, 8]);
+    assert_eq!(
+        pb3::decode(&literal).unwrap().pixels(),
+        &[3, 2, 1, 4, 7, 6, 5, 8]
+    );
+    assert!(image::decode(&literal).unwrap().unwrap().alpha);
+    // One literal followed by a seven-byte reference overlapping the write cursor.
+    let pair = (2014u16 << 5) | 4;
+    let raw = interleaved(2, 1, &[0x40], &[91, pair as u8, (pair >> 8) as u8]);
+    assert_eq!(pb3::decode(&raw).unwrap().pixels(), &[91; 8]);
+    for invalid in [
+        mutate(raw.clone(), 34, 24),
+        mutate(raw.clone(), 52, u32::MAX),
+        mutate(raw.clone(), 56, 0),
+        mutate(raw, 56, u32::MAX),
+    ] {
+        assert!(pb3::decode(&invalid).is_err());
+    }
+    // A reference must not overrun the declared image.
+    assert!(pb3::decode(&interleaved(1, 1, &[0x80], &[31, 0])).is_err());
+}
+
+#[test]
+fn type8_reference_uses_type6_tiles_and_can_load_a_type7_base() {
+    let raw = mutate(
+        patch(9, 9, b"base", &[0x60], &[[1, 2, 3, 4]; 65]),
+        28,
+        8 | (9 << 16),
+    );
+    let six = patch(9, 9, b"base", &[0x60], &[[1, 2, 3, 4]; 65]);
+    assert_eq!(
+        pb3::decode_with_base(&raw, base(9, 9)).unwrap(),
+        pb3::decode_with_base(&six, base(9, 9)).unwrap()
+    );
+    assert_eq!(
+        pb3::reference_name(&raw).unwrap(),
+        Some(b"base.pb3".to_vec())
+    );
+    assert!(image::decode(&raw).is_err());
+    let base_bytes = interleaved(1, 1, &[0], &[1, 2, 3, 4]);
+    let top = mutate(patch(1, 1, b"base", &[0x80], &[]), 28, 8 | (1 << 16));
+    let mut files = Files::default();
+    files.files.insert(b"top.pb3".to_vec(), top);
+    files.files.insert(b"base.pb3".to_vec(), base_bytes);
+    assert_eq!(
+        image::load(&mut files, b"top.pb3")
+            .unwrap()
+            .unwrap()
+            .pixels
+            .pixels(),
+        &[3, 2, 1, 4]
+    );
+    assert!(pb3::decode_with_base(&mutate(raw, 34, 24), base(9, 9)).is_err());
+}
+
 #[test]
 fn type5_predictor_wraps_and_continues_across_rows_in_bgra_order() {
     let raw = delta(

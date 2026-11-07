@@ -475,11 +475,12 @@ impl<'a> Startup<'a> {
             self.frame_delta = 0;
             return Ok(());
         }
-        self.sequence.advance_frame_with_hosts(
+        self.sequence.advance_frame_with_windows(
             delta_ms,
             &mut self.scene,
             &mut self.images.with_paths(self.bootstrap.paths()),
             &mut self.camera,
+            &mut self.messages,
         )?;
         self.scene.advance_frame(delta_ms);
         self.scene
@@ -916,6 +917,7 @@ impl<'a> Startup<'a> {
             .scene_movies
             .with_paths(self.bootstrap.paths(), ResourceKind::SceneMovie);
         let is_movie_player = crate::dispatch::uses_movie_player_for(resolved.semantics, command);
+        let mut sequence_messages = Some(&mut self.messages);
         let mut hosts = crate::dispatch::Hosts {
             runtime: true,
             message_wait: None,
@@ -971,7 +973,7 @@ impl<'a> Startup<'a> {
             effects: Some(&mut self.effects),
         };
         if crate::dispatch::uses_message_state(command) {
-            hosts.messages = Some(&mut self.messages);
+            hosts.messages = sequence_messages.take();
             if crate::dispatch::uses_input_for(resolved.semantics, command) {
                 hosts.input = Some(crate::dispatch::InputHosts {
                     input: &mut self.input,
@@ -985,9 +987,9 @@ impl<'a> Startup<'a> {
                 skip: message_flags.skip(),
                 clock: Some(input_clock),
             });
-        } else {
+        } else if !crate::dispatch::uses_sequence(command) {
             hosts.text = Some(crate::dispatch::TextHosts {
-                messages: &mut self.messages,
+                messages: sequence_messages.take().expect("text owns message host"),
                 input: &mut self.input,
                 flags: message_flags,
             });
@@ -1021,6 +1023,7 @@ impl<'a> Startup<'a> {
                     scene: &mut self.scene,
                     images: &mut image_source,
                     camera: Some(&mut self.camera),
+                    messages: sequence_messages.take(),
                 }),
             });
         } else {
