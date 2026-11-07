@@ -277,6 +277,7 @@ mod tests {
                         follow: true,
                         image: None,
                         particles: Vec::new(),
+                        x87_arithmetic: false,
                     },
                 );
             }
@@ -313,6 +314,7 @@ mod tests {
                 follow: true,
                 image: None,
                 particles: Vec::new(),
+                x87_arithmetic: false,
             },
         );
         let settings = run.settings.clone();

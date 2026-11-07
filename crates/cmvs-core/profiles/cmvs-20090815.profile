@@ -678,7 +678,7 @@ binary x86 file=cmvs.exe sha256=36fa780a5d2b8df4ac6a6e48a2f78708b79aa10d22eb575a
 0x229f noop 0x567dc
 0x22a0 unreviewed 0x575eb
 0x22a1 unreviewed 0x575f3
-0x22a2 unreviewed 0x575fb
+0x22a2 unreviewed 0x575fb variant=falling-billboards-x87:x86:36fa780a5d2b8df4ac6a6e48a2f78708b79aa10d22eb575a5ae74742d902f71a evidence=games/memoria/README.md
 0x22a3 unreviewed 0x57603
 0x22a4 unreviewed 0x5760b
 0x22a5 unreviewed 0x57613

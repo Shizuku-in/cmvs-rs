@@ -152,12 +152,13 @@ impl SceneHost {
                     );
                 }
                 SavedEffect::Falling { words, .. } => {
-                    let mut effect = FallingEffect::new(
+                    let mut effect = FallingEffect::new_with_arithmetic(
                         words[..4].try_into().unwrap(),
                         words[4],
                         words[5] != 0,
                         image,
                         random,
+                        x87_arithmetic,
                     );
                     effect.template = Some(template);
                     scene.falling_effects.insert(slot as u8, effect);

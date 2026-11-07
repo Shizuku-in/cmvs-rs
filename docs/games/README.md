@@ -6,7 +6,7 @@
 | [《明日の君と逢うために》 / asukimi](asukimi/README.md) | `2007-11-30_ASUKIMI` | 存读档、设置及评论编辑已验证；完整路线与原生存档界面待验证 |
 | [《春色桜瀬》 / harouse](harouse/README.md) | `2008-07-31_HAROUSE` | 首选路线回标题，存读档及评论编辑通过；仍有 9 个分支前缀待探索 |
 | [《明日の七海と逢うために〜明日の君と逢うために〜FAN DISC》 / asunana](asunana/README.md) | `2008-10-24_ASUNANA` | 基本游玩接入；四轮解锁收敛、存读档与绘制检查通过 |
-| [《メモリア》 / memoria](memoria/README.md) | `2009-08-28_MEMORIA` | 初步接入：开场画面及基础存读档通过；跳读越过 `snky` 系列进入 `snha`，停在类型 2 效果快照，完整流程待验证 |
+| [《メモリア》 / memoria](memoria/README.md) | `2009-08-28_MEMORIA` | 初步接入：开场画面及基础存读档通过；跳读经 `snky`/`snha` 回标题，其他路线与原生音画待验证 |
 | [《夏に奏でる僕らの詩》 / natsuuta](natsuuta/README.md) | `2010-03-26_NATSUUTA` | 仅基础档案，尚未适配运行 |
 | [《初恋サクラメント》 / hassaku](hassaku/README.md) | `2010-12-24_HASSAKU` | 仅基础档案，尚未适配运行 |
 | [《未来ノスタルジア》 / miranosu](miranosu/README.md) | `2011-09-02_MIRANOSU` | 16 条探索路线回标题，存读档通过；仍有 42 个分支前缀待探索 |

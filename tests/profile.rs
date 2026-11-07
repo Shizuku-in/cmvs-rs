@@ -1005,6 +1005,7 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
     assert_eq!(memoria.count(CommandStatus::NoOp), 313);
     assert_eq!(memoria.status(0x1d), CommandStatus::NoOp);
     for (command, id) in [
+        (0x2a2, cmvs_rs::profile::VariantId::FallingBillboardsX87),
         (0x2a6, cmvs_rs::profile::VariantId::CollisionParticles),
         (0x2a7, cmvs_rs::profile::VariantId::FadingParticles),
     ] {
