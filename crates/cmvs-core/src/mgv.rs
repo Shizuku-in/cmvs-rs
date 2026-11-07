@@ -111,8 +111,9 @@ impl MgvIndex {
     }
 }
 
-pub trait ReadSeek: Read + Seek {}
-impl<T: Read + Seek> ReadSeek for T {}
+/// `Send` so a backend may decode on its own thread.
+pub trait ReadSeek: Read + Seek + Send {}
+impl<T: Read + Seek + Send> ReadSeek for T {}
 
 /// A stateful decoder may replay packets for backwards access; requests use nominal frames.
 pub trait Decoder: Debug {

@@ -308,6 +308,7 @@ dependencies = [
  "cmvs-font",
  "cmvs-input",
  "cmvs-native",
+ "cmvs-video",
  "cmvs-wgpu",
  "encoding_rs",
  "log",
@@ -320,6 +321,16 @@ dependencies = [
  "cmvs-core",
  "lewton",
  "rodio",
+]
+
+[[package]]
+name = "cmvs-console"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "cmvs-core",
+ "cmvs-native",
+ "encoding_rs",
 ]
 
 [[package]]
@@ -339,12 +350,10 @@ dependencies = [
  "cmvs-font",
  "cmvs-input",
  "cmvs-native",
+ "cmvs-video",
  "cmvs-wgpu",
  "encoding_rs",
  "ico",
- "ogg 0.9.2",
- "oxideav-core",
- "oxideav-theora",
  "softbuffer",
  "winit",
 ]
@@ -366,6 +375,7 @@ dependencies = [
  "cmvs-audio",
  "cmvs-core",
  "cmvs-font",
+ "cmvs-video",
  "ndk-context",
  "self_cell",
 ]
@@ -413,10 +423,41 @@ version = "0.1.0"
 dependencies = [
  "ab_glyph",
  "cmvs-audio",
+ "cmvs-console",
  "cmvs-core",
  "cmvs-font",
  "cmvs-native",
- "encoding_rs",
+ "cmvs-video",
+]
+
+[[package]]
+name = "cmvs-video"
+version = "0.1.0"
+dependencies = [
+ "cmvs-core",
+ "ogg 0.9.2",
+ "oxideav-core",
+ "oxideav-theora",
+]
+
+[[package]]
+name = "cmvs-vita"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "cmvs-audio",
+ "cmvs-console",
+ "cmvs-core",
+ "cmvs-font",
+ "cmvs-native",
+ "cmvs-video",
+]
+
+[[package]]
+name = "cmvs-vita-probe"
+version = "0.1.0"
+dependencies = [
+ "cmvs-core",
 ]
 
 [[package]]

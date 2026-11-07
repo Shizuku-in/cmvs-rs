@@ -1,28 +1,23 @@
 # cmvs-desktop
 
-CMVS 的桌面宿主库，负责窗口、物理输入、字体输出和应用事件循环。依赖 `cmvs-core` 与 `cmvs-native`，按功能开关接入音频和 GPU 后端；同名可执行程序由仓库根包提供。
+Desktop host for Windows, Linux and macOS, built on `winit` and `softbuffer`. It owns the window, keyboard and mouse input, the application event loop, and fullscreen and cursor handling. MGV (Ogg Theora) movies decode through [`cmvs-video`](../cmvs-video/README.md), re-exported as `cmvs_desktop::video`. Rendering is software by default.
 
-主要职责：
+The `cmvs-desktop` binary is built from the root package:
 
-- 将键鼠与窗口事件转换为 Core 的输入和宿主请求，驱动 VM 与完整帧更新。
-- 解析字体与文本编码、生成字形，并呈现场景和文字。
-- `video` 模块提供 MGV1 Ogg/Theora 解码，供桌面宿主和无头探针复用；容器解析留在 Core。`cmvs-mgv` 检查/导出工具由根包的 `desktop` feature 提供。
-- 协调独立用户目录、运行设置与退出流程，通过 `cmvs-native` 调用系统服务。
-
-功能开关默认关闭：
-
-| Feature | 用途 |
-|---|---|
-| `audio-output` | 接入 `cmvs-audio`，运行时以 `--audio native` 打开设备 |
-| `wgpu-renderer` | 接入 `cmvs-wgpu`，运行时以 `--renderer wgpu` 选择 GPU；默认使用 CPU |
-
-从仓库根目录运行：
-
-```bash
-cargo check --offline -p cmvs-desktop --no-default-features
-cargo run --offline --release --features desktop --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --record-text
+```sh
+cargo run --release --features desktop,audio-output --bin cmvs-desktop -- \
+  <game-dir> --encoding shift-jis --user-data-dir <dir> --audio native --font <font>
 ```
 
-示例使用文字记录模式；显示字形需按运行指南配置字体。当前属于研究预览，Windows 已有部分实测，完整游戏流程及其他平台仍待验证。原游戏保持只读，存档写入需显式配置独立用户目录。
+See the [running guide](../../docs/guides/running.md) for options.
 
-详见[运行指南](../../docs/guides/running.md)、[桌面后端](../../docs/backends/desktop.md)和[字体输出](../../docs/backends/font-output.md)。
+## Features
+
+| Feature | Adds |
+|---|---|
+| `audio-output` | Native audio through `cmvs-audio` |
+| `wgpu-renderer` | GPU compositing through `cmvs-wgpu` |
+
+## Testing
+
+`tests/wgpu.rs` is an ignored GPU scene test on a real game; it needs the `wgpu-renderer` feature, a GPU, and `CMVS_GAME_ROOT` and `CMVS_FONT_PATH`.

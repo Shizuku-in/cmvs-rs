@@ -1,12 +1,12 @@
 //! Game selection screen, shown when more than one game is installed.
 use crate::{
-    SCREEN,
-    canvas::{BRIGHT, Canvas, DIM, HIGHLIGHT, MARGIN, TEXT},
+    Console,
+    canvas::{self, BRIGHT, Canvas, DIM, HIGHLIGHT, MARGIN, TEXT},
     library::GameEntry,
 };
 use ab_glyph::FontVec;
 use cmvs_core::raster::RgbaImage;
-use cmvs_native::{SwitchInput, button};
+use cmvs_native::PadInput;
 
 /// Rows shown at once.
 pub const ROWS: usize = 10;
@@ -26,6 +26,7 @@ pub enum MenuAction {
 }
 
 pub struct Menu {
+    console: Console,
     pub selected: usize,
     /// First visible row.
     pub top: usize,
@@ -42,16 +43,18 @@ pub struct Menu {
 
 impl Menu {
     /// `initial` is the current sample: anything already held must be released first.
-    pub fn new(selected: usize, len: usize, initial: &SwitchInput) -> Self {
+    pub fn new(selected: usize, len: usize, initial: &PadInput, console: &Console) -> Self {
         let mut menu = Self {
+            console: console.clone(),
             selected: selected.min(len.saturating_sub(1)),
             top: 0,
             len,
-            held: initial.buttons | direction_bits(initial),
+            held: 0,
             repeat: None,
             touch: None,
             stale_touches: initial.touches.iter().map(|t| t.id).collect(),
         };
+        menu.held = menu.direction_bits(initial);
         menu.scroll_to_selection();
         menu
     }
@@ -79,31 +82,34 @@ impl Menu {
         self.select(target as usize)
     }
 
-    pub fn poll(&mut self, sample: &SwitchInput, dt_ms: u32) -> MenuAction {
+    pub fn poll(&mut self, sample: &PadInput, dt_ms: u32) -> MenuAction {
         if !sample.focused {
-            // Input from HOME or an overlay never reaches the menu.
-            self.held = sample.buttons | direction_bits(sample);
+            // Input from system UI never reaches the menu.
+            self.held = self.direction_bits(sample);
             self.repeat = None;
             self.touch = None;
             self.stale_touches = sample.touches.iter().map(|t| t.id).collect();
             return MenuAction::Idle;
         }
-        let now = sample.buttons | direction_bits(sample);
+        let map = &self.console.buttons;
+        let (confirm, exit, up, down) = (map.confirm, map.exit, map.up, map.down);
+        let (page_up, page_down) = (map.page_up, map.page_down);
+        let now = self.direction_bits(sample);
         let pressed = now & !self.held;
         self.held = now;
-        if pressed & button::PLUS != 0 {
+        if pressed & exit != 0 {
             return MenuAction::Exit;
         }
-        if pressed & button::A != 0 {
+        if pressed & confirm != 0 {
             return MenuAction::Launch(self.selected);
         }
         let mut action = MenuAction::Idle;
-        if pressed & button::L != 0 {
+        if pressed & page_up != 0 {
             action = self.step(-(ROWS as i32));
-        } else if pressed & button::R != 0 {
+        } else if pressed & page_down != 0 {
             action = self.step(ROWS as i32);
         }
-        let direction = match (now & button::UP != 0, now & button::DOWN != 0) {
+        let direction = match (now & up != 0, now & down != 0) {
             (true, false) => -1,
             (false, true) => 1,
             _ => 0,
@@ -130,7 +136,7 @@ impl Menu {
     }
 
     /// A tap selects a row; tapping the selected row starts it.
-    fn track_touch(&mut self, sample: &SwitchInput) -> MenuAction {
+    fn track_touch(&mut self, sample: &PadInput) -> MenuAction {
         self.stale_touches
             .retain(|id| sample.touches.iter().any(|t| t.id == *id));
         let current = sample
@@ -156,9 +162,12 @@ impl Menu {
         }
     }
 
+    /// The row under a touch at screen pixels `[x, y]`.
     fn row_at(&self, [x, y]: [u32; 2]) -> Option<usize> {
-        let (x, y) = (x as i32, y as i32);
-        if x < MARGIN || x >= SCREEN[0] as i32 - MARGIN || y < LIST_TOP {
+        let screen = self.console.screen;
+        let scale = canvas::scale(screen);
+        let (x, y) = ((x as f32 / scale) as i32, (y as f32 / scale) as i32);
+        if x < MARGIN || x >= canvas::width(screen) as i32 - MARGIN || y < LIST_TOP {
             return None;
         }
         let row = ((y - LIST_TOP) / ROW_HEIGHT) as usize;
@@ -166,23 +175,27 @@ impl Menu {
     }
 }
 
-/// Up/down from the D-pad or either stick.
-fn direction_bits(sample: &SwitchInput) -> u32 {
-    let mut bits = sample.buttons & (button::UP | button::DOWN);
-    for [_, y] in sample.sticks {
-        if y > STICK_THRESHOLD {
-            bits |= button::UP;
-        } else if y < -STICK_THRESHOLD {
-            bits |= button::DOWN;
+impl Menu {
+    /// Held buttons, with either stick adding up/down.
+    fn direction_bits(&self, sample: &PadInput) -> u32 {
+        let map = &self.console.buttons;
+        let mut bits = sample.buttons;
+        for [_, y] in sample.sticks {
+            if y > STICK_THRESHOLD {
+                bits |= map.up;
+            } else if y < -STICK_THRESHOLD {
+                bits |= map.down;
+            }
         }
+        bits
     }
-    bits
 }
 
 /// Renders the screen; `loading` replaces the controls hint once a game is chosen.
 pub fn draw(menu: &Menu, games: &[GameEntry], font: &FontVec, loading: bool) -> RgbaImage {
-    let mut canvas = Canvas::new();
-    let width = SCREEN[0] as i32 - 2 * MARGIN;
+    let mut canvas = Canvas::new(menu.console.screen);
+    let page = canvas.width() as i32;
+    let width = page - 2 * MARGIN;
     canvas.text(
         font,
         44.0,
@@ -196,7 +209,7 @@ pub fn draw(menu: &Menu, games: &[GameEntry], font: &FontVec, loading: bool) -> 
     canvas.text(
         font,
         26.0,
-        [(SCREEN[0] as i32 - MARGIN) as f32 - count_width, 92.0],
+        [(page - MARGIN) as f32 - count_width, 92.0],
         count_width + 1.0,
         &count,
         DIM,
@@ -217,16 +230,20 @@ pub fn draw(menu: &Menu, games: &[GameEntry], font: &FontVec, loading: bool) -> 
         );
     }
     if menu.top > 0 {
-        canvas.fill([SCREEN[0] as i32 / 2 - 12, LIST_TOP - 10, 24, 3], DIM);
+        canvas.fill([page / 2 - 12, LIST_TOP - 10, 24, 3], DIM);
     }
     if menu.top + ROWS < games.len() {
         let y = LIST_TOP + ROWS as i32 * ROW_HEIGHT + 4;
-        canvas.fill([SCREEN[0] as i32 / 2 - 12, y, 24, 3], DIM);
+        canvas.fill([page / 2 - 12, y, 24, 3], DIM);
     }
     let hint = if loading {
         format!("Loading {}…", games[menu.selected].name)
     } else {
-        "A: Start    L / R: Page    +: Exit".into()
+        let labels = menu.console.labels;
+        format!(
+            "{}: Start    {}: Page    {}: Exit",
+            labels.confirm, labels.pages, labels.exit
+        )
     };
     canvas.text(font, 24.0, [MARGIN as f32, 692.0], width as f32, &hint, DIM);
     canvas.finish()
@@ -235,26 +252,32 @@ pub fn draw(menu: &Menu, games: &[GameEntry], font: &FontVec, loading: bool) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_pad::{button, console};
     use cmvs_native::Touch;
 
-    fn sample(buttons: u32) -> SwitchInput {
-        SwitchInput {
+    fn sample(buttons: u32) -> PadInput {
+        PadInput {
             focused: true,
             buttons,
-            ..SwitchInput::default()
+            ..PadInput::default()
         }
     }
-    fn touch(id: u32, position: [u32; 2]) -> SwitchInput {
-        SwitchInput {
+    fn touch(id: u32, position: [u32; 2]) -> PadInput {
+        PadInput {
             focused: true,
             touches: vec![Touch { id, position }],
-            ..SwitchInput::default()
+            ..PadInput::default()
         }
     }
 
     #[test]
     fn held_buttons_need_release_and_directions_repeat_after_a_delay() {
-        let mut menu = Menu::new(0, 25, &sample(button::A | button::PLUS));
+        let mut menu = Menu::new(
+            0,
+            25,
+            &sample(button::A | button::PLUS),
+            &console([1280, 720]),
+        );
         assert_eq!(
             menu.poll(&sample(button::A | button::PLUS), 16),
             MenuAction::Idle
@@ -267,7 +290,7 @@ mod tests {
         assert_eq!(menu.poll(&sample(button::DOWN), 100), MenuAction::Moved);
         assert_eq!(menu.poll(&sample(button::DOWN), 100), MenuAction::Moved);
         assert_eq!(menu.selected, 3);
-        let stick = SwitchInput {
+        let stick = PadInput {
             sticks: [[0, 30000], [0, 0]],
             ..sample(0)
         };
@@ -289,7 +312,12 @@ mod tests {
 
     #[test]
     fn taps_select_then_start_and_unfocused_input_is_ignored() {
-        let mut menu = Menu::new(0, 3, &touch(7, [200, LIST_TOP as u32 + 60]));
+        let mut menu = Menu::new(
+            0,
+            3,
+            &touch(7, [200, LIST_TOP as u32 + 60]),
+            &console([1280, 720]),
+        );
         // The touch held while the menu opened does nothing.
         assert_eq!(
             menu.poll(&touch(7, [200, LIST_TOP as u32 + 60]), 16),
@@ -309,7 +337,7 @@ mod tests {
         );
         assert_eq!(menu.poll(&sample(0), 16), MenuAction::Idle);
 
-        let unfocused = SwitchInput {
+        let unfocused = PadInput {
             focused: false,
             ..sample(button::A)
         };
@@ -319,7 +347,7 @@ mod tests {
 }
 
 /// Writes a menu preview: `CMVS_MENU_FONT=<font> CMVS_MENU_PNG=<out.png> cargo test -p
-/// cmvs-switch menu_preview -- --ignored`.
+/// cmvs-console menu_preview -- --ignored`; `CMVS_MENU_SCREEN=vita` draws it at 960x544.
 #[cfg(test)]
 #[test]
 #[ignore = "needs a font file; writes a PNG for visual review"]
@@ -339,11 +367,12 @@ fn menu_preview() {
             root: std::path::PathBuf::new(),
         })
         .collect();
-    let initial = SwitchInput {
+    let initial = PadInput {
         focused: true,
-        ..SwitchInput::default()
+        ..PadInput::default()
     };
-    let menu = Menu::new(11, games.len(), &initial);
+    let console = crate::test_pad::console(crate::test_pad::preview_screen());
+    let menu = Menu::new(11, games.len(), &initial, &console);
     let image = draw(&menu, &games, &font, false);
     std::fs::write(
         std::env::var("CMVS_MENU_PNG").expect("CMVS_MENU_PNG"),

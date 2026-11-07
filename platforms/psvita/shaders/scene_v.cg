@@ -1,0 +1,15 @@
+// Port of crates/cmvs-wgpu/src/scene.wgsl; the layout is cmvs_core::scene_render::shader
+// (its first 16 floats). `corner` is (0,0), (1,0), (0,1), (1,1) in strip order, since
+// GXM has no vertex index.
+void main(
+    float2 corner,
+    uniform float4 v[4],
+    out float4 position : POSITION,
+    out float2 uv : TEXCOORD0)
+{
+    float2 top = corner.x > 0.5 ? v[2].zw : v[2].xy;
+    float2 bottom = corner.x > 0.5 ? v[3].zw : v[3].xy;
+    float2 xy = corner.y > 0.5 ? bottom : top;
+    position = float4(xy.x / v[0].x * 2.0 - 1.0, 1.0 - xy.y / v[0].y * 2.0, 0.5, 1.0);
+    uv = v[1].xy + corner * v[1].zw;
+}

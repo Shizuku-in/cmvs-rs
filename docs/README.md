@@ -4,7 +4,7 @@
 
 - [运行指南](guides/running.md)：桌面运行、字体、音频、存档与运行策略。
 - [CLI 指南](guides/cli.md)：脚本、资源和存档检查工具。
-- [Web](../platforms/web/README.md)与 [Switch](../platforms/switch/README.md)：各平台的构建、操作与验证范围。
+- [平台总览](../platforms/README.md)：平台、目标与支持情况；[Web](../platforms/web/README.md)、[Switch](../platforms/switch/README.md)与 [PS Vita](../platforms/psvita/README.md)：各平台的构建、操作与验证范围。
 
 ## 开发
 

@@ -1,26 +1,17 @@
 # cmvs-audio
 
-CMVS 的可选音频后端，负责 Vorbis 流式解码与原生设备播放。解码依赖 `cmvs-core`、`lewton`；默认 `native` feature 启用 `rodio`，不依赖桌面窗口包。
+Audio for CMVS hosts: streaming Ogg Vorbis (`lewton`) and PCM WAVE decoders, an engine mixer and native device output (`rodio`).
 
-浏览器宿主通过 `default-features = false` 复用 `Vorbis` 与 `AudioProgram`，不引入原生音频设备。
+## Features
 
-主要职责：
+| Feature | Adds |
+|---|---|
+| none | `vorbis` and `pcm_wave` decoders only |
+| `mixer` | Engine channel state, envelopes and software mixing. The host pulls PCM through `PcmOutput::fill_i16`, which is how the Switch and PS Vita players feed their audio ports |
+| `native` (default) | `mixer` output through the default system device (`NativeAudio`) |
 
-- 解码 Ogg/Vorbis 数据，支持已实现的 BGM 前奏与循环段播放。
-- 实现 Core 的 `AudioBackend` 契约，播放 SE、BGM、语音和影片音轨。
-- 执行音量、淡入淡出、语音压低 BGM 等播放请求，并提供影片音源消费时钟。
+`HostAudioControl` lets a host mute output while it is backgrounded. BGM position and gain are exposed to the engine for its own timing.
 
-音频命令语义和引擎状态保留在 Core，本包负责解码与设备输出。Android 主机默认启用本后端，应用不活跃时通过独立的宿主输出开关静音；静音期间继续消费音源，不覆盖游戏自身的声音设置。当前已有 Windows 部分路径的设备检查，设备缓冲延迟尚未校准，Android 的实际出声仍需设备验证。
+## Used by
 
-从仓库根目录检查或启用：
-
-```bash
-cargo test --offline -p cmvs-audio
-cargo check --offline --features desktop,audio-output
-```
-
-根包的 `audio-output` feature 引入本包；桌面播放还需在运行时指定 `--audio native`。默认记录模式不会打开音频设备，硬件测试需单独显式运行。
-
-详见[音频后端](../../docs/backends/audio-output.md)、[运行指南](../../docs/guides/running.md)和[依赖与许可](../../docs/references.md)。
-
-PCM WAVE：支持 RIFF/WAVE 中 8–192 kHz、单/双声道、16 位有符号 PCM；沿用音量、循环、预加载和重播路径。按块读取样本，校验 chunk 边界、格式和完整帧；其他 WAV 编码显式报错。`AudioProgram` 统一处理 Ogg Vorbis 和这种 PCM WAVE；历史名称 `VorbisProgram` 作为兼容别名保留。
+`cmvs-desktop` (`audio-output` feature), `cmvs-host`, and the Android, Web, Switch and PS Vita players.

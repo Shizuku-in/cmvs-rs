@@ -73,7 +73,7 @@ renderer.txt        可选，gpu（缺省）或 cpu
 | 菜单与错误页 | CPU 绘制（`ab_glyph`），经当前渲染器显示 |
 | 运行时补丁 | `runtime/libc.c` 补上 Rust std 所需而 newlib 缺少的 `sysconf` / `getrandom` |
 
-输入、列表、错误页、提频与软键盘编码的逻辑可在开发机上 `cargo test -p cmvs-switch`。`menu_preview` / `error_preview` 两个忽略测试可把页面渲染为 PNG（需 `CMVS_MENU_FONT` 指定字体）。
+输入、列表、错误页、提频与软键盘编码的逻辑可在开发机上 `cargo test -p cmvs-console -p cmvs-switch`；前四项与 PS Vita 共用 `cmvs-console`。`cmvs-console` 的 `menu_preview` / `error_preview` 两个忽略测试可把页面渲染为 PNG（需 `CMVS_MENU_FONT` 指定字体）。
 
 暂未接入字体选择对话框。
 

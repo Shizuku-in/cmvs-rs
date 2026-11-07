@@ -1,29 +1,23 @@
 # cmvs-probe
 
-Keyboard presses reject list groups whose script state disables navigation before sending input. This avoids moving another active group's selection while trying to reach a mouse-only list.
+Headless whole-run checks for CMVS games. It drives the engine with virtual mouse or keyboard input and judges the results from engine-level observations. It contains no game names, script names or script addresses, and every result states the verdict level it reached. See [probe design](../../docs/design/probe.md).
 
-与游戏无关的无头整机检查工具。设计、通用性规则与分阶段计划见[通用游戏探针设计草案](../../docs/design/probe.md)。依赖 `cmvs-core`，并借用 `cmvs-desktop` 的字体模块提供字形度量；不打开窗口或音频设备。
+## Checks
 
-主要职责：
+| Group | Covers |
+|---|---|
+| S | Static: engine profile, file hashes, command gate status, archives, shipped saves |
+| R | Routes: fresh start, choice-tree exploration, unlock rounds, executed against decoded instructions |
+| D | Determinism, frame-time independence, damaged saves |
+| I | Input: message waits, mouse and keyboard parity, seeded random input |
+| P | Page traversal, returning to pages, quit and return-to-title controls |
+| C | Settings controls, persistence across restarts, text speed |
+| V | Save, restart and load round-trips, system save across restarts |
 
-- 通过档案层识别构建，把构建差异表示为能力集合（如 `archive:readable`、`key-config`、`snapshot-layout`）；缺少能力的检查记为 `skipped`。
-- 在隔离用户目录中，用固定种子和虚拟帧时间运行 `Startup`；输入以抽象动作发出，由鼠标或键盘设备翻译。
-- 只用引擎层观察量（消息等待、按钮组、场景渐变、摘要值）判断状态，代码中不出现游戏身份、脚本名或脚本地址；`tests/no_game_constants.rs` 检查这条规则。
-- 输出 `summary.json` 与 `events.jsonl`，每个结果注明达到的判定等级（L0/L1/L2）。
+## Usage
 
-从仓库根目录运行：
-
-```bash
-cargo test --offline -p cmvs-probe
-cargo run --offline --release -p cmvs-probe -- "<游戏目录>" --out "<新输出目录>" --font "<字体文件>"
+```sh
+cargo run --release -p cmvs-probe -- <game-root> --out <new-dir> --checks all
 ```
 
-需要设备帧抓图的检查可追加 `--render-frames`（必须提供 `--font`）：每次 VM 让出后推进动画、解码影片，再用桌面软件合成器绘制并提交逻辑画布，下一段 VM 读取上一张完成帧。文字和影片都参与合成；绘制失败会停止并记录原因。此模式增加逐帧绘制开销，也可能暴露默认仅记录模式未触及的渲染限制；报告的 `options.render_frames` 标明是否启用，不能据此声称原版像素一致。默认仍不提供设备完成帧。
-
-帧提交回归仅使用合成脚本及既有 CPZ6 夹具，因需要外部字体而默认忽略；设置 `CMVS_TEST_FONT` 后可运行 `cargo test --offline -p cmvs-probe yielded_frames -- --ignored`。
-
-设计中的全部检查都已实现：静态（S1–S5）、启动与确定性（R1、D1–D3）、剧本路线（R2–R5）、输入（I1–I5）、页面（P1–P4）、存读档（V1–V5）、设置（C1–C4）和长时间运行（L1）。`--help` 逐行说明各检查与选项；默认只运行几秒内完成的静态与启动检查。实施记录见设计文档第 13–16 节。游戏目录只读；输出目录必须不存在。
-
-报告、抽象按键和清单中的组号0–5对应普通按钮组，6–13对应列表组0–7。列表点击按绑定对象位置转换坐标，并限制在命中区域；完全在区域外的条目不算可点击。列表滚动/分类布局和图片查看器轮询上下文会区分成不同页面状态，挂起的VM等待不作为稳定页面。纯键盘导航仍受原脚本的列表导航/焦点行为限制，不能将鼠标检查结果视作全部键盘控件均可达。
-
-鼠标页面探索还会在每个列表的命中区域内尝试上下滚轮；因此不会因为上一点击已把指针移出屏幕而空滚。页图仍有深度与尝试次数上限，报告中的未完成/截断不能当作所有鉴赏内容已经遍历。
+`--out` must name a directory that does not exist yet. `--help` lists every check and option, including the step and route budgets.

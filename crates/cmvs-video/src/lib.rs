@@ -1,4 +1,7 @@
 //! MGV1's Ogg/Theora stream, with bounded I/O and explicit nominal-frame mapping.
+//! Pure Rust and window-free, so every host can install [`TheoraFactory`], or
+//! [`PrefetchTheoraFactory`] to decode the next packet on a worker thread during playback.
+mod prefetch;
 use cmvs_core::{
     FormatError, MAX_PAYLOAD,
     mgv::{self, MgvIndex, ReadSeek},
@@ -6,12 +9,15 @@ use cmvs_core::{
 };
 use ogg::PacketReader;
 use oxideav_theora::{self as theora, FrameDecoder, TheoraIdentHeader};
+pub use prefetch::PrefetchTheoraFactory;
 use std::{
-    cell::Cell,
     error::Error,
     fmt,
     io::{self, Read, Seek, SeekFrom},
-    rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 #[derive(Debug, Default)]
@@ -26,12 +32,24 @@ impl mgv::DecoderFactory for TheoraFactory {
     }
 }
 
+/// Bytes the next Ogg packet may still read; shared with the packet reader's section.
+#[derive(Clone)]
+struct Budget(Arc<AtomicUsize>);
+impl Budget {
+    fn get(&self) -> usize {
+        self.0.load(Ordering::Relaxed)
+    }
+    fn set(&self, value: usize) {
+        self.0.store(value, Ordering::Relaxed);
+    }
+}
+
 struct VideoSection {
     reader: Box<dyn ReadSeek>,
     start: u64,
     size: u64,
     position: u64,
-    budget: Rc<Cell<usize>>,
+    budget: Budget,
 }
 impl Read for VideoSection {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
@@ -69,12 +87,14 @@ impl Seek for VideoSection {
 pub struct TheoraStream {
     index: MgvIndex,
     packets: PacketReader<VideoSection>,
-    budget: Rc<Cell<usize>>,
+    budget: Budget,
     decoder: FrameDecoder,
     ident: TheoraIdentHeader,
     next_packet: u32,
     serial: u32,
-    cached: Option<RgbaImage>,
+    /// The last two converted packets: the frame on screen and, after a prefetch, the
+    /// next one. Duplicate nominal frames reuse the on-screen packet without a replay.
+    recent: [Option<(u32, RgbaImage)>; 2],
     failed: bool,
 }
 impl fmt::Debug for TheoraStream {
@@ -93,7 +113,7 @@ impl TheoraStream {
             return Err(FormatError("MGV frame map is empty").into());
         }
         reader.seek(SeekFrom::Start(index.video_offset))?;
-        let budget = Rc::new(Cell::new(MAX_PAYLOAD));
+        let budget = Budget(Arc::new(AtomicUsize::new(MAX_PAYLOAD)));
         let section = VideoSection {
             reader,
             start: index.video_offset,
@@ -111,13 +131,13 @@ impl TheoraStream {
             ident,
             next_packet: 0,
             serial,
-            cached: None,
+            recent: [None, None],
             failed: false,
         })
     }
     fn headers(
         packets: &mut PacketReader<VideoSection>,
-        budget: &Cell<usize>,
+        budget: &Budget,
         index: &MgvIndex,
     ) -> Result<(TheoraIdentHeader, FrameDecoder, u32), Box<dyn Error>> {
         budget.set(MAX_PAYLOAD);
@@ -157,13 +177,30 @@ impl TheoraStream {
         self.decoder = decoder;
         self.serial = serial;
         self.next_packet = 0;
-        self.cached = None;
+        self.recent = [None, None];
         self.failed = false;
         Ok(())
     }
+    fn recent(&self, packet: u32) -> Option<&RgbaImage> {
+        self.recent
+            .iter()
+            .flatten()
+            .find(|(p, _)| *p == packet)
+            .map(|(_, image)| image)
+    }
+    /// Decodes and converts the packet after the last decoded one, so a later
+    /// [`mgv::Decoder::frame`] for it returns at once. A failure surfaces on that call.
+    pub fn prefetch(&mut self) {
+        if !self.failed && self.next_packet < self.index.packet_count() {
+            let _ = self.decode_through(self.next_packet);
+        }
+    }
     /// Decode through an Ogg packet, including all inter-frame dependencies.
     fn decode_through(&mut self, target: u32) -> Result<(), Box<dyn Error>> {
-        if self.failed || target + 1 < self.next_packet {
+        if !self.failed && self.recent(target).is_some() {
+            return Ok(());
+        }
+        if self.failed || target < self.next_packet {
             self.reset()?;
         }
         while self.next_packet <= target {
@@ -175,7 +212,9 @@ impl TheoraStream {
             }
             let frame = codec(self.decoder.decode_frame(&packet.data))?;
             if self.next_packet == target {
-                self.cached = Some(to_rgba(&self.ident, &frame.frame, &self.index)?);
+                let image = to_rgba(&self.ident, &frame.frame, &self.index)?;
+                self.recent.rotate_left(1);
+                self.recent[1] = Some((target, image));
             }
             self.next_packet += 1;
             self.failed = false;
@@ -193,8 +232,7 @@ impl mgv::Decoder for TheoraStream {
             .packet;
         self.decode_through(u32::from(target))?;
         Ok(self
-            .cached
-            .as_ref()
+            .recent(u32::from(target))
             .ok_or(FormatError("MGV decoded frame unavailable"))?
             .clone())
     }
@@ -225,25 +263,61 @@ fn to_rgba(
     } else {
         [0, 0]
     };
-    let mut rgba = Vec::with_capacity(width * height * 4);
     let yw = frame.dims_y.width as usize;
     let cw = frame.dims_cb.width as usize;
-    for row in 0..height {
+    const BOUNDS: &str = "Theora planes smaller than the MGV picture";
+    let mut rgba = vec![0; width * height * 4];
+    for (row, out) in rgba.chunks_exact_mut(width * 4).enumerate() {
+        // Theora rows run bottom-up.
         let y = bottom + height - 1 - row;
-        for column in 0..width {
-            let x = left + column;
-            let luma = i32::from(frame.samples_y[y * yw + x]) - 16;
-            let cb = i32::from(frame.samples_cb[(y / 2) * cw + x / 2]) - 128;
-            let cr = i32::from(frame.samples_cr[(y / 2) * cw + x / 2]) - 128;
-            // BT.601 limited-range conversion; the decoded Y/Cb/Cr samples are retained exactly.
-            let clip = |v: i32| ((v + 128) >> 8).clamp(0, 255) as u8;
-            rgba.extend([
-                clip(298 * luma + 409 * cr),
-                clip(298 * luma - 100 * cb - 208 * cr),
-                clip(298 * luma + 516 * cb),
-                255,
-            ]);
+        let luma = frame
+            .samples_y
+            .get(y * yw + left..y * yw + left + width)
+            .ok_or(FormatError(BOUNDS))?;
+        let chroma = (y / 2) * cw + left / 2..(y / 2) * cw + (left + width).div_ceil(2);
+        let cb = frame
+            .samples_cb
+            .get(chroma.clone())
+            .ok_or(FormatError(BOUNDS))?;
+        let cr = frame.samples_cr.get(chroma).ok_or(FormatError(BOUNDS))?;
+        // An odd left edge starts mid-pair: its first pixel takes the first chroma sample.
+        let (head, luma, out) = if left % 2 == 1 {
+            let (first, out) = out.split_at_mut(4);
+            first.copy_from_slice(&ycbcr(luma[0], cb[0], cr[0]));
+            (1, &luma[1..], out)
+        } else {
+            (0, luma, out)
+        };
+        let (cb, cr) = (&cb[head..], &cr[head..]);
+        let pairs = luma.len() / 2;
+        for (((y2, out), &u), &v) in luma
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .zip(out.as_chunks_mut::<8>().0)
+            .zip(cb)
+            .zip(cr)
+        {
+            out[..4].copy_from_slice(&ycbcr(y2[0], u, v));
+            out[4..].copy_from_slice(&ycbcr(y2[1], u, v));
+        }
+        if let Some(&last) = luma.get(pairs * 2) {
+            out[pairs * 8..].copy_from_slice(&ycbcr(last, cb[pairs], cr[pairs]));
         }
     }
     RgbaImage::new(u32::from(index.width), u32::from(index.height), rgba)
+}
+
+/// BT.601 limited-range conversion; the decoded Y/Cb/Cr samples are retained exactly.
+#[inline(always)]
+fn ycbcr(y: u8, cb: u8, cr: u8) -> [u8; 4] {
+    let luma = 298 * (i32::from(y) - 16);
+    let (cb, cr) = (i32::from(cb) - 128, i32::from(cr) - 128);
+    let clip = |v: i32| ((v + 128) >> 8).clamp(0, 255) as u8;
+    [
+        clip(luma + 409 * cr),
+        clip(luma - 100 * cb - 208 * cr),
+        clip(luma + 516 * cb),
+        255,
+    ]
 }

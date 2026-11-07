@@ -25,6 +25,12 @@ int cmvs_nx_set_cpu_boost(int enabled) {
     return R_SUCCEEDED(rc) ? 0 : -1;
 }
 
+/* Runs the calling thread on `core` alone (applications own cores 0..2). Returns 0 on
+   success. */
+int cmvs_nx_prefer_core(int core) {
+    return R_SUCCEEDED(svcSetThreadCoreMask(CUR_THREAD_HANDLE, core, 1u << core)) ? 0 : -1;
+}
+
 /* Shows the error applet, blocking until dismissed. The application variant (the one
    games use) is fatal outside application mode, where the system variant stands in.
    Returns 0 when it was shown. */

@@ -1,0 +1,69 @@
+// Port of crates/cmvs-wgpu/src/scene.wgsl; the layout is cmvs_core::scene_render::shader.
+// `dims` holds texture sizes in texels: image (xy) and mask (zw), then screen (xy).
+// Texels are addressed by integer coordinates as in the software compositor, which
+// this follows for bilinear weights and rounding.
+
+// GPU division is reciprocal-based; exact byte quotients must not round down.
+float div255(float x)
+{
+    return floor(x / 255.0 + 0.001);
+}
+
+// Bit tests on the flags float; `bit` is a power of two, so the quotient is exact.
+bool has(float flags, float bit)
+{
+    return fmod(floor(flags / bit), 2.0) != 0.0;
+}
+
+float4 load(sampler2D t, float2 size, float2 xy, bool wrap)
+{
+    // The half-texel offset keeps the quotient away from integers, so floor() is exact.
+    float2 at = wrap ? xy - size * floor((xy + 0.5) / size) : xy;
+    at = clamp(at, float2(0.0, 0.0), size - 1.0);
+    return floor(tex2D(t, (at + 0.5) / size) * 255.0 + 0.5);
+}
+
+float4 sample_linear(sampler2D t, float2 size, float2 uv, bool wrap)
+{
+    float2 q = uv - 0.5;
+    float2 xy = floor(q);
+    float2 f = q - xy;
+    float4 upper = load(t, size, xy, wrap) * (1.0 - f.x) + load(t, size, xy + float2(1.0, 0.0), wrap) * f.x;
+    float4 lower = load(t, size, xy + float2(0.0, 1.0), wrap) * (1.0 - f.x) + load(t, size, xy + float2(1.0, 1.0), wrap) * f.x;
+    return floor(upper * (1.0 - f.y) + lower * f.y + 0.5);
+}
+
+float4 main(
+    float2 uv : TEXCOORD0,
+    float4 frag : WPOS,
+    uniform sampler2D image : TEXUNIT0,
+    uniform sampler2D mask : TEXUNIT1,
+    uniform sampler2D screen : TEXUNIT2,
+    uniform float4 dims[2],
+    uniform float4 v[70]) : COLOR
+{
+    float flags = v[4].w;
+    bool wrap = has(flags, 16.0);
+    float4 texel = float4(v[4].xyz, 255.0);
+    if (!has(flags, 1.0)) {
+        texel = v[0].w > 0.0 ? sample_linear(image, dims[0].xy, uv, wrap)
+                             : load(image, dims[0].xy, floor(uv), wrap);
+    }
+    float alpha = div255(texel.a * v[0].z + 127.0);
+    if (has(flags, 4.0)) {
+        // Coverage per green value: entry g is component g % 4 of v[6 + g / 4].
+        float green = load(mask, dims[0].zw, floor(uv), wrap).g;
+        float entry = floor(green / 4.0 + 0.1);
+        float lane = green - entry * 4.0;
+        float4 pick = float4(lane == 0.0, lane == 1.0, lane == 2.0, lane == 3.0);
+        alpha = floor(alpha * dot(v[6 + (int)entry], pick) + 0.5);
+    }
+    if (has(flags, 8.0)) {
+        float2 at = (frag.xy - 0.5) * dims[1].xy / v[0].xy;
+        alpha = div255(alpha * sample_linear(screen, dims[1].xy, at, wrap).g + 127.0);
+    }
+    if (has(flags, 2.0)) {
+        texel.rgb = float3(0.0, 0.0, 0.0);
+    }
+    return float4(texel.rgb / 255.0, alpha / 255.0);
+}

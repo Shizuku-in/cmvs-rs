@@ -1,10 +1,9 @@
-//! Nintendo Switch libnx integration and on-device diagnostics. Input sample types are
+//! Nintendo Switch libnx integration and on-device diagnostics. Button bits are
 //! portable; every libnx call is compiled for Horizon only.
 #[cfg(target_os = "horizon")]
 mod audio;
 #[cfg(target_os = "horizon")]
 mod font;
-mod gpu;
 #[cfg(target_os = "horizon")]
 mod gpu_device;
 mod input;
@@ -21,13 +20,12 @@ mod window;
 pub use audio::SwitchAudioOut;
 #[cfg(target_os = "horizon")]
 pub use font::shared_font;
-pub use gpu::{GpuError, GpuTexture};
 #[cfg(target_os = "horizon")]
 pub use gpu_device::SwitchGpu;
-pub use input::{SwitchInput, Touch, button};
+pub use input::button;
 #[cfg(target_os = "horizon")]
 pub use keyboard::software_keyboard;
 #[cfg(target_os = "horizon")]
-pub use performance::{set_cpu_boost, show_system_error};
+pub use performance::{prefer_core, set_cpu_boost, show_system_error};
 #[cfg(target_os = "horizon")]
 pub use window::SwitchWindow;

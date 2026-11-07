@@ -19,6 +19,7 @@ all = "warn"
 cmvs-core = { path = "../cmvs-core" }
 cmvs-font = { path = "../cmvs-font" }
 cmvs-audio = { path = "../cmvs-audio" }
+cmvs-video = { path = "../cmvs-video" }
 self_cell.workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]

@@ -20,17 +20,17 @@ pub fn try_exists(path: impl AsRef<std::path::Path>) -> std::io::Result<bool> {
 pub use std::path::absolute;
 
 /// Moves `from` over `to`, replacing an existing file.
-#[cfg(not(any(target_arch = "wasm32", target_os = "horizon")))]
+#[cfg(not(any(target_arch = "wasm32", target_os = "horizon", target_os = "vita")))]
 pub fn replace(
     from: impl AsRef<std::path::Path>,
     to: impl AsRef<std::path::Path>,
 ) -> std::io::Result<()> {
     rename(from, to)
 }
-/// Moves `from` over `to`, replacing an existing file. Horizon's filesystem rejects an
-/// occupied target, so the old file is removed first: unlike elsewhere this is not
-/// atomic, and an interruption between the steps leaves only `from`.
-#[cfg(target_os = "horizon")]
+/// Moves `from` over `to`, replacing an existing file. The Horizon and Vita filesystems
+/// reject an occupied target, so the old file is removed first: unlike elsewhere this
+/// is not atomic, and an interruption between the steps leaves only `from`.
+#[cfg(any(target_os = "horizon", target_os = "vita"))]
 pub fn replace(
     from: impl AsRef<std::path::Path>,
     to: impl AsRef<std::path::Path>,
