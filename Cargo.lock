@@ -326,6 +326,7 @@ dependencies = [
 name = "cmvs-core"
 version = "0.1.0"
 dependencies = [
+ "rustix 1.1.6",
  "wasm-bindgen",
 ]
 
@@ -356,6 +357,17 @@ dependencies = [
  "cmvs-core",
  "cmvs-native",
  "encoding_rs",
+]
+
+[[package]]
+name = "cmvs-host"
+version = "0.1.0"
+dependencies = [
+ "cmvs-audio",
+ "cmvs-core",
+ "cmvs-font",
+ "ndk-context",
+ "self_cell",
 ]
 
 [[package]]

@@ -1,0 +1,25 @@
+[package]
+name = "cmvs-host"
+license.workspace = true
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Window-independent CMVS player and versioned C host interface"
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[lints.rust]
+unsafe_code = "deny"
+[lints.clippy]
+all = "warn"
+
+[dependencies]
+cmvs-core = { path = "../cmvs-core" }
+cmvs-font = { path = "../cmvs-font" }
+cmvs-audio = { path = "../cmvs-audio" }
+self_cell.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+ndk-context = "=0.1.1"

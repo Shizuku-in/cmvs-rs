@@ -88,6 +88,8 @@ cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop
 
 ## macOS
 
+Apple Silicon 本机构建及 iOS 真机/模拟器构建入口另见 [Apple players](../../platforms/apple/README.md)，其中记录了实际验证范围与当前限制。
+
 安装 Rust stable 与 Xcode Command Line Tools（`xcode-select --install`）。Apple Silicon 与 Intel 均使用本机默认 Rust target；首次构建需要联网获取依赖。
 
 ```bash

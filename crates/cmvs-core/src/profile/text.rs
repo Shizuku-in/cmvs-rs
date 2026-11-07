@@ -462,7 +462,10 @@ pub(super) fn parse_games(text: &str) -> Result<Vec<GameRecord>, ProfileError> {
                 sha256: sha_field(line, words[1])?,
             })
         };
-        let start_script = file(&mut lines, "start")?;
+        let mut start_scripts = vec![file(&mut lines, "start")?];
+        while lines.peek_key() == Some("start") {
+            start_scripts.push(file(&mut lines, "start")?);
+        }
         let script_archive = file(&mut lines, "archive")?;
         let (line, words) = lines.expect("game-id", 1)?;
         let game_id = hex32(line, words[0])?;
@@ -488,7 +491,7 @@ pub(super) fn parse_games(text: &str) -> Result<Vec<GameRecord>, ProfileError> {
         games.push(GameRecord {
             game,
             profile,
-            start_script,
+            start_scripts,
             script_archive,
             game_id,
             executables,
