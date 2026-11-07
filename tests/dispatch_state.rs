@@ -58,7 +58,7 @@ fn setup(scene: &mut SceneHost) {
 #[test]
 fn batch_has_exact_owners_and_each_command_completes_with_only_its_own_host() {
     let cases = cases();
-    for (capability, count) in [(Capability::Scene, 74), (Capability::Camera, 29)] {
+    for (capability, count) in [(Capability::Scene, 76), (Capability::Camera, 29)] {
         let expected: std::collections::BTreeSet<_> = cases
             .iter()
             .filter(|(_, _, cap)| *cap == capability)

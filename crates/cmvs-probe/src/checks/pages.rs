@@ -223,7 +223,9 @@ fn apply(session: &mut Session<'_>, entry: (usize, usize), step: &Step) -> Arriv
             if session.busy() {
                 continue;
             }
-            if o.waiting_for_advance() {
+            // A page callback can return to the same message wait with its repeat
+            // count intact. It need not be the first waiting frame anymore.
+            if o.in_message_wait() {
                 let point = WaitPoint::of(session, &o);
                 return Ok(Arrival::State(capture(session, Place::Wait(point))));
             }

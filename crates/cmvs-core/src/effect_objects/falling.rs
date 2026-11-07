@@ -1,5 +1,6 @@
 //! Identity-bound type-2 falling billboards; see games/aoitori/vm-semantics.md.
 use crate::{
+    audio::AudioBackend,
     camera::CameraHost,
     dispatch::Call,
     image::{self, ImageSource},
@@ -127,6 +128,7 @@ impl SceneHost {
         call: &mut Call<'_, '_>,
         source: &mut dyn ImageSource,
         random: &mut CrtRandom,
+        backend: Option<&mut dyn AudioBackend>,
     ) -> Result<(), Box<dyn Error>> {
         let slot = call.argument(4, "effect slot")?;
         let name_id = call.argument(8, "effect image")?;
@@ -175,11 +177,8 @@ impl SceneHost {
         let mut effect =
             FallingEffect::new(parameters, count, follow, image, &mut candidate_random);
         effect.template = template;
+        self.replace_effect_slot(slot as u8, backend)?;
         call.complete(0x4020)?;
-        self.rain_effects.remove(&(slot as u8));
-        self.particle_effects.remove(&(slot as u8));
-        self.collision_effects.remove(&(slot as u8));
-        self.fragment_effects.remove(&(slot as u8));
         self.falling_effects.insert(slot as u8, effect);
         *random = candidate_random;
         Ok(())

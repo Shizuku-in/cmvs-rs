@@ -147,3 +147,33 @@ fn child_rotation_minus_two_disposes_only_the_child_and_zero_cycles_are_bounded(
     assert_eq!(angle(&scene), 9000);
     assert!(track(&scene).unwrap().playing);
 }
+
+#[test]
+fn puriring_hold_keeps_the_angle_then_snaps_and_continues_from_the_target() {
+    let registry = cmvs_rs::profile::Registry::builtin();
+    let mut code = vec![];
+    setup(&mut code, 0);
+    command(&mut code, 0x21e6, &[20, u32::MAX, 0, 1, 0xff, 300, 90]);
+    command(&mut code, 0x21e6, &[20, u32::MAX, 1, u32::MAX, 0, 200, 180]);
+    command(&mut code, 0x21e7, &[20, u32::MAX, 0]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    let mut scene = SceneHost::for_profile(registry.profile("cmvs-20070119").unwrap());
+    run(&mut vm, &mut scene, 6);
+    scene.advance_frame(100);
+    assert_eq!(angle(&scene), 0);
+    scene.advance_frame(200);
+    assert_eq!(angle(&scene), 9000);
+    assert_eq!(track(&scene).unwrap().base, 9000);
+    scene.advance_frame(100);
+    assert_eq!(angle(&scene), 13500);
+    scene.advance_frame(100);
+    assert_eq!(angle(&scene), 18000);
+    assert!(track(&scene).is_none());
+
+    let mut vm = Machine::new(&program).unwrap();
+    let mut modern = SceneHost::default();
+    run(&mut vm, &mut modern, 3);
+    pending(&mut vm);
+    assert!(modern.shared_state(&mut vm).is_err());
+}

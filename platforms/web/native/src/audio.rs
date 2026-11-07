@@ -1,5 +1,5 @@
 //! Streaming Vorbis channels backed by the page's Web Audio device.
-use cmvs_audio::VorbisProgram;
+use cmvs_audio::AudioProgram;
 use cmvs_core::{
     MAX_PAYLOAD,
     audio::{
@@ -45,7 +45,7 @@ struct Compression {
     ended: bool,
 }
 struct Channel {
-    program: VorbisProgram,
+    program: AudioProgram,
     compression: Option<Compression>,
     epoch: u32,
     started: bool,
@@ -55,7 +55,7 @@ struct Channel {
     volume: f32,
 }
 impl Channel {
-    fn new(program: VorbisProgram, volume: u32) -> Self {
+    fn new(program: AudioProgram, volume: u32) -> Self {
         Self {
             program,
             compression: None,
@@ -267,7 +267,7 @@ impl AudioBackend for BrowserAudio {
                 && let Some(data) = self.load(ResourceKind::SoundEffect, &value.name)?
             {
                 prepared[id] = Some(Channel::new(
-                    VorbisProgram::new(data, None, value.looped)?,
+                    AudioProgram::new(data, None, value.looped)?,
                     value.volume,
                 ));
             }
@@ -316,7 +316,7 @@ impl AudioBackend for BrowserAudio {
             self.release(id);
             return Ok(false);
         };
-        let candidate = Channel::new(VorbisProgram::new(data, None, *looped)?, *volume);
+        let candidate = Channel::new(AudioProgram::new(data, None, *looped)?, *volume);
         self.install(
             id,
             Some(candidate),
@@ -413,7 +413,7 @@ impl AudioBackend for BrowserAudio {
         let Some(data) = data else {
             return Ok(false);
         };
-        let mut candidate = Channel::new(VorbisProgram::new(data, None, false)?, *volume);
+        let mut candidate = Channel::new(AudioProgram::new(data, None, false)?, *volume);
         if let Some(compressor) = VoiceCompressor::new(
             f32::from_bits(*rate_bits),
             candidate.program.sample_rate(),
@@ -459,7 +459,7 @@ impl AudioBackend for BrowserAudio {
                     .ok_or("BGM loop resource missing")?,
             )
         };
-        let candidate = Channel::new(VorbisProgram::new(first, second, *looped)?, *volume);
+        let candidate = Channel::new(AudioProgram::new(first, second, *looped)?, *volume);
         self.set_volumes(&std::array::from_fn(|i| {
             if i < 2 {
                 Some((*volume).min(256))
@@ -510,7 +510,7 @@ impl AudioBackend for BrowserAudio {
         file.seek(SeekFrom::Start(*offset))?;
         let mut bytes = vec![0; *size as usize];
         file.read_exact(&mut bytes)?;
-        let candidate = Channel::new(VorbisProgram::new(bytes, None, false)?, *volume);
+        let candidate = Channel::new(AudioProgram::new(bytes, None, false)?, *volume);
         self.install(2, Some(candidate), true, 0)
     }
     fn stop_movie_audio(&mut self) -> Result<(), Box<dyn Error>> {

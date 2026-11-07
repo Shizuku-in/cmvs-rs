@@ -46,7 +46,7 @@ impl DrawBindings {
         // Dynamic offsets are u32 even on devices with larger buffer limits.
         let limit = device.limits().max_buffer_size.min(u64::from(u32::MAX)) & !3;
         if size > limit {
-            return Err("scene parameters exceed buffer limits".into());
+            return Err(format!("scene parameters exceed buffer limits: {count} draws, stride {}, requested {size} bytes, limit {limit}", self.stride).into());
         }
         if size > self.buffer.size() {
             self.buffer = Self::buffer(device, size.next_power_of_two().min(limit));

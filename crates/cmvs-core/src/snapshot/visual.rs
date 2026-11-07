@@ -11,6 +11,7 @@ use crate::{
 use std::{collections::BTreeMap, error::Error};
 mod collision;
 mod draw;
+mod legacy;
 pub(super) mod text;
 pub(super) mod window;
 
@@ -22,6 +23,33 @@ const MAX_PIXELS: usize = 64 * 1024 * 1024;
 mod tests {
     use super::*;
     use crate::scene::ImageChange;
+
+    #[test]
+    fn object_effect_header_roundtrip_rebuilds_independent_rows_at_time_zero() {
+        let mut draw = DrawState::default();
+        draw.words[4..6].copy_from_slice(&[4, 3]);
+        let mut effect =
+            crate::scene::ObjectEffect::create(&draw, [0; 2], [1, 0, 0, 500, 1, 0, 0, 250, 1000])
+                .unwrap();
+        effect.advance(333, &draw);
+        let parent = SceneObject {
+            draw: Some(draw),
+            special_effect: Some(Box::new(effect)),
+            ..Default::default()
+        };
+        let saved = SavedScene::from_object(&parent).unwrap();
+        assert_eq!(saved.effect_words[10], 333);
+        let bytes = saved.encode_with_layout(SnapshotLayout::TextV3).unwrap();
+        let parsed =
+            SavedScene::decode_with_layout(&bytes, 0, &mut 0, SnapshotLayout::TextV3).unwrap();
+        assert_eq!(saved, parsed);
+        let mut budget = MAX_PIXELS;
+        let restored = parsed.load(&mut NoImages, &mut budget).unwrap();
+        let effect = restored.special_effect.unwrap();
+        assert_eq!(effect.words[10], 0);
+        assert_eq!(effect.children.len(), 3);
+        assert_eq!(effect.children[0].draw.as_ref().unwrap().words[8], 2);
+    }
 
     struct NoImages;
     impl ImageSource for NoImages {
@@ -351,6 +379,9 @@ fn words(out: &mut Vec<u8>, words: &[u32]) {
 
 impl SavedImage {
     fn encode_with_layout(&self, layout: SnapshotLayout) -> Result<Vec<u8>, FormatError> {
+        if layout == SnapshotLayout::TextV1SceneLegacy {
+            return self.encode_legacy();
+        }
         let mut bytes = self.encode();
         if layout == SnapshotLayout::TextV1SceneV1 {
             if self.surface == Some(true) {
@@ -401,6 +432,9 @@ impl SavedImage {
         })
     }
     fn decode_with_layout(bytes: &[u8], layout: SnapshotLayout) -> Result<Self, FormatError> {
+        if layout == SnapshotLayout::TextV1SceneLegacy {
+            return Self::decode_legacy(bytes);
+        }
         let text_v1_scene_v1 = layout == SnapshotLayout::TextV1SceneV1;
         let mut r = Reader::new(bytes);
         let h = if text_v1_scene_v1 {
@@ -529,7 +563,7 @@ pub struct SavedScene {
     pub draw: Option<DrawState>,
     /// Optional 0x749 vertex stream, including an allocated but empty mesh.
     pub collision_vertices: Option<Vec<[u32; 3]>>,
-    /// +6264..+6304; only the inactive effect branch (word 0 == 0) is supported.
+    /// +6264..+6304. Active modes 1/16 rebuild their independent children on load.
     pub effect_words: [u32; 11],
     pub children: BTreeMap<u16, SavedScene>,
 }
@@ -553,6 +587,9 @@ impl SavedScene {
             ));
         }
         *nodes += 1;
+        if layout == SnapshotLayout::TextV1SceneLegacy {
+            return Self::decode_legacy(bytes, depth, nodes);
+        }
         let mut r = Reader::new(bytes);
         let scene_v4 = layout == SnapshotLayout::TextV3SceneV4;
         let text_v1_scene_v1 = layout == SnapshotLayout::TextV1SceneV1;
@@ -616,9 +653,18 @@ impl SavedScene {
             r.words::<11>()?
         };
         if effect_words[0] != 0 {
-            return Err(FormatError(
-                "snapshot scene image change is not implemented",
-            ));
+            let draw = draw
+                .as_ref()
+                .ok_or(FormatError("saved object effect needs a draw state"))?;
+            *nodes += crate::scene::ObjectEffect::generated_count(
+                draw,
+                &effect_words[1..10].try_into().unwrap(),
+            )?;
+            if *nodes > MAX_NODES {
+                return Err(FormatError(
+                    "saved object effects exceed the scene node budget",
+                ));
+            }
         }
         let mut children = BTreeMap::new();
         while r.peek() == Some(0x700) {
@@ -661,6 +707,9 @@ impl SavedScene {
         &self,
         layout: SnapshotLayout,
     ) -> Result<Vec<u8>, FormatError> {
+        if layout == SnapshotLayout::TextV1SceneLegacy {
+            return self.encode_legacy();
+        }
         let mut out = 0xffffu16.to_le_bytes().to_vec();
         let scene_v4 = layout == SnapshotLayout::TextV3SceneV4;
         let text_v1_scene_v1 = layout == SnapshotLayout::TextV1SceneV1;
@@ -761,7 +810,7 @@ impl SavedScene {
                 .transpose()?,
             draw: object.draw.clone(),
             collision_vertices: object.collision_vertices.clone(),
-            effect_words: [0; 11],
+            effect_words: object.special_effect.as_ref().map_or([0; 11], |e| e.words),
             children,
         })
     }
@@ -791,6 +840,22 @@ impl SavedScene {
             .as_ref()
             .map(|i| i.load(source, budget))
             .transpose()?;
+        if self.effect_words[0] != 0 {
+            // 0x14003d740 passes only the nine parameters to 0x14003d190;
+            // the saved elapsed word is not restored and the list is recreated.
+            object.special_effect = Some(Box::new(crate::scene::ObjectEffect::create(
+                object
+                    .draw
+                    .as_ref()
+                    .ok_or(FormatError("saved object effect needs a draw state"))?,
+                object.logical_size,
+                self.effect_words[1..10].try_into().unwrap(),
+            )?));
+        } else if self.effect_words != [0; 11] {
+            object.special_effect = Some(Box::new(crate::scene::ObjectEffect::inactive(
+                self.effect_words,
+            )));
+        }
         for (&slot, child) in &self.children {
             object.children.insert(slot, child.load(source, budget)?);
         }

@@ -1,6 +1,7 @@
 //! Type-6 particles and scene-slot collision planes; executable-bound research semantics.
 use super::particles::{hundredth, range as spread};
 use crate::{
+    audio::AudioBackend,
     bytecode::DecodeError,
     dispatch::Call,
     image::{self, ImageSource},
@@ -243,6 +244,7 @@ impl SceneHost {
         call: &mut Call<'_, '_>,
         source: &mut dyn ImageSource,
         random: &mut CrtRandom,
+        backend: Option<&mut dyn AudioBackend>,
     ) -> Result<(), Box<dyn Error>> {
         let slot = call.argument(4, "effect slot")?;
         let name_id = call.argument(8, "particle image")?;
@@ -284,11 +286,8 @@ impl SceneHost {
         let mut candidate_random = random.clone();
         let mut effect = CollisionEffect::new(mode, parameters, count, pool, &mut candidate_random);
         effect.template = template;
+        self.replace_effect_slot(slot as u8, backend)?;
         call.complete(0x4018)?;
-        self.rain_effects.remove(&(slot as u8));
-        self.particle_effects.remove(&(slot as u8));
-        self.falling_effects.remove(&(slot as u8));
-        self.fragment_effects.remove(&(slot as u8));
         self.collision_effects.insert(slot as u8, effect);
         *random = candidate_random;
         Ok(())

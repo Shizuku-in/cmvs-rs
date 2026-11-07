@@ -245,7 +245,8 @@ impl MessageHost {
     pub fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
         Self {
             child_slots: crate::scene::ChildSlots::for_profile(profile),
-            legacy_text_creation: profile.is_inspected_20071117()
+            legacy_text_creation: profile.is_inspected_20070119()
+                || profile.is_inspected_20071117()
                 || profile.is_inspected_20080719()
                 || profile.is_inspected_20080903(),
             ..Self::default()
@@ -688,6 +689,7 @@ impl MessageHost {
             0x14b..=0x14d => self.presence(call),
             0x14a | 0x15a => self.window_text(call),
             0x1cf..=0x1d1 => self.animation(call),
+            0x1c0..=0x1c2 => self.scale_motion(call),
             _ => Err(call.error("unregistered window command")),
         }
     }
@@ -794,6 +796,98 @@ impl MessageHost {
         candidate.revision_alpha = self.output_settings.revision_alpha;
         // The native overwrite leaks its old object; Rust drops owned state.
         self.auxiliary_texts[slot] = Some(candidate);
+        Ok(())
+    }
+    /// cmvs-20070119 0x21c0 / 0x438af0, 0x21c1 / 0x438b70 and 0x21c2 / 0x438c20: the
+    /// draw-state +88 scale track of a window object (SP-4 window below 4, SP-8 child
+    /// through 0x429070, negative = the window object). Arguments and the 0xb8-byte track match
+    /// scene 0x21e0..0x21e2: create with base X/Y floats (0x40ef10, pops 16), set key
+    /// SP-12 with next/mode/duration/X/Y (0x40f010, pops 32), start at key SP-12
+    /// (0x40b930, pops 12). Set/start without a track are no-ops; the frame update is
+    /// 0x40f080, the shared scale interpolation. Missing windows, children or draw states
+    /// only set +8108 bit 0x10000 in the original and are errors here.
+    fn scale_motion(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        use crate::scene::{SCALE_KEYS, ScaleKey, ScaleMotion, ScalePlayback};
+        let (pc, command) = (call.pc, call.command);
+        let op = command + 0x2000;
+        let fail = |why| error(pc, op, why);
+        let count = match command {
+            0x1c0 => 4,
+            0x1c1 => 8,
+            _ => 3,
+        };
+        const NAMES: [&str; 8] = [
+            "window slot",
+            "child slot",
+            "first argument",
+            "second argument",
+            "mode",
+            "duration",
+            "target x",
+            "target y",
+        ];
+        let mut args = [0u32; 8];
+        for (i, arg) in args.iter_mut().take(count).enumerate() {
+            *arg = call.argument((i + 1) * 4, NAMES[i])?;
+        }
+        if args[0] >= 4 {
+            return Err(fail("window scale motion slot outside this build's 0..3"));
+        }
+        let slot = args[0] as usize;
+        let children = self.child_slots.count();
+        let draw = self.windows[slot]
+            .as_ref()
+            .and_then(|window| window_target(&window.object, args[1] as i32, children))
+            .ok_or_else(|| fail("message window or window child does not exist"))?
+            .draw
+            .as_ref()
+            .ok_or_else(|| fail("window scale motion target has no draw state"))?;
+        if draw.scale_motion.is_some() {
+            if command != 0x1c0 && args[2] >= SCALE_KEYS as u32 {
+                return Err(fail("scale key outside 0..7"));
+            }
+            if command == 0x1c1 {
+                if (args[3] as i32) >= SCALE_KEYS as i32 {
+                    return Err(fail("next scale key outside 0..7"));
+                }
+                if !matches!(args[4] as u8, 0 | 1) {
+                    return Err(fail("scale motion mode not implemented"));
+                }
+            }
+        }
+        call.complete(0x4000 | (count * 4) as u16)?;
+        let window = self.windows[slot].as_mut().expect("validated window");
+        let draw = window_target_mut(&mut window.object, args[1] as i32, children)
+            .and_then(|target| target.draw.as_mut())
+            .expect("validated draw state");
+        match command {
+            0x1c0 => {
+                draw.scale_motion = Some(Box::new(ScaleMotion {
+                    base: [args[2], args[3]],
+                    playback: None,
+                    keys: [ScaleKey::default(); SCALE_KEYS],
+                }))
+            }
+            0x1c1 => {
+                if let Some(motion) = draw.scale_motion.as_mut() {
+                    motion.keys[args[2] as usize] = ScaleKey {
+                        next: args[3] as i32,
+                        mode: args[4],
+                        duration: args[5],
+                        xy: [args[6], args[7]],
+                    };
+                }
+            }
+            _ => {
+                if let Some(motion) = draw.scale_motion.as_mut() {
+                    motion.playback = Some(ScalePlayback {
+                        start: args[2],
+                        current: args[2],
+                        elapsed: 0,
+                    });
+                }
+            }
+        }
         Ok(())
     }
     /// 0x2178 / 0x140077180 (0x14005d2a0) and 0x217f / 0x1400773d0: SP-4 window slot, SP-8
@@ -1026,7 +1120,8 @@ impl MessageHost {
     /// ruby size 12. The logical size (+552/+556) repeats the configured screen info +8/+12.
     /// The face is copied into +44 and selected on the
     /// font object (0x140059b90); explicit faces are enabled only for the inspected
-    /// 2007 constructor (0x444410 -> 0x4356a0 -> 0x4338a0) and the 2008
+    /// 2007 constructors (PURIRING 0x4361b0 -> 0x428c20 -> 0x426ee0,
+    /// ASUKIMI 0x444410 -> 0x4356a0 -> 0x4338a0) and the 2008
     /// constructor (0x448560 -> 0x437a70 -> 0x435c50). The capacity
     /// (+324) sizes the glyph texture in 0x14005a6a0: 0 and 196 (0x215d's value) both give
     /// a 1024x2048 texture; other capacities are rejected because textures are not modeled.
@@ -1960,6 +2055,9 @@ impl MessageHost {
             group.secondary_image = Some(image);
             return Ok(());
         }
+        if call.command == 0x176 {
+            return self.window_child_image(call, images);
+        }
         let slot = call_window_slot(call)?;
         let raw = call.argument(8, window_argument_names(call.command)[1])?;
         let name = call.vm.resolve_string(raw)?;
@@ -1984,6 +2082,37 @@ impl MessageHost {
             .expect("checked above")
             .object
             .image = Some(image);
+        Ok(())
+    }
+    /// cmvs-20070119 0x2176 / 0x438670: SP-4 window (below 4), SP-8 child through 0x429070
+    /// (negative = the window object), SP-12 image. The target's image is released
+    /// (0x4163e0) and reloaded from the 0x2011 entries (0x416590); a decode failure only sets
+    /// +8108 bit 0x80 and leaves no image. Returns 0x400c without a result write.
+    fn window_child_image(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        images: &mut dyn ImageSource,
+    ) -> Result<(), Box<dyn Error>> {
+        let pc = call.pc;
+        let slot = call.argument(4, "window slot")?;
+        let child = call.argument(8, "child slot")? as i32;
+        let raw = call.argument(12, "image name")?;
+        let children = self.child_slots.count();
+        if slot >= 4
+            || self.windows[slot as usize]
+                .as_ref()
+                .and_then(|window| window_target(&window.object, child, children))
+                .is_none()
+        {
+            return Err(error(pc, 0x2176, "message window or window child does not exist").into());
+        }
+        let name = call.vm.resolve_string(raw)?;
+        let image = scene::load_image(images, name, pc, 0x2176)?;
+        call.complete(0x400c)?;
+        let window = self.windows[slot as usize].as_mut().expect("checked above");
+        window_target_mut(&mut window.object, child, children)
+            .expect("checked above")
+            .image = image;
         Ok(())
     }
     /// 0x215b / 0x140076b80 and 0x2142..0x2149 / 0x140076060..0x140076370: SP-4 window

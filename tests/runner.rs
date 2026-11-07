@@ -1917,6 +1917,7 @@ fn old_snapshot_roundtrip_uses_build_layout_and_zero_css1_identity() {
         system_save::Css1Save,
     };
     for (profile, layout) in [
+        ("cmvs-20070119", SnapshotLayout::TextV1SceneLegacy),
         ("cmvs-20071117", SnapshotLayout::TextV1SceneV1),
         ("cmvs-20080719", SnapshotLayout::TextV1SceneV2),
     ] {

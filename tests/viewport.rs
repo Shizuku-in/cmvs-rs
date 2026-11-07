@@ -87,7 +87,7 @@ fn normal_falls_back_to_contain_and_fixed_point_rounding_matches_engine() {
         }
     }
     assert!(Viewport::new([0, 2], [5, 5], 1).is_err());
-    assert!(Viewport::new([2, 2], [5, 5], 4).is_err());
+    assert!(Viewport::new([2, 2], [5, 5], 5).is_err());
     assert!(Viewport::new([2, 2], [u32::MAX, u32::MAX], 1).is_err());
 }
 
@@ -119,4 +119,31 @@ fn linear_presentation_uses_texel_centers_clamped_edges_and_premultiplied_alpha(
     image.draw_scaled(&mut target, 3, 1, 3, true).unwrap();
     assert_eq!(target[1], 0x800080);
     assert!(image.draw_scaled(&mut [0; 2], 3, 1, 3, true).is_err());
+}
+
+#[test]
+fn legacy_full_move_keeps_unscaled_drawing_and_pointer_input_at_the_origin() {
+    use cmvs_rs::viewport::{UNSCALED_ORIGIN, presentation_mode_with_full_move};
+    let mode = presentation_mode_with_full_move(true, false, 3, true);
+    assert_eq!(mode, UNSCALED_ORIGIN);
+    let view = Viewport::new([4, 2], [8, 6], mode).unwrap();
+    assert_eq!((view.left, view.top, view.width, view.height), (0, 0, 4, 2));
+    assert_eq!(view.to_source([0.0, 0.0]), Some([0, 0]));
+    assert_eq!(view.to_source([4.0, 0.0]), None);
+    assert_eq!(view.to_source(view.to_target([3, 1])), Some([3, 1]));
+    let image = RgbaImage::new(4, 2, vec![255; 4 * 2 * 4]).unwrap();
+    let mut pixels = vec![0; 8 * 6];
+    image.draw_scaled(&mut pixels, 8, 6, mode, false).unwrap();
+    for y in 0..6 {
+        for x in 0..8 {
+            assert_eq!(pixels[y * 8 + x], if x < 4 && y < 2 { 0xffffff } else { 0 });
+        }
+    }
+    assert_eq!(presentation_mode_with_full_move(true, false, 3, false), 0);
+    assert_eq!(presentation_mode_with_full_move(true, true, 3, true), 3);
+    assert_eq!(presentation_mode_with_full_move(false, false, 3, true), 1);
+    assert_eq!(
+        Viewport::new([8, 6], [4, 4], mode),
+        Viewport::new([8, 6], [4, 4], 1)
+    );
 }

@@ -219,6 +219,9 @@ impl<'a> Startup<'a> {
         let effects = crate::save_menu::profile_int(text, "SYSTEM_INFO", "EFFECT_USE", 1) != 0;
         let mut platform = PlatformHost::default();
         platform.configure_display_selection(text);
+        if game.selection.profile.is_inspected_20070119() {
+            platform.configure_window_full_move(text);
+        }
         Ok(Self {
             slot_edit: None,
             main_script_name: if game.files.start_name() == b"start.ps2" {
@@ -485,6 +488,13 @@ impl<'a> Startup<'a> {
         self.messages
             .advance_auxiliary_motion(delta_ms, &mut self.scene)?;
         self.camera.advance_frame(delta_ms);
+        // cmvs-20070119 0x407810 updates the effect slots after the view motion.
+        self.scene.advance_legacy_effects(
+            delta_ms,
+            &mut self.camera,
+            self.audio.settings(),
+            self.audio_backend.as_mut(),
+        )?;
         self.frame_delta = delta_ms;
         self.take_capture()
     }
@@ -552,11 +562,14 @@ impl<'a> Startup<'a> {
     pub fn audio(&self) -> &AudioHost {
         &self.audio
     }
-    /// Defaults to a recording backend that reports nothing started.
+    /// Defaults to a recording backend that reports nothing started. The new backend
+    /// receives the paths and keys registered so far.
     pub fn set_audio_backend(
         &mut self,
         mut backend: Box<dyn AudioBackend>,
     ) -> Result<(), Box<dyn Error>> {
+        backend.configure_paths(self.bootstrap.paths())?;
+        backend.configure_archive_parameters(self.bootstrap.archive_parameters())?;
         backend.configure_voice_ducking(self.audio.voice_ducking())?;
         if !self.audio.output_enabled() {
             backend.set_output_enabled(false)?;
@@ -781,6 +794,11 @@ impl<'a> Startup<'a> {
                 .configure_parameters(self.bootstrap.archive_parameters());
             self.scene_movies
                 .configure_parameters(self.bootstrap.archive_parameters());
+            // The audio backend keeps its own copy, so every later sound load by name
+            // sees the current registrations and keys.
+            self.audio_backend.configure_paths(self.bootstrap.paths())?;
+            self.audio_backend
+                .configure_archive_parameters(self.bootstrap.archive_parameters())?;
             return Ok(if flow == Some(crate::dispatch::Flow::Done) {
                 StartupEvent::Progress
             } else {
@@ -790,16 +808,11 @@ impl<'a> Startup<'a> {
                 }
             });
         }
-        if matches!(command, 0xa0 | 0xa4 | 0xa6 | 0xb0 | 0xba | 0x2d6 | 0x2d7) {
-            self.audio_backend.configure_paths(self.bootstrap.paths())?;
-            self.audio_backend
-                .configure_archive_parameters(self.bootstrap.archive_parameters())?;
-        }
         let gate = SkipGate {
             effects: self.effects,
             skip: self.message_flags.skip(),
         };
-        if crate::dispatch::is_wait(command) {
+        if crate::dispatch::is_wait_for(resolved.semantics, command) {
             let flow = crate::dispatch::run(
                 resolved.semantics,
                 &mut self.machine,

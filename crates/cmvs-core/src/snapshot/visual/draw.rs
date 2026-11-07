@@ -65,13 +65,25 @@ pub(super) fn decode_with_layout(
     bytes: &[u8],
     layout: SnapshotLayout,
 ) -> Result<DrawState, FormatError> {
+    let legacy = layout == SnapshotLayout::TextV1SceneLegacy;
     let text_v1_scene_v1 = layout == SnapshotLayout::TextV1SceneV1;
     let mut r = Reader::new(bytes);
-    if r.u16()? != if text_v1_scene_v1 { 3 } else { 4 } || r.u16()? != 0 {
+    if r.u16()?
+        != if legacy {
+            1
+        } else if text_v1_scene_v1 {
+            3
+        } else {
+            4
+        }
+        || r.u16()? != 0
+    {
         return Err(FormatError("unsupported snapshot draw version"));
     }
     let words = r.words::<22>()?;
-    let extra = if text_v1_scene_v1 {
+    let extra = if legacy {
+        [0; 6]
+    } else if text_v1_scene_v1 {
         let v3_extra = r.words::<5>()?;
         let mut extra = [0; 6];
         extra[..5].copy_from_slice(&v3_extra);
@@ -95,7 +107,7 @@ pub(super) fn decode_with_layout(
     }
     if r.peek() == Some(0x791) {
         r.u16()?;
-        out.rotation_track = Some(Box::new(rotation(r.chunk()?)?));
+        out.rotation_track = Some(Box::new(rotation(r.chunk()?, legacy)?));
     }
     if r.peek() == Some(0x792) {
         r.u16()?;
@@ -115,7 +127,11 @@ pub(super) fn decode_with_layout(
     if r.peek() == Some(0x795) {
         r.u16()?;
         let allow_legacy_sine_modes = layout.text_version() == 1;
-        out.world_motion = Some(Box::new(world(r.chunk()?, allow_legacy_sine_modes)?));
+        out.world_motion = Some(Box::new(world(
+            r.chunk()?,
+            allow_legacy_sine_modes,
+            legacy,
+        )?));
     }
     if r.peek().is_some_and(|tag| (0x790..=0x795).contains(&tag)) {
         return Err(FormatError(
@@ -143,13 +159,23 @@ pub(crate) fn encode_with_layout(
     draw: &DrawState,
     layout: SnapshotLayout,
 ) -> Result<Vec<u8>, FormatError> {
+    let legacy = layout == SnapshotLayout::TextV1SceneLegacy;
     let text_v1_scene_v1 = layout == SnapshotLayout::TextV1SceneV1;
+    if legacy && (draw.texture_mode != 0 || draw.texture_subtract != 0 || draw.depth_bias != 0) {
+        return Err(FormatError("draw v1 has no extra texture fields"));
+    }
     if text_v1_scene_v1 && draw.depth_bias != 0 {
         return Err(FormatError("draw v3 has no depth bias field"));
     }
-    let mut out = if text_v1_scene_v1 { 3u16 } else { 4u16 }
-        .to_le_bytes()
-        .to_vec();
+    let mut out = if legacy {
+        1u16
+    } else if text_v1_scene_v1 {
+        3u16
+    } else {
+        4u16
+    }
+    .to_le_bytes()
+    .to_vec();
     out.extend(0u16.to_le_bytes());
     for word in draw.words {
         out.extend(word.to_le_bytes());
@@ -163,8 +189,13 @@ pub(crate) fn encode_with_layout(
         draw.depth_bias,
     ]
     .into_iter()
-    .take(if text_v1_scene_v1 { 5 } else { 6 })
-    {
+    .take(if legacy {
+        0
+    } else if text_v1_scene_v1 {
+        5
+    } else {
+        6
+    }) {
         out.extend(word.to_le_bytes());
     }
     if let Some(scale) = &draw.scale_motion {
@@ -256,6 +287,11 @@ pub(crate) fn encode_with_layout(
         put_track(&mut out, 0x794, &words);
     }
     if let Some(world) = &draw.world_motion {
+        if world.legacy_20070119 != legacy {
+            return Err(FormatError(
+                "world motion semantics disagree with snapshot layout",
+            ));
+        }
         let p = world.playback.as_ref();
         let base = p.map_or([0; 3], |p| p.base);
         let mut words = vec![u32::from(p.is_some()), base[0], base[1], base[2]];
@@ -360,7 +396,7 @@ fn scale(bytes: &[u8]) -> Result<ScaleMotion, FormatError> {
     })
 }
 
-fn rotation(bytes: &[u8]) -> Result<RotationTrack, FormatError> {
+fn rotation(bytes: &[u8], allow_hold: bool) -> Result<RotationTrack, FormatError> {
     let mut r = track(bytes, OPACITY_SIZE)?;
     let [play, base, start, current, elapsed] = r.words::<5>()?;
     let angle = |v: u32| (-35900..=35900).contains(&(v as i32)) && (v as i32) % 100 == 0;
@@ -372,7 +408,7 @@ fn rotation(bytes: &[u8]) -> Result<RotationTrack, FormatError> {
         let [next, value, mode, duration] = r.words::<4>()?;
         if !keys_in_range(next as i32, ROTATION_KEYS)
             || !angle(value)
-            || !RotationTrack::supports(mode)
+            || !(RotationTrack::supports(mode) || allow_hold && mode == 0xff)
             || (mode as u8 == 0x80 && duration == 0)
         {
             return Err(FormatError("unsupported snapshot rotation key"));
@@ -471,15 +507,23 @@ fn position(bytes: &[u8]) -> Result<PositionMotion, FormatError> {
     Ok(PositionMotion { playback, keys })
 }
 
-fn world(bytes: &[u8], allow_legacy_sine_modes: bool) -> Result<WorldMotion, FormatError> {
+fn world(
+    bytes: &[u8],
+    allow_legacy_sine_modes: bool,
+    legacy: bool,
+) -> Result<WorldMotion, FormatError> {
     let mut r = track(bytes, WORLD_SIZE)?;
     let [play, x, y, z, start, current, elapsed] = r.words::<7>()?;
     let mut keys = [MotionKey::default(); WORLD_MOTION_KEYS];
     for key in &mut keys {
         let [next, kx, ky, kz, mode, duration] = r.words::<6>()?;
         if !keys_in_range(next as i32, WORLD_MOTION_KEYS)
-            || !(WorldMotion::supports_mode(mode)
-                || allow_legacy_sine_modes && matches!(mode as u8, 0x20 | 0x21 | 0x30 | 0x40))
+            || !(if legacy {
+                matches!(mode as u8, 0 | 1 | 0x10)
+            } else {
+                WorldMotion::supports_mode(mode)
+                    || allow_legacy_sine_modes && matches!(mode as u8, 0x20 | 0x21 | 0x30 | 0x40)
+            })
         {
             return Err(FormatError("snapshot world motion key is not supported"));
         }
@@ -502,7 +546,11 @@ fn world(bytes: &[u8], allow_legacy_sine_modes: bool) -> Result<WorldMotion, For
     } else {
         None
     };
-    Ok(WorldMotion { playback, keys })
+    Ok(WorldMotion {
+        legacy_20070119: legacy,
+        playback,
+        keys,
+    })
 }
 
 fn animation(bytes: &[u8], format: AnimationSnapshotFormat) -> Result<Animation, FormatError> {

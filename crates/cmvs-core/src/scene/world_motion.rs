@@ -33,6 +33,8 @@ pub struct MotionPlayback {
 /// 0xdc-byte track, constructor 0x1400253e0 clears playing and eight entries only.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WorldMotion {
+    /// cmvs-20070119 0x40f710: sine ease and linear motion with X sway.
+    pub legacy_20070119: bool,
     pub playback: Option<MotionPlayback>,
     pub keys: [MotionKey; WORLD_MOTION_KEYS],
 }
@@ -64,6 +66,37 @@ impl WorldMotion {
             // cvtsi2ss uses zero-extended rdi/r8, not the decompiler's signed int casts.
             let elapsed = playback.elapsed as f32;
             let duration = key.duration as f32;
+            if self.legacy_20070119 {
+                let mode = key.mode as u8;
+                let relative = key.mode & 0x8000 != 0;
+                if matches!(mode, 0 | 1) || mode == 0x10 && !relative {
+                    for (i, word) in words[11..14].iter_mut().enumerate() {
+                        let base = f32::from_bits(playback.base[i]);
+                        let target = f32::from_bits(key.xyz[i]);
+                        let distance = if relative { target } else { target - base };
+                        let offset = if mode == 1 {
+                            let degrees = (f64::from(elapsed) * 90.0 / f64::from(duration)) as f32;
+                            legacy_sine(degrees, distance)
+                        } else {
+                            let value = f64::from(distance) * f64::from(elapsed)
+                                / f64::from(duration)
+                                * 100.0;
+                            let integer = if !(-2147483648.0..2147483648.0).contains(&value) {
+                                i32::MIN
+                            } else {
+                                value as i32
+                            };
+                            (f64::from(integer) / 100.0) as f32
+                        };
+                        *word = (base + offset).to_bits();
+                    }
+                }
+                if mode == 0x10 {
+                    let degrees = (f64::from(playback.elapsed % 2000) * 360.0 / 2000.0) as f32;
+                    words[11] = (f32::from_bits(words[11]) + legacy_sine(degrees, 0.2)).to_bits();
+                }
+                return None;
+            }
             if matches!(key.mode as u8, 0x20 | 0x21 | 0x30 | 0x40) {
                 // ASUKIMI 0x414af0 -> 0x42db70; HAROUSE 0x415010 -> 0x4256e0:
                 // Y half-turn arches or X full-turn oscillation; full high word / 100.
@@ -185,8 +218,23 @@ impl WorldMotion {
     }
 }
 
+fn legacy_sine(degrees: f32, distance: f32) -> f32 {
+    let radians = f64::from(degrees) / 180.0 * f64::from(std::f32::consts::PI);
+    let value = (radians.sin() * f64::from(distance)) as f32;
+    let scaled = f64::from(value) * 100.0;
+    let integer = if !(-2147483648.0..2147483648.0).contains(&scaled) {
+        i32::MIN
+    } else {
+        scaled as i32
+    };
+    (f64::from(integer) / 100.0) as f32
+}
+
 impl SceneHost {
     fn supports_world_motion_mode(&self, mode: u32) -> bool {
+        if self.legacy_world_motion {
+            return matches!(mode as u8, 0 | 1 | 0x10);
+        }
         WorldMotion::supports_mode(mode)
             || self.allow_legacy_sine_modes && matches!(mode as u8, 0x20 | 0x21 | 0x30 | 0x40)
     }
@@ -203,6 +251,8 @@ impl SceneHost {
     ) -> Result<(), DecodeError> {
         let fail = |why| error(at.0, at.1, why);
         let slot = u8::try_from(raw_slot).map_err(|_| fail("motion slot outside 0..255"))?;
+        let legacy = self.legacy_world_motion;
+        let supported = self.supports_world_motion_mode(mode);
         let Some(object) = self.object_mut(slot) else {
             return Ok(());
         };
@@ -210,10 +260,13 @@ impl SceneHost {
             .draw
             .as_mut()
             .ok_or_else(|| fail("motion target has no draw state"))?;
-        if !WorldMotion::supports_mode(mode) {
+        if !supported {
             return Err(fail("world motion interpolation mode is not implemented"));
         }
-        let mut motion = WorldMotion::default();
+        let mut motion = WorldMotion {
+            legacy_20070119: legacy,
+            ..Default::default()
+        };
         motion.keys[0] = MotionKey {
             next: -1,
             xyz,
@@ -307,7 +360,12 @@ impl SceneHost {
         };
         let draw = object.draw.as_mut().expect("validated draw");
         match command {
-            0x1f9 => draw.world_motion = Some(Box::default()),
+            0x1f9 => {
+                draw.world_motion = Some(Box::new(WorldMotion {
+                    legacy_20070119: self.legacy_world_motion,
+                    ..Default::default()
+                }))
+            }
             0x1fa => {
                 if let Some(motion) = draw.world_motion.as_mut() {
                     motion.keys[args[2] as usize] = MotionKey {
@@ -359,6 +417,53 @@ mod tests {
             }),
             ..WorldMotion::default()
         }
+    }
+
+    #[test]
+    fn puriring_sine_and_sway_use_old_interpolation_and_snap_at_the_boundary() {
+        let mut motion = playing();
+        motion.legacy_20070119 = true;
+        motion.keys[0] = MotionKey {
+            next: -1,
+            xyz: [10f32.to_bits(); 3],
+            mode: 1,
+            duration: 400,
+        };
+        let mut words = [0; 22];
+        assert_eq!(motion.advance(200, &mut words), None);
+        assert_eq!(words[11..14], [7.07f32.to_bits(); 3]);
+        assert_eq!(motion.advance(200, &mut words), Some(-1));
+        assert_eq!(words[11..14], [10f32.to_bits(); 3]);
+        motion.keys[0].mode = 0x10;
+        motion.keys[0].duration = 1000;
+        motion.start([0; 3], 0);
+        motion.advance(200, &mut words);
+        assert_eq!(
+            words[11..14]
+                .iter()
+                .map(|v| f32::from_bits(*v))
+                .collect::<Vec<_>>(),
+            vec![2.11, 2.0, 2.0]
+        );
+        motion.keys[0].mode = 0x8010;
+        motion.start([0; 3], 0);
+        words[11..14].copy_from_slice(&[3f32, 4.0, 5.0].map(f32::to_bits));
+        motion.advance(200, &mut words);
+        assert_eq!(words[11..14], [3.11f32, 4.0, 5.0].map(f32::to_bits));
+        motion.advance(200, &mut words);
+        assert_eq!(f32::from_bits(words[11]), 3.11f32 + 0.19);
+        assert_eq!(words[12..14], [4f32, 5.0].map(f32::to_bits));
+    }
+
+    #[test]
+    fn puriring_motion_modes_are_bound_to_the_profile() {
+        let registry = crate::profile::Registry::builtin();
+        let old = SceneHost::for_profile(registry.profile("cmvs-20070119").unwrap());
+        for mode in [0, 1, 0x8001, 0x10, 0x8010] {
+            assert!(old.supports_world_motion_mode(mode));
+        }
+        assert!(!SceneHost::default().supports_world_motion_mode(0x10));
+        assert!(!old.supports_world_motion_mode(0x20));
     }
 
     #[test]

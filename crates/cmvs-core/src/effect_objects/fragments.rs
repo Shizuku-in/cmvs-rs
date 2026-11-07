@@ -1,11 +1,12 @@
 //! Type-8 image fragments; executable-bound evidence is in games/aoitori/vm-semantics.md.
 use crate::{
+    audio::AudioBackend,
     bytecode::DecodeError,
     dispatch::Call,
     random::CrtRandom,
     scene::{DrawState, SceneHost, SceneObject},
 };
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, error::Error};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Fragment {
@@ -116,11 +117,17 @@ impl SceneHost {
     pub(crate) fn query_fragments(&self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
         let slot = call.argument(4, "effect slot")?;
         let value = if slot < 4 {
-            let effect = self
-                .fragment_effects
-                .get(&(slot as u8))
-                .ok_or_else(|| call.error("fragment query needs an existing type-8 effect"))?;
-            Some(if effect.complete { u32::MAX } else { 0 })
+            let slot = slot as u8;
+            if let Some(effect) = self.fragment_effects.get(&slot) {
+                Some(if effect.complete { u32::MAX } else { 0 })
+            } else if self.has_effect_slot(slot) {
+                // BASE 0x14003f0d0: the other types take the default -1 branch, as does
+                // cmvs-20070119 type 3 (legacy flakes) in 0x417c90. That build answers its
+                // own legacy types before reaching this query.
+                Some(u32::MAX)
+            } else {
+                return Err(call.error("effect query needs an existing effect"));
+            }
         } else {
             None
         };
@@ -142,7 +149,8 @@ impl SceneHost {
         &mut self,
         call: &mut Call<'_, '_>,
         random: &mut CrtRandom,
-    ) -> Result<(), DecodeError> {
+        backend: Option<&mut dyn AudioBackend>,
+    ) -> Result<(), Box<dyn Error>> {
         let slot = call.argument(4, "effect slot")?;
         let source = call.argument(8, "source object")?;
         let parameters = [
@@ -167,17 +175,16 @@ impl SceneHost {
             || parameters[0] > i16::MAX as u32
             || size.iter().any(|&v| v > i16::MAX as u32)
         {
-            return Err(call.error("fragment geometry exceeds research bounds"));
+            return Err(call
+                .error("fragment geometry exceeds research bounds")
+                .into());
         }
         let mut candidate_random = random.clone();
         let mut effect = FragmentEffect::new(size, parameters, &mut candidate_random);
+        self.replace_effect_slot(slot as u8, backend)?;
         call.complete(0x4010)?;
         effect.pool = self.take_object(source).expect("validated source");
         effect.pool.logical_size = size;
-        self.rain_effects.remove(&(slot as u8));
-        self.particle_effects.remove(&(slot as u8));
-        self.falling_effects.remove(&(slot as u8));
-        self.collision_effects.remove(&(slot as u8));
         self.fragment_effects.insert(slot as u8, effect);
         *random = candidate_random;
         Ok(())

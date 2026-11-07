@@ -53,6 +53,11 @@ impl RotationTrack {
             return None;
         }
         if key.duration > self.elapsed {
+            // PURIRING 0x4100dd..0x4100ec: unsupported low bytes hold until the boundary.
+            // Only 0xff is admitted by this build's command gate.
+            if key.mode as u8 == 0xff {
+                return None;
+            }
             let reverse = key.mode & 0x8000 != 0;
             let distance = if reverse {
                 let base = if key.value >= self.base {
@@ -87,7 +92,7 @@ impl RotationTrack {
         }
         for _ in 0..ANIMATION_FRAMES {
             let key = self.keys[self.current as usize];
-            if (key.mode as u8) < 0x80 {
+            if (key.mode as u8) < 0x80 || key.mode as u8 == 0xff {
                 self.base = key.value;
                 words[20] = key.value as u32;
             }
@@ -154,7 +159,10 @@ impl SceneHost {
                 "rotation key outside 0..7 leaves the original track",
             ));
         }
-        if command == 0x1e6 && (!RotationTrack::supports(c as u32) || (c as u8 == 0x80 && d == 0)) {
+        if command == 0x1e6
+            && (!(RotationTrack::supports(c as u32) || self.allow_rotation_hold && c as u8 == 0xff)
+                || (c as u8 == 0x80 && d == 0))
+        {
             return Err(error(
                 pc,
                 op,

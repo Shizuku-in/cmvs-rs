@@ -32,6 +32,24 @@ pub fn presentation_mode(fullscreen: bool, scaling: bool, aspect_mode: u32) -> u
     }
 }
 
+/// Host presentation policy only; script aspect modes remain restricted to 0..=3.
+/// cmvs-20070119 0x409b50 places the unscaled fullscreen canvas at (0, 0)
+/// when WINDOW_FULL_MOVE_USE is enabled, instead of centering it.
+pub const UNSCALED_ORIGIN: u32 = 4;
+
+pub fn presentation_mode_with_full_move(
+    fullscreen: bool,
+    scaling: bool,
+    aspect_mode: u32,
+    full_move: bool,
+) -> u32 {
+    if fullscreen && !scaling && full_move {
+        UNSCALED_ORIGIN
+    } else {
+        presentation_mode(fullscreen, scaling, aspect_mode)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Viewport {
     pub left: i64,
@@ -48,7 +66,7 @@ impl Viewport {
     pub fn new(source: [u32; 2], target: [u32; 2], mode: u32) -> Result<Self, FormatError> {
         if source.contains(&0)
             || target.contains(&0)
-            || mode > 3
+            || mode > UNSCALED_ORIGIN
             || u64::from(source[0]) * u64::from(source[1]) > MAX_PAYLOAD as u64 / 4
             || u64::from(target[0]) * u64::from(target[1]) > MAX_PAYLOAD as u64 / 4
         {
@@ -56,6 +74,8 @@ impl Viewport {
         }
         let [sw, sh] = source.map(u64::from);
         let [tw, th] = target.map(u64::from);
+        let origin = mode == UNSCALED_ORIGIN;
+        let mode = if origin { 0 } else { mode };
         let mode = if mode == 0 && (tw < sw || th < sh) {
             1
         } else {
@@ -80,8 +100,16 @@ impl Viewport {
             return Err(FormatError("display viewport exceeds supported dimensions"));
         }
         Ok(Self {
-            left: (tw as i64 - w as i64) / 2,
-            top: (th as i64 - h as i64) / 2,
+            left: if origin && mode == 0 {
+                0
+            } else {
+                (tw as i64 - w as i64) / 2
+            },
+            top: if origin && mode == 0 {
+                0
+            } else {
+                (th as i64 - h as i64) / 2
+            },
             width: w as u32,
             height: h as u32,
             source,

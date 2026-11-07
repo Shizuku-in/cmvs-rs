@@ -262,7 +262,18 @@ impl SceneHost {
                     call.argument(12, "period")?,
                     call.argument(16, "count")?,
                 );
+                // cmvs-20070119 0x42b9d0 runs the triangle wave for every nonzero waveform
+                // nibble; other directions leave the offset. Stored as 0x100 here.
+                let mode = if self.allow_legacy_triangle_quake && mode & 0xf00 != 0 {
+                    if period == 0 {
+                        return Err(error(pc, op, "triangle quake needs a nonzero period"));
+                    }
+                    mode & !0xf00 | 0x100
+                } else {
+                    mode
+                };
                 match mode & 0xf00 {
+                    0x100 if self.allow_legacy_triangle_quake => {}
                     0x100 if self.allow_triangle_quake && matches!(mode & 0xf0, 0 | 0x10) => {
                         if period == 0 {
                             return Err(error(pc, op, "triangle quake needs a nonzero period"));

@@ -1,6 +1,15 @@
 # Game records: data hashes identify a game; executables confirm the build of its profile.
 # Hashes are evidence from docs/games/<game>/; game files themselves never enter the repository.
 
+game puriring
+profile cmvs-20070119
+start data/pack/start.ps2 sha256=6e8f2a8b81065f5163cd7447a80002ed41e9f1067846cd38ecda7936f07e6064
+archive data/pack/script.cpz sha256=125070cfeb012eb35be04577196942c26cff76f0a52d1046d7a76a444ae1e140
+# This build has no 0x201d handler; no game ID is supplied by the startup script.
+game-id 0x00000000
+executable cmvs.exe sha256=5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602
+end
+
 game asukimi
 profile cmvs-20071117
 start data/pack/start.ps2 sha256=f92c0997c47900f9ae8fc1f388f04ed2688622274e22bd4bf76920af5fd46c0c

@@ -15,7 +15,7 @@ use crate::{
     machine::{Machine, Step},
 };
 mod view;
-pub use view::DeviceView;
+pub use view::{DeviceView, ViewProjection};
 
 pub const CAMERAS: usize = 2;
 pub const CAMERA_WORDS: usize = 40;
@@ -237,7 +237,17 @@ impl Default for CameraConfig {
 
 impl CameraConfig {
     fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
-        if profile.is_inspected_20071117() || profile.is_inspected_20080903() {
+        if profile.is_inspected_20070119() {
+            // PURIRING: constructor 0x422200, projection 0x422430, writer 0x422280.
+            // Runtime motion uses our normalized layout; native words 15+ are motion,
+            // not the screen center and scale introduced in later versions.
+            Self {
+                object_projection: ObjectProjectionSet::Type1,
+                default_height: 614.0,
+                default_center_y: 307.0,
+                snapshot_format: CameraSnapshotFormat::V1,
+            }
+        } else if profile.is_inspected_20071117() || profile.is_inspected_20080903() {
             // Constructor 0x42dc10, projection 0x42df60, snapshot 0x42dca0.
             // ASUNANA: 0x42fcf0 / 0x430200, with independent v3 writer 0x42fd80.
             Self {
@@ -265,6 +275,7 @@ impl CameraConfig {
 
 #[derive(Debug, Clone, Copy)]
 enum ObjectProjectionSet {
+    Type1,
     Types1And2,
     Type3,
 }
@@ -278,6 +289,10 @@ impl ObjectProjectionSet {
         reference: f32,
     ) -> Result<Option<ObjectProjection>, &'static str> {
         match self {
+            Self::Type1 if camera.words[0] != 1 => {
+                Err("only camera projection type 1 is verified for this profile")
+            }
+            Self::Type1 => project_types_1_2(camera, world, offset, reference),
             Self::Types1And2 => project_types_1_2(camera, world, offset, reference),
             Self::Type3 => camera.project_object(world, offset, reference),
         }
@@ -286,6 +301,7 @@ impl ObjectProjectionSet {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CameraSnapshotFormat {
+    V1,
     V2,
     V3,
 }
@@ -460,6 +476,7 @@ impl CameraHost {
         for camera in &mut self.cameras {
             camera.advance_move(delta);
         }
+        self.advance_view(delta);
     }
 
     /// 0x206b/0x206c/0x206d -> 0x14004f5b0/0x14004f680/0x14004f820.
@@ -483,6 +500,7 @@ impl CameraHost {
         let axes: &[usize] = match command {
             0x6b => &[0, 2],
             0x6c => &[0, 1, 2],
+            0x6e => &[0],
             _ => &[1],
         };
         for (i, &axis) in axes.iter().enumerate() {
@@ -597,7 +615,11 @@ impl CameraHost {
         if matches!(call.command, 0x260..=0x264) {
             return self.set_view(call);
         }
-        if matches!(call.command, 0x6b..=0x6d) {
+        if matches!(call.command, 0x270 | 0x272..=0x274) {
+            return self.view_motion(call);
+        }
+        // 0x206e only through the cmvs-20070119 variant (0x434960 -> 0x422780: X only).
+        if matches!(call.command, 0x6b..=0x6e) {
             return self.start_move(call);
         }
         if matches!(call.command, 0x6a) {
@@ -759,6 +781,18 @@ impl CameraSnapshotFormat {
     /// then words 15..18. A running move saves its targets as the base words.
     fn encode(self, camera: &Camera) -> Vec<u8> {
         let w = &camera.words;
+        if self == Self::V1 {
+            // 0x422280: only the first 15 native words, with XYZ targets if moving.
+            let mut base: [u32; 15] = w[..15].try_into().unwrap();
+            if w[MOVING] != 0 {
+                base[1..4].copy_from_slice(&w[23..26]);
+            }
+            let mut out = 1u16.to_le_bytes().to_vec();
+            for word in base {
+                out.extend(word.to_le_bytes());
+            }
+            return out;
+        }
         if self == Self::V2 {
             // 0x42dca0: v2, words 37/38, base 0..14 snapped to move targets,
             // then center 15/16. It never persists a running move or scale 17/18.
@@ -816,6 +850,21 @@ impl CameraSnapshotFormat {
     /// Reader 0x14004ea90 for version 3; retains words 19/20.
     /// Version 2 (0x42dca0 writer) restores a stationary camera without scale fields.
     fn restore(self, camera: &mut Camera, record: &[u8]) -> Result<(), &'static str> {
+        if self == Self::V1 {
+            if record.len() != 62 || record[..2] != [1, 0] {
+                return Err("unsupported v1 camera snapshot version or size");
+            }
+            let mut restored = Camera::default();
+            for (word, bytes) in restored.words[..15]
+                .iter_mut()
+                .zip(record[2..].as_chunks::<4>().0)
+            {
+                *word = u32::from_le_bytes(*bytes);
+            }
+            restored.set(16, 307.0);
+            *camera = restored;
+            return Ok(());
+        }
         if self == Self::V2 {
             if record.len() != 78 || record[..2] != [2, 0] {
                 return Err("unsupported v2 camera snapshot version or size");
@@ -897,6 +946,7 @@ fn argument_names(command: u16) -> &'static [&'static str] {
         0x6b => &["mode", "x", "z", "duration"],
         0x6c => &["mode", "x", "y", "z", "duration"],
         0x6d => &["mode", "y", "duration"],
+        0x6e => &["mode", "x", "duration"],
         0x9c => &["camera index", "effect"],
         0x261 => &["angle x"],
         0x262 => &["angle y"],
@@ -909,6 +959,43 @@ fn argument_names(command: u16) -> &'static [&'static str] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn puriring_projects_type_one_and_saves_native_v1_camera() {
+        let profile = crate::profile::Registry::builtin()
+            .profile("cmvs-20070119")
+            .unwrap();
+        let mut host = CameraHost::for_profile(profile);
+        let projected = host
+            .project_object(0, [0.0, 3.0, 10.0], 0.0, 10.0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(projected.position, [512.0, 307.0]);
+        assert_eq!(projected.scale, 1.0);
+        assert_eq!(projected.fade, 255);
+        assert!(
+            host.project_object(0, [0.0, 3.0, 0.0], 0.0, 10.0)
+                .unwrap()
+                .is_none()
+        );
+        host.cameras[0].words[0] = 2;
+        assert!(host.project_object(0, [0.0, 3.0, 10.0], 0.0, 10.0).is_err());
+        host.reset();
+        let w = &mut host.cameras[0].words;
+        w[MOVING] = 1;
+        w[23..26].copy_from_slice(&[1f32.to_bits(), 2f32.to_bits(), 3f32.to_bits()]);
+        let before = host.cameras[0].clone();
+        let record = host.saved(0);
+        assert_eq!(record.len(), 62);
+        assert_eq!(&record[..2], &[1, 0]);
+        assert_eq!(host.cameras[0], before);
+        host.restore(0, &record).unwrap();
+        assert_eq!(&host.cameras[0].words[1..4], &before.words[23..26]);
+        assert_eq!(host.cameras[0].words[MOVING], 0);
+        assert_eq!(host.saved(0), record);
+        assert!(host.restore(0, &record[..61]).is_err());
+        assert!(CameraHost::default().restore(0, &record).is_err());
+    }
 
     #[test]
     fn projection_defaults_and_snapshot_format_are_independent() {

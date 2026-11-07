@@ -188,7 +188,7 @@ fn world_query_missing_child_is_retryable_and_does_not_write_results() {
 }
 
 #[test]
-fn special_effect_reset_destroys_children_but_retains_the_parent_draw_and_flags() {
+fn special_effect_reset_retains_ordinary_children_parent_draw_and_flags() {
     let mut code = vec![];
     for (op, args) in [
         (0x2020, vec![7]),
@@ -211,7 +211,7 @@ fn special_effect_reset_destroys_children_but_retains_the_parent_draw_and_flags(
     for _ in 0..2 {
         assert!(next(&mut vm, &mut scene).unwrap());
         let actual = scene.object(7).unwrap();
-        assert!(actual.children.is_empty());
+        assert_eq!(actual.children, before.children);
         assert_eq!(actual.draw, before.draw);
         assert_eq!(actual.flags, before.flags);
     }

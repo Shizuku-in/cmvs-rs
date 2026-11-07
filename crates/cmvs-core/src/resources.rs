@@ -36,6 +36,14 @@ impl ResourceKind {
             Self::SceneMovie => 0x201a,
         }
     }
+    /// Further tables searched after the primary one. cmvs-20070119 keeps stand images in
+    /// a separate 0x2017 table; only its hash-bound variant registers that table.
+    const fn extra_tables(self) -> &'static [(u16, u32)] {
+        match self {
+            Self::Image => &[(0x2017, 10)],
+            _ => &[],
+        }
+    }
     pub const fn slot_count(self) -> u32 {
         match self {
             Self::Image => 10,
@@ -93,6 +101,7 @@ impl ResourceArchives {
             paths,
             command: kind.command(),
             entries: kind.slot_count(),
+            extra: kind.extra_tables(),
         }
     }
 
@@ -171,26 +180,27 @@ pub struct RegisteredResources<'a> {
     paths: &'a BTreeMap<(u16, u32), Vec<u8>>,
     command: u16,
     entries: u32,
+    extra: &'static [(u16, u32)],
 }
 
 impl ResourceSource for RegisteredResources<'_> {
     fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
-        for slot in 0..self.entries {
-            let Some(path) = self
-                .paths
-                .get(&(self.command, slot))
-                .filter(|p| !p.is_empty())
-            else {
-                continue;
-            };
-            // A trailing backslash marks a directory; anything else is an archive.
-            let hit = if path.ends_with(b"\\") {
-                self.archives.read_file(&[path.as_slice(), name].concat())?
-            } else {
-                self.archives.read_archive(self.command, slot, path, name)?
-            };
-            if hit.is_some() {
-                return Ok(hit);
+        let tables =
+            std::iter::once((self.command, self.entries)).chain(self.extra.iter().copied());
+        for (command, entries) in tables {
+            for slot in 0..entries {
+                let Some(path) = self.paths.get(&(command, slot)).filter(|p| !p.is_empty()) else {
+                    continue;
+                };
+                // A trailing backslash marks a directory; anything else is an archive.
+                let hit = if path.ends_with(b"\\") {
+                    self.archives.read_file(&[path.as_slice(), name].concat())?
+                } else {
+                    self.archives.read_archive(command, slot, path, name)?
+                };
+                if hit.is_some() {
+                    return Ok(hit);
+                }
             }
         }
         Ok(None)

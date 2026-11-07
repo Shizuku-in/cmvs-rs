@@ -394,3 +394,23 @@ fn scene_v2_wire_uses_six_header_words_effect_block_and_paired_bgm_without_seque
     }
     assert!(EngineSnapshot::decode_with_layout(&bytes[..bytes.len() - 1], layout).is_err());
 }
+
+#[test]
+fn puriring_stream_omits_second_camera_and_second_view() {
+    use cmvs_rs::snapshot::SnapshotLayout;
+    let bytes = v1_stream(&[]);
+    let mut legacy = Vec::new();
+    for record in parse_records(&bytes).unwrap() {
+        if !matches!(record.tag, 0x881 | 0x883) {
+            legacy.extend(&bytes[record.offset..record.body.end]);
+        }
+    }
+    let layout = SnapshotLayout::TextV1SceneLegacy;
+    let mut snapshot = EngineSnapshot::decode_with_layout(&legacy, layout).unwrap();
+    assert_eq!(snapshot.encode_with_layout(layout).unwrap(), legacy);
+    assert!(snapshot.cameras[1].is_empty());
+    assert!(snapshot.cameras[3].is_empty());
+    assert!(EngineSnapshot::decode_with_layout(&legacy, SnapshotLayout::TextV1SceneV1).is_err());
+    snapshot.cameras[1] = vec![1, 0];
+    assert!(snapshot.encode_with_layout(layout).is_err());
+}

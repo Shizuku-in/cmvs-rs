@@ -21,6 +21,8 @@ pub use vm_state::VmSnapshot;
 /// bounded by their own decoders; a layout does not grant support for unknown records.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SnapshotLayout {
+    /// Inspected 20070119: unversioned scene header, image/draw/text v1.
+    TextV1SceneLegacy,
     /// Inspected 20071117: text/window/scene v1, draw v3 and a single BGM name.
     TextV1SceneV1,
     /// Inspected 20080719: text/window v1, scene v2, draw/movie v4, paired BGM.
@@ -33,7 +35,7 @@ pub enum SnapshotLayout {
 impl SnapshotLayout {
     pub(crate) fn text_version(self) -> u16 {
         match self {
-            Self::TextV1SceneV1 | Self::TextV1SceneV2 => 1,
+            Self::TextV1SceneLegacy | Self::TextV1SceneV1 | Self::TextV1SceneV2 => 1,
             Self::TextV2 => 2,
             Self::TextV3 | Self::TextV3SceneV4 => 3,
         }

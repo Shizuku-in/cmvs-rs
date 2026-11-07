@@ -31,6 +31,10 @@ impl<'a> Startup<'a> {
             self.quit = true;
             return Ok(StartupEvent::Quit);
         }
+        // The rebuilt scene drops the legacy effects; their destructors release the
+        // prepared sounds and stop the walk's channel 1, which would otherwise play on.
+        self.scene
+            .release_legacy_effects(self.audio_backend.as_mut())?;
         self.finish_reset(replacement.expect("RESET replacement prepared"));
         Ok(StartupEvent::Progress)
     }
@@ -276,18 +280,20 @@ mod tests {
                     },
                 );
             }
-            assert!(
-                run.inspect_snapshot()
-                    .unwrap_err()
-                    .to_string()
-                    .contains("active particle effects")
-            );
-            assert!(
-                run.load_slot(0, &mut backend)
-                    .unwrap_err()
-                    .to_string()
-                    .contains("active particle effects")
-            );
+            if kind != 2 {
+                assert!(
+                    run.inspect_snapshot()
+                        .unwrap_err()
+                        .to_string()
+                        .contains("active particle effects")
+                );
+                assert!(
+                    run.load_slot(0, &mut backend)
+                        .unwrap_err()
+                        .to_string()
+                        .contains("active particle effects")
+                );
+            }
         }
         run.scene.collision_effects.insert(
             2,

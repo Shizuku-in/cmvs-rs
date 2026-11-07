@@ -130,12 +130,17 @@ fn setup(scene: &mut SceneHost, images: &mut Images) {
 }
 
 #[test]
-fn all_image_entries_preserve_missing_capabilities_and_complete_once() {
+fn scene_image_entries_preserve_missing_capabilities_and_complete_once() {
     let expected: std::collections::BTreeSet<_> =
         cases().iter().map(|(op, _)| op - 0x2000).collect();
     let actual = dispatch::ROOT
         .iter()
-        .filter(|e| dispatch::uses_images(e.command))
+        .filter(|e| {
+            matches!(
+                e.capability,
+                Capability::SceneImages | Capability::MaskImages | Capability::ImageChange
+            )
+        })
         .map(|e| e.command)
         .collect();
     assert_eq!(expected, actual);

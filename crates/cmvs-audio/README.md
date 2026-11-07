@@ -2,7 +2,7 @@
 
 CMVS 的可选音频后端，负责 Vorbis 流式解码与原生设备播放。解码依赖 `cmvs-core`、`lewton`；默认 `native` feature 启用 `rodio`，不依赖桌面窗口包。
 
-浏览器宿主通过 `default-features = false` 复用 `Vorbis` 与 `VorbisProgram`，不引入原生音频设备。
+浏览器宿主通过 `default-features = false` 复用 `Vorbis` 与 `AudioProgram`，不引入原生音频设备。
 
 主要职责：
 
@@ -22,3 +22,5 @@ cargo check --offline --features desktop,audio-output
 根包的 `audio-output` feature 引入本包；桌面播放还需在运行时指定 `--audio native`。默认记录模式不会打开音频设备，硬件测试需单独显式运行。
 
 详见[音频后端](../../docs/backends/audio-output.md)、[运行指南](../../docs/guides/running.md)和[依赖与许可](../../docs/references.md)。
+
+PCM WAVE：支持 RIFF/WAVE 中 8–192 kHz、单/双声道、16 位有符号 PCM；沿用音量、循环、预加载和重播路径。按块读取样本，校验 chunk 边界、格式和完整帧；其他 WAV 编码显式报错。`AudioProgram` 统一处理 Ogg Vorbis 和这种 PCM WAVE；历史名称 `VorbisProgram` 作为兼容别名保留。

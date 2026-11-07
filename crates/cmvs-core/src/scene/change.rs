@@ -252,7 +252,12 @@ impl SceneHost {
             return Ok(());
         };
         if args[3] != 0 {
-            return Err(fail("secondary replacement image manager is not implemented").into());
+            if !self.allow_stand_change_table {
+                return Err(fail("secondary replacement image manager is not implemented").into());
+            }
+            // cmvs-20070119 0x4076f0: the stand table (searched after 0x2011 here, see
+            // ResourceKind::Image) with its next-read cache armed (0x414030).
+            images.cache_next_read()?;
         }
         let prepared = self.prepare_image_change(slot, &name, args[2], images, pc, 0x22c4)?;
         call.complete(0x4010)?;

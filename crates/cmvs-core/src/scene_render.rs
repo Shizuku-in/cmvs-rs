@@ -44,8 +44,8 @@ pub enum Layer<'a> {
     /// bottom-left, bottom-right of the source rectangle.
     Rotated {
         image: &'a ObjectImage,
-        /// Source x/y/width/height.
-        rect: [i64; 4],
+        /// Source x/y/width/height in texels; tessellated world cells may span fractions.
+        rect: [f32; 4],
         corners: [[f32; 2]; 4],
         alpha: u32,
         blend: Blend,
@@ -236,7 +236,7 @@ fn image_layer<'a>(
         }
         return Ok(Some(Layer::Rotated {
             image,
-            rect: [sx, sy, w, h],
+            rect: [sx, sy, w, h].map(|v| v as f32),
             corners,
             alpha: alpha.min(255) as u32,
             blend: blend(words, image, alpha, false)?,
@@ -650,7 +650,7 @@ fn projected_layer<'a>(
             key,
             Layer::Rotated {
                 image,
-                rect: [sx, sy, w, h],
+                rect: [sx, sy, w, h].map(|v| v as f32),
                 corners,
                 alpha: alpha.min(255) as u32,
                 blend,
@@ -887,6 +887,18 @@ pub fn prepare_scene<'a>(
             )
             .chain(
                 scene
+                    .legacy_flakes
+                    .get(&slot)
+                    .into_iter()
+                    .flat_map(|effect| {
+                        effect
+                            .particles
+                            .iter()
+                            .map(|p| (None, &p.object, Some(&effect.pool)))
+                    }),
+            )
+            .chain(
+                scene
                     .rain_effects
                     .get(&slot)
                     .into_iter()
@@ -898,18 +910,54 @@ pub fn prepare_scene<'a>(
                     }),
             )
     });
+    let sprites = scene
+        .legacy_effects()
+        .values()
+        .flat_map(|effect| match effect {
+            crate::effect_objects::LegacyEffect::Sprites(sprites) => sprites.objects.as_slice(),
+            crate::effect_objects::LegacyEffect::Curtain(curtain) => {
+                std::slice::from_ref(&curtain.background)
+            }
+            _ => &[],
+        });
     let all_objects = slots
         .map(|(slot, object)| (slot, object, None, false))
         .chain(particles.map(|(slot, object, parent)| (slot, object, parent, false)))
+        .chain(sprites.map(|object| (None, object, None, false)))
         .chain(additional.iter().map(|&object| (None, object, None, true)));
-    for (slot, object, parent, additional_object) in all_objects {
-        if object.shown
-            && let Some(change) = &object.change
-        {
-            objects.push((None, change.common.as_ref(), additional_object, None));
-            objects.push((None, change.previous.as_ref(), additional_object, None));
+    type QueuedObject<'a> = (Option<u8>, &'a SceneObject, bool, Option<&'a SceneObject>);
+    fn collect<'a>(
+        out: &mut Vec<QueuedObject<'a>>,
+        slot: Option<u8>,
+        object: &'a SceneObject,
+        additional: bool,
+        parent: Option<&'a SceneObject>,
+    ) -> Result<(), FormatError> {
+        if !object.shown {
+            return Ok(());
         }
-        objects.push((slot, object, additional_object, parent));
+        if let Some(effect) = object.special_effect.as_ref().filter(|e| e.words[0] != 0) {
+            effect.validate_live(
+                object
+                    .draw
+                    .as_ref()
+                    .ok_or(FormatError("object effect has no draw state"))?,
+            )?;
+            // Active effects queue only their independent list (0x14003de80).
+            for child in &effect.children {
+                collect(out, None, child, additional, Some(object))?;
+            }
+        } else {
+            if let Some(change) = &object.change {
+                collect(out, None, &change.common, additional, None)?;
+                collect(out, None, &change.previous, additional, None)?;
+            }
+            out.push((slot, object, additional, parent));
+        }
+        Ok(())
+    }
+    for (slot, object, parent, additional_object) in all_objects {
+        collect(&mut objects, slot, object, additional_object, parent)?;
     }
     for (slot, object, additional_object, parent) in objects {
         // 0x14003de80 returns early for +6244 == 0; no draw state means +6240 == 0.
@@ -1100,18 +1148,29 @@ pub fn prepare_scene<'a>(
     }
     // The engine enqueues the fade after ordinary object slots (0x140015da0).
     if let Some(fade) = scene.fade().current() {
-        // The overlay is a layer 0 queue item; its translated extent is not verified.
-        if scene
-            .quake()
-            .is_some_and(|quake| quake.offset(false) != [0, 0])
-        {
-            return Err(FormatError(
-                "fade overlay under a quake offset is not verified",
-            ));
-        }
+        // PURIRING 0x42ab20 creates a screen-sized solid at (0,0), with the
+        // constructor's quake flag set. 0x407b10 enqueues it as a slot object;
+        // 0x407c90 / 0x42bb90 apply that queue's offset without expanding it.
+        let [x, y] = scene.quake().map_or([0, 0], |quake| quake.offset(false));
+        let layer = if [x, y] == [0, 0] {
+            Layer::Fade(fade)
+        } else {
+            let [b, g, r, _] = fade.color.to_le_bytes();
+            Layer::Solid {
+                rect: [
+                    i64::from(x),
+                    i64::from(y),
+                    i64::from(width),
+                    i64::from(height),
+                ],
+                color: [r, g, b],
+                alpha: fade.opacity.clamp(0, 255) as u32,
+                blend: Blend::Alpha,
+            }
+        };
         entries.push(Entry {
             order: fade.order as f32,
-            layer: Some(Layer::Fade(fade)),
+            layer: Some(layer),
             children: Vec::new(),
         });
     }
@@ -1122,6 +1181,39 @@ pub fn prepare_scene<'a>(
         queue.sort_by(|a, b| b.order.total_cmp(&a.order));
     }
     let mut world = Vec::new();
+    // cmvs-20070119 legacy effect meshes: queue 1 (no blending) then queue 5, each from the
+    // farthest object (0x407c90 / 0x417290 insert by descending view distance).
+    let mut opaque = Vec::new();
+    if !scene.legacy_effects().is_empty() {
+        let cameras = cameras.ok_or(FormatError("legacy effect meshes need the device view"))?;
+        let view = cameras.view(0).expect("view exists");
+        let projection = view.projection([width, height]).map_err(FormatError)?;
+        let eye = [view.words[0], view.words[1], view.words[2]].map(f32::from_bits);
+        for effect in scene.legacy_effects().values() {
+            for quad in effect.quads() {
+                let distance = quad
+                    .position
+                    .iter()
+                    .zip(eye)
+                    .map(|(p, e)| (p - e) * (p - e))
+                    .sum::<f32>()
+                    .sqrt();
+                let mut layers = Vec::new();
+                tessellate_world_quad(&quad, &projection, &mut layers);
+                let entry = Entry {
+                    order: distance,
+                    layer: None,
+                    children: layers.into_iter().map(|layer| (0.0, layer)).collect(),
+                };
+                if !quad.late {
+                    opaque.push(entry);
+                } else {
+                    world.push(entry);
+                }
+            }
+        }
+    }
+    opaque.sort_by(|a, b| b.order.total_cmp(&a.order));
     for effect in scene.falling_effects().values() {
         let Some(image) = &effect.image else { continue };
         let view = cameras
@@ -1155,9 +1247,60 @@ pub fn prepare_scene<'a>(
             });
         }
     }
+    for effect in scene.legacy_effects().values() {
+        let crate::effect_objects::LegacyEffect::Magic(magic) = effect else {
+            continue;
+        };
+        let view = cameras
+            .ok_or(FormatError("magic sparks need the device view"))?
+            .view(0)
+            .expect("view exists");
+        let eye = [view.words[0], view.words[1], view.words[2]].map(f32::from_bits);
+        for spark in &magic.sparks {
+            if spark.alpha == 0 {
+                continue;
+            }
+            let position = spark.xyz.map(f32::from_bits);
+            let Some(quad) = view
+                .billboard(position, [0.1, 0.1], [width, height])
+                .map_err(FormatError)?
+            else {
+                continue;
+            };
+            let distance = position
+                .iter()
+                .zip(eye)
+                .map(|(p, e)| (p - e) * (p - e))
+                .sum::<f32>()
+                .sqrt();
+            let image = &magic.spark_image;
+            world.push(Entry {
+                order: distance,
+                layer: Some(Layer::Projected {
+                    image,
+                    rect: [
+                        0,
+                        0,
+                        i64::from(image.pixels.width()),
+                        i64::from(image.pixels.height()),
+                    ],
+                    quad,
+                    alpha: spark.alpha,
+                    blend: Blend::Additive,
+                }),
+                children: Vec::new(),
+            });
+        }
+    }
     world.sort_by(|a, b| b.order.total_cmp(&a.order));
     let mut commands = Vec::new();
-    for mut entry in projected.into_iter().flatten().chain(world).chain(entries) {
+    for mut entry in projected
+        .into_iter()
+        .flatten()
+        .chain(opaque)
+        .chain(world)
+        .chain(entries)
+    {
         entry.children.sort_by(|a, b| b.0.total_cmp(&a.0));
         let layers = entry
             .layer
@@ -1271,12 +1414,12 @@ fn draw_rotated(
     pixels: &mut [u8],
     [width, height]: [u32; 2],
     image: &ObjectImage,
-    [sx, sy, w, h]: [i64; 4],
+    [sx, sy, w, h]: [f32; 4],
     corners: [[f32; 2]; 4],
     opacity: u32,
     blend: Blend,
 ) {
-    let [u0, v0, u1, v1] = [sx, sy, sx + w, sy + h].map(|v| v as f64);
+    let [u0, v0, u1, v1] = [sx, sy, sx + w, sy + h].map(f64::from);
     let texture = [[u0, v0], [u1, v0], [u0, v1], [u1, v1]];
     let point = corners.map(|[x, y]| [f64::from(x), f64::from(y)]);
     for triangle in [[0, 1, 2], [1, 3, 2]] {
@@ -1336,6 +1479,96 @@ fn draw_rotated(
             }
         }
     }
+}
+
+/// A world-space quad of the old 3D queues as device-space `Rotated` cells. The device
+/// interpolates texture coordinates perspective-correctly and clips at the near plane; here
+/// the quad is subdivided in world space until each cell is small on screen and shallow in
+/// depth, so affine cells stay within a fraction of a pixel. Cells crossing the near plane
+/// are subdivided further and dropped at the depth limit; cells beyond the far plane are
+/// dropped. Cells keep fractional texel sub-rectangles, so magnified textures split into
+/// cells smaller than a texel stay covered; they sample with clamped addressing, whereas
+/// the device's 3D stage wraps.
+fn tessellate_world_quad<'a>(
+    quad: &crate::effect_objects::WorldQuad<'a>,
+    projection: &crate::camera::ViewProjection,
+    out: &mut Vec<Layer<'a>>,
+) {
+    use crate::camera::ViewProjection;
+    let size = [quad.image.pixels.width(), quad.image.pixels.height()].map(|v| v as f32);
+    let lerp = |a: [f32; 3], b: [f32; 3], t: f32| std::array::from_fn(|i| a[i] + (b[i] - a[i]) * t);
+    let world = |u: f32, v: f32| {
+        let [tl, tr, bl, br] = quad.corners;
+        lerp(lerp(tl, tr, u), lerp(bl, br, u), v)
+    };
+    #[allow(clippy::too_many_arguments)]
+    fn cell<'a>(
+        quad: &crate::effect_objects::WorldQuad<'a>,
+        projection: &ViewProjection,
+        world: &dyn Fn(f32, f32) -> [f32; 3],
+        size: [f32; 2],
+        [u0, v0, u1, v1]: [f32; 4],
+        depth: u32,
+        out: &mut Vec<Layer<'a>>,
+    ) {
+        let corners = [[u0, v0], [u1, v0], [u0, v1], [u1, v1]];
+        let view = corners.map(|[u, v]| projection.view(world(u, v)));
+        // Offscreen cells near the eye can project to enormous rectangles. Splitting
+        // those invisible cells to the depth limit creates hundreds of thousands of
+        // draws; homogeneous side-plane rejection preserves every visible cell.
+        if projection.outside_sides(&view) {
+            return;
+        }
+        let near = view.iter().filter(|p| p[2] < ViewProjection::NEAR).count();
+        if view.iter().all(|p| p[2] >= ViewProjection::FAR) || near == 4 && depth > 2 {
+            return;
+        }
+        let screen = view.map(|p| projection.screen(p));
+        let extent = screen
+            .iter()
+            .flat_map(|a| {
+                screen
+                    .iter()
+                    .map(move |b| (a[0] - b[0]).abs().max((a[1] - b[1]).abs()))
+            })
+            .fold(0.0f32, f32::max);
+        let zs = view.map(|p| p[2]);
+        let (low, high) = zs
+            .iter()
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(l, h), &z| {
+                (l.min(z), h.max(z))
+            });
+        let fine = near == 0 && extent <= 48.0 && high <= low * 1.08;
+        if !fine && depth < 9 {
+            let (um, vm) = ((u0 + u1) * 0.5, (v0 + v1) * 0.5);
+            for rect in [
+                [u0, v0, um, vm],
+                [um, v0, u1, vm],
+                [u0, vm, um, v1],
+                [um, vm, u1, v1],
+            ] {
+                cell(quad, projection, world, size, rect, depth + 1, out);
+            }
+            return;
+        }
+        if near != 0 || !screen.iter().flatten().all(|v| v.is_finite()) {
+            return;
+        }
+        let [left, top, right, bottom] = quad.uv;
+        let [x0, x1] = [u0, u1].map(|u| (left + u * (right - left)) * size[0]);
+        let [y0, y1] = [v0, v1].map(|v| (top + v * (bottom - top)) * size[1]);
+        if ![x0, x1, y0, y1].iter().all(|v| v.is_finite()) {
+            return;
+        }
+        out.push(Layer::Rotated {
+            image: quad.image,
+            rect: [x0, y0, x1 - x0, y1 - y0],
+            corners: screen,
+            alpha: quad.alpha,
+            blend: quad.blend,
+        });
+    }
+    cell(quad, projection, &world, size, [0.0, 0.0, 1.0, 1.0], 0, out);
 }
 
 /// 0x140020340 mode 4 maps the second texture over the device viewport.
@@ -1490,6 +1723,162 @@ fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
 
 #[cfg(test)]
 mod scale_tests {
+    #[test]
+    fn oversized_world_mesh_culls_invisible_cells_and_preserves_visible_pixels() {
+        let image = ObjectImage {
+            name: Vec::new(),
+            filter: None,
+            alpha: false,
+            surface: false,
+            pixels: RgbaImage::new(512, 512, vec![255; 512 * 512 * 4]).unwrap(),
+        };
+        let camera = crate::camera::CameraHost::default();
+        let mut view = camera.view(0).unwrap().clone();
+        view.words = [0.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 90.0].map(f32::to_bits);
+        let projection = view.projection([64, 64]).unwrap();
+        let mut quad = crate::effect_objects::WorldQuad {
+            image: &image,
+            uv: [0.0, 0.0, 1.0, 1.0],
+            corners: [
+                [-20.0, 20.0, 1.0],
+                [20.0, 20.0, 1.0],
+                [-20.0, -20.0, 1.0],
+                [20.0, -20.0, 1.0],
+            ],
+            position: [0.0; 3],
+            alpha: 255,
+            blend: Blend::Replace,
+            late: false,
+        };
+        let mut layers = Vec::new();
+        tessellate_world_quad(&quad, &projection, &mut layers);
+        assert!(!layers.is_empty() && layers.len() < 100);
+        let frame = RenderFrame {
+            width: 64,
+            height: 64,
+            clear: [0, 0, 0, 255],
+            commands: layers,
+        };
+        assert!(
+            frame
+                .render_cpu()
+                .unwrap()
+                .pixels()
+                .iter()
+                .all(|&v| v == 255)
+        );
+        for corner in &mut quad.corners {
+            corner[0] += 50.0;
+        }
+        let mut layers = Vec::new();
+        tessellate_world_quad(&quad, &projection, &mut layers);
+        assert!(layers.is_empty());
+    }
+
+    #[test]
+    fn world_mesh_uses_the_selected_atlas_tile_after_tessellation() {
+        let mut pixels = [255, 0, 0, 255].repeat(64 * 64);
+        for y in 16..32 {
+            for x in 32..48 {
+                pixels[(y * 64 + x) * 4..(y * 64 + x) * 4 + 4].copy_from_slice(&[0, 255, 0, 255]);
+            }
+        }
+        let image = ObjectImage {
+            name: Vec::new(),
+            filter: None,
+            alpha: false,
+            surface: false,
+            pixels: RgbaImage::new(64, 64, pixels).unwrap(),
+        };
+        let camera = crate::camera::CameraHost::default();
+        let mut view = camera.view(0).unwrap().clone();
+        view.words = [0.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 90.0].map(f32::to_bits);
+        let quad = crate::effect_objects::WorldQuad {
+            image: &image,
+            uv: [0.5, 0.25, 0.75, 0.5],
+            corners: [
+                [-1.0, 1.0, 1.0],
+                [1.0, 1.0, 1.0],
+                [-1.0, -1.0, 1.0],
+                [1.0, -1.0, 1.0],
+            ],
+            position: [0.0, 0.0, 1.0],
+            alpha: 255,
+            blend: Blend::Replace,
+            late: false,
+        };
+        let mut layers = Vec::new();
+        tessellate_world_quad(&quad, &view.projection([64, 64]).unwrap(), &mut layers);
+        assert!(layers.len() > 1);
+        for layer in &layers {
+            let Layer::Rotated {
+                rect: [x, y, w, h], ..
+            } = layer
+            else {
+                panic!("wrong layer");
+            };
+            assert!(*x >= 32.0 && x + w <= 48.0 && *y >= 16.0 && y + h <= 32.0);
+        }
+        let frame = RenderFrame {
+            width: 64,
+            height: 64,
+            clear: [0, 0, 0, 255],
+            commands: layers,
+        };
+        let pixels = frame.render_cpu().unwrap();
+        assert_eq!(
+            &pixels.pixels()[(32 * 64 + 32) * 4..(32 * 64 + 32) * 4 + 4],
+            &[0, 255, 0, 255]
+        );
+    }
+
+    #[test]
+    fn world_mesh_cells_smaller_than_a_texel_stay_covered() {
+        let image = ObjectImage {
+            name: Vec::new(),
+            filter: None,
+            alpha: false,
+            surface: false,
+            pixels: RgbaImage::new(1, 1, vec![0, 255, 0, 255]).unwrap(),
+        };
+        let camera = crate::camera::CameraHost::default();
+        let mut view = camera.view(0).unwrap().clone();
+        view.words = [0.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 90.0].map(f32::to_bits);
+        let quad = crate::effect_objects::WorldQuad {
+            image: &image,
+            uv: [0.0, 0.0, 1.0, 1.0],
+            corners: [
+                [-1.0, 1.0, 1.0],
+                [1.0, 1.0, 1.0],
+                [-1.0, -1.0, 1.0],
+                [1.0, -1.0, 1.0],
+            ],
+            position: [0.0, 0.0, 1.0],
+            alpha: 255,
+            blend: Blend::Replace,
+            late: false,
+        };
+        let mut layers = Vec::new();
+        tessellate_world_quad(&quad, &view.projection([64, 64]).unwrap(), &mut layers);
+        // The 64-pixel quad splits into cells of half a texel or less.
+        assert!(layers.len() >= 4);
+        let frame = RenderFrame {
+            width: 64,
+            height: 64,
+            clear: [0, 0, 0, 255],
+            commands: layers,
+        };
+        let pixels = frame.render_cpu().unwrap();
+        let green = pixels
+            .pixels()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| **p == [0, 255, 0, 255])
+            .count();
+        assert_eq!(green, 64 * 64);
+    }
+
     #[test]
     fn world_billboard_sampling_wraps_both_texture_edges() {
         let image = crate::scene::ObjectImage {

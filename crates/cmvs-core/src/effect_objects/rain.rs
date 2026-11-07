@@ -1,5 +1,6 @@
 //! ASUNANA x86 type 4: timed, dynamically allocated rain streaks.
 use crate::{
+    audio::AudioBackend,
     dispatch::Call,
     image::{self, ImageSource},
     random::CrtRandom,
@@ -33,6 +34,35 @@ mod tests {
             },
             SavedEffect::name_field(b"rain.pb3").unwrap(),
         )
+    }
+
+    #[test]
+    fn puriring_rain_uses_small_world_single_emission_and_native_type_one_save() {
+        let original = effect(0x1003, 10);
+        let SavedEffect::Rain { words, name } = original.template else {
+            panic!()
+        };
+        let mut rain = RainEffect::new_legacy(words, original.pool, name);
+        let mut random = CrtRandom::new(0);
+        rain.advance(11, &mut random);
+        assert_eq!(rain.particles.len(), 1); // old build ignores doubled-emission bit
+        let draw = rain.particles[0].object.draw.as_ref().unwrap();
+        assert_eq!(f32::from_bits(draw.words[12]), 5.75);
+        assert_eq!(f32::from_bits(draw.words[15]), 6.0);
+        assert_eq!(f32::from_bits(draw.words[16]), 3.0);
+        let mut expected = CrtRandom::new(0);
+        let x = (f64::from(expected.next_value()) / 32767.0 * 10.0 - 5.0) as f32;
+        let z = (f64::from(expected.next_value()) / 32767.0 * 10.0) as f32;
+        assert_eq!(draw.words[11], x.to_bits());
+        assert_eq!(draw.words[13], z.to_bits());
+        assert_eq!(random, expected);
+        let record = rain.template.encode().unwrap();
+        assert_eq!(&record[..4], &[1, 0, 1, 0]);
+        assert_eq!(record.len(), 60);
+        assert_eq!(SavedEffect::decode(&record).unwrap(), rain.template);
+        rain.words[5] = 1000;
+        rain.advance(24, &mut random);
+        assert!(rain.particles.is_empty()); // disappears at world Y <= 0
     }
 
     #[test]
@@ -123,6 +153,7 @@ mod tests {
 
 #[derive(Debug)]
 pub(crate) struct RainEffect {
+    pub(crate) legacy: bool,
     pub pool: SceneObject,
     pub particles: Vec<RainParticle>,
     pub template: SavedEffect,
@@ -134,6 +165,7 @@ pub(crate) struct RainEffect {
 impl RainEffect {
     pub(crate) fn new(words: [u32; 6], pool: SceneObject, name: [u8; 32]) -> Self {
         Self {
+            legacy: false,
             pool,
             particles: Vec::new(),
             template: SavedEffect::Rain { words, name },
@@ -143,29 +175,49 @@ impl RainEffect {
         }
     }
 
+    pub(crate) fn new_legacy(words: [u32; 6], pool: SceneObject, name: [u8; 32]) -> Self {
+        let mut effect = Self::new(words, pool, name);
+        effect.legacy = true;
+        effect.template = SavedEffect::LegacyRain { words, name };
+        effect
+    }
+
     fn spawn(&mut self, tick: u32, random: &mut CrtRandom) {
-        if self.particles.len() >= 2048 || self.pool.image.is_none() {
+        if self.particles.len() >= if self.legacy { 1024 } else { 2048 }
+            || self.pool.image.is_none()
+        {
             return;
         }
         let mode = self.words[0];
-        let x_offset = match mode & 0xf0 {
-            0 => -50.0,
-            0x10 => 0.0,
-            0x20 => -100.0,
-            0x30 => 50.0,
-            0x40 => -150.0,
-            0x50 => -15.0,
-            0x60 => -85.0,
-            0x70 => -25.0,
-            0x80 => -75.0,
-            0xa0 => -78.0,
-            _ => unreachable!("validated rain mode"),
+        let x_offset = if self.legacy {
+            -5.0
+        } else {
+            match mode & 0xf0 {
+                0 => -50.0,
+                0x10 => 0.0,
+                0x20 => -100.0,
+                0x30 => 50.0,
+                0x40 => -150.0,
+                0x50 => -15.0,
+                0x60 => -85.0,
+                0x70 => -25.0,
+                0x80 => -75.0,
+                0xa0 => -78.0,
+                _ => unreachable!("validated rain mode"),
+            }
         };
-        let x = (f64::from(random.next_value()) / 32767.0 * 100.0 + x_offset) as f32;
+        let x = (f64::from(random.next_value()) / 32767.0 * if self.legacy { 10.0 } else { 100.0 }
+            + x_offset) as f32;
         let depth_mode = (mode >> 8) & 0xf;
         let z = (f64::from(random.next_value()) / 32767.0
-            * if depth_mode == 0 { 100.0 } else { 50.0 }
-            + if depth_mode == 0 {
+            * if self.legacy {
+                10.0
+            } else if depth_mode == 0 {
+                100.0
+            } else {
+                50.0
+            }
+            + if self.legacy || depth_mode == 0 {
                 0.0
             } else {
                 f64::from(depth_mode - 1) * 10.0
@@ -174,9 +226,18 @@ impl RainEffect {
         let mut draw = DrawState::default();
         draw.words[0] = 2;
         draw.words[2..8].copy_from_slice(&[0, 0, 6, 112, 3, 112]);
-        draw.words[11..14].copy_from_slice(&[x.to_bits(), 150.0f32.to_bits(), z.to_bits()]);
-        draw.words[15] = (20.5 + (mode & 3) as f32 * 10.0).to_bits();
-        draw.words[16] = 20.0f32.to_bits();
+        draw.words[11..14].copy_from_slice(&[
+            x.to_bits(),
+            (if self.legacy { 6.0f32 } else { 150.0f32 }).to_bits(),
+            z.to_bits(),
+        ]);
+        draw.words[15] = (if self.legacy {
+            3.0 + (mode & 3) as f32
+        } else {
+            20.5 + (mode & 3) as f32 * 10.0
+        })
+        .to_bits();
+        draw.words[16] = (if self.legacy { 3.0f32 } else { 20.0f32 }).to_bits();
         draw.words[20] =
             (crate::evaluate::truncate(angle).wrapping_add(360) % 360).unsigned_abs() * 100;
         self.particles.push(RainParticle {
@@ -199,7 +260,7 @@ impl RainEffect {
                 .wrapping_add(interval)
                 .wrapping_sub(self.remainder);
             self.spawn(tick, random);
-            if self.words[0] & 0x1000 != 0 {
+            if !self.legacy && self.words[0] & 0x1000 != 0 {
                 self.spawn(tick, random);
             }
             self.remainder -= interval;
@@ -208,8 +269,8 @@ impl RainEffect {
         let speed = f64::from(f32::from_bits(self.words[4]));
         for particle in &mut self.particles {
             let draw = particle.object.draw.as_mut().expect("rain draw");
-            let distance =
-                (f64::from(self.clock.wrapping_sub(particle.last_tick)) * speed / 250.0) as f32;
+            let distance = (f64::from(self.clock.wrapping_sub(particle.last_tick)) * speed
+                / if self.legacy { 1000.0 } else { 250.0 }) as f32;
             let (dx, dy) = if angle == 0.0 {
                 (0.0, distance)
             } else {
@@ -223,8 +284,10 @@ impl RainEffect {
             draw.words[12] = (f32::from_bits(draw.words[12]) - dy).to_bits();
             particle.last_tick = self.clock;
         }
-        self.particles
-            .retain(|p| f32::from_bits(p.object.draw.as_ref().unwrap().words[12]) > -50.0);
+        self.particles.retain(|p| {
+            f32::from_bits(p.object.draw.as_ref().unwrap().words[12])
+                > if self.legacy { 0.0 } else { -50.0 }
+        });
     }
 }
 
@@ -233,6 +296,7 @@ impl SceneHost {
         &mut self,
         call: &mut Call<'_, '_>,
         source: &mut dyn ImageSource,
+        backend: Option<&mut dyn AudioBackend>,
     ) -> Result<(), Box<dyn Error>> {
         let slot = call.argument(4, "effect slot")?;
         let name_id = call.argument(8, "rain image")?;
@@ -247,9 +311,17 @@ impl SceneHost {
             return Ok(());
         }
         let name_field = SavedEffect::name_field(&name)?;
-        let template = SavedEffect::Rain {
-            words,
-            name: name_field,
+        let legacy = call.command == 0x2a1;
+        let template = if legacy {
+            SavedEffect::LegacyRain {
+                words,
+                name: name_field,
+            }
+        } else {
+            SavedEffect::Rain {
+                words,
+                name: name_field,
+            }
         };
         template.encode()?;
         let image = image::load(source, &name)?.map(|decoded| ObjectImage {
@@ -259,7 +331,12 @@ impl SceneHost {
             filter: None,
             surface: false,
         });
-        let effect = RainEffect::new(
+        let construct = if legacy {
+            RainEffect::new_legacy
+        } else {
+            RainEffect::new
+        };
+        let effect = construct(
             words,
             SceneObject {
                 image,
@@ -267,11 +344,8 @@ impl SceneHost {
             },
             name_field,
         );
+        self.replace_effect_slot(slot as u8, backend)?;
         call.complete(0x4020)?;
-        self.particle_effects.remove(&(slot as u8));
-        self.falling_effects.remove(&(slot as u8));
-        self.collision_effects.remove(&(slot as u8));
-        self.fragment_effects.remove(&(slot as u8));
         self.rain_effects.insert(slot as u8, effect);
         Ok(())
     }

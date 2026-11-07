@@ -1,6 +1,12 @@
 use cmvs_rs::dispatch::Capability;
 pub fn cases() -> Vec<(u16, Vec<u32>, Capability)> {
     vec![
+        (0x22ae, vec![4], Capability::Scene),
+        (
+            0x2328,
+            vec![3, 16, 0, 0, 0, 2, 1, 0, 0, 0],
+            Capability::Scene,
+        ),
         (0x2020, vec![0x3], Capability::Scene),
         (0x2021, vec![0x3], Capability::Scene),
         (0x2022, vec![0x3, 0x7], Capability::Scene),
