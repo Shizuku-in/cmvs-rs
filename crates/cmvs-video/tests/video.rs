@@ -2,7 +2,7 @@ use cmvs_core::{
     digest::{sha256, to_hex},
     mgv::{Decoder, MgvIndex},
 };
-use cmvs_desktop::video::TheoraStream;
+use cmvs_video::TheoraStream;
 use std::io::Cursor;
 fn fixture() -> Vec<u8> {
     include_str!("fixtures/mgv1.hex")
@@ -62,21 +62,16 @@ fn geometry_and_packet_corruption_fail_without_poisoning_repeatable_errors() {
     assert!(decoder.finish().is_err());
 }
 
-#[test]
-fn padded_container_preserves_the_coding_surface_and_picture_container_crops() {
+/// The fixture with a 24x24 picture at (`x`, `y`) inside its 32x32 coding surface.
+fn with_picture(bytes: &[u8], index: &MgvIndex, x: u8, y: u8) -> Vec<u8> {
     use ogg::{PacketReader, PacketWriteEndInfo, PacketWriter};
-    let bytes = fixture();
-    let index = MgvIndex::read(&mut Cursor::new(&bytes)).unwrap();
-    let mut original = TheoraStream::open(Box::new(Cursor::new(bytes.clone())), &index).unwrap();
-    let full = original.frame(0).unwrap();
     let mut reader = PacketReader::new(Cursor::new(&bytes[index.video_offset as usize..]));
     let mut writer = PacketWriter::new(Vec::new());
     let mut first = true;
     while let Some(mut packet) = reader.read_packet().unwrap() {
         if first {
-            // A 24x24 picture at (4, 8) inside the existing 32x32 coding surface.
             packet.data[14..20].copy_from_slice(&[0, 0, 24, 0, 0, 24]);
-            packet.data[20..22].copy_from_slice(&[4, 8]);
+            packet.data[20..22].copy_from_slice(&[x, y]);
             first = false;
         }
         let end = if packet.last_in_stream() {
@@ -94,6 +89,30 @@ fn padded_container_preserves_the_coding_surface_and_picture_container_crops() {
     let mut padded = bytes[..index.video_offset as usize].to_vec();
     padded[8..12].copy_from_slice(&(video.len() as u32).to_le_bytes());
     padded.extend(video);
+    padded
+}
+
+fn assert_crop(
+    cropped: &cmvs_core::raster::RgbaImage,
+    full: &cmvs_core::raster::RgbaImage,
+    x: usize,
+) {
+    assert_eq!((cropped.width(), cropped.height()), (24, 24));
+    for row in 0..24 {
+        assert_eq!(
+            &cropped.pixels()[row * 24 * 4..(row + 1) * 24 * 4],
+            &full.pixels()[(row * 32 + x) * 4..(row * 32 + x + 24) * 4]
+        );
+    }
+}
+
+#[test]
+fn padded_container_preserves_the_coding_surface_and_picture_container_crops() {
+    let bytes = fixture();
+    let index = MgvIndex::read(&mut Cursor::new(&bytes)).unwrap();
+    let mut original = TheoraStream::open(Box::new(Cursor::new(bytes.clone())), &index).unwrap();
+    let full = original.frame(0).unwrap();
+    let padded = with_picture(&bytes, &index, 4, 8);
     let index = MgvIndex::read(&mut Cursor::new(&padded)).unwrap();
     let mut decoder = TheoraStream::open(Box::new(Cursor::new(padded.clone())), &index).unwrap();
     assert_eq!(decoder.frame(0).unwrap(), full);
@@ -101,14 +120,54 @@ fn padded_container_preserves_the_coding_surface_and_picture_container_crops() {
     picture.width = 24;
     picture.height = 24;
     let mut decoder = TheoraStream::open(Box::new(Cursor::new(padded.clone())), &picture).unwrap();
-    let cropped = decoder.frame(0).unwrap();
-    assert_eq!((cropped.width(), cropped.height()), (24, 24));
-    for row in 0..24 {
-        assert_eq!(
-            &cropped.pixels()[row * 24 * 4..(row + 1) * 24 * 4],
-            &full.pixels()[(row * 32 + 4) * 4..(row * 32 + 28) * 4]
-        );
-    }
+    assert_crop(&decoder.frame(0).unwrap(), &full, 4);
     picture.height = 25;
     assert!(TheoraStream::open(Box::new(Cursor::new(padded)), &picture).is_err());
+}
+
+#[test]
+fn odd_picture_left_edge_keeps_absolute_chroma_columns() {
+    let bytes = fixture();
+    let index = MgvIndex::read(&mut Cursor::new(&bytes)).unwrap();
+    let mut original = TheoraStream::open(Box::new(Cursor::new(bytes.clone())), &index).unwrap();
+    let padded = with_picture(&bytes, &index, 5, 8);
+    let mut picture = MgvIndex::read(&mut Cursor::new(&padded)).unwrap();
+    picture.width = 24;
+    picture.height = 24;
+    let mut decoder = TheoraStream::open(Box::new(Cursor::new(padded)), &picture).unwrap();
+    for frame in 0..4 {
+        assert_crop(
+            &decoder.frame(frame).unwrap(),
+            &original.frame(frame).unwrap(),
+            5,
+        );
+    }
+}
+
+#[test]
+fn prefetching_decoder_matches_the_inline_stream() {
+    use cmvs_core::mgv::DecoderFactory;
+    use cmvs_video::{PrefetchTheoraFactory, TheoraFactory};
+    let bytes = fixture();
+    let index = MgvIndex::read(&mut Cursor::new(&bytes)).unwrap();
+    let open = |factory: &dyn DecoderFactory| {
+        factory
+            .open(Box::new(Cursor::new(bytes.clone())), &index)
+            .unwrap()
+    };
+    let mut inline = open(&TheoraFactory);
+    let mut prefetch = open(&PrefetchTheoraFactory::default());
+    // Forward with a duplicate, then backwards and forwards again.
+    for frame in [0, 1, 2, 3, 0, 2, 3] {
+        assert_eq!(prefetch.frame(frame).unwrap(), inline.frame(frame).unwrap());
+    }
+    assert!(prefetch.frame(4).is_err());
+    assert_eq!(prefetch.frame(1).unwrap(), inline.frame(1).unwrap());
+    prefetch.finish().unwrap();
+    let mut short = index.clone();
+    short.frames.truncate(1);
+    let mut prefetch = PrefetchTheoraFactory::default()
+        .open(Box::new(Cursor::new(bytes.clone())), &short)
+        .unwrap();
+    assert!(prefetch.finish().is_err());
 }

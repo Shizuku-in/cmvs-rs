@@ -5,8 +5,8 @@ mod gpu;
 #[cfg(target_os = "horizon")]
 mod sys {
     pub use cmvs_native::{
-        SwitchAudioOut, SwitchGpu, SwitchWindow, set_cpu_boost, shared_font, show_system_error,
-        software_keyboard,
+        SwitchAudioOut, SwitchGpu, SwitchWindow, prefer_core, set_cpu_boost, shared_font,
+        show_system_error, software_keyboard,
     };
 }
 #[cfg(not(target_os = "horizon"))]
@@ -181,6 +181,12 @@ fn run(
     let audio_control = audio.host_control();
     startup.set_audio_backend(Box::new(audio))?;
     startup.set_decode_movie_frames(true);
+    // Core 0 runs the VM and rendering, core 1 the audio thread.
+    startup.set_mgv_factory(Box::new(cmvs_video::PrefetchTheoraFactory {
+        on_thread_start: || {
+            sys::prefer_core(2);
+        },
+    }));
     startup.set_record_text(true);
     startup.set_save_clock(Box::new(cmvs_core::runner::utc_save_time));
     let mut font = FontRenderer::from_bytes(font_bytes(base)?, 0)?;

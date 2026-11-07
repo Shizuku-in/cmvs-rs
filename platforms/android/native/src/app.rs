@@ -361,6 +361,7 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
     startup.set_audio_backend(Box::new(audio))?;
     log::info!("Native Vorbis audio enabled");
     startup.set_decode_movie_frames(true);
+    startup.set_mgv_factory(Box::new(cmvs_video::PrefetchTheoraFactory::default()));
     startup.set_record_text(true);
     startup.set_glyph_metrics(font.borrow().metrics());
     font.borrow().set_user_directory(&user)?;

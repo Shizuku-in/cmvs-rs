@@ -19,6 +19,7 @@
 | `crates/cmvs-audio` | Vorbis 解码、混音、原生音频输出、源消费时钟 | 依赖 core、lewton；`mixer` feature 启用 rodio 混音（宿主拉取 PCM，Switch 与 Vita 使用），默认 `native` 再接系统设备 |
 | `crates/cmvs-desktop` | 窗口、物理输入、字体光栅化与按名解析、帧显示与桌面运行入口 | 依赖 core、winit、softbuffer、ico、encoding_rs、ab_glyph；可选依赖 audio；系统服务经 cmvs-native |
 | `crates/cmvs-native` | 操作系统服务的统一接口（字体对话框、系统字体目录），按平台分模块；原生系统 FFI 包 | raw-window-handle；Windows 上 windows-sys。macOS/iOS/Linux/Android/wasm 预留，返回 Unsupported |
+| `crates/cmvs-video` | MGV1 的 Ogg/Theora 解码与 RGBA 转换，可选在工作线程预解码下一帧 | 依赖 core、ogg、oxideav-theora；桌面、Apple、Android、Switch、Vita 与 probe 使用，[说明](../crates/cmvs-video/README.md) |
 | `crates/cmvs-console` | 游戏机宿主共用的手柄映射、游戏列表、错误页、注释输入编码，以及在 `cmvs_native::GpuDevice` 上执行绘制队列的纹理缓存合成器 | 依赖 core、native、encoding_rs、ab_glyph；Switch 与 Vita 播放器使用 |
 | `platforms/web/native` | wasm Worker 宿主、CPU/WebGPU 画面、文字与输入 | 依赖 core、font、无原生设备 feature 的 audio、wasm-bindgen、self_cell；[当前范围](backends/web.md) |
 | 根包 `cmvs-rs` | 检查 CLI、`cmvs_rs` 兼容重导出、集成测试 | 默认仅依赖 core；通过 `desktop`、`audio-output` 选择后端 |
@@ -37,7 +38,7 @@
 - `cpz::ArchiveIndex` / `ArchiveLayout` 按签名分派；当前支持 CPZ3、CPZ5 打包模式 5～9、CPZ6 模式 1 和 CPZ7（资源模式 0/1）。CPZ7 使用每包参数，默认为零；CPZ3 无需启动参数，始终验证索引密文校验值；CPZ5/7 验证头部与索引摘要。公共资源读取验证各格式的数据校验值，CPZ6 头部/索引摘要尚未验证。
 - PB3 支持 type 1、type 2/3 JBP1、type 5/7，以及需要参考底图的 type 6/8；其他分支显式报错。type 5/6 已有 23 个不同真实输出与独立 Python 逐字节对照，未宣称全包覆盖。
 - CMV6 与 JBPD 支持已核对的全屏影片容器和帧解码；无实际音轨的 CMV6 与静音 CMV9 支持 0x2308 初始场景绑定、默认模式 0 的段播放与循环，CMV9 另缓存静态底图，其他槽控制仍未实现。影片计时、画面解码和设备音轨播放分开。
-- MGV1 按名义帧表解码 Ogg/Theora。容器尺寸须精确等于 Theora picture 或 coded 尺寸；前者裁可见区域，后者保留整个编码表面（如 1920×1088），再按逻辑画布呈现。帧率、YUV420 与像素预算校验保留，见[Hapymaher RE](games/hapymaher_re/README.md#1080p-素材边界)。
+- MGV1 按名义帧表解码 Ogg/Theora。容器尺寸须精确等于 Theora picture 或 coded 尺寸；前者裁可见区域，后者保留整个编码表面（如 1920×1088），再按逻辑画布呈现。容器解析与帧映射在 core，Theora 解码在 `cmvs-video`，由宿主经 `set_mgv_factory` 安装。帧率、YUV420 与像素预算校验保留，见[Hapymaher RE](games/hapymaher_re/README.md#1080p-素材边界)。
 
 `resources::ResourceArchives` 按资源族和注册槽号查找首个命中项：图像十槽，SE/BGM/语音各四槽。归档惰性打开，注册路径变化时重开；缓存键包含资源族与槽号。缺失返回 miss，坏归档、校验失败、路径逃逸明确报错。名称规则和覆盖顺序按证据实现，不套用宿主文件系统的隐式行为。
 

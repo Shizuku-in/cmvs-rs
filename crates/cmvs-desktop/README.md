@@ -1,6 +1,6 @@
 # cmvs-desktop
 
-Desktop host for Windows, Linux and macOS, built on `winit` and `softbuffer`. It owns the window, keyboard and mouse input, the application event loop, fullscreen and cursor handling, and MGV (Ogg Theora) movie decoding. Rendering is software by default.
+Desktop host for Windows, Linux and macOS, built on `winit` and `softbuffer`. It owns the window, keyboard and mouse input, the application event loop, and fullscreen and cursor handling. MGV (Ogg Theora) movies decode through [`cmvs-video`](../cmvs-video/README.md), re-exported as `cmvs_desktop::video`. Rendering is software by default.
 
 The `cmvs-desktop` binary is built from the root package:
 
@@ -20,4 +20,4 @@ See the [running guide](../../docs/guides/running.md) for options.
 
 ## Testing
 
-`tests/video.rs` covers MGV decoding. `tests/wgpu.rs` is an ignored GPU scene test on a real game; it needs the `wgpu-renderer` feature, a GPU, and `CMVS_GAME_ROOT` and `CMVS_FONT_PATH`.
+`tests/wgpu.rs` is an ignored GPU scene test on a real game; it needs the `wgpu-renderer` feature, a GPU, and `CMVS_GAME_ROOT` and `CMVS_FONT_PATH`.

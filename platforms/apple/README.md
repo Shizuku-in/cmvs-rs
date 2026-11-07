@@ -40,7 +40,7 @@ only completed VM frames advance the serial and expose new RGBA pixels. Native
 audio owns its device callback. The host does not implement desktop window
 management, a font picker or a save-comment editor. Font selection is cancelled;
 unsupported platform requests report errors. CMV decoding is shared with core;
-the optional desktop MGV/Theora factory is not installed by this host.
+MGV/Theora movies decode through `cmvs-video` on a prefetching worker thread.
 
 ## Validation, 2026-11-06
 

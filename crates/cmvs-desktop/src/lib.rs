@@ -4,13 +4,13 @@ mod encoding;
 pub use cmvs_font::{font, font_library};
 mod frame_boundary;
 pub mod game_input;
-pub mod video;
 pub use app::{movie_canvas, run_cli};
 use cmvs_core::{
     FormatError,
     cursor::CursorBitmap,
     platform::{MAX_PLATFORM_ASSET, PlatformBackend, PlatformRequest},
 };
+pub use cmvs_video as video;
 use std::{
     collections::{BTreeSet, VecDeque},
     error::Error,

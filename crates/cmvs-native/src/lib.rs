@@ -118,8 +118,8 @@ mod switch;
 pub use switch::button as switch_button;
 #[cfg(target_os = "horizon")]
 pub use switch::{
-    SwitchAudioOut, SwitchGpu, SwitchWindow, set_cpu_boost, shared_font, show_system_error,
-    software_keyboard,
+    SwitchAudioOut, SwitchGpu, SwitchWindow, prefer_core, set_cpu_boost, shared_font,
+    show_system_error, software_keyboard,
 };
 
 mod vita;

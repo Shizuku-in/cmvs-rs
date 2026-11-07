@@ -76,6 +76,10 @@ impl SwitchAudioOut {
     }
 }
 
+pub fn prefer_core(_: u32) -> bool {
+    false
+}
+
 pub fn set_cpu_boost(_: bool) -> bool {
     false
 }
