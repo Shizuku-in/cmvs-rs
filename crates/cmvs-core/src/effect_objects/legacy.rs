@@ -618,8 +618,15 @@ impl SceneHost {
         &self.legacy_effects
     }
 
-    /// Creating any effect type replaces whatever the slot held (0x418aa0).
-    pub(crate) fn clear_effect_slot(&mut self, slot: u8) {
+    /// Creating any effect type replaces whatever the slot held (0x418aa0), running the
+    /// old object's destructor first. Only a slot without prepared sounds can be replaced
+    /// without the audio backend.
+    pub(crate) fn replace_effect_slot(
+        &mut self,
+        slot: u8,
+        backend: Option<&mut dyn AudioBackend>,
+    ) -> Result<(), Box<dyn Error>> {
+        self.release_legacy(slot, backend)?;
         self.legacy_flakes.remove(&slot);
         self.rain_effects.remove(&slot);
         self.particle_effects.remove(&slot);
@@ -627,6 +634,20 @@ impl SceneHost {
         self.collision_effects.remove(&slot);
         self.fragment_effects.remove(&slot);
         self.legacy_effects.remove(&slot);
+        Ok(())
+    }
+
+    /// Destroy every legacy effect with its destructor, for a RESET or a load that
+    /// discards the scene's legacy slots.
+    pub(crate) fn release_legacy_effects(
+        &mut self,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        while let Some(&slot) = self.legacy_effects.keys().next() {
+            self.release_legacy(slot, Some(&mut *backend))?;
+            self.legacy_effects.remove(&slot);
+        }
+        Ok(())
     }
 
     /// 0x2290 / 0x43c410: SP-4 slot (unsigned, ignored above 3), SP-8 floor image, SP-12
@@ -635,6 +656,7 @@ impl SceneHost {
         &mut self,
         call: &mut Call<'_, '_>,
         source: &mut dyn ImageSource,
+        backend: Option<&mut dyn AudioBackend>,
     ) -> Result<(), Box<dyn Error>> {
         let slot = call.argument(4, "effect slot")?;
         let floor_name = call.argument(8, "floor image")?;
@@ -657,8 +679,8 @@ impl SceneHost {
         };
         let floor = load(floor_name)?;
         let cover = load(cover_name)?;
+        self.replace_effect_slot(slot as u8, backend)?;
         call.complete(0x400c)?;
-        self.clear_effect_slot(slot as u8);
         self.legacy_effects.insert(
             slot as u8,
             LegacyEffect::SnowField(Box::new(SnowField::new(floor, cover))),
@@ -680,8 +702,7 @@ impl SceneHost {
             return Ok(());
         }
         // 0x43c500 destroys the old slot object (0x418aa0) before preparing new sounds.
-        self.release_legacy(slot as u8, backend)?;
-        self.clear_effect_slot(slot as u8);
+        self.replace_effect_slot(slot as u8, Some(&mut *backend))?;
         for (sound, name) in WALK_SOUNDS {
             backend.preload(sound, name)?;
         }
@@ -727,8 +748,7 @@ impl SceneHost {
                 surface: false,
             });
         }
-        self.release_legacy(slot as u8, backend)?;
-        self.clear_effect_slot(slot as u8);
+        self.replace_effect_slot(slot as u8, Some(&mut *backend))?;
         for (sound, name) in CIRCLE_SOUNDS {
             backend.preload(sound, name)?;
         }
@@ -765,9 +785,8 @@ impl SceneHost {
                 surface: false,
             });
         }
-        self.release_legacy(slot as u8, backend)?;
+        self.replace_effect_slot(slot as u8, Some(backend))?;
         call.complete(0x4008)?;
-        self.clear_effect_slot(slot as u8);
         self.legacy_effects.insert(
             slot as u8,
             LegacyEffect::FloatingPlanes(Box::new(FloatingPlanes::new(images))),
@@ -789,10 +808,9 @@ impl SceneHost {
             return Ok(());
         }
         let magic = super::magic::Magic::new(source, random)?;
-        self.release_legacy(slot as u8, backend)?;
+        self.replace_effect_slot(slot as u8, Some(&mut *backend))?;
         backend.preload(16, b"st03_magic1b.wav")?;
         call.complete(0x4004)?;
-        self.clear_effect_slot(slot as u8);
         camera.set_view_position([0.0, 1.0, 0.0]);
         camera.set_view_angle(0, 0.0);
         camera.set_view_angle(1, 0.0);
@@ -814,9 +832,8 @@ impl SceneHost {
             return Ok(());
         }
         let curtain = super::curtain::Curtain::new(source)?;
-        self.release_legacy(slot as u8, backend)?;
+        self.replace_effect_slot(slot as u8, Some(backend))?;
         call.complete(0x4004)?;
-        self.clear_effect_slot(slot as u8);
         camera.set_view_position([0.0, 3.2, 0.0]);
         camera.set_view_angle(0, 0.0);
         camera.set_view_angle(1, 0.0);
@@ -848,8 +865,7 @@ impl SceneHost {
                 surface: false,
             });
         }
-        self.release_legacy(slot as u8, backend)?;
-        self.clear_effect_slot(slot as u8);
+        self.replace_effect_slot(slot as u8, Some(&mut *backend))?;
         backend.preload(16, b"SE035a.ogg")?;
         backend.preload(17, b"SE037b.ogg")?;
         call.complete(0x4004)?;
@@ -860,50 +876,27 @@ impl SceneHost {
         Ok(())
     }
 
-    /// The destructor side effects of 0x418aa0 for types that own device resources.
-    pub(crate) fn release_legacy(
-        &mut self,
+    /// The destructor side effects of 0x418aa0 for types that own device resources:
+    /// release their prepared sounds, and for a walk also stop channel 1.
+    fn release_legacy(
+        &self,
         slot: u8,
-        backend: &mut dyn AudioBackend,
+        backend: Option<&mut dyn AudioBackend>,
     ) -> Result<(), Box<dyn Error>> {
-        match self.legacy_effects.get(&slot) {
-            Some(LegacyEffect::Walk(_)) => {
-                for sound in WALK_RELEASED {
-                    backend.release_preloaded(sound)?;
-                }
-                backend.stop(1)?;
-            }
+        let (sounds, stop): (&[u8], bool) = match self.legacy_effects.get(&slot) {
+            Some(LegacyEffect::Walk(_)) => (&WALK_RELEASED, true),
             // 0x41bd20 releases the two prepared sounds.
-            Some(LegacyEffect::Magic(_)) => {
-                backend.release_preloaded(16)?;
-            }
-            Some(LegacyEffect::Sprites(_)) => {
-                backend.release_preloaded(16)?;
-                backend.release_preloaded(17)?;
-            }
-            Some(LegacyEffect::Circle(_)) => {
-                for (sound, _) in CIRCLE_SOUNDS {
-                    backend.release_preloaded(sound)?;
-                }
-            }
-            _ => {}
+            Some(LegacyEffect::Magic(_)) => (&[16], false),
+            Some(LegacyEffect::Sprites(_)) => (&[16, 17], false),
+            Some(LegacyEffect::Circle(_)) => (&CIRCLE_SOUNDS.map(|(sound, _)| sound), false),
+            _ => return Ok(()),
+        };
+        let backend = backend.ok_or("destroying an effect with prepared sounds needs audio")?;
+        for &sound in sounds {
+            backend.release_preloaded(sound)?;
         }
-        Ok(())
-    }
-
-    /// 0x22a0 / 0x43cab0 with the legacy destructors: SP-4 slot 0..3, returns 0x4004.
-    pub(crate) fn release_effect_with_audio(
-        &mut self,
-        call: &mut Call<'_, '_>,
-        backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
-        let slot = call.argument(4, "slot")?;
-        if slot < 4 {
-            self.release_legacy(slot as u8, backend)?;
-        }
-        call.complete(0x4004)?;
-        if slot < 4 {
-            self.clear_effect_slot(slot as u8);
+        if stop {
+            backend.stop(1)?;
         }
         Ok(())
     }
@@ -1116,5 +1109,32 @@ mod tests {
         // D3DX RotationY: (x, z) -> (x cos + z sin, -x sin + z cos).
         let close = |a: f32, b: f32| (a - b).abs() < 1e-5;
         assert!(close(world[0][0], 3.0) && close(world[0][2], 4.0));
+    }
+
+    /// RESET and loads discard every legacy slot through its destructor.
+    #[test]
+    fn releasing_all_legacy_effects_runs_each_destructor() {
+        use crate::audio::{AudioRequest, RecordingAudio};
+        let mut scene = SceneHost::default();
+        let planes = FloatingPlanes::new(vec![image(b"wall"), image(b"plane")]);
+        scene
+            .legacy_effects
+            .insert(0, LegacyEffect::FloatingPlanes(Box::new(planes)));
+        let walk = Walk {
+            state: 1,
+            base: [0; 3],
+            elapsed: 0,
+            played: false,
+            requested: -1,
+        };
+        scene.legacy_effects.insert(2, LegacyEffect::Walk(walk));
+        let mut backend = RecordingAudio::default();
+        scene.release_legacy_effects(&mut backend).unwrap();
+        assert!(scene.legacy_effects.is_empty());
+        let mut expected: Vec<_> = WALK_RELEASED
+            .map(|slot| AudioRequest::ReleasePreloaded { slot })
+            .into();
+        expected.push(AudioRequest::StopSe { channel: 1 });
+        assert_eq!(backend.requests(), expected);
     }
 }

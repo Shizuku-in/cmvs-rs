@@ -1,5 +1,6 @@
 //! Type-5 particle pool; executable-bound evidence is in games/{aoitori,miranosu}/vm-semantics.md.
 use crate::{
+    audio::AudioBackend,
     dispatch::Call,
     image::{self, ImageSource},
     random::CrtRandom,
@@ -269,6 +270,7 @@ impl SceneHost {
         source: &mut dyn ImageSource,
         random: &mut CrtRandom,
         x87_arithmetic: bool,
+        backend: Option<&mut dyn AudioBackend>,
     ) -> Result<(), Box<dyn Error>> {
         let slot = call.argument(4, "effect slot")?;
         let mode = call.argument(12, "particle mode")?;
@@ -333,8 +335,8 @@ impl SceneHost {
             x87_arithmetic,
         );
         effect.template = template;
+        self.replace_effect_slot(slot as u8, backend)?;
         call.complete(0x4020)?;
-        self.clear_effect_slot(slot as u8);
         self.particle_effects.insert(slot as u8, effect);
         *random = candidate_random;
         Ok(())

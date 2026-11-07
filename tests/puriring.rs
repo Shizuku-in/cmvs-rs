@@ -195,6 +195,104 @@ fn separate_image_tables_and_window_scale_motion_are_bound_only_here() {
     assert!(!dispatch::is_wait(0x271));
 }
 
+/// Creating any effect, or releasing the slot, destroys the old object (0x418aa0). A walk's
+/// destructor releases its prepared sounds and stops channel 1, whichever creator replaces it.
+#[test]
+fn every_slot_replacement_runs_the_walk_destructor() {
+    use cmvs_rs::{
+        dispatch::ImageHosts, effect_objects::LegacyEffect, image::ImageSource, random::CrtRandom,
+        scene::SceneHost,
+    };
+    struct NoImages;
+    impl ImageSource for NoImages {
+        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+            // Unknown magic is the quiet load failure these creators accept.
+            Ok(Some(b"NONE".to_vec()))
+        }
+    }
+    let destructor: Vec<_> = [16, 17, 18, 19, 20]
+        .map(|slot| AudioRequest::ReleasePreloaded { slot })
+        .into_iter()
+        .chain([AudioRequest::StopSe { channel: 1 }])
+        .collect();
+    let one = 1.0f32.to_bits();
+    // Slot 0 and an empty string-bank name, then each command's own parameters.
+    let replacements: [(u16, Vec<u32>); 4] = [
+        (0x22a3, vec![0, 0x8000_0000, 0, 0, one, 1]),
+        (0x22a1, vec![0, 0x8000_0000, 0, 0, 0, 0, one, 1]),
+        (0x22a2, vec![0, 0x8000_0000, one, one, one, 0, 1, 0]),
+        (0x22a0, vec![0]),
+    ];
+    for (opcode, args) in replacements {
+        for with_audio in [true, false] {
+            let mut code = vec![];
+            command(&mut code, 0x2291, &[0]);
+            command(&mut code, opcode, &args);
+            let program = script(&code);
+            let mut vm = Machine::new(&program).unwrap();
+            vm.state_mut().set_string(0, b"").unwrap();
+            let mut scene = SceneHost::default();
+            let mut camera = CameraHost::default();
+            let mut audio = AudioHost::default();
+            let mut backend = RecordingAudio::default();
+            let mut random = CrtRandom::new(0);
+            pending(&mut vm);
+            let flow = dispatch::run(
+                semantics(0x291),
+                &mut vm,
+                &mut Hosts {
+                    scene: Some(&mut scene),
+                    camera: Some(&mut camera),
+                    audio: Some(AudioHosts {
+                        audio: &mut audio,
+                        backend: &mut backend,
+                    }),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(flow, Some(Flow::Done));
+            let created = backend.requests().len();
+            pending(&mut vm);
+            let command = opcode - 0x2000;
+            let mut source = NoImages;
+            let mut hosts = Hosts {
+                audio: with_audio.then_some(AudioHosts {
+                    audio: &mut audio,
+                    backend: &mut backend,
+                }),
+                random: Some(&mut random),
+                ..Default::default()
+            };
+            if command == 0x2a0 {
+                hosts.scene = Some(&mut scene);
+            } else {
+                hosts.images = Some(ImageHosts {
+                    scene: &mut scene,
+                    source: &mut source,
+                    change_images: false,
+                });
+            }
+            let result = dispatch::run(semantics(command), &mut vm, &mut hosts);
+            if with_audio {
+                assert_eq!(result.unwrap(), Some(Flow::Done), "0x{opcode:04x}");
+                assert_eq!(backend.requests()[created..], destructor, "0x{opcode:04x}");
+                assert!(scene.legacy_effects().is_empty());
+                assert_eq!(vm.pending_system(), None);
+            } else {
+                // Without audio the walk cannot be destroyed: the call stays pending.
+                assert!(result.is_err(), "0x{opcode:04x}");
+                assert_eq!(backend.requests().len(), created);
+                assert!(matches!(
+                    scene.legacy_effects().get(&0),
+                    Some(LegacyEffect::Walk(_))
+                ));
+                assert_eq!(vm.pending_system().map(|p| p.1), Some(command));
+            }
+        }
+    }
+}
+
 #[test]
 fn floating_planes_use_command_296_and_consume_two_words_for_an_invalid_slot() {
     use cmvs_rs::{dispatch::ImageHosts, image::ImageSource, scene::SceneHost};

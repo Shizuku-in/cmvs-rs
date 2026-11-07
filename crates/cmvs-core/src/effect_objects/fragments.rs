@@ -1,11 +1,12 @@
 //! Type-8 image fragments; executable-bound evidence is in games/aoitori/vm-semantics.md.
 use crate::{
+    audio::AudioBackend,
     bytecode::DecodeError,
     dispatch::Call,
     random::CrtRandom,
     scene::{DrawState, SceneHost, SceneObject},
 };
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, error::Error};
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Fragment {
@@ -152,7 +153,8 @@ impl SceneHost {
         &mut self,
         call: &mut Call<'_, '_>,
         random: &mut CrtRandom,
-    ) -> Result<(), DecodeError> {
+        backend: Option<&mut dyn AudioBackend>,
+    ) -> Result<(), Box<dyn Error>> {
         let slot = call.argument(4, "effect slot")?;
         let source = call.argument(8, "source object")?;
         let parameters = [
@@ -177,14 +179,16 @@ impl SceneHost {
             || parameters[0] > i16::MAX as u32
             || size.iter().any(|&v| v > i16::MAX as u32)
         {
-            return Err(call.error("fragment geometry exceeds research bounds"));
+            return Err(call
+                .error("fragment geometry exceeds research bounds")
+                .into());
         }
         let mut candidate_random = random.clone();
         let mut effect = FragmentEffect::new(size, parameters, &mut candidate_random);
+        self.replace_effect_slot(slot as u8, backend)?;
         call.complete(0x4010)?;
         effect.pool = self.take_object(source).expect("validated source");
         effect.pool.logical_size = size;
-        self.clear_effect_slot(slot as u8);
         self.fragment_effects.insert(slot as u8, effect);
         *random = candidate_random;
         Ok(())

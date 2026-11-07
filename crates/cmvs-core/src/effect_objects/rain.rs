@@ -1,5 +1,6 @@
 //! ASUNANA x86 type 4: timed, dynamically allocated rain streaks.
 use crate::{
+    audio::AudioBackend,
     dispatch::Call,
     image::{self, ImageSource},
     random::CrtRandom,
@@ -295,6 +296,7 @@ impl SceneHost {
         &mut self,
         call: &mut Call<'_, '_>,
         source: &mut dyn ImageSource,
+        backend: Option<&mut dyn AudioBackend>,
     ) -> Result<(), Box<dyn Error>> {
         let slot = call.argument(4, "effect slot")?;
         let name_id = call.argument(8, "rain image")?;
@@ -342,8 +344,8 @@ impl SceneHost {
             },
             name_field,
         );
+        self.replace_effect_slot(slot as u8, backend)?;
         call.complete(0x4020)?;
-        self.clear_effect_slot(slot as u8);
         self.rain_effects.insert(slot as u8, effect);
         Ok(())
     }

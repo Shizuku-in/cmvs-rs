@@ -977,8 +977,10 @@ impl Startup<'_> {
         self.scene.falling_effects = effects.falling_effects;
         self.scene.particle_effects = effects.particle_effects;
         self.scene.collision_effects = effects.collision_effects;
-        // Legacy slots are never saved (saving them is rejected), so a load clears them.
-        self.scene.legacy_effects.clear();
+        // Legacy slots are never saved (saving them is rejected), so a load destroys
+        // them, releasing their prepared sounds.
+        self.scene
+            .release_legacy_effects(self.audio_backend.as_mut())?;
         self.random = restored_random;
         self.messages.restore(texts, windows);
         let word = |at: usize| u32::from_le_bytes(header[at..at + 4].try_into().unwrap());

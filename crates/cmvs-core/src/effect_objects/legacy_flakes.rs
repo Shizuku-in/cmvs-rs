@@ -1,5 +1,6 @@
 //! cmvs-20070119 type 3: 0x43cdf0 / 0x421880 / 0x421af0.
 use crate::{
+    audio::AudioBackend,
     dispatch::Call,
     image::{self, ImageSource},
     random::CrtRandom,
@@ -81,6 +82,7 @@ impl SceneHost {
         call: &mut Call<'_, '_>,
         source: &mut dyn ImageSource,
         random: &mut CrtRandom,
+        backend: Option<&mut dyn AudioBackend>,
     ) -> Result<(), Box<dyn Error>> {
         let slot = call.argument(4, "effect slot")?;
         let reference = call.argument(8, "flake image")?;
@@ -114,8 +116,8 @@ impl SceneHost {
             field,
             &mut candidate,
         );
+        self.replace_effect_slot(slot as u8, backend)?;
         call.complete(0x4018)?;
-        self.clear_effect_slot(slot as u8);
         self.legacy_flakes.insert(slot as u8, effect);
         *random = candidate;
         Ok(())
@@ -226,7 +228,7 @@ mod tests {
             restored.saved_effect_pools_with_legacy(true).unwrap(),
             records
         );
-        scene.clear_effect_slot(2);
+        scene.replace_effect_slot(2, None).unwrap();
         assert!(!scene.has_effect_pools());
         // A real image goes through the shared CPU/GPU draw-command preparation.
         scene.legacy_flakes.insert(0, effect(100));

@@ -736,8 +736,15 @@ fn root_effect_objects(
         .scene
         .as_deref_mut()
         .expect("effect objects capability checked")
-        .release_effect(call)?;
+        .release_effect(call, audio_backend(&mut hosts.audio))?;
     Ok(Flow::Done)
+}
+/// Effect slot replacement runs the old object's destructor, which releases prepared
+/// sounds; callers without audio can still replace slots that own none.
+fn audio_backend<'h>(audio: &'h mut Option<AudioHosts<'_>>) -> Option<&'h mut dyn AudioBackend> {
+    audio
+        .as_mut()
+        .map(|audio| &mut *audio.backend as &mut dyn AudioBackend)
 }
 
 fn root_wait_fade(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
@@ -4856,7 +4863,8 @@ pub static RAIN: &[Entry] = &[Entry {
             .images
             .as_mut()
             .expect("particle image capability checked");
-        h.scene.create_rain(call, h.source)?;
+        h.scene
+            .create_rain(call, h.source, audio_backend(&mut hosts.audio))?;
         Ok(Flow::Done)
     },
 }];
@@ -4878,6 +4886,7 @@ pub static PARTICLES: &[Entry] = &[Entry {
                 .as_deref_mut()
                 .expect("particle random capability checked"),
             false,
+            audio_backend(&mut hosts.audio),
         )?;
         Ok(Flow::Done)
     },
@@ -4900,6 +4909,7 @@ pub static PARTICLES_X87: &[Entry] = &[Entry {
                 .as_deref_mut()
                 .expect("particle random capability checked"),
             true,
+            audio_backend(&mut hosts.audio),
         )?;
         Ok(Flow::Done)
     },
@@ -4984,6 +4994,7 @@ pub static FALLING_BILLBOARDS: &[Entry] = &[Entry {
                 .random
                 .as_deref_mut()
                 .expect("particle random capability checked"),
+            audio_backend(&mut hosts.audio),
         )?;
         Ok(Flow::Done)
     },
@@ -5005,6 +5016,7 @@ pub static FRAGMENTS: &[Entry] = &[
                         .random
                         .as_deref_mut()
                         .expect("scene random capability checked"),
+                    audio_backend(&mut hosts.audio),
                 )?;
             Ok(Flow::Done)
         },
@@ -5041,6 +5053,7 @@ pub static COLLISION_PARTICLES: &[Entry] = &[
                     .random
                     .as_deref_mut()
                     .expect("particle random capability checked"),
+                audio_backend(&mut hosts.audio),
             )?;
             Ok(Flow::Done)
         },
@@ -5262,7 +5275,8 @@ fn legacy_snow_field(
     call: &mut Call<'_, '_>,
 ) -> Result<Flow, Box<dyn Error>> {
     let h = hosts.images.as_mut().expect("image capability checked");
-    h.scene.create_snow_field(call, h.source)?;
+    h.scene
+        .create_snow_field(call, h.source, audio_backend(&mut hosts.audio))?;
     Ok(Flow::Done)
 }
 fn legacy_floating_planes(
@@ -5347,13 +5361,6 @@ fn legacy_walk(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, B
     scene.create_walk(call, camera, audio.backend)?;
     Ok(Flow::Done)
 }
-fn legacy_release(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
-    let (Some(scene), Some(audio)) = (hosts.scene.as_deref_mut(), hosts.audio.as_mut()) else {
-        return Ok(Flow::Unavailable);
-    };
-    scene.release_effect_with_audio(call, audio.backend)?;
-    Ok(Flow::Done)
-}
 fn legacy_query(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     let scene = hosts
         .scene
@@ -5402,6 +5409,7 @@ pub static LEGACY_EFFECTS: &[Entry] = &[
                     .random
                     .as_deref_mut()
                     .expect("particle random capability checked"),
+                audio_backend(&mut hosts.audio),
             )?;
             Ok(Flow::Done)
         },
@@ -5415,7 +5423,8 @@ pub static LEGACY_EFFECTS: &[Entry] = &[
                 .images
                 .as_mut()
                 .expect("particle image capability checked");
-            h.scene.create_rain(call, h.source)?;
+            h.scene
+                .create_rain(call, h.source, audio_backend(&mut hosts.audio))?;
             Ok(Flow::Done)
         },
     },
@@ -5471,7 +5480,7 @@ pub static LEGACY_EFFECTS: &[Entry] = &[
         command: 0x2a0,
         name: "release effect object",
         capability: Capability::Scene,
-        handler: legacy_release,
+        handler: root_effect_objects,
     },
     Entry {
         command: 0x2ae,

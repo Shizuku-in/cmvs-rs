@@ -158,9 +158,8 @@ impl SceneHost {
         }
         let mut next_random = random.clone();
         let vortex = Vortex::new(source, &mut next_random)?;
-        self.release_legacy(slot as u8, backend)?;
+        self.replace_effect_slot(slot as u8, Some(backend))?;
         call.complete(0x4004)?;
-        self.clear_effect_slot(slot as u8);
         camera.set_view_position([0.0; 3]);
         camera.set_view_angle(0, 0.0);
         camera.set_view_angle(1, 0.0);
@@ -249,7 +248,7 @@ mod tests {
             vec![(1, vec![1, 0, 0x57, 0])]
         );
         assert_eq!(scene.legacy_effects.len(), 1);
-        scene.clear_effect_slot(1);
+        scene.replace_effect_slot(1, None).unwrap();
         assert!(scene.legacy_effects.is_empty());
     }
 }
