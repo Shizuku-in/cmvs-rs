@@ -248,7 +248,8 @@ impl MessageHost {
             legacy_text_creation: profile.is_inspected_20070119()
                 || profile.is_inspected_20071117()
                 || profile.is_inspected_20080719()
-                || profile.is_inspected_20080903(),
+                || profile.is_inspected_20080903()
+                || profile.is_inspected_20090815(),
             ..Self::default()
         }
     }

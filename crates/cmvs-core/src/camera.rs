@@ -247,14 +247,23 @@ impl CameraConfig {
                 default_center_y: 307.0,
                 snapshot_format: CameraSnapshotFormat::V1,
             }
-        } else if profile.is_inspected_20071117() || profile.is_inspected_20080903() {
+        } else if profile.is_inspected_20071117()
+            || profile.is_inspected_20080903()
+            || profile.is_inspected_20090815()
+        {
             // Constructor 0x42dc10, projection 0x42df60, snapshot 0x42dca0.
             // ASUNANA: 0x42fcf0 / 0x430200, with independent v3 writer 0x42fd80.
             Self {
-                object_projection: ObjectProjectionSet::Types1And2,
+                object_projection: if profile.is_inspected_20090815() {
+                    ObjectProjectionSet::Types1And2And3
+                } else {
+                    ObjectProjectionSet::Types1And2
+                },
                 default_height: 614.0,
                 default_center_y: 307.0,
-                snapshot_format: if profile.is_inspected_20080903() {
+                snapshot_format: if profile.is_inspected_20080903()
+                    || profile.is_inspected_20090815()
+                {
                     CameraSnapshotFormat::V3
                 } else {
                     CameraSnapshotFormat::V2
@@ -277,6 +286,7 @@ impl CameraConfig {
 enum ObjectProjectionSet {
     Type1,
     Types1And2,
+    Types1And2And3,
     Type3,
 }
 
@@ -294,7 +304,10 @@ impl ObjectProjectionSet {
             }
             Self::Type1 => project_types_1_2(camera, world, offset, reference),
             Self::Types1And2 => project_types_1_2(camera, world, offset, reference),
-            Self::Type3 => camera.project_object(world, offset, reference),
+            Self::Types1And2And3 if camera.words[0] != 3 => {
+                project_types_1_2(camera, world, offset, reference)
+            }
+            Self::Type3 | Self::Types1And2And3 => camera.project_object(world, offset, reference),
         }
     }
 }

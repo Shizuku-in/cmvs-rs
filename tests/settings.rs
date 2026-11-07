@@ -9,7 +9,12 @@ use bytecode::{command, pending, script};
 #[test]
 fn inspected_old_builds_use_their_window_size_schema_only_for_their_binary() {
     use cmvs_rs::{profile::Registry, settings::Configuration};
-    for id in ["cmvs-20071117", "cmvs-20080719", "cmvs-20080903"] {
+    for id in [
+        "cmvs-20071117",
+        "cmvs-20080719",
+        "cmvs-20080903",
+        "cmvs-20090815",
+    ] {
         let profile = Registry::builtin().profile(id).unwrap();
         for (ini, expected) in [
             ("", [800, 600]),

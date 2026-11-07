@@ -364,6 +364,7 @@ pub struct SceneHost {
     pub(crate) legacy_flakes: BTreeMap<u8, crate::effect_objects::LegacyFlakes>,
     pub(crate) rain_effects: BTreeMap<u8, crate::effect_objects::RainEffect>,
     pub(crate) fragment_effects: BTreeMap<u8, crate::effect_objects::FragmentEffect>,
+    pub(crate) collision_x87_arithmetic: bool,
     pub(crate) collision_effects: BTreeMap<u8, crate::effect_objects::CollisionEffect>,
     pub(crate) particle_effects: BTreeMap<u8, crate::effect_objects::ParticleEffect>,
     pub(crate) falling_effects: BTreeMap<u8, crate::effect_objects::FallingEffect>,
@@ -383,13 +384,16 @@ impl SceneHost {
     pub fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
         Self {
             child_slots: ChildSlots::for_profile(profile),
-            allow_filter_mode_one: profile.is_inspected_20071117(),
+            collision_x87_arithmetic: profile.is_inspected_20090815(),
+            allow_filter_mode_one: profile.is_inspected_20071117()
+                || profile.is_inspected_20090815(),
             allow_rotation_hold: profile.is_inspected_20070119(),
             legacy_world_motion: profile.is_inspected_20070119(),
             allow_legacy_sine_modes: profile.uses_legacy_sine_modes(),
             allow_screen_coordinates_one: profile.is_inspected_20070119()
                 || profile.is_inspected_20080719()
-                || profile.is_inspected_20080903(),
+                || profile.is_inspected_20080903()
+                || profile.is_inspected_20090815(),
             allow_projected_parent_rotation: profile.is_inspected_20080719(),
             allow_triangle_quake: profile.is_inspected_20080719(),
             allow_stand_change_table: profile.is_inspected_20070119(),
@@ -1288,6 +1292,7 @@ impl SceneHost {
         *self = Self {
             screen_size: self.screen_size,
             child_slots: self.child_slots,
+            collision_x87_arithmetic: self.collision_x87_arithmetic,
             allow_filter_mode_one: self.allow_filter_mode_one,
             allow_rotation_hold: self.allow_rotation_hold,
             legacy_world_motion: self.legacy_world_motion,

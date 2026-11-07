@@ -178,7 +178,7 @@ impl SceneHost {
                     scene.particle_effects.insert(slot as u8, effect);
                 }
                 SavedEffect::Collision { words, .. } => {
-                    let mut effect = CollisionEffect::new(
+                    let mut effect = CollisionEffect::new_with_arithmetic(
                         words[0],
                         words[1..3].try_into().unwrap(),
                         words[3],
@@ -187,6 +187,7 @@ impl SceneHost {
                             ..Default::default()
                         },
                         random,
+                        x87_arithmetic,
                     );
                     effect.template = Some(template);
                     scene.collision_effects.insert(slot as u8, effect);

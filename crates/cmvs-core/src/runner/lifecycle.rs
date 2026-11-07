@@ -260,13 +260,13 @@ mod tests {
             } else if kind == 1 {
                 run.scene.collision_effects.insert(
                     2,
-                    crate::effect_objects::CollisionEffect {
-                        template: None,
-                        mode: 0,
-                        parameters: [0; 2],
-                        pool: Default::default(),
-                        particles: Vec::new(),
-                    },
+                    crate::effect_objects::CollisionEffect::new(
+                        0,
+                        [0; 2],
+                        0,
+                        Default::default(),
+                        &mut crate::random::CrtRandom::new(0),
+                    ),
                 );
             } else {
                 run.scene.falling_effects.insert(
@@ -297,13 +297,13 @@ mod tests {
         }
         run.scene.collision_effects.insert(
             2,
-            crate::effect_objects::CollisionEffect {
-                template: None,
-                mode: 0,
-                parameters: [0; 2],
-                pool: Default::default(),
-                particles: Vec::new(),
-            },
+            crate::effect_objects::CollisionEffect::new(
+                0,
+                [0; 2],
+                0,
+                Default::default(),
+                &mut crate::random::CrtRandom::new(0),
+            ),
         );
         run.scene.falling_effects.insert(
             1,

@@ -44,6 +44,17 @@ fn height(triangle: &Triangle, x: f32, z: f32) -> Option<f32> {
     Some(point[1])
 }
 
+// MEMORIA 0x431750/0x431ba0: x87 intermediates with explicit f32 stores.
+fn hundredth_x87(value: f64) -> f32 {
+    let scaled = value * 100.0;
+    let integer = if (-2147483648.0..2147483648.0).contains(&scaled) {
+        scaled as i32
+    } else {
+        i32::MIN
+    };
+    (f64::from(integer) / 100.0) as f32
+}
+
 fn unit(random: &mut CrtRandom) -> f32 {
     random.next_value() as f32 / 32767.0
 }
@@ -57,6 +68,7 @@ pub struct CollisionParticle {
 #[derive(Debug, PartialEq, Eq)]
 pub struct CollisionEffect {
     pub(crate) template: Option<crate::snapshot::SavedEffect>,
+    x87_arithmetic: bool,
     pub mode: u32,
     pub parameters: [u32; 2],
     pub pool: SceneObject,
@@ -64,6 +76,7 @@ pub struct CollisionEffect {
 }
 
 impl CollisionEffect {
+    #[cfg(test)]
     pub(crate) fn new(
         mode: u32,
         parameters: [u32; 2],
@@ -71,9 +84,21 @@ impl CollisionEffect {
         pool: SceneObject,
         random: &mut CrtRandom,
     ) -> Self {
+        Self::new_with_arithmetic(mode, parameters, count, pool, random, false)
+    }
+
+    pub(crate) fn new_with_arithmetic(
+        mode: u32,
+        parameters: [u32; 2],
+        count: u32,
+        pool: SceneObject,
+        random: &mut CrtRandom,
+        x87_arithmetic: bool,
+    ) -> Self {
         let [base_z, speed] = parameters.map(f32::from_bits);
         let particles = (0..count)
             .map(|index| {
+                let mut candidate = random.clone();
                 let x = unit(random) * 90.0 - 45.0;
                 let z = unit(random) * spread(mode) + base_z;
                 let y = unit(random) * 75.0;
@@ -86,6 +111,20 @@ impl CollisionEffect {
                 words[8] = hundredth(z).to_bits();
                 let variation = speed * 0.25;
                 words[9] = ((unit(random) * variation - variation * 0.5) + speed).to_bits();
+                if x87_arithmetic {
+                    let unit = |rng: &mut CrtRandom| f64::from(rng.next_value()) / 32767.0;
+                    let x = (unit(&mut candidate) * 90.0 - 45.0) as f32;
+                    let z =
+                        (unit(&mut candidate) * f64::from(spread(mode)) + f64::from(base_z)) as f32;
+                    let y = (unit(&mut candidate) * 75.0) as f32;
+                    candidate.next_value();
+                    words[6] = hundredth_x87(f64::from(x)).to_bits();
+                    words[7] = hundredth_x87(f64::from(y)).to_bits();
+                    words[8] = hundredth_x87(f64::from(z)).to_bits();
+                    let offset = (unit(&mut candidate) * f64::from(variation)
+                        - f64::from(variation) * 0.5) as f32;
+                    words[9] = (speed + offset).to_bits();
+                }
                 let mut draw = DrawState::default();
                 draw.words[0] = 2;
                 draw.words[2..8].copy_from_slice(&[0, 0, 32, 32, 16, 16]);
@@ -110,6 +149,7 @@ impl CollisionEffect {
             })
             .collect();
         Self {
+            x87_arithmetic,
             template: None,
             mode,
             parameters,
@@ -123,10 +163,20 @@ impl CollisionEffect {
         draw: &mut DrawState,
         mode: u32,
         base_z: f32,
+        x87_arithmetic: bool,
         random: &mut CrtRandom,
     ) {
-        words[6] = hundredth(unit(random) * 90.0 - 45.0).to_bits();
-        let z = hundredth(unit(random) * spread(mode) + base_z);
+        let z = if x87_arithmetic {
+            words[6] =
+                hundredth_x87(f64::from(random.next_value()) / 32767.0 * 90.0 - 45.0).to_bits();
+            hundredth_x87(
+                f64::from(random.next_value()) / 32767.0 * f64::from(spread(mode))
+                    + f64::from(base_z),
+            )
+        } else {
+            words[6] = hundredth(unit(random) * 90.0 - 45.0).to_bits();
+            hundredth(unit(random) * spread(mode) + base_z)
+        };
         words[7] = (f32::from_bits(words[7]) + 75.0).to_bits();
         words[8] = z.to_bits();
         words[10] = 0;
@@ -139,7 +189,12 @@ impl CollisionEffect {
         for particle in &mut self.particles {
             let words = &mut particle.words;
             let x = f32::from_bits(words[6]);
-            let y = f32::from_bits(words[7]) - time / f32::from_bits(words[9]);
+            let y = if self.x87_arithmetic {
+                (f64::from(f32::from_bits(words[7]))
+                    - f64::from(time) / f64::from(f32::from_bits(words[9]))) as f32
+            } else {
+                f32::from_bits(words[7]) - time / f32::from_bits(words[9])
+            };
             let z = f32::from_bits(words[8]);
             words[7] = y.to_bits();
             let contact = f32::from_bits(words[10]);
@@ -147,7 +202,7 @@ impl CollisionEffect {
             if !triangles.is_empty() && contact >= 1.0 {
                 let difference = y - contact;
                 if difference <= -0.5 {
-                    Self::respawn(words, draw, self.mode, base_z, random);
+                    Self::respawn(words, draw, self.mode, base_z, self.x87_arithmetic, random);
                 } else if difference <= 0.5 {
                     draw.words[17] = ((difference + 0.5) * 255.0) as u32;
                 }
@@ -161,7 +216,7 @@ impl CollisionEffect {
                 }
             }
             if f32::from_bits(words[7]) < 0.0 {
-                Self::respawn(words, draw, self.mode, base_z, random);
+                Self::respawn(words, draw, self.mode, base_z, self.x87_arithmetic, random);
             }
             draw.words[11..14].copy_from_slice(&words[6..9]);
         }
@@ -284,7 +339,14 @@ impl SceneHost {
             ..Default::default()
         };
         let mut candidate_random = random.clone();
-        let mut effect = CollisionEffect::new(mode, parameters, count, pool, &mut candidate_random);
+        let mut effect = CollisionEffect::new_with_arithmetic(
+            mode,
+            parameters,
+            count,
+            pool,
+            &mut candidate_random,
+            self.collision_x87_arithmetic,
+        );
         effect.template = template;
         self.replace_effect_slot(slot as u8, backend)?;
         call.complete(0x4018)?;
@@ -338,6 +400,37 @@ mod tests {
             &[0, 0, 32, 32, 16, 16]
         );
     }
+    #[test]
+    fn memoria_x87_stores_match_independent_reference_and_keep_rng_progress() {
+        let mut rng = CrtRandom::new(4);
+        let mut effect = CollisionEffect::new_with_arithmetic(
+            0,
+            [15.0f32.to_bits(), 5000.0f32.to_bits()],
+            1,
+            SceneObject::default(),
+            &mut rng,
+            true,
+        );
+        // Independent Python struct/f64 reference, preserving native f32 store points.
+        assert_eq!(
+            effect.particles[0].words,
+            [
+                1, 0, 0, 0, 0, 0, 3258148454, 1115202519, 1104124314, 1167943023, 0
+            ]
+        );
+        let mut expected_rng = CrtRandom::new(4);
+        for _ in 0..5 {
+            expected_rng.next_value();
+        }
+        assert_eq!(rng, expected_rng);
+        let before = effect.particles[0].words;
+        let y = (f64::from(f32::from_bits(before[7]))
+            - 1200.0 / f64::from(f32::from_bits(before[9]))) as f32;
+        effect.advance(1000, &[], &mut rng);
+        assert_eq!(effect.particles[0].words[7], y.to_bits());
+        assert_eq!(rng, expected_rng);
+    }
+
     #[test]
     fn collisions_use_first_plane_then_fade_and_respawn_with_two_draws() {
         let triangle = [[-2.0, 2.0, -2.0], [2.0, 2.0, -2.0], [0.0, 2.0, 2.0]];

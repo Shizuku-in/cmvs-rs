@@ -27,6 +27,8 @@ pub enum SnapshotLayout {
     TextV1SceneV1,
     /// Inspected 20080719: text/window v1, scene v2, draw/movie v4, paired BGM.
     TextV1SceneV2,
+    /// MEMORIA: scene v2 additionally carries the 0x749 collision mesh chunk.
+    TextV1SceneV2Collision,
     TextV2,
     TextV3,
     /// Text v3, scene v4 with 1024 child slots (REALIVE and verified later builds).
@@ -35,7 +37,10 @@ pub enum SnapshotLayout {
 impl SnapshotLayout {
     pub(crate) fn text_version(self) -> u16 {
         match self {
-            Self::TextV1SceneLegacy | Self::TextV1SceneV1 | Self::TextV1SceneV2 => 1,
+            Self::TextV1SceneLegacy
+            | Self::TextV1SceneV1
+            | Self::TextV1SceneV2
+            | Self::TextV1SceneV2Collision => 1,
             Self::TextV2 => 2,
             Self::TextV3 | Self::TextV3SceneV4 => 3,
         }

@@ -190,6 +190,43 @@ mod tests {
     }
 
     #[test]
+    fn memoria_scene_v2_mesh_roundtrips_without_opening_earlier_builds() {
+        let child = SceneObject {
+            collision_vertices: Some(vec![[1f32.to_bits(), 2f32.to_bits(), 3f32.to_bits()]; 3]),
+            draw: Some(DrawState::default()),
+            ..Default::default()
+        };
+        let mut parent = SceneObject::default();
+        parent.flags |= 0x8000_0000;
+        parent.children.insert(255, child);
+        let saved = SavedScene::from_object(&parent).unwrap();
+        let layout = SnapshotLayout::TextV1SceneV2Collision;
+        let bytes = saved.encode_with_layout(layout).unwrap();
+        assert_eq!(&bytes[..4], &[255, 255, 2, 0]);
+        assert_eq!(
+            SavedScene::decode_with_layout(&bytes, 0, &mut 0, layout).unwrap(),
+            saved
+        );
+        assert!(
+            saved
+                .encode_with_layout(SnapshotLayout::TextV1SceneV2)
+                .is_err()
+        );
+        assert!(
+            SavedScene::decode_with_layout(&bytes, 0, &mut 0, SnapshotLayout::TextV1SceneV2)
+                .is_err()
+        );
+        let leaf = parent.children.remove(&255).unwrap();
+        parent.children.insert(256, leaf);
+        assert!(
+            SavedScene::from_object(&parent)
+                .unwrap()
+                .encode_with_layout(layout)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn collision_mesh_roundtrip_preserves_empty_and_full_streams_in_children() {
         for count in [0, 1, 3, 128] {
             let vertices =
@@ -597,7 +634,10 @@ impl SavedScene {
             || r.u16()?
                 != if text_v1_scene_v1 {
                     1
-                } else if layout == SnapshotLayout::TextV1SceneV2 {
+                } else if matches!(
+                    layout,
+                    SnapshotLayout::TextV1SceneV2 | SnapshotLayout::TextV1SceneV2Collision
+                ) {
                     2
                 } else if scene_v4 {
                     4
@@ -632,7 +672,10 @@ impl SavedScene {
                 match tag {
                     0x740 => image = Some(SavedImage::decode_with_layout(bytes, layout)?),
                     0x741 => secondary_image = Some(SavedImage::decode_with_layout(bytes, layout)?),
-                    0x749 if layout.text_version() != 1 => {
+                    0x749
+                        if layout.text_version() != 1
+                            || layout == SnapshotLayout::TextV1SceneV2Collision =>
+                    {
                         collision_vertices = Some(collision::decode(bytes)?)
                     }
                     0x780 => draw = Some(draw::decode_with_layout(bytes, layout)?),
@@ -724,7 +767,10 @@ impl SavedScene {
         out.extend(
             if text_v1_scene_v1 {
                 1u16
-            } else if layout == SnapshotLayout::TextV1SceneV2 {
+            } else if matches!(
+                layout,
+                SnapshotLayout::TextV1SceneV2 | SnapshotLayout::TextV1SceneV2Collision
+            ) {
                 2u16
             } else if scene_v4 {
                 4u16
