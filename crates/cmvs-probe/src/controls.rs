@@ -1,7 +1,7 @@
 //! Probe group IDs 0..=5 are ordinary groups; 6..=13 are list groups 0..=7.
 //! List hit rectangles follow the bound object, then intersect the screen-space hit area.
 use cmvs_core::{
-    buttons::{BUTTON_GROUPS, Button},
+    buttons::{BUTTON_GROUPS, Button, ButtonGroup},
     runner::Startup,
 };
 
@@ -13,9 +13,11 @@ pub struct Group<'a> {
     pub current: Option<usize>,
     offset: [i32; 2],
     clip: Option<[i32; 4]>,
+    /// Ordinary groups map script points to device pointer positions (0x221b scale).
+    pointer: Option<&'a ButtonGroup>,
 }
 
-impl Group<'_> {
+impl<'a> Group<'a> {
     pub fn rect(&self, index: usize) -> Option<[i32; 4]> {
         let button = self.buttons.get(index)?;
         let [x, y, w, h] = button.rect;
@@ -47,9 +49,14 @@ impl Group<'_> {
     pub fn enabled(&self, index: usize) -> bool {
         self.buttons.get(index).is_some_and(|button| button.enabled) && self.rect(index).is_some()
     }
+    /// The device pointer position at the centre of a button's rectangle.
     pub fn point(&self, index: usize) -> Option<[i32; 2]> {
         let [x, y, w, h] = self.rect(index)?;
-        Some([x.checked_add(w / 2)?, y.checked_add(h / 2)?])
+        let centre = [x.checked_add(w / 2)?, y.checked_add(h / 2)?];
+        Some(
+            self.pointer
+                .map_or(centre, |group| group.to_pointer(centre)),
+        )
     }
     pub fn scroll_point(&self) -> Option<[i32; 2]> {
         let [x, y, w, h] = self.clip?;
@@ -68,6 +75,7 @@ pub fn group<'a>(run: &'a Startup<'_>, slot: usize) -> Option<Group<'a>> {
             current: group.current,
             offset: [0, 0],
             clip: None,
+            pointer: Some(group),
         });
     }
     let group = run.buttons().list_group(slot.checked_sub(BUTTON_GROUPS)?)?;
@@ -95,6 +103,7 @@ pub fn group<'a>(run: &'a Startup<'_>, slot: usize) -> Option<Group<'a>> {
         current: group.current,
         offset,
         clip: Some(group.hit_area),
+        pointer: None,
     })
 }
 
@@ -107,4 +116,41 @@ pub fn enabled(run: &Startup<'_>) -> Vec<(usize, usize)> {
                 .map(move |index| (slot, index))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cmvs_core::buttons::{BUTTON_STATES, ButtonImage};
+
+    #[test]
+    fn scaled_group_points_are_device_pointer_positions() {
+        let group = |pointer_scale| ButtonGroup {
+            object: 0,
+            buttons: vec![Button {
+                id: 1,
+                enabled: true,
+                rect: [640, 480, 100, 100],
+                links: [-1; 4],
+                images: [ButtonImage::default(); BUTTON_STATES],
+            }],
+            current: None,
+            pressed_visual: false,
+            press_target: None,
+            pointer_scale,
+        };
+        let probe = |group: &ButtonGroup| {
+            Group {
+                buttons: &group.buttons,
+                current: None,
+                offset: [0, 0],
+                clip: None,
+                pointer: Some(group),
+            }
+            .point(0)
+        };
+        // 800x600 device over 1280x960 script space: centre (690, 530) is (431, 331).
+        assert_eq!(probe(&group(Some([800, 600, 1280, 960]))), Some([431, 331]));
+        assert_eq!(probe(&group(None)), Some([690, 530]));
+    }
 }

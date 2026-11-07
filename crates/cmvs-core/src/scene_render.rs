@@ -2404,6 +2404,41 @@ mod scale_tests {
     }
 
     #[test]
+    fn logical_text_parent_keeps_a_fractional_device_anchor() {
+        // As cmvs-font queues a NATSUUTA 0x211c text: an unscaled anchor on a parent with
+        // the text's logical size, and inheriting glyph children offset by the padding.
+        let profile = crate::profile::Registry::builtin()
+            .profile("cmvs-20100314")
+            .unwrap();
+        let mut scene = SceneHost::for_profile(profile);
+        scene.set_screen_size(crate::viewport::ScreenSize::new([800, 600]).unwrap());
+        let mut p = DrawState::default().words;
+        p[8..10].copy_from_slice(&[1, 1]);
+        p[18..20].fill(1.0f32.to_bits());
+        let parent = SceneObject {
+            logical_size: [1280, 960],
+            ..SceneObject::default()
+        };
+        let mut c = DrawState::default().words;
+        c[4..6].copy_from_slice(&[2, 2]);
+        c[8..10].fill(-2i32 as u32);
+        let child = SceneObject {
+            image: Some(image()),
+            ..SceneObject::default()
+        };
+        let parent_scale = logical_screen_scale(&scene, &parent, None).unwrap();
+        assert_eq!(parent_scale, 0.625);
+        let child_scale = logical_screen_scale(&scene, &child, Some(parent_scale)).unwrap();
+        let Layer::Projected { quad, .. } = child_layer(&parent, &p, &child, &c, child_scale)
+            .unwrap()
+            .unwrap()
+        else {
+            panic!("logical text glyph quad")
+        };
+        assert_eq!(quad[..2], [-1.125, -1.125]);
+    }
+
+    #[test]
     fn logical_mask_scales_geometry_and_keeps_source_space_mask_samples() {
         let image = ObjectImage {
             pixels: RgbaImage::new(2, 1, [255, 0, 0, 255].repeat(2)).unwrap(),

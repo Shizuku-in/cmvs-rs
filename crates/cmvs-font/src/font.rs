@@ -428,34 +428,34 @@ impl FontRenderer {
             }
             // A text created with its own logical size (NATSUUTA 0x211c) is drawn in that
             // space; as for logically scaled scene objects, the device over logical width
-            // scales both axes, including the anchor. Other builds keep refusing it.
+            // scales both axes, including the anchor. The scene's logical sizing applies
+            // it to the final vertices, so fractional device anchors are kept. Other
+            // builds keep refusing it.
             let screen = messages.screen_size();
-            let ratio = if text.logical_size == screen.map(|v| v as i32) {
-                1.0
+            let logical_size = if text.logical_size == screen.map(|v| v as i32) {
+                [0, 0]
             } else if !messages.allows_logical_text_scale() {
                 return Err(FormatError(
                     "font preview requires text coordinates matching the logical screen",
                 ));
             } else if text.logical_size[0] > 0 {
-                screen[0] as f32 / text.logical_size[0] as f32
+                text.logical_size.map(|v| v as u32)
             } else {
                 return Err(FormatError(
                     "font preview requires a positive logical text width",
                 ));
             };
             let mut parent_draw = DrawState::default();
-            parent_draw.words[8..10].copy_from_slice(
-                &text
-                    .position
-                    .map(|v| (v as f32 * ratio).round() as i32 as u32),
-            );
+            parent_draw.words[8..10].copy_from_slice(&text.position.map(|v| v as u32));
             parent_draw.words[10] = text.layer as u32;
-            parent_draw.words[18..20].fill((scale * ratio).to_bits());
+            parent_draw.words[18..20].fill(scale.to_bits());
             // The original text scene object owns attached glyph children. Scaling
             // acts on their relative positions and padded cells, not the text anchor.
+            // Glyph children inherit the parent's logical factor (flag bit 0).
             let mut parent = SceneObject {
                 draw: Some(parent_draw),
                 flags: 0xffff_ffff,
+                logical_size,
                 ..SceneObject::default()
             };
             for glyph in text.glyphs.iter().filter(|g| g.shown && g.opacity != 0) {

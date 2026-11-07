@@ -73,7 +73,7 @@ impl ButtonGroup {
         }
     }
     /// A script position as the pointer position the original warps to.
-    fn to_pointer(&self, [x, y]: [i32; 2]) -> [i32; 2] {
+    pub fn to_pointer(&self, [x, y]: [i32; 2]) -> [i32; 2] {
         match self.pointer_scale {
             Some([w, h, sw, sh]) => [Self::scaled(x, w, sw), Self::scaled(y, h, sh)],
             None => [x, y],
