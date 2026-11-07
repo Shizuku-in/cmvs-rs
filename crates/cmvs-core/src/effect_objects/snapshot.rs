@@ -10,14 +10,9 @@ use crate::{
 use std::{collections::BTreeMap, error::Error};
 
 impl SceneHost {
+    /// Creators and restores only fill slots 0..3.
     pub(crate) fn has_effect_pools(&self) -> bool {
-        !self.legacy_flakes.is_empty()
-            || !self.rain_effects.is_empty()
-            || !self.particle_effects.is_empty()
-            || !self.falling_effects.is_empty()
-            || !self.collision_effects.is_empty()
-            || !self.fragment_effects.is_empty()
-            || !self.legacy_effects.is_empty()
+        (0..4).any(|slot| self.has_effect_slot(slot))
     }
 
     pub(crate) fn saved_effect_pools(&self) -> Result<Vec<(u16, Vec<u8>)>, FormatError> {

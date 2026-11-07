@@ -634,7 +634,20 @@ impl SceneHost {
         self.collision_effects.remove(&slot);
         self.fragment_effects.remove(&slot);
         self.legacy_effects.remove(&slot);
+        debug_assert!(!self.has_effect_slot(slot), "an effect map is not cleared");
         Ok(())
+    }
+
+    /// Whether any effect type holds `slot`. The per-type maps share the four engine slots,
+    /// and `replace_effect_slot` above must clear the same maps.
+    pub(crate) fn has_effect_slot(&self, slot: u8) -> bool {
+        self.legacy_flakes.contains_key(&slot)
+            || self.rain_effects.contains_key(&slot)
+            || self.particle_effects.contains_key(&slot)
+            || self.falling_effects.contains_key(&slot)
+            || self.collision_effects.contains_key(&slot)
+            || self.fragment_effects.contains_key(&slot)
+            || self.legacy_effects.contains_key(&slot)
     }
 
     /// Destroy every legacy effect with its destructor, for a RESET or a load that
@@ -926,9 +939,7 @@ impl SceneHost {
         let value = call.argument(8, "effect parameter")?;
         call.argument(12, "effect parameter")?;
         call.argument(16, "effect parameter")?;
-        let known = slot > 3
-            || self.legacy_effects.contains_key(&(slot as u8))
-            || self.has_effect_slot(slot as u8);
+        let known = slot > 3 || self.has_effect_slot(slot as u8);
         if !known {
             return Err(call
                 .error("effect parameter needs an existing effect")
@@ -963,15 +974,6 @@ impl SceneHost {
             _ => {}
         }
         Ok(())
-    }
-
-    fn has_effect_slot(&self, slot: u8) -> bool {
-        self.legacy_flakes.contains_key(&slot)
-            || self.rain_effects.contains_key(&slot)
-            || self.particle_effects.contains_key(&slot)
-            || self.falling_effects.contains_key(&slot)
-            || self.collision_effects.contains_key(&slot)
-            || self.fragment_effects.contains_key(&slot)
     }
 
     /// The legacy part of 0x417e70, after the view motion of the same frame.

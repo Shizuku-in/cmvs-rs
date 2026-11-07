@@ -3,12 +3,17 @@ mod shared_audio;
 use cmvs_rs::{
     audio::{
         AudioBackend, AudioHost, AudioRequest, AudioSettings, BgmState, RecordingAudio, SeChannel,
+        VoiceDuckingSettings,
     },
+    cpz::Cpz7Parameters,
     machine::{Machine, Step},
+    platform::RecordingBackend,
+    profile::Registry,
     ps3::Script,
+    runner::{Startup, load_start},
 };
 use shared_audio::SharedAudio;
-use std::error::Error;
+use std::{cell::RefCell, collections::BTreeMap, error::Error, fs, path::PathBuf, rc::Rc};
 
 #[test]
 fn voice_fade_out_keeps_duration_results_and_works_with_voice_disabled() {
@@ -116,50 +121,67 @@ fn ps2a(code: &[u8], text: &[u8]) -> Vec<u8> {
     raw
 }
 
+type Paths = BTreeMap<(u16, u32), Vec<u8>>;
+/// What a backend last received through its configuration calls, and the paths it held
+/// at each preload, by sound name.
+#[derive(Default)]
+struct Configured {
+    paths: Option<Paths>,
+    keys: Option<BTreeMap<(u16, u32), Cpz7Parameters>>,
+    preloads: Vec<(Vec<u8>, Paths)>,
+}
+type Seen = Rc<RefCell<Configured>>;
+struct Mirror(Seen);
+impl AudioBackend for Mirror {
+    fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+        Ok(false)
+    }
+    fn configure_voice_ducking(&mut self, _: VoiceDuckingSettings) -> Result<(), Box<dyn Error>> {
+        Ok(())
+    }
+    fn configure_paths(&mut self, paths: &Paths) -> Result<(), Box<dyn Error>> {
+        self.0.borrow_mut().paths = Some(paths.clone());
+        Ok(())
+    }
+    fn configure_archive_parameters(
+        &mut self,
+        parameters: &BTreeMap<(u16, u32), Cpz7Parameters>,
+    ) -> Result<(), Box<dyn Error>> {
+        self.0.borrow_mut().keys = Some(parameters.clone());
+        Ok(())
+    }
+    fn preload(&mut self, _: u8, name: &[u8]) -> Result<bool, Box<dyn Error>> {
+        let mut seen = self.0.borrow_mut();
+        let paths = seen.paths.clone().unwrap_or_default();
+        seen.preloads.push((name.to_vec(), paths));
+        Ok(true)
+    }
+}
+
+/// A game directory whose start script is `code` with text section `text`.
+fn synthetic_game(name: &str, code: &[u8], text: &[u8]) -> PathBuf {
+    let root = std::env::temp_dir().join(format!("cmvs-audio-{name}-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("data/pack")).unwrap();
+    fs::create_dir_all(root.join("save")).unwrap();
+    fs::write(root.join("data/pack/start.ps3"), ps2a(code, text)).unwrap();
+    let archive: Vec<_> = include_str!("fixtures/cpz6-script.hex")
+        .trim()
+        .as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap())
+        .collect();
+    fs::write(root.join("data/pack/script.cpz"), archive).unwrap();
+    root
+}
+
 /// The backend keeps its own copy of the registered paths and CPZ7 keys, so the runner
 /// refreshes it after every registration and when a backend is swapped in, not only
 /// before particular commands that load sounds by name.
 #[test]
 fn audio_backend_tracks_registered_paths_and_keys() {
-    use cmvs_rs::{
-        cpz::Cpz7Parameters,
-        platform::RecordingBackend,
-        profile::Registry,
-        runner::{Startup, load_start},
-    };
-    use std::{cell::RefCell, collections::BTreeMap, fs, rc::Rc};
-    type Seen = Rc<
-        RefCell<(
-            Option<BTreeMap<(u16, u32), Vec<u8>>>,
-            Option<BTreeMap<(u16, u32), Cpz7Parameters>>,
-        )>,
-    >;
-    struct Mirror(Seen);
-    impl AudioBackend for Mirror {
-        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
-            Ok(false)
-        }
-        fn configure_voice_ducking(
-            &mut self,
-            _: cmvs_rs::audio::VoiceDuckingSettings,
-        ) -> Result<(), Box<dyn Error>> {
-            Ok(())
-        }
-        fn configure_paths(
-            &mut self,
-            paths: &BTreeMap<(u16, u32), Vec<u8>>,
-        ) -> Result<(), Box<dyn Error>> {
-            self.0.borrow_mut().0 = Some(paths.clone());
-            Ok(())
-        }
-        fn configure_archive_parameters(
-            &mut self,
-            parameters: &BTreeMap<(u16, u32), Cpz7Parameters>,
-        ) -> Result<(), Box<dyn Error>> {
-            self.0.borrow_mut().1 = Some(parameters.clone());
-            Ok(())
-        }
-    }
     // cmvs-20221105 binds 0x226c to the keyed archive registration. It registers SE
     // slot 0 as "se" with keys 1..=4; plain 0x2014 then moves the slot to "voice" and
     // drops its keys.
@@ -171,24 +193,7 @@ fn audio_backend_tracks_registered_paths_and_keys() {
     push(&mut code, 3);
     push(&mut code, 0);
     code.extend(0x2014u16.to_le_bytes());
-    let root = std::env::temp_dir().join(format!("cmvs-audio-paths-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(root.join("data/pack")).unwrap();
-    fs::create_dir_all(root.join("save")).unwrap();
-    fs::write(
-        root.join("data/pack/start.ps3"),
-        ps2a(&code, b"se\0voice\0"),
-    )
-    .unwrap();
-    let archive: Vec<_> = include_str!("fixtures/cpz6-script.hex")
-        .trim()
-        .as_bytes()
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap())
-        .collect();
-    fs::write(root.join("data/pack/script.cpz"), archive).unwrap();
+    let root = synthetic_game("paths", &code, b"se\0voice\0");
     let registry = Registry::builtin();
     let game = registry
         .identify_game(&root, Some("cmvs-20221105"))
@@ -211,8 +216,8 @@ fn audio_backend_tracks_registered_paths_and_keys() {
     };
     let mirrors = |seen: &Seen, run: &Startup<'_>| {
         let seen = seen.borrow();
-        seen.0.as_ref() == Some(run.bootstrap().paths())
-            && seen.1.as_ref() == Some(run.bootstrap().archive_parameters())
+        seen.paths.as_ref() == Some(run.bootstrap().paths())
+            && seen.keys.as_ref() == Some(run.bootstrap().archive_parameters())
     };
     assert!(mirrors(&first, &run));
     assert!(run.bootstrap().paths().is_empty());
@@ -235,6 +240,46 @@ fn audio_backend_tracks_registered_paths_and_keys() {
     run.set_audio_backend(Box::new(Mirror(second.clone())))
         .unwrap();
     assert!(mirrors(&second, &run));
+    drop(run);
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// PURIRING's 0x2248 preload loads a sound by name, so it must see the paths registered
+/// before it. The list of commands the runner configured audio for once missed it.
+#[test]
+fn puriring_preload_sees_the_paths_registered_before_it() {
+    // 0x2014 registers SE slot 0 as "se"; 0x2248 then preloads sound 23, "a.wav".
+    let mut code = vec![];
+    push(&mut code, 0);
+    push(&mut code, 0);
+    code.extend(0x2014u16.to_le_bytes());
+    push(&mut code, 3);
+    push(&mut code, 23);
+    code.extend(0x2248u16.to_le_bytes());
+    let root = synthetic_game("puriring-preload", &code, b"se\0a.wav\0");
+    let registry = Registry::builtin();
+    let game = registry
+        .identify_game(&root, Some("cmvs-20070119"))
+        .unwrap();
+    let script = load_start(&root, &game.files).unwrap();
+    let mut run = Startup::new(&script, &root, &game, 0).unwrap();
+    let seen = Seen::default();
+    run.set_audio_backend(Box::new(Mirror(seen.clone())))
+        .unwrap();
+    let mut platform = RecordingBackend::default();
+    for _ in 0..32 {
+        if !seen.borrow().preloads.is_empty() {
+            break;
+        }
+        run.tick(&mut platform).unwrap();
+    }
+    assert_eq!(
+        seen.borrow().preloads,
+        [(
+            b"a.wav".to_vec(),
+            Paths::from([((0x2014, 0), b"se".to_vec())])
+        )]
+    );
     drop(run);
     let _ = fs::remove_dir_all(&root);
 }
