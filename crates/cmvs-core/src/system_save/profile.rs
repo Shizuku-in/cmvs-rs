@@ -133,7 +133,11 @@ impl ProfileSystemSave {
         #[cfg(target_os = "android")]
         let locked = rustix::fs::flock(&lock, rustix::fs::FlockOperation::NonBlockingLockExclusive)
             .map_err(io::Error::from);
-        #[cfg(not(any(target_os = "android", target_os = "horizon")))]
+        // The browser adapter already returns io::Error rather than std's
+        // TryLockError; keep its worker-local lock result unchanged.
+        #[cfg(target_arch = "wasm32")]
+        let locked = lock.try_lock();
+        #[cfg(not(any(target_os = "android", target_os = "horizon", target_arch = "wasm32")))]
         let locked = lock.try_lock().map_err(io::Error::from);
         #[cfg(not(target_os = "horizon"))]
         locked.map_err(|error| {
