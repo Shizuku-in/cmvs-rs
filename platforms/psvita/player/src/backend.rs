@@ -4,15 +4,17 @@ use cmvs_core::{
     settings::DisplayPreferences,
 };
 use std::error::Error;
-pub struct Backend {
+pub struct Backend<'a> {
     pub display: DisplayPreferences,
     pub size: [u32; 2],
-    /// Last presented frame, the engine's screenshot source.
+    /// Last presented software frame, the engine's screenshot source unless `gpu`
+    /// presented since.
     pub frame: Option<RgbaImage>,
+    pub gpu: Option<&'a mut crate::gpu::GpuRenderer>,
     /// A modal system dialog ran since the host last cleared this.
     pub modal_shown: bool,
 }
-impl PlatformBackend for Backend {
+impl PlatformBackend for Backend<'_> {
     fn logical_size(&self) -> [u32; 2] {
         self.size
     }
@@ -65,6 +67,9 @@ impl PlatformBackend for Backend {
         Ok(None)
     }
     fn read_device_frame(&mut self) -> Result<RgbaImage, Box<dyn Error>> {
+        if let Some(frame) = self.gpu.as_mut().and_then(|gpu| gpu.read()) {
+            return frame;
+        }
         self.frame
             .clone()
             .ok_or_else(|| "no completed frame".into())
@@ -94,6 +99,7 @@ mod tests {
             display: DisplayPreferences::default(),
             size: [1280, 720],
             frame: None,
+            gpu: None,
             modal_shown: false,
         };
         let previous = backend.display.render_mode;

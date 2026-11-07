@@ -104,23 +104,6 @@ enum Ended {
     Exit,
 }
 
-/// `renderer.txt` beside the program holds `gpu` (the default when absent) or `cpu`.
-fn use_gpu(setting: Option<&str>) -> Result<bool> {
-    match setting.map(str::trim) {
-        None | Some("gpu") => Ok(true),
-        Some("cpu") => Ok(false),
-        Some(other) => Err(format!("renderer.txt must be gpu or cpu, not {other:?}").into()),
-    }
-}
-
-fn read_renderer_setting() -> Result<Option<String>> {
-    match std::fs::read_to_string(Path::new(BASE).join("renderer.txt")) {
-        Ok(text) => Ok(Some(text)),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error.into()),
-    }
-}
-
 fn render_gpu(
     startup: &Startup<'_>,
     font: &mut FontRenderer,
@@ -520,7 +503,7 @@ fn main() {
     std::panic::set_hook(Box::new(|info| report(&format!("panic: {info}"))));
     // The window lives until main returns, after the error log is written: dropping
     // it unlocks exit, after which a pending HOME close may end the process.
-    let gpu = match read_renderer_setting().and_then(|text| use_gpu(text.as_deref())) {
+    let gpu = match cmvs_console::gpu::use_gpu(Path::new(BASE)) {
         Ok(gpu) => gpu,
         Err(error) => return system_error(&error.to_string()),
     };
@@ -566,13 +549,5 @@ mod tests {
             (console.buttons.wheel_up, console.buttons.wheel_down),
             (button::L, button::R)
         );
-    }
-
-    #[test]
-    fn renderer_setting_defaults_to_gpu_and_rejects_unknown_names() {
-        assert!(use_gpu(None).unwrap());
-        assert!(use_gpu(Some("gpu\n")).unwrap());
-        assert!(!use_gpu(Some(" cpu\r\n")).unwrap());
-        assert!(use_gpu(Some("vulkan")).is_err());
     }
 }

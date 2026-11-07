@@ -1,3 +1,4 @@
+#include "window.h"
 #include <psp2/appmgr.h>
 #include <psp2/apputil.h>
 #include <psp2/common_dialog.h>
@@ -34,9 +35,13 @@ enum {
 
 static bool opened;
 static bool confirm_cross;
-/* The last presented frame, redrawn behind system dialogs. */
+/* Software frames are uploaded here. */
 static vita2d_texture *frame;
 static unsigned frame_width, frame_height;
+/* The last presented texture (`frame` or the GPU canvas), redrawn behind system
+   dialogs, and the part of it in use. */
+static vita2d_texture *shown;
+static unsigned shown_width, shown_height;
 static float frame_view[4];
 static bool has_frame;
 static bool has_cursor;
@@ -72,6 +77,10 @@ int cmvs_vita_open(void) {
     has_cursor = false;
     opened = true;
     return 0;
+}
+
+int cmvs_vita_window_is_open(void) {
+    return opened;
 }
 
 int cmvs_vita_confirm_is_cross(void) {
@@ -156,12 +165,17 @@ void cmvs_vita_poll(CmvsVitaInput *out) {
 }
 
 static void draw(void) {
+    cmvs_vita_gpu_end_pass();
     vita2d_start_drawing();
+    /* The GPU canvas pass sets its own viewport. */
+    sceGxmSetViewport(vita2d_get_context(), SCREEN_WIDTH / 2.0f, SCREEN_WIDTH / 2.0f,
+                      SCREEN_HEIGHT / 2.0f, -SCREEN_HEIGHT / 2.0f, 0.5f, 0.5f);
     vita2d_clear_screen();
     if (has_frame) {
-        vita2d_draw_texture_scale(frame, frame_view[0], frame_view[1],
-                                  frame_view[2] / (float)frame_width,
-                                  frame_view[3] / (float)frame_height);
+        vita2d_draw_texture_part_scale(shown, frame_view[0], frame_view[1], 0.0f, 0.0f,
+                                       (float)shown_width, (float)shown_height,
+                                       frame_view[2] / (float)shown_width,
+                                       frame_view[3] / (float)shown_height);
     }
     if (has_cursor) {
         vita2d_draw_rectangle(cursor_at[0] - 5.0f, cursor_at[1], 11.0f, 1.0f, 0xffffffff);
@@ -183,7 +197,8 @@ int cmvs_vita_present(const uint8_t *rgba, uint32_t width, uint32_t height, cons
     if (!frame || frame_width != width || frame_height != height) {
         if (frame)
             vita2d_free_texture(frame);
-        has_frame = false;
+        if (shown == frame)
+            has_frame = false;
         frame = vita2d_create_empty_texture(width, height);
         if (!frame)
             return -2;
@@ -194,9 +209,19 @@ int cmvs_vita_present(const uint8_t *rgba, uint32_t width, uint32_t height, cons
     unsigned stride = vita2d_texture_get_stride(frame);
     for (uint32_t y = 0; y < height; ++y)
         memcpy(texels + (size_t)y * stride, rgba + (size_t)y * width * 4, (size_t)width * 4);
+    return cmvs_vita_window_show(frame, width, height, view, linear, cursor);
+}
+
+int cmvs_vita_window_show(vita2d_texture *texture, uint32_t width, uint32_t height,
+                          const float *view, int linear, const float *cursor) {
+    if (!opened || !texture || width == 0 || height == 0)
+        return -1;
     SceGxmTextureFilter filter =
         linear ? SCE_GXM_TEXTURE_FILTER_LINEAR : SCE_GXM_TEXTURE_FILTER_POINT;
-    vita2d_texture_set_filters(frame, filter, filter);
+    vita2d_texture_set_filters(texture, filter, filter);
+    shown = texture;
+    shown_width = width;
+    shown_height = height;
     memcpy(frame_view, view, sizeof(frame_view));
     has_frame = true;
     has_cursor = cursor != NULL;
@@ -204,6 +229,13 @@ int cmvs_vita_present(const uint8_t *rgba, uint32_t width, uint32_t height, cons
         memcpy(cursor_at, cursor, sizeof(cursor_at));
     draw();
     return 0;
+}
+
+void cmvs_vita_window_forget(const vita2d_texture *texture) {
+    if (shown == texture) {
+        has_frame = false;
+        shown = NULL;
+    }
 }
 
 static void run_dialog(SceCommonDialogStatus (*status)(void)) {
@@ -265,10 +297,12 @@ int cmvs_vita_message(const char *text) {
 void cmvs_vita_close(void) {
     if (!opened)
         return;
+    cmvs_vita_gpu_close();
     vita2d_wait_rendering_done();
     if (frame)
         vita2d_free_texture(frame);
     frame = NULL;
+    shown = NULL;
     has_frame = false;
     vita2d_fini();
     sceAppUtilShutdown();

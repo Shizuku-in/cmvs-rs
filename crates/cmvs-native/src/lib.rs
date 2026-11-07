@@ -111,8 +111,11 @@ mod tests {
 mod pad;
 pub use pad::{PadInput, Touch};
 
+mod gpu;
+pub use gpu::{GpuDevice, GpuError, GpuTexture};
+
 mod switch;
-pub use switch::{GpuError, GpuTexture, button as switch_button};
+pub use switch::button as switch_button;
 #[cfg(target_os = "horizon")]
 pub use switch::{
     SwitchAudioOut, SwitchGpu, SwitchWindow, set_cpu_boost, shared_font, show_system_error,
@@ -123,6 +126,6 @@ mod vita;
 pub use vita::button as vita_button;
 #[cfg(target_os = "vita")]
 pub use vita::{
-    VitaAudioOut, VitaWindow, confirm_is_cross, ime_dialog, prefer_core, set_max_clocks,
+    VitaAudioOut, VitaGpu, VitaWindow, confirm_is_cross, ime_dialog, prefer_core, set_max_clocks,
     show_message,
 };

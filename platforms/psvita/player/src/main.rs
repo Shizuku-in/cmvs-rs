@@ -1,10 +1,11 @@
 mod audio;
 mod backend;
+mod gpu;
 #[cfg(target_os = "vita")]
 mod sys {
     pub use cmvs_native::{
-        VitaAudioOut, VitaWindow, confirm_is_cross, ime_dialog, prefer_core, set_max_clocks,
-        show_message,
+        VitaAudioOut, VitaGpu, VitaWindow, confirm_is_cross, ime_dialog, prefer_core,
+        set_max_clocks, show_message,
     };
 }
 #[cfg(not(target_os = "vita"))]
@@ -41,7 +42,8 @@ pub(crate) const SCREEN: [u32; 2] = [960, 544];
 /// VM budget per loop iteration before polling input and the system again.
 const BUDGET: Duration = Duration::from_millis(8);
 const IDLE: Duration = Duration::from_millis(16);
-/// The VM and the software compositor share this core; audio runs on core 1.
+/// The VM, glyph rasterization and the software compositor share this core; audio
+/// runs on core 1.
 const MAIN_CORE: u32 = 0;
 
 /// The handheld's buttons. Confirm and cancel follow the system's enter button
@@ -104,6 +106,26 @@ fn font_bytes(base: &Path) -> Result<Vec<u8>> {
     }
 }
 
+/// Composites the scene on the GPU; the caller presents the canvas.
+fn render_gpu(
+    startup: &Startup<'_>,
+    font: &mut FontRenderer,
+    gpu: &mut gpu::GpuRenderer,
+) -> Result<()> {
+    let objects = font.prepare_objects(startup.messages())?;
+    let mut extra: Vec<_> = objects.iter().collect();
+    extra.extend(startup.messages().visible_window_objects());
+    let size = startup.screen_size();
+    let frame = cmvs_core::scene_render::prepare_scene(
+        startup.scene(),
+        Some(startup.camera()),
+        &extra,
+        size[0],
+        size[1],
+    )?;
+    gpu.render(&frame)
+}
+
 fn render(startup: &Startup<'_>, font: &mut FontRenderer) -> Result<RgbaImage> {
     if let Some(frame) = startup.movie_frame() {
         return Ok(frame.clone());
@@ -131,7 +153,12 @@ fn view_rect(view: Viewport) -> [f32; 4] {
     ]
 }
 
-fn run(window: &mut sys::VitaWindow, console: &Console, root: &Path) -> Result<()> {
+fn run(
+    window: &mut sys::VitaWindow,
+    gpu: Option<&mut gpu::GpuRenderer>,
+    console: &Console,
+    root: &Path,
+) -> Result<()> {
     let base = Path::new(BASE);
     let game = Registry::builtin().identify_game(root, None)?;
     let record = game.selection.record.ok_or("unregistered game")?;
@@ -163,6 +190,7 @@ fn run(window: &mut sys::VitaWindow, console: &Console, root: &Path) -> Result<(
         display: startup.display_preferences(),
         size,
         frame: None,
+        gpu,
         modal_shown: false,
     };
     backend.display.render_mode =
@@ -239,19 +267,32 @@ fn run(window: &mut sys::VitaWindow, console: &Console, root: &Path) -> Result<(
                     startup.advance_decoded_frame(millis(now.duration_since(last_frame)))?;
                     last_frame = now;
                     let linear = backend.display.render_mode == 1;
-                    let frame = render(&startup, &mut font)?;
                     let cursor = controls.cursor_visible().then(|| {
                         let at = view.to_target(controls.pointer());
                         [at[0] as f32, at[1] as f32]
                     });
-                    window.present(
-                        frame.pixels(),
-                        [frame.width(), frame.height()],
-                        view_rect(view),
-                        linear,
-                        cursor,
-                    )?;
-                    backend.frame = Some(frame);
+                    match &mut backend.gpu {
+                        // Movie frames are shown as decoded, like software frames.
+                        Some(gpu) if startup.movie_frame().is_none() => {
+                            render_gpu(&startup, &mut font, gpu)?;
+                            gpu.present(view_rect(view), linear, cursor)?;
+                            backend.frame = None;
+                        }
+                        gpu => {
+                            let frame = render(&startup, &mut font)?;
+                            window.present(
+                                frame.pixels(),
+                                [frame.width(), frame.height()],
+                                view_rect(view),
+                                linear,
+                                cursor,
+                            )?;
+                            if let Some(gpu) = gpu {
+                                gpu.forget_presented();
+                            }
+                            backend.frame = Some(frame);
+                        }
+                    }
                     input_due = true;
                     break;
                 }
@@ -349,7 +390,12 @@ fn system_error(message: &str) {
 
 /// One game starts directly; several are offered in a menu that games return to.
 /// Errors are shown here; with a game list, the player may go back to it.
-fn session(window: &mut sys::VitaWindow, console: &Console, font: &ab_glyph::FontVec) {
+fn session(
+    window: &mut sys::VitaWindow,
+    mut gpu: Option<&mut gpu::GpuRenderer>,
+    console: &Console,
+    font: &ab_glyph::FontVec,
+) {
     let base = Path::new(BASE);
     let games = match library::discover(base) {
         Ok(games) if !games.is_empty() => games,
@@ -379,7 +425,11 @@ fn session(window: &mut sys::VitaWindow, console: &Console, font: &ab_glyph::Fon
             library::remember(base, &games[selected]);
         }
         let game = &games[selected];
-        match run(window, console, &game.root) {
+        let result = run(window, gpu.as_deref_mut(), console, &game.root);
+        if let Some(gpu) = gpu.as_deref_mut() {
+            gpu.clear_cache();
+        }
+        match result {
             Ok(()) if single => return,
             Ok(()) => {}
             Err(error) => {
@@ -400,11 +450,16 @@ fn main() {
         return report(&format!("cannot create {BASE}: {error}"));
     }
     sys::prefer_core(MAIN_CORE);
-    // Software compositing needs every cycle; the system restores clocks on exit.
+    // The VM and glyphs need every cycle; the system restores clocks on exit.
     sys::set_max_clocks();
     let mut window = match sys::VitaWindow::open() {
         Ok(window) => window,
         Err(error) => return system_error(error),
+    };
+    // Dropped before the window, which owns its GXM context.
+    let mut gpu = match open_gpu(&mut window) {
+        Ok(gpu) => gpu,
+        Err(error) => return system_error(&error.to_string()),
     };
     let console = console(sys::confirm_is_cross());
     let font = match font_bytes(Path::new(BASE)).and_then(|bytes| {
@@ -413,7 +468,19 @@ fn main() {
         Ok(font) => font,
         Err(error) => return system_error(&format!("cannot load the font: {error}")),
     };
-    session(&mut window, &console, &font);
+    session(&mut window, gpu.as_mut(), &console, &font);
+}
+
+/// The GPU compositor unless `renderer.txt` asks for software rendering. A GPU that
+/// fails to start is an error, not a silent fallback.
+fn open_gpu(window: &mut sys::VitaWindow) -> Result<Option<gpu::GpuRenderer>> {
+    if !cmvs_console::gpu::use_gpu(Path::new(BASE))? {
+        return Ok(None);
+    }
+    let device = window.open_gpu().map_err(|error| {
+        format!("{error}\nWrite cpu to {BASE}/renderer.txt to render in software.")
+    })?;
+    Ok(Some(gpu::GpuRenderer::new(device)?))
 }
 
 fn report(error: &str) {

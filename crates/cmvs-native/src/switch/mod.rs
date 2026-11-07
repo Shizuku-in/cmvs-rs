@@ -4,7 +4,6 @@
 mod audio;
 #[cfg(target_os = "horizon")]
 mod font;
-mod gpu;
 #[cfg(target_os = "horizon")]
 mod gpu_device;
 mod input;
@@ -21,7 +20,6 @@ mod window;
 pub use audio::SwitchAudioOut;
 #[cfg(target_os = "horizon")]
 pub use font::shared_font;
-pub use gpu::{GpuError, GpuTexture};
 #[cfg(target_os = "horizon")]
 pub use gpu_device::SwitchGpu;
 pub use input::button;

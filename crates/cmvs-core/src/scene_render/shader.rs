@@ -1,6 +1,6 @@
 //! Device-neutral parameters for GPU compositors executing [`Layer`] queues. The wgpu
-//! (WGSL) and Switch deko3d (GLSL) scene shaders share this uniform layout, read as
-//! `vec4 v[70]`:
+//! (WGSL), Switch deko3d (GLSL) and Vita GXM (Cg) scene shaders share this uniform
+//! layout, read as `vec4 v[70]`:
 //!
 //! | floats | meaning |
 //! |---|---|

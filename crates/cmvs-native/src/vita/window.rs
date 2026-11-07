@@ -62,6 +62,10 @@ impl VitaWindow {
             _thread: PhantomData,
         })
     }
+    /// The GPU compositor on this window's display. It closes with the window.
+    pub fn open_gpu(&mut self) -> Result<super::VitaGpu, String> {
+        super::VitaGpu::open()
+    }
     pub fn poll(&mut self) -> PadInput {
         let mut raw = RawInput::default();
         // SAFETY: C writes exactly one `CmvsVitaInput`, a layout this struct mirrors.
