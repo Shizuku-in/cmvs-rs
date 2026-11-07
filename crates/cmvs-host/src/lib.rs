@@ -146,7 +146,8 @@ impl Player {
         backend.fullscreen = preferences.fullscreen;
         backend.aspect = preferences.aspect_mode;
         backend.scaling = preferences.aspect_scaling;
-        backend.render = preferences.render_mode;
+        backend.render =
+            cmvs_core::platform::supported_render_mode(&backend, preferences.render_mode)?;
         let key_path = root.join("key.cfg");
         let bindings = if key_path.is_file() {
             let mut text = String::new();

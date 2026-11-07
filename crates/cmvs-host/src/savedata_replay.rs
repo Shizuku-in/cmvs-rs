@@ -33,6 +33,29 @@ fn advance(player: &mut Player, frames: u64) {
 
 #[test]
 #[ignore = "requires CMVS_TEST_GAME (Amatsutsumi) and CMVS_TEST_FONT"]
+fn restored_render_settings_use_only_supported_host_modes() {
+    let source = PathBuf::from(std::env::var_os("CMVS_TEST_GAME").expect("CMVS_TEST_GAME"));
+    let font = PathBuf::from(std::env::var_os("CMVS_TEST_FONT").expect("CMVS_TEST_FONT"));
+    let base = std::env::var_os("CMVS_TEST_TMPDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let profile = base.join(format!("cmvs-render-settings-{}", std::process::id()));
+    fs::create_dir(&profile).unwrap();
+    // INI 0/1 encode linear/point; shader modes 2/3 must fall back to point.
+    for (stored, expected) in [(0, 1), (1, 0), (2, 0), (3, 0)] {
+        fs::write(
+            profile.join("cmvs.cfg"),
+            format!("[GRAPHIC_CONFIG]\nASPECT_RATIO_FILTER={stored}\n"),
+        )
+        .unwrap();
+        let player = Player::open(&source, &profile, &font, false).unwrap();
+        assert_eq!(player.backend.preferences().render_mode, expected);
+    }
+    fs::remove_dir_all(profile).unwrap();
+}
+
+#[test]
+#[ignore = "requires CMVS_TEST_GAME (Amatsutsumi) and CMVS_TEST_FONT"]
 fn amatsutsumi_game_savedata_survives_player_restart() {
     let source = PathBuf::from(std::env::var_os("CMVS_TEST_GAME").expect("CMVS_TEST_GAME"));
     let font = PathBuf::from(std::env::var_os("CMVS_TEST_FONT").expect("CMVS_TEST_FONT"));
