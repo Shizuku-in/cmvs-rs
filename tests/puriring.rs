@@ -196,19 +196,6 @@ fn separate_image_tables_and_window_scale_motion_are_bound_only_here() {
 }
 
 #[test]
-fn sound_preloading_effect_creators_configure_audio_paths_first() {
-    // Walk, circle, magic and sprites preload sounds by name.
-    for command in [0x291, 0x292, 0x294, 0x295] {
-        assert!(dispatch::loads_sounds_for(semantics(command), command));
-        assert!(!dispatch::loads_sounds_for(Semantics::Root, command));
-    }
-    for command in [0x290, 0x293, 0x296, 0x297, 0x2a0, 0x2a3, 0x2ae, 0x2af] {
-        assert!(!dispatch::loads_sounds_for(semantics(command), command));
-    }
-    assert!(dispatch::loads_sounds_for(semantics(0xa0), 0xa0));
-}
-
-#[test]
 fn floating_planes_use_command_296_and_consume_two_words_for_an_invalid_slot() {
     use cmvs_rs::{dispatch::ImageHosts, image::ImageSource, scene::SceneHost};
     struct NoImages;

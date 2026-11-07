@@ -90,6 +90,9 @@ fn script(calls: &[(u32, u32, u32, u32, u32)], text: &[u8]) -> Script {
     program(&code, text)
 }
 fn program(code: &[u8], text: &[u8]) -> Script {
+    Script::decode(&ps2a(code, text)).unwrap()
+}
+fn ps2a(code: &[u8], text: &[u8]) -> Vec<u8> {
     let mut payload = 0u32.to_le_bytes().to_vec();
     payload.extend_from_slice(code);
     payload.extend(text);
@@ -110,7 +113,130 @@ fn program(code: &[u8], text: &[u8]) -> Script {
         raw.extend(n.to_le_bytes());
     }
     raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
-    Script::decode(&raw).unwrap()
+    raw
+}
+
+/// The backend keeps its own copy of the registered paths and CPZ7 keys, so the runner
+/// refreshes it after every registration and when a backend is swapped in, not only
+/// before particular commands that load sounds by name.
+#[test]
+fn audio_backend_tracks_registered_paths_and_keys() {
+    use cmvs_rs::{
+        cpz::Cpz7Parameters,
+        platform::RecordingBackend,
+        profile::Registry,
+        runner::{Startup, load_start},
+    };
+    use std::{cell::RefCell, collections::BTreeMap, fs, rc::Rc};
+    type Seen = Rc<
+        RefCell<(
+            Option<BTreeMap<(u16, u32), Vec<u8>>>,
+            Option<BTreeMap<(u16, u32), Cpz7Parameters>>,
+        )>,
+    >;
+    struct Mirror(Seen);
+    impl AudioBackend for Mirror {
+        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+            Ok(false)
+        }
+        fn configure_voice_ducking(
+            &mut self,
+            _: cmvs_rs::audio::VoiceDuckingSettings,
+        ) -> Result<(), Box<dyn Error>> {
+            Ok(())
+        }
+        fn configure_paths(
+            &mut self,
+            paths: &BTreeMap<(u16, u32), Vec<u8>>,
+        ) -> Result<(), Box<dyn Error>> {
+            self.0.borrow_mut().0 = Some(paths.clone());
+            Ok(())
+        }
+        fn configure_archive_parameters(
+            &mut self,
+            parameters: &BTreeMap<(u16, u32), Cpz7Parameters>,
+        ) -> Result<(), Box<dyn Error>> {
+            self.0.borrow_mut().1 = Some(parameters.clone());
+            Ok(())
+        }
+    }
+    // cmvs-20221105 binds 0x226c to the keyed archive registration. It registers SE
+    // slot 0 as "se" with keys 1..=4; plain 0x2014 then moves the slot to "voice" and
+    // drops its keys.
+    let mut code = vec![];
+    for value in [4, 3, 2, 1, 0, 0] {
+        push(&mut code, value);
+    }
+    code.extend(0x226cu16.to_le_bytes());
+    push(&mut code, 3);
+    push(&mut code, 0);
+    code.extend(0x2014u16.to_le_bytes());
+    let root = std::env::temp_dir().join(format!("cmvs-audio-paths-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("data/pack")).unwrap();
+    fs::create_dir_all(root.join("save")).unwrap();
+    fs::write(
+        root.join("data/pack/start.ps3"),
+        ps2a(&code, b"se\0voice\0"),
+    )
+    .unwrap();
+    let archive: Vec<_> = include_str!("fixtures/cpz6-script.hex")
+        .trim()
+        .as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap())
+        .collect();
+    fs::write(root.join("data/pack/script.cpz"), archive).unwrap();
+    let registry = Registry::builtin();
+    let game = registry
+        .identify_game(&root, Some("cmvs-20221105"))
+        .unwrap();
+    let script = load_start(&root, &game.files).unwrap();
+    let mut run = Startup::new(&script, &root, &game, 0).unwrap();
+    let first = Seen::default();
+    run.set_audio_backend(Box::new(Mirror(first.clone())))
+        .unwrap();
+    let mut platform = RecordingBackend::default();
+    let mut run_command = |run: &mut Startup<'_>| {
+        let target = run.bootstrap().handled_count() + 1;
+        for _ in 0..16 {
+            if run.bootstrap().handled_count() == target {
+                return;
+            }
+            run.tick(&mut platform).unwrap();
+        }
+        panic!("bootstrap command did not complete");
+    };
+    let mirrors = |seen: &Seen, run: &Startup<'_>| {
+        let seen = seen.borrow();
+        seen.0.as_ref() == Some(run.bootstrap().paths())
+            && seen.1.as_ref() == Some(run.bootstrap().archive_parameters())
+    };
+    assert!(mirrors(&first, &run));
+    assert!(run.bootstrap().paths().is_empty());
+
+    run_command(&mut run);
+    assert_eq!(run.bootstrap().paths()[&(0x2014, 0)], b"se");
+    assert!(
+        run.bootstrap()
+            .archive_parameters()
+            .contains_key(&(0x2014, 0))
+    );
+    assert!(mirrors(&first, &run));
+
+    run_command(&mut run);
+    assert_eq!(run.bootstrap().paths()[&(0x2014, 0)], b"voice");
+    assert!(run.bootstrap().archive_parameters().is_empty());
+    assert!(mirrors(&first, &run));
+
+    let second = Seen::default();
+    run.set_audio_backend(Box::new(Mirror(second.clone())))
+        .unwrap();
+    assert!(mirrors(&second, &run));
+    drop(run);
+    let _ = fs::remove_dir_all(&root);
 }
 
 fn start_code(channel: u32, looped: u32) -> Vec<u8> {

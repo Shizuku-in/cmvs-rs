@@ -1376,14 +1376,6 @@ pub fn uses_bootstrap_for(semantics: Semantics, command: u16) -> bool {
             .is_some_and(|entry| entry.capability == Capability::Bootstrap),
     }
 }
-/// Commands whose handlers load sounds by name, so the audio backend needs the current
-/// resource registrations and archive keys first. Of the cmvs-20070119 effect creators,
-/// walk 0x2291, circle 0x2292, magic 0x2294 and sprites 0x2295 preload their sounds.
-pub fn loads_sounds_for(semantics: Semantics, command: u16) -> bool {
-    matches!(command, 0xa0 | 0xa4 | 0xa6 | 0xb0 | 0xba | 0x2d6 | 0x2d7)
-        || (semantics == Semantics::Variant(crate::profile::VariantId::LegacyEffects)
-            && matches!(command, 0x291 | 0x292 | 0x294 | 0x295))
-}
 pub fn uses_platform(command: u16) -> bool {
     ROOT.iter()
         .any(|e| e.command == command && e.capability == Capability::Platform)

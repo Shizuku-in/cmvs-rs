@@ -562,11 +562,14 @@ impl<'a> Startup<'a> {
     pub fn audio(&self) -> &AudioHost {
         &self.audio
     }
-    /// Defaults to a recording backend that reports nothing started.
+    /// Defaults to a recording backend that reports nothing started. The new backend
+    /// receives the paths and keys registered so far.
     pub fn set_audio_backend(
         &mut self,
         mut backend: Box<dyn AudioBackend>,
     ) -> Result<(), Box<dyn Error>> {
+        backend.configure_paths(self.bootstrap.paths())?;
+        backend.configure_archive_parameters(self.bootstrap.archive_parameters())?;
         backend.configure_voice_ducking(self.audio.voice_ducking())?;
         if !self.audio.output_enabled() {
             backend.set_output_enabled(false)?;
@@ -783,6 +786,11 @@ impl<'a> Startup<'a> {
                 .configure_parameters(self.bootstrap.archive_parameters());
             self.scene_movies
                 .configure_parameters(self.bootstrap.archive_parameters());
+            // The audio backend keeps its own copy, so every later sound load by name
+            // sees the current registrations and keys.
+            self.audio_backend.configure_paths(self.bootstrap.paths())?;
+            self.audio_backend
+                .configure_archive_parameters(self.bootstrap.archive_parameters())?;
             return Ok(if flow == Some(crate::dispatch::Flow::Done) {
                 StartupEvent::Progress
             } else {
@@ -791,11 +799,6 @@ impl<'a> Startup<'a> {
                     command: command + 0x2000,
                 }
             });
-        }
-        if crate::dispatch::loads_sounds_for(resolved.semantics, command) {
-            self.audio_backend.configure_paths(self.bootstrap.paths())?;
-            self.audio_backend
-                .configure_archive_parameters(self.bootstrap.archive_parameters())?;
         }
         let gate = SkipGate {
             effects: self.effects,
