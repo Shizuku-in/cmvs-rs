@@ -141,6 +141,36 @@ impl Vortex {
     }
 }
 
+impl SceneHost {
+    /// 0x2297 / 0x43c9e0: one slot argument, no system result, return 0x4004.
+    pub(crate) fn create_vortex(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        source: &mut dyn ImageSource,
+        backend: &mut dyn AudioBackend,
+        camera: &mut CameraHost,
+        random: &mut CrtRandom,
+    ) -> Result<(), Box<dyn Error>> {
+        let slot = call.argument(4, "effect slot")?;
+        if slot > 3 {
+            call.complete(0x4004)?;
+            return Ok(());
+        }
+        let mut next_random = random.clone();
+        let vortex = Vortex::new(source, &mut next_random)?;
+        self.release_legacy(slot as u8, backend)?;
+        call.complete(0x4004)?;
+        self.clear_effect_slot(slot as u8);
+        camera.set_view_position([0.0; 3]);
+        camera.set_view_angle(0, 0.0);
+        camera.set_view_angle(1, 0.0);
+        *random = next_random;
+        self.legacy_effects
+            .insert(slot as u8, LegacyEffect::Vortex(Box::new(vortex)));
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,35 +251,5 @@ mod tests {
         assert_eq!(scene.legacy_effects.len(), 1);
         scene.clear_effect_slot(1);
         assert!(scene.legacy_effects.is_empty());
-    }
-}
-
-impl SceneHost {
-    /// 0x2297 / 0x43c9e0: one slot argument, no system result, return 0x4004.
-    pub(crate) fn create_vortex(
-        &mut self,
-        call: &mut Call<'_, '_>,
-        source: &mut dyn ImageSource,
-        backend: &mut dyn AudioBackend,
-        camera: &mut CameraHost,
-        random: &mut CrtRandom,
-    ) -> Result<(), Box<dyn Error>> {
-        let slot = call.argument(4, "effect slot")?;
-        if slot > 3 {
-            call.complete(0x4004)?;
-            return Ok(());
-        }
-        let mut next_random = random.clone();
-        let vortex = Vortex::new(source, &mut next_random)?;
-        self.release_legacy(slot as u8, backend)?;
-        call.complete(0x4004)?;
-        self.clear_effect_slot(slot as u8);
-        camera.set_view_position([0.0; 3]);
-        camera.set_view_angle(0, 0.0);
-        camera.set_view_angle(1, 0.0);
-        *random = next_random;
-        self.legacy_effects
-            .insert(slot as u8, LegacyEffect::Vortex(Box::new(vortex)));
-        Ok(())
     }
 }

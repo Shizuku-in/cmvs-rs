@@ -60,11 +60,8 @@ impl PcmWave {
                     }
                     format = Some((channels, rate));
                 }
-                b"data" => {
-                    if data.replace((start, next)).is_some() {
-                        return Err("duplicate WAVE data chunk".into());
-                    }
-                }
+                b"data" if data.is_some() => return Err("duplicate WAVE data chunk".into()),
+                b"data" => data = Some((start, next)),
                 _ => {}
             }
             at = next
@@ -91,8 +88,10 @@ impl PcmWave {
         }
         let end = (self.at + 8192).min(self.end);
         let samples = self.bytes[self.at..end]
-            .chunks_exact(2)
-            .map(|s| f32::from(i16::from_le_bytes([s[0], s[1]])) / 32768.0)
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&s| f32::from(i16::from_le_bytes(s)) / 32768.0)
             .collect();
         self.at = end;
         Some(samples)

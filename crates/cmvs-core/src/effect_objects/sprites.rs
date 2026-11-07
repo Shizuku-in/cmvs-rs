@@ -253,7 +253,7 @@ impl Sprites {
             return Ok(());
         }
         let [x, y, z] = self.positions[1].map(f32::from_bits);
-        if self.phase % 2 == 0 {
+        if self.phase.is_multiple_of(2) {
             if self.requested == 11 {
                 self.requested = -1;
                 self.position(0, [6.0, 0.5, -1.0]);
@@ -323,13 +323,13 @@ impl Sprites {
                 backend.play_preloaded(17, false, volume)?;
             }
             let t = (self.clock % 500) as f64 / 500.0;
-            let x = 9.0 * t - if segment % 2 == 0 { 6.0 } else { 3.0 };
+            let x = 9.0 * t - if segment.is_multiple_of(2) { 6.0 } else { 3.0 };
             let y = if segment < 2 {
                 6.5 - 6.0 * t
             } else {
                 0.5 + 6.0 * t
             };
-            let z = if segment % 2 == 0 {
+            let z = if segment.is_multiple_of(2) {
                 11.0 - 12.0 * t
             } else {
                 12.0 * t - 1.0
@@ -532,23 +532,20 @@ impl Sprites {
                 self.crossing(delta, backend, volume)?;
             }
             17 | 20 => self.crossing(delta, backend, volume)?,
-            95 => {
-                if self
-                    .objects
-                    .iter()
-                    .all(|o| o.draw.as_ref().is_none_or(|d| d.world_motion.is_none()))
-                {
-                    self.state = 0;
-                }
+            95 if self
+                .objects
+                .iter()
+                .all(|o| o.draw.as_ref().is_none_or(|d| d.world_motion.is_none())) =>
+            {
+                self.state = 0;
             }
-            90..=92 => {
+            90..=92
                 if self.objects[(self.state - 90) as usize]
                     .draw
                     .as_ref()
-                    .is_none_or(|d| d.world_motion.is_none())
-                {
-                    self.state = 0;
-                }
+                    .is_none_or(|d| d.world_motion.is_none()) =>
+            {
+                self.state = 0;
             }
             _ => {}
         }

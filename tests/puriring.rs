@@ -395,7 +395,14 @@ fn external_vortex_creates_switches_renders_and_releases() {
         .unwrap();
     let second = scene_render::render_scene(&scene, Some(&camera), &[], 1024, 614).unwrap();
     assert_ne!(first.pixels(), second.pixels());
-    assert!(second.pixels().chunks_exact(4).any(|p| p[..3] != [0, 0, 0]));
+    assert!(
+        second
+            .pixels()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|p| p[..3] != [0, 0, 0])
+    );
     let LegacyEffect::Vortex(vortex) = &scene.legacy_effects()[&1] else {
         panic!("wrong type");
     };

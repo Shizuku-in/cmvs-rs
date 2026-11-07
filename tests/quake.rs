@@ -321,7 +321,7 @@ fn invalid_quakes_fail_and_fade_overlays_follow_slot_offsets() {
         let image = scene_render::render(&scene, 4, 2).unwrap();
         let alpha = scene.fade().current().unwrap().opacity as u8;
         assert!(alpha > 0);
-        for (index, pixel) in image.pixels().chunks_exact(4).enumerate() {
+        for (index, pixel) in image.pixels().as_chunks::<4>().0.iter().enumerate() {
             let clipped = match mode {
                 0x01 => index % 4 == 0,
                 0x11 => index < 4,

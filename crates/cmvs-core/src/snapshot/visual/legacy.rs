@@ -4,102 +4,6 @@ use super::*;
 
 const LAYOUT: SnapshotLayout = SnapshotLayout::TextV1SceneLegacy;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn native_scene_header_and_image_v1_are_not_later_scene_v1() {
-        // Independent writer layout: three words, a v1 image chunk, terminator.
-        let mut bytes = Vec::new();
-        words(&mut bytes, &[0, 1, 0x7fff_ffff]);
-        let mut image = vec![1, 0, 0, 0, 0, 0, 0, 0];
-        image.extend(b"bg.pb3\0\0");
-        words(&mut image, &[0, 1024, 614]);
-        chunk(&mut bytes, 0x740, &image);
-        bytes.extend([0xf0, 0xf0]);
-        let saved = SavedScene::decode_with_layout(&bytes, 0, &mut 0, LAYOUT).unwrap();
-        assert_eq!(saved.image.as_ref().unwrap().name, b"bg.pb3");
-        assert_eq!(saved.image.as_ref().unwrap().size, [1024, 614]);
-        assert_eq!(saved.logical_size, [0; 2]);
-        assert_eq!(saved.encode_with_layout(LAYOUT).unwrap(), bytes);
-        assert!(
-            SavedScene::decode_with_layout(&bytes, 0, &mut 0, SnapshotLayout::TextV1SceneV1)
-                .is_err()
-        );
-        for end in 0..bytes.len() {
-            assert!(SavedScene::decode_with_layout(&bytes[..end], 0, &mut 0, LAYOUT).is_err());
-        }
-    }
-
-    #[test]
-    fn legacy_draw_and_children_resume_old_motion_semantics() {
-        use crate::scene::{MotionKey, MotionPlayback, RotationKey, RotationTrack, WorldMotion};
-        let mut draw = DrawState::default();
-        let mut world = WorldMotion {
-            legacy_20070119: true,
-            ..Default::default()
-        };
-        world.keys[0] = MotionKey {
-            next: -1,
-            xyz: [2f32.to_bits(), 0, 0],
-            mode: 1,
-            duration: 1000,
-        };
-        world.playback = Some(MotionPlayback {
-            base: [0; 3],
-            start: 0,
-            current: 0,
-            elapsed: 0,
-        });
-        draw.world_motion = Some(Box::new(world));
-        let mut rotation = RotationTrack {
-            playing: true,
-            base: 0,
-            start: 0,
-            current: 0,
-            elapsed: 0,
-            keys: [RotationKey::default(); 8],
-        };
-        rotation.keys[0] = RotationKey {
-            next: -1,
-            value: 9000,
-            mode: 0xff,
-            duration: 1000,
-        };
-        draw.rotation_track = Some(Box::new(rotation));
-        let object = SceneObject {
-            draw: Some(draw),
-            ..Default::default()
-        };
-        let mut saved = SavedScene::from_object(&object).unwrap();
-        saved.flags |= 0x8000_0000;
-        saved.children.insert(
-            255,
-            SavedScene::from_object(&SceneObject::default()).unwrap(),
-        );
-        let bytes = saved.encode_with_layout(LAYOUT).unwrap();
-        assert_eq!(&bytes[..4], &[1, 0, 0, 0]);
-        assert_eq!(&bytes[12..18], &[0x80, 7, 0xde, 1, 0, 0]); // draw: 92 + 156 + 228 + 2
-        let restored = SavedScene::decode_with_layout(&bytes, 0, &mut 0, LAYOUT).unwrap();
-        assert_eq!(restored.encode_with_layout(LAYOUT).unwrap(), bytes);
-        let mut object = SceneObject {
-            draw: restored.draw,
-            ..Default::default()
-        };
-        object.advance_effects(200);
-        let draw = object.draw.unwrap();
-        assert_eq!(draw.words[20], 0); // hold rotation until the key ends
-        let x = f32::from_bits(draw.words[11]);
-        assert!((x - 0.61).abs() < 0.02); // sine-quarter, not modern quadratic
-        saved.children.insert(
-            256,
-            SavedScene::from_object(&SceneObject::default()).unwrap(),
-        );
-        assert!(saved.encode_with_layout(LAYOUT).is_err());
-    }
-}
-
 impl SavedImage {
     pub(super) fn encode_legacy(&self) -> Result<Vec<u8>, FormatError> {
         if self.filter.is_some() || self.disabled_filter != [0; 3] || self.surface.is_some() {
@@ -244,5 +148,101 @@ impl SavedScene {
             collision_vertices: None,
             effect_words: [0; 11],
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_scene_header_and_image_v1_are_not_later_scene_v1() {
+        // Independent writer layout: three words, a v1 image chunk, terminator.
+        let mut bytes = Vec::new();
+        words(&mut bytes, &[0, 1, 0x7fff_ffff]);
+        let mut image = vec![1, 0, 0, 0, 0, 0, 0, 0];
+        image.extend(b"bg.pb3\0\0");
+        words(&mut image, &[0, 1024, 614]);
+        chunk(&mut bytes, 0x740, &image);
+        bytes.extend([0xf0, 0xf0]);
+        let saved = SavedScene::decode_with_layout(&bytes, 0, &mut 0, LAYOUT).unwrap();
+        assert_eq!(saved.image.as_ref().unwrap().name, b"bg.pb3");
+        assert_eq!(saved.image.as_ref().unwrap().size, [1024, 614]);
+        assert_eq!(saved.logical_size, [0; 2]);
+        assert_eq!(saved.encode_with_layout(LAYOUT).unwrap(), bytes);
+        assert!(
+            SavedScene::decode_with_layout(&bytes, 0, &mut 0, SnapshotLayout::TextV1SceneV1)
+                .is_err()
+        );
+        for end in 0..bytes.len() {
+            assert!(SavedScene::decode_with_layout(&bytes[..end], 0, &mut 0, LAYOUT).is_err());
+        }
+    }
+
+    #[test]
+    fn legacy_draw_and_children_resume_old_motion_semantics() {
+        use crate::scene::{MotionKey, MotionPlayback, RotationKey, RotationTrack, WorldMotion};
+        let mut draw = DrawState::default();
+        let mut world = WorldMotion {
+            legacy_20070119: true,
+            ..Default::default()
+        };
+        world.keys[0] = MotionKey {
+            next: -1,
+            xyz: [2f32.to_bits(), 0, 0],
+            mode: 1,
+            duration: 1000,
+        };
+        world.playback = Some(MotionPlayback {
+            base: [0; 3],
+            start: 0,
+            current: 0,
+            elapsed: 0,
+        });
+        draw.world_motion = Some(Box::new(world));
+        let mut rotation = RotationTrack {
+            playing: true,
+            base: 0,
+            start: 0,
+            current: 0,
+            elapsed: 0,
+            keys: [RotationKey::default(); 8],
+        };
+        rotation.keys[0] = RotationKey {
+            next: -1,
+            value: 9000,
+            mode: 0xff,
+            duration: 1000,
+        };
+        draw.rotation_track = Some(Box::new(rotation));
+        let object = SceneObject {
+            draw: Some(draw),
+            ..Default::default()
+        };
+        let mut saved = SavedScene::from_object(&object).unwrap();
+        saved.flags |= 0x8000_0000;
+        saved.children.insert(
+            255,
+            SavedScene::from_object(&SceneObject::default()).unwrap(),
+        );
+        let bytes = saved.encode_with_layout(LAYOUT).unwrap();
+        assert_eq!(&bytes[..4], &[1, 0, 0, 0]);
+        assert_eq!(&bytes[12..18], &[0x80, 7, 0xde, 1, 0, 0]); // draw: 92 + 156 + 228 + 2
+        let restored = SavedScene::decode_with_layout(&bytes, 0, &mut 0, LAYOUT).unwrap();
+        assert_eq!(restored.encode_with_layout(LAYOUT).unwrap(), bytes);
+        let mut object = SceneObject {
+            draw: restored.draw,
+            ..Default::default()
+        };
+        object.advance_effects(200);
+        let draw = object.draw.unwrap();
+        assert_eq!(draw.words[20], 0); // hold rotation until the key ends
+        let x = f32::from_bits(draw.words[11]);
+        assert!((x - 0.61).abs() < 0.02); // sine-quarter, not modern quadratic
+        saved.children.insert(
+            256,
+            SavedScene::from_object(&SceneObject::default()).unwrap(),
+        );
+        assert!(saved.encode_with_layout(LAYOUT).is_err());
     }
 }

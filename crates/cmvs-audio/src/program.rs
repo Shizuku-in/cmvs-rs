@@ -10,7 +10,7 @@ use std::{
 };
 
 enum AudioReader {
-    Vorbis(Vorbis),
+    Vorbis(Box<Vorbis>),
     Wave(PcmWave),
 }
 impl AudioReader {
@@ -18,7 +18,7 @@ impl AudioReader {
         if bytes.starts_with(b"RIFF") {
             Ok(Self::Wave(PcmWave::new(bytes)?))
         } else {
-            Ok(Self::Vorbis(Vorbis::new(bytes)?))
+            Ok(Self::Vorbis(Box::new(Vorbis::new(bytes)?)))
         }
     }
     fn channels(&self) -> u16 {

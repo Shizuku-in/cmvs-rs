@@ -237,7 +237,7 @@ mod tests {
         let frame = crate::scene_render::prepare_scene(&scene, Some(&c), &[], 1024, 614).unwrap();
         assert!(!frame.commands().is_empty());
         let pixels = frame.render_cpu().unwrap();
-        assert!(pixels.pixels().chunks_exact(4).any(|p| p[0] != 0));
+        assert!(pixels.pixels().as_chunks::<4>().0.iter().any(|p| p[0] != 0));
     }
 }
 

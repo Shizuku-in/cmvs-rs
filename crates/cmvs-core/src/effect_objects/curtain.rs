@@ -59,11 +59,20 @@ impl Curtain {
             {
                 return Err("curtain mask dimensions differ".into());
             }
-            masks[i] = mask.pixels.pixels().chunks_exact(4).map(|p| p[1]).collect();
+            masks[i] = mask
+                .pixels
+                .pixels()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| p[1])
+                .collect();
             alpha[i] = image
                 .pixels
                 .pixels()
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|p| p[3])
                 .collect();
             image.alpha = true;
@@ -208,7 +217,9 @@ impl Curtain {
                 let image = &mut self.scene.images[i];
                 let mut pixels = image.pixels.pixels().to_vec();
                 for ((pixel, &mask), &alpha) in pixels
-                    .chunks_exact_mut(4)
+                    .as_chunks_mut::<4>()
+                    .0
+                    .iter_mut()
                     .zip(&self.masks[i])
                     .zip(&self.alpha[i])
                 {
