@@ -1,13 +1,7 @@
 mod audio;
 mod backend;
 mod boost;
-mod canvas;
-mod controls;
-mod error_screen;
 mod gpu;
-mod library;
-mod menu;
-mod text_input;
 #[cfg(target_os = "horizon")]
 mod sys {
     pub use cmvs_native::{
@@ -19,6 +13,11 @@ mod sys {
 #[path = "stub.rs"]
 mod sys;
 
+use cmvs_console::{
+    ButtonMap, Console, Labels,
+    controls::{self, Controls},
+    error_screen, library, menu,
+};
 use cmvs_core::{
     input::KeyBindings,
     profile::Registry,
@@ -27,7 +26,7 @@ use cmvs_core::{
     viewport::{Viewport, presentation_mode},
 };
 use cmvs_font::font::FontRenderer;
-use controls::Controls;
+use cmvs_native::switch_button as button;
 use std::{
     error::Error,
     io::{ErrorKind, Read},
@@ -44,6 +43,42 @@ pub(crate) const SCREEN: [u32; 2] = [1280, 720];
 /// VM budget per loop iteration before polling input and the applet again.
 const BUDGET: Duration = Duration::from_millis(8);
 const IDLE: Duration = Duration::from_millis(16);
+
+/// The combined standard controller. In game, the D-pad uses keyboard navigation and
+/// the left stick moves the pointer; A clicks at the pointer and Y is Enter for the
+/// navigation selection.
+fn console() -> Console {
+    Console {
+        screen: SCREEN,
+        buttons: ButtonMap {
+            confirm: button::A,
+            exit: button::PLUS,
+            up: button::UP,
+            down: button::DOWN,
+            page_up: button::L,
+            page_down: button::R,
+            codes: vec![
+                (button::A, controls::MOUSE_LEFT),
+                (button::B, controls::MOUSE_RIGHT),
+                (button::X, controls::ESCAPE),
+                (button::Y, controls::ENTER),
+                (button::ZL, controls::SHIFT),
+                (button::ZR, controls::CTRL),
+                (button::UP, controls::ARROW_UP),
+                (button::DOWN, controls::ARROW_DOWN),
+                (button::LEFT, controls::ARROW_LEFT),
+                (button::RIGHT, controls::ARROW_RIGHT),
+            ],
+            wheel_up: button::L,
+            wheel_down: button::R,
+        },
+        labels: Labels {
+            confirm: "A",
+            exit: "+",
+            pages: "L / R",
+        },
+    }
+}
 
 fn millis(duration: Duration) -> u32 {
     duration.as_millis().min(u128::from(u32::MAX)) as u32
@@ -191,7 +226,7 @@ fn run(
         Some(_) => Vec::new(),
         None => vec![0u32; (SCREEN[0] * SCREEN[1]) as usize],
     };
-    let mut controls = Controls::new(size);
+    let mut controls = Controls::new(size, console().buttons);
     // The button that started the game must not click it.
     controls.suppress_held(startup.input_mut());
     let mut focused = true;
@@ -326,7 +361,7 @@ fn choose(
     if first.exit {
         return Ok(None);
     }
-    let mut menu = menu::Menu::new(selected, games.len(), &first);
+    let mut menu = menu::Menu::new(selected, games.len(), &first, &console());
     let mut dirty = true;
     let mut last = Instant::now();
     loop {
@@ -384,9 +419,10 @@ fn show_error(
         if first.exit {
             return Ok(error_screen::ErrorChoice::Exit);
         }
-        let image = error_screen::draw(font, game, message, LOG, can_return);
+        let console = console();
+        let image = error_screen::draw(&console, font, game, message, LOG, can_return);
         show(window, gpu, &image)?;
-        let mut prompt = error_screen::ErrorPrompt::new(&first, can_return);
+        let mut prompt = error_screen::ErrorPrompt::new(&first, can_return, &console.buttons);
         loop {
             let sample = window.poll();
             if sample.exit {
@@ -520,6 +556,18 @@ fn report(error: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_clicks_zr_is_ctrl_and_the_shoulders_scroll() {
+        let console = console();
+        let codes = &console.buttons.codes;
+        assert!(codes.contains(&(button::A, controls::MOUSE_LEFT)));
+        assert!(codes.contains(&(button::ZR, controls::CTRL)));
+        assert_eq!(
+            (console.buttons.wheel_up, console.buttons.wheel_down),
+            (button::L, button::R)
+        );
+    }
+
     #[test]
     fn renderer_setting_defaults_to_gpu_and_rejects_unknown_names() {
         assert!(use_gpu(None).unwrap());

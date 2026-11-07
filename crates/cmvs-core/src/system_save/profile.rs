@@ -137,9 +137,16 @@ impl ProfileSystemSave {
         // TryLockError; keep its worker-local lock result unchanged.
         #[cfg(target_arch = "wasm32")]
         let locked = lock.try_lock();
-        #[cfg(not(any(target_os = "android", target_os = "horizon", target_arch = "wasm32")))]
+        // Horizon and the Vita run one application at a time and their std has no
+        // file locks; the open lock file alone marks the profile.
+        #[cfg(not(any(
+            target_os = "android",
+            target_os = "horizon",
+            target_os = "vita",
+            target_arch = "wasm32"
+        )))]
         let locked = lock.try_lock().map_err(io::Error::from);
-        #[cfg(not(target_os = "horizon"))]
+        #[cfg(not(any(target_os = "horizon", target_os = "vita")))]
         locked.map_err(|error| {
             io::Error::new(
                 error.kind(),

@@ -1,6 +1,6 @@
 //! Stand-ins for the libnx services off Horizon, so the complete host type-checks
 //! and its portable parts test on development machines. Nothing here runs a game.
-use cmvs_native::{GpuError, GpuTexture, SwitchInput};
+use cmvs_native::{GpuError, GpuTexture, PadInput};
 
 const UNAVAILABLE: &str = "Switch host requires Horizon";
 
@@ -12,10 +12,10 @@ impl SwitchWindow {
     pub fn open_gpu() -> Result<(Self, SwitchGpu), String> {
         Err(UNAVAILABLE.into())
     }
-    pub fn poll(&mut self) -> SwitchInput {
-        SwitchInput {
+    pub fn poll(&mut self) -> PadInput {
+        PadInput {
             exit: true,
-            ..SwitchInput::default()
+            ..PadInput::default()
         }
     }
     pub fn present(&mut self, _: &[u32]) -> Result<(), &'static str> {

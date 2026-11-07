@@ -1,11 +1,11 @@
 //! Full-screen error page shown before leaving a failed game.
 use crate::{
-    SCREEN,
+    ButtonMap, Console,
     canvas::{Canvas, DIM, MARGIN, TEXT, wrap},
 };
 use ab_glyph::FontVec;
 use cmvs_core::raster::RgbaImage;
-use cmvs_native::{SwitchInput, button};
+use cmvs_native::PadInput;
 
 const TITLE: [u8; 3] = [255, 120, 110];
 const TEXT_PX: f32 = 24.0;
@@ -20,28 +20,33 @@ pub enum ErrorChoice {
     Exit,
 }
 
-/// A leaves for the game list when there is one, + exits; buttons held when the page
-/// opens need a fresh press.
+/// Confirm leaves for the game list when there is one, exit leaves the program;
+/// buttons held when the page opens need a fresh press.
 pub struct ErrorPrompt {
+    confirm: u32,
+    exit: u32,
     held: u32,
     can_return: bool,
 }
 impl ErrorPrompt {
-    pub fn new(initial: &SwitchInput, can_return: bool) -> Self {
+    pub fn new(initial: &PadInput, can_return: bool, buttons: &ButtonMap) -> Self {
         Self {
+            confirm: buttons.confirm,
+            exit: buttons.exit,
             held: initial.buttons,
             can_return,
         }
     }
-    pub fn poll(&mut self, sample: &SwitchInput) -> Option<ErrorChoice> {
+    pub fn poll(&mut self, sample: &PadInput) -> Option<ErrorChoice> {
         let pressed = sample.buttons & !self.held;
         self.held = sample.buttons;
         if !sample.focused {
             return None;
         }
-        if pressed & button::PLUS != 0 || (pressed & button::A != 0 && !self.can_return) {
+        let confirmed = pressed & self.confirm != 0;
+        if pressed & self.exit != 0 || (confirmed && !self.can_return) {
             Some(ErrorChoice::Exit)
-        } else if pressed & button::A != 0 {
+        } else if confirmed {
             Some(ErrorChoice::Back)
         } else {
             None
@@ -51,14 +56,15 @@ impl ErrorPrompt {
 
 /// `game` names the failed game, when one was running.
 pub fn draw(
+    console: &Console,
     font: &FontVec,
     game: Option<&str>,
     message: &str,
     log: &str,
     can_return: bool,
 ) -> RgbaImage {
-    let mut canvas = Canvas::new();
-    let width = (SCREEN[0] as i32 - 2 * MARGIN) as f32;
+    let mut canvas = Canvas::new(console.screen);
+    let width = canvas.width() - 2.0 * MARGIN as f32;
     let title = match game {
         Some(game) => format!("Error: {game}"),
         None => "Error".into(),
@@ -85,47 +91,53 @@ pub fn draw(
         &format!("Full message: {log}"),
         DIM,
     );
+    let labels = console.labels;
     let hint = if can_return {
-        "A: Back to list    +: Exit"
+        format!("{}: Back to list    {}: Exit", labels.confirm, labels.exit)
     } else {
-        "A / +: Exit"
+        format!("{} / {}: Exit", labels.confirm, labels.exit)
     };
-    canvas.text(font, 24.0, [MARGIN as f32, 692.0], width, hint, DIM);
+    canvas.text(font, 24.0, [MARGIN as f32, 692.0], width, &hint, DIM);
     canvas.finish()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn sample(buttons: u32) -> SwitchInput {
-        SwitchInput {
+    use crate::test_pad::{
+        button::{A, PLUS},
+        console,
+    };
+    fn sample(buttons: u32) -> PadInput {
+        PadInput {
             focused: true,
             buttons,
-            ..SwitchInput::default()
+            ..PadInput::default()
         }
     }
     #[test]
     fn held_buttons_are_ignored_and_a_returns_only_with_a_list() {
-        let mut prompt = ErrorPrompt::new(&sample(button::A), true);
-        assert_eq!(prompt.poll(&sample(button::A)), None);
+        let mut prompt = ErrorPrompt::new(&sample(A), true, &console([1280, 720]).buttons);
+        assert_eq!(prompt.poll(&sample(A)), None);
         assert_eq!(prompt.poll(&sample(0)), None);
-        assert_eq!(prompt.poll(&sample(button::A)), Some(ErrorChoice::Back));
-        assert_eq!(prompt.poll(&sample(button::PLUS)), Some(ErrorChoice::Exit));
+        assert_eq!(prompt.poll(&sample(A)), Some(ErrorChoice::Back));
+        assert_eq!(prompt.poll(&sample(PLUS)), Some(ErrorChoice::Exit));
 
-        let mut single = ErrorPrompt::new(&sample(0), false);
-        let unfocused = SwitchInput {
+        let mut single = ErrorPrompt::new(&sample(0), false, &console([1280, 720]).buttons);
+        let unfocused = PadInput {
             focused: false,
-            ..sample(button::A)
+            ..sample(A)
         };
         assert_eq!(single.poll(&unfocused), None);
-        assert_eq!(single.poll(&sample(button::A)), None);
+        assert_eq!(single.poll(&sample(A)), None);
         assert_eq!(single.poll(&sample(0)), None);
-        assert_eq!(single.poll(&sample(button::A)), Some(ErrorChoice::Exit));
+        assert_eq!(single.poll(&sample(A)), Some(ErrorChoice::Exit));
     }
 }
 
 /// Writes an error page preview: `CMVS_MENU_FONT=<font> CMVS_ERROR_PNG=<out.png> cargo
-/// test -p cmvs-switch error_preview -- --ignored`.
+/// test -p cmvs-console error_preview -- --ignored`; `CMVS_MENU_SCREEN=vita` draws it at
+/// 960x544.
 #[cfg(test)]
 #[test]
 #[ignore = "needs a font file; writes a PNG for visual review"]
@@ -136,6 +148,7 @@ fn error_preview() {
         are longer than one line of the error page, so it wraps\nat main_story / 0x1f3a after \
         48213 steps\nゲームのスクリプトを読み込めませんでした";
     let image = draw(
+        &crate::test_pad::console(crate::test_pad::preview_screen()),
         &font,
         Some("2017-11-24_AOITORI"),
         message,

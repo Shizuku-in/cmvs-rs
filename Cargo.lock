@@ -323,6 +323,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmvs-console"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "cmvs-core",
+ "cmvs-native",
+ "encoding_rs",
+]
+
+[[package]]
 name = "cmvs-core"
 version = "0.1.0"
 dependencies = [
@@ -413,10 +423,29 @@ version = "0.1.0"
 dependencies = [
  "ab_glyph",
  "cmvs-audio",
+ "cmvs-console",
  "cmvs-core",
  "cmvs-font",
  "cmvs-native",
- "encoding_rs",
+]
+
+[[package]]
+name = "cmvs-vita"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "cmvs-audio",
+ "cmvs-console",
+ "cmvs-core",
+ "cmvs-font",
+ "cmvs-native",
+]
+
+[[package]]
+name = "cmvs-vita-probe"
+version = "0.1.0"
+dependencies = [
+ "cmvs-core",
 ]
 
 [[package]]

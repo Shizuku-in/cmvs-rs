@@ -69,9 +69,40 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  psvita:
+    name: psvita homebrew
+    needs: [verify]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Keep in sync with platforms/psvita/Dockerfile and ci.yml.
+    container: vitasdk/vitasdk@sha256:acd15285e1ae473e925c6f83fa41e2de45eb8b9e8ba89be7df03e194c35c11d3
+    env:
+      RUST_TOOLCHAIN: nightly-2026-01-20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup.sh
+          sh /tmp/rustup.sh -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN" --component rust-src
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          echo "/usr/local/vitasdk/bin" >> "$GITHUB_PATH"
+      - name: Build player
+        run: sh platforms/psvita/scripts/build-player.sh
+      - name: Stage asset
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          mkdir -p dist
+          cp platforms/psvita/build/cmvs-vita.vpk "dist/cmvs-vita-$TAG.vpk"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-psvita
+          path: dist/*
+          if-no-files-found: error
+
   publish:
     name: publish release
-    needs: [switch]
+    needs: [switch, psvita]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

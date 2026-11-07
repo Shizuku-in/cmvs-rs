@@ -108,10 +108,21 @@ mod tests {
     }
 }
 
+mod pad;
+pub use pad::{PadInput, Touch};
+
 mod switch;
-pub use switch::{GpuError, GpuTexture, SwitchInput, Touch, button};
+pub use switch::{GpuError, GpuTexture, button as switch_button};
 #[cfg(target_os = "horizon")]
 pub use switch::{
     SwitchAudioOut, SwitchGpu, SwitchWindow, set_cpu_boost, shared_font, show_system_error,
     software_keyboard,
+};
+
+mod vita;
+pub use vita::button as vita_button;
+#[cfg(target_os = "vita")]
+pub use vita::{
+    VitaAudioOut, VitaWindow, confirm_is_cross, ime_dialog, prefer_core, set_max_clocks,
+    show_message,
 };

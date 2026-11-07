@@ -1,6 +1,6 @@
 //! Safe ownership of the single libnx display. Calls stay on the creating thread.
 #![allow(unsafe_code)]
-use super::{SwitchInput, Touch};
+use crate::{PadInput, Touch};
 use std::{
     marker::PhantomData,
     rc::Rc,
@@ -63,12 +63,12 @@ impl SwitchWindow {
             _thread: PhantomData,
         })
     }
-    pub fn poll(&mut self) -> SwitchInput {
+    pub fn poll(&mut self) -> PadInput {
         let mut raw = NxInput::default();
         // SAFETY: C writes exactly one `CmvsNxInput`, a layout this struct mirrors.
         unsafe { cmvs_nx_poll(&mut raw) };
         let count = (raw.touch_count as usize).min(TOUCHES);
-        SwitchInput {
+        PadInput {
             exit: raw.flags & FLAG_EXIT != 0,
             focused: raw.flags & FLAG_FOCUSED != 0,
             buttons: raw.buttons,

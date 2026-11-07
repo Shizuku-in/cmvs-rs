@@ -1,33 +1,30 @@
-//! Switch controller and touch policy, translated to the engine's input codes
+//! Controller and touch policy, translated to the engine's input codes
 //! (0x140056780: 1/3 mouse buttons, 4/5 wheel, 22 Enter, 23 Shift, 24 Ctrl, 25 Esc,
-//! 33..36 arrows). Which game action a code triggers still comes from key.cfg.
+//! 33..36 arrows). Which buttons send which codes comes from the console's
+//! [`ButtonMap`]; which game action a code triggers still comes from key.cfg.
 //!
 //! The host polls more often than the engine samples input, so `poll` runs every
 //! loop iteration and `frame` once at each engine input boundary. A press that
 //! begins and ends between two frames is latched into one down frame.
+use crate::ButtonMap;
 use cmvs_core::{
     input::{ActionInput, CodeInput, KeyBindings},
     viewport::Viewport,
 };
-use cmvs_native::{SwitchInput, button};
+use cmvs_native::PadInput;
 
-const MOUSE_LEFT: usize = 1;
-const WHEEL_UP: usize = 4;
-const WHEEL_DOWN: usize = 5;
-/// Button, engine code. The D-pad uses keyboard navigation; the left stick moves the
-/// pointer. A clicks at the pointer; Y is Enter for the navigation selection.
-const BUTTONS: [(u32, usize); 10] = [
-    (button::A, MOUSE_LEFT),
-    (button::B, 3),
-    (button::X, 25),
-    (button::Y, 22),
-    (button::ZL, 23),
-    (button::ZR, 24),
-    (button::UP, 33),
-    (button::DOWN, 34),
-    (button::LEFT, 35),
-    (button::RIGHT, 36),
-];
+pub const MOUSE_LEFT: usize = 1;
+pub const MOUSE_RIGHT: usize = 3;
+pub const WHEEL_UP: usize = 4;
+pub const WHEEL_DOWN: usize = 5;
+pub const ENTER: usize = 22;
+pub const SHIFT: usize = 23;
+pub const CTRL: usize = 24;
+pub const ESCAPE: usize = 25;
+pub const ARROW_UP: usize = 33;
+pub const ARROW_DOWN: usize = 34;
+pub const ARROW_LEFT: usize = 35;
+pub const ARROW_RIGHT: usize = 36;
 const STICK_DEAD_ZONE: f64 = 6000.0;
 const STICK_MAX: f64 = 32767.0;
 /// Full deflection crosses the canvas width in this many milliseconds.
@@ -36,7 +33,8 @@ const CURSOR_CROSSING_MS: f64 = 1200.0;
 const MAX_STEP_MS: u32 = 100;
 const WHEEL_DELAY_MS: u32 = 400;
 const WHEEL_REPEAT_MS: u32 = 100;
-/// + must be held this long to quit, so a stray press does not end the session.
+/// The exit button must be held this long to quit, so a stray press does not end the
+/// session.
 pub const QUIT_HOLD_MS: u32 = 1000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,6 +48,7 @@ enum TouchState {
 }
 
 pub struct Controls {
+    map: ButtonMap,
     size: [u32; 2],
     history: CodeInput,
     held: [bool; 128],
@@ -67,8 +66,9 @@ pub struct Controls {
 
 impl Controls {
     /// The pointer starts at the centre of the `size` script canvas.
-    pub fn new(size: [u32; 2]) -> Self {
+    pub fn new(size: [u32; 2], map: ButtonMap) -> Self {
         Self {
+            map,
             size,
             history: CodeInput::default(),
             held: [false; 128],
@@ -106,9 +106,9 @@ impl Controls {
         self.blocked = u32::MAX;
     }
 
-    /// `viewport` maps 1280x720 panel pixels to the script canvas; `dt_ms` is the time
-    /// since the previous poll.
-    pub fn poll(&mut self, sample: &SwitchInput, viewport: Viewport, dt_ms: u32) {
+    /// `viewport` maps screen pixels to the script canvas; `dt_ms` is the time since
+    /// the previous poll.
+    pub fn poll(&mut self, sample: &PadInput, viewport: Viewport, dt_ms: u32) {
         if !self.focused {
             return;
         }
@@ -116,8 +116,8 @@ impl Controls {
         self.blocked &= sample.buttons;
         let buttons = sample.buttons & !self.blocked;
         self.held.fill(false);
-        for (mask, code) in BUTTONS {
-            self.held[code] = buttons & mask != 0;
+        for &(mask, code) in &self.map.codes {
+            self.held[code] |= buttons & mask != 0;
         }
         self.track_touch(sample, viewport);
         self.held[MOUSE_LEFT] |= matches!(self.touch, TouchState::Primary(_));
@@ -126,14 +126,14 @@ impl Controls {
         }
         self.move_cursor(sample.sticks[0], dt_ms);
         self.scroll(buttons, sample.sticks[1][1], dt_ms);
-        self.quit_ms = if buttons & button::PLUS != 0 {
+        self.quit_ms = if buttons & self.map.exit != 0 {
             self.quit_ms.saturating_add(dt_ms)
         } else {
             0
         };
     }
 
-    fn track_touch(&mut self, sample: &SwitchInput, viewport: Viewport) {
+    fn track_touch(&mut self, sample: &PadInput, viewport: Viewport) {
         let inside = |position: [u32; 2]| {
             viewport.to_source([f64::from(position[0]), f64::from(position[1])])
         };
@@ -185,11 +185,11 @@ impl Controls {
         self.cursor_visible = true;
     }
 
-    /// L/R and the right stick send wheel notches: one at once, then repeating.
+    /// The wheel buttons and the right stick send notches: one at once, then repeating.
     fn scroll(&mut self, buttons: u32, stick: i32, dt_ms: u32) {
-        let code = if buttons & button::L != 0 || f64::from(stick) > STICK_DEAD_ZONE * 2.0 {
+        let code = if buttons & self.map.wheel_up != 0 || f64::from(stick) > STICK_DEAD_ZONE * 2.0 {
             Some(WHEEL_UP)
-        } else if buttons & button::R != 0 || f64::from(-stick) > STICK_DEAD_ZONE * 2.0 {
+        } else if buttons & self.map.wheel_down != 0 || f64::from(-stick) > STICK_DEAD_ZONE * 2.0 {
             Some(WHEEL_DOWN)
         } else {
             None
@@ -256,6 +256,33 @@ mod tests {
     use super::*;
     use cmvs_native::Touch;
 
+    /// Switch-like buttons: A click, B right click, ZR Ctrl, L/R wheel, + exit.
+    mod button {
+        pub const PLUS: u32 = 1;
+        pub const A: u32 = 2;
+        pub const B: u32 = 4;
+        pub const ZR: u32 = 8;
+        pub const L: u32 = 16;
+        pub const R: u32 = 32;
+    }
+    fn map() -> ButtonMap {
+        ButtonMap {
+            confirm: button::A,
+            exit: button::PLUS,
+            up: 0,
+            down: 0,
+            page_up: button::L,
+            page_down: button::R,
+            codes: vec![
+                (button::A, MOUSE_LEFT),
+                (button::B, MOUSE_RIGHT),
+                (button::ZR, CTRL),
+            ],
+            wheel_up: button::L,
+            wheel_down: button::R,
+        }
+    }
+
     fn bindings() -> KeyBindings {
         KeyBindings::parse(
             "[KEY_FUNCTION_01]\nKEY_DATA_01=1\nKEY_DATA_02=22\n[KEY_FUNCTION_09]\nKEY_DATA_01=24\n",
@@ -265,15 +292,15 @@ mod tests {
     fn view(size: [u32; 2]) -> Viewport {
         Viewport::new(size, [1280, 720], 1).unwrap()
     }
-    fn sample(buttons: u32) -> SwitchInput {
-        SwitchInput {
+    fn sample(buttons: u32) -> PadInput {
+        PadInput {
             focused: true,
             buttons,
-            ..SwitchInput::default()
+            ..PadInput::default()
         }
     }
-    fn touched(points: &[(u32, [u32; 2])]) -> SwitchInput {
-        SwitchInput {
+    fn touched(points: &[(u32, [u32; 2])]) -> PadInput {
+        PadInput {
             touches: points
                 .iter()
                 .map(|&(id, position)| Touch { id, position })
@@ -284,7 +311,7 @@ mod tests {
 
     #[test]
     fn short_press_between_frames_is_one_down_frame_then_release() {
-        let mut controls = Controls::new([1280, 720]);
+        let mut controls = Controls::new([1280, 720], map());
         let mut input = ActionInput::default();
         let b = bindings();
         controls.poll(&sample(button::A), view([1280, 720]), 8);
@@ -306,7 +333,7 @@ mod tests {
     fn touch_follows_the_primary_contact_and_ignores_letterbox_starts() {
         // An 800x600 canvas contained in 1280x720 is 959x720 after a 160 px side bar.
         let viewport = view([800, 600]);
-        let mut controls = Controls::new([800, 600]);
+        let mut controls = Controls::new([800, 600], map());
         let mut input = ActionInput::default();
         let b = bindings();
         controls.poll(&touched(&[(7, [100, 300])]), viewport, 8);
@@ -343,14 +370,14 @@ mod tests {
     #[test]
     fn stick_moves_the_pointer_by_time_with_a_dead_zone_and_clamping() {
         let viewport = view([1280, 720]);
-        let mut controls = Controls::new([1280, 720]);
-        let still = SwitchInput {
+        let mut controls = Controls::new([1280, 720], map());
+        let still = PadInput {
             sticks: [[5000, -5000], [0, 0]],
             ..sample(0)
         };
         controls.poll(&still, viewport, 16);
         assert_eq!(controls.pointer(), [640, 360]);
-        let right = SwitchInput {
+        let right = PadInput {
             sticks: [[32767, 0], [0, 0]],
             ..sample(0)
         };
@@ -359,7 +386,7 @@ mod tests {
         // A long stall moves no further than one capped step.
         controls.poll(&right, viewport, 5000);
         assert_eq!(controls.pointer(), [853, 360]);
-        let down = SwitchInput {
+        let down = PadInput {
             sticks: [[0, -32767], [0, 0]],
             ..sample(0)
         };
@@ -373,7 +400,7 @@ mod tests {
     #[test]
     fn wheel_notches_repeat_after_a_delay_and_are_single_frame_pulses() {
         let viewport = view([1280, 720]);
-        let mut controls = Controls::new([1280, 720]);
+        let mut controls = Controls::new([1280, 720], map());
         let mut input = ActionInput::default();
         let b = bindings();
         let mut notches = 0;
@@ -387,7 +414,7 @@ mod tests {
         assert_eq!(notches, 4);
         controls.poll(&sample(0), viewport, 10);
         controls.frame(&b, &mut input);
-        let up = SwitchInput {
+        let up = PadInput {
             sticks: [[0, 0], [0, 32767]],
             ..sample(0)
         };
@@ -399,7 +426,7 @@ mod tests {
     #[test]
     fn plus_must_be_held_to_quit_and_focus_loss_cancels_without_clicks() {
         let viewport = view([1280, 720]);
-        let mut controls = Controls::new([1280, 720]);
+        let mut controls = Controls::new([1280, 720], map());
         let mut input = ActionInput::default();
         let b = bindings();
         for _ in 0..9 {
@@ -428,7 +455,7 @@ mod tests {
     #[test]
     fn buttons_held_from_a_system_applet_wait_for_release() {
         let viewport = view([1280, 720]);
-        let mut controls = Controls::new([1280, 720]);
+        let mut controls = Controls::new([1280, 720], map());
         let mut input = ActionInput::default();
         let b = bindings();
         controls.suppress_held(&mut input);

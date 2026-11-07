@@ -58,7 +58,7 @@ impl PlatformBackend for Backend<'_> {
         request: &TextDialogRequest,
     ) -> Result<TextDialogResult, Box<dyn Error>> {
         self.modal_shown = true;
-        crate::text_input::edit(request, &mut |title, prompt, initial, limit, check| {
+        cmvs_console::text_input::edit(request, &mut |title, prompt, initial, limit, check| {
             crate::sys::software_keyboard(title, prompt, initial, limit, check)
         })
     }

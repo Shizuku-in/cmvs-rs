@@ -1,0 +1,16 @@
+[package]
+name = "cmvs-vita"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+[lints]
+workspace = true
+[dependencies]
+cmvs-core = { path = "../../../crates/cmvs-core" }
+cmvs-native = { path = "../../../crates/cmvs-native" }
+cmvs-font = { path = "../../../crates/cmvs-font" }
+cmvs-console = { path = "../../../crates/cmvs-console" }
+ab_glyph.workspace = true
+cmvs-audio = { path = "../../../crates/cmvs-audio", default-features = false, features = ["mixer"] }
