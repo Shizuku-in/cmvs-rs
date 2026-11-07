@@ -1004,6 +1004,15 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
     assert_eq!(memoria.count(CommandStatus::Unreviewed), 551);
     assert_eq!(memoria.count(CommandStatus::NoOp), 313);
     assert_eq!(memoria.status(0x1d), CommandStatus::NoOp);
+    for (command, id) in [
+        (0x2a6, cmvs_rs::profile::VariantId::CollisionParticles),
+        (0x2a7, cmvs_rs::profile::VariantId::FadingParticles),
+    ] {
+        assert_eq!(
+            memoria.semantics(command),
+            cmvs_rs::profile::Semantics::Variant(id)
+        );
+    }
     let asunana = registry.profile("cmvs-20080903").unwrap();
     assert_eq!(asunana.base.as_deref(), Some("cmvs-20160201"));
     assert_eq!(asunana.binaries.len(), 1);

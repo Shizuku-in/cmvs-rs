@@ -822,3 +822,81 @@ fn collision_mesh_commands_bound_vertices_and_particle_creation_retries_atomical
     .unwrap();
     assert!(scene.collision_effects().is_empty());
 }
+
+#[test]
+fn fading_particles_bind_only_0x22a7_and_ignore_incomplete_collision_meshes() {
+    let mut code = vec![];
+    command(&mut code, 0x2020, &[20]);
+    command(&mut code, 0x2330, &[20]);
+    // One vertex: type 6 would refuse this incomplete triangle stream.
+    command(&mut code, 0x2332, &[20, 0, 0, 0]);
+    command(
+        &mut code,
+        0x22a7,
+        &[
+            0,
+            0x80000000,
+            0x0002_0a05,
+            15.0f32.to_bits(),
+            5000.0f32.to_bits(),
+            2,
+        ],
+    );
+    let script = script(&code);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.state_mut().set_string(0, b"particle.pb3").unwrap();
+    let mut scene = SceneHost::default();
+    let mut source = Images::default();
+    let mut random = CrtRandom::new(0);
+    pending(&mut vm);
+    scene.try_handle(&mut vm).unwrap();
+    for _ in 0..2 {
+        pending(&mut vm);
+        run_collision(&mut vm, &mut scene, &mut source, &mut random).unwrap();
+    }
+    pending(&mut vm);
+    let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
+    assert_eq!(
+        run_collision(&mut vm, &mut scene, &mut source, &mut random).unwrap(),
+        Some(Flow::Unhandled)
+    );
+    assert_eq!(
+        (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
+        before
+    );
+    let mut hosts = Hosts {
+        random: Some(&mut random),
+        images: Some(ImageHosts {
+            scene: &mut scene,
+            source: &mut source,
+            change_images: false,
+        }),
+        ..Default::default()
+    };
+    assert_eq!(
+        dispatch::run(
+            Semantics::Variant(VariantId::FadingParticles),
+            &mut vm,
+            &mut hosts
+        )
+        .unwrap(),
+        Some(Flow::Done)
+    );
+    assert_eq!(vm.stack().len_bytes(), 0);
+    let effect = &scene.collision_effects()[&0];
+    assert_eq!(effect.particles.len(), 2);
+    assert_eq!(effect.fade.as_ref().unwrap().phase, 2);
+    let mut expected = CrtRandom::new(0);
+    for _ in 0..10 {
+        expected.next_value();
+    }
+    assert_eq!(random, expected);
+    // The pool update skips the incomplete mesh because no type-6 pool reads it.
+    scene
+        .advance_effect_pools(16, &mut random, &Default::default())
+        .unwrap();
+    assert_eq!(
+        scene.collision_effects()[&0].fade.as_ref().unwrap().elapsed,
+        16
+    );
+}

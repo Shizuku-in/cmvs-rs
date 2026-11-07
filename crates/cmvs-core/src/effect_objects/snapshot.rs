@@ -177,7 +177,9 @@ impl SceneHost {
                     effect.template = Some(template);
                     scene.particle_effects.insert(slot as u8, effect);
                 }
-                SavedEffect::Collision { words, .. } => {
+                SavedEffect::Collision { words, .. }
+                | SavedEffect::FadingParticles { words, .. } => {
+                    // 0x425850 rebuilds type 7 through 0x432500, restarting its fade clock.
                     let mut effect = CollisionEffect::new_with_arithmetic(
                         words[0],
                         words[1..3].try_into().unwrap(),
@@ -189,6 +191,9 @@ impl SceneHost {
                         random,
                         x87_arithmetic,
                     );
+                    if matches!(template, SavedEffect::FadingParticles { .. }) {
+                        effect.fade = Some(super::ParticleFade::new(words[0]));
+                    }
                     effect.template = Some(template);
                     scene.collision_effects.insert(slot as u8, effect);
                 }
@@ -229,6 +234,36 @@ mod tests {
             Ok(Some(b"NONE".to_vec()))
         }
     }
+    #[test]
+    fn fading_pool_saves_type_seven_template_and_restarts_its_fade_on_restore() {
+        let f = f32::to_bits;
+        let template = SavedEffect::FadingParticles {
+            words: [0x0002_0a05, f(15.0), f(1000.0), 2],
+            name: SavedEffect::name_field(b"snow").unwrap(),
+        };
+        let bytes = template.encode().unwrap();
+        assert_eq!((&bytes[..4], bytes.len()), (&[1, 0, 7, 0][..], 52));
+        let mut random = CrtRandom::new(0);
+        let mut scene = SceneHost::load_effect_pools(
+            &[(1, &bytes)],
+            &mut Images::default(),
+            &mut random,
+            &mut 0,
+            true,
+        )
+        .unwrap();
+        let fade = scene.collision_effects[&1].fade.clone().unwrap();
+        assert_eq!((fade.phase, fade.elapsed, fade.alpha), (2, 0, 255));
+        scene
+            .advance_effect_pools(1250, &mut random, &crate::camera::CameraHost::default())
+            .unwrap();
+        assert_eq!(
+            scene.collision_effects[&1].fade.as_ref().unwrap().alpha,
+            128
+        );
+        assert_eq!(scene.saved_effect_pools().unwrap(), vec![(1, bytes)]);
+    }
+
     #[test]
     fn mixed_pools_reinitialize_in_slot_order_and_capture_only_the_creation_templates() {
         for x87 in [false, true] {

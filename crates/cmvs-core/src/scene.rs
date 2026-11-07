@@ -355,6 +355,7 @@ pub struct SceneHost {
     allow_legacy_sine_modes: bool,
     pub(crate) allow_screen_coordinates_one: bool,
     pub(crate) allow_projected_parent_rotation: bool,
+    /// HAROUSE 0x43b0b0 and MEMORIA 0x43e2f0: horizontal/vertical 0x100 triangle wave.
     pub(crate) allow_triangle_quake: bool,
     /// cmvs-20070119 0x42b9d0: every nonzero waveform nibble is the triangle wave.
     pub(crate) allow_legacy_triangle_quake: bool,
@@ -395,7 +396,8 @@ impl SceneHost {
                 || profile.is_inspected_20080903()
                 || profile.is_inspected_20090815(),
             allow_projected_parent_rotation: profile.is_inspected_20080719(),
-            allow_triangle_quake: profile.is_inspected_20080719(),
+            allow_triangle_quake: profile.is_inspected_20080719()
+                || profile.is_inspected_20090815(),
             allow_stand_change_table: profile.is_inspected_20070119(),
             allow_legacy_triangle_quake: profile.is_inspected_20070119(),
             ..Self::default()

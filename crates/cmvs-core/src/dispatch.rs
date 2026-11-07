@@ -5077,6 +5077,29 @@ pub static COLLISION_PARTICLES: &[Entry] = &[
         handler: collision_mesh,
     },
 ];
+/// MEMORIA 0x22a7 / 0x453d20: type 7 takes the 0x22a6 arguments and pool, without collision.
+pub static FADING_PARTICLES: &[Entry] = &[Entry {
+    command: 0x2a7,
+    name: "create fading particle effect",
+    capability: Capability::ParticleImages,
+    handler: |hosts, call| {
+        let h = hosts
+            .images
+            .as_mut()
+            .expect("particle image capability checked");
+        h.scene.create_collision_effect(
+            call,
+            h.source,
+            hosts
+                .random
+                .as_deref_mut()
+                .expect("particle random capability checked"),
+            audio_backend(&mut hosts.audio),
+        )?;
+        Ok(Flow::Done)
+    },
+}];
+
 fn collision_mesh(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     hosts
         .scene
@@ -5826,6 +5849,7 @@ pub static VARIANT_TABLES: &[&[Entry]] = &[
     LIST_SELECT,
     FALLING_BILLBOARDS,
     COLLISION_PARTICLES,
+    FADING_PARTICLES,
     FRAGMENTS,
 ];
 
@@ -5865,6 +5889,7 @@ pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'st
         crate::profile::VariantId::PolarPoint => POLAR_POINT,
         crate::profile::VariantId::FallingBillboards => FALLING_BILLBOARDS,
         crate::profile::VariantId::CollisionParticles => COLLISION_PARTICLES,
+        crate::profile::VariantId::FadingParticles => FADING_PARTICLES,
         crate::profile::VariantId::Fragments => FRAGMENTS,
     };
     entries.iter().find(|entry| entry.command == command)
@@ -5903,6 +5928,7 @@ pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
         Semantics::Variant(crate::profile::VariantId::BackgroundAudio) => "variant background audio override",
         Semantics::Variant(crate::profile::VariantId::FallingBillboards) => "variant falling billboard override",
         Semantics::Variant(crate::profile::VariantId::CollisionParticles) => "variant collision particle override",
+        Semantics::Variant(crate::profile::VariantId::FadingParticles) => "variant fading particle override",
         Semantics::Variant(crate::profile::VariantId::Fragments) => "variant image fragment override",
         Semantics::Variant(crate::profile::VariantId::SeRestart) => "variant SE restart",
         Semantics::Variant(crate::profile::VariantId::AudioPreload) => "variant audio preload",

@@ -290,7 +290,8 @@ fn effect_record_supported(profile: &crate::profile::EngineProfile, body: &[u8])
                 && body[3] == 0;
     }
     if profile.is_inspected_20090815() {
-        return body.len() == 52 && body.get(..4) == Some(&[1, 0, 6, 0]);
+        // Writer 0x425740 / reader 0x425850: types 6 and 7 share the 48-byte template.
+        return body.len() == 52 && matches!(body.get(..4), Some([1, 0, 6 | 7, 0]));
     }
     if body.get(..4) == Some(&[1, 0, 3, 0]) {
         return false;

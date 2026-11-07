@@ -683,7 +683,7 @@ binary x86 file=cmvs.exe sha256=36fa780a5d2b8df4ac6a6e48a2f78708b79aa10d22eb575a
 0x22a4 unreviewed 0x5760b
 0x22a5 unreviewed 0x57613
 0x22a6 unreviewed 0x5761b variant=collision-particles:x86:36fa780a5d2b8df4ac6a6e48a2f78708b79aa10d22eb575a5ae74742d902f71a evidence=games/memoria/README.md
-0x22a7 unreviewed 0x57623
+0x22a7 unreviewed 0x57623 variant=fading-particles:x86:36fa780a5d2b8df4ac6a6e48a2f78708b79aa10d22eb575a5ae74742d902f71a evidence=games/memoria/README.md
 0x22a8 noop 0x567dc
 0x22a9 noop 0x567dc
 0x22aa noop 0x567dc
