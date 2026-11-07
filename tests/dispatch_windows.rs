@@ -72,6 +72,127 @@ fn hassaku_window_scale_preserves_raw_words_and_rejects_missing_targets_atomical
     }
 }
 
+#[test]
+fn natsuuta_window_position_and_opacity_tracks_reuse_the_scene_tracks() {
+    use cmvs_rs::scene::{OpacityKey, PositionKey};
+    let profile = cmvs_rs::profile::Registry::builtin()
+        .profile("cmvs-20100314")
+        .unwrap();
+    for command in [0x1ca, 0x1cb, 0x1cc, 0x1d4, 0x1d5, 0x1d6] {
+        assert!(matches!(profile.semantics(command), Semantics::Variant(_)));
+    }
+    // HASSAKU binds neither family.
+    let hassaku = cmvs_rs::profile::Registry::builtin()
+        .profile("cmvs-20101211")
+        .unwrap();
+    assert_eq!(hassaku.semantics(0x1d4), Semantics::Root);
+    assert_eq!(hassaku.semantics(0x1ca), Semantics::Root);
+    for child in [u32::MAX, 16] {
+        let mut windows = Windows::default();
+        windows.setup();
+        let mut code = vec![];
+        let x = (-30i32) as u32;
+        command(&mut code, 0x21d4, &[0, child]);
+        command(&mut code, 0x21d5, &[0, child, 2, u32::MAX, 0, 100, x, 40]);
+        command(&mut code, 0x21d6, &[0, child, 2]);
+        command(&mut code, 0x21ca, &[0, child, 300]);
+        command(
+            &mut code,
+            0x21cb,
+            &[0, child, 1, u32::MAX, 5, 100, (-260i32) as u32],
+        );
+        command(&mut code, 0x21cc, &[0, child, 1]);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        vm.state_mut().set_system_integer(0, 77).unwrap();
+        for op in [0x1d4, 0x1d5, 0x1d6, 0x1ca, 0x1cb, 0x1cc] {
+            pending(&mut vm);
+            assert_eq!(
+                dispatch::run(
+                    profile.semantics(op),
+                    &mut vm,
+                    &mut windows.hosts(Capability::Windows)
+                )
+                .unwrap(),
+                Some(Flow::Done)
+            );
+            assert_eq!(vm.stack().len_bytes(), 0);
+        }
+        assert_eq!(vm.state().system_integer(0), Some(77));
+        let object = &windows.messages.window(0).unwrap().object;
+        let target = if child == u32::MAX {
+            object
+        } else {
+            &object.children[&16]
+        };
+        let draw = target.draw.as_ref().unwrap();
+        let motion = draw.position_motion.as_ref().unwrap();
+        assert_eq!(
+            motion.keys[2],
+            PositionKey {
+                next: -1,
+                xy: [-30, 40],
+                mode: 0,
+                duration: 100,
+            }
+        );
+        let playback = motion.playback.as_ref().unwrap();
+        assert_eq!((playback.start, playback.current), (2, 2));
+        let track = draw.opacity_track.as_ref().unwrap();
+        assert_eq!(track.base, 44);
+        assert!(track.playing);
+        assert_eq!(
+            track.keys[1],
+            OpacityKey {
+                next: -1,
+                value: 4,
+                hold: 5,
+                duration: 100,
+            }
+        );
+    }
+    // Slots outside 0..3, missing children and keys outside the tracks fail atomically.
+    for (op, args) in [
+        (0x21d4, vec![4, u32::MAX]),
+        (0x21d4, vec![0, 17]),
+        (0x21ca, vec![4, u32::MAX, 0]),
+        (0x21cb, vec![0, u32::MAX, 8, 0, 0, 0, 0]),
+    ] {
+        let mut windows = Windows::default();
+        windows.setup();
+        let mut code = vec![];
+        if op == 0x21cb {
+            command(&mut code, 0x21ca, &[0, u32::MAX, 0]);
+        }
+        command(&mut code, op, &args);
+        let script = script(&code);
+        let mut vm = Machine::new(&script).unwrap();
+        if op == 0x21cb {
+            pending(&mut vm);
+            dispatch::run(
+                profile.semantics(0x1ca),
+                &mut vm,
+                &mut windows.hosts(Capability::Windows),
+            )
+            .unwrap();
+        }
+        pending(&mut vm);
+        let before = windows.snapshot();
+        let pending = vm.pending_system();
+        assert!(
+            dispatch::run(
+                profile.semantics(op - 0x2000),
+                &mut vm,
+                &mut windows.hosts(Capability::Windows)
+            )
+            .is_err()
+        );
+        assert_eq!(windows.snapshot(), before);
+        assert_eq!(vm.pending_system(), pending);
+        assert_eq!(vm.stack().len_bytes(), args.len() * 4);
+    }
+}
+
 fn bytes(code: &[u8]) -> Vec<u8> {
     let text = b"\0a.pb3\0";
     let mut raw = b"PS2A".to_vec();

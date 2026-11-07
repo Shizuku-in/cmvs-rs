@@ -393,6 +393,11 @@ pub fn bundled_saves(target: &Target) -> CheckResult {
         .filter(|p| p.is_file())
         .collect();
     paths.sort();
+    let layout = target
+        .game
+        .as_ref()
+        .and_then(|game| cmvs_core::runner::snapshot_layout_for(game.selection.profile))
+        .unwrap_or(cmvs_core::snapshot::SnapshotLayout::TextV3);
     let mut rows = Vec::new();
     let mut failed = 0;
     for path in paths {
@@ -412,7 +417,7 @@ pub fn bundled_saves(target: &Target) -> CheckResult {
             cmvs_core::save::Csv2Save::decode(&bytes)
                 .map_err(|e| e.to_string())
                 .and_then(|save| {
-                    cmvs_core::snapshot::EngineSnapshot::decode(&save.snapshot)
+                    cmvs_core::snapshot::EngineSnapshot::decode_with_layout(&save.snapshot, layout)
                         .map(|_| "CSV2 gameplay save".to_owned())
                         .map_err(|e| e.to_string())
                 })

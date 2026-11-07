@@ -836,13 +836,16 @@ fn root_auxiliary_scene(
 }
 pub fn uses_message_state(command: u16) -> bool {
     uses_windows(command)
-        || ROOT.iter().any(|e| {
-            e.command == command
-                && matches!(
-                    e.capability,
-                    Capability::TextState | Capability::AuxiliaryScene | Capability::FontDialog
-                )
-        })
+        || ROOT
+            .iter()
+            .chain(VARIANT_TABLES.iter().flat_map(|table| table.iter()))
+            .any(|e| {
+                e.command == command
+                    && matches!(
+                        e.capability,
+                        Capability::TextState | Capability::AuxiliaryScene | Capability::FontDialog
+                    )
+            })
 }
 
 fn root_windows(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
@@ -5642,6 +5645,55 @@ pub static WINDOW_SCALE_MOTION: &[Entry] = &[
     },
 ];
 
+pub static WINDOW_POSITION_MOTION: &[Entry] = &[
+    Entry {
+        command: 0x1d4,
+        name: "create window position motion",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x1d5,
+        name: "set key window position motion",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x1d6,
+        name: "start window position motion",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+];
+
+pub static WINDOW_OPACITY_TRACK: &[Entry] = &[
+    Entry {
+        command: 0x1ca,
+        name: "create window opacity track",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x1cb,
+        name: "set key window opacity track",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+    Entry {
+        command: 0x1cc,
+        name: "start window opacity track",
+        capability: Capability::Windows,
+        handler: root_windows,
+    },
+];
+
+pub static LOGICAL_TEXT: &[Entry] = &[Entry {
+    command: 0x11c,
+    name: "create text object with logical size",
+    capability: Capability::TextState,
+    handler: root_text_state,
+}];
+
 pub static IMAGE_TABLES: &[Entry] = &[
     Entry {
         command: 0x17,
@@ -5863,6 +5915,9 @@ pub static VARIANT_TABLES: &[&[Entry]] = &[
     IMAGE_TABLES,
     ACTIVATION_PASS,
     WINDOW_SCALE_MOTION,
+    WINDOW_POSITION_MOTION,
+    WINDOW_OPACITY_TRACK,
+    LOGICAL_TEXT,
     VIEW_MOTION,
     WINDOW_FULL_MOVE,
     LEGACY_EFFECTS,
@@ -5906,6 +5961,9 @@ pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'st
         crate::profile::VariantId::ImageTables => IMAGE_TABLES,
         crate::profile::VariantId::ActivationPass => ACTIVATION_PASS,
         crate::profile::VariantId::WindowScaleMotion => WINDOW_SCALE_MOTION,
+        crate::profile::VariantId::WindowPositionMotion => WINDOW_POSITION_MOTION,
+        crate::profile::VariantId::WindowOpacityTrack => WINDOW_OPACITY_TRACK,
+        crate::profile::VariantId::LogicalText => LOGICAL_TEXT,
         crate::profile::VariantId::ViewMotion => VIEW_MOTION,
         crate::profile::VariantId::WindowFullMove => WINDOW_FULL_MOVE,
         crate::profile::VariantId::LegacyEffects => LEGACY_EFFECTS,
@@ -5951,6 +6009,9 @@ pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
         Semantics::Variant(crate::profile::VariantId::ImageTables) => "variant separate image tables",
         Semantics::Variant(crate::profile::VariantId::ActivationPass) => "variant activation check reported as passed",
         Semantics::Variant(crate::profile::VariantId::WindowScaleMotion) => "variant window scale motion",
+        Semantics::Variant(crate::profile::VariantId::WindowPositionMotion) => "variant window position motion",
+        Semantics::Variant(crate::profile::VariantId::WindowOpacityTrack) => "variant window opacity track",
+        Semantics::Variant(crate::profile::VariantId::LogicalText) => "variant text with logical size",
         Semantics::Variant(crate::profile::VariantId::ViewMotion) => "variant device view motion",
         Semantics::Variant(crate::profile::VariantId::WindowFullMove) => "variant unscaled fullscreen origin",
         Semantics::Variant(crate::profile::VariantId::LegacyEffects) => "variant legacy effect slots",

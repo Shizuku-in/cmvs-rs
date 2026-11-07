@@ -8,7 +8,7 @@
 //! 0x2309 starts default-mode segment playback and 0x231a queries whether a player is
 //! active; 0x230b/0x230c resume/pause while retaining the frame. Inspected legacy
 //! variants additionally query segments/frames, seek, apply queued segments, and
-//! select mode 0/10 or a stop frame. Audio-clock mode 15 remains unavailable.
+//! select mode 0/10 or a stop frame. NATSUUTA alone adds clock-driven mode 15.
 use crate::filesystem::File;
 use crate::{
     audio::MovieAudioClock, bytecode::DecodeError, cmv::CmvIndex, dispatch::Call, evaluate::error,
@@ -229,9 +229,18 @@ pub struct MovieHost {
     mgv_factory: Option<Box<dyn crate::mgv::DecoderFactory>>,
     decode_frames: bool,
     scene_clock: u32,
+    /// Scene playback mode 15 (NATSUUTA 0x422fc0); other builds keep refusing it.
+    clock_mode: bool,
 }
 
 impl MovieHost {
+    /// A host for the selected build: only NATSUUTA's clock-driven mode 15 is inspected.
+    pub(crate) fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
+        Self {
+            clock_mode: profile.is_inspected_20100314(),
+            ..Self::default()
+        }
+    }
     pub(crate) fn saved_scene_players_with_layout(
         &self,
         layout: crate::snapshot::SnapshotLayout,
@@ -476,8 +485,8 @@ impl MovieHost {
     }
 }
 
-/// The parts of record 0x8e8 Rust models. Nonzero mode/stop-frame fields are encoded
-/// faithfully, but their snapshot restore remains explicitly unsupported.
+/// The parts of record 0x8e8 Rust models. Mode/stop-frame fields are encoded faithfully;
+/// restore admits only NATSUUTA's mode 15 and refuses other nonzero values.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SceneRecord {
     slot: u16,
@@ -517,7 +526,9 @@ impl SceneRecord {
         body
     }
     /// The playback clock restarts at `now` with no elapsed time, as the reader sets it.
-    fn decode(slot: u16, body: &[u8], now: u32) -> Result<Self, &'static str> {
+    /// `clock_mode` admits NATSUUTA's mode 15, which its reader (0x423260) restores into
+    /// +48 after reopening the movie at frame 0 instead of the saved frame.
+    fn decode(slot: u16, body: &[u8], now: u32, clock_mode: bool) -> Result<Self, &'static str> {
         if body.len() != SCENE_RECORD || body[..2] != [4, 0] {
             return Err("unsupported scene movie record");
         }
@@ -525,7 +536,9 @@ impl SceneRecord {
         if slot as usize >= MOVIE_SLOTS || word(2) != u32::from(slot) {
             return Err("scene movie record names another player slot");
         }
-        if word(286) != 0 || !matches!(word(290), 2 | 3) || word(294) != 0 {
+        let mode = word(286);
+        if !(mode == 0 || mode == 15 && clock_mode) || !matches!(word(290), 2 | 3) || word(294) != 0
+        {
             return Err("scene movie load mode or control fields are not implemented");
         }
         let object_slot = u8::try_from(word(6)).map_err(|_| "scene movie object outside 0..255")?;
@@ -556,10 +569,10 @@ impl SceneRecord {
             slot,
             object_slot,
             name: name[..end].to_vec(),
-            frame: word(282),
+            frame: if mode == 15 { 0 } else { word(282) },
             load_mode: SCENE_MODE, // The native reader reopens streaming mode 3 as mode 2.
             playback: MoviePlayback {
-                mode: 0,
+                mode,
                 stop_frame: 0,
                 segments,
                 current,
@@ -602,7 +615,7 @@ impl MovieHost {
     ) -> Result<[Option<SceneMovie>; MOVIE_SLOTS], Box<dyn Error>> {
         let mut players: [Option<SceneMovie>; MOVIE_SLOTS] = Default::default();
         for &(slot, body) in records {
-            let record = SceneRecord::decode(slot, body, self.scene_clock)?;
+            let record = SceneRecord::decode(slot, body, self.scene_clock, self.clock_mode)?;
             if players
                 .iter()
                 .flatten()
@@ -690,12 +703,12 @@ mod tests {
         assert_eq!(body[286..298], [0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0]);
         let mut expected = record.clone();
         expected.playback.last_tick = 77;
-        assert_eq!(SceneRecord::decode(2, &body, 77).unwrap(), expected);
+        assert_eq!(SceneRecord::decode(2, &body, 77, false).unwrap(), expected);
         let mut streaming = record.clone();
         streaming.load_mode = 3;
         assert_eq!(streaming.encode()[290..294], 3u32.to_le_bytes());
         assert_eq!(
-            SceneRecord::decode(2, &streaming.encode(), 77).unwrap(),
+            SceneRecord::decode(2, &streaming.encode(), 77, false).unwrap(),
             expected
         );
         let mut idle = record;
@@ -703,7 +716,10 @@ mod tests {
         let body = idle.encode();
         assert_eq!(body[78..82], [0xff; 4]);
         assert_eq!(
-            SceneRecord::decode(2, &body, 0).unwrap().playback.pending,
+            SceneRecord::decode(2, &body, 0, false)
+                .unwrap()
+                .playback
+                .pending,
             None
         );
     }
@@ -711,7 +727,7 @@ mod tests {
     #[test]
     fn scene_records_reject_unmodeled_fields() {
         let body = record().encode();
-        assert!(SceneRecord::decode(1, &body, 0).is_err());
+        assert!(SceneRecord::decode(1, &body, 0, false).is_err());
         for (at, value) in [
             (0, 3),   // version
             (6, 256), // object slot
@@ -727,11 +743,28 @@ mod tests {
             if at == 0 {
                 bad[2..4].copy_from_slice(&body[2..4]);
             }
-            assert!(SceneRecord::decode(2, &bad, 0).is_err(), "offset {at}");
+            assert!(
+                SceneRecord::decode(2, &bad, 0, false).is_err(),
+                "offset {at}"
+            );
         }
         let mut unterminated = body.clone();
         unterminated[10..74].fill(b'a');
-        assert!(SceneRecord::decode(2, &unterminated, 0).is_err());
-        assert!(SceneRecord::decode(2, &body[..297], 0).is_err());
+        assert!(SceneRecord::decode(2, &unterminated, 0, false).is_err());
+        assert!(SceneRecord::decode(2, &body[..297], 0, false).is_err());
+    }
+
+    #[test]
+    fn clock_mode_records_reopen_at_frame_zero_on_natsuuta_only() {
+        let mut record = record();
+        record.playback.mode = 15;
+        let body = record.encode();
+        assert_eq!(body[286..290], 15u32.to_le_bytes());
+        assert!(SceneRecord::decode(2, &body, 77, false).is_err());
+        let mut expected = record;
+        // 0x423260: mode 15 opens at frame 0 and restarts the start tick (+0x104).
+        expected.frame = 0;
+        expected.playback.last_tick = 77;
+        assert_eq!(SceneRecord::decode(2, &body, 77, true).unwrap(), expected);
     }
 }

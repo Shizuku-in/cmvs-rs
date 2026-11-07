@@ -44,9 +44,29 @@ impl MoviePlayback {
             last_tick: 0,
         }
     }
-    fn advance(&mut self, now: u32, frame: u32, rate: u32, time: u32) -> Result<u32, FormatError> {
+    fn advance(
+        &mut self,
+        now: u32,
+        frame: u32,
+        [frames, rate, time]: [u32; 3],
+    ) -> Result<u32, FormatError> {
         if !self.active || self.paused {
             return Ok(frame);
+        }
+        if self.mode == 15 {
+            // NATSUUTA 0x422ff1: the frame follows the position of audio channel 0xb
+            // (0x45dd40), or, when that is negative, the time since the start tick (+0x104,
+            // which this mode never moves), looped over the whole movie and ignoring the
+            // segments. The audio position is not modeled; the elapsed-time path is used.
+            let period = time
+                .wrapping_mul(frames)
+                .wrapping_mul(1000)
+                .checked_div(rate);
+            let Some(period) = period.filter(|&p| p != 0 && time != 0) else {
+                return Err(FormatError("clock-driven movie has a zero period"));
+            };
+            let position = now.wrapping_sub(self.last_tick) % period;
+            return Ok(position.wrapping_mul(rate) / 1000 / time);
         }
         self.elapsed = self.elapsed.wrapping_add(if self.mode == 10 {
             now.wrapping_sub(self.last_tick)
@@ -108,7 +128,9 @@ impl MovieHost {
                         "stop frame"
                     },
                 )?;
-                if call.command == 0x30d && !matches!(mode, 0 | 10) {
+                if call.command == 0x30d
+                    && !(matches!(mode, 0 | 10) || mode == 15 && self.clock_mode)
+                {
                     return Err(call.error("movie playback mode is not implemented"));
                 }
                 call.complete(0x4008)?;
@@ -298,8 +320,11 @@ impl MovieHost {
             let target = playback.advance(
                 self.scene_clock,
                 movie.frame,
-                movie.index.rate(),
-                movie.index.rate_time(),
+                [
+                    movie.index.max_sequence(),
+                    movie.index.rate(),
+                    movie.index.rate_time(),
+                ],
             )?;
             if target != movie.frame {
                 if scene
@@ -330,21 +355,39 @@ impl MovieHost {
 mod tests {
     use super::*;
     #[test]
+    fn mode_fifteen_loops_the_whole_movie_from_the_start_tick() {
+        let mut p = MoviePlayback::new(0, 3);
+        p.mode = 15;
+        p.active = true;
+        p.last_tick = 100;
+        // 10 frames at 10/1 fps: a 1000 ms period; segments are ignored.
+        assert_eq!(p.advance(600, 0, [10, 10, 1]).unwrap(), 5);
+        assert_eq!(p.advance(1099, 5, [10, 10, 1]).unwrap(), 9);
+        assert_eq!(p.advance(1100, 9, [10, 10, 1]).unwrap(), 0);
+        assert_eq!((p.last_tick, p.elapsed, p.current), (100, 0, 0));
+        assert!(p.active && !p.paused);
+        p.paused = true;
+        assert_eq!(p.advance(1600, 3, [10, 10, 1]).unwrap(), 3);
+        p.paused = false;
+        assert!(p.advance(1600, 3, [10, 0, 1]).is_err());
+        assert!(p.advance(1600, 3, [0, 10, 1]).is_err());
+    }
+    #[test]
     fn mode_ten_uses_unclamped_time_and_stops_without_loop_or_pending_transition() {
         let mut p = MoviePlayback::new(0, 30);
         p.mode = 10;
         p.active = true;
         p.pending = Some(1);
         p.segments[0].looping = true;
-        assert_eq!(p.advance(1500, 0, 15, 1).unwrap(), 22);
+        assert_eq!(p.advance(1500, 0, [0, 15, 1]).unwrap(), 22);
         assert_eq!(p.elapsed, 34);
-        assert_eq!(p.advance(2100, 22, 15, 1).unwrap(), 30);
+        assert_eq!(p.advance(2100, 22, [0, 15, 1]).unwrap(), 30);
         assert!(!p.active);
         assert!(p.paused);
         assert_eq!(p.pending, Some(1));
         assert_eq!(p.current, 0);
         let old = p.clone();
-        assert_eq!(p.advance(5000, 30, 15, 1).unwrap(), 30);
+        assert_eq!(p.advance(5000, 30, [0, 15, 1]).unwrap(), 30);
         assert_eq!(p, old);
     }
     #[test]
@@ -353,21 +396,21 @@ mod tests {
         p.mode = 10;
         p.stop_frame = 2;
         p.active = true;
-        assert_eq!(p.advance(1000, 0, 15, 1).unwrap(), 2);
+        assert_eq!(p.advance(1000, 0, [0, 15, 1]).unwrap(), 2);
         assert!(p.active);
         assert!(!p.paused);
-        assert_eq!(p.advance(2000, 2, 15, 1).unwrap(), 2);
+        assert_eq!(p.advance(2000, 2, [0, 15, 1]).unwrap(), 2);
         p.stop_frame = 0;
-        assert_eq!(p.advance(2067, 2, 15, 1).unwrap(), 3);
+        assert_eq!(p.advance(2067, 2, [0, 15, 1]).unwrap(), 3);
     }
     #[test]
     fn frame_clock_wrap_clamp_and_fractional_remainder_match_unsigned_arithmetic() {
         let mut p = MoviePlayback::new(0, 100);
         p.active = true;
         p.last_tick = u32::MAX - 15;
-        assert_eq!(p.advance(51, 0, 15, 1).unwrap(), 1);
+        assert_eq!(p.advance(51, 0, [0, 15, 1]).unwrap(), 1);
         assert_eq!(p.elapsed, 1);
-        assert_eq!(p.advance(2051, 1, 15, 1).unwrap(), 16);
+        assert_eq!(p.advance(2051, 1, [0, 15, 1]).unwrap(), 16);
         assert_eq!(p.elapsed, 1);
     }
     #[test]
@@ -381,7 +424,7 @@ mod tests {
                 start,
                 end: 7,
             };
-            assert_eq!(p.advance(67, 3, 15, 1).unwrap(), 4);
+            assert_eq!(p.advance(67, 3, [0, 15, 1]).unwrap(), 4);
             assert_eq!(p.current, 1);
             assert_eq!(p.pending, None);
         }

@@ -83,6 +83,7 @@ impl ButtonHost {
             current: group.current,
             pressed_visual: group.pressed_visual,
             press_target: group.press_target,
+            pointer_scale: None,
         };
         for button in &mut view.buttons {
             for (coordinate, offset) in button.rect[..2].iter_mut().zip(position) {

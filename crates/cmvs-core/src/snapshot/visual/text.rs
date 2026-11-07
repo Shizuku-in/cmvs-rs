@@ -47,6 +47,7 @@ pub(crate) fn decode_with_layout(
         | SnapshotLayout::TextV1SceneV1
         | SnapshotLayout::TextV1SceneV2Collision
         | SnapshotLayout::TextV1SceneV2
+        | SnapshotLayout::TextV2WindowV2
         | SnapshotLayout::TextV2 => &[0; 208],
         SnapshotLayout::TextV3 | SnapshotLayout::TextV3SceneV4 => r.take(208)?,
     };

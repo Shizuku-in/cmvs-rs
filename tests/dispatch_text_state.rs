@@ -247,3 +247,46 @@ fn trace_keeps_text_state_capabilities_unavailable() {
     fs::remove_file(path).unwrap();
     fs::remove_dir(root).unwrap();
 }
+
+#[test]
+fn natsuuta_logical_text_creation_stores_the_scripted_size() {
+    let profile = cmvs_rs::profile::Registry::builtin()
+        .profile("cmvs-20100314")
+        .unwrap();
+    let semantics = profile.semantics(0x11c);
+    assert!(matches!(semantics, Semantics::Variant(_)));
+    assert!(dispatch::uses_message_state(0x11c));
+    let mut state = State::default();
+    let mut code = vec![];
+    command(&mut code, 0x211c, &[1, 0, 0, 1280, 960]);
+    let created = script(&code);
+    let mut vm = Machine::new(&created).unwrap();
+    pending(&mut vm);
+    assert_eq!(
+        dispatch::run(semantics, &mut vm, &mut state.hosts()).unwrap(),
+        Some(Flow::Done)
+    );
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(1));
+    assert_eq!(state.messages.text(1).unwrap().logical_size, [1280, 960]);
+
+    for size in [[0, 960], [1280, u32::MAX]] {
+        let mut state = State::default();
+        let mut code = vec![];
+        command(&mut code, 0x211c, &[1, 0, 0, size[0], size[1]]);
+        let invalid = script(&code);
+        let mut vm = Machine::new(&invalid).unwrap();
+        pending(&mut vm);
+        let before = state.snapshot();
+        assert!(dispatch::run(semantics, &mut vm, &mut state.hosts()).is_err());
+        assert_eq!(state.snapshot(), before);
+        assert_eq!(vm.stack().len_bytes(), 20);
+    }
+    // Without the binding the root table has no 0x211c entry.
+    let mut vm = Machine::new(&created).unwrap();
+    pending(&mut vm);
+    assert_eq!(
+        dispatch::run(Semantics::Root, &mut vm, &mut State::default().hosts()).unwrap(),
+        None
+    );
+}

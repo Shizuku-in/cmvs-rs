@@ -3,13 +3,12 @@
 use crate::{FormatError, MAX_PAYLOAD};
 use std::sync::{Arc, OnceLock};
 
-#[derive(Debug)]
 struct ImageData {
     pixels: Vec<u8>,
     content_digest: OnceLock<[u8; 32]>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct RgbaImage {
     width: u32,
     height: u32,
@@ -28,6 +27,18 @@ pub enum CacheKey {
     /// One decoded movie frame and its clones. Hashing it would cost more than the
     /// decode, and no other image shares its content.
     Frame(u64),
+}
+/// Omits the lazily cached digest and the process-unique frame identity, so equal state
+/// formats identically across runs in one process.
+impl std::fmt::Debug for RgbaImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RgbaImage")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("pixels", &self.data.pixels)
+            .field("movie_frame", &self.frame.is_some())
+            .finish()
+    }
 }
 impl PartialEq for RgbaImage {
     fn eq(&self, other: &Self) -> bool {

@@ -14,8 +14,8 @@ mod change;
 mod child_slots;
 mod image_effect;
 mod mask;
-mod opacity;
-mod position_motion;
+pub(crate) mod opacity;
+pub(crate) mod position_motion;
 mod quake;
 mod rotation;
 mod scale_motion;
@@ -386,20 +386,25 @@ impl SceneHost {
     pub fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
         Self {
             child_slots: ChildSlots::for_profile(profile),
-            collision_x87_arithmetic: profile.is_inspected_20090815(),
+            collision_x87_arithmetic: profile.is_inspected_20090815()
+                || profile.is_inspected_20100314(),
             allow_filter_mode_one: profile.is_inspected_20071117()
-                || profile.is_inspected_20090815(),
+                || profile.is_inspected_20090815()
+                || profile.is_inspected_20100314(),
             allow_rotation_hold: profile.is_inspected_20070119(),
-            allow_logical_screen_scale: profile.is_inspected_20101211(),
+            allow_logical_screen_scale: profile.is_inspected_20101211()
+                || profile.is_inspected_20100314(),
             legacy_world_motion: profile.is_inspected_20070119(),
             allow_legacy_sine_modes: profile.uses_legacy_sine_modes(),
             allow_screen_coordinates_one: profile.is_inspected_20070119()
                 || profile.is_inspected_20080719()
                 || profile.is_inspected_20080903()
-                || profile.is_inspected_20090815(),
+                || profile.is_inspected_20090815()
+                || profile.is_inspected_20100314(),
             allow_projected_parent_rotation: profile.is_inspected_20080719(),
             allow_triangle_quake: profile.is_inspected_20080719()
-                || profile.is_inspected_20090815(),
+                || profile.is_inspected_20090815()
+                || profile.is_inspected_20100314(),
             allow_stand_change_table: profile.is_inspected_20070119(),
             allow_legacy_triangle_quake: profile.is_inspected_20070119(),
             ..Self::default()

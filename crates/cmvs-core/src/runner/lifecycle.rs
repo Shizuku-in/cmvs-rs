@@ -49,7 +49,7 @@ impl<'a> Startup<'a> {
         self.scene = crate::scene::SceneHost::for_profile(self.gate.selection().profile);
         self.scene.set_screen_size(screen_size);
         self.camera.reset();
-        self.buttons = Default::default();
+        self.buttons = crate::buttons::ButtonHost::for_profile(self.gate.selection().profile);
         self.buttons.set_screen_size(screen_size);
         self.movies.restore(Default::default());
         self.messages.reset_objects();

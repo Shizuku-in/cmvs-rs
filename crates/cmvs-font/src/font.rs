@@ -420,21 +420,37 @@ impl FontRenderer {
             .filter_map(|i| messages.text(i))
             .filter(|t| t.visible && !t.glyphs.is_empty())
         {
-            if text.logical_size != messages.screen_size().map(|v| v as i32) {
-                return Err(FormatError(
-                    "font preview requires text coordinates matching the logical screen",
-                ));
-            }
             let scale = f32::from_bits(text.scale_bits);
             if !scale.is_finite() || scale < 0.0 {
                 return Err(FormatError(
                     "font preview requires finite nonnegative scale",
                 ));
             }
+            // A text created with its own logical size (NATSUUTA 0x211c) is drawn in that
+            // space; as for logically scaled scene objects, the device over logical width
+            // scales both axes, including the anchor. Other builds keep refusing it.
+            let screen = messages.screen_size();
+            let ratio = if text.logical_size == screen.map(|v| v as i32) {
+                1.0
+            } else if !messages.allows_logical_text_scale() {
+                return Err(FormatError(
+                    "font preview requires text coordinates matching the logical screen",
+                ));
+            } else if text.logical_size[0] > 0 {
+                screen[0] as f32 / text.logical_size[0] as f32
+            } else {
+                return Err(FormatError(
+                    "font preview requires a positive logical text width",
+                ));
+            };
             let mut parent_draw = DrawState::default();
-            parent_draw.words[8..10].copy_from_slice(&text.position.map(|v| v as u32));
+            parent_draw.words[8..10].copy_from_slice(
+                &text
+                    .position
+                    .map(|v| (v as f32 * ratio).round() as i32 as u32),
+            );
             parent_draw.words[10] = text.layer as u32;
-            parent_draw.words[18..20].fill(text.scale_bits);
+            parent_draw.words[18..20].fill((scale * ratio).to_bits());
             // The original text scene object owns attached glyph children. Scaling
             // acts on their relative positions and padded cells, not the text anchor.
             let mut parent = SceneObject {

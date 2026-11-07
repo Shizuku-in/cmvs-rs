@@ -164,6 +164,11 @@ pub fn snapshot_layout_supported(profile: &crate::profile::EngineProfile) -> boo
     snapshot_layout(profile).is_some()
 }
 
+/// The gameplay snapshot layout of an inspected build, for decoding its saves offline.
+pub fn snapshot_layout_for(profile: &crate::profile::EngineProfile) -> Option<SnapshotLayout> {
+    snapshot_layout(profile)
+}
+
 fn inspected_20120309(profile: &crate::profile::EngineProfile) -> bool {
     profile.id == "cmvs-20120309"
         && profile
@@ -197,6 +202,9 @@ fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLa
     }
     if profile.is_inspected_20090815() {
         return Some(SnapshotLayout::TextV1SceneV2Collision);
+    }
+    if profile.is_inspected_20100314() {
+        return Some(SnapshotLayout::TextV2WindowV2);
     }
     if profile.is_inspected_20080719() || profile.is_inspected_20080903() {
         return Some(SnapshotLayout::TextV1SceneV2);
@@ -254,6 +262,7 @@ fn effect_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
     }
     (matches!(profile.id.as_str(), "cmvs-20110525" | "cmvs-20171114")
         || profile.is_inspected_20090815()
+        || profile.is_inspected_20100314()
         || profile.is_inspected_20080719()
         || profile.is_inspected_20080903()
         || inspected_20120309(profile)
@@ -292,8 +301,8 @@ fn effect_record_supported(profile: &crate::profile::EngineProfile, body: &[u8])
                 && (0x50..=0x57).contains(&body[2])
                 && body[3] == 0;
     }
-    if profile.is_inspected_20090815() {
-        // Writer 0x425740 / reader 0x425850: types 6 and 7 share the 48-byte template;
+    if profile.is_inspected_20090815() || profile.is_inspected_20100314() {
+        // Writer 0x425740 (NATSUUTA 0x427530 is the same code) / reader 0x425850: types 6 and 7 share the 48-byte template;
         // type 2 stores six words from object +12.
         return body.len() == 52 && matches!(body.get(..4), Some([1, 0, 6 | 7, 0]))
             || body.len() == 60 && body.get(..4) == Some(&[1, 0, 2, 0]);
@@ -392,7 +401,7 @@ impl Startup<'_> {
         snapshot: &EngineSnapshot,
         layout: SnapshotLayout,
     ) -> Result<(), Box<dyn Error>> {
-        if layout.text_version() == 1 {
+        if layout.old_tables() {
             if snapshot.effects[2].is_some() {
                 return Err("old mask snapshot records are not implemented".into());
             }
@@ -539,7 +548,7 @@ impl Startup<'_> {
                 self.scene.saved_mask(),
                 self.scene.saved_strip(),
             ],
-            record_6e0: if layout.text_version() == 1 {
+            record_6e0: if layout.old_tables() {
                 if self.sequence.saved()? != crate::sequence::SequenceHost::default().saved()? {
                     return Err("sequence state has no v1 snapshot representation".into());
                 }
@@ -925,7 +934,8 @@ impl Startup<'_> {
             &mut restored_random,
             &mut budget,
             self.gate.selection().profile.is_inspected_20080719()
-                || self.gate.selection().profile.is_inspected_20090815(),
+                || self.gate.selection().profile.is_inspected_20090815()
+                || self.gate.selection().profile.is_inspected_20100314(),
         )?;
         // Records 0x8e8 follow 0x700 and bind to the objects just rebuilt.
         let movie_records: Vec<_> = snapshot
@@ -962,7 +972,7 @@ impl Startup<'_> {
         let mut history = self.history.clone();
         history.restore(&snapshot.raw_objects[&(0x540, 0)])?;
         let mut sequence = self.sequence.clone();
-        if layout.text_version() == 1 {
+        if layout.old_tables() {
             sequence = crate::sequence::SequenceHost::default();
         } else {
             sequence.restore(&snapshot.record_6e0)?;
@@ -1263,6 +1273,7 @@ mod layout_tests {
             ("cmvs-20080719", SnapshotLayout::TextV1SceneV2),
             ("cmvs-20080903", SnapshotLayout::TextV1SceneV2),
             ("cmvs-20090815", SnapshotLayout::TextV1SceneV2Collision),
+            ("cmvs-20100314", SnapshotLayout::TextV2WindowV2),
             ("cmvs-20101211", SnapshotLayout::TextV2),
             ("cmvs-20110525", SnapshotLayout::TextV2),
             ("cmvs-20120309", SnapshotLayout::TextV2),
@@ -1282,6 +1293,7 @@ mod layout_tests {
                 matches!(
                     id,
                     "cmvs-20090815"
+                        | "cmvs-20100314"
                         | "cmvs-20080719"
                         | "cmvs-20080903"
                         | "cmvs-20110525"

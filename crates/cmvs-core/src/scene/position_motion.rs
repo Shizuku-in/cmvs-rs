@@ -1,5 +1,5 @@
 //! Integer XY motion at DrawState +144 (0x21f4..0x21f8), bound to the documented binary.
-use super::SceneHost;
+use super::{DrawState, SceneHost};
 use crate::{bytecode::DecodeError, dispatch::Call, evaluate::error};
 pub const POSITION_KEYS: usize = 16;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -98,6 +98,67 @@ fn sine(angle: i32, amplitude: i32) -> i32 {
     };
     (radians.sin() * f64::from(amplitude)) as i32
 }
+/// Validation shared by scene 0x21f4..0x21f8 and the window variant 0x21d4..0x21d6:
+/// `command` is the scene offset 0x1f4..0x1f8 and `args[2..]` follow the two target words.
+pub(crate) fn check(draw: &DrawState, command: u16, args: &[u32; 8]) -> Result<(), &'static str> {
+    if draw.position_motion.is_some() {
+        if matches!(command, 0x1f5 | 0x1f6) && args[2] >= POSITION_KEYS as u32 {
+            return Err("position motion key outside 0..15");
+        }
+        if command == 0x1f5 {
+            if (args[3] as i32) >= POSITION_KEYS as i32 {
+                return Err("position motion next key outside 0..15");
+            }
+            if !PositionMotion::supported(args[4]) {
+                return Err("position motion interpolation mode is not implemented");
+            }
+            if args[5] > i32::MAX as u32 {
+                return Err("position motion duration exceeds verified signed range");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Applies a checked command after the caller completed it; 0x1f8 writes system result 0.
+pub(crate) fn apply(draw: &mut DrawState, command: u16, args: &[u32; 8], call: &mut Call<'_, '_>) {
+    match command {
+        0x1f4 => draw.position_motion = Some(Box::default()),
+        0x1f5 => {
+            if let Some(m) = draw.position_motion.as_mut() {
+                m.keys[args[2] as usize] = PositionKey {
+                    next: args[3] as i32,
+                    xy: [args[6] as i16, args[7] as i16],
+                    mode: args[4],
+                    duration: args[5],
+                };
+            }
+        }
+        0x1f6 => {
+            if let Some(m) = draw.position_motion.as_mut() {
+                m.start(&draw.words, args[2]);
+            }
+        }
+        0x1f7 => {
+            if let Some(m) = draw.position_motion.take()
+                && let Some(p) = m.playback
+            {
+                draw.words[8..10]
+                    .copy_from_slice(&m.keys[p.current as usize].xy.map(|v| i32::from(v) as u32));
+            }
+        }
+        _ => {
+            let value = draw.position_motion.as_ref().map_or(u32::MAX, |m| {
+                m.playback.as_ref().map_or(u32::MAX - 1, |p| p.current)
+            });
+            call.vm
+                .state_mut()
+                .set_system_integer(0, value)
+                .expect("result exists");
+        }
+    }
+}
+
 impl SceneHost {
     pub(super) fn handle_position_motion(
         &mut self,
@@ -137,26 +198,7 @@ impl SceneHost {
             .draw
             .as_ref()
             .ok_or_else(|| fail("position motion target has no draw state"))?;
-        if draw.position_motion.is_some() {
-            if matches!(command, 0x1f5 | 0x1f6) && args[2] >= POSITION_KEYS as u32 {
-                return Err(fail("position motion key outside 0..15"));
-            }
-            if command == 0x1f5 {
-                if (args[3] as i32) >= POSITION_KEYS as i32 {
-                    return Err(fail("position motion next key outside 0..15"));
-                }
-                if !PositionMotion::supported(args[4]) {
-                    return Err(fail(
-                        "position motion interpolation mode is not implemented",
-                    ));
-                }
-                if args[5] > i32::MAX as u32 {
-                    return Err(fail(
-                        "position motion duration exceeds verified signed range",
-                    ));
-                }
-            }
-        }
+        check(draw, command, &args).map_err(fail)?;
         call.complete(0x4000 | (count * 4) as u16)?;
         let parent = self.objects.get_mut(&slot).expect("validated parent");
         let object = match child {
@@ -164,42 +206,7 @@ impl SceneHost {
             None => parent,
         };
         let draw = object.draw.as_mut().expect("validated draw");
-        match command {
-            0x1f4 => draw.position_motion = Some(Box::default()),
-            0x1f5 => {
-                if let Some(m) = draw.position_motion.as_mut() {
-                    m.keys[args[2] as usize] = PositionKey {
-                        next: args[3] as i32,
-                        xy: [args[6] as i16, args[7] as i16],
-                        mode: args[4],
-                        duration: args[5],
-                    };
-                }
-            }
-            0x1f6 => {
-                if let Some(m) = draw.position_motion.as_mut() {
-                    m.start(&draw.words, args[2]);
-                }
-            }
-            0x1f7 => {
-                if let Some(m) = draw.position_motion.take()
-                    && let Some(p) = m.playback
-                {
-                    draw.words[8..10].copy_from_slice(
-                        &m.keys[p.current as usize].xy.map(|v| i32::from(v) as u32),
-                    );
-                }
-            }
-            _ => {
-                let value = draw.position_motion.as_ref().map_or(u32::MAX, |m| {
-                    m.playback.as_ref().map_or(u32::MAX - 1, |p| p.current)
-                });
-                call.vm
-                    .state_mut()
-                    .set_system_integer(0, value)
-                    .expect("result exists");
-            }
-        }
+        apply(draw, command, &args, call);
         Ok(())
     }
 }

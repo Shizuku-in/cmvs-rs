@@ -16,6 +16,7 @@ impl ChildSlots {
             || profile.is_inspected_20071117()
             || profile.is_inspected_20080903()
             || profile.is_inspected_20090815()
+            || profile.is_inspected_20100314()
             || profile.is_inspected_20101211()
         {
             return Self::Slots256;

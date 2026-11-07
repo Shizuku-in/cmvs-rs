@@ -46,7 +46,8 @@ mod preferences;
 mod save;
 mod slot_edit;
 pub use save::{
-    SaveTime, save_time_from_unix, snapshot_layout_supported, thumbnail_bmp, utc_save_time,
+    SaveTime, save_time_from_unix, snapshot_layout_for, snapshot_layout_supported, thumbnail_bmp,
+    utc_save_time,
 };
 
 enum SystemOutput {
@@ -200,7 +201,7 @@ impl<'a> Startup<'a> {
         let screen_size = configuration.screen_size_for_profile(game.selection.profile)?;
         let mut scene = SceneHost::for_profile(game.selection.profile);
         scene.set_screen_size(screen_size);
-        let mut buttons = ButtonHost::default();
+        let mut buttons = ButtonHost::for_profile(game.selection.profile);
         buttons.set_screen_size(screen_size);
         let mut camera = CameraHost::for_profile(game.selection.profile);
         camera.set_screen_size(screen_size);
@@ -256,7 +257,7 @@ impl<'a> Startup<'a> {
             platform,
             scene,
             buttons,
-            movies: MovieHost::default(),
+            movies: MovieHost::for_profile(game.selection.profile),
             scene_movies: ResourceArchives::new(root)?,
             root: fs::canonicalize(root)?,
             sequence: SequenceHost::default(),

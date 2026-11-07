@@ -216,6 +216,9 @@ pub struct MessageHost {
     /// Inspected 2007 text creation uses eight slots and accepts explicit faces.
     legacy_text_creation: bool,
     named_text_faces: bool,
+    /// NATSUUTA 0x211c texts drawn in their own logical space; other builds refuse to
+    /// render a text whose logical size differs from the screen.
+    logical_text_scale: bool,
     screen_size: crate::viewport::ScreenSize,
     /// State owned by the separately dispatched font-cell text implementation.
     font_cells: font_cells::State,
@@ -248,17 +251,23 @@ impl MessageHost {
             || profile.is_inspected_20071117()
             || profile.is_inspected_20080719()
             || profile.is_inspected_20080903()
-            || profile.is_inspected_20090815();
+            || profile.is_inspected_20090815()
+            || profile.is_inspected_20100314();
         Self {
             child_slots: crate::scene::ChildSlots::for_profile(profile),
             legacy_text_creation,
             named_text_faces: legacy_text_creation || profile.is_inspected_20101211(),
+            logical_text_scale: profile.is_inspected_20100314(),
             ..Self::default()
         }
     }
 
     pub fn screen_size(&self) -> [u32; 2] {
         self.screen_size.pixels()
+    }
+    /// Whether texts with a logical size other than the screen may be scaled to it.
+    pub fn allows_logical_text_scale(&self) -> bool {
+        self.logical_text_scale
     }
     pub(crate) fn set_screen_size(&mut self, size: crate::viewport::ScreenSize) {
         self.screen_size = size;
@@ -575,7 +584,7 @@ impl MessageHost {
     pub(crate) fn handle_text_state(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         match command {
-            0x100 => return self.create_text(call),
+            0x100 | 0x11c => return self.create_text(call),
             0x101..=0x107 | 0x10c..=0x110 | 0x113 | 0x11a => return self.text_setter(call),
             0x114..=0x117 | 0x11e => return self.text_command(call),
             0x112 => return self.measure_layout(call),
@@ -694,6 +703,8 @@ impl MessageHost {
             0x14a | 0x15a => self.window_text(call),
             0x1cf..=0x1d1 => self.animation(call),
             0x1c0..=0x1c2 => self.scale_motion(call),
+            0x1d4..=0x1d6 => self.position_motion(call),
+            0x1ca..=0x1cc => self.opacity_track(call),
             _ => Err(call.error("unregistered window command")),
         }
     }
@@ -812,15 +823,13 @@ impl MessageHost {
     /// only set +8108 bit 0x10000 in the original and are errors here.
     fn scale_motion(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
         use crate::scene::{SCALE_KEYS, ScaleKey, ScaleMotion, ScalePlayback};
-        let (pc, command) = (call.pc, call.command);
-        let op = command + 0x2000;
-        let fail = |why| error(pc, op, why);
+        let command = call.command;
         let count = match command {
             0x1c0 => 4,
             0x1c1 => 8,
             _ => 3,
         };
-        const NAMES: [&str; 8] = [
+        let names = [
             "window slot",
             "child slot",
             "first argument",
@@ -830,41 +839,23 @@ impl MessageHost {
             "target x",
             "target y",
         ];
-        let mut args = [0u32; 8];
-        for (i, arg) in args.iter_mut().take(count).enumerate() {
-            *arg = call.argument((i + 1) * 4, NAMES[i])?;
-        }
-        if args[0] >= 4 {
-            return Err(fail("window scale motion slot outside this build's 0..3"));
-        }
-        let slot = args[0] as usize;
-        let children = self.child_slots.count();
-        let draw = self.windows[slot]
-            .as_ref()
-            .and_then(|window| window_target(&window.object, args[1] as i32, children))
-            .ok_or_else(|| fail("message window or window child does not exist"))?
-            .draw
-            .as_ref()
-            .ok_or_else(|| fail("window scale motion target has no draw state"))?;
-        if draw.scale_motion.is_some() {
-            if command != 0x1c0 && args[2] >= SCALE_KEYS as u32 {
-                return Err(fail("scale key outside 0..7"));
-            }
-            if command == 0x1c1 {
-                if (args[3] as i32) >= SCALE_KEYS as i32 {
-                    return Err(fail("next scale key outside 0..7"));
+        let check = |draw: &DrawState, args: &[u32; 8]| {
+            if draw.scale_motion.is_some() {
+                if command != 0x1c0 && args[2] >= SCALE_KEYS as u32 {
+                    return Err("scale key outside 0..7");
                 }
-                if !matches!(args[4] as u8, 0 | 1) {
-                    return Err(fail("scale motion mode not implemented"));
+                if command == 0x1c1 {
+                    if (args[3] as i32) >= SCALE_KEYS as i32 {
+                        return Err("next scale key outside 0..7");
+                    }
+                    if !matches!(args[4] as u8, 0 | 1) {
+                        return Err("scale motion mode not implemented");
+                    }
                 }
             }
-        }
-        call.complete(0x4000 | (count * 4) as u16)?;
-        let window = self.windows[slot].as_mut().expect("validated window");
-        let draw = window_target_mut(&mut window.object, args[1] as i32, children)
-            .and_then(|target| target.draw.as_mut())
-            .expect("validated draw state");
-        match command {
+            Ok(())
+        };
+        let apply = |draw: &mut DrawState, args: &[u32; 8], _: &mut Call<'_, '_>| match command {
             0x1c0 => {
                 draw.scale_motion = Some(Box::new(ScaleMotion {
                     base: [args[2], args[3]],
@@ -891,7 +882,124 @@ impl MessageHost {
                     });
                 }
             }
+        };
+        self.window_draw_track(
+            call,
+            names,
+            count,
+            [
+                "window scale motion slot outside this build's 0..3",
+                "window scale motion target has no draw state",
+            ],
+            check,
+            apply,
+        )
+    }
+    /// NATSUUTA 0x21d4..0x21d6 / 0x452fb0, 0x453010, 0x4530c0: the window form of scene
+    /// 0x21f4..0x21f6 (0x44c980..0x44cad0). SP-4 window below 4, SP-8 child through 0x43d1a0
+    /// (negative = the window object), then the scene commands' remaining words in the same
+    /// order to the same draw +0x80 helpers (0x4128e0 create, 0x4129f0 key, start). Missing
+    /// windows or children only set +0x2860 bit 0x10000 in the original and are errors here.
+    fn position_motion(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        use crate::scene::position_motion;
+        let scene_command = call.command + 0x20;
+        let count = match call.command {
+            0x1d5 => 8,
+            0x1d6 => 3,
+            _ => 2,
+        };
+        let names = [
+            "window slot",
+            "child slot",
+            "key",
+            "next key",
+            "mode",
+            "duration",
+            "target x",
+            "target y",
+        ];
+        self.window_draw_track(
+            call,
+            names,
+            count,
+            [
+                "window position motion slot outside this build's 0..3",
+                "window position motion target has no draw state",
+            ],
+            |draw, args| position_motion::check(draw, scene_command, args),
+            |draw, args, call| position_motion::apply(draw, scene_command, args, call),
+        )
+    }
+    /// NATSUUTA 0x21ca..0x21cc / 0x452c10, 0x452c70, 0x452d00: the window form of scene
+    /// 0x21ea..0x21ec (0x44c3d0..0x44c510). SP-4 window below 4, SP-8 child through 0x43d1a0
+    /// (negative = the window object), then the scene commands' remaining words in the same
+    /// order to the same draw helpers (0x4126a0 create, 0x412780 key, 0x412770 start).
+    /// Missing windows or children only set +0x2860 bit 0x10000 and are errors here.
+    fn opacity_track(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        use crate::scene::opacity;
+        let scene_command = call.command + 0x20;
+        let count = if call.command == 0x1cb { 7 } else { 3 };
+        let names = [
+            "window slot",
+            "child slot",
+            "key or base",
+            "next key",
+            "hold",
+            "duration",
+            "value",
+        ];
+        let signed = |args: &[u32; 7]| args.map(|a| a as i32);
+        self.window_draw_track(
+            call,
+            names,
+            count,
+            [
+                "window opacity track slot outside this build's 0..3",
+                "window opacity track target has no draw state",
+            ],
+            |_, args| opacity::check(scene_command, &signed(args)),
+            |draw, args, call| opacity::apply(draw, scene_command, &signed(args), call),
+        )
+    }
+    /// Shared shape of the window draw-track commands above: read the first `count`
+    /// words from SP-4, check the window slot (below 4) and the child selected by
+    /// 0x43d1a0/0x429070 (negative = the window object), require a draw state, run the
+    /// command's own check, pop `count` words, and apply to the same target. The original
+    /// only sets the window host's bit 0x10000 for missing windows or children.
+    fn window_draw_track<const N: usize>(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        names: [&'static str; N],
+        count: usize,
+        [slot_error, draw_error]: [&'static str; 2],
+        check: impl FnOnce(&DrawState, &[u32; N]) -> Result<(), &'static str>,
+        apply: impl FnOnce(&mut DrawState, &[u32; N], &mut Call<'_, '_>),
+    ) -> Result<(), DecodeError> {
+        let (pc, op) = (call.pc, call.command + 0x2000);
+        let fail = |why| error(pc, op, why);
+        let mut args = [0u32; N];
+        for (i, arg) in args.iter_mut().take(count).enumerate() {
+            *arg = call.argument((i + 1) * 4, names[i])?;
         }
+        if args[0] >= 4 {
+            return Err(fail(slot_error));
+        }
+        let (slot, child) = (args[0] as usize, args[1] as i32);
+        let children = self.child_slots.count();
+        let draw = self.windows[slot]
+            .as_ref()
+            .and_then(|window| window_target(&window.object, child, children))
+            .ok_or_else(|| fail("message window or window child does not exist"))?
+            .draw
+            .as_ref()
+            .ok_or_else(|| fail(draw_error))?;
+        check(draw, &args).map_err(fail)?;
+        call.complete(0x4000 | (count * 4) as u16)?;
+        let window = self.windows[slot].as_mut().expect("validated window");
+        let draw = window_target_mut(&mut window.object, child, children)
+            .and_then(|target| target.draw.as_mut())
+            .expect("validated draw state");
+        apply(draw, &args, call);
         Ok(())
     }
     /// 0x2178 / 0x140077180 (0x14005d2a0) and 0x217f / 0x1400773d0: SP-4 window slot, SP-8
@@ -1139,11 +1247,12 @@ impl MessageHost {
     /// Replacing a text object a window caches (+2528) would leave that window stale.
     fn create_text(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
         let pc = call.pc;
+        let op = call.command + 0x2000;
         let index = call.argument(4, text_argument_names(call.command)[0])? as i32;
         if index < 0 {
             return Err(error(
                 pc,
-                0x2100,
+                op,
                 "negative text object index indexes before the table",
             ));
         }
@@ -1157,31 +1266,49 @@ impl MessageHost {
         {
             return Err(error(
                 pc,
-                0x2100,
+                op,
                 "text object index outside the selected table sets an unmodeled flag",
             ));
         }
         let reference = call.argument(8, text_argument_names(call.command)[1])?;
         let requested_face = call.vm.resolve_string(reference)?;
         if !requested_face.is_empty() && !self.named_text_faces {
-            return Err(error(pc, 0x2100, "font face selection is not modeled"));
+            return Err(error(pc, op, "font face selection is not modeled"));
         }
         let glyph_capacity = call.argument(12, text_argument_names(call.command)[2])?;
         if !matches!(glyph_capacity, 0 | 196) {
             return Err(error(
                 pc,
-                0x2100,
+                op,
                 "glyph texture capacity other than 0 or 196 is not modeled",
             ));
         }
         if (0..MESSAGE_WINDOWS).any(|slot| self.window(slot).is_some_and(|w| w.text == index)) {
             return Err(error(
                 pc,
-                0x2100,
+                op,
                 "replacing a text object a window uses leaves a dangling pointer",
             ));
         }
-        call.complete(0x400c)?;
+        // NATSUUTA 0x211c / 0x44f7a0 is 0x2100 (0x44f610) with SP-16/SP-20 as the logical
+        // size the constructor receives in place of the configured screen size; 0x4014.
+        let logical_size = if call.command == 0x11c {
+            let size = [
+                call.argument(16, text_argument_names(call.command)[3])? as i32,
+                call.argument(20, text_argument_names(call.command)[4])? as i32,
+            ];
+            if size.iter().any(|&v| v <= 0) {
+                return Err(error(pc, op, "text logical size must be positive"));
+            }
+            size
+        } else {
+            self.screen_size().map(|v| v as i32)
+        };
+        call.complete(if call.command == 0x11c {
+            0x4014
+        } else {
+            0x400c
+        })?;
         call.vm
             .state_mut()
             .set_system_integer(0, 1)
@@ -1201,7 +1328,7 @@ impl MessageHost {
             bold: self.font_bold[index],
             revision_alpha: self.output_settings.revision_alpha,
             scale_bits: 1.0f32.to_bits(),
-            logical_size: self.screen_size().map(|v| v as i32),
+            logical_size,
             position: [0, 0],
             area: [0; 4],
             cursor: [0, 0],
@@ -2528,6 +2655,13 @@ fn is_text_state_command(command: u16) -> bool {
 pub(super) fn text_argument_names(command: u16) -> &'static [&'static str] {
     match command {
         0x100 => &["text slot", "font face", "glyph capacity"],
+        0x11c => &[
+            "text slot",
+            "font face",
+            "glyph capacity",
+            "logical width",
+            "logical height",
+        ],
         0x101 | 0x104 => &["text slot"],
         0x102 | 0x10c => &["text slot", "x", "y"],
         0x103 => &["text slot", "left", "top", "right", "bottom"],

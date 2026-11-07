@@ -1,5 +1,5 @@
 //! Draw-state opacity track; addresses refer to the documented binary hash.
-use super::{ANIMATION_FRAMES, SceneHost};
+use super::{ANIMATION_FRAMES, DrawState, SceneHost};
 use crate::{bytecode::DecodeError, dispatch::Call, evaluate::error};
 
 /// Keys in the 0x94-byte opacity track (0x1400267a0 zeroes them all).
@@ -68,6 +68,73 @@ impl OpacityTrack {
     }
 }
 
+/// Key bounds shared by scene 0x21ea..0x21ee and the window variant 0x21ca..0x21cc:
+/// `command` is the scene offset and `args[2..]` follow the two target words.
+pub(crate) fn check(command: u16, args: &[i32; 7]) -> Result<(), &'static str> {
+    let [_, _, a, b, ..] = *args;
+    let key_ok = |index: i32| usize::try_from(index).is_ok_and(|i| i < OPACITY_KEYS);
+    if (matches!(command, 0x1eb | 0x1ec) && !key_ok(a))
+        || (command == 0x1eb && b >= 0 && !key_ok(b))
+    {
+        return Err("opacity key outside 0..7 leaves the original track");
+    }
+    Ok(())
+}
+
+/// Applies a checked command after the caller completed it; 0x1ee writes system result 0.
+pub(crate) fn apply(draw: &mut DrawState, command: u16, args: &[i32; 7], call: &mut Call<'_, '_>) {
+    let [_, _, a, b, c, d, e] = *args;
+    let magnitude = |value: i32| value.wrapping_abs() % 256;
+    match command {
+        0x1ea => {
+            draw.opacity_track = Some(Box::new(OpacityTrack {
+                playing: false,
+                base: magnitude(a),
+                start: 0,
+                current: 0,
+                elapsed: 0,
+                keys: [OpacityKey::default(); OPACITY_KEYS],
+            }));
+        }
+        0x1eb => {
+            if let Some(track) = draw.opacity_track.as_deref_mut() {
+                track.keys[a as usize] = OpacityKey {
+                    next: b,
+                    value: magnitude(e),
+                    hold: c as u32,
+                    duration: d as u32,
+                };
+            }
+        }
+        0x1ec => {
+            if let Some(track) = draw.opacity_track.as_deref_mut() {
+                track.playing = true;
+                track.start = a as u32;
+                track.current = a as u32;
+                track.elapsed = 0;
+            }
+        }
+        0x1ed => {
+            if let Some(track) = draw.opacity_track.take()
+                && track.playing
+            {
+                draw.words[17] = track.keys[track.current as usize].value as u32;
+            }
+        }
+        _ => {
+            let result = match draw.opacity_track.as_deref() {
+                None => u32::MAX,
+                Some(track) if !track.playing => u32::MAX - 1,
+                Some(track) => track.current,
+            };
+            call.vm
+                .state_mut()
+                .set_system_integer(0, result)
+                .expect("slot 0 exists");
+        }
+    }
+}
+
 impl SceneHost {
     /// The opacity track family 0x21ea..0x21ee (0x14006e260..0x14006e500): SP-4 slot (signed
     /// < 256 with an object, otherwise +12056 bit 0x10), SP-8 child (>= 768 sets bit 0x20,
@@ -94,7 +161,7 @@ impl SceneHost {
         for (i, arg) in args.iter_mut().take(count + 2).enumerate() {
             *arg = call.argument(4 + 4 * i, super::argument_names(call.command)[i])? as i32;
         }
-        let [slot, child, a, b, c, d, e] = args;
+        let [slot, child, ..] = args;
         let slot = u8::try_from(slot)
             .ok()
             .filter(|slot| self.objects.contains_key(slot))
@@ -115,16 +182,7 @@ impl SceneHost {
                 ));
             }
         };
-        let key_ok = |index: i32| usize::try_from(index).is_ok_and(|i| i < OPACITY_KEYS);
-        if (matches!(command, 0x1eb | 0x1ec) && !key_ok(a))
-            || (command == 0x1eb && b >= 0 && !key_ok(b))
-        {
-            return Err(error(
-                pc,
-                op,
-                "opacity key outside 0..7 leaves the original track",
-            ));
-        }
+        check(command, &args).map_err(|why| error(pc, op, why))?;
         let parent = self.objects.get_mut(&slot).expect("checked above");
         let object = match child {
             Some(id) => parent.children.get_mut(&id).expect("checked above"),
@@ -135,55 +193,7 @@ impl SceneHost {
             .as_mut()
             .ok_or_else(|| error(pc, op, "effect target has no draw state"))?;
         call.complete(0x4008 + 4 * count as u16)?;
-        let magnitude = |value: i32| value.wrapping_abs() % 256;
-        match command {
-            0x1ea => {
-                draw.opacity_track = Some(Box::new(OpacityTrack {
-                    playing: false,
-                    base: magnitude(a),
-                    start: 0,
-                    current: 0,
-                    elapsed: 0,
-                    keys: [OpacityKey::default(); OPACITY_KEYS],
-                }));
-            }
-            0x1eb => {
-                if let Some(track) = draw.opacity_track.as_deref_mut() {
-                    track.keys[a as usize] = OpacityKey {
-                        next: b,
-                        value: magnitude(e),
-                        hold: c as u32,
-                        duration: d as u32,
-                    };
-                }
-            }
-            0x1ec => {
-                if let Some(track) = draw.opacity_track.as_deref_mut() {
-                    track.playing = true;
-                    track.start = a as u32;
-                    track.current = a as u32;
-                    track.elapsed = 0;
-                }
-            }
-            0x1ed => {
-                if let Some(track) = draw.opacity_track.take()
-                    && track.playing
-                {
-                    draw.words[17] = track.keys[track.current as usize].value as u32;
-                }
-            }
-            _ => {
-                let result = match draw.opacity_track.as_deref() {
-                    None => u32::MAX,
-                    Some(track) if !track.playing => u32::MAX - 1,
-                    Some(track) => track.current,
-                };
-                call.vm
-                    .state_mut()
-                    .set_system_integer(0, result)
-                    .expect("slot 0 exists");
-            }
-        }
+        apply(draw, command, &args, call);
         Ok(())
     }
 }

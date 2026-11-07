@@ -1014,6 +1014,24 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
             cmvs_rs::profile::Semantics::Variant(id)
         );
     }
+    let natsuuta = registry.profile("cmvs-20100314").unwrap();
+    assert_eq!(natsuuta.base.as_deref(), Some("cmvs-20160201"));
+    assert_eq!(natsuuta.binaries.len(), 1);
+    assert_eq!(natsuuta.statuses().len(), 864);
+    assert_eq!(natsuuta.count(CommandStatus::Unreviewed), 564);
+    assert_eq!(natsuuta.count(CommandStatus::NoOp), 300);
+    for (command, id) in [
+        (0x11c, cmvs_rs::profile::VariantId::LogicalText),
+        (0x1ca, cmvs_rs::profile::VariantId::WindowOpacityTrack),
+        (0x1d4, cmvs_rs::profile::VariantId::WindowPositionMotion),
+        (0x2a6, cmvs_rs::profile::VariantId::CollisionParticles),
+        (0x30d, cmvs_rs::profile::VariantId::MovieControl),
+    ] {
+        assert_eq!(
+            natsuuta.semantics(command),
+            cmvs_rs::profile::Semantics::Variant(id)
+        );
+    }
     let asunana = registry.profile("cmvs-20080903").unwrap();
     assert_eq!(asunana.base.as_deref(), Some("cmvs-20160201"));
     assert_eq!(asunana.binaries.len(), 1);
@@ -1079,6 +1097,7 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
             ("harouse", "cmvs-20080719", None),
             ("asunana", "cmvs-20080903", None),
             ("memoria", "cmvs-20090815", None),
+            ("natsuuta", "cmvs-20100314", None),
             ("hassaku", "cmvs-20101211", None),
             ("miranosu", "cmvs-20110525", None),
             ("kazokubu", "cmvs-20120309", None),

@@ -49,6 +49,9 @@ pub enum VariantId {
     ImageTables,
     ActivationPass,
     WindowScaleMotion,
+    WindowPositionMotion,
+    WindowOpacityTrack,
+    LogicalText,
     ViewMotion,
     WindowFullMove,
     LegacyEffects,
@@ -91,6 +94,9 @@ impl VariantId {
             "image-tables" => Some(Self::ImageTables),
             "activation-pass" => Some(Self::ActivationPass),
             "window-scale-motion" => Some(Self::WindowScaleMotion),
+            "window-position-motion" => Some(Self::WindowPositionMotion),
+            "window-opacity-track" => Some(Self::WindowOpacityTrack),
+            "logical-text" => Some(Self::LogicalText),
             "view-motion" => Some(Self::ViewMotion),
             "window-full-move" => Some(Self::WindowFullMove),
             "legacy-effects" => Some(Self::LegacyEffects),
@@ -134,6 +140,9 @@ impl VariantId {
             Self::ImageTables => "image-tables",
             Self::ActivationPass => "activation-pass",
             Self::WindowScaleMotion => "window-scale-motion",
+            Self::WindowPositionMotion => "window-position-motion",
+            Self::WindowOpacityTrack => "window-opacity-track",
+            Self::LogicalText => "logical-text",
             Self::ViewMotion => "view-motion",
             Self::WindowFullMove => "window-full-move",
             Self::LegacyEffects => "legacy-effects",
@@ -346,6 +355,7 @@ impl EngineProfile {
             || self.is_inspected_20080719()
             || self.is_inspected_20080903()
             || self.is_inspected_20090815()
+            || self.is_inspected_20100314()
     }
 
     /// Independently inspected Harouse build; capabilities still bind separately.
@@ -384,6 +394,20 @@ impl EngineProfile {
                 .binary(
                     &crate::digest::parse_hex(
                         "36fa780a5d2b8df4ac6a6e48a2f78708b79aa10d22eb575a5ae74742d902f71a",
+                    )
+                    .expect("static SHA-256"),
+                )
+                .is_some()
+    }
+
+    /// NATSUUTA x86 build, matched against MEMORIA function by function; docs/games/natsuuta.
+    pub(crate) fn is_inspected_20100314(&self) -> bool {
+        self.id == "cmvs-20100314"
+            && self.base.as_deref() == Some("cmvs-20160201")
+            && self
+                .binary(
+                    &crate::digest::parse_hex(
+                        "97575da34a284fa534084ca8452741e0e176650f3396308f92c2c8cf7ffc9bc8",
                     )
                     .expect("static SHA-256"),
                 )
@@ -619,12 +643,13 @@ pub struct Registry {
     contracts: BTreeMap<[u8; 32], ContractProof>,
 }
 
-const BUILTIN_PROFILES: [&str; 17] = [
+const BUILTIN_PROFILES: [&str; 18] = [
     include_str!("../profiles/cmvs-20070119.profile"),
     include_str!("../profiles/cmvs-20071117.profile"),
     include_str!("../profiles/cmvs-20080719.profile"),
     include_str!("../profiles/cmvs-20080903.profile"),
     include_str!("../profiles/cmvs-20090815.profile"),
+    include_str!("../profiles/cmvs-20100314.profile"),
     include_str!("../profiles/cmvs-20101211.profile"),
     include_str!("../profiles/cmvs-20110525.profile"),
     include_str!("../profiles/cmvs-20120309.profile"),

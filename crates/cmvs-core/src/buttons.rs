@@ -2,7 +2,8 @@
 //! to the documented binary hash. Covers groups, buttons, hit rectangles, navigation links,
 //! per-state images, the initial display of 0x2215, the hover/press/selection logic of
 //! 0x2216/0x2217 over `ActionInput`, 0x221a (make a button current) and 0x221b (a group with
-//! an explicit pointer scale). 0x2218/0x2219 stay unhandled.
+//! an explicit pointer scale, other than the device size only where inspected).
+//! 0x2218/0x2219 stay unhandled.
 //! Auxiliary list groups at engine +4552 are handled in `list`.
 use crate::{
     bytecode::DecodeError, dispatch::Call, evaluate::error, input::ActionInput, machine::Machine,
@@ -54,6 +55,30 @@ pub struct ButtonGroup {
     pub pressed_visual: bool,
     /// +64: button that was current when action 0 went down.
     pub press_target: Option<usize>,
+    /// Device size and 0x221b's script space, when they differ: NATSUUTA 0x43efa0 maps
+    /// the pointer to `scale * p / device` for the hit test and a navigation centre back
+    /// with `device * c / scale`, in wrapping 32-bit signed arithmetic.
+    pub pointer_scale: Option<[u32; 4]>,
+}
+impl ButtonGroup {
+    fn scaled(value: i32, numerator: u32, denominator: u32) -> i32 {
+        // Non-zero denominators are checked when the scale is set.
+        value.wrapping_mul(numerator as i32) / denominator as i32
+    }
+    /// A pointer position in the group's script coordinates.
+    fn to_script(&self, [x, y]: [i32; 2]) -> [i32; 2] {
+        match self.pointer_scale {
+            Some([w, h, sw, sh]) => [Self::scaled(x, sw, w), Self::scaled(y, sh, h)],
+            None => [x, y],
+        }
+    }
+    /// A script position as the pointer position the original warps to.
+    fn to_pointer(&self, [x, y]: [i32; 2]) -> [i32; 2] {
+        match self.pointer_scale {
+            Some([w, h, sw, sh]) => [Self::scaled(x, w, sw), Self::scaled(y, h, sh)],
+            None => [x, y],
+        }
+    }
 }
 
 /// 0x2217 results other than a selected id.
@@ -68,6 +93,8 @@ pub struct ButtonHost {
     lists: [Option<ListGroup>; 8],
     /// dword_140101448 (zero-filled .data tail), set only by 0x2087.
     merged_states: bool,
+    /// 0x221b may scale the pointer (NATSUUTA); other builds keep refusing it.
+    allow_pointer_scale: bool,
 }
 
 /// Writes button images to children of `object` with the 0x2044/0x2046 setters and, for
@@ -114,6 +141,13 @@ fn apply_images(
 impl ButtonHost {
     pub(crate) fn set_screen_size(&mut self, size: crate::viewport::ScreenSize) {
         self.screen_size = size;
+    }
+    /// A host for the selected build: only NATSUUTA's 0x221b scaling is inspected.
+    pub(crate) fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
+        Self {
+            allow_pointer_scale: profile.is_inspected_20100314(),
+            ..Self::default()
+        }
     }
     pub fn group(&self, slot: usize) -> Option<&ButtonGroup> {
         self.groups.get(slot).and_then(Option::as_ref)
@@ -172,11 +206,20 @@ impl ButtonHost {
             return Ok(());
         }
         let slot = Self::slot(args[0]).ok_or_else(|| fail("button group slot outside 0..5"))?;
+        let device = self.screen_size.pixels();
+        let mut pointer_scale = None;
         if command == 0x21b {
-            // 0x1400794e0: as 0x2210, but the group's pointer scale (+40/+44) is SP-12 /
-            // SP-16 over the device size (+24/+28) instead of the device size itself.
-            if [args[2], args[3]] != self.screen_size.pixels() {
-                return Err(fail("a button group with a pointer scale is not modeled"));
+            // 0x1400794e0 (NATSUUTA 0x453d90): as 0x2210, but the group's pointer scale
+            // (+40/+44) is SP-12 / SP-16 over the device size (+24/+28) instead of the
+            // device size itself.
+            if [args[2], args[3]] != device {
+                if !self.allow_pointer_scale {
+                    return Err(fail("a button group with a pointer scale is not modeled"));
+                }
+                if args[2..4].iter().any(|&v| v as i32 <= 0) {
+                    return Err(fail("button group pointer scale must be positive"));
+                }
+                pointer_scale = Some([device[0], device[1], args[2], args[3]]);
             }
         }
         if matches!(command, 0x210 | 0x21b) {
@@ -192,6 +235,7 @@ impl ButtonHost {
                 current: None,
                 pressed_visual: false,
                 press_target: None,
+                pointer_scale,
             });
             return Ok(());
         }
@@ -316,10 +360,10 @@ impl ButtonHost {
             let mut moved = None;
             if let Some(i) = target {
                 let [x, y, w, h] = group.buttons[i].rect;
-                let [px, py] = input.pointer();
+                let [px, py] = group.to_script(input.pointer());
                 let inside = px >= x && py >= y && px < x.wrapping_add(w) && py < y.wrapping_add(h);
                 if warp && !inside {
-                    moved = Some([x.wrapping_add(w / 2), y.wrapping_add(h / 2)]);
+                    moved = Some(group.to_pointer([x.wrapping_add(w / 2), y.wrapping_add(h / 2)]));
                 }
                 if group.current != Some(i) {
                     let mut images = Vec::new();
@@ -405,12 +449,13 @@ impl Frame {
                 _ => (!buttons.is_empty()).then_some(0),
             };
         }
-        // Navigation moves the pointer to the button centre (0x140056530, SetCursorPos).
+        // Navigation moves the pointer to the button centre (0x140056530, SetCursorPos);
+        // the hit test then reads that pointer back.
         let warp = target.map(|i| {
             let [x, y, w, h] = buttons[i].rect;
-            [x.wrapping_add(w / 2), y.wrapping_add(h / 2)]
+            group.to_pointer([x.wrapping_add(w / 2), y.wrapping_add(h / 2)])
         });
-        let [px, py] = warp.unwrap_or_else(|| input.pointer());
+        let [px, py] = group.to_script(warp.unwrap_or_else(|| input.pointer()));
         // The last enabled button containing the pointer wins.
         for (i, b) in buttons.iter().enumerate() {
             let [x, y, w, h] = b.rect;
@@ -636,6 +681,8 @@ impl ButtonHost {
                 current: None,
                 pressed_visual: false,
                 press_target: None,
+                // NATSUUTA 0x449ef2 rebuilds loaded groups with the device size.
+                pointer_scale: None,
             });
         }
         let mut restored_lists: [Option<ListGroup>; 8] = Default::default();
@@ -690,5 +737,53 @@ fn argument_names(command: u16) -> &'static [&'static str] {
         0x37d => &["group slot", "left", "top", "width", "height"],
         0x37e => &["group slot", "disable navigation"],
         _ => unreachable!("registered button argument schema"),
+    }
+}
+
+#[cfg(test)]
+mod pointer_scale_tests {
+    use super::*;
+
+    fn group(pointer_scale: Option<[u32; 4]>) -> ButtonGroup {
+        let button = |id, rect| Button {
+            id,
+            enabled: true,
+            rect,
+            links: [-1; 4],
+            images: [ButtonImage::default(); BUTTON_STATES],
+        };
+        ButtonGroup {
+            object: 0,
+            buttons: vec![button(1, [640, 480, 100, 100]), button(2, [0, 0, 10, 10])],
+            current: None,
+            pressed_visual: false,
+            press_target: None,
+            pointer_scale,
+        }
+    }
+
+    #[test]
+    fn natsuuta_pointer_scale_maps_hits_and_navigation_between_spaces() {
+        let scaled = group(Some([800, 600, 1280, 960]));
+        let mut input = ActionInput::default();
+        // Device (400, 300) is script (640, 480): inside button 1 only when scaled.
+        input.set_pointer(400, 300);
+        assert_eq!(Frame::plan(&scaled, &input).current, Some(0));
+        assert_eq!(Frame::plan(&group(None), &input).current, None);
+        // Signed 32-bit products divide toward zero.
+        assert_eq!(scaled.to_script([-1, -1]), [-1, -1]);
+        assert_eq!(scaled.to_pointer([690, 530]), [431, 331]);
+        assert_eq!(scaled.to_script([431, 331]), [689, 529]);
+    }
+
+    #[test]
+    fn pointer_scale_is_refused_outside_natsuuta() {
+        let registry = crate::profile::Registry::builtin();
+        assert!(
+            ButtonHost::for_profile(registry.profile("cmvs-20100314").unwrap()).allow_pointer_scale
+        );
+        for id in ["cmvs-20101211", "cmvs-20090815", "cmvs-20160201"] {
+            assert!(!ButtonHost::for_profile(registry.profile(id).unwrap()).allow_pointer_scale);
+        }
     }
 }

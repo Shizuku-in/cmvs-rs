@@ -110,7 +110,7 @@ impl EngineSnapshot {
     }
 
     pub fn decode_with_layout(bytes: &[u8], layout: SnapshotLayout) -> Result<Self, FormatError> {
-        let text_v1 = layout.text_version() == 1;
+        let text_v1 = layout.old_tables();
         let legacy = layout == SnapshotLayout::TextV1SceneLegacy;
         let text_v1_scene_v1 = legacy || layout == SnapshotLayout::TextV1SceneV1;
         let records = parse_records(bytes)?;
@@ -292,7 +292,7 @@ impl EngineSnapshot {
     }
 
     pub fn encode_with_layout(&self, layout: SnapshotLayout) -> Result<Vec<u8>, FormatError> {
-        let text_v1 = layout.text_version() == 1;
+        let text_v1 = layout.old_tables();
         let legacy = layout == SnapshotLayout::TextV1SceneLegacy;
         let text_v1_scene_v1 = legacy || layout == SnapshotLayout::TextV1SceneV1;
         if text_v1

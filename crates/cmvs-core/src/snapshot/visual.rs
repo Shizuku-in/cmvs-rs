@@ -190,6 +190,63 @@ mod tests {
     }
 
     #[test]
+    fn natsuuta_window_v2_keeps_the_logical_size_and_sixteen_buttons() {
+        let layout = SnapshotLayout::TextV2WindowV2;
+        assert_eq!(layout.text_version(), 2);
+        assert_eq!(layout.child_slots(), 256);
+        let mut object = SceneObject {
+            flags: 0x8000_0000,
+            ..SceneObject::default()
+        };
+        object.children.insert(255, SceneObject::default());
+        let saved = SavedScene::from_object(&object).unwrap();
+        let scene = saved.encode_with_layout(layout).unwrap();
+        // Scene v3 with the eight-word header.
+        assert_eq!(&scene[..4], &[255, 255, 3, 0]);
+        let mut state = MessageWindow {
+            text: 7,
+            visible: true,
+            hidden: false,
+            position: [3, 4],
+            switch_positions: [[0; 2]; 2],
+            size: [640, 120],
+            cursor_mode: 0,
+            cursor_offset: [0; 2],
+            position_switch: false,
+            object: SceneObject::default(),
+            buttons: [crate::message::WindowButton::default(); 32],
+            pressed_button: -1,
+            switch_state: 0,
+        };
+        state.buttons[15].enabled = true;
+        let mut window = SavedWindow::from_window(&state, [1280, 960]).unwrap();
+        window.scene = saved.clone();
+        let bytes = window::encode_with_layout(&window, layout).unwrap();
+        // Text slot, version 2, logical size, then v1's 1280-byte body and the scene.
+        assert_eq!(&bytes[..4], &[7, 0, 2, 0]);
+        assert_eq!(&bytes[4..12], &[0, 5, 0, 0, 192, 3, 0, 0]);
+        assert_eq!(bytes.len(), 12 + 1280 + 4 + scene.len());
+        let decoded = window::decode_with_layout(&bytes, &mut 0, layout).unwrap();
+        assert_eq!(decoded.logical_size, [1280, 960]);
+        assert!(decoded.state.buttons[15].enabled);
+        assert_eq!(decoded.scene, saved);
+        for other in [
+            SnapshotLayout::TextV2,
+            SnapshotLayout::TextV1SceneV2Collision,
+        ] {
+            assert!(window::decode_with_layout(&bytes, &mut 0, other).is_err());
+        }
+        // Text slots 8..11 and buttons 16..31 have no v2 representation.
+        state.text = 8;
+        let wide = SavedWindow::from_window(&state, [1280, 960]).unwrap();
+        assert!(window::encode_with_layout(&wide, layout).is_err());
+        state.text = 7;
+        state.buttons[16].enabled = true;
+        let wide = SavedWindow::from_window(&state, [1280, 960]).unwrap();
+        assert!(window::encode_with_layout(&wide, layout).is_err());
+    }
+
+    #[test]
     fn memoria_scene_v2_mesh_roundtrips_without_opening_earlier_builds() {
         let child = SceneObject {
             collision_vertices: Some(vec![[1f32.to_bits(), 2f32.to_bits(), 3f32.to_bits()]; 3]),
