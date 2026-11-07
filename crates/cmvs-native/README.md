@@ -1,42 +1,16 @@
 # cmvs-native
 
-桌面宿主使用的操作系统服务层，通过统一 Rust 接口隔离平台差异。目前提供系统字体选择对话框与系统字体目录查询，不承担 VM 或游戏命令语义。
+Operating-system services for CMVS hosts behind one cross-platform API. It has no VM or game-command logic. Every platform module implements the same functions, and a service a platform does not have returns `NativeError::Unsupported`.
 
-接口与实现：
+## Services
 
-- `choose_font`：以宿主窗口为所有者打开字体对话框；取消返回 `Ok(None)`，未实现的平台返回 `NativeError::Unsupported`。
-- `font_directories`：返回系统字体目录；当前未实现的平台返回空列表。
-- Windows、Linux、macOS 实现按平台目录隔离，统一接口与 `cfg` 分派留在 `src/lib.rs`。Linux 通过 Fontconfig 的 `fc-list` 发现字体目录，通过 Zenity 列表选择支持日文且覆盖可打印ASCII的字体族；需要安装 `fontconfig`、`zenity` 和日文字体。取消不改变当前字体，工具缺失或失败明确报错。Wayland 下选择器为独立窗口；X11 下附着于宿主窗口。macOS 通过系统自带的 osascript/JXA 和 AppKit 枚举字体、打开独立字体族选择窗口，不需要 Zenity；探测可打印 ASCII 与代表性日文字符，不能保证覆盖所有游戏用字。系统、Supplemental 和当前用户字体目录用于按面解析。iOS、Android 和 wasm 尚未实现这些服务。
+| Platform | Provides |
+|---|---|
+| Windows | Font picker, save-comment text dialog, system font directories, masked cursors |
+| Linux | Font picker and text dialog, Fontconfig font directories |
+| macOS | Font picker and text dialog, system font directories |
+| Android | Native window handle for GPU surfaces, font picker |
+| Switch | Window and GPU device, controller and touch input, audio output, software keyboard, system font, CPU boost |
+| PS Vita | Window and GPU, buttons and touch, audio output, IME and message dialogs, clock requests |
 
-本包依赖 `raw-window-handle`，仅在 Windows 引入 `windows-sys`。它是工作区唯一允许项目自身 FFI 的包：默认拒绝 `unsafe`，只在注明 `SAFETY` 的系统调用处局部放行。新增平台服务应在这里实现，调用方保持统一接口。
-
-从仓库根目录检查：
-
-```bash
-cargo test --offline -p cmvs-native
-cargo clippy --offline -p cmvs-native --all-targets -- -D warnings
-```
-
-自动测试覆盖接口和回退行为，字体对话框交互仍需原生人工验证。
-
-详见[宿主契约](../../docs/backends/platform-host.md)、[字体输出](../../docs/backends/font-output.md)和[Workspace 边界](../../docs/workspace.md)。
-
-## 目录约定
-
-```text
-src/
-├── lib.rs                  # 公共接口、错误类型及平台分派
-├── windows/                # Windows 系统服务
-│   ├── mod.rs
-│   └── font_dialog.rs
-├── linux/                  # Linux 系统服务
-│   ├── mod.rs
-│   ├── font_dialog.rs      # Zenity 字体选择
-│   └── fontconfig.rs       # Fontconfig 字体发现
-└── unsupported/            # 尚未实现的平台统一回退
-    └── mod.rs
-```
-
-新增 Android 等平台时建立对应平台目录，在 `lib.rs` 中显式分派；不把其他系统的实现放进 `windows/`。本次目录调整不扩展 Linux 实现的目标系统范围，也不改变字体选择行为。
-
-macOS 实现在 `src/macos/`；选择窗口不附着宿主 NSWindow，等待期间 VM 暂停。macOS 原生交互与字体渲染尚待实机验证。
+`PadInput` and the `GpuDevice` / `GpuTexture` types are shared by the console players through `cmvs-console`.

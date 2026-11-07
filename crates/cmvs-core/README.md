@@ -1,25 +1,29 @@
 # cmvs-core
 
-CMVS 的平台无关 Rust 核心，供检查工具、桌面程序及后续平台宿主复用。原生目标无第三方依赖，使用 `std`；wasm32 通过 wasm-bindgen 连接浏览器 Worker 文件适配器；不调用原生窗口或设备 API。
+Platform-independent core of the CMVS engine reimplementation. Every host and tool builds on it. On native targets it has no third-party dependencies. It does no windowing, rendering to a device or audio output: hosts read its state and supply those services.
 
-主要职责：
+## Contents
 
-- 解析与解码脚本、归档、图像、影片和存档等格式，提供共享资源读取与缓存。
-- 执行表达式、VM 控制流和已实现的系统命令，管理场景、文字、输入、音频状态与软件呈现。
-- 提供运行编排、快照、引擎档案识别和命令闸门，以及平台与音频后端契约。
-- 提供标准文件系统适配器；原游戏只读，写入使用显式指定的输出或独立用户目录。
+| Area | Modules |
+|---|---|
+| Formats | `cpz` (resource archives), `ps3` (PS2A scripts), `pb3`, `jbp1`, `jbpd` (images), `cmv`, `mgv` (movies), `save`, `system_save`, `snapshot` |
+| VM | `bytecode`, `vm`, `machine` (bounded multi-slot stepping), `dispatch` (system-command routing), `evaluate` |
+| Engine state | `scene`, `message`, `buttons`, `camera`, `effect_objects`, `settings`, `history`, `input`, `gesture` |
+| Rendering | `scene_render`: software compositor and the draw queue executed by GPU backends |
+| Hosting | `platform` (host requests), `resources`, `filesystem`, `runner` (startup orchestration), `viewport` |
+| Builds | `profile`: which analysed engine build supplies the semantics for a game |
 
-新增引擎操作及其平台无关语义应放在本包，系统能力通过后端接口接入。当前命令实现以《アマツツミ》的已分析构建为基准；档案闸门已实现，多版本语义变体分派仍待扩展。未知或未支持的分支显式报错，不代表已兼容全部 CMVS 游戏。
+Engine builds are described by the files in [`profiles/`](profiles); see [engine profiles](../../docs/design/engine-profiles.md). Unknown games, unimplemented commands and unsupported codecs return errors instead of being guessed.
 
-从仓库根目录检查：
+## Platforms
 
-```bash
-cargo check --offline -p cmvs-core
-cargo test --offline
+- On `wasm32`, `filesystem` reads files through a synchronous browser-worker adapter (via `wasm-bindgen`).
+- On Android, save-directory locks use `rustix`, because the standard file-lock API is unavailable there.
+
+## Testing
+
+```sh
+cargo test -p cmvs-core
 ```
 
-多数核心集成测试位于根包的 `tests/`，仅运行 `cargo test -p cmvs-core` 不会覆盖这些测试。
-
-系统命令的调用路径、处理器约定与检查命令见[分派开发指南](../../docs/guides/dispatch.md)。
-
-详见[架构](../../docs/architecture.md)、[引擎档案设计](../../docs/design/engine-profiles.md)和[格式文档入口](../../docs/README.md)。
+Tests use synthetic data only.
