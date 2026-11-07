@@ -26,5 +26,5 @@ cargo +nightly-2026-01-20 rustc --config 'patch.crates-io.libc.path="platforms/s
     -C "link-arg=$PWD/platforms/switch/build/libc.o" \
     -C "link-arg=$PWD/platforms/switch/build/keyboard.o" \
     -C "link-arg=-L$DEVKITPRO/libnx/lib" -C link-arg=-ldeko3d -C link-arg=-lnx -C link-arg=-lm
-"$DEVKITPRO/tools/bin/nacptool" --create 'CMVS Switch' 'cmvs-rs' '0.1.0' platforms/switch/build/cmvs-switch.nacp
+"$DEVKITPRO/tools/bin/nacptool" --create 'CMVS Switch' 'cmvs-rs' "${CMVS_VERSION:-0.1.0}" platforms/switch/build/cmvs-switch.nacp
 "$DEVKITPRO/tools/bin/elf2nro" target/aarch64-switch/release/cmvs-switch platforms/switch/build/cmvs-switch.nro --nacp=platforms/switch/build/cmvs-switch.nacp

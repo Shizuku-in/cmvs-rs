@@ -8,7 +8,9 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Superseded PR pushes are cancelled; every main push finishes so its
+  # caches are saved.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -21,6 +23,7 @@ jobs:
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -33,6 +36,7 @@ jobs:
   default:
     name: default features
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - name: Install Linux system packages
@@ -55,6 +59,7 @@ jobs:
   full:
     name: all features (${{ matrix.name }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -86,6 +91,7 @@ jobs:
   macos-intel:
     name: all features (macos-x86_64)
     runs-on: macos-15-intel
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -102,6 +108,7 @@ jobs:
   msrv:
     name: msrv (1.89)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - name: Install Linux system packages
@@ -117,6 +124,7 @@ jobs:
   python-tools:
     name: python tools
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -133,16 +141,19 @@ jobs:
   wasm:
     name: browser wasm
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
           components: clippy
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "24"
       - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-dejavu-core
       - run: cargo install wasm-bindgen-cli --version 0.2.130 --locked
       - run: cargo clippy --locked -p cmvs-web --target wasm32-unknown-unknown -- -D warnings
@@ -155,6 +166,7 @@ jobs:
   android:
     name: android apk
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       # Keep in sync with platforms/android/app/build.gradle.kts.
       ANDROID_NDK_VERSION: 30.0.16248370
@@ -180,7 +192,7 @@ jobs:
       - name: Build APK
         working-directory: platforms/android
         run: sh gradlew assembleDebug -PrustAbis=arm64-v8a,x86_64
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: cmvs-android
           path: platforms/android/app/build/outputs/apk/debug/app-debug.apk
@@ -190,6 +202,7 @@ jobs:
   switch:
     name: switch homebrew
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Keep in sync with platforms/switch/Dockerfile.
     container: devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282
     env:
@@ -209,7 +222,7 @@ jobs:
         run: sh platforms/switch/scripts/build-player.sh
       - name: Build smoke test
         run: sh platforms/switch/scripts/build-smoke.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: cmvs-switch
           path: |

@@ -1,0 +1,11 @@
+version: 2
+updates:
+  # Cargo dependencies are pinned on purpose and upgraded by hand; only the
+  # workflow actions are kept current here.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
