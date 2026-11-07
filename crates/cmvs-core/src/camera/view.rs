@@ -262,9 +262,11 @@ impl DeviceView {
         view.reset();
         view
     }
-    /// 0x140050180; transient motion words +28..+88 are currently unreachable.
+    /// 0x140050180 resets the pose; cmvs-20070119 0x422df0 also zeroes the transient motion
+    /// words +28..+88, so no motion survives. `snapshot_mode` (+92) is retained.
     pub(super) fn reset(&mut self) {
         self.words = [0, 1.0f32.to_bits(), 0, 0, 0, 0, 45.0f32.to_bits()];
+        self.motion = None;
     }
 }
 
@@ -505,5 +507,28 @@ mod tests {
             assert_eq!(restored.views[index].words, DeviceView::new(index).words);
             assert_eq!(restored.views[index].snapshot_mode, 23);
         }
+    }
+
+    #[test]
+    fn reset_stops_a_running_view_motion() {
+        let mut host = CameraHost::default();
+        let target = [5.0f32, 6.0, 7.0, 0.0, 0.0].map(f32::to_bits);
+        host.views[0].snapshot_mode = 9;
+        host.views[0].motion = Some(ViewMotion {
+            mode: 0,
+            duration: 1000,
+            elapsed: 0,
+            position: true,
+            angles: false,
+            start: host.views[0].words[..5].try_into().unwrap(),
+            target,
+        });
+        host.advance_view(100);
+        assert!(host.view_moving());
+        host.reset();
+        assert!(!host.view_moving());
+        assert_eq!(host.views[0].snapshot_mode, 9);
+        host.advance_view(500);
+        assert_eq!(host.views[0].words, DeviceView::new(0).words);
     }
 }

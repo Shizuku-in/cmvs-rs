@@ -128,7 +128,7 @@ pub fn shader_draw<'a>(command: &Layer<'a>, size: [u32; 2]) -> ShaderDraw<'a> {
             blend,
         } => {
             source = Some(&image.pixels);
-            p[4..8].copy_from_slice(&rect.map(|v| v as f32));
+            p[4..8].copy_from_slice(rect);
             p[3] = 1.0;
             (corners.map(|c| c.map(|v| v + 0.5)), *alpha, *blend)
         }

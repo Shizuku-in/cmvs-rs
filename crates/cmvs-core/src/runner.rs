@@ -792,7 +792,7 @@ impl<'a> Startup<'a> {
                 }
             });
         }
-        if matches!(command, 0xa0 | 0xa4 | 0xa6 | 0xb0 | 0xba | 0x2d6 | 0x2d7) {
+        if crate::dispatch::loads_sounds_for(resolved.semantics, command) {
             self.audio_backend.configure_paths(self.bootstrap.paths())?;
             self.audio_backend
                 .configure_archive_parameters(self.bootstrap.archive_parameters())?;

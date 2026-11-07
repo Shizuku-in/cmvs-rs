@@ -973,7 +973,8 @@ impl SceneHost {
     }
 
     fn has_effect_slot(&self, slot: u8) -> bool {
-        self.rain_effects.contains_key(&slot)
+        self.legacy_flakes.contains_key(&slot)
+            || self.rain_effects.contains_key(&slot)
             || self.particle_effects.contains_key(&slot)
             || self.falling_effects.contains_key(&slot)
             || self.collision_effects.contains_key(&slot)

@@ -44,8 +44,8 @@ pub enum Layer<'a> {
     /// bottom-left, bottom-right of the source rectangle.
     Rotated {
         image: &'a ObjectImage,
-        /// Source x/y/width/height.
-        rect: [i64; 4],
+        /// Source x/y/width/height in texels; tessellated world cells may span fractions.
+        rect: [f32; 4],
         corners: [[f32; 2]; 4],
         alpha: u32,
         blend: Blend,
@@ -236,7 +236,7 @@ fn image_layer<'a>(
         }
         return Ok(Some(Layer::Rotated {
             image,
-            rect: [sx, sy, w, h],
+            rect: [sx, sy, w, h].map(|v| v as f32),
             corners,
             alpha: alpha.min(255) as u32,
             blend: blend(words, image, alpha, false)?,
@@ -650,7 +650,7 @@ fn projected_layer<'a>(
             key,
             Layer::Rotated {
                 image,
-                rect: [sx, sy, w, h],
+                rect: [sx, sy, w, h].map(|v| v as f32),
                 corners,
                 alpha: alpha.min(255) as u32,
                 blend,
@@ -1414,12 +1414,12 @@ fn draw_rotated(
     pixels: &mut [u8],
     [width, height]: [u32; 2],
     image: &ObjectImage,
-    [sx, sy, w, h]: [i64; 4],
+    [sx, sy, w, h]: [f32; 4],
     corners: [[f32; 2]; 4],
     opacity: u32,
     blend: Blend,
 ) {
-    let [u0, v0, u1, v1] = [sx, sy, sx + w, sy + h].map(|v| v as f64);
+    let [u0, v0, u1, v1] = [sx, sy, sx + w, sy + h].map(f64::from);
     let texture = [[u0, v0], [u1, v0], [u0, v1], [u1, v1]];
     let point = corners.map(|[x, y]| [f64::from(x), f64::from(y)]);
     for triangle in [[0, 1, 2], [1, 3, 2]] {
@@ -1486,8 +1486,9 @@ fn draw_rotated(
 /// the quad is subdivided in world space until each cell is small on screen and shallow in
 /// depth, so affine cells stay within a fraction of a pixel. Cells crossing the near plane
 /// are subdivided further and dropped at the depth limit; cells beyond the far plane are
-/// dropped. Cells sample integer texel sub-rectangles with clamped addressing, whereas the
-/// device's 3D stage wraps.
+/// dropped. Cells keep fractional texel sub-rectangles, so magnified textures split into
+/// cells smaller than a texel stay covered; they sample with clamped addressing, whereas
+/// the device's 3D stage wraps.
 fn tessellate_world_quad<'a>(
     quad: &crate::effect_objects::WorldQuad<'a>,
     projection: &crate::camera::ViewProjection,
@@ -1553,11 +1554,10 @@ fn tessellate_world_quad<'a>(
         if near != 0 || !screen.iter().flatten().all(|v| v.is_finite()) {
             return;
         }
-        let texel = |t: f32, n: f32| (t * n).round() as i64;
         let [left, top, right, bottom] = quad.uv;
-        let [x0, x1] = [u0, u1].map(|u| texel(left + u * (right - left), size[0]));
-        let [y0, y1] = [v0, v1].map(|v| texel(top + v * (bottom - top), size[1]));
-        if x1 <= x0 || y1 <= y0 {
+        let [x0, x1] = [u0, u1].map(|u| (left + u * (right - left)) * size[0]);
+        let [y0, y1] = [v0, v1].map(|v| (top + v * (bottom - top)) * size[1]);
+        if ![x0, x1, y0, y1].iter().all(|v| v.is_finite()) {
             return;
         }
         out.push(Layer::Rotated {
@@ -1817,7 +1817,7 @@ mod scale_tests {
             else {
                 panic!("wrong layer");
             };
-            assert!(*x >= 32 && x + w <= 48 && *y >= 16 && y + h <= 32);
+            assert!(*x >= 32.0 && x + w <= 48.0 && *y >= 16.0 && y + h <= 32.0);
         }
         let frame = RenderFrame {
             width: 64,
@@ -1830,6 +1830,53 @@ mod scale_tests {
             &pixels.pixels()[(32 * 64 + 32) * 4..(32 * 64 + 32) * 4 + 4],
             &[0, 255, 0, 255]
         );
+    }
+
+    #[test]
+    fn world_mesh_cells_smaller_than_a_texel_stay_covered() {
+        let image = ObjectImage {
+            name: Vec::new(),
+            filter: None,
+            alpha: false,
+            surface: false,
+            pixels: RgbaImage::new(1, 1, vec![0, 255, 0, 255]).unwrap(),
+        };
+        let camera = crate::camera::CameraHost::default();
+        let mut view = camera.view(0).unwrap().clone();
+        view.words = [0.0f32, 0.0, 0.0, 0.0, 0.0, 0.0, 90.0].map(f32::to_bits);
+        let quad = crate::effect_objects::WorldQuad {
+            image: &image,
+            uv: [0.0, 0.0, 1.0, 1.0],
+            corners: [
+                [-1.0, 1.0, 1.0],
+                [1.0, 1.0, 1.0],
+                [-1.0, -1.0, 1.0],
+                [1.0, -1.0, 1.0],
+            ],
+            position: [0.0, 0.0, 1.0],
+            alpha: 255,
+            blend: Blend::Replace,
+            late: false,
+        };
+        let mut layers = Vec::new();
+        tessellate_world_quad(&quad, &view.projection([64, 64]).unwrap(), &mut layers);
+        // The 64-pixel quad splits into cells of half a texel or less.
+        assert!(layers.len() >= 4);
+        let frame = RenderFrame {
+            width: 64,
+            height: 64,
+            clear: [0, 0, 0, 255],
+            commands: layers,
+        };
+        let pixels = frame.render_cpu().unwrap();
+        let green = pixels
+            .pixels()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| **p == [0, 255, 0, 255])
+            .count();
+        assert_eq!(green, 64 * 64);
     }
 
     #[test]

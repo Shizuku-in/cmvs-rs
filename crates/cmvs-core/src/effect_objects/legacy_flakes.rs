@@ -250,13 +250,17 @@ mod dispatch_tests {
         ps3::Script,
     };
     fn script(slot: u32, duration: u32, count: u32) -> Script {
+        command_script(0x22a3, &[slot, 0, 0, 0, duration, count])
+    }
+    /// Pushes `args` so the first one is at SP-4, then issues `opcode`.
+    fn command_script(opcode: u16, args: &[u32]) -> Script {
         let mut code = Vec::new();
-        for arg in [slot, 0, 0, 0, duration, count].into_iter().rev() {
+        for &arg in args.iter().rev() {
             code.extend(0x440u16.to_le_bytes());
             code.extend(4u16.to_le_bytes());
             code.extend(arg.to_le_bytes());
         }
-        code.extend(0x22a3u16.to_le_bytes());
+        code.extend(opcode.to_le_bytes());
         let text = b"flake.pb3\0";
         let mut payload = code.clone();
         payload.extend(text);
@@ -354,6 +358,56 @@ mod dispatch_tests {
                     assert_eq!(images.0, old_reads);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn query_and_parameter_commands_take_the_default_branch_for_a_flake_slot() {
+        let p = crate::profile::Registry::builtin()
+            .profile("cmvs-20070119")
+            .unwrap();
+        let mut scene = SceneHost::default();
+        let mut random = CrtRandom::new(0);
+        let create = script(2, 1000f32.to_bits(), 3);
+        let mut vm = Machine::new(&create).unwrap();
+        pending(&mut vm);
+        dispatch::run(
+            p.semantics(0x2a3),
+            &mut vm,
+            &mut Hosts {
+                images: Some(ImageHosts {
+                    scene: &mut scene,
+                    source: &mut Images(0, false),
+                    change_images: false,
+                }),
+                random: Some(&mut random),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let records = scene.saved_effect_pools_with_legacy(true).unwrap();
+        // 0x417c90 / 0x417d20 send type 3 to their default branches: -1, and a no-op set.
+        for (opcode, args, result) in [
+            (0x22ae, &[2][..], u32::MAX),
+            (0x22af, &[2, 1, 0, 0][..], 77),
+        ] {
+            let program = command_script(opcode, args);
+            let mut vm = Machine::new(&program).unwrap();
+            pending(&mut vm);
+            vm.state_mut().set_system_integer(0, 77).unwrap();
+            let out = dispatch::run(
+                p.semantics(opcode - 0x2000),
+                &mut vm,
+                &mut Hosts {
+                    scene: Some(&mut scene),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(out, Some(Flow::Done));
+            assert_eq!(vm.stack().len_bytes(), 0);
+            assert_eq!(vm.state().system_integer(0), Some(result));
+            assert_eq!(scene.saved_effect_pools_with_legacy(true).unwrap(), records);
         }
     }
 }
