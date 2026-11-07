@@ -31,8 +31,26 @@ pub(super) fn game_savedata(root: &Path, legacy: &Path) -> io::Result<ProfileSys
     // Hold both locks throughout migration. An active legacy session must not
     // race copying, nor may a second local player scan a partial import.
     let source = ProfileSystemSave::open(legacy, root)?;
-    for entry in fs::read_dir(source.directory())? {
-        let entry = entry?;
+    import_entries(
+        fs::read_dir(source.directory())?.collect::<io::Result<Vec<_>>>()?,
+        target,
+    )?;
+    // A deleted local slot must not be resurrected from the old profile at the
+    // next launch. Partial failed imports are retried without replacing files.
+    let mut staged = Staged::new(target)?;
+    staged.file.write_all(b"1\n")?;
+    staged.commit(&target.join(IMPORTED))?;
+    Ok(profile)
+}
+
+fn import_entries(mut entries: Vec<fs::DirEntry>, target: &Path) -> io::Result<()> {
+    // Import backups last so an interrupted import cannot leave an orphaned
+    // backup that prevents opening the local profile to retry the migration.
+    entries.sort_by_key(|entry| {
+        let name = entry.file_name();
+        name == "system.bak" || name == "cmvs.cfg.bak"
+    });
+    for entry in entries {
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if save_file(&name) {
@@ -61,12 +79,7 @@ pub(super) fn game_savedata(root: &Path, legacy: &Path) -> io::Result<ProfileSys
             }
         }
     }
-    // A deleted local slot must not be resurrected from the old profile at the
-    // next launch. Partial failed imports are retried without replacing files.
-    let mut staged = Staged::new(target)?;
-    staged.file.write_all(b"1\n")?;
-    staged.commit(&target.join(IMPORTED))?;
-    Ok(profile)
+    Ok(())
 }
 
 fn save_file(name: &str) -> bool {
@@ -234,6 +247,71 @@ mod tests {
         fs::write(root.savedata().join("system.bak"), b"orphaned backup").unwrap();
         assert!(game_savedata(&root.game(), &root.legacy()).is_err());
         assert!(!root.legacy().exists());
+    }
+
+    #[test]
+    fn interrupted_import_with_backups_first_can_reopen_and_retry() {
+        let root = Fixture::new();
+        let source = ProfileSystemSave::open(&root.legacy(), &root.game()).unwrap();
+        let local = ProfileSystemSave::open_game_savedata(&root.game()).unwrap();
+        let originals = [
+            ("system.dat", b"system primary".as_slice()),
+            ("system.bak", b"system backup".as_slice()),
+            ("cmvs.cfg", b"[S]\nX=1\n".as_slice()),
+            ("cmvs.cfg.bak", b"[S]\nX=0\n".as_slice()),
+        ];
+        for (name, bytes) in originals {
+            fs::write(root.legacy().join(name), bytes).unwrap();
+        }
+        let bad_slot = root.legacy().join("save003.dat");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("missing", &bad_slot).unwrap();
+        #[cfg(not(unix))]
+        fs::create_dir(&bad_slot).unwrap();
+        let mut entries = fs::read_dir(source.directory())
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                (entry.file_name(), entry)
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        // Force the review's failure order independently of filesystem ordering.
+        let order = [
+            "system.bak",
+            "cmvs.cfg.bak",
+            "save003.dat",
+            "system.dat",
+            "cmvs.cfg",
+        ];
+        let entries = order
+            .into_iter()
+            .map(|name| entries.remove(std::ffi::OsStr::new(name)).unwrap())
+            .collect();
+        assert!(import_entries(entries, local.directory()).is_err());
+        assert!(!root.savedata().join(IMPORTED).exists());
+        assert!(!root.savedata().join("system.bak").exists());
+        assert!(!root.savedata().join("cmvs.cfg.bak").exists());
+        drop(local);
+        let reopened = ProfileSystemSave::open_game_savedata(&root.game()).unwrap();
+        assert!(reopened.read_configuration().unwrap().is_none());
+        drop(reopened);
+        drop(source);
+        #[cfg(unix)]
+        fs::remove_file(&bad_slot).unwrap();
+        #[cfg(not(unix))]
+        fs::remove_dir(&bad_slot).unwrap();
+        fs::write(&bad_slot, b"slot three").unwrap();
+        let imported = game_savedata(&root.game(), &root.legacy()).unwrap();
+        assert!(imported.read_configuration().unwrap().is_some());
+        assert!(root.savedata().join(IMPORTED).is_file());
+        assert_eq!(
+            fs::read(root.savedata().join("save003.dat")).unwrap(),
+            b"slot three"
+        );
+        for (name, bytes) in originals {
+            assert_eq!(fs::read(root.savedata().join(name)).unwrap(), bytes);
+            assert_eq!(fs::read(root.legacy().join(name)).unwrap(), bytes);
+        }
     }
 
     #[test]
