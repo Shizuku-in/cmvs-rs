@@ -27,7 +27,8 @@ use std::{
     path::Path,
 };
 
-/// Virtual frames a start-page button gets to show its effect.
+/// Virtual frames a start-page button gets to show its effect. Frames with a movie
+/// player do not count: an opening movie ends on its own, and the step budget still applies.
 const ENTRY_FRAMES: u64 = 3600;
 /// The engine's system save inside a user directory.
 const SYSTEM_SAVE: &str = "system.dat";
@@ -179,13 +180,16 @@ fn try_button(
         button: button.1,
     })?;
     let mut settle = Settle::new(STABLE_FRAMES);
-    let from = session.yields();
-    while session.yields() - from < ENTRY_FRAMES {
+    let mut waited = 0;
+    while waited < ENTRY_FRAMES {
         let observation = match session.frame() {
             Ok(o) => o,
             Err(Stop::Quit) => return Ok(Effect::Quit),
             Err(stop) => return Ok(Effect::Stopped(stop)),
         };
+        if !session.startup().movies().has_player() {
+            waited += 1;
+        }
         if observation.waiting_for_advance() {
             return Ok(Effect::Scenario);
         }

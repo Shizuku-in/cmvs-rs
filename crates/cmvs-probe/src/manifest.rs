@@ -6,6 +6,7 @@
 //! ```text
 //! profile <id>                                  -- <evidence>
 //! entry <group> <button>                        -- <evidence>
+//! start-route                                   -- <evidence>
 //! choice-group <script> <slot>                  -- <evidence>
 //! label page <script> <slot>x<buttons>[+...] <text...>   -- <evidence>
 //! label choice <script> <pc-hex> <text...>      -- <evidence>
@@ -24,6 +25,8 @@ use std::{
 pub enum Directive {
     Profile(String),
     Entry(usize, usize),
+    /// A first launch plays a scenario route before the start page appears.
+    StartRoute,
     ChoiceGroup {
         script: String,
         slot: usize,
@@ -103,6 +106,7 @@ impl Manifest {
             let words: Vec<&str> = body.split_whitespace().collect();
             let directive = match words.as_slice() {
                 ["profile", id] => Directive::Profile((*id).to_owned()),
+                ["start-route"] => Directive::StartRoute,
                 ["entry", group, button] => {
                     Directive::Entry(number(group, line)?, number(button, line)?)
                 }
@@ -161,6 +165,9 @@ impl Manifest {
                 Directive::Entry(g, b) => (g, b),
                 _ => unreachable!(),
             })
+    }
+    pub fn start_route(&self) -> bool {
+        self.find(|d| matches!(d, Directive::StartRoute)).is_some()
     }
     pub fn choice_group(&self, script: &str) -> Option<usize> {
         self.find(|d| matches!(d, Directive::ChoiceGroup { script: s, .. } if s == script))
@@ -233,6 +240,11 @@ mod tests {
              label choice script-a 0x10 go left -- seen\n",
         )
         .unwrap();
+        assert!(!manifest.start_route());
+        let route = Manifest::parse("start-route -- first launch plays a route\n").unwrap();
+        assert!(route.start_route());
+        assert!(route.json().to_string().contains("\"used\":true"));
+        assert!(Manifest::parse("start-route 1 -- x\n").is_err());
         assert_eq!(manifest.profile(), Some("cmvs-x"));
         assert_eq!(manifest.entry(), Some((0, 1)));
         assert_eq!(manifest.choice_group("script-a"), Some(2));

@@ -95,17 +95,25 @@ pub enum Event {
 pub struct StartLog {
     pub scripts: Vec<String>,
     pub advances: u64,
+    /// Decide presses after quiet frames; only with the manifest's `start-route`.
+    pub nudges: u64,
     pub last: Option<Observation>,
 }
 
 /// Advances every message wait until the first settled page. Nothing here knows which
 /// script shows the title; the first settled page is the start page by definition.
+///
+/// With the manifest's `start-route`, a first launch that plays a route before its title
+/// is driven like a scenario: skip is held and quiet input polls get the same nudge.
 pub fn drive_to_start(
     session: &mut Session<'_>,
     log: &mut StartLog,
 ) -> Result<PageSignature, Stop> {
+    let route = session.manifest().is_some_and(|m| m.start_route());
+    let skip = route && hold_skip(session);
     let mut settle = Settle::new(STABLE_FRAMES);
-    loop {
+    let mut quiet_since = session.yields();
+    let page = loop {
         let observation = session.frame()?;
         let name = observation.script.escape_ascii().to_string();
         if !log.scripts.contains(&name) {
@@ -114,13 +122,28 @@ pub fn drive_to_start(
         if observation.waiting_for_advance() && !session.busy() {
             session.act(Action::Advance).map_err(Stop::Error)?;
             log.advances += 1;
+            quiet_since = observation.yields;
+        } else if route
+            && !session.busy()
+            && !observation.page.interactive()
+            && !session.startup().movies().has_player()
+            && observation.yields - quiet_since >= NUDGE_FRAMES
+        {
+            session.act(Action::Advance).map_err(Stop::Error)?;
+            log.nudges += 1;
+            session.note("nudge", Json::Null);
+            quiet_since = observation.yields;
         }
         let settled = settle.feed(&observation).cloned();
         log.last = Some(observation);
         if let Some(page) = settled {
-            return Ok(page);
+            break page;
         }
+    };
+    if skip {
+        session.hold(Vec::new());
     }
+    Ok(page)
 }
 
 pub struct Scenario {
