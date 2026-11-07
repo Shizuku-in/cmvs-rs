@@ -8,42 +8,58 @@ A **Rust** reimplementation of Purple SOFTWARE's CMVS engine.
 
 <table>
   <tr>
-    <th colspan="3">Amatsutsumi</th>
+    <th colspan="2">Amatsutsumi</th>
   </tr>
   <tr>
-    <td align="center" width="33%">
+    <td align="center" width="50%">
       <img src="docs/images/amatsutsumi_windows11.webp" alt="Windows Example of Amatsutsumi" width="100%">
     </td>
-    <td align="center" width="33%">
+    <td align="center" width="50%">
       <img src="docs/images/amatsutsumi_ubuntu.webp" alt="Linux Example of Amatsutsumi" width="100%">
     </td>
-    <td align="center" width="33%">
+  </tr>
+  <tr>
+    <td align="center"><strong>Windows</strong></td>
+    <td align="center"><strong>Linux</strong></td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
       <img src="docs/images/amatsutsumi_android.webp" alt="Android Example of Amatsutsumi" width="100%">
     </td>
+    <td align="center" width="50%">
+      <img src="docs/images/amatsutsumi_switch.webp" alt="Switch (Ryujinx) Example of Amatsutsumi" width="100%">
+    </td>
   </tr>
   <tr>
-    <td align="center"><strong>Windows</strong></td>
-    <td align="center"><strong>Linux</strong></td>
     <td align="center"><strong>Android</strong></td>
+    <td align="center"><strong>Switch (Ryujinx)</strong></td>
   </tr>
   <tr>
-    <th colspan="3">Aoitori</th>
+    <th colspan="2">Aoitori</th>
   </tr>
   <tr>
-    <td align="center" width="33%">
+    <td align="center" width="50%">
       <img src="docs/images/aoitori_windows11.webp" alt="Windows Example of Aoitori" width="100%">
     </td>
-    <td align="center" width="33%">
+    <td align="center" width="50%">
       <img src="docs/images/aoitori_ubuntu.webp" alt="Linux Example of Aoitori" width="100%">
-    </td>
-    <td align="center" width="33%">
-      <img src="docs/images/aoitori_android.webp" alt="Android Example of Aoitori" width="100%">
     </td>
   </tr>
   <tr>
     <td align="center"><strong>Windows</strong></td>
     <td align="center"><strong>Linux</strong></td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="docs/images/aoitori_android.webp" alt="Android Example of Aoitori" width="100%">
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/images/aoitori_switch.webp" alt="Switch (Ryujinx) Example of Aoitori" width="100%">
+    </td>
+  </tr>
+  <tr>
     <td align="center"><strong>Android</strong></td>
+    <td align="center"><strong>Switch (Ryujinx)</strong></td>
   </tr>
 </table>
 
