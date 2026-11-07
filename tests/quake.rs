@@ -355,10 +355,15 @@ fn pause_query_reports_a_paused_quake_only() {
 }
 
 #[test]
-fn triangle_quake_requires_the_inspected_harouse_build_and_nonzero_period() {
-    let profile = cmvs_rs::profile::Registry::builtin()
-        .profile("cmvs-20080719")
-        .unwrap();
+fn triangle_quake_requires_an_inspected_build_and_nonzero_period() {
+    // HAROUSE 0x43b0b0 and MEMORIA 0x43e2f0 share the triangle branch.
+    let registry = cmvs_rs::profile::Registry::builtin();
+    for id in ["cmvs-20080719", "cmvs-20090815"] {
+        triangle_quake_gate(registry.profile(id).unwrap());
+    }
+}
+
+fn triangle_quake_gate(profile: &cmvs_rs::profile::EngineProfile) {
     let code = quake_code(0x102, 24, 80, 3);
     let program = script(&code);
     let mut vm = Machine::new(&program).unwrap();

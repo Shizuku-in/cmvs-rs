@@ -195,6 +195,9 @@ fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLa
     if profile.is_inspected_20071117() {
         return Some(SnapshotLayout::TextV1SceneV1);
     }
+    if profile.is_inspected_20090815() {
+        return Some(SnapshotLayout::TextV1SceneV2Collision);
+    }
     if profile.is_inspected_20080719() || profile.is_inspected_20080903() {
         return Some(SnapshotLayout::TextV1SceneV2);
     }
@@ -247,6 +250,7 @@ fn effect_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
         return true;
     }
     (matches!(profile.id.as_str(), "cmvs-20110525" | "cmvs-20171114")
+        || profile.is_inspected_20090815()
         || profile.is_inspected_20080719()
         || profile.is_inspected_20080903()
         || inspected_20120309(profile)
@@ -284,6 +288,12 @@ fn effect_record_supported(profile: &crate::profile::EngineProfile, body: &[u8])
                 && body[..2] == [1, 0]
                 && (0x50..=0x57).contains(&body[2])
                 && body[3] == 0;
+    }
+    if profile.is_inspected_20090815() {
+        // Writer 0x425740 / reader 0x425850: types 6 and 7 share the 48-byte template;
+        // type 2 stores six words from object +12.
+        return body.len() == 52 && matches!(body.get(..4), Some([1, 0, 6 | 7, 0]))
+            || body.len() == 60 && body.get(..4) == Some(&[1, 0, 2, 0]);
     }
     if body.get(..4) == Some(&[1, 0, 3, 0]) {
         return false;
@@ -360,6 +370,7 @@ impl Startup<'_> {
             || self.gate.selection().profile.is_inspected_20071117()
             || self.gate.selection().profile.is_inspected_20080719()
             || self.gate.selection().profile.is_inspected_20080903()
+            || self.gate.selection().profile.is_inspected_20090815()
         {
             Some(0)
         } else {
@@ -895,7 +906,8 @@ impl Startup<'_> {
             &mut images,
             &mut restored_random,
             &mut budget,
-            self.gate.selection().profile.is_inspected_20080719(),
+            self.gate.selection().profile.is_inspected_20080719()
+                || self.gate.selection().profile.is_inspected_20090815(),
         )?;
         // Records 0x8e8 follow 0x700 and bind to the objects just rebuilt.
         let movie_records: Vec<_> = snapshot
@@ -1232,6 +1244,7 @@ mod layout_tests {
             ("cmvs-20071117", SnapshotLayout::TextV1SceneV1),
             ("cmvs-20080719", SnapshotLayout::TextV1SceneV2),
             ("cmvs-20080903", SnapshotLayout::TextV1SceneV2),
+            ("cmvs-20090815", SnapshotLayout::TextV1SceneV2Collision),
             ("cmvs-20110525", SnapshotLayout::TextV2),
             ("cmvs-20120309", SnapshotLayout::TextV2),
             ("cmvs-20130131", SnapshotLayout::TextV2),
@@ -1249,7 +1262,8 @@ mod layout_tests {
                 effect_layout_supported(registry.profile(id).unwrap()),
                 matches!(
                     id,
-                    "cmvs-20080719"
+                    "cmvs-20090815"
+                        | "cmvs-20080719"
                         | "cmvs-20080903"
                         | "cmvs-20110525"
                         | "cmvs-20120309"
@@ -1329,6 +1343,24 @@ mod layout_tests {
         assert!(
             validate_512_child_slots_without_button_lists(std::iter::once(&parent), false).is_err()
         );
+    }
+
+    #[test]
+    fn memoria_collision_template_requires_exact_length_and_identity() {
+        let mut profile = crate::profile::Registry::builtin()
+            .profile("cmvs-20090815")
+            .unwrap()
+            .clone();
+        let mut body = vec![0; 52];
+        body[..4].copy_from_slice(&[1, 0, 6, 0]);
+        assert!(effect_record_supported(&profile, &body));
+        assert!(!effect_record_supported(&profile, &body[..51]));
+        body.push(0);
+        assert!(!effect_record_supported(&profile, &body));
+        body.pop();
+        profile.binaries[0].sha256 = [0; 32];
+        assert!(!effect_record_supported(&profile, &body));
+        assert_eq!(snapshot_layout(&profile), None);
     }
 
     #[test]

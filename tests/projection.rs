@@ -147,7 +147,7 @@ fn build_with_cameras(code: &[u8], mut cameras: CameraHost) -> (SceneHost, Camer
 
 #[test]
 fn type_one_projection_keeps_its_scale_fade_and_profile_boundary() {
-    for id in ["cmvs-20071117", "cmvs-20080903"] {
+    for id in ["cmvs-20071117", "cmvs-20080903", "cmvs-20090815"] {
         let profile = cmvs_rs::profile::Registry::builtin().profile(id).unwrap();
         let mut code = vec![];
         camera(&mut code);
@@ -851,4 +851,32 @@ fn harouse_parent_rotation_keeps_child_origin_nonuniform_scale_and_opacity() {
         .unwrap()
         .words[18] = f(f32::MAX);
     assert!(scene_render::render_scene(&bound, Some(&cameras), &[&invalid], 8, 8).is_err());
+}
+
+#[test]
+fn memoria_projection_three_coexists_with_its_legacy_projection() {
+    let profile = cmvs_rs::profile::Registry::builtin()
+        .profile("cmvs-20090815")
+        .unwrap();
+    let mut code = vec![];
+    camera(&mut code);
+    command(&mut code, 0x205f, &[0, 3]);
+    projected(&mut code, 1, 0, [1.0, 0.0, 10.0], 10.0);
+    let (scene, cameras) = build_with_cameras(&code, CameraHost::for_profile(profile));
+    assert!(
+        cameras
+            .project_object(0, [1.0, 0.0, 10.0], 0.0, 10.0)
+            .unwrap()
+            .is_some()
+    );
+    assert!(scene_render::render_scene(&scene, Some(&cameras), &[], 8, 4).is_ok());
+    let earlier = cmvs_rs::profile::Registry::builtin()
+        .profile("cmvs-20080903")
+        .unwrap();
+    let (_, cameras) = build_with_cameras(&code, CameraHost::for_profile(earlier));
+    assert!(
+        cameras
+            .project_object(0, [1.0, 0.0, 10.0], 0.0, 10.0)
+            .is_err()
+    );
 }

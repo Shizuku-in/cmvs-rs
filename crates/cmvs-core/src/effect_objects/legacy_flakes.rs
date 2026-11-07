@@ -244,7 +244,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod dispatch_tests {
+pub(crate) mod dispatch_tests {
     use super::*;
     use crate::{
         dispatch::{self, Flow, Hosts, ImageHosts},
@@ -255,7 +255,7 @@ mod dispatch_tests {
         command_script(0x22a3, &[slot, 0, 0, 0, duration, count])
     }
     /// Pushes `args` so the first one is at SP-4, then issues `opcode`.
-    fn command_script(opcode: u16, args: &[u32]) -> Script {
+    pub(crate) fn command_script(opcode: u16, args: &[u32]) -> Script {
         let mut code = Vec::new();
         for &arg in args.iter().rev() {
             code.extend(0x440u16.to_le_bytes());
@@ -285,7 +285,7 @@ mod dispatch_tests {
         raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
         Script::decode(&raw).unwrap()
     }
-    fn pending(vm: &mut Machine<'_>) {
+    pub(crate) fn pending(vm: &mut Machine<'_>) {
         while !matches!(vm.step().unwrap(), Step::System { .. }) {}
     }
     struct Images(usize, bool);

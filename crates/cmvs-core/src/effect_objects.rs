@@ -3,7 +3,7 @@ use crate::{bytecode::DecodeError, dispatch::Call, machine::Machine};
 mod collision;
 mod falling;
 mod fragments;
-pub use collision::{CollisionEffect, CollisionParticle};
+pub use collision::{CollisionEffect, CollisionParticle, ParticleFade};
 pub use fragments::{Fragment, FragmentEffect};
 mod curtain;
 mod legacy;
@@ -58,7 +58,12 @@ impl crate::scene::SceneHost {
         random: &mut crate::random::CrtRandom,
         cameras: &crate::camera::CameraHost,
     ) -> Result<(), crate::FormatError> {
-        let triangles = if self.collision_effects.is_empty() {
+        // Type 7 shares the map but never reads the collision planes.
+        let triangles = if self
+            .collision_effects
+            .values()
+            .all(CollisionEffect::is_fading)
+        {
             Vec::new()
         } else {
             self.collision_triangles().map_err(crate::FormatError)?

@@ -1,4 +1,5 @@
-//! Type-6 particles and scene-slot collision planes; executable-bound research semantics.
+//! Type-6 particles and scene-slot collision planes, and the MEMORIA type-7 pool that
+//! shares their initializer; executable-bound research semantics.
 use super::particles::{hundredth, range as spread};
 use crate::{
     audio::AudioBackend,
@@ -44,6 +45,17 @@ fn height(triangle: &Triangle, x: f32, z: f32) -> Option<f32> {
     Some(point[1])
 }
 
+// MEMORIA 0x431750/0x431ba0: x87 intermediates with explicit f32 stores.
+fn hundredth_x87(value: f64) -> f32 {
+    let scaled = value * 100.0;
+    let integer = if (-2147483648.0..2147483648.0).contains(&scaled) {
+        scaled as i32
+    } else {
+        i32::MIN
+    };
+    (f64::from(integer) / 100.0) as f32
+}
+
 fn unit(random: &mut CrtRandom) -> f32 {
     random.next_value() as f32 / 32767.0
 }
@@ -54,9 +66,64 @@ pub struct CollisionParticle {
     pub object: SceneObject,
 }
 
+/// MEMORIA type 7 (0x432500 / 0x4322c0): one opacity for the whole pool.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParticleFade {
+    /// +12: mode byte 2 % 3; 0 stays opaque, 1 fades in, 2 fades out.
+    pub phase: u32,
+    /// +20 / +24: mode bytes 1 and 0, in 100 ms units.
+    pub delay: u32,
+    pub duration: u32,
+    /// Unclamped milliseconds since creation (the clock minus +28).
+    pub elapsed: u32,
+    /// +16, written to every particle each update.
+    pub alpha: u32,
+}
+
+impl ParticleFade {
+    pub(crate) fn new(mode: u32) -> Self {
+        let byte = |i: u32| (mode >> (8 * i)) & 0xff;
+        let phase = byte(2) % 3;
+        Self {
+            phase,
+            delay: 100 * byte(1),
+            duration: 100 * byte(0),
+            elapsed: 0,
+            alpha: if phase == 1 { 0 } else { 255 },
+        }
+    }
+
+    /// Unsigned compares: before the delay a fade-in is clear and a fade-out opaque; a zero
+    /// duration finishes at once. The multiply keeps the original 32-bit wrap.
+    fn advance(&mut self, delta: u32) {
+        self.elapsed = self.elapsed.wrapping_add(delta);
+        let fade_in = match self.phase {
+            1 => true,
+            2 => false,
+            _ => return,
+        };
+        let (before, after) = if fade_in { (0, 255) } else { (255, 0) };
+        self.alpha = match self.elapsed.checked_sub(self.delay) {
+            None => before,
+            Some(t) if t >= self.duration => after,
+            Some(t) => {
+                let ratio = t.wrapping_mul(255) / self.duration;
+                if fade_in {
+                    ratio
+                } else {
+                    255u32.wrapping_sub(ratio)
+                }
+            }
+        };
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct CollisionEffect {
     pub(crate) template: Option<crate::snapshot::SavedEffect>,
+    x87_arithmetic: bool,
+    /// Present for type 7, which never collides.
+    pub fade: Option<ParticleFade>,
     pub mode: u32,
     pub parameters: [u32; 2],
     pub pool: SceneObject,
@@ -64,6 +131,7 @@ pub struct CollisionEffect {
 }
 
 impl CollisionEffect {
+    #[cfg(test)]
     pub(crate) fn new(
         mode: u32,
         parameters: [u32; 2],
@@ -71,9 +139,21 @@ impl CollisionEffect {
         pool: SceneObject,
         random: &mut CrtRandom,
     ) -> Self {
+        Self::new_with_arithmetic(mode, parameters, count, pool, random, false)
+    }
+
+    pub(crate) fn new_with_arithmetic(
+        mode: u32,
+        parameters: [u32; 2],
+        count: u32,
+        pool: SceneObject,
+        random: &mut CrtRandom,
+        x87_arithmetic: bool,
+    ) -> Self {
         let [base_z, speed] = parameters.map(f32::from_bits);
         let particles = (0..count)
             .map(|index| {
+                let mut candidate = random.clone();
                 let x = unit(random) * 90.0 - 45.0;
                 let z = unit(random) * spread(mode) + base_z;
                 let y = unit(random) * 75.0;
@@ -86,6 +166,20 @@ impl CollisionEffect {
                 words[8] = hundredth(z).to_bits();
                 let variation = speed * 0.25;
                 words[9] = ((unit(random) * variation - variation * 0.5) + speed).to_bits();
+                if x87_arithmetic {
+                    let unit = |rng: &mut CrtRandom| f64::from(rng.next_value()) / 32767.0;
+                    let x = (unit(&mut candidate) * 90.0 - 45.0) as f32;
+                    let z =
+                        (unit(&mut candidate) * f64::from(spread(mode)) + f64::from(base_z)) as f32;
+                    let y = (unit(&mut candidate) * 75.0) as f32;
+                    candidate.next_value();
+                    words[6] = hundredth_x87(f64::from(x)).to_bits();
+                    words[7] = hundredth_x87(f64::from(y)).to_bits();
+                    words[8] = hundredth_x87(f64::from(z)).to_bits();
+                    let offset = (unit(&mut candidate) * f64::from(variation)
+                        - f64::from(variation) * 0.5) as f32;
+                    words[9] = (speed + offset).to_bits();
+                }
                 let mut draw = DrawState::default();
                 draw.words[0] = 2;
                 draw.words[2..8].copy_from_slice(&[0, 0, 32, 32, 16, 16]);
@@ -110,6 +204,8 @@ impl CollisionEffect {
             })
             .collect();
         Self {
+            x87_arithmetic,
+            fade: None,
             template: None,
             mode,
             parameters,
@@ -123,10 +219,20 @@ impl CollisionEffect {
         draw: &mut DrawState,
         mode: u32,
         base_z: f32,
+        x87_arithmetic: bool,
         random: &mut CrtRandom,
     ) {
-        words[6] = hundredth(unit(random) * 90.0 - 45.0).to_bits();
-        let z = hundredth(unit(random) * spread(mode) + base_z);
+        let z = if x87_arithmetic {
+            words[6] =
+                hundredth_x87(f64::from(random.next_value()) / 32767.0 * 90.0 - 45.0).to_bits();
+            hundredth_x87(
+                f64::from(random.next_value()) / 32767.0 * f64::from(spread(mode))
+                    + f64::from(base_z),
+            )
+        } else {
+            words[6] = hundredth(unit(random) * 90.0 - 45.0).to_bits();
+            hundredth(unit(random) * spread(mode) + base_z)
+        };
         words[7] = (f32::from_bits(words[7]) + 75.0).to_bits();
         words[8] = z.to_bits();
         words[10] = 0;
@@ -134,11 +240,16 @@ impl CollisionEffect {
     }
 
     pub(crate) fn advance(&mut self, delta: u32, triangles: &[Triangle], random: &mut CrtRandom) {
+        if self.fade.is_some() {
+            return self.advance_fading(delta, random);
+        }
         let time = delta.min(120) as f32 * 10.0;
         let base_z = f32::from_bits(self.parameters[0]);
         for particle in &mut self.particles {
             let words = &mut particle.words;
             let x = f32::from_bits(words[6]);
+            // MEMORIA 0x431c9b stores the f64 quotient as f32 before subtracting; with
+            // 53-bit x87 precision both steps then round exactly like f32 arithmetic.
             let y = f32::from_bits(words[7]) - time / f32::from_bits(words[9]);
             let z = f32::from_bits(words[8]);
             words[7] = y.to_bits();
@@ -147,7 +258,7 @@ impl CollisionEffect {
             if !triangles.is_empty() && contact >= 1.0 {
                 let difference = y - contact;
                 if difference <= -0.5 {
-                    Self::respawn(words, draw, self.mode, base_z, random);
+                    Self::respawn(words, draw, self.mode, base_z, self.x87_arithmetic, random);
                 } else if difference <= 0.5 {
                     draw.words[17] = ((difference + 0.5) * 255.0) as u32;
                 }
@@ -161,10 +272,37 @@ impl CollisionEffect {
                 }
             }
             if f32::from_bits(words[7]) < 0.0 {
-                Self::respawn(words, draw, self.mode, base_z, random);
+                Self::respawn(words, draw, self.mode, base_z, self.x87_arithmetic, random);
             }
             draw.words[11..14].copy_from_slice(&words[6..9]);
         }
+    }
+}
+
+impl CollisionEffect {
+    /// MEMORIA 0x4322c0: the fade first, then the same fall and two-draw respawn as type 6
+    /// without collision planes; every particle takes the pool opacity.
+    fn advance_fading(&mut self, delta: u32, random: &mut CrtRandom) {
+        let fade = self.fade.as_mut().expect("type-7 fade");
+        fade.advance(delta);
+        let alpha = fade.alpha;
+        let time = delta.min(120) as f32 * 10.0;
+        let base_z = f32::from_bits(self.parameters[0]);
+        for particle in &mut self.particles {
+            let words = &mut particle.words;
+            let draw = particle.object.draw.as_mut().expect("particle draw");
+            let y = f32::from_bits(words[7]) - time / f32::from_bits(words[9]);
+            words[7] = y.to_bits();
+            if y < 0.0 {
+                Self::respawn(words, draw, self.mode, base_z, self.x87_arithmetic, random);
+            }
+            draw.words[17] = alpha;
+            draw.words[11..14].copy_from_slice(&words[6..9]);
+        }
+    }
+
+    pub fn is_fading(&self) -> bool {
+        self.fade.is_some()
     }
 }
 
@@ -254,6 +392,8 @@ impl SceneHost {
             call.argument(20, "particle speed")?,
         ];
         let count = call.argument(24, "particle count")?;
+        // 0x22a7 / MEMORIA 0x453d20 -> 0x426960 builds type 7 with the same arguments.
+        let fading = call.command == 0x2a7;
         let name = call.vm.resolve_string(name_id)?;
         if slot >= 4 {
             call.complete(0x4018)?;
@@ -265,12 +405,18 @@ impl SceneHost {
         {
             return Err(call.error("collision particles need bounded count and finite parameters with positive speed").into());
         }
-        self.collision_triangles().map_err(|e| call.error(e))?;
+        if !fading {
+            self.collision_triangles().map_err(|e| call.error(e))?;
+        }
+        let words = [mode, parameters[0], parameters[1], count];
         let template = crate::snapshot::SavedEffect::name_field(&name)
             .ok()
-            .map(|name| crate::snapshot::SavedEffect::Collision {
-                words: [mode, parameters[0], parameters[1], count],
-                name,
+            .map(|name| {
+                if fading {
+                    crate::snapshot::SavedEffect::FadingParticles { words, name }
+                } else {
+                    crate::snapshot::SavedEffect::Collision { words, name }
+                }
             });
         let image = image::load(source, &name)?.map(|decoded| ObjectImage {
             filter: None,
@@ -284,8 +430,18 @@ impl SceneHost {
             ..Default::default()
         };
         let mut candidate_random = random.clone();
-        let mut effect = CollisionEffect::new(mode, parameters, count, pool, &mut candidate_random);
+        let mut effect = CollisionEffect::new_with_arithmetic(
+            mode,
+            parameters,
+            count,
+            pool,
+            &mut candidate_random,
+            self.collision_x87_arithmetic,
+        );
         effect.template = template;
+        if fading {
+            effect.fade = Some(ParticleFade::new(mode));
+        }
         self.replace_effect_slot(slot as u8, backend)?;
         call.complete(0x4018)?;
         self.collision_effects.insert(slot as u8, effect);
@@ -338,6 +494,112 @@ mod tests {
             &[0, 0, 32, 32, 16, 16]
         );
     }
+    #[test]
+    fn memoria_x87_stores_match_independent_reference_and_keep_rng_progress() {
+        let mut rng = CrtRandom::new(4);
+        let mut effect = CollisionEffect::new_with_arithmetic(
+            0,
+            [15.0f32.to_bits(), 5000.0f32.to_bits()],
+            1,
+            SceneObject::default(),
+            &mut rng,
+            true,
+        );
+        // Independent Python struct/f64 reference, preserving native f32 store points.
+        assert_eq!(
+            effect.particles[0].words,
+            [
+                1, 0, 0, 0, 0, 0, 3258148454, 1115202519, 1104124314, 1167943023, 0
+            ]
+        );
+        let mut expected_rng = CrtRandom::new(4);
+        for _ in 0..5 {
+            expected_rng.next_value();
+        }
+        assert_eq!(rng, expected_rng);
+        let before = effect.particles[0].words;
+        // 0x431c9b rounds the quotient to f32 before the subtraction.
+        let quotient = (1200.0 / f64::from(f32::from_bits(before[9]))) as f32;
+        let y = (f64::from(f32::from_bits(before[7])) - f64::from(quotient)) as f32;
+        effect.advance(1000, &[], &mut rng);
+        assert_eq!(effect.particles[0].words[7], y.to_bits());
+        assert_eq!(rng, expected_rng);
+    }
+
+    #[test]
+    fn fade_follows_mode_bytes_with_unsigned_delay_and_zero_duration() {
+        // Byte 2 % 3 selects the phase; byte 1 is the delay, byte 0 the duration (×100 ms).
+        let mut out = ParticleFade::new(0x0002_0a05);
+        assert_eq!(
+            (out.phase, out.delay, out.duration, out.alpha),
+            (2, 1000, 500, 255)
+        );
+        let mut alphas = Vec::new();
+        for delta in [999, 1, 250, 249, 1, 5000] {
+            out.advance(delta);
+            alphas.push(out.alpha);
+        }
+        assert_eq!(alphas, [255, 255, 128, 1, 0, 0]);
+        let mut fade_in = ParticleFade::new(0x0004_0005);
+        assert_eq!((fade_in.phase, fade_in.alpha), (1, 0));
+        fade_in.advance(100);
+        assert_eq!(fade_in.alpha, 51);
+        fade_in.advance(400);
+        assert_eq!(fade_in.alpha, 255);
+        let mut instant = ParticleFade::new(0x0001_0000);
+        instant.advance(0);
+        assert_eq!(instant.alpha, 255);
+        let mut opaque = ParticleFade::new(0x0003_0101);
+        opaque.advance(150);
+        assert_eq!((opaque.phase, opaque.alpha), (0, 255));
+    }
+
+    #[test]
+    fn fading_pool_skips_planes_applies_pool_alpha_and_respawns_with_two_draws() {
+        let mut random = CrtRandom::new(0);
+        let mut effect = CollisionEffect::new_with_arithmetic(
+            0x0001_0005,
+            [15.0f32.to_bits(), 5000.0f32.to_bits()],
+            2,
+            SceneObject::default(),
+            &mut random,
+            true,
+        );
+        effect.fade = Some(ParticleFade::new(effect.mode));
+        // Below the plane and inside its fade band, but type 7 never collides.
+        for (particle, y) in effect.particles.iter_mut().zip([0.5f32, 50.0]) {
+            particle.words[6..10].copy_from_slice(&[0, y.to_bits(), 0, 100.0f32.to_bits()]);
+        }
+        let mut expected = random.clone();
+        effect.advance(10, &[], &mut random);
+        let x = hundredth_x87(f64::from(expected.next_value()) / 32767.0 * 90.0 - 45.0);
+        let z = hundredth_x87(f64::from(expected.next_value()) / 32767.0 * 20.0 + 15.0);
+        assert_eq!(random, expected);
+        let [respawned, falling] = &effect.particles[..] else {
+            panic!()
+        };
+        assert_eq!(
+            &respawned.words[6..11],
+            &[
+                x.to_bits(),
+                74.5f32.to_bits(),
+                z.to_bits(),
+                100.0f32.to_bits(),
+                0
+            ]
+        );
+        assert_eq!(falling.words[7], 49.0f32.to_bits());
+        for particle in &effect.particles {
+            let draw = particle.object.draw.as_ref().unwrap();
+            assert_eq!(draw.words[17], 5);
+            assert_eq!(&draw.words[11..14], &particle.words[6..9]);
+        }
+        // Movement clamps at 120 ms while the fade clock keeps the whole delta.
+        effect.advance(1000, &[], &mut random);
+        assert_eq!(effect.fade.as_ref().unwrap().elapsed, 1010);
+        assert_eq!(effect.particles[1].words[7], 37.0f32.to_bits());
+    }
+
     #[test]
     fn collisions_use_first_plane_then_fade_and_respawn_with_two_draws() {
         let triangle = [[-2.0, 2.0, -2.0], [2.0, 2.0, -2.0], [0.0, 2.0, 2.0]];

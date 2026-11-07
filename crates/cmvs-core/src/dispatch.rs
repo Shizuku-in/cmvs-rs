@@ -4994,6 +4994,31 @@ pub static FALLING_BILLBOARDS: &[Entry] = &[Entry {
                 .random
                 .as_deref_mut()
                 .expect("particle random capability checked"),
+            false,
+            audio_backend(&mut hosts.audio),
+        )?;
+        Ok(Flow::Done)
+    },
+}];
+
+/// MEMORIA 0x22a2 / 0x4539a0: the same type-2 effect with x87 arithmetic.
+pub static FALLING_BILLBOARDS_X87: &[Entry] = &[Entry {
+    command: 0x2a2,
+    name: "create x87 falling billboard effect",
+    capability: Capability::ParticleImages,
+    handler: |hosts, call| {
+        let h = hosts
+            .images
+            .as_mut()
+            .expect("particle image capability checked");
+        h.scene.create_falling_effect(
+            call,
+            h.source,
+            hosts
+                .random
+                .as_deref_mut()
+                .expect("particle random capability checked"),
+            true,
             audio_backend(&mut hosts.audio),
         )?;
         Ok(Flow::Done)
@@ -5077,6 +5102,29 @@ pub static COLLISION_PARTICLES: &[Entry] = &[
         handler: collision_mesh,
     },
 ];
+/// MEMORIA 0x22a7 / 0x453d20: type 7 takes the 0x22a6 arguments and pool, without collision.
+pub static FADING_PARTICLES: &[Entry] = &[Entry {
+    command: 0x2a7,
+    name: "create fading particle effect",
+    capability: Capability::ParticleImages,
+    handler: |hosts, call| {
+        let h = hosts
+            .images
+            .as_mut()
+            .expect("particle image capability checked");
+        h.scene.create_collision_effect(
+            call,
+            h.source,
+            hosts
+                .random
+                .as_deref_mut()
+                .expect("particle random capability checked"),
+            audio_backend(&mut hosts.audio),
+        )?;
+        Ok(Flow::Done)
+    },
+}];
+
 fn collision_mesh(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
     hosts
         .scene
@@ -5825,7 +5873,9 @@ pub static VARIANT_TABLES: &[&[Entry]] = &[
     OBJECT_QUEUE,
     LIST_SELECT,
     FALLING_BILLBOARDS,
+    FALLING_BILLBOARDS_X87,
     COLLISION_PARTICLES,
+    FADING_PARTICLES,
     FRAGMENTS,
 ];
 
@@ -5864,7 +5914,9 @@ pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'st
         crate::profile::VariantId::AudioPreload => AUDIO_PRELOAD,
         crate::profile::VariantId::PolarPoint => POLAR_POINT,
         crate::profile::VariantId::FallingBillboards => FALLING_BILLBOARDS,
+        crate::profile::VariantId::FallingBillboardsX87 => FALLING_BILLBOARDS_X87,
         crate::profile::VariantId::CollisionParticles => COLLISION_PARTICLES,
+        crate::profile::VariantId::FadingParticles => FADING_PARTICLES,
         crate::profile::VariantId::Fragments => FRAGMENTS,
     };
     entries.iter().find(|entry| entry.command == command)
@@ -5902,7 +5954,9 @@ pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
         Semantics::Variant(crate::profile::VariantId::ParticlesX87) => "variant x87 particle override",
         Semantics::Variant(crate::profile::VariantId::BackgroundAudio) => "variant background audio override",
         Semantics::Variant(crate::profile::VariantId::FallingBillboards) => "variant falling billboard override",
+        Semantics::Variant(crate::profile::VariantId::FallingBillboardsX87) => "variant x87 falling billboard override",
         Semantics::Variant(crate::profile::VariantId::CollisionParticles) => "variant collision particle override",
+        Semantics::Variant(crate::profile::VariantId::FadingParticles) => "variant fading particle override",
         Semantics::Variant(crate::profile::VariantId::Fragments) => "variant image fragment override",
         Semantics::Variant(crate::profile::VariantId::SeRestart) => "variant SE restart",
         Semantics::Variant(crate::profile::VariantId::AudioPreload) => "variant audio preload",

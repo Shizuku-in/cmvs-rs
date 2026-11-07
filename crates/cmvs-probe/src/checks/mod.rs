@@ -187,7 +187,9 @@ pub fn run(
             let user = out.join("users").join(label);
             fs::create_dir_all(&user)
                 .map_err(|e| e.to_string())
-                .and_then(|()| startup::run_to_start(target, &script, &user, options, font))
+                .and_then(|()| {
+                    startup::run_to_start(target, &script, &user, options, font, manifest)
+                })
         };
         let mut first = session("start-1");
         if let Ok(run) = &mut first {

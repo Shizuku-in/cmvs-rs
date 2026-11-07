@@ -36,6 +36,14 @@ game-id 0x00000000
 executable cmvs.exe sha256=f77ecbfd39d1076c66915544d73b9c2d2c5876fbabeaef3d589050b6094d13ac
 end
 
+game memoria
+profile cmvs-20090815
+start data/pack/start.ps2 sha256=651436ed2fde5075259c9ebff4ae40d41530638e3f2094d33353318bd0e04826
+archive data/pack/script.cpz sha256=f041077362880c3d0bf82f7a44ba4311648c4119e18522f507dc1dcd59df305b
+game-id 0x00000000
+executable cmvs.exe sha256=36fa780a5d2b8df4ac6a6e48a2f78708b79aa10d22eb575a5ae74742d902f71a
+end
+
 game miranosu
 profile cmvs-20110525
 start data/pack/start.ps2 sha256=2e8c7261ea801f59c9e80b9cdbde89832c0a65f7b622e2fa4551509b1cfe5143

@@ -97,6 +97,7 @@ impl Configuration {
             || profile.is_inspected_20071117()
             || profile.is_inspected_20080719()
             || profile.is_inspected_20080903()
+            || profile.is_inspected_20090815()
         {
             let value = |section, key, default| {
                 crate::save_menu::profile_int(&self.0, section, key, default) as u32

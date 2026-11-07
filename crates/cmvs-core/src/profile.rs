@@ -58,7 +58,9 @@ pub enum VariantId {
     AudioPreload,
     PolarPoint,
     FallingBillboards,
+    FallingBillboardsX87,
     CollisionParticles,
+    FadingParticles,
     Fragments,
     KeyedArchives,
     DisplayCount,
@@ -96,7 +98,9 @@ impl VariantId {
             "audio-preload" => Some(Self::AudioPreload),
             "polar-point" => Some(Self::PolarPoint),
             "falling-billboards" => Some(Self::FallingBillboards),
+            "falling-billboards-x87" => Some(Self::FallingBillboardsX87),
             "collision-particles" => Some(Self::CollisionParticles),
+            "fading-particles" => Some(Self::FadingParticles),
             "fragments" => Some(Self::Fragments),
             "keyed-archives" => Some(Self::KeyedArchives),
             "display-count" => Some(Self::DisplayCount),
@@ -135,7 +139,9 @@ impl VariantId {
             Self::AudioPreload => "audio-preload",
             Self::PolarPoint => "polar-point",
             Self::FallingBillboards => "falling-billboards",
+            Self::FallingBillboardsX87 => "falling-billboards-x87",
             Self::CollisionParticles => "collision-particles",
+            Self::FadingParticles => "fading-particles",
             Self::Fragments => "fragments",
             Self::KeyedArchives => "keyed-archives",
             Self::DisplayCount => "display-count",
@@ -330,7 +336,10 @@ impl EngineProfile {
 
     /// Independently inspected x86 sine interpolation; docs/games/{asukimi,harouse}.
     pub(crate) fn uses_legacy_sine_modes(&self) -> bool {
-        self.is_inspected_20071117() || self.is_inspected_20080719() || self.is_inspected_20080903()
+        self.is_inspected_20071117()
+            || self.is_inspected_20080719()
+            || self.is_inspected_20080903()
+            || self.is_inspected_20090815()
     }
 
     /// Independently inspected Harouse build; capabilities still bind separately.
@@ -355,6 +364,20 @@ impl EngineProfile {
                 .binary(
                     &crate::digest::parse_hex(
                         "f77ecbfd39d1076c66915544d73b9c2d2c5876fbabeaef3d589050b6094d13ac",
+                    )
+                    .expect("static SHA-256"),
+                )
+                .is_some()
+    }
+
+    /// Independently inspected MEMORIA x86 build; docs/games/memoria.
+    pub(crate) fn is_inspected_20090815(&self) -> bool {
+        self.id == "cmvs-20090815"
+            && self.base.as_deref() == Some("cmvs-20160201")
+            && self
+                .binary(
+                    &crate::digest::parse_hex(
+                        "36fa780a5d2b8df4ac6a6e48a2f78708b79aa10d22eb575a5ae74742d902f71a",
                     )
                     .expect("static SHA-256"),
                 )
@@ -576,11 +599,12 @@ pub struct Registry {
     contracts: BTreeMap<[u8; 32], ContractProof>,
 }
 
-const BUILTIN_PROFILES: [&str; 15] = [
+const BUILTIN_PROFILES: [&str; 16] = [
     include_str!("../profiles/cmvs-20070119.profile"),
     include_str!("../profiles/cmvs-20071117.profile"),
     include_str!("../profiles/cmvs-20080719.profile"),
     include_str!("../profiles/cmvs-20080903.profile"),
+    include_str!("../profiles/cmvs-20090815.profile"),
     include_str!("../profiles/cmvs-20110525.profile"),
     include_str!("../profiles/cmvs-20120309.profile"),
     include_str!("../profiles/cmvs-20130131.profile"),

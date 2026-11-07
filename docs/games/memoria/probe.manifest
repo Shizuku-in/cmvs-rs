@@ -1,0 +1,2 @@
+profile cmvs-20090815 -- README.md: executable identity and command bindings
+start-route -- README.md: a first launch plays the snky/snha route and polls decide (0x21a0) in snha19 before menu.ps2

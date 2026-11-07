@@ -22,6 +22,7 @@ pub struct StartRun {
     pub yields: u64,
     pub steps: u64,
     pub advances: u64,
+    pub nudges: u64,
     pub trace: [u8; 32],
     pub frames: Vec<[u8; 8]>,
     pub state: String,
@@ -40,8 +41,10 @@ pub fn run_to_start(
     user: &Path,
     options: &Options,
     font: Option<&cmvs_desktop::font::FontRenderer>,
+    manifest: Option<&crate::manifest::Manifest>,
 ) -> Result<StartRun, String> {
     let mut session = Session::start(target, script, user, options, font)?;
+    session.set_manifest(manifest);
     let mut log = StartLog::default();
     let (reached, stop) = match drive_to_start(&mut session, &mut log) {
         Ok(page) => (Some(page), None),
@@ -56,6 +59,7 @@ pub fn run_to_start(
         yields: session.yields(),
         steps: run.steps(),
         advances: log.advances,
+        nudges: log.nudges,
         trace: session.trace_digest(),
         frames: session.frame_digests().to_vec(),
         state: state_digest(run),
@@ -69,6 +73,7 @@ impl StartRun {
             ("steps", Json::from(self.steps)),
             ("yields", self.yields.into()),
             ("advances", self.advances.into()),
+            ("nudges", self.nudges.into()),
             (
                 "start_page",
                 self.reached

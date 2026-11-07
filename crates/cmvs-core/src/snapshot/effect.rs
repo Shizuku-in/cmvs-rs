@@ -31,6 +31,11 @@ pub enum SavedEffect {
         words: [u32; 4],
         name: [u8; 32],
     },
+    /// Type 7 (MEMORIA 0x425740 / 0x425850): the type-6 layout at object +32.
+    FadingParticles {
+        words: [u32; 4],
+        name: [u8; 32],
+    },
     /// Type 8 is written without a body and the native reader discards it.
     Fragments,
 }
@@ -55,7 +60,8 @@ impl SavedEffect {
             | Self::Rain { name, .. }
             | Self::Falling { name, .. }
             | Self::Particles { name, .. }
-            | Self::Collision { name, .. } => {
+            | Self::Collision { name, .. }
+            | Self::FadingParticles { name, .. } => {
                 &name[..name.iter().position(|&b| b == 0).unwrap_or(name.len())]
             }
             Self::Fragments => &[],
@@ -85,7 +91,9 @@ impl SavedEffect {
             }
             Self::Falling { words, name } => (&words[..4], words[4], name),
             Self::Particles { words, name } => (&words[1..5], words[5], name),
-            Self::Collision { words, name } => (&words[1..3], words[3], name),
+            Self::Collision { words, name } | Self::FadingParticles { words, name } => {
+                (&words[1..3], words[3], name)
+            }
             Self::Fragments => return Ok(()),
         };
         if count > 16_384 || !name.contains(&0) {
@@ -116,7 +124,7 @@ impl SavedEffect {
         let kind = u16::from_le_bytes(bytes[2..4].try_into().unwrap());
         let words = match kind {
             1 | 2 | 4 | 5 => 6,
-            3 | 6 => 4,
+            3 | 6 | 7 => 4,
             8 if bytes.len() == 4 => return Ok(Self::Fragments),
             _ => return Err(FormatError("unsupported saved particle effect type")),
         };
@@ -152,6 +160,10 @@ impl SavedEffect {
                 words: std::array::from_fn(word),
                 name,
             },
+            7 => Self::FadingParticles {
+                words: std::array::from_fn(word),
+                name,
+            },
             _ => unreachable!(),
         };
         effect.validate()?;
@@ -167,6 +179,7 @@ impl SavedEffect {
             Self::Falling { words, name } => (2, words, name),
             Self::Particles { words, name } => (5, words, name),
             Self::Collision { words, name } => (6, words, name),
+            Self::FadingParticles { words, name } => (7, words, name),
             Self::Fragments => (8, &[], &[]),
         };
         let mut bytes = 1u16.to_le_bytes().to_vec();
@@ -207,6 +220,7 @@ mod tests {
             ),
             (4, vec![0x1000, 0, 0, f(12.0), f(250.0), 16]),
             (6, vec![0x41000000, f(10.0), f(1000.0), 4]),
+            (7, vec![0x0002_0a05, f(10.0), f(1000.0), 4]),
         ] {
             let bytes = record(kind, &words);
             let saved = SavedEffect::decode(&bytes).unwrap();

@@ -25,6 +25,10 @@ fn inspected_early_queries_use_the_down_edge_and_extra_actions_can_be_consumed()
             "afe3b3a895e7b3ba5f78e6f6464296f1d028e87307c8de5a568b88fd6086491e",
         ),
         (
+            "cmvs-20090815",
+            "36fa780a5d2b8df4ac6a6e48a2f78708b79aa10d22eb575a5ae74742d902f71a",
+        ),
+        (
             "cmvs-20080903",
             "f77ecbfd39d1076c66915544d73b9c2d2c5876fbabeaef3d589050b6094d13ac",
         ),

@@ -45,6 +45,7 @@ pub(crate) fn decode_with_layout(
     let c = match layout {
         SnapshotLayout::TextV1SceneLegacy
         | SnapshotLayout::TextV1SceneV1
+        | SnapshotLayout::TextV1SceneV2Collision
         | SnapshotLayout::TextV1SceneV2
         | SnapshotLayout::TextV2 => &[0; 208],
         SnapshotLayout::TextV3 | SnapshotLayout::TextV3SceneV4 => r.take(208)?,
