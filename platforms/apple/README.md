@@ -60,9 +60,10 @@ physical iOS touch verification. V5, which plays a complete route before
 checking system-save persistence, exhausted both a 10-million-step budget and
 the default 50-million-step budget; complete-route coverage is not claimed.
 
-The exact 1.03 startup hash is registered as `amatsutsumi-103`; its script
-archive and original x86/x64 executables match the existing Amatsutsumi record.
-Sharing an archive is allowed only when profile, game ID, executable evidence
-and resume policy agree; unknown startup hashes still fail identification.
+The original and exact 1.03 startup hashes belong to the same `amatsutsumi`
+record, retaining the existing Android/Switch save-directory identity. Its
+script archive and original x86/x64 executables are unchanged. Game records
+may list multiple exact `start` hashes; duplicate hashes or archives across
+separate games remain invalid, and unknown startup hashes fail identification.
 The tested resources use Japanese text. Third-party DLL/PK translation overlays
 are not loaded by this implementation.

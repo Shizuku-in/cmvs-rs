@@ -480,7 +480,8 @@ impl EngineProfile {
 pub struct GameRecord {
     pub game: String,
     pub profile: String,
-    pub start_script: RecordFile,
+    /// Exact startup variants sharing this game's identity and script archive.
+    pub start_scripts: Vec<RecordFile>,
     pub script_archive: RecordFile,
     /// Value the start script hands to 0x201d.
     pub game_id: u32,
@@ -652,18 +653,26 @@ impl Registry {
             }
         }
         for (i, game) in self.games.iter().enumerate() {
+            for (index, start) in game.start_scripts.iter().enumerate() {
+                if game.start_scripts[..index]
+                    .iter()
+                    .any(|earlier| earlier.sha256 == start.sha256)
+                {
+                    return Err(ProfileError::new(format!(
+                        "game {} repeats a start script hash",
+                        game.game
+                    )));
+                }
+            }
             let earlier = &self.games[..i];
             if earlier.iter().any(|g| {
                 g.game == game.game
-                    || g.start_script.sha256 == game.start_script.sha256
-                    // An updated startup can share an unchanged script archive.
-                    // Archive-only identification must still select identical
-                    // semantics, save identity and executable confirmation rules.
-                    || (g.script_archive.sha256 == game.script_archive.sha256
-                        && (g.profile != game.profile
-                            || g.game_id != game.game_id
-                            || g.executables != game.executables
-                            || g.skip_auto_resume != game.skip_auto_resume))
+                    || g.start_scripts.iter().any(|start| {
+                        game.start_scripts
+                            .iter()
+                            .any(|other| other.sha256 == start.sha256)
+                    })
+                    || g.script_archive.sha256 == game.script_archive.sha256
             }) {
                 return Err(ProfileError::new(format!(
                     "game {} duplicates an earlier record",

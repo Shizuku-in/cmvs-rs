@@ -184,20 +184,19 @@ impl Registry {
                 .iter()
                 .map(|f| describe("executable", f)),
         );
-        let data = if evidence.start_script.is_none() && evidence.script_archive.is_none() {
-            None
-        } else {
-            self.games.iter().find(|g| {
-                evidence
-                    .start_script
-                    .as_ref()
-                    .is_none_or(|f| f.sha256 == g.start_script.sha256)
-                    && evidence
+        let data =
+            if evidence.start_script.is_none() && evidence.script_archive.is_none() {
+                None
+            } else {
+                self.games.iter().find(|g| {
+                    evidence.start_script.as_ref().is_none_or(|f| {
+                        g.start_scripts.iter().any(|start| f.sha256 == start.sha256)
+                    }) && evidence
                         .script_archive
                         .as_ref()
                         .is_none_or(|f| f.sha256 == g.script_archive.sha256)
-            })
-        };
+                })
+            };
         if let Some(game) = data {
             notes.push(format!(
                 "data matches game {} ({})",

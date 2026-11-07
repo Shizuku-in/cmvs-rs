@@ -826,40 +826,90 @@ fn selection_needs_data_evidence_and_confirms_every_present_executable() {
 }
 
 #[test]
-fn startup_variants_require_exact_data_and_identical_archive_semantics() {
+fn startup_variants_keep_one_identity_and_require_exact_data() {
     let root = build("synthetic-root", None, &[0, 1], 1).to_text();
     let derived = build("synthetic-derived", Some("synthetic-root"), &[0, 1], 3).to_text();
     let original = games(&[7; 32], &[8; 32], &[3; 32]);
-    let variant = games(&[9; 32], &[8; 32], &[3; 32]).replace("game synthetic", "game updated");
-    let records = format!("{original}{variant}");
+    let extra = format!("start data/pack/start.ps3 sha256={}\n", to_hex(&[9; 32]));
+    let records = original.replace("archive ", &format!("{extra}archive "));
     let registry = Registry::parse(&[&root, &derived], &records).unwrap();
-    let evidence = Evidence {
-        start_script: Some(file("start.ps3", 9)),
-        script_archive: Some(file("script.cpz", 8)),
-        executables: vec![file("cmvs64.exe", 3)],
-    };
-    assert_eq!(
-        registry
-            .select(None, &evidence)
-            .unwrap()
-            .record
-            .unwrap()
-            .game,
-        "updated"
-    );
+    assert_eq!(registry.games().len(), 1);
+    assert_eq!(registry.games()[0].start_scripts.len(), 2);
+    for start in [None, Some(file("start.ps3", 7)), Some(file("start.ps3", 9))] {
+        let evidence = Evidence {
+            start_script: start,
+            script_archive: Some(file("script.cpz", 8)),
+            executables: vec![file("cmvs64.exe", 3)],
+        };
+        assert_eq!(
+            registry.select(None, &evidence).unwrap().record,
+            Some(&registry.games()[0])
+        );
+        assert_eq!(
+            registry
+                .select(None, &evidence)
+                .unwrap()
+                .record
+                .unwrap()
+                .game,
+            "synthetic"
+        );
+    }
     assert!(
         registry
             .select(
                 None,
                 &Evidence {
                     start_script: Some(file("start.ps3", 10)),
-                    ..evidence
+                    script_archive: Some(file("script.cpz", 8)),
+                    executables: vec![file("cmvs64.exe", 3)],
                 }
             )
             .is_err()
     );
-    let conflicting = format!("{original}{}", variant.replace("0x12345678", "0x87654321"));
-    assert!(Registry::parse(&[&root, &derived], &conflicting).is_err());
+    // Neither a variant hash nor an archive may identify a second save identity.
+    for (start, archive) in [(9, 10), (10, 8)] {
+        let other =
+            games(&[start; 32], &[archive; 32], &[3; 32]).replace("game synthetic", "game other");
+        assert!(Registry::parse(&[&root, &derived], &format!("{records}{other}")).is_err());
+    }
+    let repeated = records.replace("archive ", &format!("{extra}archive "));
+    assert!(Registry::parse(&[&root, &derived], &repeated).is_err());
+    let missing_start = original
+        .lines()
+        .filter(|line| !line.starts_with("start "))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(Registry::parse(&[&root, &derived], &missing_start).is_err());
+}
+
+#[test]
+fn both_amatsutsumi_startups_select_the_existing_save_identity() {
+    let registry = Registry::builtin();
+    let archive = FileEvidence {
+        path: "script.cpz".into(),
+        sha256: parse_hex("92b367e8c3d2791f1dd2ca8426581974fbb640d2766f2e82ab12383d2f5359e4")
+            .unwrap(),
+    };
+    for start in [
+        "c338313949a803e834acf0d746c93f09c4d41f558af8fb6c13ab1ee55aff2bd0",
+        "14a5f200dc0c8dfc00cbc1c3293d09849fd4da060ecdc1d6cbced031691a4986",
+    ] {
+        let evidence = Evidence {
+            start_script: Some(FileEvidence {
+                path: "start.ps3".into(),
+                sha256: parse_hex(start).unwrap(),
+            }),
+            script_archive: Some(archive.clone()),
+            executables: Vec::new(),
+        };
+        let selection = registry.select(None, &evidence).unwrap();
+        let game = selection.record.unwrap();
+        assert_eq!(game.game, "amatsutsumi");
+        assert_eq!(game.game_id, 0x1780_0016);
+        assert_eq!(game.skip_auto_resume, Some(2198));
+        assert_eq!(selection.profile.id, "cmvs-20160201");
+    }
 }
 
 /// A machine stopped at the script's first system command, and that command's PC.
@@ -1016,7 +1066,6 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
             ("hapymaherfd", "cmvs-20140217", None),
             ("chronoclock", "cmvs-20150405", None),
             ("amatsutsumi", "cmvs-20160201", Some(2198)),
-            ("amatsutsumi-103", "cmvs-20160201", Some(2198)),
             ("aoitori", "cmvs-20171114", None),
             ("realive", "cmvs-20190305", None),
             ("seishunf", "cmvs-20190405", None),
@@ -1032,7 +1081,7 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
         .collect();
     assert_eq!(remakes[0].game_id, 0x1760_0013);
     assert_eq!(remakes[1].game_id, 0x1760_0015);
-    assert_ne!(remakes[0].start_script, remakes[1].start_script);
+    assert_ne!(remakes[0].start_scripts, remakes[1].start_scripts);
     assert_ne!(remakes[0].script_archive, remakes[1].script_archive);
     assert_eq!(remakes[0].executables, remakes[1].executables);
 }

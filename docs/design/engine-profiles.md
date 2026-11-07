@@ -120,11 +120,15 @@
 |---|---|
 | `game` | 游戏标识，与 `docs/games/<标识>/` 一致 |
 | `profile` | 档案 `id` |
-| `start_script` | 包外启动脚本的相对路径与 SHA-256：`data/pack/start.ps2` 或 `start.ps3` |
+| `start_scripts` | 包外启动脚本各已知版本的相对路径与精确 SHA-256：`data/pack/start.ps2` 或 `start.ps3` |
 | `script_archive` | 脚本包的相对路径与 SHA-256 |
 | `game_id` | 启动脚本交给 `0x201d` 的值，如《アマツツミ》`0x17800016`、CHRONOCLOCK `0x17700011` |
 | `executables` | 已知配套 exe（`cmvs.exe`/`cmvs32.exe`/`cmvs64.exe`）的 SHA-256，可为空。同一游戏有多个补丁版本时分别登记 |
 | `policies` | 本作专属的预览策略参数，如 `--skip-auto-resume` 用到的变量 2198 |
+
+当补丁只更新启动脚本、保持脚本包及配套 exe 不变时，在同一个 `game` 记录中追加
+`start <路径> sha256=<哈希>` 行；它们共用游戏标识和存档目录。不同游戏记录仍不能
+复用启动脚本哈希或脚本包哈希，未登记的启动脚本也不会因脚本包匹配而获准运行。
 
 ### 4.3 命令状态（`CommandStatus`）
 
