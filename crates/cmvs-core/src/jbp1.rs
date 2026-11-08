@@ -4,23 +4,21 @@
 //! 0x1400e47b0 clamps the color conversion. Entropy coding is shared with JBPD.
 use crate::{
     FormatError, MAX_PAYLOAD,
-    jbpd::{Bits, ORDER, Tree, word},
+    jbpd::{Bits, Huffman, ORDER, Tree, word},
 };
 
 /// The only flags met in this game: 4:2:0 (bits 28-29 = 1), explicit quantizers (bit 27).
 const FLAGS: u32 = 0x58c0_0002;
 
-/// Decoded JBP1 samples before the PB3 layer crops and adds alpha.
+/// Decoded JBP1 samples before the PB3 layer adds alpha. Decoding covers both dimensions
+/// rounded up to 16, as 0x1400a0ad0 does for mode 1; the padding is decoded but not stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Jbp1 {
     /// Header +16/+18.
     pub width: u16,
     pub height: u16,
-    /// Both rounded up to 16, as 0x1400a0ad0 does for mode 1; `bgr` uses this stride.
-    pub padded_width: usize,
-    pub padded_height: usize,
-    /// Blue, green and red per padded pixel, top-down.
-    pub bgr: Vec<u8>,
+    /// Opaque RGBA, top-down, `width` x `height`.
+    pub rgba: Vec<u8>,
 }
 
 /// `(c * v) >> 16` with the 32-bit wrapping multiply and arithmetic shift of the original.
@@ -62,7 +60,14 @@ fn even(x0: i32, x2: i32, x4: i32, x6: i32) -> [i32; 4] {
 /// into 32 bits (a column whose rows 1..7 are zero is filled with the 16-bit product of row
 /// 0); rows second, shifting right by 3. Every intermediate is 32-bit wrapping and only the
 /// stored results are truncated to 16 bits. No rounding or level shift happens here.
-fn idct(block: &mut [i16; 64], quant: &[u8]) {
+fn idct(block: &mut [i16; 64], quant: &[u8], dc_only: bool) {
+    if dc_only {
+        // Column 0 becomes the 16-bit product and the others zero; each row is then
+        // [v, 0, ..] and its pass yields v in every column before the shift.
+        let value = i32::from(block[0]).wrapping_mul(i32::from(quant[0])) as i16;
+        block.fill((i32::from(value) >> 3) as i16);
+        return;
+    }
     for c in 0..8 {
         if (1..8).all(|r| block[r * 8 + c] == 0) {
             let value = i32::from(block[c]).wrapping_mul(i32::from(quant[c])) as i16;
@@ -110,19 +115,7 @@ fn idct(block: &mut [i16; 64], quant: &[u8]) {
     }
 }
 
-/// The 0x1400e47b0 lookup: index 0..256 gives 0, 256..512 gives index - 256, 512..768 gives
-/// 255. Indices are the luma plus 384 plus a chroma term; outside the table the original
-/// reads neighbouring data, which is rejected here.
-fn clamp(index: i64) -> Result<u8, FormatError> {
-    match index {
-        0..256 => Ok(0),
-        256..512 => Ok((index - 256) as u8),
-        512..768 => Ok(255),
-        _ => Err(FormatError("JBP1 sample outside the original clamp table")),
-    }
-}
-
-/// Decode a JBP1 stream (PB3B type 3 data at file offset 52) to padded BGR samples.
+/// Decode a JBP1 stream (PB3B type 3 data at file offset 52) to cropped RGBA.
 pub fn decode(data: &[u8]) -> Result<Jbp1, FormatError> {
     if data.len() > MAX_PAYLOAD || data.get(..4) != Some(b"JBP1") {
         return Err(FormatError("expected bounded JBP1 stream"));
@@ -146,8 +139,8 @@ pub fn decode(data: &[u8]) -> Result<Jbp1, FormatError> {
         .filter(|&n| n >= 36 && n <= data.len().saturating_sub(272))
         .ok_or(FormatError("JBP1 table offset outside stream"))?;
     let head = &data[table..table + 272];
-    let dc_tree = Tree::new(&head[..64])?;
-    let ac_tree = Tree::new(&head[64..128])?;
+    let dc_tree = Huffman::new(Tree::new(&head[..64])?);
+    let ac_tree = Huffman::new(Tree::new(&head[64..128])?);
     let runs = &head[128..144];
     let quant = &head[144..272];
     let start = table + 272;
@@ -174,7 +167,8 @@ pub fn decode(data: &[u8]) -> Result<Jbp1, FormatError> {
         previous = previous.wrapping_add(dc.signed(n)?);
         values.push(previous);
     }
-    let mut bgr = vec![0u8; padded_width * padded_height * 3];
+    let (stored_width, stored_height) = (usize::from(width), usize::from(height));
+    let mut rgba = vec![0u8; stored_width * stored_height * 4];
     let mut dc_index = 0;
     for my in 0..rows {
         for mx in 0..columns {
@@ -182,6 +176,7 @@ pub fn decode(data: &[u8]) -> Result<Jbp1, FormatError> {
             for (n, block) in samples.iter_mut().enumerate() {
                 block[0] = values[dc_index];
                 dc_index += 1;
+                let mut dc_only = true;
                 let mut pos = 1;
                 while pos < 64 {
                     let symbol = ac_tree.symbol(&mut ac)?;
@@ -189,35 +184,64 @@ pub fn decode(data: &[u8]) -> Result<Jbp1, FormatError> {
                         break;
                     }
                     if symbol == 0 {
-                        let mut run = 0;
-                        while ac.bit()? != 0 {
-                            run += 1;
-                            if run == 16 {
-                                return Err(FormatError("JBP1 zero run selector outside table"));
-                            }
-                        }
+                        let Some(run) = ac.run_selector()? else {
+                            return Err(FormatError("JBP1 zero run selector outside table"));
+                        };
                         pos += usize::from(runs[run]) + 1;
                         if pos > 64 {
                             return Err(FormatError("JBP1 zero run outside block"));
                         }
                     } else {
                         block[ORDER[pos]] = ac.signed(symbol)?;
+                        dc_only = false;
                         pos += 1;
                     }
                 }
-                idct(block, &quant[if n < 4 { 0..64 } else { 64..128 }]);
+                idct(block, &quant[if n < 4 { 0..64 } else { 64..128 }], dc_only);
             }
+            let columns = (stored_width - mx * 16).min(16);
             for y in 0..16 {
+                // The 0x1400e47b0 lookup is indexed by luma + 384 + a chroma term: 0..256
+                // gives 0, 256..512 index - 256, 512..768 255. Outside it the original reads
+                // neighbouring data, which is rejected. Lanes hold index - 256.
+                let mut lanes = [[0i32; 16]; 3];
+                let mut outside = false;
+                let luma = [&samples[y / 8 * 2], &samples[y / 8 * 2 + 1]];
+                let (cb, cr) = (&samples[4][y / 2 * 8..][..8], &samples[5][y / 2 * 8..][..8]);
+                for k in 0..8 {
+                    let (cb, cr) = (i32::from(cb[k]), i32::from(cr[k]));
+                    let terms = [
+                        scale(116112, cb),
+                        scale(46784, cr).wrapping_add(scale(22544, cb)).wrapping_neg(),
+                        scale(91888, cr),
+                    ];
+                    for x in [2 * k, 2 * k + 1] {
+                        let l = i32::from(luma[x / 8][y % 8 * 8 + x % 8]) + 128;
+                        for c in 0..3 {
+                            let v = l + terms[c];
+                            outside |= (v + 256) as u32 >= 768;
+                            lanes[c][x] = v;
+                        }
+                    }
+                }
+                if outside {
+                    return Err(FormatError("JBP1 sample outside the original clamp table"));
+                }
+                let mut words = [0u32; 16];
                 for x in 0..16 {
-                    let luma =
-                        i64::from(i32::from(samples[y / 8 * 2 + x / 8][y % 8 * 8 + x % 8]) + 384);
-                    let cb = i32::from(samples[4][y / 2 * 8 + x / 2]);
-                    let cr = i32::from(samples[5][y / 2 * 8 + x / 2]);
-                    let green = scale(46784, cr).wrapping_add(scale(22544, cb));
-                    let at = ((my * 16 + y) * padded_width + mx * 16 + x) * 3;
-                    bgr[at] = clamp(luma + i64::from(scale(116112, cb)))?;
-                    bgr[at + 1] = clamp(luma - i64::from(green))?;
-                    bgr[at + 2] = clamp(luma + i64::from(scale(91888, cr)))?;
+                    let b = lanes[0][x].clamp(0, 255) as u32;
+                    let g = lanes[1][x].clamp(0, 255) as u32;
+                    let r = lanes[2][x].clamp(0, 255) as u32;
+                    words[x] = r | g << 8 | b << 16 | 0xff00_0000;
+                }
+                // Padding samples still pass the clamp-table check above.
+                if my * 16 + y >= stored_height {
+                    continue;
+                }
+                let at = ((my * 16 + y) * stored_width + mx * 16) * 4;
+                let row = &mut rgba[at..at + columns * 4];
+                for (bytes, word) in row.as_chunks_mut::<4>().0.iter_mut().zip(words) {
+                    *bytes = word.to_le_bytes();
                 }
             }
         }
@@ -225,8 +249,6 @@ pub fn decode(data: &[u8]) -> Result<Jbp1, FormatError> {
     Ok(Jbp1 {
         width,
         height,
-        padded_width,
-        padded_height,
-        bgr,
+        rgba,
     })
 }

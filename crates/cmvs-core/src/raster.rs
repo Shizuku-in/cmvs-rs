@@ -5,7 +5,7 @@ use std::sync::{Arc, OnceLock};
 
 struct ImageData {
     pixels: Vec<u8>,
-    content_digest: OnceLock<[u8; 32]>,
+    content_digest: OnceLock<u128>,
 }
 
 #[derive(Clone)]
@@ -22,8 +22,9 @@ pub struct RgbaImage {
 /// How a texture cache recognizes an image without comparing pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CacheKey {
-    /// Equal pixel content and dimensions share one texture.
-    Content([u8; 32], u32, u32),
+    /// Equal pixel content and dimensions share one texture. The hash is 128 bits of
+    /// [`content_hash`], not a cryptographic digest: images are not adversarial here.
+    Content(u128, u32, u32),
     /// One decoded movie frame and its clones. Hashing it would cost more than the
     /// decode, and no other image shares its content.
     Frame(u64),
@@ -48,10 +49,11 @@ impl PartialEq for RgbaImage {
 impl Eq for RgbaImage {}
 impl RgbaImage {
     /// Lazily hashes immutable pixels once. Cache state is not part of image equality.
-    pub fn content_digest(&self) -> &[u8; 32] {
-        self.data
+    pub fn content_digest(&self) -> u128 {
+        *self
+            .data
             .content_digest
-            .get_or_init(|| crate::digest::sha256(self.pixels()))
+            .get_or_init(|| content_hash(self.pixels()))
     }
 
     /// Marks a decoded movie frame with an identity unique within the process.
@@ -70,7 +72,7 @@ impl RgbaImage {
     pub fn cache_key(&self) -> CacheKey {
         match self.frame {
             Some(frame) => CacheKey::Frame(frame),
-            None => CacheKey::Content(*self.content_digest(), self.width, self.height),
+            None => CacheKey::Content(self.content_digest(), self.width, self.height),
         }
     }
 
@@ -300,6 +302,47 @@ pub fn adler32(bytes: &[u8]) -> u32 {
     (b << 16) | a
 }
 
+/// Texture-cache identity of pixel content: four independent lanes of folded 64x64-bit
+/// multiplies over 64-byte stripes (the wyhash construction), finished with the length.
+/// A software SHA-256 cost more than decoding the image on console CPUs.
+pub fn content_hash(bytes: &[u8]) -> u128 {
+    const K: [u64; 6] = [
+        0xa076_1d64_78bd_642f,
+        0xe703_7ed1_a0b4_28db,
+        0x8ebc_6af0_9c88_c6e3,
+        0x5899_65cc_7537_4cc3,
+        0x1d8e_4e27_c47d_124f,
+        0x9e37_79b9_7f4a_7c15,
+    ];
+    #[inline(always)]
+    fn fold(a: u64, b: u64) -> u64 {
+        let m = u128::from(a) * u128::from(b);
+        (m as u64) ^ (m >> 64) as u64
+    }
+    #[inline(always)]
+    fn stripe(lanes: &mut [u64; 4], stripe: &[u8; 64]) {
+        for (i, lane) in lanes.iter_mut().enumerate() {
+            let a = u64::from_le_bytes(stripe[i * 16..i * 16 + 8].try_into().unwrap());
+            let b = u64::from_le_bytes(stripe[i * 16 + 8..i * 16 + 16].try_into().unwrap());
+            *lane = fold(a ^ *lane, b ^ K[i]);
+        }
+    }
+    let length = bytes.len() as u64;
+    let mut lanes = [K[0] ^ length, K[1], K[2], K[3]];
+    let (stripes, tail) = bytes.as_chunks::<64>();
+    for chunk in stripes {
+        stripe(&mut lanes, chunk);
+    }
+    let mut last = [0u8; 64];
+    last[..tail.len()].copy_from_slice(tail);
+    stripe(&mut lanes, &last);
+    let low = fold(lanes[0] ^ K[4], lanes[1] ^ length);
+    let high = fold(lanes[2] ^ K[5], lanes[3] ^ length.rotate_left(32));
+    let low = fold(low ^ K[0], high ^ K[1]) ^ low;
+    let high = fold(high ^ K[2], low ^ K[3]) ^ high;
+    u128::from(low) | u128::from(high) << 64
+}
+
 #[cfg(test)]
 mod content_digest_tests {
     use super::*;
@@ -313,7 +356,7 @@ mod content_digest_tests {
         drop(prepared);
         assert_eq!(
             cached.data.content_digest.get(),
-            Some(&crate::digest::sha256(cached.pixels()))
+            Some(&content_hash(cached.pixels()))
         );
         assert_eq!(cached.clone().cache_key(), key);
         assert_eq!(cached, RgbaImage::new(1, 1, vec![1, 2, 3, 4]).unwrap());
@@ -323,22 +366,40 @@ mod content_digest_tests {
     fn digest_cache_does_not_change_equality_and_tracks_pixel_content() {
         let first = RgbaImage::new(1, 1, vec![1, 2, 3, 4]).unwrap();
         let second = first.clone();
-        assert_eq!(
-            first.content_digest(),
-            &crate::digest::sha256(first.pixels())
-        );
+        assert_eq!(first.content_digest(), content_hash(first.pixels()));
         assert_eq!(first, second);
         assert_eq!(first, first.clone());
         let changed = RgbaImage::new(1, 1, vec![1, 2, 3, 5]).unwrap();
         assert_ne!(first.content_digest(), changed.content_digest());
     }
     #[test]
+    fn content_hash_depends_on_every_byte_and_on_the_length() {
+        let mut seen = std::collections::HashMap::new();
+        let mut check = |bytes: Vec<u8>| {
+            let hash = content_hash(&bytes);
+            let first = seen.entry(hash).or_insert_with(|| bytes.clone());
+            assert_eq!(*first, bytes, "different inputs share {hash:#x}");
+        };
+        for length in 0..200usize {
+            let bytes: Vec<u8> = (0..length).map(|i| (i * 7 + 3) as u8).collect();
+            // Trailing zeros are padding inside the last stripe; the length tells them apart.
+            check([bytes.as_slice(), &[0]].concat());
+            for at in 0..length {
+                let mut flipped = bytes.clone();
+                flipped[at] ^= 1;
+                check(flipped);
+            }
+            check(bytes);
+        }
+    }
+
+    #[test]
     fn frames_have_their_own_identity_and_keep_it_when_cloned() {
         let image = RgbaImage::new(1, 1, vec![1, 2, 3, 4]).unwrap();
         let content = image.cache_key();
         assert_eq!(
             content,
-            CacheKey::Content(crate::digest::sha256(image.pixels()), 1, 1)
+            CacheKey::Content(content_hash(image.pixels()), 1, 1)
         );
         let first = image.clone().into_frame();
         let second = image.into_frame();

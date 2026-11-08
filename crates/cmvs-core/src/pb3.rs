@@ -96,38 +96,66 @@ fn lzss_prefix(
     if expected > MAX_PAYLOAD {
         return Err(FormatError("PB3 LZSS output exceeds research bounds"));
     }
-    let mut ring = [0u8; 2048];
-    let mut write = 2014;
+    // The original keeps a 2048-byte ring, zeroed, whose writes start at 2014: output byte
+    // i lands in slot (2014 + i) & 2047. Reading slot `offset` is therefore reading the
+    // output `distance` bytes back (2048 for the slot about to be written), or zero
+    // before the first write reached that slot. No ring is kept.
     let mut at = 0;
     let mut token = 0;
-    let mut output = Vec::with_capacity(expected);
-    while output.len() < expected {
-        let bit = flags
+    let mut output = vec![0u8; expected];
+    let mut length = 0;
+    while length < expected {
+        let flag = *flags
             .get(token / 8)
-            .ok_or(FormatError("truncated PB3 LZSS flag plane"))?
-            & (128 >> (token % 8));
-        token += 1;
-        if bit == 0 {
-            let value = *data
-                .get(at)
-                .ok_or(FormatError("truncated PB3 LZSS literal"))?;
-            at += 1;
-            output.push(value);
-            ring[write] = value;
-            write = (write + 1) & 2047;
-        } else {
-            let pair = u16_at(data, at)?;
-            at += 2;
-            let offset = usize::from(pair >> 5);
-            let n = usize::from(pair & 31) + 3;
-            if n > expected - output.len() {
-                return Err(FormatError("PB3 LZSS reference exceeds output"));
+            .ok_or(FormatError("truncated PB3 LZSS flag plane"))?;
+        if flag == 0
+            && token % 8 == 0
+            && expected - length >= 8
+            && let Some(values) = data.get(at..at + 8)
+        {
+            // Eight literals.
+            let values: &[u8; 8] = values.try_into().unwrap();
+            let target: &mut [u8; 8] = (&mut output[length..length + 8]).try_into().unwrap();
+            *target = *values;
+            token += 8;
+            at += 8;
+            length += 8;
+            continue;
+        }
+        // A flag byte covers up to eight tokens; stop early once the output is complete.
+        for bit in token % 8..8 {
+            if length == expected {
+                break;
             }
-            for j in 0..n {
-                let value = ring[(offset + j) & 2047];
-                output.push(value);
-                ring[write] = value;
-                write = (write + 1) & 2047;
+            token += 1;
+            if flag & (128 >> bit) == 0 {
+                output[length] = *data
+                    .get(at)
+                    .ok_or(FormatError("truncated PB3 LZSS literal"))?;
+                at += 1;
+                length += 1;
+            } else {
+                let pair = u16_at(data, at)?;
+                at += 2;
+                let offset = usize::from(pair >> 5);
+                let n = usize::from(pair & 31) + 3;
+                if n > expected - length {
+                    return Err(FormatError("PB3 LZSS reference exceeds output"));
+                }
+                let distance = match (2014 + length).wrapping_sub(offset) & 2047 {
+                    0 => 2048,
+                    d => d,
+                };
+                if length >= distance {
+                    for i in length..length + n {
+                        output[i] = output[i - distance];
+                    }
+                } else {
+                    for i in length..length + n {
+                        output[i] = if i >= distance { output[i - distance] } else { 0 };
+                    }
+                }
+                length += n;
             }
         }
     }
@@ -262,15 +290,21 @@ pub fn decode_with_base(raw: &[u8], base: RgbaImage) -> Result<RgbaImage, Format
     for y in (0..height).step_by(8) {
         for x in (0..width).step_by(8) {
             if patch[8 + tile / 8] & (128 >> (tile % 8)) == 0 {
+                let columns = width.min(x + 8) - x;
                 for yy in y..height.min(y + 8) {
-                    for xx in x..width.min(x + 8) {
-                        let bgra = patch
-                            .get(at..at + 4)
-                            .ok_or(FormatError("truncated PB3 type-6 replacement pixels"))?;
-                        let to = (yy * width + xx) * 4;
-                        pixels[to..to + 4].copy_from_slice(&[bgra[2], bgra[1], bgra[0], bgra[3]]);
-                        at += 4;
+                    let bgra = patch
+                        .get(at..at + columns * 4)
+                        .ok_or(FormatError("truncated PB3 type-6 replacement pixels"))?;
+                    let to = (yy * width + x) * 4;
+                    for (target, source) in pixels[to..to + columns * 4]
+                        .as_chunks_mut::<4>()
+                        .0
+                        .iter_mut()
+                        .zip(bgra.as_chunks::<4>().0)
+                    {
+                        *target = [source[2], source[1], source[0], source[3]];
                     }
+                    at += columns * 4;
                 }
             }
             tile += 1;
@@ -282,8 +316,8 @@ pub fn decode_with_base(raw: &[u8], base: RgbaImage) -> Result<RgbaImage, Format
     RgbaImage::new(u32::from(h.width), u32::from(h.height), pixels)
 }
 
-/// 0x1400a0700 for types 2/3: JBP1 data at offset 52 decodes to padded samples, rows are
-/// cropped to the PB3 width, and alpha is 255 for 24 bits or run-length coded at the +44
+/// 0x1400a0700 for types 2/3: JBP1 data at offset 52 decodes to padded samples cropped to
+/// the PB3 size (the JBP1 decoder stores only the cropped rows), and alpha is 255 for 24 bits or run-length coded at the +44
 /// offset for 32 bits: 0x00/0xff bytes are followed by a repeat count, others stand alone.
 /// The original does not stop a run at the last pixel; Rust rejects such runs. The JBP1
 /// size must match the PB3 size, which the original uses unchecked for cropping.
@@ -296,16 +330,7 @@ fn decode_jbp1(raw: &[u8], h: &Header) -> Result<RgbaImage, FormatError> {
         return Err(FormatError("JBP1 size differs from the PB3 header"));
     }
     let (width, height) = (usize::from(h.width), usize::from(h.height));
-    let mut pixels = vec![255; width * height * 4];
-    for y in 0..height {
-        for x in 0..width {
-            let from = (y * image.padded_width + x) * 3;
-            let to = (y * width + x) * 4;
-            pixels[to] = image.bgr[from + 2];
-            pixels[to + 1] = image.bgr[from + 1];
-            pixels[to + 2] = image.bgr[from];
-        }
-    }
+    let mut pixels = image.rgba;
     if h.bpp == 32 {
         let mut at = h.flags_offset as usize;
         let mut pixel = 0;
@@ -411,18 +436,18 @@ pub fn decode(raw: &[u8]) -> Result<RgbaImage, FormatError> {
                 } else {
                     0
                 };
+                let columns = width.min(x.saturating_add(block)) - x;
                 for yy in y..height.min(y.saturating_add(block)) {
-                    for xx in x..width.min(x.saturating_add(block)) {
-                        let value = if is_solid {
-                            constant
-                        } else {
-                            let value = *literals
-                                .get(literal)
-                                .ok_or(FormatError("PB3 literal pixels exhausted"))?;
-                            literal += 1;
-                            value
-                        };
-                        pixels[(yy * width + xx) * 4 + component] = value;
+                    let at = (yy * width + x) * 4 + component;
+                    let row = pixels[at..].iter_mut().step_by(4).take(columns);
+                    if is_solid {
+                        row.for_each(|p| *p = constant);
+                    } else {
+                        let values = literals
+                            .get(literal..literal + columns)
+                            .ok_or(FormatError("PB3 literal pixels exhausted"))?;
+                        literal += columns;
+                        row.zip(values).for_each(|(p, &v)| *p = v);
                     }
                 }
             }

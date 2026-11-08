@@ -201,14 +201,6 @@ impl<'a> Bits<'a> {
             Ok(())
         }
     }
-    /// One bit, for JBP1's tree walk.
-    pub(crate) fn bit(&mut self) -> Result<usize, FormatError> {
-        self.refill();
-        let bit = (self.peek() & 1) as usize;
-        self.consume(1);
-        self.check()?;
-        Ok(bit)
-    }
     /// The zero-run selector: ones ended by a zero. `None` for sixteen ones, which no
     /// table entry follows.
     #[inline(always)]
@@ -319,13 +311,6 @@ impl Tree {
             children.push([a, b]);
         }
         Ok(Self { children })
-    }
-    pub(crate) fn symbol(&self, bits: &mut Bits<'_>) -> Result<usize, FormatError> {
-        let mut node = 30;
-        while node >= 16 {
-            node = self.children[node][bits.bit()?];
-        }
-        Ok(node)
     }
 }
 pub(crate) fn word(data: &[u8], at: usize) -> Result<u32, FormatError> {

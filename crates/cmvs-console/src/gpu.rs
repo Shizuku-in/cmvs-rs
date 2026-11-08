@@ -28,7 +28,7 @@ pub struct Compositor<D> {
     device: D,
     /// Retained texture bytes; not a bound on total GPU memory.
     cache_limit: usize,
-    cache: HashMap<([u8; 32], u32, u32), Cached>,
+    cache: HashMap<(u128, u32, u32), Cached>,
     cache_bytes: usize,
     frames: HashMap<u64, Cached>,
     clock: u64,

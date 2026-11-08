@@ -179,18 +179,9 @@ impl CmvIndex {
         reader.read_exact(&mut data)?;
         let image = if self.jbp1 {
             let frame = crate::jbp1::decode(&data)?;
-            let (width, height) = (usize::from(frame.width), usize::from(frame.height));
-            let mut pixels = vec![255; width * height * 4];
-            for y in 0..height {
-                for x in 0..width {
-                    let from = (y * frame.padded_width + x) * 3;
-                    let to = (y * width + x) * 4;
-                    pixels[to] = frame.bgr[from + 2];
-                    pixels[to + 1] = frame.bgr[from + 1];
-                    pixels[to + 2] = frame.bgr[from];
-                }
-            }
-            crate::raster::RgbaImage::new(width as u32, height as u32, pixels)?
+            let (width, height) = (u32::from(frame.width), u32::from(frame.height));
+            let pixels = frame.rgba;
+            crate::raster::RgbaImage::new(width, height, pixels)?
         } else if self.alpha {
             crate::jbpd::decode_alpha(&data)?
         } else {

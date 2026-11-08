@@ -170,10 +170,10 @@ fn dc_only_blocks_fill_quadrants_with_their_level_shifted_value() {
     // Luma levels 10, -20, 0, 100 in the four quadrants (DC = 8 * level with q = 1).
     let data = stream(16, 16, &mcu([80, -160, 0, 800, 0, 0]), FLAGS);
     let image = jbp1::decode(&data).unwrap();
-    assert_eq!((image.padded_width, image.padded_height), (16, 16));
+    assert_eq!((image.width, image.height, image.rgba.len()), (16, 16, 16 * 16 * 4));
     let gray = |x: usize, y: usize| {
-        let at = (y * 16 + x) * 3;
-        let pixel = &image.bgr[at..at + 3];
+        let at = (y * 16 + x) * 4;
+        let pixel = &image.rgba[at..at + 3];
         assert!(pixel.iter().all(|&v| v == pixel[0]), "{x},{y}: {pixel:?}");
         pixel[0]
     };
@@ -201,11 +201,11 @@ fn one_horizontal_coefficient_gives_the_first_cosine_row() {
         .map(|v: &i32| (v + 128) as u8)
         .collect();
     for y in 0..8 {
-        let row: Vec<u8> = (0..8).map(|x| image.bgr[(y * 16 + x) * 3 + 1]).collect();
+        let row: Vec<u8> = (0..8).map(|x| image.rgba[(y * 16 + x) * 4 + 1]).collect();
         // Cr = 2 gives green - ((46784 * 2) >> 16) = - 1 and red + ((91888 * 2) >> 16) = + 2.
         let green: Vec<u8> = expected.iter().map(|v| v - 1).collect();
         assert_eq!(row, green, "row {y}");
-        let red: Vec<u8> = (0..8).map(|x| image.bgr[(y * 16 + x) * 3 + 2]).collect();
+        let red: Vec<u8> = (0..8).map(|x| image.rgba[(y * 16 + x) * 4]).collect();
         assert_eq!(red, expected.iter().map(|v| v + 2).collect::<Vec<_>>());
     }
 }
