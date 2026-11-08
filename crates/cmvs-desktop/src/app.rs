@@ -43,7 +43,7 @@ Required:
 Display, text and audio:
   --renderer <name>       cpu (default) or wgpu (needs wgpu-renderer build feature)
   --font <file>           OpenType font file or collection for message rendering
-                         requires shift-jis; cannot combine with --record-text
+                         supports shift-jis and gbk; cannot combine with --record-text
   --font-face <index>     zero-based collection face; requires --font (default 0)
   --record-text          record glyphs and reveal timing without drawing text
   --audio <name>          record (default) or native (needs audio-output build feature)
@@ -79,8 +79,9 @@ Build:
 
 Notes:
   Without --font or --record-text, message output stops at a barrier.
-  --font currently renders Shift-JIS only; encoding selection does not add GBK/UTF-8
-  message rendering. Glyph pixels differ from the original GDI backend.
+  Playback supports Shift-JIS and GBK, including message rendering.
+  UTF-8 engine text scanning is not supported; selecting/detecting it stops startup.
+  Glyph pixels differ from the original GDI backend.
   Auto detection samples complete strings in the first 256 KiB of startup text.
   Known game builds are identified from scripts, archives and executable hashes.
   Presumed/unreviewed commands run by default; absent/no-op commands always stop.
@@ -908,13 +909,11 @@ fn run() -> Result<(), Box<dyn Error>> {
     if font_face.is_some() && font_path.is_none() {
         return Err("--font-face requires --font".into());
     }
-    if font_path.is_some()
-        && (record_text
-            || matches!(choice, EncodingChoice::Explicit(encoding) if encoding != TextEncoding::ShiftJis))
-    {
-        return Err(
-            "--font requires shift-jis encoding and cannot be combined with --record-text".into(),
-        );
+    if font_path.is_some() && record_text {
+        return Err("--font cannot be combined with --record-text".into());
+    }
+    if let EncodingChoice::Explicit(encoding) = choice {
+        encoding.engine_encoding()?;
     }
     if system_save_output.is_some() && user_data_dir.is_some() {
         return Err("--user-data-dir and --system-save-output are mutually exclusive".into());
@@ -939,14 +938,13 @@ fn run() -> Result<(), Box<dyn Error>> {
             "# auto encoding={name}; inferred from startup script text; override with --encoding <name> if incorrect"
         );
     }
-    if font_path.is_some() && (record_text || encoding != TextEncoding::ShiftJis) {
-        return Err(
-            "--font requires shift-jis encoding and cannot be combined with --record-text".into(),
-        );
-    }
+    let engine_encoding = encoding.engine_encoding()?;
     let font = font_path
         .as_ref()
-        .map(|path| crate::font::FontRenderer::read(path, font_face.unwrap_or(0)))
+        .map(|path| {
+            crate::font::FontRenderer::read(path, font_face.unwrap_or(0))
+                .map(|font| font.with_text_encoding(engine_encoding))
+        })
         .transpose()?;
     let bindings = if native_input {
         use std::io::Read;
@@ -982,7 +980,8 @@ fn run() -> Result<(), Box<dyn Error>> {
         }
         _ => return Err("preview-image and image-archive must be supplied together".into()),
     };
-    let mut startup = Startup::new(&script, root.as_ref(), &game, 0)?;
+    let mut startup =
+        Startup::new_with_encoding(&script, root.as_ref(), &game, 0, engine_encoding)?;
     startup.set_block_unreviewed(block_unreviewed);
     startup.set_block_presumed(block_presumed);
     if !block_presumed {
@@ -1031,7 +1030,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
     if font.is_some() {
         println!(
-            "# OpenType font preview enabled; explicit font file, Shift-JIS, supported single-line layout; glyph masks differ from GDI"
+            "# OpenType font preview enabled; explicit font file, encoding={encoding:?}, supported single-line layout; glyph masks differ from GDI"
         );
     }
     if record_text {

@@ -1,4 +1,4 @@
-//! Startup-only encoding selection. VM text and glyph semantics stay unchanged.
+//! Startup encoding selection shared by host text, VM scanning and font decoding.
 use crate::TextEncoding;
 use cmvs_core::FormatError;
 

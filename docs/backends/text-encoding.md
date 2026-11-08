@@ -17,6 +17,16 @@ runner.set_glyph_metrics(font.metrics());
 
 CPZ6/7 的文件名/密钥扫描保持 SJIS；字体面名称和宿主 UI 编码也没有在本次改动中调整。
 
+## 桌面播放器测试
+
+```bash
+cargo run --release --features desktop --bin cmvs-desktop -- \
+  "<GBK 游戏目录>" --encoding gbk --font "<包含中文字形的字体.ttf>" \
+  --user-data-dir "<独立测试存档目录>"
+```
+
+桌面 `--encoding` 同时配置宿主文本、VM 和字体 metrics/渲染。`--encoding auto` 识别为 GBK 时走相同路径。`--record-text` 也使用选定的引擎编码，与 `--font` 互斥。UTF-8 可用于宿主编解码和自动识别，但引擎扫描尚未支持；播放器对显式或识别出的 UTF-8 明确报错。
+
 ## 后续编码扩展
 
 `TextEncoding` 标为 `#[non_exhaustive]`，调用方需保留未知编码分支。核心的字节扫描不依赖 `encoding_rs`；字体后端集中选择解码器，对尚未支持的编码明确报错。

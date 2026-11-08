@@ -15,7 +15,7 @@ cargo run --offline --release --features desktop --bin cmvs-desktop -- "<游戏�
 | 选项 | 含义与限制 |
 |---|---|
 | `--encoding auto` | 从启动脚本文本区前256 KiB内的完整字符串推测 `shift-jis`、`gbk` 或 `utf-8`，启动时打印结果；纯ASCII、证据不足或无法可靠区分时停止并提示手动指定 |
-| `--encoding shift-jis` | 显式选择文本编码；另可选 `gbk`、`utf-8`，可用于覆盖自动判断。该选项用于标题等平台文本转换，不代表剧情渲染已支持对应编码 |
+| `--encoding shift-jis` | 显式选择文本编码；另可选 `gbk`，可用于覆盖自动判断。编码同时应用于标题/对话框、引擎文本扫描和字体解码；`utf-8` 引擎扫描尚未支持，选择后报错 |
 | `--user-data-dir <目录>` | 独立用户目录：系统存档、剧情槽 `saveNNN.dat` 和用户设置的读写位置，见下文 |
 | `--continue-without-snapshot` | 研究用：不构建快照，只应用已核对的实时影响并继续；此后剧情存档不可用 |
 | `--skip-auto-resume` | 研究用：首次系统存档读取成功后清零游戏记录中登记的内存整数（本作为 2198），跳过启动自动读档；只对记录了该策略的游戏可用（目前仅本作），磁盘存档保持不变 |
@@ -27,7 +27,7 @@ cargo run --offline --release --features desktop --bin cmvs-desktop -- "<游戏�
 
 未指定字体且未启用 `--record-text` 时保留文字输出屏障；`--record-text` 只记录字形。关闭窗口可退出；活动游戏中的 Esc 按游戏动作绑定处理。`--exit-after <秒>` 可做有界运行，`--save-frame <新文件.png>` 可导出退出时的帧。
 
-自动识别使用严格解码和文本特征启发式，不能保证所有汉化补丁或混合编码脚本都能正确识别。省略 `--encoding` 仍会报错；`--font` 仍仅接受最终识别或显式选择为 `shift-jis` 的编码。
+自动识别使用严格解码和文本特征启发式，不能保证所有汉化补丁或混合编码脚本都能正确识别。省略 `--encoding` 仍会报错；`--font` 接受最终识别或显式选择为 `shift-jis` 或 `gbk` 的编码；识别为 `utf-8` 时停止启动。
 
 ## CHRONOCLOCK研究运行
 

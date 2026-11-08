@@ -36,6 +36,17 @@ impl TextEncoding {
             _ => Err(FormatError("encoding must be shift-jis, gbk or utf-8")),
         }
     }
+    /// Resolve the engine scanner as well as the host codec before playback.
+    /// Host-only UTF-8 conversion remains available through `encode` / `decode`.
+    pub fn engine_encoding(self) -> Result<cmvs_core::TextEncoding, FormatError> {
+        match self {
+            Self::ShiftJis => Ok(cmvs_core::TextEncoding::ShiftJis),
+            Self::Gbk => Ok(cmvs_core::TextEncoding::Gbk),
+            Self::Utf8 => Err(FormatError(
+                "UTF-8 engine text scanning is not supported; playback requires shift-jis or gbk",
+            )),
+        }
+    }
     fn encoding(self) -> &'static encoding_rs::Encoding {
         match self {
             Self::ShiftJis => encoding_rs::SHIFT_JIS,

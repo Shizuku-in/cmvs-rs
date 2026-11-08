@@ -12,7 +12,7 @@
 cargo run --offline --release --features desktop --bin cmvs-desktop -- "<游戏目录>" --encoding shift-jis --continue-without-snapshot --font "C:/Windows/Fonts/msgothic.ttc" --font-face 0
 ```
 
-字体必须显式给路径，face 默认为 0。支持 OpenType 文件和 TTC 集合的指定 face，不自动寻找字体或读取注册表。原游戏、字体均只读，不把系统字体分发到项目。`--font-face` 单独使用、字体无效或超过 32 MiB、字形不存在、编码无效均报错。`--font` 当前要求 shift-jis，与 `--record-text` 互斥。
+字体必须显式给路径，face 默认为 0。支持 OpenType 文件和 TTC 集合的指定 face，不自动寻找字体或读取注册表。原游戏、字体均只读，不把系统字体分发到项目。`--font-face` 单独使用、字体无效或超过 32 MiB、字形不存在、编码无效均报错。`--font` 支持 shift-jis 和 gbk，与 `--record-text` 互斥。GBK 游戏使用 `--encoding gbk` 并选择包含中文字形的字体，参数同时作用于宿主文本、引擎扫描和字体解码。UTF-8 引擎扫描尚未支持，显式选择或自动识别为 UTF-8 时停止启动。
 
 启用字体会使用当前已核对的单行 0x2152 字形记录/计时分支，随后真正光栅化并合成字形；默认没有字体时仍保留 0x2152 断点。`--record-text` 保留纯记录行为。消息输出协议及受限设置见 vm-semantics.md。
 
