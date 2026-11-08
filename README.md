@@ -74,12 +74,14 @@ cargo test --offline
 
 桌面预览、启动快照屏障、字体、音频和独立用户目录配置见[运行指南](docs/guides/running.md)。检查工具见[CLI 指南](docs/guides/cli.md)。
 
-## 当前状态
+## 汉化补丁支持
 
-能力、游戏验证范围与主要缺口见[当前状态](docs/status.md)；全部样本见[游戏档案目录](docs/games/README.md)。
+请使用 [补丁转换工具](./tools/fan_patch/) 自行转换汉化补丁为 cmvs-rs 标准封包，默认不提供汉化补丁支持。
 
 ## 文档与开发
 
+- [当前状态](docs/status.md)
+- [游戏档案目录](docs/games/README.md)
 - [文档导航与归档规则](docs/README.md)：按用途查找资料。
 - [架构](docs/architecture.md)与 [Workspace](docs/workspace.md)：模块职责、依赖和完整检查命令。
 - [研究约定](docs/research.md)：证据要求及新游戏接入步骤。
