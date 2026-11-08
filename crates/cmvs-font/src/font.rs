@@ -561,17 +561,14 @@ impl FontRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    #[ignore = "requires CMVS_FONT_PATH; synthetic glyphs and external font"]
-    fn bold_glyph_uses_a_distinct_cache_entry_and_increases_ink() {
-        let path = std::env::var_os("CMVS_FONT_PATH").expect("CMVS_FONT_PATH");
-        let mut font = FontRenderer::read(Path::new(&path), 0).unwrap();
-        let mut glyph = RecordedGlyph {
+
+    fn recorded_glyph(code: u16) -> RecordedGlyph {
+        RecordedGlyph {
             snapshot_indices: None,
             face: Arc::from(cmvs_core::settings::DEFAULT_FONT_FACE),
             bold: false,
             revision_alpha: false,
-            code: 0x82a0,
+            code,
             position: [0, 0],
             size: 27,
             colors: [0xffffff; 2],
@@ -585,7 +582,15 @@ mod tests {
             opacity: 255,
             reveal_mode: 0,
             reveal_width: 31,
-        };
+        }
+    }
+
+    #[test]
+    #[ignore = "requires CMVS_FONT_PATH; synthetic glyphs and external font"]
+    fn bold_glyph_uses_a_distinct_cache_entry_and_increases_ink() {
+        let path = std::env::var_os("CMVS_FONT_PATH").expect("CMVS_FONT_PATH");
+        let mut font = FontRenderer::read(Path::new(&path), 0).unwrap();
+        let mut glyph = recorded_glyph(0x82a0);
         let normal = font.glyph(&glyph).unwrap();
         glyph.bold = true;
         let bold = font.glyph(&glyph).unwrap();
@@ -635,15 +640,37 @@ mod tests {
         // Keep one style hot while more than a cacheful of other colors is painted.
         // Sharing its original pixel allocation proves it was not rasterized again.
         let hot = font.glyph(&glyph).unwrap();
-        for color in 0..256 {
+        for color in 0..1024 {
             glyph.colors = [color; 2];
             font.glyph(&glyph).unwrap();
             glyph.colors = [0xffffff; 2];
             let hit = font.glyph(&glyph).unwrap();
             assert!(std::ptr::eq(hit.pixels(), hot.pixels()));
         }
-        assert_eq!(font.cache.len(), 128);
+        assert_eq!(font.cache.len(), 512);
     }
+
+    #[test]
+    #[ignore = "requires CMVS_FONT_PATH; synthetic full page and external font"]
+    fn repeated_full_page_reuses_styled_glyph_pixels() {
+        let path = std::env::var_os("CMVS_FONT_PATH").expect("CMVS_FONT_PATH");
+        let mut font = FontRenderer::read(Path::new(&path), 0).unwrap();
+        let mut glyph = recorded_glyph(u16::from(b'A'));
+        let originals: Vec<_> = (0..512)
+            .map(|color| {
+                glyph.colors = [color; 2];
+                font.glyph(&glyph).unwrap()
+            })
+            .collect();
+        for _ in 0..3 {
+            for (color, original) in originals.iter().enumerate() {
+                glyph.colors = [color as u32; 2];
+                let hit = font.glyph(&glyph).unwrap();
+                assert!(std::ptr::eq(hit.pixels(), original.pixels()));
+            }
+        }
+    }
+
     #[test]
     fn alpha_revision_preserves_endpoints_and_increases_partial_coverage() {
         assert_eq!(revise_alpha(0), 0);
