@@ -16,21 +16,21 @@
 
 | 文件 | 职责 |
 |---|---|
-| `bits.rs` | 有界 MSB 位读取，8 位 Huffman 前缀表，长码恢复树遍历；尾部 lookahead 补零不增加可消费位数 |
+| `bits.rs` | 有界 MSB 位读取，64 位缓存按 32 位补充，8 位 Huffman 前缀表；尾部 lookahead 补零不增加可消费位数 |
 | `headers.rs` | 三个头部的校验和 setup 表；六组 × 64 档量化矩阵在初始化时生成 |
 | `geometry.rs` | superblock/Hilbert 编码顺序、宏块和三个平面的栅格映射 |
-| `packet.rs` | 复用标志、模式、向量、系数及游标缓冲；RLE、系数 token、DC 预测 |
-| `dsp.rs` | 标量整数 IDCT、SSE2 IDCT、标量/SIMD 残差叠加 |
+| `packet.rs` | 复用编码块列表和系数缓冲；RLE、系数 token 查表展开、DC 预测；解码时同步压缩活动列表 |
+| `dsp.rs` | 标量整数 IDCT、完整/稀疏 SSE2 IDCT、整块 SIMD 运动补偿及残差叠加 |
 | `mod.rs` | 运动补偿、重建、环路滤波、三个 YUV 缓冲的参考轮换 |
 
-旧后端对每个编码块重新生成 DC 量化矩阵，有 AC 时还会生成另一张矩阵；新后端只索引 setup 时生成的表。头部验证后才分配画面和几何缓冲。逐包解码不重新分配临时向量或 YUV 平面；三个缓冲按 previous/golden/current 角色轮换，避免每帧复制参考平面。熵解码在每个系数位置后压缩活动块列表，已结束的块不再扫描。Ogg 分包、RGBA 输出与外层最近帧缓存仍有分配/复制，不把内部解码器的性质扩展为整条播放链零分配。
+量化矩阵在 setup 时生成，头部验证后才分配画面和几何缓冲。逐包解码复用临时向量和 YUV 平面，三个缓冲按 previous/golden/current 角色轮换。含未编码块的 inter 帧先整面复制前帧，再只重建编码块；全编码帧直接写完整表面。只清零当前编码块的系数，系数解码与活动列表压缩合为一次遍历。Ogg 分包、RGBA 输出与外层最近帧缓存仍有分配/复制。
 
-`cmvs-video` 单独采用 `unsafe_code = deny`、`unsafe_op_in_unsafe_fn = deny`；workspace 默认 forbid 保持不变。仅 `dsp.rs` 的私有内核局部允许 unsafe，入口使用固定数组引用证明读写范围，每个 unsafe 块说明 CPU 指令与内存前提。
+`cmvs-video` 单独采用 `unsafe_code = deny`、`unsafe_op_in_unsafe_fn = deny`；workspace 默认 forbid 保持不变。仅 `dsp.rs` 的私有内核局部允许 unsafe，入口使用固定数组或已检查完整跨度的 8×8 切片证明读写范围，每个 unsafe 块说明 CPU 指令与内存前提。
 
 | 架构 | IDCT | 预测值与残差相加 |
 |---|---|---|
-| x86-64 | SSE2，一次并行八个 1D 变换 | SSE2 饱和加法与打包 |
-| AArch64 | 标量 | NEON 饱和加法与窄化 |
+| x86-64 | SSE2，含最多 3/10 个系数的稀疏路径 | SSE2 整块运动补偿、向下取整平均和饱和叠加 |
+| AArch64 | 标量 | NEON 行平均、饱和加法与窄化 |
 | ARMv7 / PS Vita 及其他架构 | 标量 | 标量 |
 
 SSE2 使用 x86-64 基线能力，无 AVX 要求；支持的 AArch64 目标启用 NEON。SIMD 保留 Theora 指定的有符号高位乘法、16 位截断和舍入语义。最终 IDCT 的 `(X + 8) >> 4` 不能直接用溢出的 16 位加法实现；SSE2 用算术右移加舍入位完成。残差叠加先饱和到有符号 16 位，再饱和为 u8，与标量宽化加法后 clamp 一致。
@@ -53,11 +53,11 @@ SSE2 使用 x86-64 基线能力，无 AVX 要求；支持的 AArch64 目标启�
 
 用户提供的《ハピメア-Fragmentation Dream- REGRET END》目录含七段独立 MGV1，合计 21,515 个名义帧、20,089 个 Theora 解码包。全部编码表面为 1920×1088，picture 为 1920×1080、24 fps。全部解码包的完整 Y/Cb/Cr 与 `oxideav-theora` 0.0.12 逐字节一致，全部可见区域与 FFmpeg 8.0.1 的 top-down yuv420p 逐字节一致。原始影片只读，提取的 Ogg 与日志保留在忽略目录，未将真实素材提交入库。
 
-相同 CPU、release、单线程，按解码包数量加权，自研 **3.384 ms/帧**、旧后端 **9.049 ms/帧**，**2.67 倍**；单片 2.14～3.22 倍。这是包解码时间，排除 Ogg I/O、FFmpeg 管道、比较、色彩转换、哈希与呈现。逐片结果、输入 SHA-256、抽样输出哈希及 MGV 播放验证范围见[游戏档案](../games/hapymaherfd_re/README.md#mgvtheora-自研后端验证2026-11-08)。
+初始版本在相同 CPU、release、单线程下，按解码包数量加权，自研 **3.384 ms/帧**、旧后端 **9.049 ms/帧**，**2.67 倍**；单片 2.14～3.22 倍。这是包解码时间，排除 Ogg I/O、FFmpeg 管道、比较、色彩转换、哈希与呈现。逐片结果、输入 SHA-256、抽样输出哈希及 MGV 播放验证范围见[游戏档案](../games/hapymaherfd_re/README.md#mgvtheora-自研后端验证2026-11-08)；后续优化的独立计时见下节。
 
 大影片可以用 `CMVS_THEORA_FFMPEG=/usr/bin/ffmpeg` 替代 `CMVS_THEORA_YUV`；忽略测试启动 FFmpeg 并逐帧读取 stdout，只保留一帧参考数据，不保存整部原始视频。比较失败时会回收子进程，并报告第一个不同的平面/帧/样本位置。
 
-MGV 完整播放验证使用真实文件的容器索引与公共 `TheoraStream`：七段影片的全部 21,515 个名义帧与旧后端转换得到的完整 1920×1088 RGBA 逐字节一致，包含 1,426 次重复映射；每段均通过 EOF 及结束后回退至帧零。默认视频测试 16 项通过、两项外部素材用例忽略；本轮对七段影片分别显式执行这两项用例，共 14 次通过。严格 Clippy、格式和 AArch64 Android 测试编译检查通过，原游戏内容哈希复核未改变。
+初始版本的 MGV 完整播放验证使用真实文件的容器索引与公共 `TheoraStream`：七段影片的全部 21,515 个名义帧与旧后端转换得到的完整 1920×1088 RGBA 逐字节一致，包含 1,426 次重复映射；每段均通过 EOF 及结束后回退至帧零。当时默认视频测试 16 项通过、两项外部素材用例忽略；对七段影片分别显式执行这两项用例，共 14 次通过。严格 Clippy、格式和 AArch64 Android 测试编译检查通过，原游戏内容哈希复核未改变。
 
 ```sh
 CMVS_THEORA_MGV="<绝对路径>/data/video/op.mgv" \
@@ -66,7 +66,35 @@ CMVS_THEORA_OGV="<提取的绝对路径>/op.ogv" CMVS_THEORA_FFMPEG=/usr/bin/ffm
   cargo test --offline --release -p cmvs-video external_corpus_and_decode_timing -- --ignored --nocapture
 ```
 
-## 1080p 合成基准
+## 接近 FFmpeg 的优化（2026-11-08）
+
+在同一 Ryzen 9 9900X、单线程、release、纯 YUV 条件下，七段真实影片各完整运行两次，按 20,089 个解码包加权，优化后 **1.389 ms/帧**，FFmpeg 8.0.1 原生 Theora 解码器 **1.322 ms/帧**，平均差距 **5.1%**。单片最大差距约 12.3%；`edc`、`edd` 更快。这一结果限于当前素材与桌面 CPU，不推断其他码流或 Switch/Vita 真机表现。
+
+| 影片 | 优化前 ms/帧 | 优化后 ms/帧 | FFmpeg ms/帧 |
+|---|---:|---:|---:|
+| `door` | 2.822 | 1.220 | 1.282 |
+| `eda` | 4.059 | 2.293 | 2.042 |
+| `edb` | 2.932 | 1.315 | 1.246 |
+| `edc` | 1.948 | 0.551 | 0.639 |
+| `edd` | 1.918 | 0.523 | 0.619 |
+| `op` | 3.498 | 1.837 | 1.683 |
+| `opre` | 3.942 | 2.264 | 2.077 |
+| 加权平均 | 2.968 | 1.389 | 1.322 |
+
+主要变化为位缓存、系数 token 预展开、编码块列表、整块 SIMD 重建，以及稀疏 IDCT。整块重建在进入 SIMD 前验证跨度，内部省去逐行切片检查；半像素平均严格向下取整，DC 与 AC 使用各自内核。边缘运动向量继续按像素复制边界。这批影片的滤波限制值为零，本轮未修改环路滤波。
+
+优化后的全部 20,089 个包再次与 `oxideav-theora` 比较完整编码平面，与 FFmpeg 比较可见区域，均逐字节一致。新增测试覆盖所有系数 token 的 extra bits 组合、跨字缓存尾部、全部像素平均组合、稀疏 IDCT 的有符号截断和舍入，以及未对齐行、保护字节、短切片和跨度溢出。全 workspace 1,366 项测试、严格 Clippy、格式和 AArch64 Android 测试编译检查通过。
+
+性能计时与像素比较分别执行，避免另一套解码器和 FFmpeg 管道竞争缓存。优化后使用包内的 `external_decoder_timing`，逐帧只计 `Decoder::decode_frame`，输出经 `black_box` 保留；优化前为相同源码入口的独立测量。FFmpeg 对 `avcodec_send_packet` / `avcodec_receive_frame` 计时，强制原生 `theora` 解码器和一个 codec 线程。双方均排除头部初始化、Ogg I/O、RGBA 转换、哈希、比较、呈现及进程启动。不要把这些独立计时与上节同时运行 oracle 的耗时交叉计算加速比。
+
+```sh
+CMVS_THEORA_OGV="<提取的绝对路径>/op.ogv" \
+  cargo test --offline --release -p cmvs-video --lib external_decoder_timing -- --ignored --nocapture
+```
+
+详细数据和计时脚本位于 `local/hapymaherfd_re/theora-2026-11-08/optimization-2026-11-08/` 的 `performance.json`、`validation.json` 及逐片日志；优化前的独立基准在同级 `ffmpeg-speed/`。真实素材和本地输出不入库。
+
+## 初始版本的 1080p 合成基准
 
 Ryzen 9 9900X，Linux x86-64，release，单线程；FFmpeg 8.0.1、libtheora 编码，`testsrc2` 1920×1080、24 fps、120 帧、quality 5、GOP 48，编码表面为 1920×1088。比较每个数据包的 YUV 解码时间，排除头部初始化、Ogg 读取、RGBA 转换、哈希和呈现：本轮验证中自研约 **2.7～2.9 ms/帧**，旧后端约 **5.5～5.8 ms/帧**，约 **2 倍**；最后一次为 2.872 / 5.503 ms，1.92 倍。该合成流全部编码平面与旧后端一致，可见区域与 FFmpeg rawvideo 逐字节一致。
 

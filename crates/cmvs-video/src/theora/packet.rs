@@ -12,6 +12,7 @@ pub(super) struct State {
     pub qi: Vec<usize>,
     pub coeffs: Vec<[i16; 64]>,
     pub ncoeffs: Vec<u8>,
+    pub coded_blocks: Vec<usize>,
     positions: Vec<u8>,
     active: Vec<usize>,
     partial: Vec<u8>,
@@ -100,6 +101,7 @@ impl State {
             qi: vec![0; n],
             coeffs: vec![[0; 64]; n],
             ncoeffs: vec![0; n],
+            coded_blocks: Vec::with_capacity(n),
             positions: vec![0; n],
             active: Vec::with_capacity(n),
             partial: vec![0; g.superblocks],
@@ -252,16 +254,18 @@ impl State {
     }
 
     fn decode_coeffs(&mut self, b: &mut Bits<'_>, g: &Geometry, setup: &Setup) -> Result<()> {
-        self.coeffs.fill([0; 64]);
         self.positions.fill(64);
         self.ncoeffs.fill(0);
         self.active.clear();
+        self.coded_blocks.clear();
         for (bi, &coded) in self.coded.iter().enumerate() {
             if coded != 0 {
-                self.active.push(bi);
+                self.coded_blocks.push(bi);
+                self.coeffs[bi].fill(0);
                 self.positions[bi] = 0;
             }
         }
+        self.active.extend_from_slice(&self.coded_blocks);
         let mut eobs = 0usize;
         let mut tables = [0; 2];
         for ti in 0..64 {
@@ -275,45 +279,56 @@ impl State {
                 15..=27 => 3,
                 _ => 4,
             };
-            for &bi in &self.active {
-                if self.positions[bi] as usize != ti {
-                    continue;
-                }
-                self.ncoeffs[bi] = ti as u8;
-                if eobs == 0 {
-                    let table = group * 16 + tables[usize::from(bi >= g.macroblocks.len() * 4)];
-                    let token = setup.huffman[table].token(b)?;
-                    if token < 7 {
-                        eobs = match token {
-                            0..=2 => token as usize + 1,
-                            3..=5 => (1 << (token - 1)) + b.read(u32::from(token - 1))? as usize,
-                            _ => {
-                                let n = b.read(12)? as usize;
-                                if n == 0 {
-                                    self.positions.iter().filter(|&&p| p < 64).count()
-                                } else {
-                                    n
-                                }
-                            }
-                        };
+            let mut remaining = 0;
+            for cursor in 0..self.active.len() {
+                let bi = self.active[cursor];
+                if self.positions[bi] as usize == ti {
+                    self.ncoeffs[bi] = ti as u8;
+                    if eobs != 0 {
+                        eobs -= 1;
+                        self.positions[bi] = 64;
                     } else {
-                        let (run, value) = coefficient(b, token)?;
-                        let end = ti + run + usize::from(value != 0);
-                        if end > 64 {
-                            return Err(FormatError("Theora coefficient run exceeds block"));
+                        let table = group * 16 + tables[usize::from(bi >= g.macroblocks.len() * 4)];
+                        let token = setup.huffman[table].token(b)?;
+                        if token < 7 {
+                            eobs = match token {
+                                0..=2 => token as usize + 1,
+                                3..=5 => {
+                                    (1 << (token - 1)) + b.read(u32::from(token - 1))? as usize
+                                }
+                                _ => {
+                                    let n = b.read(12)? as usize;
+                                    if n == 0 {
+                                        self.positions.iter().filter(|&&p| p < 64).count()
+                                    } else {
+                                        n
+                                    }
+                                }
+                            };
+                            eobs -= 1;
+                            self.positions[bi] = 64;
+                        } else {
+                            let (run, value) = coefficient(b, token)?;
+                            let end = ti + run + usize::from(value != 0);
+                            if end > 64 {
+                                return Err(FormatError("Theora coefficient run exceeds block"));
+                            }
+                            if value != 0 {
+                                self.coeffs[bi][ti + run] = value;
+                                self.ncoeffs[bi] = end as u8;
+                            }
+                            self.positions[bi] = end as u8;
                         }
-                        if value != 0 {
-                            self.coeffs[bi][ti + run] = value;
-                            self.ncoeffs[bi] = end as u8;
-                        }
-                        self.positions[bi] = end as u8;
-                        continue;
                     }
                 }
-                eobs -= 1;
-                self.positions[bi] = 64;
+                // Compact while decoding instead of scanning the same list a
+                // second time. Writes never overtake the unread input cursor.
+                if self.positions[bi] < 64 {
+                    self.active[remaining] = bi;
+                    remaining += 1;
+                }
             }
-            self.active.retain(|&bi| self.positions[bi] < 64);
+            self.active.truncate(remaining);
         }
         if eobs != 0 || !self.active.is_empty() {
             return Err(FormatError("unfinished Theora coefficient stream"));
@@ -390,37 +405,142 @@ impl State {
     }
 }
 
+// Table 7.38, tokens 7..31: extra bits, zero-run base/bits, magnitude base/bits.
+// Sign, magnitude and run share one read; their expansion is constant data.
+const COEFFICIENT_SPECS: [(u8, u8, u8, i16, u8); 25] = [
+    (3, 1, 3, 0, 0),
+    (6, 1, 6, 0, 0),
+    (0, 0, 0, 1, 0),
+    (0, 0, 0, -1, 0),
+    (0, 0, 0, 2, 0),
+    (0, 0, 0, -2, 0),
+    (1, 0, 0, 3, 0),
+    (1, 0, 0, 4, 0),
+    (1, 0, 0, 5, 0),
+    (1, 0, 0, 6, 0),
+    (2, 0, 0, 7, 1),
+    (3, 0, 0, 9, 2),
+    (4, 0, 0, 13, 3),
+    (5, 0, 0, 21, 4),
+    (6, 0, 0, 37, 5),
+    (10, 0, 0, 69, 9),
+    (1, 1, 0, 1, 0),
+    (1, 2, 0, 1, 0),
+    (1, 3, 0, 1, 0),
+    (1, 4, 0, 1, 0),
+    (1, 5, 0, 1, 0),
+    (3, 6, 2, 1, 0),
+    (4, 10, 3, 1, 0),
+    (2, 1, 0, 2, 1),
+    (3, 2, 1, 2, 1),
+];
+
+#[derive(Clone, Copy)]
+struct CoefficientInfo {
+    bits: u8,
+    first: u16,
+}
+#[derive(Clone, Copy)]
+struct Coefficient {
+    run: u8,
+    value: i16,
+}
+
+const COEFFICIENT_VALUE_COUNT: usize = {
+    let mut total = 0;
+    let mut i = 0;
+    while i < COEFFICIENT_SPECS.len() {
+        total += 1 << COEFFICIENT_SPECS[i].0;
+        i += 1;
+    }
+    total
+};
+
+const fn coefficient_tables() -> (
+    [CoefficientInfo; 25],
+    [Coefficient; COEFFICIENT_VALUE_COUNT],
+) {
+    let mut info = [CoefficientInfo { bits: 0, first: 0 }; 25];
+    let mut values = [Coefficient { run: 0, value: 0 }; COEFFICIENT_VALUE_COUNT];
+    let mut first = 0;
+    let mut index = 0;
+    while index < 25 {
+        let (bits, run, run_bits, magnitude, magnitude_bits) = COEFFICIENT_SPECS[index];
+        info[index] = CoefficientInfo {
+            bits,
+            first: first as u16,
+        };
+        let mut extra = 0u16;
+        while extra < 1 << bits {
+            let run = run + (extra & ((1 << run_bits) - 1)) as u8;
+            let value = magnitude + ((extra >> run_bits) & ((1 << magnitude_bits) - 1)) as i16;
+            let value = if extra & (1 << (run_bits + magnitude_bits)) == 0 {
+                value
+            } else {
+                -value
+            };
+            values[first + extra as usize] = Coefficient { run, value };
+            extra += 1;
+        }
+        first += 1 << bits;
+        index += 1;
+    }
+    assert!(first == values.len());
+    (info, values)
+}
+
+static COEFFICIENT_TABLES: (
+    [CoefficientInfo; 25],
+    [Coefficient; COEFFICIENT_VALUE_COUNT],
+) = coefficient_tables();
+
+#[inline]
 fn coefficient(b: &mut Bits<'_>, token: u8) -> Result<(usize, i16)> {
-    if token <= 8 {
-        return Ok((b.read(if token == 7 { 3 } else { 6 })? as usize + 1, 0));
-    }
-    if token <= 12 {
-        return Ok((0, [1, -1, 2, -2][token as usize - 9]));
-    }
-    let sign = b.read(1)?;
-    let (run, mag) = match token {
-        13..=16 => (0, i16::from(token - 10)),
-        17..=22 => {
-            let (base, n) =
-                [(7, 1), (9, 2), (13, 3), (21, 4), (37, 5), (69, 9)][token as usize - 17];
-            (0, base + b.read(n)? as i16)
-        }
-        23..=27 => ((token - 22) as usize, 1),
-        28 => (6 + b.read(2)? as usize, 1),
-        29 => (10 + b.read(3)? as usize, 1),
-        30 => (1, 2 + b.read(1)? as i16),
-        _ => {
-            let mag = 2 + b.read(1)? as i16;
-            (2 + b.read(1)? as usize, mag)
-        }
-    };
-    Ok((run, if sign == 0 { mag } else { -mag }))
+    let info = COEFFICIENT_TABLES.0[token as usize - 7];
+    let extra = b.read(u32::from(info.bits))? as usize;
+    let value = COEFFICIENT_TABLES.1[usize::from(info.first) + extra];
+    Ok((usize::from(value.run), value.value))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::theora::bits::packed;
+
+    #[test]
+    fn every_coefficient_extra_bits_value_matches_reference() {
+        for token in 7..32 {
+            let bits = COEFFICIENT_SPECS[token as usize - 7].0;
+            for extra in 0..1u16 << bits {
+                let payload = (if bits == 0 { 0 } else { extra << (16 - bits) }).to_be_bytes();
+                let (run, value) = coefficient(&mut Bits::new(&payload), token).unwrap();
+                let mut positions = [0];
+                let mut counts = [0];
+                let mut coeffs = [[0; 64]];
+                oxideav_theora::decode_coefficient_token(
+                    &payload,
+                    token,
+                    1,
+                    0,
+                    0,
+                    &mut positions,
+                    &mut counts,
+                    &mut coeffs,
+                )
+                .unwrap();
+                assert_eq!(
+                    usize::from(positions[0]),
+                    run + usize::from(value != 0),
+                    "token {token} extra {extra}"
+                );
+                if value != 0 {
+                    assert_eq!(coeffs[0][run], value);
+                } else {
+                    assert_eq!(coeffs[0], [0; 64]);
+                }
+            }
+        }
+    }
 
     #[test]
     fn maximum_long_run_reads_a_fresh_value_and_runs_are_bounded() {

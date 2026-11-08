@@ -191,7 +191,28 @@ fn scalar_idct_matches_reference_for_extreme_and_sparse_coefficients() {
         }
         let reference = oxideav_theora::inverse_dct_2d(&coeffs);
         assert_eq!(dsp::idct_scalar(&coeffs), reference);
-        assert_eq!(dsp::idct(&coeffs), reference);
+        assert_eq!(dsp::idct(&coeffs, 64), reference);
+    }
+}
+
+#[test]
+fn sparse_idct_preserves_signed_wrap_and_rounding() {
+    const ZIGZAG: [usize; 10] = [0, 1, 8, 16, 9, 2, 3, 10, 17, 24];
+    let mut random = 0x3859_a1cdu32;
+    for count in 2..=10 {
+        for _ in 0..1024 {
+            let mut coeffs = [0; 64];
+            for &ci in &ZIGZAG[..count] {
+                random ^= random << 13;
+                random ^= random >> 17;
+                random ^= random << 5;
+                coeffs[ci] = random as i16;
+            }
+            assert_eq!(
+                dsp::idct(&coeffs, count as u8),
+                oxideav_theora::inverse_dct_2d(&coeffs)
+            );
+        }
     }
 }
 
@@ -479,6 +500,33 @@ fn external_corpus_and_decode_timing() {
         ours.as_secs_f64() * 1000.0 / n,
         theirs.as_secs_f64() * 1000.0 / n,
         theirs.as_secs_f64() / ours.as_secs_f64()
+    );
+}
+
+/// Measure the crate's decoder without an oracle or another live decoder
+/// competing for the CPU cache. Header setup, packet I/O and output handling
+/// are outside the timed section. Use the pixel-comparison test separately.
+#[test]
+#[ignore = "requires CMVS_THEORA_OGV"]
+fn external_decoder_timing() {
+    let data = std::fs::read(std::env::var("CMVS_THEORA_OGV").unwrap()).unwrap();
+    let packets = packets(&data);
+    let ident = Ident::parse(&packets[0]).unwrap();
+    let mut elapsed = std::time::Duration::ZERO;
+    let repeats = 2;
+    for _ in 0..repeats {
+        let mut decoder = Decoder::new(&ident, &packets[2]).unwrap();
+        for packet in &packets[3..] {
+            let start = Instant::now();
+            let frame = decoder.decode_frame(packet).unwrap();
+            elapsed += start.elapsed();
+            std::hint::black_box(&frame.planes);
+        }
+    }
+    let frames = packets.len() - 3;
+    eprintln!(
+        "decoder benchmark: {frames} packets, {repeats} passes, {:.6} ms/frame",
+        elapsed.as_secs_f64() * 1000.0 / (frames * repeats) as f64
     );
 }
 

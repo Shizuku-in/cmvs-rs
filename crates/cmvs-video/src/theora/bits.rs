@@ -5,16 +5,25 @@ pub(super) type Result<T> = std::result::Result<T, FormatError>;
 
 pub(super) struct Bits<'a> {
     data: &'a [u8],
-    position: usize,
+    offset: usize,
+    cache: u64,
+    available: u32,
+    remaining: usize,
 }
 
 impl<'a> Bits<'a> {
     pub fn new(data: &'a [u8]) -> Self {
-        Self { data, position: 0 }
+        Self {
+            data,
+            offset: 0,
+            cache: 0,
+            available: 0,
+            remaining: data.len() * 8,
+        }
     }
 
     pub fn remaining(&self) -> usize {
-        self.data.len() * 8 - self.position
+        self.remaining
     }
 
     #[inline]
@@ -23,32 +32,58 @@ impl<'a> Bits<'a> {
             return Err(FormatError("truncated Theora packet"));
         }
         let value = self.peek(n);
-        self.position += n as usize;
+        self.consume(n);
         Ok(value)
     }
 
     #[inline]
-    pub fn peek(&self, n: u32) -> u32 {
+    pub fn peek(&mut self, n: u32) -> u32 {
         debug_assert!(n <= 32);
         if n == 0 {
             return 0;
         }
-        let byte = self.position / 8;
-        let shift = self.position % 8;
-        let count = (shift + n as usize).div_ceil(8);
-        let mut word = 0u64;
-        for i in 0..count {
-            word = (word << 8) | u64::from(self.data.get(byte + i).copied().unwrap_or(0));
+        if self.available < n {
+            self.refill();
         }
-        ((word >> (count * 8 - shift - n as usize)) & ((1u64 << n) - 1)) as u32
+        (self.cache >> (64 - n)) as u32
     }
 
+    #[inline]
     pub fn skip(&mut self, n: u32) -> Result<()> {
         if self.remaining() < n as usize {
             return Err(FormatError("truncated Theora packet"));
         }
-        self.position += n as usize;
+        if self.available < n {
+            self.refill();
+        }
+        self.consume(n);
         Ok(())
+    }
+
+    #[inline]
+    fn consume(&mut self, n: u32) {
+        self.cache <<= n;
+        self.available -= n;
+        self.remaining -= n as usize;
+    }
+
+    #[inline]
+    fn refill(&mut self) {
+        // Refill is requested only with fewer than 32 cached bits. Appending a
+        // complete word keeps the register below 64 bits and avoids byte walks.
+        debug_assert!(self.available < 32);
+        if let Some(bytes) = self.data.get(self.offset..self.offset + 4) {
+            self.cache |=
+                u64::from(u32::from_be_bytes(bytes.try_into().unwrap())) << (32 - self.available);
+            self.offset += 4;
+            self.available += 32;
+        } else {
+            while let Some(&byte) = self.data.get(self.offset) {
+                self.cache |= u64::from(byte) << (56 - self.available);
+                self.available += 8;
+                self.offset += 1;
+            }
+        }
     }
 }
 
@@ -170,6 +205,31 @@ mod tests {
         assert!(b.read(2).is_err());
         assert_eq!(b.read(1).unwrap(), 1);
         assert!(b.read(1).is_err());
+    }
+
+    #[test]
+    fn cached_reads_cross_words_and_preserve_short_packet_tails() {
+        let data: Vec<u8> = (0..257).map(|i| (i * 73 + 19) as u8).collect();
+        for length in 0..=data.len() {
+            let data = &data[..length];
+            let mut bits = Bits::new(data);
+            let mut position = 0usize;
+            let mut random = 0x1451_abcdu32;
+            while position < data.len() * 8 {
+                random = random.wrapping_mul(1664525).wrapping_add(1013904223);
+                let n = (random % 32 + 1).min(bits.remaining() as u32);
+                let mut expected = 0;
+                for bit in position..position + n as usize {
+                    expected = (expected << 1) | u32::from((data[bit / 8] >> (7 - bit % 8)) & 1);
+                }
+                assert_eq!(bits.read(n).unwrap(), expected);
+                position += n as usize;
+                assert_eq!(bits.remaining(), data.len() * 8 - position);
+            }
+            assert_eq!(bits.peek(32), 0);
+            assert!(bits.read(1).is_err());
+            assert_eq!(bits.read(0).unwrap(), 0);
+        }
     }
 
     #[test]
