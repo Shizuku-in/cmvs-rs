@@ -1,7 +1,9 @@
-"""Convert the known CK-GAL Asukimi ZIP to ordinary PS2A/CPZ3/PB3 assets.
+"""Convert CK-GAL 明日の君と逢うために fan patch to standard PS2A/CPZ3/PB3.
 
-Python 3.10+, standard library only. Inputs are read only; output must be new.
-No patch executable is run or installed. See tools/fan_patch/asukimi/README.md.
+see: https://vndb.org/r20550
+
+Python 3.10+ is required.
+See tools/fan_patch/asukimi/README.md.
 """
 from __future__ import annotations
 

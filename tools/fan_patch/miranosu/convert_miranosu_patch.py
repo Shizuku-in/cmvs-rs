@@ -1,6 +1,8 @@
-"""Convert the pinned CK-GAL Mirai Nostalgia ZIP into standard PS2A/CPZ3.
+"""Convert CK-GAL 未来ノスタルジア fan patch into standard PS2A/CPZ3.
 
-Python 3.10+ and Cargo are required. Inputs are read only. No patch binary is run.
+see: https://vndb.org/r24913
+
+Python 3.10+ and Cargo are required.
 See tools/fan_patch/miranosu/README.md.
 """
 from __future__ import annotations

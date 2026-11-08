@@ -108,7 +108,7 @@ fn rewrite_expression(
     }
     Ok(changed)
 }
-fn rewrite(raw: &[u8], rows: &BTreeMap<u32, Vec<u8>>) -> Result<(Vec<u8>, usize)> {
+pub(crate) fn rewrite(raw: &[u8], rows: &BTreeMap<u32, Vec<u8>>) -> Result<(Vec<u8>, usize)> {
     let script = Script::decode(raw)?;
     script.strings()?; // Validate terminators, then include empty strings too.
     let mut start = 0;
@@ -227,7 +227,7 @@ fn encrypt(bytes: &mut [u8]) {
         flag = (flag + 1) & 15;
     }
 }
-fn pack(entries: &[(Vec<u8>, Vec<u8>)]) -> Result<Vec<u8>> {
+pub(crate) fn pack(entries: &[(Vec<u8>, Vec<u8>)]) -> Result<Vec<u8>> {
     let mut index = Vec::new();
     let mut data = Vec::new();
     let mut names = BTreeSet::new();
