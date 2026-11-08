@@ -281,6 +281,35 @@ pub fn key_code(key: KeyCode) -> Option<u8> {
 mod tests {
     use super::*;
     #[test]
+    fn navigation_without_system_cursor_warp_persists_until_mouse_motion() {
+        let mut game = GameInput::default();
+        let mut input = ActionInput::default();
+        let bindings = KeyBindings::default();
+        let size = [800, 600];
+        game.set_screen_size(cmvs_core::viewport::ScreenSize::new(size).unwrap());
+        game.focus(true, &mut input);
+        game.pointer(40.0, 50.0);
+        game.frame(&bindings, size, &mut input);
+        for (key, target) in [
+            (KeyCode::ArrowDown, [560, 350]),
+            (KeyCode::ArrowUp, [560, 290]),
+        ] {
+            game.key(key, true);
+            game.frame(&bindings, size, &mut input);
+            game.warp(size, target).unwrap();
+            // Wayland does not deliver a system cursor move for keyboard navigation.
+            game.key(key, false);
+            for _ in 0..3 {
+                game.frame(&bindings, size, &mut input);
+                assert_eq!(input.pointer(), target);
+            }
+        }
+        game.pointer(100.0, 200.0);
+        game.frame(&bindings, size, &mut input);
+        assert_eq!(input.pointer(), [100, 200]);
+    }
+
+    #[test]
     fn short_native_events_survive_until_a_frame_and_release_once() {
         let b = KeyBindings::parse(
             "[KEY_FUNCTION_01]\nKEY_DATA_01=1\n[KEY_FUNCTION_04]\nKEY_DATA_01=34",
