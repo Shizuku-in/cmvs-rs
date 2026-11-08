@@ -12,8 +12,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 pub use wgpu;
-use wgpu::util::DeviceExt;
 mod bindings;
+mod textures;
+use textures::{Shared, Texture, TexturePool, Weak};
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const CACHE_LIMIT: usize = 128 * 1024 * 1024;
 /// Movie frames live apart from the content cache so replaced frames never evict
@@ -23,7 +24,8 @@ const FRAME_TEXTURES: usize = 8;
 
 /// An immutable submitted logical frame. Readback is performed only on demand.
 pub struct GpuFrame {
-    pub texture: wgpu::Texture,
+    // Raw handles stay private so an untracked clone cannot outlive its pool lease.
+    target: Shared<Texture>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     size: [u32; 2],
@@ -43,7 +45,7 @@ impl GpuFrame {
         });
         let mut encoder = self.device.create_command_encoder(&Default::default());
         encoder.copy_texture_to_buffer(
-            self.texture.as_image_copy(),
+            self.target.texture.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
                 buffer: &buffer,
                 layout: wgpu::TexelCopyBufferLayout {
@@ -115,7 +117,7 @@ impl GpuFrame {
     }
 }
 struct Cached {
-    view: wgpu::TextureView,
+    target: Shared<Texture>,
     bytes: usize,
     used: u64,
 }
@@ -125,11 +127,13 @@ pub struct Renderer {
     pub queue: wgpu::Queue,
     layout: wgpu::BindGroupLayout,
     bindings: bindings::DrawBindings,
-    scaling: Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline)>,
+    scaling: Option<present::Scaling>,
     pipelines: [wgpu::RenderPipeline; 3],
     cache: HashMap<(u128, u32, u32), Cached>,
     cache_bytes: usize,
     frames: HashMap<u64, Cached>,
+    canvases: TexturePool,
+    movie_textures: TexturePool,
     clock: u64,
     errors: Arc<Mutex<Option<String>>>,
     pub uploaded_bytes: u64,
@@ -260,6 +264,20 @@ impl Renderer {
             cache: HashMap::new(),
             cache_bytes: 0,
             frames: HashMap::new(),
+            canvases: TexturePool::new(
+                4,
+                64 << 20,
+                wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
+            ),
+            movie_textures: TexturePool::new(
+                FRAME_TEXTURES,
+                128 << 20,
+                wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::COPY_SRC,
+            ),
             clock: 0,
             errors,
             uploaded_bytes: 0,
@@ -273,7 +291,14 @@ impl Renderer {
         }
         Ok(())
     }
-    fn texture(&mut self, image: &RgbaImage) -> Result<wgpu::TextureView> {
+    fn texture(&mut self, image: &RgbaImage) -> Result<Shared<Texture>> {
+        self.with_texture(image, Shared::clone)
+    }
+    fn with_texture<T>(
+        &mut self,
+        image: &RgbaImage,
+        use_texture: impl FnOnce(&Shared<Texture>) -> T,
+    ) -> Result<T> {
         let [w, h] = [image.width(), image.height()];
         if w > self.device.limits().max_texture_dimension_2d
             || h > self.device.limits().max_texture_dimension_2d
@@ -281,13 +306,13 @@ impl Renderer {
             return Err("GPU image exceeds device texture limits".into());
         }
         let key = match image.cache_key() {
-            CacheKey::Frame(id) => return Ok(self.frame_texture(id, image)),
+            CacheKey::Frame(id) => return Ok(use_texture(&self.frame_texture(id, image))),
             CacheKey::Content(digest, w, h) => (digest, w, h),
         };
         self.clock += 1;
         if let Some(cached) = self.cache.get_mut(&key) {
             cached.used = self.clock;
-            return Ok(cached.view.clone());
+            return Ok(use_texture(&cached.target));
         }
         let bytes = image.pixels().len();
         while self.cache_bytes + bytes > CACHE_LIMIT && !self.cache.is_empty() {
@@ -304,20 +329,20 @@ impl Renderer {
             self.cache.insert(
                 key,
                 Cached {
-                    view: texture.clone(),
+                    target: Shared::clone(&texture),
                     bytes,
                     used: self.clock,
                 },
             );
             self.cache_bytes += bytes;
         }
-        Ok(texture)
+        Ok(use_texture(&texture))
     }
-    fn frame_texture(&mut self, id: u64, image: &RgbaImage) -> wgpu::TextureView {
+    fn frame_texture(&mut self, id: u64, image: &RgbaImage) -> Shared<Texture> {
         self.clock += 1;
         if let Some(cached) = self.frames.get_mut(&id) {
             cached.used = self.clock;
-            return cached.view.clone();
+            return Shared::clone(&cached.target);
         }
         if self.frames.len() >= FRAME_TEXTURES {
             let oldest = *self
@@ -328,47 +353,44 @@ impl Renderer {
                 .0;
             self.frames.remove(&oldest);
         }
-        let texture = self.upload(image);
+        let texture = self
+            .movie_textures
+            .acquire(&self.device, [image.width(), image.height()]);
+        self.write_image(&texture, image);
         self.frames.insert(
             id,
             Cached {
-                view: texture.clone(),
+                target: Shared::clone(&texture),
                 bytes: image.pixels().len(),
                 used: self.clock,
             },
         );
         texture
     }
-    fn upload(&mut self, image: &RgbaImage) -> wgpu::TextureView {
-        let [w, h] = [image.width(), image.height()];
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("CMVS image"),
-            size: wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
+    fn upload(&mut self, image: &RgbaImage) -> Shared<Texture> {
+        let texture = Texture::new(
+            &self.device,
+            [image.width(), image.height()],
+            wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_DST
                 | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
+        );
+        self.write_image(&texture, image);
+        texture
+    }
+    fn write_image(&mut self, target: &Texture, image: &RgbaImage) {
+        let [w, h] = [image.width(), image.height()];
         self.queue.write_texture(
-            texture.as_image_copy(),
+            target.texture.as_image_copy(),
             image.pixels(),
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(w * 4),
                 rows_per_image: Some(h),
             },
-            texture.size(),
+            target.texture.size(),
         );
         self.uploaded_bytes += image.pixels().len() as u64;
-        texture.create_view(&Default::default())
     }
     pub fn render(&mut self, frame: &RenderFrame<'_>) -> Result<GpuFrame> {
         self.compose(frame.dimensions(), frame.clear_color(), frame.commands())
@@ -376,9 +398,12 @@ impl Renderer {
     /// Preserves the source alpha for the desktop checkerboard preview path.
     pub fn preview_image(&mut self, image: &RgbaImage) -> Result<GpuFrame> {
         self.bindings.clear();
-        let texture = self.texture(image)?.texture().clone();
+        let target = self.texture(image)?;
+        if let Some(scaling) = &mut self.scaling {
+            scaling.prune();
+        }
         Ok(GpuFrame {
-            texture,
+            target,
             device: self.device.clone(),
             queue: self.queue.clone(),
             size: [image.width(), image.height()],
@@ -400,7 +425,6 @@ impl Renderer {
         commands: &[Layer<'_>],
     ) -> Result<GpuFrame> {
         self.check()?;
-        let [w, h] = size;
         if size.contains(&0)
             || size
                 .iter()
@@ -409,25 +433,13 @@ impl Renderer {
             return Err("invalid GPU canvas size".into());
         }
         self.bindings.prepare(&self.device, commands.len())?;
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("logical canvas"),
-            size: wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
+        let target = self.canvases.acquire(&self.device, size);
         let white = RgbaImage::new(1, 1, vec![255; 4])?;
         let dummy = self.texture(&white)?;
         let mut draws = Vec::with_capacity(commands.len());
+        // Pin every input until submission: an eviction later in this scene must
+        // not recycle a movie texture already referenced by an earlier draw.
+        let mut inputs = Vec::new();
         for (index, command) in commands.iter().enumerate() {
             let draw = shader_draw(command, size);
             let mode = match draw.blend {
@@ -435,10 +447,15 @@ impl Renderer {
                 ShaderBlend::Alpha => 1,
                 ShaderBlend::Additive => 2,
             };
-            let mut views = [dummy.clone(), dummy.clone(), dummy.clone()];
+            let mut views = [dummy.view.clone(), dummy.view.clone(), dummy.view.clone()];
             for (view, image) in views.iter_mut().zip(draw.textures) {
                 if let Some(image) = image {
-                    *view = self.texture(image)?;
+                    *view = self.with_texture(image, |texture| {
+                        if image.frame_id().is_some() {
+                            inputs.push(Shared::clone(texture));
+                        }
+                        texture.view.clone()
+                    })?;
                 }
             }
             let offset = self.bindings.write(index, draw.used_params());
@@ -446,12 +463,11 @@ impl Renderer {
             draws.push((mode, group, offset));
         }
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        let view = texture.create_view(&Default::default());
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("CMVS scene"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: &target.view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -478,15 +494,19 @@ impl Renderer {
         }
         self.bindings.upload(&self.queue);
         self.queue.submit([encoder.finish()]);
+        drop(inputs);
         self.bindings.retain(
             self.cache
                 .values()
                 .chain(self.frames.values())
-                .map(|c| &c.view),
+                .map(|c| &c.target.view),
         );
+        if let Some(scaling) = &mut self.scaling {
+            scaling.prune();
+        }
         self.check()?;
         Ok(GpuFrame {
-            texture,
+            target,
             device: self.device.clone(),
             queue: self.queue.clone(),
             size,

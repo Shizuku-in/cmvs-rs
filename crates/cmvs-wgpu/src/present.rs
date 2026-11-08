@@ -1,10 +1,100 @@
 use super::*;
+
+struct ScaleGroup {
+    source: Weak<Texture>,
+    binding: wgpu::BindGroup,
+}
+
+/// One scaling pass per submission. Queue writes precede that submission, just as
+/// for scene uniforms; later changes cannot affect earlier submitted frames.
+pub(super) struct Scaling {
+    layout: wgpu::BindGroupLayout,
+    pipeline: wgpu::RenderPipeline,
+    buffer: wgpu::Buffer,
+    data: Option<[u8; 32]>,
+    groups: Vec<ScaleGroup>,
+}
+impl Scaling {
+    pub(super) fn prune(&mut self) {
+        self.groups.retain(|group| group.source.strong_count() != 0);
+    }
+
+    fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        let (layout, pipeline) = scaling_pipeline(device, format);
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("scaling parameters"),
+            size: 32,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Self {
+            layout,
+            pipeline,
+            buffer,
+            data: None,
+            groups: Vec::new(),
+        }
+    }
+
+    fn bind(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        source: &Shared<Texture>,
+        data: [f32; 8],
+    ) -> wgpu::BindGroup {
+        let mut bytes = [0u8; 32];
+        for (out, value) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(data) {
+            *out = value.to_le_bytes();
+        }
+        if self.data != Some(bytes) {
+            queue.write_buffer(&self.buffer, 0, &bytes);
+            self.data = Some(bytes);
+        }
+        // Weak owners do not pin a recyclable texture. Stale bindings disappear
+        // after its pool/cache releases it, even though the GPU view is a handle.
+        self.prune();
+        if let Some(at) = self.groups.iter().position(|group| {
+            group
+                .source
+                .upgrade()
+                .is_some_and(|owner| Shared::ptr_eq(&owner, source))
+        }) {
+            let group = self.groups.remove(at);
+            let binding = group.binding.clone();
+            self.groups.push(group);
+            return binding;
+        }
+        let binding = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("scaling texture"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&source.view),
+                },
+            ],
+        });
+        if self.groups.len() == 16 {
+            self.groups.remove(0);
+        }
+        self.groups.push(ScaleGroup {
+            source: Shared::downgrade(source),
+            binding: binding.clone(),
+        });
+        binding
+    }
+}
+
 /// Window presentation is separate from the logical CMVS canvas.
 pub struct Presenter {
     surface: wgpu::Surface<'static>,
     config: wgpu::SurfaceConfiguration,
-    layout: wgpu::BindGroupLayout,
-    pipeline: wgpu::RenderPipeline,
+    scaling: Scaling,
     format: wgpu::TextureFormat,
     pub lost: bool,
     configured: bool,
@@ -23,12 +113,11 @@ impl Presenter {
             .ok_or("no GPU surface configuration")?;
         config.format = format;
         config.view_formats = vec![view_format];
-        let (layout, pipeline) = scaling_pipeline(&renderer.device, view_format);
+        let scaling = Scaling::new(&renderer.device, view_format);
         Ok(Self {
             surface,
             config,
-            layout,
-            pipeline,
+            scaling,
             format: view_format,
             lost: false,
             configured: false,
@@ -93,31 +182,9 @@ impl Presenter {
             u32::from(linear) as f32,
             u32::from(preview) as f32,
         ];
-        let bytes: Vec<_> = data.into_iter().flat_map(f32::to_le_bytes).collect();
-        let buffer = renderer
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: None,
-                contents: &bytes,
-                usage: wgpu::BufferUsages::UNIFORM,
-            });
-        let source = frame.texture.create_view(&Default::default());
-        let group = renderer
-            .device
-            .create_bind_group(&wgpu::BindGroupDescriptor {
-                label: None,
-                layout: &self.layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&source),
-                    },
-                ],
-            });
+        let group = self
+            .scaling
+            .bind(&renderer.device, &renderer.queue, &frame.target, data);
         let target = output.texture.create_view(&wgpu::TextureViewDescriptor {
             format: Some(self.format),
             ..Default::default()
@@ -137,7 +204,7 @@ impl Presenter {
                 })],
                 ..Default::default()
             });
-            pass.set_pipeline(&self.pipeline);
+            pass.set_pipeline(&self.scaling.pipeline);
             pass.set_bind_group(0, &group, &[]);
             pass.draw(0..3, 0..1);
         }
@@ -241,56 +308,17 @@ pub(crate) fn scale_image(
         u32::from(linear) as f32,
         0.0,
     ];
-    let bytes: Vec<_> = data.into_iter().flat_map(f32::to_le_bytes).collect();
-    let buffer = renderer
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: &bytes,
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-    let (layout, pipeline) = renderer
+    let target = renderer.canvases.acquire(&renderer.device, size);
+    let scaling = renderer
         .scaling
-        .get_or_insert_with(|| scaling_pipeline(&renderer.device, wgpu::TextureFormat::Rgba8Unorm));
-    let group = renderer
-        .device
-        .create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&source),
-                },
-            ],
-        });
-    let texture = renderer.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("movie canvas"),
-        size: wgpu::Extent3d {
-            width: size[0],
-            height: size[1],
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = texture.create_view(&Default::default());
+        .get_or_insert_with(|| Scaling::new(&renderer.device, wgpu::TextureFormat::Rgba8Unorm));
+    let group = scaling.bind(&renderer.device, &renderer.queue, &source, data);
     let mut encoder = renderer.device.create_command_encoder(&Default::default());
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("movie scale"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view,
+                view: &target.view,
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
@@ -300,16 +328,78 @@ pub(crate) fn scale_image(
             })],
             ..Default::default()
         });
-        pass.set_pipeline(pipeline);
+        pass.set_pipeline(&scaling.pipeline);
         pass.set_bind_group(0, &group, &[]);
         pass.draw(0..3, 0..1);
     }
     renderer.queue.submit([encoder.finish()]);
     renderer.check()?;
     Ok(GpuFrame {
-        texture,
+        target,
         device: renderer.device.clone(),
         queue: renderer.queue.clone(),
         size,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires a native GPU adapter; run explicitly"]
+    fn scaling_reuses_uniforms_and_bindings_without_changing_pending_frames() {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
+        let (mut gpu, _) = Renderer::new(&instance, None).unwrap();
+        let a = RgbaImage::new(2, 1, vec![255, 0, 0, 255, 0, 255, 0, 0]).unwrap();
+        let b = RgbaImage::new(2, 1, vec![0, 0, 255, 255, 255, 255, 255, 128]).unwrap();
+        let mut frames = Vec::new();
+        let first = gpu.render_image(&a, [4, 3], false).unwrap();
+        let scaling = gpu.scaling.as_ref().unwrap();
+        let buffer = scaling.buffer.clone();
+        let binding = scaling.groups[0].binding.clone();
+        frames.push((first, &a, [4, 3], false));
+        for (image, size, linear) in [(&a, [7, 5], true), (&b, [4, 3], false), (&a, [2, 1], true)] {
+            frames.push((
+                gpu.render_image(image, size, linear).unwrap(),
+                image,
+                size,
+                linear,
+            ));
+        }
+        let scaling = gpu.scaling.as_ref().unwrap();
+        assert_eq!(scaling.buffer, buffer);
+        assert_eq!(scaling.groups.last().unwrap().binding, binding);
+        assert_eq!(scaling.groups.len(), 2);
+        // Read only after every submission, with geometry, filters and sources changed.
+        for (frame, image, size, linear) in frames {
+            let mut expected = vec![0; (size[0] * size[1]) as usize];
+            image
+                .draw_scaled(&mut expected, size[0], size[1], 1, linear)
+                .unwrap();
+            let actual = frame.read().unwrap();
+            for (word, pixel) in expected.iter().zip(actual.pixels().as_chunks::<4>().0) {
+                for (c, shift) in [16, 8, 0].into_iter().enumerate() {
+                    assert!(pixel[c].abs_diff((word >> shift) as u8) <= 2);
+                }
+                assert_eq!(pixel[3], 255);
+            }
+        }
+        for red in 0..32 {
+            let image = RgbaImage::new(1, 1, vec![red, 0, 0, 255]).unwrap();
+            drop(gpu.render_image(&image, [1, 1], false).unwrap());
+        }
+        assert_eq!(gpu.scaling.as_ref().unwrap().groups.len(), 16);
+        gpu.cache.clear();
+        gpu.cache_bytes = 0;
+        let after_eviction = gpu.render_image(&a, [2, 1], false).unwrap();
+        assert_eq!(gpu.scaling.as_ref().unwrap().groups.len(), 1);
+        assert_eq!(gpu.scaling.as_ref().unwrap().buffer, buffer);
+        assert_eq!(
+            after_eviction.read().unwrap().pixels(),
+            &[255, 0, 0, 255, 0, 0, 0, 255]
+        );
+        gpu.check().unwrap();
+    }
 }

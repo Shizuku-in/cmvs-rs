@@ -147,3 +147,126 @@ fn legacy_full_move_keeps_unscaled_drawing_and_pointer_input_at_the_origin() {
         Viewport::new([8, 6], [4, 4], 1)
     );
 }
+
+/// Scalar presentation oracle: source texels are weighted in premultiplied space,
+/// then composited over the existing target with one final rounding operation.
+fn reference_present(
+    image: &RgbaImage,
+    target: &mut [u32],
+    size: [u32; 2],
+    mode: u32,
+    linear: bool,
+) {
+    let view = Viewport::new([image.width(), image.height()], size, mode).unwrap();
+    let tap = |position: i64, origin: i64, span: u32, source: u32| {
+        let coordinate =
+            ((position - origin) * 2 + 1) * i64::from(source) * 256 / (i64::from(span) * 2) - 128;
+        let coordinate = coordinate.clamp(0, (i64::from(source) - 1) * 256);
+        let low = coordinate / 256;
+        [
+            (low, 256 - coordinate % 256),
+            ((low + 1).min(i64::from(source) - 1), coordinate % 256),
+        ]
+    };
+    for y in 0..i64::from(size[1]) {
+        for x in 0..i64::from(size[0]) {
+            if x < view.left
+                || y < view.top
+                || x >= view.left + i64::from(view.width)
+                || y >= view.top + i64::from(view.height)
+            {
+                continue;
+            }
+            let sample = |position, origin, span, source| {
+                if linear {
+                    tap(position, origin, span, source)
+                } else {
+                    let at = (position - origin) * i64::from(source) / i64::from(span);
+                    [(at, 256), (at, 0)]
+                }
+            };
+            let mut sums = [0u64; 4];
+            for (sy, wy) in sample(y, view.top, view.height, image.height()) {
+                for (sx, wx) in sample(x, view.left, view.width, image.width()) {
+                    let at = (sy as usize * image.width() as usize + sx as usize) * 4;
+                    let pixel = &image.pixels()[at..at + 4];
+                    let weight = (wx * wy) as u64;
+                    let alpha = u64::from(pixel[3]);
+                    for channel in 0..3 {
+                        sums[channel] += weight * alpha * u64::from(pixel[channel]);
+                    }
+                    sums[3] += weight * alpha;
+                }
+            }
+            let target = &mut target[y as usize * size[0] as usize + x as usize];
+            let scale = 255 * 65536;
+            let mut rgb = 0;
+            for (channel, shift) in [16, 8, 0].into_iter().enumerate() {
+                let backdrop = u64::from((*target >> shift) & 255);
+                rgb |= (((sums[channel] + backdrop * (scale - sums[3]) + scale / 2) / scale)
+                    as u32)
+                    << shift;
+            }
+            *target = rgb;
+        }
+    }
+}
+
+#[test]
+fn presentation_matches_scalar_alpha_and_rounding_across_sizes_and_modes() {
+    for [width, height] in [[1, 1], [1, 7], [7, 1], [3, 5], [8, 6]] {
+        for alpha_mode in 0..3 {
+            let mut pixels = Vec::new();
+            for i in 0..width * height {
+                let alpha = match alpha_mode {
+                    0 => 255,
+                    1 => [0, 1, 127, 128, 254, 255][i as usize % 6],
+                    _ if i + 1 == width * height => 254,
+                    _ => 255,
+                };
+                pixels.extend([
+                    (i * 73) as u8,
+                    (i * 37 + 19) as u8,
+                    (i * 17 + 231) as u8,
+                    alpha,
+                ]);
+            }
+            let image = RgbaImage::new(width, height, pixels).unwrap();
+            for size in [
+                [width, height],
+                [width, height.saturating_sub(2).max(1)],
+                [width.saturating_sub(2).max(1), height],
+                [11, 9],
+                [2, 3],
+                [17, 11],
+            ] {
+                for mode in 0..=4 {
+                    for linear in [false, true] {
+                        // Include nonzero high bytes: untouched borders retain them,
+                        // while covered pixels are the compositor's 0x00RRGGBB.
+                        let mut expected: Vec<_> = (0..size[0] * size[1])
+                            .map(|i| 0xa500_0000 | (i * 193 + 0x123456) & 0xffffff)
+                            .collect();
+                        let mut actual = expected.clone();
+                        if let Err(error) = Viewport::new([width, height], size, mode) {
+                            assert_eq!(
+                                image.draw_scaled(&mut actual, size[0], size[1], mode, linear),
+                                Err(error)
+                            );
+                            assert_eq!(actual, expected);
+                            continue;
+                        }
+                        reference_present(&image, &mut expected, size, mode, linear);
+                        image
+                            .draw_scaled(&mut actual, size[0], size[1], mode, linear)
+                            .unwrap();
+                        assert_eq!(
+                            actual, expected,
+                            "source={width}x{height}, alpha={alpha_mode}, target={size:?}, mode={mode}, linear={linear}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

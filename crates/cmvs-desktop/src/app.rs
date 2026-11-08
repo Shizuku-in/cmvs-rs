@@ -252,21 +252,19 @@ impl App<'_> {
         let surface = self.surface.as_mut().ok_or("no surface")?;
         surface.resize(w, h)?;
         let mut buffer = surface.buffer_mut()?;
-        for (i, pixel) in buffer.iter_mut().enumerate() {
-            let x = i % size.width as usize;
-            let y = i / size.width as usize;
-            *pixel = if (x / 32 + y / 32).is_multiple_of(2) {
-                0x263447
-            } else {
-                0x2c3c50
-            };
-        }
-        if self.preview_image.is_none() {
-            buffer.fill(0);
-        }
         if self.preview_image.is_some() {
+            for (i, pixel) in buffer.iter_mut().enumerate() {
+                let x = i % size.width as usize;
+                let y = i / size.width as usize;
+                *pixel = if (x / 32 + y / 32).is_multiple_of(2) {
+                    0x263447
+                } else {
+                    0x2c3c50
+                };
+            }
             image.draw_fit(&mut buffer, size.width, size.height)?;
         } else {
+            buffer.fill(0);
             let mode = cmvs_core::viewport::presentation_mode_with_full_move(
                 window.fullscreen().is_some(),
                 self.aspect_scaling.get(),
