@@ -1,4 +1,6 @@
 //! Offline helper for convert_hapymaher_patch.py; shares the verified PS2A/CPZ3 writer.
+#[path = "../pb3_writer.rs"]
+mod images;
 #[allow(dead_code)]
 #[path = "../miranosu/rewrite_scripts.rs"]
 mod scripts;
@@ -134,41 +136,7 @@ fn png_to_pb3(raw: &[u8], original: &[u8]) -> Result<(Vec<u8>, u32, u32, u16)> {
     if rgba.len() != count * 4 {
         return Err("PNG pixel count differs".into());
     }
-    // The hook copies RGBA pixels over the original decoded image, including alpha.
-    let mut flags = Vec::new();
-    for value in [1u32, 0, count as u32] {
-        flags.extend(value.to_le_bytes());
-    }
-    flags.resize(13 + count.div_ceil(8), 0);
-    let data_at = 52 + 16 + flags.len() * 4;
-    let mut out = vec![0; 52];
-    out[..4].copy_from_slice(b"PB3B");
-    out[8..12].copy_from_slice(&1u32.to_le_bytes());
-    out[24..28].copy_from_slice(&width.max(height).to_le_bytes());
-    for (i, value) in [1, width as u16, height as u16, 32].iter().enumerate() {
-        out[28 + i * 2..30 + i * 2].copy_from_slice(&value.to_le_bytes());
-    }
-    out[44..48].copy_from_slice(&52u32.to_le_bytes());
-    out[48..52].copy_from_slice(&(data_at as u32).to_le_bytes());
-    for _ in 0..4 {
-        out.extend((flags.len() as u32).to_le_bytes());
-    }
-    for _ in 0..4 {
-        out.extend(&flags);
-    }
-    for _ in 0..4 {
-        out.extend((count as u32).to_le_bytes());
-    }
-    for channel in [2, 1, 0, 3] {
-        out.extend(rgba.iter().skip(channel).step_by(4));
-    }
-    out.extend([0; 47]);
-    let size = out.len() as u32;
-    out[4..8].copy_from_slice(&size.to_le_bytes());
-    let decoded = pb3::decode(&out)?;
-    if decoded.width() != width || decoded.height() != height || decoded.pixels() != rgba {
-        return Err("PB3B full RGBA roundtrip differs".into());
-    }
+    let out = images::encode_rgba(&rgba, width, height)?;
     Ok((out, width, height, header.bpp))
 }
 
