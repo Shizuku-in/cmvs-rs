@@ -3,7 +3,7 @@
 //! in the directories `cmvs_native::font_directories` lists for this platform
 //! (Windows/macOS system/user folders and Linux Fontconfig directories).
 use ab_glyph::{Font, FontVec};
-use cmvs_core::{FormatError, settings::DEFAULT_FONT_FACE};
+use cmvs_core::{FormatError, TextEncoding, settings::DEFAULT_FONT_FACE};
 use std::{
     collections::BTreeMap,
     fs::File,
@@ -16,6 +16,8 @@ const MAX_FONT: usize = 32 * 1024 * 1024;
 const MAX_FONT_FILES: usize = 8192;
 
 pub struct FontLibrary {
+    /// Encoding of the game's legacy font face fields (LOGFONT names).
+    encoding: TextEncoding,
     default: Arc<FontVec>,
     loaded: BTreeMap<Vec<u8>, Arc<FontVec>>,
     /// Lowercased family name -> font file and collection index; built on first use.
@@ -29,6 +31,7 @@ pub struct FontLibrary {
 impl FontLibrary {
     pub fn new(default: Arc<FontVec>) -> Self {
         Self {
+            encoding: TextEncoding::default(),
             default,
             loaded: BTreeMap::new(),
             index: None,
@@ -43,6 +46,17 @@ impl FontLibrary {
             directories,
             ..Self::new(default)
         }
+    }
+    /// Select the encoding of legacy face names. Faces resolved under the previous
+    /// encoding are forgotten, since the same bytes may now name another family.
+    pub fn set_text_encoding(&mut self, encoding: TextEncoding) {
+        if self.encoding != encoding {
+            self.encoding = encoding;
+            self.loaded.clear();
+        }
+    }
+    pub fn text_encoding(&self) -> TextEncoding {
+        self.encoding
     }
     pub fn set_user_directory(&mut self, directory: &Path) {
         self.unicode_directory = Some(directory.join("font-faces"));
@@ -121,12 +135,9 @@ impl FontLibrary {
             self.unicode_names.insert(face.to_vec(), name.clone());
             return Ok(name);
         }
-        encoding_rs::SHIFT_JIS
-            .decode_without_bom_handling_and_without_replacement(face)
-            .map(|name| name.into_owned())
-            .ok_or(FormatError("font face is not valid Shift-JIS"))
+        legacy_family_name(self.encoding, face)
     }
-    /// The font for a face in the game encoding (Shift-JIS).
+    /// The font for a face in the game encoding (see `set_text_encoding`).
     pub fn face(&mut self, face: &[u8]) -> Result<Arc<FontVec>, FormatError> {
         if let Some(font) = self.loaded.get(face) {
             return Ok(font.clone());
@@ -276,6 +287,23 @@ impl FontLibrary {
         };
         Ok(index.get(&key).cloned())
     }
+}
+
+/// Decode a legacy face field. The engine's built-in default face is a fixed Shift-JIS
+/// constant that GBK-patched executables keep unchanged, so it is named independently
+/// of the selected encoding.
+fn legacy_family_name(encoding: TextEncoding, face: &[u8]) -> Result<String, FormatError> {
+    if face == DEFAULT_FONT_FACE {
+        return Ok("ＭＳ ゴシック".to_owned());
+    }
+    crate::font::codec(encoding)?
+        .decode_without_bom_handling_and_without_replacement(face)
+        .map(|name| name.into_owned())
+        .ok_or(FormatError(match encoding {
+            TextEncoding::ShiftJis => "font face is not valid Shift-JIS",
+            TextEncoding::Gbk => "font face is not valid GBK",
+            _ => "font face is not valid in the game encoding",
+        }))
 }
 
 fn imported_key(bytes: &[u8]) -> Vec<u8> {
@@ -541,6 +569,30 @@ mod tests {
         }
         out.extend(bodies.concat());
         out
+    }
+
+    #[test]
+    fn legacy_face_names_follow_the_game_encoding() {
+        let sjis = encoding_rs::SHIFT_JIS.encode("メイリオ").0;
+        let gbk = encoding_rs::GBK.encode("黑体").0;
+        assert_eq!(
+            legacy_family_name(TextEncoding::ShiftJis, &sjis).unwrap(),
+            "メイリオ"
+        );
+        assert_eq!(legacy_family_name(TextEncoding::Gbk, &gbk).unwrap(), "黑体");
+        assert_eq!(
+            legacy_family_name(TextEncoding::Gbk, b"SimHei").unwrap(),
+            "SimHei"
+        );
+        // 0xff passes the engine's GBK lead-byte test but is not valid GBK.
+        assert!(legacy_family_name(TextEncoding::Gbk, b"\xff\xff").is_err());
+        // The fixed default face keeps its Shift-JIS name under GBK.
+        for encoding in [TextEncoding::ShiftJis, TextEncoding::Gbk] {
+            assert_eq!(
+                legacy_family_name(encoding, DEFAULT_FONT_FACE).unwrap(),
+                "ＭＳ ゴシック"
+            );
+        }
     }
 
     #[test]

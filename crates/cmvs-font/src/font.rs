@@ -109,7 +109,8 @@ impl cmvs_core::message::GlyphMetrics for PreviewMetrics {
 
 // Keep backend codec selection here, outside core's dependency-free byte scanners.
 // New core encodings must be explicitly supported before rendering their glyphs.
-fn decoder(encoding: TextEncoding) -> Result<&'static encoding_rs::Encoding, FormatError> {
+// Glyph codes and legacy font face names share this codec.
+pub(crate) fn codec(encoding: TextEncoding) -> Result<&'static encoding_rs::Encoding, FormatError> {
     match encoding {
         TextEncoding::ShiftJis => Ok(encoding_rs::SHIFT_JIS),
         TextEncoding::Gbk => Ok(encoding_rs::GBK),
@@ -124,7 +125,7 @@ fn character(encoding: TextEncoding, code: u16) -> Result<char, FormatError> {
     } else {
         &pair[..]
     };
-    let text = decoder(encoding)?
+    let text = codec(encoding)?
         .decode_without_bom_handling_and_without_replacement(bytes)
         .ok_or(FormatError(match encoding {
             TextEncoding::ShiftJis => "invalid Shift-JIS glyph code",
@@ -266,10 +267,15 @@ impl FontRenderer {
         }
     }
     /// Select the game text encoding before installing this renderer's metrics.
-    /// Changing it discards cached glyph images; existing metrics retain their encoding.
+    /// It applies to glyph codes and to legacy font face names. Changing it discards
+    /// cached glyph images; existing metrics retain their glyph encoding.
     pub fn with_text_encoding(mut self, encoding: TextEncoding) -> Self {
         self.encoding = encoding;
         self.cache = GlyphCache::default();
+        self.library
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .set_text_encoding(encoding);
         self
     }
     /// Matches this renderer's fonts; OpenType ink bounds replace GDI's
@@ -310,6 +316,8 @@ impl FontRenderer {
         File::open(path)?
             .take(MAX_FONT as u64 + 1)
             .read_to_end(&mut bytes)?;
+        // An imported font is named in the game's face field only when it fits there.
+        let encoder = codec(self.encoding)?;
         let name = crate::font_library::family_names(path)?
             .into_iter()
             .find(|(face, _)| *face == index)
@@ -318,7 +326,7 @@ impl FontRenderer {
                     if name.chars().any(char::is_control) {
                         return None;
                     }
-                    let (encoded, _, unmappable) = encoding_rs::SHIFT_JIS.encode(&name);
+                    let (encoded, _, unmappable) = encoder.encode(&name);
                     (!unmappable
                         && !encoded.is_empty()
                         && encoded.len() <= 31
