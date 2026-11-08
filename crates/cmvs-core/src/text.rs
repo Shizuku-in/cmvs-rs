@@ -1,6 +1,7 @@
 //! Stateless string utility commands of the 0x20f0..0x20ff group; only verified ones are handled.
 use crate::{
-    bytecode::DecodeError, dispatch::Call, evaluate::error, machine::Machine, vm::StringRef,
+    TextEncoding, bytecode::DecodeError, dispatch::Call, evaluate::error, machine::Machine,
+    vm::StringRef,
 };
 
 pub fn try_handle(vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
@@ -21,7 +22,7 @@ pub(crate) fn handle(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
     }
 }
 
-/// 0x20f3 / 0x1400744d0: byte offset/count, copying complete Shift-JIS pairs.
+/// 0x20f3 / 0x1400744d0: byte offset/count, copying complete encoded pairs.
 /// Result 0 counts characters copied, not bytes. An empty range leaves the
 /// destination untouched, including when the source already ends at the offset.
 fn substring(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
@@ -57,7 +58,7 @@ fn substring(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
         let Some(&byte) = bytes.get(index) else {
             break;
         };
-        let width = if (0x81..=0x9f).contains(&byte) || (0xe0..=0xfc).contains(&byte) {
+        let width = if call.vm.text_encoding().is_lead_byte(byte) {
             2
         } else {
             1
@@ -67,7 +68,10 @@ fn substring(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
             return Err(error(
                 pc,
                 0x20f3,
-                "substring ends with an incomplete Shift-JIS pair",
+                match call.vm.text_encoding() {
+                    TextEncoding::ShiftJis => "substring ends with an incomplete Shift-JIS pair",
+                    TextEncoding::Gbk => "substring ends with an incomplete GBK pair",
+                },
             ));
         }
         output.extend_from_slice(&bytes[index..next]);
@@ -108,7 +112,8 @@ fn compare(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
     );
     let first = call.vm.resolve_string(first)?;
     let second = call.vm.resolve_string(second)?;
-    let equal = equal_ignoring_ascii_case(&first, &second).map_err(|why| error(pc, 0x20f1, why))?;
+    let equal = equal_ignoring_ascii_case(call.vm.text_encoding(), &first, &second)
+        .map_err(|why| error(pc, 0x20f1, why))?;
     call.complete(0x4008)?;
     call.vm
         .state_mut()
@@ -117,16 +122,20 @@ fn compare(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
     Ok(())
 }
 
-/// 0x140008140 walks the first string: a Shift-JIS lead byte compares itself and the next
+/// 0x140008140 walks the first string: an encoding lead byte compares itself and the next
 /// byte exactly, any other byte compares with a-z folded to A-Z; the second string must
 /// end where the first does. A trailing lead byte whose pair matches steps past the first
 /// string's terminator, which is not modeled.
-fn equal_ignoring_ascii_case(first: &[u8], second: &[u8]) -> Result<bool, &'static str> {
+fn equal_ignoring_ascii_case(
+    encoding: TextEncoding,
+    first: &[u8],
+    second: &[u8],
+) -> Result<bool, &'static str> {
     let at = |text: &[u8], i: usize| text.get(i).copied().unwrap_or(0);
     let mut i = 0;
     while at(first, i) != 0 {
         let b = at(first, i);
-        if (0x81..=0x9f).contains(&b) || (0xe0..=0xfc).contains(&b) {
+        if encoding.is_lead_byte(b) {
             if b != at(second, i) || at(first, i + 1) != at(second, i + 1) {
                 return Ok(false);
             }

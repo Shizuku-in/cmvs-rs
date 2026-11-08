@@ -1,5 +1,6 @@
 //! Bounded byte-oriented counterpart of 0x14005ca80 (see vm-semantics.md).
 use super::{LineBreakRules, TextObject};
+use crate::TextEncoding;
 
 /// 0x14005b050: 1 for a character of the hanging set (+336), 2 for the inseparable set
 /// (+400), else 0. Shared by measurement and output.
@@ -31,11 +32,6 @@ pub(super) struct Layout<'a> {
     pub(super) max: u32,
     pub(super) overflow: u32,
     pub(super) previous: u16,
-}
-
-/// 0x140008080: Shift-JIS lead bytes, without checking the trail byte.
-pub(super) fn lead(byte: u8) -> bool {
-    (0x81..=0x9f).contains(&byte) || (0xe0..=0xfc).contains(&byte)
 }
 
 impl Layout<'_> {
@@ -141,6 +137,7 @@ impl Layout<'_> {
 }
 
 pub(super) fn measure(
+    encoding: TextEncoding,
     text: &TextObject,
     bytes: &[u8],
 ) -> Result<([u32; 3], [u32; 2]), &'static str> {
@@ -180,7 +177,7 @@ pub(super) fn measure(
                 loop {
                     let byte = *bytes.get(i).ok_or("ruby base is missing its slash")?;
                     i += 1;
-                    if lead(byte) {
+                    if encoding.is_lead_byte(byte) {
                         bytes.get(i).ok_or("truncated double-byte ruby character")?;
                         i += 1;
                         state.add(true);
@@ -193,7 +190,7 @@ pub(super) fn measure(
                         .get(i)
                         .ok_or("ruby annotation is missing its closing brace")?;
                     i += 1;
-                    if lead(byte) {
+                    if encoding.is_lead_byte(byte) {
                         bytes
                             .get(i)
                             .ok_or("truncated double-byte ruby annotation")?;
@@ -203,7 +200,7 @@ pub(super) fn measure(
                     }
                 }
             }
-            byte if lead(byte) => {
+            byte if encoding.is_lead_byte(byte) => {
                 let second = *bytes
                     .get(i + 1)
                     .ok_or("truncated double-byte text character")?;

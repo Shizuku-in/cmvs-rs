@@ -16,6 +16,8 @@ cargo run --offline --release --features desktop --bin cmvs-desktop -- "<游戏�
 
 启用字体会使用当前已核对的单行 0x2152 字形记录/计时分支，随后真正光栅化并合成字形；默认没有字体时仍保留 0x2152 断点。`--record-text` 保留纯记录行为。消息输出协议及受限设置见 vm-semantics.md。
 
+引擎 API 的 SJIS/GBK 选择、字体 metrics 编码同步及后续变长编码扩展边界，见[引擎层文本编码](text-encoding.md)。
+
 ## 架构与呈现边界
 
 字体文件加载、Shift-JIS 转换、OpenType 解析、字形 mask 和缓存全部在 cmvs-desktop::font。cmvs-core 无新增依赖；它只接收外部 SceneObject，再将普通槽对象、字形、可见消息窗口对象和 fade 放入同一个稳定图层队列。两条路径不修改 VM 或素材。

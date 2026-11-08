@@ -1262,12 +1262,12 @@ fn variant_text_dialog(
             .error("text dialog result exceeds native capacity")
             .into());
     }
-    // 0x403b10 keeps only Shift-JIS double-byte characters before the empty fallback.
+    // 0x403b10 keeps only encoded double-byte characters before the empty fallback.
     let text = if accepted {
         let mut full_width = Vec::new();
         let mut i = 0;
         while i < text.len() {
-            if matches!(text[i], 0x81..=0x9f | 0xe0..=0xfc) {
+            if call.vm.text_encoding().is_lead_byte(text[i]) {
                 let pair = text.get(i..i + 2).ok_or_else(|| {
                     call.error("text dialog has a truncated double-byte character")
                 })?;

@@ -5035,3 +5035,40 @@ fn inspected_window_children_share_the_table_for_draw_query_and_destroy() {
         assert_eq!(vm.pending_system().unwrap().1, 0x178);
     }
 }
+
+#[test]
+fn gbk_message_measurement_and_output_share_pairs_including_control_trails() {
+    for font_cells in [false, true] {
+        let mut code = vec![];
+        direct_output(&mut code);
+        call(&mut code, 0x211f, &[1, 1]);
+        call(&mut code, 0x210b, &[1, 1]);
+        // Backslash and ruby delimiters are also valid GBK trail bytes.
+        let script = script_with_text(&code, b"\0\xd6\xd0\xce\\{\xd6{/\xce}}\0");
+        let mut vm = Machine::new_with_encoding(&script, cmvs_rs::TextEncoding::Gbk).unwrap();
+        let mut messages = MessageHost::default();
+        messages.set_record_output(true);
+        if font_cells {
+            run_font_cells(&mut vm, &mut messages, 5);
+        } else {
+            run(&mut vm, &mut messages, 5);
+        }
+        assert_eq!(vm.state().system_integer(1), Some(6));
+        if font_cells {
+            run_font_cells(&mut vm, &mut messages, 1);
+        } else {
+            run(&mut vm, &mut messages, 1);
+        }
+        assert_eq!(
+            messages
+                .text(1)
+                .unwrap()
+                .glyphs
+                .iter()
+                .map(|g| g.code)
+                .collect::<Vec<_>>(),
+            [0xd6d0, 0xce5c, 0xd67b]
+        );
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
+}

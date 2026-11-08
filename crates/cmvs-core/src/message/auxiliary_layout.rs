@@ -1,11 +1,9 @@
 //! Auxiliary text content: 0x238b layout (0x14002f3e0), 0x2390 measurement (0x14002f120)
 //! and the glyph half of the 0x14002edb0 frame update, which attaches glyphs inside the
 //! bounds to atlas cells and detaches the others. Addresses refer to the documented binary.
-use super::{
-    auxiliary::{AuxiliaryGlyph, AuxiliaryText},
-    measure::lead,
-};
+use super::auxiliary::{AuxiliaryGlyph, AuxiliaryText};
 use crate::FormatError;
+use crate::TextEncoding;
 
 /// 0x8141 、 0x8142 。 0x8176 」 0x8178 』 stay on the full line while +128 is set.
 const NO_BREAK: [u16; 4] = [0x8141, 0x8142, 0x8176, 0x8178];
@@ -40,7 +38,11 @@ impl AuxiliaryText {
     /// at zero for each call and indexes the ruby-line flags +212..+340 that the call clears
     /// first, so only the every-line flag +200 reserves the ruby height +204. Ruby text is
     /// skipped; its base characters are laid out without the voiced-mark rule.
-    pub(super) fn layout(&self, text: &[u8]) -> Result<TextLayout, &'static str> {
+    pub(super) fn layout(
+        &self,
+        encoding: TextEncoding,
+        text: &[u8],
+    ) -> Result<TextLayout, &'static str> {
         let byte = |i: usize| text.get(i).copied().unwrap_or(0);
         let size = self.words[&48];
         let size_f = size as i32 as f32;
@@ -111,7 +113,7 @@ impl AuxiliaryText {
                     if b == 0 {
                         return Err("unterminated auxiliary ruby group");
                     }
-                    if lead(b) {
+                    if encoding.is_lead_byte(b) {
                         let code = u16::from_be_bytes([b, byte(i + 1)]);
                         i += 2;
                         if self.at_edge(x) && !(no_break && NO_BREAK.contains(&code)) {
@@ -135,7 +137,7 @@ impl AuxiliaryText {
                     if b == 0 {
                         return Err("unterminated auxiliary ruby group");
                     }
-                    if lead(b) {
+                    if encoding.is_lead_byte(b) {
                         i += 2;
                     } else {
                         i += 1;
@@ -146,7 +148,7 @@ impl AuxiliaryText {
                 }
                 continue;
             }
-            if !lead(first) {
+            if !encoding.is_lead_byte(first) {
                 // 0x14002f7a2 compares with a word the caller never stored (r8's home slot).
                 return Err("half-width auxiliary text advance reads an uninitialized stack word");
             }
@@ -190,7 +192,11 @@ impl AuxiliaryText {
 
     /// 0x14002f120 from the current pen: (lines, widest line, last line), widths counted in
     /// Shift-JIS bytes. An unknown escape ends the measurement early.
-    pub(super) fn measure(&self, text: &[u8]) -> Result<[u32; 3], &'static str> {
+    pub(super) fn measure(
+        &self,
+        encoding: TextEncoding,
+        text: &[u8],
+    ) -> Result<[u32; 3], &'static str> {
         let byte = |i: usize| text.get(i).copied().unwrap_or(0);
         let size_f = self.words[&48] as i32 as f32;
         let no_break = self.words[&128] != 0;
@@ -231,7 +237,7 @@ impl AuxiliaryText {
                     if b == 0 {
                         return Err("unterminated auxiliary ruby group");
                     }
-                    if lead(b) {
+                    if encoding.is_lead_byte(b) {
                         columns += 2;
                         i += 2;
                         x += size_f + self.float(52);
@@ -248,7 +254,7 @@ impl AuxiliaryText {
                     if b == 0 {
                         return Err("unterminated auxiliary ruby group");
                     }
-                    if lead(b) {
+                    if encoding.is_lead_byte(b) {
                         i += 2;
                     } else {
                         i += 1;
@@ -259,7 +265,7 @@ impl AuxiliaryText {
                 }
                 continue;
             }
-            if lead(first) {
+            if encoding.is_lead_byte(first) {
                 let code = u16::from_be_bytes([first, byte(i + 1)]);
                 i += 2;
                 let advance = size_f + self.float(52);

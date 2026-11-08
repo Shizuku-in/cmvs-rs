@@ -1828,3 +1828,27 @@ fn auxiliary_resizing_rejects_live_atlas_overlap_but_clear_releases_the_pixels()
     // The cell number leaks through clear, but the deleted glyph no longer samples it.
     assert_eq!(messages.auxiliary_text(7).unwrap().glyphs[0].cell, 2);
 }
+
+#[test]
+fn gbk_auxiliary_measurement_and_layout_preserve_control_trail_bytes() {
+    let mut calls = AREA.to_vec();
+    calls.extend([(0x2390, &[7, 1][..]), (0x238b, &[7, 1][..])]);
+    let script = content_script(&calls, b"\xd6\xd0\xce\\{\xd6{/\xce}}");
+    let mut vm = Machine::new_with_encoding(&script, cmvs_rs::TextEncoding::Gbk).unwrap();
+    let mut messages = MessageHost::default();
+    run_calls(&mut vm, &mut messages, 4);
+    assert_eq!(vm.state().system_integer(1), Some(6));
+    messages.set_record_output(true);
+    run(&mut vm, &mut messages);
+    assert_eq!(
+        messages
+            .auxiliary_text(7)
+            .unwrap()
+            .glyphs
+            .iter()
+            .map(|g| g.code)
+            .collect::<Vec<_>>(),
+        [0xd6d0, 0xce5c, 0xd67b]
+    );
+    assert_eq!(vm.stack().len_bytes(), 0);
+}

@@ -1,11 +1,8 @@
 //! Explicit recording of 0x2152 output for plain characters, ruby groups and newlines,
 //! including automatic wrapping. These records are not glyph textures and must not imply successful
 //! font rendering.
-use super::{
-    MessageHost, TextObject,
-    measure::{lead, line_break_kind},
-    window_slot,
-};
+use super::{MessageHost, TextObject, measure::line_break_kind, window_slot};
+use crate::TextEncoding;
 use crate::{
     bytecode::DecodeError,
     evaluate::error,
@@ -135,8 +132,13 @@ pub(super) struct Group {
 
 /// Parses the group whose `{` precedes `start`. The original reads past a terminator
 /// instead of stopping, so a missing `/` or `}` is an error.
-pub(super) fn parse_group(bytes: &[u8], start: usize) -> Result<Group, &'static str> {
+pub(super) fn parse_group(
+    encoding: TextEncoding,
+    bytes: &[u8],
+    start: usize,
+) -> Result<Group, &'static str> {
     fn part(
+        encoding: TextEncoding,
         bytes: &[u8],
         i: &mut usize,
         close: u8,
@@ -145,7 +147,7 @@ pub(super) fn parse_group(bytes: &[u8], start: usize) -> Result<Group, &'static 
         let mut items = Vec::new();
         loop {
             let byte = *bytes.get(*i).filter(|&&b| b != 0).ok_or(missing)?;
-            if lead(byte) {
+            if encoding.is_lead_byte(byte) {
                 let second = *bytes
                     .get(*i + 1)
                     .filter(|&&b| b != 0)
@@ -162,8 +164,15 @@ pub(super) fn parse_group(bytes: &[u8], start: usize) -> Result<Group, &'static 
         }
     }
     let mut i = start;
-    let base = part(bytes, &mut i, b'/', "ruby base is missing its slash")?;
+    let base = part(
+        encoding,
+        bytes,
+        &mut i,
+        b'/',
+        "ruby base is missing its slash",
+    )?;
     let ruby = part(
+        encoding,
         bytes,
         &mut i,
         b'}',
@@ -174,7 +183,7 @@ pub(super) fn parse_group(bytes: &[u8], start: usize) -> Result<Group, &'static 
 
 /// 0x2119 counts encoded bytes, skipping escapes and ruby annotations. Within a
 /// ruby base the original counts double-byte pairs only, even when ASCII is present.
-pub(super) fn encoded_length(bytes: &[u8]) -> Result<u32, &'static str> {
+pub(super) fn encoded_length(encoding: TextEncoding, bytes: &[u8]) -> Result<u32, &'static str> {
     let (mut i, mut count) = (0, 0u32);
     while i < bytes.len() && bytes[i] != 0 {
         match bytes[i] {
@@ -186,12 +195,12 @@ pub(super) fn encoded_length(bytes: &[u8]) -> Result<u32, &'static str> {
                 }
             }
             b'{' => {
-                let group = parse_group(bytes, i + 1)?;
+                let group = parse_group(encoding, bytes, i + 1)?;
                 count = count
                     .wrapping_add(2 * group.base.iter().filter(|v| v.is_some()).count() as u32);
                 i = group.end;
             }
-            byte if lead(byte) => {
+            byte if encoding.is_lead_byte(byte) => {
                 bytes
                     .get(i + 1)
                     .filter(|&&b| b != 0)
@@ -213,6 +222,7 @@ pub(super) fn encoded_length(bytes: &[u8]) -> Result<u32, &'static str> {
 /// Its own wrapping ignores 0x211e rules but keeps the +112 punctuation exception, so the
 /// marks can differ from the actual layout, as in the original.
 pub(super) fn ruby_layout(
+    encoding: TextEncoding,
     text: &TextObject,
     bytes: &[u8],
 ) -> Result<([u32; 32], [u32; 3]), &'static str> {
@@ -250,7 +260,7 @@ pub(super) fn ruby_layout(
             *lines
                 .get_mut(line)
                 .ok_or("ruby group beyond the 32 ruby-line flags")? = 1;
-            let group = parse_group(bytes, i + 1)?;
+            let group = parse_group(encoding, bytes, i + 1)?;
             for _ in group.base.iter().flatten() {
                 x = x.wrapping_add(size).wrapping_add(spacing);
                 count = count.wrapping_add(2);
@@ -258,7 +268,7 @@ pub(super) fn ruby_layout(
             }
             i = group.end;
             continue;
-        } else if lead(byte) {
+        } else if encoding.is_lead_byte(byte) {
             let second = *bytes
                 .get(i + 1)
                 .filter(|&&b| b != 0)
@@ -275,7 +285,7 @@ pub(super) fn ruby_layout(
             count = 0;
         }
         x = x.wrapping_add(advance).wrapping_add(spacing);
-        count = count.wrapping_add(if lead(byte) { 2 } else { 1 });
+        count = count.wrapping_add(if encoding.is_lead_byte(byte) { 2 } else { 1 });
         max = max.max(count);
     }
     Ok((lines, [line as u32 + 1, max, count]))
@@ -401,6 +411,7 @@ pub(super) fn retime(
 /// single bytes delay the previous glyph again and add an interval; annotations start at
 /// the group's delay and leave the following text's delay unchanged.
 fn append(
+    encoding: TextEncoding,
     text: &mut TextObject,
     bytes: &[u8],
     skip: bool,
@@ -412,7 +423,7 @@ fn append(
     let size = text.glyph_size as u32;
     let limit = line_end(text);
     text.ruby_lines = if text.ruby {
-        ruby_layout(text, bytes)?.0
+        ruby_layout(encoding, text, bytes)?.0
     } else {
         [0; 32]
     };
@@ -471,7 +482,7 @@ fn append(
             continue;
         }
         if byte == b'{' {
-            let group = parse_group(bytes, i + 1)?;
+            let group = parse_group(encoding, bytes, i + 1)?;
             i = group.end;
             if wraps(text, 0, x, limit)? {
                 new_line(text, &mut line, &mut x, &mut y)?;
@@ -525,7 +536,7 @@ fn append(
             }
             continue;
         }
-        let wide = lead(byte);
+        let wide = encoding.is_lead_byte(byte);
         let (code, wrap) = if wide {
             let second = *bytes
                 .get(i + 1)
@@ -582,6 +593,7 @@ fn append(
 /// Without one they are rejected, as are groups under 0x211e rules (its inline rule
 /// copy is not modeled).
 fn place(
+    encoding: TextEncoding,
     text: &mut TextObject,
     bytes: &[u8],
     metrics: Option<&dyn super::GlyphMetrics>,
@@ -613,7 +625,7 @@ fn place(
             if text.line_break.is_some() {
                 return Err("direct ruby groups under line-break rules are not modeled");
             }
-            let group = parse_group(bytes, i + 1)?;
+            let group = parse_group(encoding, bytes, i + 1)?;
             for &code in group.base.iter().flatten() {
                 if wraps(text, code, x, limit)? {
                     new_line(text, &mut line, &mut x, &mut y)?;
@@ -624,7 +636,7 @@ fn place(
             i = group.end;
             continue;
         }
-        if !lead(byte) {
+        if !encoding.is_lead_byte(byte) {
             let metrics =
                 metrics.ok_or("direct single-byte text requires a font metrics backend")?;
             let code = (byte as i8 as i16) as u16;
@@ -667,24 +679,32 @@ fn place(
 }
 
 pub(super) type AppendLayout =
-    fn(&MessageHost, &mut TextObject, &[u8], bool) -> Result<(), &'static str>;
+    fn(TextEncoding, &MessageHost, &mut TextObject, &[u8], bool) -> Result<(), &'static str>;
 pub(super) type PlaceLayout =
-    fn(&MessageHost, &mut TextObject, &[u8], Option<u32>) -> Result<(), &'static str>;
+    fn(TextEncoding, &MessageHost, &mut TextObject, &[u8], Option<u32>) -> Result<(), &'static str>;
 fn root_append(
+    encoding: TextEncoding,
     host: &MessageHost,
     text: &mut TextObject,
     bytes: &[u8],
     skip: bool,
 ) -> Result<(), &'static str> {
-    append(text, bytes, skip, host.output_settings)
+    append(encoding, text, bytes, skip, host.output_settings)
 }
 fn root_place(
+    encoding: TextEncoding,
     host: &MessageHost,
     text: &mut TextObject,
     bytes: &[u8],
     outline: Option<u32>,
 ) -> Result<(), &'static str> {
-    place(text, bytes, host.glyph_metrics.as_deref(), outline)
+    place(
+        encoding,
+        text,
+        bytes,
+        host.glyph_metrics.as_deref(),
+        outline,
+    )
 }
 impl MessageHost {
     /// 0x2159 / 0x140076cf0 -> 0x14005d870: explicit initialization/poll,
@@ -725,8 +745,14 @@ impl MessageHost {
             .ok_or_else(|| error(pc, 0x2159, "window without text object"))?
             .clone();
         if initialize {
-            append_layout(self, &mut candidate, &bytes, flags.skip())
-                .map_err(|why| error(pc, 0x2159, why))?;
+            append_layout(
+                vm.text_encoding(),
+                self,
+                &mut candidate,
+                &bytes,
+                flags.skip(),
+            )
+            .map_err(|why| error(pc, 0x2159, why))?;
         }
         let done = !window.hidden && !candidate.glyphs.iter().any(|g| g.active);
         vm.complete_system(SystemResult(0x4010))?;
@@ -771,7 +797,8 @@ impl MessageHost {
                 )
             })?
             .clone();
-        place_layout(self, &mut candidate, &bytes, None).map_err(|why| error(pc, 0x210b, why))?;
+        place_layout(vm.text_encoding(), self, &mut candidate, &bytes, None)
+            .map_err(|why| error(pc, 0x210b, why))?;
         vm.complete_system(SystemResult(0x4008))?;
         self.texts[index as usize] = Some(candidate);
         Ok(())
@@ -803,6 +830,7 @@ impl MessageHost {
             .ok_or_else(|| error(pc, 0x2154, "window without text object"))?
             .clone();
         place_layout(
+            vm.text_encoding(),
             self,
             &mut candidate,
             &bytes,
@@ -854,8 +882,14 @@ impl MessageHost {
             .ok_or_else(|| error(pc, op, "message window without text"))?
             .clone();
         if vm.repeat_count() == 0 {
-            append_layout(self, &mut candidate, &bytes, flags.skip())
-                .map_err(|why| error(pc, op, why))?;
+            append_layout(
+                vm.text_encoding(),
+                self,
+                &mut candidate,
+                &bytes,
+                flags.skip(),
+            )
+            .map_err(|why| error(pc, op, why))?;
         }
         let active = candidate.glyphs.iter().any(|g| g.active);
         let skip = command == 0x152 && (flags.skip() || input.skip_held() || flags.bypass());

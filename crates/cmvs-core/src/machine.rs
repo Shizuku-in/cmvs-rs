@@ -112,6 +112,7 @@ pub enum Step {
 }
 
 pub struct Machine<'a> {
+    text_encoding: crate::TextEncoding,
     images: BTreeMap<u8, Image<'a>>,
     slot: u8,
     pc: usize,
@@ -129,8 +130,26 @@ impl<'a> Machine<'a> {
     }
     /// An alternate entry is for isolated research, not an initialized game snapshot.
     pub fn at(script: &'a Script, entry: u32) -> Result<Self, DecodeError> {
+        Self::at_with_encoding(script, entry, crate::TextEncoding::default())
+    }
+    /// Select the engine text scanner; archive names and keys keep their resource encoding.
+    pub fn new_with_encoding(
+        script: &'a Script,
+        encoding: crate::TextEncoding,
+    ) -> Result<Self, DecodeError> {
+        Self::at_with_encoding(script, script.header.entry_pc, encoding)
+    }
+    pub fn text_encoding(&self) -> crate::TextEncoding {
+        self.text_encoding
+    }
+    pub fn at_with_encoding(
+        script: &'a Script,
+        entry: u32,
+        encoding: crate::TextEncoding,
+    ) -> Result<Self, DecodeError> {
         let image = Image::prepare(Cow::Borrowed(script), b"entry.ps3".to_vec(), entry)?;
         Ok(Self {
+            text_encoding: encoding,
             images: BTreeMap::from([(0, image)]),
             slot: 0,
             pc: entry as usize,

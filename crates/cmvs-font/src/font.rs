@@ -4,7 +4,7 @@ use crate::font_library::FontLibrary;
 use crate::glyph_cache::GlyphCache;
 use ab_glyph::{Font, FontVec, ScaleFont, point};
 use cmvs_core::{
-    FormatError,
+    FormatError, TextEncoding,
     camera::CameraHost,
     message::{AUXILIARY_TEXTS, MessageHost, RecordedGlyph, TEXT_OBJECTS},
     raster::RgbaImage,
@@ -25,11 +25,12 @@ const MAX_FONT: usize = 32 * 1024 * 1024;
 /// face; faces named by glyphs are resolved through `FontLibrary`.
 #[derive(Clone)]
 pub struct FontRenderer {
+    encoding: TextEncoding,
     library: Arc<Mutex<FontLibrary>>,
     cache: GlyphCache,
 }
 
-struct PreviewMetrics(Arc<Mutex<FontLibrary>>);
+struct PreviewMetrics(Arc<Mutex<FontLibrary>>, TextEncoding);
 impl PreviewMetrics {
     fn font(&self, face: &[u8], ch: char) -> Result<Arc<FontVec>, &'static str> {
         self.0
@@ -54,7 +55,7 @@ impl cmvs_core::message::GlyphMetrics for PreviewMetrics {
         if !(1..=128).contains(&size) {
             return Err("glyph size outside 1..128 preview range");
         }
-        let ch = character(code).map_err(|e| e.0)?;
+        let ch = character(self.1, code).map_err(|e| e.0)?;
         let font = self.font(face, ch)?;
         let advance = font.as_scaled(size as f32).h_advance(font.glyph_id(ch));
         if !advance.is_finite() || advance < 0.0 || advance > u16::MAX as f32 {
@@ -80,7 +81,7 @@ impl cmvs_core::message::GlyphMetrics for PreviewMetrics {
         if !(1..=128).contains(&size) {
             return Err("glyph size outside 1..128 preview range");
         }
-        let ch = character(code).map_err(|e| e.0)?;
+        let ch = character(self.1, code).map_err(|e| e.0)?;
         let font = self.font(face, ch)?;
         let id = font.glyph_id(ch);
         let scale = size as f32;
@@ -106,16 +107,30 @@ impl cmvs_core::message::GlyphMetrics for PreviewMetrics {
     }
 }
 
-fn character(code: u16) -> Result<char, FormatError> {
+// Keep backend codec selection here, outside core's dependency-free byte scanners.
+// New core encodings must be explicitly supported before rendering their glyphs.
+fn decoder(encoding: TextEncoding) -> Result<&'static encoding_rs::Encoding, FormatError> {
+    match encoding {
+        TextEncoding::ShiftJis => Ok(encoding_rs::SHIFT_JIS),
+        TextEncoding::Gbk => Ok(encoding_rs::GBK),
+        _ => Err(FormatError("unsupported font text encoding")),
+    }
+}
+
+fn character(encoding: TextEncoding, code: u16) -> Result<char, FormatError> {
     let pair = code.to_be_bytes();
-    let bytes = if code <= 0x7f || code >= 0xff80 {
+    let bytes = if code <= 0x7f || (encoding == TextEncoding::ShiftJis && code >= 0xff80) {
         &pair[1..]
     } else {
         &pair[..]
     };
-    let text = encoding_rs::SHIFT_JIS
+    let text = decoder(encoding)?
         .decode_without_bom_handling_and_without_replacement(bytes)
-        .ok_or(FormatError("invalid Shift-JIS glyph code"))?;
+        .ok_or(FormatError(match encoding {
+            TextEncoding::ShiftJis => "invalid Shift-JIS glyph code",
+            TextEncoding::Gbk => "invalid GBK glyph code",
+            _ => "invalid encoded glyph code",
+        }))?;
     let mut chars = text.chars();
     let ch = chars.next().ok_or(FormatError("empty glyph code"))?;
     if chars.next().is_some() || ch == '\0' {
@@ -237,6 +252,7 @@ impl FontRenderer {
         let font = FontVec::try_from_vec_and_index(bytes, face)
             .map_err(|_| FormatError("invalid OpenType font or collection face index"))?;
         Ok(Self {
+            encoding: TextEncoding::default(),
             library: Arc::new(Mutex::new(FontLibrary::new(Arc::new(font)))),
             cache: GlyphCache::default(),
         })
@@ -244,14 +260,22 @@ impl FontRenderer {
     /// Uses `library` (sharing its explicit default font) for every face.
     pub fn with_library(library: FontLibrary) -> Self {
         Self {
+            encoding: TextEncoding::default(),
             library: Arc::new(Mutex::new(library)),
             cache: GlyphCache::default(),
         }
     }
+    /// Select the game text encoding before installing this renderer's metrics.
+    /// Changing it discards cached glyph images; existing metrics retain their encoding.
+    pub fn with_text_encoding(mut self, encoding: TextEncoding) -> Self {
+        self.encoding = encoding;
+        self.cache = GlyphCache::default();
+        self
+    }
     /// Matches this renderer's fonts; OpenType ink bounds replace GDI's
     /// device metrics. Whitespace deterministically has zero ink extent.
     pub fn metrics(&self) -> Box<dyn cmvs_core::message::GlyphMetrics> {
-        Box::new(PreviewMetrics(Arc::clone(&self.library)))
+        Box::new(PreviewMetrics(Arc::clone(&self.library), self.encoding))
     }
     /// Whether a face in the game encoding resolves to a font (startup check).
     pub fn has_face(&self, face: &[u8]) -> bool {
@@ -347,7 +371,7 @@ impl FontRenderer {
         if let Some(image) = self.cache.get(&key) {
             return Ok(image.clone());
         }
-        let ch = character(glyph.code)?;
+        let ch = character(self.encoding, glyph.code)?;
         let font = self.font(&glyph.face, ch)?;
         let id = font.glyph_id(ch);
         let scale = glyph.size as f32;
@@ -692,11 +716,21 @@ mod tests {
     }
     #[test]
     fn glyph_codes_decode_strictly_including_sign_extended_halfwidth() {
-        assert_eq!(character(0x82a0).unwrap(), 'あ');
-        assert_eq!(character(0xffb1).unwrap(), 'ｱ');
-        assert_eq!(character(65).unwrap(), 'A');
-        assert!(character(0).is_err());
-        assert!(character(0x817f).is_err());
+        assert_eq!(character(TextEncoding::ShiftJis, 0x82a0).unwrap(), 'あ');
+        assert_eq!(character(TextEncoding::ShiftJis, 0xffb1).unwrap(), 'ｱ');
+        assert_eq!(character(TextEncoding::ShiftJis, 65).unwrap(), 'A');
+        assert!(character(TextEncoding::ShiftJis, 0).is_err());
+        assert!(character(TextEncoding::ShiftJis, 0x817f).is_err());
+    }
+    #[test]
+    fn gbk_glyph_codes_decode_without_changing_the_u16_model() {
+        assert_eq!(character(TextEncoding::Gbk, 0xd6d0).unwrap(), '中');
+        assert_eq!(character(TextEncoding::Gbk, 0xcec4).unwrap(), '文');
+        assert_eq!(character(TextEncoding::Gbk, 65).unwrap(), 'A');
+        assert!(character(TextEncoding::Gbk, 0).is_err());
+        assert!(character(TextEncoding::Gbk, 0x817f).is_err());
+        // A GBK pair remains two bytes even in the sign-extended SJIS range.
+        assert!(character(TextEncoding::Gbk, 0xffb1).is_err());
     }
     #[test]
     fn synthetic_mask_has_transparent_padding_and_a_one_pixel_outline() {
