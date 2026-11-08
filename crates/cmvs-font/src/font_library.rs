@@ -15,11 +15,17 @@ use std::{
 const MAX_FONT: usize = 32 * 1024 * 1024;
 const MAX_FONT_FILES: usize = 8192;
 
+/// Encoding-free state shared by renderers: each caller passes the encoding of the
+/// game's legacy font face fields (LOGFONT names), so renderers sharing a library
+/// may use different encodings.
 pub struct FontLibrary {
-    /// Encoding of the game's legacy font face fields (LOGFONT names).
-    encoding: TextEncoding,
     default: Arc<FontVec>,
+    /// Faces whose resolution does not depend on the encoding (handles, imported
+    /// font names and the built-in default).
     loaded: BTreeMap<Vec<u8>, Arc<FontVec>>,
+    /// System fonts found by decoded family name; the same bytes may name another
+    /// family in another encoding.
+    located: BTreeMap<(TextEncoding, Vec<u8>), Arc<FontVec>>,
     /// Lowercased family name -> font file and collection index; built on first use.
     index: Option<BTreeMap<String, (PathBuf, u32)>>,
     directories: Vec<PathBuf>,
@@ -31,9 +37,9 @@ pub struct FontLibrary {
 impl FontLibrary {
     pub fn new(default: Arc<FontVec>) -> Self {
         Self {
-            encoding: TextEncoding::default(),
             default,
             loaded: BTreeMap::new(),
+            located: BTreeMap::new(),
             index: None,
             directories: cmvs_native::font_directories(),
             unicode_names: BTreeMap::new(),
@@ -46,17 +52,6 @@ impl FontLibrary {
             directories,
             ..Self::new(default)
         }
-    }
-    /// Select the encoding of legacy face names. Faces resolved under the previous
-    /// encoding are forgotten, since the same bytes may now name another family.
-    pub fn set_text_encoding(&mut self, encoding: TextEncoding) {
-        if self.encoding != encoding {
-            self.encoding = encoding;
-            self.loaded.clear();
-        }
-    }
-    pub fn text_encoding(&self) -> TextEncoding {
-        self.encoding
     }
     pub fn set_user_directory(&mut self, directory: &Path) {
         self.unicode_directory = Some(directory.join("font-faces"));
@@ -102,7 +97,11 @@ impl FontLibrary {
         self.unicode_names.insert(key.clone(), name.to_owned());
         Ok(key)
     }
-    pub fn family_name(&mut self, face: &[u8]) -> Result<String, FormatError> {
+    pub fn family_name(
+        &mut self,
+        face: &[u8],
+        encoding: TextEncoding,
+    ) -> Result<String, FormatError> {
         if let Some(name) = self.unicode_names.get(face) {
             return Ok(name.clone());
         }
@@ -135,11 +134,19 @@ impl FontLibrary {
             self.unicode_names.insert(face.to_vec(), name.clone());
             return Ok(name);
         }
-        legacy_family_name(self.encoding, face)
+        legacy_family_name(encoding, face)
     }
-    /// The font for a face in the game encoding (see `set_text_encoding`).
-    pub fn face(&mut self, face: &[u8]) -> Result<Arc<FontVec>, FormatError> {
+    /// The font for a face whose legacy name is in `encoding`.
+    pub fn face(
+        &mut self,
+        face: &[u8],
+        encoding: TextEncoding,
+    ) -> Result<Arc<FontVec>, FormatError> {
         if let Some(font) = self.loaded.get(face) {
+            return Ok(font.clone());
+        }
+        let located = (encoding, face.to_vec());
+        if let Some(font) = self.located.get(&located) {
             return Ok(font.clone());
         }
         if face.starts_with(b"CMVS-F-") {
@@ -176,7 +183,7 @@ impl FontLibrary {
                     if reference.len() != 31 || !reference.starts_with(b"CMVS-F-") {
                         return Err(FormatError("invalid imported font reference"));
                     }
-                    let font = self.face(&reference)?;
+                    let font = self.face(&reference, encoding)?;
                     self.loaded.insert(face.to_vec(), font.clone());
                     return Ok(font);
                 }
@@ -188,7 +195,7 @@ impl FontLibrary {
             self.loaded.insert(face.to_vec(), self.default.clone());
             return Ok(self.default.clone());
         }
-        let (path, index) = self.locate(face)?.ok_or(FormatError(
+        let (path, index) = self.locate(face, encoding)?.ok_or(FormatError(
             "font face not found in the system font directories",
         ))?;
         let mut bytes = Vec::new();
@@ -202,7 +209,7 @@ impl FontLibrary {
             FontVec::try_from_vec_and_index(bytes, index)
                 .map_err(|_| FormatError("located font is not a supported outline font"))?,
         );
-        self.loaded.insert(face.to_vec(), font.clone());
+        self.located.insert(located, font.clone());
         Ok(font)
     }
     /// Keep an immutable font copy so game saves can resolve the same face later.
@@ -249,7 +256,8 @@ impl FontLibrary {
     }
     /// Use the real family name in the game's font field when its encoding permits.
     pub fn name_imported_font(&mut self, name: &[u8], key: &[u8]) -> Result<(), FormatError> {
-        let font = self.face(key)?;
+        // Imported keys are ASCII handles; their resolution ignores the encoding.
+        let font = self.face(key, TextEncoding::default())?;
         let directory = self
             .unicode_directory
             .as_ref()
@@ -264,13 +272,15 @@ impl FontLibrary {
         Ok(())
     }
     /// Startup existence check (0x140007f80): whether a face can be resolved.
-    pub fn contains(&mut self, face: &[u8]) -> bool {
-        self.face(face).is_ok()
+    pub fn contains(&mut self, face: &[u8], encoding: TextEncoding) -> bool {
+        self.face(face, encoding).is_ok()
     }
     /// Resolve each character identically for layout and rasterization. Missing or
     /// unusable selected faces fall back to the explicit default supplied by --font.
-    pub fn for_character(&mut self, face: &[u8], ch: char) -> Arc<FontVec> {
-        let font = self.face(face).unwrap_or_else(|_| self.default.clone());
+    pub fn for_character(&mut self, face: &[u8], encoding: TextEncoding, ch: char) -> Arc<FontVec> {
+        let font = self
+            .face(face, encoding)
+            .unwrap_or_else(|_| self.default.clone());
         let id = font.glyph_id(ch);
         if id.0 != 0 && (ch.is_whitespace() || font.outline(id).is_some()) {
             font
@@ -278,8 +288,12 @@ impl FontLibrary {
             self.default.clone()
         }
     }
-    fn locate(&mut self, face: &[u8]) -> Result<Option<(PathBuf, u32)>, FormatError> {
-        let name = self.family_name(face)?;
+    fn locate(
+        &mut self,
+        face: &[u8],
+        encoding: TextEncoding,
+    ) -> Result<Option<(PathBuf, u32)>, FormatError> {
+        let name = self.family_name(face, encoding)?;
         let key = name.to_lowercase();
         let index = match &self.index {
             Some(index) => index,
@@ -469,15 +483,15 @@ mod tests {
         let mut library = FontLibrary::with_directories(default.clone(), Vec::new());
         library.loaded.insert(b"partial".to_vec(), partial.clone());
         assert!(Arc::ptr_eq(
-            &library.for_character(b"partial", 'あ'),
+            &library.for_character(b"partial", TextEncoding::ShiftJis, 'あ'),
             &default
         ));
         assert!(Arc::ptr_eq(
-            &library.for_character(b"partial", 'A'),
+            &library.for_character(b"partial", TextEncoding::ShiftJis, 'A'),
             &partial
         ));
         assert!(Arc::ptr_eq(
-            &library.for_character(b"missing", 'あ'),
+            &library.for_character(b"missing", TextEncoding::ShiftJis, 'あ'),
             &default
         ));
         let directory = std::env::temp_dir().join(format!(
@@ -496,11 +510,16 @@ mod tests {
             .unwrap();
         let mut restarted = FontLibrary::with_directories(default.clone(), Vec::new());
         restarted.set_user_directory(&directory);
-        assert_eq!(restarted.family_name(&handle).unwrap(), "萝莉体");
+        assert_eq!(
+            restarted
+                .family_name(&handle, TextEncoding::ShiftJis)
+                .unwrap(),
+            "萝莉体"
+        );
         assert_eq!(restarted.register_unicode("萝莉体").unwrap(), handle);
         assert!(
             restarted
-                .family_name(b"CMVS-U-../../../../../../../../..")
+                .family_name(b"CMVS-U-../../../../../../../../..", TextEncoding::ShiftJis)
                 .is_err()
         );
         std::fs::write(
@@ -512,8 +531,15 @@ mod tests {
         .unwrap();
         let mut corrupt = FontLibrary::with_directories(default.clone(), Vec::new());
         corrupt.set_user_directory(&directory);
-        assert!(corrupt.family_name(&handle).is_err());
-        assert!(Arc::ptr_eq(&corrupt.for_character(&handle, 'あ'), &default));
+        assert!(
+            corrupt
+                .family_name(&handle, TextEncoding::ShiftJis)
+                .is_err()
+        );
+        assert!(Arc::ptr_eq(
+            &corrupt.for_character(&handle, TextEncoding::ShiftJis, 'あ'),
+            &default
+        ));
         std::fs::remove_dir_all(directory).unwrap();
     }
 

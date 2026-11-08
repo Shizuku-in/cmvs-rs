@@ -4,7 +4,7 @@
 /// single/double-byte engine contract. A variable-width encoding also needs a
 /// scanner and a mapping into the engine's `u16` glyph domain.
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TextEncoding {
     #[default]
     ShiftJis,

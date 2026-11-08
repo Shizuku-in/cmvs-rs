@@ -36,7 +36,7 @@ impl PreviewMetrics {
         self.0
             .lock()
             .map_err(|_| "font library lock poisoned")
-            .map(|mut library| library.for_character(face, ch))
+            .map(|mut library| library.for_character(face, self.1, ch))
     }
 }
 impl std::fmt::Debug for PreviewMetrics {
@@ -267,15 +267,12 @@ impl FontRenderer {
         }
     }
     /// Select the game text encoding before installing this renderer's metrics.
-    /// It applies to glyph codes and to legacy font face names. Changing it discards
-    /// cached glyph images; existing metrics retain their glyph encoding.
+    /// It applies to glyph codes and to legacy font face names of this renderer
+    /// only; clones sharing the font library keep their own encoding. Changing it
+    /// discards cached glyph images; existing metrics retain their encoding.
     pub fn with_text_encoding(mut self, encoding: TextEncoding) -> Self {
         self.encoding = encoding;
         self.cache = GlyphCache::default();
-        self.library
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .set_text_encoding(encoding);
         self
     }
     /// Matches this renderer's fonts; OpenType ink bounds replace GDI's
@@ -287,7 +284,7 @@ impl FontRenderer {
     pub fn has_face(&self, face: &[u8]) -> bool {
         self.library
             .lock()
-            .is_ok_and(|mut library| library.contains(face))
+            .is_ok_and(|mut library| library.contains(face, self.encoding))
     }
     pub fn set_user_directory(&self, directory: &Path) -> Result<(), FormatError> {
         self.library
@@ -300,7 +297,7 @@ impl FontRenderer {
         self.library
             .lock()
             .map_err(|_| FormatError("font library lock poisoned"))?
-            .family_name(face)
+            .family_name(face, self.encoding)
     }
     pub fn select_unicode_face(&self, name: &str) -> Result<Vec<u8>, FormatError> {
         let mut library = self
@@ -308,7 +305,7 @@ impl FontRenderer {
             .lock()
             .map_err(|_| FormatError("font library lock poisoned"))?;
         let face = library.register_unicode(name)?;
-        library.face(&face)?;
+        library.face(&face, self.encoding)?;
         Ok(face)
     }
     pub fn import_font(&self, path: &Path, index: u32) -> Result<Vec<u8>, Box<dyn Error>> {
@@ -352,7 +349,7 @@ impl FontRenderer {
         self.library
             .lock()
             .map_err(|_| FormatError("font library lock poisoned"))
-            .map(|mut library| library.for_character(face, ch))
+            .map(|mut library| library.for_character(face, self.encoding, ch))
     }
     fn glyph(&mut self, glyph: &RecordedGlyph) -> Result<RgbaImage, FormatError> {
         if !(1..=128).contains(&glyph.size) {
@@ -615,6 +612,19 @@ mod tests {
             reveal_mode: 0,
             reveal_width: 31,
         }
+    }
+
+    #[test]
+    #[ignore = "requires CMVS_FONT_PATH; external font"]
+    fn clones_keep_their_own_face_encoding() {
+        let path = std::env::var_os("CMVS_FONT_PATH").expect("CMVS_FONT_PATH");
+        let sjis = FontRenderer::read(Path::new(&path), 0).unwrap();
+        let gbk = sjis.clone().with_text_encoding(TextEncoding::Gbk);
+        let name = encoding_rs::GBK.encode("黑体").0;
+        assert_eq!(gbk.family_name(&name).unwrap(), "黑体");
+        assert_ne!(sjis.family_name(&name).ok().as_deref(), Some("黑体"));
+        let meiryo = encoding_rs::SHIFT_JIS.encode("メイリオ").0;
+        assert_eq!(sjis.family_name(&meiryo).unwrap(), "メイリオ");
     }
 
     #[test]
