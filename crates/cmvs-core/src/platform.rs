@@ -2,8 +2,8 @@
 use crate::filesystem as fs;
 use crate::filesystem::File;
 use crate::{
-    FormatError, MAX_PAYLOAD, bytecode::DecodeError, cursor::CursorBitmap, dispatch::Call,
-    evaluate::error, machine::Machine,
+    FormatError, MAX_PAYLOAD, TextEncoding, bytecode::DecodeError, cursor::CursorBitmap,
+    dispatch::Call, evaluate::error, machine::Machine,
 };
 use std::{
     error::Error,
@@ -433,9 +433,14 @@ pub enum PlatformEvent {
     CursorUnchanged,
     Configured,
 }
-/// Separator 0x1400de070 between base title and scene title: the Shift-JIS full-width
-/// space. These are fixed bytes, not re-encoded for a GBK game.
-const TITLE_SEPARATOR: [u8; 2] = [0x81, 0x40];
+/// Full-width space between the base and scene titles (0x1400de070 in Shift-JIS).
+/// Host-generated text must use the same encoding as the script's title strings.
+fn title_separator(encoding: TextEncoding) -> [u8; 2] {
+    match encoding {
+        TextEncoding::ShiftJis => [0x81, 0x40],
+        TextEncoding::Gbk => [0xa1, 0xa1],
+    }
+}
 
 #[derive(Default)]
 pub struct PlatformHost {
@@ -507,12 +512,16 @@ impl PlatformHost {
     }
     /// The window title 0x140069fd0 sets after a load: +340, the separator and the saved
     /// +14336, as 0x2161 composes it.
-    pub(crate) fn restored_title(&self, title: &[u8]) -> Result<Vec<u8>, &'static str> {
+    pub(crate) fn restored_title(
+        &self,
+        title: &[u8],
+        encoding: TextEncoding,
+    ) -> Result<Vec<u8>, &'static str> {
         let mut text = self
             .title
             .clone()
             .ok_or("base window title +340 is unknown at load")?;
-        text.extend(TITLE_SEPARATOR);
+        text.extend(title_separator(encoding));
         text.extend(title);
         if text.len() >= 128 {
             return Err("restored window title exceeds 127 bytes");
@@ -524,9 +533,10 @@ impl PlatformHost {
     pub(crate) fn restore_scene_title(
         &mut self,
         title: Vec<u8>,
+        encoding: TextEncoding,
         backend: &mut impl PlatformBackend,
     ) -> Result<(), Box<dyn Error>> {
-        let text = self.restored_title(&title)?;
+        let text = self.restored_title(&title, encoding)?;
         backend.apply(&PlatformRequest::Title(text))?;
         self.scene_title = title;
         Ok(())
@@ -775,7 +785,7 @@ impl PlatformHost {
                     .as_deref()
                     .ok_or_else(|| error(pc, 0x2161, "base window title +340 is unknown"))?;
                 let mut text = base.to_vec();
-                text.extend(TITLE_SEPARATOR);
+                text.extend(title_separator(call.vm.text_encoding()));
                 text.extend(&name);
                 // The original composes into a 128-byte stack buffer without a bound check.
                 if text.len() >= 128 {
@@ -858,5 +868,34 @@ fn argument_names(command: u16) -> &'static [&'static str] {
         0x2c9 => &["aspect scaling"],
         0x2b0 => &["thumbnail width", "thumbnail height"],
         _ => unreachable!("registered platform arguments"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restored_scene_title_uses_game_encoding() {
+        for (encoding, separator) in [
+            (TextEncoding::ShiftJis, [0x81, 0x40]),
+            (TextEncoding::Gbk, [0xa1, 0xa1]),
+        ] {
+            let mut host = PlatformHost {
+                title: Some(b"Game".to_vec()),
+                ..Default::default()
+            };
+            let mut backend = RecordingBackend::default();
+            host.restore_scene_title(b"- Opening -".to_vec(), encoding, &mut backend)
+                .unwrap();
+            let mut expected = b"Game".to_vec();
+            expected.extend(separator);
+            expected.extend(b"- Opening -");
+            assert_eq!(
+                backend.requests().last(),
+                Some(&PlatformRequest::Title(expected))
+            );
+            assert_eq!(host.scene_title(), b"- Opening -");
+        }
     }
 }

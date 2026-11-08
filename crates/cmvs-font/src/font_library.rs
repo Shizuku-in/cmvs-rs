@@ -3,7 +3,10 @@
 //! in the directories `cmvs_native::font_directories` lists for this platform
 //! (Windows/macOS system/user folders and Linux Fontconfig directories).
 use ab_glyph::{Font, FontVec};
-use cmvs_core::{FormatError, TextEncoding, settings::DEFAULT_FONT_FACE};
+use cmvs_core::{
+    FormatError, TextEncoding,
+    settings::{DEFAULT_FONT_FACE, font_face_for_encoding},
+};
 use std::{
     collections::BTreeMap,
     fs::File,
@@ -195,6 +198,10 @@ impl FontLibrary {
             self.loaded.insert(face.to_vec(), self.default.clone());
             return Ok(self.default.clone());
         }
+        if face == font_face_for_encoding(DEFAULT_FONT_FACE, encoding) {
+            self.located.insert(located, self.default.clone());
+            return Ok(self.default.clone());
+        }
         let (path, index) = self.locate(face, encoding)?.ok_or(FormatError(
             "font face not found in the system font directories",
         ))?;
@@ -304,10 +311,10 @@ impl FontLibrary {
 }
 
 /// Decode a legacy face field. The engine's built-in default face is a fixed Shift-JIS
-/// constant that GBK-patched executables keep unchanged, so it is named independently
-/// of the selected encoding.
+/// constant. Both it and the name returned to script text in the game encoding identify
+/// the same default font.
 fn legacy_family_name(encoding: TextEncoding, face: &[u8]) -> Result<String, FormatError> {
-    if face == DEFAULT_FONT_FACE {
+    if face == DEFAULT_FONT_FACE || face == font_face_for_encoding(DEFAULT_FONT_FACE, encoding) {
         return Ok("ＭＳ ゴシック".to_owned());
     }
     crate::font::codec(encoding)?
@@ -616,6 +623,15 @@ mod tests {
         for encoding in [TextEncoding::ShiftJis, TextEncoding::Gbk] {
             assert_eq!(
                 legacy_family_name(encoding, DEFAULT_FONT_FACE).unwrap(),
+                "ＭＳ ゴシック"
+            );
+            let displayed = font_face_for_encoding(DEFAULT_FONT_FACE, encoding);
+            assert_eq!(
+                legacy_family_name(encoding, displayed).unwrap(),
+                "ＭＳ ゴシック"
+            );
+            assert_eq!(
+                crate::font::codec(encoding).unwrap().decode(displayed).0,
                 "ＭＳ ゴシック"
             );
         }

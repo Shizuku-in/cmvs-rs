@@ -60,6 +60,12 @@ impl TextEncoding {
             .map(|s| s.into_owned())
             .ok_or(FormatError("invalid title bytes for selected encoding"))
     }
+    fn decode_font_face(self, bytes: &[u8]) -> Result<String, FormatError> {
+        if bytes == cmvs_core::settings::DEFAULT_FONT_FACE {
+            return Ok("ＭＳ ゴシック".to_owned());
+        }
+        self.decode(bytes)
+    }
     pub fn encode(self, text: &str) -> Result<Vec<u8>, FormatError> {
         let (bytes, _, unmappable) = self.encoding().encode(text);
         if unmappable {
@@ -303,7 +309,7 @@ impl PlatformBackend for NativeBackend<'_> {
             Some(fonts) => fonts
                 .family_name(current)
                 .unwrap_or_else(|_| "ＭＳ ゴシック".to_owned()),
-            None => self.encoding.decode(current)?,
+            None => self.encoding.decode_font_face(current)?,
         };
         let Some(face) = cmvs_native::choose_font(owner, &current)? else {
             println!("# native font dialog cancelled");
@@ -540,5 +546,28 @@ impl DesktopInput {
     }
     pub fn counts(&self) -> InputCounts {
         self.counts
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn font_dialog_decodes_legacy_default_and_custom_gbk_names() {
+        for encoding in [TextEncoding::ShiftJis, TextEncoding::Gbk] {
+            assert_eq!(
+                encoding
+                    .decode_font_face(cmvs_core::settings::DEFAULT_FONT_FACE)
+                    .unwrap(),
+                "ＭＳ ゴシック"
+            );
+        }
+        assert_eq!(
+            TextEncoding::Gbk
+                .decode_font_face(b"\xba\xda\xcc\xe5")
+                .unwrap(),
+            "黑体"
+        );
     }
 }
