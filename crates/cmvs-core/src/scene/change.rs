@@ -85,17 +85,26 @@ fn common_image(old: &ObjectImage, new: &ObjectImage) -> Result<ObjectImage, Box
     let width = old.pixels.width().min(new.pixels.width());
     let height = old.pixels.height().min(new.pixels.height());
     let mut pixels = vec![0; (u64::from(width) * u64::from(height) * 4) as usize];
-    let old_x = (old.pixels.width() - width) >> 1;
-    let new_x = (new.pixels.width() - width) >> 1;
-    for y in 0..height {
-        for x in 0..width {
-            let a = ((u64::from(y) * u64::from(old.pixels.width()) + u64::from(old_x + x)) * 4)
-                as usize;
-            let b = ((u64::from(y) * u64::from(new.pixels.width()) + u64::from(new_x + x)) * 4)
-                as usize;
-            if old.pixels.pixels()[a + 3] == 255 && new.pixels.pixels()[b + 3] == 255 {
-                let dst = ((u64::from(y) * u64::from(width) + u64::from(x)) * 4) as usize;
-                pixels[dst..dst + 4].copy_from_slice(&new.pixels.pixels()[b..b + 4]);
+    let old_x = ((old.pixels.width() - width) >> 1) as usize;
+    let new_x = ((new.pixels.width() - width) >> 1) as usize;
+    let (row, old_width, new_width) = (
+        width as usize * 4,
+        old.pixels.width() as usize,
+        new.pixels.width() as usize,
+    );
+    for y in 0..height as usize {
+        let old_row = &old.pixels.pixels()[(y * old_width + old_x) * 4..][..row];
+        let new_row = &new.pixels.pixels()[(y * new_width + new_x) * 4..][..row];
+        let out = &mut pixels[y * row..][..row];
+        for ((target, a), b) in out
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(old_row.as_chunks::<4>().0)
+            .zip(new_row.as_chunks::<4>().0)
+        {
+            if a[3] == 255 && b[3] == 255 {
+                *target = *b;
             }
         }
     }

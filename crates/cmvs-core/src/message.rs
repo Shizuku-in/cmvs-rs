@@ -327,8 +327,11 @@ impl MessageHost {
     /// Marks the slot's font object present, creating it with the global face if needed.
     fn font_slot(&mut self, index: usize) -> Arc<[u8]> {
         self.fonts[index] = true;
-        let face = self.default_face();
-        self.font_faces[index].get_or_insert(face).clone()
+        // Only a new font object needs the global face (which may allocate).
+        if self.font_faces[index].is_none() {
+            self.font_faces[index] = Some(self.default_face());
+        }
+        self.font_faces[index].clone().expect("set above")
     }
     /// Font device service; headless recording keeps the missing-metrics barrier.
     pub fn set_glyph_metrics(&mut self, metrics: Box<dyn GlyphMetrics>) {

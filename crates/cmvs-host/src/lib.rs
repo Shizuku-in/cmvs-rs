@@ -140,6 +140,7 @@ impl Player {
             startup.set_decode_movie_frames(true);
             startup.set_mgv_factory(Box::new(cmvs_video::PrefetchTheoraFactory::default()));
             startup.set_scene_prefetch(|| {});
+            startup.set_decoded_image_cache(256 << 20);
             Ok(startup)
         })?;
         let startup = session.borrow_dependent();

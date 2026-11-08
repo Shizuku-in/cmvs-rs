@@ -836,9 +836,9 @@ fn root_auxiliary_scene(
 }
 pub fn uses_message_state(command: u16) -> bool {
     uses_windows(command)
-        || ROOT
+        || entries_any_table(command)
             .iter()
-            .chain(VARIANT_TABLES.iter().flat_map(|table| table.iter()))
+            .copied()
             .any(|e| {
                 e.command == command
                     && matches!(
@@ -911,8 +911,7 @@ fn root_window_images(
 }
 
 pub fn uses_windows(command: u16) -> bool {
-    ROOT.iter()
-        .chain(VARIANT_TABLES.iter().flat_map(|table| table.iter()))
+    entries_any_table(command).iter().copied()
         .any(|entry| {
             entry.command == command
                 && matches!(
@@ -925,8 +924,7 @@ pub fn uses_windows(command: u16) -> bool {
         })
 }
 pub fn uses_window_images(command: u16) -> bool {
-    ROOT.iter()
-        .chain(VARIANT_TABLES.iter().flat_map(|table| table.iter()))
+    entries_any_table(command).iter().copied()
         .any(|entry| entry.command == command && entry.capability == Capability::WindowImages)
 }
 
@@ -1014,7 +1012,7 @@ fn input_capability(capability: Capability) -> bool {
     )
 }
 pub fn uses_input(command: u16) -> bool {
-    ROOT.iter()
+    root_entry(command).into_iter()
         .any(|entry| entry.command == command && input_capability(entry.capability))
 }
 pub fn uses_input_for(semantics: Semantics, command: u16) -> bool {
@@ -1133,11 +1131,11 @@ fn root_message_wait(
     Ok(h.messages.handle_wait(call, h.input, h.flags, h.context)?)
 }
 pub fn is_message_wait(command: u16) -> bool {
-    ROOT.iter()
+    root_entry(command).into_iter()
         .any(|e| e.command == command && e.capability == Capability::MessageWait)
 }
 pub fn is_lifecycle(command: u16) -> bool {
-    ROOT.iter().any(|e| {
+    root_entry(command).into_iter().any(|e| {
         e.command == command && e.capability == Capability::Runtime && matches!(command, 1 | 3)
     })
 }
@@ -1371,7 +1369,7 @@ fn root_capture_device(
 }
 /// Platform and capture backends must be borrowed independently of image sources.
 pub fn uses_bootstrap(command: u16) -> bool {
-    ROOT.iter().any(|e| {
+    root_entry(command).into_iter().any(|e| {
         e.command == command
             && matches!(
                 e.capability,
@@ -1387,7 +1385,7 @@ pub fn uses_bootstrap_for(semantics: Semantics, command: u16) -> bool {
     }
 }
 pub fn uses_platform(command: u16) -> bool {
-    ROOT.iter()
+    root_entry(command).into_iter()
         .any(|e| e.command == command && e.capability == Capability::Platform)
 }
 pub fn uses_platform_for(semantics: Semantics, command: u16) -> bool {
@@ -1406,7 +1404,7 @@ pub fn uses_device_frame_for(semantics: Semantics, command: u16) -> bool {
     }
 }
 pub fn uses_device_frame(command: u16) -> bool {
-    ROOT.iter().any(|e| {
+    root_entry(command).into_iter().any(|e| {
         e.command == command
             && matches!(
                 e.capability,
@@ -1482,12 +1480,12 @@ fn root_movie_player(
     Ok(Flow::Done)
 }
 pub fn uses_sequence(command: u16) -> bool {
-    ROOT.iter()
+    root_entry(command).into_iter()
         .chain(SEQUENCE_WINDOW_IMAGE.iter())
         .any(|e| e.command == command && e.capability == Capability::Sequence)
 }
 pub fn uses_movie_scene(command: u16) -> bool {
-    ROOT.iter()
+    root_entry(command).into_iter()
         .any(|e| e.command == command && e.capability == Capability::MovieScene)
 }
 pub fn uses_movie_scene_for(semantics: Semantics, command: u16) -> bool {
@@ -1498,7 +1496,7 @@ pub fn uses_movie_scene_for(semantics: Semantics, command: u16) -> bool {
     }
 }
 pub fn uses_movie_player(command: u16) -> bool {
-    ROOT.iter()
+    root_entry(command).into_iter()
         .any(|e| e.command == command && e.capability == Capability::MoviePlayer)
 }
 pub fn uses_movie_player_for(semantics: Semantics, command: u16) -> bool {
@@ -1566,8 +1564,7 @@ fn root_change_image(
 }
 
 pub fn uses_images(command: u16) -> bool {
-    ROOT.iter()
-        .chain(VARIANT_TABLES.iter().flat_map(|table| table.iter()))
+    entries_any_table(command).iter().copied()
         .any(|e| {
             e.command == command
                 && matches!(
@@ -1592,7 +1589,7 @@ fn is_wait_capability(capability: Capability) -> bool {
     )
 }
 pub fn is_wait(command: u16) -> bool {
-    ROOT.iter()
+    root_entry(command).into_iter()
         .any(|e| e.command == command && is_wait_capability(e.capability))
 }
 /// Waits of the selected semantics, including profile-bound variants.
@@ -1603,6 +1600,39 @@ pub fn is_wait_for(semantics: Semantics, command: u16) -> bool {
             variant_entry(id, command).is_some_and(|e| is_wait_capability(e.capability))
         }
     }
+}
+
+/// The ROOT entry for `command`, through an index built once: system commands are
+/// classified many times per VM step, and ROOT holds each command at most once
+/// (`root_commands_are_unique`).
+fn root_entry(command: u16) -> Option<&'static Entry> {
+    static INDEX: std::sync::OnceLock<Vec<u16>> = std::sync::OnceLock::new();
+    let index = INDEX.get_or_init(|| {
+        let size = ROOT.iter().map(|e| usize::from(e.command) + 1).max().unwrap_or(0);
+        let mut index = vec![u16::MAX; size];
+        for (at, entry) in ROOT.iter().enumerate().rev() {
+            index[usize::from(entry.command)] = at as u16;
+        }
+        index
+    });
+    match index.get(usize::from(command)) {
+        Some(&at) if at != u16::MAX => Some(&ROOT[usize::from(at)]),
+        _ => None,
+    }
+}
+/// Every entry for `command` in ROOT and then [`VARIANT_TABLES`], in table order.
+fn entries_any_table(command: u16) -> &'static [&'static Entry] {
+    static INDEX: std::sync::OnceLock<Vec<Vec<&'static Entry>>> = std::sync::OnceLock::new();
+    let index = INDEX.get_or_init(|| {
+        let all = || ROOT.iter().chain(VARIANT_TABLES.iter().flat_map(|table| table.iter()));
+        let size = all().map(|e| usize::from(e.command) + 1).max().unwrap_or(0);
+        let mut index = vec![Vec::new(); size];
+        for entry in all() {
+            index[usize::from(entry.command)].push(entry);
+        }
+        index
+    });
+    index.get(usize::from(command)).map_or(&[], Vec::as_slice)
 }
 
 pub static ROOT: &[Entry] = &[
@@ -6061,7 +6091,7 @@ pub fn run(
     };
     let entry = match semantics {
         Semantics::Variant(id) => variant_entry(id, command),
-        Semantics::Root => ROOT.iter().find(|e| e.command == command),
+        Semantics::Root => root_entry(command),
     };
     let Some(entry) = entry else {
         return Ok((semantics != Semantics::Root).then_some(Flow::Unhandled));
@@ -6072,4 +6102,40 @@ pub fn run(
     (entry.handler)(hosts, &mut Call::new(vm, pc, command))
         .map(Some)
         .map_err(|cause| DispatchError { pc, command, cause })
+}
+
+#[cfg(test)]
+mod index_tests {
+    use super::*;
+
+    #[test]
+    fn root_commands_are_unique() {
+        let mut seen = std::collections::HashSet::new();
+        for entry in ROOT {
+            assert!(seen.insert(entry.command), "{:#x} twice", entry.command);
+        }
+    }
+
+    #[test]
+    fn indexes_match_linear_scans_for_every_command() {
+        for command in 0..=u16::MAX {
+            let linear = ROOT.iter().find(|e| e.command == command);
+            assert_eq!(
+                root_entry(command).map(|e| e as *const Entry),
+                linear.map(|e| e as *const Entry),
+                "{command:#x}"
+            );
+            let all: Vec<_> = ROOT
+                .iter()
+                .chain(VARIANT_TABLES.iter().flat_map(|table| table.iter()))
+                .filter(|e| e.command == command)
+                .map(|e| e as *const Entry)
+                .collect();
+            let indexed: Vec<_> = entries_any_table(command)
+                .iter()
+                .map(|&e| e as *const Entry)
+                .collect();
+            assert_eq!(indexed, all, "{command:#x}");
+        }
+    }
 }

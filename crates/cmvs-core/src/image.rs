@@ -4,7 +4,11 @@ use crate::{
     raster::RgbaImage,
     resources::{RegisteredResources, ResourceArchives, ResourceKind},
 };
-use std::{collections::BTreeMap, error::Error, path::Path};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    error::Error,
+    path::Path,
+};
 mod cache;
 use cache::Cache;
 /// 0x2011 / 0x1400717c0: image manager has ten registration slots.
@@ -24,6 +28,48 @@ pub trait ImageSource {
     }
     /// Complete even a failed decode: the original inserts raw bytes after decoding.
     fn finish_image(&mut self, _read: ImageRead) {}
+    /// Host-side decoded-image cache, not part of the original: a decode of exactly
+    /// these bytes (and reference chain) seen before. `identity` comes from [`load`].
+    fn caches_decodes(&self) -> bool {
+        false
+    }
+    fn cached_decode(&mut self, _identity: u128) -> Option<DecodedImage> {
+        None
+    }
+    fn store_decode(&mut self, _identity: u128, _image: &DecodedImage) {}
+}
+
+/// Decoded images by the identity of their bytes, least recently used first out.
+/// Hits share pixels (and the texture cache's content hash) with the first decode.
+#[derive(Default)]
+struct DecodedCache {
+    entries: VecDeque<(u128, DecodedImage)>,
+    bytes: usize,
+    limit: usize,
+}
+impl DecodedCache {
+    fn get(&mut self, identity: u128) -> Option<DecodedImage> {
+        let at = self.entries.iter().position(|(id, _)| *id == identity)?;
+        let entry = self.entries.remove(at).expect("found above");
+        let image = entry.1.clone();
+        self.entries.push_front(entry);
+        Some(image)
+    }
+    fn evict_to(&mut self, bytes: usize) {
+        while self.bytes > bytes {
+            let (_, old) = self.entries.pop_back().expect("bytes imply entries");
+            self.bytes -= old.pixels.pixels().len();
+        }
+    }
+    fn insert(&mut self, identity: u128, image: &DecodedImage) {
+        let size = image.pixels.pixels().len();
+        if size > self.limit || self.entries.iter().any(|(id, _)| *id == identity) {
+            return;
+        }
+        self.evict_to(self.limit - size);
+        self.bytes += size;
+        self.entries.push_front((identity, image.clone()));
+    }
 }
 /// Owned read with an opaque deferred-cache token. This keeps outer insertions after
 /// recursive reference reads, without retaining pointers into an evictable cache.
@@ -35,6 +81,7 @@ pub struct ImageRead {
 pub struct ImageArchives {
     archives: ResourceArchives,
     cache: Cache,
+    decoded: DecodedCache,
 }
 impl ImageArchives {
     pub fn configure_parameters(
@@ -47,7 +94,14 @@ impl ImageArchives {
         Ok(Self {
             archives: ResourceArchives::new(root)?,
             cache: Cache::default(),
+            decoded: DecodedCache::default(),
         })
+    }
+    /// Keeps up to `bytes` of decoded RGBA for images loaded again (0, the default,
+    /// disables it). Results are unchanged; repeated loads skip decoding.
+    pub fn set_decoded_cache_limit(&mut self, bytes: usize) {
+        self.decoded.limit = bytes;
+        self.decoded.evict_to(bytes);
     }
     pub fn with_paths<'a>(
         &'a mut self,
@@ -56,12 +110,14 @@ impl ImageArchives {
         Registered {
             inner: self.archives.with_paths(paths, ResourceKind::Image),
             cache: &mut self.cache,
+            decoded: &mut self.decoded,
         }
     }
 }
 pub struct Registered<'a> {
     inner: RegisteredResources<'a>,
     cache: &'a mut Cache,
+    decoded: &'a mut DecodedCache,
 }
 impl ImageSource for Registered<'_> {
     fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
@@ -76,6 +132,15 @@ impl ImageSource for Registered<'_> {
     }
     fn finish_image(&mut self, read: ImageRead) {
         self.cache.finish(read);
+    }
+    fn caches_decodes(&self) -> bool {
+        self.decoded.limit > 0
+    }
+    fn cached_decode(&mut self, identity: u128) -> Option<DecodedImage> {
+        self.decoded.get(identity)
+    }
+    fn store_decode(&mut self, identity: u128, image: &DecodedImage) {
+        self.decoded.insert(identity, image);
     }
 }
 
@@ -124,7 +189,29 @@ pub fn load(
     source: &mut dyn ImageSource,
     name: &[u8],
 ) -> Result<Option<DecodedImage>, Box<dyn Error>> {
-    load_inner(source, name, &mut Vec::new(), &mut 0, false)
+    Ok(load_inner(source, name, &mut Vec::new(), &mut 0, false)?.map(|(image, _)| image))
+}
+
+/// A decoded image and its decoded-cache identity, when the source keeps that cache.
+type Identified = (DecodedImage, Option<u128>);
+
+/// A decode through the source's decoded-image cache. `identity` is `None` when the
+/// source keeps no cache; failures and quiet `None` results are never stored.
+fn decode_cached(
+    source: &mut dyn ImageSource,
+    identity: Option<u128>,
+    decode: impl FnOnce() -> Result<Option<DecodedImage>, Box<dyn Error>>,
+) -> Result<Option<Identified>, Box<dyn Error>> {
+    if let Some(id) = identity
+        && let Some(hit) = source.cached_decode(id)
+    {
+        return Ok(Some((hit, identity)));
+    }
+    let image = decode()?;
+    if let (Some(id), Some(image)) = (identity, &image) {
+        source.store_decode(id, image);
+    }
+    Ok(image.map(|image| (image, identity)))
 }
 
 fn charge(bytes: usize, budget: &mut usize) -> Result<(), Box<dyn Error>> {
@@ -143,7 +230,7 @@ fn load_inner(
     chain: &mut Vec<Vec<u8>>,
     budget: &mut usize,
     reference_read: bool,
-) -> Result<Option<DecodedImage>, Box<dyn Error>> {
+) -> Result<Option<Identified>, Box<dyn Error>> {
     let key = crate::cpz::lookup_key(name)?;
     if chain.len() >= 16 || chain.contains(&key) {
         return Err("PB3 reference cycle or depth limit exceeded".into());
@@ -160,25 +247,77 @@ fn load_inner(
     })?;
     let result = (|| {
         charge(read.bytes.len(), budget)?;
+        let identity = source
+            .caches_decodes()
+            .then(|| crate::raster::content_hash(&read.bytes));
         let decoded = if read.bytes.starts_with(b"PB3B") {
             let h = pb3::Header::parse(&read.bytes)?;
             charge(usize::from(h.width) * usize::from(h.height) * 4, budget)?;
             if let Some(reference) = pb3::reference_name(&read.bytes)? {
-                let base = load_inner(source, &reference, chain, budget, true)?
+                let (base, base_identity) = load_inner(source, &reference, chain, budget, true)?
                     .ok_or("PB3 reference codec returned no image")?;
-                Some(DecodedImage {
-                    pixels: pb3::decode_with_base(&read.bytes, base.pixels)?,
-                    alpha: h.bpp == 32,
-                })
+                // The overlay depends on its own bytes and on the whole base chain.
+                let identity = identity.zip(base_identity).map(|(own, base)| {
+                    let mut both = [0; 32];
+                    both[..16].copy_from_slice(&own.to_le_bytes());
+                    both[16..].copy_from_slice(&base.to_le_bytes());
+                    crate::raster::content_hash(&both)
+                });
+                decode_cached(source, identity, || {
+                    Ok(Some(DecodedImage {
+                        pixels: pb3::decode_with_base(&read.bytes, base.pixels)?,
+                        alpha: h.bpp == 32,
+                    }))
+                })?
             } else {
-                decode(&read.bytes)?
+                decode_cached(source, identity, || Ok(decode(&read.bytes)?))?
             }
         } else {
-            decode(&read.bytes)?
+            decode_cached(source, identity, || Ok(decode(&read.bytes)?))?
         };
         Ok(decoded)
     })();
     source.finish_image(read);
     chain.pop();
     result.map_err(|e: Box<dyn Error>| format!("image {}: {e}", name.escape_ascii()).into())
+}
+
+#[cfg(test)]
+mod decoded_cache_tests {
+    use super::*;
+
+    fn image(value: u8, pixels: u32) -> DecodedImage {
+        DecodedImage {
+            pixels: RgbaImage::new(pixels, 1, vec![value; pixels as usize * 4]).unwrap(),
+            alpha: false,
+        }
+    }
+
+    #[test]
+    fn least_recently_used_images_leave_first_and_hits_share_pixels() {
+        let mut cache = DecodedCache {
+            limit: 3 * 16,
+            ..DecodedCache::default()
+        };
+        for id in 1..=3 {
+            cache.insert(id, &image(id as u8, 4));
+        }
+        // Touch 1, so 2 is now the oldest.
+        let hit = cache.get(1).unwrap();
+        assert!(std::ptr::eq(hit.pixels.pixels(), cache.get(1).unwrap().pixels.pixels()));
+        cache.insert(4, &image(4, 4));
+        assert!(cache.get(2).is_none());
+        assert!([1, 3, 4].iter().all(|&id| cache.get(id).is_some()));
+        assert_eq!(cache.bytes, 3 * 16);
+        // Larger than the whole limit: not stored, nothing evicted.
+        cache.insert(5, &image(5, 13));
+        assert!(cache.get(5).is_none());
+        assert_eq!(cache.entries.len(), 3);
+        // Lowering the limit evicts at once; zero disables the cache.
+        cache.limit = 0;
+        cache.evict_to(0);
+        assert!(cache.entries.is_empty() && cache.bytes == 0);
+        cache.insert(6, &image(6, 1));
+        assert!(cache.get(6).is_none());
+    }
 }

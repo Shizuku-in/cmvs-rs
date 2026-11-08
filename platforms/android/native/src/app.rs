@@ -363,6 +363,7 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
     startup.set_decode_movie_frames(true);
     startup.set_mgv_factory(Box::new(cmvs_video::PrefetchTheoraFactory::default()));
     startup.set_scene_prefetch(|| {});
+    startup.set_decoded_image_cache(128 << 20);
     startup.set_record_text(true);
     startup.set_glyph_metrics(font.borrow().metrics());
     font.borrow().set_user_directory(&user)?;
