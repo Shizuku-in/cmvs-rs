@@ -44,95 +44,251 @@ fn sub(a: i16, b: i16) -> i16 {
 fn mul(a: i16, b: i16) -> i16 {
     ((i32::from(a) * i32::from(b)) >> 16) as i16
 }
-fn idct(block: &mut [i16; 64]) {
-    for (r, &table) in [0, 1, 2, 3, 0, 3, 2, 1].iter().enumerate() {
-        let x = &block[r * 8..r * 8 + 8];
-        let c = &ROW[table];
-        let mut row = [0i16; 8];
-        for j in 0..4 {
-            let e = 1024i32
-                .wrapping_add(i32::from(x[0]) * c[2 * j])
-                .wrapping_add(i32::from(x[2]) * c[2 * j + 1])
-                .wrapping_add(i32::from(x[4]) * c[8 + 2 * j])
-                .wrapping_add(i32::from(x[6]) * c[9 + 2 * j]);
-            let o = (i32::from(x[1]) * c[16 + 2 * j])
-                .wrapping_add(i32::from(x[3]) * c[17 + 2 * j])
-                .wrapping_add(i32::from(x[5]) * c[24 + 2 * j])
-                .wrapping_add(i32::from(x[7]) * c[25 + 2 * j]);
-            row[j] = sat(e.wrapping_add(o) >> 11);
-            row[7 - j] = sat(e.wrapping_sub(o) >> 11);
+/// Row tables of 0x1400b51c0, by row.
+const ROW_TABLE: [usize; 8] = [0, 1, 2, 3, 0, 3, 2, 1];
+
+#[inline(always)]
+fn idct_row(x: &[i16], c: &[i32; 32]) -> [i16; 8] {
+    let mut row = [0i16; 8];
+    for j in 0..4 {
+        let e = 1024i32
+            .wrapping_add(i32::from(x[0]) * c[2 * j])
+            .wrapping_add(i32::from(x[2]) * c[2 * j + 1])
+            .wrapping_add(i32::from(x[4]) * c[8 + 2 * j])
+            .wrapping_add(i32::from(x[6]) * c[9 + 2 * j]);
+        let o = (i32::from(x[1]) * c[16 + 2 * j])
+            .wrapping_add(i32::from(x[3]) * c[17 + 2 * j])
+            .wrapping_add(i32::from(x[5]) * c[24 + 2 * j])
+            .wrapping_add(i32::from(x[7]) * c[25 + 2 * j]);
+        row[j] = sat(e.wrapping_add(o) >> 11);
+        row[7 - j] = sat(e.wrapping_sub(o) >> 11);
+    }
+    row
+}
+
+#[inline(always)]
+fn idct_column(x: [i16; 8]) -> [i16; 8] {
+    let a = sub(mul(13036, x[1]), x[7]);
+    let b = add(mul(x[7], 13036), x[1]);
+    let d = add(add(mul(x[5], -21746), x[5]), x[3]);
+    let e = sub(x[5], add(mul(-21746, x[3]), x[3]));
+    let f = add(add(d, b), 1);
+    let g = add(sub(a, e), 1);
+    let h = add(a, e);
+    let i = sub(b, d);
+    let j = add(mul(x[6], 27146), x[2]);
+    let k = sub(mul(27146, x[2]), x[6]);
+    let l = add(x[4], x[0]);
+    let m = sub(l, j);
+    let n = add(add(i, g), mul(-19195, add(i, g))) | 1;
+    let p = add(mul(-19195, sub(i, g)), sub(i, g)) | 1;
+    let q = add(add(l, j), 32);
+    let s = sub(x[0], x[4]);
+    let t = add(sub(s, k), 31);
+    let u = add(add(s, k), 32);
+    let v = add(m, 31);
+    [
+        add(f, q) >> 6,
+        add(u, n) >> 6,
+        add(t, p) >> 6,
+        add(h, v) >> 6,
+        sub(v, h) >> 6,
+        sub(t, p) >> 6,
+        sub(u, n) >> 6,
+        sub(q, f) >> 6,
+    ]
+}
+
+/// 0x1400b51c0. `rows` has bit r set for every row that may hold a nonzero coefficient
+/// (a superset is fine); a zero row's pass yields zeros, so it is skipped. `dc_only`
+/// means only `block[0]` may be nonzero, which makes every column equal.
+fn idct(block: &mut [i16; 64], rows: u8, dc_only: bool) {
+    if dc_only {
+        // Row 0 with only x[0]: every output is (1024 + x0 * 16384) >> 11 (table 0).
+        let r0 = sat(1024i32.wrapping_add(i32::from(block[0]) * ROW[0][0]) >> 11);
+        let column = idct_column([r0, 0, 0, 0, 0, 0, 0, 0]);
+        for (r, &value) in column.iter().enumerate() {
+            block[r * 8..r * 8 + 8].fill(value);
         }
-        block[r * 8..r * 8 + 8].copy_from_slice(&row);
+        return;
+    }
+    for r in 0..8 {
+        if rows & (1 << r) != 0 {
+            let row = idct_row(&block[r * 8..r * 8 + 8], &ROW[ROW_TABLE[r]]);
+            block[r * 8..r * 8 + 8].copy_from_slice(&row);
+        }
+    }
+    if rows == 1 {
+        for c in 0..8 {
+            let out = idct_column([block[c], 0, 0, 0, 0, 0, 0, 0]);
+            for r in 0..8 {
+                block[r * 8 + c] = out[r];
+            }
+        }
+        return;
     }
     for c in 0..8 {
-        let x: [i16; 8] = std::array::from_fn(|r| block[r * 8 + c]);
-        let a = sub(mul(13036, x[1]), x[7]);
-        let b = add(mul(x[7], 13036), x[1]);
-        let d = add(add(mul(x[5], -21746), x[5]), x[3]);
-        let e = sub(x[5], add(mul(-21746, x[3]), x[3]));
-        let f = add(add(d, b), 1);
-        let g = add(sub(a, e), 1);
-        let h = add(a, e);
-        let i = sub(b, d);
-        let j = add(mul(x[6], 27146), x[2]);
-        let k = sub(mul(27146, x[2]), x[6]);
-        let l = add(x[4], x[0]);
-        let m = sub(l, j);
-        let n = add(add(i, g), mul(-19195, add(i, g))) | 1;
-        let p = add(mul(-19195, sub(i, g)), sub(i, g)) | 1;
-        let q = add(add(l, j), 32);
-        let s = sub(x[0], x[4]);
-        let t = add(sub(s, k), 31);
-        let u = add(add(s, k), 32);
-        let v = add(m, 31);
-        let out = [
-            add(f, q),
-            add(u, n),
-            add(t, p),
-            add(h, v),
-            sub(v, h),
-            sub(t, p),
-            sub(u, n),
-            sub(q, f),
-        ];
+        let out = idct_column(std::array::from_fn(|r| block[r * 8 + c]));
         for r in 0..8 {
-            block[r * 8 + c] = out[r] >> 6;
+            block[r * 8 + c] = out[r];
         }
     }
 }
 
-/// Bits taken low bit first from each byte (the originals load 32-bit words).
+/// Bits taken low bit first from each byte (the originals load 32-bit words), refilled
+/// 64 at a time.
+/// Reads past the end see zero bits and are reported by [`Bits::check`], which every
+/// caller runs before using what it read, so truncation fails where reading bit by bit would.
 pub(crate) struct Bits<'a> {
     data: &'a [u8],
-    at: usize,
+    /// Next byte to load.
+    next: usize,
+    buffer: u64,
+    /// Valid bits in `buffer`, low bits first.
+    count: u32,
+    /// Bits consumed past the end of `data`.
+    consumed: usize,
+    total: usize,
 }
 impl<'a> Bits<'a> {
     pub(crate) fn new(data: &'a [u8]) -> Self {
-        Self { data, at: 0 }
+        Self {
+            data,
+            next: 0,
+            buffer: 0,
+            count: 0,
+            consumed: 0,
+            total: data.len() * 8,
+        }
     }
+    /// At least 57 bits are valid afterwards.
+    #[inline(always)]
+    fn refill(&mut self) {
+        if self.count > 56 {
+            return;
+        }
+        if let Some(bytes) = self.data.get(self.next..self.next + 8) {
+            let word = u64::from_le_bytes(bytes.try_into().unwrap());
+            self.buffer |= word << self.count;
+            // Bits of a partly counted byte are loaded again at the same position later.
+            let taken = (64 - self.count) / 8;
+            self.next += taken as usize;
+            self.count += taken * 8;
+        } else {
+            while self.count <= 56 {
+                let byte = self.data.get(self.next).copied().unwrap_or(0);
+                self.buffer |= u64::from(byte) << self.count;
+                self.next += 1;
+                self.count += 8;
+            }
+        }
+    }
+    #[inline(always)]
+    fn peek(&self) -> u64 {
+        self.buffer
+    }
+    #[inline(always)]
+    fn consume(&mut self, n: u32) {
+        self.buffer >>= n;
+        self.count -= n;
+        self.consumed += n as usize;
+    }
+    #[inline(always)]
+    fn check(&self) -> Result<(), FormatError> {
+        if self.consumed > self.total {
+            Err(FormatError("JBP bitstream truncated"))
+        } else {
+            Ok(())
+        }
+    }
+    /// One bit, for JBP1's tree walk.
     pub(crate) fn bit(&mut self) -> Result<usize, FormatError> {
-        let b = *self
-            .data
-            .get(self.at / 8)
-            .ok_or(FormatError("JBP bitstream truncated"))?;
-        let v = usize::from((b >> (self.at % 8)) & 1);
-        self.at += 1;
-        Ok(v)
+        self.refill();
+        let bit = (self.peek() & 1) as usize;
+        self.consume(1);
+        self.check()?;
+        Ok(bit)
     }
+    /// The zero-run selector: ones ended by a zero. `None` for sixteen ones, which no
+    /// table entry follows.
+    #[inline(always)]
+    pub(crate) fn run_selector(&mut self) -> Result<Option<usize>, FormatError> {
+        self.refill();
+        let ones = self.peek().trailing_ones().min(16);
+        self.consume(if ones == 16 { 16 } else { ones + 1 });
+        self.check()?;
+        Ok((ones < 16).then_some(ones as usize))
+    }
+    /// `n` bits, the first one most significant, at most 16; values below half of the
+    /// range are negative.
+    #[inline(always)]
     pub(crate) fn signed(&mut self, n: usize) -> Result<i16, FormatError> {
         if n == 0 {
             return Ok(0);
         }
-        let mut v = 0i32;
-        for _ in 0..n {
-            v = (v << 1) | self.bit()? as i32;
-        }
+        self.refill();
+        let raw = (self.peek() as u32) & ((1u32 << n) - 1);
+        self.consume(n as u32);
+        self.check()?;
+        let mut v = (raw.reverse_bits() >> (32 - n)) as i32;
         if v < (1 << (n - 1)) {
             v -= (1 << n) - 1;
         }
         Ok(v as i16)
     }
 }
+
+const LOOKUP_BITS: u32 = 10;
+/// [`Tree`] decoding (from node 30, bit 0 to the first child) through a table of the next [`LOOKUP_BITS`] bits; longer codes walk
+/// the tree from the node the table reaches.
+pub(crate) struct Huffman {
+    children: Vec<[usize; 2]>,
+    /// Leaf: symbol | length << 8. Otherwise the internal node after LOOKUP_BITS bits,
+    /// with bit 15 set.
+    table: Vec<u16>,
+}
+impl Huffman {
+    pub(crate) fn new(tree: Tree) -> Self {
+        let mut table = vec![0u16; 1 << LOOKUP_BITS];
+        for (index, entry) in table.iter_mut().enumerate() {
+            let mut node = 30;
+            let mut depth = 0;
+            while node >= 16 && depth < LOOKUP_BITS {
+                node = tree.children[node][(index >> depth) & 1];
+                depth += 1;
+            }
+            *entry = if node < 16 {
+                node as u16 | (depth as u16) << 8
+            } else {
+                node as u16 | 0x8000
+            };
+        }
+        Self {
+            children: tree.children,
+            table,
+        }
+    }
+    #[inline(always)]
+    pub(crate) fn symbol(&self, bits: &mut Bits<'_>) -> Result<usize, FormatError> {
+        bits.refill();
+        let entry = self.table[(bits.peek() & ((1 << LOOKUP_BITS) - 1)) as usize];
+        if entry & 0x8000 == 0 {
+            bits.consume(u32::from(entry >> 8));
+            bits.check()?;
+            return Ok(usize::from(entry & 255));
+        }
+        bits.consume(LOOKUP_BITS);
+        let mut node = usize::from(entry & 0x7fff);
+        // A tree over 16 leaves is at most 15 deep, within one refill.
+        while node >= 16 {
+            node = self.children[node][(bits.peek() & 1) as usize];
+            bits.consume(1);
+        }
+        bits.check()?;
+        Ok(node)
+    }
+}
+
 /// Frequency tree shared by JBPD (0x1400a0960) and JBP1 (0x1400b3b40): repeatedly join the
 /// two lowest weights, lower node index first, the first one on bit 0.
 pub(crate) struct Tree {
@@ -259,8 +415,8 @@ fn decode_inner(
     let head = data
         .get(table..table + head_size)
         .ok_or(FormatError("JBPD tables truncated"))?;
-    let dc_tree = Tree::new(&head[..64])?;
-    let ac_tree = Tree::new(&head[64..128])?;
+    let dc_tree = Huffman::new(Tree::new(&head[..64])?);
+    let ac_tree = Huffman::new(Tree::new(&head[64..128])?);
     let runs = &head[128..144];
     let quant = &head[144..head_size];
     let mcus = w.div_ceil(16) * h.div_ceil(16);
@@ -359,6 +515,7 @@ fn decode_inner(
                     }];
                     block[0] = values[dc_index].wrapping_mul(i16::from(q[0]));
                     dc_index += 1;
+                    let mut rows = 1u8;
                     let mut pos = 1;
                     while pos < 64 {
                         let symbol = ac_tree.symbol(&mut ac)?;
@@ -366,50 +523,59 @@ fn decode_inner(
                             break;
                         }
                         if symbol == 0 {
-                            let mut run = 0;
-                            while ac.bit()? != 0 {
-                                run += 1;
-                                if run == 16 {
-                                    return Err(FormatError(
-                                        "JBPD zero run selector outside table",
-                                    ));
-                                }
-                            }
+                            let Some(run) = ac.run_selector()? else {
+                                return Err(FormatError("JBPD zero run selector outside table"));
+                            };
                             pos += usize::from(runs[run]) + 1;
                             if pos > 64 {
                                 return Err(FormatError("JBPD zero run outside block"));
                             }
                         } else {
-                            block[ORDER[pos]] =
-                                ac.signed(symbol)?.wrapping_mul(i16::from(q[ORDER[pos]]));
+                            let at = ORDER[pos];
+                            block[at] = ac.signed(symbol)?.wrapping_mul(i16::from(q[at]));
+                            rows |= 1 << (at / 8);
                             pos += 1;
                         }
                     }
-                    idct(block);
+                    idct(block, rows, rows == 1 && block[1..8].iter().all(|&v| v == 0));
                 }
-                for y in 0..16 {
+                let (y0, x0) = (ty + by * 16, tx + bx * 16);
+                let (bh, bw) = ((h - y0).min(16), (w - x0).min(16));
+                for y in 0..bh {
+                    // Fixed-size rows let the conversion vectorize without bounds checks.
+                    let mut luma = [0i16; 16];
+                    luma[..8].copy_from_slice(&samples[y / 8 * 2][y % 8 * 8..][..8]);
+                    luma[8..].copy_from_slice(&samples[y / 8 * 2 + 1][y % 8 * 8..][..8]);
+                    let cb: &[i16; 8] = samples[4][y / 2 * 8..][..8].try_into().unwrap();
+                    let cr: &[i16; 8] = samples[5][y / 2 * 8..][..8].try_into().unwrap();
+                    let mut cb_wide = [0i32; 16];
+                    let mut cr_wide = [0i32; 16];
                     for x in 0..16 {
-                        if ty + by * 16 + y >= h || tx + bx * 16 + x >= w {
-                            continue;
-                        }
-                        let l = i32::from(samples[y / 8 * 2 + x / 8][y % 8 * 8 + x % 8]);
-                        let cb = i32::from(samples[4][y / 2 * 8 + x / 2]);
-                        let cr = i32::from(samples[5][y / 2 * 8 + x / 2]);
-                        let rgb = [
-                            l + 128 + ((91888 * cr) >> 16),
-                            l + 128 - ((22544 * cb) >> 16) - ((46784 * cr) >> 16),
-                            l + 128 + ((116112 * cb) >> 16),
-                        ];
-                        let at = ((ty + by * 16 + y) * w + tx + bx * 16 + x) * 4;
-                        for c in 0..3 {
-                            pixels[at + c] = rgb[c].clamp(0, 255) as u8;
-                        }
-                        pixels[at + 3] = if alpha {
-                            alpha_sample(samples[6 + y / 8 * 2 + x / 8][y % 8 * 8 + x % 8])?
-                        } else {
-                            255
-                        };
+                        cb_wide[x] = i32::from(cb[x / 2]);
+                        cr_wide[x] = i32::from(cr[x / 2]);
                     }
+                    let mut words = [0u32; 16];
+                    for x in 0..16 {
+                        let l = i32::from(luma[x]) + 128;
+                        let (cb, cr) = (cb_wide[x], cr_wide[x]);
+                        let r = (l + ((91888 * cr) >> 16)).clamp(0, 255) as u32;
+                        let g = (l - ((22544 * cb) >> 16) - ((46784 * cr) >> 16)).clamp(0, 255)
+                            as u32;
+                        let b = (l + ((116112 * cb) >> 16)).clamp(0, 255) as u32;
+                        words[x] = r | g << 8 | b << 16 | 0xff00_0000;
+                    }
+                    let mut out = [0u8; 64];
+                    for (bytes, word) in out.as_chunks_mut::<4>().0.iter_mut().zip(words) {
+                        *bytes = word.to_le_bytes();
+                    }
+                    if alpha {
+                        for x in 0..bw {
+                            out[x * 4 + 3] =
+                                alpha_sample(samples[6 + y / 8 * 2 + x / 8][y % 8 * 8 + x % 8])?;
+                        }
+                    }
+                    let at = ((y0 + y) * w + x0) * 4;
+                    pixels[at..at + bw * 4].copy_from_slice(&out[..bw * 4]);
                 }
             }
         }
