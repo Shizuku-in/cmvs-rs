@@ -508,38 +508,23 @@ mod tests {
     use crate::theora::bits::packed;
 
     #[test]
-    fn every_coefficient_extra_bits_value_matches_reference() {
+    fn every_coefficient_extra_bits_value_matches_recorded_reference() {
+        let mut recorded = Vec::new();
         for token in 7..32 {
             let bits = COEFFICIENT_SPECS[token as usize - 7].0;
             for extra in 0..1u16 << bits {
                 let payload = (if bits == 0 { 0 } else { extra << (16 - bits) }).to_be_bytes();
-                let (run, value) = coefficient(&mut Bits::new(&payload), token).unwrap();
-                let mut positions = [0];
-                let mut counts = [0];
-                let mut coeffs = [[0; 64]];
-                oxideav_theora::decode_coefficient_token(
-                    &payload,
-                    token,
-                    1,
-                    0,
-                    0,
-                    &mut positions,
-                    &mut counts,
-                    &mut coeffs,
-                )
-                .unwrap();
-                assert_eq!(
-                    usize::from(positions[0]),
-                    run + usize::from(value != 0),
-                    "token {token} extra {extra}"
-                );
-                if value != 0 {
-                    assert_eq!(coeffs[0][run], value);
-                } else {
-                    assert_eq!(coeffs[0], [0; 64]);
-                }
+                let mut reader = Bits::new(&payload);
+                let (run, value) = coefficient(&mut reader, token).unwrap();
+                assert_eq!(reader.remaining(), 16 - usize::from(bits));
+                recorded.push(u8::try_from(run).unwrap());
+                recorded.extend(value.to_le_bytes());
             }
         }
+        assert_eq!(
+            cmvs_core::digest::to_hex(&cmvs_core::digest::sha256(&recorded)),
+            "45cdb90d11b7deeb7e7f5414b2009cc362153f5ce23ffd53cc7bcee9a520287c"
+        );
     }
 
     #[test]

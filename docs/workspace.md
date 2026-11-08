@@ -9,7 +9,7 @@
 | cmvs-audio | crates/cmvs-audio | 共享 Vorbis 解码、混音、原生音频和源时钟；依赖 core、lewton；`mixer` feature 启用 rodio 混音并由宿主拉取 PCM，默认 `native` 再接系统设备（cpal） |
 | cmvs-desktop | crates/cmvs-desktop | 窗口、原始输入、桌面运行入口；依赖 core 和窗口库，可选依赖 audio |
 | cmvs-native | crates/cmvs-native | 操作系统服务统一接口，按平台分模块（现有 Windows，其余预留）；依赖 raw-window-handle，Windows 上 windows-sys；原生系统 FFI 包。另含 Switch 与 Vita 的系统封装（含 deko3d / GXM 合成器）及两者共用的可移植手柄采样 `PadInput` 与 GPU 设备接口 `GpuDevice` |
-| cmvs-video | crates/cmvs-video | MGV1 的自研 Theora 解码、RGBA 转换与工作线程预解码；运行时依赖 core、ogg，oxideav-theora 仅作测试参考；除 Web 外的宿主及 probe 使用 |
+| cmvs-video | crates/cmvs-video | MGV1 的自研 Theora 解码、RGBA 转换与工作线程预解码；依赖 core、ogg；除 Web 外的宿主及 probe 使用 |
 | cmvs-console | crates/cmvs-console | 游戏机宿主共用策略：手柄到引擎输入码的映射、游戏列表、错误页、CPU 绘制页面与注释输入编码；每台主机以 `Console` 描述屏幕与按键；依赖 core、native、encoding_rs、ab_glyph |
 | cmvs-switch / cmvs-vita | platforms/switch/player、platforms/psvita/player | Switch NRO 与 PS Vita VPK 播放器；依赖 core、native、font、console 及 `mixer` 音频，在 Docker 工具链中构建，开发机上只编译替身 |
 | cmvs-probe | crates/cmvs-probe | 与游戏无关的无头整机检查；依赖 core 与 desktop 的字体模块，不打开窗口或设备；不在默认成员中 |

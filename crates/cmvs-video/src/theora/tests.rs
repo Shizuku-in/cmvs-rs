@@ -49,42 +49,40 @@ fn top_down(frame: &Frame, ident: &Ident) -> Vec<u8> {
 }
 
 #[test]
-fn synthetic_corpus_matches_ffmpeg_and_previous_decoder_planes() {
+fn synthetic_corpus_matches_ffmpeg_and_recorded_coded_planes() {
     let cases = [
         (
             include_str!("../../tests/fixtures/theora-tall.hex"),
             include_str!("../../tests/fixtures/theora-tall.sha256"),
+            include_str!("../../tests/fixtures/theora-tall.coded.sha256"),
         ),
         (
             include_str!("../../tests/fixtures/theora-wide.hex"),
             include_str!("../../tests/fixtures/theora-wide.sha256"),
+            include_str!("../../tests/fixtures/theora-wide.coded.sha256"),
         ),
         (
             include_str!("../../tests/fixtures/theora-crop.hex"),
             include_str!("../../tests/fixtures/theora-crop.sha256"),
+            include_str!("../../tests/fixtures/theora-crop.coded.sha256"),
         ),
         (
             include_str!("../../tests/fixtures/theora-noise.hex"),
             include_str!("../../tests/fixtures/theora-noise.sha256"),
+            include_str!("../../tests/fixtures/theora-noise.coded.sha256"),
         ),
     ];
-    for (case, hashes) in cases {
+    for (case, hashes, coded_hashes) in cases {
         let packets = packets(&hex(case));
         let ident = Ident::parse(&packets[0]).unwrap();
         let mut own = Decoder::new(&ident, &packets[2]).unwrap();
-        let mut old = oxideav_theora::FrameDecoder::new(
-            oxideav_theora::decode_identification_header(&packets[0]).unwrap(),
-            oxideav_theora::decode_setup_header(&packets[2]).unwrap(),
-        )
-        .unwrap();
         let hashes: Vec<_> = hashes.lines().collect();
+        let coded_hashes: Vec<_> = coded_hashes.lines().collect();
+        assert_eq!(hashes.len(), coded_hashes.len());
         assert_eq!(packets.len() - 3, hashes.len());
         for (i, packet) in packets[3..].iter().enumerate() {
             let got = own.decode_frame(packet).unwrap();
-            let old = old.decode_frame(packet).unwrap();
-            assert_eq!(got.planes[0], old.frame.samples_y, "Y, frame {i}");
-            assert_eq!(got.planes[1], old.frame.samples_cb, "Cb, frame {i}");
-            assert_eq!(got.planes[2], old.frame.samples_cr, "Cr, frame {i}");
+            assert_eq!(coded_hash(got), coded_hashes[i], "coded frame {i}");
             assert_eq!(
                 to_hex(&sha256(&top_down(got, &ident))),
                 hashes[i],
@@ -176,8 +174,9 @@ fn packet_truncation_and_corruption_never_panic() {
 }
 
 #[test]
-fn scalar_idct_matches_reference_for_extreme_and_sparse_coefficients() {
+fn scalar_idct_matches_recorded_reference_for_extreme_coefficients() {
     let mut random = 0x1234_5678u32;
+    let mut recorded = Vec::new();
     for iteration in 0..2048 {
         let mut coeffs = [0; 64];
         for v in coeffs
@@ -189,17 +188,26 @@ fn scalar_idct_matches_reference_for_extreme_and_sparse_coefficients() {
             random ^= random << 5;
             *v = random as i16;
         }
-        let reference = oxideav_theora::inverse_dct_2d(&coeffs);
-        assert_eq!(dsp::idct_scalar(&coeffs), reference);
-        assert_eq!(dsp::idct(&coeffs, 64), reference);
+        let scalar = dsp::idct_scalar(&coeffs);
+        assert_eq!(dsp::idct(&coeffs, 64), scalar);
+        recorded.extend(scalar.into_iter().flatten().flat_map(i16::to_le_bytes));
     }
+    assert_eq!(
+        to_hex(&sha256(&recorded)),
+        "72a0a4f3b373f4b349fbf39b7b7ad69fabf5bbbac86768deaaf322bf075550ce"
+    );
 }
 
 #[test]
 fn sparse_idct_preserves_signed_wrap_and_rounding() {
     const ZIGZAG: [usize; 10] = [0, 1, 8, 16, 9, 2, 3, 10, 17, 24];
     let mut random = 0x3859_a1cdu32;
+    let hashes: Vec<_> = include_str!("../../tests/fixtures/theora-idct-sparse.sha256")
+        .lines()
+        .collect();
+    assert_eq!(hashes.len(), 9);
     for count in 2..=10 {
+        let mut recorded = Vec::new();
         for _ in 0..1024 {
             let mut coeffs = [0; 64];
             for &ci in &ZIGZAG[..count] {
@@ -208,151 +216,57 @@ fn sparse_idct_preserves_signed_wrap_and_rounding() {
                 random ^= random << 5;
                 coeffs[ci] = random as i16;
             }
-            assert_eq!(
-                dsp::idct(&coeffs, count as u8),
-                oxideav_theora::inverse_dct_2d(&coeffs)
-            );
+            let got = dsp::idct(&coeffs, count as u8);
+            assert_eq!(got, dsp::idct_scalar(&coeffs));
+            recorded.extend(got.into_iter().flatten().flat_map(i16::to_le_bytes));
         }
+        assert_eq!(to_hex(&sha256(&recorded)), hashes[count - 2]);
     }
 }
 
+fn coded_hash(frame: &Frame) -> String {
+    to_hex(&sha256(&frame.planes.concat()))
+}
+
 #[test]
-fn quant_ranges_and_three_block_quantizers_match_reference() {
-    use oxideav_theora::{FrameEncoder, SetupHeaderTables, SourceFrame};
-    let packets = fixture();
-    let old_ident = oxideav_theora::decode_identification_header(&packets[0]).unwrap();
+fn quant_ranges_and_three_block_quantizers_match_recorded_reference() {
+    let packets = packets(&hex(include_str!("../../tests/fixtures/theora-quant.hex")));
     let ident = Ident::parse(&packets[0]).unwrap();
-    let mut setup = SetupHeaderTables::vp3_defaults();
-    let q = &mut setup.quantization_parameters;
-    q.base_matrices
-        .push(std::array::from_fn(|i| (i * 3 + 7) as u8));
-    q.num_base_matrices = q.base_matrices.len() as u16;
-    let last = q.num_base_matrices - 1;
-    for t in 0..2 {
-        for p in 0..3 {
-            let base = q.quant_range_base_matrix_indices[t][p][0];
-            q.num_quant_ranges[t][p] = 4;
-            q.quant_range_sizes[t][p][..4].copy_from_slice(&[1, 20, 21, 21]);
-            q.quant_range_base_matrix_indices[t][p][..5]
-                .copy_from_slice(&[base, last, base, last, base]);
-        }
-    }
-    let setup_packet = oxideav_theora::encode_setup_header(&setup).unwrap();
-    let mut own = Decoder::new(&ident, &setup_packet).unwrap();
-    for t in 0..2 {
-        for p in 0..3 {
-            for qi in 0..64 {
-                assert_eq!(
-                    own.setup.quant[t * 3 + p][qi],
-                    oxideav_theora::compute_quantization_matrix(
-                        &setup.quantization_parameters,
-                        t,
-                        p,
-                        qi
-                    )
-                    .unwrap()
-                    .values
-                );
-            }
-        }
-    }
-    let encoder = FrameEncoder::new(old_ident.clone(), setup.clone(), 40).unwrap();
-    let mut old = oxideav_theora::FrameDecoder::new(old_ident, setup).unwrap();
-    let qiis: Vec<_> = (0..own.geometry.blocks.len())
-        .map(|bi| (bi % 3) as u8)
+    let mut decoder = Decoder::new(&ident, &packets[2]).unwrap();
+    let matrices: Vec<_> = include_str!("../../tests/fixtures/theora-quant.matrices.sha256")
+        .lines()
         .collect();
-    for n in 0..4 {
-        let planes = own.geometry.sizes.map(|(w, h)| {
-            (0..w * h)
-                .map(|i| ((i * 31 + n * 71) % 256) as u8)
-                .collect()
-        });
-        let [samples_y, samples_cb, samples_cr] = planes;
-        let source = SourceFrame {
-            samples_y,
-            samples_cb,
-            samples_cr,
-        };
-        let packet = encoder
-            .encode_intra_frame_with_qiis(&source, &[0, 21, 63], &qiis)
-            .unwrap();
-        let got = own.decode_frame(&packet).unwrap();
-        let expected = old.decode_frame(&packet).unwrap();
-        assert_eq!(
-            got.planes,
-            [
-                expected.frame.samples_y,
-                expected.frame.samples_cb,
-                expected.frame.samples_cr
-            ]
-        );
-        assert_eq!(
-            own.state.qi,
-            qiis.iter().map(|&v| v as usize).collect::<Vec<_>>()
-        );
+    assert_eq!(matrices.len(), 6 * 64);
+    for (table, expected) in decoder.setup.quant.iter().flatten().zip(matrices) {
+        let bytes: Vec<_> = table.iter().flat_map(|v| v.to_le_bytes()).collect();
+        assert_eq!(to_hex(&sha256(&bytes)), expected);
+    }
+    let qiis: Vec<_> = (0..decoder.geometry.blocks.len())
+        .map(|bi| bi % 3)
+        .collect();
+    let hashes: Vec<_> = include_str!("../../tests/fixtures/theora-quant.coded.sha256")
+        .lines()
+        .collect();
+    assert_eq!(packets.len() - 3, hashes.len());
+    for (packet, expected) in packets[3..].iter().zip(hashes) {
+        assert_eq!(coded_hash(decoder.decode_frame(packet).unwrap()), expected);
+        assert_eq!(decoder.state.qi, qiis);
     }
 }
 
 #[test]
-fn golden_and_four_vector_frames_match_reference() {
-    use oxideav_theora::{FrameEncoder, SetupHeaderTables, SourceFrame};
-    let packets = fixture();
-    let old_ident = oxideav_theora::decode_identification_header(&packets[0]).unwrap();
+fn golden_and_four_vector_frames_match_recorded_reference() {
+    let packets = packets(&hex(include_str!("../../tests/fixtures/theora-motion.hex")));
     let ident = Ident::parse(&packets[0]).unwrap();
-    let setup = SetupHeaderTables::vp3_defaults();
-    let mut own = Decoder::new(
-        &ident,
-        &oxideav_theora::encode_setup_header(&setup).unwrap(),
-    )
-    .unwrap();
-    let encoder = FrameEncoder::new(old_ident.clone(), setup.clone(), 55).unwrap();
-    let mut old = oxideav_theora::FrameDecoder::new(old_ident, setup).unwrap();
+    let mut decoder = Decoder::new(&ident, &packets[2]).unwrap();
+    let hashes: Vec<_> = include_str!("../../tests/fixtures/theora-motion.coded.sha256")
+        .lines()
+        .collect();
+    assert_eq!(packets.len() - 3, hashes.len());
     let mut mode_mask = 0u8;
-    for n in 0..12 {
-        let planes = own.geometry.sizes.map(|(w, h)| {
-            (0..w * h)
-                .map(|i| {
-                    let (x, y) = (i % w, i / w);
-                    // Distinct 8x8 tiles move in opposite directions, then return
-                    // to the keyframe so the encoder selects the golden reference.
-                    let phase = if n % 4 == 3 { 0 } else { n };
-                    let dx = if (x / 8 + y / 8) % 2 == 0 {
-                        phase * 2
-                    } else {
-                        w - phase % w
-                    };
-                    let x = (x + dx) % w;
-                    ((x * x * 3 + y * 17 + x * y * 11) % 220 + 16) as u8
-                })
-                .collect()
-        });
-        let [samples_y, samples_cb, samples_cr] = planes;
-        let source = SourceFrame {
-            samples_y,
-            samples_cb,
-            samples_cr,
-        };
-        let packet = if n == 0 {
-            encoder.encode_intra_frame(&source).unwrap()
-        } else {
-            let refs = old.reference_store().as_reference_plane_set().unwrap();
-            if n % 4 == 3 {
-                encoder.encode_inter_frame_golden(&source, &refs).unwrap()
-            } else {
-                encoder.encode_inter_frame_four_mv(&source, &refs).unwrap()
-            }
-        };
-        let got = own.decode_frame(&packet).unwrap();
-        let expected = old.decode_frame(&packet).unwrap();
-        assert_eq!(
-            got.planes,
-            [
-                expected.frame.samples_y,
-                expected.frame.samples_cb,
-                expected.frame.samples_cr
-            ]
-        );
-        for &mode in &own.state.modes {
+    for (packet, expected) in packets[3..].iter().zip(hashes) {
+        assert_eq!(coded_hash(decoder.decode_frame(packet).unwrap()), expected);
+        for &mode in &decoder.state.modes {
             mode_mask |= 1 << mode;
         }
     }
@@ -364,23 +278,31 @@ fn golden_and_four_vector_frames_match_reference() {
     );
 }
 
-/// Optional large corpus/benchmark. CMVS_THEORA_OGV is an Ogg/Theora file;
+/// Optional large-corpus comparison. CMVS_THEORA_OGV is an Ogg/Theora file;
 /// CMVS_THEORA_YUV, when set, is FFmpeg's full picture-region yuv420p output.
 /// CMVS_THEORA_FFMPEG, when set, names an FFmpeg executable that streams the
 /// reference planes through a pipe instead of storing a full raw movie on disk.
+/// Set CMVS_THEORA_CODED=1 to compare the entire coding surface instead.
 #[test]
 #[ignore = "requires CMVS_THEORA_OGV"]
-fn external_corpus_and_decode_timing() {
+fn external_corpus_matches_ffmpeg() {
     let path = std::env::var("CMVS_THEORA_OGV").unwrap();
     let data = std::fs::read(&path).unwrap();
     let packets = packets(&data);
     let ident = Ident::parse(&packets[0]).unwrap();
     let mut own = Decoder::new(&ident, &packets[2]).unwrap();
-    let mut old = oxideav_theora::FrameDecoder::new(
-        oxideav_theora::decode_identification_header(&packets[0]).unwrap(),
-        oxideav_theora::decode_setup_header(&packets[2]).unwrap(),
-    )
-    .unwrap();
+    let coded = std::env::var("CMVS_THEORA_CODED").is_ok_and(|v| v == "1");
+    let comparison = if coded {
+        Ident {
+            picw: ident.width as u32,
+            pich: ident.height as u32,
+            picx: 0,
+            picy: 0,
+            ..ident.clone()
+        }
+    } else {
+        ident
+    };
     let external = std::env::var("CMVS_THEORA_YUV")
         .ok()
         .map(|path| std::fs::read(path).unwrap());
@@ -395,7 +317,18 @@ fn external_corpus_and_decode_timing() {
     let mut reference = std::env::var("CMVS_THEORA_FFMPEG").ok().map(|program| {
         ReferenceProcess(
             Command::new(program)
-                .args(["-v", "error", "-nostdin", "-threads", "1", "-i"])
+                .args([
+                    "-v",
+                    "error",
+                    "-nostdin",
+                    "-c:v",
+                    "theora",
+                    "-threads",
+                    "1",
+                    "-apply_cropping",
+                    if coded { "0" } else { "1" },
+                    "-i",
+                ])
                 .arg(&path)
                 .args(["-vsync", "0", "-pix_fmt", "yuv420p", "-f", "rawvideo", "-"])
                 .stdin(Stdio::null())
@@ -404,37 +337,22 @@ fn external_corpus_and_decode_timing() {
                 .unwrap(),
         )
     });
-    let picture_size = ident.picw as usize * ident.pich as usize * 3 / 2;
+    assert!(
+        external.is_some() || reference.is_some(),
+        "set CMVS_THEORA_YUV or CMVS_THEORA_FFMPEG for an independent reference"
+    );
+    let picture_size = comparison.picw as usize * comparison.pich as usize * 3 / 2;
     let mut reference_pixels = vec![0; picture_size];
     let mut ffmpeg_frames = 0;
     let mut offset = 0;
-    let mut ours = std::time::Duration::ZERO;
-    let mut theirs = std::time::Duration::ZERO;
     for (i, packet) in packets[3..].iter().enumerate() {
-        let start = Instant::now();
         let got = own.decode_frame(packet).unwrap();
-        ours += start.elapsed();
-        let start = Instant::now();
-        let expected = old.decode_frame(packet).unwrap();
-        theirs += start.elapsed();
-        for (p, want) in [
-            &expected.frame.samples_y,
-            &expected.frame.samples_cb,
-            &expected.frame.samples_cr,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            if let Some(at) = got.planes[p].iter().zip(want).position(|(a, b)| a != b) {
-                panic!(
-                    "plane {p} frame {i} sample {at}: own={}, reference={}",
-                    got.planes[p][at], want[at]
-                );
-            }
-            assert_eq!(got.planes[p].len(), want.len());
+        // FFmpeg emits no picture for an empty duplicate packet.
+        if packet.is_empty() {
+            continue;
         }
         if let Some(raw) = &external {
-            let picture = top_down(got, &ident);
+            let picture = top_down(got, &comparison);
             assert_eq!(
                 &picture,
                 &raw[offset..offset + picture.len()],
@@ -443,40 +361,36 @@ fn external_corpus_and_decode_timing() {
             offset += picture.len();
         }
         if let Some(reference) = &mut reference {
-            // FFmpeg does not emit pictures for empty Theora duplicate packets;
-            // those packets are still compared against the old decoder above.
-            if !packet.is_empty() {
-                let picture = top_down(got, &ident);
-                assert_eq!(
-                    picture.len(),
-                    reference_pixels.len(),
-                    "requires even picture dimensions"
+            let picture = top_down(got, &comparison);
+            assert_eq!(
+                picture.len(),
+                reference_pixels.len(),
+                "requires even picture dimensions"
+            );
+            reference
+                .0
+                .stdout
+                .as_mut()
+                .unwrap()
+                .read_exact(&mut reference_pixels)
+                .unwrap();
+            if let Some(at) = picture
+                .iter()
+                .zip(&reference_pixels)
+                .position(|(a, b)| a != b)
+            {
+                panic!(
+                    "FFmpeg frame {i} sample {at}: own={}, reference={}",
+                    picture[at], reference_pixels[at]
                 );
-                reference
-                    .0
-                    .stdout
-                    .as_mut()
-                    .unwrap()
-                    .read_exact(&mut reference_pixels)
-                    .unwrap();
-                if let Some(at) = picture
-                    .iter()
-                    .zip(&reference_pixels)
-                    .position(|(a, b)| a != b)
-                {
-                    panic!(
-                        "FFmpeg frame {i} sample {at}: own={}, reference={}",
-                        picture[at], reference_pixels[at]
-                    );
-                }
-                ffmpeg_frames += 1;
             }
+            ffmpeg_frames += 1;
         }
         if i % 500 == 0 || i + 4 == packets.len() {
             eprintln!(
                 "validated packet {i}/{} picture_sha256={}",
                 packets.len() - 3,
-                to_hex(&sha256(&top_down(got, &ident)))
+                to_hex(&sha256(&top_down(got, &comparison)))
             );
         }
     }
@@ -492,15 +406,6 @@ fn external_corpus_and_decode_timing() {
         assert!(reference.0.wait().unwrap().success());
         eprintln!("FFmpeg matched {ffmpeg_frames} nonempty packets");
     }
-    let n = (packets.len() - 3) as f64;
-    eprintln!(
-        "{}x{}: {n} packets; own {:.3} ms/frame, oxideav {:.3} ms/frame, {:.2}x",
-        ident.width,
-        ident.height,
-        ours.as_secs_f64() * 1000.0 / n,
-        theirs.as_secs_f64() * 1000.0 / n,
-        theirs.as_secs_f64() / ours.as_secs_f64()
-    );
 }
 
 /// Measure the crate's decoder without an oracle or another live decoder
@@ -530,11 +435,11 @@ fn external_decoder_timing() {
     );
 }
 
-/// Exercise the public MGV playback path, including duplicate nominal frames,
-/// padded RGBA output, end-of-stream validation and replay after finish.
+/// Check public MGV indexing, duplicate nominal frames, padded RGBA and replay
+/// against direct packet decoding. Codec pixels have separate pinned/FFmpeg tests.
 #[test]
 #[ignore = "requires CMVS_THEORA_MGV"]
-fn external_mgv_playback_matches_reference() {
+fn external_mgv_playback_matches_packet_decoder() {
     use cmvs_core::mgv::{Decoder as _, MgvIndex};
     let path = std::env::var("CMVS_THEORA_MGV").unwrap();
     let mut source = std::fs::File::open(&path).unwrap();
@@ -543,14 +448,9 @@ fn external_mgv_playback_matches_reference() {
     let mut ogg = PacketReader::new(source.take(u64::from(index.video_size)));
     let header = ogg.read_packet_expected().unwrap();
     let ident = Ident::parse(&header.data).unwrap();
-    let old_ident = oxideav_theora::decode_identification_header(&header.data).unwrap();
     ogg.read_packet_expected().unwrap(); // Comment, validated by the public stream.
     let setup = ogg.read_packet_expected().unwrap();
-    let mut old = oxideav_theora::FrameDecoder::new(
-        old_ident,
-        oxideav_theora::decode_setup_header(&setup.data).unwrap(),
-    )
-    .unwrap();
+    let mut direct = Decoder::new(&ident, &setup.data).unwrap();
     let mut stream =
         crate::TheoraStream::open(Box::new(std::fs::File::open(&path).unwrap()), &index).unwrap();
     let mut previous_packet = None;
@@ -560,15 +460,8 @@ fn external_mgv_playback_matches_reference() {
     for (nominal, entry) in index.frames.iter().enumerate() {
         if previous_packet != Some(entry.packet) {
             let packet = ogg.read_packet_expected().unwrap();
-            let old = old.decode_frame(&packet.data).unwrap();
-            let frame = Frame {
-                planes: [
-                    old.frame.samples_y,
-                    old.frame.samples_cb,
-                    old.frame.samples_cr,
-                ],
-            };
-            expected = Some(crate::to_rgba(&ident, &frame, &index).unwrap());
+            let frame = direct.decode_frame(&packet.data).unwrap();
+            expected = Some(crate::to_rgba(&ident, frame, &index).unwrap());
             previous_packet = Some(entry.packet);
             decoded += 1;
         }

@@ -7,7 +7,7 @@
 
 ## 依赖与研究记录
 
-- 自研 Theora 解码器依据 Xiph Theora I 规范，参考 MIT 的 `oxideav-theora` 0.0.12 并保留测试差分与许可声明；实现、性能和验证边界见 [Theora 解码](design/theora-decoder.md)。
+- 自研 Theora 解码器依据 Xiph Theora I 规范，参考 MIT 的 `oxideav-theora` 0.0.12 并保留固定回归数据与许可声明，已移除该依赖；实现、性能和验证边界见 [Theora 解码](design/theora-decoder.md)。
 - 依赖版本见 [Cargo.toml](../Cargo.toml)，精确版本与校验和见 [Cargo.lock](../Cargo.lock)，许可见 [THIRD_PARTY_NOTICES.txt](../THIRD_PARTY_NOTICES.txt)。
 - 格式、平台 API 与逐阶段来源见[《アマツツミ》来源记录](games/amatsutsumi/references.md)；游戏语义以[对应二进制证据](games/amatsutsumi/research.md#二进制身份)为准。
 - 新增来源的登记要求见[研究约定](research.md)。

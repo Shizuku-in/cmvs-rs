@@ -1,6 +1,6 @@
 # 自研 Theora 解码器
 
-2026-11-08，`cmvs-video` 用包内的 Rust 解码器替换运行时 `oxideav-theora`。`TheoraFactory`、`PrefetchTheoraFactory`、`TheoraStream` 以及宿主接入方法保持不变。Ogg 分包仍由 `ogg` 处理；MGV 容器和名义帧映射仍由 core 处理。`oxideav-theora = 0.0.12` 保留为开发依赖，用于完整 Y/Cb/Cr 差分和 IDCT 算术对照，不进入播放器的普通依赖树。
+2026-11-08，`cmvs-video` 用包内的 Rust 解码器替换运行时 `oxideav-theora`，随后也移除了该开发依赖。`TheoraFactory`、`PrefetchTheoraFactory`、`TheoraStream` 以及宿主接入方法保持不变。Ogg 分包仍由 `ogg` 处理；MGV 容器和名义帧映射仍由 core 处理。旧解码器的验证结果保留为固定回归数据，当前依赖只有 `cmvs-core` 和 `ogg`。
 
 ## 支持范围
 
@@ -40,12 +40,14 @@ SSE2 使用 x86-64 基线能力，无 AVX 要求；支持的 AArch64 目标启�
 默认 `cargo test --offline -p cmvs-video` 覆盖：
 
 - 原 32×32 MGV 的 RGBA 哈希、重复/倒退访问、picture/coded 裁剪、奇数左边缘及线程预解码。
-- 四段 libtheora 合成流共 72 帧；非完整 superblock、宽高不对称、可见区域裁剪、高低质量及噪声。完整编码平面与旧解码器逐字节一致，可见区域的 top-down Y/Cb/Cr 拼接 SHA-256 与 FFmpeg 一致。
-- 生成流覆盖 golden 参考、四运动向量；另构造四个量化范围和三个块量化器，并对六组全部 64 档量化矩阵逐元素比较。
+- 四段 libtheora 合成流共 72 帧；非完整 superblock、宽高不对称、可见区域裁剪、高低质量及噪声。检查完整编码平面的固定哈希和 FFmpeg 可见区域哈希。
+- 两段额外固定流共 16 帧，覆盖 golden 参考、四运动向量、四个量化范围和三个块量化器；六组全部 64 档量化矩阵各自检查固定哈希。全部六段流的完整编码平面均已独立通过 FFmpeg 复核。
 - MSB 位读取的所有字节内偏移与 0～32 位读取长度、单叶与长 Huffman 码、4129 长 run 的新 BIT 规则、截断/篡改包、非法头部和尺寸预算。
-- 2,048 组稀疏/全范围 i16 系数的标量、SSE2 与旧 IDCT 对照；覆盖 signed overflow 的标量/SIMD 像素叠加对照。
+- 2,048 组稀疏/全范围 i16 系数及 9,216 组稀疏 IDCT 的标量/SSE2 对照，同时检查旧实现输出的固定哈希；全部系数 token 的 extra bits 组合也检查固定哈希。另覆盖 signed overflow 的标量/SIMD 像素叠加对照。
 
-默认测试不启动 FFmpeg，fixture 和独立哈希已入库；[`generate_theora.py`](../../crates/cmvs-video/tests/fixtures/generate_theora.py) 记录生成方法。编码器驱动的用例是对旧实现的差分，不计作新增 FFmpeg 独立验证。
+默认测试不启动 FFmpeg，fixture 和固定哈希已入库；来源、序列化方式与复核命令见[测试数据说明](../../crates/cmvs-video/tests/fixtures/README.md)。`generate_theora.py --verify` 可用 FFmpeg 复核全部六段流，无需旧解码器。
+
+移除开发依赖后，全 workspace/all-features 1,366 项测试通过、38 项默认忽略，严格 Clippy、格式与 AArch64 Android 测试编译检查通过。另显式通过五项外部检查：裁剪流的可见/完整编码区域 raw YUV 对照、真实 `door.mgv` 的完整编码区域 FFmpeg 对照，以及合成/真实 MGV 的播放映射与重播；未重跑全部真实影片。Cargo 配置、锁文件和包含开发依赖的完整依赖树均不再包含 oxideav。
 
 实现替换时通过 Linux 全 workspace、全 feature 测试（当时 1,359 项通过、36 项默认忽略）、全 workspace/all-targets/all-features 严格 Clippy、格式检查、AArch64 Android 库及测试编译检查。后续新增的真实 MGV 播放用例同样默认忽略。Switch/Vita 的 Linux 构建仅为开发机替身。AArch64 内核只编译检查，尚无运行对照；当前 Docker 服务不可用，未执行 Switch/Vita 交叉构建。真实游戏素材的后续验证见下节；未重跑原 DLL，既有原 DLL 验证范围不能直接归给新后端。
 
@@ -61,10 +63,12 @@ SSE2 使用 x86-64 基线能力，无 AVX 要求；支持的 AArch64 目标启�
 
 ```sh
 CMVS_THEORA_MGV="<绝对路径>/data/video/op.mgv" \
-  cargo test --offline --release -p cmvs-video external_mgv_playback_matches_reference -- --ignored --nocapture
+  cargo test --offline --release -p cmvs-video external_mgv_playback_matches_packet_decoder -- --ignored --nocapture
 CMVS_THEORA_OGV="<提取的绝对路径>/op.ogv" CMVS_THEORA_FFMPEG=/usr/bin/ffmpeg \
-  cargo test --offline --release -p cmvs-video external_corpus_and_decode_timing -- --ignored --nocapture
+  cargo test --offline --release -p cmvs-video external_corpus_matches_ffmpeg -- --ignored --nocapture
 ```
+
+上述为当前命令：MGV 用例对照直接包解码与公共播放接口，检查容器映射、重复帧、RGBA、EOF 与回退重播，不再把同一解码器当作独立像素参考。像素独立对照由 FFmpeg 用例承担；加 `CMVS_THEORA_CODED=1` 可关闭 FFmpeg 裁剪并比较完整编码表面，原始 YUV 文件也应使用相应尺寸。上文旧解码器的逐字节结果属于已完成的历史验证。
 
 ## 接近 FFmpeg 的优化（2026-11-08）
 
@@ -100,7 +104,7 @@ Ryzen 9 9900X，Linux x86-64，release，单线程；FFmpeg 8.0.1、libtheora �
 
 这是合成流微基准，不与 README 早先 600 帧真实影片的 9.9 ms 直接计算加速比，不推断游戏机帧率。
 
-复现：
+以下当前命令复核合成流的像素；独立性能计时使用上节 `external_decoder_timing`，旧后端耗时须在历史版本复现：
 
 ```sh
 theora_tmp=$(mktemp -d /tmp/cmvs-theora.XXXXXX)
@@ -109,7 +113,7 @@ ffmpeg -v error -f lavfi -i 'testsrc2=size=1920x1080:rate=24' \
 ffmpeg -v error -threads 1 -i "$theora_tmp/1080p.ogv" \
   -vsync 0 -pix_fmt yuv420p -f rawvideo "$theora_tmp/1080p.yuv"
 CMVS_THEORA_OGV="$theora_tmp/1080p.ogv" CMVS_THEORA_YUV="$theora_tmp/1080p.yuv" \
-  cargo test --offline --release -p cmvs-video external_corpus_and_decode_timing -- --ignored --nocapture
+  cargo test --offline --release -p cmvs-video external_corpus_matches_ffmpeg -- --ignored --nocapture
 ```
 
 本轮输入 Ogg SHA-256 为 `a152aef24b569b336a5c8140ab271be5286d9167e547ea646438b64399aff98d`，FFmpeg 输出 YUV SHA-256 为 `a9966adfa499714cdf25ca273c9802942b1501a6b3b56d0b16329581fb37808d`。Ogg serial/编码器元数据可能随重新生成变化；测试按实际包和平面比较，不依赖这两个文件哈希。
@@ -117,5 +121,5 @@ CMVS_THEORA_OGV="$theora_tmp/1080p.ogv" CMVS_THEORA_YUV="$theora_tmp/1080p.yuv" 
 ## 来源
 
 - [Xiph Theora I 规范](https://www.theora.org/doc/Theora.pdf)，§2、§6、§7；[规范 LaTeX](https://github.com/xiph/theora/blob/master/doc/spec/spec.tex) 用于读取 PDF 排版缺失的过程。
-- `oxideav-theora` 0.0.12，MIT，registry 包与校验和固定在 Cargo.lock；作为头部、算术、码表和边界行为的实现参考及差分 oracle。参考其分解方式重新组织了整数 IDCT 等算法，保留 Karpelès Lab 的 MIT 声明于 [THIRD_PARTY_NOTICES.txt](../../THIRD_PARTY_NOTICES.txt)。
+- `oxideav-theora` 0.0.12，MIT，曾作为头部、算术、码表和边界行为的实现参考及差分 oracle，现已从 Cargo 配置和锁文件移除。参考其分解方式重新组织了整数 IDCT 等算法，固定测试输出也来自该版本，因此继续保留 Karpelès Lab 的 MIT 声明于 [THIRD_PARTY_NOTICES.txt](../../THIRD_PARTY_NOTICES.txt)。
 - FFmpeg 8.0.1 / libtheora 用于仓库外生成合成码流和独立解码，未复制 FFmpeg 源码或将其链接进播放器。

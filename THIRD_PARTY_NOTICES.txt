@@ -154,21 +154,17 @@ wio 0.2.2: MIT/Apache-2.0
 yeslogic-fontconfig-sys 5.0.0: MIT
 
 MGV1 video backend dependencies:
-oxideav-theora 0.0.12: MIT; https://github.com/OxideAV/oxideav-theora
-  commit fb46b4791f860db085869491dfeac6f4463a86ad
-oxideav-core 0.1.41: MIT; https://github.com/OxideAV/oxideav-core
-  commit 11fcf35a26be9912e95a8a032c183fcef8fd6d56
-serde_json 1.0.154: MIT OR Apache-2.0
-itoa 1.0.18: MIT OR Apache-2.0
-zmij 1.0.23: MIT OR Apache-2.0
 ogg 0.9.2 (video), 0.8.0 (lewton): MIT OR Apache-2.0
 
-oxideav-theora 0.0.12 and oxideav-core 0.1.41 (test-only oracle):
+Theora implementation reference and archived synthetic test outputs:
+oxideav-theora 0.0.12: MIT; https://github.com/OxideAV/oxideav-theora
+  commit fb46b4791f860db085869491dfeac6f4463a86ad
 https://crates.io/crates/oxideav-theora/0.0.12
-The in-tree cmvs-video Theora decoder also used oxideav-theora as an
+The in-tree cmvs-video Theora decoder used oxideav-theora as an
 implementation reference for specification tables, integer IDCT decomposition,
-and packet edge cases. The MIT notice is retained for that reference/adaptation
-work as well as the test dependencies. Players no longer link oxideav.
+and packet edge cases, and to generate fixed synthetic regression fixtures.
+The MIT notice is retained for that reference/adaptation work and those fixtures.
+No oxideav crate remains in runtime or test dependencies.
 
 MIT License
 
