@@ -5,9 +5,12 @@ use super::auxiliary::{AuxiliaryGlyph, AuxiliaryText};
 use crate::FormatError;
 use crate::TextEncoding;
 
-/// 0x8141 、 0x8142 。 0x8176 」 0x8178 』 stay on the full line while +128 is set.
+/// Shift-JIS 0x8141 、 0x8142 。 0x8176 」 0x8178 』 stay on the full line while +128 is
+/// set. Like the original's immediates these are fixed code values: under GBK they match
+/// other characters, as in the GBK-patched executables, not the Chinese punctuation.
 const NO_BREAK: [u16; 4] = [0x8141, 0x8142, 0x8176, 0x8178];
-/// 0x814a ゛ is drawn a fifth of the size to the left and advances less.
+/// Shift-JIS 0x814a ゛ is drawn a fifth of the size to the left and advances less; a
+/// fixed code value under GBK as well.
 const VOICED_MARK: u16 = 0x814a;
 /// 0x14002eb10 searches cells 1..1023 of the 1024-byte table at +416.
 const CELLS: u16 = 1024;
@@ -191,7 +194,8 @@ impl AuxiliaryText {
     }
 
     /// 0x14002f120 from the current pen: (lines, widest line, last line), widths counted in
-    /// Shift-JIS bytes. An unknown escape ends the measurement early.
+    /// encoded bytes (two per double-byte character). An unknown escape ends the
+    /// measurement early.
     pub(super) fn measure(
         &self,
         encoding: TextEncoding,

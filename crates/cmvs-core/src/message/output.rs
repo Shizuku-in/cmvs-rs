@@ -275,6 +275,7 @@ pub(super) fn ruby_layout(
                 .ok_or("truncated double-byte message character")?;
             i += 2;
             let code = u16::from_be_bytes([byte, second]);
+            // Fixed Shift-JIS punctuation codes, also under GBK (see auxiliary_layout.rs).
             (size, !matches!(code, 0x8141 | 0x8142 | 0x8176 | 0x8178))
         } else {
             i += 1;
@@ -302,6 +303,7 @@ pub(super) fn wraps(
     limit: u32,
 ) -> Result<bool, &'static str> {
     Ok(match &text.line_break {
+        // Fixed Shift-JIS punctuation codes, also under GBK (see auxiliary_layout.rs).
         None => x >= limit && !matches!(code, 0x8141 | 0x8142 | 0x8176 | 0x8178),
         Some(_) if x < limit => {
             text.layout_scratch[1] = u32::from(code);
@@ -586,12 +588,12 @@ fn append(
 /// Escapes are read only before a character: `\c` and `\t` are skipped, `\w` skips three
 /// bytes and `\n` returns the pen to the area's left edge one line down without counting a
 /// line or reserving ruby height; any other escape would loop forever in the original.
-/// Double-byte characters wrap as in 0x14005bc90; 0x814a sits size/5 left and advances
-/// size/2 − size/5. A `{base/ruby}` group draws only its double-byte base characters, each
-/// wrapping on its own; the annotation is skipped. Single bytes advance by the measured GDI
-/// glyph width (at least half the size), supplied by an explicit font metrics backend.
-/// Without one they are rejected, as are groups under 0x211e rules (its inline rule
-/// copy is not modeled).
+/// Double-byte characters wrap as in 0x14005bc90; code 0x814a (Shift-JIS ゛, a fixed value
+/// in every encoding) sits size/5 left and advances size/2 − size/5. A `{base/ruby}` group
+/// draws only its double-byte base characters, each wrapping on its own; the annotation is
+/// skipped. Single bytes advance by the measured GDI glyph width (at least half the size),
+/// supplied by an explicit font metrics backend. Without one they are rejected, as are
+/// groups under 0x211e rules (its inline rule copy is not modeled).
 fn place(
     encoding: TextEncoding,
     text: &mut TextObject,

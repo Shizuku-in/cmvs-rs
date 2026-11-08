@@ -15,6 +15,7 @@ pub(super) struct State {
     proportional: bool,
 }
 
+// Fixed Shift-JIS code values, independent of the game encoding; see auxiliary_layout.rs.
 const NO_BREAK: [u16; 4] = [0x8141, 0x8142, 0x8176, 0x8178];
 const VOICED_MARK: u16 = 0x814a;
 const ESCAPES: &str = "text escape that does not advance in the original";
@@ -134,7 +135,8 @@ fn append(
                 Vec::new()
             };
             // 0x1400611f0: proportional ruby ignores extra ruby spacing. A run of
-            // middle dots matching the base count is centred on each base cell.
+            // middle dots matching the base count is centred on each base cell. The dot
+            // is the fixed Shift-JIS code 0x8145 ・, also under GBK.
             let dots = proportional
                 && base_cells.len() == ruby_widths.len()
                 && group.ruby.iter().flatten().all(|&code| code == 0x8145);

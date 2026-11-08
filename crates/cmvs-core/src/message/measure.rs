@@ -97,7 +97,9 @@ impl Layout<'_> {
                 self.newline(true, true)?;
             }
         } else if self.x >= self.limit() && !matches!(code, 0x8141 | 0x8142 | 0x8176 | 0x8178) {
-            // This branch increments the line number without resetting the byte count.
+            // The exempt codes are fixed Shift-JIS punctuation, also under GBK (see
+            // auxiliary_layout.rs). This branch increments the line number without
+            // resetting the byte count.
             self.newline(false, true)?;
         }
         Ok(())
