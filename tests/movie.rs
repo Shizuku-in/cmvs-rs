@@ -1674,8 +1674,13 @@ fn cmv8_scene_creation_binds_an_alpha_image_and_playback_keeps_it() {
 fn prefetched_scene_frames_match_synchronous_decoding_through_skips_stalls_and_loops() {
     // CMV6 and CMV9 at 15 fps; display steps include stalls, skipped frames and loop wraps,
     // so prefetched frames are both used and discarded.
-    let deltas = [67, 0, 33, 34, 67, 200, 67, 67, 1, 66, 133, 67, 67, 67, 400, 67];
-    for data in [slot_fixture::cmv6(4, false), slot_fixture::movie_frames(8, 15, 1, false)] {
+    let deltas = [
+        67, 0, 33, 34, 67, 200, 67, 67, 1, 66, 133, 67, 67, 67, 400, 67,
+    ];
+    for data in [
+        slot_fixture::cmv6(4, false),
+        slot_fixture::movie_frames(8, 15, 1, false),
+    ] {
         let run = |prefetch: bool| {
             let mut code = create_code(1, 28, 0);
             scene_start(&mut code, &[1, 0, 0, u32::MAX, 1]);

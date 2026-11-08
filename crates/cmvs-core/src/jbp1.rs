@@ -212,7 +212,9 @@ pub fn decode(data: &[u8]) -> Result<Jbp1, FormatError> {
                     let (cb, cr) = (i32::from(cb[k]), i32::from(cr[k]));
                     let terms = [
                         scale(116112, cb),
-                        scale(46784, cr).wrapping_add(scale(22544, cb)).wrapping_neg(),
+                        scale(46784, cr)
+                            .wrapping_add(scale(22544, cb))
+                            .wrapping_neg(),
                         scale(91888, cr),
                     ];
                     for x in [2 * k, 2 * k + 1] {

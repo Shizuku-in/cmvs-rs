@@ -522,7 +522,11 @@ fn decode_inner(
                             pos += 1;
                         }
                     }
-                    idct(block, rows, rows == 1 && block[1..8].iter().all(|&v| v == 0));
+                    idct(
+                        block,
+                        rows,
+                        rows == 1 && block[1..8].iter().all(|&v| v == 0),
+                    );
                 }
                 let (y0, x0) = (ty + by * 16, tx + bx * 16);
                 let (bh, bw) = ((h - y0).min(16), (w - x0).min(16));
@@ -544,8 +548,8 @@ fn decode_inner(
                         let l = i32::from(luma[x]) + 128;
                         let (cb, cr) = (cb_wide[x], cr_wide[x]);
                         let r = (l + ((91888 * cr) >> 16)).clamp(0, 255) as u32;
-                        let g = (l - ((22544 * cb) >> 16) - ((46784 * cr) >> 16)).clamp(0, 255)
-                            as u32;
+                        let g =
+                            (l - ((22544 * cb) >> 16) - ((46784 * cr) >> 16)).clamp(0, 255) as u32;
                         let b = (l + ((116112 * cb) >> 16)).clamp(0, 255) as u32;
                         words[x] = r | g << 8 | b << 16 | 0xff00_0000;
                     }

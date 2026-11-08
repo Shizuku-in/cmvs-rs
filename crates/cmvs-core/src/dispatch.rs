@@ -836,16 +836,13 @@ fn root_auxiliary_scene(
 }
 pub fn uses_message_state(command: u16) -> bool {
     uses_windows(command)
-        || entries_any_table(command)
-            .iter()
-            .copied()
-            .any(|e| {
-                e.command == command
-                    && matches!(
-                        e.capability,
-                        Capability::TextState | Capability::AuxiliaryScene | Capability::FontDialog
-                    )
-            })
+        || entries_any_table(command).iter().copied().any(|e| {
+            e.command == command
+                && matches!(
+                    e.capability,
+                    Capability::TextState | Capability::AuxiliaryScene | Capability::FontDialog
+                )
+        })
 }
 
 fn root_windows(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
@@ -911,20 +908,21 @@ fn root_window_images(
 }
 
 pub fn uses_windows(command: u16) -> bool {
-    entries_any_table(command).iter().copied()
-        .any(|entry| {
-            entry.command == command
-                && matches!(
-                    entry.capability,
-                    Capability::Windows
-                        | Capability::WindowPointer
-                        | Capability::WindowButtons
-                        | Capability::WindowImages
-                )
-        })
+    entries_any_table(command).iter().copied().any(|entry| {
+        entry.command == command
+            && matches!(
+                entry.capability,
+                Capability::Windows
+                    | Capability::WindowPointer
+                    | Capability::WindowButtons
+                    | Capability::WindowImages
+            )
+    })
 }
 pub fn uses_window_images(command: u16) -> bool {
-    entries_any_table(command).iter().copied()
+    entries_any_table(command)
+        .iter()
+        .copied()
         .any(|entry| entry.command == command && entry.capability == Capability::WindowImages)
 }
 
@@ -1012,7 +1010,8 @@ fn input_capability(capability: Capability) -> bool {
     )
 }
 pub fn uses_input(command: u16) -> bool {
-    root_entry(command).into_iter()
+    root_entry(command)
+        .into_iter()
         .any(|entry| entry.command == command && input_capability(entry.capability))
 }
 pub fn uses_input_for(semantics: Semantics, command: u16) -> bool {
@@ -1131,7 +1130,8 @@ fn root_message_wait(
     Ok(h.messages.handle_wait(call, h.input, h.flags, h.context)?)
 }
 pub fn is_message_wait(command: u16) -> bool {
-    root_entry(command).into_iter()
+    root_entry(command)
+        .into_iter()
         .any(|e| e.command == command && e.capability == Capability::MessageWait)
 }
 pub fn is_lifecycle(command: u16) -> bool {
@@ -1385,7 +1385,8 @@ pub fn uses_bootstrap_for(semantics: Semantics, command: u16) -> bool {
     }
 }
 pub fn uses_platform(command: u16) -> bool {
-    root_entry(command).into_iter()
+    root_entry(command)
+        .into_iter()
         .any(|e| e.command == command && e.capability == Capability::Platform)
 }
 pub fn uses_platform_for(semantics: Semantics, command: u16) -> bool {
@@ -1480,12 +1481,14 @@ fn root_movie_player(
     Ok(Flow::Done)
 }
 pub fn uses_sequence(command: u16) -> bool {
-    root_entry(command).into_iter()
+    root_entry(command)
+        .into_iter()
         .chain(SEQUENCE_WINDOW_IMAGE.iter())
         .any(|e| e.command == command && e.capability == Capability::Sequence)
 }
 pub fn uses_movie_scene(command: u16) -> bool {
-    root_entry(command).into_iter()
+    root_entry(command)
+        .into_iter()
         .any(|e| e.command == command && e.capability == Capability::MovieScene)
 }
 pub fn uses_movie_scene_for(semantics: Semantics, command: u16) -> bool {
@@ -1496,7 +1499,8 @@ pub fn uses_movie_scene_for(semantics: Semantics, command: u16) -> bool {
     }
 }
 pub fn uses_movie_player(command: u16) -> bool {
-    root_entry(command).into_iter()
+    root_entry(command)
+        .into_iter()
         .any(|e| e.command == command && e.capability == Capability::MoviePlayer)
 }
 pub fn uses_movie_player_for(semantics: Semantics, command: u16) -> bool {
@@ -1564,17 +1568,16 @@ fn root_change_image(
 }
 
 pub fn uses_images(command: u16) -> bool {
-    entries_any_table(command).iter().copied()
-        .any(|e| {
-            e.command == command
-                && matches!(
-                    e.capability,
-                    Capability::SceneImages
-                        | Capability::MaskImages
-                        | Capability::ImageChange
-                        | Capability::ParticleImages
-                )
-        })
+    entries_any_table(command).iter().copied().any(|e| {
+        e.command == command
+            && matches!(
+                e.capability,
+                Capability::SceneImages
+                    | Capability::MaskImages
+                    | Capability::ImageChange
+                    | Capability::ParticleImages
+            )
+    })
 }
 
 fn is_wait_capability(capability: Capability) -> bool {
@@ -1589,7 +1592,8 @@ fn is_wait_capability(capability: Capability) -> bool {
     )
 }
 pub fn is_wait(command: u16) -> bool {
-    root_entry(command).into_iter()
+    root_entry(command)
+        .into_iter()
         .any(|e| e.command == command && is_wait_capability(e.capability))
 }
 /// Waits of the selected semantics, including profile-bound variants.
@@ -1608,7 +1612,11 @@ pub fn is_wait_for(semantics: Semantics, command: u16) -> bool {
 fn root_entry(command: u16) -> Option<&'static Entry> {
     static INDEX: std::sync::OnceLock<Vec<u16>> = std::sync::OnceLock::new();
     let index = INDEX.get_or_init(|| {
-        let size = ROOT.iter().map(|e| usize::from(e.command) + 1).max().unwrap_or(0);
+        let size = ROOT
+            .iter()
+            .map(|e| usize::from(e.command) + 1)
+            .max()
+            .unwrap_or(0);
         let mut index = vec![u16::MAX; size];
         for (at, entry) in ROOT.iter().enumerate().rev() {
             index[usize::from(entry.command)] = at as u16;
@@ -1624,7 +1632,10 @@ fn root_entry(command: u16) -> Option<&'static Entry> {
 fn entries_any_table(command: u16) -> &'static [&'static Entry] {
     static INDEX: std::sync::OnceLock<Vec<Vec<&'static Entry>>> = std::sync::OnceLock::new();
     let index = INDEX.get_or_init(|| {
-        let all = || ROOT.iter().chain(VARIANT_TABLES.iter().flat_map(|table| table.iter()));
+        let all = || {
+            ROOT.iter()
+                .chain(VARIANT_TABLES.iter().flat_map(|table| table.iter()))
+        };
         let size = all().map(|e| usize::from(e.command) + 1).max().unwrap_or(0);
         let mut index = vec![Vec::new(); size];
         for entry in all() {

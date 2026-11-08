@@ -170,7 +170,10 @@ fn dc_only_blocks_fill_quadrants_with_their_level_shifted_value() {
     // Luma levels 10, -20, 0, 100 in the four quadrants (DC = 8 * level with q = 1).
     let data = stream(16, 16, &mcu([80, -160, 0, 800, 0, 0]), FLAGS);
     let image = jbp1::decode(&data).unwrap();
-    assert_eq!((image.width, image.height, image.rgba.len()), (16, 16, 16 * 16 * 4));
+    assert_eq!(
+        (image.width, image.height, image.rgba.len()),
+        (16, 16, 16 * 16 * 4)
+    );
     let gray = |x: usize, y: usize| {
         let at = (y * 16 + x) * 4;
         let pixel = &image.rgba[at..at + 3];

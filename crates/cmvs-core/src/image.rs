@@ -304,7 +304,10 @@ mod decoded_cache_tests {
         }
         // Touch 1, so 2 is now the oldest.
         let hit = cache.get(1).unwrap();
-        assert!(std::ptr::eq(hit.pixels.pixels(), cache.get(1).unwrap().pixels.pixels()));
+        assert!(std::ptr::eq(
+            hit.pixels.pixels(),
+            cache.get(1).unwrap().pixels.pixels()
+        ));
         cache.insert(4, &image(4, 4));
         assert!(cache.get(2).is_none());
         assert!([1, 3, 4].iter().all(|&id| cache.get(id).is_some()));

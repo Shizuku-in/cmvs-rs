@@ -152,7 +152,11 @@ fn lzss_prefix(
                     }
                 } else {
                     for i in length..length + n {
-                        output[i] = if i >= distance { output[i - distance] } else { 0 };
+                        output[i] = if i >= distance {
+                            output[i - distance]
+                        } else {
+                            0
+                        };
                     }
                 }
                 length += n;
