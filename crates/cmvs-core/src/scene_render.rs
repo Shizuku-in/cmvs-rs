@@ -1819,6 +1819,54 @@ fn draw(pixels: &mut [u8], width: u32, height: u32, layer: Layer<'_>) {
             return;
         }
     };
+    if mask.is_none() && screen_mask.is_none() && matches!(blend, Blend::Replace | Blend::Alpha) {
+        let (x0, x1) = (left.max(0), (left + w).min(i64::from(width)));
+        let (y0, y1) = (top.max(0), (top + h).min(i64::from(height)));
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        let source_x = sx + x0 - left;
+        let source_y = sy + y0 - top;
+        let columns = (x1 - x0) as usize;
+        let source_width = i64::from(image.pixels.width());
+        if source_x >= 0
+            && source_x + x1 - x0 <= source_width
+            && source_y >= 0
+            && source_y + y1 - y0 <= i64::from(image.pixels.height())
+        {
+            // Contiguous, unscaled rows need no per-pixel coordinate clamp. Keep
+            // destination alpha, and bypass blending only for RGB replacement.
+            let replace =
+                matches!(blend, Blend::Replace) || (opacity == 255 && image.pixels.is_opaque());
+            for y in y0..y1 {
+                let source_at = ((source_y + y - y0) * source_width + source_x) as usize * 4;
+                let target_at = (y * i64::from(width) + x0) as usize * 4;
+                let source = &image.pixels.pixels()[source_at..source_at + columns * 4];
+                let target = &mut pixels[target_at..target_at + columns * 4];
+                let pairs = target
+                    .as_chunks_mut::<4>()
+                    .0
+                    .iter_mut()
+                    .zip(source.as_chunks::<4>().0);
+                if replace {
+                    for (target, source) in pairs {
+                        target[..3].copy_from_slice(&source[..3]);
+                    }
+                } else {
+                    for (target, source) in pairs {
+                        let alpha = (u32::from(source[3]) * opacity + 127) / 255;
+                        put(
+                            &mut target[..3],
+                            [source[0], source[1], source[2]],
+                            alpha,
+                            Blend::Alpha,
+                        );
+                    }
+                }
+            }
+            return;
+        }
+    }
     // Shader factor per mask green byte; the float result is rounded into the 8-bit alpha,
     // so pixels approximate rather than match the device's blending.
     let shade = mask.map(|mask| {
@@ -2042,6 +2090,96 @@ mod scale_tests {
     }
 
     use super::*;
+
+    #[test]
+    fn unscaled_replacement_rows_preserve_alpha_clipping_and_blend_rules() {
+        let size = [5, 3];
+        for opaque in [false, true] {
+            let source: Vec<_> = (0..6 * 4)
+                .flat_map(|i| [i * 7, 255 - i * 3, i * 11, if opaque { 255 } else { i * 9 }])
+                .collect();
+            let image = ObjectImage {
+                name: Vec::new(),
+                filter: None,
+                alpha: true,
+                surface: false,
+                pixels: RgbaImage::new(6, 4, source).unwrap(),
+            };
+            for (rect, corner) in [
+                ([0, 0, 6, 4], [0, 0]),
+                ([1, 1, 4, 2], [1, 1]),
+                ([0, 0, 6, 4], [-2, -1]),
+                ([-1, -1, 8, 6], [-1, -1]),
+                ([8, 7, 2, 2], [0, 0]),
+                ([0, 0, 6, 4], [10, 0]),
+            ] {
+                for blend in [
+                    Blend::Replace,
+                    Blend::Alpha,
+                    Blend::Additive,
+                    Blend::BlackReplace,
+                    Blend::BlackAlpha,
+                    Blend::BlackAdditive,
+                ] {
+                    for opacity in [0, 127, 255] {
+                        let mut expected: Vec<_> = (0..size[0] * size[1])
+                            .flat_map(|i| [30, 50, 70, i as u8 * 13])
+                            .collect();
+                        let mut actual = expected.clone();
+                        let [sx, sy, w, h] = rect;
+                        let [left, top] = corner;
+                        for y in top.max(0)..(top + h).min(i64::from(size[1])) {
+                            for x in left.max(0)..(left + w).min(i64::from(size[0])) {
+                                let source_x = (sx + x - left).clamp(0, 5);
+                                let source_y = (sy + y - top).clamp(0, 3);
+                                let at = (source_y * 6 + source_x) as usize * 4;
+                                let pixel = &image.pixels.pixels()[at..at + 4];
+                                let alpha = (u32::from(pixel[3]) * opacity + 127) / 255;
+                                let dst = (y * i64::from(size[0]) + x) as usize * 4;
+                                for c in 0..3 {
+                                    let s = if matches!(
+                                        blend,
+                                        Blend::BlackReplace
+                                            | Blend::BlackAlpha
+                                            | Blend::BlackAdditive
+                                    ) {
+                                        0
+                                    } else {
+                                        u32::from(pixel[c])
+                                    };
+                                    let t = u32::from(expected[dst + c]);
+                                    expected[dst + c] = match blend {
+                                        Blend::Replace | Blend::BlackReplace => s as u8,
+                                        Blend::Alpha | Blend::BlackAlpha => {
+                                            ((s * alpha + t * (255 - alpha) + 127) / 255) as u8
+                                        }
+                                        Blend::Additive | Blend::BlackAdditive => {
+                                            (t + (s * alpha + 127) / 255).min(255) as u8
+                                        }
+                                    };
+                                }
+                            }
+                        }
+                        draw(
+                            &mut actual,
+                            size[0],
+                            size[1],
+                            Layer::Image {
+                                image: &image,
+                                rect,
+                                corner,
+                                alpha: opacity,
+                                mask: None,
+                                screen_mask: None,
+                                blend,
+                            },
+                        );
+                        assert_eq!(actual, expected);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn source_rectangles_keep_their_extent_and_clamp_texels_on_every_edge() {

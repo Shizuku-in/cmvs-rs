@@ -6,6 +6,7 @@ use std::sync::{Arc, OnceLock};
 struct ImageData {
     pixels: Vec<u8>,
     content_digest: OnceLock<u128>,
+    opaque: OnceLock<bool>,
 }
 
 #[derive(Clone)]
@@ -89,6 +90,7 @@ impl RgbaImage {
             data: Arc::new(ImageData {
                 pixels,
                 content_digest: OnceLock::new(),
+                opaque: OnceLock::new(),
             }),
             frame: None,
         })
@@ -101,6 +103,13 @@ impl RgbaImage {
     }
     pub fn pixels(&self) -> &[u8] {
         &self.data.pixels
+    }
+    /// Shared immutable pixels need at most one alpha scan, including across clones.
+    pub(crate) fn is_opaque(&self) -> bool {
+        *self
+            .data
+            .opaque
+            .get_or_init(|| self.pixels().as_chunks::<4>().0.iter().all(|p| p[3] == 255))
     }
     /// Nearest-neighbor, centered aspect fit over 0x00RRGGBB; not CMVS scene blending.
     pub fn draw_fit(&self, target: &mut [u32], width: u32, height: u32) -> Result<(), FormatError> {
@@ -163,6 +172,29 @@ impl RgbaImage {
         }
         let xs = view.left.max(0)..(view.left + i64::from(view.width)).min(i64::from(width));
         let ys = view.top.max(0)..(view.top + i64::from(view.height)).min(i64::from(height));
+        let opaque = self.is_opaque();
+        if view.width == self.width && view.height == self.height {
+            // Both filters sample exact texels at native size, including centered
+            // views and cropped cover modes. Avoid coordinate division and four taps.
+            let columns = (xs.end - xs.start) as usize;
+            let source_x = (xs.start - view.left) as usize;
+            for y in ys {
+                let source = ((y - view.top) as usize * self.width as usize + source_x) * 4;
+                let target_at = y as usize * width as usize + xs.start as usize;
+                let source = &self.pixels()[source..source + columns * 4];
+                let target = &mut target[target_at..target_at + columns];
+                if opaque {
+                    for (target, pixel) in target.iter_mut().zip(source.as_chunks::<4>().0) {
+                        *target = rgb(*pixel);
+                    }
+                } else {
+                    for (target, pixel) in target.iter_mut().zip(source.as_chunks::<4>().0) {
+                        composite(target, *pixel);
+                    }
+                }
+            }
+            return Ok(());
+        }
         if linear {
             // Per-axis source pair and weight for each target column/row in view.
             let taps = |range: std::ops::Range<i64>, origin: i64, span: u32, source: u32| {
@@ -180,6 +212,47 @@ impl RgbaImage {
             let columns = taps(xs.clone(), view.left, view.width, self.width);
             let rows = taps(ys.clone(), view.top, view.height, self.height);
             let stride = self.width as usize;
+            if opaque {
+                // Adjacent output rows often share source rows. Keep horizontal
+                // RGB sums at 8-bit fractional precision and round only at output.
+                let mut first = vec![[0u32; 3]; columns.len()];
+                let mut second = first.clone();
+                let (mut first_y, mut second_y) = (None, None);
+                let sample_row = |y: usize, row: &mut [[u32; 3]]| {
+                    let source = self.pixels()[y * stride * 4..][..stride * 4]
+                        .as_chunks::<4>()
+                        .0;
+                    for (out, &(x0, x1, fx)) in row.iter_mut().zip(&columns) {
+                        let (a, b, fx) = (source[x0], source[x1], fx as u32);
+                        *out = std::array::from_fn(|c| {
+                            u32::from(a[c]) * (256 - fx) + u32::from(b[c]) * fx
+                        });
+                    }
+                };
+                for (y, &(y0, y1, fy)) in ys.zip(&rows) {
+                    if second_y == Some(y0) {
+                        std::mem::swap(&mut first, &mut second);
+                        std::mem::swap(&mut first_y, &mut second_y);
+                    }
+                    if first_y != Some(y0) {
+                        sample_row(y0, &mut first);
+                        first_y = Some(y0);
+                    }
+                    if y1 != y0 && second_y != Some(y1) {
+                        sample_row(y1, &mut second);
+                        second_y = Some(y1);
+                    }
+                    let below = if y0 == y1 { &first } else { &second };
+                    let fy = fy as u32;
+                    let target_at = y as usize * width as usize + xs.start as usize;
+                    let target = &mut target[target_at..target_at + columns.len()];
+                    for ((target, a), b) in target.iter_mut().zip(&first).zip(below) {
+                        let channel = |c| (a[c] * (256 - fy) + b[c] * fy + 32768) >> 16;
+                        *target = channel(0) << 16 | channel(1) << 8 | channel(2);
+                    }
+                }
+                return Ok(());
+            }
             for (y, &(y0, y1, fy)) in ys.zip(&rows) {
                 for (x, &(x0, x1, fx)) in xs.clone().zip(&columns) {
                     let weights = [
@@ -206,6 +279,29 @@ impl RgbaImage {
                             << shift
                     };
                     *dst = channel(0, 16) | channel(1, 8) | channel(2, 0);
+                }
+            }
+            return Ok(());
+        }
+        if opaque {
+            let columns: Vec<_> = xs
+                .clone()
+                .map(|x| {
+                    ((x - view.left) as u64 * u64::from(self.width) / u64::from(view.width))
+                        as usize
+                })
+                .collect();
+            for y in ys {
+                let source_y =
+                    (y - view.top) as u64 * u64::from(self.height) / u64::from(view.height);
+                let source_at = source_y as usize * self.width as usize * 4;
+                let source = self.pixels()[source_at..][..self.width as usize * 4]
+                    .as_chunks::<4>()
+                    .0;
+                let target_at = y as usize * width as usize + xs.start as usize;
+                let target = &mut target[target_at..target_at + columns.len()];
+                for (target, &source_x) in target.iter_mut().zip(&columns) {
+                    *target = rgb(source[source_x]);
                 }
             }
             return Ok(());
@@ -267,6 +363,19 @@ impl RgbaImage {
         }
         png
     }
+}
+
+fn rgb([r, g, b, _]: [u8; 4]) -> u32 {
+    u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)
+}
+
+fn composite(target: &mut u32, pixel: [u8; 4]) {
+    let alpha = u32::from(pixel[3]);
+    let channel = |i: usize, shift: u32| {
+        ((u32::from(pixel[i]) * alpha + ((*target >> shift) & 255) * (255 - alpha) + 127) / 255)
+            << shift
+    };
+    *target = channel(0, 16) | channel(1, 8) | channel(2, 0);
 }
 
 /// CRC-32 (ISO-HDLC, reflected 0xEDB88320) as PNG chunks require.
@@ -346,6 +455,20 @@ pub fn content_hash(bytes: &[u8]) -> u128 {
 #[cfg(test)]
 mod content_digest_tests {
     use super::*;
+    #[test]
+    fn clones_share_alpha_classification_without_changing_image_identity() {
+        for alpha in [0, 254, 255] {
+            let image = RgbaImage::new(2, 1, vec![1, 2, 3, 255, 4, 5, 6, alpha]).unwrap();
+            let clone = image.clone();
+            let key = image.cache_key();
+            assert!(image.data.opaque.get().is_none());
+            assert_eq!(clone.is_opaque(), alpha == 255);
+            assert_eq!(image.data.opaque.get(), Some(&(alpha == 255)));
+            assert_eq!(image.cache_key(), key);
+            assert_eq!(image, clone);
+        }
+    }
+
     #[test]
     fn temporary_clones_share_pixels_and_initialize_the_cached_digest() {
         let cached = RgbaImage::new(1, 1, vec![1, 2, 3, 4]).unwrap();
