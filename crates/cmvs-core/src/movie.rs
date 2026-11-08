@@ -14,12 +14,13 @@ use crate::{
     audio::MovieAudioClock, bytecode::DecodeError, cmv::CmvIndex, dispatch::Call, evaluate::error,
     machine::Machine, platform::resolve_under,
 };
-use std::{error::Error, io, path::Path};
+use std::{error::Error, io, path::Path, sync::Arc};
 
 pub const MOVIE_SLOTS: usize = 3;
 mod cmv_player;
 mod mgv_player;
 mod playback;
+mod prefetch;
 
 pub use cmv_player::Movie;
 use mgv_player::MgvMovie;
@@ -108,11 +109,14 @@ pub struct SceneMovie {
     pub object_slot: u8,
     pub name: Vec<u8>,
     pub frame: u32,
-    pub index: SceneMovieIndex,
-    data: Vec<u8>,
+    /// Shared with the prefetch worker, like `data` and `base`.
+    pub index: Arc<SceneMovieIndex>,
+    data: Arc<Vec<u8>>,
     base: Option<crate::raster::RgbaImage>,
     pub playback: MoviePlayback,
     load_mode: u32,
+    /// Unique within the process: frames prefetched for another player are never used.
+    id: u64,
 }
 
 /// Container-specific scene frame decoding; timing and object ownership are shared.
@@ -182,6 +186,49 @@ impl SceneMovie {
     pub fn encoded(&self) -> &[u8] {
         &self.data
     }
+    fn new(
+        object_slot: u8,
+        name: Vec<u8>,
+        frame: u32,
+        (index, base): (SceneMovieIndex, Option<crate::raster::RgbaImage>),
+        data: Vec<u8>,
+        playback: MoviePlayback,
+        load_mode: u32,
+    ) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        Self {
+            object_slot,
+            name,
+            frame,
+            index: Arc::new(index),
+            data: Arc::new(data),
+            base,
+            playback,
+            load_mode,
+            id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        }
+    }
+    /// Frame `frame`, from the prefetch worker when it was asked for exactly that frame.
+    fn decode(
+        &self,
+        prefetch: Option<&mut prefetch::ScenePrefetch>,
+        frame: u32,
+    ) -> Result<crate::raster::RgbaImage, Box<dyn Error>> {
+        if let Some(result) = prefetch.and_then(|p| p.take(self.id, frame)) {
+            return result;
+        }
+        self.index.decode(&self.data, frame, self.base.as_ref())
+    }
+    /// Asks the worker for the frame playback most likely shows next.
+    fn prefetch_next(&self, prefetch: Option<&mut prefetch::ScenePrefetch>) {
+        if let Some(prefetch) = prefetch
+            && let Some(next) = self
+                .playback
+                .predicted_next(self.frame, self.index.max_sequence())
+        {
+            prefetch.request(self.id, next, &self.index, &self.data, &self.base);
+        }
+    }
 }
 
 /// 0x1400390b0's container setup, shared by 0x2308 and the loader.
@@ -231,6 +278,8 @@ pub struct MovieHost {
     scene_clock: u32,
     /// Scene playback mode 15 (NATSUUTA 0x422fc0); other builds keep refusing it.
     clock_mode: bool,
+    /// Decodes scene frames ahead on a worker thread once a host enables it.
+    prefetch: Option<prefetch::ScenePrefetch>,
 }
 
 impl MovieHost {
@@ -284,6 +333,12 @@ impl MovieHost {
 
     pub fn set_mgv_factory(&mut self, factory: Box<dyn crate::mgv::DecoderFactory>) {
         self.mgv_factory = Some(factory);
+    }
+    /// Decodes the next scene-movie frame on a worker thread while the current one is
+    /// shown; `on_thread_start` runs first on that thread (e.g. to pick a CPU core).
+    /// Frames are identical to synchronous decoding. Hosts without threads never call it.
+    pub fn set_scene_prefetch(&mut self, on_thread_start: fn()) {
+        self.prefetch = Some(prefetch::ScenePrefetch::new(on_thread_start));
     }
     pub fn has_player(&self) -> bool {
         self.player.is_some() || self.mgv_player.is_some()
@@ -411,16 +466,15 @@ impl MovieHost {
             0x4014
         })?;
         scene.replace_movie_object(object_slot, object);
-        self.slots[slot as usize] = Some(SceneMovie {
+        self.slots[slot as usize] = Some(SceneMovie::new(
             object_slot,
             name,
             frame,
-            index,
+            (index, base),
             data,
-            base,
             playback,
             load_mode,
-        });
+        ));
         Ok(())
     }
 
@@ -645,16 +699,15 @@ impl MovieHost {
                 object.draw = Some(draw);
             }
             object.image = Some(index.frame_image(&record.name, pixels));
-            players[slot as usize] = Some(SceneMovie {
-                load_mode: record.load_mode,
-                object_slot: record.object_slot,
-                name: record.name,
-                frame: record.frame,
-                index,
+            players[slot as usize] = Some(SceneMovie::new(
+                record.object_slot,
+                record.name,
+                record.frame,
+                (index, base),
                 data,
-                base,
-                playback: record.playback,
-            });
+                record.playback,
+                record.load_mode,
+            ));
         }
         Ok(players)
     }

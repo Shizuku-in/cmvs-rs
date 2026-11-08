@@ -1004,6 +1004,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
     startup.set_decode_movie_frames(true);
     startup.set_mgv_factory(Box::new(crate::video::PrefetchTheoraFactory::default()));
+    startup.set_scene_prefetch(|| {});
     if native_audio {
         #[cfg(feature = "audio-output")]
         {

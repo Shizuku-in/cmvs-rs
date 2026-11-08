@@ -366,6 +366,10 @@ impl<'a> Startup<'a> {
     pub fn set_mgv_factory(&mut self, factory: Box<dyn crate::mgv::DecoderFactory>) {
         self.movies.set_mgv_factory(factory);
     }
+    /// See [`crate::movie::MovieHost::set_scene_prefetch`].
+    pub fn set_scene_prefetch(&mut self, on_thread_start: fn()) {
+        self.movies.set_scene_prefetch(on_thread_start);
+    }
     pub fn set_decode_movie_frames(&mut self, enabled: bool) {
         self.movies.set_decode_frames(enabled);
     }

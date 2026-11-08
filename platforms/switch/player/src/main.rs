@@ -187,6 +187,9 @@ fn run(
             sys::prefer_core(2);
         },
     }));
+    startup.set_scene_prefetch(|| {
+        sys::prefer_core(2);
+    });
     startup.set_record_text(true);
     startup.set_save_clock(Box::new(cmvs_core::runner::utc_save_time));
     let mut font = FontRenderer::from_bytes(font_bytes(base)?, 0)?;

@@ -110,6 +110,37 @@ impl MoviePlayback {
         }
         Ok(target)
     }
+
+    /// The frame one more step of [`Self::advance`] would show, for prefetching: `None`
+    /// when playback is stopped or would stop, stay, or leave the movie.
+    pub(super) fn predicted_next(&self, frame: u32, frames: u32) -> Option<u32> {
+        if !self.active || self.paused {
+            return None;
+        }
+        let next = if self.mode == 15 {
+            frame.wrapping_add(1).checked_rem(frames)?
+        } else {
+            let key = self.segments[self.current];
+            if frame < key.end {
+                if self.mode == 10 && self.stop_frame != 0 && frame == self.stop_frame {
+                    return None;
+                }
+                frame.wrapping_add(1)
+            } else if self.mode == 10 {
+                return None;
+            } else if let Some(next) = self.pending {
+                match self.segments[next].start {
+                    start if start == u32::MAX || start == frame => frame.wrapping_add(1),
+                    start => start,
+                }
+            } else if key.looping {
+                key.start
+            } else {
+                return None;
+            }
+        };
+        (next != frame && next < frames).then_some(next)
+    }
 }
 impl MovieHost {
     /// HAROUSE 0x450830/0x4508b0: mode setter and raw segment/frame query.
@@ -216,11 +247,7 @@ impl MovieHost {
                     .error("scene movie bound object was destroyed or replaced")
                     .into());
             }
-            Some(
-                movie
-                    .index
-                    .decode(&movie.data, target, movie.base.as_ref())?,
-            )
+            Some(movie.decode(self.prefetch.as_mut(), target)?)
         } else {
             None
         };
@@ -315,6 +342,10 @@ impl MovieHost {
         scene: &mut SceneHost,
     ) -> Result<(), Box<dyn Error>> {
         self.scene_clock = self.scene_clock.wrapping_add(delta);
+        if let Some(prefetch) = &mut self.prefetch {
+            let live: Vec<_> = self.slots.iter().flatten().map(|m| m.id).collect();
+            prefetch.retain_players(&live);
+        }
         for movie in self.slots.iter_mut().flatten() {
             let mut playback = movie.playback.clone();
             let target = playback.advance(
@@ -333,9 +364,7 @@ impl MovieHost {
                 {
                     return Err("scene movie bound object was destroyed or replaced".into());
                 }
-                let pixels = movie
-                    .index
-                    .decode(&movie.data, target, movie.base.as_ref())?;
+                let pixels = movie.decode(self.prefetch.as_mut(), target)?;
                 scene
                     .object_mut(movie.object_slot)
                     .expect("validated")
@@ -346,6 +375,7 @@ impl MovieHost {
             }
             movie.frame = target;
             movie.playback = playback;
+            movie.prefetch_next(self.prefetch.as_mut());
         }
         Ok(())
     }

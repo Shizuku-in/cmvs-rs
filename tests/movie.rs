@@ -1539,7 +1539,7 @@ fn cmv6_scene_creation_and_segment_playback_share_the_existing_ownership_rules()
         assert_eq!(vm.stack().len_bytes(), 0);
         assert_eq!(vm.state().system_integer(0), Some(123));
         let p = movies.scene_player(2).unwrap();
-        assert!(matches!(p.index, cmvs_rs::movie::SceneMovieIndex::Cmv6(_)));
+        assert!(matches!(*p.index, cmvs_rs::movie::SceneMovieIndex::Cmv6(_)));
         assert!(!p.playback.active);
         assert_eq!(p.frame, 1);
         assert!(
@@ -1645,7 +1645,7 @@ fn cmv8_scene_creation_binds_an_alpha_image_and_playback_keeps_it() {
         .shared_create_scene(&mut vm, &mut scene, &mut files)
         .unwrap();
     assert!(matches!(
-        movies.scene_player(1).unwrap().index,
+        *movies.scene_player(1).unwrap().index,
         cmvs_rs::movie::SceneMovieIndex::Cmv8(_)
     ));
     let alpha_of = |scene: &cmvs_rs::scene::SceneHost| {
@@ -1667,5 +1667,46 @@ fn cmv8_scene_creation_binds_an_alpha_image_and_playback_keeps_it() {
     for expected in [100, 150, 50] {
         movies.advance_scene(67, &mut scene).unwrap();
         assert_eq!(alpha_of(&scene), expected);
+    }
+}
+
+#[test]
+fn prefetched_scene_frames_match_synchronous_decoding_through_skips_stalls_and_loops() {
+    // CMV6 and CMV9 at 15 fps; display steps include stalls, skipped frames and loop wraps,
+    // so prefetched frames are both used and discarded.
+    let deltas = [67, 0, 33, 34, 67, 200, 67, 67, 1, 66, 133, 67, 67, 67, 400, 67];
+    for data in [slot_fixture::cmv6(4, false), slot_fixture::movie_frames(8, 15, 1, false)] {
+        let run = |prefetch: bool| {
+            let mut code = create_code(1, 28, 0);
+            scene_start(&mut code, &[1, 0, 0, u32::MAX, 1]);
+            let script = program(&code, b"synthetic.cmv\0");
+            let mut vm = Machine::new(&script).unwrap();
+            let mut movies = MovieHost::default();
+            if prefetch {
+                movies.set_scene_prefetch(|| {});
+            }
+            let mut scene = cmvs_rs::scene::SceneHost::default();
+            let mut files = SceneFiles(Some(data.clone()));
+            pending(&mut vm);
+            movies
+                .shared_create_scene(&mut vm, &mut scene, &mut files)
+                .unwrap();
+            pending(&mut vm);
+            movies.shared_start_scene(&mut vm).unwrap();
+            let mut seen = vec![];
+            for delta in deltas {
+                movies.advance_scene(delta, &mut scene).unwrap();
+                let image = scene.object(28).unwrap().image.as_ref().unwrap();
+                seen.push((
+                    movies.scene_player(1).unwrap().frame,
+                    image.pixels.pixels().to_vec(),
+                ));
+            }
+            seen
+        };
+        let expected = run(false);
+        let frames: std::collections::BTreeSet<_> = expected.iter().map(|(f, _)| *f).collect();
+        assert!(frames.len() > 2, "{frames:?}");
+        assert_eq!(run(true), expected);
     }
 }
