@@ -3,8 +3,23 @@ use super::{LineBreakRules, TextObject};
 use crate::TextEncoding;
 
 /// 0x14005b050: 1 for a character of the hanging set (+336), 2 for the inseparable set
-/// (+400), else 0. Shared by measurement and output.
-pub(super) fn line_break_kind(rules: &LineBreakRules, code: u16) -> Result<u8, &'static str> {
+/// (+400), else 0. Shared by measurement and output. Under UTF-8 the sets hold UTF-8
+/// characters, matched by their glyph codes.
+pub(super) fn line_break_kind(
+    encoding: TextEncoding,
+    rules: &LineBreakRules,
+    code: u16,
+) -> Result<u8, &'static str> {
+    if encoding == TextEncoding::Utf8 {
+        for (kind, bytes) in [(1, &rules.hanging), (2, &rules.inseparable)] {
+            let set =
+                core::str::from_utf8(bytes).map_err(|_| "line-break set is not valid UTF-8")?;
+            if set.chars().any(|ch| u32::from(ch) == u32::from(code)) {
+                return Ok(kind);
+            }
+        }
+        return Ok(0);
+    }
     for (kind, bytes) in [(1, &rules.hanging), (2, &rules.inseparable)] {
         // 0x14005b050 walks two bytes at a time; an odd final byte has the NUL
         // terminator as its second byte. Its next iteration would read beyond it.
@@ -24,6 +39,7 @@ pub(super) fn line_break_kind(rules: &LineBreakRules, code: u16) -> Result<u8, &
 }
 
 pub(super) struct Layout<'a> {
+    pub(super) encoding: TextEncoding,
     pub(super) text: &'a TextObject,
     pub(super) x: u32,
     pub(super) y: u32,
@@ -70,7 +86,7 @@ impl Layout<'_> {
 
     fn classify(&self, code: u16) -> Result<u8, &'static str> {
         match &self.text.line_break {
-            Some(rules) => line_break_kind(rules, code),
+            Some(rules) => line_break_kind(self.encoding, rules, code),
             None => Ok(0),
         }
     }
@@ -96,10 +112,10 @@ impl Layout<'_> {
                 }
                 self.newline(true, true)?;
             }
-        } else if self.x >= self.limit() && !matches!(code, 0x8141 | 0x8142 | 0x8176 | 0x8178) {
-            // The exempt codes are fixed Shift-JIS punctuation, also under GBK (see
-            // auxiliary_layout.rs). This branch increments the line number without
-            // resetting the byte count.
+        } else if self.x >= self.limit() && !self.encoding.no_break_codes().contains(&code) {
+            // The exempt codes are fixed punctuation of the encoding (see
+            // TextEncoding::no_break_codes). This branch increments the line number
+            // without resetting the byte count.
             self.newline(false, true)?;
         }
         Ok(())
@@ -138,6 +154,18 @@ impl Layout<'_> {
     }
 }
 
+/// The glyph code of the wide character at `i`. The bytes have already been split at the
+/// terminator, so only the length is checked, as in the original.
+fn wide(
+    encoding: TextEncoding,
+    bytes: &[u8],
+    i: usize,
+    len: usize,
+    truncated: &'static str,
+) -> Result<u16, &'static str> {
+    encoding.wide_code(bytes.get(i..i + len).ok_or(truncated)?)
+}
+
 pub(super) fn measure(
     encoding: TextEncoding,
     text: &TextObject,
@@ -148,6 +176,7 @@ pub(super) fn measure(
         .next()
         .expect("split has first item");
     let mut state = Layout {
+        encoding,
         text,
         x: text.cursor[0] as u32,
         y: text.cursor[1] as u32,
@@ -178,12 +207,20 @@ pub(super) fn measure(
                 // Only double-byte characters in the base advance the original counter.
                 loop {
                     let byte = *bytes.get(i).ok_or("ruby base is missing its slash")?;
-                    i += 1;
-                    if encoding.is_lead_byte(byte) {
-                        bytes.get(i).ok_or("truncated double-byte ruby character")?;
-                        i += 1;
+                    if let Some(len) = encoding.wide_len(byte) {
+                        wide(
+                            encoding,
+                            bytes,
+                            i,
+                            len,
+                            "truncated double-byte ruby character",
+                        )?;
+                        i += len;
                         state.add(true);
-                    } else if byte == b'/' {
+                        continue;
+                    }
+                    i += 1;
+                    if byte == b'/' {
                         break;
                     }
                 }
@@ -191,24 +228,35 @@ pub(super) fn measure(
                     let byte = *bytes
                         .get(i)
                         .ok_or("ruby annotation is missing its closing brace")?;
+                    if let Some(len) = encoding.wide_len(byte) {
+                        wide(
+                            encoding,
+                            bytes,
+                            i,
+                            len,
+                            "truncated double-byte ruby annotation",
+                        )?;
+                        i += len;
+                        continue;
+                    }
                     i += 1;
-                    if encoding.is_lead_byte(byte) {
-                        bytes
-                            .get(i)
-                            .ok_or("truncated double-byte ruby annotation")?;
-                        i += 1;
-                    } else if byte == b'}' {
+                    if byte == b'}' {
                         break;
                     }
                 }
             }
             byte if encoding.is_lead_byte(byte) => {
-                let second = *bytes
-                    .get(i + 1)
-                    .ok_or("truncated double-byte text character")?;
-                state.wide_wrap(u16::from_be_bytes([byte, second]))?;
+                let len = encoding.wide_len(byte).expect("lead byte");
+                let code = wide(
+                    encoding,
+                    bytes,
+                    i,
+                    len,
+                    "truncated double-byte text character",
+                )?;
+                state.wide_wrap(code)?;
                 state.add(true);
-                i += 2;
+                i += len;
             }
             byte => {
                 if state.x >= state.limit() {

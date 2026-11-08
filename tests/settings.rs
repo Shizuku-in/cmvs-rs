@@ -659,6 +659,50 @@ fn font_name_query_writes_the_bank_and_preserves_other_results() {
 }
 
 #[test]
+fn gbk_font_query_transcodes_only_the_legacy_default_name() {
+    let mut code = vec![];
+    command(&mut code, 0x22de, &[0, 0x8000_0000]);
+    let script = script(&code);
+    for face in [DEFAULT_FONT_FACE, b"\xba\xda\xcc\xe5".as_slice(), b"SimHei"] {
+        let mut vm = Machine::new_with_encoding(&script, cmvs_rs::TextEncoding::Gbk).unwrap();
+        let mut settings = SettingsHost::default();
+        settings.set_font_face(face).unwrap();
+        pending(&mut vm);
+        settings.try_handle(&mut vm).unwrap();
+        let expected = if face == DEFAULT_FONT_FACE {
+            b"\xa3\xcd\xa3\xd3 \xa5\xb4\xa5\xb7\xa5\xc3\xa5\xaf".as_slice()
+        } else {
+            face
+        };
+        assert_eq!(vm.resolve_string(0x8000_0000).unwrap(), expected);
+        assert_eq!(settings.font_face(), face);
+        assert_eq!(vm.state().system_integer(0), Some(1));
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
+}
+
+#[test]
+fn utf8_font_query_returns_the_default_name_in_utf8() {
+    let mut code = vec![];
+    command(&mut code, 0x22de, &[0, 0x8000_0000]);
+    let script = script(&code);
+    for face in [DEFAULT_FONT_FACE, "微软雅黑".as_bytes()] {
+        let mut vm = Machine::new_with_encoding(&script, cmvs_rs::TextEncoding::Utf8).unwrap();
+        let mut settings = SettingsHost::default();
+        settings.set_font_face(face).unwrap();
+        pending(&mut vm);
+        settings.try_handle(&mut vm).unwrap();
+        let expected = if face == DEFAULT_FONT_FACE {
+            "ＭＳ ゴシック".as_bytes()
+        } else {
+            face
+        };
+        assert_eq!(vm.resolve_string(0x8000_0000).unwrap(), expected);
+        assert_eq!(settings.font_face(), face);
+    }
+}
+
+#[test]
 fn font_writes_set_the_global_face_and_invalid_names_or_destinations_stay_pending() {
     let mut code = vec![];
     command(&mut code, 0x22de, &[1, 0x8000_0000]);

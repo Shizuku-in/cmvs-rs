@@ -5,13 +5,10 @@ use super::auxiliary::{AuxiliaryGlyph, AuxiliaryText};
 use crate::FormatError;
 use crate::TextEncoding;
 
-/// Shift-JIS 0x8141 、 0x8142 。 0x8176 」 0x8178 』 stay on the full line while +128 is
-/// set. Like the original's immediates these are fixed code values: under GBK they match
-/// other characters, as in the GBK-patched executables, not the Chinese punctuation.
-const NO_BREAK: [u16; 4] = [0x8141, 0x8142, 0x8176, 0x8178];
-/// Shift-JIS 0x814a ゛ is drawn a fifth of the size to the left and advances less; a
-/// fixed code value under GBK as well.
-const VOICED_MARK: u16 = 0x814a;
+// The no-break punctuation that stays on the full line while +128 is set and the voiced
+// mark come from `TextEncoding::no_break_codes` / `voiced_mark`. Like the original's
+// immediates they are fixed Shift-JIS code values under GBK too, matching other
+// characters as in the GBK-patched executables; UTF-8 uses the Unicode characters.
 /// 0x14002eb10 searches cells 1..1023 of the 1024-byte table at +416.
 const CELLS: u16 = 1024;
 /// 0x140073c80 passes a stack local as the measured ruby-line flag array; the frame holds
@@ -66,6 +63,7 @@ impl AuxiliaryText {
             layer: 0,
         };
         let no_break = self.words[&128] != 0;
+        let no_break_codes = encoding.no_break_codes();
         let (mut x, mut y) = (self.float(176), self.float(180));
         let mut line = 0u32;
         let mut glyphs = Vec::new();
@@ -116,10 +114,9 @@ impl AuxiliaryText {
                     if b == 0 {
                         return Err("unterminated auxiliary ruby group");
                     }
-                    if encoding.is_lead_byte(b) {
-                        let code = u16::from_be_bytes([b, byte(i + 1)]);
-                        i += 2;
-                        if self.at_edge(x) && !(no_break && NO_BREAK.contains(&code)) {
+                    if let Some((code, len)) = encoding.wide_at_unchecked(text, i)? {
+                        i += len;
+                        if self.at_edge(x) && !(no_break && no_break_codes.contains(&code)) {
                             wrap(&mut x, &mut y, &mut line)?;
                         }
                         glyphs.push(AuxiliaryGlyph {
@@ -140,8 +137,8 @@ impl AuxiliaryText {
                     if b == 0 {
                         return Err("unterminated auxiliary ruby group");
                     }
-                    if encoding.is_lead_byte(b) {
-                        i += 2;
+                    if let Some((_, len)) = encoding.wide_at_unchecked(text, i)? {
+                        i += len;
                     } else {
                         i += 1;
                         if b == b'}' {
@@ -151,17 +148,16 @@ impl AuxiliaryText {
                 }
                 continue;
             }
-            if !encoding.is_lead_byte(first) {
+            let Some((code, len)) = encoding.wide_at_unchecked(text, i)? else {
                 // 0x14002f7a2 compares with a word the caller never stored (r8's home slot).
                 return Err("half-width auxiliary text advance reads an uninitialized stack word");
-            }
-            let code = u16::from_be_bytes([first, byte(i + 1)]);
-            i += 2;
-            if self.at_edge(x) && !(no_break && NO_BREAK.contains(&code)) {
+            };
+            i += len;
+            if self.at_edge(x) && !(no_break && no_break_codes.contains(&code)) {
                 wrap(&mut x, &mut y, &mut line)?;
             }
             let mut position = [truncate(x), truncate(y)];
-            if code == VOICED_MARK {
+            if code == encoding.voiced_mark() {
                 position[0] = (position[0] as u32).wrapping_sub(size / 5) as i32;
                 x += (size_f * 0.5 - size_f / 5.0) + self.float(52);
             } else {
@@ -241,9 +237,9 @@ impl AuxiliaryText {
                     if b == 0 {
                         return Err("unterminated auxiliary ruby group");
                     }
-                    if encoding.is_lead_byte(b) {
+                    if let Some((_, len)) = encoding.wide_at_unchecked(text, i)? {
                         columns += 2;
-                        i += 2;
+                        i += len;
                         x += size_f + self.float(52);
                         widest = widest.max(columns);
                     } else {
@@ -258,8 +254,8 @@ impl AuxiliaryText {
                     if b == 0 {
                         return Err("unterminated auxiliary ruby group");
                     }
-                    if encoding.is_lead_byte(b) {
-                        i += 2;
+                    if let Some((_, len)) = encoding.wide_at_unchecked(text, i)? {
+                        i += len;
                     } else {
                         i += 1;
                         if b == b'}' {
@@ -269,12 +265,11 @@ impl AuxiliaryText {
                 }
                 continue;
             }
-            if encoding.is_lead_byte(first) {
-                let code = u16::from_be_bytes([first, byte(i + 1)]);
-                i += 2;
+            if let Some((code, len)) = encoding.wide_at_unchecked(text, i)? {
+                i += len;
                 let advance = size_f + self.float(52);
                 if x >= (self.float(16) + self.float(24)) - advance
-                    && !(no_break && NO_BREAK.contains(&code))
+                    && !(no_break && encoding.no_break_codes().contains(&code))
                 {
                     columns = 0;
                     lines += 1;

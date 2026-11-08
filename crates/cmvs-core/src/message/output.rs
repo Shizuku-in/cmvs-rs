@@ -147,13 +147,11 @@ pub(super) fn parse_group(
         let mut items = Vec::new();
         loop {
             let byte = *bytes.get(*i).filter(|&&b| b != 0).ok_or(missing)?;
-            if encoding.is_lead_byte(byte) {
-                let second = *bytes
-                    .get(*i + 1)
-                    .filter(|&&b| b != 0)
-                    .ok_or("truncated double-byte message character")?;
-                *i += 2;
-                items.push(Some(u16::from_be_bytes([byte, second])));
+            if let Some((code, len)) =
+                encoding.wide_at(bytes, *i, "truncated double-byte message character")?
+            {
+                *i += len;
+                items.push(Some(code));
             } else {
                 *i += 1;
                 items.push(None);
@@ -200,17 +198,18 @@ pub(super) fn encoded_length(encoding: TextEncoding, bytes: &[u8]) -> Result<u32
                     .wrapping_add(2 * group.base.iter().filter(|v| v.is_some()).count() as u32);
                 i = group.end;
             }
-            byte if encoding.is_lead_byte(byte) => {
-                bytes
-                    .get(i + 1)
-                    .filter(|&&b| b != 0)
-                    .ok_or("truncated double-byte message character")?;
-                count = count.wrapping_add(2);
-                i += 2;
-            }
             _ => {
-                count = count.wrapping_add(1);
-                i += 1;
+                // A wide character counts two cells, whatever its encoded length.
+                match encoding.wide_at(bytes, i, "truncated double-byte message character")? {
+                    Some((_, len)) => {
+                        count = count.wrapping_add(2);
+                        i += len;
+                    }
+                    None => {
+                        count = count.wrapping_add(1);
+                        i += 1;
+                    }
+                }
             }
         }
     }
@@ -268,15 +267,12 @@ pub(super) fn ruby_layout(
             }
             i = group.end;
             continue;
-        } else if encoding.is_lead_byte(byte) {
-            let second = *bytes
-                .get(i + 1)
-                .filter(|&&b| b != 0)
-                .ok_or("truncated double-byte message character")?;
-            i += 2;
-            let code = u16::from_be_bytes([byte, second]);
-            // Fixed Shift-JIS punctuation codes, also under GBK (see auxiliary_layout.rs).
-            (size, !matches!(code, 0x8141 | 0x8142 | 0x8176 | 0x8178))
+        } else if let Some((code, len)) =
+            encoding.wide_at(bytes, i, "truncated double-byte message character")?
+        {
+            i += len;
+            // Fixed punctuation codes of the encoding (see TextEncoding::no_break_codes).
+            (size, !encoding.no_break_codes().contains(&code))
         } else {
             i += 1;
             (size >> 1, true)
@@ -297,20 +293,21 @@ pub(super) fn ruby_layout(
 /// them. Past the line end, +528 counts hanging characters and repeats of an inseparable
 /// one; past the unsigned limit they wrap as well.
 pub(super) fn wraps(
+    encoding: TextEncoding,
     text: &mut TextObject,
     code: u16,
     x: u32,
     limit: u32,
 ) -> Result<bool, &'static str> {
     Ok(match &text.line_break {
-        // Fixed Shift-JIS punctuation codes, also under GBK (see auxiliary_layout.rs).
-        None => x >= limit && !matches!(code, 0x8141 | 0x8142 | 0x8176 | 0x8178),
+        // Fixed punctuation codes of the encoding (see TextEncoding::no_break_codes).
+        None => x >= limit && !encoding.no_break_codes().contains(&code),
         Some(_) if x < limit => {
             text.layout_scratch[1] = u32::from(code);
             false
         }
         Some(rules) => {
-            let overflow = match line_break_kind(rules, code)? {
+            let overflow = match line_break_kind(encoding, rules, code)? {
                 1 => true,
                 2 => text.layout_scratch[1] == u32::from(code),
                 _ => false,
@@ -486,7 +483,7 @@ fn append(
         if byte == b'{' {
             let group = parse_group(encoding, bytes, i + 1)?;
             i = group.end;
-            if wraps(text, 0, x, limit)? {
+            if wraps(encoding, text, 0, x, limit)? {
                 new_line(text, &mut line, &mut x, &mut y)?;
                 if text.line_break.is_some() {
                     text.layout_scratch = [0; 2];
@@ -538,15 +535,10 @@ fn append(
             }
             continue;
         }
-        let wide = encoding.is_lead_byte(byte);
-        let (code, wrap) = if wide {
-            let second = *bytes
-                .get(i + 1)
-                .filter(|&&b| b != 0)
-                .ok_or("truncated double-byte message character")?;
-            i += 2;
-            let code = u16::from_be_bytes([byte, second]);
-            (code, wraps(text, code, x, limit)?)
+        let wide = encoding.wide_at(bytes, i, "truncated double-byte message character")?;
+        let (code, wrap) = if let Some((code, len)) = wide {
+            i += len;
+            (code, wraps(encoding, text, code, x, limit)?)
         } else {
             i += 1;
             // Sign-extended to the 16-bit character word.
@@ -562,16 +554,13 @@ fn append(
                 text.layout_scratch = [0; 2];
             }
         }
-        let gx = if code == 0x814a {
-            x.wrapping_sub(size / 5)
-        } else {
-            x
-        };
+        let voiced = code == encoding.voiced_mark();
+        let gx = if voiced { x.wrapping_sub(size / 5) } else { x };
         last = Some(push(text, code, [gx, y], size, settings.outline)?);
         delay = retime(text, last, delay, interval, instant, settings)?;
-        let advance = if code == 0x814a {
+        let advance = if voiced {
             (size >> 1).wrapping_sub(size / 5)
-        } else if wide {
+        } else if wide.is_some() {
             size
         } else {
             size >> 1
@@ -588,8 +577,8 @@ fn append(
 /// Escapes are read only before a character: `\c` and `\t` are skipped, `\w` skips three
 /// bytes and `\n` returns the pen to the area's left edge one line down without counting a
 /// line or reserving ruby height; any other escape would loop forever in the original.
-/// Double-byte characters wrap as in 0x14005bc90; code 0x814a (Shift-JIS ゛, a fixed value
-/// in every encoding) sits size/5 left and advances size/2 − size/5. A `{base/ruby}` group
+/// Double-byte characters wrap as in 0x14005bc90; the voiced mark ゛ (Shift-JIS 0x814a, a
+/// fixed value under GBK too; U+309B under UTF-8) sits size/5 left and advances size/2 − size/5. A `{base/ruby}` group
 /// draws only its double-byte base characters, each wrapping on its own; the annotation is
 /// skipped. Single bytes advance by the measured GDI glyph width (at least half the size),
 /// supplied by an explicit font metrics backend. Without one they are rejected, as are
@@ -629,7 +618,7 @@ fn place(
             }
             let group = parse_group(encoding, bytes, i + 1)?;
             for &code in group.base.iter().flatten() {
-                if wraps(text, code, x, limit)? {
+                if wraps(encoding, text, code, x, limit)? {
                     new_line(text, &mut line, &mut x, &mut y)?;
                 }
                 push(text, code, [x, y], size, mode)?;
@@ -638,7 +627,9 @@ fn place(
             i = group.end;
             continue;
         }
-        if !encoding.is_lead_byte(byte) {
+        let Some((code, len)) =
+            encoding.wide_at(bytes, i, "truncated double-byte message character")?
+        else {
             let metrics =
                 metrics.ok_or("direct single-byte text requires a font metrics backend")?;
             let code = (byte as i8 as i16) as u16;
@@ -655,20 +646,15 @@ fn place(
             x = x.wrapping_add(width).wrapping_add(text.spacing[0] as u32);
             i += 1;
             continue;
-        }
-        let second = *bytes
-            .get(i + 1)
-            .filter(|&&b| b != 0)
-            .ok_or("truncated double-byte message character")?;
-        i += 2;
-        let code = u16::from_be_bytes([byte, second]);
-        if wraps(text, code, x, limit)? {
+        };
+        i += len;
+        if wraps(encoding, text, code, x, limit)? {
             new_line(text, &mut line, &mut x, &mut y)?;
             if text.line_break.is_some() {
                 text.layout_scratch = [0; 2];
             }
         }
-        let (gx, advance) = if code == 0x814a {
+        let (gx, advance) = if code == encoding.voiced_mark() {
             (x.wrapping_sub(size / 5), (size >> 1).wrapping_sub(size / 5))
         } else {
             (x, size)

@@ -15,9 +15,6 @@ pub(super) struct State {
     proportional: bool,
 }
 
-// Fixed Shift-JIS code values, independent of the game encoding; see auxiliary_layout.rs.
-const NO_BREAK: [u16; 4] = [0x8141, 0x8142, 0x8176, 0x8178];
-const VOICED_MARK: u16 = 0x814a;
 const ESCAPES: &str = "text escape that does not advance in the original";
 fn append(
     encoding: TextEncoding,
@@ -98,7 +95,7 @@ fn append(
                 return Err("ruby base exceeds the original's 32 glyph positions");
             }
             i = group.end;
-            if wraps(text, 0, x, limit)? {
+            if wraps(encoding, text, 0, x, limit)? {
                 new_line(text, &mut line, &mut x, &mut y)?;
                 if text.line_break.is_some() {
                     text.layout_scratch = [0; 2];
@@ -136,10 +133,14 @@ fn append(
             };
             // 0x1400611f0: proportional ruby ignores extra ruby spacing. A run of
             // middle dots matching the base count is centred on each base cell. The dot
-            // is the fixed Shift-JIS code 0x8145 ・, also under GBK.
+            // is the fixed code of the encoding (see TextEncoding::middle_dot).
             let dots = proportional
                 && base_cells.len() == ruby_widths.len()
-                && group.ruby.iter().flatten().all(|&code| code == 0x8145);
+                && group
+                    .ruby
+                    .iter()
+                    .flatten()
+                    .all(|&code| code == encoding.middle_dot());
             let (mut ruby_x, step) = if proportional {
                 let total = ruby_widths.iter().fold(0u32, |sum, &w| sum.wrapping_add(w));
                 (
@@ -193,15 +194,10 @@ fn append(
             }
             continue;
         }
-        let wide = encoding.is_lead_byte(byte);
-        let (code, wrap) = if wide {
-            let second = *bytes
-                .get(i + 1)
-                .filter(|&&b| b != 0)
-                .ok_or("truncated double-byte message character")?;
-            i += 2;
-            let code = u16::from_be_bytes([byte, second]);
-            (code, wraps(text, code, x, limit)?)
+        let wide = encoding.wide_at(bytes, i, "truncated double-byte message character")?;
+        let (code, wrap) = if let Some((code, len)) = wide {
+            i += len;
+            (code, wraps(encoding, text, code, x, limit)?)
         } else {
             i += 1;
             // Sign-extended to the 16-bit character word.
@@ -217,18 +213,15 @@ fn append(
                 text.layout_scratch = [0; 2];
             }
         }
-        let gx = if code == 0x814a {
-            x.wrapping_sub(size / 5)
-        } else {
-            x
-        };
+        let voiced = code == encoding.voiced_mark();
+        let gx = if voiced { x.wrapping_sub(size / 5) } else { x };
         last = Some(push(text, code, [gx, y], size, settings.outline)?);
         delay = retime(text, last, delay, interval, instant, settings)?;
-        let advance = if code == 0x814a {
+        let advance = if voiced {
             (size >> 1).wrapping_sub(size / 5)
         } else if proportional {
             output_width(text, code, size, true, metrics)?
-        } else if wide {
+        } else if wide.is_some() {
             size
         } else {
             size >> 1
@@ -294,7 +287,7 @@ fn place(
                 new_line(text, &mut line, &mut x, &mut y)?;
             }
             for &code in group.base.iter().flatten() {
-                if !proportional && wraps(text, code, x, limit)? {
+                if !proportional && wraps(encoding, text, code, x, limit)? {
                     new_line(text, &mut line, &mut x, &mut y)?;
                 }
                 push(text, code, [x, y], size, mode)?;
@@ -304,7 +297,9 @@ fn place(
             i = group.end;
             continue;
         }
-        if !encoding.is_lead_byte(byte) {
+        let Some((code, len)) =
+            encoding.wide_at(bytes, i, "truncated double-byte message character")?
+        else {
             let metrics =
                 metrics.ok_or("direct single-byte text requires a font metrics backend")?;
             let code = (byte as i8 as i16) as u16;
@@ -325,20 +320,15 @@ fn place(
             x = x.wrapping_add(width).wrapping_add(text.spacing[0] as u32);
             i += 1;
             continue;
-        }
-        let second = *bytes
-            .get(i + 1)
-            .filter(|&&b| b != 0)
-            .ok_or("truncated double-byte message character")?;
-        i += 2;
-        let code = u16::from_be_bytes([byte, second]);
-        if wraps(text, code, x, limit)? {
+        };
+        i += len;
+        if wraps(encoding, text, code, x, limit)? {
             new_line(text, &mut line, &mut x, &mut y)?;
             if text.line_break.is_some() {
                 text.layout_scratch = [0; 2];
             }
         }
-        let (gx, advance) = if code == 0x814a {
+        let (gx, advance) = if code == encoding.voiced_mark() {
             (x.wrapping_sub(size / 5), (size >> 1).wrapping_sub(size / 5))
         } else {
             (x, output_width(text, code, size, proportional, metrics)?)
@@ -360,6 +350,7 @@ pub(super) fn measure_pixels(
     metrics: Option<&dyn super::GlyphMetrics>,
 ) -> Result<([u32; 3], [u32; 2]), &'static str> {
     let mut state = Layout {
+        encoding,
         text,
         x: text.cursor[0] as u32,
         y: text.cursor[1] as u32,
@@ -375,7 +366,7 @@ pub(super) fn measure_pixels(
             metrics
                 .ok_or("proportional text requires a font metrics backend")?
                 .advance_width(&text.face, code, size, text.bold)?
-        } else if code > 0xff && code < 0xff80 {
+        } else if encoding.is_wide_code(code) {
             size
         } else {
             metrics
@@ -421,30 +412,27 @@ pub(super) fn measure_pixels(
                         .get(i)
                         .filter(|&&b| b != 0)
                         .ok_or("unterminated measured ruby group")?;
-                    i += 1;
-                    if encoding.is_lead_byte(first) {
-                        let second = *bytes
-                            .get(i)
-                            .filter(|&&b| b != 0)
-                            .ok_or("truncated measured ruby character")?;
-                        i += 1;
+                    if let Some((code, len)) =
+                        encoding.wide_at(bytes, i, "truncated measured ruby character")?
+                    {
+                        i += len;
                         if close == b'/' {
-                            add(&mut state, u16::from_be_bytes([first, second]))?;
+                            add(&mut state, code)?;
                         }
-                    } else if first == close {
+                        continue;
+                    }
+                    i += 1;
+                    if first == close {
                         break;
                     }
                 }
             }
-        } else if encoding.is_lead_byte(byte) {
-            let second = *bytes
-                .get(i + 1)
-                .filter(|&&b| b != 0)
-                .ok_or("truncated measured text character")?;
-            let code = u16::from_be_bytes([byte, second]);
+        } else if let Some((code, len)) =
+            encoding.wide_at(bytes, i, "truncated measured text character")?
+        {
             state.wide_wrap(code)?;
             add(&mut state, code)?;
-            i += 2;
+            i += len;
         } else {
             let code = byte as i8 as i16 as u16;
             if state.x >= state.limit() {
@@ -472,6 +460,7 @@ impl AuxiliaryText {
     // 0x1400321a0, a2=0. JB/JNB at +0x98/+0xb1 compare the counters unsigned.
     pub(super) fn wraps_font_cells(
         &self,
+        encoding: TextEncoding,
         x: f32,
         code: u16,
         simple: bool,
@@ -479,16 +468,15 @@ impl AuxiliaryText {
     ) -> Result<bool, &'static str> {
         let no_break = self.word(128).expect("modeled field") != 0;
         let Some(rules) = &self.line_break else {
-            return Ok(
-                self.at_edge_font_cells(x) && (simple || !(no_break && NO_BREAK.contains(&code)))
-            );
+            return Ok(self.at_edge_font_cells(x)
+                && (simple || !(no_break && encoding.no_break_codes().contains(&code))));
         };
         if !self.at_edge_font_cells(x) {
             scratch[1] = u32::from(code);
             return Ok(false);
         }
         if !simple && no_break {
-            let kind = super::measure::line_break_kind(rules, code)?;
+            let kind = super::measure::line_break_kind(encoding, rules, code)?;
             if kind == 1 || (kind == 2 && scratch[1] == u32::from(code)) {
                 scratch[0] = scratch[0].wrapping_add(1);
                 return Ok((rules.max_overflow as u32) < scratch[0]);
@@ -512,10 +500,10 @@ impl AuxiliaryText {
                     .ok_or("proportional text requires a font metrics backend")?
                     .advance_width(&self.face, code, size, false)? as f32)
             } else {
-                Ok(if !(128..0xff80).contains(&code) {
-                    size_f * 0.5
-                } else {
+                Ok(if encoding.is_wide_code(code) {
                     size_f
+                } else {
+                    size_f * 0.5
                 })
             }
         };
@@ -580,7 +568,7 @@ impl AuxiliaryText {
                     } else {
                         byte(i + 1)
                     });
-                    if self.wraps_font_cells(x, code, true, &mut scratch)? {
+                    if self.wraps_font_cells(encoding, x, code, true, &mut scratch)? {
                         wrap(&mut x, &mut y, &mut line, &mut scratch)?;
                     }
                     glyphs.push(AuxiliaryGlyph {
@@ -612,7 +600,7 @@ impl AuxiliaryText {
             if first == b'{' {
                 // The FontCells proportional path wraps the group as a whole, unlike
                 // the root build's per-character auxiliary ruby-base layout.
-                if proportional && self.wraps_font_cells(x, 0, true, &mut scratch)? {
+                if proportional && self.wraps_font_cells(encoding, x, 0, true, &mut scratch)? {
                     wrap(&mut x, &mut y, &mut line, &mut scratch)?;
                 }
                 i += 1;
@@ -621,10 +609,11 @@ impl AuxiliaryText {
                     if b == 0 {
                         return Err("unterminated auxiliary ruby group");
                     }
-                    if encoding.is_lead_byte(b) {
-                        let code = u16::from_be_bytes([b, byte(i + 1)]);
-                        i += 2;
-                        if !proportional && self.wraps_font_cells(x, code, false, &mut scratch)? {
+                    if let Some((code, len)) = encoding.wide_at_unchecked(text, i)? {
+                        i += len;
+                        if !proportional
+                            && self.wraps_font_cells(encoding, x, code, false, &mut scratch)?
+                        {
                             wrap(&mut x, &mut y, &mut line, &mut scratch)?;
                         }
                         glyphs.push(AuxiliaryGlyph {
@@ -645,8 +634,8 @@ impl AuxiliaryText {
                     if b == 0 {
                         return Err("unterminated auxiliary ruby group");
                     }
-                    if encoding.is_lead_byte(b) {
-                        i += 2;
+                    if let Some((_, len)) = encoding.wide_at_unchecked(text, i)? {
+                        i += len;
                     } else {
                         i += 1;
                         if b == b'}' {
@@ -656,8 +645,14 @@ impl AuxiliaryText {
                 }
                 continue;
             }
-            if !encoding.is_lead_byte(first) {
-                if self.wraps_font_cells(x, first as i8 as i16 as u16, true, &mut scratch)? {
+            let Some((code, len)) = encoding.wide_at_unchecked(text, i)? else {
+                if self.wraps_font_cells(
+                    encoding,
+                    x,
+                    first as i8 as i16 as u16,
+                    true,
+                    &mut scratch,
+                )? {
                     wrap(&mut x, &mut y, &mut line, &mut scratch)?;
                 }
                 let code = first as i8 as i16 as u16;
@@ -669,14 +664,13 @@ impl AuxiliaryText {
                 x += width(code)? + self.float_font_cells(52);
                 i += 1;
                 continue;
-            }
-            let code = u16::from_be_bytes([first, byte(i + 1)]);
-            i += 2;
-            if self.wraps_font_cells(x, code, false, &mut scratch)? {
+            };
+            i += len;
+            if self.wraps_font_cells(encoding, x, code, false, &mut scratch)? {
                 wrap(&mut x, &mut y, &mut line, &mut scratch)?;
             }
             let mut position = [truncate(x), truncate(y)];
-            if code == VOICED_MARK {
+            if code == encoding.voiced_mark() {
                 position[0] = (position[0] as u32).wrapping_sub(size / 5) as i32;
                 x += (size_f * 0.5 - size_f / 5.0) + self.float_font_cells(52);
             } else {

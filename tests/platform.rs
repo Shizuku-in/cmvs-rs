@@ -1059,6 +1059,35 @@ fn scene_title_composes_window_text_and_keeps_base_title() {
 }
 
 #[test]
+fn scene_title_separator_uses_game_encoding() {
+    for (encoding, separator) in [
+        (cmvs_rs::TextEncoding::ShiftJis, &[0x81, 0x40][..]),
+        (cmvs_rs::TextEncoding::Gbk, &[0xa1, 0xa1]),
+        (cmvs_rs::TextEncoding::Utf8, "\u{3000}".as_bytes()),
+    ] {
+        let script = script(&[(0x2160, 0), (0x2161, 5)], b"Game\0- Opening -\0");
+        let mut vm = Machine::new_with_encoding(&script, encoding).unwrap();
+        let mut host = PlatformHost::default();
+        let mut backend = RecordingBackend::default();
+        let mut assets = Assets::default();
+        for _ in 0..2 {
+            pending(&mut vm);
+            host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
+                .unwrap();
+        }
+        let mut expected = b"Game".to_vec();
+        expected.extend(separator);
+        expected.extend(b"- Opening -");
+        assert_eq!(
+            backend.requests().last(),
+            Some(&PlatformRequest::Title(expected))
+        );
+        assert_eq!(host.title(), Some(b"Game".as_slice()));
+        assert_eq!(host.scene_title(), b"- Opening -");
+    }
+}
+
+#[test]
 fn cursor_selection_reads_once_default_restores_and_invalid_id_stops() {
     let script = script(&[(0x2099, 1), (0x2099, 1), (0x2099, 0), (0x2099, 2)], b"");
     let mut vm = Machine::new(&script).unwrap();

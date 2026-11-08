@@ -36,15 +36,12 @@ impl TextEncoding {
             _ => Err(FormatError("encoding must be shift-jis, gbk or utf-8")),
         }
     }
-    /// Resolve the engine scanner as well as the host codec before playback.
-    /// Host-only UTF-8 conversion remains available through `encode` / `decode`.
-    pub fn engine_encoding(self) -> Result<cmvs_core::TextEncoding, FormatError> {
+    /// The engine scanner matching the host codec.
+    pub fn engine_encoding(self) -> cmvs_core::TextEncoding {
         match self {
-            Self::ShiftJis => Ok(cmvs_core::TextEncoding::ShiftJis),
-            Self::Gbk => Ok(cmvs_core::TextEncoding::Gbk),
-            Self::Utf8 => Err(FormatError(
-                "UTF-8 engine text scanning is not supported; playback requires shift-jis or gbk",
-            )),
+            Self::ShiftJis => cmvs_core::TextEncoding::ShiftJis,
+            Self::Gbk => cmvs_core::TextEncoding::Gbk,
+            Self::Utf8 => cmvs_core::TextEncoding::Utf8,
         }
     }
     fn encoding(self) -> &'static encoding_rs::Encoding {
@@ -59,6 +56,12 @@ impl TextEncoding {
             .decode_without_bom_handling_and_without_replacement(bytes)
             .map(|s| s.into_owned())
             .ok_or(FormatError("invalid title bytes for selected encoding"))
+    }
+    fn decode_font_face(self, bytes: &[u8]) -> Result<String, FormatError> {
+        if bytes == cmvs_core::settings::DEFAULT_FONT_FACE {
+            return Ok("ＭＳ ゴシック".to_owned());
+        }
+        self.decode(bytes)
     }
     pub fn encode(self, text: &str) -> Result<Vec<u8>, FormatError> {
         let (bytes, _, unmappable) = self.encoding().encode(text);
@@ -303,7 +306,7 @@ impl PlatformBackend for NativeBackend<'_> {
             Some(fonts) => fonts
                 .family_name(current)
                 .unwrap_or_else(|_| "ＭＳ ゴシック".to_owned()),
-            None => self.encoding.decode(current)?,
+            None => self.encoding.decode_font_face(current)?,
         };
         let Some(face) = cmvs_native::choose_font(owner, &current)? else {
             println!("# native font dialog cancelled");
@@ -540,5 +543,40 @@ impl DesktopInput {
     }
     pub fn counts(&self) -> InputCounts {
         self.counts
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn font_dialog_decodes_legacy_default_and_custom_gbk_names() {
+        for encoding in [
+            TextEncoding::ShiftJis,
+            TextEncoding::Gbk,
+            TextEncoding::Utf8,
+        ] {
+            let displayed = cmvs_core::settings::font_face_for_encoding(
+                cmvs_core::settings::DEFAULT_FONT_FACE,
+                encoding.engine_encoding(),
+            );
+            assert_eq!(
+                encoding.decode_font_face(displayed).unwrap(),
+                "ＭＳ ゴシック"
+            );
+            assert_eq!(
+                encoding
+                    .decode_font_face(cmvs_core::settings::DEFAULT_FONT_FACE)
+                    .unwrap(),
+                "ＭＳ ゴシック"
+            );
+        }
+        assert_eq!(
+            TextEncoding::Gbk
+                .decode_font_face(b"\xba\xda\xcc\xe5")
+                .unwrap(),
+            "黑体"
+        );
     }
 }

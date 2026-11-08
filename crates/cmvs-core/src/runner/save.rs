@@ -986,7 +986,8 @@ impl Startup<'_> {
         if layout != SnapshotLayout::TextV1SceneLegacy {
             camera_host.restore_view(1, &snapshot.cameras[3])?;
         }
-        self.platform.restored_title(&snapshot.scene_title)?;
+        self.platform
+            .restored_title(&snapshot.scene_title, self.machine.text_encoding())?;
         self.machine.install_restore(vm);
         // Commit the hosts.
         self.history = history;
@@ -1034,8 +1035,11 @@ impl Startup<'_> {
             script_image: save.script_image.clone(),
         }));
         self.audio.restore(audio, self.audio_backend.as_mut())?;
-        self.platform
-            .restore_scene_title(snapshot.scene_title.clone(), backend)?;
+        self.platform.restore_scene_title(
+            snapshot.scene_title.clone(),
+            self.machine.text_encoding(),
+            backend,
+        )?;
         Ok(())
     }
 

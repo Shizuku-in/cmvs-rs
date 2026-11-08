@@ -5037,6 +5037,45 @@ fn inspected_window_children_share_the_table_for_draw_query_and_destroy() {
 }
 
 #[test]
+fn utf8_message_measurement_and_output_use_unicode_glyph_codes() {
+    for font_cells in [false, true] {
+        let mut code = vec![];
+        direct_output(&mut code);
+        call(&mut code, 0x211f, &[1, 1]);
+        call(&mut code, 0x210b, &[1, 1]);
+        let mut text = b"\0".to_vec();
+        text.extend("中é{漢/かん}\0".as_bytes());
+        let script = script_with_text(&code, &text);
+        let mut vm = Machine::new_with_encoding(&script, cmvs_rs::TextEncoding::Utf8).unwrap();
+        let mut messages = MessageHost::default();
+        messages.set_record_output(true);
+        if font_cells {
+            run_font_cells(&mut vm, &mut messages, 5);
+        } else {
+            run(&mut vm, &mut messages, 5);
+        }
+        // Wide characters count two cells whatever their encoded length.
+        assert_eq!(vm.state().system_integer(1), Some(6));
+        if font_cells {
+            run_font_cells(&mut vm, &mut messages, 1);
+        } else {
+            run(&mut vm, &mut messages, 1);
+        }
+        assert_eq!(
+            messages
+                .text(1)
+                .unwrap()
+                .glyphs
+                .iter()
+                .map(|g| g.code)
+                .collect::<Vec<_>>(),
+            [0x4e2d, 0x00e9, 0x6f22]
+        );
+        assert_eq!(vm.stack().len_bytes(), 0);
+    }
+}
+
+#[test]
 fn gbk_message_measurement_and_output_share_pairs_including_control_trails() {
     for font_cells in [false, true] {
         let mut code = vec![];

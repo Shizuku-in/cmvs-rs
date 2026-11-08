@@ -7,6 +7,20 @@ pub use profile::{Configuration, DisplayPreferences, MAX_CONFIGURATION};
 /// Shift-JIS `ＭＳ ゴシック`, the initialized global at 0x1400fc150.
 pub const DEFAULT_FONT_FACE: &[u8] = b"\x82l\x82r \x83S\x83V\x83b\x83N";
 
+/// Present the built-in face name to script text in the selected game encoding.
+/// Keep the original bytes internally for existing configurations and snapshots.
+pub fn font_face_for_encoding(face: &[u8], encoding: crate::TextEncoding) -> &[u8] {
+    if face != DEFAULT_FONT_FACE {
+        return face;
+    }
+    match encoding {
+        // GBK `ＭＳ ゴシック`.
+        crate::TextEncoding::Gbk => b"\xa3\xcd\xa3\xd3 \xa5\xb4\xa5\xb7\xa5\xc3\xa5\xaf",
+        crate::TextEncoding::Utf8 => "ＭＳ ゴシック".as_bytes(),
+        crate::TextEncoding::ShiftJis => face,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SettingsHost {
     font_face: Vec<u8>,
@@ -183,7 +197,7 @@ impl SettingsHost {
         Ok(())
     }
     /// 0x22de / 0x14007c2d0: SP-4 selects write/read, SP-8 is a string reference.
-    /// Read writes the global font name to the destination and result 0 = 1. A write only
+    /// Read writes the global font name in the game encoding and result 0 = 1. A write only
     /// changes the global face used by font objects created afterwards.
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
         let Some((pc, command @ (0x2d5 | 0x2de..=0x2e4 | 0x2e6..=0x2e9 | 0x2f8 | 0x2f9))) =
@@ -334,10 +348,11 @@ impl SettingsHost {
                     "font name destination outside the string bank is not modeled",
                 )
             })?;
+            let face = font_face_for_encoding(&self.font_face, call.vm.text_encoding());
             call.complete(0x4008)?;
             call.vm
                 .state_mut()
-                .set_string(slot, &self.font_face)
+                .set_string(slot, face)
                 .expect("bounded font name and valid slot");
             call.vm
                 .state_mut()

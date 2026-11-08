@@ -371,3 +371,35 @@ fn gbk_string_utilities_keep_pairs_and_do_not_fold_their_trail_bytes() {
         TextEncoding::ShiftJis
     );
 }
+
+#[test]
+fn utf8_string_utilities_keep_whole_characters() {
+    use cmvs_rs::TextEncoding;
+    let mut code = vec![];
+    // One byte of a three-byte UTF-8 character copies the whole character.
+    for arg in [1, 0, 0, 0x8000_0000] {
+        push(&mut code, arg);
+    }
+    word(&mut code, 0x20f3);
+    // The second string starts after `中a\0`.
+    for arg in [5, 0] {
+        push(&mut code, arg);
+    }
+    word(&mut code, 0x20f1);
+    for (text, equal) in [("中a\0中A\0", 1), ("中a\0丰A\0", 0)] {
+        let script = script(&code, &[0], text.as_bytes());
+        let mut vm = Machine::new_with_encoding(&script, TextEncoding::Utf8).unwrap();
+        run_to_system(&mut vm);
+        assert!(cmvs_rs::text::try_handle(&mut vm).unwrap());
+        assert_eq!(vm.state().string(0), Some(&text.as_bytes()[..3]));
+        assert_eq!(vm.state().system_integer(0), Some(1));
+        run_to_system(&mut vm);
+        assert!(cmvs_rs::text::try_handle(&mut vm).unwrap());
+        assert_eq!(vm.state().system_integer(0), Some(equal));
+    }
+    // A source ending inside a character cannot be copied completely.
+    let script = script(&code, &[0], b"\xe4\xb8\0");
+    let mut vm = Machine::new_with_encoding(&script, TextEncoding::Utf8).unwrap();
+    run_to_system(&mut vm);
+    assert!(cmvs_rs::text::try_handle(&mut vm).is_err());
+}
