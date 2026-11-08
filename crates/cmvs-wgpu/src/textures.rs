@@ -2,12 +2,18 @@
 //! writes and reads use one queue, so reuse needs no per-frame device idle wait.
 use super::*;
 
+// Browser GPU handles are confined to their Worker; native frames can cross threads.
+#[cfg(target_arch = "wasm32")]
+pub(super) use std::rc::{Rc as Shared, Weak};
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) use std::sync::{Arc as Shared, Weak};
+
 pub(super) struct Texture {
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
 }
 impl Texture {
-    pub fn new(device: &wgpu::Device, size: [u32; 2], usage: wgpu::TextureUsages) -> Arc<Self> {
+    pub fn new(device: &wgpu::Device, size: [u32; 2], usage: wgpu::TextureUsages) -> Shared<Self> {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("CMVS texture"),
             size: wgpu::Extent3d {
@@ -23,7 +29,7 @@ impl Texture {
             view_formats: &[],
         });
         let view = texture.create_view(&Default::default());
-        Arc::new(Self { texture, view })
+        Shared::new(Self { texture, view })
     }
     fn size(&self) -> [u32; 2] {
         [self.texture.width(), self.texture.height()]
@@ -35,7 +41,7 @@ impl Texture {
 
 pub(super) struct TexturePool {
     // Oldest use first. Pool ownership alone means no CPU reader/draw still uses it.
-    textures: Vec<Arc<Texture>>,
+    textures: Vec<Shared<Texture>>,
     bytes: u64,
     max_bytes: u64,
     max_entries: usize,
@@ -53,14 +59,14 @@ impl TexturePool {
             created: 0,
         }
     }
-    pub fn acquire(&mut self, device: &wgpu::Device, size: [u32; 2]) -> Arc<Texture> {
+    pub fn acquire(&mut self, device: &wgpu::Device, size: [u32; 2]) -> Shared<Texture> {
         if let Some(at) = self
             .textures
             .iter()
-            .position(|texture| texture.size() == size && Arc::strong_count(texture) == 1)
+            .position(|texture| texture.size() == size && Shared::strong_count(texture) == 1)
         {
             let texture = self.textures.remove(at);
-            self.textures.push(Arc::clone(&texture));
+            self.textures.push(Shared::clone(&texture));
             return texture;
         }
         let texture = Texture::new(device, size, self.usage);
@@ -70,14 +76,18 @@ impl TexturePool {
             return texture;
         }
         while self.textures.len() >= self.max_entries || self.bytes + bytes > self.max_bytes {
-            let Some(at) = self.textures.iter().position(|t| Arc::strong_count(t) == 1) else {
+            let Some(at) = self
+                .textures
+                .iter()
+                .position(|t| Shared::strong_count(t) == 1)
+            else {
                 // All retained textures are leased. This allocation stays transient.
                 return texture;
             };
             self.bytes -= self.textures.remove(at).bytes();
         }
         self.bytes += bytes;
-        self.textures.push(Arc::clone(&texture));
+        self.textures.push(Shared::clone(&texture));
         texture
     }
 }
@@ -98,14 +108,11 @@ mod tests {
         let mut gpu = renderer();
         let first = gpu.compose([3, 2], [10, 20, 30, 255], &[]).unwrap();
         let second = gpu.compose([3, 2], [40, 50, 60, 255], &[]).unwrap();
-        assert!(!Arc::ptr_eq(&first.target, &second.target));
-        let released = Arc::downgrade(&second.target);
+        assert!(!Shared::ptr_eq(&first.target, &second.target));
+        let released = Shared::downgrade(&second.target);
         drop(second);
         let third = gpu.compose([3, 2], [70, 80, 90, 255], &[]).unwrap();
-        assert!(std::sync::Weak::ptr_eq(
-            &released,
-            &Arc::downgrade(&third.target)
-        ));
+        assert!(Weak::ptr_eq(&released, &Shared::downgrade(&third.target)));
         for red in 0..24 {
             drop(gpu.compose([3, 2], [red, 0, 0, 255], &[]).unwrap());
         }
@@ -138,8 +145,8 @@ mod tests {
         let first = pool.acquire(&gpu.device, [2, 2]);
         let second = pool.acquire(&gpu.device, [2, 2]);
         let transient = pool.acquire(&gpu.device, [2, 2]);
-        assert!(!Arc::ptr_eq(&first, &transient));
-        assert!(!Arc::ptr_eq(&second, &transient));
+        assert!(!Shared::ptr_eq(&first, &transient));
+        assert!(!Shared::ptr_eq(&second, &transient));
         assert_eq!(pool.textures.len(), 2);
         assert_eq!(pool.bytes, 32);
         drop(first);
@@ -150,8 +157,8 @@ mod tests {
         let oversized = pool.acquire(&gpu.device, [4, 4]);
         assert_eq!(oversized.bytes(), 64);
         assert_eq!(pool.bytes, 20);
-        assert!(pool.textures.iter().any(|t| Arc::ptr_eq(t, &small)));
-        assert!(pool.textures.iter().any(|t| Arc::ptr_eq(t, &second)));
+        assert!(pool.textures.iter().any(|t| Shared::ptr_eq(t, &small)));
+        assert!(pool.textures.iter().any(|t| Shared::ptr_eq(t, &second)));
         gpu.check().unwrap();
     }
 

@@ -14,7 +14,7 @@ use std::{
 pub use wgpu;
 mod bindings;
 mod textures;
-use textures::{Texture, TexturePool};
+use textures::{Shared, Texture, TexturePool, Weak};
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const CACHE_LIMIT: usize = 128 * 1024 * 1024;
 /// Movie frames live apart from the content cache so replaced frames never evict
@@ -25,7 +25,7 @@ const FRAME_TEXTURES: usize = 8;
 /// An immutable submitted logical frame. Readback is performed only on demand.
 pub struct GpuFrame {
     // Raw handles stay private so an untracked clone cannot outlive its pool lease.
-    target: Arc<Texture>,
+    target: Shared<Texture>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     size: [u32; 2],
@@ -117,7 +117,7 @@ impl GpuFrame {
     }
 }
 struct Cached {
-    target: Arc<Texture>,
+    target: Shared<Texture>,
     bytes: usize,
     used: u64,
 }
@@ -291,13 +291,13 @@ impl Renderer {
         }
         Ok(())
     }
-    fn texture(&mut self, image: &RgbaImage) -> Result<Arc<Texture>> {
-        self.with_texture(image, Arc::clone)
+    fn texture(&mut self, image: &RgbaImage) -> Result<Shared<Texture>> {
+        self.with_texture(image, Shared::clone)
     }
     fn with_texture<T>(
         &mut self,
         image: &RgbaImage,
-        use_texture: impl FnOnce(&Arc<Texture>) -> T,
+        use_texture: impl FnOnce(&Shared<Texture>) -> T,
     ) -> Result<T> {
         let [w, h] = [image.width(), image.height()];
         if w > self.device.limits().max_texture_dimension_2d
@@ -329,7 +329,7 @@ impl Renderer {
             self.cache.insert(
                 key,
                 Cached {
-                    target: Arc::clone(&texture),
+                    target: Shared::clone(&texture),
                     bytes,
                     used: self.clock,
                 },
@@ -338,11 +338,11 @@ impl Renderer {
         }
         Ok(use_texture(&texture))
     }
-    fn frame_texture(&mut self, id: u64, image: &RgbaImage) -> Arc<Texture> {
+    fn frame_texture(&mut self, id: u64, image: &RgbaImage) -> Shared<Texture> {
         self.clock += 1;
         if let Some(cached) = self.frames.get_mut(&id) {
             cached.used = self.clock;
-            return Arc::clone(&cached.target);
+            return Shared::clone(&cached.target);
         }
         if self.frames.len() >= FRAME_TEXTURES {
             let oldest = *self
@@ -360,14 +360,14 @@ impl Renderer {
         self.frames.insert(
             id,
             Cached {
-                target: Arc::clone(&texture),
+                target: Shared::clone(&texture),
                 bytes: image.pixels().len(),
                 used: self.clock,
             },
         );
         texture
     }
-    fn upload(&mut self, image: &RgbaImage) -> Arc<Texture> {
+    fn upload(&mut self, image: &RgbaImage) -> Shared<Texture> {
         let texture = Texture::new(
             &self.device,
             [image.width(), image.height()],
@@ -452,7 +452,7 @@ impl Renderer {
                 if let Some(image) = image {
                     *view = self.with_texture(image, |texture| {
                         if image.frame_id().is_some() {
-                            inputs.push(Arc::clone(texture));
+                            inputs.push(Shared::clone(texture));
                         }
                         texture.view.clone()
                     })?;

@@ -1,7 +1,7 @@
 use super::*;
 
 struct ScaleGroup {
-    source: std::sync::Weak<Texture>,
+    source: Weak<Texture>,
     binding: wgpu::BindGroup,
 }
 
@@ -40,7 +40,7 @@ impl Scaling {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
-        source: &Arc<Texture>,
+        source: &Shared<Texture>,
         data: [f32; 8],
     ) -> wgpu::BindGroup {
         let mut bytes = [0u8; 32];
@@ -58,7 +58,7 @@ impl Scaling {
             group
                 .source
                 .upgrade()
-                .is_some_and(|owner| Arc::ptr_eq(&owner, source))
+                .is_some_and(|owner| Shared::ptr_eq(&owner, source))
         }) {
             let group = self.groups.remove(at);
             let binding = group.binding.clone();
@@ -83,7 +83,7 @@ impl Scaling {
             self.groups.remove(0);
         }
         self.groups.push(ScaleGroup {
-            source: Arc::downgrade(source),
+            source: Shared::downgrade(source),
             binding: binding.clone(),
         });
         binding
