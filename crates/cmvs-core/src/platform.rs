@@ -104,7 +104,7 @@ pub struct TextDialogRequest {
     pub title: Vec<u8>,
     pub prompt: Vec<u8>,
     pub initial: Vec<u8>,
-    /// ANSI edit limit: 100 bytes allows 50 full-width Shift-JIS characters.
+    /// ANSI edit limit: 100 bytes allows 50 double-byte characters in the game encoding.
     pub max_bytes: u32,
 }
 pub enum TextDialogResult {
@@ -433,7 +433,8 @@ pub enum PlatformEvent {
     CursorUnchanged,
     Configured,
 }
-/// Separator 0x1400de070 between base title and scene title: Shift-JIS full-width space.
+/// Separator 0x1400de070 between base title and scene title: the Shift-JIS full-width
+/// space. These are fixed bytes, not re-encoded for a GBK game.
 const TITLE_SEPARATOR: [u8; 2] = [0x81, 0x40];
 
 #[derive(Default)]

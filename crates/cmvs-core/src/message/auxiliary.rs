@@ -173,7 +173,7 @@ pub struct AuxiliaryGlyph {
     /// The group's +4392 font face (game encoding) when the glyph was laid out.
     pub face: std::sync::Arc<[u8]>,
     pub revision_alpha: bool,
-    /// Descriptor word 0 high half: Shift-JIS pair, lead byte high.
+    /// Descriptor word 0 high half: double-byte pair in the game encoding, lead byte high.
     pub code: u16,
     /// Descriptor words 3/4: truncated pen position relative to the group position.
     pub position: [i32; 2],

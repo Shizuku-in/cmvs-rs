@@ -337,3 +337,37 @@ fn format_0x20fc_rejects_unmodeled_conversions_targets_overlap_and_overflow() {
         assert_eq!(vm.state().string(0), Some(&b"y%z1"[..]));
     }
 }
+
+#[test]
+fn gbk_string_utilities_keep_pairs_and_do_not_fold_their_trail_bytes() {
+    use cmvs_rs::TextEncoding;
+    let mut code = vec![];
+    // Copy a byte range ending inside a GBK pair: the engine copies the whole pair.
+    for arg in [1, 0, 0, 0x8000_0000] {
+        push(&mut code, arg);
+    }
+    word(&mut code, 0x20f3);
+    for arg in [3, 0] {
+        push(&mut code, arg);
+    }
+    word(&mut code, 0x20f1);
+    let script = script(&code, &[0], b"\xd6a\0\xd6A\0");
+    for (encoding, copied, equal) in [
+        (TextEncoding::ShiftJis, &b"\xd6"[..], 1),
+        (TextEncoding::Gbk, &b"\xd6a"[..], 0),
+    ] {
+        let mut vm = Machine::new_with_encoding(&script, encoding).unwrap();
+        assert_eq!(vm.text_encoding(), encoding);
+        run_to_system(&mut vm);
+        assert!(cmvs_rs::text::try_handle(&mut vm).unwrap());
+        assert_eq!(vm.state().string(0), Some(copied));
+        assert_eq!(vm.state().system_integer(0), Some(1));
+        run_to_system(&mut vm);
+        assert!(cmvs_rs::text::try_handle(&mut vm).unwrap());
+        assert_eq!(vm.state().system_integer(0), Some(equal));
+    }
+    assert_eq!(
+        Machine::new(&script).unwrap().text_encoding(),
+        TextEncoding::ShiftJis
+    );
+}

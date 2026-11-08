@@ -393,10 +393,31 @@ fn old_text_dialog_commits_accept_cancel_and_empty_results() {
     use cmvs_rs::platform::RecordingBackend;
     for name in ["cmvs-20071117", "cmvs-20080719", "cmvs-20080903"] {
         let profile = Registry::builtin().profile(name).unwrap();
-        for (answer, result, text) in [
-            (Some(b"A\x82\xa0x".to_vec()), 1, b"\x82\xa0".as_slice()),
-            (None, 0, b"old comment".as_slice()),
-            (Some(vec![]), 1, b"old comment".as_slice()),
+        for (encoding, answer, result, text) in [
+            (
+                cmvs_rs::TextEncoding::ShiftJis,
+                Some(b"A\x82\xa0x".to_vec()),
+                1,
+                b"\x82\xa0".as_slice(),
+            ),
+            (
+                cmvs_rs::TextEncoding::ShiftJis,
+                None,
+                0,
+                b"old comment".as_slice(),
+            ),
+            (
+                cmvs_rs::TextEncoding::ShiftJis,
+                Some(vec![]),
+                1,
+                b"old comment".as_slice(),
+            ),
+            (
+                cmvs_rs::TextEncoding::Gbk,
+                Some(b"A\xd6\xd0x\xce\\".to_vec()),
+                1,
+                b"\xd6\xd0\xce\\".as_slice(),
+            ),
         ] {
             let mut code = vec![];
             command(
@@ -405,7 +426,7 @@ fn old_text_dialog_commits_accept_cancel_and_empty_results() {
                 &[0x80000000, 0x80000001, 0x80000002, 32, 0x80000003, 1],
             );
             let program = script(&code);
-            let mut vm = Machine::new(&program).unwrap();
+            let mut vm = Machine::new_with_encoding(&program, encoding).unwrap();
             for (i, value) in [b"Title".as_slice(), b"Prompt", b"old comment", b"before"]
                 .iter()
                 .enumerate()

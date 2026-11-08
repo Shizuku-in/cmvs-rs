@@ -46,6 +46,8 @@ pub mod settings;
 pub mod snapshot;
 pub mod system_save;
 pub mod text;
+pub mod text_encoding;
+pub use text_encoding::TextEncoding;
 pub mod timers;
 pub mod viewport;
 pub mod vm;

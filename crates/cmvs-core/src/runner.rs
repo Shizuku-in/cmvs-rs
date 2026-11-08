@@ -175,7 +175,23 @@ impl<'a> Startup<'a> {
         game: &Game<'a>,
         virtual_tick: u32,
     ) -> Result<Self, Box<dyn Error>> {
-        let mut machine = Machine::new(script)?;
+        Self::new_with_encoding(
+            script,
+            root,
+            game,
+            virtual_tick,
+            crate::TextEncoding::default(),
+        )
+    }
+    /// Start with an explicit game text encoding. `new` retains the original Shift-JIS default.
+    pub fn new_with_encoding(
+        script: &'a Script,
+        root: &Path,
+        game: &Game<'a>,
+        virtual_tick: u32,
+        encoding: crate::TextEncoding,
+    ) -> Result<Self, Box<dyn Error>> {
+        let mut machine = Machine::new_with_encoding(script, encoding)?;
         if let Some([integers, bits, floats, strings]) = game.selection.profile.initial_globals() {
             // Verified PE zero-fill globals (docs/games/aoitori/vm-semantics.md
             // and docs/games/hapymaherfd/README.md). Keep standalone

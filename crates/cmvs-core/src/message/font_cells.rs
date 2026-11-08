@@ -5,19 +5,22 @@ use super::{
     MessageHost, TextObject,
     auxiliary::{AuxiliaryGlyph, AuxiliaryText},
     auxiliary_layout::TextLayout,
-    measure::{Layout, lead},
+    measure::Layout,
     output::{escape_w, line_end, new_line, parse_group, push, retime, ruby_layout, wraps},
 };
+use crate::TextEncoding;
 use crate::bytecode::DecodeError;
 #[derive(Debug, Default)]
 pub(super) struct State {
     proportional: bool,
 }
 
+// Fixed Shift-JIS code values, independent of the game encoding; see auxiliary_layout.rs.
 const NO_BREAK: [u16; 4] = [0x8141, 0x8142, 0x8176, 0x8178];
 const VOICED_MARK: u16 = 0x814a;
 const ESCAPES: &str = "text escape that does not advance in the original";
 fn append(
+    encoding: TextEncoding,
     text: &mut TextObject,
     bytes: &[u8],
     skip: bool,
@@ -31,7 +34,7 @@ fn append(
     let size = text.glyph_size as u32;
     let limit = line_end(text);
     text.ruby_lines = if text.ruby {
-        ruby_layout(text, bytes)?.0
+        ruby_layout(encoding, text, bytes)?.0
     } else {
         [0; 32]
     };
@@ -90,7 +93,7 @@ fn append(
             continue;
         }
         if byte == b'{' {
-            let group = parse_group(bytes, i + 1)?;
+            let group = parse_group(encoding, bytes, i + 1)?;
             if proportional && group.base.iter().flatten().count() > 32 {
                 return Err("ruby base exceeds the original's 32 glyph positions");
             }
@@ -132,7 +135,8 @@ fn append(
                 Vec::new()
             };
             // 0x1400611f0: proportional ruby ignores extra ruby spacing. A run of
-            // middle dots matching the base count is centred on each base cell.
+            // middle dots matching the base count is centred on each base cell. The dot
+            // is the fixed Shift-JIS code 0x8145 ・, also under GBK.
             let dots = proportional
                 && base_cells.len() == ruby_widths.len()
                 && group.ruby.iter().flatten().all(|&code| code == 0x8145);
@@ -189,7 +193,7 @@ fn append(
             }
             continue;
         }
-        let wide = lead(byte);
+        let wide = encoding.is_lead_byte(byte);
         let (code, wrap) = if wide {
             let second = *bytes
                 .get(i + 1)
@@ -252,6 +256,7 @@ fn output_width(
 }
 
 fn place(
+    encoding: TextEncoding,
     text: &mut TextObject,
     bytes: &[u8],
     metrics: Option<&dyn super::GlyphMetrics>,
@@ -284,7 +289,7 @@ fn place(
             if text.line_break.is_some() {
                 return Err("direct ruby groups under line-break rules are not modeled");
             }
-            let group = parse_group(bytes, i + 1)?;
+            let group = parse_group(encoding, bytes, i + 1)?;
             if proportional && x >= limit {
                 new_line(text, &mut line, &mut x, &mut y)?;
             }
@@ -299,7 +304,7 @@ fn place(
             i = group.end;
             continue;
         }
-        if !lead(byte) {
+        if !encoding.is_lead_byte(byte) {
             let metrics =
                 metrics.ok_or("direct single-byte text requires a font metrics backend")?;
             let code = (byte as i8 as i16) as u16;
@@ -348,6 +353,7 @@ fn place(
 /// Aoitori 0x140062aa0: pixel-width query, retaining the original wrap counters
 /// and scratch effects while restoring the caller's pen. Ruby annotations are skipped.
 pub(super) fn measure_pixels(
+    encoding: TextEncoding,
     text: &TextObject,
     bytes: &[u8],
     proportional: bool,
@@ -416,7 +422,7 @@ pub(super) fn measure_pixels(
                         .filter(|&&b| b != 0)
                         .ok_or("unterminated measured ruby group")?;
                     i += 1;
-                    if lead(first) {
+                    if encoding.is_lead_byte(first) {
                         let second = *bytes
                             .get(i)
                             .filter(|&&b| b != 0)
@@ -430,7 +436,7 @@ pub(super) fn measure_pixels(
                     }
                 }
             }
-        } else if lead(byte) {
+        } else if encoding.is_lead_byte(byte) {
             let second = *bytes
                 .get(i + 1)
                 .filter(|&&b| b != 0)
@@ -492,6 +498,7 @@ impl AuxiliaryText {
     }
     pub(super) fn layout_font_cells(
         &self,
+        encoding: TextEncoding,
         text: &[u8],
         proportional: bool,
         metrics: Option<&dyn super::GlyphMetrics>,
@@ -614,7 +621,7 @@ impl AuxiliaryText {
                     if b == 0 {
                         return Err("unterminated auxiliary ruby group");
                     }
-                    if lead(b) {
+                    if encoding.is_lead_byte(b) {
                         let code = u16::from_be_bytes([b, byte(i + 1)]);
                         i += 2;
                         if !proportional && self.wraps_font_cells(x, code, false, &mut scratch)? {
@@ -638,7 +645,7 @@ impl AuxiliaryText {
                     if b == 0 {
                         return Err("unterminated auxiliary ruby group");
                     }
-                    if lead(b) {
+                    if encoding.is_lead_byte(b) {
                         i += 2;
                     } else {
                         i += 1;
@@ -649,7 +656,7 @@ impl AuxiliaryText {
                 }
                 continue;
             }
-            if !lead(first) {
+            if !encoding.is_lead_byte(first) {
                 if self.wraps_font_cells(x, first as i8 as i16 as u16, true, &mut scratch)? {
                     wrap(&mut x, &mut y, &mut line, &mut scratch)?;
                 }
@@ -690,12 +697,14 @@ impl AuxiliaryText {
 }
 
 fn append_layout(
+    encoding: TextEncoding,
     host: &MessageHost,
     text: &mut TextObject,
     bytes: &[u8],
     skip: bool,
 ) -> Result<(), &'static str> {
     append(
+        encoding,
         text,
         bytes,
         skip,
@@ -705,12 +714,14 @@ fn append_layout(
     )
 }
 fn place_layout(
+    encoding: TextEncoding,
     host: &MessageHost,
     text: &mut TextObject,
     bytes: &[u8],
     outline: Option<u32>,
 ) -> Result<(), &'static str> {
     place(
+        encoding,
         text,
         bytes,
         host.glyph_metrics.as_deref(),
@@ -773,6 +784,7 @@ pub(crate) fn measure_text(
         .clone();
     text.ruby_lines = [0; 32];
     let (counts, scratch) = measure_pixels(
+        call.vm.text_encoding(),
         &text,
         &bytes,
         host.font_cells.proportional,
@@ -864,6 +876,7 @@ pub(crate) fn auxiliary_text(
         .ok_or_else(|| call.error("auxiliary text group does not exist or outside 0..7"))?;
     let layout = group
         .layout_font_cells(
+            call.vm.text_encoding(),
             &text,
             host.font_cells.proportional,
             host.glyph_metrics.as_deref(),
@@ -932,6 +945,7 @@ pub(crate) fn auxiliary_measure(
         .ok_or_else(|| call.error("auxiliary text group does not exist or outside 0..7"))?;
     let (counts, scratch) = group
         .measure_font_cells(
+            call.vm.text_encoding(),
             &bytes,
             call.command == 0x3bb,
             host.font_cells.proportional,

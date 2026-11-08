@@ -744,7 +744,9 @@ impl MessageHost {
         match command {
             0x38b => {
                 let text = call.vm.resolve_string(args[1])?;
-                let layout = group.layout(&text).map_err(|why| error(pc, opcode, why))?;
+                let layout = group
+                    .layout(call.vm.text_encoding(), &text)
+                    .map_err(|why| error(pc, opcode, why))?;
                 call.complete(0x4008)?;
                 self.auxiliary_texts[slot]
                     .as_mut()
@@ -753,8 +755,9 @@ impl MessageHost {
             }
             0x390 => {
                 let text = call.vm.resolve_string(args[1])?;
-                let [lines, widest, last] =
-                    group.measure(&text).map_err(|why| error(pc, opcode, why))?;
+                let [lines, widest, last] = group
+                    .measure(call.vm.text_encoding(), &text)
+                    .map_err(|why| error(pc, opcode, why))?;
                 call.complete(0x4008)?;
                 for (index, value) in [(0, lines), (1, widest), (4, last)] {
                     call.vm
@@ -1623,7 +1626,7 @@ impl MessageHost {
                 "text count needs an existing text object in slots 0..11",
             ));
         }
-        let count = output::encoded_length(&bytes).map_err(fail)?;
+        let count = output::encoded_length(call.vm.text_encoding(), &bytes).map_err(fail)?;
         call.complete(0x4008)?;
         call.vm
             .state_mut()
@@ -1643,7 +1646,8 @@ impl MessageHost {
         let text = self
             .text(index)
             .ok_or_else(|| fail("text layout needs an existing text object in slots 0..11"))?;
-        let (flags, counts) = output::ruby_layout(text, &bytes).map_err(fail)?;
+        let (flags, counts) =
+            output::ruby_layout(call.vm.text_encoding(), text, &bytes).map_err(fail)?;
         // This wrapper passes a 64-byte stack buffer at rsp+0x40, followed by the
         // /GS cookie at rsp+0x80. Output's separate call uses the object's 32 flags.
         if flags[16..].iter().any(|&marked| marked != 0) {
@@ -1677,7 +1681,8 @@ impl MessageHost {
                 "text object index outside 0..11 or without an object sets an unmodeled flag",
             )
         })?;
-        let (counts, scratch) = measure::measure(text, &bytes).map_err(|e| error(pc, 0x211f, e))?;
+        let (counts, scratch) = measure::measure(call.vm.text_encoding(), text, &bytes)
+            .map_err(|e| error(pc, 0x211f, e))?;
         call.complete(0x4008)?;
         self.texts[index]
             .as_mut()
