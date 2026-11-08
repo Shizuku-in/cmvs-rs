@@ -2,13 +2,13 @@
 //! Pure Rust and window-free, so every host can install [`TheoraFactory`], or
 //! [`PrefetchTheoraFactory`] to decode the next packet on a worker thread during playback.
 mod prefetch;
+mod theora;
 use cmvs_core::{
     FormatError, MAX_PAYLOAD,
     mgv::{self, MgvIndex, ReadSeek},
     raster::RgbaImage,
 };
 use ogg::PacketReader;
-use oxideav_theora::{self as theora, FrameDecoder, TheoraIdentHeader};
 pub use prefetch::PrefetchTheoraFactory;
 use std::{
     error::Error,
@@ -19,6 +19,7 @@ use std::{
         atomic::{AtomicUsize, Ordering},
     },
 };
+use theora::{Decoder as FrameDecoder, Ident as TheoraIdentHeader};
 
 #[derive(Debug, Default)]
 pub struct TheoraFactory;
@@ -104,7 +105,7 @@ impl fmt::Debug for TheoraStream {
             .finish_non_exhaustive()
     }
 }
-fn codec<T>(result: Result<T, theora::Error>) -> Result<T, Box<dyn Error>> {
+fn codec<T>(result: Result<T, FormatError>) -> Result<T, Box<dyn Error>> {
     result.map_err(|e| format!("Theora decode: {e:?}").into())
 }
 impl TheoraStream {
@@ -143,30 +144,25 @@ impl TheoraStream {
         budget.set(MAX_PAYLOAD);
         let packet = packets.read_packet_expected()?;
         let serial = packet.stream_serial();
-        let ident = codec(theora::decode_identification_header(&packet.data))?;
+        let ident = codec(TheoraIdentHeader::parse(&packet.data))?;
         let container = (u32::from(index.width), u32::from(index.height));
         if (container != (ident.picw, ident.pich)
-            && container != (ident.coded_width(), ident.coded_height()))
+            && container != (ident.width as u32, ident.height as u32))
             || u64::from(ident.frn) * u64::from(index.rate_time)
                 != u64::from(index.rate) * u64::from(ident.frd)
-            || ident.pf != theora::PixelFormat::Yuv420
-            || u64::from(ident.coded_width()) * u64::from(ident.coded_height()) * 4
-                > MAX_PAYLOAD as u64
+            || ident.width as u64 * ident.height as u64 * 4 > MAX_PAYLOAD as u64
         {
             return Err(FormatError("MGV/Theora geometry, rate or pixel format mismatch").into());
         }
         budget.set(MAX_PAYLOAD);
         let comment = packets.read_packet_expected()?;
-        codec(theora::parse_comment_header(&comment.data))?;
+        codec(theora::comments(&comment.data))?;
         budget.set(MAX_PAYLOAD);
         let setup = packets.read_packet_expected()?;
         if comment.stream_serial() != serial || setup.stream_serial() != serial {
             return Err(FormatError("MGV Theora headers change Ogg serial").into());
         }
-        let decoder = codec(FrameDecoder::new(
-            ident.clone(),
-            codec(theora::decode_setup_header(&setup.data))?,
-        ))?;
+        let decoder = codec(FrameDecoder::new(&ident, &setup.data))?;
         Ok((ident, decoder, serial))
     }
     fn reset(&mut self) -> Result<(), Box<dyn Error>> {
@@ -212,7 +208,7 @@ impl TheoraStream {
             }
             let frame = codec(self.decoder.decode_frame(&packet.data))?;
             if self.next_packet == target {
-                let image = to_rgba(&self.ident, &frame.frame, &self.index)?;
+                let image = to_rgba(&self.ident, frame, &self.index)?;
                 self.recent.rotate_left(1);
                 self.recent[1] = Some((target, image));
             }
@@ -250,7 +246,7 @@ impl mgv::Decoder for TheoraStream {
 
 fn to_rgba(
     ident: &TheoraIdentHeader,
-    frame: &theora::ReconstructedFrame,
+    frame: &theora::Frame,
     index: &MgvIndex,
 ) -> Result<RgbaImage, FormatError> {
     // Some MGV headers describe the padded coding surface (e.g. 1920x1088),
@@ -263,23 +259,21 @@ fn to_rgba(
     } else {
         [0, 0]
     };
-    let yw = frame.dims_y.width as usize;
-    let cw = frame.dims_cb.width as usize;
+    let yw = ident.width;
+    let cw = ident.width / 2;
     const BOUNDS: &str = "Theora planes smaller than the MGV picture";
     let mut rgba = vec![0; width * height * 4];
     for (row, out) in rgba.chunks_exact_mut(width * 4).enumerate() {
         // Theora rows run bottom-up.
         let y = bottom + height - 1 - row;
-        let luma = frame
-            .samples_y
+        let luma = frame.planes[0]
             .get(y * yw + left..y * yw + left + width)
             .ok_or(FormatError(BOUNDS))?;
         let chroma = (y / 2) * cw + left / 2..(y / 2) * cw + (left + width).div_ceil(2);
-        let cb = frame
-            .samples_cb
+        let cb = frame.planes[1]
             .get(chroma.clone())
             .ok_or(FormatError(BOUNDS))?;
-        let cr = frame.samples_cr.get(chroma).ok_or(FormatError(BOUNDS))?;
+        let cr = frame.planes[2].get(chroma).ok_or(FormatError(BOUNDS))?;
         // An odd left edge starts mid-pair: its first pixel takes the first chroma sample.
         let (head, luma, out) = if left % 2 == 1 {
             let (first, out) = out.split_at_mut(4);

@@ -19,14 +19,14 @@
 | `crates/cmvs-audio` | Vorbis 解码、混音、原生音频输出、源消费时钟 | 依赖 core、lewton；`mixer` feature 启用 rodio 混音（宿主拉取 PCM，Switch 与 Vita 使用），默认 `native` 再接系统设备 |
 | `crates/cmvs-desktop` | 窗口、物理输入、字体光栅化与按名解析、帧显示与桌面运行入口 | 依赖 core、winit、softbuffer、ico、encoding_rs、ab_glyph；可选依赖 audio；系统服务经 cmvs-native |
 | `crates/cmvs-native` | 操作系统服务的统一接口（字体对话框、系统字体目录），按平台分模块；原生系统 FFI 包 | raw-window-handle；Windows 上 windows-sys。macOS/iOS/Linux/Android/wasm 预留，返回 Unsupported |
-| `crates/cmvs-video` | MGV1 的 Ogg/Theora 解码与 RGBA 转换，可选在工作线程预解码下一帧 | 依赖 core、ogg、oxideav-theora；桌面、Apple、Android、Switch、Vita 与 probe 使用，[说明](../crates/cmvs-video/README.md) |
+| `crates/cmvs-video` | MGV1 的自研 Theora 解码与 RGBA 转换，可选在工作线程预解码下一帧 | 运行时依赖 core、ogg；oxideav-theora 仅用于差分测试；桌面、Apple、Android、Switch、Vita 与 probe 使用，[说明](../crates/cmvs-video/README.md) |
 | `crates/cmvs-console` | 游戏机宿主共用的手柄映射、游戏列表、错误页、注释输入编码，以及在 `cmvs_native::GpuDevice` 上执行绘制队列的纹理缓存合成器 | 依赖 core、native、encoding_rs、ab_glyph；Switch 与 Vita 播放器使用 |
 | `platforms/web/native` | wasm Worker 宿主、CPU/WebGPU 画面、文字与输入 | 依赖 core、font、无原生设备 feature 的 audio、wasm-bindgen、self_cell；[当前范围](backends/web.md) |
 | 根包 `cmvs-rs` | 检查 CLI、`cmvs_rs` 兼容重导出、集成测试 | 默认仅依赖 core；通过 `desktop`、`audio-output` 选择后端 |
 
 依赖方向为 `desktop → core`、`desktop → audio → core`。格式、VM 和软件呈现目前保持为 core 内部模块，不新增 C++ 运行核心。后续平台应复用核心语义，通过后端接入系统服务。
 
-默认 workspace 成员仅为根包；全 workspace 构建会额外选择桌面和音频成员。除 `cmvs-native` 外，所有项目包继承 `unsafe_code = forbid` 和严格 Clippy 约定；`cmvs-native` 设为 deny，只在注明 SAFETY 的系统调用处局部允许。新平台在该包内增加同名函数的模块实现，宿主代码不写平台条件；某平台需要独立宿主或依赖很重时拆为单独的包，wasm 宿主已独立为 `cmvs-web`。feature 转发、固定依赖及拆包回归证据见 [workspace](workspace.md)，参考项目提交与许可见 [references](games/amatsutsumi/references.md)。
+默认 workspace 成员仅为根包；全 workspace 构建会额外选择桌面和音频成员。workspace 默认 `unsafe_code = forbid`，平台 FFI 包局部使用 deny；`cmvs-video` 同样设为 deny，仅在注明 SAFETY、带标量对照的私有 SIMD 内核中允许 unsafe，详见 [Theora 解码](design/theora-decoder.md)。新平台在 `cmvs-native` 内增加同名函数的模块实现，宿主代码不写平台条件；某平台需要独立宿主或依赖很重时拆为单独的包，wasm 宿主已独立为 `cmvs-web`。feature 转发、固定依赖及拆包回归证据见 [workspace](workspace.md)，参考项目提交与许可见 [references](games/amatsutsumi/references.md)。
 
 ## 核心职责
 

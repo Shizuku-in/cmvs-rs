@@ -7,7 +7,7 @@ rust-version.workspace = true
 publish.workspace = true
 description = "Operating-system integration for CMVS hosts behind one cross-platform API"
 
-# The workspace forbids unsafe code. This crate alone denies it and allows it only in the
+# The workspace forbids unsafe code. This crate denies it and allows it only in the
 # documented system calls of each platform module.
 [lints.rust]
 unsafe_code = "deny"

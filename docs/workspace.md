@@ -9,7 +9,7 @@
 | cmvs-audio | crates/cmvs-audio | 共享 Vorbis 解码、混音、原生音频和源时钟；依赖 core、lewton；`mixer` feature 启用 rodio 混音并由宿主拉取 PCM，默认 `native` 再接系统设备（cpal） |
 | cmvs-desktop | crates/cmvs-desktop | 窗口、原始输入、桌面运行入口；依赖 core 和窗口库，可选依赖 audio |
 | cmvs-native | crates/cmvs-native | 操作系统服务统一接口，按平台分模块（现有 Windows，其余预留）；依赖 raw-window-handle，Windows 上 windows-sys；原生系统 FFI 包。另含 Switch 与 Vita 的系统封装（含 deko3d / GXM 合成器）及两者共用的可移植手柄采样 `PadInput` 与 GPU 设备接口 `GpuDevice` |
-| cmvs-video | crates/cmvs-video | MGV1 的 Ogg/Theora 解码、RGBA 转换与工作线程预解码；依赖 core、ogg、oxideav-theora；除 Web 外的宿主及 probe 使用 |
+| cmvs-video | crates/cmvs-video | MGV1 的自研 Theora 解码、RGBA 转换与工作线程预解码；运行时依赖 core、ogg，oxideav-theora 仅作测试参考；除 Web 外的宿主及 probe 使用 |
 | cmvs-console | crates/cmvs-console | 游戏机宿主共用策略：手柄到引擎输入码的映射、游戏列表、错误页、CPU 绘制页面与注释输入编码；每台主机以 `Console` 描述屏幕与按键；依赖 core、native、encoding_rs、ab_glyph |
 | cmvs-switch / cmvs-vita | platforms/switch/player、platforms/psvita/player | Switch NRO 与 PS Vita VPK 播放器；依赖 core、native、font、console 及 `mixer` 音频，在 Docker 工具链中构建，开发机上只编译替身 |
 | cmvs-probe | crates/cmvs-probe | 与游戏无关的无头整机检查；依赖 core 与 desktop 的字体模块，不打开窗口或设备；不在默认成员中 |
@@ -29,7 +29,7 @@ core 中的 std 文件读取器可在各平台编译，不含原生窗口或设�
 
 根 feature 名保持 `desktop` 和 `audio-output`。`audio-output` 通过弱依赖 feature 转发给已启用的 desktop，单独启用音频不会拉入窗口库。
 workspace `default-members = ["."]`，因此原来的根目录命令只选择根包，原生默认仍无第三方依赖。
-`unsafe_code = forbid`、严格 Clippy 约定由 workspace 集中定义，四个原有包均继承；`cmvs-native` 改为 deny，只在注明 SAFETY 的系统调用处局部允许 unsafe。
+`unsafe_code = forbid`、严格 Clippy 约定由 workspace 集中定义，四个原有包均继承；平台 FFI 包使用 deny，在注明 SAFETY 的系统调用处局部允许 unsafe。`cmvs-video` 使用 deny，并禁止 unsafe 函数内的隐式 unsafe 操作，仅私有 SIMD 内核局部允许 unsafe，见 [Theora 解码](design/theora-decoder.md)。
 外部依赖版本集中在 workspace.dependencies，Cargo.lock 保留原 registry 包版本与校验值。
 
 ```bash
