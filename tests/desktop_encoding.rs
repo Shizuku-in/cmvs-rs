@@ -80,27 +80,17 @@ fn gbk_font_selection_reaches_font_loading_explicitly_and_via_auto_detection() {
 }
 
 #[test]
-fn utf8_playback_is_rejected_explicitly_and_after_auto_detection() {
+fn utf8_font_selection_reaches_font_loading_explicitly_and_via_auto_detection() {
     let fixture = Fixture::new(TextEncoding::Utf8);
     for encoding in ["utf-8", "auto"] {
         let output = fixture.run(encoding, &[]);
         let error = String::from_utf8_lossy(&output.stderr);
         assert!(!output.status.success());
-        assert!(
-            error.contains("UTF-8 engine text scanning is not supported"),
-            "{error}"
-        );
+        assert!(error.contains("invalid OpenType font"), "{error}");
+        if encoding == "auto" {
+            assert!(String::from_utf8_lossy(&output.stdout).contains("auto encoding=utf-8"));
+        }
     }
-    let output = Command::new(env!("CARGO_BIN_EXE_cmvs-desktop"))
-        .arg(&fixture.0)
-        .args(["--encoding", "utf-8", "--record-text"])
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("UTF-8 engine text scanning is not supported")
-    );
 }
 
 #[test]
@@ -115,16 +105,19 @@ fn font_and_record_text_remain_mutually_exclusive_for_gbk() {
 }
 
 #[test]
-fn host_encoding_maps_to_the_engine_without_a_utf8_fallback() {
+fn host_encoding_maps_to_the_engine() {
     assert_eq!(
-        TextEncoding::ShiftJis.engine_encoding().unwrap(),
+        TextEncoding::ShiftJis.engine_encoding(),
         cmvs_rs::TextEncoding::ShiftJis
     );
     assert_eq!(
-        TextEncoding::Gbk.engine_encoding().unwrap(),
+        TextEncoding::Gbk.engine_encoding(),
         cmvs_rs::TextEncoding::Gbk
     );
-    assert!(TextEncoding::Utf8.engine_encoding().is_err());
+    assert_eq!(
+        TextEncoding::Utf8.engine_encoding(),
+        cmvs_rs::TextEncoding::Utf8
+    );
     assert_eq!(
         TextEncoding::Utf8.decode("标题".as_bytes()).unwrap(),
         "标题"

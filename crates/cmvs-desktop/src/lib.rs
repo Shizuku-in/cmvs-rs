@@ -36,15 +36,12 @@ impl TextEncoding {
             _ => Err(FormatError("encoding must be shift-jis, gbk or utf-8")),
         }
     }
-    /// Resolve the engine scanner as well as the host codec before playback.
-    /// Host-only UTF-8 conversion remains available through `encode` / `decode`.
-    pub fn engine_encoding(self) -> Result<cmvs_core::TextEncoding, FormatError> {
+    /// The engine scanner matching the host codec.
+    pub fn engine_encoding(self) -> cmvs_core::TextEncoding {
         match self {
-            Self::ShiftJis => Ok(cmvs_core::TextEncoding::ShiftJis),
-            Self::Gbk => Ok(cmvs_core::TextEncoding::Gbk),
-            Self::Utf8 => Err(FormatError(
-                "UTF-8 engine text scanning is not supported; playback requires shift-jis or gbk",
-            )),
+            Self::ShiftJis => cmvs_core::TextEncoding::ShiftJis,
+            Self::Gbk => cmvs_core::TextEncoding::Gbk,
+            Self::Utf8 => cmvs_core::TextEncoding::Utf8,
         }
     }
     fn encoding(self) -> &'static encoding_rs::Encoding {
@@ -555,7 +552,19 @@ mod tests {
 
     #[test]
     fn font_dialog_decodes_legacy_default_and_custom_gbk_names() {
-        for encoding in [TextEncoding::ShiftJis, TextEncoding::Gbk] {
+        for encoding in [
+            TextEncoding::ShiftJis,
+            TextEncoding::Gbk,
+            TextEncoding::Utf8,
+        ] {
+            let displayed = cmvs_core::settings::font_face_for_encoding(
+                cmvs_core::settings::DEFAULT_FONT_FACE,
+                encoding.engine_encoding(),
+            );
+            assert_eq!(
+                encoding.decode_font_face(displayed).unwrap(),
+                "ＭＳ ゴシック"
+            );
             assert_eq!(
                 encoding
                     .decode_font_face(cmvs_core::settings::DEFAULT_FONT_FACE)

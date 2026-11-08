@@ -1267,12 +1267,12 @@ fn variant_text_dialog(
         let mut full_width = Vec::new();
         let mut i = 0;
         while i < text.len() {
-            if call.vm.text_encoding().is_lead_byte(text[i]) {
-                let pair = text.get(i..i + 2).ok_or_else(|| {
+            if let Some(len) = call.vm.text_encoding().wide_len(text[i]) {
+                let pair = text.get(i..i + len).ok_or_else(|| {
                     call.error("text dialog has a truncated double-byte character")
                 })?;
                 full_width.extend_from_slice(pair);
-                i += 2;
+                i += len;
             } else {
                 i += 1;
             }

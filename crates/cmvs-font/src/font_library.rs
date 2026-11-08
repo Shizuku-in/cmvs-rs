@@ -323,6 +323,7 @@ fn legacy_family_name(encoding: TextEncoding, face: &[u8]) -> Result<String, For
         .ok_or(FormatError(match encoding {
             TextEncoding::ShiftJis => "font face is not valid Shift-JIS",
             TextEncoding::Gbk => "font face is not valid GBK",
+            TextEncoding::Utf8 => "font face is not valid UTF-8",
             _ => "font face is not valid in the game encoding",
         }))
 }
@@ -619,8 +620,17 @@ mod tests {
         );
         // 0xff passes the engine's GBK lead-byte test but is not valid GBK.
         assert!(legacy_family_name(TextEncoding::Gbk, b"\xff\xff").is_err());
-        // The fixed default face keeps its Shift-JIS name under GBK.
-        for encoding in [TextEncoding::ShiftJis, TextEncoding::Gbk] {
+        assert_eq!(
+            legacy_family_name(TextEncoding::Utf8, "微软雅黑".as_bytes()).unwrap(),
+            "微软雅黑"
+        );
+        assert!(legacy_family_name(TextEncoding::Utf8, &sjis).is_err());
+        // The fixed default face keeps its Shift-JIS name in every encoding.
+        for encoding in [
+            TextEncoding::ShiftJis,
+            TextEncoding::Gbk,
+            TextEncoding::Utf8,
+        ] {
             assert_eq!(
                 legacy_family_name(encoding, DEFAULT_FONT_FACE).unwrap(),
                 "ＭＳ ゴシック"

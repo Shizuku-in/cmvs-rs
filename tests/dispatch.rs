@@ -418,6 +418,12 @@ fn old_text_dialog_commits_accept_cancel_and_empty_results() {
                 1,
                 b"\xd6\xd0\xce\\".as_slice(),
             ),
+            (
+                cmvs_rs::TextEncoding::Utf8,
+                Some("A中xé文".as_bytes().to_vec()),
+                1,
+                "中é文".as_bytes(),
+            ),
         ] {
             let mut code = vec![];
             command(

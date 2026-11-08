@@ -1830,6 +1830,46 @@ fn auxiliary_resizing_rejects_live_atlas_overlap_but_clear_releases_the_pixels()
 }
 
 #[test]
+fn utf8_auxiliary_measurement_and_layout_use_unicode_glyph_codes() {
+    let mut calls = AREA.to_vec();
+    calls.extend([(0x2390, &[7, 1][..]), (0x238b, &[7, 1][..])]);
+    // Two- and three-byte characters each count two cells, as a double-byte pair does.
+    let script = content_script(&calls, "中é{漢/かん}".as_bytes());
+    let mut vm = Machine::new_with_encoding(&script, cmvs_rs::TextEncoding::Utf8).unwrap();
+    let mut messages = MessageHost::default();
+    run_calls(&mut vm, &mut messages, 4);
+    assert_eq!(vm.state().system_integer(1), Some(6));
+    messages.set_record_output(true);
+    run(&mut vm, &mut messages);
+    assert_eq!(
+        messages
+            .auxiliary_text(7)
+            .unwrap()
+            .glyphs
+            .iter()
+            .map(|g| g.code)
+            .collect::<Vec<_>>(),
+        [0x4e2d, 0x00e9, 0x6f22]
+    );
+    assert_eq!(vm.stack().len_bytes(), 0);
+}
+
+#[test]
+fn utf8_auxiliary_text_rejects_invalid_and_supplementary_characters() {
+    for text in [&b"\xe4\xb8"[..], b"\xff", "😀".as_bytes()] {
+        let mut calls = AREA.to_vec();
+        calls.push((0x2390, &[7, 1][..]));
+        let script = content_script(&calls, text);
+        let mut vm = Machine::new_with_encoding(&script, cmvs_rs::TextEncoding::Utf8).unwrap();
+        let mut messages = MessageHost::default();
+        run_calls(&mut vm, &mut messages, 3);
+        pending(&mut vm);
+        let error = messages.shared_message(&mut vm).unwrap_err().to_string();
+        assert!(error.contains("UTF-8"), "{text:?}: {error}");
+    }
+}
+
+#[test]
 fn gbk_auxiliary_measurement_and_layout_preserve_control_trail_bytes() {
     let mut calls = AREA.to_vec();
     calls.extend([(0x2390, &[7, 1][..]), (0x238b, &[7, 1][..])]);

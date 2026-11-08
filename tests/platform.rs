@@ -1061,8 +1061,9 @@ fn scene_title_composes_window_text_and_keeps_base_title() {
 #[test]
 fn scene_title_separator_uses_game_encoding() {
     for (encoding, separator) in [
-        (cmvs_rs::TextEncoding::ShiftJis, [0x81, 0x40]),
-        (cmvs_rs::TextEncoding::Gbk, [0xa1, 0xa1]),
+        (cmvs_rs::TextEncoding::ShiftJis, &[0x81, 0x40][..]),
+        (cmvs_rs::TextEncoding::Gbk, &[0xa1, 0xa1]),
+        (cmvs_rs::TextEncoding::Utf8, "\u{3000}".as_bytes()),
     ] {
         let script = script(&[(0x2160, 0), (0x2161, 5)], b"Game\0- Opening -\0");
         let mut vm = Machine::new_with_encoding(&script, encoding).unwrap();

@@ -58,11 +58,7 @@ fn substring(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
         let Some(&byte) = bytes.get(index) else {
             break;
         };
-        let width = if call.vm.text_encoding().is_lead_byte(byte) {
-            2
-        } else {
-            1
-        };
+        let width = call.vm.text_encoding().wide_len(byte).unwrap_or(1);
         let next = index + width;
         if next > bytes.len() {
             return Err(error(
@@ -71,6 +67,7 @@ fn substring(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
                 match call.vm.text_encoding() {
                     TextEncoding::ShiftJis => "substring ends with an incomplete Shift-JIS pair",
                     TextEncoding::Gbk => "substring ends with an incomplete GBK pair",
+                    TextEncoding::Utf8 => "substring ends with an incomplete UTF-8 character",
                 },
             ));
         }
@@ -135,14 +132,16 @@ fn equal_ignoring_ascii_case(
     let mut i = 0;
     while at(first, i) != 0 {
         let b = at(first, i);
-        if encoding.is_lead_byte(b) {
-            if b != at(second, i) || at(first, i + 1) != at(second, i + 1) {
-                return Ok(false);
+        if let Some(len) = encoding.wide_len(b) {
+            for j in i..i + len {
+                if at(first, j) != at(second, j) {
+                    return Ok(false);
+                }
+                if j > i && at(first, j) == 0 {
+                    return Err("string comparison steps past a trailing lead byte");
+                }
             }
-            if at(first, i + 1) == 0 {
-                return Err("string comparison steps past a trailing lead byte");
-            }
-            i += 2;
+            i += len;
         } else {
             if !b.eq_ignore_ascii_case(&at(second, i)) {
                 return Ok(false);

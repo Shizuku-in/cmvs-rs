@@ -114,11 +114,18 @@ pub(crate) fn codec(encoding: TextEncoding) -> Result<&'static encoding_rs::Enco
     match encoding {
         TextEncoding::ShiftJis => Ok(encoding_rs::SHIFT_JIS),
         TextEncoding::Gbk => Ok(encoding_rs::GBK),
+        TextEncoding::Utf8 => Ok(encoding_rs::UTF_8),
         _ => Err(FormatError("unsupported font text encoding")),
     }
 }
 
 fn character(encoding: TextEncoding, code: u16) -> Result<char, FormatError> {
+    if encoding == TextEncoding::Utf8 {
+        // UTF-8 glyph codes are Unicode scalar values (see TextEncoding).
+        return char::from_u32(u32::from(code))
+            .filter(|&ch| ch != '\0')
+            .ok_or(FormatError("invalid UTF-8 glyph code"));
+    }
     let pair = code.to_be_bytes();
     let bytes = if code <= 0x7f || (encoding == TextEncoding::ShiftJis && code >= 0xff80) {
         &pair[1..]
@@ -749,6 +756,15 @@ mod tests {
         assert!(character(TextEncoding::Gbk, 0x817f).is_err());
         // A GBK pair remains two bytes even in the sign-extended SJIS range.
         assert!(character(TextEncoding::Gbk, 0xffb1).is_err());
+    }
+
+    #[test]
+    fn utf8_glyph_codes_are_unicode_scalars() {
+        assert_eq!(character(TextEncoding::Utf8, 0x3042).unwrap(), 'あ');
+        assert_eq!(character(TextEncoding::Utf8, 0x00e9).unwrap(), 'é');
+        assert_eq!(character(TextEncoding::Utf8, 65).unwrap(), 'A');
+        assert!(character(TextEncoding::Utf8, 0).is_err());
+        assert!(character(TextEncoding::Utf8, 0xd800).is_err());
     }
     #[test]
     fn synthetic_mask_has_transparent_padding_and_a_one_pixel_outline() {

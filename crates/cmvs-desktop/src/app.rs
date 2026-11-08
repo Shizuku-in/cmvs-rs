@@ -43,7 +43,7 @@ Required:
 Display, text and audio:
   --renderer <name>       cpu (default) or wgpu (needs wgpu-renderer build feature)
   --font <file>           OpenType font file or collection for message rendering
-                         supports shift-jis and gbk; cannot combine with --record-text
+                         supports shift-jis, gbk and utf-8; cannot combine with --record-text
   --font-face <index>     zero-based collection face; requires --font (default 0)
   --record-text          record glyphs and reveal timing without drawing text
   --audio <name>          record (default) or native (needs audio-output build feature)
@@ -79,8 +79,7 @@ Build:
 
 Notes:
   Without --font or --record-text, message output stops at a barrier.
-  Playback supports Shift-JIS and GBK, including message rendering.
-  UTF-8 engine text scanning is not supported; selecting/detecting it stops startup.
+  Playback supports Shift-JIS, GBK and UTF-8, including message rendering.
   Glyph pixels differ from the original GDI backend.
   Auto detection samples complete strings in the first 256 KiB of startup text.
   Known game builds are identified from scripts, archives and executable hashes.
@@ -912,9 +911,6 @@ fn run() -> Result<(), Box<dyn Error>> {
     if font_path.is_some() && record_text {
         return Err("--font cannot be combined with --record-text".into());
     }
-    if let EncodingChoice::Explicit(encoding) = choice {
-        encoding.engine_encoding()?;
-    }
     if system_save_output.is_some() && user_data_dir.is_some() {
         return Err("--user-data-dir and --system-save-output are mutually exclusive".into());
     }
@@ -938,7 +934,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             "# auto encoding={name}; inferred from startup script text; override with --encoding <name> if incorrect"
         );
     }
-    let engine_encoding = encoding.engine_encoding()?;
+    let engine_encoding = encoding.engine_encoding();
     let font = font_path
         .as_ref()
         .map(|path| {

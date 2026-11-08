@@ -433,14 +433,6 @@ pub enum PlatformEvent {
     CursorUnchanged,
     Configured,
 }
-/// Full-width space between the base and scene titles (0x1400de070 in Shift-JIS).
-/// Host-generated text must use the same encoding as the script's title strings.
-fn title_separator(encoding: TextEncoding) -> [u8; 2] {
-    match encoding {
-        TextEncoding::ShiftJis => [0x81, 0x40],
-        TextEncoding::Gbk => [0xa1, 0xa1],
-    }
-}
 
 #[derive(Default)]
 pub struct PlatformHost {
@@ -521,7 +513,8 @@ impl PlatformHost {
             .title
             .clone()
             .ok_or("base window title +340 is unknown at load")?;
-        text.extend(title_separator(encoding));
+        // Host-generated text uses the same encoding as the script's title strings.
+        text.extend(encoding.title_separator());
         text.extend(title);
         if text.len() >= 128 {
             return Err("restored window title exceeds 127 bytes");
@@ -785,7 +778,7 @@ impl PlatformHost {
                     .as_deref()
                     .ok_or_else(|| error(pc, 0x2161, "base window title +340 is unknown"))?;
                 let mut text = base.to_vec();
-                text.extend(title_separator(call.vm.text_encoding()));
+                text.extend(call.vm.text_encoding().title_separator());
                 text.extend(&name);
                 // The original composes into a 128-byte stack buffer without a bound check.
                 if text.len() >= 128 {
@@ -878,8 +871,9 @@ mod tests {
     #[test]
     fn restored_scene_title_uses_game_encoding() {
         for (encoding, separator) in [
-            (TextEncoding::ShiftJis, [0x81, 0x40]),
-            (TextEncoding::Gbk, [0xa1, 0xa1]),
+            (TextEncoding::ShiftJis, &[0x81, 0x40][..]),
+            (TextEncoding::Gbk, &[0xa1, 0xa1]),
+            (TextEncoding::Utf8, "\u{3000}".as_bytes()),
         ] {
             let mut host = PlatformHost {
                 title: Some(b"Game".to_vec()),

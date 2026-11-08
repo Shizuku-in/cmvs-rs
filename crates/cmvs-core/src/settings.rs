@@ -10,11 +10,14 @@ pub const DEFAULT_FONT_FACE: &[u8] = b"\x82l\x82r \x83S\x83V\x83b\x83N";
 /// Present the built-in face name to script text in the selected game encoding.
 /// Keep the original bytes internally for existing configurations and snapshots.
 pub fn font_face_for_encoding(face: &[u8], encoding: crate::TextEncoding) -> &[u8] {
-    if face == DEFAULT_FONT_FACE && encoding == crate::TextEncoding::Gbk {
+    if face != DEFAULT_FONT_FACE {
+        return face;
+    }
+    match encoding {
         // GBK `ＭＳ ゴシック`.
-        b"\xa3\xcd\xa3\xd3 \xa5\xb4\xa5\xb7\xa5\xc3\xa5\xaf"
-    } else {
-        face
+        crate::TextEncoding::Gbk => b"\xa3\xcd\xa3\xd3 \xa5\xb4\xa5\xb7\xa5\xc3\xa5\xaf",
+        crate::TextEncoding::Utf8 => "ＭＳ ゴシック".as_bytes(),
+        crate::TextEncoding::ShiftJis => face,
     }
 }
 
