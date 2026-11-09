@@ -843,7 +843,9 @@ fn root_auxiliary_scene(
         .handle_auxiliary_scene(call, hosts.scene.as_deref_mut())?)
 }
 pub fn uses_message_state(command: u16) -> bool {
-    uses_windows(command)
+    // The font-name query needs the message host's backend to show a readable name.
+    command == 0x2de
+        || uses_windows(command)
         || entries_any_table(command).iter().copied().any(|e| {
             e.command == command
                 && matches!(
