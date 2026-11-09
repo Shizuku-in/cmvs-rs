@@ -218,6 +218,14 @@ pub(crate) fn rewrite_encoded(
     {
         return Err("instruction layout changed".into());
     }
+    Ok((rebuild_script(raw, &code, &text)?, changed))
+}
+
+pub(crate) fn rebuild_script(raw: &[u8], code: &[u8], text: &[u8]) -> Result<Vec<u8>> {
+    let script = Script::decode(raw)?;
+    if code.len() != script.code().len() {
+        return Err("instruction segment size changed".into());
+    }
     let mut payload = Vec::new();
     for label in script.labels() {
         push(&mut payload, label);
@@ -251,7 +259,7 @@ pub(crate) fn rewrite_encoded(
     if verified.payload() != payload {
         return Err("PS2A roundtrip differs".into());
     }
-    Ok((out, changed))
+    Ok(out)
 }
 fn encrypt(bytes: &mut [u8]) {
     const TABLE: [u32; 16] = [

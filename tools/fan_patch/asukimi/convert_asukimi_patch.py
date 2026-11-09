@@ -8,12 +8,14 @@ See tools/fan_patch/asukimi/README.md.
 from __future__ import annotations
 
 import argparse
+import csv
 from array import array
 import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import shutil
 import struct
+import subprocess
 import sys
 import tempfile
 import zipfile
@@ -250,7 +252,11 @@ def normalize_script_archive(raw: bytes) -> tuple[bytes, int]:
     return bytes(out), repaired
 
 
-def convert(game: Path, patch: Path, output: Path) -> None:
+def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> None:
+    if encoding not in ("utf-8", "utf8", "gbk"):
+        raise FormatError("encoding must be utf-8, utf8 or gbk")
+    encoding = "utf-8" if encoding == "utf8" else encoding
+    recoded_scripts = []
     game, patch, output = game.resolve(), patch.resolve(), output.resolve()
     if output.exists() or output.is_relative_to(game):
         raise FormatError("Output must be a new directory outside the game")
@@ -282,6 +288,20 @@ def convert(game: Path, patch: Path, output: Path) -> None:
             raise FormatError("Unexpected script count")
         for name in scripts.entries:
             decode_script(scripts.read(name))
+        if encoding == "utf-8":
+            (Path(temp) / "start.ps2").write_bytes(start)
+            recoded = Path(temp) / "utf8"
+            recoded.mkdir()
+            tool = Path(__file__).resolve().parent
+            subprocess.run([
+                "cargo", "run", "--offline", "--locked", "--release", "--manifest-path",
+                str(tool / "Cargo.toml"), "--target-dir", str(tool.parents[2] / "target/fan-patch-asukimi"),
+                "--", str(game), temp, str(recoded),
+            ], check=True)
+            start = (recoded / "start.ps2").read_bytes()
+            script_archive = (recoded / "script.cpz").read_bytes()
+            with (recoded / "scripts.tsv").open(encoding="utf-8") as stream:
+                recoded_scripts = list(csv.DictReader(stream, delimiter="\t"))
     chip = Cpz3(game / "data/pack/chip.cpz")
     images, details = {}, {}
     for name, raw in files.items():
@@ -316,9 +336,15 @@ def convert(game: Path, patch: Path, output: Path) -> None:
     temp_chip.replace(output / "data/pack/chip.cpz")
     (output / "patch-readme.txt").write_bytes(files["readme.txt"])
     report = dict(converter="asukimi-ck-gal-v1", engine_profile="cmvs-20071117",
-                  encoding="gbk", patch_sha256=PATCH_SHA256,
+                  encoding=encoding, patch_sha256=PATCH_SHA256,
                   base_sha256={**BASE_HASHES, "data/pack/chip.cpz": sha256(chip.path)},
                   scripts=len(scripts.entries), images=details,
+                  recoded_scripts=recoded_scripts,
+                  source_encoding="gbk", text_substitutions={},
+                  code_repairs=[
+                      {"script": "snas09.ps2", "code_offset": "0x3a6c1", "before": "02ec0000", "after": "000f0230"},
+                      {"script": "snma10.ps2", "code_offset": "0x20e51", "before": "d62b0000", "after": "000f0230"},
+                  ] if encoding == "utf-8" else [],
                   resource_checksums_rebuilt=repaired, index_checksum_rebuilt=True,
                   startup_repair={"text_size": [60, 382], "compressed_size": [915, 908],
                                   "decoded_size": [7130, 3756]},
@@ -338,10 +364,12 @@ def main() -> None:
     parser.add_argument("game", type=Path, help="Supported unmodified original game directory")
     parser.add_argument("patch", type=Path, help="Supported CK-GAL V1.0 ZIP")
     parser.add_argument("output", type=Path, help="New independent output directory")
+    parser.add_argument("--encoding", choices=("utf-8", "utf8", "gbk"), default="utf-8",
+                        help="Output text encoding (default: utf-8)")
     args = parser.parse_args()
     try:
-        convert(args.game, args.patch, args.output)
-    except (OSError, ValueError, KeyError, zipfile.BadZipFile) as exc:
+        convert(args.game, args.patch, args.output, encoding=args.encoding)
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile, subprocess.CalledProcessError) as exc:
         parser.exit(1, f"Error: {exc}\n")
 
 
