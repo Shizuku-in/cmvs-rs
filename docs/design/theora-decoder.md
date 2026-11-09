@@ -109,6 +109,14 @@ CMVS_THEORA_MGV="<绝对路径>/data/video/op.mgv" \
   cargo test --release -p cmvs-video --test video external_prefetch_playback_never_rewinds_forward_requests -- --ignored --nocapture
 ```
 
+## Switch 复杂画面与预解码
+
+工作线程默认保留最多 16 张 RGBA / 64 MiB，缓存命中直接返回，不等待正在解码的后续包。Switch 用 `with_lookahead` 改存 YUV420，缓冲上限 192 MiB / 144 帧，仅显示时转换 RGBA；大帧至少保留两帧，当前 RGBA 和解码器参考平面另计。通知通道有界，仅保留最新播放目标；停止、倒退、错误与 EOF 校验仍通过同步请求。
+
+Huffman 初始化时展开 10 位以内的码与附加位，复杂/长码保留原路径；固定包尾测试对照逐树解码，保证 lookahead 不消费补零。模拟器验证使用独立的逐包及按时钟推进基准，分别统计解码耗时和播放请求阻塞；不把桌面计时当作 Switch 帧率。
+
+Ryujinx 1.3.3 的 REALIVE OP 无呈现播放基准（1280×720、24 fps）：一帧预取跳过 188 个名义帧、26 次等待超过 100 ms，最大 1726 ms；YUV 长队列未跳帧、无超过 100 ms 的等待，最大 11.2 ms。该基准按时钟请求整段影片，不含 VM 与 GPU 呈现，不代表完整游戏帧率。
+
 ## 初始版本的 1080p 合成基准
 
 Ryzen 9 9900X，Linux x86-64，release，单线程；FFmpeg 8.0.1、libtheora 编码，`testsrc2` 1920×1080、24 fps、120 帧、quality 5、GOP 48，编码表面为 1920×1088。比较每个数据包的 YUV 解码时间，排除头部初始化、Ogg 读取、RGBA 转换、哈希和呈现：本轮验证中自研约 **2.7～2.9 ms/帧**，旧后端约 **5.5～5.8 ms/帧**，约 **2 倍**；最后一次为 2.872 / 5.503 ms，1.92 倍。该合成流全部编码平面与旧后端一致，可见区域与 FFmpeg rawvideo 逐字节一致。

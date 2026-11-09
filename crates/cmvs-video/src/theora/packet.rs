@@ -433,7 +433,7 @@ const COEFFICIENT_SPECS: [(u8, u8, u8, i16, u8); 25] = [
     (3, 2, 1, 2, 1),
 ];
 
-const TOKEN_EXTRA_BITS: [u8; 32] = {
+pub(super) const TOKEN_EXTRA_BITS: [u8; 32] = {
     let mut bits = [0; 32];
     bits[3] = 2;
     bits[4] = 3;

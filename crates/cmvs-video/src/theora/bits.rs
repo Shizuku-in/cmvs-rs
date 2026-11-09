@@ -94,11 +94,22 @@ struct Entry {
     node: u8,
 }
 
+#[derive(Clone, Copy)]
+struct FastEntry {
+    bits: u8,
+    token: u8,
+    extra: u16,
+}
+
+const FAST_BITS: u8 = 10;
+const FAST_SIZE: usize = 1 << FAST_BITS;
+
 pub(super) struct Huffman {
     // A tree has at most 32 leaves and 31 branches. Short codes take one lookup;
     // long codes resume at the node reached by the first eight bits.
     tree: Vec<[i16; 2]>,
     prefix: [Entry; 256],
+    fast: Option<Box<[FastEntry; FAST_SIZE]>>,
 }
 
 impl Huffman {
@@ -152,11 +163,56 @@ impl Huffman {
                 }
             }
         });
-        Ok(Self { tree, prefix })
+        Ok(Self {
+            tree,
+            prefix,
+            fast: None,
+        })
+    }
+
+    /// Expand short codes including their payload at setup, instead of extracting
+    /// the Huffman code and its extra bits separately for every coefficient.
+    pub fn prepare(&mut self, extra_bits: &[u8; 32]) {
+        self.fast = Some(Box::new(std::array::from_fn(|code| {
+            let entry = self.prefix[code >> (FAST_BITS - 8)];
+            let mut n = entry.bits;
+            let mut current = if entry.node == 0 {
+                -1 - i16::from(entry.token)
+            } else {
+                i16::from(entry.node - 1)
+            };
+            while current >= 0 && n < FAST_BITS {
+                current = self.tree[current as usize][(code >> (FAST_BITS - 1 - n)) & 1];
+                n += 1;
+            }
+            if current < 0 {
+                let token = (-1 - current) as u8;
+                let extra = extra_bits[token as usize];
+                if n + extra <= FAST_BITS {
+                    return FastEntry {
+                        bits: n + extra,
+                        token,
+                        extra: ((code >> (FAST_BITS - n - extra)) & ((1 << extra) - 1)) as u16,
+                    };
+                }
+            }
+            FastEntry {
+                bits: 255,
+                token: 0,
+                extra: 0,
+            }
+        })));
     }
 
     #[inline]
     pub fn token(&self, bits: &mut Bits<'_>, extra_bits: &[u8; 32]) -> Result<(u8, u32)> {
+        if let Some(fast) = &self.fast {
+            let entry = fast[bits.peek(u32::from(FAST_BITS)) as usize];
+            if entry.bits != 255 {
+                bits.skip(u32::from(entry.bits))?;
+                return Ok((entry.token, u32::from(entry.extra)));
+            }
+        }
         let entry = self.prefix[bits.peek(8) as usize];
         if entry.node == 0 {
             // Consume a short Huffman code and its payload with one bounds check
@@ -234,6 +290,56 @@ mod tests {
             assert_eq!(bits.peek(32), 0);
             assert!(bits.read(1).is_err());
             assert_eq!(bits.read(0).unwrap(), 0);
+        }
+    }
+
+    #[test]
+    fn expanded_tokens_match_tree_decoding_at_packet_tails() {
+        fn balanced(out: &mut Vec<u8>, depth: u8, token: u8) {
+            if depth == 0 {
+                out.push(1);
+                out.extend((0..5).rev().map(|bit| (token >> bit) & 1));
+            } else {
+                out.push(0);
+                balanced(out, depth - 1, token);
+                balanced(out, depth - 1, token + (1 << (depth - 1)));
+            }
+        }
+        let mut tree = Vec::new();
+        balanced(&mut tree, 5, 0);
+        let mut long = vec![0; 31];
+        for token in 0..32 {
+            long.push(1);
+            long.extend((0..5).rev().map(|bit| (token >> bit) & 1));
+        }
+        let extras = super::super::packet::TOKEN_EXTRA_BITS;
+        let data: Vec<u8> = (0..32).map(|i| (i * 73 + 19) as u8).collect();
+        for description in [vec![1, 1, 0, 1, 0, 1], tree, long] {
+            let description = packed(&description);
+            let reference = Huffman::parse(&mut Bits::new(&description)).unwrap();
+            let mut fast = Huffman::parse(&mut Bits::new(&description)).unwrap();
+            fast.prepare(&extras);
+            for length in 0..=data.len() {
+                for offset in 0..8 {
+                    let mut a = Bits::new(&data[..length]);
+                    let mut b = Bits::new(&data[..length]);
+                    if a.skip(offset).is_err() {
+                        continue;
+                    }
+                    b.skip(offset).unwrap();
+                    for _ in 0..32 {
+                        let expected = reference.token(&mut a, &extras);
+                        let actual = fast.token(&mut b, &extras);
+                        assert_eq!(actual, expected);
+                        // Errors may consume a Huffman prefix before detecting a
+                        // truncated payload, but must never consume padding.
+                        if actual.is_err() {
+                            break;
+                        }
+                        assert_eq!(a.remaining(), b.remaining());
+                    }
+                }
+            }
         }
     }
 

@@ -175,7 +175,9 @@ impl Setup {
         }
         let mut huffman = Vec::with_capacity(80);
         for _ in 0..80 {
-            huffman.push(Huffman::parse(&mut b)?);
+            let mut table = Huffman::parse(&mut b)?;
+            table.prepare(&super::packet::TOKEN_EXTRA_BITS);
+            huffman.push(table);
         }
         Ok(Self {
             limits,

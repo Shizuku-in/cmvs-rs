@@ -15,6 +15,7 @@ use headers::Setup;
 pub(crate) use headers::{Ident, comments};
 use packet::State;
 
+#[derive(Clone)]
 pub(crate) struct Frame {
     pub planes: [Vec<u8>; 3],
 }
@@ -101,6 +102,10 @@ impl Decoder {
         self.started = true;
         self.failed = false;
         Ok(&self.frames[current])
+    }
+
+    pub fn current_frame(&self) -> &Frame {
+        &self.frames[self.previous]
     }
 
     fn reconstruct(&mut self, current: usize, qis: &[usize; 3], intra: bool) {

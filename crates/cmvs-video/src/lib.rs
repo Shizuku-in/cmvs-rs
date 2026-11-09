@@ -1,6 +1,6 @@
 //! MGV1's Ogg/Theora stream, with bounded I/O and explicit nominal-frame mapping.
 //! Pure Rust and window-free, so every host can install [`TheoraFactory`], or
-//! [`PrefetchTheoraFactory`] to decode the next packet on a worker thread during playback.
+//! [`PrefetchTheoraFactory`] for bounded worker-thread lookahead during playback.
 mod prefetch;
 mod theora;
 use cmvs_core::{
@@ -200,22 +200,32 @@ impl TheoraStream {
             self.reset()?;
         }
         while self.next_packet <= target {
-            self.failed = true;
-            self.budget.set(MAX_PAYLOAD);
-            let packet = self.packets.read_packet_expected()?;
-            if packet.stream_serial() != self.serial {
-                return Err(FormatError("MGV video changes Ogg serial").into());
-            }
-            let frame = codec(self.decoder.decode_frame(&packet.data))?;
-            if self.next_packet == target {
-                let image = to_rgba(&self.ident, frame, &self.index)?;
+            let packet = self.next_packet;
+            self.decode_packet()?;
+            if packet == target {
+                let image = to_rgba(&self.ident, self.decoder.current_frame(), &self.index)?;
                 self.recent.rotate_left(1);
                 self.recent[1] = Some((target, image));
             }
-            self.next_packet += 1;
-            self.failed = false;
         }
         Ok(())
+    }
+    fn decode_packet(&mut self) -> Result<(), Box<dyn Error>> {
+        self.failed = true;
+        self.budget.set(MAX_PAYLOAD);
+        let packet = self.packets.read_packet_expected()?;
+        if packet.stream_serial() != self.serial {
+            return Err(FormatError("MGV video changes Ogg serial").into());
+        }
+        codec(self.decoder.decode_frame(&packet.data))?;
+        self.next_packet += 1;
+        self.failed = false;
+        Ok(())
+    }
+    fn prefetch_yuv(&mut self) -> Result<theora::Frame, Box<dyn Error>> {
+        self.decode_packet()?;
+        self.recent = [None, None];
+        Ok(self.decoder.current_frame().clone())
     }
 }
 impl mgv::Decoder for TheoraStream {
@@ -233,7 +243,9 @@ impl mgv::Decoder for TheoraStream {
             .clone())
     }
     fn finish(&mut self) -> Result<(), Box<dyn Error>> {
-        self.decode_through(self.index.packet_count() - 1)?;
+        if self.failed || self.next_packet < self.index.packet_count() {
+            self.decode_through(self.index.packet_count() - 1)?;
+        }
         self.failed = true;
         self.budget.set(MAX_PAYLOAD);
         if self.packets.read_packet()?.is_some() {

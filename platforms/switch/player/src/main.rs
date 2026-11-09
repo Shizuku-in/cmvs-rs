@@ -209,11 +209,14 @@ fn run(
     startup.set_audio_backend(Box::new(audio))?;
     startup.set_decode_movie_frames(true);
     // Core 0 runs the VM and rendering, core 1 the audio thread.
-    startup.set_mgv_factory(Box::new(cmvs_video::PrefetchTheoraFactory {
-        on_thread_start: || {
-            sys::prefer_core(2);
-        },
-    }));
+    startup.set_mgv_factory(Box::new(
+        cmvs_video::PrefetchTheoraFactory {
+            on_thread_start: || {
+                sys::prefer_core(2);
+            },
+        }
+        .with_lookahead(192 << 20, 144),
+    ));
     startup.set_scene_prefetch(|| {
         sys::prefer_core(2);
     });

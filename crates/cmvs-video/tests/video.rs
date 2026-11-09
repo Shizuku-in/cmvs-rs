@@ -198,37 +198,41 @@ fn prefetching_decoder_matches_the_inline_stream() {
 fn repeated_frames_do_not_rewind_the_prefetching_decoder() {
     use cmvs_core::mgv::DecoderFactory;
     use cmvs_video::PrefetchTheoraFactory;
-    let bytes = fixture();
-    let mut index = MgvIndex::read(&mut Cursor::new(&bytes)).unwrap();
-    let mut frames = vec![index.frames[0]; 16];
-    frames.extend_from_slice(&index.frames[1..]);
-    index.frames = frames;
-    let seeks = Arc::new(AtomicUsize::new(0));
-    let mut inline = TheoraStream::open(Box::new(Cursor::new(bytes.clone())), &index).unwrap();
-    let mut prefetch = PrefetchTheoraFactory::default()
-        .open(
-            Box::new(CountingReader {
-                data: Cursor::new(bytes),
-                seeks: seeks.clone(),
-            }),
-            &index,
-        )
-        .unwrap();
-    for frame in 0..index.frames.len() as u32 {
-        assert_eq!(prefetch.frame(frame).unwrap(), inline.frame(frame).unwrap());
+    let factory = PrefetchTheoraFactory::default();
+    let buffered = factory.with_lookahead(1 << 20, 16);
+    for factory in [&factory as &dyn DecoderFactory, &buffered] {
+        let bytes = fixture();
+        let mut index = MgvIndex::read(&mut Cursor::new(&bytes)).unwrap();
+        let mut frames = vec![index.frames[0]; 16];
+        frames.extend_from_slice(&index.frames[1..]);
+        index.frames = frames;
+        let seeks = Arc::new(AtomicUsize::new(0));
+        let mut inline = TheoraStream::open(Box::new(Cursor::new(bytes.clone())), &index).unwrap();
+        let mut prefetch = factory
+            .open(
+                Box::new(CountingReader {
+                    data: Cursor::new(bytes),
+                    seeks: seeks.clone(),
+                }),
+                &index,
+            )
+            .unwrap();
+        for frame in 0..index.frames.len() as u32 {
+            assert_eq!(prefetch.frame(frame).unwrap(), inline.frame(frame).unwrap());
+        }
+        prefetch.finish().unwrap();
+        assert_eq!(
+            seeks.load(Ordering::Relaxed),
+            1,
+            "sequential playback replayed"
+        );
+        assert_eq!(prefetch.frame(0).unwrap(), inline.frame(0).unwrap());
+        assert_eq!(
+            seeks.load(Ordering::Relaxed),
+            2,
+            "backward seek must replay"
+        );
     }
-    prefetch.finish().unwrap();
-    assert_eq!(
-        seeks.load(Ordering::Relaxed),
-        1,
-        "sequential playback replayed"
-    );
-    assert_eq!(prefetch.frame(0).unwrap(), inline.frame(0).unwrap());
-    assert_eq!(
-        seeks.load(Ordering::Relaxed),
-        2,
-        "backward seek must replay"
-    );
 }
 
 #[test]
@@ -243,6 +247,7 @@ fn external_prefetch_playback_never_rewinds_forward_requests() {
     let mut inline =
         TheoraStream::open(Box::new(std::fs::File::open(&path).unwrap()), &index).unwrap();
     let mut prefetch = PrefetchTheoraFactory::default()
+        .with_lookahead(192 << 20, 144)
         .open(
             Box::new(CountingReader {
                 data: source,
@@ -272,5 +277,71 @@ fn external_prefetch_playback_never_rewinds_forward_requests() {
         seeks.load(Ordering::Relaxed),
         1,
         "forward playback replayed"
+    );
+}
+
+#[test]
+fn cached_frame_does_not_wait_for_a_later_packet() {
+    use cmvs_core::mgv::DecoderFactory;
+    use cmvs_video::PrefetchTheoraFactory;
+    use std::{sync::mpsc, time::Duration};
+    struct BlockingReader {
+        data: Cursor<Vec<u8>>,
+        at: u64,
+        reached: Option<mpsc::SyncSender<()>>,
+        release: mpsc::Receiver<()>,
+    }
+    impl Read for BlockingReader {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            if self.data.position() >= self.at
+                && let Some(reached) = self.reached.take()
+            {
+                let _ = reached.send(());
+                self.release.recv().map_err(std::io::Error::other)?;
+            }
+            self.data.read(out)
+        }
+    }
+    impl Seek for BlockingReader {
+        fn seek(&mut self, offset: SeekFrom) -> std::io::Result<u64> {
+            self.data.seek(offset)
+        }
+    }
+    let bytes = fixture();
+    let index = MgvIndex::read(&mut Cursor::new(&bytes)).unwrap();
+    let mut inline = TheoraStream::open(Box::new(Cursor::new(bytes.clone())), &index).unwrap();
+    let expected = inline.frame(1).unwrap();
+    let at = bytes.windows(4).rposition(|b| b == b"OggS").unwrap() as u64;
+    let (reached_tx, reached) = mpsc::sync_channel(1);
+    let (release, release_rx) = mpsc::sync_channel(1);
+    let (ask, ask_rx) = mpsc::sync_channel(1);
+    let (done_tx, done) = mpsc::sync_channel(1);
+    let host = std::thread::spawn(move || {
+        let mut decoder = PrefetchTheoraFactory::default()
+            .with_lookahead(1 << 20, 16)
+            .open(
+                Box::new(BlockingReader {
+                    data: Cursor::new(bytes),
+                    at,
+                    reached: Some(reached_tx),
+                    release: release_rx,
+                }),
+                &index,
+            )
+            .unwrap();
+        decoder.frame(0).unwrap();
+        if ask_rx.recv().is_ok() {
+            let _ = done_tx.send(decoder.frame(1).unwrap());
+        }
+    });
+    // The worker has frame 1 ready and is deliberately stuck reading frame 3.
+    reached.recv_timeout(Duration::from_secs(5)).unwrap();
+    ask.send(()).unwrap();
+    let cached = done.recv_timeout(Duration::from_secs(5));
+    let _ = release.send(());
+    host.join().unwrap();
+    assert_eq!(
+        cached.expect("cached frame waited for the blocked worker"),
+        expected
     );
 }
