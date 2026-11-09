@@ -1,4 +1,4 @@
-//! CPZ archive reading. Supports CPZ3, CPZ5 packing modes 5..9, CPZ6 and CPZ7.
+//! CPZ archive access. Supports CPZ3, CPZ5 packing modes 5..9, CPZ6 and CPZ7.
 //!
 //! Version-specific implementations are kept behind this public entry point.
 
@@ -9,9 +9,13 @@ mod cpz7;
 mod crypto;
 mod entry;
 mod error;
+mod write;
 
 use crate::FormatError;
-use std::io::{Read, Seek, SeekFrom};
+use std::{
+    collections::BTreeMap,
+    io::{Read, Seek, SeekFrom, Write},
+};
 
 pub use cpz3::{CPZ3_HEADER_SIZE, Cpz3Index, Cpz3Layout, cpz3_checksum};
 pub use cpz5::{CPZ5_HEADER_SIZE, Cpz5Index, Cpz5Layout, Cpz5Mode};
@@ -20,6 +24,7 @@ pub use cpz7::{CPZ7_HEADER_SIZE, Cpz7Index, Cpz7Layout, Cpz7Parameters};
 pub use crypto::data_checksum;
 pub use entry::Entry;
 pub use error::ArchiveError;
+pub use write::{ArchiveDirectory, ArchiveFile};
 
 /// Recognized signatures; recognition alone does not imply decoding support.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +118,19 @@ pub enum ArchiveIndex {
 }
 
 impl ArchiveIndex {
+    /// Replace entries by index, retaining the archive version, names, directories,
+    /// keys and packing/encryption modes. Other payloads are copied as verified
+    /// ciphertext. `source` must match this index and `output` must be empty;
+    /// failures may leave a partial output. No entries are added or removed.
+    pub fn write_replacements<R: Read + Seek, W: Write + Seek>(
+        &self,
+        source: &mut R,
+        output: &mut W,
+        replacements: &BTreeMap<usize, Vec<u8>>,
+    ) -> Result<(), ArchiveError> {
+        write::rewrite(self, source, output, replacements)
+    }
+
     pub fn read<R: Read + Seek>(reader: &mut R) -> Result<Self, ArchiveError> {
         Self::read_with_cpz7_parameters(reader, Cpz7Parameters::default())
     }

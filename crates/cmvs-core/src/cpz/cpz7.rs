@@ -62,7 +62,7 @@ pub struct Cpz7Index {
     entries: Vec<Entry>,
     entry_keys: Vec<(u32, u32)>,
     keys: crypto::Keys,
-    parameters: Cpz7Parameters,
+    pub(super) parameters: Cpz7Parameters,
     file_bytes: u64,
 }
 
@@ -423,7 +423,7 @@ fn huffman_tree(bits: &mut HuffmanBits<'_>, nodes: &mut Vec<[u16; 2]>) -> Result
     Ok(at as u16 + 256)
 }
 
-fn unpack_index_key(block: &[u8]) -> Result<Vec<u8>, FormatError> {
+pub(super) fn unpack_index_key(block: &[u8]) -> Result<Vec<u8>, FormatError> {
     if block.len() < 24 {
         return Err(FormatError("truncated CPZ7 key block"));
     }

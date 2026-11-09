@@ -40,7 +40,7 @@ impl TryFrom<u32> for Cpz5Mode {
 }
 
 impl Cpz5Mode {
-    fn table_bytes(self) -> &'static [u8; 96] {
+    pub(super) fn table_bytes(self) -> &'static [u8; 96] {
         if (self as u32) < 8 {
             &crypto::TABLE_BYTES
         } else {
@@ -48,7 +48,7 @@ impl Cpz5Mode {
         }
     }
 
-    fn keys(self, header: &[u8]) -> crypto::Keys {
+    pub(super) fn keys(self, header: &[u8]) -> crypto::Keys {
         let masks = [0x43de7c19, 0xcc65f415, 0xd016a93c, 0x97a3ba9a];
         let input = std::array::from_fn(|i| word(&header[32 + i * 4..]) ^ masks[i]);
         let initial = match self {
@@ -88,7 +88,7 @@ impl Cpz5Mode {
         }
     }
 
-    fn table(self, mut key: u32, seed: u32) -> [u8; 256] {
+    pub(super) fn table(self, mut key: u32, seed: u32) -> [u8; 256] {
         let multiplier = if self == Self::Mode9 {
             0x1a740235
         } else {
@@ -106,7 +106,7 @@ impl Cpz5Mode {
         table
     }
 
-    fn outer_index(self, bytes: &mut [u8], key: u32) {
+    pub(super) fn outer_index(self, bytes: &mut [u8], key: u32) {
         let key = key ^ 0x3795b39a;
         let table: [u32; 24] =
             std::array::from_fn(|i| word(&self.table_bytes()[i * 4..]).wrapping_sub(key));
@@ -136,7 +136,7 @@ impl Cpz5Mode {
         }
     }
 
-    fn directory_index(self, bytes: &mut [u8], keys: &crypto::Keys) {
+    pub(super) fn directory_index(self, bytes: &mut [u8], keys: &crypto::Keys) {
         self.substitute(bytes, keys, keys.digest[1], 0x3a);
         let key = keys.directory_key();
         let mut seed = 0x76548aefu32;
@@ -157,7 +157,7 @@ impl Cpz5Mode {
         }
     }
 
-    fn file_index(self, bytes: &mut [u8], directory: u32, keys: &crypto::Keys) {
+    pub(super) fn file_index(self, bytes: &mut [u8], directory: u32, keys: &crypto::Keys) {
         self.substitute(bytes, keys, keys.digest[2], 0x7e);
         let key = [
             directory ^ keys.digest[0],

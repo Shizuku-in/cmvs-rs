@@ -1,7 +1,7 @@
 //! Public archive metadata; cipher keys belong to each version implementation.
 use std::sync::Arc;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
     pub directory: Arc<[u8]>,
     pub name: Vec<u8>,

@@ -182,7 +182,8 @@ fn rewrite_archive(
         .write(true)
         .create_new(true)
         .open(output.join(name))?;
-    Cpz7Index::write_replacements(&mut source, &mut destination, parameters, replacements)?;
+    let index = archive_index_from_start(&mut source, start, name.as_bytes())?;
+    index.write_replacements(&mut source, &mut destination, replacements)?;
     destination.flush()?;
     drop(destination);
     let mut verified = File::open(output.join(name))?;

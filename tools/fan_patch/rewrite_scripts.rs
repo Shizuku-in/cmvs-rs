@@ -1,7 +1,7 @@
 //! Shared encoding, string relocation, PS2A rebuilding and CPZ3 writing for offline converters.
 use cmvs_core::{
     bytecode::{self, Expression, InstructionKind, Term},
-    cpz::{ArchiveIndex, cpz3_checksum},
+    cpz::{ArchiveIndex, Cpz3Index},
     ps3::Script,
 };
 use std::{
@@ -204,33 +204,9 @@ pub(crate) fn rebuild_script(raw: &[u8], code: &[u8], text: &[u8]) -> Result<Vec
     }
     Ok(out)
 }
-fn encrypt(bytes: &mut [u8]) {
-    const TABLE: [u32; 16] = [
-        0x4d0d4a5e, 0xb3abf3e1, 0x3c37336d, 0x86c3f5f3, 0x7d4f9b89, 0x58d7de11, 0x6367778d,
-        0xa5f34629, 0x067fa4b5, 0xed0ae742, 0xb19450cc, 0xe7204a5a, 0xd9af04f5, 0x5d3b687f,
-        0xc1c7a6fd, 0xfc502289,
-    ];
-    let mut flag = 3;
-    let (words, tail) = bytes.as_chunks_mut::<4>();
-    for chunk in words {
-        let value = u32::from_le_bytes(*chunk)
-            .rotate_right(21)
-            .wrapping_sub(0x6e58a5c2)
-            ^ TABLE[flag];
-        *chunk = value.to_le_bytes();
-        flag = (flag + 1) & 15;
-    }
-    let length = tail.len();
-    for (i, b) in tail.iter_mut().enumerate() {
-        *b = b.wrapping_sub(0x52) ^ (TABLE[flag] >> (4 * (length - i))) as u8;
-        flag = (flag + 1) & 15;
-    }
-}
 pub(crate) fn pack(entries: &[(Vec<u8>, Vec<u8>)]) -> Result<Vec<u8>> {
-    let mut index = Vec::new();
-    let mut data = Vec::new();
     let mut names = BTreeSet::new();
-    for (name, bytes) in entries {
+    for (name, _) in entries {
         if name.is_empty()
             || !name.is_ascii()
             || name.iter().any(|b| b"/\\:\0".contains(b))
@@ -238,34 +214,10 @@ pub(crate) fn pack(entries: &[(Vec<u8>, Vec<u8>)]) -> Result<Vec<u8>> {
         {
             return Err("unsafe/duplicate archive basename".into());
         }
-        let mut packed = bytes.clone();
-        encrypt(&mut packed);
-        for value in [
-            25 + name.len() as u32,
-            packed.len() as u32,
-            data.len() as u32,
-            0,
-            cpz3_checksum(&packed),
-            0xc7f5da63,
-        ] {
-            push(&mut index, value);
-        }
-        index.extend(name);
-        index.push(0);
-        data.extend(packed);
     }
-    encrypt(&mut index);
-    let mut out = b"CPZ3".to_vec();
-    for value in [
-        entries.len() as u32 ^ 0x5e9c4f37,
-        index.len() as u32 ^ 0xf32aed17,
-        cpz3_checksum(&index),
-        0xdddddddd ^ 0x7bf4a539,
-    ] {
-        push(&mut out, value);
-    }
-    out.extend(index);
-    out.extend(data);
+    let mut writer = Cursor::new(Vec::new());
+    Cpz3Index::write(&mut writer, entries)?;
+    let out = writer.into_inner();
     let mut reader = Cursor::new(&out);
     let decoded = ArchiveIndex::read(&mut reader)?;
     for (name, expected) in entries {

@@ -3,6 +3,8 @@ use super::{ArchiveError, Entry};
 use crate::FormatError;
 use std::io::{Read, Seek, SeekFrom};
 
+mod write;
+
 pub const CPZ3_HEADER_SIZE: usize = 20;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,7 +30,7 @@ pub fn cpz3_checksum(bytes: &[u8]) -> u32 {
         .fold(sum, |sum, &b| sum.wrapping_add(u32::from(b)))
 }
 
-fn decrypt(bytes: &mut [u8], key: u32) {
+pub(super) fn crypt(bytes: &mut [u8], key: u32, encrypt: bool) {
     // Sixteen little-endian words derived from the 64-byte cipher phrase.
     const TABLE: [u32; 16] = [
         0x4d0d4a5e, 0xb3abf3e1, 0x3c37336d, 0x86c3f5f3, 0x7d4f9b89, 0x58d7de11, 0x6367778d,
@@ -40,15 +42,24 @@ fn decrypt(bytes: &mut [u8], key: u32) {
     let mut flag = 3;
     let (chunks, tail) = bytes.as_chunks_mut::<4>();
     for chunk in chunks {
-        let value = (word(chunk) ^ table[flag])
-            .wrapping_add(0x6e58a5c2)
-            .rotate_left(shift);
+        let value = if encrypt {
+            word(chunk).rotate_right(shift).wrapping_sub(0x6e58a5c2) ^ table[flag]
+        } else {
+            (word(chunk) ^ table[flag])
+                .wrapping_add(0x6e58a5c2)
+                .rotate_left(shift)
+        };
         chunk.copy_from_slice(&value.to_le_bytes());
         flag = (flag + 1) & 15;
     }
     let length = tail.len();
     for (i, byte) in tail.iter_mut().enumerate() {
-        *byte = (*byte ^ (table[flag] >> (4 * (length - i))) as u8).wrapping_add(0x52);
+        let xor = (table[flag] >> (4 * (length - i))) as u8;
+        *byte = if encrypt {
+            byte.wrapping_sub(0x52) ^ xor
+        } else {
+            (*byte ^ xor).wrapping_add(0x52)
+        };
         flag = (flag + 1) & 15;
     }
 }
@@ -102,7 +113,11 @@ impl Cpz3Index {
         if cpz3_checksum(&bytes) != layout.index_checksum_raw {
             return Err(FormatError("CPZ3 index checksum mismatch").into());
         }
-        decrypt(&mut bytes, word(&header[16..]) ^ 0xdddddddd ^ 0x7bf4a539);
+        crypt(
+            &mut bytes,
+            word(&header[16..]) ^ 0xdddddddd ^ 0x7bf4a539,
+            false,
+        );
         let mut entries = Vec::new();
         let mut entry_keys = Vec::new();
         let directory: std::sync::Arc<[u8]> = [].into();
@@ -215,7 +230,7 @@ impl Cpz3Index {
         if verify && cpz3_checksum(&bytes) != entry.checksum_raw {
             return Err(FormatError("CPZ3 resource checksum mismatch").into());
         }
-        decrypt(&mut bytes, self.entry_keys[index]);
+        crypt(&mut bytes, self.entry_keys[index], false);
         Ok(bytes)
     }
 }
