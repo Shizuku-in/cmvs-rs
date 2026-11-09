@@ -36,15 +36,26 @@ pub fn edit(
     let title = decode(&request.title)?;
     let prompt = decode(&request.prompt)?;
     let initial = decode(&request.initial)?;
-    // The desktop host's limit: the byte budget in full-width characters, which is
-    // also the only kind the engine keeps.
-    let limit = if request.max_bytes == 0 {
-        127
+    let budget = if request.max_bytes == 0 {
+        255
     } else {
-        (request.max_bytes.min(255) / 2).max(1)
+        request.max_bytes.min(255)
+    };
+    // UTF-8 has variable-width characters; the callback enforces the byte budget.
+    let limit = if encoding == TextEncoding::Utf8 {
+        budget
+    } else {
+        (budget / 2).max(1)
     };
     let mut check = |text: &str| match text_codec::unmappable(encoding, text) {
-        Ok(bad) if bad.is_empty() => Ok(()),
+        Ok(bad) if bad.is_empty() => {
+            let bytes = text_codec::encode(encoding, text).map_err(|error| error.to_string())?;
+            if bytes.len() > budget as usize {
+                Err(format!("输入内容超过游戏文字编码的 {budget} 字节限制"))
+            } else {
+                Ok(())
+            }
+        }
         Ok(bad) => Err(format!(
             "以下字符无法用游戏文字编码（{}）保存：{bad}",
             label(encoding)
@@ -168,5 +179,37 @@ mod tests {
             panic!("expected accepted text");
         };
         assert_eq!(bytes, gbk("这是记录"));
+    }
+
+    #[test]
+    fn utf8_input_checks_the_encoded_byte_budget() {
+        for (max_bytes, budget) in [(0, 255), (1, 1), (100, 100), (1000, 255)] {
+            let request = TextDialogRequest {
+                title: vec![],
+                prompt: vec![],
+                initial: vec![],
+                max_bytes,
+            };
+            let text = format!("{}{}", "中".repeat(budget / 3), "a".repeat(budget % 3));
+            let mut keyboard = |_: &str,
+                                _: &str,
+                                _: &str,
+                                limit: u32,
+                                check: &mut dyn FnMut(&str) -> Result<(), String>|
+             -> Result<Option<String>, &'static str> {
+                assert_eq!(limit as usize, budget);
+                assert!(check(&text).is_ok());
+                assert!(check(&format!("{text}a")).is_err());
+                assert!(check(&"中".repeat(budget / 3 + 1)).is_err());
+                assert!(check(&"😀".repeat(budget / 4 + 1)).is_err());
+                Ok(Some(text.clone()))
+            };
+            let TextDialogResult::Accepted(bytes) =
+                edit(&request, TextEncoding::Utf8, &mut keyboard).unwrap()
+            else {
+                panic!("expected accepted text");
+            };
+            assert_eq!(bytes, text.as_bytes());
+        }
     }
 }
