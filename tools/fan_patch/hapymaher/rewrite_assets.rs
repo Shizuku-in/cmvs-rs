@@ -1,8 +1,8 @@
-//! Offline helper for convert_hapymaher_patch.py; shares the verified PS2A/CPZ3 writer.
+//! Offline helper for convert_hapymaher_patch.py; uses the shared PS2A/CPZ3 writer.
 #[path = "../pb3_writer.rs"]
 mod images;
 #[allow(dead_code)]
-#[path = "../miranosu/rewrite_scripts.rs"]
+#[path = "../rewrite_scripts.rs"]
 mod scripts;
 
 use cmvs_core::{bytecode, cpz::ArchiveIndex, pb3, ps3::Script};

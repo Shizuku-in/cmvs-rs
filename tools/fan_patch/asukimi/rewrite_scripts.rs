@@ -1,6 +1,6 @@
 //! UTF-8 conversion of the digest-pinned CK-GAL patch. GBK output bypasses this helper.
 #[allow(dead_code)]
-#[path = "../miranosu/rewrite_scripts.rs"]
+#[path = "../rewrite_scripts.rs"]
 mod scripts;
 use cmvs_core::{
     bytecode::{self, Expression, InstructionKind, Term},

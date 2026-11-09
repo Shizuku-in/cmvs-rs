@@ -2,7 +2,7 @@
 #[path = "../pb3_writer.rs"]
 mod images;
 #[allow(dead_code)]
-#[path = "../miranosu/rewrite_scripts.rs"]
+#[path = "../rewrite_scripts.rs"]
 mod scripts;
 
 use cmvs_core::{cpz::ArchiveIndex, pb3, ps3::Script};
