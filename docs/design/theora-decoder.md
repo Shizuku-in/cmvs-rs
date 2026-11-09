@@ -30,8 +30,8 @@
 | 架构 | IDCT | 预测值与残差相加 |
 |---|---|---|
 | x86-64 | SSE2，含最多 3/10 个系数的稀疏路径 | SSE2 整块运动补偿、向下取整平均和饱和叠加 |
-| AArch64 | 标量 | NEON 行平均、饱和加法与窄化 |
-| ARMv7 / PS Vita 及其他架构 | 标量 | 标量 |
+| AArch64 | 标量，含最多 3/10 个系数的稀疏路径 | NEON 行平均、饱和加法与窄化 |
+| ARMv7 / PS Vita 及其他架构 | 标量，含稀疏路径 | 标量 |
 
 SSE2 使用 x86-64 基线能力，无 AVX 要求；支持的 AArch64 目标启用 NEON。SIMD 保留 Theora 指定的有符号高位乘法、16 位截断和舍入语义。最终 IDCT 的 `(X + 8) >> 4` 不能直接用溢出的 16 位加法实现；SSE2 用算术右移加舍入位完成。残差叠加先饱和到有符号 16 位，再饱和为 u8，与标量宽化加法后 clamp 一致。
 
@@ -97,6 +97,17 @@ CMVS_THEORA_OGV="<提取的绝对路径>/op.ogv" \
 ```
 
 详细数据和计时脚本位于 `local/hapymaherfd_re/theora-2026-11-08/optimization-2026-11-08/` 的 `performance.json`、`validation.json` 及逐片日志；优化前的独立基准在同级 `ffmpeg-speed/`。真实素材和本地输出不入库。
+
+## 重复帧与复杂画面的播放优化
+
+预取只领先当前请求的映射包一个包，避免重复名义帧挤掉当前 RGBA、触发从片头重解。播放器复用重复映射的画面身份，减少解码请求和纹理上传。短 Huffman 码与附加位合并读取；非 x86 IDCT 根据有效系数使用 2×2/4×4 稀疏路径，保留整数截断和舍入。
+
+回归检查顺序播放不回退、显式倒退仍重播、重复映射保留画面身份、Huffman 包尾边界，以及稀疏/完整 IDCT 的逐值一致性。真实 MGV 可另运行下列用例，对比全部名义帧并统计回退次数和请求耗时；它同时运行同步解码器作对照，耗时不代表设备帧率。
+
+```sh
+CMVS_THEORA_MGV="<绝对路径>/data/video/op.mgv" \
+  cargo test --release -p cmvs-video --test video external_prefetch_playback_never_rewinds_forward_requests -- --ignored --nocapture
+```
 
 ## 初始版本的 1080p 合成基准
 

@@ -156,17 +156,22 @@ impl Huffman {
     }
 
     #[inline]
-    pub fn token(&self, bits: &mut Bits<'_>) -> Result<u8> {
+    pub fn token(&self, bits: &mut Bits<'_>, extra_bits: &[u8; 32]) -> Result<(u8, u32)> {
         let entry = self.prefix[bits.peek(8) as usize];
-        bits.skip(u32::from(entry.bits))?;
         if entry.node == 0 {
-            return Ok(entry.token);
+            // Consume a short Huffman code and its payload with one bounds check
+            // and cache shift. Even at the packet tail, padding is never consumed.
+            let extra = extra_bits[entry.token as usize];
+            let value = bits.read(u32::from(entry.bits + extra))?;
+            return Ok((entry.token, value & ((1 << extra) - 1)));
         }
+        bits.skip(u32::from(entry.bits))?;
         let mut current = i16::from(entry.node - 1);
         while current >= 0 {
             current = self.tree[current as usize][bits.read(1)? as usize];
         }
-        Ok((-1 - current) as u8)
+        let token = (-1 - current) as u8;
+        Ok((token, bits.read(u32::from(extra_bits[token as usize]))?))
     }
 }
 
@@ -236,7 +241,14 @@ mod tests {
     fn degenerate_and_long_huffman_codes_preserve_packet_boundaries() {
         let tree = packed(&[1, 1, 0, 1, 0, 1]); // Root leaf, token 21.
         let h = Huffman::parse(&mut Bits::new(&tree)).unwrap();
-        assert_eq!(h.token(&mut Bits::new(&[])).unwrap(), 21);
+        assert_eq!(h.token(&mut Bits::new(&[]), &[0; 32]).unwrap(), (21, 0));
+        let mut extra = [0; 32];
+        extra[21] = 9;
+        assert_eq!(
+            h.token(&mut Bits::new(&[0xaa, 0x80]), &extra).unwrap(),
+            (21, 0x155)
+        );
+        assert!(h.token(&mut Bits::new(&[0xaa]), &extra).is_err());
         // A maximally unbalanced tree: 31 branches, 32 leaves.
         let mut description = vec![0; 31];
         for token in 0..32 {
@@ -247,9 +259,13 @@ mod tests {
         }
         let tree = packed(&description);
         let h = Huffman::parse(&mut Bits::new(&tree)).unwrap();
-        assert_eq!(h.token(&mut Bits::new(&[0; 4])).unwrap(), 0);
-        assert_eq!(h.token(&mut Bits::new(&[0x80])).unwrap(), 31);
-        assert!(h.token(&mut Bits::new(&[0; 3])).is_err());
+        assert_eq!(h.token(&mut Bits::new(&[0; 4]), &[0; 32]).unwrap(), (0, 0));
+        assert_eq!(h.token(&mut Bits::new(&[0x80]), &[0; 32]).unwrap(), (31, 0));
+        assert!(h.token(&mut Bits::new(&[0; 3]), &[0; 32]).is_err());
+        extra[31] = 3;
+        assert_eq!(h.token(&mut Bits::new(&[0xb0]), &extra).unwrap(), (31, 3));
+        extra[0] = 2;
+        assert!(h.token(&mut Bits::new(&[0; 4]), &extra).is_err());
         assert!(Huffman::parse(&mut Bits::new(&[0; 8])).is_err());
     }
 }

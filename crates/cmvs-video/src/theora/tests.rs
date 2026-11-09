@@ -218,6 +218,7 @@ fn sparse_idct_preserves_signed_wrap_and_rounding() {
             }
             let got = dsp::idct(&coeffs, count as u8);
             assert_eq!(got, dsp::idct_scalar(&coeffs));
+            assert_eq!(dsp::idct_sparse_scalar(&coeffs, count as u8), got);
             recorded.extend(got.into_iter().flatten().flat_map(i16::to_le_bytes));
         }
         assert_eq!(to_hex(&sha256(&recorded)), hashes[count - 2]);

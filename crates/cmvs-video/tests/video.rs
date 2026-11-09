@@ -3,7 +3,29 @@ use cmvs_core::{
     mgv::{Decoder, MgvIndex},
 };
 use cmvs_video::TheoraStream;
-use std::io::Cursor;
+use std::{
+    io::{Cursor, Read, Seek, SeekFrom},
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
+struct CountingReader<R> {
+    data: R,
+    seeks: Arc<AtomicUsize>,
+}
+impl<R: Read> Read for CountingReader<R> {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        self.data.read(out)
+    }
+}
+impl<R: Seek> Seek for CountingReader<R> {
+    fn seek(&mut self, offset: SeekFrom) -> std::io::Result<u64> {
+        self.seeks.fetch_add(1, Ordering::Relaxed);
+        self.data.seek(offset)
+    }
+}
+
 fn fixture() -> Vec<u8> {
     include_str!("fixtures/mgv1.hex")
         .trim()
@@ -170,4 +192,85 @@ fn prefetching_decoder_matches_the_inline_stream() {
         .open(Box::new(Cursor::new(bytes.clone())), &short)
         .unwrap();
     assert!(prefetch.finish().is_err());
+}
+
+#[test]
+fn repeated_frames_do_not_rewind_the_prefetching_decoder() {
+    use cmvs_core::mgv::DecoderFactory;
+    use cmvs_video::PrefetchTheoraFactory;
+    let bytes = fixture();
+    let mut index = MgvIndex::read(&mut Cursor::new(&bytes)).unwrap();
+    let mut frames = vec![index.frames[0]; 16];
+    frames.extend_from_slice(&index.frames[1..]);
+    index.frames = frames;
+    let seeks = Arc::new(AtomicUsize::new(0));
+    let mut inline = TheoraStream::open(Box::new(Cursor::new(bytes.clone())), &index).unwrap();
+    let mut prefetch = PrefetchTheoraFactory::default()
+        .open(
+            Box::new(CountingReader {
+                data: Cursor::new(bytes),
+                seeks: seeks.clone(),
+            }),
+            &index,
+        )
+        .unwrap();
+    for frame in 0..index.frames.len() as u32 {
+        assert_eq!(prefetch.frame(frame).unwrap(), inline.frame(frame).unwrap());
+    }
+    prefetch.finish().unwrap();
+    assert_eq!(
+        seeks.load(Ordering::Relaxed),
+        1,
+        "sequential playback replayed"
+    );
+    assert_eq!(prefetch.frame(0).unwrap(), inline.frame(0).unwrap());
+    assert_eq!(
+        seeks.load(Ordering::Relaxed),
+        2,
+        "backward seek must replay"
+    );
+}
+
+#[test]
+#[ignore = "requires CMVS_THEORA_MGV"]
+fn external_prefetch_playback_never_rewinds_forward_requests() {
+    use cmvs_core::mgv::DecoderFactory;
+    use cmvs_video::PrefetchTheoraFactory;
+    let path = std::env::var("CMVS_THEORA_MGV").unwrap();
+    let mut source = std::fs::File::open(&path).unwrap();
+    let index = MgvIndex::read(&mut source).unwrap();
+    let seeks = Arc::new(AtomicUsize::new(0));
+    let mut inline =
+        TheoraStream::open(Box::new(std::fs::File::open(&path).unwrap()), &index).unwrap();
+    let mut prefetch = PrefetchTheoraFactory::default()
+        .open(
+            Box::new(CountingReader {
+                data: source,
+                seeks: seeks.clone(),
+            }),
+            &index,
+        )
+        .unwrap();
+    let mut waits = Vec::new();
+    for frame in 0..index.frames.len() as u32 {
+        let start = std::time::Instant::now();
+        let image = prefetch.frame(frame).unwrap();
+        waits.push(start.elapsed());
+        assert!(image == inline.frame(frame).unwrap(), "frame {frame}");
+    }
+    prefetch.finish().unwrap();
+    waits.sort_unstable();
+    eprintln!(
+        "{} frames: rewinds={}, mean={:.3} ms, p99={:.3} ms, max={:.3} ms",
+        waits.len(),
+        seeks.load(Ordering::Relaxed) - 1,
+        waits.iter().sum::<std::time::Duration>().as_secs_f64() * 1000.0 / waits.len() as f64,
+        waits[waits.len() * 99 / 100].as_secs_f64() * 1000.0,
+        waits.last().unwrap().as_secs_f64() * 1000.0
+    );
+    assert_eq!(
+        seeks.load(Ordering::Relaxed),
+        1,
+        "forward playback replayed"
+    );
 }

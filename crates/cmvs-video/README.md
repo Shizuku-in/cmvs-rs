@@ -18,7 +18,7 @@ Install a factory with `Startup::set_mgv_factory`. Both factories produce the sa
 
 - Supports Theora 3.2 YUV420. Container dimensions must match the picture or coded surface; picture dimensions crop the visible region, while coded dimensions retain padding.
 - Validates frame rate, packet sizes and pixel limits. Invalid streams return errors.
-- Reuses frame buffers and caches the last two RGBA frames. Backward seeks replay from the headers.
+- Reuses frame buffers and caches the current/next RGBA frames. Repeated nominal frames keep the current packet cached; backward seeks replay from the headers.
 - Converts YUV to RGBA using BT.601 limited range.
 
 ## Testing

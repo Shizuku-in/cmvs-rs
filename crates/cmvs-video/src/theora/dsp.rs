@@ -101,8 +101,8 @@ pub(super) fn intra(dst: &mut [u8], stride: usize, residual: &Residual) {
 
 // Theora I §7.9.3.1. Narrowing at the specified intermediate steps is normative.
 #[cfg(any(test, not(target_arch = "x86_64")))]
-fn idct_1d(y: [i16; 8]) -> [i16; 8] {
-    let y = y.map(i32::from);
+fn idct_1d<const N: usize>(y: [i16; N]) -> [i16; 8] {
+    let y = std::array::from_fn::<_, 8, _>(|i| if i < N { i32::from(y[i]) } else { 0 });
     let mul = |c: i32, v: i32| (c * v) >> 16;
     let a = mul(46341, i32::from((y[0] + y[4]) as i16));
     let b = mul(46341, i32::from((y[0] - y[4]) as i16));
@@ -130,18 +130,33 @@ fn idct_1d(y: [i16; 8]) -> [i16; 8] {
 
 #[allow(clippy::needless_range_loop)] // The second pass traverses columns.
 #[cfg(any(test, not(target_arch = "x86_64")))]
-pub(super) fn idct_scalar(coeffs: &[i16; 64]) -> [[i16; 8]; 8] {
+fn idct_partial<const N: usize>(coeffs: &[i16; 64]) -> [[i16; 8]; 8] {
     let mut rows = [[0i16; 8]; 8];
-    for (src, dst) in coeffs.as_chunks::<8>().0.iter().zip(&mut rows) {
-        *dst = idct_1d(*src);
+    for (src, dst) in coeffs.as_chunks::<8>().0.iter().zip(&mut rows).take(N) {
+        *dst = idct_1d::<N>(src[..N].try_into().unwrap());
     }
     for x in 0..8 {
-        let column = idct_1d(std::array::from_fn(|y| rows[y][x]));
+        let column = idct_1d::<N>(std::array::from_fn(|y| rows[y][x]));
         for y in 0..8 {
             rows[y][x] = ((i32::from(column[y]) + 8) >> 4) as i16;
         }
     }
     rows
+}
+
+#[cfg(any(test, not(target_arch = "x86_64")))]
+pub(super) fn idct_scalar(coeffs: &[i16; 64]) -> [[i16; 8]; 8] {
+    idct_partial::<8>(coeffs)
+}
+
+#[cfg(any(test, not(target_arch = "x86_64")))]
+pub(super) fn idct_sparse_scalar(coeffs: &[i16; 64], ncoeffs: u8) -> [[i16; 8]; 8] {
+    match ncoeffs {
+        // The first 3/10 zig-zag coefficients fit inside a 2x2/4x4 corner.
+        0..=3 => idct_partial::<2>(coeffs),
+        4..=10 => idct_partial::<4>(coeffs),
+        _ => idct_scalar(coeffs),
+    }
 }
 
 pub(super) fn idct(coeffs: &[i16; 64], ncoeffs: u8) -> [[i16; 8]; 8] {
@@ -154,8 +169,7 @@ pub(super) fn idct(coeffs: &[i16; 64], ncoeffs: u8) -> [[i16; 8]; 8] {
     }
     #[cfg(not(target_arch = "x86_64"))]
     {
-        let _ = ncoeffs;
-        idct_scalar(coeffs)
+        idct_sparse_scalar(coeffs, ncoeffs)
     }
 }
 

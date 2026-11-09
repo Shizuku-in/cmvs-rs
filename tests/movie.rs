@@ -218,7 +218,8 @@ impl MovieSource for MgvTestSource {
             height: 1,
             rate: 10,
             rate_time: 1,
-            frames: (0..3)
+            frames: [0, 1, 1, 2]
+                .into_iter()
                 .map(|packet| cmvs_rs::mgv::FrameEntry {
                     packet,
                     key_frame: packet == 0,
@@ -277,7 +278,7 @@ fn mgv_code(queries: usize) -> Vec<u8> {
 fn mgv_player_decodes_before_commit_queries_nominal_frame_and_stops_audio() {
     for id in ["cmvs-20190305", "cmvs-20190405"] {
         use cmvs_rs::audio::MovieAudioClock;
-        let script = program(&mgv_code(2), b"synthetic.mgv\0");
+        let script = program(&mgv_code(3), b"synthetic.mgv\0");
         let mut vm = Machine::new(&script).unwrap();
         let failure = std::rc::Rc::new(std::cell::Cell::new(false));
         let mut movies = MovieHost::default();
@@ -313,6 +314,15 @@ fn mgv_player_decodes_before_commit_queries_nominal_frame_and_stops_audio() {
         pending(&mut vm);
         mgv_step(id, &mut vm, &mut movies, &mut source, &mut audio).unwrap();
         assert_eq!(vm.state().system_integer(0), Some(1));
+        let image = movies.player_image().unwrap().clone();
+        failure.set(true);
+        movies.advance_with_clock(100, None, &mut source).unwrap();
+        assert_eq!(movies.player_image().unwrap(), &image);
+        assert_eq!(movies.player_image().unwrap().frame_id(), image.frame_id());
+        pending(&mut vm);
+        mgv_step(id, &mut vm, &mut movies, &mut source, &mut audio).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(2));
+        failure.set(false);
         movies.advance_with_clock(300, None, &mut source).unwrap();
         assert!(!movies.has_player());
         pending(&mut vm);

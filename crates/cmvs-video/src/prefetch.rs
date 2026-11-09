@@ -57,6 +57,14 @@ fn serve(mut stream: TheoraStream, requests: &Receiver<Request>, replies: &Sende
     use mgv::Decoder;
     // Ends when the decoder is dropped and the request channel closes.
     while let Ok(request) = requests.recv() {
+        let requested_packet = match request {
+            Request::Frame(frame) => stream
+                .index
+                .frames
+                .get(frame as usize)
+                .map(|e| u32::from(e.packet)),
+            Request::Finish => None,
+        };
         let reply = match request {
             Request::Frame(frame) => stream.frame(frame).map(Some),
             Request::Finish => stream.finish().map(|()| None),
@@ -65,7 +73,9 @@ fn serve(mut stream: TheoraStream, requests: &Receiver<Request>, replies: &Sende
         if replies.send(reply.map_err(|e| e.to_string())).is_err() {
             return;
         }
-        if ok {
+        // Repeated nominal frames must not prefetch past the displayed packet
+        // and evict it from the two-frame cache, which would force a replay.
+        if ok && requested_packet.is_some_and(|packet| stream.next_packet == packet + 1) {
             stream.prefetch();
         }
     }

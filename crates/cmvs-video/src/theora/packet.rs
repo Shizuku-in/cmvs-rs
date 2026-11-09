@@ -289,15 +289,13 @@ impl State {
                         self.positions[bi] = 64;
                     } else {
                         let table = group * 16 + tables[usize::from(bi >= g.macroblocks.len() * 4)];
-                        let token = setup.huffman[table].token(b)?;
+                        let (token, extra) = setup.huffman[table].token(b, &TOKEN_EXTRA_BITS)?;
                         if token < 7 {
                             eobs = match token {
                                 0..=2 => token as usize + 1,
-                                3..=5 => {
-                                    (1 << (token - 1)) + b.read(u32::from(token - 1))? as usize
-                                }
+                                3..=5 => (1 << (token - 1)) + extra as usize,
                                 _ => {
-                                    let n = b.read(12)? as usize;
+                                    let n = extra as usize;
                                     if n == 0 {
                                         self.positions.iter().filter(|&&p| p < 64).count()
                                     } else {
@@ -308,7 +306,7 @@ impl State {
                             eobs -= 1;
                             self.positions[bi] = 64;
                         } else {
-                            let (run, value) = coefficient(b, token)?;
+                            let (run, value) = coefficient_value(token, extra);
                             let end = ti + run + usize::from(value != 0);
                             if end > 64 {
                                 return Err(FormatError("Theora coefficient run exceeds block"));
@@ -435,11 +433,19 @@ const COEFFICIENT_SPECS: [(u8, u8, u8, i16, u8); 25] = [
     (3, 2, 1, 2, 1),
 ];
 
-#[derive(Clone, Copy)]
-struct CoefficientInfo {
-    bits: u8,
-    first: u16,
-}
+const TOKEN_EXTRA_BITS: [u8; 32] = {
+    let mut bits = [0; 32];
+    bits[3] = 2;
+    bits[4] = 3;
+    bits[5] = 4;
+    bits[6] = 12;
+    let mut i = 0;
+    while i < COEFFICIENT_SPECS.len() {
+        bits[i + 7] = COEFFICIENT_SPECS[i].0;
+        i += 1;
+    }
+    bits
+};
 #[derive(Clone, Copy)]
 struct Coefficient {
     run: u8,
@@ -456,20 +462,14 @@ const COEFFICIENT_VALUE_COUNT: usize = {
     total
 };
 
-const fn coefficient_tables() -> (
-    [CoefficientInfo; 25],
-    [Coefficient; COEFFICIENT_VALUE_COUNT],
-) {
-    let mut info = [CoefficientInfo { bits: 0, first: 0 }; 25];
+const fn coefficient_tables() -> ([u16; 25], [Coefficient; COEFFICIENT_VALUE_COUNT]) {
+    let mut offsets = [0; 25];
     let mut values = [Coefficient { run: 0, value: 0 }; COEFFICIENT_VALUE_COUNT];
     let mut first = 0;
     let mut index = 0;
     while index < 25 {
         let (bits, run, run_bits, magnitude, magnitude_bits) = COEFFICIENT_SPECS[index];
-        info[index] = CoefficientInfo {
-            bits,
-            first: first as u16,
-        };
+        offsets[index] = first as u16;
         let mut extra = 0u16;
         while extra < 1 << bits {
             let run = run + (extra & ((1 << run_bits) - 1)) as u8;
@@ -486,20 +486,24 @@ const fn coefficient_tables() -> (
         index += 1;
     }
     assert!(first == values.len());
-    (info, values)
+    (offsets, values)
 }
 
-static COEFFICIENT_TABLES: (
-    [CoefficientInfo; 25],
-    [Coefficient; COEFFICIENT_VALUE_COUNT],
-) = coefficient_tables();
+static COEFFICIENT_TABLES: ([u16; 25], [Coefficient; COEFFICIENT_VALUE_COUNT]) =
+    coefficient_tables();
 
 #[inline]
+#[cfg(test)]
 fn coefficient(b: &mut Bits<'_>, token: u8) -> Result<(usize, i16)> {
-    let info = COEFFICIENT_TABLES.0[token as usize - 7];
-    let extra = b.read(u32::from(info.bits))? as usize;
-    let value = COEFFICIENT_TABLES.1[usize::from(info.first) + extra];
-    Ok((usize::from(value.run), value.value))
+    let extra = b.read(u32::from(TOKEN_EXTRA_BITS[token as usize]))?;
+    Ok(coefficient_value(token, extra))
+}
+
+#[inline]
+fn coefficient_value(token: u8, extra: u32) -> (usize, i16) {
+    let first = COEFFICIENT_TABLES.0[token as usize - 7];
+    let value = COEFFICIENT_TABLES.1[usize::from(first) + extra as usize];
+    (usize::from(value.run), value.value)
 }
 
 #[cfg(test)]

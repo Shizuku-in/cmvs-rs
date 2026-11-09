@@ -114,10 +114,13 @@ impl MovieHost {
             movie.decoder.finish()?;
             self.mgv_player = None;
         } else if frame > movie.frame {
-            let image = movie.decoder.frame(frame)?.into_frame();
+            if movie.index.frames[frame as usize].packet
+                != movie.index.frames[movie.frame as usize].packet
+            {
+                movie.image = movie.decoder.frame(frame)?.into_frame();
+            }
             movie.frame = frame;
             movie.elapsed = elapsed;
-            movie.image = image;
         } else {
             movie.elapsed = elapsed;
         }
