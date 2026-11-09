@@ -4332,9 +4332,14 @@ fn measurement_and_all_main_output_paths_share_proportional_advances() {
             Ok(10)
         }
     }
-    for (profile, op) in ["cmvs-20190305", "cmvs-20211006", "cmvs-20221105"]
-        .into_iter()
-        .flat_map(|profile| [0x210b, 0x2152, 0x2154, 0x2157, 0x2159].map(|op| (profile, op)))
+    for (profile, op) in [
+        "cmvs-20190305",
+        "cmvs-20190405",
+        "cmvs-20211006",
+        "cmvs-20221105",
+    ]
+    .into_iter()
+    .flat_map(|profile| [0x210b, 0x2152, 0x2154, 0x2157, 0x2159].map(|op| (profile, op)))
     {
         let mut code = vec![];
         create(&mut code, 0, 1, [0, 0, 300, 100]);
