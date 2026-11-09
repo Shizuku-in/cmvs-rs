@@ -1,4 +1,4 @@
-//! Profile selection from read-only evidence: data hashes identify the game, executables confirm.
+//! Profile selection from read-only evidence, with known-binary fallback for modified data.
 use super::{EngineProfile, GameRecord, Registry};
 use crate::digest::{sha256_reader, to_hex};
 use crate::filesystem as fs;
@@ -92,12 +92,14 @@ pub enum SelectionBasis {
     Data,
     /// Data hashes matched and every present executable is a binary of the profile.
     DataAndBinary,
+    /// Modified data; every present executable uniquely identifies one game record.
+    Binary,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProfileSelection<'a> {
     pub profile: &'a EngineProfile,
-    /// Present only when the data matched a record of the selected profile.
+    /// The record identified by data or uniquely matching known executables.
     pub record: Option<&'a GameRecord>,
     pub basis: SelectionBasis,
     pub evidence: Vec<String>,
@@ -221,7 +223,42 @@ impl Registry {
         if evidence.start_script.is_none() && evidence.script_archive.is_none() {
             return Err(SelectionError::NoDataEvidence);
         }
-        let game = data.ok_or(SelectionError::UnknownGame(notes.clone()))?;
+        let game = match data {
+            Some(game) => game,
+            None => {
+                let mut candidates = self.games.iter().filter(|game| {
+                    !evidence.executables.is_empty()
+                        && evidence.executables.iter().all(|exe| {
+                            game.executables
+                                .iter()
+                                .any(|known| known.sha256 == exe.sha256)
+                        })
+                });
+                let game = candidates.next().filter(|_| candidates.next().is_none());
+                let game = game.ok_or_else(|| SelectionError::UnknownGame(notes.clone()))?;
+                // Modified hashes are expected; hashes identifying another game are not.
+                let conflict = self.games.iter().any(|other| {
+                    other.game != game.game
+                        && (evidence.start_script.as_ref().is_some_and(|file| {
+                            other
+                                .start_scripts
+                                .iter()
+                                .any(|known| known.sha256 == file.sha256)
+                        }) || evidence
+                            .script_archive
+                            .as_ref()
+                            .is_some_and(|file| other.script_archive.sha256 == file.sha256))
+                });
+                if conflict {
+                    return Err(SelectionError::UnknownGame(notes));
+                }
+                notes.push(format!(
+                    "modified data; executables uniquely match game {} ({})",
+                    game.game, game.profile
+                ));
+                game
+            }
+        };
         for exe in &evidence.executables {
             if !game.executables.iter().any(|e| e.sha256 == exe.sha256) {
                 return Err(SelectionError::UnknownBinary {
@@ -234,7 +271,9 @@ impl Registry {
         Ok(ProfileSelection {
             profile: self.profile(&game.profile).expect("validated record"),
             record: Some(game),
-            basis: if evidence.executables.is_empty() {
+            basis: if data.is_none() {
+                SelectionBasis::Binary
+            } else if evidence.executables.is_empty() {
                 SelectionBasis::Data
             } else {
                 SelectionBasis::DataAndBinary

@@ -114,7 +114,7 @@
 
 ### 4.2 游戏记录（`GameRecord`）
 
-把游戏数据映射到档案。**运行时依据数据识别，exe 只作佐证。**
+把游戏数据映射到档案。运行时优先依据数据识别；汉化修改数据时，可由已登记 exe 的唯一匹配回退识别。
 
 | 字段 | 说明 |
 |---|---|
@@ -158,7 +158,8 @@ P1 实现了 `Absent`、`NoOp`、`Base`、`Unreviewed`；P2增加带强制证据
    --profile 已给出            → 用它；basis = Explicit，第 1、2 步的结果只记入证据
    记录命中、exe 命中或不存在   → basis = Data(+Binary)
    记录命中、exe 存在但未知     → 报错 UnknownBinary（可能是未登记的补丁），提示 --profile
-   记录未命中                   → 报错 UnknownGame，附带全部证据
+   记录未命中、全部 exe 唯一匹配一个游戏且已知数据不冲突 → basis = Binary，沿用原记录和游戏 ID 检查
+   其他情况                     → 报错 UnknownGame，附带全部证据
 4. 运行中执行 0x201d 时，若 record.game_id 与实参不同 → 报错 GameIdMismatch
 ```
 
@@ -168,7 +169,7 @@ P1 实现了 `Absent`、`NoOp`、`Base`、`Unreviewed`；P2增加带强制证据
 pub struct ProfileSelection {
     pub profile: &'static EngineProfile,
     pub record: Option<&'static GameRecord>,
-    pub basis: SelectionBasis, // Explicit | Data | DataAndBinary
+    pub basis: SelectionBasis, // Explicit | Data | DataAndBinary | Binary
     pub evidence: Vec<String>, // 例如 "script.cpz sha256 aa4bd891… matches chronoclock"
 }
 ```

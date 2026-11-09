@@ -826,7 +826,68 @@ fn selection_needs_data_evidence_and_confirms_every_present_executable() {
 }
 
 #[test]
-fn startup_variants_keep_one_identity_and_require_exact_data() {
+fn modified_data_requires_unique_consistent_known_executables() {
+    let registry = registry();
+    let patched = Evidence {
+        start_script: Some(file("start.ps3", 20)),
+        script_archive: Some(file("script.cpz", 21)),
+        executables: vec![file("cmvs64.exe", 3)],
+    };
+    let selected = registry.select(None, &patched).unwrap();
+    assert_eq!(selected.basis, SelectionBasis::Binary);
+    assert_eq!(selected.record.unwrap().game, "synthetic");
+    assert_eq!(selected.profile.id, "synthetic-derived");
+    assert!(selected.evidence.last().unwrap().contains("modified data"));
+    assert!(
+        registry
+            .select(Some("synthetic-root"), &patched)
+            .unwrap()
+            .record
+            .is_none()
+    );
+    for executables in [
+        vec![],
+        vec![file("cmvs64.exe", 9)],
+        vec![file("cmvs64.exe", 3), file("cmvs32.exe", 1)],
+        vec![file("cmvs64.exe", 3), file("cmvs32.exe", 9)],
+    ] {
+        assert!(matches!(
+            registry.select(
+                None,
+                &Evidence {
+                    executables,
+                    ..patched.clone()
+                }
+            ),
+            Err(SelectionError::UnknownGame(_))
+        ));
+    }
+    let root = registry.profile("synthetic-root").unwrap().to_text();
+    let derived = registry.profile("synthetic-derived").unwrap().to_text();
+    let original = games(&[7; 32], &[8; 32], &[3; 32]);
+    // Shared engine binaries do not uniquely identify a game or save directory.
+    let ambiguous = games(&[10; 32], &[11; 32], &[3; 32]).replace("game synthetic", "game other");
+    let ambiguous = Registry::parse(&[&root, &derived], &format!("{original}{ambiguous}")).unwrap();
+    assert!(matches!(
+        ambiguous.select(None, &patched),
+        Err(SelectionError::UnknownGame(_))
+    ));
+    let other = games(&[10; 32], &[11; 32], &[1; 32])
+        .replace("game synthetic", "game other")
+        .replace("profile synthetic-derived", "profile synthetic-root");
+    let conflicting = Registry::parse(&[&root, &derived], &format!("{original}{other}")).unwrap();
+    for (start, archive) in [(10, 21), (20, 11), (10, 11)] {
+        let evidence = Evidence {
+            start_script: Some(file("start.ps3", start)),
+            script_archive: Some(file("script.cpz", archive)),
+            ..patched.clone()
+        };
+        assert!(conflicting.select(None, &evidence).is_err());
+    }
+}
+
+#[test]
+fn startup_variants_keep_one_identity_with_known_executable_fallback() {
     let root = build("synthetic-root", None, &[0, 1], 1).to_text();
     let derived = build("synthetic-derived", Some("synthetic-root"), &[0, 1], 3).to_text();
     let original = games(&[7; 32], &[8; 32], &[3; 32]);
@@ -855,7 +916,7 @@ fn startup_variants_keep_one_identity_and_require_exact_data() {
             "synthetic"
         );
     }
-    assert!(
+    assert_eq!(
         registry
             .select(
                 None,
@@ -865,7 +926,9 @@ fn startup_variants_keep_one_identity_and_require_exact_data() {
                     executables: vec![file("cmvs64.exe", 3)],
                 }
             )
-            .is_err()
+            .unwrap()
+            .basis,
+        SelectionBasis::Binary
     );
     // Neither a variant hash nor an archive may identify a second save identity.
     for (start, archive) in [(9, 10), (10, 8)] {
