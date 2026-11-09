@@ -654,11 +654,19 @@ fn root_random(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, B
 }
 
 fn root_settings(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
-    hosts
+    let settings = hosts
         .settings
         .as_deref_mut()
-        .expect("settings capability checked")
-        .handle(call)?;
+        .expect("settings capability checked");
+    let display_name = if call.command == 0x2de && call.argument(4, "mode")? == 0 {
+        hosts
+            .messages
+            .as_deref()
+            .and_then(|messages| messages.display_face_name(settings.font_face()))
+    } else {
+        None
+    };
+    settings.handle_with_font_name(call, display_name.as_deref())?;
     Ok(Flow::Done)
 }
 
@@ -835,7 +843,9 @@ fn root_auxiliary_scene(
         .handle_auxiliary_scene(call, hosts.scene.as_deref_mut())?)
 }
 pub fn uses_message_state(command: u16) -> bool {
-    uses_windows(command)
+    // The font-name query needs the message host's backend to show a readable name.
+    command == 0x2de
+        || uses_windows(command)
         || entries_any_table(command).iter().copied().any(|e| {
             e.command == command
                 && matches!(

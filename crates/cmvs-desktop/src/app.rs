@@ -30,6 +30,30 @@ use winit::{
     window::{Window, WindowId},
 };
 
+fn warp_native_cursor(
+    window: &Window,
+    event_loop: &ActiveEventLoop,
+    point: [f64; 2],
+) -> Result<(), winit::error::ExternalError> {
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    {
+        use winit::platform::wayland::ActiveEventLoopExtWayland;
+        if event_loop.is_wayland() {
+            // Normal Wayland windows cannot warp the system cursor. GameInput::warp
+            // has already retained the navigation point for subsequent engine frames.
+            return Ok(());
+        }
+    }
+    let _ = event_loop;
+    window.set_cursor_position(winit::dpi::PhysicalPosition::new(point[0], point[1]))
+}
+
 const USAGE: &str = "\
 Usage: cmvs-desktop <game-root> --encoding <auto|shift-jis|gbk|utf-8> [options]
 
@@ -716,9 +740,8 @@ impl ApplicationHandler for App<'_> {
                 ));
             if let Some(point) = self.startup.input_mut().take_warp() {
                 let size = window.inner_size();
-                if let Some([x, y]) = self.game_input.warp([size.width, size.height], point)
-                    && let Err(error) =
-                        window.set_cursor_position(winit::dpi::PhysicalPosition::new(x, y))
+                if let Some(position) = self.game_input.warp([size.width, size.height], point)
+                    && let Err(error) = warp_native_cursor(&window, el, position)
                 {
                     self.fail(el, error);
                     return;

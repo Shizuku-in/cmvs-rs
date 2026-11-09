@@ -272,7 +272,7 @@ binary x86 file=cmvs32.exe sha256=1d47c85d947a111440974184dc3ee4530d188f1b54e8b7
 0x2108 unreviewed 0x7feea 0x732e7
 0x2109 unreviewed 0x7fef7 0x732f1
 0x210a unreviewed 0x7ff04 0x732fb
-0x210b unreviewed 0x7ff11 0x73305
+0x210b unreviewed 0x7ff11 0x73305 variant=font-cells:x64:c1742b5873e6d03f5cc7bc6f5b3b23655ec67e7cddf307deefa75349caed33be evidence=games/seishunf/README.md
 0x210c unreviewed 0x7ff1e 0x7330f
 0x210d unreviewed 0x7ff2b 0x73319
 0x210e unreviewed 0x7ff38 0x73323
@@ -343,14 +343,14 @@ binary x86 file=cmvs32.exe sha256=1d47c85d947a111440974184dc3ee4530d188f1b54e8b7
 0x214f unreviewed 0x80257 0x73599
 0x2150 unreviewed 0x80264 0x735a3
 0x2151 unreviewed 0x80271 0x735ad
-0x2152 unreviewed 0x8027e 0x735b7
+0x2152 unreviewed 0x8027e 0x735b7 variant=font-cells:x64:c1742b5873e6d03f5cc7bc6f5b3b23655ec67e7cddf307deefa75349caed33be evidence=games/seishunf/README.md
 0x2153 unreviewed 0x8028b 0x735c1
-0x2154 unreviewed 0x80298 0x735cb
+0x2154 unreviewed 0x80298 0x735cb variant=font-cells:x64:c1742b5873e6d03f5cc7bc6f5b3b23655ec67e7cddf307deefa75349caed33be evidence=games/seishunf/README.md
 0x2155 unreviewed 0x802a5 0x735d5
 0x2156 unreviewed 0x802b2 0x735df
-0x2157 unreviewed 0x802bf 0x735e9
+0x2157 unreviewed 0x802bf 0x735e9 variant=font-cells:x64:c1742b5873e6d03f5cc7bc6f5b3b23655ec67e7cddf307deefa75349caed33be evidence=games/seishunf/README.md
 0x2158 unreviewed 0x802cc 0x735f3
-0x2159 unreviewed 0x802d9 0x735fd
+0x2159 unreviewed 0x802d9 0x735fd variant=font-cells:x64:c1742b5873e6d03f5cc7bc6f5b3b23655ec67e7cddf307deefa75349caed33be evidence=games/seishunf/README.md
 0x215a unreviewed 0x802e6 0x73607
 0x215b unreviewed 0x802f3 0x73611
 0x215c unreviewed 0x80300 0x7361b

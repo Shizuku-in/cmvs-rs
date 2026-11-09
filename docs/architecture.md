@@ -36,6 +36,7 @@
 
 - PS2A 支持分段、字节变换、解压、标签与脚本装载。
 - `cpz::ArchiveIndex` / `ArchiveLayout` 按签名分派；当前支持 CPZ3、CPZ5 打包模式 5～9、CPZ6 模式 1 和 CPZ7（资源模式 0/1）。CPZ7 使用每包参数，默认为零；CPZ3 无需启动参数，始终验证索引密文校验值；CPZ5/7 验证头部与索引摘要。公共资源读取验证各格式的数据校验值，CPZ6 头部/索引摘要尚未验证。
+- `ArchiveIndex::write_replacements` 统一按原格式替换写回 CPZ3/5/6/7，保留目录、密钥与未替换资源密文；`Cpz3Index::write`、`Cpz5Index::write`、`Cpz6Index::write` 支持新建对应版本。接口与边界见 [CPZ 读写](formats/cpz-format.md)。
 - PB3 支持 type 1、type 2/3 JBP1、type 5/7，以及需要参考底图的 type 6/8；其他分支显式报错。type 5/6 已有 23 个不同真实输出与独立 Python 逐字节对照，未宣称全包覆盖。
 - CMV6 与 JBPD 支持已核对的全屏影片容器和帧解码；无实际音轨的 CMV6 与静音 CMV9 支持 0x2308 初始场景绑定、默认模式 0 的段播放与循环，CMV9 另缓存静态底图，其他槽控制仍未实现。影片计时、画面解码和设备音轨播放分开。
 - MGV1 按名义帧表解码 Ogg/Theora。容器尺寸须精确等于 Theora picture 或 coded 尺寸；前者裁可见区域，后者保留整个编码表面（如 1920×1088），再按逻辑画布呈现。容器解析与帧映射在 core，Theora 解码在 `cmvs-video`，由宿主经 `set_mgv_factory` 安装。帧率、YUV420 与像素预算校验保留，见[Hapymaher RE](games/hapymaher_re/README.md#1080p-素材边界)。

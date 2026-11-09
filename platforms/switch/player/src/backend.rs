@@ -12,6 +12,8 @@ pub struct Backend<'a> {
     pub gpu: Option<&'a mut crate::gpu::GpuRenderer>,
     /// A modal system applet ran since the host last cleared this.
     pub modal_shown: bool,
+    /// The game text encoding of the comment dialog's strings.
+    pub encoding: cmvs_core::TextEncoding,
 }
 impl PlatformBackend for Backend<'_> {
     fn logical_size(&self) -> [u32; 2] {
@@ -58,9 +60,13 @@ impl PlatformBackend for Backend<'_> {
         request: &TextDialogRequest,
     ) -> Result<TextDialogResult, Box<dyn Error>> {
         self.modal_shown = true;
-        cmvs_console::text_input::edit(request, &mut |title, prompt, initial, limit, check| {
-            crate::sys::software_keyboard(title, prompt, initial, limit, check)
-        })
+        cmvs_console::text_input::edit(
+            request,
+            self.encoding,
+            &mut |title, prompt, initial, limit, check| {
+                crate::sys::software_keyboard(title, prompt, initial, limit, check)
+            },
+        )
     }
     fn choose_font(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
         Ok(None)
@@ -100,6 +106,7 @@ mod tests {
             frame: None,
             gpu: None,
             modal_shown: false,
+            encoding: cmvs_core::TextEncoding::ShiftJis,
         };
         let previous = backend.display.render_mode;
         assert!(backend.apply(&PlatformRequest::RenderMode(9)).is_err());

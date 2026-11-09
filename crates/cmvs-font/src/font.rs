@@ -45,6 +45,29 @@ impl std::fmt::Debug for PreviewMetrics {
     }
 }
 impl cmvs_core::message::GlyphMetrics for PreviewMetrics {
+    fn display_face_name(&self, face: &[u8]) -> Option<Vec<u8>> {
+        if !face.starts_with(b"CMVS-U-") {
+            return None;
+        }
+        // Missing mappings and names outside the game's character set still get
+        // a readable label, without exposing a storage handle to the player.
+        let name = self
+            .0
+            .lock()
+            .ok()
+            .and_then(|mut library| library.family_name(face, self.1).ok());
+        Some(
+            name.and_then(|name| {
+                if name.chars().any(|ch| ch as u32 > 0xffff) {
+                    return None;
+                }
+                let (bytes, _, bad) = codec(self.1).ok()?.encode(&name);
+                (!bad).then(|| bytes.into_owned())
+            })
+            .unwrap_or_else(|| b"Selected font".to_vec()),
+        )
+    }
+
     fn advance_width(
         &self,
         face: &[u8],
@@ -264,6 +287,19 @@ impl FontRenderer {
             library: Arc::new(Mutex::new(FontLibrary::new(Arc::new(font)))),
             cache: GlyphCache::default(),
         })
+    }
+    /// Adds a font for characters the selected face and the default font lack.
+    pub fn add_fallback(&self, bytes: Vec<u8>, face: u32) -> Result<(), FormatError> {
+        if bytes.len() > MAX_FONT {
+            return Err(FormatError("font exceeds 32 MiB research limit"));
+        }
+        let font = FontVec::try_from_vec_and_index(bytes, face)
+            .map_err(|_| FormatError("invalid OpenType font or collection face index"))?;
+        self.library
+            .lock()
+            .map_err(|_| FormatError("font library lock poisoned"))?
+            .add_fallback(Arc::new(font));
+        Ok(())
     }
     /// Uses `library` (sharing its explicit default font) for every face.
     pub fn with_library(library: FontLibrary) -> Self {
@@ -597,6 +633,37 @@ impl FontRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires CMVS_FONT_PATH; external font"]
+    fn display_names_resolve_handles_in_the_game_encoding() {
+        let path = std::env::var_os("CMVS_FONT_PATH").expect("CMVS_FONT_PATH");
+        let default = FontRenderer::read(Path::new(&path), 0).unwrap();
+        let shared = default.library.clone();
+        let mut library = shared.lock().unwrap();
+        let handle = library.register_unicode("Noto Sans CJK JP").unwrap();
+        let chinese = library.register_unicode("黑体").unwrap();
+        let unsupported = library.register_unicode("😀").unwrap();
+        drop(library);
+        let library = shared;
+        use cmvs_core::message::GlyphMetrics;
+        let metrics = PreviewMetrics(library.clone(), TextEncoding::Gbk);
+        assert_eq!(
+            metrics.display_face_name(&handle).unwrap(),
+            b"Noto Sans CJK JP"
+        );
+        assert_eq!(
+            metrics.display_face_name(&chinese).unwrap(),
+            encoding_rs::GBK.encode("黑体").0.as_ref()
+        );
+        assert_eq!(
+            metrics.display_face_name(&unsupported).unwrap(),
+            b"Selected font"
+        );
+        assert!(metrics.display_face_name(b"SimHei").is_none());
+        let utf8 = PreviewMetrics(library, TextEncoding::Utf8);
+        assert_eq!(utf8.display_face_name(&chinese).unwrap(), "黑体".as_bytes());
+    }
 
     fn recorded_glyph(code: u16) -> RecordedGlyph {
         RecordedGlyph {

@@ -1,0 +1,17 @@
+[package]
+name = "chronoclock-patch-assets"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "chronoclock-patch-assets"
+path = "rewrite_assets.rs"
+
+[dependencies]
+cmvs-core = { path = "../../../crates/cmvs-core" }
+encoding_rs = "=0.8.44"

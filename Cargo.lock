@@ -329,6 +329,7 @@ version = "0.1.0"
 dependencies = [
  "ab_glyph",
  "cmvs-core",
+ "cmvs-font",
  "cmvs-native",
  "encoding_rs",
 ]

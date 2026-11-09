@@ -20,10 +20,13 @@ SD 卡目录 `switch/cmvs-rs/`：
 ```text
 cmvs-switch.nro
 games/<任意名称>/   每个目录放一个原始游戏
+  encoding.txt      可选，游戏文字编码 shift-jis、gbk 或 utf-8；缺省从启动脚本自动检测
 game/               旧的单游戏目录，仍可用，列在最前
-font.ttf            可选，字体索引 0；缺省用系统共享字体
+font.ttf            可选，字体索引 0；缺省按游戏编码用系统共享字体
 renderer.txt        可选，gpu（缺省）或 cpu
 ```
+
+游戏文字编码（Shift-JIS、GBK、UTF-8）默认从启动脚本自动检测，判断不了时会报错，在该游戏目录放 `encoding.txt` 写明编码即可。没有 `font.ttf` 时，GBK 和 UTF-8 游戏（多为中文补丁）以系统简体中文共享字体为主、日文为后备，Shift-JIS 游戏只用日文字体。
 
 程序生成：`users/<游戏标识>/`（用户数据，同一游戏的多个目录共用）、`last-game.txt`（上次启动的游戏）、`error.log`（最近一次错误）。
 

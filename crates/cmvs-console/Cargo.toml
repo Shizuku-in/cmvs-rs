@@ -11,5 +11,7 @@ workspace = true
 [dependencies]
 cmvs-core = { path = "../cmvs-core" }
 cmvs-native = { path = "../cmvs-native" }
-encoding_rs.workspace = true
+cmvs-font = { path = "../cmvs-font" }
 ab_glyph.workspace = true
+[dev-dependencies]
+encoding_rs.workspace = true

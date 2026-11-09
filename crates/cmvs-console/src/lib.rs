@@ -1,10 +1,11 @@
 //! Host policy shared by the game-console players (Switch, PlayStation Vita): the
 //! controller-to-engine mapping, the game list, the error page, CPU-drawn host pages,
-//! the comment dialog's text encoding and GPU scene compositing with its texture
+//! the game text encoding and its comment dialog, and GPU scene compositing with its texture
 //! cache. Each console describes its screen and buttons with a [`Console`]; input
 //! arrives as [`cmvs_native::PadInput`] samples.
 pub mod canvas;
 pub mod controls;
+pub mod encoding;
 pub mod error_screen;
 pub mod gpu;
 pub mod library;

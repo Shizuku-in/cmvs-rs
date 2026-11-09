@@ -185,6 +185,11 @@ pub struct TextObject {
 /// The core applies the original minimum half-size advance and spacing separately.
 /// `face` is the font object's face in the game encoding.
 pub trait GlyphMetrics: std::fmt::Debug {
+    /// A display-only face name in the game encoding; internal handles stay in saves.
+    fn display_face_name(&self, _face: &[u8]) -> Option<Vec<u8>> {
+        None
+    }
+
     /// Cell advance (GDI gmCellIncX), distinct from the visible ink extent.
     fn advance_width(
         &self,
@@ -333,6 +338,10 @@ impl MessageHost {
         }
         self.font_faces[index].clone().expect("set above")
     }
+    pub(crate) fn display_face_name(&self, face: &[u8]) -> Option<Vec<u8>> {
+        self.glyph_metrics.as_ref()?.display_face_name(face)
+    }
+
     /// Font device service; headless recording keeps the missing-metrics barrier.
     pub fn set_glyph_metrics(&mut self, metrics: Box<dyn GlyphMetrics>) {
         self.glyph_metrics = Some(metrics);
