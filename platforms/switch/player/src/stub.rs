@@ -88,7 +88,7 @@ pub fn show_system_error(_: &str, _: &str) -> bool {
     false
 }
 
-pub fn shared_font() -> Option<Vec<u8>> {
+pub fn shared_font(_: bool) -> Option<Vec<u8>> {
     None
 }
 

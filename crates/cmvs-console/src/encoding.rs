@@ -1,5 +1,5 @@
 //! The game text encoding: `encoding.txt` in the game directory, or detection from the
-//! startup script when that file is absent.
+//! startup script when that file is absent; and the system fonts its text needs.
 use cmvs_core::TextEncoding;
 use cmvs_font::text_codec;
 use std::{error::Error, io::ErrorKind, path::Path};
@@ -24,6 +24,25 @@ fn parse(setting: Option<&str>, text: &[u8]) -> Result<TextEncoding> {
         Some(name) => text_codec::parse(name).map_err(|_| {
             format!("encoding.txt must be shift-jis, gbk or utf-8, not {name:?}").into()
         }),
+    }
+}
+
+/// A system font family the console players ship with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SystemFont {
+    Japanese,
+    SimplifiedChinese,
+}
+
+/// System fonts for a game without `font.ttf`, primary first. GBK and UTF-8 games are
+/// mostly Chinese fan patches, so Chinese glyph shapes come first and the Japanese font
+/// covers what it lacks, such as kana.
+pub fn system_fonts(encoding: TextEncoding) -> &'static [SystemFont] {
+    match encoding {
+        TextEncoding::Gbk | TextEncoding::Utf8 => {
+            &[SystemFont::SimplifiedChinese, SystemFont::Japanese]
+        }
+        _ => &[SystemFont::Japanese],
     }
 }
 
@@ -61,5 +80,19 @@ mod tests {
         std::fs::write(root.join("encoding.txt"), "gbk\n").unwrap();
         assert_eq!(select(&root, b"menu.ps3\0").unwrap(), TextEncoding::Gbk);
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn chinese_text_gets_a_chinese_system_font() {
+        use SystemFont::*;
+        assert_eq!(system_fonts(TextEncoding::ShiftJis), [Japanese]);
+        assert_eq!(
+            system_fonts(TextEncoding::Gbk),
+            [SimplifiedChinese, Japanese]
+        );
+        assert_eq!(
+            system_fonts(TextEncoding::Utf8),
+            [SimplifiedChinese, Japanese]
+        );
     }
 }

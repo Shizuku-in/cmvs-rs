@@ -23,6 +23,8 @@ const MAX_FONT_FILES: usize = 8192;
 /// may use different encodings.
 pub struct FontLibrary {
     default: Arc<FontVec>,
+    /// Tried in order for characters neither the selected face nor the default covers.
+    fallbacks: Vec<Arc<FontVec>>,
     /// Faces whose resolution does not depend on the encoding (handles, imported
     /// font names and the built-in default).
     loaded: BTreeMap<Vec<u8>, Arc<FontVec>>,
@@ -41,6 +43,7 @@ impl FontLibrary {
     pub fn new(default: Arc<FontVec>) -> Self {
         Self {
             default,
+            fallbacks: Vec::new(),
             loaded: BTreeMap::new(),
             located: BTreeMap::new(),
             index: None,
@@ -282,18 +285,29 @@ impl FontLibrary {
     pub fn contains(&mut self, face: &[u8], encoding: TextEncoding) -> bool {
         self.face(face, encoding).is_ok()
     }
+    /// Adds a font for characters that neither the selected face nor the default covers.
+    pub fn add_fallback(&mut self, font: Arc<FontVec>) {
+        self.fallbacks.push(font);
+    }
     /// Resolve each character identically for layout and rasterization. Missing or
-    /// unusable selected faces fall back to the explicit default supplied by --font.
+    /// unusable selected faces fall back to the explicit default supplied by --font,
+    /// then to the added fallbacks; a character none covers uses the default.
     pub fn for_character(&mut self, face: &[u8], encoding: TextEncoding, ch: char) -> Arc<FontVec> {
+        let covers = |font: &FontVec| {
+            let id = font.glyph_id(ch);
+            id.0 != 0 && (ch.is_whitespace() || font.outline(id).is_some())
+        };
         let font = self
             .face(face, encoding)
             .unwrap_or_else(|_| self.default.clone());
-        let id = font.glyph_id(ch);
-        if id.0 != 0 && (ch.is_whitespace() || font.outline(id).is_some()) {
-            font
-        } else {
-            self.default.clone()
+        if covers(&font) {
+            return font;
         }
+        std::iter::once(&self.default)
+            .chain(&self.fallbacks)
+            .find(|font| covers(font))
+            .unwrap_or(&self.default)
+            .clone()
     }
     fn locate(
         &mut self,
@@ -501,6 +515,21 @@ mod tests {
         assert!(Arc::ptr_eq(
             &library.for_character(b"missing", TextEncoding::ShiftJis, 'あ'),
             &default
+        ));
+        // A Latin-only default reaches the fallback only for what it lacks.
+        let mut chained = FontLibrary::with_directories(partial.clone(), Vec::new());
+        chained.add_fallback(default.clone());
+        assert!(Arc::ptr_eq(
+            &chained.for_character(b"missing", TextEncoding::ShiftJis, 'あ'),
+            &default
+        ));
+        assert!(Arc::ptr_eq(
+            &chained.for_character(b"missing", TextEncoding::ShiftJis, 'A'),
+            &partial
+        ));
+        assert!(Arc::ptr_eq(
+            &chained.for_character(b"missing", TextEncoding::ShiftJis, '\u{e000}'),
+            &partial
         ));
         let directory = std::env::temp_dir().join(format!(
             "cmvs-unicode-font-{}-{}",

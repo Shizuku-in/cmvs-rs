@@ -15,6 +15,7 @@ mod sys;
 use cmvs_console::{
     ButtonMap, Console, Labels,
     controls::{self, Controls},
+    encoding::{self, SystemFont},
     error_screen, library, menu,
 };
 use cmvs_core::{
@@ -38,6 +39,8 @@ const BASE: &str = "ux0:data/cmvs-rs";
 const LOG_PATH: &str = "ux0:data/cmvs-rs/error.log";
 /// The system's Japanese gothic face (OpenType CFF), used without `font.ttf`.
 const SYSTEM_FONT: &str = "sa0:data/font/pvf/jpn0.pvf";
+/// The system's simplified Chinese gothic face (TrueType), for GBK and UTF-8 games.
+const CHINESE_FONT: &str = "sa0:data/font/pvf/cn0.pvf";
 pub(crate) const SCREEN: [u32; 2] = [960, 544];
 /// VM budget per loop iteration before polling input and the system again.
 const BUDGET: Duration = Duration::from_millis(8);
@@ -104,6 +107,35 @@ fn font_bytes(base: &Path) -> Result<Vec<u8>> {
         }
         Err(error) => Err(error.into()),
     }
+}
+
+/// `font.ttf` beside the program alone wins; otherwise the system fonts the game's text needs,
+/// the first available one primary and the rest as fallbacks.
+fn game_font(base: &Path, encoding: cmvs_core::TextEncoding) -> Result<FontRenderer> {
+    let renderer = |bytes| -> Result<FontRenderer> {
+        Ok(FontRenderer::from_bytes(bytes, 0)?.with_text_encoding(encoding))
+    };
+    match std::fs::read(base.join("font.ttf")) {
+        Ok(bytes) => return renderer(bytes),
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    let mut fonts = encoding::system_fonts(encoding).iter().filter_map(|&font| {
+        std::fs::read(match font {
+            SystemFont::Japanese => SYSTEM_FONT,
+            SystemFont::SimplifiedChinese => CHINESE_FONT,
+        })
+        .ok()
+    });
+    let font = renderer(
+        fonts
+            .next()
+            .ok_or("no font.ttf and no system font in sa0:data/font/pvf")?,
+    )?;
+    for bytes in fonts {
+        font.add_fallback(bytes, 0)?;
+    }
+    Ok(font)
 }
 
 /// Composites the scene on the GPU; the caller presents the canvas.
@@ -184,7 +216,7 @@ fn run(
     });
     startup.set_record_text(true);
     startup.set_save_clock(Box::new(cmvs_core::runner::utc_save_time));
-    let mut font = FontRenderer::from_bytes(font_bytes(base)?, 0)?.with_text_encoding(encoding);
+    let mut font = game_font(base, encoding)?;
     font.set_user_directory(&user)?;
     startup.set_glyph_metrics(font.metrics());
     if !font.has_face(startup.settings().font_face()) {

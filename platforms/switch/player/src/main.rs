@@ -16,6 +16,7 @@ mod sys;
 use cmvs_console::{
     ButtonMap, Console, Labels,
     controls::{self, Controls},
+    encoding::{self, SystemFont},
     error_screen, library, menu,
 };
 use cmvs_core::{
@@ -89,10 +90,35 @@ fn font_bytes(base: &Path) -> Result<Vec<u8>> {
     match std::fs::read(base.join("font.ttf")) {
         Ok(bytes) => Ok(bytes),
         Err(error) if error.kind() == ErrorKind::NotFound => {
-            Ok(sys::shared_font().ok_or("no font.ttf and no system shared font")?)
+            Ok(sys::shared_font(false).ok_or("no font.ttf and no system shared font")?)
         }
         Err(error) => Err(error.into()),
     }
+}
+
+/// `font.ttf` beside the program alone wins; otherwise the shared fonts the game's text needs,
+/// the first available one primary and the rest as fallbacks.
+fn game_font(base: &Path, encoding: cmvs_core::TextEncoding) -> Result<FontRenderer> {
+    let renderer = |bytes| -> Result<FontRenderer> {
+        Ok(FontRenderer::from_bytes(bytes, 0)?.with_text_encoding(encoding))
+    };
+    match std::fs::read(base.join("font.ttf")) {
+        Ok(bytes) => return renderer(bytes),
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    let mut fonts = encoding::system_fonts(encoding)
+        .iter()
+        .filter_map(|&font| sys::shared_font(font == SystemFont::SimplifiedChinese));
+    let font = renderer(
+        fonts
+            .next()
+            .ok_or("no font.ttf and no system shared font")?,
+    )?;
+    for bytes in fonts {
+        font.add_fallback(bytes, 0)?;
+    }
+    Ok(font)
 }
 
 /// How a game session ended.
@@ -195,7 +221,7 @@ fn run(
     startup.set_decoded_image_cache(128 << 20);
     startup.set_record_text(true);
     startup.set_save_clock(Box::new(cmvs_core::runner::utc_save_time));
-    let mut font = FontRenderer::from_bytes(font_bytes(base)?, 0)?.with_text_encoding(encoding);
+    let mut font = game_font(base, encoding)?;
     font.set_user_directory(&user)?;
     startup.set_glyph_metrics(font.metrics());
     if !font.has_face(startup.settings().font_face()) {

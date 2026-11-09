@@ -288,6 +288,19 @@ impl FontRenderer {
             cache: GlyphCache::default(),
         })
     }
+    /// Adds a font for characters the selected face and the default font lack.
+    pub fn add_fallback(&self, bytes: Vec<u8>, face: u32) -> Result<(), FormatError> {
+        if bytes.len() > MAX_FONT {
+            return Err(FormatError("font exceeds 32 MiB research limit"));
+        }
+        let font = FontVec::try_from_vec_and_index(bytes, face)
+            .map_err(|_| FormatError("invalid OpenType font or collection face index"))?;
+        self.library
+            .lock()
+            .map_err(|_| FormatError("font library lock poisoned"))?
+            .add_fallback(Arc::new(font));
+        Ok(())
+    }
     /// Uses `library` (sharing its explicit default font) for every face.
     pub fn with_library(library: FontLibrary) -> Self {
         Self {
