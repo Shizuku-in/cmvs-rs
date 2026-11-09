@@ -174,18 +174,18 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
     };
     let mut file = File::open(game.join("data/pack/script.cpz"))?;
     let index = ArchiveIndex::read(&mut file)?;
-    let mut entries = Vec::new();
+    let mut entries = BTreeMap::new();
     for (i, entry) in index.entries().iter().enumerate() {
         let result = convert(&entry.name, index.read_entry_verified(&mut file, i)?)
             .map_err(|e| format!("{}: {e}", String::from_utf8_lossy(&entry.name)))?;
-        entries.push((entry.name.clone(), result));
+        entries.insert(i, result);
     }
     let start = convert(b"start.ps3", fs::read(game.join("data/pack/start.ps3"))?)?;
     if seen.len() != 86 {
         return Err("unmatched patched scripts".into());
     }
     write_new(&output.join("start.ps3"), &start)?;
-    write_new(&output.join("script.cpz"), &scripts::pack(&entries)?)?;
+    scripts::write_archive(&mut file, &index, &output.join("script.cpz"), &entries, &[])?;
     write_new(&stage.join("scripts.tsv"), report.as_bytes())?;
 
     let mut pictures = BTreeMap::new();
@@ -218,10 +218,10 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
         {
             continue;
         }
-        let mut entries = Vec::new();
+        let mut entries = BTreeMap::new();
         for (i, entry) in index.entries().iter().enumerate() {
-            let original = index.read_entry_verified(&mut file, i)?;
-            let out = if let Some(path) = pictures.get(&entry.name) {
+            if let Some(path) = pictures.get(&entry.name) {
+                let original = index.read_entry_verified(&mut file, i)?;
                 if !seen.insert(entry.name.clone()) {
                     return Err("ambiguous image basename".into());
                 }
@@ -232,13 +232,10 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
                     std::str::from_utf8(&entry.name)?,
                     out.len()
                 ));
-                out
-            } else {
-                original
-            };
-            entries.push((entry.name.clone(), out));
+                entries.insert(i, out);
+            }
         }
-        write_new(&output.join(archive), &scripts::pack(&entries)?)?;
+        scripts::write_archive(&mut file, &index, &output.join(archive), &entries, &[])?;
         println!("Rebuilt {archive}");
     }
     if seen.len() != 114 {

@@ -2,7 +2,7 @@
 #[path = "../rewrite_scripts.rs"]
 mod scripts;
 use cmvs_core::{cpz::ArchiveIndex, ps3::Script};
-use scripts::{OutputEncoding, pack, rewrite_encoded, validate_utf8};
+use scripts::{OutputEncoding, rewrite_encoded, validate_utf8, write_archive};
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
@@ -87,7 +87,7 @@ fn run(game: &Path, patch: &Path, output: &Path, encoding: OutputEncoding) -> Re
     let mut blocks = parse_patch(&fs::read(patch)?)?;
     let mut archive = File::open(game.join("data/pack/script.cpz"))?;
     let index = ArchiveIndex::read(&mut archive)?;
-    let mut entries = Vec::new();
+    let mut entries = BTreeMap::new();
     let mut report = String::from("name\tkey\tstrings\tremapped_references\tbytes\n");
     let mut keys = BTreeSet::new();
     for (entry_index, entry) in index.entries().iter().enumerate() {
@@ -105,7 +105,7 @@ fn run(game: &Path, patch: &Path, output: &Path, encoding: OutputEncoding) -> Re
             rows.len(),
             converted.len()
         ));
-        entries.push((entry.name.clone(), converted));
+        entries.insert(entry_index, converted);
     }
     let raw = fs::read(game.join("data/pack/start.ps2"))?;
     let key = Script::decode(&raw)?.header.key;
@@ -122,8 +122,13 @@ fn run(game: &Path, patch: &Path, output: &Path, encoding: OutputEncoding) -> Re
     if !blocks.is_empty() {
         return Err("unmatched patch script keys".into());
     }
-    let packed = pack(&entries)?;
-    new_file(&output.join("script.cpz"), &packed)?;
+    write_archive(
+        &mut archive,
+        &index,
+        &output.join("script.cpz"),
+        &entries,
+        &[],
+    )?;
     new_file(&output.join("start.ps2"), &startup)?;
     new_file(&output.join("scripts.tsv"), report.as_bytes())?;
     Ok(())

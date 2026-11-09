@@ -1,4 +1,4 @@
-//! Offline helper for convert_hapymaher_patch.py; uses the shared PS2A/CPZ3 writer.
+//! Offline helper for convert_hapymaher_patch.py; retains the original CPZ5 format.
 #[path = "../pb3_writer.rs"]
 mod images;
 #[allow(dead_code)]
@@ -189,19 +189,19 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
     };
     let mut file = File::open(game.join("data/pack/script.cpz"))?;
     let index = ArchiveIndex::read(&mut file)?;
-    let mut entries = Vec::new();
+    let mut entries = BTreeMap::new();
     for (i, entry) in index.entries().iter().enumerate() {
-        entries.push((
-            entry.name.clone(),
+        entries.insert(
+            i,
             convert(&entry.name, index.read_entry_verified(&mut file, i)?)?,
-        ));
+        );
     }
     let start = convert(b"start.ps3", fs::read(game.join("data/pack/start.ps3"))?)?;
     if patched.len() != 151 {
         return Err("unmatched patch scripts".into());
     }
     write_new(&output.join("start.ps3"), &start)?;
-    write_new(&output.join("script.cpz"), &scripts::pack(&entries)?)?;
+    scripts::write_archive(&mut file, &index, &output.join("script.cpz"), &entries, &[])?;
     write_new(&stage.join("scripts.tsv"), report.as_bytes())?;
 
     let mut pictures = BTreeMap::new();
@@ -235,10 +235,10 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
         {
             continue;
         }
-        let mut entries = Vec::new();
+        let mut entries = BTreeMap::new();
         for (i, entry) in index.entries().iter().enumerate() {
-            let original = index.read_entry_verified(&mut file, i)?;
-            let converted = if let Some(path) = pictures.get(&entry.name) {
+            if let Some(path) = pictures.get(&entry.name) {
+                let original = index.read_entry_verified(&mut file, i)?;
                 if !seen.insert(entry.name.clone()) {
                     return Err("ambiguous image basename".into());
                 }
@@ -249,12 +249,10 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
                     std::str::from_utf8(&entry.name)?,
                     converted.len()
                 ));
-                converted
-            } else {
-                original
-            };
-            entries.push((entry.name.clone(), converted));
+                entries.insert(i, converted);
+            }
         }
+        let mut additions = Vec::new();
         // This patch adds a second backlog atlas and points its scripts at it.
         if archive == "chip.cpz" && !seen.contains(b"message_log1.pb3".as_slice()) {
             let name = b"message_log1.pb3".to_vec();
@@ -266,9 +264,19 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
                 converted.len()
             ));
             seen.insert(name.clone());
-            entries.push((name, converted));
+            additions.push(scripts::AddedEntry {
+                template: index.find(b"message_log.pb3")?,
+                name,
+                bytes: converted,
+            });
         }
-        write_new(&output.join(archive), &scripts::pack(&entries)?)?;
+        scripts::write_archive(
+            &mut file,
+            &index,
+            &output.join(archive),
+            &entries,
+            &additions,
+        )?;
         println!("Rebuilt {archive}");
     }
     if seen.len() != 111 {

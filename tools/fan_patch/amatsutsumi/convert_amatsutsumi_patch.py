@@ -1,4 +1,4 @@
-"""Convert 绿茶汉化组 アマツツミ fan patch to standard PS2A/CPZ3/PB3B.
+"""Convert 绿茶汉化组 アマツツミ fan patch to standard PS2A/CPZ6/PB3B.
 
 see: https://vndb.org/r97972
 
@@ -221,6 +221,7 @@ def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> N
             outputs[str(destination.relative_to(output))] = sha256(destination)
         report = dict(
             game="amatsutsumi", profile="cmvs-20160201", encoding=encoding,
+            archive_format="CPZ6",
             patch_sha256=sha256(patch), patch_member_sha256=digests, original_sha256=BASE_HASHES,
             script_update=True, optional_mosaic_patch=False,
             source_adaptations=["Keep installed startup archive mounts and initialization; use the updated Chinese title.",

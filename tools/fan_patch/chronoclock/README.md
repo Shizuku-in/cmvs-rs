@@ -19,7 +19,7 @@ cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop
 
 ## 转换内容
 
-按文本偏移、原文及脚本上下文匹配译文，重定位字符串引用并转换 BMP 图片。每版处理 86 个脚本来源（包括包内和包外各自的 `start.ps3`）、52,362 条译文和 92 张图片。复制原版 `save/system.dat` 模板并保留汉化声明。
+按文本偏移、原文及脚本上下文匹配译文，重定位字符串引用并转换 BMP 图片。每版处理 86 个脚本来源（包括包内和包外各自的 `start.ps3`）、52,362 条译文和 92 张图片。脚本与图片包保持原 CPZ6 格式，保留目录和密钥。复制原版 `save/system.dat` 模板并保留汉化声明。
 
 `--patch-version` 可选 `1.0`（默认）或 `1.05`。两版使用同一日版资源和译文，仅 `dialog_chip.pb3` 不同；1.05 保留扩展至 1280 像素宽的图集。
 

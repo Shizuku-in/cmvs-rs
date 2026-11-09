@@ -231,7 +231,7 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
     }
     let output = stage.join("pack");
     fs::create_dir(&output)?;
-    let mut entries = Vec::new();
+    let mut entries = BTreeMap::new();
     let mut report =
         String::from("source\tname\ttranslated_strings\tstrings\tremapped_references\tbytes\n");
     for (i, ((name, raw), translated)) in sources.iter().zip(translations).enumerate() {
@@ -263,10 +263,16 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
         if external {
             write_new(&output.join(name), &out)?;
         } else {
-            entries.push((name.as_bytes().to_vec(), out));
+            entries.insert(i, out);
         }
     }
-    write_new(&output.join("script.cpz"), &scripts::pack(&entries)?)?;
+    scripts::write_archive(
+        &mut file,
+        &archive,
+        &output.join("script.cpz"),
+        &entries,
+        &[],
+    )?;
     write_new(&stage.join("scripts.tsv"), report.as_bytes())?;
     println!("Converted 86 scripts / 52362 translation records");
 
@@ -301,10 +307,10 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
         {
             continue;
         }
-        let mut entries = Vec::new();
+        let mut entries = BTreeMap::new();
         for (i, entry) in index.entries().iter().enumerate() {
-            let original = index.read_entry_verified(&mut file, i)?;
-            let converted = if let Some(path) = pictures.get(&entry.name) {
+            if let Some(path) = pictures.get(&entry.name) {
+                let original = index.read_entry_verified(&mut file, i)?;
                 if !seen.insert(entry.name.clone()) {
                     return Err("ambiguous image basename".into());
                 }
@@ -326,13 +332,10 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
                     header.bpp,
                     out.len()
                 ));
-                out
-            } else {
-                original
-            };
-            entries.push((entry.name.clone(), converted));
+                entries.insert(i, out);
+            }
         }
-        write_new(&output.join(archive), &scripts::pack(&entries)?)?;
+        scripts::write_archive(&mut file, &index, &output.join(archive), &entries, &[])?;
         println!("Rebuilt {archive}");
     }
     if pictures.len() != 92 || seen.len() != pictures.len() {

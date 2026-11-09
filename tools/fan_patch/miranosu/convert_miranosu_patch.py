@@ -1,4 +1,4 @@
-"""Convert CK-GAL 未来ノスタルジア fan patch into standard PS2A/CPZ3.
+"""Convert CK-GAL 未来ノスタルジア fan patch into standard PS2A/CPZ5.
 
 see: https://vndb.org/r24913
 
@@ -168,6 +168,7 @@ def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> N
             shutil.copy2(stage / name, output / "data/pack" / name)
         report = dict(
             game="miranosu", profile="cmvs-20110525", encoding=encoding,
+            archive_format="CPZ5", packing_mode=8,
             patch_sha256=PATCH_SHA256, decoded_patch_sha256=DECODED_SHA256,
             original_sha256=BASE_HASHES,
             output_sha256={name: sha256(output / name) for name in

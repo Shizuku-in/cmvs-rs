@@ -1,4 +1,4 @@
-"""Convert 葵海计划 クロノクロック 1.0/1.05 fan patches to standard PS2A/CPZ3/PB3B.
+"""Convert 葵海计划 クロノクロック 1.0/1.05 fan patches to standard PS2A/CPZ6/PB3B.
 
 see: https://vndb.org/r114391
 
@@ -117,6 +117,7 @@ def convert(game: Path, patch: Path, output: Path, version: str = "1.0", encodin
             outputs[str(destination.relative_to(output))] = sha256(destination)
         report = dict(
             game="chronoclock", profile="cmvs-20150405", encoding=encoding, patch_version=version,
+            archive_format="CPZ6",
             patch_sha256=PATCH_SHA256, original_sha256=BASE_HASHES,
             text_substitutions={"♪": "☆", "・": "·", "䇲": "筴"} if encoding == "gbk" else {},
             source_adaptations=["snky21.ps3 text+0xc41a: match the installed source punctuation."],

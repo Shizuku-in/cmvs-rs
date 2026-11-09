@@ -1,13 +1,15 @@
-//! Shared encoding, string relocation, PS2A rebuilding and CPZ3 writing for offline converters.
+//! Shared encoding, string relocation, PS2A rebuilding and archive writing for offline converters.
 use cmvs_core::{
     bytecode::{self, Expression, InstructionKind, Term},
-    cpz::{ArchiveIndex, Cpz3Index},
+    cpz::{ArchiveDirectory, ArchiveFile, ArchiveIndex, Cpz3Index, Cpz5Index},
     ps3::Script,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
-    io::Cursor,
+    fs::{File, OpenOptions},
+    io::{Cursor, Read, Seek},
+    path::Path,
 };
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
@@ -204,6 +206,7 @@ pub(crate) fn rebuild_script(raw: &[u8], code: &[u8], text: &[u8]) -> Result<Vec
     }
     Ok(out)
 }
+#[allow(dead_code)]
 pub(crate) fn pack(entries: &[(Vec<u8>, Vec<u8>)]) -> Result<Vec<u8>> {
     let mut names = BTreeSet::new();
     for (name, _) in entries {
@@ -227,6 +230,132 @@ pub(crate) fn pack(entries: &[(Vec<u8>, Vec<u8>)]) -> Result<Vec<u8>> {
     }
     Ok(out)
 }
+/// Additional files inherit the directory of an existing template entry.
+pub(crate) struct AddedEntry {
+    pub template: usize,
+    pub name: Vec<u8>,
+    pub bytes: Vec<u8>,
+}
+
+/// Preserve the source format, using a fresh CPZ5 index only when files are added.
+#[allow(dead_code)]
+pub(crate) fn write_archive<R: Read + Seek>(
+    source: &mut R,
+    index: &ArchiveIndex,
+    destination: &Path,
+    replacements: &BTreeMap<usize, Vec<u8>>,
+    additions: &[AddedEntry],
+) -> Result<()> {
+    if replacements.keys().any(|i| *i >= index.entries().len()) {
+        return Err("replacement outside source archive".into());
+    }
+    let mut rebuilt = None;
+    if !additions.is_empty() {
+        let ArchiveIndex::Cpz5(original) = index else {
+            return Err("additional patch files require CPZ5".into());
+        };
+        if original.layout.encryption_mode != 1 {
+            return Err("additional patch files require CPZ5 resource mode 1".into());
+        }
+        let mut dirs: Vec<ArchiveDirectory> = Vec::new();
+        for (i, entry) in index.entries().iter().enumerate() {
+            if dirs
+                .last()
+                .is_none_or(|d| d.name != entry.directory.as_ref())
+            {
+                dirs.push(ArchiveDirectory {
+                    name: entry.directory.to_vec(),
+                    files: Vec::new(),
+                });
+            }
+            let raw = index.read_entry_verified(source, i)?;
+            dirs.last_mut().unwrap().files.push(ArchiveFile {
+                name: entry.name.clone(),
+                data: replacements.get(&i).cloned().unwrap_or(raw),
+            });
+        }
+        let mut names: BTreeSet<_> = index.entries().iter().map(|e| e.name.clone()).collect();
+        for addition in additions {
+            if !names.insert(addition.name.clone()) {
+                return Err("duplicate additional filename".into());
+            }
+            let directory = &index
+                .entries()
+                .get(addition.template)
+                .ok_or("invalid additional file template")?
+                .directory;
+            let targets: Vec<_> = dirs
+                .iter()
+                .enumerate()
+                .filter(|(_, d)| d.name == directory.as_ref())
+                .map(|(i, _)| i)
+                .collect();
+            if targets.len() != 1 {
+                return Err("ambiguous additional file directory".into());
+            }
+            dirs[targets[0]].files.push(ArchiveFile {
+                name: addition.name.clone(),
+                data: addition.bytes.clone(),
+            });
+        }
+        rebuilt = Some((original.mode, dirs));
+    }
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)?;
+    if let Some((mode, dirs)) = &rebuilt {
+        Cpz5Index::write(&mut output, *mode, dirs)?;
+    } else {
+        index.write_replacements(source, &mut output, replacements)?;
+    }
+    drop(output);
+    let mut output = File::open(destination)?;
+    let checked = ArchiveIndex::read(&mut output)?;
+    if checked.version() != index.version() {
+        return Err("archive format changed".into());
+    }
+    if let (ArchiveIndex::Cpz5(before), ArchiveIndex::Cpz5(after)) = (index, &checked)
+        && before.mode != after.mode
+    {
+        return Err("CPZ5 packing mode changed".into());
+    }
+    if let Some((_, dirs)) = &rebuilt {
+        let expected: Vec<_> = dirs
+            .iter()
+            .flat_map(|d| d.files.iter().map(move |f| (d, f)))
+            .collect();
+        if checked.entries().len() != expected.len() {
+            return Err("rebuilt archive entry count differs".into());
+        }
+        for (i, (entry, (dir, file))) in checked.entries().iter().zip(expected).enumerate() {
+            if entry.directory.as_ref() != dir.name
+                || entry.name != file.name
+                || checked.read_entry_verified(&mut output, i)? != file.data
+            {
+                return Err("rebuilt archive roundtrip differs".into());
+            }
+        }
+    } else {
+        if checked.entries().len() != index.entries().len() {
+            return Err("archive entry count changed".into());
+        }
+        for (i, (before, after)) in index.entries().iter().zip(checked.entries()).enumerate() {
+            let expected = match replacements.get(&i) {
+                Some(bytes) => bytes.clone(),
+                None => index.read_entry_verified(source, i)?,
+            };
+            if before.directory != after.directory
+                || before.name != after.name
+                || checked.read_entry_verified(&mut output, i)? != expected
+            {
+                return Err("archive replacement roundtrip differs".into());
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,6 +458,75 @@ mod tests {
         assert!(pack(&[(b"../escape".to_vec(), vec![])]).is_err());
         Ok(())
     }
+    #[test]
+    fn cpz5_additions_follow_template_directory_and_keep_other_files() -> Result<()> {
+        use cmvs_core::cpz::Cpz5Mode;
+        let dirs = vec![
+            ArchiveDirectory {
+                name: b"first".to_vec(),
+                files: vec![ArchiveFile {
+                    name: b"old.bin".to_vec(),
+                    data: vec![1],
+                }],
+            },
+            ArchiveDirectory {
+                name: b"second".to_vec(),
+                files: vec![ArchiveFile {
+                    name: b"keep.bin".to_vec(),
+                    data: vec![2],
+                }],
+            },
+        ];
+        let mut source = Cursor::new(Vec::new());
+        Cpz5Index::write(&mut source, Cpz5Mode::Mode8, &dirs)?;
+        let index = ArchiveIndex::read(&mut source)?;
+        let dir = std::env::temp_dir().join(format!("cmvs-patch-append-{}", std::process::id()));
+        std::fs::create_dir(&dir)?;
+        let destination = dir.join("new.cpz");
+        let additions = [AddedEntry {
+            template: 0,
+            name: b"added.bin".to_vec(),
+            bytes: vec![3],
+        }];
+        write_archive(
+            &mut source,
+            &index,
+            &destination,
+            &BTreeMap::from([(0, vec![4])]),
+            &additions,
+        )?;
+        let mut file = File::open(&destination)?;
+        let result = ArchiveIndex::read(&mut file)?;
+        assert_eq!(result.entries().len(), 3);
+        assert_eq!(result.entries()[1].directory.as_ref(), b"first");
+        assert_eq!(result.entries()[1].name, b"added.bin");
+        assert_eq!(result.read_entry_verified(&mut file, 0)?, [4]);
+        assert_eq!(result.read_entry_verified(&mut file, 1)?, [3]);
+        assert_eq!(result.read_entry_verified(&mut file, 2)?, [2]);
+        let invalid = dir.join("bad.cpz");
+        for (template, name) in [(99, b"bad.bin".to_vec()), (0, b"keep.bin".to_vec())] {
+            assert!(
+                write_archive(
+                    &mut source,
+                    &index,
+                    &invalid,
+                    &BTreeMap::new(),
+                    &[AddedEntry {
+                        template,
+                        name,
+                        bytes: vec![]
+                    }]
+                )
+                .is_err()
+            );
+            assert!(!invalid.exists());
+        }
+        drop(file);
+        std::fs::remove_file(destination)?;
+        std::fs::remove_dir(dir)?;
+        Ok(())
+    }
+
     #[test]
     fn utf8_rows_reject_invalid_bytes_non_bmp_and_nul() {
         let raw = fixture_script();

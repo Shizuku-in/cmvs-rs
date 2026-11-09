@@ -21,7 +21,7 @@ cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop
 ## 转换内容
 
 - 合并 `Scripts.pk` 与 `Scriptspk.UPD`，重定位两种编码的字符串引用；保留未翻译的日文，恢复补丁自定义音符。
-- 转换 114 张 PNG 为 PB3，重建 `chip.cpz`、`event.cpz`；复制六段默认字幕视频。
+- 转换 114 张 PNG 为 PB3，按原 CPZ6 格式写回 `script.cpz`、`chip.cpz`、`event.cpz`，保留目录和密钥；复制六段默认字幕视频。
 - 补丁启动脚本依赖当前原版没有的 `update.cpz`，因此保留原版启动流程并替换中文标题；其他脚本使用经校验的补丁代码和标签表。
 
 不安装汉化 exe/DLL、内嵌字体、选装图片或其他画质视频。`conversion.json` 记录输入、编码、资源校验值与转换报告。

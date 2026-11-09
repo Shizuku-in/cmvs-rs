@@ -1,4 +1,4 @@
-"""Convert 里想奈骑士团 ハピメア fan patch to standard PS2A/CPZ3/PB3B.
+"""Convert 里想奈骑士团 ハピメア fan patch to standard PS2A/CPZ5/PB3B.
 
 see: https://vndb.org/r56370
 
@@ -115,6 +115,7 @@ def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> N
             outputs[str(destination.relative_to(output))] = sha256(destination)
         report = dict(
             game="hapymaher", profile="cmvs-20130131", encoding=encoding,
+            archive_format="CPZ5", packing_mode=9,
             patch_sha256=PATCH_SHA256, original_sha256=BASE_HASHES,
             text_substitutions={"♪": "☆", "・": "·"} if encoding == "gbk" else {},
             output_sha256=outputs, scripts=scripts, images=images,

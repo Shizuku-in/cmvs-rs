@@ -19,7 +19,7 @@ cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop
 
 ## 转换内容
 
-从补丁 `word.mai` 和 DLL 数据表还原自定义字码，按所选编码写入脚本并重定位字符串引用。共输出 159 个脚本（151 个使用补丁）和 111 张图片，包含新增的 `message_log1.pb3`；保留未译日文。仅沿用原版 `save/system.dat` 模板。
+从补丁 `word.mai` 和 DLL 数据表还原自定义字码，按所选编码写入脚本并重定位字符串引用。共输出 159 个脚本（151 个使用补丁）和 111 张图片，包含新增的 `message_log1.pb3`；保留未译日文。封包保持原 CPZ5 模式 9；`chip.cpz` 因新增回看图按原目录重建，其余修改按原包替换写回。仅沿用原版 `save/system.dat` 模板。
 
 ## 验证
 
