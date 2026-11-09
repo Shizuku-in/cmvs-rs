@@ -43,21 +43,24 @@ pub fn edit(
     };
     // UTF-8 has variable-width characters; the callback enforces the byte budget.
     let limit = if encoding == TextEncoding::Utf8 {
-        budget
+        budget.min(127)
     } else {
         (budget / 2).max(1)
     };
     let mut check = |text: &str| match text_codec::unmappable(encoding, text) {
+        _ if text.contains('\0') => Err("Input cannot contain NUL characters".into()),
         Ok(bad) if bad.is_empty() => {
             let bytes = text_codec::encode(encoding, text).map_err(|error| error.to_string())?;
             if bytes.len() > budget as usize {
-                Err(format!("输入内容超过游戏文字编码的 {budget} 字节限制"))
+                Err(format!(
+                    "Input exceeds the {budget}-byte limit in the game encoding"
+                ))
             } else {
                 Ok(())
             }
         }
         Ok(bad) => Err(format!(
-            "以下字符无法用游戏文字编码（{}）保存：{bad}",
+            "These characters cannot be saved in the game encoding ({}): {bad}",
             label(encoding)
         )),
         Err(error) => Err(error.to_string()),
@@ -102,7 +105,10 @@ mod tests {
             ));
             assert!(check("今日の記録").is_ok());
             let rejected = check("記録😀と😀🎮").unwrap_err();
-            assert!(rejected.ends_with("：😀🎮"), "{rejected}");
+            assert_eq!(
+                rejected,
+                "These characters cannot be saved in the game encoding (Shift-JIS): 😀🎮"
+            );
             Ok(Some("今日の記録".into()))
         };
         let TextDialogResult::Accepted(bytes) =
@@ -168,7 +174,7 @@ mod tests {
             assert_eq!((title, initial), ("注释", "上次"));
             let rejected = check("这是记录😀").unwrap_err();
             assert!(
-                rejected.contains("（GBK）") && rejected.ends_with("：😀"),
+                rejected.contains("(GBK)") && rejected.ends_with(": 😀"),
                 "{rejected}"
             );
             Ok(Some("这是记录".into()))
@@ -179,6 +185,29 @@ mod tests {
             panic!("expected accepted text");
         };
         assert_eq!(bytes, gbk("这是记录"));
+    }
+
+    #[test]
+    fn legacy_input_checks_encoded_bytes_instead_of_utf8_length() {
+        for encoding in [TextEncoding::ShiftJis, TextEncoding::Gbk] {
+            let request = TextDialogRequest {
+                title: vec![],
+                prompt: vec![],
+                initial: vec![],
+                max_bytes: 3,
+            };
+            let mut keyboard = |_: &str,
+                                _: &str,
+                                _: &str,
+                                _: u32,
+                                check: &mut dyn FnMut(&str) -> Result<(), String>|
+             -> Result<Option<String>, &'static str> {
+                assert!(check("中a").is_ok());
+                assert!(check("中中").is_err());
+                Ok(None)
+            };
+            edit(&request, encoding, &mut keyboard).unwrap();
+        }
     }
 
     #[test]
@@ -197,8 +226,9 @@ mod tests {
                                 limit: u32,
                                 check: &mut dyn FnMut(&str) -> Result<(), String>|
              -> Result<Option<String>, &'static str> {
-                assert_eq!(limit as usize, budget);
+                assert_eq!(limit as usize, budget.min(127));
                 assert!(check(&text).is_ok());
+                assert!(check("\0").is_err());
                 assert!(check(&format!("{text}a")).is_err());
                 assert!(check(&"中".repeat(budget / 3 + 1)).is_err());
                 assert!(check(&"😀".repeat(budget / 4 + 1)).is_err());
