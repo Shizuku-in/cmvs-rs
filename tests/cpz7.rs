@@ -524,3 +524,104 @@ fn external_archive_resources() -> Result<(), Box<dyn std::error::Error>> {
     assert!(archives > 0, "at least one archive is required");
     Ok(())
 }
+
+#[test]
+fn cpz7_replacements_preserve_keys_directories_and_unmodified_ciphertext() {
+    use cmvs_rs::cpz::Cpz7Parameters;
+    use std::collections::BTreeMap;
+    for (fixture, parameters) in [
+        (
+            include_str!("fixtures/cpz7-keyed.hex"),
+            [0x10203040, 0x89abcdef, 0xfedcba98, 0x76543210].into(),
+        ),
+        (
+            include_str!("fixtures/cpz7-plain.hex"),
+            Cpz7Parameters::default(),
+        ),
+        (
+            include_str!("fixtures/cpz7-0.hex"),
+            Cpz7Parameters::default(),
+        ),
+        (
+            include_str!("fixtures/cpz7-7.hex"),
+            Cpz7Parameters::default(),
+        ),
+    ] {
+        let original = hex(fixture);
+        let index =
+            Cpz7Index::read_with_parameters(&mut Cursor::new(&original), parameters).unwrap();
+        // Includes empty and longer resources, all cipher word tails, and lengths
+        // across the resource feedback cycle; every other entry stays encrypted.
+        for length in 0..=68 {
+            let replacement: Vec<_> = (0..length).map(|i| (i * 71) as u8).collect();
+            let mut output = Cursor::new(Vec::new());
+            Cpz7Index::write_replacements(
+                &mut Cursor::new(&original),
+                &mut output,
+                parameters,
+                &BTreeMap::from([(0, replacement.clone())]),
+            )
+            .unwrap();
+            let bytes = output.into_inner();
+            let result =
+                Cpz7Index::read_with_parameters(&mut Cursor::new(&bytes), parameters).unwrap();
+            assert_eq!(&bytes[4..16], &original[4..16]);
+            assert_eq!(&bytes[32..68], &original[32..68]);
+            assert_eq!(result.entries().len(), index.entries().len());
+            for (i, (before, after)) in index.entries().iter().zip(result.entries()).enumerate() {
+                assert_eq!(before.directory, after.directory);
+                assert_eq!(before.name, after.name);
+                let decoded = result
+                    .read_entry_verified(&mut Cursor::new(&bytes), i)
+                    .unwrap();
+                if i == 0 {
+                    assert_eq!(decoded, replacement);
+                } else {
+                    assert_eq!(
+                        decoded,
+                        index
+                            .read_entry_verified(&mut Cursor::new(&original), i)
+                            .unwrap()
+                    );
+                    let old = before.offset as usize;
+                    let new = after.offset as usize;
+                    assert_eq!(
+                        &original[old..old + before.size as usize],
+                        &bytes[new..new + after.size as usize]
+                    );
+                }
+            }
+        }
+        let mut output = Cursor::new(Vec::new());
+        Cpz7Index::write_replacements(
+            &mut Cursor::new(&original),
+            &mut output,
+            parameters,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(output.into_inner(), original);
+        let mut output = Cursor::new(Vec::new());
+        assert!(
+            Cpz7Index::write_replacements(
+                &mut Cursor::new(&original),
+                &mut output,
+                parameters,
+                &BTreeMap::from([(index.entries().len(), vec![1])])
+            )
+            .is_err()
+        );
+        assert!(output.into_inner().is_empty());
+        let mut output = Cursor::new(b"do not overwrite".to_vec());
+        assert!(
+            Cpz7Index::write_replacements(
+                &mut Cursor::new(&original),
+                &mut output,
+                parameters,
+                &BTreeMap::new()
+            )
+            .is_err()
+        );
+        assert_eq!(output.into_inner(), b"do not overwrite");
+    }
+}

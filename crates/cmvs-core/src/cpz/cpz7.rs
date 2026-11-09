@@ -11,6 +11,8 @@ use std::{
     sync::Arc,
 };
 
+mod write;
+
 pub const CPZ7_HEADER_SIZE: usize = 72;
 
 /// Per-archive parameters in engine argument order (reverse of startup pushes).

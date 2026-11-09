@@ -11,6 +11,7 @@
 | ハピメア | [hapymaher](hapymaher/README.md) | UTF-8、GBK | `cmvs-20130131` |
 | クロノクロック | [chronoclock](chronoclock/README.md) | UTF-8、GBK | `cmvs-20150405` |
 | アマツツミ | [amatsutsumi](amatsutsumi/README.md) | UTF-8、GBK | `cmvs-20160201` |
+| リアライブ | [realive](realive/README.md) | UTF-8、GBK | `cmvs-20190305` |
 
 ## 使用约定
 
@@ -29,13 +30,15 @@
 | `--encoding utf-8` | 默认值，保留源文本字符；也接受 `utf8` | `--encoding utf-8` |
 | `--encoding gbk` | 使用旧版 GBK 输出规则 | `--encoding gbk` |
 
-GBK 字符转换规则：
+GBK 字符转换规则（各游戏按需使用）：
 
 | 原字符 | 转换后 |
 | --- | --- |
 | ♪ | ☆ |
 | ・ | · |
 | 䇲 | 筴 |
+
+リアライブ的额外颜文字替换见[游戏说明](realive/README.md)。
 
 两套输出请使用不同的新目录和独立用户目录。切换编码须从原始游戏和补丁重新转换；旧输出中已被替换的字符不能靠再次转码恢复。
 
