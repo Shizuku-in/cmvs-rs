@@ -78,6 +78,17 @@ cargo test --offline
 
 请使用 [补丁转换工具](./tools/fan_patch/README.md) 自行转换汉化补丁为 cmvs-rs 标准封包，默认不提供汉化补丁支持。
 
+## 支持平台
+
+| Platform | Target |
+|---|---|
+| Windows / Linux / MacOS | Host |
+| iOS | aarch64-apple-ios |
+| Android | aarch64-linux-android, x86_64-linux-android |
+| Web | wasm32-unknown-unknown |
+| Switch | aarch64-switch |
+| PS Vita | armv7-sony-vita-newlibeabihf |
+
 ## 文档与开发
 
 - [当前状态](docs/status.md)

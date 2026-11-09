@@ -74,12 +74,21 @@ cargo test --offline
 
 See the [Running Guide](docs/guides/running.md) for desktop previews, startup snapshot barriers, fonts, audio, and a separate user data directory. See the [CLI Guide](docs/guides/cli.md) for inspection tools.
 
-## Current Status
+## Platforms
 
-See [Current Status](docs/status.md) for capabilities, game validation scope, and major gaps. All documented samples are listed in the [Game Archive](docs/games/README.md).
+| Platform | Target |
+|---|---|
+| Windows / Linux / MacOS | Host |
+| iOS | aarch64-apple-ios |
+| Android | aarch64-linux-android, x86_64-linux-android |
+| Web | wasm32-unknown-unknown |
+| Switch | aarch64-switch |
+| PS Vita | armv7-sony-vita-newlibeabihf |
 
 ## Documentation and Development
 
+- [Current Status](docs/status.md)
+- [Game Archive](docs/games/README.md)
 - [Documentation Index and Archiving Rules](docs/README.md): find documentation by purpose.
 - [Architecture](docs/architecture.md) and [Workspace](docs/workspace.md): module responsibilities, dependencies, and the full set of validation commands.
 - [Research Guidelines](docs/research.md): evidence requirements and steps for adding support for a new game.
