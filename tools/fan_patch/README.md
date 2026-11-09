@@ -11,7 +11,9 @@
 | ハピメア | [hapymaher](hapymaher/README.md) | UTF-8、GBK | CPZ5 | `cmvs-20130131` |
 | クロノクロック | [chronoclock](chronoclock/README.md) | UTF-8、GBK | CPZ6 | `cmvs-20150405` |
 | アマツツミ | [amatsutsumi](amatsutsumi/README.md) | UTF-8、GBK | CPZ6 | `cmvs-20160201` |
+| アオイトリ | [aoitori](aoitori/README.md) | UTF-8、GBK | CPZ7 | `cmvs-20171114` |
 | リアライブ | [realive](realive/README.md) | UTF-8、GBK | CPZ7 | `cmvs-20190305` |
+| クナド国記 | [kunado](kunado/README.md) | UTF-8、GBK | CPZ7 | `cmvs-20211006` |
 
 ## 使用约定
 
@@ -46,6 +48,6 @@ asukimi 的源补丁为 GBK。UTF-8 模式逐字符转码，并重定位字符�
 
 ## 验证范围
 
-编码选择、字符串引用重定位和资源封包有自动测试。各游戏此前的实际运行记录来自 GBK 输出；UTF-8 的验证情况见各游戏说明。完整路线及原版存档互操作尚未验证；各补丁的已知问题见游戏说明。
+编码选择、字符串引用重定位和资源封包有自动测试。各游戏两种编码的实际验证情况见各游戏说明。完整路线及原版存档互操作尚未验证；各补丁的已知问题见游戏说明。
 
 封包格式迁移已覆盖 miranosu、hapymaher、chronoclock 1.0/1.05、amatsutsumi 的 UTF-8/GBK 共 10 种组合，与此前 CPZ3 输出逐项解包对照一致；既有运行记录来自迁移前。
