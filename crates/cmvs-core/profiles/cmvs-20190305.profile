@@ -272,7 +272,7 @@ binary x86 file=cmvs32.exe sha256=6705a43d85121b56961515f3dd0a0766a14a91ffa76df8
 0x2108 unreviewed 0x7fefa 0x732e7
 0x2109 unreviewed 0x7ff07 0x732f1
 0x210a unreviewed 0x7ff14 0x732fb
-0x210b unreviewed 0x7ff21 0x73305
+0x210b unreviewed 0x7ff21 0x73305 variant=font-cells:x64:02b71aac3d3d1ced1d0312b6c37748cf12df9cffd9585fb07787e6ca43199f00 evidence=games/realive/README.md
 0x210c unreviewed 0x7ff2e 0x7330f
 0x210d unreviewed 0x7ff3b 0x73319
 0x210e unreviewed 0x7ff48 0x73323
@@ -343,14 +343,14 @@ binary x86 file=cmvs32.exe sha256=6705a43d85121b56961515f3dd0a0766a14a91ffa76df8
 0x214f unreviewed 0x80267 0x73599
 0x2150 unreviewed 0x80274 0x735a3
 0x2151 unreviewed 0x80281 0x735ad
-0x2152 unreviewed 0x8028e 0x735b7
+0x2152 unreviewed 0x8028e 0x735b7 variant=font-cells:x64:02b71aac3d3d1ced1d0312b6c37748cf12df9cffd9585fb07787e6ca43199f00 evidence=games/realive/README.md
 0x2153 unreviewed 0x8029b 0x735c1
-0x2154 unreviewed 0x802a8 0x735cb
+0x2154 unreviewed 0x802a8 0x735cb variant=font-cells:x64:02b71aac3d3d1ced1d0312b6c37748cf12df9cffd9585fb07787e6ca43199f00 evidence=games/realive/README.md
 0x2155 unreviewed 0x802b5 0x735d5
 0x2156 unreviewed 0x802c2 0x735df
-0x2157 unreviewed 0x802cf 0x735e9
+0x2157 unreviewed 0x802cf 0x735e9 variant=font-cells:x64:02b71aac3d3d1ced1d0312b6c37748cf12df9cffd9585fb07787e6ca43199f00 evidence=games/realive/README.md
 0x2158 unreviewed 0x802dc 0x735f3
-0x2159 unreviewed 0x802e9 0x735fd
+0x2159 unreviewed 0x802e9 0x735fd variant=font-cells:x64:02b71aac3d3d1ced1d0312b6c37748cf12df9cffd9585fb07787e6ca43199f00 evidence=games/realive/README.md
 0x215a unreviewed 0x802f6 0x73607
 0x215b unreviewed 0x80303 0x73611
 0x215c unreviewed 0x80310 0x7361b

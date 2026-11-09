@@ -202,7 +202,7 @@ fn font_cells_bindings_are_limited_to_the_inspected_commands() {
             .map(|(command, _)| command)
             .collect();
         let mut expected = vec![0x11d, 0x388, 0x38b, 0x3ac, 0x3b8, 0x3b9, 0x3bb];
-        if matches!(id, "cmvs-20211006" | "cmvs-20221105") {
+        if matches!(id, "cmvs-20190305" | "cmvs-20211006" | "cmvs-20221105") {
             expected.extend([0x10b, 0x152, 0x154, 0x157, 0x159]);
             expected.sort_unstable();
         }
@@ -214,7 +214,7 @@ fn font_cells_bindings_are_limited_to_the_inspected_commands() {
         );
         assert_eq!(
             profile.semantics(0x10b),
-            if matches!(id, "cmvs-20211006" | "cmvs-20221105") {
+            if matches!(id, "cmvs-20190305" | "cmvs-20211006" | "cmvs-20221105") {
                 Semantics::Variant(VariantId::FontCells)
             } else {
                 Semantics::Root
