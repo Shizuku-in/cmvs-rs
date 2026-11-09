@@ -195,7 +195,7 @@ fn run(
     let game = Registry::builtin().identify_game(root, None)?;
     let record = game.selection.record.ok_or("unregistered game")?;
     let script = load_start(root, &game.files)?;
-    let encoding = cmvs_console::encoding::select(root, script.text())?;
+    let encoding = cmvs_console::encoding::select(root, &game.files, &script)?;
     let mut startup = Startup::new_with_encoding(&script, root, &game, 0, encoding)?;
     let user = base.join("users").join(&record.game);
     startup.set_user_data_directory(&user)?;

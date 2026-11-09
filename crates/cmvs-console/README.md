@@ -11,7 +11,7 @@ Host logic shared by the Switch and PS Vita players. Each console describes its 
 | `menu` | Game selection screen, shown when more than one game is installed |
 | `error_screen` | Full-screen error page shown before leaving a failed game |
 | `canvas` | CPU-drawn host pages, laid out on a 720-unit grid and scaled to the screen |
-| `encoding` | Game text encoding from `encoding.txt` in the game directory, or detected from the startup script |
+| `encoding` | Game text encoding from `encoding.txt` in the game directory, or detected from startup text with bounded archive-script fallback |
 | `text_input` | Save-comment dialog through the system keyboard, in the game text encoding |
 | `gpu` | Executes the shared scene draw queue on a console GPU, with a content-keyed texture cache |
 

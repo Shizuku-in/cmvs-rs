@@ -61,7 +61,7 @@ Open a native research preview. Game files are read only.
 
 Required:
   --encoding <name>       auto, shift-jis, gbk or utf-8
-                         auto infers from startup script text and prints the result;
+                         auto infers from game script text and prints the result;
                          ambiguous samples require an explicit encoding
 
 Display, text and audio:
@@ -105,7 +105,7 @@ Notes:
   Without --font or --record-text, message output stops at a barrier.
   Playback supports Shift-JIS, GBK and UTF-8, including message rendering.
   Glyph pixels differ from the original GDI backend.
-  Auto detection samples complete strings in the first 256 KiB of startup text.
+  Auto detection samples startup text, then up to 32 archived scripts if uncertain.
   Known game builds are identified from scripts, archives and executable hashes.
   Presumed/unreviewed commands run by default; absent/no-op commands always stop.
   Save snapshots are built at main entry and scenario points. Unsupported snapshot
@@ -946,7 +946,13 @@ fn run() -> Result<(), Box<dyn Error>> {
         println!("{line}");
     }
     let script = load_start(root.as_ref(), &game.files)?;
-    let encoding = choice.resolve(script.text())?;
+    let encoding = match choice.resolve(script.text()) {
+        Err(_) if choice == EncodingChoice::Auto => {
+            let encoding = cmvs_font::text_codec::detect_game(&root, &game.files, &script)?;
+            TextEncoding::parse(cmvs_font::text_codec::name(encoding))?
+        }
+        result => result?,
+    };
     if choice == EncodingChoice::Auto {
         let name = match encoding {
             TextEncoding::ShiftJis => "shift-jis",
@@ -954,7 +960,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             TextEncoding::Utf8 => "utf-8",
         };
         println!(
-            "# auto encoding={name}; inferred from startup script text; override with --encoding <name> if incorrect"
+            "# auto encoding={name}; inferred from game script text; override with --encoding <name> if incorrect"
         );
     }
     let engine_encoding = encoding.engine_encoding();

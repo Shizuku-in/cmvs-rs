@@ -1,5 +1,5 @@
 //! Host-side game text codecs: decoding and encoding host strings in the game encoding,
-//! and inferring that encoding from startup script text. Core's byte scanners stay
+//! and inferring that encoding from script text. Core's byte scanners stay
 //! dependency-free; the codec tables live here beside the glyph decoding that shares them.
 use cmvs_core::{FormatError, TextEncoding};
 
@@ -62,7 +62,58 @@ pub fn unmappable(encoding: TextEncoding, text: &str) -> Result<String, FormatEr
 
 /// Detection found no reliable evidence; the host must ask for an explicit encoding.
 pub const UNCERTAIN: FormatError =
-    FormatError("cannot reliably detect the game text encoding from the startup script");
+    FormatError("cannot reliably detect the game text encoding from script text");
+
+/// Try startup text first, then at most 32 archived scripts in archive order.
+/// Fallback reads and decoded payloads each share a 16 MiB budget; uncertain
+/// samples never select a default encoding. Archive and script errors propagate.
+pub fn detect_game(
+    root: &std::path::Path,
+    files: &cmvs_core::profile::GameFiles,
+    startup: &cmvs_core::ps3::Script,
+) -> Result<TextEncoding, Box<dyn std::error::Error>> {
+    use cmvs_core::{
+        filesystem::File,
+        ps3::{Header, Script},
+        script_control::archive_index_from_start,
+    };
+    if let Ok(encoding) = detect(startup.text()) {
+        return Ok(encoding);
+    }
+    let mut reader = File::open(root.join(&files.script_archive))?;
+    let basename = files.script_archive.file_name().ok_or(UNCERTAIN)?;
+    let index = archive_index_from_start(&mut reader, startup, basename.as_encoded_bytes())?;
+    let mut stored_budget = 16 * 1024 * 1024;
+    let mut decoded_budget = stored_budget;
+    let mut scripts = 0;
+    for (i, entry) in index.entries().iter().enumerate() {
+        let extension = entry.name.rsplit(|&b| b == b'.').next().unwrap_or_default();
+        if !extension.eq_ignore_ascii_case(b"ps3") && !extension.eq_ignore_ascii_case(b"ps2") {
+            continue;
+        }
+        if scripts == 32 {
+            break;
+        }
+        scripts += 1;
+        let size = entry.size as usize;
+        if size > stored_budget {
+            continue;
+        }
+        stored_budget -= size;
+        let raw = index.read_entry(&mut reader, i)?;
+        let header = Header::parse(&raw)?;
+        let decoded = header.decoded_size as usize;
+        if decoded > decoded_budget {
+            continue;
+        }
+        decoded_budget -= decoded;
+        let script = Script::decode(&raw)?;
+        if let Ok(encoding) = detect(script.text()) {
+            return Ok(encoding);
+        }
+    }
+    Err(UNCERTAIN.into())
+}
 
 #[derive(Default)]
 struct Evidence {
@@ -182,6 +233,108 @@ mod tests {
         let mut over_limit = vec![b'a'; 256 * 1024];
         over_limit.extend_from_slice(b"\x82\xa0\0");
         assert_eq!(detect(&over_limit), Err(UNCERTAIN));
+    }
+
+    fn script_bytes(text: &[u8]) -> Vec<u8> {
+        let size = text.len() as u32;
+        let mut raw = b"PS2A".to_vec();
+        for word in [48, 0, 0, 0, 2, 0, size, 0, 0, size + 2, 0] {
+            raw.extend(word.to_le_bytes());
+        }
+        raw.extend(
+            [0u8, 0x20]
+                .iter()
+                .chain(text)
+                .map(|b| b.rotate_left(1).wrapping_add(124)),
+        );
+        raw
+    }
+
+    #[test]
+    fn fallback_reads_archived_scripts_without_guessing_ascii_or_binary() {
+        use cmvs_core::{
+            cpz::{ArchiveDirectory, ArchiveFile, Cpz6Index},
+            profile::GameFiles,
+            ps3::Script,
+        };
+        use std::{fs, io::Cursor};
+        let root = std::env::temp_dir().join(format!("cmvs-font-encoding-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let files = GameFiles {
+            start_script: "start.ps3".into(),
+            script_archive: "script.cpz".into(),
+        };
+        let startup = Script::decode(&script_bytes(b"menu.ps3\0")).unwrap();
+        for (encoding, text) in [
+            (
+                TextEncoding::ShiftJis,
+                "これは文字コードを自動で判定するための日本語の文章です。",
+            ),
+            (
+                TextEncoding::Gbk,
+                "这是用于自动识别文字编码的中文句子，请检查显示是否正确。",
+            ),
+            (TextEncoding::Utf8, "「日本語」と“中文”のUTF-8テキスト"),
+        ] {
+            let mut text = encode(encoding, text).unwrap();
+            text.push(0);
+            let mut archive = Cursor::new(Vec::new());
+            Cpz6Index::write(
+                &mut archive,
+                &[ArchiveDirectory {
+                    name: Vec::new(),
+                    files: vec![
+                        ArchiveFile {
+                            name: b"binary.dat".to_vec(),
+                            data: vec![0xff],
+                        },
+                        ArchiveFile {
+                            name: b"menu.ps3".to_vec(),
+                            data: script_bytes(b"logo.pb3\0"),
+                        },
+                        ArchiveFile {
+                            name: b"story.PS3".to_vec(),
+                            data: script_bytes(&text),
+                        },
+                    ],
+                }],
+            )
+            .unwrap();
+            fs::write(root.join(&files.script_archive), archive.into_inner()).unwrap();
+            assert_eq!(detect_game(&root, &files, &startup).unwrap(), encoding);
+            // Startup evidence takes priority, without opening the archive.
+            let strong_start = Script::decode(&script_bytes(&text)).unwrap();
+            let empty = GameFiles {
+                script_archive: "missing.cpz".into(),
+                ..files.clone()
+            };
+            assert_eq!(detect_game(&root, &empty, &strong_start).unwrap(), encoding);
+        }
+        let mut archive = Cursor::new(Vec::new());
+        Cpz6Index::write(
+            &mut archive,
+            &[ArchiveDirectory {
+                name: Vec::new(),
+                files: (0..32)
+                    .map(|i| ArchiveFile {
+                        name: format!("{i}.ps3").into_bytes(),
+                        data: script_bytes(b"menu.ps3\0"),
+                    })
+                    .chain(std::iter::once(ArchiveFile {
+                        name: b"beyond-limit.ps3".to_vec(),
+                        data: script_bytes("日本語の文章をここから開始します。\0".as_bytes()),
+                    }))
+                    .collect(),
+            }],
+        )
+        .unwrap();
+        fs::write(root.join(&files.script_archive), archive.into_inner()).unwrap();
+        let error = detect_game(&root, &files, &startup).unwrap_err();
+        assert_eq!(error.downcast_ref::<FormatError>(), Some(&UNCERTAIN));
+        fs::write(root.join(&files.script_archive), b"broken archive").unwrap();
+        let error = detect_game(&root, &files, &startup).unwrap_err();
+        assert_ne!(error.downcast_ref::<FormatError>(), Some(&UNCERTAIN));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

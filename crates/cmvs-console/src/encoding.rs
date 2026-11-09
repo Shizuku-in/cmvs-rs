@@ -1,29 +1,34 @@
 //! The game text encoding: `encoding.txt` in the game directory, or detection from the
-//! startup script when that file is absent; and the system fonts its text needs.
+//! game scripts when that file is absent; and the system fonts its text needs.
 use cmvs_core::TextEncoding;
 use cmvs_font::text_codec;
 use std::{error::Error, io::ErrorKind, path::Path};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-/// `encoding.txt` in `root` holds `shift-jis`, `gbk` or `utf-8`; without it the encoding
-/// is inferred from `text`, the startup script's text section.
-pub fn select(root: &Path, text: &[u8]) -> Result<TextEncoding> {
+/// An explicit game setting overrides bounded detection from startup and archived scripts.
+pub fn select(
+    root: &Path,
+    files: &cmvs_core::profile::GameFiles,
+    startup: &cmvs_core::ps3::Script,
+) -> Result<TextEncoding> {
     match std::fs::read_to_string(root.join("encoding.txt")) {
-        Ok(setting) => parse(Some(&setting), text),
-        Err(error) if error.kind() == ErrorKind::NotFound => parse(None, text),
+        Ok(setting) => {
+            let name = setting.trim();
+            text_codec::parse(name).map_err(|_| {
+                format!("encoding.txt must be shift-jis, gbk or utf-8, not {name:?}").into()
+            })
+        },
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            text_codec::detect_game(root, files, startup).map_err(|error| {
+                if error.downcast_ref::<cmvs_core::FormatError>() == Some(&text_codec::UNCERTAIN) {
+                    "cannot detect the game text encoding; put encoding.txt holding shift-jis, gbk or utf-8 in the game directory".into()
+                } else {
+                    error
+                }
+            })
+        }
         Err(error) => Err(error.into()),
-    }
-}
-
-fn parse(setting: Option<&str>, text: &[u8]) -> Result<TextEncoding> {
-    match setting.map(str::trim) {
-        None => text_codec::detect(text).map_err(|_| {
-            "cannot detect the game text encoding; put encoding.txt holding shift-jis, gbk or utf-8 in the game directory".into()
-        }),
-        Some(name) => text_codec::parse(name).map_err(|_| {
-            format!("encoding.txt must be shift-jis, gbk or utf-8, not {name:?}").into()
-        }),
     }
 }
 
@@ -51,34 +56,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_setting_overrides_detection() {
-        let mut gbk = text_codec::encode(
-            TextEncoding::Gbk,
-            "这是用于自动识别文字编码的中文句子，请检查显示是否正确。",
-        )
-        .unwrap();
-        gbk.push(0);
-        let gbk = gbk.as_slice();
-        assert_eq!(parse(None, gbk).unwrap(), TextEncoding::Gbk);
-        assert_eq!(parse(Some("utf-8\r\n"), gbk).unwrap(), TextEncoding::Utf8);
-        assert_eq!(
-            parse(Some("shift-jis"), b"").unwrap(),
-            TextEncoding::ShiftJis
-        );
-        let bad = parse(Some("auto"), gbk).unwrap_err().to_string();
-        assert!(bad.contains("\"auto\""), "{bad}");
-        let uncertain = parse(None, b"menu.ps3\0").unwrap_err().to_string();
-        assert!(uncertain.contains("encoding.txt"), "{uncertain}");
-    }
-
-    #[test]
-    fn select_reads_the_game_directory() {
+    fn explicit_setting_bypasses_missing_archive_and_uncertain_text() {
         let root =
             std::env::temp_dir().join(format!("cmvs-console-encoding-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
-        assert!(select(&root, b"menu.ps3\0").is_err());
-        std::fs::write(root.join("encoding.txt"), "gbk\n").unwrap();
-        assert_eq!(select(&root, b"menu.ps3\0").unwrap(), TextEncoding::Gbk);
+        let files = cmvs_core::profile::GameFiles {
+            start_script: "start.ps3".into(),
+            script_archive: "missing.cpz".into(),
+        };
+        let mut raw = b"PS2A".to_vec();
+        for word in [48u32, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0] {
+            raw.extend(word.to_le_bytes());
+        }
+        raw.extend([0, 0x20]);
+        let startup = cmvs_core::ps3::Script::from_memory_image(&raw).unwrap();
+        for (name, expected) in [
+            ("gbk\n", TextEncoding::Gbk),
+            ("utf-8\r\n", TextEncoding::Utf8),
+            ("shift-jis", TextEncoding::ShiftJis),
+        ] {
+            std::fs::write(root.join("encoding.txt"), name).unwrap();
+            assert_eq!(select(&root, &files, &startup).unwrap(), expected);
+        }
+        std::fs::write(root.join("encoding.txt"), "auto").unwrap();
+        assert!(
+            select(&root, &files, &startup)
+                .unwrap_err()
+                .to_string()
+                .contains("\"auto\"")
+        );
         std::fs::remove_dir_all(&root).unwrap();
     }
 
