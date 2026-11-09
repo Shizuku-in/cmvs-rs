@@ -654,11 +654,19 @@ fn root_random(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, B
 }
 
 fn root_settings(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
-    hosts
+    let settings = hosts
         .settings
         .as_deref_mut()
-        .expect("settings capability checked")
-        .handle(call)?;
+        .expect("settings capability checked");
+    let display_name = if call.command == 0x2de && call.argument(4, "mode")? == 0 {
+        hosts
+            .messages
+            .as_deref()
+            .and_then(|messages| messages.display_face_name(settings.font_face()))
+    } else {
+        None
+    };
+    settings.handle_with_font_name(call, display_name.as_deref())?;
     Ok(Flow::Done)
 }
 

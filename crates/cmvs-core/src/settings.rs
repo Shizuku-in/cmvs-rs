@@ -210,6 +210,14 @@ impl SettingsHost {
     }
 
     pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        self.handle_with_font_name(call, None)
+    }
+
+    pub(crate) fn handle_with_font_name(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        display_name: Option<&[u8]>,
+    ) -> Result<(), DecodeError> {
         let pc = call.pc;
         let command = call.command;
         if command == 0x2e9 {
@@ -348,7 +356,9 @@ impl SettingsHost {
                     "font name destination outside the string bank is not modeled",
                 )
             })?;
-            let face = font_face_for_encoding(&self.font_face, call.vm.text_encoding());
+            let face = display_name.unwrap_or_else(|| {
+                font_face_for_encoding(&self.font_face, call.vm.text_encoding())
+            });
             call.complete(0x4008)?;
             call.vm
                 .state_mut()

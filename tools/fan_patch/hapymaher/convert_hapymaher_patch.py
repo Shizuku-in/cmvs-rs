@@ -71,7 +71,10 @@ def character_map(flags: bytes, sjis: tuple[int, ...]) -> dict[int, int]:
     return inverse
 
 
-def convert(game: Path, patch: Path, output: Path) -> None:
+def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> None:
+    if encoding not in ("utf-8", "utf8", "gbk"):
+        raise ValueError("encoding must be utf-8, utf8 or gbk")
+    encoding = "utf-8" if encoding == "utf8" else encoding
     game, patch, output = game.resolve(), patch.resolve(), output.resolve()
     if output.exists() or output.is_relative_to(game):
         raise ValueError("Output must be a new directory outside the game")
@@ -119,7 +122,7 @@ def convert(game: Path, patch: Path, output: Path) -> None:
         subprocess.run([
             "cargo", "run", "--offline", "--locked", "--release", "--manifest-path",
             str(tool / "Cargo.toml"), "--target-dir", str(repository / "target/fan-patch-hapymaher"),
-            "--", str(game), str(stage),
+            "--", str(game), str(stage), encoding,
         ], check=True)
         with (stage / "scripts.tsv").open() as stream:
             scripts = list(csv.DictReader(stream, delimiter="\t"))
@@ -141,9 +144,9 @@ def convert(game: Path, patch: Path, output: Path) -> None:
             shutil.copy2(asset, destination)
             outputs[str(destination.relative_to(output))] = sha256(destination)
         report = dict(
-            game="hapymaher", profile="cmvs-20130131", encoding="gbk",
+            game="hapymaher", profile="cmvs-20130131", encoding=encoding,
             patch_sha256=PATCH_SHA256, original_sha256=BASE_HASHES,
-            text_substitutions={"♪": "☆", "・": "·"},
+            text_substitutions={"♪": "☆", "・": "·"} if encoding == "gbk" else {},
             output_sha256=outputs, scripts=scripts, images=images,
             limitations=["Source translation is the 2017-07-11 test patch.",
                          "No patch exe/DLL, settings or saves installed.",
@@ -157,9 +160,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("game", "patch", "output"):
         parser.add_argument(name, type=Path)
+    parser.add_argument("--encoding", choices=("utf-8", "utf8", "gbk"), default="utf-8", help="Output text encoding (default: utf-8)")
     args = parser.parse_args()
     try:
-        convert(args.game, args.patch, args.output)
+        convert(args.game, args.patch, args.output, encoding=args.encoding)
     except (OSError, ValueError, KeyError, struct.error, zipfile.BadZipFile, subprocess.CalledProcessError) as exc:
         parser.exit(1, f"Error: {exc}\n")
 

@@ -58,16 +58,12 @@ fn recode(text: &[u8], mapping: &[u16]) -> Result<Vec<u8>> {
         }
         chars.push(value);
     }
-    encode_gbk(&String::from_utf16(&chars)?)
+    encode_utf8(&String::from_utf16(&chars)?)
 }
 
-fn encode_gbk(unicode: &str) -> Result<Vec<u8>> {
-    let unicode = unicode.replace('♪', "☆").replace('・', "·");
-    let (encoded, _, bad) = encoding_rs::GBK.encode(&unicode);
-    if bad {
-        return Err(format!("patch text cannot be represented in GBK: {unicode}").into());
-    }
-    Ok(encoded.into_owned())
+fn encode_utf8(text: &str) -> Result<Vec<u8>> {
+    scripts::validate_utf8(text.as_bytes())?;
+    Ok(text.as_bytes().to_vec())
 }
 
 fn patch_rows(
@@ -97,7 +93,7 @@ fn patch_rows(
         if bad {
             return Err("invalid base Japanese string".into());
         }
-        rows.insert(entry.offset as u32, encode_gbk(&unicode)?);
+        rows.insert(entry.offset as u32, encode_utf8(&unicode)?);
     }
     for bytes in patch.text()[at..].split_inclusive(|&b| b == 0) {
         rows.insert(at as u32, recode(&bytes[..bytes.len() - 1], mapping)?);
@@ -140,7 +136,7 @@ fn png_to_pb3(raw: &[u8], original: &[u8]) -> Result<(Vec<u8>, u32, u32, u16)> {
     Ok((out, width, height, header.bpp))
 }
 
-fn run(game: &Path, stage: &Path) -> Result<()> {
+fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<()> {
     let output = stage.join("pack");
     fs::create_dir(&output)?;
     let table = fs::read(stage.join("characters.bin"))?;
@@ -175,12 +171,13 @@ fn run(game: &Path, stage: &Path) -> Result<()> {
                 if bad {
                     return Err("invalid original Japanese string".into());
                 }
-                rows.insert(entry.offset as u32, encode_gbk(&unicode)?);
+                rows.insert(entry.offset as u32, encode_utf8(&unicode)?);
             }
             (raw, rows, false)
         };
         let (converted, changed) =
-            scripts::rewrite(&source, &rows).map_err(|e| format!("{basename}: {e}"))?;
+            scripts::rewrite_encoded(&source, &rows, encoding, &[('♪', "☆"), ('・', "·")])
+                .map_err(|e| format!("{basename}: {e}"))?;
         let decoded = Script::decode(&converted)?;
         bytecode::decode_layout(decoded.code(), decoded.header.entry_pc, &decoded.labels())?;
         report.push_str(&format!(
@@ -291,10 +288,14 @@ fn run(game: &Path, stage: &Path) -> Result<()> {
 }
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.len() != 2 {
-        return Err("internal helper: <original-game> <stage-directory>".into());
+    if args.len() != 3 {
+        return Err("internal helper: <original-game> <stage-directory> <encoding>".into());
     }
-    run(Path::new(&args[0]), Path::new(&args[1]))
+    run(
+        Path::new(&args[0]),
+        Path::new(&args[1]),
+        scripts::OutputEncoding::parse(&args[2])?,
+    )
 }
 
 #[cfg(test)]
@@ -325,17 +326,17 @@ mod tests {
     }
 
     #[test]
-    fn custom_codes_and_explicit_gbk_symbol_substitutions() -> Result<()> {
+    fn custom_codes_preserve_utf8_symbols() -> Result<()> {
         let mut mapping = vec![0xffff; 65536];
         mapping[0x889f] = '简' as u16;
         assert_eq!(
-            encoding_rs::GBK.decode(&recode(&[0x88, 0x9f], &mapping)?).0,
+            String::from_utf8_lossy(&recode(&[0x88, 0x9f], &mapping)?),
             "简"
         );
         assert!(recode(&[0x88], &mapping).is_err());
         assert!(recode(&[0x88, 0xa0], &mapping).is_err());
-        assert_eq!(encoding_rs::GBK.decode(&encode_gbk("♪・")?).0, "☆·");
-        assert!(encode_gbk("😀").is_err());
+        assert_eq!(String::from_utf8_lossy(&encode_utf8("♪・")?), "♪・");
+        assert!(encode_utf8("😀").is_err());
         Ok(())
     }
 
@@ -346,8 +347,8 @@ mod tests {
         let mut mapping = vec![0xffff; 65536];
         mapping[0x889f] = '简' as u16;
         let rows = patch_rows(&original, &patch, &mapping)?;
-        assert_eq!(encoding_rs::GBK.decode(&rows[&0]).0, "ああ");
-        assert_eq!(encoding_rs::GBK.decode(&rows[&14]).0, "简");
+        assert_eq!(String::from_utf8_lossy(&rows[&0]), "ああ");
+        assert_eq!(String::from_utf8_lossy(&rows[&14]), "简");
         assert!(rows[&17].is_empty());
         assert!(patch_rows(&original, &memory(b"x\0wrong.ps3\0z\0")?, &mapping).is_err());
         let raw = patch.memory_image(patch.unknown())?;

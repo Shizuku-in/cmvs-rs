@@ -121,7 +121,10 @@ def decode_mirai(raw: bytes) -> bytes:
     return bytes(out)
 
 
-def convert(game: Path, patch: Path, output: Path) -> None:
+def convert(game: Path, patch: Path, output: Path, encoding: str = "utf-8") -> None:
+    if encoding not in ("utf-8", "utf8", "gbk"):
+        raise ValueError("encoding must be utf-8, utf8 or gbk")
+    encoding = "utf-8" if encoding == "utf8" else encoding
     game, patch, output = game.resolve(), patch.resolve(), output.resolve()
     if output.exists() or output.is_relative_to(game):
         raise ValueError("Output must be a new directory outside the game")
@@ -146,7 +149,7 @@ def convert(game: Path, patch: Path, output: Path) -> None:
         subprocess.run([
             "cargo", "run", "--offline", "--locked", "--release", "--manifest-path",
             str(tool / "Cargo.toml"), "--target-dir", str(repository / "target/fan-patch-miranosu"),
-            "--", str(game), str(stage / "mirai.decoded"), str(stage),
+            "--", str(game), str(stage / "mirai.decoded"), str(stage), encoding,
         ], check=True)
         with (stage / "scripts.tsv").open() as stream:
             scripts = list(csv.DictReader(stream, delimiter="\t"))
@@ -164,14 +167,14 @@ def convert(game: Path, patch: Path, output: Path) -> None:
         for name in ("script.cpz", "start.ps2"):
             shutil.copy2(stage / name, output / "data/pack" / name)
         report = dict(
-            game="miranosu", profile="cmvs-20110525", encoding="gbk",
+            game="miranosu", profile="cmvs-20110525", encoding=encoding,
             patch_sha256=PATCH_SHA256, decoded_patch_sha256=DECODED_SHA256,
             original_sha256=BASE_HASHES,
             output_sha256={name: sha256(output / name) for name in
                            ("data/pack/script.cpz", "data/pack/start.ps2")},
             scripts=scripts,
             limitations=["Original image assets: image-based menus remain Japanese.",
-                         "Untranslated Japanese strings are retained in GBK.",
+                         f"Untranslated Japanese strings are retained in {encoding}.",
                          "No patch DLL/exe/system.dat or full-CG saves installed.",
                          "Full routes and original save interoperability are not verified."],
         )
@@ -184,9 +187,10 @@ def main() -> None:
     parser.add_argument("game", type=Path)
     parser.add_argument("patch", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--encoding", choices=("utf-8", "utf8", "gbk"), default="utf-8", help="Output text encoding (default: utf-8)")
     args = parser.parse_args()
     try:
-        convert(args.game, args.patch, args.output)
+        convert(args.game, args.patch, args.output, encoding=args.encoding)
     except (OSError, ValueError, zipfile.BadZipFile, subprocess.CalledProcessError) as exc:
         parser.exit(1, f"Error: {exc}\n")
 

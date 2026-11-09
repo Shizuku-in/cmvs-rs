@@ -1,32 +1,34 @@
-# 《クロノクロック》 葵海计划汉化转换
+# 《クロノクロック》汉化补丁转换
 
-将《クロノクロック》 [葵海计划 1.0 / 1.05 补丁](https://vndb.org/r114391)中的译文和 BMP 转为标准 PS2A、CPZ3 和 PB3B，供 cmvs-rs 使用。
+支持 [葵海计划 1.0 / 1.05 补丁](https://vndb.org/r114391)。依赖、输出目录要求和编码规则见[工具总览](../README.md)。每版约需 4.4 GiB。
 
-## 使用
+## 转换与启动
 
-需要 Python 3.10+、本项目要求的 Rust/Cargo 和已缓存的依赖。从仓库根目录执行，两版分别输出：
+从仓库根目录执行：
 
 ```bash
-for version in 1.0 1.05; do
-  python3 tools/fan_patch/chronoclock/convert_chronoclock_patch.py \
-    "<原版游戏目录>" "<汉化补丁.zip>" "<新输出目录>-$version" --patch-version "$version"
-done
+python3 tools/fan_patch/chronoclock/convert_chronoclock_patch.py \
+  "<原版游戏目录>" "<汉化补丁.zip>" "<新输出目录>" --encoding utf-8 --patch-version 1.05
 
 cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- \
-  "<转换输出目录>" --profile cmvs-20150405 --encoding gbk --audio native \
+  "<转换输出目录>" --profile cmvs-20150405 --encoding utf-8 --audio native \
   --font "<中文字体文件>" --user-data-dir "<独立用户目录>"
 ```
 
-输出目录必须不存在且位于原版目录之外，每版约需 4.4 GiB。输入只读；复制原版资源、程序、配置和 `save/system.dat` 模板，保留汉化声明，不安装补丁 exe/DLL 或剧情存档。完成后生成 `conversion.json`；失败后另选新目录重试。
+示例输出 UTF-8。如需 GBK，将转换和启动命令中的 `--encoding utf-8` 同时改为 `--encoding gbk`。
 
-## 转换与验证
+## 转换内容
 
-每版处理 86 个脚本来源（含包内、包外各自的 `start.ps3`）、52,362 条译文和 92 张图片。按文本偏移、原文及脚本上下文匹配译文，调整字符串引用；复用已有脚本、封包和图片写入器，不修改运行时。GBK 不支持的 `♪` / `・` / `䇲` 分别替换为 `☆` / `·` / `筴`。
+按文本偏移、原文及脚本上下文匹配译文，重定位字符串引用并转换 BMP 图片。每版处理 86 个脚本来源（包括包内和包外各自的 `start.ps3`）、52,362 条译文和 92 张图片。复制原版 `save/system.dat` 模板并保留汉化声明。
 
-两版使用同一日版资源，译文相同，仅 `dialog_chip.pb3` 不同；1.05 保留扩展至 1280 像素宽的图集。已通过 10 项合成测试、严格 Clippy、全部输出脚本及封包校验；图片完整 RGBA 与各版 BMP 一致。两版均确认标题、中文退出对话框、10 个不同中文消息等待及首次剧情存读档后继续播放。完整路线、原生音频和原版存档互操作尚未验证。
+`--patch-version` 可选 `1.0`（默认）或 `1.05`。两版使用同一日版资源和译文，仅 `dialog_chip.pb3` 不同；1.05 保留扩展至 1280 像素宽的图集。
+
+## 验证
+
+两版的既有 GBK 运行记录均覆盖标题、中文退出对话框、10 个不同消息等待，以及首次剧情存读档后继续播放。图片完整 RGBA 已与各版 BMP 核对。完整路线、原生音频和原版存档互操作尚未验证。新增 UTF-8 输出的验证范围见[工具总览](../README.md#验证范围)。
 
 ```bash
-python3 -m unittest discover -s tools/fan_patch/chronoclock -p test_convert_chronoclock_patch.py
+python3 -m unittest discover -s tools/fan_patch/chronoclock -p 'test_*.py'
 cargo test --offline --locked --manifest-path tools/fan_patch/chronoclock/Cargo.toml \
   --target-dir target/fan-patch-chronoclock
 ```

@@ -76,7 +76,7 @@ cargo test --offline
 
 ## 汉化补丁支持
 
-请使用 [补丁转换工具](./tools/fan_patch/) 自行转换汉化补丁为 cmvs-rs 标准封包，默认不提供汉化补丁支持。
+请使用 [补丁转换工具](./tools/fan_patch/README.md) 自行转换汉化补丁为 cmvs-rs 标准封包，默认不提供汉化补丁支持。
 
 ## 文档与开发
 

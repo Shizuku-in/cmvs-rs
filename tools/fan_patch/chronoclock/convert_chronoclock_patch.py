@@ -69,7 +69,10 @@ def extract_patch(archive: zipfile.ZipFile, stage: Path, version: str) -> None:
     (stage / "汉化补丁说明.txt").write_bytes(archive.read(members["补丁使用说明.txt"]))
 
 
-def convert(game: Path, patch: Path, output: Path, version: str = "1.0") -> None:
+def convert(game: Path, patch: Path, output: Path, version: str = "1.0", encoding: str = "utf-8") -> None:
+    if encoding not in ("utf-8", "utf8", "gbk"):
+        raise ValueError("encoding must be utf-8, utf8 or gbk")
+    encoding = "utf-8" if encoding == "utf8" else encoding
     game, patch, output = game.resolve(), patch.resolve(), output.resolve()
     if output.exists() or output.is_relative_to(game):
         raise ValueError("Output must be a new directory outside the game")
@@ -89,7 +92,7 @@ def convert(game: Path, patch: Path, output: Path, version: str = "1.0") -> None
         subprocess.run([
             "cargo", "run", "--offline", "--locked", "--release", "--manifest-path",
             str(tool / "Cargo.toml"), "--target-dir", str(repository / "target/fan-patch-chronoclock"),
-            "--", str(game), str(stage),
+            "--", str(game), str(stage), encoding,
         ], check=True)
         with (stage / "scripts.tsv").open() as stream:
             scripts = list(csv.DictReader(stream, delimiter="\t"))
@@ -113,9 +116,9 @@ def convert(game: Path, patch: Path, output: Path, version: str = "1.0") -> None
             shutil.copy2(asset, destination)
             outputs[str(destination.relative_to(output))] = sha256(destination)
         report = dict(
-            game="chronoclock", profile="cmvs-20150405", encoding="gbk", patch_version=version,
+            game="chronoclock", profile="cmvs-20150405", encoding=encoding, patch_version=version,
             patch_sha256=PATCH_SHA256, original_sha256=BASE_HASHES,
-            text_substitutions={"♪": "☆", "・": "·", "䇲": "筴"},
+            text_substitutions={"♪": "☆", "・": "·", "䇲": "筴"} if encoding == "gbk" else {},
             source_adaptations=["snky21.ps3 text+0xc41a: match the installed source punctuation."],
             output_sha256=outputs, scripts=scripts, images=images,
             limitations=["Patch 1.0 and 1.05 share translations; dialog_chip.pb3 differs.",
@@ -131,9 +134,10 @@ def main() -> None:
     for name in ("game", "patch", "output"):
         parser.add_argument(name, type=Path)
     parser.add_argument("--patch-version", choices=("1.0", "1.05"), default="1.0")
+    parser.add_argument("--encoding", choices=("utf-8", "utf8", "gbk"), default="utf-8", help="Output text encoding (default: utf-8)")
     args = parser.parse_args()
     try:
-        convert(args.game, args.patch, args.output, args.patch_version)
+        convert(args.game, args.patch, args.output, args.patch_version, encoding=args.encoding)
     except (OSError, ValueError, KeyError, zipfile.BadZipFile, subprocess.CalledProcessError) as exc:
         parser.exit(1, f"Error: {exc}\n")
 

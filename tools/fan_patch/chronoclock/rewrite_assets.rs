@@ -22,17 +22,9 @@ struct Record {
     translated: Vec<u8>,
 }
 
-fn gbk(text: &str) -> Result<Vec<u8>> {
-    // Explicit, reported substitutions for characters absent from GBK.
-    let text = text
-        .replace('♪', "☆")
-        .replace('・', "·")
-        .replace('䇲', "筴");
-    let (bytes, _, bad) = encoding_rs::GBK.encode(&text);
-    if bad || bytes.contains(&0) {
-        return Err(format!("text cannot be represented in GBK: {text}").into());
-    }
-    Ok(bytes.into_owned())
+fn encode_utf8(text: &str) -> Result<Vec<u8>> {
+    scripts::validate_utf8(text.as_bytes())?;
+    Ok(text.as_bytes().to_vec())
 }
 
 fn japanese(bytes: &[u8]) -> Result<String> {
@@ -61,7 +53,7 @@ fn parse_trans(raw: &[u8]) -> Result<Vec<Record>> {
         records.push(Record {
             offset: u32::from_str_radix(fields[0], 16)?,
             original: fields[1].to_owned(),
-            translated: gbk(fields[2])?,
+            translated: encode_utf8(fields[2])?,
         });
     }
     if records.is_empty() {
@@ -183,7 +175,7 @@ fn image_dimensions_match(name: &[u8], original: [u32; 2], replacement: [u32; 2]
         || (name == b"dialog_chip.pb3" && original == [1024, 720] && replacement == [1280, 720])
 }
 
-fn run(game: &Path, stage: &Path) -> Result<()> {
+fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<()> {
     let mut file = File::open(game.join("data/pack/script.cpz"))?;
     let archive = ArchiveIndex::read(&mut file)?;
     let mut sources = Vec::new();
@@ -250,11 +242,17 @@ fn run(game: &Path, stage: &Path) -> Result<()> {
         for entry in script.strings()? {
             let value = match translated.get(&(entry.offset as u32)) {
                 Some(text) => text.clone(),
-                None => gbk(&japanese(entry.bytes)?)?,
+                None => encode_utf8(&japanese(entry.bytes)?)?,
             };
             rows.insert(entry.offset as u32, value);
         }
-        let (out, changed) = scripts::rewrite(raw, &rows).map_err(|e| format!("{name}: {e}"))?;
+        let (out, changed) = scripts::rewrite_encoded(
+            raw,
+            &rows,
+            encoding,
+            &[('♪', "☆"), ('・', "·"), ('䇲', "筴")],
+        )
+        .map_err(|e| format!("{name}: {e}"))?;
         report.push_str(&format!(
             "{location}\t{name}\t{}\t{}\t{changed}\t{}\n",
             translated.len(),
@@ -346,10 +344,14 @@ fn run(game: &Path, stage: &Path) -> Result<()> {
 
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.len() != 2 {
-        return Err("internal helper: <original-game> <stage-directory>".into());
+    if args.len() != 3 {
+        return Err("internal helper: <original-game> <stage-directory> <encoding>".into());
     }
-    run(Path::new(&args[0]), Path::new(&args[1]))
+    run(
+        Path::new(&args[0]),
+        Path::new(&args[1]),
+        scripts::OutputEncoding::parse(&args[2])?,
+    )
 }
 
 #[cfg(test)]
@@ -357,10 +359,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn utf8_table_is_strict_and_gbk_substitutions_are_explicit() -> Result<()> {
+    fn utf8_table_is_strict_and_preserves_symbols() -> Result<()> {
         let records = parse_trans("A|原文|中文♪䇲\r\n".as_bytes())?;
         assert_eq!(records[0].offset, 10);
-        assert_eq!(encoding_rs::GBK.decode(&records[0].translated).0, "中文☆筴");
+        assert_eq!(String::from_utf8_lossy(&records[0].translated), "中文♪䇲");
         for bad in ["A|x", "A|x|y|z", "-1|x|y", "A||y", "A|x|😀", "A|x|a\0b", ""] {
             assert!(parse_trans(bad.as_bytes()).is_err());
         }

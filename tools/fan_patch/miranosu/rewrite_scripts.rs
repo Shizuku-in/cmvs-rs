@@ -14,6 +14,45 @@ use std::{
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 type Translations = BTreeMap<u32, BTreeMap<u32, Vec<u8>>>;
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum OutputEncoding {
+    Utf8,
+    Gbk,
+}
+impl OutputEncoding {
+    pub(crate) fn parse(value: &std::ffi::OsStr) -> Result<Self> {
+        match value.to_str() {
+            Some("utf-8" | "utf8") => Ok(Self::Utf8),
+            Some("gbk") => Ok(Self::Gbk),
+            _ => Err("encoding must be utf-8, utf8 or gbk".into()),
+        }
+    }
+    fn encode(self, text: &str, substitutions: &[(char, &str)]) -> Result<Vec<u8>> {
+        validate_utf8(text.as_bytes())?;
+        if matches!(self, Self::Utf8) {
+            return Ok(text.as_bytes().to_vec());
+        }
+        let mut text = text.to_owned();
+        for &(from, to) in substitutions {
+            text = text.replace(from, to);
+        }
+        let (bytes, _, bad) = encoding_rs::GBK.encode(&text);
+        if bad {
+            return Err(format!("text cannot be represented in GBK: {text}").into());
+        }
+        Ok(bytes.into_owned())
+    }
+}
+
+/// Match the runtime's u16 glyph model and NUL-terminated string table.
+pub(crate) fn validate_utf8(bytes: &[u8]) -> Result<()> {
+    let text = std::str::from_utf8(bytes)?;
+    if text.chars().any(|c| c == '\0' || c as u32 > 0xffff) {
+        return Err("text contains NUL or a character outside the BMP".into());
+    }
+    Ok(())
+}
+
 fn word(data: &[u8], at: usize) -> Result<u32> {
     Ok(u32::from_le_bytes(
         data.get(at..at + 4)
@@ -60,11 +99,17 @@ fn parse_patch(data: &[u8]) -> Result<Translations> {
                 .checked_add(8 + padded)
                 .filter(|&n| n <= data.len())
                 .ok_or("patch record exceeds input")?;
-            let text = data[at + 8..at + 8 + size].to_vec();
+            let text = &data[at + 8..at + 8 + size];
             // The DLL ignores alignment bytes and writes the terminator itself.
             if text.contains(&0) {
                 return Err("embedded patch text terminator".into());
             }
+            let (unicode, _, bad) = encoding_rs::GBK.decode(text);
+            if bad {
+                return Err("invalid GBK source patch string".into());
+            }
+            let text = unicode.as_bytes().to_vec();
+            validate_utf8(&text)?;
             if rows.insert(flagged & 0x7fff_ffff, text).is_some() {
                 return Err("duplicate patch offset".into());
             }
@@ -108,7 +153,16 @@ fn rewrite_expression(
     }
     Ok(changed)
 }
+#[cfg(test)]
 pub(crate) fn rewrite(raw: &[u8], rows: &BTreeMap<u32, Vec<u8>>) -> Result<(Vec<u8>, usize)> {
+    rewrite_encoded(raw, rows, OutputEncoding::Utf8, &[])
+}
+pub(crate) fn rewrite_encoded(
+    raw: &[u8],
+    rows: &BTreeMap<u32, Vec<u8>>,
+    encoding: OutputEncoding,
+    substitutions: &[(char, &str)],
+) -> Result<(Vec<u8>, usize)> {
     let script = Script::decode(raw)?;
     script.strings()?; // Validate terminators, then include empty strings too.
     let mut start = 0;
@@ -140,17 +194,11 @@ pub(crate) fn rewrite(raw: &[u8], rows: &BTreeMap<u32, Vec<u8>>) -> Result<(Vec<
             if bad {
                 return Err("invalid untranslated Shift-JIS string".into());
             }
-            let (encoded, _, bad) = encoding_rs::GBK.encode(&unicode);
-            if bad {
-                return Err("untranslated string cannot be represented in GBK".into());
-            }
-            recoded = encoded.into_owned();
+            recoded = unicode.as_bytes().to_vec();
             &recoded
         };
-        if encoding_rs::GBK.decode(value).2 {
-            return Err("invalid GBK patch string".into());
-        }
-        text.extend(value);
+        validate_utf8(value)?;
+        text.extend(encoding.encode(std::str::from_utf8(value)?, substitutions)?);
         text.push(0);
     }
     let mut code = script.code().to_vec();
@@ -276,7 +324,7 @@ pub(crate) fn pack(entries: &[(Vec<u8>, Vec<u8>)]) -> Result<Vec<u8>> {
     }
     Ok(out)
 }
-fn run(game: &Path, patch: &Path, output: &Path) -> Result<()> {
+fn run(game: &Path, patch: &Path, output: &Path, encoding: OutputEncoding) -> Result<()> {
     let mut blocks = parse_patch(&fs::read(patch)?)?;
     let mut archive = File::open(game.join("data/pack/script.cpz"))?;
     let index = ArchiveIndex::read(&mut archive)?;
@@ -290,7 +338,7 @@ fn run(game: &Path, patch: &Path, output: &Path) -> Result<()> {
             return Err("duplicate original script key".into());
         }
         let rows = blocks.remove(&key).unwrap_or_default();
-        let (converted, changed) = rewrite(&raw, &rows)
+        let (converted, changed) = rewrite_encoded(&raw, &rows, encoding, &[])
             .map_err(|e| format!("{}: {e}", String::from_utf8_lossy(&entry.name)))?;
         report.push_str(&format!(
             "{}\t{key:08x}\t{}\t{changed}\t{}\n",
@@ -306,7 +354,7 @@ fn run(game: &Path, patch: &Path, output: &Path) -> Result<()> {
         return Err("duplicate startup key".into());
     }
     let rows = blocks.remove(&key).ok_or("startup missing from patch")?;
-    let (startup, changed) = rewrite(&raw, &rows)?;
+    let (startup, changed) = rewrite_encoded(&raw, &rows, encoding, &[])?;
     report.push_str(&format!(
         "start.ps2\t{key:08x}\t{}\t{changed}\t{}\n",
         rows.len(),
@@ -323,15 +371,16 @@ fn run(game: &Path, patch: &Path, output: &Path) -> Result<()> {
 }
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.len() != 3 {
+    if args.len() != 4 {
         return Err(
-            "internal helper: <original-game> <decoded-mirai> <existing-empty-output>".into(),
+            "internal helper: <original-game> <decoded-mirai> <empty-output> <encoding>".into(),
         );
     }
     run(
         Path::new(&args[0]),
         Path::new(&args[1]),
         Path::new(&args[2]),
+        OutputEncoding::parse(&args[3])?,
     )
 }
 
@@ -382,18 +431,18 @@ mod tests {
     -> Result<()> {
         let raw = fixture_script();
         let before = Script::decode(&raw)?;
-        let rows = BTreeMap::from([(1, vec![0xd6, 0xd0, 0xce, 0xc4])]);
+        let rows = BTreeMap::from([(1, "中文♪・䇲".as_bytes().to_vec())]);
         let (out, count) = rewrite(&raw, &rows)?;
         let after = Script::decode(&out)?;
         assert_eq!(count, 1);
-        assert_eq!(after.text(), b"\0\xd6\xd0\xce\xc4\0B\0");
+        assert_eq!(after.text(), "\0中文♪・䇲\0B\0".as_bytes());
         assert_eq!(after.labels(), before.labels());
         assert_eq!(after.unknown(), before.unknown());
         assert_eq!(word(after.code(), 4)?, 3);
-        assert_eq!(word(after.code(), 14)?, 6);
+        assert_eq!(word(after.code(), 14)?, 17);
         assert_eq!(word(after.code(), 24)?, 0);
         let mut expected = before.code().to_vec();
-        put(&mut expected, 14, 6);
+        put(&mut expected, 14, 17);
         assert_eq!(after.code(), expected);
         assert!(rewrite(&raw, &BTreeMap::from([(2, b"bad offset".to_vec())])).is_err());
         Ok(())
@@ -419,6 +468,42 @@ mod tests {
         assert!(parse_patch(&duplicate_key).is_err());
         put(&mut record, 8, 1);
         assert!(parse_patch(&record).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn both_output_encodings_relocate_literals_and_apply_only_explicit_substitutions() -> Result<()>
+    {
+        let raw = fixture_script();
+        let rows = BTreeMap::from([(1, "中文♪・䇲".as_bytes().to_vec())]);
+        let substitutions = [('♪', "☆"), ('・', "·"), ('䇲', "筴")];
+        let (gbk, _) = rewrite_encoded(&raw, &rows, OutputEncoding::Gbk, &substitutions)?;
+        let gbk = Script::decode(&gbk)?;
+        assert_eq!(encoding_rs::GBK.decode(gbk.text()).0, "\0中文☆·筴\0B\0");
+        assert_eq!(word(gbk.code(), 14)?, 12);
+        let (utf8, _) = rewrite_encoded(&raw, &rows, OutputEncoding::Utf8, &substitutions)?;
+        let utf8 = Script::decode(&utf8)?;
+        assert_eq!(utf8.text(), "\0中文♪・䇲\0B\0".as_bytes());
+        assert_eq!(word(utf8.code(), 14)?, 17);
+        assert!(rewrite_encoded(&raw, &rows, OutputEncoding::Gbk, &[]).is_err());
+        assert!(OutputEncoding::parse(std::ffi::OsStr::new("utf16")).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn source_gbk_is_transcoded_and_utf8_rows_are_strict() -> Result<()> {
+        let mut record = Vec::new();
+        for v in [1, 0x12345678, 0x80000001, 4] {
+            push(&mut record, v);
+        }
+        record.extend([0xd6, 0xd0, 0xce, 0xc4]);
+        assert_eq!(parse_patch(&record)?[&0x12345678][&1], "中文".as_bytes());
+        record[16..20].fill(0xff);
+        assert!(parse_patch(&record).is_err());
+        let raw = fixture_script();
+        for bad in [vec![0xff], "😀".as_bytes().to_vec(), b"a\0b".to_vec()] {
+            assert!(rewrite(&raw, &BTreeMap::from([(1, bad)])).is_err());
+        }
         Ok(())
     }
 
