@@ -1,16 +1,25 @@
 #![cfg(feature = "desktop")]
 use cmvs_rs::desktop::TextEncoding;
-use std::{fs, path::PathBuf, process::Command};
+use std::{
+    fs,
+    path::PathBuf,
+    process::Command,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 struct Fixture(PathBuf);
 impl Fixture {
     fn new(encoding: TextEncoding) -> Self {
+        static NEXT_ROOT: AtomicU64 = AtomicU64::new(0);
         let serial = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root =
-            std::env::temp_dir().join(format!("cmvs-encoding-{}-{serial}", std::process::id()));
+        let sequence = NEXT_ROOT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "cmvs-encoding-{}-{serial}-{sequence}",
+            std::process::id()
+        ));
         fs::create_dir(&root).unwrap();
         fs::create_dir_all(root.join("data/pack")).unwrap();
         let text = encoding
