@@ -27,83 +27,18 @@ impl EncodingChoice {
     }
 }
 
-#[derive(Default)]
-struct Evidence {
-    non_ascii: usize,
-    kana: usize,
-    halfwidth: usize,
-    han: usize,
-}
-
-fn evidence(encoding: TextEncoding, samples: &[&[u8]]) -> Option<Evidence> {
-    let mut result = Evidence::default();
-    for bytes in samples {
-        let text = encoding.decode(bytes).ok()?;
-        for ch in text.chars().filter(|ch| !ch.is_ascii()) {
-            result.non_ascii += 1;
-            result.kana +=
-                usize::from(matches!(ch, '\u{3041}'..='\u{3096}' | '\u{30a1}'..='\u{30fa}'));
-            result.halfwidth += usize::from(matches!(ch, '\u{ff61}'..='\u{ff9f}'));
-            result.han += usize::from(matches!(ch, '\u{3400}'..='\u{9fff}'));
-        }
-    }
-    Some(result)
-}
-
+/// The shared startup-script detection, with the desktop's command-line remedy.
 fn detect(text: &[u8]) -> Result<TextEncoding, FormatError> {
-    const LIMIT: usize = 256 * 1024;
-    const UNCERTAIN: FormatError = FormatError(
-        "cannot reliably detect startup text encoding; select --encoding shift-jis, gbk or utf-8 explicitly",
-    );
-    // Keep string boundaries: truncating a multibyte character would invalidate a
-    // candidate. ASCII resource names provide no evidence for any encoding.
-    let mut samples = Vec::new();
-    let mut total = 0;
-    for bytes in text.split_inclusive(|&b| b == 0) {
-        if total + bytes.len() > LIMIT {
-            break;
-        }
-        total += bytes.len();
-        let bytes = bytes.strip_suffix(&[0]).ok_or(UNCERTAIN)?;
-        if !bytes.is_ascii() {
-            samples.push(bytes);
-        }
-    }
-    if samples.is_empty() {
-        return Err(UNCERTAIN);
-    }
-    let sjis = evidence(TextEncoding::ShiftJis, &samples);
-    let gbk = evidence(TextEncoding::Gbk, &samples);
-    let utf8 = evidence(TextEncoding::Utf8, &samples);
-    // Short UTF-8 sequences can also be valid legacy text. Require either a
-    // unique candidate or enough non-ASCII text before preferring UTF-8.
-    if let Some(utf8) = utf8 {
-        return if (sjis.is_none() && gbk.is_none()) || utf8.non_ascii >= 8 {
-            Ok(TextEncoding::Utf8)
-        } else {
-            Err(UNCERTAIN)
-        };
-    }
-    match (sjis, gbk) {
-        (Some(_), None) => Ok(TextEncoding::ShiftJis),
-        (None, Some(_)) => Ok(TextEncoding::Gbk),
-        (Some(sjis), Some(gbk)) => {
-            // Legacy encodings overlap. Require substantial language evidence,
-            // rather than treating successful decoding as identification.
-            if sjis.kana >= 8 && sjis.kana * 5 >= sjis.non_ascii && gbk.kana * 4 < sjis.kana {
-                Ok(TextEncoding::ShiftJis)
-            } else if gbk.han >= 8
-                && gbk.han * 10 >= gbk.non_ascii * 8
-                && sjis.halfwidth >= 8
-                && sjis.halfwidth * 2 >= sjis.non_ascii
-                && sjis.kana * 10 < sjis.non_ascii
-            {
-                Ok(TextEncoding::Gbk)
-            } else {
-                Err(UNCERTAIN)
-            }
-        }
-        (None, None) => Err(UNCERTAIN),
+    match cmvs_font::text_codec::detect(text) {
+        Ok(cmvs_core::TextEncoding::ShiftJis) => Ok(TextEncoding::ShiftJis),
+        Ok(cmvs_core::TextEncoding::Gbk) => Ok(TextEncoding::Gbk),
+        Ok(cmvs_core::TextEncoding::Utf8) => Ok(TextEncoding::Utf8),
+        Ok(_) => Err(FormatError(
+            "detected an encoding the desktop host does not support",
+        )),
+        Err(_) => Err(FormatError(
+            "cannot reliably detect startup text encoding; select --encoding shift-jis, gbk or utf-8 explicitly",
+        )),
     }
 }
 

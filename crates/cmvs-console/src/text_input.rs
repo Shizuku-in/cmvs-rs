@@ -1,7 +1,10 @@
-//! The engine's comment dialog (0x213c) through the system keyboard. Game strings are
-//! Shift-JIS, the only encoding cmvs-font renders.
-use cmvs_core::platform::{TextDialogRequest, TextDialogResult};
-use encoding_rs::SHIFT_JIS;
+//! The engine's comment dialog (0x213c) through the system keyboard. Game strings use
+//! the selected game encoding in both directions.
+use cmvs_core::{
+    TextEncoding,
+    platform::{TextDialogRequest, TextDialogResult},
+};
+use cmvs_font::text_codec;
 use std::error::Error;
 
 /// Shows (title, prompt, initial, max_chars, check) and returns the text, or None when
@@ -15,29 +18,21 @@ pub type Keyboard<'a> = dyn FnMut(
     ) -> Result<Option<String>, &'static str>
     + 'a;
 
-fn decode(bytes: &[u8]) -> Result<String, Box<dyn Error>> {
-    Ok(SHIFT_JIS
-        .decode_without_bom_handling_and_without_replacement(bytes)
-        .ok_or("text dialog string is not valid Shift-JIS")?
-        .into_owned())
-}
-
-/// Characters of `text` that Shift-JIS cannot represent, in order, without repeats.
-fn unmappable(text: &str) -> String {
-    let mut result = String::new();
-    for ch in text.chars() {
-        let mut buffer = [0; 4];
-        if SHIFT_JIS.encode(ch.encode_utf8(&mut buffer)).2 && !result.contains(ch) {
-            result.push(ch);
-        }
+/// The encoding as the player reads it in the rejection message.
+fn label(encoding: TextEncoding) -> &'static str {
+    match encoding {
+        TextEncoding::Gbk => "GBK",
+        TextEncoding::Utf8 => "UTF-8",
+        _ => "Shift-JIS",
     }
-    result
 }
 
 pub fn edit(
     request: &TextDialogRequest,
+    encoding: TextEncoding,
     keyboard: &mut Keyboard<'_>,
 ) -> Result<TextDialogResult, Box<dyn Error>> {
+    let decode = |bytes: &[u8]| text_codec::decode(encoding, bytes);
     let title = decode(&request.title)?;
     let prompt = decode(&request.prompt)?;
     let initial = decode(&request.initial)?;
@@ -48,22 +43,18 @@ pub fn edit(
     } else {
         (request.max_bytes.min(255) / 2).max(1)
     };
-    let mut check = |text: &str| match unmappable(text) {
-        bad if bad.is_empty() => Ok(()),
-        bad => Err(format!(
-            "以下字符无法用游戏文字编码（Shift-JIS）保存：{bad}"
+    let mut check = |text: &str| match text_codec::unmappable(encoding, text) {
+        Ok(bad) if bad.is_empty() => Ok(()),
+        Ok(bad) => Err(format!(
+            "以下字符无法用游戏文字编码（{}）保存：{bad}",
+            label(encoding)
         )),
+        Err(error) => Err(error.to_string()),
     };
     Ok(
         match keyboard(&title, &prompt, &initial, limit, &mut check)? {
             None => TextDialogResult::Cancelled,
-            Some(text) => {
-                let (bytes, _, unmappable) = SHIFT_JIS.encode(&text);
-                if unmappable {
-                    return Err("keyboard text is not representable in Shift-JIS".into());
-                }
-                TextDialogResult::Accepted(bytes.into_owned())
-            }
+            Some(text) => TextDialogResult::Accepted(text_codec::encode(encoding, &text)?),
         },
     )
 }
@@ -71,6 +62,7 @@ pub fn edit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use encoding_rs::SHIFT_JIS;
 
     fn request(max_bytes: u32) -> TextDialogRequest {
         let sjis = |s: &str| SHIFT_JIS.encode(s).0.into_owned();
@@ -102,7 +94,9 @@ mod tests {
             assert!(rejected.ends_with("：😀🎮"), "{rejected}");
             Ok(Some("今日の記録".into()))
         };
-        let TextDialogResult::Accepted(bytes) = edit(&request(100), &mut keyboard).unwrap() else {
+        let TextDialogResult::Accepted(bytes) =
+            edit(&request(100), TextEncoding::ShiftJis, &mut keyboard).unwrap()
+        else {
             panic!("expected accepted text");
         };
         assert_eq!(bytes, SHIFT_JIS.encode("今日の記録").0.as_ref());
@@ -130,7 +124,7 @@ mod tests {
                 Ok(None)
             };
             assert!(matches!(
-                edit(&request(max_bytes), &mut keyboard).unwrap(),
+                edit(&request(max_bytes), TextEncoding::ShiftJis, &mut keyboard).unwrap(),
                 TextDialogResult::Cancelled
             ));
         }
@@ -142,6 +136,37 @@ mod tests {
                             _: u32,
                             _: &mut dyn FnMut(&str) -> Result<(), String>|
          -> Result<Option<String>, &'static str> { unreachable!() };
-        assert!(edit(&invalid, &mut keyboard).is_err());
+        assert!(edit(&invalid, TextEncoding::ShiftJis, &mut keyboard).is_err());
+    }
+
+    #[test]
+    fn gbk_games_round_trip_simplified_chinese() {
+        let gbk = |s: &str| text_codec::encode(TextEncoding::Gbk, s).unwrap();
+        let request = TextDialogRequest {
+            title: gbk("注释"),
+            prompt: gbk("请输入"),
+            initial: gbk("上次"),
+            max_bytes: 100,
+        };
+        let mut keyboard = |title: &str,
+                            _: &str,
+                            initial: &str,
+                            _: u32,
+                            check: &mut dyn FnMut(&str) -> Result<(), String>|
+         -> Result<Option<String>, &'static str> {
+            assert_eq!((title, initial), ("注释", "上次"));
+            let rejected = check("这是记录😀").unwrap_err();
+            assert!(
+                rejected.contains("（GBK）") && rejected.ends_with("：😀"),
+                "{rejected}"
+            );
+            Ok(Some("这是记录".into()))
+        };
+        let TextDialogResult::Accepted(bytes) =
+            edit(&request, TextEncoding::Gbk, &mut keyboard).unwrap()
+        else {
+            panic!("expected accepted text");
+        };
+        assert_eq!(bytes, gbk("这是记录"));
     }
 }

@@ -163,7 +163,8 @@ fn run(
     let game = Registry::builtin().identify_game(root, None)?;
     let record = game.selection.record.ok_or("unregistered game")?;
     let script = load_start(root, &game.files)?;
-    let mut startup = Startup::new(&script, root, &game, 0)?;
+    let encoding = cmvs_console::encoding::select(root, script.text())?;
+    let mut startup = Startup::new_with_encoding(&script, root, &game, 0, encoding)?;
     let user = base.join("users").join(&record.game);
     startup.set_user_data_directory(&user)?;
     startup.set_block_unreviewed(false);
@@ -183,7 +184,7 @@ fn run(
     });
     startup.set_record_text(true);
     startup.set_save_clock(Box::new(cmvs_core::runner::utc_save_time));
-    let mut font = FontRenderer::from_bytes(font_bytes(base)?, 0)?;
+    let mut font = FontRenderer::from_bytes(font_bytes(base)?, 0)?.with_text_encoding(encoding);
     font.set_user_directory(&user)?;
     startup.set_glyph_metrics(font.metrics());
     if !font.has_face(startup.settings().font_face()) {
@@ -201,6 +202,7 @@ fn run(
         frame: None,
         gpu,
         modal_shown: false,
+        encoding,
     };
     backend.display.render_mode =
         cmvs_core::platform::supported_render_mode(&backend, backend.display.render_mode)?;

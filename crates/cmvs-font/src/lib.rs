@@ -2,3 +2,4 @@
 pub mod font;
 pub mod font_library;
 mod glyph_cache;
+pub mod text_codec;
