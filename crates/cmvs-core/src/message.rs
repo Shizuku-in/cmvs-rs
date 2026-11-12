@@ -284,6 +284,10 @@ impl MessageHost {
         self.auxiliary_texts = Default::default();
     }
     pub fn set_text_settings(&mut self, settings: crate::settings::TextOutputSettings) {
+        // Synchronized before every VM step; almost always unchanged.
+        if self.output_settings == settings {
+            return;
+        }
         // 0x140068960 changes only existing texts that request the default face.
         // Already uploaded glyph images retain the weight used at their creation.
         if self.output_settings.bold != settings.bold {
@@ -313,7 +317,12 @@ impl MessageHost {
     }
     /// Changes only font objects created later; existing ones keep their face.
     pub fn set_default_face(&mut self, face: &[u8]) {
-        if *self.default_face() != *face {
+        // Compared in place: this runs before every VM step.
+        let current = self
+            .default_face
+            .as_deref()
+            .unwrap_or(crate::settings::DEFAULT_FONT_FACE);
+        if current != face {
             self.default_face = Some(Arc::from(face));
         }
     }

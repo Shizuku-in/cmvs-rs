@@ -151,6 +151,20 @@ impl<D: GpuDevice> Compositor<D> {
         }
     }
 
+    /// Marks the image's texture, if cached, as used by the current frame.
+    fn touch(&mut self, image: &RgbaImage) {
+        let cached = match image.cache_key() {
+            CacheKey::Frame(id) => self.frames.get_mut(&id),
+            CacheKey::Content(digest, width, height) => {
+                self.cache.get_mut(&(digest, width, height))
+            }
+        };
+        if let Some(cached) = cached {
+            self.clock += 1;
+            cached.used = self.clock;
+        }
+    }
+
     /// Images above the cache limit are uploaded for this frame only (`transient`).
     fn texture(
         &mut self,
@@ -229,9 +243,18 @@ impl<D: GpuDevice> Compositor<D> {
         transient: &mut Vec<GpuTexture>,
     ) -> Result<()> {
         // Every upload precedes the pass, so the pass needs a single barrier.
-        let mut draws = Vec::with_capacity(frame.commands().len());
-        for command in frame.commands() {
-            let draw = shader_draw(command, size);
+        let queue: Vec<_> = frame
+            .commands()
+            .iter()
+            .map(|command| shader_draw(command, size))
+            .collect();
+        // Cached textures of the whole frame count as used before any upload: making
+        // room for an early image must not evict one that a later draw needs.
+        for image in queue.iter().flat_map(|draw| draw.textures).flatten() {
+            self.touch(image);
+        }
+        let mut draws = Vec::with_capacity(queue.len());
+        for draw in queue {
             let mut textures = [self.white; 3];
             for (texture, image) in textures.iter_mut().zip(draw.textures) {
                 if let Some(image) = image {
@@ -400,6 +423,29 @@ mod tests {
         // Two images in one frame cannot both fit: nothing of this frame is evicted.
         let error = render(&mut gpu, &[30, 40]).unwrap_err();
         assert_eq!(error.to_string(), "GPU texture memory exhausted");
+    }
+
+    #[test]
+    fn a_new_image_does_not_evict_textures_the_same_frame_still_draws() {
+        let device = FakeDevice {
+            capacity: 16,
+            ..FakeDevice::default()
+        };
+        // Two 2x2 images fill the cache.
+        let mut gpu = Compositor::new(device, 32).unwrap();
+        render(&mut gpu, &[10, 20]).unwrap();
+        // The new image draws first; both cached ones follow in the same frame.
+        for _ in 0..2 {
+            render(&mut gpu, &[30, 10, 20]).unwrap();
+        }
+        let calls = &gpu.device().calls;
+        let uploads = calls.iter().filter(|c| c.starts_with("upload")).count();
+        // The placeholder and each image once.
+        assert_eq!(uploads, 4, "{calls:?}");
+        assert!(!calls.iter().any(|c| c.starts_with("release")), "{calls:?}");
+        // Once the frame no longer needs them, they make room again.
+        render(&mut gpu, &[40]).unwrap();
+        assert!(gpu.device().calls.iter().any(|c| c.starts_with("release")));
     }
 
     #[test]

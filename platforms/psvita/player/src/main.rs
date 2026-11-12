@@ -214,6 +214,9 @@ fn run(
     startup.set_scene_prefetch(|| {
         sys::prefer_core(2);
     });
+    // Scenes reload the same images; decoding dominates their load time. Entries share
+    // pixels with the scene objects showing them, within the 256 MiB heap.
+    startup.set_decoded_image_cache(64 << 20);
     startup.set_record_text(true);
     startup.set_save_clock(Box::new(cmvs_core::runner::utc_save_time));
     let mut font = game_font(base, encoding)?;
