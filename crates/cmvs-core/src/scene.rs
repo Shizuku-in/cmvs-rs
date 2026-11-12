@@ -231,6 +231,7 @@ impl ObjectImage {
             return Ok(());
         }
         self.apply_filter(parameters)?;
+        self.pixels.identify_content(identity);
         source.store_decode(
             identity,
             &crate::image::DecodedImage {

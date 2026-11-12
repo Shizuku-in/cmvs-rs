@@ -13,6 +13,63 @@ mod cache;
 use cache::Cache;
 /// 0x2011 / 0x1400717c0: image manager has ten registration slots.
 pub const IMAGE_ENTRIES: u32 = ResourceKind::Image.slot_count();
+/// Threads an image decode may use besides the calling one, for formats with
+/// independently coded parts. They live only for the decode. The default uses none.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DecodeThreads {
+    pub extra: usize,
+    /// Runs first on each extra thread, with its index below `extra`: a host places
+    /// the thread, e.g. on a core away from its audio.
+    pub on_start: Option<fn(usize)>,
+}
+impl DecodeThreads {
+    /// `run` over `tasks`, results in task order. Each thread takes the next
+    /// unclaimed task; a thread the system refuses to start is simply not used.
+    pub(crate) fn map<T: Sync, R: Send>(self, tasks: &[T], run: impl Fn(&T) -> R + Sync) -> Vec<R> {
+        let extra = self.extra.min(tasks.len().saturating_sub(1));
+        if extra == 0 {
+            return tasks.iter().map(run).collect();
+        }
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let work = || {
+            let mut done = Vec::new();
+            loop {
+                let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some(task) = tasks.get(index) else {
+                    return done;
+                };
+                done.push((index, run(task)));
+            }
+        };
+        let mut done = std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..extra)
+                .filter_map(|thread| {
+                    std::thread::Builder::new()
+                        .name("image decode".into())
+                        .stack_size(256 << 10)
+                        .spawn_scoped(scope, move || {
+                            if let Some(on_start) = self.on_start {
+                                on_start(thread);
+                            }
+                            work()
+                        })
+                        .ok()
+                })
+                .collect();
+            let mut done = work();
+            for worker in workers {
+                match worker.join() {
+                    Ok(results) => done.extend(results),
+                    Err(panic) => std::panic::resume_unwind(panic),
+                }
+            }
+            done
+        });
+        done.sort_by_key(|(index, _)| *index);
+        done.into_iter().map(|(_, result)| result).collect()
+    }
+}
+
 pub trait ImageSource {
     fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>>;
     /// 0x203f: arm the next image-file read's raw-byte cache lookup/insertion.
@@ -37,6 +94,10 @@ pub trait ImageSource {
         None
     }
     fn store_decode(&mut self, _identity: u128, _image: &DecodedImage) {}
+    /// Host setting, not part of the original; results do not depend on it.
+    fn decode_threads(&self) -> DecodeThreads {
+        DecodeThreads::default()
+    }
 }
 
 /// Decoded images by the identity of their bytes, least recently used first out.
@@ -82,6 +143,7 @@ pub struct ImageArchives {
     archives: ResourceArchives,
     cache: Cache,
     decoded: DecodedCache,
+    threads: DecodeThreads,
 }
 impl ImageArchives {
     pub fn configure_parameters(
@@ -95,6 +157,7 @@ impl ImageArchives {
             archives: ResourceArchives::new(root)?,
             cache: Cache::default(),
             decoded: DecodedCache::default(),
+            threads: DecodeThreads::default(),
         })
     }
     /// Keeps up to `bytes` of decoded RGBA for images loaded again (0, the default,
@@ -102,6 +165,10 @@ impl ImageArchives {
     pub fn set_decoded_cache_limit(&mut self, bytes: usize) {
         self.decoded.limit = bytes;
         self.decoded.evict_to(bytes);
+    }
+    /// Lets image decodes use extra threads. Results are unchanged.
+    pub fn set_decode_threads(&mut self, threads: DecodeThreads) {
+        self.threads = threads;
     }
     pub fn with_paths<'a>(
         &'a mut self,
@@ -111,6 +178,7 @@ impl ImageArchives {
             inner: self.archives.with_paths(paths, ResourceKind::Image),
             cache: &mut self.cache,
             decoded: &mut self.decoded,
+            threads: self.threads,
         }
     }
 }
@@ -118,6 +186,7 @@ pub struct Registered<'a> {
     inner: RegisteredResources<'a>,
     cache: &'a mut Cache,
     decoded: &'a mut DecodedCache,
+    threads: DecodeThreads,
 }
 impl ImageSource for Registered<'_> {
     fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
@@ -142,6 +211,9 @@ impl ImageSource for Registered<'_> {
     fn store_decode(&mut self, identity: u128, image: &DecodedImage) {
         self.decoded.insert(identity, image);
     }
+    fn decode_threads(&self) -> DecodeThreads {
+        self.threads
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -156,6 +228,14 @@ pub struct DecodedImage {
 /// are explicit errors. Ok(None) is the original quiet failure for an unknown magic or a
 /// PB3 type outside 1..8: the load returns 0 without a MessageBox.
 pub fn decode(bytes: &[u8]) -> Result<Option<DecodedImage>, FormatError> {
+    decode_with(bytes, DecodeThreads::default())
+}
+
+/// [`decode`] with extra threads for formats that can use them.
+pub fn decode_with(
+    bytes: &[u8],
+    threads: DecodeThreads,
+) -> Result<Option<DecodedImage>, FormatError> {
     let unsupported = FormatError(
         "image codec not implemented; standalone PB3 types 1, 2, 3, 5 and 7 are supported",
     );
@@ -167,7 +247,7 @@ pub fn decode(bytes: &[u8]) -> Result<Option<DecodedImage>, FormatError> {
             let header = pb3::Header::parse(bytes)?;
             match header.kind {
                 1 | 2 | 3 | 5 | 7 => Ok(Some(DecodedImage {
-                    pixels: pb3::decode(bytes)?,
+                    pixels: pb3::decode_with(bytes, threads)?,
                     alpha: header.bpp == 32,
                 })),
                 6 | 8 => Err(FormatError(
@@ -209,6 +289,8 @@ fn decode_cached(
     }
     let image = decode()?;
     if let (Some(id), Some(image)) = (identity, &image) {
+        // The bytes and reference chain determine the pixels: no need to hash those.
+        image.pixels.identify_content(id);
         source.store_decode(id, image);
     }
     Ok(image.map(|image| (image, identity)))
@@ -247,6 +329,7 @@ fn load_inner(
     })?;
     let result = (|| {
         charge(read.bytes.len(), budget)?;
+        let threads = source.decode_threads();
         let identity = source
             .caches_decodes()
             .then(|| crate::raster::content_hash(&read.bytes));
@@ -270,10 +353,10 @@ fn load_inner(
                     }))
                 })?
             } else {
-                decode_cached(source, identity, || Ok(decode(&read.bytes)?))?
+                decode_cached(source, identity, || Ok(decode_with(&read.bytes, threads)?))?
             }
         } else {
-            decode_cached(source, identity, || Ok(decode(&read.bytes)?))?
+            decode_cached(source, identity, || Ok(decode_with(&read.bytes, threads)?))?
         };
         Ok(decoded)
     })();

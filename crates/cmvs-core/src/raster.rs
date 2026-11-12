@@ -25,6 +25,7 @@ pub struct RgbaImage {
 pub enum CacheKey {
     /// Equal pixel content and dimensions share one texture. The hash is 128 bits of
     /// [`content_hash`], not a cryptographic digest: images are not adversarial here.
+    /// Decoded image files carry a hash of what they were decoded from instead.
     Content(u128, u32, u32),
     /// One decoded movie frame and its clones. Hashing it would cost more than the
     /// decode, and no other image shares its content.
@@ -49,12 +50,24 @@ impl PartialEq for RgbaImage {
 }
 impl Eq for RgbaImage {}
 impl RgbaImage {
-    /// Lazily hashes immutable pixels once. Cache state is not part of image equality.
+    /// Lazily hashes immutable pixels once, unless the image was identified by its
+    /// source. Cache state is not part of image equality.
     pub fn content_digest(&self) -> u128 {
         *self
             .data
             .content_digest
             .get_or_init(|| content_hash(self.pixels()))
+    }
+
+    /// Stands in for the content hash with one derived from `identity`, which must
+    /// determine the pixels: the identity of the bytes an image was decoded from. Saves
+    /// hashing the decoded pixels, which are many times larger. Images with equal pixels
+    /// but different identities then no longer share a texture. Has no effect once the
+    /// digest exists.
+    pub(crate) fn identify_content(&self, identity: u128) {
+        let mut tagged = *b"decoded image\0\0\0################";
+        tagged[16..].copy_from_slice(&identity.to_le_bytes());
+        let _ = self.data.content_digest.set(content_hash(&tagged));
     }
 
     /// Marks a decoded movie frame with an identity unique within the process.
@@ -483,6 +496,30 @@ mod content_digest_tests {
         );
         assert_eq!(cached.clone().cache_key(), key);
         assert_eq!(cached, RgbaImage::new(1, 1, vec![1, 2, 3, 4]).unwrap());
+    }
+
+    #[test]
+    fn a_source_identity_stands_in_for_the_pixel_hash_until_one_exists() {
+        let image = RgbaImage::new(1, 1, vec![1, 2, 3, 4]).unwrap();
+        let other = image.clone();
+        image.identify_content(7);
+        let key = image.content_digest();
+        assert_ne!(key, content_hash(image.pixels()));
+        // Clones share it, a later identity does not replace it, and it is stable.
+        other.identify_content(8);
+        assert_eq!(other.content_digest(), key);
+        let same = RgbaImage::new(1, 1, vec![9; 4]).unwrap();
+        same.identify_content(7);
+        assert_eq!(same.content_digest(), key);
+        let different = RgbaImage::new(1, 1, vec![1, 2, 3, 4]).unwrap();
+        different.identify_content(8);
+        assert_ne!(different.content_digest(), key);
+        // An image already hashed keeps its pixel hash.
+        let hashed = RgbaImage::new(1, 1, vec![1, 2, 3, 4]).unwrap();
+        let pixels = hashed.content_digest();
+        hashed.identify_content(7);
+        assert_eq!(hashed.content_digest(), pixels);
+        assert_eq!(image, hashed);
     }
 
     #[test]

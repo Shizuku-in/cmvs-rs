@@ -232,6 +232,14 @@ fn run(
     startup.set_scene_prefetch(|| {
         sys::prefer_core(2);
     });
+    // Image planes decode on this thread and on one more, on the core the movie
+    // prefetch uses: the audio core stays free.
+    startup.set_image_decode_threads(cmvs_core::image::DecodeThreads {
+        extra: 1,
+        on_start: Some(|_| {
+            sys::prefer_core(2);
+        }),
+    });
     startup.set_decoded_image_cache(decoded_cache_bytes(sys::total_memory()));
     startup.set_record_text(true);
     // Requested screen captures read back the canvas instead of a software redraw.

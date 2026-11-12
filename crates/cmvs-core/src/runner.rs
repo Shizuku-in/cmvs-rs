@@ -396,6 +396,10 @@ impl<'a> Startup<'a> {
     pub fn set_decoded_image_cache(&mut self, bytes: usize) {
         self.images.set_decoded_cache_limit(bytes);
     }
+    /// See [`crate::image::ImageArchives::set_decode_threads`].
+    pub fn set_image_decode_threads(&mut self, threads: crate::image::DecodeThreads) {
+        self.images.set_decode_threads(threads);
+    }
     pub fn set_decode_movie_frames(&mut self, enabled: bool) {
         self.movies.set_decode_frames(enabled);
     }
