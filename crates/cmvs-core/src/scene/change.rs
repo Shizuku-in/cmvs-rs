@@ -329,7 +329,7 @@ impl SceneObject {
         let mut image = load_image(images, name.to_vec(), pc, opcode)?
             .ok_or_else(|| fail("missing replacement image leaves an unmodeled partial object"))?;
         if let Some(filter) = old_image.filter {
-            image.apply_filter(filter)?;
+            image.apply_filter_cached(filter, images)?;
         }
         // 0x14003c900 copies the first 88 bytes, then 0x14001f520 copies +88..+108 into
         // both the new and the common draw state.

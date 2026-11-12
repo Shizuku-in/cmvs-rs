@@ -6,7 +6,7 @@ mod gpu;
 mod sys {
     pub use cmvs_native::{
         SwitchAudioOut, SwitchGpu, SwitchWindow, prefer_core, set_cpu_boost, shared_font,
-        show_system_error, software_keyboard,
+        show_system_error, software_keyboard, total_memory,
     };
 }
 #[cfg(not(target_os = "horizon"))]
@@ -78,6 +78,18 @@ fn console() -> Console {
             exit: "+",
             pages: "L / R",
         },
+    }
+}
+
+/// Decoded images kept for reloads; skip mode and scene changes load the same sprites
+/// repeatedly. An application has over 3 GiB, where high-resolution games (about
+/// 15 MiB a sprite) keep reloading with less than this; an applet has a few hundred
+/// MiB in all and keeps the size of the GPU texture cache.
+fn decoded_cache_bytes(total_memory: u64) -> usize {
+    if total_memory >= 2 << 30 {
+        512 << 20
+    } else {
+        128 << 20
     }
 }
 
@@ -220,9 +232,10 @@ fn run(
     startup.set_scene_prefetch(|| {
         sys::prefer_core(2);
     });
-    // Matches the GPU texture cache; skip mode reloads the same sprites repeatedly.
-    startup.set_decoded_image_cache(128 << 20);
+    startup.set_decoded_image_cache(decoded_cache_bytes(sys::total_memory()));
     startup.set_record_text(true);
+    // Requested screen captures read back the canvas instead of a software redraw.
+    startup.set_host_capture(gpu.is_some());
     startup.set_save_clock(Box::new(cmvs_core::runner::utc_save_time));
     let mut font = game_font(base, encoding)?;
     font.set_user_directory(&user)?;
@@ -338,6 +351,9 @@ fn run(
                             .cursor_visible()
                             .then(|| view.to_target(controls.pointer()));
                         gpu.present(mode, linear, cursor)?;
+                        if startup.capture_due() {
+                            startup.supply_capture(gpu.read()?)?;
+                        }
                     } else {
                         let frame = render(&startup, &mut font)?;
                         surface.fill(0);
@@ -581,6 +597,13 @@ fn report(error: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_an_application_memory_budget_gets_the_large_decoded_cache() {
+        assert_eq!(decoded_cache_bytes(0), 128 << 20);
+        assert_eq!(decoded_cache_bytes(442 << 20), 128 << 20);
+        assert_eq!(decoded_cache_bytes(3276 << 20), 512 << 20);
+    }
+
     #[test]
     fn a_clicks_zr_is_ctrl_and_the_shoulders_scroll() {
         let console = console();

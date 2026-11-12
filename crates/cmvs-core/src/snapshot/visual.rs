@@ -641,7 +641,7 @@ impl SavedImage {
             surface: false,
         };
         if let Some(filter) = self.filter {
-            image.apply_filter(filter)?;
+            image.apply_filter_cached(filter, source)?;
         }
         Ok(image)
     }

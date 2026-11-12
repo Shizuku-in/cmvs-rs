@@ -72,6 +72,97 @@ mod tests {
         snapshot::SaveImage,
     };
 
+    /// A synthetic game whose start script requests a screen capture (0x2304), then
+    /// asks whether one is held (0x2306).
+    fn capture_fixture(tag: &str) -> (std::path::PathBuf, Vec<u8>) {
+        let root = std::env::temp_dir().join(format!("cmvs-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("data/pack")).unwrap();
+        std::fs::create_dir_all(root.join("save")).unwrap();
+        let archive: Vec<_> = include_str!("../../../../tests/fixtures/cpz6-script.hex")
+            .trim()
+            .as_bytes()
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap())
+            .collect();
+        std::fs::write(root.join("data/pack/script.cpz"), archive).unwrap();
+        let code: Vec<u8> = [0x2304u16, 0x2306, 0x2306]
+            .into_iter()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        let mut raw = b"PS2A".to_vec();
+        for word in [
+            48u32,
+            0,
+            0,
+            0,
+            code.len() as u32,
+            0,
+            0,
+            0,
+            0,
+            code.len() as u32,
+            0,
+        ] {
+            raw.extend(word.to_le_bytes());
+        }
+        raw.extend(code.into_iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+        std::fs::write(root.join("data/pack/start.ps3"), &raw).unwrap();
+        (root, raw)
+    }
+
+    #[test]
+    fn a_host_supplies_a_due_capture_or_the_next_step_draws_it() {
+        let (root, raw) = capture_fixture("host-capture");
+        let registry = Registry::builtin();
+        let game = registry
+            .identify_game(&root, Some("cmvs-20160201"))
+            .unwrap();
+        let script = Script::decode(&raw).unwrap();
+        let mut backend = RecordingBackend::default();
+        let requested = |host: bool| {
+            let mut run = Startup::new(&script, &root, &game, 0).unwrap();
+            run.set_host_capture(host);
+            let mut backend = RecordingBackend::default();
+            assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+            assert!(run.capture().requested());
+            run.advance_frame(16).unwrap();
+            run
+        };
+        // Without a host frame the frame advance draws the capture itself.
+        let run = requested(false);
+        assert!(!run.capture_due() && !run.capture().requested());
+        let [width, height] = run.screen_size();
+        let drawn = run.capture().image().unwrap().clone();
+        assert_eq!([drawn.width(), drawn.height()], [width, height]);
+
+        let mut run = requested(true);
+        assert!(run.capture_due() && run.capture().requested());
+        assert!(run.capture().image().is_none());
+        let wrong = crate::raster::RgbaImage::new(1, 1, vec![0; 4]).unwrap();
+        assert!(run.supply_capture(wrong).is_err());
+        assert!(run.capture_due());
+        let pixels = [9, 8, 7, 0].repeat((width * height) as usize);
+        let frame = crate::raster::RgbaImage::new(width, height, pixels).unwrap();
+        run.supply_capture(frame.clone()).unwrap();
+        assert!(!run.capture_due() && !run.capture().requested());
+        // Held like a drawn capture: opaque.
+        assert_eq!(
+            &run.capture().image().unwrap().pixels()[..4],
+            &[9, 8, 7, 255]
+        );
+        assert!(run.supply_capture(frame).is_err());
+
+        // A host that supplies nothing leaves the capture to the next VM step.
+        let mut run = requested(true);
+        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+        assert!(!run.capture_due());
+        assert_eq!(run.capture().image(), Some(&drawn));
+        assert_eq!(run.machine.state().system_integer(0), Some(1));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     #[ignore = "requires read-only CMVS_GAME_ROOT Amatsutsumi sample; writes only a fresh temporary user directory"]
     fn external_reset_reenters_title_and_quit_terminates() {

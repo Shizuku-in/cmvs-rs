@@ -26,6 +26,15 @@ int cmvs_nx_set_cpu_boost(int enabled) {
     return R_SUCCEEDED(rc) ? 0 : -1;
 }
 
+/* The memory available to the process in bytes, 0 when unknown: over 3 GiB as an
+   application, a few hundred MiB as an applet. */
+u64 cmvs_nx_total_memory(void) {
+    u64 bytes = 0;
+    if (R_FAILED(svcGetInfo(&bytes, InfoType_TotalMemorySize, CUR_PROCESS_HANDLE, 0)))
+        return 0;
+    return bytes;
+}
+
 /* Runs the calling thread on `core` alone (applications own cores 0..2). Returns 0 on
    success. */
 int cmvs_nx_prefer_core(int core) {
