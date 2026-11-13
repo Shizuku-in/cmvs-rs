@@ -56,8 +56,9 @@ impl Sprites {
         draw.words[0] = 2;
         draw.words[15] = 5f32.to_bits();
         let mut animation = Animation::default();
-        for frame in 0..[24, 12, 8][index] {
-            animation.frames[frame] = AnimationFrame {
+        let count = [24, 12, 8][index];
+        for (frame, slot) in animation.frames.iter_mut().take(count).enumerate() {
+            *slot = AnimationFrame {
                 next: (frame / 4 * 4 + (frame + 1) % 4) as i32,
                 words: [
                     (frame / 4 * 256) as i16,
