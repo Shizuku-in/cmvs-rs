@@ -135,3 +135,29 @@ fn reports_trailing_bytes_outside_compressed_payload() {
     raw.extend_from_slice(b"tail");
     assert_eq!(Script::decode(&raw).unwrap().trailing_file_bytes, 4);
 }
+
+#[test]
+fn pss0_shares_the_layout_but_skips_the_byte_transform() {
+    use cmvs_rs::ps3::Container;
+    for compressed in [true, false] {
+        // Key 0 makes the PS2A fixture's transform `(b << 1 rotated) + 124`; undo it
+        // to obtain the plain stored payload PSS0 uses.
+        let mut raw = fixture(compressed, 0);
+        for byte in &mut raw[48..] {
+            *byte = byte.wrapping_sub(124).rotate_right(1);
+        }
+        assert!(Script::decode(&raw).is_err() || !compressed);
+        raw[..4].copy_from_slice(b"PSS0");
+        let script = Script::decode(&raw).unwrap();
+        assert_eq!(script.header.container, Container::Pss0);
+        assert_eq!(script.code(), &[0, 0x20]);
+        assert_eq!(script.strings().unwrap()[0].bytes, b"hello");
+        let image = script.memory_image(&[]).unwrap();
+        assert_eq!(&image[..4], b"PSS0");
+        let reloaded = Script::from_memory_image(&image).unwrap();
+        assert_eq!(reloaded.header.container, Container::Pss0);
+        assert_eq!(reloaded.payload(), script.payload());
+    }
+    let ps2a = Script::decode(&fixture(true, 0)).unwrap();
+    assert_eq!(ps2a.header.container, Container::Ps2a);
+}

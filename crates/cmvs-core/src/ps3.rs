@@ -1,11 +1,30 @@
-//! PS2A containers, including files using the .ps3 extension.
+//! PS2A containers, including files using the .ps3 extension, and the CVNS-era
+//! PSS0 container (.pss): the same header and segments with an untransformed payload.
 //! Text is deliberately exposed as bytes: the script header does not identify its encoding.
 use crate::{FormatError, MAX_PAYLOAD, lzss};
 
 pub const HEADER_SIZE: usize = 48;
 
+/// Which container a script came from. PSS0 stores zero in the two fields PS2A
+/// uses as transform parameters and applies no byte transform before LZSS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Container {
+    Ps2a,
+    Pss0,
+}
+
+impl Container {
+    pub fn magic(self) -> &'static [u8; 4] {
+        match self {
+            Self::Ps2a => b"PS2A",
+            Self::Pss0 => b"PSS0",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Header {
+    pub container: Container,
     pub version_raw: u32,
     pub key: u32,
     pub label_count: u32,
@@ -27,13 +46,19 @@ fn u32_at(data: &[u8], at: usize) -> Result<u32, FormatError> {
 
 impl Header {
     pub fn parse(raw: &[u8]) -> Result<Self, FormatError> {
-        if raw.len() < HEADER_SIZE || &raw[..4] != b"PS2A" {
-            return Err(FormatError("expected PS2A header"));
+        let container = match raw.get(..4) {
+            Some(b"PS2A") => Container::Ps2a,
+            Some(b"PSS0") => Container::Pss0,
+            _ => return Err(FormatError("expected PS2A or PSS0 header")),
+        };
+        if raw.len() < HEADER_SIZE {
+            return Err(FormatError("truncated script header"));
         }
         if u32_at(raw, 4)? != HEADER_SIZE as u32 {
-            return Err(FormatError("unsupported PS2A header length"));
+            return Err(FormatError("unsupported script header length"));
         }
         Ok(Self {
+            container,
             version_raw: u32_at(raw, 8)?,
             key: u32_at(raw, 12)?,
             label_count: u32_at(raw, 16)?,
@@ -107,7 +132,7 @@ impl Script {
             return Err(FormatError("script data length differs from its segment"));
         }
         let h = &self.header;
-        let mut out = b"PS2A".to_vec();
+        let mut out = h.container.magic().to_vec();
         for word in [
             HEADER_SIZE as u32,
             h.version_raw,
@@ -164,10 +189,13 @@ impl Script {
             .ok_or(FormatError("truncated script payload"))?;
         let xor = ((header.key >> 3).wrapping_add(header.key >> 24)) as u8;
         let shift = (header.key >> 20) % 5 + 1;
-        let transformed: Vec<u8> = input
-            .iter()
-            .map(|v| (v.wrapping_sub(124) ^ xor).rotate_right(shift))
-            .collect();
+        let transformed: Vec<u8> = match header.container {
+            Container::Ps2a => input
+                .iter()
+                .map(|v| (v.wrapping_sub(124) ^ xor).rotate_right(shift))
+                .collect(),
+            Container::Pss0 => input.to_vec(),
+        };
         let payload = if packed == 0 {
             transformed
         } else {
