@@ -525,8 +525,8 @@ impl AudioBackend for BrowserAudio {
         let duck = self.ducking.update(now().max(0.0) as u32, &voices) as f32 / 256.0;
         if duck != self.duck_gain {
             self.duck_gain = duck;
-            for id in 0..2 {
-                if let Some(c) = &self.slots[id]
+            for (id, slot) in self.slots.iter().enumerate().take(2) {
+                if let Some(c) = slot
                     && c.started
                 {
                     gain(id as u32, c.volume * duck);
@@ -564,8 +564,8 @@ impl AudioBackend for BrowserAudio {
 
 impl Drop for BrowserAudio {
     fn drop(&mut self) {
-        for id in 0..16 {
-            if self.slots[id].is_some() {
+        for (id, slot) in self.slots.iter().enumerate() {
+            if slot.is_some() {
                 stop(id as u32);
             }
         }

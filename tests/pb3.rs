@@ -340,3 +340,89 @@ fn cli_export_is_create_new_and_unsupported_codec_creates_no_file() {
     fs::remove_file(path).unwrap();
     fs::remove_dir(root).unwrap();
 }
+
+/// Pseudo-random bytes, the same on every run.
+fn noise(count: usize, mut state: u32) -> Vec<u8> {
+    (0..count)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state as u8
+        })
+        .collect()
+}
+/// A type-5 image: four planes (B, G, R, A) of literal deltas.
+fn delta_fixture(w: u16, h: u16, planes: [&[u8]; 4]) -> Vec<u8> {
+    let mut b = vec![0; 84];
+    b[..4].copy_from_slice(b"PB3B");
+    b[28] = 5;
+    b[30..32].copy_from_slice(&w.to_le_bytes());
+    b[32..34].copy_from_slice(&h.to_le_bytes());
+    b[34] = 32;
+    for (i, plane) in planes.into_iter().enumerate() {
+        let at = (b.len() - 84) as u32;
+        put(&mut b, 52 + i * 8, at);
+        b.extend(vec![0; plane.len().div_ceil(8)]);
+        let at = (b.len() - 84) as u32;
+        put(&mut b, 56 + i * 8, at);
+        b.extend(plane);
+    }
+    encrypt(&mut b);
+    b
+}
+
+#[test]
+fn planes_decoded_on_extra_threads_give_the_same_image_and_the_same_error() {
+    use cmvs_rs::image::DecodeThreads;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static STARTED: AtomicUsize = AtomicUsize::new(0);
+    let threads = DecodeThreads {
+        extra: 3,
+        on_start: Some(|index| {
+            assert!(index < 3);
+            STARTED.fetch_add(1, Ordering::Relaxed);
+        }),
+    };
+    // Large enough to be spread over threads.
+    let (w, h) = (300u16, 250u16);
+    let count = usize::from(w) * usize::from(h);
+    let literal = |seed| noise(count, seed);
+
+    let tiles = vec![false; count.div_ceil(16 * 16) + 64];
+    let tiles = &tiles[..usize::from(w).div_ceil(16) * usize::from(h).div_ceil(16)];
+    let blocks = fixture(
+        w,
+        h,
+        16,
+        (1..=4)
+            .map(|seed| plane(tiles, &[], &literal(seed)))
+            .collect(),
+    );
+    let deltas = delta_fixture(w, h, [&literal(5), &literal(6), &literal(7), &literal(8)]);
+    for file in [&blocks, &deltas] {
+        let single = pb3::decode(file).unwrap();
+        assert_eq!([single.width(), single.height()], [300, 250]);
+        assert_eq!(pb3::decode_with(file, threads).unwrap(), single);
+    }
+    assert!(STARTED.load(Ordering::Relaxed) > 0);
+    // The delta planes accumulate, blue first in the file and third in RGBA.
+    let (image, blue) = (pb3::decode(&deltas).unwrap(), literal(5));
+    assert_eq!(image.pixels()[2], blue[0]);
+    assert_eq!(image.pixels()[6], blue[0].wrapping_add(blue[1]));
+    assert_eq!(image.pixels()[3], literal(8)[0]);
+
+    // A plane that fails does so identically, whichever thread decodes it.
+    let mut planes: Vec<_> = (1..=4)
+        .map(|seed| plane(tiles, &[], &literal(seed)))
+        .collect();
+    planes[2].literals -= 1;
+    let broken = fixture(w, h, 16, planes);
+    let error = pb3::decode(&broken).unwrap_err();
+    assert_eq!(pb3::decode_with(&broken, threads).unwrap_err(), error);
+
+    // A small image stays on the calling thread.
+    let started = STARTED.load(Ordering::Relaxed);
+    pb3::decode_with(&simple(), threads).unwrap();
+    assert_eq!(STARTED.load(Ordering::Relaxed), started);
+}

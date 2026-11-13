@@ -69,7 +69,178 @@ pub struct ObjectImage {
     pub surface: bool,
 }
 
+/// The row filter of modes 256 (`triangular`) and 512: samples at offsets -radius,
+/// -radius + step, ... up to radius, weighted `radius - |offset| + 1` or 1, summed and
+/// divided in wrapping 32-bit arithmetic as the original does. Sums over the strided
+/// samples come from prefix sums along the same stride, so the cost per pixel does not
+/// grow with the radius.
+fn filter_rows(
+    image: &RgbaImage,
+    triangular: bool,
+    extra: u32,
+) -> Result<Vec<u8>, crate::FormatError> {
+    let radius = i64::from((extra & 0xffff).max(1));
+    let step = i64::from((extra >> 16).max(1));
+    let width = image.width() as usize;
+    let mut pixels = image.pixels().to_vec();
+    // Per channel: sums of v and of index * v over j, j - step, j - 2 * step, ...
+    let mut plain = vec![[0u32; 4]; width];
+    let mut indexed = vec![[0u32; 4]; width];
+    // Samples first..=last in steps of `step`; `first` is at least 0.
+    let range = |sums: &[[u32; 4]], first: i64, last: i64| -> [u32; 4] {
+        let mut sum = sums[last as usize];
+        if first >= step {
+            let before = sums[(first - step) as usize];
+            for (sum, before) in sum.iter_mut().zip(before) {
+                *sum = sum.wrapping_sub(before);
+            }
+        }
+        sum
+    };
+    // The wrapped sum of `radius + 1 - |offset|` over offsets first..=last by `step`.
+    let weights = |first: i64, last: i64| -> u32 {
+        let count = (last - first) / step + 1;
+        let distance = if last < 0 {
+            -(first + last) * count / 2
+        } else {
+            (first + last) * count / 2
+        };
+        (count * (radius + 1) - distance) as u32
+    };
+    for (source, target) in image
+        .pixels()
+        .chunks_exact(width * 4)
+        .zip(pixels.chunks_exact_mut(width * 4))
+    {
+        let step = step as usize;
+        for (j, texel) in source.as_chunks::<4>().0.iter().enumerate() {
+            let (mut a, mut b) = ([0u32; 4], [0u32; 4]);
+            if j >= step {
+                (a, b) = (plain[j - step], indexed[j - step]);
+            }
+            for c in 0..4 {
+                let v = u32::from(texel[c]);
+                a[c] = a[c].wrapping_add(v);
+                b[c] = b[c].wrapping_add(v.wrapping_mul(j as u32));
+            }
+            (plain[j], indexed[j]) = (a, b);
+        }
+        let step = step as i64;
+        // The samples of pixel x: (first, last below x if any, last), all in bounds.
+        let samples = |x: i64| -> Option<(i64, Option<i64>, i64)> {
+            let skipped = ((radius - x).max(0) + step - 1) / step;
+            let first = x - radius + skipped * step;
+            let last = first + ((x + radius).min(width as i64 - 1) - first).div_euclid(step) * step;
+            (last >= first).then(|| {
+                let left = (first < x).then(|| first + (x - 1 - first) / step * step);
+                (first, left, last)
+            })
+        };
+        let weight = |x: i64, (first, left, last): (i64, Option<i64>, i64)| -> u32 {
+            if !triangular {
+                return ((last - first) / step + 1) as u32;
+            }
+            let right = left.map_or(first, |j| j + step);
+            let mut weight = left.map_or(0, |left| weights(first - x, left - x));
+            if right <= last {
+                weight = weight.wrapping_add(weights(right - x, last - x));
+            }
+            weight
+        };
+        // Away from the row ends every pixel has the same samples relative to itself.
+        let inner = radius..width as i64 - radius;
+        let inner_samples = samples(radius)
+            .filter(|_| !inner.is_empty())
+            .map(|(first, left, last)| (first - radius, left.map(|j| j - radius), last - radius));
+        let inner_weight = samples(radius).map_or(0, |at| weight(radius, at));
+        for (x, pixel) in target.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let x = x as i64;
+            let (at, weight) = match inner_samples {
+                Some((first, left, last)) if inner.contains(&x) => {
+                    ((x + first, left.map(|j| x + j), x + last), inner_weight)
+                }
+                _ => {
+                    let at = samples(x).ok_or(crate::FormatError(
+                        "horizontal image filter has no in-bounds samples",
+                    ))?;
+                    (at, weight(x, at))
+                }
+            };
+            if weight == 0 {
+                return Err(crate::FormatError(
+                    "horizontal image filter has no in-bounds samples",
+                ));
+            }
+            let (first, left, last) = at;
+            let sums = if triangular {
+                // Left of x the weight is radius + 1 - x + j, from x on radius + 1 + x - j.
+                let mut sums = [0u32; 4];
+                if let Some(left) = left {
+                    let (v, jv) = (range(&plain, first, left), range(&indexed, first, left));
+                    let factor = (radius + 1 - x) as u32;
+                    for c in 0..4 {
+                        sums[c] = factor.wrapping_mul(v[c]).wrapping_add(jv[c]);
+                    }
+                }
+                let right = left.map_or(first, |j| j + step);
+                if right <= last {
+                    let (v, jv) = (range(&plain, right, last), range(&indexed, right, last));
+                    let factor = (radius + 1 + x) as u32;
+                    for c in 0..4 {
+                        sums[c] = sums[c]
+                            .wrapping_add(factor.wrapping_mul(v[c]))
+                            .wrapping_sub(jv[c]);
+                    }
+                }
+                sums
+            } else {
+                range(&plain, first, last)
+            };
+            for (channel, sum) in pixel.iter_mut().zip(sums) {
+                *channel = (sum / weight) as u8;
+            }
+        }
+    }
+    Ok(pixels)
+}
+
 impl ObjectImage {
+    /// [`Self::apply_filter`] through the source's decoded-image cache, when it keeps
+    /// one: the same image filtered again shares pixels (and the texture cache's
+    /// content hash) with the first result.
+    pub(crate) fn apply_filter_cached(
+        &mut self,
+        parameters: [u32; 3],
+        source: &mut dyn ImageSource,
+    ) -> Result<(), crate::FormatError> {
+        if !source.caches_decodes() {
+            return self.apply_filter(parameters);
+        }
+        let mut key = [0; 36];
+        key[..16].copy_from_slice(&self.pixels.content_digest().to_le_bytes());
+        key[16..24].copy_from_slice(
+            &(u64::from(self.pixels.width()) << 32 | u64::from(self.pixels.height())).to_le_bytes(),
+        );
+        for (bytes, value) in key[24..].as_chunks_mut::<4>().0.iter_mut().zip(parameters) {
+            *bytes = value.to_le_bytes();
+        }
+        let identity = crate::raster::content_hash(&key);
+        if let Some(hit) = source.cached_decode(identity) {
+            self.pixels = hit.pixels;
+            self.filter = Some(parameters);
+            return Ok(());
+        }
+        self.apply_filter(parameters)?;
+        self.pixels.identify_content(identity);
+        source.store_decode(
+            identity,
+            &crate::image::DecodedImage {
+                pixels: self.pixels.clone(),
+                alpha: self.alpha,
+            },
+        );
+        Ok(())
+    }
     pub(crate) fn apply_filter(&mut self, parameters: [u32; 3]) -> Result<(), crate::FormatError> {
         let [mode, color, extra] = parameters;
         if !matches!(mode, 1 | 2 | 17 | 256 | 512) {
@@ -80,47 +251,7 @@ impl ObjectImage {
         // Hapymaher 0x14002c6e0: modes 256/512 filter rows with triangular/uniform
         // weights, including alpha. Sampling starts at -radius even if it skips the centre.
         if matches!(mode, 256 | 512) {
-            let radius = (extra & 0xffff).max(1) as i32;
-            let step = (extra >> 16).max(1) as usize;
-            let width = self.pixels.width() as usize;
-            let row_bytes = width * 4;
-            let mut pixels = self.pixels.pixels().to_vec();
-            for (source, target) in self
-                .pixels
-                .pixels()
-                .chunks_exact(row_bytes)
-                .zip(pixels.chunks_exact_mut(row_bytes))
-            {
-                for (x, pixel) in target.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-                    let (mut sums, mut weights) = ([0u32; 4], 0u32);
-                    for offset in (-radius..=radius).step_by(step) {
-                        let sample = x as i64 + i64::from(offset);
-                        if !(0..width as i64).contains(&sample) {
-                            continue;
-                        }
-                        let weight = if mode == 256 {
-                            (radius - offset.abs() + 1) as u32
-                        } else {
-                            1
-                        };
-                        weights = weights.wrapping_add(weight);
-                        for (channel, sum) in sums.iter_mut().enumerate() {
-                            *sum = sum
-                                .wrapping_add(weight.wrapping_mul(u32::from(
-                                    source[sample as usize * 4 + channel],
-                                )));
-                        }
-                    }
-                    if weights == 0 {
-                        return Err(crate::FormatError(
-                            "horizontal image filter has no in-bounds samples",
-                        ));
-                    }
-                    for (channel, sum) in pixel.iter_mut().zip(sums) {
-                        *channel = (sum / weights) as u8;
-                    }
-                }
-            }
+            let pixels = filter_rows(&self.pixels, mode == 256, extra)?;
             self.pixels = RgbaImage::new(self.pixels.width(), self.pixels.height(), pixels)?;
             self.filter = Some(parameters);
             return Ok(());
@@ -1202,7 +1333,7 @@ impl SceneHost {
         if let Some(filter) = filter
             && let Some(image) = decoded.as_mut()
         {
-            image.apply_filter(filter)?;
+            image.apply_filter_cached(filter, images)?;
         }
         call.complete(match command {
             0x38 | 0x32 => 0x400c,
@@ -1428,5 +1559,132 @@ fn argument_names(command: u16) -> &'static [&'static str] {
         | 0x1f7..=0x1f9
         | 0x1fc..=0x1fd => &["object slot", "child slot"],
         _ => unreachable!("registered scene argument schema"),
+    }
+}
+
+#[cfg(test)]
+mod filter_tests {
+    use super::*;
+
+    /// The direct form: every sample of every pixel, as the original loops.
+    fn reference(image: &RgbaImage, triangular: bool, extra: u32) -> Option<Vec<u8>> {
+        let radius = (extra & 0xffff).max(1) as i32;
+        let step = (extra >> 16).max(1) as usize;
+        let width = image.width() as usize;
+        let mut pixels = image.pixels().to_vec();
+        for (source, target) in image
+            .pixels()
+            .chunks_exact(width * 4)
+            .zip(pixels.chunks_exact_mut(width * 4))
+        {
+            for (x, pixel) in target.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let (mut sums, mut weights) = ([0u32; 4], 0u32);
+                for offset in (-radius..=radius).step_by(step) {
+                    let sample = x as i64 + i64::from(offset);
+                    if !(0..width as i64).contains(&sample) {
+                        continue;
+                    }
+                    let weight = if triangular {
+                        (radius - offset.abs() + 1) as u32
+                    } else {
+                        1
+                    };
+                    weights = weights.wrapping_add(weight);
+                    for (channel, sum) in sums.iter_mut().enumerate() {
+                        *sum = sum.wrapping_add(
+                            weight.wrapping_mul(u32::from(source[sample as usize * 4 + channel])),
+                        );
+                    }
+                }
+                if weights == 0 {
+                    return None;
+                }
+                for (channel, sum) in pixel.iter_mut().zip(sums) {
+                    *channel = (sum / weights) as u8;
+                }
+            }
+        }
+        Some(pixels)
+    }
+
+    #[test]
+    fn row_filters_match_the_direct_sums_for_every_radius_step_and_edge() {
+        let mut state = 0x2545_f491u32;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state
+        };
+        for width in [1u32, 2, 3, 5, 8, 17, 40] {
+            let pixels = (0..width * 2 * 4).map(|_| next() as u8).collect();
+            let image = RgbaImage::new(width, 2, pixels).unwrap();
+            for radius in [0u32, 1, 2, 3, 7, 16, 39, 40, 41, 200, 0xffff] {
+                for step in [0u32, 1, 2, 3, 5, 16, 41, 300] {
+                    let extra = step << 16 | radius;
+                    for triangular in [true, false] {
+                        assert_eq!(
+                            filter_rows(&image, triangular, extra).ok(),
+                            reference(&image, triangular, extra),
+                            "width {width} radius {radius} step {step} triangular {triangular}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[derive(Default)]
+    struct CachingSource(std::collections::HashMap<u128, image::DecodedImage>, bool);
+    impl ImageSource for CachingSource {
+        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+            Ok(None)
+        }
+        fn caches_decodes(&self) -> bool {
+            self.1
+        }
+        fn cached_decode(&mut self, identity: u128) -> Option<image::DecodedImage> {
+            self.0.get(&identity).cloned()
+        }
+        fn store_decode(&mut self, identity: u128, image: &image::DecodedImage) {
+            self.0.insert(identity, image.clone());
+        }
+    }
+
+    #[test]
+    fn a_cached_filter_result_is_shared_per_image_and_parameters() {
+        let image = |value: u8| ObjectImage {
+            filter: None,
+            name: Vec::new(),
+            pixels: RgbaImage::new(4, 1, vec![value; 16]).unwrap(),
+            alpha: true,
+            surface: false,
+        };
+        let mut source = CachingSource(Default::default(), true);
+        let filtered = |source: &mut CachingSource, value, parameters| {
+            let mut direct = image(value);
+            direct.apply_filter(parameters).unwrap();
+            let mut cached = image(value);
+            cached.apply_filter_cached(parameters, source).unwrap();
+            assert_eq!(cached, direct);
+            cached
+        };
+        let first = filtered(&mut source, 200, [2, 0x40_4040, 0]);
+        let again = filtered(&mut source, 200, [2, 0x40_4040, 0]);
+        assert_eq!(source.0.len(), 1);
+        assert_eq!(again, first);
+        filtered(&mut source, 200, [2, 0x20_2020, 0]);
+        filtered(&mut source, 100, [2, 0x40_4040, 0]);
+        assert_eq!(source.0.len(), 3);
+        // An unsupported mode fails the same way and stores nothing.
+        assert!(
+            image(1)
+                .apply_filter_cached([3, 0, 0], &mut source)
+                .is_err()
+        );
+        // Without a decoded cache the filter runs directly.
+        let mut plain = CachingSource::default();
+        filtered(&mut plain, 200, [2, 0x40_4040, 0]);
+        assert!(plain.0.is_empty());
     }
 }

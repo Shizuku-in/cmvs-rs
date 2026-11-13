@@ -34,7 +34,7 @@ fn fixture() -> Vec<Vec<u8>> {
 
 fn top_down(frame: &Frame, ident: &Ident) -> Vec<u8> {
     let mut out = Vec::new();
-    for p in 0..3 {
+    for (p, plane) in frame.planes.iter().enumerate() {
         let div = if p == 0 { 1 } else { 2 };
         let width = ident.picw as usize / div;
         let height = ident.pich as usize / div;
@@ -42,7 +42,7 @@ fn top_down(frame: &Frame, ident: &Ident) -> Vec<u8> {
         let x = usize::from(ident.picx) / div;
         let y = usize::from(ident.picy) / div;
         for row in (y..y + height).rev() {
-            out.extend_from_slice(&frame.planes[p][row * stride + x..row * stride + x + width]);
+            out.extend_from_slice(&plane[row * stride + x..row * stride + x + width]);
         }
     }
     out

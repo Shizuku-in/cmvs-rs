@@ -1,7 +1,7 @@
 //! PB3B header, types 1/2/3/5/7 and contextual type-6/8 replacement blocks. Other codecs are
 //! explicitly unsupported. Format reference: pinned MIT CMVS-Engine PB3B.cpp/CPB.cpp/JBP1.cpp;
 //! checked against current IDA.
-use crate::{FormatError, MAX_PAYLOAD, jbp1, raster::RgbaImage};
+use crate::{FormatError, MAX_PAYLOAD, image::DecodeThreads, jbp1, raster::RgbaImage};
 use std::ops::Range;
 
 fn u16_at(b: &[u8], at: usize) -> Result<u16, FormatError> {
@@ -167,13 +167,12 @@ fn lzss_prefix(
 }
 
 /// 0x14009fad0: four independently compressed delta planes, cumulative across rows.
-fn decode_delta(raw: &[u8], h: &Header) -> Result<RgbaImage, FormatError> {
+fn decode_delta(raw: &[u8], h: &Header, threads: DecodeThreads) -> Result<RgbaImage, FormatError> {
     if h.bpp != 32 {
         return Err(FormatError("PB3 type 5 requires 32 bits per pixel"));
     }
     let count = usize::from(h.width) * usize::from(h.height);
-    let mut pixels = vec![0; count * 4];
-    for (plane, component) in [2, 1, 0, 3].into_iter().enumerate() {
+    let planes = map_planes(threads, count, &[0, 1, 2, 3], |&plane| {
         let flag_at = offset(84, u32_at(raw, 52 + plane * 8)?)?;
         let data_at = offset(84, u32_at(raw, 56 + plane * 8)?)?;
         let flags = raw
@@ -182,14 +181,53 @@ fn decode_delta(raw: &[u8], h: &Header) -> Result<RgbaImage, FormatError> {
         let data = raw
             .get(data_at..)
             .ok_or(FormatError("invalid PB3 type-5 data offset"))?;
-        let (deltas, _, _) = lzss_prefix(flags, data, count)?;
+        let (mut values, _, _) = lzss_prefix(flags, data, count)?;
         let mut value = 0u8;
-        for (i, delta) in deltas.into_iter().enumerate() {
-            value = value.wrapping_add(delta);
-            pixels[i * 4 + component] = value;
+        for delta in &mut values {
+            value = value.wrapping_add(*delta);
+            *delta = value;
         }
+        Ok(values)
+    })?;
+    RgbaImage::new(
+        u32::from(h.width),
+        u32::from(h.height),
+        interleave(&planes, count),
+    )
+}
+
+/// Decodes the planes of an image, in file order (blue, green, red, alpha), on the
+/// calling thread and on `threads` when the image is large enough to gain from it.
+/// The first failing plane in file order decides the error, as when decoding in turn.
+fn map_planes(
+    threads: DecodeThreads,
+    pixels: usize,
+    planes: &[usize],
+    decode: impl Fn(&usize) -> Result<Vec<u8>, FormatError> + Sync,
+) -> Result<Vec<Vec<u8>>, FormatError> {
+    let threads = if pixels >= 1 << 16 {
+        threads
+    } else {
+        DecodeThreads::default()
+    };
+    threads.map(planes, decode).into_iter().collect()
+}
+
+/// RGBA from planes in file order; a missing alpha plane is opaque.
+fn interleave(planes: &[Vec<u8>], count: usize) -> Vec<u8> {
+    let mut pixels = vec![255; count * 4];
+    let [blue, green, red] = [&planes[0], &planes[1], &planes[2]];
+    let colors = red.iter().zip(green).zip(blue);
+    for ((pixel, ((r, g), b)), i) in pixels
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(colors)
+        .zip(0..)
+    {
+        *pixel = [*r, *g, *b, planes.get(3).map_or(255, |alpha| alpha[i])];
     }
-    RgbaImage::new(u32::from(h.width), u32::from(h.height), pixels)
+    pixels
 }
 
 fn offset(base: usize, relative: u32) -> Result<usize, FormatError> {
@@ -368,6 +406,11 @@ fn decode_jbp1(raw: &[u8], h: &Header) -> Result<RgbaImage, FormatError> {
 }
 
 pub fn decode(raw: &[u8]) -> Result<RgbaImage, FormatError> {
+    decode_with(raw, DecodeThreads::default())
+}
+
+/// [`decode`], spreading independently coded planes (types 1 and 5) over `threads`.
+pub fn decode_with(raw: &[u8], threads: DecodeThreads) -> Result<RgbaImage, FormatError> {
     let h = Header::parse(raw)?;
     if matches!(h.kind, 2 | 3) {
         return decode_jbp1(raw, &h);
@@ -376,7 +419,7 @@ pub fn decode(raw: &[u8]) -> Result<RgbaImage, FormatError> {
         return decode_interleaved(raw, &h);
     }
     if h.kind == 5 {
-        return decode_delta(raw, &h);
+        return decode_delta(raw, &h, threads);
     }
     if matches!(h.kind, 6 | 8) {
         return Err(FormatError(
@@ -400,13 +443,10 @@ pub fn decode(raw: &[u8]) -> Result<RgbaImage, FormatError> {
     if flags.last().expect("channels").end > h.data_offset as usize {
         return Err(FormatError("overlapping PB3 channel regions"));
     }
-    let mut pixels = vec![0; count * 4];
-    for alpha in pixels[3..].iter_mut().step_by(4) {
-        *alpha = 255;
-    }
     let block = h.block as usize;
     let tiles = width.div_ceil(block) * height.div_ceil(block);
-    for channel in 0..channels {
+    let channels: Vec<usize> = (0..channels).collect();
+    let planes = map_planes(threads, count, &channels, |&channel| {
         let f = &raw[flags[channel].clone()];
         let c = &raw[data[channel].clone()];
         let flag_bytes = u32_at(f, 0)? as usize;
@@ -422,10 +462,10 @@ pub fn decode(raw: &[u8]) -> Result<RgbaImage, FormatError> {
             return Err(FormatError("PB3 block metadata exceeds bounds"));
         }
         let literals = split_lzss(&f[lzss_at..], c, literal_count)?;
+        let mut plane = vec![0; count];
         let mut literal = 0;
         let mut solid = 0;
         let mut tile = 0;
-        let component = [2, 1, 0, 3][channel];
         for y in (0..height).step_by(block) {
             for x in (0..width).step_by(block) {
                 let is_solid = f[12 + tile / 8] & (128 >> (tile % 8)) != 0;
@@ -442,16 +482,15 @@ pub fn decode(raw: &[u8]) -> Result<RgbaImage, FormatError> {
                 };
                 let columns = width.min(x.saturating_add(block)) - x;
                 for yy in y..height.min(y.saturating_add(block)) {
-                    let at = (yy * width + x) * 4 + component;
-                    let row = pixels[at..].iter_mut().step_by(4).take(columns);
+                    let row = &mut plane[yy * width + x..][..columns];
                     if is_solid {
-                        row.for_each(|p| *p = constant);
+                        row.fill(constant);
                     } else {
                         let values = literals
                             .get(literal..literal + columns)
                             .ok_or(FormatError("PB3 literal pixels exhausted"))?;
                         literal += columns;
-                        row.zip(values).for_each(|(p, &v)| *p = v);
+                        row.copy_from_slice(values);
                     }
                 }
             }
@@ -459,6 +498,8 @@ pub fn decode(raw: &[u8]) -> Result<RgbaImage, FormatError> {
         if solid != solid_bytes || literal != literal_count {
             return Err(FormatError("unused PB3 block values"));
         }
-    }
+        Ok(plane)
+    })?;
+    let pixels = interleave(&planes, count);
     RgbaImage::new(u32::from(h.width), u32::from(h.height), pixels)
 }

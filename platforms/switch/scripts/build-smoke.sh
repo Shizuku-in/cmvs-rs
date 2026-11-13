@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 : "${DEVKITA64:=$DEVKITPRO/devkitA64}"
 sh scripts/build-core.sh
 mkdir -p build
-"$DEVKITA64/bin/aarch64-none-elf-gcc" runtime/smoke.c runtime/abi.c ../../target/aarch64-switch/release/libcmvs_native.a -o build/cmvs-switch-smoke.elf \
+"$DEVKITA64/bin/aarch64-none-elf-gcc" runtime/smoke.c runtime/abi.c runtime/libc.c ../../target/aarch64-switch/release/libcmvs_native.a -o build/cmvs-switch-smoke.elf \
     -Wall -Wextra -Werror -O2 -march=armv8-a+crc+crypto -mtune=cortex-a57 \
     -mtp=soft -fPIE -I"$DEVKITPRO/libnx/include" \
     -specs="$DEVKITPRO/libnx/switch.specs" -L"$DEVKITPRO/libnx/lib" -lnx -lm

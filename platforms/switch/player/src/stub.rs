@@ -84,6 +84,10 @@ pub fn set_cpu_boost(_: bool) -> bool {
     false
 }
 
+pub fn total_memory() -> u64 {
+    0
+}
+
 pub fn show_system_error(_: &str, _: &str) -> bool {
     false
 }

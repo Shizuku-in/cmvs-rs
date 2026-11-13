@@ -6,6 +6,7 @@ use std::ffi::CString;
 unsafe extern "C" {
     fn cmvs_nx_set_cpu_boost(enabled: i32) -> i32;
     fn cmvs_nx_prefer_core(core: i32) -> i32;
+    fn cmvs_nx_total_memory() -> u64;
     fn cmvs_nx_show_error(dialog: *const std::ffi::c_char, details: *const std::ffi::c_char)
     -> i32;
 }
@@ -24,6 +25,13 @@ pub fn show_system_error(dialog: &str, details: &str) -> bool {
 pub fn set_cpu_boost(enabled: bool) -> bool {
     // SAFETY: a plain applet service call without pointers.
     unsafe { cmvs_nx_set_cpu_boost(i32::from(enabled)) == 0 }
+}
+
+/// The memory available to the process in bytes, 0 when unknown: over 3 GiB as an
+/// application, a few hundred MiB as an applet.
+pub fn total_memory() -> u64 {
+    // SAFETY: a query of the current process without pointers.
+    unsafe { cmvs_nx_total_memory() }
 }
 
 /// Moves the calling thread to application core `core` (0..=2); false leaves it unchanged.

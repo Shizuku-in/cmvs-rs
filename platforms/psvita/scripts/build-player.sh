@@ -21,7 +21,9 @@ done
 # whenever the text happens to end just below the 64 KiB-aligned data segment.
 link="$link -C link-arg=-Wl,--defsym=__sce_headroom=0x4000"
 # shellcheck disable=SC2086 # one word per linker argument
-cargo +nightly-2026-01-20 rustc --config 'profile.release.panic="abort"' -p cmvs-vita --release \
+# Whole-program optimization: slower to build, a few percent faster in the VM and decoders.
+cargo +nightly-2026-01-20 rustc --config 'profile.release.panic="abort"' \
+    --config 'profile.release.lto="fat"' --config 'profile.release.codegen-units=1' -p cmvs-vita --release \
     --target armv7-sony-vita-newlibeabihf -Zbuild-std=std,panic_abort -- $link
 elf=target/armv7-sony-vita-newlibeabihf/release/cmvs-vita.elf
 vita-elf-create "$elf" "$out/obj/cmvs-vita.velf"

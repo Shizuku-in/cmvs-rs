@@ -157,6 +157,10 @@ pub struct Startup<'a> {
     /// Steps since the last yield, and the watchdog limit for them.
     since_yield: u64,
     yield_watchdog: u64,
+    /// The host supplies requested screen captures from the frame it drew.
+    host_capture: bool,
+    /// A requested capture awaits the host's frame; the next VM step draws it otherwise.
+    capture_due: bool,
     main_barrier: bool,
     snapshot_policy: SnapshotPolicy,
     save_image: SaveImage,
@@ -300,6 +304,8 @@ impl<'a> Startup<'a> {
             steps: 0,
             since_yield: 0,
             yield_watchdog: 1_000_000,
+            host_capture: false,
+            capture_due: false,
             main_barrier: false,
             snapshot_policy: SnapshotPolicy::default(),
             save_image: SaveImage::default(),
@@ -390,6 +396,10 @@ impl<'a> Startup<'a> {
     pub fn set_decoded_image_cache(&mut self, bytes: usize) {
         self.images.set_decoded_cache_limit(bytes);
     }
+    /// See [`crate::image::ImageArchives::set_decode_threads`].
+    pub fn set_image_decode_threads(&mut self, threads: crate::image::DecodeThreads) {
+        self.images.set_decode_threads(threads);
+    }
     pub fn set_decode_movie_frames(&mut self, enabled: bool) {
         self.movies.set_decode_frames(enabled);
     }
@@ -457,6 +467,13 @@ impl<'a> Startup<'a> {
         {
             return Err("screen capture over auxiliary glyphs needs the font backend".into());
         }
+        if self.host_capture {
+            self.capture_due = true;
+            return Ok(());
+        }
+        self.draw_capture()
+    }
+    fn draw_capture(&mut self) -> Result<(), Box<dyn Error>> {
         let windows: Vec<_> = self.messages.visible_window_objects().collect();
         let [width, height] = self.screen_size();
         let frame = crate::scene_render::render_scene(
@@ -466,6 +483,34 @@ impl<'a> Startup<'a> {
             width,
             height,
         )?;
+        self.capture.take(frame)?;
+        Ok(())
+    }
+    /// A host that composites frames itself (a GPU) can hand over the frame it drew for
+    /// a requested capture instead of having the core draw the scene again in software.
+    /// After each frame advance it checks [`Self::capture_due`] and calls
+    /// [`Self::supply_capture`]; a capture it leaves due is drawn in software by the
+    /// next VM step.
+    pub fn set_host_capture(&mut self, enabled: bool) {
+        self.host_capture = enabled;
+    }
+    /// The frame advance left a requested capture for the host's frame of this state.
+    pub fn capture_due(&self) -> bool {
+        self.capture_due
+    }
+    /// The host's frame of the current state at the logical screen size: the scene
+    /// and visible message windows without host overlays such as a cursor.
+    pub fn supply_capture(
+        &mut self,
+        frame: crate::raster::RgbaImage,
+    ) -> Result<(), Box<dyn Error>> {
+        if !self.capture_due {
+            return Err("no screen capture is due".into());
+        }
+        if [frame.width(), frame.height()] != self.screen_size() {
+            return Err("supplied screen capture differs from the screen size".into());
+        }
+        self.capture_due = false;
         self.capture.take(frame)?;
         Ok(())
     }
@@ -669,6 +714,9 @@ impl<'a> Startup<'a> {
         )?;
         if !self.frame_running() {
             return Ok(StartupEvent::Inactive);
+        }
+        if std::mem::take(&mut self.capture_due) {
+            self.draw_capture()?;
         }
         if self.since_yield >= self.yield_watchdog {
             return Err(format!(

@@ -214,7 +214,20 @@ fn run(
     startup.set_scene_prefetch(|| {
         sys::prefer_core(2);
     });
+    // Image planes decode on this thread and on one more, on the core the movie
+    // prefetch uses: the audio core stays free.
+    startup.set_image_decode_threads(cmvs_core::image::DecodeThreads {
+        extra: 1,
+        on_start: Some(|_| {
+            sys::prefer_core(2);
+        }),
+    });
+    // Scenes reload the same images; decoding dominates their load time. Entries share
+    // pixels with the scene objects showing them, within the 256 MiB heap.
+    startup.set_decoded_image_cache(64 << 20);
     startup.set_record_text(true);
+    // Requested screen captures read back the canvas instead of a software redraw.
+    startup.set_host_capture(gpu.is_some());
     startup.set_save_clock(Box::new(cmvs_core::runner::utc_save_time));
     let mut font = game_font(base, encoding)?;
     font.set_user_directory(&user)?;
@@ -319,6 +332,11 @@ fn run(
                         Some(gpu) if startup.movie_frame().is_none() => {
                             render_gpu(&startup, &mut font, gpu)?;
                             gpu.present(view_rect(view), linear, cursor)?;
+                            if startup.capture_due()
+                                && let Some(frame) = gpu.read()
+                            {
+                                startup.supply_capture(frame?)?;
+                            }
                             backend.frame = None;
                         }
                         gpu => {
