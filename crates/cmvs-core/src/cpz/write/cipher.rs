@@ -17,6 +17,9 @@ impl Cipher {
                 Self::Cpz7(index.parameters, keys)
             }
             ArchiveIndex::Cpz3(_) => unreachable!("CPZ3 has a separate flat-index writer"),
+            ArchiveIndex::Cpz1(_) | ArchiveIndex::Cpz2(_) => {
+                unreachable!("CPZ1/CPZ2 are read-only")
+            }
         }
     }
     fn keys(&self) -> &crypto::Keys {

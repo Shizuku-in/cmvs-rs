@@ -1,7 +1,9 @@
-//! CPZ archive access. Supports CPZ3, CPZ5 packing modes 5..9, CPZ6 and CPZ7.
+//! CPZ archive access. Supports CVNS-era CPZ1/CPZ2 (read-only), CPZ3, CPZ5 packing modes 5..9, CPZ6 and CPZ7.
 //!
 //! Version-specific implementations are kept behind this public entry point.
 
+mod cpz1;
+mod cpz2;
 mod cpz3;
 mod cpz5;
 mod cpz6;
@@ -9,6 +11,7 @@ mod cpz7;
 mod crypto;
 mod entry;
 mod error;
+mod flat;
 mod write;
 
 use crate::FormatError;
@@ -17,6 +20,8 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
 };
 
+pub use cpz1::{CPZ1_HEADER_SIZE, Cpz1Index, Cpz1Layout};
+pub use cpz2::{CPZ2_HEADER_SIZE, Cpz2Index, Cpz2Layout};
 pub use cpz3::{CPZ3_HEADER_SIZE, Cpz3Index, Cpz3Layout, cpz3_checksum};
 pub use cpz5::{CPZ5_HEADER_SIZE, Cpz5Index, Cpz5Layout, Cpz5Mode};
 pub use cpz6::{CPZ6_HEADER_SIZE, Cpz6Index, Cpz6Layout, lookup_key};
@@ -66,6 +71,8 @@ fn read_version<R: Read + Seek>(reader: &mut R) -> Result<ArchiveVersion, Archiv
 /// Header-only inspection, without decrypting or authenticating the index.
 #[derive(Debug)]
 pub enum ArchiveLayout {
+    Cpz1(Cpz1Layout),
+    Cpz2(Cpz2Layout),
     Cpz3(Cpz3Layout),
     Cpz5(Cpz5Layout),
     Cpz6(Cpz6Layout),
@@ -103,7 +110,20 @@ impl ArchiveLayout {
                 reader.read_exact(&mut header)?;
                 Ok(Self::Cpz7(Cpz7Layout::parse(&header, length)?))
             }
-            version => Err(ArchiveError::UnsupportedVersion(version)),
+            ArchiveVersion::Cpz1 => {
+                let length = reader.seek(SeekFrom::End(0))?;
+                reader.seek(SeekFrom::Start(0))?;
+                let mut header = [0; CPZ1_HEADER_SIZE];
+                reader.read_exact(&mut header)?;
+                Ok(Self::Cpz1(Cpz1Layout::parse(&header, length)?))
+            }
+            ArchiveVersion::Cpz2 => {
+                let length = reader.seek(SeekFrom::End(0))?;
+                reader.seek(SeekFrom::Start(0))?;
+                let mut header = [0; CPZ2_HEADER_SIZE];
+                reader.read_exact(&mut header)?;
+                Ok(Self::Cpz2(Cpz2Layout::parse(&header, length)?))
+            }
         }
     }
 }
@@ -111,6 +131,8 @@ impl ArchiveLayout {
 /// Version-dispatched archive access. Lookup and verification stay version-specific.
 #[derive(Debug)]
 pub enum ArchiveIndex {
+    Cpz1(Cpz1Index),
+    Cpz2(Cpz2Index),
     Cpz3(Cpz3Index),
     Cpz5(Cpz5Index),
     Cpz6(Cpz6Index),
@@ -140,18 +162,24 @@ impl ArchiveIndex {
         parameters: Cpz7Parameters,
     ) -> Result<Self, ArchiveError> {
         match read_version(reader)? {
+            ArchiveVersion::Cpz1 | ArchiveVersion::Cpz2
+                if parameters != Cpz7Parameters::default() =>
+            {
+                Err(FormatError("CPZ7 parameters cannot be used with CPZ1/CPZ2").into())
+            }
             ArchiveVersion::Cpz3 | ArchiveVersion::Cpz5 | ArchiveVersion::Cpz6
                 if parameters != Cpz7Parameters::default() =>
             {
                 Err(FormatError("CPZ7 parameters cannot be used with CPZ3/CPZ5/CPZ6").into())
             }
+            ArchiveVersion::Cpz1 => Ok(Self::Cpz1(Cpz1Index::read(reader)?)),
+            ArchiveVersion::Cpz2 => Ok(Self::Cpz2(Cpz2Index::read(reader)?)),
             ArchiveVersion::Cpz3 => Ok(Self::Cpz3(Cpz3Index::read(reader)?)),
             ArchiveVersion::Cpz5 => Ok(Self::Cpz5(Cpz5Index::read(reader)?)),
             ArchiveVersion::Cpz6 => Ok(Self::Cpz6(Cpz6Index::read(reader)?)),
             ArchiveVersion::Cpz7 => Ok(Self::Cpz7(Cpz7Index::read_with_parameters(
                 reader, parameters,
             )?)),
-            version => Err(ArchiveError::UnsupportedVersion(version)),
         }
     }
 
@@ -167,6 +195,8 @@ impl ArchiveIndex {
 
     pub fn version(&self) -> ArchiveVersion {
         match self {
+            Self::Cpz1(_) => ArchiveVersion::Cpz1,
+            Self::Cpz2(_) => ArchiveVersion::Cpz2,
             Self::Cpz3(_) => ArchiveVersion::Cpz3,
             Self::Cpz5(_) => ArchiveVersion::Cpz5,
             Self::Cpz6(_) => ArchiveVersion::Cpz6,
@@ -177,6 +207,8 @@ impl ArchiveIndex {
     /// Common archive metadata. Version-specific cipher keys remain private.
     pub fn entries(&self) -> &[Entry] {
         match self {
+            Self::Cpz1(index) => index.entries(),
+            Self::Cpz2(index) => index.entries(),
             Self::Cpz3(index) => index.entries(),
             Self::Cpz5(index) => index.entries(),
             Self::Cpz6(index) => index.entries(),
@@ -186,6 +218,8 @@ impl ArchiveIndex {
 
     pub fn find(&self, name: &[u8]) -> Result<usize, FormatError> {
         match self {
+            Self::Cpz1(index) => index.find(name),
+            Self::Cpz2(index) => index.find(name),
             Self::Cpz3(index) => index.find(name),
             Self::Cpz5(index) => index.find(name),
             Self::Cpz6(index) => index.find(name),
@@ -195,6 +229,8 @@ impl ArchiveIndex {
 
     pub fn lookup(&self, name: &[u8]) -> Result<Option<usize>, FormatError> {
         match self {
+            Self::Cpz1(index) => index.lookup(name),
+            Self::Cpz2(index) => index.lookup(name),
             Self::Cpz3(index) => index.lookup(name),
             Self::Cpz5(index) => index.lookup(name),
             Self::Cpz6(index) => index.lookup(name),
@@ -208,6 +244,8 @@ impl ArchiveIndex {
         entry: usize,
     ) -> Result<Vec<u8>, ArchiveError> {
         match self {
+            Self::Cpz1(index) => index.read_entry(reader, entry),
+            Self::Cpz2(index) => index.read_entry(reader, entry),
             Self::Cpz3(index) => index.read_entry(reader, entry),
             Self::Cpz5(index) => index.read_entry(reader, entry),
             Self::Cpz6(index) => index.read_entry(reader, entry),
@@ -222,6 +260,9 @@ impl ArchiveIndex {
         entry: usize,
     ) -> Result<Vec<u8>, ArchiveError> {
         match self {
+            // CPZ1 stores no checksum to verify against.
+            Self::Cpz1(index) => index.read_entry(reader, entry),
+            Self::Cpz2(index) => index.read_entry_verified(reader, entry),
             Self::Cpz3(index) => index.read_entry_verified(reader, entry),
             Self::Cpz5(index) => index.read_entry_verified(reader, entry),
             Self::Cpz6(index) => index.read_entry_verified(reader, entry),

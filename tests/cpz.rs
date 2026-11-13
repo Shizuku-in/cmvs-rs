@@ -3,9 +3,10 @@ use cmvs_rs::cpz::{Cpz6Index, data_checksum, lookup_key};
 use std::io::Cursor;
 
 #[test]
-fn archive_dispatch_distinguishes_unsupported_unknown_and_truncated_inputs() {
+fn archive_dispatch_distinguishes_unknown_and_truncated_inputs() {
     use cmvs_rs::cpz::{ArchiveError, ArchiveIndex, ArchiveLayout, ArchiveVersion};
 
+    // CPZ1/CPZ2 are decoded by their own readers; a bare signature is truncated input.
     for (signature, version) in [
         (b"CPZ1", ArchiveVersion::Cpz1),
         (b"CPZ2", ArchiveVersion::Cpz2),
@@ -13,11 +14,11 @@ fn archive_dispatch_distinguishes_unsupported_unknown_and_truncated_inputs() {
         assert_eq!(ArchiveVersion::detect(signature).unwrap(), version);
         assert!(matches!(
             ArchiveIndex::read(&mut Cursor::new(signature)),
-            Err(ArchiveError::UnsupportedVersion(v)) if v == version
+            Err(ArchiveError::Io(_))
         ));
         assert!(matches!(
             ArchiveLayout::read(&mut Cursor::new(signature)),
-            Err(ArchiveError::UnsupportedVersion(v)) if v == version
+            Err(ArchiveError::Io(_))
         ));
     }
     assert!(matches!(
