@@ -6,7 +6,7 @@
 | [《明日の君と逢うために》 / asukimi](asukimi/README.md) | `2007-11-30_ASUKIMI` | 存读档、设置及评论编辑已验证；完整路线与原生存档界面待验证 |
 | [《春色桜瀬》 / harouse](harouse/README.md) | `2008-07-31_HAROUSE` | 首选路线回标题，存读档及评论编辑通过；仍有 9 个分支前缀待探索 |
 | [《明日の七海と逢うために〜明日の君と逢うために〜FAN DISC》 / asunana](asunana/README.md) | `2008-10-24_ASUNANA` | 基本游玩接入；四轮解锁收敛、存读档与绘制检查通过 |
-| [《みはる》（あるみ箱） / miharu](miharu/README.md) | `CVNS/2009-05-29_あるみ箱（あると＋みはる）/みはる` | CVNS 接入中：档案识别通过，命令映射为零，停在 `start.pss` 第一条系统命令；PB2A/MSK0/MV2X 未实现 |
+| [《みはる》（あるみ箱） / miharu](miharu/README.md) | `CVNS/2009-05-29_あるみ箱（あると＋みはる）/みはる` | CVNS 接入中：`start.pss` 的 29 种命令已复核映射并执行（含 CSS0 系统存档读取），停在 `intproc.pss` 的 `0x2029`；PB2A/MSK0/MV2X 未实现 |
 | [《メモリア》 / memoria](memoria/README.md) | `2009-08-28_MEMORIA` | 初步接入：首次启动路线经 `snky`/`snha` 回标题，R1/D1、I1–I4 与 V1–V4 通过；其他路线与原生音画待验证 |
 | [《夏に奏でる僕らの詩》 / natsuuta](natsuuta/README.md) | `2010-03-26_NATSUUTA` | 浅层接入：首选链经 7 个选择点回标题，输入/存读档与部分设置通过；18 个分支前缀、画面与原生音画待验证 |
 | [《初恋サクラメント》 / hassaku](hassaku/README.md) | `2010-12-24_HASSAKU` | 首选链经 7 个选择点回标题，标题/输入/存读档与部分设置通过；18 个分支前缀及原生音画待验证 |

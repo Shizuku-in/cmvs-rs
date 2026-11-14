@@ -460,6 +460,7 @@ fn inventory_matches_wait_and_resource_host_recognition_exhaustively() {
                     host: &mut cmvs_rs::system_save::SystemSaveHost::default(),
                     source: &mut Unavailable,
                     game_id: None,
+                    persistent: Default::default(),
                 }),
                 system_write: Some(cmvs_rs::dispatch::SystemWriteHosts {
                     host: &mut cmvs_rs::system_save::SystemSaveHost::default(),

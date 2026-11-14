@@ -300,7 +300,17 @@ impl EngineProfile {
             // docs/games/puriring: .data file bytes end at 0x4ae000; the banks at 0x4b6708,
             // 0x4dc710 (0x8000 bytes of packed bits, 0x440be0), 0x4da710 and 0x4ba710.
             "cmvs-20070119" => Some([4096, 262144, 2048, 128]),
+            // docs/games/miharu/commands.md: .data file bytes end at 0x4b6600; integers
+            // 0x4bdd18, strings 0x4c1d20 (256 x 1024), bits 0x501d20 (0x8000 bytes); no floats.
+            "cvns-20090203" => Some([4096, 262144, 0, 256]),
             _ => None,
+        }
+    }
+    /// String variable slots of this engine: 256 for CVNS, 128 for CMVS.
+    pub fn string_slots(&self) -> u32 {
+        match self.family {
+            Family::Cmvs => 128,
+            Family::Cvns => 256,
         }
     }
     /// Status of system command `0x2000 + command`; cases beyond the switch are absent.

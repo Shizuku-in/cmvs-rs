@@ -24,7 +24,7 @@
 |---|---|
 | 容器与脚本结构 | 全部 CPZ2 封包按条目校验和读取通过；34 个脚本（含 `start.pss`）线性解码通过 |
 | 档案识别 | `cmvs-profile identify` 按数据与 exe 选中 `cvns-20090203` / `miharu` |
-| 启动、标题与 OP | 未通过：`cmvs-trace` 停在 `start.pss / 0x1c / 0x2002`，尚无复核过的命令映射 |
+| 启动、标题与 OP | `start.pss` 用到的 29 种系统命令（共 36 次调用）已复核映射并执行，其中 17 种映射到 CMVS 根语义、12 种为 CVNS 专有，包括读取样本 `save/save000.dat`（CSS0）；随后进入 `intproc.pss`，停在 `0x46cb2 / 0x2029` |
 | 剧情、选择与结局 | 未测试 |
 | 画面与字体 | 未测试；PB2A、MSK0 解码器未实现 |
 | 原生窗口、输入与音轨 | 未测试；MV2X 未实现 |
@@ -34,6 +34,7 @@
 ## 重现与限制
 
 - 测试日期：2026-11-14，分支 `feat/cvns`。
-- 运行命令：`cmvs-trace <みはる>/data/pack/start.pss --script-archive <みはる>/data/pack/script.cpz --record-platform <みはる>`。
-- 当前停点：`start.pss / 0x1c / 0x2002`（第一条系统命令）。
+- 运行命令：`cmvs-trace <みはる>/data/pack/start.pss --script-archive <みはる>/data/pack/script.cpz --record-platform <みはる> --bootstrap --save-dir <空目录> --system-save <みはる>/save/save000.dat --continue-without-snapshot --steps 100000`。
+- 当前停点：`intproc.pss / 0x46cb2 / 0x2029`。
+- 运行时差异：字符串变量区按档案设为 256 槽（CVNS 的 128–255 是持久区）；变量区初值按 `.data` 零填充登记（`EngineProfile::initial_globals`）。存档菜单扫描的文件号是槽号 +1。
 - 游戏 ID：记录为 0，尚未确认 CVNS 是否有命令把游戏 ID 交给引擎。

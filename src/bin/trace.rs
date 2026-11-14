@@ -273,13 +273,22 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut machine = Machine::at(&script, entry.unwrap_or(script.header.entry_pc))?;
     machine.set_current_name(initial_name);
     machine.set_command_map(gate.selection().profile.command_map());
+    machine
+        .state_mut()
+        .set_string_slots(gate.selection().profile.string_slots());
     let mut script_source = script_archive
         .map(|path| -> Result<_, Box<dyn Error>> { ArchiveScripts::new(File::open(path)?) })
         .transpose()?;
     let mut control = ScriptControl::new(virtual_tick);
     let mut saves = save_dir.map(DirectorySaves::new).transpose()?;
     let mut save_menu = SaveMenuHost::default();
-    let mut system_source = system_save_path.map(FileSystemSave::new);
+    let mut system_source = system_save_path.map(|path| {
+        if gate.selection().profile.family == cmvs_rs::profile::Family::Cvns {
+            FileSystemSave::css0(path)
+        } else {
+            FileSystemSave::new(path)
+        }
+    });
     let mut system_host = SystemSaveHost::default();
     let mut images = platform_root.as_ref().map(ImageArchives::new).transpose()?;
     let movie_root = platform_root
@@ -517,6 +526,10 @@ fn run() -> Result<(), Box<dyn Error>> {
                         game_id: bootstrap
                             .as_ref()
                             .and_then(|host| host.settings().get(&0x201d).copied()),
+                        persistent: bootstrap
+                            .as_ref()
+                            .map(|host| host.cvns_persistent_starts())
+                            .unwrap_or_default(),
                     });
             hosts.scripts = script_source
                 .as_mut()

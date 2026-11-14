@@ -28,6 +28,8 @@ fn cases() -> Vec<(u16, Vec<u32>)> {
         (0x20b7, vec![0]),
         (0x20ba, vec![0, name, 256, 20, 1, 1]),
         (0x2241, vec![0]),
+        // CVNS master volume (runtime 0x4ac).
+        (0x24ac, vec![50]),
     ];
     cases.extend((0x2238..=0x223f).map(|op| (op, if op % 2 == 0 { vec![1] } else { vec![] })));
     cases.extend((0x22d6..=0x22dd).map(|op| (op, vec![1, 0])));
@@ -417,7 +419,7 @@ fn all_audio_entries_require_the_pair_and_complete_once() {
         .map(|e| e.command)
         .collect();
     assert_eq!(expected, actual);
-    assert_eq!(expected.len(), 33);
+    assert_eq!(expected.len(), 34);
     for (op, args) in cases {
         let mut code = vec![];
         command(&mut code, op, &args);
@@ -566,7 +568,8 @@ fn trace_preserves_optional_audio_and_stop_diagnostics() {
     let root = std::env::temp_dir().join(format!("cmvs-cli-dispatch-audio-{}", std::process::id()));
     fs::create_dir(&root).unwrap();
     let path = root.join("audio.ps3");
-    for (opcode, mut args) in cases() {
+    // CVNS-only runtime commands are absent from the CMVS profile this trace selects.
+    for (opcode, mut args) in cases().into_iter().filter(|(op, _)| *op < 0x2400) {
         for arg in &mut args {
             if *arg == 0x80000000 {
                 *arg = 0;

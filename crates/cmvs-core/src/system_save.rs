@@ -1,9 +1,11 @@
 //! CSS1 persistent variable data; optional exclusive-file export, no gameplay snapshot restore.
 use crate::filesystem::File;
+mod css0;
 mod pack;
 mod profile;
 mod write;
 use crate::{FormatError, MAX_PAYLOAD, dispatch::Call, evaluate::State, machine::Machine};
+pub use css0::{CSS0_HEADER, Css0Save, PersistentStarts};
 pub use profile::ProfileSystemSave;
 use std::{
     error::Error,
@@ -242,11 +244,20 @@ pub trait SystemSaveSource {
 }
 pub struct FileSystemSave {
     path: PathBuf,
+    /// CVNS `save000.dat` is CSS0, whose layout the decoder checks; read it whole.
+    css0: bool,
 }
 impl FileSystemSave {
     pub fn new(path: impl AsRef<Path>) -> Self {
         Self {
             path: path.as_ref().to_owned(),
+            css0: false,
+        }
+    }
+    pub fn css0(path: impl AsRef<Path>) -> Self {
+        Self {
+            path: path.as_ref().to_owned(),
+            css0: true,
         }
     }
 }
@@ -257,6 +268,14 @@ impl SystemSaveSource for FileSystemSave {
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e),
         };
+        if self.css0 {
+            let mut raw = Vec::new();
+            file.take(MAX_PAYLOAD as u64 + 1).read_to_end(&mut raw)?;
+            if raw.len() > MAX_PAYLOAD {
+                return Err(io::Error::other("CSS0 file exceeds research limit"));
+            }
+            return Ok(Some(raw));
+        }
         let mut header = [0; PAYLOAD_OFFSET];
         file.read_exact(&mut header)?;
         let size = file.metadata()?.len();
@@ -295,6 +314,28 @@ impl SystemSaveHost {
         };
         self.handle_read(&mut Call::new(vm, pc, 0x128), source, game_id)
             .map(Some)
+    }
+    /// CVNS 0x21c0 (cvns-20090203 0x465240 -> 0x4208e0): no parameters, returns 0x4000.
+    pub(crate) fn handle_css0_read(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        source: &mut dyn SystemSaveSource,
+        starts: PersistentStarts,
+    ) -> Result<SystemSaveEvent, Box<dyn Error>> {
+        let Some(raw) = source.read()? else {
+            call.complete(0x4000)?;
+            return Ok(SystemSaveEvent::Missing);
+        };
+        let save = Css0Save::decode(&raw, starts)?;
+        let candidate = save.applied(call.vm.state())?;
+        call.complete(0x4000)?;
+        *call.vm.state_mut() = candidate;
+        for (current, new) in self.lists.iter_mut().zip(save.lists()) {
+            if !new.is_empty() {
+                *current = Some(new.clone());
+            }
+        }
+        Ok(SystemSaveEvent::Applied)
     }
     pub(crate) fn handle_read(
         &mut self,

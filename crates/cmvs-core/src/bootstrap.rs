@@ -31,6 +31,20 @@ impl Bootstrap {
     pub fn archive_parameters(&self) -> &BTreeMap<(u16, u32), Cpz7Parameters> {
         &self.archive_parameters
     }
+    /// CVNS 0x210b..0x210d as recorded so far, over the constructor defaults.
+    pub fn cvns_persistent_starts(&self) -> crate::system_save::PersistentStarts {
+        let mut starts = crate::system_save::PersistentStarts::default();
+        for (key, field) in [
+            (0x250b, &mut starts.bit),
+            (0x250c, &mut starts.integer),
+            (0x250d, &mut starts.string),
+        ] {
+            if let Some(&value) = self.settings.get(&key) {
+                *field = value;
+            }
+        }
+        starts
+    }
     pub fn handled_count(&self) -> usize {
         self.handled
     }
@@ -104,6 +118,22 @@ impl Bootstrap {
             self.handled += 1;
             return Ok(event);
         }
+        // CVNS-only (runtime 0x400 + CVNS command, cvns-20090203). The video and save
+        // directories fill the CMVS 0x2015/0x2016 tables; only the argument layout differs:
+        // the path is at SP-8 and SP-4 is an unused word.
+        if let 0x425 | 0x426 = command {
+            call.ignore_argument(4, "unused word")?;
+            let raw = call.argument(8, "resource path")?;
+            let path = call.vm.resolve_string(raw)?;
+            if path.len() >= 2048 {
+                return Err(error(pc, op, "resource path too long"));
+            }
+            let event = call.finish(0x4008)?;
+            let table = if command == 0x425 { 0x2015 } else { 0x2016 };
+            self.paths.insert((table, 0), path);
+            self.handled += 1;
+            return Ok(event);
+        }
         if command == 0x98 {
             let raw = call.argument(4, "cursor name")?;
             let name = call.vm.resolve_string(raw)?;
@@ -125,7 +155,7 @@ impl Bootstrap {
             return Ok(event);
         }
         let flags = match command {
-            0x1d..=0x1f => {
+            0x1d..=0x1f | 0x402 | 0x42d | 0x42f | 0x50b..=0x50d => {
                 let raw = call.argument(4, argument_names(command)[0])?;
                 self.settings.insert(op, raw);
                 0x4004
@@ -187,13 +217,31 @@ impl Bootstrap {
 }
 
 fn is_command(command: u16) -> bool {
-    matches!(command,0x10..=0x16|0x19|0x1a|0x1d..=0x1f|0x90..=0x94|0x98|0x34d)
+    matches!(
+        command,
+        0x10..=0x16
+            | 0x19
+            | 0x1a
+            | 0x1d..=0x1f
+            | 0x90..=0x94
+            | 0x98
+            | 0x34d
+            | 0x402
+            | 0x425
+            | 0x426
+            | 0x42d
+            | 0x42f
+            | 0x50b..=0x50d
+    )
 }
 fn argument_names(command: u16) -> &'static [&'static str] {
     match command {
         0x10..=0x14 | 0x19 | 0x1a => &["path slot", "resource path"],
         0x15 | 0x16 => &["resource path"],
         0x1d..=0x1f => &["setting value"],
+        0x402 => &["frame interval in milliseconds"],
+        0x42d | 0x42f => &["setting value"],
+        0x50b..=0x50d => &["first persistent variable"],
         0x91..=0x94 => &["range start", "range count", "initial value"],
         _ => unreachable!("registered bootstrap arguments"),
     }

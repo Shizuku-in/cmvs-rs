@@ -197,6 +197,9 @@ impl<'a> Startup<'a> {
     ) -> Result<Self, Box<dyn Error>> {
         let mut machine = Machine::new_with_encoding(script, encoding)?;
         machine.set_command_map(game.selection.profile.command_map());
+        machine
+            .state_mut()
+            .set_string_slots(game.selection.profile.string_slots());
         if let Some([integers, bits, floats, strings]) = game.selection.profile.initial_globals() {
             // Verified PE zero-fill globals (docs/games/aoitori/vm-semantics.md
             // and docs/games/hapymaherfd/README.md). Keep standalone
@@ -271,7 +274,12 @@ impl<'a> Startup<'a> {
             )?,
             saves: DirectorySaves::new(root.join("save"))?,
             save_menu,
-            system_source: FileSystemSave::new(root.join("save/system.dat")),
+            // CVNS keeps CSS0 in the save directory the start script registers (0x2026).
+            system_source: if game.selection.profile.family == crate::profile::Family::Cvns {
+                FileSystemSave::css0(root.join("save/save000.dat"))
+            } else {
+                FileSystemSave::new(root.join("save/system.dat"))
+            },
             system_host: SystemSaveHost::default(),
             system_output: None,
             assets: DirectoryAssets::new(root)?,
@@ -1009,6 +1017,7 @@ impl<'a> Startup<'a> {
                 host: &mut self.system_host,
                 source: &mut self.system_source,
                 game_id: id,
+                persistent: self.bootstrap.cvns_persistent_starts(),
             }),
             system_write: None,
             save_source: Some(&mut self.saves),

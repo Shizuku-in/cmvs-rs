@@ -130,6 +130,8 @@ pub struct State {
     system_float_bits: [Option<u32>; 4],
     integer_limit: u32,
     bit_limit: u32,
+    /// String variable slots: 128 in CMVS, 256 in CVNS (cvns-20090203 0x469cd0/0x469d00).
+    string_slots: u32,
     string_buffer: Vec<u8>,
     pub result: Option<u32>,
     pub condition: Option<bool>,
@@ -153,6 +155,7 @@ impl State {
             system_float_bits: [None; 4],
             integer_limit,
             bit_limit,
+            string_slots: 128,
             string_buffer: Vec::new(),
             result: None,
             condition: None,
@@ -210,6 +213,13 @@ impl State {
     pub fn float_bits(&self, index: u32) -> Option<u32> {
         self.floats.get(&index).copied()
     }
+    pub fn string_slots(&self) -> u32 {
+        self.string_slots
+    }
+    /// The engine's string bank size; slots at or past it are never written.
+    pub fn set_string_slots(&mut self, slots: u32) {
+        self.string_slots = slots;
+    }
     pub fn string(&self, index: u32) -> Option<&[u8]> {
         self.strings.get(&index).map(Vec::as_slice)
     }
@@ -231,7 +241,7 @@ impl State {
         bytes: &[u8],
         journal: &mut Journal,
     ) -> Result<(), &'static str> {
-        Self::range(index, 1, 128)?;
+        Self::range(index, 1, self.string_slots)?;
         if bytes.len() >= 1024 || bytes.contains(&0) {
             return Err("invalid bounded string slot value");
         }
@@ -356,7 +366,7 @@ impl State {
         if bytes.len() >= 1024 || bytes.contains(&0) {
             return Err("invalid bounded string slot value");
         }
-        for index in Self::range(start, count, 128)? {
+        for index in Self::range(start, count, self.string_slots)? {
             self.strings.insert(index, bytes.to_vec());
         }
         Ok(())

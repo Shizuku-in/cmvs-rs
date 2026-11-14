@@ -79,6 +79,7 @@ impl SharedSystem for SystemSaveHost {
                     host: self,
                     source,
                     game_id,
+                    persistent: Default::default(),
                 }),
                 ..Default::default()
             },

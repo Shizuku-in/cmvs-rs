@@ -11,9 +11,35 @@ use std::{
 
 pub const HEADER_READ_LIMIT: usize = 512;
 
+/// The gameplay-save signature a menu scan accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveFamily {
+    /// CMVS `CSV2`..`CSV9`; slot N is `saveNNN.dat`.
+    Cmvs,
+    /// CVNS `CSP1`..`CSP9` (cvns-20090203 0x46d5f0); slot N is `save(N+1).dat`, because
+    /// `save000.dat` holds the CSS0 system save.
+    Cvns,
+}
+
+impl SaveFamily {
+    fn accepts(self, bytes: &[u8]) -> bool {
+        let (prefix, first) = match self {
+            Self::Cmvs => (b"CSV", b'2'),
+            Self::Cvns => (b"CSP", b'1'),
+        };
+        bytes.len() >= 4 && &bytes[..3] == prefix && (first..=b'9').contains(&bytes[3])
+    }
+    fn file(self, slot: u16) -> u16 {
+        match self {
+            Self::Cmvs => slot,
+            Self::Cvns => slot + 1,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SaveHeader {
-    /// ASCII version digit, currently accepted by the original menu: '2'..='9'.
+    /// ASCII version digit: '2'..='9' for CMVS, '1'..='9' for CVNS.
     pub version: u8,
     /// Original bytes at offset 16, excluding the terminating NUL.
     pub label: Vec<u8>,
@@ -23,8 +49,11 @@ pub struct SaveHeader {
 
 impl SaveHeader {
     pub fn parse(bytes: &[u8]) -> Result<Self, FormatError> {
+        Self::parse_family(bytes, SaveFamily::Cmvs)
+    }
+    pub fn parse_family(bytes: &[u8], family: SaveFamily) -> Result<Self, FormatError> {
         let bytes = &bytes[..bytes.len().min(HEADER_READ_LIMIT)];
-        if bytes.len() < 4 || &bytes[..3] != b"CSV" || !(b'2'..=b'9').contains(&bytes[3]) {
+        if !family.accepts(bytes) {
             return Err(FormatError("unsupported gameplay-save signature"));
         }
         let label = bytes
@@ -156,13 +185,24 @@ impl SaveMenu {
         } else {
             requested.min(256)
         };
+        Self::scan_family(source, count as u16, SaveFamily::Cmvs)
+    }
+    /// CVNS 0x21a1 (0x467a20): the count is unsigned and clamped to 256.
+    pub fn scan_cvns(source: &mut (impl SaveSource + ?Sized), requested: u32) -> io::Result<Self> {
+        Self::scan_family(source, requested.min(256) as u16, SaveFamily::Cvns)
+    }
+    fn scan_family(
+        source: &mut (impl SaveSource + ?Sized),
+        count: u16,
+        family: SaveFamily,
+    ) -> io::Result<Self> {
         let mut slots = Vec::with_capacity(count as usize);
         let mut latest = None;
         let mut newest_key = 0;
-        for slot in 0..count as u16 {
-            let status = match source.read_header(slot)? {
+        for slot in 0..count {
+            let status = match source.read_header(family.file(slot))? {
                 None => SlotStatus::Missing,
-                Some(bytes) => match SaveHeader::parse(&bytes) {
+                Some(bytes) => match SaveHeader::parse_family(&bytes, family) {
                     Ok(header) => {
                         if header.ordering_key > newest_key {
                             newest_key = header.ordering_key;
@@ -315,7 +355,7 @@ impl SaveMenuHost {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(false);
         };
-        if !matches!(command, 0x2b3 | 0x2b4 | 0x2bb) {
+        if !matches!(command, 0x2b3 | 0x2b4 | 0x2bb | 0x5a1) {
             return Ok(false);
         }
         self.handle(&mut Call::new(vm, pc, command), source)?;
@@ -329,7 +369,7 @@ impl SaveMenuHost {
         let command = call.command;
         let argument = call.argument(
             4,
-            if command == 0x2b3 {
+            if command == 0x2b3 || command == 0x5a1 {
                 "slot count"
             } else if command == 0x2b4 {
                 "second group enabled"
@@ -356,6 +396,10 @@ impl SaveMenuHost {
                 .expect("slot 0 exists");
         } else if command == 0x2b3 {
             let menu = SaveMenu::scan(source, argument as i32)?;
+            call.complete(0x4004)?;
+            self.menu = Some(menu);
+        } else if command == 0x5a1 {
+            let menu = SaveMenu::scan_cvns(source, argument)?;
             call.complete(0x4004)?;
             self.menu = Some(menu);
         } else {

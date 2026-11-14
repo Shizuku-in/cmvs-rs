@@ -29,7 +29,8 @@ fn append(buffer: &mut Vec<u8>, bytes: &[u8], pc: usize, tag: u16) -> Result<(),
     buffer.extend_from_slice(bytes);
     Ok(())
 }
-/// 0x140085ea0 copies only slots 0..127; other indexes leave the accumulator unchanged.
+/// 0x140085ea0 copies only slots below the bank size (128; CVNS 256, 0x469d30); other
+/// indexes leave the accumulator unchanged.
 fn append_slot(
     state: &State,
     buffer: &mut Vec<u8>,
@@ -37,7 +38,7 @@ fn append_slot(
     pc: usize,
     tag: u16,
 ) -> Result<(), DecodeError> {
-    if index > 127 {
+    if index >= state.string_slots() {
         return Ok(());
     }
     let bytes = state
@@ -427,7 +428,11 @@ impl<'a> Machine<'a> {
             StringRef::Text(offset) => (self.image().script.text(), offset),
             StringRef::ScriptData(offset) => (self.script_data(), offset),
             StringRef::StringBank(index) => {
-                let index = if index > 127 { 0 } else { index };
+                let index = if index >= self.state.string_slots() {
+                    0
+                } else {
+                    index
+                };
                 return self
                     .state
                     .string(index)
@@ -536,7 +541,8 @@ impl<'a> Machine<'a> {
                     if *opcode == 0x170 {
                         self.append_operand(&self.state, &mut buffer, top)?;
                         match second {
-                            (0x121, value, _) if value & 0x3fff_ffff > 127 => {}
+                            (0x121, value, _)
+                                if value & 0x3fff_ffff >= self.state.string_slots() => {}
                             (0x121, value, at) => self
                                 .state
                                 .set_string_journaled(value & 0x3fff_ffff, &buffer, journal)
@@ -792,7 +798,18 @@ impl<'a> Machine<'a> {
         name: Vec<u8>,
         script: Script,
     ) -> Result<(), DecodeError> {
-        if !matches!(self.pending, Some((_, 0x81))) {
+        self.enter_common_with(slot, name, script, 8)
+    }
+    /// 0x2081 with `argument_bytes` of parameters; CVNS 0x2412 has only the name and
+    /// always uses common slot 0 (cvns-20090203 0x45f980 -> 0x44dfc0).
+    pub(crate) fn enter_common_with(
+        &mut self,
+        slot: u32,
+        name: Vec<u8>,
+        script: Script,
+        argument_bytes: usize,
+    ) -> Result<(), DecodeError> {
+        if !matches!(self.pending, Some((_, 0x81 | 0x412))) {
             return Err(error(self.pc, 0x2081, "no pending common-script load"));
         }
         if slot >= 3 {
@@ -808,7 +825,7 @@ impl<'a> Machine<'a> {
         }
         let entry = script.header.entry_pc as usize;
         let image = Image::prepare(Cow::Owned(script), name, entry as u32)?;
-        let stack = self.transfer_stack(8, 0x2081)?;
+        let stack = self.transfer_stack(argument_bytes, 0x2081)?;
         self.images.insert(slot, image);
         self.stack = stack;
         self.cross_calls.push(self.slot);
@@ -881,7 +898,7 @@ impl<'a> Machine<'a> {
         let (pc, command) = self
             .pending
             .ok_or_else(|| error(self.pc, 0, "no pending system command"))?;
-        if !flags.advances_pc() || matches!(command, 0x80 | 0x81) {
+        if !flags.advances_pc() || matches!(command, 0x80 | 0x81 | 0x412) {
             return Err(error(
                 pc,
                 command + 0x2000,

@@ -1134,6 +1134,20 @@ impl AudioHost {
         Ok(())
     }
 
+    /// CVNS 0x20ac (cvns-20090203 0x4597e0 -> CDvSound 0x412820): SP-4 clamped to 100 is
+    /// the software mixer's master percentage (0x412bf0 scales every channel by it).
+    /// The backend gain is /256, so percentages other than multiples of 25 are rounded down.
+    pub(crate) fn set_master_percent(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let percent = call.argument(4, "master volume percent")?.min(100);
+        backend.set_mixer_gain(percent * 256 / 100)?;
+        call.complete(0x4004)?;
+        Ok(())
+    }
+
     /// HAROUSE 0x447750 -> 0x456290, device slot channel+9 and record +40.
     pub(crate) fn set_se_gain(
         &mut self,

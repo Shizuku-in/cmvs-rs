@@ -234,6 +234,8 @@ pub struct SystemReadHosts<'a> {
     pub host: &'a mut SystemSaveHost,
     pub source: &'a mut dyn SystemSaveSource,
     pub game_id: Option<u32>,
+    /// CVNS persistent ranges, from [`Bootstrap::cvns_persistent_starts`].
+    pub persistent: crate::system_save::PersistentStarts,
 }
 pub struct SystemWriteHosts<'a> {
     pub host: &'a mut SystemSaveHost,
@@ -535,6 +537,14 @@ impl<'a, 'script> Call<'a, 'script> {
     ) -> Result<(), DecodeError> {
         self.require_arguments(8)?;
         self.vm.enter_common(slot, name, script)
+    }
+    pub fn enter_cvns_common(
+        &mut self,
+        name: Vec<u8>,
+        script: crate::ps3::Script,
+    ) -> Result<(), DecodeError> {
+        self.require_arguments(4)?;
+        self.vm.enter_common_with(0, name, script, 4)
     }
     pub fn switch_main(
         &mut self,
@@ -1165,9 +1175,11 @@ fn root_system_read(
         .system_read
         .as_mut()
         .expect("system read capability checked");
-    Ok(Flow::SystemSave(
-        h.host.handle_read(call, h.source, h.game_id)?,
-    ))
+    Ok(Flow::SystemSave(if call.command == 0x5c0 {
+        h.host.handle_css0_read(call, h.source, h.persistent)?
+    } else {
+        h.host.handle_read(call, h.source, h.game_id)?
+    }))
 }
 fn root_system_write(
     hosts: &mut Hosts<'_>,
@@ -4670,6 +4682,84 @@ pub static ROOT: &[Entry] = &[
         name: "auxiliary text",
         capability: Capability::Text,
         handler: root_text,
+    },
+    // CVNS-only semantics at 0x400 + the CVNS command (crate::cvns::CVNS_ONLY);
+    // evidence in docs/games/miharu/commands.md.
+    Entry {
+        command: 0x402,
+        name: "CVNS frame interval",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x412,
+        name: "CVNS enter common script",
+        capability: Capability::ScriptControl,
+        handler: root_script_control,
+    },
+    Entry {
+        command: 0x425,
+        name: "CVNS video directory",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x426,
+        name: "CVNS save directory",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x42d,
+        name: "CVNS unread setting",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x42f,
+        name: "CVNS archive reader version",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x4ac,
+        name: "CVNS master volume",
+        capability: Capability::Audio,
+        handler: |hosts, call| {
+            let h = hosts.audio.as_mut().expect("audio capability checked");
+            h.audio.set_master_percent(call, h.backend)?;
+            Ok(Flow::Done)
+        },
+    },
+    Entry {
+        command: 0x50b,
+        name: "CVNS persistent bits start",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x50c,
+        name: "CVNS persistent integers start",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x50d,
+        name: "CVNS persistent strings start",
+        capability: Capability::Bootstrap,
+        handler: root_bootstrap,
+    },
+    Entry {
+        command: 0x5c0,
+        name: "CVNS read system save",
+        capability: Capability::SystemRead,
+        handler: root_system_read,
+    },
+    Entry {
+        command: 0x5a1,
+        name: "CVNS scan save menu",
+        capability: Capability::SaveMenu,
+        handler: root_save_menu,
     },
 ];
 

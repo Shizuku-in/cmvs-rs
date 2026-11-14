@@ -153,6 +153,7 @@ impl State {
                     host: &mut self.system,
                     source: &mut self.store,
                     game_id: Some(0x12345678),
+                    persistent: Default::default(),
                 }),
                 ..Default::default()
             },

@@ -324,7 +324,7 @@ impl ScriptControl {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(None);
         };
-        if !matches!(command, 0x80 | 0x81 | 0x83 | 0x88..=0x8c) {
+        if !matches!(command, 0x80 | 0x81 | 0x83 | 0x88..=0x8c | 0x412) {
             return Ok(None);
         }
         self.handle(&mut Call::new(vm, pc, command), source)
@@ -349,6 +349,17 @@ impl ScriptControl {
                 };
                 let script = source.load(&name)?;
                 call.enter_common(slot, name, script)?;
+                return Ok(ControlEvent::CommonEntered {
+                    slot: call.vm.current_slot(),
+                });
+            }
+            0x412 => {
+                let name = {
+                    let raw = call.argument(4, argument_names(command)[0])?;
+                    call.vm.resolve_string(raw)?
+                };
+                let script = source.load(&name)?;
+                call.enter_cvns_common(name, script)?;
                 return Ok(ControlEvent::CommonEntered {
                     slot: call.vm.current_slot(),
                 });
@@ -437,6 +448,7 @@ impl ScriptControl {
 fn argument_names(command: u16) -> &'static [&'static str] {
     match command {
         0x80 => &["main script"],
+        0x412 => &["common script"],
         0x81 => &["common slot", "common script"],
         0x83 => &["high word", "low word"],
         0x88 => &[
