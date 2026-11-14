@@ -218,9 +218,9 @@ fn run() -> Result<(), Box<dyn Error>> {
                     "{name}: PS2A payload={} code={} labels={} strings={} entry_pc=0x{:x}",
                     script.payload().len(),
                     script.code().len(),
-                    script.header.label_count,
+                    script.header().label_count,
                     script.strings()?.len(),
-                    script.header.entry_pc
+                    script.header().entry_pc
                 );
             }
         }

@@ -256,10 +256,10 @@ fn external_archive_resources() -> Result<(), Box<dyn std::error::Error>> {
             assert_eq!(bytes.len(), entry.size as usize);
             if script {
                 let script = Script::decode(&bytes)?;
-                assert_eq!(script.header.container, Container::Pss0);
+                assert_eq!(script.header().container, Container::Pss0);
                 cmvs_rs::bytecode::decode_layout(
                     script.code(),
-                    script.header.entry_pc,
+                    script.header().entry_pc,
                     &script.labels(),
                 )?;
                 script.strings()?;

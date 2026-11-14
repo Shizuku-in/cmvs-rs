@@ -1,5 +1,5 @@
 //! Optional real-installation regression; the source game is never modified.
-use super::Player;
+use super::{Player, TickOutcome};
 use cmvs_core::save::Csv2Save;
 use std::{
     fs,
@@ -21,12 +21,15 @@ fn link_resources(source: &Path, target: &Path) {
 }
 
 fn advance(player: &mut Player, frames: u64) {
-    let end = player.serial() + frames;
+    let end = player.frame_serial() + frames;
     for _ in 0..frames * 100 {
-        if player.serial() >= end {
+        if player.frame_serial() >= end {
             return;
         }
-        assert!(player.tick(16).unwrap() < 2);
+        assert!(matches!(
+            player.tick(16).unwrap(),
+            TickOutcome::BudgetExhausted | TickOutcome::FrameReady
+        ));
     }
     panic!("frame budget exhausted");
 }
@@ -76,7 +79,7 @@ fn amatsutsumi_game_savedata_survives_player_restart() {
     let savedata = game.join("savedata");
     let mut player = Player::open_game_savedata(&game, &legacy, &font, false).unwrap();
     advance(&mut player, 700);
-    player.pointer(640, 280);
+    player.set_pointer_position(640, 280);
     player.key(1, true).unwrap();
     player.key(1, false).unwrap();
     advance(&mut player, 1800);

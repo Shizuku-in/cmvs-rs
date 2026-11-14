@@ -8,7 +8,7 @@ use cmvs_core::{
     input::{CodeInput, KeyBindings},
     profile::Registry,
     ps3::Script,
-    runner::{Startup, StartupEvent, load_start},
+    runtime::{Runtime, RuntimeEvent, RuntimeOptions, SaveStorage, load_start},
 };
 use cmvs_font::font::FontRenderer;
 use std::{error::Error, path::Path};
@@ -18,7 +18,7 @@ self_cell::self_cell! {
     struct Session {
         owner: Script,
         #[covariant]
-        dependent: Startup,
+        dependent: Runtime,
     }
 }
 fn js_error(error: impl std::fmt::Display) -> JsValue {
@@ -161,9 +161,9 @@ impl WebRuntime {
                         }
                     };
                     match event {
-                        StartupEvent::Progress | StartupEvent::SnapshotCaptured => {}
-                        StartupEvent::Yield => {
-                            startup.advance_decoded_frame(delta_ms.min(250))?;
+                        RuntimeEvent::Progress | RuntimeEvent::SnapshotCaptured => {}
+                        RuntimeEvent::Yield => {
+                            startup.advance_playback(delta_ms.min(250))?;
                             #[cfg(target_arch = "wasm32")]
                             {
                                 let display = backend.preferences();
@@ -184,8 +184,8 @@ impl WebRuntime {
                             *input_due = true;
                             return Ok(1);
                         }
-                        StartupEvent::Quit => return Ok(2),
-                        StartupEvent::Inactive => {
+                        RuntimeEvent::Quit => return Ok(2),
+                        RuntimeEvent::Inactive => {
                             *input_due = true;
                             return Ok(3);
                         }
@@ -233,14 +233,21 @@ impl WebRuntime {
         )?;
         let font = FontRenderer::from_bytes(font, face)?;
         let script = load_start(root, &game.files)?;
-        let session = Session::try_new(script, |script| -> Result<Startup<'_>, Box<dyn Error>> {
-            let mut startup = Startup::new(script, root, &game, 0)?;
-            startup.set_user_data_directory(Path::new("/user"))?;
-            startup.set_skip_auto_resume(skip)?;
+        let session = Session::try_new(script, |script| -> Result<Runtime<'_>, Box<dyn Error>> {
+            let mut startup = Runtime::with_options(
+                script,
+                root,
+                &game,
+                RuntimeOptions {
+                    saves: SaveStorage::UserDirectory("/user".into()),
+                    skip_auto_resume: skip,
+                    decode_cmv_frames: true,
+                    ..Default::default()
+                },
+            )?;
             startup.set_record_text(true);
             startup.set_glyph_metrics(font.metrics());
             startup.set_audio_backend(Box::new(audio::BrowserAudio::new(root)?))?;
-            startup.set_decode_movie_frames(true);
             Ok(startup)
         })?;
         let size = session.borrow_dependent().screen_size();

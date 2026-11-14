@@ -1,7 +1,7 @@
 //! Deferred screenshots retained for use as scene images.
 //!
 //! [`ScreenCapture`] records a request, accepts the completed frame, and retains
-//! it until released. [`crate::runner::Startup`] renders supported captures in
+//! it until released. [`crate::runtime::Runtime`] renders supported captures in
 //! software or accepts a host-rendered frame at logical screen size. Immediate
 //! readback uses [`crate::platform::PlatformBackend::read_device_frame`].
 

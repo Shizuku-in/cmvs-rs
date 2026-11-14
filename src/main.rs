@@ -65,14 +65,15 @@ fn run() -> Result<(), Box<dyn Error>> {
     println!(
         "PS2A: {} decoded bytes, {} labels, {} code bytes, {} text bytes, {} strings",
         script.payload().len(),
-        script.header.label_count,
+        script.header().label_count,
         script.code().len(),
         script.text().len(),
         strings.len()
     );
     println!(
         "entry_pc=0x{:x}, trailing_file_bytes={}",
-        script.header.entry_pc, script.trailing_file_bytes
+        script.header().entry_pc,
+        script.trailing_file_bytes
     );
     for entry in strings {
         print!("text+0x{:04x}: ", entry.offset);

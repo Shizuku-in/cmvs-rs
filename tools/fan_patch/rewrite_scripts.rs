@@ -147,7 +147,7 @@ pub(crate) fn rewrite_encoded(
         text.push(0);
     }
     let mut code = script.code().to_vec();
-    let instructions = bytecode::decode_layout(&code, script.header.entry_pc, &script.labels())?;
+    let instructions = bytecode::decode_layout(&code, script.header().entry_pc, &script.labels())?;
     let mut changed = 0;
     for insn in &instructions {
         if let InstructionKind::Expression(expr) = &insn.kind {
@@ -155,7 +155,7 @@ pub(crate) fn rewrite_encoded(
         }
     }
     // Code length, PCs, labels, branches and the mutable data segment are preserved.
-    let after = bytecode::decode_layout(&code, script.header.entry_pc, &script.labels())?;
+    let after = bytecode::decode_layout(&code, script.header().entry_pc, &script.labels())?;
     if !instructions
         .iter()
         .zip(&after)
@@ -176,7 +176,7 @@ pub(crate) fn rebuild_script(raw: &[u8], code: &[u8], text: &[u8]) -> Result<Vec
         push(&mut payload, label);
     }
     payload.extend(code);
-    payload.extend(script.unknown());
+    payload.extend(script.data());
     payload.extend(text);
     if payload.len() > cmvs_core::MAX_PAYLOAD {
         return Err("converted script exceeds limit".into());
@@ -186,13 +186,13 @@ pub(crate) fn rebuild_script(raw: &[u8], code: &[u8], text: &[u8]) -> Result<Vec
         &mut out,
         28,
         (payload.len()
-            - script.header.label_count as usize * 4
-            - script.header.code_size as usize
-            - script.header.unknown_size as usize) as u32,
+            - script.header().label_count as usize * 4
+            - script.header().code_size as usize
+            - script.header().unknown_size as usize) as u32,
     );
     put(&mut out, 36, 0); // Ordinary uncompressed PS2A; retain its original key.
     put(&mut out, 40, payload.len() as u32);
-    let key = script.header.key;
+    let key = script.header().key;
     let xor = ((key >> 3) + (key >> 24)) as u8;
     let shift = (key >> 20) % 5 + 1;
     out.extend(
@@ -409,7 +409,7 @@ mod tests {
         assert_eq!(count, 1);
         assert_eq!(after.text(), "\0中文♪・䇲\0B\0".as_bytes());
         assert_eq!(after.labels(), before.labels());
-        assert_eq!(after.unknown(), before.unknown());
+        assert_eq!(after.data(), before.data());
         assert_eq!(word(after.code(), 4)?, 3);
         assert_eq!(word(after.code(), 14)?, 17);
         assert_eq!(word(after.code(), 24)?, 0);

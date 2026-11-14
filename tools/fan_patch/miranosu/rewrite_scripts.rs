@@ -92,7 +92,7 @@ fn run(game: &Path, patch: &Path, output: &Path, encoding: OutputEncoding) -> Re
     let mut keys = BTreeSet::new();
     for (entry_index, entry) in index.entries().iter().enumerate() {
         let raw = index.read_entry_verified(&mut archive, entry_index)?;
-        let key = Script::decode(&raw)?.header.key;
+        let key = Script::decode(&raw)?.header().key;
         if !keys.insert(key) {
             return Err("duplicate original script key".into());
         }
@@ -108,7 +108,7 @@ fn run(game: &Path, patch: &Path, output: &Path, encoding: OutputEncoding) -> Re
         entries.insert(entry_index, converted);
     }
     let raw = fs::read(game.join("data/pack/start.ps2"))?;
-    let key = Script::decode(&raw)?.header.key;
+    let key = Script::decode(&raw)?.header().key;
     if !keys.insert(key) {
         return Err("duplicate startup key".into());
     }

@@ -1,5 +1,5 @@
 //! Worker-owned WebGPU surface; only explicit device screenshots read pixels back.
-use cmvs_core::{runner::Startup, scene_render::prepare_scene, settings::DisplayPreferences};
+use cmvs_core::{runtime::Runtime, scene_render::prepare_scene, settings::DisplayPreferences};
 use cmvs_font::font::FontRenderer;
 use cmvs_wgpu::{GpuFrame, Presenter, Renderer, wgpu};
 use std::error::Error;
@@ -36,7 +36,7 @@ impl BrowserGpu {
     }
     pub fn draw(
         &mut self,
-        startup: &Startup<'_>,
+        startup: &Runtime<'_>,
         font: &mut FontRenderer,
         display: DisplayPreferences,
     ) -> Result<bool, Box<dyn Error>> {

@@ -302,7 +302,7 @@ mod tests {
             .unwrap();
             fs::write(root.join(&files.script_archive), archive.into_inner()).unwrap();
             assert_eq!(detect_game(&root, &files, &startup).unwrap(), encoding);
-            // Startup evidence takes priority, without opening the archive.
+            // Runtime evidence takes priority, without opening the archive.
             let strong_start = Script::decode(&script_bytes(&text)).unwrap();
             let empty = GameFiles {
                 script_archive: "missing.cpz".into(),

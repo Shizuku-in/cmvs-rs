@@ -118,7 +118,7 @@ impl State {
         match cap {
             Capability::Bootstrap => h.bootstrap = Some(&mut self.bootstrap),
             Capability::FunctionKeys => {
-                h.function_keys = Some(FunctionKeys::Startup(&mut self.bootstrap))
+                h.function_keys = Some(FunctionKeys::Runtime(&mut self.bootstrap))
             }
             Capability::Platform => {
                 h.platform = Some(PlatformHosts {
@@ -324,7 +324,7 @@ fn function_key_policy_is_unique_explicit_and_preserves_each_environment() {
                     function_keys: Some(if report {
                         FunctionKeys::Input(&mut input)
                     } else {
-                        FunctionKeys::Startup(&mut bootstrap)
+                        FunctionKeys::Runtime(&mut bootstrap)
                     }),
                     ..Default::default()
                 }

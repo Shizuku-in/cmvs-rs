@@ -1,6 +1,8 @@
 //! A window-independent player. All calls for one player belong to one host thread;
 //! the native audio backend owns and synchronizes its device callback separately.
 mod backend;
+mod error;
+pub use error::PlayerError;
 #[allow(unsafe_code)]
 mod ffi;
 #[cfg(all(test, unix))]
@@ -13,7 +15,7 @@ use cmvs_core::{
     profile::Registry,
     ps3::Script,
     raster::RgbaImage,
-    runner::{Startup, StartupEvent, load_start},
+    runtime::{Runtime, RuntimeEvent, RuntimeOptions, SaveStorage, load_start},
     system_save::ProfileSystemSave,
 };
 use cmvs_font::font::FontRenderer;
@@ -23,7 +25,7 @@ self_cell::self_cell! {
     struct Session {
         owner: Script,
         #[covariant]
-        dependent: Startup,
+        dependent: Runtime,
     }
 }
 
@@ -65,6 +67,20 @@ impl Input {
     }
 }
 
+/// Result of one [`Player::tick`]. A budget slice does not publish a partial frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TickOutcome {
+    /// Resume the same VM run in a later slice; no new frame is available.
+    BudgetExhausted,
+    /// A complete frame is available through [`Player::frame`].
+    FrameReady,
+    /// The game requested shutdown.
+    Quit,
+    /// The player is paused or suspended by the game's focus policy.
+    Inactive,
+}
+
+/// An embedded player that configures fonts, audio, movies, and frame composition.
 pub struct Player {
     session: Session,
     backend: HostBackend,
@@ -82,13 +98,14 @@ impl Player {
         user: &Path,
         font_path: &Path,
         native_audio: bool,
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self, PlayerError> {
         Self::open_with_profile(
             root,
             || Ok(ProfileSystemSave::open(user, root)?),
             font_path,
             native_audio,
         )
+        .map_err(PlayerError::Initialization)
     }
     /// Prefer game/savedata, importing old external saves without replacing
     /// existing files. Read-only media retains the external per-game profile.
@@ -97,13 +114,14 @@ impl Player {
         legacy: &Path,
         font_path: &Path,
         native_audio: bool,
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self, PlayerError> {
         Self::open_with_profile(
             root,
             || Ok(storage::game_savedata(root, legacy)?),
             font_path,
             native_audio,
         )
+        .map_err(PlayerError::Initialization)
     }
     fn open_with_profile(
         root: &Path,
@@ -123,10 +141,18 @@ impl Player {
         font.set_user_directory(profile.directory())?;
         let script = load_start(root, &game.files)?;
         let mut audio_control = None;
-        let session = Session::try_new(script, |script| -> Result<Startup<'_>, Box<dyn Error>> {
-            let mut startup = Startup::new(script, root, &game, 0)?;
-            startup.set_save_profile(profile)?;
-            startup.set_save_clock(Box::new(cmvs_core::runner::utc_save_time));
+        let session = Session::try_new(script, |script| -> Result<Runtime<'_>, Box<dyn Error>> {
+            let mut startup = Runtime::with_options(
+                script,
+                root,
+                &game,
+                RuntimeOptions {
+                    saves: SaveStorage::Profile(profile),
+                    decode_cmv_frames: true,
+                    ..Default::default()
+                },
+            )?;
+            startup.set_save_clock(Box::new(cmvs_core::runtime::utc_save_time));
             startup.set_record_text(true);
             startup.set_glyph_metrics(font.metrics());
             if !font.has_face(startup.settings().font_face()) {
@@ -137,7 +163,6 @@ impl Player {
                 audio_control = Some(audio.host_control());
                 startup.set_audio_backend(Box::new(audio))?;
             }
-            startup.set_decode_movie_frames(true);
             startup.set_mgv_factory(Box::new(cmvs_video::PrefetchTheoraFactory::default()));
             startup.set_scene_prefetch(|| {});
             startup.set_decoded_image_cache(256 << 20);
@@ -173,13 +198,13 @@ impl Player {
             audio: audio_control,
         })
     }
-    pub fn key(&mut self, code: usize, pressed: bool) -> Result<(), &'static str> {
+    pub fn set_key_state(&mut self, code: usize, pressed: bool) -> Result<(), &'static str> {
         self.input.key(code, pressed)
     }
-    pub fn pointer(&mut self, x: i32, y: i32) {
+    pub fn set_pointer_position(&mut self, x: i32, y: i32) {
         self.input.pointer = [x, y];
     }
-    pub fn pause(&mut self, paused: bool) {
+    pub fn set_paused(&mut self, paused: bool) {
         self.paused = paused;
         if let Some(audio) = &self.audio {
             audio.set_active(!paused);
@@ -195,57 +220,85 @@ impl Player {
     pub fn size(&self) -> [u32; 2] {
         self.backend.size
     }
-    pub fn serial(&self) -> u64 {
+    pub fn frame_serial(&self) -> u64 {
         self.serial
+    }
+    /// Compatibility name for [`Self::set_key_state`].
+    pub fn key(&mut self, code: usize, pressed: bool) -> Result<(), &'static str> {
+        self.set_key_state(code, pressed)
+    }
+    /// Compatibility name for [`Self::set_pointer_position`].
+    pub fn pointer(&mut self, x: i32, y: i32) {
+        self.set_pointer_position(x, y);
+    }
+    /// Compatibility name for [`Self::set_paused`].
+    pub fn pause(&mut self, paused: bool) {
+        self.set_paused(paused);
+    }
+    /// Compatibility name for [`Self::frame_serial`].
+    pub fn serial(&self) -> u64 {
+        self.frame_serial()
     }
     pub fn frame(&self) -> Option<&RgbaImage> {
         self.backend.frame.as_ref()
     }
-    pub fn save_preferences(&mut self) -> Result<bool, Box<dyn Error>> {
+    pub fn save_preferences(&mut self) -> Result<bool, PlayerError> {
         let display = self.backend.preferences();
         self.session
             .with_dependent_mut(|_, s| s.save_preferences(display))
+            .map_err(PlayerError::Persistence)
     }
-    /// 0 = budget slice, 1 = complete frame, 2 = game quit, 3 = paused/inactive.
-    /// A budget slice must not advance time, re-latch input or expose a partial frame.
-    pub fn tick(&mut self, delta_ms: u32) -> Result<i32, Box<dyn Error>> {
+    /// Run a VM budget slice, publishing a frame only when the VM yields.
+    ///
+    /// `delta_ms` is consumed on a completed frame, capped at 250 ms. When the budget
+    /// expires, pass the same frame delta on the next call; input is latched only once.
+    /// Unsupported commands and barriers retain their structured [`RuntimeEvent`]
+    /// in [`PlayerError::Stopped`].
+    pub fn tick(&mut self, delta_ms: u32) -> Result<TickOutcome, PlayerError> {
         if self.paused {
-            return Ok(3);
+            return Ok(TickOutcome::Inactive);
         }
         self.session.with_dependent_mut(|_, startup| {
-            startup.poll_audio_output()?;
+            startup
+                .poll_audio_output()
+                .map_err(PlayerError::Execution)?;
             if self.input_due {
                 self.input.sample(&self.bindings, startup.input_mut());
                 self.input_due = false;
             }
             for _ in 0..4000 {
-                match startup.tick(&mut self.backend)? {
-                    StartupEvent::Progress | StartupEvent::SnapshotCaptured => {}
-                    StartupEvent::Yield => {
-                        startup.advance_decoded_frame(delta_ms.min(250))?;
+                match startup
+                    .tick(&mut self.backend)
+                    .map_err(PlayerError::Execution)?
+                {
+                    RuntimeEvent::Progress | RuntimeEvent::SnapshotCaptured => {}
+                    RuntimeEvent::Yield => {
+                        startup
+                            .advance_playback(delta_ms.min(250))
+                            .map_err(PlayerError::Execution)?;
                         let frame = if let Some(image) = startup.movie_frame() {
-                            self.backend.movie_canvas(image)?
+                            self.backend
+                                .movie_canvas(image)
+                                .map_err(|e| PlayerError::Execution(e.into()))?
                         } else {
-                            self.font.render(
-                                startup.scene(),
-                                startup.camera(),
-                                startup.messages(),
-                            )?
+                            self.font
+                                .render(startup.scene(), startup.camera(), startup.messages())
+                                .map_err(|e| PlayerError::Execution(e.into()))?
                         };
                         self.backend.frame = Some(frame);
                         self.serial += 1;
                         self.input_due = true;
-                        return Ok(1);
+                        return Ok(TickOutcome::FrameReady);
                     }
-                    StartupEvent::Quit => return Ok(2),
-                    StartupEvent::Inactive => {
+                    RuntimeEvent::Quit => return Ok(TickOutcome::Quit),
+                    RuntimeEvent::Inactive => {
                         self.input_due = true;
-                        return Ok(3);
+                        return Ok(TickOutcome::Inactive);
                     }
-                    event => return Err(format!("CMVS stopped: {event:?}").into()),
+                    event => return Err(PlayerError::Stopped(event)),
                 }
             }
-            Ok(0)
+            Ok(TickOutcome::BudgetExhausted)
         })
     }
 }
@@ -253,6 +306,17 @@ impl Player {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_open_preserves_the_initialization_error_source() {
+        let missing =
+            std::env::temp_dir().join(format!("cmvs-missing-player-{}", std::process::id()));
+        let error = Player::open(&missing, &missing, &missing, false)
+            .err()
+            .unwrap();
+        assert!(matches!(error, PlayerError::Initialization(_)));
+        assert!(error.source().is_some());
+    }
     #[test]
     fn quick_click_is_latched_and_released_at_frame_boundaries() {
         let mut host = Input::default();

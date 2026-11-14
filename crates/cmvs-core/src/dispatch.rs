@@ -252,7 +252,7 @@ pub struct PlatformHosts<'a> {
 /// The existing startup setting and input-reporting modes have different effects.
 /// Callers choose explicitly; handler order never chooses the function-key policy.
 pub enum FunctionKeys<'a> {
-    Startup(&'a mut Bootstrap),
+    Runtime(&'a mut Bootstrap),
     Input(&'a mut ActionInput),
 }
 
@@ -1222,7 +1222,7 @@ fn root_function_keys(
         .as_mut()
         .expect("function key capability checked")
     {
-        FunctionKeys::Startup(host) => Ok(host.handle(call)?),
+        FunctionKeys::Runtime(host) => Ok(host.handle(call)?),
         FunctionKeys::Input(input) => {
             crate::input::handle(call, input)?;
             Ok(Flow::Done)

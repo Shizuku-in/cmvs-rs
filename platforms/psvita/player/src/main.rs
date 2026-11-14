@@ -22,7 +22,7 @@ use cmvs_core::{
     input::KeyBindings,
     profile::Registry,
     raster::RgbaImage,
-    runner::{Startup, StartupEvent, load_start},
+    runtime::{Runtime, RuntimeEvent, RuntimeOptions, SaveStorage, load_start},
     viewport::{Viewport, presentation_mode},
 };
 use cmvs_font::font::FontRenderer;
@@ -140,7 +140,7 @@ fn game_font(base: &Path, encoding: cmvs_core::TextEncoding) -> Result<FontRende
 
 /// Composites the scene on the GPU; the caller presents the canvas.
 fn render_gpu(
-    startup: &Startup<'_>,
+    startup: &Runtime<'_>,
     font: &mut FontRenderer,
     gpu: &mut gpu::GpuRenderer,
 ) -> Result<()> {
@@ -158,7 +158,7 @@ fn render_gpu(
     gpu.render(&frame)
 }
 
-fn render(startup: &Startup<'_>, font: &mut FontRenderer) -> Result<RgbaImage> {
+fn render(startup: &Runtime<'_>, font: &mut FontRenderer) -> Result<RgbaImage> {
     if let Some(frame) = startup.movie_frame() {
         return Ok(frame.clone());
     }
@@ -196,15 +196,21 @@ fn run(
     let record = game.selection.record.ok_or("unregistered game")?;
     let script = load_start(root, &game.files)?;
     let encoding = cmvs_console::encoding::select(root, &game.files, &script)?;
-    let mut startup = Startup::new_with_encoding(&script, root, &game, 0, encoding)?;
     let user = base.join("users").join(&record.game);
-    startup.set_user_data_directory(&user)?;
-    startup.set_block_unreviewed(false);
-    startup.set_block_presumed(false);
+    let mut startup = Runtime::with_options(
+        &script,
+        root,
+        &game,
+        RuntimeOptions {
+            encoding,
+            saves: SaveStorage::UserDirectory(user.clone()),
+            decode_cmv_frames: true,
+            ..Default::default()
+        },
+    )?;
     let (audio, audio_thread) = audio::AudioThread::start(root)?;
     let audio_control = audio.host_control();
     startup.set_audio_backend(Box::new(audio))?;
-    startup.set_decode_movie_frames(true);
     // Core 0 runs the VM and rendering, core 1 the audio thread.
     startup.set_mgv_factory(Box::new(cmvs_video::PrefetchTheoraFactory {
         on_thread_start: || {
@@ -228,7 +234,7 @@ fn run(
     startup.set_record_text(true);
     // Requested screen captures read back the canvas instead of a software redraw.
     startup.set_host_capture(gpu.is_some());
-    startup.set_save_clock(Box::new(cmvs_core::runner::utc_save_time));
+    startup.set_save_clock(Box::new(cmvs_core::runtime::utc_save_time));
     let mut font = game_font(base, encoding)?;
     font.set_user_directory(&user)?;
     startup.set_glyph_metrics(font.metrics());
@@ -308,19 +314,19 @@ fn run(
                 last_poll = last_frame;
             }
             match event {
-                StartupEvent::Progress | StartupEvent::SnapshotCaptured => {}
-                StartupEvent::Quit => {
+                RuntimeEvent::Progress | RuntimeEvent::SnapshotCaptured => {}
+                RuntimeEvent::Quit => {
                     startup.save_preferences(backend.display)?;
                     return Ok(());
                 }
-                StartupEvent::Inactive => {
+                RuntimeEvent::Inactive => {
                     std::thread::sleep(IDLE);
                     last_frame = Instant::now();
                     break;
                 }
-                StartupEvent::Yield => {
+                RuntimeEvent::Yield => {
                     let now = Instant::now();
-                    startup.advance_decoded_frame(millis(now.duration_since(last_frame)))?;
+                    startup.advance_playback(millis(now.duration_since(last_frame)))?;
                     last_frame = now;
                     let linear = backend.display.render_mode == 1;
                     let cursor = controls.cursor_visible().then(|| {

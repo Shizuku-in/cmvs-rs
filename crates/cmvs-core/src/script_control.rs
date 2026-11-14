@@ -2,7 +2,7 @@
 //!
 //! [`ScriptControl`] manages script registrations and scheduled callback entry points.
 //! [`ArchiveScripts`] supplies scripts from the registered archive. The runtime
-//! coordinates these operations through [`crate::runner::Startup`]; rendering and
+//! coordinates these operations through [`crate::runtime::Runtime`]; rendering and
 //! save-snapshot orchestration remain separate.
 use crate::{
     cpz::{ArchiveIndex, Cpz7Parameters},
@@ -47,12 +47,12 @@ pub fn packing_mode_from_start(script: &Script) -> Result<u32, crate::FormatErro
         bytecode::{self, InstructionKind, Term},
     };
     let instructions =
-        bytecode::decode_layout(script.code(), script.header.entry_pc, &script.labels())
+        bytecode::decode_layout(script.code(), script.header().entry_pc, &script.labels())
             .map_err(|_| FormatError("invalid startup script layout"))?;
     let mut value = None;
     let mut pushed = None;
     for instruction in instructions {
-        if instruction.pc < script.header.entry_pc as usize {
+        if instruction.pc < script.header().entry_pc as usize {
             continue;
         }
         match instruction.kind {
@@ -96,12 +96,12 @@ pub fn cpz7_parameters_from_start(
         bytecode::{self, InstructionKind, Term},
     };
     let instructions =
-        bytecode::decode_layout(script.code(), script.header.entry_pc, &script.labels())
+        bytecode::decode_layout(script.code(), script.header().entry_pc, &script.labels())
             .map_err(|_| FormatError("invalid startup script layout"))?;
     let strings = script.strings()?;
     let literal = |at: usize, kind: u16, tag: u16| -> Option<u32> {
         let expr = instructions.get(at)?;
-        if expr.pc < script.header.entry_pc as usize {
+        if expr.pc < script.header().entry_pc as usize {
             return None;
         }
         if instructions.get(at + 1)?.opcode != 0x430 {
@@ -125,7 +125,7 @@ pub fn cpz7_parameters_from_start(
     let mut pack_mode = None;
     let mut found = None;
     for (i, instruction) in instructions.iter().enumerate() {
-        if instruction.pc < script.header.entry_pc as usize {
+        if instruction.pc < script.header().entry_pc as usize {
             continue;
         }
         match &instruction.kind {

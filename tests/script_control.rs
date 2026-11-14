@@ -384,8 +384,7 @@ fn reset_main_with_empty_stack_and_invalid_replacement_is_retryable() {
     let root = script(&[3, 0x20], &[0], &[], 0);
     let mut vm = Machine::new(&root).unwrap();
     pending(&mut vm);
-    let mut invalid = script(&[0, 0x20], &[0], &[], 0);
-    invalid.header.entry_pc = 1;
+    let invalid = script(&[0, 0x20], &[0], &[], 1);
     assert!(vm.switch_main_core(b"main.ps3".to_vec(), invalid).is_err());
     assert_eq!(vm.pending_system(), Some((0, 3)));
     vm.switch_main_core(b"main.ps3".to_vec(), script(&[1, 0x20], &[0], &[], 0))

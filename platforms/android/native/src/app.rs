@@ -9,7 +9,7 @@ use cmvs_core::{
     input::KeyBindings,
     platform::resolve_under,
     profile::Registry,
-    runner::{Startup, StartupEvent, load_start},
+    runtime::{Runtime, RuntimeEvent, RuntimeOptions, SaveStorage, load_start},
 };
 use cmvs_font::font::FontRenderer;
 use cmvs_input::{TouchEvent, TouchInput, TouchPhase, Viewport};
@@ -39,7 +39,7 @@ struct Graphics {
 struct Player<'a> {
     audio_control: HostAudioControl,
     graphics: Option<Graphics>,
-    startup: Startup<'a>,
+    startup: Runtime<'a>,
     backend: MobileBackend,
     touch: TouchInput,
     bindings: KeyBindings,
@@ -186,12 +186,12 @@ impl Player<'_> {
         let start = Instant::now();
         while start.elapsed() < Duration::from_millis(8) {
             match self.startup.tick(&mut self.backend)? {
-                StartupEvent::Progress | StartupEvent::SnapshotCaptured => {}
-                StartupEvent::Quit => {
+                RuntimeEvent::Progress | RuntimeEvent::SnapshotCaptured => {}
+                RuntimeEvent::Quit => {
                     self.exit = true;
                     return Ok(());
                 }
-                StartupEvent::Yield => {
+                RuntimeEvent::Yield => {
                     self.input_due = true;
                     if self.backend.font_pending {
                         // Keep the last canvas while the asynchronous modal dialog
@@ -206,13 +206,13 @@ impl Player<'_> {
                         .as_millis()
                         .min(u128::from(u32::MAX)) as u32;
                     self.last_frame = now;
-                    self.startup.advance_decoded_frame(delta)?;
+                    self.startup.advance_playback(delta)?;
                     self.draw_ready = true;
                     self.redraw()?;
                     self.next_frame = Instant::now() + FRAME_TIME;
                     return Ok(());
                 }
-                StartupEvent::Inactive => {
+                RuntimeEvent::Inactive => {
                     self.last_frame = Instant::now();
                     self.next_frame = self.last_frame + FRAME_TIME;
                     return Ok(());
@@ -349,18 +349,21 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
     );
     let user = directory.join("users").join(&record.game);
     let script = load_start(&root, &game.files)?;
-    let mut startup = Startup::new(&script, &root, &game, 0)?;
-    // Match the desktop host's existing command policy; identity and unsupported
-    // commands still pass through the core's normal validation gates.
-    startup.set_block_unreviewed(false);
-    startup.set_block_presumed(false);
-    startup.set_user_data_directory(&user)?;
+    let mut startup = Runtime::with_options(
+        &script,
+        &root,
+        &game,
+        RuntimeOptions {
+            saves: SaveStorage::UserDirectory(user.clone()),
+            decode_cmv_frames: true,
+            ..Default::default()
+        },
+    )?;
     let audio = NativeAudio::new(&root)?;
     let audio_control = audio.host_control();
     audio_control.set_active(false);
     startup.set_audio_backend(Box::new(audio))?;
     log::info!("Native Vorbis audio enabled");
-    startup.set_decode_movie_frames(true);
     startup.set_mgv_factory(Box::new(cmvs_video::PrefetchTheoraFactory::default()));
     startup.set_scene_prefetch(|| {});
     startup.set_decoded_image_cache(128 << 20);
@@ -370,7 +373,7 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
     if !font.borrow().has_face(startup.settings().font_face()) {
         startup.set_font_face(cmvs_core::settings::DEFAULT_FONT_FACE)?;
     }
-    startup.set_save_clock(Box::new(cmvs_core::runner::utc_save_time));
+    startup.set_save_clock(Box::new(cmvs_core::runtime::utc_save_time));
     let mut keys = String::new();
     File::open(root.join("key.cfg"))?
         .take(65537)

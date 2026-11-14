@@ -1,6 +1,6 @@
 //! Game startup and the host frame loop.
 //!
-//! [`Startup`] connects the VM to resources, scene state, input, audio, and saves.
+//! [`Runtime`] connects the VM to resources, scene state, input, audio, and saves.
 //! Keep the decoded startup script alive for the session and supply a
 //! [`PlatformBackend`] for window and dialog services. Every system command passes
 //! the selected profile's gate before dispatch.
@@ -9,38 +9,43 @@
 //!
 //! ```no_run
 //! use std::path::Path;
-//! use cmvs_core::{profile::Registry, runner::{load_start, Startup}};
+//! use cmvs_core::{profile::Registry, runtime::{load_start, Runtime, RuntimeOptions, SaveStorage}};
 //!
 //! let root = Path::new("game");
 //! let registry = Registry::builtin();
 //! let game = registry.identify_game(root, None)?;
 //! let script = load_start(root, &game.files)?;
-//! let mut session = Startup::new(&script, root, &game, 0)?;
-//! session.set_user_data_directory(Path::new("user-data"))?;
+//! let session = Runtime::with_options(&script, root, &game, RuntimeOptions {
+//!     saves: SaveStorage::UserDirectory("user-data".into()),
+//!     decode_cmv_frames: true,
+//!     ..Default::default()
+//! })?;
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
 //! # Drive the host loop
 //!
-//! 1. Refresh [`Startup::input_mut`] once per frame.
-//! 2. Call [`Startup::tick`] until [`StartupEvent::Yield`] or a stop event. If the
+//! 1. Refresh [`Runtime::input_mut`] once per frame.
+//! 2. Call [`Runtime::tick`] until [`RuntimeEvent::Yield`] or a stop event. If the
 //!    instruction budget runs out first, resume later with the same input; do not
 //!    advance frame time or sample new input yet.
-//! 3. On yield, call [`Startup::advance_decoded_frame`] to advance movies and scene
-//!    state. Enable CMV decoding with [`Startup::set_decode_movie_frames`] if needed.
-//!    [`Startup::advance_frame`] advances timing without reading full-screen CMV frames.
+//! 3. On yield, call [`Runtime::advance_playback`] to advance movies and scene
+//!    state. Enable CMV decoding with [`Runtime::set_decode_cmv_frames`] if needed.
+//!    [`Runtime::advance_frame`] advances timing without reading full-screen CMV frames.
 //! 4. Compose scene, message, and glyph objects for presentation. If host capture is
-//!    enabled, service [`Startup::capture_due`] with [`Startup::supply_capture`].
+//!    enabled, service [`Runtime::capture_due`] with [`Runtime::supply_capture`].
 //!
-//! [`Startup::render_frame`] returns a movie frame or renders the scene without text.
+//! Use [`Runtime::render_scene_frame`] for scene-only output and [`Runtime::movie_frame`]
+//! for decoded full-screen movies. A complete player with fonts and frame composition
+//! is available through `cmvs-host::Player`.
 //! Configure font metrics, audio output, and MGV decoding before commands need them.
 //! The default audio backend records requests without playing them.
 //!
 //! # Stops and errors
 //!
-//! Stop on [`StartupEvent::Unhandled`] rather than retrying the same unsupported
-//! command. [`StartupEvent::Quit`] ends the session. On [`StartupEvent::Inactive`],
-//! wait for host events and service audio with [`Startup::poll_audio_output`].
+//! Stop on [`RuntimeEvent::Unhandled`] rather than retrying the same unsupported
+//! command. [`RuntimeEvent::Quit`] ends the session. On [`RuntimeEvent::Inactive`],
+//! wait for host events and service audio with [`Runtime::poll_audio_output`].
 //! [`SnapshotPolicy`] controls gameplay snapshots. The default captures state and
 //! returns an error if the state includes unsupported records.
 //! Errors from VM execution, resources, and host services propagate to the caller.
@@ -128,9 +133,9 @@ pub fn load_start(root: &Path, files: &GameFiles) -> Result<Script, Box<dyn Erro
     }
     Ok(Script::decode(&bytes)?)
 }
-/// Result of one [`Startup::tick`], used to drive the host loop.
+/// Result of one [`Runtime::tick`], used to drive the host loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StartupEvent {
+pub enum RuntimeEvent {
     /// The session has ended; stop executing its VM.
     Quit,
     /// Host is unfocused and ACTIVE_DRAW is off; no VM instruction was executed.
@@ -153,7 +158,7 @@ pub enum StartupEvent {
     /// The engine snapshot used by gameplay-slot writes was captured.
     SnapshotCaptured,
 }
-/// How [`Startup`] handles script requests to capture gameplay state.
+/// How [`Runtime`] handles script requests to capture gameplay state.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SnapshotPolicy {
     /// Capture the supported engine state, returning an error for unsupported records.
@@ -164,12 +169,57 @@ pub enum SnapshotPolicy {
     /// Apply only the live-state effect and continue without an image (research).
     ContinueWithoutImage,
 }
+
+/// Save sources and destinations selected when creating a runtime.
+#[derive(Default)]
+pub enum SaveStorage {
+    /// Read original game saves without configuring a writable profile.
+    #[default]
+    ReadOnly,
+    /// Use a locked user directory outside the game directory.
+    UserDirectory(PathBuf),
+    /// Use an already locked profile, including explicitly selected game-local saves.
+    Profile(ProfileSystemSave),
+    /// Export system-save data once to a new file outside the game directory.
+    SystemExport(PathBuf),
+}
+
+/// Initialization choices applied before the first VM step.
+///
+/// Defaults use Shift-JIS, read-only save access, recording audio, and snapshot capture.
+/// Hosts install audio, font metrics, and MGV decoders separately, or use `cmvs-host::Player`
+/// for a player that configures those services.
+#[derive(Default)]
+pub struct RuntimeOptions {
+    /// Script text scanner; defaults to Shift-JIS.
+    pub encoding: crate::TextEncoding,
+    /// Initial callback clock, in milliseconds.
+    pub callback_tick: u32,
+    /// Save storage selected before loading user configuration.
+    pub saves: SaveStorage,
+    /// Snapshot capture policy; defaults to [`SnapshotPolicy::Capture`].
+    pub snapshot_policy: SnapshotPolicy,
+    /// Reject commands supported only by legacy presumed evidence.
+    pub block_presumed: bool,
+    /// Reject commands whose semantics have not been reviewed for this profile.
+    pub block_unreviewed: bool,
+    /// Skip startup auto-load only for games with a verified policy.
+    pub skip_auto_resume: bool,
+    /// Decode full-screen CMV frames during [`Runtime::advance_playback`].
+    pub decode_cmv_frames: bool,
+}
+
+/// Compatibility name for [`Runtime`].
+pub type Startup<'a> = Runtime<'a>;
+/// Compatibility name for [`RuntimeEvent`].
+pub type StartupEvent = RuntimeEvent;
+
 /// A running game session with VM, engine state, and resource services.
 ///
 /// Borrows the startup [`Script`] for the session lifetime. Construction opens
 /// resources and configuration; execution begins with [`Self::tick`]. See the
 /// [module guide](self) for initialization and frame-loop order.
-pub struct Startup<'a> {
+pub struct Runtime<'a> {
     slot_edit: Option<slot_edit::SlotEdit>,
     main_script_name: &'static [u8],
     quit: bool,
@@ -232,13 +282,40 @@ pub struct Startup<'a> {
     save_clock: Box<dyn FnMut() -> SaveTime>,
     auto_resume_skipped: bool,
 }
-impl<'a> Startup<'a> {
+impl<'a> Runtime<'a> {
+    /// Create a runtime and apply its initialization choices before any execution.
+    ///
+    /// Save storage is selected once through `options.saves`. Errors from profile
+    /// locking, configuration, or unsupported initialization policies are returned here.
+    pub fn with_options(
+        script: &'a Script,
+        root: &Path,
+        game: &Game<'a>,
+        options: RuntimeOptions,
+    ) -> Result<Self, Box<dyn Error>> {
+        let mut runtime =
+            Self::new_with_encoding(script, root, game, options.callback_tick, options.encoding)?;
+        match options.saves {
+            SaveStorage::ReadOnly => {}
+            SaveStorage::UserDirectory(path) => runtime.set_user_data_directory(&path)?,
+            SaveStorage::Profile(profile) => runtime.set_save_profile(profile)?,
+            SaveStorage::SystemExport(path) => runtime.set_system_save_output(&path)?,
+        }
+        runtime.set_snapshot_policy(options.snapshot_policy);
+        runtime.set_block_presumed(options.block_presumed);
+        runtime.set_block_unreviewed(options.block_unreviewed);
+        runtime.set_skip_auto_resume(options.skip_auto_resume)?;
+        runtime.set_decode_cmv_frames(options.decode_cmv_frames);
+        Ok(runtime)
+    }
+
     /// Create a session using Shift-JIS text and the identified game's profile.
     ///
     /// `root` is the game directory and `virtual_tick` initializes the callback clock.
     /// Uses recording audio and [`SnapshotPolicy::Capture`]. Configure output services
     /// and a writable save profile before ticking. Returns errors from script
     /// validation, configuration, or resource initialization.
+    /// Use [`Self::with_options`] to select save storage and other initialization choices.
     pub fn new(
         script: &'a Script,
         root: &Path,
@@ -436,7 +513,7 @@ impl<'a> Startup<'a> {
     pub fn auto_resume_skipped(&self) -> bool {
         self.auto_resume_skipped
     }
-    /// Startup settings and registered resource paths.
+    /// Runtime settings and registered resource paths.
     pub fn bootstrap(&self) -> &Bootstrap {
         &self.bootstrap
     }
@@ -491,8 +568,12 @@ impl<'a> Startup<'a> {
         self.images.set_decode_threads(threads);
     }
     /// Enable or disable full-screen CMV frame decoding; disabled by default.
-    pub fn set_decode_movie_frames(&mut self, enabled: bool) {
+    pub fn set_decode_cmv_frames(&mut self, enabled: bool) {
         self.movies.set_decode_frames(enabled);
+    }
+    /// Compatibility name for [`Self::set_decode_cmv_frames`].
+    pub fn set_decode_movie_frames(&mut self, enabled: bool) {
+        self.set_decode_cmv_frames(enabled);
     }
     /// Logical screen dimensions `[width, height]` in engine pixels.
     pub fn screen_size(&self) -> [u32; 2] {
@@ -500,6 +581,8 @@ impl<'a> Startup<'a> {
     }
     /// Return the latest full-screen movie frame, or render the scene in software.
     ///
+    /// Compatibility helper. Prefer [`Self::movie_frame`] or [`Self::render_scene_frame`]
+    /// when the host needs to distinguish the two output paths.
     /// Movie frames keep their decoded dimensions; scene output uses [`Self::screen_size`].
     /// To include message windows and glyphs, pass them to
     /// [`crate::scene_render::render_scene`] as additional objects. Unsupported scene
@@ -507,25 +590,23 @@ impl<'a> Startup<'a> {
     pub fn render_frame(&self) -> Result<crate::raster::RgbaImage, crate::FormatError> {
         match self.movie_frame() {
             Some(image) => Ok(image.clone()),
-            None => {
-                let [width, height] = self.screen_size();
-                crate::scene_render::render_scene(
-                    &self.scene,
-                    Some(&self.camera),
-                    &[],
-                    width,
-                    height,
-                )
-            }
+            None => self.render_scene_frame(),
         }
+    }
+    /// Render scene objects in software at the logical screen size.
+    ///
+    /// Message windows, glyphs, and full-screen movies are composed by the host.
+    pub fn render_scene_frame(&self) -> Result<crate::raster::RgbaImage, crate::FormatError> {
+        let [width, height] = self.screen_size();
+        crate::scene_render::render_scene(&self.scene, Some(&self.camera), &[], width, height)
     }
     /// Service audio and advance movies and scene state by `delta_ms` milliseconds.
     ///
     /// Uses the movie audio clock when provided. Full-screen CMV decoding requires
-    /// [`Self::set_decode_movie_frames`]; MGV playback uses its installed decoder.
+    /// [`Self::set_decode_cmv_frames`]; MGV playback uses its installed decoder.
     /// Call this or [`Self::advance_frame`] once at the frame boundary, not both.
     /// Resource, codec, audio, and scene-update failures propagate to the host.
-    pub fn advance_decoded_frame(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error>> {
+    pub fn advance_playback(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error>> {
         if self.quit {
             return Ok(());
         }
@@ -545,6 +626,10 @@ impl<'a> Startup<'a> {
         }
         self.movies.advance_scene(delta_ms, &mut self.scene)?;
         self.advance_frame_state(delta_ms)
+    }
+    /// Compatibility name for [`Self::advance_playback`].
+    pub fn advance_decoded_frame(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error>> {
+        self.advance_playback(delta_ms)
     }
     /// The main loop 0x14000e400 draws after the updates (0x140015900, then 0x140009c90);
     /// the draw 0x140015fc0 ends with 0x1400157b0, which serves a pending 0x2304 request.
@@ -639,7 +724,7 @@ impl<'a> Startup<'a> {
     }
     /// Advance scene and movie timing by `delta_ms` milliseconds without full-screen CMV reads.
     ///
-    /// Unlike [`Self::advance_decoded_frame`], this does not service audio output or
+    /// Unlike [`Self::advance_playback`], this does not service audio output or
     /// use its movie clock. Scene movies and MGV playback still advance. The VM timer
     /// delta is consumed once after yield, never per instruction or budget slice.
     pub fn advance_frame(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error>> {
@@ -716,7 +801,7 @@ impl<'a> Startup<'a> {
     pub fn settings(&self) -> &crate::settings::SettingsHost {
         &self.settings
     }
-    // Startup check 0x14000b666 substitutes a missing configured font face.
+    // Runtime check 0x14000b666 substitutes a missing configured font face.
     /// Set the initial font face, encoded in the game's text encoding.
     ///
     /// Call before font objects are created. Hosts may use this to replace an
@@ -837,8 +922,8 @@ impl<'a> Startup<'a> {
     }
     /// Attempt one VM step and dispatch its system command through the profile gate.
     ///
-    /// Returns [`StartupEvent::Inactive`] without stepping when focus policy pauses
-    /// execution, or [`StartupEvent::Quit`] after shutdown. Stop on an unhandled
+    /// Returns [`RuntimeEvent::Inactive`] without stepping when focus policy pauses
+    /// execution, or [`RuntimeEvent::Quit`] after shutdown. Stop on an unhandled
     /// command or snapshot barrier; repeated ticks cannot advance past either.
     /// Errors include command-gate rejection, the yield watchdog, and failures from
     /// instruction execution, resources, or backend services. See the [module guide](self)
@@ -846,16 +931,16 @@ impl<'a> Startup<'a> {
     pub fn tick(
         &mut self,
         backend: &mut impl PlatformBackend,
-    ) -> Result<StartupEvent, Box<dyn Error>> {
+    ) -> Result<RuntimeEvent, Box<dyn Error>> {
         if self.quit {
-            return Ok(StartupEvent::Quit);
+            return Ok(RuntimeEvent::Quit);
         }
         self.audio.sync_output_activity(
             self.focused || self.settings.active_draw(),
             self.audio_backend.as_mut(),
         )?;
         if !self.frame_running() {
-            return Ok(StartupEvent::Inactive);
+            return Ok(RuntimeEvent::Inactive);
         }
         if std::mem::take(&mut self.capture_due) {
             self.draw_capture()?;
@@ -870,7 +955,7 @@ impl<'a> Startup<'a> {
         let before = self.steps;
         let event = self.step_once(backend)?;
         if self.steps != before {
-            if event == StartupEvent::Yield {
+            if event == RuntimeEvent::Yield {
                 self.since_yield = 0;
             } else {
                 self.since_yield += 1;
@@ -882,7 +967,7 @@ impl<'a> Startup<'a> {
         &mut self,
         request: crate::dispatch::RuntimeCall,
         backend: &mut impl PlatformBackend,
-    ) -> Result<StartupEvent, Box<dyn Error>> {
+    ) -> Result<RuntimeEvent, Box<dyn Error>> {
         use crate::dispatch::RuntimeOperation::*;
         request.validate(&self.machine)?;
         match request.operation() {
@@ -897,7 +982,7 @@ impl<'a> Startup<'a> {
                 vm.repeat_count = 0;
                 self.capture_snapshot(vm)?;
                 request.complete(&mut self.machine, 0x4000)?;
-                return Ok(StartupEvent::SnapshotCaptured);
+                return Ok(RuntimeEvent::SnapshotCaptured);
             }
             LoadSlot { slot } => self.handle_load_slot(&request, slot, backend)?,
             SaveSlot { slot } => self.handle_save_slot(&request, slot)?,
@@ -914,16 +999,16 @@ impl<'a> Startup<'a> {
                 text_slot,
             } => self.handle_slot_info(&request, slot, object, child, label_slot, text_slot)?,
         }
-        Ok(StartupEvent::Progress)
+        Ok(RuntimeEvent::Progress)
     }
     fn step_once(
         &mut self,
         backend: &mut impl PlatformBackend,
-    ) -> Result<StartupEvent, Box<dyn Error>> {
+    ) -> Result<RuntimeEvent, Box<dyn Error>> {
         self.messages.set_text_settings(self.settings.text_output());
         self.messages.set_default_face(self.settings.font_face());
         if self.main_barrier {
-            return Ok(StartupEvent::MainPreparedNeedsSnapshot);
+            return Ok(RuntimeEvent::MainPreparedNeedsSnapshot);
         }
         if self.resume_run {
             // 0x140019430: the gesture update follows the input refresh and precedes the VM.
@@ -943,9 +1028,9 @@ impl<'a> Startup<'a> {
         let Step::System { pc, command } = event else {
             self.resume_run = event == Step::Yield;
             return Ok(if event == Step::Yield {
-                StartupEvent::Yield
+                RuntimeEvent::Yield
             } else {
-                StartupEvent::Progress
+                RuntimeEvent::Progress
             });
         };
         let resolved = self.gate.resolve(&self.machine, pc, command)?;
@@ -965,7 +1050,7 @@ impl<'a> Startup<'a> {
                 Some(crate::dispatch::Flow::Runtime(request)) => {
                     self.handle_runtime(request, backend)
                 }
-                _ => Ok(StartupEvent::Unhandled {
+                _ => Ok(RuntimeEvent::Unhandled {
                     pc,
                     command: command + 0x2000,
                 }),
@@ -990,9 +1075,9 @@ impl<'a> Startup<'a> {
             )?;
             if flow == Some(crate::dispatch::Flow::SystemWritten) {
                 self.system_source = FileSystemSave::new(output.path());
-                return Ok(StartupEvent::Progress);
+                return Ok(RuntimeEvent::Progress);
             }
-            return Ok(StartupEvent::Unhandled {
+            return Ok(RuntimeEvent::Unhandled {
                 pc,
                 command: command + 0x2000,
             });
@@ -1001,7 +1086,7 @@ impl<'a> Startup<'a> {
             let mut hosts = crate::dispatch::Hosts::default();
             if command == 0x34d {
                 hosts.function_keys =
-                    Some(crate::dispatch::FunctionKeys::Startup(&mut self.bootstrap));
+                    Some(crate::dispatch::FunctionKeys::Runtime(&mut self.bootstrap));
             } else {
                 hosts.bootstrap = Some(&mut self.bootstrap);
             }
@@ -1016,9 +1101,9 @@ impl<'a> Startup<'a> {
             self.audio_backend
                 .configure_archive_parameters(self.bootstrap.archive_parameters())?;
             return Ok(if flow == Some(crate::dispatch::Flow::Done) {
-                StartupEvent::Progress
+                RuntimeEvent::Progress
             } else {
-                StartupEvent::Unhandled {
+                RuntimeEvent::Unhandled {
                     pc,
                     command: command + 0x2000,
                 }
@@ -1046,7 +1131,7 @@ impl<'a> Startup<'a> {
             .expect("registered wait has a dispatch result");
             self.resume_run = flow.yields();
             return Ok(match flow {
-                crate::dispatch::Flow::Done => StartupEvent::Progress,
+                crate::dispatch::Flow::Done => RuntimeEvent::Progress,
                 crate::dispatch::Flow::Runtime(_)
                 | crate::dispatch::Flow::Control(_)
                 | crate::dispatch::Flow::SystemSave(_)
@@ -1054,9 +1139,9 @@ impl<'a> Startup<'a> {
                 | crate::dispatch::Flow::Platform(_) => {
                     unreachable!("wait handler returned a platform event")
                 }
-                crate::dispatch::Flow::Yield | crate::dispatch::Flow::Wait => StartupEvent::Yield,
+                crate::dispatch::Flow::Yield | crate::dispatch::Flow::Wait => RuntimeEvent::Yield,
                 crate::dispatch::Flow::Unhandled | crate::dispatch::Flow::Unavailable => {
-                    StartupEvent::Unhandled {
+                    RuntimeEvent::Unhandled {
                         pc,
                         command: command + 0x2000,
                     }
@@ -1103,9 +1188,9 @@ impl<'a> Startup<'a> {
             self.message_flags = message_flags;
             self.resume_run = flow.yields();
             return Ok(match flow {
-                crate::dispatch::Flow::Done => StartupEvent::Progress,
-                crate::dispatch::Flow::Wait | crate::dispatch::Flow::Yield => StartupEvent::Yield,
-                _ => StartupEvent::Unhandled {
+                crate::dispatch::Flow::Done => RuntimeEvent::Progress,
+                crate::dispatch::Flow::Wait | crate::dispatch::Flow::Yield => RuntimeEvent::Yield,
+                _ => RuntimeEvent::Unhandled {
                     pc,
                     command: command + 0x2000,
                 },
@@ -1276,18 +1361,18 @@ impl<'a> Startup<'a> {
                     }
                     self.auto_resume_checked = true;
                 }
-                return Ok(StartupEvent::Progress);
+                return Ok(RuntimeEvent::Progress);
             }
             if let crate::dispatch::Flow::Control(event) = flow {
                 if event == ControlEvent::MainPreparedNeedsSnapshot {
                     match self.snapshot_policy {
                         SnapshotPolicy::Barrier => {
                             self.main_barrier = true;
-                            return Ok(StartupEvent::MainPreparedNeedsSnapshot);
+                            return Ok(RuntimeEvent::MainPreparedNeedsSnapshot);
                         }
                         SnapshotPolicy::ContinueWithoutImage => {
                             self.save_image.capture_unavailable(&mut self.machine)?;
-                            return Ok(StartupEvent::MainEnteredWithoutSnapshot);
+                            return Ok(RuntimeEvent::MainEnteredWithoutSnapshot);
                         }
                         SnapshotPolicy::Capture => {
                             // Main is already loaded; a failed capture keeps the barrier sticky
@@ -1300,11 +1385,11 @@ impl<'a> Startup<'a> {
                                 self.main_barrier = true;
                                 return Err(why);
                             }
-                            return Ok(StartupEvent::SnapshotCaptured);
+                            return Ok(RuntimeEvent::SnapshotCaptured);
                         }
                     }
                 }
-                return Ok(StartupEvent::Progress);
+                return Ok(RuntimeEvent::Progress);
             }
             return Ok(match flow {
                 crate::dispatch::Flow::Runtime(_)
@@ -1313,30 +1398,30 @@ impl<'a> Startup<'a> {
                 | crate::dispatch::Flow::SystemWritten => {
                     unreachable!("storage event handled before ordinary flow")
                 }
-                crate::dispatch::Flow::Done => StartupEvent::Progress,
+                crate::dispatch::Flow::Done => RuntimeEvent::Progress,
                 crate::dispatch::Flow::Platform(event) => {
                     let yields = event == crate::platform::PlatformEvent::Yield;
                     self.resume_run = yields;
                     if yields {
-                        StartupEvent::Yield
+                        RuntimeEvent::Yield
                     } else {
-                        StartupEvent::Progress
+                        RuntimeEvent::Progress
                     }
                 }
                 crate::dispatch::Flow::Yield | crate::dispatch::Flow::Wait => {
                     self.message_flags = message_flags;
                     self.resume_run = true;
-                    StartupEvent::Yield
+                    RuntimeEvent::Yield
                 }
                 crate::dispatch::Flow::Unhandled | crate::dispatch::Flow::Unavailable => {
-                    StartupEvent::Unhandled {
+                    RuntimeEvent::Unhandled {
                         pc,
                         command: command + 0x2000,
                     }
                 }
             });
         }
-        Ok(StartupEvent::Unhandled {
+        Ok(RuntimeEvent::Unhandled {
             pc,
             command: command + 0x2000,
         })

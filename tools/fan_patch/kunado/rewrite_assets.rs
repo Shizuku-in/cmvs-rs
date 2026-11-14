@@ -32,7 +32,7 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 fn encode_memory(raw: &[u8]) -> Result<Vec<u8>> {
     let script = Script::from_memory_image(raw)?;
-    let key = script.header.key;
+    let key = script.header().key;
     let xor = ((key >> 3).wrapping_add(key >> 24)) as u8;
     let shift = (key >> 20) % 5 + 1;
     let mut out = raw[..48].to_vec();
@@ -211,7 +211,7 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
             scripts::rewrite_encoded(&source, &rows, encoding, GBK_SUBSTITUTIONS)
                 .map_err(|e| format!("{basename}: {e}"))?;
         let decoded = Script::decode(&converted)?;
-        bytecode::decode_layout(decoded.code(), decoded.header.entry_pc, &decoded.labels())?;
+        bytecode::decode_layout(decoded.code(), decoded.header().entry_pc, &decoded.labels())?;
         report.push_str(&format!(
             "{basename}\t{has_patch}\t{}\t{changed}\t{}\n",
             rows.len(),
@@ -367,7 +367,7 @@ mod tests {
         assert!(patch_rows(&original, &memory(b"wrong\0")?, false).is_err());
         let code = [1, 2, 0x20, 1, 12, 0, 0, 0, 15, 2, 0x30, 4];
         let source = memory_with_code(patch.text(), &code)?;
-        let raw = encode_memory(&source.memory_image(source.unknown())?)?;
+        let raw = encode_memory(&source.memory_image(source.data())?)?;
         for (encoding, offset) in [
             (scripts::OutputEncoding::Utf8, 13),
             (scripts::OutputEncoding::Gbk, 12),

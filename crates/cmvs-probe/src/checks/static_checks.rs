@@ -34,7 +34,7 @@ impl ScriptInventory {
         self.scripts += 1;
         let checked = raw.and_then(|raw| {
             let script = Script::decode(&raw).map_err(|e| e.to_string())?;
-            bytecode::decode_layout(script.code(), script.header.entry_pc, &script.labels())
+            bytecode::decode_layout(script.code(), script.header().entry_pc, &script.labels())
                 .map_err(|e| e.to_string())
         });
         match checked {
@@ -396,7 +396,7 @@ pub fn bundled_saves(target: &Target) -> CheckResult {
     let layout = target
         .game
         .as_ref()
-        .and_then(|game| cmvs_core::runner::snapshot_layout_for(game.selection.profile))
+        .and_then(|game| cmvs_core::runtime::snapshot_layout_for(game.selection.profile))
         .unwrap_or(cmvs_core::snapshot::SnapshotLayout::TextV3);
     let mut rows = Vec::new();
     let mut failed = 0;

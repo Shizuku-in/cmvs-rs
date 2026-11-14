@@ -2,7 +2,7 @@
 //!
 //! Start with [`Registry::builtin`] and [`Registry::identify_game`] to match a game
 //! directory to a known build. [`Game`] contains the selected profile and resource
-//! paths needed by [`crate::runner::Startup`]. An unknown game is an error unless
+//! paths needed by [`crate::runtime::Runtime`]. An unknown game is an error unless
 //! the caller explicitly selects a profile.
 //!
 //! [`CommandGate`] checks system commands before dispatch. Absent and no-op commands

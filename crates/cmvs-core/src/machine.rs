@@ -6,7 +6,7 @@
 //! dedicated control methods. [`Step::Yield`] returns control to the host.
 //!
 //! This layer does not identify games, load resources, or initialize a full session.
-//! Use [`crate::runner::Startup`] for those services. Reading an uninitialized
+//! Use [`crate::runtime::Runtime`] for those services. Reading an uninitialized
 //! variable or executing an unsupported instruction produces [`DecodeError`].
 use crate::{
     bytecode::{self, DecodeError, Expression, Instruction, InstructionKind, Term},
@@ -75,7 +75,7 @@ impl<'a> Image<'a> {
             .map(|i| (i.pc, Rc::new(i)))
             .collect();
         Ok(Self {
-            data: script.unknown().to_vec(),
+            data: script.data().to_vec(),
             script,
             instructions,
             labels,
@@ -155,7 +155,7 @@ impl<'a> Machine<'a> {
     ///
     /// Returns an error for an invalid instruction layout or entry point.
     pub fn new(script: &'a Script) -> Result<Self, DecodeError> {
-        Self::at(script, script.header.entry_pc)
+        Self::at(script, script.header().entry_pc)
     }
     /// Create a VM at a byte offset in the code segment, using Shift-JIS text.
     ///
@@ -170,7 +170,7 @@ impl<'a> Machine<'a> {
         script: &'a Script,
         encoding: crate::TextEncoding,
     ) -> Result<Self, DecodeError> {
-        Self::at_with_encoding(script, script.header.entry_pc, encoding)
+        Self::at_with_encoding(script, script.header().entry_pc, encoding)
     }
     /// Text encoding used by this VM.
     pub fn text_encoding(&self) -> crate::TextEncoding {
@@ -317,7 +317,7 @@ impl<'a> Machine<'a> {
             return Err("saved call frame lies above the stack pointer");
         }
         let mut stack = ParameterStack::from_saved(&image.stack, sp, 65536).map_err(|e| e.0)?;
-        let entry = script.header.entry_pc;
+        let entry = script.header().entry_pc;
         let main = Image::prepare(Cow::Owned(script), image.script_names[0].clone(), entry)
             .map_err(|_| "saved main script layout is invalid")?;
         let mut candidate_state = self.state.clone();
@@ -861,7 +861,7 @@ impl<'a> Machine<'a> {
                 "cannot replace an active common script",
             ));
         }
-        let entry = script.header.entry_pc as usize;
+        let entry = script.header().entry_pc as usize;
         let image = Image::prepare(Cow::Owned(script), name, entry as u32)?;
         let stack = self.transfer_stack(argument_bytes, 0x2081)?;
         self.images.insert(slot, image);
@@ -893,7 +893,7 @@ impl<'a> Machine<'a> {
         name: Vec<u8>,
         script: Script,
     ) -> Result<PreparedMain<'a>, DecodeError> {
-        let entry = script.header.entry_pc;
+        let entry = script.header().entry_pc;
         Ok(PreparedMain(Image::prepare(
             Cow::Owned(script),
             name,
@@ -902,7 +902,7 @@ impl<'a> Machine<'a> {
     }
 
     pub(crate) fn replace_main(&mut self, prepared: PreparedMain<'a>) {
-        let entry = prepared.0.script.header.entry_pc as usize;
+        let entry = prepared.0.script.header().entry_pc as usize;
         self.images.insert(0, prepared.0);
         self.slot = 0;
         self.pc = entry;

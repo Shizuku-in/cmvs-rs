@@ -491,7 +491,7 @@ fn external_archive_resources() -> Result<(), Box<dyn std::error::Error>> {
                 let script = cmvs_rs::ps3::Script::decode(&data)?;
                 cmvs_rs::bytecode::decode_layout(
                     script.code(),
-                    script.header.entry_pc,
+                    script.header().entry_pc,
                     &script.labels(),
                 )?;
             }

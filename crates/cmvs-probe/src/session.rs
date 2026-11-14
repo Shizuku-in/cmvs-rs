@@ -14,7 +14,7 @@ use cmvs_core::{
     platform::RecordingBackend,
     profile::{GateError, GateErrorKind},
     ps3::Script,
-    runner::{SnapshotPolicy, Startup, StartupEvent},
+    runtime::{Runtime, RuntimeEvent, RuntimeOptions, SaveStorage, SnapshotPolicy},
 };
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -126,7 +126,7 @@ fn gate_kind(kind: GateErrorKind) -> &'static str {
 }
 
 pub struct Session<'a> {
-    run: Startup<'a>,
+    run: Runtime<'a>,
     backend: RecordingBackend,
     render_frames: bool,
     font: Option<cmvs_desktop::font::FontRenderer>,
@@ -195,20 +195,26 @@ impl<'a> Session<'a> {
             return Err("software frame rendering requires a font".into());
         }
         let game = target.game.as_ref().ok_or("no engine profile selected")?;
-        let mut run = Startup::new(script, &target.root, game, 0).map_err(|e| e.to_string())?;
+        let snapshot_policy = if options.capture_snapshots && target.has(cap::SNAPSHOT_LAYOUT) {
+            SnapshotPolicy::Capture
+        } else {
+            SnapshotPolicy::ContinueWithoutImage
+        };
+        let mut run = Runtime::with_options(
+            script,
+            &target.root,
+            game,
+            RuntimeOptions {
+                saves: SaveStorage::UserDirectory(user.to_owned()),
+                snapshot_policy,
+                block_presumed: options.block_presumed,
+                block_unreviewed: options.block_unreviewed,
+                skip_auto_resume: target.has(cap::AUTO_RESUME_POLICY),
+                ..Default::default()
+            },
+        )
+        .map_err(|e| e.to_string())?;
         run.set_mgv_factory(Box::new(cmvs_desktop::video::TheoraFactory));
-        run.set_block_presumed(options.block_presumed);
-        run.set_block_unreviewed(options.block_unreviewed);
-        run.set_user_data_directory(user)
-            .map_err(|e| e.to_string())?;
-        // Data-driven: only records that verify the policy enable it.
-        if target.has(cap::AUTO_RESUME_POLICY) {
-            run.set_skip_auto_resume(true)?;
-        }
-        if !options.capture_snapshots || !target.has(cap::SNAPSHOT_LAYOUT) {
-            // Capability, not a game branch: the live-state effect still applies.
-            run.set_snapshot_policy(SnapshotPolicy::ContinueWithoutImage);
-        }
         run.set_record_text(true);
         if let Some(font) = font {
             run.set_glyph_metrics(font.metrics());
@@ -262,7 +268,7 @@ impl<'a> Session<'a> {
             session
         })
     }
-    pub fn startup(&self) -> &Startup<'a> {
+    pub fn startup(&self) -> &Runtime<'a> {
         &self.run
     }
     /// Starts recording executed addresses; costs one set insertion per VM step.
@@ -439,14 +445,14 @@ impl<'a> Session<'a> {
                 );
             }
             match event {
-                StartupEvent::Yield => break,
-                StartupEvent::Progress | StartupEvent::SnapshotCaptured => {}
-                StartupEvent::MainEnteredWithoutSnapshot => {
+                RuntimeEvent::Yield => break,
+                RuntimeEvent::Progress | RuntimeEvent::SnapshotCaptured => {}
+                RuntimeEvent::MainEnteredWithoutSnapshot => {
                     self.event("main-without-snapshot", Json::Null);
                 }
-                StartupEvent::Quit => return Err(self.stop(Stop::Quit)),
+                RuntimeEvent::Quit => return Err(self.stop(Stop::Quit)),
                 // The event already carries the full 0x2000-based opcode.
-                StartupEvent::Unhandled { pc, command } => {
+                RuntimeEvent::Unhandled { pc, command } => {
                     let blocked = Blocked {
                         command,
                         script: self.run.machine().current_name().escape_ascii().to_string(),
@@ -467,7 +473,7 @@ impl<'a> Session<'a> {
                 .map_err(|e| Stop::Error(e.to_string()))?;
         }
         let advanced = if self.render_frames {
-            self.run.advance_decoded_frame(self.frame_ms)
+            self.run.advance_playback(self.frame_ms)
         } else {
             self.run.advance_frame(self.frame_ms)
         };
@@ -605,7 +611,7 @@ impl<'a> Session<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cmvs_core::{platform::PlatformBackend, runner::load_start};
+    use cmvs_core::{platform::PlatformBackend, runtime::load_start};
 
     #[test]
     #[ignore = "requires CMVS_TEST_FONT; uses only synthetic scripts and archives"]

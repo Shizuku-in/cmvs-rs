@@ -10,7 +10,7 @@ use cmvs_rs::{
     platform::RecordingBackend,
     profile::Registry,
     ps3::Script,
-    runner::{Startup, load_start},
+    runtime::{Runtime, load_start},
 };
 use shared_audio::SharedAudio;
 use std::{cell::RefCell, collections::BTreeMap, error::Error, fs, path::PathBuf, rc::Rc};
@@ -199,12 +199,12 @@ fn audio_backend_tracks_registered_paths_and_keys() {
         .identify_game(&root, Some("cmvs-20221105"))
         .unwrap();
     let script = load_start(&root, &game.files).unwrap();
-    let mut run = Startup::new(&script, &root, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root, &game, 0).unwrap();
     let first = Seen::default();
     run.set_audio_backend(Box::new(Mirror(first.clone())))
         .unwrap();
     let mut platform = RecordingBackend::default();
-    let mut run_command = |run: &mut Startup<'_>| {
+    let mut run_command = |run: &mut Runtime<'_>| {
         let target = run.bootstrap().handled_count() + 1;
         for _ in 0..16 {
             if run.bootstrap().handled_count() == target {
@@ -214,7 +214,7 @@ fn audio_backend_tracks_registered_paths_and_keys() {
         }
         panic!("bootstrap command did not complete");
     };
-    let mirrors = |seen: &Seen, run: &Startup<'_>| {
+    let mirrors = |seen: &Seen, run: &Runtime<'_>| {
         let seen = seen.borrow();
         seen.paths.as_ref() == Some(run.bootstrap().paths())
             && seen.keys.as_ref() == Some(run.bootstrap().archive_parameters())
@@ -262,7 +262,7 @@ fn puriring_preload_sees_the_paths_registered_before_it() {
         .identify_game(&root, Some("cmvs-20070119"))
         .unwrap();
     let script = load_start(&root, &game.files).unwrap();
-    let mut run = Startup::new(&script, &root, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root, &game, 0).unwrap();
     let seen = Seen::default();
     run.set_audio_backend(Box::new(Mirror(seen.clone())))
         .unwrap();

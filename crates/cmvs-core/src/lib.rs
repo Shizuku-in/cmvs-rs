@@ -7,7 +7,7 @@
 //! | Inspect or extract an archive | [`cpz::ArchiveIndex`] |
 //! | Read a script or disassemble instructions | [`ps3::Script`], [`bytecode`] |
 //! | Decode an image | [`pb3::decode`], [`image::load`] |
-//! | Identify a game and run it | [`profile::Registry`], [`runner::Startup`] |
+//! | Identify a game and run it | [`profile::Registry`], [`runtime::Runtime`] |
 //! | Execute individual VM instructions | [`machine::Machine`] |
 //! | Implement a window, input, or output backend | [`platform::PlatformBackend`], [`input`], [`audio::AudioBackend`] |
 //! | Render engine state | [`scene_render`], [`raster::RgbaImage`] |
@@ -20,7 +20,7 @@
 //!
 //! let bytes = std::fs::read("data/pack/start.ps3")?;
 //! let script = Script::decode(&bytes)?;
-//! println!("entry: {}, code bytes: {}", script.header.entry_pc, script.code().len());
+//! println!("entry: {}, code bytes: {}", script.header().entry_pc, script.code().len());
 //! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
 //!
@@ -29,8 +29,9 @@
 //!
 //! # Running and hosting
 //!
-//! Use [`runner::Startup`] to run an identified game in a host's frame loop. It
-//! combines the selected profile, VM, resources, and engine state. Use
+//! For an embedded player with fonts, audio, and frame composition, use
+//! `cmvs-host::Player`. For a custom host, [`runtime::Runtime`] combines the selected
+//! profile, VM, resources, and engine state in a frame loop. Use
 //! [`machine::Machine`] for individual VM steps and handle system commands yourself.
 //!
 //! The host supplies windows, graphics devices, and audio output. Desktop builds
@@ -79,7 +80,9 @@ pub mod ps3;
 pub mod random;
 pub mod raster;
 pub mod resources;
-pub mod runner;
+pub mod runtime;
+/// Compatibility path for [`runtime`].
+pub use runtime as runner;
 pub mod save;
 pub mod save_menu;
 pub mod scene;

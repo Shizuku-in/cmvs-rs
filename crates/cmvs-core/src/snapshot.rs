@@ -1,7 +1,7 @@
 //! Engine-state snapshot records for gameplay saves.
 //!
 //! Snapshot capture and restoration cover the implemented record layouts. A decoded
-//! [`crate::save`] container alone is not a restored runtime; [`crate::runner::Startup`]
+//! [`crate::save`] container alone is not a restored runtime; [`crate::runtime::Runtime`]
 //! coordinates live-state changes and snapshot policy.
 
 // Capture follows 0x140069270 record framing and its verified live-state effect.

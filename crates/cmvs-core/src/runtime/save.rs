@@ -1,7 +1,7 @@
 //! Gameplay saves for the researched layout: the engine snapshot (0x140069270) taken at
 //! 0x2080 and 0x22b2, slot writes 0x22b6 (0x140080b20), loads 0x22b5 (0x140081960 then
 //! 0x140069fd0), thumbnails 0x22b8 (0x14006b4a0) and the slot queries 0x22b7 / 0x22bd.
-use super::{Startup, SystemOutput};
+use super::{Runtime, SystemOutput};
 use crate::filesystem as fs;
 use crate::{
     audio::SavedAudio,
@@ -381,7 +381,7 @@ fn validate_child_slots_without_button_lists<'a>(
     Ok(())
 }
 
-impl Startup<'_> {
+impl Runtime<'_> {
     pub(super) fn system_save_identifier(&self) -> Option<u32> {
         // 20070119 0x408b00 / 20071117 0x40bdf0 / 20080719 0x40bea0 zero the CSS1
         // header and never write offset 68: a format constant, not a game identifier.

@@ -44,7 +44,7 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<()> {
 }
 fn encode_memory(raw: &[u8]) -> Result<Vec<u8>> {
     let script = Script::from_memory_image(raw)?;
-    let key = script.header.key;
+    let key = script.header().key;
     let xor = ((key >> 3).wrapping_add(key >> 24)) as u8;
     let shift = (key >> 20) % 5 + 1;
     let mut out = raw[..48].to_vec();
@@ -240,7 +240,7 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
             scripts::rewrite_encoded(&source, &rows, encoding, GBK_SUBSTITUTIONS)
                 .map_err(|e| format!("{basename}: {e}"))?;
         let decoded = Script::decode(&converted)?;
-        bytecode::decode_layout(decoded.code(), decoded.header.entry_pc, &decoded.labels())?;
+        bytecode::decode_layout(decoded.code(), decoded.header().entry_pc, &decoded.labels())?;
         report.push_str(&format!(
             "{basename}\t{has_patch}\t{}\t{changed}\t{}\n",
             rows.len(),
@@ -407,7 +407,7 @@ mod tests {
         assert_eq!(String::from_utf8_lossy(&rows[&12]), "简");
         assert!(rows[&15].is_empty());
         assert!(patch_rows(&original, &memory(b"x\0last.ps3\0z\0")?, &mapping).is_err());
-        let raw = patch.memory_image(patch.unknown())?;
+        let raw = patch.memory_image(patch.data())?;
         assert_eq!(
             Script::decode(&encode_memory(&raw)?)?.payload(),
             patch.payload()
@@ -419,7 +419,7 @@ mod tests {
     #[test]
     fn gbk_replacements_are_explicit_and_utf8_keeps_source_characters() -> Result<()> {
         let original = memory(b"old\0")?;
-        let raw = encode_memory(&original.memory_image(original.unknown())?)?;
+        let raw = encode_memory(&original.memory_image(original.data())?)?;
         let text: String = GBK_SUBSTITUTIONS.iter().map(|(c, _)| *c).collect();
         let expected: String = GBK_SUBSTITUTIONS.iter().map(|(_, s)| *s).collect();
         let rows = BTreeMap::from([(0, text.as_bytes().to_vec())]);

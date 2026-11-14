@@ -281,7 +281,7 @@ impl FontLibrary {
         self.loaded.insert(name.to_vec(), font);
         Ok(())
     }
-    /// Startup existence check (0x140007f80): whether a face can be resolved.
+    /// Runtime existence check (0x140007f80): whether a face can be resolved.
     pub fn contains(&mut self, face: &[u8], encoding: TextEncoding) -> bool {
         self.face(face, encoding).is_ok()
     }

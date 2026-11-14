@@ -1,14 +1,14 @@
 //! A cooperative host budget is not an engine frame boundary.
-use cmvs_core::runner::StartupEvent;
+use cmvs_core::runtime::RuntimeEvent;
 
 #[derive(Default)]
 pub(crate) struct FrameBoundary {
     ready: bool,
 }
 impl FrameBoundary {
-    pub(crate) fn observe(&mut self, event: StartupEvent) {
-        if event != StartupEvent::Inactive {
-            self.ready = event == StartupEvent::Yield;
+    pub(crate) fn observe(&mut self, event: RuntimeEvent) {
+        if event != RuntimeEvent::Inactive {
+            self.ready = event == RuntimeEvent::Yield;
         }
     }
     pub(crate) fn ready(&self) -> bool {
@@ -33,11 +33,11 @@ mod tests {
             ..SceneObject::default()
         };
         let mut boundary = FrameBoundary::default();
-        boundary.observe(StartupEvent::Yield);
+        boundary.observe(RuntimeEvent::Yield);
         assert!(boundary.ready());
         // 0x2022 creates a shown child; 0x2041 initializes its draw state later.
         parent.children.insert(0, SceneObject::default());
-        boundary.observe(StartupEvent::Progress);
+        boundary.observe(RuntimeEvent::Progress);
         assert!(!boundary.ready());
         assert_eq!(
             prepare_scene(&scene, None, &[&parent], 8, 4)
@@ -46,21 +46,21 @@ mod tests {
                 .0,
             "shown child object has no draw state"
         );
-        boundary.observe(StartupEvent::SnapshotCaptured);
+        boundary.observe(RuntimeEvent::SnapshotCaptured);
         assert!(!boundary.ready());
         parent.children.get_mut(&0).unwrap().draw = Some(DrawState::default());
-        boundary.observe(StartupEvent::Progress);
+        boundary.observe(RuntimeEvent::Progress);
         assert!(!boundary.ready());
-        boundary.observe(StartupEvent::Yield);
+        boundary.observe(RuntimeEvent::Yield);
         assert!(boundary.ready());
         prepare_scene(&scene, None, &[&parent], 8, 4)
             .unwrap()
             .render_cpu()
             .unwrap();
-        boundary.observe(StartupEvent::Inactive);
+        boundary.observe(RuntimeEvent::Inactive);
         assert!(boundary.ready());
-        boundary.observe(StartupEvent::Progress);
-        boundary.observe(StartupEvent::Inactive);
+        boundary.observe(RuntimeEvent::Progress);
+        boundary.observe(RuntimeEvent::Inactive);
         assert!(!boundary.ready());
     }
 
@@ -74,10 +74,10 @@ mod tests {
         };
         parent.children.insert(0, SceneObject::default());
         let mut boundary = FrameBoundary::default();
-        boundary.observe(StartupEvent::Yield);
+        boundary.observe(RuntimeEvent::Yield);
         assert!(boundary.ready());
         assert!(prepare_scene(&scene, None, &[&parent], 8, 4).is_err());
-        boundary.observe(StartupEvent::Quit);
+        boundary.observe(RuntimeEvent::Quit);
         assert!(!boundary.ready());
     }
 }
@@ -90,7 +90,7 @@ mod external {
         input::{CodeInput, KeyBindings},
         platform::RecordingBackend,
         profile::Registry,
-        runner::{Startup, load_start},
+        runtime::{Runtime, load_start},
         scene_render::prepare_scene,
     };
     use cmvs_wgpu::{Renderer, wgpu};
@@ -119,7 +119,7 @@ mod external {
         }
         let game = Registry::builtin().identify_game(&root, None)?;
         let script = load_start(&root, &game.files)?;
-        let mut run = Startup::new(&script, &root, &game, 0)?;
+        let mut run = Runtime::new(&script, &root, &game, 0)?;
         run.set_user_data_directory(&user)?;
         run.set_skip_auto_resume(true)?;
         run.set_record_text(true);
@@ -177,8 +177,8 @@ mod external {
                 }
             }
             match event {
-                StartupEvent::Progress | StartupEvent::SnapshotCaptured => continue,
-                StartupEvent::Yield => {}
+                RuntimeEvent::Progress | RuntimeEvent::SnapshotCaptured => continue,
+                RuntimeEvent::Yield => {}
                 other => return Err(format!("unexpected {other:?}").into()),
             }
             assert!(boundary.ready());

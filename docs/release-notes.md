@@ -1,5 +1,13 @@
 # 未发布变更
 
+## Rust API 整理
+
+- 运行时入口为 `runtime::Runtime`、`RuntimeEvent`，创建选项集中在 `RuntimeOptions`，保存策略使用 `SaveStorage`。`runner` 路径和 `Startup` / `StartupEvent` 名称仍可用。
+- `Script.header` 改为只读的 `header()`；数据段使用 `data()`，保留旧 `unknown()` 别名。需要编辑头部时应重新编码并解码校验，不能直接修改已校验对象的长度。
+- `Player::tick` 返回 `TickOutcome`，错误使用 `PlayerError`。Rust 调用方应匹配枚举；C 函数名、API 版本及状态码不变。
+- Player 推荐使用 `set_key_state`、`set_pointer_position`、`set_paused` 和 `frame_serial`。运行时的 `advance_playback`、`set_decode_cmv_frames` 明确播放与 CMV 解码的职责，旧方法保留别名。
+- 桌面的 `TextEncoding` 直接复用 core 类型。原来的 `.encode()` / `.decode()` / `TextEncoding::parse()` 改用 `cmvs_font::text_codec`（desktop 也重导出该模块）；无需再调用 `.engine_encoding()`。
+
 ## 当前命令闸门策略
 
 当前默认放行 `Presumed` 和 `Unreviewed`，分别使用 `--block-presumed`、`--block-unreviewed` 显式阻止；两项互不隐含。`Absent`、`NoOp` 始终停止。默认放行不代表语义已复核、处理器完整或游戏可玩。 CLI 已移除旧 `--allow-presumed` / `--allow-unreviewed`；库调用方改用 `Startup::set_block_presumed` / `Startup::set_block_unreviewed`。

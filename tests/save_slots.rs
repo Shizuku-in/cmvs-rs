@@ -1,4 +1,4 @@
-//! Gameplay save slots and the in-game menus through `Startup` on the original game: external
+//! Gameplay save slots and the in-game menus through `Runtime` on the original game: external
 //! saves, route replays and the toolbar, save screens and backlog, read-only inputs.
 //! Synthetic save tests live in tests/runner.rs.
 use cmvs_rs::{
@@ -7,7 +7,7 @@ use cmvs_rs::{
     message::AuxiliaryText,
     platform::RecordingBackend,
     profile::Registry,
-    runner::{SnapshotPolicy, Startup, StartupEvent, load_start},
+    runtime::{Runtime, RuntimeEvent, SnapshotPolicy, load_start},
     save::Csv2Save,
     snapshot::{EngineSnapshot, SavedScene},
 };
@@ -40,7 +40,7 @@ fn original_snapshot(root: &std::path::Path, slot: u16) -> EngineSnapshot {
 
 /// Compares the hosts right after a load with the saved snapshot, normalizing only the
 /// documented loader effects.
-fn check_loaded(run: &Startup<'_>, mut expected: EngineSnapshot) {
+fn check_loaded(run: &Runtime<'_>, mut expected: EngineSnapshot) {
     let mut actual = run.inspect_snapshot().unwrap();
     // The load callback 29 runs in a cross-script frame holding the restored context.
     let callback = &run.control().callbacks()[&29];
@@ -173,14 +173,14 @@ fn external_auto_resume_restores_the_original_snapshot() {
     }
     let game = Registry::builtin().identify_game(&root, None).unwrap();
     let script = load_start(&root, &game.files).unwrap();
-    let mut run = Startup::new(&script, &root, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root, &game, 0).unwrap();
     run.set_user_data_directory(&user).unwrap();
     run.set_snapshot_policy(SnapshotPolicy::Capture);
     let mut backend = RecordingBackend::default();
     // Run to the title menu idle, then load as 0x22b5 would.
     for _ in 0..2_000_000 {
         let event = run.tick(&mut backend).unwrap();
-        if event == StartupEvent::Yield {
+        if event == RuntimeEvent::Yield {
             run.advance_frame(16).unwrap();
             if run.machine().current_name() == b"menu.ps3" && run.steps() > 200_000 {
                 break;
@@ -189,7 +189,7 @@ fn external_auto_resume_restores_the_original_snapshot() {
         assert!(
             matches!(
                 event,
-                StartupEvent::Progress | StartupEvent::Yield | StartupEvent::SnapshotCaptured
+                RuntimeEvent::Progress | RuntimeEvent::Yield | RuntimeEvent::SnapshotCaptured
             ),
             "{event:?} at {} / 0x{:x}",
             run.machine().current_name().escape_ascii(),
@@ -209,14 +209,14 @@ fn external_auto_resume_restores_the_original_snapshot() {
         let (mut captured, start) = (0, run.steps());
         for _ in 0..3_000_000 {
             match run.tick(&mut backend).unwrap() {
-                StartupEvent::Yield => run.advance_frame(16).unwrap(),
-                StartupEvent::SnapshotCaptured => {
+                RuntimeEvent::Yield => run.advance_frame(16).unwrap(),
+                RuntimeEvent::SnapshotCaptured => {
                     captured += 1;
                     if captured == 2 {
                         break;
                     }
                 }
-                StartupEvent::Progress => {}
+                RuntimeEvent::Progress => {}
                 other => panic!(
                     "slot {slot}: {other:?} at {} / 0x{:x}",
                     run.machine().current_name().escape_ascii(),
@@ -250,7 +250,7 @@ fn external_auto_resume_restores_the_original_snapshot() {
 }
 
 /// The held snapshot as the writer built it.
-fn held(run: &Startup<'_>) -> EngineSnapshot {
+fn held(run: &Runtime<'_>) -> EngineSnapshot {
     match run.held_snapshot() {
         cmvs_rs::snapshot::SaveImage::Captured(c) => EngineSnapshot::decode(&c.snapshot).unwrap(),
         other => panic!("{other:?}"),
@@ -264,7 +264,7 @@ fn external_mixed_skip_click_captures_active_image_change() {
     let user = user_directory("mixed-skip-click");
     let game = Registry::builtin().identify_game(&root, None).unwrap();
     let script = load_start(&root, &game.files).unwrap();
-    let mut run = Startup::new(&script, &root, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root, &game, 0).unwrap();
     run.set_user_data_directory(&user).unwrap();
     run.set_skip_auto_resume(true).unwrap();
     run.set_record_text(true);
@@ -290,7 +290,7 @@ fn external_mixed_skip_click_captures_active_image_change() {
         let event = run
             .tick(&mut backend)
             .unwrap_or_else(|e| panic!("{e} at {at}, frame={frame}"));
-        if event == StartupEvent::SnapshotCaptured && started {
+        if event == RuntimeEvent::SnapshotCaptured && started {
             captures += 1;
             if run.scene().objects().values().any(|o| o.change.is_some()) {
                 let expected = held(&run);
@@ -307,11 +307,11 @@ fn external_mixed_skip_click_captures_active_image_change() {
                 return;
             }
         }
-        if event != StartupEvent::Yield {
+        if event != RuntimeEvent::Yield {
             assert!(
                 matches!(
                     event,
-                    StartupEvent::Progress | StartupEvent::SnapshotCaptured
+                    RuntimeEvent::Progress | RuntimeEvent::SnapshotCaptured
                 ),
                 "{event:?} at {at}"
             );
@@ -361,7 +361,7 @@ fn external_route_saves_every_snapshot_and_plays_on_after_loads() {
     }
     let game = Registry::builtin().identify_game(&root, None).unwrap();
     let script = load_start(&root, &game.files).unwrap();
-    let mut run = Startup::new(&script, &root, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root, &game, 0).unwrap();
     run.set_user_data_directory(&user).unwrap();
     run.set_record_text(true);
     let bindings = KeyBindings::parse(&fs::read_to_string(root.join("key.cfg")).unwrap()).unwrap();
@@ -371,7 +371,7 @@ fn external_route_saves_every_snapshot_and_plays_on_after_loads() {
     let (mut choices, mut choice_idle, mut choice_step) = (0, None::<u32>, 0);
     let (mut yields, mut last_input, mut system_saved) = (0u64, 0u64, false);
     let (mut captures, mut loads) = (0u32, 0u32);
-    let place = |run: &Startup<'_>| {
+    let place = |run: &Runtime<'_>| {
         format!(
             "{} / 0x{:x} after {} steps",
             run.machine().current_name().escape_ascii(),
@@ -416,8 +416,8 @@ fn external_route_saves_every_snapshot_and_plays_on_after_loads() {
             .tick(&mut backend)
             .unwrap_or_else(|e| panic!("{e} at {}", place(&run)));
         match event {
-            StartupEvent::Progress | StartupEvent::Yield => {}
-            StartupEvent::SnapshotCaptured => {
+            RuntimeEvent::Progress | RuntimeEvent::Yield => {}
+            RuntimeEvent::SnapshotCaptured => {
                 captures += 1;
                 let image = held(&run);
                 assert!(run.save_slot(0).unwrap());
@@ -446,7 +446,7 @@ fn external_route_saves_every_snapshot_and_plays_on_after_loads() {
         if opcode == Some(0x210b) && run.machine().pending_system().is_none() {
             choice_idle = Some(0);
         }
-        if event != StartupEvent::Yield {
+        if event != RuntimeEvent::Yield {
             continue;
         }
         yields += 1;
@@ -515,7 +515,7 @@ fn external_route_saves_every_snapshot_and_plays_on_after_loads() {
 /// bindings: code 1 left button, 3 right button, 4/5 wheel up/down.
 struct Ui<'a, 'b> {
     native_audio: bool,
-    run: &'b mut Startup<'a>,
+    run: &'b mut Runtime<'a>,
     backend: RecordingBackend,
     bindings: KeyBindings,
     codes: CodeInput,
@@ -563,7 +563,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     }
     let game = Registry::builtin().identify_game(&root, None).unwrap();
     let script = load_start(&root, &game.files).unwrap();
-    let mut run = Startup::new(&script, &root, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root, &game, 0).unwrap();
     #[cfg(feature = "audio-output")]
     if native_audio {
         run.set_audio_backend(Box::new(
@@ -952,7 +952,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         } else {
             assert_eq!(
                 ui.run.tick(&mut ui.backend).unwrap(),
-                StartupEvent::Inactive
+                RuntimeEvent::Inactive
             );
             assert_eq!(ui.run.steps(), steps);
         }
@@ -1128,7 +1128,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         .unwrap();
     drop(ui);
     drop(run);
-    let mut resumed = Startup::new(&script, &root, &game, 0).unwrap();
+    let mut resumed = Runtime::new(&script, &root, &game, 0).unwrap();
     resumed.set_user_data_directory(&user).unwrap();
     assert_eq!(resumed.settings(), &settings);
     assert_eq!(resumed.audio().settings(), audio);
@@ -1156,12 +1156,12 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
             loaded = true;
             break;
         }
-        if event == StartupEvent::Yield {
+        if event == RuntimeEvent::Yield {
             resumed.advance_frame(16).unwrap();
         }
         assert!(matches!(
             event,
-            StartupEvent::Progress | StartupEvent::Yield
+            RuntimeEvent::Progress | RuntimeEvent::Yield
         ));
     }
     assert!(loaded);
@@ -1263,14 +1263,14 @@ impl Ui<'_, '_> {
                 self.voice_fades.push(fade);
             }
             match event {
-                StartupEvent::Yield => break,
-                StartupEvent::Progress | StartupEvent::SnapshotCaptured => {}
+                RuntimeEvent::Yield => break,
+                RuntimeEvent::Progress | RuntimeEvent::SnapshotCaptured => {}
                 other => panic!("{other:?}"),
             }
         }
         if self.native_audio {
             std::thread::sleep(std::time::Duration::from_millis(16));
-            self.run.advance_decoded_frame(16).unwrap();
+            self.run.advance_playback(16).unwrap();
         } else {
             self.run.advance_frame(16).unwrap();
         }
@@ -1353,7 +1353,7 @@ fn external_in_game_menus_save_and_load() {
     }
     let game = Registry::builtin().identify_game(&root, None).unwrap();
     let script = load_start(&root, &game.files).unwrap();
-    let mut run = Startup::new(&script, &root, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root, &game, 0).unwrap();
     run.set_user_data_directory(&user).unwrap();
     run.set_record_text(true);
     let mut ui = Ui {
@@ -1633,7 +1633,7 @@ fn external_backlog_scrolls_replays_voices_and_jumps_back() {
     }
     let game = Registry::builtin().identify_game(&root, None).unwrap();
     let script = load_start(&root, &game.files).unwrap();
-    let mut run = Startup::new(&script, &root, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root, &game, 0).unwrap();
     run.set_user_data_directory(&user).unwrap();
     run.set_record_text(true);
     let mut ui = Ui {
@@ -1827,24 +1827,24 @@ fn external_rotation_snapshot_resumes_on_original_resources() {
     fs::write(user.join("save005.dat"), &raw).unwrap();
     let game = Registry::builtin().identify_game(&root, None).unwrap();
     let script = load_start(&root, &game.files).unwrap();
-    let mut run = Startup::new(&script, &root, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root, &game, 0).unwrap();
     run.set_user_data_directory(&user).unwrap();
     run.set_skip_auto_resume(true).unwrap();
     let mut backend = RecordingBackend::default();
     for _ in 0..2_000_000 {
         match run.tick(&mut backend).unwrap() {
-            StartupEvent::Yield => {
+            RuntimeEvent::Yield => {
                 run.advance_frame(16).unwrap();
                 if run.machine().current_name() == b"menu.ps3" && run.steps() > 200_000 {
                     break;
                 }
             }
-            StartupEvent::Progress | StartupEvent::SnapshotCaptured => {}
+            RuntimeEvent::Progress | RuntimeEvent::SnapshotCaptured => {}
             other => panic!("{other:?}"),
         }
     }
     run.load_slot(5, &mut backend).unwrap();
-    let angle = |run: &Startup<'_>| {
+    let angle = |run: &Runtime<'_>| {
         run.scene()
             .object(slot)
             .unwrap()

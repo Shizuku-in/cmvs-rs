@@ -1,7 +1,7 @@
 #![cfg(feature = "desktop")]
 use cmvs_rs::{
     cursor::CursorBitmap,
-    desktop::{DesktopInput, InputEvent, TextEncoding, cursor_rgba, decode_icon},
+    desktop::{DesktopInput, InputEvent, TextEncoding, cursor_rgba, decode_icon, text_codec},
 };
 
 #[path = "support/bytecode.rs"]
@@ -163,17 +163,19 @@ fn cursor(rgb: [u8; 3], mask: bool) -> CursorBitmap {
 #[test]
 fn title_encoding_is_explicit_and_invalid_bytes_are_not_replaced() {
     assert_eq!(
-        TextEncoding::ShiftJis
-            .decode(&[0x83, 0x41, 0x83, 0x7d, 0x83, 0x63, 0x83, 0x63, 0x83, 0x7e])
-            .unwrap(),
+        text_codec::decode(
+            TextEncoding::ShiftJis,
+            &[0x83, 0x41, 0x83, 0x7d, 0x83, 0x63, 0x83, 0x63, 0x83, 0x7e]
+        )
+        .unwrap(),
         "アマツツミ"
     );
     assert_eq!(
-        TextEncoding::Gbk.decode(&[0xd6, 0xd0, 0xce, 0xc4]).unwrap(),
+        text_codec::decode(TextEncoding::Gbk, &[0xd6, 0xd0, 0xce, 0xc4]).unwrap(),
         "中文"
     );
     assert_eq!(
-        TextEncoding::Utf8.decode("标题".as_bytes()).unwrap(),
+        text_codec::decode(TextEncoding::Utf8, "标题".as_bytes()).unwrap(),
         "标题"
     );
     for (encoding, bytes) in [
@@ -181,9 +183,9 @@ fn title_encoding_is_explicit_and_invalid_bytes_are_not_replaced() {
         (TextEncoding::Gbk, &[0x81][..]),
         (TextEncoding::Utf8, &[0xff][..]),
     ] {
-        assert!(encoding.decode(bytes).is_err());
+        assert!(text_codec::decode(encoding, bytes).is_err());
     }
-    assert!(TextEncoding::parse("automatic").is_err());
+    assert!(text_codec::parse("automatic").is_err());
 }
 #[test]
 fn icon_bgra_and_alpha_decode_with_embedded_dimension_preflight() {

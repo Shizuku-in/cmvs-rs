@@ -6,7 +6,7 @@ use cmvs_core::{
     digest::{sha256_reader, to_hex},
     input::KeyBindings,
     profile::{Evidence, Game, GameFiles, Registry},
-    runner::snapshot_layout_supported,
+    runtime::snapshot_layout_supported,
 };
 use std::{
     collections::BTreeSet,

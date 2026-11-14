@@ -41,7 +41,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut commands = BTreeMap::new();
     println!("# Linear decode: {:?}; not execution", path);
     let instructions =
-        bytecode::decode_layout(script.code(), script.header.entry_pc, &script.labels())?;
+        bytecode::decode_layout(script.code(), script.header().entry_pc, &script.labels())?;
     for insn in instructions {
         let pc = insn.pc;
         match &insn.kind {

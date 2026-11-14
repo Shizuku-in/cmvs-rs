@@ -56,7 +56,7 @@
 
 即时截图 `0x203e` 通过 `PlatformBackend::read_device_frame` 读取已完成的逻辑设备画面，核心只负责参数、图像替换与结果；字体、影片的实际合成仍由帧生产者完成。桌面在呈现成功后保存完整画布，记录后端要求显式发布。此画面与延迟截图 `ScreenCapture` 分开，不把当前VM状态重绘成“设备读回”；服务缺失显式报错，见[后端契约](backends/platform-host.md#即时设备帧读取)。
 
-`runner/lifecycle` 编排 `0x2001` 退出与 `0x2003` 重置。退出释放播放并向宿主报告终态 `Quit`；桌面结束事件循环，沿用既有用户配置持久化。重置先验证替换主脚本，再清理已核对的运行对象与快照，保留设置、变量、字体设备与公共脚本，从 `main.ps3` 入口继续，不重跑启动流程或恢复默认设置。平台 API 仍留在后端。指令返回标志与游戏验证边界见 [生命周期语义](games/amatsutsumi/vm-semantics.md#quit-与-reset2026-10-31)。
+`runtime/lifecycle` 编排 `0x2001` 退出与 `0x2003` 重置。退出释放播放并向宿主报告终态 `Quit`；桌面结束事件循环，沿用既有用户配置持久化。重置先验证替换主脚本，再清理已核对的运行对象与快照，保留设置、变量、字体设备与公共脚本，从 `main.ps3` 入口继续，不重跑启动流程或恢复默认设置。平台 API 仍留在后端。指令返回标志与游戏验证边界见 [生命周期语义](games/amatsutsumi/vm-semantics.md#quit-与-reset2026-10-31)。
 
 `bytecode` 结构化解码指令、嵌套表达式及控制流，并检查标签与直接跳转边界。`evaluate`、`vm`、`machine` 分别承担表达式状态、参数栈/调用帧和单步执行。
 
@@ -141,7 +141,7 @@
 
 `save_menu::SaveSource` 提供只读槽前缀；`DirectorySaves` 支持槽号 0..999，菜单扫描仍最多 256 槽。`0x22bb` 只识别 `CSV2`..`CSV9` 签名，不要求有效正文，也不代表该格式已可完整解码或恢复。
 
-`save` 负责已核对模式的 CSV2 容器编解码：校验、逆变换、三段 LZSS 压缩与解压。`snapshot::EngineSnapshot` 无损编解码完整记录流，各宿主提供自己记录的 `saved`/`restore`；`runner/save.rs` 在 0x2080/0x22b2 从宿主构建镜像，0x22b6 写槽，0x22b5 先在候选宿主上完成全部解码与资源加载再提交。`SaveImage` 区分原版缓冲为空的 `Absent`、已持有镜像的 `Captured` 与按研究策略未构建的 `Unavailable`，写槽拒绝后者。快照点上尚无记录格式的状态（超出已支持字号范围的字形等）显式报错。`snapshot::VmSnapshot`、`LocalVariables` 与 `VisualSnapshot` 保留为离线检查与预览模型。
+`save` 负责已核对模式的 CSV2 容器编解码：校验、逆变换、三段 LZSS 压缩与解压。`snapshot::EngineSnapshot` 无损编解码完整记录流，各宿主提供自己记录的 `saved`/`restore`；`runtime/save.rs` 在 0x2080/0x22b2 从宿主构建镜像，0x22b6 写槽，0x22b5 先在候选宿主上完成全部解码与资源加载再提交。`SaveImage` 区分原版缓冲为空的 `Absent`、已持有镜像的 `Captured` 与按研究策略未构建的 `Unavailable`，写槽拒绝后者。快照点上尚无记录格式的状态（超出已支持字号范围的字形等）显式报错。`snapshot::VmSnapshot`、`LocalVariables` 与 `VisualSnapshot` 保留为离线检查与预览模型。
 
 `system_save` 独立处理 CSS1：恢复经核对的持久变量和文件名列表；候选状态完成验证后才提交。`system_save/pack.rs` 负责 1024 字节字典与 48 字节匹配压缩，`write.rs` 负责完整已知持久区序列化、变换/校验和可选导出。导出需要已加载来源的头部注释模板；未知变量报错，不能补零。缺失稀疏变量不隐式初始化。剧情写槽同时写系统存档。格式与限制见 [save](formats/save-format.md)、[system-save](formats/system-save-format.md)、[snapshot](formats/snapshot-format.md)。
 
@@ -226,7 +226,7 @@ VM 运行、帧时间和协作预算分别管理。计时器只在首次运行�
 
 ## 用户设置存储（2026-10-31）
 
-settings::Configuration保存有界原始INI字节，替换已实现的键并保留未知字段；runner/preferences.rs负责从运行中的SettingsHost、AudioHost、MessageFlags、确认/效果状态及显式DisplayPreferences汇集配置。用户目录初始化时安装用户配置，音频后端配置成功后才提交候选宿主；原游戏配置仅作首次只读来源。
+settings::Configuration保存有界原始INI字节，替换已实现的键并保留未知字段；runtime/preferences.rs负责从运行中的SettingsHost、AudioHost、MessageFlags、确认/效果状态及显式DisplayPreferences汇集配置。用户目录初始化时安装用户配置，音频后端配置成功后才提交候选宿主；原游戏配置仅作首次只读来源。
 
 ProfileSystemSave复用会话锁及同目录临时文件替换，分别管理cmvs.cfg/cmvs.cfg.bak与CSS1。桌面正常退出显式保存，错误退出不保存；核心Drop没有隐藏I/O。INI和CSS1是两个独立提交，失败保留各自备份和可重试状态，不能描述成整体事务。原生窗口状态通过DisplayPreferences传入；核心不持有winit窗口。未实现的设置继续保留原始键及其现有错误屏障，不因写配置而伪造支持。
 

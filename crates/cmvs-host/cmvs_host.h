@@ -27,7 +27,8 @@ int32_t cmvs_host_open_game_savedata(CmvsHost *, const char *game,
                                     const char *legacy_user, const char *font,
                                     int32_t native_audio);
 void cmvs_host_destroy(CmvsHost *);
-/* Tick: -1 error, 0 cooperative slice, 1 complete frame, 2 quit, 3 inactive. */
+/* Tick: -1 error, 0 cooperative slice, 1 complete frame, 2 quit, 3 inactive.
+ * When a slice returns 0, resume with the same delta_ms until the frame completes. */
 int32_t cmvs_host_tick(CmvsHost *, uint32_t delta_ms);
 /* CMVS codes: 1 left, 3 right, 4/5 wheel, 22 enter, 24 control, 25 escape,
  * 26 space, 33..36 arrows, 52..63 F1..F12. Pulses survive until a VM frame. */

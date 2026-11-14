@@ -7,7 +7,7 @@ mod commands;
 use cmvs_rs::{
     platform::RecordingBackend,
     profile::Registry,
-    runner::{Startup, StartupEvent, load_start},
+    runtime::{Runtime, RuntimeEvent, load_start},
 };
 use std::{
     fmt::Write as _,
@@ -74,7 +74,7 @@ fn probe(registry: &Registry, root: &Path, opcode: u16, args: &[u32]) -> String 
         .identify_game(root, Some("synthetic-base"))
         .unwrap();
     let script = load_start(root, &game.files).unwrap();
-    let mut run = match Startup::new(&script, root, &game, 0) {
+    let mut run = match Runtime::new(&script, root, &game, 0) {
         Ok(run) => run,
         Err(e) => return format!("setup\t{e}"),
     };
@@ -92,10 +92,10 @@ fn probe(registry: &Registry, root: &Path, opcode: u16, args: &[u32]) -> String 
                 return format!("error\t{}", e.to_string().replace(['\t', '\n'], " "));
             }
             Err(_) => return "handled\tlater error".into(),
-            Ok(StartupEvent::Unhandled { command, .. }) if command == opcode => {
+            Ok(RuntimeEvent::Unhandled { command, .. }) if command == opcode => {
                 return "unhandled\t".into();
             }
-            Ok(StartupEvent::Unhandled { .. }) => return "handled\tlater unhandled".into(),
+            Ok(RuntimeEvent::Unhandled { .. }) => return "handled\tlater unhandled".into(),
             Ok(_) if run.machine().pc() > site && run.machine().pending_system().is_none() => {
                 return "handled\t".into();
             }

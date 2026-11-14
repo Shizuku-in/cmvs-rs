@@ -499,7 +499,7 @@ impl DrawState {
 /// Scene-object slots, retained transitions, and effects updated by script commands.
 ///
 /// Read this state with [`crate::scene_render`] or a host renderer. It does not own
-/// a graphics device. Frame progression is coordinated by [`crate::runner::Startup`].
+/// a graphics device. Frame progression is coordinated by [`crate::runtime::Runtime`].
 #[derive(Debug, Default)]
 pub struct SceneHost {
     child_slots: ChildSlots,

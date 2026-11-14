@@ -3,7 +3,7 @@ use cmvs_core::{
     input::{CodeInput, KeyBindings},
     platform::RecordingBackend,
     profile::Registry,
-    runner::{SnapshotPolicy, Startup, StartupEvent, load_start},
+    runtime::{Runtime, RuntimeEvent, SnapshotPolicy, load_start},
     scene_render::prepare_scene,
 };
 use cmvs_desktop::font::FontRenderer;
@@ -17,11 +17,11 @@ fn external_fixed_clock_gpu_scene_comparison() -> Result<(), Box<dyn Error>> {
     let font_path = PathBuf::from(std::env::var_os("CMVS_FONT_PATH").ok_or("CMVS_FONT_PATH")?);
     let game = Registry::builtin().identify_game(&root, None)?;
     let script = load_start(&root, &game.files)?;
-    let mut run = Startup::new(&script, &root, &game, 0)?;
+    let mut run = Runtime::new(&script, &root, &game, 0)?;
     run.set_snapshot_policy(SnapshotPolicy::ContinueWithoutImage);
     run.set_skip_auto_resume(true)?;
     run.set_record_text(true);
-    run.set_decode_movie_frames(true);
+    run.set_decode_cmv_frames(true);
     let mut font = FontRenderer::read(&font_path, 0)?;
     run.set_glyph_metrics(font.metrics());
     let bindings = KeyBindings::parse(&std::fs::read_to_string(root.join("key.cfg"))?)?;
@@ -57,14 +57,14 @@ fn external_fixed_clock_gpu_scene_comparison() -> Result<(), Box<dyn Error>> {
         let event = run.tick(&mut backend)?;
         if !matches!(
             event,
-            StartupEvent::Progress
-                | StartupEvent::Yield
-                | StartupEvent::SnapshotCaptured
-                | StartupEvent::MainEnteredWithoutSnapshot
+            RuntimeEvent::Progress
+                | RuntimeEvent::Yield
+                | RuntimeEvent::SnapshotCaptured
+                | RuntimeEvent::MainEnteredWithoutSnapshot
         ) {
             return Err(format!("unexpected {event:?}").into());
         }
-        if event != StartupEvent::Yield {
+        if event != RuntimeEvent::Yield {
             continue;
         }
         yields += 1;

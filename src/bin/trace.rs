@@ -270,7 +270,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         return Err("input exceeds research allocation limit".into());
     }
     let script = Script::decode(&raw)?;
-    let mut machine = Machine::at(&script, entry.unwrap_or(script.header.entry_pc))?;
+    let mut machine = Machine::at(&script, entry.unwrap_or(script.header().entry_pc))?;
     machine.set_current_name(initial_name);
     machine.set_command_map(gate.selection().profile.command_map());
     machine
@@ -403,7 +403,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                         hosts.function_keys =
                             Some(cmvs_rs::dispatch::FunctionKeys::Input(&mut input));
                     } else if let Some(host) = &mut bootstrap {
-                        hosts.function_keys = Some(cmvs_rs::dispatch::FunctionKeys::Startup(host));
+                        hosts.function_keys = Some(cmvs_rs::dispatch::FunctionKeys::Runtime(host));
                     }
                 } else {
                     hosts.bootstrap = bootstrap.as_mut();

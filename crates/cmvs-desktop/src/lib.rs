@@ -1,7 +1,8 @@
 //! Optional native window/input adapter. Static scene rendering lives in `scene_render`.
 mod app;
 mod encoding;
-pub use cmvs_font::{font, font_library};
+pub use cmvs_core::TextEncoding;
+pub use cmvs_font::{font, font_library, text_codec};
 mod frame_boundary;
 pub mod game_input;
 pub use app::{movie_canvas, run_cli};
@@ -20,59 +21,6 @@ use winit::{
     event_loop::ActiveEventLoop,
     window::{CursorIcon, CustomCursor, Icon, Window},
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextEncoding {
-    ShiftJis,
-    Gbk,
-    Utf8,
-}
-impl TextEncoding {
-    pub fn parse(name: &str) -> Result<Self, FormatError> {
-        match name {
-            "shift-jis" => Ok(Self::ShiftJis),
-            "gbk" => Ok(Self::Gbk),
-            "utf-8" => Ok(Self::Utf8),
-            _ => Err(FormatError("encoding must be shift-jis, gbk or utf-8")),
-        }
-    }
-    /// The engine scanner matching the host codec.
-    pub fn engine_encoding(self) -> cmvs_core::TextEncoding {
-        match self {
-            Self::ShiftJis => cmvs_core::TextEncoding::ShiftJis,
-            Self::Gbk => cmvs_core::TextEncoding::Gbk,
-            Self::Utf8 => cmvs_core::TextEncoding::Utf8,
-        }
-    }
-    fn encoding(self) -> &'static encoding_rs::Encoding {
-        match self {
-            Self::ShiftJis => encoding_rs::SHIFT_JIS,
-            Self::Gbk => encoding_rs::GBK,
-            Self::Utf8 => encoding_rs::UTF_8,
-        }
-    }
-    pub fn decode(self, bytes: &[u8]) -> Result<String, FormatError> {
-        self.encoding()
-            .decode_without_bom_handling_and_without_replacement(bytes)
-            .map(|s| s.into_owned())
-            .ok_or(FormatError("invalid title bytes for selected encoding"))
-    }
-    fn decode_font_face(self, bytes: &[u8]) -> Result<String, FormatError> {
-        if bytes == cmvs_core::settings::DEFAULT_FONT_FACE {
-            return Ok("ＭＳ ゴシック".to_owned());
-        }
-        self.decode(bytes)
-    }
-    pub fn encode(self, text: &str) -> Result<Vec<u8>, FormatError> {
-        let (bytes, _, unmappable) = self.encoding().encode(text);
-        if unmappable {
-            return Err(FormatError(
-                "text is not representable in the selected encoding",
-            ));
-        }
-        Ok(bytes.into_owned())
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IconPixels {
@@ -277,9 +225,9 @@ impl PlatformBackend for NativeBackend<'_> {
     ) -> Result<cmvs_core::platform::TextDialogResult, Box<dyn Error>> {
         use winit::raw_window_handle::HasWindowHandle;
         let owner = self.window.window_handle()?.as_raw();
-        let title = self.encoding.decode(&request.title)?;
-        let prompt = self.encoding.decode(&request.prompt)?;
-        let initial = self.encoding.decode(&request.initial)?;
+        let title = text_codec::decode(self.encoding, &request.title)?;
+        let prompt = text_codec::decode(self.encoding, &request.prompt)?;
+        let initial = text_codec::decode(self.encoding, &request.initial)?;
         Ok(
             match cmvs_native::edit_text(
                 owner,
@@ -292,9 +240,10 @@ impl PlatformBackend for NativeBackend<'_> {
                     request.max_bytes.min(255) / 2
                 },
             )? {
-                Some(text) => {
-                    cmvs_core::platform::TextDialogResult::Accepted(self.encoding.encode(&text)?)
-                }
+                Some(text) => cmvs_core::platform::TextDialogResult::Accepted(text_codec::encode(
+                    self.encoding,
+                    &text,
+                )?),
                 None => cmvs_core::platform::TextDialogResult::Cancelled,
             },
         )
@@ -306,7 +255,7 @@ impl PlatformBackend for NativeBackend<'_> {
             Some(fonts) => fonts
                 .family_name(current)
                 .unwrap_or_else(|_| "ＭＳ ゴシック".to_owned()),
-            None => self.encoding.decode_font_face(current)?,
+            None => encoding::decode_font_face(self.encoding, current)?,
         };
         let Some(face) = cmvs_native::choose_font(owner, &current)? else {
             println!("# native font dialog cancelled");
@@ -314,7 +263,7 @@ impl PlatformBackend for NativeBackend<'_> {
         };
         let selected = match self.fonts {
             Some(fonts) => fonts.select_unicode_face(&face),
-            None => self.encoding.encode(&face),
+            None => text_codec::encode(self.encoding, &face),
         };
         let bytes = match selected {
             Ok(bytes) => bytes,
@@ -396,7 +345,7 @@ impl PlatformBackend for NativeBackend<'_> {
                 println!("# native fullscreen={value}");
             }
             PlatformRequest::Title(bytes) => {
-                let title = self.encoding.decode(bytes)?;
+                let title = text_codec::decode(self.encoding, bytes)?;
                 self.window.set_title(&title);
                 println!("# native title={title}");
             }
@@ -559,23 +508,20 @@ mod tests {
         ] {
             let displayed = cmvs_core::settings::font_face_for_encoding(
                 cmvs_core::settings::DEFAULT_FONT_FACE,
-                encoding.engine_encoding(),
+                encoding,
             );
             assert_eq!(
-                encoding.decode_font_face(displayed).unwrap(),
+                encoding::decode_font_face(encoding, displayed).unwrap(),
                 "ＭＳ ゴシック"
             );
             assert_eq!(
-                encoding
-                    .decode_font_face(cmvs_core::settings::DEFAULT_FONT_FACE)
+                encoding::decode_font_face(encoding, cmvs_core::settings::DEFAULT_FONT_FACE)
                     .unwrap(),
                 "ＭＳ ゴシック"
             );
         }
         assert_eq!(
-            TextEncoding::Gbk
-                .decode_font_face(b"\xba\xda\xcc\xe5")
-                .unwrap(),
+            encoding::decode_font_face(TextEncoding::Gbk, b"\xba\xda\xcc\xe5").unwrap(),
             "黑体"
         );
     }

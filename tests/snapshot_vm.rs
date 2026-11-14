@@ -233,10 +233,10 @@ fn decoded_memory_image_is_not_decrypted_again_and_requires_exact_layout() {
     let raw = memory_image();
     let script = Script::from_memory_image(&raw).unwrap();
     assert_eq!(script.code(), [0, 0x20, 0, 0x20]);
-    assert_eq!(script.unknown(), [1, 2, 3, 4]);
+    assert_eq!(script.data(), [1, 2, 3, 4]);
     assert_eq!(script.text(), b"x\0");
-    assert_eq!(script.header.compressed_size, 99);
-    assert_eq!(script.header.key, 0x1234_5678);
+    assert_eq!(script.header().compressed_size, 99);
+    assert_eq!(script.header().key, 0x1234_5678);
     assert!(Script::decode(&raw).is_err());
     for bad in [raw[..raw.len() - 1].to_vec(), {
         let mut b = raw.clone();
@@ -270,7 +270,7 @@ fn vm_fields_validate_control_and_overlay_saved_mutable_data() {
     assert_eq!(vm.frames[1], 4);
     assert_eq!(vm.stack.len(), 65536);
     assert_eq!(vm.system_results, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-    assert_eq!(vm.main_script.unknown(), [9, 8, 7, 6]);
+    assert_eq!(vm.main_script.data(), [9, 8, 7, 6]);
     assert_eq!(
         vm.uninterpreted
             .iter()

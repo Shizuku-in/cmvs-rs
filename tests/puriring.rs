@@ -588,7 +588,7 @@ fn hundredth_degree_polar_point_preserves_other_results_and_signed_radius() {
 fn external_snapshot_load_restores_scene_and_reencodes() {
     use cmvs_rs::{
         platform::RecordingBackend,
-        runner::{Startup, StartupEvent, load_start},
+        runtime::{Runtime, RuntimeEvent, load_start},
         save::Csv2Save,
         snapshot::{EngineSnapshot, SnapshotLayout},
     };
@@ -605,7 +605,7 @@ fn external_snapshot_load_restores_scene_and_reencodes() {
     let game = Registry::builtin().identify_game(&root, None).unwrap();
     assert_eq!(game.selection.profile.id, PROFILE);
     let script = load_start(&root, &game.files).unwrap();
-    let mut run = Startup::new(&script, &root, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root, &game, 0).unwrap();
     let user = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!(
         "puriring-load-{}-{}",
         std::process::id(),
@@ -622,12 +622,12 @@ fn external_snapshot_load_restores_scene_and_reencodes() {
     let mut entered = false;
     for _ in 0..1_000_000 {
         match run.tick(&mut backend).unwrap() {
-            StartupEvent::SnapshotCaptured => {
+            RuntimeEvent::SnapshotCaptured => {
                 entered = true;
                 break;
             }
-            StartupEvent::Yield => run.advance_frame(16).unwrap(),
-            StartupEvent::Progress => {}
+            RuntimeEvent::Yield => run.advance_frame(16).unwrap(),
+            RuntimeEvent::Progress => {}
             event => panic!("unexpected bootstrap event: {event:?}"),
         }
     }
@@ -654,7 +654,7 @@ fn external_snapshot_load_restores_scene_and_reencodes() {
         let mut was_waiting = false;
         for _ in 0..2_000_000 {
             match run.tick(&mut backend).unwrap() {
-                StartupEvent::Yield => {
+                RuntimeEvent::Yield => {
                     run.advance_frame(16).unwrap();
                     let waiting = run
                         .machine()
@@ -680,7 +680,7 @@ fn external_snapshot_load_restores_scene_and_reencodes() {
                         break;
                     }
                 }
-                StartupEvent::Progress | StartupEvent::SnapshotCaptured => {}
+                RuntimeEvent::Progress | RuntimeEvent::SnapshotCaptured => {}
                 event => panic!("unexpected restored event: {event:?}"),
             }
         }

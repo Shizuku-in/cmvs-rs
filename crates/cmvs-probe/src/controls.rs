@@ -2,7 +2,7 @@
 //! List hit rectangles follow the bound object, then intersect the screen-space hit area.
 use cmvs_core::{
     buttons::{BUTTON_GROUPS, Button, ButtonGroup},
-    runner::Startup,
+    runtime::Runtime,
 };
 
 pub const GROUPS: usize = BUTTON_GROUPS + 8;
@@ -67,7 +67,7 @@ impl<'a> Group<'a> {
     }
 }
 
-pub fn group<'a>(run: &'a Startup<'_>, slot: usize) -> Option<Group<'a>> {
+pub fn group<'a>(run: &'a Runtime<'_>, slot: usize) -> Option<Group<'a>> {
     if slot < BUTTON_GROUPS {
         let group = run.buttons().group(slot)?;
         return Some(Group {
@@ -107,7 +107,7 @@ pub fn group<'a>(run: &'a Startup<'_>, slot: usize) -> Option<Group<'a>> {
     })
 }
 
-pub fn enabled(run: &Startup<'_>) -> Vec<(usize, usize)> {
+pub fn enabled(run: &Runtime<'_>) -> Vec<(usize, usize)> {
     (0..GROUPS)
         .filter_map(|slot| group(run, slot).map(|group| (slot, group)))
         .flat_map(|(slot, group)| {

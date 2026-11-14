@@ -2,7 +2,7 @@
 
 HTML 文档用于浏览接口和示例，rustdoc JSON 用于程序读取类型、签名和注释。默认生成 `cmvs-core` 和根包 `cmvs-rs` 的公开 API，不包含第三方依赖的文档。
 
-从核心库首页按任务查找入口：资源处理看 `cpz`、`ps3` 和 `image`，宿主接入看 `runner`，单步执行看 `machine`。根包首页说明兼容接口和可选功能。
+从核心库首页按任务查找入口：资源处理看 `cpz`、`ps3` 和 `image`，自定义宿主看 `runtime`，单步执行看 `machine`。嵌入完整播放器使用 [`cmvs-host::Player`](../../crates/cmvs-host/README.md)，它负责字体、音频和画面合成。根包首页说明兼容接口和可选功能。
 
 ## 生成文档
 

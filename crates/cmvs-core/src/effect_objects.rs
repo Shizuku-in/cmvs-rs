@@ -1,6 +1,6 @@
 //! Effect objects maintained separately from ordinary scene slots.
 //!
-//! [`crate::scene::SceneHost`] owns their state. [`crate::runner::Startup`] advances
+//! [`crate::scene::SceneHost`] owns their state. [`crate::runtime::Runtime`] advances
 //! the effects during frame updates, and [`crate::scene_render`] prepares them for drawing.
 
 // Engine +4024: four effect objects, independent of the 256 scene slots.

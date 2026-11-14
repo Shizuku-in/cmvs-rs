@@ -83,14 +83,14 @@ mod tests {
         let registry = crate::profile::Registry::builtin();
         let profile = registry.profile("cmvs-20071117").unwrap();
         assert_eq!(ChildSlots::for_profile(profile).count(), 256);
-        assert!(crate::runner::snapshot_layout_supported(profile));
+        assert!(crate::runtime::snapshot_layout_supported(profile));
         let mut changed = profile.clone();
         changed.binaries[0].sha256 = [0; 32];
         assert_eq!(ChildSlots::for_profile(&changed).count(), 768);
         let mut changed = profile.clone();
         changed.base = Some("unverified-base".into());
         assert_eq!(ChildSlots::for_profile(&changed).count(), 768);
-        assert!(!crate::runner::snapshot_layout_supported(&changed));
+        assert!(!crate::runtime::snapshot_layout_supported(&changed));
         let mut scene = super::super::SceneHost::for_profile(profile);
         assert!(scene.allow_filter_mode_one);
         assert!(scene.allow_legacy_sine_modes);
@@ -117,7 +117,7 @@ mod tests {
         ] {
             let profile = registry.profile(id).unwrap();
             assert_eq!(ChildSlots::for_profile(profile).count(), count);
-            assert!(crate::runner::snapshot_layout_supported(profile));
+            assert!(crate::runtime::snapshot_layout_supported(profile));
             let mut scene = super::super::SceneHost::for_profile(profile);
             scene.restore(
                 Default::default(),
@@ -140,7 +140,7 @@ mod tests {
                 binary.sha256 = [0; 32];
             }
             assert_eq!(ChildSlots::for_profile(&changed).count(), 768);
-            assert!(!crate::runner::snapshot_layout_supported(&changed));
+            assert!(!crate::runtime::snapshot_layout_supported(&changed));
         }
     }
 }

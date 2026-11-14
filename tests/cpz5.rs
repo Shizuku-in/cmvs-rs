@@ -283,7 +283,7 @@ fn external_archive_resources() -> Result<(), Box<dyn std::error::Error>> {
                 let script = Script::decode(&bytes)?;
                 cmvs_rs::bytecode::decode_layout(
                     script.code(),
-                    script.header.entry_pc,
+                    script.header().entry_pc,
                     &script.labels(),
                 )?;
                 scripts += 1;

@@ -1,5 +1,5 @@
 #![cfg(feature = "desktop")]
-use cmvs_rs::desktop::TextEncoding;
+use cmvs_rs::desktop::{TextEncoding, text_codec};
 use std::{
     fs,
     path::PathBuf,
@@ -22,9 +22,11 @@ impl Fixture {
         ));
         fs::create_dir(&root).unwrap();
         fs::create_dir_all(root.join("data/pack")).unwrap();
-        let text = encoding
-            .encode("这是用于自动识别文字编码的中文句子，请检查显示是否正确。")
-            .unwrap();
+        let text = text_codec::encode(
+            encoding,
+            "这是用于自动识别文字编码的中文句子，请检查显示是否正确。",
+        )
+        .unwrap();
         let code = 0x2001u16.to_le_bytes();
         let mut payload = 0u32.to_le_bytes().to_vec();
         payload.extend(code);
@@ -110,25 +112,5 @@ fn font_and_record_text_remain_mutually_exclusive_for_gbk() {
     assert!(
         String::from_utf8_lossy(&output.stderr)
             .contains("--font cannot be combined with --record-text")
-    );
-}
-
-#[test]
-fn host_encoding_maps_to_the_engine() {
-    assert_eq!(
-        TextEncoding::ShiftJis.engine_encoding(),
-        cmvs_rs::TextEncoding::ShiftJis
-    );
-    assert_eq!(
-        TextEncoding::Gbk.engine_encoding(),
-        cmvs_rs::TextEncoding::Gbk
-    );
-    assert_eq!(
-        TextEncoding::Utf8.engine_encoding(),
-        cmvs_rs::TextEncoding::Utf8
-    );
-    assert_eq!(
-        TextEncoding::Utf8.decode("标题".as_bytes()).unwrap(),
-        "标题"
     );
 }

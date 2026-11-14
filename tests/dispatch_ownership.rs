@@ -470,7 +470,7 @@ fn inventory_matches_wait_and_resource_host_recognition_exhaustively() {
                 }),
                 save_source: Some(&mut Unavailable),
                 bootstrap: Some(&mut cmvs_rs::bootstrap::Bootstrap::default()),
-                function_keys: Some(cmvs_rs::dispatch::FunctionKeys::Startup(
+                function_keys: Some(cmvs_rs::dispatch::FunctionKeys::Runtime(
                     &mut cmvs_rs::bootstrap::Bootstrap::default(),
                 )),
                 platform: Some(cmvs_rs::dispatch::PlatformHosts {
@@ -630,7 +630,7 @@ fn inventory_tracks_chain_entry_calls() {
     for (chain, source, start) in [
         (
             Chain::Runner,
-            include_str!("../crates/cmvs-core/src/runner.rs"),
+            include_str!("../crates/cmvs-core/src/runtime.rs"),
             "    fn step_once(",
         ),
         (
@@ -670,7 +670,7 @@ fn function_key_public_apis_preserve_both_explicit_policy_effects() {
     assert_eq!(names(Chain::Runner), ["dispatch::ROOT"]);
     assert_eq!(names(Chain::Trace), ["dispatch::ROOT"]);
     // Compatibility APIs retain both effects. ROOT chooses through an explicit
-    // Startup/Input context, covered separately by the environment batch tests.
+    // Runtime/Input context, covered separately by the environment batch tests.
     let mut code = vec![];
     command(&mut code, 0x234d, &[]);
     let script = script(&code);

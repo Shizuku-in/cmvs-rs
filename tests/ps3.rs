@@ -53,7 +53,7 @@ fn decode_both_storage_modes_and_key_rotations() {
             let script = Script::decode(&fixture(compressed, key)).unwrap();
             assert_eq!(script.labels(), vec![0]);
             assert_eq!(script.code(), &[0, 0x20]);
-            assert!(script.unknown().is_empty());
+            assert!(script.data().is_empty());
             let strings = script.strings().unwrap();
             assert_eq!(strings[0].bytes, b"hello");
             assert_eq!(script.payload().len(), 12);
@@ -149,15 +149,15 @@ fn pss0_shares_the_layout_but_skips_the_byte_transform() {
         assert!(Script::decode(&raw).is_err() || !compressed);
         raw[..4].copy_from_slice(b"PSS0");
         let script = Script::decode(&raw).unwrap();
-        assert_eq!(script.header.container, Container::Pss0);
+        assert_eq!(script.header().container, Container::Pss0);
         assert_eq!(script.code(), &[0, 0x20]);
         assert_eq!(script.strings().unwrap()[0].bytes, b"hello");
         let image = script.memory_image(&[]).unwrap();
         assert_eq!(&image[..4], b"PSS0");
         let reloaded = Script::from_memory_image(&image).unwrap();
-        assert_eq!(reloaded.header.container, Container::Pss0);
+        assert_eq!(reloaded.header().container, Container::Pss0);
         assert_eq!(reloaded.payload(), script.payload());
     }
     let ps2a = Script::decode(&fixture(true, 0)).unwrap();
-    assert_eq!(ps2a.header.container, Container::Ps2a);
+    assert_eq!(ps2a.header().container, Container::Ps2a);
 }

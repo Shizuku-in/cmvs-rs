@@ -9,7 +9,7 @@ use cmvs_core::{
     platform::{DirectoryAssets, PlatformAssets, PlatformBackend, PlatformRequest},
     profile::Registry,
     raster::RgbaImage,
-    runner::{SnapshotPolicy, Startup, StartupEvent, load_start},
+    runtime::{Runtime, RuntimeEvent, RuntimeOptions, SaveStorage, SnapshotPolicy, load_start},
 };
 use std::{
     env,
@@ -110,7 +110,7 @@ Notes:
   Presumed/unreviewed commands run by default; absent/no-op commands always stop.
   Save snapshots are built at main entry and scenario points. Unsupported snapshot
   state stops with an error. Gameplay saving requires --user-data-dir.
-  Startup auto-load is enabled unless --skip-auto-resume is specified.
+  Runtime auto-load is enabled unless --skip-auto-resume is specified.
   Close the window to exit. Esc follows the game's bindings.
   F1 selects the default cursor; F2..F5 preview registered cursors after a stop.";
 
@@ -131,7 +131,7 @@ struct App<'a> {
     surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
     context: Option<softbuffer::Context<Arc<Window>>>,
     window: Option<Arc<Window>>,
-    startup: Startup<'a>,
+    startup: Runtime<'a>,
     assets: DirectoryAssets,
     encoding: TextEncoding,
     input: DesktopInput,
@@ -413,7 +413,7 @@ impl ApplicationHandler for App<'_> {
                 self.context = Some(context);
             }
             self.window = Some(window.clone());
-            // Startup load (0x140013bf1) applies the same capability fallback as 0x216d.
+            // Runtime load (0x140013bf1) applies the same capability fallback as 0x216d.
             let backend = NativeBackend {
                 logical_size: self.startup.screen_size(),
                 window: &window,
@@ -658,23 +658,23 @@ impl ApplicationHandler for App<'_> {
                     self.frame_boundary.observe(*event);
                 }
                 match outcome {
-                    Ok(StartupEvent::Quit) => {
+                    Ok(RuntimeEvent::Quit) => {
                         println!("# script requested quit");
                         el.exit();
                         return;
                     }
-                    Ok(StartupEvent::Inactive) => {
+                    Ok(RuntimeEvent::Inactive) => {
                         inactive = true;
                         break;
                     }
-                    Ok(StartupEvent::Progress) => {}
-                    Ok(StartupEvent::Yield) => {
+                    Ok(RuntimeEvent::Progress) => {}
+                    Ok(RuntimeEvent::Yield) => {
                         yielded = true;
                         self.input_due = true;
                         break;
                     }
-                    Ok(StartupEvent::SnapshotCaptured) => {}
-                    Ok(StartupEvent::MainEnteredWithoutSnapshot) => println!(
+                    Ok(RuntimeEvent::SnapshotCaptured) => {}
+                    Ok(RuntimeEvent::MainEnteredWithoutSnapshot) => println!(
                         "# main entered at step {}; snapshot NOT built, saving unavailable",
                         self.startup.steps()
                     ),
@@ -757,7 +757,7 @@ impl ApplicationHandler for App<'_> {
                     .min(u128::from(u32::MAX)) as u32;
                 self.last_frame = now;
                 let had_fade = self.startup.scene().fade().current().is_some();
-                if let Err(error) = self.startup.advance_decoded_frame(delta) {
+                if let Err(error) = self.startup.advance_playback(delta) {
                     self.fail(el, error);
                     return;
                 }
@@ -779,9 +779,9 @@ impl ApplicationHandler for App<'_> {
     }
 }
 
-fn halt_title(event: StartupEvent, script: &[u8], pc: usize) -> String {
+fn halt_title(event: RuntimeEvent, script: &[u8], pc: usize) -> String {
     match event {
-        StartupEvent::Unhandled { command, .. } => format!(
+        RuntimeEvent::Unhandled { command, .. } => format!(
             "cmvs-rs paused: unsupported 0x{command:04x} at {} / 0x{pc:x}",
             script.escape_ascii()
         ),
@@ -948,27 +948,21 @@ fn run() -> Result<(), Box<dyn Error>> {
     let script = load_start(root.as_ref(), &game.files)?;
     let encoding = match choice.resolve(script.text()) {
         Err(_) if choice == EncodingChoice::Auto => {
-            let encoding = cmvs_font::text_codec::detect_game(&root, &game.files, &script)?;
-            TextEncoding::parse(cmvs_font::text_codec::name(encoding))?
+            cmvs_font::text_codec::detect_game(&root, &game.files, &script)?
         }
         result => result?,
     };
     if choice == EncodingChoice::Auto {
-        let name = match encoding {
-            TextEncoding::ShiftJis => "shift-jis",
-            TextEncoding::Gbk => "gbk",
-            TextEncoding::Utf8 => "utf-8",
-        };
+        let name = cmvs_font::text_codec::name(encoding);
         println!(
             "# auto encoding={name}; inferred from game script text; override with --encoding <name> if incorrect"
         );
     }
-    let engine_encoding = encoding.engine_encoding();
     let font = font_path
         .as_ref()
         .map(|path| {
             crate::font::FontRenderer::read(path, font_face.unwrap_or(0))
-                .map(|font| font.with_text_encoding(engine_encoding))
+                .map(|font| font.with_text_encoding(encoding))
         })
         .transpose()?;
     let bindings = if native_input {
@@ -1005,26 +999,35 @@ fn run() -> Result<(), Box<dyn Error>> {
         }
         _ => return Err("preview-image and image-archive must be supplied together".into()),
     };
-    let mut startup =
-        Startup::new_with_encoding(&script, root.as_ref(), &game, 0, engine_encoding)?;
-    startup.set_block_unreviewed(block_unreviewed);
-    startup.set_block_presumed(block_presumed);
+    let saves = match (&user_data_dir, &system_save_output) {
+        (Some(path), None) => SaveStorage::UserDirectory(path.clone()),
+        (None, Some(path)) => SaveStorage::SystemExport(path.clone()),
+        (None, None) => SaveStorage::ReadOnly,
+        (Some(_), Some(_)) => return Err("select one save storage mode".into()),
+    };
+    let mut startup = Runtime::with_options(
+        &script,
+        &root,
+        &game,
+        RuntimeOptions {
+            encoding,
+            saves,
+            snapshot_policy,
+            block_unreviewed,
+            block_presumed,
+            skip_auto_resume,
+            decode_cmv_frames: true,
+            ..Default::default()
+        },
+    )?;
     if !block_presumed {
         println!("# research policy: legacy presumed commands allowed (default policy)");
     }
-    if let Some(path) = &user_data_dir {
-        startup.set_user_data_directory(path)?;
-    }
-    if let Some(path) = &system_save_output {
-        startup.set_system_save_output(path)?;
-    }
-    startup.set_skip_auto_resume(skip_auto_resume)?;
     if skip_auto_resume {
         println!(
             "# skip-auto-resume: explicitly clear Amatsutsumi's in-memory startup auto-load flag after system-save loading; save files unchanged"
         );
     }
-    startup.set_decode_movie_frames(true);
     startup.set_mgv_factory(Box::new(crate::video::PrefetchTheoraFactory::default()));
     startup.set_scene_prefetch(|| {});
     startup.set_decoded_image_cache(256 << 20);
@@ -1039,8 +1042,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         #[cfg(not(feature = "audio-output"))]
         return Err("native audio requires --features desktop,audio-output".into());
     }
-    startup.set_snapshot_policy(snapshot_policy);
-    startup.set_save_clock(Box::new(cmvs_core::runner::utc_save_time));
+    startup.set_save_clock(Box::new(cmvs_core::runtime::utc_save_time));
     startup.set_record_text(record_text || font.is_some());
     if let Some(font) = &font {
         if let Some(directory) = &user_data_dir {

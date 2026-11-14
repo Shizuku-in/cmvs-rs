@@ -1,4 +1,4 @@
-use super::{Startup, SystemOutput};
+use super::{Runtime, SystemOutput};
 use crate::{
     audio::AudioHost,
     message_flags::MessageFlags,
@@ -7,7 +7,7 @@ use crate::{
 };
 use std::error::Error;
 
-impl Startup<'_> {
+impl Runtime<'_> {
     pub(super) fn install_configuration(
         &mut self,
         configuration: Configuration,

@@ -101,14 +101,14 @@ fn recode(name: &[u8], original: &[u8], patched: &[u8]) -> Result<(Vec<u8>, usiz
     let patch = Script::decode(patched)?;
     if original.code().len() != patch.code().len()
         || original.labels() != patch.labels()
-        || original.header.entry_pc != patch.header.entry_pc
-        || original.unknown() != patch.unknown()
+        || original.header().entry_pc != patch.header().entry_pc
+        || original.data() != patch.data()
     {
         return Err("patch changed original script structure".into());
     }
     let positions = layout(
         original.code(),
-        original.header.entry_pc,
+        original.header().entry_pc,
         &original.labels(),
     )?;
     let mut code = patch.code().to_vec();
@@ -143,7 +143,7 @@ fn recode(name: &[u8], original: &[u8], patched: &[u8]) -> Result<(Vec<u8>, usiz
         })?;
         code[at..at + 4].copy_from_slice(&target.to_le_bytes());
     }
-    if layout(&code, patch.header.entry_pc, &patch.labels())? != positions {
+    if layout(&code, patch.header().entry_pc, &patch.labels())? != positions {
         return Err("converted instruction layout changed".into());
     }
     Ok((

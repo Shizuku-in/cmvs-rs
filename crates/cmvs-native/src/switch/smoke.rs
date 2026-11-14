@@ -66,9 +66,9 @@ fn inspect_game(root: &std::path::Path) -> Result<(), Box<dyn std::error::Error>
         "Game: {}\nProfile: {}",
         record.game, game.selection.profile.id
     );
-    let script = cmvs_core::runner::load_start(root, &game.files)?;
-    println!("Startup script decoded: {} code bytes", script.code().len());
-    let startup = cmvs_core::runner::Startup::new(&script, root, &game, 0)?;
+    let script = cmvs_core::runtime::load_start(root, &game.files)?;
+    println!("Runtime script decoded: {} code bytes", script.code().len());
+    let startup = cmvs_core::runtime::Runtime::new(&script, root, &game, 0)?;
     println!("VM initialized; canvas: {:?}", startup.screen_size());
     println!("Inspection complete. Playback is not connected yet.");
     Ok(())

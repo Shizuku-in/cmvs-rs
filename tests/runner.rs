@@ -6,7 +6,7 @@ use cmvs_rs::{
     platform::{PlatformBackend, PlatformRequest, RecordingBackend},
     profile::{Game, Registry},
     ps3::Script,
-    runner::{SnapshotPolicy, Startup, StartupEvent, load_start},
+    runtime::{Runtime, RuntimeEvent, RuntimeOptions, SaveStorage, SnapshotPolicy, load_start},
     snapshot::SaveImage,
 };
 use std::{error::Error, fs, path::PathBuf, sync::OnceLock};
@@ -86,12 +86,12 @@ fn runner_contract_gate_preserves_unimplemented_handlers() {
         .identify_game(&root.0, Some("synthetic-derived"))
         .unwrap();
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
     let mut backend = RecordingBackend::default();
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
     assert!(matches!(
         run.tick(&mut backend).unwrap(),
-        StartupEvent::Unhandled {
+        RuntimeEvent::Unhandled {
             command: 0x27fe,
             ..
         }
@@ -101,7 +101,7 @@ fn runner_contract_gate_preserves_unimplemented_handlers() {
     assert_eq!(run.gate().counts().contract_equivalent, 1);
     assert!(matches!(
         run.tick(&mut backend).unwrap(),
-        StartupEvent::Unhandled {
+        RuntimeEvent::Unhandled {
             command: 0x27fe,
             ..
         }
@@ -119,8 +119,16 @@ fn runner_legacy_presumed_policy_keeps_pending_state_on_rejection() {
         .identify_game(&root.0, Some("cmvs-20150405"))
         .unwrap();
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
-    run.set_block_presumed(true);
+    let mut run = Runtime::with_options(
+        &script,
+        &root.0,
+        &game,
+        RuntimeOptions {
+            block_presumed: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     let mut backend = RecordingBackend::default();
     assert!(
         run.tick(&mut backend)
@@ -141,7 +149,7 @@ fn runner_legacy_presumed_policy_keeps_pending_state_on_rejection() {
     assert_eq!(run.machine().pending_system(), pending);
     assert_eq!(run.gate().counts().presumed, 0);
     run.set_block_presumed(false);
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
     assert_eq!(run.gate().counts().presumed, 1);
 }
 
@@ -158,7 +166,7 @@ fn unknown_derived_layout_does_not_enable_the_root_gameplay_snapshot_format() {
     unsupported.id = "synthetic-unsupported-derived".into();
     game.selection.profile = &unsupported;
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
     let pc = run.machine().pc();
     let stack = run.machine().stack().len_bytes();
     let mut backend = RecordingBackend::default();
@@ -190,7 +198,7 @@ fn reviewed_unknown_derived_scenario_point_keeps_the_capture_format_barrier() {
     unsupported.id = "synthetic-unsupported-derived".into();
     game.selection.profile = &unsupported;
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
     let mut backend = RecordingBackend::default();
     let pc = run.machine().pc();
     assert!(
@@ -203,7 +211,7 @@ fn reviewed_unknown_derived_scenario_point_keeps_the_capture_format_barrier() {
     assert_eq!(run.machine().pending_system(), Some((pc, 0x2b2)));
     assert!(matches!(run.held_snapshot(), SaveImage::Absent));
     run.set_snapshot_policy(SnapshotPolicy::ContinueWithoutImage);
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
     assert_eq!(run.machine().pc(), pc + 2);
     assert_eq!(run.machine().pending_system(), None);
     assert_eq!(run.machine().repeat_count(), 0);
@@ -313,7 +321,7 @@ fn slot_exchange_and_move_preserve_raw_files_and_use_only_the_user_directory() {
                 let root = Root::new(&name, &code, b"");
                 let user = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(&name);
                 let script = root.script();
-                let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+                let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
                 run.set_user_data_directory(&user).unwrap();
                 let (a, b) = (
                     format!("save{first:03}.dat"),
@@ -359,7 +367,7 @@ fn slot_exchange_and_move_preserve_raw_files_and_use_only_the_user_directory() {
                 }
                 let mut backend = RecordingBackend::default();
                 for _ in 0..3 {
-                    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+                    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
                 }
                 assert_eq!(run.machine().pc(), code.len());
                 assert_eq!(run.machine().stack().len_bytes(), 0);
@@ -390,7 +398,7 @@ fn slot_edits_ignore_out_of_range_words_and_require_a_user_directory_for_valid_s
             commands::command(&mut code, op, &args);
             let root = Root::new(&format!("edit-invalid-{op}-{}", args[0]), &code, b"");
             let script = root.script();
-            let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+            let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
             let mut backend = RecordingBackend::default();
             for _ in 0..2 {
                 run.tick(&mut backend).unwrap();
@@ -400,7 +408,7 @@ fn slot_edits_ignore_out_of_range_words_and_require_a_user_directory_for_valid_s
                 assert!(run.machine().pending_system().is_some());
                 assert_eq!(run.machine().stack().len_bytes(), 8);
             } else {
-                assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+                assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
                 assert_eq!(run.machine().stack().len_bytes(), 0);
             }
         }
@@ -415,7 +423,7 @@ fn slot_exchange_refreshes_existing_menu_labels_and_latest_selection() {
     let root = Root::new("slot-edit-menu", &code, b"");
     let user = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("slot-edit-menu");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     run.set_user_data_directory(&user).unwrap();
     let labels: [&[u8]; 2] = [b"2020-01-01 00:00:00 first", b"2021-01-01 00:00:00 second"];
     for (slot, label) in labels.iter().enumerate() {
@@ -451,7 +459,7 @@ fn failed_slot_swap_resumes_after_the_successful_rename_without_swapping_twice()
     let root = Root::new("slot-edit-retry", &code, b"");
     let user = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("slot-edit-retry");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     run.set_user_data_directory(&user).unwrap();
     fs::write(user.join("save000.dat"), b"first").unwrap();
     fs::write(user.join("save001.dat"), b"second").unwrap();
@@ -472,7 +480,7 @@ fn failed_slot_swap_resumes_after_the_successful_rename_without_swapping_twice()
     assert!(run.save_slot(0).is_err());
     assert!(run.load_slot(0, &mut backend).is_err());
     drop(locked);
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
     assert_eq!(fs::read(user.join("save000.dat")).unwrap(), b"second");
     assert_eq!(fs::read(user.join("save001.dat")).unwrap(), b"first");
     assert!(!user.join("savetemp.dat").exists());
@@ -504,13 +512,13 @@ fn user_configuration_round_trips_live_settings_and_preserves_the_game_file() {
         .join("target")
         .join(format!("preferences-{}", std::process::id()));
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     assert!(!run.save_preferences(DisplayPreferences::default()).unwrap());
     run.set_user_data_directory(&directory).unwrap();
     let mut backend = RecordingBackend::default();
     let mut yielded = false;
     for _ in 0..100 {
-        if run.tick(&mut backend).unwrap() == StartupEvent::Yield {
+        if run.tick(&mut backend).unwrap() == RuntimeEvent::Yield {
             yielded = true;
             break;
         }
@@ -539,7 +547,7 @@ fn user_configuration_round_trips_live_settings_and_preserves_the_game_file() {
     .unwrap();
     assert_eq!(fs::read(directory.join("cmvs.cfg.bak")).unwrap(), first);
     drop(run);
-    let mut resumed = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut resumed = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     resumed.set_user_data_directory(&directory).unwrap();
     assert_eq!(resumed.settings(), &settings);
     assert_eq!(resumed.audio().settings(), audio);
@@ -586,7 +594,7 @@ fn immediate_readback_retries_until_a_draw_and_ignores_unflushed_scene_changes()
     commands::command(&mut code, 0x203e, &[3, u32::MAX]);
     let root = Root::new("immediate-readback", &code, b"");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     let mut backend = RecordingBackend::default();
     while run.machine().pc() < code.len() - 2 {
         if run.tick(&mut backend).is_err() {
@@ -595,11 +603,11 @@ fn immediate_readback_retries_until_a_draw_and_ignores_unflushed_scene_changes()
             assert!(run.scene().object(3).unwrap().image.is_none());
             // Completed device pixels can differ from current, not-yet-drawn VM state.
             backend.present_frame(RgbaImage::new(1, 1, vec![11, 22, 33, 0]).unwrap());
-            assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+            assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
         }
     }
     assert_eq!(run.scene().clear().color, 0x123456);
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
     assert_eq!(
         run.scene()
             .object(3)
@@ -619,15 +627,15 @@ fn immediate_readback_retries_until_a_draw_and_ignores_unflushed_scene_changes()
 fn quit_is_terminal_and_does_not_execute_the_following_command() {
     let root = Root::new("quit", &[1, 0x20, 0xff, 0x27], b"");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     let mut backend = RecordingBackend::default();
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Quit);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Quit);
     assert_eq!(run.machine().pc(), 2);
     assert!(run.machine().pending_system().is_none());
     let steps = run.steps();
     run.set_focused(false);
     for _ in 0..3 {
-        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Quit);
+        assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Quit);
     }
     assert_eq!(run.steps(), steps);
 }
@@ -640,10 +648,10 @@ fn reset_missing_main_keeps_the_command_pending_and_old_state_intact() {
     commands::command(&mut code, 0x2003, &[]);
     let root = Root::new("reset-missing", &code, b"");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     let mut backend = RecordingBackend::default();
     while run.machine().pc() != code.len() - 2 {
-        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+        assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
     }
     for _ in 0..2 {
         assert!(run.tick(&mut backend).is_err());
@@ -689,7 +697,7 @@ fn recording_frames_advance_mgv_and_release_it_at_the_nominal_end() {
     let game = Registry::builtin()
         .identify_game(&root.0, Some("cmvs-20190305"))
         .unwrap();
-    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
     run.set_block_unreviewed(false);
     run.set_mgv_factory(Box::new(Factory));
     let mut backend = RecordingBackend::default();
@@ -753,17 +761,17 @@ fn inactive_policy_freezes_vm_and_scene_but_keeps_audio_updates_without_time_cat
         )
         .unwrap();
         let script = root.script();
-        let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+        let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
         let updates = Arc::new(AtomicUsize::new(0));
         run.set_audio_backend(Box::new(Audio(updates.clone())))
             .unwrap();
         let mut backend = RecordingBackend::default();
         for _ in 0..30 {
-            if run.tick(&mut backend).unwrap() == StartupEvent::Yield {
+            if run.tick(&mut backend).unwrap() == RuntimeEvent::Yield {
                 break;
             }
         }
-        run.advance_decoded_frame(16).unwrap();
+        run.advance_playback(16).unwrap();
         let steps = run.steps();
         let clock = run.timers().clock();
         let fade = run.scene().fade().current().unwrap().elapsed;
@@ -773,12 +781,12 @@ fn inactive_policy_freezes_vm_and_scene_but_keeps_audio_updates_without_time_cat
             assert_eq!(
                 run.tick(&mut backend).unwrap(),
                 if active_draw {
-                    StartupEvent::Yield
+                    RuntimeEvent::Yield
                 } else {
-                    StartupEvent::Inactive
+                    RuntimeEvent::Inactive
                 }
             );
-            run.advance_decoded_frame(10).unwrap();
+            run.advance_playback(10).unwrap();
         }
         if active_draw {
             assert_eq!(run.steps(), steps + 5);
@@ -792,8 +800,8 @@ fn inactive_policy_freezes_vm_and_scene_but_keeps_audio_updates_without_time_cat
         }
         let clock = run.timers().clock();
         run.set_focused(true);
-        run.advance_decoded_frame(16).unwrap();
-        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
+        run.advance_playback(16).unwrap();
+        assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Yield);
         assert_eq!(run.timers().clock(), clock + 16);
         assert_eq!(updates.load(Ordering::SeqCst), 7);
     }
@@ -806,11 +814,11 @@ fn fullscreen_request_yields_once_and_query_resumes_on_the_next_run() {
     commands::command(&mut code, 0x2163, &[]);
     let root = Root::new("fullscreen-yield", &code, b"");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     let mut backend = RecordingBackend::default();
     let mut yielded = false;
     for _ in 0..20 {
-        if run.tick(&mut backend).unwrap() == StartupEvent::Yield {
+        if run.tick(&mut backend).unwrap() == RuntimeEvent::Yield {
             yielded = true;
             break;
         }
@@ -820,7 +828,7 @@ fn fullscreen_request_yields_once_and_query_resumes_on_the_next_run() {
     assert_eq!(run.machine().stack().len_bytes(), 0);
     run.advance_frame(16).unwrap();
     for _ in 0..3 {
-        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+        assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
         if run.machine().state().system_integer(0) == Some(1) {
             return;
         }
@@ -859,7 +867,7 @@ fn audio_backend_receives_startup_ducking_and_failed_replacement_keeps_old_devic
     let root = Root::new("ducking-backend", &0x20a1u16.to_le_bytes(), b"");
     fs::write(root.0.join("cmvs.cfg"), b"[SOUND_INFO]\nVOICE_FADE_VOLOME=42\nVOICE_FADE_TIMER=123\nVOICE_FADE_WAIT=321\nVOICE_FADE_USE=1\n").unwrap();
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     let settings = Arc::new(Mutex::new(vec![]));
     let updates = Arc::new(Mutex::new(0));
     run.set_audio_backend(Box::new(Probe {
@@ -885,7 +893,7 @@ fn audio_backend_receives_startup_ducking_and_failed_replacement_keeps_old_devic
         }))
         .is_err()
     );
-    run.advance_decoded_frame(16).unwrap();
+    run.advance_playback(16).unwrap();
     assert_eq!(*updates.lock().unwrap(), 1);
     assert_eq!(settings.lock().unwrap().len(), 1);
 }
@@ -894,14 +902,14 @@ fn audio_backend_receives_startup_ducking_and_failed_replacement_keeps_old_devic
 fn startup_main_snapshot_barrier_is_sticky_and_does_not_execute_new_main() {
     let root = Root::new("barrier", &string_call(0x2080), b"fixture.ps3\0");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     run.set_snapshot_policy(SnapshotPolicy::Barrier);
     let mut backend = RecordingBackend::default();
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
     assert_eq!(
         run.tick(&mut backend).unwrap(),
-        StartupEvent::MainPreparedNeedsSnapshot
+        RuntimeEvent::MainPreparedNeedsSnapshot
     );
     assert_eq!(run.machine().current_name(), b"fixture.ps3");
     let before = (
@@ -911,7 +919,7 @@ fn startup_main_snapshot_barrier_is_sticky_and_does_not_execute_new_main() {
     );
     assert_eq!(
         run.tick(&mut backend).unwrap(),
-        StartupEvent::MainPreparedNeedsSnapshot
+        RuntimeEvent::MainPreparedNeedsSnapshot
     );
     assert_eq!(
         (
@@ -926,15 +934,15 @@ fn startup_main_snapshot_barrier_is_sticky_and_does_not_execute_new_main() {
 fn explicit_policy_enters_main_without_building_a_save_image() {
     let root = Root::new("no-snapshot", &string_call(0x2080), b"fixture.ps3\0");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     run.set_snapshot_policy(SnapshotPolicy::ContinueWithoutImage);
     let mut backend = RecordingBackend::default();
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
     assert_eq!(*run.save_image(), SaveImage::Absent);
     assert_eq!(
         run.tick(&mut backend).unwrap(),
-        StartupEvent::MainEnteredWithoutSnapshot
+        RuntimeEvent::MainEnteredWithoutSnapshot
     );
     assert_eq!(
         *run.save_image(),
@@ -945,7 +953,7 @@ fn explicit_policy_enters_main_without_building_a_save_image() {
     );
     assert_eq!(run.machine().state().bit(0), Some(false));
     assert_eq!(run.machine().stack().len_bytes(), 0);
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
     assert_eq!(
         (
             run.steps(),
@@ -964,15 +972,15 @@ fn startup_records_clear_color_without_drawing() {
     code.extend(0x27ffu16.to_le_bytes());
     let root = Root::new("clear", &code, b"");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     let mut backend = RecordingBackend::default();
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
     assert_eq!(run.scene().clear().rgba(), [0xff, 0x80, 0, 255]);
     assert!(backend.requests().is_empty());
     assert!(matches!(
         run.tick(&mut backend).unwrap(),
-        StartupEvent::Unhandled {
+        RuntimeEvent::Unhandled {
             command: 0x27ff,
             ..
         }
@@ -989,11 +997,11 @@ fn jump(target: u32) -> Vec<u8> {
 fn yield_watchdog_stops_a_loop_that_never_yields_without_stepping() {
     let root = Root::new("watchdog", &jump(0), b"");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     let mut backend = RecordingBackend::default();
     run.set_yield_watchdog(3);
     for _ in 0..3 {
-        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+        assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
     }
     for _ in 0..2 {
         let error = run.tick(&mut backend).unwrap_err().to_string();
@@ -1002,7 +1010,7 @@ fn yield_watchdog_stops_a_loop_that_never_yields_without_stepping() {
     }
     run.set_yield_watchdog(5);
     for _ in 0..2 {
-        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+        assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
     }
     assert!(run.tick(&mut backend).is_err());
     assert_eq!(run.steps(), 5);
@@ -1015,12 +1023,12 @@ fn yields_reset_the_watchdog_and_total_steps_are_unbounded() {
     code.extend(jump(0));
     let root = Root::new("yielding", &code, b"");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     let mut backend = RecordingBackend::default();
     run.set_yield_watchdog(2);
     for _ in 0..1000 {
-        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
-        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+        assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Yield);
+        assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
     }
     assert_eq!(run.steps(), 2000);
     // One step after the last yield already reaches a watchdog of 1.
@@ -1040,19 +1048,19 @@ fn startup_backend_error_can_be_retried_without_losing_pending_request() {
     code.extend(0x27ffu16.to_le_bytes());
     let root = Root::new("retry", &code, b"title\0");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     run.tick(&mut Reject).unwrap();
     run.tick(&mut Reject).unwrap();
     assert!(run.tick(&mut Reject).is_err());
     let pending = run.machine().pending_system();
     let mut backend = RecordingBackend::default();
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
     assert!(pending.is_some());
     assert!(run.machine().pending_system().is_none());
     assert_eq!(backend.requests().len(), 1);
     assert!(matches!(
         run.tick(&mut backend).unwrap(),
-        StartupEvent::Unhandled {
+        RuntimeEvent::Unhandled {
             command: 0x27ff,
             ..
         }
@@ -1064,14 +1072,14 @@ fn missing_system_file_is_a_verified_no_change_return() {
     code.extend(0x27ffu16.to_le_bytes());
     let root = Root::new("missing-system", &code, b"");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     let mut backend = RecordingBackend::default();
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
     assert_eq!(run.machine().state().integer(2048), None);
     assert_eq!(run.machine().pc(), 2);
     assert!(matches!(
         run.tick(&mut backend).unwrap(),
-        StartupEvent::Unhandled {
+        RuntimeEvent::Unhandled {
             command: 0x27ff,
             ..
         }
@@ -1094,23 +1102,23 @@ fn startup_fade_wait_needs_explicit_frames_and_resumes_after_removal() {
     code.extend(0x27ffu16.to_le_bytes());
     let root = Root::new("fade-wait", &code, b"");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     let mut backend = RecordingBackend::default();
     for _ in 0..6 {
-        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+        assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
     }
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Yield);
     let pc = run.machine().pc();
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Yield);
     assert_eq!(run.machine().pc(), pc);
     assert_eq!(run.scene().fade().current().unwrap().elapsed, 0);
     run.advance_frame(100).unwrap();
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
     assert_eq!(run.machine().pc(), pc + 2);
     assert!(run.scene().fade().current().is_none());
     assert!(matches!(
         run.tick(&mut backend).unwrap(),
-        StartupEvent::Unhandled {
+        RuntimeEvent::Unhandled {
             command: 0x27ff,
             ..
         }
@@ -1120,7 +1128,7 @@ fn startup_fade_wait_needs_explicit_frames_and_resumes_after_removal() {
 #[test]
 fn message_wait_resumes_without_advancing_time_on_release_completion() {
     let mut code = vec![];
-    // Startup READ_SKIP now follows the INI default, so establish unread ID 0.
+    // Runtime READ_SKIP now follows the INI default, so establish unread ID 0.
     system_call(&mut code, 0x2091, &[0, 1, 0]);
     for (op, words) in [
         (0x215du16, vec![720u32, 1280, 100, 100, 0, 0, 7, 0]),
@@ -1136,27 +1144,27 @@ fn message_wait_resumes_without_advancing_time_on_release_completion() {
     code.extend(0x27ffu16.to_le_bytes());
     let root = Root::new("message-wait", &code, b"");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     let mut backend = RecordingBackend::default();
     loop {
-        if run.tick(&mut backend).unwrap() == StartupEvent::Yield {
+        if run.tick(&mut backend).unwrap() == RuntimeEvent::Yield {
             break;
         }
     }
     let pc = run.machine().pc();
     assert_eq!(run.machine().pending_system(), Some((pc, 0x153)));
     run.advance_frame(16).unwrap();
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Yield);
     assert_eq!(run.machine().pc(), pc);
     assert_eq!(run.timers().values()[0], 16);
     run.input_mut().set(0, false, false, true).unwrap();
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
     assert!(!run.input().released(0));
     assert_eq!(run.machine().stack().len_bytes(), 0);
     assert_eq!(run.timers().values()[0], 16);
     assert!(matches!(
         run.tick(&mut backend).unwrap(),
-        StartupEvent::Unhandled {
+        RuntimeEvent::Unhandled {
             command: 0x27ff,
             ..
         }
@@ -1181,29 +1189,29 @@ fn message_recording_is_opt_in_and_resumes_each_yield_with_explicit_frame_time()
     code.extend(0x27ffu16.to_le_bytes());
     let root = Root::new("message-record", &code, b"A\0");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     let mut backend = RecordingBackend::default();
     loop {
-        if let StartupEvent::Unhandled { command, .. } = run.tick(&mut backend).unwrap() {
+        if let RuntimeEvent::Unhandled { command, .. } = run.tick(&mut backend).unwrap() {
             assert_eq!(command, 0x2152);
             break;
         }
     }
     assert!(run.messages().text(7).unwrap().glyphs.is_empty());
     run.set_record_text(true);
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Yield);
     assert_eq!(run.machine().repeat_count(), 1);
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Yield);
     assert_eq!(run.machine().repeat_count(), 2);
     assert_eq!(run.messages().text(7).unwrap().glyphs.len(), 1);
     run.advance_frame(400).unwrap();
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Yield);
     assert_eq!(run.machine().repeat_count(), 0);
     assert_eq!(run.machine().stack().len_bytes(), 0);
     assert_eq!(run.timers().values()[0], 400);
     assert!(matches!(
         run.tick(&mut backend).unwrap(),
-        StartupEvent::Unhandled {
+        RuntimeEvent::Unhandled {
             command: 0x27ff,
             ..
         }
@@ -1231,7 +1239,7 @@ fn timers_advance_at_run_entry_and_ignore_budget_slices_and_reused_deltas() {
     code.extend(0x27ffu16.to_le_bytes());
     let root = Root::new("timer-boundary", &code, b"");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     let mut backend = RecordingBackend::default();
     run.advance_frame(100).unwrap();
     for _ in 0..4 {
@@ -1243,7 +1251,7 @@ fn timers_advance_at_run_entry_and_ignore_budget_slices_and_reused_deltas() {
         run.tick(&mut backend).unwrap();
     }
     assert_eq!(run.machine().state().system_integer(0), Some(100));
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Yield);
     run.advance_frame(16).unwrap();
     for expected in [16, 116] {
         for _ in 0..2 {
@@ -1251,11 +1259,11 @@ fn timers_advance_at_run_entry_and_ignore_budget_slices_and_reused_deltas() {
         }
         assert_eq!(run.machine().state().system_integer(0), Some(expected));
     }
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Yield);
     // No new frame delta: retrying the host must not reuse the previous 16ms.
     assert!(matches!(
         run.tick(&mut backend).unwrap(),
-        StartupEvent::Unhandled {
+        RuntimeEvent::Unhandled {
             command: 0x27ff,
             ..
         }
@@ -1271,20 +1279,20 @@ fn stopwatch_uses_frame_time_once_per_vm_run() {
     }
     let root = Root::new("stopwatch-boundary", &code, b"");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     let mut backend = RecordingBackend::default();
     run.advance_frame(100).unwrap();
     run.tick(&mut backend).unwrap(); // Mark at 100ms.
     run.advance_frame(7).unwrap(); // A budget slice does not advance the VM clock.
     run.tick(&mut backend).unwrap();
     assert_eq!(run.machine().state().system_integer(0), Some(0));
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Yield);
     run.advance_frame(16).unwrap();
     for _ in 0..2 {
         run.tick(&mut backend).unwrap();
         assert_eq!(run.machine().state().system_integer(0), Some(16));
     }
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Yield);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Yield);
     run.tick(&mut backend).unwrap(); // No new delta: the previous 16ms is not reused.
     assert_eq!(run.machine().state().system_integer(0), Some(16));
     assert_eq!(run.timers().clock(), 116);
@@ -1350,24 +1358,24 @@ fn system_save_export_is_opt_in_external_and_becomes_the_read_source() {
     fs::write(root.0.join("save/system.dat"), &original).unwrap();
     let output = root.0.with_extension("css1");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     assert!(
         run.set_system_save_output(&root.0.join("save/new.dat"))
             .is_err()
     );
     let mut backend = RecordingBackend::default();
     loop {
-        if let StartupEvent::Unhandled { command, .. } = run.tick(&mut backend).unwrap() {
+        if let RuntimeEvent::Unhandled { command, .. } = run.tick(&mut backend).unwrap() {
             assert_eq!(command, 0x2129);
             break;
         }
     }
     assert!(!output.exists());
     assert!(run.set_system_save_output(&output).is_err()); // Too late to configure.
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     run.set_system_save_output(&output).unwrap();
     loop {
-        if let StartupEvent::Unhandled { command, .. } = run.tick(&mut backend).unwrap() {
+        if let RuntimeEvent::Unhandled { command, .. } = run.tick(&mut backend).unwrap() {
             assert_eq!(command, 0x27ff);
             break;
         }
@@ -1414,7 +1422,7 @@ fn user_directory_saves_twice_restarts_and_never_falls_back_from_corrupt_primary
         .join(format!("cmvs-runner-profile-{}", std::process::id()));
     assert!(!directory.exists());
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     assert!(
         run.set_user_data_directory(&root.0.join("save/profile"))
             .is_err()
@@ -1426,7 +1434,7 @@ fn user_directory_saves_twice_restarts_and_never_falls_back_from_corrupt_primary
     );
     let mut backend = RecordingBackend::default();
     loop {
-        if let StartupEvent::Unhandled { command, .. } = run.tick(&mut backend).unwrap() {
+        if let RuntimeEvent::Unhandled { command, .. } = run.tick(&mut backend).unwrap() {
             assert_eq!(command, 0x27ff);
             break;
         }
@@ -1450,7 +1458,7 @@ fn user_directory_saves_twice_restarts_and_never_falls_back_from_corrupt_primary
         Some(42)
     );
     drop(run);
-    let mut restarted = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut restarted = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     restarted.set_user_data_directory(&directory).unwrap();
     while restarted.machine().state().integer(2048).is_none() {
         restarted.tick(&mut backend).unwrap();
@@ -1458,7 +1466,7 @@ fn user_directory_saves_twice_restarts_and_never_falls_back_from_corrupt_primary
     assert_eq!(restarted.machine().state().integer(2048), Some(99));
     drop(restarted);
     fs::write(directory.join("system.dat"), b"corrupt profile").unwrap();
-    let mut corrupt = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut corrupt = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     corrupt.set_user_data_directory(&directory).unwrap();
     let mut failed = false;
     for _ in 0..20 {
@@ -1500,13 +1508,13 @@ fn auto_resume_policy_is_explicit_preserves_other_settings_and_never_writes_save
         let script = root.script();
         let registry = root.recorded_registry(0x1780_0016);
         let game = registry.identify_game(&root.0, None).unwrap();
-        let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+        let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
         if skip {
             run.set_skip_auto_resume(true).unwrap();
         }
         let mut backend = RecordingBackend::default();
         for _ in 0..3 {
-            assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+            assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
         }
         assert_eq!(
             run.machine().state().integer(2198),
@@ -1517,7 +1525,7 @@ fn auto_resume_policy_is_explicit_preserves_other_settings_and_never_writes_save
         assert_eq!(run.auto_resume_skipped(), skip);
         assert!(matches!(
             run.tick(&mut backend).unwrap(),
-            StartupEvent::Unhandled {
+            RuntimeEvent::Unhandled {
                 command: 0x27ff,
                 ..
             }
@@ -1539,7 +1547,7 @@ fn auto_resume_policy_only_overrides_the_first_system_save_read() {
     let script = root.script();
     let registry = root.recorded_registry(0x1780_0016);
     let game = registry.identify_game(&root.0, None).unwrap();
-    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
     run.set_skip_auto_resume(true).unwrap();
     let mut backend = RecordingBackend::default();
     for _ in 0..3 {
@@ -1558,12 +1566,12 @@ fn auto_resume_policy_rejects_other_games_without_applying_system_state() {
     fs::write(root.0.join("save/system.dat"), &raw).unwrap();
     let script = root.script();
     // Without a game record the policy cannot be enabled at all.
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     assert!(run.set_skip_auto_resume(true).is_err());
     // A record verified for another game ID stops at 0x201d, before any system state.
     let registry = root.recorded_registry(0x1780_0016);
     let game = registry.identify_game(&root.0, None).unwrap();
-    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
     run.set_skip_auto_resume(true).unwrap();
     let mut backend = RecordingBackend::default();
     let error = loop {
@@ -1586,7 +1594,7 @@ fn auto_resume_policy_keeps_missing_and_invalid_system_saves_distinct_and_retrya
     let script = root.script();
     let registry = root.recorded_registry(0x1780_0016);
     let game = registry.identify_game(&root.0, None).unwrap();
-    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
     run.set_skip_auto_resume(true).unwrap();
     let mut backend = RecordingBackend::default();
     for _ in 0..3 {
@@ -1610,7 +1618,7 @@ fn auto_resume_policy_keeps_missing_and_invalid_system_saves_distinct_and_retrya
     let script = root.script();
     let registry = root.recorded_registry(0x1780_0016);
     let game = registry.identify_game(&root.0, None).unwrap();
-    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
     run.set_skip_auto_resume(true).unwrap();
     for _ in 0..2 {
         run.tick(&mut backend).unwrap();
@@ -1656,14 +1664,14 @@ fn read_skip_cancels_script_skip_at_unread_output_and_keeps_flags_on_unknown_bit
         code.extend(0x27ffu16.to_le_bytes());
         let root = Root::new(name, &code, b"A\0");
         let script = root.script();
-        let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+        let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
         run.set_record_text(true);
         let mut backend = RecordingBackend::default();
         let mut reached = false;
         for _ in 0..100 {
             match run.tick(&mut backend) {
-                Ok(StartupEvent::Progress) => {}
-                Ok(StartupEvent::Yield) => {
+                Ok(RuntimeEvent::Progress) => {}
+                Ok(RuntimeEvent::Yield) => {
                     assert_eq!(run.message_flags().skip(), read.unwrap());
                     assert_eq!(
                         run.messages().text(0).unwrap().glyphs[0].active,
@@ -1712,13 +1720,13 @@ fn scenario_snapshot_failure_keeps_the_command_vm_and_image_unchanged() {
     code.extend(0x27ffu16.to_le_bytes());
     let root = Root::new("snapshot-failure", &code, b"A ");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     run.set_record_text(true);
     let mut backend = RecordingBackend::default();
     let error = loop {
         match run.tick(&mut backend) {
-            Ok(StartupEvent::Progress) => {}
-            Ok(StartupEvent::Yield) => run.advance_frame(400).unwrap(),
+            Ok(RuntimeEvent::Progress) => {}
+            Ok(RuntimeEvent::Yield) => run.advance_frame(400).unwrap(),
             Ok(event) => panic!("unexpected {event:?}"),
             Err(error) => break error,
         }
@@ -1756,7 +1764,7 @@ fn slot_metadata_updates_only_two_header_words_in_the_user_directory() {
         fs::write(&source, b"original source").unwrap();
         let script = root.script();
         let game = root.game();
-        let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+        let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
         let user = root.0.with_extension("user");
         run.set_user_data_directory(&user).unwrap();
         let mut bytes: Vec<_> = (0..length).map(|n| n as u8).collect();
@@ -1795,7 +1803,7 @@ fn slot_metadata_failures_preserve_file_and_pending_command_for_retry() {
     let root = Root::new("slot-metadata-retry", &code, b"");
     let script = root.script();
     let game = root.game();
-    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
     let mut backend = RecordingBackend::default();
     for _ in 0..3 {
         run.tick(&mut backend).unwrap();
@@ -1807,7 +1815,7 @@ fn slot_metadata_failures_preserve_file_and_pending_command_for_retry() {
             .contains("--user-data-dir")
     );
     drop(run);
-    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
     let user = root.0.with_extension("user");
     run.set_user_data_directory(&user).unwrap();
     let mut bytes = vec![0; 700];
@@ -1832,7 +1840,7 @@ fn slot_metadata_failures_preserve_file_and_pending_command_for_retry() {
     assert_eq!(run.machine().pending_system(), Some((pc, 0x2be)));
     assert_eq!(fs::read(user.join("save003.dat")).unwrap(), bytes);
     fs::remove_dir(user.join(".save003.dat.tmp")).unwrap();
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
     bytes[532..536].copy_from_slice(&1u32.to_le_bytes());
     bytes[536..540].copy_from_slice(&2u32.to_le_bytes());
     assert_eq!(fs::read(user.join("save003.dat")).unwrap(), bytes);
@@ -1872,14 +1880,14 @@ fn ps2_canvas_queries_pointer_and_v2_saves_keep_four_by_three_coordinates() {
         .identify_game(&root.0, Some("cmvs-20110525"))
         .unwrap();
     let script = load_start(&root.0, &game.files).unwrap();
-    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
     let user = root.0.with_extension("user");
     run.set_user_data_directory(&user).unwrap();
     run.input_mut().set_pointer(1010, 755);
     let mut backend = RecordingBackend::default();
     backend.set_screen_size(cmvs_rs::viewport::ScreenSize::new([1024, 768]).unwrap());
     while run.machine().pc() != snapshot_pc {
-        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+        assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
     }
     assert_eq!(run.machine().state().system_integer(0), Some(1));
     assert_eq!(run.machine().state().system_integer(1), Some(1024));
@@ -1889,7 +1897,7 @@ fn ps2_canvas_queries_pointer_and_v2_saves_keep_four_by_three_coordinates() {
     assert_eq!([frame.width(), frame.height()], [1024, 768]);
     assert_eq!(
         run.tick(&mut backend).unwrap(),
-        StartupEvent::SnapshotCaptured
+        RuntimeEvent::SnapshotCaptured
     );
     assert!(run.save_slot(3).unwrap());
     let bytes = fs::read(user.join("save003.dat")).unwrap();
@@ -1946,7 +1954,7 @@ fn old_snapshot_roundtrip_uses_build_layout_and_zero_css1_identity() {
             .identify_game(&root.0, Some(profile))
             .unwrap();
         let script = load_start(&root.0, &game.files).unwrap();
-        let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+        let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
         let user = root.0.with_extension("user");
         run.set_user_data_directory(&user).unwrap();
         assert_eq!(run.screen_size(), [800, 600]);
@@ -1956,7 +1964,7 @@ fn old_snapshot_roundtrip_uses_build_layout_and_zero_css1_identity() {
         let mut backend = RecordingBackend::default();
         backend.set_screen_size(cmvs_rs::viewport::ScreenSize::new([800, 600]).unwrap());
         while run.machine().pc() != pc {
-            assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+            assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
         }
         if profile == "cmvs-20080719" {
             run.advance_frame(100).unwrap();
@@ -1964,7 +1972,7 @@ fn old_snapshot_roundtrip_uses_build_layout_and_zero_css1_identity() {
         }
         assert_eq!(
             run.tick(&mut backend).unwrap(),
-            StartupEvent::SnapshotCaptured
+            RuntimeEvent::SnapshotCaptured
         );
         assert!(run.save_slot(3).unwrap());
         let bytes = fs::read(user.join("save003.dat")).unwrap();
@@ -2098,16 +2106,16 @@ fn load_before_first_audio_command_configures_resources_before_replaying_bgm() {
     let game = root.game();
     let user = root.0.with_extension("user");
     let mut backend = RecordingBackend::default();
-    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
     run.set_user_data_directory(&user).unwrap();
-    while run.tick(&mut backend).unwrap() != StartupEvent::SnapshotCaptured {}
+    while run.tick(&mut backend).unwrap() != RuntimeEvent::SnapshotCaptured {}
     assert!(run.save_slot(3).unwrap());
     drop(run);
-    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
     run.set_user_data_directory(&user).unwrap();
     // Register resources, then load without executing any playback command.
     while run.machine().pc() != audio_pc {
-        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+        assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
     }
     let played = Rc::new(Cell::new(false));
     run.set_audio_backend(Box::new(Audio {
@@ -2228,21 +2236,21 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
             .unwrap(),
         None => root.game(),
     };
-    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
     run.set_user_data_directory(&directory).unwrap();
     run.set_record_text(true);
     let mut backend = RecordingBackend::default();
-    let run_to_end = |run: &mut Startup<'_>, backend: &mut RecordingBackend| {
+    let run_to_end = |run: &mut Runtime<'_>, backend: &mut RecordingBackend| {
         let mut captured = 0;
         loop {
             if run.machine().pc() == end {
                 return captured;
             }
             match run.tick(backend).unwrap() {
-                StartupEvent::Progress => {}
-                StartupEvent::Yield => run.advance_frame(400).unwrap(),
-                StartupEvent::SnapshotCaptured => captured += 1,
-                StartupEvent::Unhandled { pc, command } => {
+                RuntimeEvent::Progress => {}
+                RuntimeEvent::Yield => run.advance_frame(400).unwrap(),
+                RuntimeEvent::SnapshotCaptured => captured += 1,
+                RuntimeEvent::Unhandled { pc, command } => {
                     assert_eq!((pc, command), (end, 0x27ff));
                     return captured;
                 }
@@ -2588,7 +2596,7 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
     assert_eq!(run.machine().pc(), 2);
     assert_eq!(run.machine().repeat_count(), 0);
     assert_eq!(run.machine().stack().len_bytes(), callback.stack.len());
-    assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
     assert_eq!(run.machine().pc(), 0);
     assert_eq!(run.machine().repeat_count(), 7);
     assert_eq!(
@@ -2609,13 +2617,13 @@ fn gameplay_saves_need_an_independent_user_directory() {
     code.extend(0x27ffu16.to_le_bytes());
     let root = Root::new("snapshot-no-directory", &code, b"");
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     let mut backend = RecordingBackend::default();
     // Nothing to write before the first snapshot, as in the original.
     assert!(!run.save_slot(0).unwrap());
     assert_eq!(
         run.tick(&mut backend).unwrap(),
-        StartupEvent::SnapshotCaptured
+        RuntimeEvent::SnapshotCaptured
     );
     let error = run.save_slot(0).unwrap_err();
     assert!(error.to_string().contains("--user-data-dir"), "{error}");
@@ -2649,18 +2657,18 @@ fn automatic_dispatch_runs_due_callbacks_at_the_next_run_entry_and_returns() {
         let (code, end) = dispatch_code(block);
         let root = Root::new(&format!("dispatch-{block}"), &code, b"");
         let script = root.script();
-        let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+        let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
         let mut backend = RecordingBackend::default();
         let mut yields = 0;
         loop {
             match run.tick(&mut backend).unwrap() {
-                StartupEvent::Progress => {}
-                StartupEvent::Yield => {
+                RuntimeEvent::Progress => {}
+                RuntimeEvent::Yield => {
                     yields += 1;
                     // The callback has not run inside the run that registered it.
                     assert_eq!(run.machine().state().integer(42), None);
                 }
-                StartupEvent::Unhandled { pc, command } => {
+                RuntimeEvent::Unhandled { pc, command } => {
                     assert_eq!((pc, command), (end, 0x27ff));
                     break;
                 }
@@ -2706,20 +2714,20 @@ fn snapshots_inside_a_dispatched_callback_load_back_and_return_through_the_frame
         .join(format!("cmvs-runner-callback-{}", std::process::id()));
     let _ = fs::remove_dir_all(&directory);
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     run.set_user_data_directory(&directory).unwrap();
     let mut backend = RecordingBackend::default();
-    let run_to_end = |run: &mut Startup<'_>, backend: &mut RecordingBackend| {
+    let run_to_end = |run: &mut Runtime<'_>, backend: &mut RecordingBackend| {
         let mut captured = 0;
         loop {
             match run.tick(backend).unwrap() {
-                StartupEvent::Progress | StartupEvent::Yield => {}
-                StartupEvent::SnapshotCaptured => {
+                RuntimeEvent::Progress | RuntimeEvent::Yield => {}
+                RuntimeEvent::SnapshotCaptured => {
                     captured += 1;
                     // Captured inside the callback, above its return frame.
                     assert_eq!(run.machine().stack().len_bytes(), 12);
                 }
-                StartupEvent::Unhandled { pc, command } => {
+                RuntimeEvent::Unhandled { pc, command } => {
                     assert_eq!((pc, command), (end, 0x27ff));
                     return captured;
                 }
@@ -2753,12 +2761,12 @@ fn an_enabled_save_callback_stops_the_slot_write_but_not_the_snapshot() {
         .join(format!("cmvs-runner-save-callback-{}", std::process::id()));
     let _ = fs::remove_dir_all(&directory);
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     run.set_user_data_directory(&directory).unwrap();
     let mut backend = RecordingBackend::default();
     let error = loop {
         match run.tick(&mut backend) {
-            Ok(StartupEvent::Progress | StartupEvent::SnapshotCaptured) => {}
+            Ok(RuntimeEvent::Progress | RuntimeEvent::SnapshotCaptured) => {}
             Ok(event) => panic!("unexpected {event:?}"),
             Err(error) => break error,
         }
@@ -2788,13 +2796,13 @@ fn button_groups_are_saved_and_come_back_empty_on_object_zero() {
         .join(format!("cmvs-runner-buttons-{}", std::process::id()));
     let _ = fs::remove_dir_all(&directory);
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     run.set_user_data_directory(&directory).unwrap();
     let mut backend = RecordingBackend::default();
     loop {
         match run.tick(&mut backend).unwrap() {
-            StartupEvent::Progress | StartupEvent::SnapshotCaptured => {}
-            StartupEvent::Unhandled {
+            RuntimeEvent::Progress | RuntimeEvent::SnapshotCaptured => {}
+            RuntimeEvent::Unhandled {
                 command: 0x27ff, ..
             } => break,
             event => panic!("unexpected {event:?}"),
@@ -2833,13 +2841,13 @@ fn font_dialog_sets_the_global_face_refreshes_default_texts_and_persists() {
         .join("target")
         .join(format!("font-dialog-{}", std::process::id()));
     let script = root.script();
-    let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     run.set_user_data_directory(&directory).unwrap();
     let mut backend = RecordingBackend::default();
     backend.answer_font_dialog(Some(b"Face A".to_vec()));
     backend.answer_font_dialog(None);
     while backend.font_dialogs().len() < 2 {
-        assert_ne!(run.tick(&mut backend).unwrap(), StartupEvent::Inactive);
+        assert_ne!(run.tick(&mut backend).unwrap(), RuntimeEvent::Inactive);
     }
     assert_eq!(backend.font_dialogs(), [DEFAULT_FONT_FACE, b"Face A"]);
     assert_eq!(run.settings().font_face(), b"Face A");
@@ -2860,7 +2868,7 @@ fn font_dialog_sets_the_global_face_refreshes_default_texts_and_persists() {
     let saved = fs::read(directory.join("cmvs.cfg")).unwrap();
     assert!(saved.windows(13).any(|w| w == b"FONT=Face A\r\n"));
     drop(run);
-    let mut resumed = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+    let mut resumed = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     resumed.set_user_data_directory(&directory).unwrap();
     assert_eq!(resumed.settings().font_face(), b"Face A");
     drop(resumed);
@@ -2874,7 +2882,7 @@ fn chosen_faces_are_validated_before_the_command_completes() {
     let root = Root::new("font-dialog-invalid", &code, b"");
     let script = root.script();
     for face in [Vec::new(), vec![b'x'; 32], b"a\0b".to_vec()] {
-        let mut run = Startup::new(&script, &root.0, &root.game(), 0).unwrap();
+        let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
         let mut backend = RecordingBackend::default();
         backend.answer_font_dialog(Some(face));
         let mut failed = false;
@@ -2906,7 +2914,7 @@ fn verified_startup_globals_are_zero_but_unverified_profiles_remain_unknown() {
         let profile = synthetic_profile().replace("synthetic-base", id);
         let registry = Registry::parse(&[&profile], "").unwrap();
         let game = registry.identify_game(&root.0, Some(id)).unwrap();
-        let run = Startup::new(&script, &root.0, &game, 0).unwrap();
+        let run = Runtime::new(&script, &root.0, &game, 0).unwrap();
         let state = run.machine().state();
         let verified = id != "synthetic-base";
         assert_eq!(state.integer(2190), verified.then_some(0));
@@ -2949,7 +2957,7 @@ fn first_system_save_without_template_writes_reloads_and_survives_restart() {
         let game = registry
             .identify_game(&root.0, Some("cmvs-20160201"))
             .unwrap();
-        let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+        let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
         assert_eq!(run.machine().state().integer(2190), Some(0));
         assert_eq!(run.machine().state().integer(4095), Some(0));
         assert_eq!(run.machine().state().integer(4097), None);
@@ -2962,7 +2970,7 @@ fn first_system_save_without_template_writes_reloads_and_survives_restart() {
         assert!(!directory.join("system.dat").exists());
         let mut backend = RecordingBackend::default();
         loop {
-            if let StartupEvent::Unhandled { command, .. } = run.tick(&mut backend).unwrap() {
+            if let RuntimeEvent::Unhandled { command, .. } = run.tick(&mut backend).unwrap() {
                 assert_eq!(command, 0x27ff);
                 break;
             }
@@ -2981,7 +2989,7 @@ fn first_system_save_without_template_writes_reloads_and_survives_restart() {
             Some(96)
         );
         drop(run);
-        let mut resumed = Startup::new(&script, &root.0, &game, 0).unwrap();
+        let mut resumed = Runtime::new(&script, &root.0, &game, 0).unwrap();
         resumed.set_user_data_directory(&directory).unwrap();
         while resumed.machine().pc() != after_load {
             resumed.tick(&mut backend).unwrap();
@@ -3007,11 +3015,11 @@ fn realive_startup_uses_the_extended_child_table() {
         let game = Registry::builtin()
             .identify_game(&root.0, Some(id))
             .unwrap();
-        let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+        let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
         run.set_block_unreviewed(false);
         let mut backend = RecordingBackend::default();
         for _ in 0..20 {
-            if run.tick(&mut backend).unwrap() == StartupEvent::Yield {
+            if run.tick(&mut backend).unwrap() == RuntimeEvent::Yield {
                 break;
             }
         }
@@ -3033,12 +3041,12 @@ fn realive_fullscreen_monitor_selection_survives_configuration_restart() {
         let directory = root
             .0
             .with_file_name(format!("cmvs-realive-monitor-user-{}", std::process::id()));
-        let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+        let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
         run.set_user_data_directory(&directory).unwrap();
         run.set_block_unreviewed(false);
         let mut backend = RecordingBackend::default();
         for _ in 0..20 {
-            if run.tick(&mut backend).unwrap() == StartupEvent::Yield {
+            if run.tick(&mut backend).unwrap() == RuntimeEvent::Yield {
                 break;
             }
         }
@@ -3046,7 +3054,7 @@ fn realive_fullscreen_monitor_selection_survives_configuration_restart() {
         assert_eq!(backend.requests(), [PlatformRequest::FullscreenMonitor(5)]);
         run.save_preferences(Default::default()).unwrap();
         drop(run);
-        let mut resumed = Startup::new(&script, &root.0, &game, 0).unwrap();
+        let mut resumed = Runtime::new(&script, &root.0, &game, 0).unwrap();
         resumed.set_user_data_directory(&directory).unwrap();
         assert_eq!(resumed.platform().fullscreen_monitor_mode(), 5);
         drop(resumed);
@@ -3077,14 +3085,14 @@ fn realive_list_selection_receives_input_and_scene_hosts_in_startup() {
     let game = Registry::builtin()
         .identify_game(&root.0, Some("cmvs-20190305"))
         .unwrap();
-    let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+    let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
     run.set_block_unreviewed(false);
     let mut backend = RecordingBackend::default();
     let mut yielded = false;
     for _ in 0..100 {
         let event = run.tick(&mut backend).unwrap();
-        assert!(!matches!(event, StartupEvent::Unhandled { .. }));
-        if event == StartupEvent::Yield {
+        assert!(!matches!(event, RuntimeEvent::Unhandled { .. }));
+        if event == RuntimeEvent::Yield {
             yielded = true;
             break;
         }
@@ -3108,7 +3116,7 @@ fn old_save_comment_edit_preserves_payload_and_rejects_missing_or_invalid_slots(
             .identify_game(&root.0, Some(profile))
             .unwrap();
         let script = load_start(&root.0, &game.files).unwrap();
-        let mut run = Startup::new(&script, &root.0, &game, 0).unwrap();
+        let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
         let user = root.0.with_extension("user");
         run.set_user_data_directory(&user).unwrap();
         let mut original = vec![0x5a; 900];
@@ -3133,4 +3141,32 @@ fn old_save_comment_edit_preserves_payload_and_rejects_missing_or_invalid_slots(
         drop(run);
         fs::remove_dir_all(user).unwrap();
     }
+}
+
+#[test]
+fn runtime_options_load_and_lock_the_selected_user_profile_before_execution() {
+    let root = Root::new("runtime-options", &0x2000u16.to_le_bytes(), b"");
+    let user = root.0.with_extension("user");
+    fs::create_dir(&user).unwrap();
+    fs::write(user.join("cmvs.cfg"), b"[MESSAGE_INFO]\nTEXT_WAIT=7\n").unwrap();
+    let script = root.script();
+    let game = root.game();
+    let options = || RuntimeOptions {
+        encoding: cmvs_rs::TextEncoding::Gbk,
+        saves: SaveStorage::UserDirectory(user.clone()),
+        ..Default::default()
+    };
+    let mut run = Runtime::with_options(&script, &root.0, &game, options()).unwrap();
+    assert_eq!(run.machine().text_encoding(), cmvs_rs::TextEncoding::Gbk);
+    assert_eq!(run.settings().text_output().speed, 7);
+    assert_eq!(run.steps(), 0);
+    assert!(Runtime::with_options(&script, &root.0, &game, options()).is_err());
+    assert_eq!(
+        run.tick(&mut RecordingBackend::default()).unwrap(),
+        RuntimeEvent::Yield
+    );
+    assert!(!root.0.join("save/system.dat").exists());
+    drop(run);
+    drop(Runtime::with_options(&script, &root.0, &game, options()).unwrap());
+    fs::remove_dir_all(user).unwrap();
 }

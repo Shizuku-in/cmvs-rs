@@ -118,7 +118,7 @@ impl SharedBootstrap for Bootstrap {
         }
         let mut hosts = Hosts::default();
         if vm.pending_system().unwrap().1 == 0x34d {
-            hosts.function_keys = Some(FunctionKeys::Startup(self));
+            hosts.function_keys = Some(FunctionKeys::Runtime(self));
         } else {
             hosts.bootstrap = Some(self);
         }

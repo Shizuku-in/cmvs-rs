@@ -1,13 +1,13 @@
 //! QUIT and RESET for the hash-bound cmvs-20160201 layout.
-use super::{Startup, StartupEvent};
+use super::{Runtime, RuntimeEvent};
 use crate::{dispatch::RuntimeCall, script_control::ScriptSource};
 use std::error::Error;
 
-impl<'a> Startup<'a> {
+impl<'a> Runtime<'a> {
     pub(super) fn handle_lifecycle(
         &mut self,
         request: &RuntimeCall,
-    ) -> Result<StartupEvent, Box<dyn Error>> {
+    ) -> Result<RuntimeEvent, Box<dyn Error>> {
         let command = request.command();
         // Load/validate the replacement before destructive cleanup. Failure leaves RESET
         // pending, with the old VM and hosts intact; no game file is ever written.
@@ -29,14 +29,14 @@ impl<'a> Startup<'a> {
             request.complete(&mut self.machine, 0x4000)?;
             self.movies.restore(Default::default());
             self.quit = true;
-            return Ok(StartupEvent::Quit);
+            return Ok(RuntimeEvent::Quit);
         }
         // The rebuilt scene drops the legacy effects; their destructors release the
         // prepared sounds and stop the walk's channel 1, which would otherwise play on.
         self.scene
             .release_legacy_effects(self.audio_backend.as_mut())?;
         self.finish_reset(replacement.expect("RESET replacement prepared"));
-        Ok(StartupEvent::Progress)
+        Ok(RuntimeEvent::Progress)
     }
 
     fn finish_reset(&mut self, replacement: crate::machine::PreparedMain<'a>) {
@@ -122,10 +122,10 @@ mod tests {
         let script = Script::decode(&raw).unwrap();
         let mut backend = RecordingBackend::default();
         let requested = |host: bool| {
-            let mut run = Startup::new(&script, &root, &game, 0).unwrap();
+            let mut run = Runtime::new(&script, &root, &game, 0).unwrap();
             run.set_host_capture(host);
             let mut backend = RecordingBackend::default();
-            assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+            assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
             assert!(run.capture().requested());
             run.advance_frame(16).unwrap();
             run
@@ -156,7 +156,7 @@ mod tests {
 
         // A host that supplies nothing leaves the capture to the next VM step.
         let mut run = requested(true);
-        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+        assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
         assert!(!run.capture_due());
         assert_eq!(run.capture().image(), Some(&drawn));
         assert_eq!(run.machine.state().system_integer(0), Some(1));
@@ -171,25 +171,25 @@ mod tests {
         let registry = Registry::builtin();
         let game = registry.identify_game(&root, None).unwrap();
         assert_eq!(game.selection.profile.id, "cmvs-20160201");
-        let script = crate::runner::load_start(&root, &game.files).unwrap();
+        let script = crate::runtime::load_start(&root, &game.files).unwrap();
         let user =
             std::env::temp_dir().join(format!("cmvs-lifecycle-external-{}", std::process::id()));
-        let mut run = Startup::new(&script, &root, &game, 0).unwrap();
+        let mut run = Runtime::new(&script, &root, &game, 0).unwrap();
         run.set_user_data_directory(&user).unwrap();
         run.set_skip_auto_resume(true).unwrap();
         run.set_record_text(true);
         let mut backend = RecordingBackend::default();
-        fn title(run: &mut Startup<'_>, backend: &mut RecordingBackend, after: u64) {
+        fn title(run: &mut Runtime<'_>, backend: &mut RecordingBackend, after: u64) {
             for _ in 0..3_000_000 {
                 match run.tick(backend).unwrap() {
-                    StartupEvent::Yield => {
+                    RuntimeEvent::Yield => {
                         run.advance_frame(16).unwrap();
                         if run.machine.current_name() == b"menu.ps3" && run.steps > after + 200_000
                         {
                             return;
                         }
                     }
-                    StartupEvent::Progress | StartupEvent::SnapshotCaptured => {}
+                    RuntimeEvent::Progress | RuntimeEvent::SnapshotCaptured => {}
                     other => panic!("{other:?}"),
                 }
             }
@@ -210,7 +210,7 @@ mod tests {
             .unwrap();
         run.resume_run = false;
         let before = run.steps;
-        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+        assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
         assert_eq!(run.machine.current_name(), b"main.ps3");
         assert_eq!(run.machine.stack().len_bytes(), 0);
         assert_eq!(run.held_snapshot(), &SaveImage::Absent);
@@ -224,9 +224,9 @@ mod tests {
             .dispatch_callbacks(&[(common, 0x41800)])
             .unwrap();
         run.resume_run = false;
-        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Quit);
+        assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Quit);
         let before = run.steps;
-        assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Quit);
+        assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Quit);
         assert_eq!(run.steps, before);
         println!(
             "real RESET returned to title; QUIT terminal at {} steps",
@@ -291,11 +291,11 @@ mod tests {
             .identify_game(&root, Some("cmvs-20160201"))
             .unwrap();
         let script = Script::decode(&raw).unwrap();
-        let mut run = Startup::new(&script, &root, &game, 0).unwrap();
+        let mut run = Runtime::new(&script, &root, &game, 0).unwrap();
         run.machine.state_mut().set_integer(7, 42).unwrap();
         let mut backend = RecordingBackend::default();
         while run.machine.pc() != reset_pc {
-            assert_eq!(run.tick(&mut backend).unwrap(), StartupEvent::Progress);
+            assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
         }
         assert!(run.message_flags.skip());
         assert!(run.message_flags.auto_advance());

@@ -164,7 +164,7 @@ fn run(game: &Path, stage: &Path, encoding: scripts::OutputEncoding) -> Result<(
         let (out, changed) =
             scripts::rewrite_encoded(&source, &rows, encoding, &[('♪', "☆"), ('・', "·")])?;
         let decoded = Script::decode(&out)?;
-        bytecode::decode_layout(decoded.code(), decoded.header.entry_pc, &decoded.labels())?;
+        bytecode::decode_layout(decoded.code(), decoded.header().entry_pc, &decoded.labels())?;
         report.push_str(&format!(
             "{name}\t{patched}\t{}\t{changed}\t{}\n",
             rows.len(),
@@ -339,7 +339,7 @@ mod tests {
             let out = Script::decode(&out)?;
             assert_eq!(out.text(), expected);
             assert_eq!(out.labels(), source.labels());
-            assert_eq!(out.unknown(), source.unknown());
+            assert_eq!(out.data(), source.data());
             assert_eq!(u32::from_le_bytes(out.code()[4..8].try_into()?), offset);
         }
         Ok(())

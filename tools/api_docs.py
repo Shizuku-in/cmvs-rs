@@ -65,6 +65,15 @@ def main():
         for external in data["external_crates"].values():
             if external.get("path"):
                 external["path"] = Path(external["path"]).name
+        # Inherited impl spans can retain paths from dependency metadata.
+        for item in data["index"].values():
+            if span := item.get("span"):
+                for prefix, replacement in ((ROOT, Path(".")), (Path.home(), Path("/user"))):
+                    try:
+                        span["filename"] = (replacement / Path(span["filename"]).relative_to(prefix)).as_posix()
+                    except ValueError:
+                        continue
+                    break
         artifact.write_text(json.dumps(data, separators=(",", ":")) + "\n")
         entries.append({"package": package, "crate": name,
                         "html": f"html/doc/{name}/index.html", "json": f"json/doc/{name}.json",

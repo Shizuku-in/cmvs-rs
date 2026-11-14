@@ -1,5 +1,5 @@
 //! 0x228c / 0x140068dd0 and 0x228e / 0x1400690b0, restricted to the locked user directory.
-use super::Startup;
+use super::Runtime;
 use crate::dispatch::RuntimeCall;
 use crate::filesystem as fs;
 use std::{error::Error, io, path::PathBuf};
@@ -91,7 +91,7 @@ impl SlotEdit {
     }
 }
 
-impl Startup<'_> {
+impl Runtime<'_> {
     pub(super) fn handle_edit_slots(
         &mut self,
         request: &RuntimeCall,

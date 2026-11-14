@@ -4,7 +4,7 @@ use crate::json::Json;
 use cmvs_core::{
     buttons::BUTTON_GROUPS,
     digest::{Sha256, to_hex},
-    runner::Startup,
+    runtime::Runtime,
 };
 
 /// System command 0x2153 (message wait), as the machine reports it without 0x2000.
@@ -31,7 +31,7 @@ pub struct PageSignature {
 }
 
 impl PageSignature {
-    pub fn of(run: &Startup<'_>) -> Self {
+    pub fn of(run: &Runtime<'_>) -> Self {
         let groups = (0..crate::controls::GROUPS)
             .filter_map(|slot| {
                 let group = crate::controls::group(run, slot)?;
@@ -112,7 +112,7 @@ pub struct Observation {
 }
 
 impl Observation {
-    pub fn of(run: &Startup<'_>, yields: u64) -> Self {
+    pub fn of(run: &Runtime<'_>, yields: u64) -> Self {
         let machine = run.machine();
         Self {
             yields,
@@ -165,7 +165,7 @@ impl Observation {
 /// Coarse digest of VM, scene and button state for comparing two runs of the same build.
 /// Volatile fields such as timers are not excluded yet, so it only compares runs that should be
 /// identical step for step.
-pub fn state_digest(run: &Startup<'_>) -> String {
+pub fn state_digest(run: &Runtime<'_>) -> String {
     let mut h = Sha256::new();
     h.update(format!("{:?}", run.machine().state()).as_bytes());
     match run.machine().capture_vm() {
@@ -224,7 +224,7 @@ impl Settle {
 
 /// Digest of the VM variable state, used to recognise the same choice point reached by
 /// different paths.
-pub fn variables_digest(run: &Startup<'_>) -> String {
+pub fn variables_digest(run: &Runtime<'_>) -> String {
     let mut h = Sha256::new();
     h.update(run.machine().current_name());
     h.update(&(run.machine().pc() as u64).to_le_bytes());

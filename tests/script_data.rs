@@ -69,7 +69,7 @@ fn data_words_are_unaligned_little_endian_and_alias_across_tags() {
     let mut vm = Machine::new(&script).unwrap();
     vm.step().unwrap();
     assert_eq!(vm.script_data(), [0xaa, 0x78, 0x56, 0x34, 0x12, 0xaa]);
-    assert_eq!(script.unknown(), [0xaa; 6]);
+    assert_eq!(script.data(), [0xaa; 6]);
     vm.step().unwrap();
     assert_eq!(vm.state().result, Some(0x12345678));
     vm.step().unwrap();

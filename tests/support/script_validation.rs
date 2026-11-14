@@ -18,7 +18,7 @@ pub struct ScriptStructure {
 /// Unknown runtime system semantics are not validated; this never executes a script.
 pub fn validate(script: &Script) -> Result<ScriptStructure, DecodeError> {
     let instructions =
-        bytecode::decode_layout(script.code(), script.header.entry_pc, &script.labels())?;
+        bytecode::decode_layout(script.code(), script.header().entry_pc, &script.labels())?;
     let mut system_commands = BTreeMap::new();
     for instruction in &instructions {
         if let InstructionKind::System { command } = instruction.kind {
@@ -27,7 +27,7 @@ pub fn validate(script: &Script) -> Result<ScriptStructure, DecodeError> {
     }
     Ok(ScriptStructure {
         code_bytes: script.code().len(),
-        label_count: script.header.label_count,
+        label_count: script.header().label_count,
         instructions,
         system_commands,
     })

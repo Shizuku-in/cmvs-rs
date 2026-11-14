@@ -93,12 +93,19 @@ impl Header {
 
 /// A validated script container with an owned, decoded payload.
 ///
-/// Access [`Self::code`], [`Self::unknown`], and [`Self::text`] for the individual
+/// Access [`Self::code`], [`Self::data`], and [`Self::text`] for the individual
 /// segments. VM execution keeps its own mutable copy of the data segment.
+/// Header lengths are read-only so they cannot invalidate the decoded segments.
+///
+/// ```compile_fail
+/// # use cmvs_core::ps3::Script;
+/// fn change_length(script: &mut Script) {
+///     script.header().code_size = 3;
+/// }
+/// ```
 #[derive(Debug, Clone)]
 pub struct Script {
-    /// Original header fields, including the container's packed-size metadata.
-    pub header: Header,
+    header: Header,
     payload: Vec<u8>,
     /// Number of bytes after the declared compressed payload; zero for uncompressed input.
     pub trailing_file_bytes: usize,
@@ -114,6 +121,11 @@ pub struct TextEntry<'a> {
 }
 
 impl Script {
+    /// Original header fields, including the container's packed-size metadata.
+    pub fn header(&self) -> &Header {
+        &self.header
+    }
+
     /// Read an already-decoded script memory image from a gameplay save.
     ///
     /// CSV2 section 2 retains the original header key and packed-size fields, but
@@ -272,10 +284,15 @@ impl Script {
         &self.payload[self.code_start()..self.code_start() + self.header.code_size as usize]
     }
 
-    /// Initial mutable data segment, historically named `unknown` in this API.
-    pub fn unknown(&self) -> &[u8] {
+    /// Initial contents of the script's mutable data segment.
+    pub fn data(&self) -> &[u8] {
         let start = self.code_start() + self.header.code_size as usize;
         &self.payload[start..start + self.header.unknown_size as usize]
+    }
+
+    /// Compatibility name for [`Self::data`].
+    pub fn unknown(&self) -> &[u8] {
+        self.data()
     }
 
     /// Raw text segment, including NUL terminators.
