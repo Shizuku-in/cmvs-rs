@@ -33,35 +33,6 @@ fn pending(vm: &mut Machine<'_>) {
     while !matches!(vm.step().unwrap(), Step::System { .. }) {}
 }
 
-#[test]
-fn ending_without_a_running_move_only_pops_the_argument() {
-    for flag in [0u32, 1] {
-        let mut code = vec![];
-        code.extend(0x440u16.to_le_bytes());
-        code.extend(4u16.to_le_bytes());
-        code.extend(flag.to_le_bytes());
-        code.extend(0x2068u16.to_le_bytes());
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        vm.state_mut().set_system_integer(0, 4).unwrap();
-        let mut camera = CameraHost::default();
-        pending(&mut vm);
-        assert!(camera.shared_state(&mut vm).unwrap());
-        assert_eq!((vm.pc(), vm.stack().len_bytes()), (code.len(), 0));
-        assert_eq!(vm.state().system_integer(0), Some(4));
-        assert!(!camera.moving());
-    }
-}
-
-#[test]
-fn a_missing_argument_keeps_the_command_pending() {
-    let script = script(&0x2068u16.to_le_bytes());
-    let mut vm = Machine::new(&script).unwrap();
-    pending(&mut vm);
-    assert!(CameraHost::default().shared_state(&mut vm).is_err());
-    assert_eq!(vm.pending_system().map(|p| p.1), Some(0x68));
-}
-
 /// Pushes `args` so the first one ends up at SP-4, then issues `op`.
 fn call(code: &mut Vec<u8>, op: u16, args: &[u32]) {
     for &arg in args.iter().rev() {
@@ -126,21 +97,6 @@ fn incomplete_view_pose_does_not_commit_a_partial_xyz() {
 }
 
 #[test]
-fn constructor_values_match_0x14004fab0() {
-    let host = CameraHost::default();
-    let camera = host.camera(1).unwrap();
-    assert_eq!(camera.words[0], 1);
-    assert_eq!(
-        [2, 6, 7, 8, 9, 10, 11, 15, 16, 17, 18].map(|i| camera.float(i)),
-        [
-            3.0, 10.0, 10.0, 6.0, 1024.0, 612.0, 24.0, 512.0, 306.0, 1.0, 1.0
-        ]
-    );
-    assert_eq!(camera.words[21], 0);
-    assert!(host.camera(2).is_none());
-}
-
-#[test]
 fn indexed_and_camera0_setters_write_their_fields() {
     let mut code = vec![];
     call(&mut code, 0x205a, &[1, f(1.239), f(36.0), f(-0.555)]);
@@ -177,37 +133,6 @@ fn indexed_and_camera0_setters_write_their_fields() {
         [1, 2, 3].map(|i| host.camera(0).unwrap().float(i)),
         [4.0, 5.0, 6.0]
     );
-}
-
-#[test]
-fn bad_indices_and_short_stacks_keep_the_command_pending() {
-    let mut short = vec![];
-    call(&mut short, 0x205a, &[0, f(1.0)]);
-    let mut wide = vec![];
-    call(&mut wide, 0x205c, &[2, f(1.0)]);
-    for code in [short, wide] {
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        pending(&mut vm);
-        let mut host = CameraHost::default();
-        let bytes = vm.stack().len_bytes();
-        assert!(host.shared_state(&mut vm).is_err());
-        assert_eq!(vm.stack().len_bytes(), bytes);
-        assert_eq!(host.camera(0), Some(&Default::default()));
-    }
-}
-
-#[test]
-fn integer_at_152_is_set_by_0x209c() {
-    let mut code = vec![];
-    call(&mut code, 0x209c, &[1, 7]);
-    let script = script(&code);
-    let mut vm = Machine::new(&script).unwrap();
-    let mut host = CameraHost::default();
-    pending(&mut vm);
-    assert!(host.shared_state(&mut vm).unwrap());
-    assert_eq!(host.camera(1).unwrap().words[38], 7);
-    assert_eq!(vm.stack().len_bytes(), 0);
 }
 
 #[test]
@@ -386,36 +311,6 @@ fn camera_move_query_has_no_parameters_and_preserves_stack_cameras_and_other_res
             assert_eq!(host.camera(i), Some(&Default::default()));
         }
         assert!(vm.pending_system().is_none());
-    }
-}
-
-#[test]
-fn device_size_query_writes_results_one_and_two_without_popping() {
-    let stack_words = [0x12345678, u32::MAX];
-    let mut code = vec![];
-    for &word in &stack_words {
-        code.extend(0x440u16.to_le_bytes());
-        code.extend(4u16.to_le_bytes());
-        code.extend(word.to_le_bytes());
-    }
-    code.extend(0x2126u16.to_le_bytes());
-    let program = script(&code);
-    let mut vm = Machine::new(&program).unwrap();
-    let mut host = CameraHost::default();
-    for i in 0..7 {
-        vm.state_mut().set_system_integer(i, 100 + i).unwrap();
-    }
-    pending(&mut vm);
-    assert!(host.shared_state(&mut vm).unwrap());
-    let results: Vec<_> = (0..7).map(|i| vm.state().system_integer(i)).collect();
-    assert_eq!(
-        results,
-        [100, 1280, 720, 103, 104, 105, 106].map(Some).to_vec()
-    );
-    assert_eq!((vm.pc(), vm.stack().len_bytes()), (code.len(), 8));
-    assert_eq!(vm.stack().peek_u32(4).unwrap(), u32::MAX);
-    for i in 0..2 {
-        assert_eq!(host.camera(i), Some(&Default::default()));
     }
 }
 

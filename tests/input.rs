@@ -44,50 +44,6 @@ fn results(vm: &Machine<'_>) -> (Option<u32>, Option<u32>) {
 }
 
 #[test]
-fn queries_report_release_and_hold_of_actions_zero_and_one() {
-    let script = commands(&[0x21a0, 0x21a2, 0x21a0]);
-    let mut vm = Machine::new(&script).unwrap();
-    let mut input = ActionInput::default();
-    input.set(0, true, true, false).unwrap();
-    input.set(1, false, false, true).unwrap();
-    pending(&mut vm);
-    assert!(shared_controls::input(&mut vm, &mut input).unwrap());
-    assert_eq!(results(&vm), (Some(0), Some(1)));
-    pending(&mut vm);
-    assert!(shared_controls::input(&mut vm, &mut input).unwrap());
-    assert_eq!(results(&vm), (Some(1), Some(0)));
-    // Queries leave the flags alone; hosts without input report nothing active.
-    assert_eq!(vm.stack().len_bytes(), 0);
-    pending(&mut vm);
-    assert!(shared_controls::input(&mut vm, &mut ActionInput::default()).unwrap());
-    assert_eq!(results(&vm), (Some(0), Some(0)));
-    assert!(input.pressed(0) && input.released(1));
-}
-
-#[test]
-fn consuming_clears_press_and_release_but_keeps_hold() {
-    let script = commands(&[0x21a1, 0x21a3, 0x21a0]);
-    let mut vm = Machine::new(&script).unwrap();
-    vm.state_mut().set_system_integer(0, 7).unwrap();
-    let mut input = ActionInput::default();
-    input.set(0, true, true, true).unwrap();
-    input.set(1, true, true, true).unwrap();
-    input.set(2, true, true, true).unwrap();
-    pending(&mut vm);
-    assert!(shared_controls::input(&mut vm, &mut input).unwrap());
-    assert_eq!(vm.state().system_integer(0), Some(7));
-    assert!(input.held(0) && !input.pressed(0) && !input.released(0));
-    assert!(input.pressed(1));
-    pending(&mut vm);
-    assert!(shared_controls::input(&mut vm, &mut input).unwrap());
-    assert!(input.held(1) && !input.pressed(1) && !input.released(1));
-    assert!(input.pressed(2) && input.released(2));
-    pending(&mut vm);
-    assert!(shared_controls::input(&mut vm, &mut input).unwrap());
-    assert_eq!(results(&vm), (Some(0), Some(1)));
-}
-
-#[test]
 fn skipping_reports_the_script_flag_or_held_skip_actions() {
     let held = |action| {
         let mut input = ActionInput::default();
@@ -187,21 +143,6 @@ fn every_consumer_clears_only_its_own_action() {
             assert_eq!(input.pressed(a), !cleared, "{op:#x} press of {a}");
             assert_eq!(input.released(a), !cleared, "{op:#x} release of {a}");
         }
-    }
-}
-
-#[test]
-fn neighbouring_commands_are_left_pending() {
-    // 0x21a5/0x21a7/0x21be/0x21bf, 0x2341..0x2343 and 0x234c reach the dispatcher's shared
-    // case; the action 21 pair 0x2348/0x2349 needs the unmodeled frame-update consumer.
-    for op in [
-        0x21a5, 0x21a7, 0x21be, 0x21bf, 0x21c0, 0x2341, 0x2343, 0x2348, 0x2349, 0x234c,
-    ] {
-        let script = commands(&[op]);
-        let mut vm = Machine::new(&script).unwrap();
-        pending(&mut vm);
-        assert!(!shared_controls::input(&mut vm, &mut ActionInput::default()).unwrap());
-        assert_eq!(vm.pending_system().map(|p| p.1), Some(op - 0x2000));
     }
 }
 

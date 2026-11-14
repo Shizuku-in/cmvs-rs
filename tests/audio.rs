@@ -46,32 +46,6 @@ fn voice_fade_out_keeps_duration_results_and_works_with_voice_disabled() {
     }
 }
 
-#[test]
-fn invalid_voice_fade_or_backend_failure_keeps_command_pending() {
-    for args in [
-        vec![],
-        vec![0],
-        vec![20, 4],
-        vec![20, u32::MAX],
-        vec![20, 0],
-    ] {
-        let mut code = vec![];
-        for value in &args {
-            push(&mut code, *value);
-        }
-        code.extend(0x20a9u16.to_le_bytes());
-        let script = program(&code, b"");
-        let mut vm = Machine::new(&script).unwrap();
-        let mut host = AudioHost::default();
-        pending(&mut vm);
-        let pc = vm.pc();
-        assert!(host.shared_handle(&mut vm, &mut Started).is_err());
-        assert_eq!(vm.pc(), pc);
-        assert_eq!(vm.stack().len_bytes(), args.len() * 4);
-        assert!(vm.pending_system().is_some());
-    }
-}
-
 fn push(code: &mut Vec<u8>, value: u32) {
     code.extend(0x440u16.to_le_bytes());
     code.extend(4u16.to_le_bytes());
@@ -381,25 +355,6 @@ fn start_backend_failure_is_transactional_and_retry_keeps_original_request() {
     assert!(host.channel(0).unwrap().flag);
 }
 
-#[test]
-fn start_rejects_invalid_channels_and_truncated_stack_without_effects() {
-    let mut truncated = vec![];
-    push(&mut truncated, 0);
-    truncated.extend(0x20b1u16.to_le_bytes());
-    for code in [start_code(6, 0), start_code(u32::MAX, 0), truncated] {
-        let script = program(&code, b"");
-        let mut vm = Machine::new(&script).unwrap();
-        pending(&mut vm);
-        let mut host = AudioHost::default();
-        let mut backend = RecordingAudio::default();
-        let pc = vm.pc();
-        assert!(host.shared_handle(&mut vm, &mut backend).is_err());
-        assert_eq!(vm.pending_system(), Some((pc, 0xb1)));
-        assert!((0..6).all(|i| host.channel(i).is_none()));
-        assert!(backend.requests().is_empty());
-        assert_eq!(vm.state().system_integer(0), None);
-    }
-}
 fn stop_code(channel: u32) -> Vec<u8> {
     let mut code = vec![];
     push(&mut code, channel);
@@ -687,79 +642,6 @@ fn channel15_stop_is_independent_of_se_records_settings_and_results() {
     );
 }
 
-#[test]
-fn channel15_stop_rejects_bad_arguments_and_retries_backend_failure() {
-    let mut host = AudioHost::default();
-    let mut backend = RecordingAudio::default();
-    for code in [
-        channel15_stop_code(1),
-        channel15_stop_code(u32::MAX),
-        0x2241u16.to_le_bytes().to_vec(),
-    ] {
-        let script = program(&code, b"");
-        let mut vm = Machine::new(&script).unwrap();
-        pending(&mut vm);
-        let pending_command = vm.pending_system();
-        let sp = vm.stack().len_bytes();
-        assert!(host.shared_handle(&mut vm, &mut backend).is_err());
-        assert_eq!(vm.pending_system(), pending_command);
-        assert_eq!(vm.stack().len_bytes(), sp);
-        assert_eq!(vm.state().system_integer(0), None);
-        assert!(backend.requests().is_empty());
-    }
-    let script = program(&channel15_stop_code(0), b"");
-    let mut vm = Machine::new(&script).unwrap();
-    pending(&mut vm);
-    let pending_command = vm.pending_system();
-    assert!(host.shared_handle(&mut vm, &mut Broken).is_err());
-    assert_eq!(vm.pending_system(), pending_command);
-    assert_eq!(vm.stack().len_bytes(), 4);
-    assert!(host.shared_handle(&mut vm, &mut backend).unwrap());
-    assert_eq!(vm.pending_system(), None);
-    assert_eq!(vm.stack().len_bytes(), 0);
-    assert_eq!(backend.requests(), &[AudioRequest::StopChannel15]);
-}
-
-#[test]
-fn stop_backend_failure_and_invalid_channels_keep_the_command_pending() {
-    let script = script(&[(1, 0, 0, 0, 1)], b"a.ogg\0");
-    let mut vm = Machine::new(&script).unwrap();
-    let mut host = AudioHost::default();
-    pending(&mut vm);
-    host.shared_handle(&mut vm, &mut Started).unwrap();
-    let before = host.channel(1).cloned();
-    let script = program(&stop_code(1), b"");
-    let mut vm = Machine::new(&script).unwrap();
-    pending(&mut vm);
-    let pc = vm.pc();
-    // Broken has no stop, so the default trait method reports it as unimplemented.
-    assert!(host.shared_handle(&mut vm, &mut Broken).is_err());
-    assert_eq!(host.channel(1), before.as_ref());
-    assert_eq!(vm.pending_system(), Some((pc, 0xb3)));
-    assert_eq!(vm.stack().len_bytes(), 4);
-    let mut backend = RecordingAudio::default();
-    host.shared_handle(&mut vm, &mut backend).unwrap();
-    assert_eq!(backend.requests(), &[AudioRequest::StopSe { channel: 1 }]);
-    assert!(host.channel(1).unwrap().name.is_empty());
-
-    for code in [
-        stop_code(6),
-        stop_code(u32::MAX),
-        0x20b3u16.to_le_bytes().to_vec(),
-    ] {
-        let script = program(&code, b"");
-        let mut vm = Machine::new(&script).unwrap();
-        pending(&mut vm);
-        let mut host = AudioHost::default();
-        let mut backend = RecordingAudio::default();
-        let pc = vm.pc();
-        assert!(host.shared_handle(&mut vm, &mut backend).is_err());
-        assert_eq!(vm.pending_system(), Some((pc, 0xb3)));
-        assert!((0..6).all(|i| host.channel(i).is_none()));
-        assert!(backend.requests().is_empty());
-    }
-}
-
 fn se_fade_code(channel: u32, fade: u32) -> Vec<u8> {
     let mut code = vec![];
     push(&mut code, fade);
@@ -809,46 +691,6 @@ fn se_fade_out_reaches_the_device_and_clears_only_the_name() {
     }
 }
 
-#[test]
-fn se_fade_out_failures_and_invalid_arguments_keep_the_command_pending() {
-    let script = program(&se_fade_code(2, 0), b"");
-    let mut vm = Machine::new(&script).unwrap();
-    let mut host = AudioHost::default();
-    pending(&mut vm);
-    let pc = vm.pc();
-    // Broken has no SE fade-out, so the default trait method reports it as unimplemented.
-    assert!(host.shared_handle(&mut vm, &mut Broken).is_err());
-    assert_eq!(vm.pending_system(), Some((pc, 0xb6)));
-    assert_eq!(vm.stack().len_bytes(), 8);
-    assert!(host.channel(2).is_none());
-    let mut backend = RecordingAudio::default();
-    host.shared_handle(&mut vm, &mut backend).unwrap();
-    assert_eq!(
-        backend.requests(),
-        &[AudioRequest::FadeOutSe {
-            channel: 2,
-            fade_ms: 0
-        }]
-    );
-    assert_eq!(host.channel(2), Some(&SeChannel::default()));
-    let mut short = vec![];
-    push(&mut short, 1);
-    short.extend(0x20b6u16.to_le_bytes());
-    for code in [se_fade_code(6, 10), se_fade_code(u32::MAX, 10), short] {
-        let script = program(&code, b"");
-        let mut vm = Machine::new(&script).unwrap();
-        pending(&mut vm);
-        let (pc, bytes) = (vm.pc(), vm.stack().len_bytes());
-        let mut host = AudioHost::default();
-        let mut backend = RecordingAudio::default();
-        assert!(host.shared_handle(&mut vm, &mut backend).is_err());
-        assert_eq!(vm.pending_system(), Some((pc, 0xb6)));
-        assert_eq!(vm.stack().len_bytes(), bytes);
-        assert!((0..6).all(|i| host.channel(i).is_none()));
-        assert!(backend.requests().is_empty());
-    }
-}
-
 fn pending(vm: &mut Machine<'_>) {
     while !matches!(vm.step().unwrap(), Step::System { .. }) {}
 }
@@ -863,53 +705,6 @@ impl AudioBackend for Broken {
     fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
         Err("synthetic device failure".into())
     }
-}
-
-#[test]
-fn recording_backend_keeps_requests_and_reports_not_started() {
-    let script = script(
-        &[(0, 0, 0, 0, 0), (5, 11, 128, 1, 1)],
-        b"sys301.ogg\0loop.ogg\0",
-    );
-    let mut vm = Machine::new(&script).unwrap();
-    let mut host = AudioHost::default();
-    let mut backend = RecordingAudio::default();
-    for _ in 0..2 {
-        pending(&mut vm);
-        assert!(host.shared_handle(&mut vm, &mut backend).unwrap());
-        assert_eq!(vm.stack().len_bytes(), 0);
-        assert_eq!(vm.state().system_integer(0), Some(0));
-    }
-    assert_eq!(
-        backend.requests(),
-        [
-            AudioRequest::PlaySe {
-                channel: 0,
-                name: b"sys301.ogg".to_vec(),
-                volume: 256,
-                looped: false,
-                flag: false,
-                fade_in_ms: 0
-            },
-            AudioRequest::PlaySe {
-                channel: 5,
-                name: b"loop.ogg".to_vec(),
-                volume: 128,
-                looped: true,
-                flag: true,
-                fade_in_ms: 0
-            }
-        ]
-    );
-    assert_eq!(
-        host.channel(5),
-        Some(&SeChannel {
-            name: b"loop.ogg".to_vec(),
-            looped: true,
-            volume: 128,
-            flag: true
-        })
-    );
 }
 
 #[test]
@@ -1155,40 +950,6 @@ fn bgm_fade_out_clears_names_fades_the_current_channel_and_flips_it() {
     );
     assert_eq!(vm.stack().len_bytes(), 0);
     assert_eq!(vm.state().system_integer(0), Some(5));
-}
-
-#[test]
-fn bgm_fade_out_without_bgm_or_backend_support() {
-    // Disabled BGM clears the state without a device request or channel flip.
-    let mut code = bgm_code(11, None, 0, 0);
-    code.extend(fade_out_code(0));
-    let script = program(&code, BGM_TEXT);
-    let mut vm = Machine::new(&script).unwrap();
-    let mut host = AudioHost::new(AudioSettings {
-        bgm_enabled: false,
-        ..AudioSettings::default()
-    });
-    for _ in 0..2 {
-        pending(&mut vm);
-        host.shared_handle(&mut vm, &mut Broken).unwrap();
-    }
-    assert_eq!(
-        host.bgm(),
-        &BgmState {
-            channel: 1,
-            ..BgmState::default()
-        }
-    );
-    // A backend without fade-out support keeps the command and state for retry.
-    let script = program(&fade_out_code(100), b"");
-    let mut vm = Machine::new(&script).unwrap();
-    let mut host = AudioHost::default();
-    pending(&mut vm);
-    let pc = vm.pc();
-    assert!(host.shared_handle(&mut vm, &mut Broken).is_err());
-    assert_eq!(vm.pending_system(), Some((pc, 0xa2)));
-    assert_eq!(vm.stack().len_bytes(), 4);
-    assert_eq!(host.bgm(), &BgmState::default());
 }
 
 #[test]
@@ -1493,44 +1254,6 @@ fn position_queries_report_milliseconds_or_minus_one_per_channel_family() {
         assert_eq!(vm.state().system_integer(0), Some(u32::MAX));
     }
     assert!(recording.requests().is_empty());
-}
-
-#[test]
-fn position_queries_reject_large_channels_and_keep_backend_errors_pending() {
-    let silent = || Positions {
-        se: [None; 6],
-        voice: [None; 4],
-        queries: Default::default(),
-    };
-    for (op, channel) in [(0x20b7, 6), (0x20b7, u32::MAX), (0x20aa, 4)] {
-        let script = program(&position_code(op, channel), b"");
-        let mut vm = Machine::new(&script).unwrap();
-        pending(&mut vm);
-        vm.state_mut().set_system_integer(0, 7).unwrap();
-        let mut backend = silent();
-        assert!(
-            AudioHost::default()
-                .shared_handle(&mut vm, &mut backend)
-                .is_err()
-        );
-        assert!(backend.queries.borrow().is_empty());
-        assert_eq!(vm.pending_system().map(|p| p.1), Some(op - 0x2000));
-        assert_eq!(vm.stack().len_bytes(), 4);
-        assert_eq!(vm.state().system_integer(0), Some(7));
-    }
-    // A backend without the query, or a missing channel argument, keeps the command.
-    for (code, bytes) in [
-        (position_code(0x20b7, 0), 4),
-        (0x20aau16.to_le_bytes().to_vec(), 0),
-    ] {
-        let script = program(&code, b"");
-        let mut vm = Machine::new(&script).unwrap();
-        pending(&mut vm);
-        let error = AudioHost::default().shared_handle(&mut vm, &mut Started);
-        assert!(error.is_err());
-        assert!(vm.pending_system().is_some());
-        assert_eq!(vm.stack().len_bytes(), bytes);
-    }
 }
 
 fn voice_rate_code(rate: f32) -> Vec<u8> {

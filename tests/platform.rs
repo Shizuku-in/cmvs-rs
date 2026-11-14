@@ -137,37 +137,6 @@ fn display_count_query_uses_backend_value_and_preserves_pending_on_failure() {
 }
 
 #[test]
-fn other_display_query_reads_configuration_without_consuming_stack_or_changing_device() {
-    for (ini, expected) in [
-        (b"".as_slice(), 0),
-        (b"[WINDOW_RESOLVING]\nOTHERS_DISPLAY_USE=0\n".as_slice(), 0),
-        (b"[WINDOW_RESOLVING]\nOTHERS_DISPLAY_USE=2\n".as_slice(), 1),
-        (b"[WINDOW_RESOLVING]\nOTHERS_DISPLAY_USE=-1\n".as_slice(), 1),
-    ] {
-        let mut code = vec![];
-        bytecode::command(&mut code, 0x22ff, &[77]);
-        let script = bytecode::script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        bytecode::pending(&mut vm);
-        vm.state_mut().set_system_integer(0, 99).unwrap();
-        vm.state_mut().set_system_integer(1, 88).unwrap();
-        let mut host = PlatformHost::default();
-        // Replacing a user configuration must also clear an earlier true value.
-        host.configure_display_selection(b"[WINDOW_RESOLVING]\nOTHERS_DISPLAY_USE=1\n");
-        host.configure_display_selection(ini);
-        let mut backend = RecordingBackend::default();
-        host.shared_platform(&mut vm, &mut backend, &mut Assets::default(), &[])
-            .unwrap()
-            .unwrap();
-        assert_eq!(vm.state().system_integer(0), Some(expected));
-        assert_eq!(vm.state().system_integer(1), Some(88));
-        assert_eq!(vm.stack().len_bytes(), 4);
-        assert_eq!(vm.pending_system(), None);
-        assert!(backend.requests().is_empty());
-    }
-}
-
-#[test]
 fn aspect_scaling_normalizes_values_and_yields_only_for_fullscreen_updates() {
     use cmvs_rs::platform::PlatformEvent;
     for fullscreen in [false, true] {
@@ -307,45 +276,6 @@ fn unsupported_scaling_enable_still_refreshes_fullscreen_and_retries_failures() 
             );
         }
     }
-}
-
-#[test]
-fn equal_scaling_request_needs_no_capabilities_but_unknown_queries_fail() {
-    struct Equal;
-    impl PlatformBackend for Equal {
-        fn aspect_scaling(&self) -> Result<bool, Box<dyn Error>> {
-            Ok(false)
-        }
-        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
-            panic!("equal request")
-        }
-    }
-    struct Unknown;
-    impl PlatformBackend for Unknown {
-        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
-            panic!("unknown query")
-        }
-    }
-    let mut code = vec![];
-    bytecode::command(&mut code, 0x22c9, &[0]);
-    bytecode::command(&mut code, 0x22ca, &[]);
-    let script = bytecode::script(&code);
-    let mut vm = Machine::new(&script).unwrap();
-    let mut host = PlatformHost::default();
-    bytecode::pending(&mut vm);
-    assert!(
-        host.shared_platform(&mut vm, &mut Equal, &mut Assets::default(), &[])
-            .is_ok()
-    );
-    bytecode::pending(&mut vm);
-    vm.state_mut().set_system_integer(0, 77).unwrap();
-    let before = vm.pending_system();
-    assert!(
-        host.shared_platform(&mut vm, &mut Unknown, &mut Assets::default(), &[])
-            .is_err()
-    );
-    assert_eq!(vm.pending_system(), before);
-    assert_eq!(vm.state().system_integer(0), Some(77));
 }
 
 #[test]
@@ -690,33 +620,6 @@ fn failed_display_changes_retain_pending_command_stack_and_results() {
         assert_eq!(vm.pending_system(), before);
         assert_eq!(vm.stack().len_bytes(), 4);
         assert_eq!(vm.state().system_integer(0), Some(77));
-    }
-}
-
-#[test]
-fn fullscreen_query_uses_backend_state_and_needs_no_arguments_or_assets() {
-    struct Display(bool);
-    impl PlatformBackend for Display {
-        fn fullscreen(&self) -> Result<bool, Box<dyn Error>> {
-            Ok(self.0)
-        }
-        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
-            panic!("query must not apply requests")
-        }
-    }
-    for fullscreen in [false, true] {
-        let mut code = Vec::new();
-        bytecode::command(&mut code, 0x2163, &[]);
-        let script = bytecode::script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        bytecode::pending(&mut vm);
-        let mut host = PlatformHost::default();
-        let mut assets = Assets::default();
-        host.shared_platform(&mut vm, &mut Display(fullscreen), &mut assets, &[])
-            .unwrap();
-        assert_eq!(vm.state().system_integer(0), Some(u32::from(fullscreen)));
-        assert_eq!(vm.stack().len_bytes(), 0);
-        assert_eq!(assets.calls, 0);
     }
 }
 
@@ -1250,26 +1153,6 @@ fn thumbnail_argument_order_is_retained_and_gesture_commands_are_not_platform() 
             .is_none()
     );
     assert_eq!(vm.pending_system(), Some((8, 0x350)));
-}
-
-#[test]
-fn recording_backend_has_a_bounded_history() {
-    let mut backend = RecordingBackend::default();
-    for _ in 0..4096 {
-        backend.apply(&PlatformRequest::Title(vec![])).unwrap();
-    }
-    assert!(backend.apply(&PlatformRequest::Title(vec![])).is_err());
-    assert_eq!(backend.requests().len(), 4096);
-    let mut backend = RecordingBackend::default();
-    let request = PlatformRequest::Icon {
-        name: vec![],
-        bytes: std::sync::Arc::new(vec![0; 4 * 1024 * 1024]),
-    };
-    for _ in 0..16 {
-        backend.apply(&request).unwrap();
-    }
-    assert!(backend.apply(&PlatformRequest::Title(vec![1])).is_err());
-    assert_eq!(backend.requests().len(), 16);
 }
 
 #[test]

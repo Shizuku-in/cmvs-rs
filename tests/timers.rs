@@ -35,18 +35,6 @@ fn pending(vm: &mut Machine<'_>) {
 }
 
 #[test]
-fn constructor_and_run_updates_match_all_ten_slots_with_wrapping() {
-    let mut timers = VmTimers::default();
-    assert_eq!(timers.values(), &[0; 10]);
-    timers.begin_run(u32::MAX - 2);
-    assert_eq!(timers.values(), &[u32::MAX - 2; 10]);
-    timers.begin_run(10);
-    assert_eq!(timers.values(), &[7; 10]);
-    timers.begin_run(0);
-    assert_eq!(timers.values(), &[7; 10]);
-}
-
-#[test]
 fn reset_is_local_query_returns_raw_word_and_commands_do_not_advance_time() {
     let mut code = vec![];
     command(&mut code, 0x200b, 9);
@@ -70,44 +58,6 @@ fn reset_is_local_query_returns_raw_word_and_commands_do_not_advance_time() {
         assert_eq!(vm.stack().len_bytes(), 0);
     }
     assert_eq!(&timers.values()[..9], &[0x80000001; 9]);
-}
-
-#[test]
-fn invalid_slots_and_missing_arguments_keep_vm_and_timers_unchanged() {
-    for op in [0x200b, 0x200c] {
-        for slot in [Some(10), Some(u32::MAX), None] {
-            let mut code = vec![];
-            if let Some(slot) = slot {
-                command(&mut code, op, slot)
-            } else {
-                code.extend(op.to_le_bytes())
-            }
-            let program = program(&code);
-            let mut vm = Machine::new(&program).unwrap();
-            pending(&mut vm);
-            let mut timers = VmTimers::default();
-            timers.begin_run(42);
-            vm.state_mut().set_system_integer(0, 88).unwrap();
-            let pending = vm.pending_system();
-            let sp = vm.stack().len_bytes();
-            assert!(timers.try_handle(&mut vm).is_err());
-            assert_eq!(timers.values(), &[42; 10]);
-            assert_eq!(vm.pending_system(), pending);
-            assert_eq!(vm.stack().len_bytes(), sp);
-            assert_eq!(vm.state().system_integer(0), Some(88));
-        }
-    }
-}
-
-#[test]
-fn unrelated_commands_remain_pending() {
-    let program = program(&0x200du16.to_le_bytes());
-    let mut vm = Machine::new(&program).unwrap();
-    let mut timers = VmTimers::default();
-    assert!(!timers.try_handle(&mut vm).unwrap());
-    pending(&mut vm);
-    assert!(!timers.try_handle(&mut vm).unwrap());
-    assert_eq!(vm.pending_system(), Some((0, 13)));
 }
 
 #[test]

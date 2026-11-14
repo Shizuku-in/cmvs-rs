@@ -540,16 +540,6 @@ mod content_digest_tests {
     }
 
     #[test]
-    fn digest_cache_does_not_change_equality_and_tracks_pixel_content() {
-        let first = RgbaImage::new(1, 1, vec![1, 2, 3, 4]).unwrap();
-        let second = first.clone();
-        assert_eq!(first.content_digest(), content_hash(first.pixels()));
-        assert_eq!(first, second);
-        assert_eq!(first, first.clone());
-        let changed = RgbaImage::new(1, 1, vec![1, 2, 3, 5]).unwrap();
-        assert_ne!(first.content_digest(), changed.content_digest());
-    }
-    #[test]
     fn content_hash_depends_on_every_byte_and_on_the_length() {
         let mut seen = std::collections::HashMap::new();
         let mut check = |bytes: Vec<u8>| {

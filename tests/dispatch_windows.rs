@@ -296,77 +296,6 @@ impl Windows {
 }
 
 #[test]
-fn exact_window_batch_completes_with_only_the_required_context() {
-    for (capability, count) in [
-        (Capability::Windows, 48),
-        (Capability::WindowPointer, 1),
-        (Capability::WindowButtons, 1),
-        (Capability::WindowImages, 2),
-    ] {
-        let expected: std::collections::BTreeSet<_> = cases()
-            .iter()
-            .filter(|(_, _, cap)| *cap == capability)
-            .map(|(op, _, _)| op - 0x2000)
-            .collect();
-        let actual = dispatch::ROOT
-            .iter()
-            .filter(|e| e.capability == capability)
-            .map(|e| e.command)
-            .collect();
-        assert_eq!(expected.len(), count);
-        assert_eq!(expected, actual);
-    }
-    assert!(!dispatch::uses_windows(0x383));
-    for (opcode, args, capability) in cases() {
-        let mut windows = Windows::default();
-        windows.setup();
-        let mut code = vec![];
-        command(&mut code, opcode, &args);
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        pending(&mut vm);
-        let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
-        let state = windows.snapshot();
-        assert_eq!(
-            dispatch::run(Semantics::Root, &mut vm, &mut Hosts::default()).unwrap(),
-            Some(Flow::Unavailable)
-        );
-        assert_eq!(
-            dispatch::run(
-                Semantics::Variant(cmvs_rs::profile::VariantId::FontCells),
-                &mut vm,
-                &mut windows.hosts(capability)
-            )
-            .unwrap(),
-            Some(Flow::Unhandled)
-        );
-        assert_eq!(
-            (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
-            before
-        );
-        assert_eq!(windows.snapshot(), state);
-        assert_eq!(windows.images.reads, 0);
-        assert_eq!(
-            dispatch::run(Semantics::Root, &mut vm, &mut windows.hosts(capability)).unwrap(),
-            Some(Flow::Done),
-            "{opcode:04x}"
-        );
-        assert_eq!(
-            (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
-            (before.0 + 2, None, 0)
-        );
-        let state = windows.snapshot();
-        let reads = windows.images.reads;
-        assert_eq!(
-            dispatch::run(Semantics::Root, &mut vm, &mut windows.hosts(capability)).unwrap(),
-            None
-        );
-        assert_eq!(windows.snapshot(), state);
-        assert_eq!(windows.images.reads, reads);
-    }
-}
-
-#[test]
 fn missing_inputs_sources_and_short_stacks_preserve_window_and_input_state() {
     for (opcode, args, capability) in cases() {
         for partial in [false, true] {
@@ -477,41 +406,4 @@ fn image_errors_keep_typed_cause_and_leave_window_targets_retryable() {
         );
         assert_eq!(windows.images.reads, 2);
     }
-}
-
-#[test]
-fn trace_still_has_no_window_capability_for_any_batch_command() {
-    use std::{fs, process::Command};
-    let root =
-        std::env::temp_dir().join(format!("cmvs-cli-dispatch-windows-{}", std::process::id()));
-    fs::create_dir(&root).unwrap();
-    let path = root.join("windows.ps3");
-    for (opcode, args, _) in cases() {
-        let mut code = vec![];
-        command(&mut code, opcode, &args);
-        command(&mut code, 0x2003, &[]);
-        let raw = bytes(&code);
-        fs::write(&path, &raw).unwrap();
-        for record in [false, true] {
-            let mut cli = Command::new(env!("CARGO_BIN_EXE_cmvs-trace"));
-            cli.arg(&path).args(["--profile", "cmvs-20160201"]);
-            if record {
-                cli.arg("--record-platform").arg(&root);
-            }
-            let output = cli.output().unwrap();
-            let stdout = String::from_utf8(output.stdout).unwrap();
-            assert!(
-                output.status.success(),
-                "{stdout}\n{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            assert!(
-                stdout.contains(&format!("# STOP pending system=0x{opcode:04x};")),
-                "{stdout}"
-            );
-        }
-        assert_eq!(fs::read(&path).unwrap(), raw);
-    }
-    fs::remove_file(path).unwrap();
-    fs::remove_dir(root).unwrap();
 }

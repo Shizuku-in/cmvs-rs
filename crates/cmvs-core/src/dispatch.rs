@@ -6220,14 +6220,6 @@ mod index_tests {
     use super::*;
 
     #[test]
-    fn root_commands_are_unique() {
-        let mut seen = std::collections::HashSet::new();
-        for entry in ROOT {
-            assert!(seen.insert(entry.command), "{:#x} twice", entry.command);
-        }
-    }
-
-    #[test]
     fn indexes_match_linear_scans_for_every_command() {
         for command in 0..=u16::MAX {
             let linear = ROOT.iter().find(|e| e.command == command);

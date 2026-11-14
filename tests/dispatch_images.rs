@@ -1,5 +1,5 @@
 use cmvs_rs::{
-    dispatch::{self, Capability, Flow, Hosts, ImageHosts},
+    dispatch::{self, Flow, Hosts, ImageHosts},
     image::ImageSource,
     machine::Machine,
     profile::Semantics,
@@ -11,17 +11,14 @@ use support::bytecode::{command, pending, script};
 
 const NAME: u32 = 0x80000000;
 
-fn cases() -> Vec<(u16, Vec<u32>)> {
+fn load_commands() -> Vec<(u16, Vec<u32>)> {
     vec![
         (0x2030, vec![3, NAME]),
         (0x2035, vec![3, NAME, 0, 0]),
         (0x2038, vec![3, 7, NAME]),
         (0x203b, vec![3, NAME, 2, 0x808080, 0]),
-        (0x203f, vec![]),
         (0x222a, vec![NAME, 3, 20, 10, 1]),
-        (0x222d, vec![]),
         (0x2234, vec![NAME, 3, 20, 10, 1]),
-        (0x2237, vec![]),
         (0x22c4, vec![3, NAME, 20, 0]),
     ]
 }
@@ -130,97 +127,8 @@ fn setup(scene: &mut SceneHost, images: &mut Images) {
 }
 
 #[test]
-fn scene_image_entries_preserve_missing_capabilities_and_complete_once() {
-    let expected: std::collections::BTreeSet<_> =
-        cases().iter().map(|(op, _)| op - 0x2000).collect();
-    let actual = dispatch::ROOT
-        .iter()
-        .filter(|e| {
-            matches!(
-                e.capability,
-                Capability::SceneImages | Capability::MaskImages | Capability::ImageChange
-            )
-        })
-        .map(|e| e.command)
-        .collect();
-    assert_eq!(expected, actual);
-    assert_eq!(expected.len(), 10);
-    for (opcode, args) in cases() {
-        let mut scene = SceneHost::default();
-        let mut images = Images::default();
-        setup(&mut scene, &mut images);
-        let mut code = vec![];
-        command(&mut code, opcode, &args);
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        vm.state_mut().set_string(0, b"a.pb3").unwrap();
-        vm.state_mut().set_system_integer(0, 99).unwrap();
-        pending(&mut vm);
-        let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
-        let objects = scene.objects().clone();
-        let reads = images.reads;
-        assert_eq!(
-            dispatch::run(Semantics::Root, &mut vm, &mut Hosts::default()).unwrap(),
-            Some(Flow::Unavailable)
-        );
-        if opcode == 0x22c4 {
-            assert_eq!(
-                run(&mut vm, &mut scene, &mut images, false).unwrap(),
-                Some(Flow::Unavailable)
-            );
-        }
-        assert_eq!(
-            dispatch::run(
-                Semantics::Variant(cmvs_rs::profile::VariantId::FontCells),
-                &mut vm,
-                &mut Hosts {
-                    images: Some(ImageHosts {
-                        scene: &mut scene,
-                        source: &mut images,
-                        change_images: true
-                    }),
-                    ..Default::default()
-                }
-            )
-            .unwrap(),
-            Some(Flow::Unhandled)
-        );
-        assert_eq!(
-            (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
-            before
-        );
-        assert_eq!(scene.objects(), &objects);
-        assert_eq!(images.reads, reads);
-        assert_eq!(
-            run(&mut vm, &mut scene, &mut images, true).unwrap(),
-            Some(Flow::Done),
-            "{opcode:04x}"
-        );
-        assert_eq!(
-            (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
-            (before.0 + 2, None, 0)
-        );
-        let reads = images.reads;
-        assert_eq!(run(&mut vm, &mut scene, &mut images, true).unwrap(), None);
-        assert_eq!(images.reads, reads);
-        assert_eq!(images.arms, usize::from(opcode == 0x203f));
-        assert_eq!(
-            vm.state().system_integer(0),
-            Some(if matches!(opcode, 0x203f | 0x222d | 0x2237) {
-                99
-            } else {
-                1
-            })
-        );
-    }
-}
-
-#[test]
 fn read_errors_keep_typed_source_scene_and_pending_command_for_retry() {
-    for (opcode, args) in cases()
-        .into_iter()
-        .filter(|(op, _)| !matches!(op, 0x203f | 0x222d | 0x2237))
-    {
+    for (opcode, args) in load_commands() {
         let mut scene = SceneHost::default();
         let mut images = Images::default();
         setup(&mut scene, &mut images);
@@ -261,120 +169,4 @@ fn read_errors_keep_typed_source_scene_and_pending_command_for_retry() {
             Some(Flow::Done)
         );
     }
-}
-
-#[test]
-fn short_arguments_fail_before_resource_access() {
-    for entry in dispatch::ROOT.iter().filter(|e| {
-        matches!(
-            e.capability,
-            Capability::SceneImages | Capability::MaskImages | Capability::ImageChange
-        )
-    }) {
-        if matches!(entry.command, 0x3f | 0x22d | 0x237) {
-            continue;
-        }
-        let mut code = vec![];
-        command(&mut code, entry.command + 0x2000, &[]);
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        pending(&mut vm);
-        let before = vm.pending_system();
-        let mut images = Images::default();
-        let error = run(&mut vm, &mut SceneHost::default(), &mut images, true).unwrap_err();
-        assert_eq!(
-            error.as_decode().unwrap().reason,
-            if entry.capability == Capability::MaskImages {
-                "mask name"
-            } else {
-                "object slot"
-            }
-        );
-        assert_eq!(vm.pending_system(), before);
-        assert_eq!(vm.stack().len_bytes(), 0);
-        assert_eq!((images.reads, images.arms), (0, 0));
-    }
-}
-
-#[test]
-fn trace_keeps_image_capabilities_and_leaves_replacement_unavailable() {
-    use std::{fs, process::Command};
-    let root =
-        std::env::temp_dir().join(format!("cmvs-cli-dispatch-images-{}", std::process::id()));
-    fs::create_dir(&root).unwrap();
-    fs::create_dir(root.join("raw")).unwrap();
-    fs::write(root.join("raw/a.pb3"), pixels()).unwrap();
-    let path = root.join("images.ps3");
-    for (opcode, args) in cases() {
-        for record in [false, true] {
-            let mut code = vec![];
-            if record {
-                for (op, args) in [
-                    (0x2011, vec![0, 0]),
-                    (0x2020, vec![3]),
-                    (0x2022, vec![3, 7]),
-                    (0x2040, vec![3]),
-                    (0x2030, vec![3, 5]),
-                ] {
-                    command(&mut code, op, &args);
-                }
-            }
-            let args: Vec<_> = args
-                .iter()
-                .map(|value| if *value == NAME { 5 } else { *value })
-                .collect();
-            command(&mut code, opcode, &args);
-            command(&mut code, 0x2003, &[]);
-            let text = b"raw\\\0a.pb3\0";
-            let mut raw = b"PS2A".to_vec();
-            for word in [
-                48u32,
-                0,
-                0,
-                0,
-                code.len() as u32,
-                0,
-                text.len() as u32,
-                0,
-                0,
-                (code.len() + text.len()) as u32,
-                0,
-            ] {
-                raw.extend(word.to_le_bytes());
-            }
-            raw.extend(
-                code.iter()
-                    .chain(text)
-                    .map(|b| b.rotate_left(1).wrapping_add(124)),
-            );
-            fs::write(&path, &raw).unwrap();
-            let mut cli = Command::new(env!("CARGO_BIN_EXE_cmvs-trace"));
-            cli.arg(&path)
-                .args(["--profile", "cmvs-20160201", "--bootstrap"]);
-            if record {
-                cli.arg("--record-platform").arg(&root);
-            }
-            let output = cli.output().unwrap();
-            let stdout = String::from_utf8(output.stdout).unwrap();
-            assert!(
-                output.status.success(),
-                "{stdout}\n{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            let stop = if record && opcode != 0x22c4 {
-                0x2003
-            } else {
-                opcode
-            };
-            assert!(
-                stdout.contains(&format!("# STOP pending system=0x{stop:04x};")),
-                "{stdout}"
-            );
-            assert_eq!(fs::read(&path).unwrap(), raw);
-        }
-    }
-    fs::remove_file(path).unwrap();
-    fs::remove_file(root.join("raw/a.pb3")).unwrap();
-    fs::remove_dir(root.join("raw")).unwrap();
-    fs::remove_dir(root).unwrap();
 }

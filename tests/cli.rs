@@ -1,22 +1,45 @@
 use std::{fs, process::Command};
 
 #[test]
-fn trace_state_dispatch_preserves_optional_hosts_seed_and_log_formats() {
+fn trace_dispatch_respects_optional_capabilities() {
     let root = std::env::temp_dir().join(format!("cmvs-cli-shared-state-{}", std::process::id()));
     fs::create_dir(&root).unwrap();
     let input = root.join("synthetic.ps3");
-    for (opcode, args, log) in [
-        (0x2008u16, vec![], "# timer 0x2008: values="),
+    for (opcode, args, log, extra_flag) in [
+        (0x2008u16, vec![], Some("# timer 0x2008: values="), None),
         (
             0x22eb,
             vec![1u32, 1],
-            "# message flag 0x22eb: skip=true auto_advance=false bypass=false;",
+            Some("# message flag 0x22eb: skip=true auto_advance=false bypass=false;"),
+            None,
         ),
         (
             0x20d4,
             vec![10],
-            "# rand 0x20d4: system_integer[0]=Some(8) (explicit research seed)",
+            Some("# rand 0x20d4: system_integer[0]=Some(8) (explicit research seed)"),
+            Some("--rand-seed"),
         ),
+        (0x2020, vec![3], Some("# scene state 0x2020:"), None),
+        (0x20a1, vec![], Some("# audio 0x20a1 BGM"), None),
+        (0x2226, vec![], Some("# quake 0x2226:"), None),
+        (0x22cd, vec![0], Some("# popup menu 0x22cd:"), None),
+        (
+            0x201e,
+            vec![77],
+            Some("# bootstrap applied 0x201e"),
+            Some("--bootstrap"),
+        ),
+        (0x2128, vec![], Some("# system save"), Some("--system-save")),
+        (
+            0x22b3,
+            vec![2],
+            Some("# save menu applied 0x22b3"),
+            Some("--save-dir"),
+        ),
+        // Recording does not provide text, save metadata or writable storage.
+        (0x2100, vec![0, 0, 0], None, None),
+        (0x22b9, vec![1], None, None),
+        (0x2129, vec![], None, None),
     ] {
         let mut code = vec![];
         for value in args.iter().rev() {
@@ -45,14 +68,32 @@ fn trace_state_dispatch_preserves_optional_hosts_seed_and_log_formats() {
         raw.extend(code.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
         fs::write(&input, &raw).unwrap();
         for record in [false, true] {
-            for seed in [false, true] {
+            let options: &[bool] = if extra_flag.is_some() {
+                &[false, true]
+            } else {
+                &[false]
+            };
+            for &enabled in options {
                 let mut cli = Command::new(env!("CARGO_BIN_EXE_cmvs-trace"));
                 cli.arg(&input).args(["--profile", "cmvs-20160201"]);
                 if record {
                     cli.arg("--record-platform").arg(&root);
                 }
-                if seed {
-                    cli.args(["--rand-seed", "0"]);
+                if enabled {
+                    let flag = extra_flag.unwrap();
+                    cli.arg(flag);
+                    match flag {
+                        "--rand-seed" => {
+                            cli.arg("0");
+                        }
+                        "--save-dir" => {
+                            cli.arg(&root);
+                        }
+                        "--system-save" => {
+                            cli.arg(root.join("absent.dat"));
+                        }
+                        _ => {}
+                    }
                 }
                 let output = cli.output().unwrap();
                 let stdout = String::from_utf8(output.stdout).unwrap();
@@ -61,8 +102,14 @@ fn trace_state_dispatch_preserves_optional_hosts_seed_and_log_formats() {
                     "{stdout}\n{}",
                     String::from_utf8_lossy(&output.stderr)
                 );
-                let available = if opcode == 0x20d4 { seed } else { record };
-                assert_eq!(stdout.contains(log), available, "{stdout}");
+                let available = if extra_flag.is_some() {
+                    enabled
+                } else {
+                    record && log.is_some()
+                };
+                if let Some(log) = log {
+                    assert_eq!(stdout.contains(log), available, "{stdout}");
+                }
                 let stop = if available { 0x2003 } else { opcode };
                 assert!(
                     stdout.contains(&format!("# STOP pending system=0x{stop:04x};")),
@@ -71,6 +118,7 @@ fn trace_state_dispatch_preserves_optional_hosts_seed_and_log_formats() {
             }
         }
         assert_eq!(fs::read(&input).unwrap(), raw);
+        assert!(!root.join("absent.dat").exists());
     }
     fs::remove_file(input).unwrap();
     fs::remove_dir(root).unwrap();

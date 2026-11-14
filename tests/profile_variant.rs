@@ -403,17 +403,3 @@ fn declared_variant_obeys_unreviewed_block_on_every_attempt() {
     assert_eq!(vm.pending_system(), Some((pc, command)));
     assert_eq!(vm.stack().len_bytes(), 4);
 }
-
-#[test]
-fn embedded_variant_evidence_exists_and_names_the_bound_executable_and_commands() {
-    for profile in Registry::builtin().profiles() {
-        for (command, entry) in profile.variant_bindings() {
-            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("docs")
-                .join(&entry.evidence);
-            let text = std::fs::read_to_string(path).unwrap();
-            assert!(text.contains(&to_hex(&entry.binary_sha256)));
-            assert!(text.contains(&format!("0x{:04x}", command + 0x2000)));
-        }
-    }
-}

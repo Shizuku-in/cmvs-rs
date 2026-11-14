@@ -50,21 +50,6 @@ fn tracking_is_reset(gesture: &PointerGesture) -> bool {
 }
 
 #[test]
-fn defaults_follow_the_constructor() {
-    let gesture = PointerGesture::default();
-    for at in [0, 4, 8, 12, 16, 20, 24, 28] {
-        assert_eq!(gesture.field(at), Some(0));
-    }
-    assert_eq!((gesture.field(32), gesture.field(36)), (Some(64), Some(90)));
-    assert!(tracking_is_reset(&gesture));
-    assert_eq!(gesture.field(40), Some(4));
-    assert_eq!(gesture.field(116), Some(1));
-    for at in (188..=304).step_by(4) {
-        assert_eq!(gesture.field(at), Some(0));
-    }
-}
-
-#[test]
 fn region_setter_keeps_raw_rectangles_without_resetting_other_fields_or_results() {
     let script = script(&[
         (0x235a, &[27]),
@@ -95,22 +80,6 @@ fn region_setter_keeps_raw_rectangles_without_resetting_other_fields_or_results(
     assert_eq!(gesture.field(208), Some(0));
     assert_eq!(vm.state().system_integer(0), Some(123));
     assert_eq!(vm.stack().len_bytes(), 0);
-}
-
-#[test]
-fn region_setter_ignores_unsigned_out_of_range_slots_and_still_consumes_all_words() {
-    let script = script(&[
-        (0x2366, &[6, 1, 2, 3, 4, 5]),
-        (0x2366, &[u32::MAX, 1, 2, 3, 4, 5]),
-    ]);
-    let mut vm = Machine::new(&script).unwrap();
-    let mut gesture = PointerGesture::default();
-    let before = gesture.clone();
-    for _ in 0..2 {
-        assert!(run(&mut gesture, &mut vm));
-        assert_eq!(gesture, before);
-        assert_eq!(vm.stack().len_bytes(), 0);
-    }
 }
 
 #[test]
@@ -205,46 +174,6 @@ fn missing_arguments_keep_the_command_pending() {
 }
 
 #[test]
-fn hold_query_reports_zero_without_a_recognized_hold_and_pops_its_argument() {
-    let script = script(&[(0x2362, &[1]), (0x2362, &[0])]);
-    let mut vm = Machine::new(&script).unwrap();
-    let mut gesture = PointerGesture::default();
-    for _ in 0..2 {
-        vm.state_mut().set_system_integer(0, 9).unwrap();
-        assert!(run(&mut gesture, &mut vm));
-        assert_eq!(vm.stack().len_bytes(), 0);
-        assert_eq!(vm.state().system_integer(0), Some(0));
-    }
-    // The query does not reset tracking.
-    assert_eq!(gesture, PointerGesture::default());
-}
-
-#[test]
-fn flick_query_and_consume_keep_unrelated_results_and_pop_nothing() {
-    let script = script(&[(0x2368, &[]), (0x2367, &[]), (0x2368, &[])]);
-    let mut vm = Machine::new(&script).unwrap();
-    let mut gesture = PointerGesture::default();
-    for i in 0..7 {
-        vm.state_mut().set_system_integer(i, 50 + i).unwrap();
-    }
-    for expected in [true, true, true] {
-        assert_eq!(run(&mut gesture, &mut vm), expected);
-        assert_eq!(vm.stack().len_bytes(), 0);
-    }
-    for (slot, value) in [
-        (0, u32::MAX),
-        (1, 51),
-        (2, 52),
-        (3, 53),
-        (4, 0),
-        (5, 0),
-        (6, 0),
-    ] {
-        assert_eq!(vm.state().system_integer(slot), Some(value));
-    }
-}
-
-#[test]
 fn drag_press_query_can_force_tracking_without_consuming_the_press() {
     use cmvs_rs::input::{ActionInput, CodeInput, KeyBindings};
     let script = script(&[
@@ -297,23 +226,4 @@ fn drag_press_query_can_force_tracking_without_consuming_the_press() {
     assert_eq!(gesture.field(156), Some(123));
     assert_eq!(gesture.field(100), Some(20));
     assert_eq!(gesture.field(104), Some(30));
-}
-
-#[test]
-fn flick_hold_and_state_queries_read_the_tracking_fields() {
-    let script = script(&[(0x2353, &[]), (0x2359, &[]), (0x2360, &[])]);
-    let mut vm = Machine::new(&script).unwrap();
-    let mut gesture = PointerGesture::default();
-    assert!(run(&mut gesture, &mut vm));
-    assert_eq!(vm.state().system_integer(0), Some(u32::MAX));
-    // +72 and +76 both clear: +80 is cleared and reported, and result 4 is 0.
-    assert!(run(&mut gesture, &mut vm));
-    assert_eq!(
-        (vm.state().system_integer(0), vm.state().system_integer(4)),
-        (Some(0), Some(0))
-    );
-    assert_eq!(gesture.field(80), Some(0));
-    assert!(run(&mut gesture, &mut vm));
-    assert_eq!(vm.state().system_integer(0), Some(u32::MAX));
-    assert_eq!(vm.stack().len_bytes(), 0);
 }

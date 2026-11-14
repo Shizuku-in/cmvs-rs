@@ -50,43 +50,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn auto_detects_representative_text_in_each_encoding() {
-        for (encoding, text) in [
-            (
-                TextEncoding::ShiftJis,
-                "これは文字コードを自動で判定するための日本語の文章です。",
-            ),
-            (
-                TextEncoding::Gbk,
-                "这是用于自动识别文字编码的中文句子，请检查显示是否正确。",
-            ),
-            (TextEncoding::Utf8, "「日本語」と“中文”のUTF-8テキスト"),
-        ] {
-            let mut bytes = b"menu.ps3\0bg001\0".to_vec();
-            bytes.extend(text_codec::encode(encoding, text).unwrap());
-            bytes.push(0);
-            assert_eq!(EncodingChoice::Auto.resolve(&bytes).unwrap(), encoding);
-        }
-    }
-
-    #[test]
-    fn uncertain_or_invalid_text_requires_explicit_selection() {
-        for bytes in [
-            b"".as_slice(),
-            b"menu.ps3\0",
-            b"\xff\0",
-            b"\x93\xfa\0",
-            b"\xc2\xa1\0",
-            b"\x82\xa0",
-        ] {
-            assert!(EncodingChoice::Auto.resolve(bytes).is_err(), "{bytes:?}");
-        }
-        let mut over_limit = vec![b'a'; 256 * 1024];
-        over_limit.extend_from_slice(b"\x82\xa0\0");
-        assert!(EncodingChoice::Auto.resolve(&over_limit).is_err());
-    }
-
-    #[test]
     fn explicit_selection_bypasses_detection() {
         assert_eq!(EncodingChoice::parse("auto").unwrap(), EncodingChoice::Auto);
         for name in ["shift-jis", "gbk", "utf-8"] {

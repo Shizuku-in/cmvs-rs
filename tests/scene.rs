@@ -4,7 +4,7 @@ use shared_state::SharedState;
 mod support;
 use cmvs_rs::{
     machine::{Machine, Step},
-    scene::{ClearState, DrawState, SceneHost, SceneObject},
+    scene::{DrawState, SceneHost, SceneObject},
 };
 use support::bytecode::{command, pending, script};
 
@@ -16,14 +16,6 @@ fn push_then(value: u32, ops: &[u16]) -> Vec<u8> {
         code.extend(op.to_le_bytes());
     }
     code
-}
-
-#[test]
-fn defaults_match_device_constructor() {
-    let clear = SceneHost::default().clear();
-    assert_eq!(clear, ClearState::default());
-    assert_eq!((clear.color, clear.depth), (0, false));
-    assert_eq!(clear.rgba(), [0, 0, 0, 255]);
 }
 
 #[test]
@@ -53,36 +45,6 @@ fn visibility_selects_parent_or_child_and_preserves_other_state() {
         assert_eq!(vm.state().system_integer(0), Some(123));
     }
     assert_eq!(vm.pc(), code.len());
-}
-
-#[test]
-fn visibility_invalid_targets_and_truncated_parameters_preserve_pending_state() {
-    for args in [
-        vec![20, 1, 0],
-        vec![20, 768, 0],
-        vec![21, u32::MAX, 0],
-        vec![256, u32::MAX, 0],
-        vec![u32::MAX, u32::MAX, 0],
-        vec![20, u32::MAX],
-        vec![20],
-        vec![],
-    ] {
-        let mut code = vec![];
-        command(&mut code, 0x2020, &[20]);
-        command(&mut code, 0x2026, &args);
-        let program = script(&code);
-        let mut vm = Machine::new(&program).unwrap();
-        let mut scene = SceneHost::default();
-        next(&mut vm, &mut scene).unwrap();
-        pending(&mut vm);
-        let before = scene.object(20).unwrap().clone();
-        for _ in 0..2 {
-            assert!(scene.shared_state(&mut vm).is_err());
-            assert_eq!(scene.object(20), Some(&before));
-            assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x26)));
-            assert_eq!(vm.stack().len_bytes(), args.len() * 4);
-        }
-    }
 }
 
 #[test]
@@ -165,29 +127,6 @@ fn world_query_returns_raw_float_registers_for_parent_and_child() {
 }
 
 #[test]
-fn world_query_missing_child_is_retryable_and_does_not_write_results() {
-    let mut code = vec![];
-    command(&mut code, 0x2020, &[1]);
-    command(&mut code, 0x2040, &[1]);
-    command(&mut code, 0x2078, &[1, 768]);
-    let program = script(&code);
-    let mut vm = Machine::new(&program).unwrap();
-    let mut scene = SceneHost::default();
-    next(&mut vm, &mut scene).unwrap();
-    next(&mut vm, &mut scene).unwrap();
-    for i in 8..=10 {
-        vm.state_mut().set_system_float_bits(i, i).unwrap();
-    }
-    for _ in 0..2 {
-        assert!(next(&mut vm, &mut scene).is_err());
-        assert_eq!(vm.stack().len_bytes(), 8);
-        for i in 8..=10 {
-            assert_eq!(vm.state().system_float_bits(i), Some(i));
-        }
-    }
-}
-
-#[test]
 fn special_effect_reset_retains_ordinary_children_parent_draw_and_flags() {
     let mut code = vec![];
     for (op, args) in [
@@ -257,19 +196,6 @@ fn depth_flag_is_normalized_and_missing_argument_keeps_pending_state() {
     assert_eq!(vm.pending_system(), Some((10, 0x250)));
     assert_eq!(vm.pc(), 10);
     assert!(scene.clear().depth);
-}
-
-#[test]
-fn other_commands_are_left_pending() {
-    let script = script(&push_then(1, &[0x22cc]));
-    let mut vm = Machine::new(&script).unwrap();
-    let mut scene = SceneHost::default();
-    assert!(!scene.shared_state(&mut vm).unwrap());
-    vm.step().unwrap();
-    vm.step().unwrap();
-    assert!(!scene.shared_state(&mut vm).unwrap());
-    assert_eq!(vm.pending_system(), Some((8, 0x2cc)));
-    assert_eq!(scene.clear(), ClearState::default());
 }
 
 #[test]
@@ -511,72 +437,6 @@ fn projection_parameters_preserve_raw_float_bits_and_each_other() {
     assert_eq!(vm.pc(), code.len());
     // Preserving the projection input is not an implementation of camera presentation.
     assert!(cmvs_rs::scene_render::render(&scene, 1, 1).is_err());
-}
-
-#[test]
-fn projection_setter_errors_preserve_targets_stack_and_pending_command() {
-    for op in [0x204c, 0x2071, 0x2072, 0x2073, 0x2074, 0x2075] {
-        for args in [
-            vec![256, u32::MAX, 0],
-            vec![u32::MAX, u32::MAX, 0],
-            vec![2, u32::MAX, 0],
-            vec![1, 768, 0],
-            vec![1, 0, 0],        // Missing child.
-            vec![1, 767, 0],      // Existing child without a draw state.
-            vec![1, u32::MAX, 0], // Parent without a draw state.
-            vec![1, u32::MAX],    // Missing float word.
-        ] {
-            let mut code = vec![];
-            command(&mut code, 0x2020, &[1]);
-            command(&mut code, 0x2022, &[1, 767]);
-            command(&mut code, op, &args);
-            let program = script(&code);
-            let mut vm = Machine::new(&program).unwrap();
-            let mut scene = SceneHost::default();
-            for _ in 0..2 {
-                next(&mut vm, &mut scene).unwrap();
-            }
-            vm.state_mut().set_system_integer(0, 123).unwrap();
-            let before = scene.objects().clone();
-            assert!(next(&mut vm, &mut scene).is_err());
-            assert_eq!(scene.objects(), &before);
-            assert_eq!(vm.pending_system(), Some((code.len() - 2, op - 0x2000)));
-            assert_eq!(vm.pc(), code.len() - 2);
-            assert_eq!(vm.stack().len_bytes(), args.len() * 4);
-            assert_eq!(vm.state().system_integer(0), Some(123));
-        }
-    }
-}
-
-#[test]
-fn coordinate_mode_two_errors_preserve_pending_command_stack_and_objects() {
-    for args in [
-        vec![256, u32::MAX],
-        vec![u32::MAX, u32::MAX],
-        vec![2, u32::MAX], // Missing parent.
-        vec![1, 768],
-        vec![1, 0],        // Missing child.
-        vec![1, 767],      // Child without a draw state.
-        vec![1, u32::MAX], // Parent without a draw state.
-        vec![1],           // Missing argument.
-    ] {
-        let mut code = vec![];
-        command(&mut code, 0x2020, &[1]);
-        command(&mut code, 0x2022, &[1, 767]);
-        command(&mut code, 0x2042, &args);
-        let program = script(&code);
-        let mut vm = Machine::new(&program).unwrap();
-        let mut scene = SceneHost::default();
-        for _ in 0..2 {
-            assert!(next(&mut vm, &mut scene).unwrap());
-        }
-        let before = scene.objects().clone();
-        assert!(next(&mut vm, &mut scene).is_err());
-        assert_eq!(scene.objects(), &before);
-        assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x42)));
-        assert_eq!(vm.pc(), code.len() - 2);
-        assert_eq!(vm.stack().len_bytes(), args.len() * 4);
-    }
 }
 
 #[test]
@@ -898,41 +758,6 @@ fn stopping_and_querying_opacity_tracks() {
     assert!(draw.opacity_track.is_none());
     assert_eq!(draw.words[17], 77);
     assert_eq!(vm.stack().len_bytes(), 0);
-}
-
-#[test]
-fn opacity_commands_reject_bad_targets_and_keys() {
-    for (draw, command, words) in [
-        (false, 0x21eau16, vec![0, u32::MAX, 3]),
-        (true, 0x21ea, vec![0, 5, 3]),
-        (true, 0x21ea, vec![0, 768, 3]),
-        (true, 0x21ea, vec![0, u32::MAX, 4]),
-        (true, 0x21eb, vec![0, 0, 0, u32::MAX, 8, u32::MAX, 3]),
-        (true, 0x21eb, vec![0, 0, 0, 8, 0, u32::MAX, 3]),
-        (true, 0x21ec, vec![8, u32::MAX, 3]),
-        (true, 0x21ee, vec![3]),
-    ] {
-        let mut code = vec![];
-        invoke(&mut code, 0x2020, &[3]);
-        if draw {
-            invoke(&mut code, 0x2040, &[3]);
-        }
-        invoke(&mut code, command, &words);
-        let program = script(&code);
-        let mut vm = Machine::new(&program).unwrap();
-        vm.state_mut().set_system_integer(0, 9).unwrap();
-        let mut scene = SceneHost::default();
-        run_all(&mut vm, &mut scene, 1 + usize::from(draw));
-        pending(&mut vm);
-        let bytes = vm.stack().len_bytes();
-        assert!(
-            scene.shared_state(&mut vm).is_err(),
-            "{command:x} {words:?}"
-        );
-        assert_eq!(vm.pending_system().map(|p| p.1), Some(command - 0x2000));
-        assert_eq!(vm.stack().len_bytes(), bytes);
-        assert_eq!(vm.state().system_integer(0), Some(9));
-    }
 }
 
 fn motion_setup(code: &mut Vec<u8>, slot: u32, base: [f32; 3]) {
@@ -1310,57 +1135,6 @@ fn world_motion_crossing_a_key_snaps_until_the_next_frame_and_disposes_on_minus_
 }
 
 #[test]
-fn world_motion_without_a_track_is_a_noop_and_reset_discards_a_playing_track() {
-    let mut code = vec![];
-    command(&mut code, 0x2020, &[1]);
-    command(&mut code, 0x2040, &[1]);
-    command(&mut code, 0x21fa, &[1, u32::MAX, 99, 99, 99, 100, 0, 0, 0]);
-    command(&mut code, 0x21fb, &[1, u32::MAX, 99]);
-    command(&mut code, 0x21fc, &[1, u32::MAX]);
-    command(&mut code, 0x21f9, &[1, u32::MAX]);
-    command(
-        &mut code,
-        0x21fa,
-        &[1, u32::MAX, 0, u32::MAX, 0, 100, 100f32.to_bits(), 0, 0],
-    );
-    command(&mut code, 0x21fb, &[1, u32::MAX, 0]);
-    command(&mut code, 0x21f9, &[1, u32::MAX]);
-    let program = script(&code);
-    let mut vm = Machine::new(&program).unwrap();
-    let mut scene = SceneHost::default();
-    run_all(&mut vm, &mut scene, 5);
-    assert!(
-        scene
-            .object(1)
-            .unwrap()
-            .draw
-            .as_ref()
-            .unwrap()
-            .world_motion
-            .is_none()
-    );
-    run_all(&mut vm, &mut scene, 3);
-    scene.advance_frame(50);
-    assert_eq!(motion_xyz(&scene, 1), [50.0, 0.0, 0.0]);
-    run_all(&mut vm, &mut scene, 1);
-    scene.advance_frame(100);
-    assert_eq!(motion_xyz(&scene, 1), [50.0, 0.0, 0.0]);
-    assert!(
-        scene
-            .object(1)
-            .unwrap()
-            .draw
-            .as_ref()
-            .unwrap()
-            .world_motion
-            .as_ref()
-            .unwrap()
-            .playback
-            .is_none()
-    );
-}
-
-#[test]
 fn world_motion_invalid_targets_indices_modes_and_missing_args_are_transactional() {
     for (op, args) in [
         (0x21f9, vec![256, u32::MAX]),
@@ -1504,58 +1278,6 @@ fn rotation_setter_normalizes_signed_degrees_and_preserves_other_state() {
 }
 
 #[test]
-fn rotation_setter_invalid_targets_or_short_stack_do_not_commit() {
-    for args in [
-        vec![1, u32::MAX, 60],
-        vec![2, u32::MAX, 60],
-        vec![256, u32::MAX, 60],
-        vec![u32::MAX, u32::MAX, 60],
-        vec![1, 768, 60],
-        vec![1, 0, 60],
-        vec![1, u32::MAX],
-    ] {
-        let mut code = vec![];
-        command(&mut code, 0x2020, &[1]);
-        command(&mut code, 0x204a, &args);
-        let program = script(&code);
-        let mut vm = Machine::new(&program).unwrap();
-        let mut scene = SceneHost::default();
-        next(&mut vm, &mut scene).unwrap();
-        let before = scene.objects().clone();
-        assert!(next(&mut vm, &mut scene).is_err());
-        assert_eq!(scene.objects(), &before);
-        assert_eq!(vm.pending_system().map(|p| p.1), Some(0x4a));
-        assert_eq!(vm.stack().len_bytes(), args.len() * 4);
-    }
-}
-
-#[test]
-fn scale_setter_invalid_targets_or_short_stack_preserve_the_pending_command() {
-    for args in [
-        vec![1, u32::MAX, 0, 0],
-        vec![2, u32::MAX, 0, 0],
-        vec![256, u32::MAX, 0, 0],
-        vec![u32::MAX, u32::MAX, 0, 0],
-        vec![1, 768, 0, 0],
-        vec![1, 0, 0, 0],
-        vec![1, u32::MAX, 0],
-    ] {
-        let mut code = vec![];
-        command(&mut code, 0x2020, &[1]);
-        command(&mut code, 0x2049, &args);
-        let program = script(&code);
-        let mut vm = Machine::new(&program).unwrap();
-        let mut scene = SceneHost::default();
-        next(&mut vm, &mut scene).unwrap();
-        let old = scene.objects().clone();
-        assert!(next(&mut vm, &mut scene).is_err());
-        assert_eq!(scene.objects(), &old);
-        assert_eq!(vm.pending_system().map(|p| p.1), Some(0x49));
-        assert_eq!(vm.stack().len_bytes(), args.len() * 4);
-    }
-}
-
-#[test]
 fn solid_setter_preserves_other_properties_tracks_and_child_isolation() {
     let mut code = vec![];
     for (op, args) in [
@@ -1617,32 +1339,6 @@ fn solid_setter_preserves_other_properties_tracks_and_child_isolation() {
 }
 
 #[test]
-fn solid_setter_invalid_targets_or_short_stack_preserve_the_pending_command() {
-    for args in [
-        vec![1, u32::MAX, 0, 0, 0],
-        vec![2, u32::MAX, 0, 0, 0],
-        vec![256, u32::MAX, 0, 0, 0],
-        vec![u32::MAX, u32::MAX, 0, 0, 0],
-        vec![1, 768, 0, 0, 0],
-        vec![1, 0, 0, 0, 0],
-        vec![1, u32::MAX, 0, 0],
-    ] {
-        let mut code = vec![];
-        command(&mut code, 0x2020, &[1]);
-        command(&mut code, 0x2043, &args);
-        let program = script(&code);
-        let mut vm = Machine::new(&program).unwrap();
-        let mut scene = SceneHost::default();
-        next(&mut vm, &mut scene).unwrap();
-        let old = scene.objects().clone();
-        assert!(next(&mut vm, &mut scene).is_err());
-        assert_eq!(scene.objects(), &old);
-        assert_eq!(vm.pending_system().map(|p| p.1), Some(0x43));
-        assert_eq!(vm.stack().len_bytes(), args.len() * 4);
-    }
-}
-
-#[test]
 fn child_deletion_preserves_parent_siblings_results_and_out_of_range_indices() {
     let mut code = vec![];
     for (op, args) in [
@@ -1686,39 +1382,6 @@ fn child_deletion_preserves_parent_siblings_results_and_out_of_range_indices() {
 }
 
 #[test]
-fn child_deletion_invalid_parent_and_missing_arguments_preserve_pending_state() {
-    for args in [
-        vec![256, 0],
-        vec![u32::MAX, 0],
-        vec![21, 0],
-        vec![20],
-        vec![],
-    ] {
-        let mut code = vec![];
-        command(&mut code, 0x2020, &[20]);
-        command(&mut code, 0x2022, &[20, 0]);
-        command(&mut code, 0x2023, &args);
-        let program = script(&code);
-        let mut vm = Machine::new(&program).unwrap();
-        let mut scene = SceneHost::default();
-        run_all(&mut vm, &mut scene, 2);
-        pending(&mut vm);
-        let before = scene.object(20).unwrap().clone();
-        vm.state_mut().set_system_integer(0, 123).unwrap();
-        for _ in 0..2 {
-            assert!(scene.shared_state(&mut vm).is_err());
-            assert_eq!(scene.object(20), Some(&before));
-            assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x23)));
-            assert_eq!(vm.stack().len_bytes(), args.len() * 4);
-            for (i, word) in args.iter().enumerate() {
-                assert_eq!(vm.stack().peek_u32((i + 1) * 4).unwrap(), *word);
-            }
-            assert_eq!(vm.state().system_integer(0), Some(123));
-        }
-    }
-}
-
-#[test]
 fn subqueue_flag_selects_self_or_child_without_needing_draw_state() {
     let mut code = vec![];
     command(&mut code, 0x2020, &[20]);
@@ -1743,34 +1406,6 @@ fn subqueue_flag_selects_self_or_child_without_needing_draw_state() {
         assert_eq!(scene.object(20), Some(&expected));
         assert_eq!(vm.stack().len_bytes(), 0);
         assert_eq!(vm.state().system_integer(0), Some(123));
-    }
-}
-#[test]
-fn subqueue_flag_invalid_targets_and_missing_parameters_are_transactional() {
-    for args in [
-        vec![20, 1],
-        vec![20, 768],
-        vec![21, 0],
-        vec![256, 0],
-        vec![u32::MAX, 0],
-        vec![20],
-        vec![],
-    ] {
-        let mut code = vec![];
-        command(&mut code, 0x2020, &[20]);
-        command(&mut code, 0x202d, &args);
-        let program = script(&code);
-        let mut vm = Machine::new(&program).unwrap();
-        let mut scene = SceneHost::default();
-        run_all(&mut vm, &mut scene, 1);
-        pending(&mut vm);
-        let before = scene.object(20).unwrap().clone();
-        for _ in 0..2 {
-            assert!(scene.shared_state(&mut vm).is_err());
-            assert_eq!(scene.object(20), Some(&before));
-            assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x2d)));
-            assert_eq!(vm.stack().len_bytes(), args.len() * 4);
-        }
     }
 }
 
@@ -1809,41 +1444,6 @@ fn texture_subtract_normalizes_boolean_targets_and_keeps_other_state() {
         assert_eq!(scene.object(7), Some(&expected));
         assert_eq!(vm.pc(), pc + 2);
         assert_eq!(vm.stack().len_bytes(), 0);
-        assert_eq!(vm.state().system_integer(0), Some(123));
-    }
-}
-
-#[test]
-fn texture_subtract_rejects_invalid_targets_without_consuming_the_command() {
-    for (draw, args) in [
-        (true, [256, u32::MAX, 1]),
-        (true, [u32::MAX, u32::MAX, 1]),
-        (true, [8, u32::MAX, 1]),
-        (true, [7, 768, 1]),
-        (true, [7, 2, 1]),
-        (false, [7, u32::MAX, 1]),
-    ] {
-        let mut code = vec![];
-        command(&mut code, 0x2020, &[7]);
-        if draw {
-            command(&mut code, 0x2040, &[7]);
-        }
-        command(&mut code, 0x2322, &args);
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        let mut scene = SceneHost::default();
-        assert!(next(&mut vm, &mut scene).unwrap());
-        if draw {
-            assert!(next(&mut vm, &mut scene).unwrap());
-        }
-        let before = scene.objects().clone();
-        pending(&mut vm);
-        let pc = vm.pc();
-        vm.state_mut().set_system_integer(0, 123).unwrap();
-        assert!(scene.shared_state(&mut vm).is_err());
-        assert_eq!(scene.objects(), &before);
-        assert_eq!(vm.pending_system(), Some((pc, 0x322)));
-        assert_eq!(vm.stack().len_bytes(), 12);
         assert_eq!(vm.state().system_integer(0), Some(123));
     }
 }

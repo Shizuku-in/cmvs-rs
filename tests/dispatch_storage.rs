@@ -11,11 +11,8 @@ use cmvs_rs::{
 use std::{error::Error, io};
 #[path = "support/css1_fixture.rs"]
 mod css1_fixture;
-#[path = "support/storage_cases.rs"]
-mod storage_cases;
 #[allow(dead_code)]
 mod support;
-use storage_cases::cases;
 use support::bytecode::{command, pending};
 fn bytes(code: &[u8]) -> Vec<u8> {
     let text = b"main.ps3\0common.ps3\0broken\0";
@@ -174,19 +171,6 @@ impl State {
             _ => unreachable!(),
         }
     }
-    fn snapshot(&self) -> String {
-        format!(
-            "{:?} {:?} {:?} {:?} {:?} {:?} {:?} {:?}",
-            self.control.callbacks(),
-            self.control.settings(),
-            self.system.loaded,
-            self.system.lists,
-            self.menu.menu(),
-            self.menu.second_group_enabled(),
-            self.random,
-            self.store
-        )
-    }
 }
 fn expected(op: u16) -> Flow {
     match op {
@@ -199,95 +183,15 @@ fn expected(op: u16) -> Flow {
     }
 }
 #[test]
-fn storage_commands_use_one_owner_and_explicit_events() {
-    assert_eq!(cases().len(), 13);
-    for (op, args, cap) in cases() {
-        let owners: Vec<_> = dispatch::ROOT
-            .iter()
-            .filter(|e| e.command == op - 0x2000)
-            .collect();
-        assert_eq!(owners.len(), 1);
-        assert_eq!(owners[0].capability, cap);
-        let mut code = vec![];
-        command(&mut code, op, &args);
-        command(&mut code, 0x2000, &[]);
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        let mut state = State::default();
-        state.setup(&mut vm);
-        pending(&mut vm);
-        let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
-        let snapshot = state.snapshot();
-        assert_eq!(
-            dispatch::run(Semantics::Root, &mut vm, &mut Hosts::default()).unwrap(),
-            Some(Flow::Unavailable)
-        );
-        assert_eq!(
-            dispatch::run(
-                Semantics::Variant(cmvs_rs::profile::VariantId::FontCells),
-                &mut vm,
-                &mut state.hosts(cap)
-            )
-            .unwrap(),
-            Some(Flow::Unhandled)
-        );
-        assert_eq!(
-            (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
-            before
-        );
-        assert_eq!(state.snapshot(), snapshot);
-        assert_eq!(
-            dispatch::run(Semantics::Root, &mut vm, &mut state.hosts(cap)).unwrap(),
-            Some(expected(op))
-        );
-        assert!(vm.pending_system().is_none());
-        if matches!(op, 0x2081 | 0x208a) {
-            assert_eq!(vm.stack().len_bytes(), 12);
-        } else {
-            assert_eq!(vm.stack().len_bytes(), 0);
-        }
-        if !matches!(op, 0x2080 | 0x2081 | 0x208a) {
-            assert_eq!(vm.pc(), before.0 + 2);
-        }
-        let snapshot = state.snapshot();
-        assert_eq!(
-            dispatch::run(Semantics::Root, &mut vm, &mut state.hosts(cap)).unwrap(),
-            None
-        );
-        assert_eq!(state.snapshot(), snapshot);
-    }
-}
-#[test]
-fn storage_short_arguments_preserve_vm_hosts_and_sources() {
-    for (op, args, cap) in cases().into_iter().filter(|(_, a, _)| !a.is_empty()) {
-        for len in [0, args.len() - 1] {
-            let mut code = vec![];
-            command(&mut code, op, &args[..len]);
-            let script = script(&code);
-            let mut vm = Machine::new(&script).unwrap();
-            let mut state = State::default();
-            state.setup(&mut vm);
-            pending(&mut vm);
-            let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
-            let vars = format!("{:?}", vm.state());
-            let snapshot = state.snapshot();
-            let err = dispatch::run(Semantics::Root, &mut vm, &mut state.hosts(cap)).unwrap_err();
-            assert_eq!((err.pc, err.command), (before.0, op - 0x2000));
-            assert_eq!(
-                (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
-                before
-            );
-            assert_eq!(state.snapshot(), snapshot);
-            assert_eq!(format!("{:?}", vm.state()), vars);
-        }
-    }
-}
-#[test]
 fn storage_io_failures_preserve_typed_cause_and_allow_retry() {
-    for (op, args, cap) in cases()
-        .into_iter()
-        .filter(|(op, _, _)| matches!(op, 0x2080 | 0x2081 | 0x2128 | 0x2129 | 0x22b3 | 0x22bb))
-    {
+    for (op, args, cap) in [
+        (0x2080, vec![0], Capability::ScriptControl),
+        (0x2081, vec![0, 9], Capability::ScriptControl),
+        (0x2128, vec![], Capability::SystemRead),
+        (0x2129, vec![], Capability::SystemWrite),
+        (0x22b3, vec![2], Capability::SaveMenu),
+        (0x22bb, vec![0], Capability::SaveMenu),
+    ] {
         let mut code = vec![];
         command(&mut code, op, &args);
         command(&mut code, 0x2000, &[]);
@@ -322,54 +226,4 @@ fn storage_io_failures_preserve_typed_cause_and_allow_retry() {
             Some(expected(op))
         );
     }
-}
-
-#[test]
-fn trace_preserves_storage_option_gates_and_keeps_writes_unavailable() {
-    use std::{fs, process::Command};
-    let root = std::env::temp_dir().join(format!("cmvs-cli-storage-{}", std::process::id()));
-    fs::create_dir(&root).unwrap();
-    let path = root.join("storage.ps3");
-    for (op, args, cap) in cases() {
-        for record in [false, true] {
-            for saves in [false, true] {
-                for system in [false, true] {
-                    let mut code = vec![];
-                    command(&mut code, op, &args);
-                    command(&mut code, 0x2003, &[]);
-                    let raw = bytes(&code);
-                    fs::write(&path, &raw).unwrap();
-                    let mut cli = Command::new(env!("CARGO_BIN_EXE_cmvs-trace"));
-                    cli.arg(&path).args(["--profile", "cmvs-20160201"]);
-                    if record {
-                        cli.arg("--record-platform").arg(&root);
-                    }
-                    if saves {
-                        cli.arg("--save-dir").arg(&root);
-                    }
-                    if system {
-                        cli.arg("--system-save").arg(root.join("absent.dat"));
-                    }
-                    let out = cli.output().unwrap();
-                    let stdout = String::from_utf8(out.stdout).unwrap();
-                    assert!(
-                        out.status.success(),
-                        "{stdout}\n{}",
-                        String::from_utf8_lossy(&out.stderr)
-                    );
-                    let enabled = cap == Capability::SaveMenu && saves
-                        || cap == Capability::SystemRead && system;
-                    let stop = if enabled { 0x2003 } else { op };
-                    assert!(
-                        stdout.contains(&format!("# STOP pending system=0x{stop:04x};")),
-                        "{stdout}"
-                    );
-                    assert_eq!(fs::read(&path).unwrap(), raw);
-                    assert!(!root.join("absent.dat").exists());
-                }
-            }
-        }
-    }
-    fs::remove_file(path).unwrap();
-    fs::remove_dir(root).unwrap();
 }

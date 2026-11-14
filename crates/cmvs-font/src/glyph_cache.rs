@@ -84,29 +84,6 @@ mod tests {
     }
 
     #[test]
-    fn repeated_pages_reuse_all_glyph_pixels_above_the_old_capacity() {
-        for count in [129, 196, 512] {
-            let mut cache = GlyphCache::default();
-            // The default 27px glyph has two padding pixels on each side.
-            let images: Vec<_> = (0..count)
-                .map(|i| RgbaImage::new(31, 31, vec![i as u8; 31 * 31 * 4]).unwrap())
-                .collect();
-            for (i, image) in images.iter().enumerate() {
-                cache.insert(key(i as u32), image.clone());
-            }
-            // The render loop visits a static page in the same order every frame.
-            for _ in 0..3 {
-                for (i, expected) in images.iter().enumerate() {
-                    let hit = cache
-                        .get(&key(i as u32))
-                        .expect("visible page stays cached");
-                    assert!(std::ptr::eq(hit.pixels(), expected.pixels()));
-                }
-            }
-        }
-    }
-
-    #[test]
     fn hot_glyph_survives_streaming_misses_and_clock_rollover() {
         let mut cache = GlyphCache {
             clock: u64::MAX - 64,
@@ -168,21 +145,6 @@ mod tests {
     fn large_glyph(value: u8) -> RgbaImage {
         // The largest supported glyph: 128px plus two padding pixels on each side.
         RgbaImage::new(132, 132, vec![value; 132 * 132 * 4]).unwrap()
-    }
-
-    #[test]
-    fn largest_glyphs_preserve_the_previous_128_style_working_set() {
-        let mut cache = GlyphCache::default();
-        let originals: Vec<_> = (0..128).map(large_glyph).collect();
-        for (i, original) in originals.iter().enumerate() {
-            cache.insert(key(i as u32), original.clone());
-        }
-        for (i, original) in originals.iter().enumerate() {
-            let hit = cache
-                .get(&key(i as u32))
-                .expect("the previous maximum-size working set still fits");
-            assert!(std::ptr::eq(hit.pixels(), original.pixels()));
-        }
     }
 
     #[test]

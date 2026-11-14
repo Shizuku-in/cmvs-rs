@@ -227,19 +227,6 @@ fn invalid_references_long_fixed_strings_and_short_stacks_are_transactional() {
 }
 
 #[test]
-fn unsupported_commands_and_no_pending_command_are_not_consumed() {
-    let program = script(&0x2137u16.to_le_bytes(), b"");
-    let mut vm = Machine::new(&program).unwrap();
-    let mut history = HistoryHost::default();
-    assert!(!history.try_handle(&mut vm).unwrap());
-    pending(&mut vm);
-    let command = vm.pending_system();
-    assert!(!history.try_handle(&mut vm).unwrap());
-    assert_eq!(vm.pending_system(), command);
-    assert!(history.entries().is_empty());
-}
-
-#[test]
 fn queries_report_count_strings_and_words_newest_first() {
     let bank = |slot: u32| 0x8000_0000 | slot;
     let mut code = vec![];

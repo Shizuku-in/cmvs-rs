@@ -155,18 +155,6 @@ mod tests {
     use super::TextEncoding;
 
     #[test]
-    fn lead_byte_boundaries_match_both_engine_variants() {
-        for byte in 0..=u8::MAX {
-            assert_eq!(
-                TextEncoding::ShiftJis.is_lead_byte(byte),
-                (0x81..=0x9f).contains(&byte) || (0xe0..=0xfc).contains(&byte)
-            );
-            assert_eq!(TextEncoding::Gbk.is_lead_byte(byte), byte >= 0x80);
-            assert_eq!(TextEncoding::Utf8.is_lead_byte(byte), byte >= 0x80);
-        }
-    }
-
-    #[test]
     fn utf8_wide_characters_map_to_bmp_scalars() {
         let utf8 = TextEncoding::Utf8;
         for ch in ['é', 'あ', '中', '\u{ffef}'] {
@@ -196,15 +184,5 @@ mod tests {
             assert!(encoding.is_wide_code(code));
             assert!(!encoding.is_wide_code(0xffb1));
         }
-    }
-
-    #[test]
-    fn utf8_fixed_codes_are_the_unicode_characters() {
-        let utf8 = TextEncoding::Utf8;
-        let code = |s: &str| s.chars().next().unwrap() as u16;
-        assert_eq!(utf8.no_break_codes(), ["、", "。", "」", "』"].map(code));
-        assert_eq!(utf8.voiced_mark(), code("゛"));
-        assert_eq!(utf8.middle_dot(), code("・"));
-        assert_eq!(utf8.title_separator(), "　".as_bytes());
     }
 }

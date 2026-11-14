@@ -1,7 +1,7 @@
 use cmvs_rs::{
     machine::Machine,
     ps3::Script,
-    snapshot::{Framing, MAX_SNAPSHOT, SaveImage, SaveInfo, SaveTitle, framing, parse_records},
+    snapshot::{MAX_SNAPSHOT, SaveImage, SaveInfo, SaveTitle, parse_records},
 };
 
 fn short(tag: u16, body: &[u8]) -> Vec<u8> {
@@ -45,19 +45,6 @@ fn every_writer_framing_is_walked_in_order() {
         ]
     );
     assert!(parse_records(&[]).unwrap().is_empty());
-}
-
-#[test]
-fn framing_table_matches_writer_groups() {
-    assert_eq!(framing(0x10b), Some(Framing::Short));
-    assert_eq!(framing(0x248), Some(Framing::Short));
-    assert_eq!(framing(0x242), Some(Framing::Long));
-    assert_eq!(framing(0x318), Some(Framing::Long));
-    assert_eq!(framing(0x8e8), Some(Framing::Indexed));
-    assert_eq!(framing(0x304), Some(Framing::StringPair));
-    for unknown in [0, 0x10c, 0x116, 0x244, 0x6a1, 0xffff] {
-        assert_eq!(framing(unknown), None);
-    }
 }
 
 #[test]

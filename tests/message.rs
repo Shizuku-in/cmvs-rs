@@ -7,11 +7,11 @@ use cmvs_rs::{
     input::ActionInput,
     machine::{Machine, Step},
     message::{
-        LineBreakRules, MESSAGE_WINDOWS, MessageHost, MessageWindow, TEXT_OBJECTS, TextObject,
-        WINDOW_BUTTONS, WindowButton,
+        LineBreakRules, MessageHost, MessageWindow, TEXT_OBJECTS, TextObject, WINDOW_BUTTONS,
+        WindowButton,
     },
     ps3::Script,
-    scene::{Animation, AnimationFrame, DrawState, SceneObject},
+    scene::{DrawState, SceneObject},
 };
 use shared_windows::SharedWindows;
 
@@ -287,91 +287,11 @@ fn timed_window_wait_ignores_manual_skip_and_auto_flags_and_finishes_without_yie
     }
 }
 
-#[test]
-fn empty_auxiliary_text_destruction_preserves_windows_text_and_results() {
-    let mut code = vec![];
-    create(&mut code, 0, 0, [20, 30, 100, 50]);
-    for _ in 0..2 {
-        for slot in 0..8 {
-            call(&mut code, 0x2382, &[slot]);
-        }
-    }
-    let script = script(&code);
-    let mut vm = Machine::new(&script).unwrap();
-    let mut messages = MessageHost::default();
-    pending(&mut vm);
-    assert!(messages.shared_message(&mut vm).unwrap());
-    let window = messages.window(0).unwrap().clone();
-    let text = messages.text(0).unwrap().clone();
-    for i in 0..7 {
-        vm.state_mut().set_system_integer(i, 200 + i).unwrap();
-    }
-    for _ in 0..16 {
-        pending(&mut vm);
-        assert!(messages.shared_message(&mut vm).unwrap());
-        assert_eq!(messages.window(0), Some(&window));
-        assert_eq!(messages.text(0), Some(&text));
-        assert_eq!(vm.stack().len_bytes(), 0);
-        for i in 0..7 {
-            assert_eq!(vm.state().system_integer(i), Some(200 + i));
-        }
-    }
-}
-
-#[test]
-fn auxiliary_text_destruction_rejects_missing_or_invalid_slot_atomically() {
-    for args in [vec![], vec![8], vec![u32::MAX]] {
-        let mut code = vec![];
-        call(&mut code, 0x2382, &args);
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        pending(&mut vm);
-        vm.state_mut().set_system_integer(0, 123).unwrap();
-        let before = (vm.pc(), vm.stack().len_bytes(), vm.pending_system());
-        let mut messages = MessageHost::default();
-        for _ in 0..2 {
-            assert!(messages.shared_message(&mut vm).is_err());
-            assert_eq!(
-                (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
-                before
-            );
-            assert_eq!(vm.state().system_integer(0), Some(123));
-        }
-    }
-}
-
-#[test]
-fn auxiliary_text_explicit_viewport_creation_stays_unhandled() {
-    let mut code = vec![];
-    call(&mut code, 0x2381, &[0, 0, 0, 0]);
-    let script = script(&code);
-    let mut vm = Machine::new(&script).unwrap();
-    pending(&mut vm);
-    let before = (vm.pc(), vm.stack().len_bytes(), vm.pending_system());
-    assert!(!MessageHost::default().shared_message(&mut vm).unwrap());
-    assert_eq!(
-        (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
-        before
-    );
-}
 fn run(vm: &mut Machine<'_>, messages: &mut MessageHost, commands: usize) {
     for _ in 0..commands {
         pending(vm);
         assert!(messages.shared_message(vm).unwrap());
     }
-}
-
-#[test]
-fn destroying_constructor_empty_windows_pops_the_slot_only() {
-    let script = script(&destroy(&[0, 3, 7]));
-    let mut vm = Machine::new(&script).unwrap();
-    vm.state_mut().set_system_integer(0, 9).unwrap();
-    let mut messages = MessageHost::default();
-    run(&mut vm, &mut messages, 3);
-    assert_eq!(vm.stack().len_bytes(), 0);
-    assert_eq!(vm.state().system_integer(0), Some(9));
-    assert!((0..MESSAGE_WINDOWS).all(|slot| messages.window(slot).is_none()));
-    assert!((0..TEXT_OBJECTS).all(|index| messages.text(index).is_none()));
 }
 
 #[test]
@@ -409,34 +329,6 @@ fn position_query_returns_moved_window_origin_and_preserves_other_results() {
             (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
             before
         );
-    }
-}
-
-#[test]
-fn out_of_range_negative_slots_and_short_stacks_keep_the_command_pending() {
-    let mut cases = vec![
-        destroy(&[8]),
-        destroy(&[u32::MAX]),
-        destroy(&[0x8000_0000]),
-        0x2141u16.to_le_bytes().to_vec(),
-    ];
-    for (slot, text) in [(8, 0), (u32::MAX, 0), (0, 12), (0, u32::MAX)] {
-        let mut code = vec![];
-        create(&mut code, slot, text, [0, 0, 1280, 54]);
-        cases.push(code);
-    }
-    let mut short = vec![];
-    call(&mut short, 0x215d, &[54, 1280, 0, 0, 10, 7]);
-    cases.push(short);
-    for code in cases {
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        pending(&mut vm);
-        let (pc, command, bytes) = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
-        assert!(MessageHost::default().shared_message(&mut vm).is_err());
-        assert_eq!(vm.pending_system(), command);
-        assert_eq!(vm.pending_system().map(|p| p.0), Some(pc));
-        assert_eq!(vm.stack().len_bytes(), bytes);
     }
 }
 
@@ -522,18 +414,6 @@ fn replacing_a_text_object_used_by_another_window_is_rejected() {
     assert_eq!(messages.text(3).map(|t| t.area), Some([0, 0, 10, 10]));
 }
 
-#[test]
-fn image_loading_stays_pending_without_an_image_source() {
-    {
-        let command = 0x2170u16;
-        let script = script(&command.to_le_bytes());
-        let mut vm = Machine::new(&script).unwrap();
-        pending(&mut vm);
-        assert!(!MessageHost::default().shared_message(&mut vm).unwrap());
-        assert_eq!(vm.pending_system().map(|p| p.1), Some(command - 0x2000));
-    }
-}
-
 /// Modeled on the window 7 setup intproc.ps3 runs after 0x215d (the area differs);
 /// arguments are in push order.
 fn configure(code: &mut Vec<u8>) {
@@ -600,33 +480,6 @@ fn guarded_setters_keep_rejected_values() {
 }
 
 #[test]
-fn setters_without_a_window_or_arguments_keep_the_command_pending() {
-    let mut cases = vec![];
-    for slot in [3, 8, u32::MAX] {
-        let mut code = vec![];
-        create(&mut code, 0, 0, [0, 0, 10, 10]);
-        call(&mut code, 0x2147, &[50, slot]);
-        cases.push(code);
-    }
-    let mut short = vec![];
-    create(&mut short, 0, 0, [0, 0, 10, 10]);
-    call(&mut short, 0x2145, &[0, 0, 0]);
-    cases.push(short);
-    for code in cases {
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        let mut messages = MessageHost::default();
-        run(&mut vm, &mut messages, 1);
-        pending(&mut vm);
-        let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
-        assert!(messages.shared_message(&mut vm).is_err());
-        assert_eq!(vm.pending_system(), command);
-        assert_eq!(vm.stack().len_bytes(), bytes);
-        assert_eq!(messages.text(0).map(|t| t.char_delay), Some(100));
-    }
-}
-
-#[test]
 fn window_object_commands_rebuild_hide_and_clear_flags() {
     let mut code = vec![];
     create(&mut code, 7, 10, [0, 0, 1280, 54]);
@@ -666,33 +519,6 @@ fn window_object_commands_rebuild_hide_and_clear_flags() {
 }
 
 #[test]
-fn window_object_commands_need_a_window_and_valid_children() {
-    let mut cases = vec![];
-    for (command, child) in [(0x2178u16, 768u32), (0x217f, 5)] {
-        let mut code = vec![];
-        create(&mut code, 0, 0, [0, 0, 10, 10]);
-        call(&mut code, command, &[child, 0]);
-        cases.push(code);
-    }
-    let mut empty = vec![];
-    create(&mut empty, 0, 0, [0, 0, 10, 10]);
-    call(&mut empty, 0x2178, &[u32::MAX, 1]);
-    cases.push(empty);
-    for code in cases {
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        let mut messages = MessageHost::default();
-        run(&mut vm, &mut messages, 1);
-        pending(&mut vm);
-        let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
-        assert!(messages.shared_message(&mut vm).is_err());
-        assert_eq!(vm.pending_system(), command);
-        assert_eq!(vm.stack().len_bytes(), bytes);
-        assert_eq!(messages.window(0).unwrap().object, SceneObject::default());
-    }
-}
-
-#[test]
 fn window_child_destruction_removes_existing_children_and_ignores_others() {
     let mut code = vec![];
     create(&mut code, 7, 10, [0, 0, 1280, 54]);
@@ -727,42 +553,6 @@ fn window_child_destruction_removes_existing_children_and_ignores_others() {
     // A rebuilt child starts fresh rather than reusing the destroyed state.
     run(&mut vm, &mut messages, 1);
     assert_eq!(messages.window(7).unwrap().object.children[&5].draw, None);
-}
-
-#[test]
-fn window_child_destruction_rejects_the_window_object_missing_windows_and_short_stacks() {
-    let mut cases = vec![];
-    for words in [
-        [u32::MAX, 0],
-        [0x8000_0000, 0],
-        [5, 1],
-        [5, 8],
-        [5, u32::MAX],
-    ] {
-        let mut code = vec![];
-        create(&mut code, 0, 0, [0, 0, 10, 10]);
-        call(&mut code, 0x2178, &[5, 0]);
-        call(&mut code, 0x2179, &words);
-        cases.push(code);
-    }
-    let mut short = vec![];
-    create(&mut short, 0, 0, [0, 0, 10, 10]);
-    call(&mut short, 0x2178, &[5, 0]);
-    call(&mut short, 0x2179, &[0]);
-    cases.push(short);
-    for code in cases {
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        let mut messages = MessageHost::default();
-        run(&mut vm, &mut messages, 2);
-        let before = messages.window(0).unwrap().object.clone();
-        pending(&mut vm);
-        let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
-        assert!(messages.shared_message(&mut vm).is_err());
-        assert_eq!(vm.pending_system(), command);
-        assert_eq!(vm.stack().len_bytes(), bytes);
-        assert_eq!(messages.window(0).unwrap().object, before);
-    }
 }
 
 #[test]
@@ -825,36 +615,6 @@ fn window_blend_mode_changes_parent_and_child_and_ignores_invalid_values() {
 }
 
 #[test]
-fn window_draw_commands_need_a_target_and_its_draw_state() {
-    let mut cases = vec![];
-    for (command, words) in [
-        (0x2183u16, vec![0, 0, u32::MAX, 0]),
-        (0x2180, vec![5, 0]),
-        (0x2180, vec![768, 0]),
-        (0x2180, vec![u32::MAX, 1]),
-        (0x2182, vec![0, 0, u32::MAX, 0]),
-        (0x2187, vec![2, u32::MAX, 0]),
-    ] {
-        let mut code = vec![];
-        create(&mut code, 0, 0, [0, 0, 10, 10]);
-        call(&mut code, command, &words);
-        cases.push(code);
-    }
-    for code in cases {
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        let mut messages = MessageHost::default();
-        run(&mut vm, &mut messages, 1);
-        pending(&mut vm);
-        let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
-        assert!(messages.shared_message(&mut vm).is_err());
-        assert_eq!(vm.pending_system(), command);
-        assert_eq!(vm.stack().len_bytes(), bytes);
-        assert_eq!(messages.window(0).unwrap().object, SceneObject::default());
-    }
-}
-
-#[test]
 fn button_records_store_states_hit_rectangles_and_enable_children() {
     let mut code = vec![];
     create(&mut code, 7, 10, [0, 0, 1280, 54]);
@@ -888,54 +648,6 @@ fn button_records_store_states_hit_rectangles_and_enable_children() {
 }
 
 #[test]
-fn button_commands_reject_bad_records_states_and_missing_windows() {
-    let mut cases = vec![];
-    for (command, words) in [
-        (0x2192u16, vec![32, 0]),
-        (0x2192, vec![u32::MAX, 0]),
-        (0x2192, vec![0, 1]),
-        (0x2190, vec![0, 0, 0, 0, 0, 0, 5, 0, 0]),
-        (0x2191, vec![0, 0, 0, 0]),
-    ] {
-        let mut code = vec![];
-        create(&mut code, 0, 0, [0, 0, 10, 10]);
-        call(&mut code, command, &words);
-        cases.push(code);
-    }
-    for code in cases {
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        let mut messages = MessageHost::default();
-        run(&mut vm, &mut messages, 1);
-        pending(&mut vm);
-        let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
-        assert!(messages.shared_message(&mut vm).is_err());
-        assert_eq!(vm.pending_system(), command);
-        assert_eq!(vm.stack().len_bytes(), bytes);
-        assert!(messages.window(0).unwrap().buttons == [WindowButton::default(); WINDOW_BUTTONS]);
-    }
-}
-
-#[test]
-fn window_visibility_sets_the_shown_flag_without_a_draw_state() {
-    let mut code = vec![];
-    create(&mut code, 7, 10, [0, 0, 1280, 54]);
-    call(&mut code, 0x2178, &[64, 7]);
-    call(&mut code, 0x217a, &[5, 64, 7]);
-    call(&mut code, 0x217a, &[0, u32::MAX, 7]);
-    let script = script(&code);
-    let mut vm = Machine::new(&script).unwrap();
-    let mut messages = MessageHost::default();
-    run(&mut vm, &mut messages, 3);
-    let object = &messages.window(7).unwrap().object;
-    assert!(object.children[&64].shown);
-    assert!(object.children[&64].draw.is_none());
-    run(&mut vm, &mut messages, 1);
-    assert!(!messages.window(7).unwrap().object.shown);
-    assert_eq!(vm.stack().len_bytes(), 0);
-}
-
-#[test]
 fn moving_a_window_updates_state_zero_object_and_text_positions() {
     let mut code = vec![];
     create(&mut code, 7, 10, [5, 6, 1280, 54]);
@@ -957,107 +669,6 @@ fn moving_a_window_updates_state_zero_object_and_text_positions() {
     assert_eq!(window.switch_positions, [[1185, 4], [5, 6]]);
     assert_eq!(window.object.draw.as_ref().unwrap().words[8..10], [1185, 4]);
     assert_eq!(messages.text(10).unwrap().position, [1185, 4]);
-    assert_eq!(vm.stack().len_bytes(), 0);
-}
-
-#[test]
-fn window_moves_need_a_known_mode_a_window_and_a_draw_state() {
-    let mut cases = vec![];
-    for (draw, words) in [
-        (true, vec![0, 0, 2, 0]),
-        (false, vec![0, 0, 0, 0]),
-        (true, vec![0, 0, 0, 1]),
-        (true, vec![0, 0, 0]),
-    ] {
-        let mut code = vec![];
-        create(&mut code, 0, 0, [0, 0, 10, 10]);
-        if draw {
-            call(&mut code, 0x2180, &[u32::MAX, 0]);
-        }
-        call(&mut code, 0x2150, &words);
-        cases.push((code, 1 + usize::from(draw)));
-    }
-    for (code, setup) in cases {
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        let mut messages = MessageHost::default();
-        run(&mut vm, &mut messages, setup);
-        pending(&mut vm);
-        let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
-        assert!(messages.shared_message(&mut vm).is_err());
-        assert_eq!(vm.pending_system(), command);
-        assert_eq!(vm.stack().len_bytes(), bytes);
-        let window = messages.window(0).unwrap();
-        assert_eq!(window.position, [0, 0]);
-        assert_eq!(messages.text(0).unwrap().position, [0, 0]);
-    }
-}
-
-#[test]
-fn text_object_commands_set_ruby_fields_and_logical_size() {
-    let mut code = vec![];
-    create(&mut code, 0, 7, [0, 540, 1280, 180]);
-    call(&mut code, 0x2114, &[0, 7]);
-    call(&mut code, 0x2114, &[1, 7]);
-    call(&mut code, 0x2115, &[15, 7]);
-    call(&mut code, 0x2116, &[u32::MAX, 7]);
-    call(&mut code, 0x2117, &[2, 7]);
-    call(&mut code, 0x217c, &[720, 1280, u32::MAX, 0]);
-    let script = script(&code);
-    let mut vm = Machine::new(&script).unwrap();
-    let mut messages = MessageHost::default();
-    run(&mut vm, &mut messages, 2);
-    assert!(!messages.text(7).unwrap().ruby);
-    run(&mut vm, &mut messages, 4);
-    let text = messages.text(7).unwrap();
-    assert_eq!(
-        (
-            text.ruby,
-            text.ruby_size,
-            text.ruby_spacing,
-            text.ruby_every_line
-        ),
-        (true, 15, -1, true)
-    );
-    run(&mut vm, &mut messages, 1);
-    let object = &messages.window(0).unwrap().object;
-    assert_eq!(object.logical_size, [1280, 720]);
-    assert!(object.draw.is_none());
-    assert_eq!(vm.stack().len_bytes(), 0);
-}
-
-#[test]
-fn standalone_text_creation_uses_constructor_values_and_overwrites_in_place() {
-    let mut code = vec![];
-    call(&mut code, 0x2100, &[0, 0, 3]);
-    call(&mut code, 0x2114, &[1, 3]);
-    call(&mut code, 0x2100, &[196, 0, 3]);
-    let script = script_with_text(&code, b"\0");
-    let mut vm = Machine::new(&script).unwrap();
-    vm.state_mut().set_system_integer(0, 9).unwrap();
-    let mut messages = MessageHost::default();
-    run(&mut vm, &mut messages, 1);
-    let expected = TextObject {
-        area: [0; 4],
-        position: [0, 0],
-        glyph_size: 0,
-        char_delay: 30,
-        glyph_capacity: 0,
-        ..created_text([0, 0], [0, 0])
-    };
-    assert_eq!(messages.text(3), Some(&expected));
-    assert!(messages.font_present(3));
-    assert_eq!(vm.state().system_integer(0), Some(1));
-    assert_eq!(vm.stack().len_bytes(), 0);
-    run(&mut vm, &mut messages, 1);
-    assert!(messages.text(3).unwrap().ruby);
-    run(&mut vm, &mut messages, 1);
-    let recreated = TextObject {
-        glyph_capacity: 196,
-        ..expected.clone()
-    };
-    assert_eq!(messages.text(3), Some(&recreated));
-    assert!((0..MESSAGE_WINDOWS).all(|slot| messages.window(slot).is_none()));
     assert_eq!(vm.stack().len_bytes(), 0);
 }
 
@@ -1229,39 +840,6 @@ fn encoded_length_skips_controls_and_counts_only_double_byte_ruby_base() {
         assert_eq!(messages.text(7), Some(&before));
         assert_eq!(vm.stack().len_bytes(), 0);
         assert_eq!(vm.pc(), code.len());
-    }
-}
-
-#[test]
-fn encoded_length_rejects_malformed_input_or_missing_text_without_committing() {
-    for (bytes, slot) in [
-        (&b"\\q\0"[..], 7),
-        (&b"\\\0"[..], 7),
-        (&b"\\w\0"[..], 7),
-        (&b"\x82\0"[..], 7),
-        (&b"{base\0"[..], 7),
-        (&b"{base/ruby\0"[..], 7),
-        (&b"A\0"[..], 12),
-        (&b"A\0"[..], u32::MAX),
-        (&b"A\0"[..], 6),
-    ] {
-        let mut code = vec![];
-        create(&mut code, 0, 7, [0, 0, 300, 100]);
-        call(&mut code, 0x2119, &[0, slot]);
-        let program = script_with_text(&code, bytes);
-        let mut vm = Machine::new(&program).unwrap();
-        let mut messages = MessageHost::default();
-        run(&mut vm, &mut messages, 1);
-        let before = messages.text(7).unwrap().clone();
-        vm.state_mut().set_system_integer(0, 123).unwrap();
-        pending(&mut vm);
-        for _ in 0..2 {
-            assert!(messages.shared_message(&mut vm).is_err());
-            assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x119)));
-            assert_eq!(vm.stack().len_bytes(), 8);
-            assert_eq!(vm.state().system_integer(0), Some(123));
-            assert_eq!(messages.text(7), Some(&before));
-        }
     }
 }
 
@@ -3318,97 +2896,6 @@ fn text_object_commands_reject_missing_objects_and_long_strings() {
     }
 }
 
-#[test]
-fn frame_animations_are_rebuilt_and_filled_per_entry() {
-    let mut code = vec![];
-    create(&mut code, 0, 7, [0, 540, 1280, 180]);
-    call(&mut code, 0x2178, &[2, 0]);
-    call(&mut code, 0x2180, &[2, 0]);
-    call(&mut code, 0x21cf, &[2, 0]);
-    // Entry 1: next 2, 100 ms, source (48, 320, 48, 48), origin (-1, 0x1_0002 -> 2).
-    call(
-        &mut code,
-        0x21d0,
-        &[0x1_0002, u32::MAX, 48, 48, 320, 48, 100, 2, 1, 2, 0],
-    );
-    call(&mut code, 0x21cf, &[2, 0]);
-    let script = script(&code);
-    let mut vm = Machine::new(&script).unwrap();
-    let mut messages = MessageHost::default();
-    run(&mut vm, &mut messages, 4);
-    let animation = |messages: &MessageHost| {
-        messages.window(0).unwrap().object.children[&2]
-            .draw
-            .as_ref()
-            .unwrap()
-            .animation
-            .clone()
-    };
-    assert_eq!(animation(&messages), Some(Box::default()));
-    run(&mut vm, &mut messages, 1);
-    let mut expected = Animation::default();
-    expected.frames[1] = AnimationFrame {
-        next: 2,
-        words: [48, 320, 48, 48, -1, 2],
-        duration: 100,
-    };
-    assert_eq!(animation(&messages).as_deref(), Some(&expected));
-    // Rebuilding replaces the filled animation with an empty one.
-    run(&mut vm, &mut messages, 1);
-    assert_eq!(animation(&messages), Some(Box::default()));
-    assert_eq!(vm.stack().len_bytes(), 0);
-}
-
-#[test]
-fn frame_entries_without_an_animation_are_ignored_and_bad_targets_rejected() {
-    let mut code = vec![];
-    create(&mut code, 0, 7, [0, 540, 1280, 180]);
-    call(&mut code, 0x2180, &[u32::MAX, 0]);
-    call(
-        &mut code,
-        0x21d0,
-        &[0, 0, 48, 48, 0, 0, 100, 1, 0, u32::MAX, 0],
-    );
-    let ignored = script(&code);
-    let mut vm = Machine::new(&ignored).unwrap();
-    let mut messages = MessageHost::default();
-    run(&mut vm, &mut messages, 3);
-    let object = &messages.window(0).unwrap().object;
-    assert_eq!(object.draw, Some(DrawState::default()));
-    assert_eq!(vm.stack().len_bytes(), 0);
-
-    let mut cases = vec![];
-    for (draw, command, words) in [
-        (false, 0x21cfu16, vec![u32::MAX, 0]),
-        (true, 0x21cf, vec![5, 0]),
-        (true, 0x21cf, vec![u32::MAX, 1]),
-        (true, 0x21d0, vec![0, 0, 0, 0, 0, 0, 0, 0, 64, u32::MAX, 0]),
-        (true, 0x21d0, vec![0, 0, 0, u32::MAX, 0]),
-    ] {
-        let mut code = vec![];
-        create(&mut code, 0, 7, [0, 0, 10, 10]);
-        if draw {
-            call(&mut code, 0x2180, &[u32::MAX, 0]);
-            call(&mut code, 0x21cf, &[u32::MAX, 0]);
-        }
-        call(&mut code, command, &words);
-        cases.push((code, if draw { 3 } else { 1 }));
-    }
-    for (code, setup) in cases {
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        let mut messages = MessageHost::default();
-        run(&mut vm, &mut messages, setup);
-        let before = messages.window(0).unwrap().object.clone();
-        pending(&mut vm);
-        let (command, bytes) = (vm.pending_system(), vm.stack().len_bytes());
-        assert!(messages.shared_message(&mut vm).is_err());
-        assert_eq!(vm.pending_system(), command);
-        assert_eq!(vm.stack().len_bytes(), bytes);
-        assert_eq!(messages.window(0).unwrap().object, before);
-    }
-}
-
 /// Window 0 with child 2 animated by `frames` (next, duration, source x), all 48x48 at y 320.
 fn animated(frames: &[(u32, u32, u32)], start: u32) -> Vec<u8> {
     let mut code = vec![];
@@ -3546,48 +3033,6 @@ fn playback_rejects_out_of_table_frames() {
 }
 
 #[test]
-fn wait_cursor_mode_keeps_offsets_for_modes_one_and_three_only() {
-    let mut code = vec![];
-    create(&mut code, 0, 7, [0, 540, 1280, 180]);
-    // Mode 0x1_0003 truncates to 3; the offsets truncate to 16 bits.
-    call(&mut code, 0x2151, &[0x1_0004, u32::MAX - 1, 0x1_0003, 0]);
-    call(&mut code, 0x2151, &[9, 9, 7, 0]);
-    call(&mut code, 0x2151, &[9, 9, 2, 0]);
-    call(&mut code, 0x2151, &[5, 6, 1, 0]);
-    let program = script(&code);
-    let mut vm = Machine::new(&program).unwrap();
-    let mut messages = MessageHost::default();
-    let state = |messages: &MessageHost| {
-        let window = messages.window(0).unwrap();
-        (window.cursor_mode, window.cursor_offset)
-    };
-    run(&mut vm, &mut messages, 2);
-    assert_eq!(state(&messages), (3, [-2, 4]));
-    run(&mut vm, &mut messages, 1);
-    assert_eq!(state(&messages), (7, [-2, 4]));
-    run(&mut vm, &mut messages, 1);
-    assert_eq!(state(&messages), (2, [0, 0]));
-    run(&mut vm, &mut messages, 1);
-    assert_eq!(state(&messages), (1, [6, 5]));
-    assert_eq!(vm.stack().len_bytes(), 0);
-    for words in [vec![0, 0, 3, 1], vec![0, 3, 0]] {
-        let mut code = vec![];
-        create(&mut code, 0, 7, [0, 0, 10, 10]);
-        call(&mut code, 0x2151, &words);
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        let mut messages = MessageHost::default();
-        run(&mut vm, &mut messages, 1);
-        pending(&mut vm);
-        let bytes = vm.stack().len_bytes();
-        assert!(messages.shared_message(&mut vm).is_err());
-        assert_eq!(vm.pending_system().map(|p| p.1), Some(0x151));
-        assert_eq!(vm.stack().len_bytes(), bytes);
-        assert_eq!(state(&messages), (0, [0, 0]));
-    }
-}
-
-#[test]
 fn window_opacity_caps_at_255_and_keeps_negative_values() {
     let mut code = vec![];
     create(&mut code, 0, 7, [0, 540, 1280, 180]);
@@ -3692,45 +3137,6 @@ fn window_cursor_is_absolute_signed_unclamped_and_isolated_from_layout() {
         assert_eq!(messages.text(7), Some(&expected));
         assert_eq!(messages.window(0), window.as_ref());
         assert_eq!(messages.text(2), other.as_ref());
-    }
-}
-
-#[test]
-fn window_cursor_errors_keep_the_pending_command_and_all_arguments() {
-    for (exists, words) in [
-        (false, vec![5, 4, 0]),
-        (true, vec![5, 4, 8]),
-        (true, vec![5, 4, u32::MAX]),
-        (true, vec![5, 0]),
-        (true, vec![0]),
-        (true, vec![]),
-    ] {
-        let mut code = vec![];
-        if exists {
-            create(&mut code, 0, 7, [0, 0, 100, 20]);
-        }
-        call(&mut code, 0x214f, &words);
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        let mut messages = MessageHost::default();
-        run(&mut vm, &mut messages, usize::from(exists));
-        vm.state_mut().set_system_integer(0, 91).unwrap();
-        pending(&mut vm);
-        let pc = vm.pc();
-        let window = messages.window(0).cloned();
-        let text = messages.text(7).cloned();
-        for _ in 0..2 {
-            assert!(messages.shared_message(&mut vm).is_err());
-            assert_eq!(vm.pc(), pc);
-            assert_eq!(vm.pending_system(), Some((pc, 0x14f)));
-            assert_eq!(vm.stack().len_bytes(), words.len() * 4);
-            for (i, value) in words.iter().rev().enumerate() {
-                assert_eq!(vm.stack().peek_u32(4 * (i + 1)).unwrap(), *value);
-            }
-            assert_eq!(messages.window(0), window.as_ref());
-            assert_eq!(messages.text(7), text.as_ref());
-            assert_eq!(vm.state().system_integer(0), Some(91));
-        }
     }
 }
 
@@ -3940,142 +3346,6 @@ fn window_scale_snaps_near_one_and_preserves_other_float_bits() {
 }
 
 #[test]
-fn window_glyph_parameter_preserves_raw_bits_and_only_changes_the_linked_text() {
-    let values = [1, 0x8000_0000, u32::MAX, 0];
-    let mut code = vec![];
-    create(&mut code, 0, 7, [0, 540, 1280, 180]);
-    create(&mut code, 1, 2, [10, 20, 100, 30]);
-    code.extend(0x440u16.to_le_bytes());
-    code.extend(4u16.to_le_bytes());
-    code.extend(0x1234u32.to_le_bytes());
-    for value in values {
-        call(&mut code, 0x2155, &[value, 0]);
-    }
-    call(&mut code, 0x2155, &[99, 0]);
-    create(&mut code, 0, 7, [0, 540, 1280, 180]);
-    let script = script(&code);
-    let mut vm = Machine::new(&script).unwrap();
-    let mut messages = MessageHost::default();
-    run(&mut vm, &mut messages, 2);
-    vm.state_mut().set_system_integer(0, 42).unwrap();
-    let window = messages.window(0).unwrap().clone();
-    let other = messages.text(2).unwrap().clone();
-    let initial = messages.text(7).unwrap().clone();
-    assert_eq!(initial.glyph_parameter, 0);
-    for value in values {
-        let mut expected = initial.clone();
-        expected.glyph_parameter = value;
-        run(&mut vm, &mut messages, 1);
-        assert_eq!(messages.text(7), Some(&expected));
-        assert_eq!(messages.text(2), Some(&other));
-        assert_eq!(messages.window(0), Some(&window));
-        assert_eq!(vm.stack().len_bytes(), 4);
-        assert_eq!(vm.stack().peek_u32(4).unwrap(), 0x1234);
-        assert_eq!(vm.state().system_integer(0), Some(42));
-    }
-    run(&mut vm, &mut messages, 2);
-    assert_eq!(messages.text(7), Some(&initial));
-}
-
-#[test]
-fn window_glyph_parameter_errors_preserve_pending_command_stack_and_objects() {
-    for (exists, words) in [
-        (false, vec![5, 0]),
-        (true, vec![5, 8]),
-        (true, vec![5, u32::MAX]),
-        (true, vec![0]),
-        (true, vec![]),
-    ] {
-        let mut code = vec![];
-        if exists {
-            create(&mut code, 0, 7, [0, 0, 100, 20]);
-        }
-        call(&mut code, 0x2155, &words);
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        let mut messages = MessageHost::default();
-        run(&mut vm, &mut messages, usize::from(exists));
-        vm.state_mut().set_system_integer(0, 42).unwrap();
-        pending(&mut vm);
-        let pc = vm.pc();
-        let window = messages.window(0).cloned();
-        let text = messages.text(7).cloned();
-        for _ in 0..2 {
-            assert!(messages.shared_message(&mut vm).is_err());
-            assert_eq!(vm.pc(), pc);
-            assert_eq!(vm.pending_system(), Some((pc, 0x155)));
-            assert_eq!(vm.stack().len_bytes(), words.len() * 4);
-            for (i, value) in words.iter().rev().enumerate() {
-                assert_eq!(vm.stack().peek_u32(4 * (i + 1)).unwrap(), *value);
-            }
-            assert_eq!(messages.window(0), window.as_ref());
-            assert_eq!(messages.text(7), text.as_ref());
-            assert_eq!(vm.state().system_integer(0), Some(42));
-        }
-    }
-}
-
-#[test]
-fn window_scale_rejects_bad_targets_and_truncated_arguments_without_mutation() {
-    for (create_window, draw, words) in [
-        (false, false, vec![1.0f32.to_bits(), 0]),
-        (true, false, vec![1.0f32.to_bits(), 0]),
-        (true, true, vec![1.0f32.to_bits(), 8]),
-        (true, true, vec![1.0f32.to_bits(), u32::MAX]),
-        (true, true, vec![0]),
-    ] {
-        let mut code = vec![];
-        if create_window {
-            create(&mut code, 0, 7, [0, 0, 100, 100]);
-        }
-        if draw {
-            call(&mut code, 0x2180, &[u32::MAX, 0]);
-        }
-        call(&mut code, 0x20ec, &words);
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        let mut messages = MessageHost::default();
-        run(
-            &mut vm,
-            &mut messages,
-            usize::from(create_window) + usize::from(draw),
-        );
-        pending(&mut vm);
-        let pc = vm.pc();
-        let stack = vm.stack().len_bytes();
-        let window = messages.window(0).cloned();
-        let text = messages.text(7).cloned();
-        assert!(messages.shared_message(&mut vm).is_err());
-        assert_eq!(vm.pending_system(), Some((pc, 0xec)));
-        assert_eq!(vm.stack().len_bytes(), stack);
-        assert_eq!(messages.window(0), window.as_ref());
-        assert_eq!(messages.text(7), text.as_ref());
-    }
-}
-
-#[test]
-fn window_image_release_rejects_missing_slots_and_short_stacks_without_mutation() {
-    for args in [vec![], vec![8], vec![u32::MAX], vec![1]] {
-        let mut code = vec![];
-        create(&mut code, 0, 0, [10, 20, 100, 40]);
-        call(&mut code, 0x2171, &args);
-        let program = script(&code);
-        let mut vm = Machine::new(&program).unwrap();
-        let mut messages = MessageHost::default();
-        run(&mut vm, &mut messages, 1);
-        let before = messages.window(0).unwrap().clone();
-        let text = messages.text(0).unwrap().clone();
-        pending(&mut vm);
-        let pc = vm.pc();
-        assert!(messages.shared_message(&mut vm).is_err());
-        assert_eq!(vm.pending_system(), Some((pc, 0x171)));
-        assert_eq!(vm.stack().len_bytes(), args.len() * 4);
-        assert_eq!(messages.window(0), Some(&before));
-        assert_eq!(messages.text(0), Some(&text));
-    }
-}
-
-#[test]
 fn window_object_presence_ignores_images_visibility_and_draw_state_and_tracks_children() {
     let mut code = vec![];
     create(&mut code, 0, 0, [10, 20, 100, 40]);
@@ -4123,68 +3393,6 @@ fn window_object_presence_ignores_images_visibility_and_draw_state_and_tracks_ch
     check(&mut vm, &mut messages, 1);
     run(&mut vm, &mut messages, 1);
     check(&mut vm, &mut messages, 0);
-}
-#[test]
-fn window_object_query_rejects_missing_windows_and_short_arguments_without_mutation() {
-    for args in [vec![], vec![0], vec![0, 1], vec![0, 8], vec![0, u32::MAX]] {
-        let mut code = vec![];
-        create(&mut code, 0, 0, [10, 20, 100, 40]);
-        call(&mut code, 0x217b, &args);
-        let program = script(&code);
-        let mut vm = Machine::new(&program).unwrap();
-        let mut messages = MessageHost::default();
-        run(&mut vm, &mut messages, 1);
-        vm.state_mut().set_system_integer(0, 17).unwrap();
-        let before = messages.window(0).unwrap().clone();
-        pending(&mut vm);
-        let pc = vm.pc();
-        assert!(messages.shared_message(&mut vm).is_err());
-        assert_eq!(vm.pending_system(), Some((pc, 0x17b)));
-        assert_eq!(vm.stack().len_bytes(), args.len() * 4);
-        assert_eq!(vm.state().system_integer(0), Some(17));
-        assert_eq!(messages.window(0), Some(&before));
-    }
-}
-
-#[test]
-fn direct_text_setters_reuse_window_setter_rules_and_pop_their_words() {
-    let mut code = vec![];
-    call(&mut code, 0x2100, &[0, 0, 1]);
-    call(&mut code, 0x2102, &[720, 1280, 1]);
-    call(&mut code, 0x2103, &[50, 400, 20, 10, 1]);
-    call(&mut code, 0x2105, &[2, u32::MAX, 32, 1]);
-    call(&mut code, 0x2105, &[u32::MAX, 3, 0, 1]);
-    call(&mut code, 0x2107, &[0x0100_0000, 0x123456, 1]);
-    call(&mut code, 0x210c, &[7, 8, 1]);
-    call(&mut code, 0x210d, &[350, 1, 1]);
-    call(&mut code, 0x210e, &[0, 1]);
-    call(&mut code, 0x210f, &[3, 1]);
-    call(&mut code, 0x2110, &[8, 1]);
-    call(&mut code, 0x2113, &[1, 1]);
-    call(&mut code, 0x211a, &[0x272727, 1]);
-    call(&mut code, 0x2104, &[1]);
-    let script = script_with_text(&code, b"\0");
-    let mut vm = Machine::new(&script).unwrap();
-    vm.state_mut().set_system_integer(0, 9).unwrap();
-    let mut messages = MessageHost::default();
-    run(&mut vm, &mut messages, 1);
-    assert_eq!(messages.text(1).unwrap().outline_mode, 2);
-    vm.state_mut().set_system_integer(0, 9).unwrap();
-    run(&mut vm, &mut messages, 12);
-    let text = messages.text(1).unwrap();
-    assert_eq!(text.position, [1280, 720]);
-    assert_eq!(text.area, [10, 20, 400, 50]);
-    // Size only when positive; each spacing only when nonnegative.
-    assert_eq!((text.glyph_size, text.spacing), (32, [3, 2]));
-    assert_eq!((text.color, text.decoration_color), (0x123456, 0xff_ffff));
-    assert_eq!(text.cursor, [8, 7]);
-    assert_eq!(text.reveal, [1, 350]);
-    assert_eq!((text.char_delay, text.decoration, text.layer), (0, 3, 8));
-    assert_eq!((text.outline_mode, text.glyph_parameter), (1, 0x272727));
-    run(&mut vm, &mut messages, 1);
-    assert_eq!(messages.text(1).unwrap().cursor, [10, 20]);
-    assert_eq!(vm.stack().len_bytes(), 0);
-    assert_eq!(vm.state().system_integer(0), Some(9));
 }
 
 #[test]

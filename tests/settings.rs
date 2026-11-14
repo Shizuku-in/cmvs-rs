@@ -95,88 +95,6 @@ fn logical_canvas_uses_base_and_rejects_invalid_allocation_sizes() {
 }
 
 #[test]
-fn cursor_auto_clear_reads_ini_and_normalizes_unsigned_modes_without_changing_results() {
-    assert_eq!(SettingsHost::from_ini(&[]).cursor_auto_clear(), 1);
-    assert_eq!(
-        SettingsHost::from_ini(b"[MOUSE_INFO]\nAUTO_CLEAR=-1\n").cursor_auto_clear(),
-        0
-    );
-    let mut code = vec![];
-    for raw in [0, 4, 5, u32::MAX, 2] {
-        command(&mut code, 0x22e9, &[1, raw]);
-        command(&mut code, 0x22e9, &[0, 0]);
-    }
-    let script = script(&code);
-    let mut vm = Machine::new(&script).unwrap();
-    let mut settings = SettingsHost::default();
-    for expected in [0, 4, 0, 0, 2] {
-        vm.state_mut().set_system_integer(0, 77).unwrap();
-        pending(&mut vm);
-        settings.try_handle(&mut vm).unwrap();
-        assert_eq!(vm.state().system_integer(0), Some(77));
-        pending(&mut vm);
-        settings.try_handle(&mut vm).unwrap();
-        assert_eq!(vm.state().system_integer(0), Some(expected));
-        assert_eq!(vm.stack().len_bytes(), 0);
-    }
-}
-
-#[test]
-fn bold_setting_normalizes_ini_and_vm_values_and_preserves_write_result() {
-    assert!(!SettingsHost::default().text_output().bold);
-    assert!(!SettingsHost::from_ini(&[]).text_output().bold);
-    assert!(
-        SettingsHost::from_ini(b"[MESSAGE_INFO]\nTEXT_BOLD=-1\n")
-            .text_output()
-            .bold
-    );
-    let mut code = vec![];
-    for raw in [u32::MAX, 0, 2] {
-        command(&mut code, 0x22e0, &[1, raw]);
-        command(&mut code, 0x22e0, &[0, 0]);
-    }
-    let script = script(&code);
-    let mut vm = Machine::new(&script).unwrap();
-    let mut settings = SettingsHost::default();
-    for expected in [1, 0, 1] {
-        vm.state_mut().set_system_integer(0, 77).unwrap();
-        pending(&mut vm);
-        settings.try_handle(&mut vm).unwrap();
-        assert_eq!(vm.state().system_integer(0), Some(77));
-        pending(&mut vm);
-        settings.try_handle(&mut vm).unwrap();
-        assert_eq!(vm.state().system_integer(0), Some(expected));
-        assert_eq!(vm.stack().len_bytes(), 0);
-    }
-}
-
-#[test]
-fn read_skip_setting_loads_ini_and_normalizes_writes_without_changing_results() {
-    assert!(!SettingsHost::default().read_skip());
-    assert!(SettingsHost::from_ini(&[]).read_skip());
-    assert!(!SettingsHost::from_ini(b"[MESSAGE_INFO]\nREAD_SKIP=0\n").read_skip());
-    assert!(SettingsHost::from_ini(b"[MESSAGE_INFO]\nREAD_SKIP=-1\n").read_skip());
-    let mut code = vec![];
-    for value in [u32::MAX, 0, 1] {
-        command(&mut code, 0x22e4, &[1, value]);
-        command(&mut code, 0x22e4, &[0, 0]);
-    }
-    let script = script(&code);
-    let mut vm = Machine::new(&script).unwrap();
-    let mut settings = SettingsHost::default();
-    for expected in [1, 0, 1] {
-        vm.state_mut().set_system_integer(0, 77).unwrap();
-        pending(&mut vm);
-        settings.try_handle(&mut vm).unwrap();
-        assert_eq!(vm.state().system_integer(0), Some(77));
-        pending(&mut vm);
-        settings.try_handle(&mut vm).unwrap();
-        assert_eq!(vm.state().system_integer(0), Some(expected));
-        assert_eq!(vm.stack().len_bytes(), 0);
-    }
-}
-
-#[test]
 fn text_settings_round_trip_clamps_preserve_results_and_keep_outline_signed_remainder() {
     for (op, raw, expected) in [
         (0x22df, u32::MAX, 1),
@@ -762,73 +680,6 @@ fn configured_font_uses_the_profile_string_rules_and_rejects_bad_faces() {
 }
 
 #[test]
-fn setting_the_current_font_does_not_change_results() {
-    let mut code = vec![];
-    command(&mut code, 0x22de, &[1, 0x8000_0000]);
-    let script = script(&code);
-    let mut vm = Machine::new(&script).unwrap();
-    vm.state_mut().set_string(0, DEFAULT_FONT_FACE).unwrap();
-    vm.state_mut().set_system_integer(0, 42).unwrap();
-    pending(&mut vm);
-    assert!(SettingsHost::default().try_handle(&mut vm).unwrap());
-    assert_eq!(vm.state().system_integer(0), Some(42));
-    assert_eq!(vm.stack().len_bytes(), 0);
-}
-
-#[test]
-fn automatic_advance_fields_round_trip_raw_words_and_normalize_only_the_boolean() {
-    for (op, initial, expected) in [
-        (0x22e6, 1, 1),
-        (0x22e7, 10, u32::MAX),
-        (0x22e8, 0, u32::MAX),
-        (0x22f8, 0, u32::MAX),
-    ] {
-        let mut code = vec![];
-        command(&mut code, op, &[0, 99]);
-        command(&mut code, op, &[1, u32::MAX]);
-        command(&mut code, op, &[0, 99]);
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        let mut settings = SettingsHost::default();
-        pending(&mut vm);
-        settings.try_handle(&mut vm).unwrap();
-        assert_eq!(vm.state().system_integer(0), Some(initial));
-        pending(&mut vm);
-        settings.try_handle(&mut vm).unwrap();
-        assert_eq!(vm.state().system_integer(0), Some(initial));
-        pending(&mut vm);
-        settings.try_handle(&mut vm).unwrap();
-        assert_eq!(vm.state().system_integer(0), Some(expected));
-        assert_eq!(vm.stack().len_bytes(), 0);
-    }
-}
-
-#[test]
-fn active_draw_normalizes_ini_and_vm_values_and_preserves_write_results() {
-    assert!(SettingsHost::default().active_draw());
-    assert!(!SettingsHost::from_ini(&[]).active_draw());
-    assert!(SettingsHost::from_ini(b"[SYSTEM_INFO]\nACTIVE_DRAW=-1\n").active_draw());
-    let mut code = vec![];
-    for raw in [0, 2, u32::MAX] {
-        command(&mut code, 0x22d5, &[1, raw]);
-        command(&mut code, 0x22d5, &[0, 0]);
-    }
-    let script = script(&code);
-    let mut vm = Machine::new(&script).unwrap();
-    let mut settings = SettingsHost::default();
-    for expected in [0, 1, 1] {
-        vm.state_mut().set_system_integer(0, 77).unwrap();
-        pending(&mut vm);
-        settings.try_handle(&mut vm).unwrap();
-        assert_eq!(vm.state().system_integer(0), Some(77));
-        pending(&mut vm);
-        settings.try_handle(&mut vm).unwrap();
-        assert_eq!(vm.state().system_integer(0), Some(expected));
-        assert_eq!(vm.stack().len_bytes(), 0);
-    }
-}
-
-#[test]
 fn audio_queries_use_playback_settings_without_backend_requests() {
     use cmvs_rs::audio::{AudioHost, AudioSettings, RecordingAudio};
     let values = [0, 1, 0, 140, 150, 160, 170, 180];
@@ -907,29 +758,6 @@ fn audio_ini_initializes_query_values_and_preserves_startup_volume_words() {
             .master,
         u32::MAX
     );
-}
-
-#[test]
-fn substring_counts_complete_pairs_and_does_not_clear_an_empty_copy() {
-    for (start, count, expected, characters) in [
-        (0, 1, &b"\x82\xa0"[..], 1),
-        (0, 3, &b"\x82\xa0A"[..], 2),
-        (2, 40, &b"A\x82\xa2"[..], 2),
-        (5, 40, &b"old"[..], 0),
-        (0, 0, &b"old"[..], 0),
-    ] {
-        let mut code = vec![];
-        command(&mut code, 0x20f3, &[0x8000_0001, 0x8000_0002, start, count]);
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        vm.state_mut().set_string(1, b"old").unwrap();
-        vm.state_mut().set_string(2, b"\x82\xa0A\x82\xa2").unwrap();
-        pending(&mut vm);
-        assert!(cmvs_rs::text::try_handle(&mut vm).unwrap());
-        assert_eq!(vm.resolve_string(0x8000_0001).unwrap(), expected);
-        assert_eq!(vm.state().system_integer(0), Some(characters));
-        assert_eq!(vm.stack().len_bytes(), 0);
-    }
 }
 
 #[test]

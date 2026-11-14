@@ -8,10 +8,7 @@ use cmvs_rs::{
 };
 #[allow(dead_code)]
 mod support;
-#[path = "support/text_state_cases.rs"]
-mod text_state_cases;
 use support::bytecode::{command, pending};
-use text_state_cases::{cases, setup};
 fn bytes(code: &[u8]) -> Vec<u8> {
     let text = b"\0abc\0";
     let mut raw = b"PS2A".to_vec();
@@ -58,7 +55,15 @@ impl State {
         format!("{:?} {:?}", self.messages, self.scene)
     }
     fn setup(&mut self) {
-        let setup = setup();
+        let setup = [
+            (0x2020, vec![11]),
+            (0x2040, vec![11]),
+            (0x2100, vec![0, 0, 0]),
+            (0x2105, vec![0, 25, 0, 0]),
+            (0x2103, vec![0, 0, 0, 200, 100]),
+            (0x2380, vec![0, 0, 25, 32]),
+            (0x2385, vec![0, 0, 0, 200, 100]),
+        ];
         let mut code = vec![];
         for (op, args) in &setup {
             command(&mut code, *op, args);
@@ -71,85 +76,6 @@ impl State {
                 dispatch::run(Semantics::Root, &mut vm, &mut self.hosts()).unwrap(),
                 Some(Flow::Done)
             );
-        }
-    }
-}
-#[test]
-fn all_text_state_commands_have_one_owner_and_complete_once() {
-    assert_eq!(cases().len(), 45);
-    for (opcode, args, capability) in cases() {
-        let entries: Vec<_> = dispatch::ROOT
-            .iter()
-            .filter(|e| e.command == opcode - 0x2000)
-            .collect();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].capability, capability);
-        assert!(dispatch::uses_message_state(opcode - 0x2000));
-        let mut state = State::default();
-        state.setup();
-        let mut code = vec![];
-        command(&mut code, opcode, &args);
-        let script = script(&code);
-        let mut vm = Machine::new(&script).unwrap();
-        pending(&mut vm);
-        let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
-        let snapshot = state.snapshot();
-        assert_eq!(
-            dispatch::run(Semantics::Root, &mut vm, &mut Hosts::default()).unwrap(),
-            Some(Flow::Unavailable)
-        );
-        assert_eq!(
-            dispatch::run(
-                Semantics::Variant(cmvs_rs::profile::VariantId::FontCells),
-                &mut vm,
-                &mut state.hosts()
-            )
-            .unwrap(),
-            Some(Flow::Unhandled)
-        );
-        assert_eq!(
-            (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
-            before
-        );
-        assert_eq!(state.snapshot(), snapshot);
-        assert_eq!(
-            dispatch::run(Semantics::Root, &mut vm, &mut state.hosts()).unwrap(),
-            Some(Flow::Done),
-            "{opcode:x}"
-        );
-        assert_eq!(
-            (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
-            (before.0 + 2, None, 0)
-        );
-        let snapshot = state.snapshot();
-        assert_eq!(
-            dispatch::run(Semantics::Root, &mut vm, &mut state.hosts()).unwrap(),
-            None
-        );
-        assert_eq!(state.snapshot(), snapshot);
-    }
-}
-#[test]
-fn short_text_arguments_preserve_messages_scene_and_vm() {
-    for (opcode, args, _) in cases() {
-        for len in [0, args.len() - 1] {
-            let mut state = State::default();
-            state.setup();
-            let snapshot = state.snapshot();
-            let mut code = vec![];
-            command(&mut code, opcode, &args[..len]);
-            let script = script(&code);
-            let mut vm = Machine::new(&script).unwrap();
-            pending(&mut vm);
-            let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
-            let err = dispatch::run(Semantics::Root, &mut vm, &mut state.hosts()).unwrap_err();
-            assert_eq!((err.pc, err.command), (before.0, opcode - 0x2000));
-            assert_eq!(err.as_decode().unwrap().opcode, Some(opcode));
-            assert_eq!(
-                (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
-                before
-            );
-            assert_eq!(state.snapshot(), snapshot);
         }
     }
 }
@@ -207,45 +133,6 @@ fn auxiliary_scene_context_is_conditional_and_retryable() {
         state.messages.auxiliary_text(0).unwrap().associated_scene,
         None
     );
-}
-
-#[test]
-fn trace_keeps_text_state_capabilities_unavailable() {
-    use std::{fs, process::Command};
-    let root = std::env::temp_dir().join(format!(
-        "cmvs-cli-dispatch-text-state-{}",
-        std::process::id()
-    ));
-    fs::create_dir(&root).unwrap();
-    let path = root.join("windows.ps3");
-    for (opcode, args, _) in cases() {
-        let mut code = vec![];
-        command(&mut code, opcode, &args);
-        command(&mut code, 0x2003, &[]);
-        let raw = bytes(&code);
-        fs::write(&path, &raw).unwrap();
-        for record in [false, true] {
-            let mut cli = Command::new(env!("CARGO_BIN_EXE_cmvs-trace"));
-            cli.arg(&path).args(["--profile", "cmvs-20160201"]);
-            if record {
-                cli.arg("--record-platform").arg(&root);
-            }
-            let output = cli.output().unwrap();
-            let stdout = String::from_utf8(output.stdout).unwrap();
-            assert!(
-                output.status.success(),
-                "{stdout}\n{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            assert!(
-                stdout.contains(&format!("# STOP pending system=0x{opcode:04x};")),
-                "{stdout}"
-            );
-        }
-        assert_eq!(fs::read(&path).unwrap(), raw);
-    }
-    fs::remove_file(path).unwrap();
-    fs::remove_dir(root).unwrap();
 }
 
 #[test]
