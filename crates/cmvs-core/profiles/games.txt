@@ -171,3 +171,12 @@ game-id 0x17600015
 executable cmvs64.exe sha256=dfbabd2abac5055d3ab2144a983b6c441b87b294d19607e9a4829e2ea954e86c
 executable cmvs32.exe sha256=aa2f76985e69ec5fcee2762051a234c111529e8b339d733dee188b3a62888073
 end
+
+game miharu
+profile cvns-20090203
+start data/pack/start.pss sha256=834dc88750f547d341ee732a7116472d4fef18dd57a7bbe0ac9ba77dd2a87a09
+archive data/pack/script.cpz sha256=8c2c749799a4592e6a185a098d6da16d3c347b568874a5695eaeff53f1019f07
+# Not yet established which CVNS command, if any, carries a game ID; cvns.cfg has GAME_ID=1006.
+game-id 0x00000000
+executable cvns.exe sha256=8e6044466b928d77f0a94a0d0f32fe48190596bf628115598881c2aa3a4885aa
+end

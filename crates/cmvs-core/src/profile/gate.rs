@@ -11,6 +11,8 @@ pub enum GateErrorKind {
     NoOp,
     /// Present, but its semantics are not yet established for this build.
     Unreviewed,
+    /// A CVNS command without a reviewed translation; never run under CMVS numbering.
+    Unmapped,
     /// Legacy shape evidence is incomplete and the selected policy blocks it.
     Presumed,
     /// 0x201d declares a different game than the matched record.
@@ -23,6 +25,7 @@ pub struct GateError {
     pub base: Option<String>,
     pub script: String,
     pub pc: usize,
+    /// The command as the script encodes it (for CVNS, before translation).
     pub command: u16,
     pub kind: GateErrorKind,
 }
@@ -51,6 +54,11 @@ impl fmt::Display for GateError {
                 "{site} is unreviewed for engine profile {} (base {}); blocked by --block-unreviewed",
                 self.profile,
                 self.base.as_deref().unwrap_or("-")
+            ),
+            GateErrorKind::Unmapped => write!(
+                f,
+                "{site} is a CVNS command with no reviewed mapping in engine profile {}; not implemented",
+                self.profile
             ),
             GateErrorKind::Presumed => write!(
                 f,
@@ -208,12 +216,28 @@ impl<'a> CommandGate<'a> {
         command: u16,
     ) -> Result<Option<u16>, GateError> {
         let profile = self.selection.profile;
+        let cvns = profile.family == super::Family::Cvns;
+        // A CVNS status belongs to the command the script encodes, not its translation.
+        let source = if cvns {
+            vm.pending_source()
+                .filter(|&source| vm.command_map().map(|m| m.runtime(source)) == Some(command))
+                .ok_or_else(|| GateError {
+                    profile: profile.id.clone(),
+                    base: profile.base.clone(),
+                    script: vm.current_name().escape_ascii().to_string(),
+                    pc,
+                    command,
+                    kind: GateErrorKind::Unmapped,
+                })?
+        } else {
+            command
+        };
         let error = |kind| GateError {
             profile: profile.id.clone(),
             base: profile.base.clone(),
             script: vm.current_name().escape_ascii().to_string(),
             pc,
-            command,
+            command: source,
             kind,
         };
         // 0x201d/0x201e/0x201f read the top stack word; 0x201d carries the game ID.
@@ -227,7 +251,7 @@ impl<'a> CommandGate<'a> {
                 found,
             }));
         }
-        match profile.status(command) {
+        match profile.status(source) {
             CommandStatus::Base => {
                 self.counts.base += 1;
                 Ok(None)
@@ -253,6 +277,7 @@ impl<'a> CommandGate<'a> {
             CommandStatus::Presumed => Err(error(GateErrorKind::Presumed)),
             CommandStatus::Absent => Err(error(GateErrorKind::Absent)),
             CommandStatus::NoOp => Err(error(GateErrorKind::NoOp)),
+            CommandStatus::Unreviewed if cvns => Err(error(GateErrorKind::Unmapped)),
             CommandStatus::Unreviewed if !self.block_unreviewed => {
                 self.counts.unreviewed += 1;
                 Ok(self.allowed.insert(command).then_some(command))

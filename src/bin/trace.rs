@@ -272,6 +272,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let script = Script::decode(&raw)?;
     let mut machine = Machine::at(&script, entry.unwrap_or(script.header.entry_pc))?;
     machine.set_current_name(initial_name);
+    machine.set_command_map(gate.selection().profile.command_map());
     let mut script_source = script_archive
         .map(|path| -> Result<_, Box<dyn Error>> { ArchiveScripts::new(File::open(path)?) })
         .transpose()?;

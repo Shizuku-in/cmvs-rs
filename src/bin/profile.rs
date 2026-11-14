@@ -13,7 +13,8 @@ Usage:
       and report the profile selection.
   cmvs-profile table <game-root> --id <id> [--base <id>]
       Print a new profile from the executables in a game root. Present commands become
-      base for a root profile, or unreviewed with --base.
+      base for a root profile, or unreviewed with --base. A root with cvns.exe gives a
+      CVNS profile, which needs --base naming a CMVS root profile.
   cmvs-profile show <id>
       Summarise an embedded profile.
   cmvs-profile owners [<command>]
@@ -27,8 +28,8 @@ Options:
 Example: cmvs-profile identify game-root
 Example: cmvs-profile owners 0x2140";
 
-/// Signatures that identify the predecessor engine family, reported but not supported.
-const CVNS_HINTS: [&str; 3] = ["cvns.exe", "data/pack/start.pss", "pvns.exe"];
+/// Signatures of an earlier predecessor engine, reported but not supported.
+const PVNS_HINTS: [&str; 1] = ["pvns.exe"];
 
 fn magic(path: &Path) -> String {
     match fs::read(path) {
@@ -46,6 +47,7 @@ fn identify(root: &Path, explicit: Option<&str>) -> Result<(), Box<dyn Error>> {
     for name in [
         "data/pack/start.ps3",
         "data/pack/start.ps2",
+        "data/pack/start.pss",
         "data/pack/script.cpz",
     ] {
         let path = root.join(name);
@@ -58,9 +60,9 @@ fn identify(root: &Path, explicit: Option<&str>) -> Result<(), Box<dyn Error>> {
             );
         }
     }
-    for hint in CVNS_HINTS {
+    for hint in PVNS_HINTS {
         if root.join(hint).is_file() {
-            println!("family-hint {hint}: CVNS/PVNS family, not supported");
+            println!("family-hint {hint}: PVNS family, not supported");
         }
     }
     for name in EXECUTABLE_NAMES {
@@ -150,9 +152,17 @@ fn table(root: &Path, id: &str, base: Option<&str>) -> Result<(), Box<dyn Error>
     // x64 first: base-profile addresses in code comments refer to the x64 executable.
     found.sort_by_key(|(_, _, image, _)| image.arch != Arch::X64);
     let names: Vec<_> = found.iter().map(|(name, ..)| name.as_str()).collect();
+    let family = if names.contains(&"cvns.exe") {
+        if names.len() > 1 || base.is_none() {
+            return Err("a CVNS profile has only cvns.exe and needs --base <CMVS root>".into());
+        }
+        Family::Cvns
+    } else {
+        Family::Cmvs
+    };
     let profile = EngineProfile::from_dispatch(
         id,
-        Family::Cmvs,
+        family,
         base,
         found
             .iter()
@@ -243,6 +253,18 @@ fn show(id: &str) -> Result<(), Box<dyn Error>> {
                 ranges(matching)
             }
         );
+    }
+    if let Some(map) = profile.command_map() {
+        println!("cvns-map {} commands", map.len());
+        for command in 0..profile.statuses().len() as u16 {
+            if let Some(target) = profile.map(command) {
+                println!(
+                    "map 0x{:04x} -> 0x{:04x}",
+                    0x2000 + command,
+                    0x2000 + target
+                );
+            }
+        }
     }
     Ok(())
 }

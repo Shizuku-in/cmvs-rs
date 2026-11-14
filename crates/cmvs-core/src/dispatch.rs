@@ -1619,7 +1619,7 @@ pub fn is_wait_for(semantics: Semantics, command: u16) -> bool {
 /// The ROOT entry for `command`, through an index built once: system commands are
 /// classified many times per VM step, and ROOT holds each command at most once
 /// (`root_commands_are_unique`).
-fn root_entry(command: u16) -> Option<&'static Entry> {
+pub(crate) fn root_entry(command: u16) -> Option<&'static Entry> {
     static INDEX: std::sync::OnceLock<Vec<u16>> = std::sync::OnceLock::new();
     let index = INDEX.get_or_init(|| {
         let size = ROOT

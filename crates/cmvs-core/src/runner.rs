@@ -196,6 +196,7 @@ impl<'a> Startup<'a> {
         encoding: crate::TextEncoding,
     ) -> Result<Self, Box<dyn Error>> {
         let mut machine = Machine::new_with_encoding(script, encoding)?;
+        machine.set_command_map(game.selection.profile.command_map());
         if let Some([integers, bits, floats, strings]) = game.selection.profile.initial_globals() {
             // Verified PE zero-fill globals (docs/games/aoitori/vm-semantics.md
             // and docs/games/hapymaherfd/README.md). Keep standalone
@@ -245,10 +246,10 @@ impl<'a> Startup<'a> {
         }
         Ok(Self {
             slot_edit: None,
-            main_script_name: if game.files.start_name() == b"start.ps2" {
-                b"main.ps2"
-            } else {
-                b"main.ps3"
+            main_script_name: match game.files.start_name().as_slice() {
+                b"start.ps2" => b"main.ps2",
+                b"start.pss" => b"main.pss",
+                _ => b"main.ps3",
             },
             quit: false,
             machine,

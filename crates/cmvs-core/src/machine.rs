@@ -122,6 +122,8 @@ pub struct Machine<'a> {
     cross_calls: Vec<u8>,
     pending: Option<(usize, u16)>,
     repeat_count: u32,
+    /// CVNS profiles translate system commands to runtime numbering; CMVS has none.
+    command_map: Option<crate::cvns::CommandMap>,
 }
 
 impl<'a> Machine<'a> {
@@ -159,6 +161,7 @@ impl<'a> Machine<'a> {
             cross_calls: Vec::new(),
             pending: None,
             repeat_count: 0,
+            command_map: None,
         })
     }
     pub fn pc(&self) -> usize {
@@ -403,6 +406,21 @@ impl<'a> Machine<'a> {
     }
     pub fn pending_system(&self) -> Option<(usize, u16)> {
         self.pending
+    }
+    /// Translate later system commands; the pending one keeps the number it was issued with.
+    pub fn set_command_map(&mut self, map: Option<crate::cvns::CommandMap>) {
+        self.command_map = map;
+    }
+    pub fn command_map(&self) -> Option<&crate::cvns::CommandMap> {
+        self.command_map.as_ref()
+    }
+    /// The pending command as the script encodes it, before any command map applies.
+    pub fn pending_source(&self) -> Option<u16> {
+        let (pc, _) = self.pending?;
+        match self.image().instructions.get(&pc)?.kind {
+            InstructionKind::System { command } => Some(command),
+            _ => None,
+        }
     }
     pub fn resolve_string(&self, raw: u32) -> Result<Vec<u8>, DecodeError> {
         let (bytes, offset) = match StringRef::decode(raw) {
@@ -725,6 +743,10 @@ impl<'a> Machine<'a> {
                 return Ok(Step::Yield);
             }
             &InstructionKind::System { command } => {
+                let command = self
+                    .command_map
+                    .as_ref()
+                    .map_or(command, |map| map.runtime(command));
                 self.pending = Some((pc, command));
                 return Ok(Step::System { pc, command });
             }

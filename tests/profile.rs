@@ -10,6 +10,7 @@ use cmvs_rs::{
         CommandGate, CommandStatus, ContractProof, ContractRules, ContractSide, EngineProfile,
         Evidence, Family, FileEvidence, GateErrorKind, Registry, SelectionBasis, SelectionError,
     },
+    vm::SystemResult,
 };
 use support::bytecode::{command, pending, script};
 
@@ -723,6 +724,150 @@ fn reviewed_commands_require_a_review_record_and_pass_the_default_gate() {
     assert!(Registry::parse(&[&root_noop, &reviewed], "").is_err());
 }
 
+/// A CVNS build over the CMVS root `[base, noop, absent, base]`; `0x2001` maps to `0x2003`.
+fn cvns_texts() -> (String, String) {
+    let root = build("synthetic-root", None, &[0, 1, 2, 0], 1).to_text();
+    let (_, image, dispatch) = located(Arch::X86, &[0, 0, 1, 0]);
+    let cvns = EngineProfile::from_dispatch(
+        "synthetic-cvns",
+        Family::Cvns,
+        Some("synthetic-root"),
+        vec![("cvns.exe".into(), [9; 32], &image, &dispatch)],
+    )
+    .unwrap()
+    .to_text();
+    let line = cvns
+        .lines()
+        .find(|l| l.starts_with("0x2001 "))
+        .unwrap()
+        .to_owned();
+    let mapped =
+        line.replace("unreviewed", "reviewed") + " map=0x2003 review=games/synthetic/commands.md";
+    (root, cvns.replace(&line, &mapped))
+}
+
+#[test]
+fn cvns_profiles_translate_reviewed_commands_and_block_the_rest() {
+    let (root, cvns) = cvns_texts();
+    assert!(cvns.contains("family cvns\nbase synthetic-root\n"));
+    let registry = Registry::parse(&[&root, &cvns], "").unwrap();
+    let profile = registry.profile("synthetic-cvns").unwrap();
+    assert_eq!(profile.to_text(), cvns);
+    assert_eq!(profile.status(1), CommandStatus::Reviewed);
+    assert_eq!(profile.map(1), Some(3));
+    assert_eq!(profile.map(3), None);
+    let map = profile.command_map().unwrap();
+    assert_eq!((map.runtime(1), map.runtime(3), map.len()), (3, 3, 1));
+    assert!(
+        registry
+            .profile("synthetic-root")
+            .unwrap()
+            .command_map()
+            .is_none()
+    );
+
+    let mut code = vec![];
+    command(&mut code, 0x2001, &[]);
+    command(&mut code, 0x2003, &[]);
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    vm.set_command_map(profile.command_map());
+    pending(&mut vm);
+    let (pc, runtime) = vm.pending_system().unwrap();
+    assert_eq!((runtime, vm.pending_source()), (3, Some(1)));
+    let selection = registry
+        .select(Some("synthetic-cvns"), &Evidence::default())
+        .unwrap();
+    let mut gate = CommandGate::new(selection.clone());
+    assert_eq!(gate.check(&vm, pc, runtime), Ok(None));
+    assert_eq!(gate.counts().reviewed, 1);
+
+    // An unmapped command keeps its number and stops even though unreviewed CMVS
+    // commands would pass the default policy.
+    vm.complete_system(SystemResult(0x4000)).unwrap();
+    pending(&mut vm);
+    let (pc, runtime) = vm.pending_system().unwrap();
+    assert_eq!((runtime, vm.pending_source()), (3, Some(3)));
+    let error = gate.check(&vm, pc, runtime).unwrap_err();
+    assert_eq!((error.kind, error.command), (GateErrorKind::Unmapped, 3));
+    assert!(
+        error.to_string().contains("0x2003") && error.to_string().contains("no reviewed mapping"),
+        "{error}"
+    );
+
+    // A VM without the profile's translation never runs a CVNS command.
+    let mut plain = Machine::new(&program).unwrap();
+    pending(&mut plain);
+    let (pc, runtime) = plain.pending_system().unwrap();
+    let mut gate = CommandGate::new(selection);
+    assert_eq!(
+        gate.check(&plain, pc, runtime).map_err(|e| e.kind),
+        Err(GateErrorKind::Unmapped)
+    );
+}
+
+#[test]
+fn cvns_maps_need_a_review_and_root_semantics() {
+    let (root, cvns) = cvns_texts();
+    let map = " map=0x2003 ";
+    for (invalid, needle) in [
+        // Reviewed without a map, or a map on another status.
+        (cvns.replace(map, " "), "carry a map"),
+        (
+            cvns.replace("0x2001 reviewed", "0x2001 unreviewed"),
+            "carry a map",
+        ),
+        // Only absent/noop/unreviewed/reviewed exist for CVNS.
+        (
+            cvns.replace("0x2003 unreviewed", "0x2003 base"),
+            "CVNS commands are",
+        ),
+        // The target must be a root Base command or a registered CVNS-only handler.
+        (cvns.replace(map, " map=0x2002 "), "no root semantics"),
+        (cvns.replace(map, " map=0x2001 "), "no root semantics"),
+        (cvns.replace(map, " map=0x2600 "), "no root semantics"),
+        (
+            cvns.replace(map, " map=0x2800 "),
+            "outside the system opcodes",
+        ),
+        (cvns.replace(map, " map=0x1003 "), "0x2000-based"),
+        (
+            cvns.replace("base synthetic-root", "base -"),
+            "derives from a CMVS root",
+        ),
+    ] {
+        let error = Registry::parse(&[&root, &invalid], "")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(needle), "{needle}: {error}");
+    }
+    // A CMVS profile cannot carry a map.
+    let derived = build(
+        "synthetic-derived",
+        Some("synthetic-root"),
+        &[0, 1, 2, 0],
+        3,
+    )
+    .to_text();
+    let line = derived
+        .lines()
+        .find(|l| l.starts_with("0x2000 "))
+        .unwrap()
+        .to_owned();
+    let mapped =
+        line.replace("unreviewed", "reviewed") + " map=0x2003 review=games/synthetic/commands.md";
+    let error = Registry::parse(&[&root, &derived.replace(&line, &mapped)], "")
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("only reviewed CVNS"), "{error}");
+    // CVNS derives from a CMVS root only, never from another CVNS profile.
+    let chained = cvns
+        .replace("profile synthetic-cvns", "profile synthetic-cvns-2")
+        .replace("base synthetic-root", "base synthetic-cvns")
+        .replace("sha256=0909", "sha256=0808");
+    assert!(Registry::parse(&[&root, &cvns, &chained], "").is_err());
+}
+
 /// Review records point at a `docs/` section headed by the command, so the evidence a
 /// profile cites cannot silently disappear.
 #[test]
@@ -780,7 +925,11 @@ fn profile_tables_reject_contradictions_and_mixed_builds() {
         build("synthetic-derived", Some("missing"), &[0, 1, 2], 1).to_text(),
         "missing base",
     );
-    reject(root.replace("family cmvs", "family cvns"), "unknown family");
+    reject(root.replace("family cmvs", "family pvns"), "unknown family");
+    reject(
+        root.replace("family cmvs", "family cvns"),
+        "derives from a CMVS root",
+    );
     // x86 and x64 disagreeing on one command are not one build.
     let (_, x64_image, x64) = located(Arch::X64, &[0, 1]);
     let (_, x86_image, x86) = located(Arch::X86, &[0, 0]);
@@ -1252,9 +1401,19 @@ fn embedded_profiles_parse_and_bind_the_recorded_games() {
             ("seishunf", "cmvs-20190405", None),
             ("kunado", "cmvs-20211006", None),
             ("hapymaher_re", "cmvs-20221105", None),
-            ("hapymaherfd_re", "cmvs-20221105", None)
+            ("hapymaherfd_re", "cmvs-20221105", None),
+            ("miharu", "cvns-20090203", None)
         ]
     );
+    let miharu = registry.profile("cvns-20090203").unwrap();
+    assert_eq!(miharu.family, Family::Cvns);
+    assert_eq!(miharu.base.as_deref(), Some("cmvs-20160201"));
+    assert_eq!(miharu.statuses().len(), 608);
+    assert_eq!(
+        miharu.count(CommandStatus::Unreviewed) + miharu.count(CommandStatus::Reviewed),
+        375
+    );
+    assert_eq!(miharu.count(CommandStatus::NoOp), 233);
     let remakes: Vec<_> = registry
         .games()
         .iter()

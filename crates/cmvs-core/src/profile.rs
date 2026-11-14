@@ -19,6 +19,9 @@ use std::{collections::BTreeMap, fmt, sync::OnceLock};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Family {
     Cmvs,
+    /// The predecessor engine. A CVNS profile derives from a CMVS root profile and only runs
+    /// commands whose review maps them to a runtime command (see [`crate::cvns`]).
+    Cvns,
 }
 
 /// Selected only after the command gate authorizes the dispatch attempt.
@@ -272,6 +275,8 @@ pub struct EngineProfile {
     /// Review records, as paths relative to `docs/` of a section headed by the command.
     reviews: BTreeMap<u16, String>,
     variant: BTreeMap<u16, VariantBinding>,
+    /// CVNS only: reviewed command to the runtime command whose semantics it shares.
+    maps: BTreeMap<u16, u16>,
 }
 
 impl EngineProfile {
@@ -317,6 +322,15 @@ impl EngineProfile {
     }
     pub fn contract_id(&self, command: u16) -> Option<&[u8; 32]> {
         self.contracts.get(&command)
+    }
+    /// The runtime command a reviewed CVNS command is translated to.
+    pub fn map(&self, command: u16) -> Option<u16> {
+        self.maps.get(&command).copied()
+    }
+    /// The translation a VM running this profile's scripts must apply; `None` for CMVS.
+    pub fn command_map(&self) -> Option<crate::cvns::CommandMap> {
+        (self.family == Family::Cvns)
+            .then(|| crate::cvns::CommandMap::new(self.maps.iter().map(|(&s, &t)| (s, t))))
     }
     pub fn count(&self, status: CommandStatus) -> usize {
         self.statuses.iter().filter(|&&s| s == status).count()
@@ -479,6 +493,7 @@ impl EngineProfile {
             contracts: BTreeMap::new(),
             reviews: BTreeMap::new(),
             variant: BTreeMap::new(),
+            maps: BTreeMap::new(),
         };
         profile.validate()?;
         Ok(profile)
@@ -486,6 +501,11 @@ impl EngineProfile {
     fn validate(&self) -> Result<(), ProfileError> {
         if !text::is_identifier(&self.id) {
             return Err(ProfileError::new("profile id must be lowercase ASCII"));
+        }
+        if self.family == Family::Cvns && self.base.is_none() {
+            return Err(ProfileError::new(
+                "a CVNS profile derives from a CMVS root profile",
+            ));
         }
         let first = self
             .binaries
@@ -514,6 +534,34 @@ impl EngineProfile {
             {
                 return Err(ProfileError::new(
                     "executables disagree on a command; not one build",
+                ));
+            }
+            let cvns = self.family == Family::Cvns;
+            if cvns
+                && !matches!(
+                    status,
+                    CommandStatus::Absent
+                        | CommandStatus::NoOp
+                        | CommandStatus::Unreviewed
+                        | CommandStatus::Reviewed
+                )
+            {
+                return Err(ProfileError::new(
+                    "CVNS commands are absent, noop, unreviewed or reviewed with a map",
+                ));
+            }
+            if (cvns && *status == CommandStatus::Reviewed)
+                != self.maps.contains_key(&(command as u16))
+            {
+                return Err(ProfileError::new(
+                    "only reviewed CVNS commands, and all of them, carry a map",
+                ));
+            }
+            if let Some(target) = self.map(command as u16)
+                && target > crate::cvns::LAST_COMMAND
+            {
+                return Err(ProfileError::new(
+                    "map target is outside the system opcodes",
                 ));
             }
             let allowed = match (status, case) {
@@ -643,7 +691,7 @@ pub struct Registry {
     contracts: BTreeMap<[u8; 32], ContractProof>,
 }
 
-const BUILTIN_PROFILES: [&str; 18] = [
+const BUILTIN_PROFILES: [&str; 19] = [
     include_str!("../profiles/cmvs-20070119.profile"),
     include_str!("../profiles/cmvs-20071117.profile"),
     include_str!("../profiles/cmvs-20080719.profile"),
@@ -662,6 +710,7 @@ const BUILTIN_PROFILES: [&str; 18] = [
     include_str!("../profiles/cmvs-20190405.profile"),
     include_str!("../profiles/cmvs-20211006.profile"),
     include_str!("../profiles/cmvs-20221105.profile"),
+    include_str!("../profiles/cvns-20090203.profile"),
 ];
 const BUILTIN_GAMES: &str = include_str!("../profiles/games.txt");
 
@@ -732,18 +781,28 @@ impl Registry {
                     "profile {} names a missing base",
                     profile.id
                 )))?;
-                // Inheritance is one level deep until a reviewed chain exists.
-                if base.base.is_some() || base.family != profile.family {
+                // Inheritance is one level deep until a reviewed chain exists. CVNS has no
+                // root of its own: its reviewed commands map onto CMVS root semantics.
+                if base.base.is_some() || base.family != Family::Cmvs {
                     return Err(ProfileError::new(format!(
                         "profile {} must derive from a root profile of its family",
                         profile.id
                     )));
                 }
-                // A review compares against root semantics, which only a Base command has.
+                // A review compares against root semantics, which only a Base command has;
+                // a CVNS review names the runtime command, and CVNS-only semantics need
+                // their own registered handler.
+                let has_root_semantics = |command: u16| match profile.map(command) {
+                    None => base.status(command) == CommandStatus::Base,
+                    Some(target) if target < crate::cvns::CVNS_ONLY => {
+                        base.status(target) == CommandStatus::Base
+                    }
+                    Some(target) => crate::dispatch::root_entry(target).is_some(),
+                };
                 if profile
                     .reviews
                     .keys()
-                    .any(|&command| base.status(command) != CommandStatus::Base)
+                    .any(|&command| !has_root_semantics(command))
                 {
                     return Err(ProfileError::new("reviewed command has no root semantics"));
                 }

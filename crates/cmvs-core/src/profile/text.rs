@@ -138,6 +138,7 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
     let (line, words) = lines.expect("family", 1)?;
     let family = match words[0] {
         "cmvs" => Family::Cmvs,
+        "cvns" => Family::Cvns,
         _ => return Err(at(line, "unknown family")),
     };
     let (line, words) = lines.expect("base", 1)?;
@@ -202,6 +203,7 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
     let mut reviews = std::collections::BTreeMap::new();
     let mut contracts = std::collections::BTreeMap::new();
     let mut variant = std::collections::BTreeMap::new();
+    let mut maps = std::collections::BTreeMap::new();
     while let Some((line, words)) = lines.next() {
         let proof_key = match words.get(1) {
             Some(&"inherited") => Some("inherit="),
@@ -211,9 +213,17 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
         let reviewed = words.get(1) == Some(&"reviewed");
         let contracted = words.get(1) == Some(&"contract-equivalent");
         let has_variant = words.iter().any(|word| word.starts_with("variant="));
+        // `map=` sits between the addresses and `review=`.
+        let map = words
+            .get(2 + binaries.len())
+            .and_then(|word| word.strip_prefix("map="));
+        if map.is_some() && (!reviewed || family != Family::Cvns) {
+            return Err(at(line, "only reviewed CVNS commands carry a map"));
+        }
         if words.len()
             != 2 + binaries.len()
                 + usize::from(proof_key.is_some() || reviewed || contracted)
+                + usize::from(map.is_some())
                 + 2 * usize::from(has_variant)
         {
             return Err(at(
@@ -295,6 +305,13 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
                 },
             );
         }
+        if let Some(target) = map {
+            let target = hex_number(line, target)?
+                .checked_sub(0x2000)
+                .and_then(|t| u16::try_from(t).ok())
+                .ok_or_else(|| at(line, "map target must be a 0x2000-based system opcode"))?;
+            maps.insert(statuses.len() as u16, target);
+        }
         if reviewed {
             let path = words
                 .last()
@@ -352,6 +369,7 @@ pub(super) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
         contracts,
         reviews,
         variant,
+        maps,
     };
     profile.validate()?;
     Ok(profile)
@@ -367,6 +385,7 @@ impl EngineProfile {
             "family {}",
             match self.family {
                 Family::Cmvs => "cmvs",
+                Family::Cvns => "cvns",
             }
         );
         let _ = writeln!(out, "base {}", self.base.as_deref().unwrap_or("-"));
@@ -409,6 +428,9 @@ impl EngineProfile {
                     }
                     Case::Default => out.push_str(" -"),
                 }
+            }
+            if let Some(target) = self.map(i as u16) {
+                let _ = write!(out, " map=0x{:04x}", 0x2000 + u32::from(target));
             }
             if let Some(path) = self.review(i as u16) {
                 let _ = write!(out, " review={path}");

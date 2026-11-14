@@ -8,9 +8,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// Executable names the CMVS installers place in the game root.
-pub const EXECUTABLE_NAMES: [&str; 3] = ["cmvs.exe", "cmvs32.exe", "cmvs64.exe"];
-const START_SCRIPTS: [&str; 2] = ["data/pack/start.ps3", "data/pack/start.ps2"];
+/// Executable names the CMVS and CVNS installers place in the game root.
+pub const EXECUTABLE_NAMES: [&str; 4] = ["cmvs.exe", "cmvs32.exe", "cmvs64.exe", "cvns.exe"];
+const START_SCRIPTS: [&str; 3] = [
+    "data/pack/start.ps3",
+    "data/pack/start.ps2",
+    "data/pack/start.pss",
+];
 const SCRIPT_ARCHIVE: &str = "data/pack/script.cpz";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,7 +138,7 @@ impl fmt::Display for SelectionError {
             Self::Io(e) => write!(f, "profile evidence: {e}"),
             Self::MissingFile(name) => write!(f, "profile evidence: missing {name}"),
             Self::AmbiguousStartScript => {
-                f.write_str("profile evidence: both start.ps3 and start.ps2 exist")
+                f.write_str("profile evidence: more than one of start.ps3/ps2/pss exists")
             }
             Self::UnknownProfile(id) => write!(f, "unknown engine profile {id}"),
             Self::NoDataEvidence => f.write_str(

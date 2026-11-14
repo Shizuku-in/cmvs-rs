@@ -437,3 +437,28 @@ v1 报告的模拟显示，可写全局若能配对，上限可再解锁约 30 �
 - 交叉核对：没有任何命令在一个架构上被继承或推定、在另一个架构上被判为不同；x64 推定的命令在 x86 上也都继承或推定。
 - 研究路径上经过闸门的 94 种命令：52 条继承、29 条推定、2 条复核、11 条未复核。
 - CHRONOCLOCK 默认 trace 从第 16 步前移到第 43 步，停在 `start.ps3 / 0xde / 0x2013`；途中执行了推定命令 `0x2092`–`0x2094`。《アマツツミ》百万步 trace 与 M1 日志逐字节一致。
+
+## 16. CVNS 家族与命令翻译（2026-11-14）
+
+第一个 CVNS 作品是《みはる》（あるみ箱，2009），档案见[游戏档案](../games/miharu/README.md)。
+
+### switch 定位
+
+2009 版 `cvns.exe` 是未优化的 VC9 构建，2.1 节表格里的"模式未命中"就是这个原因。分派函数把命令号存进栈槽再比较：`cmp dword [ebp-8], imm32; ja rel32; mov ecx, [ebp-8]; jmp [ecx*4+table]`。每个表项都是 `mov ecx, [ebp-4]; call 处理函数; jmp 结尾` 的桩。`exe::find_dispatch` 现在也匹配这种形状，`Case` 记录的是桩调用的成员函数而不是桩本身；空操作是一个返回 0x4000 的成员函数（`55 8b ec 51 89 4d fc b8 00 40 00 00 8b e5 5d c3`）。共 608 项：375 个处理函数、233 个空操作（都调用 `0x454060`）。2004、2005 版是优化构建，原有形状就能定位（544、608 项）。
+
+### 为什么翻译而不是另起一套
+
+CVNS 与 CMVS 同源，但系统命令重新编号过，而且不是整体平移：拿 PURIRING 比对返回标志（参数字节数）、导入函数和字符串再做序列对齐，只能对上少数命令，说明命令表在两代之间重组过。运行时的闸门、分派表 `dispatch::ROOT` 和 runner 都按 CMVS 编号工作，所以 CVNS 不另写一套语义，而是把每条复核过的命令翻译成语义相同的运行时命令。
+
+### 机制
+
+- `Family::Cvns`，档案文本写 `family cvns`。CVNS 档案的基必须是 CMVS 根档案（目前用 `cmvs-20160201`），不能链到另一个 CVNS 档案。
+- 命令状态只有 `absent`、`noop`、`unreviewed`、`reviewed` 四种；不做指纹继承和推定（两代编译器和编号都不同）。
+- `reviewed` 行必须带 `map=` 并且只有它能带：`0x2001 reviewed <RVA> map=0x2003 review=<docs 路径>`。目标是根档案中 `base` 的命令，或者 `0x2400` 起的 CVNS 专有命令（`cvns::CVNS_ONLY`，必须在 `dispatch::ROOT` 有注册的处理函数）。CMVS 最多 992 项（0x3e0），这段编号在 CMVS 档案里永远是 absent。
+- 翻译在 `Machine` 里做：`EngineProfile::command_map()` 交给 `Machine::set_command_map`，System 指令挂起时就存翻译后的编号，下游代码不感知 CVNS。`Machine::pending_source()` 从指令本身取回原编号。
+- 闸门按原编号查 CVNS 状态，错误里报告原编号。未映射的命令（`unreviewed`）无论 `--block-unreviewed` 如何都报 `Unmapped`，因为同一个编号在 CMVS 里是另一条命令；`Machine` 没装翻译表时也一律报 `Unmapped`。
+- 选择：`EXECUTABLE_NAMES` 加入 `cvns.exe`，启动脚本加入 `data/pack/start.pss`，主脚本名随之为 `main.pss`。`cmvs-profile table` 在只有 `cvns.exe` 时生成 CVNS 档案，并要求 `--base`。
+
+### VM 主循环
+
+2009 版主循环（`0x446c30`）处理 0x200、0x201、0x400，以及 0x401–0x403、0x405、0x407、0x410–0x414、0x416、0x430、0x440，即现有解码器的集合去掉 0x202（浮点表达式）和 0x442，与 2004 版相同。《みはる》全部脚本只用到 0x200、0x201、0x400、0x401、0x403、0x410–0x412、0x414、0x430、0x440 和系统命令，都在 `Machine` 已实现的范围内。各操作码的细节语义、表达式求值器（包括整数结果写入全局整数 4096 的行为）和变量区初始值尚未逐项对照，未初始化变量的读取会显式报错。

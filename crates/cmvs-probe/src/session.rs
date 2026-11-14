@@ -119,6 +119,7 @@ fn gate_kind(kind: GateErrorKind) -> &'static str {
         GateErrorKind::Absent => "absent",
         GateErrorKind::NoOp => "noop",
         GateErrorKind::Unreviewed => "unreviewed",
+        GateErrorKind::Unmapped => "unmapped",
         GateErrorKind::Presumed => "presumed",
         GateErrorKind::GameIdMismatch { .. } => "game-id-mismatch",
     }

@@ -46,7 +46,7 @@ cargo run --offline --release --bin cmvs-profile -- table "<游戏目录>" --id 
 cargo run --offline --release --bin cmvs-profile -- show cmvs-20150405
 ```
 
-`identify` 只读哈希启动脚本、脚本包和 exe，打印封包/脚本签名、每个 exe 的 PE 时间戳、链接器版本、switch 位置与处理函数/空操作数量；exe 已登记时与内嵌表逐项比对，不一致即报错。最后报告档案选择结果；未登记的游戏以非零退出码结束，CVNS/PVNS 特征另行提示为"不支持的家族"。`table` 从游戏根目录的 exe 生成新档案表到标准输出：不带 `--base` 时有处理函数的命令记为 `base`，带 `--base` 时记为 `unreviewed`；生成的表要放进 `crates/cmvs-core/profiles/`、登记游戏记录并重新构建才会生效。`show` 汇总内嵌档案的状态统计和非基准命令列表。设计与普查见[引擎档案层](../design/engine-profiles.md)。
+`identify` 只读哈希启动脚本、脚本包和 exe，打印封包/脚本签名、每个 exe 的 PE 时间戳、链接器版本、switch 位置与处理函数/空操作数量；exe 已登记时与内嵌表逐项比对，不一致即报错。最后报告档案选择结果；未登记的游戏以非零退出码结束，PVNS 特征另行提示为"不支持的家族"。CVNS 的 `cvns.exe` 与 `start.pss` 按 CVNS 家族识别。`table` 从游戏根目录的 exe 生成新档案表到标准输出：不带 `--base` 时有处理函数的命令记为 `base`，带 `--base` 时记为 `unreviewed`；目录里只有 `cvns.exe` 时生成 CVNS 档案，必须用 `--base` 指定 CMVS 根档案；生成的表要放进 `crates/cmvs-core/profiles/`、登记游戏记录并重新构建才会生效。`show` 汇总内嵌档案的状态统计和非基准命令列表，CVNS 档案另外列出命令映射。设计与普查见[引擎档案层](../design/engine-profiles.md)。
 
 ## 归档与资源
 
