@@ -187,6 +187,85 @@ fn dispatch_rejects_missing_duplicate_and_oversized_switches() {
     assert!(PeImage::parse(b"MZ").is_err());
 }
 
+/// Unoptimized x86 dispatcher whose cases are `mov ecx, [ebp-4]; call f; jmp end` stubs.
+/// `kinds` as in `switch_code`; returns the code and the handler and no-op RVAs.
+fn frame_switch_code(kinds: &[u8], stub_tail: u8) -> (Vec<u8>, u32, u32) {
+    const BASE: u32 = 0x40_0000;
+    let rva = |offset: usize| SECTION_RVA + offset as u32;
+    let mut code = vec![0xcc; 16];
+    code.extend([
+        0x55, 0x8b, 0xec, 0x83, 0xec, 0x08, 0x89, 0x4d, 0xfc, 0x0f, 0xb7, 0x45, 0x08, 0x89, 0x45,
+        0xf8, 0x81, 0x7d, 0xf8,
+    ]);
+    code.extend(((kinds.len() - 1) as u32).to_le_bytes());
+    code.extend([0x0f, 0x87]);
+    let ja = code.len();
+    code.extend([0; 4]);
+    code.extend([0x8b, 0x4d, 0xf8, 0xff, 0x24, 0x8d]);
+    let table_operand = code.len();
+    code.extend([0; 4]);
+    let stubs = code.len();
+    code.resize(stubs + 10 * kinds.len(), 0xcc);
+    let end = code.len();
+    // Default `xor eax, eax`, then the shared epilogue the stubs jump to.
+    code.extend([0x33, 0xc0, 0x8b, 0xe5, 0x5d, 0xc2, 0x04, 0x00]);
+    let ja_rel = (end - (ja + 4)) as u32;
+    code[ja..ja + 4].copy_from_slice(&ja_rel.to_le_bytes());
+    let noop = code.len();
+    code.extend([
+        0x55, 0x8b, 0xec, 0x51, 0x89, 0x4d, 0xfc, 0xb8, 0x00, 0x40, 0x00, 0x00, 0x8b, 0xe5, 0x5d,
+        0xc3,
+    ]);
+    let handler = code.len();
+    code.push(0xc3);
+    let table = code.len();
+    code[table_operand..table_operand + 4].copy_from_slice(&(BASE + rva(table)).to_le_bytes());
+    for (i, kind) in kinds.iter().enumerate() {
+        let stub = stubs + 10 * i;
+        let target = match kind {
+            2 => end,
+            _ => {
+                let callee = if *kind == 0 { handler } else { noop };
+                code[stub..stub + 4].copy_from_slice(&[0x8b, 0x4d, 0xfc, 0xe8]);
+                let rel = callee as i32 - (stub + 8) as i32;
+                code[stub + 4..stub + 8].copy_from_slice(&rel.to_le_bytes());
+                code[stub + 8..stub + 10].copy_from_slice(&[stub_tail, 0x00]);
+                stub
+            }
+        };
+        code.extend((BASE + rva(target)).to_le_bytes());
+    }
+    (code, rva(handler), rva(noop))
+}
+
+#[test]
+fn dispatch_follows_member_call_stubs_of_unoptimized_builds() {
+    let (code, handler, noop) = frame_switch_code(&[0, 1, 2, 0], 0xeb);
+    let bytes = pe(Arch::X86, 0x4987_3a5b, &code);
+    let image = PeImage::parse(&bytes).unwrap();
+    let dispatch = find_dispatch(&image, &bytes).unwrap();
+    assert_eq!(
+        dispatch.cases,
+        [
+            Case::Handler(handler),
+            Case::NoOp(noop),
+            Case::Default,
+            Case::Handler(handler)
+        ]
+    );
+    assert_eq!(dispatch.compare_rva, SECTION_RVA + 16 + 16);
+    // A table entry that is not a member-call stub is rejected rather than guessed.
+    let (mut code, _, _) = frame_switch_code(&[0, 1], 0xeb);
+    code[55] = 0x90;
+    let bytes = pe(Arch::X86, 0, &code);
+    let error = find_dispatch(&PeImage::parse(&bytes).unwrap(), &bytes).unwrap_err();
+    assert_eq!(error.0, "switch case is not a member-call stub");
+    // The same bytes in an x64 image are not this dispatcher.
+    let (code, _, _) = frame_switch_code(&[0, 1], 0xe9);
+    let bytes = pe(Arch::X64, 0, &code);
+    assert!(find_dispatch(&PeImage::parse(&bytes).unwrap(), &bytes).is_err());
+}
+
 /// One build with both executables; `kinds` as in `switch_code`.
 fn build(id: &str, base: Option<&str>, kinds: &[u8], seed: u8) -> EngineProfile {
     let (_, x64_image, x64) = located(Arch::X64, kinds);
