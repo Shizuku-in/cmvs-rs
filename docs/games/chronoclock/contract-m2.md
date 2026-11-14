@@ -1,6 +1,6 @@
 # 契约 M2：首个构建对报告
 
-2026-11-01，离线试点完成。工具见[契约 M2 进展](../../design/command-contracts-m2.md)，前一轮见 [M1 报告](contract-m1.md)。本页不修改[游戏档案](README.md)状态或运行放行。以下先保留 M2a/M2b 的校准结果，最新 M2c 结果见[全局试点](#global-pilot)。
+2026-11-01，离线试点完成。工具见[契约工具](../../design/command-contracts-m1.md)，前一轮见 [M1 报告](contract-m1.md)。本页不修改[游戏档案](README.md)状态或运行放行。以下先保留 M2a/M2b 的校准结果，最新 M2c 结果见[全局试点](#global-pilot)。
 
 ## 输入
 

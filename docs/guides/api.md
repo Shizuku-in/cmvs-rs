@@ -33,7 +33,7 @@ python3 -I tools/api_docs.py -p cmvs-host -p cmvs-input
 python3 -I tools/api_docs.py -p cmvs-rs --features desktop,audio-output
 ```
 
-也支持 `--all-features`、`--no-default-features` 和 `--toolchain`。桌面和音频功能需要相应的系统依赖，见 [Workspace](../workspace.md)。默认命令生成当前宿主目标的 API，不覆盖其他平台的条件编译分支。
+也支持 `--all-features`、`--no-default-features` 和 `--toolchain`。桌面和音频功能需要相应的系统依赖，见 [平台总览](../../platforms/README.md)。默认命令生成当前宿主目标的 API，不覆盖其他平台的条件编译分支。
 
 重复生成可能保留旧文件，本次产物以 `manifest.json` 的列表为准。需要清理旧产物时，先移走 `target/api/` 再运行。
 

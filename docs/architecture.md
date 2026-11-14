@@ -1,244 +1,58 @@
-# cmvs-rs 架构
+# 架构与开发
 
-本文描述当前代码的职责、依赖边界与执行方式；截至 2026-10-29，已接入剧情主路径上的部分场景、世界坐标动画、换图控制、相机移动、等待/换图序列及条带转场状态，并实现当前路径上的模式 2/3 投影、换图和条带呈现。逐条指令、地址与阶段性重放证据见 [VM 语义](games/amatsutsumi/vm-semantics.md)，历史停点不作为当前完成度。
+## Workspace
 
-## 目标与当前状态
+| 包 | 职责 |
+|---|---|
+| `cmvs-core` | 格式、资源、VM、命令语义、场景、软件呈现与宿主契约 |
+| `cmvs-input` / `cmvs-font` | 物理输入转换；文字编码、字体解析与光栅化 |
+| `cmvs-audio` / `cmvs-video` | 音频解码、混音与输出；Theora 解码与预解码 |
+| `cmvs-wgpu` | GPU 场景合成、纹理缓存与读回 |
+| `cmvs-native` | 各平台的系统服务与原生 FFI |
+| `cmvs-host` | 不拥有窗口的播放器与 C ABI |
+| `cmvs-desktop` | 桌面窗口、输入、呈现与运行入口 |
+| `cmvs-console` | Switch / Vita 共用的手柄、页面与 GPU 合成策略 |
+| `cmvs-probe` | 无头运行、路线、输入与存读档检查 |
+| `platforms/*` | 各平台宿主和构建入口，见[平台总览](../platforms/README.md) |
+| 根包 `cmvs-rs` | CLI、`cmvs_rs` 兼容导出与核心集成测试 |
 
-目标是用 Rust 实现 CMVS 全平台支持，先完成平台无关核心，再通过后端接入系统服务。已有原生目标无第三方依赖的核心、研究 CLI、Windows 桌面预览、可选 wgpu 渲染与音频；其他平台尚未完成构建与行为验证。
+核心定义语义和后端契约，宿主提供窗口、设备、字体和输出。核心在桌面目标仅依赖标准库，Android / Web 使用文件系统适配依赖。具体依赖与 feature 以各包 `Cargo.toml` 为准。
 
-当前仅《アマツツミ》PC 样本建立了真实验证档案。五条结局选择链和 OP 已在显式预览条件下通过记录重放回到标题，鉴赏列表、四页入口、首张 CG 及滚动/惯性已通过记录重放，完整选项与原生输出仍待验证。剧情存读档已接入运行时，游戏内工具栏、存读档画面与回看经自动回调调度可用（字号范围外字形等快照状态仍显式报错），全分支和原生完整路线尚未验证；详细运行条件和证据统一见[游戏档案](games/amatsutsumi/README.md)。
+根包默认仅依赖 core；`desktop`、`audio-output`、`wgpu-renderer` 按需接入后端。workspace 的默认成员只有根包。共享依赖在根 `Cargo.toml` 声明，精确版本由 `Cargo.lock` 固定。
 
-下文说明模块职责和执行边界。某个游戏已核对的指令与格式分支不自动代表其他 CMVS 版本兼容；新增游戏按[研究约定](research.md)单独确认。
+## 执行流程
 
-## Workspace 与依赖方向
+1. `profile::Registry` 根据游戏数据和二进制身份选择档案；`bootstrap` 应用配置并登记资源。
+2. `machine::Machine` 执行 VM；系统命令先经 `CommandGate` 选择语义，再由共享 `dispatch` 分派。
+3. `runtime::Runtime` 编排脚本、资源、输入、场景、音频和存档。宿主在 VM 让出后推进帧时间，合成并呈现画面。
+4. 完整嵌入播放器使用 `cmvs-host::Player`；自定义宿主使用 `Runtime`。调用顺序和示例见 [API 指南](guides/api.md)及源码 rustdoc。
 
-| 包 | 职责 | 依赖边界 |
-|---|---|---|
-| `crates/cmvs-core` | 格式、资源读取、VM、命令语义、场景状态、软件呈现、动作输入与后端契约 | 原生目标无第三方依赖；包含基于 `std` 的只读文件适配器，wasm32 通过 wasm-bindgen 接入 Worker 文件接口，不调用原生窗口或设备 API |
-| `crates/cmvs-wgpu` | 共享队列的 GPU 合成、纹理缓存、呈现及按需读回 | 依赖 core、wgpu、pollster；桌面通过可选 feature 接入 |
-| `crates/cmvs-audio` | Vorbis 解码、混音、原生音频输出、源消费时钟 | 依赖 core、lewton；`mixer` feature 启用 rodio 混音（宿主拉取 PCM，Switch 与 Vita 使用），默认 `native` 再接系统设备 |
-| `crates/cmvs-desktop` | 窗口、物理输入、字体光栅化与按名解析、帧显示与桌面运行入口 | 依赖 core、winit、softbuffer、ico、encoding_rs、ab_glyph；可选依赖 audio；系统服务经 cmvs-native |
-| `crates/cmvs-native` | 操作系统服务的统一接口（字体对话框、系统字体目录），按平台分模块；原生系统 FFI 包 | raw-window-handle；Windows 上 windows-sys。macOS/iOS/Linux/Android/wasm 预留，返回 Unsupported |
-| `crates/cmvs-video` | MGV1 的自研 Theora 解码与 RGBA 转换，可选在工作线程预解码下一帧 | 依赖 core、ogg；桌面、Apple、Android、Switch、Vita 与 probe 使用，[说明](../crates/cmvs-video/README.md) |
-| `crates/cmvs-console` | 游戏机宿主共用的手柄映射、游戏列表、错误页、注释输入编码，以及在 `cmvs_native::GpuDevice` 上执行绘制队列的纹理缓存合成器 | 依赖 core、native、encoding_rs、ab_glyph；Switch 与 Vita 播放器使用 |
-| `platforms/web/native` | wasm Worker 宿主、CPU/WebGPU 画面、文字与输入 | 依赖 core、font、无原生设备 feature 的 audio、wasm-bindgen、self_cell；[当前范围](backends/web.md) |
-| 根包 `cmvs-rs` | 检查 CLI、`cmvs_rs` 兼容重导出、集成测试 | 默认仅依赖 core；通过 `desktop`、`audio-output` 选择后端 |
+VM 预算耗尽不代表帧完成：续跑时保留当前输入，不重复推进时间。字体、影片和场景合成由宿主完成；请求的设备帧与延迟截图按[后端契约](backends/platform-host.md)提供。
 
-依赖方向为 `desktop → core`、`desktop → audio → core`。格式、VM 和软件呈现目前保持为 core 内部模块，不新增 C++ 运行核心。后续平台应复用核心语义，通过后端接入系统服务。
+## 维护边界
 
-默认 workspace 成员仅为根包；全 workspace 构建会额外选择桌面和音频成员。workspace 默认 `unsafe_code = forbid`，平台 FFI 包局部使用 deny；`cmvs-video` 同样设为 deny，仅在注明 SAFETY、带标量对照的私有 SIMD 内核中允许 unsafe，详见 [Theora 解码](design/theora-decoder.md)。新平台在 `cmvs-native` 内增加同名函数的模块实现，宿主代码不写平台条件；某平台需要独立宿主或依赖很重时拆为单独的包，wasm 宿主已独立为 `cmvs-web`。feature 转发、固定依赖及拆包回归证据见 [workspace](workspace.md)，参考项目提交与许可见 [references](games/amatsutsumi/references.md)。
+- 格式解析保留边界检查、原始文本字节和明确的像素格式。未知状态或未支持模式返回错误。
+- 构建差异由[引擎档案](design/engine-profiles.md)选择，宿主不按游戏身份分支。命令开发见[分派指南](guides/dispatch.md)。
+- core 保存引擎状态，不持有窗口或图形设备；CPU / GPU 消费共享绘制队列，见 [GPU 后端](backends/wgpu.md)。
+- workspace 默认禁止 unsafe；平台 FFI 和视频私有 SIMD 内核局部放行，注明 SAFETY，并保留相应验证。
+- 游戏支持范围只记在[游戏档案](games/README.md)，平台构建与操作只记在对应平台 README。
 
-## 核心职责
+## 检查
 
-### 格式与资源
+在仓库根目录运行：
 
-`ps3`、`lzss`、`cpz`、`pb3`、`jbp1`、`jbpd`、`cmv`、`cmv9`、`cursor` 负责有界解析或解码；输出保留原始文本字节或明确的像素格式。格式层不依赖窗口和音频设备。
+```sh
+cargo fmt --all --check
+cargo test --offline
+cargo clippy --offline --all-targets -- -D warnings
+```
 
-- PS2A 支持分段、字节变换、解压、标签与脚本装载。
-- `cpz::ArchiveIndex` / `ArchiveLayout` 按签名分派；当前支持 CPZ3、CPZ5 打包模式 5～9、CPZ6 模式 1 和 CPZ7（资源模式 0/1）。CPZ7 使用每包参数，默认为零；CPZ3 无需启动参数，始终验证索引密文校验值；CPZ5/7 验证头部与索引摘要。公共资源读取验证各格式的数据校验值，CPZ6 头部/索引摘要尚未验证。
-- `ArchiveIndex::write_replacements` 统一按原格式替换写回 CPZ3/5/6/7，保留目录、密钥与未替换资源密文；`Cpz3Index::write`、`Cpz5Index::write`、`Cpz6Index::write` 支持新建对应版本。接口与边界见 [CPZ 读写](formats/cpz-format.md)。
-- PB3 支持 type 1、type 2/3 JBP1、type 5/7，以及需要参考底图的 type 6/8；其他分支显式报错。type 5/6 已有 23 个不同真实输出与独立 Python 逐字节对照，未宣称全包覆盖。
-- CMV6 与 JBPD 支持已核对的全屏影片容器和帧解码；无实际音轨的 CMV6 与静音 CMV9 支持 0x2308 初始场景绑定、默认模式 0 的段播放与循环，CMV9 另缓存静态底图，其他槽控制仍未实现。影片计时、画面解码和设备音轨播放分开。
-- MGV1 按名义帧表解码 Ogg/Theora。容器尺寸须精确等于 Theora picture 或 coded 尺寸；前者裁可见区域，后者保留整个编码表面（如 1920×1088），再按逻辑画布呈现。容器解析与帧映射在 core，Theora 解码在 `cmvs-video`，由宿主经 `set_mgv_factory` 安装。帧率、YUV420 与像素预算校验保留，见[Hapymaher RE](games/hapymaher_re/README.md#1080p-素材边界)。
+涉及子包、后端或 feature 时追加：
 
-`resources::ResourceArchives` 按资源族和注册槽号查找首个命中项：图像十槽，SE/BGM/语音各四槽。归档惰性打开，注册路径变化时重开；缓存键包含资源族与槽号。缺失返回 miss，坏归档、校验失败、路径逃逸明确报错。名称规则和覆盖顺序按证据实现，不套用宿主文件系统的隐式行为。
+```sh
+cargo test --offline --workspace --all-features
+cargo clippy --offline --workspace --all-targets --all-features -- -D warnings
+cargo check --offline -p cmvs-desktop --no-default-features
+```
 
-`image` 在共享读取层之上负责图像来源与解码分派，供场景、消息窗口和遮罩共同使用：
-
-- `pb3::decode` 无 I/O；type 6/8 通过 `decode_with_base` 或 `image::load` 获得参考上下文，不猜底图路径。
-- `image::load` 经同一 `ImageSource` 与注册源递归读取底图，拒绝循环，限制最多 16 个活动文件及累计原始/RGBA 声明长度 128 MiB；单文件与单图仍分别限制 64 MiB。
-- `image/cache.rs` 保存 `0x203f` 的下一次读取提示与原始字节 LRU，当前留存上限 32 MiB/1024 项；启动容量配置尚未接入。它与 CPZ 索引缓存及已解码 RGBA 分开。
-- `ImageRead` 延迟提交 token 使底图原始字节先于外层提交；解码失败也完成该缓存提交，但不提交 VM 命令或替换旧图像。直接 raw read 在返回前提交。
-
-上述容量是研究工具策略，不是整个进程峰值内存保证，也不应推断为格式限制。细节见 [PB3](formats/pb3-format.md)、[JBPD](formats/jbpd-format.md)。
-
-### VM 与脚本控制
-
-即时截图 `0x203e` 通过 `PlatformBackend::read_device_frame` 读取已完成的逻辑设备画面，核心只负责参数、图像替换与结果；字体、影片的实际合成仍由帧生产者完成。桌面在呈现成功后保存完整画布，记录后端要求显式发布。此画面与延迟截图 `ScreenCapture` 分开，不把当前VM状态重绘成“设备读回”；服务缺失显式报错，见[后端契约](backends/platform-host.md#即时设备帧读取)。
-
-`runtime/lifecycle` 编排 `0x2001` 退出与 `0x2003` 重置。退出释放播放并向宿主报告终态 `Quit`；桌面结束事件循环，沿用既有用户配置持久化。重置先验证替换主脚本，再清理已核对的运行对象与快照，保留设置、变量、字体设备与公共脚本，从 `main.ps3` 入口继续，不重跑启动流程或恢复默认设置。平台 API 仍留在后端。指令返回标志与游戏验证边界见 [生命周期语义](games/amatsutsumi/vm-semantics.md#quit-与-reset2026-10-31)。
-
-`bytecode` 结构化解码指令、嵌套表达式及控制流，并检查标签与直接跳转边界。`evaluate`、`vm`、`machine` 分别承担表达式状态、参数栈/调用帧和单步执行。
-
-- `State` 保存整数、位、字符串、浮点变量与独立系统结果寄存器；未知值保持未知。原版写入但尚未核对的结果可用 `forget_system_integer` 标记，读取时显式报错。
-- 表达式修改使用共享撤销日志，失败逆序恢复；不为每次求值整体克隆状态。
-- `ParameterStack` 逐字节记录已知状态；栈预留不补零，读取未写入字节报错，不模拟原版残留内存。帧偏移按已核对的 i32 运算处理。
-- 运行时 `Image` 持有从 PS2A 数据段初始化的独立可变数据；数据操作数和字符串引用访问同一视图，不修改原 `Script` 或代码。
-- `Machine` 装载时缓存标签表，以 `Rc` 共享已解码指令；遇到未处理系统命令保留待处理状态。
-
-`bootstrap` 应用已核对的配置、变量初始化和路径登记；`script_control` 处理公共脚本槽、初始化返回、跨脚本调用、核心切换、显式回调登记/调用，以及每次 VM 运行入口的自动回调调度（`0x140064f50`，`due_callbacks` 选择到期回调，`Machine::dispatch_callbacks` 压入返回帧）。`text` 提供已核对的字符串操作及受限格式化；`random` 使用显式种子的 MSVC CRT 随机数模型。
-
-### 引擎档案与命令闸门
-
-`profile` 决定一次运行用哪个已分析构建的语义，设计与普查见[引擎档案层设计](design/engine-profiles.md)。
-
-- **档案**（`EngineProfile`）对应一个构建：同一构建的x86/x64 exe合为一个档案，分别登记身份与switch。命令状态为`Base`、`Inherited`、`Unreviewed`、`NoOp`或`Absent`，越界一律Absent。`Inherited`必须附同架构根/派生exe哈希及完整依赖指纹，由Registry校验证据身份；它不代表完整运行验证或Rust已经实现。初始表由`cmvs-profile table`生成，继承表经IDA导出与标准库比较，见[设计第13节](design/engine-profiles.md#13-p2-实施与使用2026-10-31)。
-- **游戏记录**（`GameRecord`，`games.txt`）把启动脚本与脚本包的 SHA-256 映射到档案，并登记游戏 ID（`0x201d` 参数）、配套 exe 和本作专属策略。选择时按数据哈希找记录，根目录存在的 exe 必须是记录中的构建；`--profile` 可显式选择（研究用，记录只在数据也匹配时生效）。没有匹配就报错，从不默认。
-- **闸门**（`CommandGate`）在runner、trace和桌面的分派链之前统一检查：Base/Inherited/Reviewed/ContractEquivalent进入现有分派（Reviewed须有复核记录；ContractEquivalent须有独立登记证明并通过二进制/case/规则哈希校验）；Absent/NoOp总是报错；旧Presumed与Unreviewed均默认放行，分别由`--block-presumed`和`--block-unreviewed`显式阻止。`0x201d`声明必须与游戏记录一致。GateCounts分别统计各来源分派尝试（含等待重试与未实现处理器），不是完成数/覆盖率；trace和桌面退出时打印同一来源列表与策略，runner暴露同一API。闸门不改变已放行命令的执行顺序与语义。证明登记、依赖变更失效和撤销见[M3](design/command-contracts-m3.md)。
-- `exe` 只读解析 PE 头并按 2007–2023 年观察到的固定字节形态定位唯一的系统命令 switch；其他形态显式报错。`digest` 是无依赖的 SHA-256。
-
-代码注释中不带档案前缀的原版地址一律指根档案 `cmvs-20160201`（《アマツツミ》）的 x64 exe；其他构建的地址只出现在档案表和游戏文档中。
-
-### 场景状态与软件呈现
-
-`CameraHost` 区分屏幕投影相机（模式 2/3）与设备的两个独立三维视图。`0x2260..0x2264` 写入第一个独立视图的七个原始浮点参数，`camera/view.rs` 负责其 0x882/0x883 快照与 RESET 状态；矩阵三维模式 1 的呈现仍显式报错，不能据参数可存取推断画面兼容。
-
-`scene::SceneHost` 保存清屏色、深度清除标志及 256 个对象槽；`SceneObject` 包含最多 768 个子对象槽、`ObjectImage`、绘制字段、继承标志和已实现的效果轨道。核心状态不持有图形设备。
-
-`DrawState` 区分二维位置、世界 XYZ、投影参数、深度排序偏移和绘制模式。`0x2042` 只把已有绘制状态的模式设为 2；`0x2070/0x2071` 写投影参数，`0x2072..0x2074` 写 XYZ 原始浮点位，`0x2075` 写 +108 深度排序偏移，均保留其他属性和效果。`scene_render` 现消费这些字段完成已核对的无旋转投影；投影队列键为 (偏移 + Z) − 相机 Z，键不大于 0 的对象不入队，投影位置、缩放和深度剔除仍只用 Z − 相机 Z。
-
-`0x202a` 写对象逻辑尺寸（+6256/+6260）；`0x14003b350` 以设备宽度 ÷ 逻辑宽度缩放，研究视口下逻辑宽度 0 或 1280 为单位系数，其他宽度在呈现时显式报错。
-
-`capture::ScreenCapture` 对应引擎 +11104..+11128：0x2304 请求、0x2305 释放、0x2306 查询，0x203c 把截图交给对象（空名、无 alpha）。runner 在帧更新之后、对应原版绘制末尾 `0x1400157b0` 的位置截取，由 core 呈现场景与可见消息窗口并将 alpha 置 255；可见字形属于桌面后端、全屏影片属于播放器，二者存在时显式报错。截图缺失时的 0x203e 仍未实现。`0x2126` 由 `CameraHost` 返回引擎 +1968 设备尺寸，即本机配置选中的 1280×720 研究视口。
-
-`0x2043` 清零源 X/Y、设置尺寸和不透明颜色标记，保留图像与其他绘制状态。无自身图像的二维对象可绘制纯色矩形；子对象的颜色高字节非零时不继承父图像。颜色高字节不参与矩形透明度，实际透明度来自 opacity/fade；投影纯色矩形仍显式报错。
-
-`scene_render` 是平台无关的有界软件呈现器，支持已核对的二维裁切、原点、位置、层次、普通 alpha 合成、加法混合（绘制字 1 = 2）、无 alpha 图像全不透明时的覆盖回退及父/子对象排序与继承。二维图像支持有限非负 XY 缩放及父级缩放继承，复用设备四边形的有界双线性采样；缩放纯色矩形、缩放遮罩和旋转仍显式报错。`render_with_objects` 接收桌面生成的字形等附加对象，使场景槽、文字、辅助文本、可见消息窗口和 fade 按已核对的顺序进入稳定图层队列。字体以文字父对象和附着字形子对象入队，缩放相对位置及字形留边，保持文字父坐标不变。未知变换、混合方式与尚未支持的组合显式报错。
-
-`fade::FadeHost` 管理独立覆盖层；`scene/mask.rs` 管理两条目标槽遮罩转场通道（+4632 的 0x222a..0x222d 与 +4648 的 0x2234..0x2237，着色器路径相同，每个对象最多一条）；`scene/quake.rs` 管理已实现的震动波形；`scene/strip.rs` 管理引擎 +4640 的条带转场（0x222f..0x2233）。对象销毁不隐式清空独立覆盖层。帧推进按对象效果（缩放、旋转、不透明度、帧动画、XY 位置、XYZ）、对象回收、纯色 fade、条带、遮罩、震动的顺序执行。遮罩当前只作用于支持的目标图像层，CPU 改写 alpha 路径未建模；震动也只覆盖已核对的波形与队列选择；条带以 `SceneObject`/`DrawState` 保存每条纯色附属对象及结束后的全屏遮盖，只支持模式 0/2/10/12，其纯色条带和结束遮盖现按二维层次队列呈现。
-
-`SceneHost::try_handle_image` 处理普通/子图加载与 0x203b 模式 2 滤镜，后者在解码后按 128 单位缩放 RGB 并饱和，保留 alpha。`ObjectImage::filter` 保存原图像 +1200..+1212 的可选 mode/color/extra，换图从新资源重新应用旧参数后再构造公共区，避免丢失或叠加滤镜。普通加载、电影帧、捕获、字体和公共区均无该滤镜元数据；其他滤镜模式显式报错。
-
-`message/output.rs` 的强制换行 `\n` 同时接入注音行预扫描和实际字形排版，复用已有换行规则并清空禁则临时计数，不创建字形、不增加或重置逐字延迟。`\c`、`\t`、`\w` 及未知/截断转义仍保留错误屏障；原始文字字节与字体编码转换的边界不变。
-
-`scene/scale_motion.rs` 管理 +112 的八键浮点 XY 缩放轨道（0x21e0..0x21e4），在不透明度之前更新。构造基值由命令提供，播放不从当前绘制值重新取基点；支持不量化的 f32 线性和按百分之一截断偏移的正弦模式，其他模式显式报错。换图移动轨道所有权。投影呈现支持有限非负的自身/继承父级 XY 缩放，依次应用自身原点、父原点/子位置差与投影缩放；二维非单位图像缩放现已接入；负缩放、旋转与缩放纯色/遮罩仍未验证。
-
-`scene/animation.rs` 保存共享帧动画类型、推进逻辑和场景 0x21ef..0x21f3 命令处理；`scene/opacity.rs` 保存不透明度轨道及其命令处理。`scene.rs` 保留对象/绘制状态、场景宿主和效果推进顺序，并重导出原有类型与常量，调用方继续使用 `scene::Animation`、`scene::OpacityTrack` 等路径。
-
-`scene/position_motion.rs` 管理 DrawState +144 的整数二维位置轨道（0x21f4..0x21f8）：十六条关键帧与播放头分离，未初始化头用 None 表示。坐标在设置/播放基点时截为 i16，逐帧写入完整 i32 XY；按 200ms 上限推进，跨键本帧只吸附目标，不计算下一键插值。支持已核对的线性/相对线性、四分之一正弦逼近目标和半正弦偏移分支，时长限制在 0..=i32::MAX，未知模式/越界关键帧显式报错。停止吸附当前目标后释放，-2 自然结束另标记对象销毁；换图转移轨道，不复制给保留图。
-
-`scene/world_motion.rs` 处理 `0x21f9..0x21fd` 的浮点世界 XYZ 轨道：重建、八条关键帧、播放/停止/查询，按帧推进并在负 next 结束，-2 另销毁对象。当前覆盖线性（含相对分支）、绝对二次缓出、0x38/0x39 的半正弦 Y 偏移及 0x48 的完整正弦 X 偏移，其他插值模式显式报错。未播放轨道的未初始化头部用 `MotionPlayback::None` 表示；播放时从当前 XYZ 取基点，0x22c4 换图时转移同一轨道。
-
-`scene/change.rs` 保存 `0x22c4` 换图转场的无着色器分支状态：新对象继承绘制字段与效果轨道，旧对象及水平居中的公共不透明区域暂时保留，按帧时间推进 fade factor，完成后释放；重复替换先取消旧转场。`0x22c5/0x22c6` 提供取消/查询，`0x22c7` 按 SkipGate 与动作输入等待或跳过；查询/重试不推进时间，取消保留新图和动画轨道。当前只支持主图像源和已有图像/绘制状态，缺失资源或未建模分支显式报错并保留命令。活动换图现按公共区域、旧图、新图的顺序入队，各自应用 fade factor；投影与二维对象共用这一路径。
-
-`camera` 保存已核对的镜头参数，并通过 `0x2056` 查询转换后的整数 XYZ（系统结果 1..3）；查询不修改相机。`0x2068..0x206d` 接入相机 0 的 XYZ/XZ/Y 移动启动、取消/结束、查询和等待，支持线性/二次缓出；帧末按原始 delta 推进相机，不使用对象轨道的 200ms 上限，其他曲线仍显式报错。软件呈现器消费相机状态，模式 2/3 分别进入相机 0/1 的队列 2/6，再绘制二维队列 3；相机 1 禁用时不显示其队列。`raster` 提供 RGBA、比例适配、alpha 合成与 PNG 导出；1280×720 是本作研究视口，窗口缩放与留边由后端处理。
-
-世界坐标轨道模式 `0x41` 使用完整高16位振幅，在一个时长内沿Y轴完成360度正弦偏移；目标吸附、键链和结束处理复用既有轨道。其与周期数编码不同的边界及两个构建的核对见[CHRONOCLOCK语义](games/chronoclock/vm-semantics.md)。
-
-### 消息、输入与音频
-
-`MessageHost` 的 `0x2119` 只读计算显示字节数，跳过控制码和注音，保留文字对象、布局、光标与字形；注音base仅计双字节对。它复用有界注音解析，截断或会使原版循环停滞的输入明确报错。该命令不依赖字体设备，也不等于文字布局测量。
-
-`settings::SettingsHost` 保存默认字体名与自动送页参数状态，提供设置入口所需的构造配置查询。音量/开关查询直接使用 `AudioHost` 的播放配置；尚无排版或设备消费者的设置写入保持错误屏障。`message::GlyphMetrics` 允许后端提供直接半角文字的墨迹宽度，核心负责最小半字宽和换行；桌面用显式所选 OpenType 字体，未提供度量时无窗口记录仍报错。`0x2159` 为明确初始化/轮询的非阻塞文字输出，与 `0x2152` 的让出/重试分开；`0x2140` 复用消息窗口创建，逻辑尺寸取当前1280×720研究设备。游戏范围和预览策略差异见[系统设置证据](games/amatsutsumi/vm-semantics.md#系统设置入口与配置查询2026-10-30)。
-
-| 模块 | 核心负责 | 后端负责或当前限制 |
-|---|---|---|
-| `message`、`message_flags` | 八个窗口槽、十二项文字对象、样式/布局、字形记录、逐字计时、换行/注音、手动等待与跳过状态；八个辅助文本组的排版、测量与按边界附着的字形 | `--record-text` 只记录；桌面 `--font` 光栅化消息与辅助文本字形。转义、其他输出变体、自动送页等仍有显式屏障 |
-| `history` | 有界原始文本历史记录、0x212f 清空及快照 0x540 往返 | 回看界面由脚本经辅助文本与列表组实现 |
-| `buttons` | 按钮记录、显示状态、命中、导航与动作消费 | 桌面转换指针坐标并应用移动系统光标请求；选择分支尚未完整覆盖 |
-| `input` | 只读 key.cfg 解析、输入码历史、24 个动作的按下/按住/松开与消费、0x21a0 族与 0x2344..0x234b 的动作查询/消费 | 桌面转换真实键鼠；动作 21 的 0x2348/0x2349 及其帧更新消费分支、手柄、注册表覆盖及其他绑定组未实现 |
-| `gesture` | 模式0手势、模式1区域拖动与释放测量 | 模式2及完整设备验证尚未接入 |
-| `audio` | SE/BGM/语音状态、音量设置、播放/启动/停止/淡出、设备通道 15 停止与播放位置查询契约 | `RecordingAudio` 只记录；可选原生后端真正解码并输出。语音长度结果 4 的单位仍未知 |
-| `movie`、`sequence`、`timers` | 影片生命周期、等待/换图序列的追加、启停、执行与计时、十槽 VM 计时器及独立计时标记 | 0x2308 创建无实际音轨的 CMV6/静音 CMV9 初始帧，0x2309 接入模式 0 的段播放/循环，0x231a 查询活动标志；其他影片槽控制与动作序列条目仍未实现 |
-
-`sequence::SequenceHost` 接受最多 16 项等待与换图条目；满容量仍回收参数。换图在入队时捕获名称，到执行时读取资源。启动/停止/快速结束保留已核对语义，快速结束仅执行活动序列余项并令换图时长为零。显式 u32 毫秒时钟独立于回调 tick；在对象更新前处理等待与剩余时间，不截断到 200ms。换图复用 `scene/change` 的准备/提交逻辑，失败保留旧对象及当前项，前缀成功项和时钟不回滚。重置保留 typed 不活动条目；快照 0x6e0 保存与恢复全部条目。其他动作尚未实现。
-
-`Startup::advance_frame` 和 `advance_decoded_frame` 均返回 Result，传播延迟加载错误，执行顺序为序列→场景；CLI trace 的帧边界同样推进序列。无资源上下文的 SequenceHost 入口遇到换图显式报错。正常真实重放已在脚本的序列等待轮询中执行两段序列（含三次换图）并自然完成；换图画面合成已通过当前路径逐帧无窗口重放。
-
-字体文件、编码转换、OpenType 解析、字形 mask 与缓存留在 `cmvs-desktop::font`，不进入 core。当前字体后端有字号、字形数、视口、缩放及样式限制；不承诺逐像素复刻原版 GDI。输入绑定、等待边沿及音频源时钟的具体边界见 [input](backends/input.md)、[font-output](backends/font-output.md)、[audio-output](backends/audio-output.md)。
-
-### 存档与平台契约
-
-`save_menu::SaveSource` 提供只读槽前缀；`DirectorySaves` 支持槽号 0..999，菜单扫描仍最多 256 槽。`0x22bb` 只识别 `CSV2`..`CSV9` 签名，不要求有效正文，也不代表该格式已可完整解码或恢复。
-
-`save` 负责已核对模式的 CSV2 容器编解码：校验、逆变换、三段 LZSS 压缩与解压。`snapshot::EngineSnapshot` 无损编解码完整记录流，各宿主提供自己记录的 `saved`/`restore`；`runtime/save.rs` 在 0x2080/0x22b2 从宿主构建镜像，0x22b6 写槽，0x22b5 先在候选宿主上完成全部解码与资源加载再提交。`SaveImage` 区分原版缓冲为空的 `Absent`、已持有镜像的 `Captured` 与按研究策略未构建的 `Unavailable`，写槽拒绝后者。快照点上尚无记录格式的状态（超出已支持字号范围的字形等）显式报错。`snapshot::VmSnapshot`、`LocalVariables` 与 `VisualSnapshot` 保留为离线检查与预览模型。
-
-`system_save` 独立处理 CSS1：恢复经核对的持久变量和文件名列表；候选状态完成验证后才提交。`system_save/pack.rs` 负责 1024 字节字典与 48 字节匹配压缩，`write.rs` 负责完整已知持久区序列化、变换/校验和可选导出。导出需要已加载来源的头部注释模板；未知变量报错，不能补零。缺失稀疏变量不隐式初始化。剧情写槽同时写系统存档。格式与限制见 [save](formats/save-format.md)、[system-save](formats/system-save-format.md)、[snapshot](formats/snapshot-format.md)。
-
-`snapshot::VisualSnapshot` 在独立模型内解析清屏状态及有证据的文字/窗口/场景记录；`preview` 经既有 `ImageSource`、PB3 解码和过滤器重建独立 `SceneHost` / `MessageHost`，供渲染及帧动画推进。资源缺失、尺寸不符、预算超限或未知分支返回错误，所有资源成功后才返回新宿主。它不修改运行中的Machine，也不安装摄像机、音频、回调、计时及全局效果；运行时读档走 `Startup::load_slot`。核心不引入字体或设备依赖。
-
-`platform::PlatformHost` 解码已验证的标题、图标、光标等请求，通过 `PlatformBackend::apply` 应用；后端成功后才完成 VM 命令并提交宿主状态。`RecordingBackend` 保留请求，不能证明原生 API 已执行。`PlatformAssets`/`DirectoryAssets` 提供显式游戏根目录下的只读素材，CUR 核心保留 AND/XOR 平面与热点，原生光标转换由桌面完成。见 [platform-host](backends/platform-host.md)。
-
-## 运行编排与时间
-
-`runner::Startup` 是当前研究入口的编排器：组合 `Machine`、命令闸门、命令宿主、只读来源和后端，借用外部 `Script` 与已选定的游戏（`profile::Game`），不通过泄漏生命周期构造自引用对象。启动脚本、脚本包路径和 `--skip-auto-resume` 的游戏 ID/变量来自游戏记录；宿主语义仍按《アマツツミ》核对，它尚不是所有 CMVS 版本的通用播放器。
-
-一次运行循环的职责如下：
-
-1. 宿主在帧边界采样物理输入，转换为核心动作状态；记录输入模式不注入 VM 动作。
-2. 宿主提供显式帧增量，推进场景效果、消息、影片与相机运动。原生音频模式还更新设备后端并查询源消费时钟。
-3. VM 执行普通指令；系统命令先经引擎档案闸门，再由对应宿主处理，等待命令可返回 Yield，未知命令或错误保留可定位的断点。
-4. 后端读取当前状态生成画面、输出声音并处理窗口事件；进入下一帧。
-
-VM 运行、帧时间和协作预算分别管理。计时器只在首次运行或让出后恢复的入口消费一次帧增量；普通指令、预算切片续跑和未知命令重试不重复累加。桌面通常约 16ms 调度，使用实际经过毫秒；trace 通过显式 `--frame-ms` 推进。约 8ms 的桌面协作预算用于保持窗口响应，不是 VM 时间，也不保证单条指令耗时上限。回调登记 tick 是独立研究时钟。`Startup` 另有让出看门狗：自上次让出起连续执行 100 万步（可由 `set_yield_watchdog` 调整）时 tick 不执行指令并报错，桌面随即按 VM 错误关闭；累计步数不受限。它是宿主诊断策略，不是原版限制；默认值约为真实路径实测最长不让出段（9970 步）的 100 倍。
-
-输入每帧采样，跨协作预算切片保留已消费状态；失焦清理、短按锁存、视口映射均由桌面适配处理。影片可使用原生音频源消费位置推进，它不是 DAC 硬件时间戳。
-
-## 错误、提交与预览策略
-
-命令宿主先验证参数、目标、资源及后端结果，再回收参数、前进 PC 并提交命令状态。表达式使用撤销日志；资源或后端错误保留待处理命令及相关旧状态，不能静默跳过未知语义或补造结果。资源缓存存在独立副作用：一次读取会消费缓存提示，解码失败也可能完成原始字节缓存提交，不把 VM 事务描述成整个进程的回滚。
-
-`AudioBackend` 的 `Ok(true/false)` 对应已核对的装载/播放结果，`Err` 保留命令状态供重试；原生系统副作用的失败边界需由具体后端保证。`start`、`stop` 与淡出各有独立语义；例如同步停止并释放不能用清空核心通道名代替。
-
-`AudioHost` 的 0x20b5 依次停止六个 SE 通道，每个后端停止成功后立即清空对应名称，全部成功后才完成无参数 VM 命令；它保留循环、音量和启动标志。中途失败保留已完成前缀、未处理后缀和挂起命令，重试从通道 0 开始，空通道停止为无操作。该批量命令不提供设备级整体回滚。
-
-两项显式研究策略由 runner 管理，默认关闭：
-
-- `SnapshotPolicy::ContinueWithoutImage`（CLI `--continue-without-snapshot`）只应用已核对的实时快照影响、清除位变量 0 并记录来源，标记镜像不可用后继续主脚本，此后写槽报错。默认 `Capture` 构建镜像，`Barrier` 保持粘性停点。
-- `--skip-auto-resume` 仅在首次系统存档读取成功后清零内存整数 2198；只接受已核对的本作 ID，必须在 tick 前配置。缺失不生成变量，读取失败不消费策略，首次成功或缺失后不再干预后续加载。不修改系统存档解码语义或磁盘文件，也不伪造签名查询结果。
-
-`--font` 与 `--record-text` 是不同显示模式；默认无字体且未启用记录时，保留 `0x2152` 输出断点。显式素材预览不修改 VM，也不作为脚本驱动画面或存档镜像。
-
-## 验证与后续工作
-
-项目测试仅含合成数据。当前基线记录默认 587 项、全 workspace 全功能 632 项测试通过，另 1 项原生音频设备测试默认忽略；这些数量是该版本记录，不应替代本次修改的实际检查结果。原生音频在受限沙箱的 `0xc0000008` 与普通桌面权限下的成功已有同构建对照，验证范围见音频文档。
-
-提交前运行 `cargo fmt --check`、`cargo test --offline`、`cargo clippy --offline --all-targets -- -D warnings`；涉及后端或 feature 时增加 [workspace](workspace.md) 中的全 workspace 全功能检查。解码算法变更还须用仓库外真实样本与独立 Python 对照。游戏素材、解包剧本、IDA 数据库与真实输出不进入 Git，原游戏只读。
-
-指令语义保留静态/动态证据及已知限制；地址必须绑定二进制哈希，运行时由引擎档案闸门强制。根档案 `cmvs-20160201` 的 x64 `cmvs64.exe` SHA-256 为 `dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5`。许可、固定参考提交及复用边界集中记录于 [references](games/amatsutsumi/references.md)，身份与研究方法见 [research](games/amatsutsumi/research.md)。
-
-后续按当前剧情路径推进：
-
-1. 选择链 [1]、[2,1]、[2,2,1]、[2,2,2,1] 及 END1 后的 [2,2,2,2] 在独立 CSS1 存储下均已回标题，无新增未知指令停点；在每个快照点写槽并定期读档续玩的重放中同样回到标题。默认 0x2129 屏障保留；独立用户存档来源、多次写入与备份已接入；后续应处理无模板首次保存，并补做原生完整路线实测。0x212a/b/c 的列表及额外区配置仍未实现。
-2. 扩展相机投影的未验证组合，对照立绘导出帧，并验证原生窗口中的立绘、文字、注音、震动及语音；当前路径的模式 2/3、换图与条带已通过无窗口逐帧呈现。
-3. 沿路径补齐文字变体、选择分支和必要效果；显示中字形及离屏目标记录已接入；旋转轨道快照也已接入，匿名内存图像快照现按原版重建规则接入，继续补齐其他未支持状态，并在原生窗口实测游戏内存读档界面。
-4. 验证 Windows/macOS/Linux 构建与行为，随后实现 Android/iOS 后端及真机检查；iOS 签名、编译和设备测试仍需对应环境。
-5. 扩展引擎版本与作品兼容矩阵，另行评估 WebAssembly。
-
-维护本文时更新当前能力、模块边界和支持范围；最终指令语义和证据写入对应游戏及格式文档。
-
-
-0x2308 的资源、解码和对象绑定边界见 [CMV9](formats/cmv9-format.md)。影片槽状态与普通场景对象分开持有；初始帧复用核心软件呈现，未新增平台接口或 C++ 核心。
-
-
-`0x2049` 已保存原始 X/Y 缩放位并保留其他状态；当前剧情参数为单位缩放，未扩展软件呈现器对其他缩放组合的支持。
-
-
-`MovieHost::advance_scene` 在两个 runner 帧入口中均先于序列/场景效果运行（对应主循环 0x14000e400）。SceneMovie 保存不可变原始文件、CMV6/CMV9 索引与独立段状态，仅 CMV9 缓存静态底图；只解码本次最终目标帧，提交时保留对象已有绘制属性。CMV6 沿用现有 JBPD 独立解码，无额外平台后端。单槽失败保留旧帧、图像和计时以便重试，较早成功槽不回滚。0x231a 只读取活动标志，不修改播放器；自然结束（active=false、paused=true）查询为 0。槽的暂停/恢复等其他命令与模式 10/15 尚未接入。
-
-
-`MessageHost` 的 0x2171 仅释放窗口自身的 ObjectImage，保留其 SceneObject/DrawState、子对象、文字与可见状态；图像释放与窗口销毁分开处理。
-
-
-`MessageHost` 的 0x217b 查询自身/子对象存在性，复用窗口对象寻址；不把对象可见性、图像或 DrawState 存在与对象本身存在混为一谈。
-
-
-`SequenceEntry::WorldMotion` 仅存六参数与来源 PC，不在追加时访问对象。正常帧执行时替换目标轨道，以当时 DrawState 的 XYZ 初始化 playback；帧序列先执行，再由既有场景更新推进动画。快进执行跳过 subtype 2，保留已有轨道和坐标；基本无场景入口在正常执行时报错，在快进时可安全跳过。轨道重建通过 `SceneHost::replace_world_motion` 交给 `scene/world_motion.rs`，与直接播放命令共用私有初始化函数；序列不再读取 DrawState 原始字或构造轨道内部状态。不新增 OS 接口或依赖。
-
-
-`SceneHost` 的 `0x2023` 将指定子编号从父对象的 children 表删除，Rust 所有权释放其子树、图像和效果；不清空父对象的 bit31 子对象标志，不改父对象绘制状态或其他子槽。子编号按原版 unsigned <768 判断；父槽越界或缺失仍采用显式错误策略。
-
-`0x2026` 修改父对象或指定子对象的 `shown`，共用已有绘制队列和快照字段，不要求图像或 DrawState。隐藏父对象时队列也不遍历其子对象。CHRONOCLOCK 与基准构建的独立核对、非法目标错误边界及研究运行结果见[对象可见性证据](games/chronoclock/vm-semantics.md)。
-
-
-`0x202d` 只设置目标对象 flags 的 0x2（父项子队列）位，不要求 DrawState。`scene_render` 的投影队列复用 `Entry` 保存父层和子层，父项按深度排序，附着子项在其后按 parent_key + child_biased_z 稳定降序。当前只接入同模式、flags &3 ==3 的继承附着分支；世界坐标/投影参数/有效透明度继承父状态，子图在父原点周围按自身位置布局。其他组合保持错误屏障，不将其视为二维对象绘制。
-
-
-## 用户设置存储（2026-10-31）
-
-settings::Configuration保存有界原始INI字节，替换已实现的键并保留未知字段；runtime/preferences.rs负责从运行中的SettingsHost、AudioHost、MessageFlags、确认/效果状态及显式DisplayPreferences汇集配置。用户目录初始化时安装用户配置，音频后端配置成功后才提交候选宿主；原游戏配置仅作首次只读来源。
-
-ProfileSystemSave复用会话锁及同目录临时文件替换，分别管理cmvs.cfg/cmvs.cfg.bak与CSS1。桌面正常退出显式保存，错误退出不保存；核心Drop没有隐藏I/O。INI和CSS1是两个独立提交，失败保留各自备份和可重试状态，不能描述成整体事务。原生窗口状态通过DisplayPreferences传入；核心不持有winit窗口。未实现的设置继续保留原始键及其现有错误屏障，不因写配置而伪造支持。
-
-全屏/窗口尺寸分离：PlatformBackend::window_size查询当前物理客户区，windowed_size查询窗口状态（全屏时为未来恢复值）；WindowSize请求全屏时只改恢复记录。桌面App拥有尺寸Cell，NativeBackend的临时借用跨事件回调共享它，离开全屏时请求该尺寸；核心不持有winit窗口或屏幕尺寸策略。0x216e只在窗口立即调整时让出，未来尺寸更新不让出。
-
-## 共享绘制队列
-
-`scene_render::prepare_scene` 负责验证场景、计算继承/投影并稳定排序，返回借用不可变资源的 `RenderFrame`。其只读 `commands()` 提供 `DrawCommand`，`dimensions()` 与 `clear_color()` 提供逻辑画布参数，不创建像素目标或调用设备 API。`RenderFrame::render_cpu` 执行原有软件光栅化；现有 `render_scene` 等入口通过准备和执行两个步骤保持兼容。
-
-桌面 `FontRenderer::prepare_objects` 只生成消息文字与辅助文字的字形对象；调用方须同时把可见消息窗口加入共享队列。现有 `FontRenderer::render` 继续完成这两步并返回 CPU 合成帧，窗口图像仍按引用传递。
-
-可选 `cmvs-wgpu` 消费同一队列完成 GPU 合成、窗口呈现和按需逻辑帧读回。桌面以 `--renderer cpu|wgpu` 选择，默认 CPU；core 无图形依赖。延迟截图保持原核心路径，平台验证范围和资源策略见 [wgpu 后端](backends/wgpu.md)。
-
-
-桌面宿主通过 `FrameBoundary` 区分8ms合作式预算与VM的真实Yield：Progress/快照等中间事件不发布画面，预算耗尽后仅处理窗口事件并继续同一次运行；输入在帧边界刷新一次，场景时钟只在真实Yield后消费，Inactive保留既有核心轮询策略。CPU/wgpu的重绘和退出导出均不能读取菜单初始化中的半完成场景。详细行为见[桌面帧边界](backends/desktop.md#vm-时间片与完整帧边界)。
+默认根包测试不能覆盖所有子包，全 workspace 检查也不能替代平台目标构建和硬件验证。系统依赖见[平台总览](../platforms/README.md)。测试只提交合成数据；解码变更还需仓库外真实样本与独立实现对照，见[研究约定](research.md)。

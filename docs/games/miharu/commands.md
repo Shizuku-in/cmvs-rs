@@ -1,6 +1,6 @@
 # 《みはる》命令映射
 
-CVNS 系统命令到运行时命令的翻译记录，机制见[引擎档案层第 16 节](../../design/engine-profiles.md#16-cvns-家族与命令翻译2026-11-14)。地址绑定 `cvns.exe` SHA-256 `8e6044466b928d77f0a94a0d0f32fe48190596bf628115598881c2aa3a4885aa`（x86，image base 0x400000）。
+CVNS 系统命令到运行时命令的翻译记录，机制见[CVNS 映射](../../design/engine-profiles.md#cvns)。地址绑定 `cvns.exe` SHA-256 `8e6044466b928d77f0a94a0d0f32fe48190596bf628115598881c2aa3a4885aa`（x86，image base 0x400000）。
 
 每条映射单独一节，标题以 CVNS 命令号开头（档案的 `review=` 指向本文件，测试会检查标题存在），内容包括：
 

@@ -75,7 +75,7 @@ Rust `SceneHost::set_shown` 复用 `SceneObject::shown`，现有 CPU/共享绘�
 
 ## 归档类型 0x201f（2026-10-31 复核）
 
-档案状态 `reviewed`（[分派层设计 4.2](../../design/dispatch.md#42-复核记录)）。指纹工具因可写全局依赖未继承，本节为人工复核记录。默认 trace 在 `start.ps3 / 0x1a` 执行它，栈顶为 10。
+档案状态 `reviewed`（[复核记录](../../design/engine-profiles.md#复核与变体)）。指纹工具因可写全局依赖未继承，本节为人工复核记录。默认 trace 在 `start.ps3 / 0x1a` 执行它，栈顶为 10。
 
 | | CHRONOCLOCK x64 | 基准 `cmvs-20160201` x64 |
 |---|---|---|
@@ -100,7 +100,7 @@ Rust `SceneHost::set_shown` 复用 `SceneObject::shown`，现有 CPU/共享绘�
 
 差异只在取值 1、2：基准新增了两个归档类，CHRONOCLOCK 对它们走默认分支。本作脚本传入 10。归档类内部（查找、解密、校验）不在本条复核范围内，它们由资源注册与加载命令及 CPZ6 格式层分别覆盖；本作 86 个来源已通过现有 CPZ6 解码与结构检查。
 
-**Rust 实现不读取该值。** `BootstrapHost` 只把原始值记入设置表，没有代码读取 `0x201f` 的设置；封包格式按文件签名识别（[档案设计第 8 节](../../design/engine-profiles.md#8-格式层)）。因此取值 1、2 的差异不会影响 Rust 行为，本条按根语义执行。将来若 Rust 开始解释这个值，1、2 的含义因构建而异，必须改为 `Variant`。
+**Rust 实现不读取该值。** `BootstrapHost` 只把原始值记入设置表，没有代码读取 `0x201f` 的设置；封包格式按文件签名识别（[CPZ 格式](../../formats/cpz-format.md)）。因此取值 1、2 的差异不会影响 Rust 行为，本条按根语义执行。将来若 Rust 开始解释这个值，1、2 的含义因构建而异，必须改为 `Variant`。
 
 方法：CHRONOCLOCK 在当前 IDA 会话中只读查询（未改名、未注释、未保存），输入哈希已确认；基准用 IDA 9.4 `idat` 批处理读取本地分析库 `local/chronoclock/p2-amatsu-x64.i64` 的临时副本，输入哈希同上表。x86（CHRONOCLOCK `0x70d92`、基准 `0x74012`）未单独复核，依据同构建判定。
 

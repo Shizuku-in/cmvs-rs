@@ -29,7 +29,7 @@ cargo run --offline --bin cmvs-trace -- "<游戏目录>/data/pack/start.ps3" --s
 cargo run --offline --bin cmvs-trace -- "<游戏目录>/data/pack/start.ps3" --bootstrap --save-dir "<游戏目录>/save" --system-save "<游戏目录>/save/system.dat" --script-archive "<游戏目录>/data/pack/script.cpz" --record-platform "<游戏目录>" --continue-without-snapshot --frame-ms 16 --steps 1000000
 ```
 
-trace先识别引擎档案：输入脚本（或`--script`归档）、`--script-archive`及`--record-platform`根目录exe参与哈希比对，以`# engine profile`和`# profile evidence`打印。未登记的游戏或合成脚本需显式`--profile <id>`。命令先经闸门：Base、Inherited、Reviewed与带有效登记证明的ContractEquivalent进入现有分派，Absent/NoOp总是报错。Presumed、Unreviewed默认放行，分别用`--block-presumed`、`--block-unreviewed`显式阻止；未复核命令记录首次使用。派生档案在退出时打印各来源已放行分派尝试数、契约/研究命令列表及策略（含等待重试和未实现处理器的尝试，不等于完成或覆盖率），闸门错误以非零退出码结束。完整迁移与证明失效规则见[M3](../design/command-contracts-m3.md)。
+trace先识别引擎档案：输入脚本（或`--script`归档）、`--script-archive`及`--record-platform`根目录exe参与哈希比对，以`# engine profile`和`# profile evidence`打印。未登记的游戏或合成脚本需显式`--profile <id>`。命令先经闸门：Base、Inherited、Reviewed与带有效登记证明的ContractEquivalent进入现有分派，Absent/NoOp总是报错。Presumed、Unreviewed默认放行，分别用`--block-presumed`、`--block-unreviewed`显式阻止；未复核命令记录首次使用。派生档案在退出时打印各来源已放行分派尝试数、契约/研究命令列表及策略（含等待重试和未实现处理器的尝试，不等于完成或覆盖率），闸门错误以非零退出码结束。证明登记与失效规则见[契约比较](../design/command-contracts-m1.md)。
 
 `--bootstrap` 应用已核对的初始化；`--save-dir` 只读扫描剧情槽，不会自动推断 `--system-save`。记录平台请求不创建窗口，帧时间必须显式提供；省略 `--frame-ms` 时冻结时间并在等待处停止。增加步数不能绕过未知命令、快照或完整恢复屏障。VM 地址及语义见[本作证据](../games/amatsutsumi/vm-semantics.md)。
 
@@ -97,10 +97,10 @@ python -I tools/probe_matrix.py "<输出目录1>" "<输出目录2>" --markdown
 - `--device keyboard` 使用 `key.cfg` 中的按键，按钮通过导航键沿按钮链接选中。
 - `--fork save` 让路线分支从选项处写下的检查点读档开始，而不是每次从头重放；构建缺少快照布局能力时自动退回重放。
 - `--without-snapshots` 显式选择无快照研究：保留快照命令的实时状态影响，但不生成可保存图像；V1–V4标为跳过，不能与 `--fork save` 合用。适用于已知部分快照布局、但剧情中的活动效果仍无法保存的构建，不代表存读档通过。
-- `--manifest` 读取可选的每游戏纠正清单，格式见[探针设计第 16 节](../design/probe.md#16-完整实现2026-11-01)。
+- `--manifest` 读取可选的每游戏纠正清单，格式见[清单格式](../../crates/cmvs-probe/README.md#manifest)。
 - `tools/probe_matrix.py` 把多个输出目录汇总为"游戏 × 检查"矩阵，只读。
 
-任何检查失败或被闸门阻止时退出码为 1。检查清单与判定规则见[探针设计](../design/probe.md)。
+任何检查失败或被闸门阻止时退出码为 1。检查清单与判定规则见[探针说明](../../crates/cmvs-probe/README.md)。
 
 ## 外部样本审计
 

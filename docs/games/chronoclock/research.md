@@ -180,7 +180,7 @@ C2 修改 `active_draw` 为 false，正常保存 `system.dat`、`cmvs.cfg` 后�
 
 ## 2026-10-31：回到P2，完整指纹与默认闸门验收
 
-先将前述语义改动提交为`8eb8708`，本阶段以其为基线，只改工具、档案与闸门。实现IDAPython导出、标准库比较、带强制证据的`Inherited`解析/验证、状态统计及闸门来源计数；具体策略和命令见[设计第13节](../../design/engine-profiles.md#13-p2-实施与使用2026-10-31)。全局/间接依赖、未知解码、取地址/索引数据和递归截断均不自动继承。
+先将前述语义改动提交为`8eb8708`，本阶段以其为基线，只改工具、档案与闸门。实现IDAPython导出、标准库比较、带强制证据的`Inherited`解析/验证、状态统计及闸门来源计数；具体策略和命令见[指纹工具](../../design/engine-profiles.md#指纹工具)。全局/间接依赖、未知解码、取地址/索引数据和递归截断均不自动继承。
 
 IDA 9.4分别导出两个构建的x64/x86，二进制身份来自各自档案，原exe只读。CHRONOCLOCK x64使用当前IDA会话，其他三份使用`local/chronoclock/p2-*.i64`新建分析库，未切换当前会话或改写原游戏目录。工具核对输入文件哈希并拒绝数据库补丁；同一CHRONOCLOCK x64重新导出逐字节一致。原指令图JSON只留local，仓库报告仅含指纹和分类。
 
@@ -205,7 +205,7 @@ IDA 9.4分别导出两个构建的x64/x86，二进制身份来自各自档案，
 
 ## 2026-10-31：M1，`0x201f` 人工复核
 
-按[分派层设计](../../design/dispatch.md) M1 引入 `Reviewed`。默认停点 `0x201f` 的指纹原因是可写全局（`unresolved-data`、`unresolved-or-mutable-data`）。CHRONOCLOCK x64 在当前 IDA 会话只读查询；基准 x64 用 IDA 9.4 `idat` 对 `local/chronoclock/p2-amatsu-x64.i64` 的临时副本批处理读取，两边输入哈希与档案一致。结论与地址表见 [VM 语义](vm-semantics.md)：处理函数相同；全局只被归档类工厂读取，取值 1、2 在基准中有专用类而本作走默认，取值 10 两边都构造 0x1C8 字节的归档类；Rust 只记录该值不解释，故登记为 `Reviewed`。
+按[分派层设计](../../guides/dispatch.md) M1 引入 `Reviewed`。默认停点 `0x201f` 的指纹原因是可写全局（`unresolved-data`、`unresolved-or-mutable-data`）。CHRONOCLOCK x64 在当前 IDA 会话只读查询；基准 x64 用 IDA 9.4 `idat` 对 `local/chronoclock/p2-amatsu-x64.i64` 的临时副本批处理读取，两边输入哈希与档案一致。结论与地址表见 [VM 语义](vm-semantics.md)：处理函数相同；全局只被归档类工厂读取，取值 1、2 在基准中有专用类而本作走默认，取值 10 两边都构造 0x1C8 字节的归档类；Rust 只记录该值不解释，故登记为 `Reviewed`。
 
 默认运行参数同上节。停点前移到 `start.ps3 / 0x50 / 0x2091`，退出码 1，统计 base=0、inherited=3、reviewed=1、unreviewed=0。日志 `local/chronoclock/m1-default.log` SHA-256 `130018b6d499460b16f7bbe16bdc619e69e6d11697d7c0906c35d129f102d5a5`；去掉统计与错误行后，P2 日志是它的逐字节前缀。
 
@@ -215,7 +215,7 @@ IDA 9.4分别导出两个构建的x64/x86，二进制身份来自各自档案，
 
 ## 2026-10-31：指纹策略 v2（运行库叶子）
 
-按[档案设计第 14 节](../../design/engine-profiles.md#14-指纹策略-v22026-10-31)改进导出与比较工具。先在当前 IDA 会话只读分类 v1 中被数据问题阻断的 469 个函数，再离线模拟各项修复的效果；运行库边界（上限 58 条）加段外引用（上限 78 条）收益最高且无需新的配对推理，故先做这两项。
+按[指纹工具](../../design/engine-profiles.md#指纹工具)改进导出与比较工具。先在当前 IDA 会话只读分类 v1 中被数据问题阻断的 469 个函数，再离线模拟各项修复的效果；运行库边界（上限 58 条）加段外引用（上限 78 条）收益最高且无需新的配对推理，故先做这两项。
 
 导出均为 IDA 9.4 `idat` 批处理：基准 x64/x86 读取 `local/chronoclock/p2-amatsu-*.i64` 的临时副本；CHRONOCLOCK x64 用 `-o` 新建分析库 `local/chronoclock/v2-chrono-x64.i64`（不再借用当前会话），x86 读取 `p2-chrono-x86.i64` 的临时副本。游戏目录除当前会话自身的 `cmvs64.exe.id0` 外无文件变化。导出 JSON 的 SHA-256：
 
@@ -232,7 +232,7 @@ IDA 9.4分别导出两个构建的x64/x86，二进制身份来自各自档案，
 
 ## 2026-10-31：复核辅助 `--explain`
 
-见[档案设计第 14 节](../../design/engine-profiles.md#复核辅助---explain)。带诊断字段的 x64 导出为 `local/chronoclock/v2d-*-x64.json`（基准 x64 读 `p2-amatsu-x64.i64` 临时副本，CHRONOCLOCK x64 读 `v2-chrono-x64.i64` 临时副本）；与已提交报告逐行相同。`0x2091` 的解释：处理函数 `0x7f1fa` → `0x6eb60` → `0x82330`（基准 `0x82b61` → `0x72100` → `0x85ce0`），在 `+0x32` 读取可写全局（CHRONOCLOCK `qword_140131ea0`），`+0x15` 的映像基址 `lea` 位移不同。人工复核从这两处开始。
+见[指纹工具](../../design/engine-profiles.md#指纹工具)。带诊断字段的 x64 导出为 `local/chronoclock/v2d-*-x64.json`（基准 x64 读 `p2-amatsu-x64.i64` 临时副本，CHRONOCLOCK x64 读 `v2-chrono-x64.i64` 临时副本）；与已提交报告逐行相同。`0x2091` 的解释：处理函数 `0x7f1fa` → `0x6eb60` → `0x82330`（基准 `0x82b61` → `0x72100` → `0x85ce0`），在 `+0x32` 读取可写全局（CHRONOCLOCK `qword_140131ea0`），`+0x15` 的映像基址 `lea` 位移不同。人工复核从这两处开始。
 
 ## 2026-10-31：P3，`0x2091` 位变量初始化复核
 
@@ -256,7 +256,7 @@ IDA 9.4分别导出两个构建的x64/x86，二进制身份来自各自档案，
 
 ## 2026-10-31：指纹策略 v3 与 `Presumed`
 
-见[档案设计第 15 节](../../design/engine-profiles.md#15-指纹策略-v3-与-presumed2026-10-31)。先在当前 IDA 会话只读统计：间接控制流中 switch 跳转 24 处、间接调用 247 处；switch 信息可由 IDA 完整给出。随后逐步核对导出：`lea reg, [映像基址]` 未建模、IDA 未解析的映像相对表访问（如 `0x2091` 的 `movzx ecx, byte [r8+rdx+131EB0h]`）、不返回调用后的 `int3` 填充被当作缺失后继。映像相对位移只在 IDA 已解析或同一基本块内可证明寄存器装有映像基址时置零；该证明在全部 CHRONOCLOCK x64 函数中认定 140 处，抽查均为跳转表与索引表，没有结构体偏移。
+见[指纹工具](../../design/engine-profiles.md#指纹工具)。先在当前 IDA 会话只读统计：间接控制流中 switch 跳转 24 处、间接调用 247 处；switch 信息可由 IDA 完整给出。随后逐步核对导出：`lea reg, [映像基址]` 未建模、IDA 未解析的映像相对表访问（如 `0x2091` 的 `movzx ecx, byte [r8+rdx+131EB0h]`）、不返回调用后的 `int3` 填充被当作缺失后继。映像相对位移只在 IDA 已解析或同一基本块内可证明寄存器装有映像基址时置零；该证明在全部 CHRONOCLOCK x64 函数中认定 140 处，抽查均为跳转表与索引表，没有结构体偏移。
 
 导出用 IDA 9.4 `idat` 顺序批处理（并行启动时两次出现数据库输入名读取异常，改为顺序执行后正常），数据库均为 `local/chronoclock/` 中分析库的临时副本：
 

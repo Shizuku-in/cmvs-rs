@@ -59,9 +59,9 @@
 
 按解码包数加权为 **3.384 / 9.049 ms，2.67 倍**。
 
-后续优化再次通过全部 20,089 个包的 YUV 对照；独立计时为自研 **1.389 ms/帧**，详见[优化记录与计时方法](../../design/theora-decoder.md#接近-ffmpeg-的优化2026-11-08)。
+后续优化再次通过全部 20,089 个包的 YUV 对照；独立计时为自研 **1.389 ms/帧**，仅统计包解码，排除 I/O、RGBA 转换与呈现；计时入口见[解码器说明](../../../crates/cmvs-video/README.md#implementation-and-validation)。
 
-证据保存在 `local/hapymaherfd_re/theora-2026-11-08/`：`inputs.json` 记录 MGV/Ogg 身份与尺寸，`summary.json` 记录各片计时和抽样哈希，`*-validation.log` 记录旧后端与 FFmpeg 的逐帧检查，`mgv-results.json` 与 `*-mgv.log` 记录独立的公共播放路径检查。实际测试命令见[解码器说明](../../design/theora-decoder.md#真实游戏影片)。提取的 Ogg 和全部验证输出仅留在忽略目录；验证后复核七段原始 MGV 的 SHA-256，内容均未改变。
+证据保存在 `local/hapymaherfd_re/theora-2026-11-08/`：`inputs.json` 记录 MGV/Ogg 身份与尺寸，`summary.json` 记录各片计时和抽样哈希，`*-validation.log` 记录旧后端与 FFmpeg 的逐帧检查，`mgv-results.json` 与 `*-mgv.log` 记录独立的公共播放路径检查。实际测试命令见[解码器说明](../../../crates/cmvs-video/README.md#implementation-and-validation)。提取的 Ogg 和全部验证输出仅留在忽略目录；验证后复核七段原始 MGV 的 SHA-256，内容均未改变。
 
 ## 运行
 

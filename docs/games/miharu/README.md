@@ -1,6 +1,6 @@
 # 《みはる》测试档案
 
-《あるみ箱（あると＋みはる）》收录的两个独立游戏之一，也是第一个接入的 CVNS（CMVS 前代引擎）作品。CVNS 接入机制见[引擎档案层第 16 节](../../design/engine-profiles.md#16-cvns-家族与命令翻译2026-11-14)，命令映射与复核记录见[命令映射](commands.md)。
+《あるみ箱（あると＋みはる）》收录的两个独立游戏之一，也是第一个接入的 CVNS（CMVS 前代引擎）作品。CVNS 接入机制见[CVNS 映射](../../design/engine-profiles.md#cvns)，命令映射与复核记录见[命令映射](commands.md)。
 
 ## 样本身份
 

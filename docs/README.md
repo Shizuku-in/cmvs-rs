@@ -1,29 +1,12 @@
-# 文档导航
+# 文档
 
-## 使用
+| 任务 | 入口 |
+|---|---|
+| 运行游戏 | [运行指南](guides/running.md)、[平台总览](../platforms/README.md) |
+| 检查资源或脚本 | [CLI 指南](guides/cli.md) |
+| 使用或开发 API | [API 指南](guides/api.md)、[架构与检查](architecture.md)、[命令分派](guides/dispatch.md) |
+| 查询支持范围 | [游戏档案](games/README.md) |
+| 研究格式与语义 | [研究约定](research.md)、[格式](formats/)、[后端](backends/)、[引擎档案](design/engine-profiles.md) |
+| 核对来源与许可 | [参考](references.md)、[第三方声明](../THIRD_PARTY_NOTICES.txt) |
 
-- [运行指南](guides/running.md)：桌面运行、字体、音频、存档与运行策略。
-- [CLI 指南](guides/cli.md)：脚本、资源和存档检查工具。
-- [平台总览](../platforms/README.md)：平台、目标与支持情况；[Web](../platforms/web/README.md)、[Switch](../platforms/switch/README.md)与 [PS Vita](../platforms/psvita/README.md)：各平台的构建、操作与验证范围。
-
-## 开发
-
-- [API 文档](guides/api.md)：生成 HTML 与机器可读的 rustdoc JSON。
-- [架构](architecture.md)与 [Workspace](workspace.md)：模块职责、依赖、feature 和检查命令。
-- [分派开发指南](guides/dispatch.md)：系统命令入口、处理器约定与测试。
-- [引擎档案](design/engine-profiles.md)与[契约比较](design/command-contracts.md)：构建识别、语义证据和命令闸门。
-- [通用游戏探针](design/probe.md)：路线、输入、页面、存读档及设置验证。
-- [格式文档](formats/)与[后端文档](backends/)：数据布局、渲染、输入、字体和音频接口。
-
-## 游戏与证据
-
-- [游戏档案目录](games/README.md)：各游戏的样本身份、支持范围与验证结果。
-- [研究约定](research.md)：证据要求及新游戏接入流程。
-- [参考与许可](references.md)：参考实现、依赖与复用边界。
-- [发布说明](release-notes.md)：行为变更及迁移说明。
-
-## 归档约定
-
-- 通用职责放架构文档，格式放 `formats/`，系统接口放 `backends/`；游戏专属地址、版本差异和实测结果放 `games/<游戏标识>/`。
-- 游戏档案保留当前结论、支持边界和必要证据；覆盖报告注明采集基线与输入哈希，不将实现变化计为新增验证。
-- 真实游戏、探针输出和 IDA 数据库留在仓库外或忽略的 `local/`。文档相对链接以所在目录为准，命令从项目根目录执行。
+文档只维护当前用法、接口约定与必要证据；历史计划、迁移日志和测试数量留在 Git。每项事实只维护一处，其他页面用链接引用。游戏地址、哈希和验证范围归对应档案；真实素材、存档、探针输出和 IDA 数据库留在仓库外或忽略的 `local/`。不记录本机绝对路径或个人信息。

@@ -65,7 +65,7 @@
 
 ## 开始使用
 
-需要 Rust **1.89+ stable**。`--offline` 要求依赖已在本机缓存。
+需要 Rust **1.89+ stable**。
 
 ```bash
 cargo run --offline -- "<游戏目录>/data/pack/start.ps3"
@@ -80,34 +80,13 @@ cargo test --offline
 
 ## 支持平台
 
-| Platform | Target |
-|---|---|
-| Windows / Linux / MacOS | Host |
-| iOS | aarch64-apple-ios |
-| Android | aarch64-linux-android, x86_64-linux-android |
-| Web | wasm32-unknown-unknown |
-| Switch | aarch64-switch |
-| PS Vita | armv7-sony-vita-newlibeabihf |
+平台目标、支持状态与构建方法见[平台总览](platforms/README.md)。
 
 ## 文档与开发
 
-- [当前状态](docs/status.md)
-- [游戏档案目录](docs/games/README.md)
-- [文档导航与归档规则](docs/README.md)：按用途查找资料。
-- [架构](docs/architecture.md)与 [Workspace](docs/workspace.md)：模块职责、依赖和完整检查命令。
-- [研究约定](docs/research.md)：证据要求及新游戏接入步骤。
-- [引擎档案层](docs/design/engine-profiles.md)：按构建选择命令语义的闸门。
-- [参考与许可](docs/references.md)：固定提交、第三方依赖和复用边界。
-
-提交前运行：
-
-```bash
-cargo fmt --check
-cargo test --offline
-cargo clippy --offline --all-targets -- -D warnings
-```
-
-测试仅含合成数据；修改解码算法后另用仓库外真实样本与独立 Python 对照。涉及后端或 feature 时，追加 [Workspace](docs/workspace.md) 中的全功能检查。
+- [文档导航](docs/README.md)：使用、API、格式与后端。
+- [游戏档案](docs/games/README.md)：支持范围与验证证据。
+- [架构与开发检查](docs/architecture.md)、[研究约定](docs/research.md)、[参考与许可](docs/references.md)。
 
 ## 许可证
 

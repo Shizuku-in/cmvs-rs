@@ -10,7 +10,7 @@ cargo run --offline --release --features desktop --bin cmvs-desktop -- "<游戏�
 
 默认在 0x2080/0x22b2 构建引擎存档快照；存档、读档与系统存档都写入 `--user-data-dir`，原游戏目录保持只读。快照点上存在尚无存档格式的状态时以错误停止，不写不完整镜像，范围见[剧情存档](#剧情存档)。
 
-当前默认放行 `Presumed` 和 `Unreviewed`，分别使用 `--block-presumed`、`--block-unreviewed` 显式阻止；两项互不隐含。`Absent`、`NoOp` 始终停止。默认放行不代表语义已复核、处理器完整或游戏可玩。`Base`、`Inherited`、`Reviewed` 与具有有效登记证明的 `ContractEquivalent` 进入已有分派，证明要求不变。见 [M3](../design/command-contracts-m3.md)。
+当前默认放行 `Presumed` 和 `Unreviewed`，分别使用 `--block-presumed`、`--block-unreviewed` 显式阻止；两项互不隐含。`Absent`、`NoOp` 始终停止。默认放行不代表语义已复核、处理器完整或游戏可玩。`Base`、`Inherited`、`Reviewed` 与具有有效登记证明的 `ContractEquivalent` 进入已有分派，证明要求不变。见[契约比较](../design/command-contracts-m1.md)。
 
 | 选项 | 含义与限制 |
 |---|---|
