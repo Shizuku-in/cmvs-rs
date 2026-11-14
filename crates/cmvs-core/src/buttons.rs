@@ -1,10 +1,13 @@
-//! Engine +4504: six button groups bound to scene objects (0x2210..0x221b); addresses refer
-//! to the documented binary hash. Covers groups, buttons, hit rectangles, navigation links,
-//! per-state images, the initial display of 0x2215, the hover/press/selection logic of
-//! 0x2216/0x2217 over `ActionInput`, 0x221a (make a button current) and 0x221b (a group with
-//! an explicit pointer scale, other than the device size only where inspected).
-//! 0x2218/0x2219 stay unhandled.
-//! Auxiliary list groups at engine +4552 are handled in `list`.
+//! Button groups, hit testing, and keyboard or pointer selection.
+//!
+//! [`ButtonHost`] binds buttons to scene objects and updates their visual state
+//! from [`ActionInput`]. Ordinary groups and auxiliary list groups have separate
+//! state; unsupported commands remain unhandled.
+
+// Engine +4504: six groups (0x2210..0x221b). 0x2215 initializes display;
+// 0x2216/0x2217 handle hover, press, and selection; 0x221a sets the current button;
+// 0x221b supplies an explicit pointer scale. 0x2218/0x2219 remain unhandled.
+// Auxiliary list groups use engine +4552 and are handled in `list`.
 use crate::{
     bytecode::DecodeError, dispatch::Call, evaluate::error, input::ActionInput, machine::Machine,
     scene::SceneHost,

@@ -1,6 +1,10 @@
-//! Bounded MGV1 container and nominal-frame to Theora-packet mapping.
-//! REALIVE mog3x64.dll SHA-256 053156399e46565fcac4d5c4ce2ebede8bdb8abf1caaec46a29a5f76d2192a83:
-//! MGV_InputFile RVA 0x22cf0; engine frame mapping 0x14001c180.
+//! MGV1 movie indexing and frame-to-Theora-packet mapping.
+//!
+//! The container reader validates dimensions and packet bounds. A host installs a
+//! [`DecoderFactory`] for Theora decoding; [`crate::movie`] controls playback.
+
+// REALIVE mog3x64.dll SHA-256 053156399e46565fcac4d5c4ce2ebede8bdb8abf1caaec46a29a5f76d2192a83:
+// MGV_InputFile RVA 0x22cf0; engine frame mapping 0x14001c180.
 use crate::{FormatError, MAX_PAYLOAD, raster::RgbaImage};
 use std::{
     error::Error,

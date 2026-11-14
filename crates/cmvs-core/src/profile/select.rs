@@ -285,7 +285,11 @@ impl Registry {
             evidence: notes,
         })
     }
-    /// Discovers the fixed game files under `root`, hashes them read-only and selects.
+    /// Identify a game directory using startup-script, archive, and executable hashes.
+    ///
+    /// `explicit` optionally names an engine profile instead of automatic selection.
+    /// Reads files without executing or modifying them. Returns an error for missing
+    /// or ambiguous files, inconsistent evidence, an unknown profile, or I/O failures.
     pub fn identify_game(
         &self,
         root: &Path,

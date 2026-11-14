@@ -1,6 +1,10 @@
-//! CMVS 2048-byte ring LZSS. See docs/references.md for provenance.
-//! The encoder is the binary-tree family shared by CSV2 (0x140068210 / 0x140067ef0 /
-//! 0x1400680b0) and CSS1 (0x14008db90), reimplemented from the disassembly.
+//! Compression and decompression using the CMVS 2048-byte LZSS ring buffer.
+//!
+//! Higher-level script and save readers apply their own container validation
+//! before calling this codec.
+
+// Provenance: docs/references.md. The binary-tree encoder follows CSV2
+// (0x140068210 / 0x140067ef0 / 0x1400680b0) and CSS1 (0x14008db90).
 use crate::{FormatError, MAX_PAYLOAD};
 
 pub fn decode(input: &[u8], expected: usize) -> Result<Vec<u8>, FormatError> {

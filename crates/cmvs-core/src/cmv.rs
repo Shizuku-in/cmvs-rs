@@ -1,7 +1,10 @@
-//! CMV6/CMV8 movie containers: header/index parsing and bounded JBPD/JBPE frame reads.
-//! The Ogg soundtrack is located but not decoded. Field meanings follow the movie
-//! player in the documented binary (0x1400379f0, 0x140037bb0, 0x140037900) and were checked
-//! read-only against this title's data/video files.
+//! CMV6/CMV8 movie headers, frame indices, and bounded frame decoding.
+//!
+//! [`CmvIndex`] reads container metadata and locates image frames and the Ogg
+//! soundtrack. Audio decoding and playback are separate host services.
+
+// Field meanings follow the hash-bound movie player at 0x1400379f0,
+// 0x140037bb0, and 0x140037900, checked read-only against the game's video files.
 use crate::FormatError;
 use std::io::{Read, Seek, SeekFrom};
 

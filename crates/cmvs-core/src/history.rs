@@ -1,5 +1,9 @@
-//! Engine +4320 history list: append 0x2136, clear 0x212f and the queries 0x2130..0x2135.
-//! Addresses are bound to the binary hash in research.md.
+//! Message history entries and script-visible history queries.
+//!
+//! [`HistoryHost`] stores recorded text and supports append, clear, and lookup
+//! operations. It does not display a history window or rasterize text.
+
+// Engine +4320: append 0x2136, clear 0x212f, and queries 0x2130..0x2135.
 use crate::{bytecode::DecodeError, dispatch::Call, evaluate::error, machine::Machine};
 use std::collections::VecDeque;
 

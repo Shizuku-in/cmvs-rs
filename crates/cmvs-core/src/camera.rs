@@ -1,11 +1,15 @@
-//! Screen cameras at engine +1968 -> +16 and +24 (0xa0 bytes each, constructor 0x14004fab0);
-//! addresses refer to the documented binary hash. 0x2058..0x205f/0x2066/0x2067/0x209c set
-//! fields of the camera selected by SP-4 (0x140027090), 0x2060..0x2065 the same fields of camera 0
-//! (0x140027070). Fields stay raw words named by offset. The original renderer uses them
-//! for coordinate modes 2/3 (0x140020340 -> 0x14004ef40); the software renderer supports
-//! cameras of type 3 and the hash-bound types 1/2, with screen roll applied by scene_render. 0x2056 queries projected
-//! integer coordinates without rendering. Camera 0 motion supports linear and quadratic
-//! ease-out branches. 0x2126 queries the screen device size at +1968 -> +8.
+//! Camera state, projection queries, and timed camera movement.
+//!
+//! [`CameraHost`] stores screen cameras and independent device views. Renderers
+//! consume this state through [`crate::scene_render`]; changing a camera does not
+//! draw a frame. Raw camera words preserve fields whose meaning is not yet modeled.
+
+// Screen cameras: engine +1968 -> +16/+24, each 0xa0 bytes; constructor 0x14004fab0.
+// 0x2058..0x205f/0x2066/0x2067/0x209c select by SP-4 (0x140027090);
+// 0x2060..0x2065 select camera 0 (0x140027070). Modes 2/3 render through
+// 0x140020340 -> 0x14004ef40. Supported types are 3 and hash-bound variants 1/2.
+// 0x2056 queries projected coordinates; 0x2126 reads device size at +1968 -> +8.
+// Camera 0 motion covers linear and quadratic ease-out; scene_render applies roll.
 use crate::{
     bytecode::DecodeError,
     dispatch::{Call, Flow},
@@ -23,6 +27,10 @@ pub const CAMERA_WORDS: usize = 40;
 /// Word index of +84, set while an eased move runs (0x14004f5b0..0x14004f9a0).
 const MOVING: usize = 21;
 
+/// One screen camera stored as raw words for lossless state and snapshot handling.
+///
+/// [`Self::float`] interprets a word as `f32` bits. Use [`CameraHost`] for command
+/// handling and projection queries rather than assuming every word is a float.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Camera {
     pub words: [u32; CAMERA_WORDS],

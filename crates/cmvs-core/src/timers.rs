@@ -1,5 +1,11 @@
-//! Ten cumulative VM timers at engine +14748 (snapshot record 0x109), and the
-//! independent 0x200e/0x200f stopwatch at +0x4160.
+//! Cumulative VM timers and an independent stopwatch.
+//!
+//! [`VmTimers`] consumes elapsed milliseconds when a VM run begins. Hosts using
+//! [`crate::runner::Startup`] pass frame time to its `advance_frame` or
+//! `advance_decoded_frame` method once per frame.
+
+// Ten cumulative VM timers at engine +14748 (snapshot record 0x109), and the
+// independent 0x200e/0x200f stopwatch at +0x4160.
 use crate::{bytecode::DecodeError, dispatch::Call, machine::Machine};
 
 pub const TIMER_SLOTS: usize = 10;

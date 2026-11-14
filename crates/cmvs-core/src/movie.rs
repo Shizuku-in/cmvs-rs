@@ -1,14 +1,16 @@
-//! Movie sources, shared host and scene-player persistence.
+//! Full-screen and scene-bound movie playback.
 //!
-//! Full-screen CMV and MGV player commands/timing live in `cmv_player` and `mgv_player`.
-//! Scene segment playback lives in `playback`.
-//!
-//! Engine +4480 holds three scene players. 0x2308 creates a stopped CMV6/CMV9 player and
-//! initializes its bound scene object; 0x230a destroys the player, retaining that image.
-//! 0x2309 starts default-mode segment playback and 0x231a queries whether a player is
-//! active; 0x230b/0x230c resume/pause while retaining the frame. Inspected legacy
-//! variants additionally query segments/frames, seek, apply queued segments, and
-//! select mode 0/10 or a stop frame. NATSUUTA alone adds clock-driven mode 15.
+//! [`MovieHost`] combines container access, frame timing, and scene-player state.
+//! [`MovieSource`] supplies files and decoded CMV frames; MGV playback requires a
+//! [`DecoderFactory`](crate::mgv::DecoderFactory). Audio output is provided separately
+//! through [`crate::audio::AudioBackend`].
+
+// Full-screen players use `cmv_player`/`mgv_player`; scene segments use `playback`.
+// Engine +4480 holds three scene players. 0x2308 creates a stopped CMV6/CMV9 player
+// and initializes its scene image; 0x230a destroys the player but retains the image.
+// 0x2309 starts default-mode segments; 0x231a queries activity; 0x230b/0x230c resume/pause.
+// Reviewed legacy variants add segment/frame queries, seek, queued segments, modes 0/10,
+// and a stop frame. NATSUUTA additionally supports clock-driven mode 15.
 use crate::filesystem::File;
 use crate::{
     audio::MovieAudioClock, bytecode::DecodeError, cmv::CmvIndex, dispatch::Call, evaluate::error,

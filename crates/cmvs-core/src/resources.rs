@@ -1,5 +1,10 @@
-//! Bounded read-only directory/CPZ lookup shared by image and audio backends.
-//! Slot order, case folding, checksums and path confinement follow the existing reader.
+//! Shared resource lookup across registered directories and CPZ archives.
+//!
+//! Create [`ResourceArchives`] for a game root, then use [`ResourceArchives::with_paths`]
+//! to bind one [`ResourceKind`] to its registered slots. The returned
+//! [`RegisteredResources`] implements [`ResourceSource`]. Slots are searched in order:
+//! the first hit wins, a missing file is `Ok(None)`, and malformed data or I/O failures
+//! are errors. Paths must stay inside the game root.
 use crate::filesystem as fs;
 use crate::filesystem::File;
 use crate::{
@@ -14,19 +19,26 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// Verified engine registration families. Images have ten slots; SE/BGM have four.
+/// Resource families with independent registration slots and archive caches.
+///
+/// Images have ten slots; each other family has four.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceKind {
+    /// Scene and interface images.
     Image,
+    /// Short sound effects.
     SoundEffect,
+    /// Background music.
     Music,
-    /// Engine +4808, registered by 0x2014 (0x140071b30); the same 0x2820-byte list class as
-    /// the sound-effect (+4792) and music (+4800) roots.
+    // Engine +4808, registered by 0x2014 (0x140071b30); 0x2820-byte list class.
+    /// Spoken dialogue audio.
     Voice,
-    /// Engine +4824, 0x201a / 0x140071c40; four directory/archive registrations.
+    // Engine +4824, 0x201a / 0x140071c40.
+    /// Movies bound to scene objects.
     SceneMovie,
 }
 impl ResourceKind {
+    /// System command that registers paths for this family.
     pub const fn command(self) -> u16 {
         match self {
             Self::Image => 0x2011,
@@ -44,6 +56,7 @@ impl ResourceKind {
             _ => &[],
         }
     }
+    /// Number of slots in the family's primary registration table.
     pub const fn slot_count(self) -> u32 {
         match self {
             Self::Image => 10,
@@ -51,6 +64,7 @@ impl ResourceKind {
         }
     }
 }
+/// Read raw resource bytes by their encoded resource name.
 pub trait ResourceSource {
     /// Return the first hit, None for missing resources, or an explicit format/I/O error.
     fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>>;
@@ -62,8 +76,11 @@ struct OpenArchive {
     index: ArchiveIndex,
 }
 
-/// Archives open lazily per entry slot. A slot registered again with another path is
-/// reopened, as 0x140035b00 destroys the old archive object.
+/// Read-only resource access rooted in one game directory.
+///
+/// Archives open lazily and are cached by family and slot. Changing a registered
+/// path or its CPZ7 parameters invalidates the cached archive for that slot.
+// 0x140035b00 destroys the old archive object when a slot path changes.
 pub struct ResourceArchives {
     root: PathBuf,
     open: BTreeMap<(u16, u32), OpenArchive>,
@@ -71,6 +88,9 @@ pub struct ResourceArchives {
 }
 
 impl ResourceArchives {
+    /// Canonicalize an existing game directory without opening any archives.
+    ///
+    /// Returns an error if the root cannot be resolved or is not a directory.
     pub fn new(root: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
         let root = fs::canonicalize(root.as_ref())?;
         if !fs::is_dir(&root) {
@@ -90,7 +110,11 @@ impl ResourceArchives {
         self.parameters.clone_from(parameters);
     }
 
-    /// Bind the explicit registrations for one engine resource family.
+    /// Bind one resource family to a view of the current path registrations.
+    ///
+    /// `paths` maps `(registration command, slot)` to a game-relative path. The
+    /// view borrows both the cache and the table; use [`ResourceSource::read`]
+    /// to search it. Binding alone performs no I/O.
     pub fn with_paths<'a>(
         &'a mut self,
         paths: &'a BTreeMap<(u16, u32), Vec<u8>>,
@@ -175,6 +199,7 @@ fn resolve_present(root: &Path, name: &[u8]) -> Result<Option<PathBuf>, Box<dyn 
     }
 }
 
+/// A borrowed resource-family view returned by [`ResourceArchives::with_paths`].
 pub struct RegisteredResources<'a> {
     archives: &'a mut ResourceArchives,
     paths: &'a BTreeMap<(u16, u32), Vec<u8>>,

@@ -9,6 +9,11 @@ struct ImageData {
     opaque: OnceLock<bool>,
 }
 
+/// Immutable top-down RGBA pixels with straight (unpremultiplied) alpha.
+///
+/// Rows have no padding and each pixel has four bytes in red, green, blue, alpha
+/// order. Clones share pixel storage. Dimensions and storage are validated by
+/// [`Self::new`].
 #[derive(Clone)]
 pub struct RgbaImage {
     width: u32,
@@ -90,6 +95,18 @@ impl RgbaImage {
         }
     }
 
+    /// Create an image from exactly `width * height * 4` bytes.
+    ///
+    /// Rejects zero dimensions, incorrect byte lengths, and images exceeding
+    /// [`MAX_PAYLOAD`].
+    ///
+    /// ```
+    /// use cmvs_core::raster::RgbaImage;
+    ///
+    /// let image = RgbaImage::new(1, 1, vec![255, 0, 0, 255])?;
+    /// assert_eq!(image.pixels(), &[255, 0, 0, 255]);
+    /// # Ok::<(), cmvs_core::FormatError>(())
+    /// ```
     pub fn new(width: u32, height: u32, pixels: Vec<u8>) -> Result<Self, FormatError> {
         let size = (u64::from(width) * u64::from(height))
             .checked_mul(4)

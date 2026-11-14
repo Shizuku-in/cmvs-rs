@@ -1,6 +1,11 @@
-//! Software presentation of verified static 2D objects, their children, full-screen color
-//! fades, mask transitions and camera projections and strip wipes. Unsupported transforms,
-//! blend modes and unverified solid-color paths fail explicitly.
+//! Scene draw-queue preparation and software rendering.
+//!
+//! Use [`render_scene`] to produce an RGBA frame, or [`prepare_scene`] to obtain a
+//! [`RenderFrame`] for a GPU backend. Both paths share object ordering and layer
+//! preparation. Pass host-generated glyph and window objects as additional objects.
+//!
+//! Invalid dimensions and unsupported transforms or effect combinations return
+//! [`FormatError`] during queue preparation.
 use crate::{
     FormatError, MAX_PAYLOAD,
     camera::CameraHost,
@@ -880,7 +885,7 @@ pub fn render(scene: &SceneHost, width: u32, height: u32) -> Result<RgbaImage, F
     render_scene(scene, None, &[], width, height)
 }
 
-/// `render` with additional objects; see `render_scene`.
+/// Render a scene with extra objects and no camera state; see [`render_scene`].
 pub fn render_with_objects(
     scene: &SceneHost,
     additional: &[&SceneObject],
@@ -890,10 +895,13 @@ pub fn render_with_objects(
     render_scene(scene, None, additional, width, height)
 }
 
-/// Additional objects (e.g. a backend's glyph images and message windows) join the
-/// same stable layer queue before the fade. Their order breaks ties after slot objects.
-/// 0x140015fc0 draws camera 0/1's queues 2/6 before queue 3, which holds the 2D
-/// objects, windows, glyphs and the fade, so projected objects lie beneath all of them.
+/// Render a scene, optional cameras, and host-supplied objects to an RGBA frame.
+///
+/// `width` and `height` are logical output pixels. `additional` objects, such as
+/// message windows and glyph images, join the stable layer queue before the fade;
+/// their input order breaks ties after ordinary slot objects. Projected objects
+/// require camera state. Invalid dimensions or unsupported draw state return errors.
+// 0x140015fc0 draws camera 0/1's queues 2/6 before the 2D queue 3.
 pub fn render_scene(
     scene: &SceneHost,
     cameras: Option<&CameraHost>,

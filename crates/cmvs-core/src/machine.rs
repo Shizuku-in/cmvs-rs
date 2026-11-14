@@ -1,4 +1,13 @@
-//! Bounded multi-slot stepping. Unimplemented host commands remain pending.
+//! Run scripts one instruction at a time.
+//!
+//! Create a [`Machine`] from a decoded [`Script`], then call [`Machine::step`].
+//! [`Step::System`] leaves a command pending for the caller to handle. Ordinary
+//! commands finish through [`Machine::complete_system`]; script transfers use
+//! dedicated control methods. [`Step::Yield`] returns control to the host.
+//!
+//! This layer does not identify games, load resources, or initialize a full session.
+//! Use [`crate::runner::Startup`] for those services. Reading an uninitialized
+//! variable or executing an unsupported instruction produces [`DecodeError`].
 use crate::{
     bytecode::{self, DecodeError, Expression, Instruction, InstructionKind, Term},
     evaluate::{Env, Frame, Journal, State, error},
@@ -105,13 +114,27 @@ pub(crate) struct RestoredVm<'a> {
     cross_calls: Vec<u8>,
 }
 
+/// Execution outcome of [`Machine::step`] or a completed system command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
+    /// The host may execute another instruction within its budget.
     Continue,
+    /// The script yielded to the host's frame loop.
     Yield,
-    System { pc: usize, command: u16 },
+    /// A system command needs a handler and remains pending.
+    System {
+        /// Byte offset in the active script's code segment.
+        pc: usize,
+        /// Runtime command number; add `0x2000` to obtain the system opcode.
+        command: u16,
+    },
 }
 
+/// A script VM with value state, a parameter stack, and script slots.
+///
+/// Borrows the initial [`Script`]. Construction decodes its instruction layout;
+/// globals remain unknown until initialized. Engine profile setup and system-command
+/// gating are the caller's responsibility at this layer.
 pub struct Machine<'a> {
     text_encoding: crate::TextEncoding,
     images: BTreeMap<u8, Image<'a>>,
@@ -128,23 +151,32 @@ pub struct Machine<'a> {
 }
 
 impl<'a> Machine<'a> {
+    /// Create a VM at the script's entry point using Shift-JIS text.
+    ///
+    /// Returns an error for an invalid instruction layout or entry point.
     pub fn new(script: &'a Script) -> Result<Self, DecodeError> {
         Self::at(script, script.header.entry_pc)
     }
-    /// An alternate entry is for isolated research, not an initialized game snapshot.
+    /// Create a VM at a byte offset in the code segment, using Shift-JIS text.
+    ///
+    /// This does not restore the state that would normally exist at that entry.
     pub fn at(script: &'a Script, entry: u32) -> Result<Self, DecodeError> {
         Self::at_with_encoding(script, entry, crate::TextEncoding::default())
     }
-    /// Select the engine text scanner; archive names and keys keep their resource encoding.
+    /// Create a VM at the script's entry point with the given text encoding.
+    ///
+    /// Archive names and keys keep their resource encoding.
     pub fn new_with_encoding(
         script: &'a Script,
         encoding: crate::TextEncoding,
     ) -> Result<Self, DecodeError> {
         Self::at_with_encoding(script, script.header.entry_pc, encoding)
     }
+    /// Text encoding used by this VM.
     pub fn text_encoding(&self) -> crate::TextEncoding {
         self.text_encoding
     }
+    /// Create a VM at a byte offset in the code segment, with the given text encoding.
     pub fn at_with_encoding(
         script: &'a Script,
         entry: u32,
@@ -165,6 +197,7 @@ impl<'a> Machine<'a> {
             command_map: None,
         })
     }
+    /// Current byte offset in the active script's code segment.
     pub fn pc(&self) -> usize {
         self.pc
     }
@@ -644,6 +677,11 @@ impl<'a> Machine<'a> {
         Ok(())
     }
 
+    /// Execute one instruction, or return the command already awaiting completion.
+    ///
+    /// A pending [`Step::System`] is returned unchanged until handled. This call
+    /// does not advance frame time or limit the total number of instructions;
+    /// callers must impose their own execution budget.
     pub fn step(&mut self) -> Result<Step, DecodeError> {
         if let Some((pc, command)) = self.pending {
             return Ok(Step::System { pc, command });
@@ -892,8 +930,11 @@ impl<'a> Machine<'a> {
         Ok(())
     }
 
-    /// Resume an ordinary command after a host has explicitly implemented its effect.
-    /// Script transfer requires its own future API; zero flags cannot be used to skip it.
+    /// Complete a pending ordinary system command after its effect has been applied.
+    ///
+    /// Applies `flags` to stack cleanup, PC advancement, and yield state. Returns
+    /// an error if no command is pending or the flags request a retry or script
+    /// transfer that needs a dedicated control API.
     pub fn complete_system(&mut self, flags: SystemResult) -> Result<Step, DecodeError> {
         let (pc, command) = self
             .pending

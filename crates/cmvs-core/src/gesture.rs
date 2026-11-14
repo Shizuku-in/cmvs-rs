@@ -1,8 +1,13 @@
-//! Engine +4664 pointer drag/flick recognizer (constructor 0x1400533d0). Scripts configure
-//! it (0x2350..0x2364, plus six region records through 0x2366) and query the per-frame
-//! hold result (0x2362). The frame update
-//! 0x140054a60 runs mode 0 (0x140053930) or region drag mode 1 (0x1400541a0).
-//! Mode 2 (0x140054570) remains a barrier. Fields stay named by offset.
+//! Pointer drag and flick recognition over frame-level input.
+//!
+//! [`PointerGesture`] tracks script-configured regions and reports held or released
+//! movements. Feed it logical pointer coordinates through [`crate::input::ActionInput`].
+//! Unimplemented gesture modes return errors.
+
+// Engine +4664; constructor 0x1400533d0. Commands 0x2350..0x2364 configure
+// and query gestures; 0x2366 sets six regions; 0x2362 queries the hold result.
+// Frame update 0x140054a60 runs mode 0 (0x140053930) or region drag mode 1
+// (0x1400541a0). Mode 2 (0x140054570) is unimplemented; fields retain offset names.
 use crate::{bytecode::DecodeError, dispatch::Call, input::ActionInput, machine::Machine};
 use std::collections::BTreeMap;
 mod drag;

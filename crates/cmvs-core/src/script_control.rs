@@ -1,5 +1,9 @@
-//! Public script initialization and explicit cross-script control.
-//! No save snapshot, callback scheduling, rendering, or filesystem search policy.
+//! Script loading, cross-script calls, and callback scheduling.
+//!
+//! [`ScriptControl`] manages script registrations and scheduled callback entry points.
+//! [`ArchiveScripts`] supplies scripts from the registered archive. The runtime
+//! coordinates these operations through [`crate::runner::Startup`]; rendering and
+//! save-snapshot orchestration remain separate.
 use crate::{
     cpz::{ArchiveIndex, Cpz7Parameters},
     dispatch::Call,

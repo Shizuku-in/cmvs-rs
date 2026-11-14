@@ -1,4 +1,8 @@
-//! Engine +4616 full-screen color fade; addresses refer to the documented binary hash.
+//! Full-screen color fades and input-aware effect skipping.
+//!
+//! Fade state advances with frame time and is consumed by [`crate::scene_render`].
+
+// Engine +4616 holds the full-screen color fade.
 use crate::{
     bytecode::DecodeError,
     dispatch::{Call, Flow},

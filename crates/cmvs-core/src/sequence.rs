@@ -1,7 +1,11 @@
-//! Engine +4736: a timed action sequence (0x614-byte buffer from 0x140014270: a five-word
-//! header plus 16 entries of 96 bytes) that the frame update 0x140015900 runs through
-//! 0x140014b10; addresses refer to the documented binary hash. Wait entries and their
-//! start/stop/finish lifecycle, image replacement and XYZ motion entries are modeled; other actions stay unhandled.
+//! Timed action sequences for waits, image replacement, and scene movement.
+//!
+//! [`SequenceHost`] advances supported actions with frame time and coordinates
+//! input-based skipping. Unsupported action kinds remain unhandled.
+
+// Engine +4736: a 0x614-byte buffer allocated by 0x140014270, with a five-word
+// header and sixteen 96-byte entries. Frame update 0x140015900 calls 0x140014b10.
+// Modeled actions cover wait lifecycle, image replacement, and XYZ motion.
 use crate::{
     camera::CameraHost, dispatch::Call, evaluate::error, image::ImageSource, machine::Machine,
     message::MessageHost, scene::SceneHost,

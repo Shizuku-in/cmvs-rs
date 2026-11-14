@@ -1,7 +1,14 @@
-//! Engine +11104..+11128: the screen capture requested by 0x2304, taken when the next
-//! frame draw ends (0x1400157b0, the last step of 0x140015fc0) and handed to a scene object
-//! by 0x203c. 0x203e instead reads the backend's current completed device frame without
-//! consuming this held image or its pending request. Addresses bind the documented hash.
+//! Deferred screenshots retained for use as scene images.
+//!
+//! [`ScreenCapture`] records a request, accepts the completed frame, and retains
+//! it until released. [`crate::runner::Startup`] renders supported captures in
+//! software or accepts a host-rendered frame at logical screen size. Immediate
+//! readback uses [`crate::platform::PlatformBackend::read_device_frame`].
+
+// Engine +11104..+11128: the screen capture requested by 0x2304, taken when the next
+// frame draw ends (0x1400157b0, the last step of 0x140015fc0) and handed to a scene object
+// by 0x203c. 0x203e instead reads the backend's current completed device frame without
+// consuming this held image or its pending request. Addresses bind the documented hash.
 use crate::{
     bytecode::DecodeError,
     dispatch::Call,

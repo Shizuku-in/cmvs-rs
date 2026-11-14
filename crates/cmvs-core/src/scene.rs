@@ -52,7 +52,8 @@ impl ClearState {
     }
 }
 
-/// Object +6176 after a successful 0x2030 (image object built by 0x14002fd00).
+// Object +6176 after a successful 0x2030 (image object built by 0x14002fd00).
+/// Image pixels, source identity, and properties attached to a scene object.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectImage {
     /// Image +1200 enables the mode/color/extra words at +1204..+1212.
@@ -292,7 +293,11 @@ impl ObjectImage {
     }
 }
 
-/// A 0x38c8-byte object freshly built by 0x14003a3c0, including 768 child pointers.
+// A 0x38c8-byte object freshly built by 0x14003a3c0, including 768 child pointers.
+/// A drawable scene object with an optional image, children, and effect state.
+///
+/// Owned by [`SceneHost`] or a message window. Renderers read its current state;
+/// advancing it does not draw or allocate a device texture.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SceneObject {
     /// Optional +6208 collision vertex buffer, in raw f32 words; triples form triangles.
@@ -400,11 +405,25 @@ impl Default for SceneObject {
     }
 }
 
-/// Draw fields retained as original words (offset / 4). Unimplemented setters stay pending.
-/// 0=coordinate mode, 1=blend, 2..6=source x/y/width/height, 6..8=origin,
-/// 8..10=position, 10=order, 11..14=world x/y/z float bits (0x2072..0x2074),
-/// 15/16=camera projection parameter bits (0x2070/0x2071),
-/// 17=opacity, 18/19=scale bits, 20=rotation, 21=fade factor.
+/// Drawing properties and active animation tracks for a scene object.
+///
+/// Raw values in [`Self::words`] preserve the engine representation. Index ranges
+/// below exclude their upper bound; entries described as float bits use `f32::from_bits`.
+///
+/// | Indices | Meaning |
+/// |---|---|
+/// | 0, 1 | Coordinate mode, blend mode |
+/// | 2..6 | Source rectangle: x, y, width, height |
+/// | 6..8 | Origin x, y |
+/// | 8..10 | Position x, y |
+/// | 10 | Layer order |
+/// | 11..14 | World x, y, z as float bits |
+/// | 15, 16 | Camera projection parameters as float bits |
+/// | 17 | Opacity |
+/// | 18, 19 | Scale x, y as float bits |
+/// | 20, 21 | Rotation, fade factor |
+// Original fields are addressed by byte offset / 4; world XYZ: 0x2072..0x2074,
+// projection parameters: 0x2070/0x2071. Unimplemented setters stay pending.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DrawState {
     pub words: [u32; 22],
@@ -477,6 +496,10 @@ impl DrawState {
     }
 }
 
+/// Scene-object slots, retained transitions, and effects updated by script commands.
+///
+/// Read this state with [`crate::scene_render`] or a host renderer. It does not own
+/// a graphics device. Frame progression is coordinated by [`crate::runner::Startup`].
 #[derive(Debug, Default)]
 pub struct SceneHost {
     child_slots: ChildSlots,

@@ -1,5 +1,8 @@
-//! Conservative structural decoding, verified against one Amatsutsumi x64 build.
-//! This is linear disassembly, not control-flow execution or a complete CMVS VM.
+//! Decode script instructions and expressions without executing them.
+//!
+//! Use [`decode_at`] for one instruction or [`decode_layout`] for a complete code
+//! segment with entry and label checks. Offsets are bytes within [`crate::ps3::Script::code`].
+//! Decoding validates structure, not reachability, stack state, or runtime support.
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,8 +1,15 @@
-//! PS2A containers, including files using the .ps3 extension, and the CVNS-era
-//! PSS0 container (.pss): the same header and segments with an untransformed payload.
-//! Text is deliberately exposed as bytes: the script header does not identify its encoding.
+//! Script containers and decoded label, code, data, and text segments.
+//!
+//! [`Script::decode`] accepts PS2A (`.ps2`/`.ps3`) and CVNS-era PSS0 (`.pss`) files.
+//! It validates segment bounds and decompresses the payload without executing code.
+//! Use [`crate::bytecode`] to inspect instructions or [`crate::runner`] to run a game.
+//!
+//! Text remains encoded bytes because the header does not identify its encoding.
+//! [`Script::from_memory_image`] reads an already-decoded save image; it must not be
+//! given an ordinary packed script file.
 use crate::{FormatError, MAX_PAYLOAD, lzss};
 
+/// Size of the on-disk and memory-image script header, in bytes.
 pub const HEADER_SIZE: usize = 48;
 
 /// Which container a script came from. PSS0 stores zero in the two fields PS2A
@@ -22,6 +29,7 @@ impl Container {
     }
 }
 
+/// Script container metadata; sizes and entry offsets are measured in bytes.
 #[derive(Debug, Clone)]
 pub struct Header {
     pub container: Container,
@@ -45,6 +53,9 @@ fn u32_at(data: &[u8], at: usize) -> Result<u32, FormatError> {
 }
 
 impl Header {
+    /// Parse the fixed header without decompressing or validating payload segments.
+    ///
+    /// Returns an error for an unknown signature or an invalid header length.
     pub fn parse(raw: &[u8]) -> Result<Self, FormatError> {
         let container = match raw.get(..4) {
             Some(b"PS2A") => Container::Ps2a,
@@ -80,22 +91,33 @@ impl Header {
     }
 }
 
+/// A validated script container with an owned, decoded payload.
+///
+/// Access [`Self::code`], [`Self::unknown`], and [`Self::text`] for the individual
+/// segments. VM execution keeps its own mutable copy of the data segment.
 #[derive(Debug, Clone)]
 pub struct Script {
+    /// Original header fields, including the container's packed-size metadata.
     pub header: Header,
     payload: Vec<u8>,
+    /// Number of bytes after the declared compressed payload; zero for uncompressed input.
     pub trailing_file_bytes: usize,
 }
 
+/// A nonempty string borrowed from a script's decoded text segment.
 #[derive(Debug, PartialEq, Eq)]
 pub struct TextEntry<'a> {
+    /// Byte offset relative to the start of the text segment.
     pub offset: usize,
+    /// Text in the game's encoding, without the NUL terminator.
     pub bytes: &'a [u8],
 }
 
 impl Script {
-    /// Already-decoded PS2A memory image from CSV2 section 2. The original key and
-    /// packed-size fields remain in the header; do not decrypt or decompress again.
+    /// Read an already-decoded script memory image from a gameplay save.
+    ///
+    /// CSV2 section 2 retains the original header key and packed-size fields, but
+    /// its payload must not be decrypted or decompressed again.
     pub fn from_memory_image(raw: &[u8]) -> Result<Self, FormatError> {
         let header = Header::parse(raw)?;
         let total = header.segment_size();
@@ -125,8 +147,10 @@ impl Script {
         Ok(script)
     }
 
-    /// Inverse of `from_memory_image` (CSV2 section 2, engine +16592): the header fields as
-    /// loaded, then the decoded payload with `data` as the mutable segment.
+    /// Serialize a save memory image using `data` as the current mutable segment.
+    ///
+    /// Inverse of [`Self::from_memory_image`]. `data` must match the original data
+    /// segment's byte length. The original header fields are preserved.
     pub fn memory_image(&self, data: &[u8]) -> Result<Vec<u8>, FormatError> {
         if data.len() != self.header.unknown_size as usize {
             return Err(FormatError("script data length differs from its segment"));
@@ -164,6 +188,11 @@ impl Script {
         Ok(())
     }
 
+    /// Decode an on-disk script and validate segment sizes, entry point, and labels.
+    ///
+    /// Applies the container's byte transform and LZSS decompression when needed.
+    /// Returns an error for malformed, truncated, or oversized data. Instruction
+    /// decoding is a separate step performed by [`crate::bytecode`].
     pub fn decode(raw: &[u8]) -> Result<Self, FormatError> {
         let header = Header::parse(raw)?;
         let total = header.segment_size();
@@ -219,10 +248,12 @@ impl Script {
         Ok(script)
     }
 
+    /// Complete decoded payload, beginning with the label table.
     pub fn payload(&self) -> &[u8] {
         &self.payload
     }
 
+    /// Label targets as byte offsets into [`Self::code`].
     pub fn labels(&self) -> Vec<u32> {
         self.payload[..self.code_start()]
             .as_chunks::<4>()
@@ -236,21 +267,27 @@ impl Script {
         self.header.label_count as usize * 4
     }
 
+    /// Encoded VM instructions, without the container header or label table.
     pub fn code(&self) -> &[u8] {
         &self.payload[self.code_start()..self.code_start() + self.header.code_size as usize]
     }
 
+    /// Initial mutable data segment, historically named `unknown` in this API.
     pub fn unknown(&self) -> &[u8] {
         let start = self.code_start() + self.header.code_size as usize;
         &self.payload[start..start + self.header.unknown_size as usize]
     }
 
+    /// Raw text segment, including NUL terminators.
     pub fn text(&self) -> &[u8] {
         let start =
             self.code_start() + self.header.code_size as usize + self.header.unknown_size as usize;
         &self.payload[start..]
     }
 
+    /// Split the text segment into nonempty entries without decoding their encoding.
+    ///
+    /// Returns an error if the last entry has no NUL terminator.
     pub fn strings(&self) -> Result<Vec<TextEntry<'_>>, FormatError> {
         let mut entries = Vec::new();
         let mut offset = 0;

@@ -1,4 +1,47 @@
-//! Platform-independent CMVS formats, VM, scene and backend contracts. No dependencies.
+//! CMVS resource formats, script execution, and host interfaces.
+//!
+//! Choose an entry point by task:
+//!
+//! | Task | Start here |
+//! |---|---|
+//! | Inspect or extract an archive | [`cpz::ArchiveIndex`] |
+//! | Read a script or disassemble instructions | [`ps3::Script`], [`bytecode`] |
+//! | Decode an image | [`pb3::decode`], [`image::load`] |
+//! | Identify a game and run it | [`profile::Registry`], [`runner::Startup`] |
+//! | Execute individual VM instructions | [`machine::Machine`] |
+//! | Implement a window, input, or output backend | [`platform::PlatformBackend`], [`input`], [`audio::AudioBackend`] |
+//! | Render engine state | [`scene_render`], [`raster::RgbaImage`] |
+//! | Inspect save data | [`save`], [`system_save`], [`snapshot`] |
+//!
+//! # Inspect a script
+//!
+//! ```no_run
+//! use cmvs_core::ps3::Script;
+//!
+//! let bytes = std::fs::read("data/pack/start.ps3")?;
+//! let script = Script::decode(&bytes)?;
+//! println!("entry: {}, code bytes: {}", script.header.entry_pc, script.code().len());
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! Script text remains encoded bytes. Select [`TextEncoding`] when executing or
+//! displaying text; resource names keep their own lookup rules.
+//!
+//! # Running and hosting
+//!
+//! Use [`runner::Startup`] to run an identified game in a host's frame loop. It
+//! combines the selected profile, VM, resources, and engine state. Use
+//! [`machine::Machine`] for individual VM steps and handle system commands yourself.
+//!
+//! The host supplies windows, graphics devices, and audio output. Desktop builds
+//! of the core use only the standard library. Android and browser builds add
+//! dependencies for their filesystem adapters.
+//!
+//! # Errors and support
+//!
+//! Format readers validate bounds and return [`FormatError`] or format-specific errors.
+//! Execution support depends on the selected engine profile: parsing a resource does
+//! not imply that every command or effect used by its game is implemented.
 pub mod audio;
 pub mod bootstrap;
 pub mod buttons;
@@ -55,6 +98,9 @@ pub mod vm;
 
 use std::fmt;
 
+/// A format validation failure, with a short description of the failed check.
+///
+/// Includes malformed, unsupported, and oversized data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FormatError(pub &'static str);
 
@@ -66,8 +112,9 @@ impl fmt::Display for FormatError {
 
 impl std::error::Error for FormatError {}
 
-/// A research-tool allocation bound, not an inferred engine format limit.
+/// Maximum payload accepted by bounded readers, in bytes (64 MiB).
+///
+/// This is an allocation policy, not an on-disk format limit or a process memory budget.
 pub const MAX_PAYLOAD: usize = 64 * 1024 * 1024;
 
-/// Host filesystem adapter; native builds retain standard filesystem semantics.
 pub mod filesystem;

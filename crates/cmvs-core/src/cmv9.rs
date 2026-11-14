@@ -1,5 +1,9 @@
-//! CMV9 scene movies with a static MCU bitmap and independently decoded dynamic blocks.
-//! Evidence: hash-bound 0x140039c90, 0x1400388c0, 0x140038640 and 0x1400b19c0.
+//! CMV9 scene movies with a shared background and per-frame dynamic blocks.
+//!
+//! The decoder reconstructs frames from the static bitmap and independently
+//! coded blocks. Playback timing belongs to [`crate::movie`].
+
+// Evidence: hash-bound 0x140039c90, 0x1400388c0, 0x140038640, and 0x1400b19c0.
 use crate::{FormatError, MAX_PAYLOAD, cmv::CmvEntry, jbpd, raster::RgbaImage};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

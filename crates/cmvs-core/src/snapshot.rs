@@ -1,5 +1,11 @@
-//! Engine save snapshot (0x140069270): record framing and its verified live-state effect.
-//! Captures use the supported record layouts; skipped captures are tracked as unavailable.
+//! Engine-state snapshot records for gameplay saves.
+//!
+//! Snapshot capture and restoration cover the implemented record layouts. A decoded
+//! [`crate::save`] container alone is not a restored runtime; [`crate::runner::Startup`]
+//! coordinates live-state changes and snapshot policy.
+
+// Capture follows 0x140069270 record framing and its verified live-state effect.
+// Skipped captures are marked unavailable.
 use crate::{
     FormatError, bytecode::DecodeError, dispatch::Call, evaluate::error, machine::Machine,
 };

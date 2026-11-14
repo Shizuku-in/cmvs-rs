@@ -1,6 +1,14 @@
-//! Engine profiles: which analysed CMVS build supplies the semantics for a run.
-//! A profile covers one build (its x86/x64 executables); game records map data files to it.
-//! Selection never defaults; the command gate rejects absent and unreviewed commands.
+//! Game identification, engine-build profiles, and command authorization.
+//!
+//! Start with [`Registry::builtin`] and [`Registry::identify_game`] to match a game
+//! directory to a known build. [`Game`] contains the selected profile and resource
+//! paths needed by [`crate::runner::Startup`]. An unknown game is an error unless
+//! the caller explicitly selects a profile.
+//!
+//! [`CommandGate`] checks system commands before dispatch. Absent and no-op commands
+//! are rejected; unreviewed and presumed commands are allowed by default and can be
+//! blocked through the gate policy. Authorization does not imply a handler exists
+//! or that a complete game has been validated.
 mod contract;
 mod gate;
 mod select;
@@ -694,6 +702,10 @@ impl fmt::Display for ProfileError {
 
 impl std::error::Error for ProfileError {}
 
+/// Engine profiles, game identities, and reviewed command-contract proofs.
+///
+/// Use [`Self::builtin`] for the embedded registry or [`Self::parse`] for explicit
+/// registry text. [`Self::identify_game`] reads evidence without executing the game.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Registry {
     profiles: Vec<EngineProfile>,

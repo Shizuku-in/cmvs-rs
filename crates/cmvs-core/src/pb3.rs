@@ -1,6 +1,11 @@
-//! PB3B header, types 1/2/3/5/7 and contextual type-6/8 replacement blocks. Other codecs are
-//! explicitly unsupported. Format reference: pinned MIT CMVS-Engine PB3B.cpp/CPB.cpp/JBP1.cpp;
-//! checked against current IDA.
+//! PB3B image decoding, including images that depend on a reference image.
+//!
+//! Use [`decode`] for self-contained types 1, 2, 3, 5, and 7. Types 6 and 8 need
+//! [`decode_with_base`] or [`crate::image::load`] to supply their reference image.
+//! Unsupported codecs return errors.
+
+// Format reference: pinned MIT CMVS-Engine PB3B.cpp/CPB.cpp/JBP1.cpp;
+// implementation checked against the analyzed binary.
 use crate::{FormatError, MAX_PAYLOAD, image::DecodeThreads, jbp1, raster::RgbaImage};
 use std::ops::Range;
 
@@ -405,6 +410,11 @@ fn decode_jbp1(raw: &[u8], h: &Header) -> Result<RgbaImage, FormatError> {
     RgbaImage::new(u32::from(h.width), u32::from(h.height), pixels)
 }
 
+/// Decode a self-contained PB3B image into top-down RGBA pixels.
+///
+/// Returns an error for malformed input, unsupported codecs, allocation limits,
+/// or contextual types 6/8 that need a reference image. Use [`decode_with_base`]
+/// or [`crate::image::load`] for those types.
 pub fn decode(raw: &[u8]) -> Result<RgbaImage, FormatError> {
     decode_with(raw, DecodeThreads::default())
 }

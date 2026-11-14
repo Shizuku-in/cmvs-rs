@@ -1,9 +1,12 @@
-//! Script-controlled message settings; addresses refer to the documented binary hash.
-//! These live in the +1496 settings block that message objects read (e.g. 0x14005e220).
-//! The two boolean flags are cleared by the constructor/reset/save loading; no
-//! configuration helper writes either boolean. The +1548 mode starts at zero and
-//! 0x140092d40 writes it while selecting popup menu items 0x809d..0x809f.
-//! The bypass flag is engine +12244, outside that block, but read by the same message waits.
+//! Message skipping, auto-advance, and voice-cut settings.
+//!
+//! [`MessageFlags`] stores the runtime settings used by message output and waits.
+//! Physical input is supplied separately through [`crate::input::ActionInput`].
+
+// Settings block +1496 is read by message objects (e.g. 0x14005e220).
+// Constructor/reset/save loading clear both booleans; configuration does not set them.
+// Mode +1548 starts at zero; 0x140092d40 updates it for menu items 0x809d..0x809f.
+// Bypass is engine +12244, outside the settings block but read by the same waits.
 use crate::{bytecode::DecodeError, dispatch::Call, machine::Machine};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]

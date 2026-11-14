@@ -1,6 +1,10 @@
-//! MSVC CRT rand() (statically linked at 0x1400c77b4): LCG 214013/2531011 with 15-bit output.
-//! The original seeds it from timeGetTime and also draws once per main-loop frame, so values are
-//! reproducible only through an explicit research seed; the generator and command semantics match.
+//! Deterministic MSVC-compatible pseudo-random values and VM commands.
+//!
+//! Choose an explicit seed for repeatable runs. The runtime also advances the
+//! generator per frame, so instruction order alone does not determine the sequence.
+
+// MSVC CRT rand() at 0x1400c77b4: LCG 214013/2531011 with 15-bit output.
+// The original seeds from timeGetTime and draws once per main-loop frame.
 use crate::{bytecode::DecodeError, dispatch::Call, machine::Machine};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

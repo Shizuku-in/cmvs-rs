@@ -1,6 +1,8 @@
-//! Integer helpers 0x20d0..0x20d3, inline in the system dispatcher (0x140082db4..
-//! 0x140082e7f); addresses refer to the documented binary hash. Arguments are signed and the
-//! result goes to system result 0.
+//! Signed integer utility commands and their VM result values.
+//!
+//! These handlers are used by [`crate::dispatch`]; they do not advance a frame.
+
+// 0x20d0..0x20d3 are inline at 0x140082db4..0x140082e7f and write system result 0.
 use crate::{bytecode::DecodeError, dispatch::Call, machine::Machine};
 
 /// Inspected 2007 0x4454a0 -> 0x4120b0: integer degrees and signed radius;

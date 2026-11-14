@@ -53,6 +53,12 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Test
         run: cargo test --locked
+      - name: API documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          cargo doc --locked --no-deps --lib -p cmvs-core -p cmvs-rs
+          cargo test --locked -p cmvs-core --doc
       - name: Check CPU-only desktop
         run: cargo check --locked -p cmvs-desktop --no-default-features
 

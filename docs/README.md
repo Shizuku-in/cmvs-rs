@@ -8,6 +8,7 @@
 
 ## 开发
 
+- [API 文档](guides/api.md)：生成 HTML 与机器可读的 rustdoc JSON。
 - [架构](architecture.md)与 [Workspace](workspace.md)：模块职责、依赖、feature 和检查命令。
 - [分派开发指南](guides/dispatch.md)：系统命令入口、处理器约定与测试。
 - [引擎档案](design/engine-profiles.md)与[契约比较](design/command-contracts.md)：构建识别、语义证据和命令闸门。

@@ -1,17 +1,21 @@
-//! Message windows; addresses refer to the documented binary hash.
+//! Message windows, text layout, glyph records, and text-output waits.
 //!
-//! Engine +4064 holds eight message window pointers (0x9f0-byte objects, constructor
-//! 0x14005cf70), +4128 twelve text objects (0x250 bytes, constructor 0x14005c550) and +4224
-//! twelve font objects (0x70 bytes, 0x140059990); the engine constructor 0x140014e60 zeroes
-//! all three tables. A window's first word (+0) names its text object, and +2528 caches that
-//! object's pointer. 0x215d/0x2140 create windows and 0x2141 destroys them. 0x2140
-//! (0x140075a50) takes the logical size from the configured research device.
-//! 0x215b and 0x2142..0x2149 set window and text object
-//! fields; 0x2170/0x2171, 0x2178..0x217b, 0x217f and 0x2180..0x2185 drive the window's own
-//! scene object; 0x2190..0x2192 fill its 32 button records and 0x2150 moves the window;
-//! 0x21cf/0x21d0 build frame animations. 0x2100 creates a text object without a window;
-//! 0x2101..0x2113, 0x2114..0x2117 and 0x211e address text objects directly. Glyph records and font/layout metadata live in core; font rasterization
-//! belongs to the desktop backend.
+//! [`MessageHost`] owns window and text-object state. Hosts provide [`GlyphMetrics`]
+//! for layout, then rasterize the resulting [`RecordedGlyph`] records through their
+//! font backend. The core does not create font-device handles or draw glyph pixels.
+//!
+//! [`MessageWindow`] binds a text object to its window image and buttons;
+//! [`TextObject`] stores the text appearance, pen position, and recorded glyphs.
+
+// Engine tables: +4064 has eight 0x9f0-byte windows (constructor 0x14005cf70),
+// +4128 has twelve 0x250-byte texts (0x14005c550), and +4224 has twelve 0x70-byte
+// fonts (0x140059990). Engine constructor 0x140014e60 zeroes all three tables.
+// Window +0 indexes the text table; +2528 caches its pointer.
+// 0x215d/0x2140 create windows; 0x2141 destroys them. 0x2140 (0x140075a50)
+// uses the configured device size. 0x215b and 0x2142..0x2149 set window/text fields.
+// 0x2170/0x2171, 0x2178..0x217b, 0x217f, and 0x2180..0x2185 control window images;
+// 0x2190..0x2192 set button records; 0x2150 moves windows; 0x21cf/0x21d0 set animations.
+// 0x2100 creates standalone text; 0x2101..0x2113, 0x2114..0x2117, and 0x211e modify it.
 use crate::{
     bytecode::DecodeError,
     dispatch::Call,
@@ -34,156 +38,197 @@ pub use auxiliary::{AuxiliaryGlyph, AuxiliaryGlyphAtlas, AuxiliaryText};
 pub use output::RecordedGlyph;
 pub use wait::AutoAdvanceContext;
 
+/// Number of message-window slots.
 pub const MESSAGE_WINDOWS: usize = 8;
-/// Independent +4328/+4392 tables; these slots are not message window indices.
+// Independent +4328/+4392 tables.
+/// Number of auxiliary-text slots, separate from message-window indices.
 pub const AUXILIARY_TEXTS: usize = 8;
-/// Screen info +8/+12 (configuration words 0/1 of every window), which is not modeled; the
-/// research viewport stands in for it, as everywhere else in this project.
+// Screen info +8/+12 (configuration words 0/1 of every window) is not modeled.
+/// Fallback logical screen dimensions used by the research viewport.
 pub const RESEARCH_SCREEN: [u32; 2] = [1280, 720];
+/// Number of independently addressable text-object slots.
 pub const TEXT_OBJECTS: usize = 12;
+/// Maximum number of button records in one message window.
 pub const WINDOW_BUTTONS: usize = 32;
-/// State groups that fit before the hit rectangle in a 76-byte record.
+/// Number of visual-state records stored per window button.
 pub const BUTTON_STATES: usize = 5;
 
-/// One 76-byte record at window +40 + 76 * index; the constructor's memset zeroes it.
+// One 76-byte record at window +40 + 76 * index; the constructor's memset zeroes it.
+/// A window-local button with hit bounds and visual-state records.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct WindowButton {
-    /// Record +0: 0x2192 sets it (0x14005df70); hit testing (0x14005dff0) skips clear records.
+    // Record +0; 0x2192 / 0x14005df70. Clear records are skipped by 0x14005dff0.
+    /// Whether hit testing includes this button.
     pub enabled: bool,
-    /// Record +4 + 12 * state: six 16-bit words per state from 0x2190 (0x14005dee0). Their
-    /// reader is not verified; on the real path they match the button child's source
-    /// rectangle and position.
+    // Record +4 + 12 * state; six u16 words from 0x2190 / 0x14005dee0.
+    /// Raw per-state source-rectangle and position words; their full meaning is unverified.
     pub states: [[u16; 6]; BUTTON_STATES],
-    /// Record +64..+70: hit rectangle x, y, width, height relative to the window position,
-    /// read unsigned by 0x14005dff0 (0x2191 / 0x14005df40).
+    // Record +64..+70; unsigned reads in 0x14005dff0, set by 0x2191 / 0x14005df40.
+    /// Hit rectangle `[x, y, width, height]` relative to the window position.
     pub hit: [u16; 4],
-    /// Record +72 (constructor 0): the visual state 0x2196 (0x140078990) last applied, a u16
-    /// it compares before changing the button child's source rectangle; 0x2197 reports it.
+    // Record +72; constructor 0. 0x2196 / 0x140078990 compares its low u16; 0x2197 queries it.
+    /// Last applied visual state, retained as a raw word.
     pub state_word: u32,
 }
 
-/// Fields 0x14005d3b0 sets from the creating command, plus later setters.
+// Fields 0x14005d3b0 sets from the creating command, plus later setters.
+/// A message window bound to a text object and its scene image.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageWindow {
-    /// +0: index into the text object table.
+    // +0.
+    /// Index of the associated text object.
     pub text: usize,
-    /// +4 (constructor 0): shown, toggled by 0x214e.
+    // +4; constructor 0, toggled by 0x214e.
+    /// Whether the window is enabled for display.
     pub visible: bool,
-    /// +8 (constructor 0): hidden for a while although shown (0x214c / 0x14005dbc0), which
-    /// hides the text and +2520 objects; 0x214d reports it and 0x214e clears it.
+    // +8; 0x214c / 0x14005dbc0 sets it, 0x214d queries it, 0x214e clears it.
+    /// Temporarily suppress the text and window object while retaining `visible`.
     pub hidden: bool,
-    /// +12/+16, the current position.
+    // +12/+16.
+    /// Current window position `[x, y]`.
     pub position: [i32; 2],
-    /// The positions 0x14005de50 switches between: [0] = +2480/+2484 (switch state 0, also
-    /// moved by 0x2150) and [1] = +2472/+2476 (state 1). Creation sets both to `position`.
+    // 0x14005de50: index 0 is +2480/+2484 (also set by 0x2150); index 1 is +2472/+2476.
+    /// Two target positions for position switching, initially equal to `position`.
     pub switch_positions: [[i32; 2]; 2],
-    /// +20/+24.
+    // +20/+24.
+    /// Window dimensions `[width, height]` in logical pixels.
     pub size: [i32; 2],
-    /// +28 (0x2151, zeroed by the constructor): wait cursor mode. With 3, the window updates
-    /// 0x14005e220/0x14005d4e0 place children 2 and 3 at the text pen plus `cursor_offset`;
-    /// no reader treats the other modes specially.
+    // +28; 0x2151, constructor 0. Mode 3 updates children 2/3 via 0x14005e220 / 0x14005d4e0.
+    /// Wait-cursor mode; mode 3 places cursor children at the text pen plus `cursor_offset`.
     pub cursor_mode: u16,
-    /// +30/+32: wait cursor offset, kept for modes 1 and 3 and cleared for 0 and 2.
+    // +30/+32.
+    /// Wait-cursor offset `[x, y]`, retained for modes 1/3 and cleared for modes 0/2.
     pub cursor_offset: [i16; 2],
-    /// +2488 (0x215b): while set, 0x14005de50 moves the window between the +2472 and
-    /// +2480 positions; zeroed by the constructor's memset.
+    // +2488; 0x215b, constructor 0. Read by 0x14005de50.
+    /// Whether script-controlled switching between the two target positions is enabled.
     pub position_switch: bool,
-    /// +2520: the window's own scene object (0x14003a3c0), outside the +1976 table. Button
-    /// record `i` shows child `i + 16`.
+    // +2520; object constructor 0x14003a3c0, separate from engine +1976.
+    /// Window image and children, separate from the ordinary scene-object slots.
     pub object: SceneObject,
+    /// Window-local button records; button `i` uses scene child `i + 16`.
     pub buttons: [WindowButton; WINDOW_BUTTONS],
-    /// +2536: button pressed on action 0's down edge; constructor -1.
+    // +2536; constructor -1.
+    /// Button pressed on the primary action down edge, or -1 when none is recorded.
     pub pressed_button: i32,
-    /// +2492 (constructor 0): the position 0x14005de50 last switched to. Rust does not model
-    /// that movement; the value is carried through save and load unchanged.
+    // +2492; constructor 0, updated by the original 0x14005de50. Preserved on save/load.
+    /// Saved position-switch state. Automatic switching is not implemented.
     pub switch_state: u32,
 }
 
-/// 0x211e line-break rules (+328 set, +332, +336, +400), used by 0x14005b120 when the pen
-/// reaches the end of a line and +112 is set.
+// 0x211e line-break rules (+328 set, +332, +336, +400), used by 0x14005b120 when the pen
+// reaches the end of a line and +112 is set.
+/// Encoded character sets used when text reaches the line boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineBreakRules {
-    /// +332: how many consecutive characters may run past the line end.
+    // +332.
+    /// Maximum number of consecutive characters allowed past the line end.
     pub max_overflow: i32,
-    /// +336: characters that may hang past the line end (0x14005b050 returns 1).
+    // +336; 0x14005b050 returns 1.
+    /// Encoded characters that may hang past the line end.
     pub hanging: Vec<u8>,
-    /// +400: characters kept on the line while they repeat the previous one (returns 2).
+    // +400; 0x14005b050 returns 2.
+    /// Encoded characters kept on the current line while repeating the previous character.
     pub inseparable: Vec<u8>,
 }
 
-/// Text object fields that scripts set; the layout readers are 0x14005b6b0 and
-/// 0x14005bc90. Unlisted constructor/0x14005d3b0 defaults are documented in vm-semantics.md.
+// Text object fields that scripts set; the layout readers are 0x14005b6b0 and
+// 0x14005bc90. Unlisted constructor/0x14005d3b0 defaults are documented in vm-semantics.md.
+/// Text appearance, layout state, and glyphs recorded for host rendering.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextObject {
-    /// Requested face (+44), empty selects the configured default.
+    // +44.
+    /// Requested face in the game encoding; empty selects the configured default.
     pub font_face: Vec<u8>,
-    /// Face of the slot's persistent font object (+576 -> +4224): the global face when
-    /// the object was created from an empty name, changed only by 0x2106 and 0x213d.
-    /// Each new glyph captures it, so earlier glyphs keep the face they were drawn with.
+    // Persistent font +576 -> engine +4224; changed by 0x2106 / 0x213d.
+    /// Current font face captured by new glyphs. Existing glyphs retain their own face.
     pub face: Arc<[u8]>,
-    /// +108: weight of the persistent font object, captured by each new glyph.
+    // +108.
+    /// Whether new glyphs use bold text.
     pub bold: bool,
+    /// Whether the font backend applies alpha correction to glyph coverage.
     pub revision_alpha: bool,
-    /// Uniform scale of the text's scene object, kept as f32 bits (0x20ec).
+    // 0x20ec.
+    /// Uniform scene-object scale stored as raw `f32` bits.
     pub scale_bits: u32,
-    /// Configuration words 4/5 (+552/+556): the script-space size that 0x14005aac0 divides
-    /// by when scaling positions to the device size in words 2/3.
+    // Configuration words 4/5 at +552/+556; 0x14005aac0 scales to device words 2/3.
+    /// Script-space dimensions used to scale text positions to the device size.
     pub logical_size: [i32; 2],
-    /// +8/+12, set by 0x14005aac0.
+    // +8/+12; set by 0x14005aac0.
+    /// Text-object position `[x, y]`.
     pub position: [i32; 2],
-    /// +16..+28: text area x, y, width, height (0x14005ab00).
+    // +16..+28; 0x14005ab00.
+    /// Text area `[x, y, width, height]`.
     pub area: [i32; 4],
-    /// +156/+160: pen position, reset to the area origin by 0x14005ab00.
+    // +156/+160; reset by 0x14005ab00.
+    /// Current pen position, reset to the area origin when the area is set.
     pub cursor: [i32; 2],
-    /// +196..+323: ruby-line flags. Zero until text output marks a line.
+    // +196..+323.
+    /// Per-line ruby flags, set as text is output.
     pub ruby_lines: [u32; 32],
-    /// +528/+532: overflow count and previous 16-bit character, reset by measurement.
+    // +528/+532; reset by measurement.
+    /// Overflow count and previous character code used during measurement.
     pub layout_scratch: [u32; 2],
-    /// Explicit research records, without glyph pixels or a font device.
+    /// Recorded glyph layout and appearance; glyph pixels belong to the font backend.
     pub glyphs: Vec<RecordedGlyph>,
-    /// +32: glyph size; one character advances size + spacing[0], one line size + spacing[1].
+    // +32.
+    /// Base glyph size; advances also include the corresponding `spacing` value.
     pub glyph_size: i32,
-    /// +36/+40: character and line spacing.
+    // +36/+40.
+    /// Extra character and line spacing, respectively.
     pub spacing: [i32; 2],
-    /// +116: text colour (0xRRGGBB).
+    // +116.
+    /// Text color as `0xRRGGBB`.
     pub color: u32,
-    /// +120: decoration colour.
+    // +120.
+    /// Text-decoration color.
     pub decoration_color: u32,
-    /// +124 (constructor 2, set by 0x2113): outline mode 0..2 that 0x14005bc90 copies into
-    /// glyph descriptor word 8 for direct output (0x210a). Window output passes its own
-    /// setting instead (0x14005d870), so window texts do not read it.
+    // +124; constructor 2, set by 0x2113. Direct output copies it to glyph word 8
+    // through 0x14005bc90; window output supplies its own value through 0x14005d870.
+    /// Outline mode (`0..=2`) for direct output. Window output uses its own setting.
     pub outline_mode: u32,
-    /// +128: raw glyph parameter set by 0x2155, copied into glyph descriptor word 9
-    /// by 0x14005bc90. Its rendering interpretation is not modeled yet.
+    // +128; 0x2155, copied to glyph word 9 by 0x14005bc90.
+    /// Raw glyph parameter whose rendering interpretation is not yet modeled.
     pub glyph_parameter: u32,
-    /// +132: decoration style 0..3 passed to glyph rendering.
+    // +132.
+    /// Decoration style (`0..=3`) passed to glyph rendering.
     pub decoration: i32,
-    /// +136/+140: per-character reveal mode (1 = alpha from 0, 2 = offset) and duration.
+    // +136/+140.
+    /// Per-character reveal `[mode, duration]`: mode 1 fades alpha; mode 2 offsets position.
     pub reveal: [i32; 2],
-    /// +144: per-character delay factor used by 0x14005bc90.
+    // +144; read by 0x14005bc90.
+    /// Per-character delay factor used during text output.
     pub char_delay: i32,
-    /// +152: scene layer for the text and glyph objects (0x14003b0d0, as for 0x2047).
+    // +152; 0x14003b0d0, also used by 0x2047.
+    /// Scene layer for the text and its glyph objects.
     pub layer: i32,
-    /// +148 (constructor 1): shown, also copied to the text scene object (0x14005ac80).
+    // +148; constructor 1, copied to scene object by 0x14005ac80.
+    /// Whether the text and its scene object are shown.
     pub visible: bool,
-    /// +176: ruby layout; 0x14005b360 marks lines holding `{base/ruby}` groups.
+    // +176; 0x14005b360 marks ruby lines.
+    /// Enable ruby layout for `{base/ruby}` groups.
     pub ruby: bool,
-    /// +184: reserve the ruby height above every line, not only marked ones.
+    // +184.
+    /// Reserve ruby height above every line, including lines without ruby text.
     pub ruby_every_line: bool,
-    /// +188 (constructor 12): ruby glyph size, also the height reserved above a line.
+    // +188; constructor 12.
+    /// Ruby glyph size and the height reserved above a ruby line.
     pub ruby_size: i32,
-    /// +192: extra spacing between ruby glyphs.
+    // +192.
+    /// Extra spacing between ruby glyphs.
     pub ruby_spacing: i32,
-    /// None until 0x211e; the constructor zeroes +328.
+    // +328; constructor 0, enabled by 0x211e.
+    /// Optional rules for characters near the line boundary.
     pub line_break: Option<LineBreakRules>,
-    /// +324: glyph texture capacity from creation (0x2100 SP-12, 196 for 0x215d); saved by
-    /// the snapshot (0x14005c790) and passed back to the constructor on load.
+    // +324; 0x2100 SP-12, or 196 for 0x215d. Saved/restored by 0x14005c790.
+    /// Glyph texture capacity recorded at creation and preserved in snapshots.
     pub glyph_capacity: u32,
 }
 
-/// Ink extent supplied by the selected font backend for direct single-byte output.
-/// The core applies the original minimum half-size advance and spacing separately.
-/// `face` is the font object's face in the game encoding.
+/// Host-supplied font measurements for text layout.
+///
+/// Face names use the game's encoding, sizes and widths use pixels, and glyph codes
+/// follow [`crate::TextEncoding`]. The core applies minimum advances and spacing
+/// separately. This service measures glyphs; the host also needs a rasterizer to draw them.
 pub trait GlyphMetrics: std::fmt::Debug {
     /// A display-only face name in the game encoding; internal handles stay in saves.
     fn display_face_name(&self, _face: &[u8]) -> Option<Vec<u8>> {
@@ -215,6 +260,10 @@ pub trait GlyphMetrics: std::fmt::Debug {
     }
 }
 
+/// Window, text, and font-slot state updated by message commands.
+///
+/// Provides layout records for rendering; install [`GlyphMetrics`] before output
+/// that needs font measurements. Hosts rasterize the resulting glyphs separately.
 #[derive(Debug, Default)]
 pub struct MessageHost {
     child_slots: crate::scene::ChildSlots,

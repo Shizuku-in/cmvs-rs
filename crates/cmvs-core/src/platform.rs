@@ -1,4 +1,9 @@
-//! Explicit platform requests. The recording backend is a research model, not a window.
+//! Host services for windows, displays, dialogs, and frame readback.
+//!
+//! Implement [`PlatformBackend`] for a real host. [`PlatformHost`] translates script
+//! commands into validated [`PlatformRequest`] values and backend queries.
+//! [`RecordingBackend`] records requests for headless use; it does not open a window.
+//! [`PlatformAssets`] supplies bounded cursor and icon resource bytes.
 use crate::filesystem as fs;
 use crate::filesystem::File;
 use crate::{
@@ -12,14 +17,19 @@ use std::{
     sync::Arc,
 };
 
+/// Maximum cursor or icon asset size accepted by [`DirectoryAssets`], in bytes.
 pub const MAX_PLATFORM_ASSET: usize = 4 * 1024 * 1024;
+/// Read platform assets such as cursors and window icons by game-relative name.
 pub trait PlatformAssets {
+    /// Return the asset bytes, or an error when missing, invalid, or inaccessible.
     fn read(&mut self, name: &[u8]) -> Result<Vec<u8>, Box<dyn Error>>;
 }
+/// Platform assets confined to an existing canonical game directory.
 pub struct DirectoryAssets {
     root: PathBuf,
 }
 impl DirectoryAssets {
+    /// Resolve `root` and require it to be a directory.
     pub fn new(root: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
         let root = fs::canonicalize(root.as_ref())?;
         if !fs::is_dir(&root) {
@@ -74,6 +84,7 @@ impl PlatformAssets for DirectoryAssets {
     }
 }
 
+/// A validated change the host must apply to its window or presentation state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlatformRequest {
     Fullscreen(bool),
@@ -98,7 +109,7 @@ pub enum PlatformRequest {
         bytes: Arc<Vec<u8>>,
     },
 }
-/// 0x213c strings use the selected game's encoding.
+/// A text-entry dialog whose byte strings use the selected game's encoding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextDialogRequest {
     pub title: Vec<u8>,
@@ -119,6 +130,15 @@ pub enum FontDialogResult {
     Selected(Vec<u8>),
 }
 
+/// Host implementation of window, presentation, and modal-dialog services.
+///
+/// Implement [`Self::apply`] and the queries needed by the games your host supports.
+/// Most optional methods return an error by default. Queries should describe the
+/// current host state. Text and font dialogs may remain pending across VM ticks
+/// while the host processes events.
+///
+/// Logical dimensions are engine/script pixels; window dimensions are host client
+/// pixels. Completed-frame readback must include the fonts and movies actually drawn.
 pub trait PlatformBackend {
     /// Select a fullscreen target; return whether the selected display changed.
     /// Mode 5 must return true even when the current target is unchanged.
@@ -227,6 +247,7 @@ pub fn supported_render_mode(
         _ => 0,
     })
 }
+/// Headless backend that records requests and accepts explicit dialog answers and frames.
 #[derive(Default)]
 pub struct RecordingBackend {
     screen_size: crate::viewport::ScreenSize,

@@ -1,8 +1,11 @@
-//! Action-level input of the engine +4656 object; addresses refer to the documented binary hash.
-//! Each frame 0x140055260 derives three flags for each of 24 actions from five bound input
-//! codes (tables at +944 + 10 * action) and per-code frame counters (+1540 now, +2564 before).
-//! KeyBindings reads the verified key.cfg bank; hosts without native input supply the
-//! default: no action active. Physical event translation stays in the desktop backend.
+//! Frame-level action state and configurable input-code bindings.
+//!
+//! [`KeyBindings`] reads the supported `key.cfg` bank. Hosts translate physical
+//! input into [`ActionInput`] once per frame; command handlers consume its action
+//! flags. The default has no active actions.
+
+// Engine +4656: 0x140055260 derives three flags for each of 24 actions from
+// five bound codes (table +944 + 10 * action) and frame counters (+1540/+2564).
 use crate::{bytecode::DecodeError, dispatch::Call, machine::Machine};
 
 pub const ACTIONS: usize = 24;
@@ -109,7 +112,11 @@ impl CodeInput {
     }
 }
 
-/// Flags at +1232 + 12 * action: +0 released, +4 held, +8 pressed.
+// Flags at +1232 + 12 * action: +0 released, +4 held, +8 pressed.
+/// Per-frame held, pressed, and released actions plus logical pointer state.
+///
+/// Refresh once per frame, then retain it across VM budget slices. Physical event
+/// translation and key bindings belong to the host.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ActionInput {
     /// A bound code was down on the previous frame and is up now.

@@ -1,6 +1,49 @@
-//! Bounded real-data startup orchestration for the researched Amatsutsumi layout.
-//! Snapshots remain barriers unless the caller explicitly continues without an image.
-//! Every system command first passes the selected engine profile's gate.
+//! Game startup and the host frame loop.
+//!
+//! [`Startup`] connects the VM to resources, scene state, input, audio, and saves.
+//! Keep the decoded startup script alive for the session and supply a
+//! [`PlatformBackend`] for window and dialog services. Every system command passes
+//! the selected profile's gate before dispatch.
+//!
+//! # Create a session
+//!
+//! ```no_run
+//! use std::path::Path;
+//! use cmvs_core::{profile::Registry, runner::{load_start, Startup}};
+//!
+//! let root = Path::new("game");
+//! let registry = Registry::builtin();
+//! let game = registry.identify_game(root, None)?;
+//! let script = load_start(root, &game.files)?;
+//! let mut session = Startup::new(&script, root, &game, 0)?;
+//! session.set_user_data_directory(Path::new("user-data"))?;
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! # Drive the host loop
+//!
+//! 1. Refresh [`Startup::input_mut`] once per frame.
+//! 2. Call [`Startup::tick`] until [`StartupEvent::Yield`] or a stop event. If the
+//!    instruction budget runs out first, resume later with the same input; do not
+//!    advance frame time or sample new input yet.
+//! 3. On yield, call [`Startup::advance_decoded_frame`] to advance movies and scene
+//!    state. Enable CMV decoding with [`Startup::set_decode_movie_frames`] if needed.
+//!    [`Startup::advance_frame`] advances timing without reading full-screen CMV frames.
+//! 4. Compose scene, message, and glyph objects for presentation. If host capture is
+//!    enabled, service [`Startup::capture_due`] with [`Startup::supply_capture`].
+//!
+//! [`Startup::render_frame`] returns a movie frame or renders the scene without text.
+//! Configure font metrics, audio output, and MGV decoding before commands need them.
+//! The default audio backend records requests without playing them.
+//!
+//! # Stops and errors
+//!
+//! Stop on [`StartupEvent::Unhandled`] rather than retrying the same unsupported
+//! command. [`StartupEvent::Quit`] ends the session. On [`StartupEvent::Inactive`],
+//! wait for host events and service audio with [`Startup::poll_audio_output`].
+//! [`SnapshotPolicy`] controls gameplay snapshots. The default captures state and
+//! returns an error if the state includes unsupported records.
+//! Errors from VM execution, resources, and host services propagate to the caller.
 use crate::filesystem as fs;
 use crate::filesystem::File;
 use crate::{
@@ -71,6 +114,10 @@ impl SystemSaveSink for SystemOutput {
     }
 }
 
+/// Read and decode the startup script selected by [`GameFiles`].
+///
+/// `root` is the game directory. Returns an error for I/O failures, oversized input,
+/// or malformed script data; no script instructions are executed.
 pub fn load_start(root: &Path, files: &GameFiles) -> Result<Script, Box<dyn Error>> {
     let mut bytes = Vec::new();
     File::open(root.join(&files.start_script))?
@@ -81,27 +128,35 @@ pub fn load_start(root: &Path, files: &GameFiles) -> Result<Script, Box<dyn Erro
     }
     Ok(Script::decode(&bytes)?)
 }
+/// Result of one [`Startup::tick`], used to drive the host loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StartupEvent {
-    /// 0x2001: playback stopped; the host must close its window and end execution.
+    /// The session has ended; stop executing its VM.
     Quit,
     /// Host is unfocused and ACTIVE_DRAW is off; no VM instruction was executed.
     Inactive,
+    /// Execution advanced; the host may tick again within its instruction budget.
     Progress,
+    /// The VM yielded; the host may process input, advance time, and present a frame.
     Yield,
+    /// A system command has no handler and remains pending at `pc`.
     Unhandled {
+        /// Byte offset in the active script's code segment.
         pc: usize,
+        /// System command identifier after any profile-specific translation.
         command: u16,
     },
+    /// The main script reached a snapshot barrier; this session cannot continue past it.
     MainPreparedNeedsSnapshot,
     /// Main entry reached; the original snapshot was not built and saving stays unavailable.
     MainEnteredWithoutSnapshot,
-    /// 0x2080 or 0x22b2 built the engine snapshot that slot writes use.
+    /// The engine snapshot used by gameplay-slot writes was captured.
     SnapshotCaptured,
 }
+/// How [`Startup`] handles script requests to capture gameplay state.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum SnapshotPolicy {
-    /// Build the engine snapshot (0x140069270) at 0x2080 and 0x22b2.
+    /// Capture the supported engine state, returning an error for unsupported records.
     #[default]
     Capture,
     /// Stop at the first snapshot point (research).
@@ -109,6 +164,11 @@ pub enum SnapshotPolicy {
     /// Apply only the live-state effect and continue without an image (research).
     ContinueWithoutImage,
 }
+/// A running game session with VM, engine state, and resource services.
+///
+/// Borrows the startup [`Script`] for the session lifetime. Construction opens
+/// resources and configuration; execution begins with [`Self::tick`]. See the
+/// [module guide](self) for initialization and frame-loop order.
 pub struct Startup<'a> {
     slot_edit: Option<slot_edit::SlotEdit>,
     main_script_name: &'static [u8],
@@ -173,6 +233,12 @@ pub struct Startup<'a> {
     auto_resume_skipped: bool,
 }
 impl<'a> Startup<'a> {
+    /// Create a session using Shift-JIS text and the identified game's profile.
+    ///
+    /// `root` is the game directory and `virtual_tick` initializes the callback clock.
+    /// Uses recording audio and [`SnapshotPolicy::Capture`]. Configure output services
+    /// and a writable save profile before ticking. Returns errors from script
+    /// validation, configuration, or resource initialization.
     pub fn new(
         script: &'a Script,
         root: &Path,
@@ -187,7 +253,7 @@ impl<'a> Startup<'a> {
             crate::TextEncoding::default(),
         )
     }
-    /// Start with an explicit game text encoding. `new` retains the original Shift-JIS default.
+    /// Create a session with an explicit text encoding; otherwise like [`Self::new`].
     pub fn new_with_encoding(
         script: &'a Script,
         root: &Path,
@@ -326,6 +392,7 @@ impl<'a> Startup<'a> {
             auto_resume_skipped: false,
         })
     }
+    /// Inspect VM state and the current instruction position.
     pub fn machine(&self) -> &Machine<'a> {
         &self.machine
     }
@@ -353,9 +420,11 @@ impl<'a> Startup<'a> {
     pub fn set_block_unreviewed(&mut self, block: bool) {
         self.gate.set_block_unreviewed(block);
     }
+    /// Choose whether commands supported only by legacy presumed evidence are blocked.
     pub fn set_block_presumed(&mut self, block: bool) {
         self.gate.set_block_presumed(block);
     }
+    /// Inspect the selected profile, command policy, and dispatch counts.
     pub fn gate(&self) -> &CommandGate<'a> {
         &self.gate
     }
@@ -363,58 +432,78 @@ impl<'a> Startup<'a> {
     pub fn take_unreviewed_notices(&mut self) -> Vec<u16> {
         std::mem::take(&mut self.notices)
     }
+    /// Whether the configured startup auto-load skip has been applied.
     pub fn auto_resume_skipped(&self) -> bool {
         self.auto_resume_skipped
     }
+    /// Startup settings and registered resource paths.
     pub fn bootstrap(&self) -> &Bootstrap {
         &self.bootstrap
     }
-    /// Ask the registered script callback to confirm a host window close.
+    /// Request the script's window-close callback; return `false` if none is enabled.
     pub fn request_close(&mut self) -> bool {
         self.control.request_close()
     }
+    /// Inspect script slots and callback scheduling state.
     pub fn control(&self) -> &ScriptControl {
         &self.control
     }
+    /// Inspect platform-command state recorded by the session.
     pub fn platform(&self) -> &PlatformHost {
         &self.platform
     }
+    /// Scene objects and effects to be consumed by the renderer.
     pub fn scene(&self) -> &SceneHost {
         &self.scene
     }
+    /// Camera state used for projection and scene rendering.
     pub fn camera(&self) -> &CameraHost {
         &self.camera
     }
+    /// Current timed action-sequence state.
     pub fn sequence(&self) -> &SequenceHost {
         &self.sequence
     }
+    /// Movie player and scene-movie state.
     pub fn movies(&self) -> &MovieHost {
         &self.movies
     }
+    /// Latest decoded full-screen movie frame, if one is available.
     pub fn movie_frame(&self) -> Option<&crate::raster::RgbaImage> {
         self.movies.player_image()
     }
+    /// Install the host-provided Theora decoder factory for MGV movies.
     pub fn set_mgv_factory(&mut self, factory: Box<dyn crate::mgv::DecoderFactory>) {
         self.movies.set_mgv_factory(factory);
     }
-    /// See [`crate::movie::MovieHost::set_scene_prefetch`].
+    /// Enable scene-movie prefetching on a worker thread.
+    ///
+    /// See [`MovieHost::set_scene_prefetch`] for the thread-start callback contract.
     pub fn set_scene_prefetch(&mut self, on_thread_start: fn()) {
         self.movies.set_scene_prefetch(on_thread_start);
     }
-    /// See [`crate::image::ImageArchives::set_decoded_cache_limit`].
+    /// Set the decoded-image cache budget in bytes; see [`ImageArchives::set_decoded_cache_limit`].
     pub fn set_decoded_image_cache(&mut self, bytes: usize) {
         self.images.set_decoded_cache_limit(bytes);
     }
-    /// See [`crate::image::ImageArchives::set_decode_threads`].
+    /// Configure extra image-decoding threads; see [`ImageArchives::set_decode_threads`].
     pub fn set_image_decode_threads(&mut self, threads: crate::image::DecodeThreads) {
         self.images.set_decode_threads(threads);
     }
+    /// Enable or disable full-screen CMV frame decoding; disabled by default.
     pub fn set_decode_movie_frames(&mut self, enabled: bool) {
         self.movies.set_decode_frames(enabled);
     }
+    /// Logical screen dimensions `[width, height]` in engine pixels.
     pub fn screen_size(&self) -> [u32; 2] {
         self.messages.screen_size()
     }
+    /// Return the latest full-screen movie frame, or render the scene in software.
+    ///
+    /// Movie frames keep their decoded dimensions; scene output uses [`Self::screen_size`].
+    /// To include message windows and glyphs, pass them to
+    /// [`crate::scene_render::render_scene`] as additional objects. Unsupported scene
+    /// state returns an error.
     pub fn render_frame(&self) -> Result<crate::raster::RgbaImage, crate::FormatError> {
         match self.movie_frame() {
             Some(image) => Ok(image.clone()),
@@ -430,6 +519,12 @@ impl<'a> Startup<'a> {
             }
         }
     }
+    /// Service audio and advance movies and scene state by `delta_ms` milliseconds.
+    ///
+    /// Uses the movie audio clock when provided. Full-screen CMV decoding requires
+    /// [`Self::set_decode_movie_frames`]; MGV playback uses its installed decoder.
+    /// Call this or [`Self::advance_frame`] once at the frame boundary, not both.
+    /// Resource, codec, audio, and scene-update failures propagate to the host.
     pub fn advance_decoded_frame(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error>> {
         if self.quit {
             return Ok(());
@@ -503,12 +598,14 @@ impl<'a> Startup<'a> {
     pub fn set_host_capture(&mut self, enabled: bool) {
         self.host_capture = enabled;
     }
-    /// The frame advance left a requested capture for the host's frame of this state.
+    /// Whether the last frame update left a screenshot request for the host to fulfill.
     pub fn capture_due(&self) -> bool {
         self.capture_due
     }
-    /// The host's frame of the current state at the logical screen size: the scene
-    /// and visible message windows without host overlays such as a cursor.
+    /// Supply the host-rendered scene and message windows for a pending screenshot.
+    ///
+    /// The frame must match [`Self::screen_size`] and exclude host overlays such as
+    /// the cursor. Returns an error if no capture is due or the dimensions differ.
     pub fn supply_capture(
         &mut self,
         frame: crate::raster::RgbaImage,
@@ -523,12 +620,15 @@ impl<'a> Startup<'a> {
         self.capture.take(frame)?;
         Ok(())
     }
+    /// Inspect the retained screenshot and pending request state.
     pub fn capture(&self) -> &ScreenCapture {
         &self.capture
     }
+    /// Button groups and selection state for this frame.
     pub fn buttons(&self) -> &ButtonHost {
         &self.buttons
     }
+    /// Current action and pointer state, shared across VM budget slices.
     pub fn input(&self) -> &ActionInput {
         &self.input
     }
@@ -537,9 +637,11 @@ impl<'a> Startup<'a> {
     pub fn input_mut(&mut self) -> &mut ActionInput {
         &mut self.input
     }
-    /// Update the scene and supply the latest delta for the next VM run entry.
-    /// The timer delta is consumed once after yield, never per instruction/budget slice.
-    /// Callback registration time remains a separate research clock.
+    /// Advance scene and movie timing by `delta_ms` milliseconds without full-screen CMV reads.
+    ///
+    /// Unlike [`Self::advance_decoded_frame`], this does not service audio output or
+    /// use its movie clock. Scene movies and MGV playback still advance. The VM timer
+    /// delta is consumed once after yield, never per instruction or budget slice.
     pub fn advance_frame(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error>> {
         if self.quit {
             return Ok(());
@@ -578,21 +680,27 @@ impl<'a> Startup<'a> {
         self.frame_delta = delta_ms;
         self.take_capture()
     }
+    /// Inspect accumulated VM timers and the independent stopwatch.
     pub fn timers(&self) -> &VmTimers {
         &self.timers
     }
+    /// Current script-provided title for gameplay saves.
     pub fn save_title(&self) -> &SaveTitle {
         &self.save_title
     }
+    /// Current script-provided gameplay-save metadata.
     pub fn save_info(&self) -> SaveInfo {
         self.save_info
     }
+    /// Current pointer drag and flick state.
     pub fn gesture(&self) -> &PointerGesture {
         &self.gesture
     }
+    /// Current script-controlled message wait and skip flags.
     pub fn message_flags(&self) -> MessageFlags {
         self.message_flags
     }
+    /// Update host focus, discarding pending frame time when the running state changes.
     pub fn set_focused(&mut self, focused: bool) {
         let was_running = self.frame_running();
         self.focused = focused;
@@ -600,22 +708,29 @@ impl<'a> Startup<'a> {
             self.frame_delta = 0;
         }
     }
+    /// Whether the session is running under the current focus policy.
     pub fn frame_running(&self) -> bool {
         !self.quit && (self.focused || self.settings.active_draw())
     }
+    /// Runtime settings, including font, focus, and message preferences.
     pub fn settings(&self) -> &crate::settings::SettingsHost {
         &self.settings
     }
-    /// Startup check 0x14000b666: the host replaces a configured face it cannot find
-    /// with the built-in default before any font object exists.
+    // Startup check 0x14000b666 substitutes a missing configured font face.
+    /// Set the initial font face, encoded in the game's text encoding.
+    ///
+    /// Call before font objects are created. Hosts may use this to replace an
+    /// unavailable configured face with the built-in default.
     pub fn set_font_face(&mut self, face: &[u8]) -> Result<(), Box<dyn Error>> {
         self.settings.set_font_face(face)?;
         self.messages.set_default_face(face);
         Ok(())
     }
+    /// Window and text state to be composed by the host.
     pub fn messages(&self) -> &MessageHost {
         &self.messages
     }
+    /// Recorded message history.
     pub fn history(&self) -> &HistoryHost {
         &self.history
     }
@@ -623,15 +738,19 @@ impl<'a> Startup<'a> {
     pub fn set_record_text(&mut self, enabled: bool) {
         self.messages.set_record_output(enabled);
     }
+    /// Install font measurements for text layout before executing text output.
     pub fn set_glyph_metrics(&mut self, metrics: Box<dyn crate::message::GlyphMetrics>) {
         self.messages.set_glyph_metrics(metrics);
     }
+    /// Gameplay-save slot metadata and menu state.
     pub fn save_menu(&self) -> &SaveMenuHost {
         &self.save_menu
     }
+    /// Total VM step attempts made by the session.
     pub fn steps(&self) -> u64 {
         self.steps
     }
+    /// Latest captured gameplay snapshot, or its unavailable state.
     pub fn save_image(&self) -> &SaveImage {
         &self.save_image
     }
@@ -639,11 +758,14 @@ impl<'a> Startup<'a> {
     pub fn poll_audio_output(&mut self) -> Result<(), Box<dyn Error>> {
         self.audio_backend.update()
     }
+    /// Audio channels, resource registrations, and playback request state.
     pub fn audio(&self) -> &AudioHost {
         &self.audio
     }
-    /// Defaults to a recording backend that reports nothing started. The new backend
-    /// receives the paths and keys registered so far.
+    /// Install a host audio backend.
+    ///
+    /// Configures the new backend with registered paths, archive keys, voice ducking,
+    /// and output activity. If configuration fails, the existing backend remains installed.
     pub fn set_audio_backend(
         &mut self,
         mut backend: Box<dyn AudioBackend>,
@@ -657,6 +779,7 @@ impl<'a> Startup<'a> {
         self.audio_backend = backend;
         Ok(())
     }
+    /// Set the deterministic random seed; frame updates also consume random values.
     pub fn set_random_seed(&mut self, seed: u32) {
         self.random = CrtRandom::new(seed);
     }
@@ -700,16 +823,26 @@ impl<'a> Startup<'a> {
         self.system_output = Some(SystemOutput::Profile(profile));
         Ok(())
     }
-    /// Host watchdog, not an engine limit: a tick fails without stepping once this many VM
-    /// steps ran since the last yield (default 1,000,000; the longest stretch measured on
-    /// the replayed path from startup into the first scenario is 9970). Total steps are
-    /// unbounded; hosts bound long runs themselves.
+    /// Limit VM steps between yields; the default is 1,000,000.
+    ///
+    /// Once the limit is reached, [`Self::tick`] returns an error without stepping.
+    /// This host watchdog does not limit total session steps. Hosts must also use
+    /// a per-frame instruction budget to keep their event loop responsive.
     pub fn set_yield_watchdog(&mut self, steps: u64) {
         self.yield_watchdog = steps;
     }
+    /// Choose how subsequent gameplay-snapshot requests are handled.
     pub fn set_snapshot_policy(&mut self, policy: SnapshotPolicy) {
         self.snapshot_policy = policy;
     }
+    /// Attempt one VM step and dispatch its system command through the profile gate.
+    ///
+    /// Returns [`StartupEvent::Inactive`] without stepping when focus policy pauses
+    /// execution, or [`StartupEvent::Quit`] after shutdown. Stop on an unhandled
+    /// command or snapshot barrier; repeated ticks cannot advance past either.
+    /// Errors include command-gate rejection, the yield watchdog, and failures from
+    /// instruction execution, resources, or backend services. See the [module guide](self)
+    /// for input and frame-update order.
     pub fn tick(
         &mut self,
         backend: &mut impl PlatformBackend,

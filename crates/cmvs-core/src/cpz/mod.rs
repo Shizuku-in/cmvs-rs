@@ -1,6 +1,27 @@
-//! CPZ archive access. Supports CVNS-era CPZ1/CPZ2 (read-only), CPZ3, CPZ5 packing modes 5..9, CPZ6 and CPZ7.
+//! Read and update CPZ resource archives.
 //!
-//! Version-specific implementations are kept behind this public entry point.
+//! Use [`ArchiveIndex`] to open any supported archive version. [`ArchiveLayout`]
+//! reads headers without decrypting the index. CPZ1/CPZ2 are read-only;
+//! CPZ3/CPZ5/CPZ6/CPZ7 also support replacing existing entries.
+//!
+//! # Read an entry
+//!
+//! ```no_run
+//! use std::fs::File;
+//! use cmvs_core::cpz::ArchiveIndex;
+//!
+//! let mut file = File::open("data/pack/script.cpz")?;
+//! let index = ArchiveIndex::read(&mut file)?;
+//! if let Some(entry) = index.lookup(b"main.ps3")? {
+//!     let bytes = index.read_entry_verified(&mut file, entry)?;
+//!     println!("script bytes: {}", bytes.len());
+//! }
+//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! ```
+//!
+//! Entry names are byte strings interpreted by the archive's lookup rules.
+//! CPZ7 may require explicit [`Cpz7Parameters`]; CPZ5 supports
+//! explicit [`Cpz5Mode`] selection when its packing mode is known.
 
 mod cpz1;
 mod cpz2;
@@ -128,7 +149,10 @@ impl ArchiveLayout {
     }
 }
 
-/// Version-dispatched archive access. Lookup and verification stay version-specific.
+/// A decoded archive index for entry lookup and extraction.
+///
+/// Reuse the same archive reader for entry reads. Prefer [`Self::read_entry_verified`]
+/// to check payloads during extraction. Reading the index does not read every payload.
 #[derive(Debug)]
 pub enum ArchiveIndex {
     Cpz1(Cpz1Index),
@@ -153,10 +177,16 @@ impl ArchiveIndex {
         write::rewrite(self, source, output, replacements)
     }
 
+    /// Read an archive index, detecting its version and using default CPZ7 parameters.
+    ///
+    /// Seeks from the start of `reader`. Returns an error for unsupported or invalid
+    /// archive data and I/O failures. Use [`Self::read_with_cpz7_parameters`] when
+    /// the archive requires non-default keys.
     pub fn read<R: Read + Seek>(reader: &mut R) -> Result<Self, ArchiveError> {
         Self::read_with_cpz7_parameters(reader, Cpz7Parameters::default())
     }
 
+    /// Read an index with explicit CPZ7 keys; other archive versions ignore them.
     pub fn read_with_cpz7_parameters<R: Read + Seek>(
         reader: &mut R,
         parameters: Cpz7Parameters,
@@ -183,6 +213,7 @@ impl ArchiveIndex {
         }
     }
 
+    /// Read a CPZ5 index using a known packing mode; reject other archive versions.
     pub fn read_with_cpz5_mode<R: Read + Seek>(
         reader: &mut R,
         mode: Cpz5Mode,
@@ -193,6 +224,7 @@ impl ArchiveIndex {
         Ok(Self::Cpz5(Cpz5Index::read_with_mode(reader, mode)?))
     }
 
+    /// Container version detected when this index was read.
     pub fn version(&self) -> ArchiveVersion {
         match self {
             Self::Cpz1(_) => ArchiveVersion::Cpz1,
@@ -216,6 +248,9 @@ impl ArchiveIndex {
         }
     }
 
+    /// Look up an entry, treating a missing name as an error.
+    ///
+    /// Use [`Self::lookup`] when absence is expected.
     pub fn find(&self, name: &[u8]) -> Result<usize, FormatError> {
         match self {
             Self::Cpz1(index) => index.find(name),
@@ -227,6 +262,9 @@ impl ArchiveIndex {
         }
     }
 
+    /// Return the matching entry index, or `None` when the name is absent.
+    ///
+    /// Invalid lookup names return an error according to the archive's name rules.
     pub fn lookup(&self, name: &[u8]) -> Result<Option<usize>, FormatError> {
         match self {
             Self::Cpz1(index) => index.lookup(name),
@@ -238,6 +276,10 @@ impl ArchiveIndex {
         }
     }
 
+    /// Read and decrypt an entry without checking its payload checksum.
+    ///
+    /// `reader` must contain the archive used to construct this index. Prefer
+    /// [`Self::read_entry_verified`] unless unchecked extraction is intentional.
     pub fn read_entry<R: Read + Seek>(
         &self,
         reader: &mut R,
@@ -253,7 +295,11 @@ impl ArchiveIndex {
         }
     }
 
-    /// Apply the selected format's verification before returning plaintext.
+    /// Read plaintext and apply the selected format's payload verification.
+    ///
+    /// `entry` is an index into [`Self::entries`]; `reader` must contain the same
+    /// archive. Invalid indices, checksums, payloads, and I/O failures return errors.
+    /// CPZ1 has no payload checksum; for that version this is equivalent to [`Self::read_entry`].
     pub fn read_entry_verified<R: Read + Seek>(
         &self,
         reader: &mut R,
