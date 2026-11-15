@@ -1007,8 +1007,11 @@ fn run() -> Result<(), Box<dyn Error>> {
             "# skip-auto-resume: clear the script's startup auto-load flag after system-save loading; save files unchanged"
         );
     }
-    startup.set_mgv_factory(Box::new(crate::video::PrefetchTheoraFactory::default()));
+    startup.set_mgv_factory(Box::new(
+        crate::video::PrefetchTheoraFactory::default().with_lookahead(64 << 20, 48),
+    ));
     startup.set_scene_prefetch(|| {});
+    startup.set_image_decode_threads(cmvs_core::image::DecodeThreads::host());
     startup.set_decoded_image_cache(256 << 20);
     if native_audio {
         #[cfg(feature = "audio-output")]

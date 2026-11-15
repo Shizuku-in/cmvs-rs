@@ -4,13 +4,13 @@ set -eu
 cd "$(dirname "$0")/../../.."
 out=platforms/psvita/build
 mkdir -p "$out/obj"
-for unit in window gpu audio system; do
+for unit in window gpu audio system yuv; do
     arm-vita-eabi-gcc -c "platforms/psvita/runtime/$unit.c" -o "$out/obj/$unit.o" \
         -Wall -Wextra -Werror -O2 -mcpu=cortex-a9 -mfpu=neon -mfloat-abi=hard
 done
 arm-vita-eabi-gcc -c platforms/psvita/runtime/shaders.S -o "$out/obj/shaders.o"
 link=""
-for unit in window gpu shaders audio system; do
+for unit in window gpu shaders audio system yuv; do
     link="$link -C link-arg=$PWD/$out/obj/$unit.o"
 done
 for lib in vita2d SceGxm_stub SceDisplay_stub SceCtrl_stub SceTouch_stub SceAudio_stub \

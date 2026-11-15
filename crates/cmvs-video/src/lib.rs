@@ -3,6 +3,7 @@
 //! [`PrefetchTheoraFactory`] for bounded worker-thread lookahead during playback.
 mod prefetch;
 mod theora;
+mod yuv;
 use cmvs_core::{
     FormatError, MAX_PAYLOAD,
     mgv::{self, MgvIndex, ReadSeek},
@@ -286,44 +287,7 @@ fn to_rgba(
             .get(chroma.clone())
             .ok_or(FormatError(BOUNDS))?;
         let cr = frame.planes[2].get(chroma).ok_or(FormatError(BOUNDS))?;
-        // An odd left edge starts mid-pair: its first pixel takes the first chroma sample.
-        let (head, luma, out) = if left % 2 == 1 {
-            let (first, out) = out.split_at_mut(4);
-            first.copy_from_slice(&ycbcr(luma[0], cb[0], cr[0]));
-            (1, &luma[1..], out)
-        } else {
-            (0, luma, out)
-        };
-        let (cb, cr) = (&cb[head..], &cr[head..]);
-        let pairs = luma.len() / 2;
-        for (((y2, out), &u), &v) in luma
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .zip(out.as_chunks_mut::<8>().0)
-            .zip(cb)
-            .zip(cr)
-        {
-            out[..4].copy_from_slice(&ycbcr(y2[0], u, v));
-            out[4..].copy_from_slice(&ycbcr(y2[1], u, v));
-        }
-        if let Some(&last) = luma.get(pairs * 2) {
-            out[pairs * 8..].copy_from_slice(&ycbcr(last, cb[pairs], cr[pairs]));
-        }
+        yuv::convert_row(luma, cb, cr, out, left % 2 == 1);
     }
     RgbaImage::new(u32::from(index.width), u32::from(index.height), rgba)
-}
-
-/// BT.601 limited-range conversion; the decoded Y/Cb/Cr samples are retained exactly.
-#[inline(always)]
-fn ycbcr(y: u8, cb: u8, cr: u8) -> [u8; 4] {
-    let luma = 298 * (i32::from(y) - 16);
-    let (cb, cr) = (i32::from(cb) - 128, i32::from(cr) - 128);
-    let clip = |v: i32| ((v + 128) >> 8).clamp(0, 255) as u8;
-    [
-        clip(luma + 409 * cr),
-        clip(luma - 100 * cb - 208 * cr),
-        clip(luma + 516 * cb),
-        255,
-    ]
 }

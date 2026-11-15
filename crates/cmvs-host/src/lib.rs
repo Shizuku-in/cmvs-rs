@@ -177,8 +177,11 @@ impl Player {
                 audio_control = Some(audio.host_control());
                 startup.set_audio_backend(Box::new(audio))?;
             }
-            startup.set_mgv_factory(Box::new(cmvs_video::PrefetchTheoraFactory::default()));
+            startup.set_mgv_factory(Box::new(
+                cmvs_video::PrefetchTheoraFactory::default().with_lookahead(64 << 20, 48),
+            ));
             startup.set_scene_prefetch(|| {});
+            startup.set_image_decode_threads(cmvs_core::image::DecodeThreads::host());
             startup.set_decoded_image_cache(256 << 20);
             Ok(startup)
         })?;

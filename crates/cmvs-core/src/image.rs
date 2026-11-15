@@ -26,6 +26,20 @@ pub struct DecodeThreads {
     pub on_start: Option<fn(usize)>,
 }
 impl DecodeThreads {
+    /// Uses up to three extra threads bounded by available CPU parallelism.
+    ///
+    /// Image decoders split at most four color planes across threads, so higher
+    /// counts do not add parallel work.
+    pub fn host() -> Self {
+        let extra = std::thread::available_parallelism()
+            .map_or(1, |cores| cores.get().saturating_sub(1))
+            .min(3);
+        Self {
+            extra,
+            on_start: None,
+        }
+    }
+
     /// `run` over `tasks`, results in task order. Each thread takes the next
     /// unclaimed task; a thread the system refuses to start is simply not used.
     pub(crate) fn map<T: Sync, R: Send>(self, tasks: &[T], run: impl Fn(&T) -> R + Sync) -> Vec<R> {
@@ -413,5 +427,14 @@ mod decoded_cache_tests {
         assert!(cache.entries.is_empty() && cache.bytes == 0);
         cache.insert(6, &image(6, 1));
         assert!(cache.get(6).is_none());
+    }
+
+    #[test]
+    fn host_decode_threads_caps_extra_workers_at_three_planes() {
+        let threads = DecodeThreads::host();
+        assert!(threads.extra <= 3);
+        assert!(threads.on_start.is_none());
+        let output = threads.map(&[10, 20, 30, 40], |&n| n * 2);
+        assert_eq!(output, vec![20, 40, 60, 80]);
     }
 }
