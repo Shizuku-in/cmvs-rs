@@ -1,6 +1,6 @@
 //! Byte-preserving INI updates; original game files are never written.
 use crate::FormatError;
-use crate::filesystem::File;
+use crate::filesystem::HostFs;
 use std::{
     io::{self, Read},
     path::Path,
@@ -71,8 +71,8 @@ impl Configuration {
         }
         Ok(Self(bytes))
     }
-    pub fn read(path: &Path) -> io::Result<Option<Self>> {
-        let file = match File::open(path) {
+    pub fn read_with_fs(fs: &dyn HostFs, path: &Path) -> io::Result<Option<Self>> {
+        let file = match fs.open_read(path) {
             Ok(file) => file,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e),
@@ -81,6 +81,11 @@ impl Configuration {
         file.take(MAX_CONFIGURATION as u64 + 1)
             .read_to_end(&mut bytes)?;
         Self::new(bytes).map(Some).map_err(io::Error::other)
+    }
+
+    #[cfg(feature = "std-fs")]
+    pub fn read(path: &Path) -> io::Result<Option<Self>> {
+        Self::read_with_fs(&crate::filesystem::StdFs, path)
     }
     pub fn bytes(&self) -> &[u8] {
         &self.0

@@ -2,7 +2,7 @@
 //! 0x2080 and 0x22b2, slot writes 0x22b6 (0x140080b20), loads 0x22b5 (0x140081960 then
 //! 0x140069fd0), thumbnails 0x22b8 (0x14006b4a0) and the slot queries 0x22b7 / 0x22bd.
 use super::{Runtime, SystemOutput};
-use crate::filesystem as fs;
+use crate::filesystem::{HostFs, OpenOptions};
 use crate::{
     audio::SavedAudio,
     dispatch::RuntimeCall,
@@ -18,7 +18,7 @@ use crate::{
         SnapshotLayout,
     },
 };
-use std::{collections::BTreeMap, error::Error, io::Write, path::Path};
+use std::{collections::BTreeMap, error::Error, io::Write, path::Path, sync::Arc};
 
 /// Local wall-clock fields for save labels: year, month, day, hour, minute, second.
 pub type SaveTime = [u16; 6];
@@ -623,10 +623,14 @@ impl Runtime<'_> {
         Ok(())
     }
 
-    /// The directory gameplay slots are written to: only an independent user directory.
-    pub(super) fn slot_directory(&self) -> Result<std::path::PathBuf, Box<dyn Error>> {
+    /// The directory and backend gameplay slots are written to: only an independent user directory.
+    pub(super) fn slot_target(
+        &self,
+    ) -> Result<(std::path::PathBuf, Arc<dyn HostFs>), Box<dyn Error>> {
         match &self.system_output {
-            Some(SystemOutput::Profile(profile)) => Ok(profile.directory().to_path_buf()),
+            Some(SystemOutput::Profile(profile)) => {
+                Ok((profile.directory().to_path_buf(), Arc::clone(profile.fs())))
+            }
             _ => Err(
                 "gameplay saves require --user-data-dir; the game directory stays read-only".into(),
             ),
@@ -658,7 +662,7 @@ impl Runtime<'_> {
         {
             return Err("entering the save callback 30 after a write is not modeled".into());
         }
-        let directory = self.slot_directory()?;
+        let (directory, slot_fs) = self.slot_target()?;
         let mut header = captured.header;
         let now = label_time((self.save_clock)()).into_bytes();
         for i in [0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18] {
@@ -681,16 +685,22 @@ impl Runtime<'_> {
         if slot < 950
             && let Some(previous) = self.saves.read_slot(slot)?
         {
-            replace_file(&directory, &format!("save{BACKUP_SLOT:03}.dat"), &previous)?;
+            replace_file(
+                &*slot_fs,
+                &directory,
+                &format!("save{BACKUP_SLOT:03}.dat"),
+                &previous,
+            )?;
         }
         // 0x1400179e0: the system save is written with every slot.
         let id = self.system_save_identifier();
         if let Some(output) = &mut self.system_output {
             self.system_host
                 .write_now(self.machine.state(), output, &mut self.random, id)?;
-            self.system_source = crate::system_save::FileSystemSave::new(output.path());
+            self.system_source =
+                crate::system_save::FileSystemSave::with_fs(output.path(), Arc::clone(output.fs()));
         }
-        replace_file(&directory, &format!("save{slot:03}.dat"), &file)?;
+        replace_file(&*slot_fs, &directory, &format!("save{slot:03}.dat"), &file)?;
         Ok(true)
     }
 
@@ -714,7 +724,7 @@ impl Runtime<'_> {
         let changed = if slot > 999 {
             false
         } else {
-            let directory = self.slot_directory()?;
+            let (directory, slot_fs) = self.slot_target()?;
             let name = format!("save{slot:03}.dat");
             match self.saves.read_slot(slot as u16)? {
                 None => false,
@@ -731,7 +741,7 @@ impl Runtime<'_> {
                         }
                         bytes[532..536].copy_from_slice(&values[0].to_le_bytes());
                         bytes[536..540].copy_from_slice(&values[1].to_le_bytes());
-                        replace_file(&directory, &name, &bytes)?;
+                        replace_file(&*slot_fs, &directory, &name, &bytes)?;
                         true
                     }
                 }
@@ -1111,11 +1121,8 @@ impl Runtime<'_> {
         {
             bytes[272..272 + comment.len()].copy_from_slice(&comment);
             bytes[272 + comment.len()] = 0;
-            replace_file(
-                &self.slot_directory()?,
-                &format!("save{slot:03}.dat"),
-                &bytes,
-            )?;
+            let (directory, slot_fs) = self.slot_target()?;
+            replace_file(&*slot_fs, &directory, &format!("save{slot:03}.dat"), &bytes)?;
             changed = true;
         }
         request.complete(&mut self.machine, 0x4008)?;
@@ -1238,18 +1245,23 @@ impl Runtime<'_> {
 }
 
 /// Replaces a slot file through a fresh temporary file in the same directory.
-fn replace_file(directory: &Path, name: &str, bytes: &[u8]) -> Result<(), Box<dyn Error>> {
+fn replace_file(
+    fs: &dyn HostFs,
+    directory: &Path,
+    name: &str,
+    bytes: &[u8],
+) -> Result<(), Box<dyn Error>> {
     let temporary = directory.join(format!(".{name}.tmp"));
-    let _ = fs::remove_file(&temporary);
-    let mut file = fs::OpenOptions::new()
+    let _ = fs.remove_file(&temporary);
+    let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(&temporary)?;
+        .open_with(fs, &temporary)?;
     file.write_all(bytes)?;
     file.sync_all()?;
     drop(file);
-    if let Err(e) = fs::replace(&temporary, directory.join(name)) {
-        let _ = fs::remove_file(&temporary);
+    if let Err(e) = fs.replace(&temporary, &directory.join(name)) {
+        let _ = fs.remove_file(&temporary);
         return Err(e.into());
     }
     Ok(())

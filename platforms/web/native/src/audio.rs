@@ -1,4 +1,5 @@
 //! Streaming Vorbis channels backed by the page's Web Audio device.
+use crate::fs::WebFs;
 use cmvs_audio::AudioProgram;
 use cmvs_core::{
     MAX_PAYLOAD,
@@ -7,8 +8,8 @@ use cmvs_core::{
         VoiceCompressor, VoiceDucking, VoiceDuckingSettings, VoiceMixer,
     },
     cpz::Cpz7Parameters,
-    filesystem::File,
-    platform::resolve_under,
+    filesystem::HostFs,
+    platform::resolve_under_with_fs,
     resources::{ResourceArchives, ResourceKind, ResourceSource},
 };
 use std::{
@@ -16,6 +17,7 @@ use std::{
     error::Error,
     io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 use wasm_bindgen::prelude::*;
 #[wasm_bindgen]
@@ -142,7 +144,7 @@ impl BrowserAudio {
     pub fn new(root: &Path) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
             root: root.into(),
-            archives: ResourceArchives::new(root)?,
+            archives: ResourceArchives::with_fs(root, Arc::new(WebFs))?,
             paths: BTreeMap::new(),
             slots: std::array::from_fn(|_| None),
             epoch: 0,
@@ -500,7 +502,7 @@ impl AudioBackend for BrowserAudio {
         if *size as usize > MAX_PAYLOAD {
             return Err("movie Ogg resource exceeds limit".into());
         }
-        let mut file = File::open(resolve_under(&self.root, path)?)?;
+        let mut file = WebFs.open_read(&resolve_under_with_fs(&WebFs, &self.root, path)?)?;
         if offset
             .checked_add(u64::from(*size))
             .is_none_or(|end| file.metadata().map_or(true, |m| end > m.len()))

@@ -53,8 +53,7 @@
 //! [`SnapshotPolicy`] controls gameplay snapshots. The default captures state and
 //! returns an error if the state includes unsupported records.
 //! Errors from VM execution, resources, and host services propagate to the caller.
-use crate::filesystem as fs;
-use crate::filesystem::File;
+use crate::filesystem::{File, HostFs};
 use crate::{
     MAX_PAYLOAD,
     audio::{AudioBackend, AudioHost, RecordingAudio},
@@ -91,6 +90,7 @@ use std::{
     error::Error,
     io::Read,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 mod frame;
@@ -116,6 +116,12 @@ impl SystemOutput {
             Self::Profile(profile) => profile.path(),
         }
     }
+    fn fs(&self) -> &Arc<dyn HostFs> {
+        match self {
+            Self::New(output) => output.fs(),
+            Self::Profile(profile) => profile.fs(),
+        }
+    }
 }
 impl SystemSaveSink for SystemOutput {
     fn write(&mut self, raw: &[u8]) -> std::io::Result<()> {
@@ -126,19 +132,29 @@ impl SystemSaveSink for SystemOutput {
     }
 }
 
-/// Read and decode the startup script selected by [`GameFiles`].
-///
-/// `root` is the game directory. Returns an error for I/O failures, oversized input,
-/// or malformed script data; no script instructions are executed.
-pub fn load_start(root: &Path, files: &GameFiles) -> Result<Script, Box<dyn Error>> {
+/// Read and decode the startup script selected by [`GameFiles`] using `fs`.
+pub fn load_start_with_fs(
+    fs: &dyn HostFs,
+    root: &Path,
+    files: &GameFiles,
+) -> Result<Script, Box<dyn Error>> {
     let mut bytes = Vec::new();
-    File::open(root.join(&files.start_script))?
+    fs.open_read(&root.join(&files.start_script))?
         .take(MAX_PAYLOAD as u64 + 49)
         .read_to_end(&mut bytes)?;
     if bytes.len() > MAX_PAYLOAD + 48 {
         return Err("startup script exceeds research limit".into());
     }
     Ok(Script::decode(&bytes)?)
+}
+
+/// Read and decode the startup script selected by [`GameFiles`].
+///
+/// `root` is the game directory. Returns an error for I/O failures, oversized input,
+/// or malformed script data; no script instructions are executed.
+#[cfg(feature = "std-fs")]
+pub fn load_start(root: &Path, files: &GameFiles) -> Result<Script, Box<dyn Error>> {
+    load_start_with_fs(&crate::filesystem::StdFs, root, files)
 }
 /// Result of one [`Runtime::tick`], used to drive the host loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -214,6 +230,8 @@ pub struct RuntimeOptions {
     pub skip_auto_resume: bool,
     /// Decode full-screen CMV frames during [`Runtime::advance_playback`].
     pub decode_cmv_frames: bool,
+    /// Host filesystem capability; defaults to [`StdFs`](crate::filesystem::StdFs) when enabled.
+    pub fs: Option<Arc<dyn HostFs>>,
 }
 
 /// Compatibility name for [`Runtime`].
@@ -229,6 +247,7 @@ pub type StartupEvent = RuntimeEvent;
 /// resources and configuration; execution begins with [`Self::tick`]. See the
 /// [module guide](self) for initialization and frame-loop order.
 pub struct Runtime<'a> {
+    fs: Arc<dyn HostFs>,
     slot_edit: Option<slot_edit::SlotEdit>,
     main_script_name: &'static [u8],
     quit: bool,
@@ -302,8 +321,30 @@ impl<'a> Runtime<'a> {
         game: &Game<'a>,
         options: RuntimeOptions,
     ) -> Result<Self, Box<dyn Error>> {
-        let mut runtime =
-            Self::new_with_encoding(script, root, game, options.callback_tick, options.encoding)?;
+        let fs = match options.fs {
+            Some(fs) => fs,
+            None => {
+                #[cfg(feature = "std-fs")]
+                {
+                    crate::filesystem::default_fs()
+                }
+                #[cfg(not(feature = "std-fs"))]
+                {
+                    return Err(
+                        "RuntimeOptions::fs is required when cmvs-core is built without std-fs"
+                            .into(),
+                    );
+                }
+            }
+        };
+        let mut runtime = Self::new_with_encoding_and_fs(
+            script,
+            root,
+            game,
+            options.callback_tick,
+            options.encoding,
+            fs,
+        )?;
         match options.saves {
             SaveStorage::ReadOnly => {}
             SaveStorage::UserDirectory(path) => runtime.set_user_data_directory(&path)?,
@@ -325,6 +366,7 @@ impl<'a> Runtime<'a> {
     /// and a writable save profile before ticking. Returns errors from script
     /// validation, configuration, or resource initialization.
     /// Use [`Self::with_options`] to select save storage and other initialization choices.
+    #[cfg(feature = "std-fs")]
     pub fn new(
         script: &'a Script,
         root: &Path,
@@ -340,12 +382,31 @@ impl<'a> Runtime<'a> {
         )
     }
     /// Create a session with an explicit text encoding; otherwise like [`Self::new`].
+    #[cfg(feature = "std-fs")]
     pub fn new_with_encoding(
         script: &'a Script,
         root: &Path,
         game: &Game<'a>,
         virtual_tick: u32,
         encoding: crate::TextEncoding,
+    ) -> Result<Self, Box<dyn Error>> {
+        Self::new_with_encoding_and_fs(
+            script,
+            root,
+            game,
+            virtual_tick,
+            encoding,
+            crate::filesystem::default_fs(),
+        )
+    }
+
+    fn new_with_encoding_and_fs(
+        script: &'a Script,
+        root: &Path,
+        game: &Game<'a>,
+        virtual_tick: u32,
+        encoding: crate::TextEncoding,
+        fs: Arc<dyn HostFs>,
     ) -> Result<Self, Box<dyn Error>> {
         let mut machine = Machine::new_with_encoding(script, encoding)?;
         machine.set_command_map(game.selection.profile.command_map());
@@ -372,7 +433,7 @@ impl<'a> Runtime<'a> {
         }
         machine.set_current_name(game.files.start_name());
         // 0x14000a3c0 reads the startup settings; cmvs.cfg is optional and read only.
-        let configuration = crate::settings::Configuration::read(&root.join("cmvs.cfg"))?
+        let configuration = crate::settings::Configuration::read_with_fs(&*fs, &root.join("cmvs.cfg"))?
             .unwrap_or(crate::settings::Configuration::new(Vec::new())?);
         let screen_size = configuration.screen_size_for_profile(game.selection.profile)?;
         let mut scene = SceneHost::for_profile(game.selection.profile);
@@ -415,7 +476,7 @@ impl<'a> Runtime<'a> {
             bootstrap: Bootstrap::default(),
             control: ScriptControl::new(virtual_tick),
             source: ArchiveScripts::from_start(
-                File::open(root.join(&game.files.script_archive))?,
+                fs.open_read(&root.join(&game.files.script_archive))?,
                 script,
                 game.files
                     .script_archive
@@ -424,23 +485,23 @@ impl<'a> Runtime<'a> {
                     .ok_or(crate::FormatError("archive basename is not UTF-8"))?
                     .as_bytes(),
             )?,
-            saves: DirectorySaves::new(root.join("save"))?,
+            saves: DirectorySaves::with_fs(root.join("save"), Arc::clone(&fs))?,
             save_menu,
             // CVNS keeps CSS0 in the save directory the start script registers (0x2026).
             system_source: if game.selection.profile.family == crate::profile::Family::Cvns {
-                FileSystemSave::css0(root.join("save/save000.dat"))
+                FileSystemSave::css0_with_fs(root.join("save/save000.dat"), Arc::clone(&fs))
             } else {
-                FileSystemSave::new(root.join("save/system.dat"))
+                FileSystemSave::with_fs(root.join("save/system.dat"), Arc::clone(&fs))
             },
             system_host: SystemSaveHost::default(),
             system_output: None,
-            assets: DirectoryAssets::new(root)?,
+            assets: DirectoryAssets::with_fs(root, Arc::clone(&fs))?,
             platform,
             scene,
             buttons,
             movies: MovieHost::for_profile(game.selection.profile),
-            scene_movies: ResourceArchives::new(root)?,
-            root: fs::canonicalize(root)?,
+            scene_movies: ResourceArchives::with_fs(root, Arc::clone(&fs))?,
+            root: fs.canonicalize(root)?,
             sequence: SequenceHost::default(),
             camera,
             capture: ScreenCapture::default(),
@@ -450,7 +511,8 @@ impl<'a> Runtime<'a> {
             timers: VmTimers::default(),
             resume_run: true,
             frame_delta: 0,
-            images: ImageArchives::new(root)?,
+            images: ImageArchives::with_fs(root, Arc::clone(&fs))?,
+            fs,
             save_title: SaveTitle::default(),
             save_info: SaveInfo::default(),
             gesture: PointerGesture::default(),
@@ -648,10 +710,11 @@ impl<'a> Runtime<'a> {
         self.movies.advance_with_clock(
             delta_ms,
             clock,
-            &mut DirectoryMovies {
-                root: &self.root,
-                directory: self.bootstrap.paths().get(&(0x2015, 0)).map(Vec::as_slice),
-            },
+            &mut DirectoryMovies::with_fs(
+                &self.root,
+                self.bootstrap.paths().get(&(0x2015, 0)).map(Vec::as_slice),
+                &*self.fs,
+            ),
         )?;
         if had_movie && !self.movies.has_player() && clock.is_some() {
             self.audio_backend.stop_movie_audio()?;
@@ -907,7 +970,11 @@ impl<'a> Runtime<'a> {
         if self.steps != 0 || self.system_output.is_some() {
             return Err("select one system-save output mode before VM execution".into());
         }
-        self.system_output = Some(SystemOutput::New(NewSystemSave::new(path, &self.root)?));
+        self.system_output = Some(SystemOutput::New(NewSystemSave::with_fs(
+            path,
+            &self.root,
+            Arc::clone(&self.fs),
+        )?));
         Ok(())
     }
     /// Use a locked, independent user directory for CSS1 reads, repeated writes and
@@ -916,7 +983,7 @@ impl<'a> Runtime<'a> {
         if self.steps != 0 || self.system_output.is_some() {
             return Err("select one system-save output mode before VM execution".into());
         }
-        let profile = ProfileSystemSave::open(path, &self.root)?;
+        let profile = ProfileSystemSave::open_with_fs(path, &self.root, Arc::clone(&self.fs))?;
         self.set_save_profile(profile)
     }
     /// Install an already locked profile, including an explicitly selected
@@ -925,18 +992,19 @@ impl<'a> Runtime<'a> {
         if self.steps != 0 || self.system_output.is_some() {
             return Err("select one system-save output mode before VM execution".into());
         }
-        let saves = DirectorySaves::new(profile.directory())?;
+        let save_fs = Arc::clone(profile.fs());
+        let saves = DirectorySaves::with_fs(profile.directory(), Arc::clone(&save_fs))?;
         let configuration = profile.read_configuration()?;
         let primary = profile.path();
-        let source = if fs::try_exists(&primary)? {
-            primary
+        let (source, source_fs) = if save_fs.try_exists(&primary)? {
+            (primary, save_fs)
         } else {
-            self.root.join("save/system.dat")
+            (self.root.join("save/system.dat"), Arc::clone(&self.fs))
         };
         if let Some(configuration) = configuration {
             self.install_configuration(configuration)?;
         }
-        self.system_source = FileSystemSave::new(source);
+        self.system_source = FileSystemSave::with_fs(source, source_fs);
         self.saves = saves;
         self.system_output = Some(SystemOutput::Profile(profile));
         Ok(())
@@ -1107,7 +1175,8 @@ impl<'a> Runtime<'a> {
                 },
             )?;
             if flow == Some(crate::dispatch::Flow::SystemWritten) {
-                self.system_source = FileSystemSave::new(output.path());
+                self.system_source =
+                    FileSystemSave::with_fs(output.path(), Arc::clone(output.fs()));
                 return Ok(RuntimeEvent::Progress);
             }
             return Ok(RuntimeEvent::Unhandled {
@@ -1242,10 +1311,11 @@ impl<'a> Runtime<'a> {
         let mut image_source = self.images.with_paths(self.bootstrap.paths());
         let input_clock = self.timers.clock();
         let movie_settings = self.audio.settings();
-        let mut movie_source = DirectoryMovies {
-            root: &self.root,
-            directory: self.bootstrap.paths().get(&(0x2015, 0)).map(Vec::as_slice),
-        };
+        let mut movie_source = DirectoryMovies::with_fs(
+            &self.root,
+            self.bootstrap.paths().get(&(0x2015, 0)).map(Vec::as_slice),
+            &*self.fs,
+        );
         let mut scene_movie_source = self
             .scene_movies
             .with_paths(self.bootstrap.paths(), ResourceKind::SceneMovie);

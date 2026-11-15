@@ -11,10 +11,10 @@
 // 0x2309 starts default-mode segments; 0x231a queries activity; 0x230b/0x230c resume/pause.
 // Reviewed legacy variants add segment/frame queries, seek, queued segments, modes 0/10,
 // and a stop frame. NATSUUTA additionally supports clock-driven mode 15.
-use crate::filesystem::File;
+use crate::filesystem::{File, HostFs};
 use crate::{
     audio::MovieAudioClock, bytecode::DecodeError, cmv::CmvIndex, dispatch::Call, evaluate::error,
-    machine::Machine, platform::resolve_under,
+    machine::Machine, platform::resolve_under_with_fs,
 };
 use std::{error::Error, io, path::Path, sync::Arc};
 
@@ -54,6 +54,24 @@ pub trait MovieSource {
 pub struct DirectoryMovies<'a> {
     pub root: &'a Path,
     pub directory: Option<&'a [u8]>,
+    fs: &'a dyn HostFs,
+}
+
+impl<'a> DirectoryMovies<'a> {
+    /// Bind a movie directory using `fs`.
+    pub fn with_fs(root: &'a Path, directory: Option<&'a [u8]>, fs: &'a dyn HostFs) -> Self {
+        Self {
+            root,
+            directory,
+            fs,
+        }
+    }
+
+    /// Bind a movie directory using [`StdFs`](crate::filesystem::StdFs).
+    #[cfg(feature = "std-fs")]
+    pub fn new(root: &'a Path, directory: Option<&'a [u8]>) -> Self {
+        Self::with_fs(root, directory, &crate::filesystem::StdFs)
+    }
 }
 
 impl MovieSource for DirectoryMovies<'_> {
@@ -70,7 +88,8 @@ impl MovieSource for DirectoryMovies<'_> {
         index: &CmvIndex,
         frame: u32,
     ) -> Result<crate::raster::RgbaImage, Box<dyn Error>> {
-        index.decode_frame(&mut File::open(resolve_under(self.root, path)?)?, frame)
+        let resolved = resolve_under_with_fs(self.fs, self.root, path)?;
+        index.decode_frame(&mut self.fs.open_read(&resolved)?, frame)
     }
     fn open(&mut self, name: &[u8]) -> Result<Option<OpenedMovie>, Box<dyn Error>> {
         let Some((path, mut file)) = self.open_file(name)? else {
@@ -86,7 +105,7 @@ impl DirectoryMovies<'_> {
             .ok_or("movie directory 0x2015 was not registered")?;
         let mut relative = directory.to_vec();
         relative.extend_from_slice(name);
-        let path = match resolve_under(self.root, &relative) {
+        let path = match resolve_under_with_fs(self.fs, self.root, &relative) {
             Ok(path) => path,
             Err(e)
                 if e.downcast_ref::<io::Error>()
@@ -96,7 +115,7 @@ impl DirectoryMovies<'_> {
             }
             Err(e) => return Err(e),
         };
-        let file = match File::open(path) {
+        let file = match self.fs.open_read(&path) {
             Ok(file) => file,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e.into()),

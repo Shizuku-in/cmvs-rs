@@ -354,6 +354,7 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
         RuntimeOptions {
             saves: SaveStorage::UserDirectory(user.clone()),
             decode_cmv_frames: true,
+            fs: Some(Arc::new(crate::fs::AndroidFs)),
             ..Default::default()
         },
     )?;

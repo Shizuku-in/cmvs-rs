@@ -1,12 +1,12 @@
 //! Read-only gameplay-save header scanning, signature queries and menu state.
 //! Header recognition does not validate or restore the saved engine snapshot.
-use crate::filesystem as fs;
-use crate::filesystem::File;
+use crate::filesystem::HostFs;
 use crate::{FormatError, bytecode::DecodeError, dispatch::Call, machine::Machine};
 use std::{
     error::Error,
     io::{self, Read},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 pub const HEADER_READ_LIMIT: usize = 512;
@@ -98,34 +98,44 @@ pub trait SaveSource {
 /// An explicitly selected directory; no writes or game-relative path inference.
 /// A missing directory represents an empty set of saves on first startup.
 pub struct DirectorySaves {
+    fs: Arc<dyn HostFs>,
     root: PathBuf,
 }
 
 impl DirectorySaves {
-    pub fn new(root: impl AsRef<Path>) -> io::Result<Self> {
-        let root = match fs::canonicalize(root.as_ref()) {
+    pub fn with_fs(root: impl AsRef<Path>, fs: Arc<dyn HostFs>) -> io::Result<Self> {
+        let root = match fs.canonicalize(root.as_ref()) {
             Ok(root) => root,
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 return Ok(Self {
-                    root: fs::absolute(root)?,
+                    root: fs.absolute(root.as_ref())?,
+                    fs,
                 });
             }
             Err(e) => return Err(e),
         };
-        if !fs::is_dir(&root) {
+        if !fs.is_dir(&root) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "save root is not a directory",
             ));
         }
-        Ok(Self { root })
+        Ok(Self { fs, root })
+    }
+
+    #[cfg(feature = "std-fs")]
+    pub fn new(root: impl AsRef<Path>) -> io::Result<Self> {
+        Self::with_fs(root, crate::filesystem::default_fs())
     }
 }
 
 impl DirectorySaves {
     /// A whole slot file for loading (0x1400087c0), bounded by the research payload limit.
     pub(crate) fn read_slot(&self, slot: u16) -> io::Result<Option<Vec<u8>>> {
-        let file = match File::open(self.root.join(format!("save{slot:03}.dat"))) {
+        let file = match self
+            .fs
+            .open_read(&self.root.join(format!("save{slot:03}.dat")))
+        {
             Ok(file) => file,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e),
@@ -151,7 +161,10 @@ impl SaveSource for DirectorySaves {
                 "save slot outside 0..999",
             ));
         }
-        let file = match File::open(self.root.join(format!("save{slot:03}.dat"))) {
+        let file = match self
+            .fs
+            .open_read(&self.root.join(format!("save{slot:03}.dat")))
+        {
             Ok(file) => file,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e),

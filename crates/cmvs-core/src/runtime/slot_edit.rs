@@ -1,8 +1,8 @@
 //! 0x228c / 0x140068dd0 and 0x228e / 0x1400690b0, restricted to the locked user directory.
 use super::Runtime;
 use crate::dispatch::RuntimeCall;
-use crate::filesystem as fs;
-use std::{error::Error, io, path::PathBuf};
+use crate::filesystem::HostFs;
+use std::{error::Error, io, path::PathBuf, sync::Arc};
 
 enum Operation {
     Remove(String),
@@ -12,6 +12,7 @@ enum Operation {
 /// Keep the successful prefix across an I/O failure. Retrying a partially completed
 /// swap must resume its next rename rather than swap the already moved files again.
 pub(super) struct SlotEdit {
+    fs: Arc<dyn HostFs>,
     identity: (usize, u16, u32, u32),
     directory: PathBuf,
     operations: Vec<Operation>,
@@ -20,12 +21,16 @@ pub(super) struct SlotEdit {
 }
 
 impl SlotEdit {
-    fn prepare(directory: PathBuf, identity: (usize, u16, u32, u32)) -> io::Result<Self> {
+    fn prepare(
+        fs: Arc<dyn HostFs>,
+        directory: PathBuf,
+        identity: (usize, u16, u32, u32),
+    ) -> io::Result<Self> {
         let (_, command, first, second) = identity;
         let a = format!("save{first:03}.dat");
         let b = format!("save{second:03}.dat");
-        let a_exists = fs::try_exists(directory.join(&a))?;
-        let b_exists = fs::try_exists(directory.join(&b))?;
+        let a_exists = fs.try_exists(&directory.join(&a))?;
+        let b_exists = fs.try_exists(&directory.join(&b))?;
         let scratch = if command == 0x28c {
             "savetemp.dat"
         } else {
@@ -57,6 +62,7 @@ impl SlotEdit {
             }
         }
         Ok(Self {
+            fs,
             identity,
             directory,
             operations,
@@ -68,7 +74,7 @@ impl SlotEdit {
     fn run(&mut self) -> io::Result<()> {
         while let Some(operation) = self.operations.get(self.next) {
             match operation {
-                Operation::Remove(name) => match fs::remove_file(self.directory.join(name)) {
+                Operation::Remove(name) => match self.fs.remove_file(&self.directory.join(name)) {
                     Err(e) if e.kind() == io::ErrorKind::NotFound => {}
                     result => result?,
                 },
@@ -76,13 +82,14 @@ impl SlotEdit {
                     // The original uses MoveFileA, which rejects an occupied target.
                     // The profile lock excludes competing engine sessions; also reject
                     // unexpected destinations instead of deliberately replacing them.
-                    if fs::try_exists(self.directory.join(to))? {
+                    if self.fs.try_exists(&self.directory.join(to))? {
                         return Err(io::Error::new(
                             io::ErrorKind::AlreadyExists,
                             "slot rename target already exists",
                         ));
                     }
-                    fs::rename(self.directory.join(from), self.directory.join(to))?
+                    self.fs
+                        .rename(&self.directory.join(from), &self.directory.join(to))?
                 }
             }
             self.next += 1;
@@ -102,7 +109,8 @@ impl Runtime<'_> {
         if first <= 999 && second <= 999 {
             let identity = (pc, command, first, second);
             if self.slot_edit.is_none() {
-                self.slot_edit = Some(SlotEdit::prepare(self.slot_directory()?, identity)?);
+                let (directory, slot_fs) = self.slot_target()?;
+                self.slot_edit = Some(SlotEdit::prepare(slot_fs, directory, identity)?);
             }
             let edit = self.slot_edit.as_mut().expect("prepared");
             if edit.identity != identity {

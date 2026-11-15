@@ -438,4 +438,185 @@ mod tests {
         drop(game);
         std::fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn save_profile_operations_use_profile_fs_not_runtime_fs() {
+        use crate::{
+            filesystem::{File, HostFs, Metadata, OpenOptions, StdFs},
+            runtime::{RuntimeOptions, SaveStorage},
+            save_menu::SaveSource,
+            snapshot::CapturedSave,
+            system_save::{ProfileSystemSave, SystemSaveSource},
+        };
+        use std::{
+            io,
+            path::{Path, PathBuf},
+            sync::Arc,
+        };
+
+        struct BlockPrefixFs(PathBuf);
+
+        impl BlockPrefixFs {
+            fn guard(&self, path: &Path) -> io::Result<()> {
+                if path.starts_with(&self.0) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        format!("runtime fs accessed profile path {}", path.display()),
+                    ));
+                }
+                Ok(())
+            }
+        }
+
+        impl HostFs for BlockPrefixFs {
+            fn open(&self, path: &Path, options: &OpenOptions) -> io::Result<File> {
+                self.guard(path)?;
+                StdFs.open(path, options)
+            }
+            fn metadata(&self, path: &Path) -> io::Result<Metadata> {
+                self.guard(path)?;
+                StdFs.metadata(path)
+            }
+            fn symlink_metadata(&self, path: &Path) -> io::Result<Metadata> {
+                self.guard(path)?;
+                StdFs.symlink_metadata(path)
+            }
+            fn try_exists(&self, path: &Path) -> io::Result<bool> {
+                self.guard(path)?;
+                StdFs.try_exists(path)
+            }
+            fn is_file(&self, path: &Path) -> bool {
+                !path.starts_with(&self.0) && StdFs.is_file(path)
+            }
+            fn is_dir(&self, path: &Path) -> bool {
+                !path.starts_with(&self.0) && StdFs.is_dir(path)
+            }
+            fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+                self.guard(path)?;
+                StdFs.canonicalize(path)
+            }
+            fn absolute(&self, path: &Path) -> io::Result<PathBuf> {
+                self.guard(path)?;
+                StdFs.absolute(path)
+            }
+            fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+                self.guard(path)?;
+                StdFs.create_dir_all(path)
+            }
+            fn remove_file(&self, path: &Path) -> io::Result<()> {
+                self.guard(path)?;
+                StdFs.remove_file(path)
+            }
+            fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+                self.guard(from)?;
+                self.guard(to)?;
+                StdFs.rename(from, to)
+            }
+            fn session_id(&self) -> u32 {
+                StdFs.session_id()
+            }
+        }
+
+        let (root, _) = capture_fixture("profile-fs-isolation");
+        let mut code = Vec::new();
+        code.extend(0x440u16.to_le_bytes());
+        code.extend(4u16.to_le_bytes());
+        code.extend(1u32.to_le_bytes());
+        code.extend(0x201du16.to_le_bytes());
+        code.extend(0x2003u16.to_le_bytes());
+        let mut raw = b"PS2A".to_vec();
+        for word in [
+            48u32,
+            0,
+            0,
+            0,
+            code.len() as u32,
+            0,
+            0,
+            0,
+            0,
+            code.len() as u32,
+            0,
+        ] {
+            raw.extend(word.to_le_bytes());
+        }
+        raw.extend(code.into_iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+        std::fs::write(root.join("data/pack/start.ps3"), &raw).unwrap();
+
+        let user =
+            std::env::temp_dir().join(format!("cmvs-profile-fs-user-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&user);
+        let registry = Registry::builtin();
+        let game = registry
+            .identify_game(&root, Some("cmvs-20160201"))
+            .unwrap();
+        let script = Script::decode(&raw).unwrap();
+
+        let mut header = [0u8; crate::save::HEADER_SIZE];
+        header[..4].copy_from_slice(b"CSV2");
+        header[4..8].copy_from_slice(&(crate::save::HEADER_SIZE as u32).to_le_bytes());
+        header[548..550].copy_from_slice(&0u16.to_le_bytes());
+
+        // Phase 1: seed user/system.dat and user/save000.dat via a normal session.
+        {
+            let profile =
+                ProfileSystemSave::open_with_fs(&user, &root, Arc::new(StdFs)).unwrap();
+            let mut seed = Runtime::with_options(
+                &script,
+                &root,
+                &game,
+                RuntimeOptions {
+                    saves: SaveStorage::Profile(profile),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let mut backend = RecordingBackend::default();
+            assert_eq!(seed.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
+            assert_eq!(seed.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
+            seed.save_image = SaveImage::Captured(Box::new(CapturedSave {
+                header,
+                snapshot: vec![1, 2, 3, 4],
+                script_image: vec![1],
+            }));
+            assert!(seed.save_slot(0).unwrap());
+        }
+
+        // Phase 2: reinstall the profile onto a Runtime whose own fs forbids profile paths.
+        let profile = ProfileSystemSave::open_with_fs(&user, &root, Arc::new(StdFs)).unwrap();
+        let user_canon = profile.directory().to_path_buf();
+
+        let mut run = Runtime::with_options(
+            &script,
+            &root,
+            &game,
+            RuntimeOptions {
+                saves: SaveStorage::Profile(profile),
+                fs: Some(Arc::new(BlockPrefixFs(user_canon))),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert!(run.system_source.read().unwrap().is_some());
+        assert!(run.saves.read_header(0).unwrap().is_some());
+
+        let mut backend = RecordingBackend::default();
+        assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
+        assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
+        run.save_image = SaveImage::Captured(Box::new(CapturedSave {
+            header,
+            snapshot: vec![5, 6, 7, 8],
+            script_image: vec![1],
+        }));
+        assert!(run.save_slot(0).unwrap());
+        assert!(run.saves.read_slot(0).unwrap().is_some());
+        assert!(run.saves.read_slot(999).unwrap().is_some());
+        assert!(run.system_source.read().unwrap().is_some());
+
+        drop(run);
+        drop(game);
+        let _ = std::fs::remove_dir_all(&user);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

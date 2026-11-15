@@ -312,6 +312,7 @@ dependencies = [
  "cmvs-wgpu",
  "encoding_rs",
  "log",
+ "rustix 1.1.6",
 ]
 
 [[package]]
@@ -337,10 +338,6 @@ dependencies = [
 [[package]]
 name = "cmvs-core"
 version = "0.1.0"
-dependencies = [
- "rustix 1.1.6",
- "wasm-bindgen",
-]
 
 [[package]]
 name = "cmvs-desktop"

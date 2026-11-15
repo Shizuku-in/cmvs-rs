@@ -438,10 +438,9 @@ fn run() -> Result<(), Box<dyn Error>> {
             let is_movie_player =
                 cmvs_rs::dispatch::uses_movie_player_for(resolved.semantics, command);
             let movie_settings = audio.settings();
-            let mut movie_source = movie_root.as_ref().map(|root| DirectoryMovies {
-                root,
-                directory: paths.get(&(0x2015, 0)).map(Vec::as_slice),
-            });
+            let mut movie_source = movie_root
+                .as_ref()
+                .map(|root| DirectoryMovies::new(root, paths.get(&(0x2015, 0)).map(Vec::as_slice)));
             let mut hosts = cmvs_rs::dispatch::Hosts {
                 buttons: platform_assets.is_some().then_some(&mut buttons),
                 movies: platform_assets.is_some().then_some(&mut movies),

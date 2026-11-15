@@ -7,6 +7,8 @@ pub mod canvas;
 pub mod controls;
 pub mod encoding;
 pub mod error_screen;
+pub mod fs;
+pub use fs::ConsoleFs;
 pub mod gpu;
 pub mod library;
 pub mod menu;

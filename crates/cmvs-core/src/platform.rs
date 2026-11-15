@@ -4,8 +4,7 @@
 //! commands into validated [`PlatformRequest`] values and backend queries.
 //! [`RecordingBackend`] records requests for headless use; it does not open a window.
 //! [`PlatformAssets`] supplies bounded cursor and icon resource bytes.
-use crate::filesystem as fs;
-use crate::filesystem::File;
+use crate::filesystem::HostFs;
 use crate::{
     FormatError, MAX_PAYLOAD, TextEncoding, bytecode::DecodeError, cursor::CursorBitmap,
     dispatch::Call, evaluate::error, machine::Machine,
@@ -26,22 +25,33 @@ pub trait PlatformAssets {
 }
 /// Platform assets confined to an existing canonical game directory.
 pub struct DirectoryAssets {
+    fs: Arc<dyn HostFs>,
     root: PathBuf,
 }
 impl DirectoryAssets {
-    /// Resolve `root` and require it to be a directory.
-    pub fn new(root: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
-        let root = fs::canonicalize(root.as_ref())?;
-        if !fs::is_dir(&root) {
+    /// Resolve `root` with the given [`HostFs`] and require it to be a directory.
+    pub fn with_fs(root: impl AsRef<Path>, fs: Arc<dyn HostFs>) -> Result<Self, Box<dyn Error>> {
+        let root = fs.canonicalize(root.as_ref())?;
+        if !fs.is_dir(&root) {
             return Err("platform asset root is not a directory".into());
         }
-        Ok(Self { root })
+        Ok(Self { fs, root })
+    }
+
+    /// Resolve `root` and require it to be a directory.
+    #[cfg(feature = "std-fs")]
+    pub fn new(root: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
+        Self::with_fs(root, crate::filesystem::default_fs())
     }
 }
 /// A bounded ASCII game-relative path, split on `/` or `\`, that must resolve inside the
 /// canonical `root`. Repeated interior separators name the same directory. A missing
 /// file surfaces as the canonicalize `io::Error`.
-pub fn resolve_under(root: &Path, name: &[u8]) -> Result<PathBuf, Box<dyn Error>> {
+pub fn resolve_under_with_fs(
+    fs: &dyn HostFs,
+    root: &Path,
+    name: &[u8],
+) -> Result<PathBuf, Box<dyn Error>> {
     if name.is_empty()
         || name.len() >= 2048
         || !name.is_ascii()
@@ -64,16 +74,24 @@ pub fn resolve_under(root: &Path, name: &[u8]) -> Result<PathBuf, Box<dyn Error>
         }
         path.push(std::str::from_utf8(part)?);
     }
-    let path = fs::canonicalize(path)?;
+    let path = fs.canonicalize(&path)?;
     if !path.starts_with(root) {
         return Err("game path resolves outside root".into());
     }
     Ok(path)
 }
 
+/// [`resolve_under_with_fs`] using [`StdFs`](crate::filesystem::StdFs).
+#[cfg(feature = "std-fs")]
+pub fn resolve_under(root: &Path, name: &[u8]) -> Result<PathBuf, Box<dyn Error>> {
+    resolve_under_with_fs(&crate::filesystem::StdFs, root, name)
+}
+
 impl PlatformAssets for DirectoryAssets {
     fn read(&mut self, name: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
-        let file = File::open(resolve_under(&self.root, name)?)?;
+        let file = self
+            .fs
+            .open_read(&resolve_under_with_fs(&*self.fs, &self.root, name)?)?;
         let mut bytes = Vec::new();
         file.take(MAX_PLATFORM_ASSET as u64 + 1)
             .read_to_end(&mut bytes)?;

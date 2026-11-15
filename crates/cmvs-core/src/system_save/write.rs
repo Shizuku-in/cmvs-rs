@@ -1,12 +1,12 @@
 //! Mode-1 CSS1 output from fully known state (0x1400179e0). Original game stays read-only.
 use super::{Css1Save, KEY, PAYLOAD_OFFSET, pack};
-use crate::filesystem as fs;
-use crate::filesystem::OpenOptions;
+use crate::filesystem::{HostFs, OpenOptions};
 use crate::{FormatError, dispatch::Call, evaluate::State, machine::Machine, random::CrtRandom};
 use std::{
     error::Error,
     io::{self, Write},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 /// Original writer's four CRT draws, including the wrapping 16-bit product.
@@ -161,10 +161,11 @@ pub trait SystemSaveSink {
 /// An explicitly selected new file, outside the canonical read-only game root.
 /// This export policy never replaces an existing file or creates a game backup.
 pub struct NewSystemSave {
+    fs: Arc<dyn HostFs>,
     path: PathBuf,
 }
 impl NewSystemSave {
-    pub fn new(path: &Path, game_root: &Path) -> io::Result<Self> {
+    pub fn with_fs(path: &Path, game_root: &Path, fs: Arc<dyn HostFs>) -> io::Result<Self> {
         let name = path
             .file_name()
             .ok_or_else(|| io::Error::other("CSS1 output needs a filename"))?;
@@ -172,23 +173,30 @@ impl NewSystemSave {
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
             .unwrap_or(Path::new("."));
-        let parent = fs::canonicalize(parent)?;
-        if parent.starts_with(fs::canonicalize(game_root)?) {
+        let parent = fs.canonicalize(parent)?;
+        if parent.starts_with(fs.canonicalize(game_root)?) {
             return Err(io::Error::other(
                 "CSS1 output must be outside the read-only game root",
             ));
         }
         let path = parent.join(name);
-        if fs::try_exists(&path)? {
+        if fs.try_exists(&path)? {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 "CSS1 output already exists",
             ));
         }
-        Ok(Self { path })
+        Ok(Self { fs, path })
+    }
+    #[cfg(feature = "std-fs")]
+    pub fn new(path: &Path, game_root: &Path) -> io::Result<Self> {
+        Self::with_fs(path, game_root, crate::filesystem::default_fs())
     }
     pub fn path(&self) -> &Path {
         &self.path
+    }
+    pub fn fs(&self) -> &Arc<dyn HostFs> {
+        &self.fs
     }
 }
 impl SystemSaveSink for NewSystemSave {
@@ -196,7 +204,7 @@ impl SystemSaveSink for NewSystemSave {
         let mut file = OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&self.path)?;
+            .open_with(&*self.fs, &self.path)?;
         // A failed write retains its partial file; retries cannot silently overwrite it.
         file.write_all(raw)?;
         file.sync_all()

@@ -5,18 +5,18 @@
 //! [`RegisteredResources`] implements [`ResourceSource`]. Slots are searched in order:
 //! the first hit wins, a missing file is `Ok(None)`, and malformed data or I/O failures
 //! are errors. Paths must stay inside the game root.
-use crate::filesystem as fs;
-use crate::filesystem::File;
+use crate::filesystem::{File, HostFs};
 use crate::{
     MAX_PAYLOAD,
     cpz::{ArchiveIndex, Cpz7Parameters},
-    platform::resolve_under,
+    platform::resolve_under_with_fs,
 };
 use std::{
     collections::BTreeMap,
     error::Error,
     io::{self, Read},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 /// Resource families with independent registration slots and archive caches.
@@ -82,25 +82,35 @@ struct OpenArchive {
 /// path or its CPZ7 parameters invalidates the cached archive for that slot.
 // 0x140035b00 destroys the old archive object when a slot path changes.
 pub struct ResourceArchives {
+    fs: Arc<dyn HostFs>,
     root: PathBuf,
     open: BTreeMap<(u16, u32), OpenArchive>,
     parameters: BTreeMap<(u16, u32), Cpz7Parameters>,
 }
 
 impl ResourceArchives {
-    /// Canonicalize an existing game directory without opening any archives.
+    /// Canonicalize an existing game directory using `fs` without opening any archives.
     ///
     /// Returns an error if the root cannot be resolved or is not a directory.
-    pub fn new(root: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
-        let root = fs::canonicalize(root.as_ref())?;
-        if !fs::is_dir(&root) {
+    pub fn with_fs(root: impl AsRef<Path>, fs: Arc<dyn HostFs>) -> Result<Self, Box<dyn Error>> {
+        let root = fs.canonicalize(root.as_ref())?;
+        if !fs.is_dir(&root) {
             return Err("resource root is not a directory".into());
         }
         Ok(Self {
+            fs,
             root,
             open: BTreeMap::new(),
             parameters: BTreeMap::new(),
         })
+    }
+
+    /// Canonicalize an existing game directory without opening any archives.
+    ///
+    /// Returns an error if the root cannot be resolved or is not a directory.
+    #[cfg(feature = "std-fs")]
+    pub fn new(root: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
+        Self::with_fs(root, crate::filesystem::default_fs())
     }
 
     /// Reopen a slot when its keys change, even if its path stays the same.
@@ -131,11 +141,12 @@ impl ResourceArchives {
 
     /// Directory entry: 0x1400087c0 reads root + entry path + name; a missing file is a miss.
     fn read_file(&self, path: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
-        let Some(path) = resolve_present(&self.root, path)? else {
+        let Some(path) = resolve_present(&*self.fs, &self.root, path)? else {
             return Ok(None);
         };
         let mut bytes = Vec::new();
-        File::open(path)?
+        self.fs
+            .open_read(&path)?
             .take(MAX_PAYLOAD as u64 + 1)
             .read_to_end(&mut bytes)?;
         if bytes.len() > MAX_PAYLOAD {
@@ -159,10 +170,10 @@ impl ResourceArchives {
             .is_none_or(|open| open.path != path)
         {
             self.open.remove(&(command, slot));
-            let Some(resolved) = resolve_present(&self.root, path)? else {
+            let Some(resolved) = resolve_present(&*self.fs, &self.root, path)? else {
                 return Ok(None);
             };
-            let mut file = File::open(resolved)?;
+            let mut file = self.fs.open_read(&resolved)?;
             let parameters = self
                 .parameters
                 .get(&(command, slot))
@@ -186,8 +197,12 @@ impl ResourceArchives {
     }
 }
 
-fn resolve_present(root: &Path, name: &[u8]) -> Result<Option<PathBuf>, Box<dyn Error>> {
-    match resolve_under(root, name) {
+fn resolve_present(
+    fs: &dyn HostFs,
+    root: &Path,
+    name: &[u8],
+) -> Result<Option<PathBuf>, Box<dyn Error>> {
+    match resolve_under_with_fs(fs, root, name) {
         Ok(path) => Ok(Some(path)),
         Err(e)
             if e.downcast_ref::<io::Error>()

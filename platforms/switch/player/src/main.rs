@@ -205,6 +205,7 @@ fn run(
             encoding,
             saves: SaveStorage::UserDirectory(user.clone()),
             decode_cmv_frames: true,
+            fs: Some(std::sync::Arc::new(cmvs_console::ConsoleFs)),
             ..Default::default()
         },
     )?;

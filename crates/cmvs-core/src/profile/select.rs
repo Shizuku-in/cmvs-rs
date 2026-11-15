@@ -1,8 +1,7 @@
 //! Profile selection from read-only evidence, with known-binary fallback for modified data.
 use super::{EngineProfile, GameRecord, Registry};
 use crate::digest::{sha256_reader, to_hex};
-use crate::filesystem as fs;
-use crate::filesystem::File;
+use crate::filesystem::HostFs;
 use std::{
     fmt, io,
     path::{Path, PathBuf},
@@ -25,11 +24,20 @@ pub struct FileEvidence {
 }
 
 impl FileEvidence {
-    pub fn read(path: &Path, label: impl Into<String>) -> io::Result<Self> {
+    pub fn read_with_fs(
+        fs: &dyn HostFs,
+        path: &Path,
+        label: impl Into<String>,
+    ) -> io::Result<Self> {
         Ok(Self {
             path: label.into(),
-            sha256: sha256_reader(File::open(path)?)?,
+            sha256: sha256_reader(fs.open_read(path)?)?,
         })
+    }
+
+    #[cfg(feature = "std-fs")]
+    pub fn read(path: &Path, label: impl Into<String>) -> io::Result<Self> {
+        Self::read_with_fs(&crate::filesystem::StdFs, path, label)
     }
 }
 
@@ -42,12 +50,18 @@ pub struct Evidence {
 
 impl Evidence {
     /// Hashes whichever known executables exist directly in `root`.
-    pub fn executables_in(root: &Path) -> io::Result<Vec<FileEvidence>> {
+    pub fn executables_in_with_fs(fs: &dyn HostFs, root: &Path) -> io::Result<Vec<FileEvidence>> {
         EXECUTABLE_NAMES
             .iter()
-            .filter(|name| fs::is_file(root.join(name)))
-            .map(|name| FileEvidence::read(&root.join(name), *name))
+            .filter(|name| fs.is_file(&root.join(name)))
+            .map(|name| FileEvidence::read_with_fs(fs, &root.join(name), *name))
             .collect()
+    }
+
+    /// Hashes whichever known executables exist directly in `root`.
+    #[cfg(feature = "std-fs")]
+    pub fn executables_in(root: &Path) -> io::Result<Vec<FileEvidence>> {
+        Self::executables_in_with_fs(&crate::filesystem::StdFs, root)
     }
 }
 
@@ -59,23 +73,28 @@ pub struct GameFiles {
 }
 
 impl GameFiles {
-    pub fn discover(root: &Path) -> Result<Self, SelectionError> {
+    pub fn discover_with_fs(fs: &dyn HostFs, root: &Path) -> Result<Self, SelectionError> {
         let found: Vec<_> = START_SCRIPTS
             .iter()
-            .filter(|p| fs::is_file(root.join(p)))
+            .filter(|p| fs.is_file(&root.join(p)))
             .collect();
         let start = match found.as_slice() {
             [one] => PathBuf::from(one),
             [] => return Err(SelectionError::MissingFile(START_SCRIPTS.join(" or "))),
             _ => return Err(SelectionError::AmbiguousStartScript),
         };
-        if !fs::is_file(root.join(SCRIPT_ARCHIVE)) {
+        if !fs.is_file(&root.join(SCRIPT_ARCHIVE)) {
             return Err(SelectionError::MissingFile(SCRIPT_ARCHIVE.into()));
         }
         Ok(Self {
             start_script: start,
             script_archive: PathBuf::from(SCRIPT_ARCHIVE),
         })
+    }
+
+    #[cfg(feature = "std-fs")]
+    pub fn discover(root: &Path) -> Result<Self, SelectionError> {
+        Self::discover_with_fs(&crate::filesystem::StdFs, root)
     }
     /// Basename recorded as the current script, as the original names it.
     pub fn start_name(&self) -> Vec<u8> {
@@ -285,33 +304,47 @@ impl Registry {
             evidence: notes,
         })
     }
-    /// Identify a game directory using startup-script, archive, and executable hashes.
-    ///
-    /// `explicit` optionally names an engine profile instead of automatic selection.
-    /// Reads files without executing or modifying them. Returns an error for missing
-    /// or ambiguous files, inconsistent evidence, an unknown profile, or I/O failures.
-    pub fn identify_game(
+    /// Identify a game directory using startup-script, archive, and executable hashes
+    /// read through `fs`.
+    pub fn identify_game_with_fs(
         &self,
+        fs: &dyn HostFs,
         root: &Path,
         explicit: Option<&str>,
     ) -> Result<Game<'_>, SelectionError> {
-        let files = GameFiles::discover(root)?;
+        let files = GameFiles::discover_with_fs(fs, root)?;
         let label = |p: &Path| p.to_string_lossy().replace('\\', "/");
         let evidence = Evidence {
-            start_script: Some(FileEvidence::read(
+            start_script: Some(FileEvidence::read_with_fs(
+                fs,
                 &root.join(&files.start_script),
                 label(&files.start_script),
             )?),
-            script_archive: Some(FileEvidence::read(
+            script_archive: Some(FileEvidence::read_with_fs(
+                fs,
                 &root.join(&files.script_archive),
                 label(&files.script_archive),
             )?),
-            executables: Evidence::executables_in(root)?,
+            executables: Evidence::executables_in_with_fs(fs, root)?,
         };
         Ok(Game {
             selection: self.select(explicit, &evidence)?,
             files,
         })
+    }
+
+    /// Identify a game directory using startup-script, archive, and executable hashes.
+    ///
+    /// `explicit` optionally names an engine profile instead of automatic selection.
+    /// Reads files without executing or modifying them. Returns an error for missing
+    /// or ambiguous files, inconsistent evidence, an unknown profile, or I/O failures.
+    #[cfg(feature = "std-fs")]
+    pub fn identify_game(
+        &self,
+        root: &Path,
+        explicit: Option<&str>,
+    ) -> Result<Game<'_>, SelectionError> {
+        self.identify_game_with_fs(&crate::filesystem::StdFs, root, explicit)
     }
 }
 

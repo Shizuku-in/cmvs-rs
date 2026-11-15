@@ -46,9 +46,9 @@
 //! [`raster::RgbaImage`] represents software output; [`scene_render::RenderFrame`]
 //! supplies the shared draw queue for GPU backends.
 //!
-//! The host supplies windows, graphics devices, and audio output. Desktop builds
-//! of the core use only the standard library. Android and browser builds add
-//! dependencies for their filesystem adapters.
+//! The host supplies windows, graphics devices, and audio output. The core has no
+//! third-party dependencies; hosts supply storage via [`filesystem::HostFs`] or use
+//! the optional `std-fs` feature (`StdFs`, enabled by default).
 //!
 //! # Low-level execution and research
 //!

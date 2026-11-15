@@ -1,5 +1,5 @@
 //! CSS1 persistent variable data; optional exclusive-file export, no gameplay snapshot restore.
-use crate::filesystem::File;
+use crate::filesystem::HostFs;
 mod css0;
 mod pack;
 mod profile;
@@ -11,6 +11,7 @@ use std::{
     error::Error,
     io::{self, Read},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 pub use write::{Css1Parameters, NewSystemSave, SystemSaveSink};
 
@@ -243,27 +244,38 @@ pub trait SystemSaveSource {
     fn read(&mut self) -> io::Result<Option<Vec<u8>>>;
 }
 pub struct FileSystemSave {
+    fs: Arc<dyn HostFs>,
     path: PathBuf,
     /// CVNS `save000.dat` is CSS0, whose layout the decoder checks; read it whole.
     css0: bool,
 }
 impl FileSystemSave {
-    pub fn new(path: impl AsRef<Path>) -> Self {
+    pub fn with_fs(path: impl AsRef<Path>, fs: Arc<dyn HostFs>) -> Self {
         Self {
+            fs,
             path: path.as_ref().to_owned(),
             css0: false,
         }
     }
-    pub fn css0(path: impl AsRef<Path>) -> Self {
+    pub fn css0_with_fs(path: impl AsRef<Path>, fs: Arc<dyn HostFs>) -> Self {
         Self {
+            fs,
             path: path.as_ref().to_owned(),
             css0: true,
         }
     }
+    #[cfg(feature = "std-fs")]
+    pub fn new(path: impl AsRef<Path>) -> Self {
+        Self::with_fs(path, crate::filesystem::default_fs())
+    }
+    #[cfg(feature = "std-fs")]
+    pub fn css0(path: impl AsRef<Path>) -> Self {
+        Self::css0_with_fs(path, crate::filesystem::default_fs())
+    }
 }
 impl SystemSaveSource for FileSystemSave {
     fn read(&mut self) -> io::Result<Option<Vec<u8>>> {
-        let mut file = match File::open(&self.path) {
+        let mut file = match self.fs.open_read(&self.path) {
             Ok(f) => f,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e),

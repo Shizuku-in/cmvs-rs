@@ -1,6 +1,8 @@
 //! Image-specific lookup and codec dispatch; shared I/O lives in `resources`.
 use crate::{
-    FormatError, pb3,
+    FormatError,
+    filesystem::HostFs,
+    pb3,
     raster::RgbaImage,
     resources::{RegisteredResources, ResourceArchives, ResourceKind},
 };
@@ -8,6 +10,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     error::Error,
     path::Path,
+    sync::Arc,
 };
 mod cache;
 use cache::Cache;
@@ -152,13 +155,18 @@ impl ImageArchives {
     ) {
         self.archives.configure_parameters(parameters);
     }
-    pub fn new(root: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
+    pub fn with_fs(root: impl AsRef<Path>, fs: Arc<dyn HostFs>) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
-            archives: ResourceArchives::new(root)?,
+            archives: ResourceArchives::with_fs(root, fs)?,
             cache: Cache::default(),
             decoded: DecodedCache::default(),
             threads: DecodeThreads::default(),
         })
+    }
+
+    #[cfg(feature = "std-fs")]
+    pub fn new(root: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
+        Self::with_fs(root, crate::filesystem::default_fs())
     }
     /// Keeps up to `bytes` of decoded RGBA for images loaded again (0, the default,
     /// disables it). Results are unchanged; repeated loads skip decoding.

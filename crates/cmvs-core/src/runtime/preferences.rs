@@ -144,7 +144,8 @@ impl Runtime<'_> {
         if self.system_host.loaded.is_some() || self.auto_resume_checked {
             self.system_host
                 .write_now(self.machine.state(), profile, &mut self.random, id)?;
-            self.system_source = crate::system_save::FileSystemSave::new(profile.path());
+            self.system_source =
+                crate::system_save::FileSystemSave::with_fs(profile.path(), profile.fs().clone());
         }
         profile.write_configuration(&configuration)?;
         self.configuration = configuration;

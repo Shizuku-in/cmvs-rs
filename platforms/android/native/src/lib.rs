@@ -3,6 +3,8 @@
 mod app;
 #[cfg(target_os = "android")]
 mod backend;
+#[cfg(target_os = "android")]
+mod fs;
 
 #[cfg(target_os = "android")]
 #[allow(unsafe_code)]

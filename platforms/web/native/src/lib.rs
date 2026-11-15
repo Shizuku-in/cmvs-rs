@@ -1,21 +1,24 @@
 //! Browser game host. JavaScript owns files, scheduling and presentation.
 mod audio;
 mod backend;
+mod fs;
 #[cfg(target_arch = "wasm32")]
 mod gpu;
 use backend::BrowserBackend;
 use cmvs_core::{
+    filesystem::HostFs,
     input::{CodeInput, KeyBindings},
     profile::Registry,
     ps3::Script,
     raster::movie_canvas,
     runtime::{
         FrameBudget, FrameDriver, FrameOutcome, Runtime, RuntimeEvent, RuntimeOptions, SaveStorage,
-        load_start,
+        load_start_with_fs,
     },
 };
 use cmvs_font::font::FontRenderer;
-use std::{error::Error, path::Path};
+use fs::WebFs;
+use std::{error::Error, path::Path, sync::Arc};
 use wasm_bindgen::prelude::*;
 
 self_cell::self_cell! {
@@ -242,7 +245,9 @@ impl WebRuntime {
     }
     fn create(font: Vec<u8>, face: u32, profile: &str, skip: bool) -> Result<Self, Box<dyn Error>> {
         let root = Path::new("/game");
-        let game = Registry::builtin().identify_game(
+        let fs = Arc::new(WebFs);
+        let game = Registry::builtin().identify_game_with_fs(
+            &*fs,
             root,
             if profile.is_empty() {
                 None
@@ -251,7 +256,7 @@ impl WebRuntime {
             },
         )?;
         let font = FontRenderer::from_bytes(font, face)?;
-        let script = load_start(root, &game.files)?;
+        let script = load_start_with_fs(&*fs, root, &game.files)?;
         let session = Session::try_new(script, |script| -> Result<Runtime<'_>, Box<dyn Error>> {
             let mut startup = Runtime::with_options(
                 script,
@@ -261,6 +266,7 @@ impl WebRuntime {
                     saves: SaveStorage::UserDirectory("/user".into()),
                     skip_auto_resume: skip,
                     decode_cmv_frames: true,
+                    fs: Some(Arc::clone(&fs) as Arc<dyn HostFs>),
                     ..Default::default()
                 },
             )?;
@@ -271,10 +277,10 @@ impl WebRuntime {
         })?;
         let size = session.borrow_dependent().screen_size();
         let key_path = root.join("key.cfg");
-        let bindings = if cmvs_core::filesystem::is_file(&key_path) {
+        let bindings = if fs.is_file(&key_path) {
             use std::io::Read;
             let mut text = String::new();
-            cmvs_core::filesystem::File::open(key_path)?
+            fs.open_read(&key_path)?
                 .take(65537)
                 .read_to_string(&mut text)?;
             KeyBindings::parse(&text)?
@@ -297,7 +303,8 @@ impl WebRuntime {
 #[wasm_bindgen]
 pub fn identify(profile: &str) -> Result<String, JsValue> {
     let game = Registry::builtin()
-        .identify_game(
+        .identify_game_with_fs(
+            &WebFs,
             Path::new("/game"),
             if profile.is_empty() {
                 None

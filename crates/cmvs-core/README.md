@@ -17,8 +17,8 @@ Engine builds are described by the files in [`profiles/`](profiles); see [engine
 
 ## Platforms
 
-- On `wasm32`, `filesystem` reads files through a synchronous browser-worker adapter (via `wasm-bindgen`).
-- On Android, save-directory locks use `rustix`, because the standard file-lock API is unavailable there.
+- All targets compile `cmvs-core` with zero third-party dependencies.
+- The default `std-fs` feature provides `filesystem::StdFs`; hosts with custom storage, locking, or `replace` semantics (browser workers, Android, Horizon/Vita) inject a [`filesystem::HostFs`] implementation instead (and may disable `std-fs` via `default-features = false`).
 
 ## Testing
 
