@@ -18,13 +18,11 @@ unsafe_code = "deny"
 [lints.clippy]
 all = "warn"
 
-[dependencies]
+[target.'cfg(target_os = "android")'.dependencies]
 cmvs-core = { path = "../../../crates/cmvs-core" }
 cmvs-input = { path = "../../../crates/cmvs-input" }
 cmvs-font = { path = "../../../crates/cmvs-font" }
 encoding_rs.workspace = true
-
-[target.'cfg(target_os = "android")'.dependencies]
 cmvs-audio = { path = "../../../crates/cmvs-audio" }
 cmvs-wgpu = { path = "../../../crates/cmvs-wgpu" }
 cmvs-video = { path = "../../../crates/cmvs-video" }
