@@ -134,7 +134,7 @@ pub fn run(
     selected: &[&str],
     options: &Options,
     out: &Path,
-    font: Option<&cmvs_desktop::font::FontRenderer>,
+    font: Option<&cmvs_font::font::FontRenderer>,
     manifest: Option<&crate::manifest::Manifest>,
 ) -> Run {
     let wants = |id: &str| selected.contains(&id);

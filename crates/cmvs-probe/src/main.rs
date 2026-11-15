@@ -1,4 +1,4 @@
-use cmvs_desktop::font::FontRenderer;
+use cmvs_font::font::FontRenderer;
 use cmvs_probe::{
     checks,
     device::Device,

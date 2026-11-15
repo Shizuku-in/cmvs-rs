@@ -129,7 +129,7 @@ pub struct Session<'a> {
     run: Runtime<'a>,
     backend: RecordingBackend,
     render_frames: bool,
-    font: Option<cmvs_desktop::font::FontRenderer>,
+    font: Option<cmvs_font::font::FontRenderer>,
     codes: CodeInput,
     bindings: KeyBindings,
     device: Device,
@@ -189,7 +189,7 @@ impl<'a> Session<'a> {
         script: &'a Script,
         user: &Path,
         options: &Options,
-        font: Option<&cmvs_desktop::font::FontRenderer>,
+        font: Option<&cmvs_font::font::FontRenderer>,
     ) -> Result<Self, String> {
         if options.render_frames && font.is_none() {
             return Err("software frame rendering requires a font".into());
@@ -214,7 +214,7 @@ impl<'a> Session<'a> {
             },
         )
         .map_err(|e| e.to_string())?;
-        run.set_mgv_factory(Box::new(cmvs_desktop::video::TheoraFactory));
+        run.set_mgv_factory(Box::new(cmvs_video::TheoraFactory));
         run.set_record_text(true);
         if let Some(font) = font {
             run.set_glyph_metrics(font.metrics());
@@ -518,7 +518,7 @@ impl<'a> Session<'a> {
     fn completed_frame(&mut self) -> Result<cmvs_core::raster::RgbaImage, String> {
         if let Some(movie) = self.run.movie_frame() {
             use cmvs_core::platform::PlatformBackend;
-            return cmvs_desktop::movie_canvas(
+            return cmvs_core::raster::movie_canvas(
                 movie,
                 self.run.screen_size(),
                 self.backend.render_mode().map_err(|e| e.to_string())? == 1,
@@ -616,7 +616,7 @@ mod tests {
     #[test]
     #[ignore = "requires CMVS_TEST_FONT; uses only synthetic scripts and archives"]
     fn yielded_frames_enable_device_capture_on_the_next_vm_slice() {
-        let font = cmvs_desktop::font::FontRenderer::read(
+        let font = cmvs_font::font::FontRenderer::read(
             Path::new(&std::env::var("CMVS_TEST_FONT").expect("set CMVS_TEST_FONT")),
             0,
         )

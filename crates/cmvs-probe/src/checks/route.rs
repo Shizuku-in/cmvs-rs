@@ -61,7 +61,7 @@ pub struct Runner<'t> {
     pub target: &'t Target,
     pub script: &'t Script,
     pub options: &'t Options,
-    pub font: Option<&'t cmvs_desktop::font::FontRenderer>,
+    pub font: Option<&'t cmvs_font::font::FontRenderer>,
     pub out: &'t Path,
     /// Optional per-game corrections; see `manifest`.
     pub manifest: Option<&'t crate::manifest::Manifest>,
@@ -73,7 +73,7 @@ impl<'t> Runner<'t> {
         target: &'t Target,
         script: &'t Script,
         options: &'t Options,
-        font: Option<&'t cmvs_desktop::font::FontRenderer>,
+        font: Option<&'t cmvs_font::font::FontRenderer>,
         out: &'t Path,
     ) -> Self {
         Self {

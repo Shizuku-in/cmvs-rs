@@ -40,7 +40,7 @@ pub fn run_to_start(
     script: &Script,
     user: &Path,
     options: &Options,
-    font: Option<&cmvs_desktop::font::FontRenderer>,
+    font: Option<&cmvs_font::font::FontRenderer>,
     manifest: Option<&crate::manifest::Manifest>,
 ) -> Result<StartRun, String> {
     let mut session = Session::start(target, script, user, options, font)?;

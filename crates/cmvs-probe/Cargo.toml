@@ -16,5 +16,6 @@ path = "src/main.rs"
 
 [dependencies]
 cmvs-core = { path = "../cmvs-core" }
-cmvs-desktop = { path = "../cmvs-desktop" }
+cmvs-font = { path = "../cmvs-font" }
+cmvs-video = { path = "../cmvs-video" }
 encoding_rs.workspace = true
