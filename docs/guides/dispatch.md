@@ -2,6 +2,20 @@
 
 Runtime 与 trace 共用 [dispatch](../../crates/cmvs-core/src/dispatch.rs)。命令登记在 `ROOT` 与变体表；实际执行仍受档案闸门和宿主能力限制，不代表全部游戏语义已验证。
 
+## 代码组织
+
+`call`、`hosts`、`registry` 和 `handlers` 为私有实现，对外路径仍为 `dispatch::*`。
+
+| 位置（相对 `cmvs-core/src`） | 职责 |
+|---|---|
+| `dispatch.rs` | 公开类型与导出、能力检查后的统一分发 |
+| `dispatch/hosts.rs` | 服务集合、能力定义与可用性检查 |
+| `dispatch/call.rs` | 参数记账、指令完成、延迟运行时请求 |
+| `dispatch/registry.rs` | 命令索引、能力分类查询、变体选择 |
+| `dispatch/registry/{root,variants}.rs` | 基准与变体登记表，只关联命令、能力和处理函数 |
+| `dispatch/handlers/` | 按文本、输入、场景、媒体、存储、平台和基础服务组织的处理器 |
+| `dispatch/ownership.rs` | runner/trace 的只读归属清单 |
+
 ## 调用路径
 
 `CommandGate::resolve` 检查证据与运行策略，选择语义；`dispatch::run` 查找 ROOT 或指定 variant，再调用处理器。选中的 variant 不能退回 ROOT。宿主只执行语义，不判断游戏版本。
@@ -14,7 +28,7 @@ Runtime 与 trace 共用 [dispatch](../../crates/cmvs-core/src/dispatch.rs)。�
 
 ## 新增或修改命令
 
-1. 在 ROOT 登记 opcode、能力和处理器；语义差异放入显式覆盖表。
+1. 在 `handlers/` 对应领域实现处理器；在 `registry/root.rs` 登记 opcode、能力和处理器，语义差异登记在 `registry/variants.rs`。
 2. 用 `Call::argument` 读取命名参数，忽略的参数用 `ignore_argument` 标记，保留原验证与提交顺序。
 3. 用 `finish` 完成并核对回收量；等待用 `wait`，保留 pending 供后续重试。不要另加 `try_*` 试探链。
 4. 更新归属与行为测试，覆盖缺能力、失败重试、参数回收及结果状态。
