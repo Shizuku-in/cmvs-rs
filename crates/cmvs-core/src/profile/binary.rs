@@ -294,7 +294,7 @@ fn encode_profile(enc: &mut Encoder, profile: &EngineProfile) -> Result<(), Prof
 
     // Deduplicate (arch, base_sha256, derived_sha256) pairs across proofs in one profile.
     let mut proof_bases: Vec<(Arch, [u8; 32], [u8; 32])> = Vec::new();
-    for proof in profile.proofs.values() {
+    for (_, proof) in &profile.proofs {
         let key = (proof.arch, proof.base_sha256, proof.derived_sha256);
         if !proof_bases.contains(&key) {
             proof_bases.push(key);
@@ -307,25 +307,25 @@ fn encode_profile(enc: &mut Encoder, profile: &EngineProfile) -> Result<(), Prof
         enc.write_hash(&derived_sha);
     }
     enc.write_usize(profile.proofs.len());
-    for (&cmd, proof) in &profile.proofs {
+    for (cmd, proof) in &profile.proofs {
         let base_idx = proof_bases
             .iter()
             .position(|&k| k == (proof.arch, proof.base_sha256, proof.derived_sha256))
             .expect("inserted above");
-        enc.write_u64(u64::from(cmd));
+        enc.write_u64(u64::from(*cmd));
         enc.write_usize(base_idx);
         enc.write_hash(&proof.digest);
     }
 
     enc.write_usize(profile.contracts.len());
-    for (&cmd, id) in &profile.contracts {
-        enc.write_u64(u64::from(cmd));
+    for (cmd, id) in &profile.contracts {
+        enc.write_u64(u64::from(*cmd));
         enc.write_hash(id);
     }
 
     // Deduplicate review paths within each profile.
     let mut review_paths: Vec<&str> = Vec::new();
-    for path in profile.reviews.values() {
+    for (_, path) in &profile.reviews {
         if !review_paths.contains(&path.as_str()) {
             review_paths.push(path);
         }
@@ -335,18 +335,18 @@ fn encode_profile(enc: &mut Encoder, profile: &EngineProfile) -> Result<(), Prof
         enc.write_str(path);
     }
     enc.write_usize(profile.reviews.len());
-    for (&cmd, path) in &profile.reviews {
+    for (cmd, path) in &profile.reviews {
         let path_idx = review_paths
             .iter()
             .position(|&p| p == path)
             .expect("inserted above");
-        enc.write_u64(u64::from(cmd));
+        enc.write_u64(u64::from(*cmd));
         enc.write_usize(path_idx);
     }
 
     enc.write_usize(profile.variant.len());
-    for (&cmd, v) in &profile.variant {
-        enc.write_u64(u64::from(cmd));
+    for (cmd, v) in &profile.variant {
+        enc.write_u64(u64::from(*cmd));
         enc.write_str(v.id.name());
         enc.write_u8(encode_arch(v.arch));
         enc.write_hash(&v.binary_sha256);
@@ -354,11 +354,21 @@ fn encode_profile(enc: &mut Encoder, profile: &EngineProfile) -> Result<(), Prof
     }
 
     enc.write_usize(profile.maps.len());
-    for (&cmd, &target) in &profile.maps {
+    for &(cmd, target) in &profile.maps {
         enc.write_u64(u64::from(cmd));
         enc.write_u64(u64::from(target));
     }
 
+    Ok(())
+}
+
+fn push_sorted<T>(entries: &mut Vec<(u16, T)>, cmd: u16, value: T) -> Result<(), ProfileError> {
+    if entries.last().is_some_and(|&(prev, _)| cmd <= prev) {
+        return Err(ProfileError::new(
+            "binary command entries must be strictly increasing",
+        ));
+    }
+    entries.push((cmd, value));
     Ok(())
 }
 
@@ -427,14 +437,15 @@ fn decode_profile(dec: &mut Decoder<'_>) -> Result<EngineProfile, ProfileError> 
         ));
     }
     let proof_count = dec.read_usize()?;
-    let mut proofs = BTreeMap::new();
+    let mut proofs = Vec::with_capacity(proof_count.min(dec.0.len()));
     for _ in 0..proof_count {
         let cmd = dec.read_u16()?;
         let base_idx = dec.read_usize()?;
         let &(arch, base_sha256, derived_sha256) = proof_bases
             .get(base_idx)
             .ok_or_else(|| ProfileError::new("binary proof base index out of bounds"))?;
-        proofs.insert(
+        push_sorted(
+            &mut proofs,
             cmd,
             MachineProof {
                 arch,
@@ -442,39 +453,40 @@ fn decode_profile(dec: &mut Decoder<'_>) -> Result<EngineProfile, ProfileError> 
                 derived_sha256,
                 digest: dec.read_hash()?,
             },
-        );
+        )?;
     }
 
     let contract_count = dec.read_usize()?;
-    let mut contracts = BTreeMap::new();
+    let mut contracts = Vec::with_capacity(contract_count.min(dec.0.len()));
     for _ in 0..contract_count {
-        contracts.insert(dec.read_u16()?, dec.read_hash()?);
+        push_sorted(&mut contracts, dec.read_u16()?, dec.read_hash()?)?;
     }
 
     let path_count = dec.read_usize()?;
-    let mut review_paths = Vec::with_capacity(path_count);
+    let mut review_paths = Vec::with_capacity(path_count.min(dec.0.len()));
     for _ in 0..path_count {
         review_paths.push(dec.read_str()?);
     }
     let review_count = dec.read_usize()?;
-    let mut reviews = BTreeMap::new();
+    let mut reviews = Vec::with_capacity(review_count.min(dec.0.len()));
     for _ in 0..review_count {
         let cmd = dec.read_u16()?;
         let path_idx = dec.read_usize()?;
         let path = review_paths
             .get(path_idx)
             .ok_or_else(|| ProfileError::new("binary review path index out of bounds"))?;
-        reviews.insert(cmd, path.clone());
+        push_sorted(&mut reviews, cmd, path.clone())?;
     }
 
     let variant_count = dec.read_usize()?;
-    let mut variant = BTreeMap::new();
+    let mut variant = Vec::with_capacity(variant_count.min(dec.0.len()));
     for _ in 0..variant_count {
         let cmd = dec.read_u16()?;
         let name = dec.read_str()?;
         let id = VariantId::parse(&name)
             .ok_or_else(|| ProfileError::new("unknown binary variant id"))?;
-        variant.insert(
+        push_sorted(
+            &mut variant,
             cmd,
             VariantBinding {
                 id,
@@ -482,13 +494,13 @@ fn decode_profile(dec: &mut Decoder<'_>) -> Result<EngineProfile, ProfileError> 
                 binary_sha256: dec.read_hash()?,
                 evidence: dec.read_str()?,
             },
-        );
+        )?;
     }
 
     let map_count = dec.read_usize()?;
-    let mut maps = BTreeMap::new();
+    let mut maps = Vec::with_capacity(map_count.min(dec.0.len()));
     for _ in 0..map_count {
-        maps.insert(dec.read_u16()?, dec.read_u16()?);
+        push_sorted(&mut maps, dec.read_u16()?, dec.read_u16()?)?;
     }
 
     Ok(EngineProfile {

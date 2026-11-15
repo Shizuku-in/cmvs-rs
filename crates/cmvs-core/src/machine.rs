@@ -59,8 +59,8 @@ fn append_slot(
 struct Image<'a> {
     script: Cow<'a, Script>,
     data: Vec<u8>,
-    /// Shared so each step clones a pointer, not an expression tree.
-    instructions: BTreeMap<usize, Rc<Instruction>>,
+    /// Shared contiguous decoded slice so `step()` clones one Rc pointer without B-Tree lookups.
+    instructions: Rc<[Instruction]>,
     labels: Vec<u32>,
     name: Vec<u8>,
 }
@@ -70,10 +70,8 @@ pub(crate) struct PreparedMain<'a>(Image<'a>);
 impl<'a> Image<'a> {
     fn prepare(script: Cow<'a, Script>, name: Vec<u8>, entry: u32) -> Result<Self, DecodeError> {
         let labels = script.labels();
-        let instructions = bytecode::decode_layout(script.code(), entry, &labels)?
-            .into_iter()
-            .map(|i| (i.pc, Rc::new(i)))
-            .collect();
+        let instructions: Rc<[Instruction]> =
+            bytecode::decode_layout(script.code(), entry, &labels)?.into();
         Ok(Self {
             data: script.data().to_vec(),
             script,
@@ -81,6 +79,15 @@ impl<'a> Image<'a> {
             labels,
             name,
         })
+    }
+
+    fn instruction_index(&self, pc: usize) -> Option<usize> {
+        self.instructions.binary_search_by_key(&pc, |i| i.pc).ok()
+    }
+
+    fn instruction_at(&self, pc: usize) -> Option<&Instruction> {
+        self.instruction_index(pc)
+            .map(|idx| &self.instructions[idx])
     }
 }
 
@@ -140,6 +147,7 @@ pub struct Machine<'a> {
     images: BTreeMap<u8, Image<'a>>,
     slot: u8,
     pc: usize,
+    pc_hint: usize,
     state: State,
     stack: ParameterStack,
     frames: Vec<usize>,
@@ -188,6 +196,7 @@ impl<'a> Machine<'a> {
             images: BTreeMap::from([(0, image)]),
             slot: 0,
             pc: entry as usize,
+            pc_hint: 0,
             state: State::default(),
             stack: ParameterStack::new(65536),
             frames: Vec::new(),
@@ -217,12 +226,9 @@ impl<'a> Machine<'a> {
         self.images.get(&slot).map(|i| i.script.as_ref())
     }
     pub(crate) fn instructions(&self) -> impl Iterator<Item = &Instruction> {
-        self.images.values().flat_map(|image| {
-            image
-                .instructions
-                .values()
-                .map(|instruction| instruction.as_ref())
-        })
+        self.images
+            .values()
+            .flat_map(|image| image.instructions.iter())
     }
     pub fn loaded_names(&self) -> Vec<(u8, &[u8])> {
         self.images
@@ -338,7 +344,7 @@ impl<'a> Machine<'a> {
         }
         let slot = image.active_slot as u8;
         let is_boundary = |slot, pc| match slot {
-            0 => main.instructions.contains_key(&pc),
+            0 => main.instruction_index(pc).is_some(),
             _ => self.is_boundary(slot, pc),
         };
         if !is_boundary(slot, image.pc as usize) {
@@ -371,6 +377,7 @@ impl<'a> Machine<'a> {
         self.images.insert(0, restored.main);
         self.slot = restored.slot;
         self.pc = restored.pc;
+        self.pc_hint = 0;
         self.repeat_count = restored.repeat_count;
         self.stack = restored.stack;
         self.frames = restored.frames;
@@ -417,6 +424,7 @@ impl<'a> Machine<'a> {
         self.cross_calls = cross_calls;
         self.slot = slot;
         self.pc = target;
+        self.pc_hint = 0;
         self.repeat_count = 0;
         self.pending = None;
         Ok(())
@@ -428,7 +436,7 @@ impl<'a> Machine<'a> {
     pub fn is_boundary(&self, slot: u8, pc: usize) -> bool {
         self.images
             .get(&slot)
-            .is_some_and(|image| image.instructions.contains_key(&pc))
+            .is_some_and(|image| image.instruction_index(pc).is_some())
     }
     pub fn state(&self) -> &State {
         &self.state
@@ -459,7 +467,7 @@ impl<'a> Machine<'a> {
     /// The pending command as the script encodes it, before any command map applies.
     pub fn pending_source(&self) -> Option<u16> {
         let (pc, _) = self.pending?;
-        match self.image().instructions.get(&pc)?.kind {
+        match self.image().instruction_at(pc)?.kind {
             InstructionKind::System { command } => Some(command),
             _ => None,
         }
@@ -694,12 +702,14 @@ impl<'a> Machine<'a> {
         if let Some((pc, command)) = self.pending {
             return Ok(Step::System { pc, command });
         }
-        let insn = self
-            .image()
-            .instructions
-            .get(&self.pc)
-            .cloned()
+        let instructions = Rc::clone(&self.image().instructions);
+        let index = instructions
+            .get(self.pc_hint)
+            .filter(|i| i.pc == self.pc)
+            .map(|_| self.pc_hint)
+            .or_else(|| instructions.binary_search_by_key(&self.pc, |i| i.pc).ok())
             .ok_or_else(|| error(self.pc, 0, "PC outside decoded instruction boundaries"))?;
+        let insn = &instructions[index];
         let pc = insn.pc;
         let op = insn.opcode;
         let mut next = insn.end;
@@ -791,6 +801,7 @@ impl<'a> Machine<'a> {
             }
             InstructionKind::System { command: 0 } => {
                 self.pc = next;
+                self.pc_hint = index + 1;
                 self.repeat_count = 0;
                 return Ok(Step::Yield);
             }
@@ -799,12 +810,14 @@ impl<'a> Machine<'a> {
                     .command_map
                     .as_ref()
                     .map_or(command, |map| map.runtime(command));
+                self.pc_hint = index;
                 self.pending = Some((pc, command));
                 return Ok(Step::System { pc, command });
             }
             _ => return Err(error(pc, op, "instruction execution is not implemented")),
         }
         self.pc = next;
+        self.pc_hint = if next == insn.end { index + 1 } else { 0 };
         Ok(Step::Continue)
     }
 
@@ -877,6 +890,7 @@ impl<'a> Machine<'a> {
         self.cross_calls.push(self.slot);
         self.slot = slot;
         self.pc = entry;
+        self.pc_hint = 0;
         self.repeat_count = 0;
         self.pending = None;
         Ok(())
@@ -914,6 +928,7 @@ impl<'a> Machine<'a> {
         self.images.insert(0, prepared.0);
         self.slot = 0;
         self.pc = entry;
+        self.pc_hint = 0;
         self.repeat_count = 0;
         self.stack = ParameterStack::new(65536);
         self.frames.clear();
@@ -958,6 +973,7 @@ impl<'a> Machine<'a> {
             .apply_cleanup(flags)
             .map_err(|e| error(pc, command + 0x2000, e.0))?;
         self.pc = pc + 2;
+        self.pc_hint = self.pc_hint.saturating_add(1);
         self.pending = None;
         self.repeat_count = if flags.increments_repeat_counter() {
             self.repeat_count.wrapping_add(1)

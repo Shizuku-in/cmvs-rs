@@ -18,6 +18,7 @@ mod text;
 
 pub use contract::{ContractProof, ContractRules, ContractSide};
 pub use gate::{CommandGate, GateCounts, GateError, GateErrorKind};
+use model::lookup_sorted;
 pub use model::{
     Binary, CommandStatus, EngineProfile, Family, GameRecord, MachineProof, ProfileError,
     RecordFile, Semantics, VariantBinding, VariantId,
@@ -68,12 +69,12 @@ impl EngineProfile {
             .map_or(Semantics::Root, |entry| Semantics::Variant(entry.id))
     }
     pub fn variant(&self, command: u16) -> Option<&VariantBinding> {
-        self.variant.get(&command)
+        lookup_sorted(&self.variant, command)
     }
     pub fn variant_bindings(&self) -> impl Iterator<Item = (u16, &VariantBinding)> {
         self.variant
             .iter()
-            .map(|(&command, entry)| (command, entry))
+            .map(|(command, entry)| (*command, entry))
     }
     /// Verified loader zero-fill bank sizes, in integer/bit/float/string order.
     /// This is startup layout evidence, independent of command gate policy.
@@ -108,22 +109,22 @@ impl EngineProfile {
     }
     /// The machine comparison proof of an `Inherited` or `Presumed` command.
     pub fn proof(&self, command: u16) -> Option<&MachineProof> {
-        self.proofs.get(&command)
+        lookup_sorted(&self.proofs, command)
     }
     pub fn review(&self, command: u16) -> Option<&str> {
-        self.reviews.get(&command).map(String::as_str)
+        lookup_sorted(&self.reviews, command).map(String::as_str)
     }
     pub fn contract_id(&self, command: u16) -> Option<&[u8; 32]> {
-        self.contracts.get(&command)
+        lookup_sorted(&self.contracts, command)
     }
     /// The runtime command a reviewed CVNS command is translated to.
     pub fn map(&self, command: u16) -> Option<u16> {
-        self.maps.get(&command).copied()
+        lookup_sorted(&self.maps, command).copied()
     }
     /// The translation a VM running this profile's scripts must apply; `None` for CMVS.
     pub fn command_map(&self) -> Option<crate::cvns::CommandMap> {
         (self.family == Family::Cvns)
-            .then(|| crate::cvns::CommandMap::new(self.maps.iter().map(|(&s, &t)| (s, t))))
+            .then(|| crate::cvns::CommandMap::new(self.maps.iter().copied()))
     }
     pub fn count(&self, status: CommandStatus) -> usize {
         self.statuses.iter().filter(|&&s| s == status).count()
@@ -282,11 +283,11 @@ impl EngineProfile {
                 })
                 .collect(),
             statuses,
-            proofs: BTreeMap::new(),
-            contracts: BTreeMap::new(),
-            reviews: BTreeMap::new(),
-            variant: BTreeMap::new(),
-            maps: BTreeMap::new(),
+            proofs: Vec::new(),
+            contracts: Vec::new(),
+            reviews: Vec::new(),
+            variant: Vec::new(),
+            maps: Vec::new(),
         };
         profile.validate()?;
         Ok(profile)
@@ -343,9 +344,7 @@ impl EngineProfile {
                     "CVNS commands are absent, noop, unreviewed or reviewed with a map",
                 ));
             }
-            if (cvns && *status == CommandStatus::Reviewed)
-                != self.maps.contains_key(&(command as u16))
-            {
+            if (cvns && *status == CommandStatus::Reviewed) != self.map(command as u16).is_some() {
                 return Err(ProfileError::new(
                     "only reviewed CVNS commands, and all of them, carry a map",
                 ));
@@ -396,20 +395,19 @@ impl EngineProfile {
                 }
             }
             if matches!(status, CommandStatus::Inherited | CommandStatus::Presumed)
-                != self.proofs.contains_key(&(command as u16))
+                != self.proof(command as u16).is_some()
             {
                 return Err(ProfileError::new(
                     "inherited and presumed status require exactly one proof",
                 ));
             }
-            if (*status == CommandStatus::Reviewed) != self.reviews.contains_key(&(command as u16))
-            {
+            if (*status == CommandStatus::Reviewed) != self.review(command as u16).is_some() {
                 return Err(ProfileError::new(
                     "reviewed status requires exactly one review record",
                 ));
             }
             if (*status == CommandStatus::ContractEquivalent)
-                != self.contracts.contains_key(&(command as u16))
+                != self.contract_id(command as u16).is_some()
             {
                 return Err(ProfileError::new(
                     "contract-equivalent status requires exactly one certificate",
@@ -557,12 +555,13 @@ impl Registry {
                 };
                 if profile
                     .reviews
-                    .keys()
-                    .any(|&command| !has_root_semantics(command))
+                    .iter()
+                    .any(|&(command, _)| !has_root_semantics(command))
                 {
                     return Err(ProfileError::new("reviewed command has no root semantics"));
                 }
-                for (&command, proof) in &profile.proofs {
+                for (command, proof) in &profile.proofs {
+                    let command = *command;
                     if base.status(command) != CommandStatus::Base
                         || !base
                             .binaries
@@ -574,7 +573,8 @@ impl Registry {
                         ));
                     }
                 }
-                for (&command, id) in &profile.contracts {
+                for (command, id) in &profile.contracts {
+                    let command = *command;
                     if base.status(command) != CommandStatus::Base {
                         return Err(ProfileError::new("contract command has no root semantics"));
                     }

@@ -1,7 +1,7 @@
 //! Line-oriented profile and game-record files; `#` starts a comment line.
 use super::{
     Binary, CommandStatus, EngineProfile, Family, GameRecord, MachineProof, ProfileError,
-    RecordFile, VariantBinding, VariantId,
+    RecordFile, VariantBinding, VariantId, model::lookup_sorted,
 };
 use crate::{
     digest::{parse_hex, to_hex},
@@ -216,11 +216,11 @@ pub(crate) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
         proof_bases.push((arch, sha(line, v[0])?, line));
     }
     let mut statuses = Vec::new();
-    let mut proofs = std::collections::BTreeMap::new();
-    let mut reviews = std::collections::BTreeMap::new();
-    let mut contracts = std::collections::BTreeMap::new();
-    let mut variant = std::collections::BTreeMap::new();
-    let mut maps = std::collections::BTreeMap::new();
+    let mut proofs = Vec::new();
+    let mut reviews = Vec::new();
+    let mut contracts = Vec::new();
+    let mut variant = Vec::new();
+    let mut maps = Vec::new();
     while let Some((line, words)) = lines.next() {
         let proof_key = match words.get(1) {
             Some(&"inherited") => Some("inherit="),
@@ -289,7 +289,7 @@ pub(crate) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
                 .strip_prefix("evidence=")
                 .filter(|path| is_review_path(path))
                 .ok_or_else(|| at(line, "expected evidence=<docs-relative .md path>"))?;
-            variant.insert(
+            variant.push((
                 statuses.len() as u16,
                 VariantBinding {
                     id,
@@ -297,7 +297,7 @@ pub(crate) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
                     binary_sha256,
                     evidence: evidence.to_owned(),
                 },
-            );
+            ));
         }
         if let Some(key) = proof_key {
             let (arch, digest) = words
@@ -312,7 +312,7 @@ pub(crate) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
                 .find(|&&(a, ..)| a == arch)
                 .ok_or_else(|| at(line, "proof architecture lacks a compare line"))?;
             let derived = binaries.iter().find(|b| b.arch == arch);
-            proofs.insert(
+            proofs.push((
                 statuses.len() as u16,
                 MachineProof {
                     arch,
@@ -320,14 +320,14 @@ pub(crate) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
                     derived_sha256: derived.expect("compare line checked").sha256,
                     digest: sha(line, digest)?,
                 },
-            );
+            ));
         }
         if let Some(target) = map {
             let target = hex_number(line, target)?
                 .checked_sub(0x2000)
                 .and_then(|t| u16::try_from(t).ok())
                 .ok_or_else(|| at(line, "map target must be a 0x2000-based system opcode"))?;
-            maps.insert(statuses.len() as u16, target);
+            maps.push((statuses.len() as u16, target));
         }
         if reviewed {
             let path = words
@@ -336,7 +336,7 @@ pub(crate) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
                 .strip_prefix("review=")
                 .filter(|path| is_review_path(path))
                 .ok_or_else(|| at(line, "expected review=<docs-relative .md path>"))?;
-            reviews.insert(statuses.len() as u16, path.to_owned());
+            reviews.push((statuses.len() as u16, path.to_owned()));
         }
         if contracted {
             let id = words
@@ -344,7 +344,7 @@ pub(crate) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
                 .expect("row length checked")
                 .strip_prefix("contract=")
                 .ok_or_else(|| at(line, "expected contract=<certificate id>"))?;
-            contracts.insert(statuses.len() as u16, sha(line, id)?);
+            contracts.push((statuses.len() as u16, sha(line, id)?));
         }
         statuses.push(status);
         for (binary, word) in binaries.iter_mut().zip(&words[2..]) {
@@ -369,7 +369,8 @@ pub(crate) fn parse_profile(text: &str) -> Result<EngineProfile, ProfileError> {
             "command rows do not match the declared cases",
         ));
     }
-    let unused = |&&(arch, ..): &&(Arch, [u8; 32], usize)| !proofs.values().any(|p| p.arch == arch);
+    let unused =
+        |&&(arch, ..): &&(Arch, [u8; 32], usize)| !proofs.iter().any(|(_, p)| p.arch == arch);
     if let Some(&(.., line)) = proof_bases.iter().find(unused) {
         return Err(at(
             line,
@@ -421,7 +422,11 @@ impl EngineProfile {
             );
         }
         for b in &self.binaries {
-            if let Some(proof) = self.proofs.values().find(|p| p.arch == b.arch) {
+            if let Some(proof) = self
+                .proofs
+                .iter()
+                .find_map(|(_, p)| (p.arch == b.arch).then_some(p))
+            {
                 let _ = writeln!(
                     out,
                     "compare {} base-sha256={}",
@@ -444,16 +449,16 @@ impl EngineProfile {
                     Case::Default => out.push_str(" -"),
                 }
             }
-            if let Some(&target) = self.maps.get(&(i as u16)) {
+            if let Some(&target) = lookup_sorted(&self.maps, i as u16) {
                 let _ = write!(out, " map=0x{:04x}", 0x2000 + u32::from(target));
             }
-            if let Some(path) = self.reviews.get(&(i as u16)) {
+            if let Some(path) = lookup_sorted(&self.reviews, i as u16) {
                 let _ = write!(out, " review={path}");
             }
-            if let Some(id) = self.contracts.get(&(i as u16)) {
+            if let Some(id) = lookup_sorted(&self.contracts, i as u16) {
                 let _ = write!(out, " contract={}", to_hex(id));
             }
-            if let Some(proof) = self.proofs.get(&(i as u16)) {
+            if let Some(proof) = lookup_sorted(&self.proofs, i as u16) {
                 let key = match status {
                     CommandStatus::Presumed => "presume",
                     _ => "inherit",
@@ -465,7 +470,7 @@ impl EngineProfile {
                     to_hex(&proof.digest)
                 );
             }
-            if let Some(variant) = self.variant.get(&(i as u16)) {
+            if let Some(variant) = lookup_sorted(&self.variant, i as u16) {
                 let _ = write!(
                     out,
                     " variant={}:{}:{} evidence={}",

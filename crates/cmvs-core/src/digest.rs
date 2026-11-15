@@ -131,14 +131,24 @@ pub fn to_hex(digest: &[u8; 32]) -> String {
     digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
 /// Parses exactly 64 hexadecimal digits.
 pub fn parse_hex(text: &str) -> Option<[u8; 32]> {
-    if text.len() != 64 || !text.is_ascii() {
+    let bytes = text.as_bytes();
+    if bytes.len() != 64 {
         return None;
     }
     let mut out = [0; 32];
-    for (byte, pair) in out.iter_mut().zip(text.as_bytes().as_chunks::<2>().0) {
-        *byte = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
+    for (byte, &[hi, lo]) in out.iter_mut().zip(bytes.as_chunks::<2>().0) {
+        *byte = (hex_nibble(hi)? << 4) | hex_nibble(lo)?;
     }
     Some(out)
 }

@@ -1,6 +1,6 @@
 //! Pure data structures for engine profiles, game records, and validation errors.
 use crate::exe::{Arch, Case};
-use std::{collections::BTreeMap, fmt};
+use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Family {
@@ -237,13 +237,20 @@ pub struct EngineProfile {
     pub base: Option<String>,
     pub binaries: Vec<Binary>,
     pub(super) statuses: Vec<CommandStatus>,
-    pub(super) proofs: BTreeMap<u16, MachineProof>,
-    pub(super) contracts: BTreeMap<u16, [u8; 32]>,
+    pub(super) proofs: Vec<(u16, MachineProof)>,
+    pub(super) contracts: Vec<(u16, [u8; 32])>,
     /// Review records, as paths relative to `docs/` of a section headed by the command.
-    pub(super) reviews: BTreeMap<u16, String>,
-    pub(super) variant: BTreeMap<u16, VariantBinding>,
+    pub(super) reviews: Vec<(u16, String)>,
+    pub(super) variant: Vec<(u16, VariantBinding)>,
     /// CVNS only: reviewed command to the runtime command whose semantics it shares.
-    pub(super) maps: BTreeMap<u16, u16>,
+    pub(super) maps: Vec<(u16, u16)>,
+}
+
+pub(super) fn lookup_sorted<T>(entries: &[(u16, T)], command: u16) -> Option<&T> {
+    entries
+        .binary_search_by_key(&command, |&(key, _)| key)
+        .ok()
+        .map(|idx| &entries[idx].1)
 }
 
 /// Maps the data of one game to the profile of the build it ships with.
