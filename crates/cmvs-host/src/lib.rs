@@ -1,4 +1,15 @@
-//! A window-independent player. All calls for one player belong to one host thread;
+//! Embed a complete CMVS player without owning a window.
+//!
+//! Open a [`Player`], forward input with [`Player::set_key_state`] and
+//! [`Player::set_pointer_position`], then call [`Player::tick`]. Present
+//! [`Player::frame`] on [`TickOutcome::FrameReady`]; on
+//! [`TickOutcome::BudgetExhausted`], resume the same frame in another slice.
+//! Call [`Player::save_preferences`] before closing.
+//!
+//! The player configures fonts, audio, movies, and frame composition. For a custom
+//! host that supplies those services, use [`cmvs_core::runtime`] instead.
+//!
+//! All calls for one player belong to one host thread;
 //! the native audio backend owns and synchronizes its device callback separately.
 mod backend;
 mod error;
@@ -228,18 +239,22 @@ impl Player {
         self.serial
     }
     /// Compatibility name for [`Self::set_key_state`].
+    #[doc(hidden)]
     pub fn key(&mut self, code: usize, pressed: bool) -> Result<(), &'static str> {
         self.set_key_state(code, pressed)
     }
     /// Compatibility name for [`Self::set_pointer_position`].
+    #[doc(hidden)]
     pub fn pointer(&mut self, x: i32, y: i32) {
         self.set_pointer_position(x, y);
     }
     /// Compatibility name for [`Self::set_paused`].
+    #[doc(hidden)]
     pub fn pause(&mut self, paused: bool) {
         self.set_paused(paused);
     }
     /// Compatibility name for [`Self::frame_serial`].
+    #[doc(hidden)]
     pub fn serial(&self) -> u64 {
         self.frame_serial()
     }

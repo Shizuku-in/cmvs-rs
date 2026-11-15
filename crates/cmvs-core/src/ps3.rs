@@ -291,6 +291,7 @@ impl Script {
     }
 
     /// Compatibility name for [`Self::data`].
+    #[doc(hidden)]
     pub fn unknown(&self) -> &[u8] {
         self.data()
     }

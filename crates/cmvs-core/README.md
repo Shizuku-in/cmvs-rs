@@ -10,7 +10,7 @@ Platform-independent core of the CMVS engine reimplementation. Every host and to
 | VM | `bytecode`, `vm`, `machine` (bounded multi-slot stepping), `dispatch` (system-command routing), `evaluate` |
 | Engine state | `scene`, `message`, `buttons`, `camera`, `effect_objects`, `settings`, `history`, `input`, `gesture` |
 | Rendering | `scene_render`: software compositor and the draw queue executed by GPU backends |
-| Hosting | `platform` (host requests), `resources`, `filesystem`, `runner` (startup orchestration), `viewport` |
+| Hosting | `platform` (host requests), `resources`, `filesystem`, `runtime` (session and frame loop), `viewport` |
 | Builds | `profile`: which analysed engine build supplies the semantics for a game |
 
 Engine builds are described by the files in [`profiles/`](profiles); see [engine profiles](../../docs/design/engine-profiles.md). Unknown games, unimplemented commands and unsupported codecs return errors instead of being guessed.

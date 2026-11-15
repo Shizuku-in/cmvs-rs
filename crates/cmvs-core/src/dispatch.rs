@@ -2,6 +2,14 @@
 //! Gate resolution precedes dispatch. Runtime-wide operations return a checked
 //! request for the caller's orchestration; they remain pending until acknowledged.
 //! A selected override never falls through to root semantics.
+//!
+//! Custom executors use [`run`] with [`Hosts`] after [`crate::profile::CommandGate`]
+//! resolves the command. Complete hosts should use [`crate::runtime::Runtime`],
+//! which performs this sequence and handles runtime requests.
+//!
+//! [`Entry`], [`ROOT`], [`VARIANT_TABLES`], and [`variant_entry`] expose registration
+//! metadata for inspection. Handlers and their argument bookkeeping are internal;
+//! metadata alone does not authorize a command or establish host capabilities.
 pub mod ownership;
 
 use std::{error::Error, fmt};
@@ -468,7 +476,7 @@ pub struct TextHosts<'a> {
     pub flags: MessageFlags,
 }
 
-pub struct Call<'a, 'script> {
+pub(crate) struct Call<'a, 'script> {
     pub vm: &'a mut Machine<'script>,
     pub pc: usize,
     pub command: u16,
@@ -600,11 +608,13 @@ impl<'a, 'script> Call<'a, 'script> {
 }
 
 type Handler = fn(&mut Hosts<'_>, &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>>;
+/// Registration metadata for command inspection. Execute commands through [`run`].
 pub struct Entry {
+    /// VM system-command number (opcode minus 0x2000).
     pub command: u16,
     pub name: &'static str,
     pub capability: Capability,
-    pub handler: Handler,
+    handler: Handler,
 }
 
 fn root_text(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {

@@ -216,8 +216,10 @@ pub struct RuntimeOptions {
 }
 
 /// Compatibility name for [`Runtime`].
+#[doc(hidden)]
 pub type Startup<'a> = Runtime<'a>;
 /// Compatibility name for [`RuntimeEvent`].
+#[doc(hidden)]
 pub type StartupEvent = RuntimeEvent;
 
 /// A running game session with VM, engine state, and resource services.
@@ -578,6 +580,7 @@ impl<'a> Runtime<'a> {
         self.movies.set_decode_frames(enabled);
     }
     /// Compatibility name for [`Self::set_decode_cmv_frames`].
+    #[doc(hidden)]
     pub fn set_decode_movie_frames(&mut self, enabled: bool) {
         self.set_decode_cmv_frames(enabled);
     }
@@ -593,6 +596,7 @@ impl<'a> Runtime<'a> {
     /// To include message windows and glyphs, pass them to
     /// [`crate::scene_render::render_scene`] as additional objects. Unsupported scene
     /// state returns an error.
+    #[doc(hidden)]
     pub fn render_frame(&self) -> Result<crate::raster::RgbaImage, crate::FormatError> {
         match self.movie_frame() {
             Some(image) => Ok(image.clone()),
@@ -634,6 +638,7 @@ impl<'a> Runtime<'a> {
         self.advance_frame_state(delta_ms)
     }
     /// Compatibility name for [`Self::advance_playback`].
+    #[doc(hidden)]
     pub fn advance_decoded_frame(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error>> {
         self.advance_playback(delta_ms)
     }

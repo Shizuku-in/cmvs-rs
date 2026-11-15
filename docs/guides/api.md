@@ -2,7 +2,16 @@
 
 HTML 文档用于浏览接口和示例，rustdoc JSON 用于程序读取类型、签名和注释。默认生成 `cmvs-core` 和根包 `cmvs-rs` 的公开 API，不包含第三方依赖的文档。
 
-从核心库首页按任务查找入口：资源处理看 `cpz`、`ps3` 和 `image`，自定义宿主看 `runtime`，单步执行看 `machine`。嵌入完整播放器使用 [`cmvs-host::Player`](../../crates/cmvs-host/README.md)，它负责字体、音频和画面合成。根包首页说明兼容接口和可选功能。
+先按接入层次选择入口：
+
+| 用途 | 推荐入口 |
+|---|---|
+| 嵌入完整播放器 | [`cmvs-host::Player`](../../crates/cmvs-host/README.md)，负责字体、音频和画面合成 |
+| 自定义宿主 | `runtime::{Runtime, RuntimeOptions, FrameDriver}` |
+| 读取资源 | `cpz::ArchiveIndex`、`ps3::Script`、`image::load` |
+| 单步执行与研究工具 | `machine::Machine`；自行路由命令时使用 `dispatch` |
+
+核心库首页进一步区分宿主服务、引擎状态和底层执行接口。`dispatch` 的登记表供元数据查询，处理函数与参数记账由 core 内部维护。新集成直接依赖对应子包；根包保留兼容导出和可选后端。旧名称仍可调用，但不展示在生成文档中。
 
 ## 生成文档
 

@@ -1,19 +1,30 @@
 //! CMVS resource formats, script execution, and host interfaces.
 //!
-//! Choose an entry point by task:
+//! # Start here
+//!
+//! Choose the level of integration first:
+//!
+//! | Integration | Entry point | Caller supplies |
+//! |---|---|---|
+//! | Embed a complete player | `cmvs-host::Player` (separate crate) | Presentation, input, save directory, font |
+//! | Build a custom host | [`runtime::Runtime`], [`runtime::RuntimeOptions`], [`runtime::FrameDriver`] | Device services and frame composition |
+//! | Step scripts or build analysis tools | [`machine::Machine`] | Resources, command handling, scheduling |
+//!
+//! For a custom host, start with [`profile::Registry`] to identify the game, then
+//! follow the initialization and frame-loop guide in [`runtime`].
+//!
+//! # Resource APIs
+//!
+//! These readers and decoders can be used independently of a running game.
 //!
 //! | Task | Start here |
 //! |---|---|
 //! | Inspect or extract an archive | [`cpz::ArchiveIndex`] |
 //! | Read a script or disassemble instructions | [`ps3::Script`], [`bytecode`] |
 //! | Decode an image | [`pb3::decode`], [`image::load`] |
-//! | Identify a game and run it | [`profile::Registry`], [`runtime::Runtime`] |
-//! | Execute individual VM instructions | [`machine::Machine`] |
-//! | Implement a window, input, or output backend | [`platform::PlatformBackend`], [`input`], [`audio::AudioBackend`] |
-//! | Render engine state | [`scene_render`], [`raster::RgbaImage`] |
 //! | Inspect save data | [`save`], [`system_save`], [`snapshot`] |
 //!
-//! # Inspect a script
+//! ## Inspect a script
 //!
 //! ```no_run
 //! use cmvs_core::ps3::Script;
@@ -27,16 +38,28 @@
 //! Script text remains encoded bytes. Select [`TextEncoding`] when executing or
 //! displaying text; resource names keep their own lookup rules.
 //!
-//! # Running and hosting
+//! # Host services and engine state
 //!
-//! For an embedded player with fonts, audio, and frame composition, use
-//! `cmvs-host::Player`. For a custom host, [`runtime::Runtime`] combines the selected
-//! profile, VM, resources, and engine state in a frame loop. Use
-//! [`machine::Machine`] for individual VM steps and handle system commands yourself.
+//! [`runtime::Runtime`] owns the engine state. Custom hosts supply
+//! [`platform::PlatformBackend`] and [`audio::AudioBackend`], update [`input`], and
+//! compose [`scene`], [`camera`], and [`message`] state through [`scene_render`].
+//! [`raster::RgbaImage`] represents software output; [`scene_render::RenderFrame`]
+//! supplies the shared draw queue for GPU backends.
 //!
 //! The host supplies windows, graphics devices, and audio output. Desktop builds
 //! of the core use only the standard library. Android and browser builds add
 //! dependencies for their filesystem adapters.
+//!
+//! # Low-level execution and research
+//!
+//! [`vm`] and [`evaluate`] expose VM values and execution state. [`dispatch`]
+//! provides command routing and metadata for custom executors; [`runtime::Runtime`]
+//! already handles this layer. [`bootstrap`], [`script_control`], and the individual
+//! engine-state modules support command implementation and focused tools.
+//! [`exe`], [`digest`], and [`cvns`] support engine identification and analysis.
+//!
+//! Module paths are the canonical API. Compatibility aliases remain callable but
+//! are omitted from the generated documentation.
 //!
 //! # Errors and support
 //!
@@ -82,6 +105,7 @@ pub mod raster;
 pub mod resources;
 pub mod runtime;
 /// Compatibility path for [`runtime`].
+#[doc(hidden)]
 pub use runtime as runner;
 pub mod save;
 pub mod save_menu;
