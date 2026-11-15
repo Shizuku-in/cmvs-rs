@@ -37,7 +37,7 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 default-run = "cmvs-inspect"
-description = "Portable CMVS format research tools; not yet a game runtime"
+description = "Portable CMVS engine reimplementation, game runtime and format research tools"
 
 [lib]
 name = "cmvs_rs"
