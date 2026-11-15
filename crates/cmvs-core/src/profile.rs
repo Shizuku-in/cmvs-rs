@@ -9,250 +9,41 @@
 //! are rejected; unreviewed and presumed commands are allowed by default and can be
 //! blocked through the gate policy. Authorization does not imply a handler exists
 //! or that a complete game has been validated.
+mod binary;
 mod contract;
 mod gate;
+mod model;
 mod select;
 mod text;
 
 pub use contract::{ContractProof, ContractRules, ContractSide};
 pub use gate::{CommandGate, GateCounts, GateError, GateErrorKind};
+pub use model::{
+    Binary, CommandStatus, EngineProfile, Family, GameRecord, MachineProof, ProfileError,
+    RecordFile, Semantics, VariantBinding, VariantId,
+};
 pub use select::{
     EXECUTABLE_NAMES, Evidence, FileEvidence, Game, GameFiles, ProfileSelection, SelectionBasis,
     SelectionError,
 };
 
-use crate::exe::{Arch, Case, Dispatch, PeImage};
-use std::{collections::BTreeMap, fmt, sync::OnceLock};
+use crate::exe::{Case, Dispatch, PeImage};
+use std::{collections::BTreeMap, sync::OnceLock};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Family {
-    Cmvs,
-    /// The predecessor engine. A CVNS profile derives from a CMVS root profile and only runs
-    /// commands whose review maps them to a runtime command (see [`crate::cvns`]).
-    Cvns,
-}
+include!(concat!(env!("OUT_DIR"), "/contract_rules.rs"));
 
-/// Selected only after the command gate authorizes the dispatch attempt.
-/// Variant semantics do not constitute a Reviewed or contract proof.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Semantics {
-    Root,
-    Variant(VariantId),
-}
-
-/// Static implementation identifiers; execution obeys the unreviewed block policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VariantId {
-    TextDialog,
-    ScreenCoordinates,
-    InputPress,
-    FontCells,
-    TextAlpha,
-    ObjectQueue,
-    ListSelect,
-    Particles,
-    ParticlesX87,
-    Rain,
-    BackgroundAudio,
-    SeRestart,
-    SeGain,
-    MixerGain,
-    ImageTables,
-    ActivationPass,
-    WindowScaleMotion,
-    WindowPositionMotion,
-    WindowOpacityTrack,
-    LogicalText,
-    ViewMotion,
-    WindowFullMove,
-    LegacyEffects,
-    WindowChildImage,
-    WindowDrawScale,
-    SequenceWindowImage,
-    DrawQuery,
-    CameraMoveX,
-    AudioPreload,
-    PolarPoint,
-    FallingBillboards,
-    FallingBillboardsX87,
-    CollisionParticles,
-    FadingParticles,
-    Fragments,
-    KeyedArchives,
-    DisplayCount,
-    FullscreenMonitor,
-    MgvPlayer,
-    MovieSeek,
-    MovieControl,
-}
-impl VariantId {
-    pub fn parse(name: &str) -> Option<Self> {
-        match name {
-            "text-dialog" => Some(Self::TextDialog),
-            "screen-coordinates" => Some(Self::ScreenCoordinates),
-            "input-press" => Some(Self::InputPress),
-            "list-select" => Some(Self::ListSelect),
-            "object-queue" => Some(Self::ObjectQueue),
-            "text-alpha" => Some(Self::TextAlpha),
-            "font-cells" => Some(Self::FontCells),
-            "particles" => Some(Self::Particles),
-            "particles-x87" => Some(Self::ParticlesX87),
-            "rain" => Some(Self::Rain),
-            "background-audio" => Some(Self::BackgroundAudio),
-            "se-restart" => Some(Self::SeRestart),
-            "se-gain" => Some(Self::SeGain),
-            "mixer-gain" => Some(Self::MixerGain),
-            "image-tables" => Some(Self::ImageTables),
-            "activation-pass" => Some(Self::ActivationPass),
-            "window-scale-motion" => Some(Self::WindowScaleMotion),
-            "window-position-motion" => Some(Self::WindowPositionMotion),
-            "window-opacity-track" => Some(Self::WindowOpacityTrack),
-            "logical-text" => Some(Self::LogicalText),
-            "view-motion" => Some(Self::ViewMotion),
-            "window-full-move" => Some(Self::WindowFullMove),
-            "legacy-effects" => Some(Self::LegacyEffects),
-            "window-child-image" => Some(Self::WindowChildImage),
-            "window-draw-scale" => Some(Self::WindowDrawScale),
-            "sequence-window-image" => Some(Self::SequenceWindowImage),
-            "draw-query" => Some(Self::DrawQuery),
-            "camera-move-x" => Some(Self::CameraMoveX),
-            "audio-preload" => Some(Self::AudioPreload),
-            "polar-point" => Some(Self::PolarPoint),
-            "falling-billboards" => Some(Self::FallingBillboards),
-            "falling-billboards-x87" => Some(Self::FallingBillboardsX87),
-            "collision-particles" => Some(Self::CollisionParticles),
-            "fading-particles" => Some(Self::FadingParticles),
-            "fragments" => Some(Self::Fragments),
-            "keyed-archives" => Some(Self::KeyedArchives),
-            "display-count" => Some(Self::DisplayCount),
-            "fullscreen-monitor" => Some(Self::FullscreenMonitor),
-            "mgv-player" => Some(Self::MgvPlayer),
-            "movie-seek" => Some(Self::MovieSeek),
-            "movie-control" => Some(Self::MovieControl),
-            _ => None,
-        }
+impl ContractRules {
+    /// Active rules computed at build time from the bundled extractor sources and
+    /// contract tables. Editing any dependency invalidates the registered certificates
+    /// until extraction and review are repeated.
+    pub fn builtin() -> Self {
+        BUILTIN_CONTRACT_RULES
     }
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::TextDialog => "text-dialog",
-            Self::ScreenCoordinates => "screen-coordinates",
-            Self::InputPress => "input-press",
-            Self::ListSelect => "list-select",
-            Self::ObjectQueue => "object-queue",
-            Self::TextAlpha => "text-alpha",
-            Self::FontCells => "font-cells",
-            Self::Particles => "particles",
-            Self::ParticlesX87 => "particles-x87",
-            Self::Rain => "rain",
-            Self::BackgroundAudio => "background-audio",
-            Self::SeRestart => "se-restart",
-            Self::SeGain => "se-gain",
-            Self::MixerGain => "mixer-gain",
-            Self::ImageTables => "image-tables",
-            Self::ActivationPass => "activation-pass",
-            Self::WindowScaleMotion => "window-scale-motion",
-            Self::WindowPositionMotion => "window-position-motion",
-            Self::WindowOpacityTrack => "window-opacity-track",
-            Self::LogicalText => "logical-text",
-            Self::ViewMotion => "view-motion",
-            Self::WindowFullMove => "window-full-move",
-            Self::LegacyEffects => "legacy-effects",
-            Self::WindowChildImage => "window-child-image",
-            Self::WindowDrawScale => "window-draw-scale",
-            Self::SequenceWindowImage => "sequence-window-image",
-            Self::DrawQuery => "draw-query",
-            Self::CameraMoveX => "camera-move-x",
-            Self::AudioPreload => "audio-preload",
-            Self::PolarPoint => "polar-point",
-            Self::FallingBillboards => "falling-billboards",
-            Self::FallingBillboardsX87 => "falling-billboards-x87",
-            Self::CollisionParticles => "collision-particles",
-            Self::FadingParticles => "fading-particles",
-            Self::Fragments => "fragments",
-            Self::KeyedArchives => "keyed-archives",
-            Self::DisplayCount => "display-count",
-            Self::FullscreenMonitor => "fullscreen-monitor",
-            Self::MgvPlayer => "mgv-player",
-            Self::MovieSeek => "movie-seek",
-            Self::MovieControl => "movie-control",
-        }
-    }
-}
-
-/// A declared variant implementation and its executable-bound evidence.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VariantBinding {
-    pub id: VariantId,
-    pub arch: Arch,
-    pub binary_sha256: [u8; 32],
-    pub evidence: String,
 }
 
 pub struct ResolvedCommand {
     pub semantics: Semantics,
     pub first_unreviewed: Option<u16>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommandStatus {
-    /// The switch's default (returns 0); every command beyond the switch is absent too.
-    Absent,
-    /// The shared stub returning 0x4000 with no effect; base semantics never apply.
-    NoOp,
-    /// Root profile only: this build is the semantic reference.
-    Base,
-    /// A complete same-architecture fingerprint matches the root; proof is mandatory.
-    Inherited,
-    /// A recorded manual review found the root semantics apply; the record is mandatory.
-    Reviewed,
-    /// Complete offline contracts match under an active, registered certificate.
-    ContractEquivalent,
-    /// Comparison found no difference, but conservative limits (blocked data, indirect
-    /// calls, recursion, depth) hide part of the code; the comparable-shape proof is
-    /// mandatory. Allowed by default; an explicit block-presumed policy rejects it.
-    Presumed,
-    /// Present, but not yet compared with or reviewed against the base.
-    Unreviewed,
-}
-
-impl CommandStatus {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Absent => "absent",
-            Self::NoOp => "noop",
-            Self::Base => "base",
-            Self::Inherited => "inherited",
-            Self::Reviewed => "reviewed",
-            Self::ContractEquivalent => "contract-equivalent",
-            Self::Presumed => "presumed",
-            Self::Unreviewed => "unreviewed",
-        }
-    }
-}
-
-/// Identity-bound machine comparison evidence: for `Inherited` the digest covers the
-/// complete normalized handler and its dependencies, for `Presumed` everything comparable
-/// with blocked parts as placeholders. No original code bytes are embedded.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MachineProof {
-    pub arch: Arch,
-    pub base_sha256: [u8; 32],
-    pub derived_sha256: [u8; 32],
-    pub digest: [u8; 32],
-}
-
-/// One analysed executable of a build; every address is relative to this file only.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Binary {
-    pub arch: Arch,
-    pub file: String,
-    pub sha256: [u8; 32],
-    pub timestamp: u32,
-    pub linker: (u8, u8),
-    pub image_base: u64,
-    pub table_rva: u32,
-    pub default_rva: u32,
-    pub cases: Vec<Case>,
 }
 
 impl Binary {
@@ -270,22 +61,6 @@ impl Binary {
 
 /// x86/x64 executables of one build are linked minutes apart (66-147 s in the 2010-2023 survey).
 pub const SAME_BUILD_SECONDS: u32 = 300;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EngineProfile {
-    pub id: String,
-    pub family: Family,
-    pub base: Option<String>,
-    pub binaries: Vec<Binary>,
-    statuses: Vec<CommandStatus>,
-    proofs: BTreeMap<u16, MachineProof>,
-    contracts: BTreeMap<u16, [u8; 32]>,
-    /// Review records, as paths relative to `docs/` of a section headed by the command.
-    reviews: BTreeMap<u16, String>,
-    variant: BTreeMap<u16, VariantBinding>,
-    /// CVNS only: reviewed command to the runtime command whose semantics it shares.
-    maps: BTreeMap<u16, u16>,
-}
 
 impl EngineProfile {
     pub fn semantics(&self, command: u16) -> Semantics {
@@ -655,53 +430,6 @@ impl EngineProfile {
     }
 }
 
-/// Maps the data of one game to the profile of the build it ships with.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GameRecord {
-    pub game: String,
-    pub profile: String,
-    /// Exact startup variants sharing this game's identity and script archive.
-    pub start_scripts: Vec<RecordFile>,
-    pub script_archive: RecordFile,
-    /// Value the start script hands to 0x201d.
-    pub game_id: u32,
-    pub executables: Vec<RecordFile>,
-    /// Integer cleared by the explicit `--skip-auto-resume` preview policy, when verified.
-    pub skip_auto_resume: Option<u32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RecordFile {
-    pub path: String,
-    pub sha256: [u8; 32],
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProfileError {
-    pub line: Option<usize>,
-    pub message: String,
-}
-
-impl ProfileError {
-    fn new(message: impl Into<String>) -> Self {
-        Self {
-            line: None,
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for ProfileError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.line {
-            Some(line) => write!(f, "profile data line {line}: {}", self.message),
-            None => write!(f, "profile data: {}", self.message),
-        }
-    }
-}
-
-impl std::error::Error for ProfileError {}
-
 /// Engine profiles, game identities, and reviewed command-contract proofs.
 ///
 /// Use [`Self::builtin`] for the embedded registry or [`Self::parse`] for explicit
@@ -713,28 +441,7 @@ pub struct Registry {
     contracts: BTreeMap<[u8; 32], ContractProof>,
 }
 
-const BUILTIN_PROFILES: [&str; 19] = [
-    include_str!("../profiles/cmvs-20070119.profile"),
-    include_str!("../profiles/cmvs-20071117.profile"),
-    include_str!("../profiles/cmvs-20080719.profile"),
-    include_str!("../profiles/cmvs-20080903.profile"),
-    include_str!("../profiles/cmvs-20090815.profile"),
-    include_str!("../profiles/cmvs-20100314.profile"),
-    include_str!("../profiles/cmvs-20101211.profile"),
-    include_str!("../profiles/cmvs-20110525.profile"),
-    include_str!("../profiles/cmvs-20120309.profile"),
-    include_str!("../profiles/cmvs-20130131.profile"),
-    include_str!("../profiles/cmvs-20140217.profile"),
-    include_str!("../profiles/cmvs-20150405.profile"),
-    include_str!("../profiles/cmvs-20160201.profile"),
-    include_str!("../profiles/cmvs-20171114.profile"),
-    include_str!("../profiles/cmvs-20190305.profile"),
-    include_str!("../profiles/cmvs-20190405.profile"),
-    include_str!("../profiles/cmvs-20211006.profile"),
-    include_str!("../profiles/cmvs-20221105.profile"),
-    include_str!("../profiles/cvns-20090203.profile"),
-];
-const BUILTIN_GAMES: &str = include_str!("../profiles/games.txt");
+const BUILTIN_REGISTRY: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/builtin_registry.bin"));
 
 impl Registry {
     pub fn parse(profiles: &[&str], games: &str) -> Result<Self, ProfileError> {
@@ -748,11 +455,16 @@ impl Registry {
         catalog: &str,
         active_rules: &[ContractRules],
     ) -> Result<Self, ProfileError> {
+        let profiles = profiles
+            .iter()
+            .map(|t| {
+                let profile = text::parse_profile(t)?;
+                profile.validate()?;
+                Ok(profile)
+            })
+            .collect::<Result<Vec<_>, ProfileError>>()?;
         let registry = Self {
-            profiles: profiles
-                .iter()
-                .map(|t| text::parse_profile(t))
-                .collect::<Result<_, _>>()?,
+            profiles,
             games: text::parse_games(games)?,
             contracts: contract::parse_catalog(catalog, active_rules)?,
         };
@@ -763,13 +475,35 @@ impl Registry {
     pub fn builtin() -> &'static Self {
         static REGISTRY: OnceLock<Registry> = OnceLock::new();
         REGISTRY.get_or_init(|| {
-            Self::parse_with_contracts(
-                &BUILTIN_PROFILES,
-                BUILTIN_GAMES,
-                include_str!("../profiles/contracts.txt"),
-                &[ContractRules::builtin()],
-            )
-            .expect("embedded profile data is valid")
+            let (raw_len_bytes, compressed) = BUILTIN_REGISTRY
+                .split_at_checked(4)
+                .expect("embedded registry has length header");
+            let raw_len = u32::from_le_bytes(
+                raw_len_bytes
+                    .try_into()
+                    .expect("four-byte embedded registry length"),
+            ) as usize;
+            let raw = crate::lzss::decode(compressed, raw_len)
+                .expect("embedded registry LZSS payload is valid");
+            let (profiles, games, contracts) =
+                binary::decode_bundle(&raw).expect("embedded registry binary payload is valid");
+            for profile in &profiles {
+                profile
+                    .validate()
+                    .expect("embedded engine profile is valid");
+            }
+            let active = ContractRules::builtin();
+            assert!(
+                contracts.values().all(|proof| proof.rules == active),
+                "embedded contract rules are current"
+            );
+            let registry = Self {
+                profiles,
+                games,
+                contracts,
+            };
+            registry.validate().expect("embedded profile data is valid");
+            registry
         })
     }
     pub fn profiles(&self) -> &[EngineProfile] {
@@ -894,5 +628,59 @@ impl Registry {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{fs, path::Path};
+
+    #[test]
+    fn builtin_matches_raw_profile_files_on_disk() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("profiles");
+        let mut profile_paths = fs::read_dir(&dir)
+            .expect("read profiles directory")
+            .map(|entry| entry.expect("dir entry").path())
+            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("profile"))
+            .collect::<Vec<_>>();
+        profile_paths.sort();
+
+        let profile_texts = profile_paths
+            .iter()
+            .map(|path| fs::read_to_string(path).expect("read profile file"))
+            .collect::<Vec<_>>();
+        let profile_refs = profile_texts.iter().map(String::as_str).collect::<Vec<_>>();
+        let games = fs::read_to_string(dir.join("games.txt")).expect("read games.txt");
+        let contracts = fs::read_to_string(dir.join("contracts.txt")).expect("read contracts.txt");
+
+        let parsed = Registry::parse_with_contracts(
+            &profile_refs,
+            &games,
+            &contracts,
+            &[ContractRules::builtin()],
+        )
+        .expect("parse raw profile files");
+
+        assert_eq!(Registry::builtin(), &parsed);
+    }
+
+    #[test]
+    fn binary_bundle_roundtrips_and_rejects_corrupt_inputs() {
+        let builtin = Registry::builtin();
+        let encoded = binary::encode_bundle(&builtin.profiles, &builtin.games, &builtin.contracts)
+            .expect("encode builtin bundle");
+        let decoded = binary::decode_bundle(&encoded).expect("decode builtin bundle");
+        assert_eq!(decoded.0, builtin.profiles);
+        assert_eq!(decoded.1, builtin.games);
+        assert_eq!(decoded.2, builtin.contracts);
+
+        assert!(binary::decode_bundle(b"").is_err());
+        assert!(binary::decode_bundle(b"CMVB\x02").is_err());
+        assert!(binary::decode_bundle(&encoded[..encoded.len() - 1]).is_err());
+
+        let mut with_trailing = encoded;
+        with_trailing.push(0);
+        assert!(binary::decode_bundle(&with_trailing).is_err());
     }
 }
