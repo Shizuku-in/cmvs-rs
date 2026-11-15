@@ -276,18 +276,39 @@ fn to_rgba(
     let cw = ident.width / 2;
     const BOUNDS: &str = "Theora planes smaller than the MGV picture";
     let mut rgba = vec![0; width * height * 4];
-    for (row, out) in rgba.chunks_exact_mut(width * 4).enumerate() {
+    let row_stride = width * 4;
+    let odd_left = left % 2 == 1;
+    let chroma_left = left / 2;
+    let chroma_right = (left + width).div_ceil(2);
+    let mut row = 0usize;
+    while row < height {
         // Theora rows run bottom-up.
         let y = bottom + height - 1 - row;
-        let luma = frame.planes[0]
-            .get(y * yw + left..y * yw + left + width)
-            .ok_or(FormatError(BOUNDS))?;
-        let chroma = (y / 2) * cw + left / 2..(y / 2) * cw + (left + width).div_ceil(2);
+        let chroma = (y / 2) * cw + chroma_left..(y / 2) * cw + chroma_right;
         let cb = frame.planes[1]
             .get(chroma.clone())
             .ok_or(FormatError(BOUNDS))?;
         let cr = frame.planes[2].get(chroma).ok_or(FormatError(BOUNDS))?;
-        yuv::convert_row(luma, cb, cr, out, left % 2 == 1);
+        if row + 1 < height && (y & 1) == 1 {
+            let luma0 = frame.planes[0]
+                .get(y * yw + left..y * yw + left + width)
+                .ok_or(FormatError(BOUNDS))?;
+            let y1 = y - 1;
+            let luma1 = frame.planes[0]
+                .get(y1 * yw + left..y1 * yw + left + width)
+                .ok_or(FormatError(BOUNDS))?;
+            let (out0, out1) =
+                rgba[row * row_stride..(row + 2) * row_stride].split_at_mut(row_stride);
+            yuv::convert_row_pair(luma0, luma1, cb, cr, out0, out1, odd_left);
+            row += 2;
+        } else {
+            let luma = frame.planes[0]
+                .get(y * yw + left..y * yw + left + width)
+                .ok_or(FormatError(BOUNDS))?;
+            let out = &mut rgba[row * row_stride..(row + 1) * row_stride];
+            yuv::convert_row(luma, cb, cr, out, odd_left);
+            row += 1;
+        }
     }
     RgbaImage::new(u32::from(index.width), u32::from(index.height), rgba)
 }
