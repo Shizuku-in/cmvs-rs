@@ -1,4 +1,4 @@
-//! Type-8 image fragments; executable-bound evidence is in games/aoitori/vm-semantics.md.
+//! Type-8 image fragments; executable-bound evidence is in games/aoitori/README.md.
 use crate::{
     audio::AudioBackend,
     bytecode::DecodeError,

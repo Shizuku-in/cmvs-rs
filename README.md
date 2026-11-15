@@ -72,7 +72,7 @@ cargo run --offline -- "<游戏目录>/data/pack/start.ps3"
 cargo test --offline
 ```
 
-桌面预览、启动快照屏障、字体、音频和独立用户目录配置见[运行指南](docs/guides/running.md)。检查工具见[CLI 指南](docs/guides/cli.md)。
+桌面运行、字体、音频和独立用户目录配置见[运行指南](docs/guides/running.md)。检查工具见[CLI 指南](docs/guides/cli.md)。
 
 ## 汉化补丁支持
 

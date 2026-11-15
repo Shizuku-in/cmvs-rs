@@ -5,10 +5,9 @@
 | 字段 | 内容 |
 |---|---|
 | 游戏标识 | `memoria` |
-| 本地样本目录 | `2009-08-28_MEMORIA` |
 | 英文名称 | Memoria |
 | 引擎 / 脚本自报版本 | `cmvs[ver.1.70]` / `ps2[ver.1.00]` |
-| 发行版本与补丁 | 未确认；目录日期仅作为样本标签 |
+| 发行版本与补丁 | 未确认 |
 | 平台与架构 | Windows PC；x86 |
 | 文本编码 | Shift-JIS |
 | 引擎 profile | `cmvs-20090815`，基准 `cmvs-20160201` |
@@ -76,7 +75,7 @@ x87 分支以 f64 表达随机数中间值，保留明确 f32 落栈点和百分
 
 ```bash
 cargo run --offline --release --features desktop,audio-output --bin cmvs-desktop -- \
-  "/run/media/gkouen/New Volume/Download/Purple Software/2009-08-28_MEMORIA" \
+  "<游戏目录>" \
   --encoding shift-jis --user-data-dir local/memoria/play-user --audio native \
   --font /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
 ```

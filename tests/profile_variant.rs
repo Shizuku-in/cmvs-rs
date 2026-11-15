@@ -319,8 +319,7 @@ fn declared_variant_round_trips_and_does_not_depend_on_the_profile_name() {
 
 #[test]
 fn variant_declarations_reject_unknown_handlers_bad_bindings_and_unsafe_evidence_paths() {
-    let declaration =
-        format!("variant=font-cells:x64:{HASH} evidence=games/aoitori/vm-semantics.md");
+    let declaration = format!("variant=font-cells:x64:{HASH} evidence=games/aoitori/README.md");
     for replacement in [
         declaration.replace("variant=", "research="),
         declaration.replace("font-cells", "unknown"),
@@ -328,10 +327,10 @@ fn variant_declarations_reject_unknown_handlers_bad_bindings_and_unsafe_evidence
         declaration.replace(HASH, &"0".repeat(64)),
         declaration.replace(HASH, "not-a-hash"),
         declaration.replace(&format!(":{HASH}"), ""),
-        declaration.replace("games/aoitori/vm-semantics.md", "../outside.md"),
-        declaration.replace("games/aoitori/vm-semantics.md", "/outside.md"),
-        declaration.replace("games/aoitori/vm-semantics.md", "games/evidence.txt"),
-        declaration.replace(" evidence=games/aoitori/vm-semantics.md", ""),
+        declaration.replace("games/aoitori/README.md", "../outside.md"),
+        declaration.replace("games/aoitori/README.md", "/outside.md"),
+        declaration.replace("games/aoitori/README.md", "games/evidence.txt"),
+        declaration.replace(" evidence=games/aoitori/README.md", ""),
         format!("{declaration} evidence=duplicate.md"),
     ] {
         assert!(

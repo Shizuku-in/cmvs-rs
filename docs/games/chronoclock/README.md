@@ -1,14 +1,11 @@
 # 《クロノクロック》测试档案
 
-当前运行参数见[运行指南](../../guides/running.md#chronoclock研究运行)；命令依据见[VM 语义](vm-semantics.md)，各项验证条件与哈希见[研究记录](research.md)。
+当前运行参数见[运行指南](../../guides/running.md#chronoclock运行)；命令依据见[VM 语义](vm-semantics.md)。契约字段依据见[契约表](contract-m2.md)。
 
 ## 样本身份
 
-契约工具的首轮输入整理见 [M0 差异分类快照](contract-m0.md)，离线提取见 [M1 报告](contract-m1.md) 与 [M2 报告](contract-m2.md)；这些都不改变本页复核状态或运行结果。
-
 | 字段 | 内容 |
 |---|---|
-| 本地样本目录 | `2015-04-24_CHRONOCLOCK` |
 | 英文名称 | Chrono Clock |
 | 引擎 / 脚本自报版本 | `cmvs64[ver.3.22]` / `ps3[ver.1.00]` |
 | 游戏标识 | `chronoclock` |
@@ -16,7 +13,7 @@
 | 样本平台与架构 | PC；研究对象是 `cmvs64.exe` x86-64，另有 `cmvs32.exe`，未分析 |
 | 引擎版本标识 | 没有找到显式版本字符串；PE 时间戳 `0x55219bdb`（2015-04-05）。封包均为 `CPZ6`，脚本为 `PS2A` |
 | 文本编码 | 推测为 Shift-JIS：trace 记录的窗口标题按 Shift-JIS 字节呈现，未逐项确认 |
-| 可执行文件 | `cmvs64.exe`，image base `0x140000000`，SHA-256 `d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d`；IDA 识别 3097 个函数，IDA 输入哈希与此一致 |
+| 可执行文件 | `cmvs64.exe`，image base `0x140000000`，SHA-256 `d1c4ade9551b827b8e401fc10f68a73e2525a67a217b63747898f5797894911d` |
 | `cmvs32.exe` | SHA-256 `30edecfde8d69b60102c79c82db7eda3895126510e51c0ec76658a303f5a49b4` |
 | `data/pack/script.cpz` | SHA-256 `aa4bd891cc50fe658cacc050c6b216e8ba0389d17d01163e335f3177d6f14ba3`，85 个脚本 |
 | 包外 `data/pack/start.ps3` | SHA-256 `d4263a32830bb385fabfa7e06c2fde2d70e072722e3ed6c317292e7086fb6dce` |
@@ -29,7 +26,7 @@
 
 | 项目 | 结果与范围 |
 |---|---|
-| 容器 | 全部 12 个 `.cpz` 的签名都是 `CPZ6`，`cmvs-cpz` 都识别为模式 1；`script`/`ps`/`bg`/`balloon`/`voice` 的索引能解析。**没有遇到 CPZ5**，封包层暂时不需要改架构 |
+| 容器 | 全部 12 个 `.cpz` 的签名都是 `CPZ6`，`cmvs-cpz` 都识别为模式 1；`script`/`ps`/`bg`/`balloon`/`voice` 的索引能解析 |
 | 脚本结构 | 85 个包内脚本加包外 `start.ps3`，共 86 个来源通过 PS2A 解码和入口/标签/直接跳转边界检查，包内资源校验和也通过（`external_script_structure`）。这只是结构检查，不代表能执行 |
 | 静态系统命令 | 427 种，其中 422 种也出现在《アマツツミ》的语料中。本作独有 `0x2026 0x2112 0x2119 0x22ca 0x22ff`；《アマツツミ》独有、本作语料没有的是 `0x200e 0x200f 0x202d 0x2065 0x211e 0x211f 0x21ef 0x21f0 0x21f1`。命令号相同**不等于**语义相同 |
 | 启动、标题与 OP | 独立新用户目录启动、标题和剧情通过；原生 OP 自然返回鉴赏页，3074 帧离线解码通过。未作人工听音或同步质量判断 |
@@ -39,24 +36,12 @@
 | 保存、关闭、重启与恢复 | v2布局V1–V5及存档分叉通过；原生空槽保存、正常关闭、设置重启保持及新槽恢复到同一句通过；特殊图像/活动场景效果快照继续显式拒绝 |
 | 其他平台 | 未测试 |
 
-2026-10-31 更新：上表启动 trace 为建档时的历史结果。新增 `0x2026` 后，trace 越过旧停点，在 `intproc.ps3 / 0x4021a / 0x2141` 因工具没有 MessageHost 而停止；完整 runner 可处理该命令，执行三次可见性切换后，在 steps=102011、`cdemo.ps3 / 0x1ef16 / 0x21fa` 的模式 `0x00140041` 明确报错。使用种子0、帧16ms、记录文字、无输入、无快照研究策略及独立 CSS1 副本。未验证原生画面/音轨或完整剧情，不代表该路径的所有指令已复核。
-
-## 系统命令分派（本作二进制）
-
-系统命令由 `0x14007ea60` 中的 switch 分派：`movzx eax, dx` 取低 16 位作为 case，共 976 项，跳转表 RVA 数组在 `0x140081344`，越界命令落到 default `0x14007eaba`（返回 0）；范围内另有 264 个 case 指向共用的空操作存根 `0x14007eaa7`（`mov eax, 4000h` 后返回，无副作用）。建档初稿把这个存根误记为 default，2026-10-30 实现引擎档案时更正。用 IDA 抽查的映射如下：
-
-| 命令 | 处理函数 | 备注 |
-|---|---|---|
-| `0x20d4` | `0x140071420` | 调用 `rand`，与《アマツツミ》随机数命令同号，细节未逐条复核 |
-| `0x2080` | `0x14007d7b0` | 未复核 |
-| `0x22b3` | `0x1400791b0` | 未复核 |
-| `0x2026` | `0x140068aa0` | 见下文 |
-| `0x2112` / `0x2119` | `0x14006f930` / `0x14006f9f0` | 文字布局测量尚未实现 / 显示字节计数已实现，见VM语义 |
-| `0x22ca` / `0x22ff` | `0x1400782d0` / `0x140078400` | 未分析 |
-| `0x211e` / `0x211f` | 空操作存根 `0x14007eaa7` | 本作只返回 0x4000；《アマツツミ》中是真实处理函数，不能套用其语义 |
-
 ## 重现与限制
 
-- 测试日期 2026-10-30，代码 `6475d2f`，release 构建。游戏目录保持只读；输出放在忽略的 `local/chronoclock/initial/`。
-- 结构检查：照搬《アマツツミ》[脚本审计](../amatsutsumi/script-audit.md#重复运行)的命令，把 `CMVS_SCRIPT_TEST_INPUTS` 换成本作的 `script.cpz;start.ps3`。报告 SHA-256 `b75f9d6e2004728bc05e4a72df66c1df141865231995b074341b544ededb4b57`。
-- 启动 trace：`cmvs-trace <游戏目录>/data/pack/start.ps3 --bootstrap --save-dir <游戏目录>/save --system-save <游戏目录>/save/system.dat --script-archive <游戏目录>/data/pack/script.cpz --record-platform <游戏目录> --continue-without-snapshot --frame-ms 16 --rand-seed 0 --steps 1000000`。日志 SHA-256 `3904db2db18cc939ccbe9bb8e44ba8047cc79a51f381a2f4fba920d84247ad30`。不加 `--save-dir` 会停在 `start.ps3 / 0x22b3`，不加 `--rand-seed` 会停在 `logo.ps3 / 0x20d4`，两处都和《アマツツミ》行为一致。
+使用[运行指南](../../guides/running.md#chronoclock运行)的桌面命令，或[CLI 指南](../../guides/cli.md)中的通用探针入口。游戏目录只读，输出使用全新独立目录；自动路线采用固定种子和虚拟帧时间。
+
+命令号相同不代表构建语义相同；命令映射和已核对差异以[引擎档案](../../../crates/cmvs-core/profiles/cmvs-20150405.profile)及[VM 语义](vm-semantics.md)为准。运行结果不提高未复核命令的证据等级。
+
+## 验证条件
+
+自动路线使用固定种子 0、16 ms 虚拟帧、合成输入和独立用户目录。默认放行推定及未复核命令，不将运行结果升级为语义证明。原生检查使用 Windows 软件绘制和原生音频；全新用户目录仍可读取原游戏的只读 CSS1 模板，不代表无模板首次启动。

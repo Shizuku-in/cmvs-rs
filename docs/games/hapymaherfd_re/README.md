@@ -5,10 +5,9 @@
 | 字段 | 内容 |
 |---|---|
 | 游戏标识 | `hapymaherfd_re` |
-| 本地样本目录 | `2023-05-26_HAPYMAHERFD_RE` |
 | 英文名称 | Hapymaher -Fragmentation Dream- REGRET END |
 | 引擎 / 脚本自报版本 | `cmvs64[ver.3.90]` / `ps3[ver.1.00]` |
-| 发行版本与补丁 | 未确认；目录日期仅作为样本标签 |
+| 发行版本与补丁 | 未确认 |
 | 平台与架构 | Windows PC；x86 + x64 |
 | 文本编码 | 本轮使用 Shift-JIS；剧情画面抽查通过，未普查全量文本 |
 | 引擎 profile | `cmvs-20221105`，基准 `cmvs-20160201` |

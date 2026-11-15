@@ -1,5 +1,5 @@
 //! cmvs-20070119 effect slots of types 0x50.. (engine +2928, four slots shared with the
-//! particle pools); evidence and addresses are in games/puriring/research.md.
+//! particle pools); evidence and addresses are in games/puriring/README.md.
 use crate::{
     audio::{AudioBackend, AudioSettings},
     camera::CameraHost,

@@ -3046,7 +3046,7 @@ pub static ROOT: &[Entry] = &[
         handler: root_text,
     },
     // CVNS-only semantics at 0x400 + the CVNS command (crate::cvns::CVNS_ONLY);
-    // evidence in docs/games/miharu/commands.md.
+    // evidence in docs/games/miharu/README.md.
     Entry {
         command: 0x402,
         name: "CVNS frame interval",

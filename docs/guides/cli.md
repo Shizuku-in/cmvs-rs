@@ -104,4 +104,30 @@ python -I tools/probe_matrix.py "<输出目录1>" "<输出目录2>" --markdown
 
 ## 外部样本审计
 
-可复用的脚本结构测试适配器接受独立 PS2A 与受支持的 CPZ6/CPZ7 输入，默认忽略，需显式设置输入路径。当前完整命令、报告协议及边界见[脚本审计方法](../games/amatsutsumi/script-audit.md#重复运行)。测试本身只保存合成数据，真实输入与元数据报告按游戏分开归档。
+游戏输入只读，测试只保留合成数据；真实输出在仓库外。结构通过、命令入口覆盖、路线地址覆盖和完整语义支持分别报告。
+
+单脚本接口位于 `tests/support/script_validation.rs`：`validate(&Script) -> Result<ScriptStructure, DecodeError>`，返回指令边界、代码/标签数量和系统命令频次。它不依赖路径、归档、游戏名或输出协议，不向运行时核心增加仅供测试的 API。`tests/script_validation.rs` 用合成数据验证接口，并提供默认忽略的外部样本适配器。
+
+从项目目录显式执行外部样本检查（游戏输入只读，报告仅含元数据）：
+
+```powershell
+New-Item -ItemType Directory -Force local | Out-Null
+$env:CMVS_SCRIPT_TEST_INPUTS = "<游戏目录>/data/pack/script.cpz;<游戏目录>/data/pack/start.ps3"
+$env:CMVS_SCRIPT_TEST_REPORT = "local/script-validation-sites.tsv"
+cargo test --offline --release --test script_validation external_script_structure -- --ignored --exact --nocapture
+Remove-Item Env:CMVS_SCRIPT_TEST_INPUTS, Env:CMVS_SCRIPT_TEST_REPORT
+```
+
+`CMVS_SCRIPT_TEST_INPUTS` 支持任意数量的 CPZ6 包与独立 PS2A 文件，路径列表采用宿主平台的 `std::env::split_paths` 规则（Windows 用分号，Unix 用冒号）。`.cpz` 输入校验资源校验和并检查其中 `.ps3` 条目，其他包内资源明确 skip；其他路径作为独立 PS2A 输入。每项失败记录后继续后续检查，最终由 Cargo 测试状态报告失败；零脚本、缺少路径、损坏归档也不能算通过。不设置报告变量时仅做断言，不产生输出文件；设置时用 create_new 拒绝覆盖。报告保留旧 TSV 的 script/system/site/failure/summary 行，便于与已有 PC 元数据比对；重定向 Cargo 标准输出不能代替报告文件。
+
+系统命令盘点在结构检查报告之外运行分派探针并合并（不需要游戏文件，输出拒绝覆盖）。探针开启文字记录，并为 `0x2129` 提供游戏目录外的合成用户目录；否则会将条件禁用的已实现服务误记为无入口。自检不接受panic作为这些入口已认领的证明：
+
+```powershell
+$env:CMVS_COMMAND_INVENTORY = "local/inventory/dispatch.tsv"
+cargo test --offline --release --test command_inventory command_inventory -- --ignored --exact
+Remove-Item Env:CMVS_COMMAND_INVENTORY
+python -I tools/command_inventory.py local/script-validation-sites.tsv local/inventory/dispatch.tsv crates/cmvs-core/profiles/cmvs-20160201.profile local/inventory/joined.tsv
+```
+
+
+覆盖汇总只接受明确成功结束的路线；预算耗尽、失败和截断不算通过。包内 / 包外同名启动脚本分开归因。路线结果记入对应游戏档案，不提交逐脚本清单或本地日志哈希。

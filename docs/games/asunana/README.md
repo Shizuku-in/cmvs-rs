@@ -5,10 +5,9 @@
 | 字段 | 内容 |
 |---|---|
 | 游戏标识 | `asunana` |
-| 本地样本目录 | `2008-10-24_ASUNANA` |
 | 英文名称 | Ashita no Nanami to Au Tame ni ~Ashita no Kimi to Au Tame ni~ Fandisc |
 | 引擎 / 脚本自报版本 | `cmvs[ver.1.52]` / `ps2[ver.1.00]` |
-| 发行版本与补丁 | 未确认；目录日期仅作为样本标签 |
+| 发行版本与补丁 | 未确认 |
 | 平台与架构 | Windows PC；x86 |
 | 文本编码 | Shift-JIS；剧情文字合成抽查通过 |
 | 引擎 profile | `cmvs-20080903`，基准 `cmvs-20160201` |

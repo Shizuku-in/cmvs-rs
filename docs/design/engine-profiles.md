@@ -50,4 +50,4 @@ python3 -I tools/profile_compare.py local/base.json local/derived.json \
 
 `family cvns` 复用 CMVS 运行时，但命令重新编号，必须逐条复核映射。只有 `reviewed` 行可以携带 `map=`，目标为根档案的 `base` 命令或 `0x2400` 起已登记的 CVNS 专有处理器。
 
-`Machine` 将挂起命令翻译为运行时编号，闸门和诊断仍按原编号核对。未映射命令始终报 `Unmapped`，不受 `--block-unreviewed` 影响。CVNS 不使用跨代指纹继承或推定；当前构建与证据见[みはる档案](../games/miharu/README.md)及[命令映射](../games/miharu/commands.md)。
+`Machine` 将挂起命令翻译为运行时编号，闸门和诊断仍按原编号核对。未映射命令始终报 `Unmapped`，不受 `--block-unreviewed` 影响。CVNS 不使用跨代指纹继承或推定；当前构建与证据见[みはる档案](../games/miharu/README.md)及[命令映射](../games/miharu/README.md#命令映射)。

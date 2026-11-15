@@ -352,7 +352,7 @@ impl<'a> Runtime<'a> {
             .state_mut()
             .set_string_slots(game.selection.profile.string_slots());
         if let Some([integers, bits, floats, strings]) = game.selection.profile.initial_globals() {
-            // Verified PE zero-fill globals (docs/games/aoitori/vm-semantics.md
+            // Verified PE zero-fill globals (docs/games/aoitori/README.md
             // and docs/games/hapymaherfd/README.md). Keep standalone
             // research VMs and other profiles unknown until separately verified.
             let state = machine.state_mut();

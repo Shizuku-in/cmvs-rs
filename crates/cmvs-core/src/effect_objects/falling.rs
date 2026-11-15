@@ -1,4 +1,4 @@
-//! Identity-bound type-2 falling billboards; see games/aoitori/vm-semantics.md and, for the
+//! Identity-bound type-2 falling billboards; see games/aoitori/README.md and, for the
 //! x87 arithmetic, games/memoria/README.md.
 use crate::{
     audio::AudioBackend,

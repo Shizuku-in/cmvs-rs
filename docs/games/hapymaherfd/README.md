@@ -5,10 +5,9 @@
 | 字段 | 内容 |
 |---|---|
 | 游戏标识 | `hapymaherfd` |
-| 本地样本目录 | `2014-02-28_HAPYMAHERFD` |
 | 英文名称 | Hapymaher -Fragmentation Dream- |
 | 引擎 / 脚本自报版本 | `cmvs64[ver.3.12]` / `ps3[ver.1.00]` |
-| 发行版本与补丁 | 未确认；目录日期仅作为样本标签 |
+| 发行版本与补丁 | 未确认 |
 | 平台与架构 | Windows PC；x86 + x64 |
 | 文本编码 | 未独立确认 |
 | 引擎 profile | `cmvs-20140217`；701 条处理命令均为 `Unreviewed` |
