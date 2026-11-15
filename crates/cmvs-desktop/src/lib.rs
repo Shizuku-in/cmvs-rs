@@ -6,7 +6,8 @@ pub use cmvs_font::{font, font_library, text_codec};
 #[cfg(all(test, feature = "wgpu-renderer"))]
 mod frame_boundary;
 pub mod game_input;
-pub use app::{movie_canvas, run_cli};
+pub use app::run_cli;
+pub use cmvs_core::raster::movie_canvas;
 use cmvs_core::{
     FormatError,
     cursor::CursorBitmap,

@@ -8,6 +8,7 @@ use cmvs_core::{
     input::{CodeInput, KeyBindings},
     profile::Registry,
     ps3::Script,
+    raster::movie_canvas,
     runtime::{
         FrameBudget, FrameDriver, FrameOutcome, Runtime, RuntimeEvent, RuntimeOptions, SaveStorage,
         load_start,
@@ -218,7 +219,11 @@ impl WebRuntime {
                             }
                         }
                         let frame = if let Some(image) = startup.movie_frame() {
-                            backend.movie_canvas(image)?
+                            movie_canvas(
+                                image,
+                                backend.size,
+                                backend.preferences().render_mode == 1,
+                            )?
                         } else {
                             font.render(startup.scene(), startup.camera(), startup.messages())?
                         };

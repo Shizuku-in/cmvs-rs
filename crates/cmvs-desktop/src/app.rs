@@ -8,7 +8,7 @@ use cmvs_core::{
     pb3,
     platform::{DirectoryAssets, PlatformAssets, PlatformBackend, PlatformRequest},
     profile::Registry,
-    raster::RgbaImage,
+    raster::{RgbaImage, movie_canvas},
     runtime::{
         FrameBudget, FrameDriver, FrameOutcome, Runtime, RuntimeEvent, RuntimeOptions, SaveStorage,
         SnapshotPolicy, load_start,
@@ -193,18 +193,18 @@ impl App<'_> {
                 self.render_mode.get() == 1,
             );
         }
-        let objects = match &mut self.font {
-            Some(font) => font.prepare_objects(self.startup.messages())?,
-            None => Vec::new(),
-        };
-        let mut additional: Vec<_> = objects.iter().collect();
-        if self.font.is_some() {
-            additional.extend(self.startup.messages().visible_window_objects());
+        if let Some(font) = &mut self.font {
+            let composition = font.compose(
+                self.startup.scene(),
+                self.startup.camera(),
+                self.startup.messages(),
+            )?;
+            return renderer.render(&composition.prepare()?);
         }
         let frame = cmvs_core::scene_render::prepare_scene(
             self.startup.scene(),
             Some(self.startup.camera()),
-            &additional,
+            &[],
             self.startup.screen_size()[0],
             self.startup.screen_size()[1],
         )?;
@@ -344,27 +344,6 @@ impl App<'_> {
     }
 }
 
-/// Movies join the same logical device canvas that readback sees, before window
-/// fitting. Videos retain aspect ratio inside the logical game canvas.
-pub fn movie_canvas(
-    image: &RgbaImage,
-    [width, height]: [u32; 2],
-    linear: bool,
-) -> Result<RgbaImage, cmvs_core::FormatError> {
-    if [image.width(), image.height()] == [width, height] {
-        return Ok(image.clone());
-    }
-    let mut target = vec![0; (width * height) as usize];
-    image.draw_scaled(&mut target, width, height, 1, linear)?;
-    let pixels = target
-        .into_iter()
-        .flat_map(|word| {
-            let [b, g, r, _] = word.to_le_bytes();
-            [r, g, b, 255]
-        })
-        .collect();
-    RgbaImage::new(width, height, pixels)
-}
 impl ApplicationHandler for App<'_> {
     fn resumed(&mut self, el: &ActiveEventLoop) {
         if self.window.is_some() {
@@ -1172,34 +1151,5 @@ pub fn run_cli() {
     if let Err(error) = run() {
         eprintln!("Error: {error}\nRun 'cmvs-desktop --help' for usage.");
         std::process::exit(1)
-    }
-}
-
-#[cfg(test)]
-mod readback_tests {
-    use super::*;
-
-    #[test]
-    fn movie_canvas_keeps_logical_device_dimensions_and_letterboxes_small_videos() {
-        let video = RgbaImage::new(2, 1, [200, 100, 40, 255].repeat(2)).unwrap();
-        for [width, height] in [[1280, 720], [1024, 768]] {
-            for linear in [false, true] {
-                let frame = movie_canvas(&video, [width, height], linear).unwrap();
-                assert_eq!([frame.width(), frame.height()], [width, height]);
-                let pixel = |y| {
-                    let at = ((y * width + width / 2) * 4) as usize;
-                    &frame.pixels()[at..at + 4]
-                };
-                let top = (height - width / 2) / 2;
-                assert_eq!(pixel(top - 1), [0, 0, 0, 255]);
-                assert_eq!(pixel(top), [200, 100, 40, 255]);
-                assert_eq!(pixel(height - top - 1), [200, 100, 40, 255]);
-                assert_eq!(pixel(height - top), [0, 0, 0, 255]);
-                assert_eq!(
-                    movie_canvas(&frame, [width, height], linear).unwrap(),
-                    frame
-                );
-            }
-        }
     }
 }

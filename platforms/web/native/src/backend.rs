@@ -17,22 +17,6 @@ pub struct BrowserBackend {
     render: u32,
 }
 impl BrowserBackend {
-    pub fn movie_canvas(&self, image: &RgbaImage) -> Result<RgbaImage, cmvs_core::FormatError> {
-        if [image.width(), image.height()] == self.size {
-            return Ok(image.clone());
-        }
-        let [width, height] = self.size;
-        let mut target = vec![0; (width * height) as usize];
-        image.draw_scaled(&mut target, width, height, 1, self.render == 1)?;
-        let pixels = target
-            .into_iter()
-            .flat_map(|word| {
-                let [b, g, r, _] = word.to_le_bytes();
-                [r, g, b, 255]
-            })
-            .collect();
-        RgbaImage::new(width, height, pixels)
-    }
     pub fn preferences(&self) -> cmvs_core::settings::DisplayPreferences {
         cmvs_core::settings::DisplayPreferences {
             fullscreen: self.fullscreen,

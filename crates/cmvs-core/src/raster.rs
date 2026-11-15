@@ -482,6 +482,33 @@ pub fn content_hash(bytes: &[u8]) -> u128 {
     u128::from(low) | u128::from(high) << 64
 }
 
+/// Fit a movie image onto a logical canvas with opaque black letterboxing.
+/// Matching dimensions preserve the original image and its shared pixel storage.
+/// Rejects zero dimensions and canvases exceeding [`MAX_PAYLOAD`] before allocation.
+pub fn movie_canvas(
+    image: &RgbaImage,
+    [width, height]: [u32; 2],
+    linear: bool,
+) -> Result<RgbaImage, FormatError> {
+    if [image.width(), image.height()] == [width, height] {
+        return Ok(image.clone());
+    }
+    let size = u64::from(width) * u64::from(height);
+    if width == 0 || height == 0 || size > MAX_PAYLOAD as u64 / 4 {
+        return Err(FormatError("invalid movie canvas dimensions"));
+    }
+    let mut target = vec![0; size as usize];
+    image.draw_scaled(&mut target, width, height, 1, linear)?;
+    let pixels = target
+        .into_iter()
+        .flat_map(|word| {
+            let [b, g, r, _] = word.to_le_bytes();
+            [r, g, b, 255]
+        })
+        .collect();
+    RgbaImage::new(width, height, pixels)
+}
+
 #[cfg(test)]
 mod content_digest_tests {
     use super::*;
@@ -579,5 +606,47 @@ mod content_digest_tests {
         assert_ne!(first.cache_key(), second.cache_key());
         assert_eq!(first.cache_key(), first.clone().cache_key());
         assert_eq!(first, second, "identity is not part of equality");
+    }
+}
+
+#[cfg(test)]
+mod movie_canvas_tests {
+    use super::*;
+
+    #[test]
+    fn movie_canvas_bounds_allocation_and_preserves_matching_frame_identity() {
+        let video = RgbaImage::new(2, 1, [200, 100, 40, 255].repeat(2))
+            .unwrap()
+            .into_frame();
+        for size in [[0, 1], [1, 0], [u32::MAX, u32::MAX], [4097, 4096]] {
+            assert!(movie_canvas(&video, size, false).is_err());
+        }
+        let frame = movie_canvas(&video, [2, 1], true).unwrap();
+        assert_eq!(frame.cache_key(), video.cache_key());
+        assert!(std::ptr::eq(frame.pixels(), video.pixels()));
+    }
+
+    #[test]
+    fn movie_canvas_keeps_logical_device_dimensions_and_letterboxes_small_videos() {
+        let video = RgbaImage::new(2, 1, [200, 100, 40, 255].repeat(2)).unwrap();
+        for [width, height] in [[1280, 720], [1024, 768]] {
+            for linear in [false, true] {
+                let frame = movie_canvas(&video, [width, height], linear).unwrap();
+                assert_eq!([frame.width(), frame.height()], [width, height]);
+                let pixel = |y| {
+                    let at = ((y * width + width / 2) * 4) as usize;
+                    &frame.pixels()[at..at + 4]
+                };
+                let top = (height - width / 2) / 2;
+                assert_eq!(pixel(top - 1), [0, 0, 0, 255]);
+                assert_eq!(pixel(top), [200, 100, 40, 255]);
+                assert_eq!(pixel(height - top - 1), [200, 100, 40, 255]);
+                assert_eq!(pixel(height - top), [0, 0, 0, 255]);
+                assert_eq!(
+                    movie_canvas(&frame, [width, height], linear).unwrap(),
+                    frame
+                );
+            }
+        }
     }
 }

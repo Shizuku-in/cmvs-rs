@@ -147,17 +147,8 @@ fn render_gpu(
     font: &mut FontRenderer,
     gpu: &mut gpu::GpuRenderer,
 ) -> Result<()> {
-    let objects = font.prepare_objects(startup.messages())?;
-    let mut extra: Vec<_> = objects.iter().collect();
-    extra.extend(startup.messages().visible_window_objects());
-    let size = startup.screen_size();
-    let frame = cmvs_core::scene_render::prepare_scene(
-        startup.scene(),
-        Some(startup.camera()),
-        &extra,
-        size[0],
-        size[1],
-    )?;
+    let composition = font.compose(startup.scene(), startup.camera(), startup.messages())?;
+    let frame = composition.prepare()?;
     gpu.render(&frame)
 }
 
@@ -165,17 +156,7 @@ fn render(startup: &Runtime<'_>, font: &mut FontRenderer) -> Result<RgbaImage> {
     if let Some(frame) = startup.movie_frame() {
         return Ok(frame.clone());
     }
-    let objects = font.prepare_objects(startup.messages())?;
-    let mut extra: Vec<_> = objects.iter().collect();
-    extra.extend(startup.messages().visible_window_objects());
-    let size = startup.screen_size();
-    Ok(cmvs_core::scene_render::render_scene(
-        startup.scene(),
-        Some(startup.camera()),
-        &extra,
-        size[0],
-        size[1],
-    )?)
+    Ok(font.render(startup.scene(), startup.camera(), startup.messages())?)
 }
 
 /// The screen rectangle a viewport covers, as the window draws it.

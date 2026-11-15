@@ -38,7 +38,16 @@ fn immediate_device_readback_keeps_the_completed_font_composite() {
         .unwrap();
     messages.advance_frame(10_000);
     let camera = CameraHost::default();
-    let frame = font.render(&scene, &camera, &messages).unwrap();
+    let composition = font.compose(&scene, &camera, &messages).unwrap();
+    // The composition owns its glyphs, so later font work cannot invalidate it.
+    let glyphs = font.prepare_objects(&messages).unwrap();
+    let mut additional: Vec<_> = glyphs.iter().collect();
+    additional.extend(messages.visible_window_objects());
+    let expected =
+        cmvs_rs::scene_render::render_scene(&scene, Some(&camera), &additional, 1280, 720).unwrap();
+    let frame = composition.prepare().unwrap().render_cpu().unwrap();
+    assert_eq!(frame, expected);
+    assert_eq!(font.render(&scene, &camera, &messages).unwrap(), frame);
     let windows: Vec<_> = messages.visible_window_objects().collect();
     let without_glyphs =
         cmvs_rs::scene_render::render_scene(&scene, Some(&camera), &windows, 1280, 720).unwrap();

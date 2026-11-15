@@ -1,5 +1,6 @@
 //! Explicit OpenType font preview. Script layout stays in core; this backend replaces
 //! the original GDI mask rasterizer, so its pixels are not claimed to match GDI.
+use crate::composition::SceneComposition;
 use crate::font_library::FontLibrary;
 use crate::glyph_cache::GlyphCache;
 use ab_glyph::{Font, FontVec, ScaleFont, point};
@@ -9,7 +10,6 @@ use cmvs_core::{
     message::{AUXILIARY_TEXTS, MessageHost, RecordedGlyph, TEXT_OBJECTS},
     raster::RgbaImage,
     scene::{DrawState, ObjectImage, SceneHost, SceneObject},
-    scene_render,
 };
 use std::{
     error::Error,
@@ -471,17 +471,30 @@ impl FontRenderer {
         cameras: &CameraHost,
         messages: &MessageHost,
     ) -> Result<RgbaImage, FormatError> {
-        let objects = self.prepare_objects(messages)?;
-        let mut additional: Vec<_> = objects.iter().collect();
-        additional.extend(messages.visible_window_objects());
-        {
-            let [width, height] = messages.screen_size();
-            scene_render::render_scene(scene, Some(cameras), &additional, width, height)
-        }
+        self.compose(scene, cameras, messages)?
+            .prepare()?
+            .render_cpu()
+    }
+
+    /// Combine scene state, rasterized glyphs and visible message windows.
+    /// Prepare the returned composition for either CPU or GPU rendering.
+    pub fn compose<'a>(
+        &mut self,
+        scene: &'a SceneHost,
+        cameras: &'a CameraHost,
+        messages: &'a MessageHost,
+    ) -> Result<SceneComposition<'a>, FormatError> {
+        Ok(SceneComposition {
+            scene,
+            cameras,
+            messages,
+            glyphs: self.prepare_objects(messages)?,
+        })
     }
 
     /// Builds glyph objects without compositing a frame.
     /// Visible message windows must also be passed to the shared scene queue.
+    /// Prefer [`Self::compose`] when preparing a complete game scene.
     pub fn prepare_objects(
         &mut self,
         messages: &MessageHost,

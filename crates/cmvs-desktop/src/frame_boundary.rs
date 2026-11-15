@@ -115,10 +115,8 @@ mod external {
                 click_frame = 1;
             }
             if click_frame > 0 {
-                let objects = font.prepare_objects(run.messages())?;
-                let mut additional: Vec<_> = objects.iter().collect();
-                additional.extend(run.messages().visible_window_objects());
-                let frame = prepare_scene(run.scene(), Some(run.camera()), &additional, 1280, 720)?;
+                let composition = font.compose(run.scene(), run.camera(), run.messages())?;
+                let frame = composition.prepare()?;
                 let output = gpu.render(&frame)?;
                 if checked.is_multiple_of(10) {
                     let actual = output.read()?;

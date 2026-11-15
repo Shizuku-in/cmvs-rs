@@ -14,7 +14,7 @@ use cmvs_core::{
     input::{CodeInput, KeyBindings},
     profile::Registry,
     ps3::Script,
-    raster::RgbaImage,
+    raster::{RgbaImage, movie_canvas},
     runtime::{
         FrameBudget, FrameDriver, FrameOutcome, Runtime, RuntimeEvent, RuntimeOptions, SaveStorage,
         load_start,
@@ -283,8 +283,7 @@ impl Player {
                         .finish_frame(startup, 0)
                         .map_err(PlayerError::Execution)?;
                     let frame = if let Some(image) = startup.movie_frame() {
-                        self.backend
-                            .movie_canvas(image)
+                        movie_canvas(image, self.backend.size, self.backend.render == 1)
                             .map_err(|e| PlayerError::Execution(e.into()))?
                     } else {
                         self.font

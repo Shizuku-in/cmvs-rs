@@ -4,7 +4,6 @@ use cmvs_core::{
     platform::RecordingBackend,
     profile::Registry,
     runtime::{Runtime, RuntimeEvent, SnapshotPolicy, load_start},
-    scene_render::prepare_scene,
 };
 use cmvs_desktop::font::FontRenderer;
 use cmvs_wgpu::{Renderer, wgpu};
@@ -74,10 +73,8 @@ fn external_fixed_clock_gpu_scene_comparison() -> Result<(), Box<dyn Error>> {
                 let frame = gpu.render_image(image, [1280, 720], true)?;
                 assert_eq!(frame.read()?.width(), 1280);
             } else {
-                let objects = font.prepare_objects(run.messages())?;
-                let mut additional: Vec<_> = objects.iter().collect();
-                additional.extend(run.messages().visible_window_objects());
-                let frame = prepare_scene(run.scene(), Some(run.camera()), &additional, 1280, 720)?;
+                let composition = font.compose(run.scene(), run.camera(), run.messages())?;
+                let frame = composition.prepare()?;
                 let clock = Instant::now();
                 let output = gpu.render(&frame)?;
                 gpu_time += clock.elapsed();

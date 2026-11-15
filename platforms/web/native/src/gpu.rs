@@ -1,5 +1,5 @@
 //! Worker-owned WebGPU surface; only explicit device screenshots read pixels back.
-use cmvs_core::{runtime::Runtime, scene_render::prepare_scene, settings::DisplayPreferences};
+use cmvs_core::{runtime::Runtime, settings::DisplayPreferences};
 use cmvs_font::font::FontRenderer;
 use cmvs_wgpu::{GpuFrame, Presenter, Renderer, wgpu};
 use std::error::Error;
@@ -52,16 +52,9 @@ impl BrowserGpu {
             self.renderer
                 .render_image(image, size, display.render_mode == 1)?
         } else {
-            let objects = font.prepare_objects(startup.messages())?;
-            let mut additional: Vec<_> = objects.iter().collect();
-            additional.extend(startup.messages().visible_window_objects());
-            let scene = prepare_scene(
-                startup.scene(),
-                Some(startup.camera()),
-                &additional,
-                size[0],
-                size[1],
-            )?;
+            let composition =
+                font.compose(startup.scene(), startup.camera(), startup.messages())?;
+            let scene = composition.prepare()?;
             self.renderer.render(&scene)?
         };
         let presented = self.presenter.present(

@@ -119,20 +119,12 @@ impl Player<'_> {
                 self.backend.display.render_mode == 1,
             )?));
         }
-        let objects = self
-            .backend
-            .font
-            .borrow_mut()
-            .prepare_objects(self.startup.messages())?;
-        let mut additional: Vec<_> = objects.iter().collect();
-        additional.extend(self.startup.messages().visible_window_objects());
-        let frame = cmvs_core::scene_render::prepare_scene(
+        let composition = self.backend.font.borrow_mut().compose(
             self.startup.scene(),
-            Some(self.startup.camera()),
-            &additional,
-            self.startup.screen_size()[0],
-            self.startup.screen_size()[1],
+            self.startup.camera(),
+            self.startup.messages(),
         )?;
+        let frame = composition.prepare()?;
         Ok(Arc::new(graphics.renderer.render(&frame)?))
     }
     fn redraw(&mut self) -> Result<()> {
