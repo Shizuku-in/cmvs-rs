@@ -678,8 +678,8 @@ impl ApplicationHandler for App<'_> {
                         self.startup.machine().current_name().escape_ascii(),
                         self.startup.machine().pc(),
                         self.startup.control().callbacks().len(),
-                        self.startup.machine().state().integers().len(),
-                        self.startup.machine().state().bits().len()
+                        self.startup.machine().state().known_integer_count(),
+                        self.startup.machine().state().known_bit_count()
                     );
                 }
                 Err(error) => {

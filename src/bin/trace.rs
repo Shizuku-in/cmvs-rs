@@ -564,8 +564,8 @@ fn run() -> Result<(), Box<dyn Error>> {
             if let Some(cmvs_rs::dispatch::Flow::SystemSave(event)) = dispatched {
                 println!(
                     "# system save {event:?}; known integers={} known bits={}",
-                    machine.state().integers().len(),
-                    machine.state().bits().len()
+                    machine.state().known_integer_count(),
+                    machine.state().known_bit_count()
                 );
                 continue;
             }
@@ -596,8 +596,8 @@ fn run() -> Result<(), Box<dyn Error>> {
                     }
                     println!(
                         "# known integers={} known bits={} stack_bytes={}",
-                        machine.state().integers().len(),
-                        machine.state().bits().len(),
+                        machine.state().known_integer_count(),
+                        machine.state().known_bit_count(),
                         machine.stack().len_bytes()
                     );
                     return Ok(());
@@ -1108,8 +1108,8 @@ fn run() -> Result<(), Box<dyn Error>> {
             }
             println!(
                 "# known integers={} known bits={}",
-                machine.state().integers().len(),
-                machine.state().bits().len()
+                machine.state().known_integer_count(),
+                machine.state().known_bit_count()
             );
             return Ok(());
         }

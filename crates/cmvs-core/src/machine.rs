@@ -10,7 +10,7 @@
 //! variable or executing an unsupported instruction produces [`DecodeError`].
 use crate::{
     bytecode::{self, DecodeError, Expression, Instruction, InstructionKind, Term},
-    evaluate::{Env, Frame, Journal, State, error},
+    evaluate::{Env, EvalScratch, Frame, Journal, State, error},
     ps3::Script,
     vm::{ParameterStack, StringRef, SystemResult, frame_offset},
 };
@@ -156,6 +156,9 @@ pub struct Machine<'a> {
     repeat_count: u32,
     /// CVNS profiles translate system commands to runtime numbering; CMVS has none.
     command_map: Option<crate::cvns::CommandMap>,
+    journal: Journal,
+    eval_scratch: EvalScratch,
+    string_entries: Vec<(u16, u32, usize)>,
 }
 
 impl<'a> Machine<'a> {
@@ -204,6 +207,9 @@ impl<'a> Machine<'a> {
             pending: None,
             repeat_count: 0,
             command_map: None,
+            journal: Journal::default(),
+            eval_scratch: EvalScratch::default(),
+            string_entries: Vec::new(),
         })
     }
     /// Current byte offset in the active script's code segment.
@@ -540,24 +546,36 @@ impl<'a> Machine<'a> {
     /// 0x0201 / 0x140066b00: clears the accumulator, appends operands as operators read them,
     /// and sets the result only from the tag of the bottom entry. Commits all writes or none.
     fn string_expression(&mut self, expr: &Expression) -> Result<(), DecodeError> {
-        let mut journal = Journal::default();
-        let outcome = self.string_expression_in(expr, &mut journal);
+        let mut journal = std::mem::take(&mut self.journal);
+        let mut scratch = std::mem::take(&mut self.eval_scratch);
+        let mut entries = std::mem::take(&mut self.string_entries);
+        entries.clear();
+        let mut buffer = scratch.take_string_buffer();
+        let outcome =
+            self.string_expression_in(expr, &mut entries, &mut buffer, &mut scratch, &mut journal);
         if outcome.is_err() {
+            scratch.put_string_buffer(buffer);
             self.state.rollback(
-                journal,
+                &mut journal,
                 Some(&mut self.stack),
                 Some(&mut self.images.get_mut(&self.slot).expect("active image").data),
             );
+        } else {
+            journal.clear(&mut scratch);
         }
+        self.string_entries = entries;
+        self.eval_scratch = scratch;
+        self.journal = journal;
         outcome
     }
     fn string_expression_in(
         &mut self,
         expr: &Expression,
+        entries: &mut Vec<(u16, u32, usize)>,
+        buffer: &mut Vec<u8>,
+        scratch: &mut EvalScratch,
         journal: &mut Journal,
     ) -> Result<(), DecodeError> {
-        let mut buffer = Vec::new();
-        let mut entries: Vec<(u16, u32, usize)> = Vec::new();
         for term in &expr.terms {
             match term {
                 Term::Nested {
@@ -576,7 +594,9 @@ impl<'a> Machine<'a> {
                             base,
                         }),
                     };
-                    let index = self.state.evaluate_in(expression, &mut env, journal)?;
+                    let index = self
+                        .state
+                        .evaluate_in(expression, &mut env, scratch, journal)?;
                     entries.push((0x121, index as u32 | 0x8000_0000, *pc));
                 }
                 Term::Scalar { pc, tag, raw } => entries.push((*tag, *raw, *pc)),
@@ -588,13 +608,13 @@ impl<'a> Machine<'a> {
                         .last()
                         .ok_or_else(|| error(*pc, *opcode, "expression stack underflow"))?;
                     if *opcode == 0x170 {
-                        self.append_operand(&self.state, &mut buffer, top)?;
+                        self.append_operand(&self.state, buffer, top)?;
                         match second {
                             (0x121, value, _)
                                 if value & 0x3fff_ffff >= self.state.string_slots() => {}
                             (0x121, value, at) => self
                                 .state
-                                .set_string_journaled(value & 0x3fff_ffff, &buffer, journal)
+                                .set_string_journaled(value & 0x3fff_ffff, buffer, journal)
                                 .map_err(|why| error(at, 0x121, why))?,
                             (tag, _, at) => {
                                 return Err(error(
@@ -606,8 +626,8 @@ impl<'a> Machine<'a> {
                         }
                     } else {
                         // Binary operators only read both operands, so strings concatenate.
-                        self.append_operand(&self.state, &mut buffer, second)?;
-                        self.append_operand(&self.state, &mut buffer, top)?;
+                        self.append_operand(&self.state, buffer, second)?;
+                        self.append_operand(&self.state, buffer, top)?;
                     }
                     *entries.last_mut().expect("checked above") = (0, 0, *pc);
                 }
@@ -636,7 +656,8 @@ impl<'a> Machine<'a> {
             self.state.set_result_journaled(result, journal);
         }
         // This evaluator does not modify integer condition flags itself.
-        self.state.set_string_buffer_journaled(buffer, journal);
+        self.state
+            .set_string_buffer_journaled(std::mem::take(buffer), journal);
         Ok(())
     }
 
@@ -647,10 +668,11 @@ impl<'a> Machine<'a> {
     /// Runs a numeric evaluation with the current labels and frame; rolls back on failure.
     fn numeric<T>(
         &mut self,
-        run: impl FnOnce(&mut State, &mut Env, &mut Journal) -> Result<T, DecodeError>,
+        run: impl FnOnce(&mut State, &mut Env, &mut EvalScratch, &mut Journal) -> Result<T, DecodeError>,
     ) -> Result<T, DecodeError> {
         let base = self.frame_base();
-        let mut journal = Journal::default();
+        let mut journal = std::mem::take(&mut self.journal);
+        let mut scratch = std::mem::take(&mut self.eval_scratch);
         let outcome = {
             let image = self.images.get_mut(&self.slot).expect("active image");
             let mut env = Env {
@@ -661,26 +683,34 @@ impl<'a> Machine<'a> {
                     base,
                 }),
             };
-            run(&mut self.state, &mut env, &mut journal)
+            run(&mut self.state, &mut env, &mut scratch, &mut journal)
         };
         if outcome.is_err() {
             self.state.rollback(
-                journal,
+                &mut journal,
                 Some(&mut self.stack),
                 Some(&mut self.images.get_mut(&self.slot).expect("active image").data),
             );
+        } else {
+            journal.clear(&mut scratch);
         }
+        self.eval_scratch = scratch;
+        self.journal = journal;
         outcome
     }
 
     fn expression(&mut self, expr: &Expression) -> Result<(), DecodeError> {
         match expr.kind {
             0x200 => {
-                self.numeric(|state, env, journal| state.evaluate_in(expr, env, journal))?;
+                self.numeric(|state, env, scratch, journal| {
+                    state.evaluate_in(expr, env, scratch, journal)
+                })?;
             }
             0x201 => self.string_expression(expr)?,
             0x202 => {
-                self.numeric(|state, env, journal| state.evaluate_float_in(expr, env, journal))?;
+                self.numeric(|state, env, scratch, journal| {
+                    state.evaluate_float_in(expr, env, scratch, journal)
+                })?;
             }
             _ => {
                 return Err(error(
