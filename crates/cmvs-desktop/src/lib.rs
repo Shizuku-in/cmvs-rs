@@ -3,6 +3,7 @@ mod app;
 mod encoding;
 pub use cmvs_core::TextEncoding;
 pub use cmvs_font::{font, font_library, text_codec};
+#[cfg(all(test, feature = "wgpu-renderer"))]
 mod frame_boundary;
 pub mod game_input;
 pub use app::{movie_canvas, run_cli};

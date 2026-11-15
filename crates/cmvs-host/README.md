@@ -6,7 +6,7 @@ Window-independent CMVS player for embedding. The host supplies presentation, in
 
 Use Rust `Player` for embedding a complete player. Custom hosts that implement their own services can use `cmvs_core::runtime::Runtime` and `RuntimeOptions` instead.
 
-`Player::tick` returns `TickOutcome::{BudgetExhausted, FrameReady, Quit, Inactive}`. On `BudgetExhausted`, resume with the same frame delta; only `FrameReady` publishes a new frame. Errors use `PlayerError`, which retains initialization, execution and persistence error sources or the runtime's structured stop event.
+`Player::tick` returns `TickOutcome::{BudgetExhausted, FrameReady, Quit, Inactive}`. On `BudgetExhausted`, the driver retains the frame delta and input; only `FrameReady` publishes a new frame. Errors use `PlayerError`, which retains initialization, execution and persistence error sources or the runtime's structured stop event.
 
 The C interface in [`cmvs_host.h`](cmvs_host.h) exposes the same model:
 

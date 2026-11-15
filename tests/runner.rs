@@ -1,6 +1,8 @@
 #[path = "support/bytecode.rs"]
 #[allow(dead_code)]
 mod commands;
+#[path = "support/frame_driver.rs"]
+mod frame_driver;
 use cmvs_rs::{
     digest::{sha256, to_hex},
     platform::{PlatformBackend, PlatformRequest, RecordingBackend},

@@ -1,96 +1,11 @@
-//! A cooperative host budget is not an engine frame boundary.
-use cmvs_core::runtime::RuntimeEvent;
-
-#[derive(Default)]
-pub(crate) struct FrameBoundary {
-    ready: bool,
-}
-impl FrameBoundary {
-    pub(crate) fn observe(&mut self, event: RuntimeEvent) {
-        if event != RuntimeEvent::Inactive {
-            self.ready = event == RuntimeEvent::Yield;
-        }
-    }
-    pub(crate) fn ready(&self) -> bool {
-        self.ready
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use cmvs_core::{
-        scene::{DrawState, SceneHost, SceneObject},
-        scene_render::prepare_scene,
-    };
-
-    #[test]
-    fn budget_slices_do_not_publish_partly_initialized_menu_children() {
-        let scene = SceneHost::default();
-        let mut parent = SceneObject {
-            draw: Some(DrawState::default()),
-            flags: 0x8000_0000,
-            ..SceneObject::default()
-        };
-        let mut boundary = FrameBoundary::default();
-        boundary.observe(RuntimeEvent::Yield);
-        assert!(boundary.ready());
-        // 0x2022 creates a shown child; 0x2041 initializes its draw state later.
-        parent.children.insert(0, SceneObject::default());
-        boundary.observe(RuntimeEvent::Progress);
-        assert!(!boundary.ready());
-        assert_eq!(
-            prepare_scene(&scene, None, &[&parent], 8, 4)
-                .err()
-                .unwrap()
-                .0,
-            "shown child object has no draw state"
-        );
-        boundary.observe(RuntimeEvent::SnapshotCaptured);
-        assert!(!boundary.ready());
-        parent.children.get_mut(&0).unwrap().draw = Some(DrawState::default());
-        boundary.observe(RuntimeEvent::Progress);
-        assert!(!boundary.ready());
-        boundary.observe(RuntimeEvent::Yield);
-        assert!(boundary.ready());
-        prepare_scene(&scene, None, &[&parent], 8, 4)
-            .unwrap()
-            .render_cpu()
-            .unwrap();
-        boundary.observe(RuntimeEvent::Inactive);
-        assert!(boundary.ready());
-        boundary.observe(RuntimeEvent::Progress);
-        boundary.observe(RuntimeEvent::Inactive);
-        assert!(!boundary.ready());
-    }
-
-    #[test]
-    fn a_real_yield_does_not_suppress_invalid_scene_errors() {
-        let scene = SceneHost::default();
-        let mut parent = SceneObject {
-            draw: Some(DrawState::default()),
-            flags: 0x8000_0000,
-            ..SceneObject::default()
-        };
-        parent.children.insert(0, SceneObject::default());
-        let mut boundary = FrameBoundary::default();
-        boundary.observe(RuntimeEvent::Yield);
-        assert!(boundary.ready());
-        assert!(prepare_scene(&scene, None, &[&parent], 8, 4).is_err());
-        boundary.observe(RuntimeEvent::Quit);
-        assert!(!boundary.ready());
-    }
-}
-
 #[cfg(all(test, feature = "wgpu-renderer"))]
 mod external {
-    use super::*;
     use crate::font::FontRenderer;
     use cmvs_core::{
         input::{CodeInput, KeyBindings},
         platform::RecordingBackend,
         profile::Registry,
-        runtime::{Runtime, load_start},
+        runtime::{FrameBudget, FrameDriver, FrameOutcome, Runtime, load_start},
         scene_render::prepare_scene,
     };
     use cmvs_wgpu::{Renderer, wgpu};
@@ -132,7 +47,7 @@ mod external {
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle().with_env());
         let (mut gpu, adapter) = Renderer::new(&instance, None)?;
         println!("adapter={:?}", adapter.get_info());
-        let mut boundary = FrameBoundary::default();
+        let mut boundary = FrameDriver::default();
         let (mut loaded, mut click_frame, mut point, mut checked, mut partial, mut old_errors) =
             (false, 0u32, [-1, -1], 0u32, 0u32, 0u32);
         let mut menu_frames = 0;
@@ -148,8 +63,10 @@ mod external {
                 run.load_slot(0, &mut backend)?;
                 loaded = true;
             }
-            let event = run.tick(&mut backend)?;
-            boundary.observe(event);
+            boundary.sample_input(run.input_mut(), |_| {});
+            let event = boundary.run_slice(&mut run, &mut FrameBudget::steps(1), |runtime| {
+                runtime.tick(&mut backend)
+            })?;
             // Deliberately exhaust the host budget after every single VM tick.
             // Detect, but never render, children between allocation and initialization.
             if loaded
@@ -177,12 +94,12 @@ mod external {
                 }
             }
             match event {
-                RuntimeEvent::Progress | RuntimeEvent::SnapshotCaptured => continue,
-                RuntimeEvent::Yield => {}
+                FrameOutcome::BudgetExhausted => continue,
+                FrameOutcome::Yield => {}
                 other => return Err(format!("unexpected {other:?}").into()),
             }
+            boundary.finish_frame(&mut run, 16)?;
             assert!(boundary.ready());
-            run.advance_frame(16)?;
             if loaded
                 && click_frame == 0
                 && run.machine().current_name() == b"sn1001.ps3"

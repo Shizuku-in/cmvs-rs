@@ -15,7 +15,10 @@ use cmvs_core::{
     profile::Registry,
     ps3::Script,
     raster::RgbaImage,
-    runtime::{Runtime, RuntimeEvent, RuntimeOptions, SaveStorage, load_start},
+    runtime::{
+        FrameBudget, FrameDriver, FrameOutcome, Runtime, RuntimeEvent, RuntimeOptions, SaveStorage,
+        load_start,
+    },
     system_save::ProfileSystemSave,
 };
 use cmvs_font::font::FontRenderer;
@@ -87,7 +90,7 @@ pub struct Player {
     font: FontRenderer,
     bindings: KeyBindings,
     input: Input,
-    input_due: bool,
+    driver: FrameDriver,
     paused: bool,
     serial: u64,
     audio: Option<cmvs_audio::HostAudioControl>,
@@ -192,7 +195,7 @@ impl Player {
             font,
             bindings,
             input: Input::default(),
-            input_due: true,
+            driver: FrameDriver::default(),
             paused: false,
             serial: 0,
             audio: audio_control,
@@ -210,6 +213,7 @@ impl Player {
             audio.set_active(!paused);
         }
         if paused {
+            self.driver.suspend();
             self.input.held.fill(false);
             self.input.pulses.fill(false);
             self.input.functions = 0;
@@ -251,7 +255,8 @@ impl Player {
     /// Run a VM budget slice, publishing a frame only when the VM yields.
     ///
     /// `delta_ms` is consumed on a completed frame, capped at 250 ms. When the budget
-    /// expires, pass the same frame delta on the next call; input is latched only once.
+    /// expires, the driver retains that delta and input until the frame completes;
+    /// delta values on continuation calls are ignored.
     /// Unsupported commands and barriers retain their structured [`RuntimeEvent`]
     /// in [`PlayerError::Stopped`].
     pub fn tick(&mut self, delta_ms: u32) -> Result<TickOutcome, PlayerError> {
@@ -262,43 +267,39 @@ impl Player {
             startup
                 .poll_audio_output()
                 .map_err(PlayerError::Execution)?;
-            if self.input_due {
-                self.input.sample(&self.bindings, startup.input_mut());
-                self.input_due = false;
-            }
-            for _ in 0..4000 {
-                match startup
-                    .tick(&mut self.backend)
-                    .map_err(PlayerError::Execution)?
-                {
-                    RuntimeEvent::Progress | RuntimeEvent::SnapshotCaptured => {}
-                    RuntimeEvent::Yield => {
-                        startup
-                            .advance_playback(delta_ms.min(250))
-                            .map_err(PlayerError::Execution)?;
-                        let frame = if let Some(image) = startup.movie_frame() {
-                            self.backend
-                                .movie_canvas(image)
-                                .map_err(|e| PlayerError::Execution(e.into()))?
-                        } else {
-                            self.font
-                                .render(startup.scene(), startup.camera(), startup.messages())
-                                .map_err(|e| PlayerError::Execution(e.into()))?
-                        };
-                        self.backend.frame = Some(frame);
-                        self.serial += 1;
-                        self.input_due = true;
-                        return Ok(TickOutcome::FrameReady);
-                    }
-                    RuntimeEvent::Quit => return Ok(TickOutcome::Quit),
-                    RuntimeEvent::Inactive => {
-                        self.input_due = true;
-                        return Ok(TickOutcome::Inactive);
-                    }
-                    event => return Err(PlayerError::Stopped(event)),
+            self.driver.latch_delta(delta_ms.min(250));
+            self.driver.sample_input(startup.input_mut(), |input| {
+                self.input.sample(&self.bindings, input);
+            });
+            match self
+                .driver
+                .run_slice(startup, &mut FrameBudget::steps(4000), |runtime| {
+                    runtime.tick(&mut self.backend)
+                })
+                .map_err(PlayerError::Execution)?
+            {
+                FrameOutcome::Yield => {
+                    self.driver
+                        .finish_frame(startup, 0)
+                        .map_err(PlayerError::Execution)?;
+                    let frame = if let Some(image) = startup.movie_frame() {
+                        self.backend
+                            .movie_canvas(image)
+                            .map_err(|e| PlayerError::Execution(e.into()))?
+                    } else {
+                        self.font
+                            .render(startup.scene(), startup.camera(), startup.messages())
+                            .map_err(|e| PlayerError::Execution(e.into()))?
+                    };
+                    self.backend.frame = Some(frame);
+                    self.serial += 1;
+                    Ok(TickOutcome::FrameReady)
                 }
+                FrameOutcome::Stopped(RuntimeEvent::Quit) => Ok(TickOutcome::Quit),
+                FrameOutcome::Inactive => Ok(TickOutcome::Inactive),
+                FrameOutcome::Stopped(event) => Err(PlayerError::Stopped(event)),
+                FrameOutcome::BudgetExhausted => Ok(TickOutcome::BudgetExhausted),
             }
-            Ok(TickOutcome::BudgetExhausted)
         })
     }
 }

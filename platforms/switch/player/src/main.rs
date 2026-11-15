@@ -23,7 +23,10 @@ use cmvs_core::{
     input::KeyBindings,
     profile::Registry,
     raster::RgbaImage,
-    runtime::{Runtime, RuntimeEvent, RuntimeOptions, SaveStorage, load_start},
+    runtime::{
+        FrameBudget, FrameDriver, FrameOutcome, Runtime, RuntimeEvent, RuntimeOptions, SaveStorage,
+        load_start,
+    },
     viewport::{Viewport, presentation_mode},
 };
 use cmvs_font::font::FontRenderer;
@@ -282,7 +285,7 @@ fn run(
     // The button that started the game must not click it.
     controls.suppress_held(startup.input_mut());
     let mut focused = true;
-    let mut input_due = true;
+    let mut driver = FrameDriver::default();
     let mut last_poll = Instant::now();
     let mut last_frame = last_poll;
     let ended = loop {
@@ -299,6 +302,7 @@ fn run(
             audio_control.set_active(focused);
             startup.set_focused(focused);
             controls.focus(focused, startup.input_mut());
+            driver.suspend();
             last_frame = now;
         }
         cpu_boost.apply(load.wanted(focused));
@@ -312,77 +316,74 @@ fn run(
         if controls.quit_requested() {
             break Ended::Quit;
         }
-        if input_due {
-            if let Some(warp) = startup.input_mut().take_warp() {
+        driver.sample_input(startup.input_mut(), |input| {
+            if let Some(warp) = input.take_warp() {
                 controls.warp(warp);
             }
-            controls.frame(&bindings, startup.input_mut());
-            input_due = false;
-        }
-        let budget = Instant::now();
-        while budget.elapsed() < BUDGET {
-            let tick = Instant::now();
-            let event = startup.tick(&mut backend).map_err(|error| {
-                let vm = startup.machine();
-                format!(
-                    "{error}\nat {} / 0x{:x} after {} steps",
-                    vm.current_name().escape_ascii(),
-                    vm.pc(),
-                    startup.steps()
-                )
-            })?;
-            if std::mem::take(&mut backend.modal_shown) {
-                // Time inside the keyboard is not game time, and the button that
-                // closed it must not click the game.
-                controls.suppress_held(startup.input_mut());
-                last_frame = Instant::now();
-                last_poll = last_frame;
-                load.interrupted();
-            } else {
-                load.ran(tick.elapsed());
-            }
-            match event {
-                RuntimeEvent::Progress | RuntimeEvent::SnapshotCaptured => {}
-                RuntimeEvent::Quit => {
-                    startup.save_preferences(backend.display)?;
-                    return Ok(Ended::Quit);
-                }
-                RuntimeEvent::Inactive => {
-                    load.interrupted();
-                    std::thread::sleep(IDLE);
+            controls.frame(&bindings, input);
+        });
+        let outcome =
+            driver.run_slice(&mut startup, &mut FrameBudget::time(BUDGET), |startup| {
+                let tick = Instant::now();
+                let event = startup.tick(&mut backend).map_err(|error| {
+                    let vm = startup.machine();
+                    format!(
+                        "{error}\nat {} / 0x{:x} after {} steps",
+                        vm.current_name().escape_ascii(),
+                        vm.pc(),
+                        startup.steps()
+                    )
+                })?;
+                if std::mem::take(&mut backend.modal_shown) {
+                    // Time inside the keyboard is not game time, and the button that
+                    // closed it must not click the game.
+                    controls.suppress_held(startup.input_mut());
                     last_frame = Instant::now();
-                    break;
+                    last_poll = last_frame;
+                    load.interrupted();
+                } else {
+                    load.ran(tick.elapsed());
                 }
-                RuntimeEvent::Yield => {
-                    let now = Instant::now();
-                    load.frame(now);
-                    startup.advance_playback(millis(now.duration_since(last_frame)))?;
-                    last_frame = now;
-                    let linear = backend.display.render_mode == 1;
-                    if let Some(gpu) = &mut backend.gpu {
-                        render_gpu(&startup, &mut font, gpu, linear)?;
-                        let cursor = controls
-                            .cursor_visible()
-                            .then(|| view.to_target(controls.pointer()));
-                        gpu.present(mode, linear, cursor)?;
-                        if startup.capture_due() {
-                            startup.supply_capture(gpu.read()?)?;
-                        }
-                    } else {
-                        let frame = render(&startup, &mut font)?;
-                        surface.fill(0);
-                        frame.draw_scaled(&mut surface, SCREEN[0], SCREEN[1], mode, linear)?;
-                        if controls.cursor_visible() {
-                            draw_cursor(&mut surface, view, controls.pointer());
-                        }
-                        window.present(&surface)?;
-                        backend.frame = Some(frame);
-                    }
-                    input_due = true;
-                    break;
-                }
-                event => return Err(format!("game stopped: {event:?}").into()),
+                Ok::<_, Box<dyn std::error::Error>>(event)
+            })?;
+        match outcome {
+            FrameOutcome::Stopped(RuntimeEvent::Quit) => {
+                startup.save_preferences(backend.display)?;
+                return Ok(Ended::Quit);
             }
+            FrameOutcome::Inactive => {
+                load.interrupted();
+                std::thread::sleep(IDLE);
+                last_frame = Instant::now();
+            }
+            FrameOutcome::Yield => {
+                let now = Instant::now();
+                load.frame(now);
+                driver.finish_frame(&mut startup, millis(now.duration_since(last_frame)))?;
+                last_frame = now;
+                let linear = backend.display.render_mode == 1;
+                if let Some(gpu) = &mut backend.gpu {
+                    render_gpu(&startup, &mut font, gpu, linear)?;
+                    let cursor = controls
+                        .cursor_visible()
+                        .then(|| view.to_target(controls.pointer()));
+                    gpu.present(mode, linear, cursor)?;
+                    if startup.capture_due() {
+                        startup.supply_capture(gpu.read()?)?;
+                    }
+                } else {
+                    let frame = render(&startup, &mut font)?;
+                    surface.fill(0);
+                    frame.draw_scaled(&mut surface, SCREEN[0], SCREEN[1], mode, linear)?;
+                    if controls.cursor_visible() {
+                        draw_cursor(&mut surface, view, controls.pointer());
+                    }
+                    window.present(&surface)?;
+                    backend.frame = Some(frame);
+                }
+            }
+            FrameOutcome::Stopped(event) => return Err(format!("game stopped: {event:?}").into()),
+            FrameOutcome::BudgetExhausted => {}
         }
     };
     startup.save_preferences(backend.display)?;

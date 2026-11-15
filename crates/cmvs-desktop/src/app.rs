@@ -9,7 +9,10 @@ use cmvs_core::{
     platform::{DirectoryAssets, PlatformAssets, PlatformBackend, PlatformRequest},
     profile::Registry,
     raster::RgbaImage,
-    runtime::{Runtime, RuntimeEvent, RuntimeOptions, SaveStorage, SnapshotPolicy, load_start},
+    runtime::{
+        FrameBudget, FrameDriver, FrameOutcome, Runtime, RuntimeEvent, RuntimeOptions, SaveStorage,
+        SnapshotPolicy, load_start,
+    },
 };
 use std::{
     env,
@@ -124,7 +127,7 @@ struct GpuDesktop {
 struct App<'a> {
     #[cfg(windows)]
     masked_cursor: std::cell::RefCell<Option<cmvs_native::MaskedCursor>>,
-    frame_boundary: crate::frame_boundary::FrameBoundary,
+    driver: FrameDriver,
     use_gpu: bool,
     #[cfg(feature = "wgpu-renderer")]
     gpu: Option<GpuDesktop>,
@@ -138,7 +141,6 @@ struct App<'a> {
     game_input: GameInput,
     bindings: KeyBindings,
     native_input: bool,
-    input_due: bool,
     halted: bool,
     error: Option<String>,
     exit_after: Option<Duration>,
@@ -257,7 +259,7 @@ impl App<'_> {
     fn redraw(&mut self) -> Result<(), Box<dyn Error>> {
         // A resize/redraw can arrive between VM budget slices. Keep the previous
         // presented canvas until the engine, rather than the host budget, yields.
-        if self.preview_image.is_none() && !self.frame_boundary.ready() {
+        if self.preview_image.is_none() && !self.driver.ready() {
             return Ok(());
         }
         #[cfg(feature = "wgpu-renderer")]
@@ -483,7 +485,7 @@ impl ApplicationHandler for App<'_> {
                 self.game_input.focus(focus, self.startup.input_mut());
                 if self.native_input && self.preview_image.is_none() {
                     self.startup.set_focused(focus);
-                    self.input_due = true;
+                    self.driver.suspend();
                 }
                 if !focus {
                     self.window
@@ -596,36 +598,34 @@ impl ApplicationHandler for App<'_> {
                     self.aspect_mode.get(),
                     self.startup.platform().window_full_move(),
                 ));
-            if self.input_due && self.native_input && self.preview_image.is_none() {
-                let size = window.inner_size();
-                self.game_input.frame(
-                    &self.bindings,
-                    [size.width, size.height],
-                    self.startup.input_mut(),
-                );
-                let position = self.game_input.cursor_position([size.width, size.height]);
-                let visible = self.cursor_visibility.update(
-                    self.cursor_clock.elapsed().as_millis() as u32,
-                    self.startup.settings().cursor_auto_clear(),
-                    position.is_some(),
-                    position.unwrap_or_default(),
-                );
-                // Window-scoped adaptation: always show the host cursor outside the
-                // game viewport; keep the engine's stored visibility while inactive.
-                let visible = position.is_none() || visible;
-                if visible != self.cursor_shown {
-                    window.set_cursor_visible(visible);
-                    self.cursor_shown = visible;
-                    println!("# native cursor visible={visible}");
+            let cursor_auto_clear = self.startup.settings().cursor_auto_clear();
+            self.driver.sample_input(self.startup.input_mut(), |input| {
+                if self.native_input && self.preview_image.is_none() {
+                    let size = window.inner_size();
+                    self.game_input
+                        .frame(&self.bindings, [size.width, size.height], input);
+                    let position = self.game_input.cursor_position([size.width, size.height]);
+                    let visible = self.cursor_visibility.update(
+                        self.cursor_clock.elapsed().as_millis() as u32,
+                        cursor_auto_clear,
+                        position.is_some(),
+                        position.unwrap_or_default(),
+                    );
+                    // Window-scoped adaptation: always show the host cursor outside the
+                    // game viewport; keep the engine's stored visibility while inactive.
+                    let visible = position.is_none() || visible;
+                    if visible != self.cursor_shown {
+                        window.set_cursor_visible(visible);
+                        self.cursor_shown = visible;
+                        println!("# native cursor visible={visible}");
+                    }
                 }
-                self.input_due = false;
-            }
+            });
             let mut yielded = false;
             let mut inactive = false;
-            let start = Instant::now();
-            while start.elapsed() < Duration::from_millis(8) {
+            let outcome = self.driver.run_slice(&mut self.startup, &mut FrameBudget::time(Duration::from_millis(8)), |startup| {
                 let mut backend = NativeBackend {
-                    logical_size: self.startup.screen_size(),
+                    logical_size: startup.screen_size(),
                     window: &window,
                     event_loop: el,
                     encoding: self.encoding,
@@ -639,89 +639,81 @@ impl ApplicationHandler for App<'_> {
                     #[cfg(windows)]
                     masked_cursor: &self.masked_cursor,
                 };
-                let had_fade = self.startup.scene().fade().current().is_some();
-                let outcome = self.startup.tick(&mut backend);
-                for command in self.startup.take_unreviewed_notices() {
+                let had_fade = startup.scene().fade().current().is_some();
+                let outcome = startup.tick(&mut backend);
+                for command in startup.take_unreviewed_notices() {
                     println!(
                         "# UNREVIEWED system command 0x{:04x} allowed with {} (default policy, first use)",
                         0x2000 + command,
                         cmvs_core::dispatch::semantics_name(
-                            self.startup.gate().selection().profile,
+                            startup.gate().selection().profile,
                             command
                         )
                     );
                 }
-                if !had_fade && let Some(fade) = self.startup.scene().fade().current() {
+                if !had_fade && let Some(fade) = startup.scene().fade().current() {
                     println!("# fade started {fade:?}");
                 }
-                if let Ok(event) = &outcome {
-                    self.frame_boundary.observe(*event);
+                if matches!(outcome, Ok(RuntimeEvent::MainEnteredWithoutSnapshot)) {
+                    println!("# main entered at step {}; snapshot NOT built, saving unavailable", startup.steps());
+                    return Ok(RuntimeEvent::Progress);
                 }
-                match outcome {
-                    Ok(RuntimeEvent::Quit) => {
-                        println!("# script requested quit");
-                        el.exit();
-                        return;
-                    }
-                    Ok(RuntimeEvent::Inactive) => {
-                        inactive = true;
-                        break;
-                    }
-                    Ok(RuntimeEvent::Progress) => {}
-                    Ok(RuntimeEvent::Yield) => {
-                        yielded = true;
-                        self.input_due = true;
-                        break;
-                    }
-                    Ok(RuntimeEvent::SnapshotCaptured) => {}
-                    Ok(RuntimeEvent::MainEnteredWithoutSnapshot) => println!(
-                        "# main entered at step {}; snapshot NOT built, saving unavailable",
-                        self.startup.steps()
-                    ),
-                    Ok(event) => {
-                        self.halted = true;
-                        if self.startup.gate().selection().profile.base.is_some() {
-                            for line in self.startup.gate().diagnostic_lines() {
-                                println!("{line}");
-                            }
+                outcome
+            });
+            match outcome {
+                Ok(FrameOutcome::Stopped(RuntimeEvent::Quit)) => {
+                    println!("# script requested quit");
+                    el.exit();
+                    return;
+                }
+                Ok(FrameOutcome::Inactive) => {
+                    inactive = true;
+                }
+                Ok(FrameOutcome::Yield) => {
+                    yielded = true;
+                }
+                Ok(FrameOutcome::BudgetExhausted) => {}
+                Ok(FrameOutcome::Stopped(event)) => {
+                    self.halted = true;
+                    if self.startup.gate().selection().profile.base.is_some() {
+                        for line in self.startup.gate().diagnostic_lines() {
+                            println!("{line}");
                         }
-                        window.set_title(&halt_title(
-                            event,
-                            self.startup.machine().current_name(),
-                            self.startup.machine().pc(),
-                        ));
-                        for (slot, object) in self.startup.scene().objects() {
-                            println!(
-                                "# scene object[{slot}] draw={:?} children={}",
-                                object.draw,
-                                object.children.len()
-                            );
-                        }
+                    }
+                    window.set_title(&halt_title(
+                        event,
+                        self.startup.machine().current_name(),
+                        self.startup.machine().pc(),
+                    ));
+                    for (slot, object) in self.startup.scene().objects() {
                         println!(
-                            "# STARTUP STOP {event:?}; steps={} slot={} script={} pc=0x{:x} callbacks={} known_integers={} known_bits={}",
-                            self.startup.steps(),
-                            self.startup.machine().current_slot(),
-                            self.startup.machine().current_name().escape_ascii(),
-                            self.startup.machine().pc(),
-                            self.startup.control().callbacks().len(),
-                            self.startup.machine().state().integers().len(),
-                            self.startup.machine().state().bits().len()
+                            "# scene object[{slot}] draw={:?} children={}",
+                            object.draw,
+                            object.children.len()
                         );
-                        break;
                     }
-                    Err(error) => {
-                        let vm = self.startup.machine();
-                        let stack_top: Vec<_> =
-                            (1..=5).map(|n| vm.stack().peek_u32(n * 4)).collect();
-                        eprintln!(
-                            "# VM error script={} pc=0x{:x} stack_bytes={} top_words={stack_top:?}",
-                            vm.current_name().escape_ascii(),
-                            vm.pc(),
-                            vm.stack().len_bytes()
-                        );
-                        self.fail(el, error);
-                        return;
-                    }
+                    println!(
+                        "# STARTUP STOP {event:?}; steps={} slot={} script={} pc=0x{:x} callbacks={} known_integers={} known_bits={}",
+                        self.startup.steps(),
+                        self.startup.machine().current_slot(),
+                        self.startup.machine().current_name().escape_ascii(),
+                        self.startup.machine().pc(),
+                        self.startup.control().callbacks().len(),
+                        self.startup.machine().state().integers().len(),
+                        self.startup.machine().state().bits().len()
+                    );
+                }
+                Err(error) => {
+                    let vm = self.startup.machine();
+                    let stack_top: Vec<_> = (1..=5).map(|n| vm.stack().peek_u32(n * 4)).collect();
+                    eprintln!(
+                        "# VM error script={} pc=0x{:x} stack_bytes={} top_words={stack_top:?}",
+                        vm.current_name().escape_ascii(),
+                        vm.pc(),
+                        vm.stack().len_bytes()
+                    );
+                    self.fail(el, error);
+                    return;
                 }
             }
             if !yielded && !inactive && !self.halted {
@@ -757,7 +749,15 @@ impl ApplicationHandler for App<'_> {
                     .min(u128::from(u32::MAX)) as u32;
                 self.last_frame = now;
                 let had_fade = self.startup.scene().fade().current().is_some();
-                if let Err(error) = self.startup.advance_playback(delta) {
+                let advanced = if yielded {
+                    self.driver
+                        .finish_frame(&mut self.startup, delta)
+                        .map(|_| ())
+                } else {
+                    // Inactivity still services the existing audio/movie policy.
+                    self.startup.advance_playback(delta)
+                };
+                if let Err(error) = advanced {
                     self.fail(el, error);
                     return;
                 }
@@ -1078,7 +1078,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut app = App {
         #[cfg(windows)]
         masked_cursor: Default::default(),
-        frame_boundary: Default::default(),
+        driver: FrameDriver::default(),
         use_gpu,
         #[cfg(feature = "wgpu-renderer")]
         gpu: None,
@@ -1092,7 +1092,6 @@ fn run() -> Result<(), Box<dyn Error>> {
         game_input,
         bindings,
         native_input,
-        input_due: true,
         halted: false,
         error: None,
         exit_after,

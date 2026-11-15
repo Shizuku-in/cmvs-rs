@@ -9,7 +9,10 @@ use cmvs_core::{
     input::KeyBindings,
     platform::resolve_under,
     profile::Registry,
-    runtime::{Runtime, RuntimeEvent, RuntimeOptions, SaveStorage, load_start},
+    runtime::{
+        FrameBudget, FrameDriver, FrameOutcome, Runtime, RuntimeEvent, RuntimeOptions, SaveStorage,
+        load_start,
+    },
 };
 use cmvs_font::font::FontRenderer;
 use cmvs_input::{TouchEvent, TouchInput, TouchPhase, Viewport};
@@ -47,7 +50,7 @@ struct Player<'a> {
     focused: bool,
     next_frame: Instant,
     last_frame: Instant,
-    input_due: bool,
+    driver: FrameDriver,
     draw_ready: bool,
     exit: bool,
 }
@@ -57,6 +60,7 @@ impl Player<'_> {
     }
     fn sync_input(&mut self) {
         let active = self.active();
+        self.driver.suspend();
         self.audio_control.set_active(active);
         self.touch.focus(active, self.startup.input_mut());
         self.startup.set_focused(active);
@@ -64,6 +68,7 @@ impl Player<'_> {
         self.last_frame = self.next_frame;
     }
     fn release_surface(&mut self) {
+        self.driver.suspend();
         self.audio_control.set_active(false);
         self.touch.focus(false, self.startup.input_mut());
         self.startup.set_focused(false);
@@ -165,7 +170,7 @@ impl Player<'_> {
         Ok(())
     }
     fn execute(&mut self) -> Result<()> {
-        if self.input_due {
+        if self.driver.needs_input() {
             let size = self
                 .graphics
                 .as_ref()
@@ -175,50 +180,51 @@ impl Player<'_> {
             if let Some(viewport) =
                 Viewport::for_canvas(self.startup.screen_size(), size, self.backend.mode())
             {
-                self.touch
-                    .frame(&self.bindings, viewport, self.startup.input_mut());
-                self.input_due = false;
+                self.driver.sample_input(self.startup.input_mut(), |input| {
+                    self.touch.frame(&self.bindings, viewport, input);
+                });
             } else {
                 self.next_frame = Instant::now() + FRAME_TIME;
                 return Ok(());
             }
         }
-        let start = Instant::now();
-        while start.elapsed() < Duration::from_millis(8) {
-            match self.startup.tick(&mut self.backend)? {
-                RuntimeEvent::Progress | RuntimeEvent::SnapshotCaptured => {}
-                RuntimeEvent::Quit => {
-                    self.exit = true;
-                    return Ok(());
-                }
-                RuntimeEvent::Yield => {
-                    self.input_due = true;
-                    if self.backend.font_pending {
-                        // Keep the last canvas while the asynchronous modal dialog
-                        // runs, and continue polling Android lifecycle events.
-                        self.last_frame = Instant::now();
-                        self.next_frame = self.last_frame + FRAME_TIME;
-                        return Ok(());
-                    }
-                    let now = Instant::now();
-                    let delta = now
-                        .duration_since(self.last_frame)
-                        .as_millis()
-                        .min(u128::from(u32::MAX)) as u32;
-                    self.last_frame = now;
-                    self.startup.advance_playback(delta)?;
-                    self.draw_ready = true;
-                    self.redraw()?;
-                    self.next_frame = Instant::now() + FRAME_TIME;
-                    return Ok(());
-                }
-                RuntimeEvent::Inactive => {
+        match self.driver.run_slice(
+            &mut self.startup,
+            &mut FrameBudget::time(Duration::from_millis(8)),
+            |runtime| runtime.tick(&mut self.backend),
+        )? {
+            FrameOutcome::Stopped(RuntimeEvent::Quit) => {
+                self.exit = true;
+                return Ok(());
+            }
+            FrameOutcome::Yield => {
+                if self.backend.font_pending {
+                    self.driver.skip_frame();
+                    // Keep the last canvas while the asynchronous modal dialog
+                    // runs, and continue polling Android lifecycle events.
                     self.last_frame = Instant::now();
                     self.next_frame = self.last_frame + FRAME_TIME;
                     return Ok(());
                 }
-                event => return Err(format!("game stopped: {event:?}").into()),
+                let now = Instant::now();
+                let delta = now
+                    .duration_since(self.last_frame)
+                    .as_millis()
+                    .min(u128::from(u32::MAX)) as u32;
+                self.last_frame = now;
+                self.driver.finish_frame(&mut self.startup, delta)?;
+                self.draw_ready = true;
+                self.redraw()?;
+                self.next_frame = Instant::now() + FRAME_TIME;
+                return Ok(());
             }
+            FrameOutcome::Inactive => {
+                self.last_frame = Instant::now();
+                self.next_frame = self.last_frame + FRAME_TIME;
+                return Ok(());
+            }
+            FrameOutcome::Stopped(event) => return Err(format!("game stopped: {event:?}").into()),
+            FrameOutcome::BudgetExhausted => {}
         }
         self.next_frame = Instant::now();
         Ok(())
@@ -399,7 +405,7 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
         focused: false,
         next_frame: Instant::now(),
         last_frame: Instant::now(),
-        input_due: true,
+        driver: FrameDriver::default(),
         draw_ready: false,
         exit: false,
     };

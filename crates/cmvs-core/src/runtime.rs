@@ -25,15 +25,19 @@
 //!
 //! # Drive the host loop
 //!
-//! 1. Refresh [`Runtime::input_mut`] once per frame.
-//! 2. Call [`Runtime::tick`] until [`RuntimeEvent::Yield`] or a stop event. If the
-//!    instruction budget runs out first, resume later with the same input; do not
-//!    advance frame time or sample new input yet.
-//! 3. On yield, call [`Runtime::advance_playback`] to advance movies and scene
-//!    state. Enable CMV decoding with [`Runtime::set_decode_cmv_frames`] if needed.
-//!    [`Runtime::advance_frame`] advances timing without reading full-screen CMV frames.
-//! 4. Compose scene, message, and glyph objects for presentation. If host capture is
-//!    enabled, service [`Runtime::capture_due`] with [`Runtime::supply_capture`].
+//! Use [`FrameDriver`] to preserve frame state across cooperative budget slices:
+//! call [`FrameDriver::sample_input`], then [`FrameDriver::run_slice`] with a
+//! [`FrameBudget`] and a step hook calling [`Runtime::tick`]. On [`FrameOutcome::Yield`],
+//! call [`FrameDriver::finish_frame`] before composing the scene. Only
+//! [`FrameDriver::ready`] state may be composed, including during window redraws.
+//! Hosts own clocks, scheduling, device services, and capture readback. Embedders
+//! can latch a frame delta; real-time hosts may supply elapsed time at completion.
+//!
+//! Low-level callers may still tick directly: sample input once, resume with that
+//! sample across budget exhaustion, and call [`Runtime::advance_playback`] once
+//! on yield. [`Runtime::advance_frame`] omits full-screen CMV decoding and audio
+//! output service. Service [`Runtime::capture_due`] with [`Runtime::supply_capture`]
+//! after drawing, before executing the next VM instruction.
 //!
 //! Use [`Runtime::render_scene_frame`] for scene-only output and [`Runtime::movie_frame`]
 //! for decoded full-screen movies. A complete player with fonts and frame composition
@@ -89,6 +93,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod frame;
+pub use frame::{FrameBudget, FrameDriver, FrameOutcome};
 mod lifecycle;
 mod preferences;
 mod save;
