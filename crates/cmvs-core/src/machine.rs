@@ -216,6 +216,14 @@ impl<'a> Machine<'a> {
     pub fn loaded_script(&self, slot: u8) -> Option<&Script> {
         self.images.get(&slot).map(|i| i.script.as_ref())
     }
+    pub(crate) fn instructions(&self) -> impl Iterator<Item = &Instruction> {
+        self.images.values().flat_map(|image| {
+            image
+                .instructions
+                .values()
+                .map(|instruction| instruction.as_ref())
+        })
+    }
     pub fn loaded_names(&self) -> Vec<(u8, &[u8])> {
         self.images
             .iter()

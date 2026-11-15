@@ -84,7 +84,7 @@ Saves:
                          directory is locked during use; existing user saves update
   --system-save-output <new.dat>
                          export a CSS1 save; refuses overwrite; excludes --user-data-dir
-  --skip-auto-resume      disable startup auto-load in memory (verified games only)
+  --skip-auto-resume      disable startup auto-load in memory
   --continue-without-snapshot
                          research: continue without save images; saving unavailable
 
@@ -1004,7 +1004,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
     if skip_auto_resume {
         println!(
-            "# skip-auto-resume: explicitly clear Amatsutsumi's in-memory startup auto-load flag after system-save loading; save files unchanged"
+            "# skip-auto-resume: clear the script's startup auto-load flag after system-save loading; save files unchanged"
         );
     }
     startup.set_mgv_factory(Box::new(crate::video::PrefetchTheoraFactory::default()));

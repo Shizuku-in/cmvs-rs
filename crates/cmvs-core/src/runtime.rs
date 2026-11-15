@@ -78,7 +78,7 @@ use crate::{
     resources::{ResourceArchives, ResourceKind},
     save_menu::{DirectorySaves, SaveMenuHost},
     scene::SceneHost,
-    script_control::{ArchiveScripts, ControlEvent, ScriptControl},
+    script_control::{ArchiveScripts, ControlEvent, ScriptControl, ScriptSource},
     sequence::SequenceHost,
     snapshot::{SaveImage, SaveInfo, SaveTitle},
     system_save::{
@@ -98,6 +98,7 @@ pub use frame::{FrameBudget, FrameDriver, FrameOutcome};
 mod lifecycle;
 mod preferences;
 mod save;
+mod script_settings;
 mod slot_edit;
 pub use save::{
     SaveTime, save_time_from_unix, snapshot_layout_for, snapshot_layout_supported, thumbnail_bmp,
@@ -481,22 +482,35 @@ impl<'a> Runtime<'a> {
     pub fn machine(&self) -> &Machine<'a> {
         &self.machine
     }
-    /// Explicit preview policy, not a VM command: after the first system-save read, clear
-    /// the recorded integer (2198 for Amatsutsumi) so main.ps3 does not attempt startup
-    /// auto-load. Other persistent values and every file stay unchanged. Configure before
-    /// ticking; only games whose record verifies the policy accept it.
+    /// Skip startup auto-load using its script guard, or an explicitly recorded binding.
+    /// Configure before ticking; the flag is cleared after the first system-save read.
     pub fn set_skip_auto_resume(&mut self, enabled: bool) -> Result<(), &'static str> {
         if self.steps != 0 {
             return Err("skip-auto-resume must be configured before startup");
         }
         self.skip_auto_resume = match (enabled, self.gate.selection().record) {
             (false, _) => None,
-            (true, Some(record)) => Some((
-                record.game_id,
-                record
-                    .skip_auto_resume
-                    .ok_or("skip-auto-resume is not verified for this game")?,
-            )),
+            (true, Some(record)) => {
+                let inferred = self
+                    .source
+                    .load(self.main_script_name)
+                    .ok()
+                    .and_then(|script| {
+                        let instructions = crate::bytecode::decode_layout(
+                            script.code(),
+                            script.header().entry_pc,
+                            &script.labels(),
+                        )
+                        .ok()?;
+                        script_settings::conditional_integer(instructions.iter(), 870, 0x22bb)
+                    });
+                Some((
+                    record.game_id,
+                    inferred
+                        .or(record.skip_auto_resume)
+                        .ok_or("startup auto-resume setting was not recognized")?,
+                ))
+            }
             (true, None) => return Err("skip-auto-resume needs a recorded game"),
         };
         Ok(())
@@ -525,8 +539,16 @@ impl<'a> Runtime<'a> {
     pub fn bootstrap(&self) -> &Bootstrap {
         &self.bootstrap
     }
-    /// Request the script's window-close callback; return `false` if none is enabled.
+    /// Queue the window-close callback; `false` tells the host to close immediately.
+    /// An identified script quit-confirmation guard also applies to window closing.
     pub fn request_close(&mut self) -> bool {
+        if self.auto_resume_checked
+            && let Some(integer) =
+                script_settings::conditional_integer(self.machine.instructions(), 11, 0x410)
+            && self.machine.state().integer(integer) == Some(0)
+        {
+            return false;
+        }
         self.control.request_close()
     }
     /// Inspect script slots and callback scheduling state.
