@@ -479,3 +479,86 @@ fn old_text_dialog_waits_and_rejects_invalid_results_atomically() {
         );
     }
 }
+
+#[test]
+fn old_text_dialog_treats_negative_wrapped_bank_initial_as_empty_without_reading_output() {
+    use cmvs_rs::platform::RecordingBackend;
+
+    fn string_expr_nested_bank(code: &mut Vec<u8>, index: i32) {
+        code.extend(0x0201u16.to_le_bytes());
+        code.extend(0x0121u16.to_le_bytes());
+        code.extend(0x0200u16.to_le_bytes());
+        code.extend(0x0100u16.to_le_bytes());
+        code.extend((index as u32).to_le_bytes());
+        code.extend(0x020fu16.to_le_bytes());
+        code.extend(0x020fu16.to_le_bytes());
+    }
+
+    let profile = Registry::builtin().profile("cvns-20050727").unwrap();
+    let mut code = vec![];
+    // Push 0, uninitialized slot 15, 96, Nested(0x121, -29), Title, Prompt, 0x21b2.
+    command(&mut code, 0x21b2, &[0, 0x8000_000f, 96]);
+    code.truncate(code.len() - 2);
+    string_expr_nested_bank(&mut code, -29);
+    code.extend(0x0430u16.to_le_bytes());
+    for raw in [0x8000_0001u32, 0x8000_0000] {
+        code.extend(0x0440u16.to_le_bytes());
+        code.extend(4u16.to_le_bytes());
+        code.extend(raw.to_le_bytes());
+    }
+    code.extend(0x21b2u16.to_le_bytes());
+
+    let program = script(&code);
+    let mut vm = Machine::new(&program).unwrap();
+    vm.set_command_map(profile.command_map());
+    vm.state_mut().set_string_slots(256);
+    vm.state_mut().set_string(0, b"Title").unwrap();
+    vm.state_mut().set_string(1, b"Prompt").unwrap();
+    // Leave slot 15 uninitialized to verify write-only output is not read.
+    pending(&mut vm);
+    let mut backend = RecordingBackend::default();
+    backend.answer_text_dialog(Some(vec![0x82, 0xa0])); // Shift-JIS "あ"
+    assert_eq!(
+        dispatch::run(
+            profile.semantics(0x1b2),
+            &mut vm,
+            &mut Hosts {
+                device_frame: Some(&mut backend),
+                ..Default::default()
+            }
+        )
+        .unwrap(),
+        Some(Flow::Done)
+    );
+    assert_eq!(backend.text_dialogs().len(), 1);
+    assert!(backend.text_dialogs()[0].initial.is_empty());
+    assert_eq!(vm.state().system_integer(0), Some(1));
+    assert_eq!(vm.state().string(15), Some(&[0x82, 0xa0][..]));
+
+    // Ordinary small Frame offsets on `initial` must still fail cleanly without mutating state.
+    let mut bad = vec![];
+    command(
+        &mut bad,
+        0x21b2,
+        &[0x8000_0000, 0x8000_0001, 0xc000_0004, 96, 0x8000_000f, 0],
+    );
+    let program = script(&bad);
+    let mut vm = Machine::new(&program).unwrap();
+    vm.set_command_map(profile.command_map());
+    vm.state_mut().set_string_slots(256);
+    vm.state_mut().set_string(0, b"Title").unwrap();
+    vm.state_mut().set_string(1, b"Prompt").unwrap();
+    pending(&mut vm);
+    assert!(
+        dispatch::run(
+            profile.semantics(0x1b2),
+            &mut vm,
+            &mut Hosts {
+                device_frame: Some(&mut backend),
+                ..Default::default()
+            }
+        )
+        .is_err()
+    );
+    assert!(vm.state().string(15).is_none());
+}

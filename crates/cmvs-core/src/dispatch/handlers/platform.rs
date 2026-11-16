@@ -21,27 +21,43 @@ pub(in crate::dispatch) fn variant_text_dialog(
     call: &mut Call<'_, '_>,
 ) -> Result<Flow, Box<dyn Error>> {
     use crate::platform::{TextDialogRequest, TextDialogResult};
-    let mut strings = Vec::new();
-    for distance in [4, 8, 12, 20] {
-        let raw = call.argument(distance, "text dialog string")?;
-        strings.push(call.vm.resolve_string(raw)?);
-    }
+    let title_raw = call.argument(4, "text dialog string")?;
+    let prompt_raw = call.argument(8, "text dialog string")?;
+    let initial_raw = call.argument(12, "text dialog string")?;
+    let max_bytes = call.argument(16, "text dialog character limit")?;
     let output = call.argument(20, "text dialog output")?;
+    // The inspected old helper ignores this sixth flag after the wrapper normalizes it.
+    call.argument(24, "text dialog flag")?;
     let crate::vm::StringRef::StringBank(index) = crate::vm::StringRef::decode(output) else {
         return Err(call
             .error("text dialog output requires a writable string slot")
             .into());
     };
+    let title = call.vm.resolve_string(title_raw)?;
+    let prompt = call.vm.resolve_string(prompt_raw)?;
+    let initial = match call.vm.resolve_string(initial_raw) {
+        Ok(bytes) => bytes,
+        Err(_)
+            if matches!(
+                crate::vm::StringRef::decode(initial_raw),
+                crate::vm::StringRef::Frame(offset) if offset >= 0x3fff_0000
+            ) =>
+        {
+            // Negative 0x121 bank indices (e.g. akifd's `16 + (g[84] - 80)` for comment-edit
+            // buttons 35..49) wrap via `| 0x8000_0000` into ~1 GiB Frame offsets; Win32's
+            // SEH inside `lstrcpyA` swallows the fault cleanly and leaves initial text empty.
+            Vec::new()
+        }
+        Err(err) => return Err(err.into()),
+    };
     let limit = call.vm.state().string_slots();
     let index = if index >= limit { 0 } else { index };
     let request = TextDialogRequest {
-        title: strings[0].clone(),
-        prompt: strings[1].clone(),
-        initial: strings[2].clone(),
-        max_bytes: call.argument(16, "text dialog character limit")?,
+        title,
+        prompt,
+        initial,
+        max_bytes,
     };
-    // The inspected old helper ignores this sixth flag after the wrapper normalizes it.
-    call.argument(24, "text dialog flag")?;
     if request.title.len() >= 144 || request.prompt.len() >= 256 || request.initial.len() >= 256 {
         return Err(call
             .error("text dialog strings exceed native capacity")

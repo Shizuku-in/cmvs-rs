@@ -13,7 +13,7 @@ impl Runtime<'_> {
         configuration: Configuration,
     ) -> Result<(), Box<dyn Error>> {
         let bytes = configuration.bytes();
-        let audio = AudioHost::from_ini(bytes);
+        let audio = AudioHost::for_profile(self.gate.selection().profile, bytes);
         self.audio_backend
             .configure_voice_ducking(audio.voice_ducking())?;
         let settings = SettingsHost::from_ini(bytes);
@@ -93,11 +93,9 @@ impl Runtime<'_> {
         configuration.set_string("MESSAGE_INFO", "FONT", self.settings.font_face())?;
         let audio = self.audio.settings();
         let duck = self.audio.voice_ducking();
+        let background_output = u32::from(self.audio.background_output());
         for (key, value) in [
-            (
-                "INACTIVE_SOUND_PLAY",
-                u32::from(self.audio.background_output()),
-            ),
+            ("INACTIVE_SOUND_PLAY", background_output),
             ("MUSIC_USE", u32::from(audio.bgm_enabled)),
             ("SE_USE", u32::from(audio.se_enabled)),
             ("VOICE_USE", u32::from(audio.voice_enabled)),

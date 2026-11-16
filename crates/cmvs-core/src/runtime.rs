@@ -881,6 +881,7 @@ impl<'a> Runtime<'a> {
         self.audio_backend.update()?;
         let clock = self.audio_backend.movie_clock()?;
         let had_movie = self.movies.has_player();
+        let was_cvns_modal = self.movies.has_cvns_modal_player();
         self.movies.advance_with_clock(
             delta_ms,
             clock,
@@ -892,6 +893,14 @@ impl<'a> Runtime<'a> {
         )?;
         if had_movie && !self.movies.has_player() && clock.is_some() {
             self.audio_backend.stop_movie_audio()?;
+        }
+        if was_cvns_modal {
+            // cvns-20090203 0x405960 ticks only the modal player until it stops (0x472a70
+            // clears the frame clock when resuming the VM).
+            if !self.movies.has_cvns_modal_player() {
+                self.frame_delta = 0;
+            }
+            return Ok(());
         }
         self.movies.advance_scene(delta_ms, &mut self.scene)?;
         self.advance_frame_state(delta_ms)
@@ -1001,9 +1010,18 @@ impl<'a> Runtime<'a> {
         if self.quit {
             return Ok(());
         }
-        self.movies.advance_scene(delta_ms, &mut self.scene)?;
-        self.movies.advance_mgv(delta_ms, None)?;
+        let was_cvns_modal = self.movies.has_cvns_modal_player();
+        if !was_cvns_modal {
+            self.movies.advance_scene(delta_ms, &mut self.scene)?;
+            self.movies.advance_mgv(delta_ms, None)?;
+        }
         self.movies.advance(delta_ms);
+        if was_cvns_modal {
+            if !self.movies.has_cvns_modal_player() {
+                self.frame_delta = 0;
+            }
+            return Ok(());
+        }
         self.advance_frame_state(delta_ms)
     }
     fn advance_frame_state(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error>> {
@@ -1360,6 +1378,18 @@ impl<'a> Runtime<'a> {
         if self.main_barrier {
             return Ok(RuntimeEvent::MainPreparedNeedsSnapshot);
         }
+        if self.movies.has_cvns_modal_player() {
+            if self.input.take_cvns_movie_skip() {
+                self.movies
+                    .stop_player(self.audio_backend.as_mut())
+                    .map_err(RuntimeError::Other)?;
+                self.frame_delta = 0;
+            } else {
+                self.since_yield = 0;
+                self.resume_run = true;
+                return Ok(RuntimeEvent::Yield);
+            }
+        }
         if self.resume_run {
             // 0x140019430: the gesture update follows the input refresh and precedes the VM.
             let delta = std::mem::take(&mut self.frame_delta);
@@ -1608,7 +1638,14 @@ impl<'a> Runtime<'a> {
         }
         let mut image_source = self.images.with_paths(self.bootstrap.paths());
         let input_clock = self.timers.clock();
-        let movie_settings = self.audio.settings();
+        let movie_settings = if self.gate.selection().profile.is_cvns() {
+            let mut settings = self.audio.settings();
+            settings.master = self.audio.cvns_movie_volume();
+            settings.movie = 256;
+            settings
+        } else {
+            self.audio.settings()
+        };
         let mut movie_source = DirectoryMovies::with_fs(
             &self.root,
             self.bootstrap.paths().get(&(0x2015, 0)).map(Vec::as_slice),

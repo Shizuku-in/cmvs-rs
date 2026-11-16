@@ -1,4 +1,4 @@
-//! CMV6/CMV8 movie headers, frame indices, and bounded frame decoding.
+//! CMV3/CMV4/CMV6/CMV8 movie headers, frame indices, and bounded frame decoding.
 //!
 //! [`CmvIndex`] reads container metadata and locates image frames and the Ogg
 //! soundtrack. Audio decoding and playback are separate host services.
@@ -50,13 +50,13 @@ pub struct CmvIndex {
     /// CMV8 (0x1400390b0 type 4) frames are 32-bit JBPE images with alpha; CMV6 frames are
     /// opaque 24-bit JBPD images.
     pub alpha: bool,
-    /// CMV4 (cmvs-20070119 op.cmv) keeps the CMV6 container with opaque JBP1 frames; that
-    /// player checks no signature (docs/games/puriring).
+    /// CMV3 (cvns-20090203 op.cmv) and CMV4 (cmvs-20070119 op.cmv) keep the 44-byte CMV6
+    /// container with opaque JBP1 frames; those players check no container signature.
     pub jbp1: bool,
 }
 
 impl CmvIndex {
-    /// Reads and bounds-checks a CMV6 header and its `max_sequence + 1` index entries.
+    /// Reads and bounds-checks a CMV3/CMV4/CMV6 header and its `max_sequence + 1` index entries.
     pub fn read(reader: &mut (impl Read + Seek)) -> Result<Self, FormatError> {
         Self::read_signature(reader, false)
     }
@@ -80,11 +80,11 @@ impl CmvIndex {
             .map_err(|_| FormatError("CMV header truncated"))?;
         let (alpha, jbp1) = match &head[..4] {
             b"CMV6" => (false, false),
-            b"CMV4" => (false, true),
+            b"CMV3" | b"CMV4" => (false, true),
             b"CMV8" if allow_alpha => (true, false),
             _ => {
                 return Err(FormatError(
-                    "only the verified CMV4/CMV6 signatures are supported",
+                    "only the verified CMV3/CMV4/CMV6 signatures are supported",
                 ));
             }
         };

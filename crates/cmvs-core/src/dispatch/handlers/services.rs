@@ -105,6 +105,14 @@ pub(in crate::dispatch) fn polar_point(
     Ok(Flow::Done)
 }
 
+pub(in crate::dispatch) fn cartesian_to_polar(
+    _hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    crate::math::handle_cartesian_to_polar(call)?;
+    Ok(Flow::Done)
+}
+
 /// CVNS timing and wall-clock queries/switches (`0x403`, `0x404`, `0x407`, `0x41c`, `0x41f`).
 pub(in crate::dispatch) fn cvns_timers(
     hosts: &mut Hosts<'_>,

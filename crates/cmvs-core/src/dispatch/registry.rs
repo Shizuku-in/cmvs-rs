@@ -216,71 +216,32 @@ macro_rules! define_variant_registry {
     };
 }
 
+#[rustfmt::skip]
 define_variant_registry!(
     (TextDialog, TEXT_DIALOG, "variant text dialog"),
     (SeGain, SE_GAIN, "variant SE gain multiplier"),
     (MixerGain, MIXER_GAIN, "variant device mixer gain"),
     (ImageTables, IMAGE_TABLES, "variant separate image tables"),
-    (
-        ActivationPass,
-        ACTIVATION_PASS,
-        "variant activation check reported as passed"
-    ),
-    (
-        WindowScaleMotion,
-        WINDOW_SCALE_MOTION,
-        "variant window scale motion"
-    ),
-    (
-        WindowPositionMotion,
-        WINDOW_POSITION_MOTION,
-        "variant window position motion"
-    ),
-    (
-        WindowOpacityTrack,
-        WINDOW_OPACITY_TRACK,
-        "variant window opacity track"
-    ),
+    (ActivationPass, ACTIVATION_PASS, "variant activation check reported as passed"),
+    (WindowScaleMotion, WINDOW_SCALE_MOTION, "variant window scale motion"),
+    (WindowPositionMotion, WINDOW_POSITION_MOTION, "variant window position motion"),
+    (WindowOpacityTrack, WINDOW_OPACITY_TRACK, "variant window opacity track"),
     (LogicalText, LOGICAL_TEXT, "variant text with logical size"),
     (ViewMotion, VIEW_MOTION, "variant device view motion"),
-    (
-        WindowFullMove,
-        WINDOW_FULL_MOVE,
-        "variant unscaled fullscreen origin"
-    ),
+    (WindowFullMove, WINDOW_FULL_MOVE, "variant unscaled fullscreen origin"),
     (LegacyEffects, LEGACY_EFFECTS, "variant legacy effect slots"),
-    (
-        WindowChildImage,
-        WINDOW_CHILD_IMAGE,
-        "variant window child image"
-    ),
-    (
-        WindowDrawScale,
-        WINDOW_DRAW_SCALE,
-        "variant window draw scale"
-    ),
-    (
-        SequenceWindowImage,
-        SEQUENCE_WINDOW_IMAGE,
-        "variant sequence window image"
-    ),
+    (WindowChildImage, WINDOW_CHILD_IMAGE, "variant window child image"),
+    (WindowDrawScale, WINDOW_DRAW_SCALE, "variant window draw scale"),
+    (SequenceWindowImage, SEQUENCE_WINDOW_IMAGE, "variant sequence window image"),
     (DrawQuery, DRAW_QUERY, "variant object draw query"),
     (CameraMoveX, CAMERA_MOVE_X, "variant camera X move"),
     (MovieControl, MOVIE_CONTROL, "variant scene movie control"),
     (MovieSeek, MOVIE_SEEK, "variant scene movie seek"),
-    (
-        ScreenCoordinates,
-        SCREEN_COORDINATES,
-        "variant screen coordinates"
-    ),
+    (ScreenCoordinates, SCREEN_COORDINATES, "variant screen coordinates"),
     (InputPress, INPUT_PRESS, "variant input down edge"),
     (MgvPlayer, MGV_PLAYER, "variant MGV player"),
     (DisplayCount, DISPLAY_COUNT, "variant display count"),
-    (
-        FullscreenMonitor,
-        FULLSCREEN_MONITOR,
-        "variant fullscreen monitor"
-    ),
+    (FullscreenMonitor, FULLSCREEN_MONITOR, "variant fullscreen monitor"),
     (KeyedArchives, KEYED_ARCHIVES, "variant keyed archives"),
     (ListSelect, LIST_SELECT, "variant list selection"),
     (ObjectQueue, OBJECT_QUEUE, "variant object queue"),
@@ -289,34 +250,14 @@ define_variant_registry!(
     (Particles, PARTICLES, "variant particle override"),
     (ParticlesX87, PARTICLES_X87, "variant x87 particle override"),
     (Rain, RAIN, "variant rain streaks"),
-    (
-        BackgroundAudio,
-        BACKGROUND_AUDIO,
-        "variant background audio override"
-    ),
+    (BackgroundAudio, BACKGROUND_AUDIO, "variant background audio override"),
     (SeRestart, SE_RESTART, "variant SE restart"),
     (AudioPreload, AUDIO_PRELOAD, "variant audio preload"),
     (PolarPoint, POLAR_POINT, "variant integer polar point"),
-    (
-        FallingBillboards,
-        FALLING_BILLBOARDS,
-        "variant falling billboard override"
-    ),
-    (
-        FallingBillboardsX87,
-        FALLING_BILLBOARDS_X87,
-        "variant x87 falling billboard override"
-    ),
-    (
-        CollisionParticles,
-        COLLISION_PARTICLES,
-        "variant collision particle override"
-    ),
-    (
-        FadingParticles,
-        FADING_PARTICLES,
-        "variant fading particle override"
-    ),
+    (FallingBillboards, FALLING_BILLBOARDS, "variant falling billboard override"),
+    (FallingBillboardsX87, FALLING_BILLBOARDS_X87, "variant x87 falling billboard override"),
+    (CollisionParticles, COLLISION_PARTICLES, "variant collision particle override"),
+    (FadingParticles, FADING_PARTICLES, "variant fading particle override"),
     (Fragments, FRAGMENTS, "variant image fragment override"),
 );
 

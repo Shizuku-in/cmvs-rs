@@ -2510,7 +2510,7 @@ fn hls_bgr_to_rgb(h: i16, l: i16, s: i16) -> [u8; 3] {
     [r, g, b]
 }
 
-fn apply_hsl_tint(layer: &mut CvnsImageLayer, src_c: u32, dst_c: u32) {
+pub(crate) fn apply_hsl_tint(layer: &mut CvnsImageLayer, src_c: u32, dst_c: u32) {
     let [sr, sg, sb] = unpack_rgb(src_c);
     let [dr, dg, db] = unpack_rgb(dst_c);
     let (sh, sl, ss) = rgb_to_hls_bgr(sr, sg, sb);

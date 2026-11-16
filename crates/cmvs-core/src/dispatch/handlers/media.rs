@@ -67,8 +67,7 @@ pub(in crate::dispatch) fn root_movie_player(
         .movies
         .as_deref_mut()
         .expect("movie capability checked")
-        .handle_player(call, h.source, h.settings, h.backend)?;
-    Ok(Flow::Done)
+        .handle_player(call, h.source, h.settings, h.backend)
 }
 
 pub(in crate::dispatch) fn mgv_player(

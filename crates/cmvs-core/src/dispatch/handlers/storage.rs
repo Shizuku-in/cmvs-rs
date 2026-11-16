@@ -30,7 +30,7 @@ pub(in crate::dispatch) fn root_runtime(
             },
             8,
         ),
-        0x2bc => (
+        0x2bc | 0x5ab => (
             SetSlotComment {
                 slot: call.argument(4, "save slot")?,
                 text: call.argument(8, "comment")?,

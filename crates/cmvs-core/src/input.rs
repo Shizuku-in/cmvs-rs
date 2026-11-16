@@ -304,6 +304,18 @@ impl ActionInput {
     pub(crate) fn cvns_skip_held(&self) -> bool {
         self.skip_held() || self.cvns_holds[0] != 0
     }
+    /// CVNS `sub_405960`: left click (`this+1680`) or Return edge (`this+1724 == 1`) ends
+    /// modal `0x20c0` movie playback and consumes the edge (`1680 = 0`, `1724 = 2`).
+    pub(crate) fn take_cvns_movie_skip(&mut self) -> bool {
+        let hit = self.mouse[0][2] || self.cvns_holds[3] == 1;
+        if hit {
+            self.mouse[0][2] = false;
+            if self.cvns_holds[3] == 1 {
+                self.cvns_holds[3] = 2;
+            }
+        }
+        hit
+    }
     /// CVNS `sub_46f6e0` wait interrupt mask check with optional edge consumption.
     pub(crate) fn cvns_wait_interrupt(&mut self, mask: u32, consume: bool) -> bool {
         let mut hit = false;

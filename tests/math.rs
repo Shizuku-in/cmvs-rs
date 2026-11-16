@@ -114,3 +114,61 @@ fn abs_clamp_max_and_min_are_signed_and_pop_their_arguments() {
         assert_eq!(vm.stack().len_bytes(), 0);
     }
 }
+
+#[test]
+fn cvns_centidegree_polar_and_cartesian_conversions() {
+    use cmvs_rs::{
+        dispatch::{self, Flow, Hosts},
+        profile::Registry,
+    };
+    let profile = Registry::builtin().profile("cvns-20050727").unwrap();
+    let script = script(&[
+        (0x20ec, &[9000, 100]),
+        (0x20ec, &[0, (-50i32) as u32]),
+        (0x20ed, &[0, 0, 100, 0]),
+        (0x20ed, &[10, 20, 10, (-30i32) as u32]),
+        (0x20ed, &[0, 0, 0, 40]),
+    ]);
+    let mut vm = Machine::new(&script).unwrap();
+    vm.set_command_map(profile.command_map());
+
+    let run = |vm: &mut Machine<'_>| {
+        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        let (_, cmd) = vm.pending_system().unwrap();
+        assert_eq!(
+            dispatch::run(
+                profile.semantics(cmd),
+                vm,
+                &mut Hosts {
+                    math: true,
+                    ..Default::default()
+                }
+            )
+            .unwrap(),
+            Some(Flow::Done)
+        );
+        assert_eq!(vm.stack().len_bytes(), 0);
+    };
+
+    run(&mut vm);
+    assert_eq!(vm.state().system_integer(1), Some(0));
+    assert_eq!(vm.state().system_integer(2), Some(100));
+
+    run(&mut vm);
+    assert_eq!(vm.state().system_integer(1), Some((-50i32) as u32));
+    assert_eq!(vm.state().system_integer(2), Some(0));
+
+    run(&mut vm);
+    assert_eq!(vm.state().system_integer(4), Some(0));
+    assert_eq!(vm.state().system_integer(5), Some(100));
+
+    // dy = -50 -> atan2(-50, 0) = -pi/2 -> raw +9000 -> 36000 - 9000 = 27000
+    run(&mut vm);
+    assert_eq!(vm.state().system_integer(4), Some(27000));
+    assert_eq!(vm.state().system_integer(5), Some(50));
+
+    // dy = +40 -> atan2(+40, 0) = +pi/2 -> raw -9000 (+36000 = 27000) -> 36000 - 27000 = 9000
+    run(&mut vm);
+    assert_eq!(vm.state().system_integer(4), Some(9000));
+    assert_eq!(vm.state().system_integer(5), Some(40));
+}

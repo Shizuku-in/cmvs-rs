@@ -7,6 +7,7 @@ use crate::digest::parse_hex;
 /// and bound to exact `(id, base, sha256)` profile identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InspectedBuild {
+    Cvns20050727,
     Cmvs20070119,
     Cmvs20071117,
     Cmvs20080719,
@@ -40,6 +41,12 @@ struct BuildIdentity {
 }
 
 const INSPECTED_BUILDS: &[BuildIdentity] = &[
+    BuildIdentity {
+        build: InspectedBuild::Cvns20050727,
+        id: "cvns-20050727",
+        base: Some("cmvs-20160201"),
+        sha256: sha256_hex("fd475dda79e4a559d934b214494d314539915afde7a910b3d35269dd9cd4a028"),
+    },
     BuildIdentity {
         build: InspectedBuild::Cmvs20070119,
         id: "cmvs-20070119",
@@ -177,9 +184,9 @@ impl EngineProfile {
             // docs/games/puriring: .data file bytes end at 0x4ae000; the banks at 0x4b6708,
             // 0x4dc710 (0x8000 bytes of packed bits, 0x440be0), 0x4da710 and 0x4ba710.
             "cmvs-20070119" => Some([4096, 262144, 2048, 128]),
-            // docs/games/miharu/README.md: .data file bytes end at 0x4b6600; integers
-            // 0x4bdd18, strings 0x4c1d20 (256 x 1024), bits 0x501d20 (0x8000 bytes); no floats.
-            "cvns-20090203" => Some([4096, 262144, 0, 256]),
+            // docs/games/akifd/README.md (`sub_412FE0`/`sub_413AC0`) & miharu/README.md:
+            // integers 4096, bits 0x8000*8=262144, floats 0, strings 256.
+            "cvns-20050727" | "cvns-20090203" => Some([4096, 262144, 0, 256]),
             _ => None,
         }
     }
@@ -209,7 +216,8 @@ impl EngineProfile {
         matches!(
             self.inspected_build(),
             Some(
-                InspectedBuild::Cvns20090203
+                InspectedBuild::Cvns20050727
+                    | InspectedBuild::Cvns20090203
                     | InspectedBuild::Cmvs20070119
                     | InspectedBuild::Cmvs20071117
                     | InspectedBuild::Cmvs20080719

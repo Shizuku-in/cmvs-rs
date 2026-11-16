@@ -8,7 +8,7 @@ use std::{
 const USAGE: &str = "\
 Usage: cmvs-cursor <file.cur> [--planes <new-file> | --rgba <new-file>]
 
-Inspect a single-image, 8-bit or 32-bit BI_RGB Windows cursor.
+Inspect a single-image, 8-bit, 24-bit or 32-bit BI_RGB Windows cursor.
 Without export options, print metadata only. Does not display a native cursor.
 
 Options (choose at most one export):

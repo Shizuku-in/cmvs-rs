@@ -24,6 +24,7 @@ pub mod cmd {
     pub const MASK_CAPTURE: u16 = 0x589;
     pub const MENU_SCAN: u16 = 0x5a1;
     pub const SLOT_INFO: u16 = 0x5ac;
+    pub const MOVIE_PLAY: u16 = 0x4c0;
     pub const SYSTEM_SAVE_READ: u16 = 0x5c0;
     pub const SYSTEM_SAVE_WRITE: u16 = 0x5c1;
     pub const GET_CONFIG: u16 = 0x5ec;

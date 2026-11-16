@@ -288,6 +288,7 @@ pub struct MovieHost {
     /// The constructor (0x140014fc2..0x140014fd0) stores null in all three pointers.
     slots: [Option<SceneMovie>; MOVIE_SLOTS],
     player: Option<Movie>,
+    player_modal: bool,
     mgv_player: Option<MgvMovie>,
     mgv_factory: Option<Box<dyn crate::mgv::DecoderFactory>>,
     decode_frames: bool,
@@ -359,6 +360,10 @@ impl MovieHost {
     }
     pub fn has_player(&self) -> bool {
         self.player.is_some() || self.mgv_player.is_some()
+    }
+    /// Whether CVNS modal `0x20c0` movie playback is currently holding the VM.
+    pub fn has_cvns_modal_player(&self) -> bool {
+        self.player.is_some() && self.player_modal
     }
     pub fn player_image(&self) -> Option<&crate::raster::RgbaImage> {
         self.mgv_player
@@ -733,6 +738,7 @@ impl MovieHost {
     pub(crate) fn restore(&mut self, players: [Option<SceneMovie>; MOVIE_SLOTS]) -> bool {
         let had_player = self.has_player();
         self.player = None;
+        self.player_modal = false;
         self.mgv_player = None;
         self.slots = players;
         had_player

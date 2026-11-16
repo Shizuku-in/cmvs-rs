@@ -6,8 +6,8 @@ Platform-independent core of the CMVS engine reimplementation. Every host and to
 
 | Area | Modules |
 |---|---|
-| Formats | `cpz` (resource archives), `ps3` (PS2A scripts), `pb3`, `jbp1`, `jbpd` (images), `cmv`, `mgv` (movies), `save`, `system_save`, `snapshot` |
-| VM | `bytecode`, `vm`, `machine` (bounded multi-slot stepping), `dispatch` (system-command routing), `evaluate` |
+| Formats | `cpz` (resource archives, CPZ1–CPZ7), `ps3` (`PS2A`/`PSS0` scripts), `pb3`, `pb2`, `msk`, `jbp1`, `jbpd` (images), `cmv`, `mgv` (movies), `mv2` (MV2X audio), `save`, `system_save`, `snapshot` |
+| VM | `bytecode`, `vm`, `machine` (bounded multi-slot stepping), `dispatch` (system-command routing), `evaluate`, `cvns` |
 | Engine state | `scene`, `message`, `buttons`, `camera`, `effect_objects`, `settings`, `history`, `input`, `gesture` |
 | Rendering | `scene_render`: software compositor and the draw queue executed by GPU backends |
 | Hosting | `platform` (host requests), `resources`, `filesystem`, `runtime` (session and frame loop), `viewport` |

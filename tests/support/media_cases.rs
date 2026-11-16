@@ -1,4 +1,5 @@
 use cmvs_rs::dispatch::Capability;
+#[rustfmt::skip]
 pub fn cases() -> Vec<(u16, Vec<u32>, Capability)> {
     vec![
         (0x2280, vec![], Capability::Sequence),
@@ -8,33 +9,13 @@ pub fn cases() -> Vec<(u16, Vec<u32>, Capability)> {
         (0x2284, vec![], Capability::Sequence),
         (0x2285, vec![], Capability::Sequence),
         (0x2286, vec![16], Capability::Sequence),
-        (
-            0x2287,
-            vec![0, 1065353216, 1073741824, 1077936128, 32],
-            Capability::Sequence,
-        ),
+        (0x2287, vec![0, 1065353216, 1073741824, 1077936128, 32], Capability::Sequence),
         (0x2288, vec![11, 0, 32], Capability::Sequence),
-        (
-            0x2289,
-            vec![11, 1065353216, 1073741824, 1077936128, 0, 32],
-            Capability::Sequence,
-        ),
-        (
-            0x228a,
-            vec![11, 1065353216, 1073741824, 1077936128, 0, 32],
-            Capability::Sequence,
-        ),
-        (
-            0x2308,
-            vec![0, 11, 0, 3735928559, 0],
-            Capability::MovieScene,
-        ),
+        (0x2289, vec![11, 1065353216, 1073741824, 1077936128, 0, 32], Capability::Sequence),
+        (0x228a, vec![11, 1065353216, 1073741824, 1077936128, 0, 32], Capability::Sequence),
+        (0x2308, vec![0, 11, 0, 3735928559, 0], Capability::MovieScene),
         (0x2309, vec![0, 0, 0, 4294967295, 1], Capability::MovieStart),
-        (
-            0x230e,
-            vec![0, 11, 0, 3735928559, 0, 3],
-            Capability::MovieScene,
-        ),
+        (0x230e, vec![0, 11, 0, 3735928559, 0, 3], Capability::MovieScene),
         (0x230a, vec![0], Capability::MovieState),
         (0x230b, vec![0], Capability::MovieState),
         (0x230c, vec![0], Capability::MovieState),

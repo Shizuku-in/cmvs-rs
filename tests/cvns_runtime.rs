@@ -235,3 +235,285 @@ fn translated_common_entry_pops_one_word_and_returns_through_0414() {
     assert_eq!((vm.current_slot(), vm.pc()), (0, resume));
     assert_eq!(vm.stack().len_bytes(), 0);
 }
+
+fn push_const(code: &mut Vec<u8>, kind: u16, tag: u16, raw: u32) {
+    word(code, kind);
+    word(code, tag);
+    code.extend(raw.to_le_bytes());
+    word(code, 0x20f);
+    word(code, 0x430);
+}
+
+fn cvns_movie_fixture(tag: &str, audio_flag: u32) -> (std::path::PathBuf, Vec<u8>) {
+    let root = std::env::temp_dir().join(format!("cmvs-cvns-movie-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("data/pack")).unwrap();
+    std::fs::create_dir_all(root.join("data/video")).unwrap();
+    std::fs::create_dir_all(root.join("save")).unwrap();
+    let archive: Vec<u8> = include_str!("fixtures/cpz6-script.hex")
+        .trim()
+        .as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap())
+        .collect();
+    std::fs::write(root.join("data/pack/script.cpz"), archive).unwrap();
+    std::fs::write(
+        root.join("cvns.cfg"),
+        b"[SOUND_INFO]\nMASTER_VOLUME=80\nVIDEO_VOLUME=50\n",
+    )
+    .unwrap();
+
+    // Minimal 3-frame CMV3 at 24 fps with optional trailing Ogg entry.
+    let frames = 3u32;
+    let has_audio = audio_flag != 0;
+    let count = frames + u32::from(has_audio);
+    let resource_offset = 44 + count * 20;
+    let payload_size = frames * 4 + if has_audio { 4 } else { 0 };
+    let mut cmv = b"CMV3".to_vec();
+    for w in [
+        resource_offset,
+        resource_offset + payload_size,
+        0,
+        frames,
+        24,
+        1,
+        800,
+        600,
+        24,
+        audio_flag,
+    ] {
+        cmv.extend(w.to_le_bytes());
+    }
+    for i in 0..frames {
+        for w in [i, 4, 800 * 600 * 3, 2, i * 4] {
+            cmv.extend(w.to_le_bytes());
+        }
+    }
+    if has_audio {
+        for w in [frames, 4, 4, 0, frames * 4] {
+            cmv.extend(w.to_le_bytes());
+        }
+    }
+    for _ in 0..frames {
+        cmv.extend(b"JBP1");
+    }
+    if has_audio {
+        cmv.extend(b"OggS");
+    }
+    std::fs::write(root.join("data/video/op.cmv"), cmv).unwrap();
+
+    // text: 0 = "op.cmv\0", 7 = "data/video/\0"
+    // Program: 0x2025("data/video/", 0); 0x20c0("op.cmv"); 0x2040(peek=1); 0x2000
+    let mut code = vec![];
+    push_const(&mut code, 0x201, 0x120, 7);
+    push_const(&mut code, 0x200, 0x100, 0);
+    word(&mut code, 0x2025);
+    push_const(&mut code, 0x201, 0x120, 0);
+    word(&mut code, 0x20c0);
+    push_const(&mut code, 0x200, 0x100, 1);
+    word(&mut code, 0x2040);
+    word(&mut code, 0x2000);
+    let text = b"op.cmv\0data/video/\0";
+    let start_raw = script(&code, text);
+    std::fs::write(root.join("data/pack/start.pss"), &start_raw).unwrap();
+    (root, start_raw)
+}
+
+#[derive(Default)]
+struct SharedAudioLog(std::rc::Rc<std::cell::RefCell<cmvs_rs::audio::RecordingAudio>>);
+impl cmvs_rs::audio::AudioBackend for SharedAudioLog {
+    fn play(
+        &mut self,
+        request: &cmvs_rs::audio::AudioRequest,
+    ) -> Result<bool, Box<dyn std::error::Error>> {
+        self.0.borrow_mut().play(request)
+    }
+    fn configure_paths(
+        &mut self,
+        paths: &BTreeMap<(u16, u32), Vec<u8>>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.0.borrow_mut().configure_paths(paths)
+    }
+    fn configure_archive_parameters(
+        &mut self,
+        parameters: &BTreeMap<(u16, u32), cmvs_rs::cpz::Cpz7Parameters>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.0.borrow_mut().configure_archive_parameters(parameters)
+    }
+    fn configure_voice_ducking(
+        &mut self,
+        _settings: cmvs_rs::audio::VoiceDuckingSettings,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        Ok(())
+    }
+    fn set_output_enabled(&mut self, _enabled: bool) -> Result<(), Box<dyn std::error::Error>> {
+        Ok(())
+    }
+    fn play_movie_audio(
+        &mut self,
+        request: &cmvs_rs::audio::AudioRequest,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.0.borrow_mut().play_movie_audio(request)
+    }
+    fn stop_movie_audio(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.0.borrow_mut().stop_movie_audio()
+    }
+    fn movie_clock(
+        &self,
+    ) -> Result<Option<cmvs_rs::audio::MovieAudioClock>, Box<dyn std::error::Error>> {
+        self.0.borrow().movie_clock()
+    }
+}
+
+#[test]
+fn cvns_runtime_0x20c0_blocks_vm_scales_volume_and_consumes_skip_input() {
+    use cmvs_rs::{
+        audio::AudioRequest,
+        input::{CodeInput, KeyBindings},
+        platform::RecordingBackend,
+        profile::Registry,
+        runtime::{Runtime, RuntimeEvent, load_start},
+    };
+
+    let tick_until_yield = |run: &mut Runtime<'_>, platform: &mut RecordingBackend| loop {
+        match run.tick(platform).unwrap() {
+            RuntimeEvent::Progress => {}
+            RuntimeEvent::Yield => break,
+            other => panic!("unexpected runtime event: {other:?}"),
+        }
+    };
+
+    // 1. Natural playback end: holds VM while playing, uses 100-based CVNS movie volume, then resumes.
+    let (root, _) = cvns_movie_fixture("natural", 2);
+    let game = Registry::builtin()
+        .identify_game(&root, Some("cvns-20090203"))
+        .unwrap();
+    let start = load_start(&root, &game.files).unwrap();
+    let mut run = Runtime::new(&start, &root, &game, 0).unwrap();
+    let audio_log = std::rc::Rc::new(std::cell::RefCell::new(
+        cmvs_rs::audio::RecordingAudio::default(),
+    ));
+    run.set_audio_backend(Box::new(SharedAudioLog(audio_log.clone())))
+        .unwrap();
+    let mut platform = RecordingBackend::default();
+
+    tick_until_yield(&mut run, &mut platform);
+    assert!(run.movies().has_cvns_modal_player());
+    assert_eq!(run.machine().state().system_integer(0), Some(1));
+    // MASTER=80 * VIDEO=50 / 100 = 40% => (40 * 256 / 100) = 102.
+    assert_eq!(
+        audio_log.borrow().requests(),
+        &[AudioRequest::PlayMovieAudio {
+            path: b"data/video/op.cmv".to_vec(),
+            offset: 44 + 4 * 20 + 12,
+            size: 4,
+            volume: 102,
+        }]
+    );
+
+    let steps_at_open = run.steps();
+    run.advance_playback(40).unwrap();
+    assert!(run.movies().has_cvns_modal_player());
+    assert_eq!(run.tick(&mut platform).unwrap(), RuntimeEvent::Yield);
+    assert_eq!(run.steps(), steps_at_open);
+
+    run.advance_playback(100).unwrap();
+    assert!(!run.movies().has_cvns_modal_player());
+    tick_until_yield(&mut run, &mut platform);
+    assert!(run.steps() > steps_at_open);
+    let _ = std::fs::remove_dir_all(&root);
+
+    // 2. Skip input via left click (code 1) and Return (code 22) stops movie audio and consumes edge.
+    for (tag, skip_code, expected_mask) in [("click", 1usize, 1 << 24), ("enter", 22usize, 0)] {
+        let (root, _) = cvns_movie_fixture(tag, 2);
+        let game = Registry::builtin()
+            .identify_game(&root, Some("cvns-20090203"))
+            .unwrap();
+        let start = load_start(&root, &game.files).unwrap();
+        let mut run = Runtime::new(&start, &root, &game, 0).unwrap();
+        let audio_log = std::rc::Rc::new(std::cell::RefCell::new(
+            cmvs_rs::audio::RecordingAudio::default(),
+        ));
+        run.set_audio_backend(Box::new(SharedAudioLog(audio_log.clone())))
+            .unwrap();
+        let mut platform = RecordingBackend::default();
+        let mut codes = CodeInput::default();
+        let bindings = KeyBindings::default();
+
+        tick_until_yield(&mut run, &mut platform);
+        assert!(run.movies().has_cvns_modal_player());
+        let steps_at_open = run.steps();
+
+        let mut now = [false; 128];
+        now[skip_code] = true;
+        codes.update(&bindings, &now, run.input_mut());
+        // Advances past 0x2040(peek=1) into 0x2000; 0x2040 must NOT see the consumed skip press.
+        tick_until_yield(&mut run, &mut platform);
+        assert!(!run.movies().has_cvns_modal_player());
+        assert!(run.steps() > steps_at_open);
+        assert_eq!(run.machine().state().system_integer(0), Some(expected_mask));
+        assert_eq!(
+            audio_log.borrow().requests().last(),
+            Some(&AudioRequest::StopMovieAudio)
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[test]
+fn cvns_0x21ab_save_comment_updates_csp_slot_and_skips_slot_zero() {
+    use cmvs_rs::{
+        platform::RecordingBackend,
+        profile::Registry,
+        runtime::{Runtime, RuntimeEvent, load_start},
+    };
+
+    let (root, _) = cvns_movie_fixture("save-comment", 0);
+    // 0x2026(0, "data/save/"); 0x21ab(0, text[11]); 0x21ab(1, text[11]); 0x2000
+    // text: 0 = "data/save/\0", 11 = "comment!\0"
+    let mut code = vec![];
+    push_const(&mut code, 0x201, 0x120, 0);
+    push_const(&mut code, 0x200, 0x100, 0);
+    word(&mut code, 0x2026);
+    for slot in [0u32, 1] {
+        push_const(&mut code, 0x201, 0x120, 11);
+        push_const(&mut code, 0x200, 0x100, slot);
+        word(&mut code, 0x21ab);
+    }
+    word(&mut code, 0x2000);
+    std::fs::write(
+        root.join("data/pack/start.pss"),
+        script(&code, b"data/save/\0comment!\0"),
+    )
+    .unwrap();
+
+    for profile in ["cvns-20050727", "cvns-20090203"] {
+        let game = Registry::builtin()
+            .identify_game(&root, Some(profile))
+            .unwrap();
+        let start = load_start(&root, &game.files).unwrap();
+        let mut run = Runtime::new(&start, &root, &game, 0).unwrap();
+        let user = root.with_extension(format!("user-{profile}"));
+        run.set_user_data_directory(&user).unwrap();
+        let mut css0 = vec![0x5au8; 700];
+        css0[..4].copy_from_slice(b"CSS0");
+        let mut csp1 = vec![0x5au8; 900];
+        csp1[..4].copy_from_slice(b"CSP1");
+        std::fs::write(user.join("save000.dat"), &css0).unwrap();
+        std::fs::write(user.join("save001.dat"), &csp1).unwrap();
+
+        let mut platform = RecordingBackend::default();
+        while run.tick(&mut platform).unwrap() != RuntimeEvent::Yield {}
+        assert_eq!(run.machine().state().system_integer(0), Some(1));
+
+        assert_eq!(std::fs::read(user.join("save000.dat")).unwrap(), css0);
+        let mut expected = csp1;
+        expected[272..281].copy_from_slice(b"comment!\0");
+        assert_eq!(std::fs::read(user.join("save001.dat")).unwrap(), expected);
+        drop(run);
+        let _ = std::fs::remove_dir_all(&user);
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}

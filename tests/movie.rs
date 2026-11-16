@@ -574,6 +574,81 @@ fn initial_frame_failure_preserves_vm_and_sends_no_audio() {
 }
 
 #[test]
+fn cvns_modal_player_yields_allows_silent_cmv3_and_clears_on_missing_or_end() {
+    use cmvs_rs::{
+        cvns::CommandMap,
+        dispatch::{self, Flow, Hosts, MoviePlayerHosts},
+        profile::Semantics,
+    };
+
+    let code = player_code(0);
+    let script = program(&code, b"op.cmv\0");
+    let map = CommandMap::new([(0xc0, cmvs_rs::cvns::cmd::MOVIE_PLAY)]);
+
+    // Valid CMV3 with audio_flag == 0 and no Ogg entry: modal CVNS yields (0xc004) and advances PC.
+    let mut silent_cmv3 = cmv(3, 24, 1, false);
+    silent_cmv3[..4].copy_from_slice(b"CMV3");
+    silent_cmv3[40..44].copy_from_slice(&0u32.to_le_bytes());
+
+    let mut vm = Machine::new(&script).unwrap();
+    vm.set_command_map(Some(map.clone()));
+    pending(&mut vm);
+    let mut files = Files::default();
+    files.0.insert(b"op.cmv".to_vec(), silent_cmv3);
+    let mut movies = MovieHost::default();
+    let mut audio = RecordingAudio::default();
+    let flow = dispatch::run(
+        Semantics::Root,
+        &mut vm,
+        &mut Hosts {
+            movies: Some(&mut movies),
+            movie_player: Some(MoviePlayerHosts {
+                source: &mut files,
+                settings: AudioSettings::default(),
+                backend: &mut audio,
+            }),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(flow, Some(Flow::Yield));
+    assert_eq!(vm.stack().len_bytes(), 0);
+    assert_eq!(vm.state().system_integer(0), Some(1));
+    assert!(movies.has_cvns_modal_player());
+    assert_eq!(audio.requests(), &[AudioRequest::StopMovieAudio]);
+
+    // Natural completion clears both player and modal flag.
+    movies.advance(125);
+    assert!(!movies.has_player());
+    assert!(!movies.has_cvns_modal_player());
+
+    // Missing movie file yields once with result 0 and does not hold the VM modally.
+    let mut vm = Machine::new(&script).unwrap();
+    vm.set_command_map(Some(map));
+    pending(&mut vm);
+    let mut movies = MovieHost::default();
+    let mut audio = RecordingAudio::default();
+    let flow = dispatch::run(
+        Semantics::Root,
+        &mut vm,
+        &mut Hosts {
+            movies: Some(&mut movies),
+            movie_player: Some(MoviePlayerHosts {
+                source: &mut Files::default(),
+                settings: AudioSettings::default(),
+                backend: &mut audio,
+            }),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(flow, Some(Flow::Yield));
+    assert_eq!(vm.state().system_integer(0), Some(0));
+    assert!(!movies.has_cvns_modal_player());
+    assert_eq!(audio.requests(), &[AudioRequest::StopMovieAudio]);
+}
+
+#[test]
 fn audio_clock_is_absolute_and_does_not_accumulate_wall_time() {
     use cmvs_rs::audio::MovieAudioClock;
     let script = program(&player_code(0), b"a.cmv\0");

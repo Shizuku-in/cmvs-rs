@@ -765,6 +765,64 @@ fn cursor_argb_preserves_alpha_orientation_and_uses_mask_only_when_alpha_is_abse
 }
 
 #[test]
+fn cursor_24bit_bi_rgb_handles_row_padding_bottom_up_order_and_and_mask() {
+    // 3x2 24-bit CUR: xor_stride = 12 (9 pixel bytes + 3 padding), and_stride = 4.
+    let mut raw = vec![0u8; 22 + 40 + 24 + 8];
+    raw[2] = 2;
+    raw[4] = 1;
+    raw[6] = 3;
+    raw[7] = 2;
+    raw[10] = 2; // hotspot x
+    raw[12] = 1; // hotspot y
+    put(&mut raw, 14, 40 + 24 + 8);
+    put(&mut raw, 18, 22);
+    put(&mut raw, 22, 40);
+    put(&mut raw, 26, 3);
+    put(&mut raw, 30, 4);
+    raw[34] = 1;
+    raw[36] = 24;
+    // Bottom row (y=0 in DIB -> visual row 1): BGR=(1,2,3), (4,5,6), (0,0,0) + padding 0xff
+    raw[62..74].copy_from_slice(&[1, 2, 3, 4, 5, 6, 0, 0, 0, 0xff, 0xff, 0xff]);
+    // Top row (y=1 in DIB -> visual row 0): BGR=(10,20,30), (0,0,0), (40,50,60)
+    raw[74..86].copy_from_slice(&[10, 20, 30, 0, 0, 0, 40, 50, 60, 0, 0, 0]);
+    // AND mask bottom-up: row 0 = 001 (x=2 transparent), row 1 = 010 (x=1 transparent)
+    raw[86] = 0b0010_0000;
+    raw[90] = 0b0100_0000;
+
+    let cursor = CursorBitmap::decode(&raw).unwrap();
+    assert_eq!(
+        (cursor.width(), cursor.height(), cursor.hotspot()),
+        (3, 2, (2, 1))
+    );
+    assert_eq!(cursor.alpha(), None);
+    assert_eq!(
+        cursor.xor_rgb(),
+        [
+            [30, 20, 10],
+            [0, 0, 0],
+            [60, 50, 40],
+            [3, 2, 1],
+            [6, 5, 4],
+            [0, 0, 0],
+        ]
+    );
+    assert_eq!(cursor.and_mask(), [false, true, false, false, false, true]);
+    assert_eq!(
+        cursor.rgba().unwrap(),
+        [
+            30, 20, 10, 255, 0, 0, 0, 0, 60, 50, 40, 255, 3, 2, 1, 255, 6, 5, 4, 255, 0, 0, 0, 0,
+        ]
+    );
+
+    let mut with_palette = raw.clone();
+    put(&mut with_palette, 54, 1);
+    assert!(CursorBitmap::decode(&with_palette).is_err());
+    for end in 0..raw.len() {
+        assert!(CursorBitmap::decode(&raw[..end]).is_err());
+    }
+}
+
+#[test]
 fn cursor_truncation_invalid_ranges_and_unsupported_variants_fail() {
     let raw = cur();
     for end in 0..raw.len() {

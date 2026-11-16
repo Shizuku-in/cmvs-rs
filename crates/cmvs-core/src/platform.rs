@@ -91,7 +91,9 @@ impl From<std::io::Error> for PathError {
 }
 
 /// A bounded ASCII game-relative path, split on `/` or `\`, that must resolve inside the
-/// canonical `root`. Repeated interior separators name the same directory. A missing
+/// canonical `root`. Repeated interior separators name the same directory. If exact-case
+/// resolution fails with `NotFound` and `fs` provides directory listings, components match
+/// case-insensitively (matching Windows game expectations on case-sensitive hosts). A missing
 /// file surfaces as `PathError::Io` with `ErrorKind::NotFound`.
 pub fn resolve_under_with_fs(
     fs: &dyn HostFs,
@@ -110,7 +112,8 @@ pub fn resolve_under_with_fs(
     if separator(name[0]) || separator(name[name.len() - 1]) {
         return Err(FormatError("invalid game path component").into());
     }
-    let mut path = root.to_path_buf();
+    let mut parts = Vec::new();
+    let mut direct = root.to_path_buf();
     for part in name
         .split(|&b| separator(b))
         .filter(|part| !part.is_empty())
@@ -118,16 +121,45 @@ pub fn resolve_under_with_fs(
         if part == b"." || part == b".." {
             return Err(FormatError("invalid game path component").into());
         }
-        path.push(
-            std::str::from_utf8(part)
-                .map_err(|_| FormatError("game path must be a bounded ASCII relative path"))?,
-        );
+        let part = std::str::from_utf8(part)
+            .map_err(|_| FormatError("game path must be a bounded ASCII relative path"))?;
+        direct.push(part);
+        parts.push(part);
     }
-    let path = fs.canonicalize(&path)?;
-    if !path.starts_with(root) {
+    let resolved = match fs.canonicalize(&direct) {
+        Ok(path) => path,
+        Err(not_found) if not_found.kind() == std::io::ErrorKind::NotFound => {
+            let mut cur = root.to_path_buf();
+            for &part in &parts {
+                let exact = cur.join(part);
+                if fs.try_exists(&exact).unwrap_or(false) {
+                    cur = exact;
+                    continue;
+                }
+                let canon_cur = fs.canonicalize(&cur)?;
+                if !canon_cur.starts_with(root) {
+                    return Err(FormatError("game path resolves outside root").into());
+                }
+                let Some(mut names) = fs.read_dir_names(&canon_cur)? else {
+                    return Err(not_found.into());
+                };
+                names.sort();
+                let Some(matched) = names
+                    .into_iter()
+                    .find(|entry| entry.to_str().is_some_and(|s| s.eq_ignore_ascii_case(part)))
+                else {
+                    return Err(not_found.into());
+                };
+                cur = canon_cur.join(matched);
+            }
+            fs.canonicalize(&cur)?
+        }
+        Err(err) => return Err(err.into()),
+    };
+    if !resolved.starts_with(root) {
         return Err(FormatError("game path resolves outside root").into());
     }
-    Ok(path)
+    Ok(resolved)
 }
 
 /// [`resolve_under_with_fs`] using [`StdFs`](crate::filesystem::StdFs).

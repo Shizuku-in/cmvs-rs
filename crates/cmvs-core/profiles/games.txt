@@ -180,3 +180,21 @@ archive data/pack/script.cpz sha256=8c2c749799a4592e6a185a098d6da16d3c347b568874
 game-id 0x00000000
 executable cvns.exe sha256=8e6044466b928d77f0a94a0d0f32fe48190596bf628115598881c2aa3a4885aa
 end
+
+game aruto
+profile cvns-20090203
+start data/pack/start.pss sha256=8733206a83c7d249ab9245d85d9dfe0b7125c3d2d85e0b2f730000d79dd35bc9
+archive data/pack/script.cpz sha256=b62efd2250283532e8ac3a01d1ce46846b28900811a26f58d8296faf8d22d5f7
+# Not yet established which CVNS command, if any, carries a game ID; cvns.cfg has GAME_ID=1005.
+game-id 0x00000000
+executable cvns.exe sha256=8e6044466b928d77f0a94a0d0f32fe48190596bf628115598881c2aa3a4885aa
+end
+
+game akifd
+profile cvns-20050727
+start data/pack/start.pss sha256=bc23cdd6e62f9a09953169b4fb71dcc3b6b5d58c4bd7aa9ccd501128dba2483a
+archive data/pack/script.cpz sha256=d380b8065fdf05440047adc74b36d59cab345486e2534d0e06fb195ecab8c699
+# Not yet established which CVNS command, if any, carries a game ID; cvns.cfg has GAME_ID=1003.
+game-id 0x00000000
+executable cvns.exe sha256=fd475dda79e4a559d934b214494d314539915afde7a910b3d35269dd9cd4a028
+end

@@ -221,6 +221,11 @@ pub trait HostFs: Send + Sync {
             },
         )
     }
+    /// List entry filenames in `dir` when the backend supports directory scans
+    /// (`Ok(None)` skips case-insensitive path resolution fallback).
+    fn read_dir_names(&self, _dir: &Path) -> io::Result<Option<Vec<std::ffi::OsString>>> {
+        Ok(None)
+    }
 }
 
 /// Convert [`std::fs::Metadata`] to [`Metadata`] for hosts wrapping standard files.
@@ -347,6 +352,14 @@ impl HostFs for StdFs {
     fn session_id(&self) -> u32 {
         std::process::id()
     }
+
+    fn read_dir_names(&self, dir: &Path) -> io::Result<Option<Vec<std::ffi::OsString>>> {
+        let mut names = Vec::new();
+        for entry in std::fs::read_dir(dir)? {
+            names.push(entry?.file_name());
+        }
+        Ok(Some(names))
+    }
 }
 
 /// Shared [`StdFs`] instance for callers using default host storage.
@@ -451,6 +464,10 @@ mod tests {
 
         fn session_id(&self) -> u32 {
             42
+        }
+
+        fn read_dir_names(&self, dir: &Path) -> io::Result<Option<Vec<std::ffi::OsString>>> {
+            StdFs.read_dir_names(dir)
         }
     }
 

@@ -1242,6 +1242,10 @@ impl AudioHost {
         self.cvns_volumes[kind]
     }
 
+    pub(crate) fn cvns_movie_volume(&self) -> u32 {
+        Self::cvns_percent_to_gain(self.cvns_volumes[0] * self.cvns_volumes[4] / 100)
+    }
+
     fn cvns_percent_to_gain(percent: u32) -> u32 {
         (percent.min(100) * 256 / 100).min(256)
     }

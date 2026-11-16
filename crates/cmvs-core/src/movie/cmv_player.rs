@@ -10,7 +10,8 @@ use super::{MovieHost, MovieSource};
 use crate::{
     audio::{AudioBackend, AudioRequest, AudioSettings, MovieAudioClock},
     cmv::CmvIndex,
-    dispatch::Call,
+    cvns::cmd::MOVIE_PLAY as CVNS_MOVIE_PLAY,
+    dispatch::{Call, Flow},
     evaluate::error,
     machine::Machine,
 };
@@ -59,6 +60,7 @@ impl MovieHost {
         };
         if clock == Some(MovieAudioClock::Ended) {
             self.player = None;
+            self.player_modal = false;
             return Ok(());
         }
         let elapsed = match clock {
@@ -80,6 +82,7 @@ impl MovieHost {
         };
         if target >= movie.index.header.max_sequence {
             self.player = None;
+            self.player_modal = false;
             return Ok(());
         }
         let movie = self.player.as_mut().expect("checked active player");
@@ -93,11 +96,28 @@ impl MovieHost {
         }
         Ok(())
     }
+
+    pub(crate) fn stop_player(
+        &mut self,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        if self.player.is_some() {
+            backend.stop_movie_audio()?;
+        }
+        self.player = None;
+        self.player_modal = false;
+        Ok(())
+    }
+
     /// 0x20c0 / 0x140071500: SP-4 name; destroys any player, opens root + 0x2015 entry +
     /// name, starts the soundtrack at (+1612 * +1628) >> 8 and sets system result 0 to
     /// whether the file opened; returns 0x4004. 0x20c1 / 0x140071680 destroys the player
     /// (stopping channel 2) and returns 0x4000. 0x20c2 / 0x1400716d0 sets system result 0
     /// to the frame index, or -1 without a player, and returns 0x4000.
+    ///
+    /// CVNS `0x20c0` (`CVNS_MOVIE_PLAY` / `0x459850`) shares open/audio/frame-0 setup but
+    /// returns `0xc004` (`Flow::Yield`) and holds the VM in `sub_405960` until completion or
+    /// skip input.
     pub fn try_handle_player(
         &mut self,
         vm: &mut Machine<'_>,
@@ -105,9 +125,12 @@ impl MovieHost {
         settings: AudioSettings,
         backend: &mut dyn AudioBackend,
     ) -> Result<bool, Box<dyn Error>> {
-        let Some((pc, command @ 0xc0..=0xc2)) = vm.pending_system() else {
+        let Some((pc, command)) = vm.pending_system() else {
             return Ok(false);
         };
+        if !matches!(command, 0xc0..=0xc2 | CVNS_MOVIE_PLAY) {
+            return Ok(false);
+        }
         self.handle_player(&mut Call::new(vm, pc, command), source, settings, backend)?;
         Ok(true)
     }
@@ -118,11 +141,12 @@ impl MovieHost {
         source: &mut dyn MovieSource,
         settings: AudioSettings,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<Flow, Box<dyn Error>> {
         let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
         match command {
-            0xc0 => {
+            0xc0 | CVNS_MOVIE_PLAY => {
+                let modal = command == CVNS_MOVIE_PLAY;
                 let raw = call.argument(4, "movie name")?;
                 let name = call.vm.resolve_string(raw)?;
                 let opened = source.open(&name)?;
@@ -135,23 +159,27 @@ impl MovieHost {
                     None
                 };
                 if let Some((path, index)) = &opened {
-                    // 0x1400397e0/0x1400397b0 fetch the soundtrack; a CMV without one is the
-                    // MOG_INputMemory crash RxCMVS notes, so it is rejected here.
-                    let audio = index
-                        .audio()
-                        .ok_or_else(|| error(pc, op, "CMV without an Ogg soundtrack"))?;
-                    backend.play_movie_audio(&AudioRequest::PlayMovieAudio {
-                        path: path.clone(),
-                        offset: audio.file_offset(&index.header),
-                        size: audio.stored_size,
-                        volume: settings.master.wrapping_mul(settings.movie) >> 8,
-                    })?;
+                    if let Some(audio) = index.audio() {
+                        backend.play_movie_audio(&AudioRequest::PlayMovieAudio {
+                            path: path.clone(),
+                            offset: audio.file_offset(&index.header),
+                            size: audio.stored_size,
+                            volume: settings.master.wrapping_mul(settings.movie) >> 8,
+                        })?;
+                    } else if modal && index.header.audio_flag == 0 {
+                        // cvns-20090203 0x43e760 skips soundtrack setup when header +40 == 0.
+                        backend.stop_movie_audio()?;
+                    } else {
+                        // 0x1400397e0/0x1400397b0 fetch the soundtrack; a CMV without one is the
+                        // MOG_INputMemory crash RxCMVS notes, so it is rejected here.
+                        return Err(error(pc, op, "CMV without an Ogg soundtrack").into());
+                    }
                 } else {
                     // The failed player is destroyed at once; its destructor stops channel 2
                     // (the open stored the device pointer first).
                     backend.stop_movie_audio()?;
                 }
-                call.complete(0x4004)?;
+                let flow = call.finish(if modal { 0xc004 } else { 0x4004 })?;
                 call.vm
                     .state_mut()
                     .set_system_integer(0, u32::from(opened.is_some()))
@@ -163,24 +191,24 @@ impl MovieHost {
                     elapsed: 0,
                     image,
                 });
+                self.player_modal = modal && self.player.is_some();
+                Ok(flow)
             }
             0xc1 => {
-                if self.player.is_some() {
-                    backend.stop_movie_audio()?;
-                }
-                call.complete(0x4000)?;
-                self.player = None;
+                self.stop_player(backend)?;
+                call.finish(0x4000).map_err(Into::into)
             }
-            _ => {
+            0xc2 => {
                 let frame = self.player.as_ref().map_or(u32::MAX, |movie| movie.frame);
-                call.complete(0x4000)?;
+                let flow = call.finish(0x4000)?;
                 call.vm
                     .state_mut()
                     .set_system_integer(0, frame)
                     .expect("slot 0 exists");
+                Ok(flow)
             }
+            _ => Err(error(pc, op, "movie player command is not implemented").into()),
         }
-        Ok(())
     }
 
     /// Frame update (main loop 0x14000e4a4 -> 0x140037bb0): a later frame index is decoded
@@ -198,6 +226,7 @@ impl MovieHost {
         }
         if target >= movie.index.header.max_sequence {
             self.player = None;
+            self.player_modal = false;
         } else {
             movie.frame = target;
             movie.image = None;

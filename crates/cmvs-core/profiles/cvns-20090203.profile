@@ -197,7 +197,7 @@ binary x86 file=cvns.exe sha256=8e6044466b928d77f0a94a0d0f32fe48190596bf62811559
 0x20bd reviewed 0x5b4a0 map=0x24bd review=games/miharu/README.md
 0x20be reviewed 0x5b550 map=0x24be review=games/miharu/README.md
 0x20bf reviewed 0x5b600 map=0x24bf review=games/miharu/README.md
-0x20c0 unreviewed 0x59850
+0x20c0 reviewed 0x59850 map=0x24c0 review=games/aruto/README.md
 0x20c1 noop 0x54060
 0x20c2 noop 0x54060
 0x20c3 noop 0x54060
@@ -432,7 +432,7 @@ binary x86 file=cvns.exe sha256=8e6044466b928d77f0a94a0d0f32fe48190596bf62811559
 0x21a8 noop 0x54060
 0x21a9 reviewed 0x67d60 map=0x22b9 review=games/miharu/README.md
 0x21aa unreviewed 0x67db0
-0x21ab reviewed 0x67e30 map=0x22bc review=games/miharu/README.md
+0x21ab reviewed 0x67e30 map=0x25ab review=games/miharu/README.md
 0x21ac reviewed 0x67ff0 map=0x25ac review=games/miharu/README.md
 0x21ad noop 0x54060
 0x21ae reviewed 0x683c0 map=0x22bb review=games/miharu/README.md

@@ -197,7 +197,9 @@ fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLa
         Some(InspectedBuild::Cmvs20160201 | InspectedBuild::Cmvs20171114) => {
             Some(SnapshotLayout::TextV3)
         }
-        Some(InspectedBuild::Cvns20090203) => Some(SnapshotLayout::Cvns20090203),
+        Some(InspectedBuild::Cvns20050727 | InspectedBuild::Cvns20090203) => {
+            Some(SnapshotLayout::Cvns20090203)
+        }
         None if profile.base.is_none() => Some(SnapshotLayout::TextV3),
         None => None,
     }
@@ -1260,7 +1262,7 @@ impl Runtime<'_> {
         Ok(())
     }
 
-    /// Old 0x22bc (and CVNS 0x21ab) patches only the 256-byte comment field in the 600-byte header.
+    /// Old 0x22bc / CVNS 0x25ab (0x21ab) patches only the 256-byte comment field in the 600-byte header.
     pub(super) fn handle_set_slot_comment(
         &mut self,
         request: &RuntimeCall,
@@ -1269,7 +1271,12 @@ impl Runtime<'_> {
     ) -> Result<(), Box<dyn Error>> {
         let comment = self.machine.resolve_string(text)?;
         if comment.len() >= 256 {
-            return Err(error(request.pc(), 0x22bc, "save comment exceeds native capacity").into());
+            return Err(error(
+                request.pc(),
+                request.command() + 0x2000,
+                "save comment exceeds native capacity",
+            )
+            .into());
         }
         let family = self.save_family();
         let mut changed = false;

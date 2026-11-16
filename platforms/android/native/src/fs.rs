@@ -104,4 +104,8 @@ impl HostFs for AndroidFs {
     fn session_id(&self) -> u32 {
         StdFs.session_id()
     }
+
+    fn read_dir_names(&self, dir: &Path) -> io::Result<Option<Vec<std::ffi::OsString>>> {
+        StdFs.read_dir_names(dir)
+    }
 }

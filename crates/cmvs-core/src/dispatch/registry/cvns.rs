@@ -1,7 +1,7 @@
 //! CVNS-only command registrations (`0x400 + source`, i.e. `crate::cvns::CVNS_ONLY..=LAST_COMMAND`).
 //! Evidence in `docs/games/miharu/README.md`.
 use crate::dispatch::handlers::input::root_input;
-use crate::dispatch::handlers::media::{cvns_master_volume, root_audio};
+use crate::dispatch::handlers::media::{cvns_master_volume, root_audio, root_movie_player};
 use crate::dispatch::handlers::platform::{
     cvns_message_dialog, root_platform, variant_text_dialog,
 };
@@ -9,8 +9,8 @@ use crate::dispatch::handlers::scene::{
     root_cvns_image, root_cvns_scene, root_cvns_wait, root_scene,
 };
 use crate::dispatch::handlers::services::{
-    activation_pass, cvns_config, cvns_timers, polar_point, root_bootstrap, root_history,
-    root_strings,
+    activation_pass, cartesian_to_polar, cvns_config, cvns_timers, polar_point, root_bootstrap,
+    root_history, root_strings,
 };
 use crate::dispatch::handlers::storage::{
     root_popup, root_runtime, root_save_menu, root_script_control, root_system_read,
@@ -329,6 +329,12 @@ pub static CVNS: &[Entry] = &[
         handler: root_audio,
     },
     Entry {
+        command: 0x4c0,
+        name: "CVNS play full-screen movie",
+        capability: Capability::MoviePlayer,
+        handler: root_movie_player,
+    },
+    Entry {
         command: 0x4c5,
         name: "CVNS play auxiliary SE",
         capability: Capability::Audio,
@@ -351,6 +357,18 @@ pub static CVNS: &[Entry] = &[
         name: "CVNS integer polar point",
         capability: Capability::Math,
         handler: polar_point,
+    },
+    Entry {
+        command: 0x4ec,
+        name: "CVNS centidegree polar point",
+        capability: Capability::Math,
+        handler: polar_point,
+    },
+    Entry {
+        command: 0x4ed,
+        name: "CVNS centidegree cartesian to polar",
+        capability: Capability::Math,
+        handler: cartesian_to_polar,
     },
     Entry {
         command: 0x4fb,
@@ -405,6 +423,12 @@ pub static CVNS: &[Entry] = &[
         name: "CVNS scan save menu",
         capability: Capability::SaveMenu,
         handler: root_save_menu,
+    },
+    Entry {
+        command: 0x5ab,
+        name: "CVNS save comment",
+        capability: Capability::Runtime,
+        handler: root_runtime,
     },
     Entry {
         command: 0x5ac,
@@ -1175,6 +1199,18 @@ pub static CVNS: &[Entry] = &[
         handler: root_cvns_messages,
     },
     Entry {
+        command: 0x534,
+        name: "CVNS query local message image size",
+        capability: Capability::Windows,
+        handler: root_cvns_messages,
+    },
+    Entry {
+        command: 0x535,
+        name: "CVNS tint local message image HSL",
+        capability: Capability::Windows,
+        handler: root_cvns_messages,
+    },
+    Entry {
         command: 0x538,
         name: "CVNS create local message sprite",
         capability: Capability::Windows,
@@ -1205,6 +1241,12 @@ pub static CVNS: &[Entry] = &[
         handler: root_cvns_messages,
     },
     Entry {
+        command: 0x53e,
+        name: "CVNS set local message sprite alpha",
+        capability: Capability::Windows,
+        handler: root_cvns_messages,
+    },
+    Entry {
         command: 0x540,
         name: "CVNS set local message sprite origin",
         capability: Capability::Windows,
@@ -1219,6 +1261,12 @@ pub static CVNS: &[Entry] = &[
     Entry {
         command: 0x545,
         name: "CVNS set local sprite keyframe",
+        capability: Capability::Windows,
+        handler: root_cvns_messages,
+    },
+    Entry {
+        command: 0x548,
+        name: "CVNS set local sprite raw source",
         capability: Capability::Windows,
         handler: root_cvns_messages,
     },

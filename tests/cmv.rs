@@ -79,3 +79,17 @@ fn malformed_containers_are_rejected() {
         assert!(CmvIndex::read(&mut Cursor::new(bytes)).is_err());
     }
 }
+
+#[test]
+fn cmv3_and_cmv4_mark_jbp1_frames_with_same_container_layout() {
+    for magic in [*b"CMV3", *b"CMV4"] {
+        let mut bytes = cmv(2, 24, 1);
+        bytes[..4].copy_from_slice(&magic);
+        let index = CmvIndex::read(&mut Cursor::new(&bytes)).unwrap();
+        assert!(index.jbp1);
+        assert!(!index.alpha);
+        assert_eq!(index.header.max_sequence, 2);
+        let scene = CmvIndex::read_scene(&mut Cursor::new(&bytes)).unwrap();
+        assert_eq!(scene, index);
+    }
+}

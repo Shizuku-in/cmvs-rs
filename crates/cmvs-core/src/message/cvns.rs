@@ -570,6 +570,14 @@ impl CvnsMessageHost {
         }
     }
 
+    fn check_local_image(pc: usize, op: u16, slot: u32) -> Result<usize, DecodeError> {
+        if (slot as usize) < CVNS_LOCAL_IMAGES {
+            Ok(slot as usize)
+        } else {
+            Err(error(pc, op, "CVNS local image outside 0..5"))
+        }
+    }
+
     fn check_button_slot(pc: usize, op: u16, slot: u32) -> Result<usize, DecodeError> {
         if (slot as usize) < CVNS_INLINE_BUTTONS {
             Ok(slot as usize)
@@ -1415,18 +1423,46 @@ impl CvnsMessageHost {
                 state.set_system_integer(4, msg.h as u32).expect("slot 4");
             }
 
-            // Message local images / sprites / inline buttons 0x2131, 0x2138..=0x2157
+            // Message local images / sprites / inline buttons 0x2131, 0x2134..=0x2157
             0x531 => {
                 let (m, _) =
                     self.require_msg_win_mut(call.pc, op, call.argument(4, "message slot")?)?;
-                let img = call.argument(8, "local image")? as usize;
-                if img >= CVNS_LOCAL_IMAGES {
-                    return Err(error(call.pc, op, "CVNS local image outside 0..5"));
-                }
+                let img = Self::check_local_image(call.pc, op, call.argument(8, "local image")?)?;
                 call.complete(0x4008)?;
                 let msg = self.messages[m].as_mut().expect("checked");
                 msg.local_images[img] = None;
                 msg.rebuild_cached_objects();
+            }
+            0x534 => {
+                let (m, _) =
+                    self.require_msg_win_mut(call.pc, op, call.argument(4, "message slot")?)?;
+                let img = Self::check_local_image(call.pc, op, call.argument(8, "local image")?)?;
+                call.complete(0x4008)?;
+                let msg = self.messages[m].as_ref().expect("checked");
+                let state = call.vm.state_mut();
+                if let Some(layer) = msg.local_images[img].as_ref() {
+                    state.set_system_integer(0, 1).expect("slot 0");
+                    state.set_system_integer(1, layer.width()).expect("slot 1");
+                    state.set_system_integer(2, layer.height()).expect("slot 2");
+                } else {
+                    state.set_system_integer(0, 0).expect("slot 0");
+                }
+            }
+            0x535 => {
+                let (m, _) =
+                    self.require_msg_win_mut(call.pc, op, call.argument(4, "message slot")?)?;
+                let img = Self::check_local_image(call.pc, op, call.argument(8, "local image")?)?;
+                let layer_idx = call.argument(12, "layer")?;
+                let src_c = call.argument(16, "src color")?;
+                let dst_c = call.argument(20, "dst color")?;
+                call.complete(0x4014)?;
+                let msg = self.messages[m].as_mut().expect("checked");
+                if (layer_idx == 0 || layer_idx >= 16)
+                    && let Some(layer) = msg.local_images[img].as_mut()
+                {
+                    crate::scene::cvns::apply_hsl_tint(layer, src_c, dst_c);
+                    msg.rebuild_cached_objects();
+                }
             }
             0x538 => {
                 let (m, _) =
@@ -1507,6 +1543,19 @@ impl CvnsMessageHost {
                 }
                 msg.rebuild_cached_objects();
             }
+            0x53e => {
+                let (m, sp) = self.require_local_sprite_mut(
+                    call.pc,
+                    op,
+                    call.argument(4, "message slot")?,
+                    call.argument(8, "local sprite")?,
+                )?;
+                let alpha = call.argument(12, "alpha")?.min(256) as u16;
+                call.complete(0x400c)?;
+                let msg = self.messages[m].as_mut().expect("checked");
+                msg.local_sprites[sp].as_mut().expect("checked").alpha = alpha;
+                msg.rebuild_cached_objects();
+            }
             0x540 => {
                 let (m, sp) = self.require_local_sprite_mut(
                     call.pc,
@@ -1566,6 +1615,35 @@ impl CvnsMessageHost {
                         oy,
                         playlist,
                     );
+            }
+            0x548 => {
+                let (m, sp) = self.require_local_sprite_mut(
+                    call.pc,
+                    op,
+                    call.argument(4, "message slot")?,
+                    call.argument(8, "local sprite")?,
+                )?;
+                let img = call.argument(12, "local image")?;
+                let sx = call.argument(16, "sx")? as i16;
+                let sy = call.argument(20, "sy")? as i16;
+                let sw = call.argument(24, "sw")? as i16;
+                let sh = call.argument(28, "sh")? as i16;
+                call.complete(0x401c)?;
+                let msg = self.messages[m].as_mut().expect("checked");
+                msg.local_sprites[sp]
+                    .as_mut()
+                    .expect("checked")
+                    .set_src_rect(
+                        img as i16,
+                        i32::from(sx),
+                        i32::from(sy),
+                        i32::from(sw),
+                        i32::from(sh),
+                        (0, 0),
+                        false,
+                        true,
+                    );
+                msg.rebuild_cached_objects();
             }
             0x54f => {
                 let m = Self::check_msg_slot(call.pc, op, call.argument(4, "message slot")?)?;
@@ -2768,5 +2846,102 @@ mod tests {
         msg.refresh_default_fonts();
         assert_eq!(msg.text(0).unwrap().face.as_ref(), b"NewDefault");
         assert_eq!(msg.text(1).unwrap().face.as_ref(), b"CustomFace");
+    }
+
+    #[test]
+    fn cvns_local_message_size_hsl_alpha_and_raw_source() {
+        let mut map = HashMap::new();
+        map.insert(b"btn".to_vec(), pb2_type1_rgba(6, 4, [200, 40, 40, 255]));
+        let mut images = MemImages(map);
+        let mut msg = new_cvns_msg_host(64, 64);
+
+        exec_msg(
+            &mut msg,
+            0x510,
+            &[
+                Arg::Int(0),
+                Arg::Int(0),
+                Arg::Int(0),
+                Arg::Int(0),
+                Arg::Int(64),
+                Arg::Int(64),
+            ],
+        );
+        // Empty local image slot queries as 0 without changing size slots.
+        let vm_empty = exec_msg(&mut msg, 0x534, &[Arg::Int(0), Arg::Int(1)]);
+        assert_eq!(vm_empty.system_integer(0), Some(0));
+
+        // Populate slot 0, query size via 0x534 -> (1, 6, 4).
+        exec_img(
+            &mut msg,
+            &mut images,
+            0x530,
+            &[Arg::Int(0), Arg::Int(0), Arg::Str(b"btn"), Arg::Int(1)],
+        );
+        let vm_size = exec_msg(&mut msg, 0x534, &[Arg::Int(0), Arg::Int(0)]);
+        assert_eq!(vm_size.system_integer(0), Some(1));
+        assert_eq!(vm_size.system_integer(1), Some(6));
+        assert_eq!(vm_size.system_integer(2), Some(4));
+
+        // 0x535 HSL tint shifts red -> blue/green cleanly and records hsl_from/hsl_to.
+        exec_msg(
+            &mut msg,
+            0x535,
+            &[
+                Arg::Int(0),
+                Arg::Int(0),
+                Arg::Int(0),
+                Arg::Int(0x00c8_2828),
+                Arg::Int(0x0028_c828),
+            ],
+        );
+        let tinted = msg.cvns().unwrap().messages[0]
+            .as_ref()
+            .unwrap()
+            .local_images[0]
+            .as_ref()
+            .unwrap();
+        assert_eq!(tinted.hsl_from, 0x00c8_2828);
+        assert_eq!(tinted.hsl_to, 0x0028_c828);
+        let px = &tinted.pixels.pixels()[..4];
+        assert!(px[2] > px[0] && px[2] > px[1]);
+
+        // 0x538 create sprite, 0x53e alpha clamp (>256 -> 256), 0x548 raw src_rect without clamping negatives.
+        exec_msg(&mut msg, 0x538, &[Arg::Int(0), Arg::Int(2)]);
+        exec_msg(&mut msg, 0x53e, &[Arg::Int(0), Arg::Int(2), Arg::Int(400)]);
+        assert_eq!(
+            msg.cvns().unwrap().messages[0]
+                .as_ref()
+                .unwrap()
+                .local_sprites[2]
+                .as_ref()
+                .unwrap()
+                .alpha,
+            256
+        );
+        exec_msg(&mut msg, 0x53e, &[Arg::Int(0), Arg::Int(2), Arg::Int(120)]);
+        exec_msg(
+            &mut msg,
+            0x548,
+            &[
+                Arg::Int(0),
+                Arg::Int(2),
+                Arg::Int(0),
+                Arg::Int((-2i32) as u32),
+                Arg::Int(1),
+                Arg::Int(5),
+                Arg::Int(3),
+            ],
+        );
+        let sp = msg.cvns().unwrap().messages[0]
+            .as_ref()
+            .unwrap()
+            .local_sprites[2]
+            .as_ref()
+            .unwrap();
+        assert_eq!(sp.alpha, 120);
+        assert_eq!(sp.src_rect, [-2, 1, 3, 4]);
+        assert_eq!((sp.w, sp.h), (5, 3));
+        assert!(sp.dirty);
     }
 }

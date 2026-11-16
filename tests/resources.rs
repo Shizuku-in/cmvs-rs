@@ -261,3 +261,37 @@ fn resolve_under_distinguishes_missing_files_from_invalid_paths() {
     assert!(!invalid.is_not_found());
     assert!(matches!(invalid, PathError::Format(_)));
 }
+
+#[test]
+fn resolve_under_and_loose_directory_reads_fold_ascii_case_without_escaping_root() {
+    use cmvs_rs::platform::{PathError, resolve_under};
+    let root = Root::new();
+    fs::create_dir_all(root.0.join("DATA/Music")).unwrap();
+    fs::write(root.0.join("DATA/Music/BGM30.ogg"), b"vorbis").unwrap();
+
+    let resolved = resolve_under(&root.0, br"data\music\bgm30.ogg").unwrap();
+    assert!(resolved.ends_with("DATA/Music/BGM30.ogg"));
+
+    let mut archives = ResourceArchives::new(&root.0).unwrap();
+    let paths = BTreeMap::from([((0x2013, 0), b"data\\music\\".to_vec())]);
+    assert_eq!(
+        archives
+            .with_paths(&paths, ResourceKind::Music)
+            .read(b"bgm30.ogg")
+            .unwrap()
+            .as_deref(),
+        Some(&b"vorbis"[..])
+    );
+
+    #[cfg(unix)]
+    {
+        let outside = std::env::temp_dir().join(format!("cmvs-escape-{}", std::process::id()));
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("SECRET.txt"), b"x").unwrap();
+        std::os::unix::fs::symlink(&outside, root.0.join("LINKDIR")).unwrap();
+        let escaped = resolve_under(&root.0, b"linkdir/secret.txt").unwrap_err();
+        assert!(!escaped.is_not_found());
+        assert!(matches!(escaped, PathError::Format(_)));
+        let _ = fs::remove_dir_all(&outside);
+    }
+}
