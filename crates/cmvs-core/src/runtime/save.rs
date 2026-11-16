@@ -169,172 +169,110 @@ pub fn snapshot_layout_for(profile: &crate::profile::EngineProfile) -> Option<Sn
     snapshot_layout(profile)
 }
 
-fn inspected_20120309(profile: &crate::profile::EngineProfile) -> bool {
-    profile.id == "cmvs-20120309"
-        && profile
-            .binary(
-                &crate::digest::parse_hex(
-                    "f93d90d45dad95588f91425fa5d4fe20be0d97e1978ccb4ae0e83ca6e09aa15e",
-                )
-                .expect("static SHA-256"),
-            )
-            .is_some()
-}
-
-fn inspected_20221105(profile: &crate::profile::EngineProfile) -> bool {
-    profile.id == "cmvs-20221105"
-        && profile
-            .binary(
-                &crate::digest::parse_hex(
-                    "dfbabd2abac5055d3ab2144a983b6c441b87b294d19607e9a4829e2ea954e86c",
-                )
-                .expect("static SHA-256"),
-            )
-            .is_some()
-}
-
 fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLayout> {
-    if profile.is_inspected_20070119() {
-        return Some(SnapshotLayout::TextV1SceneLegacy);
-    }
-    if profile.is_inspected_20071117() {
-        return Some(SnapshotLayout::TextV1SceneV1);
-    }
-    if profile.is_inspected_20090815() {
-        return Some(SnapshotLayout::TextV1SceneV2Collision);
-    }
-    if profile.is_inspected_20100314() {
-        return Some(SnapshotLayout::TextV2WindowV2);
-    }
-    if profile.is_inspected_20080719() || profile.is_inspected_20080903() {
-        return Some(SnapshotLayout::TextV1SceneV2);
-    }
-    if profile.is_inspected_20101211() {
-        return Some(SnapshotLayout::TextV2);
-    }
-    if (matches!(
-        profile.id.as_str(),
-        "cmvs-20110525" | "cmvs-20130131" | "cmvs-20140217" | "cmvs-20150405"
-    ) || inspected_20120309(profile))
-        && profile.base.as_deref() == Some("cmvs-20160201")
-    {
-        Some(SnapshotLayout::TextV2)
-    } else if profile.base.as_deref() == Some("cmvs-20160201")
-        && [
-            (
-                "cmvs-20190305",
-                "02b71aac3d3d1ced1d0312b6c37748cf12df9cffd9585fb07787e6ca43199f00",
-            ),
-            (
-                "cmvs-20190405",
-                "c1742b5873e6d03f5cc7bc6f5b3b23655ec67e7cddf307deefa75349caed33be",
-            ),
-            (
-                "cmvs-20211006",
-                "58e993a82e741ea73d3d1b5d89363dcaf435e72e6d505324e1de0c0ba5486631",
-            ),
-            (
-                "cmvs-20221105",
-                "dfbabd2abac5055d3ab2144a983b6c441b87b294d19607e9a4829e2ea954e86c",
-            ),
-        ]
-        .iter()
-        .any(|(id, hash)| {
-            profile.id == *id
-                && profile
-                    .binary(&crate::digest::parse_hex(hash).expect("static SHA-256"))
-                    .is_some()
-        })
-    {
-        Some(SnapshotLayout::TextV3SceneV4)
-    } else if profile.base.is_none()
-        || (profile.id == "cmvs-20171114" && profile.base.as_deref() == Some("cmvs-20160201"))
-    {
-        Some(SnapshotLayout::TextV3)
-    } else {
-        None
+    use crate::profile::InspectedBuild;
+
+    match profile.inspected_build() {
+        Some(InspectedBuild::Cmvs20070119) => Some(SnapshotLayout::TextV1SceneLegacy),
+        Some(InspectedBuild::Cmvs20071117) => Some(SnapshotLayout::TextV1SceneV1),
+        Some(InspectedBuild::Cmvs20090815) => Some(SnapshotLayout::TextV1SceneV2Collision),
+        Some(InspectedBuild::Cmvs20100314) => Some(SnapshotLayout::TextV2WindowV2),
+        Some(InspectedBuild::Cmvs20080719 | InspectedBuild::Cmvs20080903) => {
+            Some(SnapshotLayout::TextV1SceneV2)
+        }
+        Some(
+            InspectedBuild::Cmvs20101211
+            | InspectedBuild::Cmvs20110525
+            | InspectedBuild::Cmvs20120309
+            | InspectedBuild::Cmvs20130131
+            | InspectedBuild::Cmvs20140217
+            | InspectedBuild::Cmvs20150405,
+        ) => Some(SnapshotLayout::TextV2),
+        Some(
+            InspectedBuild::Cmvs20190305
+            | InspectedBuild::Cmvs20190405
+            | InspectedBuild::Cmvs20211006
+            | InspectedBuild::Cmvs20221105,
+        ) => Some(SnapshotLayout::TextV3SceneV4),
+        Some(InspectedBuild::Cmvs20160201 | InspectedBuild::Cmvs20171114) => {
+            Some(SnapshotLayout::TextV3)
+        }
+        Some(InspectedBuild::Cvns20090203) => None,
+        None if profile.base.is_none() => Some(SnapshotLayout::TextV3),
+        None => None,
     }
 }
 
 fn effect_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
-    if base_effect_layout_supported(profile) {
-        return true;
-    }
-    (matches!(profile.id.as_str(), "cmvs-20110525" | "cmvs-20171114")
-        || profile.is_inspected_20090815()
-        || profile.is_inspected_20100314()
-        || profile.is_inspected_20080719()
-        || profile.is_inspected_20080903()
-        || inspected_20120309(profile)
-        || inspected_20221105(profile)
-        || (profile.id == "cmvs-20211006"
-            && profile
-                .binary(
-                    &crate::digest::parse_hex(
-                        "58e993a82e741ea73d3d1b5d89363dcaf435e72e6d505324e1de0c0ba5486631",
-                    )
-                    .expect("static SHA-256"),
-                )
-                .is_some()))
-        && profile.base.as_deref() == Some("cmvs-20160201")
+    use crate::profile::InspectedBuild;
+
+    matches!(
+        profile.inspected_build(),
+        Some(
+            InspectedBuild::Cmvs20080719
+                | InspectedBuild::Cmvs20080903
+                | InspectedBuild::Cmvs20090815
+                | InspectedBuild::Cmvs20100314
+                | InspectedBuild::Cmvs20110525
+                | InspectedBuild::Cmvs20120309
+                | InspectedBuild::Cmvs20160201
+                | InspectedBuild::Cmvs20171114
+                | InspectedBuild::Cmvs20211006
+                | InspectedBuild::Cmvs20221105
+        )
+    )
 }
 
 fn base_effect_layout_supported(profile: &crate::profile::EngineProfile) -> bool {
-    profile.id == "cmvs-20160201"
-        && profile.base.is_none()
-        && profile
-            .binary(
-                &crate::digest::parse_hex(
-                    "dc74d2001387ae1aefbdc4204216de5ebb9d3896009280720c4e7a91b42d84f5",
-                )
-                .expect("static SHA-256"),
-            )
-            .is_some()
+    profile.inspected_build() == Some(crate::profile::InspectedBuild::Cmvs20160201)
 }
 
 fn effect_record_supported(profile: &crate::profile::EngineProfile, body: &[u8]) -> bool {
-    if profile.is_inspected_20070119() {
-        return body.len() == 52 && body.get(..4) == Some(&[1, 0, 3, 0])
-            || body.len() == 60 && matches!(body.get(..4), Some([1, 0, 1 | 2, 0]))
-            || body.len() == 4
-                && body[..2] == [1, 0]
-                && (0x50..=0x57).contains(&body[2])
-                && body[3] == 0;
-    }
-    if profile.is_inspected_20090815() || profile.is_inspected_20100314() {
+    use crate::profile::InspectedBuild;
+
+    match profile.inspected_build() {
+        Some(InspectedBuild::Cmvs20070119) => {
+            body.len() == 52 && body.get(..4) == Some(&[1, 0, 3, 0])
+                || body.len() == 60 && matches!(body.get(..4), Some([1, 0, 1 | 2, 0]))
+                || body.len() == 4
+                    && body[..2] == [1, 0]
+                    && (0x50..=0x57).contains(&body[2])
+                    && body[3] == 0
+        }
         // Writer 0x425740 (NATSUUTA 0x427530 is the same code) / reader 0x425850: types 6 and 7 share the 48-byte template;
         // type 2 stores six words from object +12.
-        return body.len() == 52 && matches!(body.get(..4), Some([1, 0, 6 | 7, 0]))
-            || body.len() == 60 && body.get(..4) == Some(&[1, 0, 2, 0]);
-    }
-    if body.get(..4) == Some(&[1, 0, 3, 0]) {
-        return false;
-    }
-    if base_effect_layout_supported(profile) {
-        return body.get(..4) == Some(&[1, 0, 2, 0]) || body == [1, 0, 8, 0];
-    }
-    if profile.is_inspected_20080903() || body.get(..4) == Some(&[1, 0, 4, 0]) {
-        return profile.is_inspected_20080903() && body.get(..4) == Some(&[1, 0, 4, 0]);
-    }
-    if inspected_20221105(profile)
-        && profile.base.as_deref() == Some("cmvs-20160201")
-        && body == [1, 0, 8, 0]
-    {
+        Some(InspectedBuild::Cmvs20090815 | InspectedBuild::Cmvs20100314) => {
+            body.len() == 52 && matches!(body.get(..4), Some([1, 0, 6 | 7, 0]))
+                || body.len() == 60 && body.get(..4) == Some(&[1, 0, 2, 0])
+        }
+        _ if body.get(..4) == Some(&[1, 0, 3, 0]) => false,
+        Some(InspectedBuild::Cmvs20160201) => {
+            body.get(..4) == Some(&[1, 0, 2, 0]) || body == [1, 0, 8, 0]
+        }
+        Some(InspectedBuild::Cmvs20080903) => body.get(..4) == Some(&[1, 0, 4, 0]),
+        _ if body.get(..4) == Some(&[1, 0, 4, 0]) => false,
         // The native type-8 writer emits only this header; its reader discards it.
-        return true;
-    }
-    effect_layout_supported(profile)
+        Some(InspectedBuild::Cmvs20221105) => {
+            body == [1, 0, 8, 0] || body.get(..4) == Some(&[1, 0, 5, 0])
+        }
         // These builds' type-5 writer/readers are independently inspected. Other
         // configurations still need their own runtime and snapshot evidence.
-        && (!matches!(profile.id.as_str(), "cmvs-20080719" | "cmvs-20110525" | "cmvs-20120309" | "cmvs-20211006" | "cmvs-20221105")
-            || body.get(..4) == Some(&[1, 0, 5, 0]))
+        Some(
+            InspectedBuild::Cmvs20080719
+            | InspectedBuild::Cmvs20110525
+            | InspectedBuild::Cmvs20120309
+            | InspectedBuild::Cmvs20211006,
+        ) => body.get(..4) == Some(&[1, 0, 5, 0]),
+        Some(InspectedBuild::Cmvs20171114) => true,
+        _ => false,
+    }
 }
 
 fn effect_state_supported(
     profile: &crate::profile::EngineProfile,
     scene: &crate::scene::SceneHost,
 ) -> bool {
-    if profile.is_inspected_20070119() {
+    if profile.inspected_build() == Some(crate::profile::InspectedBuild::Cmvs20070119) {
         return scene
             .saved_effect_pools_with_legacy(true)
             .is_ok_and(|records| {
@@ -383,14 +321,20 @@ fn validate_child_slots_without_button_lists<'a>(
 
 impl Runtime<'_> {
     pub(super) fn system_save_identifier(&self) -> Option<u32> {
+        use crate::profile::InspectedBuild;
+
         // 20070119 0x408b00 / 20071117 0x40bdf0 / 20080719 0x40bea0 zero the CSS1
         // header and never write offset 68: a format constant, not a game identifier.
-        if self.gate.selection().profile.is_inspected_20070119()
-            || self.gate.selection().profile.is_inspected_20071117()
-            || self.gate.selection().profile.is_inspected_20080719()
-            || self.gate.selection().profile.is_inspected_20080903()
-            || self.gate.selection().profile.is_inspected_20090815()
-        {
+        if matches!(
+            self.gate.selection().profile.inspected_build(),
+            Some(
+                InspectedBuild::Cmvs20070119
+                    | InspectedBuild::Cmvs20071117
+                    | InspectedBuild::Cmvs20080719
+                    | InspectedBuild::Cmvs20080903
+                    | InspectedBuild::Cmvs20090815
+            )
+        ) {
             Some(0)
         } else {
             self.bootstrap.settings().get(&0x201d).copied()
@@ -401,6 +345,8 @@ impl Runtime<'_> {
         snapshot: &EngineSnapshot,
         layout: SnapshotLayout,
     ) -> Result<(), Box<dyn Error>> {
+        use crate::profile::InspectedBuild;
+
         if layout.old_tables() {
             if snapshot.effects[2].is_some() {
                 return Err("old mask snapshot records are not implemented".into());
@@ -411,24 +357,23 @@ impl Runtime<'_> {
                 return Err(format!("old snapshot record {tag:#x} is not implemented").into());
             }
         }
-        let profile = self.gate.selection().profile;
-        if profile.is_inspected_20101211()
-            || matches!(
-                profile.id.as_str(),
-                "cmvs-20110525" | "cmvs-20120309" | "cmvs-20130131" | "cmvs-20140217"
-            )
-        {
+        if let Some(capacity) = match self.gate.selection().profile.inspected_build() {
+            Some(InspectedBuild::Cmvs20101211) => Some(256),
+            Some(
+                InspectedBuild::Cmvs20110525
+                | InspectedBuild::Cmvs20120309
+                | InspectedBuild::Cmvs20130131
+                | InspectedBuild::Cmvs20140217,
+            ) => Some(512),
+            _ => None,
+        } {
             validate_child_slots_without_button_lists(
                 snapshot
                     .objects
                     .values()
                     .chain(snapshot.windows.iter().flatten().map(|w| &w.scene)),
                 snapshot.raw_objects.keys().any(|&(tag, _)| tag == 0x8c8),
-                if profile.is_inspected_20101211() {
-                    256
-                } else {
-                    512
-                },
+                capacity,
             )?;
         }
         Ok(())
@@ -841,7 +786,7 @@ impl Runtime<'_> {
             .map(crate::scene::Quake::restore)
             .transpose()?;
         if quake.as_ref().is_some_and(|q| q.mode & 0xf00 == 0x100)
-            && !self.scene.allow_triangle_quake
+            && !self.scene.config.allow_triangle_quake
         {
             return Err("triangle quake restore requires the inspected build".into());
         }
@@ -943,9 +888,14 @@ impl Runtime<'_> {
             &mut images,
             &mut restored_random,
             &mut budget,
-            self.gate.selection().profile.is_inspected_20080719()
-                || self.gate.selection().profile.is_inspected_20090815()
-                || self.gate.selection().profile.is_inspected_20100314(),
+            matches!(
+                self.gate.selection().profile.inspected_build(),
+                Some(
+                    crate::profile::InspectedBuild::Cmvs20080719
+                        | crate::profile::InspectedBuild::Cmvs20090815
+                        | crate::profile::InspectedBuild::Cmvs20100314
+                )
+            ),
         )?;
         // Records 0x8e8 follow 0x700 and bind to the objects just rebuilt.
         let movie_records: Vec<_> = snapshot

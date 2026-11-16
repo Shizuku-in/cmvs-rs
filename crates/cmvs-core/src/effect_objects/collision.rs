@@ -436,7 +436,7 @@ impl SceneHost {
             count,
             pool,
             &mut candidate_random,
-            self.collision_x87_arithmetic,
+            self.config.collision_x87_arithmetic,
         );
         effect.template = template;
         if fading {

@@ -13,6 +13,7 @@ mod binary;
 mod contract;
 mod gate;
 mod model;
+mod quirks;
 mod select;
 mod text;
 
@@ -23,6 +24,7 @@ pub use model::{
     Binary, CommandStatus, EngineProfile, Family, GameRecord, MachineProof, ProfileError,
     RecordFile, Semantics, VariantBinding, VariantId,
 };
+pub(crate) use quirks::InspectedBuild;
 pub use select::{
     EXECUTABLE_NAMES, Evidence, FileEvidence, Game, GameFiles, ProfileSelection, SelectionBasis,
     SelectionError,
@@ -76,20 +78,6 @@ impl EngineProfile {
             .iter()
             .map(|(command, entry)| (*command, entry))
     }
-    /// Verified loader zero-fill bank sizes, in integer/bit/float/string order.
-    /// This is startup layout evidence, independent of command gate policy.
-    pub(crate) fn initial_globals(&self) -> Option<[u32; 4]> {
-        match self.id.as_str() {
-            "cmvs-20140217" | "cmvs-20160201" | "cmvs-20171114" => Some([4096, 262144, 2048, 128]),
-            // docs/games/puriring: .data file bytes end at 0x4ae000; the banks at 0x4b6708,
-            // 0x4dc710 (0x8000 bytes of packed bits, 0x440be0), 0x4da710 and 0x4ba710.
-            "cmvs-20070119" => Some([4096, 262144, 2048, 128]),
-            // docs/games/miharu/README.md: .data file bytes end at 0x4b6600; integers
-            // 0x4bdd18, strings 0x4c1d20 (256 x 1024), bits 0x501d20 (0x8000 bytes); no floats.
-            "cvns-20090203" => Some([4096, 262144, 0, 256]),
-            _ => None,
-        }
-    }
     /// String variable slots of this engine: 256 for CVNS, 128 for CMVS.
     pub fn string_slots(&self) -> u32 {
         match self.family {
@@ -128,112 +116,6 @@ impl EngineProfile {
     }
     pub fn count(&self, status: CommandStatus) -> usize {
         self.statuses.iter().filter(|&&s| s == status).count()
-    }
-    /// Independently inspected ASUKIMI build and its inherited command schema.
-    pub(crate) fn is_inspected_20071117(&self) -> bool {
-        self.id == "cmvs-20071117"
-            && self.base.as_deref() == Some("cmvs-20160201")
-            && self
-                .binary(
-                    &crate::digest::parse_hex(
-                        "caff7901a7dc4ec963d7fde358028cdd68dfd87fc7925c9715a20e7a5f36d02b",
-                    )
-                    .expect("static SHA-256"),
-                )
-                .is_some()
-    }
-
-    /// Independently inspected Primitive Link build; docs/games/puriring.
-    pub(crate) fn is_inspected_20070119(&self) -> bool {
-        self.id == "cmvs-20070119"
-            && self.base.as_deref() == Some("cmvs-20160201")
-            && self
-                .binary(
-                    &crate::digest::parse_hex(
-                        "5ce421db393cbc5ca443fa405c5a9e31c348416109cb1279d91718f490c0e602",
-                    )
-                    .expect("static SHA-256"),
-                )
-                .is_some()
-    }
-
-    /// Independently inspected x86 sine interpolation; docs/games/{asukimi,harouse}.
-    pub(crate) fn uses_legacy_sine_modes(&self) -> bool {
-        self.is_inspected_20071117()
-            || self.is_inspected_20080719()
-            || self.is_inspected_20080903()
-            || self.is_inspected_20090815()
-            || self.is_inspected_20100314()
-    }
-
-    /// Independently inspected Harouse build; capabilities still bind separately.
-    pub(crate) fn is_inspected_20080719(&self) -> bool {
-        self.id == "cmvs-20080719"
-            && self.base.as_deref() == Some("cmvs-20160201")
-            && self
-                .binary(
-                    &crate::digest::parse_hex(
-                        "afe3b3a895e7b3ba5f78e6f6464296f1d028e87307c8de5a568b88fd6086491e",
-                    )
-                    .expect("static SHA-256"),
-                )
-                .is_some()
-    }
-
-    /// Independently inspected ASUNANA x86 build; docs/games/asunana.
-    pub(crate) fn is_inspected_20080903(&self) -> bool {
-        self.id == "cmvs-20080903"
-            && self.base.as_deref() == Some("cmvs-20160201")
-            && self
-                .binary(
-                    &crate::digest::parse_hex(
-                        "f77ecbfd39d1076c66915544d73b9c2d2c5876fbabeaef3d589050b6094d13ac",
-                    )
-                    .expect("static SHA-256"),
-                )
-                .is_some()
-    }
-
-    /// Independently inspected MEMORIA x86 build; docs/games/memoria.
-    pub(crate) fn is_inspected_20090815(&self) -> bool {
-        self.id == "cmvs-20090815"
-            && self.base.as_deref() == Some("cmvs-20160201")
-            && self
-                .binary(
-                    &crate::digest::parse_hex(
-                        "36fa780a5d2b8df4ac6a6e48a2f78708b79aa10d22eb575a5ae74742d902f71a",
-                    )
-                    .expect("static SHA-256"),
-                )
-                .is_some()
-    }
-
-    /// NATSUUTA x86 build, matched against MEMORIA function by function; docs/games/natsuuta.
-    pub(crate) fn is_inspected_20100314(&self) -> bool {
-        self.id == "cmvs-20100314"
-            && self.base.as_deref() == Some("cmvs-20160201")
-            && self
-                .binary(
-                    &crate::digest::parse_hex(
-                        "97575da34a284fa534084ca8452741e0e176650f3396308f92c2c8cf7ffc9bc8",
-                    )
-                    .expect("static SHA-256"),
-                )
-                .is_some()
-    }
-
-    /// Independently inspected HASSAKU x64 build; docs/games/hassaku.
-    pub(crate) fn is_inspected_20101211(&self) -> bool {
-        self.id == "cmvs-20101211"
-            && self.base.as_deref() == Some("cmvs-20160201")
-            && self
-                .binary(
-                    &crate::digest::parse_hex(
-                        "158409c71cf14c3dedb7d051585e5f48e56dbc621bb19e56d084cd4fe8d4352f",
-                    )
-                    .expect("static SHA-256"),
-                )
-                .is_some()
     }
 
     pub fn binary(&self, sha256: &[u8; 32]) -> Option<&Binary> {

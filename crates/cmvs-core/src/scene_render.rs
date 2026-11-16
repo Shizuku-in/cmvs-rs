@@ -503,7 +503,7 @@ fn logical_screen_scale(
     object: &SceneObject,
     parent_scale: Option<f32>,
 ) -> Result<f32, FormatError> {
-    if !scene.allow_logical_screen_scale {
+    if !scene.config.allow_logical_screen_scale {
         return match object.logical_size[0] {
             0 => Ok(1.0),
             width if width == scene.screen_size()[0] => Ok(1.0),
@@ -659,7 +659,7 @@ fn projected_layer<'a>(
     // then subtracts the offset, applies the projection scale, rotates by its +52 argument
     // (the parent's angle for an inherited child, 0 otherwise) and adds the position.
     let parent_angle = inherited.map_or(0, |p| p[20] as i32);
-    if parent_angle != 0 && !scene.allow_projected_parent_rotation {
+    if parent_angle != 0 && !scene.config.allow_projected_parent_rotation {
         return Err(FormatError(
             "children of a rotated projected parent are not verified",
         ));
@@ -1137,7 +1137,7 @@ pub fn prepare_scene<'a>(
             }
             _ => {}
         }
-        check_screen(d, scene.allow_screen_coordinates_one)?;
+        check_screen(d, scene.config.allow_screen_coordinates_one)?;
         let position = [d[8] as i32, d[9] as i32].map(i64::from);
         let mask = slot.and_then(|slot| scene.mask_on(slot));
         let layer = match object
@@ -1188,7 +1188,7 @@ pub fn prepare_scene<'a>(
                     continue;
                 }
                 let child_scale = logical_screen_scale(scene, child, Some(screen_scale))?;
-                check_screen(words, scene.allow_screen_coordinates_one)?;
+                check_screen(words, scene.config.allow_screen_coordinates_one)?;
                 let Some(layer) = child_layer(object, d, child, words, child_scale)? else {
                     continue;
                 };

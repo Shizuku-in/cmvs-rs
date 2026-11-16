@@ -616,7 +616,7 @@ impl<'a> Runtime<'a> {
         let effects = crate::save_menu::profile_int(text, "SYSTEM_INFO", "EFFECT_USE", 1) != 0;
         let mut platform = PlatformHost::default();
         platform.configure_display_selection(text);
-        if game.selection.profile.is_inspected_20070119() {
+        if game.selection.profile.uses_window_full_move() {
             platform.configure_window_full_move(text);
         }
         Ok(Self {

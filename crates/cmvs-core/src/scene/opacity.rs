@@ -169,7 +169,7 @@ impl SceneHost {
         let child = match u16::try_from(child) {
             Err(_) if child < 0 => None,
             Ok(id)
-                if id < self.child_slots.count()
+                if id < self.config.child_slots.count()
                     && self.objects[&slot].children.contains_key(&id) =>
             {
                 Some(id)

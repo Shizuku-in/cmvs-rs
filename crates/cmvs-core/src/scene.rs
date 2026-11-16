@@ -496,17 +496,15 @@ impl DrawState {
     }
 }
 
-/// Scene-object slots, retained transitions, and effects updated by script commands.
-///
-/// Read this state with [`crate::scene_render`] or a host renderer. It does not own
-/// a graphics device. Frame progression is coordinated by [`crate::runtime::Runtime`].
-#[derive(Debug, Default)]
-pub struct SceneHost {
-    child_slots: ChildSlots,
-    allow_filter_mode_one: bool,
-    allow_rotation_hold: bool,
-    legacy_world_motion: bool,
-    allow_legacy_sine_modes: bool,
+/// Immutable engine-build scene configuration derived from [`crate::profile::EngineProfile`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct SceneConfig {
+    pub(crate) child_slots: ChildSlots,
+    pub(crate) collision_x87_arithmetic: bool,
+    pub(crate) allow_filter_mode_one: bool,
+    pub(crate) allow_rotation_hold: bool,
+    pub(crate) legacy_world_motion: bool,
+    pub(crate) allow_legacy_sine_modes: bool,
     pub(crate) allow_screen_coordinates_one: bool,
     pub(crate) allow_logical_screen_scale: bool,
     pub(crate) allow_projected_parent_rotation: bool,
@@ -516,11 +514,70 @@ pub struct SceneHost {
     pub(crate) allow_legacy_triangle_quake: bool,
     /// cmvs-20070119 0x4076f0: a nonzero 0x22c4 selector loads from the stand table.
     pub(crate) allow_stand_change_table: bool,
+}
+
+impl SceneConfig {
+    pub(crate) fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
+        use crate::profile::InspectedBuild;
+
+        let build = profile.inspected_build();
+        Self {
+            child_slots: ChildSlots::for_profile(profile),
+            collision_x87_arithmetic: matches!(
+                build,
+                Some(InspectedBuild::Cmvs20090815 | InspectedBuild::Cmvs20100314)
+            ),
+            allow_filter_mode_one: matches!(
+                build,
+                Some(
+                    InspectedBuild::Cmvs20071117
+                        | InspectedBuild::Cmvs20090815
+                        | InspectedBuild::Cmvs20100314
+                )
+            ),
+            allow_rotation_hold: build == Some(InspectedBuild::Cmvs20070119),
+            legacy_world_motion: build == Some(InspectedBuild::Cmvs20070119),
+            allow_legacy_sine_modes: profile.uses_legacy_sine_modes(),
+            allow_screen_coordinates_one: matches!(
+                build,
+                Some(
+                    InspectedBuild::Cmvs20070119
+                        | InspectedBuild::Cmvs20080719
+                        | InspectedBuild::Cmvs20080903
+                        | InspectedBuild::Cmvs20090815
+                        | InspectedBuild::Cmvs20100314
+                )
+            ),
+            allow_logical_screen_scale: matches!(
+                build,
+                Some(InspectedBuild::Cmvs20101211 | InspectedBuild::Cmvs20100314)
+            ),
+            allow_projected_parent_rotation: build == Some(InspectedBuild::Cmvs20080719),
+            allow_triangle_quake: matches!(
+                build,
+                Some(
+                    InspectedBuild::Cmvs20080719
+                        | InspectedBuild::Cmvs20090815
+                        | InspectedBuild::Cmvs20100314
+                )
+            ),
+            allow_legacy_triangle_quake: build == Some(InspectedBuild::Cmvs20070119),
+            allow_stand_change_table: build == Some(InspectedBuild::Cmvs20070119),
+        }
+    }
+}
+
+/// Scene-object slots, retained transitions, and effects updated by script commands.
+///
+/// Read this state with [`crate::scene_render`] or a host renderer. It does not own
+/// a graphics device. Frame progression is coordinated by [`crate::runtime::Runtime`].
+#[derive(Debug, Default)]
+pub struct SceneHost {
+    pub(crate) config: SceneConfig,
     screen_size: crate::viewport::ScreenSize,
     pub(crate) legacy_flakes: BTreeMap<u8, crate::effect_objects::LegacyFlakes>,
     pub(crate) rain_effects: BTreeMap<u8, crate::effect_objects::RainEffect>,
     pub(crate) fragment_effects: BTreeMap<u8, crate::effect_objects::FragmentEffect>,
-    pub(crate) collision_x87_arithmetic: bool,
     pub(crate) collision_effects: BTreeMap<u8, crate::effect_objects::CollisionEffect>,
     pub(crate) particle_effects: BTreeMap<u8, crate::effect_objects::ParticleEffect>,
     pub(crate) falling_effects: BTreeMap<u8, crate::effect_objects::FallingEffect>,
@@ -539,34 +596,13 @@ impl SceneHost {
     /// Construct runtime hosts for the independently inspected child-table layout.
     pub fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
         Self {
-            child_slots: ChildSlots::for_profile(profile),
-            collision_x87_arithmetic: profile.is_inspected_20090815()
-                || profile.is_inspected_20100314(),
-            allow_filter_mode_one: profile.is_inspected_20071117()
-                || profile.is_inspected_20090815()
-                || profile.is_inspected_20100314(),
-            allow_rotation_hold: profile.is_inspected_20070119(),
-            allow_logical_screen_scale: profile.is_inspected_20101211()
-                || profile.is_inspected_20100314(),
-            legacy_world_motion: profile.is_inspected_20070119(),
-            allow_legacy_sine_modes: profile.uses_legacy_sine_modes(),
-            allow_screen_coordinates_one: profile.is_inspected_20070119()
-                || profile.is_inspected_20080719()
-                || profile.is_inspected_20080903()
-                || profile.is_inspected_20090815()
-                || profile.is_inspected_20100314(),
-            allow_projected_parent_rotation: profile.is_inspected_20080719(),
-            allow_triangle_quake: profile.is_inspected_20080719()
-                || profile.is_inspected_20090815()
-                || profile.is_inspected_20100314(),
-            allow_stand_change_table: profile.is_inspected_20070119(),
-            allow_legacy_triangle_quake: profile.is_inspected_20070119(),
+            config: SceneConfig::for_profile(profile),
             ..Self::default()
         }
     }
 
     fn supports_image_filter_mode(&self, mode: u32) -> bool {
-        matches!(mode, 2 | 17 | 256 | 512) || mode == 1 && self.allow_filter_mode_one
+        matches!(mode, 2 | 17 | 256 | 512) || mode == 1 && self.config.allow_filter_mode_one
     }
 
     pub fn screen_size(&self) -> [u32; 2] {
@@ -774,7 +810,7 @@ impl SceneHost {
         } else {
             u16::try_from(child)
                 .ok()
-                .filter(|id| *id < self.child_slots.count())
+                .filter(|id| *id < self.config.child_slots.count())
                 .and_then(|id| parent.children.get_mut(&id))
                 .ok_or_else(|| {
                     fail("visibility needs an existing child within this build's child table")
@@ -798,7 +834,7 @@ impl SceneHost {
             return Err(fail("child deletion needs an existing parent object"));
         }
         call.complete(0x4008)?;
-        if child < u32::from(self.child_slots.count()) {
+        if child < u32::from(self.config.child_slots.count()) {
             self.objects
                 .get_mut(&slot)
                 .expect("validated parent")
@@ -832,7 +868,7 @@ impl SceneHost {
                 None => false,
                 Some(_) if second < 0 => true,
                 Some(object) => u16::try_from(second).is_ok_and(|id| {
-                    id < self.child_slots.count() && object.children.contains_key(&id)
+                    id < self.config.child_slots.count() && object.children.contains_key(&id)
                 }),
             };
             call.complete(0x4008)?;
@@ -920,7 +956,7 @@ impl SceneHost {
         } else {
             u16::try_from(child)
                 .ok()
-                .filter(|id| *id < self.child_slots.count())
+                .filter(|id| *id < self.config.child_slots.count())
                 .and_then(|id| object.children.get(&id))
                 .ok_or_else(|| {
                     fail("pixel query needs an existing child within this build's child table")
@@ -976,7 +1012,7 @@ impl SceneHost {
         } else {
             u16::try_from(child)
                 .ok()
-                .filter(|id| *id < self.child_slots.count())
+                .filter(|id| *id < self.config.child_slots.count())
                 .and_then(|id| object.children.get_mut(&id))
                 .ok_or_else(|| {
                     fail("logical size needs an existing child within this build's child table")
@@ -1083,8 +1119,8 @@ impl SceneHost {
             .ok_or_else(|| fail("object slot does not exist"))?;
         // Independently inspected create helpers ignore unsigned overflow of their table.
         if command == 0x22
-            && self.child_slots != ChildSlots::Slots768
-            && args[1] >= u32::from(self.child_slots.count())
+            && self.config.child_slots != ChildSlots::Slots768
+            && args[1] >= u32::from(self.config.child_slots.count())
         {
             call.complete(0x4008)?;
             return Ok(());
@@ -1098,7 +1134,7 @@ impl SceneHost {
             Some(
                 u16::try_from(args[1])
                     .ok()
-                    .filter(|v| *v < self.child_slots.count())
+                    .filter(|v| *v < self.config.child_slots.count())
                     .ok_or_else(|| fail("child slot outside this build's table"))?,
             )
         };
@@ -1235,7 +1271,7 @@ impl SceneHost {
         } else {
             u16::try_from(child)
                 .ok()
-                .filter(|&id| id < self.child_slots.count())
+                .filter(|&id| id < self.config.child_slots.count())
                 .and_then(|id| parent.children.get(&id))
                 .ok_or_else(|| {
                     fail("world query needs an existing child within this build's child table")
@@ -1308,7 +1344,7 @@ impl SceneHost {
                 u16::try_from(id)
                     .ok()
                     .filter(|id| {
-                        *id < self.child_slots.count()
+                        *id < self.config.child_slots.count()
                             && self.objects[&slot].children.contains_key(id)
                     })
                     .ok_or_else(|| {
@@ -1454,18 +1490,7 @@ impl SceneHost {
     ) {
         *self = Self {
             screen_size: self.screen_size,
-            child_slots: self.child_slots,
-            collision_x87_arithmetic: self.collision_x87_arithmetic,
-            allow_filter_mode_one: self.allow_filter_mode_one,
-            allow_rotation_hold: self.allow_rotation_hold,
-            legacy_world_motion: self.legacy_world_motion,
-            allow_legacy_sine_modes: self.allow_legacy_sine_modes,
-            allow_screen_coordinates_one: self.allow_screen_coordinates_one,
-            allow_logical_screen_scale: self.allow_logical_screen_scale,
-            allow_projected_parent_rotation: self.allow_projected_parent_rotation,
-            allow_triangle_quake: self.allow_triangle_quake,
-            allow_stand_change_table: self.allow_stand_change_table,
-            allow_legacy_triangle_quake: self.allow_legacy_triangle_quake,
+            config: self.config,
             legacy_flakes: Default::default(),
             rain_effects: Default::default(),
             particle_effects: Default::default(),

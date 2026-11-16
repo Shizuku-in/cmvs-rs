@@ -148,7 +148,8 @@ impl ButtonHost {
     /// A host for the selected build: only NATSUUTA's 0x221b scaling is inspected.
     pub(crate) fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
         Self {
-            allow_pointer_scale: profile.is_inspected_20100314(),
+            allow_pointer_scale: profile.inspected_build()
+                == Some(crate::profile::InspectedBuild::Cmvs20100314),
             ..Self::default()
         }
     }

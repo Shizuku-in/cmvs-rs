@@ -301,17 +301,25 @@ pub struct MessageHost {
 impl MessageHost {
     /// Construct window-object hosts using the selected runtime child-table layout.
     pub fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
-        let legacy_text_creation = profile.is_inspected_20070119()
-            || profile.is_inspected_20071117()
-            || profile.is_inspected_20080719()
-            || profile.is_inspected_20080903()
-            || profile.is_inspected_20090815()
-            || profile.is_inspected_20100314();
+        use crate::profile::InspectedBuild;
+
+        let build = profile.inspected_build();
+        let legacy_text_creation = matches!(
+            build,
+            Some(
+                InspectedBuild::Cmvs20070119
+                    | InspectedBuild::Cmvs20071117
+                    | InspectedBuild::Cmvs20080719
+                    | InspectedBuild::Cmvs20080903
+                    | InspectedBuild::Cmvs20090815
+                    | InspectedBuild::Cmvs20100314
+            )
+        );
         Self {
             child_slots: crate::scene::ChildSlots::for_profile(profile),
             legacy_text_creation,
-            named_text_faces: legacy_text_creation || profile.is_inspected_20101211(),
-            logical_text_scale: profile.is_inspected_20100314(),
+            named_text_faces: legacy_text_creation || build == Some(InspectedBuild::Cmvs20101211),
+            logical_text_scale: build == Some(InspectedBuild::Cmvs20100314),
             ..Self::default()
         }
     }

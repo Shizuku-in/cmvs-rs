@@ -245,44 +245,42 @@ impl Default for CameraConfig {
 
 impl CameraConfig {
     fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
-        if profile.is_inspected_20070119() {
+        use crate::profile::InspectedBuild;
+
+        match profile.inspected_build() {
             // PURIRING: constructor 0x422200, projection 0x422430, writer 0x422280.
             // Runtime motion uses our normalized layout; native words 15+ are motion,
             // not the screen center and scale introduced in later versions.
-            Self {
+            Some(InspectedBuild::Cmvs20070119) => Self {
                 object_projection: ObjectProjectionSet::Type1,
                 default_height: 614.0,
                 default_center_y: 307.0,
                 snapshot_format: CameraSnapshotFormat::V1,
-            }
-        } else if profile.is_inspected_20071117()
-            || profile.is_inspected_20080903()
-            || profile.is_inspected_20090815()
-            || profile.is_inspected_20100314()
-        {
+            },
             // Constructor 0x42dc10, projection 0x42df60, snapshot 0x42dca0.
             // ASUNANA: 0x42fcf0 / 0x430200, with independent v3 writer 0x42fd80.
-            Self {
-                object_projection: if profile.is_inspected_20090815()
-                    || profile.is_inspected_20100314()
-                {
-                    ObjectProjectionSet::Types1And2And3
-                } else {
-                    ObjectProjectionSet::Types1And2
+            Some(
+                build @ (InspectedBuild::Cmvs20071117
+                | InspectedBuild::Cmvs20080903
+                | InspectedBuild::Cmvs20090815
+                | InspectedBuild::Cmvs20100314),
+            ) => Self {
+                object_projection: match build {
+                    InspectedBuild::Cmvs20090815 | InspectedBuild::Cmvs20100314 => {
+                        ObjectProjectionSet::Types1And2And3
+                    }
+                    _ => ObjectProjectionSet::Types1And2,
                 },
                 default_height: 614.0,
                 default_center_y: 307.0,
-                snapshot_format: if profile.is_inspected_20080903()
-                    || profile.is_inspected_20090815()
-                    || profile.is_inspected_20100314()
-                {
-                    CameraSnapshotFormat::V3
-                } else {
-                    CameraSnapshotFormat::V2
+                snapshot_format: match build {
+                    InspectedBuild::Cmvs20080903
+                    | InspectedBuild::Cmvs20090815
+                    | InspectedBuild::Cmvs20100314 => CameraSnapshotFormat::V3,
+                    _ => CameraSnapshotFormat::V2,
                 },
-            }
-        } else {
-            Self::default()
+            },
+            _ => Self::default(),
         }
     }
 

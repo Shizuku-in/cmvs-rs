@@ -187,7 +187,9 @@ impl SceneHost {
             Some(
                 u16::try_from(args[1])
                     .ok()
-                    .filter(|id| *id < self.child_slots.count() && parent.children.contains_key(id))
+                    .filter(|id| {
+                        *id < self.config.child_slots.count() && parent.children.contains_key(id)
+                    })
                     .ok_or_else(|| {
                         fail("position motion child outside this build's table or missing")
                     })?,

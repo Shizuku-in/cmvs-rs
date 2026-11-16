@@ -98,13 +98,7 @@ impl Configuration {
         // ASUKIMI 0x404e00 and Harouse 0x40538c select WINDOW_SIZE; Harouse's
         // 0x40d0f0 sets the logical device size. Evidence: docs/games/{asukimi,harouse}.
         // cmvs-20070119 0x403f60 has the same branches (docs/games/puriring).
-        if profile.is_inspected_20070119()
-            || profile.is_inspected_20071117()
-            || profile.is_inspected_20080719()
-            || profile.is_inspected_20080903()
-            || profile.is_inspected_20090815()
-            || profile.is_inspected_20100314()
-        {
+        if profile.uses_legacy_window_size_ini() {
             let value = |section, key, default| {
                 crate::save_menu::profile_int(&self.0, section, key, default) as u32
             };

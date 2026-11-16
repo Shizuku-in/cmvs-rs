@@ -136,7 +136,7 @@ impl SceneHost {
         let child = match u16::try_from(child) {
             Err(_) if child < 0 => None,
             Ok(id)
-                if id < self.child_slots.count()
+                if id < self.config.child_slots.count()
                     && self.objects[&slot].children.contains_key(&id) =>
             {
                 Some(id)
@@ -160,7 +160,8 @@ impl SceneHost {
             ));
         }
         if command == 0x1e6
-            && (!(RotationTrack::supports(c as u32) || self.allow_rotation_hold && c as u8 == 0xff)
+            && (!(RotationTrack::supports(c as u32)
+                || self.config.allow_rotation_hold && c as u8 == 0xff)
                 || (c as u8 == 0x80 && d == 0))
         {
             return Err(error(

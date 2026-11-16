@@ -261,7 +261,7 @@ impl SceneHost {
             return Ok(());
         };
         if args[3] != 0 {
-            if !self.allow_stand_change_table {
+            if !self.config.allow_stand_change_table {
                 return Err(fail("secondary replacement image manager is not implemented").into());
             }
             // cmvs-20070119 0x4076f0: the stand table (searched after 0x2011 here, see

@@ -27,7 +27,7 @@ impl Runtime<'_> {
         self.effects = profile_int(bytes, "SYSTEM_INFO", "EFFECT_USE", 1) != 0;
         self.audio = audio;
         self.platform.configure_display_selection(bytes);
-        if self.gate.selection().profile.is_inspected_20070119() {
+        if self.gate.selection().profile.uses_window_full_move() {
             self.platform.configure_window_full_move(bytes);
         }
         self.configuration = configuration;
@@ -50,7 +50,7 @@ impl Runtime<'_> {
             return Err("invalid saved display aspect or render mode".into());
         }
         let mut configuration = self.configuration.clone();
-        if self.gate.selection().profile.is_inspected_20070119() {
+        if self.gate.selection().profile.uses_window_full_move() {
             configuration.set_integer(
                 "SYSTEM_INFO",
                 "WINDOW_FULL_MOVE_USE",

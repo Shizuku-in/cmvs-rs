@@ -302,7 +302,8 @@ impl MovieHost {
     /// A host for the selected build: only NATSUUTA's clock-driven mode 15 is inspected.
     pub(crate) fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
         Self {
-            clock_mode: profile.is_inspected_20100314(),
+            clock_mode: profile.inspected_build()
+                == Some(crate::profile::InspectedBuild::Cmvs20100314),
             ..Self::default()
         }
     }
