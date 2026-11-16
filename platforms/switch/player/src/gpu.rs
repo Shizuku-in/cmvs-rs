@@ -2,7 +2,7 @@
 //! [`cmvs_console::gpu::Compositor`]; movie scaling, presentation and readback are the
 //! Switch's own. Readback happens only when the engine requests a device frame.
 use crate::{SCREEN, sys::SwitchGpu};
-use cmvs_console::gpu::Compositor;
+use cmvs_console::{backend::ConsoleGpu, gpu::Compositor};
 use cmvs_core::{
     raster::RgbaImage,
     scene_render::{
@@ -75,6 +75,12 @@ impl GpuRenderer {
         let mut pixels = vec![0; size[0] as usize * size[1] as usize * 4];
         self.0.device().read(size, &mut pixels)?;
         Ok(RgbaImage::new(size[0], size[1], pixels)?)
+    }
+}
+
+impl ConsoleGpu for GpuRenderer {
+    fn read_presented(&mut self) -> Option<Result<RgbaImage>> {
+        Some(self.read())
     }
 }
 

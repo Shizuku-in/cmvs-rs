@@ -1,21 +1,42 @@
+//! Shared `PlatformBackend` implementation for the console players.
+use crate::text_input;
 use cmvs_core::{
     platform::{PlatformBackend, PlatformRequest, TextDialogRequest, TextDialogResult},
     raster::RgbaImage,
     settings::DisplayPreferences,
 };
 use std::error::Error;
-pub struct Backend<'a> {
+
+/// Presents GPU-rendered canvases that can optionally be read back for engine screenshots.
+pub trait ConsoleGpu {
+    fn read_presented(&mut self) -> Option<Result<RgbaImage, Box<dyn Error>>>;
+}
+
+/// Callback displaying the platform's modal text input dialog.
+pub type TextDialogFn = fn(
+    &str,
+    &str,
+    &str,
+    u32,
+    &mut dyn FnMut(&str) -> Result<(), String>,
+) -> Result<Option<String>, &'static str>;
+
+/// Shared `PlatformBackend` adapter parameterized by console GPU readback and keyboard dialog.
+pub struct ConsoleBackend<'a, G> {
     pub display: DisplayPreferences,
     pub size: [u32; 2],
-    /// Last software frame; unused when `gpu` renders.
+    /// Last completed software frame when software compositing owns the screen.
     pub frame: Option<RgbaImage>,
-    pub gpu: Option<&'a mut crate::gpu::GpuRenderer>,
-    /// A modal system applet ran since the host last cleared this.
+    pub gpu: Option<&'a mut G>,
+    /// A modal system keyboard/dialog ran since the host last cleared this.
     pub modal_shown: bool,
     /// The game text encoding of the comment dialog's strings.
     pub encoding: cmvs_core::TextEncoding,
+    pub platform_name: &'static str,
+    pub text_dialog: TextDialogFn,
 }
-impl PlatformBackend for Backend<'_> {
+
+impl<G: ConsoleGpu> PlatformBackend for ConsoleBackend<'_, G> {
     fn logical_size(&self) -> [u32; 2] {
         self.size
     }
@@ -60,20 +81,17 @@ impl PlatformBackend for Backend<'_> {
         request: &TextDialogRequest,
     ) -> Result<TextDialogResult, Box<dyn Error>> {
         self.modal_shown = true;
-        cmvs_console::text_input::edit(
-            request,
-            self.encoding,
-            &mut |title, prompt, initial, limit, check| {
-                crate::sys::software_keyboard(title, prompt, initial, limit, check)
-            },
-        )
+        let dialog = self.text_dialog;
+        text_input::edit(request, self.encoding, &mut |t, p, i, l, c| {
+            dialog(t, p, i, l, c)
+        })
     }
     fn choose_font(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
         Ok(None)
     }
     fn read_device_frame(&mut self) -> Result<RgbaImage, Box<dyn Error>> {
-        if let Some(gpu) = &mut self.gpu {
-            return gpu.read();
+        if let Some(frame) = self.gpu.as_deref_mut().and_then(ConsoleGpu::read_presented) {
+            return frame;
         }
         self.frame
             .clone()
@@ -89,7 +107,7 @@ impl PlatformBackend for Backend<'_> {
             PlatformRequest::Title(_)
             | PlatformRequest::Cursor { .. }
             | PlatformRequest::Icon { .. } => {}
-            _ => return Err("unsupported Switch display request".into()),
+            _ => return Err(format!("unsupported {} display request", self.platform_name).into()),
         }
         Ok(())
     }
@@ -98,26 +116,74 @@ impl PlatformBackend for Backend<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct FakeGpu {
+        presented: Option<Result<RgbaImage, &'static str>>,
+    }
+
+    impl ConsoleGpu for FakeGpu {
+        fn read_presented(&mut self) -> Option<Result<RgbaImage, Box<dyn Error>>> {
+            self.presented
+                .take()
+                .map(|result| result.map_err(Into::into))
+        }
+    }
+
+    fn no_dialog(
+        _: &str,
+        _: &str,
+        _: &str,
+        _: u32,
+        _: &mut dyn FnMut(&str) -> Result<(), String>,
+    ) -> Result<Option<String>, &'static str> {
+        Ok(None)
+    }
+
     #[test]
-    fn rejected_request_keeps_preferences_and_no_frame_is_an_error() {
-        let mut backend = Backend {
+    fn rejected_request_keeps_preferences_and_readback_prefers_presented_gpu_frame() {
+        let mut backend: ConsoleBackend<'_, FakeGpu> = ConsoleBackend {
             display: DisplayPreferences::default(),
             size: [1280, 720],
             frame: None,
             gpu: None,
             modal_shown: false,
             encoding: cmvs_core::TextEncoding::ShiftJis,
+            platform_name: "Test",
+            text_dialog: no_dialog,
         };
         let previous = backend.display.render_mode;
-        assert!(backend.apply(&PlatformRequest::RenderMode(9)).is_err());
+        assert!(
+            backend
+                .apply(&PlatformRequest::RenderMode(9))
+                .unwrap_err()
+                .to_string()
+                .contains("Test")
+        );
         assert_eq!(backend.display.render_mode, previous);
         assert!(backend.read_device_frame().is_err());
-        let frame = RgbaImage::new(1, 1, vec![10, 20, 30, 255]).unwrap();
-        backend.frame = Some(frame);
+
+        let sw = RgbaImage::new(1, 1, vec![10, 20, 30, 255]).unwrap();
+        backend.frame = Some(sw);
         assert_eq!(
             backend.read_device_frame().unwrap().pixels(),
             &[10, 20, 30, 255]
         );
         assert!(backend.frame.is_some());
+
+        let gpu_frame = RgbaImage::new(1, 1, vec![40, 50, 60, 255]).unwrap();
+        let mut fake_gpu = FakeGpu {
+            presented: Some(Ok(gpu_frame)),
+        };
+        backend.gpu = Some(&mut fake_gpu);
+        // Presented GPU frame wins over retained software frame.
+        assert_eq!(
+            backend.read_device_frame().unwrap().pixels(),
+            &[40, 50, 60, 255]
+        );
+        // When the GPU has no presented frame, fall back to the software frame.
+        assert_eq!(
+            backend.read_device_frame().unwrap().pixels(),
+            &[10, 20, 30, 255]
+        );
     }
 }

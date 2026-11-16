@@ -51,6 +51,45 @@ pub fn system_fonts(encoding: TextEncoding) -> &'static [SystemFont] {
     }
 }
 
+/// Loads the host UI font from `base/font.ttf` or falls back to the console's system font.
+pub fn load_host_font(
+    base: &Path,
+    system_fallback: impl FnOnce() -> Result<Vec<u8>>,
+) -> Result<ab_glyph::FontVec> {
+    let bytes = match std::fs::read(base.join("font.ttf")) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == ErrorKind::NotFound => system_fallback()?,
+        Err(error) => return Err(error.into()),
+    };
+    Ok(ab_glyph::FontVec::try_from_vec_and_index(bytes, 0).map_err(|_| "invalid font")?)
+}
+
+/// Loads `base/font.ttf` alone when present; otherwise loads the encoding's system fonts,
+/// installing subsequent available faces as fallbacks.
+pub fn load_game_font(
+    base: &Path,
+    encoding: TextEncoding,
+    missing_message: &'static str,
+    mut load_system: impl FnMut(SystemFont) -> Option<Vec<u8>>,
+) -> Result<cmvs_font::font::FontRenderer> {
+    let renderer = |bytes| -> Result<cmvs_font::font::FontRenderer> {
+        Ok(cmvs_font::font::FontRenderer::from_bytes(bytes, 0)?.with_text_encoding(encoding))
+    };
+    match std::fs::read(base.join("font.ttf")) {
+        Ok(bytes) => return renderer(bytes),
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    let mut fonts = system_fonts(encoding)
+        .iter()
+        .filter_map(|&font| load_system(font));
+    let font = renderer(fonts.next().ok_or(missing_message)?)?;
+    for bytes in fonts {
+        font.add_fallback(bytes, 0)?;
+    }
+    Ok(font)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

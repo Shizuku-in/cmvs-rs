@@ -3,6 +3,8 @@
 //! the game text encoding and its comment dialog, and GPU scene compositing with its texture
 //! cache. Each console describes its screen and buttons with a [`Console`]; input
 //! arrives as [`cmvs_native::PadInput`] samples.
+pub mod audio;
+pub mod backend;
 pub mod canvas;
 pub mod controls;
 pub mod encoding;
@@ -13,6 +15,62 @@ pub mod gpu;
 pub mod library;
 pub mod menu;
 pub mod text_input;
+
+use std::{error::Error, fmt, io::Read as _, path::Path, time::Duration};
+
+/// Converts a frame interval to milliseconds saturated to `u32`.
+pub fn millis(duration: Duration) -> u32 {
+    duration.as_millis().min(u128::from(u32::MAX)) as u32
+}
+
+/// Renders the current movie frame if playing, otherwise software-composites the scene.
+pub fn render_software(
+    startup: &cmvs_core::runtime::Runtime<'_>,
+    font: &mut cmvs_font::font::FontRenderer,
+) -> Result<cmvs_core::raster::RgbaImage, Box<dyn Error>> {
+    if let Some(frame) = startup.movie_frame() {
+        return Ok(frame.clone());
+    }
+    Ok(font.render(startup.scene(), startup.camera(), startup.messages())?)
+}
+
+/// Binds user font directory, installs glyph metrics on the runtime, and falls back to the
+/// built-in font face if the configured face is absent.
+pub fn configure_game_font(
+    startup: &mut cmvs_core::runtime::Runtime<'_>,
+    font: &mut cmvs_font::font::FontRenderer,
+    user_dir: &Path,
+) -> Result<(), Box<dyn Error>> {
+    font.set_user_directory(user_dir)?;
+    startup.set_glyph_metrics(font.metrics());
+    if !font.has_face(startup.settings().font_face()) {
+        startup.set_font_face(cmvs_core::settings::DEFAULT_FONT_FACE)?;
+    }
+    Ok(())
+}
+
+/// Reads and parses `root/key.cfg`.
+pub fn load_key_bindings(root: &Path) -> Result<cmvs_core::input::KeyBindings, Box<dyn Error>> {
+    let mut keys = String::new();
+    std::fs::File::open(root.join("key.cfg"))?
+        .take(65537)
+        .read_to_string(&mut keys)?;
+    Ok(cmvs_core::input::KeyBindings::parse(&keys)?)
+}
+
+/// Formats a runtime tick failure with script name, PC, and step count context.
+pub fn format_tick_error(
+    startup: &cmvs_core::runtime::Runtime<'_>,
+    error: impl fmt::Display,
+) -> String {
+    let vm = startup.machine();
+    format!(
+        "{error}\nat {} / 0x{:x} after {} steps",
+        vm.current_name().escape_ascii(),
+        vm.pc(),
+        startup.steps()
+    )
+}
 
 /// What each console button means to the shared pages and the in-game controls.
 #[derive(Debug, Clone, PartialEq, Eq)]

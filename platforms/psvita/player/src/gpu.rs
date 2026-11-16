@@ -3,7 +3,7 @@
 //! pages keep the software path. Readback happens only when the engine requests a
 //! device frame.
 use crate::sys::VitaGpu;
-use cmvs_console::gpu::Compositor;
+use cmvs_console::{backend::ConsoleGpu, gpu::Compositor};
 use cmvs_core::{raster::RgbaImage, scene_render::RenderFrame};
 use std::error::Error;
 
@@ -58,5 +58,11 @@ impl GpuRenderer {
                 .map_err(Into::into)
                 .and_then(|()| Ok(RgbaImage::new(size[0], size[1], pixels)?)),
         )
+    }
+}
+
+impl ConsoleGpu for GpuRenderer {
+    fn read_presented(&mut self) -> Option<Result<RgbaImage>> {
+        self.read()
     }
 }

@@ -1,5 +1,4 @@
 mod audio;
-mod backend;
 mod boost;
 mod gpu;
 #[cfg(target_os = "horizon")]
@@ -15,12 +14,13 @@ mod sys;
 
 use cmvs_console::{
     ButtonMap, Console, Labels,
+    backend::ConsoleBackend,
+    configure_game_font,
     controls::{self, Controls},
     encoding::{self, SystemFont},
-    error_screen, library, menu,
+    error_screen, format_tick_error, library, load_key_bindings, menu, millis, render_software,
 };
 use cmvs_core::{
-    input::KeyBindings,
     profile::Registry,
     raster::RgbaImage,
     runtime::{
@@ -33,7 +33,6 @@ use cmvs_font::font::FontRenderer;
 use cmvs_native::switch_button as button;
 use std::{
     error::Error,
-    io::{ErrorKind, Read},
     path::Path,
     time::{Duration, Instant},
 };
@@ -96,46 +95,6 @@ fn decoded_cache_bytes(total_memory: u64) -> usize {
     }
 }
 
-fn millis(duration: Duration) -> u32 {
-    duration.as_millis().min(u128::from(u32::MAX)) as u32
-}
-
-/// `font.ttf` beside the program wins; otherwise the system's shared Japanese font.
-fn font_bytes(base: &Path) -> Result<Vec<u8>> {
-    match std::fs::read(base.join("font.ttf")) {
-        Ok(bytes) => Ok(bytes),
-        Err(error) if error.kind() == ErrorKind::NotFound => {
-            Ok(sys::shared_font(false).ok_or("no font.ttf and no system shared font")?)
-        }
-        Err(error) => Err(error.into()),
-    }
-}
-
-/// `font.ttf` beside the program alone wins; otherwise the shared fonts the game's text needs,
-/// the first available one primary and the rest as fallbacks.
-fn game_font(base: &Path, encoding: cmvs_core::TextEncoding) -> Result<FontRenderer> {
-    let renderer = |bytes| -> Result<FontRenderer> {
-        Ok(FontRenderer::from_bytes(bytes, 0)?.with_text_encoding(encoding))
-    };
-    match std::fs::read(base.join("font.ttf")) {
-        Ok(bytes) => return renderer(bytes),
-        Err(error) if error.kind() == ErrorKind::NotFound => {}
-        Err(error) => return Err(error.into()),
-    }
-    let mut fonts = encoding::system_fonts(encoding)
-        .iter()
-        .filter_map(|&font| sys::shared_font(font == SystemFont::SimplifiedChinese));
-    let font = renderer(
-        fonts
-            .next()
-            .ok_or("no font.ttf and no system shared font")?,
-    )?;
-    for bytes in fonts {
-        font.add_fallback(bytes, 0)?;
-    }
-    Ok(font)
-}
-
 /// How a game session ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Ended {
@@ -158,13 +117,6 @@ fn render_gpu(
     let composition = font.compose(startup.scene(), startup.camera(), startup.messages())?;
     let frame = composition.prepare()?;
     gpu.render(&frame)
-}
-
-fn render(startup: &Runtime<'_>, font: &mut FontRenderer) -> Result<RgbaImage> {
-    if let Some(frame) = startup.movie_frame() {
-        return Ok(frame.clone());
-    }
-    Ok(font.render(startup.scene(), startup.camera(), startup.messages())?)
 }
 
 /// Host-only crosshair; the engine screenshot readback never includes it.
@@ -209,7 +161,7 @@ fn run(
             ..Default::default()
         },
     )?;
-    let (audio, audio_thread) = audio::AudioThread::start(root)?;
+    let (audio, audio_thread) = audio::start(root)?;
     let audio_control = audio.host_control();
     startup.set_audio_backend(Box::new(audio))?;
     // Core 0 runs the VM and rendering, core 1 the audio thread.
@@ -237,25 +189,24 @@ fn run(
     // Requested screen captures read back the canvas instead of a software redraw.
     startup.set_host_capture(gpu.is_some());
     startup.set_save_clock(Box::new(cmvs_core::runtime::utc_save_time));
-    let mut font = game_font(base, encoding)?;
-    font.set_user_directory(&user)?;
-    startup.set_glyph_metrics(font.metrics());
-    if !font.has_face(startup.settings().font_face()) {
-        startup.set_font_face(cmvs_core::settings::DEFAULT_FONT_FACE)?;
-    }
-    let mut keys = String::new();
-    std::fs::File::open(root.join("key.cfg"))?
-        .take(65537)
-        .read_to_string(&mut keys)?;
-    let bindings = KeyBindings::parse(&keys)?;
+    let mut font = encoding::load_game_font(
+        base,
+        encoding,
+        "no font.ttf and no system shared font",
+        |font| sys::shared_font(font == SystemFont::SimplifiedChinese),
+    )?;
+    configure_game_font(&mut startup, &mut font, &user)?;
+    let bindings = load_key_bindings(root)?;
     let size = startup.screen_size();
-    let mut backend = backend::Backend {
+    let mut backend = ConsoleBackend {
         display: startup.display_preferences(),
         size,
         frame: None,
         gpu,
         modal_shown: false,
         encoding,
+        platform_name: "Switch",
+        text_dialog: |t, p, i, l, c| sys::software_keyboard(t, p, i, l, c),
     };
     backend.display.render_mode =
         cmvs_core::platform::supported_render_mode(&backend, backend.display.render_mode)?;
@@ -308,15 +259,9 @@ fn run(
         let outcome =
             driver.run_slice(&mut startup, &mut FrameBudget::time(BUDGET), |startup| {
                 let tick = Instant::now();
-                let event = startup.tick(&mut backend).map_err(|error| {
-                    let vm = startup.machine();
-                    format!(
-                        "{error}\nat {} / 0x{:x} after {} steps",
-                        vm.current_name().escape_ascii(),
-                        vm.pc(),
-                        startup.steps()
-                    )
-                })?;
+                let event = startup
+                    .tick(&mut backend)
+                    .map_err(|error| format_tick_error(startup, error))?;
                 if std::mem::take(&mut backend.modal_shown) {
                     // Time inside the keyboard is not game time, and the button that
                     // closed it must not click the game.
@@ -355,7 +300,7 @@ fn run(
                         startup.supply_capture(gpu.read()?)?;
                     }
                 } else {
-                    let frame = render(&startup, &mut font)?;
+                    let frame = render_software(&startup, &mut font)?;
                     surface.fill(0);
                     frame.draw_scaled(&mut surface, SCREEN[0], SCREEN[1], mode, linear)?;
                     if controls.cursor_visible() {
@@ -578,8 +523,8 @@ fn main() {
         Ok(gpu) => gpu,
         Err(error) => return system_error(&error.to_string()),
     };
-    let font = match font_bytes(Path::new(BASE)).and_then(|bytes| {
-        Ok(ab_glyph::FontVec::try_from_vec_and_index(bytes, 0).map_err(|_| "invalid font")?)
+    let font = match encoding::load_host_font(Path::new(BASE), || {
+        Ok(sys::shared_font(false).ok_or("no font.ttf and no system shared font")?)
     }) {
         Ok(font) => font,
         Err(error) => return system_error(&format!("cannot load the font: {error}")),
