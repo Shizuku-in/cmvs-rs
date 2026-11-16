@@ -78,6 +78,38 @@ impl EngineProfile {
             .iter()
             .map(|(command, entry)| (*command, entry))
     }
+    /// Whether this profile belongs to the predecessor CVNS family.
+    pub fn is_cvns(&self) -> bool {
+        self.family == Family::Cvns
+    }
+    /// Startup INI filename for this engine family (`cvns.cfg` or `cmvs.cfg`).
+    pub fn config_file_name(&self) -> &'static str {
+        if self.is_cvns() {
+            "cvns.cfg"
+        } else {
+            "cmvs.cfg"
+        }
+    }
+    /// System save filename for this engine family (`save000.dat` or `system.dat`).
+    pub fn system_save_file_name(&self) -> &'static str {
+        if self.is_cvns() {
+            "save000.dat"
+        } else {
+            "system.dat"
+        }
+    }
+    /// Gameplay save slot format and slot-numbering family.
+    pub fn save_family(&self) -> crate::save_menu::SaveFamily {
+        if self.is_cvns() {
+            crate::save_menu::SaveFamily::Cvns
+        } else {
+            crate::save_menu::SaveFamily::Cmvs
+        }
+    }
+    /// Whether native desktop input binds keys from `key.cfg` (false for CVNS fixed codes).
+    pub fn uses_key_cfg(&self) -> bool {
+        !self.is_cvns()
+    }
     /// String variable slots of this engine: 256 for CVNS, 128 for CMVS.
     pub fn string_slots(&self) -> u32 {
         match self.family {
@@ -433,7 +465,7 @@ impl Registry {
                     Some(target) if target < crate::cvns::CVNS_ONLY => {
                         base.status(target) == CommandStatus::Base
                     }
-                    Some(target) => crate::dispatch::root_entry(target).is_some(),
+                    Some(target) => crate::dispatch::cvns_entry(target).is_some(),
                 };
                 if profile
                     .reviews

@@ -777,4 +777,48 @@ mod tests {
         let _ = std::fs::remove_dir_all(user);
         let _ = std::fs::remove_dir_all(root);
     }
+
+    #[test]
+    fn cvns_hosts_and_finish_reset_enable_cvns_from_profile() {
+        let registry = Registry::builtin();
+        let cvns = registry.profile("cvns-20090203").unwrap();
+        let cmvs = registry.profile("cmvs-20160201").unwrap();
+        assert!(crate::scene::SceneHost::for_profile(cvns).cvns().is_some());
+        assert!(crate::scene::SceneHost::for_profile(cmvs).cvns().is_none());
+        assert_eq!(
+            crate::audio::AudioHost::for_profile(cvns, &[]).se_channel_count(),
+            crate::audio::CVNS_SE_CHANNELS
+        );
+        assert_eq!(
+            crate::audio::AudioHost::for_profile(cmvs, &[]).se_channel_count(),
+            crate::audio::SE_CHANNELS
+        );
+        assert!(
+            crate::system_save::SystemSaveHost::for_profile(cvns)
+                .css0_starts
+                .is_some()
+        );
+        assert!(
+            crate::system_save::SystemSaveHost::for_profile(cmvs)
+                .css0_starts
+                .is_none()
+        );
+
+        let (root, raw) = capture_fixture("cvns-finish-reset");
+        let game = registry
+            .identify_game(&root, Some("cvns-20090203"))
+            .unwrap();
+        let script = Script::decode(&raw).unwrap();
+        let mut run = Runtime::new(&script, &root, &game, 0).unwrap();
+        assert!(run.scene.cvns().is_some());
+        assert!(run.messages.cvns().is_some());
+        assert_eq!(run.audio.se_channel_count(), crate::audio::CVNS_SE_CHANNELS);
+
+        let replacement = Machine::prepare_main(b"main.pss".to_vec(), script.clone()).unwrap();
+        run.finish_reset(replacement);
+        assert!(run.scene.cvns().is_some());
+        assert!(run.messages.cvns().is_some());
+        assert_eq!(run.audio.se_channel_count(), crate::audio::CVNS_SE_CHANNELS);
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

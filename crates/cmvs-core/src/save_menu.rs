@@ -262,13 +262,8 @@ impl Default for SaveMenuHost {
 
 impl SaveMenuHost {
     pub fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
-        let family = if profile.family == crate::profile::Family::Cvns {
-            SaveFamily::Cvns
-        } else {
-            SaveFamily::Cmvs
-        };
         Self {
-            family,
+            family: profile.save_family(),
             ..Self::default()
         }
     }
@@ -435,7 +430,7 @@ impl SaveMenuHost {
             let menu = SaveMenu::scan(source, argument as i32)?;
             call.complete(0x4004)?;
             self.menu = Some(menu);
-        } else if command == 0x5a1 {
+        } else if command == crate::cvns::cmd::MENU_SCAN {
             let menu = SaveMenu::scan_cvns(source, argument)?;
             call.complete(0x4004)?;
             self.menu = Some(menu);

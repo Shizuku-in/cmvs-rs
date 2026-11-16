@@ -10,7 +10,7 @@ use support::bytecode::{command, pending, script};
 
 #[test]
 fn missing_capabilities_preserve_pending_commands_and_arguments() {
-    for entry in dispatch::ROOT {
+    for entry in dispatch::ROOT.iter().chain(dispatch::CVNS) {
         let mut code = vec![];
         command(&mut code, entry.command + 0x2000, &[77]);
         let script = script(&code);
@@ -151,7 +151,10 @@ fn screen_coordinates_reject_invalid_targets_without_consuming_arguments() {
 
 #[test]
 fn migrated_tables_have_unique_owners_and_overrides_are_build_bound() {
-    for table in std::iter::once(dispatch::ROOT).chain(dispatch::VARIANT_TABLES.iter().copied()) {
+    for table in [dispatch::ROOT, dispatch::CVNS]
+        .into_iter()
+        .chain(dispatch::VARIANT_TABLES.iter().copied())
+    {
         let owners: std::collections::BTreeSet<_> = table.iter().map(|e| e.command).collect();
         assert_eq!(owners.len(), table.len());
         for entry in table {

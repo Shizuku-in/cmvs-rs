@@ -52,9 +52,8 @@ impl SharedMessageWait for MessageHost {
         context: AutoAdvanceContext<'_>,
     ) -> Result<Option<Step>, Box<dyn Error>> {
         if !vm.pending_system().is_some_and(|(_, c)| {
-            dispatch::ROOT
-                .iter()
-                .any(|e| e.command == c && e.capability == Capability::MessageWait)
+            dispatch::entry(Semantics::Root, c)
+                .is_some_and(|e| e.capability == Capability::MessageWait)
         }) {
             return Ok(None);
         }

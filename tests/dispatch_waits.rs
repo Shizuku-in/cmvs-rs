@@ -116,9 +116,9 @@ fn inactive_waits_check_capabilities_then_complete_without_yield_or_frame_advanc
         );
     }
 
-    let cvns_waits: Vec<_> = dispatch::ROOT
+    let cvns_waits: Vec<_> = dispatch::CVNS
         .iter()
-        .filter(|entry| entry.command >= 0x400 && dispatch::is_wait(entry.command))
+        .filter(|entry| dispatch::is_wait(entry.command))
         .collect();
     assert_eq!(cvns_waits.len(), 4);
     for entry in cvns_waits {

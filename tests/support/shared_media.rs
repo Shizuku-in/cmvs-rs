@@ -19,9 +19,7 @@ fn run(
     capability: Capability,
 ) -> Result<bool, DispatchError> {
     if !vm.pending_system().is_some_and(|(_, c)| {
-        dispatch::ROOT
-            .iter()
-            .any(|e| e.command == c && e.capability == capability)
+        dispatch::entry(Semantics::Root, c).is_some_and(|e| e.capability == capability)
     }) {
         return Ok(false);
     }

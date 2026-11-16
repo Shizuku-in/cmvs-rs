@@ -58,25 +58,28 @@ impl PersistentStarts {
                     };
                 }
                 InstructionKind::Simple if instruction.opcode == 0x430 => pushed = value.take(),
-                InstructionKind::System { command } => match map.runtime(command) {
-                    0x50b => {
-                        starts.bit = pushed
-                            .take()
-                            .ok_or(FormatError("dynamic CVNS persistent bit start"))?;
+                InstructionKind::System { command } => {
+                    use crate::cvns::cmd;
+                    match map.runtime(command) {
+                        cmd::PERSISTENT_BIT_START => {
+                            starts.bit = pushed
+                                .take()
+                                .ok_or(FormatError("dynamic CVNS persistent bit start"))?;
+                        }
+                        cmd::PERSISTENT_INT_START => {
+                            starts.integer = pushed
+                                .take()
+                                .ok_or(FormatError("dynamic CVNS persistent integer start"))?;
+                        }
+                        cmd::PERSISTENT_STR_START => {
+                            starts.string = pushed
+                                .take()
+                                .ok_or(FormatError("dynamic CVNS persistent string start"))?;
+                        }
+                        cmd::SYSTEM_SAVE_READ => break,
+                        _ => pushed = None,
                     }
-                    0x50c => {
-                        starts.integer = pushed
-                            .take()
-                            .ok_or(FormatError("dynamic CVNS persistent integer start"))?;
-                    }
-                    0x50d => {
-                        starts.string = pushed
-                            .take()
-                            .ok_or(FormatError("dynamic CVNS persistent string start"))?;
-                    }
-                    0x5c0 => break,
-                    _ => pushed = None,
-                },
+                }
                 InstructionKind::Jump { .. }
                 | InstructionKind::ConditionalJump { .. }
                 | InstructionKind::CompareJump { .. }

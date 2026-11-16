@@ -10,9 +10,7 @@ use cmvs_rs::{
 use std::error::Error;
 fn accepts(vm: &Machine<'_>, cap: Capability) -> bool {
     vm.pending_system().is_some_and(|(_, c)| {
-        dispatch::ROOT
-            .iter()
-            .any(|e| e.command == c && e.capability == cap)
+        dispatch::entry(Semantics::Root, c).is_some_and(|e| e.capability == cap)
     })
 }
 #[allow(dead_code)]

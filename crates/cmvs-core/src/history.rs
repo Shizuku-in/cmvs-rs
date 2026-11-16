@@ -32,14 +32,22 @@ impl HistoryHost {
     }
 
     pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x12f..=0x136 | 0x536 | 0x537))) = vm.pending_system() else {
+        use crate::cvns::cmd;
+        let Some((pc, command)) = vm.pending_system() else {
             return Ok(false);
         };
+        if !matches!(
+            command,
+            0x12f..=0x136 | cmd::HISTORY_QUERY | cmd::HISTORY_APPEND
+        ) {
+            return Ok(false);
+        }
         self.handle(&mut Call::new(vm, pc, command))?;
         Ok(true)
     }
 
     pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        use crate::cvns::cmd;
         let pc = call.pc;
         let command = call.command;
         // 0x140083240 -> 0x14005e800 frees the nodes and their dynamic strings,
@@ -49,10 +57,10 @@ impl HistoryHost {
             self.entries.clear();
             return Ok(());
         }
-        if matches!(command, 0x130..=0x135 | 0x536) {
+        if matches!(command, 0x130..=0x135 | cmd::HISTORY_QUERY) {
             return self.query(call);
         }
-        let is_cvns = command == 0x537;
+        let is_cvns = command == cmd::HISTORY_APPEND;
         let op = command + 0x2000;
         let str_count = if is_cvns { 3 } else { 4 };
         let word_count = if is_cvns { 4 } else { 6 };

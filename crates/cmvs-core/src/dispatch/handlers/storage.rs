@@ -80,7 +80,7 @@ pub(in crate::dispatch) fn root_runtime(
                 20,
             )
         }
-        0x5ac => {
+        crate::cvns::cmd::SLOT_INFO => {
             let slot = call.argument(4, "save slot")? as i32;
             let img_slot = call.argument(8, "CVNS image slot")?;
             let label_arg = call.argument(12, "label destination")?;

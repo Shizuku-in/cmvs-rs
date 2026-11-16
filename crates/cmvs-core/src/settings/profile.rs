@@ -102,7 +102,7 @@ impl Configuration {
             let value = |section, key, default| {
                 crate::save_menu::profile_int(&self.0, section, key, default) as u32
             };
-            let section = if profile.family == crate::profile::Family::Cvns {
+            let section = if profile.is_cvns() {
                 "CVNS_SYSTEM_MAIN"
             } else {
                 "CMVS_SYSTEM_MAIN"

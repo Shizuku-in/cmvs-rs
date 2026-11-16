@@ -997,6 +997,15 @@ impl AudioHost {
     pub fn voice_ducking(&self) -> VoiceDuckingSettings {
         self.voice_ducking
     }
+    /// Read-only startup configuration (0x14000a3c0) bound to `profile`.
+    pub fn for_profile(profile: &crate::profile::EngineProfile, text: &[u8]) -> Self {
+        let mut host = Self::from_ini(text);
+        if profile.is_cvns() {
+            host.enable_cvns();
+        }
+        host
+    }
+
     /// Read-only startup configuration (0x14000a3c0); registry overrides and
     /// configuration persistence are separate backend work. Call before playback.
     pub fn from_ini(text: &[u8]) -> Self {

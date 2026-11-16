@@ -7,7 +7,7 @@
 //! resolves the command. Complete hosts should use [`crate::runtime::Runtime`],
 //! which performs this sequence and handles runtime requests.
 //!
-//! [`Entry`], [`ROOT`], [`VARIANT_TABLES`], and [`variant_entry`] expose registration
+//! [`Entry`], [`ROOT`], [`CVNS`], [`VARIANT_TABLES`], and [`variant_entry`] expose registration
 //! metadata for inspection. Handlers and their argument bookkeeping are internal;
 //! metadata alone does not authorize a command or establish host capabilities.
 mod call;
@@ -24,21 +24,21 @@ pub use hosts::{
     SystemReadHosts, SystemWriteHosts, TextHosts, WaitHosts,
 };
 pub use registry::{
-    ACTIVATION_PASS, AUDIO_PRELOAD, BACKGROUND_AUDIO, CAMERA_MOVE_X, COLLISION_PARTICLES,
+    ACTIVATION_PASS, AUDIO_PRELOAD, BACKGROUND_AUDIO, CAMERA_MOVE_X, COLLISION_PARTICLES, CVNS,
     DISPLAY_COUNT, DRAW_QUERY, FADING_PARTICLES, FALLING_BILLBOARDS, FALLING_BILLBOARDS_X87,
     FONT_CELLS, FRAGMENTS, FULLSCREEN_MONITOR, IMAGE_TABLES, INPUT_PRESS, KEYED_ARCHIVES,
     LEGACY_EFFECTS, LIST_SELECT, LOGICAL_TEXT, MGV_PLAYER, MIXER_GAIN, MOVIE_CONTROL, MOVIE_SEEK,
     OBJECT_QUEUE, PARTICLES, PARTICLES_X87, POLAR_POINT, RAIN, ROOT, SCREEN_COORDINATES, SE_GAIN,
     SE_RESTART, SEQUENCE_WINDOW_IMAGE, TEXT_ALPHA, TEXT_DIALOG, VARIANT_TABLES, VIEW_MOTION,
     WINDOW_CHILD_IMAGE, WINDOW_DRAW_SCALE, WINDOW_FULL_MOVE, WINDOW_OPACITY_TRACK,
-    WINDOW_POSITION_MOTION, WINDOW_SCALE_MOTION, is_lifecycle, is_message_wait, is_wait,
+    WINDOW_POSITION_MOTION, WINDOW_SCALE_MOTION, entry, is_lifecycle, is_message_wait, is_wait,
     is_wait_for, semantics_name, uses_bootstrap, uses_bootstrap_for, uses_device_frame,
     uses_device_frame_for, uses_images, uses_input, uses_input_for, uses_message_state,
     uses_movie_player, uses_movie_player_for, uses_movie_scene, uses_movie_scene_for,
     uses_platform, uses_platform_for, uses_sequence, uses_window_images, uses_windows,
     variant_entry,
 };
-pub(crate) use registry::{resolve_entry, root_entry};
+pub(crate) use registry::{cvns_entry, resolve_entry};
 
 use crate::{
     bytecode::DecodeError,

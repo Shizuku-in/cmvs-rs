@@ -264,6 +264,17 @@ impl FileSystemSave {
             css0: true,
         }
     }
+    pub fn for_profile_with_fs(
+        profile: &crate::profile::EngineProfile,
+        path: impl AsRef<Path>,
+        fs: Arc<dyn HostFs>,
+    ) -> Self {
+        if profile.is_cvns() {
+            Self::css0_with_fs(path, fs)
+        } else {
+            Self::with_fs(path, fs)
+        }
+    }
     #[cfg(feature = "std-fs")]
     pub fn new(path: impl AsRef<Path>) -> Self {
         Self::with_fs(path, crate::filesystem::default_fs())
@@ -271,6 +282,10 @@ impl FileSystemSave {
     #[cfg(feature = "std-fs")]
     pub fn css0(path: impl AsRef<Path>) -> Self {
         Self::css0_with_fs(path, crate::filesystem::default_fs())
+    }
+    #[cfg(feature = "std-fs")]
+    pub fn for_profile(profile: &crate::profile::EngineProfile, path: impl AsRef<Path>) -> Self {
+        Self::for_profile_with_fs(profile, path, crate::filesystem::default_fs())
     }
 }
 impl SystemSaveSource for FileSystemSave {
@@ -317,6 +332,14 @@ pub struct SystemSaveHost {
     pub lists: [Option<Vec<Vec<u8>>>; 2],
 }
 impl SystemSaveHost {
+    /// Construct system-save host state for the selected engine profile.
+    pub fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
+        let mut host = Self::default();
+        if profile.is_cvns() {
+            host.set_css0(PersistentStarts::default());
+        }
+        host
+    }
     /// Switches `write_now` / `try_write` to emit CSS0 `save000.dat` with `starts`.
     pub fn set_css0(&mut self, starts: PersistentStarts) {
         self.css0_starts = Some(starts);

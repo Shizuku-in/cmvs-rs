@@ -9,6 +9,27 @@ pub const CVNS_ONLY: u16 = 0x400;
 /// Highest runtime command: VM system opcodes are 0x2000..=0x27ff.
 pub const LAST_COMMAND: u16 = 0x7ff;
 
+/// CVNS-only runtime command numbers (`CVNS_ONLY + source`) referenced by shared
+/// subsystems outside the dispatch registry table.
+pub mod cmd {
+    pub const FRAME_INTERVAL: u16 = 0x402;
+    pub const CAPTURE_SCREEN: u16 = 0x45a;
+    pub const PERSISTENT_BIT_START: u16 = 0x50b;
+    pub const PERSISTENT_INT_START: u16 = 0x50c;
+    pub const PERSISTENT_STR_START: u16 = 0x50d;
+    pub const TEXT_MESSAGE_LOG: u16 = 0x512;
+    pub const TEXT_MESSAGE_WAIT: u16 = 0x520;
+    pub const HISTORY_QUERY: u16 = 0x536;
+    pub const HISTORY_APPEND: u16 = 0x537;
+    pub const MASK_CAPTURE: u16 = 0x589;
+    pub const MENU_SCAN: u16 = 0x5a1;
+    pub const SLOT_INFO: u16 = 0x5ac;
+    pub const SYSTEM_SAVE_READ: u16 = 0x5c0;
+    pub const SYSTEM_SAVE_WRITE: u16 = 0x5c1;
+    pub const GET_CONFIG: u16 = 0x5ec;
+    pub const SET_CONFIG: u16 = 0x5ed;
+}
+
 /// Source command (opcode minus 0x2000) to runtime command. Unmapped commands keep their
 /// number; the profile gate stops them before any handler can run.
 #[derive(Debug, Clone, PartialEq, Eq)]

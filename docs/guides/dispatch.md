@@ -12,7 +12,7 @@ Runtime 与 trace 共用 [dispatch](../../crates/cmvs-core/src/dispatch.rs)。�
 | `dispatch/hosts.rs` | 服务集合、能力定义与可用性检查 |
 | `dispatch/call.rs` | 参数记账、指令完成、延迟运行时请求 |
 | `dispatch/registry.rs` | 命令索引、能力分类查询、变体选择 |
-| `dispatch/registry/{root,variants}.rs` | 基准与变体登记表，只关联命令、能力和处理函数 |
+| `dispatch/registry/{root,cvns,variants}.rs` | 基准、CVNS 专有与变体登记表，只关联命令、能力和处理函数 |
 | `dispatch/handlers/` | 按文本、输入、场景、媒体、存储、平台和基础服务组织的处理器 |
 | `dispatch/ownership.rs` | runner/trace 的只读归属清单 |
 
@@ -28,7 +28,7 @@ Runtime 与 trace 共用 [dispatch](../../crates/cmvs-core/src/dispatch.rs)。�
 
 ## 新增或修改命令
 
-1. 在 `handlers/` 对应领域实现处理器；在 `registry/root.rs` 登记 opcode、能力和处理器，语义差异登记在 `registry/variants.rs`。
+1. 在 `handlers/` 对应领域实现处理器；在 `registry/root.rs`（或 CVNS 专有 `registry/cvns.rs`）登记 opcode、能力和处理器，语义差异登记在 `registry/variants.rs`。
 2. 用 `Call::argument` 读取命名参数，忽略的参数用 `ignore_argument` 标记，保留原验证与提交顺序。
 3. 用 `finish` 完成并核对回收量；等待用 `wait`，保留 pending 供后续重试。不要另加 `try_*` 试探链。
 4. 更新归属与行为测试，覆盖缺能力、失败重试、参数回收及结果状态。

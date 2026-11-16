@@ -199,7 +199,7 @@ pub(in crate::dispatch) fn cvns_config(
     hosts: &mut Hosts<'_>,
     call: &mut Call<'_, '_>,
 ) -> Result<Flow, Box<dyn Error>> {
-    if call.command == 0x5ec {
+    if call.command == crate::cvns::cmd::GET_CONFIG {
         cvns_get_config(hosts, call)?;
     } else {
         cvns_set_config(hosts, call)?;

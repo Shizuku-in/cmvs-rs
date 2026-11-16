@@ -945,7 +945,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         })
         .transpose()?;
     let bindings = if native_input {
-        if game.selection.profile.family == cmvs_core::profile::Family::Cvns {
+        if !game.selection.profile.uses_key_cfg() {
             println!(
                 "# native input enabled; CVNS uses fixed virtual key and mouse codes (no key.cfg)"
             );

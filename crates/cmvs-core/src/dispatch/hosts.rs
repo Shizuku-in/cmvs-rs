@@ -256,8 +256,10 @@ impl Capability {
 
     pub(crate) fn uses_message_state(self, command: u16) -> bool {
         // The font-name query needs the message host's backend to show a readable name.
-        matches!(command, 0x2de | 0x5ec | 0x5ed)
-            || self.uses_windows()
+        matches!(
+            command,
+            0x2de | crate::cvns::cmd::GET_CONFIG | crate::cvns::cmd::SET_CONFIG
+        ) || self.uses_windows()
             || matches!(
                 self,
                 Self::TextState | Self::AuxiliaryScene | Self::FontDialog

@@ -210,6 +210,23 @@ pub fn shader_draw<'a>(command: &Layer<'a>, size: [u32; 2]) -> ShaderDraw<'a> {
     }
 }
 
+/// Builds a full-target opaque draw for a [`super::RenderFrame::precomposited`] image.
+pub fn precomposited_draw<'a>(image: &'a RgbaImage, size: [u32; 2]) -> ShaderDraw<'a> {
+    let [w, h] = size.map(|v| v as f32);
+    let [sw, sh] = [image.width() as f32, image.height() as f32];
+    let mut p = [0f32; PARAM_FLOATS];
+    p[0] = w;
+    p[1] = h;
+    p[2] = 255.0;
+    p[4..8].copy_from_slice(&[0.0, 0.0, sw, sh]);
+    p[8..16].copy_from_slice(&[0.0, 0.0, w, 0.0, 0.0, h, w, h]);
+    ShaderDraw {
+        params: p,
+        blend: ShaderBlend::Replace,
+        textures: [Some(image), None, None],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

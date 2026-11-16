@@ -128,28 +128,24 @@ impl Target {
     pub fn is_cvns(&self) -> bool {
         self.game
             .as_ref()
-            .is_some_and(|g| g.selection.profile.family == cmvs_core::profile::Family::Cvns)
+            .is_some_and(|g| g.selection.profile.is_cvns())
     }
     pub fn save_family(&self) -> cmvs_core::save_menu::SaveFamily {
-        if self.is_cvns() {
-            cmvs_core::save_menu::SaveFamily::Cvns
-        } else {
-            cmvs_core::save_menu::SaveFamily::Cmvs
-        }
+        self.game
+            .as_ref()
+            .map_or(cmvs_core::save_menu::SaveFamily::Cmvs, |g| {
+                g.selection.profile.save_family()
+            })
     }
     pub fn system_save_name(&self) -> &'static str {
-        if self.is_cvns() {
-            "save000.dat"
-        } else {
-            "system.dat"
-        }
+        self.game.as_ref().map_or("system.dat", |g| {
+            g.selection.profile.system_save_file_name()
+        })
     }
     pub fn config_file_name(&self) -> &'static str {
-        if self.is_cvns() {
-            "cvns.cfg"
-        } else {
-            "cmvs.cfg"
-        }
+        self.game
+            .as_ref()
+            .map_or("cmvs.cfg", |g| g.selection.profile.config_file_name())
     }
     /// The first capability of `needed` that is missing, for `skipped` results.
     pub fn missing(&self, needed: &[&'static str]) -> Option<&'static str> {

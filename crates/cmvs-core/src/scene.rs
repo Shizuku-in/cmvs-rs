@@ -600,10 +600,14 @@ pub struct SceneHost {
     cvns: Option<Box<cvns::CvnsScene>>,
 }
 impl SceneHost {
-    /// Construct runtime hosts for the independently inspected child-table layout.
+    /// Construct runtime hosts for the independently inspected child-table layout
+    /// and engine family.
     pub fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
         Self {
             config: SceneConfig::for_profile(profile),
+            cvns: profile
+                .is_cvns()
+                .then(|| Box::new(cvns::CvnsScene::default())),
             ..Self::default()
         }
     }

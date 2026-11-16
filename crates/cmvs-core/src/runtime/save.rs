@@ -525,11 +525,7 @@ impl Runtime<'_> {
     }
 
     pub(super) fn save_family(&self) -> SaveFamily {
-        if self.gate.selection().profile.family == crate::profile::Family::Cvns {
-            SaveFamily::Cvns
-        } else {
-            SaveFamily::Cmvs
-        }
+        self.gate.selection().profile.save_family()
     }
 
     /// The 600-byte header 0x140069270 (or CVNS 0x44ebf0) prepares at +11204 / +22816.

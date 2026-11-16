@@ -559,8 +559,9 @@ pub(in crate::dispatch) fn root_cvns_image(
     hosts: &mut Hosts<'_>,
     call: &mut Call<'_, '_>,
 ) -> Result<Flow, Box<dyn Error>> {
-    if hosts.runtime && matches!(call.command, 0x45a | 0x589) {
-        if call.command == 0x45a {
+    use crate::cvns::cmd;
+    if hosts.runtime && matches!(call.command, cmd::CAPTURE_SCREEN | cmd::MASK_CAPTURE) {
+        if call.command == cmd::CAPTURE_SCREEN {
             let slot = call.argument(4, "image slot")?;
             if (slot as usize) >= crate::scene::cvns::CVNS_IMAGES {
                 return Err(call.error("CVNS image slot outside 0..127").into());

@@ -33,11 +33,12 @@ impl Bootstrap {
     }
     /// CVNS 0x210b..0x210d as recorded so far, over the constructor defaults.
     pub fn cvns_persistent_starts(&self) -> crate::system_save::PersistentStarts {
+        use crate::cvns::cmd;
         let mut starts = crate::system_save::PersistentStarts::default();
         for (key, field) in [
-            (0x250b, &mut starts.bit),
-            (0x250c, &mut starts.integer),
-            (0x250d, &mut starts.string),
+            (0x2000 + cmd::PERSISTENT_BIT_START, &mut starts.bit),
+            (0x2000 + cmd::PERSISTENT_INT_START, &mut starts.integer),
+            (0x2000 + cmd::PERSISTENT_STR_START, &mut starts.string),
         ] {
             if let Some(&value) = self.settings.get(&key) {
                 *field = value;

@@ -279,17 +279,12 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut script_source = script_archive
         .map(|path| -> Result<_, Box<dyn Error>> { ArchiveScripts::new(File::open(path)?) })
         .transpose()?;
-    let mut control = ScriptControl::for_profile(gate.selection().profile, virtual_tick);
+    let profile = gate.selection().profile;
+    let mut control = ScriptControl::for_profile(profile, virtual_tick);
     let mut saves = save_dir.map(DirectorySaves::new).transpose()?;
-    let mut save_menu = SaveMenuHost::default();
-    let mut system_source = system_save_path.map(|path| {
-        if gate.selection().profile.family == cmvs_rs::profile::Family::Cvns {
-            FileSystemSave::css0(path)
-        } else {
-            FileSystemSave::new(path)
-        }
-    });
-    let mut system_host = SystemSaveHost::default();
+    let mut save_menu = SaveMenuHost::for_profile(profile);
+    let mut system_source = system_save_path.map(|path| FileSystemSave::for_profile(profile, path));
+    let mut system_host = SystemSaveHost::for_profile(profile);
     let mut images = platform_root.as_ref().map(ImageArchives::new).transpose()?;
     let movie_root = platform_root
         .as_ref()
@@ -299,7 +294,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut platform_host = PlatformHost::default();
     let mut platform_backend = RecordingBackend::default();
     let mut save_image = SaveImage::default();
-    let mut scene = SceneHost::default();
+    let mut scene = SceneHost::for_profile(profile);
     let mut timers = VmTimers::default();
     let mut resume_run = true;
     let mut frame_delta = 0;
@@ -307,12 +302,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut gesture = PointerGesture::default();
     let mut history = HistoryHost::default();
     let cfg_bytes = if let Some(root) = &movie_root {
-        let file_name = if gate.selection().profile.family == cmvs_rs::profile::Family::Cvns {
-            "cvns.cfg"
-        } else {
-            "cmvs.cfg"
-        };
-        match std::fs::read(root.join(file_name)) {
+        match std::fs::read(root.join(profile.config_file_name())) {
             Ok(bytes) => bytes,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
             Err(e) => return Err(e.into()),
@@ -327,15 +317,13 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut buttons = ButtonHost::default();
     let mut movies = MovieHost::default();
     let mut sequence = SequenceHost::default();
-    let mut camera = CameraHost::default();
+    let mut camera = CameraHost::for_profile(profile);
     // Traces supply no input: no CMVS action is ever active.
     let mut input = ActionInput::default();
-    let mut audio = AudioHost::from_ini(&cfg_bytes);
-    if gate.selection().profile.family == cmvs_rs::profile::Family::Cvns {
-        audio.enable_cvns();
-        scene.enable_cvns();
+    let mut audio = AudioHost::for_profile(profile, &cfg_bytes);
+    if profile.is_cvns() {
         let cfg = cmvs_rs::settings::Configuration::new(cfg_bytes.clone())?;
-        scene.set_screen_size(cfg.screen_size_for_profile(gate.selection().profile)?);
+        scene.set_screen_size(cfg.screen_size_for_profile(profile)?);
     }
     let mut audio_backend = RecordingAudio::default();
     if platform_assets.is_some() {
@@ -424,10 +412,10 @@ fn run() -> Result<(), Box<dyn Error>> {
                 if cmvs_rs::dispatch::run(resolved.semantics, &mut machine, &mut hosts)?
                     == Some(cmvs_rs::dispatch::Flow::Done)
                 {
-                    if let Some(&interval) = bootstrap
-                        .as_ref()
-                        .and_then(|host| host.settings().get(&0x2402))
-                    {
+                    if let Some(&interval) = bootstrap.as_ref().and_then(|host| {
+                        host.settings()
+                            .get(&(0x2000 + cmvs_rs::cvns::cmd::FRAME_INTERVAL))
+                    }) {
                         settings.cvns_mut().frame_interval_ms = interval;
                     }
                     if let (Some(images), Some(config)) = (&mut images, &bootstrap) {
@@ -728,15 +716,8 @@ fn run() -> Result<(), Box<dyn Error>> {
             }
             if dispatched == Some(cmvs_rs::dispatch::Flow::Done) {
                 use cmvs_rs::dispatch::Capability;
-                let entry = match resolved.semantics {
-                    cmvs_rs::profile::Semantics::Root => cmvs_rs::dispatch::ROOT
-                        .iter()
-                        .find(|entry| entry.command == command),
-                    cmvs_rs::profile::Semantics::Variant(id) => {
-                        cmvs_rs::dispatch::variant_entry(id, command)
-                    }
-                }
-                .expect("completed command has a selected entry");
+                let entry = cmvs_rs::dispatch::entry(resolved.semantics, command)
+                    .expect("completed command has a selected entry");
                 let capability = entry.capability;
                 match capability {
                     Capability::TextState

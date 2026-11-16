@@ -1,10 +1,12 @@
 //! Command lookup, host provisioning queries, and variant metadata.
+mod cvns;
 mod root;
 mod variants;
 
 use super::Entry;
 use crate::profile::{EngineProfile, Semantics, VariantId};
 
+pub use cvns::CVNS;
 pub use root::ROOT;
 pub use variants::{
     ACTIVATION_PASS, AUDIO_PRELOAD, BACKGROUND_AUDIO, CAMERA_MOVE_X, COLLISION_PARTICLES,
@@ -17,9 +19,21 @@ pub use variants::{
     WINDOW_SCALE_MOTION,
 };
 
+fn default_entry(command: u16) -> Option<&'static Entry> {
+    if command >= crate::cvns::CVNS_ONLY {
+        cvns_entry(command)
+    } else {
+        root_entry(command)
+    }
+}
+
+pub fn entry(semantics: Semantics, command: u16) -> Option<&'static Entry> {
+    resolve_entry(semantics, command)
+}
+
 pub(crate) fn resolve_entry(semantics: Semantics, command: u16) -> Option<&'static Entry> {
     match semantics {
-        Semantics::Root => root_entry(command),
+        Semantics::Root => default_entry(command),
         Semantics::Variant(id) => variant_entry(id, command),
     }
 }
@@ -55,11 +69,11 @@ pub fn uses_input_for(semantics: Semantics, command: u16) -> bool {
 }
 
 pub fn is_message_wait(command: u16) -> bool {
-    root_entry(command).is_some_and(Entry::is_message_wait)
+    default_entry(command).is_some_and(Entry::is_message_wait)
 }
 
 pub fn is_lifecycle(command: u16) -> bool {
-    root_entry(command).is_some_and(Entry::is_lifecycle)
+    default_entry(command).is_some_and(Entry::is_lifecycle)
 }
 
 /// Platform and capture backends must be borrowed independently of image sources.
@@ -126,35 +140,50 @@ pub fn is_wait_for(semantics: Semantics, command: u16) -> bool {
     resolve_entry(semantics, command).is_some_and(Entry::is_wait)
 }
 
-/// The ROOT entry for `command`, through an index built once: system commands are
-/// classified many times per VM step, and ROOT holds each command at most once
-/// (`root_commands_are_unique`).
-pub(crate) fn root_entry(command: u16) -> Option<&'static Entry> {
-    static INDEX: std::sync::OnceLock<Vec<u16>> = std::sync::OnceLock::new();
-    let index = INDEX.get_or_init(|| {
-        let size = ROOT
+fn indexed_entry(
+    table: &'static [Entry],
+    cache: &std::sync::OnceLock<Vec<u16>>,
+    command: u16,
+) -> Option<&'static Entry> {
+    let index = cache.get_or_init(|| {
+        let size = table
             .iter()
             .map(|e| usize::from(e.command) + 1)
             .max()
             .unwrap_or(0);
         let mut index = vec![u16::MAX; size];
-        for (at, entry) in ROOT.iter().enumerate().rev() {
+        for (at, entry) in table.iter().enumerate().rev() {
             index[usize::from(entry.command)] = at as u16;
         }
         index
     });
     match index.get(usize::from(command)) {
-        Some(&at) if at != u16::MAX => Some(&ROOT[usize::from(at)]),
+        Some(&at) if at != u16::MAX => Some(&table[usize::from(at)]),
         _ => None,
     }
 }
 
-/// Every entry for `command` in ROOT and then [`VARIANT_TABLES`], in table order.
+/// The ROOT entry for `command`, through an index built once: system commands are
+/// classified many times per VM step, and ROOT holds each command at most once
+/// (`root_commands_are_unique`).
+pub(crate) fn root_entry(command: u16) -> Option<&'static Entry> {
+    static INDEX: std::sync::OnceLock<Vec<u16>> = std::sync::OnceLock::new();
+    indexed_entry(ROOT, &INDEX, command)
+}
+
+/// The CVNS-only entry for `command` (`>= CVNS_ONLY`), indexed once like [`root_entry`].
+pub(crate) fn cvns_entry(command: u16) -> Option<&'static Entry> {
+    static INDEX: std::sync::OnceLock<Vec<u16>> = std::sync::OnceLock::new();
+    indexed_entry(CVNS, &INDEX, command)
+}
+
+/// Every entry for `command` in ROOT, CVNS, and then [`VARIANT_TABLES`], in table order.
 fn entries_any_table(command: u16) -> &'static [&'static Entry] {
     static INDEX: std::sync::OnceLock<Vec<Vec<&'static Entry>>> = std::sync::OnceLock::new();
     let index = INDEX.get_or_init(|| {
         let all = || {
             ROOT.iter()
+                .chain(CVNS.iter())
                 .chain(VARIANT_TABLES.iter().flat_map(|table| table.iter()))
         };
         let size = all().map(|e| usize::from(e.command) + 1).max().unwrap_or(0);
@@ -298,14 +327,21 @@ mod index_tests {
     #[test]
     fn indexes_match_linear_scans_for_every_command() {
         for command in 0..=u16::MAX {
-            let linear = ROOT.iter().find(|e| e.command == command);
+            let linear_root = ROOT.iter().find(|e| e.command == command);
             assert_eq!(
                 root_entry(command).map(|e| e as *const Entry),
-                linear.map(|e| e as *const Entry),
+                linear_root.map(|e| e as *const Entry),
+                "{command:#x}"
+            );
+            let linear_cvns = CVNS.iter().find(|e| e.command == command);
+            assert_eq!(
+                cvns_entry(command).map(|e| e as *const Entry),
+                linear_cvns.map(|e| e as *const Entry),
                 "{command:#x}"
             );
             let all: Vec<_> = ROOT
                 .iter()
+                .chain(CVNS.iter())
                 .chain(VARIANT_TABLES.iter().flat_map(|table| table.iter()))
                 .filter(|e| e.command == command)
                 .map(|e| e as *const Entry)

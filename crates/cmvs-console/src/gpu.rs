@@ -6,7 +6,7 @@ use cmvs_core::{
     raster::{CacheKey, RgbaImage},
     scene_render::{
         RenderFrame,
-        shader::{ShaderBlend, shader_draw},
+        shader::{ShaderBlend, precomposited_draw, shader_draw},
     },
 };
 use cmvs_native::{GpuDevice, GpuError, GpuTexture};
@@ -242,6 +242,15 @@ impl<D: GpuDevice> Compositor<D> {
         size: [u32; 2],
         transient: &mut Vec<GpuTexture>,
     ) -> Result<()> {
+        if let Some(image) = frame.precomposited() {
+            let draw = precomposited_draw(image, size);
+            let texture = self.upload(image)?;
+            transient.push(texture);
+            self.begin_canvas(size, frame.clear_color())?;
+            self.device
+                .draw(0, draw.used_params(), [texture, self.white, self.white])?;
+            return Ok(());
+        }
         // Every upload precedes the pass, so the pass needs a single barrier.
         let queue: Vec<_> = frame
             .commands()
@@ -446,6 +455,27 @@ mod tests {
         // Once the frame no longer needs them, they make room again.
         render(&mut gpu, &[40]).unwrap();
         assert!(gpu.device().calls.iter().any(|c| c.starts_with("release")));
+    }
+
+    #[test]
+    fn precomposited_frames_upload_draw_and_release_transient_texture() {
+        let device = FakeDevice {
+            capacity: 4,
+            ..FakeDevice::default()
+        };
+        let mut gpu = Compositor::new(device, 1 << 20).unwrap();
+        let mut scene = SceneHost::default();
+        scene.enable_cvns();
+        let frame = cmvs_core::scene_render::prepare_scene(&scene, None, &[], 8, 4).unwrap();
+        assert!(frame.precomposited().is_some());
+        gpu.render(&frame).unwrap();
+        let calls = &gpu.device().calls;
+        assert!(calls.contains(&"upload 2 8x4".to_owned()), "{calls:?}");
+        assert!(
+            calls.contains(&"draw 0 24 [2, 1, 1]".to_owned()),
+            "{calls:?}"
+        );
+        assert!(calls.contains(&"release 2".to_owned()), "{calls:?}");
     }
 
     #[test]

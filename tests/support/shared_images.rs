@@ -32,9 +32,8 @@ fn run(
     capability: Capability,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     if !vm.pending_system().is_some_and(|(_, command)| {
-        dispatch::ROOT
-            .iter()
-            .any(|entry| entry.command == command && entry.capability == capability)
+        dispatch::entry(Semantics::Root, command)
+            .is_some_and(|entry| entry.capability == capability)
     }) {
         return Ok(false);
     }
