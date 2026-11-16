@@ -62,7 +62,15 @@ pub struct DispatchError {
 
 impl DispatchError {
     pub fn as_decode(&self) -> Option<&DecodeError> {
-        self.cause.downcast_ref()
+        crate::find_error_source(Some(self.cause.as_ref()))
+    }
+
+    pub fn as_format(&self) -> Option<&crate::FormatError> {
+        crate::find_error_source(Some(self.cause.as_ref()))
+    }
+
+    pub fn as_io(&self) -> Option<&std::io::Error> {
+        crate::find_error_source(Some(self.cause.as_ref()))
     }
 }
 
@@ -85,6 +93,7 @@ pub enum Flow {
     SystemSave(SystemSaveEvent),
     SystemWritten,
     Platform(PlatformEvent),
+    DeviceFramePending,
     Done,
     Yield,
     Wait,

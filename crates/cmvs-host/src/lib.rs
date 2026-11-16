@@ -294,7 +294,7 @@ impl Player {
                 .run_slice(startup, &mut FrameBudget::steps(4000), |runtime| {
                     runtime.tick(&mut self.backend)
                 })
-                .map_err(PlayerError::Execution)?
+                .map_err(|e| PlayerError::Execution(e.into()))?
             {
                 FrameOutcome::Yield => {
                     self.driver

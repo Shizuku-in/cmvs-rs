@@ -44,25 +44,71 @@ impl DirectoryAssets {
         Self::with_fs(root, crate::filesystem::default_fs())
     }
 }
+/// Failure resolving a bounded game-relative path against a host root directory.
+#[derive(Debug)]
+pub enum PathError {
+    /// The relative path failed lexical bounds checks or resolved outside the root.
+    Format(FormatError),
+    /// Filesystem canonicalization failed (for example, `NotFound`).
+    Io(std::io::Error),
+}
+
+impl PathError {
+    /// Whether path resolution failed because the target path does not exist.
+    pub fn is_not_found(&self) -> bool {
+        matches!(self, Self::Io(error) if error.kind() == std::io::ErrorKind::NotFound)
+    }
+}
+
+impl std::fmt::Display for PathError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Format(error) => error.fmt(f),
+            Self::Io(error) => error.fmt(f),
+        }
+    }
+}
+
+impl Error for PathError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Format(error) => Some(error),
+            Self::Io(error) => Some(error),
+        }
+    }
+}
+
+impl From<FormatError> for PathError {
+    fn from(error: FormatError) -> Self {
+        Self::Format(error)
+    }
+}
+
+impl From<std::io::Error> for PathError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
 /// A bounded ASCII game-relative path, split on `/` or `\`, that must resolve inside the
 /// canonical `root`. Repeated interior separators name the same directory. A missing
-/// file surfaces as the canonicalize `io::Error`.
+/// file surfaces as `PathError::Io` with `ErrorKind::NotFound`.
 pub fn resolve_under_with_fs(
     fs: &dyn HostFs,
     root: &Path,
     name: &[u8],
-) -> Result<PathBuf, Box<dyn Error>> {
+) -> Result<PathBuf, PathError> {
     if name.is_empty()
         || name.len() >= 2048
         || !name.is_ascii()
         || name.contains(&0)
         || name.contains(&b':')
     {
-        return Err("game path must be a bounded ASCII relative path".into());
+        return Err(FormatError("game path must be a bounded ASCII relative path").into());
     }
     let separator = |b| matches!(b, b'/' | b'\\');
     if separator(name[0]) || separator(name[name.len() - 1]) {
-        return Err("invalid game path component".into());
+        return Err(FormatError("invalid game path component").into());
     }
     let mut path = root.to_path_buf();
     for part in name
@@ -70,20 +116,23 @@ pub fn resolve_under_with_fs(
         .filter(|part| !part.is_empty())
     {
         if part == b"." || part == b".." {
-            return Err("invalid game path component".into());
+            return Err(FormatError("invalid game path component").into());
         }
-        path.push(std::str::from_utf8(part)?);
+        path.push(
+            std::str::from_utf8(part)
+                .map_err(|_| FormatError("game path must be a bounded ASCII relative path"))?,
+        );
     }
     let path = fs.canonicalize(&path)?;
     if !path.starts_with(root) {
-        return Err("game path resolves outside root".into());
+        return Err(FormatError("game path resolves outside root").into());
     }
     Ok(path)
 }
 
 /// [`resolve_under_with_fs`] using [`StdFs`](crate::filesystem::StdFs).
 #[cfg(feature = "std-fs")]
-pub fn resolve_under(root: &Path, name: &[u8]) -> Result<PathBuf, Box<dyn Error>> {
+pub fn resolve_under(root: &Path, name: &[u8]) -> Result<PathBuf, PathError> {
     resolve_under_with_fs(&crate::filesystem::StdFs, root, name)
 }
 
@@ -148,6 +197,15 @@ pub enum FontDialogResult {
     Selected(Vec<u8>),
 }
 
+/// Outcome of polling the host for the latest completed logical device frame.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeviceFrameResult {
+    /// Asynchronous device readback is in progress; the VM keeps the instruction pending.
+    Pending,
+    /// Completed logical engine canvas in RGBA order.
+    Ready(crate::raster::RgbaImage),
+}
+
 /// Host implementation of window, presentation, and modal-dialog services.
 ///
 /// Implement [`Self::apply`] and the queries needed by the games your host supports.
@@ -176,6 +234,12 @@ pub trait PlatformBackend {
     /// Absence of a completed frame is an error, not a black/empty fabricated image.
     fn read_device_frame(&mut self) -> Result<crate::raster::RgbaImage, Box<dyn Error>> {
         Err("platform backend does not implement device frame readback".into())
+    }
+    /// Poll for the latest completed engine frame, allowing asynchronous GPU backends to
+    /// report [`DeviceFrameResult::Pending`] while a readback is in flight.
+    /// Synchronous hosts only need to implement [`Self::read_device_frame`].
+    fn poll_device_frame(&mut self) -> Result<DeviceFrameResult, Box<dyn Error>> {
+        self.read_device_frame().map(DeviceFrameResult::Ready)
     }
     fn window_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
         Err("platform backend does not implement window size queries".into())

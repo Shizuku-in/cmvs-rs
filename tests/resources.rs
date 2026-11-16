@@ -248,3 +248,16 @@ fn scene_movie_registration_is_independent_and_searches_only_four_slots() {
         b"image"
     );
 }
+
+#[test]
+fn resolve_under_distinguishes_missing_files_from_invalid_paths() {
+    use cmvs_rs::platform::{PathError, resolve_under};
+    let root = Root::new();
+    let missing = resolve_under(&root.0, b"a/missing.bin").unwrap_err();
+    assert!(missing.is_not_found());
+    assert!(matches!(missing, PathError::Io(_)));
+
+    let invalid = resolve_under(&root.0, b"../outside.bin").unwrap_err();
+    assert!(!invalid.is_not_found());
+    assert!(matches!(invalid, PathError::Format(_)));
+}

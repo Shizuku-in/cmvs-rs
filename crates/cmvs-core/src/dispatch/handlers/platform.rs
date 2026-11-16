@@ -168,8 +168,7 @@ pub(in crate::dispatch) fn root_capture_device(
                 .device_frame
                 .as_deref_mut()
                 .expect("capture device checked"),
-        )?;
-    Ok(Flow::Done)
+        )
 }
 
 pub(in crate::dispatch) fn window_full_move(

@@ -3514,7 +3514,8 @@ fn font_cell_profile_step(
             | cmvs_rs::dispatch::Flow::Control(_)
             | cmvs_rs::dispatch::Flow::SystemSave(_)
             | cmvs_rs::dispatch::Flow::SystemWritten
-            | cmvs_rs::dispatch::Flow::Platform(_),
+            | cmvs_rs::dispatch::Flow::Platform(_)
+            | cmvs_rs::dispatch::Flow::DeviceFramePending,
         ) => {
             unreachable!("text handler returned platform flow")
         }

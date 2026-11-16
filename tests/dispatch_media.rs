@@ -229,6 +229,7 @@ fn movie_source_failures_keep_typed_cause_and_allow_retry() {
             state.audio.requests()
         );
         let e = dispatch::run(Semantics::Root, &mut vm, &mut state.hosts(cap)).unwrap_err();
+        assert_eq!(e.as_io().unwrap().kind(), std::io::ErrorKind::Interrupted);
         assert_eq!(
             e.source()
                 .unwrap()
@@ -325,6 +326,7 @@ fn sequence_finish_retains_successful_prefix_and_retries_failed_action() {
         &mut state.hosts(Capability::Sequence),
     )
     .unwrap_err();
+    assert_eq!(e.as_io().unwrap().kind(), std::io::ErrorKind::Interrupted);
     assert_eq!(
         e.source()
             .unwrap()

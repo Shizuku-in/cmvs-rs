@@ -11,10 +11,10 @@
 // consuming this held image or its pending request. Addresses bind the documented hash.
 use crate::{
     bytecode::DecodeError,
-    dispatch::Call,
+    dispatch::{Call, Flow},
     evaluate::error,
     machine::Machine,
-    platform::PlatformBackend,
+    platform::{DeviceFrameResult, PlatformBackend},
     raster::RgbaImage,
     scene::{ObjectImage, SceneHost},
 };
@@ -41,15 +41,14 @@ impl ScreenCapture {
         let Some((pc, command @ (0x3d | 0x3e))) = vm.pending_system() else {
             return Ok(false);
         };
-        self.handle_immediate(&mut Call::new(vm, pc, command), scene, backend)?;
-        Ok(true)
+        Ok(self.handle_immediate(&mut Call::new(vm, pc, command), scene, backend)? == Flow::Done)
     }
     pub(crate) fn handle_immediate(
         &self,
         call: &mut Call<'_, '_>,
         scene: &mut SceneHost,
         backend: &mut dyn PlatformBackend,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<Flow, Box<dyn std::error::Error>> {
         let pc = call.pc;
         let op = call.command + 0x2000;
         let fail = |why| error(pc, op, why);
@@ -60,7 +59,10 @@ impl ScreenCapture {
             .filter(|_| child < 0)
             .filter(|slot| scene.object(*slot).is_some())
             .ok_or_else(|| fail("device image needs an existing object in slots 0..255 itself"))?;
-        let frame = opaque(backend.read_device_frame()?)?;
+        let frame = match backend.poll_device_frame()? {
+            DeviceFrameResult::Pending => return Ok(Flow::DeviceFramePending),
+            DeviceFrameResult::Ready(frame) => opaque(frame)?,
+        };
         call.complete(0x4008)?;
         scene.object_mut(slot).expect("validated").image = Some(ObjectImage {
             filter: None,
@@ -73,7 +75,7 @@ impl ScreenCapture {
             .state_mut()
             .set_system_integer(0, 1)
             .expect("result 0 exists");
-        Ok(())
+        Ok(Flow::Done)
     }
     pub fn requested(&self) -> bool {
         self.requested

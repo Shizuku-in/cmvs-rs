@@ -21,10 +21,10 @@ pub fn select(
         },
         Err(error) if error.kind() == ErrorKind::NotFound => {
             text_codec::detect_game(root, files, startup).map_err(|error| {
-                if error.downcast_ref::<cmvs_core::FormatError>() == Some(&text_codec::UNCERTAIN) {
+                if error.is_uncertain() {
                     "cannot detect the game text encoding; put encoding.txt holding shift-jis, gbk or utf-8 in the game directory".into()
                 } else {
-                    error
+                    error.into()
                 }
             })
         }

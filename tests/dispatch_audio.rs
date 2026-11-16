@@ -436,6 +436,10 @@ fn errors_keep_location_typed_source_and_retry_state() {
     let error = run(&mut vm, &mut audio, &mut Reject).unwrap_err();
     assert_eq!((error.pc, error.command), (before.0, 0x238));
     assert!(error.as_decode().is_none());
+    assert_eq!(
+        error.as_io().unwrap().kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
     assert_eq!(error.to_string(), "device rejected configuration");
     assert_eq!(
         error

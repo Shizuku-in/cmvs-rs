@@ -205,6 +205,7 @@ fn storage_io_failures_preserve_typed_cause_and_allow_retry() {
         let random = state.random.clone();
         let vars = format!("{:?}", vm.state());
         let err = dispatch::run(Semantics::Root, &mut vm, &mut state.hosts(cap)).unwrap_err();
+        assert_eq!(err.as_io().unwrap().kind(), io::ErrorKind::Interrupted);
         assert_eq!(
             err.source()
                 .unwrap()

@@ -12,7 +12,7 @@ use cmvs_core::{
     digest::Sha256,
     input::{CodeInput, KeyBindings},
     platform::RecordingBackend,
-    profile::{GateError, GateErrorKind},
+    profile::GateErrorKind,
     ps3::Script,
     runtime::{Runtime, RuntimeEvent, RuntimeOptions, SaveStorage, SnapshotPolicy},
 };
@@ -411,7 +411,7 @@ impl<'a> Session<'a> {
             let event = match self.run.tick(&mut self.backend) {
                 Ok(event) => event,
                 Err(error) => {
-                    let stop = match error.downcast_ref::<GateError>() {
+                    let stop = match error.as_gate() {
                         Some(g) => Stop::Blocked(Blocked {
                             command: 0x2000 + g.command,
                             script: g.script.clone(),

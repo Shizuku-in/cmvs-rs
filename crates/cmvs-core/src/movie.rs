@@ -107,13 +107,8 @@ impl DirectoryMovies<'_> {
         relative.extend_from_slice(name);
         let path = match resolve_under_with_fs(self.fs, self.root, &relative) {
             Ok(path) => path,
-            Err(e)
-                if e.downcast_ref::<io::Error>()
-                    .is_some_and(|e| e.kind() == io::ErrorKind::NotFound) =>
-            {
-                return Ok(None);
-            }
-            Err(e) => return Err(e),
+            Err(e) if e.is_not_found() => return Ok(None),
+            Err(e) => return Err(e.into()),
         };
         let file = match self.fs.open_read(&path) {
             Ok(file) => file,

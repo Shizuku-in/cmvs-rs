@@ -1,7 +1,8 @@
 use super::{Root, Runtime, RuntimeEvent, commands};
 use cmvs_rs::{
-    platform::RecordingBackend,
-    runtime::{FrameBudget, FrameDriver, FrameOutcome},
+    platform::{DeviceFrameResult, PlatformBackend, PlatformRequest, RecordingBackend},
+    raster::RgbaImage,
+    runtime::{FrameBudget, FrameDriver, FrameOutcome, RuntimeError},
 };
 use std::{error::Error, time::Duration};
 
@@ -190,4 +191,139 @@ fn device_retry_keeps_slice_budget_and_structured_stops() {
         assert!(!driver.ready());
         assert!(!driver.finish_frame(&mut run, 100).unwrap());
     }
+}
+
+#[test]
+fn async_device_frame_pending_retains_input_delta_watchdog_and_resumes() {
+    #[derive(Default)]
+    struct AsyncBackend {
+        frame: Option<RgbaImage>,
+    }
+    impl PlatformBackend for AsyncBackend {
+        fn poll_device_frame(&mut self) -> Result<DeviceFrameResult, Box<dyn Error>> {
+            Ok(match self.frame.clone() {
+                Some(image) => DeviceFrameResult::Ready(image),
+                None => DeviceFrameResult::Pending,
+            })
+        }
+        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+            unreachable!()
+        }
+    }
+
+    let mut code = Vec::new();
+    for (op, args) in [
+        (0x2020, vec![3]),
+        (0x2040, vec![3]),
+        (0x203e, vec![3, u32::MAX]),
+        (0x2000, vec![]),
+        (0x2000, vec![]),
+    ] {
+        commands::command(&mut code, op, &args);
+    }
+    let root = Root::new("async-device-frame", &code, b"");
+    let script = root.script();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
+    // Strict yield watchdog must not trip while waiting for async GPU readback.
+    // 6 setup steps precede 0x203e, 0x203e adds 1 when it completes, and 0x2000 yields at 7 < 8.
+    run.set_yield_watchdog(8);
+    let mut driver = FrameDriver::default();
+    let mut backend = AsyncBackend::default();
+    let mut budget = FrameBudget::steps(20);
+
+    driver.latch_delta(16);
+    driver.sample_input(run.input_mut(), |input| {
+        input.set(0, true, true, false).unwrap();
+    });
+    for _ in 0..5 {
+        let outcome = driver
+            .run_slice(&mut run, &mut budget, |run| run.tick(&mut backend))
+            .unwrap();
+        assert_eq!(
+            outcome,
+            FrameOutcome::Stopped(RuntimeEvent::DeviceFramePending)
+        );
+        assert!(!driver.needs_input());
+        assert!(!driver.ready());
+        assert!(!driver.finish_frame(&mut run, 999).unwrap());
+        assert_eq!(run.timers().delta_ms(), 0);
+        assert!(run.input().pressed(0));
+    }
+
+    backend.frame = Some(RgbaImage::new(1, 1, vec![12, 34, 56, 78]).unwrap());
+    let outcome = driver
+        .run_slice(&mut run, &mut budget, |run| run.tick(&mut backend))
+        .unwrap();
+    assert_eq!(outcome, FrameOutcome::Yield);
+    assert!(driver.finish_frame(&mut run, 999).unwrap());
+    assert!(driver.ready());
+    assert_eq!(
+        run.scene()
+            .object(3)
+            .unwrap()
+            .image
+            .as_ref()
+            .unwrap()
+            .pixels
+            .pixels(),
+        &[12, 34, 56, 255]
+    );
+    // The latched 16 ms delta is applied on the next VM run, not the ignored 999 ms.
+    assert_eq!(slice(&mut driver, &mut run, 10), FrameOutcome::Yield);
+    assert_eq!(run.timers().delta_ms(), 16);
+}
+
+#[test]
+fn runtime_error_exposes_structured_variants_and_sources() {
+    use cmvs_rs::profile::GateErrorKind;
+    // Watchdog error
+    let root = Root::new("runtime-error-watchdog", &[0x00, 0x20], b"");
+    let script = root.script();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
+    run.set_yield_watchdog(0);
+    let err = run.tick(&mut RecordingBackend::default()).unwrap_err();
+    assert!(matches!(err, RuntimeError::Watchdog { steps: 0 }));
+    assert_eq!(
+        err.to_string(),
+        "research watchdog: 0 VM steps without a yield"
+    );
+    assert!(err.source().is_none());
+
+    // Gate error (absent command 0x27ff in cmvs-20160201)
+    let mut code = Vec::new();
+    commands::command(&mut code, 0x27ff, &[]);
+    let root = Root::new("runtime-error-gate", &code, b"");
+    let game = cmvs_rs::profile::Registry::builtin()
+        .identify_game(&root.0, Some("cmvs-20160201"))
+        .unwrap();
+    let script = root.script();
+    let mut run = Runtime::new(&script, &root.0, &game, 0).unwrap();
+    let err = run.tick(&mut RecordingBackend::default()).unwrap_err();
+    let gate = err.as_gate().expect("structured gate error");
+    assert_eq!(gate.kind, GateErrorKind::Absent);
+    assert_eq!(gate.command, 0x7ff);
+
+    // Dispatch error wrapping an underlying io::Error through platform device frame readback
+    let mut code = Vec::new();
+    commands::command(&mut code, 0x2020, &[3]);
+    commands::command(&mut code, 0x203e, &[3, u32::MAX]);
+    let root = Root::new("runtime-error-dispatch-io", &code, b"");
+    let script = root.script();
+    let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
+    struct FailingDevice;
+    impl PlatformBackend for FailingDevice {
+        fn read_device_frame(&mut self) -> Result<RgbaImage, Box<dyn Error>> {
+            Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "gpu pipe lost").into())
+        }
+        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+            unreachable!()
+        }
+    }
+    let mut backend = FailingDevice;
+    for _ in 0..4 {
+        assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
+    }
+    let err = run.tick(&mut backend).unwrap_err();
+    assert!(err.as_dispatch().is_some());
+    assert_eq!(err.as_io().unwrap().kind(), std::io::ErrorKind::BrokenPipe);
 }

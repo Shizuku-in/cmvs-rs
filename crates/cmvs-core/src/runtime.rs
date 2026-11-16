@@ -180,6 +180,165 @@ pub enum RuntimeEvent {
     MainEnteredWithoutSnapshot,
     /// The engine snapshot used by gameplay-slot writes was captured.
     SnapshotCaptured,
+    /// The host must supply an asynchronous device frame before resuming the pending command.
+    DeviceFramePending,
+}
+
+/// Structured failure returned by [`Runtime::tick`].
+#[derive(Debug)]
+pub enum RuntimeError {
+    /// Bytecode decoding, evaluation, or VM state failure.
+    Decode(crate::bytecode::DecodeError),
+    /// System command rejected by the profile evidence gate.
+    Gate(crate::profile::GateError),
+    /// Command handler or backend failure during dispatch.
+    Dispatch(crate::dispatch::DispatchError),
+    /// Resource, snapshot, or scene format validation failure.
+    Format(crate::FormatError),
+    /// Filesystem or host I/O failure.
+    Io(std::io::Error),
+    /// Step limit between yields exceeded without yielding.
+    Watchdog { steps: u64 },
+    /// Any other host, codec, or runtime configuration failure.
+    Other(Box<dyn Error>),
+}
+
+impl RuntimeError {
+    /// Returns the gate error when a command was rejected by [`CommandGate`].
+    pub fn as_gate(&self) -> Option<&crate::profile::GateError> {
+        match self {
+            Self::Gate(error) => Some(error),
+            _ => None,
+        }
+    }
+
+    /// Returns the dispatch error when a command handler failed.
+    pub fn as_dispatch(&self) -> Option<&crate::dispatch::DispatchError> {
+        match self {
+            Self::Dispatch(error) => Some(error),
+            _ => None,
+        }
+    }
+
+    /// Returns the underlying decode error, including when wrapped by dispatch or other errors.
+    pub fn as_decode(&self) -> Option<&crate::bytecode::DecodeError> {
+        match self {
+            Self::Decode(error) => Some(error),
+            Self::Dispatch(error) => error.as_decode(),
+            Self::Other(error) => crate::find_error_source(Some(error.as_ref())),
+            _ => None,
+        }
+    }
+
+    /// Returns the underlying format error, including when wrapped by dispatch or other errors.
+    pub fn as_format(&self) -> Option<&crate::FormatError> {
+        match self {
+            Self::Format(error) => Some(error),
+            Self::Dispatch(error) => error.as_format(),
+            Self::Other(error) => crate::find_error_source(Some(error.as_ref())),
+            _ => None,
+        }
+    }
+
+    /// Returns the underlying I/O error, including when wrapped by dispatch or other errors.
+    pub fn as_io(&self) -> Option<&std::io::Error> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Dispatch(error) => error.as_io(),
+            Self::Other(error) => crate::find_error_source(Some(error.as_ref())),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for RuntimeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Decode(error) => error.fmt(f),
+            Self::Gate(error) => error.fmt(f),
+            Self::Dispatch(error) => error.fmt(f),
+            Self::Format(error) => error.fmt(f),
+            Self::Io(error) => error.fmt(f),
+            Self::Watchdog { steps } => {
+                write!(f, "research watchdog: {steps} VM steps without a yield")
+            }
+            Self::Other(error) => error.fmt(f),
+        }
+    }
+}
+
+impl Error for RuntimeError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Decode(error) => Some(error),
+            Self::Gate(error) => Some(error),
+            Self::Dispatch(error) => Some(error),
+            Self::Format(error) => Some(error),
+            Self::Io(error) => Some(error),
+            Self::Watchdog { .. } => None,
+            Self::Other(error) => Some(error.as_ref()),
+        }
+    }
+}
+
+impl From<crate::bytecode::DecodeError> for RuntimeError {
+    fn from(error: crate::bytecode::DecodeError) -> Self {
+        Self::Decode(error)
+    }
+}
+
+impl From<crate::profile::GateError> for RuntimeError {
+    fn from(error: crate::profile::GateError) -> Self {
+        Self::Gate(error)
+    }
+}
+
+impl From<crate::dispatch::DispatchError> for RuntimeError {
+    fn from(error: crate::dispatch::DispatchError) -> Self {
+        Self::Dispatch(error)
+    }
+}
+
+impl From<crate::FormatError> for RuntimeError {
+    fn from(error: crate::FormatError) -> Self {
+        Self::Format(error)
+    }
+}
+
+impl From<std::io::Error> for RuntimeError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<Box<dyn Error>> for RuntimeError {
+    fn from(error: Box<dyn Error>) -> Self {
+        let error = match error.downcast::<Self>() {
+            Ok(error) => return *error,
+            Err(error) => error,
+        };
+        let error = match error.downcast::<crate::bytecode::DecodeError>() {
+            Ok(error) => return Self::Decode(*error),
+            Err(error) => error,
+        };
+        let error = match error.downcast::<crate::profile::GateError>() {
+            Ok(error) => return Self::Gate(*error),
+            Err(error) => error,
+        };
+        let error = match error.downcast::<crate::dispatch::DispatchError>() {
+            Ok(error) => return Self::Dispatch(*error),
+            Err(error) => error,
+        };
+        let error = match error.downcast::<crate::FormatError>() {
+            Ok(error) => return Self::Format(*error),
+            Err(error) => error,
+        };
+        let error = match error.downcast::<std::io::Error>() {
+            Ok(error) => return Self::Io(*error),
+            Err(error) => error,
+        };
+        Self::Other(error)
+    }
 }
 /// How [`Runtime`] handles script requests to capture gameplay state.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1024,15 +1183,16 @@ impl<'a> Runtime<'a> {
     /// Attempt one VM step and dispatch its system command through the profile gate.
     ///
     /// Returns [`RuntimeEvent::Inactive`] without stepping when focus policy pauses
-    /// execution, or [`RuntimeEvent::Quit`] after shutdown. Stop on an unhandled
-    /// command or snapshot barrier; repeated ticks cannot advance past either.
+    /// execution, [`RuntimeEvent::DeviceFramePending`] when an immediate capture awaits
+    /// asynchronous host readback, or [`RuntimeEvent::Quit`] after shutdown. Stop on an
+    /// unhandled command or snapshot barrier; repeated ticks cannot advance past either.
     /// Errors include command-gate rejection, the yield watchdog, and failures from
     /// instruction execution, resources, or backend services. See the [module guide](self)
     /// for input and frame-update order.
     pub fn tick(
         &mut self,
         backend: &mut impl PlatformBackend,
-    ) -> Result<RuntimeEvent, Box<dyn Error>> {
+    ) -> Result<RuntimeEvent, RuntimeError> {
         if self.quit {
             return Ok(RuntimeEvent::Quit);
         }
@@ -1047,18 +1207,16 @@ impl<'a> Runtime<'a> {
             self.draw_capture()?;
         }
         if self.since_yield >= self.yield_watchdog {
-            return Err(format!(
-                "research watchdog: {} VM steps without a yield",
-                self.since_yield
-            )
-            .into());
+            return Err(RuntimeError::Watchdog {
+                steps: self.since_yield,
+            });
         }
         let before = self.steps;
         let event = self.step_once(backend)?;
         if self.steps != before {
             if event == RuntimeEvent::Yield {
                 self.since_yield = 0;
-            } else {
+            } else if event != RuntimeEvent::DeviceFramePending {
                 self.since_yield += 1;
             }
         }
@@ -1105,7 +1263,7 @@ impl<'a> Runtime<'a> {
     fn step_once(
         &mut self,
         backend: &mut impl PlatformBackend,
-    ) -> Result<RuntimeEvent, Box<dyn Error>> {
+    ) -> Result<RuntimeEvent, RuntimeError> {
         self.messages.set_text_settings(self.settings.text_output());
         self.messages.set_default_face(self.settings.font_face());
         if self.main_barrier {
@@ -1116,12 +1274,16 @@ impl<'a> Runtime<'a> {
             let delta = std::mem::take(&mut self.frame_delta);
             self.timers.begin_run(delta);
             self.input.latch_pointer();
-            self.gesture.frame(&mut self.input, self.timers.clock())?;
+            self.gesture
+                .frame(&mut self.input, self.timers.clock())
+                .map_err(|why| RuntimeError::Other(why.into()))?;
             // 0x140067930 runs the automatic callback dispatch 0x140064f50 after the timers.
             let shown =
                 std::array::from_fn(|slot| self.messages.window(slot).is_some_and(|w| w.visible));
             let due = self.control.due_callbacks(shown);
-            self.machine.dispatch_callbacks(&due)?;
+            self.machine
+                .dispatch_callbacks(&due)
+                .map_err(|why| RuntimeError::Other(why.into()))?;
             self.resume_run = false;
         }
         let event = self.machine.step()?;
@@ -1149,7 +1311,7 @@ impl<'a> Runtime<'a> {
             )?;
             return match flow {
                 Some(crate::dispatch::Flow::Runtime(request)) => {
-                    self.handle_runtime(request, backend)
+                    Ok(self.handle_runtime(request, backend)?)
                 }
                 _ => Ok(RuntimeEvent::Unhandled {
                     pc,
@@ -1238,7 +1400,8 @@ impl<'a> Runtime<'a> {
                 | crate::dispatch::Flow::Control(_)
                 | crate::dispatch::Flow::SystemSave(_)
                 | crate::dispatch::Flow::SystemWritten
-                | crate::dispatch::Flow::Platform(_) => {
+                | crate::dispatch::Flow::Platform(_)
+                | crate::dispatch::Flow::DeviceFramePending => {
                     unreachable!("wait handler returned a platform event")
                 }
                 crate::dispatch::Flow::Yield | crate::dispatch::Flow::Wait => RuntimeEvent::Yield,
@@ -1303,10 +1466,10 @@ impl<'a> Runtime<'a> {
             && !self.auto_resume_checked
             && id != Some(game_id)
         {
-            return Err(format!(
-                "skip-auto-resume is only verified for recorded game ID 0x{game_id:08x}"
-            )
-            .into());
+            return Err(RuntimeError::Other(
+                format!("skip-auto-resume is only verified for recorded game ID 0x{game_id:08x}")
+                    .into(),
+            ));
         }
         let mut image_source = self.images.with_paths(self.bootstrap.paths());
         let input_clock = self.timers.clock();
@@ -1452,14 +1615,17 @@ impl<'a> Runtime<'a> {
         if let Some(flow) = crate::dispatch::run(resolved.semantics, &mut self.machine, &mut hosts)?
         {
             if let crate::dispatch::Flow::Runtime(request) = flow {
-                return self.handle_runtime(request, backend);
+                return Ok(self.handle_runtime(request, backend)?);
             }
             if let crate::dispatch::Flow::SystemSave(event) = flow {
                 if !self.auto_resume_checked {
                     if let Some((_, integer)) = self.skip_auto_resume
                         && event == SystemSaveEvent::Applied
                     {
-                        self.machine.state_mut().set_integer(integer, 0)?;
+                        self.machine
+                            .state_mut()
+                            .set_integer(integer, 0)
+                            .map_err(|why| RuntimeError::Other(why.into()))?;
                         self.auto_resume_skipped = true;
                     }
                     self.auto_resume_checked = true;
@@ -1474,7 +1640,9 @@ impl<'a> Runtime<'a> {
                             return Ok(RuntimeEvent::MainPreparedNeedsSnapshot);
                         }
                         SnapshotPolicy::ContinueWithoutImage => {
-                            self.save_image.capture_unavailable(&mut self.machine)?;
+                            self.save_image
+                                .capture_unavailable(&mut self.machine)
+                                .map_err(|why| RuntimeError::Other(why.into()))?;
                             return Ok(RuntimeEvent::MainEnteredWithoutSnapshot);
                         }
                         SnapshotPolicy::Capture => {
@@ -1486,7 +1654,7 @@ impl<'a> Runtime<'a> {
                             };
                             if let Err(why) = captured {
                                 self.main_barrier = true;
-                                return Err(why);
+                                return Err(why.into());
                             }
                             return Ok(RuntimeEvent::SnapshotCaptured);
                         }
@@ -1511,6 +1679,7 @@ impl<'a> Runtime<'a> {
                         RuntimeEvent::Progress
                     }
                 }
+                crate::dispatch::Flow::DeviceFramePending => RuntimeEvent::DeviceFramePending,
                 crate::dispatch::Flow::Yield | crate::dispatch::Flow::Wait => {
                     self.message_flags = message_flags;
                     self.resume_run = true;

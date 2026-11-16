@@ -139,6 +139,19 @@ impl fmt::Display for FormatError {
 
 impl std::error::Error for FormatError {}
 
+/// Walk an error's `source` chain to locate the first inner error of type `T`.
+pub(crate) fn find_error_source<'a, T: std::error::Error + 'static>(
+    mut current: Option<&'a (dyn std::error::Error + 'static)>,
+) -> Option<&'a T> {
+    while let Some(error) = current {
+        if let Some(found) = error.downcast_ref::<T>() {
+            return Some(found);
+        }
+        current = error.source();
+    }
+    None
+}
+
 /// Maximum payload accepted by bounded readers, in bytes (64 MiB).
 ///
 /// This is an allocation policy, not an on-disk format limit or a process memory budget.

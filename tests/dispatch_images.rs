@@ -148,6 +148,10 @@ fn read_errors_keep_typed_source_scene_and_pending_command_for_retry() {
             error.to_string(),
             format!("PC=0x{:x} 0x{opcode:04x}: read rejected", before.0)
         );
+        assert_eq!(
+            error.as_io().unwrap().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
         let cause = error
             .source()
             .unwrap()

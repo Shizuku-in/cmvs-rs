@@ -290,6 +290,7 @@ fn platform_io_failures_keep_original_cause_and_retry_without_committing_host() 
             &mut state.hosts(Capability::Platform),
         )
         .unwrap_err();
+        assert_eq!(e.as_io().unwrap().kind(), std::io::ErrorKind::Interrupted);
         assert_eq!(
             e.source()
                 .unwrap()

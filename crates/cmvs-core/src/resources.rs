@@ -9,12 +9,12 @@ use crate::filesystem::{File, HostFs};
 use crate::{
     MAX_PAYLOAD,
     cpz::{ArchiveIndex, Cpz7Parameters},
-    platform::resolve_under_with_fs,
+    platform::{PathError, resolve_under_with_fs},
 };
 use std::{
     collections::BTreeMap,
     error::Error,
-    io::{self, Read},
+    io::Read,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -201,15 +201,10 @@ fn resolve_present(
     fs: &dyn HostFs,
     root: &Path,
     name: &[u8],
-) -> Result<Option<PathBuf>, Box<dyn Error>> {
+) -> Result<Option<PathBuf>, PathError> {
     match resolve_under_with_fs(fs, root, name) {
         Ok(path) => Ok(Some(path)),
-        Err(e)
-            if e.downcast_ref::<io::Error>()
-                .is_some_and(|e| e.kind() == io::ErrorKind::NotFound) =>
-        {
-            Ok(None)
-        }
+        Err(e) if e.is_not_found() => Ok(None),
         Err(e) => Err(e),
     }
 }

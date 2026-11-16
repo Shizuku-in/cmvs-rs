@@ -74,7 +74,6 @@ impl WebRuntime {
             if result != 4 {
                 return Ok(result);
             }
-            self.backend.read_requested = false;
             let frame = self
                 .backend
                 .gpu
@@ -197,17 +196,7 @@ impl WebRuntime {
                     codes.update(bindings, &now, input);
                     input.set_pointer(x, y);
                 });
-                let outcome =
-                    match driver.run_slice(startup, budget, |runtime| runtime.tick(backend)) {
-                        Ok(outcome) => outcome,
-                        Err(error) => {
-                            #[cfg(target_arch = "wasm32")]
-                            if backend.read_requested {
-                                return Ok(4);
-                            }
-                            return Err(error);
-                        }
-                    };
+                let outcome = driver.run_slice(startup, budget, |runtime| runtime.tick(backend))?;
                 match outcome {
                     FrameOutcome::Yield => {
                         driver.finish_frame(startup, delta_ms.min(250))?;
@@ -233,6 +222,7 @@ impl WebRuntime {
                         backend.frame = Some(frame);
                         Ok(1)
                     }
+                    FrameOutcome::Stopped(RuntimeEvent::DeviceFramePending) => Ok(4),
                     FrameOutcome::Stopped(RuntimeEvent::Quit) => Ok(2),
                     FrameOutcome::Inactive => Ok(3),
                     FrameOutcome::Stopped(event) => {

@@ -374,6 +374,7 @@ fn image_errors_keep_typed_cause_and_leave_window_targets_retryable() {
             &mut windows.hosts(Capability::WindowImages),
         )
         .unwrap_err();
+        assert_eq!(error.as_io().unwrap().kind(), std::io::ErrorKind::NotFound);
         assert_eq!(
             error
                 .source()

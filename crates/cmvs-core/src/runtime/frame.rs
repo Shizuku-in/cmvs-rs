@@ -75,9 +75,10 @@ impl FrameDriver {
         self.sampled = false;
         self.delta = None;
     }
-    /// Run until yield, inactivity, a stop, or the host budget. The step hook may
-    /// service devices and diagnostics; errors retain the current input and delta
-    /// so an asynchronous device request can resume the pending instruction.
+    /// Run until yield, inactivity, a stop (including [`RuntimeEvent::DeviceFramePending`]),
+    /// or the host budget. The step hook may service devices and diagnostics; both
+    /// `Stopped(RuntimeEvent::DeviceFramePending)` and errors retain the current input and
+    /// delta so an asynchronous device request can resume the pending instruction.
     pub fn run_slice<E>(
         &mut self,
         runtime: &mut Runtime<'_>,

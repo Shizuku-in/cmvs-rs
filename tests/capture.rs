@@ -335,3 +335,107 @@ fn only_unit_logical_screen_scaling_is_rendered() {
         }
     }
 }
+
+#[test]
+fn async_device_frame_pending_preserves_command_and_resumes_when_ready() {
+    use cmvs_rs::{
+        dispatch::{self, Flow, Hosts},
+        platform::{DeviceFrameResult, PlatformBackend, PlatformRequest},
+        profile::Semantics,
+    };
+
+    #[derive(Default)]
+    struct AsyncDevice {
+        frame: Option<RgbaImage>,
+        polls: usize,
+    }
+    impl PlatformBackend for AsyncDevice {
+        fn poll_device_frame(&mut self) -> Result<DeviceFrameResult, Box<dyn std::error::Error>> {
+            self.polls += 1;
+            Ok(match self.frame.clone() {
+                Some(image) => DeviceFrameResult::Ready(image),
+                None => DeviceFrameResult::Pending,
+            })
+        }
+        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn std::error::Error>> {
+            unreachable!()
+        }
+    }
+
+    for opcode in [0x203d, 0x203e] {
+        let mut code = vec![];
+        call(&mut code, 0x2020, &[3]);
+        call(&mut code, 0x2040, &[3]);
+        call(&mut code, opcode, &[3, u32::MAX]);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        let (mut scene, mut capture) = (SceneHost::default(), ScreenCapture::default());
+        for _ in 0..2 {
+            assert!(next(&mut vm, &mut scene, &mut capture).unwrap());
+        }
+        while !matches!(vm.step().unwrap(), Step::System { .. }) {}
+        vm.state_mut().set_system_integer(0, 77).unwrap();
+        let before_scene = scene.objects().clone();
+        let before_vm = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
+        let mut backend = AsyncDevice::default();
+
+        assert_eq!(
+            dispatch::run(
+                Semantics::Root,
+                &mut vm,
+                &mut Hosts {
+                    capture: Some(&mut capture),
+                    scene: Some(&mut scene),
+                    device_frame: Some(&mut backend),
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+            Some(Flow::DeviceFramePending)
+        );
+        assert!(
+            !capture
+                .try_immediate(&mut vm, &mut scene, &mut backend)
+                .unwrap()
+        );
+        assert_eq!(backend.polls, 2);
+        assert_eq!(scene.objects(), &before_scene);
+        assert_eq!(
+            (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
+            before_vm
+        );
+        assert_eq!(vm.state().system_integer(0), Some(77));
+
+        backend.frame = Some(frame());
+        assert_eq!(
+            dispatch::run(
+                Semantics::Root,
+                &mut vm,
+                &mut Hosts {
+                    capture: Some(&mut capture),
+                    scene: Some(&mut scene),
+                    device_frame: Some(&mut backend),
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+            Some(Flow::Done)
+        );
+        assert_eq!(backend.polls, 3);
+        assert_eq!(vm.pending_system(), None);
+        assert_eq!(vm.pc(), code.len());
+        assert_eq!(vm.stack().len_bytes(), 0);
+        assert_eq!(vm.state().system_integer(0), Some(1));
+        assert_eq!(
+            scene
+                .object(3)
+                .unwrap()
+                .image
+                .as_ref()
+                .unwrap()
+                .pixels
+                .pixels(),
+            &[10, 20, 30, 255, 40, 50, 60, 255]
+        );
+    }
+}

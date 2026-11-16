@@ -1,5 +1,5 @@
 use cmvs_core::{
-    platform::{FontDialogResult, PlatformBackend, PlatformRequest},
+    platform::{DeviceFrameResult, FontDialogResult, PlatformBackend, PlatformRequest},
     raster::RgbaImage,
 };
 use std::error::Error;
@@ -9,8 +9,6 @@ pub struct BrowserBackend {
     pub frame: Option<RgbaImage>,
     #[cfg(target_arch = "wasm32")]
     pub gpu: Option<crate::gpu::BrowserGpu>,
-    #[cfg(target_arch = "wasm32")]
-    pub read_requested: bool,
     fullscreen: bool,
     aspect: u32,
     scaling: bool,
@@ -31,8 +29,6 @@ impl BrowserBackend {
             frame: None,
             #[cfg(target_arch = "wasm32")]
             gpu: None,
-            #[cfg(target_arch = "wasm32")]
-            read_requested: false,
             fullscreen: false,
             aspect: 1,
             scaling: true,
@@ -51,14 +47,16 @@ impl PlatformBackend for BrowserBackend {
         self.size
     }
     fn read_device_frame(&mut self) -> Result<RgbaImage, Box<dyn Error>> {
-        #[cfg(target_arch = "wasm32")]
-        if self.frame.is_none() && self.gpu.as_ref().is_some_and(|gpu| gpu.frame.is_some()) {
-            self.read_requested = true;
-            return Err("browser GPU readback pending".into());
-        }
         self.frame
             .clone()
             .ok_or_else(|| "no completed browser frame".into())
+    }
+    fn poll_device_frame(&mut self) -> Result<DeviceFrameResult, Box<dyn Error>> {
+        #[cfg(target_arch = "wasm32")]
+        if self.frame.is_none() && self.gpu.as_ref().is_some_and(|gpu| gpu.frame.is_some()) {
+            return Ok(DeviceFrameResult::Pending);
+        }
+        self.read_device_frame().map(DeviceFrameResult::Ready)
     }
     fn window_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
         Ok(self.size)
