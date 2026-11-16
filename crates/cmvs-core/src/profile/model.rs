@@ -18,146 +18,74 @@ pub enum Semantics {
     Variant(VariantId),
 }
 
-/// Static implementation identifiers; execution obeys the unreviewed block policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VariantId {
-    TextDialog,
-    ScreenCoordinates,
-    InputPress,
-    FontCells,
-    TextAlpha,
-    ObjectQueue,
-    ListSelect,
-    Particles,
-    ParticlesX87,
-    Rain,
-    BackgroundAudio,
-    SeRestart,
-    SeGain,
-    MixerGain,
-    ImageTables,
-    ActivationPass,
-    WindowScaleMotion,
-    WindowPositionMotion,
-    WindowOpacityTrack,
-    LogicalText,
-    ViewMotion,
-    WindowFullMove,
-    LegacyEffects,
-    WindowChildImage,
-    WindowDrawScale,
-    SequenceWindowImage,
-    DrawQuery,
-    CameraMoveX,
-    AudioPreload,
-    PolarPoint,
-    FallingBillboards,
-    FallingBillboardsX87,
-    CollisionParticles,
-    FadingParticles,
-    Fragments,
-    KeyedArchives,
-    DisplayCount,
-    FullscreenMonitor,
-    MgvPlayer,
-    MovieSeek,
-    MovieControl,
+macro_rules! define_variant_ids {
+    ($(($variant:ident, $name:literal)),* $(,)?) => {
+        /// Static implementation identifiers; execution obeys the unreviewed block policy.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum VariantId {
+            $($variant,)*
+        }
+
+        impl VariantId {
+            pub fn parse(name: &str) -> Option<Self> {
+                match name {
+                    $($name => Some(Self::$variant),)*
+                    _ => None,
+                }
+            }
+
+            pub fn name(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $name,)*
+                }
+            }
+        }
+    };
 }
 
-impl VariantId {
-    pub fn parse(name: &str) -> Option<Self> {
-        match name {
-            "text-dialog" => Some(Self::TextDialog),
-            "screen-coordinates" => Some(Self::ScreenCoordinates),
-            "input-press" => Some(Self::InputPress),
-            "list-select" => Some(Self::ListSelect),
-            "object-queue" => Some(Self::ObjectQueue),
-            "text-alpha" => Some(Self::TextAlpha),
-            "font-cells" => Some(Self::FontCells),
-            "particles" => Some(Self::Particles),
-            "particles-x87" => Some(Self::ParticlesX87),
-            "rain" => Some(Self::Rain),
-            "background-audio" => Some(Self::BackgroundAudio),
-            "se-restart" => Some(Self::SeRestart),
-            "se-gain" => Some(Self::SeGain),
-            "mixer-gain" => Some(Self::MixerGain),
-            "image-tables" => Some(Self::ImageTables),
-            "activation-pass" => Some(Self::ActivationPass),
-            "window-scale-motion" => Some(Self::WindowScaleMotion),
-            "window-position-motion" => Some(Self::WindowPositionMotion),
-            "window-opacity-track" => Some(Self::WindowOpacityTrack),
-            "logical-text" => Some(Self::LogicalText),
-            "view-motion" => Some(Self::ViewMotion),
-            "window-full-move" => Some(Self::WindowFullMove),
-            "legacy-effects" => Some(Self::LegacyEffects),
-            "window-child-image" => Some(Self::WindowChildImage),
-            "window-draw-scale" => Some(Self::WindowDrawScale),
-            "sequence-window-image" => Some(Self::SequenceWindowImage),
-            "draw-query" => Some(Self::DrawQuery),
-            "camera-move-x" => Some(Self::CameraMoveX),
-            "audio-preload" => Some(Self::AudioPreload),
-            "polar-point" => Some(Self::PolarPoint),
-            "falling-billboards" => Some(Self::FallingBillboards),
-            "falling-billboards-x87" => Some(Self::FallingBillboardsX87),
-            "collision-particles" => Some(Self::CollisionParticles),
-            "fading-particles" => Some(Self::FadingParticles),
-            "fragments" => Some(Self::Fragments),
-            "keyed-archives" => Some(Self::KeyedArchives),
-            "display-count" => Some(Self::DisplayCount),
-            "fullscreen-monitor" => Some(Self::FullscreenMonitor),
-            "mgv-player" => Some(Self::MgvPlayer),
-            "movie-seek" => Some(Self::MovieSeek),
-            "movie-control" => Some(Self::MovieControl),
-            _ => None,
-        }
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::TextDialog => "text-dialog",
-            Self::ScreenCoordinates => "screen-coordinates",
-            Self::InputPress => "input-press",
-            Self::ListSelect => "list-select",
-            Self::ObjectQueue => "object-queue",
-            Self::TextAlpha => "text-alpha",
-            Self::FontCells => "font-cells",
-            Self::Particles => "particles",
-            Self::ParticlesX87 => "particles-x87",
-            Self::Rain => "rain",
-            Self::BackgroundAudio => "background-audio",
-            Self::SeRestart => "se-restart",
-            Self::SeGain => "se-gain",
-            Self::MixerGain => "mixer-gain",
-            Self::ImageTables => "image-tables",
-            Self::ActivationPass => "activation-pass",
-            Self::WindowScaleMotion => "window-scale-motion",
-            Self::WindowPositionMotion => "window-position-motion",
-            Self::WindowOpacityTrack => "window-opacity-track",
-            Self::LogicalText => "logical-text",
-            Self::ViewMotion => "view-motion",
-            Self::WindowFullMove => "window-full-move",
-            Self::LegacyEffects => "legacy-effects",
-            Self::WindowChildImage => "window-child-image",
-            Self::WindowDrawScale => "window-draw-scale",
-            Self::SequenceWindowImage => "sequence-window-image",
-            Self::DrawQuery => "draw-query",
-            Self::CameraMoveX => "camera-move-x",
-            Self::AudioPreload => "audio-preload",
-            Self::PolarPoint => "polar-point",
-            Self::FallingBillboards => "falling-billboards",
-            Self::FallingBillboardsX87 => "falling-billboards-x87",
-            Self::CollisionParticles => "collision-particles",
-            Self::FadingParticles => "fading-particles",
-            Self::Fragments => "fragments",
-            Self::KeyedArchives => "keyed-archives",
-            Self::DisplayCount => "display-count",
-            Self::FullscreenMonitor => "fullscreen-monitor",
-            Self::MgvPlayer => "mgv-player",
-            Self::MovieSeek => "movie-seek",
-            Self::MovieControl => "movie-control",
-        }
-    }
-}
+define_variant_ids!(
+    (TextDialog, "text-dialog"),
+    (ScreenCoordinates, "screen-coordinates"),
+    (InputPress, "input-press"),
+    (FontCells, "font-cells"),
+    (TextAlpha, "text-alpha"),
+    (ObjectQueue, "object-queue"),
+    (ListSelect, "list-select"),
+    (Particles, "particles"),
+    (ParticlesX87, "particles-x87"),
+    (Rain, "rain"),
+    (BackgroundAudio, "background-audio"),
+    (SeRestart, "se-restart"),
+    (SeGain, "se-gain"),
+    (MixerGain, "mixer-gain"),
+    (ImageTables, "image-tables"),
+    (ActivationPass, "activation-pass"),
+    (WindowScaleMotion, "window-scale-motion"),
+    (WindowPositionMotion, "window-position-motion"),
+    (WindowOpacityTrack, "window-opacity-track"),
+    (LogicalText, "logical-text"),
+    (ViewMotion, "view-motion"),
+    (WindowFullMove, "window-full-move"),
+    (LegacyEffects, "legacy-effects"),
+    (WindowChildImage, "window-child-image"),
+    (WindowDrawScale, "window-draw-scale"),
+    (SequenceWindowImage, "sequence-window-image"),
+    (DrawQuery, "draw-query"),
+    (CameraMoveX, "camera-move-x"),
+    (AudioPreload, "audio-preload"),
+    (PolarPoint, "polar-point"),
+    (FallingBillboards, "falling-billboards"),
+    (FallingBillboardsX87, "falling-billboards-x87"),
+    (CollisionParticles, "collision-particles"),
+    (FadingParticles, "fading-particles"),
+    (Fragments, "fragments"),
+    (KeyedArchives, "keyed-archives"),
+    (DisplayCount, "display-count"),
+    (FullscreenMonitor, "fullscreen-monitor"),
+    (MgvPlayer, "mgv-player"),
+    (MovieSeek, "movie-seek"),
+    (MovieControl, "movie-control"),
+);
 
 /// A declared variant implementation and its executable-bound evidence.
 #[derive(Debug, Clone, PartialEq, Eq)]

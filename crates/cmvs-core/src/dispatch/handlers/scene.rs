@@ -388,9 +388,10 @@ pub(in crate::dispatch) fn create_rain(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn create_particles(
+fn particles(
     hosts: &mut Hosts<'_>,
     call: &mut Call<'_, '_>,
+    x87: bool,
 ) -> Result<Flow, Box<dyn Error>> {
     let h = hosts
         .images
@@ -403,28 +404,43 @@ pub(in crate::dispatch) fn create_particles(
             .random
             .as_deref_mut()
             .expect("particle random capability checked"),
-        false,
+        x87,
         audio_backend(&mut hosts.audio),
     )?;
     Ok(Flow::Done)
+}
+
+pub(in crate::dispatch) fn create_particles(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    particles(hosts, call, false)
 }
 
 pub(in crate::dispatch) fn create_particles_x87(
     hosts: &mut Hosts<'_>,
     call: &mut Call<'_, '_>,
 ) -> Result<Flow, Box<dyn Error>> {
+    particles(hosts, call, true)
+}
+
+fn falling_billboards(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+    x87: bool,
+) -> Result<Flow, Box<dyn Error>> {
     let h = hosts
         .images
         .as_mut()
         .expect("particle image capability checked");
-    h.scene.create_particles(
+    h.scene.create_falling_effect(
         call,
         h.source,
         hosts
             .random
             .as_deref_mut()
             .expect("particle random capability checked"),
-        true,
+        x87,
         audio_backend(&mut hosts.audio),
     )?;
     Ok(Flow::Done)
@@ -434,42 +450,14 @@ pub(in crate::dispatch) fn create_falling_billboards(
     hosts: &mut Hosts<'_>,
     call: &mut Call<'_, '_>,
 ) -> Result<Flow, Box<dyn Error>> {
-    let h = hosts
-        .images
-        .as_mut()
-        .expect("particle image capability checked");
-    h.scene.create_falling_effect(
-        call,
-        h.source,
-        hosts
-            .random
-            .as_deref_mut()
-            .expect("particle random capability checked"),
-        false,
-        audio_backend(&mut hosts.audio),
-    )?;
-    Ok(Flow::Done)
+    falling_billboards(hosts, call, false)
 }
 
 pub(in crate::dispatch) fn create_falling_billboards_x87(
     hosts: &mut Hosts<'_>,
     call: &mut Call<'_, '_>,
 ) -> Result<Flow, Box<dyn Error>> {
-    let h = hosts
-        .images
-        .as_mut()
-        .expect("particle image capability checked");
-    h.scene.create_falling_effect(
-        call,
-        h.source,
-        hosts
-            .random
-            .as_deref_mut()
-            .expect("particle random capability checked"),
-        true,
-        audio_backend(&mut hosts.audio),
-    )?;
-    Ok(Flow::Done)
+    falling_billboards(hosts, call, true)
 }
 
 pub(in crate::dispatch) fn create_fragments(
@@ -523,26 +511,6 @@ pub(in crate::dispatch) fn create_collision_particles(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn create_fading_particles(
-    hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
-    let h = hosts
-        .images
-        .as_mut()
-        .expect("particle image capability checked");
-    h.scene.create_collision_effect(
-        call,
-        h.source,
-        hosts
-            .random
-            .as_deref_mut()
-            .expect("particle random capability checked"),
-        audio_backend(&mut hosts.audio),
-    )?;
-    Ok(Flow::Done)
-}
-
 pub(in crate::dispatch) fn screen_coordinates(
     hosts: &mut Hosts<'_>,
     call: &mut Call<'_, '_>,
@@ -572,19 +540,6 @@ pub(in crate::dispatch) fn create_legacy_flakes(
             .expect("particle random capability checked"),
         audio_backend(&mut hosts.audio),
     )?;
-    Ok(Flow::Done)
-}
-
-pub(in crate::dispatch) fn create_legacy_rain(
-    hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
-    let h = hosts
-        .images
-        .as_mut()
-        .expect("particle image capability checked");
-    h.scene
-        .create_rain(call, h.source, audio_backend(&mut hosts.audio))?;
     Ok(Flow::Done)
 }
 

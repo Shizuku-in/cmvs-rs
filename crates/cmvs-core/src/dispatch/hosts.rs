@@ -232,6 +232,67 @@ pub enum Capability {
     CameraWait,
 }
 
+impl Capability {
+    pub(crate) fn uses_input(self) -> bool {
+        matches!(
+            self,
+            Self::Input
+                | Self::ButtonInput
+                | Self::ListInput
+                | Self::DragPress
+                | Self::WindowPointer
+                | Self::WindowButtons
+        )
+    }
+
+    pub(crate) fn uses_windows(self) -> bool {
+        matches!(
+            self,
+            Self::Windows | Self::WindowPointer | Self::WindowButtons | Self::WindowImages
+        )
+    }
+
+    pub(crate) fn uses_message_state(self, command: u16) -> bool {
+        // The font-name query needs the message host's backend to show a readable name.
+        command == 0x2de
+            || self.uses_windows()
+            || matches!(
+                self,
+                Self::TextState | Self::AuxiliaryScene | Self::FontDialog
+            )
+    }
+
+    pub(crate) fn uses_bootstrap(self) -> bool {
+        matches!(self, Self::Bootstrap | Self::FunctionKeys)
+    }
+
+    pub(crate) fn uses_device_frame(self) -> bool {
+        matches!(
+            self,
+            Self::CaptureDevice | Self::FontDialog | Self::TextDialog
+        )
+    }
+
+    pub(crate) fn uses_scene_images(self) -> bool {
+        matches!(
+            self,
+            Self::SceneImages | Self::MaskImages | Self::ImageChange | Self::ParticleImages
+        )
+    }
+
+    pub(crate) fn is_wait(self) -> bool {
+        matches!(
+            self,
+            Self::FadeWait
+                | Self::MaskWait
+                | Self::QuakeWait
+                | Self::StripWait
+                | Self::ChangeWait
+                | Self::CameraWait
+        )
+    }
+}
+
 impl Hosts<'_> {
     pub(super) fn has(&self, capability: Capability) -> bool {
         match capability {

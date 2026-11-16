@@ -1300,9 +1300,14 @@ impl<'a> Runtime<'a> {
         if let Some(first) = resolved.first_unreviewed {
             self.notices.push(first);
         }
-        if crate::dispatch::is_lifecycle(command) {
-            let flow = crate::dispatch::run(
-                resolved.semantics,
+        let Some(entry) = crate::dispatch::resolve_entry(resolved.semantics, command) else {
+            return Ok(RuntimeEvent::Unhandled {
+                pc,
+                command: command + 0x2000,
+            });
+        };
+        if entry.is_lifecycle() {
+            let flow = entry.run(
                 &mut self.machine,
                 &mut crate::dispatch::Hosts {
                     runtime: true,
@@ -1323,8 +1328,7 @@ impl<'a> Runtime<'a> {
         if command == 0x129
             && let Some(output) = &mut self.system_output
         {
-            let flow = crate::dispatch::run(
-                resolved.semantics,
+            let flow = entry.run(
                 &mut self.machine,
                 &mut crate::dispatch::Hosts {
                     system_write: Some(crate::dispatch::SystemWriteHosts {
@@ -1346,15 +1350,15 @@ impl<'a> Runtime<'a> {
                 command: command + 0x2000,
             });
         }
-        if crate::dispatch::uses_bootstrap_for(resolved.semantics, command) {
+        if entry.uses_bootstrap() {
             let mut hosts = crate::dispatch::Hosts::default();
-            if command == 0x34d {
+            if entry.capability == crate::dispatch::Capability::FunctionKeys {
                 hosts.function_keys =
                     Some(crate::dispatch::FunctionKeys::Runtime(&mut self.bootstrap));
             } else {
                 hosts.bootstrap = Some(&mut self.bootstrap);
             }
-            let flow = crate::dispatch::run(resolved.semantics, &mut self.machine, &mut hosts)?;
+            let flow = entry.run(&mut self.machine, &mut hosts)?;
             self.images
                 .configure_parameters(self.bootstrap.archive_parameters());
             self.scene_movies
@@ -1377,22 +1381,22 @@ impl<'a> Runtime<'a> {
             effects: self.effects,
             skip: self.message_flags.skip(),
         };
-        if crate::dispatch::is_wait_for(resolved.semantics, command) {
-            let flow = crate::dispatch::run(
-                resolved.semantics,
-                &mut self.machine,
-                &mut crate::dispatch::Hosts {
-                    waits: Some(crate::dispatch::WaitHosts {
-                        scene: Some(&mut self.scene),
-                        camera: Some(&mut self.camera),
-                        input: &mut self.input,
-                        gate,
-                        change_images: true,
-                    }),
-                    ..Default::default()
-                },
-            )?
-            .expect("registered wait has a dispatch result");
+        if entry.is_wait() {
+            let flow = entry
+                .run(
+                    &mut self.machine,
+                    &mut crate::dispatch::Hosts {
+                        waits: Some(crate::dispatch::WaitHosts {
+                            scene: Some(&mut self.scene),
+                            camera: Some(&mut self.camera),
+                            input: &mut self.input,
+                            gate,
+                            change_images: true,
+                        }),
+                        ..Default::default()
+                    },
+                )?
+                .expect("registered wait has a dispatch result");
             self.resume_run = flow.yields();
             return Ok(match flow {
                 crate::dispatch::Flow::Done => RuntimeEvent::Progress,
@@ -1426,30 +1430,30 @@ impl<'a> Runtime<'a> {
         } else {
             (self.message_flags, true)
         };
-        if crate::dispatch::is_message_wait(command) {
-            let flow = crate::dispatch::run(
-                resolved.semantics,
-                &mut self.machine,
-                &mut crate::dispatch::Hosts {
-                    message_wait: Some(crate::dispatch::MessageWaitHosts {
-                        messages: &mut self.messages,
-                        input: &mut self.input,
-                        flags: message_flags,
-                        context: crate::message::AutoAdvanceContext {
-                            settings: self.settings.auto_advance(),
-                            delta_ms: self.timers.delta_ms(),
-                            gesture_result: self
-                                .gesture
-                                .field(88)
-                                .is_some_and(|value| value as i32 >= 0),
-                            read_eligible,
-                            audio: self.audio_backend.as_ref(),
-                        },
-                    }),
-                    ..Default::default()
-                },
-            )?
-            .expect("registered message wait");
+        if entry.is_message_wait() {
+            let flow = entry
+                .run(
+                    &mut self.machine,
+                    &mut crate::dispatch::Hosts {
+                        message_wait: Some(crate::dispatch::MessageWaitHosts {
+                            messages: &mut self.messages,
+                            input: &mut self.input,
+                            flags: message_flags,
+                            context: crate::message::AutoAdvanceContext {
+                                settings: self.settings.auto_advance(),
+                                delta_ms: self.timers.delta_ms(),
+                                gesture_result: self
+                                    .gesture
+                                    .field(88)
+                                    .is_some_and(|value| value as i32 >= 0),
+                                read_eligible,
+                                audio: self.audio_backend.as_ref(),
+                            },
+                        }),
+                        ..Default::default()
+                    },
+                )?
+                .expect("registered message wait");
             self.message_flags = message_flags;
             self.resume_run = flow.yields();
             return Ok(match flow {
@@ -1482,7 +1486,7 @@ impl<'a> Runtime<'a> {
         let mut scene_movie_source = self
             .scene_movies
             .with_paths(self.bootstrap.paths(), ResourceKind::SceneMovie);
-        let is_movie_player = crate::dispatch::uses_movie_player_for(resolved.semantics, command);
+        let is_movie_player = entry.uses_movie_player();
         let mut sequence_messages = Some(&mut self.messages);
         let mut hosts = crate::dispatch::Hosts {
             runtime: true,
@@ -1539,36 +1543,30 @@ impl<'a> Runtime<'a> {
             save_info: Some(&mut self.save_info),
             effects: Some(&mut self.effects),
         };
-        if crate::dispatch::uses_message_state(command) {
+        if entry.uses_message_state() {
             hosts.messages = sequence_messages.take();
-            if crate::dispatch::uses_input_for(resolved.semantics, command) {
-                hosts.input = Some(crate::dispatch::InputHosts {
-                    input: &mut self.input,
-                    skip: message_flags.skip(),
-                    clock: Some(input_clock),
-                });
-            }
-        } else if crate::dispatch::uses_input_for(resolved.semantics, command) {
+        }
+        if entry.uses_input() {
             hosts.input = Some(crate::dispatch::InputHosts {
                 input: &mut self.input,
                 skip: message_flags.skip(),
                 clock: Some(input_clock),
             });
-        } else if !crate::dispatch::uses_sequence(command) {
+        } else if !entry.uses_message_state() && !entry.uses_sequence() {
             hosts.text = Some(crate::dispatch::TextHosts {
                 messages: sequence_messages.take().expect("text owns message host"),
                 input: &mut self.input,
                 flags: message_flags,
             });
         }
-        if crate::dispatch::uses_platform_for(resolved.semantics, command) {
+        if entry.uses_platform() {
             hosts.platform = Some(crate::dispatch::PlatformHosts {
                 host: &mut self.platform,
                 backend,
                 assets: &mut self.assets,
                 cursors: self.bootstrap.cursor_names(),
             });
-        } else if crate::dispatch::uses_device_frame_for(resolved.semantics, command) {
+        } else if entry.uses_device_frame() {
             hosts.device_frame = Some(backend);
         }
         if is_movie_player {
@@ -1583,7 +1581,7 @@ impl<'a> Runtime<'a> {
                 backend: self.audio_backend.as_mut(),
             });
         }
-        if crate::dispatch::uses_sequence(command) {
+        if entry.uses_sequence() {
             hosts.sequence = Some(crate::dispatch::SequenceHosts {
                 host: &mut self.sequence,
                 execution: Some(crate::sequence::SequenceContext {
@@ -1595,14 +1593,14 @@ impl<'a> Runtime<'a> {
             });
         } else {
             hosts.camera = Some(&mut self.camera);
-            if crate::dispatch::uses_movie_scene_for(resolved.semantics, command) {
+            if entry.uses_movie_scene() {
                 hosts.movie_scene = Some(crate::dispatch::MovieSceneHosts {
                     scene: &mut self.scene,
                     source: &mut scene_movie_source,
                 });
-            } else if crate::dispatch::uses_window_images(command) {
+            } else if entry.uses_window_images() {
                 hosts.window_images = Some(&mut image_source);
-            } else if crate::dispatch::uses_images(command) {
+            } else if entry.uses_images() {
                 hosts.images = Some(crate::dispatch::ImageHosts {
                     scene: &mut self.scene,
                     source: &mut image_source,
@@ -1612,8 +1610,7 @@ impl<'a> Runtime<'a> {
                 hosts.scene = Some(&mut self.scene);
             }
         }
-        if let Some(flow) = crate::dispatch::run(resolved.semantics, &mut self.machine, &mut hosts)?
-        {
+        if let Some(flow) = entry.run(&mut self.machine, &mut hosts)? {
             if let crate::dispatch::Flow::Runtime(request) = flow {
                 return Ok(self.handle_runtime(request, backend)?);
             }

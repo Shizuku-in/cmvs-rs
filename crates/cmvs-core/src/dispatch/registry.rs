@@ -2,8 +2,8 @@
 mod root;
 mod variants;
 
-use super::{Capability, Entry};
-use crate::profile::{EngineProfile, Semantics};
+use super::Entry;
+use crate::profile::{EngineProfile, Semantics, VariantId};
 
 pub use root::ROOT;
 pub use variants::{
@@ -17,205 +17,113 @@ pub use variants::{
     WINDOW_SCALE_MOTION,
 };
 
+pub(crate) fn resolve_entry(semantics: Semantics, command: u16) -> Option<&'static Entry> {
+    match semantics {
+        Semantics::Root => root_entry(command),
+        Semantics::Variant(id) => variant_entry(id, command),
+    }
+}
+
 pub fn uses_message_state(command: u16) -> bool {
-    // The font-name query needs the message host's backend to show a readable name.
     command == 0x2de
-        || uses_windows(command)
-        || entries_any_table(command).iter().copied().any(|e| {
-            e.command == command
-                && matches!(
-                    e.capability,
-                    Capability::TextState | Capability::AuxiliaryScene | Capability::FontDialog
-                )
-        })
+        || entries_any_table(command)
+            .iter()
+            .copied()
+            .any(Entry::uses_message_state)
 }
 
 pub fn uses_windows(command: u16) -> bool {
-    entries_any_table(command).iter().copied().any(|entry| {
-        entry.command == command
-            && matches!(
-                entry.capability,
-                Capability::Windows
-                    | Capability::WindowPointer
-                    | Capability::WindowButtons
-                    | Capability::WindowImages
-            )
-    })
+    entries_any_table(command)
+        .iter()
+        .copied()
+        .any(Entry::uses_windows)
 }
 
 pub fn uses_window_images(command: u16) -> bool {
     entries_any_table(command)
         .iter()
         .copied()
-        .any(|entry| entry.command == command && entry.capability == Capability::WindowImages)
-}
-
-fn input_capability(capability: Capability) -> bool {
-    matches!(
-        capability,
-        Capability::Input
-            | Capability::ButtonInput
-            | Capability::ListInput
-            | Capability::DragPress
-            | Capability::WindowPointer
-            | Capability::WindowButtons
-    )
+        .any(Entry::uses_window_images)
 }
 
 pub fn uses_input(command: u16) -> bool {
-    root_entry(command)
-        .into_iter()
-        .any(|entry| entry.command == command && input_capability(entry.capability))
+    uses_input_for(Semantics::Root, command)
 }
 
 pub fn uses_input_for(semantics: Semantics, command: u16) -> bool {
-    match semantics {
-        Semantics::Root => uses_input(command),
-        Semantics::Variant(id) => {
-            variant_entry(id, command).is_some_and(|entry| input_capability(entry.capability))
-        }
-    }
+    resolve_entry(semantics, command).is_some_and(Entry::uses_input)
 }
 
 pub fn is_message_wait(command: u16) -> bool {
-    root_entry(command)
-        .into_iter()
-        .any(|e| e.command == command && e.capability == Capability::MessageWait)
+    root_entry(command).is_some_and(Entry::is_message_wait)
 }
 
 pub fn is_lifecycle(command: u16) -> bool {
-    root_entry(command).into_iter().any(|e| {
-        e.command == command && e.capability == Capability::Runtime && matches!(command, 1 | 3)
-    })
+    root_entry(command).is_some_and(Entry::is_lifecycle)
 }
 
 /// Platform and capture backends must be borrowed independently of image sources.
 pub fn uses_bootstrap(command: u16) -> bool {
-    root_entry(command).into_iter().any(|e| {
-        e.command == command
-            && matches!(
-                e.capability,
-                Capability::Bootstrap | Capability::FunctionKeys
-            )
-    })
+    uses_bootstrap_for(Semantics::Root, command)
 }
 
 pub fn uses_bootstrap_for(semantics: Semantics, command: u16) -> bool {
-    match semantics {
-        Semantics::Root => uses_bootstrap(command),
-        Semantics::Variant(id) => variant_entry(id, command)
-            .is_some_and(|entry| entry.capability == Capability::Bootstrap),
-    }
+    resolve_entry(semantics, command).is_some_and(Entry::uses_bootstrap)
 }
 
 pub fn uses_platform(command: u16) -> bool {
-    root_entry(command)
-        .into_iter()
-        .any(|e| e.command == command && e.capability == Capability::Platform)
+    uses_platform_for(Semantics::Root, command)
 }
 
 pub fn uses_platform_for(semantics: Semantics, command: u16) -> bool {
-    match semantics {
-        Semantics::Root => uses_platform(command),
-        Semantics::Variant(id) => {
-            variant_entry(id, command).is_some_and(|entry| entry.capability == Capability::Platform)
-        }
-    }
+    resolve_entry(semantics, command).is_some_and(Entry::uses_platform)
 }
 
 pub fn uses_device_frame_for(semantics: Semantics, command: u16) -> bool {
-    match semantics {
-        Semantics::Root => uses_device_frame(command),
-        Semantics::Variant(id) => variant_entry(id, command)
-            .is_some_and(|entry| entry.capability == Capability::TextDialog),
-    }
+    resolve_entry(semantics, command).is_some_and(Entry::uses_device_frame)
 }
 
 pub fn uses_device_frame(command: u16) -> bool {
-    root_entry(command).into_iter().any(|e| {
-        e.command == command
-            && matches!(
-                e.capability,
-                Capability::CaptureDevice | Capability::FontDialog
-            )
-    })
+    uses_device_frame_for(Semantics::Root, command)
 }
 
 pub fn uses_sequence(command: u16) -> bool {
-    root_entry(command)
-        .into_iter()
-        .chain(SEQUENCE_WINDOW_IMAGE.iter())
-        .any(|e| e.command == command && e.capability == Capability::Sequence)
+    entries_any_table(command)
+        .iter()
+        .copied()
+        .any(Entry::uses_sequence)
 }
 
 pub fn uses_movie_scene(command: u16) -> bool {
-    root_entry(command)
-        .into_iter()
-        .any(|e| e.command == command && e.capability == Capability::MovieScene)
+    uses_movie_scene_for(Semantics::Root, command)
 }
 
 pub fn uses_movie_scene_for(semantics: Semantics, command: u16) -> bool {
-    match semantics {
-        Semantics::Root => uses_movie_scene(command),
-        Semantics::Variant(id) => variant_entry(id, command)
-            .is_some_and(|entry| entry.capability == Capability::MovieScene),
-    }
+    resolve_entry(semantics, command).is_some_and(Entry::uses_movie_scene)
 }
 
 pub fn uses_movie_player(command: u16) -> bool {
-    root_entry(command)
-        .into_iter()
-        .any(|e| e.command == command && e.capability == Capability::MoviePlayer)
+    uses_movie_player_for(Semantics::Root, command)
 }
 
 pub fn uses_movie_player_for(semantics: Semantics, command: u16) -> bool {
-    match semantics {
-        Semantics::Root => uses_movie_player(command),
-        Semantics::Variant(id) => {
-            variant_entry(id, command).is_some_and(|e| e.capability == Capability::MoviePlayer)
-        }
-    }
+    resolve_entry(semantics, command).is_some_and(Entry::uses_movie_player)
 }
 
 pub fn uses_images(command: u16) -> bool {
-    entries_any_table(command).iter().copied().any(|e| {
-        e.command == command
-            && matches!(
-                e.capability,
-                Capability::SceneImages
-                    | Capability::MaskImages
-                    | Capability::ImageChange
-                    | Capability::ParticleImages
-            )
-    })
-}
-
-fn is_wait_capability(capability: Capability) -> bool {
-    matches!(
-        capability,
-        Capability::FadeWait
-            | Capability::MaskWait
-            | Capability::QuakeWait
-            | Capability::StripWait
-            | Capability::ChangeWait
-            | Capability::CameraWait
-    )
+    entries_any_table(command)
+        .iter()
+        .copied()
+        .any(Entry::uses_images)
 }
 
 pub fn is_wait(command: u16) -> bool {
-    root_entry(command)
-        .into_iter()
-        .any(|e| e.command == command && is_wait_capability(e.capability))
+    is_wait_for(Semantics::Root, command)
 }
 
 /// Waits of the selected semantics, including profile-bound variants.
 pub fn is_wait_for(semantics: Semantics, command: u16) -> bool {
-    match semantics {
-        Semantics::Root => is_wait(command),
-        Semantics::Variant(id) => {
-            variant_entry(id, command).is_some_and(|e| is_wait_capability(e.capability))
-        }
-    }
+    resolve_entry(semantics, command).is_some_and(Entry::is_wait)
 }
 
 /// The ROOT entry for `command`, through an index built once: system commands are
@@ -259,145 +167,129 @@ fn entries_any_table(command: u16) -> &'static [&'static Entry] {
     index.get(usize::from(command)).map_or(&[], Vec::as_slice)
 }
 
-#[rustfmt::skip]
-pub fn variant_entry(id: crate::profile::VariantId, command: u16) -> Option<&'static Entry> {
-    let entries = match id {
-        crate::profile::VariantId::TextDialog => TEXT_DIALOG,
-        crate::profile::VariantId::SeGain => SE_GAIN,
-        crate::profile::VariantId::MixerGain => MIXER_GAIN,
-        crate::profile::VariantId::ImageTables => IMAGE_TABLES,
-        crate::profile::VariantId::ActivationPass => ACTIVATION_PASS,
-        crate::profile::VariantId::WindowScaleMotion => WINDOW_SCALE_MOTION,
-        crate::profile::VariantId::WindowPositionMotion => WINDOW_POSITION_MOTION,
-        crate::profile::VariantId::WindowOpacityTrack => WINDOW_OPACITY_TRACK,
-        crate::profile::VariantId::LogicalText => LOGICAL_TEXT,
-        crate::profile::VariantId::ViewMotion => VIEW_MOTION,
-        crate::profile::VariantId::WindowFullMove => WINDOW_FULL_MOVE,
-        crate::profile::VariantId::LegacyEffects => LEGACY_EFFECTS,
-        crate::profile::VariantId::WindowChildImage => WINDOW_CHILD_IMAGE,
-        crate::profile::VariantId::WindowDrawScale => WINDOW_DRAW_SCALE,
-        crate::profile::VariantId::SequenceWindowImage => SEQUENCE_WINDOW_IMAGE,
-        crate::profile::VariantId::DrawQuery => DRAW_QUERY,
-        crate::profile::VariantId::CameraMoveX => CAMERA_MOVE_X,
-        crate::profile::VariantId::MovieControl => MOVIE_CONTROL,
-        crate::profile::VariantId::MovieSeek => MOVIE_SEEK,
-        crate::profile::VariantId::ScreenCoordinates => SCREEN_COORDINATES,
-        crate::profile::VariantId::InputPress => INPUT_PRESS,
-        crate::profile::VariantId::MgvPlayer => MGV_PLAYER,
-        crate::profile::VariantId::DisplayCount => DISPLAY_COUNT,
-        crate::profile::VariantId::FullscreenMonitor => FULLSCREEN_MONITOR,
-        crate::profile::VariantId::KeyedArchives => KEYED_ARCHIVES,
-        crate::profile::VariantId::ListSelect => LIST_SELECT,
-        crate::profile::VariantId::ObjectQueue => OBJECT_QUEUE,
-        crate::profile::VariantId::TextAlpha => TEXT_ALPHA,
-        crate::profile::VariantId::FontCells => FONT_CELLS,
-        crate::profile::VariantId::Particles => PARTICLES,
-        crate::profile::VariantId::ParticlesX87 => PARTICLES_X87,
-        crate::profile::VariantId::Rain => RAIN,
-        crate::profile::VariantId::BackgroundAudio => BACKGROUND_AUDIO,
-        crate::profile::VariantId::SeRestart => SE_RESTART,
-        crate::profile::VariantId::AudioPreload => AUDIO_PRELOAD,
-        crate::profile::VariantId::PolarPoint => POLAR_POINT,
-        crate::profile::VariantId::FallingBillboards => FALLING_BILLBOARDS,
-        crate::profile::VariantId::FallingBillboardsX87 => FALLING_BILLBOARDS_X87,
-        crate::profile::VariantId::CollisionParticles => COLLISION_PARTICLES,
-        crate::profile::VariantId::FadingParticles => FADING_PARTICLES,
-        crate::profile::VariantId::Fragments => FRAGMENTS,
+macro_rules! define_variant_registry {
+    ($(($variant:ident, $table:ident, $label:literal)),* $(,)?) => {
+        pub fn variant_entry(id: VariantId, command: u16) -> Option<&'static Entry> {
+            let entries = match id {
+                $(VariantId::$variant => $table,)*
+            };
+            entries.iter().find(|entry| entry.command == command)
+        }
+
+        pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
+            match profile.semantics(command) {
+                $(Semantics::Variant(VariantId::$variant) => $label,)*
+                Semantics::Root => "base semantics",
+            }
+        }
+
+        pub static VARIANT_TABLES: &[&[Entry]] = &[$($table,)*];
     };
-    entries.iter().find(|entry| entry.command == command)
 }
 
-#[rustfmt::skip]
-pub fn semantics_name(profile: &EngineProfile, command: u16) -> &'static str {
-    match profile.semantics(command) {
-        Semantics::Variant(crate::profile::VariantId::TextDialog) => "variant text dialog",
-        Semantics::Variant(crate::profile::VariantId::SeGain) => "variant SE gain multiplier",
-        Semantics::Variant(crate::profile::VariantId::MixerGain) => "variant device mixer gain",
-        Semantics::Variant(crate::profile::VariantId::ImageTables) => "variant separate image tables",
-        Semantics::Variant(crate::profile::VariantId::ActivationPass) => "variant activation check reported as passed",
-        Semantics::Variant(crate::profile::VariantId::WindowScaleMotion) => "variant window scale motion",
-        Semantics::Variant(crate::profile::VariantId::WindowPositionMotion) => "variant window position motion",
-        Semantics::Variant(crate::profile::VariantId::WindowOpacityTrack) => "variant window opacity track",
-        Semantics::Variant(crate::profile::VariantId::LogicalText) => "variant text with logical size",
-        Semantics::Variant(crate::profile::VariantId::ViewMotion) => "variant device view motion",
-        Semantics::Variant(crate::profile::VariantId::WindowFullMove) => "variant unscaled fullscreen origin",
-        Semantics::Variant(crate::profile::VariantId::LegacyEffects) => "variant legacy effect slots",
-        Semantics::Variant(crate::profile::VariantId::WindowChildImage) => "variant window child image",
-        Semantics::Variant(crate::profile::VariantId::WindowDrawScale) => "variant window draw scale",
-        Semantics::Variant(crate::profile::VariantId::SequenceWindowImage) => "variant sequence window image",
-        Semantics::Variant(crate::profile::VariantId::DrawQuery) => "variant object draw query",
-        Semantics::Variant(crate::profile::VariantId::CameraMoveX) => "variant camera X move",
-        Semantics::Variant(crate::profile::VariantId::MovieControl) => "variant scene movie control",
-        Semantics::Variant(crate::profile::VariantId::MovieSeek) => "variant scene movie seek",
-        Semantics::Variant(crate::profile::VariantId::ScreenCoordinates) => "variant screen coordinates",
-        Semantics::Variant(crate::profile::VariantId::InputPress) => "variant input down edge",
-        Semantics::Variant(crate::profile::VariantId::MgvPlayer) => "variant MGV player",
-        Semantics::Variant(crate::profile::VariantId::DisplayCount) => "variant display count",
-        Semantics::Variant(crate::profile::VariantId::FullscreenMonitor) => "variant fullscreen monitor",
-        Semantics::Variant(crate::profile::VariantId::KeyedArchives) => "variant keyed archives",
-        Semantics::Variant(crate::profile::VariantId::ListSelect) => "variant list selection",
-        Semantics::Variant(crate::profile::VariantId::ObjectQueue) => "variant object queue",
-        Semantics::Variant(crate::profile::VariantId::TextAlpha) => "variant text alpha revision",
-        Semantics::Variant(crate::profile::VariantId::FontCells) => "variant text override",
-        Semantics::Variant(crate::profile::VariantId::Particles) => "variant particle override",
-        Semantics::Variant(crate::profile::VariantId::Rain) => "variant rain streaks",
-        Semantics::Variant(crate::profile::VariantId::ParticlesX87) => "variant x87 particle override",
-        Semantics::Variant(crate::profile::VariantId::BackgroundAudio) => "variant background audio override",
-        Semantics::Variant(crate::profile::VariantId::FallingBillboards) => "variant falling billboard override",
-        Semantics::Variant(crate::profile::VariantId::FallingBillboardsX87) => "variant x87 falling billboard override",
-        Semantics::Variant(crate::profile::VariantId::CollisionParticles) => "variant collision particle override",
-        Semantics::Variant(crate::profile::VariantId::FadingParticles) => "variant fading particle override",
-        Semantics::Variant(crate::profile::VariantId::Fragments) => "variant image fragment override",
-        Semantics::Variant(crate::profile::VariantId::SeRestart) => "variant SE restart",
-        Semantics::Variant(crate::profile::VariantId::AudioPreload) => "variant audio preload",
-        Semantics::Variant(crate::profile::VariantId::PolarPoint) => "variant integer polar point",
-        Semantics::Root => "base semantics",
-    }
-}
-
-pub static VARIANT_TABLES: &[&[Entry]] = &[
-    TEXT_DIALOG,
-    SE_GAIN,
-    MIXER_GAIN,
-    IMAGE_TABLES,
-    ACTIVATION_PASS,
-    WINDOW_SCALE_MOTION,
-    WINDOW_POSITION_MOTION,
-    WINDOW_OPACITY_TRACK,
-    LOGICAL_TEXT,
-    VIEW_MOTION,
-    WINDOW_FULL_MOVE,
-    LEGACY_EFFECTS,
-    WINDOW_CHILD_IMAGE,
-    WINDOW_DRAW_SCALE,
-    SEQUENCE_WINDOW_IMAGE,
-    DRAW_QUERY,
-    CAMERA_MOVE_X,
-    MOVIE_CONTROL,
-    MOVIE_SEEK,
-    SCREEN_COORDINATES,
-    INPUT_PRESS,
-    MGV_PLAYER,
-    DISPLAY_COUNT,
-    FULLSCREEN_MONITOR,
-    KEYED_ARCHIVES,
-    FONT_CELLS,
-    PARTICLES,
-    PARTICLES_X87,
-    RAIN,
-    BACKGROUND_AUDIO,
-    SE_RESTART,
-    AUDIO_PRELOAD,
-    POLAR_POINT,
-    TEXT_ALPHA,
-    OBJECT_QUEUE,
-    LIST_SELECT,
-    FALLING_BILLBOARDS,
-    FALLING_BILLBOARDS_X87,
-    COLLISION_PARTICLES,
-    FADING_PARTICLES,
-    FRAGMENTS,
-];
+define_variant_registry!(
+    (TextDialog, TEXT_DIALOG, "variant text dialog"),
+    (SeGain, SE_GAIN, "variant SE gain multiplier"),
+    (MixerGain, MIXER_GAIN, "variant device mixer gain"),
+    (ImageTables, IMAGE_TABLES, "variant separate image tables"),
+    (
+        ActivationPass,
+        ACTIVATION_PASS,
+        "variant activation check reported as passed"
+    ),
+    (
+        WindowScaleMotion,
+        WINDOW_SCALE_MOTION,
+        "variant window scale motion"
+    ),
+    (
+        WindowPositionMotion,
+        WINDOW_POSITION_MOTION,
+        "variant window position motion"
+    ),
+    (
+        WindowOpacityTrack,
+        WINDOW_OPACITY_TRACK,
+        "variant window opacity track"
+    ),
+    (LogicalText, LOGICAL_TEXT, "variant text with logical size"),
+    (ViewMotion, VIEW_MOTION, "variant device view motion"),
+    (
+        WindowFullMove,
+        WINDOW_FULL_MOVE,
+        "variant unscaled fullscreen origin"
+    ),
+    (LegacyEffects, LEGACY_EFFECTS, "variant legacy effect slots"),
+    (
+        WindowChildImage,
+        WINDOW_CHILD_IMAGE,
+        "variant window child image"
+    ),
+    (
+        WindowDrawScale,
+        WINDOW_DRAW_SCALE,
+        "variant window draw scale"
+    ),
+    (
+        SequenceWindowImage,
+        SEQUENCE_WINDOW_IMAGE,
+        "variant sequence window image"
+    ),
+    (DrawQuery, DRAW_QUERY, "variant object draw query"),
+    (CameraMoveX, CAMERA_MOVE_X, "variant camera X move"),
+    (MovieControl, MOVIE_CONTROL, "variant scene movie control"),
+    (MovieSeek, MOVIE_SEEK, "variant scene movie seek"),
+    (
+        ScreenCoordinates,
+        SCREEN_COORDINATES,
+        "variant screen coordinates"
+    ),
+    (InputPress, INPUT_PRESS, "variant input down edge"),
+    (MgvPlayer, MGV_PLAYER, "variant MGV player"),
+    (DisplayCount, DISPLAY_COUNT, "variant display count"),
+    (
+        FullscreenMonitor,
+        FULLSCREEN_MONITOR,
+        "variant fullscreen monitor"
+    ),
+    (KeyedArchives, KEYED_ARCHIVES, "variant keyed archives"),
+    (ListSelect, LIST_SELECT, "variant list selection"),
+    (ObjectQueue, OBJECT_QUEUE, "variant object queue"),
+    (TextAlpha, TEXT_ALPHA, "variant text alpha revision"),
+    (FontCells, FONT_CELLS, "variant text override"),
+    (Particles, PARTICLES, "variant particle override"),
+    (ParticlesX87, PARTICLES_X87, "variant x87 particle override"),
+    (Rain, RAIN, "variant rain streaks"),
+    (
+        BackgroundAudio,
+        BACKGROUND_AUDIO,
+        "variant background audio override"
+    ),
+    (SeRestart, SE_RESTART, "variant SE restart"),
+    (AudioPreload, AUDIO_PRELOAD, "variant audio preload"),
+    (PolarPoint, POLAR_POINT, "variant integer polar point"),
+    (
+        FallingBillboards,
+        FALLING_BILLBOARDS,
+        "variant falling billboard override"
+    ),
+    (
+        FallingBillboardsX87,
+        FALLING_BILLBOARDS_X87,
+        "variant x87 falling billboard override"
+    ),
+    (
+        CollisionParticles,
+        COLLISION_PARTICLES,
+        "variant collision particle override"
+    ),
+    (
+        FadingParticles,
+        FADING_PARTICLES,
+        "variant fading particle override"
+    ),
+    (Fragments, FRAGMENTS, "variant image fragment override"),
+);
 
 #[cfg(test)]
 mod index_tests {

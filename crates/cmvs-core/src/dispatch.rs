@@ -23,7 +23,6 @@ pub use hosts::{
     MoviePlayerHosts, MovieSceneHosts, PlatformHosts, ScriptHosts, SequenceHosts, SnapshotHosts,
     SystemReadHosts, SystemWriteHosts, TextHosts, WaitHosts,
 };
-pub(crate) use registry::root_entry;
 pub use registry::{
     ACTIVATION_PASS, AUDIO_PRELOAD, BACKGROUND_AUDIO, CAMERA_MOVE_X, COLLISION_PARTICLES,
     DISPLAY_COUNT, DRAW_QUERY, FADING_PARTICLES, FALLING_BILLBOARDS, FALLING_BILLBOARDS_X87,
@@ -39,6 +38,7 @@ pub use registry::{
     uses_platform, uses_platform_for, uses_sequence, uses_window_images, uses_windows,
     variant_entry,
 };
+pub(crate) use registry::{resolve_entry, root_entry};
 
 use crate::{
     bytecode::DecodeError,
@@ -138,6 +138,81 @@ pub struct Entry {
     handler: Handler,
 }
 
+impl Entry {
+    pub(crate) fn is_lifecycle(&self) -> bool {
+        self.capability == Capability::Runtime && matches!(self.command, 1 | 3)
+    }
+
+    pub(crate) fn is_message_wait(&self) -> bool {
+        self.capability == Capability::MessageWait
+    }
+
+    pub(crate) fn is_wait(&self) -> bool {
+        self.capability.is_wait()
+    }
+
+    pub(crate) fn uses_bootstrap(&self) -> bool {
+        self.capability.uses_bootstrap()
+    }
+
+    pub(crate) fn uses_input(&self) -> bool {
+        self.capability.uses_input()
+    }
+
+    pub(crate) fn uses_platform(&self) -> bool {
+        self.capability == Capability::Platform
+    }
+
+    pub(crate) fn uses_device_frame(&self) -> bool {
+        self.capability.uses_device_frame()
+    }
+
+    pub(crate) fn uses_sequence(&self) -> bool {
+        self.capability == Capability::Sequence
+    }
+
+    pub(crate) fn uses_movie_scene(&self) -> bool {
+        self.capability == Capability::MovieScene
+    }
+
+    pub(crate) fn uses_movie_player(&self) -> bool {
+        self.capability == Capability::MoviePlayer
+    }
+
+    pub(crate) fn uses_window_images(&self) -> bool {
+        self.capability == Capability::WindowImages
+    }
+
+    pub(crate) fn uses_images(&self) -> bool {
+        self.capability.uses_scene_images()
+    }
+
+    pub(crate) fn uses_windows(&self) -> bool {
+        self.capability.uses_windows()
+    }
+
+    pub(crate) fn uses_message_state(&self) -> bool {
+        self.capability.uses_message_state(self.command)
+    }
+
+    pub(crate) fn run(
+        &self,
+        vm: &mut Machine<'_>,
+        hosts: &mut Hosts<'_>,
+    ) -> Result<Option<Flow>, DispatchError> {
+        let Some((pc, command)) = vm.pending_system() else {
+            return Ok(None);
+        };
+        debug_assert_eq!(command, self.command);
+        if !hosts.has(self.capability) {
+            return Ok(Some(Flow::Unavailable));
+        }
+        (self.handler)(hosts, &mut Call::new(vm, pc, command))
+            .map(Some)
+            .map_err(|cause| DispatchError { pc, command, cause })
+    }
+}
+
 /// Called after CommandGate::resolve. None means no pending command or no root
 /// entry. Unavailable preserves the pending command and arguments; the
 /// caller may report the missing capability, but must not try another handler.
@@ -146,20 +221,11 @@ pub fn run(
     vm: &mut Machine<'_>,
     hosts: &mut Hosts<'_>,
 ) -> Result<Option<Flow>, DispatchError> {
-    let Some((pc, command)) = vm.pending_system() else {
+    let Some((_, command)) = vm.pending_system() else {
         return Ok(None);
     };
-    let entry = match semantics {
-        Semantics::Variant(id) => variant_entry(id, command),
-        Semantics::Root => root_entry(command),
-    };
-    let Some(entry) = entry else {
+    let Some(entry) = resolve_entry(semantics, command) else {
         return Ok((semantics != Semantics::Root).then_some(Flow::Unhandled));
     };
-    if !hosts.has(entry.capability) {
-        return Ok(Some(Flow::Unavailable));
-    }
-    (entry.handler)(hosts, &mut Call::new(vm, pc, command))
-        .map(Some)
-        .map_err(|cause| DispatchError { pc, command, cause })
+    entry.run(vm, hosts)
 }

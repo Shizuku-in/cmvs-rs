@@ -120,42 +120,6 @@ pub(in crate::dispatch) fn preload_audio(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn release_preloaded_audio(
-    hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
-    let h = hosts.audio.as_mut().expect("audio capability checked");
-    h.audio.handle_preload(call, h.backend)?;
-    Ok(Flow::Done)
-}
-
-pub(in crate::dispatch) fn play_preloaded_audio(
-    hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
-    let h = hosts.audio.as_mut().expect("audio capability checked");
-    h.audio.handle_preload(call, h.backend)?;
-    Ok(Flow::Done)
-}
-
-pub(in crate::dispatch) fn stop_preloaded_audio(
-    hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
-    let h = hosts.audio.as_mut().expect("audio capability checked");
-    h.audio.handle_preload(call, h.backend)?;
-    Ok(Flow::Done)
-}
-
-pub(in crate::dispatch) fn preloaded_audio_volume(
-    hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
-    let h = hosts.audio.as_mut().expect("audio capability checked");
-    h.audio.handle_preload(call, h.backend)?;
-    Ok(Flow::Done)
-}
-
 pub(in crate::dispatch) fn se_gain(
     hosts: &mut Hosts<'_>,
     call: &mut Call<'_, '_>,

@@ -2,14 +2,13 @@
 use crate::dispatch::handlers::input::{select_list, variant_input_press};
 use crate::dispatch::handlers::media::{
     background_audio, legacy_movie_control, legacy_movie_seek, mgv_player, mixer_gain,
-    play_preloaded_audio, preload_audio, preloaded_audio_volume, release_preloaded_audio,
-    root_audio, se_gain, stop_preloaded_audio,
+    preload_audio, root_audio, se_gain,
 };
 use crate::dispatch::handlers::platform::{root_platform, variant_text_dialog, window_full_move};
 use crate::dispatch::handlers::scene::{
-    collision_mesh, create_collision_particles, create_fading_particles, create_falling_billboards,
-    create_falling_billboards_x87, create_fragments, create_legacy_flakes, create_legacy_rain,
-    create_particles, create_particles_x87, create_rain, draw_query, legacy_circle, legacy_curtain,
+    collision_mesh, create_collision_particles, create_falling_billboards,
+    create_falling_billboards_x87, create_fragments, create_legacy_flakes, create_particles,
+    create_particles_x87, create_rain, draw_query, legacy_circle, legacy_curtain,
     legacy_floating_planes, legacy_magic, legacy_query, legacy_set, legacy_snow_field,
     legacy_sprites, legacy_vortex, legacy_walk, query_fragments, root_camera, root_effect_objects,
     root_images, root_scene, root_sequence, root_wait_view, screen_coordinates,
@@ -309,7 +308,7 @@ pub static FADING_PARTICLES: &[Entry] = &[Entry {
     command: 0x2a7,
     name: "create fading particle effect",
     capability: Capability::ParticleImages,
-    handler: create_fading_particles,
+    handler: create_collision_particles,
 }];
 
 pub static LIST_SELECT: &[Entry] = &[Entry {
@@ -359,25 +358,25 @@ pub static AUDIO_PRELOAD: &[Entry] = &[
         command: 0x249,
         name: "release preloaded audio",
         capability: Capability::Audio,
-        handler: release_preloaded_audio,
+        handler: preload_audio,
     },
     Entry {
         command: 0x24a,
         name: "play preloaded audio",
         capability: Capability::Audio,
-        handler: play_preloaded_audio,
+        handler: preload_audio,
     },
     Entry {
         command: 0x24b,
         name: "stop preloaded audio",
         capability: Capability::Audio,
-        handler: stop_preloaded_audio,
+        handler: preload_audio,
     },
     Entry {
         command: 0x24f,
         name: "preloaded audio volume",
         capability: Capability::Audio,
-        handler: preloaded_audio_volume,
+        handler: preload_audio,
     },
 ];
 
@@ -436,7 +435,7 @@ pub static LEGACY_EFFECTS: &[Entry] = &[
         command: 0x2a1,
         name: "create legacy rain streak effect",
         capability: Capability::ParticleImages,
-        handler: create_legacy_rain,
+        handler: create_rain,
     },
     Entry {
         command: 0x294,
