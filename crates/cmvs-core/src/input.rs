@@ -66,6 +66,31 @@ impl KeyBindings {
     }
 }
 
+/// Direct code indices matching [`CodeInput`] / `cmvs-desktop` for CVNS hold counters:
+/// Ctrl, Shift, Escape, Return, Space, PageUp, PageDown.
+const CVNS_HOLD_CODES: [usize; 7] = [24, 23, 25, 22, 26, 27, 28];
+
+/// Mapping from `CodeInput` key index to CVNS `0x2040` bit when triggered as a single-frame edge.
+const CVNS_EDGE_BITS: [(usize, u32); 17] = [
+    (21, 1 << 4),  // Tab
+    (33, 1 << 8),  // Up
+    (34, 1 << 9),  // Down
+    (35, 1 << 10), // Left
+    (36, 1 << 11), // Right
+    (52, 1 << 12), // F1
+    (53, 1 << 13), // F2
+    (54, 1 << 14), // F3
+    (55, 1 << 15), // F4
+    (56, 1 << 16), // F5
+    (57, 1 << 17), // F6
+    (58, 1 << 18), // F7
+    (59, 1 << 19), // F8
+    (60, 1 << 20), // F9
+    (61, 1 << 21), // F10
+    (62, 1 << 22), // F11
+    (63, 1 << 23), // F12
+];
+
 /// Per-code history, independent of consumed action flags. One update per VM frame,
 /// never per instruction or cooperative execution slice (0x140055260/0x140056780).
 #[derive(Debug, Clone)]
@@ -101,6 +126,24 @@ impl CodeInput {
                 now[code],
                 now[code] && !self.previous[code],
             ];
+        }
+        if now[4] && !self.previous[4] {
+            input.cvns_wheel = input.cvns_wheel.saturating_sub(1);
+        }
+        if now[5] && !self.previous[5] {
+            input.cvns_wheel = input.cvns_wheel.saturating_add(1);
+        }
+        input.cvns_middle_pressed = now[2] && !self.previous[2];
+        input.cvns_edges = CVNS_EDGE_BITS
+            .iter()
+            .filter(|&&(code, _)| now[code] && !self.previous[code])
+            .fold(0u32, |mask, &(_, bit)| mask | bit);
+        for (counter, &code) in input.cvns_holds.iter_mut().zip(&CVNS_HOLD_CODES) {
+            *counter = if now[code] {
+                counter.saturating_add(1)
+            } else {
+                0
+            };
         }
         self.previous = *now;
     }
@@ -142,6 +185,16 @@ pub struct ActionInput {
     /// +0x600: while enabled, the function key 1..12 whose VK_F1..VK_F12 hold counter is 1
     /// this frame (the lowest one when several are), else 0; 0x234f clears it.
     function_key: u32,
+    /// CVNS +0xabc (this+687): accumulated wheel notches (-1 up, +1 down), reset by 0x2039.
+    cvns_wheel: i32,
+    /// CVNS this+426: middle mouse button click pulse for 0x203d / 0x2042(3).
+    cvns_middle_pressed: bool,
+    /// CVNS `sub_46EEE0` non-counter single-frame press bits (Tab, arrows, F1..F12).
+    cvns_edges: u32,
+    /// CVNS `sub_46E800` hold frame counters for Ctrl, Shift, Esc, Enter, Space, PgUp, PgDn.
+    cvns_holds: [u32; 7],
+    /// Positive hit rectangles queried via `0x20ca` / `0x2031` during the current frame.
+    hit_rects: Vec<[i32; 4]>,
 }
 
 impl ActionInput {
@@ -177,6 +230,12 @@ impl ActionInput {
     }
     pub fn pointer(&self) -> [i32; 2] {
         self.pointer
+    }
+    pub fn hit_rects(&self) -> &[[i32; 4]] {
+        &self.hit_rects
+    }
+    pub(crate) fn clear_hit_rects(&mut self) {
+        self.hit_rects.clear();
     }
     /// Host update of the pointer in script coordinates.
     pub fn set_pointer(&mut self, x: i32, y: i32) {
@@ -218,6 +277,8 @@ impl ActionInput {
         }
         self.released = [false; ACTIONS];
         self.pressed = [false; ACTIONS];
+        self.cvns_middle_pressed = false;
+        self.cvns_edges = 0;
     }
     /// 0x140059560: also clears the four mouse releases before 0x140054bf0.
     pub(crate) fn clear_all_edges(&mut self) {
@@ -233,6 +294,68 @@ impl ActionInput {
             self.released[action] = false;
             self.pressed[action] = false;
         }
+    }
+    pub(crate) fn consume_mouse_press(&mut self, index: usize) {
+        if let Some(flags) = self.mouse.get_mut(index) {
+            flags[2] = false;
+        }
+    }
+    /// True when CVNS Ctrl hold (`0x100`) or standard skip hold is active (`sub_41cf90`).
+    pub(crate) fn cvns_skip_held(&self) -> bool {
+        self.skip_held() || self.cvns_holds[0] != 0
+    }
+    /// CVNS `sub_46f6e0` wait interrupt mask check with optional edge consumption.
+    pub(crate) fn cvns_wait_interrupt(&mut self, mask: u32, consume: bool) -> bool {
+        let mut hit = false;
+        if mask & 1 != 0 && self.cvns_wheel < 0 {
+            if consume {
+                self.cvns_wheel = 0;
+            }
+            hit = true;
+        }
+        if mask & 2 != 0 && self.cvns_wheel > 0 {
+            if consume {
+                self.cvns_wheel = 0;
+            }
+            hit = true;
+        }
+        // Bits 2..8 correspond to Ctrl(0), Shift(1), Esc(2), Enter(3), Space(4), PgUp(5).
+        const HOLD_MASKS: [(usize, u32); 6] = [
+            (0, 1 << 2),
+            (1, 1 << 3),
+            (2, 1 << 4),
+            (3, 1 << 5),
+            (4, 1 << 6),
+            (5, 1 << 7),
+        ];
+        for &(slot, bit) in &HOLD_MASKS {
+            if mask & bit != 0 && self.cvns_holds[slot] == 1 {
+                if consume {
+                    self.cvns_holds[slot] = 2;
+                }
+                hit = true;
+            }
+        }
+        let edge_bits = mask & 0x00FF_FF00;
+        if self.cvns_edges & edge_bits != 0 {
+            if consume {
+                self.cvns_edges &= !edge_bits;
+            }
+            hit = true;
+        }
+        if mask & (1 << 26) != 0 && self.mouse[0][2] {
+            if consume {
+                self.mouse[0][2] = false;
+            }
+            hit = true;
+        }
+        if mask & (1 << 27) != 0 && self.mouse[1][2] {
+            if consume {
+                self.mouse[1][2] = false;
+            }
+            hit = true;
+        }
+        hit
     }
 }
 
@@ -312,11 +435,33 @@ pub fn try_handle(vm: &mut Machine<'_>, input: &mut ActionInput) -> Result<bool,
 }
 
 fn recognizes(command: u16) -> bool {
-    matches!(command, 0xc8..=0xca | 0x19a | 0x19c..=0x1a4 | 0x1a6 | 0x1a8..=0x1bd | 0x344..=0x347 | 0x34a | 0x34b | 0x34d..=0x34f | 0x35c | 0x35d)
+    matches!(
+        command,
+        0xc8..=0xca
+            | 0x19a
+            | 0x19c..=0x1a4
+            | 0x1a6
+            | 0x1a8..=0x1bd
+            | 0x344..=0x347
+            | 0x34a
+            | 0x34b
+            | 0x34d..=0x34f
+            | 0x35c
+            | 0x35d
+            | 0x433
+            | 0x438..=0x43d
+            | 0x440
+            | 0x442
+            | 0x46c
+            | 0x46e
+    )
 }
 
 pub(crate) fn handle(call: &mut Call<'_, '_>, input: &mut ActionInput) -> Result<(), DecodeError> {
     let command = call.command;
+    if try_handle_cvns(call, input)?.is_some() {
+        return Ok(());
+    }
     if matches!(command, 0xc8 | 0xc9) {
         // 0x140074ed0: system results 1/2 = pointer x/y (0x1400565a0); 0x140074f00: system
         // result 0 = +936 (0x1400565c0). Both return 0x4000.
@@ -376,6 +521,13 @@ pub(crate) fn handle(call: &mut Call<'_, '_>, input: &mut ActionInput) -> Result
             *value = call.argument((i + 1) * 4, ["left", "top", "width", "height"][i])? as i32;
         }
         let [left, top, width, height] = rect;
+        if width > 0
+            && height > 0
+            && input.hit_rects.len() < 256
+            && !input.hit_rects.contains(&rect)
+        {
+            input.hit_rects.push(rect);
+        }
         let [x, y] = input.pointer();
         let hit =
             x >= left && x <= left.wrapping_add(width) && y >= top && y <= top.wrapping_add(height);
@@ -406,17 +558,17 @@ pub(crate) fn handle(call: &mut Call<'_, '_>, input: &mut ActionInput) -> Result
     Ok(())
 }
 
-/// 0x22ef / 0x14007c8e0: system result 0 = 1 when the +1520 script skip flag (0x22eb) is set
-/// or action 7 or 8 is held, else 0; returns 0x4000 and pops nothing.
+/// 0x22ef / 0x14007c8e0 and CVNS 0x2047 / 0x45dfb0 -> 0x41cf90: system result 0 = 1 when
+/// skipping (script flag, action 7/8 held, or Ctrl held on CVNS 0x447), else 0; 0x4000.
 pub fn try_handle_skipping(
     vm: &mut Machine<'_>,
     input: &ActionInput,
     skip: bool,
 ) -> Result<bool, DecodeError> {
-    let Some((pc, 0x2ef)) = vm.pending_system() else {
+    let Some((pc, command @ (0x2ef | 0x447))) = vm.pending_system() else {
         return Ok(false);
     };
-    handle_skipping(&mut Call::new(vm, pc, 0x2ef), input, skip)?;
+    handle_skipping(&mut Call::new(vm, pc, command), input, skip)?;
     Ok(true)
 }
 
@@ -425,10 +577,214 @@ pub(crate) fn handle_skipping(
     input: &ActionInput,
     skip: bool,
 ) -> Result<(), DecodeError> {
+    let cvns_ctrl = call.command == 0x447 && input.cvns_holds[0] != 0;
     call.complete(0x4000)?;
     call.vm
         .state_mut()
-        .set_system_integer(0, u32::from(skip || input.skip_held()))
+        .set_system_integer(0, u32::from(skip || input.skip_held() || cvns_ctrl))
         .expect("slot 0 exists");
     Ok(())
+}
+
+/// CVNS input/pointer handlers (`0x433, 0x438..=0x43b, 0x43d, 0x440, 0x442`), matching
+/// `cvns.exe` `0x45dc90..0x45dfa5`, `0x46e800`, `0x46eee0`, and `0x46fc80`.
+fn try_handle_cvns(
+    call: &mut Call<'_, '_>,
+    input: &mut ActionInput,
+) -> Result<Option<()>, DecodeError> {
+    let result = match call.command {
+        0x433 => {
+            let x = call.argument(4, "x")? as i32;
+            let y = call.argument(8, "y")? as i32;
+            call.complete(0x4008)?;
+            input.warp_pointer(x, y);
+            Some(())
+        }
+        0x438 | 0x43a | 0x43c | 0x43d => {
+            let value = match call.command {
+                0x438 => input.cvns_wheel as u32,
+                0x43a => 0,
+                0x43c => 1,
+                _ => u32::from(input.cvns_middle_pressed),
+            };
+            call.complete(0x4000)?;
+            call.vm
+                .state_mut()
+                .set_system_integer(0, value)
+                .expect("slot 0 exists");
+            Some(())
+        }
+        0x439 | 0x43b => {
+            if call.command == 0x439 {
+                input.cvns_wheel = 0;
+            }
+            call.complete(0x4000)?;
+            Some(())
+        }
+        0x440 => {
+            let peek = call.argument(4, "peek")? != 0;
+            let mut mask = input.cvns_edges;
+            if input.mouse[0][2] {
+                mask |= 1;
+            }
+            if input.mouse[1][2] {
+                mask |= 2;
+            }
+            const HOLD_BITS: [(usize, u32); 5] = [
+                (3, 1 << 2),
+                (4, 1 << 3),
+                (2, 1 << 5),
+                (5, 1 << 6),
+                (6, 1 << 7),
+            ];
+            for &(slot, bit) in &HOLD_BITS {
+                if input.cvns_holds[slot] == 1 {
+                    mask |= bit;
+                }
+            }
+            if input.mouse[0][1] {
+                mask |= 1 << 24;
+            }
+            if input.mouse[1][1] {
+                mask |= 1 << 25;
+            }
+            call.complete(0x4004)?;
+            if !peek {
+                for &(slot, _) in &HOLD_BITS {
+                    if input.cvns_holds[slot] == 1 {
+                        input.cvns_holds[slot] = 2;
+                    }
+                }
+                input.mouse[0][2] = false;
+                input.mouse[1][2] = false;
+                input.cvns_edges = 0;
+            }
+            call.vm
+                .state_mut()
+                .set_system_integer(0, mask)
+                .expect("slot 0 exists");
+            Some(())
+        }
+        0x442 => {
+            let code = call.argument(4, "input code")?;
+            let value = match code {
+                1 => u32::from(input.mouse[0][2]),
+                2 => u32::from(input.mouse[1][2]),
+                3 => u32::from(input.cvns_middle_pressed),
+                0x100..=0x106 => input.cvns_holds[(code - 0x100) as usize],
+                _ => 0,
+            };
+            call.complete(0x4004)?;
+            call.vm
+                .state_mut()
+                .set_system_integer(0, value)
+                .expect("slot 0 exists");
+            Some(())
+        }
+        0x46c | 0x46e => {
+            call.complete(0x4000)?;
+            input.mouse[0][2] = call.command == 0x46c;
+            Some(())
+        }
+        _ => None,
+    };
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vm_pending(command: u16, args: &[u32]) -> (Machine<'static>, usize) {
+        let mut code = Vec::new();
+        for &value in args.iter().rev() {
+            code.extend(0x440u16.to_le_bytes());
+            code.extend(4u16.to_le_bytes());
+            code.extend(value.to_le_bytes());
+        }
+        code.extend((command + 0x1c00).to_le_bytes());
+        let mut payload = 0u32.to_le_bytes().to_vec();
+        payload.extend(&code);
+        let mut raw = b"PS2A".to_vec();
+        for n in [
+            48,
+            0,
+            0,
+            1,
+            code.len() as u32,
+            0,
+            0,
+            0,
+            0,
+            payload.len() as u32,
+            0,
+        ] {
+            raw.extend(n.to_le_bytes());
+        }
+        raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+        let script = Box::leak(Box::new(crate::ps3::Script::decode(&raw).unwrap()));
+        let mut vm = Machine::new(script).unwrap();
+        while !matches!(vm.step().unwrap(), crate::machine::Step::System { .. }) {}
+        let pc = vm.pc();
+        (vm, pc)
+    }
+
+    #[test]
+    fn cvns_wheel_middle_mask_and_holds_match_winproc_contract() {
+        let mut codes = CodeInput::default();
+        let bindings = KeyBindings::default();
+        let mut input = ActionInput::default();
+        let mut now = [false; 128];
+        now[1] = true; // left click
+        now[2] = true; // middle click
+        now[4] = true; // wheel up (-1)
+        now[24] = true; // Ctrl
+        now[22] = true; // Enter
+        now[52] = true; // F1
+        codes.update(&bindings, &now, &mut input);
+
+        // 0x438 query wheel == -1, 0x439 resets to 0.
+        let (mut vm, pc) = vm_pending(0x438, &[]);
+        try_handle_cvns(&mut Call::new(&mut vm, pc, 0x438), &mut input).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(u32::MAX));
+        let (mut vm, pc) = vm_pending(0x439, &[]);
+        try_handle_cvns(&mut Call::new(&mut vm, pc, 0x439), &mut input).unwrap();
+        let (mut vm, pc) = vm_pending(0x438, &[]);
+        try_handle_cvns(&mut Call::new(&mut vm, pc, 0x438), &mut input).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(0));
+
+        // 0x43d middle click, 0x447 skip via Ctrl.
+        let (mut vm, pc) = vm_pending(0x43d, &[]);
+        try_handle_cvns(&mut Call::new(&mut vm, pc, 0x43d), &mut input).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(1));
+        let (mut vm, pc) = vm_pending(0x447, &[]);
+        handle_skipping(&mut Call::new(&mut vm, pc, 0x447), &input, false).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(1));
+
+        // 0x440 peek=1 preserves bits, peek=0 consumes edges and bumps Enter hold to 2.
+        let expected = 1 | (1 << 2) | (1 << 12) | (1 << 24);
+        let (mut vm, pc) = vm_pending(0x440, &[1]);
+        try_handle_cvns(&mut Call::new(&mut vm, pc, 0x440), &mut input).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(expected));
+        let (mut vm, pc) = vm_pending(0x440, &[0]);
+        try_handle_cvns(&mut Call::new(&mut vm, pc, 0x440), &mut input).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(expected));
+        let (mut vm, pc) = vm_pending(0x440, &[1]);
+        try_handle_cvns(&mut Call::new(&mut vm, pc, 0x440), &mut input).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(1 << 24));
+        let (mut vm, pc) = vm_pending(0x442, &[0x103]);
+        try_handle_cvns(&mut Call::new(&mut vm, pc, 0x442), &mut input).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(2));
+
+        // 0x46c / 0x46e set and clear the left mouse click pulse (`mouse[0][2]`).
+        let (mut vm, pc) = vm_pending(0x46e, &[]);
+        try_handle_cvns(&mut Call::new(&mut vm, pc, 0x46e), &mut input).unwrap();
+        assert!(!input.mouse[0][2]);
+        let (mut vm, pc) = vm_pending(0x46c, &[]);
+        try_handle_cvns(&mut Call::new(&mut vm, pc, 0x46c), &mut input).unwrap();
+        assert!(input.mouse[0][2]);
+        let (mut vm, pc) = vm_pending(0x442, &[1]);
+        try_handle_cvns(&mut Call::new(&mut vm, pc, 0x442), &mut input).unwrap();
+        assert_eq!(vm.state().system_integer(0), Some(1));
+    }
 }

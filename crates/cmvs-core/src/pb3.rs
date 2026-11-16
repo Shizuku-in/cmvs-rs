@@ -9,11 +9,11 @@
 use crate::{FormatError, MAX_PAYLOAD, image::DecodeThreads, jbp1, raster::RgbaImage};
 use std::ops::Range;
 
-fn u16_at(b: &[u8], at: usize) -> Result<u16, FormatError> {
+pub(crate) fn u16_at(b: &[u8], at: usize) -> Result<u16, FormatError> {
     let v = b.get(at..at + 2).ok_or(FormatError("truncated PB3 u16"))?;
     Ok(u16::from_le_bytes([v[0], v[1]]))
 }
-fn u32_at(b: &[u8], at: usize) -> Result<u32, FormatError> {
+pub(crate) fn u32_at(b: &[u8], at: usize) -> Result<u32, FormatError> {
     let v = b.get(at..at + 4).ok_or(FormatError("truncated PB3 u32"))?;
     Ok(u32::from_le_bytes(v.try_into().expect("four bytes")))
 }
@@ -93,7 +93,7 @@ fn split_lzss(flags: &[u8], data: &[u8], expected: usize) -> Result<Vec<u8>, For
 
 // Types 5/6 store starting offsets rather than exact stream lengths. The trailing
 // header-key sample may also be compressed data; stop at the declared output length.
-fn lzss_prefix(
+pub(crate) fn lzss_prefix(
     flags: &[u8],
     data: &[u8],
     expected: usize,
@@ -204,7 +204,7 @@ fn decode_delta(raw: &[u8], h: &Header, threads: DecodeThreads) -> Result<RgbaIm
 /// Decodes the planes of an image, in file order (blue, green, red, alpha), on the
 /// calling thread and on `threads` when the image is large enough to gain from it.
 /// The first failing plane in file order decides the error, as when decoding in turn.
-fn map_planes(
+pub(crate) fn map_planes(
     threads: DecodeThreads,
     pixels: usize,
     planes: &[usize],
@@ -219,7 +219,7 @@ fn map_planes(
 }
 
 /// RGBA from planes in file order; a missing alpha plane is opaque.
-fn interleave(planes: &[Vec<u8>], count: usize) -> Vec<u8> {
+pub(crate) fn interleave(planes: &[Vec<u8>], count: usize) -> Vec<u8> {
     let mut pixels = vec![255; count * 4];
     let [blue, green, red] = [&planes[0], &planes[1], &planes[2]];
     let colors = red.iter().zip(green).zip(blue);
@@ -379,35 +379,50 @@ fn decode_jbp1(raw: &[u8], h: &Header) -> Result<RgbaImage, FormatError> {
     let (width, height) = (usize::from(h.width), usize::from(h.height));
     let mut pixels = image.rgba;
     if h.bpp == 32 {
-        let mut at = h.flags_offset as usize;
-        let mut pixel = 0;
-        while pixel < width * height {
-            let value = *raw
-                .get(at)
-                .ok_or(FormatError("truncated PB3 JBP1 alpha runs"))?;
-            let count = if matches!(value, 0 | 255) {
-                let count = *raw
-                    .get(at + 1)
-                    .ok_or(FormatError("truncated PB3 JBP1 alpha runs"))?;
-                at += 2;
-                usize::from(count)
-            } else {
-                at += 1;
-                1
-            };
-            if count > width * height - pixel {
-                return Err(FormatError("PB3 JBP1 alpha run passes the last pixel"));
-            }
-            for alpha in pixels[pixel * 4 + 3..(pixel + count) * 4]
-                .iter_mut()
-                .step_by(4)
-            {
-                *alpha = value;
-            }
-            pixel += count;
-        }
+        let stream = raw
+            .get(h.flags_offset as usize..)
+            .ok_or(FormatError("truncated PB3 JBP1 alpha runs"))?;
+        apply_jbp1_alpha(stream, &mut pixels, width, height)?;
     }
     RgbaImage::new(u32::from(h.width), u32::from(h.height), pixels)
+}
+
+/// Applies JBP1 run-length coded alpha (`0x00`/`0xff` followed by count byte) into RGBA pixels.
+pub(crate) fn apply_jbp1_alpha(
+    stream: &[u8],
+    pixels: &mut [u8],
+    width: usize,
+    height: usize,
+) -> Result<(), FormatError> {
+    let mut at = 0;
+    let mut pixel = 0;
+    let total = width * height;
+    while pixel < total {
+        let value = *stream
+            .get(at)
+            .ok_or(FormatError("truncated PB3 JBP1 alpha runs"))?;
+        let count = if matches!(value, 0 | 255) {
+            let count = *stream
+                .get(at + 1)
+                .ok_or(FormatError("truncated PB3 JBP1 alpha runs"))?;
+            at += 2;
+            usize::from(count)
+        } else {
+            at += 1;
+            1
+        };
+        if count > total - pixel {
+            return Err(FormatError("PB3 JBP1 alpha run passes the last pixel"));
+        }
+        for alpha in pixels[pixel * 4 + 3..(pixel + count) * 4]
+            .iter_mut()
+            .step_by(4)
+        {
+            *alpha = value;
+        }
+        pixel += count;
+    }
+    Ok(())
 }
 
 /// Decode a self-contained PB3B image into top-down RGBA pixels.

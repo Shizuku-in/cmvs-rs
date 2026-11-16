@@ -384,15 +384,15 @@ mod tests {
     }
 }
 
-struct Reader<'a> {
+pub(super) struct Reader<'a> {
     bytes: &'a [u8],
     at: usize,
 }
 impl<'a> Reader<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
+    pub(super) fn new(bytes: &'a [u8]) -> Self {
         Self { bytes, at: 0 }
     }
-    fn take(&mut self, count: usize) -> Result<&'a [u8], FormatError> {
+    pub(super) fn take(&mut self, count: usize) -> Result<&'a [u8], FormatError> {
         let end = self
             .at
             .checked_add(count)
@@ -402,20 +402,20 @@ impl<'a> Reader<'a> {
         self.at = end;
         Ok(bytes)
     }
-    fn u16(&mut self) -> Result<u16, FormatError> {
+    pub(super) fn u16(&mut self) -> Result<u16, FormatError> {
         Ok(u16::from_le_bytes(self.take(2)?.try_into().unwrap()))
     }
-    fn u32(&mut self) -> Result<u32, FormatError> {
+    pub(super) fn u32(&mut self) -> Result<u32, FormatError> {
         Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
     }
-    fn words<const N: usize>(&mut self) -> Result<[u32; N], FormatError> {
+    pub(super) fn words<const N: usize>(&mut self) -> Result<[u32; N], FormatError> {
         let mut out = [0; N];
         for n in &mut out {
             *n = self.u32()?;
         }
         Ok(out)
     }
-    fn string(&mut self, limit: usize) -> Result<&'a [u8], FormatError> {
+    pub(super) fn string(&mut self, limit: usize) -> Result<&'a [u8], FormatError> {
         let len = self.bytes[self.at..]
             .iter()
             .take(limit)
@@ -436,7 +436,7 @@ impl<'a> Reader<'a> {
         let len = self.u32()?;
         self.take(len as usize)
     }
-    fn finish(&self) -> Result<(), FormatError> {
+    pub(super) fn finish(&self) -> Result<(), FormatError> {
         if self.at == self.bytes.len() {
             Ok(())
         } else {

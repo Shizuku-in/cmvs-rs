@@ -244,6 +244,8 @@ pub enum ControlEvent {
 #[derive(Clone)]
 pub struct ScriptControl {
     callbacks: BTreeMap<u8, Callback>,
+    armed: [bool; 64],
+    cvns: bool,
     settings: BTreeMap<u16, u32>,
     virtual_tick: u32,
     close_requested: bool,
@@ -254,9 +256,19 @@ impl ScriptControl {
     pub fn new(virtual_tick: u32) -> Self {
         Self {
             callbacks: BTreeMap::new(),
+            armed: [false; 64],
+            cvns: false,
             settings: BTreeMap::new(),
             virtual_tick,
             close_requested: false,
+        }
+    }
+
+    /// Configures script control rules for `profile` (`cvns` uses `0x446660` callback rules).
+    pub fn for_profile(profile: &crate::profile::EngineProfile, virtual_tick: u32) -> Self {
+        Self {
+            cvns: profile.family == crate::profile::Family::Cvns,
+            ..Self::new(virtual_tick)
         }
     }
     pub fn callbacks(&self) -> &BTreeMap<u8, Callback> {
@@ -278,7 +290,7 @@ impl ScriptControl {
     /// consumed once dispatched. Returned in push order: the last one runs
     /// first.
     pub fn due_callbacks(&mut self, windows_shown: [bool; 8]) -> Vec<(u8, usize)> {
-        if self.settings.get(&0x208c).copied().unwrap_or(0) != 0 {
+        if !self.cvns && self.settings.get(&0x208c).copied().unwrap_or(0) != 0 {
             return Vec::new();
         }
         let close_requested = std::mem::take(&mut self.close_requested);
@@ -288,9 +300,24 @@ impl ScriptControl {
                 .filter(|c| c.enabled)
                 .map(|c| (c.script_slot, c.target as usize))
         };
+        let armed = std::mem::replace(&mut self.armed, [false; 64]);
         if self.settings.get(&0x2089).copied().unwrap_or(0) == 0 {
-            return registered(if close_requested { 26 } else { 28 })
-                .into_iter()
+            let slot = if !self.cvns && close_requested {
+                26
+            } else {
+                28
+            };
+            return registered(slot).into_iter().collect();
+        }
+        if self.cvns {
+            return (0..64u8)
+                .filter(|&index| match index {
+                    3..=5 | 28 => true,
+                    10..=13 => windows_shown[usize::from(index - 10)],
+                    32..=63 => armed[usize::from(index)],
+                    _ => false,
+                })
+                .filter_map(registered)
                 .collect();
         }
         (0..32u8)
@@ -328,7 +355,7 @@ impl ScriptControl {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(None);
         };
-        if !matches!(command, 0x80 | 0x81 | 0x83 | 0x88..=0x8c | 0x412) {
+        if !matches!(command, 0x80 | 0x81 | 0x83 | 0x88..=0x8c | 0x412 | 0x42a) {
             return Ok(None);
         }
         self.handle(&mut Call::new(vm, pc, command), source)
@@ -440,6 +467,18 @@ impl ScriptControl {
                     callback.enabled = false;
                     callback.target = u32::MAX;
                 }
+                self.armed[slot as usize] = false;
+                0x4004
+            }
+            0x42a => {
+                let slot = call.argument(4, argument_names(command)[0])?;
+                let enabled = self.settings.get(&0x2089).copied().unwrap_or(0) != 0;
+                if enabled && (1..64).contains(&(slot as i32)) {
+                    let index = slot as usize;
+                    if self.callbacks.get(&(slot as u8)).is_some_and(|c| c.enabled) {
+                        self.armed[index] = true;
+                    }
+                }
                 0x4004
             }
             _ => unreachable!("registered script-control command"),
@@ -463,7 +502,7 @@ fn argument_names(command: u16) -> &'static [&'static str] {
             "parameter 20",
         ],
         0x89 | 0x8c => &["enabled"],
-        0x8a | 0x8b => &["callback slot"],
+        0x8a | 0x8b | 0x42a => &["callback slot"],
         _ => unreachable!("registered script-control arguments"),
     }
 }

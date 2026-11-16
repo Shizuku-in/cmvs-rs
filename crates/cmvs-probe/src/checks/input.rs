@@ -125,7 +125,7 @@ fn actions(device: Device) -> Vec<(&'static str, Option<Action>)> {
 
 /// Holds skip for `SKIP_FRAMES` frames, then releases it.
 fn hold_skip(session: &mut Session<'_>) -> Result<bool, Stop> {
-    let Some(code) = skip_code(session.bindings()) else {
+    let Some(code) = skip_code(session.bindings(), session.is_cvns()) else {
         return Ok(false);
     };
     session.hold(vec![code]);

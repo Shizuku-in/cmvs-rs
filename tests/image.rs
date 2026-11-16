@@ -322,6 +322,34 @@ fn decode_dispatches_on_magic_and_pb3_type_like_0x140036700() {
     for magic in [&b"\x89PNG"[..], b"BMxx", b"MSK0", b"PB2A"] {
         assert!(decode(magic).is_err());
     }
+    let mut msk = b"MSK0\x10\0\0\0\x02\0\0\0\x01\0\0\0".to_vec();
+    msk.extend_from_slice(&[10, 200]);
+    assert_eq!(
+        decode(&msk).unwrap().unwrap(),
+        DecodedImage {
+            pixels: RgbaImage::new(2, 1, vec![10, 10, 10, 255, 200, 200, 200, 255]).unwrap(),
+            alpha: false,
+        }
+    );
+
+    // Minimal valid 2x1 32-bpp PB2A type-1 image with all-literal LZSS payload.
+    let mut pb2_body = vec![0u8; 2]; // 2 flag bytes for 8 bytes of B,G,R,A
+    pb2_body.extend_from_slice(&[1, 2, 3, 4, 5, 6, 7, 8]);
+    pb2_body.resize(32, 0); // ensure total >= 64 with 31-byte zero tail (padded body + tail)
+    let mut pb2_raw = b"PB2A".to_vec();
+    for v in [0u32, 1, 0] {
+        pb2_raw.extend(v.to_le_bytes());
+    }
+    for v in [1u16, 2, 1, 32] {
+        pb2_raw.extend(v.to_le_bytes());
+    }
+    pb2_raw.extend(32u32.to_le_bytes()); // flags_offset
+    pb2_raw.extend(34u32.to_le_bytes()); // data_offset
+    pb2_raw.extend_from_slice(&pb2_body);
+    let pb2_decoded = decode(&pb2_raw).unwrap().unwrap();
+    assert!(pb2_decoded.alpha);
+    assert_eq!(pb2_decoded.pixels.pixels(), [5, 3, 1, 7, 6, 4, 2, 8]);
+
     assert_eq!(decode(b"XYZW").unwrap(), None);
     assert!(decode(b"PB3").is_err());
 }

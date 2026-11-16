@@ -469,12 +469,9 @@ mod tests {
             replaces: Arc::clone(&replaces),
         });
 
-        let mut profile = crate::system_save::ProfileSystemSave::open_with_fs(
-            &user,
-            &game,
-            Arc::clone(&fs),
-        )
-        .unwrap();
+        let mut profile =
+            crate::system_save::ProfileSystemSave::open_with_fs(&user, &game, Arc::clone(&fs))
+                .unwrap();
         assert_eq!(locks.load(Ordering::Relaxed), 1);
 
         let cfg = crate::settings::Configuration::new(b"[SYSTEM_INFO]\r\n".to_vec()).unwrap();

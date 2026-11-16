@@ -97,7 +97,9 @@ pub fn scripts(target: &Target) -> (CheckResult, Option<ScriptInventory>) {
         Ok((mut file, index)) => {
             for (i, entry) in index.entries().iter().enumerate() {
                 let lower = entry.name.to_ascii_lowercase();
-                if !(lower.ends_with(b".ps3") || lower.ends_with(b".ps2"))
+                if !(lower.ends_with(b".ps3")
+                    || lower.ends_with(b".ps2")
+                    || lower.ends_with(b".pss"))
                     || entry.name.eq_ignore_ascii_case(&start_name)
                 {
                     continue;
@@ -139,8 +141,9 @@ pub fn scripts(target: &Target) -> (CheckResult, Option<ScriptInventory>) {
 }
 
 /// Statuses the default gate stops at.
-fn stops(status: CommandStatus) -> bool {
+fn stops(status: CommandStatus, is_cvns: bool) -> bool {
     matches!(status, CommandStatus::Absent | CommandStatus::NoOp)
+        || (is_cvns && status == CommandStatus::Unreviewed)
 }
 
 /// Classifies statically present system commands by gate status. Presence is a linear
@@ -158,10 +161,11 @@ pub fn gate_inventory(target: &Target, inventory: Option<&ScriptInventory>) -> C
     let profile = game.selection.profile;
     let mut by_status: BTreeMap<&'static str, Vec<Json>> = BTreeMap::new();
     let mut stopping = 0;
+    let is_cvns = profile.family == cmvs_core::profile::Family::Cvns;
     for (&command, (sites, scripts)) in &inventory.commands {
         let status = profile.status(command - 0x2000);
         let entry = by_status.entry(status.name()).or_default();
-        if stops(status) {
+        if stops(status, is_cvns) {
             stopping += 1;
             entry.push(Json::obj([
                 ("command", Json::hex(command.into())),
@@ -236,6 +240,15 @@ fn extension(name: &[u8]) -> String {
 fn resource_header(kind: &str, bytes: &[u8]) -> Result<(), String> {
     match kind {
         "pb3" => cmvs_core::pb3::Header::parse(bytes)
+            .map(|_| ())
+            .map_err(|e| e.to_string()),
+        "pb2" => cmvs_core::pb2::Header::parse(bytes)
+            .map(|_| ())
+            .map_err(|e| e.to_string()),
+        "msk" => cmvs_core::msk::Header::parse(bytes)
+            .map(|_| ())
+            .map_err(|e| e.to_string()),
+        "mv2" => cmvs_core::mv2::Header::parse(bytes)
             .map(|_| ())
             .map_err(|e| e.to_string()),
         "ogg" if !bytes.starts_with(b"OggS") => Err("missing OggS signature".into()),
@@ -414,13 +427,33 @@ pub fn bundled_saves(target: &Target) -> CheckResult {
                 .map(|_| "CSS1 system save".to_owned())
                 .map_err(|e| e.to_string())
         } else if lower.starts_with("save") && lower.ends_with(".dat") {
-            cmvs_core::save::Csv2Save::decode(&bytes)
-                .map_err(|e| e.to_string())
-                .and_then(|save| {
-                    cmvs_core::snapshot::EngineSnapshot::decode_with_layout(&save.snapshot, layout)
-                        .map(|_| "CSV2 gameplay save".to_owned())
+            if bytes.starts_with(b"CSS0") {
+                css0_starts(target).and_then(|starts| {
+                    cmvs_core::system_save::Css0Save::decode(&bytes, starts)
+                        .map(|_| "CSS0 system save".to_owned())
                         .map_err(|e| e.to_string())
                 })
+            } else {
+                cmvs_core::save::Csv2Save::decode_any(&bytes)
+                    .map_err(|e| e.to_string())
+                    .and_then(|(family, save)| match (family, layout) {
+                        (
+                            cmvs_core::save_menu::SaveFamily::Cvns,
+                            cmvs_core::snapshot::SnapshotLayout::Cvns20090203,
+                        ) => cmvs_core::snapshot::CvnsSnapshot::decode(&save.snapshot)
+                            .map(|_| "CSP1 gameplay save".to_owned())
+                            .map_err(|e| e.to_string()),
+                        (cmvs_core::save_menu::SaveFamily::Cmvs, _) => {
+                            cmvs_core::snapshot::EngineSnapshot::decode_with_layout(
+                                &save.snapshot,
+                                layout,
+                            )
+                            .map(|_| "CSV2 gameplay save".to_owned())
+                            .map_err(|e| e.to_string())
+                        }
+                        _ => Err("save container family disagrees with engine profile".into()),
+                    })
+            }
         } else {
             continue;
         };
@@ -441,6 +474,21 @@ pub fn bundled_saves(target: &Target) -> CheckResult {
         Outcome::Fail(format!("{failed} saves failed to decode"))
     };
     CheckResult::new("S5", TITLE, outcome).with(Json::obj([("saves", Json::Arr(rows))]))
+}
+
+fn css0_starts(target: &Target) -> Result<cmvs_core::system_save::PersistentStarts, String> {
+    let Some(files) = &target.files else {
+        return Ok(cmvs_core::system_save::PersistentStarts::default());
+    };
+    let Some(game) = &target.game else {
+        return Ok(cmvs_core::system_save::PersistentStarts::default());
+    };
+    let Some(map) = game.selection.profile.command_map() else {
+        return Ok(cmvs_core::system_save::PersistentStarts::default());
+    };
+    let raw = std::fs::read(target.root.join(&files.start_script)).map_err(|e| e.to_string())?;
+    let script = cmvs_core::ps3::Script::decode(&raw).map_err(|e| e.to_string())?;
+    cmvs_core::system_save::PersistentStarts::from_start(&script, &map).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

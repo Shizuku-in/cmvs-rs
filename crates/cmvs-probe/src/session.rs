@@ -133,6 +133,7 @@ pub struct Session<'a> {
     codes: CodeInput,
     bindings: KeyBindings,
     device: Device,
+    is_cvns: bool,
     frame_ms: u32,
     max_steps: u64,
     route_skip: bool,
@@ -240,6 +241,7 @@ impl<'a> Session<'a> {
             codes: CodeInput::default(),
             bindings: target.key_bindings.clone().unwrap_or_default(),
             device: options.device,
+            is_cvns: target.is_cvns(),
             frame_ms: options.frame_ms,
             max_steps: options.max_steps,
             route_skip: options.route_skip,
@@ -265,6 +267,7 @@ impl<'a> Session<'a> {
         })
         .map(|mut session: Self| {
             session.backend.answer_font_dialog(None);
+            session.backend.set_default_message_answer(Some(false));
             session
         })
     }
@@ -315,6 +318,16 @@ impl<'a> Session<'a> {
     pub fn device(&self) -> Device {
         self.device
     }
+    pub fn is_cvns(&self) -> bool {
+        self.is_cvns
+    }
+    pub fn system_save_name(&self) -> &'static str {
+        if self.is_cvns {
+            "save000.dat"
+        } else {
+            "system.dat"
+        }
+    }
     /// Writes a gameplay save to `slot` as the script command would; false when the engine
     /// has not built a snapshot yet.
     pub fn save_slot(&mut self, slot: u16) -> Result<bool, String> {
@@ -347,8 +360,11 @@ impl<'a> Session<'a> {
     /// Live resource counts that a long run should not grow without bound.
     pub fn resource_counts(&self) -> [usize; 5] {
         let run = &self.run;
-        let objects = run.scene().objects().len();
-        let channels = (0..32)
+        let objects = run.scene().cvns().map_or_else(
+            || run.scene().objects().len(),
+            |cvns| cvns.sprites.iter().flatten().count(),
+        );
+        let channels = (0..run.audio().se_channel_count())
             .filter(|&i| run.audio().channel(i).is_some())
             .count();
         let groups = (0..cmvs_core::buttons::BUTTON_GROUPS)
@@ -369,7 +385,7 @@ impl<'a> Session<'a> {
     pub fn act(&mut self, action: Action) -> Result<(), String> {
         if let (Device::Keyboard, Action::Press { group, button }) = (self.device, action) {
             let present =
-                crate::controls::group(&self.run, group).is_some_and(|g| button < g.buttons.len());
+                crate::controls::group(&self.run, group).is_some_and(|g| button < g.len());
             if !present {
                 return Err(format!("button {group}:{button} is not present"));
             }
@@ -387,9 +403,11 @@ impl<'a> Session<'a> {
             self.navigation = Some((group, button, 0));
             return Ok(());
         }
-        let frames = self.device.frames(action, &self.bindings, |g, b| {
-            crate::controls::group(&self.run, g)?.point(b)
-        })?;
+        let frames =
+            self.device
+                .frames_with_cvns(action, &self.bindings, self.is_cvns, |g, b| {
+                    crate::controls::group(&self.run, g)?.point(b)
+                })?;
         self.event(
             "action",
             Json::obj([("action", Json::from(format!("{action:?}")))]),
@@ -545,7 +563,7 @@ impl<'a> Session<'a> {
                 "keyboard navigation lost button group {group}"
             ))));
         };
-        let (current, count) = (buttons.current, buttons.buttons.len());
+        let (current, count) = (buttons.current, buttons.len());
         let action = if current == Some(button) {
             self.navigation = None;
             crate::device::engine_action::DECIDE

@@ -7,8 +7,9 @@ use cmvs_core::{
     runtime::Runtime,
 };
 
-/// System command 0x2153 (message wait), as the machine reports it without 0x2000.
+/// System command 0x2153 (CMVS) or 0x2520 (CVNS message wait), without 0x2000.
 const MESSAGE_WAIT: u16 = 0x153;
+const CVNS_MESSAGE_WAIT: u16 = 0x520;
 /// Rectangles are compared on this grid so sub-pixel layout motion is not a new page.
 const RECT_GRID: i32 = 8;
 
@@ -35,7 +36,8 @@ impl PageSignature {
         let groups = (0..crate::controls::GROUPS)
             .filter_map(|slot| {
                 let group = crate::controls::group(run, slot)?;
-                if group.buttons.is_empty() {
+                let buttons = group.len();
+                if buttons == 0 {
                     return None;
                 }
                 let mut layout = Sha256::new();
@@ -44,18 +46,20 @@ impl PageSignature {
                     // polling contexts without using any game-specific address.
                     layout.update(&(run.machine().pc() as u64).to_le_bytes());
                 }
-                for (index, button) in group.buttons.iter().enumerate() {
-                    for v in group.rect(index).unwrap_or(button.rect) {
+                for index in 0..buttons {
+                    for v in group
+                        .rect(index)
+                        .or_else(|| group.raw_rect(index))
+                        .unwrap_or([0; 4])
+                    {
                         layout.update(&v.div_euclid(RECT_GRID).to_le_bytes());
                     }
                     layout.update(&[u8::from(group.enabled(index))]);
                 }
                 Some(GroupShape {
                     slot,
-                    buttons: group.buttons.len(),
-                    enabled: (0..group.buttons.len())
-                        .filter(|&index| group.enabled(index))
-                        .count(),
+                    buttons,
+                    enabled: (0..buttons).filter(|&index| group.enabled(index)).count(),
                     layout: layout.finish(),
                 })
             })
@@ -121,18 +125,22 @@ impl Observation {
             pc: machine.pc(),
             pending: machine.pending_system().map(|(_, c)| c),
             repeat: machine.repeat_count(),
-            transition: run.scene().fade().current().is_some(),
+            transition: run.scene().fade().current().is_some()
+                || run
+                    .scene()
+                    .cvns()
+                    .is_some_and(|s| s.fade.is_some() || s.mask_transition.is_some()),
             page: PageSignature::of(run),
         }
     }
     /// The message wait has entered its waiting phase and wants a decide release.
     pub fn waiting_for_advance(&self) -> bool {
-        self.pending == Some(MESSAGE_WAIT) && self.repeat == 2
+        matches!(self.pending, Some(MESSAGE_WAIT | CVNS_MESSAGE_WAIT)) && self.repeat == 2
     }
     /// A wait can resume after a script callback with its repeat count intact.
     /// Use this for returning from a page; `waiting_for_advance` marks only a new wait.
     pub fn in_message_wait(&self) -> bool {
-        self.pending == Some(MESSAGE_WAIT) && self.repeat >= 2
+        matches!(self.pending, Some(MESSAGE_WAIT | CVNS_MESSAGE_WAIT)) && self.repeat >= 2
     }
     /// Feeds the per-frame trace digest used by determinism checks.
     pub fn hash_into(&self, h: &mut Sha256) {
@@ -173,6 +181,23 @@ pub fn state_digest(run: &Runtime<'_>) -> String {
         Err(e) => h.update(e.as_bytes()),
     }
     h.update(format!("{:?}", run.scene().objects()).as_bytes());
+    if let Some(cvns) = run.scene().cvns() {
+        for (slot, sp) in cvns.sprites.iter().enumerate() {
+            if let Some(sp) = sp.as_ref().filter(|s| s.visible) {
+                h.update(format!("{slot}:{sp:?}").as_bytes());
+            }
+        }
+        h.update(
+            format!(
+                "{:?}:{:?}:{:?}",
+                cvns.fade, cvns.mask_transition, cvns.quake
+            )
+            .as_bytes(),
+        );
+    }
+    if let Some(cvns_msg) = run.messages().cvns() {
+        h.update(format!("{cvns_msg:?}").as_bytes());
+    }
     if !run.scene().particle_effects().is_empty() {
         h.update(format!("{:?}", run.scene().particle_effects()).as_bytes());
     }

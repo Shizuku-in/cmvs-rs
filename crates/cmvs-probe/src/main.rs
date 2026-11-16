@@ -254,7 +254,7 @@ fn run(args: Args) -> Result<bool, String> {
         font.as_ref(),
         manifest.as_ref(),
     );
-    let initial_system = args.root.join("save/system.dat");
+    let initial_system = args.root.join("save").join(target.system_save_name());
     let header = Json::obj([
         ("probe", Json::from(env!("CARGO_PKG_VERSION"))),
         ("target", target.identity_json()),

@@ -209,7 +209,8 @@ impl EngineProfile {
         matches!(
             self.inspected_build(),
             Some(
-                InspectedBuild::Cmvs20070119
+                InspectedBuild::Cvns20090203
+                    | InspectedBuild::Cmvs20070119
                     | InspectedBuild::Cmvs20071117
                     | InspectedBuild::Cmvs20080719
                     | InspectedBuild::Cmvs20080903

@@ -2,7 +2,7 @@
 //! Renderers read it each frame; this module draws nothing and owns no device.
 use crate::{
     bytecode::DecodeError,
-    dispatch::Call,
+    dispatch::{Call, Flow},
     evaluate::error,
     image::{self, ImageSource},
     machine::Machine,
@@ -12,6 +12,7 @@ use std::{collections::BTreeMap, error::Error};
 mod animation;
 mod change;
 mod child_slots;
+pub mod cvns;
 mod image_effect;
 mod mask;
 pub(crate) mod opacity;
@@ -591,6 +592,12 @@ pub struct SceneHost {
     quake: Option<Quake>,
     /// Engine +4640; see `strip`.
     strip: Option<StripWipe>,
+    /// CVNS +5696 (`0x2008`): defaults to backdrop clear enabled (`false` = enabled).
+    cvns_backdrop_disabled: bool,
+    /// CVNS +5695 (`0x2009`): optional screen/layer fade mix `0..=256` (`None` = 256).
+    cvns_layer_fade_alpha: Option<u16>,
+    /// CVNS (`cvns-20090203`) 2D image buffers, 1536 sprites, fade, mask wipe, and quake.
+    cvns: Option<Box<cvns::CvnsScene>>,
 }
 impl SceneHost {
     /// Construct runtime hosts for the independently inspected child-table layout.
@@ -608,7 +615,7 @@ impl SceneHost {
     pub fn screen_size(&self) -> [u32; 2] {
         self.screen_size.pixels()
     }
-    pub(crate) fn set_screen_size(&mut self, size: crate::viewport::ScreenSize) {
+    pub fn set_screen_size(&mut self, size: crate::viewport::ScreenSize) {
         self.screen_size = size;
     }
     pub(crate) fn snapshot_preview(clear: ClearState, objects: BTreeMap<u8, SceneObject>) -> Self {
@@ -637,9 +644,134 @@ impl SceneHost {
         self.advance_strip(delta);
         self.advance_mask(delta);
         self.advance_quake(delta);
+        if let Some(cvns) = self.cvns.as_mut() {
+            let before = self.cvns_layer_fade_alpha.unwrap_or(256);
+            let mut level = before;
+            let active_fade = cvns.fade.is_some();
+            cvns.advance_frame(delta, &mut self.clear.color, &mut level);
+            if active_fade || level != before {
+                self.cvns_layer_fade_alpha = Some(level);
+            }
+        }
+    }
+    pub fn enable_cvns(&mut self) {
+        self.cvns
+            .get_or_insert_with(|| Box::new(cvns::CvnsScene::default()));
+    }
+    pub fn cvns(&self) -> Option<&cvns::CvnsScene> {
+        self.cvns.as_deref()
+    }
+    pub fn cvns_mut(&mut self) -> &mut cvns::CvnsScene {
+        self.cvns
+            .get_or_insert_with(|| Box::new(cvns::CvnsScene::default()))
+    }
+    pub(crate) fn cvns_backdrop_disabled(&self) -> bool {
+        self.cvns_backdrop_disabled
+    }
+    pub(crate) fn cvns_layer_fade_alpha(&self) -> Option<u16> {
+        self.cvns_layer_fade_alpha
+    }
+    pub(crate) fn restore_cvns(
+        &mut self,
+        clear: ClearState,
+        backdrop_disabled: bool,
+        layer_fade_alpha: Option<u16>,
+        cvns: cvns::CvnsScene,
+    ) {
+        *self = Self {
+            screen_size: self.screen_size,
+            config: self.config,
+            clear,
+            cvns_backdrop_disabled: backdrop_disabled,
+            cvns_layer_fade_alpha: layer_fade_alpha,
+            cvns: Some(Box::new(cvns)),
+            ..Self::default()
+        };
+    }
+    pub(crate) fn handle_cvns_image(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        source: &mut dyn ImageSource,
+    ) -> Result<Flow, Box<dyn Error>> {
+        let size = self.screen_size.pixels();
+        let backdrop = (
+            !self.cvns_backdrop_disabled,
+            self.clear.color,
+            self.cvns_layer_fade_alpha.unwrap_or(256),
+        );
+        self.cvns_mut().handle_image(call, source, size, backdrop)
+    }
+    pub(crate) fn handle_cvns(&mut self, call: &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>> {
+        let mut level = self.cvns_layer_fade_alpha.unwrap_or(256);
+        let mut color = self.clear.color;
+        let flow = self.cvns_mut().handle(call, &mut color, &mut level)?;
+        self.clear.color = color;
+        if self.cvns_layer_fade_alpha.is_some() || level != 256 {
+            self.cvns_layer_fade_alpha = Some(level);
+        }
+        Ok(flow)
+    }
+    pub(crate) fn wait_cvns(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        input: &mut crate::input::ActionInput,
+        gate: crate::fade::SkipGate,
+    ) -> Result<Flow, Box<dyn Error>> {
+        let mut level = self.cvns_layer_fade_alpha.unwrap_or(256);
+        let mut color = self.clear.color;
+        let flow = self
+            .cvns_mut()
+            .wait(call, input, gate, &mut color, &mut level)?;
+        self.clear.color = color;
+        if self.cvns_layer_fade_alpha.is_some() || level != 256 {
+            self.cvns_layer_fade_alpha = Some(level);
+        }
+        Ok(flow)
     }
     pub fn clear(&self) -> ClearState {
         self.clear
+    }
+    pub fn clear_enabled(&self) -> bool {
+        !self.cvns_backdrop_disabled
+    }
+    pub fn layer_fade_alpha(&self) -> u16 {
+        self.cvns_layer_fade_alpha.unwrap_or(256)
+    }
+    fn handle_cvns_backdrop(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+        let names = argument_names(call.command);
+        match call.command {
+            0x408 => {
+                let enabled = call.argument(4, names[0])? != 0;
+                call.complete(0x4004)?;
+                self.cvns_backdrop_disabled = !enabled;
+            }
+            0x409 => {
+                let alpha = call.argument(4, names[0])?;
+                let color = call.argument(8, names[1])?;
+                call.complete(0x4008)?;
+                self.clear.color = color;
+                self.cvns_layer_fade_alpha = Some(alpha.min(256) as u16);
+                if let Some(cvns) = self.cvns.as_mut() {
+                    cvns.fade = None;
+                }
+            }
+            0x40c => {
+                for (i, name) in names.iter().enumerate() {
+                    call.argument(4 * (i + 1), name)?;
+                }
+                call.complete(0x4010)?;
+            }
+            0x40b => {
+                let color = call.argument(4, names[0])?;
+                call.complete(0x4004)?;
+                self.clear.color = color;
+            }
+            0x40d => {
+                call.complete(0x4000)?;
+            }
+            _ => unreachable!("handled CVNS backdrop command"),
+        }
+        Ok(())
     }
     pub fn object(&self, slot: u8) -> Option<&SceneObject> {
         self.objects.get(&slot)
@@ -666,7 +798,7 @@ impl SceneHost {
         let Some((pc, command)) = vm.pending_system() else {
             return Ok(false);
         };
-        if !matches!(command, 0x20..=0x23 | 0x25..=0x28 | 0x2a | 0x2d..=0x2f | 0x33 | 0x34 | 0x40 | 0x42..=0x4c | 0x50 | 0x70..=0x75 | 0x78 | 0x1e0..=0x1fd | 0x220..=0x223 | 0x250 | 0x2ae | 0x2c5 | 0x2c6 | 0x2cb | 0x321 | 0x322 | 0x328 | 0x329)
+        if !matches!(command, 0x20..=0x23 | 0x25..=0x28 | 0x2a | 0x2d..=0x2f | 0x33 | 0x34 | 0x40 | 0x42..=0x4c | 0x50 | 0x70..=0x75 | 0x78 | 0x1e0..=0x1fd | 0x220..=0x223 | 0x250 | 0x2ae | 0x2c5 | 0x2c6 | 0x2cb | 0x321 | 0x322 | 0x328 | 0x329 | 0x408 | 0x409 | 0x40b..=0x40d)
         {
             return Ok(false);
         }
@@ -760,6 +892,9 @@ impl SceneHost {
             call.complete(0x4000)?;
             self.objects.clear();
             return Ok(());
+        }
+        if matches!(command, 0x408 | 0x409 | 0x40b..=0x40d) {
+            return self.handle_cvns_backdrop(call);
         }
         if !matches!(command, 0x2cb | 0x250 | 0x20 | 0x21) {
             return Err(call.error("unregistered command"));
@@ -1504,6 +1639,9 @@ impl SceneHost {
             fade: crate::fade::FadeHost::restored(fade),
             masks: [mask, None],
             strip,
+            cvns_backdrop_disabled: false,
+            cvns_layer_fade_alpha: None,
+            cvns: None,
         };
     }
 }
@@ -1513,6 +1651,11 @@ fn argument_names(command: u16) -> &'static [&'static str] {
         0x2f | 0x221..=0x223 => &[],
         0x2cb => &["clear color"],
         0x250 => &["clear depth"],
+        0x408 => &["backdrop clear enable"],
+        0x409 => &["layer fade alpha", "fade color"],
+        0x40b => &["fill color"],
+        0x40c => &["left", "top", "width", "height"],
+        0x40d => &[],
         0x20 | 0x21 | 0x33 | 0x40 | 0x329 | 0x2c5 | 0x2c6 => &["object slot"],
         0x22 | 0x23 | 0x25 | 0x27 | 0x2d | 0x2e | 0x42 | 0x50 | 0x78 => {
             &["object slot", "child slot"]

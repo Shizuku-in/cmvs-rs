@@ -13,6 +13,7 @@ use crate::{
     scene::{DrawState, MaskTransition, ObjectImage, SceneHost, SceneObject},
 };
 
+pub mod cvns;
 pub mod shader;
 
 pub enum Layer<'a> {
@@ -848,6 +849,7 @@ pub struct RenderFrame<'a> {
     height: u32,
     clear: [u8; 4],
     commands: Vec<DrawCommand<'a>>,
+    precomposited: Option<RgbaImage>,
 }
 impl<'a> RenderFrame<'a> {
     pub fn dimensions(&self) -> [u32; 2] {
@@ -859,9 +861,15 @@ impl<'a> RenderFrame<'a> {
     pub fn commands(&self) -> &[DrawCommand<'a>] {
         &self.commands
     }
+    pub fn precomposited(&self) -> Option<&RgbaImage> {
+        self.precomposited.as_ref()
+    }
 
     /// Executes the shared command queue with the portable rasterizer.
     pub fn render_cpu(self) -> Result<RgbaImage, FormatError> {
+        if let Some(image) = self.precomposited {
+            return Ok(image);
+        }
         let size = (u64::from(self.width) * u64::from(self.height))
             .checked_mul(4)
             .ok_or(FormatError("scene surface size overflow"))?;
@@ -925,6 +933,24 @@ pub fn prepare_scene<'a>(
         .ok_or(FormatError("scene surface size overflow"))?;
     if width == 0 || height == 0 || size > MAX_PAYLOAD as u64 {
         return Err(FormatError("invalid scene surface dimensions"));
+    }
+    if let Some(cvns) = scene.cvns() {
+        let image = cvns::render_with_objects(
+            cvns,
+            scene.clear_enabled(),
+            scene.clear().color,
+            scene.layer_fade_alpha(),
+            additional,
+            width,
+            height,
+        )?;
+        return Ok(RenderFrame {
+            width,
+            height,
+            clear: [0, 0, 0, 255],
+            commands: Vec::new(),
+            precomposited: Some(image),
+        });
     }
     // Validate the entire scene before rasterizing. Slot order is the stable tie-breaker.
     let mut entries = Vec::new();
@@ -1414,6 +1440,7 @@ pub fn prepare_scene<'a>(
         height,
         clear: scene.clear().rgba(),
         commands,
+        precomposited: None,
     })
 }
 
@@ -1942,6 +1969,7 @@ mod scale_tests {
             height: 64,
             clear: [0, 0, 0, 255],
             commands: layers,
+            precomposited: None,
         };
         assert!(
             frame
@@ -2008,6 +2036,7 @@ mod scale_tests {
             height: 64,
             clear: [0, 0, 0, 255],
             commands: layers,
+            precomposited: None,
         };
         let pixels = frame.render_cpu().unwrap();
         assert_eq!(
@@ -2051,6 +2080,7 @@ mod scale_tests {
             height: 64,
             clear: [0, 0, 0, 255],
             commands: layers,
+            precomposited: None,
         };
         let pixels = frame.render_cpu().unwrap();
         let green = pixels

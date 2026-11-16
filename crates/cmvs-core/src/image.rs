@@ -2,7 +2,7 @@
 use crate::{
     FormatError,
     filesystem::HostFs,
-    pb3,
+    msk, pb2, pb3,
     raster::RgbaImage,
     resources::{RegisteredResources, ResourceArchives, ResourceKind},
 };
@@ -279,7 +279,18 @@ pub fn decode_with(
                 _ => Ok(None),
             }
         }
-        [0x89, b'P', b'N', b'G'] | b"MSK0" | b"PB2A" | [b'B', b'M', ..] => Err(unsupported),
+        b"PB2A" => {
+            let header = pb2::Header::parse(bytes)?;
+            Ok(Some(DecodedImage {
+                pixels: pb2::decode_with(bytes, threads)?,
+                alpha: matches!(header.kind, 5 | 6) || header.bpp == 32,
+            }))
+        }
+        b"MSK0" => Ok(Some(DecodedImage {
+            pixels: msk::decode(bytes)?,
+            alpha: false,
+        })),
+        [0x89, b'P', b'N', b'G'] | [b'B', b'M', ..] => Err(unsupported),
         _ => Ok(None),
     }
 }
@@ -292,6 +303,90 @@ pub fn load(
     name: &[u8],
 ) -> Result<Option<DecodedImage>, Box<dyn Error>> {
     Ok(load_inner(source, name, &mut Vec::new(), &mut 0, false)?.map(|(image, _)| image))
+}
+
+#[derive(Clone, Copy)]
+enum Pb2Selector<'a> {
+    Part(&'a [u8]),
+    Frame(usize),
+}
+
+fn load_pb2_variant(
+    source: &mut dyn ImageSource,
+    name: &[u8],
+    selector: Pb2Selector<'_>,
+) -> Result<Option<DecodedImage>, Box<dyn Error>> {
+    let read = source.read_image(name)?.ok_or_else(|| {
+        format!(
+            "image {} not found in any 0x2011 entry",
+            name.escape_ascii()
+        )
+    })?;
+    if !read.bytes.starts_with(b"PB2A") {
+        return load(source, name);
+    }
+    let header = pb2::Header::parse(&read.bytes)?;
+    let matches_variant = match selector {
+        Pb2Selector::Part(_) => header.kind == 6,
+        Pb2Selector::Frame(_) => header.kind == 5,
+    };
+    if !matches_variant {
+        return load(source, name);
+    }
+    let mut budget = 0;
+    charge(read.bytes.len(), &mut budget)?;
+    charge(
+        usize::from(header.width) * usize::from(header.height) * 4,
+        &mut budget,
+    )?;
+    let threads = source.decode_threads();
+    let identity = source.caches_decodes().then(|| {
+        let base = crate::raster::content_hash(&read.bytes);
+        let mut mixed = Vec::with_capacity(24);
+        mixed.extend_from_slice(&base.to_le_bytes());
+        match selector {
+            Pb2Selector::Part(part) => {
+                mixed.push(6);
+                mixed.extend_from_slice(part);
+            }
+            Pb2Selector::Frame(frame) => {
+                mixed.push(5);
+                mixed.extend_from_slice(&(frame as u64).to_le_bytes());
+            }
+        }
+        crate::raster::content_hash(&mixed)
+    });
+    let identified = decode_cached(source, identity, || {
+        let pixels = match selector {
+            Pb2Selector::Part(part) => pb2::decode_part_with(&read.bytes, Some(part), threads)?,
+            Pb2Selector::Frame(frame) => {
+                pb2::decode_frame_with_threads(&read.bytes, frame, threads)?
+            }
+        };
+        Ok(Some(DecodedImage {
+            pixels,
+            alpha: matches!(header.kind, 5 | 6) || header.bpp == 32,
+        }))
+    })?;
+    Ok(identified.map(|(image, _)| image))
+}
+
+/// Decodes `base` selecting `part` when `base` is a PB2A type-6 archive, matching CVNS `0x2064`/`0x2065`.
+pub fn load_part(
+    source: &mut dyn ImageSource,
+    base: &[u8],
+    part: &[u8],
+) -> Result<Option<DecodedImage>, Box<dyn Error>> {
+    load_pb2_variant(source, base, Pb2Selector::Part(part))
+}
+
+/// Decodes frame `frame` when `name` is a PB2A type-5 animation, matching CVNS `0x2052`.
+pub fn load_frame(
+    source: &mut dyn ImageSource,
+    name: &[u8],
+    frame: usize,
+) -> Result<Option<DecodedImage>, Box<dyn Error>> {
+    load_pb2_variant(source, name, Pb2Selector::Frame(frame))
 }
 
 /// A decoded image and its decoded-cache identity, when the source keeps that cache.

@@ -15,6 +15,8 @@ pub struct MessageFlags {
     auto_advance: bool,
     mode_1548: u32,
     bypass: bool,
+    /// CVNS +1464 (`0x5b8`): active read-skip state toggled/queried by `0x21ec`/`0x21ed` case `0x3e7`.
+    cvns_read_skipping: bool,
 }
 impl MessageFlags {
     pub fn from_ini(bytes: &[u8]) -> Self {
@@ -51,6 +53,7 @@ impl MessageFlags {
     pub(crate) fn clear_for_load(&mut self) {
         self.skip = false;
         self.auto_advance = false;
+        self.cvns_read_skipping = false;
     }
     /// Engine +12244: zeroed by the CMainFrameWnd constructor (qword store at 0x140016ff5)
     /// and written only by 0x2340. 0x2152/0x2153/0x215c treat it as read and finish like
@@ -64,6 +67,9 @@ impl MessageFlags {
     pub fn mode_1548(&self) -> u32 {
         self.mode_1548
     }
+    pub(crate) fn set_mode_1548(&mut self, value: u32) {
+        self.mode_1548 = value;
+    }
     /// +1520, 0x22eb. Also read by 0x2224's input-skip branch and 0x22ef, which need input.
     pub fn skip(&self) -> bool {
         self.skip
@@ -71,6 +77,15 @@ impl MessageFlags {
     /// +1552, 0x22e5; the 自動送りを実行 checkbox (control 1018) of dialog 138 also edits it.
     pub fn auto_advance(&self) -> bool {
         self.auto_advance
+    }
+    pub(crate) fn set_auto_advance(&mut self, value: bool) {
+        self.auto_advance = value;
+    }
+    pub fn cvns_read_skipping(&self) -> bool {
+        self.cvns_read_skipping
+    }
+    pub(crate) fn set_cvns_read_skipping(&mut self, value: bool) {
+        self.cvns_read_skipping = value;
     }
     /// 0x22eb / 0x14007c890 and 0x22e5 / 0x14007c5d0: nonzero SP-4 sets the flag to
     /// bool(SP-8); zero SP-4 copies it to system result 0 without reading SP-8. Both pop 8 bytes.

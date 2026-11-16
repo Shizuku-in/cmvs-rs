@@ -8,14 +8,24 @@ use crate::{bytecode::DecodeError, dispatch::Call, machine::Machine};
 /// Inspected 2007 0x4454a0 -> 0x4120b0: integer degrees and signed radius;
 /// x87 uses a wrapped signed angle times 100 and the f32 PI constant promoted to f64.
 pub(crate) fn handle_polar_point(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
-    let raw = call.argument(4, "angle")? as i32;
-    let angle = if call.command == 0xd9 {
-        raw
+    let degrees = call.command != 0xd9;
+    let pi = if call.command == 0x4e7 {
+        std::f64::consts::PI
     } else {
-        raw.wrapping_mul(100)
+        f64::from(std::f32::consts::PI)
     };
+    handle_polar_point_with(call, degrees, pi)
+}
+
+fn handle_polar_point_with(
+    call: &mut Call<'_, '_>,
+    degrees: bool,
+    pi: f64,
+) -> Result<(), DecodeError> {
+    let raw = call.argument(4, "angle")? as i32;
+    let angle = if degrees { raw.wrapping_mul(100) } else { raw };
     let radius = f64::from(call.argument(8, "radius")? as i32);
-    let radians = f64::from(angle) / 18000.0 * f64::from(std::f32::consts::PI);
+    let radians = f64::from(angle) / 18000.0 * pi;
     // x87's integer-indefinite value for conversion overflow is i32::MIN.
     let integer = |v: f64| {
         if v.trunc() < f64::from(i32::MIN) || v.trunc() > f64::from(i32::MAX) {

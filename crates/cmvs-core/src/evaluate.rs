@@ -859,7 +859,7 @@ impl State {
                 }
                 Term::Scalar {
                     pc,
-                    tag: tag @ (0x103 | 0x108),
+                    tag: tag @ (0x103 | 0x108 | 0x10a),
                     raw,
                 } => stack.push(Cell::Frame(env.offset(*tag, *raw, *pc)?)),
                 Term::Scalar {
@@ -871,23 +871,52 @@ impl State {
                 }
                 Term::Indexed {
                     pc,
-                    tag: tag @ (0x105 | 0x109 | 0x110),
+                    tag: tag @ (0x105 | 0x107 | 0x109 | 0x10b | 0x110 | 0x111 | 0x112 | 0x113),
                     base,
+                    stride,
                     indices,
-                    ..
                 } => {
-                    // 0x140066200 evaluates the index when pushing and rewrites the item with
-                    // raw = base + 4 * index in u32 arithmetic: 0x109 becomes the frame word
-                    // 0x108, 0x105 the script data word 0x104 and 0x110 the data word 0x106.
-                    let [index] = indices.as_slice() else {
-                        return Err(error(*pc, *tag, "array operand needs one index"));
+                    // 0x140066200 / CVNS 0x447420 rewrite array operands with base + stride * idx0
+                    // (+ 4 * idx1 for 2D tags 0x111/0x113). Data tags yield 0x104/0x106/0x107; frame
+                    // tags yield 0x108/0x10a/0x10b.
+                    let two_d = matches!(tag, 0x111 | 0x113);
+                    let raw = match indices.as_slice() {
+                        [first] if !two_d => {
+                            let idx = self.evaluate(first, depth + 1, env, stack.stack, journal)?;
+                            base.wrapping_add((idx as u32).wrapping_mul(u32::from(*stride)))
+                        }
+                        [first, second] if two_d => {
+                            let idx0 =
+                                self.evaluate(first, depth + 1, env, stack.stack, journal)?;
+                            let idx1 =
+                                self.evaluate(second, depth + 1, env, stack.stack, journal)?;
+                            base.wrapping_add((idx0 as u32).wrapping_mul(u32::from(*stride)))
+                                .wrapping_add((idx1 as u32).wrapping_mul(4))
+                        }
+                        _ => {
+                            return Err(error(
+                                *pc,
+                                *tag,
+                                if two_d {
+                                    "2D array operand needs two indices"
+                                } else {
+                                    "array operand needs one index"
+                                },
+                            ));
+                        }
                     };
-                    let index = self.evaluate(index, depth + 1, env, stack.stack, journal)?;
-                    let raw = base.wrapping_add((index as u32).wrapping_mul(4));
-                    stack.push(if *tag == 0x109 {
-                        Cell::Frame(env.offset(0x108, raw, *pc)?)
+                    let (is_frame, resolved_tag) = match tag {
+                        0x105 => (false, 0x104),
+                        0x110 => (false, 0x106),
+                        0x107 | 0x111 => (false, 0x107),
+                        0x109 => (true, 0x108),
+                        0x112 => (true, 0x10a),
+                        _ => (true, 0x10b),
+                    };
+                    stack.push(if is_frame {
+                        Cell::Frame(env.offset(resolved_tag, raw, *pc)?)
                     } else {
-                        Cell::Data(env.data_offset(raw, *pc, *tag)?)
+                        Cell::Data(env.data_offset(raw, *pc, resolved_tag)?)
                     });
                 }
                 Term::Nested {
@@ -1450,5 +1479,190 @@ mod tests {
                 capacities
             );
         }
+    }
+
+    #[test]
+    fn cvns_strided_arrays_and_frame_scalar_read_write() {
+        let scalar = |tag, raw| Term::Scalar { pc: 0, tag, raw };
+        let indexed = |tag, base, stride, indices| Term::Indexed {
+            pc: 0,
+            tag,
+            base,
+            stride,
+            indices,
+        };
+        let operator = |opcode| Term::Operator { pc: 0, opcode };
+        let expr = |terms| Expression {
+            pc: 0,
+            kind: 0x200,
+            end: 0,
+            terms,
+        };
+
+        let mut state = State::default();
+        let mut scratch = EvalScratch::default();
+        let mut journal = Journal::default();
+        let mut stack = ParameterStack::new(256);
+        stack.reserve(0, 128).unwrap();
+        let mut data = vec![0u8; 128];
+
+        let mut eval = |stack: &mut ParameterStack, data: &mut [u8], terms: Vec<Term>| {
+            let mut env = Env {
+                labels: &[],
+                frame: Some(Frame { stack, base: 16 }),
+                data: Some(data),
+            };
+            state
+                .evaluate_in(&expr(terms), &mut env, &mut scratch, &mut journal)
+                .unwrap()
+        };
+
+        // 0x10a frame scalar at base(16) + 8 = 24.
+        assert_eq!(
+            eval(
+                &mut stack,
+                &mut data,
+                vec![scalar(0x10a, 8), scalar(0x100, 111), operator(0x170)],
+            ),
+            111
+        );
+        assert_eq!(eval(&mut stack, &mut data, vec![scalar(0x10a, 8)]), 111);
+        assert_eq!(stack.read_u32_at(24).unwrap(), 111);
+
+        // 0x112 frame 1D array (stride 4) at base(16) + 12 + 4 * 2 = 36 (= 0x10a raw 20).
+        assert_eq!(
+            eval(
+                &mut stack,
+                &mut data,
+                vec![
+                    indexed(0x112, 12, 4, vec![expr(vec![scalar(0x100, 2)])]),
+                    scalar(0x100, 222),
+                    operator(0x170),
+                ],
+            ),
+            222
+        );
+        assert_eq!(
+            eval(
+                &mut stack,
+                &mut data,
+                vec![indexed(0x112, 12, 4, vec![expr(vec![scalar(0x100, 2)])])],
+            ),
+            222
+        );
+        assert_eq!(eval(&mut stack, &mut data, vec![scalar(0x10a, 20)]), 222);
+        assert_eq!(stack.read_u32_at(36).unwrap(), 222);
+
+        // 0x10b frame 1D array with non-4 stride: base(16) + 24 + 12 * 3 = 76.
+        assert_eq!(
+            eval(
+                &mut stack,
+                &mut data,
+                vec![
+                    indexed(0x10b, 24, 12, vec![expr(vec![scalar(0x100, 3)])]),
+                    scalar(0x100, (-333i32) as u32),
+                    operator(0x170),
+                ],
+            ),
+            -333
+        );
+        assert_eq!(
+            eval(
+                &mut stack,
+                &mut data,
+                vec![indexed(0x10b, 24, 12, vec![expr(vec![scalar(0x100, 3)])])],
+            ),
+            -333
+        );
+        assert_eq!(stack.read_u32_at(76).unwrap(), (-333i32) as u32);
+
+        // 0x113 frame 2D array with non-4 stride: base(16) + 24 + 12 * 2 + 4 * 1 = 68.
+        assert_eq!(
+            eval(
+                &mut stack,
+                &mut data,
+                vec![
+                    indexed(
+                        0x113,
+                        24,
+                        12,
+                        vec![expr(vec![scalar(0x100, 2)]), expr(vec![scalar(0x100, 1)])],
+                    ),
+                    scalar(0x100, 444),
+                    operator(0x170),
+                ],
+            ),
+            444
+        );
+        assert_eq!(
+            eval(
+                &mut stack,
+                &mut data,
+                vec![indexed(
+                    0x113,
+                    24,
+                    12,
+                    vec![expr(vec![scalar(0x100, 2)]), expr(vec![scalar(0x100, 1)])],
+                )],
+            ),
+            444
+        );
+        assert_eq!(stack.read_u32_at(68).unwrap(), 444);
+
+        // 0x107 data 1D array with non-4 stride: 8 + 20 * 2 = 48.
+        assert_eq!(
+            eval(
+                &mut stack,
+                &mut data,
+                vec![
+                    indexed(0x107, 8, 20, vec![expr(vec![scalar(0x100, 2)])]),
+                    scalar(0x100, (-555i32) as u32),
+                    operator(0x170),
+                ],
+            ),
+            -555
+        );
+        assert_eq!(
+            eval(
+                &mut stack,
+                &mut data,
+                vec![indexed(0x107, 8, 20, vec![expr(vec![scalar(0x100, 2)])])],
+            ),
+            -555
+        );
+        assert_eq!(i32::from_le_bytes(data[48..52].try_into().unwrap()), -555);
+
+        // 0x111 data 2D array with non-4 stride: 8 + 20 * 1 + 4 * 3 = 40.
+        assert_eq!(
+            eval(
+                &mut stack,
+                &mut data,
+                vec![
+                    indexed(
+                        0x111,
+                        8,
+                        20,
+                        vec![expr(vec![scalar(0x100, 1)]), expr(vec![scalar(0x100, 3)])],
+                    ),
+                    scalar(0x100, 666),
+                    operator(0x170),
+                ],
+            ),
+            666
+        );
+        assert_eq!(
+            eval(
+                &mut stack,
+                &mut data,
+                vec![indexed(
+                    0x111,
+                    8,
+                    20,
+                    vec![expr(vec![scalar(0x100, 1)]), expr(vec![scalar(0x100, 3)])],
+                )],
+            ),
+            666
+        );
+        assert_eq!(i32::from_le_bytes(data[40..44].try_into().unwrap()), 666);
     }
 }

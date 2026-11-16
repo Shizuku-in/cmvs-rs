@@ -136,7 +136,7 @@ fn checksum_rejects_changed_snapshot_or_trailer() {
         bad[at] ^= 1;
         assert_eq!(
             Csv2Save::decode(&bad).unwrap_err().0,
-            "CSV2 snapshot checksum mismatch"
+            "save snapshot checksum mismatch"
         );
     }
 }

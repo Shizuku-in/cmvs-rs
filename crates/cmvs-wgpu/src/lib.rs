@@ -393,6 +393,9 @@ impl Renderer {
         self.uploaded_bytes += image.pixels().len() as u64;
     }
     pub fn render(&mut self, frame: &RenderFrame<'_>) -> Result<GpuFrame> {
+        if let Some(image) = frame.precomposited() {
+            return self.preview_image(image);
+        }
         self.compose(frame.dimensions(), frame.clear_color(), frame.commands())
     }
     /// Preserves the source alpha for the desktop checkerboard preview path.

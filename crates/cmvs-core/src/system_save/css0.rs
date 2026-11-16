@@ -2,7 +2,7 @@
 //! 0x4208e0. The persistent ranges are the tails of the variable banks from the starts set
 //! by CVNS 0x210b..0x210d; the same LZSS as CSS1 packs them.
 use super::decompress;
-use crate::{FormatError, MAX_PAYLOAD, evaluate::State};
+use crate::{FormatError, MAX_PAYLOAD, evaluate::State, random::CrtRandom};
 
 pub const CSS0_HEADER: usize = 600;
 const KEY: &[u8] = b"PURPLE YUKO KAWAI ARC CHECK";
@@ -30,7 +30,68 @@ impl Default for PersistentStarts {
 }
 
 impl PersistentStarts {
-    fn checked(self) -> Result<Self, FormatError> {
+    /// Inspects literal `0x50b..=0x50d` (`bit`, `integer`, `string` starts) from the startup script prefix.
+    pub fn from_start(
+        script: &crate::ps3::Script,
+        map: &crate::cvns::CommandMap,
+    ) -> Result<Self, FormatError> {
+        use crate::bytecode::{self, InstructionKind, Term};
+        let instructions =
+            bytecode::decode_layout(script.code(), script.header().entry_pc, &script.labels())
+                .map_err(|_| FormatError("invalid startup script layout"))?;
+        let mut starts = Self::default();
+        let mut value = None;
+        let mut pushed = None;
+        for instruction in instructions {
+            if instruction.pc < script.header().entry_pc as usize {
+                continue;
+            }
+            match instruction.kind {
+                InstructionKind::Expression(expression) if expression.kind == 0x200 => {
+                    value = match expression.terms.as_slice() {
+                        [
+                            Term::Scalar {
+                                tag: 0x100, raw, ..
+                            },
+                        ] => Some(*raw),
+                        _ => None,
+                    };
+                }
+                InstructionKind::Simple if instruction.opcode == 0x430 => pushed = value.take(),
+                InstructionKind::System { command } => match map.runtime(command) {
+                    0x50b => {
+                        starts.bit = pushed
+                            .take()
+                            .ok_or(FormatError("dynamic CVNS persistent bit start"))?;
+                    }
+                    0x50c => {
+                        starts.integer = pushed
+                            .take()
+                            .ok_or(FormatError("dynamic CVNS persistent integer start"))?;
+                    }
+                    0x50d => {
+                        starts.string = pushed
+                            .take()
+                            .ok_or(FormatError("dynamic CVNS persistent string start"))?;
+                    }
+                    0x5c0 => break,
+                    _ => pushed = None,
+                },
+                InstructionKind::Jump { .. }
+                | InstructionKind::ConditionalJump { .. }
+                | InstructionKind::CompareJump { .. }
+                | InstructionKind::LongJump { .. }
+                | InstructionKind::ScriptReturn { .. } => break,
+                _ => {
+                    value = None;
+                    pushed = None;
+                }
+            }
+        }
+        starts.checked()
+    }
+
+    pub(crate) fn checked(self) -> Result<Self, FormatError> {
         if self.bit >> 3 > BIT_BYTES || self.integer > INTEGERS || self.string > STRINGS {
             return Err(FormatError(
                 "CSS0 persistent start beyond its variable bank",
@@ -45,6 +106,22 @@ fn u16_at(b: &[u8], at: usize) -> u16 {
 }
 fn u32_at(b: &[u8], at: usize) -> u32 {
     u32::from_le_bytes(b[at..at + 4].try_into().expect("validated CSS0 header"))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Css0Parameters {
+    pub key_add: u8,
+    pub byte_add: u8,
+}
+
+impl Css0Parameters {
+    /// Two CRT draws matching cvns-20090203 0x420460: `[546] = (u8)rand()`,
+    /// `[548] = (rand() & 0x7f) + 128`.
+    pub fn draw(random: &mut CrtRandom) -> Self {
+        let key_add = random.next_value() as u8;
+        let byte_add = (random.next_value() as u8 & 127) + 128;
+        Self { key_add, byte_add }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,5 +246,156 @@ impl Css0Save {
                 .map_err(FormatError)?;
         }
         Ok(candidate)
+    }
+
+    /// Encodes a CSS0 `save000.dat` payload (cvns-20090203 0x420460).
+    pub fn encode_state(
+        state: &State,
+        starts: PersistentStarts,
+        title: &[u8],
+        parameters: Css0Parameters,
+        lists: [&[Vec<u8>]; 2],
+    ) -> Result<Vec<u8>, FormatError> {
+        let starts = starts.checked()?;
+        if title.contains(&0) || title.len() >= 256 {
+            return Err(FormatError("CSS0 title contains NUL or exceeds capacity"));
+        }
+        if lists.iter().any(|list| list.len() > 4096) {
+            return Err(FormatError("CSS0 output list exceeds research bounds"));
+        }
+        let mut payload = Vec::with_capacity(64 * 1024);
+        let first_bit = starts.bit >> 3 << 3;
+        for base in (first_bit..BIT_BYTES * 8).step_by(8) {
+            let mut byte = 0u8;
+            for bit in 0..8 {
+                let set = state
+                    .bit(base + bit)
+                    .ok_or(FormatError("unknown persistent CSS0 bit"))?;
+                byte |= u8::from(set) << bit;
+            }
+            payload.push(byte);
+        }
+        for index in starts.integer..INTEGERS {
+            let value = state
+                .integer(index)
+                .ok_or(FormatError("unknown persistent CSS0 integer"))?;
+            payload.extend_from_slice(&value.to_le_bytes());
+        }
+        for index in starts.string..STRINGS {
+            let value = state
+                .string(index)
+                .ok_or(FormatError("unknown persistent CSS0 string"))?;
+            super::write::add_string(&mut payload, value, true)?;
+        }
+        for list in lists {
+            for name in list {
+                super::write::add_string(&mut payload, name, false)?;
+            }
+        }
+        if payload.len() > MAX_PAYLOAD {
+            return Err(FormatError("CSS0 payload exceeds research bounds"));
+        }
+        let packed = super::pack::compress(&payload);
+        let end = CSS0_HEADER + packed.len();
+        if end + 2 > MAX_PAYLOAD {
+            return Err(FormatError("CSS0 file exceeds research bounds"));
+        }
+        let mut raw = vec![0u8; CSS0_HEADER];
+        raw[..4].copy_from_slice(b"CSS0");
+        raw[16..16 + title.len()].copy_from_slice(title);
+        for (at, value) in [
+            (4, CSS0_HEADER as u32),
+            (540, end as u32),
+            (552, lists[0].len() as u32),
+            (556, lists[1].len() as u32),
+            (560, packed.len() as u32),
+            (580, payload.len() as u32),
+        ] {
+            raw[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        raw[544..546].copy_from_slice(&1u16.to_le_bytes());
+        raw[546..548].copy_from_slice(&u16::from(parameters.key_add).to_le_bytes());
+        raw[548..550].copy_from_slice(&u16::from(parameters.byte_add).to_le_bytes());
+        let mut sum = 0u16;
+        for (i, byte) in packed.into_iter().enumerate() {
+            let coded = (byte.wrapping_add(64)
+                ^ parameters.key_add.wrapping_add(KEY[i % KEY.len()]))
+            .wrapping_add(parameters.byte_add);
+            sum = sum.wrapping_add(u16::from(coded));
+            raw.push(coded);
+        }
+        raw.extend_from_slice(&sum.to_le_bytes());
+        Ok(raw)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn css0_encode_decode_applied_round_trips_persistent_banks_and_lists() {
+        fn filled_state() -> State {
+            let mut state = State::new(4096, 262_144);
+            state.set_string_slots(256);
+            state.fill_bits(0, 262_144, false).unwrap();
+            state.fill_integers(0, 4096, 0).unwrap();
+            state.fill_strings(0, 256, b"").unwrap();
+            state
+        }
+        let starts = PersistentStarts {
+            bit: 0x1013,
+            integer: 0x410,
+            string: 0x24,
+        };
+        let mut state = filled_state();
+        state.set_bit(0x1008, true).unwrap();
+        state.set_bit(0x1010, true).unwrap();
+        state.set_bit(0x1013, true).unwrap();
+        state.set_bit(262_143, true).unwrap();
+        state.set_integer(0x410, -123_456).unwrap();
+        state.set_integer(4095, 987_654).unwrap();
+        state.set_string(0x24, b"flag_alpha").unwrap();
+        state.set_string(255, b"tail_str").unwrap();
+        // Volatile variables outside persistent ranges are ignored on save/apply.
+        state.set_integer(0x10, 777).unwrap();
+
+        let mut rng = CrtRandom::new(0x1234_5678);
+        let params = Css0Parameters::draw(&mut rng);
+        assert!(params.byte_add >= 128);
+        let l0 = vec![b"ev01".to_vec(), b"ev02".to_vec()];
+        let l1 = vec![b"bgm03".to_vec()];
+        let raw = Css0Save::encode_state(&state, starts, b"miharu", params, [&l0, &l1]).unwrap();
+        let decoded = Css0Save::decode(&raw, starts).unwrap();
+        assert_eq!(decoded.lists(), &[l0, l1]);
+
+        let mut fresh = filled_state();
+        fresh.set_integer(0x10, 42).unwrap();
+        let applied = decoded.applied(&fresh).unwrap();
+        // Bits before (starts.bit >> 3 << 3) == 0x1010 stay untouched; the partial byte
+        // starting at 0x1010 and tail bits up to 262143 persist.
+        assert_eq!(applied.bit(0x1008), Some(false));
+        assert_eq!(applied.bit(0x1010), Some(true));
+        assert_eq!(applied.bit(0x1013), Some(true));
+        assert_eq!(applied.bit(262_143), Some(true));
+        assert_eq!(applied.integer(0x410), Some(-123_456));
+        assert_eq!(applied.integer(4095), Some(987_654));
+        assert_eq!(applied.integer(0x10), Some(42));
+        assert_eq!(applied.string(0x24), Some(b"flag_alpha".as_slice()));
+        assert_eq!(applied.string(255), Some(b"tail_str".as_slice()));
+
+        assert!(
+            Css0Save::decode(
+                &raw,
+                PersistentStarts {
+                    integer: starts.integer + 1,
+                    ..starts
+                }
+            )
+            .is_err()
+        );
+        let mut corrupt = raw.clone();
+        corrupt[CSS0_HEADER] ^= 1;
+        assert!(Css0Save::decode(&corrupt, starts).is_err());
     }
 }

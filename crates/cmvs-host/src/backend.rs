@@ -80,6 +80,12 @@ impl PlatformBackend for HostBackend {
     fn poll_font_dialog(&mut self, _: &[u8]) -> Result<FontDialogResult, Box<dyn Error>> {
         Ok(FontDialogResult::Cancelled)
     }
+    fn poll_message_dialog(
+        &mut self,
+        _: &cmvs_core::platform::MessageDialogRequest,
+    ) -> Result<cmvs_core::platform::MessageDialogResult, Box<dyn Error>> {
+        Ok(cmvs_core::platform::MessageDialogResult::Accepted)
+    }
     fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>> {
         match request {
             PlatformRequest::Fullscreen(value) => self.fullscreen = *value,

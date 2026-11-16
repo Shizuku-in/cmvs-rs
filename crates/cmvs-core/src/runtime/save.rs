@@ -4,18 +4,18 @@
 use super::{Runtime, SystemOutput};
 use crate::filesystem::{HostFs, OpenOptions};
 use crate::{
-    audio::SavedAudio,
+    audio::{SavedAudio, SavedCvnsAudio},
     dispatch::RuntimeCall,
     evaluate::error,
     message::{MESSAGE_WINDOWS, TEXT_OBJECTS},
     platform::PlatformBackend,
     raster::RgbaImage,
     save::{Csv2Save, HEADER_SIZE},
-    save_menu::SaveHeader,
+    save_menu::{SaveFamily, SaveHeader},
     scene::{ClearState, ObjectImage, SceneObject},
     snapshot::{
-        CapturedSave, EngineSnapshot, LocalVariables, SaveImage, SavedScene, SavedWindow,
-        SnapshotLayout,
+        CapturedSave, CvnsLocalVariables, CvnsSnapshot, EngineSnapshot, LocalVariables, SaveImage,
+        SavedScene, SavedWindow, SnapshotLayout,
     },
 };
 use std::{collections::BTreeMap, error::Error, io::Write, path::Path, sync::Arc};
@@ -197,7 +197,7 @@ fn snapshot_layout(profile: &crate::profile::EngineProfile) -> Option<SnapshotLa
         Some(InspectedBuild::Cmvs20160201 | InspectedBuild::Cmvs20171114) => {
             Some(SnapshotLayout::TextV3)
         }
-        Some(InspectedBuild::Cvns20090203) => None,
+        Some(InspectedBuild::Cvns20090203) => Some(SnapshotLayout::Cvns20090203),
         None if profile.base.is_none() => Some(SnapshotLayout::TextV3),
         None => None,
     }
@@ -524,12 +524,24 @@ impl Runtime<'_> {
         Ok((snapshot, vm.main_image))
     }
 
-    /// The 600-byte header 0x140069270 prepares at +11204.
+    pub(super) fn save_family(&self) -> SaveFamily {
+        if self.gate.selection().profile.family == crate::profile::Family::Cvns {
+            SaveFamily::Cvns
+        } else {
+            SaveFamily::Cmvs
+        }
+    }
+
+    /// The 600-byte header 0x140069270 (or CVNS 0x44ebf0) prepares at +11204 / +22816.
     fn snapshot_header(&mut self) -> Result<[u8; HEADER_SIZE], Box<dyn Error>> {
         let mut header = [0u8; HEADER_SIZE];
-        header[..4].copy_from_slice(b"CSV2");
+        let (signature, word8, version) = match self.save_family() {
+            SaveFamily::Cmvs => (*b"CSV2", HEADER_WORD_8, 4u16),
+            SaveFamily::Cvns => (*b"CSP1", 0u32, 3u16),
+        };
+        header[..4].copy_from_slice(&signature);
         header[4..8].copy_from_slice(&(HEADER_SIZE as u32).to_le_bytes());
-        header[8..12].copy_from_slice(&HEADER_WORD_8.to_le_bytes());
+        header[8..12].copy_from_slice(&word8.to_le_bytes());
         let time = (self.save_clock)();
         let mut label = format!("{} ", label_time(time)).into_bytes();
         label.extend(self.save_title.bytes());
@@ -540,10 +552,55 @@ impl Runtime<'_> {
         for (i, value) in self.save_info.values().iter().enumerate() {
             header[528 + 4 * i..532 + 4 * i].copy_from_slice(&value.unwrap_or(0).to_le_bytes());
         }
-        header[544..546].copy_from_slice(&4u16.to_le_bytes());
+        header[544..546].copy_from_slice(&version.to_le_bytes());
         let thumbnail = self.platform.thumbnail().is_some_and(|t| t.enabled);
         header[548..550].copy_from_slice(&u16::from(thumbnail).to_le_bytes());
         Ok(header)
+    }
+
+    fn capture_cvns_snapshot(
+        &self,
+        vm: crate::machine::VmImage,
+    ) -> Result<(Vec<u8>, Vec<u8>), Box<dyn Error>> {
+        let starts = self.bootstrap.cvns_persistent_starts();
+        let variables = CvnsLocalVariables::capture(self.machine.state(), starts)?;
+        let clear = self.scene.clear();
+        let default_scene = crate::scene::cvns::CvnsScene::default();
+        let cvns_scene = self.scene.cvns().unwrap_or(&default_scene);
+        let (_, popup) = self.save_menu.saved_flags();
+        let snapshot = CvnsSnapshot::from_scene_and_messages(
+            crate::snapshot::cvns::CvnsSceneCapture {
+                scene: cvns_scene,
+                msg_host: self.messages.cvns(),
+                texts: self.messages.saved_texts(),
+                clear_color: clear.color,
+                clear_depth: clear.depth,
+                backdrop_disabled: self.scene.cvns_backdrop_disabled(),
+                layer_fade_alpha: self.scene.cvns_layer_fade_alpha(),
+            },
+            crate::snapshot::cvns::CvnsVmCapture {
+                save_title: self.save_title.bytes().to_vec(),
+                scene_title: self.platform.scene_title().to_vec(),
+                script_names: vm.script_names,
+                script_sizes: vm.script_sizes,
+                active_slot: vm.active_slot,
+                pc: vm.pc,
+                repeat_count: vm.repeat_count,
+                timers: *self.timers.values(),
+                popup,
+                callbacks: self.control.saved_callbacks(),
+                stack_pointer: vm.stack_pointer,
+                frame_depth: vm.frame_depth,
+                frames: vm.frames,
+                stack: vm.stack,
+                system_results: vm.system_results,
+                script_data: vm.main_data,
+                variables,
+                audio: self.audio.saved_cvns(),
+                history: self.history.saved(),
+            },
+        )?;
+        Ok((snapshot.encode()?, vm.main_image))
     }
 
     /// 0x2080 / 0x22b2: the image is built before any live change, so a state without a
@@ -552,8 +609,13 @@ impl Runtime<'_> {
         &mut self,
         vm: crate::machine::VmImage,
     ) -> Result<(), Box<dyn Error>> {
-        let (snapshot, script_image) = self.engine_snapshot_with(vm)?;
-        let bytes = snapshot.encode_with_layout(self.require_snapshot_layout()?)?;
+        let layout = self.require_snapshot_layout()?;
+        let (bytes, script_image) = if layout == SnapshotLayout::Cvns20090203 {
+            self.capture_cvns_snapshot(vm)?
+        } else {
+            let (snapshot, script_image) = self.engine_snapshot_with(vm)?;
+            (snapshot.encode_with_layout(layout)?, script_image)
+        };
         if bytes.len() > crate::snapshot::MAX_SNAPSHOT {
             return Err("snapshot exceeds the original 3 MiB buffer".into());
         }
@@ -620,7 +682,8 @@ impl Runtime<'_> {
             (0, _) | (_, None) => Vec::new(),
             (_, Some(bmp)) => bmp.clone(),
         };
-        let file = Csv2Save::encode(
+        let file = Csv2Save::encode_for(
+            self.save_family(),
             &header,
             &captured.snapshot,
             &thumbnail,
@@ -639,11 +702,14 @@ impl Runtime<'_> {
         }
         // 0x1400179e0: the system save is written with every slot.
         let id = self.system_save_identifier();
+        let mut system_path = None;
         if let Some(output) = &mut self.system_output {
             self.system_host
                 .write_now(self.machine.state(), output, &mut self.random, id)?;
-            self.system_source =
-                crate::system_save::FileSystemSave::with_fs(output.path(), Arc::clone(output.fs()));
+            system_path = Some((output.path(), Arc::clone(output.fs())));
+        }
+        if let Some((path, fs)) = system_path {
+            self.system_source = self.open_system_source(path, fs);
         }
         replace_file(&*slot_fs, &directory, &format!("save{slot:03}.dat"), &file)?;
         Ok(true)
@@ -699,29 +765,30 @@ impl Runtime<'_> {
         Ok(())
     }
 
-    /// 0x22b6 / 0x1400812f0: SP-4 slot; slots above 999 are ignored. Returns 0x4004.
+    /// 0x22b6 / 0x1400812f0 (and CVNS 0x21a4 / 0x467bf0): SP-4 slot; slots above 999
+    /// (and slot 0 / <= 0 in CVNS) are ignored. Returns 0x4004.
     pub(super) fn handle_save_slot(
         &mut self,
         request: &RuntimeCall,
         slot: u32,
     ) -> Result<(), Box<dyn Error>> {
-        if slot <= 999 {
+        if slot <= 999 && (self.save_family() != SaveFamily::Cvns || slot != 0) {
             self.write_slot(slot as u16, false)?;
         }
         request.complete(&mut self.machine, 0x4004)?;
         Ok(())
     }
 
-    /// 0x22b5 / 0x140082340: SP-4 slot. The load replaces the VM, so the result flags are
-    /// applied by hand: 0x2000 (repeat + 1) when the restored repeat count is nonzero, else
-    /// 0 (repeat reset, nothing popped, the restored PC runs next).
+    /// 0x22b5 / 0x140082340 (and CVNS 0x21a3 / 0x467b80): SP-4 slot. The load replaces the VM,
+    /// so the result flags are applied by hand: 0x2000 (repeat + 1) when the restored repeat
+    /// count is nonzero, else 0 (repeat reset, nothing popped, the restored PC runs next).
     pub(super) fn handle_load_slot(
         &mut self,
         request: &RuntimeCall,
         slot: u32,
         backend: &mut impl PlatformBackend,
     ) -> Result<(), Box<dyn Error>> {
-        if slot > 999 {
+        if slot > 999 || (self.save_family() == SaveFamily::Cvns && slot == 0) {
             request.complete(&mut self.machine, 0x4004)?;
             return Ok(());
         }
@@ -753,7 +820,18 @@ impl Runtime<'_> {
             .saves
             .read_slot(slot)?
             .ok_or("save slot to load does not exist")?;
-        let save = Csv2Save::decode(&bytes)?;
+        let family = self.save_family();
+        let save = Csv2Save::decode_family(&bytes, family)?;
+        if layout == SnapshotLayout::Cvns20090203 {
+            let snapshot = CvnsSnapshot::decode(&save.snapshot)?;
+            return self.restore_cvns_snapshot(
+                slot,
+                &save,
+                &bytes[..HEADER_SIZE],
+                &snapshot,
+                backend,
+            );
+        }
         let snapshot = EngineSnapshot::decode_with_layout(&save.snapshot, layout)?;
         self.validate_build_snapshot(&snapshot, layout)?;
         self.restore_snapshot(
@@ -764,6 +842,136 @@ impl Runtime<'_> {
             layout,
             backend,
         )
+    }
+
+    fn restore_cvns_snapshot(
+        &mut self,
+        slot: u16,
+        save: &Csv2Save,
+        header: &[u8],
+        snapshot: &CvnsSnapshot,
+        backend: &mut impl PlatformBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let audio = SavedCvnsAudio::decode(&snapshot.audio)?;
+        let mut control = self.control.clone();
+        control.restore_callbacks(&snapshot.callbacks)?;
+        let callback = control
+            .callbacks()
+            .get(&LOAD_CALLBACK)
+            .filter(|c| c.enabled)
+            .map(|c| (c.script_slot, c.target as usize));
+        let image = crate::machine::VmImage {
+            script_names: snapshot.script_names.clone(),
+            script_sizes: snapshot.script_sizes,
+            active_slot: snapshot.active_slot,
+            pc: snapshot.pc,
+            repeat_count: snapshot.repeat_count,
+            stack_pointer: snapshot.stack_pointer,
+            frame_depth: snapshot.frame_depth,
+            frames: snapshot.frames,
+            stack: snapshot.stack.clone(),
+            system_results: snapshot.system_results,
+            main_image: save.script_image.clone(),
+            main_data: snapshot.script_data.clone(),
+        };
+        let mut vm = self.machine.prepare_restore(&image, callback)?;
+        snapshot
+            .variables
+            .apply_to_state(&mut vm.state, self.bootstrap.cvns_persistent_starts())?;
+        if slot < 950 && matches!(self.save_image, SaveImage::Captured(_)) {
+            self.write_slot(LOAD_BACKUP_SLOT, true)?;
+        }
+        let mut budget = crate::snapshot::RESTORE_PIXELS;
+        let mut image_src = self.images.with_paths(self.bootstrap.paths());
+        let mut scene_images = vec![None; crate::scene::cvns::CVNS_IMAGES];
+        for (&idx, saved_buf) in &snapshot.images {
+            scene_images[usize::from(idx)] = Some(saved_buf.load(&mut image_src, &mut budget)?);
+        }
+        let mask_transition = snapshot
+            .mask_transition
+            .as_ref()
+            .map(|m| m.restore(&mut budget))
+            .transpose()?;
+        let mut scene_sprites = vec![None; crate::scene::cvns::CVNS_SPRITES];
+        for (&idx, sp) in &snapshot.sprites {
+            scene_sprites[usize::from(idx)] = Some(sp.clone());
+        }
+        let cvns_scene = crate::scene::cvns::CvnsScene {
+            images: scene_images,
+            sprites: scene_sprites,
+            fade: snapshot.fade,
+            mask_transition,
+            quake: snapshot.quake,
+            cg_seen: snapshot.cg_seen.clone(),
+        };
+        let mut cvns_windows: [Option<crate::message::cvns::CvnsWindow>;
+            crate::message::cvns::CVNS_WINDOWS] = Default::default();
+        for (&idx, win) in &snapshot.windows {
+            cvns_windows[usize::from(idx)] = Some(win.clone());
+        }
+        let mut cvns_messages: [Option<crate::message::cvns::CvnsMessage>;
+            crate::message::cvns::CVNS_MESSAGES] = Default::default();
+        for (&idx, msg) in &snapshot.messages {
+            cvns_messages[usize::from(idx)] = Some(msg.load(&mut image_src, &mut budget)?);
+        }
+        let cvns_msg_host = crate::message::cvns::CvnsMessageHost {
+            windows: cvns_windows,
+            messages: cvns_messages,
+            text_shadow: snapshot.text_shadow,
+            read_skip: snapshot.read_skip,
+            auto_skip: snapshot.auto_skip,
+            auto_wait_elapsed_ms: snapshot.auto_wait_elapsed_ms,
+            click_wait_elapsed_ms: snapshot.click_wait_elapsed_ms,
+        };
+        let mut texts: [Option<crate::message::TextObject>; TEXT_OBJECTS] = Default::default();
+        for (&idx, obj) in &snapshot.texts {
+            texts[usize::from(idx)] = Some(obj.clone());
+        }
+        let mut history = self.history.clone();
+        history.restore(&snapshot.history)?;
+        self.platform
+            .restored_title(&snapshot.scene_title, self.machine.text_encoding())?;
+        self.machine.install_restore(vm);
+        self.history = history;
+        self.sequence = Default::default();
+        self.camera = Default::default();
+        self.control = control;
+        self.timers.restore_values(snapshot.timers);
+        self.save_title.restore(snapshot.save_title.clone());
+        self.save_menu.restore_flags(snapshot.popup);
+        self.message_flags.clear_for_load();
+        self.buttons = Default::default();
+        if self.movies.restore(Default::default()) {
+            self.audio_backend.stop_movie_audio()?;
+        }
+        self.scene.restore_cvns(
+            ClearState {
+                color: snapshot.clear_color,
+                depth: snapshot.clear_depth,
+            },
+            snapshot.backdrop_disabled,
+            snapshot.layer_fade_alpha,
+            cvns_scene,
+        );
+        self.messages.restore_cvns(texts, cvns_msg_host);
+        let word = |at: usize| u32::from_le_bytes(header[at..at + 4].try_into().unwrap());
+        self.save_info.restore([word(528), word(532), word(536)]);
+        if !save.auxiliary.is_empty() {
+            self.thumbnail = Some(save.auxiliary.clone());
+        }
+        self.save_image = SaveImage::Captured(Box::new(CapturedSave {
+            header: header.try_into().expect("600-byte header"),
+            snapshot: save.snapshot.clone(),
+            script_image: save.script_image.clone(),
+        }));
+        self.audio
+            .restore_cvns(audio, self.audio_backend.as_mut())?;
+        self.platform.restore_scene_title(
+            snapshot.scene_title.clone(),
+            self.machine.text_encoding(),
+            backend,
+        )?;
+        Ok(())
     }
 
     /// Loader 0x140081960 and reader 0x140069fd0 over the Rust hosts. Everything fallible
@@ -1029,13 +1237,18 @@ impl Runtime<'_> {
         start: i32,
         count: i32,
     ) -> Result<(), Box<dyn Error>> {
+        let family = self.save_family();
         let mut latest = u32::MAX;
-        if start >= 0 && count.wrapping_add(start) <= 999 {
+        let in_range = match family {
+            SaveFamily::Cmvs => start >= 0 && count.wrapping_add(start) <= 999,
+            SaveFamily::Cvns => start > 0 && count >= 0 && start.saturating_add(count) <= 257,
+        };
+        if in_range {
             let mut best = 0;
             for slot in start..start.wrapping_add(count) {
                 if let Some(bytes) =
                     crate::save_menu::SaveSource::read_header(&mut self.saves, slot as u16)?
-                    && let Ok(header) = SaveHeader::parse(&bytes)
+                    && let Ok(header) = SaveHeader::parse_family(&bytes, family)
                     && header.ordering_key > best
                 {
                     best = header.ordering_key;
@@ -1051,7 +1264,7 @@ impl Runtime<'_> {
         Ok(())
     }
 
-    /// Old 0x22bc patches only the 256-byte comment field in the 600-byte header.
+    /// Old 0x22bc (and CVNS 0x21ab) patches only the 256-byte comment field in the 600-byte header.
     pub(super) fn handle_set_slot_comment(
         &mut self,
         request: &RuntimeCall,
@@ -1062,12 +1275,13 @@ impl Runtime<'_> {
         if comment.len() >= 256 {
             return Err(error(request.pc(), 0x22bc, "save comment exceeds native capacity").into());
         }
+        let family = self.save_family();
         let mut changed = false;
         if slot <= 999
+            && (family != SaveFamily::Cvns || slot != 0)
             && let Some(mut bytes) = self.saves.read_slot(slot as u16)?
             && bytes.len() >= HEADER_SIZE
-            && &bytes[..3] == b"CSV"
-            && (b'2'..=b'9').contains(&bytes[3])
+            && family.accepts(&bytes)
         {
             bytes[272..272 + comment.len()].copy_from_slice(&comment);
             bytes[272 + comment.len()] = 0;
@@ -1080,6 +1294,93 @@ impl Runtime<'_> {
             .state_mut()
             .set_system_integer(0, u32::from(changed))
             .expect("slot zero exists");
+        Ok(())
+    }
+
+    /// CVNS 0x21ac (0x5ac / 0x467ff0): SP-4 slot, SP-8 CVNS image slot (0..128), SP-12/SP-16
+    /// string destinations for label (+16) and comment (+272). Loads BMP thumbnail directly into
+    /// `scene.cvns_mut().images[img_slot]`. Returns 0x4010.
+    pub(super) fn handle_cvns_slot_info(
+        &mut self,
+        request: &RuntimeCall,
+        slot: i32,
+        img_slot: u32,
+        label_slot: u32,
+        text_slot: u32,
+    ) -> Result<(), Box<dyn Error>> {
+        let pc = request.pc();
+        let fail = |why: &'static str| error(pc, 0x21ac, why);
+        if slot <= 0 || slot > 999 || img_slot >= crate::scene::cvns::CVNS_IMAGES as u32 {
+            request.complete(&mut self.machine, 0x4010)?;
+            self.machine
+                .state_mut()
+                .set_system_integer(0, 0)
+                .expect("slot 0 exists");
+            return Ok(());
+        }
+        let Some(bytes) = self.saves.read_slot(slot as u16)? else {
+            request.complete(&mut self.machine, 0x4010)?;
+            self.machine
+                .state_mut()
+                .set_system_integer(0, 0)
+                .expect("slot 0 exists");
+            return Ok(());
+        };
+        if bytes.len() < HEADER_SIZE || !SaveFamily::Cvns.accepts(&bytes) {
+            request.complete(&mut self.machine, 0x4010)?;
+            self.machine
+                .state_mut()
+                .set_system_integer(0, 0)
+                .expect("slot 0 exists");
+            return Ok(());
+        }
+        let (header, auxiliary) = Csv2Save::decode_auxiliary(&bytes, SaveFamily::Cvns)?;
+        let c_string = |field: &[u8]| {
+            field[..field.iter().position(|&b| b == 0).unwrap_or(field.len())].to_vec()
+        };
+        let label = c_string(&bytes[16..272]);
+        let text = c_string(&bytes[272..528]);
+        if label.len() >= 1024 || text.len() >= 1024 {
+            return Err(fail("save label overflows its string slot").into());
+        }
+        let word = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+        let image = if u16::from_le_bytes([bytes[548], bytes[549]]) != 0 {
+            if auxiliary.is_empty() {
+                None
+            } else {
+                let pixels = decode_bmp(&auxiliary)?;
+                let mut layer = crate::scene::cvns::CvnsImageLayer::from_image(
+                    Vec::new(),
+                    Vec::new(),
+                    pixels,
+                    0,
+                    0,
+                    false,
+                );
+                layer.captured = true;
+                Some(crate::scene::cvns::CvnsImageBuffer::with_base(layer))
+            }
+        } else {
+            None
+        };
+        request.complete(&mut self.machine, 0x4010)?;
+        if let Some(buf) = image {
+            self.scene.cvns_mut().images[img_slot as usize] = Some(buf);
+        }
+        let state = self.machine.state_mut();
+        state
+            .set_string(label_slot, &label)
+            .expect("checked length");
+        state.set_string(text_slot, &text).expect("checked length");
+        for (index, value) in [
+            (4, word(528)),
+            (5, word(532)),
+            (6, word(536)),
+            (1, header.ordering_key),
+            (0, 1),
+        ] {
+            state.set_system_integer(index, value).expect("slot exists");
+        }
         Ok(())
     }
 
@@ -1252,6 +1553,7 @@ mod layout_tests {
             ("cmvs-20211006", SnapshotLayout::TextV3SceneV4),
             ("cmvs-20221105", SnapshotLayout::TextV3SceneV4),
             ("cmvs-20160201", SnapshotLayout::TextV3),
+            ("cvns-20090203", SnapshotLayout::Cvns20090203),
         ] {
             assert_eq!(snapshot_layout(registry.profile(id).unwrap()), Some(layout));
             assert_eq!(
@@ -1412,5 +1714,99 @@ mod layout_tests {
         }
         assert!(!effect_layout_supported(&changed));
         assert!(!effect_record_supported(&changed, &[1, 0, 8, 0]));
+    }
+
+    #[test]
+    fn csp1_container_encode_decode_and_menu_semantics() {
+        let mut header = [0u8; HEADER_SIZE];
+        header[..4].copy_from_slice(b"CSP1");
+        header[4..8].copy_from_slice(&(HEADER_SIZE as u32).to_le_bytes());
+        header[16..37].copy_from_slice(b"2026-11-16 12:00:00 A");
+        header[272..276].copy_from_slice(b"Note");
+        header[528..532].copy_from_slice(&11u32.to_le_bytes());
+        header[532..536].copy_from_slice(&22u32.to_le_bytes());
+        header[536..540].copy_from_slice(&33u32.to_le_bytes());
+        header[544..546].copy_from_slice(&3u16.to_le_bytes());
+        header[548..550].copy_from_slice(&1u16.to_le_bytes());
+
+        let bytes = Csv2Save::encode_for(
+            SaveFamily::Cvns,
+            &header,
+            b"snap-body",
+            b"BMthumb",
+            b"script-img",
+        )
+        .unwrap();
+        assert_eq!(&bytes[..4], b"CSP1");
+        assert!(SaveFamily::Cvns.accepts(&bytes));
+        assert!(!SaveFamily::Cmvs.accepts(&bytes));
+        assert!(Csv2Save::decode_family(&bytes, SaveFamily::Cmvs).is_err());
+
+        let decoded = Csv2Save::decode_family(&bytes, SaveFamily::Cvns).unwrap();
+        assert_eq!(decoded.snapshot, b"snap-body");
+        assert_eq!(decoded.auxiliary, b"BMthumb");
+        assert_eq!(decoded.script_image, b"script-img");
+        let (aux_hdr, aux_bytes) = Csv2Save::decode_auxiliary(&bytes, SaveFamily::Cvns).unwrap();
+        assert_eq!(aux_hdr.version, b'1');
+        assert_eq!(aux_bytes, b"BMthumb");
+
+        struct MapSaves(std::collections::BTreeMap<u16, Vec<u8>>);
+        impl crate::save_menu::SaveSource for MapSaves {
+            fn read_header(&mut self, slot: u16) -> std::io::Result<Option<Vec<u8>>> {
+                Ok(self.0.get(&slot).cloned())
+            }
+        }
+        let mut files = MapSaves(std::collections::BTreeMap::from([(1, bytes.clone())]));
+        let menu = crate::save_menu::SaveMenu::scan_cvns(&mut files, 3).unwrap();
+        assert_eq!(menu.slots.len(), 3);
+        assert!(matches!(
+            menu.slots[0],
+            crate::save_menu::SlotStatus::Recognized(_)
+        ));
+        assert_eq!(menu.latest, Some(0));
+
+        // 0x2bb on CVNS must reject slot 0 (reserved for CSS0 save000.dat) and accept slot 1.
+        let mut host = crate::save_menu::SaveMenuHost::for_profile(
+            crate::profile::Registry::builtin()
+                .profile("cvns-20090203")
+                .unwrap(),
+        );
+        let mut code = Vec::new();
+        for arg in [0u32, 1u32] {
+            code.extend(0x440u16.to_le_bytes());
+            code.extend(4u16.to_le_bytes());
+            code.extend(arg.to_le_bytes());
+            code.extend(0x22bbu16.to_le_bytes());
+        }
+        let mut raw = b"PS2A".to_vec();
+        for word in [
+            48u32,
+            0,
+            0,
+            0,
+            code.len() as u32,
+            0,
+            0,
+            0,
+            0,
+            code.len() as u32,
+            0,
+        ] {
+            raw.extend(word.to_le_bytes());
+        }
+        raw.extend(code.into_iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+        let dummy_script = crate::ps3::Script::decode(&raw).unwrap();
+        let mut vm = crate::machine::Machine::new(&dummy_script).unwrap();
+        vm.state_mut().set_bit(0, false).unwrap();
+        for expected in [0u32, 1u32] {
+            while vm.pending_system().is_none() {
+                vm.step().unwrap();
+            }
+            assert!(
+                host.try_handle(&mut vm, &mut files).unwrap(),
+                "0x2bb handled"
+            );
+            assert_eq!(vm.state().system_integer(0), Some(expected));
+        }
     }
 }

@@ -386,15 +386,20 @@ impl EngineSnapshot {
 }
 
 #[derive(Default)]
-struct Writer(Vec<u8>);
+pub(super) struct Writer(pub(super) Vec<u8>);
 
 impl Writer {
-    fn short(&mut self, len: usize) -> Result<(), FormatError> {
+    pub(super) fn short(&mut self, len: usize) -> Result<(), FormatError> {
         let len = u16::try_from(len).map_err(|_| FormatError("snapshot record too long"))?;
         self.0.extend(len.to_le_bytes());
         Ok(())
     }
-    fn record(&mut self, tag: u16, index: Option<u16>, body: &[u8]) -> Result<(), FormatError> {
+    pub(super) fn record(
+        &mut self,
+        tag: u16,
+        index: Option<u16>,
+        body: &[u8],
+    ) -> Result<(), FormatError> {
         self.0.extend(tag.to_le_bytes());
         match framing(tag).expect("writer emits known tags") {
             Framing::Short => self.short(body.len())?,

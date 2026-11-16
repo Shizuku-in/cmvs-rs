@@ -11,11 +11,13 @@ use crate::{
 };
 use std::ops::Range;
 
+pub(crate) mod cvns;
 mod effect;
 mod engine;
 mod variables;
 mod visual;
 mod vm_state;
+pub use cvns::{CvnsLocalVariables, CvnsSnapshot};
 pub use effect::SavedEffect;
 pub use engine::EngineSnapshot;
 pub use variables::LocalVariables;
@@ -43,6 +45,9 @@ pub enum SnapshotLayout {
     TextV3,
     /// Text v3, scene v4 with 1024 child slots (REALIVE and verified later builds).
     TextV3SceneV4,
+    /// Inspected `cvns-20090203`: CSP1 snapshots with dynamic local variable bounds
+    /// (`PersistentStarts`) and CVNS 2D scene/message/audio state (`0xa00..=0xa09`).
+    Cvns20090203,
 }
 impl SnapshotLayout {
     pub(crate) fn text_version(self) -> u16 {
@@ -52,7 +57,7 @@ impl SnapshotLayout {
             | Self::TextV1SceneV2
             | Self::TextV1SceneV2Collision => 1,
             Self::TextV2WindowV2 | Self::TextV2 => 2,
-            Self::TextV3 | Self::TextV3SceneV4 => 3,
+            Self::TextV3 | Self::TextV3SceneV4 | Self::Cvns20090203 => 3,
         }
     }
     /// Eight texts, four windows, no 0x6e0 or 0x8c8 records, v1 draw animations and
@@ -61,7 +66,7 @@ impl SnapshotLayout {
         self.text_version() == 1 || self == Self::TextV2WindowV2
     }
     pub(crate) fn child_slots(self) -> u16 {
-        if self.old_tables() {
+        if self.old_tables() || self == Self::Cvns20090203 {
             256
         } else if self == Self::TextV3SceneV4 {
             1024
@@ -119,8 +124,14 @@ pub fn framing(tag: u16) -> Option<Framing> {
         | 0x630
         | 0x6e0
         | 0x880..=0x883
-        | 0x900 => Framing::Long,
-        0x380 | 0x400 | 0x6a0 | 0x700 | 0x800 | 0x8c0 | 0x8c8 | 0x8e8 => Framing::Indexed,
+        | 0x900
+        | 0xa00
+        | 0xa01
+        | 0xa04
+        | 0xa08
+        | 0xa09 => Framing::Long,
+        0x380 | 0x400 | 0x6a0 | 0x700 | 0x800 | 0x8c0 | 0x8c8 | 0x8e8 | 0xa02 | 0xa03 | 0xa05
+        | 0xa06 | 0xa07 => Framing::Indexed,
         0x304 => Framing::StringPair,
         _ => return None,
     })

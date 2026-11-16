@@ -591,12 +591,21 @@ impl<'a> Runtime<'a> {
                 .map_err(crate::FormatError)?;
         }
         machine.set_current_name(game.files.start_name());
-        // 0x14000a3c0 reads the startup settings; cmvs.cfg is optional and read only.
-        let configuration = crate::settings::Configuration::read_with_fs(&*fs, &root.join("cmvs.cfg"))?
-            .unwrap_or(crate::settings::Configuration::new(Vec::new())?);
+        // 0x14000a3c0 reads the startup settings; cmvs.cfg (or CVNS cvns.cfg) is optional and read only.
+        let cfg_name = if game.selection.profile.family == crate::profile::Family::Cvns {
+            "cvns.cfg"
+        } else {
+            "cmvs.cfg"
+        };
+        let configuration =
+            crate::settings::Configuration::read_with_fs(&*fs, &root.join(cfg_name))?
+                .unwrap_or(crate::settings::Configuration::new(Vec::new())?);
         let screen_size = configuration.screen_size_for_profile(game.selection.profile)?;
         let mut scene = SceneHost::for_profile(game.selection.profile);
         scene.set_screen_size(screen_size);
+        if game.selection.profile.family == crate::profile::Family::Cvns {
+            scene.enable_cvns();
+        }
         let mut buttons = ButtonHost::for_profile(game.selection.profile);
         buttons.set_screen_size(screen_size);
         let mut camera = CameraHost::for_profile(game.selection.profile);
@@ -604,12 +613,15 @@ impl<'a> Runtime<'a> {
         let mut messages = MessageHost::for_profile(game.selection.profile);
         messages.set_screen_size(screen_size);
         let text = configuration.bytes();
-        let mut save_menu = SaveMenuHost::default();
+        let mut save_menu = SaveMenuHost::for_profile(game.selection.profile);
         save_menu.set_confirmations(
             crate::save_menu::profile_int(text, "SYSTEM_INFO", "DLG_LOAD", 0) != 0,
             crate::save_menu::profile_int(text, "SYSTEM_INFO", "DLG_SAVE", 0) != 0,
         );
-        let audio = AudioHost::from_ini(text);
+        let mut audio = AudioHost::from_ini(text);
+        if game.selection.profile.family == crate::profile::Family::Cvns {
+            audio.enable_cvns();
+        }
         let settings = crate::settings::SettingsHost::from_ini(text);
         settings.check_font_face()?;
         let message_flags = MessageFlags::from_ini(text);
@@ -633,7 +645,7 @@ impl<'a> Runtime<'a> {
             configuration,
             focused: true,
             bootstrap: Bootstrap::default(),
-            control: ScriptControl::new(virtual_tick),
+            control: ScriptControl::for_profile(game.selection.profile, virtual_tick),
             source: ArchiveScripts::from_start(
                 fs.open_read(&root.join(&game.files.script_archive))?,
                 script,
@@ -652,7 +664,13 @@ impl<'a> Runtime<'a> {
             } else {
                 FileSystemSave::with_fs(root.join("save/system.dat"), Arc::clone(&fs))
             },
-            system_host: SystemSaveHost::default(),
+            system_host: {
+                let mut host = SystemSaveHost::default();
+                if game.selection.profile.family == crate::profile::Family::Cvns {
+                    host.set_css0(crate::system_save::PersistentStarts::default());
+                }
+                host
+            },
             system_output: None,
             assets: DirectoryAssets::with_fs(root, Arc::clone(&fs))?,
             platform,
@@ -851,7 +869,18 @@ impl<'a> Runtime<'a> {
     /// Message windows, glyphs, and full-screen movies are composed by the host.
     pub fn render_scene_frame(&self) -> Result<crate::raster::RgbaImage, crate::FormatError> {
         let [width, height] = self.screen_size();
-        crate::scene_render::render_scene(&self.scene, Some(&self.camera), &[], width, height)
+        if self.scene.cvns().is_some() {
+            let windows: Vec<_> = self.messages.visible_window_objects().collect();
+            crate::scene_render::render_scene(
+                &self.scene,
+                Some(&self.camera),
+                &windows,
+                width,
+                height,
+            )
+        } else {
+            crate::scene_render::render_scene(&self.scene, Some(&self.camera), &[], width, height)
+        }
     }
     /// Service audio and advance movies and scene state by `delta_ms` milliseconds.
     ///
@@ -1145,25 +1174,49 @@ impl<'a> Runtime<'a> {
         let profile = ProfileSystemSave::open_with_fs(path, &self.root, Arc::clone(&self.fs))?;
         self.set_save_profile(profile)
     }
+    pub(super) fn open_system_source(
+        &self,
+        path: impl AsRef<Path>,
+        fs: Arc<dyn HostFs>,
+    ) -> crate::system_save::FileSystemSave {
+        if self.gate.selection().profile.family == crate::profile::Family::Cvns {
+            crate::system_save::FileSystemSave::css0_with_fs(path, fs)
+        } else {
+            crate::system_save::FileSystemSave::with_fs(path, fs)
+        }
+    }
+
     /// Install an already locked profile, including an explicitly selected
     /// game-local savedata profile. The lock remains owned by this session.
-    pub fn set_save_profile(&mut self, profile: ProfileSystemSave) -> Result<(), Box<dyn Error>> {
+    pub fn set_save_profile(
+        &mut self,
+        mut profile: ProfileSystemSave,
+    ) -> Result<(), Box<dyn Error>> {
         if self.steps != 0 || self.system_output.is_some() {
             return Err("select one system-save output mode before VM execution".into());
+        }
+        let is_cvns = self.gate.selection().profile.family == crate::profile::Family::Cvns;
+        if is_cvns {
+            profile.set_css0(Some(self.bootstrap.cvns_persistent_starts()))?;
         }
         let save_fs = Arc::clone(profile.fs());
         let saves = DirectorySaves::with_fs(profile.directory(), Arc::clone(&save_fs))?;
         let configuration = profile.read_configuration()?;
         let primary = profile.path();
+        let default_relative = if is_cvns {
+            "save/save000.dat"
+        } else {
+            "save/system.dat"
+        };
         let (source, source_fs) = if save_fs.try_exists(&primary)? {
             (primary, save_fs)
         } else {
-            (self.root.join("save/system.dat"), Arc::clone(&self.fs))
+            (self.root.join(default_relative), Arc::clone(&self.fs))
         };
         if let Some(configuration) = configuration {
             self.install_configuration(configuration)?;
         }
-        self.system_source = FileSystemSave::with_fs(source, source_fs);
+        self.system_source = self.open_system_source(source, source_fs);
         self.saves = saves;
         self.system_output = Some(SystemOutput::Profile(profile));
         Ok(())
@@ -1257,6 +1310,44 @@ impl<'a> Runtime<'a> {
                 label_slot,
                 text_slot,
             } => self.handle_slot_info(&request, slot, object, child, label_slot, text_slot)?,
+            CvnsSlotInfo {
+                slot,
+                img_slot,
+                label_slot,
+                text_slot,
+            } => self.handle_cvns_slot_info(&request, slot, img_slot, label_slot, text_slot)?,
+            CvnsCaptureScreen { slot } => {
+                let frame = self.render_scene_frame()?;
+                self.scene.cvns_mut().install_captured_image(slot, frame)?;
+                request.complete(&mut self.machine, 0x4004)?;
+                self.machine
+                    .state_mut()
+                    .set_system_integer(0, 1)
+                    .expect("slot 0 exists");
+            }
+            CvnsMaskCapture {
+                mask_ref,
+                duration_ms,
+                ramp_ms,
+            } => {
+                let mask_name = self.machine.resolve_string(mask_ref)?;
+                let loaded = {
+                    let mut source = self.images.with_paths(self.bootstrap.paths());
+                    crate::image::load(&mut source, &mask_name)?
+                };
+                let frame = self.render_scene_frame()?;
+                let ok = self.scene.cvns_mut().install_mask_capture(
+                    frame,
+                    loaded.as_ref().map(|d| &d.pixels),
+                    duration_ms,
+                    ramp_ms,
+                )?;
+                request.complete(&mut self.machine, 0x400c)?;
+                self.machine
+                    .state_mut()
+                    .set_system_integer(0, u32::from(ok))
+                    .expect("slot 0 exists");
+            }
         }
         Ok(RuntimeEvent::Progress)
     }
@@ -1266,6 +1357,11 @@ impl<'a> Runtime<'a> {
     ) -> Result<RuntimeEvent, RuntimeError> {
         self.messages.set_text_settings(self.settings.text_output());
         self.messages.set_default_face(self.settings.font_face());
+        self.messages.set_cvns_settings(
+            self.settings.cvns().text_shadow,
+            self.settings.read_skip(),
+            self.settings.cvns().auto_skip,
+        );
         if self.main_barrier {
             return Ok(RuntimeEvent::MainPreparedNeedsSnapshot);
         }
@@ -1274,12 +1370,12 @@ impl<'a> Runtime<'a> {
             let delta = std::mem::take(&mut self.frame_delta);
             self.timers.begin_run(delta);
             self.input.latch_pointer();
+            self.input.clear_hit_rects();
             self.gesture
                 .frame(&mut self.input, self.timers.clock())
                 .map_err(|why| RuntimeError::Other(why.into()))?;
             // 0x140067930 runs the automatic callback dispatch 0x140064f50 after the timers.
-            let shown =
-                std::array::from_fn(|slot| self.messages.window(slot).is_some_and(|w| w.visible));
+            let shown = std::array::from_fn(|slot| self.messages.window_visible(slot));
             let due = self.control.due_callbacks(shown);
             self.machine
                 .dispatch_callbacks(&due)
@@ -1325,9 +1421,16 @@ impl<'a> Runtime<'a> {
             };
         }
         let id = self.system_save_identifier();
-        if command == 0x129
+        if matches!(command, 0x129 | 0x5c1)
             && let Some(output) = &mut self.system_output
         {
+            if command == 0x5c1 {
+                let persistent = self.bootstrap.cvns_persistent_starts();
+                self.system_host.set_css0(persistent);
+                if let SystemOutput::Profile(profile) = output {
+                    profile.set_css0(Some(persistent))?;
+                }
+            }
             let flow = entry.run(
                 &mut self.machine,
                 &mut crate::dispatch::Hosts {
@@ -1341,8 +1444,8 @@ impl<'a> Runtime<'a> {
                 },
             )?;
             if flow == Some(crate::dispatch::Flow::SystemWritten) {
-                self.system_source =
-                    FileSystemSave::with_fs(output.path(), Arc::clone(output.fs()));
+                let (path, fs) = (output.path(), Arc::clone(output.fs()));
+                self.system_source = self.open_system_source(path, fs);
                 return Ok(RuntimeEvent::Progress);
             }
             return Ok(RuntimeEvent::Unhandled {
@@ -1359,6 +1462,16 @@ impl<'a> Runtime<'a> {
                 hosts.bootstrap = Some(&mut self.bootstrap);
             }
             let flow = entry.run(&mut self.machine, &mut hosts)?;
+            if self.gate.selection().profile.family == crate::profile::Family::Cvns {
+                let persistent = self.bootstrap.cvns_persistent_starts();
+                self.system_host.set_css0(persistent);
+                if let Some(SystemOutput::Profile(profile)) = &mut self.system_output {
+                    profile.set_css0(Some(persistent))?;
+                }
+            }
+            if let Some(&interval) = self.bootstrap.settings().get(&0x2402) {
+                self.settings.cvns_mut().frame_interval_ms = interval;
+            }
             self.images
                 .configure_parameters(self.bootstrap.archive_parameters());
             self.scene_movies
@@ -1379,7 +1492,7 @@ impl<'a> Runtime<'a> {
         }
         let gate = SkipGate {
             effects: self.effects,
-            skip: self.message_flags.skip(),
+            skip: self.message_flags.skip() || self.message_flags.cvns_read_skipping(),
         };
         if entry.is_wait() {
             let flow = entry
@@ -1417,19 +1530,32 @@ impl<'a> Runtime<'a> {
                 }
             });
         }
-        let (message_flags, read_eligible) = if matches!(command, 0x152 | 0x153) {
+        let (mut message_flags, read_eligible) = if matches!(command, 0x152 | 0x153 | 0x512 | 0x520)
+        {
             let read_id = self
                 .machine
                 .stack()
                 .peek_u32(8)
                 .map_err(|e| crate::evaluate::error(pc, command + 0x2000, e.0))?
                 as i32;
-            self.message_flags
+            let (mut flags, read) = self
+                .message_flags
                 .prepare_read(self.machine.state(), read_id, self.settings.read_skip())
-                .map_err(|why| crate::evaluate::error(pc, command + 0x2000, why))?
+                .map_err(|why| crate::evaluate::error(pc, command + 0x2000, why))?;
+            if matches!(command, 0x512 | 0x520) && self.settings.read_skip() && read_id >= 0 {
+                if command == 0x512 && read && self.settings.cvns().auto_skip {
+                    flags.set_cvns_read_skipping(true);
+                } else if !read {
+                    flags.set_cvns_read_skipping(false);
+                }
+            }
+            (flags, read)
         } else {
             (self.message_flags, true)
         };
+        if matches!(command, 0x512 | 0x520) {
+            let _ = &mut message_flags;
+        }
         if entry.is_message_wait() {
             let flow = entry
                 .run(
@@ -1549,7 +1675,7 @@ impl<'a> Runtime<'a> {
         if entry.uses_input() {
             hosts.input = Some(crate::dispatch::InputHosts {
                 input: &mut self.input,
-                skip: message_flags.skip(),
+                skip: message_flags.skip() || message_flags.cvns_read_skipping(),
                 clock: Some(input_clock),
             });
         } else if !entry.uses_message_state() && !entry.uses_sequence() {

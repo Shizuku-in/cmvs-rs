@@ -32,7 +32,8 @@ pub(in crate::dispatch) fn variant_text_dialog(
             .error("text dialog output requires a writable string slot")
             .into());
     };
-    let index = if index > 127 { 0 } else { index };
+    let limit = call.vm.state().string_slots();
+    let index = if index >= limit { 0 } else { index };
     let request = TextDialogRequest {
         title: strings[0].clone(),
         prompt: strings[1].clone(),
@@ -93,6 +94,70 @@ pub(in crate::dispatch) fn variant_text_dialog(
         .state_mut()
         .set_string(index, &text)
         .expect("validated string slot");
+    call.vm
+        .state_mut()
+        .set_system_integer(0, u32::from(accepted))
+        .expect("slot zero exists");
+    Ok(Flow::Done)
+}
+
+/// CVNS 0x21b0 (0x4652a0 -> exit confirmation dialog) and 0x21b1 (0x4652f0 -> MessageBoxA).
+pub(in crate::dispatch) fn cvns_message_dialog(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    use crate::platform::{MessageDialogKind, MessageDialogRequest, MessageDialogResult};
+
+    let (complete_code, request) = if call.command == 0x5b0 {
+        let (caption, text) = match call.vm.text_encoding() {
+            crate::TextEncoding::Utf8 => (
+                "ゲーム終了の確認".as_bytes().to_vec(),
+                "ゲームを終了させますか？".as_bytes().to_vec(),
+            ),
+            _ => (
+                b"\x83\x51\x81\x5b\x83\x80\x8f\x49\x97\xb9\x82\xcc\x8a\x6d\x94\x46".to_vec(),
+                b"\x83\x51\x81\x5b\x83\x80\x82\xf0\x8f\x49\x97\xb9\x82\xb3\x82\xb9\x82\xdc\x82\xb7\x82\xa9\x81\x48".to_vec(),
+            ),
+        };
+        (
+            0x4000,
+            MessageDialogRequest {
+                kind: MessageDialogKind::Confirm,
+                caption,
+                text,
+            },
+        )
+    } else {
+        let mode = call.argument(4, "dialog mode")?;
+        let cap_ref = call.argument(8, "dialog caption")?;
+        let text_ref = call.argument(12, "dialog text")?;
+        let caption = call.vm.resolve_string(cap_ref)?;
+        let text = call.vm.resolve_string(text_ref)?;
+        let kind = if mode == 0 {
+            MessageDialogKind::Alert
+        } else {
+            MessageDialogKind::Confirm
+        };
+        (
+            0x400c,
+            MessageDialogRequest {
+                kind,
+                caption,
+                text,
+            },
+        )
+    };
+    let answer = hosts
+        .device_frame
+        .as_deref_mut()
+        .expect("message dialog backend checked")
+        .poll_message_dialog(&request)?;
+    let accepted = match answer {
+        MessageDialogResult::Pending => return Ok(Flow::Wait),
+        MessageDialogResult::Cancelled => false,
+        MessageDialogResult::Accepted => true,
+    };
+    call.complete(complete_code)?;
     call.vm
         .state_mut()
         .set_system_integer(0, u32::from(accepted))

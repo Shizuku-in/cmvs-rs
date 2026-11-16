@@ -80,6 +80,28 @@ pub(in crate::dispatch) fn root_runtime(
                 20,
             )
         }
+        0x5ac => {
+            let slot = call.argument(4, "save slot")? as i32;
+            let img_slot = call.argument(8, "CVNS image slot")?;
+            let label_arg = call.argument(12, "label destination")?;
+            let text_arg = call.argument(16, "text destination")?;
+            let state = call.vm.state();
+            let label_slot = crate::text::bank_slot_for(state, label_arg).ok_or_else(|| {
+                call.error("label destination outside the string bank is not modeled")
+            })?;
+            let text_slot = crate::text::bank_slot_for(state, text_arg).ok_or_else(|| {
+                call.error("text destination outside the string bank is not modeled")
+            })?;
+            (
+                CvnsSlotInfo {
+                    slot,
+                    img_slot,
+                    label_slot,
+                    text_slot,
+                },
+                16,
+            )
+        }
         _ => unreachable!("registered runtime command"),
     };
     Ok(call.defer(operation, bytes)?)

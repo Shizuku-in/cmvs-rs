@@ -279,7 +279,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut script_source = script_archive
         .map(|path| -> Result<_, Box<dyn Error>> { ArchiveScripts::new(File::open(path)?) })
         .transpose()?;
-    let mut control = ScriptControl::new(virtual_tick);
+    let mut control = ScriptControl::for_profile(gate.selection().profile, virtual_tick);
     let mut saves = save_dir.map(DirectorySaves::new).transpose()?;
     let mut save_menu = SaveMenuHost::default();
     let mut system_source = system_save_path.map(|path| {
@@ -306,24 +306,37 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut save_title = SaveTitle::default();
     let mut gesture = PointerGesture::default();
     let mut history = HistoryHost::default();
-    let mut message_flags = MessageFlags::default();
-    let mut settings = cmvs_rs::settings::SettingsHost::default();
+    let cfg_bytes = if let Some(root) = &movie_root {
+        let file_name = if gate.selection().profile.family == cmvs_rs::profile::Family::Cvns {
+            "cvns.cfg"
+        } else {
+            "cmvs.cfg"
+        };
+        match std::fs::read(root.join(file_name)) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(e) => return Err(e.into()),
+        }
+    } else {
+        Vec::new()
+    };
+    let mut effects =
+        cmvs_rs::save_menu::profile_int(&cfg_bytes, "SYSTEM_INFO", "EFFECT_USE", 1) != 0;
+    let mut message_flags = MessageFlags::from_ini(&cfg_bytes);
+    let mut settings = cmvs_rs::settings::SettingsHost::from_ini(&cfg_bytes);
     let mut buttons = ButtonHost::default();
     let mut movies = MovieHost::default();
     let mut sequence = SequenceHost::default();
     let mut camera = CameraHost::default();
     // Traces supply no input: no CMVS action is ever active.
     let mut input = ActionInput::default();
-    let mut audio = if let Some(root) = &movie_root {
-        let config = match std::fs::read(root.join("cmvs.cfg")) {
-            Ok(bytes) => bytes,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-            Err(e) => return Err(e.into()),
-        };
-        AudioHost::from_ini(&config)
-    } else {
-        AudioHost::default()
-    };
+    let mut audio = AudioHost::from_ini(&cfg_bytes);
+    if gate.selection().profile.family == cmvs_rs::profile::Family::Cvns {
+        audio.enable_cvns();
+        scene.enable_cvns();
+        let cfg = cmvs_rs::settings::Configuration::new(cfg_bytes.clone())?;
+        scene.set_screen_size(cfg.screen_size_for_profile(gate.selection().profile)?);
+    }
     let mut audio_backend = RecordingAudio::default();
     if platform_assets.is_some() {
         println!(
@@ -393,7 +406,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 );
             }
             let wait_gate = SkipGate {
-                skip: message_flags.skip(),
+                skip: message_flags.skip() || message_flags.cvns_read_skipping(),
                 ..SkipGate::default()
             };
             if cmvs_rs::dispatch::uses_bootstrap_for(resolved.semantics, command) {
@@ -411,6 +424,12 @@ fn run() -> Result<(), Box<dyn Error>> {
                 if cmvs_rs::dispatch::run(resolved.semantics, &mut machine, &mut hosts)?
                     == Some(cmvs_rs::dispatch::Flow::Done)
                 {
+                    if let Some(&interval) = bootstrap
+                        .as_ref()
+                        .and_then(|host| host.settings().get(&0x2402))
+                    {
+                        settings.cvns_mut().frame_interval_ms = interval;
+                    }
                     if let (Some(images), Some(config)) = (&mut images, &bootstrap) {
                         images.configure_parameters(config.archive_parameters());
                     }
@@ -453,6 +472,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 gesture: platform_assets.is_some().then_some(&mut gesture),
                 popup: None,
                 save_title: platform_assets.is_some().then_some(&mut save_title),
+                effects: platform_assets.is_some().then_some(&mut effects),
                 ..Default::default()
             };
             if platform_assets.is_some() {
@@ -993,7 +1013,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                     | Capability::SystemWrite => {
                         return Err("unexpected storage completion flow".into());
                     }
-                    Capability::Timers => println!(
+                    Capability::Timers | Capability::CvnsTiming => println!(
                         "# timer 0x{:04x}: values={:?} system_integer[0]={:?}",
                         command + 0x2000,
                         timers.values(),
@@ -1011,10 +1031,12 @@ fn run() -> Result<(), Box<dyn Error>> {
                         "# rand 0x20d4: system_integer[0]={:?} (explicit research seed)",
                         machine.state().system_integer(0)
                     ),
-                    Capability::Settings => println!(
-                        "# configuration 0x{:04x}; system_integer[0]={:?}",
+                    Capability::Settings | Capability::CvnsConfig => println!(
+                        "# configuration 0x{:04x}; system_integer[0]={:?} effects={} read_skipping={}",
                         command + 0x2000,
-                        machine.state().system_integer(0)
+                        machine.state().system_integer(0),
+                        effects,
+                        message_flags.cvns_read_skipping()
                     ),
                     Capability::History => println!(
                         "# history entries={} (newest first; no history UI)",

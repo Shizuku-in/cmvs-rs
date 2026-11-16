@@ -197,6 +197,28 @@ pub enum FontDialogResult {
     Selected(Vec<u8>),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageDialogKind {
+    /// Acknowledge-only alert (`MessageBoxA` `MB_ICONEXCLAMATION | MB_OK`).
+    Alert,
+    /// Two-way confirmation (`0x21b0` exit confirmation or `0x21b1` mode >= 1).
+    Confirm,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageDialogRequest {
+    pub kind: MessageDialogKind,
+    pub caption: Vec<u8>,
+    pub text: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageDialogResult {
+    Pending,
+    Cancelled,
+    Accepted,
+}
+
 /// Outcome of polling the host for the latest completed logical device frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeviceFrameResult {
@@ -303,6 +325,13 @@ pub trait PlatformBackend {
             None => FontDialogResult::Cancelled,
         })
     }
+    /// CVNS modal message/confirmation dialog (`0x21b0` / `0x21b1`).
+    fn poll_message_dialog(
+        &mut self,
+        _request: &MessageDialogRequest,
+    ) -> Result<MessageDialogResult, Box<dyn Error>> {
+        Err("platform backend does not implement message dialogs".into())
+    }
     /// 0=unscaled when it fits, 1=contain, 2=cover, 3=stretch (0x14001a360).
     fn aspect_mode(&self) -> Result<u32, Box<dyn Error>> {
         Err("platform backend does not implement aspect mode queries".into())
@@ -345,6 +374,9 @@ pub struct RecordingBackend {
     font_dialogs: Vec<Vec<u8>>,
     text_answers: std::collections::VecDeque<Option<Vec<u8>>>,
     text_dialogs: Vec<TextDialogRequest>,
+    message_answers: std::collections::VecDeque<bool>,
+    default_message_answer: Option<bool>,
+    message_dialogs: Vec<MessageDialogRequest>,
 }
 impl RecordingBackend {
     pub fn set_screen_size(&mut self, size: crate::viewport::ScreenSize) {
@@ -372,8 +404,36 @@ impl RecordingBackend {
     pub fn font_dialogs(&self) -> &[Vec<u8>] {
         &self.font_dialogs
     }
+    pub fn answer_message_dialog(&mut self, accepted: bool) {
+        self.message_answers.push_back(accepted);
+    }
+    pub fn set_default_message_answer(&mut self, accepted: Option<bool>) {
+        self.default_message_answer = accepted;
+    }
+    pub fn message_dialogs(&self) -> &[MessageDialogRequest] {
+        &self.message_dialogs
+    }
 }
 impl PlatformBackend for RecordingBackend {
+    fn poll_message_dialog(
+        &mut self,
+        request: &MessageDialogRequest,
+    ) -> Result<MessageDialogResult, Box<dyn Error>> {
+        if self.message_dialogs.len() >= 4096 {
+            return Err("recorded message dialogs exceed research limits".into());
+        }
+        let accepted = self
+            .message_answers
+            .pop_front()
+            .or(self.default_message_answer)
+            .ok_or("recording backend has no scripted message dialog answer")?;
+        self.message_dialogs.push(request.clone());
+        Ok(if accepted {
+            MessageDialogResult::Accepted
+        } else {
+            MessageDialogResult::Cancelled
+        })
+    }
     fn poll_text_dialog(
         &mut self,
         request: &TextDialogRequest,
@@ -552,8 +612,13 @@ pub struct PlatformHost {
     fullscreen_monitor_mode: u32,
     fullscreen_monitor_initialized: bool,
     window_full_move: bool,
+    /// CVNS display +14 keep-aspect flag (`0x222d` / `0x222e`).
+    cvns_keep_aspect: bool,
 }
 impl PlatformHost {
+    pub fn cvns_keep_aspect(&self) -> bool {
+        self.cvns_keep_aspect
+    }
     /// Legacy device +56: omit the centered origin in unscaled fullscreen mode.
     pub fn window_full_move(&self) -> bool {
         self.window_full_move
@@ -768,6 +833,67 @@ impl PlatformHost {
             call.complete(0x4004)?;
             return Ok(PlatformEvent::Configured);
         }
+        if command == 0x629 {
+            let raw = call.argument(4, argument_names(command)[0])?;
+            let supported = backend.stretch_filter_supported()?;
+            let fullscreen = backend.fullscreen()?;
+            backend.apply(&PlatformRequest::AspectScaling(raw != 0 && supported))?;
+            call.complete(if fullscreen { 0xc004 } else { 0x4004 })?;
+            return Ok(if fullscreen {
+                PlatformEvent::Yield
+            } else {
+                PlatformEvent::Configured
+            });
+        }
+        if command == 0x62b {
+            let raw = call.argument(4, argument_names(command)[0])?;
+            let requested = if raw > 2 { 0 } else { raw };
+            let current = backend.aspect_mode()? % 3;
+            let yields = if requested != current {
+                let fullscreen = backend.fullscreen()?;
+                backend.apply(&PlatformRequest::AspectMode(requested))?;
+                fullscreen && !(matches!(current, 1 | 2) && matches!(requested, 1 | 2))
+            } else {
+                false
+            };
+            call.complete(if yields { 0xc004 } else { 0x4004 })?;
+            return Ok(if yields {
+                PlatformEvent::Yield
+            } else {
+                PlatformEvent::Configured
+            });
+        }
+        if command == 0x62c {
+            let value = backend.aspect_mode()? % 3;
+            call.complete(0x4000)?;
+            call.vm
+                .state_mut()
+                .set_system_integer(0, value)
+                .expect("slot 0 exists");
+            return Ok(PlatformEvent::Configured);
+        }
+        if command == 0x62d {
+            let raw = call.argument(4, argument_names(command)[0])?;
+            let fullscreen = backend.fullscreen()?;
+            let aspect = backend.aspect_mode()? % 3;
+            let yields = fullscreen && aspect == 0;
+            call.complete(if yields { 0xc004 } else { 0x4004 })?;
+            self.cvns_keep_aspect = raw != 0;
+            return Ok(if yields {
+                PlatformEvent::Yield
+            } else {
+                PlatformEvent::Configured
+            });
+        }
+        if command == 0x62e {
+            let value = u32::from(self.cvns_keep_aspect);
+            call.complete(0x4000)?;
+            call.vm
+                .state_mut()
+                .set_system_integer(0, value)
+                .expect("slot 0 exists");
+            return Ok(PlatformEvent::Configured);
+        }
         if command == 0x2c9 {
             let raw = call.argument(4, argument_names(command)[0])?;
             let requested = raw != 0;
@@ -950,7 +1076,22 @@ impl PlatformHost {
 }
 
 fn is_command(command: u16) -> bool {
-    matches!(command,0x8f|0x99|0x160|0x161|0x163|0x164|0x16b..=0x16f|0x2b0|0x2c8..=0x2ca|0x2fc|0x2fd|0x2ff)
+    matches!(
+        command,
+        0x8f | 0x99
+            | 0x160
+            | 0x161
+            | 0x163
+            | 0x164
+            | 0x16b..=0x16f
+            | 0x2b0
+            | 0x2c8..=0x2ca
+            | 0x2fc
+            | 0x2fd
+            | 0x2ff
+            | 0x629
+            | 0x62b..=0x62e
+    )
 }
 fn argument_names(command: u16) -> &'static [&'static str] {
     match command {
@@ -960,8 +1101,9 @@ fn argument_names(command: u16) -> &'static [&'static str] {
         0x161 => &["scene title"],
         0x164 => &["fullscreen"],
         0x16d => &["render mode"],
-        0x2fd => &["aspect mode"],
-        0x2c9 => &["aspect scaling"],
+        0x2fd | 0x62b => &["aspect mode"],
+        0x2c9 | 0x629 => &["aspect scaling"],
+        0x62d => &["keep aspect"],
         0x2b0 => &["thumbnail width", "thumbnail height"],
         _ => unreachable!("registered platform arguments"),
     }
@@ -993,6 +1135,234 @@ mod tests {
                 Some(&PlatformRequest::Title(expected))
             );
             assert_eq!(host.scene_title(), b"- Opening -");
+        }
+    }
+
+    #[test]
+    fn cvns_display_aspect_scaling_keep_aspect_and_dialogs_follow_cvns_rules() {
+        struct NoAssets;
+        impl PlatformAssets for NoAssets {
+            fn read(&mut self, _: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+                unreachable!("dialog/display tests do not read assets")
+            }
+        }
+        fn run_root_cmd(
+            cmd: u16,
+            args: &[u32],
+            strings: &[&[u8]],
+            hosts_fn: impl FnOnce(&mut crate::machine::Machine<'_>, usize),
+        ) {
+            let mut code = Vec::new();
+            for &value in args.iter().rev() {
+                code.extend(0x440u16.to_le_bytes());
+                code.extend(4u16.to_le_bytes());
+                code.extend(value.to_le_bytes());
+            }
+            code.extend((cmd + 0x2000).to_le_bytes());
+            let mut payload = 0u32.to_le_bytes().to_vec();
+            payload.extend(&code);
+            let mut raw = b"PS2A".to_vec();
+            for n in [
+                48,
+                0,
+                0,
+                1,
+                code.len() as u32,
+                0,
+                0,
+                0,
+                0,
+                payload.len() as u32,
+                0,
+            ] {
+                raw.extend(n.to_le_bytes());
+            }
+            raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+            let script = Box::leak(Box::new(crate::ps3::Script::decode(&raw).unwrap()));
+            let mut vm = crate::machine::Machine::new(script).unwrap();
+            vm.state_mut().set_string_slots(256);
+            vm.state_mut().fill_strings(0, 256, b"").unwrap();
+            for (i, s) in strings.iter().enumerate() {
+                vm.state_mut().set_string(i as u32, s).unwrap();
+            }
+            while !matches!(vm.step().unwrap(), crate::machine::Step::System { .. }) {}
+            let pc = vm.pc();
+            hosts_fn(&mut vm, pc);
+        }
+
+        let mut host = PlatformHost::default();
+        let mut backend = RecordingBackend::default();
+        let mut assets = NoAssets;
+        backend.apply(&PlatformRequest::Fullscreen(true)).unwrap();
+        backend.apply(&PlatformRequest::AspectMode(1)).unwrap();
+
+        // 0x629 always yields in fullscreen.
+        run_root_cmd(0x629, &[1], &[], |vm, pc| {
+            let ev = host
+                .handle(
+                    &mut Call::new(vm, pc, 0x629),
+                    &mut backend,
+                    &mut assets,
+                    &[],
+                )
+                .unwrap();
+            assert_eq!(ev, PlatformEvent::Yield);
+            assert!(backend.aspect_scaling().unwrap());
+        });
+
+        // 0x62b between modes 1 and 2 does not yield even in fullscreen; transition to 0 yields.
+        run_root_cmd(0x62b, &[2], &[], |vm, pc| {
+            let ev = host
+                .handle(
+                    &mut Call::new(vm, pc, 0x62b),
+                    &mut backend,
+                    &mut assets,
+                    &[],
+                )
+                .unwrap();
+            assert_eq!(ev, PlatformEvent::Configured);
+        });
+        run_root_cmd(0x62b, &[9], &[], |vm, pc| {
+            let ev = host
+                .handle(
+                    &mut Call::new(vm, pc, 0x62b),
+                    &mut backend,
+                    &mut assets,
+                    &[],
+                )
+                .unwrap();
+            assert_eq!(ev, PlatformEvent::Yield);
+            assert_eq!(backend.aspect_mode().unwrap(), 0);
+        });
+        run_root_cmd(0x62c, &[], &[], |vm, pc| {
+            host.handle(
+                &mut Call::new(vm, pc, 0x62c),
+                &mut backend,
+                &mut assets,
+                &[],
+            )
+            .unwrap();
+            assert_eq!(vm.state().system_integer(0), Some(0));
+        });
+
+        // 0x62d yields in fullscreen iff aspect_mode == 0; 0x62e reads it back.
+        run_root_cmd(0x62d, &[1], &[], |vm, pc| {
+            let ev = host
+                .handle(
+                    &mut Call::new(vm, pc, 0x62d),
+                    &mut backend,
+                    &mut assets,
+                    &[],
+                )
+                .unwrap();
+            assert_eq!(ev, PlatformEvent::Yield);
+            assert!(host.cvns_keep_aspect());
+        });
+        run_root_cmd(0x62e, &[], &[], |vm, pc| {
+            host.handle(
+                &mut Call::new(vm, pc, 0x62e),
+                &mut backend,
+                &mut assets,
+                &[],
+            )
+            .unwrap();
+            assert_eq!(vm.state().system_integer(0), Some(1));
+        });
+
+        // Dispatch checks for 0x5b0, 0x5b1, 0x5b2 (>=128 string slot), 0x417, 0x42e.
+        let sem = crate::profile::Semantics::Root;
+        backend.answer_message_dialog(false);
+        backend.answer_message_dialog(true);
+        backend.answer_text_dialog(Some(vec![0x82, 0xa0])); // Shift-JIS "あ"
+        run_root_cmd(0x5b0, &[], &[], |vm, _| {
+            let flow = crate::dispatch::run(
+                sem,
+                vm,
+                &mut crate::dispatch::Hosts {
+                    device_frame: Some(&mut backend),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(flow, Some(crate::dispatch::Flow::Done));
+            assert_eq!(vm.state().system_integer(0), Some(0));
+        });
+        assert_eq!(backend.message_dialogs().len(), 1);
+        assert_eq!(
+            backend.message_dialogs()[0].kind,
+            MessageDialogKind::Confirm
+        );
+
+        run_root_cmd(
+            0x5b1,
+            &[0, 0x8000_0000, 0x8000_0001],
+            &[b"Cap", b"Msg"],
+            |vm, _| {
+                crate::dispatch::run(
+                    sem,
+                    vm,
+                    &mut crate::dispatch::Hosts {
+                        device_frame: Some(&mut backend),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                assert_eq!(vm.state().system_integer(0), Some(1));
+            },
+        );
+        assert_eq!(backend.message_dialogs()[1].kind, MessageDialogKind::Alert);
+        assert_eq!(backend.message_dialogs()[1].caption, b"Cap");
+        assert_eq!(backend.message_dialogs()[1].text, b"Msg");
+
+        // Slot 200 (>= 128) is valid on CVNS's 256-slot string bank.
+        run_root_cmd(
+            0x5b2,
+            &[
+                0x8000_0000,
+                0x8000_0001,
+                0x8000_0002,
+                32,
+                0x8000_0000 + 200,
+                1,
+            ],
+            &[b"T", b"P", b"Init"],
+            |vm, _| {
+                crate::dispatch::run(
+                    sem,
+                    vm,
+                    &mut crate::dispatch::Hosts {
+                        device_frame: Some(&mut backend),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                assert_eq!(vm.state().system_integer(0), Some(1));
+                assert_eq!(vm.state().string(200), Some([0x82, 0xa0].as_slice()));
+            },
+        );
+
+        for (cmd, mode, expected) in [
+            (0x417, 1, 0),
+            (0x417, 2, 1),
+            (0x417, 3, 1),
+            (0x417, 5, 1),
+            (0x417, 6, 1),
+            (0x42e, 1, 1),
+            (0x42e, 4, 0),
+            (0x42e, 6, 1),
+        ] {
+            run_root_cmd(cmd, &[mode], &[], |vm, _| {
+                crate::dispatch::run(
+                    sem,
+                    vm,
+                    &mut crate::dispatch::Hosts {
+                        math: true,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                assert_eq!(vm.state().system_integer(0), Some(expected));
+            });
         }
     }
 }

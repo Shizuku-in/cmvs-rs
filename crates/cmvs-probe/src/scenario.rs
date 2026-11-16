@@ -345,14 +345,8 @@ impl Scenario {
                 let Some(group) = crate::controls::group(session.startup(), shape.slot) else {
                     return Err(Stop::Error("choice group vanished".into()));
                 };
-                let enabled = group
-                    .buttons
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| group.enabled(*i))
-                    .map(|(i, _)| i)
-                    .collect();
-                let buttons = group.buttons.len();
+                let enabled = (0..group.len()).filter(|&i| group.enabled(i)).collect();
+                let buttons = group.len();
                 let texts = shown_texts(session);
                 return Ok(Some(Event::Choice(Choice {
                     observation: o,
@@ -375,7 +369,7 @@ impl Scenario {
 
 /// Starts holding skip; false when key.cfg binds no key to it.
 fn hold_skip(session: &mut Session<'_>) -> bool {
-    match crate::device::skip_code(session.bindings()) {
+    match crate::device::skip_code(session.bindings(), session.is_cvns()) {
         Some(code) => {
             session.hold(vec![code]);
             true
@@ -396,9 +390,30 @@ pub fn view_digest(session: &Session<'_>, o: &Observation) -> String {
         .map(|(slot, _)| *slot)
         .collect();
     let windows: Vec<bool> = (0..cmvs_core::message::MESSAGE_WINDOWS)
-        .map(|slot| run.messages().window(slot).is_some_and(|w| w.visible))
+        .map(|slot| run.messages().window_visible(slot))
         .collect();
-    let text = format!("{} {objects:?} {windows:?}", o.page.digest());
+    let cvns_sprites: Vec<_> = run
+        .scene()
+        .cvns()
+        .into_iter()
+        .flat_map(|cvns| cvns.sprites.iter().enumerate())
+        .filter_map(|(slot, sp)| {
+            sp.as_ref()
+                .filter(|s| s.visible)
+                .map(|s| (slot, s.image_slot, s.x, s.y, s.w, s.h, s.src_rect, s.alpha))
+        })
+        .collect();
+    let cvns_msgs: Vec<_> = run
+        .messages()
+        .cvns()
+        .into_iter()
+        .flat_map(|cvns| cvns.messages.iter().enumerate())
+        .filter_map(|(slot, m)| m.as_ref().filter(|m| m.visible).map(|m| (slot, m.x, m.y)))
+        .collect();
+    let text = format!(
+        "{} {objects:?} {windows:?} {cvns_sprites:?} {cvns_msgs:?}",
+        o.page.digest()
+    );
     cmvs_core::digest::to_hex(&cmvs_core::digest::sha256(text.as_bytes()))[..16].to_owned()
 }
 

@@ -84,9 +84,14 @@ pub fn key_tap(bindings: &KeyBindings, action: usize) -> Result<Vec<Frame>, Stri
     ])
 }
 
+/// CVNS virtual key codes when `key.cfg` is absent (matching `CodeInput` / `input.rs`).
+const CVNS_DECIDE: usize = 22;
+const CVNS_CANCEL: usize = 25;
+const CVNS_SKIP: usize = 24;
+
 /// A non-mouse code bound to normal skip, held by route exploration whatever the device.
-pub fn skip_code(bindings: &KeyBindings) -> Option<usize> {
-    bound_key(bindings, engine_action::SKIP)
+pub fn skip_code(bindings: &KeyBindings, is_cvns: bool) -> Option<usize> {
+    bound_key(bindings, engine_action::SKIP).or(is_cvns.then_some(CVNS_SKIP))
 }
 
 fn bound_key(bindings: &KeyBindings, action: usize) -> Option<usize> {
@@ -105,6 +110,16 @@ impl Device {
         bindings: &KeyBindings,
         centre: impl Fn(usize, usize) -> Option<[i32; 2]>,
     ) -> Result<Vec<Frame>, String> {
+        self.frames_with_cvns(action, bindings, false, centre)
+    }
+
+    pub fn frames_with_cvns(
+        self,
+        action: Action,
+        bindings: &KeyBindings,
+        is_cvns: bool,
+        centre: impl Fn(usize, usize) -> Option<[i32; 2]>,
+    ) -> Result<Vec<Frame>, String> {
         let tap = |code: usize, pointer: Option<[i32; 2]>| {
             vec![
                 Frame {
@@ -118,7 +133,18 @@ impl Device {
             ]
         };
         let key = |action: usize, label: &str| {
-            bound_key(bindings, action).ok_or_else(|| format!("key.cfg binds no key to {label}"))
+            bound_key(bindings, action)
+                .or(if is_cvns {
+                    match action {
+                        engine_action::DECIDE => Some(CVNS_DECIDE),
+                        engine_action::CANCEL => Some(CVNS_CANCEL),
+                        engine_action::SKIP => Some(CVNS_SKIP),
+                        _ => None,
+                    }
+                } else {
+                    None
+                })
+                .ok_or_else(|| format!("key.cfg binds no key to {label}"))
         };
         match (self, action) {
             (Self::Mouse, Action::Advance) => Ok(tap(MOUSE_CODES[0], Some(OFF_SCREEN))),

@@ -221,6 +221,12 @@ impl PlatformBackend for NativeBackend<'_> {
     fn fullscreen(&self) -> Result<bool, Box<dyn Error>> {
         Ok(self.window.fullscreen().is_some())
     }
+    fn poll_message_dialog(
+        &mut self,
+        _: &cmvs_core::platform::MessageDialogRequest,
+    ) -> Result<cmvs_core::platform::MessageDialogResult, Box<dyn Error>> {
+        Ok(cmvs_core::platform::MessageDialogResult::Accepted)
+    }
     fn poll_text_dialog(
         &mut self,
         request: &cmvs_core::platform::TextDialogRequest,

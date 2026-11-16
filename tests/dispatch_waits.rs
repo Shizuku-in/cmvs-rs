@@ -46,7 +46,7 @@ fn object(scene: &mut SceneHost) {
 fn inactive_waits_check_capabilities_then_complete_without_yield_or_frame_advance() {
     let entries: Vec<_> = dispatch::ROOT
         .iter()
-        .filter(|entry| dispatch::is_wait(entry.command))
+        .filter(|entry| entry.command < 0x400 && dispatch::is_wait(entry.command))
         .collect();
     assert_eq!(entries.len(), 7);
     for entry in entries {
@@ -113,6 +113,56 @@ fn inactive_waits_check_capabilities_then_complete_without_yield_or_frame_advanc
         assert_eq!(
             vm.state().system_integer(0),
             Some(u32::from(entry.capability == Capability::QuakeWait))
+        );
+    }
+
+    let cvns_waits: Vec<_> = dispatch::ROOT
+        .iter()
+        .filter(|entry| entry.command >= 0x400 && dispatch::is_wait(entry.command))
+        .collect();
+    assert_eq!(cvns_waits.len(), 4);
+    for entry in cvns_waits {
+        let args: &[u32] = if entry.command == 0x58e {
+            &[0, 0, 0]
+        } else {
+            &[0]
+        };
+        let mut code = vec![];
+        command(&mut code, entry.command + 0x2000, args);
+        let program = script(&code);
+        let mut vm = Machine::new(&program).unwrap();
+        pending(&mut vm);
+        let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
+        assert_eq!(
+            dispatch::run(Semantics::Root, &mut vm, &mut Hosts::default()).unwrap(),
+            Some(Flow::Unavailable)
+        );
+        assert_eq!(
+            (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
+            before
+        );
+        let mut scene = SceneHost::default();
+        let mut input = ActionInput::default();
+        let mut hosts = Hosts {
+            waits: Some(WaitHosts {
+                scene: Some(&mut scene),
+                camera: None,
+                input: &mut input,
+                gate: SkipGate::default(),
+                change_images: true,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            dispatch::run(Semantics::Root, &mut vm, &mut hosts).unwrap(),
+            Some(Flow::Done)
+        );
+        assert_eq!(vm.pc(), code.len());
+        assert_eq!(vm.pending_system(), None);
+        assert_eq!((vm.stack().len_bytes(), vm.repeat_count()), (0, 0));
+        assert_eq!(
+            vm.state().system_integer(0),
+            Some(u32::from(entry.command == 0x594))
         );
     }
 }

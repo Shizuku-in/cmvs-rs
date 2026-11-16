@@ -945,16 +945,23 @@ fn run() -> Result<(), Box<dyn Error>> {
         })
         .transpose()?;
     let bindings = if native_input {
-        use std::io::Read;
-        let mut text = String::new();
-        File::open(root.join("key.cfg"))?
-            .take(65537)
-            .read_to_string(&mut text)?;
-        let bindings = KeyBindings::parse(&text)?;
-        println!(
-            "# native input enabled; bindings read only from key.cfg; no registry overrides or gamepad"
-        );
-        bindings
+        if game.selection.profile.family == cmvs_core::profile::Family::Cvns {
+            println!(
+                "# native input enabled; CVNS uses fixed virtual key and mouse codes (no key.cfg)"
+            );
+            KeyBindings::default()
+        } else {
+            use std::io::Read;
+            let mut text = String::new();
+            File::open(root.join("key.cfg"))?
+                .take(65537)
+                .read_to_string(&mut text)?;
+            let bindings = KeyBindings::parse(&text)?;
+            println!(
+                "# native input enabled; bindings read only from key.cfg; no registry overrides or gamepad"
+            );
+            bindings
+        }
     } else {
         KeyBindings::default()
     };

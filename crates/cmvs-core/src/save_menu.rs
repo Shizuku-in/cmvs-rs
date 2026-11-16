@@ -22,7 +22,7 @@ pub enum SaveFamily {
 }
 
 impl SaveFamily {
-    fn accepts(self, bytes: &[u8]) -> bool {
+    pub(crate) fn accepts(self, bytes: &[u8]) -> bool {
         let (prefix, first) = match self {
             Self::Cmvs => (b"CSV", b'2'),
             Self::Cvns => (b"CSP", b'1'),
@@ -234,6 +234,7 @@ impl SaveMenu {
 
 #[derive(Debug)]
 pub struct SaveMenuHost {
+    family: SaveFamily,
     menu: Option<SaveMenu>,
     /// 0x22b4 enables position 0 unconditionally and sets position 1 to this value.
     second_group_enabled: Option<bool>,
@@ -241,32 +242,53 @@ pub struct SaveMenuHost {
     popup_enabled: bool,
     /// +1496 / +1500: DLG_LOAD / DLG_SAVE, whether the scripts ask before loading / saving.
     confirm: [bool; 2],
+    /// CVNS +6173 (`0x206b`): transient UI/menu cancel mark.
+    cvns_menu_triggered: bool,
 }
 
 impl Default for SaveMenuHost {
     fn default() -> Self {
         Self {
+            family: SaveFamily::Cmvs,
             menu: None,
             second_group_enabled: None,
             // Constructor 0x140016e20, reset 0x140080700 and load 0x140081960 all set 1.
             popup_enabled: true,
             confirm: [false; 2],
+            cvns_menu_triggered: false,
         }
     }
 }
 
 impl SaveMenuHost {
+    pub fn for_profile(profile: &crate::profile::EngineProfile) -> Self {
+        let family = if profile.family == crate::profile::Family::Cvns {
+            SaveFamily::Cvns
+        } else {
+            SaveFamily::Cmvs
+        };
+        Self {
+            family,
+            ..Self::default()
+        }
+    }
+
     /// Slot exchange/move refreshes the first-ten native menu labels. Preserve the
     /// previously requested scan extent in the portable menu model.
     pub(crate) fn refresh_slots(&mut self, source: &mut impl SaveSource) -> io::Result<()> {
         if let Some(menu) = &self.menu {
-            self.menu = Some(SaveMenu::scan(source, menu.slots.len() as i32)?);
+            self.menu = Some(SaveMenu::scan_family(
+                source,
+                menu.slots.len() as u16,
+                self.family,
+            )?);
         }
         Ok(())
     }
     /// RESET writes only +12092; the menu and confirmation settings survive.
     pub(crate) fn reset_popup(&mut self) {
         self.popup_enabled = true;
+        self.cvns_menu_triggered = false;
     }
     pub fn menu(&self) -> Option<&SaveMenu> {
         self.menu.as_ref()
@@ -308,7 +330,8 @@ impl SaveMenuHost {
     /// (inline) sets system result 0 to +1644 != 0, the copy of the second menu group flag
     /// 0x140092ea0 keeps (constructor 0). None needs a save directory or creates native UI.
     pub fn try_handle_popup(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x2cd | 0x2ce | 0x2d3 | 0x2d4 | 0x2ee))) = vm.pending_system()
+        let Some((pc, command @ (0x2cd | 0x2ce | 0x2d3 | 0x2d4 | 0x2ee | 0x46b))) =
+            vm.pending_system()
         else {
             return Ok(false);
         };
@@ -355,6 +378,10 @@ impl SaveMenuHost {
                     .set_system_integer(0, u32::from(value))
                     .expect("slot 0 exists");
             }
+            0x46b => {
+                call.complete(0x4000)?;
+                self.cvns_menu_triggered = true;
+            }
             _ => return Err(call.error("unregistered popup command")),
         }
         Ok(())
@@ -391,17 +418,14 @@ impl SaveMenuHost {
             },
         )?;
         if command == 0x2bb {
-            // 0x14007cb60 reads up to 64 bytes and tests only CSV[2-9]. Unlike the
-            // menu scan, this accepts a signature without a valid date/label/body.
-            // Out-of-range u32 values (including negative words) perform no I/O.
-            // Short reads use only available bytes, never the original stale buffer.
-            let recognized = if argument <= 999 {
-                source.read_header(argument as u16)?.is_some_and(|bytes| {
-                    bytes.len() >= 4 && &bytes[..3] == b"CSV" && (b'2'..=b'9').contains(&bytes[3])
-                })
-            } else {
-                false
-            };
+            // 0x14007cb60 reads up to 64 bytes and tests only CSV[2-9]; CVNS 0x21ae
+            // (`0x4683c0`) checks `slot != 0` and CSP[1-9]. Unlike the menu scan, both accept
+            // a signature without a valid date/label/body.
+            let recognized = argument <= 999
+                && (self.family != SaveFamily::Cvns || argument != 0)
+                && source
+                    .read_header(argument as u16)?
+                    .is_some_and(|bytes| self.family.accepts(&bytes));
             call.complete(0x4004)?;
             call.vm
                 .state_mut()

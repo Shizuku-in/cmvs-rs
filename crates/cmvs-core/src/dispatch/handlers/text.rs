@@ -145,6 +145,66 @@ pub(in crate::dispatch) fn root_message_wait(
     Ok(h.messages.handle_wait(call, h.input, h.flags, h.context)?)
 }
 
+pub(in crate::dispatch) fn root_cvns_messages(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    Ok(hosts
+        .messages
+        .as_deref_mut()
+        .expect("window capability checked")
+        .handle_cvns(call)?)
+}
+
+pub(in crate::dispatch) fn root_cvns_message_buttons(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    hosts
+        .messages
+        .as_deref_mut()
+        .expect("window capability checked")
+        .handle_cvns_input(
+            call,
+            hosts
+                .input
+                .as_mut()
+                .expect("input capability checked")
+                .input,
+        )?;
+    Ok(Flow::Done)
+}
+
+pub(in crate::dispatch) fn root_cvns_message_images(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    hosts
+        .messages
+        .as_deref_mut()
+        .expect("window capability checked")
+        .handle_cvns_image(
+            call,
+            hosts
+                .window_images
+                .as_deref_mut()
+                .expect("image source capability checked"),
+        )?;
+    Ok(Flow::Done)
+}
+
+pub(in crate::dispatch) fn root_cvns_message_wait(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    let h = hosts
+        .message_wait
+        .as_mut()
+        .expect("message wait capability checked");
+    Ok(h.messages
+        .handle_cvns_wait(call, h.input, h.flags, h.context)?)
+}
+
 pub(in crate::dispatch) fn auxiliary_measure(
     hosts: &mut Hosts<'_>,
     call: &mut Call<'_, '_>,

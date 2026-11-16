@@ -48,7 +48,7 @@ fn import_entries(mut entries: Vec<fs::DirEntry>, target: &Path) -> io::Result<(
     // backup that prevents opening the local profile to retry the migration.
     entries.sort_by_key(|entry| {
         let name = entry.file_name();
-        name == "system.bak" || name == "cmvs.cfg.bak"
+        name == "system.bak" || name == "save000.bak" || name == "cmvs.cfg.bak"
     });
     for entry in entries {
         let name = entry.file_name();
@@ -85,7 +85,13 @@ fn import_entries(mut entries: Vec<fs::DirEntry>, target: &Path) -> io::Result<(
 fn save_file(name: &str) -> bool {
     matches!(
         name,
-        "system.dat" | "system.bak" | "cmvs.cfg" | "cmvs.cfg.bak"
+        "system.dat"
+            | "system.bak"
+            | "save000.bak"
+            | "cmvs.cfg"
+            | "cmvs.cfg.bak"
+            | "cvns.cfg"
+            | "cvns.cfg.bak"
     ) || (name.len() == 11
         && name.starts_with("save")
         && name.ends_with(".dat")

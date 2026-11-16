@@ -30,6 +30,7 @@ mod auxiliary;
 mod auxiliary_layout;
 mod auxiliary_measure;
 mod auxiliary_motion;
+pub mod cvns;
 pub(crate) mod font_cells;
 mod measure;
 mod output;
@@ -296,6 +297,7 @@ pub struct MessageHost {
     auxiliary_fonts: [bool; AUXILIARY_TEXTS],
     auxiliary_font_faces: [Option<Arc<[u8]>>; AUXILIARY_TEXTS],
     auxiliary_clock: u32,
+    cvns: Option<Box<cvns::CvnsMessageHost>>,
 }
 
 impl MessageHost {
@@ -320,7 +322,26 @@ impl MessageHost {
             legacy_text_creation,
             named_text_faces: legacy_text_creation || build == Some(InspectedBuild::Cmvs20101211),
             logical_text_scale: build == Some(InspectedBuild::Cmvs20100314),
+            cvns: (profile.family == crate::profile::Family::Cvns)
+                .then(|| Box::new(cvns::CvnsMessageHost::default())),
             ..Self::default()
+        }
+    }
+
+    pub fn enable_cvns(&mut self) {
+        self.cvns
+            .get_or_insert_with(|| Box::new(cvns::CvnsMessageHost::default()));
+    }
+
+    pub fn cvns(&self) -> Option<&cvns::CvnsMessageHost> {
+        self.cvns.as_deref()
+    }
+
+    pub(crate) fn set_cvns_settings(&mut self, shadow: bool, read_skip: bool, auto_skip: bool) {
+        if let Some(cvns) = self.cvns.as_deref_mut() {
+            cvns.text_shadow = shadow;
+            cvns.read_skip = read_skip;
+            cvns.auto_skip = auto_skip;
         }
     }
 
@@ -339,6 +360,9 @@ impl MessageHost {
         self.windows = Default::default();
         self.texts = Default::default();
         self.auxiliary_texts = Default::default();
+        if let Some(cvns) = self.cvns.as_deref_mut() {
+            cvns.reset();
+        }
     }
     pub fn set_text_settings(&mut self, settings: crate::settings::TextOutputSettings) {
         // Synchronized before every VM step; almost always unchanged.
@@ -442,6 +466,18 @@ impl MessageHost {
     pub fn window(&self, slot: usize) -> Option<&MessageWindow> {
         self.windows.get(slot)?.as_ref()
     }
+    pub fn window_visible(&self, slot: usize) -> bool {
+        if let Some(c) = self.cvns.as_ref() {
+            // `sub_446660` (`0x44678c..0x4467a1`): callbacks 10..=13 follow CVNS message box slots
+            // (`+112` visibility), which may be paired with a differently numbered text window slot.
+            c.messages
+                .get(slot)
+                .and_then(Option::as_ref)
+                .is_some_and(|m| m.visible)
+        } else {
+            self.window(slot).is_some_and(|w| w.visible)
+        }
+    }
     /// Window objects for rendering, in ascending window slot order.
     pub fn visible_window_objects(&self) -> impl Iterator<Item = &SceneObject> {
         self.windows
@@ -449,6 +485,7 @@ impl MessageHost {
             .flatten()
             .filter(|window| window.visible && !window.hidden)
             .map(|window| &window.object)
+            .chain(self.cvns.iter().flat_map(|cvns| cvns.visible_objects()))
     }
     pub fn text(&self, index: usize) -> Option<&TextObject> {
         self.texts.get(index)?.as_ref()
@@ -469,6 +506,68 @@ impl MessageHost {
         for window in self.windows.iter_mut().flatten() {
             window.object.advance_effects(delta);
         }
+        let face = self.default_face();
+        if let Some(cvns) = self.cvns.as_deref_mut() {
+            cvns.advance_frame(delta, &mut self.texts, &face);
+        }
+    }
+
+    pub(crate) fn handle_cvns(
+        &mut self,
+        call: &mut Call<'_, '_>,
+    ) -> Result<crate::dispatch::Flow, DecodeError> {
+        let face = self.default_face();
+        let settings = self.output_settings;
+        let screen_size = self.screen_size().map(|v| v as i32);
+        let cvns = self
+            .cvns
+            .get_or_insert_with(|| Box::new(cvns::CvnsMessageHost::default()));
+        cvns.handle(call, &mut self.texts, settings, &face, screen_size)
+    }
+
+    pub(crate) fn handle_cvns_image(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        source: &mut dyn ImageSource,
+    ) -> Result<(), Box<dyn Error>> {
+        let cvns = self
+            .cvns
+            .get_or_insert_with(|| Box::new(cvns::CvnsMessageHost::default()));
+        cvns.handle_image(call, source)
+    }
+
+    pub(crate) fn handle_cvns_input(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        input: &mut ActionInput,
+    ) -> Result<(), DecodeError> {
+        let cvns = self
+            .cvns
+            .get_or_insert_with(|| Box::new(cvns::CvnsMessageHost::default()));
+        cvns.handle_pointer_or_buttons(call, input)
+    }
+
+    pub(crate) fn handle_cvns_wait(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        input: &mut ActionInput,
+        flags: crate::message_flags::MessageFlags,
+        context: AutoAdvanceContext<'_>,
+    ) -> Result<crate::dispatch::Flow, DecodeError> {
+        let face = self.default_face();
+        let settings = self.output_settings;
+        let cvns = self
+            .cvns
+            .get_or_insert_with(|| Box::new(cvns::CvnsMessageHost::default()));
+        cvns.handle_wait(
+            call,
+            &mut self.texts,
+            input,
+            flags,
+            context,
+            settings,
+            &face,
+        )
     }
     /// 0x215f / 0x140076be0 -> 0x14005dd10: SP-4 window slot (a missing window or a slot of
     /// 8 or more only sets +12056 bit 0x10000), SP-8/SP-12 offset and SP-16/SP-20 size of a
@@ -2636,6 +2735,38 @@ impl MessageHost {
         self.texts = texts;
         self.windows = windows;
         self.auxiliary_texts = Default::default();
+    }
+    pub(crate) fn restore_cvns(
+        &mut self,
+        mut texts: [Option<TextObject>; TEXT_OBJECTS],
+        cvns: cvns::CvnsMessageHost,
+    ) {
+        self.fonts = [false; TEXT_OBJECTS];
+        self.font_faces = std::array::from_fn(|_| None);
+        self.font_bold = [false; TEXT_OBJECTS];
+        let default_face = self.default_face();
+        for (index, text) in texts.iter_mut().enumerate() {
+            if let Some(text) = text {
+                self.fonts[index] = true;
+                let face = if text.font_face.is_empty() {
+                    default_face.clone()
+                } else {
+                    Arc::from(text.font_face.as_slice())
+                };
+                text.face = face.clone();
+                self.font_faces[index] = Some(face);
+                for glyph in &mut text.glyphs {
+                    glyph.face = text.face.clone();
+                    glyph.shown = true;
+                    glyph.active = false;
+                    glyph.opacity = 255;
+                }
+            }
+        }
+        self.texts = texts;
+        self.windows = Default::default();
+        self.auxiliary_texts = Default::default();
+        self.cvns = Some(Box::new(cvns));
     }
 }
 

@@ -169,7 +169,7 @@ pub fn run(
     if running.is_empty() {
         return finish(results, events);
     }
-    let script = match target.missing(&startup::RUN_CAPABILITIES) {
+    let script = match target.missing(startup::run_capabilities(target)) {
         Some(missing) => Err(format!("missing capability {missing}")),
         None => startup::load_script(target),
     };

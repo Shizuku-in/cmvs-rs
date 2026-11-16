@@ -125,6 +125,32 @@ impl Target {
     pub fn has(&self, capability: &str) -> bool {
         self.capabilities.contains(capability)
     }
+    pub fn is_cvns(&self) -> bool {
+        self.game
+            .as_ref()
+            .is_some_and(|g| g.selection.profile.family == cmvs_core::profile::Family::Cvns)
+    }
+    pub fn save_family(&self) -> cmvs_core::save_menu::SaveFamily {
+        if self.is_cvns() {
+            cmvs_core::save_menu::SaveFamily::Cvns
+        } else {
+            cmvs_core::save_menu::SaveFamily::Cmvs
+        }
+    }
+    pub fn system_save_name(&self) -> &'static str {
+        if self.is_cvns() {
+            "save000.dat"
+        } else {
+            "system.dat"
+        }
+    }
+    pub fn config_file_name(&self) -> &'static str {
+        if self.is_cvns() {
+            "cvns.cfg"
+        } else {
+            "cmvs.cfg"
+        }
+    }
     /// The first capability of `needed` that is missing, for `skipped` results.
     pub fn missing(&self, needed: &[&'static str]) -> Option<&'static str> {
         needed.iter().copied().find(|c| !self.has(c))

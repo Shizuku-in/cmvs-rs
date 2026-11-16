@@ -29,6 +29,7 @@ pub struct SettingsHost {
     read_skip: bool,
     active_draw: bool,
     cursor_auto_clear: u32,
+    cvns: CvnsSettings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +111,9 @@ impl AutoAdvanceSettings {
         Ok(result.max(self.base.wrapping_mul(100)))
     }
 }
+mod cvns;
+pub use cvns::CvnsSettings;
+
 impl Default for SettingsHost {
     fn default() -> Self {
         Self {
@@ -119,6 +123,7 @@ impl Default for SettingsHost {
             read_skip: false,
             active_draw: true,
             cursor_auto_clear: 1,
+            cvns: CvnsSettings::default(),
         }
     }
 }
@@ -179,6 +184,7 @@ impl SettingsHost {
                 DEFAULT_FONT_FACE,
                 0x80,
             ),
+            cvns: CvnsSettings::from_ini(bytes),
         }
     }
     pub fn font_face(&self) -> &[u8] {

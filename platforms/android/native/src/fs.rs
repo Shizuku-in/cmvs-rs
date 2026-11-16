@@ -43,8 +43,11 @@ impl HostFile for AndroidFile {
     // std::fs::File locking is unsupported on Android; use nonblocking OS flock
     // while keeping the file descriptor open until drop.
     fn try_lock(&self) -> io::Result<()> {
-        rustix::fs::flock(&self.0, rustix::fs::FlockOperation::NonBlockingLockExclusive)
-            .map_err(io::Error::from)
+        rustix::fs::flock(
+            &self.0,
+            rustix::fs::FlockOperation::NonBlockingLockExclusive,
+        )
+        .map_err(io::Error::from)
     }
 }
 

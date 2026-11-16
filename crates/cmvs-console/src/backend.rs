@@ -1,7 +1,10 @@
 //! Shared `PlatformBackend` implementation for the console players.
 use crate::text_input;
 use cmvs_core::{
-    platform::{PlatformBackend, PlatformRequest, TextDialogRequest, TextDialogResult},
+    platform::{
+        MessageDialogRequest, MessageDialogResult, PlatformBackend, PlatformRequest,
+        TextDialogRequest, TextDialogResult,
+    },
     raster::RgbaImage,
     settings::DisplayPreferences,
 };
@@ -75,6 +78,12 @@ impl<G: ConsoleGpu> PlatformBackend for ConsoleBackend<'_, G> {
     }
     fn aspect_scaling(&self) -> Result<bool, Box<dyn Error>> {
         Ok(self.display.aspect_scaling)
+    }
+    fn poll_message_dialog(
+        &mut self,
+        _: &MessageDialogRequest,
+    ) -> Result<MessageDialogResult, Box<dyn Error>> {
+        Ok(MessageDialogResult::Accepted)
     }
     fn poll_text_dialog(
         &mut self,

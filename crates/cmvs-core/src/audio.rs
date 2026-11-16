@@ -2,7 +2,7 @@
 //! The recording backend keeps requests only; no sound is loaded or played.
 pub mod compress;
 pub mod ducking;
-use crate::{dispatch::Call, evaluate::error, machine::Machine};
+use crate::{FormatError, dispatch::Call, evaluate::error, machine::Machine};
 pub use compress::{VoiceCompressor, VoiceMixer};
 pub use ducking::{VoiceActivity, VoiceDucking, VoiceDuckingSettings};
 use std::error::Error;
@@ -224,7 +224,68 @@ pub enum AudioRequest {
     },
     /// 0x140087910 on device channel 2, from the player destructor 0x140037890.
     StopMovieAudio,
+    /// CVNS 0x20a7 (0x459540): BGM playback looping from PCM sample frame `loop_sample`.
+    PlayBgmLoopFrom {
+        channel: u8,
+        previous: u8,
+        primary: Vec<u8>,
+        secondary: Vec<u8>,
+        volume: u32,
+        fade_ms: u32,
+        looped: bool,
+        flag_1576: u32,
+        loop_sample: u32,
+    },
+    /// CVNS 0x20b2 (0x45a690): pause an SE channel without releasing or clearing its name.
+    PauseSe {
+        channel: u8,
+    },
+    /// CVNS 0x20af (0x45aa80): per-channel SE stereo pan (-100..=100).
+    SetSePan {
+        channel: u8,
+        pan: i32,
+    },
+    /// CVNS 0x20bd (0x45b4a0): voice channel gain multiplier (/256 scale).
+    SetVoiceGain {
+        channel: u8,
+        multiplier: u32,
+    },
+    /// CVNS 0x20be (0x45b550): voice channel stereo pan (-100..=100).
+    SetVoicePan {
+        channel: u8,
+        pan: i32,
+    },
+    /// CVNS 0x20b9 (0x45b180): start or resume a prepared voice channel.
+    StartVoice {
+        channel: u8,
+        looped: bool,
+    },
+    /// CVNS 0x20c5 (0x45ab50): auxiliary SE playback (device slots 60..63 -> 0..3).
+    PlayAuxSe {
+        channel: u8,
+        name: Vec<u8>,
+        volume: u32,
+        fade_in_ms: u32,
+        looped: bool,
+        start: bool,
+    },
+    /// CVNS 0x20c7 (0x45ad20): stop auxiliary SE channel (0..3).
+    StopAuxSe {
+        channel: u8,
+    },
+    /// CVNS `sub_41FCC0` live volume update across all CVNS SE (0..48), BGM, voice, and aux slots.
+    UpdateCvnsVolumes {
+        bgm: Option<u32>,
+        se: Vec<(u8, u32)>,
+        voice: Option<u32>,
+        aux: Option<u32>,
+    },
 }
+
+/// CVNS allocates 48 script SE slots (device channels 12..60, `v4 < 0x30`).
+pub const CVNS_SE_CHANNELS: usize = 48;
+/// CVNS auxiliary master-scaled SE slots (`0x20c5..=0x20c7`, device channels 60..63).
+pub const AUX_SE_CHANNELS: usize = 4;
 
 pub trait AudioBackend {
     /// Device-wide /256 gain applied by the software mixer to every channel's samples,
@@ -378,6 +439,70 @@ pub trait AudioBackend {
     fn voice_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
         Err("audio backend does not implement voice position queries".into())
     }
+    /// CVNS 0x20a4 (0x4596d0 -> 0x40f680): active BGM playback position in ms, or None.
+    fn bgm_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+        Err("audio backend does not implement BGM position queries".into())
+    }
+    /// CVNS 0x20a7 (0x459540): `play_bgm` with loop restart skipping to PCM frame `loop_sample`.
+    fn play_bgm_loop_from(
+        &mut self,
+        request: &AudioRequest,
+        loop_sample: u32,
+    ) -> Result<(), Box<dyn Error>> {
+        if loop_sample == 0 {
+            return self.play_bgm(request);
+        }
+        Err("audio backend does not implement BGM loop start offsets".into())
+    }
+    /// CVNS 0x20b2 (0x45a690): pause SE channel without clearing or freeing.
+    fn pause_se(&mut self, _channel: u8) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement pausing an SE channel".into())
+    }
+    /// CVNS 0x20af (0x45aa80): set SE channel stereo balance (-100..=100).
+    fn set_se_pan(&mut self, _channel: u8, _pan: i32) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement SE panning".into())
+    }
+    /// CVNS 0x20b9 (0x45b180): start or resume a prepared voice channel.
+    fn start_voice(&mut self, _channel: u8, _looped: bool) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement starting a voice channel".into())
+    }
+    /// CVNS 0x20bd (0x45b4a0): set voice channel gain multiplier (/256 scale).
+    fn set_voice_gain(&mut self, _channel: u8, _multiplier: u32) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement voice gain multipliers".into())
+    }
+    /// CVNS 0x20be (0x45b550): set voice channel stereo balance (-100..=100).
+    fn set_voice_pan(&mut self, _channel: u8, _pan: i32) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement voice panning".into())
+    }
+    /// CVNS 0x20b8 (0x45af90): load/play voice and return decoded PCM byte length when loaded.
+    fn play_voice_with_len(
+        &mut self,
+        request: &AudioRequest,
+    ) -> Result<Option<u32>, Box<dyn Error>> {
+        self.play_voice(request).map(|ok| ok.then_some(0))
+    }
+    /// CVNS 0x20c5 (0x45ab50): load/play auxiliary SE channel 0..3.
+    fn play_aux_se(&mut self, _request: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+        Err("audio backend does not implement auxiliary SE playback".into())
+    }
+    /// CVNS 0x20c7 (0x45ad20): stop auxiliary SE channel 0..3.
+    fn stop_aux_se(&mut self, _channel: u8) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement stopping auxiliary SE".into())
+    }
+    /// CVNS 0x20c6 (0x45adb0): query auxiliary SE position in ms, or None.
+    fn aux_se_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+        Err("audio backend does not implement auxiliary SE position queries".into())
+    }
+    /// CVNS `sub_41FCC0`: update BGM, 48-slot SE, voice, and auxiliary SE gains together.
+    fn set_cvns_volumes(
+        &mut self,
+        _bgm: Option<u32>,
+        _se: &[(u8, u32)],
+        _voice: Option<u32>,
+        _aux: Option<u32>,
+    ) -> Result<(), Box<dyn Error>> {
+        Err("audio backend does not implement CVNS multi-channel volume updates".into())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -514,6 +639,128 @@ impl AudioBackend for RecordingAudio {
     fn voice_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
         Ok(None)
     }
+    fn bgm_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+        Ok(None)
+    }
+    fn play_bgm_loop_from(
+        &mut self,
+        request: &AudioRequest,
+        loop_sample: u32,
+    ) -> Result<(), Box<dyn Error>> {
+        if loop_sample == 0 {
+            return self.play_bgm(request);
+        }
+        let AudioRequest::PlayBgm {
+            channel,
+            previous,
+            primary,
+            secondary,
+            volume,
+            fade_ms,
+            looped,
+            flag_1576,
+        } = request
+        else {
+            return Err("expected PlayBgm".into());
+        };
+        self.record(AudioRequest::PlayBgmLoopFrom {
+            channel: *channel,
+            previous: *previous,
+            primary: primary.clone(),
+            secondary: secondary.clone(),
+            volume: *volume,
+            fade_ms: *fade_ms,
+            looped: *looped,
+            flag_1576: *flag_1576,
+            loop_sample,
+        })
+    }
+    fn pause_se(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::PauseSe { channel })
+    }
+    fn set_se_pan(&mut self, channel: u8, pan: i32) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::SetSePan { channel, pan })
+    }
+    fn start_voice(&mut self, channel: u8, looped: bool) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::StartVoice { channel, looped })
+    }
+    fn set_voice_gain(&mut self, channel: u8, multiplier: u32) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::SetVoiceGain {
+            channel,
+            multiplier,
+        })
+    }
+    fn set_voice_pan(&mut self, channel: u8, pan: i32) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::SetVoicePan { channel, pan })
+    }
+    fn play_aux_se(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+        self.record(request.clone())?;
+        Ok(false)
+    }
+    fn stop_aux_se(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::StopAuxSe { channel })
+    }
+    fn aux_se_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+        Ok(None)
+    }
+    fn set_cvns_volumes(
+        &mut self,
+        bgm: Option<u32>,
+        se: &[(u8, u32)],
+        voice: Option<u32>,
+        aux: Option<u32>,
+    ) -> Result<(), Box<dyn Error>> {
+        self.record(AudioRequest::UpdateCvnsVolumes {
+            bgm,
+            se: se.to_vec(),
+            voice,
+            aux,
+        })
+    }
+}
+
+fn volume_channel_updates(
+    command: u16,
+    settings: &AudioSettings,
+    se_channels: &[Option<SeChannel>; SE_CHANNELS],
+) -> [Option<u32>; 15] {
+    let mut channels = [None; 15];
+    let product = |volume| settings.master.wrapping_mul(volume) >> 8;
+    if matches!(command, 0x2d9 | 0x2da) && settings.bgm_enabled {
+        channels[0..2].fill(Some(product(settings.bgm)));
+    }
+    if matches!(command, 0x2d9 | 0x2dd) {
+        channels[2..5].fill(Some(product(settings.movie)));
+    }
+    if matches!(command, 0x2d9 | 0x2dc) {
+        channels[5..9].fill(Some(product(settings.voice)));
+    }
+    if matches!(command, 0x2d9 | 0x2db) {
+        for (index, channel) in channels[9..15].iter_mut().enumerate() {
+            let mut volume = product(settings.se);
+            // Master adjustment deliberately omits per-SE gain in the original.
+            if command == 0x2db
+                && let Some(se) = &se_channels[index]
+                && se.volume > 0
+            {
+                volume = (se.volume as u32).wrapping_mul(volume) >> 8;
+            }
+            *channel = Some(volume);
+        }
+    }
+    channels
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct CvnsAudioState {
+    enabled: bool,
+    extra_channels: Vec<Option<SeChannel>>,
+    gains: Vec<u32>,
+    pans: Vec<i32>,
+    voice_gains: [u32; VOICE_CHANNELS],
+    voice_pans: [i32; VOICE_CHANNELS],
+    aux_channels: [Option<SeChannel>; AUX_SE_CHANNELS],
+    bgm_loop_sample: u32,
 }
 
 #[derive(Debug)]
@@ -522,6 +769,8 @@ pub struct AudioHost {
     output_active: bool,
     output_enabled: bool,
     settings: AudioSettings,
+    /// CVNS percentage-scale volumes (`MASTER/MUSIC/SE/VOICE/VIDEO_VOLUME`, `10..=100` on VM writes).
+    cvns_volumes: [u32; 5],
     /// Device +2424/+2428/+2432/+2436, including the most recent queued update.
     voice_ducking: VoiceDuckingSettings,
     channels: [Option<SeChannel>; SE_CHANNELS],
@@ -530,6 +779,7 @@ pub struct AudioHost {
     /// zeroes it, and stopping keeps it. HAROUSE 0x20b8 writes the raw gain multiplier.
     played: [u32; SE_CHANNELS],
     bgm: BgmState,
+    cvns: CvnsAudioState,
 }
 
 impl Default for AudioHost {
@@ -539,6 +789,40 @@ impl Default for AudioHost {
 }
 
 impl AudioHost {
+    /// Configure this host for CVNS (48 SE channels, 100-based volume & gain scaling, aux SE).
+    pub fn enable_cvns(&mut self) {
+        if !self.cvns.enabled {
+            self.cvns.enabled = true;
+            self.cvns
+                .extra_channels
+                .resize_with(CVNS_SE_CHANNELS - SE_CHANNELS, || None);
+            self.cvns.gains.resize(CVNS_SE_CHANNELS, 100);
+            self.cvns.pans.resize(CVNS_SE_CHANNELS, 0);
+            self.cvns.voice_gains = [100; VOICE_CHANNELS];
+            self.cvns.voice_pans = [0; VOICE_CHANNELS];
+        }
+    }
+
+    fn cvns_se_slot(&self, index: usize) -> Option<&SeChannel> {
+        if index < SE_CHANNELS {
+            self.channels[index].as_ref()
+        } else {
+            self.cvns
+                .extra_channels
+                .get(index - SE_CHANNELS)
+                .and_then(|s| s.as_ref())
+        }
+    }
+
+    fn cvns_se_slot_mut(&mut self, index: usize) -> &mut Option<SeChannel> {
+        self.enable_cvns();
+        if index < SE_CHANNELS {
+            &mut self.channels[index]
+        } else {
+            &mut self.cvns.extra_channels[index - SE_CHANNELS]
+        }
+    }
+
     /// cmvs-20071117 0x442fb0/0x443050, selected only by the hash-bound variant.
     pub(crate) fn handle_preload(
         &mut self,
@@ -599,13 +883,24 @@ impl AudioHost {
         if self.settings.bgm_enabled {
             backend.stop_bgm()?;
         }
-        for channel in 0..SE_CHANNELS as u8 {
+        let se_count = if self.cvns.enabled {
+            CVNS_SE_CHANNELS
+        } else {
+            SE_CHANNELS
+        };
+        for channel in 0..se_count as u8 {
             backend.stop(channel)?;
         }
         for channel in 0..VOICE_CHANNELS as u8 {
             backend.stop_voice(channel)?;
         }
-        backend.stop_channel15()?;
+        if self.cvns.enabled {
+            for channel in 0..AUX_SE_CHANNELS as u8 {
+                backend.stop_aux_se(channel)?;
+            }
+        } else {
+            backend.stop_channel15()?;
+        }
         self.bgm = BgmState {
             channel: if self.settings.bgm_enabled {
                 0
@@ -614,9 +909,18 @@ impl AudioHost {
             },
             ..BgmState::default()
         };
+        self.cvns.bgm_loop_sample = 0;
         if reset {
             self.channels = Default::default();
             self.played = [0; SE_CHANNELS];
+            if self.cvns.enabled {
+                self.cvns.extra_channels.fill(None);
+                self.cvns.gains.fill(100);
+                self.cvns.pans.fill(0);
+                self.cvns.voice_gains = [100; VOICE_CHANNELS];
+                self.cvns.voice_pans = [0; VOICE_CHANNELS];
+                self.cvns.aux_channels = Default::default();
+            }
         }
         Ok(())
     }
@@ -626,11 +930,13 @@ impl AudioHost {
             output_active: true,
             output_enabled: true,
             settings,
+            cvns_volumes: [100; 5],
             voice_ducking: VoiceDuckingSettings::default(),
             channels: Default::default(),
             mixer: VoiceMixer::default(),
             played: [0; SE_CHANNELS],
             bgm: BgmState::default(),
+            cvns: CvnsAudioState::default(),
         }
     }
     pub fn background_output(&self) -> bool {
@@ -708,6 +1014,13 @@ impl AudioHost {
         host.settings.se = int("SE_VOLUME", 100) as u32;
         host.settings.voice = int("VOICE_VOLUME", 100) as u32;
         host.settings.movie = int("VIDEO_VOLUME", 100) as u32;
+        host.cvns_volumes = [
+            host.settings.master,
+            host.settings.bgm,
+            host.settings.se,
+            host.settings.voice,
+            host.settings.movie,
+        ];
         host.voice_ducking = VoiceDuckingSettings {
             percent: (int("VOICE_FADE_VOLOME", 100) as u32).min(100),
             fade_ms: (int("VOICE_FADE_TIMER", 500) as u32).min(2000),
@@ -717,8 +1030,19 @@ impl AudioHost {
         host.mixer = VoiceMixer::from_ini(int("SOUND_QUALITY", 0), int("SOUND_BUFFER", 0));
         host
     }
+    pub fn se_channel_count(&self) -> usize {
+        if self.cvns.enabled {
+            CVNS_SE_CHANNELS
+        } else {
+            SE_CHANNELS
+        }
+    }
     pub fn channel(&self, index: usize) -> Option<&SeChannel> {
-        self.channels.get(index).and_then(Option::as_ref)
+        if self.cvns.enabled {
+            self.cvns_se_slot(index)
+        } else {
+            self.channels.get(index).and_then(Option::as_ref)
+        }
     }
     /// Compatibility entry for the audio commands registered in the shared table.
     pub fn try_handle(
@@ -870,44 +1194,14 @@ impl AudioHost {
                     0x2dc => settings.voice = value,
                     _ => settings.movie = value,
                 }
-                let mut channels = [None; 15];
-                let product = |volume| settings.master.wrapping_mul(volume) >> 8;
-                if matches!(command, 0x2d9 | 0x2da) && settings.bgm_enabled {
-                    channels[0..2].fill(Some(product(settings.bgm)));
-                }
-                if matches!(command, 0x2d9 | 0x2dd) {
-                    channels[2..5].fill(Some(product(settings.movie)));
-                }
-                if matches!(command, 0x2d9 | 0x2dc) {
-                    channels[5..9].fill(Some(product(settings.voice)));
-                }
-                if matches!(command, 0x2d9 | 0x2db) {
-                    for (index, channel) in channels[9..15].iter_mut().enumerate() {
-                        let mut volume = product(settings.se);
-                        // Master adjustment deliberately omits per-SE gain in the original.
-                        if command == 0x2db
-                            && let Some(se) = &self.channels[index]
-                            && se.volume > 0
-                        {
-                            volume = (se.volume as u32).wrapping_mul(volume) >> 8;
-                        }
-                        *channel = Some(volume);
-                    }
-                }
+                let channels = volume_channel_updates(command, &settings, &self.channels);
                 backend.set_volumes(&channels)?;
                 call.complete(0x4008)?;
                 self.settings = settings;
                 return Ok(());
             }
             let enabled = call.argument(8, "value")? != 0;
-            let current = match command {
-                0x2d6 => self.settings.bgm_enabled,
-                0x2d7 => self.settings.se_enabled,
-                _ => self.settings.voice_enabled,
-            };
-            if current != enabled {
-                self.set_enabled(command, enabled, pc, backend)?;
-            }
+            self.cvns_set_enabled(command, enabled, pc, backend)?;
             call.complete(0x4008)?;
             return Ok(());
         }
@@ -932,6 +1226,183 @@ impl AudioHost {
             .state_mut()
             .set_system_integer(0, value)
             .expect("slot 0 exists");
+        Ok(())
+    }
+
+    pub(crate) fn cvns_volume(&self, kind: usize) -> u32 {
+        self.cvns_volumes[kind]
+    }
+
+    fn cvns_percent_to_gain(percent: u32) -> u32 {
+        (percent.min(100) * 256 / 100).min(256)
+    }
+
+    fn cvns_bgm_volume_for(volumes: &[u32; 5]) -> u32 {
+        Self::cvns_percent_to_gain(volumes[0] * volumes[1] / 100)
+    }
+
+    fn cvns_se_volume_for(volumes: &[u32; 5], call_vol: i32) -> u32 {
+        let mut percent = volumes[0] * volumes[2] / 100;
+        if call_vol > 0 {
+            percent = (call_vol as u32).saturating_mul(percent) / 100;
+        }
+        Self::cvns_percent_to_gain(percent)
+    }
+
+    fn cvns_voice_volume_for(volumes: &[u32; 5], call_vol: i32) -> u32 {
+        let mut percent = volumes[0] * volumes[3] / 100;
+        if call_vol > 0 {
+            percent = (call_vol as u32).saturating_mul(percent) / 100;
+        }
+        Self::cvns_percent_to_gain(percent)
+    }
+
+    pub(crate) fn stage_cvns_volume(
+        &self,
+        kind: usize,
+        raw_value: i32,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(u32, AudioSettings), Box<dyn Error>> {
+        let percent = raw_value.clamp(10, 100) as u32;
+        let scaled = percent * 256 / 100;
+        let mut settings = self.settings;
+        let command = 0x2d9 + kind as u16;
+        match kind {
+            0 => settings.master = scaled,
+            1 => settings.bgm = scaled,
+            2 => settings.se = scaled,
+            3 => settings.voice = scaled,
+            _ => settings.movie = scaled,
+        }
+        if self.cvns.enabled {
+            let mut next = self.cvns_volumes;
+            next[kind] = percent;
+            let bgm = matches!(kind, 0 | 1).then(|| Self::cvns_bgm_volume_for(&next));
+            let voice =
+                matches!(kind, 0 | 3).then(|| Self::cvns_percent_to_gain(next[0] * next[3] / 100));
+            let aux =
+                matches!(kind, 0 | 4).then(|| Self::cvns_percent_to_gain(next[0] * next[4] / 100));
+            let se: Vec<(u8, u32)> = if matches!(kind, 0 | 2) {
+                (0..CVNS_SE_CHANNELS)
+                    .map(|idx| {
+                        let call_vol = if kind == 2 {
+                            self.cvns_se_slot(idx).map_or(0, |s| s.volume)
+                        } else {
+                            // `sub_41FCC0` case 0 uses `master * SE_VOLUME / 100` without per-channel scale.
+                            0
+                        };
+                        (idx as u8, Self::cvns_se_volume_for(&next, call_vol))
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            backend.set_cvns_volumes(bgm, &se, voice, aux)?;
+        } else {
+            let channels = volume_channel_updates(command, &settings, &self.channels);
+            backend.set_volumes(&channels)?;
+        }
+        Ok((percent, settings))
+    }
+
+    pub(crate) fn commit_cvns_volume(
+        &mut self,
+        kind: usize,
+        percent: u32,
+        settings: AudioSettings,
+    ) {
+        self.cvns_volumes[kind] = percent;
+        self.settings = settings;
+    }
+
+    pub(crate) fn cvns_set_enabled(
+        &mut self,
+        command: u16,
+        enabled: bool,
+        pc: usize,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let current = match command {
+            0x2d6 => self.settings.bgm_enabled,
+            0x2d7 => self.settings.se_enabled,
+            _ => self.settings.voice_enabled,
+        };
+        if current != enabled {
+            if self.cvns.enabled && matches!(command, 0x2d6 | 0x2d7) {
+                self.cvns_apply_enabled(command, enabled, backend)?;
+            } else {
+                self.set_enabled(command, enabled, pc, backend)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn cvns_apply_enabled(
+        &mut self,
+        command: u16,
+        enabled: bool,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        if command == 0x2d6 {
+            if !enabled && self.bgm.playing {
+                backend.stop_bgm()?;
+                self.bgm.channel = 0;
+                self.bgm.playing = false;
+            } else if enabled && !self.bgm.primary.is_empty() {
+                let req = AudioRequest::PlayBgm {
+                    channel: 1,
+                    previous: self.bgm.channel,
+                    primary: self.bgm.primary.clone(),
+                    secondary: self.bgm.secondary.clone(),
+                    volume: Self::cvns_bgm_volume_for(&self.cvns_volumes),
+                    fade_ms: 0,
+                    looped: true,
+                    flag_1576: self.settings.bgm_flag_1576,
+                };
+                backend.play_bgm_loop_from(&req, self.cvns.bgm_loop_sample)?;
+                self.bgm.channel = 1;
+                self.bgm.playing = true;
+            }
+            self.settings.bgm_enabled = enabled;
+            return Ok(());
+        }
+        if !enabled {
+            for ch in 0..CVNS_SE_CHANNELS as u8 {
+                backend.stop(ch)?;
+            }
+        } else {
+            let volumes = self.cvns_volumes;
+            for idx in 0..CVNS_SE_CHANNELS {
+                let Some(se) = self.cvns_se_slot(idx).cloned() else {
+                    continue;
+                };
+                if se.name.is_empty() {
+                    continue;
+                }
+                let volume = Self::cvns_se_volume_for(&volumes, se.volume);
+                backend.play(&AudioRequest::PlaySe {
+                    channel: idx as u8,
+                    name: se.name,
+                    volume,
+                    looped: se.looped,
+                    flag: false,
+                    fade_in_ms: 0,
+                })?;
+                if self.cvns.gains[idx] < 100 {
+                    let mult = (u64::from(self.cvns.gains[idx]) * 256 / 100) as u32;
+                    backend.set_se_gain(idx as u8, mult)?;
+                }
+                if self.cvns.pans[idx] != 0 {
+                    backend.set_se_pan(idx as u8, self.cvns.pans[idx])?;
+                }
+                if se.looped && se.flag {
+                    backend.start(idx as u8, true)?;
+                } else if let Some(slot) = self.cvns_se_slot_mut(idx).as_mut() {
+                    slot.flag = false;
+                }
+            }
+        }
+        self.settings.se_enabled = enabled;
         Ok(())
     }
 
@@ -1010,43 +1481,35 @@ impl AudioHost {
         Ok(())
     }
 
-    /// 0x20a9 / 0x140070740: SP-4 voice channel, SP-8 duration; no enable flag gate.
+    /// 0x20a9 / 0x140070740 and CVNS 0x20bb / 0x45b2d0: SP-4 voice channel, SP-8 duration;
+    /// no enable flag gate.
     fn try_voice_fade_out(
         &mut self,
         call: &mut Call<'_, '_>,
         backend: &mut dyn AudioBackend,
     ) -> Result<(), Box<dyn Error>> {
-        let pc = call.pc;
+        let (pc, op) = (call.pc, call.command + 0x2000);
         let channel = call.argument(4, "channel")?;
         let fade_ms = call.argument(8, "fade milliseconds")?;
         if channel as usize >= VOICE_CHANNELS {
-            return Err(error(
-                pc,
-                0x20a9,
-                "voice channel outside 0..3 sets an unmodeled flag",
-            )
-            .into());
+            return Err(error(pc, op, "voice channel outside 0..3 sets an unmodeled flag").into());
         }
         backend.fade_out_voice(channel as u8, fade_ms)?;
         call.complete(0x4008)?;
         Ok(())
     }
 
-    /// 0x20a8 / 0x140070650: SP-4 voice channel, device +5; no enable flag gate.
+    /// 0x20a8 / 0x140070650 and CVNS 0x20ba / 0x45b240: SP-4 voice channel, device +5;
+    /// no enable flag gate.
     fn try_voice_stop(
         &mut self,
         call: &mut Call<'_, '_>,
         backend: &mut dyn AudioBackend,
     ) -> Result<(), Box<dyn Error>> {
-        let pc = call.pc;
+        let (pc, op) = (call.pc, call.command + 0x2000);
         let channel = call.argument(4, "channel")?;
         if channel as usize >= VOICE_CHANNELS {
-            return Err(error(
-                pc,
-                0x20a8,
-                "voice channel outside 0..3 sets an unmodeled flag",
-            )
-            .into());
+            return Err(error(pc, op, "voice channel outside 0..3 sets an unmodeled flag").into());
         }
         backend.stop_voice(channel as u8)?;
         call.complete(0x4004)?;
@@ -1413,6 +1876,489 @@ impl AudioHost {
         };
         Ok(())
     }
+
+    /// CVNS audio dispatch (`0x20a0..=0x20c7`), using 48 SE slots, percentage scaling, and
+    /// 64-byte names (`cvns.exe` `0x459440..0x45b694`).
+    pub(crate) fn handle_cvns(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        self.enable_cvns();
+        let command = call.command;
+        match command {
+            0x4a0 | 0x4a7 => self.try_cvns_bgm(call, backend),
+            0x4a4 => self.try_cvns_bgm_position(call, backend),
+            0x4ad | 0x4b0 => self.try_cvns_se_play(call, backend),
+            0x4ae | 0x4b1 => self.try_cvns_se_start(call, backend),
+            0x4af => self.try_cvns_se_pan(call, backend),
+            0x4b2 => self.try_cvns_se_pause(call, backend),
+            0x4b3 => self.try_cvns_se_stop(call, backend),
+            0x4b4 => self.try_cvns_se_stop_all(call, backend),
+            0x4b5 => self.try_cvns_se_fade_out(call, backend),
+            0x4b6 => self.try_cvns_se_position(call, backend),
+            0x4b7 => self.try_cvns_se_gain(call, backend),
+            0x4b8 => self.try_cvns_voice_play(call, backend),
+            0x4b9 => self.try_cvns_voice_start(call, backend),
+            0x4ba => self.try_voice_stop(call, backend),
+            0x4bb => self.try_voice_fade_out(call, backend),
+            0x4bc => self.try_cvns_voice_position(call, backend),
+            0x4bd => self.try_cvns_voice_gain(call, backend),
+            0x4be => self.try_cvns_voice_pan(call, backend),
+            0x4bf => self.try_cvns_voice_level(call),
+            0x4c5..=0x4c7 => self.try_cvns_aux_se(call, backend),
+            _ => Err(call.error("unregistered CVNS audio command").into()),
+        }
+    }
+
+    fn try_cvns_bgm(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let (pc, command) = (call.pc, call.command);
+        let op = if command == 0x4a7 { 0x20a7 } else { 0x20a0 };
+        let name_ref = call.argument(4, "BGM name")?;
+        let primary = call.vm.resolve_string(name_ref)?;
+        let fade_ms = call.argument(8, "fade milliseconds")?;
+        let looped = call.argument(12, "loop")? != 0;
+        let loop_sample = if command == 0x4a7 {
+            call.argument(16, "loop sample")?
+        } else {
+            0
+        };
+        if primary.len() >= 64 {
+            return Err(error(pc, op, "BGM file name exceeds the 64-byte device limit").into());
+        }
+        let enabled = self.settings.bgm_enabled;
+        let previous = self.bgm.channel;
+        let current = if fade_ms == 0 && enabled { 0 } else { previous };
+        let channel = current.wrapping_sub(1) & 1;
+        if enabled {
+            let req = AudioRequest::PlayBgm {
+                channel,
+                previous,
+                primary: primary.clone(),
+                secondary: Vec::new(),
+                volume: Self::cvns_bgm_volume_for(&self.cvns_volumes),
+                fade_ms,
+                looped,
+                flag_1576: self.settings.bgm_flag_1576,
+            };
+            backend.play_bgm_loop_from(&req, loop_sample)?;
+        }
+        call.complete(if command == 0x4a7 { 0x4010 } else { 0x400c })?;
+        self.bgm = BgmState {
+            primary,
+            secondary: Vec::new(),
+            channel,
+            playing: enabled,
+        };
+        self.cvns.bgm_loop_sample = loop_sample;
+        Ok(())
+    }
+
+    fn try_cvns_bgm_position(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let position = backend.bgm_position(self.bgm.channel)?;
+        call.complete(0x4000)?;
+        call.vm
+            .state_mut()
+            .set_system_integer(0, position.unwrap_or(u32::MAX))
+            .expect("slot 0 exists");
+        Ok(())
+    }
+
+    fn check_cvns_se_channel(call: &mut Call<'_, '_>, op: u16) -> Result<usize, Box<dyn Error>> {
+        let channel = call.argument(4, "channel")?;
+        if channel as usize >= CVNS_SE_CHANNELS {
+            return Err(error(
+                call.pc,
+                op,
+                "CVNS SE channel outside 0..47 sets an unmodeled flag",
+            )
+            .into());
+        }
+        Ok(channel as usize)
+    }
+
+    fn check_cvns_voice_channel(call: &mut Call<'_, '_>, op: u16) -> Result<usize, Box<dyn Error>> {
+        let channel = call.argument(4, "channel")?;
+        if channel as usize >= VOICE_CHANNELS {
+            return Err(error(
+                call.pc,
+                op,
+                "CVNS voice channel outside 0..3 sets an unmodeled flag",
+            )
+            .into());
+        }
+        Ok(channel as usize)
+    }
+
+    fn try_cvns_se_play(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let with_fade = call.command == 0x4ad;
+        let op = if with_fade { 0x20ad } else { 0x20b0 };
+        let shift = if with_fade { 4 } else { 0 };
+        let ch = Self::check_cvns_se_channel(call, op)?;
+        let name_ref = call.argument(8, "name")?;
+        let volume = call.argument(12, "volume")? as i32;
+        let fade_in_ms = if with_fade {
+            call.argument(16, "fade milliseconds")?
+        } else {
+            0
+        };
+        let looped = call.argument(16 + shift, "loop")? != 0;
+        let flag = call.argument(20 + shift, "start")? != 0;
+        let name = call.vm.resolve_string(name_ref)?;
+        if name.len() >= 64 {
+            return Err(error(call.pc, op, "SE file name exceeds the 64-byte record").into());
+        }
+        let started = if self.settings.se_enabled {
+            Some(backend.play(&AudioRequest::PlaySe {
+                channel: ch as u8,
+                name: name.clone(),
+                volume: Self::cvns_se_volume_for(&self.cvns_volumes, volume),
+                looped,
+                flag,
+                fade_in_ms,
+            })?)
+        } else {
+            None
+        };
+        call.complete(0x4014 + shift as u16)?;
+        if let Some(started) = started {
+            call.vm
+                .state_mut()
+                .set_system_integer(0, u32::from(started))
+                .expect("slot 0 exists");
+        }
+        *self.cvns_se_slot_mut(ch) = Some(SeChannel {
+            name,
+            looped,
+            volume,
+            flag,
+        });
+        self.cvns.gains[ch] = 100;
+        self.cvns.pans[ch] = 0;
+        Ok(())
+    }
+
+    fn try_cvns_se_start(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let restart = call.command == 0x4ae;
+        let op = if restart { 0x20ae } else { 0x20b1 };
+        let ch = Self::check_cvns_se_channel(call, op)?;
+        let looped = call.argument(8, "loop")? != 0;
+        if self.settings.se_enabled {
+            if restart {
+                backend.restart_se(ch as u8, looped)?;
+            } else {
+                backend.start(ch as u8, looped)?;
+            }
+        }
+        call.complete(0x4008)?;
+        let slot = self
+            .cvns_se_slot_mut(ch)
+            .get_or_insert_with(SeChannel::default);
+        slot.looped = looped;
+        slot.flag = true;
+        Ok(())
+    }
+
+    fn try_cvns_se_pause(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let ch = Self::check_cvns_se_channel(call, 0x20b2)?;
+        backend.pause_se(ch as u8)?;
+        call.complete(0x4004)?;
+        self.cvns_se_slot_mut(ch)
+            .get_or_insert_with(SeChannel::default)
+            .flag = false;
+        Ok(())
+    }
+
+    fn try_cvns_se_stop(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let ch = Self::check_cvns_se_channel(call, 0x20b3)?;
+        backend.stop(ch as u8)?;
+        call.complete(0x4004)?;
+        let slot = self
+            .cvns_se_slot_mut(ch)
+            .get_or_insert_with(SeChannel::default);
+        slot.name.clear();
+        slot.flag = false;
+        Ok(())
+    }
+
+    fn try_cvns_se_stop_all(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        for ch in 0..CVNS_SE_CHANNELS {
+            backend.stop(ch as u8)?;
+            self.cvns_se_slot_mut(ch)
+                .get_or_insert_with(SeChannel::default)
+                .name
+                .clear();
+        }
+        call.complete(0x4000)?;
+        Ok(())
+    }
+
+    fn try_cvns_se_fade_out(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let ch = Self::check_cvns_se_channel(call, 0x20b5)?;
+        let fade_ms = call.argument(8, "fade milliseconds")?;
+        backend.fade_out_se(ch as u8, fade_ms)?;
+        call.complete(0x4008)?;
+        self.cvns_se_slot_mut(ch)
+            .get_or_insert_with(SeChannel::default)
+            .name
+            .clear();
+        Ok(())
+    }
+
+    fn try_cvns_se_position(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let ch = Self::check_cvns_se_channel(call, 0x20b6)?;
+        let position = backend.se_position(ch as u8)?;
+        call.complete(0x4004)?;
+        call.vm
+            .state_mut()
+            .set_system_integer(0, position.unwrap_or(u32::MAX))
+            .expect("slot 0 exists");
+        Ok(())
+    }
+
+    fn try_cvns_se_gain(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let ch = Self::check_cvns_se_channel(call, 0x20b7)?;
+        let multiplier = call.argument(8, "multiplier")?;
+        backend.set_se_gain(ch as u8, (u64::from(multiplier) * 256 / 100) as u32)?;
+        call.complete(0x4008)?;
+        self.cvns.gains[ch] = multiplier;
+        Ok(())
+    }
+
+    fn try_cvns_se_pan(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let ch = Self::check_cvns_se_channel(call, 0x20af)?;
+        let pan = call.argument(8, "pan")? as i32;
+        backend.set_se_pan(ch as u8, pan)?;
+        call.complete(0x4008)?;
+        self.cvns.pans[ch] = pan;
+        Ok(())
+    }
+
+    fn try_cvns_voice_play(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let ch = Self::check_cvns_voice_channel(call, 0x20b8)?;
+        let name_ref = call.argument(8, "name")?;
+        let volume = call.argument(12, "volume")? as i32;
+        let _looped = call.argument(16, "loop")? != 0;
+        let start = call.argument(20, "start")? != 0;
+        let name = call.vm.resolve_string(name_ref)?;
+        let length = if self.settings.voice_enabled {
+            if name.len() >= 64 {
+                return Err(error(
+                    call.pc,
+                    0x20b8,
+                    "voice file name exceeds the 64-byte device limit",
+                )
+                .into());
+            }
+            Some(backend.play_voice_with_len(&AudioRequest::PlayVoice {
+                channel: ch as u8,
+                name,
+                volume: Self::cvns_voice_volume_for(&self.cvns_volumes, volume),
+                start,
+                rate_bits: 1.0f32.to_bits(),
+                mixer: self.mixer,
+            })?)
+        } else {
+            None
+        };
+        call.complete(0x4014)?;
+        let state = call.vm.state_mut();
+        match length {
+            Some(Some(bytes)) => {
+                state.set_system_integer(0, 1).expect("slot 0 exists");
+                state.set_system_integer(4, bytes).expect("slot 4 exists");
+            }
+            Some(None) => {
+                state.set_system_integer(0, 0).expect("slot 0 exists");
+                // Common CVNS script wrappers unconditionally copy slot 4 after 0x20b8.
+                state.set_system_integer(4, 0).expect("slot 4 exists");
+            }
+            None => {
+                state.set_system_integer(0, 0).expect("slot 0 exists");
+                if state.system_integer(4).is_none() {
+                    state.set_system_integer(4, 0).expect("slot 4 exists");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn try_cvns_voice_start(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let ch = Self::check_cvns_voice_channel(call, 0x20b9)?;
+        let looped = call.argument(8, "loop")? != 0;
+        backend.start_voice(ch as u8, looped)?;
+        call.complete(0x4008)?;
+        Ok(())
+    }
+
+    fn try_cvns_voice_position(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let ch = Self::check_cvns_voice_channel(call, 0x20bc)?;
+        let position = backend.voice_position(ch as u8)?;
+        call.complete(0x4004)?;
+        call.vm
+            .state_mut()
+            .set_system_integer(0, position.unwrap_or(u32::MAX))
+            .expect("slot 0 exists");
+        Ok(())
+    }
+
+    fn try_cvns_voice_gain(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let ch = Self::check_cvns_voice_channel(call, 0x20bd)?;
+        let multiplier = call.argument(8, "multiplier")?;
+        backend.set_voice_gain(ch as u8, (u64::from(multiplier) * 256 / 100) as u32)?;
+        call.complete(0x4008)?;
+        self.cvns.voice_gains[ch] = multiplier;
+        Ok(())
+    }
+
+    fn try_cvns_voice_pan(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let ch = Self::check_cvns_voice_channel(call, 0x20be)?;
+        let pan = call.argument(8, "pan")? as i32;
+        backend.set_voice_pan(ch as u8, pan)?;
+        call.complete(0x4008)?;
+        self.cvns.voice_pans[ch] = pan;
+        Ok(())
+    }
+
+    fn try_cvns_voice_level(&mut self, call: &mut Call<'_, '_>) -> Result<(), Box<dyn Error>> {
+        let _ch = Self::check_cvns_voice_channel(call, 0x20bf)?;
+        call.complete(0x4004)?;
+        let state = call.vm.state_mut();
+        state.set_system_integer(4, 0).expect("slot 4 exists");
+        state.set_system_integer(5, 0).expect("slot 5 exists");
+        Ok(())
+    }
+
+    fn try_cvns_aux_se(
+        &mut self,
+        call: &mut Call<'_, '_>,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        let op = call.command + 0x1c00;
+        let channel = call.argument(4, "channel")?;
+        if channel as usize >= AUX_SE_CHANNELS {
+            return Err(error(
+                call.pc,
+                op,
+                "CVNS aux SE channel outside 0..3 sets an unmodeled flag",
+            )
+            .into());
+        }
+        let ch = channel as usize;
+        match call.command {
+            0x4c5 => {
+                let name_ref = call.argument(8, "name")?;
+                let volume = call.argument(12, "volume")? as i32;
+                let fade_in_ms = call.argument(16, "fade milliseconds")?;
+                let looped = call.argument(20, "loop")? != 0;
+                let start = call.argument(24, "start")? != 0;
+                let name = call.vm.resolve_string(name_ref)?;
+                if name.len() >= 64 {
+                    return Err(error(call.pc, op, "aux SE file name exceeds 64 bytes").into());
+                }
+                let eff = Self::cvns_percent_to_gain(
+                    (volume.max(0) as u32).saturating_mul(self.cvns_volumes[0]) / 100,
+                );
+                let loaded = backend.play_aux_se(&AudioRequest::PlayAuxSe {
+                    channel: ch as u8,
+                    name: name.clone(),
+                    volume: eff,
+                    fade_in_ms,
+                    looped,
+                    start,
+                })?;
+                call.complete(0x4018)?;
+                call.vm
+                    .state_mut()
+                    .set_system_integer(0, u32::from(loaded))
+                    .expect("slot 0 exists");
+                self.cvns.aux_channels[ch] = Some(SeChannel {
+                    name,
+                    looped,
+                    volume,
+                    flag: start,
+                });
+            }
+            0x4c6 => {
+                let position = backend.aux_se_position(ch as u8)?;
+                call.complete(0x4004)?;
+                call.vm
+                    .state_mut()
+                    .set_system_integer(0, position.unwrap_or(u32::MAX))
+                    .expect("slot 0 exists");
+            }
+            _ => {
+                backend.stop_aux_se(ch as u8)?;
+                call.complete(0x4004)?;
+                self.cvns.aux_channels[ch] = None;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Record 0x310 length: six 52-byte channel records at +1656.
@@ -1570,6 +2516,224 @@ impl AudioHost {
         self.played = played;
         Ok(())
     }
+
+    /// Serializes CVNS BGM (+ loop sample), 48 SE channels (+ gain/pan), and 4 aux SE slots.
+    pub(crate) fn saved_cvns(&self) -> Vec<u8> {
+        let mut out = Vec::new();
+        let write_bytes = |out: &mut Vec<u8>, bytes: &[u8]| {
+            out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+            out.extend_from_slice(bytes);
+        };
+        let write_se = |out: &mut Vec<u8>, slot: Option<&SeChannel>| match slot {
+            None => out.push(0),
+            Some(c) => {
+                out.push(1);
+                write_bytes(out, &c.name);
+                out.push(u8::from(c.looped));
+                out.extend_from_slice(&c.volume.to_le_bytes());
+                out.push(u8::from(c.flag));
+            }
+        };
+        write_bytes(&mut out, &self.bgm.primary);
+        write_bytes(&mut out, &self.bgm.secondary);
+        out.extend_from_slice(&self.cvns.bgm_loop_sample.to_le_bytes());
+        for i in 0..CVNS_SE_CHANNELS {
+            write_se(&mut out, self.cvns_se_slot(i));
+            let gain = self.cvns.gains.get(i).copied().unwrap_or(100);
+            let pan = self.cvns.pans.get(i).copied().unwrap_or(0);
+            out.extend_from_slice(&gain.to_le_bytes());
+            out.extend_from_slice(&pan.to_le_bytes());
+        }
+        for aux in &self.cvns.aux_channels {
+            write_se(&mut out, aux.as_ref());
+        }
+        out
+    }
+
+    pub(crate) fn restore_cvns(
+        &mut self,
+        saved: SavedCvnsAudio,
+        backend: &mut dyn AudioBackend,
+    ) -> Result<(), Box<dyn Error>> {
+        self.enable_cvns();
+        let enabled = self.settings.bgm_enabled;
+        if enabled {
+            backend.stop_bgm()?;
+        }
+        for channel in 0..CVNS_SE_CHANNELS as u8 {
+            backend.stop(channel)?;
+        }
+        for channel in 0..VOICE_CHANNELS as u8 {
+            backend.stop_voice(channel)?;
+        }
+        for channel in 0..AUX_SE_CHANNELS as u8 {
+            backend.stop_aux_se(channel)?;
+        }
+        let mut current = if enabled { 0 } else { self.bgm.channel };
+        self.bgm = BgmState {
+            channel: current,
+            ..BgmState::default()
+        };
+        if !saved.bgm[0].is_empty() {
+            let channel = current.wrapping_sub(1) & 1;
+            if enabled {
+                let req = AudioRequest::PlayBgm {
+                    channel,
+                    previous: current,
+                    primary: saved.bgm[0].clone(),
+                    secondary: saved.bgm[1].clone(),
+                    volume: Self::cvns_bgm_volume_for(&self.cvns_volumes),
+                    fade_ms: 0,
+                    looped: true,
+                    flag_1576: self.settings.bgm_flag_1576,
+                };
+                backend.play_bgm_loop_from(&req, saved.bgm_loop_sample)?;
+            }
+            current = channel;
+            let [primary, secondary] = saved.bgm;
+            self.bgm = BgmState {
+                primary,
+                secondary,
+                channel: current,
+                playing: enabled,
+            };
+        }
+        self.cvns.bgm_loop_sample = saved.bgm_loop_sample;
+        for (i, ((channel, gain), pan)) in saved
+            .channels
+            .iter()
+            .zip(&saved.gains)
+            .zip(&saved.pans)
+            .enumerate()
+        {
+            if let Some(c) = channel.as_ref().filter(|c| !c.name.is_empty()) {
+                let start = c.looped && c.flag;
+                backend.play(&AudioRequest::PlaySe {
+                    channel: i as u8,
+                    name: c.name.clone(),
+                    volume: Self::cvns_se_volume_for(&self.cvns_volumes, c.volume),
+                    looped: c.looped,
+                    flag: start,
+                    fade_in_ms: 0,
+                })?;
+                if *gain < 100 {
+                    let mult = (u64::from(*gain) * 256 / 100) as u32;
+                    backend.set_se_gain(i as u8, mult)?;
+                }
+                if *pan != 0 {
+                    backend.set_se_pan(i as u8, *pan)?;
+                }
+            }
+            *self.cvns_se_slot_mut(i) = channel.clone();
+            self.cvns.gains[i] = *gain;
+            self.cvns.pans[i] = *pan;
+        }
+        for (i, aux) in saved.aux_channels.iter().enumerate() {
+            if let Some(c) = aux.as_ref().filter(|c| !c.name.is_empty()) {
+                let eff = Self::cvns_percent_to_gain(
+                    (c.volume.max(0) as u32).saturating_mul(self.cvns_volumes[0]) / 100,
+                );
+                backend.play_aux_se(&AudioRequest::PlayAuxSe {
+                    channel: i as u8,
+                    name: c.name.clone(),
+                    volume: eff,
+                    fade_in_ms: 0,
+                    looped: c.looped,
+                    start: c.flag,
+                })?;
+            }
+        }
+        self.cvns.aux_channels = saved.aux_channels;
+        self.cvns.voice_gains = [100; VOICE_CHANNELS];
+        self.cvns.voice_pans = [0; VOICE_CHANNELS];
+        self.played = [0; SE_CHANNELS];
+        Ok(())
+    }
+}
+
+pub(crate) struct SavedCvnsAudio {
+    bgm: [Vec<u8>; 2],
+    bgm_loop_sample: u32,
+    channels: [Option<SeChannel>; CVNS_SE_CHANNELS],
+    gains: [u32; CVNS_SE_CHANNELS],
+    pans: [i32; CVNS_SE_CHANNELS],
+    aux_channels: [Option<SeChannel>; AUX_SE_CHANNELS],
+}
+
+impl SavedCvnsAudio {
+    pub(crate) fn decode(bytes: &[u8]) -> Result<Self, FormatError> {
+        let mut at = 0usize;
+        let take = |at: &mut usize, n: usize| -> Result<&[u8], FormatError> {
+            let end = at
+                .checked_add(n)
+                .filter(|&e| e <= bytes.len())
+                .ok_or(FormatError("truncated CVNS audio snapshot"))?;
+            let slice = &bytes[*at..end];
+            *at = end;
+            Ok(slice)
+        };
+        let read_u32 = |at: &mut usize| -> Result<u32, FormatError> {
+            Ok(u32::from_le_bytes(take(at, 4)?.try_into().unwrap()))
+        };
+        let read_i32 = |at: &mut usize| -> Result<i32, FormatError> {
+            Ok(i32::from_le_bytes(take(at, 4)?.try_into().unwrap()))
+        };
+        let read_bytes = |at: &mut usize, limit: usize| -> Result<Vec<u8>, FormatError> {
+            let len = read_u32(at)? as usize;
+            if len >= limit {
+                return Err(FormatError("CVNS audio name exceeds device limit"));
+            }
+            let data = take(at, len)?.to_vec();
+            if data.contains(&0) {
+                return Err(FormatError("CVNS audio name contains NUL"));
+            }
+            Ok(data)
+        };
+        let read_se = |at: &mut usize| -> Result<Option<SeChannel>, FormatError> {
+            let present = take(at, 1)?[0];
+            if present == 0 {
+                return Ok(None);
+            }
+            if present != 1 {
+                return Err(FormatError("invalid CVNS SE presence flag"));
+            }
+            let name = read_bytes(at, 64)?;
+            let looped = take(at, 1)?[0] != 0;
+            let volume = read_i32(at)?;
+            let flag = take(at, 1)?[0] != 0;
+            Ok(Some(SeChannel {
+                name,
+                looped,
+                volume,
+                flag,
+            }))
+        };
+        let bgm = [read_bytes(&mut at, 64)?, read_bytes(&mut at, 64)?];
+        let bgm_loop_sample = read_u32(&mut at)?;
+        let mut channels: [Option<SeChannel>; CVNS_SE_CHANNELS] = std::array::from_fn(|_| None);
+        let mut gains = [100u32; CVNS_SE_CHANNELS];
+        let mut pans = [0i32; CVNS_SE_CHANNELS];
+        for i in 0..CVNS_SE_CHANNELS {
+            channels[i] = read_se(&mut at)?;
+            gains[i] = read_u32(&mut at)?.min(100);
+            pans[i] = read_i32(&mut at)?.clamp(-100, 100);
+        }
+        let mut aux_channels: [Option<SeChannel>; AUX_SE_CHANNELS] = Default::default();
+        for slot in &mut aux_channels {
+            *slot = read_se(&mut at)?;
+        }
+        if at != bytes.len() {
+            return Err(FormatError("trailing bytes in CVNS audio snapshot"));
+        }
+        Ok(Self {
+            bgm,
+            bgm_loop_sample,
+            channels,
+            gains,
+            pans,
+            aux_channels,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -1678,5 +2842,157 @@ mod lifecycle_tests {
         host.stop_for_lifecycle(&mut RecordingAudio::default(), true)
             .unwrap();
         assert_eq!(host.bgm, BgmState::default());
+    }
+
+    #[test]
+    fn cvns_48_channel_se_and_100_percent_volume_and_bgm_loop_frames() {
+        fn call_cvns(
+            host: &mut AudioHost,
+            backend: &mut RecordingAudio,
+            command: u16,
+            args: &[u32],
+            strings: &[&[u8]],
+        ) -> (Option<u32>, Option<u32>) {
+            let mut code = vec![];
+            for &value in args.iter().rev() {
+                code.extend(0x440u16.to_le_bytes());
+                code.extend(4u16.to_le_bytes());
+                code.extend(value.to_le_bytes());
+            }
+            code.extend((command + 0x1c00).to_le_bytes());
+            let mut payload = 0u32.to_le_bytes().to_vec();
+            payload.extend(&code);
+            let mut raw = b"PS2A".to_vec();
+            for n in [
+                48,
+                0,
+                0,
+                1,
+                code.len() as u32,
+                0,
+                0,
+                0,
+                0,
+                payload.len() as u32,
+                0,
+            ] {
+                raw.extend(n.to_le_bytes());
+            }
+            raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+            let script = crate::ps3::Script::decode(&raw).unwrap();
+            let mut vm = Machine::new(&script).unwrap();
+            vm.state_mut().set_string_slots(strings.len() as u32);
+            for (index, text) in strings.iter().enumerate() {
+                vm.state_mut().set_string(index as u32, text).unwrap();
+            }
+            while !matches!(vm.step().unwrap(), crate::machine::Step::System { .. }) {}
+            let pc = vm.pc();
+            host.handle_cvns(&mut Call::new(&mut vm, pc, command), backend)
+                .unwrap();
+            assert_eq!(vm.stack().len_bytes(), 0);
+            let state = vm.state_mut();
+            (state.system_integer(0), state.system_integer(4))
+        }
+
+        let mut host = AudioHost::default();
+        host.enable_cvns();
+        let mut backend = RecordingAudio::default();
+
+        assert_eq!(AudioHost::cvns_percent_to_gain(100), 256);
+
+        call_cvns(
+            &mut host,
+            &mut backend,
+            0x4a7,
+            &[0x8000_0000, 0, 1, 12345],
+            &[b"bgm01"],
+        );
+        assert_eq!(
+            backend.requests(),
+            &[AudioRequest::PlayBgmLoopFrom {
+                channel: 1,
+                previous: 0,
+                primary: b"bgm01".to_vec(),
+                secondary: Vec::new(),
+                volume: 256,
+                fade_ms: 0,
+                looped: true,
+                flag_1576: 0,
+                loop_sample: 12345,
+            }]
+        );
+        assert_eq!(host.cvns.bgm_loop_sample, 12345);
+
+        backend = RecordingAudio::default();
+        call_cvns(
+            &mut host,
+            &mut backend,
+            0x4b0,
+            &[47, 0x8000_0000, 100, 0, 1],
+            &[b"se47"],
+        );
+        assert_eq!(
+            backend.requests(),
+            &[AudioRequest::PlaySe {
+                channel: 47,
+                name: b"se47".to_vec(),
+                volume: 256,
+                looped: false,
+                flag: true,
+                fade_in_ms: 0,
+            }]
+        );
+        assert_eq!(
+            host.cvns_se_slot(47).map(|s| s.name.as_slice()),
+            Some(b"se47".as_slice())
+        );
+
+        backend = RecordingAudio::default();
+        let (v0, v4) = call_cvns(
+            &mut host,
+            &mut backend,
+            0x4b8,
+            &[2, 0x8000_0000, 100, 0, 1],
+            &[b"vo01"],
+        );
+        assert_eq!(v0, Some(0));
+        assert_eq!(v4, Some(0));
+
+        backend = RecordingAudio::default();
+        let (aux0, _) = call_cvns(
+            &mut host,
+            &mut backend,
+            0x4c5,
+            &[3, 0x8000_0000, 100, 25, 1, 1],
+            &[b"aux3"],
+        );
+        assert_eq!(aux0, Some(0));
+        call_cvns(&mut host, &mut backend, 0x4c7, &[3], &[]);
+        assert_eq!(
+            backend.requests(),
+            &[
+                AudioRequest::PlayAuxSe {
+                    channel: 3,
+                    name: b"aux3".to_vec(),
+                    volume: 256,
+                    fade_in_ms: 25,
+                    looped: true,
+                    start: true,
+                },
+                AudioRequest::StopAuxSe { channel: 3 },
+            ]
+        );
+
+        backend = RecordingAudio::default();
+        host.stop_for_lifecycle(&mut backend, true).unwrap();
+        let mut expected = vec![AudioRequest::StopBgm];
+        expected
+            .extend((0..CVNS_SE_CHANNELS as u8).map(|channel| AudioRequest::StopSe { channel }));
+        expected
+            .extend((0..VOICE_CHANNELS as u8).map(|channel| AudioRequest::StopVoice { channel }));
+        expected
+            .extend((0..AUX_SE_CHANNELS as u8).map(|channel| AudioRequest::StopAuxSe { channel }));
+        assert_eq!(backend.requests(), expected);
+        assert!(host.cvns_se_slot(47).is_none());
     }
 }

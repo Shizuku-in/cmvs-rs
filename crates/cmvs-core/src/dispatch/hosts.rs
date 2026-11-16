@@ -210,9 +210,11 @@ pub enum Capability {
     Audio,
     Text,
     Timers,
+    CvnsTiming,
     Flags,
     Random,
     Settings,
+    CvnsConfig,
     History,
     Strings,
     Math,
@@ -254,7 +256,7 @@ impl Capability {
 
     pub(crate) fn uses_message_state(self, command: u16) -> bool {
         // The font-name query needs the message host's backend to show a readable name.
-        command == 0x2de
+        matches!(command, 0x2de | 0x5ec | 0x5ed)
             || self.uses_windows()
             || matches!(
                 self,
@@ -347,9 +349,17 @@ impl Hosts<'_> {
             Capability::Audio => self.audio.is_some(),
             Capability::Text => self.text.is_some(),
             Capability::Timers => self.timers.is_some(),
+            Capability::CvnsTiming => self.timers.is_some() && self.settings.is_some(),
             Capability::Flags => self.flags.is_some(),
             Capability::Random => self.random.is_some(),
             Capability::Settings => self.settings.is_some(),
+            Capability::CvnsConfig => {
+                self.settings.is_some()
+                    && self.audio.is_some()
+                    && self.popup.is_some()
+                    && self.flags.is_some()
+                    && self.effects.is_some()
+            }
             Capability::History => self.history.is_some(),
             Capability::Strings => self.strings,
             Capability::Math => self.math,

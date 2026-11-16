@@ -7,7 +7,11 @@ pub(in crate::dispatch) fn root_audio(
     call: &mut Call<'_, '_>,
 ) -> Result<Flow, Box<dyn Error>> {
     let h = hosts.audio.as_mut().expect("audio capability checked");
-    h.audio.handle(call, h.backend)?;
+    if call.command >= 0x400 {
+        h.audio.handle_cvns(call, h.backend)?;
+    } else {
+        h.audio.handle(call, h.backend)?;
+    }
     Ok(Flow::Done)
 }
 

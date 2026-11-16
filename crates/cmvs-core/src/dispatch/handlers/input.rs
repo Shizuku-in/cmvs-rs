@@ -8,7 +8,7 @@ pub(in crate::dispatch) fn root_input(
     call: &mut Call<'_, '_>,
 ) -> Result<Flow, Box<dyn Error>> {
     let h = hosts.input.as_mut().expect("input capability checked");
-    if call.command == 0x2ef {
+    if matches!(call.command, 0x2ef | 0x447) {
         crate::input::handle_skipping(call, h.input, h.skip)?;
     } else {
         crate::input::handle(call, h.input)?;

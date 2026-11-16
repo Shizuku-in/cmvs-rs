@@ -5,7 +5,7 @@ mod pack;
 mod profile;
 mod write;
 use crate::{FormatError, MAX_PAYLOAD, dispatch::Call, evaluate::State, machine::Machine};
-pub use css0::{CSS0_HEADER, Css0Save, PersistentStarts};
+pub use css0::{CSS0_HEADER, Css0Parameters, Css0Save, PersistentStarts};
 pub use profile::ProfileSystemSave;
 use std::{
     error::Error,
@@ -311,10 +311,16 @@ pub enum SystemSaveEvent {
 #[derive(Default)]
 pub struct SystemSaveHost {
     pub loaded: Option<Css1Save>,
+    /// Active CSS0 persistent bank starts when running CVNS.
+    pub css0_starts: Option<PersistentStarts>,
     /// Zero-count lists leave the previous list unchanged in the original loader.
     pub lists: [Option<Vec<Vec<u8>>>; 2],
 }
 impl SystemSaveHost {
+    /// Switches `write_now` / `try_write` to emit CSS0 `save000.dat` with `starts`.
+    pub fn set_css0(&mut self, starts: PersistentStarts) {
+        self.css0_starts = Some(starts);
+    }
     pub fn try_handle(
         &mut self,
         vm: &mut Machine<'_>,
@@ -342,6 +348,7 @@ impl SystemSaveHost {
         let candidate = save.applied(call.vm.state())?;
         call.complete(0x4000)?;
         *call.vm.state_mut() = candidate;
+        self.css0_starts = Some(starts);
         for (current, new) in self.lists.iter_mut().zip(save.lists()) {
             if !new.is_empty() {
                 *current = Some(new.clone());

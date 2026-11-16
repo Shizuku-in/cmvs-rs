@@ -102,7 +102,12 @@ impl Configuration {
             let value = |section, key, default| {
                 crate::save_menu::profile_int(&self.0, section, key, default) as u32
             };
-            let pixels = match value("CMVS_SYSTEM_MAIN", "WINDOW_SIZE", 1) {
+            let section = if profile.family == crate::profile::Family::Cvns {
+                "CVNS_SYSTEM_MAIN"
+            } else {
+                "CMVS_SYSTEM_MAIN"
+            };
+            let pixels = match value(section, "WINDOW_SIZE", 1) {
                 0 => [640, 480],
                 2 => [1024, 768],
                 9 => [

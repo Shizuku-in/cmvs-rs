@@ -4,8 +4,9 @@ use crate::AudioProgram;
 use cmvs_core::{
     MAX_PAYLOAD,
     audio::{
-        AudioBackend, AudioRequest, MovieAudioClock, SE_CHANNELS, SePlayback, VOICE_CHANNELS,
-        VoiceActivity, VoiceCompressor, VoiceDucking, VoiceDuckingSettings,
+        AUX_SE_CHANNELS, AudioBackend, AudioRequest, CVNS_SE_CHANNELS, MovieAudioClock,
+        SE_CHANNELS, SePlayback, VOICE_CHANNELS, VoiceActivity, VoiceCompressor, VoiceDucking,
+        VoiceDuckingSettings,
     },
     platform::resolve_under,
     resources::{ResourceArchives, ResourceKind, ResourceSource},
@@ -218,7 +219,8 @@ pub struct NativeAudio {
     root: PathBuf,
     paths: BTreeMap<(u16, u32), Vec<u8>>,
     archives: ResourceArchives,
-    se: [Option<Channel>; SE_CHANNELS],
+    se: Vec<Option<Channel>>,
+    aux_se: [Option<Channel>; AUX_SE_CHANNELS],
     voice: [Option<Channel>; VOICE_CHANNELS],
     bgm: [Option<Channel>; 2],
     movie: Option<Channel>,
@@ -298,7 +300,8 @@ impl NativeAudio {
             root: root.canonicalize()?,
             paths: BTreeMap::new(),
             archives: ResourceArchives::new(root)?,
-            se: std::array::from_fn(|_| None),
+            se: (0..CVNS_SE_CHANNELS).map(|_| None).collect(),
+            aux_se: std::array::from_fn(|_| None),
             voice: std::array::from_fn(|_| None),
             bgm: std::array::from_fn(|_| None),
             movie: None,
@@ -341,9 +344,9 @@ impl NativeAudio {
             return Ok(None);
         }
         let lower = name.to_ascii_lowercase();
-        if !lower.ends_with(b".ogg") && !lower.ends_with(b".wav") {
+        if !lower.ends_with(b".ogg") && !lower.ends_with(b".wav") && !lower.ends_with(b".mv2") {
             return Err(format!(
-                "unsupported audio resource: {} (expected Ogg Vorbis or PCM WAVE)",
+                "unsupported audio resource: {} (expected Ogg Vorbis, PCM WAVE, or MV2)",
                 String::from_utf8_lossy(name)
             )
             .into());
@@ -549,7 +552,7 @@ impl AudioBackend for NativeAudio {
         &mut self,
         channels: &[Option<SePlayback>; SE_CHANNELS],
     ) -> Result<(), Box<dyn Error>> {
-        let mut prepared = std::array::from_fn(|_| None);
+        let mut prepared: Vec<Option<Channel>> = (0..SE_CHANNELS).map(|_| None).collect();
         // Load and validate every resource while old sounds keep playing. Candidates
         // remain paused, so a later decode error leaves the audible state unchanged.
         for (index, request) in channels.iter().enumerate() {
@@ -560,7 +563,12 @@ impl AudioBackend for NativeAudio {
                 prepared[index] = Some(self.prepare(program, request.volume, 0));
             }
         }
-        self.se = prepared;
+        for slot in &mut self.se {
+            *slot = None;
+        }
+        for (slot, candidate) in self.se.iter_mut().zip(prepared) {
+            *slot = candidate;
+        }
         for (channel, request) in self.se.iter().zip(channels) {
             if let (Some(channel), Some(request)) = (channel, request)
                 && request.start
@@ -622,7 +630,7 @@ impl AudioBackend for NativeAudio {
         else {
             return Err("expected PlaySe".into());
         };
-        if usize::from(*channel) >= SE_CHANNELS {
+        if usize::from(*channel) >= self.se.len() {
             return Err("SE channel out of range".into());
         }
         let data = self.load(ResourceKind::SoundEffect, name)?;
@@ -759,54 +767,134 @@ impl AudioBackend for NativeAudio {
         Ok(())
     }
     fn play_bgm(&mut self, request: &AudioRequest) -> Result<(), Box<dyn Error>> {
-        let AudioRequest::PlayBgm {
+        self.play_bgm_with_loop(request, 0)
+    }
+    fn play_bgm_loop_from(
+        &mut self,
+        request: &AudioRequest,
+        loop_sample: u32,
+    ) -> Result<(), Box<dyn Error>> {
+        self.play_bgm_with_loop(request, loop_sample)
+    }
+    fn bgm_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+        NativeAudio::bgm_position(self, channel)
+    }
+    fn pause_se(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
+        let slot = self
+            .se
+            .get_mut(usize::from(channel))
+            .ok_or("SE channel out of range")?;
+        if let Some(current) = slot {
+            current.sink.pause();
+        }
+        Ok(())
+    }
+    fn set_se_pan(&mut self, channel: u8, _pan: i32) -> Result<(), Box<dyn Error>> {
+        self.se
+            .get(usize::from(channel))
+            .ok_or("SE channel out of range")?;
+        Ok(())
+    }
+    fn start_voice(&mut self, channel: u8, looped: bool) -> Result<(), Box<dyn Error>> {
+        let slot = self
+            .voice
+            .get_mut(usize::from(channel))
+            .ok_or("voice channel out of range")?;
+        if let Some(current) = slot {
+            current.looped.store(looped, Ordering::Relaxed);
+            current.sink.play();
+        }
+        Ok(())
+    }
+    fn set_voice_gain(&mut self, channel: u8, multiplier: u32) -> Result<(), Box<dyn Error>> {
+        let slot = self
+            .voice
+            .get_mut(usize::from(channel))
+            .ok_or("voice channel out of range")?;
+        if let Some(sound) = slot {
+            sound.script_gain = multiplier as f32 / 256.0;
+            Self::set_gain(sound, sound.gain);
+        }
+        Ok(())
+    }
+    fn set_voice_pan(&mut self, channel: u8, _pan: i32) -> Result<(), Box<dyn Error>> {
+        self.voice
+            .get(usize::from(channel))
+            .ok_or("voice channel out of range")?;
+        Ok(())
+    }
+    fn play_aux_se(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+        let AudioRequest::PlayAuxSe {
             channel,
-            previous,
-            primary,
-            secondary,
+            name,
             volume,
-            fade_ms,
+            fade_in_ms,
             looped,
-            ..
+            start,
         } = request
         else {
-            return Err("expected PlayBgm".into());
+            return Err("expected PlayAuxSe".into());
         };
-        if *channel > 1 || *previous > 1 {
-            return Err("BGM channel out of range".into());
+        let slot = usize::from(*channel);
+        if slot >= self.aux_se.len() {
+            return Err("auxiliary SE channel out of range".into());
         }
-        let first = self
-            .load(ResourceKind::Music, primary)?
-            .ok_or("BGM primary resource missing")?;
-        let second = if secondary.is_empty() {
-            None
-        } else {
-            Some(
-                self.load(ResourceKind::Music, secondary)?
-                    .ok_or("BGM loop resource missing")?,
-            )
+        let data = self.load(ResourceKind::SoundEffect, name)?;
+        let Some(data) = data else {
+            self.aux_se[slot] = None;
+            return Ok(false);
         };
-        let program = AudioProgram::new(first, second, *looped)?;
-        println!(
-            "# native BGM[{channel}] {} + {}: {} Hz, {} channels, loop={looped}, fade_ms={fade_ms}",
-            primary.escape_ascii(),
-            secondary.escape_ascii(),
-            program.sample_rate(),
-            program.channels()
-        );
-        let mut candidate = self.prepare(program, *volume, *fade_ms);
-        candidate.duck_gain = self.voice_ducking.gain() as f32 / 256.0;
-        Self::set_gain(&mut candidate, (*volume).min(256) as f32 / 256.0);
-        for current in self.bgm.iter_mut().flatten() {
-            Self::set_gain(current, (*volume).min(256) as f32 / 256.0);
+        let program = AudioProgram::new(data, None, *looped)?;
+        let candidate = self.prepare(program, *volume, if *start { *fade_in_ms } else { 0 });
+        self.aux_se[slot] = Some(candidate);
+        if *start {
+            self.aux_se[slot].as_ref().unwrap().sink.play();
         }
-        if *fade_ms == 0 {
-            self.bgm = [None, None];
-        } else {
-            Self::fade(&mut self.bgm[*previous as usize], *fade_ms);
+        Ok(true)
+    }
+    fn stop_aux_se(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
+        *self
+            .aux_se
+            .get_mut(usize::from(channel))
+            .ok_or("auxiliary SE channel out of range")? = None;
+        Ok(())
+    }
+    fn aux_se_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+        let channel = self
+            .aux_se
+            .get(usize::from(channel))
+            .ok_or("auxiliary SE channel out of range")?;
+        Self::position(channel.as_ref())
+    }
+    fn set_cvns_volumes(
+        &mut self,
+        bgm: Option<u32>,
+        se: &[(u8, u32)],
+        voice: Option<u32>,
+        aux: Option<u32>,
+    ) -> Result<(), Box<dyn Error>> {
+        if let Some(volume) = bgm.filter(|&v| v <= 256) {
+            for channel in self.bgm.iter_mut().flatten() {
+                Self::set_gain(channel, volume as f32 / 256.0);
+            }
         }
-        self.bgm[*channel as usize] = Some(candidate);
-        self.bgm[*channel as usize].as_ref().unwrap().sink.play();
+        for &(index, volume) in se {
+            if volume <= 256
+                && let Some(Some(channel)) = self.se.get_mut(usize::from(index))
+            {
+                Self::set_gain(channel, volume as f32 / 256.0);
+            }
+        }
+        if let Some(volume) = voice.filter(|&v| v <= 256) {
+            for channel in self.voice.iter_mut().flatten() {
+                Self::set_gain(channel, volume as f32 / 256.0);
+            }
+        }
+        if let Some(volume) = aux.filter(|&v| v <= 256) {
+            for channel in self.aux_se.iter_mut().flatten() {
+                Self::set_gain(channel, volume as f32 / 256.0);
+            }
+        }
         Ok(())
     }
     fn fade_out_bgm(&mut self, channel: u8, ms: u32) -> Result<(), Box<dyn Error>> {
@@ -877,7 +965,12 @@ impl AudioBackend for NativeAudio {
             channel.duck_gain = duck;
             Self::set_gain(channel, channel.gain);
         }
-        for channel in self.se.iter_mut().chain(&mut self.voice) {
+        for channel in self
+            .se
+            .iter_mut()
+            .chain(&mut self.voice)
+            .chain(&mut self.aux_se)
+        {
             Self::tick_channel(channel)?;
             if let Some(current) = channel
                 && current.sink.empty()
@@ -932,6 +1025,64 @@ impl AudioBackend for NativeAudio {
                 position_ms: movie.sink.get_pos().as_millis().min(u128::from(u32::MAX)) as u32,
             }))
         }
+    }
+}
+
+impl NativeAudio {
+    fn play_bgm_with_loop(
+        &mut self,
+        request: &AudioRequest,
+        loop_sample: u32,
+    ) -> Result<(), Box<dyn Error>> {
+        let AudioRequest::PlayBgm {
+            channel,
+            previous,
+            primary,
+            secondary,
+            volume,
+            fade_ms,
+            looped,
+            ..
+        } = request
+        else {
+            return Err("expected PlayBgm".into());
+        };
+        if *channel > 1 || *previous > 1 {
+            return Err("BGM channel out of range".into());
+        }
+        let first = self
+            .load(ResourceKind::Music, primary)?
+            .ok_or("BGM primary resource missing")?;
+        let second = if secondary.is_empty() {
+            None
+        } else {
+            Some(
+                self.load(ResourceKind::Music, secondary)?
+                    .ok_or("BGM loop resource missing")?,
+            )
+        };
+        let program = AudioProgram::with_loop_frames(first, second, *looped, loop_sample)?;
+        println!(
+            "# native BGM[{channel}] {} + {}: {} Hz, {} channels, loop={looped}, fade_ms={fade_ms}",
+            primary.escape_ascii(),
+            secondary.escape_ascii(),
+            program.sample_rate(),
+            program.channels()
+        );
+        let mut candidate = self.prepare(program, *volume, *fade_ms);
+        candidate.duck_gain = self.voice_ducking.gain() as f32 / 256.0;
+        Self::set_gain(&mut candidate, (*volume).min(256) as f32 / 256.0);
+        for current in self.bgm.iter_mut().flatten() {
+            Self::set_gain(current, (*volume).min(256) as f32 / 256.0);
+        }
+        if *fade_ms == 0 {
+            self.bgm = [None, None];
+        } else {
+            Self::fade(&mut self.bgm[*previous as usize], *fade_ms);
+        }
+        self.bgm[*channel as usize] = Some(candidate);
+        self.bgm[*channel as usize].as_ref().unwrap().sink.play();
+        Ok(())
     }
 }
 

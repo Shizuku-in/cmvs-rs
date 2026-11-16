@@ -12,6 +12,15 @@ use cmvs_core::{digest::to_hex, ps3::Script, runtime::load_start};
 use std::path::Path;
 
 pub const RUN_CAPABILITIES: [&str; 3] = [cap::PROFILE, cap::ARCHIVE, cap::KEY_CONFIG];
+pub const CVNS_RUN_CAPABILITIES: [&str; 2] = [cap::PROFILE, cap::ARCHIVE];
+
+pub fn run_capabilities(target: &Target) -> &'static [&'static str] {
+    if target.is_cvns() {
+        &CVNS_RUN_CAPABILITIES
+    } else {
+        &RUN_CAPABILITIES
+    }
+}
 
 /// Result of driving one fresh session to its first stable interactive page.
 pub struct StartRun {

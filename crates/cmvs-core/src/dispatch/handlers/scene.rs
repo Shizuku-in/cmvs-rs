@@ -1,6 +1,6 @@
 //! Scene objects, images, camera motion, effects, and their waits.
 use crate::dispatch::AudioHosts;
-use crate::dispatch::{Call, Flow, Hosts};
+use crate::dispatch::{Call, Flow, Hosts, RuntimeOperation};
 use crate::{audio::AudioBackend, sequence::SequenceContext};
 use std::error::Error;
 
@@ -553,4 +553,58 @@ pub(in crate::dispatch) fn draw_query(
         .expect("scene capability checked")
         .draw_query(call)?;
     Ok(Flow::Done)
+}
+
+pub(in crate::dispatch) fn root_cvns_image(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    if hosts.runtime && matches!(call.command, 0x45a | 0x589) {
+        if call.command == 0x45a {
+            let slot = call.argument(4, "image slot")?;
+            if (slot as usize) >= crate::scene::cvns::CVNS_IMAGES {
+                return Err(call.error("CVNS image slot outside 0..127").into());
+            }
+            return call
+                .defer(RuntimeOperation::CvnsCaptureScreen { slot }, 4)
+                .map_err(Into::into);
+        }
+        let mask_ref = call.argument(4, "mask name")?;
+        let duration_ms = call.argument(8, "duration ms")?;
+        let ramp_ms = call.argument(12, "ramp ms")?;
+        return call
+            .defer(
+                RuntimeOperation::CvnsMaskCapture {
+                    mask_ref,
+                    duration_ms,
+                    ramp_ms,
+                },
+                12,
+            )
+            .map_err(Into::into);
+    }
+    let h = hosts.images.as_mut().expect("image capability checked");
+    h.scene.handle_cvns_image(call, h.source)
+}
+
+pub(in crate::dispatch) fn root_cvns_scene(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    hosts
+        .scene
+        .as_deref_mut()
+        .expect("scene capability checked")
+        .handle_cvns(call)
+}
+
+pub(in crate::dispatch) fn root_cvns_wait(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_, '_>,
+) -> Result<Flow, Box<dyn Error>> {
+    let w = hosts.waits.as_mut().expect("wait capability checked");
+    w.scene
+        .as_deref_mut()
+        .expect("wait scene capability checked")
+        .wait_cvns(call, w.input, w.gate)
 }

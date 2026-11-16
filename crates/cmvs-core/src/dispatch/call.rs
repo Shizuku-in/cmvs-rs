@@ -39,6 +39,20 @@ pub enum RuntimeOperation {
         label_slot: u32,
         text_slot: u32,
     },
+    CvnsSlotInfo {
+        slot: i32,
+        img_slot: u32,
+        label_slot: u32,
+        text_slot: u32,
+    },
+    CvnsCaptureScreen {
+        slot: u32,
+    },
+    CvnsMaskCapture {
+        mask_ref: u32,
+        duration_ms: u32,
+        ramp_ms: u32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

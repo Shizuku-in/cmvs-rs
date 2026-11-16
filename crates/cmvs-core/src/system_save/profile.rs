@@ -84,6 +84,7 @@ impl Drop for StagedFile {
 pub struct ProfileSystemSave {
     fs: Arc<dyn HostFs>,
     directory: PathBuf,
+    css0: Option<super::PersistentStarts>,
     _lock: File,
 }
 impl ProfileSystemSave {
@@ -158,6 +159,7 @@ impl ProfileSystemSave {
         let profile = Self {
             fs,
             directory,
+            css0: None,
             _lock: lock,
         };
         let primary = regular_file(&*profile.fs, &profile.path())?;
@@ -175,20 +177,54 @@ impl ProfileSystemSave {
     pub fn fs(&self) -> &Arc<dyn HostFs> {
         &self.fs
     }
+    pub fn is_css0(&self) -> bool {
+        self.css0.is_some()
+    }
+    /// Selects CSS0 (`save000.dat` / `save000.bak`) validation when `starts` is `Some`.
+    pub fn set_css0(&mut self, starts: Option<super::PersistentStarts>) -> io::Result<()> {
+        let first_css0 = self.css0.is_none() && starts.is_some();
+        self.css0 = starts;
+        if first_css0 {
+            let primary = regular_file(&*self.fs, &self.path())?;
+            let backup = regular_file(&*self.fs, &self.backup_path())?;
+            if !primary && backup {
+                return Err(io::Error::other(
+                    "profile save000.dat is missing but save000.bak exists; restore the backup explicitly",
+                ));
+            }
+        }
+        Ok(())
+    }
     pub fn path(&self) -> PathBuf {
-        self.directory.join("system.dat")
+        self.directory.join(if self.css0.is_some() {
+            "save000.dat"
+        } else {
+            "system.dat"
+        })
     }
     pub fn backup_path(&self) -> PathBuf {
-        self.directory.join("system.bak")
+        self.directory.join(if self.css0.is_some() {
+            "save000.bak"
+        } else {
+            "system.bak"
+        })
+    }
+    fn config_names(&self) -> (&'static str, &'static str) {
+        if self.css0.is_some() {
+            ("cvns.cfg", "cvns.cfg.bak")
+        } else {
+            ("cmvs.cfg", "cmvs.cfg.bak")
+        }
     }
     pub fn read_configuration(&self) -> io::Result<Option<crate::settings::Configuration>> {
-        let path = self.directory.join("cmvs.cfg");
+        let (name, bak) = self.config_names();
+        let path = self.directory.join(name);
         let primary = regular_file(&*self.fs, &path)?;
-        let backup = regular_file(&*self.fs, &self.directory.join("cmvs.cfg.bak"))?;
+        let backup = regular_file(&*self.fs, &self.directory.join(bak))?;
         if !primary && backup {
-            return Err(io::Error::other(
-                "profile cmvs.cfg is missing but its backup exists; restore explicitly",
-            ));
+            return Err(io::Error::other(format!(
+                "profile {name} is missing but its backup exists; restore explicitly"
+            )));
         }
         if primary {
             crate::settings::Configuration::read_with_fs(&*self.fs, &path)
@@ -200,8 +236,9 @@ impl ProfileSystemSave {
         &mut self,
         configuration: &crate::settings::Configuration,
     ) -> io::Result<()> {
-        let path = self.directory.join("cmvs.cfg");
-        let backup = self.directory.join("cmvs.cfg.bak");
+        let (name, bak) = self.config_names();
+        let path = self.directory.join(name);
+        let backup = self.directory.join(bak);
         regular_file(&*self.fs, &backup)?;
         let previous = self.read_configuration()?;
         let staged = self.stage(configuration.bytes())?;
@@ -242,22 +279,35 @@ impl ProfileSystemSave {
 }
 impl SystemSaveSink for ProfileSystemSave {
     fn write(&mut self, raw: &[u8]) -> io::Result<()> {
-        let incoming = Css1Save::decode(raw).map_err(io::Error::other)?;
         let primary = self.path();
         let backup = self.backup_path();
-        let previous = if regular_file(&*self.fs, &primary)? {
-            let raw = FileSystemSave::with_fs(&primary, Arc::clone(&self.fs))
-                .read()?
-                .ok_or_else(|| io::Error::other("profile system.dat disappeared"))?;
-            let previous = Css1Save::decode(&raw).map_err(io::Error::other)?;
-            if previous.layout().game_id != 0
-                && previous.layout().game_id != incoming.layout().game_id
-            {
-                return Err(io::Error::other("profile CSS1 game identifier mismatch"));
+        let previous = if let Some(starts) = self.css0 {
+            super::Css0Save::decode(raw, starts).map_err(io::Error::other)?;
+            if regular_file(&*self.fs, &primary)? {
+                let raw = FileSystemSave::css0_with_fs(&primary, Arc::clone(&self.fs))
+                    .read()?
+                    .ok_or_else(|| io::Error::other("profile save000.dat disappeared"))?;
+                super::Css0Save::decode(&raw, starts).map_err(io::Error::other)?;
+                Some(raw)
+            } else {
+                None
             }
-            Some(raw)
         } else {
-            None
+            let incoming = Css1Save::decode(raw).map_err(io::Error::other)?;
+            if regular_file(&*self.fs, &primary)? {
+                let raw = FileSystemSave::with_fs(&primary, Arc::clone(&self.fs))
+                    .read()?
+                    .ok_or_else(|| io::Error::other("profile system.dat disappeared"))?;
+                let previous = Css1Save::decode(&raw).map_err(io::Error::other)?;
+                if previous.layout().game_id != 0
+                    && previous.layout().game_id != incoming.layout().game_id
+                {
+                    return Err(io::Error::other("profile CSS1 game identifier mismatch"));
+                }
+                Some(raw)
+            } else {
+                None
+            }
         };
         regular_file(&*self.fs, &backup)?;
         let staged = self.stage(raw)?;

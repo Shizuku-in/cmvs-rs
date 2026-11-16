@@ -138,16 +138,20 @@ impl Runtime<'_> {
         let Some(SystemOutput::Profile(profile)) = &mut self.system_output else {
             unreachable!()
         };
-        // Only persist CSS1 after the startup load command has completed,
+        // Only persist CSS1/CSS0 after the startup load command has completed,
         // including its missing-file branch. Earlier exits may precede variable
         // initialization and must not manufacture persistent defaults.
-        if self.system_host.loaded.is_some() || self.auto_resume_checked {
+        let updated_source = if self.system_host.loaded.is_some() || self.auto_resume_checked {
             self.system_host
                 .write_now(self.machine.state(), profile, &mut self.random, id)?;
-            self.system_source =
-                crate::system_save::FileSystemSave::with_fs(profile.path(), profile.fs().clone());
-        }
+            Some((profile.path(), profile.fs().clone()))
+        } else {
+            None
+        };
         profile.write_configuration(&configuration)?;
+        if let Some((path, fs)) = updated_source {
+            self.system_source = self.open_system_source(path, fs);
+        }
         self.configuration = configuration;
         Ok(true)
     }

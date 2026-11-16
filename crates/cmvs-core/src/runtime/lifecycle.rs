@@ -559,8 +559,7 @@ mod tests {
 
         // Phase 1: seed user/system.dat and user/save000.dat via a normal session.
         {
-            let profile =
-                ProfileSystemSave::open_with_fs(&user, &root, Arc::new(StdFs)).unwrap();
+            let profile = ProfileSystemSave::open_with_fs(&user, &root, Arc::new(StdFs)).unwrap();
             let mut seed = Runtime::with_options(
                 &script,
                 &root,
@@ -618,5 +617,164 @@ mod tests {
         drop(game);
         let _ = std::fs::remove_dir_all(&user);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cvns_runtime_snapshot_save_load_slot_info_and_persistent_preservation() {
+        let root = std::env::temp_dir().join(format!("cmvs-cvns-save-{}", std::process::id()));
+        let user = std::env::temp_dir().join(format!("cmvs-cvns-user-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&user);
+        std::fs::create_dir_all(root.join("data/pack")).unwrap();
+        std::fs::create_dir_all(&user).unwrap();
+        let archive: Vec<_> = include_str!("../../../../tests/fixtures/cpz6-script.hex")
+            .trim()
+            .as_bytes()
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|p| u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16).unwrap())
+            .collect();
+        std::fs::write(root.join("data/pack/script.cpz"), archive).unwrap();
+
+        let mut code = Vec::new();
+        let push_int = |code: &mut Vec<u8>, v: u32| {
+            code.extend(0x440u16.to_le_bytes());
+            code.extend(4u16.to_le_bytes());
+            code.extend(v.to_le_bytes());
+        };
+        let call = |code: &mut Vec<u8>, op: u16, args: &[u32]| {
+            for &arg in args.iter().rev() {
+                push_int(code, arg);
+            }
+            code.extend(op.to_le_bytes());
+        };
+        call(&mut code, 0x210b, &[16]);
+        call(&mut code, 0x210c, &[8]);
+        call(&mut code, 0x210d, &[3]);
+        call(&mut code, 0x2178, &[0x8000_0000 | 6]); // base window title +340
+        call(&mut code, 0x21a6, &[2, 2]); // 0x22b0 thumbnail 2x2
+        call(&mut code, 0x200a, &[0x223344]);
+        call(&mut code, 0x21a0, &[]); // 0x22b2 capture snapshot
+        let after_capture_pc = code.len();
+        call(&mut code, 0x21ae, &[0]); // slot 0 (save000.dat) -> 0
+        let after_exists0_pc = code.len();
+        call(&mut code, 0x21ae, &[1]); // slot 1 (CSP1) -> 1
+        let after_exists1_pc = code.len();
+        call(&mut code, 0x21a7, &[1, 4]); // LatestSlot 1..4 -> 1
+        let after_latest_pc = code.len();
+        call(&mut code, 0x21ac, &[1, 5, 0x8000_0000 | 4, 0x8000_0000 | 5]);
+        let after_info_pc = code.len();
+        call(&mut code, 0x2003, &[]);
+
+        let mut raw = b"PS2A".to_vec();
+        for word in [
+            48u32,
+            0,
+            0,
+            0,
+            code.len() as u32,
+            0,
+            0,
+            0,
+            0,
+            code.len() as u32,
+            0,
+        ] {
+            raw.extend(word.to_le_bytes());
+        }
+        raw.extend(code.into_iter().map(|b| b.rotate_left(1).wrapping_add(124)));
+        std::fs::write(root.join("data/pack/start.ps3"), &raw).unwrap();
+
+        let registry = Registry::builtin();
+        let game = registry
+            .identify_game(&root, Some("cvns-20090203"))
+            .unwrap();
+        let script = Script::decode(&raw).unwrap();
+        let mut run = Runtime::with_options(
+            &script,
+            &root,
+            &game,
+            crate::runtime::RuntimeOptions {
+                saves: crate::runtime::SaveStorage::UserDirectory(user.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        run.machine.state_mut().set_integer(2, 123).unwrap();
+        run.machine.state_mut().set_integer(8, 777).unwrap();
+        run.machine.state_mut().set_string(1, b"local1").unwrap();
+        run.machine.state_mut().set_string(3, b"persist3").unwrap();
+        run.machine.state_mut().set_string(6, b"Miharu").unwrap();
+        run.save_title.restore(b"Chapter".to_vec());
+        run.save_info.restore([101, 202, 303]);
+        let mut bmp = Vec::new();
+        bmp.extend_from_slice(b"BM");
+        bmp.extend_from_slice(&70u32.to_le_bytes());
+        bmp.extend_from_slice(&0u32.to_le_bytes());
+        bmp.extend_from_slice(&54u32.to_le_bytes());
+        bmp.extend_from_slice(&40u32.to_le_bytes());
+        bmp.extend_from_slice(&2i32.to_le_bytes());
+        bmp.extend_from_slice(&2i32.to_le_bytes());
+        bmp.extend_from_slice(&1u16.to_le_bytes());
+        bmp.extend_from_slice(&24u16.to_le_bytes());
+        bmp.extend_from_slice(&[0u8; 24]);
+        bmp.extend_from_slice(&[10, 20, 30, 40, 50, 60, 0, 0]);
+        bmp.extend_from_slice(&[70, 80, 90, 100, 110, 120, 0, 0]);
+        run.thumbnail = Some(bmp);
+
+        let mut backend = RecordingBackend::default();
+        while run.machine.pc() != after_capture_pc {
+            let ev = run.tick(&mut backend).unwrap();
+            assert!(matches!(
+                ev,
+                RuntimeEvent::Progress | RuntimeEvent::SnapshotCaptured
+            ));
+        }
+        assert!(run.save_slot(1).unwrap());
+
+        run.save_info = Default::default();
+        while run.machine.pc() != after_exists0_pc {
+            assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
+        }
+        assert_eq!(run.machine.state().system_integer(0), Some(0));
+        while run.machine.pc() != after_exists1_pc {
+            assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
+        }
+        assert_eq!(run.machine.state().system_integer(0), Some(1));
+        while run.machine.pc() != after_latest_pc {
+            assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
+        }
+        assert_eq!(run.machine.state().system_integer(0), Some(1));
+        while run.machine.pc() != after_info_pc {
+            assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
+        }
+        let state = run.machine.state();
+        assert_eq!(state.system_integer(0), Some(1));
+        assert_eq!(state.system_integer(4), Some(101));
+        assert_eq!(state.system_integer(5), Some(202));
+        assert_eq!(state.system_integer(6), Some(303));
+        assert!(state.string(4).unwrap().ends_with(b" Chapter"));
+        assert!(run.scene.cvns().unwrap().images[5].is_some());
+
+        run.machine.state_mut().set_integer(2, 0).unwrap();
+        run.machine.state_mut().set_integer(8, 888).unwrap();
+        run.machine.state_mut().set_string(1, b"changed").unwrap();
+        run.machine
+            .state_mut()
+            .set_string(3, b"persist_new")
+            .unwrap();
+        run.load_slot(1, &mut backend).unwrap();
+        assert_eq!(run.machine.pc(), after_capture_pc);
+        assert_eq!(run.machine.state().integer(2), Some(123));
+        assert_eq!(run.machine.state().integer(8), Some(888));
+        assert_eq!(run.machine.state().string(1), Some(b"local1".as_slice()));
+        assert_eq!(
+            run.machine.state().string(3),
+            Some(b"persist_new".as_slice())
+        );
+        assert_eq!(run.save_info.values(), [Some(101), Some(202), Some(303)]);
+        let _ = std::fs::remove_dir_all(user);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

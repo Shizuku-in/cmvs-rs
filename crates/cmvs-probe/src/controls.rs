@@ -7,9 +7,15 @@ use cmvs_core::{
 
 pub const GROUPS: usize = BUTTON_GROUPS + 8;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
+pub enum GroupButtons<'a> {
+    Cmvs(&'a [Button]),
+    Rects(Vec<[i32; 4]>),
+}
+
+#[derive(Clone)]
 pub struct Group<'a> {
-    pub buttons: &'a [Button],
+    buttons: GroupButtons<'a>,
     pub current: Option<usize>,
     offset: [i32; 2],
     clip: Option<[i32; 4]>,
@@ -18,9 +24,23 @@ pub struct Group<'a> {
 }
 
 impl<'a> Group<'a> {
+    pub fn len(&self) -> usize {
+        match &self.buttons {
+            GroupButtons::Cmvs(b) => b.len(),
+            GroupButtons::Rects(r) => r.len(),
+        }
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    pub fn raw_rect(&self, index: usize) -> Option<[i32; 4]> {
+        match &self.buttons {
+            GroupButtons::Cmvs(b) => b.get(index).map(|button| button.rect),
+            GroupButtons::Rects(r) => r.get(index).copied(),
+        }
+    }
     pub fn rect(&self, index: usize) -> Option<[i32; 4]> {
-        let button = self.buttons.get(index)?;
-        let [x, y, w, h] = button.rect;
+        let [x, y, w, h] = self.raw_rect(index)?;
         if w <= 0 || h <= 0 {
             return None;
         }
@@ -47,7 +67,11 @@ impl<'a> Group<'a> {
         ])
     }
     pub fn enabled(&self, index: usize) -> bool {
-        self.buttons.get(index).is_some_and(|button| button.enabled) && self.rect(index).is_some()
+        let flag = match &self.buttons {
+            GroupButtons::Cmvs(b) => b.get(index).is_some_and(|button| button.enabled),
+            GroupButtons::Rects(r) => index < r.len(),
+        };
+        flag && self.rect(index).is_some()
     }
     /// The device pointer position at the centre of a button's rectangle.
     pub fn point(&self, index: usize) -> Option<[i32; 2]> {
@@ -69,14 +93,51 @@ impl<'a> Group<'a> {
 
 pub fn group<'a>(run: &'a Runtime<'_>, slot: usize) -> Option<Group<'a>> {
     if slot < BUTTON_GROUPS {
-        let group = run.buttons().group(slot)?;
-        return Some(Group {
-            buttons: &group.buttons,
-            current: group.current,
-            offset: [0, 0],
-            clip: None,
-            pointer: Some(group),
-        });
+        if let Some(group) = run.buttons().group(slot) {
+            return Some(Group {
+                buttons: GroupButtons::Cmvs(&group.buttons),
+                current: group.current,
+                offset: [0, 0],
+                clip: None,
+                pointer: Some(group),
+            });
+        }
+        if run.scene().cvns().is_some() {
+            if slot == 0 {
+                let rects = run.input().hit_rects();
+                if !rects.is_empty() {
+                    return Some(Group {
+                        buttons: GroupButtons::Rects(rects.to_vec()),
+                        current: None,
+                        offset: [0, 0],
+                        clip: None,
+                        pointer: None,
+                    });
+                }
+            } else if slot == 1
+                && let Some(cvns) = run.messages().cvns()
+            {
+                let rects: Vec<[i32; 4]> = cvns
+                    .messages
+                    .iter()
+                    .flatten()
+                    .filter(|m| m.visible)
+                    .flat_map(|m| m.buttons.iter())
+                    .filter(|b| b.enabled && b.hit[2] > 0 && b.hit[3] > 0)
+                    .map(|b| b.hit)
+                    .collect();
+                if !rects.is_empty() {
+                    return Some(Group {
+                        buttons: GroupButtons::Rects(rects),
+                        current: None,
+                        offset: [0, 0],
+                        clip: None,
+                        pointer: None,
+                    });
+                }
+            }
+        }
+        return None;
     }
     let group = run.buttons().list_group(slot.checked_sub(BUTTON_GROUPS)?)?;
     let object = run.scene().object(group.object)?;
@@ -99,7 +160,7 @@ pub fn group<'a>(run: &'a Runtime<'_>, slot: usize) -> Option<Group<'a>> {
         _ => return None,
     };
     Some(Group {
-        buttons: &group.buttons,
+        buttons: GroupButtons::Cmvs(&group.buttons),
         current: group.current,
         offset,
         clip: Some(group.hit_area),
@@ -111,7 +172,7 @@ pub fn enabled(run: &Runtime<'_>) -> Vec<(usize, usize)> {
     (0..GROUPS)
         .filter_map(|slot| group(run, slot).map(|group| (slot, group)))
         .flat_map(|(slot, group)| {
-            (0..group.buttons.len())
+            (0..group.len())
                 .filter(move |&index| group.enabled(index))
                 .map(move |index| (slot, index))
         })
@@ -141,7 +202,7 @@ mod tests {
         };
         let probe = |group: &ButtonGroup| {
             Group {
-                buttons: &group.buttons,
+                buttons: GroupButtons::Cmvs(&group.buttons),
                 current: None,
                 offset: [0, 0],
                 clip: None,
