@@ -1,8 +1,9 @@
+use crate::support::shared_state::SharedState;
 use crate::support::shared_storage;
 use cmvs_core::{
-    machine::{Machine, Step},
-    ps3::Script,
-    save_menu::{DirectorySaves, SaveHeader, SaveMenu, SaveMenuHost, SaveSource, SlotStatus},
+    format::ps3::Script, runtime::save_menu::DirectorySaves, runtime::save_menu::SaveHeader,
+    runtime::save_menu::SaveMenu, runtime::save_menu::SaveMenuHost, runtime::save_menu::SaveSource,
+    runtime::save_menu::SlotStatus, vm::machine::Machine, vm::machine::Step,
 };
 use shared_storage::SharedSaveMenu;
 use std::{collections::BTreeMap, io};
@@ -145,7 +146,7 @@ fn script(commands: &[(u16, u32)]) -> Script {
     Script::decode(&raw).unwrap()
 }
 
-fn pending(vm: &mut Machine<'_>) {
+fn pending(vm: &mut Machine) {
     loop {
         if matches!(vm.step().unwrap(), Step::System { .. }) {
             break;
@@ -348,11 +349,11 @@ fn popup_flag_defaults_enabled_and_is_reported_without_cleanup() {
     let mut vm = Machine::new(&script).unwrap();
     let mut host = SaveMenuHost::default();
     assert!(host.popup_enabled());
-    assert!(!host.try_handle_popup(&mut vm).unwrap());
+    assert!(!host.shared_state(&mut vm).unwrap());
     let mut seen = vec![];
     for _ in 0..4 {
         pending(&mut vm);
-        assert!(host.try_handle_popup(&mut vm).unwrap());
+        assert!(host.shared_state(&mut vm).unwrap());
         seen.push((
             host.popup_enabled(),
             vm.state().system_integer(0),
@@ -370,7 +371,7 @@ fn popup_flag_defaults_enabled_and_is_reported_without_cleanup() {
         ]
     );
     pending(&mut vm);
-    assert!(!host.try_handle_popup(&mut vm).unwrap());
+    assert!(!host.shared_state(&mut vm).unwrap());
 }
 
 #[test]
@@ -388,14 +389,14 @@ fn popup_flag_without_argument_stays_pending() {
     let mut vm = Machine::new(&script).unwrap();
     let mut host = SaveMenuHost::default();
     pending(&mut vm);
-    assert!(host.try_handle_popup(&mut vm).is_err());
+    assert!(host.shared_state(&mut vm).is_err());
     assert_eq!(vm.pending_system(), Some((0, 0x2cd)));
     assert!(host.popup_enabled());
 }
 
 #[test]
 fn confirmation_settings_are_set_and_queried_and_read_from_an_ini() {
-    use cmvs_core::save_menu::profile_int;
+    use cmvs_core::runtime::save_menu::profile_int;
     let text =
         b"[WINDOW_STATUS]\r\nDLG_SAVE=0\r\n[ system_info ]\r\n dlg_load = -12x\r\nDLG_SAVE=1\r\n";
     assert_eq!(profile_int(text, "SYSTEM_INFO", "DLG_LOAD", 0), -12);
@@ -438,9 +439,9 @@ fn confirmation_settings_are_set_and_queried_and_read_from_an_ini() {
     let mut vm = Machine::new(&script).unwrap();
     let mut host = SaveMenuHost::default();
     host.set_confirmations(true, true);
-    let step = |vm: &mut Machine<'_>, host: &mut SaveMenuHost| {
+    let step = |vm: &mut Machine, host: &mut SaveMenuHost| {
         pending(vm);
-        assert!(host.try_handle_popup(vm).unwrap());
+        assert!(host.shared_state(vm).unwrap());
         vm.state().system_integer(0)
     };
     // 0x22d4 with a zero SP-4 queries DLG_SAVE.

@@ -2,10 +2,10 @@
 use crate::dispatch::{Call, Flow, Hosts};
 use std::error::Error;
 
-pub(in crate::dispatch) fn root_timers(
+pub(in super::super) fn root_timers(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .timers
         .as_deref_mut()
@@ -14,10 +14,10 @@ pub(in crate::dispatch) fn root_timers(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_flags(
+pub(in super::super) fn root_flags(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .flags
         .as_deref_mut()
@@ -26,10 +26,10 @@ pub(in crate::dispatch) fn root_flags(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_random(
+pub(in super::super) fn root_random(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .random
         .as_deref_mut()
@@ -38,10 +38,10 @@ pub(in crate::dispatch) fn root_random(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_settings(
+pub(in super::super) fn root_settings(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let settings = hosts
         .settings
         .as_deref_mut()
@@ -58,10 +58,10 @@ pub(in crate::dispatch) fn root_settings(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_history(
+pub(in super::super) fn root_history(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .history
         .as_deref_mut()
@@ -70,26 +70,26 @@ pub(in crate::dispatch) fn root_history(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_strings(
+pub(in super::super) fn root_strings(
     _hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     crate::text::handle(call)?;
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_math(
+pub(in super::super) fn root_math(
     _hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     crate::math::handle(call)?;
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_bootstrap(
+pub(in super::super) fn root_bootstrap(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     Ok(hosts
         .bootstrap
         .as_deref_mut()
@@ -97,27 +97,27 @@ pub(in crate::dispatch) fn root_bootstrap(
         .handle(call)?)
 }
 
-pub(in crate::dispatch) fn polar_point(
+pub(in super::super) fn polar_point(
     _hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     crate::math::handle_polar_point(call)?;
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn cartesian_to_polar(
+pub(in super::super) fn cartesian_to_polar(
     _hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     crate::math::handle_cartesian_to_polar(call)?;
     Ok(Flow::Done)
 }
 
 /// CVNS timing and wall-clock queries/switches (`0x403`, `0x404`, `0x407`, `0x41c`, `0x41f`).
-pub(in crate::dispatch) fn cvns_timers(
+pub(in super::super) fn cvns_timers(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     match call.command {
         0x403 => {
             let interval = hosts
@@ -184,10 +184,10 @@ pub(in crate::dispatch) fn cvns_timers(
 /// cmvs-20070119 0x22c0 (0x43d310) / 0x22c1 (0x43d3a0) and CVNS 0x2017 (0x4696e0) /
 /// 0x202e (0x469570) report activation and disc protection checks as passed without
 /// file, process, registry, or drive access.
-pub(in crate::dispatch) fn activation_pass(
+pub(in super::super) fn activation_pass(
     _hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let mode = call.argument(4, "check mode")?;
     let passed = match call.command {
         0x417 => matches!(mode, 2 | 3 | 5 | 6),
@@ -203,10 +203,10 @@ pub(in crate::dispatch) fn activation_pass(
 }
 
 /// CVNS unified configuration read (`0x5ec` = `0x21ec`) and write (`0x5ed` = `0x21ed`).
-pub(in crate::dispatch) fn cvns_config(
+pub(in super::super) fn cvns_config(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     if call.command == crate::cvns::cmd::GET_CONFIG {
         cvns_get_config(hosts, call)?;
     } else {
@@ -215,7 +215,10 @@ pub(in crate::dispatch) fn cvns_config(
     Ok(Flow::Done)
 }
 
-fn cvns_get_config(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<(), Box<dyn Error>> {
+fn cvns_get_config(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let id = call.argument(4, "option id")?;
     if id == 15 {
         let str_ref = call.argument(8, "font buffer")?;
@@ -292,7 +295,10 @@ fn cvns_get_config(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<(),
     Ok(())
 }
 
-fn cvns_set_config(hosts: &mut Hosts<'_>, call: &mut Call<'_, '_>) -> Result<(), Box<dyn Error>> {
+fn cvns_set_config(
+    hosts: &mut Hosts<'_>,
+    call: &mut Call<'_>,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let id = call.argument(4, "option id")?;
     if id == 15 {
         let str_ref = call.argument(8, "font face")?;

@@ -1,5 +1,5 @@
 use crate::support::cmv9 as fixture;
-use cmvs_core::cmv9::Cmv9Index;
+use cmvs_core::format::cmv9::Cmv9Index;
 
 #[test]
 fn static_and_dynamic_blocks_compose_and_crop_the_padded_edge() {

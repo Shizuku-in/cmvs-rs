@@ -1,8 +1,8 @@
 use crate::support;
 use crate::support::shared_state;
 use cmvs_core::{
-    machine::{Machine, Step},
-    scene::{DrawState, SceneHost, SceneObject},
+    render::scene::DrawState, render::scene::SceneHost, render::scene::SceneObject,
+    vm::machine::Machine, vm::machine::Step,
 };
 use shared_state::SharedState;
 use support::bytecode::{command, pending, script};
@@ -48,7 +48,7 @@ fn visibility_selects_parent_or_child_and_preserves_other_state() {
 
 #[test]
 fn visibility_hides_children_with_parent_and_restores_the_same_pixels() {
-    use cmvs_core::scene_render;
+    use cmvs_core::render::scene_render;
     let mut code = vec![];
     command(&mut code, 0x2020, &[0]);
     command(&mut code, 0x2040, &[0]);
@@ -230,7 +230,10 @@ fn object_slots_are_rebuilt_destroyed_and_bounded() {
     assert_eq!(scene.object(3), Some(&SceneObject::default()));
 }
 
-fn next(vm: &mut Machine<'_>, scene: &mut SceneHost) -> Result<bool, Box<dyn std::error::Error>> {
+fn next(
+    vm: &mut Machine,
+    scene: &mut SceneHost,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     loop {
         if matches!(vm.step()?, Step::System { .. }) {
             return Ok(scene.shared_state(vm)?);
@@ -262,19 +265,31 @@ fn draw_initialization_properties_and_reinitialization_preserve_other_objects() 
     for _ in 0..7 {
         assert!(next(&mut vm, &mut scene).unwrap());
     }
-    let d = &scene.object(10).unwrap().draw.as_ref().unwrap().words;
+    let d = &scene
+        .object(10)
+        .unwrap()
+        .draw
+        .as_ref()
+        .unwrap()
+        .snapshot_words();
     assert_eq!(&d[2..11], &[5, 6, 7, 8, 2, 3, 100, 200, 32]);
     assert_eq!(d[17], 255);
     for _ in 0..3 {
         next(&mut vm, &mut scene).unwrap();
     }
-    let d = &scene.object(10).unwrap().draw.as_ref().unwrap().words;
+    let d = &scene
+        .object(10)
+        .unwrap()
+        .draw
+        .as_ref()
+        .unwrap()
+        .snapshot_words();
     assert_eq!(d[17], u32::MAX); // Original only clamps the upper end, signed.
     assert_eq!(d[1], 2); // Unsupported blend selector is a verified no-op.
     next(&mut vm, &mut scene).unwrap();
     assert_eq!(
         scene.object(10).unwrap().draw,
-        Some(cmvs_core::scene::DrawState::default())
+        Some(cmvs_core::render::scene::DrawState::default())
     );
     assert_eq!(vm.stack().len_bytes(), 0);
 }
@@ -305,7 +320,7 @@ fn coordinate_mode_two_preserves_parent_child_properties_and_system_results() {
     let mut expected = scene.object(255).unwrap().clone();
     vm.state_mut().set_system_integer(0, 0xdead_beef).unwrap();
     assert!(next(&mut vm, &mut scene).unwrap());
-    expected.draw.as_mut().unwrap().words[0] = 2;
+    expected.draw.as_mut().unwrap().set_coordinate_mode(2);
     assert_eq!(scene.object(255), Some(&expected));
     expected
         .children
@@ -314,7 +329,7 @@ fn coordinate_mode_two_preserves_parent_child_properties_and_system_results() {
         .draw
         .as_mut()
         .unwrap()
-        .words[0] = 2;
+        .set_coordinate_mode(2);
     for _ in 0..2 {
         assert!(next(&mut vm, &mut scene).unwrap());
         assert_eq!(scene.object(255), Some(&expected));
@@ -323,7 +338,7 @@ fn coordinate_mode_two_preserves_parent_child_properties_and_system_results() {
     assert_eq!(vm.stack().len_bytes(), 0);
     assert_eq!(vm.state().system_integer(0), Some(0xdead_beef));
     // The mode is retained, but its presentation is not yet modeled.
-    assert!(cmvs_core::scene_render::render(&scene, 1, 1).is_err());
+    assert!(cmvs_core::render::scene_render::render(&scene, 1, 1).is_err());
 }
 
 #[test]
@@ -365,14 +380,14 @@ fn camera_coordinate_mode_is_three_for_nonzero_values_and_two_for_zero() {
         } else {
             &mut expected
         };
-        target.draw.as_mut().unwrap().words[0] = mode;
+        target.draw.as_mut().unwrap().set_coordinate_mode(mode);
         assert_eq!(scene.object(255), Some(&expected));
         assert_eq!(vm.stack().len_bytes(), 0);
     }
     assert_eq!(vm.pc(), code.len());
     assert_eq!(vm.state().system_integer(0), Some(0xdead_beef));
     // Camera projection is not presented yet.
-    assert!(cmvs_core::scene_render::render(&scene, 1, 1).is_err());
+    assert!(cmvs_core::render::scene_render::render(&scene, 1, 1).is_err());
 }
 
 #[test]
@@ -416,8 +431,22 @@ fn projection_parameters_preserve_raw_float_bits_and_each_other() {
     let mut expected = scene.object(255).unwrap().clone();
     // Index 27 stands for +108, the depth bias kept outside the first 88 bytes.
     let set = |draw: &mut DrawState, index: usize, value: u32| match index {
+        15 => draw.set_projection_bits([value, draw.projection_bits()[1]]),
+        16 => draw.set_projection_bits([draw.projection_bits()[0], value]),
+        11 => {
+            let [_, y, z] = draw.world_position_bits();
+            draw.set_world_position_bits([value, y, z]);
+        }
+        12 => {
+            let [x, _, z] = draw.world_position_bits();
+            draw.set_world_position_bits([x, value, z]);
+        }
+        13 => {
+            let [x, y, _] = draw.world_position_bits();
+            draw.set_world_position_bits([x, y, value]);
+        }
         27 => draw.depth_bias = value,
-        _ => draw.words[index] = value,
+        _ => unreachable!(),
     };
     for value in values {
         for index in [15, 16, 11, 12, 13, 27] {
@@ -435,7 +464,7 @@ fn projection_parameters_preserve_raw_float_bits_and_each_other() {
     }
     assert_eq!(vm.pc(), code.len());
     // Preserving the projection input is not an implementation of camera presentation.
-    assert!(cmvs_core::scene_render::render(&scene, 1, 1).is_err());
+    assert!(cmvs_core::render::scene_render::render(&scene, 1, 1).is_err());
 }
 
 #[test]
@@ -462,7 +491,7 @@ fn children_rebuild_and_inherit_constructor_flags_at_creation_time() {
     assert!(parent.draw.is_none());
     assert_eq!(parent.children[&767].flags, 0);
     assert_eq!(
-        &parent.children[&767].draw.as_ref().unwrap().words[8..10],
+        &parent.children[&767].draw.as_ref().unwrap().position_raw(),
         &[9, 10]
     );
     for _ in 0..2 {
@@ -572,7 +601,7 @@ fn objects_move_between_slots_and_existence_queries_report_them() {
     let script = script(&code);
     let mut vm = Machine::new(&script).unwrap();
     let mut scene = SceneHost::default();
-    let step = |vm: &mut Machine<'_>, scene: &mut SceneHost| {
+    let step = |vm: &mut Machine, scene: &mut SceneHost| {
         pending(vm);
         assert!(scene.shared_state(vm).unwrap());
     };
@@ -637,14 +666,14 @@ fn tracked(code: &mut Vec<u8>, slot: u32, base: u32, keys: &[(u32, u32, u32, u32
     }
     invoke(code, 0x21ec, &[0, u32::MAX, slot]);
 }
-fn run_all(vm: &mut Machine<'_>, scene: &mut SceneHost, commands: usize) {
+fn run_all(vm: &mut Machine, scene: &mut SceneHost, commands: usize) {
     for _ in 0..commands {
         pending(vm);
         assert!(scene.shared_state(vm).unwrap(), "{:?}", vm.pending_system());
     }
 }
 fn opacity(scene: &SceneHost, slot: u8) -> u32 {
-    scene.object(slot).unwrap().draw.as_ref().unwrap().words[17]
+    scene.object(slot).unwrap().draw.as_ref().unwrap().opacity()
 }
 
 #[test]
@@ -755,7 +784,7 @@ fn stopping_and_querying_opacity_tracks() {
     run_all(&mut vm, &mut scene, 1);
     let draw = scene.object(3).unwrap().draw.as_ref().unwrap();
     assert!(draw.opacity_track.is_none());
-    assert_eq!(draw.words[17], 77);
+    assert_eq!(draw.opacity(), 77);
     assert_eq!(vm.stack().len_bytes(), 0);
 }
 
@@ -768,10 +797,14 @@ fn motion_setup(code: &mut Vec<u8>, slot: u32, base: [f32; 3]) {
     command(code, 0x21f9, &[slot, u32::MAX]);
 }
 fn motion_xyz(scene: &SceneHost, slot: u8) -> [f32; 3] {
-    scene.object(slot).unwrap().draw.as_ref().unwrap().words[11..14]
-        .try_into()
-        .map(|v: [u32; 3]| v.map(f32::from_bits))
+    scene
+        .object(slot)
         .unwrap()
+        .draw
+        .as_ref()
+        .unwrap()
+        .world_position_bits()
+        .map(f32::from_bits)
 }
 
 #[test]
@@ -936,7 +969,7 @@ fn y_half_turn_mode_requires_the_inspected_profile_and_hash() {
                 pending(&mut vm);
                 let pc = vm.pc();
                 let stack = vm.stack().len_bytes();
-                assert!(scene.try_handle(&mut vm).is_err());
+                assert!(scene.shared_state(&mut vm).is_err());
                 assert_eq!(vm.pc(), pc);
                 assert_eq!(vm.stack().len_bytes(), stack);
                 assert_eq!(vm.pending_system(), Some((pc, 0x1fa)));
@@ -1001,14 +1034,14 @@ fn world_motion_reset_query_stop_and_parent_child_isolation() {
     assert_eq!(vm.state().system_integer(0), Some(7));
     let child = &scene.object(255).unwrap().children[&767];
     assert_eq!(
-        &child.draw.as_ref().unwrap().words[11..14],
+        &child.draw.as_ref().unwrap().world_position_bits(),
         &[0, 0, 0],
         "play does not snap"
     );
     run_all(&mut vm, &mut scene, 1);
     let child = &scene.object(255).unwrap().children[&767];
     assert_eq!(
-        &child.draw.as_ref().unwrap().words[11..14],
+        &child.draw.as_ref().unwrap().world_position_bits(),
         &[0x7fc01234, 0x80000000, 0x7f800000]
     );
     assert!(child.draw.as_ref().unwrap().world_motion.is_none());
@@ -1024,7 +1057,10 @@ fn world_motion_reset_query_stop_and_parent_child_isolation() {
         .as_ref()
         .unwrap();
     assert!(motion.playback.is_none());
-    assert_eq!(motion.keys, [cmvs_core::scene::MotionKey::default(); 8]);
+    assert_eq!(
+        motion.keys,
+        [cmvs_core::render::scene::MotionKey::default(); 8]
+    );
     assert_eq!(vm.state().system_integer(6), Some(123));
     assert_eq!(vm.stack().len_bytes(), 0);
 }
@@ -1205,7 +1241,7 @@ fn scale_setter_preserves_raw_float_bits_other_properties_and_child_isolation() 
     let mut expected = scene.object(7).unwrap().clone();
     for pair in pairs {
         next(&mut vm, &mut scene).unwrap();
-        expected.draw.as_mut().unwrap().words[18..20].copy_from_slice(&pair);
+        expected.draw.as_mut().unwrap().set_scale_bits(pair);
         assert_eq!(scene.object(7), Some(&expected));
         next(&mut vm, &mut scene).unwrap();
         expected
@@ -1215,8 +1251,7 @@ fn scale_setter_preserves_raw_float_bits_other_properties_and_child_isolation() 
             .draw
             .as_mut()
             .unwrap()
-            .words[18..20]
-            .copy_from_slice(&[pair[1], pair[0]]);
+            .set_scale_bits([pair[1], pair[0]]);
         assert_eq!(scene.object(7), Some(&expected));
         assert_eq!(vm.stack().len_bytes(), 0);
         assert_eq!(vm.state().system_integer(0), Some(123));
@@ -1259,7 +1294,11 @@ fn rotation_setter_normalizes_signed_degrees_and_preserves_other_state() {
     let mut expected = scene.object(7).unwrap().clone();
     for (_, result) in cases {
         next(&mut vm, &mut scene).unwrap();
-        expected.draw.as_mut().unwrap().words[20] = result as u32;
+        expected
+            .draw
+            .as_mut()
+            .unwrap()
+            .set_rotation_raw(result as u32);
         assert_eq!(scene.object(7), Some(&expected));
         next(&mut vm, &mut scene).unwrap();
         expected
@@ -1269,7 +1308,7 @@ fn rotation_setter_normalizes_signed_degrees_and_preserves_other_state() {
             .draw
             .as_mut()
             .unwrap()
-            .words[20] = result as u32;
+            .set_rotation_raw(result as u32);
         assert_eq!(scene.object(7), Some(&expected));
         assert_eq!(vm.stack().len_bytes(), 0);
         assert_eq!(vm.state().system_integer(0), Some(123));
@@ -1314,23 +1353,20 @@ fn solid_setter_preserves_other_properties_tracks_and_child_isolation() {
     let mut expected = scene.object(7).unwrap().clone();
     for pair in pairs {
         next(&mut vm, &mut scene).unwrap();
-        let words = &mut expected.draw.as_mut().unwrap().words;
-        words[2..4].fill(0);
-        words[4..6].copy_from_slice(&pair);
-        words[14] = 0xff345678;
+        let draw = expected.draw.as_mut().unwrap();
+        draw.set_source_rect([0, 0, pair[0], pair[1]]);
+        draw.set_color(0xff345678);
         assert_eq!(scene.object(7), Some(&expected));
         next(&mut vm, &mut scene).unwrap();
-        let words = &mut expected
+        let draw = expected
             .children
             .get_mut(&767)
             .unwrap()
             .draw
             .as_mut()
-            .unwrap()
-            .words;
-        words[2..4].fill(0);
-        words[4..6].copy_from_slice(&[pair[1], pair[0]]);
-        words[14] = 0xffabcdef;
+            .unwrap();
+        draw.set_source_rect([0, 0, pair[1], pair[0]]);
+        draw.set_color(0xffabcdef);
         assert_eq!(scene.object(7), Some(&expected));
         assert_eq!(vm.stack().len_bytes(), 0);
         assert_eq!(vm.state().system_integer(0), Some(123));
@@ -1479,8 +1515,8 @@ fn second_texture_mode_preserves_draw_state_and_targets_parent_or_child() {
         let object = child.map_or(parent, |id| parent.children.get(&id).unwrap());
         assert_eq!(object.draw.as_ref().unwrap().texture_mode, value);
         assert_eq!(
-            object.draw.as_ref().unwrap().words,
-            before.draw.as_ref().unwrap().words
+            object.draw.as_ref().unwrap().snapshot_words(),
+            before.draw.as_ref().unwrap().snapshot_words()
         );
         assert_eq!(vm.pc(), pc + 2);
         assert_eq!(vm.stack().len_bytes(), 0);
@@ -1498,12 +1534,9 @@ fn second_texture_mode_preserves_draw_state_and_targets_parent_or_child() {
 #[ignore = "requires read-only CMVS_GAME_ROOT Amatsutsumi scripts; scene/pixels are synthetic"]
 fn external_original_library_toggle_triggers_texture_subtract() {
     use cmvs_core::{
-        capture::ScreenCapture,
-        platform::RecordingBackend,
-        profile::Registry,
-        raster::RgbaImage,
-        scene_render,
-        script_control::{ArchiveScripts, ScriptSource},
+        host::platform::RecordingBackend, profile::Registry, render::capture::ScreenCapture,
+        render::raster::RgbaImage, render::scene_render, runtime::script_control::ArchiveScripts,
+        runtime::script_control::ScriptSource,
     };
     let root =
         std::path::PathBuf::from(std::env::var_os("CMVS_GAME_ROOT").expect("CMVS_GAME_ROOT"));
@@ -1567,7 +1600,7 @@ fn external_original_library_toggle_triggers_texture_subtract() {
                 println!("original label158({value}), deferred={deferred}: 0x2322 sites={hits:x?}");
                 return hits;
             }
-            if let cmvs_core::machine::Step::System { pc, command } = vm.step().unwrap() {
+            if let cmvs_core::vm::machine::Step::System { pc, command } = vm.step().unwrap() {
                 if command == 0x322 {
                     hits.push(pc);
                 }
@@ -1674,7 +1707,7 @@ fn inspected_child_tables_support_the_last_slot_and_ignore_unsigned_create_overf
         );
         let child = &parent.children[&((limit - 1) as u16)];
         assert!(!child.shown);
-        assert_eq!(&child.draw.as_ref().unwrap().words[8..10], &[23, 45]);
+        assert_eq!(&child.draw.as_ref().unwrap().position_raw(), &[23, 45]);
         vm.state_mut().set_system_integer(0, 77).unwrap();
         run_all(&mut vm, &mut scene, 3);
         assert_eq!(scene.object(7), Some(&parent));
@@ -1694,7 +1727,7 @@ fn inspected_child_tables_support_the_last_slot_and_ignore_unsigned_create_overf
 
 #[test]
 fn realive_detach_queue_clears_only_bit_two_and_keeps_errors_pending() {
-    use cmvs_core::dispatch::{self, Flow, Hosts};
+    use cmvs_core::{vm::dispatch, vm::dispatch::Flow, vm::dispatch::Hosts};
     let profile = cmvs_core::profile::Registry::builtin()
         .profile("cmvs-20190305")
         .unwrap();

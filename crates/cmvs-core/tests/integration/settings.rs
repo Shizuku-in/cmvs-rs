@@ -1,13 +1,14 @@
 use crate::support::bytecode;
+use crate::support::shared_audio::SharedAudio;
+use crate::support::shared_state::SharedState;
 use bytecode::{command, pending, script};
 use cmvs_core::{
-    machine::Machine,
-    settings::{DEFAULT_FONT_FACE, SettingsHost},
+    host::settings::DEFAULT_FONT_FACE, host::settings::SettingsHost, vm::machine::Machine,
 };
 
 #[test]
 fn inspected_old_builds_use_their_window_size_schema_only_for_their_binary() {
-    use cmvs_core::{profile::Registry, settings::Configuration};
+    use cmvs_core::{host::settings::Configuration, profile::Registry};
     for id in [
         "cmvs-20071117",
         "cmvs-20080719",
@@ -57,7 +58,7 @@ fn inspected_old_builds_use_their_window_size_schema_only_for_their_binary() {
 
 #[test]
 fn logical_canvas_uses_base_and_rejects_invalid_allocation_sizes() {
-    use cmvs_core::settings::Configuration;
+    use cmvs_core::host::settings::Configuration;
     assert_eq!(
         Configuration::new(vec![])
             .unwrap()
@@ -114,11 +115,11 @@ fn text_settings_round_trip_clamps_preserve_results_and_keep_outline_signed_rema
         let mut host = SettingsHost::default();
         vm.state_mut().set_system_integer(0, 77).unwrap();
         pending(&mut vm);
-        host.try_handle(&mut vm).unwrap();
+        host.shared_state(&mut vm).unwrap();
         assert_eq!(vm.state().system_integer(0), Some(77));
         assert_eq!(vm.stack().len_bytes(), 0);
         pending(&mut vm);
-        host.try_handle(&mut vm).unwrap();
+        host.shared_state(&mut vm).unwrap();
         assert_eq!(vm.state().system_integer(0), Some(expected));
     }
     let host = SettingsHost::from_ini(
@@ -126,7 +127,7 @@ fn text_settings_round_trip_clamps_preserve_results_and_keep_outline_signed_rema
     );
     assert_eq!(
         host.text_output(),
-        cmvs_core::settings::TextOutputSettings {
+        cmvs_core::host::settings::TextOutputSettings {
             bold: false,
             revision_alpha: false,
             speed: 7,
@@ -145,7 +146,7 @@ fn text_settings_round_trip_clamps_preserve_results_and_keep_outline_signed_rema
 
 #[test]
 fn auto_startup_parameters_retain_raw_words_and_apply_text_delay_formula() {
-    use cmvs_core::settings::AutoAdvanceSettings;
+    use cmvs_core::host::settings::AutoAdvanceSettings;
     let host = SettingsHost::from_ini(b"[MESSAGE_INFO]\nAUTO_MODE_1=-1\nAUTO_MODE_2=10\nAUTO_MODE_3=4\nAUTO_MODE_4=7\nAUTO_VOICE_SYNC=0\n");
     assert_eq!(
         host.auto_advance(),
@@ -196,7 +197,7 @@ fn auto_startup_parameters_retain_raw_words_and_apply_text_delay_formula() {
 
 #[test]
 fn audio_use_switches_normalize_and_skip_repeated_writes() {
-    use cmvs_core::audio::{AudioHost, RecordingAudio};
+    use cmvs_core::{host::audio::AudioHost, host::audio::RecordingAudio};
     for op in 0x22d6..=0x22d8 {
         let mut code = vec![];
         for value in [1, 0, 0, u32::MAX, u32::MAX] {
@@ -210,10 +211,10 @@ fn audio_use_switches_normalize_and_skip_repeated_writes() {
         for value in [1, 0, 0, 1, 1] {
             vm.state_mut().set_system_integer(0, 77).unwrap();
             pending(&mut vm);
-            host.try_handle(&mut vm, &mut backend).unwrap();
+            host.shared_handle(&mut vm, &mut backend).unwrap();
             assert_eq!(vm.state().system_integer(0), Some(77));
             pending(&mut vm);
-            host.try_handle(&mut vm, &mut backend).unwrap();
+            host.shared_handle(&mut vm, &mut backend).unwrap();
             assert_eq!(vm.state().system_integer(0), Some(value));
             assert_eq!(vm.stack().len_bytes(), 0);
         }
@@ -225,7 +226,9 @@ fn audio_use_switches_normalize_and_skip_repeated_writes() {
 
 #[test]
 fn bgm_switch_preserves_names_and_restarts_the_pair_without_fade() {
-    use cmvs_core::audio::{AudioHost, AudioRequest, RecordingAudio};
+    use cmvs_core::{
+        host::audio::AudioHost, host::audio::AudioRequest, host::audio::RecordingAudio,
+    };
     let mut code = vec![];
     command(&mut code, 0x20a4, &[0x8000_0000, 0x8000_0001, 100, 0]);
     command(&mut code, 0x22d6, &[1, 0]);
@@ -237,16 +240,16 @@ fn bgm_switch_preserves_names_and_restarts_the_pair_without_fade() {
     let mut host = AudioHost::default();
     let mut backend = RecordingAudio::default();
     pending(&mut vm);
-    host.try_handle(&mut vm, &mut backend).unwrap();
+    host.shared_handle(&mut vm, &mut backend).unwrap();
     pending(&mut vm);
-    host.try_handle(&mut vm, &mut backend).unwrap();
+    host.shared_handle(&mut vm, &mut backend).unwrap();
     assert_eq!(backend.requests().last(), Some(&AudioRequest::StopBgm));
     assert_eq!(host.bgm().primary, b"intro.ogg");
     assert_eq!(host.bgm().secondary, b"loop.ogg");
     assert_eq!(host.bgm().channel, 0);
     assert!(!host.bgm().playing);
     pending(&mut vm);
-    host.try_handle(&mut vm, &mut backend).unwrap();
+    host.shared_handle(&mut vm, &mut backend).unwrap();
     assert_eq!(
         backend.requests().last(),
         Some(&AudioRequest::PlayBgm {
@@ -266,7 +269,10 @@ fn bgm_switch_preserves_names_and_restarts_the_pair_without_fade() {
 
 #[test]
 fn se_switch_rebuilds_named_slots_and_only_restarts_flagged_loops() {
-    use cmvs_core::audio::{AudioHost, AudioRequest, AudioSettings, RecordingAudio};
+    use cmvs_core::{
+        host::audio::AudioHost, host::audio::AudioRequest, host::audio::AudioSettings,
+        host::audio::RecordingAudio,
+    };
     let mut code = vec![];
     for (index, looped, flag) in [(0, 1, 1), (1, 0, 1), (2, 1, 0), (3, 0, 0)] {
         command(&mut code, 0x20b0, &[index, 0x8000_0000, 64, looped, flag]);
@@ -284,11 +290,11 @@ fn se_switch_rebuilds_named_slots_and_only_restarts_flagged_loops() {
     let mut backend = RecordingAudio::default();
     for _ in 0..4 {
         pending(&mut vm);
-        host.try_handle(&mut vm, &mut backend).unwrap();
+        host.shared_handle(&mut vm, &mut backend).unwrap();
     }
     let before: Vec<_> = (0..6).map(|i| host.channel(i).cloned()).collect();
     pending(&mut vm);
-    host.try_handle(&mut vm, &mut backend).unwrap();
+    host.shared_handle(&mut vm, &mut backend).unwrap();
     assert_eq!(
         backend.requests().last(),
         Some(&AudioRequest::ConfigureSe {
@@ -300,7 +306,7 @@ fn se_switch_rebuilds_named_slots_and_only_restarts_flagged_loops() {
         before
     );
     pending(&mut vm);
-    host.try_handle(&mut vm, &mut backend).unwrap();
+    host.shared_handle(&mut vm, &mut backend).unwrap();
     let AudioRequest::ConfigureSe { channels } = backend.requests().last().unwrap() else {
         panic!("SE configuration")
     };
@@ -316,7 +322,10 @@ fn se_switch_rebuilds_named_slots_and_only_restarts_flagged_loops() {
 
 #[test]
 fn disabled_bgm_tracks_the_latest_request_for_reenable() {
-    use cmvs_core::audio::{AudioHost, AudioRequest, AudioSettings, RecordingAudio};
+    use cmvs_core::{
+        host::audio::AudioHost, host::audio::AudioRequest, host::audio::AudioSettings,
+        host::audio::RecordingAudio,
+    };
     let mut code = vec![];
     command(&mut code, 0x20a0, &[0x8000_0000, 700, 0]);
     command(&mut code, 0x22d6, &[1, 1]);
@@ -329,10 +338,10 @@ fn disabled_bgm_tracks_the_latest_request_for_reenable() {
     });
     let mut backend = RecordingAudio::default();
     pending(&mut vm);
-    host.try_handle(&mut vm, &mut backend).unwrap();
+    host.shared_handle(&mut vm, &mut backend).unwrap();
     assert!(backend.requests().is_empty());
     pending(&mut vm);
-    host.try_handle(&mut vm, &mut backend).unwrap();
+    host.shared_handle(&mut vm, &mut backend).unwrap();
     let AudioRequest::PlayBgm {
         primary,
         fade_ms,
@@ -350,7 +359,7 @@ fn disabled_bgm_tracks_the_latest_request_for_reenable() {
 
 #[test]
 fn voice_switch_does_not_stop_current_audio_and_gates_future_playback() {
-    use cmvs_core::audio::{AudioHost, RecordingAudio};
+    use cmvs_core::{host::audio::AudioHost, host::audio::RecordingAudio};
     let mut code = vec![];
     command(&mut code, 0x20a6, &[0, 0x8000_0000, 256, 1]);
     command(&mut code, 0x22d8, &[1, 0]);
@@ -364,31 +373,38 @@ fn voice_switch_does_not_stop_current_audio_and_gates_future_playback() {
     let mut backend = RecordingAudio::default();
     for expected in [1, 1, 1, 1, 2] {
         pending(&mut vm);
-        host.try_handle(&mut vm, &mut backend).unwrap();
+        host.shared_handle(&mut vm, &mut backend).unwrap();
         assert_eq!(backend.requests().len(), expected);
     }
 }
 
 #[test]
 fn failed_audio_use_changes_keep_configuration_records_and_vm_for_retry() {
-    use cmvs_core::audio::{
-        AudioBackend, AudioHost, AudioRequest, RecordingAudio, SE_CHANNELS, SePlayback,
+    use cmvs_core::{
+        host::audio::AudioBackend, host::audio::AudioHost, host::audio::AudioRequest,
+        host::audio::RecordingAudio, host::audio::SE_CHANNELS, host::audio::SePlayback,
     };
     struct Reject;
     impl AudioBackend for Reject {
-        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn std::error::Error>> {
+        fn play(
+            &mut self,
+            _: &AudioRequest,
+        ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
             unreachable!()
         }
-        fn stop_bgm(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        fn stop_bgm(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             Err("synthetic stop failure".into())
         }
-        fn play_bgm(&mut self, _: &AudioRequest) -> Result<(), Box<dyn std::error::Error>> {
+        fn play_bgm(
+            &mut self,
+            _: &AudioRequest,
+        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             Err("synthetic load failure".into())
         }
         fn configure_se(
             &mut self,
             _: &[Option<SePlayback>; SE_CHANNELS],
-        ) -> Result<(), Box<dyn std::error::Error>> {
+        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             Err("synthetic group failure".into())
         }
     }
@@ -408,21 +424,21 @@ fn failed_audio_use_changes_keep_configuration_records_and_vm_for_retry() {
             let mut record = RecordingAudio::default();
             for _ in 0..(2 + usize::from(enabled)) {
                 pending(&mut vm);
-                host.try_handle(&mut vm, &mut record).unwrap();
+                host.shared_handle(&mut vm, &mut record).unwrap();
             }
             let settings = host.settings();
             let bgm = host.bgm().clone();
             let se = host.channel(0).cloned();
             pending(&mut vm);
             let pc = vm.pc();
-            assert!(host.try_handle(&mut vm, &mut Reject).is_err());
+            assert!(host.shared_handle(&mut vm, &mut Reject).is_err());
             assert_eq!(host.settings(), settings);
             assert_eq!(*host.bgm(), bgm);
             assert_eq!(host.channel(0).cloned(), se);
             assert_eq!(vm.pc(), pc);
             assert_eq!(vm.stack().len_bytes(), 8);
             assert!(vm.pending_system().is_some());
-            host.try_handle(&mut vm, &mut record).unwrap();
+            host.shared_handle(&mut vm, &mut record).unwrap();
             assert_eq!(vm.stack().len_bytes(), 0);
         }
     }
@@ -430,7 +446,10 @@ fn failed_audio_use_changes_keep_configuration_records_and_vm_for_retry() {
 
 #[test]
 fn live_volume_setters_clamp_and_update_only_their_device_family() {
-    use cmvs_core::audio::{AudioHost, AudioRequest, AudioSettings, RecordingAudio};
+    use cmvs_core::{
+        host::audio::AudioHost, host::audio::AudioRequest, host::audio::AudioSettings,
+        host::audio::RecordingAudio,
+    };
     for (op, raw, value) in [
         (0x22d9, u32::MAX, 0),
         (0x22da, 300, 256),
@@ -447,7 +466,7 @@ fn live_volume_setters_clamp_and_update_only_their_device_family() {
         let mut backend = RecordingAudio::default();
         vm.state_mut().set_system_integer(0, 77).unwrap();
         pending(&mut vm);
-        host.try_handle(&mut vm, &mut backend).unwrap();
+        host.shared_handle(&mut vm, &mut backend).unwrap();
         assert_eq!(vm.state().system_integer(0), Some(77));
         assert_eq!(vm.stack().len_bytes(), 0);
         let AudioRequest::SetVolumes { channels } = backend.requests().last().unwrap() else {
@@ -464,14 +483,17 @@ fn live_volume_setters_clamp_and_update_only_their_device_family() {
             assert_eq!(*channel, affected.then_some(value));
         }
         pending(&mut vm);
-        host.try_handle(&mut vm, &mut backend).unwrap();
+        host.shared_handle(&mut vm, &mut backend).unwrap();
         assert_eq!(vm.state().system_integer(0), Some(value));
     }
 }
 
 #[test]
 fn disabled_bgm_keeps_device_gains_while_accepting_volume_configuration() {
-    use cmvs_core::audio::{AudioHost, AudioRequest, AudioSettings, RecordingAudio};
+    use cmvs_core::{
+        host::audio::AudioHost, host::audio::AudioRequest, host::audio::AudioSettings,
+        host::audio::RecordingAudio,
+    };
     for op in [0x22d9, 0x22da] {
         let mut code = vec![];
         command(&mut code, op, &[1, 42]);
@@ -483,7 +505,7 @@ fn disabled_bgm_keeps_device_gains_while_accepting_volume_configuration() {
         });
         let mut backend = RecordingAudio::default();
         pending(&mut vm);
-        host.try_handle(&mut vm, &mut backend).unwrap();
+        host.shared_handle(&mut vm, &mut backend).unwrap();
         let AudioRequest::SetVolumes { channels } = backend.requests().last().unwrap() else {
             panic!("volume request")
         };
@@ -500,13 +522,19 @@ fn disabled_bgm_keeps_device_gains_while_accepting_volume_configuration() {
 
 #[test]
 fn failed_live_gain_update_preserves_configuration_stack_and_pending_command() {
-    use cmvs_core::audio::{AudioBackend, AudioHost, AudioRequest};
+    use cmvs_core::{host::audio::AudioBackend, host::audio::AudioHost, host::audio::AudioRequest};
     struct Reject;
     impl AudioBackend for Reject {
-        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn std::error::Error>> {
+        fn play(
+            &mut self,
+            _: &AudioRequest,
+        ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
             unreachable!()
         }
-        fn set_volumes(&mut self, _: &[Option<u32>; 15]) -> Result<(), Box<dyn std::error::Error>> {
+        fn set_volumes(
+            &mut self,
+            _: &[Option<u32>; 15],
+        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             Err("synthetic failure".into())
         }
     }
@@ -518,7 +546,7 @@ fn failed_live_gain_update_preserves_configuration_stack_and_pending_command() {
     let before = host.settings();
     pending(&mut vm);
     let pc = vm.pc();
-    assert!(host.try_handle(&mut vm, &mut Reject).is_err());
+    assert!(host.shared_handle(&mut vm, &mut Reject).is_err());
     assert_eq!(host.settings(), before);
     assert_eq!(vm.pc(), pc);
     assert_eq!(vm.stack().len_bytes(), 8);
@@ -527,7 +555,9 @@ fn failed_live_gain_update_preserves_configuration_stack_and_pending_command() {
 
 #[test]
 fn master_adjustment_and_se_adjustment_preserve_the_original_gain_asymmetry() {
-    use cmvs_core::audio::{AudioHost, AudioRequest, RecordingAudio};
+    use cmvs_core::{
+        host::audio::AudioHost, host::audio::AudioRequest, host::audio::RecordingAudio,
+    };
     let mut code = vec![];
     command(&mut code, 0x20b0, &[0, 0x8000_0000, 64, 0, 0]);
     command(&mut code, 0x22db, &[1, 128]);
@@ -538,10 +568,10 @@ fn master_adjustment_and_se_adjustment_preserve_the_original_gain_asymmetry() {
     let mut host = AudioHost::default();
     let mut backend = RecordingAudio::default();
     pending(&mut vm);
-    host.try_handle(&mut vm, &mut backend).unwrap();
+    host.shared_handle(&mut vm, &mut backend).unwrap();
     for expected in [32, 64] {
         pending(&mut vm);
-        host.try_handle(&mut vm, &mut backend).unwrap();
+        host.shared_handle(&mut vm, &mut backend).unwrap();
         let AudioRequest::SetVolumes { channels } = backend.requests().last().unwrap() else {
             panic!("volume request")
         };
@@ -564,7 +594,7 @@ fn font_name_query_writes_the_bank_and_preserves_other_results() {
         vm.state_mut().set_string(slot, b"old").unwrap();
         vm.state_mut().set_system_integer(1, 77).unwrap();
         pending(&mut vm);
-        assert!(settings.try_handle(&mut vm).unwrap());
+        assert!(settings.shared_state(&mut vm).unwrap());
         assert_eq!(
             vm.resolve_string(0x8000_0000 | slot).unwrap(),
             DEFAULT_FONT_FACE
@@ -585,7 +615,7 @@ fn gbk_font_query_transcodes_only_the_legacy_default_name() {
         let mut settings = SettingsHost::default();
         settings.set_font_face(face).unwrap();
         pending(&mut vm);
-        settings.try_handle(&mut vm).unwrap();
+        settings.shared_state(&mut vm).unwrap();
         let expected = if face == DEFAULT_FONT_FACE {
             b"\xa3\xcd\xa3\xd3 \xa5\xb4\xa5\xb7\xa5\xc3\xa5\xaf".as_slice()
         } else {
@@ -608,7 +638,7 @@ fn utf8_font_query_returns_the_default_name_in_utf8() {
         let mut settings = SettingsHost::default();
         settings.set_font_face(face).unwrap();
         pending(&mut vm);
-        settings.try_handle(&mut vm).unwrap();
+        settings.shared_state(&mut vm).unwrap();
         let expected = if face == DEFAULT_FONT_FACE {
             "ＭＳ ゴシック".as_bytes()
         } else {
@@ -629,7 +659,7 @@ fn font_writes_set_the_global_face_and_invalid_names_or_destinations_stay_pendin
     vm.state_mut().set_system_integer(0, 99).unwrap();
     pending(&mut vm);
     let mut settings = SettingsHost::default();
-    assert!(settings.try_handle(&mut vm).unwrap());
+    assert!(settings.shared_state(&mut vm).unwrap());
     assert_eq!(settings.font_face(), b"another font");
     assert_eq!(vm.stack().len_bytes(), 0);
     assert_eq!(vm.state().system_integer(0), Some(99));
@@ -647,7 +677,7 @@ fn font_writes_set_the_global_face_and_invalid_names_or_destinations_stay_pendin
         pending(&mut vm);
         let pc = vm.pc();
         let mut settings = SettingsHost::default();
-        assert!(settings.try_handle(&mut vm).is_err());
+        assert!(settings.shared_state(&mut vm).is_err());
         assert_eq!(vm.pc(), pc);
         assert!(vm.pending_system().is_some());
         assert_eq!(vm.stack().len_bytes(), 8);
@@ -680,7 +710,9 @@ fn configured_font_uses_the_profile_string_rules_and_rejects_bad_faces() {
 
 #[test]
 fn audio_queries_use_playback_settings_without_backend_requests() {
-    use cmvs_core::audio::{AudioHost, AudioSettings, RecordingAudio};
+    use cmvs_core::{
+        host::audio::AudioHost, host::audio::AudioSettings, host::audio::RecordingAudio,
+    };
     let values = [0, 1, 0, 140, 150, 160, 170, 180];
     let settings = AudioSettings {
         bgm_enabled: false,
@@ -706,7 +738,7 @@ fn audio_queries_use_playback_settings_without_backend_requests() {
     let mut backend = RecordingAudio::default();
     for value in values.into_iter().chain([128, 500, 1000]) {
         pending(&mut vm);
-        assert!(host.try_handle(&mut vm, &mut backend).unwrap());
+        assert!(host.shared_handle(&mut vm, &mut backend).unwrap());
         assert_eq!(vm.state().system_integer(0), Some(value));
         assert_eq!(vm.stack().len_bytes(), 0);
     }
@@ -715,7 +747,7 @@ fn audio_queries_use_playback_settings_without_backend_requests() {
 
 #[test]
 fn audio_ini_initializes_query_values_and_preserves_startup_volume_words() {
-    use cmvs_core::audio::{AudioHost, RecordingAudio};
+    use cmvs_core::{host::audio::AudioHost, host::audio::RecordingAudio};
     let ini = b"[SOUND_INFO]\nMASTER_VOLUME=224\nMUSIC_VOLUME=128\nSE_VOLUME=192\nVOICE_VOLUME=256\nVIDEO_VOLUME=224\nMUSIC_USE=0\nSE_USE=-1\nVOICE_USE=0\nVOICE_FADE_VOLOME=75\nVOICE_FADE_TIMER=600\nVOICE_FADE_WAIT=1200\n";
     let mut host = AudioHost::from_ini(ini);
     let settings = host.settings();
@@ -739,7 +771,7 @@ fn audio_ini_initializes_query_values_and_preserves_startup_volume_words() {
     let mut backend = RecordingAudio::default();
     for value in [75, 600, 1200] {
         pending(&mut vm);
-        host.try_handle(&mut vm, &mut backend).unwrap();
+        host.shared_handle(&mut vm, &mut backend).unwrap();
         assert_eq!(vm.state().system_integer(0), Some(value));
     }
     assert!(AudioHost::from_ini(&[]).background_output());
@@ -762,10 +794,7 @@ fn audio_ini_initializes_query_values_and_preserves_startup_volume_words() {
 #[test]
 fn realive_alpha_revision_round_trips_and_preserves_pending_errors() {
     for id in ["cmvs-20190305", "cmvs-20190405"] {
-        use cmvs_core::{
-            dispatch::{self, Flow, Hosts},
-            profile::Registry,
-        };
+        use cmvs_core::{profile::Registry, vm::dispatch, vm::dispatch::Flow, vm::dispatch::Hosts};
         let profile = Registry::builtin().profile(id).unwrap();
         let semantics = profile.semantics(0x2f9);
         assert!(
@@ -848,9 +877,8 @@ fn realive_alpha_revision_round_trips_and_preserves_pending_errors() {
 #[test]
 fn font_query_displays_resolved_name_without_changing_saved_handle() {
     use cmvs_core::{
-        dispatch::{self, Hosts},
-        message::{GlyphMetrics, MessageHost},
-        profile::Semantics,
+        profile::Semantics, render::message::GlyphMetrics, render::message::MessageHost,
+        vm::dispatch, vm::dispatch::Hosts,
     };
     #[derive(Debug)]
     struct Names;
@@ -890,9 +918,8 @@ fn font_query_displays_resolved_name_without_changing_saved_handle() {
 #[test]
 fn font_query_receives_the_message_host_the_runner_selects() {
     use cmvs_core::{
-        dispatch::{self, Hosts},
-        message::{GlyphMetrics, MessageHost},
-        profile::Semantics,
+        profile::Semantics, render::message::GlyphMetrics, render::message::MessageHost,
+        vm::dispatch, vm::dispatch::Hosts,
     };
     #[derive(Debug)]
     struct Names;

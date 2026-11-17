@@ -4,7 +4,9 @@ use crate::common::{
     OutputEncoding, PngDepthPolicy, Result, encode_memory, encode_utf8, png_to_pb3,
     rewrite_cpz7_archive, rewrite_encoded, write_new,
 };
-use cmvs_core::{bytecode, ps3::Script, script_control::archive_index_from_start};
+use cmvs_core::{
+    format::ps3::Script, runtime::script_control::archive_index_from_start, vm::bytecode,
+};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
@@ -231,7 +233,7 @@ pub fn run(game: &Path, stage: &Path, encoding: OutputEncoding) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cmvs_core::pb3;
+    use cmvs_core::format::pb3;
 
     fn memory(text: &[u8]) -> Result<Script> {
         memory_with_code(text, &[0, 4, 0, 0, 0, 0])

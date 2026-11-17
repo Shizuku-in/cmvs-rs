@@ -1,17 +1,13 @@
 use cmvs_core::{
-    dispatch::DispatchError,
-    dispatch::{self, Flow, Hosts, WaitHosts},
-    fade::SkipGate,
-    input::ActionInput,
-    machine::{Machine, Step},
-    profile::Semantics,
-    scene::SceneHost,
+    host::input::ActionInput, profile::Semantics, render::fade::SkipGate, render::scene::SceneHost,
+    vm::dispatch, vm::dispatch::DispatchError, vm::dispatch::Flow, vm::dispatch::Hosts,
+    vm::dispatch::WaitHosts, vm::machine::Machine, vm::machine::Step,
 };
 
 pub trait SharedSceneWait {
     fn shared_wait(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         gate: SkipGate,
         input: &mut ActionInput,
     ) -> Result<Option<Step>, DispatchError>;
@@ -20,7 +16,7 @@ pub trait SharedSceneWait {
 impl SharedSceneWait for SceneHost {
     fn shared_wait(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         gate: SkipGate,
         input: &mut ActionInput,
     ) -> Result<Option<Step>, DispatchError> {

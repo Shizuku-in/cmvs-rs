@@ -1,6 +1,6 @@
 //! Optional real-installation regression; the source game is never modified.
 use super::{Player, TickOutcome};
-use cmvs_core::save::Csv2Save;
+use cmvs_core::format::save::Csv2Save;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -88,12 +88,7 @@ fn amatsutsumi_game_savedata_survives_player_restart() {
         player.key(22, false).unwrap();
         advance(&mut player, 90);
     }
-    assert!(
-        player
-            .session
-            .with_dependent_mut(|_, s| s.save_slot(1))
-            .unwrap()
-    );
+    assert!(player.runtime.save_slot(1).unwrap());
     player.save_preferences().unwrap();
     let slot = fs::read(savedata.join("save001.dat")).unwrap();
     let saved = Csv2Save::decode(&slot).unwrap();
@@ -105,15 +100,10 @@ fn amatsutsumi_game_savedata_survives_player_restart() {
     let mut restarted = Player::open_game_savedata(&game, &legacy, &font, false).unwrap();
     advance(&mut restarted, 700);
     restarted
-        .session
-        .with_dependent_mut(|_, s| s.load_slot(1, &mut restarted.backend))
+        .runtime
+        .load_slot(1, &mut restarted.backend)
         .unwrap();
-    assert!(
-        restarted
-            .session
-            .with_dependent_mut(|_, s| s.save_slot(2))
-            .unwrap()
-    );
+    assert!(restarted.runtime.save_slot(2).unwrap());
     let resaved = fs::read(savedata.join("save002.dat")).unwrap();
     assert_eq!(Csv2Save::decode(&resaved).unwrap().snapshot, saved.snapshot);
     advance(&mut restarted, 90);

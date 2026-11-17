@@ -3,7 +3,7 @@
 use crate::common::{
     OutputEncoding, Result, rewrite_encoded, validate_utf8, write_archive, write_new,
 };
-use cmvs_core::{cpz::ArchiveIndex, ps3::Script};
+use cmvs_core::{format::cpz::ArchiveIndex, format::ps3::Script};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},

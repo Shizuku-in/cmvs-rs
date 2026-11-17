@@ -81,9 +81,9 @@ impl FrameDriver {
     /// delta so an asynchronous device request can resume the pending instruction.
     pub fn run_slice<E>(
         &mut self,
-        runtime: &mut Runtime<'_>,
+        runtime: &mut Runtime,
         budget: &mut FrameBudget,
-        mut step: impl FnMut(&mut Runtime<'_>) -> Result<RuntimeEvent, E>,
+        mut step: impl FnMut(&mut Runtime) -> Result<RuntimeEvent, E>,
     ) -> Result<FrameOutcome, E> {
         if self.yielded {
             return Ok(FrameOutcome::Yield);
@@ -111,9 +111,9 @@ impl FrameDriver {
     /// over the host's elapsed time. Returns whether a new frame was completed.
     pub fn finish_frame(
         &mut self,
-        runtime: &mut Runtime<'_>,
+        runtime: &mut Runtime,
         delta_ms: u32,
-    ) -> Result<bool, Box<dyn Error>> {
+    ) -> Result<bool, Box<dyn Error + Send + Sync>> {
         if !self.yielded {
             return Ok(false);
         }

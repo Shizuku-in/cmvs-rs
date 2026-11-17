@@ -1,4 +1,4 @@
-use cmvs_core::cmv::{CmvIndex, KIND_JBPX, KIND_OGG};
+use cmvs_core::{format::cmv::CmvIndex, format::cmv::KIND_JBPX, format::cmv::KIND_OGG};
 use std::io::Cursor;
 
 /// A CMV6 file with `frames` JBPX entries of 4 bytes each and one 3-byte Ogg entry.

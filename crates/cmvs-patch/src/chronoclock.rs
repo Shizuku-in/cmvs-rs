@@ -4,9 +4,7 @@ use crate::common::{
     OutputEncoding, Result, encode_utf8, rewrite_encoded, write_archive, write_new,
 };
 use cmvs_core::{
-    cpz::ArchiveIndex,
-    pb3::{self, EncodeDepth},
-    ps3::Script,
+    format::cpz::ArchiveIndex, format::pb3, format::pb3::EncodeDepth, format::ps3::Script,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},

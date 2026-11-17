@@ -1,11 +1,9 @@
+use crate::support::shared_images::SharedImages;
 use crate::support::shared_state;
 use cmvs_core::{
-    image::ImageSource,
-    machine::{Machine, Step},
-    ps3::Script,
-    raster::RgbaImage,
-    scene::{DrawState, ObjectImage, SceneHost, SceneObject},
-    scene_render,
+    format::ps3::Script, host::image::ImageSource, render::raster::RgbaImage,
+    render::scene::DrawState, render::scene::ObjectImage, render::scene::SceneHost,
+    render::scene::SceneObject, render::scene_render, vm::machine::Machine, vm::machine::Step,
 };
 use shared_state::SharedState;
 use std::error::Error;
@@ -49,7 +47,7 @@ fn white() -> Vec<u8> {
 }
 struct White;
 impl ImageSource for White {
-    fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
         Ok(Some(white()))
     }
 }
@@ -87,16 +85,16 @@ fn command(code: &mut Vec<u8>, op: u16, args: &[u32]) {
     }
     code.extend(op.to_le_bytes());
 }
-fn pending(vm: &mut Machine<'_>) {
+fn pending(vm: &mut Machine) {
     while !matches!(vm.step().unwrap(), Step::System { .. }) {}
 }
-fn run(vm: &mut Machine<'_>, scene: &mut SceneHost, commands: usize) {
+fn run(vm: &mut Machine, scene: &mut SceneHost, commands: usize) {
     for _ in 0..commands {
         pending(vm);
         assert!(
-            scene.try_handle(vm).unwrap()
+            scene.shared_state(vm).unwrap()
                 || scene.shared_state(vm).unwrap()
-                || scene.try_handle_image(vm, &mut White).unwrap()
+                || scene.shared_image(vm, &mut White).unwrap()
         );
     }
 }
@@ -175,9 +173,8 @@ fn step_quakes_toggle_or_rotate_and_run_count_plus_two_steps() {
 /// (its flags given), black elsewhere.
 fn frame(scene: &SceneHost, extra_flags: u32) -> Vec<u8> {
     let mut draw = DrawState::default();
-    draw.words[4] = 1;
-    draw.words[5] = 1;
-    draw.words[8] = 2;
+    draw.set_source_size(1, 1);
+    draw.set_position([2, 0]);
     let extra = SceneObject {
         image: Some(ObjectImage {
             filter: None,

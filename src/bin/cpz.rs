@@ -1,7 +1,8 @@
 use cmvs_rs::{
-    cpz::{ArchiveIndex, ArchiveLayout, Cpz5Mode, Cpz7Parameters},
-    ps3::Script,
-    script_control::{cpz7_parameters_from_start, packing_mode_from_start},
+    format::cpz::ArchiveIndex, format::cpz::ArchiveLayout, format::cpz::Cpz5Mode,
+    format::cpz::Cpz7Parameters, format::ps3::Script,
+    runtime::script_control::cpz7_parameters_from_start,
+    runtime::script_control::packing_mode_from_start,
 };
 use std::{
     env,
@@ -37,7 +38,7 @@ Resource checksums are not verified. Input archives are read only.
 Example: cmvs-cpz --list data/pack/script.cpz
 Example: cmvs-cpz --packing-mode 5 --extract script.cpz main.ps3 main.ps3";
 
-fn read_start(file: File) -> Result<Script, Box<dyn Error>> {
+fn read_start(file: File) -> Result<Script, Box<dyn Error + Send + Sync>> {
     let mut raw = Vec::new();
     file.take(cmvs_rs::MAX_PAYLOAD as u64 + 49)
         .read_to_end(&mut raw)?;
@@ -47,7 +48,7 @@ fn read_start(file: File) -> Result<Script, Box<dyn Error>> {
     Ok(Script::decode(&raw)?)
 }
 
-fn run() -> Result<(), Box<dyn Error>> {
+fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut paths: Vec<_> = env::args_os().skip(1).collect();
     if paths.is_empty() {
         return Err("usage: cmvs-cpz <archive> [archive ...]".into());

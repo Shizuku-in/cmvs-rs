@@ -3,11 +3,11 @@ use super::{Runtime, RuntimeEvent};
 use crate::{dispatch::RuntimeCall, script_control::ScriptSource};
 use std::error::Error;
 
-impl<'a> Runtime<'a> {
+impl Runtime {
     pub(super) fn handle_lifecycle(
         &mut self,
         request: &RuntimeCall,
-    ) -> Result<RuntimeEvent, Box<dyn Error>> {
+    ) -> Result<RuntimeEvent, Box<dyn Error + Send + Sync>> {
         let command = request.command();
         // Load/validate the replacement before destructive cleanup. Failure leaves RESET
         // pending, with the old VM and hosts intact; no game file is ever written.
@@ -39,7 +39,7 @@ impl<'a> Runtime<'a> {
         Ok(RuntimeEvent::Progress)
     }
 
-    fn finish_reset(&mut self, replacement: crate::machine::PreparedMain<'a>) {
+    fn finish_reset(&mut self, replacement: crate::machine::PreparedMain) {
         self.machine.replace_main(replacement);
         self.control.main_replaced();
         self.save_image = Default::default();
@@ -315,7 +315,7 @@ mod tests {
         run.set_skip_auto_resume(true).unwrap();
         run.set_record_text(true);
         let mut backend = RecordingBackend::default();
-        fn title(run: &mut Runtime<'_>, backend: &mut RecordingBackend, after: u64) {
+        fn title(run: &mut Runtime, backend: &mut RecordingBackend, after: u64) {
             for _ in 0..3_000_000 {
                 match run.tick(backend).unwrap() {
                     RuntimeEvent::Yield => {

@@ -4,10 +4,10 @@ use crate::dispatch::{Call, Flow, Hosts, RuntimeOperation};
 use crate::{audio::AudioBackend, sequence::SequenceContext};
 use std::error::Error;
 
-pub(in crate::dispatch) fn root_effects(
+pub(in super::super) fn root_effects(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     crate::fade::handle_effects(
         call,
         hosts
@@ -18,10 +18,10 @@ pub(in crate::dispatch) fn root_effects(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_effect_objects(
+pub(in super::super) fn root_effect_objects(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .scene
         .as_deref_mut()
@@ -38,10 +38,10 @@ fn audio_backend<'h>(audio: &'h mut Option<AudioHosts<'_>>) -> Option<&'h mut dy
         .map(|audio| &mut *audio.backend as &mut dyn AudioBackend)
 }
 
-pub(in crate::dispatch) fn root_wait_fade(
+pub(in super::super) fn root_wait_fade(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts.waits.as_mut().expect("wait context checked");
     Ok(h.scene
         .as_deref_mut()
@@ -50,10 +50,10 @@ pub(in crate::dispatch) fn root_wait_fade(
         .handle_wait(call, h.gate, h.input)?)
 }
 
-pub(in crate::dispatch) fn root_wait_mask(
+pub(in super::super) fn root_wait_mask(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts.waits.as_mut().expect("wait context checked");
     Ok(h.scene
         .as_deref_mut()
@@ -61,10 +61,10 @@ pub(in crate::dispatch) fn root_wait_mask(
         .handle_wait_mask(call, h.gate, h.input)?)
 }
 
-pub(in crate::dispatch) fn root_wait_quake(
+pub(in super::super) fn root_wait_quake(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts.waits.as_mut().expect("wait context checked");
     Ok(h.scene
         .as_deref_mut()
@@ -72,10 +72,10 @@ pub(in crate::dispatch) fn root_wait_quake(
         .handle_wait_quake(call)?)
 }
 
-pub(in crate::dispatch) fn root_wait_strip(
+pub(in super::super) fn root_wait_strip(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts.waits.as_mut().expect("wait context checked");
     Ok(h.scene
         .as_deref_mut()
@@ -83,10 +83,10 @@ pub(in crate::dispatch) fn root_wait_strip(
         .handle_wait_strip(call, h.gate, h.input)?)
 }
 
-pub(in crate::dispatch) fn root_wait_change(
+pub(in super::super) fn root_wait_change(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts.waits.as_mut().expect("wait context checked");
     Ok(h.scene
         .as_deref_mut()
@@ -94,10 +94,10 @@ pub(in crate::dispatch) fn root_wait_change(
         .handle_wait_change(call, h.gate, h.input)?)
 }
 
-pub(in crate::dispatch) fn root_wait_camera(
+pub(in super::super) fn root_wait_camera(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts.waits.as_mut().expect("wait context checked");
     Ok(h.camera
         .as_deref_mut()
@@ -105,10 +105,10 @@ pub(in crate::dispatch) fn root_wait_camera(
         .handle_wait_move(call, h.gate, h.input)?)
 }
 
-pub(in crate::dispatch) fn root_wait_view(
+pub(in super::super) fn root_wait_view(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts.waits.as_mut().expect("wait context checked");
     Ok(h.camera
         .as_deref_mut()
@@ -116,10 +116,10 @@ pub(in crate::dispatch) fn root_wait_view(
         .handle_wait_view(call, h.gate, h.input)?)
 }
 
-pub(in crate::dispatch) fn root_sequence(
+pub(in super::super) fn root_sequence(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts
         .sequence
         .as_mut()
@@ -134,10 +134,10 @@ pub(in crate::dispatch) fn root_sequence(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_quake(
+pub(in super::super) fn root_quake(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .scene
         .as_deref_mut()
@@ -146,10 +146,10 @@ pub(in crate::dispatch) fn root_quake(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_strip(
+pub(in super::super) fn root_strip(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .scene
         .as_deref_mut()
@@ -158,10 +158,10 @@ pub(in crate::dispatch) fn root_strip(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_scene(
+pub(in super::super) fn root_scene(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .scene
         .as_deref_mut()
@@ -170,10 +170,10 @@ pub(in crate::dispatch) fn root_scene(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_camera(
+pub(in super::super) fn root_camera(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .camera
         .as_deref_mut()
@@ -182,37 +182,37 @@ pub(in crate::dispatch) fn root_camera(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_images(
+pub(in super::super) fn root_images(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts.images.as_mut().expect("image capability checked");
     h.scene.handle_image(call, h.source)?;
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_mask_images(
+pub(in super::super) fn root_mask_images(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts.images.as_mut().expect("image capability checked");
     h.scene.handle_mask(call, h.source)?;
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_change_image(
+pub(in super::super) fn root_change_image(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts.images.as_mut().expect("image capability checked");
     h.scene.handle_change_image(call, h.source)?;
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn collision_mesh(
+pub(in super::super) fn collision_mesh(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .scene
         .as_deref_mut()
@@ -221,20 +221,20 @@ pub(in crate::dispatch) fn collision_mesh(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn legacy_snow_field(
+pub(in super::super) fn legacy_snow_field(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts.images.as_mut().expect("image capability checked");
     h.scene
         .create_snow_field(call, h.source, audio_backend(&mut hosts.audio))?;
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn legacy_floating_planes(
+pub(in super::super) fn legacy_floating_planes(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let (Some(images), Some(audio)) = (hosts.images.as_mut(), hosts.audio.as_mut()) else {
         return Ok(Flow::Unavailable);
     };
@@ -244,10 +244,10 @@ pub(in crate::dispatch) fn legacy_floating_planes(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn legacy_magic(
+pub(in super::super) fn legacy_magic(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let (Some(images), Some(audio), Some(camera), Some(random)) = (
         hosts.images.as_mut(),
         hosts.audio.as_mut(),
@@ -262,10 +262,10 @@ pub(in crate::dispatch) fn legacy_magic(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn legacy_vortex(
+pub(in super::super) fn legacy_vortex(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let (Some(images), Some(audio), Some(camera), Some(random)) = (
         hosts.images.as_mut(),
         hosts.audio.as_mut(),
@@ -280,10 +280,10 @@ pub(in crate::dispatch) fn legacy_vortex(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn legacy_curtain(
+pub(in super::super) fn legacy_curtain(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let (Some(images), Some(audio), Some(camera)) = (
         hosts.images.as_mut(),
         hosts.audio.as_mut(),
@@ -297,10 +297,10 @@ pub(in crate::dispatch) fn legacy_curtain(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn legacy_sprites(
+pub(in super::super) fn legacy_sprites(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let (Some(images), Some(audio)) = (hosts.images.as_mut(), hosts.audio.as_mut()) else {
         return Ok(Flow::Unavailable);
     };
@@ -310,10 +310,10 @@ pub(in crate::dispatch) fn legacy_sprites(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn legacy_circle(
+pub(in super::super) fn legacy_circle(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let (Some(images), Some(audio)) = (hosts.images.as_mut(), hosts.audio.as_mut()) else {
         return Ok(Flow::Unavailable);
     };
@@ -323,10 +323,10 @@ pub(in crate::dispatch) fn legacy_circle(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn legacy_walk(
+pub(in super::super) fn legacy_walk(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let (Some(scene), Some(camera), Some(audio)) = (
         hosts.scene.as_deref_mut(),
         hosts.camera.as_deref_mut(),
@@ -338,10 +338,10 @@ pub(in crate::dispatch) fn legacy_walk(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn legacy_query(
+pub(in super::super) fn legacy_query(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let scene = hosts
         .scene
         .as_deref_mut()
@@ -363,10 +363,10 @@ pub(in crate::dispatch) fn legacy_query(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn legacy_set(
+pub(in super::super) fn legacy_set(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let scene = hosts
         .scene
         .as_deref_mut()
@@ -375,10 +375,10 @@ pub(in crate::dispatch) fn legacy_set(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn create_rain(
+pub(in super::super) fn create_rain(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts
         .images
         .as_mut()
@@ -390,9 +390,9 @@ pub(in crate::dispatch) fn create_rain(
 
 fn particles(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
+    call: &mut Call<'_>,
     x87: bool,
-) -> Result<Flow, Box<dyn Error>> {
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts
         .images
         .as_mut()
@@ -410,25 +410,25 @@ fn particles(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn create_particles(
+pub(in super::super) fn create_particles(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     particles(hosts, call, false)
 }
 
-pub(in crate::dispatch) fn create_particles_x87(
+pub(in super::super) fn create_particles_x87(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     particles(hosts, call, true)
 }
 
 fn falling_billboards(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
+    call: &mut Call<'_>,
     x87: bool,
-) -> Result<Flow, Box<dyn Error>> {
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts
         .images
         .as_mut()
@@ -446,24 +446,24 @@ fn falling_billboards(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn create_falling_billboards(
+pub(in super::super) fn create_falling_billboards(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     falling_billboards(hosts, call, false)
 }
 
-pub(in crate::dispatch) fn create_falling_billboards_x87(
+pub(in super::super) fn create_falling_billboards_x87(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     falling_billboards(hosts, call, true)
 }
 
-pub(in crate::dispatch) fn create_fragments(
+pub(in super::super) fn create_fragments(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .scene
         .as_deref_mut()
@@ -479,10 +479,10 @@ pub(in crate::dispatch) fn create_fragments(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn query_fragments(
+pub(in super::super) fn query_fragments(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .scene
         .as_deref()
@@ -491,10 +491,10 @@ pub(in crate::dispatch) fn query_fragments(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn create_collision_particles(
+pub(in super::super) fn create_collision_particles(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts
         .images
         .as_mut()
@@ -511,10 +511,10 @@ pub(in crate::dispatch) fn create_collision_particles(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn screen_coordinates(
+pub(in super::super) fn screen_coordinates(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .scene
         .as_deref_mut()
@@ -523,10 +523,10 @@ pub(in crate::dispatch) fn screen_coordinates(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn create_legacy_flakes(
+pub(in super::super) fn create_legacy_flakes(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts
         .images
         .as_mut()
@@ -543,10 +543,10 @@ pub(in crate::dispatch) fn create_legacy_flakes(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn draw_query(
+pub(in super::super) fn draw_query(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .scene
         .as_deref_mut()
@@ -555,10 +555,10 @@ pub(in crate::dispatch) fn draw_query(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_cvns_image(
+pub(in super::super) fn root_cvns_image(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     use crate::cvns::cmd;
     if hosts.runtime && matches!(call.command, cmd::CAPTURE_SCREEN | cmd::MASK_CAPTURE) {
         if call.command == cmd::CAPTURE_SCREEN {
@@ -588,10 +588,10 @@ pub(in crate::dispatch) fn root_cvns_image(
     h.scene.handle_cvns_image(call, h.source)
 }
 
-pub(in crate::dispatch) fn root_cvns_scene(
+pub(in super::super) fn root_cvns_scene(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .scene
         .as_deref_mut()
@@ -599,10 +599,10 @@ pub(in crate::dispatch) fn root_cvns_scene(
         .handle_cvns(call)
 }
 
-pub(in crate::dispatch) fn root_cvns_wait(
+pub(in super::super) fn root_cvns_wait(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let w = hosts.waits.as_mut().expect("wait capability checked");
     w.scene
         .as_deref_mut()

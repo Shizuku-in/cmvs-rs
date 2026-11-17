@@ -1,11 +1,8 @@
 use crate::support::shared_state;
 use cmvs_core::{
-    fade::SkipGate,
-    input::ActionInput,
-    machine::{Machine, Step},
-    ps3::Script,
-    scene::{SceneHost, StripWipe},
-    scene_render,
+    format::ps3::Script, host::input::ActionInput, render::fade::SkipGate,
+    render::scene::SceneHost, render::scene::StripWipe, render::scene_render, vm::machine::Machine,
+    vm::machine::Step,
 };
 use shared_state::SharedState;
 
@@ -40,7 +37,7 @@ fn command(code: &mut Vec<u8>, op: u16, args: &[u32]) {
     }
     code.extend(op.to_le_bytes());
 }
-fn pending(vm: &mut Machine<'_>) {
+fn pending(vm: &mut Machine) {
     while !matches!(vm.step().unwrap(), Step::System { .. }) {}
 }
 /// 0x222f arguments: mode, color, size, duration, layer.
@@ -60,7 +57,12 @@ fn scene_with(mode: u32, size: u32, duration: u32) -> SceneHost {
 }
 /// (crop width, crop height, x, y) of strip `index`.
 fn strip(wipe: &StripWipe, index: usize) -> [u32; 4] {
-    let words = &wipe.strips[index].object.draw.as_ref().unwrap().words;
+    let words = &wipe.strips[index]
+        .object
+        .draw
+        .as_ref()
+        .unwrap()
+        .snapshot_words();
     [words[4], words[5], words[8], words[9]]
 }
 
@@ -91,7 +93,7 @@ fn creation_lays_out_solid_strips_and_replaces_the_previous_wipe() {
         let x = 20 * i as u32;
         assert_eq!((s.id, s.base, s.full), (i as u32, [x, 0], [20, 720]));
         assert_eq!(s.object.flags, 0);
-        let words = &s.object.draw.as_ref().unwrap().words;
+        let words = &s.object.draw.as_ref().unwrap().snapshot_words();
         assert_eq!(&words[2..11], &[0, 0, 0, 720, 0, 0, x, 0, 9]);
         assert_eq!(words[14], 0xff12_3456);
         assert_eq!(words[17], 255);
@@ -134,7 +136,7 @@ fn covering_strips_grow_in_turn_and_finish_as_a_full_screen_cover() {
     scene.advance_frame(500);
     let wipe = scene.strip_wipe().unwrap();
     assert!(wipe.finished && wipe.strips.is_empty());
-    let words = &wipe.object.draw.as_ref().unwrap().words;
+    let words = &wipe.object.draw.as_ref().unwrap().snapshot_words();
     assert_eq!(&words[2..11], &[0, 0, 1280, 720, 0, 0, 0, 0, 9]);
     assert_eq!(words[14], 0xff12_3456);
     assert_eq!(wipe.remaining(), u32::MAX);
@@ -182,7 +184,7 @@ fn finish_free_and_query_commands_pop_nothing() {
     let script = script(&code);
     let mut vm = Machine::new(&script).unwrap();
     let mut scene = SceneHost::default();
-    let next = |vm: &mut Machine<'_>, scene: &mut SceneHost| {
+    let next = |vm: &mut Machine, scene: &mut SceneHost| {
         pending(vm);
         vm.state_mut().set_system_integer(0, 7).unwrap();
         assert!(scene.shared_state(vm).unwrap());

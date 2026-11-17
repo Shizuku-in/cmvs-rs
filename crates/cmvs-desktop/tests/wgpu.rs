@@ -1,9 +1,8 @@
 #![cfg(feature = "wgpu-renderer")]
 use cmvs_core::{
-    input::{CodeInput, KeyBindings},
-    platform::RecordingBackend,
-    profile::Registry,
-    runtime::{Runtime, RuntimeEvent, SnapshotPolicy, load_start},
+    host::input::CodeInput, host::input::KeyBindings, host::platform::RecordingBackend,
+    profile::Registry, runtime::Runtime, runtime::RuntimeEvent, runtime::SnapshotPolicy,
+    runtime::load_start,
 };
 use cmvs_desktop::font::FontRenderer;
 use cmvs_wgpu::{Renderer, wgpu};
@@ -11,7 +10,7 @@ use std::{error::Error, path::PathBuf, time::Instant};
 
 #[test]
 #[ignore = "requires CMVS_GAME_ROOT, CMVS_FONT_PATH and GPU; game data stays outside Git"]
-fn external_fixed_clock_gpu_scene_comparison() -> Result<(), Box<dyn Error>> {
+fn external_fixed_clock_gpu_scene_comparison() -> Result<(), Box<dyn Error + Send + Sync>> {
     let root = PathBuf::from(std::env::var_os("CMVS_GAME_ROOT").ok_or("CMVS_GAME_ROOT")?);
     let font_path = PathBuf::from(std::env::var_os("CMVS_FONT_PATH").ok_or("CMVS_FONT_PATH")?);
     let game = Registry::builtin().identify_game(&root, None)?;
@@ -40,7 +39,7 @@ fn external_fixed_clock_gpu_scene_comparison() -> Result<(), Box<dyn Error>> {
     let mut warm_time = std::time::Duration::ZERO;
     for iteration in 0u64..40_000_000 {
         if iteration.is_multiple_of(100_000) {
-            run.set_audio_backend(Box::new(cmvs_core::audio::RecordingAudio::default()))?;
+            run.set_audio_backend(Box::new(cmvs_core::host::audio::RecordingAudio::default()))?;
             backend = RecordingBackend::default();
         }
         if phase == 0

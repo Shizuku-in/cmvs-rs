@@ -1,11 +1,7 @@
 use crate::support;
 use cmvs_core::{
-    dispatch::{self, Flow, Hosts},
-    history::HistoryHost,
-    machine::Machine,
-    profile::Semantics,
-    ps3::Script,
-    settings::SettingsHost,
+    format::ps3::Script, host::settings::SettingsHost, profile::Semantics, runtime::HistoryHost,
+    vm::dispatch, vm::dispatch::Flow, vm::dispatch::Hosts, vm::machine::Machine,
 };
 use support::bytecode::{command, pending};
 

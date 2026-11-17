@@ -186,7 +186,7 @@ impl SavedCvnsLayer {
         images: &mut dyn ImageSource,
         budget: &mut usize,
         force_opaque: bool,
-    ) -> Result<CvnsImageLayer, Box<dyn Error>> {
+    ) -> Result<CvnsImageLayer, Box<dyn Error + Send + Sync>> {
         let (name, part, frame, fill_color, captured, pixels) = match &self.source {
             SavedLayerPixels::BlankFill {
                 width,
@@ -262,7 +262,7 @@ impl SavedCvnsLayer {
     }
 }
 
-fn force_opaque_alpha(img: RgbaImage) -> Result<RgbaImage, Box<dyn Error>> {
+fn force_opaque_alpha(img: RgbaImage) -> Result<RgbaImage, Box<dyn Error + Send + Sync>> {
     let w = img.width();
     let h = img.height();
     let mut px = img.pixels().to_vec();
@@ -331,7 +331,7 @@ impl SavedCvnsImageBuffer {
         &self,
         images: &mut dyn ImageSource,
         budget: &mut usize,
-    ) -> Result<CvnsImageBuffer, Box<dyn Error>> {
+    ) -> Result<CvnsImageBuffer, Box<dyn Error + Send + Sync>> {
         let mut layers = Vec::with_capacity(CVNS_LAYERS);
         for slot in &self.layers {
             layers.push(
@@ -464,7 +464,7 @@ impl SavedCvnsMessage {
         &self,
         images: &mut dyn ImageSource,
         budget: &mut usize,
-    ) -> Result<CvnsMessage, Box<dyn Error>> {
+    ) -> Result<CvnsMessage, Box<dyn Error + Send + Sync>> {
         let mut local_images = Vec::with_capacity(CVNS_LOCAL_IMAGES);
         for slot in &self.local_images {
             local_images.push(
@@ -1833,7 +1833,7 @@ mod tests {
     struct TestImages(BTreeMap<Vec<u8>, Vec<u8>>);
 
     impl ImageSource for TestImages {
-        fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+        fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
             Ok(self.0.get(name).cloned())
         }
     }

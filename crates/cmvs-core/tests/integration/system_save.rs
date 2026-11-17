@@ -1,13 +1,11 @@
 use crate::support::shared_storage;
 use cmvs_core::{
-    MAX_PAYLOAD,
-    evaluate::State,
-    machine::{Machine, Step},
-    ps3::Script,
-    system_save::{
-        Css1Layout, Css1Parameters, Css1Save, NewSystemSave, SystemSaveEvent, SystemSaveHost,
-        SystemSaveSink, SystemSaveSource,
-    },
+    MAX_PAYLOAD, format::ps3::Script, format::system_save::Css1Layout,
+    format::system_save::Css1Parameters, format::system_save::Css1Save,
+    format::system_save::NewSystemSave, format::system_save::SystemSaveEvent,
+    format::system_save::SystemSaveHost, format::system_save::SystemSaveSink,
+    format::system_save::SystemSaveSource, vm::evaluate::State, vm::machine::Machine,
+    vm::machine::Step,
 };
 use shared_storage::SharedSystem;
 use std::{fs, io};
@@ -77,7 +75,7 @@ fn encoder_never_fills_unknown_persistent_state_or_accepts_embedded_list_nuls() 
 
 #[test]
 fn writer_failure_keeps_rng_vm_and_template_then_commits_exactly_four_draws() {
-    use cmvs_core::random::CrtRandom;
+    use cmvs_core::host::random::CrtRandom;
     #[derive(Default)]
     struct Sink {
         fail: bool,

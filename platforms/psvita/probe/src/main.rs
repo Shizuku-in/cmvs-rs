@@ -3,7 +3,7 @@ use std::{fmt::Write as _, fs, time::Instant};
 
 const BASE: &str = "ux0:data/cmvs-rs";
 
-fn probe(log: &mut String) -> Result<(), Box<dyn std::error::Error>> {
+fn probe(log: &mut String) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let start = Instant::now();
     fs::create_dir_all(BASE)?;
     for entry in fs::read_dir(BASE)?.take(16) {
@@ -15,7 +15,7 @@ fn probe(log: &mut String) -> Result<(), Box<dyn std::error::Error>> {
         "thread: {}",
         worker.join().map_err(|_| "thread panicked")?
     )?;
-    let mut hash = cmvs_core::digest::Sha256::new();
+    let mut hash = cmvs_core::format::digest::Sha256::new();
     hash.update(b"abc");
     let digest = hash.finish();
     if digest[..4] != [0xba, 0x78, 0x16, 0xbf] {

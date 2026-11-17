@@ -1,18 +1,16 @@
-//! Execution of the shared scene queue (`cmvs_core::scene_render::shader`) on a console
+//! Execution of the shared scene queue (`cmvs_core::render::scene_render::shader`) on a console
 //! GPU, with the content-keyed texture cache policy of cmvs-wgpu. Glyph rasterization
 //! and movie decoding stay on the CPU; the device composites. Presenting and readback
 //! are device specific and live with each player.
 use cmvs_core::{
-    raster::{CacheKey, RgbaImage},
-    scene_render::{
-        RenderFrame,
-        shader::{ShaderBlend, precomposited_draw, shader_draw},
-    },
+    render::raster::CacheKey, render::raster::RgbaImage, render::scene_render::RenderFrame,
+    render::scene_render::shader::ShaderBlend, render::scene_render::shader::precomposited_draw,
+    render::scene_render::shader::shader_draw,
 };
 use cmvs_native::{GpuDevice, GpuError, GpuTexture};
 use std::{collections::HashMap, error::Error, io::ErrorKind, path::Path};
 
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 /// Movie frames live apart from the content cache so replaced frames never evict
 /// static images. Each player shows one frame (three scene slots and the full-screen
 /// player), which leaves room for images that stopped players retain.
@@ -305,7 +303,10 @@ fn parse_renderer(setting: Option<&str>) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cmvs_core::scene::{DrawState, ObjectImage, SceneHost, SceneObject};
+    use cmvs_core::{
+        render::scene::DrawState, render::scene::ObjectImage, render::scene::SceneHost,
+        render::scene::SceneObject,
+    };
 
     /// Records calls; `capacity` live textures fit before uploads report exhaustion.
     #[derive(Default)]
@@ -367,10 +368,10 @@ mod tests {
             .enumerate()
             .map(|(i, &color)| {
                 let mut draw = DrawState::default();
-                draw.words[1] = 1;
-                draw.words[2..6].copy_from_slice(&[0, 0, 2, 2]);
-                draw.words[8..10].copy_from_slice(&[i as u32 * 2, 0]);
-                draw.words[18..20].fill(1.0f32.to_bits());
+                draw.set_blend_mode(1);
+                draw.set_source_rect([0, 0, 2, 2]);
+                draw.set_position_raw([i as u32 * 2, 0]);
+                draw.set_scale([1.0, 1.0]);
                 SceneObject {
                     image: Some(ObjectImage {
                         name: Vec::new(),
@@ -390,7 +391,7 @@ mod tests {
         let scene = SceneHost::default();
         let objects = objects(colors);
         let extra: Vec<_> = objects.iter().collect();
-        let frame = cmvs_core::scene_render::prepare_scene(&scene, None, &extra, 8, 4)?;
+        let frame = cmvs_core::render::scene_render::prepare_scene(&scene, None, &extra, 8, 4)?;
         gpu.render(&frame)
     }
 
@@ -466,7 +467,8 @@ mod tests {
         let mut gpu = Compositor::new(device, 1 << 20).unwrap();
         let mut scene = SceneHost::default();
         scene.enable_cvns();
-        let frame = cmvs_core::scene_render::prepare_scene(&scene, None, &[], 8, 4).unwrap();
+        let frame =
+            cmvs_core::render::scene_render::prepare_scene(&scene, None, &[], 8, 4).unwrap();
         assert!(frame.precomposited().is_some());
         gpu.render(&frame).unwrap();
         let calls = &gpu.device().calls;

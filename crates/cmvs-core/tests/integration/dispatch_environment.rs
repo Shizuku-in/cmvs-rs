@@ -1,18 +1,17 @@
 use crate::support;
 use crate::support::environment_cases;
+use crate::support::{
+    shared_environment::{SharedBootstrap, SharedPlatform},
+    shared_state::SharedState,
+};
 use cmvs_core::{
-    bootstrap::Bootstrap,
-    capture::ScreenCapture,
-    dispatch::{self, Capability, Flow, FunctionKeys, Hosts, PlatformHosts},
-    input::ActionInput,
-    machine::Machine,
-    message::MessageHost,
-    platform::{PlatformAssets, PlatformEvent, PlatformHost, RecordingBackend},
-    profile::Semantics,
-    ps3::Script,
-    raster::RgbaImage,
-    scene::SceneHost,
-    settings::SettingsHost,
+    format::ps3::Script, host::input::ActionInput, host::platform::PlatformAssets,
+    host::platform::PlatformEvent, host::platform::PlatformHost, host::platform::RecordingBackend,
+    host::settings::SettingsHost, profile::Semantics, render::capture::ScreenCapture,
+    render::message::MessageHost, render::raster::RgbaImage, render::scene::SceneHost,
+    runtime::bootstrap::Bootstrap, vm::dispatch, vm::dispatch::Capability, vm::dispatch::Flow,
+    vm::dispatch::FunctionKeys, vm::dispatch::Hosts, vm::dispatch::PlatformHosts,
+    vm::machine::Machine,
 };
 use std::error::Error;
 use support::bytecode::{command, pending};
@@ -51,7 +50,7 @@ struct Assets {
     fail: bool,
 }
 impl PlatformAssets for Assets {
-    fn read(&mut self, name: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn read(&mut self, name: &[u8]) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
         self.reads += 1;
         if self.fail {
             return Err(std::io::Error::new(
@@ -89,7 +88,7 @@ impl State {
         let mut vm = Machine::new(&scene_script).unwrap();
         for _ in 0..2 {
             pending(&mut vm);
-            assert!(self.scene.try_handle(&mut vm).unwrap());
+            assert!(self.scene.shared_state(&mut vm).unwrap());
         }
         let mut code = vec![];
         command(&mut code, 0x2098, &[15]);
@@ -97,11 +96,11 @@ impl State {
         let script = script(&code);
         let mut vm = Machine::new(&script).unwrap();
         pending(&mut vm);
-        assert!(self.bootstrap.try_handle(&mut vm).unwrap().is_some());
+        assert!(self.bootstrap.shared_bootstrap(&mut vm).unwrap().is_some());
         pending(&mut vm);
         assert!(
             self.platform
-                .try_handle(&mut vm, &mut self.backend, &mut self.assets, &[])
+                .shared_platform(&mut vm, &mut self.backend, &mut self.assets, &[])
                 .unwrap()
                 .is_some()
         );
@@ -297,7 +296,14 @@ fn platform_io_failures_keep_original_cause_and_retry_without_committing_host() 
                 .kind(),
             std::io::ErrorKind::Interrupted
         );
-        assert_eq!(e.to_string(), "platform unavailable");
+        assert_eq!(
+            e.to_string(),
+            format!(
+                "system command 0x{:04x} at 0x{:x}: platform unavailable",
+                0x2000 + e.command,
+                before.0
+            )
+        );
         assert_eq!(state.backend.requests(), requests);
         assert_eq!(state.platform.cursor(), 0);
         assert_eq!(state.platform.icon(), None);
@@ -328,19 +334,19 @@ fn function_key_public_apis_preserve_both_explicit_policy_effects() {
     let script = script(&code);
     let mut vm = Machine::new(&script).unwrap();
     pending(&mut vm);
-    let mut bootstrap = cmvs_core::bootstrap::Bootstrap::default();
-    assert!(bootstrap.try_handle(&mut vm).unwrap().is_some());
+    let mut bootstrap = cmvs_core::runtime::bootstrap::Bootstrap::default();
+    assert!(bootstrap.shared_bootstrap(&mut vm).unwrap().is_some());
     assert_eq!(bootstrap.settings().get(&0x234d), Some(&1));
     let mut vm = Machine::new(&script).unwrap();
     pending(&mut vm);
-    let mut input = cmvs_core::input::ActionInput::default();
-    assert!(cmvs_core::input::try_handle(&mut vm, &mut input).unwrap());
+    let mut input = cmvs_core::host::input::ActionInput::default();
+    assert!(support::shared_controls::input(&mut vm, &mut input).unwrap());
     input.press_function_keys(1);
     let mut code = vec![];
     command(&mut code, 0x234e, &[]);
     let query = support::bytecode::script(&code);
     let mut vm = Machine::new(&query).unwrap();
     pending(&mut vm);
-    assert!(cmvs_core::input::try_handle(&mut vm, &mut input).unwrap());
+    assert!(support::shared_controls::input(&mut vm, &mut input).unwrap());
     assert_eq!(vm.state().system_integer(0), Some(1));
 }

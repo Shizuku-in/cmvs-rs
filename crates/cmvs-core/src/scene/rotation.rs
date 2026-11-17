@@ -116,7 +116,7 @@ fn sine(angle: i32, amplitude: i32) -> i32 {
 impl SceneHost {
     /// 0x21e5..0x21e9: native wrappers 0x14006df30..0x14006e1d0.
     /// Slot/child, then constructor angle; key/next/mode/duration/angle; start key.
-    pub(super) fn rotation(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(super) fn rotation(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
         let count = match command {

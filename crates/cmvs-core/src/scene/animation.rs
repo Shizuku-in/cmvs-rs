@@ -98,7 +98,7 @@ impl Default for Animation {
 impl SceneHost {
     pub(super) fn handle_frame_animation(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
     ) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
 

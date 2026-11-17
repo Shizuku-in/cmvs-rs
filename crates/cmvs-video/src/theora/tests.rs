@@ -1,5 +1,5 @@
 use super::*;
-use cmvs_core::digest::{sha256, to_hex};
+use cmvs_core::{format::digest::sha256, format::digest::to_hex};
 use ogg::PacketReader;
 use std::{
     io::{Cursor, Read, Seek, SeekFrom},
@@ -28,7 +28,7 @@ fn packets(data: &[u8]) -> Vec<Vec<u8>> {
 
 fn fixture() -> Vec<Vec<u8>> {
     let bytes = hex(include_str!("../../tests/fixtures/mgv1.hex"));
-    let index = cmvs_core::mgv::MgvIndex::read(&mut Cursor::new(&bytes)).unwrap();
+    let index = cmvs_core::format::mgv::MgvIndex::read(&mut Cursor::new(&bytes)).unwrap();
     packets(&bytes[index.video_offset as usize..])
 }
 
@@ -485,7 +485,7 @@ fn external_decoder_timing() {
 #[test]
 #[ignore = "requires CMVS_THEORA_MGV"]
 fn external_mgv_playback_matches_packet_decoder() {
-    use cmvs_core::mgv::{Decoder as _, MgvIndex};
+    use cmvs_core::{format::mgv::Decoder as _, format::mgv::MgvIndex};
     let path = std::env::var("CMVS_THEORA_MGV").unwrap();
     let mut source = std::fs::File::open(&path).unwrap();
     let index = MgvIndex::read(&mut source).unwrap();

@@ -6,13 +6,10 @@ use android_activity::{
 };
 use cmvs_audio::{HostAudioControl, NativeAudio};
 use cmvs_core::{
-    input::KeyBindings,
-    platform::resolve_under,
-    profile::Registry,
-    runtime::{
-        FrameBudget, FrameDriver, FrameOutcome, Runtime, RuntimeEvent, RuntimeOptions, SaveStorage,
-        load_start_with_fs,
-    },
+    host::filesystem::resolve_under, host::input::KeyBindings, profile::Registry,
+    runtime::FrameBudget, runtime::FrameDriver, runtime::FrameOutcome, runtime::Runtime,
+    runtime::RuntimeEvent, runtime::RuntimeOptions, runtime::SaveStorage,
+    runtime::load_start_with_fs,
 };
 use cmvs_font::font::FontRenderer;
 use cmvs_input::{TouchEvent, TouchInput, TouchPhase, Viewport};
@@ -28,7 +25,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 const FRAME_TIME: Duration = Duration::from_millis(16);
 struct Graphics {
     // Drop the surface before its owning native window.
@@ -39,10 +36,10 @@ struct Graphics {
     instance: wgpu::Instance,
     window: Arc<AndroidWindow>,
 }
-struct Player<'a> {
+struct Player {
     audio_control: HostAudioControl,
     graphics: Option<Graphics>,
-    startup: Runtime<'a>,
+    startup: Runtime,
     backend: MobileBackend,
     touch: TouchInput,
     bindings: KeyBindings,
@@ -54,7 +51,7 @@ struct Player<'a> {
     draw_ready: bool,
     exit: bool,
 }
-impl Player<'_> {
+impl Player {
     fn active(&self) -> bool {
         self.resumed && self.focused && self.graphics.is_some()
     }
@@ -110,9 +107,9 @@ impl Player<'_> {
         self.sync_input();
         Ok(())
     }
-    fn render_software(&self) -> Result<cmvs_core::raster::RgbaImage> {
+    fn render_software(&self) -> Result<cmvs_core::render::raster::RgbaImage> {
         if let Some(frame) = self.startup.movie_frame() {
-            return Ok(cmvs_core::raster::movie_canvas(
+            return Ok(cmvs_core::render::raster::movie_canvas(
                 frame,
                 self.startup.screen_size(),
                 self.backend.display.render_mode == 1,
@@ -394,17 +391,17 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
         cmvs_video::PrefetchTheoraFactory::default().with_lookahead(64 << 20, 48),
     ));
     startup.set_scene_prefetch(|| {});
-    startup.set_image_decode_threads(cmvs_core::image::DecodeThreads::host());
+    startup.set_image_decode_threads(cmvs_core::host::image::DecodeThreads::host());
     startup.set_decoded_image_cache(128 << 20);
     startup.set_record_text(true);
     startup.set_host_capture(true);
     startup.set_glyph_metrics(font.borrow().metrics());
     font.borrow().set_user_directory(&user)?;
     if !font.borrow().has_face(startup.settings().font_face()) {
-        startup.set_font_face(cmvs_core::settings::DEFAULT_FONT_FACE)?;
+        startup.set_font_face(cmvs_core::host::settings::DEFAULT_FONT_FACE)?;
     }
     startup.set_save_clock(Box::new(cmvs_core::runtime::utc_save_time));
-    startup.set_random_seed(cmvs_core::random::host_time_seed());
+    startup.set_random_seed(cmvs_core::host::random::host_time_seed());
     let bindings = KeyBindings::load_for_profile_with_fs(&*fs, &root, game.selection.profile)?;
     let mut backend = MobileBackend::new(
         app.clone(),
@@ -415,7 +412,7 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
         startup.screen_size(),
     );
     backend.display.render_mode =
-        cmvs_core::platform::supported_render_mode(&backend, backend.display.render_mode)?;
+        cmvs_core::host::platform::supported_render_mode(&backend, backend.display.render_mode)?;
     let mut player = Player {
         audio_control,
         graphics: None,

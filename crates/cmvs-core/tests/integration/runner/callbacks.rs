@@ -85,7 +85,7 @@ fn snapshots_inside_a_dispatched_callback_load_back_and_return_through_the_frame
     let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     run.set_user_data_directory(&directory).unwrap();
     let mut backend = RecordingBackend::default();
-    let run_to_end = |run: &mut Runtime<'_>, backend: &mut RecordingBackend| {
+    let run_to_end = |run: &mut Runtime, backend: &mut RecordingBackend| {
         let mut captured = 0;
         loop {
             match run.tick(backend).unwrap() {

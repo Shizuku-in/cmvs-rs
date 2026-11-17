@@ -179,7 +179,7 @@ mod tests {
         assert_eq!(gpu.movie_textures.created, FRAME_TEXTURES as u64);
 
         let images: Vec<_> = (0..FRAME_TEXTURES + 5)
-            .map(|red| cmvs_core::scene::ObjectImage {
+            .map(|red| cmvs_core::render::scene::ObjectImage {
                 name: Vec::new(),
                 filter: None,
                 alpha: true,
@@ -200,7 +200,7 @@ mod tests {
                 alpha: 255,
                 mask: None,
                 screen_mask: None,
-                blend: cmvs_core::scene_render::Blend::Replace,
+                blend: cmvs_core::render::scene_render::Blend::Replace,
             })
             .collect();
         let scene = gpu
@@ -224,7 +224,7 @@ mod tests {
     #[test]
     #[ignore = "requires a native GPU adapter; run explicitly"]
     fn precomposited_frames_skip_content_cache_and_frame_start_protects_same_frame_uploads() {
-        fn layer_at(image: &cmvs_core::scene::ObjectImage, x: usize) -> Layer<'_> {
+        fn layer_at(image: &cmvs_core::render::scene::ObjectImage, x: usize) -> Layer<'_> {
             Layer::Image {
                 image,
                 rect: [0, 0, 1, 1],
@@ -232,20 +232,20 @@ mod tests {
                 alpha: 255,
                 mask: None,
                 screen_mask: None,
-                blend: cmvs_core::scene_render::Blend::Replace,
+                blend: cmvs_core::render::scene_render::Blend::Replace,
             }
         }
 
         let mut gpu = renderer();
-        let mut cvns_scene = cmvs_core::scene::SceneHost::default();
+        let mut cvns_scene = cmvs_core::render::scene::SceneHost::default();
         cvns_scene.enable_cvns();
         let render_cvns = |gpu: &mut Renderer, red: u8| {
-            let mut draw = cmvs_core::scene::DrawState::default();
-            draw.words[4..6].copy_from_slice(&[2, 1]);
-            draw.words[10] = 1;
-            draw.words[17] = 256;
-            let overlay = cmvs_core::scene::SceneObject {
-                image: Some(cmvs_core::scene::ObjectImage {
+            let mut draw = cmvs_core::render::scene::DrawState::default();
+            draw.set_source_size(2, 1);
+            draw.set_layer(1);
+            draw.set_opacity(256);
+            let overlay = cmvs_core::render::scene::SceneObject {
+                image: Some(cmvs_core::render::scene::ObjectImage {
                     name: Vec::new(),
                     filter: None,
                     alpha: false,
@@ -254,11 +254,16 @@ mod tests {
                 }),
                 draw: Some(draw),
                 shown: true,
-                ..cmvs_core::scene::SceneObject::default()
+                ..cmvs_core::render::scene::SceneObject::default()
             };
-            let frame =
-                cmvs_core::scene_render::prepare_scene(&cvns_scene, None, &[&overlay], 2, 1)
-                    .unwrap();
+            let frame = cmvs_core::render::scene_render::prepare_scene(
+                &cvns_scene,
+                None,
+                &[&overlay],
+                2,
+                1,
+            )
+            .unwrap();
             let expected = frame.precomposited().unwrap().clone();
             (gpu.render(&frame).unwrap(), expected)
         };
@@ -276,7 +281,7 @@ mod tests {
         assert_eq!(final_cvns.read().unwrap(), last_expected);
         drop((retained_cvns, final_cvns));
 
-        let frame_obj = |red: u8| cmvs_core::scene::ObjectImage {
+        let frame_obj = |red: u8| cmvs_core::render::scene::ObjectImage {
             name: Vec::new(),
             filter: None,
             alpha: true,
@@ -329,7 +334,7 @@ mod tests {
         expected_movies.extend_from_slice(&[1, 50, 60, 255]);
         assert_eq!(movie_scene.read().unwrap().pixels(), expected_movies);
 
-        let static_obj = |red: u8| cmvs_core::scene::ObjectImage {
+        let static_obj = |red: u8| cmvs_core::render::scene::ObjectImage {
             name: Vec::new(),
             filter: None,
             alpha: true,
@@ -391,8 +396,8 @@ mod tests {
                 255,
             ]
         }
-        fn frame_obj(i: u8) -> cmvs_core::scene::ObjectImage {
-            cmvs_core::scene::ObjectImage {
+        fn frame_obj(i: u8) -> cmvs_core::render::scene::ObjectImage {
+            cmvs_core::render::scene::ObjectImage {
                 name: Vec::new(),
                 filter: None,
                 alpha: true,
@@ -402,7 +407,7 @@ mod tests {
                     .into_frame(),
             }
         }
-        fn layer_at(image: &cmvs_core::scene::ObjectImage, x: usize) -> Layer<'_> {
+        fn layer_at(image: &cmvs_core::render::scene::ObjectImage, x: usize) -> Layer<'_> {
             Layer::Image {
                 image,
                 rect: [0, 0, 1, 1],
@@ -410,7 +415,7 @@ mod tests {
                 alpha: 255,
                 mask: None,
                 screen_mask: None,
-                blend: cmvs_core::scene_render::Blend::Replace,
+                blend: cmvs_core::render::scene_render::Blend::Replace,
             }
         }
 

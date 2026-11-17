@@ -1,10 +1,8 @@
 //! GPU execution of validated CMVS draw commands, with lazy logical-frame readback.
 use cmvs_core::{
-    raster::{CacheKey, RgbaImage},
-    scene_render::{
-        Layer, RenderFrame,
-        shader::{ShaderBlend, shader_draw},
-    },
+    render::raster::CacheKey, render::raster::RgbaImage, render::scene_render::Layer,
+    render::scene_render::RenderFrame, render::scene_render::shader::ShaderBlend,
+    render::scene_render::shader::shader_draw,
 };
 use std::{
     collections::HashMap,
@@ -15,7 +13,7 @@ pub use wgpu;
 mod bindings;
 mod textures;
 use textures::{Shared, Texture, TexturePool, Weak};
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 const CACHE_LIMIT: usize = 128 * 1024 * 1024;
 /// Movie frames live apart from the content cache so replaced frames never evict
 /// static images. Each player shows one frame (three scene slots and the full-screen
@@ -181,7 +179,7 @@ impl Renderer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: true,
                 min_binding_size: wgpu::BufferSize::new(
-                    (cmvs_core::scene_render::shader::PARAM_FLOATS * 4) as u64,
+                    (cmvs_core::render::scene_render::shader::PARAM_FLOATS * 4) as u64,
                 ),
             },
             count: None,
@@ -601,9 +599,9 @@ pub use present::Presenter;
 mod tests {
     use super::*;
     use cmvs_core::{
-        scene::{DrawState, ObjectImage, SceneHost, SceneObject},
-        scene_render::Blend,
-        scene_render::prepare_scene,
+        render::scene::DrawState, render::scene::ObjectImage, render::scene::SceneHost,
+        render::scene::SceneObject, render::scene_render::Blend,
+        render::scene_render::prepare_scene,
     };
     #[test]
     #[ignore = "requires a native GPU adapter; run explicitly"]
@@ -634,11 +632,11 @@ mod tests {
             (1.0, 60.0, 1, [u32::MAX, u32::MAX, 8, 6]),
         ] {
             let mut draw = DrawState::default();
-            draw.words[1] = mode;
-            draw.words[2..6].copy_from_slice(&rect);
-            draw.words[8..10].copy_from_slice(&[2, 1]);
-            draw.words[18..20].fill(scale.to_bits());
-            draw.words[20] = angle.to_bits();
+            draw.set_blend_mode(mode);
+            draw.set_source_rect(rect);
+            draw.set_position_raw([2, 1]);
+            draw.set_scale([scale; 2]);
+            draw.set_rotation_hundredths((angle * 100.0) as i32);
             let object = SceneObject {
                 image: Some(ObjectImage {
                     name: Vec::new(),
@@ -715,7 +713,7 @@ mod tests {
                 .unwrap(),
             ..image.clone()
         };
-        let transition = cmvs_core::scene::MaskTransition {
+        let transition = cmvs_core::render::scene::MaskTransition {
             put: true,
             slot: 0,
             ramp: 100,
@@ -813,7 +811,7 @@ mod tests {
                 }
             }
         }
-        let fade = cmvs_core::fade::Fade {
+        let fade = cmvs_core::render::fade::Fade {
             direction: 0,
             color: 0xff804020,
             duration: 100,

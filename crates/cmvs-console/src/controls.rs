@@ -8,8 +8,8 @@
 //! begins and ends between two frames is latched into one down frame.
 use crate::ButtonMap;
 use cmvs_core::{
-    input::{ActionInput, CodeInput, KeyBindings},
-    viewport::Viewport,
+    host::input::ActionInput, host::input::CodeInput, host::input::KeyBindings,
+    render::viewport::Viewport,
 };
 use cmvs_native::PadInput;
 

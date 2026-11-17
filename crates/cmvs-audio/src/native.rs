@@ -2,14 +2,13 @@
 //! With only the `mixer` feature the host pulls mixed PCM through [`PcmOutput`].
 use crate::AudioProgram;
 use cmvs_core::{
-    MAX_PAYLOAD,
-    audio::{
-        AUX_SE_CHANNELS, AudioBackend, AudioRequest, CVNS_SE_CHANNELS, MovieAudioClock,
-        SE_CHANNELS, SePlayback, VOICE_CHANNELS, VoiceActivity, VoiceCompressor, VoiceDucking,
-        VoiceDuckingSettings,
-    },
-    platform::resolve_under,
-    resources::{ResourceArchives, ResourceKind, ResourceSource},
+    MAX_PAYLOAD, host::audio::AUX_SE_CHANNELS, host::audio::AudioBackend,
+    host::audio::AudioRequest, host::audio::CVNS_SE_CHANNELS, host::audio::MovieAudioClock,
+    host::audio::SE_CHANNELS, host::audio::SePlayback, host::audio::VOICE_CHANNELS,
+    host::audio::VoiceActivity, host::audio::VoiceCompressor, host::audio::VoiceDucking,
+    host::audio::VoiceDuckingSettings, host::filesystem::resolve_under,
+    host::resources::ResourceArchives, host::resources::ResourceKind,
+    host::resources::ResourceSource,
 };
 #[cfg(feature = "native")]
 use rodio::{DeviceSinkBuilder, MixerDeviceSink};
@@ -53,13 +52,13 @@ struct StreamSource {
 }
 impl StreamSource {
     /// Original MOG output is saturated signed 16-bit PCM before device gain.
-    fn pcm(&mut self) -> Result<Option<i16>, Box<dyn Error>> {
+    fn pcm(&mut self) -> Result<Option<i16>, Box<dyn Error + Send + Sync>> {
         Ok(self
             .program
             .next_sample()?
             .map(|x| (x * 32768.0).clamp(-32768.0, 32767.0).trunc() as i16))
     }
-    fn compressed(&mut self) -> Result<Option<i16>, Box<dyn Error>> {
+    fn compressed(&mut self) -> Result<Option<i16>, Box<dyn Error + Send + Sync>> {
         let compression = self.compression.as_mut().expect("checked by caller");
         if compression.at == compression.chunk.len() {
             if compression.last || compression.compressor.ended() {
@@ -175,7 +174,7 @@ struct Channel {
     script_gain: f32,
 }
 impl Channel {
-    fn check(&self) -> Result<(), Box<dyn Error>> {
+    fn check(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
         if let Some(error) = self.fault.lock().unwrap().as_ref() {
             return Err(format!("Vorbis playback failed: {error}").into());
         }
@@ -212,7 +211,7 @@ fn preloaded_gain(volume: u32) -> Option<f32> {
 
 /// Engine audio channels shared by desktop, Android and pull-output hosts.
 pub struct NativeAudio {
-    preloaded: [Option<Channel>; cmvs_core::audio::PRELOADED_SOUNDS],
+    preloaded: [Option<Channel>; cmvs_core::host::audio::PRELOADED_SOUNDS],
     output_enabled: Arc<AtomicBool>,
     mixer_gain: Arc<AtomicU32>,
     host_control: HostAudioControl,
@@ -255,7 +254,7 @@ impl PcmOutput {
 impl NativeAudio {
     /// Plays through the default system output device.
     #[cfg(feature = "native")]
-    pub fn new(root: &Path) -> Result<Self, Box<dyn Error>> {
+    pub fn new(root: &Path) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let fault: Fault = Arc::default();
         let copy = fault.clone();
         let mut stream = DeviceSinkBuilder::from_default_device()?
@@ -274,7 +273,7 @@ impl NativeAudio {
         root: &Path,
         rate: u32,
         channels: u16,
-    ) -> Result<(Self, PcmOutput), Box<dyn Error>> {
+    ) -> Result<(Self, PcmOutput), Box<dyn Error + Send + Sync>> {
         let (mixer, source) = rodio::mixer::mixer(
             rodio::ChannelCount::new(channels).ok_or("output channel count is zero")?,
             rodio::SampleRate::new(rate).ok_or("output sample rate is zero")?,
@@ -284,7 +283,11 @@ impl NativeAudio {
             PcmOutput(source),
         ))
     }
-    fn with_mixer(root: &Path, mixer: Mixer, fault: Fault) -> Result<Self, Box<dyn Error>> {
+    fn with_mixer(
+        root: &Path,
+        mixer: Mixer,
+        fault: Fault,
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         Ok(Self {
             preloaded: std::array::from_fn(|_| None),
             output_enabled: Arc::new(AtomicBool::new(true)),
@@ -317,7 +320,7 @@ impl NativeAudio {
     /// Returns source consumption milliseconds, excluding device-buffer latency;
     /// an empty, paused or exhausted channel returns None. Call `update` separately
     /// to advance fades and report device failures. This is not a VM command result.
-    pub fn bgm_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+    pub fn bgm_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
         let channel = self
             .bgm
             .get(usize::from(channel))
@@ -326,7 +329,7 @@ impl NativeAudio {
     }
     /// Current sink gain control, including fades and voice ducking. This does not
     /// measure device output amplitude or queued hardware buffers.
-    pub fn bgm_gain(&self, channel: u8) -> Result<Option<f32>, Box<dyn Error>> {
+    pub fn bgm_gain(&self, channel: u8) -> Result<Option<f32>, Box<dyn Error + Send + Sync>> {
         Ok(self
             .bgm
             .get(usize::from(channel))
@@ -334,7 +337,11 @@ impl NativeAudio {
             .as_ref()
             .map(|c| c.sink.volume()))
     }
-    fn load(&mut self, kind: ResourceKind, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    fn load(
+        &mut self,
+        kind: ResourceKind,
+        name: &[u8],
+    ) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
         if name.is_empty() {
             return Ok(None);
         }
@@ -412,7 +419,7 @@ impl NativeAudio {
         channel: u8,
         kind: &str,
         multiplier: u32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let slot = slots
             .get_mut(usize::from(channel))
             .ok_or_else(|| format!("{kind} channel out of range"))?;
@@ -425,7 +432,7 @@ impl NativeAudio {
     /// Playing means started (not paused) with source data left; `update` releases
     /// finished channels. The position is the source consumption clock, not a DAC
     /// timestamp, and includes no device-buffer latency.
-    fn position(channel: Option<&Channel>) -> Result<Option<u32>, Box<dyn Error>> {
+    fn position(channel: Option<&Channel>) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
         let Some(channel) = channel else {
             return Ok(None);
         };
@@ -437,7 +444,7 @@ impl NativeAudio {
             channel.sink.get_pos().as_millis().min(u128::from(u32::MAX)) as u32,
         ))
     }
-    fn tick_channel(channel: &mut Option<Channel>) -> Result<(), Box<dyn Error>> {
+    fn tick_channel(channel: &mut Option<Channel>) -> Result<(), Box<dyn Error + Send + Sync>> {
         let Some(current) = channel else {
             return Ok(());
         };
@@ -458,10 +465,14 @@ impl NativeAudio {
     }
 }
 impl AudioBackend for NativeAudio {
-    fn set_se_gain(&mut self, channel: u8, multiplier: u32) -> Result<(), Box<dyn Error>> {
+    fn set_se_gain(
+        &mut self,
+        channel: u8,
+        multiplier: u32,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Self::set_slot_script_gain(&mut self.se, channel, "SE", multiplier)
     }
-    fn preload(&mut self, slot: u8, name: &[u8]) -> Result<bool, Box<dyn Error>> {
+    fn preload(&mut self, slot: u8, name: &[u8]) -> Result<bool, Box<dyn Error + Send + Sync>> {
         let index = usize::from(slot);
         if index >= self.preloaded.len() {
             return Err("preloaded sound slot out of range".into());
@@ -474,7 +485,7 @@ impl AudioBackend for NativeAudio {
         self.preloaded[index] = sound.map(|program| self.prepare(program, 256, 0));
         Ok(loaded)
     }
-    fn release_preloaded(&mut self, slot: u8) -> Result<(), Box<dyn Error>> {
+    fn release_preloaded(&mut self, slot: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
         *self
             .preloaded
             .get_mut(usize::from(slot))
@@ -487,7 +498,7 @@ impl AudioBackend for NativeAudio {
         slot: u8,
         looped: bool,
         volume: u32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let index = usize::from(slot);
         let current = self
             .preloaded
@@ -512,7 +523,7 @@ impl AudioBackend for NativeAudio {
         }
         Ok(())
     }
-    fn stop_preloaded(&mut self, slot: u8) -> Result<(), Box<dyn Error>> {
+    fn stop_preloaded(&mut self, slot: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
         if let Some(current) = self
             .preloaded
             .get(usize::from(slot))
@@ -522,7 +533,11 @@ impl AudioBackend for NativeAudio {
         }
         Ok(())
     }
-    fn set_preloaded_volume(&mut self, slot: u8, volume: u32) -> Result<(), Box<dyn Error>> {
+    fn set_preloaded_volume(
+        &mut self,
+        slot: u8,
+        volume: u32,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if let Some(current) = self
             .preloaded
             .get_mut(usize::from(slot))
@@ -534,11 +549,11 @@ impl AudioBackend for NativeAudio {
         }
         Ok(())
     }
-    fn set_mixer_gain(&mut self, gain: u32) -> Result<(), Box<dyn Error>> {
+    fn set_mixer_gain(&mut self, gain: u32) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.mixer_gain.store(gain.min(256), Ordering::Relaxed);
         Ok(())
     }
-    fn set_output_enabled(&mut self, enabled: bool) -> Result<(), Box<dyn Error>> {
+    fn set_output_enabled(&mut self, enabled: bool) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.output_enabled.store(enabled, Ordering::Relaxed);
         Ok(())
     }
@@ -546,14 +561,14 @@ impl AudioBackend for NativeAudio {
     fn configure_voice_ducking(
         &mut self,
         settings: VoiceDuckingSettings,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.voice_ducking.configure(settings);
         Ok(())
     }
     fn configure_se(
         &mut self,
         channels: &[Option<SePlayback>; SE_CHANNELS],
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let mut prepared: Vec<Option<Channel>> = (0..SE_CHANNELS).map(|_| None).collect();
         // Load and validate every resource while old sounds keep playing. Candidates
         // remain paused, so a later decode error leaves the audible state unchanged.
@@ -580,7 +595,10 @@ impl AudioBackend for NativeAudio {
         }
         Ok(())
     }
-    fn set_volumes(&mut self, channels: &[Option<u32>; 15]) -> Result<(), Box<dyn Error>> {
+    fn set_volumes(
+        &mut self,
+        channels: &[Option<u32>; 15],
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         // No fallible operation after the first mutation. Keep fade envelopes and
         // playback positions intact, including paused/prepared channels.
         for (index, volume) in channels.iter().enumerate() {
@@ -607,7 +625,7 @@ impl AudioBackend for NativeAudio {
     fn configure_paths(
         &mut self,
         paths: &BTreeMap<(u16, u32), Vec<u8>>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if self.paths != *paths {
             self.paths = paths.clone();
         }
@@ -615,12 +633,12 @@ impl AudioBackend for NativeAudio {
     }
     fn configure_archive_parameters(
         &mut self,
-        parameters: &BTreeMap<(u16, u32), cmvs_core::cpz::Cpz7Parameters>,
-    ) -> Result<(), Box<dyn Error>> {
+        parameters: &BTreeMap<(u16, u32), cmvs_core::format::cpz::Cpz7Parameters>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.archives.configure_parameters(parameters);
         Ok(())
     }
-    fn play(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+    fn play(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>> {
         let AudioRequest::PlaySe {
             channel,
             name,
@@ -656,7 +674,7 @@ impl AudioBackend for NativeAudio {
         }
         Ok(true)
     }
-    fn start(&mut self, channel: u8, looped: bool) -> Result<(), Box<dyn Error>> {
+    fn start(&mut self, channel: u8, looped: bool) -> Result<(), Box<dyn Error + Send + Sync>> {
         let channel = self
             .se
             .get_mut(usize::from(channel))
@@ -669,7 +687,11 @@ impl AudioBackend for NativeAudio {
         }
         Ok(())
     }
-    fn restart_se(&mut self, channel: u8, looped: bool) -> Result<(), Box<dyn Error>> {
+    fn restart_se(
+        &mut self,
+        channel: u8,
+        looped: bool,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let slot = usize::from(channel);
         let Some(current) = self.se.get(slot).ok_or("SE channel out of range")? else {
             return Ok(());
@@ -683,14 +705,14 @@ impl AudioBackend for NativeAudio {
         self.se[slot].as_ref().unwrap().sink.play();
         Ok(())
     }
-    fn stop_voice(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
+    fn stop_voice(&mut self, channel: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
         *self
             .voice
             .get_mut(usize::from(channel))
             .ok_or("voice channel out of range")? = None;
         Ok(())
     }
-    fn fade_out_voice(&mut self, channel: u8, ms: u32) -> Result<(), Box<dyn Error>> {
+    fn fade_out_voice(&mut self, channel: u8, ms: u32) -> Result<(), Box<dyn Error + Send + Sync>> {
         let channel = self
             .voice
             .get_mut(usize::from(channel))
@@ -698,7 +720,7 @@ impl AudioBackend for NativeAudio {
         Self::fade(channel, ms);
         Ok(())
     }
-    fn play_voice(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+    fn play_voice(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>> {
         let AudioRequest::PlayVoice {
             channel,
             name,
@@ -749,18 +771,18 @@ impl AudioBackend for NativeAudio {
         self.voice[slot] = Some(candidate);
         Ok(true)
     }
-    fn stop(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
+    fn stop(&mut self, channel: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
         *self
             .se
             .get_mut(usize::from(channel))
             .ok_or("SE channel out of range")? = None;
         Ok(())
     }
-    fn stop_channel15(&mut self) -> Result<(), Box<dyn Error>> {
+    fn stop_channel15(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.channel15 = None;
         Ok(())
     }
-    fn fade_out_se(&mut self, channel: u8, ms: u32) -> Result<(), Box<dyn Error>> {
+    fn fade_out_se(&mut self, channel: u8, ms: u32) -> Result<(), Box<dyn Error + Send + Sync>> {
         let channel = self
             .se
             .get_mut(usize::from(channel))
@@ -768,20 +790,20 @@ impl AudioBackend for NativeAudio {
         Self::fade(channel, ms);
         Ok(())
     }
-    fn play_bgm(&mut self, request: &AudioRequest) -> Result<(), Box<dyn Error>> {
+    fn play_bgm(&mut self, request: &AudioRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.play_bgm_with_loop(request, 0)
     }
     fn play_bgm_loop_from(
         &mut self,
         request: &AudioRequest,
         loop_sample: u32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.play_bgm_with_loop(request, loop_sample)
     }
-    fn bgm_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+    fn bgm_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
         NativeAudio::bgm_position(self, channel)
     }
-    fn pause_se(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
+    fn pause_se(&mut self, channel: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
         let slot = self
             .se
             .get_mut(usize::from(channel))
@@ -791,13 +813,17 @@ impl AudioBackend for NativeAudio {
         }
         Ok(())
     }
-    fn set_se_pan(&mut self, channel: u8, _pan: i32) -> Result<(), Box<dyn Error>> {
+    fn set_se_pan(&mut self, channel: u8, _pan: i32) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.se
             .get(usize::from(channel))
             .ok_or("SE channel out of range")?;
         Ok(())
     }
-    fn start_voice(&mut self, channel: u8, looped: bool) -> Result<(), Box<dyn Error>> {
+    fn start_voice(
+        &mut self,
+        channel: u8,
+        looped: bool,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let slot = self
             .voice
             .get_mut(usize::from(channel))
@@ -808,16 +834,27 @@ impl AudioBackend for NativeAudio {
         }
         Ok(())
     }
-    fn set_voice_gain(&mut self, channel: u8, multiplier: u32) -> Result<(), Box<dyn Error>> {
+    fn set_voice_gain(
+        &mut self,
+        channel: u8,
+        multiplier: u32,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Self::set_slot_script_gain(&mut self.voice, channel, "voice", multiplier)
     }
-    fn set_voice_pan(&mut self, channel: u8, _pan: i32) -> Result<(), Box<dyn Error>> {
+    fn set_voice_pan(
+        &mut self,
+        channel: u8,
+        _pan: i32,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.voice
             .get(usize::from(channel))
             .ok_or("voice channel out of range")?;
         Ok(())
     }
-    fn play_aux_se(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+    fn play_aux_se(
+        &mut self,
+        request: &AudioRequest,
+    ) -> Result<bool, Box<dyn Error + Send + Sync>> {
         let AudioRequest::PlayAuxSe {
             channel,
             name,
@@ -846,21 +883,25 @@ impl AudioBackend for NativeAudio {
         }
         Ok(true)
     }
-    fn stop_aux_se(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
+    fn stop_aux_se(&mut self, channel: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
         *self
             .aux_se
             .get_mut(usize::from(channel))
             .ok_or("auxiliary SE channel out of range")? = None;
         Ok(())
     }
-    fn aux_se_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+    fn aux_se_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
         let channel = self
             .aux_se
             .get(usize::from(channel))
             .ok_or("auxiliary SE channel out of range")?;
         Self::position(channel.as_ref())
     }
-    fn set_aux_se_gain(&mut self, channel: u8, multiplier: u32) -> Result<(), Box<dyn Error>> {
+    fn set_aux_se_gain(
+        &mut self,
+        channel: u8,
+        multiplier: u32,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Self::set_slot_script_gain(&mut self.aux_se, channel, "auxiliary SE", multiplier)
     }
     fn set_cvns_volumes(
@@ -869,7 +910,7 @@ impl AudioBackend for NativeAudio {
         se: &[(u8, u32)],
         voice: Option<u32>,
         aux: Option<u32>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if let Some(volume) = bgm.filter(|&v| v <= 256) {
             for channel in self.bgm.iter_mut().flatten() {
                 Self::set_gain(channel, volume as f32 / 256.0);
@@ -894,7 +935,7 @@ impl AudioBackend for NativeAudio {
         }
         Ok(())
     }
-    fn fade_out_bgm(&mut self, channel: u8, ms: u32) -> Result<(), Box<dyn Error>> {
+    fn fade_out_bgm(&mut self, channel: u8, ms: u32) -> Result<(), Box<dyn Error + Send + Sync>> {
         let channel = self
             .bgm
             .get_mut(usize::from(channel))
@@ -902,11 +943,14 @@ impl AudioBackend for NativeAudio {
         Self::fade(channel, ms);
         Ok(())
     }
-    fn stop_bgm(&mut self) -> Result<(), Box<dyn Error>> {
+    fn stop_bgm(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.bgm = [None, None];
         Ok(())
     }
-    fn play_movie_audio(&mut self, request: &AudioRequest) -> Result<(), Box<dyn Error>> {
+    fn play_movie_audio(
+        &mut self,
+        request: &AudioRequest,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let AudioRequest::PlayMovieAudio {
             path,
             offset,
@@ -939,11 +983,11 @@ impl AudioBackend for NativeAudio {
         self.movie.as_ref().unwrap().sink.play();
         Ok(())
     }
-    fn stop_movie_audio(&mut self) -> Result<(), Box<dyn Error>> {
+    fn stop_movie_audio(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.movie = None;
         Ok(())
     }
-    fn update(&mut self) -> Result<(), Box<dyn Error>> {
+    fn update(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         if let Some(e) = self.device_fault.lock().unwrap().as_ref() {
             return Err(format!("audio device failed: {e}").into());
         }
@@ -996,21 +1040,21 @@ impl AudioBackend for NativeAudio {
         }
         Ok(())
     }
-    fn se_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+    fn se_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
         let channel = self
             .se
             .get(usize::from(channel))
             .ok_or("SE channel out of range")?;
         Self::position(channel.as_ref())
     }
-    fn voice_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+    fn voice_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
         let channel = self
             .voice
             .get(usize::from(channel))
             .ok_or("voice channel out of range")?;
         Self::position(channel.as_ref())
     }
-    fn movie_clock(&self) -> Result<Option<MovieAudioClock>, Box<dyn Error>> {
+    fn movie_clock(&self) -> Result<Option<MovieAudioClock>, Box<dyn Error + Send + Sync>> {
         let Some(movie) = &self.movie else {
             return Ok(Some(MovieAudioClock::Ended));
         };
@@ -1030,7 +1074,7 @@ impl NativeAudio {
         &mut self,
         request: &AudioRequest,
         loop_sample: u32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let AudioRequest::PlayBgm {
             channel,
             previous,

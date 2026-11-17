@@ -43,7 +43,7 @@ impl Handle {
     fn run(
         &mut self,
         clear_error: bool,
-        f: impl FnOnce(&mut Player) -> Result<i32, Box<dyn std::error::Error>>,
+        f: impl FnOnce(&mut Player) -> Result<i32, Box<dyn std::error::Error + Send + Sync>>,
     ) -> i32 {
         let result = catch_unwind(AssertUnwindSafe(|| match self.player.as_mut() {
             Some(player) => f(player),
@@ -114,7 +114,7 @@ unsafe fn open(
     };
     h.player = None;
     let result = catch_unwind(AssertUnwindSafe(
-        || -> Result<Player, Box<dyn std::error::Error>> {
+        || -> Result<Player, Box<dyn std::error::Error + Send + Sync>> {
             if game.is_null() || user.is_null() || font.is_null() {
                 return Err("null CMVS path".into());
             }

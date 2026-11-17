@@ -1,5 +1,5 @@
 //! Native event adapter for the verified CMVS input-code table. No Windows APIs in core.
-use cmvs_core::input::{ActionInput, CodeInput, KeyBindings};
+use cmvs_core::{host::input::ActionInput, host::input::CodeInput, host::input::KeyBindings};
 pub use cmvs_input::Viewport;
 use std::collections::BTreeSet;
 use winit::{
@@ -36,10 +36,10 @@ pub struct GameInput {
     wheel: f64,
     focused: bool,
     aspect_mode: Option<u32>,
-    screen_size: cmvs_core::viewport::ScreenSize,
+    screen_size: cmvs_core::render::viewport::ScreenSize,
 }
 impl GameInput {
-    pub fn set_screen_size(&mut self, size: cmvs_core::viewport::ScreenSize) {
+    pub fn set_screen_size(&mut self, size: cmvs_core::render::viewport::ScreenSize) {
         self.screen_size = size;
     }
     pub fn set_aspect_mode(&mut self, mode: u32) {
@@ -265,7 +265,7 @@ mod tests {
         let mut input = ActionInput::default();
         let bindings = KeyBindings::default();
         let size = [800, 600];
-        game.set_screen_size(cmvs_core::viewport::ScreenSize::new(size).unwrap());
+        game.set_screen_size(cmvs_core::render::viewport::ScreenSize::new(size).unwrap());
         game.focus(true, &mut input);
         game.pointer(40.0, 50.0);
         game.frame(&bindings, size, &mut input);

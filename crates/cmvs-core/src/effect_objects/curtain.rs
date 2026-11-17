@@ -25,7 +25,7 @@ pub struct Curtain {
 pub(super) fn load(
     source: &mut dyn ImageSource,
     name: &[u8],
-) -> Result<ObjectImage, Box<dyn Error>> {
+) -> Result<ObjectImage, Box<dyn Error + Send + Sync>> {
     let decoded = image::load(source, name)?.ok_or("curtain image did not decode")?;
     Ok(ObjectImage {
         filter: None,
@@ -36,7 +36,7 @@ pub(super) fn load(
     })
 }
 impl Curtain {
-    pub fn new(source: &mut dyn ImageSource) -> Result<Self, Box<dyn Error>> {
+    pub fn new(source: &mut dyn ImageSource) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let mut images = Vec::new();
         let mut masks = [Vec::new(), Vec::new()];
         let mut alpha = [Vec::new(), Vec::new()];
@@ -133,7 +133,7 @@ impl Curtain {
             Vec::new()
         }
     }
-    pub fn advance(&mut self, delta: u32) -> Result<(), Box<dyn Error>> {
+    pub fn advance(&mut self, delta: u32) -> Result<(), Box<dyn Error + Send + Sync>> {
         if self.state == 0 && self.requested > 0 {
             self.state = self.requested as u32;
             self.requested = -1;

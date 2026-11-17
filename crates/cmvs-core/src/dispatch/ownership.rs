@@ -66,10 +66,7 @@ impl Claim {
     }
 }
 
-/// Both environments route registered commands through ROOT. Capability filtering
-/// records which commands each environment can expose, not evidence approval or
-/// a promise that resource checks, runtime requests, or waits will complete.
-pub static CLAIMS: &[Claim] = &[Claim {
+const ROOT_CLAIM: Claim = Claim {
     handler: "dispatch::ROOT",
     runner_order: Some(110),
     runner_wait_order: Some(40),
@@ -108,17 +105,14 @@ pub static CLAIMS: &[Claim] = &[Claim {
                 )
         })
     },
-}];
+};
 
 /// Potential candidates, in the actual order for the requested chain. This does
 /// not resolve state-dependent ownership or run a handler/evidence gate.
 pub fn candidates(command: u16, chain: Chain) -> Vec<&'static Claim> {
-    let mut claims: Vec<_> = CLAIMS
-        .iter()
-        .filter(|claim| {
-            claim.order_for(command, chain).is_some() && claim.recognizes_in(command, chain)
-        })
-        .collect();
-    claims.sort_by_key(|claim| claim.order_for(command, chain));
-    claims
+    if ROOT_CLAIM.order_for(command, chain).is_some() && ROOT_CLAIM.recognizes_in(command, chain) {
+        vec![&ROOT_CLAIM]
+    } else {
+        Vec::new()
+    }
 }

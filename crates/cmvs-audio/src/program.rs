@@ -1,6 +1,6 @@
 //! Bounded, device-independent Vorbis/PCM WAVE intro and loop playback.
 use crate::{pcm_wave::PcmWave, vorbis::Vorbis};
-use cmvs_core::{MAX_PAYLOAD, mv2};
+use cmvs_core::{MAX_PAYLOAD, format::mv2};
 use std::{
     error::Error,
     sync::{
@@ -15,7 +15,7 @@ enum AudioReader {
     Mv2(Box<mv2::Decoder>),
 }
 impl AudioReader {
-    fn new(bytes: Arc<[u8]>) -> Result<Self, Box<dyn Error>> {
+    fn new(bytes: Arc<[u8]>) -> Result<Self, Box<dyn Error + Send + Sync>> {
         if bytes.starts_with(b"RIFF") {
             Ok(Self::Wave(PcmWave::new(bytes)?))
         } else if bytes.starts_with(b"MV2X") {
@@ -38,7 +38,7 @@ impl AudioReader {
             Self::Mv2(m) => u32::from(m.header().sample_rate),
         }
     }
-    fn packet(&mut self) -> Result<Option<Vec<f32>>, Box<dyn Error>> {
+    fn packet(&mut self) -> Result<Option<Vec<f32>>, Box<dyn Error + Send + Sync>> {
         match self {
             Self::Vorbis(v) => v.packet(),
             Self::Wave(w) => Ok(w.packet()),
@@ -69,7 +69,7 @@ impl AudioProgram {
         primary: Vec<u8>,
         secondary: Option<Vec<u8>>,
         looped: bool,
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         Self::with_loop_frames(primary, secondary, looped, 0)
     }
     /// Variant of [`Self::new`] for CVNS `0x20a7`, skipping `loop_frames` sample frames on
@@ -79,7 +79,7 @@ impl AudioProgram {
         secondary: Option<Vec<u8>>,
         looped: bool,
         loop_frames: u32,
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         if primary
             .len()
             .checked_add(secondary.as_ref().map_or(0, Vec::len))
@@ -93,14 +93,17 @@ impl AudioProgram {
         }
         Self::from_shared_with_loop(bytes, looped, loop_frames)
     }
-    pub(crate) fn from_shared(bytes: Vec<Arc<[u8]>>, looped: bool) -> Result<Self, Box<dyn Error>> {
+    pub(crate) fn from_shared(
+        bytes: Vec<Arc<[u8]>>,
+        looped: bool,
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         Self::from_shared_with_loop(bytes, looped, 0)
     }
     fn from_shared_with_loop(
         bytes: Vec<Arc<[u8]>>,
         looped: bool,
         loop_frames: u32,
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let reader = AudioReader::new(bytes[0].clone())?;
         let channels = reader.channels();
         let rate = reader.sample_rate();
@@ -142,7 +145,7 @@ impl AudioProgram {
     }
     /// Prepare playback from the beginning without changing the current decoder.
     /// Compressed data is shared; decoder state and loop control are independent.
-    pub fn restarted(&self, looped: bool) -> Result<Self, Box<dyn Error>> {
+    pub fn restarted(&self, looped: bool) -> Result<Self, Box<dyn Error + Send + Sync>> {
         Self::from_shared(self.bytes.clone(), looped)
     }
     pub fn set_looped(&self, value: bool) {
@@ -154,7 +157,7 @@ impl AudioProgram {
     pub fn sample_rate(&self) -> u32 {
         self.rate
     }
-    fn refill(&mut self) -> Result<(), Box<dyn Error>> {
+    fn refill(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         if self.finished {
             return Ok(());
         }
@@ -201,7 +204,7 @@ impl AudioProgram {
         }
         Err("Vorbis produced too many skipped packets".into())
     }
-    pub fn next_sample(&mut self) -> Result<Option<f32>, Box<dyn Error>> {
+    pub fn next_sample(&mut self) -> Result<Option<f32>, Box<dyn Error + Send + Sync>> {
         if self.at == self.buffer.len() {
             self.refill()?;
         }

@@ -1,15 +1,12 @@
 use crate::support;
 use crate::support::shared_state;
-use cmvs_core::{
-    machine::Machine,
-    scene::{ScaleKey, SceneHost},
-};
+use cmvs_core::{render::scene::ScaleKey, render::scene::SceneHost, vm::machine::Machine};
 use shared_state::SharedState;
 use support::bytecode::{command, pending, script};
 fn f(v: f32) -> u32 {
     v.to_bits()
 }
-fn run(vm: &mut Machine<'_>, scene: &mut SceneHost, count: usize) {
+fn run(vm: &mut Machine, scene: &mut SceneHost, count: usize) {
     for _ in 0..count {
         pending(vm);
         assert!(scene.shared_state(vm).unwrap());
@@ -21,9 +18,13 @@ fn setup(code: &mut Vec<u8>, base: [u32; 2]) {
     command(code, 0x21e0, &[20, u32::MAX, base[0], base[1]]);
 }
 fn xy(scene: &SceneHost) -> [u32; 2] {
-    scene.object(20).unwrap().draw.as_ref().unwrap().words[18..20]
-        .try_into()
+    scene
+        .object(20)
         .unwrap()
+        .draw
+        .as_ref()
+        .unwrap()
+        .scale_bits()
 }
 #[test]
 fn scale_constructor_child_queries_reset_stop_and_raw_targets() {
@@ -69,7 +70,7 @@ fn scale_constructor_child_queries_reset_stop_and_raw_targets() {
         .draw
         .as_ref()
         .unwrap();
-    assert_eq!(&child.words[18..20], &[f(4.0), f(-0.0)]);
+    assert_eq!(&child.scale_bits(), &[f(4.0), f(-0.0)]);
     assert!(child.scale_motion.is_none());
     assert_eq!(xy(&scene), [f(1.0); 2]);
     run(&mut vm, &mut scene, 2);

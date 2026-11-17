@@ -99,7 +99,7 @@ mod tests {
         assert!(!frame.commands().is_empty());
         struct UnrecognizedImage;
         impl ImageSource for UnrecognizedImage {
-            fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+            fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
                 Ok(Some(b"NONE".to_vec()))
             }
         }
@@ -294,10 +294,10 @@ impl RainEffect {
 impl SceneHost {
     pub(crate) fn create_rain(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         source: &mut dyn ImageSource,
         backend: Option<&mut dyn AudioBackend>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let slot = call.argument(4, "effect slot")?;
         let name_id = call.argument(8, "rain image")?;
         let name = call.vm.resolve_string(name_id)?;

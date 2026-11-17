@@ -39,7 +39,7 @@ pub(crate) fn decode_font_face(
     encoding: TextEncoding,
     bytes: &[u8],
 ) -> Result<String, FormatError> {
-    if bytes == cmvs_core::settings::DEFAULT_FONT_FACE {
+    if bytes == cmvs_core::host::settings::DEFAULT_FONT_FACE {
         return Ok("ＭＳ ゴシック".to_owned());
     }
     text_codec::decode(encoding, bytes)

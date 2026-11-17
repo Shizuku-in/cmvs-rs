@@ -1,4 +1,4 @@
-use cmvs_core::dispatch::Capability;
+use cmvs_core::vm::dispatch::Capability;
 #[rustfmt::skip]
 pub fn cases() -> Vec<(u16, Vec<u32>, Capability)> {
     vec![

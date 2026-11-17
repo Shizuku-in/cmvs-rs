@@ -1,19 +1,16 @@
 use crate::support;
 use crate::support::cmv9;
 use crate::support::media_cases;
+use crate::support::shared_state::SharedState;
 use crate::support::window_cases;
 use cmvs_core::{
-    audio::RecordingAudio,
-    camera::CameraHost,
-    dispatch::{self, Capability, Flow, Hosts, MoviePlayerHosts, MovieSceneHosts, SequenceHosts},
-    image::ImageSource,
-    machine::Machine,
-    movie::{MovieHost, MovieSource, OpenedMovie},
-    profile::Semantics,
-    ps3::Script,
-    resources::ResourceSource,
-    scene::SceneHost,
-    sequence::{SequenceContext, SequenceHost},
+    format::ps3::Script, host::audio::RecordingAudio, host::image::ImageSource,
+    host::movie::MovieHost, host::movie::MovieSource, host::movie::OpenedMovie,
+    host::resources::ResourceSource, profile::Semantics, render::camera::CameraHost,
+    render::scene::SceneHost, runtime::SequenceContext, runtime::SequenceHost, vm::dispatch,
+    vm::dispatch::Capability, vm::dispatch::Flow, vm::dispatch::Hosts,
+    vm::dispatch::MoviePlayerHosts, vm::dispatch::MovieSceneHosts, vm::dispatch::SequenceHosts,
+    vm::machine::Machine,
 };
 use media_cases::cases;
 use std::error::Error;
@@ -53,7 +50,10 @@ struct Files {
     fail: bool,
 }
 impl Files {
-    fn read_data(&mut self, data: Vec<u8>) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    fn read_data(
+        &mut self,
+        data: Vec<u8>,
+    ) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
         self.reads += 1;
         if self.fail {
             Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "media unavailable").into())
@@ -63,23 +63,24 @@ impl Files {
     }
 }
 impl ResourceSource for Files {
-    fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
         self.read_data(cmv9::movie_frames(4, 15, 1, false))
     }
 }
 impl ImageSource for Files {
-    fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
         self.read_data(window_cases::image_bytes())
     }
 }
 impl MovieSource for Files {
-    fn open(&mut self, name: &[u8]) -> Result<Option<OpenedMovie>, Box<dyn Error>> {
+    fn open(&mut self, name: &[u8]) -> Result<Option<OpenedMovie>, Box<dyn Error + Send + Sync>> {
         Ok(self
             .read_data(media_cases::cmv(4, 15, 1, true))?
             .map(|bytes| {
                 (
                     name.to_vec(),
-                    cmvs_core::cmv::CmvIndex::read(&mut std::io::Cursor::new(bytes)).unwrap(),
+                    cmvs_core::format::cmv::CmvIndex::read(&mut std::io::Cursor::new(bytes))
+                        .unwrap(),
                 )
             }))
     }
@@ -232,7 +233,13 @@ fn movie_source_failures_keep_typed_cause_and_allow_retry() {
                 .kind(),
             std::io::ErrorKind::Interrupted
         );
-        assert_eq!(e.to_string(), "media unavailable");
+        assert_eq!(
+            e.to_string(),
+            format!(
+                "system command 0x{opcode:04x} at 0x{:x}: media unavailable",
+                before.0
+            )
+        );
         assert_eq!((e.pc, e.command), (before.0, opcode - 0x2000));
         assert_eq!(
             (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
@@ -279,7 +286,7 @@ fn sequence_finish_retains_successful_prefix_and_retries_failed_action() {
     let mut vm = Machine::new(&script).unwrap();
     for _ in 0..2 {
         pending(&mut vm);
-        assert!(state.scene.try_handle(&mut vm).unwrap());
+        assert!(state.scene.shared_state(&mut vm).unwrap());
     }
     pending(&mut vm);
     assert_eq!(
@@ -332,7 +339,14 @@ fn sequence_finish_retains_successful_prefix_and_retries_failed_action() {
         std::io::ErrorKind::Interrupted
     );
     assert_eq!(
-        &state.scene.object(11).unwrap().draw.as_ref().unwrap().words[11..14],
+        &state
+            .scene
+            .object(11)
+            .unwrap()
+            .draw
+            .as_ref()
+            .unwrap()
+            .world_position_bits(),
         &[10f32.to_bits(), 20f32.to_bits(), 30f32.to_bits()]
     );
     assert_eq!(state.sequence.header().index, 2);

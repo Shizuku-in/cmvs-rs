@@ -1,11 +1,12 @@
 //! Shared encoding, string relocation, script/image encoding, and archive writing helpers.
 
 use cmvs_core::{
-    bytecode::{self, Expression, InstructionKind, Term},
-    cpz::{ArchiveDirectory, ArchiveFile, ArchiveIndex, Cpz3Index, Cpz5Index, Cpz7Index},
-    pb3::{self, EncodeDepth},
-    ps3::{self, Script, TextEntry},
-    script_control::{archive_index_from_start, cpz7_parameters_from_start},
+    format::cpz::ArchiveDirectory, format::cpz::ArchiveFile, format::cpz::ArchiveIndex,
+    format::cpz::Cpz3Index, format::cpz::Cpz5Index, format::cpz::Cpz7Index, format::pb3,
+    format::pb3::EncodeDepth, format::ps3, format::ps3::Script, format::ps3::TextEntry,
+    runtime::script_control::archive_index_from_start,
+    runtime::script_control::cpz7_parameters_from_start, vm::bytecode, vm::bytecode::Expression,
+    vm::bytecode::InstructionKind, vm::bytecode::Term,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -16,7 +17,7 @@ use std::{
     path::Path,
 };
 
-pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
+pub type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OutputEncoding {
@@ -580,7 +581,7 @@ mod tests {
 
     #[test]
     fn cpz5_additions_follow_template_directory_and_keep_other_files() -> Result<()> {
-        use cmvs_core::cpz::Cpz5Mode;
+        use cmvs_core::format::cpz::Cpz5Mode;
         let dirs = vec![
             ArchiveDirectory {
                 name: b"first".to_vec(),

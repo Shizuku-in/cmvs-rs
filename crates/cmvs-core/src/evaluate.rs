@@ -1,7 +1,8 @@
 //! Stateful integer and float evaluation with explicit unknown values and transactional errors.
 use crate::{
     bytecode::{DecodeError, Expression, Term},
-    vm::{ParameterStack, StackWord, frame_offset},
+    vm::{ParameterStack, StackWord},
+    vm_core::frame_offset,
 };
 use std::{collections::BTreeMap, fmt};
 

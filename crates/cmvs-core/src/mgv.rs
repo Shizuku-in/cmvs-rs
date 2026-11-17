@@ -43,13 +43,14 @@ impl MgvIndex {
     /// collapsing them into [`FormatError`].
     pub fn read_io(
         reader: &mut (impl Read + Seek + ?Sized),
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let length = reader.seek(SeekFrom::End(0))?;
         reader.rewind()?;
         let mut bytes = [0; 32];
         reader.read_exact(&mut bytes).map_err(|err| {
             if err.kind() == std::io::ErrorKind::UnexpectedEof {
-                Box::new(FormatError("MGV header truncated")) as Box<dyn std::error::Error>
+                Box::new(FormatError("MGV header truncated"))
+                    as Box<dyn std::error::Error + Send + Sync>
             } else {
                 Box::new(err)
             }
@@ -81,7 +82,8 @@ impl MgvIndex {
         let mut table = vec![0u8; count as usize * 4];
         reader.read_exact(&mut table).map_err(|err| {
             if err.kind() == std::io::ErrorKind::UnexpectedEof {
-                Box::new(FormatError("MGV frame table truncated")) as Box<dyn std::error::Error>
+                Box::new(FormatError("MGV frame table truncated"))
+                    as Box<dyn std::error::Error + Send + Sync>
             } else {
                 Box::new(err)
             }
@@ -131,20 +133,20 @@ pub trait ReadSeek: Read + Seek + Send {}
 impl<T: Read + Seek + Send> ReadSeek for T {}
 
 /// A stateful decoder may replay packets for backwards access; requests use nominal frames.
-pub trait Decoder: Debug {
-    fn frame(&mut self, frame: u32) -> Result<RgbaImage, Box<dyn Error>>;
-    fn finish(&mut self) -> Result<(), Box<dyn Error>> {
+pub trait Decoder: Debug + Send {
+    fn frame(&mut self, frame: u32) -> Result<RgbaImage, Box<dyn Error + Send + Sync>>;
+    fn finish(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         Ok(())
     }
 }
 
 /// Codec dependencies live in a backend; container parsing remains in the core.
-pub trait DecoderFactory: Debug {
+pub trait DecoderFactory: Debug + Send {
     fn open(
         &self,
         reader: Box<dyn ReadSeek>,
         index: &MgvIndex,
-    ) -> Result<Box<dyn Decoder>, Box<dyn Error>>;
+    ) -> Result<Box<dyn Decoder>, Box<dyn Error + Send + Sync>>;
 }
 
 #[cfg(test)]

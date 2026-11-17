@@ -1,14 +1,15 @@
 use crate::support;
 use crate::support::css1_fixture;
+use crate::support::shared_storage::SharedControl;
 use cmvs_core::{
-    dispatch::{self, Capability, Flow, Hosts, ScriptHosts, SystemReadHosts, SystemWriteHosts},
-    machine::Machine,
-    profile::Semantics,
-    ps3::Script,
-    random::CrtRandom,
-    save_menu::{SaveMenuHost, SaveSource},
-    script_control::{ControlEvent, ScriptControl, ScriptSource},
-    system_save::{Css1Save, SystemSaveEvent, SystemSaveHost, SystemSaveSink, SystemSaveSource},
+    format::ps3::Script, format::system_save::Css1Save, format::system_save::SystemSaveEvent,
+    format::system_save::SystemSaveHost, format::system_save::SystemSaveSink,
+    format::system_save::SystemSaveSource, host::random::CrtRandom, profile::Semantics,
+    runtime::save_menu::SaveMenuHost, runtime::save_menu::SaveSource,
+    runtime::script_control::ControlEvent, runtime::script_control::ScriptControl,
+    runtime::script_control::ScriptSource, vm::dispatch, vm::dispatch::Capability,
+    vm::dispatch::Flow, vm::dispatch::Hosts, vm::dispatch::ScriptHosts,
+    vm::dispatch::SystemReadHosts, vm::dispatch::SystemWriteHosts, vm::machine::Machine,
 };
 use std::{error::Error, io};
 use support::bytecode::{command, pending};
@@ -48,7 +49,7 @@ struct Store {
     fail: bool,
 }
 impl ScriptSource for Store {
-    fn load(&mut self, _: &[u8]) -> Result<Script, Box<dyn Error>> {
+    fn load(&mut self, _: &[u8]) -> Result<Script, Box<dyn Error + Send + Sync>> {
         self.reads += 1;
         if self.fail {
             return Err(io::Error::new(io::ErrorKind::Interrupted, "source unavailable").into());
@@ -117,7 +118,7 @@ impl Default for State {
     }
 }
 impl State {
-    fn setup(&mut self, vm: &mut Machine<'_>) {
+    fn setup(&mut self, vm: &mut Machine) {
         *vm.state_mut() = self
             .system
             .loaded
@@ -131,7 +132,7 @@ impl State {
         let mut registration = Machine::new(&script).unwrap();
         pending(&mut registration);
         self.control
-            .try_handle(&mut registration, &mut self.store)
+            .shared_control(&mut registration, &mut self.store)
             .unwrap();
     }
     fn hosts(&mut self, cap: Capability) -> Hosts<'_> {
@@ -212,7 +213,13 @@ fn storage_io_failures_preserve_typed_cause_and_allow_retry() {
                 .kind(),
             io::ErrorKind::Interrupted
         );
-        assert_eq!(err.to_string(), "source unavailable");
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "system command 0x{op:04x} at 0x{:x}: source unavailable",
+                before.0
+            )
+        );
         assert_eq!(
             (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),
             before

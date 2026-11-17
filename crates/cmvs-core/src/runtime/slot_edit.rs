@@ -98,13 +98,13 @@ impl SlotEdit {
     }
 }
 
-impl Runtime<'_> {
+impl Runtime {
     pub(super) fn handle_edit_slots(
         &mut self,
         request: &RuntimeCall,
         first: u32,
         second: u32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let (pc, command) = (request.pc(), request.command());
         if first <= 999 && second <= 999 {
             let identity = (pc, command, first, second);

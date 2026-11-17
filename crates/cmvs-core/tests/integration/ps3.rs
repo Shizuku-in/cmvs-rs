@@ -1,4 +1,4 @@
-use cmvs_core::{lzss, ps3::Script};
+use cmvs_core::{format::lzss, format::ps3::Script};
 
 fn fixture(compressed: bool, key: u32) -> Vec<u8> {
     let mut payload = 0u32.to_le_bytes().to_vec();
@@ -138,7 +138,7 @@ fn reports_trailing_bytes_outside_compressed_payload() {
 
 #[test]
 fn pss0_shares_the_layout_but_skips_the_byte_transform() {
-    use cmvs_core::ps3::Container;
+    use cmvs_core::format::ps3::Container;
     for compressed in [true, false] {
         // Key 0 makes the PS2A fixture's transform `(b << 1 rotated) + 124`; undo it
         // to obtain the plain stored payload PSS0 uses.

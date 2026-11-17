@@ -1,4 +1,4 @@
-use cmvs_core::{image, jbp1, pb3};
+use cmvs_core::{format::jbp1, format::pb3, host::image};
 
 /// The decoder's tree: join the two lowest weights (lower index first, it takes bit 0).
 fn codes(freq: &[u32; 16]) -> Vec<Vec<u8>> {

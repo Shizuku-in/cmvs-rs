@@ -2,7 +2,7 @@
 //! The recording backend keeps requests only; no sound is loaded or played.
 pub mod compress;
 pub mod ducking;
-use crate::{FormatError, dispatch::Call, evaluate::error, machine::Machine};
+use crate::{FormatError, dispatch::Call, evaluate::error};
 pub use compress::{VoiceCompressor, VoiceMixer};
 pub use ducking::{VoiceActivity, VoiceDucking, VoiceDuckingSettings};
 use std::error::Error;
@@ -292,22 +292,26 @@ pub const CVNS_SE_CHANNELS: usize = 48;
 /// CVNS auxiliary master-scaled SE slots (`0x20c5..=0x20c7`, device channels 60..63).
 pub const AUX_SE_CHANNELS: usize = 4;
 
-pub trait AudioBackend {
+pub trait AudioBackend: Send {
     /// Device-wide /256 gain applied by the software mixer to every channel's samples,
     /// on top of each channel's own volume. Err leaves the gain unchanged.
-    fn set_mixer_gain(&mut self, _gain: u32) -> Result<(), Box<dyn Error>> {
+    fn set_mixer_gain(&mut self, _gain: u32) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement a device mixer gain".into())
     }
     /// Independent raw /256 multiplier; preserve playback, base volume and envelopes.
-    fn set_se_gain(&mut self, _channel: u8, _multiplier: u32) -> Result<(), Box<dyn Error>> {
+    fn set_se_gain(
+        &mut self,
+        _channel: u8,
+        _multiplier: u32,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement SE gain multipliers".into())
     }
     /// Replace an independent prepared sound without starting it. Missing resources
     /// clear the slot and return false; Err preserves the slot for retry.
-    fn preload(&mut self, _slot: u8, _name: &[u8]) -> Result<bool, Box<dyn Error>> {
+    fn preload(&mut self, _slot: u8, _name: &[u8]) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement preloading".into())
     }
-    fn release_preloaded(&mut self, _slot: u8) -> Result<(), Box<dyn Error>> {
+    fn release_preloaded(&mut self, _slot: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement releasing preloaded sounds".into())
     }
     fn play_preloaded(
@@ -315,18 +319,22 @@ pub trait AudioBackend {
         _slot: u8,
         _looped: bool,
         _volume: u32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement playing preloaded sounds".into())
     }
-    fn stop_preloaded(&mut self, _slot: u8) -> Result<(), Box<dyn Error>> {
+    fn stop_preloaded(&mut self, _slot: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement stopping preloaded sounds".into())
     }
-    fn set_preloaded_volume(&mut self, _slot: u8, _volume: u32) -> Result<(), Box<dyn Error>> {
+    fn set_preloaded_volume(
+        &mut self,
+        _slot: u8,
+        _volume: u32,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement preloaded sound volumes".into())
     }
     /// Apply a device-wide output gate without stopping streams or changing their gains.
     /// Err leaves the gate unchanged.
-    fn set_output_enabled(&mut self, _enabled: bool) -> Result<(), Box<dyn Error>> {
+    fn set_output_enabled(&mut self, _enabled: bool) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement output gating".into())
     }
 
@@ -334,7 +342,7 @@ pub trait AudioBackend {
     fn configure_voice_ducking(
         &mut self,
         _settings: VoiceDuckingSettings,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement voice ducking".into())
     }
     /// Prepare all replacement sounds before changing any SE channel. Err preserves
@@ -342,110 +350,135 @@ pub trait AudioBackend {
     fn configure_se(
         &mut self,
         _channels: &[Option<SePlayback>; SE_CHANNELS],
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement SE configuration changes".into())
     }
     /// Apply the whole gain update or leave all channels unchanged on error.
-    fn set_volumes(&mut self, _channels: &[Option<u32>; 15]) -> Result<(), Box<dyn Error>> {
+    fn set_volumes(
+        &mut self,
+        _channels: &[Option<u32>; 15],
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement live volume changes".into())
     }
     /// Supply the currently registered resource roots before loading a sound.
     fn configure_paths(
         &mut self,
         _paths: &std::collections::BTreeMap<(u16, u32), Vec<u8>>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Ok(())
     }
     /// Supply per-slot CPZ7 keys before loading a sound. Recording backends need no I/O.
     fn configure_archive_parameters(
         &mut self,
         _parameters: &std::collections::BTreeMap<(u16, u32), crate::cpz::Cpz7Parameters>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Ok(())
     }
     /// Maintain output/fades and surface asynchronous decoder/device failures.
-    fn update(&mut self) -> Result<(), Box<dyn Error>> {
+    fn update(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         Ok(())
     }
     /// None selects the explicit virtual clock; real backends report channel 2 state.
-    fn movie_clock(&self) -> Result<Option<MovieAudioClock>, Box<dyn Error>> {
+    fn movie_clock(&self) -> Result<Option<MovieAudioClock>, Box<dyn Error + Send + Sync>> {
         Ok(None)
     }
     /// Prepare a PlaySe request, optionally starting it according to its flag.
     /// Ok(true) means loading succeeded (the original's return), Ok(false) means it failed;
     /// Err leaves VM and channel state unchanged for retry.
-    fn play(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error>>;
+    fn play(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>>;
     /// Apply start-if-not-playing on channel + 9, including no-op for a missing sound.
     /// Err must leave the device unchanged, so the VM request can be retried.
-    fn start(&mut self, _channel: u8, _looped: bool) -> Result<(), Box<dyn Error>> {
+    fn start(&mut self, _channel: u8, _looped: bool) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement starting a prepared SE channel".into())
     }
     /// Restart an existing sound, including an active sound; missing sounds are unchanged.
     /// Err preserves the device for retry. This is distinct from start-if-not-playing.
-    fn restart_se(&mut self, _channel: u8, _looped: bool) -> Result<(), Box<dyn Error>> {
+    fn restart_se(
+        &mut self,
+        _channel: u8,
+        _looped: bool,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement restarting an SE channel".into())
     }
     /// Stop channel + 9 at once (no fade) and release its sound; an empty channel is a no-op.
     /// The original waits until its mixer thread has freed the slot, so Ok means released.
-    fn stop(&mut self, _channel: u8) -> Result<(), Box<dyn Error>> {
+    fn stop(&mut self, _channel: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement stopping an SE channel".into())
     }
     /// 0x1400713a0 calls 0x140087910 on device channel 15. Ok means released;
     /// an empty slot is a no-op, and Err leaves the device unchanged for retry.
-    fn stop_channel15(&mut self) -> Result<(), Box<dyn Error>> {
+    fn stop_channel15(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement stopping device channel 15".into())
     }
     /// Start the fade-out of channel + 9 (released when it ends); an empty or already
     /// fading channel is unchanged. Err leaves the device unchanged for retry.
-    fn fade_out_se(&mut self, _channel: u8, _fade_ms: u32) -> Result<(), Box<dyn Error>> {
+    fn fade_out_se(
+        &mut self,
+        _channel: u8,
+        _fade_ms: u32,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement SE fade-out".into())
     }
     /// Stop and release a voice channel (0..3, device +5), including an empty slot.
     /// Err leaves the device unchanged so the VM can retry the pending command.
-    fn stop_voice(&mut self, _channel: u8) -> Result<(), Box<dyn Error>> {
+    fn stop_voice(&mut self, _channel: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement stopping a voice channel".into())
     }
     /// An empty or already fading voice is unchanged. Err preserves the device.
-    fn fade_out_voice(&mut self, _channel: u8, _fade_ms: u32) -> Result<(), Box<dyn Error>> {
+    fn fade_out_voice(
+        &mut self,
+        _channel: u8,
+        _fade_ms: u32,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement voice fade-out".into())
     }
     /// Apply a PlayVoice request: Ok(true) when the sound loaded, Ok(false) when it did not
     /// (the channel is released either way). Err leaves the device unchanged for retry.
-    fn play_voice(&mut self, _request: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+    fn play_voice(
+        &mut self,
+        _request: &AudioRequest,
+    ) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement voice playback".into())
     }
     /// Apply a PlayBgm request in full before returning Ok; Err leaves the device unchanged.
-    fn play_bgm(&mut self, _request: &AudioRequest) -> Result<(), Box<dyn Error>> {
+    fn play_bgm(&mut self, _request: &AudioRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement BGM playback".into())
     }
     /// Start the fade-out of a BGM device channel; Err leaves the device unchanged.
-    fn fade_out_bgm(&mut self, _channel: u8, _fade_ms: u32) -> Result<(), Box<dyn Error>> {
+    fn fade_out_bgm(
+        &mut self,
+        _channel: u8,
+        _fade_ms: u32,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement BGM fade-out".into())
     }
     /// Stop and release both BGM device channels before returning Ok.
-    fn stop_bgm(&mut self) -> Result<(), Box<dyn Error>> {
+    fn stop_bgm(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement stopping BGM".into())
     }
     /// Apply a PlayMovieAudio request before returning Ok; Err leaves the device unchanged.
-    fn play_movie_audio(&mut self, _request: &AudioRequest) -> Result<(), Box<dyn Error>> {
+    fn play_movie_audio(
+        &mut self,
+        _request: &AudioRequest,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement movie audio".into())
     }
     /// Stop and release device channel 2 before returning Ok.
-    fn stop_movie_audio(&mut self) -> Result<(), Box<dyn Error>> {
+    fn stop_movie_audio(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement stopping movie audio".into())
     }
     /// 0x140087870 on device channel `channel + 9`: Some(milliseconds since the sound
     /// started) while it plays, None when the slot is empty, only prepared, being released
     /// or finished (0x1400892f0 resets +172 to 0 once a stream that does not loop ends).
-    fn se_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+    fn se_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement SE position queries".into())
     }
     /// The same query on voice channel 0..3 (device channel +5).
-    fn voice_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+    fn voice_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement voice position queries".into())
     }
     /// CVNS 0x20a4 (0x4596d0 -> 0x40f680): active BGM playback position in ms, or None.
-    fn bgm_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+    fn bgm_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement BGM position queries".into())
     }
     /// CVNS 0x20a7 (0x459540): `play_bgm` with loop restart skipping to PCM frame `loop_sample`.
@@ -453,53 +486,72 @@ pub trait AudioBackend {
         &mut self,
         request: &AudioRequest,
         loop_sample: u32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if loop_sample == 0 {
             return self.play_bgm(request);
         }
         Err("audio backend does not implement BGM loop start offsets".into())
     }
     /// CVNS 0x20b2 (0x45a690): pause SE channel without clearing or freeing.
-    fn pause_se(&mut self, _channel: u8) -> Result<(), Box<dyn Error>> {
+    fn pause_se(&mut self, _channel: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement pausing an SE channel".into())
     }
     /// CVNS 0x20af (0x45aa80): set SE channel stereo balance (-100..=100).
-    fn set_se_pan(&mut self, _channel: u8, _pan: i32) -> Result<(), Box<dyn Error>> {
+    fn set_se_pan(&mut self, _channel: u8, _pan: i32) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement SE panning".into())
     }
     /// CVNS 0x20b9 (0x45b180): start or resume a prepared voice channel.
-    fn start_voice(&mut self, _channel: u8, _looped: bool) -> Result<(), Box<dyn Error>> {
+    fn start_voice(
+        &mut self,
+        _channel: u8,
+        _looped: bool,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement starting a voice channel".into())
     }
     /// CVNS 0x20bd (0x45b4a0): set voice channel gain multiplier (/256 scale).
-    fn set_voice_gain(&mut self, _channel: u8, _multiplier: u32) -> Result<(), Box<dyn Error>> {
+    fn set_voice_gain(
+        &mut self,
+        _channel: u8,
+        _multiplier: u32,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement voice gain multipliers".into())
     }
     /// CVNS 0x20be (0x45b550): set voice channel stereo balance (-100..=100).
-    fn set_voice_pan(&mut self, _channel: u8, _pan: i32) -> Result<(), Box<dyn Error>> {
+    fn set_voice_pan(
+        &mut self,
+        _channel: u8,
+        _pan: i32,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement voice panning".into())
     }
     /// CVNS 0x20b8 (0x45af90): load/play voice and return decoded PCM byte length when loaded.
     fn play_voice_with_len(
         &mut self,
         request: &AudioRequest,
-    ) -> Result<Option<u32>, Box<dyn Error>> {
+    ) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
         self.play_voice(request).map(|ok| ok.then_some(0))
     }
     /// CVNS 0x20c5 (0x45ab50): load/play auxiliary SE channel 0..3.
-    fn play_aux_se(&mut self, _request: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+    fn play_aux_se(
+        &mut self,
+        _request: &AudioRequest,
+    ) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement auxiliary SE playback".into())
     }
     /// CVNS 0x20c7 (0x45ad20): stop auxiliary SE channel 0..3.
-    fn stop_aux_se(&mut self, _channel: u8) -> Result<(), Box<dyn Error>> {
+    fn stop_aux_se(&mut self, _channel: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement stopping auxiliary SE".into())
     }
     /// CVNS 0x20c6 (0x45adb0): query auxiliary SE position in ms, or None.
-    fn aux_se_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+    fn aux_se_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement auxiliary SE position queries".into())
     }
     /// CVNS 0x20ef (cvns-20050216 0x42d4f0): set auxiliary SE gain multiplier (/256 scale).
-    fn set_aux_se_gain(&mut self, _channel: u8, _multiplier: u32) -> Result<(), Box<dyn Error>> {
+    fn set_aux_se_gain(
+        &mut self,
+        _channel: u8,
+        _multiplier: u32,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement auxiliary SE gain multipliers".into())
     }
     /// CVNS `sub_41FCC0`: update BGM, 48-slot SE, voice, and auxiliary SE gains together.
@@ -509,7 +561,7 @@ pub trait AudioBackend {
         _se: &[(u8, u32)],
         _voice: Option<u32>,
         _aux: Option<u32>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("audio backend does not implement CVNS multi-channel volume updates".into())
     }
 }
@@ -528,7 +580,7 @@ impl RecordingAudio {
     pub fn requests(&self) -> &[AudioRequest] {
         &self.requests
     }
-    fn record(&mut self, request: AudioRequest) -> Result<(), Box<dyn Error>> {
+    fn record(&mut self, request: AudioRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
         if self.requests.len() >= 4096 {
             return Err("recorded audio requests exceed research limit".into());
         }
@@ -537,10 +589,14 @@ impl RecordingAudio {
     }
 }
 impl AudioBackend for RecordingAudio {
-    fn set_mixer_gain(&mut self, gain: u32) -> Result<(), Box<dyn Error>> {
+    fn set_mixer_gain(&mut self, gain: u32) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::SetMixerGain { gain })
     }
-    fn set_se_gain(&mut self, channel: u8, multiplier: u32) -> Result<(), Box<dyn Error>> {
+    fn set_se_gain(
+        &mut self,
+        channel: u8,
+        multiplier: u32,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::SetSeGain {
             channel,
             multiplier,
@@ -551,111 +607,137 @@ impl AudioBackend for RecordingAudio {
         slot: u8,
         looped: bool,
         volume: u32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::PlayPreloaded {
             slot,
             looped,
             volume,
         })
     }
-    fn stop_preloaded(&mut self, slot: u8) -> Result<(), Box<dyn Error>> {
+    fn stop_preloaded(&mut self, slot: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::StopPreloaded { slot })
     }
-    fn set_preloaded_volume(&mut self, slot: u8, volume: u32) -> Result<(), Box<dyn Error>> {
+    fn set_preloaded_volume(
+        &mut self,
+        slot: u8,
+        volume: u32,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::SetPreloadedVolume { slot, volume })
     }
-    fn preload(&mut self, slot: u8, name: &[u8]) -> Result<bool, Box<dyn Error>> {
+    fn preload(&mut self, slot: u8, name: &[u8]) -> Result<bool, Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::Preload {
             slot,
             name: name.to_vec(),
         })?;
         Ok(false)
     }
-    fn release_preloaded(&mut self, slot: u8) -> Result<(), Box<dyn Error>> {
+    fn release_preloaded(&mut self, slot: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::ReleasePreloaded { slot })
     }
-    fn set_output_enabled(&mut self, enabled: bool) -> Result<(), Box<dyn Error>> {
+    fn set_output_enabled(&mut self, enabled: bool) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::SetOutputEnabled { enabled })
     }
 
-    fn fade_out_voice(&mut self, channel: u8, fade_ms: u32) -> Result<(), Box<dyn Error>> {
+    fn fade_out_voice(
+        &mut self,
+        channel: u8,
+        fade_ms: u32,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::FadeOutVoice { channel, fade_ms })
     }
     fn configure_voice_ducking(
         &mut self,
         settings: VoiceDuckingSettings,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::ConfigureVoiceDucking { settings })
     }
     fn configure_se(
         &mut self,
         channels: &[Option<SePlayback>; SE_CHANNELS],
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::ConfigureSe {
             channels: channels.clone(),
         })
     }
-    fn set_volumes(&mut self, channels: &[Option<u32>; 15]) -> Result<(), Box<dyn Error>> {
+    fn set_volumes(
+        &mut self,
+        channels: &[Option<u32>; 15],
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::SetVolumes {
             channels: *channels,
         })
     }
-    fn play(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+    fn play(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>> {
         self.record(request.clone())?;
         Ok(false)
     }
-    fn start(&mut self, channel: u8, looped: bool) -> Result<(), Box<dyn Error>> {
+    fn start(&mut self, channel: u8, looped: bool) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::StartSe { channel, looped })
     }
-    fn restart_se(&mut self, channel: u8, looped: bool) -> Result<(), Box<dyn Error>> {
+    fn restart_se(
+        &mut self,
+        channel: u8,
+        looped: bool,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::RestartSe { channel, looped })
     }
-    fn stop(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
+    fn stop(&mut self, channel: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::StopSe { channel })
     }
-    fn stop_channel15(&mut self) -> Result<(), Box<dyn Error>> {
+    fn stop_channel15(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::StopChannel15)
     }
-    fn fade_out_se(&mut self, channel: u8, fade_ms: u32) -> Result<(), Box<dyn Error>> {
+    fn fade_out_se(
+        &mut self,
+        channel: u8,
+        fade_ms: u32,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::FadeOutSe { channel, fade_ms })
     }
-    fn stop_voice(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
+    fn stop_voice(&mut self, channel: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::StopVoice { channel })
     }
-    fn play_voice(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+    fn play_voice(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>> {
         self.record(request.clone())?;
         Ok(false)
     }
-    fn play_bgm(&mut self, request: &AudioRequest) -> Result<(), Box<dyn Error>> {
+    fn play_bgm(&mut self, request: &AudioRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(request.clone())
     }
-    fn fade_out_bgm(&mut self, channel: u8, fade_ms: u32) -> Result<(), Box<dyn Error>> {
+    fn fade_out_bgm(
+        &mut self,
+        channel: u8,
+        fade_ms: u32,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::FadeOutBgm { channel, fade_ms })
     }
-    fn stop_bgm(&mut self) -> Result<(), Box<dyn Error>> {
+    fn stop_bgm(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::StopBgm)
     }
-    fn play_movie_audio(&mut self, request: &AudioRequest) -> Result<(), Box<dyn Error>> {
+    fn play_movie_audio(
+        &mut self,
+        request: &AudioRequest,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(request.clone())
     }
-    fn stop_movie_audio(&mut self) -> Result<(), Box<dyn Error>> {
+    fn stop_movie_audio(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::StopMovieAudio)
     }
     /// Nothing is ever loaded (play reports failure), so every slot is empty.
-    fn se_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+    fn se_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
         Ok(None)
     }
-    fn voice_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+    fn voice_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
         Ok(None)
     }
-    fn bgm_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+    fn bgm_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
         Ok(None)
     }
     fn play_bgm_loop_from(
         &mut self,
         request: &AudioRequest,
         loop_sample: u32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if loop_sample == 0 {
             return self.play_bgm(request);
         }
@@ -684,35 +766,50 @@ impl AudioBackend for RecordingAudio {
             loop_sample,
         })
     }
-    fn pause_se(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
+    fn pause_se(&mut self, channel: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::PauseSe { channel })
     }
-    fn set_se_pan(&mut self, channel: u8, pan: i32) -> Result<(), Box<dyn Error>> {
+    fn set_se_pan(&mut self, channel: u8, pan: i32) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::SetSePan { channel, pan })
     }
-    fn start_voice(&mut self, channel: u8, looped: bool) -> Result<(), Box<dyn Error>> {
+    fn start_voice(
+        &mut self,
+        channel: u8,
+        looped: bool,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::StartVoice { channel, looped })
     }
-    fn set_voice_gain(&mut self, channel: u8, multiplier: u32) -> Result<(), Box<dyn Error>> {
+    fn set_voice_gain(
+        &mut self,
+        channel: u8,
+        multiplier: u32,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::SetVoiceGain {
             channel,
             multiplier,
         })
     }
-    fn set_voice_pan(&mut self, channel: u8, pan: i32) -> Result<(), Box<dyn Error>> {
+    fn set_voice_pan(&mut self, channel: u8, pan: i32) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::SetVoicePan { channel, pan })
     }
-    fn play_aux_se(&mut self, request: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+    fn play_aux_se(
+        &mut self,
+        request: &AudioRequest,
+    ) -> Result<bool, Box<dyn Error + Send + Sync>> {
         self.record(request.clone())?;
         Ok(false)
     }
-    fn stop_aux_se(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
+    fn stop_aux_se(&mut self, channel: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::StopAuxSe { channel })
     }
-    fn aux_se_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+    fn aux_se_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
         Ok(None)
     }
-    fn set_aux_se_gain(&mut self, channel: u8, multiplier: u32) -> Result<(), Box<dyn Error>> {
+    fn set_aux_se_gain(
+        &mut self,
+        channel: u8,
+        multiplier: u32,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::SetAuxSeGain {
             channel,
             multiplier,
@@ -724,7 +821,7 @@ impl AudioBackend for RecordingAudio {
         se: &[(u8, u32)],
         voice: Option<u32>,
         aux: Option<u32>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.record(AudioRequest::UpdateCvnsVolumes {
             bgm,
             se: se.to_vec(),
@@ -843,9 +940,9 @@ impl AudioHost {
     /// cmvs-20071117 0x442fb0/0x443050, selected only by the hash-bound variant.
     pub(crate) fn handle_preload(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let slot = call.argument(4, "preloaded sound slot")?;
         if slot >= PRELOADED_SOUNDS as u32 {
             return Err(error(call.pc, call.command, "preloaded sound slot outside 0..23").into());
@@ -896,7 +993,7 @@ impl AudioHost {
         &mut self,
         backend: &mut dyn AudioBackend,
         reset: bool,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if self.settings.bgm_enabled {
             backend.stop_bgm()?;
         }
@@ -968,7 +1065,7 @@ impl AudioHost {
         &mut self,
         active: bool,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let enabled = active || self.background_output;
         if enabled != self.output_enabled {
             backend.set_output_enabled(enabled)?;
@@ -980,9 +1077,9 @@ impl AudioHost {
     /// Identity-bound 0x22ed research entry; the root build has no handler.
     pub(crate) fn handle_background_output(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let write = call.argument(4, "write")? != 0;
         let background = if write {
             call.argument(8, "background output")? != 0
@@ -1071,28 +1168,12 @@ impl AudioHost {
             self.channels.get(index).and_then(Option::as_ref)
         }
     }
-    /// Compatibility entry for the audio commands registered in the shared table.
-    pub fn try_handle(
-        &mut self,
-        vm: &mut Machine<'_>,
-        backend: &mut dyn AudioBackend,
-    ) -> Result<bool, Box<dyn Error>> {
-        let Some((pc, command)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        if !matches!(command, 0xa0..=0xa2 | 0xa4 | 0xa6 | 0xa8..=0xaa | 0xaf..=0xb1 | 0xb3 | 0xb5..=0xb7 | 0xba | 0x238..=0x23f | 0x241 | 0x2d6..=0x2dd)
-        {
-            return Ok(false);
-        }
-        self.handle(&mut Call::new(vm, pc, command), backend)?;
-        Ok(true)
-    }
 
     pub(crate) fn handle(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         match call.command {
             command @ (0x239 | 0x23b | 0x23d | 0x23f) => {
                 // Device constructor 0x140087440, queried by 0x140087d00.
@@ -1206,9 +1287,9 @@ impl AudioHost {
     /// Commit writes only after the backend accepts the channel gain transaction.
     fn try_settings_query(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let (pc, command) = (call.pc, call.command);
         if call.argument(4, "mode")? != 0 {
             if command >= 0x2d9 {
@@ -1293,7 +1374,7 @@ impl AudioHost {
         kind: usize,
         raw_value: i32,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(u32, AudioSettings), Box<dyn Error>> {
+    ) -> Result<(u32, AudioSettings), Box<dyn Error + Send + Sync>> {
         let percent = raw_value.clamp(10, 100) as u32;
         let scaled = percent * 256 / 100;
         let mut settings = self.settings;
@@ -1352,7 +1433,7 @@ impl AudioHost {
         enabled: bool,
         pc: usize,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let current = match command {
             0x2d6 => self.settings.bgm_enabled,
             0x2d7 => self.settings.se_enabled,
@@ -1373,7 +1454,7 @@ impl AudioHost {
         command: u16,
         enabled: bool,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if command == 0x2d6 {
             if !enabled && self.bgm.playing {
                 backend.stop_bgm()?;
@@ -1444,7 +1525,7 @@ impl AudioHost {
         enabled: bool,
         pc: usize,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         match command {
             0x2d6 => {
                 if !enabled && self.bgm.playing {
@@ -1516,9 +1597,9 @@ impl AudioHost {
     /// no enable flag gate.
     fn try_voice_fade_out(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let (pc, op) = (call.pc, call.command + 0x2000);
         let channel = call.argument(4, "channel")?;
         let fade_ms = call.argument(8, "fade milliseconds")?;
@@ -1534,9 +1615,9 @@ impl AudioHost {
     /// no enable flag gate.
     fn try_voice_stop(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let (pc, op) = (call.pc, call.command + 0x2000);
         let channel = call.argument(4, "channel")?;
         if channel as usize >= VOICE_CHANNELS {
@@ -1556,9 +1637,9 @@ impl AudioHost {
     /// above 3.0 (NaN is kept), and returns 0x4014.
     fn try_voice_play(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let pc = call.pc;
         let op = 0x2000 + call.command;
         let fail = |why| error(pc, op, why);
@@ -1619,9 +1700,9 @@ impl AudioHost {
     /// Returns 0x4004 without a result write.
     pub(crate) fn set_mixer_gain(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let gain = call.argument(4, "mixer gain")?.min(256);
         backend.set_mixer_gain(gain)?;
         call.complete(0x4004)?;
@@ -1633,9 +1714,9 @@ impl AudioHost {
     /// The backend gain is /256, so percentages other than multiples of 25 are rounded down.
     pub(crate) fn set_master_percent(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let percent = call.argument(4, "master volume percent")?.min(100);
         backend.set_mixer_gain(percent * 256 / 100)?;
         call.complete(0x4004)?;
@@ -1645,9 +1726,9 @@ impl AudioHost {
     /// HAROUSE 0x447750 -> 0x456290, device slot channel+9 and record +40.
     pub(crate) fn set_se_gain(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let channel = call.argument(4, "SE channel")? as usize;
         let multiplier = call.argument(8, "SE gain multiplier")?;
         if channel >= SE_CHANNELS {
@@ -1665,9 +1746,9 @@ impl AudioHost {
     /// Hash-bound cmvs-20071117 0x20b4 / 0x4434d0 uses restart instead of start-if-not-playing.
     fn try_start(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let pc = call.pc;
         let op = call.command + 0x2000;
         let fail = |why| error(pc, op, why);
@@ -1694,9 +1775,9 @@ impl AudioHost {
     /// 0x20b3 / 0x140070f60: SP-4 channel; returns 0x4004, no result write.
     fn try_stop(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let pc = call.pc;
         let fail = |why| error(pc, 0x20b3, why);
         let channel = call.argument(4, "channel")?;
@@ -1717,9 +1798,9 @@ impl AudioHost {
     /// No SE_USE check or channel-record writes; returns 0x4004, no result write.
     fn try_channel15_stop(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let pc = call.pc;
         let fail = |why| error(pc, 0x2241, why);
         let slot = call.argument(4, "slot")?;
@@ -1740,9 +1821,9 @@ impl AudioHost {
     /// pending VM command. Retrying safely stops the already empty channels again.
     fn try_stop_all(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         for (channel, record) in self.channels.iter_mut().enumerate() {
             backend.stop(channel as u8)?;
             record.get_or_insert_with(SeChannel::default).name.clear();
@@ -1756,9 +1837,9 @@ impl AudioHost {
     /// SE_USE check; it clears only the record's name, keeping loop, volume and flag.
     fn try_fade_out(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let pc = call.pc;
         let fail = |why| error(pc, 0x20b6, why);
         let channel = call.argument(4, "channel")?;
@@ -1781,9 +1862,9 @@ impl AudioHost {
     /// +12056 bits 0x200 / 0x400 (unmodeled, rejected here).
     fn try_position(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let (pc, command) = (call.pc, call.command);
         let fail = |why| error(pc, command + 0x2000, why);
         let channel = call.argument(4, "channel")?;
@@ -1811,9 +1892,9 @@ impl AudioHost {
     /// returns 0x4010. Both call 0x14008a240 and write no system result.
     fn try_bgm(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
         let pair = command == 0xa4;
@@ -1870,9 +1951,9 @@ impl AudioHost {
     /// channel fades out and the channel flips to (channel - 1) & 1.
     fn try_bgm_fade_out(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let fade_ms = call.argument(4, "fade milliseconds")?;
         let mut channel = self.bgm.channel;
         if self.settings.bgm_enabled {
@@ -1892,9 +1973,9 @@ impl AudioHost {
     /// channel resets to 0.
     fn try_bgm_stop(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let mut channel = self.bgm.channel;
         if self.settings.bgm_enabled {
             backend.stop_bgm()?;
@@ -1912,9 +1993,9 @@ impl AudioHost {
     /// 64-byte names (`cvns.exe` `0x459440..0x45b694`).
     pub(crate) fn handle_cvns(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.enable_cvns();
         let command = call.command;
         match command {
@@ -1944,9 +2025,9 @@ impl AudioHost {
 
     fn try_cvns_bgm(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let (pc, command) = (call.pc, call.command);
         let op = if command == 0x4a7 { 0x20a7 } else { 0x20a0 };
         let name_ref = call.argument(4, "BGM name")?;
@@ -1991,9 +2072,9 @@ impl AudioHost {
 
     fn try_cvns_bgm_position(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let position = backend.bgm_position(self.bgm.channel)?;
         call.complete(0x4000)?;
         call.vm
@@ -2003,7 +2084,10 @@ impl AudioHost {
         Ok(())
     }
 
-    fn check_cvns_se_channel(call: &mut Call<'_, '_>, op: u16) -> Result<usize, Box<dyn Error>> {
+    fn check_cvns_se_channel(
+        call: &mut Call<'_>,
+        op: u16,
+    ) -> Result<usize, Box<dyn Error + Send + Sync>> {
         let channel = call.argument(4, "channel")?;
         if channel as usize >= CVNS_SE_CHANNELS {
             return Err(error(
@@ -2016,7 +2100,10 @@ impl AudioHost {
         Ok(channel as usize)
     }
 
-    fn check_cvns_voice_channel(call: &mut Call<'_, '_>, op: u16) -> Result<usize, Box<dyn Error>> {
+    fn check_cvns_voice_channel(
+        call: &mut Call<'_>,
+        op: u16,
+    ) -> Result<usize, Box<dyn Error + Send + Sync>> {
         let channel = call.argument(4, "channel")?;
         if channel as usize >= VOICE_CHANNELS {
             return Err(error(
@@ -2031,9 +2118,9 @@ impl AudioHost {
 
     fn try_cvns_se_play(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let with_fade = call.command == 0x4ad;
         let op = if with_fade { 0x20ad } else { 0x20b0 };
         let shift = if with_fade { 4 } else { 0 };
@@ -2083,9 +2170,9 @@ impl AudioHost {
 
     fn try_cvns_se_start(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let restart = call.command == 0x4ae;
         let op = if restart { 0x20ae } else { 0x20b1 };
         let ch = Self::check_cvns_se_channel(call, op)?;
@@ -2108,9 +2195,9 @@ impl AudioHost {
 
     fn try_cvns_se_pause(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let ch = Self::check_cvns_se_channel(call, 0x20b2)?;
         backend.pause_se(ch as u8)?;
         call.complete(0x4004)?;
@@ -2122,9 +2209,9 @@ impl AudioHost {
 
     fn try_cvns_se_stop(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let ch = Self::check_cvns_se_channel(call, 0x20b3)?;
         backend.stop(ch as u8)?;
         call.complete(0x4004)?;
@@ -2138,9 +2225,9 @@ impl AudioHost {
 
     fn try_cvns_se_stop_all(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         for ch in 0..CVNS_SE_CHANNELS {
             backend.stop(ch as u8)?;
             self.cvns_se_slot_mut(ch)
@@ -2154,9 +2241,9 @@ impl AudioHost {
 
     fn try_cvns_se_fade_out(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let ch = Self::check_cvns_se_channel(call, 0x20b5)?;
         let fade_ms = call.argument(8, "fade milliseconds")?;
         backend.fade_out_se(ch as u8, fade_ms)?;
@@ -2170,9 +2257,9 @@ impl AudioHost {
 
     fn try_cvns_se_position(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let ch = Self::check_cvns_se_channel(call, 0x20b6)?;
         let position = backend.se_position(ch as u8)?;
         call.complete(0x4004)?;
@@ -2185,9 +2272,9 @@ impl AudioHost {
 
     fn try_cvns_se_gain(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let ch = Self::check_cvns_se_channel(call, 0x20b7)?;
         let multiplier = call.argument(8, "multiplier")?;
         backend.set_se_gain(ch as u8, (u64::from(multiplier) * 256 / 100) as u32)?;
@@ -2198,9 +2285,9 @@ impl AudioHost {
 
     fn try_cvns_se_pan(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let ch = Self::check_cvns_se_channel(call, 0x20af)?;
         let pan = call.argument(8, "pan")? as i32;
         backend.set_se_pan(ch as u8, pan)?;
@@ -2211,9 +2298,9 @@ impl AudioHost {
 
     fn try_cvns_voice_play(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let ch = Self::check_cvns_voice_channel(call, 0x20b8)?;
         let name_ref = call.argument(8, "name")?;
         let volume = call.argument(12, "volume")? as i32;
@@ -2264,9 +2351,9 @@ impl AudioHost {
 
     fn try_cvns_voice_start(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let ch = Self::check_cvns_voice_channel(call, 0x20b9)?;
         let looped = call.argument(8, "loop")? != 0;
         backend.start_voice(ch as u8, looped)?;
@@ -2276,9 +2363,9 @@ impl AudioHost {
 
     fn try_cvns_voice_position(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let ch = Self::check_cvns_voice_channel(call, 0x20bc)?;
         let position = backend.voice_position(ch as u8)?;
         call.complete(0x4004)?;
@@ -2291,9 +2378,9 @@ impl AudioHost {
 
     fn try_cvns_voice_gain(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let ch = Self::check_cvns_voice_channel(call, 0x20bd)?;
         let multiplier = call.argument(8, "multiplier")?;
         backend.set_voice_gain(ch as u8, (u64::from(multiplier) * 256 / 100) as u32)?;
@@ -2304,9 +2391,9 @@ impl AudioHost {
 
     fn try_cvns_voice_pan(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let ch = Self::check_cvns_voice_channel(call, 0x20be)?;
         let pan = call.argument(8, "pan")? as i32;
         backend.set_voice_pan(ch as u8, pan)?;
@@ -2315,7 +2402,10 @@ impl AudioHost {
         Ok(())
     }
 
-    fn try_cvns_voice_level(&mut self, call: &mut Call<'_, '_>) -> Result<(), Box<dyn Error>> {
+    fn try_cvns_voice_level(
+        &mut self,
+        call: &mut Call<'_>,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let _ch = Self::check_cvns_voice_channel(call, 0x20bf)?;
         call.complete(0x4004)?;
         let state = call.vm.state_mut();
@@ -2326,9 +2416,9 @@ impl AudioHost {
 
     fn try_cvns_aux_se(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let op = call.command + 0x1c00;
         let channel = call.argument(4, "channel")?;
         if channel as usize >= AUX_SE_CHANNELS {
@@ -2494,7 +2584,7 @@ impl AudioHost {
         &mut self,
         saved: SavedAudio<'_>,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let SavedAudio {
             bgm,
             channels,
@@ -2601,7 +2691,7 @@ impl AudioHost {
         &mut self,
         saved: SavedCvnsAudio,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.enable_cvns();
         let enabled = self.settings.bgm_enabled;
         if enabled {
@@ -2800,6 +2890,7 @@ impl SavedCvnsAudio {
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+    use crate::machine::Machine;
 
     #[test]
     fn cvns_snapshot_restores_aux_gains_and_accepts_legacy_records() {

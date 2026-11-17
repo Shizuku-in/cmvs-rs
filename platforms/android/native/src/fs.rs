@@ -1,6 +1,8 @@
 //! Android filesystem adapter using non-blocking `flock` for save-directory locks.
-use cmvs_core::filesystem::{
-    File, HostFile, HostFs, Metadata, OpenOptions, StdFs, metadata_from_std,
+use cmvs_core::{
+    host::filesystem::File, host::filesystem::HostFile, host::filesystem::HostFs,
+    host::filesystem::Metadata, host::filesystem::OpenOptions, host::filesystem::StdFs,
+    host::filesystem::metadata_from_std,
 };
 use std::{
     io::{self, Read, Seek, SeekFrom, Write},

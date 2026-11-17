@@ -67,12 +67,12 @@ fn lines(glyphs: impl Iterator<Item = (u16, i32)>) -> Vec<String> {
 pub fn shown_texts(session: &Session<'_>) -> Vec<String> {
     let messages = session.startup().messages();
     let mut texts = Vec::new();
-    for slot in 0..cmvs_core::message::TEXT_OBJECTS {
+    for slot in 0..cmvs_core::render::message::TEXT_OBJECTS {
         if let Some(text) = messages.text(slot).filter(|t| t.visible) {
             texts.extend(lines(text.glyphs.iter().map(|g| (g.code, g.position[1]))));
         }
     }
-    for slot in 0..cmvs_core::message::AUXILIARY_TEXTS {
+    for slot in 0..cmvs_core::render::message::AUXILIARY_TEXTS {
         if let Some(text) = messages.auxiliary_text(slot) {
             texts.extend(lines(text.glyphs.iter().map(|g| (g.code, g.position[1]))));
         }
@@ -394,7 +394,7 @@ pub fn view_digest(session: &Session<'_>, o: &Observation) -> String {
         .filter(|(_, object)| object.shown)
         .map(|(slot, _)| *slot)
         .collect();
-    let windows: Vec<bool> = (0..cmvs_core::message::MESSAGE_WINDOWS)
+    let windows: Vec<bool> = (0..cmvs_core::render::message::MESSAGE_WINDOWS)
         .map(|slot| run.messages().window_visible(slot))
         .collect();
     let cvns_sprites: Vec<_> = run
@@ -419,7 +419,8 @@ pub fn view_digest(session: &Session<'_>, o: &Observation) -> String {
         "{} {objects:?} {windows:?} {cvns_sprites:?} {cvns_msgs:?}",
         o.page.digest()
     );
-    cmvs_core::digest::to_hex(&cmvs_core::digest::sha256(text.as_bytes()))[..16].to_owned()
+    cmvs_core::format::digest::to_hex(&cmvs_core::format::digest::sha256(text.as_bytes()))[..16]
+        .to_owned()
 }
 
 /// Where a message wait stood, and a digest of the newest backlog entry (its text).
@@ -439,10 +440,10 @@ impl WaitPoint {
             .entries()
             .front()
             .map(|entry| entry.strings.concat());
-        let text =
-            cmvs_core::digest::to_hex(&cmvs_core::digest::sha256(format!("{newest:?}").as_bytes()))
-                [..12]
-                .to_owned();
+        let text = cmvs_core::format::digest::to_hex(&cmvs_core::format::digest::sha256(
+            format!("{newest:?}").as_bytes(),
+        ))[..12]
+            .to_owned();
         Self {
             script: o.script.escape_ascii().to_string(),
             pc: o.pc,

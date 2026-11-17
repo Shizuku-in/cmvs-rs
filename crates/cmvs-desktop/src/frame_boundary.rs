@@ -2,18 +2,17 @@
 mod external {
     use crate::font::FontRenderer;
     use cmvs_core::{
-        input::{CodeInput, KeyBindings},
-        platform::RecordingBackend,
-        profile::Registry,
-        runtime::{FrameBudget, FrameDriver, FrameOutcome, Runtime, load_start},
-        scene_render::prepare_scene,
+        host::input::CodeInput, host::input::KeyBindings, host::platform::RecordingBackend,
+        profile::Registry, render::scene_render::prepare_scene, runtime::FrameBudget,
+        runtime::FrameDriver, runtime::FrameOutcome, runtime::Runtime, runtime::load_start,
     };
     use cmvs_wgpu::{Renderer, wgpu};
     use std::{error::Error, path::PathBuf};
 
     #[test]
     #[ignore = "requires CMVS_GAME_ROOT, CMVS_FONT_PATH, original save000.dat, and GPU"]
-    fn external_save_menu_renders_only_completed_vm_frames() -> Result<(), Box<dyn Error>> {
+    fn external_save_menu_renders_only_completed_vm_frames()
+    -> Result<(), Box<dyn Error + Send + Sync>> {
         let root = PathBuf::from(std::env::var_os("CMVS_GAME_ROOT").ok_or("CMVS_GAME_ROOT")?);
         let font_path = PathBuf::from(std::env::var_os("CMVS_FONT_PATH").ok_or("CMVS_FONT_PATH")?);
         let user = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -53,7 +52,7 @@ mod external {
         let mut menu_frames = 0;
         for iteration in 0u64..8_000_000 {
             if iteration.is_multiple_of(100_000) {
-                run.set_audio_backend(Box::new(cmvs_core::audio::RecordingAudio::default()))?;
+                run.set_audio_backend(Box::new(cmvs_core::host::audio::RecordingAudio::default()))?;
                 backend = RecordingBackend::default();
             }
             if !loaded

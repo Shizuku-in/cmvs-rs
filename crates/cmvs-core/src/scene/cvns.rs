@@ -33,7 +33,11 @@ pub(crate) fn pack_rgb(r: u8, g: u8, b: u8) -> u32 {
     (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b)
 }
 
-fn empty_rgba(width: u32, height: u32, color: u32) -> Result<RgbaImage, Box<dyn Error>> {
+fn empty_rgba(
+    width: u32,
+    height: u32,
+    color: u32,
+) -> Result<RgbaImage, Box<dyn Error + Send + Sync>> {
     let count = (width as usize)
         .checked_mul(height as usize)
         .and_then(|n| n.checked_mul(4))
@@ -112,7 +116,7 @@ impl CvnsImageLayer {
         width: u32,
         height: u32,
         color: u32,
-    ) -> Result<RgbaImage, Box<dyn Error>> {
+    ) -> Result<RgbaImage, Box<dyn Error + Send + Sync>> {
         empty_rgba(width, height, color)
     }
 
@@ -125,7 +129,7 @@ impl CvnsImageLayer {
         }
     }
 
-    pub(crate) fn apply_saved_effects(&mut self) -> Result<(), Box<dyn Error>> {
+    pub(crate) fn apply_saved_effects(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         if self.monochrome != 0x00ff_ffff {
             apply_monochrome(self, self.monochrome);
         }
@@ -195,7 +199,7 @@ impl CvnsImageBuffer {
     }
 
     /// `sub_439a90`: composites layers `1..16` over base layer 0, or clears `composited` if none exist.
-    pub fn rebuild_composite(&mut self) -> Result<bool, Box<dyn Error>> {
+    pub fn rebuild_composite(&mut self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         if !self.layers[1..].iter().any(Option::is_some) {
             self.composited = None;
             return Ok(false);
@@ -1258,7 +1262,7 @@ impl CvnsScene {
         &mut self,
         slot: u32,
         screen: RgbaImage,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let idx = slot as usize;
         if idx >= CVNS_IMAGES {
             return Err("CVNS capture image slot outside 0..127".into());
@@ -1282,7 +1286,7 @@ impl CvnsScene {
         mask_img: Option<&RgbaImage>,
         duration_ms: u32,
         ramp_ms: u32,
-    ) -> Result<bool, Box<dyn Error>> {
+    ) -> Result<bool, Box<dyn Error + Send + Sync>> {
         self.mask_transition = None;
         self.images[0] = None;
         self.sprites[0] = None;
@@ -1404,11 +1408,11 @@ impl CvnsScene {
 
     pub(crate) fn handle_image(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         source: &mut dyn ImageSource,
         backdrop_size: [u32; 2],
         backdrop: (bool, u32, u16),
-    ) -> Result<Flow, Box<dyn Error>> {
+    ) -> Result<Flow, Box<dyn Error + Send + Sync>> {
         let cmd = call.command;
         let op = cmd + 0x1c00;
         match cmd {
@@ -1756,10 +1760,10 @@ impl CvnsScene {
 
     pub(crate) fn handle(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         fade_color: &mut u32,
         fade_level: &mut u16,
-    ) -> Result<Flow, Box<dyn Error>> {
+    ) -> Result<Flow, Box<dyn Error + Send + Sync>> {
         let cmd = call.command;
         let op = cmd + 0x1c00;
         match cmd {
@@ -2289,12 +2293,12 @@ impl CvnsScene {
 
     pub(crate) fn wait(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         input: &mut ActionInput,
         gate: SkipGate,
         fade_color: &mut u32,
         fade_level: &mut u16,
-    ) -> Result<Flow, Box<dyn Error>> {
+    ) -> Result<Flow, Box<dyn Error + Send + Sync>> {
         let cmd = call.command;
         match cmd {
             0x58c => {
@@ -2536,7 +2540,11 @@ pub(crate) fn apply_hsl_tint(layer: &mut CvnsImageLayer, src_c: u32, dst_c: u32)
     layer.hsl_to = dst_c as i32;
 }
 
-fn apply_filter(layer: &mut CvnsImageLayer, mode: u32, arg: i32) -> Result<(), Box<dyn Error>> {
+fn apply_filter(
+    layer: &mut CvnsImageLayer,
+    mode: u32,
+    arg: i32,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     layer.filter_mode = mode;
     layer.filter_arg = arg;
     if mode == 0 {
@@ -2822,13 +2830,13 @@ mod tests {
     struct MemImages(HashMap<String, Vec<u8>>);
 
     impl ImageSource for MemImages {
-        fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+        fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
             let key = String::from_utf8_lossy(name).to_ascii_lowercase();
             Ok(self.0.get(&key).cloned())
         }
     }
 
-    fn vm_pending(command: u16, args: &[TestArg]) -> (Machine<'static>, usize) {
+    fn vm_pending(command: u16, args: &[TestArg]) -> (Machine, usize) {
         let mut text = Vec::new();
         let mut code = Vec::new();
         for arg in args.iter().rev() {
@@ -2887,7 +2895,7 @@ mod tests {
         images: &mut MemImages,
         command: u16,
         args: &[TestArg],
-    ) -> Machine<'static> {
+    ) -> Machine {
         let (mut vm, pc) = vm_pending(command, args);
         let mut call = Call::new(&mut vm, pc, command);
         cvns.handle_image(&mut call, images, [64, 64], (false, 0, 0x100))
@@ -2901,7 +2909,7 @@ mod tests {
         fade_level: &mut u16,
         command: u16,
         args: &[TestArg],
-    ) -> Machine<'static> {
+    ) -> Machine {
         let (mut vm, pc) = vm_pending(command, args);
         let mut call = Call::new(&mut vm, pc, command);
         cvns.handle(&mut call, fade_color, fade_level).unwrap();
@@ -2914,7 +2922,7 @@ mod tests {
         args: &[TestArg],
         input: &mut ActionInput,
         effects: bool,
-    ) -> (Machine<'static>, Flow) {
+    ) -> (Machine, Flow) {
         let (mut vm, pc) = vm_pending(command, args);
         let (mut fc, mut fl) = (0u32, 0x100u16);
         let flow = cvns

@@ -986,7 +986,7 @@ impl CvnsMessageHost {
 
     pub(crate) fn handle(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         texts: &mut [Option<TextObject>; crate::message::TEXT_OBJECTS],
         output_settings: TextOutputSettings,
         default_face: &[u8],
@@ -1844,9 +1844,9 @@ impl CvnsMessageHost {
 
     pub(crate) fn handle_image(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         source: &mut dyn ImageSource,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let op = call.command + 0x1c00;
         let (m, _) = self.require_msg_win_mut(call.pc, op, call.argument(4, "message slot")?)?;
         let slot = call.argument(8, "local image")? as usize;
@@ -1883,7 +1883,7 @@ impl CvnsMessageHost {
 
     pub(crate) fn handle_pointer_or_buttons(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         input: &mut ActionInput,
     ) -> Result<(), DecodeError> {
         let op = call.command + 0x1c00;
@@ -1925,7 +1925,7 @@ impl CvnsMessageHost {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn handle_wait(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         texts: &mut [Option<TextObject>; crate::message::TEXT_OBJECTS],
         input: &mut ActionInput,
         flags: MessageFlags,
@@ -2214,7 +2214,7 @@ mod tests {
     struct MemImages(HashMap<Vec<u8>, Vec<u8>>);
 
     impl ImageSource for MemImages {
-        fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+        fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
             Ok(self.0.get(name).cloned())
         }
         fn decode_threads(&self) -> DecodeThreads {
@@ -2227,10 +2227,13 @@ mod tests {
     }
 
     impl AudioBackend for MockVoiceAudio {
-        fn play(&mut self, _request: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+        fn play(&mut self, _request: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>> {
             Ok(true)
         }
-        fn voice_position(&self, _channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+        fn voice_position(
+            &self,
+            _channel: u8,
+        ) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
             Ok(self.pos_ms)
         }
     }

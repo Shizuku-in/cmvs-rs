@@ -1,18 +1,16 @@
 //! Shared `PlatformBackend` implementation for the console players.
 use crate::text_input;
 use cmvs_core::{
-    platform::{
-        MessageDialogRequest, MessageDialogResult, PlatformBackend, PlatformRequest,
-        TextDialogRequest, TextDialogResult,
-    },
-    raster::RgbaImage,
-    settings::DisplayPreferences,
+    host::platform::MessageDialogRequest, host::platform::MessageDialogResult,
+    host::platform::PlatformBackend, host::platform::PlatformRequest,
+    host::platform::TextDialogRequest, host::platform::TextDialogResult,
+    host::settings::DisplayPreferences, render::raster::RgbaImage,
 };
 use std::error::Error;
 
 /// Presents GPU-rendered canvases that can optionally be read back for engine screenshots.
 pub trait ConsoleGpu {
-    fn read_presented(&mut self) -> Option<Result<RgbaImage, Box<dyn Error>>>;
+    fn read_presented(&mut self) -> Option<Result<RgbaImage, Box<dyn Error + Send + Sync>>>;
 }
 
 /// Callback displaying the platform's modal text input dialog.
@@ -43,62 +41,65 @@ impl<G: ConsoleGpu> PlatformBackend for ConsoleBackend<'_, G> {
     fn logical_size(&self) -> [u32; 2] {
         self.size
     }
-    fn display_count(&self) -> Result<u32, Box<dyn Error>> {
+    fn display_count(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
         Ok(1)
     }
-    fn select_fullscreen_monitor(&mut self, mode: u32) -> Result<bool, Box<dyn Error>> {
+    fn select_fullscreen_monitor(
+        &mut self,
+        mode: u32,
+    ) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Ok(mode == 5)
     }
-    fn window_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
+    fn window_size(&self) -> Result<[u32; 2], Box<dyn Error + Send + Sync>> {
         Ok(self.size)
     }
-    fn windowed_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
+    fn windowed_size(&self) -> Result<[u32; 2], Box<dyn Error + Send + Sync>> {
         Ok(self.size)
     }
-    fn fullscreen(&self) -> Result<bool, Box<dyn Error>> {
+    fn fullscreen(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Ok(self.display.fullscreen)
     }
-    fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error>> {
+    fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error + Send + Sync>> {
         Ok(0)
     }
-    fn render_mode(&self) -> Result<u32, Box<dyn Error>> {
+    fn render_mode(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
         Ok(self.display.render_mode)
     }
-    fn resizable(&self) -> Result<bool, Box<dyn Error>> {
+    fn resizable(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Ok(false)
     }
-    fn stretch_filter_supported(&self) -> Result<bool, Box<dyn Error>> {
+    fn stretch_filter_supported(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Ok(true)
     }
-    fn linear_stretch_supported(&self) -> Result<bool, Box<dyn Error>> {
+    fn linear_stretch_supported(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Ok(true)
     }
-    fn aspect_mode(&self) -> Result<u32, Box<dyn Error>> {
+    fn aspect_mode(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
         Ok(self.display.aspect_mode)
     }
-    fn aspect_scaling(&self) -> Result<bool, Box<dyn Error>> {
+    fn aspect_scaling(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Ok(self.display.aspect_scaling)
     }
     fn poll_message_dialog(
         &mut self,
         _: &MessageDialogRequest,
-    ) -> Result<MessageDialogResult, Box<dyn Error>> {
+    ) -> Result<MessageDialogResult, Box<dyn Error + Send + Sync>> {
         Ok(MessageDialogResult::Accepted)
     }
     fn poll_text_dialog(
         &mut self,
         request: &TextDialogRequest,
-    ) -> Result<TextDialogResult, Box<dyn Error>> {
+    ) -> Result<TextDialogResult, Box<dyn Error + Send + Sync>> {
         self.modal_shown = true;
         let dialog = self.text_dialog;
         text_input::edit(request, self.encoding, &mut |t, p, i, l, c| {
             dialog(t, p, i, l, c)
         })
     }
-    fn choose_font(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    fn choose_font(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
         Ok(None)
     }
-    fn read_device_frame(&mut self) -> Result<RgbaImage, Box<dyn Error>> {
+    fn read_device_frame(&mut self) -> Result<RgbaImage, Box<dyn Error + Send + Sync>> {
         if let Some(frame) = self.gpu.as_deref_mut().and_then(ConsoleGpu::read_presented) {
             return frame;
         }
@@ -106,7 +107,7 @@ impl<G: ConsoleGpu> PlatformBackend for ConsoleBackend<'_, G> {
             .clone()
             .ok_or_else(|| "no completed frame".into())
     }
-    fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+    fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
         match request {
             PlatformRequest::Fullscreen(v) => self.display.fullscreen = *v,
             PlatformRequest::AspectMode(v) if *v <= 3 => self.display.aspect_mode = *v,
@@ -131,7 +132,7 @@ mod tests {
     }
 
     impl ConsoleGpu for FakeGpu {
-        fn read_presented(&mut self) -> Option<Result<RgbaImage, Box<dyn Error>>> {
+        fn read_presented(&mut self) -> Option<Result<RgbaImage, Box<dyn Error + Send + Sync>>> {
             self.presented
                 .take()
                 .map(|result| result.map_err(Into::into))

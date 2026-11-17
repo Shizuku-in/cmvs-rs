@@ -19,11 +19,11 @@ pub(super) struct MgvMovie {
 impl MovieHost {
     pub(crate) fn handle_mgv(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         source: &mut dyn MovieSource,
         settings: AudioSettings,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         match call.command {
             0xc4 => {
                 let raw = call.argument(4, "MGV movie name")?;
@@ -92,7 +92,7 @@ impl MovieHost {
         &mut self,
         delta_ms: u32,
         clock: Option<MovieAudioClock>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let Some(movie) = &mut self.mgv_player else {
             return Ok(());
         };

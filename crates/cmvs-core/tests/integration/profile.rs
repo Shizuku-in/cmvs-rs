@@ -3,14 +3,13 @@
 use crate::support;
 
 use cmvs_core::{
-    digest::{Sha256, parse_hex, sha256, sha256_reader, to_hex},
-    exe::{Arch, Case, Dispatch, PeImage, find_dispatch},
-    machine::Machine,
-    profile::{
-        CommandGate, CommandStatus, ContractProof, ContractRules, ContractSide, EngineProfile,
-        Evidence, Family, FileEvidence, GateErrorKind, Registry, SelectionBasis, SelectionError,
-    },
-    vm::SystemResult,
+    format::digest::Sha256, format::digest::parse_hex, format::digest::sha256,
+    format::digest::sha256_reader, format::digest::to_hex, format::exe::Arch, format::exe::Case,
+    format::exe::Dispatch, format::exe::PeImage, format::exe::find_dispatch, profile::CommandGate,
+    profile::CommandStatus, profile::ContractProof, profile::ContractRules, profile::ContractSide,
+    profile::EngineProfile, profile::Evidence, profile::Family, profile::FileEvidence,
+    profile::GateErrorKind, profile::Registry, profile::SelectionBasis, profile::SelectionError,
+    vm::SystemResult, vm::machine::Machine,
 };
 use support::bytecode::{command, pending, script};
 
@@ -1180,7 +1179,7 @@ fn both_amatsutsumi_startups_select_the_existing_save_identity() {
 }
 
 /// A machine stopped at the script's first system command, and that command's PC.
-fn pending_machine(program: &cmvs_core::ps3::Script) -> (Machine<'_>, usize) {
+fn pending_machine(program: &cmvs_core::format::ps3::Script) -> (Machine, usize) {
     let mut vm = Machine::new(program).unwrap();
     pending(&mut vm);
     let (pc, _) = vm.pending_system().unwrap();

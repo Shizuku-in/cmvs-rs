@@ -6,7 +6,7 @@
 
 // Engine +4656: 0x140055260 derives three flags for each of 24 actions from
 // five bound codes (table +944 + 10 * action) and frame counters (+1540/+2564).
-use crate::{bytecode::DecodeError, dispatch::Call, machine::Machine};
+use crate::{bytecode::DecodeError, dispatch::Call};
 
 pub const ACTIONS: usize = 24;
 /// Input codes behind the mouse flags at +1184 + 12 * i (0x140055260): left button, right
@@ -70,7 +70,7 @@ impl KeyBindings {
         fs: &dyn crate::filesystem::HostFs,
         root: &std::path::Path,
         profile: &crate::profile::EngineProfile,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         Self::load_with_policy(fs, root, profile, true)
     }
 
@@ -79,7 +79,7 @@ impl KeyBindings {
     pub fn load_for_profile(
         root: &std::path::Path,
         profile: &crate::profile::EngineProfile,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         Self::load_for_profile_with_fs(&crate::filesystem::StdFs, root, profile)
     }
 
@@ -88,7 +88,7 @@ impl KeyBindings {
         fs: &dyn crate::filesystem::HostFs,
         root: &std::path::Path,
         profile: &crate::profile::EngineProfile,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         Self::load_with_policy(fs, root, profile, false)
     }
 
@@ -96,7 +96,7 @@ impl KeyBindings {
     pub fn load_optional_for_profile(
         root: &std::path::Path,
         profile: &crate::profile::EngineProfile,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         Self::load_optional_for_profile_with_fs(&crate::filesystem::StdFs, root, profile)
     }
 
@@ -105,12 +105,12 @@ impl KeyBindings {
         root: &std::path::Path,
         profile: &crate::profile::EngineProfile,
         required: bool,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         use std::io::Read as _;
         if !profile.uses_key_cfg() {
             return Ok(Self::default());
         }
-        let path = match crate::platform::resolve_under_with_fs(fs, root, b"key.cfg") {
+        let path = match crate::filesystem::resolve_under_with_fs(fs, root, b"key.cfg") {
             Ok(path) => path,
             Err(error) if !required && error.is_not_found() => return Ok(Self::default()),
             Err(error) => return Err(Box::new(error)),
@@ -461,7 +461,7 @@ const ACTION_COMMANDS: [(u16, usize); 20] = [
 /// Inspected early x86 queries report the down edge, unlike the base build's up edge.
 /// The additional 0x22f0/2/4 pairs address actions 17/18/19; docs/games/{asukimi,harouse}.
 pub(crate) fn handle_press(
-    call: &mut Call<'_, '_>,
+    call: &mut Call<'_>,
     input: &mut ActionInput,
 ) -> Result<(), DecodeError> {
     let command = call.command;
@@ -489,46 +489,7 @@ pub(crate) fn handle_press(
     Ok(())
 }
 
-/// Even commands of ACTION_COMMANDS (0x140078b10 and identical siblings up to 0x140078fd0;
-/// 0x1400791b0, 0x140079200 and 0x1400792a0 for 0x2344/0x2346/0x234a): system result 0 =
-/// action released, system result 4 (+82832) = held. The following odd command (inline
-/// 0x140054d90 and siblings, 0x1400551c0/0x1400551f0/0x140055160 for the 0x234x pairs)
-/// consumes the action; actions 7 and 8 have none. All return 0x4000 and pop nothing.
-pub fn try_handle(vm: &mut Machine<'_>, input: &mut ActionInput) -> Result<bool, DecodeError> {
-    let Some((pc, command)) = vm.pending_system() else {
-        return Ok(false);
-    };
-    if !recognizes(command) {
-        return Ok(false);
-    }
-    handle(&mut Call::new(vm, pc, command), input)?;
-    Ok(true)
-}
-
-fn recognizes(command: u16) -> bool {
-    matches!(
-        command,
-        0xc8..=0xca
-            | 0x19a
-            | 0x19c..=0x1a4
-            | 0x1a6
-            | 0x1a8..=0x1bd
-            | 0x344..=0x347
-            | 0x34a
-            | 0x34b
-            | 0x34d..=0x34f
-            | 0x35c
-            | 0x35d
-            | 0x433
-            | 0x438..=0x43d
-            | 0x440
-            | 0x442
-            | 0x46c
-            | 0x46e
-    )
-}
-
-pub(crate) fn handle(call: &mut Call<'_, '_>, input: &mut ActionInput) -> Result<(), DecodeError> {
+pub(crate) fn handle(call: &mut Call<'_>, input: &mut ActionInput) -> Result<(), DecodeError> {
     let command = call.command;
     if try_handle_cvns(call, input)?.is_some() {
         return Ok(());
@@ -629,22 +590,8 @@ pub(crate) fn handle(call: &mut Call<'_, '_>, input: &mut ActionInput) -> Result
     Ok(())
 }
 
-/// 0x22ef / 0x14007c8e0 and CVNS 0x2047 / 0x45dfb0 -> 0x41cf90: system result 0 = 1 when
-/// skipping (script flag, action 7/8 held, or Ctrl held on CVNS 0x447), else 0; 0x4000.
-pub fn try_handle_skipping(
-    vm: &mut Machine<'_>,
-    input: &ActionInput,
-    skip: bool,
-) -> Result<bool, DecodeError> {
-    let Some((pc, command @ (0x2ef | 0x447))) = vm.pending_system() else {
-        return Ok(false);
-    };
-    handle_skipping(&mut Call::new(vm, pc, command), input, skip)?;
-    Ok(true)
-}
-
 pub(crate) fn handle_skipping(
-    call: &mut Call<'_, '_>,
+    call: &mut Call<'_>,
     input: &ActionInput,
     skip: bool,
 ) -> Result<(), DecodeError> {
@@ -660,7 +607,7 @@ pub(crate) fn handle_skipping(
 /// CVNS input/pointer handlers (`0x433, 0x438..=0x43b, 0x43d, 0x440, 0x442`), matching
 /// `cvns.exe` `0x45dc90..0x45dfa5`, `0x46e800`, `0x46eee0`, and `0x46fc80`.
 fn try_handle_cvns(
-    call: &mut Call<'_, '_>,
+    call: &mut Call<'_>,
     input: &mut ActionInput,
 ) -> Result<Option<()>, DecodeError> {
     let result = match call.command {
@@ -765,8 +712,9 @@ fn try_handle_cvns(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::machine::Machine;
 
-    fn vm_pending(command: u16, args: &[u32]) -> (Machine<'static>, usize) {
+    fn vm_pending(command: u16, args: &[u32]) -> (Machine, usize) {
         let mut code = Vec::new();
         for &value in args.iter().rev() {
             code.extend(0x440u16.to_le_bytes());
@@ -895,8 +843,8 @@ mod tests {
         let mut input = ActionInput::default();
 
         let query_fn_key = |input: &mut ActionInput| {
-            let (mut vm, _) = vm_pending(0x34e, &[]);
-            assert!(try_handle(&mut vm, input).unwrap());
+            let (mut vm, pc) = vm_pending(0x34e, &[]);
+            handle(&mut Call::new(&mut vm, pc, 0x34e), input).unwrap();
             vm.state().system_integer(0).unwrap()
         };
 
@@ -909,8 +857,8 @@ mod tests {
         codes.update(&bindings, &now, &mut input);
 
         // Enable reporting with 0x234d (command 0x34d).
-        let (mut vm, _) = vm_pending(0x34d, &[]);
-        assert!(try_handle(&mut vm, &mut input).unwrap());
+        let (mut vm, pc) = vm_pending(0x34d, &[]);
+        handle(&mut Call::new(&mut vm, pc, 0x34d), &mut input).unwrap();
 
         for bit in 0..12 {
             let code = 52 + bit;

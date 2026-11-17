@@ -1,18 +1,7 @@
 //! Stateless string utility commands of the 0x20f0..0x20ff group; only verified ones are handled.
-use crate::{
-    TextEncoding, bytecode::DecodeError, dispatch::Call, evaluate::error, machine::Machine,
-    vm::StringRef,
-};
+use crate::{TextEncoding, bytecode::DecodeError, dispatch::Call, evaluate::error, vm::StringRef};
 
-pub fn try_handle(vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-    let Some((pc, command @ (0xf1 | 0xf3 | 0xf8 | 0xfc | 0x4fb))) = vm.pending_system() else {
-        return Ok(false);
-    };
-    handle(&mut Call::new(vm, pc, command))?;
-    Ok(true)
-}
-
-pub(crate) fn handle(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+pub(crate) fn handle(call: &mut Call<'_>) -> Result<(), DecodeError> {
     match call.command {
         0xf1 => compare(call),
         0xf3 => substring(call),
@@ -25,7 +14,7 @@ pub(crate) fn handle(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
 /// 0x20f3 / 0x1400744d0: byte offset/count, copying complete encoded pairs.
 /// Result 0 counts characters copied, not bytes. An empty range leaves the
 /// destination untouched, including when the source already ends at the offset.
-fn substring(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+fn substring(call: &mut Call<'_>) -> Result<(), DecodeError> {
     let pc = call.pc;
     let (target, source, start, count) = (
         call.argument(4, "destination")?,
@@ -101,7 +90,7 @@ fn substring(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
 
 /// 0x20f1 / 0x140074400: system result 0 = 1 when the SP-4 and SP-8 strings are equal under
 /// 0x140008140, else 0; returns 0x4008.
-fn compare(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+fn compare(call: &mut Call<'_>) -> Result<(), DecodeError> {
     let pc = call.pc;
     let (first, second) = (
         call.argument(4, "first string")?,
@@ -153,7 +142,7 @@ pub(crate) fn equal_ignoring_ascii_case(
 }
 
 /// 0x20f8 / 0x1400747c0: system result 0 = lstrlenA of the SP-4 string reference.
-fn strlen(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+fn strlen(call: &mut Call<'_>) -> Result<(), DecodeError> {
     let raw = call.argument(4, "string")?;
     let length = call.vm.resolve_string(raw)?.len() as u32;
     call.complete(0x4004)?;
@@ -169,7 +158,7 @@ fn strlen(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
 /// result. The original writes unbounded into the destination; only a string-bank slot
 /// (1024 bytes, index > 127 meaning slot 0 as in 0x14006b850) is modeled, and it must not
 /// be the format's own slot.
-fn format(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+fn format(call: &mut Call<'_>) -> Result<(), DecodeError> {
     let pc = call.pc;
     let op = call.command + 0x2000;
     let (target, pattern, value) = (

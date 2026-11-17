@@ -1,4 +1,7 @@
-use cmvs_rs::system_save::{Css1Save, FileSystemSave, SystemSaveSource};
+use cmvs_rs::{
+    format::system_save::Css1Save, format::system_save::FileSystemSave,
+    format::system_save::SystemSaveSource,
+};
 use std::{env, error::Error, fs::OpenOptions, io::Write};
 
 const USAGE: &str = "\
@@ -14,7 +17,7 @@ Options:
 Output files must not already exist. Does not restore engine state or modify saves.
 Example: cmvs-system-save save/system.dat";
 
-fn run() -> Result<(), Box<dyn Error>> {
+fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let args: Vec<_> = env::args_os().skip(1).collect();
     if args.len() == 1 && (args[0] == "--help" || args[0] == "-h") {
         println!("{USAGE}");

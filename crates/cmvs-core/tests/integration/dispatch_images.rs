@@ -1,10 +1,8 @@
 use crate::support;
+use crate::support::shared_state::SharedState;
 use cmvs_core::{
-    dispatch::{self, Flow, Hosts, ImageHosts},
-    image::ImageSource,
-    machine::Machine,
-    profile::Semantics,
-    scene::SceneHost,
+    host::image::ImageSource, profile::Semantics, render::scene::SceneHost, vm::dispatch,
+    vm::dispatch::Flow, vm::dispatch::Hosts, vm::dispatch::ImageHosts, vm::machine::Machine,
 };
 use std::error::Error;
 use support::bytecode::{command, pending, script};
@@ -67,7 +65,7 @@ struct Images {
     fail: bool,
 }
 impl ImageSource for Images {
-    fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
         assert_eq!(name, b"a.pb3");
         self.reads += 1;
         if self.fail {
@@ -77,14 +75,14 @@ impl ImageSource for Images {
         }
         Ok(Some(pixels()))
     }
-    fn cache_next_read(&mut self) -> Result<(), Box<dyn Error>> {
+    fn cache_next_read(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.arms += 1;
         Ok(())
     }
 }
 
 fn run(
-    vm: &mut Machine<'_>,
+    vm: &mut Machine,
     scene: &mut SceneHost,
     source: &mut dyn ImageSource,
     change_images: bool,
@@ -121,7 +119,7 @@ fn setup(scene: &mut SceneHost, images: &mut Images) {
         if dispatch::uses_images(vm.pending_system().unwrap().1) {
             assert_eq!(run(&mut vm, scene, images, true).unwrap(), Some(Flow::Done));
         } else {
-            assert!(scene.try_handle(&mut vm).unwrap());
+            assert!(scene.shared_state(&mut vm).unwrap());
         }
     }
 }
@@ -146,7 +144,10 @@ fn read_errors_keep_typed_source_scene_and_pending_command_for_retry() {
         assert_eq!((error.pc, error.command), (before.0, opcode - 0x2000));
         assert_eq!(
             error.to_string(),
-            format!("PC=0x{:x} 0x{opcode:04x}: read rejected", before.0)
+            format!(
+                "system command 0x{opcode:04x} at 0x{pc:x}: PC=0x{pc:x} 0x{opcode:04x}: read rejected",
+                pc = before.0
+            )
         );
         assert_eq!(
             error.as_io().unwrap().kind(),

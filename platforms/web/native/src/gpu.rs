@@ -1,5 +1,5 @@
 //! Worker-owned WebGPU surface; only explicit device screenshots read pixels back.
-use cmvs_core::{runtime::Runtime, settings::DisplayPreferences};
+use cmvs_core::{host::settings::DisplayPreferences, runtime::Runtime};
 use cmvs_font::font::FontRenderer;
 use cmvs_wgpu::{GpuFrame, Presenter, Renderer, wgpu};
 use std::error::Error;
@@ -15,7 +15,10 @@ pub struct BrowserGpu {
     pub capture: Option<GpuFrame>,
 }
 impl BrowserGpu {
-    pub async fn new(canvas: OffscreenCanvas, size: [u32; 2]) -> Result<Self, Box<dyn Error>> {
+    pub async fn new(
+        canvas: OffscreenCanvas,
+        size: [u32; 2],
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         canvas.set_width(size[0]);
         canvas.set_height(size[1]);
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -38,10 +41,10 @@ impl BrowserGpu {
     }
     pub fn draw(
         &mut self,
-        startup: &Runtime<'_>,
+        startup: &Runtime,
         font: &mut FontRenderer,
         display: DisplayPreferences,
-    ) -> Result<bool, Box<dyn Error>> {
+    ) -> Result<bool, Box<dyn Error + Send + Sync>> {
         self.renderer.check()?;
         if self.presenter.lost {
             let surface = self
@@ -59,7 +62,7 @@ impl BrowserGpu {
             let scene = composition.prepare()?;
             self.renderer.render(&scene)?
         };
-        let mode = cmvs_core::viewport::presentation_mode(
+        let mode = cmvs_core::render::viewport::presentation_mode(
             display.fullscreen,
             display.aspect_scaling,
             display.aspect_mode,

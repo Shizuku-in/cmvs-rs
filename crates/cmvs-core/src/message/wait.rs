@@ -29,7 +29,7 @@ impl MessageHost {
     /// their settings, frame delta and audio backend through `try_wait_with_auto`.
     pub fn try_wait(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         input: &mut ActionInput,
         flags: MessageFlags,
     ) -> Result<Option<Step>, DecodeError> {
@@ -48,7 +48,7 @@ impl MessageHost {
     }
     pub fn try_wait_with_auto(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         input: &mut ActionInput,
         flags: MessageFlags,
         context: AutoAdvanceContext<'_>,
@@ -61,7 +61,7 @@ impl MessageHost {
     }
     pub(crate) fn handle_wait(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         input: &mut ActionInput,
         flags: MessageFlags,
         context: AutoAdvanceContext<'_>,
@@ -207,7 +207,7 @@ impl MessageHost {
     /// independent of manual input, script auto/skip flags and 0x2153's timer.
     fn wait_timed(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         context: AutoAdvanceContext<'_>,
     ) -> Result<Flow, DecodeError> {
         let pc = call.pc;

@@ -1,7 +1,4 @@
-use cmvs_rs::{
-    audio_output::{AudioProgram, Envelope},
-    vorbis::Vorbis,
-};
+use cmvs_rs::{audio_output::AudioProgram, audio_output::Envelope, vorbis::Vorbis};
 use std::sync::Arc;
 const FIRST: &[u8] = include_bytes!("../fixtures/audio/mono440.ogg");
 const SECOND: &[u8] = include_bytes!("../fixtures/audio/mono880.ogg");
@@ -130,10 +127,10 @@ fn fade_envelopes_reach_exact_endpoints_without_overshoot() {
 /// Keep ignored so normal offline/CI tests never open a device or require audio hardware.
 #[test]
 #[ignore = "opens the default native audio device; run explicitly outside restricted sandboxes"]
-fn native_device_smoke() -> Result<(), Box<dyn std::error::Error>> {
+fn native_device_smoke() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use cmvs_rs::{
-        audio::{AudioBackend, AudioRequest, MovieAudioClock, SePlayback, VoiceDuckingSettings},
-        audio_output::NativeAudio,
+        audio_output::NativeAudio, host::audio::AudioBackend, host::audio::AudioRequest,
+        host::audio::MovieAudioClock, host::audio::SePlayback, host::audio::VoiceDuckingSettings,
     };
     use std::{
         collections::BTreeMap,
@@ -152,7 +149,7 @@ fn native_device_smoke() -> Result<(), Box<dyn std::error::Error>> {
             let _ = fs::remove_dir(&self.0);
         }
     }
-    fn pump(audio: &mut NativeAudio) -> Result<(), Box<dyn std::error::Error>> {
+    fn pump(audio: &mut NativeAudio) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         for _ in 0..30 {
             thread::sleep(Duration::from_millis(10));
             audio.update()?;
@@ -325,7 +322,7 @@ fn native_device_smoke() -> Result<(), Box<dyn std::error::Error>> {
         volume: 16,
         start: true,
         rate_bits: 2.0f32.to_bits(),
-        mixer: cmvs_rs::audio::VoiceMixer::from_ini(1, 1),
+        mixer: cmvs_rs::host::audio::VoiceMixer::from_ini(1, 1),
     })?);
     pump(&mut audio)?;
     assert!(audio.voice_position(1)?.is_some());

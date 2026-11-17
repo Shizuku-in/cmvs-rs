@@ -1,14 +1,14 @@
 use cmvs_core::{
-    dispatch::{self, Capability, Flow, Hosts, ScriptHosts, SystemReadHosts, SystemWriteHosts},
-    machine::Machine,
-    profile::Semantics,
-    random::CrtRandom,
-    save_menu::{SaveMenuHost, SaveSource},
-    script_control::{ControlEvent, ScriptControl, ScriptSource},
-    system_save::{SystemSaveEvent, SystemSaveHost, SystemSaveSink, SystemSaveSource},
+    format::system_save::SystemSaveEvent, format::system_save::SystemSaveHost,
+    format::system_save::SystemSaveSink, format::system_save::SystemSaveSource,
+    host::random::CrtRandom, profile::Semantics, runtime::save_menu::SaveMenuHost,
+    runtime::save_menu::SaveSource, runtime::script_control::ControlEvent,
+    runtime::script_control::ScriptControl, runtime::script_control::ScriptSource, vm::dispatch,
+    vm::dispatch::Capability, vm::dispatch::Flow, vm::dispatch::Hosts, vm::dispatch::ScriptHosts,
+    vm::dispatch::SystemReadHosts, vm::dispatch::SystemWriteHosts, vm::machine::Machine,
 };
 use std::error::Error;
-fn accepts(vm: &Machine<'_>, cap: Capability) -> bool {
+fn accepts(vm: &Machine, cap: Capability) -> bool {
     vm.pending_system().is_some_and(|(_, c)| {
         dispatch::entry(Semantics::Root, c).is_some_and(|e| e.capability == cap)
     })
@@ -16,16 +16,16 @@ fn accepts(vm: &Machine<'_>, cap: Capability) -> bool {
 pub trait SharedControl {
     fn shared_control(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         source: &mut dyn ScriptSource,
-    ) -> Result<Option<ControlEvent>, Box<dyn Error>>;
+    ) -> Result<Option<ControlEvent>, Box<dyn Error + Send + Sync>>;
 }
 impl SharedControl for ScriptControl {
     fn shared_control(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         source: &mut dyn ScriptSource,
-    ) -> Result<Option<ControlEvent>, Box<dyn Error>> {
+    ) -> Result<Option<ControlEvent>, Box<dyn Error + Send + Sync>> {
         if !accepts(vm, Capability::ScriptControl) {
             return Ok(None);
         }
@@ -45,25 +45,25 @@ impl SharedControl for ScriptControl {
 pub trait SharedSystem {
     fn shared_read(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         source: &mut dyn SystemSaveSource,
         game_id: Option<u32>,
-    ) -> Result<Option<SystemSaveEvent>, Box<dyn Error>>;
+    ) -> Result<Option<SystemSaveEvent>, Box<dyn Error + Send + Sync>>;
     fn shared_write(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         sink: &mut dyn SystemSaveSink,
         random: &mut CrtRandom,
         game_id: Option<u32>,
-    ) -> Result<bool, Box<dyn Error>>;
+    ) -> Result<bool, Box<dyn Error + Send + Sync>>;
 }
 impl SharedSystem for SystemSaveHost {
     fn shared_read(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         source: &mut dyn SystemSaveSource,
         game_id: Option<u32>,
-    ) -> Result<Option<SystemSaveEvent>, Box<dyn Error>> {
+    ) -> Result<Option<SystemSaveEvent>, Box<dyn Error + Send + Sync>> {
         if !accepts(vm, Capability::SystemRead) {
             return Ok(None);
         }
@@ -86,11 +86,11 @@ impl SharedSystem for SystemSaveHost {
     }
     fn shared_write(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         sink: &mut dyn SystemSaveSink,
         random: &mut CrtRandom,
         game_id: Option<u32>,
-    ) -> Result<bool, Box<dyn Error>> {
+    ) -> Result<bool, Box<dyn Error + Send + Sync>> {
         if !accepts(vm, Capability::SystemWrite) {
             return Ok(false);
         }
@@ -112,16 +112,16 @@ impl SharedSystem for SystemSaveHost {
 pub trait SharedSaveMenu {
     fn shared_menu(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         source: &mut dyn SaveSource,
-    ) -> Result<bool, Box<dyn Error>>;
+    ) -> Result<bool, Box<dyn Error + Send + Sync>>;
 }
 impl SharedSaveMenu for SaveMenuHost {
     fn shared_menu(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         source: &mut dyn SaveSource,
-    ) -> Result<bool, Box<dyn Error>> {
+    ) -> Result<bool, Box<dyn Error + Send + Sync>> {
         if !accepts(vm, Capability::SaveMenu) {
             return Ok(false);
         }

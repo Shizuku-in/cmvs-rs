@@ -4,13 +4,13 @@ use cmvs_core::TextEncoding;
 use cmvs_font::text_codec;
 use std::{error::Error, io::ErrorKind, path::Path};
 
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
 /// An explicit game setting overrides bounded detection from startup and archived scripts.
 pub fn select(
     root: &Path,
     files: &cmvs_core::profile::GameFiles,
-    startup: &cmvs_core::ps3::Script,
+    startup: &cmvs_core::format::ps3::Script,
 ) -> Result<TextEncoding> {
     match std::fs::read_to_string(root.join("encoding.txt")) {
         Ok(setting) => {
@@ -108,7 +108,7 @@ mod tests {
             raw.extend(word.to_le_bytes());
         }
         raw.extend([0, 0x20]);
-        let startup = cmvs_core::ps3::Script::from_memory_image(&raw).unwrap();
+        let startup = cmvs_core::format::ps3::Script::from_memory_image(&raw).unwrap();
         for (name, expected) in [
             ("gbk\n", TextEncoding::Gbk),
             ("utf-8\r\n", TextEncoding::Utf8),

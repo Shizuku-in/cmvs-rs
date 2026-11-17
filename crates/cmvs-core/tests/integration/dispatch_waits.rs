@@ -1,22 +1,19 @@
 use crate::support;
+use crate::support::shared_state::SharedState;
 use cmvs_core::{
-    camera::CameraHost,
-    dispatch::{self, Capability, Flow, Hosts, WaitHosts},
-    fade::SkipGate,
-    input::ActionInput,
-    machine::Machine,
-    profile::Semantics,
-    scene::SceneHost,
+    host::input::ActionInput, profile::Semantics, render::camera::CameraHost,
+    render::fade::SkipGate, render::scene::SceneHost, vm::dispatch, vm::dispatch::Capability,
+    vm::dispatch::Flow, vm::dispatch::Hosts, vm::dispatch::WaitHosts, vm::machine::Machine,
 };
 use support::bytecode::{command, pending, script};
 
 fn run(
-    vm: &mut Machine<'_>,
+    vm: &mut Machine,
     scene: &mut SceneHost,
     camera: &mut CameraHost,
     input: &mut ActionInput,
     gate: SkipGate,
-) -> Result<Option<Flow>, cmvs_core::dispatch::DispatchError> {
+) -> Result<Option<Flow>, cmvs_core::vm::dispatch::DispatchError> {
     dispatch::run(
         Semantics::Root,
         vm,
@@ -39,7 +36,7 @@ fn object(scene: &mut SceneHost) {
     let program = script(&code);
     let mut vm = Machine::new(&program).unwrap();
     pending(&mut vm);
-    assert!(scene.try_handle(&mut vm).unwrap());
+    assert!(scene.shared_state(&mut vm).unwrap());
 }
 
 #[test]
@@ -201,10 +198,10 @@ fn active_wait_retries_are_frozen_and_completed_skips_yield_with_correct_input_c
             let mut camera = CameraHost::default();
             assert!(
                 match setup {
-                    0x206c => camera.try_handle(&mut vm),
-                    0x2225 => scene.try_handle_quake(&mut vm),
-                    0x222f => scene.try_handle_strip(&mut vm),
-                    _ => scene.try_handle(&mut vm),
+                    0x206c => camera.shared_state(&mut vm),
+                    0x2225 => scene.shared_state(&mut vm),
+                    0x222f => scene.shared_state(&mut vm),
+                    _ => scene.shared_state(&mut vm),
                 }
                 .unwrap()
             );

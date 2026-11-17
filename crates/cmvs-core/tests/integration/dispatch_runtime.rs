@@ -1,13 +1,12 @@
 use crate::support;
 use crate::support::runtime_cases;
+use crate::support::shared_windows::SharedWindows;
 use cmvs_core::{
-    audio::RecordingAudio,
-    dispatch::{self, Capability, Flow, Hosts, MessageWaitHosts, RuntimeOperation, SnapshotHosts},
-    input::ActionInput,
-    machine::Machine,
-    message::{AutoAdvanceContext, MessageHost},
-    profile::Semantics,
-    snapshot::SaveImage,
+    format::snapshot::SaveImage, host::audio::RecordingAudio, host::input::ActionInput,
+    profile::Semantics, render::message::AutoAdvanceContext, render::message::MessageHost,
+    vm::dispatch, vm::dispatch::Capability, vm::dispatch::Flow, vm::dispatch::Hosts,
+    vm::dispatch::MessageWaitHosts, vm::dispatch::RuntimeOperation, vm::dispatch::SnapshotHosts,
+    vm::machine::Machine,
 };
 use runtime_cases::cases;
 use support::bytecode::{command, pending, script};
@@ -100,7 +99,7 @@ fn deferred_calls_reject_changed_arguments_and_wrong_cleanup() {
     assert!(request.validate(&changed).is_err());
     assert_eq!(changed.stack().len_bytes(), 4);
 }
-fn script_code(code: &[u8]) -> cmvs_core::ps3::Script {
+fn script_code(code: &[u8]) -> cmvs_core::format::ps3::Script {
     support::bytecode::script(code)
 }
 #[test]
@@ -202,7 +201,7 @@ fn message_waits_preserve_pending_and_timed_wait_ignores_unknown_read_word() {
         let script = script(&code);
         let mut vm = Machine::new(&script).unwrap();
         pending(&mut vm);
-        assert!(messages.try_handle(&mut vm).unwrap());
+        assert!(messages.shared_message(&mut vm).unwrap());
         pending(&mut vm);
         let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
         let result = dispatch::run(

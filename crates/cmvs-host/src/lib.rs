@@ -22,26 +22,14 @@ mod storage;
 
 use backend::HostBackend;
 use cmvs_core::{
-    input::{CodeInput, KeyBindings},
-    profile::Registry,
-    ps3::Script,
-    raster::{RgbaImage, movie_canvas},
-    runtime::{
-        FrameBudget, FrameDriver, FrameOutcome, Runtime, RuntimeEvent, RuntimeOptions, SaveStorage,
-        load_start_with_fs,
-    },
-    system_save::ProfileSystemSave,
+    format::system_save::ProfileSystemSave, host::input::CodeInput, host::input::KeyBindings,
+    profile::Registry, render::raster::RgbaImage, render::raster::movie_canvas,
+    runtime::FrameBudget, runtime::FrameDriver, runtime::FrameOutcome, runtime::Runtime,
+    runtime::RuntimeEvent, runtime::RuntimeOptions, runtime::SaveStorage,
+    runtime::load_start_with_fs,
 };
 use cmvs_font::font::FontRenderer;
 use std::{error::Error, path::Path};
-
-self_cell::self_cell! {
-    struct Session {
-        owner: Script,
-        #[covariant]
-        dependent: Runtime,
-    }
-}
 
 struct Input {
     held: [bool; 128],
@@ -68,7 +56,7 @@ impl Input {
         *held = pressed;
         Ok(())
     }
-    fn sample(&mut self, bindings: &KeyBindings, input: &mut cmvs_core::input::ActionInput) {
+    fn sample(&mut self, bindings: &KeyBindings, input: &mut cmvs_core::host::input::ActionInput) {
         let now = std::array::from_fn(|i| self.held[i] || self.pulses[i]);
         self.pulses.fill(false);
         self.codes.update(bindings, &now, input);
@@ -91,7 +79,7 @@ pub enum TickOutcome {
 
 /// An embedded player that configures fonts, audio, movies, and frame composition.
 pub struct Player {
-    session: Session,
+    runtime: Runtime,
     backend: HostBackend,
     font: FontRenderer,
     bindings: KeyBindings,
@@ -140,10 +128,10 @@ impl Player {
     }
     fn open_with_profile(
         root: &Path,
-        open_profile: impl FnOnce() -> Result<ProfileSystemSave, Box<dyn Error>>,
+        open_profile: impl FnOnce() -> Result<ProfileSystemSave, Box<dyn Error + Send + Sync>>,
         font_path: &Path,
         native_audio: bool,
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         #[cfg(target_os = "android")]
         if native_audio && !ffi::android_initialized() {
             return Err(
@@ -159,52 +147,48 @@ impl Player {
         let profile = open_profile()?;
         font.set_user_directory(profile.directory())?;
         let mut audio_control = None;
-        let session = Session::try_new(script, |script| -> Result<Runtime<'_>, Box<dyn Error>> {
-            let mut startup = Runtime::with_options(
-                script,
-                root,
-                &game,
-                RuntimeOptions {
-                    encoding,
-                    saves: SaveStorage::Profile(profile),
-                    decode_cmv_frames: true,
-                    fs: Some(fs.clone()),
-                    ..Default::default()
-                },
-            )?;
-            startup.set_save_clock(Box::new(cmvs_core::runtime::utc_save_time));
-            startup.set_random_seed(cmvs_core::random::host_time_seed());
-            startup.set_record_text(true);
-            startup.set_host_capture(true);
-            startup.set_glyph_metrics(font.metrics());
-            if !font.has_face(startup.settings().font_face()) {
-                startup.set_font_face(cmvs_core::settings::DEFAULT_FONT_FACE)?;
-            }
-            if native_audio {
-                let audio = cmvs_audio::NativeAudio::new(root)?;
-                audio_control = Some(audio.host_control());
-                startup.set_audio_backend(Box::new(audio))?;
-            }
-            startup.set_mgv_factory(Box::new(
-                cmvs_video::PrefetchTheoraFactory::default().with_lookahead(64 << 20, 48),
-            ));
-            startup.set_scene_prefetch(|| {});
-            startup.set_image_decode_threads(cmvs_core::image::DecodeThreads::host());
-            startup.set_decoded_image_cache(256 << 20);
-            Ok(startup)
-        })?;
-        let startup = session.borrow_dependent();
-        let mut backend = HostBackend::new(startup.screen_size());
-        let preferences = startup.display_preferences();
+        let mut runtime = Runtime::with_options(
+            script,
+            root,
+            &game,
+            RuntimeOptions {
+                encoding,
+                saves: SaveStorage::Profile(profile),
+                decode_cmv_frames: true,
+                fs: Some(fs.clone()),
+                ..Default::default()
+            },
+        )?;
+        runtime.set_save_clock(Box::new(cmvs_core::runtime::utc_save_time));
+        runtime.set_random_seed(cmvs_core::host::random::host_time_seed());
+        runtime.set_record_text(true);
+        runtime.set_host_capture(true);
+        runtime.set_glyph_metrics(font.metrics());
+        if !font.has_face(runtime.settings().font_face()) {
+            runtime.set_font_face(cmvs_core::host::settings::DEFAULT_FONT_FACE)?;
+        }
+        if native_audio {
+            let audio = cmvs_audio::NativeAudio::new(root)?;
+            audio_control = Some(audio.host_control());
+            runtime.set_audio_backend(Box::new(audio))?;
+        }
+        runtime.set_mgv_factory(Box::new(
+            cmvs_video::PrefetchTheoraFactory::default().with_lookahead(64 << 20, 48),
+        ));
+        runtime.set_scene_prefetch(|| {});
+        runtime.set_image_decode_threads(cmvs_core::host::image::DecodeThreads::host());
+        runtime.set_decoded_image_cache(256 << 20);
+        let mut backend = HostBackend::new(runtime.screen_size());
+        let preferences = runtime.display_preferences();
         backend.fullscreen = preferences.fullscreen;
         backend.aspect = preferences.aspect_mode;
         backend.scaling = preferences.aspect_scaling;
         backend.render =
-            cmvs_core::platform::supported_render_mode(&backend, preferences.render_mode)?;
+            cmvs_core::host::platform::supported_render_mode(&backend, preferences.render_mode)?;
         let bindings =
             KeyBindings::load_optional_for_profile_with_fs(&*fs, root, game.selection.profile)?;
         Ok(Self {
-            session,
+            runtime,
             backend,
             font,
             bindings,
@@ -230,8 +214,7 @@ impl Player {
             self.driver.suspend();
             self.input.held.fill(false);
             self.input.pulses.fill(false);
-            self.session
-                .with_dependent_mut(|_, s| self.input.codes.clear(s.input_mut()));
+            self.input.codes.clear(self.runtime.input_mut());
         }
     }
     pub fn size(&self) -> [u32; 2] {
@@ -265,8 +248,8 @@ impl Player {
     }
     pub fn save_preferences(&mut self) -> Result<bool, PlayerError> {
         let display = self.backend.preferences();
-        self.session
-            .with_dependent_mut(|_, s| s.save_preferences(display))
+        self.runtime
+            .save_preferences(display)
             .map_err(PlayerError::Persistence)
     }
     /// Run a VM budget slice, publishing a frame only when the VM yields.
@@ -280,48 +263,52 @@ impl Player {
         if self.paused {
             return Ok(TickOutcome::Inactive);
         }
-        self.session.with_dependent_mut(|_, startup| {
-            startup
-                .poll_audio_output()
-                .map_err(PlayerError::Execution)?;
-            self.driver.latch_delta(delta_ms.min(250));
-            self.driver.sample_input(startup.input_mut(), |input| {
-                self.input.sample(&self.bindings, input);
-            });
-            match self
-                .driver
-                .run_slice(startup, &mut FrameBudget::steps(4000), |runtime| {
-                    runtime.tick(&mut self.backend)
-                })
-                .map_err(|e| PlayerError::Execution(e.into()))?
-            {
-                FrameOutcome::Yield => {
-                    self.driver
-                        .finish_frame(startup, 0)
+        self.runtime
+            .poll_audio_output()
+            .map_err(PlayerError::Execution)?;
+        self.driver.latch_delta(delta_ms.min(250));
+        self.driver.sample_input(self.runtime.input_mut(), |input| {
+            self.input.sample(&self.bindings, input);
+        });
+        match self
+            .driver
+            .run_slice(
+                &mut self.runtime,
+                &mut FrameBudget::steps(4000),
+                |runtime| runtime.tick(&mut self.backend),
+            )
+            .map_err(|e| PlayerError::Execution(e.into()))?
+        {
+            FrameOutcome::Yield => {
+                self.driver
+                    .finish_frame(&mut self.runtime, 0)
+                    .map_err(PlayerError::Execution)?;
+                let frame = if let Some(image) = self.runtime.movie_frame() {
+                    movie_canvas(image, self.backend.size, self.backend.render == 1)
+                        .map_err(|e| PlayerError::Execution(e.into()))?
+                } else {
+                    self.font
+                        .render(
+                            self.runtime.scene(),
+                            self.runtime.camera(),
+                            self.runtime.messages(),
+                        )
+                        .map_err(|e| PlayerError::Execution(e.into()))?
+                };
+                if self.runtime.capture_due() {
+                    self.runtime
+                        .supply_capture(frame.clone())
                         .map_err(PlayerError::Execution)?;
-                    let frame = if let Some(image) = startup.movie_frame() {
-                        movie_canvas(image, self.backend.size, self.backend.render == 1)
-                            .map_err(|e| PlayerError::Execution(e.into()))?
-                    } else {
-                        self.font
-                            .render(startup.scene(), startup.camera(), startup.messages())
-                            .map_err(|e| PlayerError::Execution(e.into()))?
-                    };
-                    if startup.capture_due() {
-                        startup
-                            .supply_capture(frame.clone())
-                            .map_err(PlayerError::Execution)?;
-                    }
-                    self.backend.frame = Some(frame);
-                    self.serial += 1;
-                    Ok(TickOutcome::FrameReady)
                 }
-                FrameOutcome::Stopped(RuntimeEvent::Quit) => Ok(TickOutcome::Quit),
-                FrameOutcome::Inactive => Ok(TickOutcome::Inactive),
-                FrameOutcome::Stopped(event) => Err(PlayerError::Stopped(event)),
-                FrameOutcome::BudgetExhausted => Ok(TickOutcome::BudgetExhausted),
+                self.backend.frame = Some(frame);
+                self.serial += 1;
+                Ok(TickOutcome::FrameReady)
             }
-        })
+            FrameOutcome::Stopped(RuntimeEvent::Quit) => Ok(TickOutcome::Quit),
+            FrameOutcome::Inactive => Ok(TickOutcome::Inactive),
+            FrameOutcome::Stopped(event) => Err(PlayerError::Stopped(event)),
+            FrameOutcome::BudgetExhausted => Ok(TickOutcome::BudgetExhausted),
+        }
     }
 }
 
@@ -342,7 +329,7 @@ mod tests {
     #[test]
     fn quick_click_is_latched_and_released_at_frame_boundaries() {
         let mut host = Input::default();
-        let mut input = cmvs_core::input::ActionInput::default();
+        let mut input = cmvs_core::host::input::ActionInput::default();
         host.key(1, true).unwrap();
         host.key(1, false).unwrap();
         host.sample(&KeyBindings::default(), &mut input);

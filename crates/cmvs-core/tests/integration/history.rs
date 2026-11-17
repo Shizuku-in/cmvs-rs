@@ -1,7 +1,7 @@
+use crate::support::shared_state::SharedState;
 use cmvs_core::{
-    history::{HISTORY_CAPACITY, HistoryHost, MAX_HISTORY_TEXT},
-    machine::{Machine, Step},
-    ps3::Script,
+    format::ps3::Script, runtime::HISTORY_CAPACITY, runtime::HistoryHost,
+    runtime::MAX_HISTORY_TEXT, vm::machine::Machine, vm::machine::Step,
 };
 
 fn call(code: &mut Vec<u8>, op: u16, args: &[u32]) {
@@ -36,7 +36,7 @@ fn script(code: &[u8], text: &[u8]) -> Script {
     );
     Script::decode(&raw).unwrap()
 }
-fn pending(vm: &mut Machine<'_>) {
+fn pending(vm: &mut Machine) {
     while !matches!(vm.step().unwrap(), Step::System { .. }) {}
 }
 
@@ -59,7 +59,7 @@ fn append_preserves_raw_strings_numeric_bits_results_and_lower_stack() {
     }
     pending(&mut vm);
     let pc = vm.pc();
-    assert!(history.try_handle(&mut vm).unwrap());
+    assert!(history.shared_state(&mut vm).unwrap());
     let entry = history.entries().front().unwrap();
     assert_eq!(
         entry.strings,
@@ -98,7 +98,7 @@ fn history_keeps_newest_first_evicts_oldest_and_owns_string_copies() {
             )
             .unwrap();
         pending(&mut vm);
-        assert!(history.try_handle(&mut vm).unwrap());
+        assert!(history.shared_state(&mut vm).unwrap());
         assert_eq!(
             history.entries().len(),
             (i as usize + 1).min(HISTORY_CAPACITY)
@@ -142,7 +142,7 @@ fn clear_releases_all_entries_preserves_stack_results_and_allows_refilling() {
     {
         pending(&mut vm);
         let pc = vm.pc();
-        assert!(history.try_handle(&mut vm).unwrap());
+        assert!(history.shared_state(&mut vm).unwrap());
         assert_eq!(history.entries().len(), expected);
         assert_eq!(vm.pc(), pc + 2);
         assert_eq!(vm.stack().len_bytes(), 4);
@@ -172,7 +172,7 @@ fn fixed_strings_accept_31_bytes_but_only_dynamic_text_accepts_larger_data() {
     let mut history = HistoryHost::default();
     vm.state_mut().set_string(0, &[b'x'; 31]).unwrap();
     pending(&mut vm);
-    assert!(history.try_handle(&mut vm).unwrap());
+    assert!(history.shared_state(&mut vm).unwrap());
     let entry = history.entries().front().unwrap();
     assert_eq!(entry.strings[0].len(), 31);
     assert_eq!(entry.strings[2].len(), MAX_HISTORY_TEXT);
@@ -206,14 +206,14 @@ fn invalid_references_long_fixed_strings_and_short_stacks_are_transactional() {
         let mut history = HistoryHost::default();
         vm.state_mut().set_string(0, &[b'x'; 32]).unwrap();
         pending(&mut vm);
-        history.try_handle(&mut vm).unwrap();
+        history.shared_state(&mut vm).unwrap();
         pending(&mut vm);
         let command = vm.pending_system();
         let pc = vm.pc();
         let entries = history.entries().clone();
         vm.state_mut().set_system_integer(0, 42).unwrap();
         for _ in 0..2 {
-            assert!(history.try_handle(&mut vm).is_err());
+            assert!(history.shared_state(&mut vm).is_err());
             assert_eq!(history.entries(), &entries);
             assert_eq!(vm.pending_system(), command);
             assert_eq!(vm.pc(), pc);
@@ -244,9 +244,9 @@ fn queries_report_count_strings_and_words_newest_first() {
     let script = script(&code, b"a\0b\0\x82\xa0\0c\0");
     let mut vm = Machine::new(&script).unwrap();
     let mut history = HistoryHost::default();
-    let mut step = |vm: &mut Machine<'_>| {
+    let mut step = |vm: &mut Machine| {
         pending(vm);
-        assert!(history.try_handle(vm).unwrap());
+        assert!(history.shared_state(vm).unwrap());
     };
     step(&mut vm);
     step(&mut vm);
@@ -271,6 +271,6 @@ fn queries_report_count_strings_and_words_newest_first() {
     assert_eq!(vm.stack().len_bytes(), 0);
     // A destination outside the string bank is not modeled.
     pending(&mut vm);
-    assert!(history.try_handle(&mut vm).is_err());
+    assert!(history.shared_state(&mut vm).is_err());
     assert!(vm.pending_system().is_some());
 }

@@ -26,12 +26,12 @@ pub fn millis(duration: Duration) -> u32 {
 /// Renders the current movie frame onto the logical canvas if playing, otherwise
 /// software-composites the scene.
 pub fn render_software(
-    startup: &cmvs_core::runtime::Runtime<'_>,
+    startup: &cmvs_core::runtime::Runtime,
     font: &mut cmvs_font::font::FontRenderer,
     linear: bool,
-) -> Result<cmvs_core::raster::RgbaImage, Box<dyn Error>> {
+) -> Result<cmvs_core::render::raster::RgbaImage, Box<dyn Error + Send + Sync>> {
     if let Some(frame) = startup.movie_frame() {
-        return Ok(cmvs_core::raster::movie_canvas(
+        return Ok(cmvs_core::render::raster::movie_canvas(
             frame,
             startup.screen_size(),
             linear,
@@ -43,14 +43,14 @@ pub fn render_software(
 /// Binds user font directory, installs glyph metrics on the runtime, and falls back to the
 /// built-in font face if the configured face is absent.
 pub fn configure_game_font(
-    startup: &mut cmvs_core::runtime::Runtime<'_>,
+    startup: &mut cmvs_core::runtime::Runtime,
     font: &mut cmvs_font::font::FontRenderer,
     user_dir: &Path,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     font.set_user_directory(user_dir)?;
     startup.set_glyph_metrics(font.metrics());
     if !font.has_face(startup.settings().font_face()) {
-        startup.set_font_face(cmvs_core::settings::DEFAULT_FONT_FACE)?;
+        startup.set_font_face(cmvs_core::host::settings::DEFAULT_FONT_FACE)?;
     }
     Ok(())
 }
@@ -60,13 +60,13 @@ pub fn configure_game_font(
 pub fn load_key_bindings(
     root: &Path,
     profile: &cmvs_core::profile::EngineProfile,
-) -> Result<cmvs_core::input::KeyBindings, Box<dyn Error>> {
-    cmvs_core::input::KeyBindings::load_for_profile_with_fs(&ConsoleFs, root, profile)
+) -> Result<cmvs_core::host::input::KeyBindings, Box<dyn Error + Send + Sync>> {
+    cmvs_core::host::input::KeyBindings::load_for_profile_with_fs(&ConsoleFs, root, profile)
 }
 
 /// Formats a runtime tick failure with script name, PC, and step count context.
 pub fn format_tick_error(
-    startup: &cmvs_core::runtime::Runtime<'_>,
+    startup: &cmvs_core::runtime::Runtime,
     error: impl fmt::Display,
 ) -> String {
     let vm = startup.machine();

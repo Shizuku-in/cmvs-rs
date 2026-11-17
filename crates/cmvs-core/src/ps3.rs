@@ -2,7 +2,7 @@
 //!
 //! [`Script::decode`] accepts PS2A (`.ps2`/`.ps3`) and CVNS-era PSS0 (`.pss`) files.
 //! It validates segment bounds and decompresses the payload without executing code.
-//! Use [`crate::bytecode`] to inspect instructions or [`crate::runner`] to run a game.
+//! Use [`crate::vm::bytecode`] to inspect instructions or [`crate::runtime`] to run a game.
 //!
 //! Text remains encoded bytes because the header does not identify its encoding.
 //! [`Script::from_memory_image`] reads an already-decoded save image; it must not be
@@ -100,7 +100,7 @@ impl Header {
 /// Header lengths are read-only so they cannot invalidate the decoded segments.
 ///
 /// ```compile_fail
-/// # use cmvs_core::ps3::Script;
+/// # use cmvs_core::format::ps3::Script;
 /// fn change_length(script: &mut Script) {
 ///     script.header().code_size = 3;
 /// }
@@ -290,12 +290,6 @@ impl Script {
     pub fn data(&self) -> &[u8] {
         let start = self.code_start() + self.header.code_size as usize;
         &self.payload[start..start + self.header.unknown_size as usize]
-    }
-
-    /// Compatibility name for [`Self::data`].
-    #[doc(hidden)]
-    pub fn unknown(&self) -> &[u8] {
-        self.data()
     }
 
     /// Raw text segment, including NUL terminators.

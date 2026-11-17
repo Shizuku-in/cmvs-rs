@@ -1,18 +1,18 @@
 use crate::support::shared_audio;
 use cmvs_core::{
-    audio::{
-        AudioBackend, AudioHost, AudioRequest, AudioSettings, BgmState, RecordingAudio, SeChannel,
-        VoiceDuckingSettings,
-    },
-    cpz::Cpz7Parameters,
-    machine::{Machine, Step},
-    platform::RecordingBackend,
-    profile::Registry,
-    ps3::Script,
-    runtime::{Runtime, load_start},
+    format::cpz::Cpz7Parameters, format::ps3::Script, host::audio::AudioBackend,
+    host::audio::AudioHost, host::audio::AudioRequest, host::audio::AudioSettings,
+    host::audio::BgmState, host::audio::RecordingAudio, host::audio::SeChannel,
+    host::audio::VoiceDuckingSettings, host::platform::RecordingBackend, profile::Registry,
+    runtime::Runtime, runtime::load_start, vm::machine::Machine, vm::machine::Step,
 };
 use shared_audio::SharedAudio;
-use std::{cell::RefCell, collections::BTreeMap, error::Error, fs, rc::Rc};
+use std::{
+    collections::BTreeMap,
+    error::Error,
+    fs,
+    sync::{Arc, Mutex},
+};
 
 #[test]
 fn voice_fade_out_keeps_duration_results_and_works_with_voice_disabled() {
@@ -103,28 +103,31 @@ struct Configured {
     keys: Option<BTreeMap<(u16, u32), Cpz7Parameters>>,
     preloads: Vec<(Vec<u8>, Paths)>,
 }
-type Seen = Rc<RefCell<Configured>>;
+type Seen = Arc<Mutex<Configured>>;
 struct Mirror(Seen);
 impl AudioBackend for Mirror {
-    fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+    fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Ok(false)
     }
-    fn configure_voice_ducking(&mut self, _: VoiceDuckingSettings) -> Result<(), Box<dyn Error>> {
+    fn configure_voice_ducking(
+        &mut self,
+        _: VoiceDuckingSettings,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Ok(())
     }
-    fn configure_paths(&mut self, paths: &Paths) -> Result<(), Box<dyn Error>> {
-        self.0.borrow_mut().paths = Some(paths.clone());
+    fn configure_paths(&mut self, paths: &Paths) -> Result<(), Box<dyn Error + Send + Sync>> {
+        self.0.lock().unwrap().paths = Some(paths.clone());
         Ok(())
     }
     fn configure_archive_parameters(
         &mut self,
         parameters: &BTreeMap<(u16, u32), Cpz7Parameters>,
-    ) -> Result<(), Box<dyn Error>> {
-        self.0.borrow_mut().keys = Some(parameters.clone());
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        self.0.lock().unwrap().keys = Some(parameters.clone());
         Ok(())
     }
-    fn preload(&mut self, _: u8, name: &[u8]) -> Result<bool, Box<dyn Error>> {
-        let mut seen = self.0.borrow_mut();
+    fn preload(&mut self, _: u8, name: &[u8]) -> Result<bool, Box<dyn Error + Send + Sync>> {
+        let mut seen = self.0.lock().unwrap();
         let paths = seen.paths.clone().unwrap_or_default();
         seen.preloads.push((name.to_vec(), paths));
         Ok(true)
@@ -176,7 +179,7 @@ fn audio_backend_tracks_registered_paths_and_keys() {
     run.set_audio_backend(Box::new(Mirror(first.clone())))
         .unwrap();
     let mut platform = RecordingBackend::default();
-    let mut run_command = |run: &mut Runtime<'_>| {
+    let mut run_command = |run: &mut Runtime| {
         let target = run.bootstrap().handled_count() + 1;
         for _ in 0..16 {
             if run.bootstrap().handled_count() == target {
@@ -186,8 +189,8 @@ fn audio_backend_tracks_registered_paths_and_keys() {
         }
         panic!("bootstrap command did not complete");
     };
-    let mirrors = |seen: &Seen, run: &Runtime<'_>| {
-        let seen = seen.borrow();
+    let mirrors = |seen: &Seen, run: &Runtime| {
+        let seen = seen.lock().unwrap();
         seen.paths.as_ref() == Some(run.bootstrap().paths())
             && seen.keys.as_ref() == Some(run.bootstrap().archive_parameters())
     };
@@ -240,13 +243,13 @@ fn puriring_preload_sees_the_paths_registered_before_it() {
         .unwrap();
     let mut platform = RecordingBackend::default();
     for _ in 0..32 {
-        if !seen.borrow().preloads.is_empty() {
+        if !seen.lock().unwrap().preloads.is_empty() {
             break;
         }
         run.tick(&mut platform).unwrap();
     }
     assert_eq!(
-        seen.borrow().preloads,
+        seen.lock().unwrap().preloads,
         [(
             b"a.wav".to_vec(),
             Paths::from([((0x2014, 0), b"se".to_vec())])
@@ -544,10 +547,10 @@ fn stop_all_clears_only_names_in_order_even_with_se_disabled() {
 fn stop_all_failure_keeps_successful_prefix_and_retries_pending_command() {
     struct FailsAtThree(Vec<u8>);
     impl AudioBackend for FailsAtThree {
-        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>> {
             unreachable!()
         }
-        fn stop(&mut self, channel: u8) -> Result<(), Box<dyn Error>> {
+        fn stop(&mut self, channel: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
             if channel == 3 {
                 return Err("synthetic stop failure".into());
             }
@@ -689,18 +692,18 @@ fn se_fade_out_reaches_the_device_and_clears_only_the_name() {
     }
 }
 
-fn pending(vm: &mut Machine<'_>) {
+fn pending(vm: &mut Machine) {
     while !matches!(vm.step().unwrap(), Step::System { .. }) {}
 }
 struct Started;
 impl AudioBackend for Started {
-    fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+    fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Ok(true)
     }
 }
 struct Broken;
 impl AudioBackend for Broken {
-    fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+    fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Err("synthetic device failure".into())
     }
 }
@@ -1089,10 +1092,10 @@ fn voice_code(channel: u32, name: u32, volume: u32, start: u32) -> Vec<u8> {
 const VOICE_TEXT: &[u8] = b"v.ogg\0abcdefghijklmnopqrstuvwxyz012345\0";
 struct Voiced;
 impl AudioBackend for Voiced {
-    fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+    fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Ok(true)
     }
-    fn play_voice(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+    fn play_voice(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Ok(true)
     }
 }
@@ -1121,7 +1124,7 @@ fn voice_play_scales_volume_reports_loading_and_forgets_the_pcm_length() {
                 volume: effective,
                 start: true,
                 rate_bits: 1.0f32.to_bits(),
-                mixer: cmvs_core::audio::VoiceMixer::default(),
+                mixer: cmvs_core::host::audio::VoiceMixer::default(),
             }]
         );
         assert_eq!(vm.state().system_integer(0), Some(0));
@@ -1200,14 +1203,14 @@ struct Positions {
     queries: std::cell::RefCell<Vec<(bool, u8)>>,
 }
 impl AudioBackend for Positions {
-    fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+    fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Err("unexpected play".into())
     }
-    fn se_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+    fn se_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
         self.queries.borrow_mut().push((false, channel));
         Ok(self.se[usize::from(channel)])
     }
-    fn voice_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error>> {
+    fn voice_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn Error + Send + Sync>> {
         self.queries.borrow_mut().push((true, channel));
         Ok(self.voice[usize::from(channel)])
     }
@@ -1266,7 +1269,7 @@ fn voice_rate_code(rate: f32) -> Vec<u8> {
 
 #[test]
 fn rated_voice_play_clamps_the_rate_keeps_nan_and_pops_twenty_bytes() {
-    use cmvs_core::audio::VoiceMixer;
+    use cmvs_core::host::audio::VoiceMixer;
     for (rate, expected) in [
         (2.0f32, 2.0f32),
         (1.0, 1.0),
@@ -1310,7 +1313,7 @@ fn rated_voice_play_clamps_the_rate_keeps_nan_and_pops_twenty_bytes() {
 
 #[test]
 fn voice_mixer_follows_quality_and_buffer_keys() {
-    use cmvs_core::audio::VoiceMixer;
+    use cmvs_core::host::audio::VoiceMixer;
     assert_eq!(VoiceMixer::default(), VoiceMixer::from_ini(0, 0));
     for (quality, buffer, rate, chunk) in [
         (0, 0, 22050, Some(0xc00)),
@@ -1335,7 +1338,7 @@ fn voice_mixer_follows_quality_and_buffer_keys() {
 
 #[test]
 fn voice_compressor_attaches_only_to_mono_rates_from_1_1_to_3() {
-    use cmvs_core::audio::VoiceCompressor;
+    use cmvs_core::host::audio::VoiceCompressor;
     for (rate, channels, attached) in [
         (1.1f32, 1, true),
         (3.0, 1, true),
@@ -1357,7 +1360,7 @@ fn voice_compressor_attaches_only_to_mono_rates_from_1_1_to_3() {
 
 /// Feeds whole chunks as the mixer does until the compressor reports its end.
 fn compress(rate: f32, need: u32, input: &[i16]) -> (Vec<i16>, Vec<u32>) {
-    let mut compressor = cmvs_core::audio::VoiceCompressor::new(rate, 44100, 1)
+    let mut compressor = cmvs_core::host::audio::VoiceCompressor::new(rate, 44100, 1)
         .unwrap()
         .unwrap();
     let (mut at, mut output, mut requests) = (0, vec![], vec![]);
@@ -1408,7 +1411,7 @@ fn constant_input_splices_at_the_minimum_lag_and_quantizes_with_32767() {
 #[test]
 fn buffered_output_skips_the_decoder_until_it_runs_short() {
     let input = vec![1000i16; 50_000];
-    let mut compressor = cmvs_core::audio::VoiceCompressor::new(1.5, 44100, 1)
+    let mut compressor = cmvs_core::host::audio::VoiceCompressor::new(1.5, 44100, 1)
         .unwrap()
         .unwrap();
     // A large first chunk leaves processed output for smaller later chunks.

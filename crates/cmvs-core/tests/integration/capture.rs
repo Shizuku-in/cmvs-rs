@@ -1,11 +1,8 @@
 use crate::support::shared_environment;
+use crate::support::shared_state::SharedState;
 use cmvs_core::{
-    capture::ScreenCapture,
-    machine::{Machine, Step},
-    ps3::Script,
-    raster::RgbaImage,
-    scene::SceneHost,
-    scene_render,
+    format::ps3::Script, render::capture::ScreenCapture, render::raster::RgbaImage,
+    render::scene::SceneHost, render::scene_render, vm::machine::Machine, vm::machine::Step,
 };
 use shared_environment::SharedCapture;
 
@@ -42,12 +39,12 @@ fn call(code: &mut Vec<u8>, op: u16, args: &[u32]) {
 }
 /// Runs to the next system command and offers it to the scene, then the capture.
 fn next(
-    vm: &mut Machine<'_>,
+    vm: &mut Machine,
     scene: &mut SceneHost,
     capture: &mut ScreenCapture,
-) -> Result<bool, Box<dyn std::error::Error>> {
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     while !matches!(vm.step()?, Step::System { .. }) {}
-    Ok(scene.try_handle(vm)? || capture.shared_capture(vm, scene)?)
+    Ok(scene.shared_state(vm)? || capture.shared_capture(vm, scene)?)
 }
 /// A 2x1 frame whose alpha bytes differ from 255.
 fn frame() -> RgbaImage {
@@ -56,7 +53,7 @@ fn frame() -> RgbaImage {
 
 #[test]
 fn immediate_read_uses_the_device_frame_and_preserves_held_capture_and_object_state() {
-    use cmvs_core::{platform::RecordingBackend, scene::ObjectImage};
+    use cmvs_core::{host::platform::RecordingBackend, render::scene::ObjectImage};
     let mut code = vec![];
     call(&mut code, 0x2020, &[3]);
     call(&mut code, 0x2040, &[3]);
@@ -123,20 +120,25 @@ fn immediate_read_uses_the_device_frame_and_preserves_held_capture_and_object_st
         assert_eq!(vm.state().system_integer(0), Some(1));
         assert_eq!(vm.state().system_integer(1), Some(34));
         // The device read is non-consuming and does not alter the published frame.
-        use cmvs_core::platform::PlatformBackend;
+        use cmvs_core::host::platform::PlatformBackend;
         assert_eq!(backend.read_device_frame().unwrap(), readback);
     }
 }
 
 #[test]
 fn immediate_invalid_targets_and_short_stack_do_not_read_or_consume() {
-    use cmvs_core::platform::{PlatformBackend, PlatformRequest};
+    use cmvs_core::{host::platform::PlatformBackend, host::platform::PlatformRequest};
     struct NoRead;
     impl PlatformBackend for NoRead {
-        fn read_device_frame(&mut self) -> Result<RgbaImage, Box<dyn std::error::Error>> {
+        fn read_device_frame(
+            &mut self,
+        ) -> Result<RgbaImage, Box<dyn std::error::Error + Send + Sync>> {
             panic!("invalid target must not read device");
         }
-        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn std::error::Error>> {
+        fn apply(
+            &mut self,
+            _: &PlatformRequest,
+        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             panic!("not a platform request");
         }
     }
@@ -338,9 +340,9 @@ fn only_unit_logical_screen_scaling_is_rendered() {
 #[test]
 fn async_device_frame_pending_preserves_command_and_resumes_when_ready() {
     use cmvs_core::{
-        dispatch::{self, Flow, Hosts},
-        platform::{DeviceFrameResult, PlatformBackend, PlatformRequest},
-        profile::Semantics,
+        host::platform::DeviceFrameResult, host::platform::PlatformBackend,
+        host::platform::PlatformRequest, profile::Semantics, vm::dispatch, vm::dispatch::Flow,
+        vm::dispatch::Hosts,
     };
 
     #[derive(Default)]
@@ -349,14 +351,19 @@ fn async_device_frame_pending_preserves_command_and_resumes_when_ready() {
         polls: usize,
     }
     impl PlatformBackend for AsyncDevice {
-        fn poll_device_frame(&mut self) -> Result<DeviceFrameResult, Box<dyn std::error::Error>> {
+        fn poll_device_frame(
+            &mut self,
+        ) -> Result<DeviceFrameResult, Box<dyn std::error::Error + Send + Sync>> {
             self.polls += 1;
             Ok(match self.frame.clone() {
                 Some(image) => DeviceFrameResult::Ready(image),
                 None => DeviceFrameResult::Pending,
             })
         }
-        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn std::error::Error>> {
+        fn apply(
+            &mut self,
+            _: &PlatformRequest,
+        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             unreachable!()
         }
     }

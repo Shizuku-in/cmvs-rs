@@ -1,4 +1,7 @@
-use cmvs_core::cpz::{ArchiveIndex, ArchiveVersion, Cpz3Index, Cpz7Parameters, data_checksum};
+use cmvs_core::{
+    format::cpz::ArchiveIndex, format::cpz::ArchiveVersion, format::cpz::Cpz3Index,
+    format::cpz::Cpz7Parameters, format::cpz::data_checksum,
+};
 use std::{collections::BTreeMap, io::Cursor};
 
 fn hex(text: &str) -> Vec<u8> {
@@ -244,7 +247,10 @@ fn cpz3_creation_preserves_raw_names_empty_entries_duplicates_and_order() {
 
 #[test]
 fn new_cpz5_modes_and_cpz6_roundtrip_directories_raw_names_and_cipher_boundaries() {
-    use cmvs_core::cpz::{ArchiveDirectory, ArchiveFile, Cpz5Index, Cpz5Mode, Cpz6Index};
+    use cmvs_core::{
+        format::cpz::ArchiveDirectory, format::cpz::ArchiveFile, format::cpz::Cpz5Index,
+        format::cpz::Cpz5Mode, format::cpz::Cpz6Index,
+    };
     let directories = vec![
         ArchiveDirectory {
             name: b"empty".to_vec(),
@@ -325,7 +331,10 @@ fn new_cpz5_modes_and_cpz6_roundtrip_directories_raw_names_and_cipher_boundaries
 
 #[test]
 fn directory_archive_creation_rejects_invalid_names_and_nonempty_output() {
-    use cmvs_core::cpz::{ArchiveDirectory, ArchiveFile, Cpz5Index, Cpz5Mode, Cpz6Index};
+    use cmvs_core::{
+        format::cpz::ArchiveDirectory, format::cpz::ArchiveFile, format::cpz::Cpz5Index,
+        format::cpz::Cpz5Mode, format::cpz::Cpz6Index,
+    };
     let create = |output: &mut Cursor<Vec<u8>>, directories: &[ArchiveDirectory], cpz6| {
         if cpz6 {
             Cpz6Index::write(output, directories)

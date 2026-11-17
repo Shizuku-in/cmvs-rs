@@ -1,16 +1,14 @@
 use crate::support::shared_images;
+use crate::support::shared_media::SharedSequence;
+use crate::support::shared_state::SharedState;
 use crate::support::shared_wait;
 use crate::support::shared_windows;
 use cmvs_core::{
-    cpz::{Cpz6Index, data_checksum},
-    fade::SkipGate,
-    image::{DecodedImage, ImageArchives, ImageSource, decode},
-    input::ActionInput,
-    machine::{Machine, Step},
-    message::MessageHost,
-    ps3::Script,
-    raster::RgbaImage,
-    scene::{ObjectImage, SceneHost},
+    format::cpz::Cpz6Index, format::cpz::data_checksum, format::ps3::Script,
+    host::image::DecodedImage, host::image::ImageArchives, host::image::ImageSource,
+    host::image::decode, host::input::ActionInput, render::fade::SkipGate,
+    render::message::MessageHost, render::raster::RgbaImage, render::scene::ObjectImage,
+    render::scene::SceneHost, vm::machine::Machine, vm::machine::Step,
 };
 use shared_images::SharedImages;
 use shared_wait::SharedSceneWait;
@@ -105,7 +103,7 @@ fn loads(slot: u32, names: &[u32]) -> Vec<u8> {
     }
     code
 }
-fn run_to_system(vm: &mut Machine<'_>) -> u16 {
+fn run_to_system(vm: &mut Machine) -> u16 {
     loop {
         if let Step::System { command, .. } = vm.step().unwrap() {
             return command;
@@ -116,7 +114,7 @@ fn run_to_system(vm: &mut Machine<'_>) -> u16 {
 #[derive(Default)]
 struct Files(BTreeMap<Vec<u8>, Vec<u8>>);
 impl ImageSource for Files {
-    fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
         Ok(self.0.get(name).cloned())
     }
 }
@@ -133,13 +131,13 @@ fn replacement_setup(code: &mut Vec<u8>, duration: u32, manager: u32) {
     scene_command(code, 0x22c4, &[20, 6, duration, manager]);
 }
 
-fn prepare_replacement<'a>(vm: &mut Machine<'a>, scene: &mut SceneHost, files: &mut Files) {
+fn prepare_replacement(vm: &mut Machine, scene: &mut SceneHost, files: &mut Files) {
     for _ in 0..9 {
         let command = run_to_system(vm);
         if command == 0x30 {
             assert!(scene.shared_image(vm, files).unwrap());
         } else {
-            assert!(scene.try_handle(vm).unwrap());
+            assert!(scene.shared_state(vm).unwrap());
         }
     }
     assert_eq!(run_to_system(vm), 0x2c4);
@@ -175,32 +173,32 @@ fn replacement_retains_old_children_moves_effects_and_finishes_on_frame_time() {
     assert_eq!(&*change.previous, &previous);
     assert!(object.draw.as_ref().unwrap().opacity_track.is_some());
     assert!(object.draw.as_ref().unwrap().world_motion.is_some());
-    assert_eq!(object.draw.as_ref().unwrap().words[21], 0);
+    assert_eq!(object.draw.as_ref().unwrap().fade_factor(), 0);
     assert!(object.children.is_empty());
     assert_eq!(object.flags, 0x7fffffff);
     assert_eq!(
         change.common.image.as_ref().unwrap().pixels.pixels(),
         &[13, 11, 9, 255, 0, 0, 0, 0]
     );
-    assert!(cmvs_core::scene_render::render(&scene, 32, 32).is_ok());
+    assert!(cmvs_core::render::scene_render::render(&scene, 32, 32).is_ok());
     assert_eq!(run_to_system(&mut vm), 0x45);
-    scene.try_handle(&mut vm).unwrap();
+    scene.shared_state(&mut vm).unwrap();
     scene.advance_frame(250);
     let object = scene.object(20).unwrap();
     let change = object.change.as_ref().unwrap();
     for retained in [&change.previous, &change.common] {
-        assert_eq!(&retained.draw.as_ref().unwrap().words[8..10], &[30, 40]);
+        assert_eq!(&retained.draw.as_ref().unwrap().position_raw(), &[30, 40]);
     }
-    assert_eq!(object.draw.as_ref().unwrap().words[21], 128);
-    assert_eq!(change.previous.draw.as_ref().unwrap().words[21], 128);
+    assert_eq!(object.draw.as_ref().unwrap().fade_factor(), 128);
+    assert_eq!(change.previous.draw.as_ref().unwrap().fade_factor(), 128);
     scene.advance_frame(249);
     assert!(scene.object(20).unwrap().change.is_some());
     scene.advance_frame(1);
     let object = scene.object(20).unwrap();
     assert!(object.change.is_none());
-    assert_eq!(object.draw.as_ref().unwrap().words[21], 256);
+    assert_eq!(object.draw.as_ref().unwrap().fade_factor(), 256);
     assert_eq!(object.image.as_ref().unwrap().name, b"b.pb3");
-    assert!(cmvs_core::scene_render::render(&scene, 32, 32).is_ok());
+    assert!(cmvs_core::render::scene_render::render(&scene, 32, 32).is_ok());
 }
 
 #[test]
@@ -226,7 +224,7 @@ fn immediate_and_repeated_replacements_drop_retained_objects_without_cloning_eff
         let previous = &object.change.as_ref().unwrap().previous;
         assert!(previous.change.is_none());
         assert!(previous.children.is_empty());
-        assert_eq!(previous.draw.as_ref().unwrap().words[21], 256);
+        assert_eq!(previous.draw.as_ref().unwrap().fade_factor(), 256);
         assert!(previous.draw.as_ref().unwrap().opacity_track.is_none());
         assert!(previous.draw.as_ref().unwrap().world_motion.is_none());
         assert!(object.draw.as_ref().unwrap().opacity_track.is_some());
@@ -364,7 +362,7 @@ fn image_load_sets_result_and_rebuilds_the_object_image() {
         .insert(b"bad.pb3".to_vec(), b"XYZW unknown magic".to_vec());
     assert_eq!(run_to_system(&mut vm), 0x20);
     assert!(!scene.shared_image(&mut vm, &mut files).unwrap());
-    scene.try_handle(&mut vm).unwrap();
+    scene.shared_state(&mut vm).unwrap();
     let expected = ObjectImage {
         filter: None,
         name: b"a.pb3".to_vec(),
@@ -407,7 +405,7 @@ fn filtered_image_load_scales_rgb_with_saturation_and_preserves_alpha_and_object
     );
     for _ in 0..6 {
         run_to_system(&mut vm);
-        if !scene.try_handle(&mut vm).unwrap() {
+        if !scene.shared_state(&mut vm).unwrap() {
             scene.shared_image(&mut vm, &mut files).unwrap();
         }
     }
@@ -472,7 +470,7 @@ fn filter_mode_one_uses_integer_mean_plus_one_and_preserves_alpha() {
         files.0.insert(b"a.pb3".to_vec(), source);
         files.0.insert(b"bad".to_vec(), b"XYZW".to_vec());
         run_to_system(&mut vm);
-        scene.try_handle(&mut vm).unwrap();
+        scene.shared_state(&mut vm).unwrap();
         for (color, extra) in [(0xfff8e0, 0), (0x55fff8e0, u32::MAX)] {
             run_to_system(&mut vm);
             scene.shared_image(&mut vm, &mut files).unwrap();
@@ -523,7 +521,7 @@ fn filter_mode_one_rejects_unverified_builds_and_resource_errors_without_committ
         let mut files = Files::default();
         files.0.insert(b"a.pb3".to_vec(), opaque());
         run_to_system(&mut vm);
-        scene.try_handle(&mut vm).unwrap();
+        scene.shared_state(&mut vm).unwrap();
         run_to_system(&mut vm);
         scene.shared_image(&mut vm, &mut files).unwrap();
         let old = scene.object(20).unwrap().clone();
@@ -563,7 +561,7 @@ fn filtered_image_load_tints_weighted_gray_with_two_truncations_and_keeps_alpha(
         let mut files = Files::default();
         files.0.insert(b"a.pb3".to_vec(), pb3(1, &planes));
         run_to_system(&mut vm);
-        scene.try_handle(&mut vm).unwrap();
+        scene.shared_state(&mut vm).unwrap();
         for color in [0xfff8e0, 0x55fff8e0] {
             run_to_system(&mut vm);
             scene.shared_image(&mut vm, &mut files).unwrap();
@@ -597,7 +595,7 @@ fn horizontal_filter_weights_edges_alpha_and_sampling_stride_and_retains_paramet
             pb3(1, &[[200, 255], [128, 1], [240, 64], [0, 17]]),
         );
         run_to_system(&mut vm);
-        scene.try_handle(&mut vm).unwrap();
+        scene.shared_state(&mut vm).unwrap();
         run_to_system(&mut vm);
         scene.shared_image(&mut vm, &mut files).unwrap();
         assert_eq!(vm.stack().len_bytes(), 0);
@@ -626,7 +624,7 @@ fn filtered_image_load_uses_128_as_identity_and_quiet_failure_clears_image() {
     files.0.insert(b"a.pb3".to_vec(), opaque());
     files.0.insert(b"bad".to_vec(), b"XYZW".to_vec());
     run_to_system(&mut vm);
-    scene.try_handle(&mut vm).unwrap();
+    scene.shared_state(&mut vm).unwrap();
     for expected in [
         Some(opaque_pixels()),
         Some(opaque_pixels()),
@@ -673,7 +671,7 @@ fn filtered_image_load_rejects_unknown_modes_missing_args_and_resource_failures_
         files.0.insert(b"a.pb3".to_vec(), opaque());
         files.0.insert(b"png.pb3".to_vec(), b"\x89PNG".to_vec());
         run_to_system(&mut vm);
-        scene.try_handle(&mut vm).unwrap();
+        scene.shared_state(&mut vm).unwrap();
         run_to_system(&mut vm);
         scene.shared_image(&mut vm, &mut files).unwrap();
         let old = scene.object(20).unwrap().clone();
@@ -719,7 +717,7 @@ fn replacement_inherits_filter_and_filters_new_source_once_before_common_area() 
         );
         for _ in 0..4 {
             run_to_system(&mut vm);
-            if !scene.try_handle(&mut vm).unwrap() {
+            if !scene.shared_state(&mut vm).unwrap() {
                 scene.shared_image(&mut vm, &mut files).unwrap();
             }
         }
@@ -798,7 +796,7 @@ fn image_load_rejects_unmodeled_slots_codecs_and_long_names() {
         let mut scene = SceneHost::default();
         if built {
             run_to_system(&mut vm);
-            scene.try_handle(&mut vm).unwrap();
+            scene.shared_state(&mut vm).unwrap();
         }
         assert_eq!(run_to_system(&mut vm), 0x30);
         assert!(scene.shared_image(&mut vm, &mut files).is_err());
@@ -899,7 +897,8 @@ fn build_scene(code: &[u8]) -> SceneHost {
     while vm.pc() < code.len() {
         run_to_system(&mut vm);
         assert!(
-            scene.try_handle(&mut vm).unwrap() || scene.shared_image(&mut vm, &mut files).unwrap()
+            scene.shared_state(&mut vm).unwrap()
+                || scene.shared_image(&mut vm, &mut files).unwrap()
         );
     }
     scene
@@ -916,7 +915,7 @@ fn child_image_loading_uses_child_argument_and_preserves_parent_image() {
     assert!(parent.image.is_some());
     // Without 0x2040 the parent is never enqueued, so its children are not visited either.
     assert_eq!(
-        cmvs_core::scene_render::render(&scene, 2, 1)
+        cmvs_core::render::scene_render::render(&scene, 2, 1)
             .unwrap()
             .pixels(),
         &[0, 0, 0, 255, 0, 0, 0, 255]
@@ -929,7 +928,7 @@ fn static_scene_uses_script_crop_origin_position_and_clear_color() {
     // Loading alone is invisible.
     let scene = build_scene(&code);
     assert_eq!(
-        cmvs_core::scene_render::render(&scene, 2, 1)
+        cmvs_core::render::scene_render::render(&scene, 2, 1)
             .unwrap()
             .pixels(),
         &[0, 0, 0, 255, 0, 0, 0, 255]
@@ -940,18 +939,15 @@ fn static_scene_uses_script_crop_origin_position_and_clear_color() {
     scene_command(&mut code, 0x2046, &[3, u32::MAX, 1, 0]);
     scene_command(&mut code, 0x2045, &[3, u32::MAX, 0, 0]);
     let scene = build_scene(&code);
-    let frame = cmvs_core::scene_render::render(&scene, 2, 1).unwrap();
+    let frame = cmvs_core::render::scene_render::render(&scene, 2, 1).unwrap();
     assert_eq!(&frame.pixels()[..4], &opaque_pixels().pixels()[4..]);
     assert_eq!(&frame.pixels()[4..], &[0x10, 0x20, 0x30, 255]);
-    assert!(cmvs_core::scene_render::render(&scene, u32::MAX, u32::MAX).is_err());
+    assert!(cmvs_core::render::scene_render::render(&scene, u32::MAX, u32::MAX).is_err());
 }
 
 #[test]
 fn texture_subtract_keeps_texel_alpha_opacity_and_device_blending() {
-    use cmvs_core::{
-        scene::{DrawState, SceneObject},
-        scene_render,
-    };
+    use cmvs_core::{render::scene::DrawState, render::scene::SceneObject, render::scene_render};
     let scene = build_scene(&{
         let mut code = vec![];
         scene_command(&mut code, 0x22cb, &[0x806040]);
@@ -963,13 +959,11 @@ fn texture_subtract_keeps_texel_alpha_opacity_and_device_blending() {
         (true, 2, 255, [128, 96, 64]),
         (false, 2, 255, [0, 0, 0]),
     ] {
-        let mut draw = DrawState {
-            texture_subtract: 1,
-            ..DrawState::default()
-        };
-        draw.words[1] = blend;
-        draw.words[4..6].copy_from_slice(&[2, 1]);
-        draw.words[17] = opacity;
+        let mut draw = DrawState::default();
+        draw.texture_subtract = 1;
+        draw.set_blend_mode(blend);
+        draw.set_source_size(2, 1);
+        draw.set_opacity(opacity);
         let object = SceneObject {
             image: Some(ObjectImage {
                 name: vec![],
@@ -1012,7 +1006,7 @@ fn texture_subtract_is_local_to_each_draw_including_inherited_children() {
         ] {
             scene_command(&mut code, op, &args);
         }
-        let frame = cmvs_core::scene_render::render(&build_scene(&code), 2, 1).unwrap();
+        let frame = cmvs_core::render::scene_render::render(&build_scene(&code), 2, 1).unwrap();
         assert_eq!(frame.pixels(), expected);
     }
 }
@@ -1034,7 +1028,7 @@ fn texture_subtract_survives_immediate_and_crossfade_replacements() {
         for _ in 0..4 {
             run_to_system(&mut vm);
             assert!(
-                scene.try_handle(&mut vm).unwrap()
+                scene.shared_state(&mut vm).unwrap()
                     || scene.shared_image(&mut vm, &mut files).unwrap()
             );
         }
@@ -1060,7 +1054,7 @@ fn static_scene_sorts_back_to_front_and_equal_orders_keep_slot_order() {
             scene_command(&mut code, 0x2044, &[slot, u32::MAX, crop, 0, 1, 1]);
             scene_command(&mut code, 0x2047, &[slot, u32::MAX, order]);
         }
-        let frame = cmvs_core::scene_render::render(&build_scene(&code), 1, 1).unwrap();
+        let frame = cmvs_core::render::scene_render::render(&build_scene(&code), 1, 1).unwrap();
         let pixels = opaque_pixels();
         assert_eq!(
             frame.pixels(),
@@ -1079,7 +1073,7 @@ fn static_scene_opacity_and_unsupported_blend_are_explicit() {
     scene_command(&mut code, 0x2040, &[1]);
     scene_command(&mut code, 0x2044, &[1, u32::MAX, 0, 0, 2, 1]);
     scene_command(&mut code, 0x2048, &[1, u32::MAX, 128]);
-    let frame = cmvs_core::scene_render::render(&build_scene(&code), 2, 1).unwrap();
+    let frame = cmvs_core::render::scene_render::render(&build_scene(&code), 2, 1).unwrap();
     for (actual, source) in frame
         .pixels()
         .as_chunks::<4>()
@@ -1095,7 +1089,7 @@ fn static_scene_opacity_and_unsupported_blend_are_explicit() {
     for mode in [0, 3] {
         let mut code = code.clone();
         scene_command(&mut code, 0x204b, &[1, u32::MAX, mode]);
-        assert!(cmvs_core::scene_render::render(&build_scene(&code), 2, 1).is_err());
+        assert!(cmvs_core::render::scene_render::render(&build_scene(&code), 2, 1).is_err());
     }
 }
 
@@ -1115,7 +1109,8 @@ fn additive(clear: u32, opacity: u32) -> Vec<u8> {
 fn additive_blend_adds_scaled_texels_and_opaque_images_at_full_opacity_replace() {
     let source = opaque_pixels();
     let frame =
-        cmvs_core::scene_render::render(&build_scene(&additive(0x40_4040, 128)), 2, 1).unwrap();
+        cmvs_core::render::scene_render::render(&build_scene(&additive(0x40_4040, 128)), 2, 1)
+            .unwrap();
     for (actual, source) in frame
         .pixels()
         .as_chunks::<4>()
@@ -1130,17 +1125,19 @@ fn additive_blend_adds_scaled_texels_and_opaque_images_at_full_opacity_replace()
     }
     // Without an alpha channel at full opacity 0x140020340 selects device mode 0.
     let frame =
-        cmvs_core::scene_render::render(&build_scene(&additive(0x40_4040, 255)), 2, 1).unwrap();
+        cmvs_core::render::scene_render::render(&build_scene(&additive(0x40_4040, 255)), 2, 1)
+            .unwrap();
     assert_eq!(frame.pixels(), source.pixels());
     // The 8-bit target saturates.
     let frame =
-        cmvs_core::scene_render::render(&build_scene(&additive(0xfe_fefe, 254)), 2, 1).unwrap();
+        cmvs_core::render::scene_render::render(&build_scene(&additive(0xfe_fefe, 254)), 2, 1)
+            .unwrap();
     assert!(frame.pixels().iter().all(|&v| v == 255));
     // An image with an alpha channel stays additive at full opacity.
-    let mut draw = cmvs_core::scene::DrawState::default();
-    draw.words[1] = 2;
-    draw.words[4..6].copy_from_slice(&[1, 1]);
-    let glow = cmvs_core::scene::SceneObject {
+    let mut draw = cmvs_core::render::scene::DrawState::default();
+    draw.set_blend_mode(2);
+    draw.set_source_size(1, 1);
+    let glow = cmvs_core::render::scene::SceneObject {
         image: Some(ObjectImage {
             filter: None,
             name: vec![],
@@ -1149,10 +1146,11 @@ fn additive_blend_adds_scaled_texels_and_opaque_images_at_full_opacity_replace()
             surface: false,
         }),
         draw: Some(draw),
-        ..cmvs_core::scene::SceneObject::default()
+        ..cmvs_core::render::scene::SceneObject::default()
     };
     let scene = build_scene(&additive(0x40_4040, 0));
-    let frame = cmvs_core::scene_render::render_with_objects(&scene, &[&glow], 1, 1).unwrap();
+    let frame =
+        cmvs_core::render::scene_render::render_with_objects(&scene, &[&glow], 1, 1).unwrap();
     assert_eq!(&frame.pixels()[..3], &[0x4a, 0x54, 0x5e]);
 }
 
@@ -1165,7 +1163,7 @@ fn fade_joins_object_order_and_equal_keys_follow_slot_objects() {
         scene_command(&mut code, 0x2047, &[1, u32::MAX, 10]);
         scene_command(&mut code, 0x2220, &[1, 0, 2000, order]);
         let scene = build_scene(&code);
-        let frame = cmvs_core::scene_render::render(&scene, 2, 1).unwrap();
+        let frame = cmvs_core::render::scene_render::render(&scene, 2, 1).unwrap();
         if covered {
             assert_eq!(frame.pixels(), &[0, 0, 0, 255, 0, 0, 0, 255]);
         } else {
@@ -1195,7 +1193,7 @@ fn parent_and_child(early_child: bool, parent_x: u32, child_x: u32, child_order:
     code
 }
 fn frame(code: &[u8]) -> Vec<u8> {
-    cmvs_core::scene_render::render(&build_scene(code), 2, 1)
+    cmvs_core::render::scene_render::render(&build_scene(code), 2, 1)
         .unwrap()
         .pixels()
         .to_vec()
@@ -1231,7 +1229,7 @@ fn inheriting_children_multiply_the_parent_opacity() {
         }
     }
     scene_command(&mut code, 0x2048, &[1, 5, u32::MAX]);
-    assert!(cmvs_core::scene_render::render(&build_scene(&code), 2, 1).is_err());
+    assert!(cmvs_core::render::scene_render::render(&build_scene(&code), 2, 1).is_err());
 }
 
 #[test]
@@ -1254,7 +1252,7 @@ fn shown_children_without_draw_state_fail_explicitly() {
     let mut code = loads(1, &[0]);
     scene_command(&mut code, 0x2040, &[1]);
     scene_command(&mut code, 0x2022, &[1, 5]);
-    assert!(cmvs_core::scene_render::render(&build_scene(&code), 2, 1).is_err());
+    assert!(cmvs_core::render::scene_render::render(&build_scene(&code), 2, 1).is_err());
 }
 
 /// 0x215d builds window 7 (text object 10), then 0x2170 loads the text offset `name`.
@@ -1279,9 +1277,9 @@ fn window_image_load_replaces_the_window_object_image_without_a_result() {
     files.0.insert(b"win.pb3".to_vec(), opaque());
     let mut messages = MessageHost::default();
     run_to_system(&mut vm);
-    assert!(messages.try_handle(&mut vm).unwrap());
+    assert!(messages.shared_message(&mut vm).unwrap());
     run_to_system(&mut vm);
-    assert!(!messages.try_handle(&mut vm).unwrap());
+    assert!(!messages.shared_message(&mut vm).unwrap());
     assert!(messages.shared_window_image(&mut vm, &mut files).unwrap());
     assert_eq!(vm.stack().len_bytes(), 0);
     assert_eq!(vm.state().system_integer(0), Some(9));
@@ -1308,7 +1306,7 @@ fn window_image_failures_keep_the_command_pending() {
         }
         let mut messages = MessageHost::default();
         run_to_system(&mut vm);
-        messages.try_handle(&mut vm).unwrap();
+        messages.shared_message(&mut vm).unwrap();
         run_to_system(&mut vm);
         let bytes = vm.stack().len_bytes();
         assert!(
@@ -1338,29 +1336,29 @@ fn image_query_reports_size_and_depth_or_only_absence() {
     let mut scene = SceneHost::default();
     for _ in 0..2 {
         run_to_system(&mut vm);
-        if !scene.try_handle(&mut vm).unwrap() {
+        if !scene.shared_state(&mut vm).unwrap() {
             assert!(scene.shared_image(&mut vm, &mut files).unwrap());
         }
     }
     run_to_system(&mut vm);
-    assert!(scene.try_handle(&mut vm).unwrap());
+    assert!(scene.shared_state(&mut vm).unwrap());
     for slot in 1..4 {
         vm.state_mut().set_system_integer(slot, 77).unwrap();
     }
     run_to_system(&mut vm);
-    assert!(scene.try_handle(&mut vm).unwrap());
+    assert!(scene.shared_state(&mut vm).unwrap());
     let results: Vec<_> = (0..4).map(|i| vm.state().system_integer(i)).collect();
     assert_eq!(results, [Some(1), Some(2), Some(1), Some(0)]);
     for slot in 1..4 {
         vm.state_mut().set_system_integer(slot, 77).unwrap();
     }
     run_to_system(&mut vm);
-    assert!(scene.try_handle(&mut vm).unwrap());
+    assert!(scene.shared_state(&mut vm).unwrap());
     let results: Vec<_> = (0..4).map(|i| vm.state().system_integer(i)).collect();
     assert_eq!(results, [Some(0), Some(77), Some(77), Some(77)]);
     run_to_system(&mut vm);
     let bytes = vm.stack().len_bytes();
-    assert!(scene.try_handle(&mut vm).is_err());
+    assert!(scene.shared_state(&mut vm).is_err());
     assert_eq!(vm.pending_system().map(|p| p.1), Some(0x33));
     assert_eq!(vm.stack().len_bytes(), bytes);
 }
@@ -1392,7 +1390,7 @@ fn next_read_cache_hint_keeps_stack_results_and_active_images_and_only_affects_o
     let mut vm = Machine::new(&program).unwrap();
     let mut scene = SceneHost::default();
     assert_eq!(run_to_system(&mut vm), 0x20);
-    scene.try_handle(&mut vm).unwrap();
+    scene.shared_state(&mut vm).unwrap();
     assert_eq!(run_to_system(&mut vm), 0x30);
     scene
         .shared_image(&mut vm, &mut archives.with_paths(&paths))
@@ -1480,7 +1478,7 @@ fn next_read_cache_hint_is_consumed_by_missing_files_and_errors() {
 fn unsupported_cache_source_keeps_command_pending_without_consuming_parameters() {
     struct Unsupported;
     impl ImageSource for Unsupported {
-        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
             panic!("0x203f does not read a file");
         }
     }
@@ -1491,7 +1489,7 @@ fn unsupported_cache_source_keeps_command_pending_without_consuming_parameters()
     let mut vm = Machine::new(&program).unwrap();
     let mut scene = SceneHost::default();
     assert_eq!(run_to_system(&mut vm), 0x3f);
-    assert!(!scene.try_handle(&mut vm).unwrap());
+    assert!(!scene.shared_state(&mut vm).unwrap());
     assert!(scene.shared_image(&mut vm, &mut Unsupported).is_err());
     assert_eq!(vm.pending_system(), Some((8, 0x3f)));
     assert_eq!(vm.pc(), 8);
@@ -1524,7 +1522,7 @@ fn replacement_query_and_cancel_keep_new_image_motion_and_other_results() {
     let mut expected = scene.object(20).unwrap().clone();
     vm.state_mut().set_system_integer(1, 555).unwrap();
     assert_eq!(run_to_system(&mut vm), 0x2c6);
-    assert!(scene.try_handle(&mut vm).unwrap());
+    assert!(scene.shared_state(&mut vm).unwrap());
     assert_eq!(vm.state().system_integer(0), Some(1));
     assert_eq!(
         scene.object(20),
@@ -1532,9 +1530,9 @@ fn replacement_query_and_cancel_keep_new_image_motion_and_other_results() {
         "query does not advance time"
     );
     assert_eq!(run_to_system(&mut vm), 0x2c5);
-    scene.try_handle(&mut vm).unwrap();
+    scene.shared_state(&mut vm).unwrap();
     expected.change = None;
-    expected.draw.as_mut().unwrap().words[21] = 256;
+    expected.draw.as_mut().unwrap().set_fade_factor(256);
     assert_eq!(scene.object(20), Some(&expected));
     assert_eq!(
         vm.state().system_integer(0),
@@ -1542,10 +1540,10 @@ fn replacement_query_and_cancel_keep_new_image_motion_and_other_results() {
         "cancel preserves result 0"
     );
     assert_eq!(run_to_system(&mut vm), 0x2c6);
-    scene.try_handle(&mut vm).unwrap();
+    scene.shared_state(&mut vm).unwrap();
     assert_eq!(vm.state().system_integer(0), Some(0));
     assert_eq!(run_to_system(&mut vm), 0x2c5);
-    scene.try_handle(&mut vm).unwrap();
+    scene.shared_state(&mut vm).unwrap();
     assert_eq!(scene.object(20), Some(&expected));
     assert_eq!(vm.state().system_integer(1), Some(555));
     assert_eq!((vm.pc(), vm.stack().len_bytes()), (code.len(), 0));
@@ -1647,7 +1645,7 @@ fn replacement_wait_skip_flags_preserve_input_while_released_action_zero_is_cons
         assert!(object.change.is_none());
         assert_eq!(object.image.as_ref().unwrap().name, b"b.pb3");
         assert!(object.draw.as_ref().unwrap().world_motion.is_some());
-        assert_eq!(object.draw.as_ref().unwrap().words[21], 256);
+        assert_eq!(object.draw.as_ref().unwrap().fade_factor(), 256);
     }
 }
 
@@ -1687,7 +1685,7 @@ fn replacement_control_errors_preserve_scene_parameters_results_and_input() {
                         .is_err()
                 );
             } else {
-                assert!(scene.try_handle(&mut vm).is_err());
+                assert!(scene.shared_state(&mut vm).is_err());
             }
             assert_eq!(scene.object(20), Some(&expected));
             assert_eq!(input, expected_input);
@@ -1716,9 +1714,9 @@ fn replacement_control_without_draw_allows_query_and_inactive_wait_but_rejects_c
     let mut vm = Machine::new(&program).unwrap();
     let mut scene = SceneHost::default();
     run_to_system(&mut vm);
-    scene.try_handle(&mut vm).unwrap();
+    scene.shared_state(&mut vm).unwrap();
     run_to_system(&mut vm);
-    scene.try_handle(&mut vm).unwrap();
+    scene.shared_state(&mut vm).unwrap();
     assert_eq!(vm.state().system_integer(0), Some(0));
     run_to_system(&mut vm);
     let mut input = ActionInput::default();
@@ -1739,23 +1737,23 @@ fn replacement_control_without_draw_allows_query_and_inactive_wait_but_rejects_c
     assert!(input.released(0));
     assert_eq!(vm.state().system_integer(0), Some(0));
     run_to_system(&mut vm);
-    assert!(scene.try_handle(&mut vm).is_err());
+    assert!(scene.shared_state(&mut vm).is_err());
     assert!(scene.object(20).unwrap().draw.is_none());
     assert_eq!(vm.stack().len_bytes(), 4);
 }
 
-fn sequence_scene(vm: &mut Machine<'_>, scene: &mut SceneHost, files: &mut Files) {
+fn sequence_scene(vm: &mut Machine, scene: &mut SceneHost, files: &mut Files) {
     assert_eq!(run_to_system(vm), 0x20);
-    scene.try_handle(vm).unwrap();
+    scene.shared_state(vm).unwrap();
     assert_eq!(run_to_system(vm), 0x30);
     scene.shared_image(vm, files).unwrap();
     assert_eq!(run_to_system(vm), 0x40);
-    scene.try_handle(vm).unwrap();
+    scene.shared_state(vm).unwrap();
 }
 
 #[test]
 fn sequence_image_load_is_deferred_until_wait_expires_and_replacement_advances_in_same_frame() {
-    use cmvs_core::sequence::SequenceHost;
+    use cmvs_core::runtime::SequenceHost;
     let mut code = loads(20, &[0]);
     scene_command(&mut code, 0x2040, &[20]);
     scene_command(&mut code, 0x2286, &[30]);
@@ -1772,7 +1770,7 @@ fn sequence_image_load_is_deferred_until_wait_expires_and_replacement_advances_i
     vm.state_mut().set_string(3, b"b.pb3").unwrap();
     for _ in 0..3 {
         let command = run_to_system(&mut vm);
-        sequence.try_handle(&mut vm).unwrap();
+        sequence.shared_sequence(&mut vm).unwrap();
         if command == 0x288 {
             vm.state_mut().set_string(3, b"a.pb3").unwrap();
         }
@@ -1810,7 +1808,7 @@ fn sequence_image_load_is_deferred_until_wait_expires_and_replacement_advances_i
 
 #[test]
 fn sequence_finish_uses_zero_duration_and_failed_finish_retains_pending_command() {
-    use cmvs_core::sequence::{SequenceHeader, SequenceHost};
+    use cmvs_core::{runtime::SequenceHeader, runtime::SequenceHost};
     for active in [false, true] {
         let mut code = loads(20, &[0]);
         scene_command(&mut code, 0x2040, &[20]);
@@ -1829,7 +1827,7 @@ fn sequence_finish_uses_zero_duration_and_failed_finish_retains_pending_command(
         let mut sequence = SequenceHost::default();
         for _ in 0..(2 + usize::from(active)) {
             run_to_system(&mut vm);
-            sequence.try_handle(&mut vm).unwrap();
+            sequence.shared_sequence(&mut vm).unwrap();
         }
         let entries = sequence.entries().clone();
         let asset = files.0.remove(b"b.pb3".as_slice()).unwrap();
@@ -1837,7 +1835,7 @@ fn sequence_finish_uses_zero_duration_and_failed_finish_retains_pending_command(
         if active {
             assert!(
                 sequence
-                    .try_handle_with_images(&mut vm, &mut scene, &mut files)
+                    .shared_sequence_images(&mut vm, &mut scene, &mut files)
                     .is_err()
             );
             assert_eq!(sequence.header().index, 1);
@@ -1846,7 +1844,7 @@ fn sequence_finish_uses_zero_duration_and_failed_finish_retains_pending_command(
         }
         files.0.insert(b"b.pb3".to_vec(), asset);
         sequence
-            .try_handle_with_images(&mut vm, &mut scene, &mut files)
+            .shared_sequence_images(&mut vm, &mut scene, &mut files)
             .unwrap();
         assert_eq!(sequence.header(), SequenceHeader::default());
         assert_eq!(sequence.entries(), &entries);
@@ -1861,10 +1859,10 @@ fn sequence_finish_uses_zero_duration_and_failed_finish_retains_pending_command(
 
 #[test]
 fn sequence_missing_slot_skips_resource_io_but_invalid_slot_is_an_explicit_execution_error() {
-    use cmvs_core::sequence::SequenceHost;
+    use cmvs_core::runtime::SequenceHost;
     struct NoReads;
     impl ImageSource for NoReads {
-        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
             panic!("missing slot must not load");
         }
     }
@@ -1877,7 +1875,7 @@ fn sequence_missing_slot_skips_resource_io_but_invalid_slot_is_an_explicit_execu
         let mut sequence = SequenceHost::default();
         for _ in 0..2 {
             run_to_system(&mut vm);
-            sequence.try_handle(&mut vm).unwrap();
+            sequence.shared_sequence(&mut vm).unwrap();
         }
         let result =
             sequence.advance_frame_with_images(16, &mut SceneHost::default(), &mut NoReads);
@@ -1888,7 +1886,7 @@ fn sequence_missing_slot_skips_resource_io_but_invalid_slot_is_an_explicit_execu
 
 #[test]
 fn sequence_image_append_checks_arguments_names_and_full_capacity_before_mutating() {
-    use cmvs_core::sequence::{SequenceEntry, SequenceHost};
+    use cmvs_core::{runtime::SequenceEntry, runtime::SequenceHost};
     let mut code = vec![];
     for i in 0..17 {
         scene_command(&mut code, 0x2288, &[i, 0, i + 100]);
@@ -1901,7 +1899,7 @@ fn sequence_image_append_checks_arguments_names_and_full_capacity_before_mutatin
     vm.state_mut().set_system_integer(0, 77).unwrap();
     for i in 0..17 {
         run_to_system(&mut vm);
-        sequence.try_handle(&mut vm).unwrap();
+        sequence.shared_sequence(&mut vm).unwrap();
         assert_eq!(sequence.header().count, (i + 1).min(16));
         assert_eq!(vm.stack().len_bytes(), 0);
         assert_eq!(vm.state().system_integer(0), Some(77));
@@ -1911,7 +1909,7 @@ fn sequence_image_append_checks_arguments_names_and_full_capacity_before_mutatin
     );
     let entries = sequence.entries().clone();
     run_to_system(&mut vm);
-    assert!(sequence.try_handle(&mut vm).is_err());
+    assert!(sequence.shared_sequence(&mut vm).is_err());
     assert_eq!(sequence.entries(), &entries);
     assert_eq!(vm.stack().len_bytes(), 12);
     for length in [63, 64] {
@@ -1923,7 +1921,7 @@ fn sequence_image_append_checks_arguments_names_and_full_capacity_before_mutatin
         let mut vm = Machine::new(&program).unwrap();
         let mut sequence = SequenceHost::default();
         run_to_system(&mut vm);
-        assert_eq!(sequence.try_handle(&mut vm).is_ok(), length == 63);
+        assert_eq!(sequence.shared_sequence(&mut vm).is_ok(), length == 63);
         assert_eq!(sequence.header().count, u32::from(length == 63));
         assert_eq!(vm.stack().len_bytes(), if length == 63 { 0 } else { 12 });
     }
@@ -1931,7 +1929,7 @@ fn sequence_image_append_checks_arguments_names_and_full_capacity_before_mutatin
 
 #[test]
 fn image_sequence_without_resource_context_reports_error_and_keeps_entry() {
-    use cmvs_core::sequence::SequenceHost;
+    use cmvs_core::runtime::SequenceHost;
     let mut code = vec![];
     scene_command(&mut code, 0x2288, &[0, 0, 10]);
     scene_command(&mut code, 0x2282, &[]);
@@ -1941,12 +1939,12 @@ fn image_sequence_without_resource_context_reports_error_and_keeps_entry() {
     let mut sequence = SequenceHost::default();
     for _ in 0..2 {
         run_to_system(&mut vm);
-        sequence.try_handle(&mut vm).unwrap();
+        sequence.shared_sequence(&mut vm).unwrap();
     }
     assert!(sequence.advance_frame(16).is_err());
     assert_eq!(sequence.header().index, 0);
     run_to_system(&mut vm);
-    assert!(sequence.try_handle(&mut vm).is_err());
+    assert!(sequence.shared_sequence(&mut vm).is_err());
     assert_eq!(sequence.header().index, 0);
     assert_eq!(vm.pending_system(), Some((code.len() - 2, 0x284)));
 }
@@ -1968,12 +1966,12 @@ fn releasing_window_image_keeps_children_draw_text_visibility_and_stack_below_th
     let mut messages = MessageHost::default();
     let mut files = Files(BTreeMap::from([(b"win.pb3".to_vec(), opaque())]));
     run_to_system(&mut vm);
-    messages.try_handle(&mut vm).unwrap();
+    messages.shared_message(&mut vm).unwrap();
     run_to_system(&mut vm);
     messages.shared_window_image(&mut vm, &mut files).unwrap();
     for _ in 0..5 {
         run_to_system(&mut vm);
-        messages.try_handle(&mut vm).unwrap();
+        messages.shared_message(&mut vm).unwrap();
     }
     let mut expected = messages.window(7).unwrap().clone();
     assert!(expected.object.image.take().is_some());
@@ -1982,7 +1980,7 @@ fn releasing_window_image_keeps_children_draw_text_visibility_and_stack_below_th
     for _ in 0..2 {
         run_to_system(&mut vm);
         let pc = vm.pc();
-        messages.try_handle(&mut vm).unwrap();
+        messages.shared_message(&mut vm).unwrap();
         assert_eq!(vm.pc(), pc + 2);
         assert_eq!(messages.window(7), Some(&expected));
         assert_eq!(messages.text(10), Some(&text));
@@ -2016,7 +2014,7 @@ fn replacement_moves_position_motion_without_cloning_it_into_retained_objects() 
         if op == 0x30 {
             scene.shared_image(&mut vm, &mut files).unwrap();
         } else {
-            scene.try_handle(&mut vm).unwrap();
+            scene.shared_state(&mut vm).unwrap();
         }
     }
     let before = scene
@@ -2106,7 +2104,7 @@ fn replacement_moves_scale_motion_without_cloning_it_into_retained_objects() {
         if op == 0x30 {
             scene.shared_image(&mut vm, &mut files).unwrap();
         } else {
-            scene.try_handle(&mut vm).unwrap();
+            scene.shared_state(&mut vm).unwrap();
         }
     }
     let before = scene
@@ -2165,7 +2163,7 @@ fn auxiliary_second_texture_replaces_only_mask_and_survives_content_clear() {
     let mut messages = MessageHost::default();
     let mut files = Files::default();
     run_to_system(&mut vm);
-    messages.try_handle(&mut vm).unwrap();
+    messages.shared_message(&mut vm).unwrap();
     let before = messages.auxiliary_text(7).unwrap().clone();
     // 0x14003b170 selects second-texture mode 4 on the atlas draw state.
     let mut object = before.object.clone();
@@ -2190,7 +2188,7 @@ fn auxiliary_second_texture_replaces_only_mask_and_survives_content_clear() {
     }
     let mask = messages.auxiliary_text(7).unwrap().secondary_image.clone();
     run_to_system(&mut vm);
-    messages.try_handle(&mut vm).unwrap();
+    messages.shared_message(&mut vm).unwrap();
     assert_eq!(messages.auxiliary_text(7).unwrap().secondary_image, mask);
 }
 
@@ -2208,7 +2206,7 @@ fn auxiliary_second_texture_errors_preserve_pending_command_and_previous_texture
             let mut files = Files::default();
             files.0.insert(b"mask.pb3".to_vec(), opaque());
             run_to_system(&mut vm);
-            messages.try_handle(&mut vm).unwrap();
+            messages.shared_message(&mut vm).unwrap();
             run_to_system(&mut vm);
             messages.shared_window_image(&mut vm, &mut files).unwrap();
             let before = messages.auxiliary_text(7).unwrap().clone();
@@ -2257,7 +2255,7 @@ fn second_texture_load_and_screen_mapping_use_green_as_alpha() {
         if matches!(cmd, 0x30 | 0x35) {
             assert!(scene.shared_image(&mut vm, &mut files).unwrap());
         } else {
-            assert!(scene.try_handle(&mut vm).unwrap());
+            assert!(scene.shared_state(&mut vm).unwrap());
         }
     }
     assert_eq!(
@@ -2280,15 +2278,15 @@ fn second_texture_load_and_screen_mapping_use_green_as_alpha() {
             .name,
         b"m.pb3"
     );
-    let frame = cmvs_core::scene_render::render(&scene, 2, 1).unwrap();
+    let frame = cmvs_core::render::scene_render::render(&scene, 2, 1).unwrap();
     assert_eq!(frame.pixels(), &[0, 0, 0, 255, 128, 128, 128, 255]);
     assert_eq!(vm.stack().len_bytes(), 0);
     assert_eq!(vm.state().system_integer(0), Some(1));
     for _ in 0..2 {
         run_to_system(&mut vm);
-        assert!(scene.try_handle(&mut vm).unwrap());
+        assert!(scene.shared_state(&mut vm).unwrap());
     }
-    let frame = cmvs_core::scene_render::render(&scene, 2, 1).unwrap();
+    let frame = cmvs_core::render::scene_render::render(&scene, 2, 1).unwrap();
     assert_eq!(frame.pixels(), &[128, 96, 64, 255, 64, 48, 32, 255]);
 }
 
@@ -2309,7 +2307,7 @@ fn second_texture_bad_flags_and_invalid_slots_preserve_main_image_and_pending_co
         let mut files = Files::default();
         files.0.insert(b"a.pb3".to_vec(), opaque());
         run_to_system(&mut vm);
-        scene.try_handle(&mut vm).unwrap();
+        scene.shared_state(&mut vm).unwrap();
         run_to_system(&mut vm);
         scene.shared_image(&mut vm, &mut files).unwrap();
         let before = scene.object(11).unwrap().clone();
@@ -2350,10 +2348,10 @@ fn child_inherits_parent_second_texture_and_screen_mode() {
         if matches!(cmd, 0x30 | 0x35) {
             scene.shared_image(&mut vm, &mut files).unwrap();
         } else {
-            scene.try_handle(&mut vm).unwrap();
+            scene.shared_state(&mut vm).unwrap();
         }
     }
-    let frame = cmvs_core::scene_render::render(&scene, 2, 1).unwrap();
+    let frame = cmvs_core::render::scene_render::render(&scene, 2, 1).unwrap();
     assert_eq!(frame.pixels(), &[0, 0, 0, 255, 128, 128, 128, 255]);
 }
 
@@ -2387,19 +2385,20 @@ fn pixel_query_returns_bgra_words_zero_outside_or_without_image_and_reads_childr
     while vm.pc() < setup {
         run_to_system(&mut vm);
         assert!(
-            scene.try_handle(&mut vm).unwrap() || scene.shared_image(&mut vm, &mut files).unwrap()
+            scene.shared_state(&mut vm).unwrap()
+                || scene.shared_image(&mut vm, &mut files).unwrap()
         );
     }
     for (_, expected) in queries {
         vm.state_mut().set_system_integer(0, 77).unwrap();
         run_to_system(&mut vm);
-        assert!(scene.try_handle(&mut vm).unwrap());
+        assert!(scene.shared_state(&mut vm).unwrap());
         assert_eq!(vm.state().system_integer(0), Some(expected));
         assert_eq!(vm.stack().len_bytes(), 0);
     }
     run_to_system(&mut vm);
     let before = scene.object(4).cloned();
-    assert!(scene.try_handle(&mut vm).is_err());
+    assert!(scene.shared_state(&mut vm).is_err());
     assert_eq!(vm.pending_system().map(|p| p.1), Some(0x34));
     assert_eq!(vm.stack().len_bytes(), 16);
     assert_eq!(vm.state().system_integer(0), Some(0));
@@ -2422,7 +2421,7 @@ fn pixel_query_keeps_alpha_and_rejects_filtered_images() {
     );
     for _ in 0..3 {
         run_to_system(&mut vm);
-        if !scene.try_handle(&mut vm).unwrap() {
+        if !scene.shared_state(&mut vm).unwrap() {
             assert!(scene.shared_image(&mut vm, &mut files).unwrap());
         }
     }
@@ -2440,7 +2439,7 @@ fn pixel_query_keeps_alpha_and_rejects_filtered_images() {
             .is_some()
     );
     run_to_system(&mut vm);
-    assert!(scene.try_handle(&mut vm).is_err());
+    assert!(scene.shared_state(&mut vm).is_err());
     assert_eq!(vm.pending_system().map(|p| p.1), Some(0x34));
     assert_eq!(vm.stack().len_bytes(), 16);
 }

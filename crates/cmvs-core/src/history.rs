@@ -4,7 +4,7 @@
 //! operations. It does not display a history window or rasterize text.
 
 // Engine +4320: append 0x2136, clear 0x212f, and queries 0x2130..0x2135.
-use crate::{bytecode::DecodeError, dispatch::Call, evaluate::error, machine::Machine};
+use crate::{bytecode::DecodeError, dispatch::Call, evaluate::error};
 use std::collections::VecDeque;
 
 /// 0x14005e7e0 constructs a list with capacity 128.
@@ -31,26 +31,7 @@ impl HistoryHost {
         &self.entries
     }
 
-    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        use crate::cvns::cmd;
-        let Some((pc, command)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        if !matches!(
-            command,
-            cmd::HISTORY_APPEND_2
-                | cmd::HISTORY_QUERY_2
-                | cmd::HISTORY_QUERY
-                | cmd::HISTORY_APPEND
-                | 0x12f..=0x136
-        ) {
-            return Ok(false);
-        }
-        self.handle(&mut Call::new(vm, pc, command))?;
-        Ok(true)
-    }
-
-    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn handle(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         use crate::cvns::cmd;
         let pc = call.pc;
         let command = call.command;
@@ -128,7 +109,7 @@ impl HistoryHost {
     /// for a missing entry; 0x2135 (0x14005e9e0) sets system result 0 to word SP-8 % 6
     /// (unsigned), or -1 for a missing entry. All return 0x4008. Destinations other than
     /// the string bank are not modeled.
-    fn query(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn query(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         use crate::cvns::cmd;
         let pc = call.pc;
         let command = call.command;
@@ -254,7 +235,7 @@ impl HistoryHost {
 
 #[cfg(test)]
 mod tests {
-    use super::HistoryHost;
+    use super::{Call, HistoryHost};
     use crate::{
         machine::{Machine, Step},
         ps3::Script,
@@ -336,8 +317,10 @@ mod tests {
         loop {
             match vm.step().unwrap() {
                 Step::Continue => {}
-                Step::System { .. } => {
-                    assert!(history.try_handle(&mut vm).unwrap());
+                Step::System { pc, command } => {
+                    history
+                        .handle(&mut Call::new(&mut vm, pc, command))
+                        .unwrap();
                 }
                 Step::Yield => break,
             }
@@ -370,8 +353,12 @@ mod tests {
         )]);
         let mut vm_err = Machine::new(&overflow_speaker).unwrap();
         while !matches!(vm_err.step().unwrap(), Step::System { .. }) {}
+        let (pc, command) = vm_err.pending_system().unwrap();
         assert_eq!(
-            history.try_handle(&mut vm_err).unwrap_err().reason,
+            history
+                .handle(&mut Call::new(&mut vm_err, pc, command))
+                .unwrap_err()
+                .reason,
             "history string overflows its 32-byte field"
         );
     }

@@ -7,7 +7,7 @@
 use crate::filesystem::HostFs;
 use crate::{
     FormatError, MAX_PAYLOAD, TextEncoding, bytecode::DecodeError, cursor::CursorBitmap,
-    dispatch::Call, evaluate::error, machine::Machine,
+    dispatch::Call, evaluate::error,
 };
 use std::{
     error::Error,
@@ -21,7 +21,7 @@ pub const MAX_PLATFORM_ASSET: usize = 4 * 1024 * 1024;
 /// Read platform assets such as cursors and window icons by game-relative name.
 pub trait PlatformAssets {
     /// Return the asset bytes, or an error when missing, invalid, or inaccessible.
-    fn read(&mut self, name: &[u8]) -> Result<Vec<u8>, Box<dyn Error>>;
+    fn read(&mut self, name: &[u8]) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>>;
 }
 /// Platform assets confined to an existing canonical game directory.
 pub struct DirectoryAssets {
@@ -30,7 +30,10 @@ pub struct DirectoryAssets {
 }
 impl DirectoryAssets {
     /// Resolve `root` with the given [`HostFs`] and require it to be a directory.
-    pub fn with_fs(root: impl AsRef<Path>, fs: Arc<dyn HostFs>) -> Result<Self, Box<dyn Error>> {
+    pub fn with_fs(
+        root: impl AsRef<Path>,
+        fs: Arc<dyn HostFs>,
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let root = fs.canonicalize(root.as_ref())?;
         if !fs.is_dir(&root) {
             return Err("platform asset root is not a directory".into());
@@ -40,139 +43,17 @@ impl DirectoryAssets {
 
     /// Resolve `root` and require it to be a directory.
     #[cfg(feature = "std-fs")]
-    pub fn new(root: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
+    pub fn new(root: impl AsRef<Path>) -> Result<Self, Box<dyn Error + Send + Sync>> {
         Self::with_fs(root, crate::filesystem::default_fs())
     }
 }
-/// Failure resolving a bounded game-relative path against a host root directory.
-#[derive(Debug)]
-pub enum PathError {
-    /// The relative path failed lexical bounds checks or resolved outside the root.
-    Format(FormatError),
-    /// Filesystem canonicalization failed (for example, `NotFound`).
-    Io(std::io::Error),
-}
-
-impl PathError {
-    /// Whether path resolution failed because the target path does not exist.
-    pub fn is_not_found(&self) -> bool {
-        matches!(self, Self::Io(error) if error.kind() == std::io::ErrorKind::NotFound)
-    }
-}
-
-impl std::fmt::Display for PathError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Format(error) => error.fmt(f),
-            Self::Io(error) => error.fmt(f),
-        }
-    }
-}
-
-impl Error for PathError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Format(error) => Some(error),
-            Self::Io(error) => Some(error),
-        }
-    }
-}
-
-impl From<FormatError> for PathError {
-    fn from(error: FormatError) -> Self {
-        Self::Format(error)
-    }
-}
-
-impl From<std::io::Error> for PathError {
-    fn from(error: std::io::Error) -> Self {
-        Self::Io(error)
-    }
-}
-
-/// A bounded ASCII game-relative path, split on `/` or `\`, that must resolve inside the
-/// canonical `root`. Repeated interior separators name the same directory. If exact-case
-/// resolution fails with `NotFound` and `fs` provides directory listings, components match
-/// case-insensitively (matching Windows game expectations on case-sensitive hosts). A missing
-/// file surfaces as `PathError::Io` with `ErrorKind::NotFound`.
-pub fn resolve_under_with_fs(
-    fs: &dyn HostFs,
-    root: &Path,
-    name: &[u8],
-) -> Result<PathBuf, PathError> {
-    if name.is_empty()
-        || name.len() >= 2048
-        || !name.is_ascii()
-        || name.contains(&0)
-        || name.contains(&b':')
-    {
-        return Err(FormatError("game path must be a bounded ASCII relative path").into());
-    }
-    let separator = |b| matches!(b, b'/' | b'\\');
-    if separator(name[0]) || separator(name[name.len() - 1]) {
-        return Err(FormatError("invalid game path component").into());
-    }
-    let mut parts = Vec::new();
-    let mut direct = root.to_path_buf();
-    for part in name
-        .split(|&b| separator(b))
-        .filter(|part| !part.is_empty())
-    {
-        if part == b"." || part == b".." {
-            return Err(FormatError("invalid game path component").into());
-        }
-        let part = std::str::from_utf8(part)
-            .map_err(|_| FormatError("game path must be a bounded ASCII relative path"))?;
-        direct.push(part);
-        parts.push(part);
-    }
-    let resolved = match fs.canonicalize(&direct) {
-        Ok(path) => path,
-        Err(not_found) if not_found.kind() == std::io::ErrorKind::NotFound => {
-            let mut cur = root.to_path_buf();
-            for &part in &parts {
-                let exact = cur.join(part);
-                if fs.try_exists(&exact).unwrap_or(false) {
-                    cur = exact;
-                    continue;
-                }
-                let canon_cur = fs.canonicalize(&cur)?;
-                if !canon_cur.starts_with(root) {
-                    return Err(FormatError("game path resolves outside root").into());
-                }
-                let Some(mut names) = fs.read_dir_names(&canon_cur)? else {
-                    return Err(not_found.into());
-                };
-                names.sort();
-                let Some(matched) = names
-                    .into_iter()
-                    .find(|entry| entry.to_str().is_some_and(|s| s.eq_ignore_ascii_case(part)))
-                else {
-                    return Err(not_found.into());
-                };
-                cur = canon_cur.join(matched);
-            }
-            fs.canonicalize(&cur)?
-        }
-        Err(err) => return Err(err.into()),
-    };
-    if !resolved.starts_with(root) {
-        return Err(FormatError("game path resolves outside root").into());
-    }
-    Ok(resolved)
-}
-
-/// [`resolve_under_with_fs`] using [`StdFs`](crate::filesystem::StdFs).
-#[cfg(feature = "std-fs")]
-pub fn resolve_under(root: &Path, name: &[u8]) -> Result<PathBuf, PathError> {
-    resolve_under_with_fs(&crate::filesystem::StdFs, root, name)
-}
-
 impl PlatformAssets for DirectoryAssets {
-    fn read(&mut self, name: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn read(&mut self, name: &[u8]) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
         let file = self
             .fs
-            .open_read(&resolve_under_with_fs(&*self.fs, &self.root, name)?)?;
+            .open_read(&crate::filesystem::resolve_under_with_fs(
+                &*self.fs, &self.root, name,
+            )?)?;
         let mut bytes = Vec::new();
         file.take(MAX_PLATFORM_ASSET as u64 + 1)
             .read_to_end(&mut bytes)?;
@@ -272,12 +153,15 @@ pub enum DeviceFrameResult {
 pub trait PlatformBackend {
     /// Select a fullscreen target; return whether the selected display changed.
     /// Mode 5 must return true even when the current target is unchanged.
-    fn select_fullscreen_monitor(&mut self, _mode: u32) -> Result<bool, Box<dyn Error>> {
+    fn select_fullscreen_monitor(
+        &mut self,
+        _mode: u32,
+    ) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Err("platform backend does not implement fullscreen monitor selection".into())
     }
 
     /// Number of available host displays; recording backends expose one virtual display.
-    fn display_count(&self) -> Result<u32, Box<dyn Error>> {
+    fn display_count(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
         Err("platform backend does not implement display count queries".into())
     }
     fn logical_size(&self) -> [u32; 2] {
@@ -286,25 +170,27 @@ pub trait PlatformBackend {
     /// Read the latest completed engine frame in device/script pixels, including
     /// fonts and movies. Do not redraw current VM state or reuse a held 0x2304 capture.
     /// Absence of a completed frame is an error, not a black/empty fabricated image.
-    fn read_device_frame(&mut self) -> Result<crate::raster::RgbaImage, Box<dyn Error>> {
+    fn read_device_frame(
+        &mut self,
+    ) -> Result<crate::raster::RgbaImage, Box<dyn Error + Send + Sync>> {
         Err("platform backend does not implement device frame readback".into())
     }
     /// Poll for the latest completed engine frame, allowing asynchronous GPU backends to
     /// report [`DeviceFrameResult::Pending`] while a readback is in flight.
     /// Synchronous hosts only need to implement [`Self::read_device_frame`].
-    fn poll_device_frame(&mut self) -> Result<DeviceFrameResult, Box<dyn Error>> {
+    fn poll_device_frame(&mut self) -> Result<DeviceFrameResult, Box<dyn Error + Send + Sync>> {
         self.read_device_frame().map(DeviceFrameResult::Ready)
     }
-    fn window_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
+    fn window_size(&self) -> Result<[u32; 2], Box<dyn Error + Send + Sync>> {
         Err("platform backend does not implement window size queries".into())
     }
-    fn windowed_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
+    fn windowed_size(&self) -> Result<[u32; 2], Box<dyn Error + Send + Sync>> {
         if self.fullscreen()? {
             return Err("platform backend does not track the future windowed size".into());
         }
         self.window_size()
     }
-    fn reset_window_size(&mut self) -> Result<bool, Box<dyn Error>> {
+    fn reset_window_size(&mut self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         if !self.resizable()? {
             return Ok(false);
         }
@@ -316,42 +202,48 @@ pub trait PlatformBackend {
         Ok(!fullscreen)
     }
     /// 0x2163 queries the device's current display mode, not the startup preference.
-    fn fullscreen(&self) -> Result<bool, Box<dyn Error>> {
+    fn fullscreen(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Err("platform backend does not implement display mode queries".into())
     }
     /// Native pixel shader capability; software backends report zero. This does
     /// not grant support for individual VM effects in the core renderer.
-    fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error>> {
+    fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error + Send + Sync>> {
         Err("platform backend does not implement pixel shader capability queries".into())
     }
-    fn render_mode(&self) -> Result<u32, Box<dyn Error>> {
+    fn render_mode(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
         Err("platform backend does not implement render mode queries".into())
     }
-    fn resizable(&self) -> Result<bool, Box<dyn Error>> {
+    fn resizable(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Err("platform backend does not implement window resizing queries".into())
     }
     /// StretchRect-equivalent point or linear enlargement in the selected backend.
-    fn stretch_filter_supported(&self) -> Result<bool, Box<dyn Error>> {
+    fn stretch_filter_supported(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Err("platform backend does not implement stretch filter queries".into())
     }
     /// D3DCAPS9.StretchRectFilterCaps MAGFLINEAR alone; render mode 1 requires it.
-    fn linear_stretch_supported(&self) -> Result<bool, Box<dyn Error>> {
+    fn linear_stretch_supported(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Err("platform backend does not implement linear stretch queries".into())
     }
     fn poll_text_dialog(
         &mut self,
         _request: &TextDialogRequest,
-    ) -> Result<TextDialogResult, Box<dyn Error>> {
+    ) -> Result<TextDialogResult, Box<dyn Error + Send + Sync>> {
         Err("platform backend does not implement the text dialog".into())
     }
     /// 0x213d's modal font dialog, seeded with the global face in the game encoding.
     /// Ok(None) is a cancelled dialog; Ok(Some) the chosen face in the game encoding.
-    fn choose_font(&mut self, _current: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    fn choose_font(
+        &mut self,
+        _current: &[u8],
+    ) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
         Err("platform backend does not implement the font dialog".into())
     }
     /// Mobile dialogs complete asynchronously while the host processes lifecycle
     /// events. Synchronous desktop dialogs keep the existing choose_font path.
-    fn poll_font_dialog(&mut self, current: &[u8]) -> Result<FontDialogResult, Box<dyn Error>> {
+    fn poll_font_dialog(
+        &mut self,
+        current: &[u8],
+    ) -> Result<FontDialogResult, Box<dyn Error + Send + Sync>> {
         Ok(match self.choose_font(current)? {
             Some(face) => FontDialogResult::Selected(face),
             None => FontDialogResult::Cancelled,
@@ -361,19 +253,19 @@ pub trait PlatformBackend {
     fn poll_message_dialog(
         &mut self,
         _request: &MessageDialogRequest,
-    ) -> Result<MessageDialogResult, Box<dyn Error>> {
+    ) -> Result<MessageDialogResult, Box<dyn Error + Send + Sync>> {
         Err("platform backend does not implement message dialogs".into())
     }
     /// 0=unscaled when it fits, 1=contain, 2=cover, 3=stretch (0x14001a360).
-    fn aspect_mode(&self) -> Result<u32, Box<dyn Error>> {
+    fn aspect_mode(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
         Err("platform backend does not implement aspect mode queries".into())
     }
-    fn aspect_scaling(&self) -> Result<bool, Box<dyn Error>> {
+    fn aspect_scaling(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Err("platform backend does not implement aspect scaling queries".into())
     }
     /// Must commit the request on Ok; on Err leave backend state unchanged for retry.
     /// This is not a queued acknowledgement. Native event-loop implementations must honor this contract.
-    fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>>;
+    fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error + Send + Sync>>;
 }
 /// 0x14001cfd0: a request the device cannot honor leaves render mode 0 (point).
 /// Modes 2/3 also need device +124, whose source is not modeled, so a capable
@@ -381,7 +273,7 @@ pub trait PlatformBackend {
 pub fn supported_render_mode(
     backend: &(impl PlatformBackend + ?Sized),
     requested: u32,
-) -> Result<u32, Box<dyn Error>> {
+) -> Result<u32, Box<dyn Error + Send + Sync>> {
     Ok(match requested {
         1 if backend.linear_stretch_supported()? => 1,
         2 | 3 if u32::from(backend.pixel_shader_major()?) >= requested => {
@@ -450,7 +342,7 @@ impl PlatformBackend for RecordingBackend {
     fn poll_message_dialog(
         &mut self,
         request: &MessageDialogRequest,
-    ) -> Result<MessageDialogResult, Box<dyn Error>> {
+    ) -> Result<MessageDialogResult, Box<dyn Error + Send + Sync>> {
         if self.message_dialogs.len() >= 4096 {
             return Err("recorded message dialogs exceed research limits".into());
         }
@@ -469,7 +361,7 @@ impl PlatformBackend for RecordingBackend {
     fn poll_text_dialog(
         &mut self,
         request: &TextDialogRequest,
-    ) -> Result<TextDialogResult, Box<dyn Error>> {
+    ) -> Result<TextDialogResult, Box<dyn Error + Send + Sync>> {
         if self.text_dialogs.len() >= 4096 {
             return Err("recorded text dialogs exceed research limits".into());
         }
@@ -484,48 +376,56 @@ impl PlatformBackend for RecordingBackend {
         })
     }
 
-    fn select_fullscreen_monitor(&mut self, mode: u32) -> Result<bool, Box<dyn Error>> {
+    fn select_fullscreen_monitor(
+        &mut self,
+        mode: u32,
+    ) -> Result<bool, Box<dyn Error + Send + Sync>> {
         self.apply(&PlatformRequest::FullscreenMonitor(mode))?;
         // One virtual display: every supported mode resolves to the same target.
         Ok(mode == 5)
     }
 
-    fn display_count(&self) -> Result<u32, Box<dyn Error>> {
+    fn display_count(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
         Ok(1)
     }
     fn logical_size(&self) -> [u32; 2] {
         self.screen_size.pixels()
     }
-    fn read_device_frame(&mut self) -> Result<crate::raster::RgbaImage, Box<dyn Error>> {
+    fn read_device_frame(
+        &mut self,
+    ) -> Result<crate::raster::RgbaImage, Box<dyn Error + Send + Sync>> {
         self.device_frame
             .clone()
             .ok_or_else(|| "recording device has no completed frame".into())
     }
-    fn windowed_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
+    fn windowed_size(&self) -> Result<[u32; 2], Box<dyn Error + Send + Sync>> {
         self.window_size()
     }
-    fn window_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
+    fn window_size(&self) -> Result<[u32; 2], Box<dyn Error + Send + Sync>> {
         Ok(self.window_size.unwrap_or([960, 540]))
     }
-    fn aspect_mode(&self) -> Result<u32, Box<dyn Error>> {
+    fn aspect_mode(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
         Ok(self.aspect_mode.unwrap_or(1))
     }
-    fn aspect_scaling(&self) -> Result<bool, Box<dyn Error>> {
+    fn aspect_scaling(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Ok(self.aspect_scaling.unwrap_or(true))
     }
-    fn stretch_filter_supported(&self) -> Result<bool, Box<dyn Error>> {
+    fn stretch_filter_supported(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Ok(true)
     }
-    fn linear_stretch_supported(&self) -> Result<bool, Box<dyn Error>> {
+    fn linear_stretch_supported(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Ok(true)
     }
-    fn resizable(&self) -> Result<bool, Box<dyn Error>> {
+    fn resizable(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Ok(true)
     }
-    fn render_mode(&self) -> Result<u32, Box<dyn Error>> {
+    fn render_mode(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
         Ok(self.render_mode)
     }
-    fn choose_font(&mut self, current: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    fn choose_font(
+        &mut self,
+        current: &[u8],
+    ) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
         if self.font_dialogs.len() >= 4096 {
             return Err("recorded font dialogs exceed research limits".into());
         }
@@ -536,13 +436,13 @@ impl PlatformBackend for RecordingBackend {
         self.font_dialogs.push(current.to_vec());
         Ok(answer)
     }
-    fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error>> {
+    fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error + Send + Sync>> {
         Ok(0)
     }
-    fn fullscreen(&self) -> Result<bool, Box<dyn Error>> {
+    fn fullscreen(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Ok(self.fullscreen)
     }
-    fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+    fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
         if matches!(request, PlatformRequest::FullscreenMonitor(mode) if *mode > 5) {
             return Err("unsupported fullscreen monitor mode".into());
         }
@@ -663,7 +563,7 @@ impl PlatformHost {
     /// cmvs-20070119 0x43bae0: read/write boolean, always consumes two words.
     pub(crate) fn handle_window_full_move(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
     ) -> Result<(), DecodeError> {
         let mode = call.argument(4, "mode")?;
         let value = if mode != 0 {
@@ -728,7 +628,7 @@ impl PlatformHost {
         title: Vec<u8>,
         encoding: TextEncoding,
         backend: &mut impl PlatformBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let text = self.restored_title(&title, encoding)?;
         backend.apply(&PlatformRequest::Title(text))?;
         self.scene_title = title;
@@ -743,29 +643,13 @@ impl PlatformHost {
     pub fn thumbnail(&self) -> Option<ThumbnailConfig> {
         self.thumbnail
     }
-    pub fn try_handle(
-        &mut self,
-        vm: &mut Machine<'_>,
-        backend: &mut impl PlatformBackend,
-        assets: &mut impl PlatformAssets,
-        cursors: &[Vec<u8>],
-    ) -> Result<Option<PlatformEvent>, Box<dyn Error>> {
-        let Some((pc, command)) = vm.pending_system() else {
-            return Ok(None);
-        };
-        if !is_command(command) {
-            return Ok(None);
-        }
-        self.handle(&mut Call::new(vm, pc, command), backend, assets, cursors)
-            .map(Some)
-    }
     pub(crate) fn handle(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         backend: &mut dyn PlatformBackend,
         assets: &mut dyn PlatformAssets,
         cursors: &[Vec<u8>],
-    ) -> Result<PlatformEvent, Box<dyn Error>> {
+    ) -> Result<PlatformEvent, Box<dyn Error + Send + Sync>> {
         let (pc, command) = (call.pc, call.command);
         if command == 0x3c6 {
             let raw = call.argument(4, "fullscreen monitor mode")?;
@@ -1107,24 +991,6 @@ impl PlatformHost {
     }
 }
 
-fn is_command(command: u16) -> bool {
-    matches!(
-        command,
-        0x8f | 0x99
-            | 0x160
-            | 0x161
-            | 0x163
-            | 0x164
-            | 0x16b..=0x16f
-            | 0x2b0
-            | 0x2c8..=0x2ca
-            | 0x2fc
-            | 0x2fd
-            | 0x2ff
-            | 0x629
-            | 0x62b..=0x62e
-    )
-}
 fn argument_names(command: u16) -> &'static [&'static str] {
     match command {
         0x8f => &["icon name"],
@@ -1174,7 +1040,7 @@ mod tests {
     fn cvns_display_aspect_scaling_keep_aspect_and_dialogs_follow_cvns_rules() {
         struct NoAssets;
         impl PlatformAssets for NoAssets {
-            fn read(&mut self, _: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+            fn read(&mut self, _: &[u8]) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
                 unreachable!("dialog/display tests do not read assets")
             }
         }
@@ -1182,7 +1048,7 @@ mod tests {
             cmd: u16,
             args: &[u32],
             strings: &[&[u8]],
-            hosts_fn: impl FnOnce(&mut crate::machine::Machine<'_>, usize),
+            hosts_fn: impl FnOnce(&mut crate::machine::Machine, usize),
         ) {
             let mut code = Vec::new();
             for &value in args.iter().rev() {

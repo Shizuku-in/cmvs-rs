@@ -1,8 +1,7 @@
+use crate::support::shared_state::SharedState;
 use crate::support::shared_windows;
 use cmvs_core::{
-    machine::{Machine, Step},
-    message::MessageHost,
-    ps3::Script,
+    format::ps3::Script, render::message::MessageHost, vm::machine::Machine, vm::machine::Step,
 };
 use shared_windows::SharedWindows;
 
@@ -37,15 +36,15 @@ fn script(code: &[u8], text: &[u8]) -> Script {
     raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
     Script::decode(&raw).unwrap()
 }
-fn pending(vm: &mut Machine<'_>) {
+fn pending(vm: &mut Machine) {
     while !matches!(vm.step().unwrap(), Step::System { .. }) {}
 }
-fn run(vm: &mut Machine<'_>, messages: &mut MessageHost) {
+fn run(vm: &mut Machine, messages: &mut MessageHost) {
     pending(vm);
     assert!(messages.shared_message(vm).unwrap());
 }
 
-fn stack_words(vm: &Machine<'_>) -> Vec<u32> {
+fn stack_words(vm: &Machine) -> Vec<u32> {
     (0..vm.stack().len_bytes())
         .step_by(4)
         .map(|at| vm.stack().read_u32_at(at).unwrap())
@@ -54,7 +53,9 @@ fn stack_words(vm: &Machine<'_>) -> Vec<u32> {
 
 #[test]
 fn auxiliary_font_change_preserves_existing_glyphs_and_survives_group_recreation() {
-    use cmvs_core::dispatch::{self, Flow, Hosts, TextHosts};
+    use cmvs_core::{
+        vm::dispatch, vm::dispatch::Flow, vm::dispatch::Hosts, vm::dispatch::TextHosts,
+    };
     let mut code = vec![];
     for (op, args) in [
         (0x2380, vec![7, 0, 25, 32]),
@@ -74,9 +75,9 @@ fn auxiliary_font_change_preserves_existing_glyphs_and_survives_group_recreation
     messages.set_record_output(true);
     messages.set_default_face(b"FirstFace");
     run(&mut vm, &mut messages);
-    let select = |vm: &mut Machine<'_>, messages: &mut MessageHost| {
+    let select = |vm: &mut Machine, messages: &mut MessageHost| {
         pending(vm);
-        let mut input = cmvs_core::input::ActionInput::default();
+        let mut input = cmvs_core::host::input::ActionInput::default();
         let profile = cmvs_core::profile::Registry::builtin()
             .profile("cmvs-20190305")
             .unwrap();
@@ -105,7 +106,7 @@ fn auxiliary_font_change_preserves_existing_glyphs_and_survives_group_recreation
     assert_eq!(group.object, before.object);
     assert_eq!(vm.state().system_integer(0), Some(99));
     assert_eq!(vm.stack().len_bytes(), 0);
-    messages.set_text_settings(cmvs_core::settings::TextOutputSettings {
+    messages.set_text_settings(cmvs_core::host::settings::TextOutputSettings {
         revision_alpha: true,
         ..Default::default()
     });
@@ -292,11 +293,11 @@ fn bound_auxiliary_position_moves_scene_with_float_roundtrip_and_detaches() {
     let script = script(&code, b"\0");
     let mut vm = Machine::new(&script).unwrap();
     let mut messages = MessageHost::default();
-    let mut scene = cmvs_core::scene::SceneHost::default();
+    let mut scene = cmvs_core::render::scene::SceneHost::default();
     for _ in 0..4 {
         pending(&mut vm);
         assert!(
-            scene.try_handle(&mut vm).unwrap()
+            scene.shared_state(&mut vm).unwrap()
                 || messages
                     .shared_auxiliary_scene(&mut vm, &mut scene)
                     .unwrap()
@@ -318,7 +319,13 @@ fn bound_auxiliary_position_moves_scene_with_float_roundtrip_and_detaches() {
             .unwrap()
     );
     assert_eq!(
-        &scene.object(11).unwrap().draw.as_ref().unwrap().words[8..10],
+        &scene
+            .object(11)
+            .unwrap()
+            .draw
+            .as_ref()
+            .unwrap()
+            .position_raw(),
         &[16777216, i32::MIN as u32]
     );
     for _ in 0..2 {
@@ -336,7 +343,13 @@ fn bound_auxiliary_position_moves_scene_with_float_roundtrip_and_detaches() {
         Some(180f32.to_bits())
     );
     assert_eq!(
-        &scene.object(11).unwrap().draw.as_ref().unwrap().words[8..10],
+        &scene
+            .object(11)
+            .unwrap()
+            .draw
+            .as_ref()
+            .unwrap()
+            .position_raw(),
         &[16777216, i32::MIN as u32]
     );
     for i in 0..7 {
@@ -353,7 +366,7 @@ fn auxiliary_association_errors_keep_target_and_pending_command() {
         let script = script(&code, b"\0");
         let mut vm = Machine::new(&script).unwrap();
         let mut messages = MessageHost::default();
-        let mut scene = cmvs_core::scene::SceneHost::default();
+        let mut scene = cmvs_core::render::scene::SceneHost::default();
         run(&mut vm, &mut messages);
         let before = messages.auxiliary_text(0).unwrap().clone();
         pending(&mut vm);
@@ -466,14 +479,14 @@ fn auxiliary_motion_linear_sine_wrap_clock_and_bound_scene_advance_only_per_fram
         let script = script(&code, b"\0");
         let mut vm = Machine::new(&script).unwrap();
         let mut messages = MessageHost::default();
-        let mut scene = cmvs_core::scene::SceneHost::default();
+        let mut scene = cmvs_core::render::scene::SceneHost::default();
         messages
             .advance_auxiliary_motion(u32::MAX, &mut scene)
             .unwrap();
         for _ in 0..6 {
             pending(&mut vm);
             assert!(
-                scene.try_handle(&mut vm).unwrap()
+                scene.shared_state(&mut vm).unwrap()
                     || messages
                         .shared_auxiliary_scene(&mut vm, &mut scene)
                         .unwrap()
@@ -488,20 +501,38 @@ fn auxiliary_motion_linear_sine_wrap_clock_and_bound_scene_advance_only_per_fram
         assert_eq!(messages.auxiliary_text(7).unwrap().word(8), Some(0));
         messages.advance_auxiliary_motion(50, &mut scene).unwrap();
         assert_eq!(
-            &scene.object(11).unwrap().draw.as_ref().unwrap().words[8..10],
+            &scene
+                .object(11)
+                .unwrap()
+                .draw
+                .as_ref()
+                .unwrap()
+                .position_raw(),
             &half
         );
         run(&mut vm, &mut messages);
         assert_eq!(vm.state().system_integer(0), Some(1));
         messages.advance_auxiliary_motion(50, &mut scene).unwrap();
         assert_eq!(
-            &scene.object(11).unwrap().draw.as_ref().unwrap().words[8..10],
+            &scene
+                .object(11)
+                .unwrap()
+                .draw
+                .as_ref()
+                .unwrap()
+                .position_raw(),
             &[100, (-100i32) as u32]
         );
         assert_eq!(messages.auxiliary_text(7).unwrap().word(368), Some(0));
         messages.advance_auxiliary_motion(1000, &mut scene).unwrap();
         assert_eq!(
-            &scene.object(11).unwrap().draw.as_ref().unwrap().words[8..10],
+            &scene
+                .object(11)
+                .unwrap()
+                .draw
+                .as_ref()
+                .unwrap()
+                .position_raw(),
             &[100, (-100i32) as u32]
         );
     }
@@ -518,7 +549,7 @@ fn auxiliary_motion_clamps_stops_and_rejects_unknown_mode_without_changing_comma
     let script = script(&code, b"\0");
     let mut vm = Machine::new(&script).unwrap();
     let mut messages = MessageHost::default();
-    let mut scene = cmvs_core::scene::SceneHost::default();
+    let mut scene = cmvs_core::render::scene::SceneHost::default();
     for _ in 0..3 {
         run(&mut vm, &mut messages);
     }
@@ -557,7 +588,7 @@ fn inverted_motion_bounds_stop_even_when_sequential_clamping_restores_same_posit
         run(&mut vm, &mut messages);
     }
     messages
-        .advance_auxiliary_motion(10, &mut cmvs_core::scene::SceneHost::default())
+        .advance_auxiliary_motion(10, &mut cmvs_core::render::scene::SceneHost::default())
         .unwrap();
     assert_eq!(
         messages.auxiliary_text(0).unwrap().word(8),
@@ -577,7 +608,7 @@ fn content_script(calls: &[(u16, &[u32])], text: &[u8]) -> Script {
     segment.push(0);
     script(&code, &segment)
 }
-fn run_calls(vm: &mut Machine<'_>, messages: &mut MessageHost, count: usize) {
+fn run_calls(vm: &mut Machine, messages: &mut MessageHost, count: usize) {
     for _ in 0..count {
         run(vm, messages);
     }
@@ -587,7 +618,7 @@ fn run_calls(vm: &mut Machine<'_>, messages: &mut MessageHost, count: usize) {
 fn proportional_auxiliary_text_uses_advances_for_single_and_double_byte_glyphs() {
     #[derive(Debug)]
     struct Metrics;
-    impl cmvs_core::message::GlyphMetrics for Metrics {
+    impl cmvs_core::render::message::GlyphMetrics for Metrics {
         fn ink_width(&self, _: &[u8], _: u16, _: u32) -> Result<u32, &'static str> {
             Ok(99)
         }
@@ -770,7 +801,7 @@ fn pen_and_motion_stop_change_only_their_fields() {
     );
     let mut vm = Machine::new(&script).unwrap();
     let mut messages = MessageHost::default();
-    let mut scene = cmvs_core::scene::SceneHost::default();
+    let mut scene = cmvs_core::render::scene::SceneHost::default();
     run_calls(&mut vm, &mut messages, 2);
     let group = messages.auxiliary_text(7).unwrap();
     assert_eq!(group.word(176), Some((-5.0f32).to_bits()));
@@ -814,7 +845,7 @@ fn glyphs_attach_inside_the_bounds_and_cells_leak_after_a_clear() {
     let mut vm = Machine::new(&script).unwrap();
     let mut messages = MessageHost::default();
     messages.set_record_output(true);
-    let mut scene = cmvs_core::scene::SceneHost::default();
+    let mut scene = cmvs_core::render::scene::SceneHost::default();
     let mut frame = |messages: &mut MessageHost| {
         messages.advance_auxiliary_motion(16, &mut scene).unwrap();
         attached(messages)
@@ -862,7 +893,7 @@ fn exhausted_cells_leave_glyphs_detached_and_cells_must_fit_the_atlas() {
     let mut vm = Machine::new(&script).unwrap();
     let mut messages = MessageHost::default();
     messages.set_record_output(true);
-    let mut scene = cmvs_core::scene::SceneHost::default();
+    let mut scene = cmvs_core::render::scene::SceneHost::default();
     run_calls(&mut vm, &mut messages, 3);
     for _ in 0..2 {
         messages.advance_auxiliary_motion(16, &mut scene).unwrap();
@@ -898,27 +929,27 @@ fn exhausted_cells_leave_glyphs_detached_and_cells_must_fit_the_atlas() {
 }
 
 fn research_call(
-    vm: &mut Machine<'_>,
+    vm: &mut Machine,
     messages: &mut MessageHost,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     pending(vm);
-    let mut input = cmvs_core::input::ActionInput::default();
+    let mut input = cmvs_core::host::input::ActionInput::default();
     let profile = cmvs_core::profile::Registry::builtin()
         .profile("cmvs-20171114")
         .unwrap();
     let command = vm.pending_system().unwrap().1;
-    let mut hosts = cmvs_core::dispatch::Hosts::default();
-    if cmvs_core::dispatch::uses_message_state(command) {
+    let mut hosts = cmvs_core::vm::dispatch::Hosts::default();
+    if cmvs_core::vm::dispatch::uses_message_state(command) {
         hosts.messages = Some(messages);
     } else {
-        hosts.text = Some(cmvs_core::dispatch::TextHosts {
+        hosts.text = Some(cmvs_core::vm::dispatch::TextHosts {
             messages,
             input: &mut input,
             flags: Default::default(),
         });
     }
-    match cmvs_core::dispatch::run(profile.semantics(command), vm, &mut hosts)? {
-        Some(cmvs_core::dispatch::Flow::Done) => Ok(()),
+    match cmvs_core::vm::dispatch::run(profile.semantics(command), vm, &mut hosts)? {
+        Some(cmvs_core::vm::dispatch::Flow::Done) => Ok(()),
         other => panic!("unexpected dispatch {other:?}"),
     }
 }
@@ -999,7 +1030,7 @@ fn auxiliary_extended_rules_bound_hanging_and_identical_character_runs() {
 fn auxiliary_queries_restore_pen_preserve_glyphs_and_report_bytes_or_font_widths() {
     #[derive(Debug)]
     struct Metrics;
-    impl cmvs_core::message::GlyphMetrics for Metrics {
+    impl cmvs_core::render::message::GlyphMetrics for Metrics {
         fn ink_width(&self, _: &[u8], _: u16, _: u32) -> Result<u32, &'static str> {
             Ok(99)
         }
@@ -1166,7 +1197,7 @@ fn auxiliary_smaller_raster_uses_the_original_grid_without_reallocating() {
     let mut messages = MessageHost::default();
     messages.set_record_output(true);
     run_calls(&mut vm, &mut messages, 4);
-    let mut scene = cmvs_core::scene::SceneHost::default();
+    let mut scene = cmvs_core::render::scene::SceneHost::default();
     messages.advance_auxiliary_motion(16, &mut scene).unwrap();
     let group = messages.auxiliary_text(7).unwrap();
     assert_eq!((group.atlas.cell_side, group.atlas.grid_side), (36, 28));
@@ -1191,7 +1222,7 @@ fn auxiliary_resizing_rejects_live_atlas_overlap_but_clear_releases_the_pixels()
     let mut vm = Machine::new(&script).unwrap();
     let mut messages = MessageHost::default();
     messages.set_record_output(true);
-    let mut scene = cmvs_core::scene::SceneHost::default();
+    let mut scene = cmvs_core::render::scene::SceneHost::default();
     run_calls(&mut vm, &mut messages, 2);
     messages.advance_auxiliary_motion(16, &mut scene).unwrap();
     assert_eq!(messages.auxiliary_text(7).unwrap().glyphs[0].cell, 1);

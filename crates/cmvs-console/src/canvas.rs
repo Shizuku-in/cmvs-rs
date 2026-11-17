@@ -2,7 +2,7 @@
 //! Pages are laid out on a 720-unit-high grid scaled to the screen, so they keep their
 //! proportions on any console; all positions and sizes here are in those units.
 use ab_glyph::{Font, FontVec, PxScale, ScaleFont, point};
-use cmvs_core::raster::RgbaImage;
+use cmvs_core::render::raster::RgbaImage;
 
 /// Left and right page margin.
 pub const MARGIN: i32 = 64;

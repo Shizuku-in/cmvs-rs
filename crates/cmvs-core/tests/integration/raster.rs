@@ -1,4 +1,4 @@
-use cmvs_core::raster::{RgbaImage, adler32, crc32};
+use cmvs_core::{render::raster::RgbaImage, render::raster::adler32, render::raster::crc32};
 
 #[test]
 fn checksums_match_published_check_values() {

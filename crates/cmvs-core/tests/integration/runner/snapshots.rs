@@ -133,7 +133,7 @@ fn slot_exchange_refreshes_existing_menu_labels_and_latest_selection() {
     }
     let menu = run.save_menu().menu().unwrap();
     assert_eq!(menu.latest, Some(0));
-    let cmvs_core::save_menu::SlotStatus::Recognized(header) = &menu.slots[0] else {
+    let cmvs_core::runtime::save_menu::SlotStatus::Recognized(header) = &menu.slots[0] else {
         panic!("header");
     };
     assert_eq!(header.label, labels[1]);
@@ -332,8 +332,7 @@ fn slot_metadata_failures_preserve_file_and_pending_command_for_retry() {
 #[test]
 fn ps2_canvas_queries_pointer_and_v2_saves_keep_four_by_three_coordinates() {
     use cmvs_core::{
-        save::Csv2Save,
-        snapshot::{EngineSnapshot, SnapshotLayout},
+        format::save::Csv2Save, format::snapshot::EngineSnapshot, format::snapshot::SnapshotLayout,
     };
     let mut code = string_call(0x2160);
     commands::command(&mut code, 0x201d, &[0x12345678]);
@@ -365,7 +364,7 @@ fn ps2_canvas_queries_pointer_and_v2_saves_keep_four_by_three_coordinates() {
     run.set_user_data_directory(&user).unwrap();
     run.input_mut().set_pointer(1010, 755);
     let mut backend = RecordingBackend::default();
-    backend.set_screen_size(cmvs_core::viewport::ScreenSize::new([1024, 768]).unwrap());
+    backend.set_screen_size(cmvs_core::render::viewport::ScreenSize::new([1024, 768]).unwrap());
     while run.machine().pc() != snapshot_pc {
         assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
     }
@@ -400,9 +399,8 @@ fn ps2_canvas_queries_pointer_and_v2_saves_keep_four_by_three_coordinates() {
 #[test]
 fn old_snapshot_roundtrip_uses_build_layout_and_zero_css1_identity() {
     use cmvs_core::{
-        save::Csv2Save,
-        snapshot::{EngineSnapshot, SnapshotLayout},
-        system_save::Css1Save,
+        format::save::Csv2Save, format::snapshot::EngineSnapshot, format::snapshot::SnapshotLayout,
+        format::system_save::Css1Save,
     };
     for (profile, layout) in [
         ("cmvs-20070119", SnapshotLayout::TextV1SceneLegacy),
@@ -442,7 +440,7 @@ fn old_snapshot_roundtrip_uses_build_layout_and_zero_css1_identity() {
         assert_eq!([frame.width(), frame.height()], [800, 600]);
 
         let mut backend = RecordingBackend::default();
-        backend.set_screen_size(cmvs_core::viewport::ScreenSize::new([800, 600]).unwrap());
+        backend.set_screen_size(cmvs_core::render::viewport::ScreenSize::new([800, 600]).unwrap());
         while run.machine().pc() != pc {
             assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
         }
@@ -467,7 +465,13 @@ fn old_snapshot_roundtrip_uses_build_layout_and_zero_css1_identity() {
         assert_eq!(run.machine().pc(), pc + 2);
         assert_eq!(run.machine().current_name(), b"start.ps2");
         assert_eq!(
-            run.scene().object(20).unwrap().draw.as_ref().unwrap().words[12],
+            run.scene()
+                .object(20)
+                .unwrap()
+                .draw
+                .as_ref()
+                .unwrap()
+                .world_position_bits()[1],
             2f32.to_bits()
         );
         assert_eq!(
@@ -510,24 +514,29 @@ fn aoitori_v3_snapshot_restores_text_scene_locals_and_backup_slots() {
 
 #[test]
 fn load_before_first_audio_command_configures_resources_before_replaying_bgm() {
-    use cmvs_core::audio::{AudioBackend, AudioRequest, VoiceDuckingSettings};
-    use std::{cell::Cell, rc::Rc};
+    use cmvs_core::{
+        host::audio::AudioBackend, host::audio::AudioRequest, host::audio::VoiceDuckingSettings,
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
     struct Audio {
         paths_ready: bool,
         configured: bool,
-        played: Rc<Cell<bool>>,
+        played: Arc<AtomicBool>,
     }
     impl AudioBackend for Audio {
         fn configure_voice_ducking(
             &mut self,
             _: VoiceDuckingSettings,
-        ) -> Result<(), Box<dyn Error>> {
+        ) -> Result<(), Box<dyn Error + Send + Sync>> {
             Ok(())
         }
         fn configure_paths(
             &mut self,
             paths: &std::collections::BTreeMap<(u16, u32), Vec<u8>>,
-        ) -> Result<(), Box<dyn Error>> {
+        ) -> Result<(), Box<dyn Error + Send + Sync>> {
             assert_eq!(
                 paths.get(&(0x2013, 0)).map(Vec::as_slice),
                 Some(&b"Synthetic"[..])
@@ -538,28 +547,28 @@ fn load_before_first_audio_command_configures_resources_before_replaying_bgm() {
         }
         fn configure_archive_parameters(
             &mut self,
-            _: &std::collections::BTreeMap<(u16, u32), cmvs_core::cpz::Cpz7Parameters>,
-        ) -> Result<(), Box<dyn Error>> {
+            _: &std::collections::BTreeMap<(u16, u32), cmvs_core::format::cpz::Cpz7Parameters>,
+        ) -> Result<(), Box<dyn Error + Send + Sync>> {
             assert!(self.paths_ready);
             self.configured = true;
             Ok(())
         }
-        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>> {
             Ok(true)
         }
-        fn stop(&mut self, _: u8) -> Result<(), Box<dyn Error>> {
+        fn stop(&mut self, _: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
             Ok(())
         }
-        fn stop_voice(&mut self, _: u8) -> Result<(), Box<dyn Error>> {
+        fn stop_voice(&mut self, _: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
             Ok(())
         }
-        fn stop_channel15(&mut self) -> Result<(), Box<dyn Error>> {
+        fn stop_channel15(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
             Ok(())
         }
-        fn stop_bgm(&mut self) -> Result<(), Box<dyn Error>> {
+        fn stop_bgm(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
             Ok(())
         }
-        fn play_bgm(&mut self, request: &AudioRequest) -> Result<(), Box<dyn Error>> {
+        fn play_bgm(&mut self, request: &AudioRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
             assert!(
                 self.configured,
                 "restored audio needs resource paths and archive parameters"
@@ -567,7 +576,7 @@ fn load_before_first_audio_command_configures_resources_before_replaying_bgm() {
             assert!(
                 matches!(request, AudioRequest::PlayBgm { primary, .. } if primary == b"Synthetic")
             );
-            self.played.set(true);
+            self.played.store(true, Ordering::Relaxed);
             Ok(())
         }
     }
@@ -597,7 +606,7 @@ fn load_before_first_audio_command_configures_resources_before_replaying_bgm() {
     while run.machine().pc() != audio_pc {
         assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
     }
-    let played = Rc::new(Cell::new(false));
+    let played = Arc::new(AtomicBool::new(false));
     run.set_audio_backend(Box::new(Audio {
         paths_ready: false,
         configured: false,
@@ -605,7 +614,7 @@ fn load_before_first_audio_command_configures_resources_before_replaying_bgm() {
     }))
     .unwrap();
     run.load_slot(3, &mut backend).unwrap();
-    assert!(played.get());
+    assert!(played.load(Ordering::Relaxed));
     drop(run);
     fs::remove_dir_all(user).unwrap();
 }
@@ -623,8 +632,7 @@ fn kazokubu_v2_snapshot_restores_text_scene_particles_locals_and_backup_slots() 
 
 fn snapshot_slots_roundtrip(profile: Option<&str>) {
     use cmvs_core::{
-        save::Csv2Save,
-        snapshot::{EngineSnapshot, SnapshotLayout},
+        format::save::Csv2Save, format::snapshot::EngineSnapshot, format::snapshot::SnapshotLayout,
     };
     let layout = if profile == Some("cmvs-20120309") {
         SnapshotLayout::TextV2
@@ -718,7 +726,7 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
     run.set_user_data_directory(&directory).unwrap();
     run.set_record_text(true);
     let mut backend = RecordingBackend::default();
-    let run_to_end = |run: &mut Runtime<'_>, backend: &mut RecordingBackend| {
+    let run_to_end = |run: &mut Runtime, backend: &mut RecordingBackend| {
         let mut captured = 0;
         loop {
             if run.machine().pc() == end {
@@ -766,10 +774,11 @@ fn snapshot_slots_roundtrip(profile: Option<&str>) {
     }
     if profile.is_some() {
         let effect =
-            cmvs_core::snapshot::SavedEffect::decode(&snapshot.raw_objects[&(0x800, 0)]).unwrap();
+            cmvs_core::format::snapshot::SavedEffect::decode(&snapshot.raw_objects[&(0x800, 0)])
+                .unwrap();
         assert_eq!(effect.image_name(), b"Synthetic");
         assert!(
-            matches!(effect, cmvs_core::snapshot::SavedEffect::Particles { words, .. } if words[5] == 2)
+            matches!(effect, cmvs_core::format::snapshot::SavedEffect::Particles { words, .. } if words[5] == 2)
         );
     }
     if matches!(profile, Some("cmvs-20211006" | "cmvs-20221105")) {
@@ -1110,7 +1119,7 @@ fn gameplay_saves_need_an_independent_user_directory() {
 
 #[test]
 fn button_groups_are_saved_and_come_back_empty_on_object_zero() {
-    use cmvs_core::snapshot::EngineSnapshot;
+    use cmvs_core::format::snapshot::EngineSnapshot;
     let mut code = string_call(0x2160);
     system_call(&mut code, 0x201d, &[0x12345678]);
     system_call(&mut code, 0x2128, &[]);

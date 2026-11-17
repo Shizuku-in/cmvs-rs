@@ -1,7 +1,4 @@
-use cmvs_core::{
-    machine::{Machine, Step},
-    ps3::Script,
-};
+use cmvs_core::{format::ps3::Script, vm::machine::Machine, vm::machine::Step};
 
 fn scalar(tag: u16, raw: u32) -> Vec<u8> {
     let mut b = tag.to_le_bytes().to_vec();

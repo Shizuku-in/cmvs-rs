@@ -1,9 +1,12 @@
-use cmvs_core::cpz::{ArchiveIndex, ArchiveLayout, ArchiveVersion, Cpz7Index, Cpz7Layout};
+use cmvs_core::{
+    format::cpz::ArchiveIndex, format::cpz::ArchiveLayout, format::cpz::ArchiveVersion,
+    format::cpz::Cpz7Index, format::cpz::Cpz7Layout,
+};
 use std::io::Cursor;
 
 #[test]
 fn cpz7_uses_per_archive_keys_and_countdown_index_tails() {
-    use cmvs_core::cpz::Cpz7Parameters;
+    use cmvs_core::format::cpz::Cpz7Parameters;
     let bytes = hex(include_str!("../../../../tests/fixtures/cpz7-keyed.hex"));
     let original_keys = [0x10203040, 0x89abcdef, 0xfedcba98, 0x76543210];
     let parameters = Cpz7Parameters::from(original_keys);
@@ -44,7 +47,7 @@ fn cpz7_uses_per_archive_keys_and_countdown_index_tails() {
     }
 }
 
-fn memory_script(code: Vec<u8>, text: &[u8]) -> cmvs_core::ps3::Script {
+fn memory_script(code: Vec<u8>, text: &[u8]) -> cmvs_core::format::ps3::Script {
     let mut bytes = b"PS2A".to_vec();
     for field in [
         48,
@@ -63,7 +66,7 @@ fn memory_script(code: Vec<u8>, text: &[u8]) -> cmvs_core::ps3::Script {
     }
     bytes.extend(code);
     bytes.extend(text);
-    cmvs_core::ps3::Script::from_memory_image(&bytes).unwrap()
+    cmvs_core::format::ps3::Script::from_memory_image(&bytes).unwrap()
 }
 
 fn push(code: &mut Vec<u8>, string: bool, value: u32) {
@@ -85,7 +88,9 @@ fn registration(code: &mut Vec<u8>, keys: [u32; 4]) {
 
 #[test]
 fn startup_inspection_preserves_key_order_and_rejects_dynamic_or_ambiguous_keys() {
-    use cmvs_core::{cpz::Cpz7Parameters, script_control::cpz7_parameters_from_start};
+    use cmvs_core::{
+        format::cpz::Cpz7Parameters, runtime::script_control::cpz7_parameters_from_start,
+    };
     let keys = [0x10203040, 0x89abcdef, 0xfedcba98, 0x76543210];
     let text = b"\0data\\pack\\script.cpz\0";
     let mut code = Vec::new();
@@ -141,7 +146,9 @@ fn startup_inspection_preserves_key_order_and_rejects_dynamic_or_ambiguous_keys(
 
 #[test]
 fn startup_archive_reader_uses_per_archive_keys_and_detects_cpz6() {
-    use cmvs_core::script_control::{ArchiveScripts, archive_index_from_start};
+    use cmvs_core::{
+        runtime::script_control::ArchiveScripts, runtime::script_control::archive_index_from_start,
+    };
     let mut code = Vec::new();
     push(&mut code, false, 13);
     code.extend(0x201fu16.to_le_bytes());
@@ -160,17 +167,18 @@ fn startup_archive_reader_uses_per_archive_keys_and_detects_cpz6() {
     let cpz6_start = memory_script(0x2000u16.to_le_bytes().to_vec(), b"");
     let mut cpz6 = Cursor::new(hex(include_str!("../../../../tests/fixtures/cpz6-0.hex")));
     let index = archive_index_from_start(&mut cpz6, &cpz6_start, b"cpz6.cpz").unwrap();
-    assert_eq!(index.version(), cmvs_core::cpz::ArchiveVersion::Cpz6);
+    assert_eq!(
+        index.version(),
+        cmvs_core::format::cpz::ArchiveVersion::Cpz6
+    );
     assert!(index.read_entry(&mut cpz6, 0).is_ok());
 }
 
 #[test]
 fn keyed_registrations_preserve_families_key_order_and_retry_state() {
     use cmvs_core::{
-        bootstrap::Bootstrap,
-        dispatch::{self, Flow, Hosts},
-        machine::Machine,
-        profile::{Registry, Semantics},
+        profile::Registry, profile::Semantics, runtime::bootstrap::Bootstrap, vm::dispatch,
+        vm::dispatch::Flow, vm::dispatch::Hosts, vm::machine::Machine,
     };
     for id in ["cmvs-20190305", "cmvs-20190405"] {
         let profile = Registry::builtin().profile(id).unwrap();
@@ -378,8 +386,8 @@ fn truncated_archives_and_authenticated_invalid_entry_ranges_fail() {
 /// Opt-in local evidence only; game archives and extracted assets are never fixtures.
 #[test]
 #[ignore = "requires CMVS_CPZ7_TEST_INPUTS pointing to read-only external archives"]
-fn external_archive_resources() -> Result<(), Box<dyn std::error::Error>> {
-    use cmvs_core::digest::{Sha256, to_hex};
+fn external_archive_resources() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use cmvs_core::{format::digest::Sha256, format::digest::to_hex};
     use std::fs::File;
 
     let inputs = std::env::var_os("CMVS_CPZ7_TEST_INPUTS").ok_or("set CMVS_CPZ7_TEST_INPUTS")?;
@@ -392,14 +400,16 @@ fn external_archive_resources() -> Result<(), Box<dyn std::error::Error>> {
                 .parent()
                 .ok_or("archive has no parent directory")?
                 .join("start.ps3");
-            let start = cmvs_core::ps3::Script::decode(&std::fs::read(start_path)?)?;
+            let start = cmvs_core::format::ps3::Script::decode(&std::fs::read(start_path)?)?;
             let name = path
                 .file_name()
                 .and_then(|name| name.to_str())
                 .ok_or("invalid archive basename")?;
-            let parameters =
-                cmvs_core::script_control::cpz7_parameters_from_start(&start, name.as_bytes())?
-                    .ok_or("missing startup key registration")?;
+            let parameters = cmvs_core::runtime::script_control::cpz7_parameters_from_start(
+                &start,
+                name.as_bytes(),
+            )?
+            .ok_or("missing startup key registration")?;
             ArchiveIndex::read_with_cpz7_parameters(&mut file, parameters)?
         } else {
             ArchiveIndex::read(&mut file)?
@@ -416,8 +426,8 @@ fn external_archive_resources() -> Result<(), Box<dyn std::error::Error>> {
             assert_eq!(data.len(), entry.size as usize);
             let lower = entry.name.to_ascii_lowercase();
             if lower.ends_with(b".ps3") {
-                let script = cmvs_core::ps3::Script::decode(&data)?;
-                cmvs_core::bytecode::decode_layout(
+                let script = cmvs_core::format::ps3::Script::decode(&data)?;
+                cmvs_core::vm::bytecode::decode_layout(
                     script.code(),
                     script.header().entry_pc,
                     &script.labels(),
@@ -455,7 +465,7 @@ fn external_archive_resources() -> Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 fn cpz7_replacements_preserve_keys_directories_and_unmodified_ciphertext() {
-    use cmvs_core::cpz::Cpz7Parameters;
+    use cmvs_core::format::cpz::Cpz7Parameters;
     use std::collections::BTreeMap;
     for (fixture, parameters) in [
         (

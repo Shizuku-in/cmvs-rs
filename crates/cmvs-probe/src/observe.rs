@@ -2,9 +2,7 @@
 //! script name or address ever decides what state the game is in.
 use crate::json::Json;
 use cmvs_core::{
-    buttons::BUTTON_GROUPS,
-    digest::{Sha256, to_hex},
-    runtime::Runtime,
+    format::digest::Sha256, format::digest::to_hex, runtime::BUTTON_GROUPS, runtime::Runtime,
 };
 
 /// System command 0x2153 (CMVS) or 0x2520 (CVNS message wait), without 0x2000.
@@ -32,7 +30,7 @@ pub struct PageSignature {
 }
 
 impl PageSignature {
-    pub fn of(run: &Runtime<'_>) -> Self {
+    pub fn of(run: &Runtime) -> Self {
         let groups = (0..crate::controls::GROUPS)
             .filter_map(|slot| {
                 let group = crate::controls::group(run, slot)?;
@@ -116,7 +114,7 @@ pub struct Observation {
 }
 
 impl Observation {
-    pub fn of(run: &Runtime<'_>, yields: u64) -> Self {
+    pub fn of(run: &Runtime, yields: u64) -> Self {
         let machine = run.machine();
         Self {
             yields,
@@ -173,7 +171,7 @@ impl Observation {
 /// Coarse digest of VM, scene and button state for comparing two runs of the same build.
 /// Volatile fields such as timers are not excluded yet, so it only compares runs that should be
 /// identical step for step.
-pub fn state_digest(run: &Runtime<'_>) -> String {
+pub fn state_digest(run: &Runtime) -> String {
     let mut h = Sha256::new();
     h.update(format!("{:?}", run.machine().state()).as_bytes());
     match run.machine().capture_vm() {
@@ -249,7 +247,7 @@ impl Settle {
 
 /// Digest of the VM variable state, used to recognise the same choice point reached by
 /// different paths.
-pub fn variables_digest(run: &Runtime<'_>) -> String {
+pub fn variables_digest(run: &Runtime) -> String {
     let mut h = Sha256::new();
     h.update(run.machine().current_name());
     h.update(&(run.machine().pc() as u64).to_le_bytes());

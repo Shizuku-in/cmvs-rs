@@ -1,9 +1,6 @@
 //! Probe group IDs 0..=5 are ordinary groups; 6..=13 are list groups 0..=7.
 //! List hit rectangles follow the bound object, then intersect the screen-space hit area.
-use cmvs_core::{
-    buttons::{BUTTON_GROUPS, Button, ButtonGroup},
-    runtime::Runtime,
-};
+use cmvs_core::{runtime::BUTTON_GROUPS, runtime::Button, runtime::ButtonGroup, runtime::Runtime};
 
 pub const GROUPS: usize = BUTTON_GROUPS + 8;
 
@@ -91,7 +88,7 @@ impl<'a> Group<'a> {
     }
 }
 
-pub fn group<'a>(run: &'a Runtime<'_>, slot: usize) -> Option<Group<'a>> {
+pub fn group<'a>(run: &'a Runtime, slot: usize) -> Option<Group<'a>> {
     if slot < BUTTON_GROUPS {
         if let Some(group) = run.buttons().group(slot) {
             return Some(Group {
@@ -145,20 +142,7 @@ pub fn group<'a>(run: &'a Runtime<'_>, slot: usize) -> Option<Group<'a>> {
         return None;
     }
     let draw = object.draw.as_ref()?;
-    let offset = match draw.words[0] {
-        0 => [draw.words[8], draw.words[9]].map(|v| v as i32),
-        5 => {
-            let values = [draw.words[11], draw.words[12]].map(f32::from_bits);
-            if values
-                .iter()
-                .any(|v| !(-2147483648.0..2147483648.0).contains(v))
-            {
-                return None;
-            }
-            values.map(|v| v as i32)
-        }
-        _ => return None,
-    };
+    let offset = draw.screen_offset()?;
     Some(Group {
         buttons: GroupButtons::Cmvs(&group.buttons),
         current: group.current,
@@ -168,7 +152,7 @@ pub fn group<'a>(run: &'a Runtime<'_>, slot: usize) -> Option<Group<'a>> {
     })
 }
 
-pub fn enabled(run: &Runtime<'_>) -> Vec<(usize, usize)> {
+pub fn enabled(run: &Runtime) -> Vec<(usize, usize)> {
     (0..GROUPS)
         .filter_map(|slot| group(run, slot).map(|group| (slot, group)))
         .flat_map(|(slot, group)| {
@@ -182,7 +166,7 @@ pub fn enabled(run: &Runtime<'_>) -> Vec<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cmvs_core::buttons::{BUTTON_STATES, ButtonImage};
+    use cmvs_core::{runtime::BUTTON_STATES, runtime::ButtonImage};
 
     #[test]
     fn scaled_group_points_are_device_pointer_positions() {

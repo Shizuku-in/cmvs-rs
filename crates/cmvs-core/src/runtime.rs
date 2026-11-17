@@ -1,9 +1,9 @@
 //! Game startup and the host frame loop.
 //!
 //! [`Runtime`] connects the VM to resources, scene state, input, audio, and saves.
-//! Keep the decoded startup script alive for the session and supply a
-//! [`PlatformBackend`] for window and dialog services. Every system command passes
-//! the selected profile's gate before dispatch.
+//! Pass the decoded startup script (owned, borrowed, or shared via `Arc<Script>`) and
+//! supply a [`PlatformBackend`] for window and dialog services. Every system command
+//! passes the selected profile's gate before dispatch.
 //!
 //! # Create a session
 //!
@@ -15,12 +15,12 @@
 //! let registry = Registry::builtin();
 //! let game = registry.identify_game(root, None)?;
 //! let script = load_start(root, &game.files)?;
-//! let session = Runtime::with_options(&script, root, &game, RuntimeOptions {
+//! let session = Runtime::with_options(script, root, &game, RuntimeOptions {
 //!     saves: SaveStorage::UserDirectory("user-data".into()),
 //!     decode_cmv_frames: true,
 //!     ..Default::default()
 //! })?;
-//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! # Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
 //! ```
 //!
 //! # Drive the host loop
@@ -54,21 +54,19 @@
 //! returns an error if the state includes unsupported records.
 //! Errors from VM execution, resources, and host services propagate to the caller.
 use crate::filesystem::{File, HostFs};
+pub use crate::modules::{bootstrap, save_menu, script_control};
 use crate::{
     MAX_PAYLOAD,
     audio::{AudioBackend, AudioHost, RecordingAudio},
     bootstrap::Bootstrap,
-    buttons::ButtonHost,
     camera::CameraHost,
     capture::ScreenCapture,
     fade::SkipGate,
     gesture::PointerGesture,
-    history::HistoryHost,
     image::ImageArchives,
     input::ActionInput,
-    machine::{Machine, Step},
+    machine::{IntoSharedScript, Machine, Step},
     message::MessageHost,
-    message_flags::MessageFlags,
     movie::{DirectoryMovies, MovieHost},
     platform::{DirectoryAssets, PlatformBackend, PlatformHost},
     profile::{CommandGate, Game, GameFiles},
@@ -78,13 +76,23 @@ use crate::{
     save_menu::{DirectorySaves, SaveMenuHost},
     scene::SceneHost,
     script_control::{ArchiveScripts, ControlEvent, ScriptControl, ScriptSource},
-    sequence::SequenceHost,
     snapshot::{SaveImage, SaveInfo, SaveTitle},
     system_save::{
         FileSystemSave, NewSystemSave, ProfileSystemSave, SystemSaveEvent, SystemSaveHost,
         SystemSaveSink,
     },
-    timers::VmTimers,
+};
+pub use crate::{
+    buttons::{
+        BUTTON_GROUPS, BUTTON_STATES, Button, ButtonGroup, ButtonHost, ButtonImage, ListGroup,
+    },
+    history::{HISTORY_CAPACITY, HistoryEntry, HistoryHost, MAX_HISTORY_TEXT, SAVED_ENTRIES},
+    message_flags::MessageFlags,
+    sequence::{
+        SAVED_SEQUENCE, SEQUENCE_ENTRIES, SequenceContext, SequenceEntry, SequenceHeader,
+        SequenceHost,
+    },
+    timers::{TIMER_SLOTS, VmTimers},
 };
 use std::{
     error::Error,
@@ -137,7 +145,7 @@ pub fn load_start_with_fs(
     fs: &dyn HostFs,
     root: &Path,
     files: &GameFiles,
-) -> Result<Script, Box<dyn Error>> {
+) -> Result<Script, Box<dyn Error + Send + Sync>> {
     let mut bytes = Vec::new();
     fs.open_read(&root.join(&files.start_script))?
         .take(MAX_PAYLOAD as u64 + 49)
@@ -153,7 +161,7 @@ pub fn load_start_with_fs(
 /// `root` is the game directory. Returns an error for I/O failures, oversized input,
 /// or malformed script data; no script instructions are executed.
 #[cfg(feature = "std-fs")]
-pub fn load_start(root: &Path, files: &GameFiles) -> Result<Script, Box<dyn Error>> {
+pub fn load_start(root: &Path, files: &GameFiles) -> Result<Script, Box<dyn Error + Send + Sync>> {
     load_start_with_fs(&crate::filesystem::StdFs, root, files)
 }
 /// Result of one [`Runtime::tick`], used to drive the host loop.
@@ -200,7 +208,7 @@ pub enum RuntimeError {
     /// Step limit between yields exceeded without yielding.
     Watchdog { steps: u64 },
     /// Any other host, codec, or runtime configuration failure.
-    Other(Box<dyn Error>),
+    Other(Box<dyn Error + Send + Sync>),
 }
 
 impl RuntimeError {
@@ -311,8 +319,8 @@ impl From<std::io::Error> for RuntimeError {
     }
 }
 
-impl From<Box<dyn Error>> for RuntimeError {
-    fn from(error: Box<dyn Error>) -> Self {
+impl From<Box<dyn Error + Send + Sync>> for RuntimeError {
+    fn from(error: Box<dyn Error + Send + Sync>) -> Self {
         let error = match error.downcast::<Self>() {
             Ok(error) => return *error,
             Err(error) => error,
@@ -393,26 +401,19 @@ pub struct RuntimeOptions {
     pub fs: Option<Arc<dyn HostFs>>,
 }
 
-/// Compatibility name for [`Runtime`].
-#[doc(hidden)]
-pub type Startup<'a> = Runtime<'a>;
-/// Compatibility name for [`RuntimeEvent`].
-#[doc(hidden)]
-pub type StartupEvent = RuntimeEvent;
-
 /// A running game session with VM, engine state, and resource services.
 ///
-/// Borrows the startup [`Script`] for the session lifetime. Construction opens
+/// Owns a shared startup [`Script`] handle for the session lifetime. Construction opens
 /// resources and configuration; execution begins with [`Self::tick`]. See the
 /// [module guide](self) for initialization and frame-loop order.
-pub struct Runtime<'a> {
+pub struct Runtime {
     fs: Arc<dyn HostFs>,
     slot_edit: Option<slot_edit::SlotEdit>,
     main_script_name: &'static [u8],
     quit: bool,
     focused: bool,
-    machine: Machine<'a>,
-    gate: CommandGate<'a>,
+    machine: Machine,
+    gate: CommandGate,
     /// Unreviewed commands first let through since the last `take_unreviewed_notices`.
     notices: Vec<u16>,
     bootstrap: Bootstrap,
@@ -466,20 +467,20 @@ pub struct Runtime<'a> {
     auto_resume_checked: bool,
     /// Engine +11192: the 0x22b8 thumbnail BMP.
     thumbnail: Option<Vec<u8>>,
-    save_clock: Box<dyn FnMut() -> SaveTime>,
+    save_clock: Box<dyn FnMut() -> SaveTime + Send>,
     auto_resume_skipped: bool,
 }
-impl<'a> Runtime<'a> {
+impl Runtime {
     /// Create a runtime and apply its initialization choices before any execution.
     ///
     /// Save storage is selected once through `options.saves`. Errors from profile
     /// locking, configuration, or unsupported initialization policies are returned here.
     pub fn with_options(
-        script: &'a Script,
+        script: impl IntoSharedScript,
         root: &Path,
-        game: &Game<'a>,
+        game: &Game<'_>,
         options: RuntimeOptions,
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let fs = match options.fs {
             Some(fs) => fs,
             None => {
@@ -527,11 +528,11 @@ impl<'a> Runtime<'a> {
     /// Use [`Self::with_options`] to select save storage and other initialization choices.
     #[cfg(feature = "std-fs")]
     pub fn new(
-        script: &'a Script,
+        script: impl IntoSharedScript,
         root: &Path,
-        game: &Game<'a>,
+        game: &Game<'_>,
         virtual_tick: u32,
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         Self::new_with_encoding(
             script,
             root,
@@ -543,12 +544,12 @@ impl<'a> Runtime<'a> {
     /// Create a session with an explicit text encoding; otherwise like [`Self::new`].
     #[cfg(feature = "std-fs")]
     pub fn new_with_encoding(
-        script: &'a Script,
+        script: impl IntoSharedScript,
         root: &Path,
-        game: &Game<'a>,
+        game: &Game<'_>,
         virtual_tick: u32,
         encoding: crate::TextEncoding,
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         Self::new_with_encoding_and_fs(
             script,
             root,
@@ -560,14 +561,15 @@ impl<'a> Runtime<'a> {
     }
 
     fn new_with_encoding_and_fs(
-        script: &'a Script,
+        script: impl IntoSharedScript,
         root: &Path,
-        game: &Game<'a>,
+        game: &Game<'_>,
         virtual_tick: u32,
         encoding: crate::TextEncoding,
         fs: Arc<dyn HostFs>,
-    ) -> Result<Self, Box<dyn Error>> {
-        let mut machine = Machine::new_with_encoding(script, encoding)?;
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
+        let script = script.into_shared_script();
+        let mut machine = Machine::new_with_encoding(Arc::clone(&script), encoding)?;
         machine.set_command_map(game.selection.profile.command_map());
         machine
             .state_mut()
@@ -640,7 +642,7 @@ impl<'a> Runtime<'a> {
             control: ScriptControl::for_profile(game.selection.profile, virtual_tick),
             source: ArchiveScripts::from_start(
                 fs.open_read(&root.join(&game.files.script_archive))?,
-                script,
+                &script,
                 game.files
                     .script_archive
                     .file_name()
@@ -704,7 +706,7 @@ impl<'a> Runtime<'a> {
         })
     }
     /// Inspect VM state and the current instruction position.
-    pub fn machine(&self) -> &Machine<'a> {
+    pub fn machine(&self) -> &Machine {
         &self.machine
     }
     /// Skip startup auto-load using its script guard, or an explicitly recorded binding.
@@ -713,7 +715,7 @@ impl<'a> Runtime<'a> {
         if self.steps != 0 {
             return Err("skip-auto-resume must be configured before startup");
         }
-        self.skip_auto_resume = match (enabled, self.gate.selection().record) {
+        self.skip_auto_resume = match (enabled, self.gate.record()) {
             (false, _) => None,
             (true, Some(record)) => {
                 let inferred = self
@@ -749,7 +751,7 @@ impl<'a> Runtime<'a> {
         self.gate.set_block_presumed(block);
     }
     /// Inspect the selected profile, command policy, and dispatch counts.
-    pub fn gate(&self) -> &CommandGate<'a> {
+    pub fn gate(&self) -> &CommandGate {
         &self.gate
     }
     /// Unreviewed commands let through for the first time since the previous call.
@@ -831,24 +833,18 @@ impl<'a> Runtime<'a> {
     pub fn set_decode_cmv_frames(&mut self, enabled: bool) {
         self.movies.set_decode_frames(enabled);
     }
-    /// Compatibility name for [`Self::set_decode_cmv_frames`].
-    #[doc(hidden)]
-    pub fn set_decode_movie_frames(&mut self, enabled: bool) {
-        self.set_decode_cmv_frames(enabled);
-    }
     /// Logical screen dimensions `[width, height]` in engine pixels.
     pub fn screen_size(&self) -> [u32; 2] {
         self.messages.screen_size()
     }
     /// Return the latest full-screen movie frame, or render the scene in software.
     ///
-    /// Compatibility helper. Prefer [`Self::movie_frame`] or [`Self::render_scene_frame`]
+    /// Prefer [`Self::movie_frame`] or [`Self::render_scene_frame`]
     /// when the host needs to distinguish the two output paths.
     /// Movie frames keep their decoded dimensions; scene output uses [`Self::screen_size`].
     /// To include message windows and glyphs, pass them to
     /// [`crate::scene_render::render_scene`] as additional objects. Unsupported scene
     /// state returns an error.
-    #[doc(hidden)]
     pub fn render_frame(&self) -> Result<crate::raster::RgbaImage, crate::FormatError> {
         match self.movie_frame() {
             Some(image) => Ok(image.clone()),
@@ -879,7 +875,7 @@ impl<'a> Runtime<'a> {
     /// [`Self::set_decode_cmv_frames`]; MGV playback uses its installed decoder.
     /// Call this or [`Self::advance_frame`] once at the frame boundary, not both.
     /// Resource, codec, audio, and scene-update failures propagate to the host.
-    pub fn advance_playback(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error>> {
+    pub fn advance_playback(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error + Send + Sync>> {
         if self.quit {
             return Ok(());
         }
@@ -910,17 +906,12 @@ impl<'a> Runtime<'a> {
         self.movies.advance_scene(delta_ms, &mut self.scene)?;
         self.advance_frame_state(delta_ms)
     }
-    /// Compatibility name for [`Self::advance_playback`].
-    #[doc(hidden)]
-    pub fn advance_decoded_frame(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error>> {
-        self.advance_playback(delta_ms)
-    }
     /// The main loop 0x14000e400 draws after the updates (0x140015900, then 0x140009c90);
     /// the draw 0x140015fc0 ends with 0x1400157b0, which serves a pending 0x2304 request.
     /// The core draws the scene and visible message windows on the device-sized research
     /// viewport. Glyphs belong to the backend and full-screen movies to their player, so
     /// a capture over either fails explicitly.
-    fn take_capture(&mut self) -> Result<(), Box<dyn Error>> {
+    fn take_capture(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         if !self.capture.requested() {
             return Ok(());
         }
@@ -933,7 +924,7 @@ impl<'a> Runtime<'a> {
         }
         self.draw_capture()
     }
-    fn draw_capture(&mut self) -> Result<(), Box<dyn Error>> {
+    fn draw_capture(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         let texts = (0..crate::message::TEXT_OBJECTS).filter_map(|i| self.messages.text(i));
         if texts
             .filter(|text| text.visible)
@@ -978,7 +969,7 @@ impl<'a> Runtime<'a> {
     pub fn supply_capture(
         &mut self,
         frame: crate::raster::RgbaImage,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if !self.capture_due {
             return Err("no screen capture is due".into());
         }
@@ -1011,7 +1002,7 @@ impl<'a> Runtime<'a> {
     /// Unlike [`Self::advance_playback`], this does not service audio output or
     /// use its movie clock. Scene movies and MGV playback still advance. The VM timer
     /// delta is consumed once after yield, never per instruction or budget slice.
-    pub fn advance_frame(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error>> {
+    pub fn advance_frame(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error + Send + Sync>> {
         if self.quit {
             return Ok(());
         }
@@ -1029,7 +1020,7 @@ impl<'a> Runtime<'a> {
         }
         self.advance_frame_state(delta_ms)
     }
-    fn advance_frame_state(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error>> {
+    fn advance_frame_state(&mut self, delta_ms: u32) -> Result<(), Box<dyn Error + Send + Sync>> {
         if !self.frame_running() {
             self.frame_delta = 0;
             return Ok(());
@@ -1099,7 +1090,7 @@ impl<'a> Runtime<'a> {
     ///
     /// Call before font objects are created. Hosts may use this to replace an
     /// unavailable configured face with the built-in default.
-    pub fn set_font_face(&mut self, face: &[u8]) -> Result<(), Box<dyn Error>> {
+    pub fn set_font_face(&mut self, face: &[u8]) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.settings.set_font_face(face)?;
         self.messages.set_default_face(face);
         Ok(())
@@ -1133,7 +1124,7 @@ impl<'a> Runtime<'a> {
         &self.save_image
     }
     /// Service host-driven output independently of VM/frame progression, including inactivity.
-    pub fn poll_audio_output(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn poll_audio_output(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.audio_backend.update()
     }
     /// Audio channels, resource registrations, and playback request state.
@@ -1147,7 +1138,7 @@ impl<'a> Runtime<'a> {
     pub fn set_audio_backend(
         &mut self,
         mut backend: Box<dyn AudioBackend>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         backend.configure_paths(self.bootstrap.paths())?;
         backend.configure_archive_parameters(self.bootstrap.archive_parameters())?;
         backend.configure_voice_ducking(self.audio.voice_ducking())?;
@@ -1163,7 +1154,10 @@ impl<'a> Runtime<'a> {
     }
     /// Opt into one CSS1 export to a new file outside the original game directory.
     /// Subsequent 0x2128 reads use the exported file after the write succeeds.
-    pub fn set_system_save_output(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
+    pub fn set_system_save_output(
+        &mut self,
+        path: &Path,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if self.steps != 0 || self.system_output.is_some() {
             return Err("select one system-save output mode before VM execution".into());
         }
@@ -1176,7 +1170,10 @@ impl<'a> Runtime<'a> {
     }
     /// Use a locked, independent user directory for CSS1 reads, repeated writes and
     /// gameplay-slot scanning. Only an absent initial CSS1 falls back to the game template.
-    pub fn set_user_data_directory(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
+    pub fn set_user_data_directory(
+        &mut self,
+        path: &Path,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if self.steps != 0 || self.system_output.is_some() {
             return Err("select one system-save output mode before VM execution".into());
         }
@@ -1195,7 +1192,7 @@ impl<'a> Runtime<'a> {
         )
     }
 
-    fn sync_cvns_persistent_starts(&mut self) -> Result<(), Box<dyn Error>> {
+    fn sync_cvns_persistent_starts(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         let persistent = self.bootstrap.cvns_persistent_starts();
         self.system_host.set_css0(persistent);
         if let Some(SystemOutput::Profile(profile)) = &mut self.system_output {
@@ -1209,7 +1206,7 @@ impl<'a> Runtime<'a> {
     pub fn set_save_profile(
         &mut self,
         mut profile: ProfileSystemSave,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if self.steps != 0 || self.system_output.is_some() {
             return Err("select one system-save output mode before VM execution".into());
         }
@@ -1297,7 +1294,7 @@ impl<'a> Runtime<'a> {
         &mut self,
         request: crate::dispatch::RuntimeCall,
         backend: &mut impl PlatformBackend,
-    ) -> Result<RuntimeEvent, Box<dyn Error>> {
+    ) -> Result<RuntimeEvent, Box<dyn Error + Send + Sync>> {
         use crate::dispatch::RuntimeOperation::*;
         request.validate(&self.machine)?;
         match request.operation() {
@@ -1867,5 +1864,21 @@ impl<'a> Runtime<'a> {
             pc,
             command: command + 0x2000,
         })
+    }
+}
+
+#[cfg(test)]
+mod send_static_tests {
+    use super::Runtime;
+    use crate::{machine::Machine, profile::CommandGate, ps3::Script};
+
+    fn assert_send_static<T: Send + 'static>() {}
+
+    #[test]
+    fn core_session_types_are_send_and_static() {
+        assert_send_static::<Script>();
+        assert_send_static::<Machine>();
+        assert_send_static::<Runtime>();
+        assert_send_static::<CommandGate>();
     }
 }

@@ -368,6 +368,131 @@ pub fn default_fs() -> Arc<dyn HostFs> {
     Arc::new(StdFs)
 }
 
+/// Failure resolving a bounded game-relative path against a host root directory.
+#[derive(Debug)]
+pub enum PathError {
+    /// The relative path failed lexical bounds checks or resolved outside the root.
+    Format(crate::FormatError),
+    /// Filesystem canonicalization failed (for example, `NotFound`).
+    Io(io::Error),
+}
+
+impl PathError {
+    /// Whether path resolution failed because the target path does not exist.
+    pub fn is_not_found(&self) -> bool {
+        matches!(self, Self::Io(error) if error.kind() == io::ErrorKind::NotFound)
+    }
+}
+
+impl std::fmt::Display for PathError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Format(error) => error.fmt(f),
+            Self::Io(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for PathError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Format(error) => Some(error),
+            Self::Io(error) => Some(error),
+        }
+    }
+}
+
+impl From<crate::FormatError> for PathError {
+    fn from(error: crate::FormatError) -> Self {
+        Self::Format(error)
+    }
+}
+
+impl From<io::Error> for PathError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+/// A bounded ASCII game-relative path, split on `/` or `\`, that must resolve inside the
+/// canonical `root`. Repeated interior separators name the same directory. If exact-case
+/// resolution fails with `NotFound` and `fs` provides directory listings, components match
+/// case-insensitively (matching Windows game expectations on case-sensitive hosts). A missing
+/// file surfaces as `PathError::Io` with `ErrorKind::NotFound`.
+pub fn resolve_under_with_fs(
+    fs: &dyn HostFs,
+    root: &Path,
+    name: &[u8],
+) -> Result<PathBuf, PathError> {
+    use crate::FormatError;
+    if name.is_empty()
+        || name.len() >= 2048
+        || !name.is_ascii()
+        || name.contains(&0)
+        || name.contains(&b':')
+    {
+        return Err(FormatError("game path must be a bounded ASCII relative path").into());
+    }
+    let separator = |b| matches!(b, b'/' | b'\\');
+    if separator(name[0]) || separator(name[name.len() - 1]) {
+        return Err(FormatError("invalid game path component").into());
+    }
+    let mut parts = Vec::new();
+    let mut direct = root.to_path_buf();
+    for part in name
+        .split(|&b| separator(b))
+        .filter(|part| !part.is_empty())
+    {
+        if part == b"." || part == b".." {
+            return Err(FormatError("invalid game path component").into());
+        }
+        let part = std::str::from_utf8(part)
+            .map_err(|_| FormatError("game path must be a bounded ASCII relative path"))?;
+        direct.push(part);
+        parts.push(part);
+    }
+    let resolved = match fs.canonicalize(&direct) {
+        Ok(path) => path,
+        Err(not_found) if not_found.kind() == io::ErrorKind::NotFound => {
+            let mut cur = root.to_path_buf();
+            for &part in &parts {
+                let exact = cur.join(part);
+                if fs.try_exists(&exact).unwrap_or(false) {
+                    cur = exact;
+                    continue;
+                }
+                let canon_cur = fs.canonicalize(&cur)?;
+                if !canon_cur.starts_with(root) {
+                    return Err(FormatError("game path resolves outside root").into());
+                }
+                let Some(mut names) = fs.read_dir_names(&canon_cur)? else {
+                    return Err(not_found.into());
+                };
+                names.sort();
+                let Some(matched) = names
+                    .into_iter()
+                    .find(|entry| entry.to_str().is_some_and(|s| s.eq_ignore_ascii_case(part)))
+                else {
+                    return Err(not_found.into());
+                };
+                cur = canon_cur.join(matched);
+            }
+            fs.canonicalize(&cur)?
+        }
+        Err(err) => return Err(err.into()),
+    };
+    if !resolved.starts_with(root) {
+        return Err(FormatError("game path resolves outside root").into());
+    }
+    Ok(resolved)
+}
+
+/// [`resolve_under_with_fs`] using [`StdFs`].
+#[cfg(feature = "std-fs")]
+pub fn resolve_under(root: &Path, name: &[u8]) -> Result<PathBuf, PathError> {
+    resolve_under_with_fs(&StdFs, root, name)
+}
+
 #[cfg(all(test, feature = "std-fs"))]
 mod tests {
     use super::*;

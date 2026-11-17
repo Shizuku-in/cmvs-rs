@@ -232,26 +232,7 @@ pub enum SaveImage {
 }
 
 impl SaveImage {
-    /// 0x22b2 / 0x14007c9a0 captures the next PC with repeat count zero.
-    /// Only an explicit research policy may proceed without the serialized image.
-    pub fn try_handle(
-        &mut self,
-        vm: &mut Machine<'_>,
-        continue_without_image: bool,
-    ) -> Result<bool, DecodeError> {
-        let Some((pc, 0x2b2)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        if !continue_without_image {
-            return Ok(false);
-        }
-        self.handle_unavailable(&mut Call::new(vm, pc, 0x2b2))?;
-        Ok(true)
-    }
-    pub(crate) fn handle_unavailable(
-        &mut self,
-        call: &mut Call<'_, '_>,
-    ) -> Result<(), DecodeError> {
+    pub(crate) fn handle_unavailable(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         // Validate/apply the only fallible live-state change before completing the
         // verified no-argument command. Completion advances PC and resets repeat.
@@ -270,7 +251,7 @@ impl SaveImage {
     /// Applies 0x140069270's only VM-visible effect without building the image:
     /// bit 0 is set for the captured copy, then cleared in live state.
     /// The variable change-tracking flag it may raise is not modeled.
-    pub fn capture_unavailable(&mut self, vm: &mut Machine<'_>) -> Result<(), &'static str> {
+    pub fn capture_unavailable(&mut self, vm: &mut Machine) -> Result<(), &'static str> {
         vm.state_mut().set_bit(0, false)?;
         *self = Self::Unavailable {
             script: vm.current_name().to_vec(),
@@ -293,15 +274,8 @@ impl SaveTitle {
     pub(crate) fn restore(&mut self, title: Vec<u8>) {
         self.0 = title;
     }
-    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, 0x162)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle(&mut Call::new(vm, pc, 0x162))?;
-        Ok(true)
-    }
 
-    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn handle(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         let raw = call.argument(4, "title")?;
         let title = call.vm.resolve_string(raw)?;
@@ -331,17 +305,8 @@ impl SaveInfo {
     pub fn values(&self) -> [Option<u32>; 3] {
         self.0
     }
-    /// 0x22b9, inline in the dispatcher: +11828 = SP-4, pops 4 bytes. 0x22ba (inline):
-    /// +11832 = SP-4 and +11836 = SP-8, pops 8.
-    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x2b9 | 0x2ba))) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle(&mut Call::new(vm, pc, command))?;
-        Ok(true)
-    }
 
-    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn handle(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let command = call.command;
         let first = call.argument(4, "first word")?;
         if command == 0x2b9 {

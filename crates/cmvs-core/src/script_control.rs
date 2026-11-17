@@ -8,7 +8,6 @@ use crate::{
     cpz::{ArchiveIndex, Cpz7Parameters},
     dispatch::Call,
     evaluate::error,
-    machine::Machine,
     ps3::Script,
 };
 use std::{
@@ -17,7 +16,7 @@ use std::{
     io::{Read, Seek},
 };
 
-pub type LoadError = Box<dyn Error>;
+pub type LoadError = Box<dyn Error + Send + Sync>;
 
 /// Open an archive using its literal startup registration when CPZ7 requires keys.
 /// Other archive versions keep their existing detection policy.
@@ -347,23 +346,9 @@ impl ScriptControl {
         }
     }
 
-    pub fn try_handle<S: ScriptSource>(
-        &mut self,
-        vm: &mut Machine<'_>,
-        source: &mut S,
-    ) -> Result<Option<ControlEvent>, LoadError> {
-        let Some((pc, command)) = vm.pending_system() else {
-            return Ok(None);
-        };
-        if !matches!(command, 0x80 | 0x81 | 0x83 | 0x88..=0x8c | 0x412 | 0x42a) {
-            return Ok(None);
-        }
-        self.handle(&mut Call::new(vm, pc, command), source)
-            .map(Some)
-    }
     pub(crate) fn handle(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         source: &mut dyn ScriptSource,
     ) -> Result<ControlEvent, LoadError> {
         let (pc, command) = (call.pc, call.command);

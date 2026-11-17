@@ -1,4 +1,4 @@
-use cmvs_core::mgv::MgvIndex;
+use cmvs_core::format::mgv::MgvIndex;
 use std::io::Cursor;
 fn synthetic() -> Vec<u8> {
     let mut b = b"MGV1".to_vec();

@@ -20,13 +20,10 @@ use cmvs_console::{
     error_screen, format_tick_error, library, load_key_bindings, menu, millis, render_software,
 };
 use cmvs_core::{
-    profile::Registry,
-    raster::RgbaImage,
-    runtime::{
-        FrameBudget, FrameDriver, FrameOutcome, Runtime, RuntimeEvent, RuntimeOptions, SaveStorage,
-        load_start,
-    },
-    viewport::{Viewport, presentation_mode},
+    profile::Registry, render::raster::RgbaImage, render::viewport::Viewport,
+    render::viewport::presentation_mode, runtime::FrameBudget, runtime::FrameDriver,
+    runtime::FrameOutcome, runtime::Runtime, runtime::RuntimeEvent, runtime::RuntimeOptions,
+    runtime::SaveStorage, runtime::load_start,
 };
 use cmvs_font::font::FontRenderer;
 use cmvs_native::vita_button as button;
@@ -36,7 +33,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 const BASE: &str = "ux0:data/cmvs-rs";
 const LOG_PATH: &str = "ux0:data/cmvs-rs/error.log";
 /// The system's Japanese gothic face (OpenType CFF), used without `font.ttf`.
@@ -96,7 +93,7 @@ fn console(confirm_is_cross: bool) -> Console {
 
 /// Composites the scene on the GPU; the caller presents the canvas.
 fn render_gpu(
-    startup: &Runtime<'_>,
+    startup: &Runtime,
     font: &mut FontRenderer,
     gpu: &mut gpu::GpuRenderer,
 ) -> Result<()> {
@@ -156,7 +153,7 @@ fn run(
     });
     // Image planes decode on this thread and on one more, on the core the movie
     // prefetch uses: the audio core stays free.
-    startup.set_image_decode_threads(cmvs_core::image::DecodeThreads {
+    startup.set_image_decode_threads(cmvs_core::host::image::DecodeThreads {
         extra: 1,
         on_start: Some(|_| {
             sys::prefer_core(2);
@@ -170,7 +167,7 @@ fn run(
     // Requested screen captures read back the canvas instead of a software redraw.
     startup.set_host_capture(true);
     startup.set_save_clock(Box::new(cmvs_core::runtime::utc_save_time));
-    startup.set_random_seed(cmvs_core::random::host_time_seed());
+    startup.set_random_seed(cmvs_core::host::random::host_time_seed());
     let mut font = encoding::load_game_font(
         base,
         encoding,
@@ -197,7 +194,7 @@ fn run(
         text_dialog: |t, p, i, l, c| sys::ime_dialog(t, p, i, l, c),
     };
     backend.display.render_mode =
-        cmvs_core::platform::supported_render_mode(&backend, backend.display.render_mode)?;
+        cmvs_core::host::platform::supported_render_mode(&backend, backend.display.render_mode)?;
 
     let mut controls = Controls::new(size, console.buttons.clone());
     // The button that started the game must not click it.
@@ -248,7 +245,7 @@ fn run(
                     last_frame = Instant::now();
                     last_poll = last_frame;
                 }
-                Ok::<_, Box<dyn std::error::Error>>(event)
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(event)
             })?;
         match outcome {
             FrameOutcome::Stopped(RuntimeEvent::Quit) => {

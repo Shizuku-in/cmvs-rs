@@ -1,9 +1,9 @@
 use crate::support;
 use cmvs_core::{
-    audio::{AudioBackend, AudioHost, AudioRequest, RecordingAudio, VoiceDuckingSettings},
-    dispatch::{self, AudioHosts, Flow, Hosts},
-    machine::Machine,
-    profile::Semantics,
+    host::audio::AudioBackend, host::audio::AudioHost, host::audio::AudioRequest,
+    host::audio::RecordingAudio, host::audio::VoiceDuckingSettings, profile::Semantics,
+    vm::dispatch, vm::dispatch::AudioHosts, vm::dispatch::Flow, vm::dispatch::Hosts,
+    vm::machine::Machine,
 };
 use std::error::Error;
 use support::bytecode::{command, pending, script};
@@ -38,7 +38,7 @@ fn cvns_master_percentage_reaches_the_mixer_with_integer_rounding_and_clamping()
 
 #[test]
 fn preloaded_playback_obeys_se_gate_and_keeps_results_and_normal_channels() {
-    use cmvs_core::{audio::AudioSettings, profile::Registry};
+    use cmvs_core::{host::audio::AudioSettings, profile::Registry};
     let profile = Registry::builtin().profile("cmvs-20071117").unwrap();
     for enabled in [false, true] {
         for (scale, volume) in [(0, 128), (u32::MAX, 128), (256, 128), (512, 256)] {
@@ -99,16 +99,16 @@ fn preloaded_playback_obeys_se_gate_and_keeps_results_and_normal_channels() {
 
 #[test]
 fn preload_variant_reports_load_results_and_releases_independent_slots() {
-    use cmvs_core::profile::{Registry, VariantId};
+    use cmvs_core::{profile::Registry, profile::VariantId};
     struct Pool {
         loaded: bool,
         fail: bool,
     }
     impl AudioBackend for Pool {
-        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>> {
             unreachable!()
         }
-        fn preload(&mut self, slot: u8, name: &[u8]) -> Result<bool, Box<dyn Error>> {
+        fn preload(&mut self, slot: u8, name: &[u8]) -> Result<bool, Box<dyn Error + Send + Sync>> {
             assert_eq!(slot, 23);
             assert!(name.is_empty());
             if self.fail {
@@ -116,7 +116,7 @@ fn preload_variant_reports_load_results_and_releases_independent_slots() {
             }
             Ok(self.loaded)
         }
-        fn release_preloaded(&mut self, slot: u8) -> Result<(), Box<dyn Error>> {
+        fn release_preloaded(&mut self, slot: u8) -> Result<(), Box<dyn Error + Send + Sync>> {
             assert_eq!(slot, 23);
             self.loaded = false;
             Ok(())
@@ -137,17 +137,16 @@ fn preload_variant_reports_load_results_and_releases_independent_slots() {
         let before = (vm.pc(), vm.stack().len_bytes());
         let semantics = profile.semantics(0x248);
         assert_eq!(semantics, Semantics::Variant(VariantId::AudioPreload));
-        let execute =
-            |vm: &mut Machine<'_>, audio: &mut AudioHost, backend: &mut Pool, semantics| {
-                dispatch::run(
-                    semantics,
-                    vm,
-                    &mut Hosts {
-                        audio: Some(AudioHosts { audio, backend }),
-                        ..Default::default()
-                    },
-                )
-            };
+        let execute = |vm: &mut Machine, audio: &mut AudioHost, backend: &mut Pool, semantics| {
+            dispatch::run(
+                semantics,
+                vm,
+                &mut Hosts {
+                    audio: Some(AudioHosts { audio, backend }),
+                    ..Default::default()
+                },
+            )
+        };
         assert!(execute(&mut vm, &mut audio, &mut backend, semantics).is_err());
         assert_eq!((vm.pc(), vm.stack().len_bytes()), before);
         backend.fail = false;
@@ -188,10 +187,7 @@ fn preload_variant_reports_load_results_and_releases_independent_slots() {
 
 #[test]
 fn se_restart_is_variant_only_and_preserves_record_and_results() {
-    use cmvs_core::{
-        audio::AudioSettings,
-        profile::{Registry, VariantId},
-    };
+    use cmvs_core::{host::audio::AudioSettings, profile::Registry, profile::VariantId};
     for id in ["cmvs-20071117", "cmvs-20080719"] {
         let semantics = Registry::builtin().profile(id).unwrap().semantics(0xb4);
         assert_eq!(semantics, Semantics::Variant(VariantId::SeRestart));
@@ -253,10 +249,10 @@ fn se_restart_is_variant_only_and_preserves_record_and_results() {
 
 #[test]
 fn se_restart_rejects_bad_arguments_and_unsupported_backends_before_commit() {
-    use cmvs_core::profile::{Semantics, VariantId};
+    use cmvs_core::{profile::Semantics, profile::VariantId};
     struct Unsupported;
     impl AudioBackend for Unsupported {
-        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>> {
             Ok(false)
         }
     }
@@ -292,10 +288,7 @@ fn se_restart_rejects_bad_arguments_and_unsupported_backends_before_commit() {
 
 #[test]
 fn se_gain_uses_bound_dispatch_without_consuming_results_or_changing_channel_records() {
-    use cmvs_core::{
-        audio::AudioSettings,
-        profile::{Registry, VariantId},
-    };
+    use cmvs_core::{host::audio::AudioSettings, profile::Registry, profile::VariantId};
     let semantics = Registry::builtin()
         .profile("cmvs-20080719")
         .unwrap()
@@ -346,10 +339,10 @@ fn se_gain_uses_bound_dispatch_without_consuming_results_or_changing_channel_rec
 
 #[test]
 fn se_gain_rejects_invalid_parameters_and_backend_failure_before_commit() {
-    use cmvs_core::profile::{Registry, Semantics};
+    use cmvs_core::{profile::Registry, profile::Semantics};
     struct Unsupported;
     impl AudioBackend for Unsupported {
-        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>> {
             Ok(false)
         }
     }
@@ -395,7 +388,7 @@ fn se_gain_rejects_invalid_parameters_and_backend_failure_before_commit() {
 }
 
 fn run(
-    vm: &mut Machine<'_>,
+    vm: &mut Machine,
     audio: &mut AudioHost,
     backend: &mut dyn AudioBackend,
 ) -> Result<Option<Flow>, dispatch::DispatchError> {
@@ -411,10 +404,13 @@ fn run(
 
 struct Reject;
 impl AudioBackend for Reject {
-    fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+    fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>> {
         unreachable!()
     }
-    fn configure_voice_ducking(&mut self, _: VoiceDuckingSettings) -> Result<(), Box<dyn Error>> {
+    fn configure_voice_ducking(
+        &mut self,
+        _: VoiceDuckingSettings,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
             "device rejected configuration",
@@ -440,7 +436,13 @@ fn errors_keep_location_typed_source_and_retry_state() {
         error.as_io().unwrap().kind(),
         std::io::ErrorKind::PermissionDenied
     );
-    assert_eq!(error.to_string(), "device rejected configuration");
+    assert_eq!(
+        error.to_string(),
+        format!(
+            "system command 0x2238 at 0x{:x}: device rejected configuration",
+            before.0
+        )
+    );
     assert_eq!(
         error
             .source()
@@ -470,7 +472,10 @@ fn errors_keep_location_typed_source_and_retry_state() {
     let decode = error.as_decode().unwrap();
     assert_eq!(decode.reason, "value");
     assert_eq!(decode.opcode, Some(0x2238));
-    assert_eq!(decode.to_string(), error.to_string());
+    assert_eq!(
+        error.to_string(),
+        format!("system command 0x2238 at 0x0: {decode}")
+    );
     assert_eq!(error.source().unwrap().downcast_ref(), Some(decode));
     assert_eq!(audio.voice_ducking().percent, 50);
 }

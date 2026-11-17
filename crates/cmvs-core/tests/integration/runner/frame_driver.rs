@@ -1,12 +1,12 @@
 use super::{Root, Runtime, RuntimeEvent, commands};
 use cmvs_core::{
-    platform::{DeviceFrameResult, PlatformBackend, PlatformRequest, RecordingBackend},
-    raster::RgbaImage,
-    runtime::{FrameBudget, FrameDriver, FrameOutcome, RuntimeError},
+    host::platform::DeviceFrameResult, host::platform::PlatformBackend,
+    host::platform::PlatformRequest, host::platform::RecordingBackend, render::raster::RgbaImage,
+    runtime::FrameBudget, runtime::FrameDriver, runtime::FrameOutcome, runtime::RuntimeError,
 };
 use std::{error::Error, time::Duration};
 
-fn slice(driver: &mut FrameDriver, run: &mut Runtime<'_>, steps: usize) -> FrameOutcome {
+fn slice(driver: &mut FrameDriver, run: &mut Runtime, steps: usize) -> FrameOutcome {
     driver
         .run_slice(run, &mut FrameBudget::steps(steps), |run| {
             run.tick(&mut RecordingBackend::default())
@@ -160,7 +160,7 @@ fn device_retry_keeps_slice_budget_and_structured_stops() {
         driver
             .run_slice(&mut run, &mut budget, |_| {
                 calls += 1;
-                Ok::<_, Box<dyn Error>>(RuntimeEvent::Progress)
+                Ok::<_, Box<dyn Error + Send + Sync>>(RuntimeEvent::Progress)
             })
             .unwrap(),
         FrameOutcome::BudgetExhausted
@@ -200,13 +200,13 @@ fn async_device_frame_pending_retains_input_delta_watchdog_and_resumes() {
         frame: Option<RgbaImage>,
     }
     impl PlatformBackend for AsyncBackend {
-        fn poll_device_frame(&mut self) -> Result<DeviceFrameResult, Box<dyn Error>> {
+        fn poll_device_frame(&mut self) -> Result<DeviceFrameResult, Box<dyn Error + Send + Sync>> {
             Ok(match self.frame.clone() {
                 Some(image) => DeviceFrameResult::Ready(image),
                 None => DeviceFrameResult::Pending,
             })
         }
-        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
             unreachable!()
         }
     }
@@ -312,10 +312,10 @@ fn runtime_error_exposes_structured_variants_and_sources() {
     let mut run = Runtime::new(&script, &root.0, &root.game(), 0).unwrap();
     struct FailingDevice;
     impl PlatformBackend for FailingDevice {
-        fn read_device_frame(&mut self) -> Result<RgbaImage, Box<dyn Error>> {
+        fn read_device_frame(&mut self) -> Result<RgbaImage, Box<dyn Error + Send + Sync>> {
             Err(std::io::Error::new(std::io::ErrorKind::BrokenPipe, "gpu pipe lost").into())
         }
-        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
             unreachable!()
         }
     }

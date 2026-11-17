@@ -5,11 +5,11 @@ use std::{error::Error, fmt};
 #[derive(Debug)]
 pub enum PlayerError {
     /// Opening the game, font, save profile, or output services failed.
-    Initialization(Box<dyn Error>),
+    Initialization(Box<dyn Error + Send + Sync>),
     /// A VM step or frame update failed.
-    Execution(Box<dyn Error>),
+    Execution(Box<dyn Error + Send + Sync>),
     /// Saving user preferences failed.
-    Persistence(Box<dyn Error>),
+    Persistence(Box<dyn Error + Send + Sync>),
     /// The VM reached a barrier or an unsupported command.
     Stopped(RuntimeEvent),
 }

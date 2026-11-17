@@ -32,7 +32,7 @@ impl AudioThread {
         root: &Path,
         mut output: D,
         stack_size: Option<usize>,
-    ) -> Result<(NativeAudio, Self), Box<dyn Error>> {
+    ) -> Result<(NativeAudio, Self), Box<dyn Error + Send + Sync>> {
         let (audio, mut pcm) = NativeAudio::pull(root, output.sample_rate(), output.channels())?;
         let stop = Arc::new(AtomicBool::new(false));
         let fault = Arc::new(Mutex::new(None));
@@ -63,7 +63,7 @@ impl AudioThread {
     }
 
     /// Reports a device failure from the audio thread.
-    pub fn check(&self) -> Result<(), Box<dyn Error>> {
+    pub fn check(&self) -> Result<(), Box<dyn Error + Send + Sync>> {
         match *self.fault.lock().unwrap() {
             Some(error) => Err(error.into()),
             None => Ok(()),

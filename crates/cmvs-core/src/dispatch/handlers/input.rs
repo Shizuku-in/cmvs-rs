@@ -3,10 +3,10 @@ use crate::dispatch::FunctionKeys;
 use crate::dispatch::{Call, Flow, Hosts};
 use std::error::Error;
 
-pub(in crate::dispatch) fn root_input(
+pub(in super::super) fn root_input(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts.input.as_mut().expect("input capability checked");
     if matches!(call.command, 0x2ef | 0x447) {
         crate::input::handle_skipping(call, h.input, h.skip)?;
@@ -16,10 +16,10 @@ pub(in crate::dispatch) fn root_input(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_buttons(
+pub(in super::super) fn root_buttons(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .buttons
         .as_deref_mut()
@@ -34,10 +34,10 @@ pub(in crate::dispatch) fn root_buttons(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_button_input(
+pub(in super::super) fn root_button_input(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts.input.as_mut().expect("input capability checked");
     hosts
         .buttons
@@ -54,10 +54,10 @@ pub(in crate::dispatch) fn root_button_input(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_list_input(
+pub(in super::super) fn root_list_input(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts.input.as_mut().expect("input capability checked");
     hosts
         .buttons
@@ -78,10 +78,10 @@ pub(in crate::dispatch) fn root_list_input(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_drag_press(
+pub(in super::super) fn root_drag_press(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts.input.as_mut().expect("input capability checked");
     hosts
         .gesture
@@ -91,10 +91,10 @@ pub(in crate::dispatch) fn root_drag_press(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_gesture(
+pub(in super::super) fn root_gesture(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .gesture
         .as_deref_mut()
@@ -103,10 +103,10 @@ pub(in crate::dispatch) fn root_gesture(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_function_keys(
+pub(in super::super) fn root_function_keys(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     match hosts
         .function_keys
         .as_mut()
@@ -121,19 +121,19 @@ pub(in crate::dispatch) fn root_function_keys(
 }
 
 /// Static variant tables used when provisioning shared host capabilities.
-pub(in crate::dispatch) fn variant_input_press(
+pub(in super::super) fn variant_input_press(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts.input.as_mut().expect("input capability checked");
     crate::input::handle_press(call, h.input)?;
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn select_list(
+pub(in super::super) fn select_list(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts.input.as_mut().expect("input capability checked");
     hosts
         .buttons

@@ -1,9 +1,7 @@
 use crate::support;
 use crate::support::shared_media;
-use cmvs_core::{
-    machine::Machine,
-    sequence::{SequenceHeader, SequenceHost},
-};
+use crate::support::shared_state::SharedState;
+use cmvs_core::{runtime::SequenceHeader, runtime::SequenceHost, vm::machine::Machine};
 use shared_media::SharedSequence;
 use support::bytecode::{command, pending, script};
 
@@ -29,14 +27,14 @@ fn current_index_uses_activity_not_count_and_preserves_raw_index_bits() {
     }
 }
 
-fn run(vm: &mut Machine<'_>, sequence: &mut SequenceHost) {
+fn run(vm: &mut Machine, sequence: &mut SequenceHost) {
     pending(vm);
     assert!(sequence.shared_sequence(vm).unwrap());
 }
 
 #[test]
 fn wait_append_caps_at_sixteen_preserves_results_and_reset_keeps_inactive_entries() {
-    use cmvs_core::sequence::SequenceEntry;
+    use cmvs_core::runtime::SequenceEntry;
     let mut code = vec![];
     for duration in 0..17 {
         command(&mut code, 0x2286, &[duration]);
@@ -265,7 +263,7 @@ fn camera_sequence_starts_motion_at_execution_and_requires_the_camera_host() {
     let mut vm = Machine::new(&program).unwrap();
     let mut host = SequenceHost::default();
     let mut scene = motion_scene();
-    let mut camera = cmvs_core::camera::CameraHost::default();
+    let mut camera = cmvs_core::render::camera::CameraHost::default();
     for _ in 0..2 {
         run(&mut vm, &mut host);
     }
@@ -295,9 +293,9 @@ fn camera_sequence_immediate_paths_quantize_xyz_without_cancelling_old_motion() 
         );
         let old = script(&old);
         let mut old_vm = Machine::new(&old).unwrap();
-        let mut camera = cmvs_core::camera::CameraHost::default();
+        let mut camera = cmvs_core::render::camera::CameraHost::default();
         pending(&mut old_vm);
-        camera.try_handle(&mut old_vm).unwrap();
+        camera.shared_state(&mut old_vm).unwrap();
         let old_words = camera.camera(0).unwrap().words;
         let mut code = vec![];
         command(
@@ -337,12 +335,15 @@ fn camera_sequence_immediate_paths_quantize_xyz_without_cancelling_old_motion() 
 }
 
 struct NoImages;
-impl cmvs_core::image::ImageSource for NoImages {
-    fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+impl cmvs_core::host::image::ImageSource for NoImages {
+    fn read(
+        &mut self,
+        _: &[u8],
+    ) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
         panic!("world motion must not read image resources")
     }
 }
-fn motion_scene() -> cmvs_core::scene::SceneHost {
+fn motion_scene() -> cmvs_core::render::scene::SceneHost {
     let mut code = vec![];
     command(&mut code, 0x2020, &[20]);
     command(&mut code, 0x2040, &[20]);
@@ -361,10 +362,10 @@ fn motion_scene() -> cmvs_core::scene::SceneHost {
     );
     let program = script(&code);
     let mut vm = Machine::new(&program).unwrap();
-    let mut scene = cmvs_core::scene::SceneHost::default();
+    let mut scene = cmvs_core::render::scene::SceneHost::default();
     for _ in 0..7 {
         pending(&mut vm);
-        assert!(scene.try_handle(&mut vm).unwrap());
+        assert!(scene.shared_state(&mut vm).unwrap());
     }
     scene
 }
@@ -404,8 +405,14 @@ fn motion_sequence_defers_rebuild_captures_execution_base_and_does_not_wait_for_
     let setter = script(&setter);
     let mut setter_vm = Machine::new(&setter).unwrap();
     pending(&mut setter_vm);
-    scene.try_handle(&mut setter_vm).unwrap();
-    let execution_words = scene.object(20).unwrap().draw.as_ref().unwrap().words;
+    scene.shared_state(&mut setter_vm).unwrap();
+    let execution_words = scene
+        .object(20)
+        .unwrap()
+        .draw
+        .as_ref()
+        .unwrap()
+        .snapshot_words();
     host.advance_frame_with_images(29, &mut scene, &mut NoImages)
         .unwrap();
     assert_eq!(host.header().index, 0);
@@ -413,7 +420,7 @@ fn motion_sequence_defers_rebuild_captures_execution_base_and_does_not_wait_for_
         .unwrap();
     assert_eq!(host.header().index, 2);
     let draw = scene.object(20).unwrap().draw.as_ref().unwrap();
-    assert_eq!(draw.words, execution_words);
+    assert_eq!(draw.snapshot_words(), execution_words);
     let motion = draw.world_motion.as_ref().unwrap();
     assert_eq!(
         motion.keys[7],
@@ -427,7 +434,13 @@ fn motion_sequence_defers_rebuild_captures_execution_base_and_does_not_wait_for_
     assert_eq!(motion.playback.as_ref().unwrap().elapsed, 0);
     scene.advance_frame(100);
     assert_eq!(
-        scene.object(20).unwrap().draw.as_ref().unwrap().words[12],
+        scene
+            .object(20)
+            .unwrap()
+            .draw
+            .as_ref()
+            .unwrap()
+            .world_position_bits()[1],
         20.62f32.to_bits()
     );
     host.advance_frame_with_images(50, &mut scene, &mut NoImages)
@@ -440,7 +453,10 @@ fn motion_sequence_defers_rebuild_captures_execution_base_and_does_not_wait_for_
     scene.advance_frame(200);
     scene.advance_frame(100);
     let draw = scene.object(20).unwrap().draw.as_ref().unwrap();
-    assert_eq!(&draw.words[11..14], &[1f32, 2.0, 3.0].map(f32::to_bits));
+    assert_eq!(
+        &draw.world_position_bits(),
+        &[1f32, 2.0, 3.0].map(f32::to_bits)
+    );
     assert!(draw.world_motion.is_none());
 }
 #[test]
@@ -528,7 +544,7 @@ fn subtype_one_motion_runs_normally_but_fast_finish_snaps_and_removes_the_old_tr
             scene.advance_frame(100);
         }
         let draw = scene.object(20).unwrap().draw.as_ref().unwrap();
-        assert_eq!(&draw.words[11..14], &xyz);
+        assert_eq!(&draw.world_position_bits(), &xyz);
         assert!(draw.world_motion.is_none());
         assert_eq!(vm.stack().len_bytes(), 0);
         assert_eq!(vm.state().system_integer(0), Some(123));
@@ -557,7 +573,7 @@ fn motion_sequence_execution_errors_preserve_entry_and_target_but_missing_slots_
             });
             let mut vm = Machine::new(&program).unwrap();
             pending(&mut vm);
-            scene.try_handle(&mut vm).unwrap();
+            scene.shared_state(&mut vm).unwrap();
         }
         let before = scene.object(20).unwrap().clone();
         run(&mut vm, &mut host);
@@ -593,7 +609,7 @@ fn motion_append_preserves_raw_bits_caps_at_sixteen_and_missing_args_are_transac
     }
     assert!(matches!(
         host.entries()[0],
-        Some(cmvs_core::sequence::SequenceEntry::WorldMotion {
+        Some(cmvs_core::runtime::SequenceEntry::WorldMotion {
             xyz: [0x7fc01234, 0x80000000, 0x7f800000],
             mode: 0xffff,
             duration: u32::MAX,

@@ -5,10 +5,8 @@ use crate::{
     target::{Target, cap},
 };
 use cmvs_core::{
-    MAX_PAYLOAD,
-    bytecode::{self, InstructionKind},
-    profile::CommandStatus,
-    ps3::Script,
+    MAX_PAYLOAD, format::ps3::Script, profile::CommandStatus, vm::bytecode,
+    vm::bytecode::InstructionKind,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -239,24 +237,24 @@ fn extension(name: &[u8]) -> String {
 /// Checks the header a resource of this kind must have; other kinds pass on their checksum.
 fn resource_header(kind: &str, bytes: &[u8]) -> Result<(), String> {
     match kind {
-        "pb3" => cmvs_core::pb3::Header::parse(bytes)
+        "pb3" => cmvs_core::format::pb3::Header::parse(bytes)
             .map(|_| ())
             .map_err(|e| e.to_string()),
-        "pb2" => cmvs_core::pb2::Header::parse(bytes)
+        "pb2" => cmvs_core::format::pb2::Header::parse(bytes)
             .map(|_| ())
             .map_err(|e| e.to_string()),
-        "msk" => cmvs_core::msk::Header::parse(bytes)
+        "msk" => cmvs_core::format::msk::Header::parse(bytes)
             .map(|_| ())
             .map_err(|e| e.to_string()),
-        "mv2" => cmvs_core::mv2::Header::parse(bytes)
+        "mv2" => cmvs_core::format::mv2::Header::parse(bytes)
             .map(|_| ())
             .map_err(|e| e.to_string()),
         "ogg" if !bytes.starts_with(b"OggS") => Err("missing OggS signature".into()),
         // Scene movies are CMV6 or CMV8; CMV9 has its own container.
-        "cmv" => cmvs_core::cmv::CmvIndex::read_scene(&mut std::io::Cursor::new(bytes))
+        "cmv" => cmvs_core::format::cmv::CmvIndex::read_scene(&mut std::io::Cursor::new(bytes))
             .map(|_| ())
             .or_else(|first| {
-                cmvs_core::cmv9::Cmv9Index::parse(bytes)
+                cmvs_core::format::cmv9::Cmv9Index::parse(bytes)
                     .map(|_| ())
                     .map_err(|second| format!("{first}; as CMV9: {second}"))
             }),
@@ -275,11 +273,11 @@ fn loose_cmv_header(reader: &mut (impl Read + Seek)) -> Result<(), String> {
             .take(MAX_PAYLOAD as u64 + 1)
             .read_to_end(&mut bytes)
             .map_err(|e| e.to_string())?;
-        cmvs_core::cmv9::Cmv9Index::parse(&bytes)
+        cmvs_core::format::cmv9::Cmv9Index::parse(&bytes)
             .map(|_| ())
             .map_err(|e| e.to_string())
     } else {
-        cmvs_core::cmv::CmvIndex::read_scene_io(reader)
+        cmvs_core::format::cmv::CmvIndex::read_scene_io(reader)
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
@@ -354,7 +352,7 @@ pub fn resources(target: &Target) -> CheckResult {
                 File::open(&path)
                     .map_err(|e| e.to_string())
                     .and_then(|mut f| {
-                        cmvs_core::mgv::MgvIndex::read_io(&mut f)
+                        cmvs_core::format::mgv::MgvIndex::read_io(&mut f)
                             .map(|_| ())
                             .map_err(|e| e.to_string())
                     })
@@ -410,7 +408,7 @@ pub fn bundled_saves(target: &Target) -> CheckResult {
         .game
         .as_ref()
         .and_then(|game| cmvs_core::runtime::snapshot_layout_for(game.selection.profile))
-        .unwrap_or(cmvs_core::snapshot::SnapshotLayout::TextV3);
+        .unwrap_or(cmvs_core::format::snapshot::SnapshotLayout::TextV3);
     let mut rows = Vec::new();
     let mut failed = 0;
     for path in paths {
@@ -423,36 +421,36 @@ pub fn bundled_saves(target: &Target) -> CheckResult {
             continue;
         };
         let result = if lower == "system.dat" {
-            cmvs_core::system_save::Css1Save::decode(&bytes)
+            cmvs_core::format::system_save::Css1Save::decode(&bytes)
                 .map(|_| "CSS1 system save".to_owned())
                 .map_err(|e| e.to_string())
         } else if lower.starts_with("save") && lower.ends_with(".dat") {
             if bytes.starts_with(b"CSS0") {
                 css0_starts(target).and_then(|starts| {
-                    cmvs_core::system_save::Css0Save::decode(&bytes, starts)
+                    cmvs_core::format::system_save::Css0Save::decode(&bytes, starts)
                         .map(|_| "CSS0 system save".to_owned())
                         .map_err(|e| e.to_string())
                 })
             } else {
-                cmvs_core::save::Csv2Save::decode_any(&bytes)
+                cmvs_core::format::save::Csv2Save::decode_any(&bytes)
                     .map_err(|e| e.to_string())
                     .and_then(|(family, save)| match (family, layout) {
                         (
-                            cmvs_core::save_menu::SaveFamily::Cvns,
-                            cmvs_core::snapshot::SnapshotLayout::CvnsCsp1,
+                            cmvs_core::runtime::save_menu::SaveFamily::Cvns,
+                            cmvs_core::format::snapshot::SnapshotLayout::CvnsCsp1,
                         ) => {
-                            if cmvs_core::snapshot::CvnsSnapshot::has_cmvs_rs_records(
+                            if cmvs_core::format::snapshot::CvnsSnapshot::has_cmvs_rs_records(
                                 &save.snapshot,
                             ) {
-                                cmvs_core::snapshot::CvnsSnapshot::decode(&save.snapshot)
+                                cmvs_core::format::snapshot::CvnsSnapshot::decode(&save.snapshot)
                                     .map(|_| "CSP1 gameplay save".to_owned())
                                     .map_err(|e| e.to_string())
                             } else {
                                 Ok("CSP1 native gameplay container".to_owned())
                             }
                         }
-                        (cmvs_core::save_menu::SaveFamily::Cmvs, _) => {
-                            cmvs_core::snapshot::EngineSnapshot::decode_with_layout(
+                        (cmvs_core::runtime::save_menu::SaveFamily::Cmvs, _) => {
+                            cmvs_core::format::snapshot::EngineSnapshot::decode_with_layout(
                                 &save.snapshot,
                                 layout,
                             )
@@ -484,19 +482,22 @@ pub fn bundled_saves(target: &Target) -> CheckResult {
     CheckResult::new("S5", TITLE, outcome).with(Json::obj([("saves", Json::Arr(rows))]))
 }
 
-fn css0_starts(target: &Target) -> Result<cmvs_core::system_save::PersistentStarts, String> {
+fn css0_starts(
+    target: &Target,
+) -> Result<cmvs_core::format::system_save::PersistentStarts, String> {
     let Some(files) = &target.files else {
-        return Ok(cmvs_core::system_save::PersistentStarts::default());
+        return Ok(cmvs_core::format::system_save::PersistentStarts::default());
     };
     let Some(game) = &target.game else {
-        return Ok(cmvs_core::system_save::PersistentStarts::default());
+        return Ok(cmvs_core::format::system_save::PersistentStarts::default());
     };
     let Some(map) = game.selection.profile.command_map() else {
-        return Ok(cmvs_core::system_save::PersistentStarts::default());
+        return Ok(cmvs_core::format::system_save::PersistentStarts::default());
     };
     let raw = std::fs::read(target.root.join(&files.start_script)).map_err(|e| e.to_string())?;
-    let script = cmvs_core::ps3::Script::decode(&raw).map_err(|e| e.to_string())?;
-    cmvs_core::system_save::PersistentStarts::from_start(&script, &map).map_err(|e| e.to_string())
+    let script = cmvs_core::format::ps3::Script::decode(&raw).map_err(|e| e.to_string())?;
+    cmvs_core::format::system_save::PersistentStarts::from_start(&script, &map)
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

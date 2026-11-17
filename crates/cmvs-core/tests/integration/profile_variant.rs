@@ -1,11 +1,8 @@
 use crate::support;
 use cmvs_core::{
-    digest::to_hex,
-    dispatch,
-    machine::Machine,
-    profile::{
-        CommandGate, CommandStatus, Evidence, GateErrorKind, Registry, Semantics, VariantId,
-    },
+    format::digest::to_hex, profile::CommandGate, profile::CommandStatus, profile::Evidence,
+    profile::GateErrorKind, profile::Registry, profile::Semantics, profile::VariantId,
+    vm::dispatch, vm::machine::Machine,
 };
 use support::bytecode::{command, pending, script};
 
@@ -28,7 +25,7 @@ fn window_sequence_append_copies_names_and_preserves_results_at_capacity() {
     }
     let script = script(&code);
     let mut vm = Machine::new(&script).unwrap();
-    let mut sequence = cmvs_core::sequence::SequenceHost::default();
+    let mut sequence = cmvs_core::runtime::SequenceHost::default();
     vm.state_mut().set_string(3, b"first.pb3").unwrap();
     vm.state_mut().set_system_integer(0, 77).unwrap();
     for index in 0..17 {
@@ -50,7 +47,7 @@ fn window_sequence_append_copies_names_and_preserves_results_at_capacity() {
         assert_eq!(vm.state().system_integer(0), Some(77));
     }
     assert!(
-        matches!(&sequence.entries()[0], Some(cmvs_core::sequence::SequenceEntry::ReplaceWindowImage { child: 0, name, duration: 100, .. }) if name == b"first.pb3")
+        matches!(&sequence.entries()[0], Some(cmvs_core::runtime::SequenceEntry::ReplaceWindowImage { child: 0, name, duration: 100, .. }) if name == b"first.pb3")
     );
     let entries = sequence.entries().clone();
     vm.state_mut().set_string(3, b"x").unwrap();
@@ -117,7 +114,7 @@ fn inspected_early_queries_use_the_down_edge_and_extra_actions_can_be_consumed()
                 command(&mut code, query + 0x2000, &[]);
                 let script = script(&code);
                 let mut vm = Machine::new(&script).unwrap();
-                let mut input = cmvs_core::input::ActionInput::default();
+                let mut input = cmvs_core::host::input::ActionInput::default();
                 input.set(action, held, pressed, released).unwrap();
                 for _ in 0..2 {
                     pending(&mut vm);
@@ -144,7 +141,7 @@ fn inspected_early_queries_use_the_down_edge_and_extra_actions_can_be_consumed()
             command(&mut code, query + 0x2001, &[]);
             let script = script(&code);
             let mut vm = Machine::new(&script).unwrap();
-            let mut input = cmvs_core::input::ActionInput::default();
+            let mut input = cmvs_core::host::input::ActionInput::default();
             let action = 17 + usize::from((query - 0x2f0) / 2);
             input.set(action, true, true, false).unwrap();
             vm.state_mut().set_system_integer(0, 77).unwrap();
@@ -234,8 +231,8 @@ fn font_cells_bindings_are_limited_to_the_inspected_commands() {
         );
         assert_eq!(vm.stack().len_bytes(), 4);
         assert_eq!(vm.pc(), pc);
-        let mut messages = cmvs_core::message::MessageHost::default();
-        let mut input = cmvs_core::input::ActionInput::default();
+        let mut messages = cmvs_core::render::message::MessageHost::default();
+        let mut input = cmvs_core::host::input::ActionInput::default();
         let mut hosts = dispatch::Hosts {
             text: Some(dispatch::TextHosts {
                 messages: &mut messages,

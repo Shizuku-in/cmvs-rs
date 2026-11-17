@@ -1,10 +1,8 @@
 use crate::support;
 use cmvs_core::{
-    dispatch::{self, Flow, Hosts, TextHosts},
-    input::ActionInput,
-    machine::Machine,
-    message::MessageHost,
-    profile::{CommandGate, Registry},
+    host::input::ActionInput, profile::CommandGate, profile::Registry,
+    render::message::MessageHost, vm::dispatch, vm::dispatch::Flow, vm::dispatch::Hosts,
+    vm::dispatch::TextHosts, vm::machine::Machine,
 };
 use support::bytecode::{command, pending, script};
 
@@ -40,7 +38,7 @@ fn missing_capabilities_preserve_pending_commands_and_arguments() {
 
 #[test]
 fn screen_coordinates_change_only_the_selected_draw_mode() {
-    use cmvs_core::{profile::Semantics, scene::SceneHost};
+    use cmvs_core::{profile::Semantics, render::scene::SceneHost};
     let profile = Registry::builtin().profile("cmvs-20080719").unwrap();
     for child in [u32::MAX, 255] {
         for mode in [0, 1, 2, u32::MAX] {
@@ -76,7 +74,11 @@ fn screen_coordinates_change_only_the_selected_draw_mode() {
             } else {
                 expected.children.get_mut(&255).unwrap()
             };
-            object.draw.as_mut().unwrap().words[0] = u32::from(mode != 0);
+            object
+                .draw
+                .as_mut()
+                .unwrap()
+                .set_coordinate_mode(u32::from(mode != 0));
             pending(&mut vm);
             // The root has no implementation of this entry; only the hash-bound override runs.
             assert_eq!(
@@ -103,7 +105,7 @@ fn screen_coordinates_change_only_the_selected_draw_mode() {
 
 #[test]
 fn screen_coordinates_reject_invalid_targets_without_consuming_arguments() {
-    use cmvs_core::{profile::Semantics, scene::SceneHost};
+    use cmvs_core::{profile::Semantics, render::scene::SceneHost};
     let profile = Registry::builtin().profile("cmvs-20080719").unwrap();
     for args in [
         vec![20, u32::MAX, 1],
@@ -253,7 +255,7 @@ fn font_cell_mode_requires_research_gate_and_short_stack_is_transactional() {
 #[test]
 fn state_dispatch_errors_name_arguments_and_preserve_vm_and_hosts() {
     use cmvs_core::{
-        message_flags::MessageFlags, profile::Semantics, random::CrtRandom, timers::VmTimers,
+        host::random::CrtRandom, profile::Semantics, runtime::MessageFlags, runtime::VmTimers,
     };
     for (opcode, args, reason) in [
         (0x200b, vec![], "timer slot"),
@@ -301,7 +303,7 @@ fn state_dispatch_errors_name_arguments_and_preserve_vm_and_hosts() {
 
 #[test]
 fn shared_flag_queries_discard_unknown_value_words_without_reading_them() {
-    use cmvs_core::{message_flags::MessageFlags, profile::Semantics};
+    use cmvs_core::{profile::Semantics, runtime::MessageFlags};
     for opcode in [0x22d0u16, 0x22e5, 0x22eb] {
         let mut code = vec![];
         // Reserving eight bytes initializes only the top word. After the mode
@@ -334,7 +336,7 @@ fn shared_flag_queries_discard_unknown_value_words_without_reading_them() {
 
 #[test]
 fn old_text_dialog_commits_accept_cancel_and_empty_results() {
-    use cmvs_core::platform::RecordingBackend;
+    use cmvs_core::host::platform::RecordingBackend;
     for name in ["cmvs-20071117", "cmvs-20080719", "cmvs-20080903"] {
         let profile = Registry::builtin().profile(name).unwrap();
         for (encoding, answer, result, text) in [
@@ -406,18 +408,23 @@ fn old_text_dialog_commits_accept_cancel_and_empty_results() {
 
 #[test]
 fn old_text_dialog_waits_and_rejects_invalid_results_atomically() {
-    use cmvs_core::platform::{
-        PlatformBackend, PlatformRequest, RecordingBackend, TextDialogRequest, TextDialogResult,
+    use cmvs_core::{
+        host::platform::PlatformBackend, host::platform::PlatformRequest,
+        host::platform::RecordingBackend, host::platform::TextDialogRequest,
+        host::platform::TextDialogResult,
     };
     struct Pending;
     impl PlatformBackend for Pending {
-        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn std::error::Error>> {
+        fn apply(
+            &mut self,
+            _: &PlatformRequest,
+        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             unreachable!()
         }
         fn poll_text_dialog(
             &mut self,
             _: &TextDialogRequest,
-        ) -> Result<TextDialogResult, Box<dyn std::error::Error>> {
+        ) -> Result<TextDialogResult, Box<dyn std::error::Error + Send + Sync>> {
             Ok(TextDialogResult::Pending)
         }
     }
@@ -485,7 +492,7 @@ fn old_text_dialog_waits_and_rejects_invalid_results_atomically() {
 
 #[test]
 fn old_text_dialog_treats_negative_wrapped_bank_initial_as_empty_without_reading_output() {
-    use cmvs_core::platform::RecordingBackend;
+    use cmvs_core::host::platform::RecordingBackend;
 
     fn string_expr_nested_bank(code: &mut Vec<u8>, index: i32) {
         code.extend(0x0201u16.to_le_bytes());

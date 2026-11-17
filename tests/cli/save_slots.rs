@@ -3,14 +3,10 @@
 //! Synthetic save tests live in tests/runner.rs.
 use crate::support::command_trace;
 use cmvs_rs::{
-    history::HistoryEntry,
-    input::{CodeInput, KeyBindings},
-    message::AuxiliaryText,
-    platform::RecordingBackend,
-    profile::Registry,
-    runtime::{Runtime, RuntimeEvent, SnapshotPolicy, load_start},
-    save::Csv2Save,
-    snapshot::{EngineSnapshot, SavedScene},
+    format::save::Csv2Save, format::snapshot::EngineSnapshot, format::snapshot::SavedScene,
+    host::input::CodeInput, host::input::KeyBindings, host::platform::RecordingBackend,
+    profile::Registry, render::message::AuxiliaryText, runtime::HistoryEntry, runtime::Runtime,
+    runtime::RuntimeEvent, runtime::SnapshotPolicy, runtime::load_start,
 };
 use std::{fs, path::PathBuf};
 
@@ -28,7 +24,7 @@ fn user_directory(name: &str) -> PathBuf {
 /// The loader resets the draw +84 fade factor (0x14001f080).
 fn reset_fades(scene: &mut SavedScene) {
     if let Some(draw) = &mut scene.draw {
-        draw.words[21] = 256;
+        draw.set_fade_factor(256);
     }
     for child in scene.children.values_mut() {
         reset_fades(child);
@@ -42,7 +38,7 @@ fn original_snapshot(root: &std::path::Path, slot: u16) -> EngineSnapshot {
 
 /// Compares the hosts right after a load with the saved snapshot, normalizing only the
 /// documented loader effects.
-fn check_loaded(run: &Runtime<'_>, mut expected: EngineSnapshot) {
+fn check_loaded(run: &Runtime, mut expected: EngineSnapshot) {
     let mut actual = run.inspect_snapshot().unwrap();
     // The load callback 29 runs in a cross-script frame holding the restored context.
     let callback = &run.control().callbacks()[&29];
@@ -239,7 +235,7 @@ fn external_auto_resume_restores_the_original_snapshot() {
         );
         // Write the held snapshot to a new slot through 0x22b6's path and load it back.
         let held = match run.held_snapshot() {
-            cmvs_rs::snapshot::SaveImage::Captured(c) => {
+            cmvs_rs::format::snapshot::SaveImage::Captured(c) => {
                 EngineSnapshot::decode(&c.snapshot).unwrap()
             }
             other => panic!("{other:?}"),
@@ -252,9 +248,11 @@ fn external_auto_resume_restores_the_original_snapshot() {
 }
 
 /// The held snapshot as the writer built it.
-fn held(run: &Runtime<'_>) -> EngineSnapshot {
+fn held(run: &Runtime) -> EngineSnapshot {
     match run.held_snapshot() {
-        cmvs_rs::snapshot::SaveImage::Captured(c) => EngineSnapshot::decode(&c.snapshot).unwrap(),
+        cmvs_rs::format::snapshot::SaveImage::Captured(c) => {
+            EngineSnapshot::decode(&c.snapshot).unwrap()
+        }
         other => panic!("{other:?}"),
     }
 }
@@ -373,7 +371,7 @@ fn external_route_saves_every_snapshot_and_plays_on_after_loads() {
     let (mut choices, mut choice_idle, mut choice_step) = (0, None::<u32>, 0);
     let (mut yields, mut last_input, mut system_saved) = (0u64, 0u64, false);
     let (mut captures, mut loads) = (0u32, 0u32);
-    let place = |run: &Runtime<'_>| {
+    let place = |run: &Runtime| {
         format!(
             "{} / 0x{:x} after {} steps",
             run.machine().current_name().escape_ascii(),
@@ -384,7 +382,7 @@ fn external_route_saves_every_snapshot_and_plays_on_after_loads() {
     for iteration in 0..1_000_000_000u64 {
         // The recording backends keep at most 4096 requests; every load sets the title.
         if iteration % 100_000 == 0 {
-            run.set_audio_backend(Box::new(cmvs_rs::audio::RecordingAudio::default()))
+            run.set_audio_backend(Box::new(cmvs_rs::host::audio::RecordingAudio::default()))
                 .unwrap();
             backend = RecordingBackend::default();
         }
@@ -515,9 +513,9 @@ fn external_route_saves_every_snapshot_and_plays_on_after_loads() {
 /// callbacks), its confirmation dialog (button group 2, id 1 = yes), the save and load
 /// screens (button group 1, slot ids from 70) and the backlog. Input goes through key.cfg
 /// bindings: code 1 left button, 3 right button, 4/5 wheel up/down.
-struct Ui<'a, 'b> {
+struct Ui<'b> {
     native_audio: bool,
-    run: &'b mut Runtime<'a>,
+    run: &'b mut Runtime,
     backend: RecordingBackend,
     bindings: KeyBindings,
     codes: CodeInput,
@@ -592,15 +590,15 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         frozen: false,
     };
     // The desktop host applies the startup filter; the sample cmvs.cfg word 0 means linear.
-    let startup_filter = cmvs_rs::platform::supported_render_mode(
+    let startup_filter = cmvs_rs::host::platform::supported_render_mode(
         &ui.backend,
         ui.run.display_preferences().render_mode,
     )
     .unwrap();
     assert_eq!(startup_filter, 1);
-    cmvs_rs::platform::PlatformBackend::apply(
+    cmvs_rs::host::platform::PlatformBackend::apply(
         &mut ui.backend,
-        &cmvs_rs::platform::PlatformRequest::RenderMode(startup_filter),
+        &cmvs_rs::host::platform::PlatformRequest::RenderMode(startup_filter),
     )
     .unwrap();
     for _ in 0..30_000 {
@@ -681,7 +679,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     for _ in 0..600 {
         font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
             .unwrap();
-        if (0..cmvs_rs::message::TEXT_OBJECTS)
+        if (0..cmvs_rs::render::message::TEXT_OBJECTS)
             .filter_map(|slot| ui.run.messages().text(slot))
             .flat_map(|text| &text.glyphs)
             .any(|glyph| *glyph.face == *mincho)
@@ -699,16 +697,16 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     ui.click(ui.button(1, 10), 30);
     assert_eq!(ui.run.settings().font_face(), mincho);
     ui.backend
-        .answer_font_dialog(Some(cmvs_rs::settings::DEFAULT_FONT_FACE.to_vec()));
+        .answer_font_dialog(Some(cmvs_rs::host::settings::DEFAULT_FONT_FACE.to_vec()));
     ui.click(ui.button(1, 10), 30);
     assert_eq!(
         ui.run.settings().font_face(),
-        cmvs_rs::settings::DEFAULT_FONT_FACE
+        cmvs_rs::host::settings::DEFAULT_FONT_FACE
     );
     assert_eq!(
         ui.backend.font_dialogs(),
         [
-            cmvs_rs::settings::DEFAULT_FONT_FACE,
+            cmvs_rs::host::settings::DEFAULT_FONT_FACE,
             mincho.as_slice(),
             mincho.as_slice()
         ]
@@ -717,7 +715,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         ui.click([x, 107], 30);
         assert_eq!(ui.run.settings().text_output().bold, bold);
         assert!(
-            (0..cmvs_rs::message::TEXT_OBJECTS)
+            (0..cmvs_rs::render::message::TEXT_OBJECTS)
                 .filter_map(|slot| ui.run.messages().text(slot))
                 .filter(|text| text.font_face.is_empty())
                 .all(|text| text.bold == bold)
@@ -725,7 +723,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         if bold {
             // The demonstration clears and re-emits its text on a timer.
             for _ in 0..600 {
-                if (0..cmvs_rs::message::TEXT_OBJECTS)
+                if (0..cmvs_rs::render::message::TEXT_OBJECTS)
                     .filter_map(|slot| ui.run.messages().text(slot))
                     .any(|text| text.glyphs.iter().any(|glyph| glyph.bold))
                 {
@@ -734,7 +732,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
                 ui.frame([640, 360], None);
             }
             assert!(
-                (0..cmvs_rs::message::TEXT_OBJECTS)
+                (0..cmvs_rs::render::message::TEXT_OBJECTS)
                     .filter_map(|slot| ui.run.messages().text(slot))
                     .any(|text| text.glyphs.iter().any(|glyph| glyph.bold))
             );
@@ -777,7 +775,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     }
     for (index, y) in [380, 420, 460].into_iter().enumerate() {
         let values =
-            |s: cmvs_rs::settings::AutoAdvanceSettings| [s.base, s.per_glyph, s.voice_wait];
+            |s: cmvs_rs::host::settings::AutoAdvanceSettings| [s.base, s.per_glyph, s.voice_wait];
         let before = ui.run.settings().auto_advance();
         ui.click([220, y], 30);
         let after = ui.run.settings().auto_advance();
@@ -796,7 +794,8 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         let before = ui.run.audio().settings();
         ui.click([900, y], 30);
         let after = ui.run.audio().settings();
-        let fields = |s: cmvs_rs::audio::AudioSettings| [s.master, s.bgm, s.se, s.voice, s.movie];
+        let fields =
+            |s: cmvs_rs::host::audio::AudioSettings| [s.master, s.bgm, s.se, s.voice, s.movie];
         assert_ne!(fields(before)[index], fields(after)[index]);
         for other in 0..5 {
             if other != index {
@@ -815,7 +814,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     for (index, y) in [286, 320, 354].into_iter().enumerate() {
         let before = ui.run.audio().settings();
         let flags =
-            |s: cmvs_rs::audio::AudioSettings| [s.bgm_enabled, s.se_enabled, s.voice_enabled];
+            |s: cmvs_rs::host::audio::AudioSettings| [s.bgm_enabled, s.se_enabled, s.voice_enabled];
         ui.click([1194, y], 30);
         let mut expected = before;
         match index {
@@ -857,7 +856,8 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         let before = ui.run.audio().voice_ducking();
         ui.click([900, y], 30);
         let after = ui.run.audio().voice_ducking();
-        let values = |s: cmvs_rs::audio::VoiceDuckingSettings| [s.percent, s.fade_ms, s.wait_ms];
+        let values =
+            |s: cmvs_rs::host::audio::VoiceDuckingSettings| [s.percent, s.fade_ms, s.wait_ms];
         assert_ne!(values(before)[index], values(after)[index]);
         for other in 0..3 {
             if other != index {
@@ -965,16 +965,16 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     for (x, fullscreen) in [(576, true), (472, false)] {
         ui.click([x, 107], 30);
         assert_eq!(
-            cmvs_rs::platform::PlatformBackend::fullscreen(&ui.backend).unwrap(),
+            cmvs_rs::host::platform::PlatformBackend::fullscreen(&ui.backend).unwrap(),
             fullscreen
         );
         if fullscreen {
             // 0x216e in fullscreen updates the future windowed size without
             // leaving fullscreen; repeating the reset sends no second request.
             ui.click([576, 626], 30);
-            assert!(cmvs_rs::platform::PlatformBackend::fullscreen(&ui.backend).unwrap());
+            assert!(cmvs_rs::host::platform::PlatformBackend::fullscreen(&ui.backend).unwrap());
             assert_eq!(
-                cmvs_rs::platform::PlatformBackend::windowed_size(&ui.backend).unwrap(),
+                cmvs_rs::host::platform::PlatformBackend::windowed_size(&ui.backend).unwrap(),
                 [1280, 720]
             );
             let requests = ui.backend.requests().len();
@@ -983,7 +983,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
             for (mode, x) in [904, 1008, 1112, 1216].into_iter().enumerate() {
                 ui.click([x, 137], 30);
                 assert_eq!(
-                    cmvs_rs::platform::PlatformBackend::aspect_mode(&ui.backend).unwrap(),
+                    cmvs_rs::host::platform::PlatformBackend::aspect_mode(&ui.backend).unwrap(),
                     mode as u32
                 );
                 let image = font
@@ -1001,7 +1001,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     for (x, mode) in [(264, 0), (368, 1), (264, 0)] {
         ui.click([x, 560], 30);
         assert_eq!(
-            cmvs_rs::platform::PlatformBackend::render_mode(&ui.backend).unwrap(),
+            cmvs_rs::host::platform::PlatformBackend::render_mode(&ui.backend).unwrap(),
             mode
         );
         let image = font
@@ -1018,7 +1018,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     }
     ui.click([576, 626], 30);
     assert_eq!(
-        cmvs_rs::platform::PlatformBackend::window_size(&ui.backend).unwrap(),
+        cmvs_rs::host::platform::PlatformBackend::window_size(&ui.backend).unwrap(),
         [1280, 720]
     );
     font.render(ui.run.scene(), ui.run.camera(), ui.run.messages())
@@ -1046,7 +1046,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
             first_voice_history = Some(ui.run.history().entries().len());
         }
         if character_glyphs.is_none() && !ui.voices.is_empty() {
-            character_glyphs = (0..cmvs_rs::message::TEXT_OBJECTS)
+            character_glyphs = (0..cmvs_rs::render::message::TEXT_OBJECTS)
                 .filter_map(|slot| ui.run.messages().text(slot))
                 .flat_map(|text| &text.glyphs)
                 .find(|glyph| glyph.colors[0] == 0x1effff)
@@ -1105,7 +1105,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     assert!(
         panels
             .iter()
-            .all(|child| child.draw.as_ref().unwrap().words[17] == 32)
+            .all(|child| child.draw.as_ref().unwrap().opacity() == 32)
     );
     println!(
         "settings: native_audio={native_audio}; title + toolbar; background/opacity/fullscreen/aspect/filter, cursor hide, voice stop modes, read-skip policy, bold/text/audio/auto settings, character volume/gradient/colour picker/reset, 1.5x voice speed, font dialog, three pages, 444 settings frames; auto advanced at least three entries in {auto_frames} rendered frames with {} voices and {} voice fades; disabled then idle 240 rendered frames",
@@ -1121,11 +1121,12 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
         .map(|index| ui.run.machine().state().integer(index))
         .collect();
     ui.run
-        .save_preferences(cmvs_rs::settings::DisplayPreferences {
+        .save_preferences(cmvs_rs::host::settings::DisplayPreferences {
             fullscreen: false,
             aspect_mode: 3,
             aspect_scaling: true,
-            render_mode: cmvs_rs::platform::PlatformBackend::render_mode(&ui.backend).unwrap(),
+            render_mode: cmvs_rs::host::platform::PlatformBackend::render_mode(&ui.backend)
+                .unwrap(),
         })
         .unwrap();
     drop(ui);
@@ -1138,7 +1139,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     assert_eq!(resumed.message_flags().mode_1548(), voice_mode);
     assert_eq!(
         resumed.display_preferences(),
-        cmvs_rs::settings::DisplayPreferences {
+        cmvs_rs::host::settings::DisplayPreferences {
             fullscreen: false,
             aspect_mode: 3,
             aspect_scaling: true,
@@ -1182,7 +1183,7 @@ fn system_settings_entries_render_and_return(native_audio: bool) {
     );
 }
 
-impl Ui<'_, '_> {
+impl Ui<'_> {
     fn frame(&mut self, pointer: [i32; 2], code: Option<usize>) {
         command_trace::begin();
         if self.frozen {
@@ -1539,7 +1540,7 @@ fn external_in_game_menus_save_and_load() {
     assert_eq!(ui.commands, [0x22b5]);
     check_loaded(ui.run, original_snapshot(&root, 0));
     ui.run.load_slot(6, &mut ui.backend).unwrap();
-    fn black_images(object: &cmvs_rs::scene::SceneObject) -> usize {
+    fn black_images(object: &cmvs_rs::render::scene::SceneObject) -> usize {
         let mut count = 0;
         for image in [&object.image, &object.secondary_image]
             .into_iter()
@@ -1657,7 +1658,7 @@ fn external_backlog_scrolls_replays_voices_and_jumps_back() {
     ui.run.load_slot(870, &mut ui.backend).unwrap();
     ui.wait_for_text();
     let history: Vec<HistoryEntry> = ui.run.history().entries().iter().rev().cloned().collect();
-    let open = |ui: &mut Ui<'_, '_>| {
+    let open = |ui: &mut Ui<'_>| {
         ui.press([640, 360], 4, 0);
         for _ in 0..120 {
             ui.frame([640, 360], None);
@@ -1668,7 +1669,7 @@ fn external_backlog_scrolls_replays_voices_and_jumps_back() {
             .expect("backlog text group")
             .clone()
     };
-    let list = |ui: &Ui<'_, '_>| {
+    let list = |ui: &Ui<'_>| {
         ui.run
             .buttons()
             .list_group(2)
@@ -1707,7 +1708,7 @@ fn external_backlog_scrolls_replays_voices_and_jumps_back() {
     );
 
     // One wheel step scrolls one 106-pixel entry and back.
-    let y = |ui: &Ui<'_, '_>| {
+    let y = |ui: &Ui<'_>| {
         f32::from_bits(
             ui.run
                 .messages()
@@ -1725,7 +1726,7 @@ fn external_backlog_scrolls_replays_voices_and_jumps_back() {
     assert_eq!(y(&ui), bottom);
 
     // Screen centres of list buttons, relative to the list's object, fully inside its area.
-    let visible = |ui: &Ui<'_, '_>, ids: std::ops::Range<u32>| {
+    let visible = |ui: &Ui<'_>, ids: std::ops::Range<u32>| {
         let list = list(ui);
         let base = ui
             .run
@@ -1735,7 +1736,7 @@ fn external_backlog_scrolls_replays_voices_and_jumps_back() {
             .draw
             .as_ref()
             .unwrap()
-            .words[9] as i32;
+            .position()[1];
         let [_, top, _, height] = list.hit_area;
         list.buttons
             .iter()
@@ -1790,7 +1791,7 @@ fn external_backlog_scrolls_replays_voices_and_jumps_back() {
 #[test]
 #[ignore = "requires CMVS_GAME_ROOT; original save000 resources with an injected rotation track"]
 fn external_rotation_snapshot_resumes_on_original_resources() {
-    use cmvs_rs::scene::{RotationKey, RotationTrack};
+    use cmvs_rs::{render::scene::RotationKey, render::scene::RotationTrack};
     let root = PathBuf::from(std::env::var_os("CMVS_GAME_ROOT").expect("CMVS_GAME_ROOT"));
     let user = user_directory("rotation-snapshot");
     fs::copy(root.join("save/system.dat"), user.join("system.dat")).unwrap();
@@ -1803,7 +1804,7 @@ fn external_rotation_snapshot_resumes_on_original_resources() {
         .find(|(_, o)| o.image.is_some() && o.draw.is_some() && o.children.is_empty())
         .expect("a named real image");
     let draw = object.draw.as_mut().unwrap();
-    draw.words[20] = 2250;
+    draw.set_rotation_raw(2250);
     let mut keys = [RotationKey::default(); 8];
     keys[0] = RotationKey {
         next: -1,
@@ -1846,14 +1847,14 @@ fn external_rotation_snapshot_resumes_on_original_resources() {
         }
     }
     run.load_slot(5, &mut backend).unwrap();
-    let angle = |run: &Runtime<'_>| {
+    let angle = |run: &Runtime| {
         run.scene()
             .object(slot)
             .unwrap()
             .draw
             .as_ref()
             .unwrap()
-            .words[20]
+            .rotation_raw()
     };
     assert_eq!(angle(&run), 2250);
     assert_eq!(

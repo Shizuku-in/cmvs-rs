@@ -3,24 +3,9 @@ use super::{HELD, LEFT, PRESSED, PointerGesture, RELEASED};
 use crate::input::ActionInput;
 
 impl PointerGesture {
-    /// 0x2369 / 0x1400537a0: a new left press in a configured region can
-    /// immediately establish a drag while interrupting auxiliary inertia.
-    pub fn try_handle_drag_press(
-        &mut self,
-        vm: &mut crate::machine::Machine<'_>,
-        input: &ActionInput,
-        now: u32,
-    ) -> Result<bool, crate::bytecode::DecodeError> {
-        let Some((pc, 0x369)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle_drag_press(&mut crate::dispatch::Call::new(vm, pc, 0x369), input, now)?;
-        Ok(true)
-    }
-
     pub(crate) fn handle_drag_press(
         &mut self,
-        call: &mut crate::dispatch::Call<'_, '_>,
+        call: &mut crate::dispatch::Call<'_>,
         input: &ActionInput,
         now: u32,
     ) -> Result<(), crate::bytecode::DecodeError> {

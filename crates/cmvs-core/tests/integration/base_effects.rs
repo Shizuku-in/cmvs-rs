@@ -1,16 +1,17 @@
 use crate::support;
+use crate::support::shared_state::SharedState;
 use cmvs_core::{
-    dispatch::{self, Flow, Hosts, ImageHosts},
-    image::ImageSource,
-    machine::Machine,
-    profile::Semantics,
-    random::CrtRandom,
-    scene::SceneHost,
+    host::image::ImageSource, host::random::CrtRandom, profile::Semantics,
+    render::scene::SceneHost, vm::dispatch, vm::dispatch::Flow, vm::dispatch::Hosts,
+    vm::dispatch::ImageHosts, vm::machine::Machine,
 };
 use support::bytecode::{command, pending, script};
 struct Images;
 impl ImageSource for Images {
-    fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+    fn read(
+        &mut self,
+        _: &[u8],
+    ) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
         Ok(Some(b"NONE".to_vec()))
     }
 }
@@ -126,7 +127,7 @@ fn object_effect_errors_are_transactional_and_reset_keeps_ordinary_slots() {
     let mut scene = SceneHost::default();
     for _ in 0..6 {
         pending(&mut vm);
-        assert!(scene.try_handle(&mut vm).unwrap());
+        assert!(scene.shared_state(&mut vm).unwrap());
     }
     assert_eq!(
         scene
@@ -154,7 +155,7 @@ fn object_effect_errors_are_transactional_and_reset_keeps_ordinary_slots() {
         pending(&mut vm);
         let objects = scene.objects().clone();
         let pending_before = vm.pending_system();
-        assert!(scene.try_handle(&mut vm).is_err());
+        assert!(scene.shared_state(&mut vm).is_err());
         assert_eq!(scene.objects(), &objects);
         assert_eq!(vm.pending_system(), pending_before);
         assert_eq!(vm.stack().len_bytes(), args.len() * 4);
@@ -165,7 +166,7 @@ fn object_effect_errors_are_transactional_and_reset_keeps_ordinary_slots() {
     let program = script(&code);
     let mut vm = Machine::new(&program).unwrap();
     pending(&mut vm);
-    scene.try_handle(&mut vm).unwrap();
+    scene.shared_state(&mut vm).unwrap();
     let actual = scene.object(29).unwrap();
     assert_eq!(actual.special_effect.as_ref().unwrap().words[0], 0);
     assert_eq!(actual.children, parent.children);
@@ -178,7 +179,7 @@ fn object_effect_errors_are_transactional_and_reset_keeps_ordinary_slots() {
     let program = script(&code);
     let mut vm = Machine::new(&program).unwrap();
     pending(&mut vm);
-    scene.try_handle(&mut vm).unwrap();
+    scene.shared_state(&mut vm).unwrap();
     scene.advance_frame(16);
 }
 
@@ -186,10 +187,8 @@ fn object_effect_errors_are_transactional_and_reset_keeps_ordinary_slots() {
 #[ignore = "requires explicit read-only CMVS_GAME_ROOT; invokes original library functions with synthetic scene/resources"]
 fn external_original_effect_library_functions_use_base_dispatch() {
     use cmvs_core::{
-        camera::CameraHost,
-        machine::Step,
-        profile::Registry,
-        script_control::{ArchiveScripts, ScriptSource},
+        profile::Registry, render::camera::CameraHost, runtime::script_control::ArchiveScripts,
+        runtime::script_control::ScriptSource, vm::machine::Step,
     };
     let root =
         std::path::PathBuf::from(std::env::var_os("CMVS_GAME_ROOT").expect("CMVS_GAME_ROOT"));
@@ -216,7 +215,7 @@ fn external_original_effect_library_functions_use_base_dispatch() {
         let mut setup_vm = Machine::new(&setup).unwrap();
         for _ in 0..3 {
             pending(&mut setup_vm);
-            scene.try_handle(&mut setup_vm).unwrap();
+            scene.shared_state(&mut setup_vm).unwrap();
         }
         let mut vm = Machine::at(&original, labels[label]).unwrap();
         vm.set_current_name(b"intproc.ps3".to_vec());

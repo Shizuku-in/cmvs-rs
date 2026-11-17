@@ -1,12 +1,8 @@
 use crate::support;
 use cmvs_core::{
-    dispatch::{self, Flow, Hosts},
-    gesture::PointerGesture,
-    machine::Machine,
-    profile::Semantics,
-    ps3::Script,
-    save_menu::SaveMenuHost,
-    snapshot::{SaveInfo, SaveTitle},
+    format::ps3::Script, format::snapshot::SaveInfo, format::snapshot::SaveTitle,
+    host::gesture::PointerGesture, profile::Semantics, runtime::save_menu::SaveMenuHost,
+    vm::dispatch, vm::dispatch::Flow, vm::dispatch::Hosts, vm::machine::Machine,
 };
 use support::bytecode::{command, pending};
 
@@ -124,7 +120,7 @@ fn metadata_failures_preserve_pending_command_results_and_existing_fields() {
                 save_title: Some(&mut title),
                 save_info: Some(&mut info),
                 effects: Some(&mut effects),
-                scene: Some(&mut cmvs_core::scene::SceneHost::default()),
+                scene: Some(&mut cmvs_core::render::scene::SceneHost::default()),
                 ..Default::default()
             },
         )

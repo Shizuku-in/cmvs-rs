@@ -1,7 +1,7 @@
 //! Script structure assertions shared by synthetic tests and opt-in external checks.
 use cmvs_core::{
-    bytecode::{self, DecodeError, Instruction, InstructionKind},
-    ps3::Script,
+    format::ps3::Script, vm::bytecode, vm::bytecode::DecodeError, vm::bytecode::Instruction,
+    vm::bytecode::InstructionKind,
 };
 use std::collections::BTreeMap;
 

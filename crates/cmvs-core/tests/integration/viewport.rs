@@ -1,8 +1,8 @@
-use cmvs_core::{raster::RgbaImage, viewport::Viewport};
+use cmvs_core::{render::raster::RgbaImage, render::viewport::Viewport};
 
 #[test]
 fn scaling_disable_centers_native_pixels_and_input_without_losing_selected_mode() {
-    use cmvs_core::viewport::presentation_mode;
+    use cmvs_core::render::viewport::presentation_mode;
     let source = [4, 2];
     let target = [12, 8];
     let scaled = Viewport::new(source, target, presentation_mode(true, true, 3)).unwrap();
@@ -123,7 +123,9 @@ fn linear_presentation_uses_texel_centers_clamped_edges_and_premultiplied_alpha(
 
 #[test]
 fn legacy_full_move_keeps_unscaled_drawing_and_pointer_input_at_the_origin() {
-    use cmvs_core::viewport::{UNSCALED_ORIGIN, presentation_mode_with_full_move};
+    use cmvs_core::{
+        render::viewport::UNSCALED_ORIGIN, render::viewport::presentation_mode_with_full_move,
+    };
     let mode = presentation_mode_with_full_move(true, false, 3, true);
     assert_eq!(mode, UNSCALED_ORIGIN);
     let view = Viewport::new([4, 2], [8, 6], mode).unwrap();

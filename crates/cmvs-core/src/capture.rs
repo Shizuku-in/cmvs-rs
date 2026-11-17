@@ -34,10 +34,10 @@ impl ScreenCapture {
     /// image intact, rather than reproducing the original's empty partial image.
     pub fn try_immediate(
         &self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         scene: &mut SceneHost,
         backend: &mut impl PlatformBackend,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
         let Some((pc, command @ (0x3d | 0x3e))) = vm.pending_system() else {
             return Ok(false);
         };
@@ -45,10 +45,10 @@ impl ScreenCapture {
     }
     pub(crate) fn handle_immediate(
         &self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         scene: &mut SceneHost,
         backend: &mut dyn PlatformBackend,
-    ) -> Result<Flow, Box<dyn std::error::Error>> {
+    ) -> Result<Flow, Box<dyn std::error::Error + Send + Sync>> {
         let pc = call.pc;
         let op = call.command + 0x2000;
         let fail = |why| error(pc, op, why);
@@ -91,26 +91,9 @@ impl ScreenCapture {
         Ok(())
     }
 
-    /// No stack parameters:
-    /// - 0x2304 / 0x1400158f0: request a capture (+11112 = 1).
-    /// - 0x2305 / 0x1400158a0: free the capture and clear the request and size.
-    /// - 0x2306 / 0x14007fb20 -> 0x1400158e0: system result 0 = whether a capture is held.
-    ///
-    /// All return 0x4000. 0x203c is described at `give`.
-    pub fn try_handle(
-        &mut self,
-        vm: &mut Machine<'_>,
-        scene: &mut SceneHost,
-    ) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x3c | 0x304..=0x306))) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle(&mut Call::new(vm, pc, command), scene)?;
-        Ok(true)
-    }
     pub(crate) fn handle(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         scene: &mut SceneHost,
     ) -> Result<(), DecodeError> {
         let command = call.command;
@@ -135,7 +118,7 @@ impl ScreenCapture {
     /// image (+6176) and builds one from the capture (0x140032f80: empty name, +1152 = 0);
     /// result 0 = success, then the capture is reset (0x1400158a0). Pops 8. Without a
     /// capture the original keeps an empty image object, which Rust rejects.
-    fn give(&mut self, call: &mut Call<'_, '_>, scene: &mut SceneHost) -> Result<(), DecodeError> {
+    fn give(&mut self, call: &mut Call<'_>, scene: &mut SceneHost) -> Result<(), DecodeError> {
         let pc = call.pc;
         let fail = |why| error(pc, 0x203c, why);
         let (slot, child) = (

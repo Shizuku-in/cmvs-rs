@@ -1,13 +1,90 @@
-//! CSV2 and CVNS CSP1 disk containers only. Decoded sections are not a restored engine state.
-use crate::{
-    FormatError, MAX_PAYLOAD, lzss,
-    save_menu::{SaveFamily, SaveHeader},
-};
+//! CSV2 and CVNS CSP1 disk containers and gameplay-save header metadata.
+//! Decoded sections are not a restored engine state.
+use crate::{FormatError, MAX_PAYLOAD, lzss};
 use std::ops::Range;
 
 pub const HEADER_SIZE: usize = 600;
+pub const HEADER_READ_LIMIT: usize = 512;
 const CMVS_KEY: &[u8] = b"DAME_SAVE_IMAGE";
 const CVNS_KEY: &[u8] = b"SAVE_IMAGE_ARC";
+
+/// The gameplay-save signature a menu scan accepts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SaveFamily {
+    /// CMVS `CSV2`..`CSV9`; slot N is `saveNNN.dat`.
+    Cmvs,
+    /// CVNS `CSP1`..`CSP9` (cvns-20090203 0x46d5f0); slot N is `save(N+1).dat`, because
+    /// `save000.dat` holds the CSS0 system save.
+    Cvns,
+}
+
+impl SaveFamily {
+    pub(crate) fn accepts(self, bytes: &[u8]) -> bool {
+        let (prefix, first) = match self {
+            Self::Cmvs => (b"CSV", b'2'),
+            Self::Cvns => (b"CSP", b'1'),
+        };
+        bytes.len() >= 4 && &bytes[..3] == prefix && (first..=b'9').contains(&bytes[3])
+    }
+    pub(crate) fn file(self, slot: u16) -> u16 {
+        match self {
+            Self::Cmvs => slot,
+            Self::Cvns => slot + 1,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaveHeader {
+    /// ASCII version digit: '2'..='9' for CMVS, '1'..='9' for CVNS.
+    pub version: u8,
+    /// Original bytes at offset 16, excluding the terminating NUL.
+    pub label: Vec<u8>,
+    /// Original ordering key; only the last two year digits and even seconds count.
+    pub ordering_key: u32,
+}
+
+impl SaveHeader {
+    pub fn parse(bytes: &[u8]) -> Result<Self, FormatError> {
+        Self::parse_family(bytes, SaveFamily::Cmvs)
+    }
+    pub fn parse_family(bytes: &[u8], family: SaveFamily) -> Result<Self, FormatError> {
+        let bytes = &bytes[..bytes.len().min(HEADER_READ_LIMIT)];
+        if !family.accepts(bytes) {
+            return Err(FormatError("unsupported gameplay-save signature"));
+        }
+        let label = bytes
+            .get(16..)
+            .and_then(|b| b.iter().position(|v| *v == 0).map(|end| &b[..end]))
+            .ok_or(FormatError("save label is truncated or not NUL terminated"))?;
+        // Explicit malformed-input policy: no stale read-buffer bytes or unbounded C strings.
+        if label.len() < 19
+            || label[4] != b'-'
+            || label[7] != b'-'
+            || label[10] != b' '
+            || label[13] != b':'
+            || label[16] != b':'
+            || !label[..19]
+                .iter()
+                .enumerate()
+                .all(|(i, b)| matches!(i, 4 | 7 | 10 | 13 | 16) || b.is_ascii_digit())
+        {
+            return Err(FormatError("save label lacks YYYY-MM-DD HH:MM:SS prefix"));
+        }
+        let pair = |i: usize| u32::from(label[i] - b'0') * 10 + u32::from(label[i + 1] - b'0');
+        let ordering_key = pair(2).wrapping_shl(25)
+            | ((pair(5) & 15) << 21)
+            | ((pair(8) & 31) << 16)
+            | ((pair(11) & 31) << 11)
+            | ((pair(14) & 63) << 5)
+            | ((pair(17) / 2) & 31);
+        Ok(Self {
+            version: bytes[3],
+            label: label.to_vec(),
+            ordering_key,
+        })
+    }
+}
 
 fn word(bytes: &[u8], at: usize) -> u16 {
     u16::from_le_bytes(bytes[at..at + 2].try_into().expect("validated header"))

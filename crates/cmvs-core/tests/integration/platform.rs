@@ -1,13 +1,10 @@
 use crate::support::bytecode;
 use crate::support::shared_environment;
 use cmvs_core::{
-    cursor::CursorBitmap,
-    machine::{Machine, Step},
-    platform::{
-        PlatformAssets, PlatformBackend, PlatformHost, PlatformRequest, RecordingBackend,
-        ThumbnailConfig,
-    },
-    ps3::Script,
+    format::cursor::CursorBitmap, format::ps3::Script, host::platform::PlatformAssets,
+    host::platform::PlatformBackend, host::platform::PlatformHost, host::platform::PlatformRequest,
+    host::platform::RecordingBackend, host::platform::ThumbnailConfig, vm::machine::Machine,
+    vm::machine::Step,
 };
 use shared_environment::SharedPlatform;
 use std::{collections::BTreeMap, error::Error};
@@ -16,15 +13,14 @@ use std::{collections::BTreeMap, error::Error};
 fn fullscreen_monitor_query_normalizes_unavailable_displays_and_preserves_errors() {
     for id in ["cmvs-20190305", "cmvs-20190405"] {
         use cmvs_core::{
-            dispatch::{self, Hosts, PlatformHosts},
-            profile::Registry,
+            profile::Registry, vm::dispatch, vm::dispatch::Hosts, vm::dispatch::PlatformHosts,
         };
         struct Displays(Result<u32, &'static str>);
         impl PlatformBackend for Displays {
-            fn display_count(&self) -> Result<u32, Box<dyn Error>> {
+            fn display_count(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
                 self.0.map_err(Into::into)
             }
-            fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+            fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
                 unreachable!()
             }
         }
@@ -81,15 +77,14 @@ fn fullscreen_monitor_query_normalizes_unavailable_displays_and_preserves_errors
 #[test]
 fn display_count_query_uses_backend_value_and_preserves_pending_on_failure() {
     use cmvs_core::{
-        dispatch::{self, Hosts, PlatformHosts},
-        profile::Registry,
+        profile::Registry, vm::dispatch, vm::dispatch::Hosts, vm::dispatch::PlatformHosts,
     };
     struct Displays(Result<u32, &'static str>);
     impl PlatformBackend for Displays {
-        fn display_count(&self) -> Result<u32, Box<dyn Error>> {
+        fn display_count(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
             self.0.map_err(Into::into)
         }
-        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
             unreachable!()
         }
     }
@@ -136,7 +131,7 @@ fn display_count_query_uses_backend_value_and_preserves_pending_on_failure() {
 
 #[test]
 fn aspect_scaling_normalizes_values_and_yields_only_for_fullscreen_updates() {
-    use cmvs_core::platform::PlatformEvent;
+    use cmvs_core::host::platform::PlatformEvent;
     for fullscreen in [false, true] {
         let mut code = vec![];
         for raw in [0, 0, 2, u32::MAX, 0] {
@@ -192,7 +187,7 @@ fn aspect_scaling_normalizes_values_and_yields_only_for_fullscreen_updates() {
 
 #[test]
 fn unsupported_scaling_enable_still_refreshes_fullscreen_and_retries_failures() {
-    use cmvs_core::platform::PlatformEvent;
+    use cmvs_core::host::platform::PlatformEvent;
     struct Device {
         enabled: bool,
         supported: bool,
@@ -201,16 +196,16 @@ fn unsupported_scaling_enable_still_refreshes_fullscreen_and_retries_failures() 
         requests: Vec<PlatformRequest>,
     }
     impl PlatformBackend for Device {
-        fn aspect_scaling(&self) -> Result<bool, Box<dyn Error>> {
+        fn aspect_scaling(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
             Ok(self.enabled)
         }
-        fn stretch_filter_supported(&self) -> Result<bool, Box<dyn Error>> {
+        fn stretch_filter_supported(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
             Ok(self.supported)
         }
-        fn fullscreen(&self) -> Result<bool, Box<dyn Error>> {
+        fn fullscreen(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
             Ok(self.fullscreen)
         }
-        fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+        fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
             if self.fail {
                 return Err("synthetic failure".into());
             }
@@ -278,7 +273,7 @@ fn unsupported_scaling_enable_still_refreshes_fullscreen_and_retries_failures() 
 
 #[test]
 fn window_size_reset_yields_only_when_it_changes_and_preserves_results() {
-    use cmvs_core::platform::PlatformEvent;
+    use cmvs_core::host::platform::PlatformEvent;
     let mut code = vec![];
     bytecode::command(&mut code, 0x216e, &[]);
     bytecode::command(&mut code, 0x216e, &[]);
@@ -308,10 +303,10 @@ fn window_size_reset_yields_only_when_it_changes_and_preserves_results() {
 fn fixed_window_reset_is_a_noop_and_fullscreen_reset_records_the_future_size() {
     struct Fixed;
     impl PlatformBackend for Fixed {
-        fn resizable(&self) -> Result<bool, Box<dyn Error>> {
+        fn resizable(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
             Ok(false)
         }
-        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
             panic!("fixed window must not resize")
         }
     }
@@ -327,7 +322,7 @@ fn fixed_window_reset_is_a_noop_and_fullscreen_reset_records_the_future_size() {
     assert_eq!(
         host.shared_platform(&mut vm, &mut backend, &mut Assets::default(), &[])
             .unwrap(),
-        Some(cmvs_core::platform::PlatformEvent::Configured)
+        Some(cmvs_core::host::platform::PlatformEvent::Configured)
     );
     assert_eq!(backend.windowed_size().unwrap(), [1280, 720]);
     assert!(backend.fullscreen().unwrap());
@@ -337,7 +332,7 @@ fn fixed_window_reset_is_a_noop_and_fullscreen_reset_records_the_future_size() {
     assert_eq!(
         host.shared_platform(&mut vm, &mut Fixed, &mut Assets::default(), &[])
             .unwrap(),
-        Some(cmvs_core::platform::PlatformEvent::Configured)
+        Some(cmvs_core::host::platform::PlatformEvent::Configured)
     );
 }
 
@@ -349,19 +344,19 @@ fn fullscreen_reset_changes_only_recorded_size_and_retries_backend_failure() {
         requests: usize,
     }
     impl PlatformBackend for Fullscreen {
-        fn resizable(&self) -> Result<bool, Box<dyn Error>> {
+        fn resizable(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
             Ok(true)
         }
-        fn fullscreen(&self) -> Result<bool, Box<dyn Error>> {
+        fn fullscreen(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
             Ok(true)
         }
-        fn window_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
+        fn window_size(&self) -> Result<[u32; 2], Box<dyn Error + Send + Sync>> {
             Ok([1920, 1080])
         }
-        fn windowed_size(&self) -> Result<[u32; 2], Box<dyn Error>> {
+        fn windowed_size(&self) -> Result<[u32; 2], Box<dyn Error + Send + Sync>> {
             Ok(self.recorded)
         }
-        fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+        fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
             if self.fail {
                 return Err("synthetic failure".into());
             }
@@ -398,7 +393,7 @@ fn fullscreen_reset_changes_only_recorded_size_and_retries_backend_failure() {
         assert_eq!(
             host.shared_platform(&mut vm, &mut backend, &mut Assets::default(), &[])
                 .unwrap(),
-            Some(cmvs_core::platform::PlatformEvent::Configured)
+            Some(cmvs_core::host::platform::PlatformEvent::Configured)
         );
         assert_eq!(backend.window_size().unwrap(), [1920, 1080]);
         if vm.pc() < code.len() {
@@ -458,7 +453,7 @@ fn render_mode_clamps_words_falls_back_without_linear_support_and_skips_equal_re
         assert_eq!(
             host.shared_platform(&mut vm, &mut backend, &mut assets, &[])
                 .unwrap(),
-            Some(cmvs_core::platform::PlatformEvent::Configured)
+            Some(cmvs_core::host::platform::PlatformEvent::Configured)
         );
         assert_eq!(vm.state().system_integer(0), Some(77));
         assert_eq!(vm.stack().len_bytes(), 0);
@@ -475,16 +470,16 @@ fn render_mode_clamps_words_falls_back_without_linear_support_and_skips_equal_re
 
     struct PointOnly(u32);
     impl PlatformBackend for PointOnly {
-        fn linear_stretch_supported(&self) -> Result<bool, Box<dyn Error>> {
+        fn linear_stretch_supported(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
             Ok(false)
         }
-        fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error>> {
+        fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error + Send + Sync>> {
             Ok(0)
         }
-        fn render_mode(&self) -> Result<u32, Box<dyn Error>> {
+        fn render_mode(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
             Ok(self.0)
         }
-        fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+        fn apply(&mut self, request: &PlatformRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
             assert_eq!(request, &PlatformRequest::RenderMode(0));
             self.0 = 0;
             Ok(())
@@ -505,16 +500,16 @@ fn render_mode_clamps_words_falls_back_without_linear_support_and_skips_equal_re
 fn shader_render_modes_on_capable_devices_and_backend_failures_stay_barriers() {
     struct Device(u8, bool);
     impl PlatformBackend for Device {
-        fn linear_stretch_supported(&self) -> Result<bool, Box<dyn Error>> {
+        fn linear_stretch_supported(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
             Ok(true)
         }
-        fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error>> {
+        fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error + Send + Sync>> {
             Ok(self.0)
         }
-        fn render_mode(&self) -> Result<u32, Box<dyn Error>> {
+        fn render_mode(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
             Ok(0)
         }
-        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
             if self.1 {
                 Ok(())
             } else {
@@ -558,7 +553,7 @@ fn shader_render_modes_on_capable_devices_and_backend_failures_stay_barriers() {
 
 #[test]
 fn fullscreen_changes_yield_preserve_results_and_query_the_new_backend_mode() {
-    use cmvs_core::platform::PlatformEvent;
+    use cmvs_core::host::platform::PlatformEvent;
     let mut code = vec![];
     for raw in [1, 0, u32::MAX, u32::MAX] {
         bytecode::command(&mut code, 0x2164, &[raw]);
@@ -595,10 +590,10 @@ fn fullscreen_changes_yield_preserve_results_and_query_the_new_backend_mode() {
 fn failed_display_changes_retain_pending_command_stack_and_results() {
     struct Reject;
     impl PlatformBackend for Reject {
-        fn aspect_mode(&self) -> Result<u32, Box<dyn Error>> {
+        fn aspect_mode(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
             Ok(1)
         }
-        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
             Err("synthetic display failure".into())
         }
     }
@@ -625,22 +620,22 @@ fn failed_display_changes_retain_pending_command_stack_and_results() {
 fn graphics_and_resizing_queries_report_explicit_backend_capabilities() {
     struct Device(u8, bool);
     impl PlatformBackend for Device {
-        fn stretch_filter_supported(&self) -> Result<bool, Box<dyn Error>> {
+        fn stretch_filter_supported(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
             Ok(true)
         }
-        fn aspect_mode(&self) -> Result<u32, Box<dyn Error>> {
+        fn aspect_mode(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
             Ok(2)
         }
-        fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error>> {
+        fn pixel_shader_major(&self) -> Result<u8, Box<dyn Error + Send + Sync>> {
             Ok(self.0)
         }
-        fn render_mode(&self) -> Result<u32, Box<dyn Error>> {
+        fn render_mode(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
             Ok(2)
         }
-        fn resizable(&self) -> Result<bool, Box<dyn Error>> {
+        fn resizable(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
             Ok(self.1)
         }
-        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+        fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
             panic!("query must not apply requests")
         }
     }
@@ -923,7 +918,7 @@ struct Assets {
     fail: bool,
 }
 impl PlatformAssets for Assets {
-    fn read(&mut self, name: &[u8]) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn read(&mut self, name: &[u8]) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
         self.calls += 1;
         if self.fail {
             return Err("synthetic read failure".into());
@@ -963,7 +958,7 @@ fn script(commands: &[(u16, u32)], text: &[u8]) -> Script {
     raw.extend(code.into_iter().map(|b| b.rotate_left(1).wrapping_add(124)));
     Script::decode(&raw).unwrap()
 }
-fn pending(vm: &mut Machine<'_>) {
+fn pending(vm: &mut Machine) {
     while !matches!(vm.step().unwrap(), Step::System { .. }) {}
 }
 
@@ -1008,7 +1003,7 @@ fn title_and_icon_requests_preserve_byte_encoding_and_registers() {
 
 struct RejectBackend;
 impl PlatformBackend for RejectBackend {
-    fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+    fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("synthetic backend unavailable".into())
     }
 }
@@ -1280,8 +1275,8 @@ fn thumbnail_argument_order_is_retained_and_gesture_commands_are_not_platform() 
 fn fullscreen_monitor_setter_normalizes_modes_and_yields_only_for_fullscreen_refresh() {
     for id in ["cmvs-20190305", "cmvs-20190405"] {
         use cmvs_core::{
-            dispatch::{self, Flow, Hosts, PlatformHosts},
-            profile::Registry,
+            profile::Registry, vm::dispatch, vm::dispatch::Flow, vm::dispatch::Hosts,
+            vm::dispatch::PlatformHosts,
         };
         struct Displays {
             fullscreen: bool,
@@ -1290,13 +1285,16 @@ fn fullscreen_monitor_setter_normalizes_modes_and_yields_only_for_fullscreen_ref
             modes: Vec<u32>,
         }
         impl PlatformBackend for Displays {
-            fn display_count(&self) -> Result<u32, Box<dyn Error>> {
+            fn display_count(&self) -> Result<u32, Box<dyn Error + Send + Sync>> {
                 Ok(2)
             }
-            fn fullscreen(&self) -> Result<bool, Box<dyn Error>> {
+            fn fullscreen(&self) -> Result<bool, Box<dyn Error + Send + Sync>> {
                 Ok(self.fullscreen)
             }
-            fn select_fullscreen_monitor(&mut self, mode: u32) -> Result<bool, Box<dyn Error>> {
+            fn select_fullscreen_monitor(
+                &mut self,
+                mode: u32,
+            ) -> Result<bool, Box<dyn Error + Send + Sync>> {
                 if self.fail {
                     return Err("selection failed".into());
                 }
@@ -1311,7 +1309,7 @@ fn fullscreen_monitor_setter_normalizes_modes_and_yields_only_for_fullscreen_ref
                 self.modes.push(mode);
                 Ok(changed)
             }
-            fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+            fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
                 unreachable!()
             }
         }
@@ -1361,9 +1359,9 @@ fn fullscreen_monitor_setter_normalizes_modes_and_yields_only_for_fullscreen_ref
                 assert_eq!(
                     result.unwrap(),
                     Some(Flow::Platform(if yielded {
-                        cmvs_core::platform::PlatformEvent::Yield
+                        cmvs_core::host::platform::PlatformEvent::Yield
                     } else {
-                        cmvs_core::platform::PlatformEvent::Configured
+                        cmvs_core::host::platform::PlatformEvent::Configured
                     }))
                 );
                 assert_eq!(backend.modes, [mode]);

@@ -1,10 +1,7 @@
+use crate::support::shared_state::SharedState;
 use cmvs_core::{
-    fade::{self, FadeHost, SkipGate},
-    input::ActionInput,
-    machine::{Machine, Step},
-    ps3::Script,
-    scene::SceneHost,
-    scene_render,
+    format::ps3::Script, host::input::ActionInput, render::fade::FadeHost, render::fade::SkipGate,
+    render::scene::SceneHost, render::scene_render, vm::machine::Machine, vm::machine::Step,
 };
 
 fn command(code: &mut Vec<u8>, op: u16, args: &[u32]) {
@@ -35,7 +32,7 @@ fn script(code: &[u8]) -> Script {
     raw.extend(code.iter().map(|v| v.rotate_left(1).wrapping_add(124)));
     Script::decode(&raw).unwrap()
 }
-fn pending(vm: &mut Machine<'_>) {
+fn pending(vm: &mut Machine) {
     loop {
         if matches!(vm.step().unwrap(), Step::System { .. }) {
             break;
@@ -49,7 +46,7 @@ fn create(direction: u32, duration: u32) -> FadeHost {
     let mut vm = Machine::new(&script).unwrap();
     pending(&mut vm);
     let mut fade = FadeHost::default();
-    fade.try_handle(&mut vm).unwrap();
+    fade.shared_state(&mut vm).unwrap();
     assert_eq!(vm.state().system_integer(0), Some(1));
     assert_eq!(vm.stack().len_bytes(), 0);
     fade
@@ -58,14 +55,13 @@ fn create(direction: u32, duration: u32) -> FadeHost {
 #[test]
 fn additional_objects_use_stable_layers_and_clamp_source_coordinates() {
     use cmvs_core::{
-        raster::RgbaImage,
-        scene::{DrawState, ObjectImage, SceneObject},
+        render::raster::RgbaImage, render::scene::DrawState, render::scene::ObjectImage,
+        render::scene::SceneObject,
     };
     let object = |rgba| {
         let mut draw = DrawState::default();
-        draw.words[4] = 1;
-        draw.words[5] = 1;
-        draw.words[10] = 1;
+        draw.set_source_size(1, 1);
+        draw.set_layer(1);
         SceneObject {
             image: Some(ObjectImage {
                 filter: None,
@@ -95,7 +91,11 @@ fn additional_objects_use_stable_layers_and_clamp_source_coordinates() {
         &[0, 0, 255, 255]
     );
     red.shown = true;
-    red.draw.as_mut().unwrap().words[2] = 1;
+    {
+        let d = red.draw.as_mut().unwrap();
+        let [_, y, w, h] = d.source_rect();
+        d.set_source_rect([1, y, w, h]);
+    }
     assert_eq!(
         scene_render::render_with_objects(&scene, &[&blue, &red], 1, 1)
             .unwrap()
@@ -107,8 +107,8 @@ fn additional_objects_use_stable_layers_and_clamp_source_coordinates() {
 #[test]
 fn additional_glyph_objects_are_sorted_with_the_fade_instead_of_overlaid_after_it() {
     use cmvs_core::{
-        raster::RgbaImage,
-        scene::{DrawState, ObjectImage, SceneObject},
+        render::raster::RgbaImage, render::scene::DrawState, render::scene::ObjectImage,
+        render::scene::SceneObject,
     };
     let mut code = vec![];
     command(&mut code, 0x2220, &[0, 0, 1000, 0]);
@@ -116,12 +116,11 @@ fn additional_glyph_objects_are_sorted_with_the_fade_instead_of_overlaid_after_i
     let mut vm = Machine::new(&program).unwrap();
     pending(&mut vm);
     let mut scene = SceneHost::default();
-    scene.fade_mut().try_handle(&mut vm).unwrap();
+    scene.fade_mut().shared_state(&mut vm).unwrap();
     scene.fade_mut().advance(500);
     let mut draw = DrawState::default();
-    draw.words[4] = 1;
-    draw.words[5] = 1;
-    draw.words[10] = 1;
+    draw.set_source_size(1, 1);
+    draw.set_layer(1);
     let mut glyph = SceneObject {
         image: Some(ObjectImage {
             filter: None,
@@ -139,7 +138,7 @@ fn additional_glyph_objects_are_sorted_with_the_fade_instead_of_overlaid_after_i
             .pixels(),
         &[128, 128, 128, 255]
     );
-    glyph.draw.as_mut().unwrap().words[10] = u32::MAX;
+    glyph.draw.as_mut().unwrap().set_layer(u32::MAX);
     assert_eq!(
         scene_render::render_with_objects(&scene, &[&glyph], 1, 1)
             .unwrap()
@@ -233,14 +232,14 @@ fn skippable_wait_without_input_and_invalid_creation_do_not_commit() {
     fade.try_wait(&mut vm, SkipGate::default(), &mut ActionInput::default())
         .unwrap();
     pending(&mut vm);
-    assert!(fade.try_handle(&mut vm).is_err());
+    assert!(fade.shared_state(&mut vm).is_err());
     assert_eq!(vm.stack().len_bytes(), 16);
     assert!(fade.current().is_none());
     assert!(before.is_some());
     let program = script(&0x2220u16.to_le_bytes());
     let mut vm = Machine::new(&program).unwrap();
     pending(&mut vm);
-    assert!(fade.try_handle(&mut vm).is_err());
+    assert!(fade.shared_state(&mut vm).is_err());
 }
 
 #[test]
@@ -261,7 +260,7 @@ fn query_force_finish_destroy_and_replace_follow_original_results() {
             (0x2223, Some(u32::MAX)),
         ] {
             pending(&mut vm);
-            assert!(fade.try_handle(&mut vm).unwrap());
+            assert!(fade.shared_state(&mut vm).unwrap());
             if let Some(result) = result {
                 assert_eq!(vm.state().system_integer(0), Some(result));
             }
@@ -277,7 +276,7 @@ fn query_force_finish_destroy_and_replace_follow_original_results() {
     let program = script(&replace);
     let mut vm = Machine::new(&program).unwrap();
     pending(&mut vm);
-    fade.try_handle(&mut vm).unwrap();
+    fade.shared_state(&mut vm).unwrap();
     assert_eq!(fade.current().unwrap().elapsed, 0);
     assert_eq!(fade.current().unwrap().opacity, 255);
 }
@@ -292,7 +291,7 @@ fn solid_fade_composites_color_and_retains_opaque_end_state() {
     let mut scene = SceneHost::default();
     for _ in 0..2 {
         pending(&mut vm);
-        scene.try_handle(&mut vm).unwrap();
+        scene.shared_state(&mut vm).unwrap();
     }
     assert_eq!(
         scene_render::render(&scene, 1, 1).unwrap().pixels(),
@@ -451,7 +450,7 @@ fn effect_use_is_set_and_read_by_0x22d1() {
     for _ in 0..5 {
         while !matches!(vm.step().unwrap(), Step::System { .. }) {}
         vm.state_mut().set_system_integer(0, 5).unwrap();
-        assert!(fade::try_handle_effects(&mut vm, &mut effects).unwrap());
+        assert!(crate::support::shared_state::shared_effects(&mut vm, &mut effects).unwrap());
         results.push((vm.state().system_integer(0), effects));
     }
     assert_eq!(
@@ -467,6 +466,6 @@ fn effect_use_is_set_and_read_by_0x22d1() {
     assert_eq!(vm.stack().len_bytes(), 0);
     // An empty stack keeps the command pending.
     while !matches!(vm.step().unwrap(), Step::System { .. }) {}
-    assert!(fade::try_handle_effects(&mut vm, &mut effects).is_err());
+    assert!(crate::support::shared_state::shared_effects(&mut vm, &mut effects).is_err());
     assert_eq!(vm.pending_system().map(|p| p.1), Some(0x2d1));
 }

@@ -1,6 +1,6 @@
 use cmvs_core::{
-    save_menu::profile_int,
-    settings::{Configuration, DisplayPreferences, MAX_CONFIGURATION},
+    host::settings::Configuration, host::settings::DisplayPreferences,
+    host::settings::MAX_CONFIGURATION, runtime::save_menu::profile_int,
 };
 
 #[test]

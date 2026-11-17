@@ -27,7 +27,7 @@ impl Magic {
     pub fn new(
         source: &mut dyn ImageSource,
         random: &mut CrtRandom,
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let mut images = Vec::new();
         for name in [
             b"try008a.pb3",
@@ -102,7 +102,7 @@ impl Magic {
         delta: u32,
         backend: &mut dyn AudioBackend,
         volume: u32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let delta = delta.min(200);
         self.clock = self.clock.wrapping_add(delta);
         let angle = (self.clock.wrapping_mul(3600) / 6000 % 3600) as f32 / 10.0;

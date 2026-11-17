@@ -1,10 +1,9 @@
+use crate::support::shared_images::SharedImages;
+use crate::support::shared_state::SharedState;
 use cmvs_core::{
-    camera::{Camera, CameraHost},
-    image::ImageSource,
-    machine::{Machine, Step},
-    ps3::Script,
-    scene::SceneHost,
-    scene_render,
+    format::ps3::Script, host::image::ImageSource, render::camera::Camera,
+    render::camera::CameraHost, render::scene::SceneHost, render::scene_render,
+    vm::machine::Machine, vm::machine::Step,
 };
 use std::{collections::BTreeMap, error::Error};
 
@@ -52,7 +51,7 @@ const ORANGE: [u8; 3] = [200, 100, 40];
 
 struct Files(BTreeMap<Vec<u8>, Vec<u8>>);
 impl ImageSource for Files {
-    fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
         Ok(self.0.get(name).cloned())
     }
 }
@@ -135,10 +134,10 @@ fn build_with_cameras(code: &[u8], mut cameras: CameraHost) -> (SceneHost, Camer
     while vm.pc() < code.len() {
         while !matches!(vm.step().unwrap(), Step::System { .. }) {}
         assert!(
-            scene.try_handle(&mut vm).unwrap()
-                || cameras.try_handle(&mut vm).unwrap()
-                || scene.try_handle_image(&mut vm, &mut files).unwrap()
-                || scene.try_handle_mask(&mut vm, &mut files).unwrap()
+            scene.shared_state(&mut vm).unwrap()
+                || cameras.shared_state(&mut vm).unwrap()
+                || scene.shared_image(&mut vm, &mut files).unwrap()
+                || scene.shared_mask(&mut vm, &mut files).unwrap()
                 || scene.try_change_image(&mut vm, &mut files).unwrap()
         );
     }
@@ -594,7 +593,7 @@ fn solid_color_blocks_child_image_inheritance_but_keeps_an_objects_own_image() {
     let mut object = scene.object(0).unwrap().clone();
     object.children.clear();
     object.image = None;
-    object.draw.as_mut().unwrap().words[14] = 0x000000ff;
+    object.draw.as_mut().unwrap().set_color(0x000000ff);
     scene = SceneHost::default();
     let frame = scene_render::render_with_objects(&scene, &[&object], 8, 4).unwrap();
     assert_eq!(&frame.pixels()[..4], &[0, 0, 255, 255]);
@@ -699,10 +698,10 @@ fn projected_child_stays_in_parent_group_and_unsupported_flags_still_fail() {
     // Attached children sort by parent key + their own biased Z, independently of
     // the inherited projection coordinates. The larger-key orange child draws first.
     let mut farther = object.children[&0].clone();
-    farther.image = Some(cmvs_core::scene::ObjectImage {
+    farther.image = Some(cmvs_core::render::scene::ObjectImage {
         filter: None,
         name: b"orange".to_vec(),
-        pixels: cmvs_core::raster::RgbaImage::new(
+        pixels: cmvs_core::render::raster::RgbaImage::new(
             2,
             1,
             [
@@ -714,7 +713,11 @@ fn projected_child_stays_in_parent_group_and_unsupported_flags_still_fail() {
         alpha: false,
         surface: false,
     });
-    farther.draw.as_mut().unwrap().words[13] = f(1.0);
+    {
+        let d = farther.draw.as_mut().unwrap();
+        let [x, y, _] = d.world_position_bits();
+        d.set_world_position_bits([x, y, f(1.0)]);
+    }
     object.children.insert(1, farther);
     let ordered =
         scene_render::render_scene(&SceneHost::default(), Some(&cameras), &[&object], 8, 4)
@@ -736,7 +739,7 @@ fn projected_child_stays_in_parent_group_and_unsupported_flags_still_fail() {
         .draw
         .as_mut()
         .unwrap()
-        .words[0] = 0;
+        .set_coordinate_mode(0);
     assert!(
         scene_render::render_scene(&SceneHost::default(), Some(&cameras), &[&object], 8, 4).is_ok(),
         "mismatched coordinate modes do not enqueue"
@@ -841,7 +844,11 @@ fn harouse_parent_rotation_keeps_child_origin_nonuniform_scale_and_opacity() {
         }
     }
     let mut invalid = scene.object(1).unwrap().clone();
-    invalid.draw.as_mut().unwrap().words[18] = f(f32::MAX);
+    {
+        let d = invalid.draw.as_mut().unwrap();
+        let [_, sy] = d.scale_bits();
+        d.set_scale_bits([f(f32::MAX), sy]);
+    }
     invalid
         .children
         .get_mut(&0)
@@ -849,7 +856,7 @@ fn harouse_parent_rotation_keeps_child_origin_nonuniform_scale_and_opacity() {
         .draw
         .as_mut()
         .unwrap()
-        .words[18] = f(f32::MAX);
+        .set_scale_bits([f(f32::MAX), 1.0f32.to_bits()]);
     assert!(scene_render::render_scene(&bound, Some(&cameras), &[&invalid], 8, 8).is_err());
 }
 

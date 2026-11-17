@@ -1,11 +1,9 @@
 use crate::support;
+use crate::support::shared_state::SharedState;
 use cmvs_core::{
-    dispatch::{self, Flow, Hosts, ImageHosts},
-    image::ImageSource,
-    machine::Machine,
-    profile::{Semantics, VariantId},
-    random::CrtRandom,
-    scene::SceneHost,
+    host::image::ImageSource, host::random::CrtRandom, profile::Semantics, profile::VariantId,
+    render::scene::SceneHost, vm::dispatch, vm::dispatch::Flow, vm::dispatch::Hosts,
+    vm::dispatch::ImageHosts, vm::machine::Machine,
 };
 use support::bytecode::{command, pending, script};
 
@@ -19,7 +17,7 @@ fn fragment_dispatch_transfers_source_and_preserves_pending_when_random_is_missi
     let mut vm = Machine::new(&script).unwrap();
     let mut scene = SceneHost::default();
     pending(&mut vm);
-    scene.try_handle(&mut vm).unwrap();
+    scene.shared_state(&mut vm).unwrap();
     pending(&mut vm);
     let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
     assert_eq!(
@@ -80,7 +78,7 @@ fn fragment_completion_query_preserves_errors_and_reports_pending_and_finished()
     let mut scene = SceneHost::default();
     let mut random = CrtRandom::new(0);
     pending(&mut vm);
-    scene.try_handle(&mut vm).unwrap();
+    scene.shared_state(&mut vm).unwrap();
     pending(&mut vm);
     dispatch::run(
         Semantics::Variant(VariantId::Fragments),
@@ -138,7 +136,10 @@ struct Images {
     fail: bool,
 }
 impl ImageSource for Images {
-    fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+    fn read(
+        &mut self,
+        name: &[u8],
+    ) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
         assert_eq!(name, b"particle.pb3");
         self.reads += 1;
         if self.fail {
@@ -199,7 +200,7 @@ fn rain_binding_preserves_pending_arguments_and_rng_on_image_failure() {
     assert_eq!(random, CrtRandom::new(0));
 }
 fn run(
-    vm: &mut Machine<'_>,
+    vm: &mut Machine,
     scene: &mut SceneHost,
     source: &mut Images,
     random: &mut CrtRandom,
@@ -215,7 +216,7 @@ fn run(
 
 fn run_as(
     semantics: Semantics,
-    vm: &mut Machine<'_>,
+    vm: &mut Machine,
     scene: &mut SceneHost,
     source: &mut Images,
     random: &mut CrtRandom,
@@ -502,7 +503,7 @@ fn falling_override_preserves_pending_on_failure_and_shares_effect_slots_and_ran
             Some(Flow::Unavailable)
         );
         source.fail = true;
-        let execute = |vm: &mut Machine<'_>,
+        let execute = |vm: &mut Machine,
                        scene: &mut SceneHost,
                        random: &mut CrtRandom,
                        source: &mut Images| {
@@ -629,7 +630,7 @@ fn falling_override_preserves_pending_on_failure_and_shares_effect_slots_and_ran
 }
 
 fn run_collision(
-    vm: &mut Machine<'_>,
+    vm: &mut Machine,
     scene: &mut SceneHost,
     source: &mut Images,
     random: &mut CrtRandom,
@@ -688,7 +689,7 @@ fn collision_mesh_commands_bound_vertices_and_particle_creation_retries_atomical
     let mut source = Images::default();
     let mut random = CrtRandom::new(0);
     pending(&mut vm);
-    scene.try_handle(&mut vm).unwrap();
+    scene.shared_state(&mut vm).unwrap();
     for index in 0..133 {
         pending(&mut vm);
         let before = (vm.pc(), vm.pending_system(), vm.stack().len_bytes());
@@ -783,7 +784,7 @@ fn fading_particles_bind_only_0x22a7_and_ignore_incomplete_collision_meshes() {
     let mut source = Images::default();
     let mut random = CrtRandom::new(0);
     pending(&mut vm);
-    scene.try_handle(&mut vm).unwrap();
+    scene.shared_state(&mut vm).unwrap();
     for _ in 0..2 {
         pending(&mut vm);
         run_collision(&mut vm, &mut scene, &mut source, &mut random).unwrap();

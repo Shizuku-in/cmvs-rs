@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn user_configuration_round_trips_live_settings_and_preserves_the_game_file() {
-    use cmvs_core::settings::DisplayPreferences;
+    use cmvs_core::host::settings::DisplayPreferences;
     let mut code = vec![];
     for (op, value) in [
         (0x22e1, 7),
@@ -63,7 +63,7 @@ fn user_configuration_round_trips_live_settings_and_preserves_the_game_file() {
     assert_eq!(resumed.audio().settings(), audio);
     assert_eq!(resumed.audio().voice_ducking(), duck);
     assert!(!resumed.audio().background_output());
-    assert!(!cmvs_core::audio::AudioHost::from_ini(&first).background_output());
+    assert!(!cmvs_core::host::audio::AudioHost::from_ini(&first).background_output());
     assert_eq!(resumed.message_flags().mode_1548(), flags.mode_1548());
     assert_eq!(resumed.save_menu().confirmations(), confirmations);
     assert_eq!(
@@ -95,7 +95,7 @@ fn user_configuration_round_trips_live_settings_and_preserves_the_game_file() {
 
 #[test]
 fn system_save_export_is_opt_in_external_and_becomes_the_read_source() {
-    use cmvs_core::system_save::Css1Save;
+    use cmvs_core::format::system_save::Css1Save;
     let mut code = vec![];
     let mut call = |op: u16, args: &[u32]| {
         for value in args.iter().rev() {
@@ -154,7 +154,7 @@ fn system_save_export_is_opt_in_external_and_becomes_the_read_source() {
 
 #[test]
 fn user_directory_saves_twice_restarts_and_never_falls_back_from_corrupt_primary() {
-    use cmvs_core::{evaluate::State, system_save::Css1Save};
+    use cmvs_core::{format::system_save::Css1Save, vm::evaluate::State};
     let mut code = vec![];
     let mut call = |op: u16, args: &[u32]| {
         for value in args.iter().rev() {
@@ -448,7 +448,7 @@ fn read_skip_cancels_script_skip_at_unread_output_and_keeps_flags_on_unknown_bit
 
 #[test]
 fn first_system_save_without_template_writes_reloads_and_survives_restart() {
-    use cmvs_core::{settings::DisplayPreferences, system_save::Css1Save};
+    use cmvs_core::{format::system_save::Css1Save, host::settings::DisplayPreferences};
     let profile = synthetic_profile().replace("synthetic-base", "cmvs-20160201");
     let registry = Registry::parse(&[&profile], "").unwrap();
     for explicit_write in [false, true] {

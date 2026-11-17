@@ -2,10 +2,10 @@
 use crate::dispatch::{Call, Flow, Hosts};
 use std::error::Error;
 
-pub(in crate::dispatch) fn root_audio(
+pub(in super::super) fn root_audio(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts.audio.as_mut().expect("audio capability checked");
     if call.command >= 0x400 {
         h.audio.handle_cvns(call, h.backend)?;
@@ -15,10 +15,10 @@ pub(in crate::dispatch) fn root_audio(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_movie_state(
+pub(in super::super) fn root_movie_state(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .movies
         .as_deref_mut()
@@ -27,10 +27,10 @@ pub(in crate::dispatch) fn root_movie_state(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_movie_start(
+pub(in super::super) fn root_movie_start(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .movies
         .as_deref_mut()
@@ -39,10 +39,10 @@ pub(in crate::dispatch) fn root_movie_start(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_movie_scene(
+pub(in super::super) fn root_movie_scene(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts
         .movie_scene
         .as_mut()
@@ -55,10 +55,10 @@ pub(in crate::dispatch) fn root_movie_scene(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_movie_player(
+pub(in super::super) fn root_movie_player(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts
         .movie_player
         .as_mut()
@@ -70,10 +70,10 @@ pub(in crate::dispatch) fn root_movie_player(
         .handle_player(call, h.source, h.settings, h.backend)
 }
 
-pub(in crate::dispatch) fn mgv_player(
+pub(in super::super) fn mgv_player(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts
         .movie_player
         .as_mut()
@@ -86,10 +86,10 @@ pub(in crate::dispatch) fn mgv_player(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn legacy_movie_control(
+pub(in super::super) fn legacy_movie_control(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .movies
         .as_deref_mut()
@@ -98,10 +98,10 @@ pub(in crate::dispatch) fn legacy_movie_control(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn legacy_movie_seek(
+pub(in super::super) fn legacy_movie_seek(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts
         .movie_scene
         .as_mut()
@@ -114,46 +114,46 @@ pub(in crate::dispatch) fn legacy_movie_seek(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn preload_audio(
+pub(in super::super) fn preload_audio(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts.audio.as_mut().expect("audio capability checked");
     h.audio.handle_preload(call, h.backend)?;
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn se_gain(
+pub(in super::super) fn se_gain(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts.audio.as_mut().expect("audio capability checked");
     h.audio.set_se_gain(call, h.backend)?;
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn mixer_gain(
+pub(in super::super) fn mixer_gain(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts.audio.as_mut().expect("audio capability checked");
     h.audio.set_mixer_gain(call, h.backend)?;
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn background_audio(
+pub(in super::super) fn background_audio(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts.audio.as_mut().expect("audio capability checked");
     h.audio.handle_background_output(call, h.backend)?;
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn cvns_master_volume(
+pub(in super::super) fn cvns_master_volume(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts.audio.as_mut().expect("audio capability checked");
     h.audio.set_master_percent(call, h.backend)?;
     Ok(Flow::Done)

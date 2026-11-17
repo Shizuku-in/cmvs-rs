@@ -1,4 +1,7 @@
-use cmvs_core::resources::{ResourceArchives, ResourceKind, ResourceSource};
+use cmvs_core::{
+    host::resources::ResourceArchives, host::resources::ResourceKind,
+    host::resources::ResourceSource,
+};
 use std::{
     collections::BTreeMap,
     fs,
@@ -80,7 +83,7 @@ fn resource_families_and_slot_limits_are_independent() {
 
 #[test]
 fn keyed_archives_reopen_when_only_the_parameters_change() {
-    use cmvs_core::cpz::{ArchiveIndex, Cpz7Parameters};
+    use cmvs_core::{format::cpz::ArchiveIndex, format::cpz::Cpz7Parameters};
     let root = Root::new();
     let bytes: Vec<_> = include_str!("../../../../tests/fixtures/cpz7-keyed.hex")
         .trim()
@@ -193,7 +196,7 @@ fn shared_reader_confines_audio_paths_and_rejects_file_roots() {
 
 #[test]
 fn repeated_interior_separators_resolve_without_accepting_rooted_or_dot_paths() {
-    use cmvs_core::platform::{DirectoryAssets, PlatformAssets};
+    use cmvs_core::{host::platform::DirectoryAssets, host::platform::PlatformAssets};
     let root = Root::new();
     root.put("a/same.bin", b"valid");
     let mut assets = DirectoryAssets::new(&root.0).unwrap();
@@ -251,7 +254,7 @@ fn scene_movie_registration_is_independent_and_searches_only_four_slots() {
 
 #[test]
 fn resolve_under_distinguishes_missing_files_from_invalid_paths() {
-    use cmvs_core::platform::{PathError, resolve_under};
+    use cmvs_core::{host::filesystem::PathError, host::filesystem::resolve_under};
     let root = Root::new();
     let missing = resolve_under(&root.0, b"a/missing.bin").unwrap_err();
     assert!(missing.is_not_found());
@@ -264,7 +267,7 @@ fn resolve_under_distinguishes_missing_files_from_invalid_paths() {
 
 #[test]
 fn resolve_under_and_loose_directory_reads_fold_ascii_case_without_escaping_root() {
-    use cmvs_core::platform::{PathError, resolve_under};
+    use cmvs_core::{host::filesystem::PathError, host::filesystem::resolve_under};
     let root = Root::new();
     fs::create_dir_all(root.0.join("DATA/Music")).unwrap();
     fs::write(root.0.join("DATA/Music/BGM30.ogg"), b"vorbis").unwrap();

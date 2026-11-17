@@ -1,12 +1,9 @@
 use crate::support;
 use crate::support::shared_state;
-use cmvs_core::{
-    machine::Machine,
-    scene::{RotationTrack, SceneHost},
-};
+use cmvs_core::{render::scene::RotationTrack, render::scene::SceneHost, vm::machine::Machine};
 use shared_state::SharedState;
 use support::bytecode::{command, pending, script};
-fn run(vm: &mut Machine<'_>, scene: &mut SceneHost, count: usize) {
+fn run(vm: &mut Machine, scene: &mut SceneHost, count: usize) {
     for _ in 0..count {
         pending(vm);
         assert!(scene.shared_state(vm).unwrap());
@@ -18,7 +15,13 @@ fn setup(code: &mut Vec<u8>, base: i32) {
     command(code, 0x21e5, &[20, u32::MAX, base as u32]);
 }
 fn angle(scene: &SceneHost) -> i32 {
-    scene.object(20).unwrap().draw.as_ref().unwrap().words[20] as i32
+    scene
+        .object(20)
+        .unwrap()
+        .draw
+        .as_ref()
+        .unwrap()
+        .rotation_raw() as i32
 }
 fn track(scene: &SceneHost) -> Option<&RotationTrack> {
     scene.object(20)?.draw.as_ref()?.rotation_track.as_deref()

@@ -2,10 +2,10 @@
 use crate::dispatch::{Call, Flow, Hosts};
 use std::error::Error;
 
-pub(in crate::dispatch) fn root_platform(
+pub(in super::super) fn root_platform(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts
         .platform
         .as_mut()
@@ -16,10 +16,10 @@ pub(in crate::dispatch) fn root_platform(
 }
 
 /// Old 0x213c returns a full-width comment and a confirmation result.
-pub(in crate::dispatch) fn variant_text_dialog(
+pub(in super::super) fn variant_text_dialog(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     use crate::platform::{TextDialogRequest, TextDialogResult};
     let title_raw = call.argument(4, "text dialog string")?;
     let prompt_raw = call.argument(8, "text dialog string")?;
@@ -118,10 +118,10 @@ pub(in crate::dispatch) fn variant_text_dialog(
 }
 
 /// CVNS 0x21b0 (0x4652a0 -> exit confirmation dialog) and 0x21b1 (0x4652f0 -> MessageBoxA).
-pub(in crate::dispatch) fn cvns_message_dialog(
+pub(in super::super) fn cvns_message_dialog(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     use crate::platform::{MessageDialogKind, MessageDialogRequest, MessageDialogResult};
 
     let (complete_code, request) = if call.command == 0x5b0 {
@@ -183,10 +183,10 @@ pub(in crate::dispatch) fn cvns_message_dialog(
 
 /// CVNS 0x21b7 (cvns-20040730 0x430820 -> ChooseColorA): pops two color words (`0x4008`)
 /// and writes `system_integer(0) = 0` when no interactive color dialog is picked.
-pub(in crate::dispatch) fn cvns_color_dialog(
+pub(in super::super) fn cvns_color_dialog(
     _hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     call.ignore_argument(4, "initial color")?;
     call.ignore_argument(8, "custom color")?;
     call.complete(0x4008)?;
@@ -200,10 +200,10 @@ pub(in crate::dispatch) fn cvns_color_dialog(
 /// 0x213d / 0x140081520 seeds the modal dialog with the global face (+3160).
 /// An accepted face updates the setting and reselects only texts using the default;
 /// cancellation still completes with no arguments or result writes.
-pub(in crate::dispatch) fn root_font_dialog(
+pub(in super::super) fn root_font_dialog(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let settings = hosts
         .settings
         .as_deref_mut()
@@ -235,10 +235,10 @@ pub(in crate::dispatch) fn root_font_dialog(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_capture(
+pub(in super::super) fn root_capture(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .capture
         .as_deref_mut()
@@ -250,10 +250,10 @@ pub(in crate::dispatch) fn root_capture(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_capture_device(
+pub(in super::super) fn root_capture_device(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .capture
         .as_deref_mut()
@@ -268,10 +268,10 @@ pub(in crate::dispatch) fn root_capture_device(
         )
 }
 
-pub(in crate::dispatch) fn window_full_move(
+pub(in super::super) fn window_full_move(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .platform
         .as_mut()

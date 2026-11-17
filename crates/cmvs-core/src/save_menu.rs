@@ -1,7 +1,7 @@
 //! Read-only gameplay-save header scanning, signature queries and menu state.
 //! Header recognition does not validate or restore the saved engine snapshot.
 use crate::filesystem::HostFs;
-use crate::{FormatError, bytecode::DecodeError, dispatch::Call, machine::Machine};
+use crate::{FormatError, bytecode::DecodeError, dispatch::Call};
 use std::{
     error::Error,
     io::{self, Read},
@@ -9,85 +9,7 @@ use std::{
     sync::Arc,
 };
 
-pub const HEADER_READ_LIMIT: usize = 512;
-
-/// The gameplay-save signature a menu scan accepts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SaveFamily {
-    /// CMVS `CSV2`..`CSV9`; slot N is `saveNNN.dat`.
-    Cmvs,
-    /// CVNS `CSP1`..`CSP9` (cvns-20090203 0x46d5f0); slot N is `save(N+1).dat`, because
-    /// `save000.dat` holds the CSS0 system save.
-    Cvns,
-}
-
-impl SaveFamily {
-    pub(crate) fn accepts(self, bytes: &[u8]) -> bool {
-        let (prefix, first) = match self {
-            Self::Cmvs => (b"CSV", b'2'),
-            Self::Cvns => (b"CSP", b'1'),
-        };
-        bytes.len() >= 4 && &bytes[..3] == prefix && (first..=b'9').contains(&bytes[3])
-    }
-    fn file(self, slot: u16) -> u16 {
-        match self {
-            Self::Cmvs => slot,
-            Self::Cvns => slot + 1,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SaveHeader {
-    /// ASCII version digit: '2'..='9' for CMVS, '1'..='9' for CVNS.
-    pub version: u8,
-    /// Original bytes at offset 16, excluding the terminating NUL.
-    pub label: Vec<u8>,
-    /// Original ordering key; only the last two year digits and even seconds count.
-    pub ordering_key: u32,
-}
-
-impl SaveHeader {
-    pub fn parse(bytes: &[u8]) -> Result<Self, FormatError> {
-        Self::parse_family(bytes, SaveFamily::Cmvs)
-    }
-    pub fn parse_family(bytes: &[u8], family: SaveFamily) -> Result<Self, FormatError> {
-        let bytes = &bytes[..bytes.len().min(HEADER_READ_LIMIT)];
-        if !family.accepts(bytes) {
-            return Err(FormatError("unsupported gameplay-save signature"));
-        }
-        let label = bytes
-            .get(16..)
-            .and_then(|b| b.iter().position(|v| *v == 0).map(|end| &b[..end]))
-            .ok_or(FormatError("save label is truncated or not NUL terminated"))?;
-        // Explicit malformed-input policy: no stale read-buffer bytes or unbounded C strings.
-        if label.len() < 19
-            || label[4] != b'-'
-            || label[7] != b'-'
-            || label[10] != b' '
-            || label[13] != b':'
-            || label[16] != b':'
-            || !label[..19]
-                .iter()
-                .enumerate()
-                .all(|(i, b)| matches!(i, 4 | 7 | 10 | 13 | 16) || b.is_ascii_digit())
-        {
-            return Err(FormatError("save label lacks YYYY-MM-DD HH:MM:SS prefix"));
-        }
-        let pair = |i: usize| u32::from(label[i] - b'0') * 10 + u32::from(label[i + 1] - b'0');
-        let ordering_key = pair(2).wrapping_shl(25)
-            | ((pair(5) & 15) << 21)
-            | ((pair(8) & 31) << 16)
-            | ((pair(11) & 31) << 11)
-            | ((pair(14) & 63) << 5)
-            | ((pair(17) / 2) & 31);
-        Ok(Self {
-            version: bytes[3],
-            label: label.to_vec(),
-            ordering_key,
-        })
-    }
-}
+pub use crate::save::{HEADER_READ_LIMIT, SaveFamily, SaveHeader};
 
 /// Slots 0..999; a source returns at most the first 512 bytes, None for absent files.
 /// I/O failures are distinct from missing or malformed saves and stop the command.
@@ -317,24 +239,8 @@ impl SaveMenuHost {
         self.popup_enabled = popup != 0;
         self.second_group_enabled = Some(true);
     }
-    /// 0x22d3 / 0x14007be00 and 0x22d4 / 0x14007be70: nonzero SP-4 sets +1496 / +1500 to
-    /// bool(SP-8) through 0x140090da0 (menu items 32764 / 32765 are checked accordingly);
-    /// zero SP-4 copies the flag to system result 0. Both return 0x4008. The original keeps
-    /// changed values for its registry; Rust keeps them for the session only.
-    /// 0x22cd stores SP-4 != 0 in +12092; 0x22ce copies +12092 to system result 0. 0x22ee
-    /// (inline) sets system result 0 to +1644 != 0, the copy of the second menu group flag
-    /// 0x140092ea0 keeps (constructor 0). None needs a save directory or creates native UI.
-    pub fn try_handle_popup(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x2cd | 0x2ce | 0x2d3 | 0x2d4 | 0x2ee | 0x46b))) =
-            vm.pending_system()
-        else {
-            return Ok(false);
-        };
-        self.handle_popup(&mut Call::new(vm, pc, command))?;
-        Ok(true)
-    }
 
-    pub(crate) fn handle_popup(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn handle_popup(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let command = call.command;
         match command {
             0x2d3 | 0x2d4 => {
@@ -381,26 +287,11 @@ impl SaveMenuHost {
         }
         Ok(())
     }
-    /// Returns true only when a verified command completed. No native UI is created.
-    pub fn try_handle(
-        &mut self,
-        vm: &mut Machine<'_>,
-        source: &mut impl SaveSource,
-    ) -> Result<bool, Box<dyn Error>> {
-        let Some((pc, command)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        if !matches!(command, 0x2b3 | 0x2b4 | 0x2bb | 0x5a1) {
-            return Ok(false);
-        }
-        self.handle(&mut Call::new(vm, pc, command), source)?;
-        Ok(true)
-    }
     pub(crate) fn handle(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         source: &mut dyn SaveSource,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let command = call.command;
         let argument = call.argument(
             4,

@@ -2,8 +2,8 @@
 //! the worker decodes a more expensive packet; explicit misses still wait and report errors.
 use crate::TheoraStream;
 use cmvs_core::{
-    mgv::{self, MgvIndex, ReadSeek},
-    raster::RgbaImage,
+    format::mgv::{self, MgvIndex, ReadSeek},
+    render::raster::RgbaImage,
 };
 use std::{
     collections::VecDeque,
@@ -41,7 +41,7 @@ impl CachedFrame {
         &self,
         ident: &crate::TheoraIdentHeader,
         index: &MgvIndex,
-    ) -> Result<RgbaImage, Box<dyn Error>> {
+    ) -> Result<RgbaImage, Box<dyn Error + Send + Sync>> {
         match self {
             Self::Rgba(image) => Ok(image.clone()),
             Self::Yuv(frame) => Ok(crate::to_rgba(ident, frame, index)?),
@@ -99,7 +99,7 @@ impl mgv::DecoderFactory for PrefetchTheoraFactory {
         &self,
         reader: Box<dyn ReadSeek>,
         index: &MgvIndex,
-    ) -> Result<Box<dyn mgv::Decoder>, Box<dyn Error>> {
+    ) -> Result<Box<dyn mgv::Decoder>, Box<dyn Error + Send + Sync>> {
         BufferedFactory {
             factory: *self,
             bytes: 64 << 20,
@@ -114,7 +114,7 @@ impl mgv::DecoderFactory for BufferedFactory {
         &self,
         reader: Box<dyn ReadSeek>,
         index: &MgvIndex,
-    ) -> Result<Box<dyn mgv::Decoder>, Box<dyn Error>> {
+    ) -> Result<Box<dyn mgv::Decoder>, Box<dyn Error + Send + Sync>> {
         let stream = TheoraStream::open(reader, index)?;
         // YUV420 lookahead uses 3/2 bytes per coded pixel instead of 4 for RGBA.
         // Very large frames retain the stream's existing minimum two-frame cache.
@@ -235,14 +235,14 @@ impl fmt::Debug for PrefetchDecoder {
     }
 }
 impl PrefetchDecoder {
-    fn call(&self, request: Request) -> Result<Option<RgbaImage>, Box<dyn Error>> {
+    fn call(&self, request: Request) -> Result<Option<RgbaImage>, Box<dyn Error + Send + Sync>> {
         const GONE: &str = "MGV decoding thread stopped";
         self.requests.send(request).map_err(|_| GONE)?;
         Ok(self.replies.recv().map_err(|_| GONE)??)
     }
 }
 impl mgv::Decoder for PrefetchDecoder {
-    fn frame(&mut self, frame: u32) -> Result<RgbaImage, Box<dyn Error>> {
+    fn frame(&mut self, frame: u32) -> Result<RgbaImage, Box<dyn Error + Send + Sync>> {
         let packet = self
             .index
             .frames
@@ -263,7 +263,7 @@ impl mgv::Decoder for PrefetchDecoder {
             .call(Request::Frame(frame))?
             .expect("frame request returns an image"))
     }
-    fn finish(&mut self) -> Result<(), Box<dyn Error>> {
+    fn finish(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.cache.wanted.store(u32::MAX, Ordering::Relaxed);
         self.call(Request::Finish).map(|_| ())
     }

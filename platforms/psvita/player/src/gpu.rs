@@ -4,10 +4,10 @@
 //! device frame.
 use crate::sys::VitaGpu;
 use cmvs_console::{backend::ConsoleGpu, gpu::Compositor};
-use cmvs_core::{raster::RgbaImage, scene_render::RenderFrame};
+use cmvs_core::{render::raster::RgbaImage, render::scene_render::RenderFrame};
 use std::error::Error;
 
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
+type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 /// Retained texture bytes; video memory (128 MiB) also holds the display buffers, and
 /// uploads fall back to main memory once it is full.
 const CACHE_LIMIT: usize = 64 * 1024 * 1024;

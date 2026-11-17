@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn immediate_readback_retries_until_a_draw_and_ignores_unflushed_scene_changes() {
-    use cmvs_core::raster::RgbaImage;
+    use cmvs_core::render::raster::RgbaImage;
     let mut code = vec![];
     commands::command(&mut code, 0x2020, &[3]);
     commands::command(&mut code, 0x22cb, &[0xabcdef]);
@@ -80,11 +80,11 @@ fn reset_missing_main_keeps_the_command_pending_and_old_state_intact() {
 
 #[test]
 fn recording_frames_advance_mgv_and_release_it_at_the_nominal_end() {
-    use cmvs_core::{mgv, raster::RgbaImage};
+    use cmvs_core::{format::mgv, render::raster::RgbaImage};
     #[derive(Debug)]
     struct Decoder;
     impl mgv::Decoder for Decoder {
-        fn frame(&mut self, frame: u32) -> Result<RgbaImage, Box<dyn Error>> {
+        fn frame(&mut self, frame: u32) -> Result<RgbaImage, Box<dyn Error + Send + Sync>> {
             Ok(RgbaImage::new(1, 1, vec![frame as u8, 0, 0, 255])?)
         }
     }
@@ -95,7 +95,7 @@ fn recording_frames_advance_mgv_and_release_it_at_the_nominal_end() {
             &self,
             _: Box<dyn mgv::ReadSeek>,
             _: &mgv::MgvIndex,
-        ) -> Result<Box<dyn mgv::Decoder>, Box<dyn Error>> {
+        ) -> Result<Box<dyn mgv::Decoder>, Box<dyn Error + Send + Sync>> {
             Ok(Box::new(Decoder))
         }
     }
@@ -136,7 +136,7 @@ fn recording_frames_advance_mgv_and_release_it_at_the_nominal_end() {
 
 #[test]
 fn inactive_policy_freezes_vm_and_scene_but_keeps_audio_updates_without_time_catchup() {
-    use cmvs_core::audio::{AudioBackend, AudioRequest};
+    use cmvs_core::{host::audio::AudioBackend, host::audio::AudioRequest};
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -145,14 +145,14 @@ fn inactive_policy_freezes_vm_and_scene_but_keeps_audio_updates_without_time_cat
     impl AudioBackend for Audio {
         fn configure_voice_ducking(
             &mut self,
-            _: cmvs_core::audio::VoiceDuckingSettings,
-        ) -> Result<(), Box<dyn Error>> {
+            _: cmvs_core::host::audio::VoiceDuckingSettings,
+        ) -> Result<(), Box<dyn Error + Send + Sync>> {
             Ok(())
         }
-        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>> {
             unreachable!()
         }
-        fn update(&mut self) -> Result<(), Box<dyn Error>> {
+        fn update(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
             self.0.fetch_add(1, Ordering::SeqCst);
             Ok(())
         }
@@ -255,7 +255,9 @@ fn fullscreen_request_yields_once_and_query_resumes_on_the_next_run() {
 
 #[test]
 fn audio_backend_receives_startup_ducking_and_failed_replacement_keeps_old_device() {
-    use cmvs_core::audio::{AudioBackend, AudioRequest, VoiceDuckingSettings};
+    use cmvs_core::{
+        host::audio::AudioBackend, host::audio::AudioRequest, host::audio::VoiceDuckingSettings,
+    };
     use std::sync::{Arc, Mutex};
     struct Probe {
         settings: Arc<Mutex<Vec<VoiceDuckingSettings>>>,
@@ -263,20 +265,20 @@ fn audio_backend_receives_startup_ducking_and_failed_replacement_keeps_old_devic
         reject: bool,
     }
     impl AudioBackend for Probe {
-        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>> {
             unreachable!()
         }
         fn configure_voice_ducking(
             &mut self,
             settings: VoiceDuckingSettings,
-        ) -> Result<(), Box<dyn Error>> {
+        ) -> Result<(), Box<dyn Error + Send + Sync>> {
             if self.reject {
                 return Err("synthetic configuration failure".into());
             }
             self.settings.lock().unwrap().push(settings);
             Ok(())
         }
-        fn update(&mut self) -> Result<(), Box<dyn Error>> {
+        fn update(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
             *self.updates.lock().unwrap() += 1;
             Ok(())
         }
@@ -455,7 +457,7 @@ fn yields_reset_the_watchdog_and_total_steps_are_unbounded() {
 }
 struct Reject;
 impl PlatformBackend for Reject {
-    fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error>> {
+    fn apply(&mut self, _: &PlatformRequest) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("synthetic backend failure".into())
     }
 }
@@ -717,7 +719,7 @@ fn stopwatch_uses_frame_time_once_per_vm_run() {
 
 #[test]
 fn font_dialog_sets_the_global_face_refreshes_default_texts_and_persists() {
-    use cmvs_core::settings::{DEFAULT_FONT_FACE, DisplayPreferences};
+    use cmvs_core::{host::settings::DEFAULT_FONT_FACE, host::settings::DisplayPreferences};
     let mut code = vec![];
     commands::command(&mut code, 0x2100, &[1, 0, 0]);
     for _ in 0..3 {
@@ -781,7 +783,7 @@ fn chosen_faces_are_validated_before_the_command_completes() {
         assert!(run.machine().pending_system().is_some());
         assert_eq!(
             run.settings().font_face(),
-            cmvs_core::settings::DEFAULT_FONT_FACE
+            cmvs_core::host::settings::DEFAULT_FONT_FACE
         );
     }
 }

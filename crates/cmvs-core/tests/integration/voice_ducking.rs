@@ -1,5 +1,7 @@
 use crate::support::shared_audio;
-use cmvs_core::audio::{VoiceActivity, VoiceDucking, VoiceDuckingSettings};
+use cmvs_core::{
+    host::audio::VoiceActivity, host::audio::VoiceDucking, host::audio::VoiceDuckingSettings,
+};
 use shared_audio::SharedAudio;
 
 const TALKING: [VoiceActivity; 1] = [VoiceActivity {
@@ -158,8 +160,8 @@ use crate::support::bytecode;
 fn ducking_commands_preserve_other_fields_results_and_exact_clamp_rules() {
     use bytecode::{command, pending, script};
     use cmvs_core::{
-        audio::{AudioHost, AudioRequest, RecordingAudio},
-        machine::Machine,
+        host::audio::AudioHost, host::audio::AudioRequest, host::audio::RecordingAudio,
+        vm::machine::Machine,
     };
     for (op, raw, expected) in [
         (0x2238, u32::MAX, 0),
@@ -208,18 +210,21 @@ fn ducking_commands_preserve_other_fields_results_and_exact_clamp_rules() {
 fn failed_ducking_configuration_preserves_pending_command_and_parameters() {
     use bytecode::{command, pending, script};
     use cmvs_core::{
-        audio::{AudioBackend, AudioHost, AudioRequest},
-        machine::Machine,
+        host::audio::AudioBackend, host::audio::AudioHost, host::audio::AudioRequest,
+        vm::machine::Machine,
     };
     struct Reject;
     impl AudioBackend for Reject {
-        fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn std::error::Error>> {
+        fn play(
+            &mut self,
+            _: &AudioRequest,
+        ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
             unreachable!()
         }
         fn configure_voice_ducking(
             &mut self,
             _: VoiceDuckingSettings,
-        ) -> Result<(), Box<dyn std::error::Error>> {
+        ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             Err("synthetic failure".into())
         }
     }

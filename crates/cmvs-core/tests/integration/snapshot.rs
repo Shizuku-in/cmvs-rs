@@ -1,7 +1,8 @@
+use crate::support::shared_state::{SharedSnapshotUnavailable, SharedState};
 use cmvs_core::{
-    machine::Machine,
-    ps3::Script,
-    snapshot::{MAX_SNAPSHOT, SaveImage, SaveInfo, SaveTitle, parse_records},
+    format::ps3::Script, format::snapshot::MAX_SNAPSHOT, format::snapshot::SaveImage,
+    format::snapshot::SaveInfo, format::snapshot::SaveTitle, format::snapshot::parse_records,
+    vm::machine::Machine,
 };
 
 fn short(tag: u16, body: &[u8]) -> Vec<u8> {
@@ -151,8 +152,11 @@ fn title_script(text: &[u8], offsets: &[u32]) -> Script {
     raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
     Script::decode(&raw).unwrap()
 }
-fn to_system(vm: &mut Machine<'_>) {
-    while !matches!(vm.step().unwrap(), cmvs_core::machine::Step::System { .. }) {}
+fn to_system(vm: &mut Machine) {
+    while !matches!(
+        vm.step().unwrap(),
+        cmvs_core::vm::machine::Step::System { .. }
+    ) {}
 }
 
 #[test]
@@ -164,20 +168,20 @@ fn save_title_copies_short_strings_and_rejects_the_unmodeled_flag_path() {
     let mut vm = Machine::new(&script).unwrap();
     let mut title = SaveTitle::default();
     assert_eq!(title.bytes(), b"");
-    assert!(!title.try_handle(&mut vm).unwrap());
+    assert!(!title.shared_state(&mut vm).unwrap());
     to_system(&mut vm);
-    assert!(title.try_handle(&mut vm).unwrap());
+    assert!(title.shared_state(&mut vm).unwrap());
     assert_eq!(title.bytes(), b"- main -");
     assert_eq!(vm.stack().len_bytes(), 0);
     to_system(&mut vm);
     let before = vm.pending_system();
-    assert!(title.try_handle(&mut vm).is_err());
+    assert!(title.shared_state(&mut vm).is_err());
     assert_eq!(vm.pending_system(), before);
     assert_eq!(title.bytes(), b"- main -");
     vm.complete_system(cmvs_core::vm::SystemResult(0x4004))
         .unwrap();
     to_system(&mut vm);
-    assert!(!title.try_handle(&mut vm).unwrap());
+    assert!(!title.shared_state(&mut vm).unwrap());
 }
 
 #[test]
@@ -216,16 +220,16 @@ fn save_info_starts_unknown_and_0x22b9_sets_the_first_word() {
     let mut info = SaveInfo::default();
     assert_eq!(info.values(), [None; 3]);
     to_system(&mut vm);
-    assert!(info.try_handle(&mut vm).unwrap());
+    assert!(info.shared_state(&mut vm).unwrap());
     assert_eq!(info.values(), [Some(1), None, None]);
     to_system(&mut vm);
-    assert!(info.try_handle(&mut vm).unwrap());
+    assert!(info.shared_state(&mut vm).unwrap());
     assert_eq!(info.values(), [Some(0x8000_0000), None, None]);
     assert_eq!(vm.stack().len_bytes(), 0);
     assert_eq!(vm.state().system_integer(0), Some(9));
     // An empty stack keeps the command pending; 0x22ba is left to other handlers.
     to_system(&mut vm);
-    assert!(info.try_handle(&mut vm).is_err());
+    assert!(info.shared_state(&mut vm).is_err());
     assert_eq!(vm.pending_system().map(|p| p.1), Some(0x2b9));
     assert_eq!(info.values(), [Some(0x8000_0000), None, None]);
 }
@@ -264,7 +268,7 @@ fn scenario_capture_requires_explicit_policy_and_records_resume_pc() {
     let script = capture_script();
     let mut vm = Machine::new(&script).unwrap();
     let mut image = SaveImage::default();
-    assert!(!image.try_handle(&mut vm, true).unwrap());
+    assert!(!image.shared_snapshot_unavailable(&mut vm, true).unwrap());
     vm.state_mut().set_bit(0, true).unwrap();
     vm.state_mut().set_bit(1, true).unwrap();
     vm.state_mut().set_system_integer(0, 17).unwrap();
@@ -272,14 +276,14 @@ fn scenario_capture_requires_explicit_policy_and_records_resume_pc() {
     vm.yield_pending_system().unwrap();
     assert_eq!(vm.repeat_count(), 1);
     for _ in 0..2 {
-        assert!(!image.try_handle(&mut vm, false).unwrap());
+        assert!(!image.shared_snapshot_unavailable(&mut vm, false).unwrap());
         assert_eq!(vm.pc(), 8);
         assert_eq!(vm.repeat_count(), 1);
         assert_eq!(vm.state().bit(0), Some(true));
         assert_eq!(image, SaveImage::Absent);
     }
     for expected_pc in [10, 12] {
-        assert!(image.try_handle(&mut vm, true).unwrap());
+        assert!(image.shared_snapshot_unavailable(&mut vm, true).unwrap());
         assert_eq!(vm.pc(), expected_pc);
         assert_eq!(vm.pending_system(), None);
         assert_eq!(vm.repeat_count(), 0);
@@ -298,7 +302,7 @@ fn scenario_capture_requires_explicit_policy_and_records_resume_pc() {
         to_system(&mut vm);
     }
     let before = image.clone();
-    assert!(!image.try_handle(&mut vm, true).unwrap());
+    assert!(!image.shared_snapshot_unavailable(&mut vm, true).unwrap());
     assert_eq!(vm.pending_system(), Some((12, 0x2b6)));
     assert_eq!(image, before);
 }
@@ -307,7 +311,7 @@ fn scenario_capture_requires_explicit_policy_and_records_resume_pc() {
 fn failed_scenario_capture_preserves_pending_vm_and_previous_image() {
     let script = capture_script();
     let mut vm = Machine::new(&script).unwrap();
-    *vm.state_mut() = cmvs_core::evaluate::State::new(1, 0);
+    *vm.state_mut() = cmvs_core::vm::evaluate::State::new(1, 0);
     to_system(&mut vm);
     vm.yield_pending_system().unwrap();
     let mut image = SaveImage::Unavailable {
@@ -315,7 +319,7 @@ fn failed_scenario_capture_preserves_pending_vm_and_previous_image() {
         pc: 4,
     };
     let before = image.clone();
-    assert!(image.try_handle(&mut vm, true).is_err());
+    assert!(image.shared_snapshot_unavailable(&mut vm, true).is_err());
     assert_eq!(image, before);
     assert_eq!(vm.pending_system(), Some((8, 0x2b2)));
     assert_eq!(vm.pc(), 8);

@@ -3,10 +3,10 @@ use crate::dispatch::RuntimeOperation;
 use crate::dispatch::{Call, Flow, Hosts};
 use std::error::Error;
 
-pub(in crate::dispatch) fn root_runtime(
+pub(in super::super) fn root_runtime(
     _hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     use RuntimeOperation::*;
     let (operation, bytes) = match call.command {
         1 => (Quit, 0),
@@ -107,10 +107,10 @@ pub(in crate::dispatch) fn root_runtime(
     Ok(call.defer(operation, bytes)?)
 }
 
-pub(in crate::dispatch) fn root_snapshot(
+pub(in super::super) fn root_snapshot(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts
         .snapshot
         .as_mut()
@@ -129,18 +129,18 @@ pub(in crate::dispatch) fn root_snapshot(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_script_control(
+pub(in super::super) fn root_script_control(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts.scripts.as_mut().expect("script capability checked");
     Ok(Flow::Control(h.host.handle(call, h.source)?))
 }
 
-pub(in crate::dispatch) fn root_system_read(
+pub(in super::super) fn root_system_read(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts
         .system_read
         .as_mut()
@@ -152,10 +152,10 @@ pub(in crate::dispatch) fn root_system_read(
     }))
 }
 
-pub(in crate::dispatch) fn root_system_write(
+pub(in super::super) fn root_system_write(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts
         .system_write
         .as_mut()
@@ -164,10 +164,10 @@ pub(in crate::dispatch) fn root_system_write(
     Ok(Flow::SystemWritten)
 }
 
-pub(in crate::dispatch) fn root_save_menu(
+pub(in super::super) fn root_save_menu(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .popup
         .as_deref_mut()
@@ -182,10 +182,10 @@ pub(in crate::dispatch) fn root_save_menu(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_popup(
+pub(in super::super) fn root_popup(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .popup
         .as_deref_mut()
@@ -194,10 +194,10 @@ pub(in crate::dispatch) fn root_popup(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_save_title(
+pub(in super::super) fn root_save_title(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .save_title
         .as_deref_mut()
@@ -206,10 +206,10 @@ pub(in crate::dispatch) fn root_save_title(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_save_info(
+pub(in super::super) fn root_save_info(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .save_info
         .as_deref_mut()

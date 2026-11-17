@@ -7,11 +7,11 @@ use crate::{
 };
 use std::error::Error;
 
-impl Runtime<'_> {
+impl Runtime {
     pub(super) fn install_configuration(
         &mut self,
         configuration: Configuration,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let bytes = configuration.bytes();
         let audio = AudioHost::for_profile(self.gate.selection().profile, bytes);
         self.audio_backend
@@ -42,7 +42,7 @@ impl Runtime<'_> {
     pub fn save_preferences(
         &mut self,
         display: DisplayPreferences,
-    ) -> Result<bool, Box<dyn Error>> {
+    ) -> Result<bool, Box<dyn Error + Send + Sync>> {
         if !matches!(self.system_output, Some(SystemOutput::Profile(_))) {
             return Ok(false);
         }

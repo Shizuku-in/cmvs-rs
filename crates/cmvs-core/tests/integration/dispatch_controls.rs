@@ -1,12 +1,9 @@
 use crate::support;
+use crate::support::shared_state::SharedState;
 use cmvs_core::{
-    buttons::ButtonHost,
-    dispatch::{self, Capability, Flow, Hosts, InputHosts},
-    gesture::PointerGesture,
-    input::ActionInput,
-    machine::Machine,
-    profile::Semantics,
-    scene::SceneHost,
+    host::gesture::PointerGesture, host::input::ActionInput, profile::Semantics,
+    render::scene::SceneHost, runtime::ButtonHost, vm::dispatch, vm::dispatch::Capability,
+    vm::dispatch::Flow, vm::dispatch::Hosts, vm::dispatch::InputHosts, vm::machine::Machine,
 };
 use support::bytecode::{command, pending, script};
 
@@ -69,7 +66,7 @@ impl Controls {
                 Capability::ListInput
             };
             if capability == Capability::Scene {
-                assert!(self.scene.try_handle(&mut vm).unwrap());
+                assert!(self.scene.shared_state(&mut vm).unwrap());
             } else {
                 assert_eq!(
                     dispatch::run(Semantics::Root, &mut vm, &mut self.hosts(capability)).unwrap(),

@@ -1,4 +1,4 @@
-use cmvs_core::jbpd;
+use cmvs_core::format::jbpd;
 
 fn pack(bits: &[u8]) -> Vec<u8> {
     let mut bytes = vec![0; bits.len().div_ceil(32) * 4];
@@ -174,7 +174,7 @@ fn malformed_huffman_and_unbounded_zero_runs_are_rejected() {
 
 #[test]
 fn cmv_frame_checks_container_dimensions_lengths_and_index() {
-    use cmvs_core::cmv::{CmvEntry, CmvHeader, CmvIndex};
+    use cmvs_core::{format::cmv::CmvEntry, format::cmv::CmvHeader, format::cmv::CmvIndex};
     use std::io::Cursor;
     let data = flat([0; 6], false);
     let mut index = CmvIndex {
@@ -323,7 +323,7 @@ fn jbpe_clips_partial_mcus_and_rejects_unverified_alpha_or_layout() {
 
 #[test]
 fn cmv8_scene_index_reads_alpha_frames_but_the_op_reader_does_not() {
-    use cmvs_core::cmv::CmvIndex;
+    use cmvs_core::format::cmv::CmvIndex;
     use std::io::Cursor;
     let frame = jbpe(&alpha_mcu([800; 4]), 16, false, 1, 10);
     let resource = 44 + 2 * 20;

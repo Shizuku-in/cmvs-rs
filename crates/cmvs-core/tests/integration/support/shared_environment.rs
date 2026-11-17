@@ -1,13 +1,12 @@
 use cmvs_core::{
-    bootstrap::Bootstrap,
-    capture::ScreenCapture,
-    dispatch::{self, Capability, DispatchError, Flow, FunctionKeys, Hosts, PlatformHosts},
-    machine::{Machine, Step},
-    platform::{PlatformAssets, PlatformBackend, PlatformEvent, PlatformHost},
-    profile::Semantics,
-    scene::SceneHost,
+    host::platform::PlatformAssets, host::platform::PlatformBackend, host::platform::PlatformEvent,
+    host::platform::PlatformHost, profile::Semantics, render::capture::ScreenCapture,
+    render::scene::SceneHost, runtime::bootstrap::Bootstrap, vm::dispatch,
+    vm::dispatch::Capability, vm::dispatch::DispatchError, vm::dispatch::Flow,
+    vm::dispatch::FunctionKeys, vm::dispatch::Hosts, vm::dispatch::PlatformHosts,
+    vm::machine::Machine, vm::machine::Step,
 };
-fn accepts(vm: &Machine<'_>, capability: Capability) -> bool {
+fn accepts(vm: &Machine, capability: Capability) -> bool {
     vm.pending_system().is_some_and(|(_, c)| {
         dispatch::entry(Semantics::Root, c).is_some_and(|e| e.capability == capability)
     })
@@ -15,7 +14,7 @@ fn accepts(vm: &Machine<'_>, capability: Capability) -> bool {
 pub trait SharedPlatform {
     fn shared_platform(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         backend: &mut dyn PlatformBackend,
         assets: &mut dyn PlatformAssets,
         cursors: &[Vec<u8>],
@@ -24,7 +23,7 @@ pub trait SharedPlatform {
 impl SharedPlatform for PlatformHost {
     fn shared_platform(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         backend: &mut dyn PlatformBackend,
         assets: &mut dyn PlatformAssets,
         cursors: &[Vec<u8>],
@@ -53,12 +52,12 @@ impl SharedPlatform for PlatformHost {
 pub trait SharedCapture {
     fn shared_capture(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         scene: &mut SceneHost,
     ) -> Result<bool, DispatchError>;
     fn shared_immediate(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         scene: &mut SceneHost,
         backend: &mut dyn PlatformBackend,
     ) -> Result<bool, DispatchError>;
@@ -66,7 +65,7 @@ pub trait SharedCapture {
 impl SharedCapture for ScreenCapture {
     fn shared_capture(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         scene: &mut SceneHost,
     ) -> Result<bool, DispatchError> {
         if !accepts(vm, Capability::Capture) {
@@ -84,7 +83,7 @@ impl SharedCapture for ScreenCapture {
     }
     fn shared_immediate(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         scene: &mut SceneHost,
         backend: &mut dyn PlatformBackend,
     ) -> Result<bool, DispatchError> {
@@ -104,10 +103,10 @@ impl SharedCapture for ScreenCapture {
     }
 }
 pub trait SharedBootstrap {
-    fn shared_bootstrap(&mut self, vm: &mut Machine<'_>) -> Result<Option<Step>, DispatchError>;
+    fn shared_bootstrap(&mut self, vm: &mut Machine) -> Result<Option<Step>, DispatchError>;
 }
 impl SharedBootstrap for Bootstrap {
-    fn shared_bootstrap(&mut self, vm: &mut Machine<'_>) -> Result<Option<Step>, DispatchError> {
+    fn shared_bootstrap(&mut self, vm: &mut Machine) -> Result<Option<Step>, DispatchError> {
         if !accepts(vm, Capability::Bootstrap) && !accepts(vm, Capability::FunctionKeys) {
             return Ok(None);
         }

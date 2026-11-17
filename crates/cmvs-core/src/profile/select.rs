@@ -109,7 +109,7 @@ impl GameFiles {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectionBasis {
-    /// `--profile`; any record match is only reported.
+    /// Explicit profile selection; any record match is only reported.
     Explicit,
     /// Data hashes matched a record; no known executable was present.
     Data,
@@ -161,23 +161,30 @@ impl fmt::Display for SelectionError {
             }
             Self::UnknownProfile(id) => write!(f, "unknown engine profile {id}"),
             Self::NoDataEvidence => f.write_str(
-                "no start script or script archive to identify the game; pass --profile",
+                "no start script or script archive to identify the game; explicit profile selection required",
             ),
             Self::UnknownGame(evidence) => write!(
                 f,
-                "game data matches no recorded game ({}); run cmvs-profile identify, or pass --profile for research",
+                "game data matches no recorded game ({}); explicit profile selection required",
                 evidence.join("; ")
             ),
             Self::UnknownBinary { game, file, sha256 } => write!(
                 f,
-                "{file} sha256={} is not a recorded executable of {game} (unregistered patch?); pass --profile for research",
+                "{file} sha256={} is not a recorded executable of {game} (unregistered patch?); explicit profile selection required",
                 to_hex(sha256)
             ),
         }
     }
 }
 
-impl std::error::Error for SelectionError {}
+impl std::error::Error for SelectionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Io(err) => Some(err),
+            _ => None,
+        }
+    }
+}
 
 impl From<io::Error> for SelectionError {
     fn from(e: io::Error) -> Self {
@@ -363,5 +370,24 @@ impl ProfileSelection<'_> {
                 .map(|e| format!("# profile evidence: {e}")),
         );
         lines
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SelectionError;
+    use std::{error::Error, io};
+
+    #[test]
+    fn selection_error_forwards_io_source_and_uses_cli_free_messages() {
+        let io_err = SelectionError::Io(io::Error::new(io::ErrorKind::PermissionDenied, "denied"));
+        assert!(io_err.source().is_some());
+        assert_eq!(io_err.source().unwrap().to_string(), "denied");
+
+        let unknown = SelectionError::UnknownGame(vec!["no match".to_owned()]);
+        assert!(unknown.source().is_none());
+        let rendered = unknown.to_string();
+        assert!(!rendered.contains("--profile"));
+        assert!(!rendered.contains("cmvs-profile"));
     }
 }

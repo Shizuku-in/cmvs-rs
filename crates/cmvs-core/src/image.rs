@@ -88,13 +88,16 @@ impl DecodeThreads {
 }
 
 pub trait ImageSource {
-    fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>>;
+    fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>>;
     /// 0x203f: arm the next image-file read's raw-byte cache lookup/insertion.
-    fn cache_next_read(&mut self) -> Result<(), Box<dyn Error>> {
+    fn cache_next_read(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         Err("image source does not implement the next-read cache".into())
     }
     /// Begin a decode read. Sources without caches can use the default implementation.
-    fn read_image(&mut self, name: &[u8]) -> Result<Option<ImageRead>, Box<dyn Error>> {
+    fn read_image(
+        &mut self,
+        name: &[u8],
+    ) -> Result<Option<ImageRead>, Box<dyn Error + Send + Sync>> {
         Ok(self.read(name)?.map(|bytes| ImageRead {
             bytes,
             cache_key: None,
@@ -169,7 +172,10 @@ impl ImageArchives {
     ) {
         self.archives.configure_parameters(parameters);
     }
-    pub fn with_fs(root: impl AsRef<Path>, fs: Arc<dyn HostFs>) -> Result<Self, Box<dyn Error>> {
+    pub fn with_fs(
+        root: impl AsRef<Path>,
+        fs: Arc<dyn HostFs>,
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         Ok(Self {
             archives: ResourceArchives::with_fs(root, fs)?,
             cache: Cache::default(),
@@ -179,7 +185,7 @@ impl ImageArchives {
     }
 
     #[cfg(feature = "std-fs")]
-    pub fn new(root: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
+    pub fn new(root: impl AsRef<Path>) -> Result<Self, Box<dyn Error + Send + Sync>> {
         Self::with_fs(root, crate::filesystem::default_fs())
     }
     /// Keeps up to `bytes` of raw compressed image payloads cached via `0x203f`
@@ -216,14 +222,17 @@ pub struct Registered<'a> {
     threads: DecodeThreads,
 }
 impl ImageSource for Registered<'_> {
-    fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
         self.cache.read(name, &mut self.inner)
     }
-    fn cache_next_read(&mut self) -> Result<(), Box<dyn Error>> {
+    fn cache_next_read(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.cache.arm();
         Ok(())
     }
-    fn read_image(&mut self, name: &[u8]) -> Result<Option<ImageRead>, Box<dyn Error>> {
+    fn read_image(
+        &mut self,
+        name: &[u8],
+    ) -> Result<Option<ImageRead>, Box<dyn Error + Send + Sync>> {
         self.cache.begin(name, &mut self.inner)
     }
     fn finish_image(&mut self, read: ImageRead) {
@@ -306,7 +315,7 @@ pub fn decode_with(
 pub fn load(
     source: &mut dyn ImageSource,
     name: &[u8],
-) -> Result<Option<DecodedImage>, Box<dyn Error>> {
+) -> Result<Option<DecodedImage>, Box<dyn Error + Send + Sync>> {
     Ok(load_inner(source, name, &mut Vec::new(), &mut 0, false)?.map(|(image, _)| image))
 }
 
@@ -320,7 +329,7 @@ fn load_pb2_variant(
     source: &mut dyn ImageSource,
     name: &[u8],
     selector: Pb2Selector<'_>,
-) -> Result<Option<DecodedImage>, Box<dyn Error>> {
+) -> Result<Option<DecodedImage>, Box<dyn Error + Send + Sync>> {
     let key = crate::cpz::lookup_key(name)?;
     let read = source.read_image(name)?.ok_or_else(|| {
         format!(
@@ -353,7 +362,7 @@ fn load_pb2_variant(
             load_from_read(source, name, read, &mut chain, &mut budget)?.map(|(image, _)| image)
         );
     }
-    let result = (|| -> Result<Option<Identified>, Box<dyn Error>> {
+    let result = (|| -> Result<Option<Identified>, Box<dyn Error + Send + Sync>> {
         let mut budget = 0;
         charge(read.bytes.len(), &mut budget)?;
         charge(
@@ -399,7 +408,7 @@ pub fn load_part(
     source: &mut dyn ImageSource,
     base: &[u8],
     part: &[u8],
-) -> Result<Option<DecodedImage>, Box<dyn Error>> {
+) -> Result<Option<DecodedImage>, Box<dyn Error + Send + Sync>> {
     load_pb2_variant(source, base, Pb2Selector::Part(part))
 }
 
@@ -408,7 +417,7 @@ pub fn load_frame(
     source: &mut dyn ImageSource,
     name: &[u8],
     frame: usize,
-) -> Result<Option<DecodedImage>, Box<dyn Error>> {
+) -> Result<Option<DecodedImage>, Box<dyn Error + Send + Sync>> {
     load_pb2_variant(source, name, Pb2Selector::Frame(frame))
 }
 
@@ -420,8 +429,8 @@ type Identified = (DecodedImage, Option<u128>);
 fn decode_cached(
     source: &mut dyn ImageSource,
     identity: Option<u128>,
-    decode: impl FnOnce() -> Result<Option<DecodedImage>, Box<dyn Error>>,
-) -> Result<Option<Identified>, Box<dyn Error>> {
+    decode: impl FnOnce() -> Result<Option<DecodedImage>, Box<dyn Error + Send + Sync>>,
+) -> Result<Option<Identified>, Box<dyn Error + Send + Sync>> {
     if let Some(id) = identity
         && let Some(hit) = source.cached_decode(id)
     {
@@ -436,7 +445,7 @@ fn decode_cached(
     Ok(image.map(|image| (image, identity)))
 }
 
-fn charge(bytes: usize, budget: &mut usize) -> Result<(), Box<dyn Error>> {
+fn charge(bytes: usize, budget: &mut usize) -> Result<(), Box<dyn Error + Send + Sync>> {
     *budget = budget
         .checked_add(bytes)
         .ok_or("PB3 reference budget overflow")?;
@@ -452,7 +461,7 @@ fn load_inner(
     chain: &mut Vec<Vec<u8>>,
     budget: &mut usize,
     reference_read: bool,
-) -> Result<Option<Identified>, Box<dyn Error>> {
+) -> Result<Option<Identified>, Box<dyn Error + Send + Sync>> {
     let key = crate::cpz::lookup_key(name)?;
     if chain.len() >= 16 || chain.contains(&key) {
         return Err("PB3 reference cycle or depth limit exceeded".into());
@@ -481,7 +490,7 @@ fn load_from_read(
     read: ImageRead,
     chain: &mut Vec<Vec<u8>>,
     budget: &mut usize,
-) -> Result<Option<Identified>, Box<dyn Error>> {
+) -> Result<Option<Identified>, Box<dyn Error + Send + Sync>> {
     let result = (|| {
         charge(read.bytes.len(), budget)?;
         let threads = source.decode_threads();
@@ -517,7 +526,9 @@ fn load_from_read(
     })();
     source.finish_image(read);
     chain.pop();
-    result.map_err(|e: Box<dyn Error>| format!("image {}: {e}", name.escape_ascii()).into())
+    result.map_err(|e: Box<dyn Error + Send + Sync>| {
+        format!("image {}: {e}", name.escape_ascii()).into()
+    })
 }
 
 #[cfg(test)]
@@ -578,7 +589,7 @@ mod decoded_cache_tests {
     }
 
     impl crate::resources::ResourceSource for BackingFiles {
-        fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+        fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
             self.disk_reads += 1;
             Ok(self.files.get(name).cloned())
         }
@@ -602,15 +613,18 @@ mod decoded_cache_tests {
     }
 
     impl ImageSource for TrackingImageSource {
-        fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+        fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
             self.read_calls += 1;
             self.cache.read(name, &mut self.backing)
         }
-        fn cache_next_read(&mut self) -> Result<(), Box<dyn Error>> {
+        fn cache_next_read(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
             self.cache.arm();
             Ok(())
         }
-        fn read_image(&mut self, name: &[u8]) -> Result<Option<ImageRead>, Box<dyn Error>> {
+        fn read_image(
+            &mut self,
+            name: &[u8],
+        ) -> Result<Option<ImageRead>, Box<dyn Error + Send + Sync>> {
             self.read_image_calls += 1;
             self.cache.begin(name, &mut self.backing)
         }

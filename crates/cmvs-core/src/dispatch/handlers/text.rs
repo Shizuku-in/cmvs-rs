@@ -3,10 +3,10 @@ use crate::dispatch::{Call, Flow, Hosts};
 use crate::message::font_cells;
 use std::error::Error;
 
-pub(in crate::dispatch) fn root_text(
+pub(in super::super) fn root_text(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let hosts = hosts.text.as_mut().expect("text capability checked");
     Ok(if hosts.messages.try_handle(call.vm)? {
         Flow::Done
@@ -15,10 +15,10 @@ pub(in crate::dispatch) fn root_text(
     })
 }
 
-pub(in crate::dispatch) fn root_output(
+pub(in super::super) fn root_output(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let hosts = hosts.text.as_mut().expect("text capability checked");
     Ok(
         match hosts
@@ -31,10 +31,10 @@ pub(in crate::dispatch) fn root_output(
     )
 }
 
-pub(in crate::dispatch) fn root_poll(
+pub(in super::super) fn root_poll(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let hosts = hosts.text.as_mut().expect("text capability checked");
     Ok(if hosts.messages.try_record_poll(call.vm, hosts.flags)? {
         Flow::Done
@@ -43,10 +43,10 @@ pub(in crate::dispatch) fn root_poll(
     })
 }
 
-pub(in crate::dispatch) fn root_text_state(
+pub(in super::super) fn root_text_state(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .messages
         .as_deref_mut()
@@ -55,10 +55,10 @@ pub(in crate::dispatch) fn root_text_state(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_auxiliary_scene(
+pub(in super::super) fn root_auxiliary_scene(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     Ok(hosts
         .messages
         .as_deref_mut()
@@ -66,10 +66,10 @@ pub(in crate::dispatch) fn root_auxiliary_scene(
         .handle_auxiliary_scene(call, hosts.scene.as_deref_mut())?)
 }
 
-pub(in crate::dispatch) fn root_windows(
+pub(in super::super) fn root_windows(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .messages
         .as_deref_mut()
@@ -78,10 +78,10 @@ pub(in crate::dispatch) fn root_windows(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_window_pointer(
+pub(in super::super) fn root_window_pointer(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .messages
         .as_deref_mut()
@@ -97,10 +97,10 @@ pub(in crate::dispatch) fn root_window_pointer(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_window_buttons(
+pub(in super::super) fn root_window_buttons(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .messages
         .as_deref_mut()
@@ -116,10 +116,10 @@ pub(in crate::dispatch) fn root_window_buttons(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_window_images(
+pub(in super::super) fn root_window_images(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .messages
         .as_deref_mut()
@@ -134,10 +134,10 @@ pub(in crate::dispatch) fn root_window_images(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_message_wait(
+pub(in super::super) fn root_message_wait(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts
         .message_wait
         .as_mut()
@@ -145,10 +145,10 @@ pub(in crate::dispatch) fn root_message_wait(
     Ok(h.messages.handle_wait(call, h.input, h.flags, h.context)?)
 }
 
-pub(in crate::dispatch) fn root_cvns_messages(
+pub(in super::super) fn root_cvns_messages(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     Ok(hosts
         .messages
         .as_deref_mut()
@@ -156,10 +156,10 @@ pub(in crate::dispatch) fn root_cvns_messages(
         .handle_cvns(call)?)
 }
 
-pub(in crate::dispatch) fn root_cvns_message_buttons(
+pub(in super::super) fn root_cvns_message_buttons(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .messages
         .as_deref_mut()
@@ -175,10 +175,10 @@ pub(in crate::dispatch) fn root_cvns_message_buttons(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_cvns_message_images(
+pub(in super::super) fn root_cvns_message_images(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     hosts
         .messages
         .as_deref_mut()
@@ -193,10 +193,10 @@ pub(in crate::dispatch) fn root_cvns_message_images(
     Ok(Flow::Done)
 }
 
-pub(in crate::dispatch) fn root_cvns_message_wait(
+pub(in super::super) fn root_cvns_message_wait(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     let h = hosts
         .message_wait
         .as_mut()
@@ -205,100 +205,100 @@ pub(in crate::dispatch) fn root_cvns_message_wait(
         .handle_cvns_wait(call, h.input, h.flags, h.context)?)
 }
 
-pub(in crate::dispatch) fn auxiliary_measure(
+pub(in super::super) fn auxiliary_measure(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     Ok(font_cells::auxiliary_measure(
         hosts.text.as_mut().expect("text capability checked"),
         call,
     )?)
 }
 
-pub(in crate::dispatch) fn font_direct_text(
+pub(in super::super) fn font_direct_text(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     Ok(font_cells::direct_text(
         hosts.text.as_mut().expect("text capability checked"),
         call,
     )?)
 }
 
-pub(in crate::dispatch) fn font_measure_text(
+pub(in super::super) fn font_measure_text(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     Ok(font_cells::measure_text(
         hosts.text.as_mut().expect("text capability checked"),
         call,
     )?)
 }
 
-pub(in crate::dispatch) fn font_append_window(
+pub(in super::super) fn font_append_window(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     Ok(font_cells::append_window(
         hosts.text.as_mut().expect("text capability checked"),
         call,
     )?)
 }
 
-pub(in crate::dispatch) fn font_direct_window(
+pub(in super::super) fn font_direct_window(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     Ok(font_cells::direct_window(
         hosts.text.as_mut().expect("text capability checked"),
         call,
     )?)
 }
 
-pub(in crate::dispatch) fn font_poll_window(
+pub(in super::super) fn font_poll_window(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     Ok(font_cells::poll_window(
         hosts.text.as_mut().expect("text capability checked"),
         call,
     )?)
 }
 
-pub(in crate::dispatch) fn font_auxiliary_face(
+pub(in super::super) fn font_auxiliary_face(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     Ok(font_cells::auxiliary_face(
         hosts.text.as_mut().expect("text capability checked"),
         call,
     )?)
 }
 
-pub(in crate::dispatch) fn font_auxiliary_text(
+pub(in super::super) fn font_auxiliary_text(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     Ok(font_cells::auxiliary_text(
         hosts.text.as_mut().expect("text capability checked"),
         call,
     )?)
 }
 
-pub(in crate::dispatch) fn font_set_mode(
+pub(in super::super) fn font_set_mode(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     Ok(font_cells::set_mode(
         hosts.text.as_mut().expect("text capability checked"),
         call,
     )?)
 }
 
-pub(in crate::dispatch) fn font_auxiliary_line_break(
+pub(in super::super) fn font_auxiliary_line_break(
     hosts: &mut Hosts<'_>,
-    call: &mut Call<'_, '_>,
-) -> Result<Flow, Box<dyn Error>> {
+    call: &mut Call<'_>,
+) -> Result<Flow, Box<dyn Error + Send + Sync>> {
     Ok(font_cells::auxiliary_line_break(
         hosts.text.as_mut().expect("text capability checked"),
         call,

@@ -177,7 +177,7 @@ impl Sprites {
         delta: u32,
         backend: &mut dyn AudioBackend,
         volume: u32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if self.phase == 0 {
             self.position(0, [6.0, 3.3, 5.0]);
             self.move_to(0, [0.5, 3.3, 5.0], 0, 800);
@@ -249,7 +249,7 @@ impl Sprites {
         &mut self,
         backend: &mut dyn AudioBackend,
         volume: u32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if self.moving(0) {
             return Ok(());
         }
@@ -301,7 +301,7 @@ impl Sprites {
         delta: u32,
         backend: &mut dyn AudioBackend,
         volume: u32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.clock = self.clock.wrapping_add(delta);
         if self.state == 17 {
             if !self.exit_sound {
@@ -399,7 +399,7 @@ impl Sprites {
             draw.words[20] = (degrees * 100) as u32;
         }
     }
-    pub fn request(&mut self, value: u32) -> Result<(), Box<dyn Error>> {
+    pub fn request(&mut self, value: u32) -> Result<(), Box<dyn Error + Send + Sync>> {
         match value {
             1..=4 | 6..=8 | 10..=14 | 17 => self.requested = value as i32,
             5 | 15 | 16 => {
@@ -423,7 +423,7 @@ impl Sprites {
         delta: u32,
         backend: &mut dyn AudioBackend,
         volume: u32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if self.state == 0 && self.requested > 0 {
             self.state = self.requested as u32;
             self.requested = -1;

@@ -5,11 +5,10 @@
 //! [`RegisteredResources`] implements [`ResourceSource`]. Slots are searched in order:
 //! the first hit wins, a missing file is `Ok(None)`, and malformed data or I/O failures
 //! are errors. Paths must stay inside the game root.
-use crate::filesystem::{File, HostFs};
+use crate::filesystem::{File, HostFs, PathError, resolve_under_with_fs};
 use crate::{
     MAX_PAYLOAD,
     cpz::{ArchiveIndex, Cpz7Parameters},
-    platform::{PathError, resolve_under_with_fs},
 };
 use std::{
     collections::BTreeMap,
@@ -67,7 +66,7 @@ impl ResourceKind {
 /// Read raw resource bytes by their encoded resource name.
 pub trait ResourceSource {
     /// Return the first hit, None for missing resources, or an explicit format/I/O error.
-    fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>>;
+    fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>>;
 }
 
 struct OpenArchive {
@@ -92,7 +91,10 @@ impl ResourceArchives {
     /// Canonicalize an existing game directory using `fs` without opening any archives.
     ///
     /// Returns an error if the root cannot be resolved or is not a directory.
-    pub fn with_fs(root: impl AsRef<Path>, fs: Arc<dyn HostFs>) -> Result<Self, Box<dyn Error>> {
+    pub fn with_fs(
+        root: impl AsRef<Path>,
+        fs: Arc<dyn HostFs>,
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let root = fs.canonicalize(root.as_ref())?;
         if !fs.is_dir(&root) {
             return Err("resource root is not a directory".into());
@@ -109,7 +111,7 @@ impl ResourceArchives {
     ///
     /// Returns an error if the root cannot be resolved or is not a directory.
     #[cfg(feature = "std-fs")]
-    pub fn new(root: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
+    pub fn new(root: impl AsRef<Path>) -> Result<Self, Box<dyn Error + Send + Sync>> {
         Self::with_fs(root, crate::filesystem::default_fs())
     }
 
@@ -140,7 +142,7 @@ impl ResourceArchives {
     }
 
     /// Directory entry: 0x1400087c0 reads root + entry path + name; a missing file is a miss.
-    fn read_file(&self, path: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    fn read_file(&self, path: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
         let Some(path) = resolve_present(&*self.fs, &self.root, path)? else {
             return Ok(None);
         };
@@ -163,7 +165,7 @@ impl ResourceArchives {
         slot: u32,
         path: &[u8],
         name: &[u8],
-    ) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    ) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
         if self
             .open
             .get(&(command, slot))
@@ -219,7 +221,7 @@ pub struct RegisteredResources<'a> {
 }
 
 impl ResourceSource for RegisteredResources<'_> {
-    fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
         let tables =
             std::iter::once((self.command, self.entries)).chain(self.extra.iter().copied());
         for (command, entries) in tables {

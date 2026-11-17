@@ -4,7 +4,10 @@ use crate::common::{
     OutputEncoding, PngDepthPolicy, Result, encode_memory, png_to_pb3, rewrite_cpz7_archive,
     rewrite_encoded, write_new,
 };
-use cmvs_core::{bytecode, pb3, ps3::Script, script_control::archive_index_from_start};
+use cmvs_core::{
+    format::pb3, format::ps3::Script, runtime::script_control::archive_index_from_start,
+    vm::bytecode,
+};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},

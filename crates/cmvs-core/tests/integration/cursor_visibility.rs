@@ -1,4 +1,4 @@
-use cmvs_core::cursor::CursorVisibility;
+use cmvs_core::format::cursor::CursorVisibility;
 
 #[test]
 fn movement_deadlines_and_disabled_or_inactive_state_follow_engine_policy() {

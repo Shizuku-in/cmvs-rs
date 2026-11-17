@@ -1,5 +1,5 @@
 //! Bounded LRU for rasterized glyphs, keyed by face and all pixel-affecting styles.
-use cmvs_core::raster::RgbaImage;
+use cmvs_core::render::raster::RgbaImage;
 use std::{collections::BTreeMap, sync::Arc};
 
 type Key = (Arc<[u8]>, [u32; 9]);

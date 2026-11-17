@@ -1,7 +1,6 @@
 use cmvs_rs::{
-    MAX_PAYLOAD,
-    save::{Csv2Layout, Csv2Save, HEADER_SIZE},
-    snapshot,
+    MAX_PAYLOAD, format::save::Csv2Layout, format::save::Csv2Save, format::save::HEADER_SIZE,
+    format::snapshot,
 };
 use std::{
     env,
@@ -32,7 +31,7 @@ original additive checksum, which does not authenticate the whole file.
 Read only: these commands never install engine state.
 Example: cmvs-save --section 0 save/save000.dat snapshot.bin";
 
-fn run() -> Result<(), Box<dyn Error>> {
+fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let args: Vec<_> = env::args_os().skip(1).collect();
     if args.len() == 1 && (args[0] == "--help" || args[0] == "-h") {
         println!("{USAGE}");

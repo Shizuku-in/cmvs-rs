@@ -1,4 +1,4 @@
-use cmvs_rs::{MAX_PAYLOAD, pb3};
+use cmvs_rs::{MAX_PAYLOAD, format::pb3};
 use std::{
     env,
     error::Error,
@@ -18,7 +18,7 @@ Options:
 Output files must not already exist. Resource checksums are not verified.
 Example: cmvs-pb3 background.pb3 --rgba background.rgba";
 
-fn run() -> Result<(), Box<dyn Error>> {
+fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let args: Vec<_> = env::args_os().skip(1).collect();
     if args.len() == 1 && (args[0] == "--help" || args[0] == "-h") {
         println!("{USAGE}");

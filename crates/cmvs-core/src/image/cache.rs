@@ -38,7 +38,7 @@ impl Cache {
         &mut self,
         name: &[u8],
         source: &mut impl ResourceSource,
-    ) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    ) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
         let Some(read) = self.begin(name, source)? else {
             return Ok(None);
         };
@@ -53,7 +53,7 @@ impl Cache {
         &mut self,
         name: &[u8],
         source: &mut impl ResourceSource,
-    ) -> Result<Option<ImageRead>, Box<dyn Error>> {
+    ) -> Result<Option<ImageRead>, Box<dyn Error + Send + Sync>> {
         // The original resets +24792 before lookup, including missing/failed reads.
         if !std::mem::take(&mut self.armed) {
             return Ok(source.read(name)?.map(|bytes| ImageRead {
@@ -113,7 +113,7 @@ mod tests {
     #[derive(Default)]
     struct Files(BTreeMap<Vec<u8>, Vec<u8>>);
     impl ResourceSource for Files {
-        fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+        fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
             Ok(self.0.get(name).cloned())
         }
     }

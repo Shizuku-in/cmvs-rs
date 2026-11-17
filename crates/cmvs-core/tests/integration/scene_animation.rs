@@ -1,13 +1,10 @@
 use crate::support;
 use crate::support::shared_state;
-use cmvs_core::{
-    machine::Machine,
-    scene::{AnimationFrame, SceneHost},
-};
+use cmvs_core::{render::scene::AnimationFrame, render::scene::SceneHost, vm::machine::Machine};
 use shared_state::SharedState;
 use support::bytecode::{command, pending, script};
 
-fn run(vm: &mut Machine<'_>, scene: &mut SceneHost, count: usize) {
+fn run(vm: &mut Machine, scene: &mut SceneHost, count: usize) {
     for _ in 0..count {
         pending(vm);
         assert!(scene.shared_state(vm).unwrap());
@@ -17,8 +14,15 @@ fn setup(code: &mut Vec<u8>) {
     command(code, 0x2020, &[20]);
     command(code, 0x2040, &[20]);
 }
-fn words(scene: &SceneHost) -> &[u32] {
-    &scene.object(20).unwrap().draw.as_ref().unwrap().words[2..8]
+fn words(scene: &SceneHost) -> Vec<u32> {
+    scene
+        .object(20)
+        .unwrap()
+        .draw
+        .as_ref()
+        .unwrap()
+        .snapshot_words()[2..8]
+        .to_vec()
 }
 
 #[test]
@@ -66,7 +70,7 @@ fn scene_animation_child_lifecycle_queries_and_low_short_coordinates() {
             .draw
             .as_ref()
             .unwrap()
-            .words[2..8],
+            .snapshot_words()[2..8],
         &[(-32767i32) as u32, 2, 30, 40, 5, 6]
     );
     assert!(

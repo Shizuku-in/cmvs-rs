@@ -1,4 +1,4 @@
-use cmvs_core::{pb3, raster::RgbaImage};
+use cmvs_core::{format::pb3, render::raster::RgbaImage};
 fn put(b: &mut [u8], at: usize, v: u32) {
     b[at..at + 4].copy_from_slice(&v.to_le_bytes());
 }
@@ -340,7 +340,7 @@ fn delta_fixture(w: u16, h: u16, planes: [&[u8]; 4]) -> Vec<u8> {
 
 #[test]
 fn planes_decoded_on_extra_threads_give_the_same_image_and_the_same_error() {
-    use cmvs_core::image::DecodeThreads;
+    use cmvs_core::host::image::DecodeThreads;
     use std::sync::atomic::{AtomicUsize, Ordering};
     static STARTED: AtomicUsize = AtomicUsize::new(0);
     let threads = DecodeThreads {

@@ -553,7 +553,7 @@ mod tests {
             }
         }
         assert_eq!(
-            cmvs_core::digest::to_hex(&cmvs_core::digest::sha256(&recorded)),
+            cmvs_core::format::digest::to_hex(&cmvs_core::format::digest::sha256(&recorded)),
             "45cdb90d11b7deeb7e7f5414b2009cc362153f5ce23ffd53cc7bcee9a520287c"
         );
     }

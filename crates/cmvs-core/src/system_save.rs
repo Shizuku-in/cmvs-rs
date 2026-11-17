@@ -4,7 +4,7 @@ mod css0;
 mod pack;
 mod profile;
 mod write;
-use crate::{FormatError, MAX_PAYLOAD, dispatch::Call, evaluate::State, machine::Machine};
+use crate::{FormatError, MAX_PAYLOAD, dispatch::Call, evaluate::State};
 pub use css0::{CSS0_HEADER, Css0Parameters, Css0Save, PersistentStarts};
 pub use profile::ProfileSystemSave;
 use std::{
@@ -344,25 +344,13 @@ impl SystemSaveHost {
     pub fn set_css0(&mut self, starts: PersistentStarts) {
         self.css0_starts = Some(starts);
     }
-    pub fn try_handle(
-        &mut self,
-        vm: &mut Machine<'_>,
-        source: &mut impl SystemSaveSource,
-        game_id: Option<u32>,
-    ) -> Result<Option<SystemSaveEvent>, Box<dyn Error>> {
-        let Some((pc, 0x128)) = vm.pending_system() else {
-            return Ok(None);
-        };
-        self.handle_read(&mut Call::new(vm, pc, 0x128), source, game_id)
-            .map(Some)
-    }
     /// CVNS 0x21c0 (cvns-20090203 0x465240 -> 0x4208e0): no parameters, returns 0x4000.
     pub(crate) fn handle_css0_read(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         source: &mut dyn SystemSaveSource,
         starts: PersistentStarts,
-    ) -> Result<SystemSaveEvent, Box<dyn Error>> {
+    ) -> Result<SystemSaveEvent, Box<dyn Error + Send + Sync>> {
         let Some(raw) = source.read()? else {
             call.complete(0x4000)?;
             return Ok(SystemSaveEvent::Missing);
@@ -381,10 +369,10 @@ impl SystemSaveHost {
     }
     pub(crate) fn handle_read(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         source: &mut dyn SystemSaveSource,
         game_id: Option<u32>,
-    ) -> Result<SystemSaveEvent, Box<dyn Error>> {
+    ) -> Result<SystemSaveEvent, Box<dyn Error + Send + Sync>> {
         let Some(raw) = source.read()? else {
             call.complete(0x4000)?;
             return Ok(SystemSaveEvent::Missing);

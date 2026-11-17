@@ -1,10 +1,8 @@
 use crate::support::shared_controls;
+use crate::support::shared_state::SharedState;
 use cmvs_core::{
-    buttons::{Button, ButtonHost, ButtonImage},
-    input::ActionInput,
-    machine::{Machine, Step},
-    ps3::Script,
-    scene::SceneHost,
+    format::ps3::Script, host::input::ActionInput, render::scene::SceneHost, runtime::Button,
+    runtime::ButtonHost, runtime::ButtonImage, vm::machine::Machine, vm::machine::Step,
 };
 use shared_controls::SharedControls;
 
@@ -40,9 +38,9 @@ fn script(code: &[u8]) -> Script {
     Script::decode(&raw).unwrap()
 }
 /// Runs to the next system command and offers it to the scene, then to the buttons.
-fn next(vm: &mut Machine<'_>, scene: &mut SceneHost, buttons: &mut ButtonHost) -> bool {
+fn next(vm: &mut Machine, scene: &mut SceneHost, buttons: &mut ButtonHost) -> bool {
     while !matches!(vm.step().unwrap(), Step::System { .. }) {}
-    scene.try_handle(vm).unwrap() || buttons.shared_buttons(vm, scene).unwrap()
+    scene.shared_state(vm).unwrap() || buttons.shared_buttons(vm, scene).unwrap()
 }
 /// Scene object 10 plus button group 2 bound to it.
 fn prelude(code: &mut Vec<u8>) {
@@ -211,7 +209,10 @@ fn show_applies_state_zero_crop_and_origin_to_the_child_and_marks_it_shown() {
     assert!(child.shown);
     // Sign-extended words from movsx, as the 0x2044/0x2046 setters receive them.
     let crop_origin = [-2, -1, 0, 1, 2, 3].map(|v: i32| v as u32);
-    assert_eq!(&child.draw.as_ref().unwrap().words[2..8], &crop_origin);
+    assert_eq!(
+        &child.draw.as_ref().unwrap().snapshot_words()[2..8],
+        &crop_origin
+    );
 }
 
 #[test]
@@ -271,11 +272,11 @@ fn crop_x(scene: &SceneHost, child: u16) -> i32 {
         .draw
         .as_ref()
         .unwrap()
-        .words[2] as i32
+        .source_rect()[0] as i32
 }
 /// Runs the next 0x2216/0x2217 with `input` and returns system result 0 as i32.
 fn frame(
-    vm: &mut Machine<'_>,
+    vm: &mut Machine,
     scene: &mut SceneHost,
     buttons: &mut ButtonHost,
     input: &mut ActionInput,
@@ -284,7 +285,7 @@ fn frame(
     assert!(buttons.shared_button_input(vm, scene, input).unwrap());
     vm.state().system_integer(0).unwrap() as i32
 }
-fn run_setup(vm: &mut Machine<'_>, scene: &mut SceneHost, buttons: &mut ButtonHost) {
+fn run_setup(vm: &mut Machine, scene: &mut SceneHost, buttons: &mut ButtonHost) {
     for _ in 0..SETUP {
         assert!(next(vm, scene, buttons));
     }
@@ -554,7 +555,7 @@ fn list_input_offsets_hits_by_parent_and_keeps_input_when_configured() {
                         &mut vm,
                         &mut scene,
                         &mut input,
-                        &cmvs_core::gesture::PointerGesture::default()
+                        &cmvs_core::host::gesture::PointerGesture::default()
                     )
                     .unwrap()
             );
@@ -598,7 +599,7 @@ fn list_input_hit_area_is_half_open_and_navigation_can_be_disabled() {
                 &mut vm,
                 &mut scene,
                 &mut input,
-                &cmvs_core::gesture::PointerGesture::default(),
+                &cmvs_core::host::gesture::PointerGesture::default(),
             )
             .unwrap();
         assert_eq!(vm.state().system_integer(0), Some(u32::MAX));
@@ -638,7 +639,7 @@ fn list_input_missing_visual_keeps_group_input_and_pending_command_unchanged() {
                 &mut vm,
                 &mut scene,
                 &mut input,
-                &cmvs_core::gesture::PointerGesture::default()
+                &cmvs_core::host::gesture::PointerGesture::default()
             )
             .is_err()
     );
@@ -702,8 +703,8 @@ fn scaled_group_creation_accepts_the_device_scale_only() {
 #[test]
 fn realive_list_selection_warps_relative_to_object_and_preserves_poll_state() {
     use cmvs_core::{
-        dispatch::{self, Flow, Hosts, InputHosts},
-        profile::Registry,
+        profile::Registry, vm::dispatch, vm::dispatch::Flow, vm::dispatch::Hosts,
+        vm::dispatch::InputHosts,
     };
     let mut code = vec![];
     call(&mut code, 0x2020, &[10]);
@@ -791,7 +792,7 @@ fn realive_list_selection_warps_relative_to_object_and_preserves_poll_state() {
             .draw
             .as_ref()
             .unwrap()
-            .words[2],
+            .source_rect()[0],
         0
     );
     assert_eq!(
@@ -799,7 +800,7 @@ fn realive_list_selection_warps_relative_to_object_and_preserves_poll_state() {
             .draw
             .as_ref()
             .unwrap()
-            .words[2],
+            .source_rect()[0],
         10
     );
     assert!(next(&mut vm, &mut scene, &mut buttons));

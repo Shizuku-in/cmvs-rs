@@ -101,7 +101,7 @@ impl RgbaImage {
     /// [`MAX_PAYLOAD`].
     ///
     /// ```
-    /// use cmvs_core::raster::RgbaImage;
+    /// use cmvs_core::render::raster::RgbaImage;
     ///
     /// let image = RgbaImage::new(1, 1, vec![255, 0, 0, 255])?;
     /// assert_eq!(image.pixels(), &[255, 0, 0, 255]);

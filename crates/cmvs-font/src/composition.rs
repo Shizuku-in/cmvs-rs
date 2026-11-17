@@ -1,10 +1,8 @@
 //! Scene composition shared by software and GPU hosts.
 use cmvs_core::{
-    FormatError,
-    camera::CameraHost,
-    message::MessageHost,
-    scene::{SceneHost, SceneObject},
-    scene_render::{RenderFrame, prepare_scene},
+    FormatError, render::camera::CameraHost, render::message::MessageHost,
+    render::scene::SceneHost, render::scene::SceneObject, render::scene_render::RenderFrame,
+    render::scene_render::prepare_scene,
 };
 
 /// Holds generated glyph objects while the draw queue borrows their images.

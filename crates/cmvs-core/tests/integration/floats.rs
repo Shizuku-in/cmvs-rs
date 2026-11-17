@@ -1,8 +1,6 @@
 use cmvs_core::{
-    bytecode::{self, Expression, InstructionKind},
-    evaluate::State,
-    machine::Machine,
-    ps3::Script,
+    format::ps3::Script, vm::bytecode, vm::bytecode::Expression, vm::bytecode::InstructionKind,
+    vm::evaluate::State, vm::machine::Machine,
 };
 
 fn scalar(tag: u16, raw: u32) -> Vec<u8> {

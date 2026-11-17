@@ -7,7 +7,7 @@
 // Constructor/reset/save loading clear both booleans; configuration does not set them.
 // Mode +1548 starts at zero; 0x140092d40 updates it for menu items 0x809d..0x809f.
 // Bypass is engine +12244, outside the settings block but read by the same waits.
-use crate::{bytecode::DecodeError, dispatch::Call, machine::Machine};
+use crate::{bytecode::DecodeError, dispatch::Call};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct MessageFlags {
@@ -87,19 +87,8 @@ impl MessageFlags {
     pub(crate) fn set_cvns_read_skipping(&mut self, value: bool) {
         self.cvns_read_skipping = value;
     }
-    /// 0x22eb / 0x14007c890 and 0x22e5 / 0x14007c5d0: nonzero SP-4 sets the flag to
-    /// bool(SP-8); zero SP-4 copies it to system result 0 without reading SP-8. Both pop 8 bytes.
-    /// 0x2340 (inline 0x1400847fa) sets the bypass to bool(SP-4) and pops 4 bytes; it has no
-    /// query form and leaves the system results alone.
-    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x340 | 0x2d0 | 0x2eb | 0x2e5))) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle(&mut Call::new(vm, pc, command))?;
-        Ok(true)
-    }
 
-    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn handle(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         if call.command == 0x340 {
             let value = call.argument(4, "bypass")?;
             call.complete(0x4004)?;

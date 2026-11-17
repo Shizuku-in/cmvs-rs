@@ -4,7 +4,9 @@ use crate::common::{
     OutputEncoding, PngDepthPolicy, Result, png_to_pb3, rewrite_encoded, validate_utf8,
     write_archive, write_new,
 };
-use cmvs_core::{bytecode, cmv::CmvIndex, cpz::ArchiveIndex, ps3::Script};
+use cmvs_core::{
+    format::cmv::CmvIndex, format::cpz::ArchiveIndex, format::ps3::Script, vm::bytecode,
+};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File},
@@ -230,7 +232,7 @@ pub fn run(game: &Path, stage: &Path, encoding: OutputEncoding) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cmvs_core::pb3::{self, EncodeDepth};
+    use cmvs_core::{format::pb3, format::pb3::EncodeDepth};
 
     fn fixture(text: &[u8], offset: u32) -> Vec<u8> {
         let mut code = vec![1, 2, 0x20, 1];

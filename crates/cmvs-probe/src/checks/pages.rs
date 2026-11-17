@@ -307,7 +307,7 @@ fn actions_at(session: &Session<'_>) -> Vec<Step> {
             .collect();
     }
     if session.device() == crate::device::Device::Mouse {
-        for slot in cmvs_core::buttons::BUTTON_GROUPS..crate::controls::GROUPS {
+        for slot in cmvs_core::runtime::BUTTON_GROUPS..crate::controls::GROUPS {
             if crate::controls::group(session.startup(), slot)
                 .and_then(|group| group.scroll_point())
                 .is_some()

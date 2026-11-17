@@ -1,13 +1,10 @@
 use crate::support;
+use crate::support::shared_windows::SharedWindows;
 use crate::support::window_cases;
 use cmvs_core::{
-    dispatch::{self, Capability, Flow, Hosts, InputHosts},
-    image::ImageSource,
-    input::ActionInput,
-    machine::Machine,
-    message::MessageHost,
-    profile::Semantics,
-    ps3::Script,
+    format::ps3::Script, host::image::ImageSource, host::input::ActionInput, profile::Semantics,
+    render::message::MessageHost, vm::dispatch, vm::dispatch::Capability, vm::dispatch::Flow,
+    vm::dispatch::Hosts, vm::dispatch::InputHosts, vm::machine::Machine,
 };
 use std::error::Error;
 use support::bytecode::{command, pending};
@@ -41,7 +38,11 @@ fn hassaku_window_scale_preserves_raw_words_and_rejects_missing_targets_atomical
         } else {
             expected.children.get_mut(&16).unwrap()
         };
-        target.draw.as_mut().unwrap().words[18..20].copy_from_slice(&[0x8000_0000, 0x7fc0_1234]);
+        target
+            .draw
+            .as_mut()
+            .unwrap()
+            .set_scale_bits([0x8000_0000, 0x7fc0_1234]);
         assert_eq!(windows.messages.window(0).unwrap().object, expected);
         assert_eq!(vm.stack().len_bytes(), 0);
         assert_eq!(vm.state().system_integer(0), Some(77));
@@ -72,7 +73,7 @@ fn hassaku_window_scale_preserves_raw_words_and_rejects_missing_targets_atomical
 
 #[test]
 fn natsuuta_window_position_and_opacity_tracks_reuse_the_scene_tracks() {
-    use cmvs_core::scene::{OpacityKey, PositionKey};
+    use cmvs_core::{render::scene::OpacityKey, render::scene::PositionKey};
     let profile = cmvs_core::profile::Registry::builtin()
         .profile("cmvs-20100314")
         .unwrap();
@@ -226,7 +227,7 @@ struct Images {
     fail: bool,
 }
 impl ImageSource for Images {
-    fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
         assert_eq!(name, b"a.pb3");
         self.reads += 1;
         if self.fail {
@@ -267,7 +268,7 @@ impl Windows {
                     Some(Flow::Done)
                 );
             } else {
-                assert!(self.messages.try_handle(&mut vm).unwrap());
+                assert!(self.messages.shared_message(&mut vm).unwrap());
             }
         }
     }
@@ -386,7 +387,10 @@ fn image_errors_keep_typed_cause_and_leave_window_targets_retryable() {
         );
         assert_eq!(
             error.to_string(),
-            format!("PC=0x{:x} 0x{opcode:04x}: image unavailable", before.0)
+            format!(
+                "system command 0x{opcode:04x} at 0x{pc:x}: PC=0x{pc:x} 0x{opcode:04x}: image unavailable",
+                pc = before.0
+            )
         );
         assert_eq!(
             (vm.pc(), vm.pending_system(), vm.stack().len_bytes()),

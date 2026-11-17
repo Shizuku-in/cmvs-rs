@@ -1,7 +1,6 @@
 //! Engine snapshot record stream: canonical order, typed codecs and raw payloads.
 use cmvs_core::{
-    save::Csv2Save,
-    snapshot::{EngineSnapshot, parse_records},
+    format::save::Csv2Save, format::snapshot::EngineSnapshot, format::snapshot::parse_records,
 };
 
 /// Decodes and re-encodes section 0 of external original saves; the record stream must be
@@ -137,7 +136,7 @@ fn synthetic_stream_round_trips_with_raw_objects_and_effects() {
 
 #[test]
 fn realive_engine_round_trips_scene_v4_and_rejects_other_layouts() {
-    use cmvs_core::snapshot::SnapshotLayout;
+    use cmvs_core::format::snapshot::SnapshotLayout;
     // Native scene v4: marker/version, kind/shown/flags/width/height,
     // 44-byte inactive effect block and terminator.
     let scene = |flags: u32| {
@@ -203,7 +202,7 @@ fn v1_stream(objects: &[(u16, Option<u16>, Vec<u8>)]) -> Vec<u8> {
 
 #[test]
 fn text_v1_scene_v1_wire_records_roundtrip_and_reject_unsupported_or_out_of_range_state() {
-    use cmvs_core::snapshot::SnapshotLayout;
+    use cmvs_core::format::snapshot::SnapshotLayout;
     let layout = SnapshotLayout::TextV1SceneV1;
     let mut text = 1u16.to_le_bytes().to_vec();
     text.extend(196u32.to_le_bytes());
@@ -223,7 +222,7 @@ fn text_v1_scene_v1_wire_records_roundtrip_and_reject_unsupported_or_out_of_rang
     let mut child = scene(0, 0);
     child.extend(0xf0f0u16.to_le_bytes());
     let mut draw = vec![3, 0, 0, 0];
-    for word in cmvs_core::scene::DrawState::default().words {
+    for word in cmvs_core::render::scene::DrawState::default().snapshot_words() {
         draw.extend(word.to_le_bytes());
     }
     draw.extend([0; 20]);
@@ -316,7 +315,7 @@ fn text_v1_scene_v1_wire_records_roundtrip_and_reject_unsupported_or_out_of_rang
 
 #[test]
 fn scene_v2_wire_uses_six_header_words_effect_block_and_paired_bgm_without_sequence() {
-    use cmvs_core::snapshot::SnapshotLayout;
+    use cmvs_core::format::snapshot::SnapshotLayout;
     let layout = SnapshotLayout::TextV1SceneV2;
     let mut scene = vec![255, 255, 2, 0];
     for word in [1u32, 1, 0, 0, 800, 600] {
@@ -332,7 +331,7 @@ fn scene_v2_wire_uses_six_header_words_effect_block_and_paired_bgm_without_seque
     }
     long(&mut scene, 0x740, None, &image);
     let mut draw = vec![4, 0, 0, 0];
-    for word in cmvs_core::scene::DrawState::default().words {
+    for word in cmvs_core::render::scene::DrawState::default().snapshot_words() {
         draw.extend(word.to_le_bytes());
     }
     draw.extend([0; 24]);
@@ -397,7 +396,7 @@ fn scene_v2_wire_uses_six_header_words_effect_block_and_paired_bgm_without_seque
 
 #[test]
 fn puriring_stream_omits_second_camera_and_second_view() {
-    use cmvs_core::snapshot::SnapshotLayout;
+    use cmvs_core::format::snapshot::SnapshotLayout;
     let bytes = v1_stream(&[]);
     let mut legacy = Vec::new();
     for record in parse_records(&bytes).unwrap() {

@@ -1,11 +1,10 @@
 //! cmvs-20070119 variants on synthetic scripts; see docs/games/puriring.
 use crate::support;
 use cmvs_core::{
-    audio::{AudioHost, AudioRequest, RecordingAudio},
-    camera::CameraHost,
-    dispatch::{self, AudioHosts, Flow, Hosts},
-    machine::Machine,
-    profile::{Registry, Semantics, VariantId},
+    host::audio::AudioHost, host::audio::AudioRequest, host::audio::RecordingAudio,
+    profile::Registry, profile::Semantics, profile::VariantId, render::camera::CameraHost,
+    vm::dispatch, vm::dispatch::AudioHosts, vm::dispatch::Flow, vm::dispatch::Hosts,
+    vm::machine::Machine,
 };
 use support::bytecode::{command, pending, script};
 
@@ -87,7 +86,7 @@ fn mixer_gain_is_clamped_to_256_and_reaches_the_backend() {
     }
 }
 
-fn run_camera(camera: &mut CameraHost, opcode: u16, args: &[u32]) -> Machine<'static> {
+fn run_camera(camera: &mut CameraHost, opcode: u16, args: &[u32]) -> Machine {
     let mut code = vec![];
     command(&mut code, opcode, args);
     let program = Box::leak(Box::new(script(&code)));
@@ -200,12 +199,15 @@ fn separate_image_tables_and_window_scale_motion_are_bound_only_here() {
 #[test]
 fn every_slot_replacement_runs_the_walk_destructor() {
     use cmvs_core::{
-        dispatch::ImageHosts, effect_objects::LegacyEffect, image::ImageSource, random::CrtRandom,
-        scene::SceneHost,
+        host::image::ImageSource, host::random::CrtRandom, render::scene::LegacyEffect,
+        render::scene::SceneHost, vm::dispatch::ImageHosts,
     };
     struct NoImages;
     impl ImageSource for NoImages {
-        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+        fn read(
+            &mut self,
+            _: &[u8],
+        ) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
             // Unknown magic is the quiet load failure these creators accept.
             Ok(Some(b"NONE".to_vec()))
         }
@@ -295,10 +297,13 @@ fn every_slot_replacement_runs_the_walk_destructor() {
 
 #[test]
 fn floating_planes_use_command_296_and_consume_two_words_for_an_invalid_slot() {
-    use cmvs_core::{dispatch::ImageHosts, image::ImageSource, scene::SceneHost};
+    use cmvs_core::{host::image::ImageSource, render::scene::SceneHost, vm::dispatch::ImageHosts};
     struct NoImages;
     impl ImageSource for NoImages {
-        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+        fn read(
+            &mut self,
+            _: &[u8],
+        ) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
             panic!("invalid slots must not read images");
         }
     }
@@ -347,11 +352,15 @@ fn floating_planes_use_command_296_and_consume_two_words_for_an_invalid_slot() {
 #[test]
 fn vortex_binding_uses_one_word_and_keeps_failed_creation_pending() {
     use cmvs_core::{
-        dispatch::ImageHosts, image::ImageSource, random::CrtRandom, scene::SceneHost,
+        host::image::ImageSource, host::random::CrtRandom, render::scene::SceneHost,
+        vm::dispatch::ImageHosts,
     };
     struct FailingImages(usize);
     impl ImageSource for FailingImages {
-        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error>> {
+        fn read(
+            &mut self,
+            _: &[u8],
+        ) -> Result<Option<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
             self.0 += 1;
             Err("synthetic image failure".into())
         }
@@ -419,8 +428,9 @@ fn vortex_binding_uses_one_word_and_keeps_failed_creation_pending() {
 #[ignore = "requires CMVS_GAME_ROOT pointing to read-only PURIRING resources"]
 fn external_vortex_creates_switches_renders_and_releases() {
     use cmvs_core::{
-        audio::AudioSettings, dispatch::ImageHosts, effect_objects::LegacyEffect,
-        image::ImageArchives, random::CrtRandom, scene::SceneHost, scene_render,
+        host::audio::AudioSettings, host::image::ImageArchives, host::random::CrtRandom,
+        render::scene::LegacyEffect, render::scene::SceneHost, render::scene_render,
+        vm::dispatch::ImageHosts,
     };
     let root =
         std::path::PathBuf::from(std::env::var_os("CMVS_GAME_ROOT").expect("CMVS_GAME_ROOT"));
@@ -589,10 +599,9 @@ fn hundredth_degree_polar_point_preserves_other_results_and_signed_radius() {
 #[ignore = "requires CMVS_GAME_ROOT and CMVS_PURIRING_SAVE pointing to read-only game resources and a CSV2 save"]
 fn external_snapshot_load_restores_scene_and_reencodes() {
     use cmvs_core::{
-        platform::RecordingBackend,
-        runtime::{Runtime, RuntimeEvent, load_start},
-        save::Csv2Save,
-        snapshot::{EngineSnapshot, SnapshotLayout},
+        format::save::Csv2Save, format::snapshot::EngineSnapshot, format::snapshot::SnapshotLayout,
+        host::platform::RecordingBackend, runtime::Runtime, runtime::RuntimeEvent,
+        runtime::load_start,
     };
     let root =
         std::path::PathBuf::from(std::env::var_os("CMVS_GAME_ROOT").expect("CMVS_GAME_ROOT"));
@@ -637,11 +646,11 @@ fn external_snapshot_load_restores_scene_and_reencodes() {
     for _ in 0..2 {
         run.input_mut().set(0, false, false, false).unwrap();
         run.load_slot(3, &mut backend).unwrap();
-        let bindings = cmvs_core::input::KeyBindings::parse(
+        let bindings = cmvs_core::host::input::KeyBindings::parse(
             &std::fs::read_to_string(root.join("key.cfg")).unwrap(),
         )
         .unwrap();
-        let mut codes = cmvs_core::input::CodeInput::default();
+        let mut codes = cmvs_core::host::input::CodeInput::default();
         let mut taps = std::collections::VecDeque::new();
         run.input_mut().set_pointer(-1, -1);
         let mut trace = Vec::new();
@@ -668,7 +677,7 @@ fn external_snapshot_load_restores_scene_and_reencodes() {
                         taps.extend([true, false]);
                     }
                     let mut now = [false; 128];
-                    now[cmvs_core::input::MOUSE_CODES[0]] = taps.pop_front().unwrap_or(false);
+                    now[cmvs_core::host::input::MOUSE_CODES[0]] = taps.pop_front().unwrap_or(false);
                     codes.update(&bindings, &now, run.input_mut());
                     if trace.len() >= 20 {
                         break;
@@ -698,8 +707,8 @@ fn external_snapshot_load_restores_scene_and_reencodes() {
 #[test]
 fn window_full_move_queries_ignore_the_value_and_writes_preserve_system_results() {
     use cmvs_core::{
-        dispatch::PlatformHosts,
-        platform::{DirectoryAssets, PlatformHost, RecordingBackend},
+        host::platform::DirectoryAssets, host::platform::PlatformHost,
+        host::platform::RecordingBackend, vm::dispatch::PlatformHosts,
     };
     let variant = Semantics::Variant(VariantId::WindowFullMove);
     assert_eq!(semantics(0x2ec), variant);

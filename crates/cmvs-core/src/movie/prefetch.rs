@@ -105,7 +105,7 @@ impl ScenePrefetch {
         &mut self,
         id: u64,
         frame: u32,
-    ) -> Option<Result<RgbaImage, Box<dyn Error>>> {
+    ) -> Option<Result<RgbaImage, Box<dyn Error + Send + Sync>>> {
         let at = self.requested.iter().position(|&r| r == (id, frame))?;
         loop {
             if let Some(i) = self

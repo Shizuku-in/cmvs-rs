@@ -2,17 +2,12 @@ use crate::encoding::EncodingChoice;
 use crate::game_input::{GameInput, event_key};
 use crate::{DesktopInput, InputEvent, NativeBackend, TextEncoding};
 use cmvs_core::{
-    cpz::ArchiveIndex,
-    cursor::CursorBitmap,
-    input::KeyBindings,
-    pb3,
-    platform::{DirectoryAssets, PlatformAssets, PlatformBackend, PlatformRequest},
-    profile::Registry,
-    raster::{RgbaImage, movie_canvas},
-    runtime::{
-        FrameBudget, FrameDriver, FrameOutcome, Runtime, RuntimeEvent, RuntimeOptions, SaveStorage,
-        SnapshotPolicy, load_start,
-    },
+    format::cpz::ArchiveIndex, format::cursor::CursorBitmap, format::pb3, host::input::KeyBindings,
+    host::platform::DirectoryAssets, host::platform::PlatformAssets,
+    host::platform::PlatformBackend, host::platform::PlatformRequest, profile::Registry,
+    render::raster::RgbaImage, render::raster::movie_canvas, runtime::FrameBudget,
+    runtime::FrameDriver, runtime::FrameOutcome, runtime::Runtime, runtime::RuntimeEvent,
+    runtime::RuntimeOptions, runtime::SaveStorage, runtime::SnapshotPolicy, runtime::load_start,
 };
 use std::{
     env,
@@ -124,7 +119,7 @@ struct GpuDesktop {
     instance: cmvs_wgpu::wgpu::Instance,
     adapter: cmvs_wgpu::wgpu::Adapter,
 }
-struct App<'a> {
+struct App {
     #[cfg(windows)]
     masked_cursor: std::cell::RefCell<Option<cmvs_native::MaskedCursor>>,
     driver: FrameDriver,
@@ -134,7 +129,7 @@ struct App<'a> {
     surface: Option<softbuffer::Surface<Arc<Window>, Arc<Window>>>,
     context: Option<softbuffer::Context<Arc<Window>>>,
     window: Option<Arc<Window>>,
-    startup: Runtime<'a>,
+    startup: Runtime,
     assets: DirectoryAssets,
     encoding: TextEncoding,
     input: DesktopInput,
@@ -150,7 +145,7 @@ struct App<'a> {
     next_frame: Instant,
     last_frame: Instant,
     cursor_clock: Instant,
-    cursor_visibility: cmvs_core::cursor::CursorVisibility,
+    cursor_visibility: cmvs_core::format::cursor::CursorVisibility,
     cursor_shown: bool,
     font: Option<crate::font::FontRenderer>,
     aspect_mode: std::cell::Cell<u32>,
@@ -159,8 +154,8 @@ struct App<'a> {
     fullscreen_monitor: std::cell::RefCell<crate::FullscreenMonitor>,
     windowed_size: std::cell::Cell<[u32; 2]>,
 }
-impl App<'_> {
-    fn frame(&mut self) -> Result<RgbaImage, Box<dyn Error>> {
+impl App {
+    fn frame(&mut self) -> Result<RgbaImage, Box<dyn Error + Send + Sync>> {
         if let Some(image) = &self.preview_image {
             return Ok(image.clone());
         }
@@ -181,7 +176,7 @@ impl App<'_> {
         Ok(self.startup.render_frame()?)
     }
     #[cfg(feature = "wgpu-renderer")]
-    fn gpu_frame(&mut self) -> Result<cmvs_wgpu::GpuFrame, Box<dyn Error>> {
+    fn gpu_frame(&mut self) -> Result<cmvs_wgpu::GpuFrame, Box<dyn Error + Send + Sync>> {
         let renderer = &mut self.gpu.as_mut().ok_or("GPU is not initialized")?.renderer;
         if let Some(image) = &self.preview_image {
             return renderer.preview_image(image);
@@ -201,7 +196,7 @@ impl App<'_> {
             )?;
             return renderer.render(&composition.prepare()?);
         }
-        let frame = cmvs_core::scene_render::prepare_scene(
+        let frame = cmvs_core::render::scene_render::prepare_scene(
             self.startup.scene(),
             Some(self.startup.camera()),
             &[],
@@ -211,7 +206,7 @@ impl App<'_> {
         renderer.render(&frame)
     }
     #[cfg(feature = "wgpu-renderer")]
-    fn redraw_gpu(&mut self) -> Result<(), Box<dyn Error>> {
+    fn redraw_gpu(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         let window = self.window.as_ref().ok_or("no window")?.clone();
         let size = window.inner_size();
         if size.width == 0 || size.height == 0 {
@@ -232,7 +227,7 @@ impl App<'_> {
         let mode = if self.preview_image.is_some() {
             1
         } else {
-            cmvs_core::viewport::presentation_mode_with_full_move(
+            cmvs_core::render::viewport::presentation_mode_with_full_move(
                 window.fullscreen().is_some(),
                 self.aspect_scaling.get(),
                 self.aspect_mode.get(),
@@ -259,7 +254,7 @@ impl App<'_> {
         self.error = Some(error.to_string());
         el.exit();
     }
-    fn redraw(&mut self) -> Result<(), Box<dyn Error>> {
+    fn redraw(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         // A resize/redraw can arrive between VM budget slices. Keep the previous
         // presented canvas until the engine, rather than the host budget, yields.
         if self.preview_image.is_none() && !self.driver.ready() {
@@ -279,8 +274,8 @@ impl App<'_> {
             return Err("desktop surface exceeds research pixel limit".into());
         }
         let surface = self.surface.as_mut().ok_or("no surface")?;
-        surface.resize(w, h)?;
-        let mut buffer = surface.buffer_mut()?;
+        surface.resize(w, h).map_err(|e| e.to_string())?;
+        let mut buffer = surface.buffer_mut().map_err(|e| e.to_string())?;
         if self.preview_image.is_some() {
             for (i, pixel) in buffer.iter_mut().enumerate() {
                 let x = i % size.width as usize;
@@ -294,7 +289,7 @@ impl App<'_> {
             image.draw_fit(&mut buffer, size.width, size.height)?;
         } else {
             buffer.fill(0);
-            let mode = cmvs_core::viewport::presentation_mode_with_full_move(
+            let mode = cmvs_core::render::viewport::presentation_mode_with_full_move(
                 window.fullscreen().is_some(),
                 self.aspect_scaling.get(),
                 self.aspect_mode.get(),
@@ -308,7 +303,7 @@ impl App<'_> {
                 self.render_mode.get() == 1,
             )?;
         }
-        buffer.present()?;
+        buffer.present().map_err(|e| e.to_string())?;
         if self.preview_image.is_none() {
             if self.startup.capture_due() {
                 self.startup.supply_capture(image.clone())?;
@@ -317,7 +312,11 @@ impl App<'_> {
         }
         Ok(())
     }
-    fn preview_cursor(&mut self, el: &ActiveEventLoop, id: u32) -> Result<(), Box<dyn Error>> {
+    fn preview_cursor(
+        &mut self,
+        el: &ActiveEventLoop,
+        id: u32,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let bitmap = if id == 0 {
             None
         } else {
@@ -350,12 +349,12 @@ impl App<'_> {
     }
 }
 
-impl ApplicationHandler for App<'_> {
+impl ApplicationHandler for App {
     fn resumed(&mut self, el: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
         }
-        let result = (|| -> Result<(), Box<dyn Error>> {
+        let result = (|| -> Result<(), Box<dyn Error + Send + Sync>> {
             let window = Arc::new(
                 el.create_window(
                     Window::default_attributes()
@@ -394,8 +393,10 @@ impl ApplicationHandler for App<'_> {
                 });
             }
             if !self.use_gpu {
-                let context = softbuffer::Context::new(window.clone())?;
-                let surface = softbuffer::Surface::new(&context, window.clone())?;
+                let context =
+                    softbuffer::Context::new(window.clone()).map_err(|e| e.to_string())?;
+                let surface = softbuffer::Surface::new(&context, window.clone())
+                    .map_err(|e| e.to_string())?;
                 self.surface = Some(surface);
                 self.context = Some(context);
             }
@@ -417,7 +418,7 @@ impl ApplicationHandler for App<'_> {
                 masked_cursor: &self.masked_cursor,
             };
             let mode =
-                cmvs_core::platform::supported_render_mode(&backend, backend.render_mode()?)?;
+                cmvs_core::host::platform::supported_render_mode(&backend, backend.render_mode()?)?;
             self.render_mode.set(mode);
             if self.native_input && self.preview_image.is_none() {
                 self.startup.set_focused(false);
@@ -576,13 +577,14 @@ impl ApplicationHandler for App<'_> {
             }
             self.next_frame = now + Duration::from_millis(16);
             let window = window.clone();
-            self.game_input
-                .set_aspect_mode(cmvs_core::viewport::presentation_mode_with_full_move(
+            self.game_input.set_aspect_mode(
+                cmvs_core::render::viewport::presentation_mode_with_full_move(
                     window.fullscreen().is_some(),
                     self.aspect_scaling.get(),
                     self.aspect_mode.get(),
                     self.startup.platform().window_full_move(),
-                ));
+                ),
+            );
             let cursor_auto_clear = self.startup.settings().cursor_auto_clear();
             self.driver.sample_input(self.startup.input_mut(), |input| {
                 if self.native_input && self.preview_image.is_none() {
@@ -630,7 +632,7 @@ impl ApplicationHandler for App<'_> {
                     println!(
                         "# UNREVIEWED system command 0x{:04x} allowed with {} (default policy, first use)",
                         0x2000 + command,
-                        cmvs_core::dispatch::semantics_name(
+                        cmvs_core::vm::dispatch::semantics_name(
                             startup.gate().selection().profile,
                             command
                         )
@@ -708,13 +710,14 @@ impl ApplicationHandler for App<'_> {
                 el.set_control_flow(ControlFlow::Poll);
                 return;
             }
-            self.game_input
-                .set_aspect_mode(cmvs_core::viewport::presentation_mode_with_full_move(
+            self.game_input.set_aspect_mode(
+                cmvs_core::render::viewport::presentation_mode_with_full_move(
                     window.fullscreen().is_some(),
                     self.aspect_scaling.get(),
                     self.aspect_mode.get(),
                     self.startup.platform().window_full_move(),
-                ));
+                ),
+            );
             if let Some(point) = self.startup.input_mut().take_warp() {
                 let size = window.inner_size();
                 if let Some(position) = self.game_input.warp([size.width, size.height], point)
@@ -795,7 +798,7 @@ fn halt_title(event: RuntimeEvent, script: &[u8], pc: usize) -> String {
         _ => "cmvs-rs paused: main snapshot was not built".into(),
     }
 }
-fn run() -> Result<(), Box<dyn Error>> {
+fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut args = env::args_os().skip(1);
     let root = args.next().ok_or(
         "usage: cmvs-desktop <game-root> --encoding <auto|shift-jis|gbk|utf-8> [options]; see --help",
@@ -1041,7 +1044,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         crate::video::PrefetchTheoraFactory::default().with_lookahead(64 << 20, 48),
     ));
     startup.set_scene_prefetch(|| {});
-    startup.set_image_decode_threads(cmvs_core::image::DecodeThreads::host());
+    startup.set_image_decode_threads(cmvs_core::host::image::DecodeThreads::host());
     startup.set_decoded_image_cache(256 << 20);
     if native_audio {
         #[cfg(feature = "audio-output")]
@@ -1065,7 +1068,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         // 0x14000b666: a configured face that cannot be found becomes the default.
         if !font.has_face(startup.settings().font_face()) {
             println!("# configured font face not found; using the built-in default face");
-            startup.set_font_face(cmvs_core::settings::DEFAULT_FONT_FACE)?;
+            startup.set_font_face(cmvs_core::host::settings::DEFAULT_FONT_FACE)?;
         }
     }
     if font.is_some() {
@@ -1078,12 +1081,12 @@ fn run() -> Result<(), Box<dyn Error>> {
             "# text RECORDING ONLY: supported single-line glyph descriptors and reveal timing; no font pixels or text drawing"
         );
     }
-    startup.set_random_seed(rand_seed.unwrap_or_else(cmvs_core::random::host_time_seed));
+    startup.set_random_seed(rand_seed.unwrap_or_else(cmvs_core::host::random::host_time_seed));
     let display_preferences = startup.display_preferences();
     let fullscreen_monitor_mode = startup.platform().fullscreen_monitor_mode();
     let canvas = startup.screen_size();
     let mut game_input = GameInput::default();
-    game_input.set_screen_size(cmvs_core::viewport::ScreenSize::new(canvas)?);
+    game_input.set_screen_size(cmvs_core::render::viewport::ScreenSize::new(canvas)?);
     let window_size = [
         960,
         (960u64 * u64::from(canvas[1]) / u64::from(canvas[0])) as u32,
@@ -1145,7 +1148,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
     if app
         .startup
-        .save_preferences(cmvs_core::settings::DisplayPreferences {
+        .save_preferences(cmvs_core::host::settings::DisplayPreferences {
             fullscreen: app
                 .window
                 .as_ref()

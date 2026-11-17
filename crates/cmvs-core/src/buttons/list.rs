@@ -1,8 +1,6 @@
 //! Engine +4552 list groups, distinct from the six ordinary button groups.
 use super::{BUTTON_LIMIT, BUTTON_STATES, Button, ButtonHost, ButtonImage, apply_images};
-use crate::{
-    bytecode::DecodeError, dispatch::Call, evaluate::error, machine::Machine, scene::SceneHost,
-};
+use crate::{bytecode::DecodeError, dispatch::Call, evaluate::error, scene::SceneHost};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListGroup {
@@ -45,25 +43,9 @@ impl ButtonHost {
         self.lists.get(slot)?.as_ref()
     }
 
-    /// 0x2377 / 0x14007a0e0 -> 0x140005140. Hit rectangles are relative to
-    /// the bound object's current position; the group hit area stays in screen space.
-    pub fn try_handle_list_input(
-        &mut self,
-        vm: &mut Machine<'_>,
-        scene: &mut SceneHost,
-        input: &mut crate::input::ActionInput,
-        gesture: &crate::gesture::PointerGesture,
-    ) -> Result<bool, DecodeError> {
-        let Some((pc, 0x377)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle_list_input(&mut Call::new(vm, pc, 0x377), scene, input, gesture)?;
-        Ok(true)
-    }
-
     pub(crate) fn handle_list_input(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         scene: &mut SceneHost,
         input: &mut crate::input::ActionInput,
         gesture: &crate::gesture::PointerGesture,
@@ -146,7 +128,7 @@ impl ButtonHost {
     /// REALIVE 0x140097810 -> 0x14001b2d0; explicit list selection, not input polling.
     pub(crate) fn handle_list_select(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         scene: &mut SceneHost,
         input: &mut crate::input::ActionInput,
     ) -> Result<(), DecodeError> {
@@ -210,7 +192,7 @@ impl ButtonHost {
 
     pub(super) fn handle_list(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         scene: &mut SceneHost,
     ) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);

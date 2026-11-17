@@ -1,12 +1,9 @@
 use crate::support;
 use crate::support::shared_state;
-use cmvs_core::{
-    machine::Machine,
-    scene::{PositionKey, SceneHost},
-};
+use cmvs_core::{render::scene::PositionKey, render::scene::SceneHost, vm::machine::Machine};
 use shared_state::SharedState;
 use support::bytecode::{command, pending, script};
-fn run(vm: &mut Machine<'_>, scene: &mut SceneHost, n: usize) {
+fn run(vm: &mut Machine, scene: &mut SceneHost, n: usize) {
     for _ in 0..n {
         pending(vm);
         assert!(scene.shared_state(vm).unwrap());
@@ -19,7 +16,13 @@ fn setup(code: &mut Vec<u8>, base: [u32; 2]) {
     command(code, 0x21f4, &[20, u32::MAX]);
 }
 fn xy(scene: &SceneHost) -> [i32; 2] {
-    let w = &scene.object(20).unwrap().draw.as_ref().unwrap().words;
+    let w = &scene
+        .object(20)
+        .unwrap()
+        .draw
+        .as_ref()
+        .unwrap()
+        .snapshot_words();
     [w[8] as i32, w[9] as i32]
 }
 #[test]
@@ -64,7 +67,7 @@ fn position_motion_constructor_query_child_isolation_stop_and_reset() {
         .draw
         .as_ref()
         .unwrap();
-    assert_eq!(&child.words[8..10], &[(-32767i32) as u32, 32767]);
+    assert_eq!(&child.position_raw(), &[(-32767i32) as u32, 32767]);
     assert!(child.position_motion.is_none());
     assert_eq!(xy(&scene), [10, 20]);
     run(&mut vm, &mut scene, 2);

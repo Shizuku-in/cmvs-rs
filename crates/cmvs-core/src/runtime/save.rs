@@ -304,7 +304,7 @@ fn validate_child_slots_without_button_lists<'a>(
     scenes: impl Iterator<Item = &'a SavedScene>,
     has_button_lists: bool,
     capacity: u16,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     fn scene_supported(scene: &SavedScene, capacity: u16) -> bool {
         scene
             .children
@@ -325,7 +325,7 @@ fn validate_child_slots_without_button_lists<'a>(
     Ok(())
 }
 
-impl Runtime<'_> {
+impl Runtime {
     pub(super) fn system_save_identifier(&self) -> Option<u32> {
         use crate::profile::InspectedBuild;
 
@@ -350,7 +350,7 @@ impl Runtime<'_> {
         &self,
         snapshot: &EngineSnapshot,
         layout: SnapshotLayout,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         use crate::profile::InspectedBuild;
 
         if layout.old_tables() {
@@ -384,7 +384,7 @@ impl Runtime<'_> {
         }
         Ok(())
     }
-    fn require_snapshot_layout(&self) -> Result<SnapshotLayout, Box<dyn Error>> {
+    fn require_snapshot_layout(&self) -> Result<SnapshotLayout, Box<dyn Error + Send + Sync>> {
         let profile = self.gate.selection().profile;
         snapshot_layout(profile).ok_or_else(|| {
             format!(
@@ -395,12 +395,12 @@ impl Runtime<'_> {
         })
     }
     /// Wall-clock source for labels; the default is a fixed research time so runs repeat.
-    pub fn set_save_clock(&mut self, clock: Box<dyn FnMut() -> SaveTime>) {
+    pub fn set_save_clock(&mut self, clock: Box<dyn FnMut() -> SaveTime + Send>) {
         self.save_clock = clock;
     }
     /// Research inspection: the snapshot the writer would build from the current hosts,
     /// without the live bit-0 change or replacing the held image.
-    pub fn inspect_snapshot(&self) -> Result<EngineSnapshot, Box<dyn Error>> {
+    pub fn inspect_snapshot(&self) -> Result<EngineSnapshot, Box<dyn Error + Send + Sync>> {
         Ok(self.engine_snapshot_with(self.machine.capture_vm()?)?.0)
     }
     /// The held snapshot image (built, loaded, or none).
@@ -417,7 +417,7 @@ impl Runtime<'_> {
     fn engine_snapshot_with(
         &self,
         vm: crate::machine::VmImage,
-    ) -> Result<(EngineSnapshot, Vec<u8>), Box<dyn Error>> {
+    ) -> Result<(EngineSnapshot, Vec<u8>), Box<dyn Error + Send + Sync>> {
         let layout = self.require_snapshot_layout()?;
         if self.scene.has_effect_pools()
             && !effect_state_supported(self.gate.selection().profile, &self.scene)
@@ -535,7 +535,7 @@ impl Runtime<'_> {
     }
 
     /// The 600-byte header 0x140069270 (or CVNS 0x44ebf0) prepares at +11204 / +22816.
-    fn snapshot_header(&mut self) -> Result<[u8; HEADER_SIZE], Box<dyn Error>> {
+    fn snapshot_header(&mut self) -> Result<[u8; HEADER_SIZE], Box<dyn Error + Send + Sync>> {
         let mut header = [0u8; HEADER_SIZE];
         let (signature, word8, version) = match self.save_family() {
             SaveFamily::Cmvs => (*b"CSV2", HEADER_WORD_8, 4u16),
@@ -563,7 +563,7 @@ impl Runtime<'_> {
     fn capture_cvns_snapshot(
         &self,
         vm: crate::machine::VmImage,
-    ) -> Result<(Vec<u8>, Vec<u8>), Box<dyn Error>> {
+    ) -> Result<(Vec<u8>, Vec<u8>), Box<dyn Error + Send + Sync>> {
         let starts = self.bootstrap.cvns_persistent_starts();
         let variables = CvnsLocalVariables::capture(self.machine.state(), starts)?;
         let clear = self.scene.clear();
@@ -610,7 +610,7 @@ impl Runtime<'_> {
     pub(super) fn capture_snapshot(
         &mut self,
         vm: crate::machine::VmImage,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let layout = self.require_snapshot_layout()?;
         let (bytes, script_image) = if layout == SnapshotLayout::CvnsCsp1 {
             self.capture_cvns_snapshot(vm)?
@@ -635,7 +635,7 @@ impl Runtime<'_> {
     /// The directory and backend gameplay slots are written to: only an independent user directory.
     pub(super) fn slot_target(
         &self,
-    ) -> Result<(std::path::PathBuf, Arc<dyn HostFs>), Box<dyn Error>> {
+    ) -> Result<(std::path::PathBuf, Arc<dyn HostFs>), Box<dyn Error + Send + Sync>> {
         match &self.system_output {
             Some(SystemOutput::Profile(profile)) => {
                 Ok((profile.directory().to_path_buf(), Arc::clone(profile.fs())))
@@ -651,7 +651,11 @@ impl Runtime<'_> {
     /// original enters callback 30 (0x140068770) when registered; this title never registers
     /// it, and the command flags applied afterwards are not modeled, so an enabled callback
     /// is an error except for the pre-load backup, whose context the load replaces.
-    fn write_slot(&mut self, slot: u16, before_load: bool) -> Result<bool, Box<dyn Error>> {
+    fn write_slot(
+        &mut self,
+        slot: u16,
+        before_load: bool,
+    ) -> Result<bool, Box<dyn Error + Send + Sync>> {
         if self.slot_edit.is_some() {
             return Err("finish the pending slot edit before writing a gameplay save".into());
         }
@@ -719,7 +723,7 @@ impl Runtime<'_> {
 
     /// The write 0x22b6 performs, from any point between VM steps. False when no snapshot
     /// has been taken yet, as in the original.
-    pub fn save_slot(&mut self, slot: u16) -> Result<bool, Box<dyn Error>> {
+    pub fn save_slot(&mut self, slot: u16) -> Result<bool, Box<dyn Error + Send + Sync>> {
         if slot > 999 {
             return Err("save slot outside 0..999".into());
         }
@@ -733,7 +737,7 @@ impl Runtime<'_> {
         request: &RuntimeCall,
         slot: u32,
         values: [u32; 2],
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let changed = if slot > 999 {
             false
         } else {
@@ -773,7 +777,7 @@ impl Runtime<'_> {
         &mut self,
         request: &RuntimeCall,
         slot: u32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if slot <= 999 && (self.save_family() != SaveFamily::Cvns || slot != 0) {
             self.write_slot(slot as u16, false)?;
         }
@@ -789,7 +793,7 @@ impl Runtime<'_> {
         request: &RuntimeCall,
         slot: u32,
         backend: &mut impl PlatformBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if slot > 999 || (self.save_family() == SaveFamily::Cvns && slot == 0) {
             request.complete(&mut self.machine, 0x4004)?;
             return Ok(());
@@ -808,7 +812,7 @@ impl Runtime<'_> {
         &mut self,
         slot: u16,
         backend: &mut impl PlatformBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let layout = self.require_snapshot_layout()?;
         if self.scene.has_effect_pools()
             && !effect_state_supported(self.gate.selection().profile, &self.scene)
@@ -853,7 +857,7 @@ impl Runtime<'_> {
         header: &[u8],
         snapshot: &CvnsSnapshot,
         backend: &mut impl PlatformBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let audio = SavedCvnsAudio::decode(&snapshot.audio)?;
         let mut control = self.control.clone();
         control.restore_callbacks(&snapshot.callbacks)?;
@@ -987,7 +991,7 @@ impl Runtime<'_> {
         snapshot: &EngineSnapshot,
         layout: SnapshotLayout,
         backend: &mut impl PlatformBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if snapshot.word_11144 != 1 {
             return Err("saved +11144 value is not modeled".into());
         }
@@ -1216,7 +1220,10 @@ impl Runtime<'_> {
     /// 0x22b8: 0x14006b4a0 builds the thumbnail from the screen capture when one exists,
     /// otherwise from the frame; returns 0x4000. Text glyphs drawn by the desktop font
     /// backend are not part of the core frame.
-    pub(super) fn handle_thumbnail(&mut self, request: &RuntimeCall) -> Result<(), Box<dyn Error>> {
+    pub(super) fn handle_thumbnail(
+        &mut self,
+        request: &RuntimeCall,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let config = self
             .platform
             .thumbnail()
@@ -1238,7 +1245,7 @@ impl Runtime<'_> {
         request: &RuntimeCall,
         start: i32,
         count: i32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let family = self.save_family();
         let mut latest = u32::MAX;
         let in_range = match family {
@@ -1272,7 +1279,7 @@ impl Runtime<'_> {
         request: &RuntimeCall,
         slot: u32,
         text: u32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let comment = self.machine.resolve_string(text)?;
         if comment.len() >= 256 {
             return Err(error(
@@ -1314,7 +1321,7 @@ impl Runtime<'_> {
         img_slot: u32,
         label_slot: u32,
         text_slot: u32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let pc = request.pc();
         let fail = |why: &'static str| error(pc, 0x21ac, why);
         if slot <= 0 || slot > 999 || img_slot >= crate::scene::cvns::CVNS_IMAGES as u32 {
@@ -1404,7 +1411,7 @@ impl Runtime<'_> {
         child: i32,
         label_slot: u32,
         text_slot: u32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let pc = request.pc();
         let fail = |why: &'static str| error(pc, 0x22bd, why);
         if slot < 0 || object > 255 || slot > 999 {
@@ -1509,7 +1516,7 @@ fn replace_file(
     directory: &Path,
     name: &str,
     bytes: &[u8],
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let temporary = directory.join(format!(".{name}.tmp"));
     let _ = fs.remove_file(&temporary);
     let mut file = OpenOptions::new()
@@ -1814,10 +1821,12 @@ mod layout_tests {
             while vm.pending_system().is_none() {
                 vm.step().unwrap();
             }
-            assert!(
-                host.try_handle(&mut vm, &mut files).unwrap(),
-                "0x2bb handled"
-            );
+            let (pc, command) = vm.pending_system().unwrap();
+            host.handle(
+                &mut crate::dispatch::Call::new(&mut vm, pc, command),
+                &mut files,
+            )
+            .unwrap();
             assert_eq!(vm.state().system_integer(0), Some(expected));
         }
     }

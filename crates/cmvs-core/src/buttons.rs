@@ -9,8 +9,7 @@
 // 0x221b supplies an explicit pointer scale. 0x2218/0x2219 remain unhandled.
 // Auxiliary list groups use engine +4552 and are handled in `list`.
 use crate::{
-    bytecode::DecodeError, dispatch::Call, evaluate::error, input::ActionInput, machine::Machine,
-    scene::SceneHost,
+    bytecode::DecodeError, dispatch::Call, evaluate::error, input::ActionInput, scene::SceneHost,
 };
 
 mod list;
@@ -166,25 +165,10 @@ impl ButtonHost {
             .ok()
             .filter(|slot| *slot < BUTTON_GROUPS)
     }
-    pub fn try_handle(
-        &mut self,
-        vm: &mut Machine<'_>,
-        scene: &mut SceneHost,
-    ) -> Result<bool, DecodeError> {
-        let Some((pc, command)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        if !matches!(command, 0x87 | 0x210..=0x215 | 0x21b | 0x370..=0x376 | 0x378..=0x379 | 0x37c..=0x37f)
-        {
-            return Ok(false);
-        }
-        self.handle(&mut Call::new(vm, pc, command), scene)?;
-        Ok(true)
-    }
 
     pub(crate) fn handle(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         scene: &mut SceneHost,
     ) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
@@ -320,26 +304,9 @@ impl ButtonHost {
         Ok(())
     }
 
-    /// 0x2216 (0x1400798c0 → 0x14005f4a0): system result 0 = hovered id or -1.
-    /// 0x2217 (0x140079920 → 0x14005f700): one frame of navigation, hover, press and
-    /// selection; system result 0 = selected id, -10 (released elsewhere), -2 (action 1
-    /// released) or -1. Both return 0x4004.
-    pub fn try_handle_input(
-        &mut self,
-        vm: &mut Machine<'_>,
-        scene: &mut SceneHost,
-        input: &mut ActionInput,
-    ) -> Result<bool, DecodeError> {
-        let Some((pc, command @ (0x216 | 0x217 | 0x21a))) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle_input(&mut Call::new(vm, pc, command), scene, input)?;
-        Ok(true)
-    }
-
     pub(crate) fn handle_input(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         scene: &mut SceneHost,
         input: &mut ActionInput,
     ) -> Result<(), DecodeError> {

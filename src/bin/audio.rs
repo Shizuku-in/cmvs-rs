@@ -1,5 +1,5 @@
 //! Read-only bounded Vorbis verification; no audio device is opened.
-use cmvs_rs::{MAX_PAYLOAD, audio_output::AudioProgram, cmv::CmvIndex};
+use cmvs_rs::{MAX_PAYLOAD, audio_output::AudioProgram, format::cmv::CmvIndex};
 use std::{
     env,
     error::Error,
@@ -20,7 +20,7 @@ Output files must not already exist. Input files are read only.
 Build: cargo build --features audio-output --bin cmvs-audio
 Example: cmvs-audio voice.ogg --pcm voice.f32";
 
-fn run() -> Result<(), Box<dyn Error>> {
+fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut args = env::args_os().skip(1);
     let path = args
         .next()

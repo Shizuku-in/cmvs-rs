@@ -1,10 +1,13 @@
-use cmvs_core::cpz::{CPZ6_HEADER_SIZE, Cpz6Layout};
-use cmvs_core::cpz::{Cpz6Index, data_checksum, lookup_key};
+use cmvs_core::{format::cpz::CPZ6_HEADER_SIZE, format::cpz::Cpz6Layout};
+use cmvs_core::{format::cpz::Cpz6Index, format::cpz::data_checksum, format::cpz::lookup_key};
 use std::io::Cursor;
 
 #[test]
 fn archive_dispatch_distinguishes_unknown_and_truncated_inputs() {
-    use cmvs_core::cpz::{ArchiveError, ArchiveIndex, ArchiveLayout, ArchiveVersion};
+    use cmvs_core::{
+        format::cpz::ArchiveError, format::cpz::ArchiveIndex, format::cpz::ArchiveLayout,
+        format::cpz::ArchiveVersion,
+    };
 
     // CPZ1/CPZ2 are decoded by their own readers; a bare signature is truncated input.
     for (signature, version) in [
@@ -39,7 +42,9 @@ fn archive_dispatch_distinguishes_unknown_and_truncated_inputs() {
 
 #[test]
 fn archive_dispatch_preserves_cpz6_reads_lookup_and_verification() {
-    use cmvs_core::cpz::{ArchiveIndex, ArchiveLayout, ArchiveVersion};
+    use cmvs_core::{
+        format::cpz::ArchiveIndex, format::cpz::ArchiveLayout, format::cpz::ArchiveVersion,
+    };
 
     for i in 0..8 {
         let bytes = vector(i);

@@ -1,5 +1,8 @@
 //! Synchronous browser-worker filesystem adapter over `globalThis.cmvsFs`.
-use cmvs_core::filesystem::{File, HostFile, HostFs, Metadata, OpenOptions};
+use cmvs_core::{
+    host::filesystem::File, host::filesystem::HostFile, host::filesystem::HostFs,
+    host::filesystem::Metadata, host::filesystem::OpenOptions,
+};
 use std::{
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Component, Path, PathBuf},

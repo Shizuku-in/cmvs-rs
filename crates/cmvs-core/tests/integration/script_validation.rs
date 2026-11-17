@@ -1,7 +1,7 @@
 use crate::support::bytecode as synthetic;
 use crate::support::script_validation;
 
-use cmvs_core::{MAX_PAYLOAD, cpz::ArchiveIndex, ps3::Script};
+use cmvs_core::{MAX_PAYLOAD, format::cpz::ArchiveIndex, format::ps3::Script};
 use std::{
     error::Error,
     fs::{File, OpenOptions},
@@ -32,7 +32,11 @@ fn structure_rejects_truncation_and_jump_into_operand() {
     }
 }
 
-fn inspect(name: &str, raw: &[u8], output: &mut impl Write) -> Result<(), Box<dyn Error>> {
+fn inspect(
+    name: &str,
+    raw: &[u8],
+    output: &mut impl Write,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let checked = script_validation::validate(&Script::decode(raw)?)?;
     writeln!(
         output,
@@ -57,7 +61,7 @@ fn inspect(name: &str, raw: &[u8], output: &mut impl Write) -> Result<(), Box<dy
 
 fn record(
     name: &str,
-    raw: Result<Vec<u8>, Box<dyn Error>>,
+    raw: Result<Vec<u8>, Box<dyn Error + Send + Sync>>,
     output: &mut impl Write,
     failed: &mut usize,
 ) -> io::Result<()> {
@@ -97,7 +101,7 @@ fn check_input(
     output: &mut impl Write,
     checked: &mut usize,
     failed: &mut usize,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut file = File::open(path)?;
     if path
         .extension()
@@ -134,7 +138,7 @@ fn check_input(
 /// External files are never fixtures and are never opened by the default test suite.
 #[test]
 #[ignore = "requires explicit CMVS_SCRIPT_TEST_INPUTS pointing to external read-only samples"]
-fn external_script_structure() -> Result<(), Box<dyn Error>> {
+fn external_script_structure() -> Result<(), Box<dyn Error + Send + Sync>> {
     let inputs = std::env::var_os("CMVS_SCRIPT_TEST_INPUTS")
         .ok_or("set CMVS_SCRIPT_TEST_INPUTS with std::env::join_paths-compatible paths")?;
     let paths: Vec<_> = std::env::split_paths(&inputs).collect();

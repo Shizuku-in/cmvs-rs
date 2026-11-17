@@ -3,9 +3,8 @@
 //! with static script sites by `tools/command_inventory.py`; see the Amatsutsumi script audit.
 use crate::support::bytecode as commands;
 use cmvs_core::{
-    platform::RecordingBackend,
-    profile::Registry,
-    runtime::{Runtime, RuntimeEvent, load_start},
+    host::platform::RecordingBackend, profile::Registry, runtime::Runtime, runtime::RuntimeEvent,
+    runtime::load_start,
 };
 use std::{fmt::Write as _, fs, path::Path};
 

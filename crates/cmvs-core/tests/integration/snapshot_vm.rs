@@ -1,9 +1,7 @@
 use cmvs_core::{
-    evaluate::State,
-    ps3::Script,
-    save::{Csv2Layout, Csv2Save},
-    save_menu::SaveHeader,
-    snapshot::{Framing, LocalVariables, VmSnapshot, framing},
+    format::ps3::Script, format::save::Csv2Layout, format::save::Csv2Save,
+    format::snapshot::Framing, format::snapshot::LocalVariables, format::snapshot::VmSnapshot,
+    format::snapshot::framing, runtime::save_menu::SaveHeader, vm::evaluate::State,
 };
 use std::collections::BTreeMap;
 
@@ -180,7 +178,7 @@ fn malformed_local_records_fail_without_partial_values() {
     let valid = LocalVariables::from_state(&known_state())
         .unwrap()
         .encode_records();
-    let list = cmvs_core::snapshot::parse_records(&valid).unwrap();
+    let list = cmvs_core::format::snapshot::parse_records(&valid).unwrap();
     let bodies: BTreeMap<_, _> = list
         .iter()
         .map(|r| (r.tag, valid[r.body.clone()].to_vec()))

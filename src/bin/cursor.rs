@@ -1,4 +1,4 @@
-use cmvs_rs::{cursor::CursorBitmap, platform::MAX_PLATFORM_ASSET};
+use cmvs_rs::{format::cursor::CursorBitmap, host::platform::MAX_PLATFORM_ASSET};
 use std::{
     env,
     error::Error,
@@ -20,7 +20,7 @@ Options (choose at most one export):
 Exports are raw pixels without a header. Output files must not already exist.
 Example: cmvs-cursor 01.cur --rgba cursor.rgba";
 
-fn run() -> Result<(), Box<dyn Error>> {
+fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let args: Vec<_> = env::args_os().skip(1).collect();
     if args.len() == 1 && (args[0] == "--help" || args[0] == "-h") {
         println!("{USAGE}");

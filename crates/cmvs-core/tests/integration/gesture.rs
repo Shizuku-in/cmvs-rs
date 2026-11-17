@@ -1,7 +1,6 @@
+use crate::support::shared_state::SharedState;
 use cmvs_core::{
-    gesture::PointerGesture,
-    machine::{Machine, Step},
-    ps3::Script,
+    format::ps3::Script, host::gesture::PointerGesture, vm::machine::Machine, vm::machine::Step,
 };
 
 fn script(commands: &[(u16, &[u32])]) -> Script {
@@ -36,9 +35,9 @@ fn script(commands: &[(u16, &[u32])]) -> Script {
     raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
     Script::decode(&raw).unwrap()
 }
-fn run(gesture: &mut PointerGesture, vm: &mut Machine<'_>) -> bool {
+fn run(gesture: &mut PointerGesture, vm: &mut Machine) -> bool {
     while !matches!(vm.step().unwrap(), Step::System { .. }) {}
-    gesture.try_handle(vm).unwrap()
+    gesture.shared_state(vm).unwrap()
 }
 fn tracking_is_reset(gesture: &PointerGesture) -> bool {
     [44, 88, 172]
@@ -92,7 +91,7 @@ fn region_setter_requires_all_six_arguments_before_committing() {
         let before_vm = (vm.pc(), vm.stack().len_bytes(), vm.pending_system());
         let mut gesture = PointerGesture::default();
         let before = gesture.clone();
-        assert!(gesture.try_handle(&mut vm).is_err());
+        assert!(gesture.shared_state(&mut vm).is_err());
         assert_eq!(gesture, before);
         assert_eq!(
             (vm.pc(), vm.stack().len_bytes(), vm.pending_system()),
@@ -167,7 +166,7 @@ fn missing_arguments_keep_the_command_pending() {
     let mut gesture = PointerGesture::default();
     vm.step().unwrap();
     vm.step().unwrap();
-    assert!(gesture.try_handle(&mut vm).is_err());
+    assert!(gesture.shared_state(&mut vm).is_err());
     assert_eq!(vm.pending_system(), Some((8, 0x351)));
     assert_eq!(vm.stack().len_bytes(), 4);
     assert_eq!(gesture, PointerGesture::default());
@@ -175,7 +174,7 @@ fn missing_arguments_keep_the_command_pending() {
 
 #[test]
 fn drag_press_query_can_force_tracking_without_consuming_the_press() {
-    use cmvs_core::input::{ActionInput, CodeInput, KeyBindings};
+    use cmvs_core::{host::input::ActionInput, host::input::CodeInput, host::input::KeyBindings};
     let script = script(&[
         (0x2350, &[1]),
         (0x2352, &[1]),
@@ -203,11 +202,11 @@ fn drag_press_query_can_force_tracking_without_consuming_the_press() {
     for active in [0, 1] {
         while !matches!(vm.step().unwrap(), Step::System { .. }) {}
         assert_eq!(
-            cmvs_core::dispatch::run(
+            cmvs_core::vm::dispatch::run(
                 cmvs_core::profile::Semantics::Root,
                 &mut vm,
-                &mut cmvs_core::dispatch::Hosts {
-                    input: Some(cmvs_core::dispatch::InputHosts {
+                &mut cmvs_core::vm::dispatch::Hosts {
+                    input: Some(cmvs_core::vm::dispatch::InputHosts {
                         input: &mut input,
                         skip: false,
                         clock: Some(123)
@@ -217,7 +216,7 @@ fn drag_press_query_can_force_tracking_without_consuming_the_press() {
                 }
             )
             .unwrap(),
-            Some(cmvs_core::dispatch::Flow::Done)
+            Some(cmvs_core::vm::dispatch::Flow::Done)
         );
         assert_eq!(vm.state().system_integer(0), Some(1));
         assert_eq!(gesture.field(120), Some(active));

@@ -76,7 +76,7 @@ impl RuntimeCall {
         self.command
     }
     /// Reject stale work before any runtime side effect or VM acknowledgement.
-    pub fn validate(&self, vm: &Machine<'_>) -> Result<(), DecodeError> {
+    pub fn validate(&self, vm: &Machine) -> Result<(), DecodeError> {
         if vm.pending_system() != Some((self.pc, self.command))
             || vm.stack().len_bytes() != self.stack_len
             || (0..self.arguments.count_ones() as usize)
@@ -90,7 +90,7 @@ impl RuntimeCall {
         }
         Ok(())
     }
-    pub fn complete(&self, vm: &mut Machine<'_>, flags: u16) -> Result<Flow, DecodeError> {
+    pub fn complete(&self, vm: &mut Machine, flags: u16) -> Result<Flow, DecodeError> {
         self.validate(vm)?;
         Call {
             vm,
@@ -102,15 +102,15 @@ impl RuntimeCall {
     }
 }
 
-pub(crate) struct Call<'a, 'script> {
-    pub vm: &'a mut Machine<'script>,
+pub(crate) struct Call<'a> {
+    pub vm: &'a mut Machine,
     pub pc: usize,
     pub command: u16,
     arguments: u64,
 }
 
-impl<'a, 'script> Call<'a, 'script> {
-    pub(crate) fn new(vm: &'a mut Machine<'script>, pc: usize, command: u16) -> Self {
+impl<'a> Call<'a> {
+    pub(crate) fn new(vm: &'a mut Machine, pc: usize, command: u16) -> Self {
         Self {
             vm,
             pc,

@@ -230,7 +230,7 @@ pub struct TextObject {
 /// Face names use the game's encoding, sizes and widths use pixels, and glyph codes
 /// follow [`crate::TextEncoding`]. The core applies minimum advances and spacing
 /// separately. This service measures glyphs; the host also needs a rasterizer to draw them.
-pub trait GlyphMetrics: std::fmt::Debug {
+pub trait GlyphMetrics: std::fmt::Debug + Send {
     /// A display-only face name in the game encoding; internal handles stay in saves.
     fn display_face_name(&self, _face: &[u8]) -> Option<Vec<u8>> {
         None
@@ -259,6 +259,18 @@ pub trait GlyphMetrics: std::fmt::Debug {
         }
         self.ink_width(face, code, size)
     }
+}
+
+/// Rasterizes recorded message and auxiliary-text glyphs into padded RGBA cells.
+///
+/// Implementations return a `glyph.size + 4` square cell (two padding pixels per side)
+/// in straight-alpha RGBA, matching the engine's glyph-cell convention.
+pub trait GlyphRasterizer {
+    /// Rasterize `glyph` into an [`RgbaImage`](crate::raster::RgbaImage).
+    fn rasterize_glyph(
+        &mut self,
+        glyph: &RecordedGlyph,
+    ) -> Result<crate::raster::RgbaImage, crate::FormatError>;
 }
 
 /// Window, text, and font-slot state updated by message commands.
@@ -488,6 +500,157 @@ impl MessageHost {
             .map(|window| &window.object)
             .chain(self.cvns.iter().flat_map(|cvns| cvns.visible_objects()))
     }
+    /// Build drawable scene objects for all visible text and auxiliary-text glyphs.
+    ///
+    /// Visible message windows are returned separately by [`Self::visible_window_objects`].
+    pub fn build_glyph_objects(
+        &self,
+        rasterizer: &mut dyn GlyphRasterizer,
+    ) -> Result<Vec<SceneObject>, crate::FormatError> {
+        let mut objects = Vec::new();
+        let mut visible_glyphs = 0;
+        for text in (0..TEXT_OBJECTS)
+            .filter_map(|i| self.text(i))
+            .filter(|t| t.visible && !t.glyphs.is_empty())
+        {
+            let scale = f32::from_bits(text.scale_bits);
+            if !scale.is_finite() || scale < 0.0 {
+                return Err(crate::FormatError(
+                    "font preview requires finite nonnegative scale",
+                ));
+            }
+            // A text created with its own logical size (NATSUUTA 0x211c) is drawn in that
+            // space; as for logically scaled scene objects, the device over logical width
+            // scales both axes, including the anchor. The scene's logical sizing applies
+            // it to the final vertices, so fractional device anchors are kept. Other
+            // builds keep refusing it.
+            let screen = self.screen_size();
+            let logical_size = if text.logical_size == screen.map(|v| v as i32) {
+                [0, 0]
+            } else if !self.allows_logical_text_scale() {
+                return Err(crate::FormatError(
+                    "font preview requires text coordinates matching the logical screen",
+                ));
+            } else if text.logical_size[0] > 0 {
+                text.logical_size.map(|v| v as u32)
+            } else {
+                return Err(crate::FormatError(
+                    "font preview requires a positive logical text width",
+                ));
+            };
+            let mut parent_draw = crate::scene::DrawState::default();
+            parent_draw.words[8..10].copy_from_slice(&text.position.map(|v| v as u32));
+            parent_draw.words[10] = text.layer as u32;
+            parent_draw.words[18..20].fill(scale.to_bits());
+            // The original text scene object owns attached glyph children. Scaling
+            // acts on their relative positions and padded cells, not the text anchor.
+            // Glyph children inherit the parent's logical factor (flag bit 0).
+            let mut parent = SceneObject {
+                draw: Some(parent_draw),
+                flags: 0xffff_ffff,
+                logical_size,
+                ..SceneObject::default()
+            };
+            for glyph in text.glyphs.iter().filter(|g| g.shown && g.opacity != 0) {
+                if visible_glyphs >= 512 {
+                    return Err(crate::FormatError(
+                        "font preview exceeds 512 visible glyphs",
+                    ));
+                }
+                visible_glyphs += 1;
+                let pixels = rasterizer.rasterize_glyph(glyph)?;
+                let mut draw = crate::scene::DrawState::default();
+                draw.words[4] = glyph.reveal_width.min(pixels.width());
+                draw.words[5] = pixels.height();
+                draw.words[8] = (glyph.position[0] as u32).wrapping_sub(2);
+                draw.words[9] = (glyph.position[1] as u32).wrapping_sub(2);
+                draw.words[10] = text.layer as u32;
+                draw.words[17] = glyph.opacity;
+                parent.children.insert(
+                    parent.children.len() as u16,
+                    SceneObject {
+                        image: Some(crate::scene::ObjectImage {
+                            filter: None,
+                            name: Vec::new(),
+                            pixels,
+                            alpha: true,
+                            surface: false,
+                        }),
+                        draw: Some(draw),
+                        ..SceneObject::default()
+                    },
+                );
+            }
+            objects.push(parent);
+        }
+        // 0x140015da0 queues the +4328 auxiliary atlas objects after the text objects and
+        // before the windows. Attached glyphs (0x14002eb10) inherit the atlas position,
+        // opacity and mode-4 second texture, keep the layer they were attached with, and
+        // queue independently.
+        for group in (0..AUXILIARY_TEXTS)
+            .filter_map(|i| self.auxiliary_text(i))
+            .filter(|g| g.attached_glyphs().next().is_some())
+        {
+            let mut parent_draw = crate::scene::DrawState::default();
+            parent_draw.words[8..10].copy_from_slice(&group.glyph_origin()?.map(|v| v as u32));
+            parent_draw.texture_mode = group
+                .object
+                .draw
+                .as_ref()
+                .map_or(0, |draw| draw.texture_mode);
+            let mut parent = SceneObject {
+                draw: Some(parent_draw),
+                secondary_image: group.secondary_image.clone(),
+                flags: 0x8000_0000,
+                ..SceneObject::default()
+            };
+            for glyph in group.attached_glyphs() {
+                let pixels = rasterizer.rasterize_glyph(&RecordedGlyph {
+                    snapshot_indices: None,
+                    face: glyph.face.clone(),
+                    bold: false,
+                    revision_alpha: glyph.revision_alpha,
+                    code: glyph.code,
+                    position: glyph.position,
+                    size: glyph.size,
+                    colors: glyph.colors,
+                    gradient: glyph.gradient,
+                    outline: glyph.outline,
+                    delay_ms: 0,
+                    elapsed_ms: 0,
+                    duration_ms: 0,
+                    active: false,
+                    shown: true,
+                    opacity: 255,
+                    reveal_mode: 0,
+                    reveal_width: glyph.size + 4,
+                })?;
+                let mut draw = crate::scene::DrawState::default();
+                draw.words[4] = pixels.width();
+                draw.words[5] = pixels.height();
+                draw.words[8] = (glyph.position[0] as u32).wrapping_sub(2);
+                draw.words[9] = (glyph.position[1] as u32).wrapping_sub(2);
+                draw.words[10] = glyph.layer;
+                parent.children.insert(
+                    parent.children.len() as u16,
+                    SceneObject {
+                        image: Some(crate::scene::ObjectImage {
+                            filter: None,
+                            name: Vec::new(),
+                            pixels,
+                            alpha: true,
+                            surface: false,
+                        }),
+                        draw: Some(draw),
+                        flags: 1,
+                        ..SceneObject::default()
+                    },
+                );
+            }
+            objects.push(parent);
+        }
+        Ok(objects)
+    }
     pub fn text(&self, index: usize) -> Option<&TextObject> {
         self.texts.get(index)?.as_ref()
     }
@@ -515,7 +678,7 @@ impl MessageHost {
 
     pub(crate) fn handle_cvns(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
     ) -> Result<crate::dispatch::Flow, DecodeError> {
         if call.command == 0x601 {
             let tile_index = call.argument(4, "glyph tile index")?;
@@ -535,9 +698,9 @@ impl MessageHost {
 
     pub(crate) fn handle_cvns_image(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         source: &mut dyn ImageSource,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if call.command == 0x600 {
             let name_ref = call.argument(4, "external glyph sheet")?;
             let glyph_size = call.argument(8, "external glyph size")?;
@@ -560,7 +723,7 @@ impl MessageHost {
 
     pub(crate) fn handle_cvns_input(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         input: &mut ActionInput,
     ) -> Result<(), DecodeError> {
         let cvns = self
@@ -571,7 +734,7 @@ impl MessageHost {
 
     pub(crate) fn handle_cvns_wait(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         input: &mut ActionInput,
         flags: crate::message_flags::MessageFlags,
         context: AutoAdvanceContext<'_>,
@@ -591,29 +754,10 @@ impl MessageHost {
             &face,
         )
     }
-    /// 0x215f / 0x140076be0 -> 0x14005dd10: SP-4 window slot (a missing window or a slot of
-    /// 8 or more only sets +12056 bit 0x10000), SP-8/SP-12 offset and SP-16/SP-20 size of a
-    /// rectangle relative to the window position. The input pointer (+868/+872, 0x1400565a0)
-    /// is scaled by configuration word 4 over word 0 (and 5 over 1) with unsigned arithmetic;
-    /// system result 0 = whether it lies in [x, x + w) x [y, y + h). Pops 20.
-    pub fn try_handle_pointer(
-        &mut self,
-        vm: &mut Machine<'_>,
-        input: &ActionInput,
-    ) -> Result<bool, DecodeError> {
-        let Some((pc, command)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        if command != 0x15f {
-            return Ok(false);
-        }
-        self.handle_window_pointer(&mut Call::new(vm, pc, command), input)?;
-        Ok(true)
-    }
 
     pub(crate) fn handle_window_pointer(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         input: &ActionInput,
     ) -> Result<(), DecodeError> {
         let pc = call.pc;
@@ -652,33 +796,10 @@ impl MessageHost {
             .expect("slot 0 exists");
         Ok(())
     }
-    /// 0x2194 / 0x140078890 -> 0x14005dff0: SP-4 window slot (8 or more, or a missing window,
-    /// only sets +12056 bit 0x20000). Results 4 = the last enabled button record under the
-    /// pointer (-1 for none), 5 = action 0 released over the button it was pressed on, 6 =
-    /// action 0 held over a button. A press (0x140054d80) over a button records it at +2536
-    /// and a press elsewhere clears it; a release over a button is consumed (0x140054d90),
-    /// as is a later release while a button is recorded; letting go clears the record. Hit
-    /// rectangles are inclusive, from the window position plus unsigned 16-bit offsets, with
-    /// the pointer scaled by configuration word 4 over word 0 (and 5 over 1) in signed
-    /// arithmetic (imul/idiv). Returns 0x4004.
-    pub fn try_handle_buttons(
-        &mut self,
-        vm: &mut Machine<'_>,
-        input: &mut ActionInput,
-    ) -> Result<bool, DecodeError> {
-        let Some((pc, command)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        if command != 0x194 {
-            return Ok(false);
-        }
-        self.handle_window_buttons(&mut Call::new(vm, pc, command), input)?;
-        Ok(true)
-    }
 
     pub(crate) fn handle_window_buttons(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         input: &mut ActionInput,
     ) -> Result<(), DecodeError> {
         let pc = call.pc;
@@ -744,32 +865,13 @@ impl MessageHost {
         }
         Ok(())
     }
-    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        if is_window_command(command) {
-            self.handle_window(&mut Call::new(vm, pc, command))?;
-            return Ok(true);
-        }
-        if is_text_state_command(command) {
-            self.handle_text_state(&mut Call::new(vm, pc, command))?;
-            return Ok(true);
-        }
-        if command == 0x383 {
-            return match self.handle_auxiliary_scene(&mut Call::new(vm, pc, command), None)? {
-                crate::dispatch::Flow::Done => Ok(true),
-                crate::dispatch::Flow::Unavailable => Err(error(
-                    pc,
-                    command + 0x2000,
-                    "bound auxiliary position requires scene context",
-                )),
-                _ => unreachable!("auxiliary position only completes or lacks scene context"),
-            };
-        }
+    pub(crate) fn try_handle(&mut self, vm: &mut Machine) -> Result<bool, DecodeError> {
         if !self.record_output {
             return Ok(false);
         }
+        let Some((pc, command)) = vm.pending_system() else {
+            return Ok(false);
+        };
         match command {
             0x10b => self.place_text(vm, pc).map(|()| true),
             0x154 => self.place_window_text(vm, pc).map(|()| true),
@@ -780,7 +882,7 @@ impl MessageHost {
         }
     }
 
-    pub(crate) fn handle_text_state(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn handle_text_state(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         match command {
             0x100 | 0x11c => return self.create_text(call),
@@ -865,7 +967,7 @@ impl MessageHost {
         Ok(())
     }
 
-    pub(crate) fn handle_window(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn handle_window(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         if call.command == 0x15e {
             // MIRANOSU 0x14006b310 -> 0x140052290: window +12/+16, not text pen.
             let slot = call_window_slot(call)?;
@@ -913,7 +1015,7 @@ impl MessageHost {
     /// (0x140074210, 0x4004). SP-4 is the group slot, SP-8 the string or pen x, SP-12 pen y.
     /// A missing group only sets +12056 bit 0x1000, which is not modeled. Text output is
     /// recorded only in the explicit text-recording mode, as for 0x2152.
-    fn auxiliary_content(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn auxiliary_content(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         let opcode = 0x2000 + command;
         let count = match command {
@@ -982,7 +1084,7 @@ impl MessageHost {
     /// 0x140073280: slot, font name, glyph size, capacity; returns 0x4010 and
     /// system result 0 = object != null. Only the existing explicit default-font
     /// policy is supported; native font discovery and named faces remain errors.
-    fn create_auxiliary_text(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn create_auxiliary_text(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         let mut args = [0; 4];
         for (i, word) in args.iter_mut().enumerate() {
@@ -1023,7 +1125,7 @@ impl MessageHost {
     /// (0x40b930, pops 12). Set/start without a track are no-ops; the frame update is
     /// 0x40f080, the shared scale interpolation. Missing windows, children or draw states
     /// only set +8108 bit 0x10000 in the original and are errors here.
-    fn scale_motion(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn scale_motion(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         use crate::scene::{SCALE_KEYS, ScaleKey, ScaleMotion, ScalePlayback};
         let command = call.command;
         let count = match command {
@@ -1057,7 +1159,7 @@ impl MessageHost {
             }
             Ok(())
         };
-        let apply = |draw: &mut DrawState, args: &[u32; 8], _: &mut Call<'_, '_>| match command {
+        let apply = |draw: &mut DrawState, args: &[u32; 8], _: &mut Call<'_>| match command {
             0x1c0 => {
                 draw.scale_motion = Some(Box::new(ScaleMotion {
                     base: [args[2], args[3]],
@@ -1102,7 +1204,7 @@ impl MessageHost {
     /// (negative = the window object), then the scene commands' remaining words in the same
     /// order to the same draw +0x80 helpers (0x4128e0 create, 0x4129f0 key, start). Missing
     /// windows or children only set +0x2860 bit 0x10000 in the original and are errors here.
-    fn position_motion(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn position_motion(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         use crate::scene::position_motion;
         let scene_command = call.command + 0x20;
         let count = match call.command {
@@ -1137,7 +1239,7 @@ impl MessageHost {
     /// (negative = the window object), then the scene commands' remaining words in the same
     /// order to the same draw helpers (0x4126a0 create, 0x412780 key, 0x412770 start).
     /// Missing windows or children only set +0x2860 bit 0x10000 and are errors here.
-    fn opacity_track(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn opacity_track(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         use crate::scene::opacity;
         let scene_command = call.command + 0x20;
         let count = if call.command == 0x1cb { 7 } else { 3 };
@@ -1170,12 +1272,12 @@ impl MessageHost {
     /// only sets the window host's bit 0x10000 for missing windows or children.
     fn window_draw_track<const N: usize>(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         names: [&'static str; N],
         count: usize,
         [slot_error, draw_error]: [&'static str; 2],
         check: impl FnOnce(&DrawState, &[u32; N]) -> Result<(), &'static str>,
-        apply: impl FnOnce(&mut DrawState, &[u32; N], &mut Call<'_, '_>),
+        apply: impl FnOnce(&mut DrawState, &[u32; N], &mut Call<'_>),
     ) -> Result<(), DecodeError> {
         let (pc, op) = (call.pc, call.command + 0x2000);
         let fail = |why| error(pc, op, why);
@@ -1225,7 +1327,7 @@ impl MessageHost {
     ///   both pop 16.
     /// - 0x2184: layer (0x14003b0d0, as 0x2047); 0x2186 / 0x140077970: opacity
     ///   (0x14003b0e0, as 0x2048); both pop 12.
-    fn draw(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn draw(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
         let slot = call_window_slot(call)?;
@@ -1296,7 +1398,7 @@ impl MessageHost {
     /// SP-12, which the original does not bound (Rust accepts 0..5); pops 36. 0x2191 stores
     /// the hit rectangle SP-12..SP-24; pops 24. 0x2192 enables the record and shows window
     /// child index + 16 if it exists; pops 8.
-    fn button(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn button(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
         let slot = call_window_slot(call)?;
@@ -1375,7 +1477,7 @@ impl MessageHost {
     /// - 0x211e (0x14005afd0): copies the strings SP-8 and SP-12 into the 64-byte +336 and
     ///   +400 buffers with lstrcpyA, sets +332 = SP-16, clears +464 and the +528/+532 layout
     ///   counters and sets +328 = 1; pops 16.
-    fn text_command(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn text_command(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
         let index = call.argument(4, text_argument_names(call.command)[0])? as i32;
@@ -1447,7 +1549,7 @@ impl MessageHost {
     /// (+324) sizes the glyph texture in 0x14005a6a0: 0 and 196 (0x215d's value) both give
     /// a 1024x2048 texture; other capacities are rejected because textures are not modeled.
     /// Replacing a text object a window caches (+2528) would leave that window stale.
-    fn create_text(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn create_text(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         let op = call.command + 0x2000;
         let index = call.argument(4, text_argument_names(call.command)[0])? as i32;
@@ -1571,7 +1673,7 @@ impl MessageHost {
     ///   0x210f (0x14005ac30): +132 decoration. 0x2110 (0x14005ac70): +152 layer, also on
     ///   the scene object. 0x2113 (0x14005ac50): +124 outline mode, raw. 0x211a /
     ///   0x140073070 (0x14002e860, as 0x2155): +128 glyph parameter, raw.
-    fn text_setter(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn text_setter(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
         let count = match command {
@@ -1701,7 +1803,7 @@ impl MessageHost {
     ///
     /// Stopping (0x21d2 / 0x140026110) is not on the real path yet and stays unhandled;
     /// `advance_frame` runs the per-frame update.
-    fn animation(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn animation(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
         let slot = call_window_slot(call)?;
@@ -1773,7 +1875,7 @@ impl MessageHost {
     ///   yet, so only the pen moves. Pops 4.
     /// - 0x215a / 0x140076b20 -> 0x14005de30: +2472/+2476 = SP-8/SP-12, the switch state 1
     ///   position (the current position is not moved). Pops 12.
-    fn window_text(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn window_text(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
         let slot = call_window_slot(call)?;
@@ -1811,7 +1913,7 @@ impl MessageHost {
     }
     /// 0x2119: encoded display-byte count, without layout or text state changes.
     /// Build-specific evidence: docs/games/chronoclock/vm-semantics.md.
-    fn encoded_length(&self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn encoded_length(&self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         let fail = |why| error(pc, 0x2119, why);
         let index = call.argument(4, text_argument_names(call.command)[0])?;
@@ -1833,7 +1935,7 @@ impl MessageHost {
 
     /// 0x140072ed0 -> 0x14005b360: SP-4 text index, SP-8 string reference.
     /// Read-only layout query: results 0/1/4 = lines/max bytes/final bytes; pops 8.
-    fn measure_layout(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn measure_layout(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         let fail = |why| error(pc, 0x2112, why);
         let index = call.argument(4, text_argument_names(call.command)[0])? as usize;
@@ -1863,7 +1965,7 @@ impl MessageHost {
 
     /// 0x1400731d0 -> 0x14005ca80: SP-4 text index, SP-8 string reference.
     /// System results 0/1/2/4 = success/max count/lines/last count; pops 8.
-    fn measure(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn measure(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         let index = call.argument(4, text_argument_names(call.command)[0])? as usize;
         let bytes = {
@@ -1895,7 +1997,7 @@ impl MessageHost {
     /// 0x140076250 -> 0x14005db60 -> 0x14002e860: SP-4 window slot, SP-8
     /// raw u32 stored at text +128. The wrapper preserves edx despite the decompiler
     /// omitting that parameter. Missing windows set an unmodeled engine error flag.
-    fn glyph_parameter(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn glyph_parameter(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         let slot = call_window_slot(call)?;
         let value = call.argument(8, window_argument_names(call.command)[1])?;
@@ -1921,7 +2023,7 @@ impl MessageHost {
     }
     /// 0x140076ea0 -> 0x14005ddc0: SP-4 slot, SP-8 f32 scale. Both axes of
     /// the window and text draw state receive it; [0.95, 1.05] snaps to 1.0.
-    fn scale(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn scale(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         let slot = call_window_slot(call)?;
         let raw = call.argument(8, window_argument_names(call.command)[1])?;
@@ -1968,7 +2070,7 @@ impl MessageHost {
     /// to the window position (0x14005aac0); +8 is cleared again. Pops 8. The original does
     /// not check the window pointer, and for slots >= 8 it sets +12056 bit 0x10000 and still
     /// writes past the table, so both are errors here.
-    fn show(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn show(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         let slot = call_window_slot(call)?;
         let shown = call.argument(8, window_argument_names(call.command)[1])? != 0;
@@ -2002,7 +2104,7 @@ impl MessageHost {
     /// - 0x214c / 0x1400764e0 -> 0x14005dbc0: for a shown window (+4), +8 = bool(SP-8) and
     ///   the text object and +2520 object are shown exactly when it is clear; a window that
     ///   is not shown is left alone. A missing window only sets the flag. Pops 8.
-    fn presence(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn presence(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
         let slot = call_window_slot(call)?;
@@ -2053,7 +2155,7 @@ impl MessageHost {
     /// word 17 (opacity), 1..3 = words 8..10 (position and layer), float results 8/9 =
     /// words 18/19 (scale). Returns 0x4008. A missing window or child only sets a +12056
     /// flag in the original and a missing draw state is dereferenced; both are errors here.
-    fn draw_query(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn draw_query(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         let slot = call_window_slot(call)?;
         let child = call.argument(8, window_argument_names(call.command)[1])? as i32;
@@ -2094,7 +2196,7 @@ impl MessageHost {
     /// 0x140078a90: system result 0 = the +72 word; 0x4008.
     fn button_state(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         slot: usize,
         index: usize,
     ) -> Result<(), DecodeError> {
@@ -2137,7 +2239,7 @@ impl MessageHost {
             .expect("slot 0 exists");
         Ok(())
     }
-    fn cursor(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn cursor(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         let slot = call_window_slot(call)?;
         let mut word =
@@ -2164,7 +2266,7 @@ impl MessageHost {
         }
         Ok(())
     }
-    fn move_window(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn move_window(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         let slot = call_window_slot(call)?;
         let mut word =
@@ -2214,7 +2316,7 @@ impl MessageHost {
             .position = point;
         Ok(())
     }
-    fn object(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn object(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
         let slot = call_window_slot(call)?;
@@ -2280,7 +2382,7 @@ impl MessageHost {
     /// A negative child frees the +2520 object and leaves its pointer null, which
     /// `MessageWindow` cannot represent, so it stays an error. Missing windows only set
     /// +12056 bit 0x10000.
-    fn destroy_child(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn destroy_child(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         let slot = call_window_slot(call)?;
         let child = call.argument(8, window_argument_names(call.command)[1])? as i32;
@@ -2315,7 +2417,7 @@ impl MessageHost {
         duration: u32,
         images: &mut dyn ImageSource,
         pc: usize,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let count = self.child_slots.count();
         let Some(window) = self.windows[0].as_mut() else {
             return Ok(());
@@ -2331,7 +2433,7 @@ impl MessageHost {
     /// 0x217b / 0x1400772d0 -> 0x14005d280: tests the window's own object
     /// (negative child) or a child pointer, regardless of image, visibility or draw state.
     /// Existing window with missing/out-of-range child returns 0, not an error.
-    fn object_presence(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn object_presence(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         let slot = call_window_slot(call)?;
         let child = call.argument(8, window_argument_names(call.command)[1])? as i32;
@@ -2353,7 +2455,7 @@ impl MessageHost {
 
     /// 0x2171 / 0x140076fd0 -> 0x14003aa30: releases only +6176 on the
     /// window's +2520 object. Children, draw state, text and visibility are retained.
-    fn release_image(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn release_image(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         let slot = call_window_slot(call)?;
         if self.windows[slot].is_none() {
@@ -2368,27 +2470,11 @@ impl MessageHost {
         Ok(())
     }
 
-    /// 0x2170 / 0x140076f00: SP-4 window slot, SP-8 file name. Releases the +2520 object's
-    /// image (0x14003aa30) and reloads it with 0x14003bb10 as 0x2030 does, without a system
-    /// result or the +12032 hook; returns 0x4008. A quiet decode failure only sets +12056
-    /// bit 0x80 (unmodeled), so it is reported like the missing-window case.
-    pub fn try_handle_image(
-        &mut self,
-        vm: &mut Machine<'_>,
-        images: &mut dyn ImageSource,
-    ) -> Result<bool, Box<dyn Error>> {
-        let Some((pc, command @ (0x170 | 0x397))) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle_window_image(&mut Call::new(vm, pc, command), images)?;
-        Ok(true)
-    }
-
     pub(crate) fn handle_window_image(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         images: &mut dyn ImageSource,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let pc = call.pc;
         if call.command == 0x397 {
             let slot = call.argument(4, window_argument_names(call.command)[0])? as usize;
@@ -2453,9 +2539,9 @@ impl MessageHost {
     /// +8108 bit 0x80 and leaves no image. Returns 0x400c without a result write.
     fn window_child_image(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         images: &mut dyn ImageSource,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let pc = call.pc;
         let slot = call.argument(4, "window slot")?;
         let child = call.argument(8, "child slot")? as i32;
@@ -2490,7 +2576,7 @@ impl MessageHost {
     /// - 0x2147: +144 (0x14002e850); 0x2148: +136/+140 (0x14005ac40); 0x2149: +132.
     /// - 0x214f / 0x1400765e0 -> 0x14005db80 -> 0x14005ac20: cursor +156/+160 =
     ///   SP-8/SP-12, unconditionally; area and window position stay unchanged. Pops 12.
-    fn set(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn set(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
         let slot = call_window_slot(call)?;
@@ -2558,7 +2644,7 @@ impl MessageHost {
     /// in the +1976 table) and clears the slot; empty slots change nothing. Returns 0x4004.
     /// Slots >= 8 only set +12056 bit 0x10000 (unmodeled); negative slots would index
     /// before the table.
-    fn destroy(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn destroy(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let slot = call_window_slot(call)?;
         call.complete(0x4004)?;
         if let Some(window) = self.windows[slot].take() {
@@ -2572,7 +2658,7 @@ impl MessageHost {
     /// new index, creates the font object there if absent, then builds the text object and
     /// the window. Returns 0x4020. Out-of-range indices only set +12056 bits 0x10000 and
     /// 0x1000 (unmodeled).
-    fn create(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn create(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
         let slot = call_window_slot(call)?;
@@ -2688,11 +2774,11 @@ fn window_target_mut(
 }
 
 /// SP-4 compared signed against 8, as all window handlers do.
-fn window_slot(vm: &Machine<'_>, pc: usize, op: u16) -> Result<usize, DecodeError> {
+fn window_slot(vm: &Machine, pc: usize, op: u16) -> Result<usize, DecodeError> {
     let slot = vm.stack().peek_u32(4).map_err(|e| error(pc, op, e.0))? as i32;
     checked_window_slot(slot as u32, pc, op)
 }
-fn call_window_slot(call: &mut Call<'_, '_>) -> Result<usize, DecodeError> {
+fn call_window_slot(call: &mut Call<'_>) -> Result<usize, DecodeError> {
     let slot = call.argument(4, "window slot")?;
     checked_window_slot(slot, call.pc, call.command + 0x2000)
 }
@@ -2792,9 +2878,6 @@ impl MessageHost {
     }
 }
 
-fn is_window_command(command: u16) -> bool {
-    matches!(command, 0xec | 0x140..=0x151 | 0x155 | 0x15a | 0x15b | 0x15d | 0x15e | 0x171 | 0x178..=0x17c | 0x17f | 0x180 | 0x182..=0x187 | 0x18d | 0x190..=0x192 | 0x195..=0x197 | 0x1cf..=0x1d1)
-}
 fn window_argument_names(command: u16) -> &'static [&'static str] {
     match command {
         0x15e => &["window slot"],
@@ -2885,9 +2968,6 @@ fn window_argument_names(command: u16) -> &'static [&'static str] {
     }
 }
 
-fn is_text_state_command(command: u16) -> bool {
-    matches!(command, 0x100..=0x107 | 0x10c..=0x110 | 0x112..=0x117 | 0x119..=0x11a | 0x11e..=0x11f | 0x380 | 0x382 | 0x385..=0x387 | 0x389 | 0x38c | 0x38e..=0x390 | 0x392..=0x393 | 0x396 | 0x398 | 0x39a..=0x39c | 0x39e..=0x3a0)
-}
 pub(super) fn text_argument_names(command: u16) -> &'static [&'static str] {
     match command {
         0x100 => &["text slot", "font face", "glyph capacity"],

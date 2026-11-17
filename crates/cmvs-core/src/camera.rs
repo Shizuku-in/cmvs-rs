@@ -504,7 +504,7 @@ impl CameraHost {
 
     /// 0x206b/0x206c/0x206d -> 0x14004f5b0/0x14004f680/0x14004f820.
     /// Camera 0 only; first argument mode, last duration, intervening floats XZ/XYZ/Y.
-    fn start_move(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn start_move(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         let fail = |why| error(pc, command + 0x2000, why);
         let count = match command {
@@ -575,7 +575,7 @@ impl CameraHost {
     /// 0x2069 / 0x14006fd90: wait on camera 0, using 0x4004/0xa000/0xc004.
     pub fn try_wait_move(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         gate: SkipGate,
         input: &mut ActionInput,
     ) -> Result<Option<Step>, DecodeError> {
@@ -588,7 +588,7 @@ impl CameraHost {
 
     pub(crate) fn handle_wait_move(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         gate: SkipGate,
         input: &mut ActionInput,
     ) -> Result<Flow, DecodeError> {
@@ -622,18 +622,8 @@ impl CameraHost {
             .expect("result 0 exists");
         Ok(flow)
     }
-    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, command)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        if !matches!(command, 0x56 | 0x58..=0x68 | 0x6a..=0x6d | 0x9c | 0x126 | 0x260..=0x264) {
-            return Ok(false);
-        }
-        self.handle(&mut Call::new(vm, pc, command))?;
-        Ok(true)
-    }
 
-    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn handle(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let (pc, command) = (call.pc, call.command);
         if matches!(call.command, 0x260..=0x264) {
             return self.set_view(call);
@@ -757,7 +747,7 @@ impl CameraHost {
     /// 0x2056 / 0x14006fa20: SP-4 camera, SP-8 query mode, SP-12..20 XYZ,
     /// SP-24 vertical offset, SP-28 reference depth. Returns 0x401c and writes only
     /// integer system results 1..3 with cvttss2si (including its indefinite i32 value).
-    fn project_query(&self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    fn project_query(&self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let pc = call.pc;
         let fail = |why| error(pc, 0x2056, why);
         let mut args = [0; 7];

@@ -9,7 +9,7 @@ pub(crate) struct PcmWave {
     pub rate: u32,
 }
 impl PcmWave {
-    pub fn new(bytes: Arc<[u8]>) -> Result<Self, Box<dyn Error>> {
+    pub fn new(bytes: Arc<[u8]>) -> Result<Self, Box<dyn Error + Send + Sync>> {
         if bytes.len() > cmvs_core::MAX_PAYLOAD
             || bytes.len() < 12
             || &bytes[..4] != b"RIFF"
@@ -162,7 +162,7 @@ mod tests {
         assert!(count.is_multiple_of(usize::from(p.channels())));
         #[cfg(feature = "mixer")]
         {
-            use cmvs_core::audio::AudioBackend;
+            use cmvs_core::host::audio::AudioBackend;
             let path = std::path::PathBuf::from(std::env::var_os("CMVS_TEST_WAV").unwrap());
             let (mut audio, mut output) =
                 crate::NativeAudio::pull(path.parent().unwrap().parent().unwrap(), 48000, 2)

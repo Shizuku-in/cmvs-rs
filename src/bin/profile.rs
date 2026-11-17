@@ -1,7 +1,7 @@
 use cmvs_rs::{
-    digest::{sha256, to_hex},
-    exe::{Arch, PeImage, find_dispatch},
-    profile::{CommandStatus, EXECUTABLE_NAMES, EngineProfile, Family, Registry},
+    format::digest::sha256, format::digest::to_hex, format::exe::Arch, format::exe::PeImage,
+    format::exe::find_dispatch, profile::CommandStatus, profile::EXECUTABLE_NAMES,
+    profile::EngineProfile, profile::Family, profile::Registry,
 };
 use std::{env, error::Error, fs, path::Path};
 
@@ -41,7 +41,7 @@ fn magic(path: &Path) -> String {
     }
 }
 
-fn identify(root: &Path, explicit: Option<&str>) -> Result<(), Box<dyn Error>> {
+fn identify(root: &Path, explicit: Option<&str>) -> Result<(), Box<dyn Error + Send + Sync>> {
     let registry = Registry::builtin();
     println!("# read-only identification of {}", root.display());
     for name in [
@@ -138,7 +138,7 @@ fn identify(root: &Path, explicit: Option<&str>) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn table(root: &Path, id: &str, base: Option<&str>) -> Result<(), Box<dyn Error>> {
+fn table(root: &Path, id: &str, base: Option<&str>) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut found = Vec::new();
     for name in EXECUTABLE_NAMES {
         let path = root.join(name);
@@ -203,7 +203,7 @@ fn range(start: usize, end: usize) -> String {
     }
 }
 
-fn show(id: &str) -> Result<(), Box<dyn Error>> {
+fn show(id: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     let registry = Registry::builtin();
     let profile = registry
         .profile(id)
@@ -269,8 +269,8 @@ fn show(id: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn owners(opcode: Option<&str>) -> Result<(), Box<dyn Error>> {
-    use cmvs_rs::dispatch::ownership::{Chain, candidates};
+fn owners(opcode: Option<&str>) -> Result<(), Box<dyn Error + Send + Sync>> {
+    use cmvs_rs::{vm::dispatch::ownership::Chain, vm::dispatch::ownership::candidates};
     let selected = opcode
         .map(|value| {
             value
@@ -297,7 +297,7 @@ fn owners(opcode: Option<&str>) -> Result<(), Box<dyn Error>> {
         if selected.is_none() && runner.is_empty() && trace.is_empty() {
             continue;
         }
-        let names = |claims: Vec<&cmvs_rs::dispatch::ownership::Claim>| {
+        let names = |claims: Vec<&cmvs_rs::vm::dispatch::ownership::Claim>| {
             if claims.is_empty() {
                 "—".into()
             } else {
@@ -318,7 +318,7 @@ fn owners(opcode: Option<&str>) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn run() -> Result<(), Box<dyn Error>> {
+fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let args: Vec<String> = env::args().skip(1).collect();
     if matches!(args.as_slice(), [flag] if flag == "--help" || flag == "-h")
         || matches!(args.as_slice(), [command, flag]
@@ -329,22 +329,23 @@ fn run() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
     // Options follow the subcommand's positional argument as `--name value` pairs.
-    let options = |allowed: &[&str]| -> Result<Vec<(String, String)>, Box<dyn Error>> {
-        let rest = args.get(2..).unwrap_or_default();
-        let mut parsed = Vec::new();
-        let mut rest = rest.iter();
-        while let Some(flag) = rest.next() {
-            if !allowed.contains(&flag.as_str()) {
-                return Err(format!("unknown option {flag}").into());
+    let options =
+        |allowed: &[&str]| -> Result<Vec<(String, String)>, Box<dyn Error + Send + Sync>> {
+            let rest = args.get(2..).unwrap_or_default();
+            let mut parsed = Vec::new();
+            let mut rest = rest.iter();
+            while let Some(flag) = rest.next() {
+                if !allowed.contains(&flag.as_str()) {
+                    return Err(format!("unknown option {flag}").into());
+                }
+                let value = rest
+                    .next()
+                    .filter(|v| !v.starts_with("--") && *v != "-h")
+                    .ok_or_else(|| format!("{flag} requires a value"))?;
+                parsed.push((flag.clone(), value.clone()));
             }
-            let value = rest
-                .next()
-                .filter(|v| !v.starts_with("--") && *v != "-h")
-                .ok_or_else(|| format!("{flag} requires a value"))?;
-            parsed.push((flag.clone(), value.clone()));
-        }
-        Ok(parsed)
-    };
+            Ok(parsed)
+        };
     let find = |options: &[(String, String)], name: &str| {
         options
             .iter()

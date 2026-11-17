@@ -1,19 +1,26 @@
 use cmvs_core::{
-    buttons::ButtonHost,
-    dispatch::{self, Capability, DispatchError, Flow, Hosts, InputHosts},
-    gesture::PointerGesture,
-    input::ActionInput,
-    machine::Machine,
-    profile::Semantics,
-    scene::SceneHost,
+    host::gesture::PointerGesture, host::input::ActionInput, profile::Semantics,
+    render::scene::SceneHost, runtime::ButtonHost, vm::dispatch, vm::dispatch::Capability,
+    vm::dispatch::DispatchError, vm::dispatch::Flow, vm::dispatch::FunctionKeys,
+    vm::dispatch::Hosts, vm::dispatch::InputHosts, vm::machine::Machine,
 };
 
 pub fn input(
-    vm: &mut Machine<'_>,
+    vm: &mut Machine,
     input: &mut ActionInput,
-) -> Result<bool, Box<dyn std::error::Error>> {
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     if vm.pending_system().is_some_and(|(_, c)| c == 0x34d) {
-        return Ok(cmvs_core::input::try_handle(vm, input)?);
+        return Ok(matches!(
+            dispatch::run(
+                Semantics::Root,
+                vm,
+                &mut Hosts {
+                    function_keys: Some(FunctionKeys::Input(input)),
+                    ..Default::default()
+                }
+            )?,
+            Some(Flow::Done)
+        ));
     }
     Ok(matches!(
         dispatch::run(
@@ -31,11 +38,7 @@ pub fn input(
         Some(Flow::Done)
     ))
 }
-pub fn skipping(
-    vm: &mut Machine<'_>,
-    input: &ActionInput,
-    skip: bool,
-) -> Result<bool, DispatchError> {
+pub fn skipping(vm: &mut Machine, input: &ActionInput, skip: bool) -> Result<bool, DispatchError> {
     let mut input = input.clone();
     Ok(matches!(
         dispatch::run(
@@ -57,24 +60,24 @@ pub fn skipping(
 pub trait SharedControls {
     fn shared_buttons(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         scene: &mut SceneHost,
     ) -> Result<bool, DispatchError>;
     fn shared_button_input(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         scene: &mut SceneHost,
         input: &mut ActionInput,
     ) -> Result<bool, DispatchError>;
     fn shared_list_input(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         scene: &mut SceneHost,
         input: &mut ActionInput,
         gesture: &PointerGesture,
     ) -> Result<bool, DispatchError>;
 }
-fn accepts(vm: &Machine<'_>, capability: Capability) -> bool {
+fn accepts(vm: &Machine, capability: Capability) -> bool {
     vm.pending_system().is_some_and(|(_, c)| {
         dispatch::entry(Semantics::Root, c).is_some_and(|e| e.capability == capability)
     })
@@ -82,7 +85,7 @@ fn accepts(vm: &Machine<'_>, capability: Capability) -> bool {
 impl SharedControls for ButtonHost {
     fn shared_buttons(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         scene: &mut SceneHost,
     ) -> Result<bool, DispatchError> {
         if !accepts(vm, Capability::Buttons) {
@@ -103,7 +106,7 @@ impl SharedControls for ButtonHost {
     }
     fn shared_button_input(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         scene: &mut SceneHost,
         input: &mut ActionInput,
     ) -> Result<bool, DispatchError> {
@@ -130,7 +133,7 @@ impl SharedControls for ButtonHost {
     }
     fn shared_list_input(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         scene: &mut SceneHost,
         input: &mut ActionInput,
         gesture: &PointerGesture,

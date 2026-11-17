@@ -5,11 +5,9 @@ use crate::font_library::FontLibrary;
 use crate::glyph_cache::GlyphCache;
 use ab_glyph::{Font, FontVec, ScaleFont, point};
 use cmvs_core::{
-    FormatError, TextEncoding,
-    camera::CameraHost,
-    message::{AUXILIARY_TEXTS, MessageHost, RecordedGlyph, TEXT_OBJECTS},
-    raster::RgbaImage,
-    scene::{DrawState, ObjectImage, SceneHost, SceneObject},
+    FormatError, TextEncoding, render::camera::CameraHost, render::message::GlyphRasterizer,
+    render::message::MessageHost, render::message::RecordedGlyph, render::raster::RgbaImage,
+    render::scene::SceneHost, render::scene::SceneObject,
 };
 use std::{
     error::Error,
@@ -44,7 +42,7 @@ impl std::fmt::Debug for PreviewMetrics {
         f.write_str("OpenType preview metrics")
     }
 }
-impl cmvs_core::message::GlyphMetrics for PreviewMetrics {
+impl cmvs_core::render::message::GlyphMetrics for PreviewMetrics {
     fn display_face_name(&self, face: &[u8]) -> Option<Vec<u8>> {
         if !face.starts_with(b"CMVS-U-") {
             return None;
@@ -269,7 +267,7 @@ fn paint(
 }
 
 impl FontRenderer {
-    pub fn read(path: &Path, face: u32) -> Result<Self, Box<dyn Error>> {
+    pub fn read(path: &Path, face: u32) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let mut bytes = Vec::new();
         File::open(path)?
             .take(MAX_FONT as u64 + 1)
@@ -320,7 +318,7 @@ impl FontRenderer {
     }
     /// Matches this renderer's fonts; OpenType ink bounds replace GDI's
     /// device metrics. Whitespace deterministically has zero ink extent.
-    pub fn metrics(&self) -> Box<dyn cmvs_core::message::GlyphMetrics> {
+    pub fn metrics(&self) -> Box<dyn cmvs_core::render::message::GlyphMetrics> {
         Box::new(PreviewMetrics(Arc::clone(&self.library), self.encoding))
     }
     /// Whether a face in the game encoding resolves to a font (startup check).
@@ -351,7 +349,11 @@ impl FontRenderer {
         library.face(&face, self.encoding)?;
         Ok(face)
     }
-    pub fn import_font(&self, path: &Path, index: u32) -> Result<Vec<u8>, Box<dyn Error>> {
+    pub fn import_font(
+        &self,
+        path: &Path,
+        index: u32,
+    ) -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
         let mut bytes = Vec::new();
         File::open(path)?
             .take(MAX_FONT as u64 + 1)
@@ -499,147 +501,13 @@ impl FontRenderer {
         &mut self,
         messages: &MessageHost,
     ) -> Result<Vec<SceneObject>, FormatError> {
-        let mut objects = Vec::new();
-        let mut visible_glyphs = 0;
-        for text in (0..TEXT_OBJECTS)
-            .filter_map(|i| messages.text(i))
-            .filter(|t| t.visible && !t.glyphs.is_empty())
-        {
-            let scale = f32::from_bits(text.scale_bits);
-            if !scale.is_finite() || scale < 0.0 {
-                return Err(FormatError(
-                    "font preview requires finite nonnegative scale",
-                ));
-            }
-            // A text created with its own logical size (NATSUUTA 0x211c) is drawn in that
-            // space; as for logically scaled scene objects, the device over logical width
-            // scales both axes, including the anchor. The scene's logical sizing applies
-            // it to the final vertices, so fractional device anchors are kept. Other
-            // builds keep refusing it.
-            let screen = messages.screen_size();
-            let logical_size = if text.logical_size == screen.map(|v| v as i32) {
-                [0, 0]
-            } else if !messages.allows_logical_text_scale() {
-                return Err(FormatError(
-                    "font preview requires text coordinates matching the logical screen",
-                ));
-            } else if text.logical_size[0] > 0 {
-                text.logical_size.map(|v| v as u32)
-            } else {
-                return Err(FormatError(
-                    "font preview requires a positive logical text width",
-                ));
-            };
-            let mut parent_draw = DrawState::default();
-            parent_draw.words[8..10].copy_from_slice(&text.position.map(|v| v as u32));
-            parent_draw.words[10] = text.layer as u32;
-            parent_draw.words[18..20].fill(scale.to_bits());
-            // The original text scene object owns attached glyph children. Scaling
-            // acts on their relative positions and padded cells, not the text anchor.
-            // Glyph children inherit the parent's logical factor (flag bit 0).
-            let mut parent = SceneObject {
-                draw: Some(parent_draw),
-                flags: 0xffff_ffff,
-                logical_size,
-                ..SceneObject::default()
-            };
-            for glyph in text.glyphs.iter().filter(|g| g.shown && g.opacity != 0) {
-                if visible_glyphs >= 512 {
-                    return Err(FormatError("font preview exceeds 512 visible glyphs"));
-                }
-                visible_glyphs += 1;
-                let pixels = self.glyph(glyph)?;
-                let mut draw = DrawState::default();
-                draw.words[4] = glyph.reveal_width.min(pixels.width());
-                draw.words[5] = pixels.height();
-                draw.words[8] = (glyph.position[0] as u32).wrapping_sub(2);
-                draw.words[9] = (glyph.position[1] as u32).wrapping_sub(2);
-                draw.words[10] = text.layer as u32;
-                draw.words[17] = glyph.opacity;
-                parent.children.insert(
-                    parent.children.len() as u16,
-                    SceneObject {
-                        image: Some(ObjectImage {
-                            filter: None,
-                            name: Vec::new(),
-                            pixels,
-                            alpha: true,
-                            surface: false,
-                        }),
-                        draw: Some(draw),
-                        ..SceneObject::default()
-                    },
-                );
-            }
-            objects.push(parent);
-        }
-        // 0x140015da0 queues the +4328 auxiliary atlas objects after the text objects and
-        // before the windows. Attached glyphs (0x14002eb10) inherit the atlas position,
-        // opacity and mode-4 second texture, keep the layer they were attached with, and
-        // queue independently.
-        for group in (0..AUXILIARY_TEXTS)
-            .filter_map(|i| messages.auxiliary_text(i))
-            .filter(|g| g.attached_glyphs().next().is_some())
-        {
-            let mut parent_draw = DrawState::default();
-            parent_draw.words[8..10].copy_from_slice(&group.glyph_origin()?.map(|v| v as u32));
-            parent_draw.texture_mode = group
-                .object
-                .draw
-                .as_ref()
-                .map_or(0, |draw| draw.texture_mode);
-            let mut parent = SceneObject {
-                draw: Some(parent_draw),
-                secondary_image: group.secondary_image.clone(),
-                flags: 0x8000_0000,
-                ..SceneObject::default()
-            };
-            for glyph in group.attached_glyphs() {
-                let pixels = self.glyph(&RecordedGlyph {
-                    snapshot_indices: None,
-                    face: glyph.face.clone(),
-                    bold: false,
-                    revision_alpha: glyph.revision_alpha,
-                    code: glyph.code,
-                    position: glyph.position,
-                    size: glyph.size,
-                    colors: glyph.colors,
-                    gradient: glyph.gradient,
-                    outline: glyph.outline,
-                    delay_ms: 0,
-                    elapsed_ms: 0,
-                    duration_ms: 0,
-                    active: false,
-                    shown: true,
-                    opacity: 255,
-                    reveal_mode: 0,
-                    reveal_width: glyph.size + 4,
-                })?;
-                let mut draw = DrawState::default();
-                draw.words[4] = pixels.width();
-                draw.words[5] = pixels.height();
-                draw.words[8] = (glyph.position[0] as u32).wrapping_sub(2);
-                draw.words[9] = (glyph.position[1] as u32).wrapping_sub(2);
-                draw.words[10] = glyph.layer;
-                parent.children.insert(
-                    parent.children.len() as u16,
-                    SceneObject {
-                        image: Some(ObjectImage {
-                            filter: None,
-                            name: Vec::new(),
-                            pixels,
-                            alpha: true,
-                            surface: false,
-                        }),
-                        draw: Some(draw),
-                        flags: 1,
-                        ..SceneObject::default()
-                    },
-                );
-            }
-            objects.push(parent);
-        }
-        Ok(objects)
+        messages.build_glyph_objects(self)
+    }
+}
+
+impl GlyphRasterizer for FontRenderer {
+    fn rasterize_glyph(&mut self, glyph: &RecordedGlyph) -> Result<RgbaImage, FormatError> {
+        self.glyph(glyph)
     }
 }
 
@@ -659,7 +527,7 @@ mod tests {
         let unsupported = library.register_unicode("😀").unwrap();
         drop(library);
         let library = shared;
-        use cmvs_core::message::GlyphMetrics;
+        use cmvs_core::render::message::GlyphMetrics;
         let metrics = PreviewMetrics(library.clone(), TextEncoding::Gbk);
         assert_eq!(
             metrics.display_face_name(&handle).unwrap(),
@@ -681,7 +549,7 @@ mod tests {
     fn recorded_glyph(code: u16) -> RecordedGlyph {
         RecordedGlyph {
             snapshot_indices: None,
-            face: Arc::from(cmvs_core::settings::DEFAULT_FONT_FACE),
+            face: Arc::from(cmvs_core::host::settings::DEFAULT_FONT_FACE),
             bold: false,
             revision_alpha: false,
             code,
@@ -751,7 +619,7 @@ mod tests {
         assert_eq!(font.glyph(&glyph).unwrap(), normal);
         assert_eq!(font.cache.len(), 3);
         let metrics = font.metrics();
-        let face = cmvs_core::settings::DEFAULT_FONT_FACE;
+        let face = cmvs_core::host::settings::DEFAULT_FONT_FACE;
         let width = metrics.ink_width(face, 65, 27).unwrap();
         assert_eq!(
             metrics.styled_ink_width(face, 65, 27, true).unwrap(),

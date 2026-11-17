@@ -1,12 +1,6 @@
 //! Deterministic startup effects. No files are opened, saved or rendered here.
 //! Unhandled environment-dependent commands remain pending in the VM.
-use crate::{
-    bytecode::DecodeError,
-    cpz::Cpz7Parameters,
-    dispatch::Call,
-    evaluate::error,
-    machine::{Machine, Step},
-};
+use crate::{bytecode::DecodeError, cpz::Cpz7Parameters, dispatch::Call, evaluate::error};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Default)]
@@ -54,19 +48,9 @@ impl Bootstrap {
         &self.cursors
     }
 
-    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<Option<Step>, DecodeError> {
-        let Some((pc, command)) = vm.pending_system() else {
-            return Ok(None);
-        };
-        if !is_command(command) {
-            return Ok(None);
-        }
-        self.handle(&mut Call::new(vm, pc, command))
-            .map(|flow| Some(flow.wait_step()))
-    }
     pub(crate) fn handle(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
     ) -> Result<crate::dispatch::Flow, DecodeError> {
         let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
@@ -217,24 +201,6 @@ impl Bootstrap {
     }
 }
 
-fn is_command(command: u16) -> bool {
-    matches!(
-        command,
-        0x10..=0x16
-            | 0x19
-            | 0x1a
-            | 0x1d..=0x1f
-            | 0x90..=0x94
-            | 0x98
-            | 0x34d
-            | 0x402
-            | 0x425
-            | 0x426
-            | 0x42d
-            | 0x42f
-            | 0x50b..=0x50d
-    )
-}
 fn argument_names(command: u16) -> &'static [&'static str] {
     match command {
         0x10..=0x14 | 0x19 | 0x1a => &["path slot", "resource path"],

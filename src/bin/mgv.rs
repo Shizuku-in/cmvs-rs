@@ -1,6 +1,5 @@
 use cmvs_core::{
-    digest::{sha256, to_hex},
-    mgv::{Decoder, MgvIndex},
+    format::digest::sha256, format::digest::to_hex, format::mgv::Decoder, format::mgv::MgvIndex,
 };
 use cmvs_rs::desktop::video::TheoraStream;
 use std::{
@@ -24,7 +23,7 @@ Audio is not decoded. Video decoding uses the portable Theora backend.
 Build: cargo build --features desktop --bin cmvs-mgv
 Example: cmvs-mgv op.mgv --frame 0 frame.png";
 
-fn run() -> Result<(), Box<dyn Error>> {
+fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.len() == 1 && (args[0] == "--help" || args[0] == "-h") {
         println!("{USAGE}");

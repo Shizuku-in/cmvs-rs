@@ -1,8 +1,6 @@
 use crate::support::shared_state;
 use cmvs_core::{
-    camera::CameraHost,
-    machine::{Machine, Step},
-    ps3::Script,
+    format::ps3::Script, render::camera::CameraHost, vm::machine::Machine, vm::machine::Step,
 };
 use shared_state::SharedState;
 
@@ -28,7 +26,7 @@ fn script(code: &[u8]) -> Script {
     raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
     Script::decode(&raw).unwrap()
 }
-fn pending(vm: &mut Machine<'_>) {
+fn pending(vm: &mut Machine) {
     while !matches!(vm.step().unwrap(), Step::System { .. }) {}
 }
 
@@ -461,7 +459,7 @@ fn projection_during_camera_motion_distinguishes_current_and_target_positions() 
 
 #[test]
 fn camera_motion_wait_natural_finish_and_skip_follow_input_short_circuit_rules() {
-    use cmvs_core::{fade::SkipGate, input::ActionInput};
+    use cmvs_core::{host::input::ActionInput, render::fade::SkipGate};
     for trigger in 0..6 {
         let mut code = vec![];
         call(&mut code, 0x206c, &[1, f(10.0), f(20.0), f(30.0), 400]);
@@ -517,7 +515,7 @@ fn camera_motion_wait_natural_finish_and_skip_follow_input_short_circuit_rules()
 
 #[test]
 fn camera_motion_bad_mode_or_short_parameters_preserve_active_move_stack_and_results() {
-    use cmvs_core::{fade::SkipGate, input::ActionInput};
+    use cmvs_core::{host::input::ActionInput, render::fade::SkipGate};
     for (opcode, args) in [
         (0x206b, vec![2, f(1.0), f(2.0), 100]),
         (0x206c, vec![u32::MAX, 0, 0, 0, 100]),

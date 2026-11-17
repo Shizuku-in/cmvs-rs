@@ -3,12 +3,12 @@
 //! These handlers are used by [`crate::dispatch`]; they do not advance a frame.
 
 // 0x20d0..0x20d3 are inline at 0x140082db4..0x140082e7f and write system result 0.
-use crate::{bytecode::DecodeError, dispatch::Call, machine::Machine};
+use crate::{bytecode::DecodeError, dispatch::Call};
 
 /// Inspected 2007 0x4454a0 -> 0x4120b0: integer degrees and signed radius;
 /// x87 uses a wrapped signed angle times 100 and the f32 PI constant promoted to f64.
 /// CVNS `0x4e7` (degrees) and `0x4ec` (centidegrees, cvns-20050727 0x442ad0) use `f64::consts::PI`.
-pub(crate) fn handle_polar_point(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+pub(crate) fn handle_polar_point(call: &mut Call<'_>) -> Result<(), DecodeError> {
     let degrees = !matches!(call.command, 0xd9 | 0x4ec);
     let pi = if matches!(call.command, 0x4e7 | 0x4ec) {
         std::f64::consts::PI
@@ -27,11 +27,7 @@ fn trunc_f64_i32(v: f64) -> i32 {
     }
 }
 
-fn handle_polar_point_with(
-    call: &mut Call<'_, '_>,
-    degrees: bool,
-    pi: f64,
-) -> Result<(), DecodeError> {
+fn handle_polar_point_with(call: &mut Call<'_>, degrees: bool, pi: f64) -> Result<(), DecodeError> {
     let raw = call.argument(4, "angle")? as i32;
     let angle = if degrees { raw.wrapping_mul(100) } else { raw };
     let radius = f64::from(call.argument(8, "radius")? as i32);
@@ -53,7 +49,7 @@ fn handle_polar_point_with(
 /// CVNS `0x4e8` (cvns-20040730 0x42d1c0 -> 0x43bae0) and `0x4ed` (cvns-20050727 0x433290 -> 0x442bb0):
 /// pops `(x1, y1, x2, y2)` (`0x4010`), writes integer degree `[0, 360)` (`0x4e8`) or
 /// centidegree `[0, 36000)` (`0x4ed`) angle to `system_integer(4)` and distance to `system_integer(5)`.
-pub(crate) fn handle_cartesian_to_polar(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+pub(crate) fn handle_cartesian_to_polar(call: &mut Call<'_>) -> Result<(), DecodeError> {
     let x1 = call.argument(4, "x1")? as i32;
     let y1 = call.argument(8, "y1")? as i32;
     let x2 = call.argument(12, "x2")? as i32;
@@ -90,18 +86,7 @@ pub(crate) fn handle_cartesian_to_polar(call: &mut Call<'_, '_>) -> Result<(), D
     Ok(())
 }
 
-/// 0x20d0: |SP-4| (cdq/xor/sub, so i32::MIN stays), 0x4004. 0x20d1: SP-4 raised to at least
-/// SP-8, then lowered to at most SP-12 (the upper bound wins), 0x400c. 0x20d2 / 0x20d3: the
-/// larger / smaller of SP-4 and SP-8, 0x4008.
-pub fn try_handle(vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-    let Some((pc, command @ 0xd0..=0xd3)) = vm.pending_system() else {
-        return Ok(false);
-    };
-    handle(&mut Call::new(vm, pc, command))?;
-    Ok(true)
-}
-
-pub(crate) fn handle(call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+pub(crate) fn handle(call: &mut Call<'_>) -> Result<(), DecodeError> {
     let command = call.command;
     let count = match command {
         0xd0 => 1,

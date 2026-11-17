@@ -1,8 +1,4 @@
-use cmvs_rs::{
-    MAX_PAYLOAD,
-    bytecode::{self, InstructionKind},
-    ps3::Script,
-};
+use cmvs_rs::{MAX_PAYLOAD, format::ps3::Script, vm::bytecode, vm::bytecode::InstructionKind};
 use std::{collections::BTreeMap, env, error::Error, fs::File, io::Read};
 
 const USAGE: &str = "\
@@ -16,7 +12,7 @@ Options:
 
 Example: cmvs-disasm data/pack/start.ps3";
 
-fn run() -> Result<(), Box<dyn Error>> {
+fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut args = env::args_os().skip(1);
     let path = args.next().ok_or("usage: cmvs-disasm <script>")?;
     if path == "--help" || path == "-h" {

@@ -13,9 +13,8 @@ use crate::{
     target::cap,
 };
 use cmvs_core::{
-    save::Csv2Save,
-    save_menu::{SaveFamily, SaveHeader},
-    snapshot::parse_records,
+    format::save::Csv2Save, format::snapshot::parse_records, runtime::save_menu::SaveFamily,
+    runtime::save_menu::SaveHeader,
 };
 use std::{fs, path::Path};
 

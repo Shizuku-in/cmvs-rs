@@ -5,7 +5,7 @@
 
 // MSVC CRT rand() at 0x1400c77b4: LCG 214013/2531011 with 15-bit output.
 // The original seeds from timeGetTime and draws once per main-loop frame.
-use crate::{bytecode::DecodeError, dispatch::Call, machine::Machine};
+use crate::{bytecode::DecodeError, dispatch::Call};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CrtRandom {
@@ -29,17 +29,8 @@ impl CrtRandom {
         self.state = self.state.wrapping_mul(214013).wrapping_add(2531011);
         (self.state >> 16) & 0x7fff
     }
-    /// 0x20d4 / 0x140074b10: system result 0 = rand() % SP-4, returning 0x4004.
-    /// The generator advances only when the command completes.
-    pub fn try_handle(&mut self, vm: &mut Machine<'_>) -> Result<bool, DecodeError> {
-        let Some((pc, 0xd4)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        self.handle(&mut Call::new(vm, pc, 0xd4))?;
-        Ok(true)
-    }
 
-    pub(crate) fn handle(&mut self, call: &mut Call<'_, '_>) -> Result<(), DecodeError> {
+    pub(crate) fn handle(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let divisor = call.argument(4, "divisor")? as i32;
         if divisor == 0 {
             return Err(call.error("rand() % 0 faults in the original"));

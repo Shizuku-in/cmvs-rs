@@ -8,13 +8,10 @@ use crate::{
     target::{Target, cap},
 };
 use cmvs_core::{
-    audio::RecordingAudio,
-    digest::Sha256,
-    input::{CodeInput, KeyBindings},
-    platform::RecordingBackend,
-    profile::GateErrorKind,
-    ps3::Script,
-    runtime::{Runtime, RuntimeEvent, RuntimeOptions, SaveStorage, SnapshotPolicy},
+    format::digest::Sha256, format::ps3::Script, host::audio::RecordingAudio,
+    host::input::CodeInput, host::input::KeyBindings, host::platform::RecordingBackend,
+    profile::GateErrorKind, runtime::Runtime, runtime::RuntimeEvent, runtime::RuntimeOptions,
+    runtime::SaveStorage, runtime::SnapshotPolicy,
 };
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -126,7 +123,7 @@ fn gate_kind(kind: GateErrorKind) -> &'static str {
 }
 
 pub struct Session<'a> {
-    run: Runtime<'a>,
+    run: Runtime,
     backend: RecordingBackend,
     render_frames: bool,
     font: Option<cmvs_font::font::FontRenderer>,
@@ -220,14 +217,15 @@ impl<'a> Session<'a> {
         if let Some(font) = font {
             run.set_glyph_metrics(font.metrics());
             if !font.has_face(run.settings().font_face()) {
-                run.set_font_face(cmvs_core::settings::DEFAULT_FONT_FACE)
+                run.set_font_face(cmvs_core::host::settings::DEFAULT_FONT_FACE)
                     .map_err(|e| e.to_string())?;
             }
         }
         run.set_random_seed(options.seed);
         let mut backend = RecordingBackend::default();
         backend.set_screen_size(
-            cmvs_core::viewport::ScreenSize::new(run.screen_size()).map_err(|e| e.to_string())?,
+            cmvs_core::render::viewport::ScreenSize::new(run.screen_size())
+                .map_err(|e| e.to_string())?,
         );
         Ok(Self {
             run,
@@ -271,7 +269,7 @@ impl<'a> Session<'a> {
             session
         })
     }
-    pub fn startup(&self) -> &Runtime<'a> {
+    pub fn startup(&self) -> &Runtime {
         &self.run
     }
     /// Starts recording executed addresses; costs one set insertion per VM step.
@@ -367,13 +365,13 @@ impl<'a> Session<'a> {
         let channels = (0..run.audio().se_channel_count())
             .filter(|&i| run.audio().channel(i).is_some())
             .count();
-        let groups = (0..cmvs_core::buttons::BUTTON_GROUPS)
+        let groups = (0..cmvs_core::runtime::BUTTON_GROUPS)
             .filter(|&g| run.buttons().group(g).is_some())
             .count()
-            + (cmvs_core::buttons::BUTTON_GROUPS..crate::controls::GROUPS)
+            + (cmvs_core::runtime::BUTTON_GROUPS..crate::controls::GROUPS)
                 .filter(|&g| {
                     run.buttons()
-                        .list_group(g - cmvs_core::buttons::BUTTON_GROUPS)
+                        .list_group(g - cmvs_core::runtime::BUTTON_GROUPS)
                         .is_some()
                 })
                 .count();
@@ -390,7 +388,7 @@ impl<'a> Session<'a> {
                 return Err(format!("button {group}:{button} is not present"));
             }
             if group
-                .checked_sub(cmvs_core::buttons::BUTTON_GROUPS)
+                .checked_sub(cmvs_core::runtime::BUTTON_GROUPS)
                 .and_then(|slot| self.run.buttons().list_group(slot))
                 .is_some_and(|list| list.disable_navigation)
             {
@@ -453,7 +451,7 @@ impl<'a> Session<'a> {
                         ("command", Json::hex(0x2000 + u64::from(command))),
                         (
                             "semantics",
-                            cmvs_core::dispatch::semantics_name(
+                            cmvs_core::vm::dispatch::semantics_name(
                                 self.run.gate().selection().profile,
                                 command,
                             )
@@ -533,10 +531,10 @@ impl<'a> Session<'a> {
         Ok(observation)
     }
 
-    fn completed_frame(&mut self) -> Result<cmvs_core::raster::RgbaImage, String> {
+    fn completed_frame(&mut self) -> Result<cmvs_core::render::raster::RgbaImage, String> {
         if let Some(movie) = self.run.movie_frame() {
-            use cmvs_core::platform::PlatformBackend;
-            return cmvs_core::raster::movie_canvas(
+            use cmvs_core::host::platform::PlatformBackend;
+            return cmvs_core::render::raster::movie_canvas(
                 movie,
                 self.run.screen_size(),
                 self.backend.render_mode().map_err(|e| e.to_string())? == 1,
@@ -629,7 +627,7 @@ impl<'a> Session<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cmvs_core::{platform::PlatformBackend, runtime::load_start};
+    use cmvs_core::{host::platform::PlatformBackend, runtime::load_start};
 
     #[test]
     #[ignore = "requires CMVS_TEST_FONT; uses only synthetic scripts and archives"]

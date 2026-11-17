@@ -1,5 +1,5 @@
 //! Read-only CMV6 inspection and bounded JBPD frame decoding.
-use cmvs_rs::cmv::{CmvIndex, KIND_JBPX, KIND_OGG};
+use cmvs_rs::{format::cmv::CmvIndex, format::cmv::KIND_JBPX, format::cmv::KIND_OGG};
 use std::{
     env,
     error::Error,
@@ -22,7 +22,7 @@ Output files must not already exist. Input files are read only.
 Ogg audio is located but not decoded; use cmvs-audio to inspect it.
 Example: cmvs-cmv op.cmv --frame 0 frame.png";
 
-fn run() -> Result<(), Box<dyn Error>> {
+fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let path = env::args_os().nth(1).ok_or("usage: cmvs-cmv <movie.cmv>")?;
     if path == "--help" || path == "-h" {
         println!("{USAGE}");

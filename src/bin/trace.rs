@@ -1,29 +1,18 @@
 use cmvs_rs::{
-    MAX_PAYLOAD,
-    audio::{AudioHost, AudioRequest, RecordingAudio},
-    bootstrap::Bootstrap,
-    buttons::ButtonHost,
-    camera::CameraHost,
-    cpz::ArchiveIndex,
-    fade::SkipGate,
-    gesture::PointerGesture,
-    history::HistoryHost,
-    image::ImageArchives,
-    input::ActionInput,
-    machine::{Machine, Step},
-    message_flags::MessageFlags,
-    movie::{DirectoryMovies, MovieHost},
-    platform::{DirectoryAssets, PlatformHost, PlatformRequest, RecordingBackend},
-    profile::{CommandGate, Evidence, FileEvidence, Registry},
-    ps3::Script,
-    random::CrtRandom,
-    save_menu::{DirectorySaves, SaveMenuHost, SlotStatus},
-    scene::SceneHost,
-    script_control::{ArchiveScripts, ControlEvent, ScriptControl},
-    sequence::SequenceHost,
-    snapshot::{SaveImage, SaveTitle},
-    system_save::{FileSystemSave, SystemSaveHost},
-    timers::VmTimers,
+    MAX_PAYLOAD, format::cpz::ArchiveIndex, format::ps3::Script, format::snapshot::SaveImage,
+    format::snapshot::SaveTitle, format::system_save::FileSystemSave,
+    format::system_save::SystemSaveHost, host::audio::AudioHost, host::audio::AudioRequest,
+    host::audio::RecordingAudio, host::gesture::PointerGesture, host::image::ImageArchives,
+    host::input::ActionInput, host::movie::DirectoryMovies, host::movie::MovieHost,
+    host::platform::DirectoryAssets, host::platform::PlatformHost, host::platform::PlatformRequest,
+    host::platform::RecordingBackend, host::random::CrtRandom, profile::CommandGate,
+    profile::Evidence, profile::FileEvidence, profile::Registry, render::camera::CameraHost,
+    render::fade::SkipGate, render::scene::SceneHost, runtime::ButtonHost, runtime::HistoryHost,
+    runtime::MessageFlags, runtime::SequenceHost, runtime::VmTimers, runtime::bootstrap::Bootstrap,
+    runtime::save_menu::DirectorySaves, runtime::save_menu::SaveMenuHost,
+    runtime::save_menu::SlotStatus, runtime::script_control::ArchiveScripts,
+    runtime::script_control::ControlEvent, runtime::script_control::ScriptControl,
+    vm::machine::Machine, vm::machine::Step,
 };
 use std::{collections::BTreeMap, env, error::Error, fs::File, io::Read};
 
@@ -73,19 +62,19 @@ Notes:
     not reproducible.";
 
 // Emit source diagnostics on every return path, including a handler error or budget stop.
-struct TraceGate<'a>(CommandGate<'a>);
-impl<'a> std::ops::Deref for TraceGate<'a> {
-    type Target = CommandGate<'a>;
+struct TraceGate(CommandGate);
+impl std::ops::Deref for TraceGate {
+    type Target = CommandGate;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-impl std::ops::DerefMut for TraceGate<'_> {
+impl std::ops::DerefMut for TraceGate {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
-impl Drop for TraceGate<'_> {
+impl Drop for TraceGate {
     fn drop(&mut self) {
         if self.0.selection().profile.base.is_some() {
             use std::io::Write;
@@ -98,7 +87,7 @@ impl Drop for TraceGate<'_> {
     }
 }
 
-fn number(raw: &std::ffi::OsStr) -> Result<u32, Box<dyn Error>> {
+fn number(raw: &std::ffi::OsStr) -> Result<u32, Box<dyn Error + Send + Sync>> {
     let text = raw.to_str().ok_or("expected numeric argument")?;
     Ok(if let Some(hex) = text.strip_prefix("0x") {
         u32::from_str_radix(hex, 16)?
@@ -107,7 +96,7 @@ fn number(raw: &std::ffi::OsStr) -> Result<u32, Box<dyn Error>> {
     })
 }
 
-fn run() -> Result<(), Box<dyn Error>> {
+fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut args = env::args_os().skip(1);
     let path = args
         .next()
@@ -277,7 +266,9 @@ fn run() -> Result<(), Box<dyn Error>> {
         .state_mut()
         .set_string_slots(gate.selection().profile.string_slots());
     let mut script_source = script_archive
-        .map(|path| -> Result<_, Box<dyn Error>> { ArchiveScripts::new(File::open(path)?) })
+        .map(|path| -> Result<_, Box<dyn Error + Send + Sync>> {
+            ArchiveScripts::new(File::open(path)?)
+        })
         .transpose()?;
     let profile = gate.selection().profile;
     let mut control = ScriptControl::for_profile(profile, virtual_tick);
@@ -311,9 +302,9 @@ fn run() -> Result<(), Box<dyn Error>> {
         Vec::new()
     };
     let mut effects =
-        cmvs_rs::save_menu::profile_int(&cfg_bytes, "SYSTEM_INFO", "EFFECT_USE", 1) != 0;
+        cmvs_rs::runtime::save_menu::profile_int(&cfg_bytes, "SYSTEM_INFO", "EFFECT_USE", 1) != 0;
     let mut message_flags = MessageFlags::from_ini(&cfg_bytes);
-    let mut settings = cmvs_rs::settings::SettingsHost::from_ini(&cfg_bytes);
+    let mut settings = cmvs_rs::host::settings::SettingsHost::from_ini(&cfg_bytes);
     let mut buttons = ButtonHost::default();
     let mut movies = MovieHost::default();
     let mut sequence = SequenceHost::default();
@@ -322,7 +313,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut input = ActionInput::default();
     let mut audio = AudioHost::for_profile(profile, &cfg_bytes);
     if profile.is_cvns() {
-        let cfg = cmvs_rs::settings::Configuration::new(cfg_bytes.clone())?;
+        let cfg = cmvs_rs::host::settings::Configuration::new(cfg_bytes.clone())?;
         scene.set_screen_size(cfg.screen_size_for_profile(profile)?);
     }
     let mut audio_backend = RecordingAudio::default();
@@ -390,31 +381,32 @@ fn run() -> Result<(), Box<dyn Error>> {
                 println!(
                     "# UNREVIEWED system command 0x{:04x} allowed with {} (default policy, first use)",
                     0x2000 + first,
-                    cmvs_rs::dispatch::semantics_name(gate.selection().profile, first)
+                    cmvs_rs::vm::dispatch::semantics_name(gate.selection().profile, first)
                 );
             }
             let wait_gate = SkipGate {
                 skip: message_flags.skip() || message_flags.cvns_read_skipping(),
                 ..SkipGate::default()
             };
-            if cmvs_rs::dispatch::uses_bootstrap_for(resolved.semantics, command) {
-                let mut hosts = cmvs_rs::dispatch::Hosts::default();
+            if cmvs_rs::vm::dispatch::uses_bootstrap_for(resolved.semantics, command) {
+                let mut hosts = cmvs_rs::vm::dispatch::Hosts::default();
                 if command == 0x34d {
                     if platform_assets.is_some() {
                         hosts.function_keys =
-                            Some(cmvs_rs::dispatch::FunctionKeys::Input(&mut input));
+                            Some(cmvs_rs::vm::dispatch::FunctionKeys::Input(&mut input));
                     } else if let Some(host) = &mut bootstrap {
-                        hosts.function_keys = Some(cmvs_rs::dispatch::FunctionKeys::Runtime(host));
+                        hosts.function_keys =
+                            Some(cmvs_rs::vm::dispatch::FunctionKeys::Runtime(host));
                     }
                 } else {
                     hosts.bootstrap = bootstrap.as_mut();
                 }
-                if cmvs_rs::dispatch::run(resolved.semantics, &mut machine, &mut hosts)?
-                    == Some(cmvs_rs::dispatch::Flow::Done)
+                if cmvs_rs::vm::dispatch::run(resolved.semantics, &mut machine, &mut hosts)?
+                    == Some(cmvs_rs::vm::dispatch::Flow::Done)
                 {
                     if let Some(&interval) = bootstrap.as_ref().and_then(|host| {
                         host.settings()
-                            .get(&(0x2000 + cmvs_rs::cvns::cmd::FRAME_INTERVAL))
+                            .get(&(0x2000 + cmvs_rs::vm::cvns::cmd::FRAME_INTERVAL))
                     }) {
                         settings.cvns_mut().frame_interval_ms = interval;
                     }
@@ -443,12 +435,12 @@ fn run() -> Result<(), Box<dyn Error>> {
             let paths = bootstrap.as_ref().map_or(&no_paths, Bootstrap::paths);
             let mut registered_images = images.as_mut().map(|images| images.with_paths(paths));
             let is_movie_player =
-                cmvs_rs::dispatch::uses_movie_player_for(resolved.semantics, command);
+                cmvs_rs::vm::dispatch::uses_movie_player_for(resolved.semantics, command);
             let movie_settings = audio.settings();
             let mut movie_source = movie_root
                 .as_ref()
                 .map(|root| DirectoryMovies::new(root, paths.get(&(0x2015, 0)).map(Vec::as_slice)));
-            let mut hosts = cmvs_rs::dispatch::Hosts {
+            let mut hosts = cmvs_rs::vm::dispatch::Hosts {
                 buttons: platform_assets.is_some().then_some(&mut buttons),
                 movies: platform_assets.is_some().then_some(&mut movies),
                 timers: platform_assets.is_some().then_some(&mut timers),
@@ -465,50 +457,48 @@ fn run() -> Result<(), Box<dyn Error>> {
             };
             if platform_assets.is_some() {
                 if is_movie_player {
-                    hosts.movie_player =
-                        movie_source
-                            .as_mut()
-                            .map(|source| cmvs_rs::dispatch::MoviePlayerHosts {
-                                source,
-                                settings: movie_settings,
-                                backend: &mut audio_backend,
-                            });
+                    hosts.movie_player = movie_source.as_mut().map(|source| {
+                        cmvs_rs::vm::dispatch::MoviePlayerHosts {
+                            source,
+                            settings: movie_settings,
+                            backend: &mut audio_backend,
+                        }
+                    });
                 } else {
-                    hosts.audio = Some(cmvs_rs::dispatch::AudioHosts {
+                    hosts.audio = Some(cmvs_rs::vm::dispatch::AudioHosts {
                         audio: &mut audio,
                         backend: &mut audio_backend,
                     });
                 }
             }
-            if platform_assets.is_some() && cmvs_rs::dispatch::uses_sequence(command) {
-                hosts.sequence = Some(cmvs_rs::dispatch::SequenceHosts {
+            if platform_assets.is_some() && cmvs_rs::vm::dispatch::uses_sequence(command) {
+                hosts.sequence = Some(cmvs_rs::vm::dispatch::SequenceHosts {
                     host: &mut sequence,
                     execution: if bootstrap.is_some() {
-                        registered_images.as_mut().map(|images| {
-                            cmvs_rs::sequence::SequenceContext {
+                        registered_images
+                            .as_mut()
+                            .map(|images| cmvs_rs::runtime::SequenceContext {
                                 scene: &mut scene,
                                 images,
                                 camera: Some(&mut camera),
                                 messages: None,
-                            }
-                        })
+                            })
                     } else {
                         None
                     },
                 });
             } else {
                 hosts.camera = platform_assets.is_some().then_some(&mut camera);
-                if cmvs_rs::dispatch::uses_images(command) {
-                    hosts.images =
-                        registered_images
-                            .as_mut()
-                            .map(|source| cmvs_rs::dispatch::ImageHosts {
-                                scene: &mut scene,
-                                source,
-                                change_images: false,
-                            });
-                } else if platform_assets.is_some() && cmvs_rs::dispatch::is_wait(command) {
-                    hosts.waits = Some(cmvs_rs::dispatch::WaitHosts {
+                if cmvs_rs::vm::dispatch::uses_images(command) {
+                    hosts.images = registered_images.as_mut().map(|source| {
+                        cmvs_rs::vm::dispatch::ImageHosts {
+                            scene: &mut scene,
+                            source,
+                            change_images: false,
+                        }
+                    });
+                } else if platform_assets.is_some() && cmvs_rs::vm::dispatch::is_wait(command) {
+                    hosts.waits = Some(cmvs_rs::vm::dispatch::WaitHosts {
                         scene: Some(&mut scene),
                         camera: None,
                         input: &mut input,
@@ -517,7 +507,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                     });
                 } else if platform_assets.is_some() {
                     hosts.scene = Some(&mut scene);
-                    hosts.input = Some(cmvs_rs::dispatch::InputHosts {
+                    hosts.input = Some(cmvs_rs::vm::dispatch::InputHosts {
                         input: &mut input,
                         skip: wait_gate.skip,
                         clock: None,
@@ -527,7 +517,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             hosts.system_read =
                 system_source
                     .as_mut()
-                    .map(|source| cmvs_rs::dispatch::SystemReadHosts {
+                    .map(|source| cmvs_rs::vm::dispatch::SystemReadHosts {
                         host: &mut system_host,
                         source,
                         game_id: bootstrap
@@ -538,26 +528,27 @@ fn run() -> Result<(), Box<dyn Error>> {
                             .map(|host| host.cvns_persistent_starts())
                             .unwrap_or_default(),
                     });
-            hosts.scripts = script_source
-                .as_mut()
-                .map(|source| cmvs_rs::dispatch::ScriptHosts {
-                    host: &mut control,
-                    source,
-                });
+            hosts.scripts =
+                script_source
+                    .as_mut()
+                    .map(|source| cmvs_rs::vm::dispatch::ScriptHosts {
+                        host: &mut control,
+                        source,
+                    });
             hosts.save_source = saves
                 .as_mut()
-                .map(|source| source as &mut dyn cmvs_rs::save_menu::SaveSource);
+                .map(|source| source as &mut dyn cmvs_rs::runtime::save_menu::SaveSource);
             if hosts.save_source.is_some() || platform_assets.is_some() {
                 hosts.popup = Some(&mut save_menu);
             }
-            hosts.snapshot = Some(cmvs_rs::dispatch::SnapshotHosts {
+            hosts.snapshot = Some(cmvs_rs::vm::dispatch::SnapshotHosts {
                 image: &mut save_image,
                 capture: false,
                 continue_without_image: continue_without_snapshot,
             });
             let previous = platform_backend.requests().len();
             if let Some(assets) = &mut platform_assets {
-                hosts.platform = Some(cmvs_rs::dispatch::PlatformHosts {
+                hosts.platform = Some(cmvs_rs::vm::dispatch::PlatformHosts {
                     host: &mut platform_host,
                     backend: &mut platform_backend,
                     assets,
@@ -567,9 +558,10 @@ fn run() -> Result<(), Box<dyn Error>> {
                         .unwrap_or(&[]),
                 });
             }
-            let dispatched = cmvs_rs::dispatch::run(resolved.semantics, &mut machine, &mut hosts)?;
+            let dispatched =
+                cmvs_rs::vm::dispatch::run(resolved.semantics, &mut machine, &mut hosts)?;
 
-            if let Some(cmvs_rs::dispatch::Flow::SystemSave(event)) = dispatched {
+            if let Some(cmvs_rs::vm::dispatch::Flow::SystemSave(event)) = dispatched {
                 println!(
                     "# system save {event:?}; known integers={} known bits={}",
                     machine.state().known_integer_count(),
@@ -577,7 +569,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 );
                 continue;
             }
-            if let Some(cmvs_rs::dispatch::Flow::Control(event)) = dispatched {
+            if let Some(cmvs_rs::vm::dispatch::Flow::Control(event)) = dispatched {
                 println!(
                     "# script control 0x{:04x}: {event:?}; slot={} script={} pc=0x{:x} callbacks={}",
                     command + 0x2000,
@@ -612,7 +604,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 }
                 continue;
             }
-            if let Some(cmvs_rs::dispatch::Flow::Platform(event)) = dispatched {
+            if let Some(cmvs_rs::vm::dispatch::Flow::Platform(event)) = dispatched {
                 println!(
                     "# platform recording 0x{:04x} {event:?}; requests={} thumbnail={:?}",
                     command + 0x2000,
@@ -655,7 +647,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                         ),
                     }
                 }
-                if event == cmvs_rs::platform::PlatformEvent::Yield {
+                if event == cmvs_rs::host::platform::PlatformEvent::Yield {
                     if let Some(delta) = frame_ms {
                         if let (Some(images), Some(config)) = (&mut images, &bootstrap) {
                             sequence.advance_frame_with_hosts(
@@ -679,7 +671,7 @@ fn run() -> Result<(), Box<dyn Error>> {
                 }
                 continue;
             }
-            if dispatched.is_some_and(cmvs_rs::dispatch::Flow::yields) {
+            if dispatched.is_some_and(cmvs_rs::vm::dispatch::Flow::yields) {
                 let Some(delta) = frame_ms else {
                     println!(
                         "# WAIT fade/mask transition at pc=0x{:x}; PC and stack preserved; supply --frame-ms to advance engine frames",
@@ -714,9 +706,9 @@ fn run() -> Result<(), Box<dyn Error>> {
                 );
                 continue;
             }
-            if dispatched == Some(cmvs_rs::dispatch::Flow::Done) {
-                use cmvs_rs::dispatch::Capability;
-                let entry = cmvs_rs::dispatch::entry(resolved.semantics, command)
+            if dispatched == Some(cmvs_rs::vm::dispatch::Flow::Done) {
+                use cmvs_rs::vm::dispatch::Capability;
+                let entry = cmvs_rs::vm::dispatch::entry(resolved.semantics, command)
                     .expect("completed command has a selected entry");
                 let capability = entry.capability;
                 match capability {
@@ -1076,7 +1068,10 @@ fn run() -> Result<(), Box<dyn Error>> {
             // diagnostics below. A selected variant stops immediately.
             if matches!(
                 dispatched,
-                Some(cmvs_rs::dispatch::Flow::Unhandled | cmvs_rs::dispatch::Flow::Unavailable)
+                Some(
+                    cmvs_rs::vm::dispatch::Flow::Unhandled
+                        | cmvs_rs::vm::dispatch::Flow::Unavailable
+                )
             ) && resolved.semantics != cmvs_rs::profile::Semantics::Root
             {
                 println!(

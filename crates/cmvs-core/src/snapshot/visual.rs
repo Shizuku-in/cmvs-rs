@@ -53,7 +53,7 @@ mod tests {
 
     struct NoImages;
     impl ImageSource for NoImages {
-        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+        fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
             panic!("retained replacement resources must not be loaded");
         }
     }
@@ -598,7 +598,7 @@ impl SavedImage {
         &self,
         source: &mut dyn ImageSource,
         budget: &mut usize,
-    ) -> Result<ObjectImage, Box<dyn Error>> {
+    ) -> Result<ObjectImage, Box<dyn Error + Send + Sync>> {
         // Check the saved dimensions before allocating decoded pixels. The actual
         // resource must match them below; image::load also has its own codec bound.
         let required = u64::from(self.size[0]) * u64::from(self.size[1]) * 4;
@@ -921,7 +921,7 @@ impl SavedScene {
         &self,
         source: &mut dyn ImageSource,
         budget: &mut usize,
-    ) -> Result<SceneObject, Box<dyn Error>> {
+    ) -> Result<SceneObject, Box<dyn Error + Send + Sync>> {
         let mut object = SceneObject {
             shown: self.shown,
             flags: self.flags,
@@ -998,7 +998,7 @@ impl SavedWindow {
         &self,
         source: &mut dyn ImageSource,
         budget: &mut usize,
-    ) -> Result<MessageWindow, Box<dyn Error>> {
+    ) -> Result<MessageWindow, Box<dyn Error + Send + Sync>> {
         Ok(MessageWindow {
             object: self.scene.load(source, budget)?,
             pressed_button: -1,
@@ -1106,7 +1106,10 @@ impl VisualSnapshot {
     }
     /// Reads named resources through the caller's existing read-only image source.
     /// Returns hosts only after every resource succeeds; no existing engine is changed.
-    pub fn preview(&self, source: &mut dyn ImageSource) -> Result<VisualPreview, Box<dyn Error>> {
+    pub fn preview(
+        &self,
+        source: &mut dyn ImageSource,
+    ) -> Result<VisualPreview, Box<dyn Error + Send + Sync>> {
         let mut budget = MAX_PIXELS;
         let mut objects = BTreeMap::new();
         for (&slot, saved) in &self.objects {

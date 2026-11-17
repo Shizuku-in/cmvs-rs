@@ -5,12 +5,11 @@ mod lifecycle;
 mod snapshots;
 mod system_save;
 use cmvs_core::{
-    digest::{sha256, to_hex},
-    platform::{PlatformBackend, PlatformRequest, RecordingBackend},
-    profile::{Game, Registry},
-    ps3::Script,
-    runtime::{Runtime, RuntimeEvent, RuntimeOptions, SaveStorage, SnapshotPolicy, load_start},
-    snapshot::SaveImage,
+    format::digest::sha256, format::digest::to_hex, format::ps3::Script,
+    format::snapshot::SaveImage, host::platform::PlatformBackend, host::platform::PlatformRequest,
+    host::platform::RecordingBackend, profile::Game, profile::Registry, runtime::Runtime,
+    runtime::RuntimeEvent, runtime::RuntimeOptions, runtime::SaveStorage, runtime::SnapshotPolicy,
+    runtime::load_start,
 };
 use std::{error::Error, fs, sync::OnceLock};
 
@@ -36,8 +35,7 @@ fn base_registry() -> &'static Registry {
 #[test]
 fn runner_contract_gate_preserves_unimplemented_handlers() {
     use cmvs_core::{
-        exe::Arch,
-        profile::{ContractProof, ContractRules, ContractSide},
+        format::exe::Arch, profile::ContractProof, profile::ContractRules, profile::ContractSide,
     };
     let mut code = Vec::new();
     commands::command(&mut code, 0x27fe, &[123]);

@@ -1,6 +1,7 @@
-use cmvs_core::cpz::{
-    ArchiveIndex, ArchiveLayout, ArchiveVersion, Cpz3Index, Cpz3Layout, Cpz5Mode, Cpz7Parameters,
-    cpz3_checksum,
+use cmvs_core::{
+    format::cpz::ArchiveIndex, format::cpz::ArchiveLayout, format::cpz::ArchiveVersion,
+    format::cpz::Cpz3Index, format::cpz::Cpz3Layout, format::cpz::Cpz5Mode,
+    format::cpz::Cpz7Parameters, format::cpz::cpz3_checksum,
 };
 use std::io::Cursor;
 

@@ -1,4 +1,4 @@
-use cmvs_core::bytecode::{self, InstructionKind, Term};
+use cmvs_core::{vm::bytecode, vm::bytecode::InstructionKind, vm::bytecode::Term};
 
 fn word(code: &mut Vec<u8>, value: u16) {
     code.extend(value.to_le_bytes());
@@ -14,7 +14,7 @@ fn integer(value: i32) -> Vec<u8> {
     word(&mut code, 0x20f);
     code
 }
-fn expression(code: &[u8]) -> cmvs_core::bytecode::Expression {
+fn expression(code: &[u8]) -> cmvs_core::vm::bytecode::Expression {
     match bytecode::decode_at(code, 0).unwrap().kind {
         InstructionKind::Expression(expr) => expr,
         _ => panic!("not an expression"),

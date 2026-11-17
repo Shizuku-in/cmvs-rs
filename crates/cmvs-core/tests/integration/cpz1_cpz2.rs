@@ -1,6 +1,7 @@
 //! CPZ1/CPZ2 vectors built by an encoder written independently of the reader.
-use cmvs_core::cpz::{
-    ArchiveIndex, ArchiveLayout, ArchiveVersion, Cpz2Index, Cpz7Parameters, cpz3_checksum,
+use cmvs_core::{
+    format::cpz::ArchiveIndex, format::cpz::ArchiveLayout, format::cpz::ArchiveVersion,
+    format::cpz::Cpz2Index, format::cpz::Cpz7Parameters, format::cpz::cpz3_checksum,
 };
 use std::collections::BTreeMap;
 use std::io::Cursor;
@@ -233,8 +234,8 @@ fn write_back_is_refused() {
 /// `CMVS_CVNS_TEST_INPUTS` is a path list of `.cpz` files.
 #[test]
 #[ignore = "requires local CVNS archives"]
-fn external_archive_resources() -> Result<(), Box<dyn std::error::Error>> {
-    use cmvs_core::ps3::{Container, Script};
+fn external_archive_resources() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use cmvs_core::{format::ps3::Container, format::ps3::Script};
     let inputs = std::env::var_os("CMVS_CVNS_TEST_INPUTS").ok_or("set CMVS_CVNS_TEST_INPUTS")?;
     let sample = std::env::var_os("CMVS_CVNS_SAMPLE_EDGES").is_some();
     let mut archives = 0;
@@ -257,7 +258,7 @@ fn external_archive_resources() -> Result<(), Box<dyn std::error::Error>> {
             if script {
                 let script = Script::decode(&bytes)?;
                 assert_eq!(script.header().container, Container::Pss0);
-                cmvs_core::bytecode::decode_layout(
+                cmvs_core::vm::bytecode::decode_layout(
                     script.code(),
                     script.header().entry_pc,
                     &script.labels(),

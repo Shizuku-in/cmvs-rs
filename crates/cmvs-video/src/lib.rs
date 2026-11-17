@@ -5,9 +5,8 @@ mod prefetch;
 mod theora;
 mod yuv;
 use cmvs_core::{
-    FormatError, MAX_PAYLOAD,
-    mgv::{self, MgvIndex, ReadSeek},
-    raster::RgbaImage,
+    FormatError, MAX_PAYLOAD, format::mgv, format::mgv::MgvIndex, format::mgv::ReadSeek,
+    render::raster::RgbaImage,
 };
 use ogg::PacketReader;
 pub use prefetch::PrefetchTheoraFactory;
@@ -29,7 +28,7 @@ impl mgv::DecoderFactory for TheoraFactory {
         &self,
         reader: Box<dyn ReadSeek>,
         index: &MgvIndex,
-    ) -> Result<Box<dyn mgv::Decoder>, Box<dyn Error>> {
+    ) -> Result<Box<dyn mgv::Decoder>, Box<dyn Error + Send + Sync>> {
         Ok(Box::new(TheoraStream::open(reader, index)?))
     }
 }
@@ -106,11 +105,14 @@ impl fmt::Debug for TheoraStream {
             .finish_non_exhaustive()
     }
 }
-fn codec<T>(result: Result<T, FormatError>) -> Result<T, Box<dyn Error>> {
-    result.map_err(|e| format!("Theora decode: {e:?}").into())
+fn codec<T>(result: Result<T, FormatError>) -> Result<T, Box<dyn Error + Send + Sync>> {
+    result.map_err(|e| format!("Theora decode: {e}").into())
 }
 impl TheoraStream {
-    pub fn open(mut reader: Box<dyn ReadSeek>, index: &MgvIndex) -> Result<Self, Box<dyn Error>> {
+    pub fn open(
+        mut reader: Box<dyn ReadSeek>,
+        index: &MgvIndex,
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         if index.frames.is_empty() {
             return Err(FormatError("MGV frame map is empty").into());
         }
@@ -141,7 +143,7 @@ impl TheoraStream {
         packets: &mut PacketReader<VideoSection>,
         budget: &Budget,
         index: &MgvIndex,
-    ) -> Result<(TheoraIdentHeader, FrameDecoder, u32), Box<dyn Error>> {
+    ) -> Result<(TheoraIdentHeader, FrameDecoder, u32), Box<dyn Error + Send + Sync>> {
         budget.set(MAX_PAYLOAD);
         let packet = packets.read_packet_expected()?;
         let serial = packet.stream_serial();
@@ -166,7 +168,7 @@ impl TheoraStream {
         let decoder = codec(FrameDecoder::new(&ident, &setup.data))?;
         Ok((ident, decoder, serial))
     }
-    fn reset(&mut self) -> Result<(), Box<dyn Error>> {
+    fn reset(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.budget.set(MAX_PAYLOAD);
         self.packets.seek_bytes(SeekFrom::Start(0))?;
         let (ident, decoder, serial) = Self::headers(&mut self.packets, &self.budget, &self.index)?;
@@ -193,7 +195,7 @@ impl TheoraStream {
         }
     }
     /// Decode through an Ogg packet, including all inter-frame dependencies.
-    fn decode_through(&mut self, target: u32) -> Result<(), Box<dyn Error>> {
+    fn decode_through(&mut self, target: u32) -> Result<(), Box<dyn Error + Send + Sync>> {
         if !self.failed && self.recent(target).is_some() {
             return Ok(());
         }
@@ -211,7 +213,7 @@ impl TheoraStream {
         }
         Ok(())
     }
-    fn decode_packet(&mut self) -> Result<(), Box<dyn Error>> {
+    fn decode_packet(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.failed = true;
         self.budget.set(MAX_PAYLOAD);
         let packet = self.packets.read_packet_expected()?;
@@ -223,14 +225,14 @@ impl TheoraStream {
         self.failed = false;
         Ok(())
     }
-    fn prefetch_yuv(&mut self) -> Result<theora::Frame, Box<dyn Error>> {
+    fn prefetch_yuv(&mut self) -> Result<theora::Frame, Box<dyn Error + Send + Sync>> {
         self.decode_packet()?;
         self.recent = [None, None];
         Ok(self.decoder.current_frame().clone())
     }
 }
 impl mgv::Decoder for TheoraStream {
-    fn frame(&mut self, frame: u32) -> Result<RgbaImage, Box<dyn Error>> {
+    fn frame(&mut self, frame: u32) -> Result<RgbaImage, Box<dyn Error + Send + Sync>> {
         let target = self
             .index
             .frames
@@ -243,7 +245,7 @@ impl mgv::Decoder for TheoraStream {
             .ok_or(FormatError("MGV decoded frame unavailable"))?
             .clone())
     }
-    fn finish(&mut self) -> Result<(), Box<dyn Error>> {
+    fn finish(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         if self.failed || self.next_packet < self.index.packet_count() {
             self.decode_through(self.index.packet_count() - 1)?;
         }

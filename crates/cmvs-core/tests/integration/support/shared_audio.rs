@@ -1,24 +1,22 @@
 use cmvs_core::{
-    audio::{AudioBackend, AudioHost},
-    dispatch::{self, AudioHosts, Flow, Hosts},
-    machine::Machine,
-    profile::Semantics,
+    host::audio::AudioBackend, host::audio::AudioHost, profile::Semantics, vm::dispatch,
+    vm::dispatch::AudioHosts, vm::dispatch::Flow, vm::dispatch::Hosts, vm::machine::Machine,
 };
 
 pub trait SharedAudio {
     fn shared_handle(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         backend: &mut dyn AudioBackend,
-    ) -> Result<bool, Box<dyn std::error::Error>>;
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>>;
 }
 
 impl SharedAudio for AudioHost {
     fn shared_handle(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         backend: &mut dyn AudioBackend,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
         Ok(
             match dispatch::run(
                 Semantics::Root,

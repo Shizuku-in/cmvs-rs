@@ -1,14 +1,11 @@
 use crate::support::shared_message_wait;
+use crate::support::shared_state::SharedState;
 use crate::support::shared_windows;
 use cmvs_core::{
-    input::ActionInput,
-    machine::{Machine, Step},
-    message::{
-        LineBreakRules, MessageHost, MessageWindow, TEXT_OBJECTS, TextObject, WINDOW_BUTTONS,
-        WindowButton,
-    },
-    ps3::Script,
-    scene::{DrawState, SceneObject},
+    format::ps3::Script, host::input::ActionInput, render::message::LineBreakRules,
+    render::message::MessageHost, render::message::MessageWindow, render::message::TEXT_OBJECTS,
+    render::message::TextObject, render::message::WINDOW_BUTTONS, render::message::WindowButton,
+    render::scene::DrawState, render::scene::SceneObject, vm::machine::Machine, vm::machine::Step,
 };
 use shared_message_wait::SharedMessageWait;
 use shared_windows::SharedWindows;
@@ -60,7 +57,7 @@ fn create(code: &mut Vec<u8>, slot: u32, text: u32, rect: [u32; 4]) {
 fn created_text(position: [i32; 2], size: [u32; 2]) -> TextObject {
     TextObject {
         font_face: Vec::new(),
-        face: cmvs_core::settings::DEFAULT_FONT_FACE.into(),
+        face: cmvs_core::host::settings::DEFAULT_FONT_FACE.into(),
         bold: false,
         revision_alpha: false,
         scale_bits: 1.0f32.to_bits(),
@@ -90,7 +87,7 @@ fn created_text(position: [i32; 2], size: [u32; 2]) -> TextObject {
         glyph_capacity: 196,
     }
 }
-fn pending(vm: &mut Machine<'_>) {
+fn pending(vm: &mut Machine) {
     while !matches!(vm.step().unwrap(), Step::System { .. }) {}
 }
 
@@ -107,7 +104,7 @@ fn window_immediate_output_uses_global_outline_and_keeps_text_style() {
     assert!(!messages.shared_message(&mut vm).unwrap());
     messages.set_record_output(true);
     let before = messages.text(7).unwrap().outline_mode;
-    messages.set_text_settings(cmvs_core::settings::TextOutputSettings {
+    messages.set_text_settings(cmvs_core::host::settings::TextOutputSettings {
         outline: 1,
         ..Default::default()
     });
@@ -163,8 +160,8 @@ fn yielding_append_outputs_once_and_does_not_consume_release_or_bypass_reveal() 
 #[test]
 fn shared_append_flow_distinguishes_pending_wait_from_completed_yield() {
     use cmvs_core::{
-        dispatch::{self, Flow, Hosts, TextHosts},
-        profile::Semantics,
+        profile::Semantics, vm::dispatch, vm::dispatch::Flow, vm::dispatch::Hosts,
+        vm::dispatch::TextHosts,
     };
     let mut code = vec![];
     create(&mut code, 0, 7, [0, 0, 300, 100]);
@@ -226,7 +223,7 @@ fn shared_append_flow_distinguishes_pending_wait_from_completed_yield() {
 
 #[test]
 fn timed_window_wait_ignores_manual_skip_and_auto_flags_and_finishes_without_yield() {
-    use cmvs_core::{message::AutoAdvanceContext, settings::AutoAdvanceSettings};
+    use cmvs_core::{host::settings::AutoAdvanceSettings, render::message::AutoAdvanceContext};
     for (voice, auto) in [(-1i32, false), (-1, true), (5, false), (5, true)] {
         let mut code = vec![];
         create(&mut code, 0, 7, [0, 0, 300, 100]);
@@ -247,7 +244,7 @@ fn timed_window_wait_ignores_manual_skip_and_auto_flags_and_finishes_without_yie
             voice_wait: 0,
             sync_voice: true,
         };
-        let backend = cmvs_core::audio::RecordingAudio::default();
+        let backend = cmvs_core::host::audio::RecordingAudio::default();
         let expected = if voice < 0 {
             vec![Step::Yield, Step::Continue]
         } else {
@@ -285,7 +282,7 @@ fn timed_window_wait_ignores_manual_skip_and_auto_flags_and_finishes_without_yie
     }
 }
 
-fn run(vm: &mut Machine<'_>, messages: &mut MessageHost, commands: usize) {
+fn run(vm: &mut Machine, messages: &mut MessageHost, commands: usize) {
     for _ in 0..commands {
         pending(vm);
         assert!(messages.shared_message(vm).unwrap());
@@ -579,11 +576,11 @@ fn window_draw_commands_reuse_scene_draw_fields() {
         .draw
         .clone()
         .unwrap()
-        .words;
+        .snapshot_words();
     assert_eq!(words[2..11], [1, 2, 1280, 54, 8, 9, 5, 6, 3]);
     run(&mut vm, &mut messages, 3);
     let child = &messages.window(7).unwrap().object.children[&16];
-    assert_eq!(child.draw.as_ref().unwrap().words[8..10], [588, 0]);
+    assert_eq!(child.draw.as_ref().unwrap().position_raw(), [588, 0]);
     assert!(!child.shown);
     assert_eq!(vm.stack().len_bytes(), 0);
 }
@@ -606,8 +603,11 @@ fn window_blend_mode_changes_parent_and_child_and_ignores_invalid_values() {
     for mode in [0, 1, 2, 3, 3, 3] {
         run(&mut vm, &mut messages, 2);
         let object = &messages.window(0).unwrap().object;
-        assert_eq!(object.draw.as_ref().unwrap().words[1], mode);
-        assert_eq!(object.children[&5].draw.as_ref().unwrap().words[1], mode);
+        assert_eq!(object.draw.as_ref().unwrap().blend_mode(), mode);
+        assert_eq!(
+            object.children[&5].draw.as_ref().unwrap().blend_mode(),
+            mode
+        );
         assert_eq!(vm.stack().len_bytes(), 0);
     }
 }
@@ -659,13 +659,19 @@ fn moving_a_window_updates_state_zero_object_and_text_positions() {
     let window = messages.window(7).unwrap();
     assert_eq!(window.position, [1186, 0]);
     assert_eq!(window.switch_positions, [[1186, 0], [5, 6]]);
-    assert_eq!(window.object.draw.as_ref().unwrap().words[8..10], [1186, 0]);
+    assert_eq!(
+        window.object.draw.as_ref().unwrap().position_raw(),
+        [1186, 0]
+    );
     assert_eq!(messages.text(10).unwrap().position, [1186, 0]);
     run(&mut vm, &mut messages, 1);
     let window = messages.window(7).unwrap();
     assert_eq!(window.position, [1185, 4]);
     assert_eq!(window.switch_positions, [[1185, 4], [5, 6]]);
-    assert_eq!(window.object.draw.as_ref().unwrap().words[8..10], [1185, 4]);
+    assert_eq!(
+        window.object.draw.as_ref().unwrap().position_raw(),
+        [1185, 4]
+    );
     assert_eq!(messages.text(10).unwrap().position, [1185, 4]);
     assert_eq!(vm.stack().len_bytes(), 0);
 }
@@ -871,21 +877,21 @@ fn recorded_output_only_release_edge_skips_reveal_not_press_edge() {
     assert!(!input.released(0));
 }
 
-fn wait_flags(skip: bool, auto: bool) -> cmvs_core::message_flags::MessageFlags {
+fn wait_flags(skip: bool, auto: bool) -> cmvs_core::runtime::MessageFlags {
     message_flags(skip, auto, false)
 }
 /// Flags set through the script commands: 0x22eb skip, 0x22e5 auto advance, 0x2340 bypass.
-fn message_flags(skip: bool, auto: bool, bypass: bool) -> cmvs_core::message_flags::MessageFlags {
+fn message_flags(skip: bool, auto: bool, bypass: bool) -> cmvs_core::runtime::MessageFlags {
     let mut code = vec![];
     call(&mut code, 0x22eb, &[u32::from(skip), 1]);
     call(&mut code, 0x22e5, &[u32::from(auto), 1]);
     call(&mut code, 0x2340, &[u32::from(bypass)]);
     let program = script(&code);
     let mut vm = Machine::new(&program).unwrap();
-    let mut flags = cmvs_core::message_flags::MessageFlags::default();
+    let mut flags = cmvs_core::runtime::MessageFlags::default();
     for _ in 0..3 {
         pending(&mut vm);
-        assert!(flags.try_handle(&mut vm).unwrap());
+        assert!(flags.shared_state(&mut vm).unwrap());
     }
     assert_eq!(flags.bypass(), bypass);
     flags
@@ -923,7 +929,7 @@ fn message_wait_preserves_parameters_shows_pen_cursor_and_advances_on_release() 
         assert_eq!(vm.repeat_count(), count);
         for child in messages.window(0).unwrap().object.children.values() {
             assert!(child.shown);
-            assert_eq!(&child.draw.as_ref().unwrap().words[8..10], &[15, 27]);
+            assert_eq!(&child.draw.as_ref().unwrap().position_raw(), &[15, 27]);
         }
     }
     input.set(0, true, true, false).unwrap();
@@ -1181,7 +1187,7 @@ struct AutoVoice {
 
 #[test]
 fn read_policy_clears_script_skip_for_unread_and_bypass_overrides_only_eligibility() {
-    let mut state = cmvs_core::evaluate::State::default();
+    let mut state = cmvs_core::vm::evaluate::State::default();
     state.set_bit(123, false).unwrap();
     state.set_bit(124, true).unwrap();
     for (read_skip, id, bypass, expected_skip, expected_read) in [
@@ -1208,7 +1214,7 @@ fn read_policy_clears_script_skip_for_unread_and_bypass_overrides_only_eligibili
 
 #[test]
 fn unread_wait_blocks_normal_skip_but_force_skip_and_bypass_still_advance() {
-    use cmvs_core::{message::AutoAdvanceContext, settings::AutoAdvanceSettings};
+    use cmvs_core::{host::settings::AutoAdvanceSettings, render::message::AutoAdvanceContext};
     for (read, action, skip, bypass, expected) in [
         (false, Some(8), false, false, Step::Yield),
         (true, Some(8), false, false, Step::Continue),
@@ -1257,7 +1263,7 @@ fn unread_wait_blocks_normal_skip_but_force_skip_and_bypass_still_advance() {
 
 #[test]
 fn unread_output_can_be_revealed_by_held_skip_while_the_following_wait_still_stops() {
-    use cmvs_core::{message::AutoAdvanceContext, settings::AutoAdvanceSettings};
+    use cmvs_core::{host::settings::AutoAdvanceSettings, render::message::AutoAdvanceContext};
     let mut code = vec![];
     create(&mut code, 0, 7, [0, 0, 300, 100]);
     call(&mut code, 0x2152, &[0, 123, 0]);
@@ -1329,7 +1335,7 @@ fn unread_output_can_be_revealed_by_held_skip_while_the_following_wait_still_sto
 
 #[test]
 fn pointer_gesture_result_blocks_auto_manual_and_skip_without_advancing_timer() {
-    use cmvs_core::{message::AutoAdvanceContext, settings::AutoAdvanceSettings};
+    use cmvs_core::{host::settings::AutoAdvanceSettings, render::message::AutoAdvanceContext};
     let mut code = vec![];
     create(&mut code, 0, 7, [0, 0, 100, 100]);
     call(&mut code, 0x2153, &[3, 0, 0]);
@@ -1383,14 +1389,17 @@ fn pointer_gesture_result_blocks_auto_manual_and_skip_without_advancing_timer() 
         );
     }
 }
-impl cmvs_core::audio::AudioBackend for AutoVoice {
+impl cmvs_core::host::audio::AudioBackend for AutoVoice {
     fn play(
         &mut self,
-        _: &cmvs_core::audio::AudioRequest,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
+        _: &cmvs_core::host::audio::AudioRequest,
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
         unreachable!()
     }
-    fn voice_position(&self, channel: u8) -> Result<Option<u32>, Box<dyn std::error::Error>> {
+    fn voice_position(
+        &self,
+        channel: u8,
+    ) -> Result<Option<u32>, Box<dyn std::error::Error + Send + Sync>> {
         assert_eq!(channel, 3);
         if self.fail {
             Err("synthetic voice query failure".into())
@@ -1402,7 +1411,7 @@ impl cmvs_core::audio::AudioBackend for AutoVoice {
 
 #[test]
 fn automatic_wait_uses_frame_delta_and_resets_after_manual_or_timed_completion() {
-    use cmvs_core::{message::AutoAdvanceContext, settings::AutoAdvanceSettings};
+    use cmvs_core::{host::settings::AutoAdvanceSettings, render::message::AutoAdvanceContext};
     let mut code = vec![];
     create(&mut code, 0, 7, [0, 0, 100, 100]);
     for _ in 0..3 {
@@ -1493,7 +1502,7 @@ fn automatic_wait_uses_frame_delta_and_resets_after_manual_or_timed_completion()
 
 #[test]
 fn automatic_wait_restarts_timer_while_voice_plays_and_waits_after_it_ends() {
-    use cmvs_core::{message::AutoAdvanceContext, settings::AutoAdvanceSettings};
+    use cmvs_core::{host::settings::AutoAdvanceSettings, render::message::AutoAdvanceContext};
     let mut code = vec![];
     create(&mut code, 0, 7, [0, 0, 100, 100]);
     call(&mut code, 0x2153, &[7, 0, 0]);
@@ -1542,7 +1551,7 @@ fn automatic_wait_restarts_timer_while_voice_plays_and_waits_after_it_ends() {
 
 #[test]
 fn automatic_wait_voice_query_failure_preserves_timer_command_input_and_window() {
-    use cmvs_core::{message::AutoAdvanceContext, settings::AutoAdvanceSettings};
+    use cmvs_core::{host::settings::AutoAdvanceSettings, render::message::AutoAdvanceContext};
     let mut code = vec![];
     create(&mut code, 0, 7, [0, 0, 100, 100]);
     call(&mut code, 0x2153, &[3, 0, 0]);
@@ -1605,7 +1614,7 @@ fn automatic_wait_voice_query_failure_preserves_timer_command_input_and_window()
 
 #[test]
 fn automatic_wait_hidden_window_pauses_timer_and_sync_off_ignores_voice_device() {
-    use cmvs_core::{message::AutoAdvanceContext, settings::AutoAdvanceSettings};
+    use cmvs_core::{host::settings::AutoAdvanceSettings, render::message::AutoAdvanceContext};
     let mut code = vec![];
     create(&mut code, 0, 7, [0, 0, 100, 100]);
     call(&mut code, 0x214e, &[1, 0]);
@@ -1774,7 +1783,7 @@ fn recorded_output_captures_styles_and_ruby_reserved_height_then_clears() {
 
 #[test]
 fn configured_text_reveal_modes_durations_and_outline_only_affect_new_glyphs() {
-    use cmvs_core::settings::TextOutputSettings;
+    use cmvs_core::host::settings::TextOutputSettings;
     for mode in 0..=2 {
         for (index, duration) in [50, 200, 350, 500, 650].into_iter().enumerate() {
             let mut code = vec![];
@@ -1847,7 +1856,7 @@ fn configured_text_reveal_modes_durations_and_outline_only_affect_new_glyphs() {
 
 #[test]
 fn bold_updates_default_text_fonts_but_preserves_uploaded_glyphs_and_named_fonts() {
-    use cmvs_core::settings::TextOutputSettings;
+    use cmvs_core::host::settings::TextOutputSettings;
     let mut code = vec![];
     create(&mut code, 0, 7, [0, 0, 300, 100]);
     call(&mut code, 0x2159, &[0, 0, 0, 0]);
@@ -1882,7 +1891,7 @@ fn bold_updates_default_text_fonts_but_preserves_uploaded_glyphs_and_named_fonts
     );
     // Set a named face via the bank; it retains its weight through global changes.
     vm.state_mut()
-        .set_string(0, cmvs_core::settings::DEFAULT_FONT_FACE)
+        .set_string(0, cmvs_core::host::settings::DEFAULT_FONT_FACE)
         .unwrap();
     run(&mut vm, &mut messages, 1);
     messages.set_text_settings(TextOutputSettings {
@@ -1902,7 +1911,7 @@ fn bold_updates_default_text_fonts_but_preserves_uploaded_glyphs_and_named_fonts
 
 #[test]
 fn zero_text_speed_keeps_glyphs_instant_even_with_a_reveal_effect() {
-    use cmvs_core::settings::TextOutputSettings;
+    use cmvs_core::host::settings::TextOutputSettings;
     let mut code = vec![];
     create(&mut code, 0, 7, [0, 0, 300, 100]);
     call(&mut code, 0x2152, &[0, u32::MAX, 0]);
@@ -2930,7 +2939,7 @@ fn child_words(messages: &MessageHost) -> Vec<u32> {
         .draw
         .as_ref()
         .unwrap()
-        .words[2..8]
+        .snapshot_words()[2..8]
         .to_vec()
 }
 
@@ -2993,7 +3002,7 @@ fn ended_animations_are_freed_and_minus_two_disposes_the_child() {
         if survives {
             let child = &object.children[&2];
             assert!(child.draw.as_ref().unwrap().animation.is_none());
-            assert_eq!(child.draw.as_ref().unwrap().words[2], 48);
+            assert_eq!(child.draw.as_ref().unwrap().source_rect()[0], 48);
         }
     }
 }
@@ -3050,7 +3059,7 @@ fn window_opacity_caps_at_255_and_keeps_negative_values() {
             .draw
             .as_ref()
             .unwrap()
-            .words[17]
+            .opacity()
     };
     run(&mut vm, &mut messages, 4);
     assert_eq!(opacity(&messages), 128);
@@ -3337,7 +3346,12 @@ fn window_scale_snaps_near_one_and_preserves_other_float_bits() {
         run(&mut vm, &mut messages, 1);
         let expected = if i < 3 { 1.0f32.to_bits() } else { raw };
         let mut window = initial.clone();
-        window.object.draw.as_mut().unwrap().words[18..20].fill(expected);
+        window
+            .object
+            .draw
+            .as_mut()
+            .unwrap()
+            .set_scale_bits([expected, expected]);
         assert_eq!(messages.window(0), Some(&window));
         assert_eq!(messages.text(7).unwrap().scale_bits, expected);
         assert_eq!(vm.state().system_integer(0), Some(11));
@@ -3371,7 +3385,7 @@ fn window_object_presence_ignores_images_visibility_and_draw_state_and_tracks_ch
     let mut messages = MessageHost::default();
     run(&mut vm, &mut messages, 1);
     vm.state_mut().set_system_integer(1, 99).unwrap();
-    let check = |vm: &mut Machine<'_>, messages: &mut MessageHost, result| {
+    let check = |vm: &mut Machine, messages: &mut MessageHost, result| {
         let window = messages.window(0).unwrap().clone();
         let text = messages.text(0).unwrap().clone();
         pending(vm);
@@ -3447,9 +3461,9 @@ fn direct_output(code: &mut Vec<u8>) {
 fn direct_half_width_text_uses_backend_ink_extent_with_minimum_half_size_and_wraps() {
     #[derive(Debug)]
     struct Metrics;
-    impl cmvs_core::message::GlyphMetrics for Metrics {
+    impl cmvs_core::render::message::GlyphMetrics for Metrics {
         fn ink_width(&self, face: &[u8], code: u16, _: u32) -> Result<u32, &'static str> {
-            assert_eq!(face, cmvs_core::settings::DEFAULT_FONT_FACE);
+            assert_eq!(face, cmvs_core::host::settings::DEFAULT_FONT_FACE);
             match code {
                 0x20 => Ok(0),
                 0x57 => Ok(17),
@@ -3475,54 +3489,54 @@ fn direct_half_width_text_uses_backend_ink_extent_with_minimum_half_size_and_wra
 }
 
 fn font_cell_step(
-    vm: &mut Machine<'_>,
+    vm: &mut Machine,
     messages: &mut MessageHost,
-) -> Result<bool, Box<dyn std::error::Error>> {
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     font_cell_profile_step(vm, messages, "cmvs-20171114")
 }
 fn font_cell_profile_step(
-    vm: &mut Machine<'_>,
+    vm: &mut Machine,
     messages: &mut MessageHost,
     profile_id: &str,
-) -> Result<bool, Box<dyn std::error::Error>> {
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     let profile = cmvs_core::profile::Registry::builtin()
         .profile(profile_id)
         .unwrap();
     let mut input = ActionInput::default();
     let command = vm.pending_system().unwrap().1;
-    let mut hosts = cmvs_core::dispatch::Hosts::default();
-    if cmvs_core::dispatch::uses_message_state(command) {
+    let mut hosts = cmvs_core::vm::dispatch::Hosts::default();
+    if cmvs_core::vm::dispatch::uses_message_state(command) {
         hosts.messages = Some(&mut *messages);
     } else {
-        hosts.text = Some(cmvs_core::dispatch::TextHosts {
+        hosts.text = Some(cmvs_core::vm::dispatch::TextHosts {
             messages: &mut *messages,
             input: &mut input,
             flags: Default::default(),
         });
     }
-    match cmvs_core::dispatch::run(profile.semantics(command), vm, &mut hosts)? {
+    match cmvs_core::vm::dispatch::run(profile.semantics(command), vm, &mut hosts)? {
         Some(
-            cmvs_core::dispatch::Flow::Done
-            | cmvs_core::dispatch::Flow::Yield
-            | cmvs_core::dispatch::Flow::Wait,
+            cmvs_core::vm::dispatch::Flow::Done
+            | cmvs_core::vm::dispatch::Flow::Yield
+            | cmvs_core::vm::dispatch::Flow::Wait,
         ) => Ok(true),
-        Some(cmvs_core::dispatch::Flow::Unhandled | cmvs_core::dispatch::Flow::Unavailable) => {
-            Ok(false)
-        }
         Some(
-            cmvs_core::dispatch::Flow::Runtime(_)
-            | cmvs_core::dispatch::Flow::Control(_)
-            | cmvs_core::dispatch::Flow::SystemSave(_)
-            | cmvs_core::dispatch::Flow::SystemWritten
-            | cmvs_core::dispatch::Flow::Platform(_)
-            | cmvs_core::dispatch::Flow::DeviceFramePending,
+            cmvs_core::vm::dispatch::Flow::Unhandled | cmvs_core::vm::dispatch::Flow::Unavailable,
+        ) => Ok(false),
+        Some(
+            cmvs_core::vm::dispatch::Flow::Runtime(_)
+            | cmvs_core::vm::dispatch::Flow::Control(_)
+            | cmvs_core::vm::dispatch::Flow::SystemSave(_)
+            | cmvs_core::vm::dispatch::Flow::SystemWritten
+            | cmvs_core::vm::dispatch::Flow::Platform(_)
+            | cmvs_core::vm::dispatch::Flow::DeviceFramePending,
         ) => {
             unreachable!("text handler returned platform flow")
         }
         None => Ok(messages.shared_message(vm)?),
     }
 }
-fn run_font_cells(vm: &mut Machine<'_>, messages: &mut MessageHost, count: usize) {
+fn run_font_cells(vm: &mut Machine, messages: &mut MessageHost, count: usize) {
     for _ in 0..count {
         pending(vm);
         assert!(font_cell_step(vm, messages).unwrap());
@@ -3533,7 +3547,7 @@ fn run_font_cells(vm: &mut Machine<'_>, messages: &mut MessageHost, count: usize
 fn measurement_and_all_main_output_paths_share_proportional_advances() {
     #[derive(Debug)]
     struct Metrics;
-    impl cmvs_core::message::GlyphMetrics for Metrics {
+    impl cmvs_core::render::message::GlyphMetrics for Metrics {
         fn ink_width(&self, _: &[u8], _: u16, _: u32) -> Result<u32, &'static str> {
             Ok(20)
         }
@@ -3589,7 +3603,7 @@ fn measurement_and_all_main_output_paths_share_proportional_advances() {
 fn proportional_output_uses_cell_advance_and_switches_back_without_changing_results() {
     #[derive(Debug)]
     struct Metrics;
-    impl cmvs_core::message::GlyphMetrics for Metrics {
+    impl cmvs_core::render::message::GlyphMetrics for Metrics {
         fn ink_width(&self, _: &[u8], _: u16, _: u32) -> Result<u32, &'static str> {
             Ok(17)
         }
@@ -3650,7 +3664,7 @@ fn proportional_output_without_metrics_keeps_pending_stack_and_text() {
 struct RubyAdvances {
     fail: bool,
 }
-impl cmvs_core::message::GlyphMetrics for RubyAdvances {
+impl cmvs_core::render::message::GlyphMetrics for RubyAdvances {
     fn ink_width(&self, _: &[u8], _: u16, _: u32) -> Result<u32, &'static str> {
         Err("ruby must use cell advance")
     }
@@ -3678,7 +3692,7 @@ fn font_cell_ruby_code() -> Vec<u8> {
     call(&mut code, 0x2152, &[0, 0, 0]);
     code
 }
-fn prepare_font_cell_ruby(vm: &mut Machine<'_>, messages: &mut MessageHost, fail: bool) {
+fn prepare_font_cell_ruby(vm: &mut Machine, messages: &mut MessageHost, fail: bool) {
     run(vm, messages, 6);
     messages.set_record_output(true);
     messages.set_glyph_metrics(Box::new(RubyAdvances { fail }));
@@ -3829,7 +3843,7 @@ fn proportional_ruby_bounds_the_original_base_position_array() {
 fn pixel_measurement_uses_advance_width_preserves_pen_and_skips_ruby_annotation() {
     #[derive(Debug)]
     struct Metrics;
-    impl cmvs_core::message::GlyphMetrics for Metrics {
+    impl cmvs_core::render::message::GlyphMetrics for Metrics {
         fn ink_width(&self, _: &[u8], _: u16, _: u32) -> Result<u32, &'static str> {
             Ok(99)
         }
@@ -3885,7 +3899,7 @@ fn polled_window_output_appends_only_on_initialization_and_never_yields() {
         pending(&mut vm);
         assert!(
             messages
-                .try_record_poll(&mut vm, cmvs_core::message_flags::MessageFlags::default())
+                .try_record_poll(&mut vm, cmvs_core::runtime::MessageFlags::default())
                 .unwrap()
         );
         assert!(vm.pending_system().is_none());
@@ -4105,7 +4119,7 @@ fn window_button_state_commands_switch_the_child_source_once() {
     let mut vm = Machine::new(&script).unwrap();
     let mut messages = MessageHost::default();
     run(&mut vm, &mut messages, 5);
-    let result = |vm: &mut Machine<'_>, messages: &mut MessageHost| {
+    let result = |vm: &mut Machine, messages: &mut MessageHost| {
         pending(vm);
         assert!(messages.shared_message(vm).unwrap());
         vm.state().system_integer(0)
@@ -4114,7 +4128,11 @@ fn window_button_state_commands_switch_the_child_source_once() {
     assert_eq!(result(&mut vm, &mut messages), Some(0));
     result(&mut vm, &mut messages);
     let window = messages.window(7).unwrap();
-    let words = window.object.children[&16].draw.as_ref().unwrap().words;
+    let words = window.object.children[&16]
+        .draw
+        .as_ref()
+        .unwrap()
+        .snapshot_words();
     assert_eq!(words[2..6], [96, 0, 94, 52]);
     assert_eq!(window.buttons[0].state_word, 1);
     assert_eq!(result(&mut vm, &mut messages), Some(1));
@@ -4149,7 +4167,7 @@ fn window_draw_query_and_hidden_flag_report_window_state() {
         .draw
         .as_ref()
         .unwrap()
-        .words;
+        .snapshot_words();
     assert_eq!(
         (0..4)
             .map(|i| state.system_integer(i).unwrap())
@@ -4167,7 +4185,7 @@ fn window_draw_query_and_hidden_flag_report_window_state() {
 
 #[test]
 fn font_objects_keep_their_face_glyphs_capture_it_and_the_dialog_refreshes_default_texts() {
-    use cmvs_core::settings::DEFAULT_FONT_FACE;
+    use cmvs_core::host::settings::DEFAULT_FONT_FACE;
     let mut code = vec![];
     create(&mut code, 0, 7, [0, 0, 300, 100]);
     create(&mut code, 1, 8, [0, 100, 300, 100]);

@@ -1,10 +1,10 @@
 use crate::support::shared_media;
+use crate::support::shared_state::SharedState;
 use cmvs_core::{
-    audio::{AudioBackend, AudioRequest, AudioSettings, RecordingAudio},
-    cmv::CmvIndex,
-    machine::{Machine, Step},
-    movie::{MovieHost, MovieSource, OpenedMovie},
-    ps3::Script,
+    format::cmv::CmvIndex, format::ps3::Script, host::audio::AudioBackend,
+    host::audio::AudioRequest, host::audio::AudioSettings, host::audio::RecordingAudio,
+    host::movie::MovieHost, host::movie::MovieSource, host::movie::OpenedMovie,
+    vm::machine::Machine, vm::machine::Step,
 };
 use shared_media::SharedMovies;
 use std::{collections::BTreeMap, error::Error, io::Cursor};
@@ -51,7 +51,7 @@ fn destroy(slots: &[u32]) -> Vec<u8> {
 fn query(slots: &[u32]) -> Vec<u8> {
     slot_command(0x231a, slots)
 }
-fn pending(vm: &mut Machine<'_>) {
+fn pending(vm: &mut Machine) {
     while !matches!(vm.step().unwrap(), Step::System { .. }) {}
 }
 
@@ -141,7 +141,7 @@ fn cmv(frames: u32, rate: u32, rate_time: u32, audio: bool) -> Vec<u8> {
 #[derive(Default)]
 struct Files(BTreeMap<Vec<u8>, Vec<u8>>);
 impl MovieSource for Files {
-    fn open(&mut self, name: &[u8]) -> Result<Option<OpenedMovie>, Box<dyn Error>> {
+    fn open(&mut self, name: &[u8]) -> Result<Option<OpenedMovie>, Box<dyn Error + Send + Sync>> {
         let Some(bytes) = self.0.get(name) else {
             return Ok(None);
         };
@@ -152,7 +152,7 @@ impl MovieSource for Files {
 }
 struct Broken;
 impl AudioBackend for Broken {
-    fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error>> {
+    fn play(&mut self, _: &AudioRequest) -> Result<bool, Box<dyn Error + Send + Sync>> {
         Err("synthetic device failure".into())
     }
 }
@@ -174,27 +174,30 @@ fn player_code(queries: usize) -> Vec<u8> {
 }
 
 #[derive(Debug, Clone)]
-struct MgvTestFactory(std::rc::Rc<std::cell::Cell<bool>>);
+struct MgvTestFactory(std::sync::Arc<std::sync::atomic::AtomicBool>);
 #[derive(Debug)]
-struct MgvTestDecoder(std::rc::Rc<std::cell::Cell<bool>>);
-impl cmvs_core::mgv::Decoder for MgvTestDecoder {
-    fn frame(&mut self, frame: u32) -> Result<cmvs_core::raster::RgbaImage, Box<dyn Error>> {
-        if self.0.get() {
+struct MgvTestDecoder(std::sync::Arc<std::sync::atomic::AtomicBool>);
+impl cmvs_core::format::mgv::Decoder for MgvTestDecoder {
+    fn frame(
+        &mut self,
+        frame: u32,
+    ) -> Result<cmvs_core::render::raster::RgbaImage, Box<dyn Error + Send + Sync>> {
+        if self.0.load(std::sync::atomic::Ordering::Relaxed) {
             return Err("synthetic frame failure".into());
         }
-        Ok(cmvs_core::raster::RgbaImage::new(
+        Ok(cmvs_core::render::raster::RgbaImage::new(
             1,
             1,
             vec![frame as u8, 0, 0, 255],
         )?)
     }
 }
-impl cmvs_core::mgv::DecoderFactory for MgvTestFactory {
+impl cmvs_core::format::mgv::DecoderFactory for MgvTestFactory {
     fn open(
         &self,
-        _: Box<dyn cmvs_core::mgv::ReadSeek>,
-        _: &cmvs_core::mgv::MgvIndex,
-    ) -> Result<Box<dyn cmvs_core::mgv::Decoder>, Box<dyn Error>> {
+        _: Box<dyn cmvs_core::format::mgv::ReadSeek>,
+        _: &cmvs_core::format::mgv::MgvIndex,
+    ) -> Result<Box<dyn cmvs_core::format::mgv::Decoder>, Box<dyn Error + Send + Sync>> {
         Ok(Box::new(MgvTestDecoder(self.0.clone())))
     }
 }
@@ -202,24 +205,24 @@ struct MgvTestSource {
     missing: bool,
 }
 impl MovieSource for MgvTestSource {
-    fn open(&mut self, _: &[u8]) -> Result<Option<OpenedMovie>, Box<dyn Error>> {
+    fn open(&mut self, _: &[u8]) -> Result<Option<OpenedMovie>, Box<dyn Error + Send + Sync>> {
         unreachable!()
     }
     fn open_mgv(
         &mut self,
         name: &[u8],
-    ) -> Result<Option<cmvs_core::movie::OpenedMgv>, Box<dyn Error>> {
+    ) -> Result<Option<cmvs_core::host::movie::OpenedMgv>, Box<dyn Error + Send + Sync>> {
         if self.missing {
             return Ok(None);
         }
-        let index = cmvs_core::mgv::MgvIndex {
+        let index = cmvs_core::format::mgv::MgvIndex {
             width: 1,
             height: 1,
             rate: 10,
             rate_time: 1,
             frames: [0, 1, 1, 2]
                 .into_iter()
-                .map(|packet| cmvs_core::mgv::FrameEntry {
+                .map(|packet| cmvs_core::format::mgv::FrameEntry {
                     packet,
                     key_frame: packet == 0,
                 })
@@ -234,14 +237,13 @@ impl MovieSource for MgvTestSource {
 }
 fn mgv_step(
     id: &str,
-    vm: &mut Machine<'_>,
+    vm: &mut Machine,
     movies: &mut MovieHost,
     source: &mut MgvTestSource,
     audio: &mut RecordingAudio,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     use cmvs_core::{
-        dispatch::{self, Hosts, MoviePlayerHosts},
-        profile::Registry,
+        profile::Registry, vm::dispatch, vm::dispatch::Hosts, vm::dispatch::MoviePlayerHosts,
     };
     let command = vm.pending_system().unwrap().1;
     let profile = Registry::builtin().profile(id).unwrap();
@@ -276,10 +278,10 @@ fn mgv_code(queries: usize) -> Vec<u8> {
 #[test]
 fn mgv_player_decodes_before_commit_queries_nominal_frame_and_stops_audio() {
     for id in ["cmvs-20190305", "cmvs-20190405"] {
-        use cmvs_core::audio::MovieAudioClock;
+        use cmvs_core::host::audio::MovieAudioClock;
         let script = program(&mgv_code(3), b"synthetic.mgv\0");
         let mut vm = Machine::new(&script).unwrap();
-        let failure = std::rc::Rc::new(std::cell::Cell::new(false));
+        let failure = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let mut movies = MovieHost::default();
         movies.set_mgv_factory(Box::new(MgvTestFactory(failure.clone())));
         let mut source = MgvTestSource { missing: false };
@@ -298,10 +300,10 @@ fn mgv_player_decodes_before_commit_queries_nominal_frame_and_stops_audio() {
                 ..
             }
         ));
-        failure.set(true);
+        failure.store(true, std::sync::atomic::Ordering::Relaxed);
         assert!(movies.advance_with_clock(100, None, &mut source).is_err());
         assert_eq!(movies.player_image().unwrap().pixels(), [0, 0, 0, 255]);
-        failure.set(false);
+        failure.store(false, std::sync::atomic::Ordering::Relaxed);
         movies
             .advance_with_clock(
                 50000,
@@ -314,14 +316,14 @@ fn mgv_player_decodes_before_commit_queries_nominal_frame_and_stops_audio() {
         mgv_step(id, &mut vm, &mut movies, &mut source, &mut audio).unwrap();
         assert_eq!(vm.state().system_integer(0), Some(1));
         let image = movies.player_image().unwrap().clone();
-        failure.set(true);
+        failure.store(true, std::sync::atomic::Ordering::Relaxed);
         movies.advance_with_clock(100, None, &mut source).unwrap();
         assert_eq!(movies.player_image().unwrap(), &image);
         assert_eq!(movies.player_image().unwrap().frame_id(), image.frame_id());
         pending(&mut vm);
         mgv_step(id, &mut vm, &mut movies, &mut source, &mut audio).unwrap();
         assert_eq!(vm.state().system_integer(0), Some(2));
-        failure.set(false);
+        failure.store(false, std::sync::atomic::Ordering::Relaxed);
         movies.advance_with_clock(300, None, &mut source).unwrap();
         assert!(!movies.has_player());
         pending(&mut vm);
@@ -342,8 +344,8 @@ fn mgv_missing_files_backend_and_frame_failures_leave_explicit_results_or_pendin
             let mut vm = Machine::new(&script).unwrap();
             let mut movies = MovieHost::default();
             if install {
-                movies.set_mgv_factory(Box::new(MgvTestFactory(std::rc::Rc::new(
-                    std::cell::Cell::new(fail),
+                movies.set_mgv_factory(Box::new(MgvTestFactory(std::sync::Arc::new(
+                    std::sync::atomic::AtomicBool::new(fail),
                 ))));
             }
             let mut source = MgvTestSource { missing };
@@ -376,11 +378,11 @@ fn mgv_missing_files_backend_and_frame_failures_leave_explicit_results_or_pendin
     }
 }
 fn step(
-    vm: &mut Machine<'_>,
+    vm: &mut Machine,
     movies: &mut MovieHost,
     files: &mut Files,
     backend: &mut dyn AudioBackend,
-) -> Result<bool, Box<dyn Error>> {
+) -> Result<bool, Box<dyn Error + Send + Sync>> {
     pending(vm);
     Ok(movies.shared_player(vm, files, AudioSettings::default(), backend)?)
 }
@@ -484,7 +486,7 @@ struct Frames {
     fail: bool,
 }
 impl MovieSource for Frames {
-    fn open(&mut self, name: &[u8]) -> Result<Option<OpenedMovie>, Box<dyn Error>> {
+    fn open(&mut self, name: &[u8]) -> Result<Option<OpenedMovie>, Box<dyn Error + Send + Sync>> {
         self.files.open(name)
     }
     fn frame(
@@ -492,12 +494,12 @@ impl MovieSource for Frames {
         _: &[u8],
         _: &CmvIndex,
         frame: u32,
-    ) -> Result<cmvs_core::raster::RgbaImage, Box<dyn Error>> {
+    ) -> Result<cmvs_core::render::raster::RgbaImage, Box<dyn Error + Send + Sync>> {
         self.reads.push(frame);
         if self.fail {
             return Err("synthetic frame read failed".into());
         }
-        Ok(cmvs_core::raster::RgbaImage::new(
+        Ok(cmvs_core::render::raster::RgbaImage::new(
             1,
             1,
             vec![frame as u8, 0, 0, 255],
@@ -575,14 +577,13 @@ fn initial_frame_failure_preserves_vm_and_sends_no_audio() {
 #[test]
 fn cvns_modal_player_yields_allows_silent_cmv3_and_clears_on_missing_or_end() {
     use cmvs_core::{
-        cvns::CommandMap,
-        dispatch::{self, Flow, Hosts, MoviePlayerHosts},
-        profile::Semantics,
+        profile::Semantics, vm::cvns::CommandMap, vm::dispatch, vm::dispatch::Flow,
+        vm::dispatch::Hosts, vm::dispatch::MoviePlayerHosts,
     };
 
     let code = player_code(0);
     let script = program(&code, b"op.cmv\0");
-    let map = CommandMap::new([(0xc0, cmvs_core::cvns::cmd::MOVIE_PLAY)]);
+    let map = CommandMap::new([(0xc0, cmvs_core::vm::cvns::cmd::MOVIE_PLAY)]);
 
     // Valid CMV3 with audio_flag == 0 and no Ogg entry: modal CVNS yields (0xc004) and advances PC.
     let mut silent_cmv3 = cmv(3, 24, 1, false);
@@ -649,7 +650,7 @@ fn cvns_modal_player_yields_allows_silent_cmv3_and_clears_on_missing_or_end() {
 
 #[test]
 fn audio_clock_is_absolute_and_does_not_accumulate_wall_time() {
-    use cmvs_core::audio::MovieAudioClock;
+    use cmvs_core::host::audio::MovieAudioClock;
     let script = program(&player_code(0), b"a.cmv\0");
     let mut vm = Machine::new(&script).unwrap();
     pending(&mut vm);
@@ -704,8 +705,8 @@ fn audio_clock_is_absolute_and_does_not_accumulate_wall_time() {
 
 use crate::support::cmv9 as slot_fixture;
 struct SceneFiles(Option<Vec<u8>>);
-impl cmvs_core::resources::ResourceSource for SceneFiles {
-    fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+impl cmvs_core::host::resources::ResourceSource for SceneFiles {
+    fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
         Ok(self.0.clone())
     }
 }
@@ -726,7 +727,7 @@ fn scene_movie_creation_replaces_the_object_without_changing_results_or_starting
     let program = program(&code, b"synthetic.cmv\0");
     let mut vm = Machine::new(&program).unwrap();
     let mut movies = MovieHost::default();
-    let mut scene = cmvs_core::scene::SceneHost::default();
+    let mut scene = cmvs_core::render::scene::SceneHost::default();
     let mut files = SceneFiles(Some(slot_fixture::movie(false)));
     vm.state_mut().set_system_integer(0, 123).unwrap();
     pending(&mut vm);
@@ -763,7 +764,7 @@ fn explicit_archive_movie_modes_create_a_player_and_reject_other_sources_atomica
         let parsed = program(&code, b"synthetic.cmv\0");
         let mut vm = Machine::new(&parsed).unwrap();
         let mut movies = MovieHost::default();
-        let mut scene = cmvs_core::scene::SceneHost::default();
+        let mut scene = cmvs_core::render::scene::SceneHost::default();
         let mut files = SceneFiles(Some(slot_fixture::movie(false)));
         pending(&mut vm);
         vm.state_mut().set_system_integer(0, 99).unwrap();
@@ -799,7 +800,7 @@ fn failed_scene_movie_creation_preserves_command_stack_results_and_scene() {
         let program = program(&code, b"synthetic.cmv\0");
         let mut vm = Machine::new(&program).unwrap();
         let mut movies = MovieHost::default();
-        let mut scene = cmvs_core::scene::SceneHost::default();
+        let mut scene = cmvs_core::render::scene::SceneHost::default();
         pending(&mut vm);
         vm.state_mut().set_system_integer(0, 456).unwrap();
         let pc = vm.pc();
@@ -824,7 +825,7 @@ fn replacing_an_existing_scene_player_is_atomic_on_resource_failure() {
     let script = program(&code, b"synthetic.cmv\0");
     let mut vm = Machine::new(&script).unwrap();
     let mut movies = MovieHost::default();
-    let mut scene = cmvs_core::scene::SceneHost::default();
+    let mut scene = cmvs_core::render::scene::SceneHost::default();
     let mut files = SceneFiles(Some(slot_fixture::movie(false)));
     pending(&mut vm);
     movies
@@ -869,8 +870,8 @@ fn scene_command(code: &mut Vec<u8>, opcode: u16, args: &[u32]) {
 #[test]
 fn inspected_seek_updates_pixels_and_unpauses_without_starting_or_resetting_playback() {
     use cmvs_core::{
-        dispatch::{self, Flow, Hosts, MovieSceneHosts},
-        profile::{Registry, Semantics},
+        profile::Registry, profile::Semantics, vm::dispatch, vm::dispatch::Flow,
+        vm::dispatch::Hosts, vm::dispatch::MovieSceneHosts,
     };
     let profile = Registry::builtin().profile("cmvs-20080719").unwrap();
     let semantics = profile.semantics(0x31b);
@@ -889,7 +890,7 @@ fn inspected_seek_updates_pixels_and_unpauses_without_starting_or_resetting_play
         let (program, mut files) = scene_play_fixture(&code);
         let mut vm = Machine::new(&program).unwrap();
         let mut movies = MovieHost::default();
-        let mut scene = cmvs_core::scene::SceneHost::default();
+        let mut scene = cmvs_core::render::scene::SceneHost::default();
         pending(&mut vm);
         movies
             .shared_create_scene(&mut vm, &mut scene, &mut files)
@@ -965,8 +966,7 @@ fn inspected_seek_updates_pixels_and_unpauses_without_starting_or_resetting_play
 #[test]
 fn inspected_seek_preserves_pending_state_on_invalid_frame_slot_or_binding() {
     use cmvs_core::{
-        dispatch::{self, Hosts, MovieSceneHosts},
-        profile::Registry,
+        profile::Registry, vm::dispatch, vm::dispatch::Hosts, vm::dispatch::MovieSceneHosts,
     };
     let semantics = Registry::builtin()
         .profile("cmvs-20080719")
@@ -983,7 +983,7 @@ fn inspected_seek_preserves_pending_state_on_invalid_frame_slot_or_binding() {
         let (program, mut files) = scene_play_fixture(&code);
         let mut vm = Machine::new(&program).unwrap();
         let mut movies = MovieHost::default();
-        let mut scene = cmvs_core::scene::SceneHost::default();
+        let mut scene = cmvs_core::render::scene::SceneHost::default();
         pending(&mut vm);
         movies
             .shared_create_scene(&mut vm, &mut scene, &mut files)
@@ -992,7 +992,7 @@ fn inspected_seek_preserves_pending_state_on_invalid_frame_slot_or_binding() {
             let removal = script(&slot_command(0x2021, &[28]));
             let mut removal_vm = Machine::new(&removal).unwrap();
             pending(&mut removal_vm);
-            scene.try_handle(&mut removal_vm).unwrap();
+            scene.shared_state(&mut removal_vm).unwrap();
         }
         pending(&mut vm);
         vm.state_mut().set_system_integer(0, 77).unwrap();
@@ -1033,8 +1033,8 @@ fn scene_play_fixture(extra: &[u8]) -> (Script, SceneFiles) {
 #[test]
 fn inspected_movie_controls_query_segment_frame_and_preserve_state_on_errors() {
     use cmvs_core::{
-        dispatch::{self, Flow, Hosts},
-        profile::{Registry, Semantics},
+        profile::Registry, profile::Semantics, vm::dispatch, vm::dispatch::Flow,
+        vm::dispatch::Hosts,
     };
     let profile = Registry::builtin().profile("cmvs-20080719").unwrap();
     let mut code = vec![];
@@ -1055,7 +1055,7 @@ fn inspected_movie_controls_query_segment_frame_and_preserve_state_on_errors() {
     let (program, mut files) = scene_play_fixture(&code);
     let mut vm = Machine::new(&program).unwrap();
     let mut movies = MovieHost::default();
-    let mut scene = cmvs_core::scene::SceneHost::default();
+    let mut scene = cmvs_core::render::scene::SceneHost::default();
     pending(&mut vm);
     movies
         .shared_create_scene(&mut vm, &mut scene, &mut files)
@@ -1133,7 +1133,7 @@ fn scene_playback_uses_fractional_frame_time_and_keeps_the_final_image() {
     let (script, mut files) = scene_play_fixture(&code);
     let mut vm = Machine::new(&script).unwrap();
     let mut movies = MovieHost::default();
-    let mut scene = cmvs_core::scene::SceneHost::default();
+    let mut scene = cmvs_core::render::scene::SceneHost::default();
     pending(&mut vm);
     movies
         .shared_create_scene(&mut vm, &mut scene, &mut files)
@@ -1175,8 +1175,7 @@ fn scene_playback_uses_fractional_frame_time_and_keeps_the_final_image() {
 #[test]
 fn queued_movie_segment_applies_immediately_preserving_pause_clock_and_active() {
     use cmvs_core::{
-        dispatch::{self, Hosts, MovieSceneHosts},
-        profile::Registry,
+        profile::Registry, vm::dispatch, vm::dispatch::Hosts, vm::dispatch::MovieSceneHosts,
     };
     let semantics = Registry::builtin()
         .profile("cmvs-20080719")
@@ -1192,7 +1191,7 @@ fn queued_movie_segment_applies_immediately_preserving_pause_clock_and_active() 
         let (program, mut files) = scene_play_fixture(&code);
         let mut vm = Machine::new(&program).unwrap();
         let mut movies = MovieHost::default();
-        let mut scene = cmvs_core::scene::SceneHost::default();
+        let mut scene = cmvs_core::render::scene::SceneHost::default();
         pending(&mut vm);
         movies
             .shared_create_scene(&mut vm, &mut scene, &mut files)
@@ -1262,7 +1261,7 @@ fn scene_playback_loops_and_defers_a_new_segment_until_the_boundary() {
     let (script, mut files) = scene_play_fixture(&code);
     let mut vm = Machine::new(&script).unwrap();
     let mut movies = MovieHost::default();
-    let mut scene = cmvs_core::scene::SceneHost::default();
+    let mut scene = cmvs_core::render::scene::SceneHost::default();
     pending(&mut vm);
     movies
         .shared_create_scene(&mut vm, &mut scene, &mut files)
@@ -1295,7 +1294,7 @@ fn scene_start_does_not_seek_and_preserves_a_paused_completion_state() {
     let (script, mut files) = scene_play_fixture(&code);
     let mut vm = Machine::new(&script).unwrap();
     let mut movies = MovieHost::default();
-    let mut scene = cmvs_core::scene::SceneHost::default();
+    let mut scene = cmvs_core::render::scene::SceneHost::default();
     pending(&mut vm);
     movies
         .shared_create_scene(&mut vm, &mut scene, &mut files)
@@ -1323,7 +1322,7 @@ fn scene_pause_keeps_frame_and_resume_discards_fractional_time_without_catching_
     let (script, mut files) = scene_play_fixture(&code);
     let mut vm = Machine::new(&script).unwrap();
     let mut movies = MovieHost::default();
-    let mut scene = cmvs_core::scene::SceneHost::default();
+    let mut scene = cmvs_core::render::scene::SceneHost::default();
     pending(&mut vm);
     movies
         .shared_create_scene(&mut vm, &mut scene, &mut files)
@@ -1394,7 +1393,7 @@ fn scene_pause_resume_empty_slots_are_noops_and_invalid_slots_remain_pending() {
 #[test]
 #[ignore = "requires CMVS_GAME_ROOT; external background movie, read only"]
 fn external_background_movie_pause_and_resume_keeps_the_bound_image() {
-    use cmvs_core::resources::{ResourceArchives, ResourceKind};
+    use cmvs_core::{host::resources::ResourceArchives, host::resources::ResourceKind};
     let root = std::env::var_os("CMVS_GAME_ROOT").expect("CMVS_GAME_ROOT");
     let mut resources = ResourceArchives::new(root).unwrap();
     let paths = BTreeMap::from([((0x201a, 0), b"data/pack/video.cpz".to_vec())]);
@@ -1405,7 +1404,7 @@ fn external_background_movie_pause_and_resume_keeps_the_bound_image() {
     let script = program(&code, b"bg340a.cmv\0");
     let mut vm = Machine::new(&script).unwrap();
     let mut movies = MovieHost::default();
-    let mut scene = cmvs_core::scene::SceneHost::default();
+    let mut scene = cmvs_core::render::scene::SceneHost::default();
     pending(&mut vm);
     movies
         .shared_create_scene(
@@ -1448,7 +1447,7 @@ fn external_background_movie_pause_and_resume_keeps_the_bound_image() {
         movies.scene_player(0).unwrap().frame
     );
 }
-fn query_result(vm: &mut Machine<'_>, movies: &mut MovieHost) -> Option<u32> {
+fn query_result(vm: &mut Machine, movies: &mut MovieHost) -> Option<u32> {
     pending(vm);
     vm.state_mut().set_system_integer(0, 9).unwrap();
     let pc = vm.pc();
@@ -1466,7 +1465,7 @@ fn scene_activity_query_follows_start_and_completion_and_reports_empty_slots_as_
     let (script, mut files) = scene_play_fixture(&code);
     let mut vm = Machine::new(&script).unwrap();
     let mut movies = MovieHost::default();
-    let mut scene = cmvs_core::scene::SceneHost::default();
+    let mut scene = cmvs_core::render::scene::SceneHost::default();
     pending(&mut vm);
     movies
         .shared_create_scene(&mut vm, &mut scene, &mut files)
@@ -1504,7 +1503,7 @@ fn scene_frame_query_reads_retained_frame_and_zero_for_empty_player() {
     let (script, mut files) = scene_play_fixture(&code);
     let mut vm = Machine::new(&script).unwrap();
     let mut movies = MovieHost::default();
-    let mut scene = cmvs_core::scene::SceneHost::default();
+    let mut scene = cmvs_core::render::scene::SceneHost::default();
     pending(&mut vm);
     movies
         .shared_create_scene(&mut vm, &mut scene, &mut files)
@@ -1535,7 +1534,7 @@ fn scene_playback_rejects_destroyed_bindings_without_committing_its_frame_or_tim
     let (script, mut files) = scene_play_fixture(&code);
     let mut vm = Machine::new(&script).unwrap();
     let mut movies = MovieHost::default();
-    let mut scene = cmvs_core::scene::SceneHost::default();
+    let mut scene = cmvs_core::render::scene::SceneHost::default();
     pending(&mut vm);
     movies
         .shared_create_scene(&mut vm, &mut scene, &mut files)
@@ -1543,7 +1542,7 @@ fn scene_playback_rejects_destroyed_bindings_without_committing_its_frame_or_tim
     pending(&mut vm);
     movies.shared_start_scene(&mut vm).unwrap();
     pending(&mut vm);
-    scene.try_handle(&mut vm).unwrap();
+    scene.shared_state(&mut vm).unwrap();
     let old = movies.scene_player(0).unwrap().playback.clone();
     assert!(movies.advance_scene(67, &mut scene).is_err());
     assert_eq!(movies.scene_player(0).unwrap().playback, old);
@@ -1557,7 +1556,7 @@ fn scene_start_checks_segments_and_arguments_but_an_empty_slot_is_a_noop() {
         let (script, mut files) = scene_play_fixture(&code);
         let mut vm = Machine::new(&script).unwrap();
         let mut movies = MovieHost::default();
-        let mut scene = cmvs_core::scene::SceneHost::default();
+        let mut scene = cmvs_core::render::scene::SceneHost::default();
         pending(&mut vm);
         movies
             .shared_create_scene(&mut vm, &mut scene, &mut files)
@@ -1584,7 +1583,7 @@ fn scene_frame_decode_failure_keeps_the_previous_pixels_frame_and_playback_for_r
     let (script, mut files) = scene_play_fixture(&code);
     let mut vm = Machine::new(&script).unwrap();
     let mut movies = MovieHost::default();
-    let mut scene = cmvs_core::scene::SceneHost::default();
+    let mut scene = cmvs_core::render::scene::SceneHost::default();
     pending(&mut vm);
     movies
         .shared_create_scene(&mut vm, &mut scene, &mut files)
@@ -1612,7 +1611,7 @@ fn cmv6_scene_creation_and_segment_playback_share_the_existing_ownership_rules()
         let script = program(&code, b"synthetic.cmv\0");
         let mut vm = Machine::new(&script).unwrap();
         let mut movies = MovieHost::default();
-        let mut scene = cmvs_core::scene::SceneHost::default();
+        let mut scene = cmvs_core::render::scene::SceneHost::default();
         let mut files = SceneFiles(Some(slot_fixture::cmv6(4, bitmap_header)));
         pending(&mut vm);
         vm.state_mut().set_system_integer(0, 123).unwrap();
@@ -1624,7 +1623,7 @@ fn cmv6_scene_creation_and_segment_playback_share_the_existing_ownership_rules()
         let p = movies.scene_player(2).unwrap();
         assert!(matches!(
             *p.index,
-            cmvs_core::movie::SceneMovieIndex::Cmv6(_)
+            cmvs_core::host::movie::SceneMovieIndex::Cmv6(_)
         ));
         assert!(!p.playback.active);
         assert_eq!(p.frame, 1);
@@ -1689,7 +1688,7 @@ fn cmv6_scene_bad_frames_metadata_and_real_soundtracks_preserve_the_old_player()
         let script = program(&code, b"synthetic.cmv\0");
         let mut vm = Machine::new(&script).unwrap();
         let mut movies = MovieHost::default();
-        let mut scene = cmvs_core::scene::SceneHost::default();
+        let mut scene = cmvs_core::render::scene::SceneHost::default();
         pending(&mut vm);
         movies
             .shared_create_scene(
@@ -1724,7 +1723,7 @@ fn cmv8_scene_creation_binds_an_alpha_image_and_playback_keeps_it() {
     let script = program(&code, b"synthetic.cmv\0");
     let mut vm = Machine::new(&script).unwrap();
     let mut movies = MovieHost::default();
-    let mut scene = cmvs_core::scene::SceneHost::default();
+    let mut scene = cmvs_core::render::scene::SceneHost::default();
     let mut files = SceneFiles(Some(slot_fixture::cmv8(3)));
     pending(&mut vm);
     movies
@@ -1732,9 +1731,9 @@ fn cmv8_scene_creation_binds_an_alpha_image_and_playback_keeps_it() {
         .unwrap();
     assert!(matches!(
         *movies.scene_player(1).unwrap().index,
-        cmvs_core::movie::SceneMovieIndex::Cmv8(_)
+        cmvs_core::host::movie::SceneMovieIndex::Cmv8(_)
     ));
-    let alpha_of = |scene: &cmvs_core::scene::SceneHost| {
+    let alpha_of = |scene: &cmvs_core::render::scene::SceneHost| {
         let image = scene.object(30).unwrap().image.as_ref().unwrap();
         assert!(image.alpha);
         let pixels = image.pixels.pixels();
@@ -1776,7 +1775,7 @@ fn prefetched_scene_frames_match_synchronous_decoding_through_skips_stalls_and_l
             if prefetch {
                 movies.set_scene_prefetch(|| {});
             }
-            let mut scene = cmvs_core::scene::SceneHost::default();
+            let mut scene = cmvs_core::render::scene::SceneHost::default();
             let mut files = SceneFiles(Some(data.clone()));
             pending(&mut vm);
             movies

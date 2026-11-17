@@ -13,7 +13,6 @@ use crate::{
     cvns::cmd::MOVIE_PLAY as CVNS_MOVIE_PLAY,
     dispatch::{Call, Flow},
     evaluate::error,
-    machine::Machine,
 };
 use std::error::Error;
 
@@ -54,7 +53,7 @@ impl MovieHost {
         delta_ms: u32,
         clock: Option<MovieAudioClock>,
         source: &mut dyn MovieSource,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         let Some(movie) = &self.player else {
             return Ok(());
         };
@@ -102,7 +101,7 @@ impl MovieHost {
     pub(crate) fn stop_player(
         &mut self,
         backend: &mut dyn AudioBackend,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if self.player.is_some() {
             backend.stop_movie_audio()?;
         }
@@ -112,39 +111,13 @@ impl MovieHost {
         Ok(())
     }
 
-    /// 0x20c0 / 0x140071500: SP-4 name; destroys any player, opens root + 0x2015 entry +
-    /// name, starts the soundtrack at (+1612 * +1628) >> 8 and sets system result 0 to
-    /// whether the file opened; returns 0x4004. 0x20c1 / 0x140071680 destroys the player
-    /// (stopping channel 2) and returns 0x4000. 0x20c2 / 0x1400716d0 sets system result 0
-    /// to the frame index, or -1 without a player, and returns 0x4000.
-    ///
-    /// CVNS `0x20c0` (`CVNS_MOVIE_PLAY` / `0x459850`) shares open/audio/frame-0 setup but
-    /// returns `0xc004` (`Flow::Yield`) and holds the VM in `sub_405960` until completion or
-    /// skip input.
-    pub fn try_handle_player(
-        &mut self,
-        vm: &mut Machine<'_>,
-        source: &mut dyn MovieSource,
-        settings: AudioSettings,
-        backend: &mut dyn AudioBackend,
-    ) -> Result<bool, Box<dyn Error>> {
-        let Some((pc, command)) = vm.pending_system() else {
-            return Ok(false);
-        };
-        if !matches!(command, 0xc0..=0xc2 | CVNS_MOVIE_PLAY) {
-            return Ok(false);
-        }
-        self.handle_player(&mut Call::new(vm, pc, command), source, settings, backend)?;
-        Ok(true)
-    }
-
     pub(crate) fn handle_player(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         source: &mut dyn MovieSource,
         settings: AudioSettings,
         backend: &mut dyn AudioBackend,
-    ) -> Result<Flow, Box<dyn Error>> {
+    ) -> Result<Flow, Box<dyn Error + Send + Sync>> {
         let (pc, command) = (call.pc, call.command);
         let op = command + 0x2000;
         match command {

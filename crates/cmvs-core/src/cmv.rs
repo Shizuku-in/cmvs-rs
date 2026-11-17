@@ -68,13 +68,13 @@ impl CmvIndex {
     /// collapsing them into [`FormatError`].
     pub fn read_io(
         reader: &mut (impl Read + Seek + ?Sized),
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         Self::read_signature_io(reader, false)
     }
     /// Like [`Self::read_scene`], preserving underlying [`std::io::Error`] failures.
     pub fn read_scene_io(
         reader: &mut (impl Read + Seek + ?Sized),
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         Self::read_signature_io(reader, true)
     }
     fn read_signature(
@@ -91,13 +91,14 @@ impl CmvIndex {
     fn read_signature_io(
         reader: &mut (impl Read + Seek + ?Sized),
         allow_alpha: bool,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let length = reader.seek(SeekFrom::End(0))?;
         reader.seek(SeekFrom::Start(0))?;
         let mut head = [0u8; HEADER_SIZE as usize];
         reader.read_exact(&mut head).map_err(|err| {
             if err.kind() == std::io::ErrorKind::UnexpectedEof {
-                Box::new(FormatError("CMV header truncated")) as Box<dyn std::error::Error>
+                Box::new(FormatError("CMV header truncated"))
+                    as Box<dyn std::error::Error + Send + Sync>
             } else {
                 Box::new(err)
             }
@@ -143,7 +144,8 @@ impl CmvIndex {
         let mut table = vec![0u8; (u64::from(count) * ENTRY_SIZE) as usize];
         reader.read_exact(&mut table).map_err(|err| {
             if err.kind() == std::io::ErrorKind::UnexpectedEof {
-                Box::new(FormatError("CMV index truncated")) as Box<dyn std::error::Error>
+                Box::new(FormatError("CMV index truncated"))
+                    as Box<dyn std::error::Error + Send + Sync>
             } else {
                 Box::new(err)
             }
@@ -182,7 +184,7 @@ impl CmvIndex {
         &self,
         reader: &mut (impl Read + Seek + ?Sized),
         frame: u32,
-    ) -> Result<crate::raster::RgbaImage, Box<dyn std::error::Error>> {
+    ) -> Result<crate::raster::RgbaImage, Box<dyn std::error::Error + Send + Sync>> {
         let entry = self
             .entries
             .get(frame as usize)

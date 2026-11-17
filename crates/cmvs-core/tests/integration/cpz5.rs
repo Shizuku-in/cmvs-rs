@@ -1,7 +1,7 @@
 use cmvs_core::{
-    cpz::{ArchiveIndex, ArchiveLayout, ArchiveVersion, Cpz5Index, Cpz5Layout, Cpz5Mode},
-    ps3::Script,
-    script_control::packing_mode_from_start,
+    format::cpz::ArchiveIndex, format::cpz::ArchiveLayout, format::cpz::ArchiveVersion,
+    format::cpz::Cpz5Index, format::cpz::Cpz5Layout, format::cpz::Cpz5Mode, format::ps3::Script,
+    runtime::script_control::packing_mode_from_start,
 };
 use std::{
     fs::File,
@@ -129,7 +129,7 @@ fn checksum_layers_truncated_inputs_and_invalid_ranges_are_rejected() {
 
 #[test]
 fn impossible_header_counts_modes_and_large_indexes_fail_before_allocation() {
-    use cmvs_core::cpz::data_checksum;
+    use cmvs_core::format::cpz::data_checksum;
     use std::io::{self, Seek, SeekFrom};
     fn checksum(bytes: &mut [u8]) {
         let sum = data_checksum(&bytes[..60])
@@ -183,7 +183,7 @@ fn impossible_header_counts_modes_and_large_indexes_fail_before_allocation() {
 
 #[test]
 #[ignore = "requires CMVS_CPZ5_TEST_INPUTS pointing to read-only external archives"]
-fn external_archive_resources() -> Result<(), Box<dyn std::error::Error>> {
+fn external_archive_resources() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let inputs = std::env::var_os("CMVS_CPZ5_TEST_INPUTS").ok_or("set CMVS_CPZ5_TEST_INPUTS")?;
     let sample = std::env::var_os("CMVS_CPZ5_SAMPLE_EDGES").is_some();
     let mut archives = 0;
@@ -217,7 +217,7 @@ fn external_archive_resources() -> Result<(), Box<dyn std::error::Error>> {
             let name = entry.name.to_ascii_lowercase();
             if name.ends_with(b".ps2") || name.ends_with(b".ps3") {
                 let script = Script::decode(&bytes)?;
-                cmvs_core::bytecode::decode_layout(
+                cmvs_core::vm::bytecode::decode_layout(
                     script.code(),
                     script.header().entry_pc,
                     &script.labels(),

@@ -51,13 +51,12 @@ use crate::{
 use std::{error::Error, fmt};
 
 /// A command failure with its original typed cause and dispatch location.
-/// Display delegates to the cause to preserve existing diagnostics.
 #[derive(Debug)]
 pub struct DispatchError {
     pub pc: usize,
     /// VM command number (opcode minus 0x2000), including for backend failures.
     pub command: u16,
-    cause: Box<dyn Error>,
+    cause: Box<dyn Error + Send + Sync>,
 }
 
 impl DispatchError {
@@ -76,7 +75,13 @@ impl DispatchError {
 
 impl fmt::Display for DispatchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.cause.fmt(f)
+        write!(
+            f,
+            "system command 0x{:04x} at 0x{:x}: {}",
+            0x2000 + self.command,
+            self.pc,
+            self.cause
+        )
     }
 }
 
@@ -127,7 +132,7 @@ impl Flow {
     }
 }
 
-type Handler = fn(&mut Hosts<'_>, &mut Call<'_, '_>) -> Result<Flow, Box<dyn Error>>;
+type Handler = fn(&mut Hosts<'_>, &mut Call<'_>) -> Result<Flow, Box<dyn Error + Send + Sync>>;
 
 /// Registration metadata for command inspection. Execute commands through [`run`].
 pub struct Entry {
@@ -197,7 +202,7 @@ impl Entry {
 
     pub(crate) fn run(
         &self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         hosts: &mut Hosts<'_>,
     ) -> Result<Option<Flow>, DispatchError> {
         let Some((pc, command)) = vm.pending_system() else {
@@ -218,7 +223,7 @@ impl Entry {
 /// caller may report the missing capability, but must not try another handler.
 pub fn run(
     semantics: Semantics,
-    vm: &mut Machine<'_>,
+    vm: &mut Machine,
     hosts: &mut Hosts<'_>,
 ) -> Result<Option<Flow>, DispatchError> {
     let Some((_, command)) = vm.pending_system() else {
@@ -228,4 +233,24 @@ pub fn run(
         return Ok((semantics != Semantics::Root).then_some(Flow::Unhandled));
     };
     entry.run(vm, hosts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DispatchError;
+    use std::error::Error;
+
+    #[test]
+    fn dispatch_error_display_includes_opcode_and_pc() {
+        let err = DispatchError {
+            pc: 0x1a4,
+            command: 0x0152,
+            cause: "bad operand".into(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "system command 0x2152 at 0x1a4: bad operand"
+        );
+        assert!(err.source().is_some());
+    }
 }

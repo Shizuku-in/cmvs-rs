@@ -15,10 +15,7 @@ use crate::{
     session::{Coverage, Options, Session, Stop},
     target::Target,
 };
-use cmvs_core::{
-    digest::{sha256, to_hex},
-    ps3::Script,
-};
+use cmvs_core::{format::digest::sha256, format::digest::to_hex, format::ps3::Script};
 use std::{
     cell::Cell,
     collections::{BTreeMap, BTreeSet},

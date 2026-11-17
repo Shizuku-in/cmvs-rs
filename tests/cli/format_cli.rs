@@ -1,8 +1,7 @@
 use crate::support::TempDir;
 use cmvs_rs::{
-    pb3,
-    platform::{DirectoryAssets, PlatformAssets},
-    system_save::{FileSystemSave, SystemSaveSource},
+    format::pb3, format::system_save::FileSystemSave, format::system_save::SystemSaveSource,
+    host::platform::DirectoryAssets, host::platform::PlatformAssets,
 };
 use std::{fs, process::Command};
 
@@ -168,7 +167,7 @@ fn literals(bytes: &[u8]) -> Vec<u8> {
 }
 
 fn csv2_fixture(sections: [&[u8]; 3]) -> Vec<u8> {
-    use cmvs_rs::save::HEADER_SIZE;
+    use cmvs_rs::format::save::HEADER_SIZE;
     let mut packed = sections.map(literals);
     let key = b"DAME_SAVE_IMAGE";
     for (i, b) in packed[0].iter_mut().enumerate() {

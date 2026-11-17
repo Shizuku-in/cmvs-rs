@@ -25,7 +25,7 @@ fn probe() -> io::Result<()> {
         return Err(io::Error::other("NRO header or metadata mismatch"));
     }
     println!("NRO read OK: {} bytes", metadata.len());
-    let mut hash = cmvs_core::digest::Sha256::new();
+    let mut hash = cmvs_core::format::digest::Sha256::new();
     hash.update(b"abc");
     if hash.finish()
         != [
@@ -56,7 +56,7 @@ pub extern "C" fn cmvs_switch_probe() -> i32 {
     }
 }
 
-fn inspect_game(root: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+fn inspect_game(root: &std::path::Path) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let game = cmvs_core::profile::Registry::builtin().identify_game(root, None)?;
     let record = game
         .selection

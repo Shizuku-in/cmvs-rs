@@ -8,7 +8,7 @@
 //!
 //! ```no_run
 //! use std::fs::File;
-//! use cmvs_core::cpz::ArchiveIndex;
+//! use cmvs_core::format::cpz::ArchiveIndex;
 //!
 //! let mut file = File::open("data/pack/script.cpz")?;
 //! let index = ArchiveIndex::read(&mut file)?;

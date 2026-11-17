@@ -1,8 +1,4 @@
-use cmvs_core::{
-    machine::{Machine, Step},
-    math,
-    ps3::Script,
-};
+use cmvs_core::{format::ps3::Script, vm::machine::Machine, vm::machine::Step};
 
 fn script(commands: &[(u16, &[u32])]) -> Script {
     let mut code = vec![];
@@ -36,10 +32,7 @@ fn script(commands: &[(u16, &[u32])]) -> Script {
 
 #[test]
 fn inspected_polar_point_writes_xy_results_with_signed_wrapping_and_truncation() {
-    use cmvs_core::{
-        dispatch::{self, Flow, Hosts},
-        profile::Registry,
-    };
+    use cmvs_core::{profile::Registry, vm::dispatch, vm::dispatch::Flow, vm::dispatch::Hosts};
     let profile = Registry::builtin().profile("cmvs-20071117").unwrap();
     for (angle, radius, xy) in [
         (0, 100, [100, 0]),
@@ -109,7 +102,7 @@ fn abs_clamp_max_and_min_are_signed_and_pop_their_arguments() {
     let mut vm = Machine::new(&script).unwrap();
     for &(_, _, expected) in &cases {
         while !matches!(vm.step().unwrap(), Step::System { .. }) {}
-        assert!(math::try_handle(&mut vm).unwrap());
+        assert!(crate::support::shared_state::shared_math(&mut vm).unwrap());
         assert_eq!(vm.state().system_integer(0), Some(expected as u32));
         assert_eq!(vm.stack().len_bytes(), 0);
     }
@@ -117,10 +110,7 @@ fn abs_clamp_max_and_min_are_signed_and_pop_their_arguments() {
 
 #[test]
 fn cvns_centidegree_polar_and_cartesian_conversions() {
-    use cmvs_core::{
-        dispatch::{self, Flow, Hosts},
-        profile::Registry,
-    };
+    use cmvs_core::{profile::Registry, vm::dispatch, vm::dispatch::Flow, vm::dispatch::Hosts};
     let profile = Registry::builtin().profile("cvns-20050727").unwrap();
     let script = script(&[
         (0x20ec, &[9000, 100]),
@@ -132,7 +122,7 @@ fn cvns_centidegree_polar_and_cartesian_conversions() {
     let mut vm = Machine::new(&script).unwrap();
     vm.set_command_map(profile.command_map());
 
-    let run = |vm: &mut Machine<'_>| {
+    let run = |vm: &mut Machine| {
         while !matches!(vm.step().unwrap(), Step::System { .. }) {}
         let (_, cmd) = vm.pending_system().unwrap();
         assert_eq!(
@@ -175,10 +165,7 @@ fn cvns_centidegree_polar_and_cartesian_conversions() {
 
 #[test]
 fn cvns_2004_degree_cartesian_to_polar_uses_360_degree_circle() {
-    use cmvs_core::{
-        dispatch::{self, Flow, Hosts},
-        profile::Registry,
-    };
+    use cmvs_core::{profile::Registry, vm::dispatch, vm::dispatch::Flow, vm::dispatch::Hosts};
     for id in ["cvns-20040515", "cvns-20040730"] {
         let profile = Registry::builtin().profile(id).unwrap();
         let script = script(&[

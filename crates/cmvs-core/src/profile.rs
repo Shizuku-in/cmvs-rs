@@ -85,11 +85,11 @@ impl EngineProfile {
         }
     }
     /// Gameplay save slot format and slot-numbering family.
-    pub fn save_family(&self) -> crate::save_menu::SaveFamily {
+    pub fn save_family(&self) -> crate::save::SaveFamily {
         if self.is_cvns() {
-            crate::save_menu::SaveFamily::Cvns
+            crate::save::SaveFamily::Cvns
         } else {
-            crate::save_menu::SaveFamily::Cmvs
+            crate::save::SaveFamily::Cmvs
         }
     }
     /// Whether native desktop input binds keys from `key.cfg` (false for CVNS fixed codes).

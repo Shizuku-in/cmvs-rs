@@ -1,6 +1,6 @@
 //! Abstract probe actions and the devices that translate them into engine input codes
 //! Checks only issue `Action`s, so one check covers both devices.
-use cmvs_core::input::{KeyBindings, MOUSE_CODES};
+use cmvs_core::{host::input::KeyBindings, host::input::MOUSE_CODES};
 
 /// Engine action indices of the key.cfg bank (KEY_FUNCTION_01.. minus one). These are
 /// engine semantics shared by all builds, not per-game data; builds whose

@@ -2,13 +2,11 @@
 //! bank and the translated common-script entry.
 use crate::support::shared_storage;
 use cmvs_core::{
-    cvns::CommandMap,
-    evaluate::State,
-    machine::{Machine, Step},
-    ps3::Script,
-    save_menu::{SaveMenu, SaveSource, SlotStatus},
-    script_control::{ControlEvent, LoadError, ScriptControl, ScriptSource},
-    system_save::{Css0Save, PersistentStarts},
+    format::ps3::Script, format::system_save::Css0Save, format::system_save::PersistentStarts,
+    runtime::save_menu::SaveMenu, runtime::save_menu::SaveSource, runtime::save_menu::SlotStatus,
+    runtime::script_control::ControlEvent, runtime::script_control::LoadError,
+    runtime::script_control::ScriptControl, runtime::script_control::ScriptSource,
+    vm::cvns::CommandMap, vm::evaluate::State, vm::machine::Machine, vm::machine::Step,
 };
 use shared_storage::SharedControl;
 use std::{collections::BTreeMap, io};
@@ -320,62 +318,69 @@ fn cvns_movie_fixture(tag: &str, audio_flag: u32) -> (crate::support::temp_dir::
 }
 
 #[derive(Default)]
-struct SharedAudioLog(std::rc::Rc<std::cell::RefCell<cmvs_core::audio::RecordingAudio>>);
-impl cmvs_core::audio::AudioBackend for SharedAudioLog {
+struct SharedAudioLog(std::sync::Arc<std::sync::Mutex<cmvs_core::host::audio::RecordingAudio>>);
+impl cmvs_core::host::audio::AudioBackend for SharedAudioLog {
     fn play(
         &mut self,
-        request: &cmvs_core::audio::AudioRequest,
-    ) -> Result<bool, Box<dyn std::error::Error>> {
-        self.0.borrow_mut().play(request)
+        request: &cmvs_core::host::audio::AudioRequest,
+    ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+        self.0.lock().unwrap().play(request)
     }
     fn configure_paths(
         &mut self,
         paths: &BTreeMap<(u16, u32), Vec<u8>>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.0.borrow_mut().configure_paths(paths)
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.0.lock().unwrap().configure_paths(paths)
     }
     fn configure_archive_parameters(
         &mut self,
-        parameters: &BTreeMap<(u16, u32), cmvs_core::cpz::Cpz7Parameters>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.0.borrow_mut().configure_archive_parameters(parameters)
+        parameters: &BTreeMap<(u16, u32), cmvs_core::format::cpz::Cpz7Parameters>,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.0
+            .lock()
+            .unwrap()
+            .configure_archive_parameters(parameters)
     }
     fn configure_voice_ducking(
         &mut self,
-        _settings: cmvs_core::audio::VoiceDuckingSettings,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+        _settings: cmvs_core::host::audio::VoiceDuckingSettings,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Ok(())
     }
-    fn set_output_enabled(&mut self, _enabled: bool) -> Result<(), Box<dyn std::error::Error>> {
+    fn set_output_enabled(
+        &mut self,
+        _enabled: bool,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Ok(())
     }
     fn play_movie_audio(
         &mut self,
-        request: &cmvs_core::audio::AudioRequest,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        self.0.borrow_mut().play_movie_audio(request)
+        request: &cmvs_core::host::audio::AudioRequest,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.0.lock().unwrap().play_movie_audio(request)
     }
-    fn stop_movie_audio(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.0.borrow_mut().stop_movie_audio()
+    fn stop_movie_audio(&mut self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.0.lock().unwrap().stop_movie_audio()
     }
     fn movie_clock(
         &self,
-    ) -> Result<Option<cmvs_core::audio::MovieAudioClock>, Box<dyn std::error::Error>> {
-        self.0.borrow().movie_clock()
+    ) -> Result<
+        Option<cmvs_core::host::audio::MovieAudioClock>,
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
+        self.0.lock().unwrap().movie_clock()
     }
 }
 
 #[test]
 fn cvns_runtime_0x20c0_blocks_vm_scales_volume_and_consumes_skip_input() {
     use cmvs_core::{
-        audio::AudioRequest,
-        input::{CodeInput, KeyBindings},
-        platform::RecordingBackend,
-        profile::Registry,
-        runtime::{Runtime, RuntimeEvent, load_start},
+        host::audio::AudioRequest, host::input::CodeInput, host::input::KeyBindings,
+        host::platform::RecordingBackend, profile::Registry, runtime::Runtime,
+        runtime::RuntimeEvent, runtime::load_start,
     };
 
-    let tick_until_yield = |run: &mut Runtime<'_>, platform: &mut RecordingBackend| loop {
+    let tick_until_yield = |run: &mut Runtime, platform: &mut RecordingBackend| loop {
         match run.tick(platform).unwrap() {
             RuntimeEvent::Progress => {}
             RuntimeEvent::Yield => break,
@@ -390,8 +395,8 @@ fn cvns_runtime_0x20c0_blocks_vm_scales_volume_and_consumes_skip_input() {
         .unwrap();
     let start = load_start(&root, &game.files).unwrap();
     let mut run = Runtime::new(&start, &root, &game, 0).unwrap();
-    let audio_log = std::rc::Rc::new(std::cell::RefCell::new(
-        cmvs_core::audio::RecordingAudio::default(),
+    let audio_log = std::sync::Arc::new(std::sync::Mutex::new(
+        cmvs_core::host::audio::RecordingAudio::default(),
     ));
     run.set_audio_backend(Box::new(SharedAudioLog(audio_log.clone())))
         .unwrap();
@@ -402,7 +407,7 @@ fn cvns_runtime_0x20c0_blocks_vm_scales_volume_and_consumes_skip_input() {
     assert_eq!(run.machine().state().system_integer(0), Some(1));
     // MASTER=80 * VIDEO=50 / 100 = 40% => (40 * 256 / 100) = 102.
     assert_eq!(
-        audio_log.borrow().requests(),
+        audio_log.lock().unwrap().requests(),
         &[AudioRequest::PlayMovieAudio {
             path: b"data/video/op.cmv".to_vec(),
             offset: 44 + 4 * 20 + 12,
@@ -431,8 +436,8 @@ fn cvns_runtime_0x20c0_blocks_vm_scales_volume_and_consumes_skip_input() {
             .unwrap();
         let start = load_start(&root, &game.files).unwrap();
         let mut run = Runtime::new(&start, &root, &game, 0).unwrap();
-        let audio_log = std::rc::Rc::new(std::cell::RefCell::new(
-            cmvs_core::audio::RecordingAudio::default(),
+        let audio_log = std::sync::Arc::new(std::sync::Mutex::new(
+            cmvs_core::host::audio::RecordingAudio::default(),
         ));
         run.set_audio_backend(Box::new(SharedAudioLog(audio_log.clone())))
             .unwrap();
@@ -453,7 +458,7 @@ fn cvns_runtime_0x20c0_blocks_vm_scales_volume_and_consumes_skip_input() {
         assert!(run.steps() > steps_at_open);
         assert_eq!(run.machine().state().system_integer(0), Some(expected_mask));
         assert_eq!(
-            audio_log.borrow().requests().last(),
+            audio_log.lock().unwrap().requests().last(),
             Some(&AudioRequest::StopMovieAudio)
         );
         let _ = std::fs::remove_dir_all(&root);
@@ -463,9 +468,8 @@ fn cvns_runtime_0x20c0_blocks_vm_scales_volume_and_consumes_skip_input() {
 #[test]
 fn cvns_0x21ab_save_comment_updates_csp_slot_and_skips_slot_zero() {
     use cmvs_core::{
-        platform::RecordingBackend,
-        profile::Registry,
-        runtime::{Runtime, RuntimeEvent, load_start},
+        host::platform::RecordingBackend, profile::Registry, runtime::Runtime,
+        runtime::RuntimeEvent, runtime::load_start,
     };
 
     let (root, _) = cvns_movie_fixture("save-comment", 0);
@@ -524,10 +528,7 @@ fn cvns_0x21ab_save_comment_updates_csp_slot_and_skips_slot_zero() {
 
 #[test]
 fn cvns_2004_color_dialog_pops_args_and_clears_accept_flag() {
-    use cmvs_core::{
-        dispatch::{self, Flow, Hosts},
-        profile::Registry,
-    };
+    use cmvs_core::{profile::Registry, vm::dispatch, vm::dispatch::Flow, vm::dispatch::Hosts};
     for id in ["cvns-20040515", "cvns-20040730"] {
         let profile = Registry::builtin().profile(id).unwrap();
         let mut code = Vec::new();

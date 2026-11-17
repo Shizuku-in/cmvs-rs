@@ -1,4 +1,4 @@
-use cmvs_core::vm::{ParameterStack, StringRef, SystemResult};
+use cmvs_core::{vm::ParameterStack, vm::StringRef, vm::SystemResult};
 
 #[test]
 fn tagged_string_offsets_are_not_host_pointers() {

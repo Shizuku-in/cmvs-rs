@@ -1,11 +1,8 @@
 use crate::support;
 use cmvs_core::{
-    dispatch::{self, Flow, Hosts},
-    machine::Machine,
-    message::MessageHost,
-    profile::Semantics,
-    ps3::Script,
-    scene::SceneHost,
+    format::ps3::Script, profile::Semantics, render::message::MessageHost,
+    render::scene::SceneHost, vm::dispatch, vm::dispatch::Flow, vm::dispatch::Hosts,
+    vm::machine::Machine,
 };
 use support::bytecode::{command, pending};
 fn bytes(code: &[u8]) -> Vec<u8> {
@@ -123,7 +120,14 @@ fn auxiliary_scene_context_is_conditional_and_retryable() {
         }
         if i == 2 {
             assert_eq!(
-                &state.scene.object(11).unwrap().draw.as_ref().unwrap().words[8..10],
+                &state
+                    .scene
+                    .object(11)
+                    .unwrap()
+                    .draw
+                    .as_ref()
+                    .unwrap()
+                    .position_raw(),
                 &[16777216, i32::MIN as u32]
             );
         }

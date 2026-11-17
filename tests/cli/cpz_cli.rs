@@ -1,5 +1,5 @@
 use crate::support::TempDir;
-use cmvs_rs::{cpz::Cpz5Index, ps3::Script};
+use cmvs_rs::{format::cpz::Cpz5Index, format::ps3::Script};
 use std::{fs, io::Cursor, process::Command};
 
 fn hex(text: &str) -> Vec<u8> {

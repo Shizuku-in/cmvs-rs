@@ -1,8 +1,5 @@
 //! Minimal PS2A scripts and argument pushes for scene/sequence integration tests.
-use cmvs_core::{
-    machine::{Machine, Step},
-    ps3::Script,
-};
+use cmvs_core::{format::ps3::Script, vm::machine::Machine, vm::machine::Step};
 
 pub fn script(code: &[u8]) -> Script {
     let mut payload = 0u32.to_le_bytes().to_vec();
@@ -37,6 +34,6 @@ pub fn command(code: &mut Vec<u8>, opcode: u16, args: &[u32]) {
     code.extend(opcode.to_le_bytes());
 }
 
-pub fn pending(vm: &mut Machine<'_>) {
+pub fn pending(vm: &mut Machine) {
     while !matches!(vm.step().unwrap(), Step::System { .. }) {}
 }

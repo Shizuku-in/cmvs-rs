@@ -1,6 +1,5 @@
 use cmvs_core::{
-    digest::{sha256, to_hex},
-    mgv::{Decoder, MgvIndex},
+    format::digest::sha256, format::digest::to_hex, format::mgv::Decoder, format::mgv::MgvIndex,
 };
 use cmvs_video::TheoraStream;
 use std::{
@@ -115,8 +114,8 @@ fn with_picture(bytes: &[u8], index: &MgvIndex, x: u8, y: u8) -> Vec<u8> {
 }
 
 fn assert_crop(
-    cropped: &cmvs_core::raster::RgbaImage,
-    full: &cmvs_core::raster::RgbaImage,
+    cropped: &cmvs_core::render::raster::RgbaImage,
+    full: &cmvs_core::render::raster::RgbaImage,
     x: usize,
 ) {
     assert_eq!((cropped.width(), cropped.height()), (24, 24));
@@ -168,7 +167,7 @@ fn odd_picture_left_edge_keeps_absolute_chroma_columns() {
 
 #[test]
 fn prefetching_decoder_matches_the_inline_stream() {
-    use cmvs_core::mgv::DecoderFactory;
+    use cmvs_core::format::mgv::DecoderFactory;
     use cmvs_video::{PrefetchTheoraFactory, TheoraFactory};
     let bytes = fixture();
     let index = MgvIndex::read(&mut Cursor::new(&bytes)).unwrap();
@@ -196,7 +195,7 @@ fn prefetching_decoder_matches_the_inline_stream() {
 
 #[test]
 fn repeated_frames_do_not_rewind_the_prefetching_decoder() {
-    use cmvs_core::mgv::DecoderFactory;
+    use cmvs_core::format::mgv::DecoderFactory;
     use cmvs_video::PrefetchTheoraFactory;
     let factory = PrefetchTheoraFactory::default();
     let buffered = factory.with_lookahead(1 << 20, 16);
@@ -238,7 +237,7 @@ fn repeated_frames_do_not_rewind_the_prefetching_decoder() {
 #[test]
 #[ignore = "requires CMVS_THEORA_MGV"]
 fn external_prefetch_playback_never_rewinds_forward_requests() {
-    use cmvs_core::mgv::DecoderFactory;
+    use cmvs_core::format::mgv::DecoderFactory;
     use cmvs_video::PrefetchTheoraFactory;
     let path = std::env::var("CMVS_THEORA_MGV").unwrap();
     let mut source = std::fs::File::open(&path).unwrap();
@@ -282,7 +281,7 @@ fn external_prefetch_playback_never_rewinds_forward_requests() {
 
 #[test]
 fn cached_frame_does_not_wait_for_a_later_packet() {
-    use cmvs_core::mgv::DecoderFactory;
+    use cmvs_core::format::mgv::DecoderFactory;
     use cmvs_video::PrefetchTheoraFactory;
     use std::{sync::mpsc, time::Duration};
     struct BlockingReader {

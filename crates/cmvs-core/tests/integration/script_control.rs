@@ -1,10 +1,9 @@
 use crate::support::shared_storage;
 use cmvs_core::{
-    bytecode::{self, InstructionKind},
-    machine::{Machine, Step},
-    ps3::Script,
-    script_control::{ControlEvent, LoadError, ScriptControl, ScriptSource},
-    vm::SystemResult,
+    format::ps3::Script, runtime::script_control::ControlEvent, runtime::script_control::LoadError,
+    runtime::script_control::ScriptControl, runtime::script_control::ScriptSource,
+    vm::SystemResult, vm::bytecode, vm::bytecode::InstructionKind, vm::machine::Machine,
+    vm::machine::Step,
 };
 use shared_storage::SharedControl;
 use std::collections::BTreeMap;
@@ -100,7 +99,7 @@ impl ScriptSource for MemorySource {
         Ok(Script::decode(raw)?)
     }
 }
-fn pending(vm: &mut Machine<'_>) -> Step {
+fn pending(vm: &mut Machine) -> Step {
     for _ in 0..1000 {
         let event = vm.step().unwrap();
         if event != Step::Continue {
@@ -110,7 +109,7 @@ fn pending(vm: &mut Machine<'_>) -> Step {
     panic!("budget");
 }
 fn run(
-    vm: &mut Machine<'_>,
+    vm: &mut Machine,
     host: &mut ScriptControl,
     source: &mut MemorySource,
 ) -> Option<ControlEvent> {
@@ -427,7 +426,7 @@ fn label_operand_validates_index_and_changes_only_on_success() {
         InstructionKind::Expression(e) => e,
         _ => unreachable!(),
     };
-    let mut state = cmvs_core::evaluate::State::default();
+    let mut state = cmvs_core::vm::evaluate::State::default();
     assert!(state.evaluate_integer_with_labels(&e, &[0]).is_err());
     assert_eq!(state.result, None);
     assert_eq!(

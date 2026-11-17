@@ -1,4 +1,4 @@
-use cmvs_rs::ps3::Script;
+use cmvs_rs::format::ps3::Script;
 use std::{
     env,
     error::Error,
@@ -21,7 +21,7 @@ Options:
 Output files must not already exist. Input files are read only.
 Example: cmvs-inspect data/pack/start.ps3";
 
-fn run() -> Result<(), Box<dyn Error>> {
+fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut args = env::args_os().skip(1);
     let Some(input) = args.next() else {
         return Err("usage: cmvs-inspect <script> [--payload <new-output-file>]".into());

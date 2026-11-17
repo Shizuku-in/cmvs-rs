@@ -1,4 +1,4 @@
-use cmvs_core::input::{ActionInput, CodeInput, KeyBindings};
+use cmvs_core::{host::input::ActionInput, host::input::CodeInput, host::input::KeyBindings};
 
 #[test]
 fn bindings_are_bounded_and_only_the_first_bank_is_loaded() {

@@ -168,10 +168,7 @@ impl ObjectEffect {
 }
 
 impl SceneHost {
-    pub(super) fn create_object_effect(
-        &mut self,
-        call: &mut Call<'_, '_>,
-    ) -> Result<(), DecodeError> {
+    pub(super) fn create_object_effect(&mut self, call: &mut Call<'_>) -> Result<(), DecodeError> {
         let slot = call.argument(4, "object slot")?;
         let mut parameters = [0; 9];
         for (i, parameter) in parameters.iter_mut().enumerate() {

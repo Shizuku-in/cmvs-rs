@@ -72,7 +72,7 @@ pub enum DetectError {
     /// Filesystem failure opening or reading the script archive.
     Io(std::io::Error),
     /// Malformed or unsupported script archive container.
-    Archive(cmvs_core::cpz::ArchiveError),
+    Archive(cmvs_core::format::cpz::ArchiveError),
     /// Invalid script header, startup registration, or payload format.
     Format(FormatError),
 }
@@ -112,8 +112,8 @@ impl From<std::io::Error> for DetectError {
     }
 }
 
-impl From<cmvs_core::cpz::ArchiveError> for DetectError {
-    fn from(error: cmvs_core::cpz::ArchiveError) -> Self {
+impl From<cmvs_core::format::cpz::ArchiveError> for DetectError {
+    fn from(error: cmvs_core::format::cpz::ArchiveError) -> Self {
         Self::Archive(error)
     }
 }
@@ -134,21 +134,20 @@ impl From<FormatError> for DetectError {
 pub fn detect_game(
     root: &std::path::Path,
     files: &cmvs_core::profile::GameFiles,
-    startup: &cmvs_core::ps3::Script,
+    startup: &cmvs_core::format::ps3::Script,
 ) -> Result<TextEncoding, DetectError> {
-    detect_game_with_fs(&cmvs_core::filesystem::StdFs, root, files, startup)
+    detect_game_with_fs(&cmvs_core::host::filesystem::StdFs, root, files, startup)
 }
 
 /// Like [`detect_game`], reading the script archive through `fs`.
 pub fn detect_game_with_fs(
-    fs: &dyn cmvs_core::filesystem::HostFs,
+    fs: &dyn cmvs_core::host::filesystem::HostFs,
     root: &std::path::Path,
     files: &cmvs_core::profile::GameFiles,
-    startup: &cmvs_core::ps3::Script,
+    startup: &cmvs_core::format::ps3::Script,
 ) -> Result<TextEncoding, DetectError> {
     use cmvs_core::{
-        ps3::{Header, Script},
-        script_control::archive_index_from_start,
+        format::ps3::Header, format::ps3::Script, runtime::script_control::archive_index_from_start,
     };
     if let Ok(encoding) = detect(startup.text()) {
         return Ok(encoding);
@@ -164,7 +163,7 @@ pub fn detect_game_with_fs(
                 Ok(error) => return DetectError::Io(*error),
                 Err(error) => error,
             };
-            let error = match error.downcast::<cmvs_core::cpz::ArchiveError>() {
+            let error = match error.downcast::<cmvs_core::format::cpz::ArchiveError>() {
                 Ok(error) => return DetectError::Archive(*error),
                 Err(error) => error,
             };
@@ -211,11 +210,11 @@ pub fn detect_game_with_fs(
 /// Resolves `root/encoding.txt` when present, otherwise runs [`detect_game_with_fs`] and
 /// falls back to [`TextEncoding::ShiftJis`] only when script text is purely ASCII/uncertain.
 pub fn select_or_default_with_fs(
-    fs: &dyn cmvs_core::filesystem::HostFs,
+    fs: &dyn cmvs_core::host::filesystem::HostFs,
     root: &std::path::Path,
     files: &cmvs_core::profile::GameFiles,
-    startup: &cmvs_core::ps3::Script,
-) -> Result<TextEncoding, Box<dyn std::error::Error>> {
+    startup: &cmvs_core::format::ps3::Script,
+) -> Result<TextEncoding, Box<dyn std::error::Error + Send + Sync>> {
     use std::io::{ErrorKind, Read as _};
     match fs.open_read(&root.join("encoding.txt")) {
         Ok(file) => {
@@ -375,9 +374,8 @@ mod tests {
     #[test]
     fn fallback_reads_archived_scripts_without_guessing_ascii_or_binary() {
         use cmvs_core::{
-            cpz::{ArchiveDirectory, ArchiveFile, Cpz6Index},
-            profile::GameFiles,
-            ps3::Script,
+            format::cpz::ArchiveDirectory, format::cpz::ArchiveFile, format::cpz::Cpz6Index,
+            format::ps3::Script, profile::GameFiles,
         };
         use std::{fs, io::Cursor};
         let root = std::env::temp_dir().join(format!("cmvs-font-encoding-{}", std::process::id()));

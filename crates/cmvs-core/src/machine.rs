@@ -12,9 +12,46 @@ use crate::{
     bytecode::{self, DecodeError, Expression, Instruction, InstructionKind, Term},
     evaluate::{Env, EvalScratch, Frame, Journal, State, error},
     ps3::Script,
-    vm::{ParameterStack, StringRef, SystemResult, frame_offset},
+    vm::{ParameterStack, StringRef, SystemResult},
+    vm_core::frame_offset,
 };
-use std::{borrow::Cow, collections::BTreeMap, rc::Rc};
+use std::{collections::BTreeMap, sync::Arc};
+
+/// Conversion into a shared [`Script`] handle for [`Machine`] and [`crate::runtime::Runtime`].
+pub trait IntoSharedScript {
+    /// Convert or clone the caller's script argument into an [`Arc<Script>`].
+    fn into_shared_script(self) -> Arc<Script>;
+}
+
+impl IntoSharedScript for Script {
+    fn into_shared_script(self) -> Arc<Script> {
+        Arc::new(self)
+    }
+}
+
+impl IntoSharedScript for &Script {
+    fn into_shared_script(self) -> Arc<Script> {
+        Arc::new(self.clone())
+    }
+}
+
+impl IntoSharedScript for &mut Script {
+    fn into_shared_script(self) -> Arc<Script> {
+        Arc::new(self.clone())
+    }
+}
+
+impl IntoSharedScript for Arc<Script> {
+    fn into_shared_script(self) -> Arc<Script> {
+        self
+    }
+}
+
+impl IntoSharedScript for &Arc<Script> {
+    fn into_shared_script(self) -> Arc<Script> {
+        Arc::clone(self)
+    }
+}
 
 /// Frame table +82548 has 64 entries indexed by depth +82804; entry 0 is the base.
 const MAX_CALL_DEPTH: usize = 63;
@@ -56,21 +93,21 @@ fn append_slot(
     append(buffer, bytes, pc, tag)
 }
 
-struct Image<'a> {
-    script: Cow<'a, Script>,
+struct Image {
+    script: Arc<Script>,
     data: Vec<u8>,
-    /// Shared contiguous decoded slice so `step()` clones one Rc pointer without B-Tree lookups.
-    instructions: Rc<[Instruction]>,
+    /// Shared contiguous decoded slice so `step()` clones one Arc pointer without B-Tree lookups.
+    instructions: Arc<[Instruction]>,
     labels: Vec<u32>,
     name: Vec<u8>,
 }
 
-pub(crate) struct PreparedMain<'a>(Image<'a>);
+pub(crate) struct PreparedMain(Image);
 
-impl<'a> Image<'a> {
-    fn prepare(script: Cow<'a, Script>, name: Vec<u8>, entry: u32) -> Result<Self, DecodeError> {
+impl Image {
+    fn prepare(script: Arc<Script>, name: Vec<u8>, entry: u32) -> Result<Self, DecodeError> {
         let labels = script.labels();
-        let instructions: Rc<[Instruction]> =
+        let instructions: Arc<[Instruction]> =
             bytecode::decode_layout(script.code(), entry, &labels)?.into();
         Ok(Self {
             data: script.data().to_vec(),
@@ -110,8 +147,8 @@ pub struct VmImage {
     pub main_data: Vec<u8>,
 }
 
-pub(crate) struct RestoredVm<'a> {
-    main: Image<'a>,
+pub(crate) struct RestoredVm {
+    main: Image,
     slot: u8,
     pc: usize,
     repeat_count: u32,
@@ -139,12 +176,12 @@ pub enum Step {
 
 /// A script VM with value state, a parameter stack, and script slots.
 ///
-/// Borrows the initial [`Script`]. Construction decodes its instruction layout;
+/// Owns a shared [`Script`] handle. Construction decodes its instruction layout;
 /// globals remain unknown until initialized. Engine profile setup and system-command
 /// gating are the caller's responsibility at this layer.
-pub struct Machine<'a> {
+pub struct Machine {
     text_encoding: crate::TextEncoding,
-    images: BTreeMap<u8, Image<'a>>,
+    images: BTreeMap<u8, Image>,
     slot: u8,
     pc: usize,
     pc_hint: usize,
@@ -161,27 +198,31 @@ pub struct Machine<'a> {
     string_entries: Vec<(u16, u32, usize)>,
 }
 
-impl<'a> Machine<'a> {
+impl Machine {
     /// Create a VM at the script's entry point using Shift-JIS text.
     ///
     /// Returns an error for an invalid instruction layout or entry point.
-    pub fn new(script: &'a Script) -> Result<Self, DecodeError> {
-        Self::at(script, script.header().entry_pc)
+    pub fn new(script: impl IntoSharedScript) -> Result<Self, DecodeError> {
+        let script = script.into_shared_script();
+        let entry = script.header().entry_pc;
+        Self::at(script, entry)
     }
     /// Create a VM at a byte offset in the code segment, using Shift-JIS text.
     ///
     /// This does not restore the state that would normally exist at that entry.
-    pub fn at(script: &'a Script, entry: u32) -> Result<Self, DecodeError> {
+    pub fn at(script: impl IntoSharedScript, entry: u32) -> Result<Self, DecodeError> {
         Self::at_with_encoding(script, entry, crate::TextEncoding::default())
     }
     /// Create a VM at the script's entry point with the given text encoding.
     ///
     /// Archive names and keys keep their resource encoding.
     pub fn new_with_encoding(
-        script: &'a Script,
+        script: impl IntoSharedScript,
         encoding: crate::TextEncoding,
     ) -> Result<Self, DecodeError> {
-        Self::at_with_encoding(script, script.header().entry_pc, encoding)
+        let script = script.into_shared_script();
+        let entry = script.header().entry_pc;
+        Self::at_with_encoding(script, entry, encoding)
     }
     /// Text encoding used by this VM.
     pub fn text_encoding(&self) -> crate::TextEncoding {
@@ -189,11 +230,11 @@ impl<'a> Machine<'a> {
     }
     /// Create a VM at a byte offset in the code segment, with the given text encoding.
     pub fn at_with_encoding(
-        script: &'a Script,
+        script: impl IntoSharedScript,
         entry: u32,
         encoding: crate::TextEncoding,
     ) -> Result<Self, DecodeError> {
-        let image = Image::prepare(Cow::Borrowed(script), b"entry.ps3".to_vec(), entry)?;
+        let image = Image::prepare(script.into_shared_script(), b"entry.ps3".to_vec(), entry)?;
         Ok(Self {
             text_encoding: encoding,
             images: BTreeMap::from([(0, image)]),
@@ -216,7 +257,7 @@ impl<'a> Machine<'a> {
     pub fn pc(&self) -> usize {
         self.pc
     }
-    fn image(&self) -> &Image<'a> {
+    fn image(&self) -> &Image {
         &self.images[&self.slot]
     }
     pub fn current_slot(&self) -> u8 {
@@ -307,7 +348,7 @@ impl<'a> Machine<'a> {
         &self,
         image: &VmImage,
         callback: Option<(u8, usize)>,
-    ) -> Result<RestoredVm<'a>, &'static str> {
+    ) -> Result<RestoredVm, &'static str> {
         let mut script = Script::from_memory_image(&image.main_image).map_err(|e| e.0)?;
         script
             .apply_snapshot_data(&image.main_data)
@@ -338,7 +379,7 @@ impl<'a> Machine<'a> {
         }
         let mut stack = ParameterStack::from_saved(&image.stack, sp, 65536).map_err(|e| e.0)?;
         let entry = script.header().entry_pc;
-        let main = Image::prepare(Cow::Owned(script), image.script_names[0].clone(), entry)
+        let main = Image::prepare(Arc::new(script), image.script_names[0].clone(), entry)
             .map_err(|_| "saved main script layout is invalid")?;
         let mut candidate_state = self.state.clone();
         for (i, &word) in image.system_results.iter().enumerate() {
@@ -379,7 +420,7 @@ impl<'a> Machine<'a> {
         })
     }
 
-    pub(crate) fn install_restore(&mut self, restored: RestoredVm<'a>) {
+    pub(crate) fn install_restore(&mut self, restored: RestoredVm) {
         self.images.insert(0, restored.main);
         self.slot = restored.slot;
         self.pc = restored.pc;
@@ -732,7 +773,7 @@ impl<'a> Machine<'a> {
         if let Some((pc, command)) = self.pending {
             return Ok(Step::System { pc, command });
         }
-        let instructions = Rc::clone(&self.image().instructions);
+        let instructions = Arc::clone(&self.image().instructions);
         let index = instructions
             .get(self.pc_hint)
             .filter(|i| i.pc == self.pc)
@@ -894,7 +935,7 @@ impl<'a> Machine<'a> {
         &mut self,
         slot: u32,
         name: Vec<u8>,
-        script: Script,
+        script: impl IntoSharedScript,
     ) -> Result<(), DecodeError> {
         self.enter_common_with(slot, name, script, 8)
     }
@@ -904,7 +945,7 @@ impl<'a> Machine<'a> {
         &mut self,
         slot: u32,
         name: Vec<u8>,
-        script: Script,
+        script: impl IntoSharedScript,
         argument_bytes: usize,
     ) -> Result<(), DecodeError> {
         if !matches!(self.pending, Some((_, 0x81 | 0x412))) {
@@ -921,8 +962,9 @@ impl<'a> Machine<'a> {
                 "cannot replace an active common script",
             ));
         }
+        let script = script.into_shared_script();
         let entry = script.header().entry_pc as usize;
-        let image = Image::prepare(Cow::Owned(script), name, entry as u32)?;
+        let image = Image::prepare(script, name, entry as u32)?;
         let stack = self.transfer_stack(argument_bytes, 0x2081)?;
         self.images.insert(slot, image);
         self.stack = stack;
@@ -936,7 +978,11 @@ impl<'a> Machine<'a> {
     }
 
     /// Core 0x2080 / 0x2003 transition. The host owns snapshot/reset effects.
-    pub fn switch_main_core(&mut self, name: Vec<u8>, script: Script) -> Result<(), DecodeError> {
+    pub fn switch_main_core(
+        &mut self,
+        name: Vec<u8>,
+        script: impl IntoSharedScript,
+    ) -> Result<(), DecodeError> {
         if !matches!(self.pending, Some((_, 0x80 | 0x03))) {
             return Err(error(self.pc, 0x2080, "no pending main-script switch"));
         }
@@ -952,17 +998,14 @@ impl<'a> Machine<'a> {
 
     pub(crate) fn prepare_main(
         name: Vec<u8>,
-        script: Script,
-    ) -> Result<PreparedMain<'a>, DecodeError> {
+        script: impl IntoSharedScript,
+    ) -> Result<PreparedMain, DecodeError> {
+        let script = script.into_shared_script();
         let entry = script.header().entry_pc;
-        Ok(PreparedMain(Image::prepare(
-            Cow::Owned(script),
-            name,
-            entry,
-        )?))
+        Ok(PreparedMain(Image::prepare(script, name, entry)?))
     }
 
-    pub(crate) fn replace_main(&mut self, prepared: PreparedMain<'a>) {
+    pub(crate) fn replace_main(&mut self, prepared: PreparedMain) {
         let entry = prepared.0.script.header().entry_pc as usize;
         self.images.insert(0, prepared.0);
         self.slot = 0;

@@ -25,6 +25,6 @@ impl AudioOutputDevice for AudioDevice {
 }
 
 /// Opens the device and returns the engine backend plus its pumping thread.
-pub fn start(root: &Path) -> Result<(NativeAudio, AudioThread), Box<dyn Error>> {
+pub fn start(root: &Path) -> Result<(NativeAudio, AudioThread), Box<dyn Error + Send + Sync>> {
     AudioThread::start(root, AudioDevice(SwitchAudioOut::open()?), None)
 }

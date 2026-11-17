@@ -1,9 +1,6 @@
 use crate::support::shared_images;
-use cmvs_core::{
-    image::{self, ImageSource},
-    pb3,
-    raster::RgbaImage,
-};
+use crate::support::shared_state::SharedState;
+use cmvs_core::{format::pb3, host::image, host::image::ImageSource, render::raster::RgbaImage};
 use shared_images::SharedImages;
 use std::{collections::BTreeMap, error::Error};
 
@@ -263,11 +260,11 @@ struct Files {
     hints: usize,
 }
 impl ImageSource for Files {
-    fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
         self.reads.push(name.to_vec());
         Ok(self.files.get(name).cloned())
     }
-    fn cache_next_read(&mut self) -> Result<(), Box<dyn Error>> {
+    fn cache_next_read(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
         self.hints += 1;
         Ok(())
     }
@@ -369,7 +366,7 @@ fn contextual_loader_checks_chain_byte_budget_before_allocating_decoded_planes()
 
 #[test]
 fn registered_loader_caches_reference_bytes_and_defers_outer_insertion() {
-    use cmvs_core::image::ImageArchives;
+    use cmvs_core::host::image::ImageArchives;
     let root = crate::support::temp_dir::TempDir::new("type6-cache");
     std::fs::create_dir(root.join("raw")).unwrap();
     let original = delta(1, 1, &[[1, 2, 3, 4]]);
@@ -413,16 +410,14 @@ fn registered_loader_caches_reference_bytes_and_defers_outer_insertion() {
 #[test]
 fn reference_failure_preserves_pending_vm_stack_results_and_previous_image() {
     use cmvs_core::{
-        machine::{Machine, Step},
-        ps3::Script,
-        scene::SceneHost,
+        format::ps3::Script, render::scene::SceneHost, vm::machine::Machine, vm::machine::Step,
     };
     fn push(code: &mut Vec<u8>, v: u32) {
         code.extend(0x440u16.to_le_bytes());
         code.extend(4u16.to_le_bytes());
         code.extend(v.to_le_bytes());
     }
-    fn system(vm: &mut Machine<'_>) {
+    fn system(vm: &mut Machine) {
         while !matches!(vm.step().unwrap(), Step::System { .. }) {}
     }
     let mut code = vec![];
@@ -465,7 +460,7 @@ fn reference_failure_preserves_pending_vm_stack_results_and_previous_image() {
         .files
         .insert(b"top.pb3".to_vec(), patch(1, 1, b"missing", &[0x80], &[]));
     system(&mut vm);
-    scene.try_handle(&mut vm).unwrap();
+    scene.shared_state(&mut vm).unwrap();
     system(&mut vm);
     scene.shared_image(&mut vm, &mut source).unwrap();
     system(&mut vm);

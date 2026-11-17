@@ -1,8 +1,6 @@
 use crate::support::shared_controls;
 use cmvs_core::{
-    input::ActionInput,
-    machine::{Machine, Step},
-    ps3::Script,
+    format::ps3::Script, host::input::ActionInput, vm::machine::Machine, vm::machine::Step,
 };
 
 fn script(code: &[u8]) -> Script {
@@ -34,10 +32,10 @@ fn commands(ops: &[u16]) -> Script {
             .collect::<Vec<_>>(),
     )
 }
-fn pending(vm: &mut Machine<'_>) {
+fn pending(vm: &mut Machine) {
     while !matches!(vm.step().unwrap(), Step::System { .. }) {}
 }
-fn results(vm: &Machine<'_>) -> (Option<u32>, Option<u32>) {
+fn results(vm: &Machine) -> (Option<u32>, Option<u32>) {
     (vm.state().system_integer(0), vm.state().system_integer(4))
 }
 
@@ -176,7 +174,7 @@ fn pointer_function_key_and_press_queries_read_the_per_frame_state() {
     ]);
     let mut vm = Machine::new(&script).unwrap();
     let mut input = ActionInput::default();
-    let step = |vm: &mut Machine<'_>, input: &mut ActionInput| {
+    let step = |vm: &mut Machine, input: &mut ActionInput| {
         pending(vm);
         assert!(shared_controls::input(vm, input).unwrap());
         vm.state().system_integer(0)

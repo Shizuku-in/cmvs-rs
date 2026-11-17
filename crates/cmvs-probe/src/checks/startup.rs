@@ -8,7 +8,7 @@ use crate::{
     session::{Options, Session, Stop},
     target::{Target, cap},
 };
-use cmvs_core::{digest::to_hex, ps3::Script, runtime::load_start};
+use cmvs_core::{format::digest::to_hex, format::ps3::Script, runtime::load_start};
 use std::path::Path;
 
 pub const RUN_CAPABILITIES: [&str; 3] = [cap::PROFILE, cap::ARCHIVE, cap::KEY_CONFIG];

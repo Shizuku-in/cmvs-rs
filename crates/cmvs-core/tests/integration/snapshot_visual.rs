@@ -1,4 +1,6 @@
-use cmvs_core::{image::ImageSource, scene::DrawState, snapshot::VisualSnapshot};
+use cmvs_core::{
+    format::snapshot::VisualSnapshot, host::image::ImageSource, render::scene::DrawState,
+};
 use std::error::Error;
 
 fn put(b: &mut [u8], at: usize, n: u32) {
@@ -54,7 +56,7 @@ fn text() -> Vec<u8> {
 }
 fn draw(animation: Option<&[u8]>) -> Vec<u8> {
     let mut b = vec![4, 0, 0, 0];
-    let mut words = DrawState::default().words;
+    let mut words = DrawState::default().snapshot_words();
     words[21] = 12;
     for n in words {
         b.extend(n.to_le_bytes());
@@ -116,7 +118,7 @@ fn window(scene: &[u8]) -> Vec<u8> {
 }
 struct Empty;
 impl ImageSource for Empty {
-    fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
         Ok(None)
     }
 }
@@ -146,7 +148,7 @@ fn preview_resets_native_transients_and_preserves_window_metadata() {
     assert_eq!(window.position, [-20, 0]);
     assert_eq!(window.pressed_button, -1);
     assert!(window.buttons[0].enabled);
-    assert_eq!(window.object.draw.as_ref().unwrap().words[21], 256);
+    assert_eq!(window.object.draw.as_ref().unwrap().fade_factor(), 256);
     assert_eq!(p.scene.object(255).unwrap().children.len(), 1);
     p.scene.advance_frame(43);
     p.messages.advance_frame(43);
@@ -354,7 +356,7 @@ fn tiny_pb3() -> Vec<u8> {
 }
 struct Tiny;
 impl ImageSource for Tiny {
-    fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    fn read(&mut self, _: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
         Ok(Some(tiny_pb3()))
     }
 }

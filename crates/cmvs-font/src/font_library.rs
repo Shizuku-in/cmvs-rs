@@ -5,7 +5,8 @@
 use ab_glyph::{Font, FontVec};
 use cmvs_core::{
     FormatError, TextEncoding,
-    settings::{DEFAULT_FONT_FACE, font_face_for_encoding},
+    format::digest,
+    host::settings::{DEFAULT_FONT_FACE, font_face_for_encoding},
 };
 use std::{
     collections::BTreeMap,
@@ -70,7 +71,7 @@ impl FontLibrary {
         }
         let key = format!(
             "CMVS-U-{}",
-            &cmvs_core::digest::to_hex(&cmvs_core::digest::sha256(name.as_bytes()))[..24]
+            &digest::to_hex(&digest::sha256(name.as_bytes()))[..24]
         )
         .into_bytes();
         if let Some(directory) = &self.unicode_directory {
@@ -130,7 +131,7 @@ impl FontLibrary {
                 || name.chars().any(char::is_control)
                 || format!(
                     "CMVS-U-{}",
-                    &cmvs_core::digest::to_hex(&cmvs_core::digest::sha256(name.as_bytes()))[..24]
+                    &digest::to_hex(&digest::sha256(name.as_bytes()))[..24]
                 )
                 .as_bytes()
                     != face
@@ -343,18 +344,11 @@ fn legacy_family_name(encoding: TextEncoding, face: &[u8]) -> Result<String, For
 }
 
 fn imported_key(bytes: &[u8]) -> Vec<u8> {
-    format!(
-        "CMVS-F-{}",
-        &cmvs_core::digest::to_hex(&cmvs_core::digest::sha256(bytes))[..24]
-    )
-    .into_bytes()
+    format!("CMVS-F-{}", &digest::to_hex(&digest::sha256(bytes))[..24]).into_bytes()
 }
 
 fn named_key(face: &[u8]) -> String {
-    format!(
-        "file-{}",
-        &cmvs_core::digest::to_hex(&cmvs_core::digest::sha256(face))[..24]
-    )
+    format!("file-{}", &digest::to_hex(&digest::sha256(face))[..24])
 }
 
 /// First file wins for a name, scanning directories in order and files sorted by path.
@@ -542,7 +536,7 @@ mod tests {
         library.set_user_directory(&directory);
         let handle = library.register_unicode("萝莉体").unwrap();
         assert_eq!(handle.len(), 31);
-        cmvs_core::settings::SettingsHost::default()
+        cmvs_core::host::settings::SettingsHost::default()
             .set_font_face(&handle)
             .unwrap();
         let mut restarted = FontLibrary::with_directories(default.clone(), Vec::new());

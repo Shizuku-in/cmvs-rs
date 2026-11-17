@@ -220,11 +220,11 @@ impl super::SystemSaveHost {
     /// while CSS0 re-emits any lists restored from `save000.dat`.
     pub fn try_write(
         &mut self,
-        vm: &mut Machine<'_>,
+        vm: &mut Machine,
         sink: &mut dyn SystemSaveSink,
         random: &mut CrtRandom,
         game_id: Option<u32>,
-    ) -> Result<bool, Box<dyn Error>> {
+    ) -> Result<bool, Box<dyn Error + Send + Sync>> {
         let Some((pc, command @ (0x129 | 0x5c1))) = vm.pending_system() else {
             return Ok(false);
         };
@@ -233,11 +233,11 @@ impl super::SystemSaveHost {
     }
     pub(crate) fn handle_write(
         &mut self,
-        call: &mut Call<'_, '_>,
+        call: &mut Call<'_>,
         sink: &mut dyn SystemSaveSink,
         random: &mut CrtRandom,
         game_id: Option<u32>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if call.command == 0x5c1 && self.css0_starts.is_none() {
             self.css0_starts = Some(super::PersistentStarts::default());
         }
@@ -254,7 +254,7 @@ impl super::SystemSaveHost {
         sink: &mut dyn SystemSaveSink,
         random: &mut CrtRandom,
         game_id: Option<u32>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
         if let Some(starts) = self.css0_starts {
             let mut candidate = random.clone();
             let parameters = super::Css0Parameters::draw(&mut candidate);

@@ -1,8 +1,7 @@
 //! The engine's comment dialog (0x213c) through the system keyboard. Game strings use
 //! the selected game encoding in both directions.
 use cmvs_core::{
-    TextEncoding,
-    platform::{TextDialogRequest, TextDialogResult},
+    TextEncoding, host::platform::TextDialogRequest, host::platform::TextDialogResult,
 };
 use cmvs_font::text_codec;
 use std::error::Error;
@@ -31,7 +30,7 @@ pub fn edit(
     request: &TextDialogRequest,
     encoding: TextEncoding,
     keyboard: &mut Keyboard<'_>,
-) -> Result<TextDialogResult, Box<dyn Error>> {
+) -> Result<TextDialogResult, Box<dyn Error + Send + Sync>> {
     let decode = |bytes: &[u8]| text_codec::decode(encoding, bytes);
     let title = decode(&request.title)?;
     let prompt = decode(&request.prompt)?;

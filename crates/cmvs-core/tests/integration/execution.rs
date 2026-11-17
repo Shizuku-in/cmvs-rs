@@ -1,11 +1,9 @@
 use crate::support::shared_environment;
+use crate::support::shared_state::SharedState;
 use cmvs_core::{
-    bootstrap::Bootstrap,
-    bytecode::{self, Expression, InstructionKind},
-    evaluate::State,
-    machine::{Machine, Step},
-    ps3::Script,
-    vm::SystemResult,
+    format::ps3::Script, runtime::bootstrap::Bootstrap, vm::SystemResult, vm::bytecode,
+    vm::bytecode::Expression, vm::bytecode::InstructionKind, vm::evaluate::State,
+    vm::machine::Machine, vm::machine::Step,
 };
 use shared_environment::SharedBootstrap;
 
@@ -413,7 +411,7 @@ fn push_expr(code: &mut Vec<u8>, expression: Vec<u8>) {
     word(code, 0x430);
 }
 
-fn run_bootstrap(vm: &mut Machine<'_>, host: &mut Bootstrap) -> Step {
+fn run_bootstrap(vm: &mut Machine, host: &mut Bootstrap) -> Step {
     for _ in 0..1000 {
         match vm.step().unwrap() {
             Step::Continue => {}
@@ -694,7 +692,7 @@ fn cursor_name_boundary_and_bad_reference_preserve_pending_command() {
 
 #[test]
 fn crt_rand_sequence_and_0x20d4_remainder() {
-    use cmvs_core::random::CrtRandom;
+    use cmvs_core::host::random::CrtRandom;
     let mut random = CrtRandom::new(0);
     let first: Vec<_> = (0..4).map(|_| random.next_value()).collect();
     // MSVC CRT reference values for seed 0 (and srand(1) gives 41, 18467, ...).
@@ -711,7 +709,7 @@ fn crt_rand_sequence_and_0x20d4_remainder() {
         while vm.pending_system().is_none() {
             vm.step().unwrap();
         }
-        assert!(random.try_handle(&mut vm).unwrap());
+        assert!(random.shared_state(&mut vm).unwrap());
         assert_eq!(vm.state().system_integer(0), Some(expected));
         assert_eq!(vm.stack().len_bytes(), 0);
         assert_eq!(random.next_value(), 7719);
@@ -726,7 +724,7 @@ fn crt_rand_sequence_and_0x20d4_remainder() {
     while vm.pending_system().is_none() {
         vm.step().unwrap();
     }
-    assert!(random.try_handle(&mut vm).is_err());
+    assert!(random.shared_state(&mut vm).is_err());
     assert_eq!(vm.pending_system().map(|p| p.1), Some(0xd4));
     assert_eq!(random, CrtRandom::new(0));
 }

@@ -1,8 +1,4 @@
-use cmvs_core::{
-    machine::{Machine, Step},
-    ps3::Script,
-    vm::SystemResult,
-};
+use cmvs_core::{format::ps3::Script, vm::SystemResult, vm::machine::Machine, vm::machine::Step};
 
 fn word(bytes: &mut Vec<u8>, value: u16) {
     bytes.extend(value.to_le_bytes());
@@ -54,7 +50,7 @@ fn script(code: &[u8], labels: &[u32], text: &[u8]) -> Script {
     raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
     Script::decode(&raw).unwrap()
 }
-fn run_to_system(vm: &mut Machine<'_>) -> Step {
+fn run_to_system(vm: &mut Machine) -> Step {
     loop {
         let step = vm.step().unwrap();
         if matches!(step, Step::System { .. }) {
@@ -204,12 +200,12 @@ fn strlen_0x20f8_reports_resolved_byte_length() {
     let mut vm = Machine::new(&script).unwrap();
     for expected in [8, 0] {
         run_to_system(&mut vm);
-        assert!(cmvs_core::text::try_handle(&mut vm).unwrap());
+        assert!(crate::support::shared_state::shared_strings(&mut vm).unwrap());
         assert_eq!(vm.state().system_integer(0), Some(expected));
         assert_eq!(vm.stack().len_bytes(), 0);
     }
     run_to_system(&mut vm);
-    assert!(cmvs_core::text::try_handle(&mut vm).is_err());
+    assert!(crate::support::shared_state::shared_strings(&mut vm).is_err());
     assert_eq!(vm.pending_system().map(|p| p.1), Some(0xf8));
     assert_eq!(vm.state().system_integer(0), Some(0));
 }
@@ -239,14 +235,14 @@ fn compare_0x20f1_folds_ascii_letters_and_matches_shift_jis_pairs_exactly() {
     vm.state_mut().set_system_integer(1, 9).unwrap();
     for (_, _, expected) in cases {
         run_to_system(&mut vm);
-        assert!(cmvs_core::text::try_handle(&mut vm).unwrap());
+        assert!(crate::support::shared_state::shared_strings(&mut vm).unwrap());
         assert_eq!(vm.state().system_integer(0), Some(expected));
         assert_eq!(vm.stack().len_bytes(), 0);
     }
     assert_eq!(vm.state().system_integer(1), Some(9));
     // A matching trailing lead byte walks past the first string's terminator.
     run_to_system(&mut vm);
-    assert!(cmvs_core::text::try_handle(&mut vm).is_err());
+    assert!(crate::support::shared_state::shared_strings(&mut vm).is_err());
     assert_eq!(vm.pending_system().map(|p| p.1), Some(0xf1));
     assert_eq!(vm.stack().len_bytes(), 8);
 }
@@ -283,13 +279,13 @@ fn format_0x20fc_writes_zero_padded_low_digits_into_a_string_slot() {
         b"mask295a.pb3",
     ] {
         run_to_system(&mut vm);
-        assert!(cmvs_core::text::try_handle(&mut vm).unwrap());
+        assert!(crate::support::shared_state::shared_strings(&mut vm).unwrap());
         assert_eq!(vm.state().string(49), Some(expected));
         assert_eq!(vm.stack().len_bytes(), 0);
         assert_eq!(vm.pending_system(), None);
     }
     run_to_system(&mut vm);
-    assert!(cmvs_core::text::try_handle(&mut vm).unwrap());
+    assert!(crate::support::shared_state::shared_strings(&mut vm).unwrap());
     assert_eq!(vm.state().string(0), Some(&b"101234567890/100%"[..]));
     assert_eq!(vm.state().system_integer(0), Some(7));
 }
@@ -329,7 +325,7 @@ fn format_0x20fc_rejects_unmodeled_conversions_targets_overlap_and_overflow() {
         vm.state_mut().set_string(0, b"y%z1").unwrap();
         run_to_system(&mut vm);
         let (pending, bytes) = (vm.pending_system(), vm.stack().len_bytes());
-        assert!(cmvs_core::text::try_handle(&mut vm).is_err());
+        assert!(crate::support::shared_state::shared_strings(&mut vm).is_err());
         assert_eq!(vm.pending_system(), pending);
         assert_eq!(vm.stack().len_bytes(), bytes);
         assert_eq!(vm.state().string(49), None);
@@ -359,11 +355,11 @@ fn gbk_string_utilities_keep_pairs_and_do_not_fold_their_trail_bytes() {
         let mut vm = Machine::new_with_encoding(&script, encoding).unwrap();
         assert_eq!(vm.text_encoding(), encoding);
         run_to_system(&mut vm);
-        assert!(cmvs_core::text::try_handle(&mut vm).unwrap());
+        assert!(crate::support::shared_state::shared_strings(&mut vm).unwrap());
         assert_eq!(vm.state().string(0), Some(copied));
         assert_eq!(vm.state().system_integer(0), Some(1));
         run_to_system(&mut vm);
-        assert!(cmvs_core::text::try_handle(&mut vm).unwrap());
+        assert!(crate::support::shared_state::shared_strings(&mut vm).unwrap());
         assert_eq!(vm.state().system_integer(0), Some(equal));
     }
     assert_eq!(
@@ -390,16 +386,16 @@ fn utf8_string_utilities_keep_whole_characters() {
         let script = script(&code, &[0], text.as_bytes());
         let mut vm = Machine::new_with_encoding(&script, TextEncoding::Utf8).unwrap();
         run_to_system(&mut vm);
-        assert!(cmvs_core::text::try_handle(&mut vm).unwrap());
+        assert!(crate::support::shared_state::shared_strings(&mut vm).unwrap());
         assert_eq!(vm.state().string(0), Some(&text.as_bytes()[..3]));
         assert_eq!(vm.state().system_integer(0), Some(1));
         run_to_system(&mut vm);
-        assert!(cmvs_core::text::try_handle(&mut vm).unwrap());
+        assert!(crate::support::shared_state::shared_strings(&mut vm).unwrap());
         assert_eq!(vm.state().system_integer(0), Some(equal));
     }
     // A source ending inside a character cannot be copied completely.
     let script = script(&code, &[0], b"\xe4\xb8\0");
     let mut vm = Machine::new_with_encoding(&script, TextEncoding::Utf8).unwrap();
     run_to_system(&mut vm);
-    assert!(cmvs_core::text::try_handle(&mut vm).is_err());
+    assert!(crate::support::shared_state::shared_strings(&mut vm).is_err());
 }

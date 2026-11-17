@@ -1,13 +1,10 @@
 use crate::support::shared_images;
+use crate::support::shared_state::SharedState;
 use crate::support::shared_wait;
 use cmvs_core::{
-    fade::SkipGate,
-    image::ImageSource,
-    input::ActionInput,
-    machine::{Machine, Step},
-    ps3::Script,
-    scene::SceneHost,
-    scene_render,
+    format::ps3::Script, host::image::ImageSource, host::input::ActionInput,
+    render::fade::SkipGate, render::scene::SceneHost, render::scene_render, vm::machine::Machine,
+    vm::machine::Step,
 };
 use shared_images::SharedImages;
 use shared_wait::SharedSceneWait;
@@ -100,7 +97,7 @@ fn transition(code: &mut Vec<u8>, slot: u32, duration: u32, put: u32) {
 
 struct Files(BTreeMap<Vec<u8>, Vec<u8>>);
 impl ImageSource for Files {
-    fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+    fn read(&mut self, name: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error + Send + Sync>> {
         Ok(self.0.get(name).cloned())
     }
 }
@@ -110,16 +107,16 @@ fn files() -> Files {
     files.insert(b"m.pb3".to_vec(), pb3(&[[9, 9], [0, 255], [9, 9]]));
     Files(files)
 }
-fn pending(vm: &mut Machine<'_>) {
+fn pending(vm: &mut Machine) {
     while !matches!(vm.step().unwrap(), Step::System { .. }) {}
 }
 /// Runs `commands` scene commands, including mask creation and finishing.
-fn run(vm: &mut Machine<'_>, scene: &mut SceneHost, commands: usize) {
+fn run(vm: &mut Machine, scene: &mut SceneHost, commands: usize) {
     let mut files = files();
     for _ in 0..commands {
         pending(vm);
         assert!(
-            scene.try_handle(vm).unwrap()
+            scene.shared_state(vm).unwrap()
                 || scene.shared_image(vm, &mut files).unwrap()
                 || scene.shared_mask(vm, &mut files).unwrap()
         );

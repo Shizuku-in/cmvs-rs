@@ -2,9 +2,8 @@
 
 use crate::common::{Result, pack_cpz3, rebuild_script, validate_utf8, write_new};
 use cmvs_core::{
-    bytecode::{self, Expression, InstructionKind, Term},
-    cpz::ArchiveIndex,
-    ps3::Script,
+    format::cpz::ArchiveIndex, format::ps3::Script, vm::bytecode, vm::bytecode::Expression,
+    vm::bytecode::InstructionKind, vm::bytecode::Term,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},

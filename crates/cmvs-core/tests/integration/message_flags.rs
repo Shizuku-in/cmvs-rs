@@ -1,7 +1,6 @@
+use crate::support::shared_state::SharedState;
 use cmvs_core::{
-    machine::{Machine, Step},
-    message_flags::MessageFlags,
-    ps3::Script,
+    format::ps3::Script, runtime::MessageFlags, vm::machine::Machine, vm::machine::Step,
 };
 
 /// 0x22eb reads/writes the skip flag (+1520), 0x22e5 the auto-advance flag (+1552).
@@ -41,7 +40,7 @@ fn script(code: &[u8]) -> Script {
     raw.extend(payload.iter().map(|b| b.rotate_left(1).wrapping_add(124)));
     Script::decode(&raw).unwrap()
 }
-fn pending(vm: &mut Machine<'_>) {
+fn pending(vm: &mut Machine) {
     while !matches!(vm.step().unwrap(), Step::System { .. }) {}
 }
 
@@ -84,20 +83,20 @@ fn mode_1548_preserves_signed_abs_remainder_including_minimum_integer() {
     let mut flags = MessageFlags::default();
     for _ in 0..2 {
         pending(&mut vm);
-        flags.try_handle(&mut vm).unwrap();
+        flags.shared_state(&mut vm).unwrap();
     }
     for (_, expected) in cases {
         vm.state_mut().set_system_integer(0, 99).unwrap();
         pending(&mut vm);
         let pc = vm.pc();
-        assert!(flags.try_handle(&mut vm).unwrap());
+        assert!(flags.shared_state(&mut vm).unwrap());
         assert_eq!(flags.mode_1548(), expected);
         assert_eq!(vm.pc(), pc + 2);
         assert_eq!(vm.stack().len_bytes(), 0);
         assert_eq!(vm.state().system_integer(0), Some(99));
         assert!(flags.skip() && flags.auto_advance());
         pending(&mut vm);
-        assert!(flags.try_handle(&mut vm).unwrap());
+        assert!(flags.shared_state(&mut vm).unwrap());
         assert_eq!(vm.state().system_integer(0), Some(expected));
         assert!(flags.skip() && flags.auto_advance());
     }
@@ -113,12 +112,12 @@ fn mode_query_defaults_to_zero_and_unused_value_may_remain_unknown() {
     let mut vm = Machine::new(&script).unwrap();
     let mut flags = MessageFlags::default();
     assert_eq!(flags.mode_1548(), 0);
-    assert!(!flags.try_handle(&mut vm).unwrap());
+    assert!(!flags.shared_state(&mut vm).unwrap());
     for slot in 0..7 {
         vm.state_mut().set_system_integer(slot, 42).unwrap();
     }
     pending(&mut vm);
-    assert!(flags.try_handle(&mut vm).unwrap());
+    assert!(flags.shared_state(&mut vm).unwrap());
     assert_eq!(vm.state().system_integer(0), Some(0));
     for slot in 1..7 {
         assert_eq!(vm.state().system_integer(slot), Some(42));
@@ -149,14 +148,14 @@ fn mode_errors_preserve_existing_setting_results_and_pending_arguments() {
         let mut vm = Machine::new(&script).unwrap();
         let mut flags = MessageFlags::default();
         pending(&mut vm);
-        flags.try_handle(&mut vm).unwrap();
+        flags.shared_state(&mut vm).unwrap();
         pending(&mut vm);
         let before = flags;
         let command = vm.pending_system();
         let len = vm.stack().len_bytes();
         vm.state_mut().set_system_integer(0, 99).unwrap();
         for _ in 0..2 {
-            assert!(flags.try_handle(&mut vm).is_err());
+            assert!(flags.shared_state(&mut vm).is_err());
             assert_eq!(flags, before);
             assert_eq!(vm.pending_system(), command);
             assert_eq!(vm.stack().len_bytes(), len);
@@ -178,15 +177,15 @@ fn set_normalizes_the_value_and_keeps_the_system_result() {
         vm.state_mut().set_system_integer(0, 9).unwrap();
         let mut flags = MessageFlags::default();
         pending(&mut vm);
-        flags.try_handle(&mut vm).unwrap();
+        flags.shared_state(&mut vm).unwrap();
         assert_eq!(vm.state().system_integer(0), Some(9));
         pending(&mut vm);
-        flags.try_handle(&mut vm).unwrap();
+        flags.shared_state(&mut vm).unwrap();
         assert_eq!(vm.state().system_integer(0), Some(1));
         pending(&mut vm);
-        flags.try_handle(&mut vm).unwrap();
+        flags.shared_state(&mut vm).unwrap();
         pending(&mut vm);
-        flags.try_handle(&mut vm).unwrap();
+        flags.shared_state(&mut vm).unwrap();
         assert_eq!(vm.state().system_integer(0), Some(0));
         assert_eq!(vm.stack().len_bytes(), 0);
     }
@@ -206,7 +205,7 @@ fn bypass_is_set_from_sp4_without_a_query_or_system_result() {
     for expected in [true, false, true, false, true] {
         pending(&mut vm);
         let pc = vm.pc();
-        assert!(flags.try_handle(&mut vm).unwrap());
+        assert!(flags.shared_state(&mut vm).unwrap());
         assert_eq!(flags.bypass(), expected);
         assert_eq!((vm.pending_system(), vm.pc()), (None, pc + 2));
         assert_eq!(vm.stack().len_bytes(), 0);

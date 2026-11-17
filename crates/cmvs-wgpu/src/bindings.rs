@@ -1,7 +1,7 @@
 //! Reusable scene uniforms and texture bindings. Queue writes precede each scene's
 //! submission, so later frames can reuse the buffer without a CPU/GPU idle wait.
 use super::*;
-use cmvs_core::scene_render::shader::PARAM_FLOATS;
+use cmvs_core::render::scene_render::shader::PARAM_FLOATS;
 use std::collections::HashSet;
 
 const PARAM_BYTES: u64 = (PARAM_FLOATS * 4) as u64;
@@ -135,7 +135,7 @@ impl DrawBindings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cmvs_core::scene_render::Blend;
+    use cmvs_core::render::scene_render::Blend;
 
     #[test]
     #[ignore = "requires a native GPU adapter; run explicitly"]
@@ -167,7 +167,7 @@ mod tests {
         let smaller = render(&mut gpu, 3, 50);
 
         // Eviction must not leave bindings to the old texture resident in the cache.
-        let sprite = cmvs_core::scene::ObjectImage {
+        let sprite = cmvs_core::render::scene::ObjectImage {
             name: Vec::new(),
             filter: None,
             alpha: true,

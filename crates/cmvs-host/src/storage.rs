@@ -1,6 +1,6 @@
 //! Opt-in game-local storage for embedding applications. Research/CLI players
 //! retain their explicit external-profile policy.
-use cmvs_core::{filesystem::HostFs, system_save::ProfileSystemSave};
+use cmvs_core::{format::system_save::ProfileSystemSave, host::filesystem::HostFs};
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, Write},
@@ -13,8 +13,10 @@ use std::{
 
 #[cfg(target_os = "android")]
 mod android_fs {
-    use cmvs_core::filesystem::{
-        File, HostFile, HostFs, Metadata, OpenOptions, StdFs, metadata_from_std,
+    use cmvs_core::{
+        host::filesystem::File, host::filesystem::HostFile, host::filesystem::HostFs,
+        host::filesystem::Metadata, host::filesystem::OpenOptions, host::filesystem::StdFs,
+        host::filesystem::metadata_from_std,
     };
     use std::{
         io::{self, Read, Seek, SeekFrom, Write},
@@ -115,7 +117,7 @@ pub(super) fn host_fs() -> Arc<dyn HostFs> {
     }
     #[cfg(not(target_os = "android"))]
     {
-        cmvs_core::filesystem::default_fs()
+        cmvs_core::host::filesystem::default_fs()
     }
 }
 

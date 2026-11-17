@@ -211,10 +211,5 @@ termcolor 1.4.1: Unlicense OR MIT (used under MIT)
 https://github.com/BurntSushi/termcolor
 Transitive shader diagnostic dependency enabled by wgpu/webgpu.
 
-self_cell 1.2.2 - Apache-2.0 OR GPL-2.0-only (used under Apache-2.0)
-https://crates.io/crates/self_cell/1.2.2
-https://github.com/Voultapher/self_cell
-Published package commit: 3b0f5c363ca8adbece7cb3c93c978e6153e3a4b7
-Owns a startup script and its borrowing runtime without leaking either.
 Exact package checksums are pinned in Cargo.lock. Distributions must retain
 applicable upstream license and notice files from the published packages.

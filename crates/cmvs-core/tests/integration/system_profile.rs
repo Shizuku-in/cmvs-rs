@@ -1,4 +1,7 @@
-use cmvs_core::system_save::{Css1Save, ProfileSystemSave, SystemSaveSink};
+use cmvs_core::{
+    format::system_save::Css1Save, format::system_save::ProfileSystemSave,
+    format::system_save::SystemSaveSink,
+};
 use std::{
     fs,
     path::PathBuf,
@@ -9,7 +12,7 @@ static NEXT: AtomicU64 = AtomicU64::new(0);
 
 #[test]
 fn configuration_uses_the_profile_lock_atomic_replacement_and_own_backup() {
-    use cmvs_core::settings::Configuration;
+    use cmvs_core::host::settings::Configuration;
     let root = Root::new();
     fs::write(root.game().join("cmvs.cfg"), b"original read only").unwrap();
     let mut profile = ProfileSystemSave::open(&root.profile(), &root.game()).unwrap();
@@ -39,7 +42,7 @@ fn configuration_uses_the_profile_lock_atomic_replacement_and_own_backup() {
 
 #[test]
 fn configuration_rejects_invalid_targets_and_ambiguous_missing_primary() {
-    use cmvs_core::settings::Configuration;
+    use cmvs_core::host::settings::Configuration;
     let root = Root::new();
     let mut profile = ProfileSystemSave::open(&root.profile(), &root.game()).unwrap();
     fs::create_dir(root.profile().join("cmvs.cfg.bak")).unwrap();
@@ -57,7 +60,7 @@ fn configuration_rejects_invalid_targets_and_ambiguous_missing_primary() {
 #[cfg(windows)]
 #[test]
 fn failed_configuration_replacement_preserves_primary_and_backup_for_retry() {
-    use cmvs_core::settings::Configuration;
+    use cmvs_core::host::settings::Configuration;
     use std::os::windows::fs::OpenOptionsExt;
     let root = Root::new();
     let mut profile = ProfileSystemSave::open(&root.profile(), &root.game()).unwrap();
@@ -281,7 +284,7 @@ fn failed_primary_replacement_preserves_old_file_and_synced_backup() {
 
 #[test]
 fn explicit_game_savedata_reopens_settings_and_system_saves_under_one_lock() {
-    use cmvs_core::{save_menu::DirectorySaves, settings::Configuration};
+    use cmvs_core::{host::settings::Configuration, runtime::save_menu::DirectorySaves};
     let root = Root::new();
     let directory = root.game().join("savedata");
     assert!(ProfileSystemSave::open(&directory, &root.game()).is_err());
