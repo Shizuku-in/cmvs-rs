@@ -68,3 +68,11 @@ CLI 默认只输出标签与段尺寸。`--section <0|1|2> <输入> <新输出>`
 读档 `Runtime::load_slot`（0x22b5）：解码 CSV2 与记录流；0..949 号槽且已有镜像时先把当前镜像写为 `save998.dat`（`0x1400818e0`）；随后安装全部宿主并把读入的文件作为新的持有镜像，第 1 段缩略图作为当前缩略图。读入的头部 528/536 恢复 0x22b9/0x22ba，532 清零。记录安装顺序、失败边界与回调见[引擎快照](snapshot-format.md#从宿主捕获写入与读档)。
 
 验证：写出的槽文件经 `Csv2Save::decode` 与 `EngineSnapshot::decode` 读回，与持有镜像逐字节一致（合成测试 `scenario_snapshot_writes_a_slot_that_loads_back_with_backups` 与外部路线重放）。
+
+## CVNS `CSP1` 容器与 `CvnsSnapshot` 边界
+
+CVNS 剧情存档外层同样复用 600 字节头 + 三段 LZSS + 2 字节校验和的容器（`SaveFamily::Cvns`）：
+
+- 魔数接受 `CSP1..CSP9`（`Runtime` 写出 `CSP1`，偏移 544 头部版本为 `3`，偏移 546 编码模式为 `1`），第 0 段循环密钥为 14 字节 `SAVE_IMAGE_ARC`。
+- 外层容器、头部元数据与第 1 段辅助缩略图与原版 `cvns.exe` 一致；第 0 段负载在 `cmvs-rs` 中采用自建 `CvnsSnapshot` 记录流（`0xa00..=0xa09`），其中首条 `0xa00` 记录起始 `u32` 为显式版本号 `CVNS_SNAPSHOT_SCHEMA_VERSION = 1`。
+- 若遇到原版 `cvns.exe` 写出的 `0x100..` 负载记录，`CvnsSnapshot::decode` 会明确拒绝并返回 `native cvns.exe CSP1 snapshot payload is not supported`；未知的 `0xa00` 版本号则返回 `unsupported CVNS snapshot VM block version`。

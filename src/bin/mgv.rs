@@ -53,7 +53,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         None
     };
     let mut file = File::open(&args[0])?;
-    let index = MgvIndex::read(&mut file)?;
+    let index = MgvIndex::read_io(&mut file)?;
     println!(
         "MGV1 {}x{} frames={} packets={} rate={}/{} audio={} video={}",
         index.width,

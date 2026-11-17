@@ -25,6 +25,12 @@ impl Default for Cache {
     }
 }
 impl Cache {
+    pub(super) fn set_limit(&mut self, bytes: usize) {
+        self.limit = bytes;
+        while self.bytes > self.limit {
+            self.bytes -= self.entries.pop_back().expect("over limit").1.len();
+        }
+    }
     pub(super) fn arm(&mut self) {
         self.armed = true;
     }

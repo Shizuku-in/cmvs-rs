@@ -80,8 +80,9 @@ impl Seek for WebFile {
             SeekFrom::Current(value) => i128::from(self.offset) + i128::from(value),
             SeekFrom::End(value) => i128::from(self.metadata()?.len()) + i128::from(value),
         };
-        if !(0..=i128::from(u32::MAX)).contains(&offset) {
-            return Err(io::Error::other("browser file position exceeds 4 GiB"));
+        const MAX_SAFE_INTEGER: i128 = (1i128 << 53) - 1;
+        if !(0..=MAX_SAFE_INTEGER).contains(&offset) {
+            return Err(io::Error::other("browser file position out of range"));
         }
         self.offset = offset as u64;
         Ok(self.offset)

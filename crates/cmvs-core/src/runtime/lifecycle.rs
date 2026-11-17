@@ -164,6 +164,142 @@ mod tests {
     }
 
     #[test]
+    fn host_capture_allows_visible_and_auxiliary_glyphs_when_supplied_and_errors_if_drawn() {
+        let (root, _) = capture_fixture("host-capture-glyphs");
+        let registry = Registry::builtin();
+
+        let build_script = |setup: &[(u16, &[u32])]| {
+            let mut code = Vec::new();
+            for &(op, args) in setup
+                .iter()
+                .chain([&(0x2304u16, &[][..]), &(0x2306u16, &[][..])])
+            {
+                for &arg in args.iter().rev() {
+                    code.extend(0x440u16.to_le_bytes());
+                    code.extend(4u16.to_le_bytes());
+                    code.extend(arg.to_le_bytes());
+                }
+                code.extend(op.to_le_bytes());
+            }
+            let strings = b"\0\x82\xa0\0";
+            let mut payload = code.clone();
+            payload.extend_from_slice(strings);
+            let mut raw = b"PS2A".to_vec();
+            for word in [
+                48u32,
+                0,
+                0,
+                0,
+                code.len() as u32,
+                0,
+                strings.len() as u32,
+                0,
+                0,
+                payload.len() as u32,
+                0,
+            ] {
+                raw.extend(word.to_le_bytes());
+            }
+            raw.extend(
+                payload
+                    .into_iter()
+                    .map(|b| b.rotate_left(1).wrapping_add(124)),
+            );
+            raw
+        };
+
+        let visible_setup: &[(u16, &[u32])] = &[
+            (0x2100, &[0, 0, 0]),
+            (0x2103, &[0, 0, 0, 200, 200]),
+            (0x2105, &[0, 24, 0, 0]),
+            (0x210b, &[0, 1]),
+        ];
+        let auxiliary_setup: &[(u16, &[u32])] = &[
+            (0x2380, &[0, 0, 24, 64]),
+            (0x2385, &[0, 0, 0, 200, 200]),
+            (0x238b, &[0, 1]),
+        ];
+
+        for (label, setup) in [("visible", visible_setup), ("auxiliary", auxiliary_setup)] {
+            let raw = build_script(setup);
+            std::fs::write(root.join("data/pack/start.ps3"), &raw).unwrap();
+            let game = registry
+                .identify_game(&root, Some("cmvs-20160201"))
+                .unwrap();
+            let script = Script::decode(&raw).unwrap();
+
+            let request_capture = |host: bool| {
+                let mut run = Runtime::new(&script, &root, &game, 0).unwrap();
+                run.set_record_text(true);
+                run.set_host_capture(host);
+                let mut backend = RecordingBackend::default();
+                while !run.capture().requested() {
+                    assert_eq!(run.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
+                }
+                run
+            };
+
+            // Software capture (`host_capture == false`) fails in advance_frame over glyphs.
+            let mut software = request_capture(false);
+            let err = software.advance_frame(16).unwrap_err().to_string();
+            assert!(
+                err.contains("needs the font backend"),
+                "{label} software error: {err}"
+            );
+
+            // Host capture (`host_capture == true`) defers capture in advance_frame and accepts a matching frame.
+            let mut supplied = request_capture(true);
+            supplied.advance_frame(16).unwrap();
+            assert!(supplied.capture_due() && supplied.capture().requested());
+            if label == "visible" {
+                assert!(
+                    supplied
+                        .messages
+                        .text(0)
+                        .unwrap()
+                        .glyphs
+                        .iter()
+                        .any(|g| g.shown && g.opacity != 0)
+                );
+            } else {
+                assert!(
+                    supplied
+                        .messages
+                        .auxiliary_text(0)
+                        .unwrap()
+                        .attached_glyphs()
+                        .next()
+                        .is_some()
+                );
+            }
+            let [width, height] = supplied.screen_size();
+            let pixels = [4, 5, 6, 0].repeat((width * height) as usize);
+            let frame = crate::raster::RgbaImage::new(width, height, pixels).unwrap();
+            supplied.supply_capture(frame).unwrap();
+            assert!(!supplied.capture_due() && !supplied.capture().requested());
+            assert_eq!(
+                &supplied.capture().image().unwrap().pixels()[..4],
+                &[4, 5, 6, 255]
+            );
+            let mut backend = RecordingBackend::default();
+            assert_eq!(supplied.tick(&mut backend).unwrap(), RuntimeEvent::Progress);
+            assert_eq!(supplied.machine.state().system_integer(0), Some(1));
+
+            // Leaving capture_due unsupplied falls back to software draw on the next tick and errors.
+            let mut unsupplied = request_capture(true);
+            unsupplied.advance_frame(16).unwrap();
+            assert!(unsupplied.capture_due());
+            let next_err = unsupplied.tick(&mut backend).unwrap_err().to_string();
+            assert!(
+                next_err.contains("needs the font backend"),
+                "{label} unsupplied tick error: {next_err}"
+            );
+        }
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     #[ignore = "requires read-only CMVS_GAME_ROOT Amatsutsumi sample; writes only a fresh temporary user directory"]
     fn external_reset_reenters_title_and_quit_terminates() {
         let root =

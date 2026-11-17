@@ -49,7 +49,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         None
     };
     let mut file = File::open(path)?;
-    let index = CmvIndex::read(&mut file)?;
+    let index = CmvIndex::read_io(&mut file)?;
     if args.as_slice() == ["--check-frames"] {
         let start = std::time::Instant::now();
         let mut count = 0;

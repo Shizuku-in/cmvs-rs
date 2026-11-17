@@ -15,7 +15,7 @@ for unit in window gpu audio system libc keyboard; do
 done
 "$DEVKITA64/bin/aarch64-none-elf-gcc" -c platforms/switch/runtime/abi.c -o platforms/switch/build/abi.o
 # Whole-program optimization: slower to build, a few percent faster in the VM and decoders.
-cargo +nightly-2026-01-20 rustc --config 'patch.crates-io.libc.path="platforms/switch/build/libc-0.2.178"' \
+cargo "+${RUST_TOOLCHAIN:-nightly-2026-01-20}" rustc --config 'patch.crates-io.libc.path="platforms/switch/build/libc-0.2.178"' \
     --config 'profile.release.lto="fat"' --config 'profile.release.codegen-units=1' \
     -p cmvs-switch --release --target platforms/switch/toolchain/aarch64-switch.json -Zbuild-std=std,panic_abort -- \
     -C "linker=$PWD/platforms/switch/toolchain/linker.py" \

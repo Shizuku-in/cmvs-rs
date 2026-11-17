@@ -42,7 +42,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     file.read_exact(&mut signature)?;
     file.seek(SeekFrom::Start(0))?;
     let bytes = if &signature == b"CMV6" {
-        let index = CmvIndex::read(&mut file)?;
+        let index = CmvIndex::read_io(&mut file)?;
         let audio = index.audio().ok_or("CMV without audio")?;
         if audio.stored_size as usize > MAX_PAYLOAD {
             return Err("CMV audio exceeds limit".into());

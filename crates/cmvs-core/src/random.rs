@@ -12,6 +12,15 @@ pub struct CrtRandom {
     state: u32,
 }
 
+/// Wall-clock milliseconds truncated to `u32`, matching the original `timeGetTime()`
+/// startup seed for interactive hosts.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn host_time_seed() -> u32 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u32)
+}
+
 impl CrtRandom {
     pub fn new(seed: u32) -> Self {
         Self { state: seed }

@@ -112,19 +112,27 @@
     }
 }
 - (void)pointer:(UITouch *)touch pressed:(BOOL)pressed {
-    if (!_player || _failed) return;
-    CGPoint point=[touch locationInView:_image];
+    if (!_player || _failed || !touch) return;
+    CGSize bounds=_image.bounds.size;
     CGFloat w=cmvs_host_width(_player),h=cmvs_host_height(_player);
-    CGFloat scale=MIN(_image.bounds.size.width/w,_image.bounds.size.height/h);
-    CGFloat x=(point.x-(_image.bounds.size.width-w*scale)/2)/scale;
-    CGFloat y=(point.y-(_image.bounds.size.height-h*scale)/2)/scale;
+    if (w<=0 || h<=0 || bounds.width<=0 || bounds.height<=0) return;
+    CGPoint point=[touch locationInView:_image];
+    CGFloat scale=MIN(bounds.width/w,bounds.height/h);
+    if (scale<=0) return;
+    CGFloat x=MIN(MAX((point.x-(bounds.width-w*scale)/2)/scale,-1.0e6),1.0e6);
+    CGFloat y=MIN(MAX((point.y-(bounds.height-h*scale)/2)/scale,-1.0e6),1.0e6);
     cmvs_host_pointer(_player,(int32_t)x,(int32_t)y);
     cmvs_host_key(_player,1,pressed);
 }
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { [self pointer:touches.anyObject pressed:YES]; }
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { [self pointer:touches.anyObject pressed:YES]; }
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { [self pointer:touches.anyObject pressed:NO]; }
-- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event { if (_player) cmvs_host_key(_player,1,0); }
+- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+    if (_player && !_failed) {
+        cmvs_host_pointer(_player,-1,-1);
+        cmvs_host_key(_player,1,0);
+    }
+}
 - (void)dealloc { [self closeGame]; [NSNotificationCenter.defaultCenter removeObserver:self]; }
 @end
 

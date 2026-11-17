@@ -143,11 +143,14 @@ fn run(
     let audio_control = audio.host_control();
     startup.set_audio_backend(Box::new(audio))?;
     // Core 0 runs the VM and rendering, core 1 the audio thread.
-    startup.set_mgv_factory(Box::new(cmvs_video::PrefetchTheoraFactory {
-        on_thread_start: || {
-            sys::prefer_core(2);
-        },
-    }));
+    startup.set_mgv_factory(Box::new(
+        cmvs_video::PrefetchTheoraFactory {
+            on_thread_start: || {
+                sys::prefer_core(2);
+            },
+        }
+        .with_lookahead(16 << 20, 8),
+    ));
     startup.set_scene_prefetch(|| {
         sys::prefer_core(2);
     });
@@ -161,11 +164,13 @@ fn run(
     });
     // Scenes reload the same images; decoding dominates their load time. Entries share
     // pixels with the scene objects showing them, within the 256 MiB heap.
-    startup.set_decoded_image_cache(64 << 20);
+    startup.set_raw_image_cache(8 << 20);
+    startup.set_decoded_image_cache(48 << 20);
     startup.set_record_text(true);
     // Requested screen captures read back the canvas instead of a software redraw.
-    startup.set_host_capture(gpu.is_some());
+    startup.set_host_capture(true);
     startup.set_save_clock(Box::new(cmvs_core::runtime::utc_save_time));
+    startup.set_random_seed(cmvs_core::random::host_time_seed());
     let mut font = encoding::load_game_font(
         base,
         encoding,
@@ -179,7 +184,7 @@ fn run(
         },
     )?;
     configure_game_font(&mut startup, &mut font, &user)?;
-    let bindings = load_key_bindings(root)?;
+    let bindings = load_key_bindings(root, game.selection.profile)?;
     let size = startup.screen_size();
     let mut backend = ConsoleBackend {
         display: startup.display_preferences(),
@@ -276,7 +281,7 @@ fn run(
                         backend.frame = None;
                     }
                     gpu => {
-                        let frame = render_software(&startup, &mut font)?;
+                        let frame = render_software(&startup, &mut font, linear)?;
                         window.present(
                             frame.pixels(),
                             [frame.width(), frame.height()],
@@ -286,6 +291,9 @@ fn run(
                         )?;
                         if let Some(gpu) = gpu {
                             gpu.forget_presented();
+                        }
+                        if startup.capture_due() {
+                            startup.supply_capture(frame.clone())?;
                         }
                         backend.frame = Some(frame);
                     }

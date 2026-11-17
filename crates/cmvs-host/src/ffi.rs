@@ -26,10 +26,13 @@ pub unsafe extern "C" fn cmvs_host_initialize_android(
     if java_vm.is_null() || application_context.is_null() {
         return -1;
     }
-    ANDROID_INITIALIZED.call_once(|| unsafe {
-        ndk_context::initialize_android_context(java_vm, application_context);
-    });
-    0
+    catch_unwind(AssertUnwindSafe(|| {
+        ANDROID_INITIALIZED.call_once(|| unsafe {
+            ndk_context::initialize_android_context(java_vm, application_context);
+        });
+        0
+    }))
+    .unwrap_or(-1)
 }
 
 pub struct Handle {
@@ -39,6 +42,7 @@ pub struct Handle {
 impl Handle {
     fn run(
         &mut self,
+        clear_error: bool,
         f: impl FnOnce(&mut Player) -> Result<i32, Box<dyn std::error::Error>>,
     ) -> i32 {
         let result = catch_unwind(AssertUnwindSafe(|| match self.player.as_mut() {
@@ -47,7 +51,9 @@ impl Handle {
         }));
         match result {
             Ok(Ok(value)) => {
-                self.error = CString::default();
+                if clear_error {
+                    self.error = CString::default();
+                }
                 value
             }
             error => {
@@ -147,12 +153,14 @@ unsafe fn open(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cmvs_host_destroy(handle: *mut Handle) {
     if !handle.is_null() {
-        drop(unsafe { Box::from_raw(handle) });
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            drop(unsafe { Box::from_raw(handle) });
+        }));
     }
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cmvs_host_tick(handle: *mut Handle, delta_ms: u32) -> i32 {
-    unsafe { handle.as_mut() }.map_or(-1, |h| h.run(|p| Ok(tick_code(p.tick(delta_ms)?))))
+    unsafe { handle.as_mut() }.map_or(-1, |h| h.run(true, |p| Ok(tick_code(p.tick(delta_ms)?))))
 }
 
 fn tick_code(outcome: TickOutcome) -> i32 {
@@ -166,7 +174,7 @@ fn tick_code(outcome: TickOutcome) -> i32 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cmvs_host_key(handle: *mut Handle, code: u32, pressed: i32) -> i32 {
     unsafe { handle.as_mut() }.map_or(-1, |h| {
-        h.run(|p| {
+        h.run(false, |p| {
             p.set_key_state(code as usize, pressed != 0)?;
             Ok(0)
         })
@@ -175,7 +183,7 @@ pub unsafe extern "C" fn cmvs_host_key(handle: *mut Handle, code: u32, pressed: 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cmvs_host_pointer(handle: *mut Handle, x: i32, y: i32) -> i32 {
     unsafe { handle.as_mut() }.map_or(-1, |h| {
-        h.run(|p| {
+        h.run(false, |p| {
             p.set_pointer_position(x, y);
             Ok(0)
         })
@@ -184,7 +192,7 @@ pub unsafe extern "C" fn cmvs_host_pointer(handle: *mut Handle, x: i32, y: i32) 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cmvs_host_pause(handle: *mut Handle, paused: i32) -> i32 {
     unsafe { handle.as_mut() }.map_or(-1, |h| {
-        h.run(|p| {
+        h.run(false, |p| {
             p.set_paused(paused != 0);
             Ok(0)
         })
@@ -193,7 +201,7 @@ pub unsafe extern "C" fn cmvs_host_pause(handle: *mut Handle, paused: i32) -> i3
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cmvs_host_save_preferences(handle: *mut Handle) -> i32 {
     unsafe { handle.as_mut() }.map_or(-1, |h| {
-        h.run(|p| {
+        h.run(true, |p| {
             p.save_preferences()?;
             Ok(0)
         })

@@ -41,7 +41,6 @@ pub struct WebRuntime {
     bindings: KeyBindings,
     codes: CodeInput,
     driver: FrameDriver,
-    functions: u16,
 }
 #[wasm_bindgen]
 impl WebRuntime {
@@ -72,6 +71,24 @@ impl WebRuntime {
         loop {
             let result = self.tick_slice(delta_ms, &keys, [x, y], focused, &mut budget)?;
             if result != 4 {
+                if result == 1 && self.session.borrow_dependent().capture_due() {
+                    let image = {
+                        let gpu = self
+                            .backend
+                            .gpu
+                            .as_mut()
+                            .ok_or_else(|| js_error("no completed GPU frame"))?;
+                        let capture = gpu.capture.take();
+                        let frame = capture
+                            .as_ref()
+                            .or(gpu.frame.as_ref())
+                            .ok_or_else(|| js_error("no completed GPU frame"))?;
+                        frame.read_async().await.map_err(js_error)?
+                    };
+                    self.session
+                        .with_dependent_mut(|_, startup| startup.supply_capture(image))
+                        .map_err(js_error)?;
+                }
                 return Ok(result);
             }
             let frame = self
@@ -100,6 +117,10 @@ impl WebRuntime {
         self.session
             .with_dependent_mut(|_, startup| startup.save_preferences(display))
             .map_err(js_error)
+    }
+    pub fn set_random_seed(&mut self, seed: u32) {
+        self.session
+            .with_dependent_mut(|_, startup| startup.set_random_seed(seed));
     }
     pub fn set_clock(&mut self, time: &[u16]) -> Result<(), JsValue> {
         let time: [u16; 6] = time
@@ -174,14 +195,12 @@ impl WebRuntime {
         let codes = &mut self.codes;
         let bindings = &self.bindings;
         let driver = &mut self.driver;
-        let functions = &mut self.functions;
         self.session
             .with_dependent_mut(|_, startup| -> Result<u8, Box<dyn Error>> {
                 startup.set_focused(focused);
                 startup.poll_audio_output()?;
                 if !focused {
                     codes.clear(startup.input_mut());
-                    *functions = 0;
                 }
                 driver.sample_input(startup.input_mut(), |input| {
                     let mut now = [false; 128];
@@ -190,9 +209,6 @@ impl WebRuntime {
                             *value = true;
                         }
                     }
-                    let held = (0..12).fold(0u16, |mask, i| mask | (u16::from(now[52 + i]) << i));
-                    input.press_function_keys(held & !*functions);
-                    *functions = held;
                     codes.update(bindings, &now, input);
                     input.set_pointer(x, y);
                 });
@@ -219,6 +235,9 @@ impl WebRuntime {
                         } else {
                             font.render(startup.scene(), startup.camera(), startup.messages())?
                         };
+                        if startup.capture_due() {
+                            startup.supply_capture(frame.clone())?;
+                        }
                         backend.frame = Some(frame);
                         Ok(1)
                     }
@@ -245,14 +264,17 @@ impl WebRuntime {
                 Some(profile)
             },
         )?;
-        let font = FontRenderer::from_bytes(font, face)?;
         let script = load_start_with_fs(&*fs, root, &game.files)?;
+        let encoding =
+            cmvs_font::text_codec::select_or_default_with_fs(&*fs, root, &game.files, &script)?;
+        let font = FontRenderer::from_bytes(font, face)?.with_text_encoding(encoding);
         let session = Session::try_new(script, |script| -> Result<Runtime<'_>, Box<dyn Error>> {
             let mut startup = Runtime::with_options(
                 script,
                 root,
                 &game,
                 RuntimeOptions {
+                    encoding,
                     saves: SaveStorage::UserDirectory("/user".into()),
                     skip_auto_resume: skip,
                     decode_cmv_frames: true,
@@ -261,30 +283,28 @@ impl WebRuntime {
                 },
             )?;
             startup.set_record_text(true);
+            startup.set_host_capture(true);
             startup.set_glyph_metrics(font.metrics());
+            if !font.has_face(startup.settings().font_face()) {
+                startup.set_font_face(cmvs_core::settings::DEFAULT_FONT_FACE)?;
+            }
+            startup.set_mgv_factory(Box::new(cmvs_video::TheoraFactory));
+            startup.set_decoded_image_cache(64 << 20);
             startup.set_audio_backend(Box::new(audio::BrowserAudio::new(root)?))?;
             Ok(startup)
         })?;
-        let size = session.borrow_dependent().screen_size();
-        let key_path = root.join("key.cfg");
-        let bindings = if fs.is_file(&key_path) {
-            use std::io::Read;
-            let mut text = String::new();
-            fs.open_read(&key_path)?
-                .take(65537)
-                .read_to_string(&mut text)?;
-            KeyBindings::parse(&text)?
-        } else {
-            KeyBindings::default()
-        };
+        let startup = session.borrow_dependent();
+        let backend =
+            BrowserBackend::with_preferences(startup.screen_size(), startup.display_preferences())?;
+        let bindings =
+            KeyBindings::load_optional_for_profile_with_fs(&*fs, root, game.selection.profile)?;
         Ok(Self {
             session,
-            backend: BrowserBackend::new(size),
+            backend,
             font,
             bindings,
             codes: CodeInput::default(),
             driver: FrameDriver::default(),
-            functions: 0,
         })
     }
 }

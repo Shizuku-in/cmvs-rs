@@ -1454,11 +1454,12 @@ impl Runtime<'_> {
                     surface: false,
                 })
             } else {
-                let save = Csv2Save::decode(&bytes)?;
+                crate::save::Csv2Layout::parse(&bytes, bytes.len() as u64)?;
+                let (_, auxiliary) = Csv2Save::decode_auxiliary(&bytes, SaveFamily::Cmvs)?;
                 Some(ObjectImage {
                     filter: None,
                     name: Vec::new(),
-                    pixels: decode_bmp(&save.auxiliary)?,
+                    pixels: decode_bmp(&auxiliary)?,
                     alpha: false,
                     surface: false,
                 })

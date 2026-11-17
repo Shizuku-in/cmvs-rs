@@ -1,4 +1,8 @@
 //! Engine snapshot serialization for CVNS (`cvns-20090203` / `CSP1`).
+
+/// Explicit schema version stored at the start of the `0xa00` CVNS snapshot header record.
+/// Increment whenever `0xa00..=0xa09` record layouts change.
+pub const CVNS_SNAPSHOT_SCHEMA_VERSION: u32 = 1;
 use super::{
     SnapshotLayout, SnapshotRecord,
     engine::Writer,
@@ -221,6 +225,7 @@ impl SavedCvnsLayer {
                 (b" ".to_vec(), b" ".to_vec(), None, None, true, img)
             }
         };
+        let raw_unfiltered = (captured && self.filter_mode != 0).then(|| pixels.clone());
         let mut layer =
             CvnsImageLayer::from_image(name, part, pixels, self.dx, self.dy, self.use_alpha);
         layer.frame = frame;
@@ -234,20 +239,11 @@ impl SavedCvnsLayer {
         layer.rgb_mul = self.rgb_mul;
         layer.apply_saved_effects()?;
         // Raw captured layers already hold tinted pixels; avoid double-tinting base pixels.
-        if captured && self.filter_mode != 0 {
+        if let Some(unfiltered) = raw_unfiltered {
             let mut reset = CvnsImageLayer::from_image(
                 layer.name.clone(),
                 layer.part.clone(),
-                RgbaImage::new(
-                    layer.width(),
-                    layer.height(),
-                    match &self.source {
-                        SavedLayerPixels::RawLzss { packed, .. } => {
-                            lzss::decode(packed, (layer.width() * layer.height() * 4) as usize)?
-                        }
-                        _ => unreachable!(),
-                    },
-                )?,
+                unfiltered,
                 self.dx,
                 self.dy,
                 self.use_alpha,
@@ -663,6 +659,12 @@ impl CvnsSnapshot {
         })
     }
 
+    /// Whether `bytes` begins with `cmvs-rs` `0xa00` CVNS snapshot records (rather than an
+    /// original `cvns.exe` `0x100..` payload inside a `CSP1` container).
+    pub fn has_cmvs_rs_records(bytes: &[u8]) -> bool {
+        bytes.len() >= 10 && u16::from_le_bytes([bytes[0], bytes[1]]) == 0xa00
+    }
+
     pub fn encode(&self) -> Result<Vec<u8>, FormatError> {
         let mut out = Writer::default();
         out.record(0xa00, None, &self.encode_vm_block()?)?;
@@ -711,7 +713,14 @@ impl CvnsSnapshot {
 
     pub fn decode(bytes: &[u8]) -> Result<Self, FormatError> {
         let records = parse_records(bytes)?;
-        let vm = decode_vm_block(unique_body(bytes, &records, 0xa00)?)?;
+        let vm_body = unique_body(bytes, &records, 0xa00).map_err(|err| {
+            if records.iter().any(|r| (0x100..0xa00).contains(&r.tag)) {
+                FormatError("native cvns.exe CSP1 snapshot payload is not supported")
+            } else {
+                err
+            }
+        })?;
+        let vm = decode_vm_block(vm_body)?;
         let scene_meta = decode_scene_meta(unique_body(bytes, &records, 0xa01)?)?;
         let msg_meta = decode_message_meta(unique_body(bytes, &records, 0xa04)?)?;
         let audio = unique_body(bytes, &records, 0xa08)?.to_vec();
@@ -798,7 +807,7 @@ impl CvnsSnapshot {
 
     fn encode_vm_block(&self) -> Result<Vec<u8>, FormatError> {
         let mut out = Vec::new();
-        out.extend_from_slice(&1u32.to_le_bytes());
+        out.extend_from_slice(&CVNS_SNAPSHOT_SCHEMA_VERSION.to_le_bytes());
         put_bytes(&mut out, &self.save_title);
         put_bytes(&mut out, &self.scene_title);
         for name in &self.script_names {
@@ -999,7 +1008,7 @@ fn read_i32(r: &mut Reader<'_>) -> Result<i32, FormatError> {
 
 fn decode_vm_block(bytes: &[u8]) -> Result<DecodedVmBlock, FormatError> {
     let mut r = Reader::new(bytes);
-    if r.u32()? != 1 {
+    if r.u32()? != CVNS_SNAPSHOT_SCHEMA_VERSION {
         return Err(FormatError("unsupported CVNS snapshot VM block version"));
     }
     let save_title = read_bytes(&mut r, 256)?;
@@ -2303,6 +2312,22 @@ mod tests {
             r,
             AudioRequest::PlayAuxSe { channel: 1, name, .. } if name == b"ax.ogg"
         )));
+
+        assert!(CvnsSnapshot::has_cmvs_rs_records(&encoded));
+        let mut wrong_version = encoded.clone();
+        wrong_version[6..10].copy_from_slice(&(CVNS_SNAPSHOT_SCHEMA_VERSION + 1).to_le_bytes());
+        assert_eq!(
+            CvnsSnapshot::decode(&wrong_version).unwrap_err(),
+            FormatError("unsupported CVNS snapshot VM block version")
+        );
+
+        // Native cvns.exe CSP1 snapshots start with 0x100 short records and lack 0xa00.
+        let native_payload = [0x00, 0x01, 0x02, 0x00, 0xaa, 0xbb];
+        assert!(!CvnsSnapshot::has_cmvs_rs_records(&native_payload));
+        assert_eq!(
+            CvnsSnapshot::decode(&native_payload).unwrap_err(),
+            FormatError("native cvns.exe CSP1 snapshot payload is not supported")
+        );
 
         let mut bad = encoded.clone();
         bad[0] ^= 0xff;

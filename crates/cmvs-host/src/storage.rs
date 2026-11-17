@@ -1,18 +1,130 @@
 //! Opt-in game-local storage for embedding applications. Research/CLI players
 //! retain their explicit external-profile policy.
-use cmvs_core::system_save::ProfileSystemSave;
+use cmvs_core::{filesystem::HostFs, system_save::ProfileSystemSave};
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, Write},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
+
+#[cfg(target_os = "android")]
+mod android_fs {
+    use cmvs_core::filesystem::{
+        File, HostFile, HostFs, Metadata, OpenOptions, StdFs, metadata_from_std,
+    };
+    use std::{
+        io::{self, Read, Seek, SeekFrom, Write},
+        path::{Path, PathBuf},
+    };
+
+    struct AndroidFile(std::fs::File);
+
+    impl Read for AndroidFile {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.0.read(buf)
+        }
+    }
+
+    impl Write for AndroidFile {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.write(buf)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            self.0.flush()
+        }
+    }
+
+    impl Seek for AndroidFile {
+        fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+            self.0.seek(pos)
+        }
+    }
+
+    impl HostFile for AndroidFile {
+        fn metadata(&self) -> io::Result<Metadata> {
+            Ok(metadata_from_std(&self.0.metadata()?))
+        }
+        fn sync_all(&self) -> io::Result<()> {
+            self.0.sync_all()
+        }
+        fn try_lock(&self) -> io::Result<()> {
+            rustix::fs::flock(
+                &self.0,
+                rustix::fs::FlockOperation::NonBlockingLockExclusive,
+            )
+            .map_err(io::Error::from)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, Default)]
+    pub(super) struct AndroidHostFs;
+
+    impl HostFs for AndroidHostFs {
+        fn open(&self, path: &Path, options: &OpenOptions) -> io::Result<File> {
+            Ok(File::from_host(Box::new(AndroidFile(
+                StdFs::open_std_file(path, options)?,
+            ))))
+        }
+        fn metadata(&self, path: &Path) -> io::Result<Metadata> {
+            StdFs.metadata(path)
+        }
+        fn symlink_metadata(&self, path: &Path) -> io::Result<Metadata> {
+            StdFs.symlink_metadata(path)
+        }
+        fn try_exists(&self, path: &Path) -> io::Result<bool> {
+            StdFs.try_exists(path)
+        }
+        fn is_file(&self, path: &Path) -> bool {
+            StdFs.is_file(path)
+        }
+        fn is_dir(&self, path: &Path) -> bool {
+            StdFs.is_dir(path)
+        }
+        fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
+            StdFs.canonicalize(path)
+        }
+        fn absolute(&self, path: &Path) -> io::Result<PathBuf> {
+            StdFs.absolute(path)
+        }
+        fn create_dir_all(&self, path: &Path) -> io::Result<()> {
+            StdFs.create_dir_all(path)
+        }
+        fn remove_file(&self, path: &Path) -> io::Result<()> {
+            StdFs.remove_file(path)
+        }
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            StdFs.rename(from, to)
+        }
+        fn session_id(&self) -> u32 {
+            StdFs.session_id()
+        }
+        fn read_dir_names(&self, dir: &Path) -> io::Result<Option<Vec<std::ffi::OsString>>> {
+            StdFs.read_dir_names(dir)
+        }
+    }
+}
+
+pub(super) fn host_fs() -> Arc<dyn HostFs> {
+    #[cfg(target_os = "android")]
+    {
+        Arc::new(android_fs::AndroidHostFs)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        cmvs_core::filesystem::default_fs()
+    }
+}
 
 const IMPORTED: &str = ".cmvs-legacy-imported";
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 pub(super) fn game_savedata(root: &Path, legacy: &Path) -> io::Result<ProfileSystemSave> {
-    let profile = match ProfileSystemSave::open_game_savedata(root) {
+    let fs = host_fs();
+    let profile = match ProfileSystemSave::open_game_savedata_with_fs(root, fs.clone()) {
         Ok(profile) => profile,
         Err(error)
             if matches!(
@@ -20,7 +132,7 @@ pub(super) fn game_savedata(root: &Path, legacy: &Path) -> io::Result<ProfileSys
                 io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem
             ) =>
         {
-            return ProfileSystemSave::open(legacy, root);
+            return ProfileSystemSave::open_with_fs(legacy, root, fs);
         }
         Err(error) => return Err(error),
     };
@@ -30,7 +142,7 @@ pub(super) fn game_savedata(root: &Path, legacy: &Path) -> io::Result<ProfileSys
     }
     // Hold both locks throughout migration. An active legacy session must not
     // race copying, nor may a second local player scan a partial import.
-    let source = ProfileSystemSave::open(legacy, root)?;
+    let source = ProfileSystemSave::open_with_fs(legacy, root, fs)?;
     import_entries(
         fs::read_dir(source.directory())?.collect::<io::Result<Vec<_>>>()?,
         target,

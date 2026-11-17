@@ -35,6 +35,18 @@ impl BrowserBackend {
             render: 0,
         }
     }
+    pub fn with_preferences(
+        size: [u32; 2],
+        preferences: cmvs_core::settings::DisplayPreferences,
+    ) -> Result<Self, Box<dyn Error>> {
+        let mut backend = Self::new(size);
+        backend.fullscreen = preferences.fullscreen;
+        backend.aspect = preferences.aspect_mode;
+        backend.scaling = preferences.aspect_scaling;
+        backend.render =
+            cmvs_core::platform::supported_render_mode(&backend, preferences.render_mode)?;
+        Ok(backend)
+    }
 }
 impl PlatformBackend for BrowserBackend {
     fn select_fullscreen_monitor(&mut self, mode: u32) -> Result<bool, Box<dyn Error>> {

@@ -59,8 +59,10 @@ jobs:
         run: |
           cargo doc --locked --no-deps --lib -p cmvs-core -p cmvs-rs
           cargo test --locked -p cmvs-core --doc
-      - name: Check CPU-only desktop
-        run: cargo check --locked -p cmvs-desktop --no-default-features
+      - name: Check CPU-only desktop and no-std-fs core
+        run: |
+          cargo check --locked -p cmvs-desktop --no-default-features
+          cargo check --locked -p cmvs-core --no-default-features
 
   full:
     name: all features (${{ matrix.name }})
@@ -138,7 +140,7 @@ jobs:
           python-version: "3.12"
       - name: Run synthetic tool tests
         run: |
-          for test in tools/test_*.py; do
+          for test in tools/test_*.py tests/test_ps3.py; do
             echo "::group::$test"
             python -I "$test"
             echo "::endgroup::"

@@ -28,12 +28,12 @@ use cmvs_core::{
     raster::{RgbaImage, movie_canvas},
     runtime::{
         FrameBudget, FrameDriver, FrameOutcome, Runtime, RuntimeEvent, RuntimeOptions, SaveStorage,
-        load_start,
+        load_start_with_fs,
     },
     system_save::ProfileSystemSave,
 };
 use cmvs_font::font::FontRenderer;
-use std::{error::Error, io::Read, path::Path};
+use std::{error::Error, path::Path};
 
 self_cell::self_cell! {
     struct Session {
@@ -47,7 +47,6 @@ struct Input {
     held: [bool; 128],
     pulses: [bool; 128],
     codes: CodeInput,
-    functions: u16,
     pointer: [i32; 2],
 }
 impl Default for Input {
@@ -56,7 +55,6 @@ impl Default for Input {
             held: [false; 128],
             pulses: [false; 128],
             codes: CodeInput::default(),
-            functions: 0,
             pointer: [0; 2],
         }
     }
@@ -73,9 +71,6 @@ impl Input {
     fn sample(&mut self, bindings: &KeyBindings, input: &mut cmvs_core::input::ActionInput) {
         let now = std::array::from_fn(|i| self.held[i] || self.pulses[i]);
         self.pulses.fill(false);
-        let functions = (0..12).fold(0u16, |mask, i| mask | (u16::from(now[52 + i]) << i));
-        input.press_function_keys(functions & !self.functions);
-        self.functions = functions;
         self.codes.update(bindings, &now, input);
         input.set_pointer(self.pointer[0], self.pointer[1]);
     }
@@ -115,7 +110,13 @@ impl Player {
     ) -> Result<Self, PlayerError> {
         Self::open_with_profile(
             root,
-            || Ok(ProfileSystemSave::open(user, root)?),
+            || {
+                Ok(ProfileSystemSave::open_with_fs(
+                    user,
+                    root,
+                    storage::host_fs(),
+                )?)
+            },
             font_path,
             native_audio,
         )
@@ -149,11 +150,14 @@ impl Player {
                 "initialize the CMVS Android application context before native audio".into(),
             );
         }
-        let game = Registry::builtin().identify_game(root, None)?;
-        let font = FontRenderer::read(font_path, 0)?;
+        let fs = storage::host_fs();
+        let game = Registry::builtin().identify_game_with_fs(&*fs, root, None)?;
+        let script = load_start_with_fs(&*fs, root, &game.files)?;
+        let encoding =
+            cmvs_font::text_codec::select_or_default_with_fs(&*fs, root, &game.files, &script)?;
+        let font = FontRenderer::read(font_path, 0)?.with_text_encoding(encoding);
         let profile = open_profile()?;
         font.set_user_directory(profile.directory())?;
-        let script = load_start(root, &game.files)?;
         let mut audio_control = None;
         let session = Session::try_new(script, |script| -> Result<Runtime<'_>, Box<dyn Error>> {
             let mut startup = Runtime::with_options(
@@ -161,13 +165,17 @@ impl Player {
                 root,
                 &game,
                 RuntimeOptions {
+                    encoding,
                     saves: SaveStorage::Profile(profile),
                     decode_cmv_frames: true,
+                    fs: Some(fs.clone()),
                     ..Default::default()
                 },
             )?;
             startup.set_save_clock(Box::new(cmvs_core::runtime::utc_save_time));
+            startup.set_random_seed(cmvs_core::random::host_time_seed());
             startup.set_record_text(true);
+            startup.set_host_capture(true);
             startup.set_glyph_metrics(font.metrics());
             if !font.has_face(startup.settings().font_face()) {
                 startup.set_font_face(cmvs_core::settings::DEFAULT_FONT_FACE)?;
@@ -193,16 +201,8 @@ impl Player {
         backend.scaling = preferences.aspect_scaling;
         backend.render =
             cmvs_core::platform::supported_render_mode(&backend, preferences.render_mode)?;
-        let key_path = root.join("key.cfg");
-        let bindings = if key_path.is_file() {
-            let mut text = String::new();
-            std::fs::File::open(key_path)?
-                .take(65537)
-                .read_to_string(&mut text)?;
-            KeyBindings::parse(&text)?
-        } else {
-            KeyBindings::default()
-        };
+        let bindings =
+            KeyBindings::load_optional_for_profile_with_fs(&*fs, root, game.selection.profile)?;
         Ok(Self {
             session,
             backend,
@@ -230,7 +230,6 @@ impl Player {
             self.driver.suspend();
             self.input.held.fill(false);
             self.input.pulses.fill(false);
-            self.input.functions = 0;
             self.session
                 .with_dependent_mut(|_, s| self.input.codes.clear(s.input_mut()));
         }
@@ -308,6 +307,11 @@ impl Player {
                             .render(startup.scene(), startup.camera(), startup.messages())
                             .map_err(|e| PlayerError::Execution(e.into()))?
                     };
+                    if startup.capture_due() {
+                        startup
+                            .supply_capture(frame.clone())
+                            .map_err(PlayerError::Execution)?;
+                    }
                     self.backend.frame = Some(frame);
                     self.serial += 1;
                     Ok(TickOutcome::FrameReady)

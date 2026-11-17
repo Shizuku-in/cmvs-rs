@@ -814,6 +814,11 @@ impl<'a> Runtime<'a> {
     pub fn set_scene_prefetch(&mut self, on_thread_start: fn()) {
         self.movies.set_scene_prefetch(on_thread_start);
     }
+    /// Set the raw compressed-image (`0x203f`) cache budget in bytes; see
+    /// [`ImageArchives::set_raw_cache_limit`].
+    pub fn set_raw_image_cache(&mut self, bytes: usize) {
+        self.images.set_raw_cache_limit(bytes);
+    }
     /// Set the decoded-image cache budget in bytes; see [`ImageArchives::set_decoded_cache_limit`].
     pub fn set_decoded_image_cache(&mut self, bytes: usize) {
         self.images.set_decoded_cache_limit(bytes);
@@ -922,6 +927,13 @@ impl<'a> Runtime<'a> {
         if self.movies.has_player() {
             return Err("screen capture during a full-screen movie is not verified".into());
         }
+        if self.host_capture {
+            self.capture_due = true;
+            return Ok(());
+        }
+        self.draw_capture()
+    }
+    fn draw_capture(&mut self) -> Result<(), Box<dyn Error>> {
         let texts = (0..crate::message::TEXT_OBJECTS).filter_map(|i| self.messages.text(i));
         if texts
             .filter(|text| text.visible)
@@ -935,13 +947,6 @@ impl<'a> Runtime<'a> {
         {
             return Err("screen capture over auxiliary glyphs needs the font backend".into());
         }
-        if self.host_capture {
-            self.capture_due = true;
-            return Ok(());
-        }
-        self.draw_capture()
-    }
-    fn draw_capture(&mut self) -> Result<(), Box<dyn Error>> {
         let windows: Vec<_> = self.messages.visible_window_objects().collect();
         let [width, height] = self.screen_size();
         let frame = crate::scene_render::render_scene(

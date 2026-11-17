@@ -90,7 +90,7 @@ Saves:
 
 Run control and research:
   --exit-after <seconds>  exit after 1..3600 seconds
-  --rand-seed <seed>      CRT random seed, decimal u32 (default 0)
+  --rand-seed <seed>      CRT random seed, decimal u32 (defaults to wall-clock ms)
   --profile <id>          force an engine profile; otherwise identify the game build
   --block-presumed       stop at commands with only legacy presumed evidence
   --block-unreviewed     stop at unreviewed commands
@@ -248,6 +248,9 @@ impl App<'_> {
             self.preview_image.is_some(),
         )? && self.preview_image.is_none()
         {
+            if self.startup.capture_due() {
+                self.startup.supply_capture(frame.read()?)?;
+            }
             self.device_frame = Some(Box::new(frame));
         }
         Ok(())
@@ -307,6 +310,9 @@ impl App<'_> {
         }
         buffer.present()?;
         if self.preview_image.is_none() {
+            if self.startup.capture_due() {
+                self.startup.supply_capture(image.clone())?;
+            }
             self.device_frame = Some(Box::new(image));
         }
         Ok(())
@@ -745,6 +751,28 @@ impl ApplicationHandler for App<'_> {
                         "# fade completed and removed; elapsed wall time drives frame updates"
                     );
                 }
+                if yielded && self.startup.capture_due() {
+                    if let Err(error) = self.redraw() {
+                        self.fail(el, error);
+                        return;
+                    }
+                    // Minimized/zero-sized surfaces skip presentation; still satisfy the
+                    // pending capture from the off-screen logical frame when font/GPU owns it.
+                    if self.startup.capture_due() {
+                        let captured = (|| -> Result<RgbaImage, Box<dyn Error>> {
+                            #[cfg(feature = "wgpu-renderer")]
+                            if self.use_gpu {
+                                return self.gpu_frame()?.read();
+                            }
+                            self.frame()
+                        })()
+                        .and_then(|img| self.startup.supply_capture(img));
+                        if let Err(error) = captured {
+                            self.fail(el, error);
+                            return;
+                        }
+                    }
+                }
             }
             window.request_redraw();
         }
@@ -790,7 +818,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     let mut block_presumed = false;
     let mut system_save_output = None;
     let mut user_data_dir = None;
-    let mut rand_seed = 0;
+    let mut rand_seed: Option<u32> = None;
     let mut save_frame = None;
     let mut use_gpu = false;
     let mut native_audio = false;
@@ -865,7 +893,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             }
             exit_after = Some(Duration::from_secs(seconds));
         } else if flag == "--rand-seed" {
-            rand_seed = value.to_str().ok_or("invalid seed")?.parse::<u32>()?;
+            rand_seed = Some(value.to_str().ok_or("invalid seed")?.parse::<u32>()?);
         } else if flag == "--system-save-output" {
             system_save_output = Some(PathBuf::from(value));
         } else if flag == "--user-data-dir" {
@@ -951,12 +979,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             );
             KeyBindings::default()
         } else {
-            use std::io::Read;
-            let mut text = String::new();
-            File::open(root.join("key.cfg"))?
-                .take(65537)
-                .read_to_string(&mut text)?;
-            let bindings = KeyBindings::parse(&text)?;
+            let bindings = KeyBindings::load_for_profile(&root, game.selection.profile)?;
             println!(
                 "# native input enabled; bindings read only from key.cfg; no registry overrides or gamepad"
             );
@@ -1033,6 +1056,7 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
     startup.set_save_clock(Box::new(cmvs_core::runtime::utc_save_time));
     startup.set_record_text(record_text || font.is_some());
+    startup.set_host_capture(font.is_some() || use_gpu);
     if let Some(font) = &font {
         if let Some(directory) = &user_data_dir {
             font.set_user_directory(directory)?;
@@ -1054,7 +1078,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             "# text RECORDING ONLY: supported single-line glyph descriptors and reveal timing; no font pixels or text drawing"
         );
     }
-    startup.set_random_seed(rand_seed);
+    startup.set_random_seed(rand_seed.unwrap_or_else(cmvs_core::random::host_time_seed));
     let display_preferences = startup.display_preferences();
     let fullscreen_monitor_mode = startup.platform().fullscreen_monitor_mode();
     let canvas = startup.screen_size();

@@ -16,20 +16,26 @@ pub mod library;
 pub mod menu;
 pub mod text_input;
 
-use std::{error::Error, fmt, io::Read as _, path::Path, time::Duration};
+use std::{error::Error, fmt, path::Path, time::Duration};
 
 /// Converts a frame interval to milliseconds saturated to `u32`.
 pub fn millis(duration: Duration) -> u32 {
     duration.as_millis().min(u128::from(u32::MAX)) as u32
 }
 
-/// Renders the current movie frame if playing, otherwise software-composites the scene.
+/// Renders the current movie frame onto the logical canvas if playing, otherwise
+/// software-composites the scene.
 pub fn render_software(
     startup: &cmvs_core::runtime::Runtime<'_>,
     font: &mut cmvs_font::font::FontRenderer,
+    linear: bool,
 ) -> Result<cmvs_core::raster::RgbaImage, Box<dyn Error>> {
     if let Some(frame) = startup.movie_frame() {
-        return Ok(frame.clone());
+        return Ok(cmvs_core::raster::movie_canvas(
+            frame,
+            startup.screen_size(),
+            linear,
+        )?);
     }
     Ok(font.render(startup.scene(), startup.camera(), startup.messages())?)
 }
@@ -49,13 +55,13 @@ pub fn configure_game_font(
     Ok(())
 }
 
-/// Reads and parses `root/key.cfg`.
-pub fn load_key_bindings(root: &Path) -> Result<cmvs_core::input::KeyBindings, Box<dyn Error>> {
-    let mut keys = String::new();
-    std::fs::File::open(root.join("key.cfg"))?
-        .take(65537)
-        .read_to_string(&mut keys)?;
-    Ok(cmvs_core::input::KeyBindings::parse(&keys)?)
+/// Reads and parses `root/key.cfg` when `profile.uses_key_cfg()` is true, or returns empty
+/// bindings for CVNS builds that use fixed virtual key codes.
+pub fn load_key_bindings(
+    root: &Path,
+    profile: &cmvs_core::profile::EngineProfile,
+) -> Result<cmvs_core::input::KeyBindings, Box<dyn Error>> {
+    cmvs_core::input::KeyBindings::load_for_profile_with_fs(&ConsoleFs, root, profile)
 }
 
 /// Formats a runtime tick failure with script name, PC, and step count context.

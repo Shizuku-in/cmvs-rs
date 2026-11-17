@@ -136,15 +136,24 @@ pub fn detect_game(
     files: &cmvs_core::profile::GameFiles,
     startup: &cmvs_core::ps3::Script,
 ) -> Result<TextEncoding, DetectError> {
+    detect_game_with_fs(&cmvs_core::filesystem::StdFs, root, files, startup)
+}
+
+/// Like [`detect_game`], reading the script archive through `fs`.
+pub fn detect_game_with_fs(
+    fs: &dyn cmvs_core::filesystem::HostFs,
+    root: &std::path::Path,
+    files: &cmvs_core::profile::GameFiles,
+    startup: &cmvs_core::ps3::Script,
+) -> Result<TextEncoding, DetectError> {
     use cmvs_core::{
-        filesystem::File,
         ps3::{Header, Script},
         script_control::archive_index_from_start,
     };
     if let Ok(encoding) = detect(startup.text()) {
         return Ok(encoding);
     }
-    let mut reader = File::open(root.join(&files.script_archive))?;
+    let mut reader = fs.open_read(&root.join(&files.script_archive))?;
     let basename = files
         .script_archive
         .file_name()
@@ -169,7 +178,10 @@ pub fn detect_game(
     let mut scripts = 0;
     for (i, entry) in index.entries().iter().enumerate() {
         let extension = entry.name.rsplit(|&b| b == b'.').next().unwrap_or_default();
-        if !extension.eq_ignore_ascii_case(b"ps3") && !extension.eq_ignore_ascii_case(b"ps2") {
+        if !extension.eq_ignore_ascii_case(b"ps3")
+            && !extension.eq_ignore_ascii_case(b"ps2")
+            && !extension.eq_ignore_ascii_case(b"pss")
+        {
             continue;
         }
         if scripts == 32 {
@@ -194,6 +206,35 @@ pub fn detect_game(
         }
     }
     Err(DetectError::Uncertain)
+}
+
+/// Resolves `root/encoding.txt` when present, otherwise runs [`detect_game_with_fs`] and
+/// falls back to [`TextEncoding::ShiftJis`] only when script text is purely ASCII/uncertain.
+pub fn select_or_default_with_fs(
+    fs: &dyn cmvs_core::filesystem::HostFs,
+    root: &std::path::Path,
+    files: &cmvs_core::profile::GameFiles,
+    startup: &cmvs_core::ps3::Script,
+) -> Result<TextEncoding, Box<dyn std::error::Error>> {
+    use std::io::{ErrorKind, Read as _};
+    match fs.open_read(&root.join("encoding.txt")) {
+        Ok(file) => {
+            let mut setting = String::new();
+            file.take(65).read_to_string(&mut setting)?;
+            let name = setting.trim();
+            parse(name).map_err(|_| {
+                format!("encoding.txt must be shift-jis, gbk or utf-8, not {name:?}").into()
+            })
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            match detect_game_with_fs(fs, root, files, startup) {
+                Ok(encoding) => Ok(encoding),
+                Err(DetectError::Uncertain) => Ok(TextEncoding::ShiftJis),
+                Err(error) => Err(Box::new(error)),
+            }
+        }
+        Err(error) => Err(Box::new(error)),
+    }
 }
 
 #[derive(Default)]

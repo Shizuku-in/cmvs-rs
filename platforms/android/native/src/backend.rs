@@ -14,6 +14,7 @@ pub(super) struct MobileBackend {
     pub frame: Option<Arc<GpuFrame>>,
     pub font: Rc<RefCell<FontRenderer>>,
     pub font_pending: bool,
+    encoding: cmvs_core::TextEncoding,
     app: AndroidApp,
     directory: PathBuf,
     title: String,
@@ -24,6 +25,7 @@ impl MobileBackend {
         app: AndroidApp,
         directory: PathBuf,
         font: Rc<RefCell<FontRenderer>>,
+        encoding: cmvs_core::TextEncoding,
         display: DisplayPreferences,
         screen_size: [u32; 2],
     ) -> Self {
@@ -31,6 +33,7 @@ impl MobileBackend {
             app,
             directory,
             font,
+            encoding,
             display,
             screen_size,
             frame: None,
@@ -142,10 +145,7 @@ impl PlatformBackend for MobileBackend {
             PlatformRequest::RenderMode(mode) if *mode <= 1 => self.display.render_mode = *mode,
             PlatformRequest::WindowSize(size) if *size == self.screen_size => {}
             PlatformRequest::Title(bytes) => {
-                self.title = encoding_rs::SHIFT_JIS
-                    .decode_without_bom_handling_and_without_replacement(bytes)
-                    .ok_or("invalid Shift-JIS game title")?
-                    .into_owned();
+                self.title = cmvs_font::text_codec::decode(self.encoding, bytes)?;
                 log::info!("Game title: {}", self.title);
             }
             // Native cursors and desktop window icons have no visible mobile target.

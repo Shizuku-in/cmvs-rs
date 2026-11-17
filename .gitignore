@@ -1,14 +1,22 @@
-/target/
+target/
 /local/
 __pycache__/
 *.py[cod]
 .vscode/
+.DS_Store
 # User-supplied game data and IDA databases belong outside the repository.
 *.cpz
 *.ps2
 *.ps3
+*.pss
 *.cmv
+*.mgv
+*.pb2
 *.pb3
+*.msk
+*.mv2
+*.cur
+*.dat
 *.exe
 *.dll
 *.i64

@@ -64,6 +64,61 @@ impl KeyBindings {
         }
         Ok(result)
     }
+    /// Reads `key.cfg` (case-insensitively under `root`) when `profile.uses_key_cfg()` is
+    /// true, or returns empty bindings for CVNS builds that use fixed virtual key codes.
+    pub fn load_for_profile_with_fs(
+        fs: &dyn crate::filesystem::HostFs,
+        root: &std::path::Path,
+        profile: &crate::profile::EngineProfile,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::load_with_policy(fs, root, profile, true)
+    }
+
+    /// Reads `key.cfg` under `root` with [`StdFs`](crate::filesystem::StdFs) when used by `profile`.
+    #[cfg(feature = "std-fs")]
+    pub fn load_for_profile(
+        root: &std::path::Path,
+        profile: &crate::profile::EngineProfile,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::load_for_profile_with_fs(&crate::filesystem::StdFs, root, profile)
+    }
+
+    /// Like [`Self::load_for_profile_with_fs`], returning empty bindings when `key.cfg` is absent.
+    pub fn load_optional_for_profile_with_fs(
+        fs: &dyn crate::filesystem::HostFs,
+        root: &std::path::Path,
+        profile: &crate::profile::EngineProfile,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::load_with_policy(fs, root, profile, false)
+    }
+
+    #[cfg(feature = "std-fs")]
+    pub fn load_optional_for_profile(
+        root: &std::path::Path,
+        profile: &crate::profile::EngineProfile,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        Self::load_optional_for_profile_with_fs(&crate::filesystem::StdFs, root, profile)
+    }
+
+    fn load_with_policy(
+        fs: &dyn crate::filesystem::HostFs,
+        root: &std::path::Path,
+        profile: &crate::profile::EngineProfile,
+        required: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        use std::io::Read as _;
+        if !profile.uses_key_cfg() {
+            return Ok(Self::default());
+        }
+        let path = match crate::platform::resolve_under_with_fs(fs, root, b"key.cfg") {
+            Ok(path) => path,
+            Err(error) if !required && error.is_not_found() => return Ok(Self::default()),
+            Err(error) => return Err(Box::new(error)),
+        };
+        let mut text = String::new();
+        fs.open_read(&path)?.take(65537).read_to_string(&mut text)?;
+        Ok(Self::parse(&text)?)
+    }
 }
 
 /// Direct code indices matching [`CodeInput`] / `cmvs-desktop` for CVNS hold counters:
@@ -145,6 +200,10 @@ impl CodeInput {
                 0
             };
         }
+        let fn_pressed = (0..12).fold(0u16, |mask, bit| {
+            mask | (u16::from(now[52 + bit] && !self.previous[52 + bit]) << bit)
+        });
+        input.press_function_keys(fn_pressed);
         self.previous = *now;
     }
     /// Focus loss cancels state without turning it into a click on release.
@@ -714,7 +773,7 @@ mod tests {
             code.extend(4u16.to_le_bytes());
             code.extend(value.to_le_bytes());
         }
-        code.extend((command + 0x1c00).to_le_bytes());
+        code.extend((0x2000 | (command & 0x7ff)).to_le_bytes());
         let mut payload = 0u32.to_le_bytes().to_vec();
         payload.extend(&code);
         let mut raw = b"PS2A".to_vec();
@@ -798,5 +857,91 @@ mod tests {
         let (mut vm, pc) = vm_pending(0x442, &[1]);
         try_handle_cvns(&mut Call::new(&mut vm, pc, 0x442), &mut input).unwrap();
         assert_eq!(vm.state().system_integer(0), Some(1));
+    }
+
+    #[cfg(feature = "std-fs")]
+    #[test]
+    fn load_for_profile_skips_absent_key_cfg_on_cvns_and_resolves_uppercase_on_cmvs() {
+        let registry = crate::profile::Registry::builtin();
+        let cvns = registry.profile("cvns-20090203").unwrap();
+        let cmvs = registry.profile("cmvs-20160201").unwrap();
+        assert!(!cvns.uses_key_cfg());
+        assert!(cmvs.uses_key_cfg());
+
+        let root = std::env::temp_dir().join(format!("cmvs-key-cfg-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        assert_eq!(
+            KeyBindings::load_for_profile(&root, cvns).unwrap(),
+            KeyBindings::default()
+        );
+        assert!(KeyBindings::load_for_profile(&root, cmvs).is_err());
+
+        let cfg = "[KEY_FUNCTION_1]\nKEY_DATA_1=22\n[KEY_FUNCTION_8]\nKEY_DATA_2=24\n";
+        std::fs::write(root.join("KEY.CFG"), cfg).unwrap();
+        let loaded = KeyBindings::load_for_profile(&root, cmvs).unwrap();
+        assert_eq!(loaded, KeyBindings::parse(cfg).unwrap());
+        assert_eq!(loaded.codes()[0][0], 22);
+        assert_eq!(loaded.codes()[7][1], 24);
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn code_input_reports_f1_through_f12_rising_edges_without_hold_retrigger() {
+        let mut codes = CodeInput::default();
+        let bindings = KeyBindings::default();
+        let mut input = ActionInput::default();
+
+        let query_fn_key = |input: &mut ActionInput| {
+            let (mut vm, _) = vm_pending(0x34e, &[]);
+            assert!(try_handle(&mut vm, input).unwrap());
+            vm.state().system_integer(0).unwrap()
+        };
+
+        // Ignored before 0x234d enables function-key reporting.
+        let mut now = [false; 128];
+        now[52] = true;
+        codes.update(&bindings, &now, &mut input);
+        assert_eq!(query_fn_key(&mut input), 0);
+        now = [false; 128];
+        codes.update(&bindings, &now, &mut input);
+
+        // Enable reporting with 0x234d (command 0x34d).
+        let (mut vm, _) = vm_pending(0x34d, &[]);
+        assert!(try_handle(&mut vm, &mut input).unwrap());
+
+        for bit in 0..12 {
+            let code = 52 + bit;
+            let expected = (bit + 1) as u32;
+
+            // Rising edge reports 1..=12 for codes 52..64.
+            now = [false; 128];
+            now[code] = true;
+            codes.update(&bindings, &now, &mut input);
+            assert_eq!(query_fn_key(&mut input), expected);
+
+            // Next frame while still held does not re-trigger.
+            codes.update(&bindings, &now, &mut input);
+            assert_eq!(query_fn_key(&mut input), 0);
+
+            // Release also reports 0.
+            now = [false; 128];
+            codes.update(&bindings, &now, &mut input);
+            assert_eq!(query_fn_key(&mut input), 0);
+        }
+
+        // With F1 already held, simultaneous rising edges on F4 and F9 report lowest new edge (F4),
+        // then clear on the following held frame.
+        now[52] = true;
+        codes.update(&bindings, &now, &mut input);
+        assert_eq!(query_fn_key(&mut input), 1);
+        now[55] = true;
+        now[60] = true;
+        codes.update(&bindings, &now, &mut input);
+        assert_eq!(query_fn_key(&mut input), 4);
+        codes.update(&bindings, &now, &mut input);
+        assert_eq!(query_fn_key(&mut input), 0);
     }
 }

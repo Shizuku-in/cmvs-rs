@@ -12,6 +12,7 @@ pub struct BrowserGpu {
     renderer: Renderer,
     presenter: Presenter,
     pub frame: Option<GpuFrame>,
+    pub capture: Option<GpuFrame>,
 }
 impl BrowserGpu {
     pub async fn new(canvas: OffscreenCanvas, size: [u32; 2]) -> Result<Self, Box<dyn Error>> {
@@ -32,6 +33,7 @@ impl BrowserGpu {
             renderer,
             presenter,
             frame: None,
+            capture: None,
         })
     }
     pub fn draw(
@@ -57,16 +59,24 @@ impl BrowserGpu {
             let scene = composition.prepare()?;
             self.renderer.render(&scene)?
         };
+        let mode = cmvs_core::viewport::presentation_mode(
+            display.fullscreen,
+            display.aspect_scaling,
+            display.aspect_mode,
+        );
         let presented = self.presenter.present(
             &self.renderer,
             &frame,
             size,
-            display.aspect_mode,
+            mode,
             display.render_mode == 1,
             false,
         )?;
         if presented {
+            self.capture = None;
             self.frame = Some(frame);
+        } else if startup.capture_due() {
+            self.capture = Some(frame);
         }
         Ok(presented)
     }

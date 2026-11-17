@@ -376,6 +376,7 @@ dependencies = [
  "cmvs-font",
  "cmvs-video",
  "ndk-context",
+ "rustix 1.1.6",
  "self_cell",
 ]
 
@@ -465,6 +466,7 @@ dependencies = [
  "cmvs-audio",
  "cmvs-core",
  "cmvs-font",
+ "cmvs-video",
  "cmvs-wgpu",
  "self_cell",
  "wasm-bindgen",

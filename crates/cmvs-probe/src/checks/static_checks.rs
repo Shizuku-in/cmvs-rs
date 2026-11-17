@@ -279,7 +279,7 @@ fn loose_cmv_header(reader: &mut (impl Read + Seek)) -> Result<(), String> {
             .map(|_| ())
             .map_err(|e| e.to_string())
     } else {
-        cmvs_core::cmv::CmvIndex::read_scene(reader)
+        cmvs_core::cmv::CmvIndex::read_scene_io(reader)
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
@@ -354,7 +354,7 @@ pub fn resources(target: &Target) -> CheckResult {
                 File::open(&path)
                     .map_err(|e| e.to_string())
                     .and_then(|mut f| {
-                        cmvs_core::mgv::MgvIndex::read(&mut f)
+                        cmvs_core::mgv::MgvIndex::read_io(&mut f)
                             .map(|_| ())
                             .map_err(|e| e.to_string())
                     })
@@ -440,9 +440,17 @@ pub fn bundled_saves(target: &Target) -> CheckResult {
                         (
                             cmvs_core::save_menu::SaveFamily::Cvns,
                             cmvs_core::snapshot::SnapshotLayout::CvnsCsp1,
-                        ) => cmvs_core::snapshot::CvnsSnapshot::decode(&save.snapshot)
-                            .map(|_| "CSP1 gameplay save".to_owned())
-                            .map_err(|e| e.to_string()),
+                        ) => {
+                            if cmvs_core::snapshot::CvnsSnapshot::has_cmvs_rs_records(
+                                &save.snapshot,
+                            ) {
+                                cmvs_core::snapshot::CvnsSnapshot::decode(&save.snapshot)
+                                    .map(|_| "CSP1 gameplay save".to_owned())
+                                    .map_err(|e| e.to_string())
+                            } else {
+                                Ok("CSP1 native gameplay container".to_owned())
+                            }
+                        }
                         (cmvs_core::save_menu::SaveFamily::Cmvs, _) => {
                             cmvs_core::snapshot::EngineSnapshot::decode_with_layout(
                                 &save.snapshot,

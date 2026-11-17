@@ -187,8 +187,9 @@ fn run(
     startup.set_decoded_image_cache(decoded_cache_bytes(sys::total_memory()));
     startup.set_record_text(true);
     // Requested screen captures read back the canvas instead of a software redraw.
-    startup.set_host_capture(gpu.is_some());
+    startup.set_host_capture(true);
     startup.set_save_clock(Box::new(cmvs_core::runtime::utc_save_time));
+    startup.set_random_seed(cmvs_core::random::host_time_seed());
     let mut font = encoding::load_game_font(
         base,
         encoding,
@@ -196,7 +197,7 @@ fn run(
         |font| sys::shared_font(font == SystemFont::SimplifiedChinese),
     )?;
     configure_game_font(&mut startup, &mut font, &user)?;
-    let bindings = load_key_bindings(root)?;
+    let bindings = load_key_bindings(root, game.selection.profile)?;
     let size = startup.screen_size();
     let mut backend = ConsoleBackend {
         display: startup.display_preferences(),
@@ -300,13 +301,16 @@ fn run(
                         startup.supply_capture(gpu.read()?)?;
                     }
                 } else {
-                    let frame = render_software(&startup, &mut font)?;
+                    let frame = render_software(&startup, &mut font, linear)?;
                     surface.fill(0);
                     frame.draw_scaled(&mut surface, SCREEN[0], SCREEN[1], mode, linear)?;
                     if controls.cursor_visible() {
                         draw_cursor(&mut surface, view, controls.pointer());
                     }
                     window.present(&surface)?;
+                    if startup.capture_due() {
+                        startup.supply_capture(frame.clone())?;
+                    }
                     backend.frame = Some(frame);
                 }
             }

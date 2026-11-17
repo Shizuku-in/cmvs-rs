@@ -30,8 +30,16 @@ pub use playback::{MOVIE_SEGMENTS, MoviePlayback, MovieSegment};
 
 /// The game-relative path the soundtrack request names and the parsed container.
 pub type OpenedMovie = (Vec<u8>, CmvIndex);
+pub type OpenedMovieStream = (OpenedMovie, Option<Box<dyn crate::mgv::ReadSeek>>);
 pub type OpenedMgv = (Vec<u8>, crate::mgv::MgvIndex, Box<dyn crate::mgv::ReadSeek>);
 type OpenedMovieFile = (Vec<u8>, File);
+
+struct CmvReader(Box<dyn crate::mgv::ReadSeek>);
+impl std::fmt::Debug for CmvReader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CmvReader(..)")
+    }
+}
 
 /// Opens movies by the name scripts pass to 0x20c0.
 pub trait MovieSource {
@@ -40,6 +48,11 @@ pub trait MovieSource {
     }
     /// Ok(None) when the file does not exist (0x1400379f0 then fails quietly).
     fn open(&mut self, name: &[u8]) -> Result<Option<OpenedMovie>, Box<dyn Error>>;
+    /// Opens a CMV container and optionally retains its reader handle across frames so
+    /// filesystem-backed sources do not re-resolve and re-open the file per video tick.
+    fn open_stream(&mut self, name: &[u8]) -> Result<Option<OpenedMovieStream>, Box<dyn Error>> {
+        Ok(self.open(name)?.map(|opened| (opened, None)))
+    }
     fn frame(
         &mut self,
         _path: &[u8],
@@ -79,7 +92,7 @@ impl MovieSource for DirectoryMovies<'_> {
         let Some((path, mut file)) = self.open_file(name)? else {
             return Ok(None);
         };
-        let index = crate::mgv::MgvIndex::read(&mut file)?;
+        let index = crate::mgv::MgvIndex::read_io(&mut file)?;
         Ok(Some((path, index, Box::new(file))))
     }
     fn frame(
@@ -95,7 +108,14 @@ impl MovieSource for DirectoryMovies<'_> {
         let Some((path, mut file)) = self.open_file(name)? else {
             return Ok(None);
         };
-        Ok(Some((path, CmvIndex::read(&mut file)?)))
+        Ok(Some((path, CmvIndex::read_io(&mut file)?)))
+    }
+    fn open_stream(&mut self, name: &[u8]) -> Result<Option<OpenedMovieStream>, Box<dyn Error>> {
+        let Some((path, mut file)) = self.open_file(name)? else {
+            return Ok(None);
+        };
+        let index = CmvIndex::read_io(&mut file)?;
+        Ok(Some(((path, index), Some(Box::new(file)))))
     }
 }
 impl DirectoryMovies<'_> {
@@ -288,6 +308,7 @@ pub struct MovieHost {
     /// The constructor (0x140014fc2..0x140014fd0) stores null in all three pointers.
     slots: [Option<SceneMovie>; MOVIE_SLOTS],
     player: Option<Movie>,
+    cmv_reader: Option<CmvReader>,
     player_modal: bool,
     mgv_player: Option<MgvMovie>,
     mgv_factory: Option<Box<dyn crate::mgv::DecoderFactory>>,
@@ -738,6 +759,7 @@ impl MovieHost {
     pub(crate) fn restore(&mut self, players: [Option<SceneMovie>; MOVIE_SLOTS]) -> bool {
         let had_player = self.has_player();
         self.player = None;
+        self.cmv_reader = None;
         self.player_modal = false;
         self.mgv_player = None;
         self.slots = players;

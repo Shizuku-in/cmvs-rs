@@ -60,6 +60,7 @@ impl MovieHost {
         };
         if clock == Some(MovieAudioClock::Ended) {
             self.player = None;
+            self.cmv_reader = None;
             self.player_modal = false;
             return Ok(());
         }
@@ -72,16 +73,17 @@ impl MovieHost {
             && target < movie.index.header.max_sequence
             && self.decode_frames
         {
-            Some(
-                source
-                    .frame(&movie.path, &movie.index, target)?
-                    .into_frame(),
-            )
+            let decoded = match &mut self.cmv_reader {
+                Some(reader) => movie.index.decode_frame(&mut *reader.0, target)?,
+                None => source.frame(&movie.path, &movie.index, target)?,
+            };
+            Some(decoded.into_frame())
         } else {
             None
         };
         if target >= movie.index.header.max_sequence {
             self.player = None;
+            self.cmv_reader = None;
             self.player_modal = false;
             return Ok(());
         }
@@ -105,6 +107,7 @@ impl MovieHost {
             backend.stop_movie_audio()?;
         }
         self.player = None;
+        self.cmv_reader = None;
         self.player_modal = false;
         Ok(())
     }
@@ -149,12 +152,20 @@ impl MovieHost {
                 let modal = command == CVNS_MOVIE_PLAY;
                 let raw = call.argument(4, "movie name")?;
                 let name = call.vm.resolve_string(raw)?;
-                let opened = source.open(&name)?;
+                let (opened, mut reader) = match source.open_stream(&name)? {
+                    Some((opened, reader)) => (Some(opened), reader),
+                    None => (None, None),
+                };
                 let image = if self.decode_frames {
-                    opened
-                        .as_ref()
-                        .map(|(path, index)| source.frame(path, index, 0).map(|i| i.into_frame()))
-                        .transpose()?
+                    match (&opened, &mut reader) {
+                        (Some((_, index)), Some(r)) => {
+                            Some(index.decode_frame(&mut **r, 0)?.into_frame())
+                        }
+                        (Some((path, index)), None) => {
+                            Some(source.frame(path, index, 0)?.into_frame())
+                        }
+                        (None, _) => None,
+                    }
                 } else {
                     None
                 };
@@ -191,6 +202,11 @@ impl MovieHost {
                     elapsed: 0,
                     image,
                 });
+                self.cmv_reader = if self.player.is_some() {
+                    reader.map(super::CmvReader)
+                } else {
+                    None
+                };
                 self.player_modal = modal && self.player.is_some();
                 Ok(flow)
             }
@@ -226,6 +242,7 @@ impl MovieHost {
         }
         if target >= movie.index.header.max_sequence {
             self.player = None;
+            self.cmv_reader = None;
             self.player_modal = false;
         } else {
             movie.frame = target;

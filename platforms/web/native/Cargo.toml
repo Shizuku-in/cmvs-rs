@@ -16,6 +16,7 @@ workspace = true
 cmvs-core = { path = "../../../crates/cmvs-core", default-features = false }
 cmvs-audio = { path = "../../../crates/cmvs-audio", default-features = false }
 cmvs-font = { path = "../../../crates/cmvs-font" }
+cmvs-video = { path = "../../../crates/cmvs-video" }
 wasm-bindgen.workspace = true
 self_cell.workspace = true
 

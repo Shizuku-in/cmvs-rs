@@ -11,7 +11,7 @@ use cmvs_core::{
     profile::Registry,
     runtime::{
         FrameBudget, FrameDriver, FrameOutcome, Runtime, RuntimeEvent, RuntimeOptions, SaveStorage,
-        load_start,
+        load_start_with_fs,
     },
 };
 use cmvs_font::font::FontRenderer;
@@ -110,6 +110,20 @@ impl Player<'_> {
         self.sync_input();
         Ok(())
     }
+    fn render_software(&self) -> Result<cmvs_core::raster::RgbaImage> {
+        if let Some(frame) = self.startup.movie_frame() {
+            return Ok(cmvs_core::raster::movie_canvas(
+                frame,
+                self.startup.screen_size(),
+                self.backend.display.render_mode == 1,
+            )?);
+        }
+        Ok(self.backend.font.borrow_mut().render(
+            self.startup.scene(),
+            self.startup.camera(),
+            self.startup.messages(),
+        )?)
+    }
     fn render_game(&mut self) -> Result<Arc<GpuFrame>> {
         let graphics = self.graphics.as_mut().ok_or("no graphics device")?;
         if let Some(image) = self.startup.movie_frame() {
@@ -207,6 +221,13 @@ impl Player<'_> {
                 self.driver.finish_frame(&mut self.startup, delta)?;
                 self.draw_ready = true;
                 self.redraw()?;
+                if self.startup.capture_due() {
+                    let captured = match self.graphics.as_ref().and_then(|g| g.frame.as_ref()) {
+                        Some(frame) => frame.read()?,
+                        None => self.render_software()?,
+                    };
+                    self.startup.supply_capture(captured)?;
+                }
                 self.next_frame = Instant::now() + FRAME_TIME;
                 return Ok(());
             }
@@ -334,8 +355,8 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
         config.next().ok_or("no font selected")?.as_bytes(),
     )?;
     let face = config.next().ok_or("no font collection index")?.parse()?;
-    let font = Rc::new(RefCell::new(FontRenderer::read(&font_path, face)?));
-    let game = Registry::builtin().identify_game(&root, None)?;
+    let fs = Arc::new(crate::fs::AndroidFs);
+    let game = Registry::builtin().identify_game_with_fs(&*fs, &root, None)?;
     let record = game
         .selection
         .record
@@ -346,15 +367,21 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
         game.selection.profile.id
     );
     let user = directory.join("users").join(&record.game);
-    let script = load_start(&root, &game.files)?;
+    let script = load_start_with_fs(&*fs, &root, &game.files)?;
+    let encoding =
+        cmvs_font::text_codec::select_or_default_with_fs(&*fs, &root, &game.files, &script)?;
+    let font = Rc::new(RefCell::new(
+        FontRenderer::read(&font_path, face)?.with_text_encoding(encoding),
+    ));
     let mut startup = Runtime::with_options(
         &script,
         &root,
         &game,
         RuntimeOptions {
+            encoding,
             saves: SaveStorage::UserDirectory(user.clone()),
             decode_cmv_frames: true,
-            fs: Some(Arc::new(crate::fs::AndroidFs)),
+            fs: Some(fs.clone()),
             ..Default::default()
         },
     )?;
@@ -370,21 +397,20 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
     startup.set_image_decode_threads(cmvs_core::image::DecodeThreads::host());
     startup.set_decoded_image_cache(128 << 20);
     startup.set_record_text(true);
+    startup.set_host_capture(true);
     startup.set_glyph_metrics(font.borrow().metrics());
     font.borrow().set_user_directory(&user)?;
     if !font.borrow().has_face(startup.settings().font_face()) {
         startup.set_font_face(cmvs_core::settings::DEFAULT_FONT_FACE)?;
     }
     startup.set_save_clock(Box::new(cmvs_core::runtime::utc_save_time));
-    let mut keys = String::new();
-    File::open(root.join("key.cfg"))?
-        .take(65537)
-        .read_to_string(&mut keys)?;
-    let bindings = KeyBindings::parse(&keys)?;
+    startup.set_random_seed(cmvs_core::random::host_time_seed());
+    let bindings = KeyBindings::load_for_profile_with_fs(&*fs, &root, game.selection.profile)?;
     let mut backend = MobileBackend::new(
         app.clone(),
         directory,
         font,
+        encoding,
         startup.display_preferences(),
         startup.screen_size(),
     );

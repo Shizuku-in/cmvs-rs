@@ -20,7 +20,7 @@ export class BrowserFiles {
   mount(relative, blob) {
     const path = this.path('/game/' + relative);
     if (this.files.has(path)) throw Error('Duplicate file after case folding: ' + relative);
-    if (blob.size > 0xffffffff) throw Error('Files above 4 GiB are unsupported');
+    if (!Number.isSafeInteger(blob.size) || blob.size < 0) throw Error('File size exceeds safe integer range');
     this.parents(path);
     this.files.set(path, blob);
   }

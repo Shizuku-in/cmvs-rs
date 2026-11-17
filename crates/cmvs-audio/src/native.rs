@@ -264,11 +264,6 @@ impl NativeAudio {
             })
             .open_sink_or_fallback()?;
         stream.log_on_drop(false);
-        println!(
-            "# native audio output: {} Hz, {} channels",
-            stream.config().sample_rate(),
-            stream.config().channel_count()
-        );
         let mut audio = Self::with_mixer(root, stream.mixer().clone(), fault)?;
         audio._device = Some(stream);
         Ok(audio)

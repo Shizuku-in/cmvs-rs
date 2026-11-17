@@ -17,7 +17,7 @@ mod engine;
 mod variables;
 mod visual;
 mod vm_state;
-pub use cvns::{CvnsLocalVariables, CvnsSnapshot};
+pub use cvns::{CVNS_SNAPSHOT_SCHEMA_VERSION, CvnsLocalVariables, CvnsSnapshot};
 pub use effect::SavedEffect;
 pub use engine::EngineSnapshot;
 pub use variables::LocalVariables;
