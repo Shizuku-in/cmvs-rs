@@ -14,9 +14,9 @@ workspace = true
 
 [dependencies]
 cmvs-core = { path = "../../../crates/cmvs-core", default-features = false }
+cmvs-host = { path = "../../../crates/cmvs-host", default-features = false }
 cmvs-audio = { path = "../../../crates/cmvs-audio", default-features = false }
 cmvs-font = { path = "../../../crates/cmvs-font" }
-cmvs-video = { path = "../../../crates/cmvs-video" }
 wasm-bindgen.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

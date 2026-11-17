@@ -88,7 +88,7 @@ fn amatsutsumi_game_savedata_survives_player_restart() {
         player.key(22, false).unwrap();
         advance(&mut player, 90);
     }
-    assert!(player.runtime.save_slot(1).unwrap());
+    assert!(player.session.runtime.save_slot(1).unwrap());
     player.save_preferences().unwrap();
     let slot = fs::read(savedata.join("save001.dat")).unwrap();
     let saved = Csv2Save::decode(&slot).unwrap();
@@ -100,10 +100,11 @@ fn amatsutsumi_game_savedata_survives_player_restart() {
     let mut restarted = Player::open_game_savedata(&game, &legacy, &font, false).unwrap();
     advance(&mut restarted, 700);
     restarted
+        .session
         .runtime
         .load_slot(1, &mut restarted.backend)
         .unwrap();
-    assert!(restarted.runtime.save_slot(2).unwrap());
+    assert!(restarted.session.runtime.save_slot(2).unwrap());
     let resaved = fs::read(savedata.join("save002.dat")).unwrap();
     assert_eq!(Csv2Save::decode(&resaved).unwrap().snapshot, saved.snapshot);
     advance(&mut restarted, 90);

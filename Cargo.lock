@@ -306,13 +306,11 @@ dependencies = [
  "cmvs-audio",
  "cmvs-core",
  "cmvs-font",
+ "cmvs-host",
  "cmvs-input",
  "cmvs-native",
- "cmvs-video",
  "cmvs-wgpu",
- "encoding_rs",
  "log",
- "rustix 1.1.6",
 ]
 
 [[package]]
@@ -341,6 +339,7 @@ dependencies = [
  "cmvs-audio",
  "cmvs-core",
  "cmvs-font",
+ "cmvs-host",
  "cmvs-native",
  "encoding_rs",
 ]
@@ -356,11 +355,11 @@ dependencies = [
  "cmvs-audio",
  "cmvs-core",
  "cmvs-font",
+ "cmvs-host",
  "cmvs-input",
  "cmvs-native",
  "cmvs-video",
  "cmvs-wgpu",
- "encoding_rs",
  "ico",
  "softbuffer",
  "winit",
@@ -444,8 +443,8 @@ dependencies = [
  "cmvs-console",
  "cmvs-core",
  "cmvs-font",
+ "cmvs-host",
  "cmvs-native",
- "cmvs-video",
 ]
 
 [[package]]
@@ -465,8 +464,8 @@ dependencies = [
  "cmvs-console",
  "cmvs-core",
  "cmvs-font",
+ "cmvs-host",
  "cmvs-native",
- "cmvs-video",
 ]
 
 [[package]]
@@ -483,7 +482,7 @@ dependencies = [
  "cmvs-audio",
  "cmvs-core",
  "cmvs-font",
- "cmvs-video",
+ "cmvs-host",
  "cmvs-wgpu",
  "wasm-bindgen",
  "wasm-bindgen-futures",

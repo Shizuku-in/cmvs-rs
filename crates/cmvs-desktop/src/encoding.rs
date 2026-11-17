@@ -1,6 +1,9 @@
 //! Runtime encoding selection shared by host text, VM scanning and font decoding.
 use crate::{TextEncoding, text_codec};
 use cmvs_core::FormatError;
+use cmvs_host::EncodingPolicy;
+
+pub(crate) const UNCERTAIN_DESKTOP_ENCODING: &str = "cannot reliably detect startup text encoding; select --encoding shift-jis, gbk or utf-8 explicitly";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EncodingChoice {
@@ -19,19 +22,22 @@ impl EncodingChoice {
         }
     }
 
+    pub(crate) fn into_policy(self) -> EncodingPolicy {
+        match self {
+            Self::Auto => EncodingPolicy::AutoStrict(UNCERTAIN_DESKTOP_ENCODING),
+            Self::Explicit(encoding) => EncodingPolicy::Explicit(encoding),
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn resolve(self, text: &[u8]) -> Result<TextEncoding, FormatError> {
         match self {
-            Self::Auto => detect(text),
+            Self::Auto => {
+                text_codec::detect(text).map_err(|_| FormatError(UNCERTAIN_DESKTOP_ENCODING))
+            }
             Self::Explicit(encoding) => Ok(encoding),
         }
     }
-}
-
-/// The shared startup-script detection, with the desktop's command-line remedy.
-fn detect(text: &[u8]) -> Result<TextEncoding, FormatError> {
-    text_codec::detect(text).map_err(|_| FormatError(
-        "cannot reliably detect startup text encoding; select --encoding shift-jis, gbk or utf-8 explicitly",
-    ))
 }
 
 /// The legacy built-in face name remains Shift-JIS even for patched game encodings.
@@ -52,15 +58,15 @@ mod tests {
     #[test]
     fn explicit_selection_bypasses_detection() {
         assert_eq!(EncodingChoice::parse("auto").unwrap(), EncodingChoice::Auto);
+        assert_eq!(
+            EncodingChoice::Auto.into_policy(),
+            EncodingPolicy::AutoStrict(UNCERTAIN_DESKTOP_ENCODING)
+        );
         for name in ["shift-jis", "gbk", "utf-8"] {
             let expected = text_codec::parse(name).unwrap();
-            assert_eq!(
-                EncodingChoice::parse(name)
-                    .unwrap()
-                    .resolve(b"\xff")
-                    .unwrap(),
-                expected
-            );
+            let choice = EncodingChoice::parse(name).unwrap();
+            assert_eq!(choice.resolve(b"\xff").unwrap(), expected);
+            assert_eq!(choice.into_policy(), EncodingPolicy::Explicit(expected));
         }
         assert!(EncodingChoice::parse("aut").is_err());
     }

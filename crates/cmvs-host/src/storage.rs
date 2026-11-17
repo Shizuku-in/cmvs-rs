@@ -62,8 +62,9 @@ mod android_fs {
         }
     }
 
+    /// Android filesystem adapter using non-blocking OS `flock` for save-directory locks.
     #[derive(Debug, Clone, Copy, Default)]
-    pub(super) struct AndroidHostFs;
+    pub struct AndroidHostFs;
 
     impl HostFs for AndroidHostFs {
         fn open(&self, path: &Path, options: &OpenOptions) -> io::Result<File> {
@@ -110,10 +111,14 @@ mod android_fs {
     }
 }
 
-pub(super) fn host_fs() -> Arc<dyn HostFs> {
+#[cfg(target_os = "android")]
+pub use android_fs::AndroidHostFs;
+
+/// Default standard-library [`HostFs`] for this OS (`AndroidHostFs` on Android, `StdFs` elsewhere).
+pub fn default_host_fs() -> Arc<dyn HostFs> {
     #[cfg(target_os = "android")]
     {
-        Arc::new(android_fs::AndroidHostFs)
+        Arc::new(AndroidHostFs)
     }
     #[cfg(not(target_os = "android"))]
     {
@@ -124,8 +129,10 @@ pub(super) fn host_fs() -> Arc<dyn HostFs> {
 const IMPORTED: &str = ".cmvs-legacy-imported";
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
-pub(super) fn game_savedata(root: &Path, legacy: &Path) -> io::Result<ProfileSystemSave> {
-    let fs = host_fs();
+/// Opens `<root>/savedata`, importing legacy external saves once without overwriting local files,
+/// or falls back to `legacy` on read-only game media.
+pub fn game_savedata(root: &Path, legacy: &Path) -> io::Result<ProfileSystemSave> {
+    let fs = default_host_fs();
     let profile = match ProfileSystemSave::open_game_savedata_with_fs(root, fs.clone()) {
         Ok(profile) => profile,
         Err(error)

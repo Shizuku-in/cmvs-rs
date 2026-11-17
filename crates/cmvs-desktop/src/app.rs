@@ -5,9 +5,13 @@ use cmvs_core::{
     format::cpz::ArchiveIndex, format::cursor::CursorBitmap, format::pb3, host::input::KeyBindings,
     host::platform::DirectoryAssets, host::platform::PlatformAssets,
     host::platform::PlatformBackend, host::platform::PlatformRequest, profile::Registry,
-    render::raster::RgbaImage, render::raster::movie_canvas, runtime::FrameBudget,
-    runtime::FrameDriver, runtime::FrameOutcome, runtime::Runtime, runtime::RuntimeEvent,
-    runtime::RuntimeOptions, runtime::SaveStorage, runtime::SnapshotPolicy, runtime::load_start,
+    render::raster::RgbaImage, runtime::FrameBudget, runtime::FrameDriver, runtime::FrameOutcome,
+    runtime::Runtime, runtime::RuntimeEvent, runtime::SaveStorage, runtime::SnapshotPolicy,
+    runtime::load_start_with_fs,
+};
+use cmvs_host::{
+    GameBootstrap, KeyBindingPolicy, SessionConfig, compose_cpu_frame, default_host_fs,
+    resolve_encoding_with_fs,
 };
 use std::{
     env,
@@ -159,21 +163,11 @@ impl App {
         if let Some(image) = &self.preview_image {
             return Ok(image.clone());
         }
-        if let Some(image) = self.startup.movie_frame() {
-            return Ok(movie_canvas(
-                image,
-                self.startup.screen_size(),
-                self.render_mode.get() == 1,
-            )?);
-        }
-        if let Some(font) = &mut self.font {
-            return Ok(font.render(
-                self.startup.scene(),
-                self.startup.camera(),
-                self.startup.messages(),
-            )?);
-        }
-        Ok(self.startup.render_frame()?)
+        compose_cpu_frame(
+            &self.startup,
+            self.font.as_mut(),
+            self.render_mode.get() == 1,
+        )
     }
     #[cfg(feature = "wgpu-renderer")]
     fn gpu_frame(&mut self) -> Result<cmvs_wgpu::GpuFrame, Box<dyn Error + Send + Sync>> {
@@ -181,29 +175,19 @@ impl App {
         if let Some(image) = &self.preview_image {
             return renderer.preview_image(image);
         }
-        if let Some(image) = self.startup.movie_frame() {
-            return renderer.render_image(
-                image,
-                self.startup.screen_size(),
-                self.render_mode.get() == 1,
-            );
-        }
-        if let Some(font) = &mut self.font {
-            let composition = font.compose(
-                self.startup.scene(),
-                self.startup.camera(),
-                self.startup.messages(),
-            )?;
-            return renderer.render(&composition.prepare()?);
-        }
-        let frame = cmvs_core::render::scene_render::prepare_scene(
-            self.startup.scene(),
-            Some(self.startup.camera()),
-            &[],
-            self.startup.screen_size()[0],
-            self.startup.screen_size()[1],
-        )?;
-        renderer.render(&frame)
+        cmvs_host::with_gpu_target(
+            &self.startup,
+            self.font.as_mut(),
+            self.render_mode.get() == 1,
+            |target| match target {
+                cmvs_host::GpuTarget::Movie {
+                    image,
+                    size,
+                    linear,
+                } => renderer.render_image(image, size, linear),
+                cmvs_host::GpuTarget::Scene(frame) => renderer.render(&frame),
+            },
+        )
     }
     #[cfg(feature = "wgpu-renderer")]
     fn redraw_gpu(&mut self) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -951,17 +935,15 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         return Err("preview-image and image-archive must be supplied together".into());
     }
     let root = PathBuf::from(root).canonicalize()?;
-    let game = Registry::builtin().identify_game(root.as_ref(), profile.as_deref())?;
+    let fs = default_host_fs();
+    let game =
+        Registry::builtin().identify_game_with_fs(&*fs, root.as_ref(), profile.as_deref())?;
     for line in game.selection.log_lines() {
         println!("{line}");
     }
-    let script = load_start(root.as_ref(), &game.files)?;
-    let encoding = match choice.resolve(script.text()) {
-        Err(_) if choice == EncodingChoice::Auto => {
-            cmvs_font::text_codec::detect_game(&root, &game.files, &script)?
-        }
-        result => result?,
-    };
+    let script = load_start_with_fs(&*fs, root.as_ref(), &game.files)?;
+    let encoding =
+        resolve_encoding_with_fs(&*fs, &root, &game.files, &script, choice.into_policy())?;
     if choice == EncodingChoice::Auto {
         let name = cmvs_font::text_codec::name(encoding);
         println!(
@@ -975,21 +957,11 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
                 .map(|font| font.with_text_encoding(encoding))
         })
         .transpose()?;
-    let bindings = if native_input {
-        if !game.selection.profile.uses_key_cfg() {
-            println!(
-                "# native input enabled; CVNS uses fixed virtual key and mouse codes (no key.cfg)"
-            );
-            KeyBindings::default()
-        } else {
-            let bindings = KeyBindings::load_for_profile(&root, game.selection.profile)?;
-            println!(
-                "# native input enabled; bindings read only from key.cfg; no registry overrides or gamepad"
-            );
-            bindings
-        }
+    let uses_key_cfg = game.selection.profile.uses_key_cfg();
+    let key_bindings = if native_input {
+        KeyBindingPolicy::Required
     } else {
-        KeyBindings::default()
+        KeyBindingPolicy::DefaultOnly
     };
     let preview_image = match (preview_name, image_archive) {
         (None, None) => None,
@@ -1017,21 +989,47 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         (None, None) => SaveStorage::ReadOnly,
         (Some(_), Some(_)) => return Err("select one save storage mode".into()),
     };
-    let mut startup = Runtime::with_options(
-        &script,
-        &root,
-        &game,
-        RuntimeOptions {
-            encoding,
+    let bootstrap = GameBootstrap {
+        fs,
+        root: root.clone(),
+        game,
+        script,
+        encoding,
+    };
+    let cmvs_host::RuntimeOpenReport {
+        #[cfg(feature = "audio-output")]
+        mut runtime,
+        #[cfg(not(feature = "audio-output"))]
+        runtime,
+        bindings,
+        font_face_reset,
+    } = bootstrap.open_runtime_detailed(
+        font.as_ref(),
+        SessionConfig {
             saves,
+            user_font_dir: user_data_dir.clone(),
             snapshot_policy,
             block_unreviewed,
             block_presumed,
             skip_auto_resume,
-            decode_cmv_frames: true,
-            ..Default::default()
+            record_text: record_text || font.is_some(),
+            host_capture: font.is_some() || use_gpu,
+            random_seed: Some(rand_seed.unwrap_or_else(cmvs_core::host::random::host_time_seed)),
+            key_bindings,
+            ..SessionConfig::default()
         },
     )?;
+    if native_input {
+        if !uses_key_cfg {
+            println!(
+                "# native input enabled; CVNS uses fixed virtual key and mouse codes (no key.cfg)"
+            );
+        } else {
+            println!(
+                "# native input enabled; bindings read only from key.cfg; no registry overrides or gamepad"
+            );
+        }
+    }
     if !block_presumed {
         println!("# research policy: legacy presumed commands allowed (default policy)");
     }
@@ -1040,16 +1038,10 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
             "# skip-auto-resume: clear the script's startup auto-load flag after system-save loading; save files unchanged"
         );
     }
-    startup.set_mgv_factory(Box::new(
-        crate::video::PrefetchTheoraFactory::default().with_lookahead(64 << 20, 48),
-    ));
-    startup.set_scene_prefetch(|| {});
-    startup.set_image_decode_threads(cmvs_core::host::image::DecodeThreads::host());
-    startup.set_decoded_image_cache(256 << 20);
     if native_audio {
         #[cfg(feature = "audio-output")]
         {
-            startup.set_audio_backend(Box::new(cmvs_audio::NativeAudio::new(&root)?))?;
+            runtime.set_audio_backend(Box::new(cmvs_audio::NativeAudio::new(&root)?))?;
             println!(
                 "# native Vorbis audio enabled; movie frames follow the audio source position"
             );
@@ -1057,19 +1049,9 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         #[cfg(not(feature = "audio-output"))]
         return Err("native audio requires --features desktop,audio-output".into());
     }
-    startup.set_save_clock(Box::new(cmvs_core::runtime::utc_save_time));
-    startup.set_record_text(record_text || font.is_some());
-    startup.set_host_capture(font.is_some() || use_gpu);
-    if let Some(font) = &font {
-        if let Some(directory) = &user_data_dir {
-            font.set_user_directory(directory)?;
-        }
-        startup.set_glyph_metrics(font.metrics());
-        // 0x14000b666: a configured face that cannot be found becomes the default.
-        if !font.has_face(startup.settings().font_face()) {
-            println!("# configured font face not found; using the built-in default face");
-            startup.set_font_face(cmvs_core::host::settings::DEFAULT_FONT_FACE)?;
-        }
+    let startup = runtime;
+    if font_face_reset {
+        println!("# configured font face not found; using the built-in default face");
     }
     if font.is_some() {
         println!(
@@ -1081,7 +1063,6 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
             "# text RECORDING ONLY: supported single-line glyph descriptors and reveal timing; no font pixels or text drawing"
         );
     }
-    startup.set_random_seed(rand_seed.unwrap_or_else(cmvs_core::host::random::host_time_seed));
     let display_preferences = startup.display_preferences();
     let fullscreen_monitor_mode = startup.platform().fullscreen_monitor_mode();
     let canvas = startup.screen_size();

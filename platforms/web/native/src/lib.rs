@@ -6,12 +6,11 @@ mod fs;
 mod gpu;
 use backend::BrowserBackend;
 use cmvs_core::{
-    host::filesystem::HostFs, host::input::CodeInput, host::input::KeyBindings, profile::Registry,
-    render::raster::movie_canvas, runtime::FrameBudget, runtime::FrameDriver,
-    runtime::FrameOutcome, runtime::Runtime, runtime::RuntimeEvent, runtime::RuntimeOptions,
-    runtime::SaveStorage, runtime::load_start_with_fs,
+    host::filesystem::HostFs, profile::Registry, runtime::FrameBudget, runtime::FrameOutcome,
+    runtime::RuntimeEvent, runtime::SaveStorage,
 };
 use cmvs_font::font::FontRenderer;
+use cmvs_host::{EncodingPolicy, GameBootstrap, HostSession, KeyBindingPolicy, SessionConfig};
 use fs::WebFs;
 use std::{error::Error, path::Path, sync::Arc};
 use wasm_bindgen::prelude::*;
@@ -23,12 +22,8 @@ fn js_error(error: impl std::fmt::Display) -> JsValue {
 /// One runtime per worker; dropping it releases scripts, archives and render caches.
 #[wasm_bindgen]
 pub struct WebRuntime {
-    runtime: Runtime,
+    session: HostSession,
     backend: BrowserBackend,
-    font: FontRenderer,
-    bindings: KeyBindings,
-    codes: CodeInput,
-    driver: FrameDriver,
 }
 #[wasm_bindgen]
 impl WebRuntime {
@@ -59,7 +54,7 @@ impl WebRuntime {
         loop {
             let result = self.tick_slice(delta_ms, &keys, [x, y], focused, &mut budget)?;
             if result != 4 {
-                if result == 1 && self.runtime.capture_due() {
+                if result == 1 && self.session.runtime.capture_due() {
                     let image = {
                         let gpu = self
                             .backend
@@ -73,7 +68,10 @@ impl WebRuntime {
                             .ok_or_else(|| js_error("no completed GPU frame"))?;
                         frame.read_async().await.map_err(js_error)?
                     };
-                    self.runtime.supply_capture(image).map_err(js_error)?;
+                    self.session
+                        .runtime
+                        .supply_capture(image)
+                        .map_err(js_error)?;
                 }
                 return Ok(result);
             }
@@ -100,20 +98,23 @@ impl WebRuntime {
     }
     pub fn save_preferences(&mut self) -> Result<bool, JsValue> {
         let display = self.backend.preferences();
-        self.runtime.save_preferences(display).map_err(js_error)
+        self.session
+            .runtime
+            .save_preferences(display)
+            .map_err(js_error)
     }
     pub fn set_random_seed(&mut self, seed: u32) {
-        self.runtime.set_random_seed(seed);
+        self.session.runtime.set_random_seed(seed);
     }
     pub fn set_clock(&mut self, time: &[u16]) -> Result<(), JsValue> {
         let time: [u16; 6] = time
             .try_into()
             .map_err(|_| js_error("expected six save clock fields"))?;
-        self.runtime.set_save_clock(Box::new(move || time));
+        self.session.runtime.set_save_clock(Box::new(move || time));
         Ok(())
     }
     pub fn needs_input(&self) -> bool {
-        self.driver.needs_input()
+        self.session.driver.needs_input()
     }
     pub fn width(&self) -> u32 {
         self.backend.size[0]
@@ -172,50 +173,45 @@ impl WebRuntime {
         focused: bool,
         budget: &mut FrameBudget,
     ) -> Result<u8, JsValue> {
+        let session = &mut self.session;
         let backend = &mut self.backend;
-        let font = &mut self.font;
-        let codes = &mut self.codes;
-        let bindings = &self.bindings;
-        let driver = &mut self.driver;
-        let startup = &mut self.runtime;
         (|| -> Result<u8, Box<dyn Error + Send + Sync>> {
-            startup.set_focused(focused);
-            startup.poll_audio_output()?;
+            session.runtime.set_focused(focused);
+            session.runtime.poll_audio_output()?;
             if !focused {
-                codes.clear(startup.input_mut());
+                session.input.clear(session.runtime.input_mut());
             }
-            driver.sample_input(startup.input_mut(), |input| {
-                let mut now = [false; 128];
-                for &key in keys {
-                    if let Some(value) = now.get_mut(usize::from(key)) {
-                        *value = true;
-                    }
-                }
-                codes.update(bindings, &now, input);
-                input.set_pointer(x, y);
-            });
-            let outcome = driver.run_slice(startup, budget, |runtime| runtime.tick(backend))?;
+            let bindings = &session.bindings;
+            let input_state = &mut session.input;
+            session
+                .driver
+                .sample_input(session.runtime.input_mut(), |input| {
+                    input_state.set_held_codes(keys);
+                    input_state.set_pointer(x, y);
+                    input_state.sample(bindings, input);
+                });
+            let outcome = session
+                .driver
+                .run_slice(&mut session.runtime, budget, |runtime| {
+                    runtime.tick(backend)
+                })?;
             match outcome {
                 FrameOutcome::Yield => {
-                    driver.finish_frame(startup, delta_ms.min(250))?;
+                    session
+                        .driver
+                        .finish_frame(&mut session.runtime, delta_ms.min(250))?;
                     #[cfg(target_arch = "wasm32")]
                     {
                         let display = backend.preferences();
                         if let Some(gpu) = &mut backend.gpu {
-                            if gpu.draw(startup, font, display)? {
+                            if gpu.draw(&session.runtime, &mut session.font, display)? {
                                 backend.frame = None;
                             }
                             return Ok(1);
                         }
                     }
-                    let frame = if let Some(image) = startup.movie_frame() {
-                        movie_canvas(image, backend.size, backend.preferences().render_mode == 1)?
-                    } else {
-                        font.render(startup.scene(), startup.camera(), startup.messages())?
-                    };
-                    if startup.capture_due() {
-                        startup.supply_capture(frame.clone())?;
-                    }
+                    let frame =
+                        session.compose_cpu_frame(backend.preferences().render_mode == 1, true)?;
                     backend.frame = Some(frame);
                     Ok(1)
                 }
@@ -237,54 +233,31 @@ impl WebRuntime {
         skip: bool,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let root = Path::new("/game");
-        let fs = Arc::new(WebFs);
-        let game = Registry::builtin().identify_game_with_fs(
-            &*fs,
+        let fs: Arc<dyn HostFs> = Arc::new(WebFs);
+        let bootstrap = GameBootstrap::load(
+            fs,
             root,
-            if profile.is_empty() {
-                None
-            } else {
-                Some(profile)
-            },
+            (!profile.is_empty()).then_some(profile),
+            EncodingPolicy::AutoDefaultShiftJis,
         )?;
-        let script = load_start_with_fs(&*fs, root, &game.files)?;
-        let encoding =
-            cmvs_font::text_codec::select_or_default_with_fs(&*fs, root, &game.files, &script)?;
-        let font = FontRenderer::from_bytes(font, face)?.with_text_encoding(encoding);
-        let mut runtime = Runtime::with_options(
-            script,
-            root,
-            &game,
-            RuntimeOptions {
-                encoding,
+        let font = FontRenderer::from_bytes(font, face)?.with_text_encoding(bootstrap.encoding);
+        let mut session = bootstrap.into_session(
+            font,
+            SessionConfig {
                 saves: SaveStorage::UserDirectory("/user".into()),
                 skip_auto_resume: skip,
-                decode_cmv_frames: true,
-                fs: Some(Arc::clone(&fs) as Arc<dyn HostFs>),
-                ..Default::default()
+                key_bindings: KeyBindingPolicy::Optional,
+                ..SessionConfig::single_threaded()
             },
         )?;
-        runtime.set_record_text(true);
-        runtime.set_host_capture(true);
-        runtime.set_glyph_metrics(font.metrics());
-        if !font.has_face(runtime.settings().font_face()) {
-            runtime.set_font_face(cmvs_core::host::settings::DEFAULT_FONT_FACE)?;
-        }
-        runtime.set_mgv_factory(Box::new(cmvs_video::TheoraFactory));
-        runtime.set_decoded_image_cache(64 << 20);
-        runtime.set_audio_backend(Box::new(audio::BrowserAudio::new(root)?))?;
-        let backend =
-            BrowserBackend::with_preferences(runtime.screen_size(), runtime.display_preferences())?;
-        let bindings =
-            KeyBindings::load_optional_for_profile_with_fs(&*fs, root, game.selection.profile)?;
-        Ok(Self {
-            runtime,
-            backend,
-            font,
-            bindings,
-            codes: CodeInput::default(),
-            driver: FrameDriver::default(),
-        })
+        session
+            .runtime
+            .set_audio_backend(Box::new(audio::BrowserAudio::new(root)?))?;
+        let backend = BrowserBackend::with_preferences(
+            session.runtime.screen_size(),
+            session.runtime.display_preferences(),
+        )?;
+        Ok(Self { session, backend })
     }
 }
 

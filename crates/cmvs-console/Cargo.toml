@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 cmvs-audio = { path = "../cmvs-audio", default-features = false, features = ["mixer"] }
 cmvs-core = { path = "../cmvs-core" }
+cmvs-host = { path = "../cmvs-host", default-features = false, features = ["std-fs"] }
 cmvs-native = { path = "../cmvs-native" }
 cmvs-font = { path = "../cmvs-font" }
 ab_glyph.workspace = true

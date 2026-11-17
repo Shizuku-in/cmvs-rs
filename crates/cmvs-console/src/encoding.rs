@@ -1,35 +1,28 @@
-//! The game text encoding: `encoding.txt` in the game directory, or detection from the
-//! game scripts when that file is absent; and the system fonts its text needs.
+//! The game text encoding: `encoding.txt` or `conversion.json` in the game directory, or
+//! detection from the game scripts when those files are absent; and the system fonts its text needs.
 use cmvs_core::TextEncoding;
-use cmvs_font::text_codec;
+use cmvs_host::{EncodingPolicy, resolve_encoding_with_fs};
 use std::{error::Error, io::ErrorKind, path::Path};
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
-/// An explicit game setting overrides bounded detection from startup and archived scripts.
+/// Error message when a console game lacks `encoding.txt`, `conversion.json`, and decisive script text.
+pub const UNCERTAIN_ENCODING_MESSAGE: &str = "cannot detect the game text encoding; put encoding.txt holding shift-jis, gbk or utf-8 in the game directory";
+
+/// An explicit game setting (`encoding.txt` or `conversion.json`) overrides bounded detection
+/// from startup and archived scripts.
 pub fn select(
     root: &Path,
     files: &cmvs_core::profile::GameFiles,
     startup: &cmvs_core::format::ps3::Script,
 ) -> Result<TextEncoding> {
-    match std::fs::read_to_string(root.join("encoding.txt")) {
-        Ok(setting) => {
-            let name = setting.trim();
-            text_codec::parse(name).map_err(|_| {
-                format!("encoding.txt must be shift-jis, gbk or utf-8, not {name:?}").into()
-            })
-        },
-        Err(error) if error.kind() == ErrorKind::NotFound => {
-            text_codec::detect_game(root, files, startup).map_err(|error| {
-                if error.is_uncertain() {
-                    "cannot detect the game text encoding; put encoding.txt holding shift-jis, gbk or utf-8 in the game directory".into()
-                } else {
-                    error.into()
-                }
-            })
-        }
-        Err(error) => Err(error.into()),
-    }
+    resolve_encoding_with_fs(
+        &crate::ConsoleFs,
+        root,
+        files,
+        startup,
+        EncodingPolicy::AutoStrict(UNCERTAIN_ENCODING_MESSAGE),
+    )
 }
 
 /// A system font family the console players ship with.
@@ -124,6 +117,13 @@ mod tests {
                 .to_string()
                 .contains("\"auto\"")
         );
+        std::fs::remove_file(root.join("encoding.txt")).unwrap();
+        std::fs::write(
+            root.join("conversion.json"),
+            br#"{"game":"amatsutsumi","encoding":"utf-8"}"#,
+        )
+        .unwrap();
+        assert_eq!(select(&root, &files, &startup).unwrap(), TextEncoding::Utf8);
         std::fs::remove_dir_all(&root).unwrap();
     }
 

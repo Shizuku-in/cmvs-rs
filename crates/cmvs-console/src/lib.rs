@@ -30,14 +30,7 @@ pub fn render_software(
     font: &mut cmvs_font::font::FontRenderer,
     linear: bool,
 ) -> Result<cmvs_core::render::raster::RgbaImage, Box<dyn Error + Send + Sync>> {
-    if let Some(frame) = startup.movie_frame() {
-        return Ok(cmvs_core::render::raster::movie_canvas(
-            frame,
-            startup.screen_size(),
-            linear,
-        )?);
-    }
-    Ok(font.render(startup.scene(), startup.camera(), startup.messages())?)
+    cmvs_host::compose_cpu_frame(startup, Some(font), linear)
 }
 
 /// Binds user font directory, installs glyph metrics on the runtime, and falls back to the
@@ -47,12 +40,7 @@ pub fn configure_game_font(
     font: &mut cmvs_font::font::FontRenderer,
     user_dir: &Path,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    font.set_user_directory(user_dir)?;
-    startup.set_glyph_metrics(font.metrics());
-    if !font.has_face(startup.settings().font_face()) {
-        startup.set_font_face(cmvs_core::host::settings::DEFAULT_FONT_FACE)?;
-    }
-    Ok(())
+    cmvs_host::bind_font(startup, font, Some(user_dir)).map(|_| ())
 }
 
 /// Reads and parses `root/key.cfg` when `profile.uses_key_cfg()` is true, or returns empty

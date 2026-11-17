@@ -1,5 +1,6 @@
 //! Native event adapter for the verified CMVS input-code table. No Windows APIs in core.
-use cmvs_core::{host::input::ActionInput, host::input::CodeInput, host::input::KeyBindings};
+use cmvs_core::{host::input::ActionInput, host::input::KeyBindings};
+use cmvs_host::InputState;
 pub use cmvs_input::Viewport;
 use std::collections::BTreeSet;
 use winit::{
@@ -25,13 +26,22 @@ pub fn event_key(physical: KeyCode, logical: &Key) -> KeyCode {
     }
 }
 
+fn mouse_button_code(button: MouseButton) -> Option<usize> {
+    match button {
+        MouseButton::Left => Some(1),
+        MouseButton::Middle => Some(2),
+        MouseButton::Right => Some(3),
+        MouseButton::Back => Some(6),
+        MouseButton::Forward => Some(7),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct GameInput {
     keys: BTreeSet<KeyCode>,
     buttons: BTreeSet<MouseButton>,
-    key_pulses: BTreeSet<KeyCode>,
-    button_pulses: BTreeSet<MouseButton>,
-    history: CodeInput,
+    state: InputState,
     pointer: Option<[f64; 2]>,
     wheel: f64,
     focused: bool,
@@ -60,8 +70,10 @@ impl GameInput {
             return;
         }
         if pressed {
-            if self.keys.insert(key) {
-                self.key_pulses.insert(key);
+            if self.keys.insert(key)
+                && let Some(code) = key_code(key)
+            {
+                let _ = self.state.pulse(usize::from(code));
             }
         } else {
             self.keys.remove(&key);
@@ -72,8 +84,10 @@ impl GameInput {
             return;
         }
         if pressed {
-            if self.buttons.insert(button) {
-                self.button_pulses.insert(button);
+            if self.buttons.insert(button)
+                && let Some(code) = mouse_button_code(button)
+            {
+                let _ = self.state.pulse(code);
             }
         } else {
             self.buttons.remove(&button);
@@ -97,40 +111,36 @@ impl GameInput {
         if !focused {
             self.keys.clear();
             self.buttons.clear();
-            self.key_pulses.clear();
-            self.button_pulses.clear();
             self.wheel = 0.0;
             self.pointer = None;
-            self.history.clear(input);
+            self.state.clear(input);
         }
     }
     pub fn frame(&mut self, bindings: &KeyBindings, size: [u32; 2], input: &mut ActionInput) {
-        let mut codes = [false; 128];
-        // Latch a short press until sampled: even a complete down/up between two
-        // frames produces one down frame followed by one release frame.
-        for &key in self.keys.union(&self.key_pulses) {
+        // Recompute currently held codes from physical keys/buttons so shared codes
+        // (e.g. Left/Right Shift or Control) stay held until both keys release, while
+        // sub-frame taps stay latched via `self.state.pulse`.
+        self.state.clear_held();
+        for &key in &self.keys {
             if let Some(code) = key_code(key) {
-                codes[usize::from(code)] = true;
+                let _ = self.state.set_held(usize::from(code), true);
             }
         }
-        for &(button, code) in &[
-            (MouseButton::Left, 1),
-            (MouseButton::Middle, 2),
-            (MouseButton::Right, 3),
-            (MouseButton::Back, 6),
-            (MouseButton::Forward, 7),
-        ] {
-            codes[code] = self.buttons.contains(&button) || self.button_pulses.contains(&button);
+        for &button in &self.buttons {
+            if let Some(code) = mouse_button_code(button) {
+                let _ = self.state.set_held(code, true);
+            }
         }
         // Native wheel units: positive is up. CMVS code 4=up, 5=down.
-        codes[4] = self.wheel > 0.0;
-        codes[5] = self.wheel < 0.0;
+        if self.wheel > 0.0 {
+            let _ = self.state.pulse(4);
+        } else if self.wheel < 0.0 {
+            let _ = self.state.pulse(5);
+        }
         self.wheel = 0.0;
-        self.key_pulses.clear();
-        self.button_pulses.clear();
-        self.history.update(bindings, &codes, input);
         let [x, y] = self.cursor_position(size).unwrap_or([-1, -1]);
-        input.set_pointer(x, y);
+        self.state.set_pointer(x, y);
+        self.state.sample(bindings, input);
     }
     pub fn warp(&mut self, size: [u32; 2], script: [i32; 2]) -> Option<[f64; 2]> {
         let point = Viewport::for_canvas(

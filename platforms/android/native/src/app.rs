@@ -6,12 +6,15 @@ use android_activity::{
 };
 use cmvs_audio::{HostAudioControl, NativeAudio};
 use cmvs_core::{
-    host::filesystem::resolve_under, host::input::KeyBindings, profile::Registry,
-    runtime::FrameBudget, runtime::FrameDriver, runtime::FrameOutcome, runtime::Runtime,
-    runtime::RuntimeEvent, runtime::RuntimeOptions, runtime::SaveStorage,
-    runtime::load_start_with_fs,
+    host::filesystem::resolve_under, host::input::KeyBindings, runtime::FrameBudget,
+    runtime::FrameDriver, runtime::FrameOutcome, runtime::Runtime, runtime::RuntimeEvent,
+    runtime::SaveStorage,
 };
 use cmvs_font::font::FontRenderer;
+use cmvs_host::{
+    AndroidHostFs, EncodingPolicy, GameBootstrap, GpuTarget, KeyBindingPolicy, SessionConfig,
+    compose_cpu_frame, with_gpu_target,
+};
 use cmvs_input::{TouchEvent, TouchInput, TouchPhase, Viewport};
 use cmvs_native::AndroidWindow;
 use cmvs_wgpu::{GpuFrame, Presenter, Renderer, wgpu};
@@ -108,35 +111,30 @@ impl Player {
         Ok(())
     }
     fn render_software(&self) -> Result<cmvs_core::render::raster::RgbaImage> {
-        if let Some(frame) = self.startup.movie_frame() {
-            return Ok(cmvs_core::render::raster::movie_canvas(
-                frame,
-                self.startup.screen_size(),
-                self.backend.display.render_mode == 1,
-            )?);
-        }
-        Ok(self.backend.font.borrow_mut().render(
-            self.startup.scene(),
-            self.startup.camera(),
-            self.startup.messages(),
-        )?)
+        let mut font = self.backend.font.borrow_mut();
+        compose_cpu_frame(
+            &self.startup,
+            Some(&mut *font),
+            self.backend.display.render_mode == 1,
+        )
     }
     fn render_game(&mut self) -> Result<Arc<GpuFrame>> {
         let graphics = self.graphics.as_mut().ok_or("no graphics device")?;
-        if let Some(image) = self.startup.movie_frame() {
-            return Ok(Arc::new(graphics.renderer.render_image(
-                image,
-                self.startup.screen_size(),
-                self.backend.display.render_mode == 1,
-            )?));
-        }
-        let composition = self.backend.font.borrow_mut().compose(
-            self.startup.scene(),
-            self.startup.camera(),
-            self.startup.messages(),
+        let mut font = self.backend.font.borrow_mut();
+        let frame = with_gpu_target(
+            &self.startup,
+            Some(&mut *font),
+            self.backend.display.render_mode == 1,
+            |target| match target {
+                GpuTarget::Movie {
+                    image,
+                    size,
+                    linear,
+                } => graphics.renderer.render_image(image, size, linear),
+                GpuTarget::Scene(frame) => graphics.renderer.render(&frame),
+            },
         )?;
-        let frame = composition.prepare()?;
-        Ok(Arc::new(graphics.renderer.render(&frame)?))
+        Ok(Arc::new(frame))
     }
     fn redraw(&mut self) -> Result<()> {
         if self.graphics.is_none() {
@@ -352,34 +350,31 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
         config.next().ok_or("no font selected")?.as_bytes(),
     )?;
     let face = config.next().ok_or("no font collection index")?.parse()?;
-    let fs = Arc::new(crate::fs::AndroidFs);
-    let game = Registry::builtin().identify_game_with_fs(&*fs, &root, None)?;
-    let record = game
+    let fs = Arc::new(AndroidHostFs);
+    let bootstrap = GameBootstrap::load(fs, &root, None, EncodingPolicy::AutoDefaultShiftJis)?;
+    let record = bootstrap
+        .game
         .selection
         .record
         .ok_or("game does not have a registered identity")?;
     log::info!(
         "Loading game {} with profile {}",
         record.game,
-        game.selection.profile.id
+        bootstrap.game.selection.profile.id
     );
+    let encoding = bootstrap.encoding;
     let user = directory.join("users").join(&record.game);
-    let script = load_start_with_fs(&*fs, &root, &game.files)?;
-    let encoding =
-        cmvs_font::text_codec::select_or_default_with_fs(&*fs, &root, &game.files, &script)?;
     let font = Rc::new(RefCell::new(
         FontRenderer::read(&font_path, face)?.with_text_encoding(encoding),
     ));
-    let mut startup = Runtime::with_options(
-        &script,
-        &root,
-        &game,
-        RuntimeOptions {
-            encoding,
+    let (mut startup, bindings) = bootstrap.open_runtime(
+        Some(&*font.borrow()),
+        SessionConfig {
             saves: SaveStorage::UserDirectory(user.clone()),
-            decode_cmv_frames: true,
-            fs: Some(fs.clone()),
-            ..Default::default()
+            user_font_dir: Some(user),
+            decoded_image_cache: Some(128 << 20),
+            key_bindings: KeyBindingPolicy::Required,
+            ..SessionConfig::default()
         },
     )?;
     let audio = NativeAudio::new(&root)?;
@@ -387,22 +382,6 @@ pub(super) fn run(app: AndroidApp) -> Result<()> {
     audio_control.set_active(false);
     startup.set_audio_backend(Box::new(audio))?;
     log::info!("Native Vorbis audio enabled");
-    startup.set_mgv_factory(Box::new(
-        cmvs_video::PrefetchTheoraFactory::default().with_lookahead(64 << 20, 48),
-    ));
-    startup.set_scene_prefetch(|| {});
-    startup.set_image_decode_threads(cmvs_core::host::image::DecodeThreads::host());
-    startup.set_decoded_image_cache(128 << 20);
-    startup.set_record_text(true);
-    startup.set_host_capture(true);
-    startup.set_glyph_metrics(font.borrow().metrics());
-    font.borrow().set_user_directory(&user)?;
-    if !font.borrow().has_face(startup.settings().font_face()) {
-        startup.set_font_face(cmvs_core::host::settings::DEFAULT_FONT_FACE)?;
-    }
-    startup.set_save_clock(Box::new(cmvs_core::runtime::utc_save_time));
-    startup.set_random_seed(cmvs_core::host::random::host_time_seed());
-    let bindings = KeyBindings::load_for_profile_with_fs(&*fs, &root, game.selection.profile)?;
     let mut backend = MobileBackend::new(
         app.clone(),
         directory,

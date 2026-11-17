@@ -1,6 +1,7 @@
 //! Worker-owned WebGPU surface; only explicit device screenshots read pixels back.
 use cmvs_core::{host::settings::DisplayPreferences, runtime::Runtime};
 use cmvs_font::font::FontRenderer;
+use cmvs_host::{GpuTarget, with_gpu_target};
 use cmvs_wgpu::{GpuFrame, Presenter, Renderer, wgpu};
 use std::error::Error;
 use web_sys::OffscreenCanvas;
@@ -53,28 +54,23 @@ impl BrowserGpu {
             self.presenter = Presenter::new(surface, &self.adapter, &self.renderer)?;
         }
         let size = startup.screen_size();
-        let frame = if let Some(image) = startup.movie_frame() {
-            self.renderer
-                .render_image(image, size, display.render_mode == 1)?
-        } else {
-            let composition =
-                font.compose(startup.scene(), startup.camera(), startup.messages())?;
-            let scene = composition.prepare()?;
-            self.renderer.render(&scene)?
-        };
+        let linear = display.render_mode == 1;
+        let frame = with_gpu_target(startup, Some(font), linear, |target| match target {
+            GpuTarget::Movie {
+                image,
+                size,
+                linear,
+            } => self.renderer.render_image(image, size, linear),
+            GpuTarget::Scene(scene) => self.renderer.render(&scene),
+        })?;
         let mode = cmvs_core::render::viewport::presentation_mode(
             display.fullscreen,
             display.aspect_scaling,
             display.aspect_mode,
         );
-        let presented = self.presenter.present(
-            &self.renderer,
-            &frame,
-            size,
-            mode,
-            display.render_mode == 1,
-            false,
-        )?;
+        let presented =
+            self.presenter
+                .present(&self.renderer, &frame, size, mode, linear, false)?;
         if presented {
             self.capture = None;
             self.frame = Some(frame);

@@ -14,18 +14,18 @@ mod sys;
 use cmvs_console::{
     ButtonMap, Console, Labels,
     backend::ConsoleBackend,
-    configure_game_font,
     controls::{self, Controls},
-    encoding::{self, SystemFont},
-    error_screen, format_tick_error, library, load_key_bindings, menu, millis, render_software,
+    encoding::{self, SystemFont, UNCERTAIN_ENCODING_MESSAGE},
+    error_screen, format_tick_error, library, menu, millis,
 };
 use cmvs_core::{
-    profile::Registry, render::raster::RgbaImage, render::viewport::Viewport,
-    render::viewport::presentation_mode, runtime::FrameBudget, runtime::FrameDriver,
-    runtime::FrameOutcome, runtime::Runtime, runtime::RuntimeEvent, runtime::RuntimeOptions,
-    runtime::SaveStorage, runtime::load_start,
+    render::raster::RgbaImage, render::viewport::Viewport, render::viewport::presentation_mode,
+    runtime::FrameBudget, runtime::FrameOutcome, runtime::RuntimeEvent, runtime::SaveStorage,
 };
-use cmvs_font::font::FontRenderer;
+use cmvs_host::{
+    EncodingPolicy, GameBootstrap, GpuTarget, HostSession, KeyBindingPolicy, MovieConfig,
+    SessionConfig,
+};
 use cmvs_native::vita_button as button;
 use std::{
     error::Error,
@@ -92,14 +92,11 @@ fn console(confirm_is_cross: bool) -> Console {
 }
 
 /// Composites the scene on the GPU; the caller presents the canvas.
-fn render_gpu(
-    startup: &Runtime,
-    font: &mut FontRenderer,
-    gpu: &mut gpu::GpuRenderer,
-) -> Result<()> {
-    let composition = font.compose(startup.scene(), startup.camera(), startup.messages())?;
-    let frame = composition.prepare()?;
-    gpu.render(&frame)
+fn render_gpu(session: &mut HostSession, gpu: &mut gpu::GpuRenderer) -> Result<()> {
+    session.with_gpu_target(false, |target| match target {
+        GpuTarget::Scene(frame) => gpu.render(&frame),
+        GpuTarget::Movie { .. } => Err("Vita movie frames use window presentation".into()),
+    })
 }
 
 /// The screen rectangle a viewport covers, as the window draws it.
@@ -119,56 +116,16 @@ fn run(
     root: &Path,
 ) -> Result<()> {
     let base = Path::new(BASE);
-    let game = Registry::builtin().identify_game(root, None)?;
-    let record = game.selection.record.ok_or("unregistered game")?;
-    let script = load_start(root, &game.files)?;
-    let encoding = cmvs_console::encoding::select(root, &game.files, &script)?;
-    let user = base.join("users").join(&record.game);
-    let mut startup = Runtime::with_options(
-        &script,
+    let bootstrap = GameBootstrap::load(
+        std::sync::Arc::new(cmvs_console::ConsoleFs),
         root,
-        &game,
-        RuntimeOptions {
-            encoding,
-            saves: SaveStorage::UserDirectory(user.clone()),
-            decode_cmv_frames: true,
-            fs: Some(std::sync::Arc::new(cmvs_console::ConsoleFs)),
-            ..Default::default()
-        },
+        None,
+        EncodingPolicy::AutoStrict(UNCERTAIN_ENCODING_MESSAGE),
     )?;
-    let (audio, audio_thread) = audio::start(root)?;
-    let audio_control = audio.host_control();
-    startup.set_audio_backend(Box::new(audio))?;
-    // Core 0 runs the VM and rendering, core 1 the audio thread.
-    startup.set_mgv_factory(Box::new(
-        cmvs_video::PrefetchTheoraFactory {
-            on_thread_start: || {
-                sys::prefer_core(2);
-            },
-        }
-        .with_lookahead(16 << 20, 8),
-    ));
-    startup.set_scene_prefetch(|| {
-        sys::prefer_core(2);
-    });
-    // Image planes decode on this thread and on one more, on the core the movie
-    // prefetch uses: the audio core stays free.
-    startup.set_image_decode_threads(cmvs_core::host::image::DecodeThreads {
-        extra: 1,
-        on_start: Some(|_| {
-            sys::prefer_core(2);
-        }),
-    });
-    // Scenes reload the same images; decoding dominates their load time. Entries share
-    // pixels with the scene objects showing them, within the 256 MiB heap.
-    startup.set_raw_image_cache(8 << 20);
-    startup.set_decoded_image_cache(48 << 20);
-    startup.set_record_text(true);
-    // Requested screen captures read back the canvas instead of a software redraw.
-    startup.set_host_capture(true);
-    startup.set_save_clock(Box::new(cmvs_core::runtime::utc_save_time));
-    startup.set_random_seed(cmvs_core::host::random::host_time_seed());
-    let mut font = encoding::load_game_font(
+    let record = bootstrap.game.selection.record.ok_or("unregistered game")?;
+    let encoding = bootstrap.encoding;
+    let user = base.join("users").join(&record.game);
+    let font = encoding::load_game_font(
         base,
         encoding,
         "no font.ttf and no system font in sa0:data/font/pvf",
@@ -180,11 +137,37 @@ fn run(
             .ok()
         },
     )?;
-    configure_game_font(&mut startup, &mut font, &user)?;
-    let bindings = load_key_bindings(root, game.selection.profile)?;
-    let size = startup.screen_size();
+    let mut session = bootstrap.into_session(
+        font,
+        SessionConfig {
+            saves: SaveStorage::UserDirectory(user.clone()),
+            user_font_dir: Some(user),
+            // Core 0 runs the VM and rendering, core 1 the audio thread, core 2 prefetch/decode.
+            movie: MovieConfig::Prefetch {
+                budget_bytes: 16 << 20,
+                max_frames: 8,
+                on_thread_start: || {
+                    sys::prefer_core(2);
+                },
+            },
+            image_decode_threads: Some(cmvs_core::host::image::DecodeThreads {
+                extra: 1,
+                on_start: Some(|_| {
+                    sys::prefer_core(2);
+                }),
+            }),
+            raw_image_cache: Some(8 << 20),
+            decoded_image_cache: Some(48 << 20),
+            key_bindings: KeyBindingPolicy::Required,
+            ..SessionConfig::default()
+        },
+    )?;
+    let (audio, audio_thread) = audio::start(root)?;
+    let audio_control = audio.host_control();
+    session.runtime.set_audio_backend(Box::new(audio))?;
+    let size = session.runtime.screen_size();
     let mut backend = ConsoleBackend {
-        display: startup.display_preferences(),
+        display: session.runtime.display_preferences(),
         size,
         frame: None,
         gpu,
@@ -198,9 +181,8 @@ fn run(
 
     let mut controls = Controls::new(size, console.buttons.clone());
     // The button that started the game must not click it.
-    controls.suppress_held(startup.input_mut());
+    controls.suppress_held(session.runtime.input_mut());
     let mut focused = true;
-    let mut driver = FrameDriver::default();
     let mut last_poll = Instant::now();
     let mut last_frame = last_poll;
     loop {
@@ -212,9 +194,9 @@ fn run(
         if sample.focused != focused {
             focused = sample.focused;
             audio_control.set_active(focused);
-            startup.set_focused(focused);
-            controls.focus(focused, startup.input_mut());
-            driver.suspend();
+            session.runtime.set_focused(focused);
+            controls.focus(focused, session.runtime.input_mut());
+            session.driver.suspend();
             last_frame = now;
         }
         let mode = presentation_mode(
@@ -227,14 +209,19 @@ fn run(
         if controls.quit_requested() {
             break;
         }
-        driver.sample_input(startup.input_mut(), |input| {
-            if let Some(warp) = input.take_warp() {
-                controls.warp(warp);
-            }
-            controls.frame(&bindings, input);
-        });
-        let outcome =
-            driver.run_slice(&mut startup, &mut FrameBudget::time(BUDGET), |startup| {
+        let bindings = &session.bindings;
+        session
+            .driver
+            .sample_input(session.runtime.input_mut(), |input| {
+                if let Some(warp) = input.take_warp() {
+                    controls.warp(warp);
+                }
+                controls.frame(bindings, input);
+            });
+        let outcome = session.driver.run_slice(
+            &mut session.runtime,
+            &mut FrameBudget::time(BUDGET),
+            |startup| {
                 let event = startup
                     .tick(&mut backend)
                     .map_err(|error| format_tick_error(startup, error))?;
@@ -246,10 +233,11 @@ fn run(
                     last_poll = last_frame;
                 }
                 Ok::<_, Box<dyn std::error::Error + Send + Sync>>(event)
-            })?;
+            },
+        )?;
         match outcome {
             FrameOutcome::Stopped(RuntimeEvent::Quit) => {
-                startup.save_preferences(backend.display)?;
+                session.runtime.save_preferences(backend.display)?;
                 return Ok(());
             }
             FrameOutcome::Inactive => {
@@ -258,7 +246,9 @@ fn run(
             }
             FrameOutcome::Yield => {
                 let now = Instant::now();
-                driver.finish_frame(&mut startup, millis(now.duration_since(last_frame)))?;
+                session
+                    .driver
+                    .finish_frame(&mut session.runtime, millis(now.duration_since(last_frame)))?;
                 last_frame = now;
                 let linear = backend.display.render_mode == 1;
                 let cursor = controls.cursor_visible().then(|| {
@@ -267,18 +257,18 @@ fn run(
                 });
                 match &mut backend.gpu {
                     // Movie frames are shown as decoded, like software frames.
-                    Some(gpu) if startup.movie_frame().is_none() => {
-                        render_gpu(&startup, &mut font, gpu)?;
+                    Some(gpu) if session.runtime.movie_frame().is_none() => {
+                        render_gpu(&mut session, gpu)?;
                         gpu.present(view_rect(view), linear, cursor)?;
-                        if startup.capture_due()
+                        if session.runtime.capture_due()
                             && let Some(frame) = gpu.read()
                         {
-                            startup.supply_capture(frame?)?;
+                            session.runtime.supply_capture(frame?)?;
                         }
                         backend.frame = None;
                     }
                     gpu => {
-                        let frame = render_software(&startup, &mut font, linear)?;
+                        let frame = session.compose_cpu_frame(linear, false)?;
                         window.present(
                             frame.pixels(),
                             [frame.width(), frame.height()],
@@ -289,8 +279,8 @@ fn run(
                         if let Some(gpu) = gpu {
                             gpu.forget_presented();
                         }
-                        if startup.capture_due() {
-                            startup.supply_capture(frame.clone())?;
+                        if session.runtime.capture_due() {
+                            session.runtime.supply_capture(frame.clone())?;
                         }
                         backend.frame = Some(frame);
                     }
@@ -300,7 +290,7 @@ fn run(
             FrameOutcome::BudgetExhausted => {}
         }
     }
-    startup.save_preferences(backend.display)?;
+    session.runtime.save_preferences(backend.display)?;
     Ok(())
 }
 

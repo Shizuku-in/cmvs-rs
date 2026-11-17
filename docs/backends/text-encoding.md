@@ -38,7 +38,7 @@ cargo run --release --features desktop --bin cmvs-desktop -- \
   --user-data-dir "<独立测试存档目录>"
 ```
 
-桌面 `--encoding` 同时配置宿主文本、VM 和字体 metrics/渲染。`--encoding auto` 识别为 GBK 或 UTF-8 时走相同路径。`--record-text` 也使用选定的引擎编码，与 `--font` 互斥。
+桌面 `--encoding` 同时配置宿主文本、VM 和字体 metrics/渲染。`--encoding auto`（以及移动端、浏览器、主机与嵌入宿主）按 `encoding.txt` → 汉化转换器生成的 `conversion.json`（顶层 `"encoding"`）→ 游戏脚本文本的顺序识别编码；识别为 GBK 或 UTF-8 时走相同路径。`--record-text` 也使用选定的引擎编码，与 `--font` 互斥。
 
 ## UTF-8
 
