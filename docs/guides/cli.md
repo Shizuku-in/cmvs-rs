@@ -10,13 +10,13 @@ cargo run --offline --features desktop --bin cmvs-desktop -- --help
 cargo run --offline --features audio-output --bin cmvs-audio -- --help
 ```
 
-`cargo run` 的 `--` 用于分隔Cargo选项与工具参数。`cmvs-desktop`、`cmvs-mgv` 需要 `desktop` feature，`cmvs-audio` 需要 `audio-output`；`cmvs-probe` 使用 `-p cmvs-probe` 运行。
+`cargo run` 的 `--` 用于分隔Cargo选项与工具参数。CLI 工具位于 `cmvs-cli` 包（属于默认成员，可直接用 `--bin` 运行，或用 `-p cmvs-cli` 默认运行 `cmvs-inspect`）；`cmvs-desktop` 需要 `desktop` feature，`cmvs-audio` 需要 `audio-output`，`cmvs-mgv` 使用无窗口 `cmvs-video` 解码器而无需 `desktop`；`cmvs-probe` 使用 `-p cmvs-probe` 运行。
 
 ## 脚本与执行跟踪
 
 ```bash
-cargo run --offline -- "<游戏目录>/data/pack/start.ps3"
-cargo run --offline -- "<游戏目录>/data/pack/start.ps3" --payload "<新输出文件>"
+cargo run --offline -p cmvs-cli -- "<游戏目录>/data/pack/start.ps3"
+cargo run --offline --bin cmvs-inspect -- "<游戏目录>/data/pack/start.ps3" --payload "<新输出文件>"
 cargo run --offline --bin cmvs-disasm -- "<游戏目录>/data/pack/start.ps3"
 cargo run --offline --bin cmvs-trace -- "<游戏目录>/data/pack/start.ps3" --steps 10000
 ```
@@ -57,7 +57,7 @@ cargo run --offline --bin cmvs-cpz -- --script "<游戏目录>/data/pack/script.
 cargo run --offline --bin cmvs-cursor -- "<游戏目录>/data/icon/01.cur"
 cargo run --offline --bin cmvs-pb3 -- "<PB3 文件>" --rgba "<新输出文件>"
 cargo run --offline --bin cmvs-cmv -- "<游戏目录>/data/video/op.cmv"
-cargo run --offline --release --features desktop --bin cmvs-mgv -- "<游戏目录>/data/video/op.mgv" --check-frames
+cargo run --offline --release --bin cmvs-mgv -- "<游戏目录>/data/video/op.mgv" --check-frames
 ```
 
 `cmvs-cpz` 支持 CPZ3、CPZ5（打包模式 5～9）、CPZ6 模式 1 和 CPZ7（资源模式 0/1）。默认检查头部，`--list` 列目录，`--extract` 提取资源，`--script` 解码 PS2A 容器；CPZ3 不需要启动参数，列目录和提取前始终验证索引密文校验值。

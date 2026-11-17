@@ -1,5 +1,5 @@
-use cmvs_rs::{
-    format::cpz::ArchiveIndex, format::cpz::ArchiveLayout, format::cpz::Cpz5Mode,
+use cmvs_core::{
+    MAX_PAYLOAD, format::cpz::ArchiveIndex, format::cpz::ArchiveLayout, format::cpz::Cpz5Mode,
     format::cpz::Cpz7Parameters, format::ps3::Script,
     runtime::script_control::cpz7_parameters_from_start,
     runtime::script_control::packing_mode_from_start,
@@ -40,9 +40,8 @@ Example: cmvs-cpz --packing-mode 5 --extract script.cpz main.ps3 main.ps3";
 
 fn read_start(file: File) -> Result<Script, Box<dyn Error + Send + Sync>> {
     let mut raw = Vec::new();
-    file.take(cmvs_rs::MAX_PAYLOAD as u64 + 49)
-        .read_to_end(&mut raw)?;
-    if raw.len() > cmvs_rs::MAX_PAYLOAD + 48 {
+    file.take(MAX_PAYLOAD as u64 + 49).read_to_end(&mut raw)?;
+    if raw.len() > MAX_PAYLOAD + 48 {
         return Err("startup script exceeds research limit".into());
     }
     Ok(Script::decode(&raw)?)
@@ -50,12 +49,12 @@ fn read_start(file: File) -> Result<Script, Box<dyn Error + Send + Sync>> {
 
 fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut paths: Vec<_> = env::args_os().skip(1).collect();
-    if paths.is_empty() {
-        return Err("usage: cmvs-cpz <archive> [archive ...]".into());
-    }
-    if paths.len() == 1 && (paths[0] == "--help" || paths[0] == "-h") {
+    if cmvs_cli::wants_help(&paths) {
         println!("{USAGE}");
         return Ok(());
+    }
+    if paths.is_empty() {
+        return Err("usage: cmvs-cpz <archive> [archive ...]".into());
     }
     let mut start = if paths[0] == "--start-script" {
         let path = paths.get(1).ok_or("expected startup script path")?;
@@ -118,6 +117,9 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
         Cpz7Parameters::default()
     };
     if paths[0] == "--list" || paths[0] == "--script" || paths[0] == "--extract" {
+        if paths.get(1).is_some_and(|p| p == "--") {
+            paths.remove(1);
+        }
         let expected = if paths[0] == "--list" {
             2
         } else if paths[0] == "--script" {
@@ -230,7 +232,18 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     if start.is_some() || explicit_parameters || explicit_mode {
         return Err("parameter options require --list, --script or --extract".into());
     }
-    if let Some(flag) = paths
+    if let Some(pos) = paths.iter().position(|path| path == "--") {
+        if let Some(flag) = paths[..pos]
+            .iter()
+            .find(|path| path.to_string_lossy().starts_with('-'))
+        {
+            return Err(format!("unknown option {}", flag.to_string_lossy()).into());
+        }
+        paths.remove(pos);
+        if paths.is_empty() {
+            return Err("usage: cmvs-cpz <archive> [archive ...]".into());
+        }
+    } else if let Some(flag) = paths
         .iter()
         .find(|path| path.to_string_lossy().starts_with('-'))
     {

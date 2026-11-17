@@ -1,4 +1,4 @@
-use cmvs_rs::{MAX_PAYLOAD, format::ps3::Script, vm::bytecode, vm::bytecode::InstructionKind};
+use cmvs_core::{MAX_PAYLOAD, format::ps3::Script, vm::bytecode, vm::bytecode::InstructionKind};
 use std::{collections::BTreeMap, env, error::Error, fs::File, io::Read};
 
 const USAGE: &str = "\
@@ -13,20 +13,22 @@ Options:
 Example: cmvs-disasm data/pack/start.ps3";
 
 fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut args = env::args_os().skip(1);
-    let path = args.next().ok_or("usage: cmvs-disasm <script>")?;
-    if path == "--help" || path == "-h" {
+    let args: Vec<_> = env::args_os().skip(1).collect();
+    if cmvs_cli::wants_help(&args) {
         println!("{USAGE}");
         return Ok(());
     }
-    if path.to_string_lossy().starts_with('-') {
-        return Err(format!("unknown option {}", path.to_string_lossy()).into());
-    }
-    if args.next().is_some() {
-        return Err("too many arguments".into());
-    }
+    let path = match args.as_slice() {
+        [] => return Err("usage: cmvs-disasm <script>".into()),
+        [sep, path] if *sep == "--" => path,
+        [flag, ..] if flag.to_string_lossy().starts_with('-') => {
+            return Err(format!("unknown option {}", flag.to_string_lossy()).into());
+        }
+        [path] => path,
+        _ => return Err("too many arguments".into()),
+    };
     let mut raw = Vec::new();
-    File::open(&path)?
+    File::open(path)?
         .take(MAX_PAYLOAD as u64 + 49)
         .read_to_end(&mut raw)?;
     if raw.len() > MAX_PAYLOAD + 48 {
@@ -35,7 +37,7 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     let script = Script::decode(&raw)?;
     let mut count = 0;
     let mut commands = BTreeMap::new();
-    println!("# Linear decode: {:?}; not execution", path);
+    println!("# Linear decode: {path:?}; not execution");
     let instructions =
         bytecode::decode_layout(script.code(), script.header().entry_pc, &script.labels())?;
     for insn in instructions {

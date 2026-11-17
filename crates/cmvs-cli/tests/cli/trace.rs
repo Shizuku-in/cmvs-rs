@@ -1,5 +1,5 @@
 use crate::support::{TempDir, bytecode::command};
-use cmvs_rs::vm::dispatch::Capability;
+use cmvs_core::vm::dispatch::Capability;
 use std::{fs, process::Command};
 
 #[test]

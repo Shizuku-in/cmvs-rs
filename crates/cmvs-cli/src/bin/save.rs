@@ -1,4 +1,4 @@
-use cmvs_rs::{
+use cmvs_core::{
     MAX_PAYLOAD, format::save::Csv2Layout, format::save::Csv2Save, format::save::HEADER_SIZE,
     format::snapshot,
 };
@@ -32,12 +32,19 @@ Read only: these commands never install engine state.
 Example: cmvs-save --section 0 save/save000.dat snapshot.bin";
 
 fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let args: Vec<_> = env::args_os().skip(1).collect();
-    if args.len() == 1 && (args[0] == "--help" || args[0] == "-h") {
+    let mut args: Vec<_> = env::args_os().skip(1).collect();
+    if cmvs_cli::wants_help(&args) {
         println!("{USAGE}");
         return Ok(());
     }
-    if let Some(flag) = args.first()
+    let positional_first = if args.first().is_some_and(|a| a == "--") && args.len() == 2 {
+        args.remove(0);
+        true
+    } else {
+        false
+    };
+    if !positional_first
+        && let Some(flag) = args.first()
         && flag.to_string_lossy().starts_with('-')
         && !["--section", "--records", "--vm-state", "--visual-state"]
             .iter()
@@ -45,10 +52,10 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     {
         return Err(format!("unknown option {}", flag.to_string_lossy()).into());
     }
-    let records = args.len() == 2 && args[0] == "--records";
-    let vm_state = args.len() == 2 && args[0] == "--vm-state";
-    let visual_state = args.len() == 2 && args[0] == "--visual-state";
-    let section = if args.len() == 4 && args[0] == "--section" {
+    let records = args.len() == 2 && !positional_first && args[0] == "--records";
+    let vm_state = args.len() == 2 && !positional_first && args[0] == "--vm-state";
+    let visual_state = args.len() == 2 && !positional_first && args[0] == "--visual-state";
+    let section = if args.len() == 4 && !positional_first && args[0] == "--section" {
         let index = args[1]
             .to_str()
             .ok_or("section must be 0, 1 or 2")?
@@ -60,7 +67,7 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     } else if records
         || vm_state
         || visual_state
-        || (args.len() == 1 && !args[0].to_string_lossy().starts_with('-'))
+        || (args.len() == 1 && (positional_first || !args[0].to_string_lossy().starts_with('-')))
     {
         None
     } else {

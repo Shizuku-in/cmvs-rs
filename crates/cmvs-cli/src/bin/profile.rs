@@ -1,4 +1,4 @@
-use cmvs_rs::{
+use cmvs_core::{
     format::digest::sha256, format::digest::to_hex, format::exe::Arch, format::exe::PeImage,
     format::exe::find_dispatch, profile::CommandStatus, profile::EXECUTABLE_NAMES,
     profile::EngineProfile, profile::Family, profile::Registry,
@@ -270,7 +270,7 @@ fn show(id: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
 }
 
 fn owners(opcode: Option<&str>) -> Result<(), Box<dyn Error + Send + Sync>> {
-    use cmvs_rs::{vm::dispatch::ownership::Chain, vm::dispatch::ownership::candidates};
+    use cmvs_core::{vm::dispatch::ownership::Chain, vm::dispatch::ownership::candidates};
     let selected = opcode
         .map(|value| {
             value
@@ -297,7 +297,7 @@ fn owners(opcode: Option<&str>) -> Result<(), Box<dyn Error + Send + Sync>> {
         if selected.is_none() && runner.is_empty() && trace.is_empty() {
             continue;
         }
-        let names = |claims: Vec<&cmvs_rs::vm::dispatch::ownership::Claim>| {
+        let names = |claims: Vec<&cmvs_core::vm::dispatch::ownership::Claim>| {
             if claims.is_empty() {
                 "—".into()
             } else {
@@ -319,15 +319,18 @@ fn owners(opcode: Option<&str>) -> Result<(), Box<dyn Error + Send + Sync>> {
 }
 
 fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let args: Vec<String> = env::args().skip(1).collect();
-    if matches!(args.as_slice(), [flag] if flag == "--help" || flag == "-h")
-        || matches!(args.as_slice(), [command, flag]
-            if ["identify", "table", "show", "owners"].contains(&command.as_str())
-                && (flag == "--help" || flag == "-h"))
-    {
+    let raw_args: Vec<_> = env::args_os().skip(1).collect();
+    if cmvs_cli::wants_help(&raw_args) {
         println!("{USAGE}");
         return Ok(());
     }
+    let args: Vec<String> = raw_args
+        .into_iter()
+        .map(|arg| {
+            arg.into_string()
+                .map_err(|_| "arguments must be valid UTF-8")
+        })
+        .collect::<Result<_, _>>()?;
     // Options follow the subcommand's positional argument as `--name value` pairs.
     let options =
         |allowed: &[&str]| -> Result<Vec<(String, String)>, Box<dyn Error + Send + Sync>> {

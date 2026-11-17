@@ -1,11 +1,13 @@
 //! Read-only bounded Vorbis verification; no audio device is opened.
-use cmvs_rs::{MAX_PAYLOAD, audio_output::AudioProgram, format::cmv::CmvIndex};
+use cmvs_audio::AudioProgram;
+use cmvs_core::{MAX_PAYLOAD, format::cmv::CmvIndex};
 use std::{
     env,
     error::Error,
     fs::{File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
 };
+
 const USAGE: &str = "\
 Usage: cmvs-audio <file.ogg|movie.cmv> [--pcm <new.f32>]
 
@@ -21,15 +23,22 @@ Build: cargo build --features audio-output --bin cmvs-audio
 Example: cmvs-audio voice.ogg --pcm voice.f32";
 
 fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut args = env::args_os().skip(1);
-    let path = args
-        .next()
-        .ok_or("usage: cmvs-audio <file.ogg|movie.cmv> [--pcm <new.f32>]")?;
-    if path == "--help" || path == "-h" {
+    let mut all_args: Vec<_> = env::args_os().skip(1).collect();
+    if cmvs_cli::wants_help(&all_args) {
         println!("{USAGE}");
         return Ok(());
     }
-    if path.to_string_lossy().starts_with('-') {
+    let positional_first = if all_args.first().is_some_and(|a| a == "--") && all_args.len() >= 2 {
+        all_args.remove(0);
+        true
+    } else {
+        false
+    };
+    let mut args = all_args.into_iter();
+    let path = args
+        .next()
+        .ok_or("usage: cmvs-audio <file.ogg|movie.cmv> [--pcm <new.f32>]")?;
+    if !positional_first && path.to_string_lossy().starts_with('-') {
         return Err(format!("unknown option {}", path.to_string_lossy()).into());
     }
     let output = match (args.next(), args.next(), args.next()) {
@@ -82,6 +91,7 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     );
     Ok(())
 }
+
 fn main() {
     if let Err(error) = run() {
         eprintln!("Error: {error}\nRun 'cmvs-audio --help' for usage.");

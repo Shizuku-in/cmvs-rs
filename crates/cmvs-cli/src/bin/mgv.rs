@@ -1,12 +1,13 @@
 use cmvs_core::{
     format::digest::sha256, format::digest::to_hex, format::mgv::Decoder, format::mgv::MgvIndex,
 };
-use cmvs_rs::desktop::video::TheoraStream;
+use cmvs_video::TheoraStream;
 use std::{
     error::Error,
     fs::{File, OpenOptions},
     io::Write,
 };
+
 const USAGE: &str = "\
 Usage: cmvs-mgv <movie.mgv> [--check-frames | --frame <index> <new-file>]
 
@@ -20,19 +21,25 @@ Options (choose at most one):
 
 Output files must not already exist. Input files are read only.
 Audio is not decoded. Video decoding uses the portable Theora backend.
-Build: cargo build --features desktop --bin cmvs-mgv
+Build: cargo build --bin cmvs-mgv
 Example: cmvs-mgv op.mgv --frame 0 frame.png";
 
 fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let args: Vec<_> = std::env::args_os().skip(1).collect();
-    if args.len() == 1 && (args[0] == "--help" || args[0] == "-h") {
+    let mut args: Vec<_> = std::env::args_os().skip(1).collect();
+    if cmvs_cli::wants_help(&args) {
         println!("{USAGE}");
         return Ok(());
     }
+    let positional_first = if args.first().is_some_and(|a| a == "--") && args.len() >= 2 {
+        args.remove(0);
+        true
+    } else {
+        false
+    };
     if args.is_empty() {
         return Err("missing movie path".into());
     }
-    if args[0].to_string_lossy().starts_with('-') {
+    if !positional_first && args[0].to_string_lossy().starts_with('-') {
         return Err(format!("unknown option {}", args[0].to_string_lossy()).into());
     }
     if !(args.len() == 1

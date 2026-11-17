@@ -1,10 +1,11 @@
-use cmvs_rs::{MAX_PAYLOAD, format::pb3};
+use cmvs_core::{MAX_PAYLOAD, format::pb3};
 use std::{
     env,
     error::Error,
     fs::{File, OpenOptions},
     io::{Read, Write},
 };
+
 const USAGE: &str = "\
 Usage: cmvs-pb3 <file.pb3> [--rgba <new-file>]
 
@@ -19,12 +20,19 @@ Output files must not already exist. Resource checksums are not verified.
 Example: cmvs-pb3 background.pb3 --rgba background.rgba";
 
 fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let args: Vec<_> = env::args_os().skip(1).collect();
-    if args.len() == 1 && (args[0] == "--help" || args[0] == "-h") {
+    let mut args: Vec<_> = env::args_os().skip(1).collect();
+    if cmvs_cli::wants_help(&args) {
         println!("{USAGE}");
         return Ok(());
     }
-    if let Some(flag) = args.first()
+    let positional_first = if args.first().is_some_and(|a| a == "--") && args.len() >= 2 {
+        args.remove(0);
+        true
+    } else {
+        false
+    };
+    if !positional_first
+        && let Some(flag) = args.first()
         && flag.to_string_lossy().starts_with('-')
     {
         return Err(format!("unknown option {}", flag.to_string_lossy()).into());
@@ -55,9 +63,10 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     }
     Ok(())
 }
+
 fn main() {
     if let Err(error) = run() {
         eprintln!("Error: {error}\nRun 'cmvs-pb3 --help' for usage.");
-        std::process::exit(1)
+        std::process::exit(1);
     }
 }

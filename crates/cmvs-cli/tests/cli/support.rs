@@ -54,7 +54,7 @@ impl Drop for TempDir {
 
 pub mod bytecode {
     #[cfg(feature = "desktop")]
-    use cmvs_rs::{format::ps3::Script, vm::machine::Machine, vm::machine::Step};
+    use cmvs_core::{format::ps3::Script, vm::machine::Machine, vm::machine::Step};
 
     #[cfg(feature = "desktop")]
     pub fn script(code: &[u8]) -> Script {

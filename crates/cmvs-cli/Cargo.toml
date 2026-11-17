@@ -1,0 +1,82 @@
+[package]
+license.workspace = true
+name = "cmvs-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+default-run = "cmvs-inspect"
+description = "Command-line format inspectors, VM trace tools and desktop entry point for CMVS"
+
+[lib]
+name = "cmvs_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "cmvs-inspect"
+path = "src/main.rs"
+
+[[bin]]
+name = "cmvs-disasm"
+path = "src/bin/disasm.rs"
+
+[[bin]]
+name = "cmvs-trace"
+path = "src/bin/trace.rs"
+
+[[bin]]
+name = "cmvs-cpz"
+path = "src/bin/cpz.rs"
+
+[[bin]]
+name = "cmvs-profile"
+path = "src/bin/profile.rs"
+
+[[bin]]
+name = "cmvs-save"
+path = "src/bin/save.rs"
+
+[[bin]]
+name = "cmvs-system-save"
+path = "src/bin/system_save.rs"
+
+[[bin]]
+name = "cmvs-cursor"
+path = "src/bin/cursor.rs"
+
+[[bin]]
+name = "cmvs-pb3"
+path = "src/bin/pb3.rs"
+
+[[bin]]
+name = "cmvs-cmv"
+path = "src/bin/cmv.rs"
+
+[[bin]]
+name = "cmvs-mgv"
+path = "src/bin/mgv.rs"
+
+[[bin]]
+name = "cmvs-audio"
+path = "src/bin/audio.rs"
+required-features = ["audio-output"]
+
+[[bin]]
+name = "cmvs-desktop"
+path = "src/bin/desktop.rs"
+required-features = ["desktop"]
+
+[lints]
+workspace = true
+
+[dependencies]
+cmvs-core = { path = "../cmvs-core" }
+cmvs-video = { path = "../cmvs-video" }
+cmvs-audio = { path = "../cmvs-audio", optional = true }
+cmvs-desktop = { path = "../cmvs-desktop", optional = true }
+
+[features]
+default = []
+desktop = ["dep:cmvs-desktop"]
+wgpu-renderer = ["desktop", "cmvs-desktop/wgpu-renderer"]
+audio-output = ["dep:cmvs-audio", "cmvs-desktop?/audio-output"]

@@ -332,6 +332,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmvs-cli"
+version = "0.1.0"
+dependencies = [
+ "cmvs-audio",
+ "cmvs-core",
+ "cmvs-desktop",
+ "cmvs-video",
+]
+
+[[package]]
 name = "cmvs-console"
 version = "0.1.0"
 dependencies = [

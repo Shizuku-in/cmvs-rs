@@ -68,7 +68,7 @@
 需要 Rust **1.90+ stable**。
 
 ```bash
-cargo run --offline -- "<游戏目录>/data/pack/start.ps3"
+cargo run --offline -p cmvs-cli -- "<游戏目录>/data/pack/start.ps3"
 cargo test --offline
 ```
 

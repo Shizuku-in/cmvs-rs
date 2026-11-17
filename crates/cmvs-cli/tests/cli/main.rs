@@ -1,5 +1,6 @@
 #[cfg(feature = "audio-output")]
 mod audio_output;
+mod cli_smoke;
 mod cpz_cli;
 #[cfg(feature = "desktop")]
 mod desktop;

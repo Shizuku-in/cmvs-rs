@@ -1,18 +1,17 @@
-use cmvs_rs::{
-    desktop::DesktopInput, desktop::InputEvent, desktop::TextEncoding, desktop::cursor_rgba,
-    desktop::decode_icon, desktop::text_codec, format::cursor::CursorBitmap,
-};
+use cmvs_core::format::cursor::CursorBitmap;
+use cmvs_desktop::{DesktopInput, InputEvent, TextEncoding, cursor_rgba, decode_icon, text_codec};
 
 use crate::support::bytecode;
 
 #[test]
 #[ignore = "requires CMVS_FONT_PATH; synthetic scene and external font, no game data"]
 fn immediate_device_readback_keeps_the_completed_font_composite() {
-    use cmvs_rs::{
-        desktop::font::FontRenderer, host::platform::RecordingBackend, render::camera::CameraHost,
+    use cmvs_core::{
+        host::platform::RecordingBackend, render::camera::CameraHost,
         render::capture::ScreenCapture, render::message::MessageHost, render::scene::SceneHost,
         runtime::MessageFlags, vm::machine::Machine,
     };
+    use cmvs_desktop::font::FontRenderer;
     let path = std::env::var_os("CMVS_FONT_PATH").expect("CMVS_FONT_PATH");
     let mut font = FontRenderer::read(std::path::Path::new(&path), 0).unwrap();
     let mut code = vec![];
@@ -26,20 +25,20 @@ fn immediate_device_readback_keeps_the_completed_font_composite() {
     let mut scene = SceneHost::default();
     let mut messages = MessageHost::default();
     bytecode::pending(&mut vm);
-    cmvs_rs::vm::dispatch::run(
-        cmvs_rs::profile::Semantics::Root,
+    cmvs_core::vm::dispatch::run(
+        cmvs_core::profile::Semantics::Root,
         &mut vm,
-        &mut cmvs_rs::vm::dispatch::Hosts {
+        &mut cmvs_core::vm::dispatch::Hosts {
             scene: Some(&mut scene),
             ..Default::default()
         },
     )
     .unwrap();
     bytecode::pending(&mut vm);
-    cmvs_rs::vm::dispatch::run(
-        cmvs_rs::profile::Semantics::Root,
+    cmvs_core::vm::dispatch::run(
+        cmvs_core::profile::Semantics::Root,
         &mut vm,
-        &mut cmvs_rs::vm::dispatch::Hosts {
+        &mut cmvs_core::vm::dispatch::Hosts {
             messages: Some(&mut messages),
             ..Default::default()
         },
@@ -57,15 +56,20 @@ fn immediate_device_readback_keeps_the_completed_font_composite() {
     let glyphs = font.prepare_objects(&messages).unwrap();
     let mut additional: Vec<_> = glyphs.iter().collect();
     additional.extend(messages.visible_window_objects());
-    let expected =
-        cmvs_rs::render::scene_render::render_scene(&scene, Some(&camera), &additional, 1280, 720)
-            .unwrap();
+    let expected = cmvs_core::render::scene_render::render_scene(
+        &scene,
+        Some(&camera),
+        &additional,
+        1280,
+        720,
+    )
+    .unwrap();
     let frame = composition.prepare().unwrap().render_cpu().unwrap();
     assert_eq!(frame, expected);
     assert_eq!(font.render(&scene, &camera, &messages).unwrap(), frame);
     let windows: Vec<_> = messages.visible_window_objects().collect();
     let without_glyphs =
-        cmvs_rs::render::scene_render::render_scene(&scene, Some(&camera), &windows, 1280, 720)
+        cmvs_core::render::scene_render::render_scene(&scene, Some(&camera), &windows, 1280, 720)
             .unwrap();
     assert_ne!(frame, without_glyphs);
     assert!(
@@ -91,11 +95,12 @@ fn immediate_device_readback_keeps_the_completed_font_composite() {
 #[test]
 #[ignore = "requires CMVS_FONT_PATH; synthetic message and external font, no game data"]
 fn horizontal_glyph_reveal_crops_the_full_font_image_without_rescaling() {
-    use cmvs_rs::{
-        desktop::font::FontRenderer, host::settings::TextOutputSettings,
-        render::camera::CameraHost, render::message::MessageHost, render::scene::SceneHost,
-        runtime::MessageFlags, vm::machine::Machine,
+    use cmvs_core::{
+        host::settings::TextOutputSettings, render::camera::CameraHost,
+        render::message::MessageHost, render::scene::SceneHost, runtime::MessageFlags,
+        vm::machine::Machine,
     };
+    use cmvs_desktop::font::FontRenderer;
     let font_path = std::env::var_os("CMVS_FONT_PATH").expect("CMVS_FONT_PATH");
     let mut font = FontRenderer::read(std::path::Path::new(&font_path), 0).unwrap();
     let mut code = vec![];
@@ -107,16 +112,16 @@ fn horizontal_glyph_reveal_crops_the_full_font_image_without_rescaling() {
     let mut messages = MessageHost::default();
     bytecode::pending(&mut vm);
     assert_eq!(
-        cmvs_rs::vm::dispatch::run(
-            cmvs_rs::profile::Semantics::Root,
+        cmvs_core::vm::dispatch::run(
+            cmvs_core::profile::Semantics::Root,
             &mut vm,
-            &mut cmvs_rs::vm::dispatch::Hosts {
+            &mut cmvs_core::vm::dispatch::Hosts {
                 messages: Some(&mut messages),
                 ..Default::default()
             },
         )
         .unwrap(),
-        Some(cmvs_rs::vm::dispatch::Flow::Done)
+        Some(cmvs_core::vm::dispatch::Flow::Done)
     );
     messages.set_record_output(true);
     messages.set_text_settings(TextOutputSettings {

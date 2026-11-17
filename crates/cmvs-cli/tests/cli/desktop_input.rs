@@ -1,7 +1,5 @@
-use cmvs_rs::{
-    desktop::game_input::GameInput, desktop::game_input::Viewport, host::input::ActionInput,
-    host::input::KeyBindings,
-};
+use cmvs_core::{host::input::ActionInput, host::input::KeyBindings};
+use cmvs_desktop::game_input::{GameInput, Viewport};
 
 #[test]
 fn four_by_three_canvas_maps_bottom_buttons_and_cursor_warps() {
@@ -9,7 +7,7 @@ fn four_by_three_canvas_maps_bottom_buttons_and_cursor_warps() {
     let viewport = Viewport::for_canvas(canvas, [1280, 720], 1).unwrap();
     assert_eq!(viewport.to_script([100.0, 360.0]), None);
     let mut game = GameInput::default();
-    game.set_screen_size(cmvs_rs::render::viewport::ScreenSize::new(canvas).unwrap());
+    game.set_screen_size(cmvs_core::render::viewport::ScreenSize::new(canvas).unwrap());
     for mode in 0..=3 {
         game.set_aspect_mode(mode);
         let target = game.warp([1280, 960], [1000, 755]).unwrap();

@@ -1,8 +1,8 @@
-use cmvs_rs::{audio_output::AudioProgram, audio_output::Envelope, vorbis::Vorbis};
+use cmvs_audio::{AudioProgram, Envelope, vorbis::Vorbis};
 use std::sync::Arc;
-const FIRST: &[u8] = include_bytes!("../fixtures/audio/mono440.ogg");
-const SECOND: &[u8] = include_bytes!("../fixtures/audio/mono880.ogg");
-const VOICE: &[u8] = include_bytes!("../fixtures/audio/mono660voice.ogg");
+const FIRST: &[u8] = include_bytes!("../../../../tests/fixtures/audio/mono440.ogg");
+const SECOND: &[u8] = include_bytes!("../../../../tests/fixtures/audio/mono880.ogg");
+const VOICE: &[u8] = include_bytes!("../../../../tests/fixtures/audio/mono660voice.ogg");
 fn samples(bytes: &[u8]) -> Vec<f32> {
     let mut program = AudioProgram::new(bytes.to_vec(), None, false).unwrap();
     let mut samples = vec![];
@@ -128,9 +128,9 @@ fn fade_envelopes_reach_exact_endpoints_without_overshoot() {
 #[test]
 #[ignore = "opens the default native audio device; run explicitly outside restricted sandboxes"]
 fn native_device_smoke() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use cmvs_rs::{
-        audio_output::NativeAudio, host::audio::AudioBackend, host::audio::AudioRequest,
-        host::audio::MovieAudioClock, host::audio::SePlayback, host::audio::VoiceDuckingSettings,
+    use cmvs_audio::NativeAudio;
+    use cmvs_core::host::audio::{
+        AudioBackend, AudioRequest, MovieAudioClock, SePlayback, VoiceDuckingSettings,
     };
     use std::{
         collections::BTreeMap,
@@ -322,7 +322,7 @@ fn native_device_smoke() -> Result<(), Box<dyn std::error::Error + Send + Sync>>
         volume: 16,
         start: true,
         rate_bits: 2.0f32.to_bits(),
-        mixer: cmvs_rs::host::audio::VoiceMixer::from_ini(1, 1),
+        mixer: cmvs_core::host::audio::VoiceMixer::from_ini(1, 1),
     })?);
     pump(&mut audio)?;
     assert!(audio.voice_position(1)?.is_some());

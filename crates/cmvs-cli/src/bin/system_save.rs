@@ -1,4 +1,4 @@
-use cmvs_rs::{
+use cmvs_core::{
     format::system_save::Css1Save, format::system_save::FileSystemSave,
     format::system_save::SystemSaveSource,
 };
@@ -18,12 +18,19 @@ Output files must not already exist. Does not restore engine state or modify sav
 Example: cmvs-system-save save/system.dat";
 
 fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let args: Vec<_> = env::args_os().skip(1).collect();
-    if args.len() == 1 && (args[0] == "--help" || args[0] == "-h") {
+    let mut args: Vec<_> = env::args_os().skip(1).collect();
+    if cmvs_cli::wants_help(&args) {
         println!("{USAGE}");
         return Ok(());
     }
-    if let Some(flag) = args.first()
+    let positional_first = if args.first().is_some_and(|a| a == "--") && args.len() >= 2 {
+        args.remove(0);
+        true
+    } else {
+        false
+    };
+    if !positional_first
+        && let Some(flag) = args.first()
         && flag.to_string_lossy().starts_with('-')
     {
         return Err(format!("unknown option {}", flag.to_string_lossy()).into());
@@ -59,6 +66,7 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     }
     Ok(())
 }
+
 fn main() {
     if let Err(error) = run() {
         eprintln!("Error: {error}\nRun 'cmvs-system-save --help' for usage.");

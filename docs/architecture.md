@@ -9,16 +9,18 @@
 | `cmvs-audio` / `cmvs-video` | 音频解码、混音与输出；Theora 解码与预解码 |
 | `cmvs-wgpu` | GPU 场景合成、纹理缓存与读回 |
 | `cmvs-native` | 各平台的系统服务与原生 FFI |
-| `cmvs-host` | 不拥有窗口的播放器与 C ABI |
+| `cmvs-host` | 跨平台会话层、不拥有窗口的播放器与 C ABI |
 | `cmvs-desktop` | 桌面窗口、输入、呈现与运行入口 |
 | `cmvs-console` | Switch / Vita 共用的手柄、页面与 GPU 合成策略 |
-| `cmvs-probe` | 无头运行、路线、输入与存读档检查 |
+| `cmvs-cli` | 格式检查、反汇编、VM trace 与桌面 CLI 入口 |
+| `cmvs-patch` | 补丁资产提取、重编码与转换 |
+| `cmvs-probe` / `cmvs-bench` | 无头运行、路线、输入与存读档检查；热路径微基准测试 |
 | `platforms/*` | 各平台宿主和构建入口，见[平台总览](../platforms/README.md) |
-| 根包 `cmvs-rs` | CLI、`cmvs_rs` 兼容导出与核心集成测试 |
+| 根包 `cmvs-rs` | `cmvs_rs` 兼容导出门面 |
 
 核心定义语义和后端契约，宿主提供窗口、设备、字体和输出。核心在桌面目标仅依赖标准库，Android / Web 使用文件系统适配依赖。具体依赖与 feature 以各包 `Cargo.toml` 为准。
 
-根包默认仅依赖 core；`desktop`、`audio-output`、`wgpu-renderer` 按需接入后端。workspace 的默认成员只有根包。共享依赖在根 `Cargo.toml` 声明，精确版本由 `Cargo.lock` 固定。
+根包默认仅依赖 core；`desktop`、`audio-output`、`wgpu-renderer` 按需接入后端。共享依赖在根 `Cargo.toml` 声明，精确版本由 `Cargo.lock` 固定。
 
 ## 执行流程
 

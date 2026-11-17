@@ -1,5 +1,5 @@
 //! Read-only CMV6 inspection and bounded JBPD frame decoding.
-use cmvs_rs::{format::cmv::CmvIndex, format::cmv::KIND_JBPX, format::cmv::KIND_OGG};
+use cmvs_core::{format::cmv::CmvIndex, format::cmv::KIND_JBPX, format::cmv::KIND_OGG};
 use std::{
     env,
     error::Error,
@@ -23,18 +23,25 @@ Ogg audio is located but not decoded; use cmvs-audio to inspect it.
 Example: cmvs-cmv op.cmv --frame 0 frame.png";
 
 fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
-    let path = env::args_os().nth(1).ok_or("usage: cmvs-cmv <movie.cmv>")?;
-    if path == "--help" || path == "-h" {
+    let mut all_args: Vec<_> = env::args_os().skip(1).collect();
+    if cmvs_cli::wants_help(&all_args) {
         println!("{USAGE}");
         return Ok(());
     }
-    if path.to_string_lossy().starts_with('-') {
+    let positional_first = if all_args.first().is_some_and(|a| a == "--") && all_args.len() >= 2 {
+        all_args.remove(0);
+        true
+    } else {
+        false
+    };
+    let Some(path) = all_args.first().cloned() else {
+        return Err("usage: cmvs-cmv <movie.cmv>".into());
+    };
+    if !positional_first && path.to_string_lossy().starts_with('-') {
         return Err(format!("unknown option {}", path.to_string_lossy()).into());
     }
-    let args: Vec<_> = env::args_os().skip(2).collect();
-    if !(args.is_empty()
-        || args.as_slice() == ["--check-frames"]
-        || (args.len() == 3 && args[0] == "--frame"))
+    let args = &all_args[1..];
+    if !(args.is_empty() || args == ["--check-frames"] || (args.len() == 3 && args[0] == "--frame"))
     {
         return Err("expected --check-frames or --frame <index> <new-file>".into());
     }
@@ -50,7 +57,7 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
     };
     let mut file = File::open(path)?;
     let index = CmvIndex::read_io(&mut file)?;
-    if args.as_slice() == ["--check-frames"] {
+    if args == ["--check-frames"] {
         let start = std::time::Instant::now();
         let mut count = 0;
         for i in 0..index.header.max_sequence {
@@ -144,6 +151,6 @@ fn run() -> Result<(), Box<dyn Error + Send + Sync>> {
 fn main() {
     if let Err(error) = run() {
         eprintln!("Error: {error}\nRun 'cmvs-cmv --help' for usage.");
-        std::process::exit(1)
+        std::process::exit(1);
     }
 }

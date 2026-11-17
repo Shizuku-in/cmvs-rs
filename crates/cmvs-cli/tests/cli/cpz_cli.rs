@@ -1,5 +1,5 @@
 use crate::support::TempDir;
-use cmvs_rs::{format::cpz::Cpz5Index, format::ps3::Script};
+use cmvs_core::{format::cpz::Cpz5Index, format::ps3::Script};
 use std::{fs, io::Cursor, process::Command};
 
 fn hex(text: &str) -> Vec<u8> {
@@ -17,7 +17,11 @@ fn extract_cli_never_overwrites_an_existing_file() {
     let root = TempDir::new("cpz6-extract");
     let input = root.join("synthetic.bin");
     let output = root.join("existing.bin");
-    fs::write(&input, hex(include_str!("../fixtures/cpz6-0.hex"))).unwrap();
+    fs::write(
+        &input,
+        hex(include_str!("../../../../tests/fixtures/cpz6-0.hex")),
+    )
+    .unwrap();
     fs::write(&output, b"keep me").unwrap();
     let result = Command::new(env!("CARGO_BIN_EXE_cmvs-cpz"))
         .arg("--extract")
@@ -34,7 +38,11 @@ fn extract_cli_never_overwrites_an_existing_file() {
 fn trace_cli_loads_and_steps_synthetic_ps3_directly_from_archive() {
     let root = TempDir::new("cpz6-script");
     let path = root.join("script.bin");
-    fs::write(&path, hex(include_str!("../fixtures/cpz6-script.hex"))).unwrap();
+    fs::write(
+        &path,
+        hex(include_str!("../../../../tests/fixtures/cpz6-script.hex")),
+    )
+    .unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_cmvs-trace"))
         .arg(&path)
         .args(["--script", "fixture.ps3", "--profile", "cmvs-20160201"])
@@ -55,7 +63,11 @@ fn cli_lists_extracts_and_rejects_inapplicable_settings() {
     let root = TempDir::new("cpz3-cli");
     let archive = root.join("fixture.cpz");
     let output = root.join("payload.bin");
-    fs::write(&archive, hex(include_str!("../fixtures/cpz3-0.hex"))).unwrap();
+    fs::write(
+        &archive,
+        hex(include_str!("../../../../tests/fixtures/cpz3-0.hex")),
+    )
+    .unwrap();
     // CPZ3 must not try to load adjacent startup settings.
     fs::write(root.join("start.ps2"), b"invalid").unwrap();
     let run = |args: &[&std::ffi::OsStr]| {
@@ -95,7 +107,9 @@ fn cli_lists_extracts_and_rejects_inapplicable_settings() {
 
 #[test]
 fn plain_resources_and_startup_mode_selection_work_through_cli() {
-    let mut reader = Cursor::new(hex(include_str!("../fixtures/cpz5-plain.hex")));
+    let mut reader = Cursor::new(hex(include_str!(
+        "../../../../tests/fixtures/cpz5-plain.hex"
+    )));
     let index = Cpz5Index::read(&mut reader).unwrap();
     assert_eq!(index.layout.encryption_mode, 0);
     assert_eq!(
@@ -105,7 +119,11 @@ fn plain_resources_and_startup_mode_selection_work_through_cli() {
     let root = TempDir::new("cpz5-cli");
     let archive = root.join("fixture.cpz");
     let start = root.join("start.ps2");
-    fs::write(&archive, hex(include_str!("../fixtures/cpz5-5.hex"))).unwrap();
+    fs::write(
+        &archive,
+        hex(include_str!("../../../../tests/fixtures/cpz5-5.hex")),
+    )
+    .unwrap();
     let run = |args: &[&std::ffi::OsStr]| {
         Command::new(env!("CARGO_BIN_EXE_cmvs-cpz"))
             .args(args)
@@ -200,7 +218,11 @@ fn cli_discovers_startup_beside_cpz7_and_respects_explicit_overrides() {
     let start = root.join("start.ps3");
     let explicit_start = root.join("custom.ps3");
     let cpz6 = root.join("cpz6.cpz");
-    fs::write(&archive, hex(include_str!("../fixtures/cpz7-keyed.hex"))).unwrap();
+    fs::write(
+        &archive,
+        hex(include_str!("../../../../tests/fixtures/cpz7-keyed.hex")),
+    )
+    .unwrap();
     let run = |args: &[&std::ffi::OsStr]| {
         Command::new(env!("CARGO_BIN_EXE_cmvs-cpz"))
             .args(args)
@@ -257,6 +279,10 @@ fn cli_discovers_startup_beside_cpz7_and_respects_explicit_overrides() {
         .status
         .success()
     );
-    fs::write(&cpz6, hex(include_str!("../fixtures/cpz6-0.hex"))).unwrap();
+    fs::write(
+        &cpz6,
+        hex(include_str!("../../../../tests/fixtures/cpz6-0.hex")),
+    )
+    .unwrap();
     assert!(run(&["--list".as_ref(), cpz6.as_os_str()]).status.success());
 }

@@ -68,7 +68,7 @@ A **Rust** reimplementation of Purple SOFTWARE's CMVS engine.
 Requires **Rust 1.90+ stable**.
 
 ```bash
-cargo run --offline -- "<game-directory>/data/pack/start.ps3"
+cargo run --offline -p cmvs-cli -- "<game-directory>/data/pack/start.ps3"
 cargo test --offline
 ```
 

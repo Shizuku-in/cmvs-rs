@@ -45,7 +45,7 @@ CPZ5 新建可选模式 5～9；CPZ6 使用模式 1。新建 CPZ5/6 默认启用
 
 ```sh
 cargo test --offline --locked -p cmvs-core --test integration cpz
-cargo test --offline --locked -p cmvs-rs --test cli cpz_cli
+cargo test --offline --locked -p cmvs-cli --test cli cpz_cli
 ```
 
 独立合成向量覆盖各版本和模式、每包参数、重复名称、目录与索引填充、空/变长资源及加密尾字节；检查替换内容回读、未替换密文不变；新建 CPZ3/5/6 覆盖目录、名称、空资源和加密边界，并拒绝错误条目、损坏或不匹配的输入及非空输出。9 个原版脚本包共 1,113 项已完成替换回读，覆盖全部上述版本和 CPZ5 模式；另以 7 个原版脚本包的 907 项内容新建 CPZ5/6，全部回读一致。CPZ6 头部摘要和校验和公式另与 25 个原版封包核对。
